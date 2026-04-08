@@ -20,7 +20,7 @@ type
     FMockName: string;
     FCalls: TGocciaValueList;
     FResults: TGocciaValueList;
-    FInstances: TGocciaValueList;
+    FContexts: TGocciaValueList;
     FImplementation: TGocciaValue;
     FOnceQueue: TGocciaValueList;
     FOnceIsImpl: array of Boolean;
@@ -37,7 +37,7 @@ type
     function BuildMockObject: TGocciaObjectValue;
     function BuildCallsArray: TGocciaArrayValue;
     function BuildResultsArray: TGocciaArrayValue;
-    function BuildInstancesArray: TGocciaArrayValue;
+    function BuildContextsArray: TGocciaArrayValue;
     function CreateResultEntry(const AResultType: string;
       const AValue: TGocciaValue): TGocciaObjectValue;
   protected
@@ -78,7 +78,7 @@ type
     // Internal accessors for matchers
     property MockCalls: TGocciaValueList read FCalls;
     property MockResults: TGocciaValueList read FResults;
-    property MockInstances: TGocciaValueList read FInstances;
+    property MockContexts: TGocciaValueList read FContexts;
   end;
 
 implementation
@@ -108,7 +108,7 @@ begin
   FMockName := MOCK_DEFAULT_NAME;
   FCalls := TGocciaValueList.Create(False);
   FResults := TGocciaValueList.Create(False);
-  FInstances := TGocciaValueList.Create(False);
+  FContexts := TGocciaValueList.Create(False);
   FOnceQueue := TGocciaValueList.Create(False);
   SetLength(FOnceIsImpl, 0);
   FImplementation := AImplementation;
@@ -151,7 +151,7 @@ destructor TGocciaMockFunctionValue.Destroy;
 begin
   FCalls.Free;
   FResults.Free;
-  FInstances.Free;
+  FContexts.Free;
   FOnceQueue.Free;
   inherited;
 end;
@@ -230,13 +230,13 @@ begin
     Result.Elements.Add(FResults[I]);
 end;
 
-function TGocciaMockFunctionValue.BuildInstancesArray: TGocciaArrayValue;
+function TGocciaMockFunctionValue.BuildContextsArray: TGocciaArrayValue;
 var
   I: Integer;
 begin
   Result := TGocciaArrayValue.Create;
-  for I := 0 to FInstances.Count - 1 do
-    Result.Elements.Add(FInstances[I]);
+  for I := 0 to FContexts.Count - 1 do
+    Result.Elements.Add(FContexts[I]);
 end;
 
 function TGocciaMockFunctionValue.BuildMockObject: TGocciaObjectValue;
@@ -249,7 +249,8 @@ begin
   try
     Result.AssignProperty(PROP_CALLS, BuildCallsArray);
     Result.AssignProperty(PROP_RESULTS, BuildResultsArray);
-    Result.AssignProperty(PROP_INSTANCES, BuildInstancesArray);
+    Result.AssignProperty(PROP_INSTANCES, TGocciaArrayValue.Create);
+    Result.AssignProperty('contexts', BuildContextsArray);
 
     if FCalls.Count > 0 then
       LastCall := FCalls[FCalls.Count - 1]
@@ -286,7 +287,7 @@ begin
   FCalls.Add(ArgsArray);
 
   // Record this value
-  FInstances.Add(AThisValue);
+  FContexts.Add(AThisValue);
 
   // Invalidate cached mock object
   InvalidateMockObject;
@@ -379,9 +380,9 @@ begin
     if Assigned(FResults[I]) then
       FResults[I].MarkReferences;
 
-  for I := 0 to FInstances.Count - 1 do
-    if Assigned(FInstances[I]) then
-      FInstances[I].MarkReferences;
+  for I := 0 to FContexts.Count - 1 do
+    if Assigned(FContexts[I]) then
+      FContexts[I].MarkReferences;
 
   for I := 0 to FOnceQueue.Count - 1 do
     if Assigned(FOnceQueue[I]) then
@@ -476,7 +477,7 @@ function TGocciaMockFunctionValue.DoMockClear(
 begin
   FCalls.Clear;
   FResults.Clear;
-  FInstances.Clear;
+  FContexts.Clear;
   InvalidateMockObject;
   Result := Self;
 end;
@@ -488,7 +489,7 @@ function TGocciaMockFunctionValue.DoMockReset(
 begin
   FCalls.Clear;
   FResults.Clear;
-  FInstances.Clear;
+  FContexts.Clear;
   FOnceQueue.Clear;
   SetLength(FOnceIsImpl, 0);
   FImplementation := nil;

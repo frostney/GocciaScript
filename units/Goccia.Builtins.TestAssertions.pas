@@ -1725,7 +1725,7 @@ begin
   MockFn := TGocciaMockFunctionValue(FActualValue);
   NumVal := AArgs.GetElement(0).ToNumberLiteral;
   if NumVal.IsNaN or NumVal.IsInfinity or NumVal.IsNegativeInfinity or
-     (NumVal.Value < 0) or (Frac(NumVal.Value) <> 0) then
+     (NumVal.Value < 0) or (NumVal.Value > High(Integer)) or (Frac(NumVal.Value) <> 0) then
     TGocciaTestAssertions(FTestAssertions).ThrowError(
       'toHaveBeenCalledTimes expects a non-negative integer', 0, 0);
   ExpectedTimes := Trunc(NumVal.Value);
@@ -1890,7 +1890,7 @@ begin
   MockFn := TGocciaMockFunctionValue(FActualValue);
   NumVal := AArgs.GetElement(0).ToNumberLiteral;
   if NumVal.IsNaN or NumVal.IsInfinity or NumVal.IsNegativeInfinity or
-     (NumVal.Value < 1) or (Frac(NumVal.Value) <> 0) then
+     (NumVal.Value < 1) or (NumVal.Value > High(Integer)) or (Frac(NumVal.Value) <> 0) then
     TGocciaTestAssertions(FTestAssertions).ThrowError(
       'toHaveBeenNthCalledWith expects a positive integer index', 0, 0);
   N := Trunc(NumVal.Value);
@@ -2007,7 +2007,7 @@ begin
   MockFn := TGocciaMockFunctionValue(FActualValue);
   NumVal := AArgs.GetElement(0).ToNumberLiteral;
   if NumVal.IsNaN or NumVal.IsInfinity or NumVal.IsNegativeInfinity or
-     (NumVal.Value < 0) or (Frac(NumVal.Value) <> 0) then
+     (NumVal.Value < 0) or (NumVal.Value > High(Integer)) or (Frac(NumVal.Value) <> 0) then
     TGocciaTestAssertions(FTestAssertions).ThrowError(
       'toHaveReturnedTimes expects a non-negative integer', 0, 0);
   ExpectedTimes := Trunc(NumVal.Value);
@@ -2172,17 +2172,13 @@ begin
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 
-  if AArgs.Length < 2 then
-  begin
-    TGocciaTestAssertions(FTestAssertions).ThrowError(
-      'toHaveNthReturnedWith requires at least 2 arguments (call index and expected value)', 0, 0);
-    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
-  end;
+  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'toHaveNthReturnedWith',
+    TGocciaTestAssertions(FTestAssertions).ThrowError);
 
   MockFn := TGocciaMockFunctionValue(FActualValue);
   NumVal := AArgs.GetElement(0).ToNumberLiteral;
   if NumVal.IsNaN or NumVal.IsInfinity or NumVal.IsNegativeInfinity or
-     (NumVal.Value < 1) or (Frac(NumVal.Value) <> 0) then
+     (NumVal.Value < 1) or (NumVal.Value > High(Integer)) or (Frac(NumVal.Value) <> 0) then
     TGocciaTestAssertions(FTestAssertions).ThrowError(
       'toHaveNthReturnedWith expects a positive integer index', 0, 0);
   N := Trunc(NumVal.Value);
