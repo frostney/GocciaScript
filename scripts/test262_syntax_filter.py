@@ -319,7 +319,7 @@ def _strip_strings_and_comments(source: str) -> str:
             continue
 
         # String literals
-        if ch in ("'", '"', "`"):
+        if ch in ("'", '"'):
             quote = ch
             i += 1
             while i < length:
@@ -332,10 +332,49 @@ def _strip_strings_and_comments(source: str) -> str:
                 i += 1
             continue
 
-        # Regex literal (heuristic: after = or ( or , or ; or ! or & or | or return or typeof)
-        if ch == "/" and i > 0:
+        # Template literals — strip literal chunks but preserve ${...} expressions
+        if ch == "`":
+            i += 1
+            while i < length:
+                if source[i] == "\\" and i + 1 < length:
+                    i += 2
+                    continue
+                if source[i] == "$" and i + 1 < length and source[i + 1] == "{":
+                    # Enter substitution: skip ${ but keep expression visible
+                    i += 2
+                    depth = 1
+                    while i < length and depth > 0:
+                        if source[i] == "{":
+                            depth += 1
+                        elif source[i] == "}":
+                            depth -= 1
+                            if depth == 0:
+                                i += 1
+                                break
+                        result.append(source[i])
+                        i += 1
+                    continue
+                if source[i] == "`":
+                    i += 1
+                    break
+                i += 1
+            continue
+
+        # Regex literal heuristic: after operators, keywords, or at BOF
+        _REGEX_PRECEDING_KEYWORDS = {"return", "typeof", "throw", "delete", "new", "in", "instanceof", "case", "void"}
+        if ch == "/":
             prev = source[:i].rstrip()
-            if prev and prev[-1] in "=({,;!&|:?[~^%*/+-":
+            is_regex = False
+            if not prev:
+                is_regex = True  # BOF
+            elif prev[-1] in "=({,;!&|:?[~^%*/+-":
+                is_regex = True
+            else:
+                # Check if preceded by a keyword
+                m_kw = re.search(r"\b(\w+)\s*$", prev)
+                if m_kw and m_kw.group(1) in _REGEX_PRECEDING_KEYWORDS:
+                    is_regex = True
+            if is_regex:
                 i += 1
                 while i < length:
                     if source[i] == "\\" and i + 1 < length:

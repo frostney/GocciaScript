@@ -51,6 +51,9 @@ const deepEqual = (a, b) => {
     }
     return true;
   }
+  if (Array.isArray(b)) {
+    return false;
+  }
 
   const keysA = Object.keys(a);
   const keysB = Object.keys(b);

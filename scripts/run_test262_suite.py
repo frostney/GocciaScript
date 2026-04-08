@@ -486,56 +486,54 @@ def evaluate_suite(
                             {"id": tid, "status": "ERROR", "message": f"JSON parse error: {e}"}
                         )
                     tr_results = None
-                if tr_results is None:
-                    continue
-                tr_passed = int(tr_results.get("passed", 0))
-                tr_failed = int(tr_results.get("failed", 0))
-                tr_skipped = int(tr_results.get("skipped", 0))
-                tr_failed_tests = tr_results.get("failedTests", [])
+                if tr_results is not None:
+                    tr_passed = int(tr_results.get("passed", 0))
+                    tr_failed = int(tr_results.get("failed", 0))
+                    tr_skipped = int(tr_results.get("skipped", 0))
+                    tr_failed_tests = tr_results.get("failedTests", [])
 
-                summary["passed"] += tr_passed
-                summary["failed"] += tr_failed
+                    summary["passed"] += tr_passed
+                    summary["failed"] += tr_failed
 
-                # Build failed-test ID set from TestRunner output
-                failed_set: set[str] = set()
-                failed_messages: dict[str, str] = {}
-                for name in tr_failed_tests:
-                    # Case 1: "test262: <test_id> > <description>"
-                    m = re.match(r"test262:\s*(.+?)\s*>", name)
-                    if m:
-                        failed_set.add(m.group(1))
-                        failed_messages[m.group(1)] = name
-                        continue
-                    # Case 2: "<filepath>: <error>" (parse/load error)
-                    # Extract filename, convert __ back to /
-                    m2 = re.search(r"[/\\]([^/\\]+\.js)(?:\s*:\s*(.+))?$", name)
-                    if m2:
-                        fname = m2.group(1)
-                        test_id_guess = fname.replace("__", "/")
-                        failed_set.add(test_id_guess)
-                        msg = m2.group(2) or name
-                        failed_messages[test_id_guess] = msg
-                    else:
-                        failed_set.add(name)
-                        failed_messages[name] = name
+                    # Build failed-test ID set from TestRunner output
+                    failed_set: set[str] = set()
+                    failed_messages: dict[str, str] = {}
+                    for name in tr_failed_tests:
+                        # Case 1: "test262: <test_id> > <description>"
+                        m = re.match(r"test262:\s*(.+?)\s*>", name)
+                        if m:
+                            failed_set.add(m.group(1))
+                            failed_messages[m.group(1)] = name
+                            continue
+                        # Case 2: "<filepath>: <error>" (parse/load error)
+                        m2 = re.search(r"[/\\]([^/\\]+\.js)(?:\s*:\s*(.+))?$", name)
+                        if m2:
+                            fname = m2.group(1)
+                            test_id_guess = file_to_test_id.get(fname, fname.replace("__", "/"))
+                            failed_set.add(test_id_guess)
+                            msg = m2.group(2) or name
+                            failed_messages[test_id_guess] = msg
+                        else:
+                            failed_set.add(name)
+                            failed_messages[name] = name
 
-                for _, _, test_id in batch_tests:
-                    safe = test_id.replace("/", "__").replace("\\", "__")
-                    if test_id in failed_set or safe in failed_set:
-                        status = "FAIL"
-                        msg = failed_messages.get(test_id, failed_messages.get(safe, ""))
-                    else:
-                        status = "PASS"
-                        msg = ""
-                    results.append({"id": test_id, "status": status, "message": msg})
+                    for _, _, test_id in batch_tests:
+                        safe = test_id.replace("/", "__").replace("\\", "__")
+                        if test_id in failed_set or safe in failed_set:
+                            status = "FAIL"
+                            msg = failed_messages.get(test_id, failed_messages.get(safe, ""))
+                        else:
+                            status = "PASS"
+                            msg = ""
+                        results.append({"id": test_id, "status": status, "message": msg})
 
-                print(
-                    f"  TestRunner: {tr_passed} passed, "
-                    f"{tr_failed} failed, {tr_skipped} skipped"
-                )
-                if verbose:
-                    for tid in sorted(failed_set)[:50]:
-                        print(f"    F {tid}")
+                    print(
+                        f"  TestRunner: {tr_passed} passed, "
+                        f"{tr_failed} failed, {tr_skipped} skipped"
+                    )
+                    if verbose:
+                        for tid in sorted(failed_set)[:50]:
+                            print(f"    F {tid}")
             else:
                 print("Warning: TestRunner produced no JSON output")
                 if runner_output:
@@ -770,7 +768,7 @@ def main() -> int:
     if temp_checkout is not None:
         temp_checkout.cleanup()
 
-    return 1 if s["failed"] > 0 or s["timeouts"] > 0 else 0
+    return 1 if s["failed"] > 0 or s["timeouts"] > 0 or s["errors"] > 0 else 0
 
 
 if __name__ == "__main__":
