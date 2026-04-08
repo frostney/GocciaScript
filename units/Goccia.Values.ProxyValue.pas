@@ -55,6 +55,12 @@ type
     function GetAllPropertyNames: TArray<string>; override;
     function HasOwnProperty(const AName: string): Boolean; override;
 
+    // Symbol-keyed property access via get/has traps
+    function GetSymbolProperty(
+      const ASymbol: TGocciaSymbolValue): TGocciaValue; override;
+    function HasSymbolProperty(
+      const ASymbol: TGocciaSymbolValue): Boolean; override;
+
     // ES2026 $28.1.1 [[GetPrototypeOf]]()
     function GetPrototypeTrap: TGocciaValue;
 
@@ -108,6 +114,7 @@ uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Values.ArrayValue,
+  Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
@@ -269,9 +276,51 @@ begin
 end;
 
 function TGocciaProxyValue.HasOwnProperty(const AName: string): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
 begin
-  // Delegate to HasTrap which handles both trap and fallback
-  Result := HasTrap(AName);
+  // ES2026 §28.1.1: Own-property check uses [[GetOwnProperty]], not
+  // [[HasProperty]], so Object.hasOwn(proxy, key) only reports true
+  // for own properties, not inherited ones.
+  Descriptor := GetOwnPropertyDescriptor(AName);
+  Result := Assigned(Descriptor);
+end;
+
+// ES2026 §28.1.1 [[Get]](P, Receiver) — symbol key
+function TGocciaProxyValue.GetSymbolProperty(
+  const ASymbol: TGocciaSymbolValue): TGocciaValue;
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+begin
+  CheckRevoked;
+  Trap := GetTrap(PROP_GET);
+  if Assigned(Trap) then
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      Args.Add(ASymbol);
+      Args.Add(Self);
+      Result := InvokeTrap(Trap, Args);
+    finally
+      Args.Free;
+    end;
+  end
+  else
+  begin
+    if FTarget is TGocciaObjectValue then
+      Result := TGocciaObjectValue(FTarget).GetSymbolProperty(ASymbol)
+    else
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+end;
+
+// ES2026 §28.1.1 [[HasProperty]](P) — symbol key (virtual override)
+function TGocciaProxyValue.HasSymbolProperty(
+  const ASymbol: TGocciaSymbolValue): Boolean;
+begin
+  Result := HasSymbolTrap(ASymbol);
 end;
 
 // ES2026 $28.1.1 [[Delete]](P)
@@ -489,11 +538,26 @@ begin
 end;
 
 function TGocciaProxyValue.GetEnumerablePropertyNames: TArray<string>;
+var
+  AllKeys: TArray<string>;
+  Descriptor: TGocciaPropertyDescriptor;
+  FilteredKeys: TArray<string>;
+  I, Count: Integer;
 begin
-  // For proxies with ownKeys trap, return all keys (filtering by
-  // enumerability would require getOwnPropertyDescriptor for each key).
-  // Without a trap, delegate to target.
-  Result := GetOwnPropertyKeys;
+  AllKeys := GetOwnPropertyKeys;
+  SetLength(FilteredKeys, Length(AllKeys));
+  Count := 0;
+  for I := 0 to Length(AllKeys) - 1 do
+  begin
+    Descriptor := GetOwnPropertyDescriptor(AllKeys[I]);
+    if Assigned(Descriptor) and Descriptor.Enumerable then
+    begin
+      FilteredKeys[Count] := AllKeys[I];
+      Inc(Count);
+    end;
+  end;
+  SetLength(FilteredKeys, Count);
+  Result := FilteredKeys;
 end;
 
 function TGocciaProxyValue.GetAllPropertyNames: TArray<string>;
@@ -559,11 +623,25 @@ begin
   begin
     if FTarget is TGocciaObjectValue then
     begin
-      if AProto is TGocciaObjectValue then
-        TGocciaObjectValue(FTarget).Prototype := TGocciaObjectValue(AProto)
-      else if (AProto is TGocciaNullLiteralValue) then
-        TGocciaObjectValue(FTarget).Prototype := nil;
-      Result := True;
+      // ES2026 §10.1.2 step 4: If target is not extensible and the new
+      // prototype differs from the current one, return false.
+      if not TGocciaObjectValue(FTarget).Extensible then
+      begin
+        if AProto is TGocciaObjectValue then
+          Result := TGocciaObjectValue(FTarget).Prototype = TGocciaObjectValue(AProto)
+        else if AProto is TGocciaNullLiteralValue then
+          Result := not Assigned(TGocciaObjectValue(FTarget).Prototype)
+        else
+          Result := False;
+      end
+      else
+      begin
+        if AProto is TGocciaObjectValue then
+          TGocciaObjectValue(FTarget).Prototype := TGocciaObjectValue(AProto)
+        else if (AProto is TGocciaNullLiteralValue) then
+          TGocciaObjectValue(FTarget).Prototype := nil;
+        Result := True;
+      end;
     end
     else
       Result := False;
@@ -629,6 +707,13 @@ begin
     finally
       Args.Free;
     end;
+
+    // ES2026 §28.1.1 step 8: Invariant — if trap returned true, target
+    // must actually be non-extensible now.
+    if (FTarget is TGocciaObjectValue) and
+       TGocciaObjectValue(FTarget).Extensible then
+      ThrowTypeError(
+        'Proxy preventExtensions trap returned true but target is still extensible');
   end
   else
   begin
@@ -714,7 +799,10 @@ begin
   else
   begin
     // No construct trap: construct the target directly
-    if FTarget is TGocciaNativeFunctionValue then
+    if FTarget is TGocciaClassValue then
+      Result := TGocciaClassValue(FTarget).Call(AArguments,
+        TGocciaUndefinedLiteralValue.UndefinedValue)
+    else if FTarget is TGocciaNativeFunctionValue then
       Result := TGocciaNativeFunctionValue(FTarget).Call(AArguments,
         TGocciaHoleValue.HoleValue)
     else if FTarget is TGocciaFunctionBase then

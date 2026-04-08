@@ -2148,6 +2148,7 @@ var
   Context: TGocciaEvaluationContext;
   ConstructorName: string;
 begin
+  // ES2026 §28.1.1 [[Construct]](argumentsList, newTarget)
   if AConstructor is TGocciaProxyValue then
   begin
     Result := TGocciaProxyValue(AConstructor).ConstructTrap(AArguments);
@@ -3222,6 +3223,7 @@ begin
 
   if (AKey is TGocciaSymbolValue) and (AObject is TGocciaObjectValue) then
   begin
+    // ES2026 §28.1.1 [[HasProperty]](P) — symbol key
     if AObject is TGocciaProxyValue then
     begin
       if TGocciaProxyValue(AObject).HasSymbolTrap(TGocciaSymbolValue(AKey)) then
@@ -3235,7 +3237,7 @@ begin
 
   KeyStr := KeyToPropertyName(AKey);
 
-  // Proxy intercept: has trap takes precedence over all other checks
+  // ES2026 §28.1.1 [[HasProperty]](P) — string key
   if AObject is TGocciaProxyValue then
   begin
     if TGocciaProxyValue(AObject).HasTrap(KeyStr) then
@@ -3278,6 +3280,7 @@ function TGocciaVM.InvokeFunctionValue(const ACallee: TGocciaValue;
 var
   CalleeDesc: string;
 begin
+  // ES2026 §28.1.1 [[Call]](thisArgument, argumentsList)
   if ACallee is TGocciaProxyValue then
     Exit(TGocciaProxyValue(ACallee).ApplyTrap(AArguments, AThisValue));
   if ACallee is TGocciaBytecodeFunctionValue then
