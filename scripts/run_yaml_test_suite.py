@@ -29,6 +29,7 @@ uses
   Goccia.YAML;
 
 var
+  ExitCode: Integer;
   Documents: TGocciaArrayValue;
   Parser: TGocciaYAMLParser;
   Source: TStringList;
@@ -36,6 +37,7 @@ begin
   if ParamCount <> 1 then
     Halt(2);
 
+  ExitCode := 0;
   TGarbageCollector.Initialize;
   PinPrimitiveSingletons;
 
@@ -50,7 +52,7 @@ begin
       on E: Exception do
       begin
         Writeln(E.Message);
-        Halt(1);
+        ExitCode := 1;
       end;
     end;
   finally
@@ -58,6 +60,8 @@ begin
     Source.Free;
     TGarbageCollector.Shutdown;
   end;
+
+  Halt(ExitCode);
 end.
 """
 
