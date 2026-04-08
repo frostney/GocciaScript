@@ -78,11 +78,9 @@ uses
   Goccia.AST.Statements,
   Goccia.ControlFlow,
   Goccia.Coverage,
-  Goccia.Error,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.Values.ArrayValue,
-  Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper;
 
 { TGocciaFunctionValue }

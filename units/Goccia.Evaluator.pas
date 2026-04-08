@@ -14,7 +14,6 @@ uses
   Goccia.ControlFlow,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Evaluator.Context,
-  Goccia.Modules,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
   Goccia.Values.ClassValue,
@@ -77,9 +76,6 @@ function InstantiateClass(const AClassValue: TGocciaClassValue; const AArguments
 
 function IsObjectInstanceOfClass(const AObj: TGocciaObjectValue; const AClassValue: TGocciaClassValue): Boolean;
 
-// Helper function to safely call OnError with proper error handling
-procedure SafeOnError(const AContext: TGocciaEvaluationContext; const AMessage: string; const ALine, AColumn: Integer);
-
 implementation
 
 uses
@@ -126,13 +122,6 @@ uses
   Goccia.Values.SetValue,
   Goccia.Values.SymbolValue,
   Goccia.Values.ToPrimitive;
-
-// Helper function to safely call OnError with proper error handling
-procedure SafeOnError(const AContext: TGocciaEvaluationContext; const AMessage: string; const ALine, AColumn: Integer);
-begin
-  if Assigned(AContext.OnError) then
-    AContext.OnError(AMessage, ALine, AColumn);
-end;
 
 // Helper: create a non-owning copy of a statement list (AST owns the nodes)
 function CopyStatementList(const ASource: TObjectList<TGocciaASTNode>): TObjectList<TGocciaASTNode>;

@@ -50,7 +50,6 @@ type
     class function WellKnownIsConcatSpreadable: TGocciaSymbolValue;
     class function WellKnownAsyncIterator: TGocciaSymbolValue;
     class function WellKnownMetadata: TGocciaSymbolValue;
-    class function ById(const AId: Integer): TGocciaSymbolValue;
 
     function TypeName: string; override;
     function TypeOf: string; override;
@@ -297,13 +296,6 @@ begin
   if not Assigned(GSymbolRegistry) then
     GSymbolRegistry := THashMap<Integer, TGocciaSymbolValue>.Create;
   GSymbolRegistry.AddOrSetValue(FId, Self);
-end;
-
-class function TGocciaSymbolValue.ById(const AId: Integer): TGocciaSymbolValue;
-begin
-  if Assigned(GSymbolRegistry) and GSymbolRegistry.TryGetValue(AId, Result) then
-    Exit;
-  Result := nil;
 end;
 
 function TGocciaSymbolValue.TypeName: string;

@@ -42,7 +42,6 @@ type
     function ToDebugString: string;
     function TypeName: string; override;
     function TypeOf: string; override;
-    function ValueOf: TGocciaValue;
     function ToStringTag: string; virtual;
 
     function ToStringLiteral: TGocciaStringLiteralValue; override;
@@ -80,11 +79,8 @@ type
     function GetOwnSymbols: TArray<TGocciaSymbolValue>;
 
     procedure Freeze; virtual;
-    function IsFrozen: Boolean; virtual;
     procedure Seal; virtual;
-    function IsSealed: Boolean; virtual;
     procedure PreventExtensions; virtual;
-    function IsExtensible: Boolean; virtual;
 
     procedure MarkReferences; override;
 
@@ -115,7 +111,6 @@ uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.ObjectModel,
-  Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
@@ -483,11 +478,6 @@ end;
 function TGocciaObjectValue.TypeOf: string;
 begin
   Result := 'object';
-end;
-
-function TGocciaObjectValue.ValueOf: TGocciaValue;
-begin
-  Result := Self;
 end;
 
 function TGocciaObjectValue.ToStringTag: string;
@@ -1060,11 +1050,6 @@ begin
   FExtensible := False;
 end;
 
-function TGocciaObjectValue.IsFrozen: Boolean;
-begin
-  Result := FFrozen;
-end;
-
 procedure TGocciaObjectValue.Seal;
 var
   Pair: TGocciaPropertyMap.TKeyValuePair;
@@ -1100,19 +1085,9 @@ begin
   FExtensible := False;
 end;
 
-function TGocciaObjectValue.IsSealed: Boolean;
-begin
-  Result := FSealed or FFrozen;
-end;
-
 procedure TGocciaObjectValue.PreventExtensions;
 begin
   FExtensible := False;
-end;
-
-function TGocciaObjectValue.IsExtensible: Boolean;
-begin
-  Result := FExtensible and not FSealed and not FFrozen;
 end;
 
 end.

@@ -124,9 +124,6 @@ type
     property TypeCheckPreambleSize: UInt8 read FTypeCheckPreambleSize write FTypeCheckPreambleSize;
   end;
 
-const
-  NO_FINALLY: UInt32 = $FFFFFFFF;
-
 implementation
 
 uses

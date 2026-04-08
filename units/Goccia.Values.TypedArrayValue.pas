@@ -126,8 +126,6 @@ implementation
 uses
   Math,
 
-  GarbageCollector.Generic,
-
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Values.ArrayValue,

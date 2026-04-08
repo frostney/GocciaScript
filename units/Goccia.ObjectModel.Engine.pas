@@ -45,7 +45,6 @@ implementation
 
 uses
   Goccia.Constants.PropertyNames,
-  Goccia.ObjectModel.Types,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 

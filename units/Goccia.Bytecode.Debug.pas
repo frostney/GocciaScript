@@ -35,7 +35,6 @@ type
 
     function GetLineForPC(const APC: UInt32): UInt32;
     function GetColumnForPC(const APC: UInt32): UInt16;
-    function GetLocalName(const ASlot: UInt8; const APC: UInt32): string;
 
     function GetLineMapEntry(const AIndex: Integer): TGocciaLineMapEntry;
     function GetLocalInfo(const AIndex: Integer): TGocciaLocalInfo;
@@ -96,18 +95,6 @@ begin
   for I := FLineMapCount - 1 downto 0 do
     if FLineMap[I].PC <= APC then
       Exit(FLineMap[I].Column);
-end;
-
-function TGocciaDebugInfo.GetLocalName(const ASlot: UInt8;
-  const APC: UInt32): string;
-var
-  I: Integer;
-begin
-  Result := '';
-  for I := 0 to FLocalCount - 1 do
-    if (FLocals[I].Slot = ASlot) and (APC >= FLocals[I].StartPC) and
-       (APC <= FLocals[I].EndPC) then
-      Exit(FLocals[I].Name);
 end;
 
 function TGocciaDebugInfo.GetLineMapEntry(const AIndex: Integer): TGocciaLineMapEntry;

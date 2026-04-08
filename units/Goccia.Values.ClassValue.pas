@@ -86,7 +86,6 @@ type
     function HasOwnPrivateGetter(const AName: string): Boolean;
     function HasOwnPrivateSetter(const AName: string): Boolean;
     function HasOwnPrivateStaticProperty(const AName: string): Boolean;
-    function HasOwnPrivateStaticName(const AName: string): Boolean;
     function GetOwnPrivatePropertyGetter(
       const AName: string): TGocciaFunctionBase;
     function GetOwnPrivatePropertySetter(
@@ -94,7 +93,6 @@ type
     procedure AddInstanceProperty(const AName: string; const AExpression: TGocciaExpression);
     procedure AddPrivateInstanceProperty(const AName: string; const AExpression: TGocciaExpression);
     procedure AddPrivateStaticProperty(const AName: string; const AValue: TGocciaValue);
-    function GetPrivateStaticProperty(const AName: string): TGocciaValue;
     procedure AddPrivateMethod(const AName: string; const AMethod: TGocciaMethodValue);
     function GetPrivateMethod(const AName: string): TGocciaMethodValue;
     procedure AppendOwnPrivateNames(const ANames: TStrings);
@@ -191,13 +189,11 @@ type
     procedure SetPrivateProperty(const AName: string; const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue);
     function TryGetRawPrivateProperty(const AKey: string; out AValue: TGocciaValue): Boolean;
     procedure SetRawPrivateProperty(const AKey: string; const AValue: TGocciaValue);
-    function HasPrivateProperty(const AName: string): Boolean;
     function IsInstanceOf(const AClass: TGocciaClassValue): Boolean; inline;
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); virtual;
     procedure MarkReferences; override;
 
     property ClassValue: TGocciaClassValue read FClass write FClass;
-    property PrivateProperties: TGocciaValueMap read FPrivateProperties;
   end;
 
 implementation
@@ -500,13 +496,6 @@ begin
   Result := FPrivateStaticProperties.ContainsKey(AName);
 end;
 
-function TGocciaClassValue.HasOwnPrivateStaticName(const AName: string): Boolean;
-begin
-  Result := HasOwnPrivateStaticProperty(AName) or
-    HasOwnPrivateGetter(AName) or
-    HasOwnPrivateSetter(AName);
-end;
-
 function TGocciaClassValue.GetOwnPrivatePropertyGetter(
   const AName: string): TGocciaFunctionBase;
 begin
@@ -703,12 +692,6 @@ end;
 procedure TGocciaClassValue.AddPrivateStaticProperty(const AName: string; const AValue: TGocciaValue);
 begin
   FPrivateStaticProperties.AddOrSetValue(AName, AValue);
-end;
-
-function TGocciaClassValue.GetPrivateStaticProperty(const AName: string): TGocciaValue;
-begin
-  if not FPrivateStaticProperties.TryGetValue(AName, Result) then
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 procedure TGocciaClassValue.AddPrivateMethod(const AName: string; const AMethod: TGocciaMethodValue);
@@ -1247,28 +1230,6 @@ procedure TGocciaInstanceValue.SetProperty(const AName: string; const AValue: TG
 begin
   // Delegate to AssignProperty which has the setter logic
   AssignProperty(AName, AValue);
-end;
-
-function TGocciaInstanceValue.HasPrivateProperty(const AName: string): Boolean;
-var
-  Pair: TGocciaValueMap.TKeyValuePair;
-  Suffix: string;
-begin
-  if not Assigned(FPrivateProperties) then
-  begin
-    Result := False;
-    Exit;
-  end;
-  Suffix := ':' + AName;
-  for Pair in FPrivateProperties do
-  begin
-    if (Pair.Key = AName) or (Copy(Pair.Key, Length(Pair.Key) - Length(Suffix) + 1, Length(Suffix)) = Suffix) then
-    begin
-      Result := True;
-      Exit;
-    end;
-  end;
-  Result := False;
 end;
 
 function TGocciaInstanceValue.TryGetRawPrivateProperty(const AKey: string;

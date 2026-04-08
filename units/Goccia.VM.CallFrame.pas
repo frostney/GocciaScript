@@ -5,8 +5,7 @@ unit Goccia.VM.CallFrame;
 interface
 
 uses
-  Goccia.Bytecode.Chunk,
-  Goccia.VM.Registers;
+  Goccia.Bytecode.Chunk;
 
 type
   TGocciaVMCallFrame = record
