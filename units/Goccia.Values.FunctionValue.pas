@@ -80,7 +80,6 @@ uses
   Goccia.Coverage,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
-  Goccia.Logger,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper;
 

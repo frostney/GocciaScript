@@ -24,7 +24,6 @@ uses
   Goccia.JSX.SourceMap,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
-  Goccia.Logger,
   Goccia.Modules.Configuration,
   Goccia.Parser,
   Goccia.ScriptLoader.Globals,
@@ -613,7 +612,6 @@ begin
   GSilentConsole := False;
   GTimeoutMilliseconds := 0;
   GImportMapPath := '';
-  Logger.Levels := [];
   GGlobalsFiles := TStringList.Create;
   GInlineGlobals := TStringList.Create;
   GInlineAliases := TStringList.Create;

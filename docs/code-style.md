@@ -22,7 +22,6 @@ Which sets:
 {$overflowchecks on}     // Runtime overflow checking
 {$rangechecks on}        // Runtime range checking
 {$modeswitch advancedrecords}   // Records with methods
-{$modeswitch multihelpers}      // Multiple class helpers
 ```
 
 Overflow and range checks are **enabled** — correctness is prioritized over raw performance.
