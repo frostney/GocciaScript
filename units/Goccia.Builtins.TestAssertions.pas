@@ -16,6 +16,7 @@ uses
   Goccia.Scope,
   Goccia.Values.ArrayValue,
   Goccia.Values.FunctionBase,
+  Goccia.Values.MockFunction,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -128,6 +129,18 @@ type
     function ToThrow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ToBeCloseTo(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
+    // Mock matchers
+    function ToHaveBeenCalled(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToHaveBeenCalledTimes(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToHaveBeenCalledWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToHaveBeenLastCalledWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToHaveBeenNthCalledWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToHaveReturned(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToHaveReturnedTimes(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToHaveReturnedWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToHaveLastReturnedWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToHaveNthReturnedWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+
     // Negation support
     function GetNot(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
@@ -238,6 +251,10 @@ type
     function BeforeEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function AfterEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function AfterAll(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+
+    // Mock/spy creation
+    function MockFunction(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SpyOn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     // Test execution
     function RunTests(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -598,6 +615,28 @@ begin
     TGocciaNativeFunctionValue.Create(ToThrow, 'toThrow', 1), [pfConfigurable, pfWritable]));
   DefineProperty('toBeCloseTo', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ToBeCloseTo, 'toBeCloseTo', 2), [pfConfigurable, pfWritable]));
+
+  // Mock matchers
+  DefineProperty('toHaveBeenCalled', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToHaveBeenCalled, 'toHaveBeenCalled', 0), [pfConfigurable, pfWritable]));
+  DefineProperty('toHaveBeenCalledTimes', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToHaveBeenCalledTimes, 'toHaveBeenCalledTimes', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('toHaveBeenCalledWith', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToHaveBeenCalledWith, 'toHaveBeenCalledWith', -1), [pfConfigurable, pfWritable]));
+  DefineProperty('toHaveBeenLastCalledWith', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToHaveBeenLastCalledWith, 'toHaveBeenLastCalledWith', -1), [pfConfigurable, pfWritable]));
+  DefineProperty('toHaveBeenNthCalledWith', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToHaveBeenNthCalledWith, 'toHaveBeenNthCalledWith', -1), [pfConfigurable, pfWritable]));
+  DefineProperty('toHaveReturned', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToHaveReturned, 'toHaveReturned', 0), [pfConfigurable, pfWritable]));
+  DefineProperty('toHaveReturnedTimes', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToHaveReturnedTimes, 'toHaveReturnedTimes', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('toHaveReturnedWith', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToHaveReturnedWith, 'toHaveReturnedWith', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('toHaveLastReturnedWith', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToHaveLastReturnedWith, 'toHaveLastReturnedWith', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('toHaveNthReturnedWith', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToHaveNthReturnedWith, 'toHaveNthReturnedWith', 2), [pfConfigurable, pfWritable]));
 
   // Negation property - use accessor to make it a getter
   DefineProperty('not', TGocciaPropertyDescriptorAccessor.Create(
@@ -1630,6 +1669,557 @@ begin
   end;
 end;
 
+function TGocciaExpectationValue.ToHaveBeenCalled(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  MockFn: TGocciaMockFunctionValue;
+  WasCalled: Boolean;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 0, 'toHaveBeenCalled',
+    TGocciaTestAssertions(FTestAssertions).ThrowError);
+
+  if not (FActualValue is TGocciaMockFunctionValue) then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveBeenCalled',
+      'Value must be a mock or spy function');
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  MockFn := TGocciaMockFunctionValue(FActualValue);
+  WasCalled := MockFn.MockCalls.Count > 0;
+
+  if FIsNegated then
+    WasCalled := not WasCalled;
+
+  if WasCalled then
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveBeenCalled')
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveBeenCalled',
+        Format('Expected mock not to have been called but it was called %d time(s)',
+          [MockFn.MockCalls.Count]))
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveBeenCalled',
+        'Expected mock to have been called but it was not called');
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaExpectationValue.ToHaveBeenCalledTimes(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  MockFn: TGocciaMockFunctionValue;
+  ExpectedTimes: Integer;
+  Matches: Boolean;
+  NumVal: TGocciaNumberLiteralValue;
+begin
+  if not (FActualValue is TGocciaMockFunctionValue) then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveBeenCalledTimes',
+      'Value must be a mock or spy function');
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toHaveBeenCalledTimes',
+    TGocciaTestAssertions(FTestAssertions).ThrowError);
+
+  MockFn := TGocciaMockFunctionValue(FActualValue);
+  NumVal := AArgs.GetElement(0).ToNumberLiteral;
+  if NumVal.IsNaN or NumVal.IsInfinity or NumVal.IsNegativeInfinity or
+     (NumVal.Value < 0) or (NumVal.Value > High(Integer)) or (Frac(NumVal.Value) <> 0) then
+    TGocciaTestAssertions(FTestAssertions).ThrowError(
+      'toHaveBeenCalledTimes expects a non-negative integer', 0, 0);
+  ExpectedTimes := Trunc(NumVal.Value);
+  Matches := MockFn.MockCalls.Count = ExpectedTimes;
+
+  if FIsNegated then
+    Matches := not Matches;
+
+  if Matches then
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveBeenCalledTimes')
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveBeenCalledTimes',
+        Format('Expected mock not to have been called %d time(s)', [ExpectedTimes]))
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveBeenCalledTimes',
+        Format('Expected mock to have been called %d time(s) but was called %d time(s)',
+          [ExpectedTimes, MockFn.MockCalls.Count]));
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaExpectationValue.ToHaveBeenCalledWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  MockFn: TGocciaMockFunctionValue;
+  Found: Boolean;
+  I, J: Integer;
+  CallArgs: TGocciaArrayValue;
+  CallMatches: Boolean;
+begin
+  if not (FActualValue is TGocciaMockFunctionValue) then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveBeenCalledWith',
+      'Value must be a mock or spy function');
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  MockFn := TGocciaMockFunctionValue(FActualValue);
+  Found := False;
+
+  for I := 0 to MockFn.MockCalls.Count - 1 do
+  begin
+    if not (MockFn.MockCalls[I] is TGocciaArrayValue) then
+      Continue;
+
+    CallArgs := TGocciaArrayValue(MockFn.MockCalls[I]);
+    if CallArgs.Elements.Count <> AArgs.Length then
+      Continue;
+
+    CallMatches := True;
+    for J := 0 to AArgs.Length - 1 do
+    begin
+      if not IsDeepEqual(CallArgs.Elements[J], AArgs.GetElement(J)) then
+      begin
+        CallMatches := False;
+        Break;
+      end;
+    end;
+
+    if CallMatches then
+    begin
+      Found := True;
+      Break;
+    end;
+  end;
+
+  if FIsNegated then
+    Found := not Found;
+
+  if Found then
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveBeenCalledWith')
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveBeenCalledWith',
+        'Expected mock not to have been called with the specified arguments')
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveBeenCalledWith',
+        Format('Expected mock to have been called with the specified arguments (%d call(s) recorded)',
+          [MockFn.MockCalls.Count]));
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaExpectationValue.ToHaveBeenLastCalledWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  MockFn: TGocciaMockFunctionValue;
+  LastCallArgs: TGocciaArrayValue;
+  Matches: Boolean;
+  J: Integer;
+begin
+  if not (FActualValue is TGocciaMockFunctionValue) then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveBeenLastCalledWith',
+      'Value must be a mock or spy function');
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  MockFn := TGocciaMockFunctionValue(FActualValue);
+  if MockFn.MockCalls.Count = 0 then
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveBeenLastCalledWith')
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveBeenLastCalledWith',
+        'Expected mock to have been called but it was not called');
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  LastCallArgs := TGocciaArrayValue(MockFn.MockCalls[MockFn.MockCalls.Count - 1]);
+  Matches := LastCallArgs.Elements.Count = AArgs.Length;
+
+  if Matches then
+    for J := 0 to AArgs.Length - 1 do
+      if not IsDeepEqual(LastCallArgs.Elements[J], AArgs.GetElement(J)) then
+      begin
+        Matches := False;
+        Break;
+      end;
+
+  if FIsNegated then
+    Matches := not Matches;
+
+  if Matches then
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveBeenLastCalledWith')
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveBeenLastCalledWith',
+        'Expected mock not to have been last called with the specified arguments')
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveBeenLastCalledWith',
+        'Expected mock to have been last called with the specified arguments');
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaExpectationValue.ToHaveBeenNthCalledWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  MockFn: TGocciaMockFunctionValue;
+  N: Integer;
+  NumVal: TGocciaNumberLiteralValue;
+  NthCallArgs: TGocciaArrayValue;
+  Matches: Boolean;
+  J: Integer;
+begin
+  if not (FActualValue is TGocciaMockFunctionValue) then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveBeenNthCalledWith',
+      'Value must be a mock or spy function');
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  if AArgs.Length < 1 then
+  begin
+    TGocciaTestAssertions(FTestAssertions).ThrowError(
+      'toHaveBeenNthCalledWith requires at least 1 argument (call index)', 0, 0);
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  MockFn := TGocciaMockFunctionValue(FActualValue);
+  NumVal := AArgs.GetElement(0).ToNumberLiteral;
+  if NumVal.IsNaN or NumVal.IsInfinity or NumVal.IsNegativeInfinity or
+     (NumVal.Value < 1) or (NumVal.Value > High(Integer)) or (Frac(NumVal.Value) <> 0) then
+    TGocciaTestAssertions(FTestAssertions).ThrowError(
+      'toHaveBeenNthCalledWith expects a positive integer index', 0, 0);
+  N := Trunc(NumVal.Value);
+
+  if (N < 1) or (N > MockFn.MockCalls.Count) then
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveBeenNthCalledWith')
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveBeenNthCalledWith',
+        Format('Call index %d is out of range (mock was called %d time(s))',
+          [N, MockFn.MockCalls.Count]));
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  NthCallArgs := TGocciaArrayValue(MockFn.MockCalls[N - 1]);
+  Matches := NthCallArgs.Elements.Count = (AArgs.Length - 1);
+
+  if Matches then
+    for J := 1 to AArgs.Length - 1 do
+      if not IsDeepEqual(NthCallArgs.Elements[J - 1], AArgs.GetElement(J)) then
+      begin
+        Matches := False;
+        Break;
+      end;
+
+  if FIsNegated then
+    Matches := not Matches;
+
+  if Matches then
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveBeenNthCalledWith')
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveBeenNthCalledWith',
+        Format('Expected call %d not to have the specified arguments', [N]))
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveBeenNthCalledWith',
+        Format('Expected call %d to have the specified arguments', [N]));
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaExpectationValue.ToHaveReturned(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  MockFn: TGocciaMockFunctionValue;
+  HasReturn: Boolean;
+  I: Integer;
+  ResultObj: TGocciaObjectValue;
+  ResultType: TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 0, 'toHaveReturned',
+    TGocciaTestAssertions(FTestAssertions).ThrowError);
+
+  if not (FActualValue is TGocciaMockFunctionValue) then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveReturned',
+      'Value must be a mock or spy function');
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  MockFn := TGocciaMockFunctionValue(FActualValue);
+  HasReturn := False;
+
+  for I := 0 to MockFn.MockResults.Count - 1 do
+    if MockFn.MockResults[I] is TGocciaObjectValue then
+    begin
+      ResultObj := TGocciaObjectValue(MockFn.MockResults[I]);
+      ResultType := ResultObj.GetProperty(PROP_TYPE);
+      if (ResultType is TGocciaStringLiteralValue) and
+         (TGocciaStringLiteralValue(ResultType).Value = 'return') then
+      begin
+        HasReturn := True;
+        Break;
+      end;
+    end;
+
+  if FIsNegated then
+    HasReturn := not HasReturn;
+
+  if HasReturn then
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveReturned')
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveReturned',
+        'Expected mock not to have returned')
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveReturned',
+        'Expected mock to have returned at least once');
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaExpectationValue.ToHaveReturnedTimes(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  MockFn: TGocciaMockFunctionValue;
+  ExpectedTimes, ActualCount, I: Integer;
+  NumVal: TGocciaNumberLiteralValue;
+  ResultObj: TGocciaObjectValue;
+  ResultType: TGocciaValue;
+  Matches: Boolean;
+begin
+  if not (FActualValue is TGocciaMockFunctionValue) then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveReturnedTimes',
+      'Value must be a mock or spy function');
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toHaveReturnedTimes',
+    TGocciaTestAssertions(FTestAssertions).ThrowError);
+
+  MockFn := TGocciaMockFunctionValue(FActualValue);
+  NumVal := AArgs.GetElement(0).ToNumberLiteral;
+  if NumVal.IsNaN or NumVal.IsInfinity or NumVal.IsNegativeInfinity or
+     (NumVal.Value < 0) or (NumVal.Value > High(Integer)) or (Frac(NumVal.Value) <> 0) then
+    TGocciaTestAssertions(FTestAssertions).ThrowError(
+      'toHaveReturnedTimes expects a non-negative integer', 0, 0);
+  ExpectedTimes := Trunc(NumVal.Value);
+  ActualCount := 0;
+
+  for I := 0 to MockFn.MockResults.Count - 1 do
+    if MockFn.MockResults[I] is TGocciaObjectValue then
+    begin
+      ResultObj := TGocciaObjectValue(MockFn.MockResults[I]);
+      ResultType := ResultObj.GetProperty(PROP_TYPE);
+      if (ResultType is TGocciaStringLiteralValue) and
+         (TGocciaStringLiteralValue(ResultType).Value = 'return') then
+        Inc(ActualCount);
+    end;
+
+  Matches := ActualCount = ExpectedTimes;
+  if FIsNegated then
+    Matches := not Matches;
+
+  if Matches then
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveReturnedTimes')
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveReturnedTimes',
+        Format('Expected mock not to have returned %d time(s)', [ExpectedTimes]))
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveReturnedTimes',
+        Format('Expected mock to have returned %d time(s) but returned %d time(s)',
+          [ExpectedTimes, ActualCount]));
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaExpectationValue.ToHaveReturnedWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  MockFn: TGocciaMockFunctionValue;
+  Expected: TGocciaValue;
+  Found: Boolean;
+  I: Integer;
+  ResultObj: TGocciaObjectValue;
+  ResultType, ResultValue: TGocciaValue;
+begin
+  if not (FActualValue is TGocciaMockFunctionValue) then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveReturnedWith',
+      'Value must be a mock or spy function');
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toHaveReturnedWith',
+    TGocciaTestAssertions(FTestAssertions).ThrowError);
+
+  MockFn := TGocciaMockFunctionValue(FActualValue);
+  Expected := AArgs.GetElement(0);
+  Found := False;
+
+  for I := 0 to MockFn.MockResults.Count - 1 do
+    if MockFn.MockResults[I] is TGocciaObjectValue then
+    begin
+      ResultObj := TGocciaObjectValue(MockFn.MockResults[I]);
+      ResultType := ResultObj.GetProperty(PROP_TYPE);
+      if (ResultType is TGocciaStringLiteralValue) and
+         (TGocciaStringLiteralValue(ResultType).Value = 'return') then
+      begin
+        ResultValue := ResultObj.GetProperty(PROP_VALUE);
+        if IsDeepEqual(ResultValue, Expected) then
+        begin
+          Found := True;
+          Break;
+        end;
+      end;
+    end;
+
+  if FIsNegated then
+    Found := not Found;
+
+  if Found then
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveReturnedWith')
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveReturnedWith',
+        'Expected mock not to have returned with ' + Expected.ToStringLiteral.Value)
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveReturnedWith',
+        'Expected mock to have returned with ' + Expected.ToStringLiteral.Value);
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaExpectationValue.ToHaveLastReturnedWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  MockFn: TGocciaMockFunctionValue;
+  Expected: TGocciaValue;
+  Matches: Boolean;
+  LastResult: TGocciaObjectValue;
+  ResultType, ResultValue: TGocciaValue;
+begin
+  if not (FActualValue is TGocciaMockFunctionValue) then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveLastReturnedWith',
+      'Value must be a mock or spy function');
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toHaveLastReturnedWith',
+    TGocciaTestAssertions(FTestAssertions).ThrowError);
+
+  MockFn := TGocciaMockFunctionValue(FActualValue);
+  Expected := AArgs.GetElement(0);
+
+  if MockFn.MockResults.Count = 0 then
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveLastReturnedWith')
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveLastReturnedWith',
+        'Expected mock to have returned but it was never called');
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  LastResult := TGocciaObjectValue(MockFn.MockResults[MockFn.MockResults.Count - 1]);
+  ResultType := LastResult.GetProperty(PROP_TYPE);
+  ResultValue := LastResult.GetProperty(PROP_VALUE);
+
+  Matches := (ResultType is TGocciaStringLiteralValue) and
+    (TGocciaStringLiteralValue(ResultType).Value = 'return') and
+    IsDeepEqual(ResultValue, Expected);
+
+  if FIsNegated then
+    Matches := not Matches;
+
+  if Matches then
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveLastReturnedWith')
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveLastReturnedWith',
+        'Expected mock not to have last returned with ' + Expected.ToStringLiteral.Value)
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveLastReturnedWith',
+        'Expected mock to have last returned with ' + Expected.ToStringLiteral.Value);
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaExpectationValue.ToHaveNthReturnedWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  MockFn: TGocciaMockFunctionValue;
+  N: Integer;
+  NumVal: TGocciaNumberLiteralValue;
+  Expected: TGocciaValue;
+  Matches: Boolean;
+  NthResult: TGocciaObjectValue;
+  ResultType, ResultValue: TGocciaValue;
+begin
+  if not (FActualValue is TGocciaMockFunctionValue) then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveNthReturnedWith',
+      'Value must be a mock or spy function');
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'toHaveNthReturnedWith',
+    TGocciaTestAssertions(FTestAssertions).ThrowError);
+
+  MockFn := TGocciaMockFunctionValue(FActualValue);
+  NumVal := AArgs.GetElement(0).ToNumberLiteral;
+  if NumVal.IsNaN or NumVal.IsInfinity or NumVal.IsNegativeInfinity or
+     (NumVal.Value < 1) or (NumVal.Value > High(Integer)) or (Frac(NumVal.Value) <> 0) then
+    TGocciaTestAssertions(FTestAssertions).ThrowError(
+      'toHaveNthReturnedWith expects a positive integer index', 0, 0);
+  N := Trunc(NumVal.Value);
+  Expected := AArgs.GetElement(1);
+
+  if (N < 1) or (N > MockFn.MockResults.Count) then
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveNthReturnedWith')
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveNthReturnedWith',
+        Format('Return index %d is out of range (mock returned %d time(s))',
+          [N, MockFn.MockResults.Count]));
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  NthResult := TGocciaObjectValue(MockFn.MockResults[N - 1]);
+  ResultType := NthResult.GetProperty(PROP_TYPE);
+  ResultValue := NthResult.GetProperty(PROP_VALUE);
+
+  Matches := (ResultType is TGocciaStringLiteralValue) and
+    (TGocciaStringLiteralValue(ResultType).Value = 'return') and
+    IsDeepEqual(ResultValue, Expected);
+
+  if FIsNegated then
+    Matches := not Matches;
+
+  if Matches then
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveNthReturnedWith')
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveNthReturnedWith',
+        Format('Expected return %d not to be %s', [N, Expected.ToStringLiteral.Value]))
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveNthReturnedWith',
+        Format('Expected return %d to be %s', [N, Expected.ToStringLiteral.Value]));
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
 function TGocciaExpectationValue.GetNot(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaExpectationValue.Create(FActualValue, FTestAssertions, True);
@@ -1753,6 +2343,8 @@ begin
   AScope.DefineLexicalBinding('afterEach', TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1), dtConst);
   AScope.DefineLexicalBinding('afterAll', TGocciaNativeFunctionValue.Create(AfterAll, 'afterAll', 1), dtConst);
   AScope.DefineLexicalBinding('runTests', TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0), dtConst);
+  AScope.DefineLexicalBinding('mock', TGocciaNativeFunctionValue.Create(MockFunction, 'mock', 0), dtConst);
+  AScope.DefineLexicalBinding('spyOn', TGocciaNativeFunctionValue.Create(SpyOn, 'spyOn', 2), dtConst);
 
   // Also set them in the builtin object for completeness
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(Expect, 'expect', 1));
@@ -1764,6 +2356,8 @@ begin
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(AfterAll, 'afterAll', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MockFunction, 'mock', 0));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(SpyOn, 'spyOn', 2));
 end;
 
 destructor TGocciaTestAssertions.Destroy;
@@ -2493,6 +3087,64 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'expect', ThrowError);
 
   Result := TGocciaExpectationValue.Create(AArgs.GetElement(0), Self);
+end;
+
+function TGocciaTestAssertions.MockFunction(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Impl: TGocciaValue;
+begin
+  if AArgs.Length > 0 then
+  begin
+    if not (AArgs.GetElement(0) is TGocciaFunctionBase) then
+    begin
+      ThrowError('mock() expects a function argument or no arguments', 0, 0);
+      Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+    end;
+    Impl := AArgs.GetElement(0);
+  end
+  else
+    Impl := nil;
+
+  Result := TGocciaMockFunctionValue.Create(Impl);
+end;
+
+function TGocciaTestAssertions.SpyOn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Target: TGocciaObjectValue;
+  MethodName: string;
+  ExistingValue: TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'spyOn', ThrowError);
+
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
+  begin
+    ThrowError('spyOn expects first argument to be an object', 0, 0);
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  if not (AArgs.GetElement(1) is TGocciaStringLiteralValue) then
+  begin
+    ThrowError('spyOn expects second argument to be a string (method name)', 0, 0);
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  Target := TGocciaObjectValue(AArgs.GetElement(0));
+  MethodName := TGocciaStringLiteralValue(AArgs.GetElement(1)).Value;
+
+  if not Target.HasProperty(MethodName) then
+  begin
+    ThrowError('spyOn: cannot spy on non-existent property "' + MethodName + '"', 0, 0);
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  ExistingValue := Target.GetProperty(MethodName);
+  if not Assigned(ExistingValue) or not (ExistingValue is TGocciaFunctionBase) then
+  begin
+    ThrowError('spyOn: property "' + MethodName + '" is not a function', 0, 0);
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  Result := TGocciaMockFunctionValue.CreateSpy(Target, MethodName);
 end;
 
 function TGocciaTestAssertions.Describe(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

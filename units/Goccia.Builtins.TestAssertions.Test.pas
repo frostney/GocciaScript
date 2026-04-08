@@ -19,6 +19,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
+  Goccia.Values.MockFunction,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
@@ -229,6 +230,122 @@ type
     procedure AfterAll; override;
     procedure BeforeEach; override;
     procedure AfterEach; override;
+    procedure SetupTests; override;
+  end;
+
+  TTestMockAndSpyAPIs = class(TestRunner.TTestSuite)
+  private
+    FScope: TGocciaScope;
+    FAssertions: TGocciaTestAssertions;
+
+    procedure DummyThrowError(const AMessage: string; const ALine, AColumn: Integer);
+
+    function MakeExpectation(const AValue: TGocciaValue; const AIsNegated: Boolean = False): TGocciaExpectationValue;
+    procedure ExpectPass(const AValue: TGocciaValue);
+    procedure ExpectFail(const AValue: TGocciaValue);
+
+    function CreateMockViaGlobal(const AImpl: TGocciaValue = nil): TGocciaMockFunctionValue;
+    function CreateSpyViaGlobal(const ATarget: TGocciaObjectValue; const AMethodName: string): TGocciaMockFunctionValue;
+    function CallMockFunction(const AMock: TGocciaMockFunctionValue; const AArgs: array of TGocciaValue): TGocciaValue;
+
+    // Reusable callbacks for mock implementations (FPC 3.2.2 has no anonymous functions)
+    function CallbackReturn42(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function CallbackReturn99(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function CallbackReturnDefault(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function CallbackReturnOnce(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function CallbackReturnFirst(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function CallbackReturnSecond(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function CallbackReturnImpl(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function CallbackReturnOriginal(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function CallbackReturnMocked(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function CallbackReturnUndefined(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+
+    { mock() creation and call tracking }
+    procedure TestMockReturnsUndefinedByDefault;
+    procedure TestMockTracksCallArguments;
+    procedure TestMockTracksMultipleCalls;
+    procedure TestMockWithImplementation;
+    procedure TestMockDotMockCallsArray;
+    procedure TestMockDotMockResultsArray;
+    procedure TestMockDotMockLastCall;
+    procedure TestMockDotMockLastCallWhenNeverCalled;
+
+    { mockImplementation }
+    procedure TestMockImplementationSetsImpl;
+    procedure TestMockImplementationReturnsTheMock;
+
+    { mockImplementationOnce }
+    procedure TestMockImplementationOnceThenFallback;
+    procedure TestMockImplementationOnceChained;
+
+    { mockReturnValue }
+    procedure TestMockReturnValuePermanent;
+    procedure TestMockReturnValueOverridesImpl;
+
+    { mockReturnValueOnce }
+    procedure TestMockReturnValueOnceThenUndefined;
+    procedure TestMockReturnValueOnceChained;
+    procedure TestMockReturnValueOncePriorityOverPermanent;
+
+    { mockClear / mockReset }
+    procedure TestMockClearKeepsImplementation;
+    procedure TestMockResetClearsImplementation;
+
+    { mockName / getMockName }
+    procedure TestMockNameDefault;
+    procedure TestMockNameCustom;
+
+    { spyOn }
+    procedure TestSpyOnPassesThrough;
+    procedure TestSpyOnTracksCalls;
+    procedure TestSpyOnMockImplementationOverrides;
+    procedure TestSpyOnMockRestoreRestoresOriginal;
+    procedure TestSpyOnMockReturnValueOverrides;
+
+    { mock matchers - toHaveBeenCalled }
+    procedure TestToHaveBeenCalledPass;
+    procedure TestToHaveBeenCalledFail;
+    procedure TestToHaveBeenCalledNegated;
+
+    { mock matchers - toHaveBeenCalledTimes }
+    procedure TestToHaveBeenCalledTimesPass;
+    procedure TestToHaveBeenCalledTimesFail;
+
+    { mock matchers - toHaveBeenCalledWith }
+    procedure TestToHaveBeenCalledWithPass;
+    procedure TestToHaveBeenCalledWithFail;
+    procedure TestToHaveBeenCalledWithDeepEquality;
+
+    { mock matchers - toHaveBeenLastCalledWith }
+    procedure TestToHaveBeenLastCalledWithPass;
+    procedure TestToHaveBeenLastCalledWithFail;
+
+    { mock matchers - toHaveBeenNthCalledWith }
+    procedure TestToHaveBeenNthCalledWithPass;
+
+    { mock matchers - toHaveReturned }
+    procedure TestToHaveReturnedPass;
+    procedure TestToHaveReturnedFail;
+
+    { mock matchers - toHaveReturnedTimes }
+    procedure TestToHaveReturnedTimesPass;
+
+    { mock matchers - toHaveReturnedWith }
+    procedure TestToHaveReturnedWithPass;
+    procedure TestToHaveReturnedWithFail;
+
+    { mock matchers - toHaveLastReturnedWith }
+    procedure TestToHaveLastReturnedWithPass;
+
+    { mock matchers - toHaveNthReturnedWith }
+    procedure TestToHaveNthReturnedWithPass;
+
+    { matchers reject non-mock values }
+    procedure TestMatcherRejectsNonMock;
+  public
+    procedure BeforeAll; override;
+    procedure AfterAll; override;
+    procedure BeforeEach; override;
     procedure SetupTests; override;
   end;
 
@@ -2522,9 +2639,1089 @@ begin
   Expect<String>(FRecordedEvents[1]).ToBe('suite:two');
 end;
 
+{ ======== TTestMockAndSpyAPIs ======== }
+
+procedure TTestMockAndSpyAPIs.DummyThrowError(const AMessage: string; const ALine, AColumn: Integer);
+begin
+  raise Exception.Create(AMessage);
+end;
+
+procedure TTestMockAndSpyAPIs.BeforeAll;
+begin
+  FScope := TGocciaGlobalScope.Create;
+  FAssertions := TGocciaTestAssertions.Create('test', FScope, DummyThrowError);
+  FAssertions.SuppressOutput := True;
+end;
+
+procedure TTestMockAndSpyAPIs.AfterAll;
+begin
+  FAssertions.Free;
+  FScope.Free;
+end;
+
+procedure TTestMockAndSpyAPIs.BeforeEach;
+begin
+  FAssertions.ResetCurrentTestState;
+end;
+
+function TTestMockAndSpyAPIs.MakeExpectation(const AValue: TGocciaValue; const AIsNegated: Boolean): TGocciaExpectationValue;
+begin
+  Result := TGocciaExpectationValue.Create(AValue, FAssertions, AIsNegated);
+end;
+
+procedure TTestMockAndSpyAPIs.ExpectPass(const AValue: TGocciaValue);
+begin
+  Expect<Boolean>(AValue = TGocciaUndefinedLiteralValue.UndefinedValue).ToBe(True);
+  Expect<Boolean>(FAssertions.CurrentTestHasFailures).ToBe(False);
+end;
+
+procedure TTestMockAndSpyAPIs.ExpectFail(const AValue: TGocciaValue);
+begin
+  Expect<Boolean>(AValue = TGocciaUndefinedLiteralValue.UndefinedValue).ToBe(True);
+  Expect<Boolean>(FAssertions.CurrentTestHasFailures).ToBe(True);
+end;
+
+function TTestMockAndSpyAPIs.CreateMockViaGlobal(const AImpl: TGocciaValue): TGocciaMockFunctionValue;
+var
+  MockCallable: TGocciaFunctionBase;
+  Args: TGocciaArgumentsCollection;
+  Result_: TGocciaValue;
+begin
+  MockCallable := TGocciaFunctionBase(FScope.ResolveIdentifier('mock'));
+  if Assigned(AImpl) then
+    Args := TGocciaArgumentsCollection.Create([AImpl])
+  else
+    Args := TGocciaArgumentsCollection.Create;
+  try
+    Result_ := MockCallable.Call(Args, nil);
+  finally
+    Args.Free;
+  end;
+  Result := TGocciaMockFunctionValue(Result_);
+end;
+
+function TTestMockAndSpyAPIs.CreateSpyViaGlobal(const ATarget: TGocciaObjectValue; const AMethodName: string): TGocciaMockFunctionValue;
+var
+  SpyCallable: TGocciaFunctionBase;
+  Args: TGocciaArgumentsCollection;
+  Result_: TGocciaValue;
+begin
+  SpyCallable := TGocciaFunctionBase(FScope.ResolveIdentifier('spyOn'));
+  Args := TGocciaArgumentsCollection.Create([ATarget, TGocciaStringLiteralValue.Create(AMethodName)]);
+  try
+    Result_ := SpyCallable.Call(Args, nil);
+  finally
+    Args.Free;
+  end;
+  Result := TGocciaMockFunctionValue(Result_);
+end;
+
+function TTestMockAndSpyAPIs.CallMockFunction(const AMock: TGocciaMockFunctionValue; const AArgs: array of TGocciaValue): TGocciaValue;
+var
+  Args: TGocciaArgumentsCollection;
+  I: Integer;
+begin
+  Args := TGocciaArgumentsCollection.CreateWithCapacity(Length(AArgs));
+  try
+    for I := 0 to Length(AArgs) - 1 do
+      Args.Add(AArgs[I]);
+    Result := AMock.Call(Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+  finally
+    Args.Free;
+  end;
+end;
+
+function TTestMockAndSpyAPIs.CallbackReturn42(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaNumberLiteralValue.Create(42);
+end;
+
+function TTestMockAndSpyAPIs.CallbackReturn99(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaNumberLiteralValue.Create(99);
+end;
+
+function TTestMockAndSpyAPIs.CallbackReturnDefault(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaStringLiteralValue.Create('default');
+end;
+
+function TTestMockAndSpyAPIs.CallbackReturnOnce(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaStringLiteralValue.Create('once');
+end;
+
+function TTestMockAndSpyAPIs.CallbackReturnFirst(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaStringLiteralValue.Create('first');
+end;
+
+function TTestMockAndSpyAPIs.CallbackReturnSecond(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaStringLiteralValue.Create('second');
+end;
+
+function TTestMockAndSpyAPIs.CallbackReturnImpl(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaStringLiteralValue.Create('impl');
+end;
+
+function TTestMockAndSpyAPIs.CallbackReturnOriginal(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaStringLiteralValue.Create('original');
+end;
+
+function TTestMockAndSpyAPIs.CallbackReturnMocked(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaStringLiteralValue.Create('mocked');
+end;
+
+function TTestMockAndSpyAPIs.CallbackReturnUndefined(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+procedure TTestMockAndSpyAPIs.SetupTests;
+begin
+  { mock() creation and call tracking }
+  Test('mock() returns undefined by default', TestMockReturnsUndefinedByDefault);
+  Test('mock() tracks call arguments', TestMockTracksCallArguments);
+  Test('mock() tracks multiple calls', TestMockTracksMultipleCalls);
+  Test('mock(impl) uses the provided implementation', TestMockWithImplementation);
+  Test('mock.calls contains argument arrays', TestMockDotMockCallsArray);
+  Test('mock.results contains return entries', TestMockDotMockResultsArray);
+  Test('mock.lastCall returns last call args', TestMockDotMockLastCall);
+  Test('mock.lastCall is undefined when never called', TestMockDotMockLastCallWhenNeverCalled);
+
+  { mockImplementation }
+  Test('mockImplementation sets new implementation', TestMockImplementationSetsImpl);
+  Test('mockImplementation returns the mock for chaining', TestMockImplementationReturnsTheMock);
+
+  { mockImplementationOnce }
+  Test('mockImplementationOnce uses impl once then falls back', TestMockImplementationOnceThenFallback);
+  Test('mockImplementationOnce can be chained', TestMockImplementationOnceChained);
+
+  { mockReturnValue }
+  Test('mockReturnValue sets permanent return value', TestMockReturnValuePermanent);
+  Test('mockReturnValue overrides existing implementation', TestMockReturnValueOverridesImpl);
+
+  { mockReturnValueOnce }
+  Test('mockReturnValueOnce returns once then undefined', TestMockReturnValueOnceThenUndefined);
+  Test('mockReturnValueOnce can be chained', TestMockReturnValueOnceChained);
+  Test('mockReturnValueOnce takes priority over mockReturnValue', TestMockReturnValueOncePriorityOverPermanent);
+
+  { mockClear / mockReset }
+  Test('mockClear clears tracking but keeps implementation', TestMockClearKeepsImplementation);
+  Test('mockReset clears tracking and implementation', TestMockResetClearsImplementation);
+
+  { mockName / getMockName }
+  Test('getMockName returns default name', TestMockNameDefault);
+  Test('mockName sets custom name', TestMockNameCustom);
+
+  { spyOn }
+  Test('spyOn passes through to original implementation', TestSpyOnPassesThrough);
+  Test('spyOn tracks calls', TestSpyOnTracksCalls);
+  Test('spyOn mockImplementation overrides original', TestSpyOnMockImplementationOverrides);
+  Test('spyOn mockRestore restores the original method', TestSpyOnMockRestoreRestoresOriginal);
+  Test('spyOn mockReturnValue overrides original', TestSpyOnMockReturnValueOverrides);
+
+  { mock matchers - toHaveBeenCalled }
+  Test('toHaveBeenCalled passes when mock was called', TestToHaveBeenCalledPass);
+  Test('toHaveBeenCalled fails when mock was not called', TestToHaveBeenCalledFail);
+  Test('not.toHaveBeenCalled passes when mock was not called', TestToHaveBeenCalledNegated);
+
+  { mock matchers - toHaveBeenCalledTimes }
+  Test('toHaveBeenCalledTimes passes for correct count', TestToHaveBeenCalledTimesPass);
+  Test('toHaveBeenCalledTimes fails for wrong count', TestToHaveBeenCalledTimesFail);
+
+  { mock matchers - toHaveBeenCalledWith }
+  Test('toHaveBeenCalledWith passes when args match a call', TestToHaveBeenCalledWithPass);
+  Test('toHaveBeenCalledWith fails when no call matches', TestToHaveBeenCalledWithFail);
+  Test('toHaveBeenCalledWith uses deep equality', TestToHaveBeenCalledWithDeepEquality);
+
+  { mock matchers - toHaveBeenLastCalledWith }
+  Test('toHaveBeenLastCalledWith passes for last call args', TestToHaveBeenLastCalledWithPass);
+  Test('toHaveBeenLastCalledWith fails for non-last args', TestToHaveBeenLastCalledWithFail);
+
+  { mock matchers - toHaveBeenNthCalledWith }
+  Test('toHaveBeenNthCalledWith passes for correct nth call', TestToHaveBeenNthCalledWithPass);
+
+  { mock matchers - toHaveReturned }
+  Test('toHaveReturned passes when mock returned', TestToHaveReturnedPass);
+  Test('toHaveReturned fails when mock was never called', TestToHaveReturnedFail);
+
+  { mock matchers - toHaveReturnedTimes }
+  Test('toHaveReturnedTimes passes for correct count', TestToHaveReturnedTimesPass);
+
+  { mock matchers - toHaveReturnedWith }
+  Test('toHaveReturnedWith passes when value matches a return', TestToHaveReturnedWithPass);
+  Test('toHaveReturnedWith fails when value does not match', TestToHaveReturnedWithFail);
+
+  { mock matchers - toHaveLastReturnedWith }
+  Test('toHaveLastReturnedWith passes for last return value', TestToHaveLastReturnedWithPass);
+
+  { mock matchers - toHaveNthReturnedWith }
+  Test('toHaveNthReturnedWith passes for correct nth return', TestToHaveNthReturnedWithPass);
+
+  { matchers reject non-mock values }
+  Test('mock matchers fail for non-mock values', TestMatcherRejectsNonMock);
+end;
+
+{ ---- mock() creation and call tracking ---- }
+
+procedure TTestMockAndSpyAPIs.TestMockReturnsUndefinedByDefault;
+var
+  M: TGocciaMockFunctionValue;
+  R: TGocciaValue;
+begin
+  M := CreateMockViaGlobal;
+  R := CallMockFunction(M, []);
+  Expect<Boolean>(R is TGocciaUndefinedLiteralValue).ToBe(True);
+end;
+
+procedure TTestMockAndSpyAPIs.TestMockTracksCallArguments;
+var
+  M: TGocciaMockFunctionValue;
+begin
+  M := CreateMockViaGlobal;
+  CallMockFunction(M, [TGocciaNumberLiteralValue.Create(1), TGocciaNumberLiteralValue.Create(2)]);
+  Expect<Integer>(M.MockCalls.Count).ToBe(1);
+  Expect<Boolean>(M.MockCalls[0] is TGocciaArrayValue).ToBe(True);
+  Expect<Integer>(TGocciaArrayValue(M.MockCalls[0]).Elements.Count).ToBe(2);
+end;
+
+procedure TTestMockAndSpyAPIs.TestMockTracksMultipleCalls;
+var
+  M: TGocciaMockFunctionValue;
+begin
+  M := CreateMockViaGlobal;
+  CallMockFunction(M, []);
+  CallMockFunction(M, [TGocciaStringLiteralValue.Create('a')]);
+  CallMockFunction(M, [TGocciaNumberLiteralValue.Create(1), TGocciaNumberLiteralValue.Create(2)]);
+  Expect<Integer>(M.MockCalls.Count).ToBe(3);
+  Expect<Integer>(TGocciaArrayValue(M.MockCalls[0]).Elements.Count).ToBe(0);
+  Expect<Integer>(TGocciaArrayValue(M.MockCalls[1]).Elements.Count).ToBe(1);
+  Expect<Integer>(TGocciaArrayValue(M.MockCalls[2]).Elements.Count).ToBe(2);
+end;
+
+procedure TTestMockAndSpyAPIs.TestMockWithImplementation;
+var
+  M: TGocciaMockFunctionValue;
+  R: TGocciaValue;
+begin
+  // Use a simple impl that returns a known value
+  M := TGocciaMockFunctionValue.Create(
+    TGocciaNativeFunctionValue.Create(CallbackReturn42, 'impl', 0));
+  R := CallMockFunction(M, []);
+  Expect<Double>(R.ToNumberLiteral.Value).ToBe(42);
+end;
+
+procedure TTestMockAndSpyAPIs.TestMockDotMockCallsArray;
+var
+  M: TGocciaMockFunctionValue;
+  MockObj: TGocciaValue;
+  CallsArr: TGocciaValue;
+begin
+  M := CreateMockViaGlobal;
+  CallMockFunction(M, [TGocciaStringLiteralValue.Create('hello')]);
+  MockObj := M.GetProperty('mock');
+  Expect<Boolean>(MockObj is TGocciaObjectValue).ToBe(True);
+  CallsArr := TGocciaObjectValue(MockObj).GetProperty('calls');
+  Expect<Boolean>(CallsArr is TGocciaArrayValue).ToBe(True);
+  Expect<Integer>(TGocciaArrayValue(CallsArr).Elements.Count).ToBe(1);
+end;
+
+procedure TTestMockAndSpyAPIs.TestMockDotMockResultsArray;
+var
+  M: TGocciaMockFunctionValue;
+  MockObj: TGocciaValue;
+  ResultsArr: TGocciaValue;
+  FirstResult: TGocciaValue;
+begin
+  M := CreateMockViaGlobal;
+  CallMockFunction(M, []);
+  MockObj := M.GetProperty('mock');
+  ResultsArr := TGocciaObjectValue(MockObj).GetProperty('results');
+  Expect<Boolean>(ResultsArr is TGocciaArrayValue).ToBe(True);
+  Expect<Integer>(TGocciaArrayValue(ResultsArr).Elements.Count).ToBe(1);
+  FirstResult := TGocciaArrayValue(ResultsArr).Elements[0];
+  Expect<string>(TGocciaObjectValue(FirstResult).GetProperty('type').ToStringLiteral.Value).ToBe('return');
+end;
+
+procedure TTestMockAndSpyAPIs.TestMockDotMockLastCall;
+var
+  M: TGocciaMockFunctionValue;
+  MockObj: TGocciaValue;
+  LastCall: TGocciaValue;
+begin
+  M := CreateMockViaGlobal;
+  CallMockFunction(M, [TGocciaNumberLiteralValue.Create(1)]);
+  CallMockFunction(M, [TGocciaNumberLiteralValue.Create(2), TGocciaNumberLiteralValue.Create(3)]);
+  MockObj := M.GetProperty('mock');
+  LastCall := TGocciaObjectValue(MockObj).GetProperty('lastCall');
+  Expect<Boolean>(LastCall is TGocciaArrayValue).ToBe(True);
+  Expect<Integer>(TGocciaArrayValue(LastCall).Elements.Count).ToBe(2);
+end;
+
+procedure TTestMockAndSpyAPIs.TestMockDotMockLastCallWhenNeverCalled;
+var
+  M: TGocciaMockFunctionValue;
+  MockObj: TGocciaValue;
+  LastCall: TGocciaValue;
+begin
+  M := CreateMockViaGlobal;
+  MockObj := M.GetProperty('mock');
+  LastCall := TGocciaObjectValue(MockObj).GetProperty('lastCall');
+  Expect<Boolean>(LastCall is TGocciaUndefinedLiteralValue).ToBe(True);
+end;
+
+{ ---- mockImplementation ---- }
+
+procedure TTestMockAndSpyAPIs.TestMockImplementationSetsImpl;
+var
+  M: TGocciaMockFunctionValue;
+  Args: TGocciaArgumentsCollection;
+  ImplFn: TGocciaNativeFunctionValue;
+  R: TGocciaValue;
+begin
+  M := CreateMockViaGlobal;
+  ImplFn := TGocciaNativeFunctionValue.Create(CallbackReturn99, 'impl', 0);
+  Args := TGocciaArgumentsCollection.Create([ImplFn]);
+  try
+    M.DoMockImplementation(Args, nil);
+  finally
+    Args.Free;
+  end;
+  R := CallMockFunction(M, []);
+  Expect<Double>(R.ToNumberLiteral.Value).ToBe(99);
+end;
+
+procedure TTestMockAndSpyAPIs.TestMockImplementationReturnsTheMock;
+var
+  M: TGocciaMockFunctionValue;
+  Args: TGocciaArgumentsCollection;
+  R: TGocciaValue;
+  ImplFn: TGocciaNativeFunctionValue;
+begin
+  M := CreateMockViaGlobal;
+  ImplFn := TGocciaNativeFunctionValue.Create(CallbackReturnUndefined, 'impl', 0);
+  Args := TGocciaArgumentsCollection.Create([ImplFn]);
+  try
+    R := M.DoMockImplementation(Args, nil);
+  finally
+    Args.Free;
+  end;
+  Expect<Boolean>(R = M).ToBe(True);
+end;
+
+{ ---- mockImplementationOnce ---- }
+
+procedure TTestMockAndSpyAPIs.TestMockImplementationOnceThenFallback;
+var
+  M: TGocciaMockFunctionValue;
+  Args: TGocciaArgumentsCollection;
+  OnceFn, DefaultFn: TGocciaNativeFunctionValue;
+  R: TGocciaValue;
+begin
+  DefaultFn := TGocciaNativeFunctionValue.Create(CallbackReturnDefault, 'default', 0);
+  M := TGocciaMockFunctionValue.Create(DefaultFn);
+
+  OnceFn := TGocciaNativeFunctionValue.Create(CallbackReturnOnce, 'once', 0);
+  Args := TGocciaArgumentsCollection.Create([OnceFn]);
+  try
+    M.DoMockImplementationOnce(Args, nil);
+  finally
+    Args.Free;
+  end;
+
+  R := CallMockFunction(M, []);
+  Expect<string>(R.ToStringLiteral.Value).ToBe('once');
+  R := CallMockFunction(M, []);
+  Expect<string>(R.ToStringLiteral.Value).ToBe('default');
+end;
+
+procedure TTestMockAndSpyAPIs.TestMockImplementationOnceChained;
+var
+  M: TGocciaMockFunctionValue;
+  Args1, Args2: TGocciaArgumentsCollection;
+  Fn1, Fn2: TGocciaNativeFunctionValue;
+  R: TGocciaValue;
+begin
+  M := CreateMockViaGlobal;
+
+  Fn1 := TGocciaNativeFunctionValue.Create(CallbackReturnFirst, 'fn1', 0);
+  Fn2 := TGocciaNativeFunctionValue.Create(CallbackReturnSecond, 'fn2', 0);
+
+  Args1 := TGocciaArgumentsCollection.Create([Fn1]);
+  Args2 := TGocciaArgumentsCollection.Create([Fn2]);
+  try
+    M.DoMockImplementationOnce(Args1, nil);
+    M.DoMockImplementationOnce(Args2, nil);
+  finally
+    Args1.Free;
+    Args2.Free;
+  end;
+
+  R := CallMockFunction(M, []);
+  Expect<string>(R.ToStringLiteral.Value).ToBe('first');
+  R := CallMockFunction(M, []);
+  Expect<string>(R.ToStringLiteral.Value).ToBe('second');
+  R := CallMockFunction(M, []);
+  Expect<Boolean>(R is TGocciaUndefinedLiteralValue).ToBe(True);
+end;
+
+{ ---- mockReturnValue ---- }
+
+procedure TTestMockAndSpyAPIs.TestMockReturnValuePermanent;
+var
+  M: TGocciaMockFunctionValue;
+  Args: TGocciaArgumentsCollection;
+  R: TGocciaValue;
+begin
+  M := CreateMockViaGlobal;
+  Args := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(42)]);
+  try
+    M.DoMockReturnValue(Args, nil);
+  finally
+    Args.Free;
+  end;
+  R := CallMockFunction(M, []);
+  Expect<Double>(R.ToNumberLiteral.Value).ToBe(42);
+  R := CallMockFunction(M, []);
+  Expect<Double>(R.ToNumberLiteral.Value).ToBe(42);
+end;
+
+procedure TTestMockAndSpyAPIs.TestMockReturnValueOverridesImpl;
+var
+  M: TGocciaMockFunctionValue;
+  ImplFn: TGocciaNativeFunctionValue;
+  RetArgs: TGocciaArgumentsCollection;
+  R: TGocciaValue;
+begin
+  ImplFn := TGocciaNativeFunctionValue.Create(CallbackReturnImpl, 'impl', 0);
+  M := TGocciaMockFunctionValue.Create(ImplFn);
+
+  R := CallMockFunction(M, []);
+  Expect<string>(R.ToStringLiteral.Value).ToBe('impl');
+
+  RetArgs := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('ret')]);
+  try
+    M.DoMockReturnValue(RetArgs, nil);
+  finally
+    RetArgs.Free;
+  end;
+
+  R := CallMockFunction(M, []);
+  Expect<string>(R.ToStringLiteral.Value).ToBe('ret');
+end;
+
+{ ---- mockReturnValueOnce ---- }
+
+procedure TTestMockAndSpyAPIs.TestMockReturnValueOnceThenUndefined;
+var
+  M: TGocciaMockFunctionValue;
+  Args: TGocciaArgumentsCollection;
+  R: TGocciaValue;
+begin
+  M := CreateMockViaGlobal;
+  Args := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(1)]);
+  try
+    M.DoMockReturnValueOnce(Args, nil);
+  finally
+    Args.Free;
+  end;
+  R := CallMockFunction(M, []);
+  Expect<Double>(R.ToNumberLiteral.Value).ToBe(1);
+  R := CallMockFunction(M, []);
+  Expect<Boolean>(R is TGocciaUndefinedLiteralValue).ToBe(True);
+end;
+
+procedure TTestMockAndSpyAPIs.TestMockReturnValueOnceChained;
+var
+  M: TGocciaMockFunctionValue;
+  Args1, Args2: TGocciaArgumentsCollection;
+  R: TGocciaValue;
+begin
+  M := CreateMockViaGlobal;
+  Args1 := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('a')]);
+  Args2 := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('b')]);
+  try
+    M.DoMockReturnValueOnce(Args1, nil);
+    M.DoMockReturnValueOnce(Args2, nil);
+  finally
+    Args1.Free;
+    Args2.Free;
+  end;
+  R := CallMockFunction(M, []);
+  Expect<string>(R.ToStringLiteral.Value).ToBe('a');
+  R := CallMockFunction(M, []);
+  Expect<string>(R.ToStringLiteral.Value).ToBe('b');
+  R := CallMockFunction(M, []);
+  Expect<Boolean>(R is TGocciaUndefinedLiteralValue).ToBe(True);
+end;
+
+procedure TTestMockAndSpyAPIs.TestMockReturnValueOncePriorityOverPermanent;
+var
+  M: TGocciaMockFunctionValue;
+  RetArgs, OnceArgs: TGocciaArgumentsCollection;
+  R: TGocciaValue;
+begin
+  M := CreateMockViaGlobal;
+  RetArgs := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('perm')]);
+  OnceArgs := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('once')]);
+  try
+    M.DoMockReturnValue(RetArgs, nil);
+    M.DoMockReturnValueOnce(OnceArgs, nil);
+  finally
+    RetArgs.Free;
+    OnceArgs.Free;
+  end;
+  R := CallMockFunction(M, []);
+  Expect<string>(R.ToStringLiteral.Value).ToBe('once');
+  // After once is consumed, the permanent return value is gone (mockReturnValue clears impl)
+  // and default return value was set
+  R := CallMockFunction(M, []);
+  Expect<string>(R.ToStringLiteral.Value).ToBe('perm');
+end;
+
+{ ---- mockClear / mockReset ---- }
+
+procedure TTestMockAndSpyAPIs.TestMockClearKeepsImplementation;
+var
+  M: TGocciaMockFunctionValue;
+  EmptyArgs: TGocciaArgumentsCollection;
+  R: TGocciaValue;
+  ImplFn: TGocciaNativeFunctionValue;
+begin
+  ImplFn := TGocciaNativeFunctionValue.Create(CallbackReturn42, 'impl', 0);
+  M := TGocciaMockFunctionValue.Create(ImplFn);
+
+  CallMockFunction(M, []);
+  Expect<Integer>(M.MockCalls.Count).ToBe(1);
+
+  EmptyArgs := TGocciaArgumentsCollection.Create;
+  try
+    M.DoMockClear(EmptyArgs, nil);
+  finally
+    EmptyArgs.Free;
+  end;
+
+  Expect<Integer>(M.MockCalls.Count).ToBe(0);
+  Expect<Integer>(M.MockResults.Count).ToBe(0);
+
+  // Implementation should still work
+  R := CallMockFunction(M, []);
+  Expect<Double>(R.ToNumberLiteral.Value).ToBe(42);
+end;
+
+procedure TTestMockAndSpyAPIs.TestMockResetClearsImplementation;
+var
+  M: TGocciaMockFunctionValue;
+  EmptyArgs: TGocciaArgumentsCollection;
+  R: TGocciaValue;
+  ImplFn: TGocciaNativeFunctionValue;
+begin
+  ImplFn := TGocciaNativeFunctionValue.Create(CallbackReturn42, 'impl', 0);
+  M := TGocciaMockFunctionValue.Create(ImplFn);
+
+  CallMockFunction(M, []);
+
+  EmptyArgs := TGocciaArgumentsCollection.Create;
+  try
+    M.DoMockReset(EmptyArgs, nil);
+  finally
+    EmptyArgs.Free;
+  end;
+
+  Expect<Integer>(M.MockCalls.Count).ToBe(0);
+  R := CallMockFunction(M, []);
+  Expect<Boolean>(R is TGocciaUndefinedLiteralValue).ToBe(True);
+end;
+
+{ ---- mockName / getMockName ---- }
+
+procedure TTestMockAndSpyAPIs.TestMockNameDefault;
+var
+  M: TGocciaMockFunctionValue;
+  Args: TGocciaArgumentsCollection;
+  R: TGocciaValue;
+begin
+  M := CreateMockViaGlobal;
+  Args := TGocciaArgumentsCollection.Create;
+  try
+    R := M.DoGetMockName(Args, nil);
+  finally
+    Args.Free;
+  end;
+  Expect<string>(R.ToStringLiteral.Value).ToBe('mock');
+end;
+
+procedure TTestMockAndSpyAPIs.TestMockNameCustom;
+var
+  M: TGocciaMockFunctionValue;
+  NameArgs, EmptyArgs: TGocciaArgumentsCollection;
+  R: TGocciaValue;
+begin
+  M := CreateMockViaGlobal;
+  NameArgs := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('myMock')]);
+  EmptyArgs := TGocciaArgumentsCollection.Create;
+  try
+    M.DoMockName(NameArgs, nil);
+    R := M.DoGetMockName(EmptyArgs, nil);
+  finally
+    NameArgs.Free;
+    EmptyArgs.Free;
+  end;
+  Expect<string>(R.ToStringLiteral.Value).ToBe('myMock');
+end;
+
+{ ---- spyOn ---- }
+
+procedure TTestMockAndSpyAPIs.TestSpyOnPassesThrough;
+var
+  Obj: TGocciaObjectValue;
+  OrigFn: TGocciaNativeFunctionValue;
+  Spy: TGocciaMockFunctionValue;
+  R: TGocciaValue;
+begin
+  OrigFn := TGocciaNativeFunctionValue.Create(CallbackReturnOriginal, 'orig', 0);
+  Obj := TGocciaObjectValue.Create;
+  Obj.AssignProperty('method', OrigFn);
+  Spy := CreateSpyViaGlobal(Obj, 'method');
+  R := CallMockFunction(Spy, []);
+  Expect<string>(R.ToStringLiteral.Value).ToBe('original');
+end;
+
+procedure TTestMockAndSpyAPIs.TestSpyOnTracksCalls;
+var
+  Obj: TGocciaObjectValue;
+  OrigFn: TGocciaNativeFunctionValue;
+  Spy: TGocciaMockFunctionValue;
+begin
+  OrigFn := TGocciaNativeFunctionValue.Create(CallbackReturnUndefined, 'orig', 0);
+  Obj := TGocciaObjectValue.Create;
+  Obj.AssignProperty('method', OrigFn);
+  Spy := CreateSpyViaGlobal(Obj, 'method');
+  CallMockFunction(Spy, [TGocciaNumberLiteralValue.Create(1)]);
+  CallMockFunction(Spy, [TGocciaNumberLiteralValue.Create(2)]);
+  Expect<Integer>(Spy.MockCalls.Count).ToBe(2);
+end;
+
+procedure TTestMockAndSpyAPIs.TestSpyOnMockImplementationOverrides;
+var
+  Obj: TGocciaObjectValue;
+  OrigFn, NewFn: TGocciaNativeFunctionValue;
+  Spy: TGocciaMockFunctionValue;
+  Args: TGocciaArgumentsCollection;
+  R: TGocciaValue;
+begin
+  OrigFn := TGocciaNativeFunctionValue.Create(CallbackReturnOriginal, 'orig', 0);
+  Obj := TGocciaObjectValue.Create;
+  Obj.AssignProperty('method', OrigFn);
+  Spy := CreateSpyViaGlobal(Obj, 'method');
+
+  NewFn := TGocciaNativeFunctionValue.Create(CallbackReturnMocked, 'new', 0);
+  Args := TGocciaArgumentsCollection.Create([NewFn]);
+  try
+    Spy.DoMockImplementation(Args, nil);
+  finally
+    Args.Free;
+  end;
+
+  R := CallMockFunction(Spy, []);
+  Expect<string>(R.ToStringLiteral.Value).ToBe('mocked');
+end;
+
+procedure TTestMockAndSpyAPIs.TestSpyOnMockRestoreRestoresOriginal;
+var
+  Obj: TGocciaObjectValue;
+  OrigFn: TGocciaNativeFunctionValue;
+  Spy: TGocciaMockFunctionValue;
+  EmptyArgs: TGocciaArgumentsCollection;
+  PropValue: TGocciaValue;
+begin
+  OrigFn := TGocciaNativeFunctionValue.Create(CallbackReturnOriginal, 'orig', 0);
+  Obj := TGocciaObjectValue.Create;
+  Obj.AssignProperty('method', OrigFn);
+  Spy := CreateSpyViaGlobal(Obj, 'method');
+
+  // Verify spy is installed
+  PropValue := Obj.GetProperty('method');
+  Expect<Boolean>(PropValue = Spy).ToBe(True);
+
+  // Restore
+  EmptyArgs := TGocciaArgumentsCollection.Create;
+  try
+    Spy.DoMockRestore(EmptyArgs, nil);
+  finally
+    EmptyArgs.Free;
+  end;
+
+  // Verify original is restored
+  PropValue := Obj.GetProperty('method');
+  Expect<Boolean>(PropValue = OrigFn).ToBe(True);
+end;
+
+procedure TTestMockAndSpyAPIs.TestSpyOnMockReturnValueOverrides;
+var
+  Obj: TGocciaObjectValue;
+  OrigFn: TGocciaNativeFunctionValue;
+  Spy: TGocciaMockFunctionValue;
+  RetArgs: TGocciaArgumentsCollection;
+  R: TGocciaValue;
+begin
+  OrigFn := TGocciaNativeFunctionValue.Create(CallbackReturnOriginal, 'orig', 0);
+  Obj := TGocciaObjectValue.Create;
+  Obj.AssignProperty('method', OrigFn);
+  Spy := CreateSpyViaGlobal(Obj, 'method');
+
+  RetArgs := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('mocked')]);
+  try
+    Spy.DoMockReturnValue(RetArgs, nil);
+  finally
+    RetArgs.Free;
+  end;
+
+  R := CallMockFunction(Spy, []);
+  Expect<string>(R.ToStringLiteral.Value).ToBe('mocked');
+end;
+
+{ ---- mock matchers ---- }
+
+procedure TTestMockAndSpyAPIs.TestToHaveBeenCalledPass;
+var
+  M: TGocciaMockFunctionValue;
+  A: TGocciaArgumentsCollection;
+begin
+  M := CreateMockViaGlobal;
+  CallMockFunction(M, []);
+  A := TGocciaArgumentsCollection.Create;
+  try
+    ExpectPass(MakeExpectation(M).ToHaveBeenCalled(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestMockAndSpyAPIs.TestToHaveBeenCalledFail;
+var
+  M: TGocciaMockFunctionValue;
+  A: TGocciaArgumentsCollection;
+begin
+  M := CreateMockViaGlobal;
+  A := TGocciaArgumentsCollection.Create;
+  try
+    ExpectFail(MakeExpectation(M).ToHaveBeenCalled(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestMockAndSpyAPIs.TestToHaveBeenCalledNegated;
+var
+  M: TGocciaMockFunctionValue;
+  A: TGocciaArgumentsCollection;
+begin
+  M := CreateMockViaGlobal;
+  A := TGocciaArgumentsCollection.Create;
+  try
+    ExpectPass(MakeExpectation(M, True).ToHaveBeenCalled(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestMockAndSpyAPIs.TestToHaveBeenCalledTimesPass;
+var
+  M: TGocciaMockFunctionValue;
+  A: TGocciaArgumentsCollection;
+begin
+  M := CreateMockViaGlobal;
+  CallMockFunction(M, []);
+  CallMockFunction(M, []);
+  CallMockFunction(M, []);
+  A := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(3)]);
+  try
+    ExpectPass(MakeExpectation(M).ToHaveBeenCalledTimes(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestMockAndSpyAPIs.TestToHaveBeenCalledTimesFail;
+var
+  M: TGocciaMockFunctionValue;
+  A: TGocciaArgumentsCollection;
+begin
+  M := CreateMockViaGlobal;
+  CallMockFunction(M, []);
+  A := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(2)]);
+  try
+    ExpectFail(MakeExpectation(M).ToHaveBeenCalledTimes(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestMockAndSpyAPIs.TestToHaveBeenCalledWithPass;
+var
+  M: TGocciaMockFunctionValue;
+  A: TGocciaArgumentsCollection;
+begin
+  M := CreateMockViaGlobal;
+  CallMockFunction(M, [TGocciaNumberLiteralValue.Create(1), TGocciaNumberLiteralValue.Create(2)]);
+  CallMockFunction(M, [TGocciaNumberLiteralValue.Create(3), TGocciaNumberLiteralValue.Create(4)]);
+  A := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(3), TGocciaNumberLiteralValue.Create(4)]);
+  try
+    ExpectPass(MakeExpectation(M).ToHaveBeenCalledWith(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestMockAndSpyAPIs.TestToHaveBeenCalledWithFail;
+var
+  M: TGocciaMockFunctionValue;
+  A: TGocciaArgumentsCollection;
+begin
+  M := CreateMockViaGlobal;
+  CallMockFunction(M, [TGocciaNumberLiteralValue.Create(1)]);
+  A := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(99)]);
+  try
+    ExpectFail(MakeExpectation(M).ToHaveBeenCalledWith(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestMockAndSpyAPIs.TestToHaveBeenCalledWithDeepEquality;
+var
+  M: TGocciaMockFunctionValue;
+  Arr: TGocciaArrayValue;
+  ExpectedArr: TGocciaArrayValue;
+  A: TGocciaArgumentsCollection;
+begin
+  M := CreateMockViaGlobal;
+  Arr := TGocciaArrayValue.Create;
+  Arr.Elements.Add(TGocciaNumberLiteralValue.Create(1));
+  Arr.Elements.Add(TGocciaNumberLiteralValue.Create(2));
+  CallMockFunction(M, [Arr]);
+
+  ExpectedArr := TGocciaArrayValue.Create;
+  ExpectedArr.Elements.Add(TGocciaNumberLiteralValue.Create(1));
+  ExpectedArr.Elements.Add(TGocciaNumberLiteralValue.Create(2));
+  A := TGocciaArgumentsCollection.Create([ExpectedArr]);
+  try
+    ExpectPass(MakeExpectation(M).ToHaveBeenCalledWith(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestMockAndSpyAPIs.TestToHaveBeenLastCalledWithPass;
+var
+  M: TGocciaMockFunctionValue;
+  A: TGocciaArgumentsCollection;
+begin
+  M := CreateMockViaGlobal;
+  CallMockFunction(M, [TGocciaStringLiteralValue.Create('first')]);
+  CallMockFunction(M, [TGocciaStringLiteralValue.Create('last')]);
+  A := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('last')]);
+  try
+    ExpectPass(MakeExpectation(M).ToHaveBeenLastCalledWith(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestMockAndSpyAPIs.TestToHaveBeenLastCalledWithFail;
+var
+  M: TGocciaMockFunctionValue;
+  A: TGocciaArgumentsCollection;
+begin
+  M := CreateMockViaGlobal;
+  CallMockFunction(M, [TGocciaStringLiteralValue.Create('first')]);
+  CallMockFunction(M, [TGocciaStringLiteralValue.Create('last')]);
+  A := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('first')]);
+  try
+    ExpectFail(MakeExpectation(M).ToHaveBeenLastCalledWith(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestMockAndSpyAPIs.TestToHaveBeenNthCalledWithPass;
+var
+  M: TGocciaMockFunctionValue;
+  A: TGocciaArgumentsCollection;
+begin
+  M := CreateMockViaGlobal;
+  CallMockFunction(M, [TGocciaStringLiteralValue.Create('a')]);
+  CallMockFunction(M, [TGocciaStringLiteralValue.Create('b')]);
+  CallMockFunction(M, [TGocciaStringLiteralValue.Create('c')]);
+  // 1-based index: nth=2 should be 'b'
+  A := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(2), TGocciaStringLiteralValue.Create('b')]);
+  try
+    ExpectPass(MakeExpectation(M).ToHaveBeenNthCalledWith(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestMockAndSpyAPIs.TestToHaveReturnedPass;
+var
+  M: TGocciaMockFunctionValue;
+  A: TGocciaArgumentsCollection;
+begin
+  M := CreateMockViaGlobal;
+  CallMockFunction(M, []);
+  A := TGocciaArgumentsCollection.Create;
+  try
+    ExpectPass(MakeExpectation(M).ToHaveReturned(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestMockAndSpyAPIs.TestToHaveReturnedFail;
+var
+  M: TGocciaMockFunctionValue;
+  A: TGocciaArgumentsCollection;
+begin
+  M := CreateMockViaGlobal;
+  // Never called — no returns
+  A := TGocciaArgumentsCollection.Create;
+  try
+    ExpectFail(MakeExpectation(M).ToHaveReturned(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestMockAndSpyAPIs.TestToHaveReturnedTimesPass;
+var
+  M: TGocciaMockFunctionValue;
+  A: TGocciaArgumentsCollection;
+begin
+  M := CreateMockViaGlobal;
+  CallMockFunction(M, []);
+  CallMockFunction(M, []);
+  A := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(2)]);
+  try
+    ExpectPass(MakeExpectation(M).ToHaveReturnedTimes(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestMockAndSpyAPIs.TestToHaveReturnedWithPass;
+var
+  M: TGocciaMockFunctionValue;
+  RetArgs, A: TGocciaArgumentsCollection;
+begin
+  M := CreateMockViaGlobal;
+  RetArgs := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(42)]);
+  try
+    M.DoMockReturnValue(RetArgs, nil);
+  finally
+    RetArgs.Free;
+  end;
+  CallMockFunction(M, []);
+  A := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(42)]);
+  try
+    ExpectPass(MakeExpectation(M).ToHaveReturnedWith(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestMockAndSpyAPIs.TestToHaveReturnedWithFail;
+var
+  M: TGocciaMockFunctionValue;
+  A: TGocciaArgumentsCollection;
+begin
+  M := CreateMockViaGlobal;
+  CallMockFunction(M, []);
+  // Default return is undefined, look for 42
+  A := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(42)]);
+  try
+    ExpectFail(MakeExpectation(M).ToHaveReturnedWith(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestMockAndSpyAPIs.TestToHaveLastReturnedWithPass;
+var
+  M: TGocciaMockFunctionValue;
+  OnceArgs1, OnceArgs2, A: TGocciaArgumentsCollection;
+begin
+  M := CreateMockViaGlobal;
+  OnceArgs1 := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(1)]);
+  OnceArgs2 := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(2)]);
+  try
+    M.DoMockReturnValueOnce(OnceArgs1, nil);
+    M.DoMockReturnValueOnce(OnceArgs2, nil);
+  finally
+    OnceArgs1.Free;
+    OnceArgs2.Free;
+  end;
+  CallMockFunction(M, []);
+  CallMockFunction(M, []);
+  A := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(2)]);
+  try
+    ExpectPass(MakeExpectation(M).ToHaveLastReturnedWith(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestMockAndSpyAPIs.TestToHaveNthReturnedWithPass;
+var
+  M: TGocciaMockFunctionValue;
+  OnceArgs1, OnceArgs2, OnceArgs3, A: TGocciaArgumentsCollection;
+begin
+  M := CreateMockViaGlobal;
+  OnceArgs1 := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('a')]);
+  OnceArgs2 := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('b')]);
+  OnceArgs3 := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('c')]);
+  try
+    M.DoMockReturnValueOnce(OnceArgs1, nil);
+    M.DoMockReturnValueOnce(OnceArgs2, nil);
+    M.DoMockReturnValueOnce(OnceArgs3, nil);
+  finally
+    OnceArgs1.Free;
+    OnceArgs2.Free;
+    OnceArgs3.Free;
+  end;
+  CallMockFunction(M, []);
+  CallMockFunction(M, []);
+  CallMockFunction(M, []);
+  // 1-based: nth=2 should be 'b'
+  A := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(2), TGocciaStringLiteralValue.Create('b')]);
+  try
+    ExpectPass(MakeExpectation(M).ToHaveNthReturnedWith(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestMockAndSpyAPIs.TestMatcherRejectsNonMock;
+var
+  A: TGocciaArgumentsCollection;
+begin
+  A := TGocciaArgumentsCollection.Create;
+  try
+    ExpectFail(MakeExpectation(TGocciaNumberLiteralValue.Create(42)).ToHaveBeenCalled(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
 begin
   TestRunnerProgram.AddSuite(TTestExpectationMatchers.Create('Test Assertions - Expectation Matchers'));
   TestRunnerProgram.AddSuite(TTestSkipAndConditionalAPIs.Create('Test Assertions - Skip and Conditional APIs'));
+  TestRunnerProgram.AddSuite(TTestMockAndSpyAPIs.Create('Test Assertions - Mock and Spy APIs'));
   TestRunnerProgram.Run;
 
   ExitCode := TestResultToExitCode;

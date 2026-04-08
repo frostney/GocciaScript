@@ -373,6 +373,95 @@ expect(value).not.toContain(item);
 
 When `.toMatch()` receives a `RegExp`, the matcher uses regex semantics but does not mutate or depend on the regex object's current `lastIndex`.
 
+### Mock Functions
+
+`mock()` creates a mock function that tracks calls, arguments, return values, and `this` values. `spyOn()` wraps an existing object method with a spy that tracks calls while passing through to the original implementation by default.
+
+```javascript
+// Create a mock function
+const fn = mock();                     // Returns undefined by default
+const fnWithImpl = mock((x) => x * 2); // With an implementation
+
+// Call tracking
+fn(1, 2);
+fn("a", "b");
+fn.mock.calls;      // [[1, 2], ["a", "b"]]
+fn.mock.results;    // [{ type: "return", value: undefined }, ...]
+fn.mock.contexts;   // [this values for each call]
+fn.mock.instances;  // [] (only populated for new calls; see note below)
+fn.mock.lastCall;   // ["a", "b"]
+
+// Configure behavior
+fn.mockReturnValue(42);              // All calls return 42
+fn.mockReturnValueOnce(1);           // Next call returns 1
+fn.mockImplementation((x) => x + 1); // Set implementation
+fn.mockImplementationOnce(() => 99);  // One-shot implementation
+
+// Chaining
+fn.mockReturnValueOnce(1).mockReturnValueOnce(2).mockReturnValueOnce(3);
+
+// Reset
+fn.mockClear();    // Clear tracking, keep implementation
+fn.mockReset();    // Clear everything
+
+// Naming
+fn.mockName("myFn");
+fn.getMockName();  // "myFn"
+```
+
+**Priority order** when a mock is called:
+1. One-shot implementation (`mockImplementationOnce`) — FIFO
+2. One-shot return value (`mockReturnValueOnce`) — FIFO
+3. Permanent implementation (`mockImplementation`)
+4. Permanent return value (`mockReturnValue`)
+5. Return `undefined`
+
+#### `spyOn(object, methodName)`
+
+Creates a spy on an existing object method:
+
+```javascript
+const obj = { greet: (name) => "hello " + name };
+const spy = spyOn(obj, "greet");
+
+obj.greet("world");  // "hello world" — passes through by default
+spy.mock.calls;      // [["world"]]
+
+// Override implementation
+spy.mockImplementation(() => "mocked");
+obj.greet("test");   // "mocked"
+
+// Restore original
+spy.mockRestore();
+obj.greet("test");   // "hello test"
+```
+
+#### Mock Matchers
+
+```javascript
+// Call tracking
+expect(fn).toHaveBeenCalled();
+expect(fn).toHaveBeenCalledTimes(3);
+expect(fn).toHaveBeenCalledWith(1, 2);        // Any call matched
+expect(fn).toHaveBeenLastCalledWith("last");   // Last call matched
+expect(fn).toHaveBeenNthCalledWith(2, "second"); // Nth call (1-based)
+
+// Return tracking
+expect(fn).toHaveReturned();
+expect(fn).toHaveReturnedTimes(2);
+expect(fn).toHaveReturnedWith(42);             // Any return matched
+expect(fn).toHaveLastReturnedWith(42);         // Last return matched
+expect(fn).toHaveNthReturnedWith(1, "first");  // Nth return (1-based)
+
+// Negation
+expect(fn).not.toHaveBeenCalled();
+expect(fn).not.toHaveBeenCalledWith(5, 6);
+```
+
+All mock matchers use deep equality for argument and return value comparison.
+
+**GocciaScript vs Vitest/Jest:** `mock()` and `spyOn()` are standalone globals in GocciaScript (equivalent to `vi.fn()` / `vi.spyOn()` in Vitest or `jest.fn()` / `jest.spyOn()` in Jest). Tests using these APIs are GocciaScript-specific and will not run in Vitest without adaptation. GocciaScript follows the Vitest/Jest convention where `mock.instances` only stores objects created via `new`, and `mock.contexts` stores the `this` value for every call.
+
 ### Lifecycle Hooks
 
 `beforeAll` and `afterAll` run once per suite. `beforeEach` and `afterEach` run around every test in the suite and are inherited by nested suites.
@@ -611,6 +700,7 @@ expect([...set.values()]).toEqual([1, 2, 3]);
 | Emoji identifiers | Supported | Not supported by V8/Rollup |
 | Arrow methods `this` | Binds to owning object | Inherits from enclosing scope |
 | Global `parseInt`, `isNaN`, etc. | Not available (use `Number.*`) | Available as global functions |
+| `mock()` / `spyOn()` | Standalone globals | `vi.fn()` / `vi.spyOn()` (Vitest) or `jest.fn()` / `jest.spyOn()` (Jest) |
 
 ## Test Principles
 
