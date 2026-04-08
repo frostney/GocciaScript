@@ -971,9 +971,11 @@ begin
   Result := FSymbolDescriptors.ContainsKey(ASymbol);
 end;
 
+// ES2026 §10.1.10 [[Delete]](P)
 function TGocciaObjectValue.DeleteSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean;
 var
   Descriptor: TGocciaPropertyDescriptor;
+  I: Integer;
 begin
   if not FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
   begin
@@ -988,6 +990,12 @@ begin
   end;
 
   FSymbolDescriptors.Remove(ASymbol);
+  for I := FSymbolInsertionOrder.Count - 1 downto 0 do
+    if FSymbolInsertionOrder[I] = ASymbol then
+    begin
+      FSymbolInsertionOrder.Delete(I);
+      Break;
+    end;
   Descriptor.Free;
   Result := True;
 end;

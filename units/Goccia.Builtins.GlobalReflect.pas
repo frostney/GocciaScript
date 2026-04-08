@@ -151,6 +151,10 @@ begin
   if not (Target is TGocciaClassValue) then
     ThrowTypeError('Reflect.construct: target must be a constructor');
 
+  // Step 2: Let args be ? CreateListFromArrayLike(argumentsList)
+  if not (ArgsList is TGocciaArrayValue) then
+    ThrowTypeError('Reflect.construct: argumentsList must be an array');
+
   // Step 3: If IsConstructor(newTarget) is false, throw a TypeError exception
   if AArgs.Length >= 3 then
   begin
@@ -160,10 +164,6 @@ begin
   end
   else
     NewTarget := Target;
-
-  // Step 2: Let args be ? CreateListFromArrayLike(argumentsList)
-  if not (ArgsList is TGocciaArrayValue) then
-    ThrowTypeError('Reflect.construct: argumentsList must be an array');
 
   ArgsArray := TGocciaArrayValue(ArgsList);
   CallArgs := TGocciaArgumentsCollection.Create;
