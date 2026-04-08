@@ -760,6 +760,8 @@ begin
     // No apply trap: call the target directly
     if FTarget is TGocciaFunctionBase then
       Result := TGocciaFunctionBase(FTarget).Call(AArguments, AThisValue)
+    else if FTarget is TGocciaClassValue then
+      Result := TGocciaClassValue(FTarget).Call(AArguments, AThisValue)
     else
       ThrowTypeError('Proxy target is not callable');
   end;
@@ -775,6 +777,13 @@ var
   I: Integer;
 begin
   CheckRevoked;
+
+  // ES2026 §28.1.1 step 1: Proxy [[Construct]] only exists when target
+  // is constructable. Validate before dispatching to the trap.
+  if not ((FTarget is TGocciaClassValue) or
+          (FTarget is TGocciaNativeFunctionValue) or
+          (FTarget is TGocciaFunctionBase)) then
+    ThrowTypeError('Proxy target is not a constructor');
 
   Trap := GetTrap(PROP_CONSTRUCT);
   if Assigned(Trap) then
@@ -798,10 +807,11 @@ begin
   end
   else
   begin
-    // No construct trap: construct the target directly
+    // No construct trap: construct the target directly.
+    // Use Instantiate() for class values — it is virtual, so
+    // TGocciaVMClassValue dispatches to its bytecode-aware override.
     if FTarget is TGocciaClassValue then
-      Result := TGocciaClassValue(FTarget).Call(AArguments,
-        TGocciaUndefinedLiteralValue.UndefinedValue)
+      Result := TGocciaClassValue(FTarget).Instantiate(AArguments)
     else if FTarget is TGocciaNativeFunctionValue then
       Result := TGocciaNativeFunctionValue(FTarget).Call(AArguments,
         TGocciaHoleValue.HoleValue)

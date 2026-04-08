@@ -35,6 +35,7 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
   Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.ProxyValue;
 
@@ -123,6 +124,11 @@ begin
   ResultObj.AssignProperty(PROP_REVOKE,
     TGocciaNativeFunctionValue.CreateWithoutPrototype(
       Revoker.RevokeCallback, PROP_REVOKE, 0));
+  // Keep the Revoker reachable from the GC graph: the native function
+  // captures it via a method pointer (opaque to the GC), so store it
+  // as a non-enumerable property so MarkReferences traces it.
+  ResultObj.DefineProperty('__revoker',
+    TGocciaPropertyDescriptorData.Create(Revoker, []));
 
   Result := ResultObj;
 end;
