@@ -2367,6 +2367,7 @@ end;
 
 destructor TGocciaTestAssertions.Destroy;
 begin
+  RemoveCollectionRoots(FOnTestFinishedCallbacks);
   FOnTestFinishedCallbacks.Free;
   FRootSuite.Free;
   inherited;
@@ -2832,6 +2833,7 @@ begin
       try
         CollectBeforeEachCallbacks(TestCase.ParentSuite, BeforeCallbacks);
         CollectAfterEachCallbacks(TestCase.ParentSuite, AfterCallbacks);
+        RemoveCollectionRoots(FOnTestFinishedCallbacks);
         FOnTestFinishedCallbacks.Clear;
 
         RunCallbacks(BeforeCallbacks);
@@ -2907,7 +2909,11 @@ begin
         finally
           RunCallbacks(AfterCallbacks);
           if FOnTestFinishedCallbacks.Length > 0 then
+          begin
             RunCallbacks(FOnTestFinishedCallbacks);
+            RemoveCollectionRoots(FOnTestFinishedCallbacks);
+            FOnTestFinishedCallbacks.Clear;
+          end;
         end;
       finally
         BeforeCallbacks.Free;
@@ -3354,6 +3360,7 @@ begin
   if not (AArgs.GetElement(0) is TGocciaFunctionBase) then
     ThrowError('onTestFinished expects a function argument', 0, 0);
 
+  AddTempRootIfNeeded(AArgs.GetElement(0));
   FOnTestFinishedCallbacks.Add(AArgs.GetElement(0));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;

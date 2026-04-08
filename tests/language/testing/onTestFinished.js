@@ -52,18 +52,21 @@ describe("onTestFinished", () => {
 });
 
 describe("onTestFinished with async", () => {
+  const asyncLog = [];
+  const marker = [];
+
   test("async onTestFinished callback", () => {
-    const asyncLog = [];
     onTestFinished(async () => {
       const val = await Promise.resolve("async-cleanup");
       asyncLog.push(val);
     });
-    // The callback runs after the test, so we can't check it here
-    // But the callback should not cause errors
+  });
+
+  test("async cleanup ran for previous test", () => {
+    expect(asyncLog).toEqual(["async-cleanup"]);
   });
 
   test("onTestFinished runs even when test has assertions", () => {
-    const marker = [];
     onTestFinished(() => {
       marker.push("cleanup");
     });
@@ -71,9 +74,7 @@ describe("onTestFinished with async", () => {
   });
 
   test("cleanup ran for previous test", () => {
-    // Can't directly verify the previous test's onTestFinished marker
-    // since it was a local variable, but we verify no errors occurred
-    expect(true).toBeTruthy();
+    expect(marker).toEqual(["cleanup"]);
   });
 });
 
