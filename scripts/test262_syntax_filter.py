@@ -271,7 +271,7 @@ _UNSUPPORTED_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("loose_equality",
      re.compile(r"[^!=<>]==[^=]")),
     ("loose_inequality",
-     re.compile(r"[^!]=!=[^=]")),
+     re.compile(r"(?<!=)!=[^=]")),
     ("eval_identifier",
      re.compile(r"\beval\b")),
     ("arguments_object",
