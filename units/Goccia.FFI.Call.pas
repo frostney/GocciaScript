@@ -189,37 +189,38 @@ end;
 {$IFDEF CPU64}
 
 {$IFDEF CPUX86_64}
+{$ASMMODE ATT}
+
 {$IFDEF MSWINDOWS}
 // -- Win64 x86_64: 4 shared positions (RCX/XMM0, RDX/XMM1, R8/XMM2, R9/XMM3)
 // Args 5-8 go on the stack. 32-byte shadow space required.
+// Gpr offsets: [0]=16, [1]=24, [2]=32, [3]=40, [4]=48, [5]=56, [6]=64, [7]=72
+// Fpr offsets: [0]=80, [1]=88, [2]=96, [3]=104
 procedure FFITrampolineCall(var AState: TGocciaFFICallState); assembler; nostackframe;
 asm
   pushq %rbx
   pushq %r12
   movq %rcx, %rbx
 
-  movq 0(%rbx), %r12         // FuncPtr
+  movq (%rbx), %r12
 
-  // Shadow space (32) + overflow args 5-8 (32) = 64 bytes
   subq $64, %rsp
 
-  // Overflow args on stack (positions 4-7)
-  movq (16 + 4*8)(%rbx), %rax
+  // Overflow args on stack (Gpr[4]-Gpr[7])
+  movq 48(%rbx), %rax
   movq %rax, 32(%rsp)
-  movq (16 + 5*8)(%rbx), %rax
+  movq 56(%rbx), %rax
   movq %rax, 40(%rsp)
-  movq (16 + 6*8)(%rbx), %rax
+  movq 64(%rbx), %rax
   movq %rax, 48(%rsp)
-  movq (16 + 7*8)(%rbx), %rax
+  movq 72(%rbx), %rax
   movq %rax, 56(%rsp)
 
-  // Load XMM0-XMM3 from Fpr[0..3]
   movsd 80(%rbx), %xmm0
   movsd 88(%rbx), %xmm1
   movsd 96(%rbx), %xmm2
   movsd 104(%rbx), %xmm3
 
-  // Load RCX, RDX, R8, R9 from Gpr[0..3]
   movq 16(%rbx), %rcx
   movq 24(%rbx), %rdx
   movq 32(%rbx), %r8
@@ -227,7 +228,6 @@ asm
 
   call *%r12
 
-  // Store both return paths
   movq %rax, 144(%rbx)
   movsd %xmm0, 152(%rbx)
 
@@ -238,24 +238,24 @@ asm
 end;
 {$ELSE}
 // -- System V x86_64 (Linux + macOS): 6 GPR regs, 8 XMM regs, separate counters
-// GPR overflow args 7-8 go on the stack.
+// Gpr offsets: [0]=16 .. [5]=56, [6]=64, [7]=72
+// Fpr offsets: [0]=80 .. [7]=136
 procedure FFITrampolineCall(var AState: TGocciaFFICallState); assembler; nostackframe;
 asm
   pushq %rbx
   pushq %r12
   movq %rdi, %rbx
 
-  movq 0(%rbx), %r12         // FuncPtr
+  movq (%rbx), %r12
 
-  // Stack space for GPR overflow args (positions 6-7): 16 bytes
   subq $16, %rsp
 
-  movq (16 + 7*8)(%rbx), %rax
+  // Overflow GPR args (Gpr[7] then Gpr[6])
+  movq 72(%rbx), %rax
   movq %rax, 8(%rsp)
-  movq (16 + 6*8)(%rbx), %rax
-  movq %rax, 0(%rsp)
+  movq 64(%rbx), %rax
+  movq %rax, (%rsp)
 
-  // Load XMM0-XMM7 from Fpr[0..7]
   movsd 80(%rbx), %xmm0
   movsd 88(%rbx), %xmm1
   movsd 96(%rbx), %xmm2
@@ -265,7 +265,6 @@ asm
   movsd 128(%rbx), %xmm6
   movsd 136(%rbx), %xmm7
 
-  // Load GPR args: RDI, RSI, RDX, RCX, R8, R9 from Gpr[0..5]
   movq 16(%rbx), %rdi
   movq 24(%rbx), %rsi
   movq 32(%rbx), %rdx
@@ -273,13 +272,11 @@ asm
   movq 48(%rbx), %r8
   movq 56(%rbx), %r9
 
-  // AL = number of vector args (System V ABI requirement for variadic calls;
-  // harmless for non-variadic, some callees check it)
+  // AL = FprCount (System V varargs convention)
   movl 12(%rbx), %eax
 
   call *%r12
 
-  // Store both return paths
   movq %rax, 144(%rbx)
   movsd %xmm0, 152(%rbx)
 
