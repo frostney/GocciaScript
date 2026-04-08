@@ -117,7 +117,7 @@ var
   EngineResult: TGocciaScriptResult;
   TestGlobals: TGocciaGlobalBuiltins;
 begin
-  TestGlobals := TGocciaEngine.DefaultGlobals + [ggTestAssertions];
+  TestGlobals := TGocciaEngine.DefaultGlobals + [ggTestAssertions, ggFFI];
   ScriptResult := CreateDefaultScriptResult;
 
   Source := nil;
@@ -195,7 +195,7 @@ var
   OrigLine, OrigCol, I: Integer;
   LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd: Int64;
 begin
-  TestGlobals := TGocciaEngine.DefaultGlobals + [ggTestAssertions];
+  TestGlobals := TGocciaEngine.DefaultGlobals + [ggTestAssertions, ggFFI];
   ScriptResult := CreateDefaultScriptResult;
 
   Source := nil;

@@ -155,13 +155,11 @@ begin
 
   if ALeft is TGocciaSymbolValue then
   begin
-    // Proxy has trap for symbol keys: delegate to HasTrap with the
-    // symbol description as the property name. The has trap receives
-    // the symbol description string; symbol-keyed has traps are not
-    // yet fully spec-compliant but cover the common patterns.
+    // Proxy has trap for symbol keys: pass the symbol itself unchanged
+    // per ES2026 §28.1.1 — traps receive PropertyKey (String or Symbol).
     if ARight is TGocciaProxyValue then
     begin
-      if TGocciaProxyValue(ARight).HasTrap(TGocciaSymbolValue(ALeft).ToStringLiteral.Value) then
+      if TGocciaProxyValue(ARight).HasSymbolTrap(TGocciaSymbolValue(ALeft)) then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue;

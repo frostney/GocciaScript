@@ -464,7 +464,15 @@ All mock matchers use deep equality for argument and return value comparison.
 
 ### Lifecycle Hooks
 
-`beforeAll` and `afterAll` run once per suite. `beforeEach` and `afterEach` run around every test in the suite and are inherited by nested suites.
+`beforeAll` and `afterAll` run once per suite. `beforeEach` and `afterEach` run around every test in the suite and are inherited by nested suites. `onTestFinished` registers a per-test cleanup callback from inside the test body — it runs after all `afterEach` hooks.
+
+| Hook | Scope | Runs |
+|------|-------|------|
+| `beforeAll(fn)` | Suite | Once before all tests in the suite |
+| `beforeEach(fn)` | Suite (inherited) | Before each test |
+| `afterEach(fn)` | Suite (inherited) | After each test |
+| `afterAll(fn)` | Suite | Once after all tests in the suite |
+| `onTestFinished(fn)` | Current test | After afterEach, only for the current test |
 
 ```javascript
 describe("with setup", () => {
@@ -491,6 +499,20 @@ describe("with setup", () => {
   });
 });
 ```
+
+`onTestFinished` is useful for inline cleanup that is specific to a single test:
+
+```javascript
+test("temporary resource", () => {
+  const resource = acquireResource();
+  onTestFinished(() => {
+    resource.release();
+  });
+  expect(resource.isActive()).toBe(true);
+});
+```
+
+Multiple `onTestFinished` callbacks run in registration order. Callbacks are scoped to the current test — they do not leak to subsequent tests.
 
 Hooks can also be `async`, allowing `await` in the hook body:
 

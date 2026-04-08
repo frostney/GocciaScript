@@ -82,6 +82,11 @@ const
   PROP_RESULTS                = 'results';
   PROP_INSTANCES              = 'instances';
   PROP_LAST_CALL              = 'lastCall';
+  PROP_IS_NULL                = 'isNull';
+  PROP_FFI_ADDRESS            = 'address';
+  PROP_OPEN                   = 'open';
+  PROP_NULLPTR                = 'nullptr';
+  PROP_SUFFIX                 = 'suffix';
 
   // Proxy handler trap names
   PROP_HAS                       = 'has';

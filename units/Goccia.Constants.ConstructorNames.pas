@@ -34,6 +34,8 @@ const
   CONSTRUCTOR_FLOAT32_ARRAY        = 'Float32Array';
   CONSTRUCTOR_FLOAT64_ARRAY        = 'Float64Array';
 
+  CONSTRUCTOR_FFI                  = 'FFI';
+
 implementation
 
 end.

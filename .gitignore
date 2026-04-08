@@ -25,3 +25,8 @@ node_modules/
 scripts/__pycache__/
 
 tests-wasm/*.wasm
+
+# FFI fixture binaries (built from source by fixtures/ffi/build.sh)
+fixtures/ffi/*.dylib
+fixtures/ffi/*.so
+fixtures/ffi/*.dll

@@ -1,15 +1,5 @@
 describe("Proxy isExtensible trap", () => {
-  test("intercepts Object.isExtensible", () => {
-    const proxy = new Proxy(
-      {},
-      {
-        isExtensible: () => false,
-      }
-    );
-    expect(Object.isExtensible(proxy)).toBe(false);
-  });
-
-  test("can return true", () => {
+  test("intercepts Object.isExtensible with matching result", () => {
     const proxy = new Proxy(
       {},
       {
@@ -17,6 +7,26 @@ describe("Proxy isExtensible trap", () => {
       }
     );
     expect(Object.isExtensible(proxy)).toBe(true);
+  });
+
+  test("throws TypeError when trap result mismatches target", () => {
+    // Target is extensible but trap returns false — invariant violation
+    const proxy = new Proxy(
+      {},
+      {
+        isExtensible: () => false,
+      }
+    );
+    expect(() => Object.isExtensible(proxy)).toThrow(TypeError);
+  });
+
+  test("trap can return false when target is non-extensible", () => {
+    const target = {};
+    Object.preventExtensions(target);
+    const proxy = new Proxy(target, {
+      isExtensible: () => false,
+    });
+    expect(Object.isExtensible(proxy)).toBe(false);
   });
 
   test("falls back to target when no trap", () => {

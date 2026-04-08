@@ -172,6 +172,7 @@ type
     FSkipNextTest: Boolean;
     FFocusNextTest: Boolean;
     FSuppressOutput: Boolean;
+    FOnTestFinishedCallbacks: TGocciaArgumentsCollection;
 
     procedure ConfigureDescribeFunction(const AFunction: TGocciaNativeFunctionValue);
     procedure ConfigureTestFunction(const AFunction: TGocciaNativeFunctionValue);
@@ -251,6 +252,7 @@ type
     function BeforeEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function AfterEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function AfterAll(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function OnTestFinished(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     // Mock/spy creation
     function MockFunction(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -2317,6 +2319,7 @@ begin
 
   FRootSuite := TGocciaTestSuite.Create(nil, '', nil, nil);
   FCurrentRegistrationSuite := FRootSuite;
+  FOnTestFinishedCallbacks := TGocciaArgumentsCollection.Create;
   ResetTestStats;
 
   // Functions are registered on both the scope (for direct access in test scripts)
@@ -2342,6 +2345,7 @@ begin
   AScope.DefineLexicalBinding('beforeEach', TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1), dtConst);
   AScope.DefineLexicalBinding('afterEach', TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1), dtConst);
   AScope.DefineLexicalBinding('afterAll', TGocciaNativeFunctionValue.Create(AfterAll, 'afterAll', 1), dtConst);
+  AScope.DefineLexicalBinding('onTestFinished', TGocciaNativeFunctionValue.Create(OnTestFinished, 'onTestFinished', 1), dtConst);
   AScope.DefineLexicalBinding('runTests', TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0), dtConst);
   AScope.DefineLexicalBinding('mock', TGocciaNativeFunctionValue.Create(MockFunction, 'mock', 0), dtConst);
   AScope.DefineLexicalBinding('spyOn', TGocciaNativeFunctionValue.Create(SpyOn, 'spyOn', 2), dtConst);
@@ -2355,6 +2359,7 @@ begin
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(AfterAll, 'afterAll', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(OnTestFinished, 'onTestFinished', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MockFunction, 'mock', 0));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(SpyOn, 'spyOn', 2));
@@ -2362,6 +2367,8 @@ end;
 
 destructor TGocciaTestAssertions.Destroy;
 begin
+  RemoveCollectionRoots(FOnTestFinishedCallbacks);
+  FOnTestFinishedCallbacks.Free;
   FRootSuite.Free;
   inherited;
 end;
@@ -2826,6 +2833,8 @@ begin
       try
         CollectBeforeEachCallbacks(TestCase.ParentSuite, BeforeCallbacks);
         CollectAfterEachCallbacks(TestCase.ParentSuite, AfterCallbacks);
+        RemoveCollectionRoots(FOnTestFinishedCallbacks);
+        FOnTestFinishedCallbacks.Clear;
 
         RunCallbacks(BeforeCallbacks);
 
@@ -2899,6 +2908,12 @@ begin
           end;
         finally
           RunCallbacks(AfterCallbacks);
+          if FOnTestFinishedCallbacks.Length > 0 then
+          begin
+            RunCallbacks(FOnTestFinishedCallbacks);
+            RemoveCollectionRoots(FOnTestFinishedCallbacks);
+            FOnTestFinishedCallbacks.Clear;
+          end;
         end;
       finally
         BeforeCallbacks.Free;
@@ -3335,6 +3350,18 @@ end;
 function TGocciaTestAssertions.AfterAll(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   RegisterHook(AArgs, 'afterAll', thAfterAll);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaTestAssertions.OnTestFinished(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'onTestFinished', ThrowError);
+
+  if not (AArgs.GetElement(0) is TGocciaFunctionBase) then
+    ThrowError('onTestFinished expects a function argument', 0, 0);
+
+  AddTempRootIfNeeded(AArgs.GetElement(0));
+  FOnTestFinishedCallbacks.Add(AArgs.GetElement(0));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 

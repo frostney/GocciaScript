@@ -786,7 +786,8 @@ begin
   // Proxy intercept: delegate to setPrototypeOf trap
   if AArgs.GetElement(0) is TGocciaProxyValue then
   begin
-    TGocciaProxyValue(AArgs.GetElement(0)).SetPrototypeTrap(ProtoArg);
+    if not TGocciaProxyValue(AArgs.GetElement(0)).SetPrototypeTrap(ProtoArg) then
+      ThrowError('setPrototypeOf trap returned false', 0, 0);
     Result := AArgs.GetElement(0);
     Exit;
   end;

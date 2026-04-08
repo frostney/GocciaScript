@@ -8,7 +8,8 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives;
+  Goccia.Values.Primitives,
+  Goccia.Values.SymbolValue;
 
 type
   TGocciaProxyValue = class(TGocciaObjectValue)
@@ -34,6 +35,7 @@ type
 
     // ES2026 $28.1.1 [[HasProperty]](P)
     function HasTrap(const AName: string): Boolean;
+    function HasSymbolTrap(const ASymbol: TGocciaSymbolValue): Boolean;
 
     // ES2026 $28.1.1 [[Delete]](P)
     function DeleteProperty(const AName: string): Boolean; override;
@@ -235,6 +237,37 @@ begin
   end;
 end;
 
+// ES2026 $28.1.1 [[HasProperty]](P) — symbol key overload
+function TGocciaProxyValue.HasSymbolTrap(
+  const ASymbol: TGocciaSymbolValue): Boolean;
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  TrapResult: TGocciaValue;
+begin
+  CheckRevoked;
+  Trap := GetTrap(PROP_HAS);
+  if Assigned(Trap) then
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      Args.Add(ASymbol);
+      TrapResult := InvokeTrap(Trap, Args);
+      Result := TrapResult.ToBooleanLiteral.Value;
+    finally
+      Args.Free;
+    end;
+  end
+  else
+  begin
+    if FTarget is TGocciaObjectValue then
+      Result := TGocciaObjectValue(FTarget).HasSymbolProperty(ASymbol)
+    else
+      Result := False;
+  end;
+end;
+
 function TGocciaProxyValue.HasOwnProperty(const AName: string): Boolean;
 begin
   // Delegate to HasTrap which handles both trap and fallback
@@ -280,6 +313,8 @@ var
   TrapResult: TGocciaValue;
   ResultObj: TGocciaObjectValue;
   ValueProp, WritableProp, EnumProp, ConfigProp: TGocciaValue;
+  GetterProp, SetterProp: TGocciaValue;
+  HasGetter, HasSetter: Boolean;
   Flags: TPropertyFlags;
 begin
   CheckRevoked;
@@ -313,12 +348,28 @@ begin
     if Assigned(ConfigProp) and ConfigProp.ToBooleanLiteral.Value then
       Include(Flags, pfConfigurable);
 
-    WritableProp := ResultObj.GetProperty(PROP_WRITABLE);
-    if Assigned(WritableProp) and WritableProp.ToBooleanLiteral.Value then
-      Include(Flags, pfWritable);
+    // Detect accessor vs data descriptor
+    GetterProp := ResultObj.GetProperty(PROP_GET);
+    SetterProp := ResultObj.GetProperty(PROP_SET);
+    HasGetter := Assigned(GetterProp) and not (GetterProp is TGocciaUndefinedLiteralValue);
+    HasSetter := Assigned(SetterProp) and not (SetterProp is TGocciaUndefinedLiteralValue);
 
-    ValueProp := ResultObj.GetProperty(PROP_VALUE);
-    Result := TGocciaPropertyDescriptorData.Create(ValueProp, Flags);
+    if HasGetter or HasSetter then
+    begin
+      // Accessor descriptor
+      Result := TGocciaPropertyDescriptorAccessor.Create(
+        GetterProp, SetterProp, Flags);
+    end
+    else
+    begin
+      // Data descriptor
+      WritableProp := ResultObj.GetProperty(PROP_WRITABLE);
+      if Assigned(WritableProp) and WritableProp.ToBooleanLiteral.Value then
+        Include(Flags, pfWritable);
+
+      ValueProp := ResultObj.GetProperty(PROP_VALUE);
+      Result := TGocciaPropertyDescriptorData.Create(ValueProp, Flags);
+    end;
   end
   else
   begin
@@ -342,9 +393,18 @@ begin
   Trap := GetTrap(PROP_DEFINE_PROPERTY);
   if Assigned(Trap) then
   begin
-    // Build descriptor object
+    // Build descriptor object — preserve accessor vs data shape
     DescObj := TGocciaObjectValue.Create;
-    if ADescriptor is TGocciaPropertyDescriptorData then
+    if ADescriptor is TGocciaPropertyDescriptorAccessor then
+    begin
+      if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
+        DescObj.AssignProperty(PROP_GET,
+          TGocciaPropertyDescriptorAccessor(ADescriptor).Getter);
+      if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
+        DescObj.AssignProperty(PROP_SET,
+          TGocciaPropertyDescriptorAccessor(ADescriptor).Setter);
+    end
+    else if ADescriptor is TGocciaPropertyDescriptorData then
     begin
       DescObj.AssignProperty(PROP_VALUE,
         TGocciaPropertyDescriptorData(ADescriptor).Value);
@@ -516,6 +576,7 @@ var
   Trap: TGocciaValue;
   Args: TGocciaArgumentsCollection;
   TrapResult: TGocciaValue;
+  TargetExtensible: Boolean;
 begin
   CheckRevoked;
   Trap := GetTrap(PROP_IS_EXTENSIBLE);
@@ -529,6 +590,15 @@ begin
     finally
       Args.Free;
     end;
+
+    // ES2026 §28.1.1 step 7: Validate against target extensibility
+    if FTarget is TGocciaObjectValue then
+      TargetExtensible := TGocciaObjectValue(FTarget).Extensible
+    else
+      TargetExtensible := False;
+    if Result <> TargetExtensible then
+      ThrowTypeError(
+        'Proxy isExtensible trap result does not match target extensibility');
   end
   else
   begin
