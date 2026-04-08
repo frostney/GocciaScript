@@ -15,7 +15,6 @@
   {$C+}
 {$ENDIF}
 {$modeswitch advancedrecords}
-{$modeswitch multihelpers}
 
 { Uncomment to enable bridge-crossing metrics on the GocciaScript runtime.
   When enabled, TGocciaRuntimeOperations tracks per-operation counts and

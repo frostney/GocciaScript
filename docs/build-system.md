@@ -186,7 +186,6 @@ Shared compiler directives included by all units:
   {$rangechecks on}               // Runtime array bounds checking
 {$ENDIF}
 {$modeswitch advancedrecords}     // Records with methods
-{$modeswitch multihelpers}        // Multiple class helpers for same type
 ```
 
 Under the current project settings, FreePascal behaves like this:
