@@ -9,6 +9,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.Constants.PropertyNames,
   Goccia.ObjectModel,
   Goccia.SharedPrototype,
   Goccia.Values.ObjectValue,
@@ -51,9 +52,6 @@ uses
 
 const
   FFI_POINTER_TAG = 'FFIPointer';
-
-  PROP_IS_NULL = 'isNull';
-  PROP_FFI_ADDRESS = 'address';
 
 constructor TGocciaFFIPointerValue.Create(const AAddress: Pointer);
 begin

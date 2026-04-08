@@ -17,8 +17,8 @@ case "$(uname -s)" in
     echo "Built $SCRIPT_DIR/libfixture.so"
     ;;
   MINGW*|MSYS*|CYGWIN*)
-    gcc -shared -o "$SCRIPT_DIR/fixture.dll" "$SRC"
-    echo "Built $SCRIPT_DIR/fixture.dll"
+    gcc -shared -o "$SCRIPT_DIR/libfixture.dll" "$SRC"
+    echo "Built $SCRIPT_DIR/libfixture.dll"
     ;;
   *)
     echo "Unsupported platform: $(uname -s)" >&2

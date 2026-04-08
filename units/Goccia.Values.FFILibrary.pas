@@ -279,6 +279,21 @@ begin
                 else
                   {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(@TGocciaArrayBufferValue(ArgValue).Data[0]);
               end
+              else if ArgValue is TGocciaSharedArrayBufferValue then
+              begin
+                if Length(TGocciaSharedArrayBufferValue(ArgValue).Data) = 0 then
+                  {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := 0
+                else
+                  {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(@TGocciaSharedArrayBufferValue(ArgValue).Data[0]);
+              end
+              else if ArgValue is TGocciaTypedArrayValue then
+              begin
+                if Length(TGocciaTypedArrayValue(ArgValue).BufferData) = 0 then
+                  {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := 0
+                else
+                  {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(@TGocciaTypedArrayValue(ArgValue).BufferData[
+                    TGocciaTypedArrayValue(ArgValue).ByteOffset]);
+              end
               else if ArgValue is TGocciaNullLiteralValue then
                 {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := 0
               else
@@ -342,6 +357,21 @@ begin
                   IntVal := 0
                 else
                   IntVal := LongInt(@TGocciaArrayBufferValue(ArgValue).Data[0]);
+              end
+              else if ArgValue is TGocciaSharedArrayBufferValue then
+              begin
+                if Length(TGocciaSharedArrayBufferValue(ArgValue).Data) = 0 then
+                  IntVal := 0
+                else
+                  IntVal := LongInt(@TGocciaSharedArrayBufferValue(ArgValue).Data[0]);
+              end
+              else if ArgValue is TGocciaTypedArrayValue then
+              begin
+                if Length(TGocciaTypedArrayValue(ArgValue).BufferData) = 0 then
+                  IntVal := 0
+                else
+                  IntVal := LongInt(@TGocciaTypedArrayValue(ArgValue).BufferData[
+                    TGocciaTypedArrayValue(ArgValue).ByteOffset]);
               end
               else if ArgValue is TGocciaNullLiteralValue then
                 IntVal := 0
@@ -501,6 +531,7 @@ end;
 function ParseSignatureFromArgs(const AArgs: TGocciaArgumentsCollection; const AFuncName: string): TGocciaFFISignature;
 var
   SigObj: TGocciaObjectValue;
+  ArgsField, ReturnsField: TGocciaValue;
   ArgsArray: TGocciaArrayValue;
   ReturnStr: string;
   I: Integer;
@@ -516,9 +547,10 @@ begin
   SigObj := TGocciaObjectValue(AArgs.GetElement(1));
 
   // Parse args array
-  if SigObj.GetProperty('args') is TGocciaArrayValue then
+  ArgsField := SigObj.GetProperty('args');
+  if ArgsField is TGocciaArrayValue then
   begin
-    ArgsArray := TGocciaArrayValue(SigObj.GetProperty('args'));
+    ArgsArray := TGocciaArrayValue(ArgsField);
     Result.ArgCount := ArgsArray.Elements.Count;
     SetLength(Result.ArgTypes, Result.ArgCount);
     for I := 0 to Result.ArgCount - 1 do
@@ -531,22 +563,27 @@ begin
         ThrowTypeError('void is not a valid argument type');
     end;
   end
-  else
+  else if (ArgsField = nil) or (ArgsField is TGocciaUndefinedLiteralValue) then
   begin
     Result.ArgCount := 0;
     SetLength(Result.ArgTypes, 0);
-  end;
+  end
+  else
+    ThrowTypeError('signature args must be an array of type strings');
 
   // Parse return type
-  if SigObj.GetProperty('returns') is TGocciaStringLiteralValue then
+  ReturnsField := SigObj.GetProperty('returns');
+  if ReturnsField is TGocciaStringLiteralValue then
   begin
-    ReturnStr := TGocciaStringLiteralValue(SigObj.GetProperty('returns')).Value;
+    ReturnStr := TGocciaStringLiteralValue(ReturnsField).Value;
     Result.ReturnType := ParseFFIType(ReturnStr);
     if (Result.ReturnType = fftVoid) and (ReturnStr <> FFI_TYPE_VOID) then
       ThrowTypeError('Unknown FFI return type: ' + ReturnStr);
   end
+  else if (ReturnsField = nil) or (ReturnsField is TGocciaUndefinedLiteralValue) then
+    Result.ReturnType := fftVoid
   else
-    Result.ReturnType := fftVoid;
+    ThrowTypeError('signature returns must be a type string');
 
   // Validate
   ValidationError := ValidateSignature(Result);

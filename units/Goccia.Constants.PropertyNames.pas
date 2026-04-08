@@ -82,6 +82,8 @@ const
   PROP_RESULTS                = 'results';
   PROP_INSTANCES              = 'instances';
   PROP_LAST_CALL              = 'lastCall';
+  PROP_IS_NULL                = 'isNull';
+  PROP_FFI_ADDRESS            = 'address';
 
 implementation
 
