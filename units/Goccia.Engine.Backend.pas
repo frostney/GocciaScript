@@ -41,6 +41,7 @@ type
     FBootstrapSource: TStringList;
     FOwnsModuleLoader: Boolean;
     FInjectedGlobals: TStringList;
+    FASIEnabled: Boolean;
     FGlobalBackedTopLevel: Boolean;
     function GetContentProvider: TGocciaModuleContentProvider;
     function GetModuleResolver: TGocciaModuleResolver;
@@ -70,6 +71,7 @@ type
     property ContentProvider: TGocciaModuleContentProvider read GetContentProvider;
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
       write FGlobalBackedTopLevel;
+    property ASIEnabled: Boolean read FASIEnabled write FASIEnabled;
     property ModuleLoader: TGocciaModuleLoader read FModuleLoader;
     property ModuleResolver: TGocciaModuleResolver read GetModuleResolver;
   end;
@@ -386,6 +388,7 @@ begin
   FInterpreter := TGocciaInterpreter.Create(FSourcePath, FBootstrapSource,
     FModuleLoader);
   FInterpreter.JSXEnabled := ggJSX in AGlobals;
+  FInterpreter.ASIEnabled := FASIEnabled;
   TGarbageCollector.Instance.AddRootObject(FInterpreter.GlobalScope);
   FBootstrap := TGocciaRuntimeBootstrap.Create(FInterpreter, AGlobals, ThrowError);
 

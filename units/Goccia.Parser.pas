@@ -59,6 +59,7 @@ type
     FInAsyncFunction: Integer;
     FPrivateClassContexts: TObjectList<TGocciaPrivateClassContext>;
     FSkipPrivateNameValidation: Integer;
+    FAutomaticSemicolonInsertion: Boolean;
 
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
     procedure PushPrivateClassContext;
@@ -78,6 +79,8 @@ type
     function Match(const ATokenType: TGocciaTokenType): Boolean; overload; inline;
     function Consume(const ATokenType: TGocciaTokenType; const AMessage: string): TGocciaToken; overload;
     function Consume(const ATokenType: TGocciaTokenType; const AMessage, ASuggestion: string): TGocciaToken; overload;
+    procedure ConsumeSemicolonOrASI(const AMessage, ASuggestion: string);
+    function CheckSemicolonOrASI: Boolean;
     function IsIdentifierNameToken(
       const ATokenType: TGocciaTokenType): Boolean;
     function ConsumeModuleExportName(const AMessage: string): TGocciaToken; overload;
@@ -178,6 +181,8 @@ type
     function ParseExpressionUnchecked: TGocciaExpression;
     function Expression: TGocciaExpression;
     function GetWarning(const AIndex: Integer): TGocciaParserWarning; inline;
+    property AutomaticSemicolonInsertion: Boolean
+      read FAutomaticSemicolonInsertion write FAutomaticSemicolonInsertion;
     property WarningCount: Integer read FWarningCount;
   end;
 
@@ -461,6 +466,43 @@ begin
     FFileName, FSourceLines);
   Error.Suggestion := ASuggestion;
   raise Error;
+end;
+
+// ES2026 §12.10 Automatic Semicolon Insertion
+procedure TGocciaParser.ConsumeSemicolonOrASI(const AMessage, ASuggestion: string);
+begin
+  if Check(gttSemicolon) then
+  begin
+    Advance;
+    Exit;
+  end;
+
+  if not FAutomaticSemicolonInsertion then
+  begin
+    Consume(gttSemicolon, AMessage, ASuggestion);
+    Exit;
+  end;
+
+  // ES2026 §12.10 rules:
+  //   1. Newline between previous token and current token
+  //   2. Current token is }
+  //   3. Current token is EOF
+  if (Previous.Line < Peek.Line) or
+     Check(gttRightBrace) or
+     Check(gttEOF) then
+    Exit;
+
+  Consume(gttSemicolon, AMessage, ASuggestion);
+end;
+
+// ES2026 §12.10 Check whether ASI would apply at current position
+function TGocciaParser.CheckSemicolonOrASI: Boolean;
+begin
+  if Check(gttSemicolon) then
+    Exit(True);
+  if not FAutomaticSemicolonInsertion then
+    Exit(False);
+  Result := (Previous.Line < Peek.Line) or Check(gttRightBrace) or Check(gttEOF);
 end;
 
 function TGocciaParser.IsIdentifierNameToken(
@@ -1731,7 +1773,7 @@ begin
     Consume(gttAssign, 'Destructuring declarations must have an initializer',
       SSuggestDestructuringRequiresInitializer);
     Initializer := Expression;
-    Consume(gttSemicolon, 'Expected ";" after destructuring declaration',
+    ConsumeSemicolonOrASI('Expected ";" after destructuring declaration',
       SSuggestAddSemicolon);
     DestructuringDecl := TGocciaDestructuringDeclaration.Create(Pattern, Initializer, IsConst, Line, Column);
     DestructuringDecl.TypeAnnotation := DestructuringType;
@@ -1765,7 +1807,7 @@ begin
       Inc(VariableCount);
     until not Match(gttComma);
 
-    Consume(gttSemicolon, 'Expected ";" after variable declaration',
+    ConsumeSemicolonOrASI('Expected ";" after variable declaration',
       SSuggestAddSemicolon);
     Result := TGocciaVariableDeclaration.Create(Variables, IsConst, Line, Column);
   end;
@@ -2155,7 +2197,7 @@ begin
   Consume(gttWhile, 'Expected "while" after do body',
     SSuggestAddWhileAfterDo);
   SkipBalancedParens;
-  Consume(gttSemicolon, 'Expected ";" after do-while statement',
+  ConsumeSemicolonOrASI('Expected ";" after do-while statement',
     SSuggestAddSemicolon);
 
   Result := TGocciaEmptyStatement.Create(Line, Column);
@@ -2202,13 +2244,19 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  if Check(gttSemicolon) then
-    Value := nil
+  // ES2026 §12.10.1 restricted production: return [no LineTerminator here] Expression
+  if CheckSemicolonOrASI then
+  begin
+    Value := nil;
+    if Check(gttSemicolon) then
+      Advance;
+  end
   else
+  begin
     Value := Expression;
-
-  Consume(gttSemicolon, 'Expected ";" after return value',
-    SSuggestAddSemicolon);
+    ConsumeSemicolonOrASI('Expected ";" after return value',
+      SSuggestAddSemicolon);
+  end;
   Result := TGocciaReturnStatement.Create(Value, Line, Column);
 end;
 
@@ -2220,8 +2268,14 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
+  // ES2026 §12.10.1 restricted production: throw [no LineTerminator here] Expression
+  if FAutomaticSemicolonInsertion and (Previous.Line < Peek.Line) then
+    raise TGocciaSyntaxError.Create('Illegal newline after throw',
+      Line, Column, FFileName, FSourceLines,
+      'Move the throw expression to the same line as the throw keyword');
+
   Value := Expression;
-  Consume(gttSemicolon, 'Expected ";" after throw value',
+  ConsumeSemicolonOrASI('Expected ";" after throw value',
     SSuggestAddSemicolon);
   Result := TGocciaThrowStatement.Create(Value, Line, Column);
 end;
@@ -2528,7 +2582,7 @@ begin
       SSuggestAddFromAfterImport);
     ModulePath := Consume(gttString, 'Expected module path',
       SSuggestProvideModulePath).Lexeme;
-    Consume(gttSemicolon, 'Expected ";" after import declaration',
+    ConsumeSemicolonOrASI('Expected ";" after import declaration',
       SSuggestAddSemicolon);
     Result := TGocciaImportDeclaration.Create(TStringStringMap.Create,
       ModulePath, Line, Column, NamespaceName);
@@ -2595,7 +2649,7 @@ begin
     SSuggestAddFromAfterImportList);
   ModulePath := Consume(gttString, 'Expected module path',
     SSuggestProvideModulePath).Lexeme;
-  Consume(gttSemicolon, 'Expected ";" after import declaration',
+  ConsumeSemicolonOrASI('Expected ";" after import declaration',
     SSuggestAddSemicolon);
 
   Result := TGocciaImportDeclaration.Create(Imports, ModulePath, Line, Column);
@@ -2764,13 +2818,13 @@ begin
   begin
     ModulePath := Consume(gttString, 'Expected module path after "from"',
       SSuggestProvideModulePath).Lexeme;
-    Consume(gttSemicolon, 'Expected ";" after re-export declaration',
+    ConsumeSemicolonOrASI('Expected ";" after re-export declaration',
       SSuggestAddSemicolon);
     Result := TGocciaReExportDeclaration.Create(ExportsTable, ModulePath, Line, Column);
   end
   else
   begin
-    Consume(gttSemicolon, 'Expected ";" after export declaration',
+    ConsumeSemicolonOrASI('Expected ";" after export declaration',
       SSuggestAddSemicolon);
     Result := TGocciaExportDeclaration.Create(ExportsTable, Line, Column);
   end;
@@ -2965,7 +3019,7 @@ begin
         end
         else
           PropertyValue := nil;
-        Consume(gttSemicolon, 'Expected ";" after accessor declaration',
+        ConsumeSemicolonOrASI('Expected ";" after accessor declaration',
           SSuggestAddSemicolon);
 
         SetLength(Elements, Length(Elements) + 1);
@@ -2984,7 +3038,7 @@ begin
         Consume(gttAssign, 'Expected "=" in property',
           SSuggestAddPropertyInitializer);
         PropertyValue := Expression;
-        Consume(gttSemicolon, 'Expected ";" after property',
+        ConsumeSemicolonOrASI('Expected ";" after property',
           SSuggestAddSemicolon);
 
         if Length(MemberDecorators) > 0 then
@@ -3022,10 +3076,10 @@ begin
             InstancePropertyTypes.Add(MemberName, FieldType);
         end;
       end
-      else if Check(gttSemicolon) then
+      else if CheckSemicolonOrASI then
       begin
-        Consume(gttSemicolon, 'Expected ";" after property declaration',
-          SSuggestAddSemicolon);
+        if Check(gttSemicolon) then
+          Advance;
         PropertyValue := TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, Peek.Line, Peek.Column);
 
         if Length(MemberDecorators) > 0 then
@@ -3875,7 +3929,7 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  Consume(gttSemicolon, 'Expected ";" after break statement',
+  ConsumeSemicolonOrASI('Expected ";" after break statement',
     SSuggestAddSemicolon);
   Result := TGocciaBreakStatement.Create(Line, Column);
 end;

@@ -128,8 +128,10 @@ type
     FBuiltinTemporal: TGocciaTemporalBuiltin;
     FBuiltinArrayBuffer: TGocciaGlobalArrayBuffer;
     FPreviousExceptionMask: TFPUExceptionMask;
+    FASIEnabled: Boolean;
     FSuppressWarnings: Boolean;
     FLastTiming: TGocciaScriptResult;
+    procedure SetASIEnabled(const AValue: Boolean);
 
     procedure PinSingletons;
     procedure RegisterBuiltIns;
@@ -193,6 +195,7 @@ type
     property BuiltinBenchmark: TGocciaBenchmark read FBuiltinBenchmark;
     property BuiltinTemporal: TGocciaTemporalBuiltin read FBuiltinTemporal;
     property BuiltinArrayBuffer: TGocciaGlobalArrayBuffer read FBuiltinArrayBuffer;
+    property ASIEnabled: Boolean read FASIEnabled write SetASIEnabled;
     property SuppressWarnings: Boolean read FSuppressWarnings write FSuppressWarnings;
     property LastTiming: TGocciaScriptResult read FLastTiming;
   end;
@@ -844,6 +847,7 @@ begin
         FLastTiming.LexTimeNanoseconds := LexEnd - StartTime;
 
         Parser := TGocciaParser.Create(Tokens, FFileName, Lexer.SourceLines);
+        Parser.AutomaticSemicolonInsertion := FASIEnabled;
         try
           ProgramNode := Parser.Parse;
           PrintParserWarnings(Parser, SourceMap);
@@ -980,6 +984,12 @@ end;
 function TGocciaEngine.SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := AThisValue;
+end;
+
+procedure TGocciaEngine.SetASIEnabled(const AValue: Boolean);
+begin
+  FASIEnabled := AValue;
+  FInterpreter.ASIEnabled := AValue;
 end;
 
 procedure TGocciaEngine.ThrowError(const AMessage: string; const ALine, AColumn: Integer);

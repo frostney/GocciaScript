@@ -48,6 +48,7 @@ var
   GCoverageLcovEnabled: Boolean = False;
   GCoverageJsonEnabled: Boolean = False;
   GCoverageOutputPath: string = '';
+  GASIEnabled: Boolean = False;
 
 type
   TTestFileResult = record
@@ -140,6 +141,7 @@ begin
       SilentConsole := nil;
       Engine := TGocciaEngine.Create(AFileName, Source, TestGlobals);
       try
+        Engine.ASIEnabled := GASIEnabled;
         ConfigureModuleResolver(Engine.Resolver, AFileName, GImportMapPath,
           GInlineAliases);
         if GSilentConsole then
@@ -225,6 +227,7 @@ begin
     try try
       Backend := TGocciaBytecodeBackend.Create(AFileName);
       try
+        Backend.ASIEnabled := GASIEnabled;
         Backend.RegisterBuiltIns(TestGlobals);
         ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
           GImportMapPath, GInlineAliases);
@@ -236,6 +239,7 @@ begin
           LexEnd := GetNanoseconds;
 
           Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
+          Parser.AutomaticSemicolonInsertion := GASIEnabled;
           try
             ProgramNode := Parser.Parse;
             ParseEnd := GetNanoseconds;
@@ -651,6 +655,8 @@ begin
         GCoverageOutputPath := Copy(Arg, 19, MaxInt);
         GCoverageEnabled := True;
       end
+      else if Arg = '--asi' then
+        GASIEnabled := True
       else if Copy(Arg, 1, 2) = '--' then
       begin
         WriteLn('Error: Unknown option "', Arg, '"');
@@ -674,6 +680,7 @@ begin
       WriteLn('  --alias key=value       Add an inline import-map-style alias');
       WriteLn('  --output=<file>         Write test results as JSON to file');
       WriteLn('  --mode=interpreted|bytecode  Execution backend (default: interpreted)');
+      WriteLn('  --asi                   Enable automatic semicolon insertion');
       WriteLn('  --coverage              Enable line and branch coverage reporting');
       WriteLn('  --coverage-format=lcov|json  Coverage output format (implies --coverage)');
       WriteLn('  --coverage-output=<file>     Coverage output file (paired with --coverage-format)');

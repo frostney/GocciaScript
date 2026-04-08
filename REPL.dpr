@@ -37,6 +37,7 @@ var
   InlineAliases: TStringList;
   Line: string;
   Source: TStringList;
+  GASIEnabled: Boolean = False;
   ShowTiming: Boolean;
   IsBytecodeMode: Boolean;
   I: Integer;
@@ -108,6 +109,8 @@ begin
       Inc(I);
       InlineAliases.Add(ParamStr(I));
     end
+    else if Arg = '--asi' then
+      GASIEnabled := True
     else if (Arg <> '--timing') and (Arg <> '--help') and (Arg <> '-h') then
     begin
       WriteLn('Error: Unknown option ', Arg);
@@ -119,7 +122,8 @@ begin
 
   if FindCmdLineSwitch('help', ['-'], True) or FindCmdLineSwitch('h', ['-'], False) then
   begin
-    WriteLn('Usage: REPL [--timing] [--mode=interpreted|bytecode] [--import-map=file] [--alias key=value]');
+    WriteLn('Usage: REPL [--timing] [--mode=interpreted|bytecode] [--import-map=file] [--alias key=value] [--asi]');
+    WriteLn('  --asi                   Enable automatic semicolon insertion');
     Exit;
   end;
 
@@ -134,6 +138,7 @@ begin
   if IsBytecodeMode then
   begin
     Backend := TGocciaBytecodeBackend.Create(REPL_FILE_NAME);
+    Backend.ASIEnabled := GASIEnabled;
     LiveModules := TObjectList<TGocciaBytecodeModule>.Create(True);
     try
       Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
@@ -176,6 +181,7 @@ begin
 
             Parser := TGocciaParser.Create(Tokens, REPL_FILE_NAME,
               Lexer.SourceLines);
+            Parser.AutomaticSemicolonInsertion := GASIEnabled;
             try
               ProgramNode := Parser.Parse;
               ParseEnd := GetNanoseconds;
@@ -244,6 +250,7 @@ begin
   begin
     Engine := TGocciaEngine.Create(REPL_FILE_NAME, Source,
       TGocciaEngine.DefaultGlobals);
+    Engine.ASIEnabled := GASIEnabled;
     try
       ConfigureModuleResolver(Engine.Resolver, REPL_FILE_NAME, ImportMapPath,
         InlineAliases);
