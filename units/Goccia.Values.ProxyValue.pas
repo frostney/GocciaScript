@@ -226,6 +226,7 @@ var
   Trap: TGocciaValue;
   Args: TGocciaArgumentsCollection;
   TrapResult: TGocciaValue;
+  TargetDesc: TGocciaPropertyDescriptor;
 begin
   CheckRevoked;
   Trap := GetTrap(PROP_HAS);
@@ -239,6 +240,15 @@ begin
       Result := TrapResult.ToBooleanLiteral.Value;
     finally
       Args.Free;
+    end;
+
+    // ES2026 §28.1.1 step 9-10: Invariant — if trap returns false,
+    // target must not have a non-configurable own property with that name.
+    if (not Result) and (FTarget is TGocciaObjectValue) then
+    begin
+      TargetDesc := TGocciaObjectValue(FTarget).GetOwnPropertyDescriptor(AName);
+      if Assigned(TargetDesc) and not TargetDesc.Configurable then
+        ThrowTypeError('Proxy has trap returned false for non-configurable property ''' + AName + '''');
     end;
   end
   else
@@ -335,6 +345,7 @@ var
   Trap: TGocciaValue;
   Args: TGocciaArgumentsCollection;
   TrapResult: TGocciaValue;
+  TargetDesc: TGocciaPropertyDescriptor;
 begin
   CheckRevoked;
   Trap := GetTrap(PROP_DELETE_PROPERTY);
@@ -348,6 +359,15 @@ begin
       Result := TrapResult.ToBooleanLiteral.Value;
     finally
       Args.Free;
+    end;
+
+    // ES2026 §28.1.1 step 11: Invariant — if trap returns true,
+    // target must not have a non-configurable own property with that name.
+    if Result and (FTarget is TGocciaObjectValue) then
+    begin
+      TargetDesc := TGocciaObjectValue(FTarget).GetOwnPropertyDescriptor(AName);
+      if Assigned(TargetDesc) and not TargetDesc.Configurable then
+        ThrowTypeError('Proxy deleteProperty trap returned true for non-configurable property ''' + AName + '''');
     end;
   end
   else
@@ -385,8 +405,8 @@ begin
       Args.Free;
     end;
 
-    if (TrapResult is TGocciaUndefinedLiteralValue) or
-       (TrapResult is TGocciaNullLiteralValue) then
+    // Per spec, trap must return an object or undefined (not null)
+    if TrapResult is TGocciaUndefinedLiteralValue then
       Exit(nil);
 
     if not (TrapResult is TGocciaObjectValue) then
@@ -403,15 +423,16 @@ begin
     if Assigned(ConfigProp) and ConfigProp.ToBooleanLiteral.Value then
       Include(Flags, pfConfigurable);
 
-    // Detect accessor vs data descriptor
-    GetterProp := ResultObj.GetProperty(PROP_GET);
-    SetterProp := ResultObj.GetProperty(PROP_SET);
-    HasGetter := Assigned(GetterProp) and not (GetterProp is TGocciaUndefinedLiteralValue);
-    HasSetter := Assigned(SetterProp) and not (SetterProp is TGocciaUndefinedLiteralValue);
+    // Detect accessor vs data descriptor by field presence, not value.
+    // { get: undefined } is an accessor descriptor per ES2026 §6.2.6.
+    HasGetter := ResultObj.HasOwnProperty(PROP_GET);
+    HasSetter := ResultObj.HasOwnProperty(PROP_SET);
 
     if HasGetter or HasSetter then
     begin
-      // Accessor descriptor
+      // Accessor descriptor — preserve explicit undefined get/set
+      GetterProp := ResultObj.GetProperty(PROP_GET);
+      SetterProp := ResultObj.GetProperty(PROP_SET);
       Result := TGocciaPropertyDescriptorAccessor.Create(
         GetterProp, SetterProp, Flags);
     end
@@ -450,14 +471,14 @@ begin
   begin
     // Build descriptor object — preserve accessor vs data shape
     DescObj := TGocciaObjectValue.Create;
+    // Emit get/set when the descriptor IS an accessor, regardless of
+    // whether the stored function is nil — presence matters per spec.
     if ADescriptor is TGocciaPropertyDescriptorAccessor then
     begin
-      if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
-        DescObj.AssignProperty(PROP_GET,
-          TGocciaPropertyDescriptorAccessor(ADescriptor).Getter);
-      if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
-        DescObj.AssignProperty(PROP_SET,
-          TGocciaPropertyDescriptorAccessor(ADescriptor).Setter);
+      DescObj.AssignProperty(PROP_GET,
+        TGocciaPropertyDescriptorAccessor(ADescriptor).Getter);
+      DescObj.AssignProperty(PROP_SET,
+        TGocciaPropertyDescriptorAccessor(ADescriptor).Setter);
     end
     else if ADescriptor is TGocciaPropertyDescriptorData then
     begin
@@ -576,6 +597,7 @@ function TGocciaProxyValue.GetPrototypeTrap: TGocciaValue;
 var
   Trap: TGocciaValue;
   Args: TGocciaArgumentsCollection;
+  TargetProto: TGocciaValue;
 begin
   CheckRevoked;
   Trap := GetTrap(PROP_GET_PROTOTYPE_OF);
@@ -587,6 +609,20 @@ begin
       Result := InvokeTrap(Trap, Args);
     finally
       Args.Free;
+    end;
+
+    // ES2026 §28.1.1 step 8: If target is non-extensible, trap result
+    // must be the same as the target's actual prototype.
+    if (FTarget is TGocciaObjectValue) and
+       not TGocciaObjectValue(FTarget).Extensible then
+    begin
+      if Assigned(TGocciaObjectValue(FTarget).Prototype) then
+        TargetProto := TGocciaObjectValue(FTarget).Prototype
+      else
+        TargetProto := TGocciaNullLiteralValue.NullValue;
+      if Result <> TargetProto then
+        ThrowTypeError(
+          'Proxy getPrototypeOf trap result does not match non-extensible target prototype');
     end;
   end
   else
@@ -623,6 +659,23 @@ begin
       Result := TrapResult.ToBooleanLiteral.Value;
     finally
       Args.Free;
+    end;
+
+    // ES2026 §28.1.1 step 12: If trap returns true and target is
+    // non-extensible, the new prototype must match the target's current one.
+    if Result and (FTarget is TGocciaObjectValue) and
+       not TGocciaObjectValue(FTarget).Extensible then
+    begin
+      if AProto is TGocciaObjectValue then
+      begin
+        if TGocciaObjectValue(FTarget).Prototype <> TGocciaObjectValue(AProto) then
+          ThrowTypeError('Proxy setPrototypeOf trap returned true but target is non-extensible');
+      end
+      else if AProto is TGocciaNullLiteralValue then
+      begin
+        if Assigned(TGocciaObjectValue(FTarget).Prototype) then
+          ThrowTypeError('Proxy setPrototypeOf trap returned true but target is non-extensible');
+      end;
     end;
   end
   else
