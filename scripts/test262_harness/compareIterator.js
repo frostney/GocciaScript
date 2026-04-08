@@ -11,7 +11,7 @@ const compareIterator = (iter, validators) => {
       );
     }
     validators[i](val, i);
-    i = i + 1;
+    i++;
   }
   if (i !== validators.length) {
     throw new Test262Error(
