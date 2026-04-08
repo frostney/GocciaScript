@@ -526,6 +526,117 @@ jobs:
           retention-days: 1
           path: json5-test-results-${{ matrix.target }}.json
 
+  test262-conformance:
+    needs: build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download build
+        uses: actions/download-artifact@v5
+        with:
+          name: gocciascript-x86_64-linux
+          path: build/
+
+      - name: Make binaries executable
+        run: chmod +x build/*
+
+      - name: Cache test262 suite
+        id: cache-test262
+        uses: actions/cache@v5
+        with:
+          path: test262-suite
+          key: test262-${{ hashFiles('scripts/run_test262_suite.py', 'scripts/test262_syntax_filter.py') }}
+          restore-keys: test262-
+
+      - name: Clone test262
+        if: steps.cache-test262.outputs.cache-hit != 'true'
+        run: git clone --depth 1 --branch main https://github.com/tc39/test262.git test262-suite
+
+      - name: Run test262 conformance suite
+        id: test262
+        run: |
+          PYTHON_BIN="$(command -v python3 || command -v python)"
+          "$PYTHON_BIN" scripts/run_test262_suite.py \
+            --suite-dir test262-suite \
+            --test-runner ./build/TestRunner \
+            --script-loader ./build/ScriptLoader \
+            --asi \
+            --output test262-results.json \
+            || true
+
+      - name: Report test262 conformance
+        if: always()
+        run: |
+          PYTHON_BIN="$(command -v python3 || command -v python)"
+          "$PYTHON_BIN" - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("test262-results.json")
+          if not path.exists():
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+                  f.write("## test262 Conformance\n\n⚠️ No results produced.\n")
+              raise SystemExit(0)
+
+          report = json.loads(path.read_text())
+          s = report["summary"]
+          discovered = s["total_discovered"]
+          eligible = s["total_eligible"]
+          run = s["total_run"]
+          passed = s["passed"]
+          failed = s["failed"]
+          timeouts = s.get("timeouts", 0)
+          duration = s.get("duration_seconds", 0)
+          pct_eligible = 100 * eligible / max(discovered, 1)
+          pct_passed = 100 * passed / max(run, 1)
+
+          md = []
+          md.append("## test262 Conformance")
+          md.append("")
+          md.append(f"**{passed:,} / {run:,} ({pct_passed:.1f}%)** eligible tests pass")
+          md.append("")
+          md.append("| Metric | Count |")
+          md.append("|--------|------:|")
+          md.append(f"| Discovered | {discovered:,} |")
+          md.append(f"| Eligible | {eligible:,} ({pct_eligible:.1f}%) |")
+          md.append(f"| Passed | {passed:,} |")
+          md.append(f"| Failed | {failed:,} |")
+          if timeouts:
+              md.append(f"| Timeouts | {timeouts:,} |")
+          md.append(f"| Duration | {duration:.0f}s |")
+          md.append("")
+
+          skip_reasons = s.get("skip_reasons", {})
+          if skip_reasons:
+              top = sorted(skip_reasons.items(), key=lambda x: -x[1])[:10]
+              md.append("<details><summary>Top skip reasons</summary>")
+              md.append("")
+              md.append("| Reason | Count |")
+              md.append("|--------|------:|")
+              for reason, count in top:
+                  md.append(f"| `{reason}` | {count:,} |")
+              md.append("")
+              md.append("</details>")
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("\n".join(md) + "\n")
+          PY
+
+      - name: Upload test262 report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: test262-results
+          retention-days: 7
+          path: test262-results.json
+
   benchmark:
     needs: build
     strategy:
