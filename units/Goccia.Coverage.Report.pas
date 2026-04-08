@@ -150,12 +150,15 @@ procedure WriteCoverageLcov(const ATracker: TGocciaCoverageTracker;
   const AOutputPath: string);
 var
   Output: TStringList;
+  SourceLines: TStringList;
+  ExecutableFlags: array of Boolean;
   Pair: TFileCovPair;
   FileCov: TGocciaFileCoverage;
-  I, HitCount, LineCount, BranchCount, BranchHitCount: Integer;
+  I, HitCount, LineCount, LinesHitCount, BranchCount, BranchHitCount: Integer;
   Branch: TGocciaCoverageBranch;
   BranchBlockIndex: Integer;
   PrevLine, PrevColumn: Integer;
+  HasSource: Boolean;
 begin
   Output := TStringList.Create;
   try
@@ -166,16 +169,49 @@ begin
       FileCov := Pair.Value;
       Output.Add('SF:' + FileCov.FileName);
 
-      // Line coverage data
-      LineCount := 0;
-      for I := 1 to FileCov.LineHitCount - 1 do
-      begin
-        HitCount := FileCov.GetLineHitCount(I);
-        if HitCount > 0 then
+      // Load source to identify executable lines for zero-hit entries
+      HasSource := False;
+      SourceLines := TStringList.Create;
+      try
+        if FileExists(FileCov.FileName) then
         begin
-          Output.Add(Format('DA:%d,%d', [I, HitCount]));
-          Inc(LineCount);
+          SourceLines.LoadFromFile(FileCov.FileName);
+          if SourceLines.Count > 0 then
+          begin
+            SetLength(ExecutableFlags, SourceLines.Count);
+            BuildExecutableLineFlags(SourceLines, ExecutableFlags);
+            HasSource := True;
+          end;
         end;
+
+        // Line coverage data — emit DA: for all executable lines (hit or zero)
+        LineCount := 0;
+        LinesHitCount := 0;
+        if HasSource then
+        begin
+          for I := 0 to SourceLines.Count - 1 do
+            if ExecutableFlags[I] then
+            begin
+              HitCount := FileCov.GetLineHitCount(I + 1);
+              Output.Add(Format('DA:%d,%d', [I + 1, HitCount]));
+              Inc(LineCount);
+              if HitCount > 0 then
+                Inc(LinesHitCount);
+            end;
+        end
+        else
+          for I := 1 to FileCov.LineHitCount - 1 do
+          begin
+            HitCount := FileCov.GetLineHitCount(I);
+            if HitCount > 0 then
+            begin
+              Output.Add(Format('DA:%d,%d', [I, HitCount]));
+              Inc(LineCount);
+              Inc(LinesHitCount);
+            end;
+          end;
+      finally
+        SourceLines.Free;
       end;
 
       // Branch coverage data
@@ -209,7 +245,7 @@ begin
       Output.Add(Format('BRF:%d', [BranchCount]));
       Output.Add(Format('BRH:%d', [BranchHitCount]));
       Output.Add(Format('LF:%d', [LineCount]));
-      Output.Add(Format('LH:%d', [FileCov.LinesHit]));
+      Output.Add(Format('LH:%d', [LinesHitCount]));
       Output.Add('end_of_record');
     end;
 
@@ -234,12 +270,15 @@ procedure WriteCoverageJSON(const ATracker: TGocciaCoverageTracker;
   const AOutputPath: string);
 var
   Buf: TStringBuffer;
+  SourceLines: TStringList;
+  ExecutableFlags: array of Boolean;
   Pair: TFileCovPair;
   FileCov: TGocciaFileCoverage;
   I, HitCount, StatementIndex, BranchBlockIndex: Integer;
   Branch: TGocciaCoverageBranch;
   PrevLine, PrevColumn: Integer;
   FirstFile, FirstEntry: Boolean;
+  HasSource: Boolean;
   Output: TStringList;
 begin
   Buf := TStringBuffer.Create(4096);
@@ -262,42 +301,90 @@ begin
     Buf.Append(EscapeJSONStr(FileCov.FileName));
     Buf.Append('",');
 
-    // s (statement hit counts)
-    Buf.Append(#10'    "s": {');
-    StatementIndex := 0;
-    FirstEntry := True;
-    for I := 1 to FileCov.LineHitCount - 1 do
-    begin
-      HitCount := FileCov.GetLineHitCount(I);
-      if HitCount > 0 then
+    // Load source to identify executable lines for zero-hit entries
+    HasSource := False;
+    SourceLines := TStringList.Create;
+    try
+      if FileExists(FileCov.FileName) then
       begin
-        if not FirstEntry then
-          Buf.AppendChar(',');
-        FirstEntry := False;
-        Inc(StatementIndex);
-        Buf.Append(Format('"%d":%d', [StatementIndex, HitCount]));
+        SourceLines.LoadFromFile(FileCov.FileName);
+        if SourceLines.Count > 0 then
+        begin
+          SetLength(ExecutableFlags, SourceLines.Count);
+          BuildExecutableLineFlags(SourceLines, ExecutableFlags);
+          HasSource := True;
+        end;
       end;
-    end;
-    Buf.Append('},');
 
-    // statementMap
-    Buf.Append(#10'    "statementMap": {');
-    StatementIndex := 0;
-    FirstEntry := True;
-    for I := 1 to FileCov.LineHitCount - 1 do
-    begin
-      HitCount := FileCov.GetLineHitCount(I);
-      if HitCount > 0 then
+      // s (statement hit counts) — emit for all executable lines
+      Buf.Append(#10'    "s": {');
+      StatementIndex := 0;
+      FirstEntry := True;
+      if HasSource then
       begin
-        if not FirstEntry then
-          Buf.AppendChar(',');
-        FirstEntry := False;
-        Inc(StatementIndex);
-        Buf.Append(Format('"%d":{"start":{"line":%d,"column":0},"end":{"line":%d,"column":0}}',
-          [StatementIndex, I, I]));
-      end;
+        for I := 0 to SourceLines.Count - 1 do
+          if ExecutableFlags[I] then
+          begin
+            if not FirstEntry then
+              Buf.AppendChar(',');
+            FirstEntry := False;
+            Inc(StatementIndex);
+            Buf.Append(Format('"%d":%d',
+              [StatementIndex, FileCov.GetLineHitCount(I + 1)]));
+          end;
+      end
+      else
+        for I := 1 to FileCov.LineHitCount - 1 do
+        begin
+          HitCount := FileCov.GetLineHitCount(I);
+          if HitCount > 0 then
+          begin
+            if not FirstEntry then
+              Buf.AppendChar(',');
+            FirstEntry := False;
+            Inc(StatementIndex);
+            Buf.Append(Format('"%d":%d', [StatementIndex, HitCount]));
+          end;
+        end;
+      Buf.Append('},');
+
+      // statementMap — emit for all executable lines
+      Buf.Append(#10'    "statementMap": {');
+      StatementIndex := 0;
+      FirstEntry := True;
+      if HasSource then
+      begin
+        for I := 0 to SourceLines.Count - 1 do
+          if ExecutableFlags[I] then
+          begin
+            if not FirstEntry then
+              Buf.AppendChar(',');
+            FirstEntry := False;
+            Inc(StatementIndex);
+            Buf.Append(Format(
+              '"%d":{"start":{"line":%d,"column":0},"end":{"line":%d,"column":0}}',
+              [StatementIndex, I + 1, I + 1]));
+          end;
+      end
+      else
+        for I := 1 to FileCov.LineHitCount - 1 do
+        begin
+          HitCount := FileCov.GetLineHitCount(I);
+          if HitCount > 0 then
+          begin
+            if not FirstEntry then
+              Buf.AppendChar(',');
+            FirstEntry := False;
+            Inc(StatementIndex);
+            Buf.Append(Format(
+              '"%d":{"start":{"line":%d,"column":0},"end":{"line":%d,"column":0}}',
+              [StatementIndex, I, I]));
+          end;
+        end;
+      Buf.Append('},');
+    finally
+      SourceLines.Free;
     end;
-    Buf.Append('},');
 
     // b (branch hit counts)
     Buf.Append(#10'    "b": {');
