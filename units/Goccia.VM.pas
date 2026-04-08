@@ -1,6 +1,7 @@
 unit Goccia.VM;
 
 {$I Goccia.inc}
+{$POINTERMATH ON}
 
 interface
 
@@ -49,12 +50,19 @@ type
   end;
 
   TGocciaBytecodeCellArray = array of TGocciaBytecodeCell;
+  PGocciaBytecodeCell = ^TGocciaBytecodeCell;
   TGocciaArgumentsPoolArray = array of TGocciaArgumentsCollection;
 
   TGocciaVM = class
   private
-    FRegisters: TGocciaRegisterArray;
-    FLocalCells: TGocciaBytecodeCellArray;
+    FRegisterStack: TGocciaRegisterArray;
+    FRegisterBase: Integer;
+    FRegisters: PGocciaRegister;
+    FRegisterCount: Integer;
+    FLocalCellStack: TGocciaBytecodeCellArray;
+    FLocalCellBase: Integer;
+    FLocalCells: PGocciaBytecodeCell;
+    FLocalCellCount: Integer;
     FArgCount: Integer;
     FGlobalScope: TGocciaScope;
     FInterpreter: TGocciaInterpreter;
@@ -71,10 +79,8 @@ type
     function ConstantToValue(const AConstant: TGocciaBytecodeConstant): TGocciaValue;
     function AcquireArguments(const ACapacity: Integer = 0): TGocciaArgumentsCollection;
     procedure ReleaseArguments(const AArguments: TGocciaArgumentsCollection);
-    function AcquireRegisters(const ACount: Integer): TGocciaRegisterArray;
-    procedure ReleaseRegisters(var ARegisters: TGocciaRegisterArray);
-    function AcquireLocalCells(const ACount: Integer): TGocciaBytecodeCellArray;
-    procedure ReleaseLocalCells(var ALocalCells: TGocciaBytecodeCellArray);
+    procedure AcquireRegisters(const ACount: Integer);
+    procedure AcquireLocalCells(const ACount: Integer);
     procedure EnsureRegisterCapacity(const ACount: Integer);
     procedure EnsureLocalCapacity(const ACount: Integer);
     function GetLocalCell(const AIndex: Integer): TGocciaBytecodeCell;
@@ -1261,6 +1267,8 @@ begin
 end;
 
 constructor TGocciaVM.Create;
+const
+  INITIAL_STACK_SIZE = 4096;
 begin
   inherited Create;
   FPreviousExceptionMask := GetExceptionMask;
@@ -1268,6 +1276,14 @@ begin
   FHandlerStack := TGocciaBytecodeHandlerStack.Create;
   FArgumentPoolCount := 0;
   FActiveDecoratorSession := nil;
+  SetLength(FRegisterStack, INITIAL_STACK_SIZE);
+  FRegisterBase := 0;
+  FRegisters := nil;
+  FRegisterCount := 0;
+  SetLength(FLocalCellStack, INITIAL_STACK_SIZE);
+  FLocalCellBase := 0;
+  FLocalCells := nil;
+  FLocalCellCount := 0;
 end;
 
 destructor TGocciaVM.Destroy;
@@ -1690,37 +1706,66 @@ begin
     AArguments.Free;
 end;
 
-function TGocciaVM.AcquireRegisters(const ACount: Integer): TGocciaRegisterArray;
+procedure TGocciaVM.AcquireRegisters(const ACount: Integer);
+var
+  NewBase, Required: Integer;
 begin
-  SetLength(Result, ACount);
+  NewBase := FRegisterBase + FRegisterCount;
+  Required := NewBase + ACount;
+  if Required > Length(FRegisterStack) then
+    SetLength(FRegisterStack, Required * 2);
+  FRegisterBase := NewBase;
+  FRegisterCount := ACount;
+  FRegisters := @FRegisterStack[FRegisterBase];
+  FillChar(FRegisters^, ACount * SizeOf(TGocciaRegister), 0);
 end;
 
-procedure TGocciaVM.ReleaseRegisters(var ARegisters: TGocciaRegisterArray);
+procedure TGocciaVM.AcquireLocalCells(const ACount: Integer);
+var
+  NewBase, Required: Integer;
 begin
-  ARegisters := nil;
-end;
-
-function TGocciaVM.AcquireLocalCells(
-  const ACount: Integer): TGocciaBytecodeCellArray;
-begin
-  SetLength(Result, ACount);
-end;
-
-procedure TGocciaVM.ReleaseLocalCells(var ALocalCells: TGocciaBytecodeCellArray);
-begin
-  ALocalCells := nil;
+  NewBase := FLocalCellBase + FLocalCellCount;
+  Required := NewBase + ACount;
+  if Required > Length(FLocalCellStack) then
+    SetLength(FLocalCellStack, Required * 2);
+  FLocalCellBase := NewBase;
+  FLocalCellCount := ACount;
+  FLocalCells := @FLocalCellStack[FLocalCellBase];
+  FillChar(FLocalCells^, ACount * SizeOf(TGocciaBytecodeCell), 0);
 end;
 
 procedure TGocciaVM.EnsureRegisterCapacity(const ACount: Integer);
+var
+  Growth, Required: Integer;
 begin
-  if Length(FRegisters) < ACount then
-    SetLength(FRegisters, ACount);
+  if ACount > FRegisterCount then
+  begin
+    Growth := ACount - FRegisterCount;
+    Required := FRegisterBase + ACount;
+    if Required > Length(FRegisterStack) then
+      SetLength(FRegisterStack, Required * 2);
+    FillChar(FRegisterStack[FRegisterBase + FRegisterCount],
+      Growth * SizeOf(TGocciaRegister), 0);
+    FRegisterCount := ACount;
+    FRegisters := @FRegisterStack[FRegisterBase];
+  end;
 end;
 
 procedure TGocciaVM.EnsureLocalCapacity(const ACount: Integer);
+var
+  Growth, Required: Integer;
 begin
-  if Length(FLocalCells) < ACount then
-    SetLength(FLocalCells, ACount);
+  if ACount > FLocalCellCount then
+  begin
+    Growth := ACount - FLocalCellCount;
+    Required := FLocalCellBase + ACount;
+    if Required > Length(FLocalCellStack) then
+      SetLength(FLocalCellStack, Required * 2);
+    FillChar(FLocalCellStack[FLocalCellBase + FLocalCellCount],
+      Growth * SizeOf(TGocciaBytecodeCell), 0);
+    FLocalCellCount := ACount;
+    FLocalCells := @FLocalCellStack[FLocalCellBase];
+  end;
 end;
 
 function TGocciaVM.GetLocalCell(const AIndex: Integer): TGocciaBytecodeCell;
@@ -1733,16 +1778,16 @@ end;
 
 function TGocciaVM.GetLocalRegister(const AIndex: Integer): TGocciaRegister;
 begin
-  if (AIndex >= 0) and (AIndex < Length(FLocalCells)) and Assigned(FLocalCells[AIndex]) then
+  if (AIndex >= 0) and (AIndex < FLocalCellCount) and Assigned(FLocalCells[AIndex]) then
     Exit(FLocalCells[AIndex].Value);
-  if (AIndex >= 0) and (AIndex < Length(FRegisters)) then
+  if (AIndex >= 0) and (AIndex < FRegisterCount) then
     Exit(FRegisters[AIndex]);
   Result := RegisterUndefined;
 end;
 
 function TGocciaVM.GetRegister(const AIndex: Integer): TGocciaValue;
 begin
-  if (AIndex >= 0) and (AIndex < Length(FRegisters)) then
+  if (AIndex >= 0) and (AIndex < FRegisterCount) then
     Result := RegisterToValue(FRegisters[AIndex])
   else
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -1750,7 +1795,7 @@ end;
 
 function TGocciaVM.GetRegisterFast(const AIndex: Integer): TGocciaValue;
 begin
-  if (AIndex < 0) or (AIndex >= Length(FRegisters)) then
+  if (AIndex < 0) or (AIndex >= FRegisterCount) then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   Result := RegisterToValue(FRegisters[AIndex]);
 end;
@@ -1759,7 +1804,7 @@ procedure TGocciaVM.SetRegister(const AIndex: Integer; const AValue: TGocciaValu
 begin
   EnsureRegisterCapacity(AIndex + 1);
   FRegisters[AIndex] := VMValueToRegisterFast(AValue);
-  if (AIndex >= 0) and (AIndex < Length(FLocalCells)) and
+  if (AIndex >= 0) and (AIndex < FLocalCellCount) and
      Assigned(FLocalCells[AIndex]) then
     FLocalCells[AIndex].Value := FRegisters[AIndex];
 end;
@@ -1767,13 +1812,13 @@ end;
 procedure TGocciaVM.SetRegisterFast(const AIndex: Integer;
   const AValue: TGocciaValue);
 begin
-  if (AIndex < 0) or (AIndex >= Length(FRegisters)) then
+  if (AIndex < 0) or (AIndex >= FRegisterCount) then
   begin
     SetRegister(AIndex, AValue);
     Exit;
   end;
   FRegisters[AIndex] := VMValueToRegisterFast(AValue);
-  if (AIndex < Length(FLocalCells)) and Assigned(FLocalCells[AIndex]) then
+  if (AIndex < FLocalCellCount) and Assigned(FLocalCells[AIndex]) then
     FLocalCells[AIndex].Value := FRegisters[AIndex];
 end;
 
@@ -1782,14 +1827,14 @@ procedure TGocciaVM.SetRegisterRaw(const AIndex: Integer;
 begin
   EnsureRegisterCapacity(AIndex + 1);
   FRegisters[AIndex] := AValue;
-  if (AIndex >= 0) and (AIndex < Length(FLocalCells)) and
+  if (AIndex >= 0) and (AIndex < FLocalCellCount) and
      Assigned(FLocalCells[AIndex]) then
     FLocalCells[AIndex].Value := AValue;
 end;
 
 function TGocciaVM.GetLocal(const AIndex: Integer): TGocciaValue;
 begin
-  if (AIndex >= 0) and (AIndex < Length(FLocalCells)) and Assigned(FLocalCells[AIndex]) then
+  if (AIndex >= 0) and (AIndex < FLocalCellCount) and Assigned(FLocalCells[AIndex]) then
     Exit(RegisterToValue(FLocalCells[AIndex].Value));
   Result := GetRegister(AIndex);
 end;
@@ -1798,7 +1843,7 @@ function TGocciaVM.GetLocalFast(const AIndex: Integer): TGocciaValue;
 begin
   if AIndex < 0 then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
-  if (AIndex < Length(FLocalCells)) and Assigned(FLocalCells[AIndex]) then
+  if (AIndex < FLocalCellCount) and Assigned(FLocalCells[AIndex]) then
     Exit(RegisterToValue(FLocalCells[AIndex].Value));
   Result := GetRegisterFast(AIndex);
 end;
@@ -3314,8 +3359,10 @@ function TGocciaVM.ExecuteClosureRegistersInternal(
   const AArg0, AArg1, AArg2: TGocciaRegister; const AUseFixedArgs: Boolean): TGocciaRegister;
 var
   Frame: TGocciaVMCallFrame;
-  SavedRegisters: TGocciaRegisterArray;
-  SavedLocalCells: TGocciaBytecodeCellArray;
+  SavedRegisterBase: Integer;
+  SavedRegisterCount: Integer;
+  SavedLocalCellBase: Integer;
+  SavedLocalCellCount: Integer;
   SavedArgCount: Integer;
   SavedClosure: TGocciaBytecodeClosure;
   SavedHandlerCount: Integer;
@@ -3346,14 +3393,16 @@ var
   JumpOffset: Integer;
   PrevCovLine, CovLine: UInt32;
 begin
-  SavedRegisters := FRegisters;
-  SavedLocalCells := FLocalCells;
+  SavedRegisterBase := FRegisterBase;
+  SavedRegisterCount := FRegisterCount;
+  SavedLocalCellBase := FLocalCellBase;
+  SavedLocalCellCount := FLocalCellCount;
   SavedArgCount := FArgCount;
   SavedClosure := FCurrentClosure;
   SavedHandlerCount := FHandlerStack.Count;
   try
-    FRegisters := AcquireRegisters(Max(AClosure.Template.MaxRegisters, 1));
-    FLocalCells := AcquireLocalCells(Max(AClosure.Template.MaxRegisters, 1));
+    AcquireRegisters(Max(AClosure.Template.MaxRegisters, 1));
+    AcquireLocalCells(Max(AClosure.Template.MaxRegisters, 1));
     FArgCount := AArgCount;
     FCurrentClosure := AClosure;
     Inc(FFrameDepth);
@@ -3520,7 +3569,7 @@ begin
       end;
 
       OP_CLOSE_UPVALUE:
-        if (A >= 0) and (A < Length(FLocalCells)) then
+        if (A >= 0) and (A < FLocalCellCount) then
           FLocalCells[A] := nil;
 
       OP_ARG_COUNT:
@@ -4883,7 +4932,7 @@ begin
 
           COLLECTION_OP_OBJECT_REST:
             begin
-              if (A + 1 < Length(FRegisters)) and
+              if (A + 1 < FRegisterCount) and
                  (FRegisters[A + 1].Kind = grkObject) and
                  (FRegisters[A + 1].ObjectValue is TGocciaArrayValue) then
                 SetRegister(A, ObjectRestValue(RegisterToValue(FRegisters[C]),
@@ -5051,10 +5100,12 @@ begin
     Dec(FFrameDepth);
     FCurrentClosure := SavedClosure;
     FArgCount := SavedArgCount;
-    ReleaseLocalCells(FLocalCells);
-    ReleaseRegisters(FRegisters);
-    FLocalCells := SavedLocalCells;
-    FRegisters := SavedRegisters;
+    FRegisterBase := SavedRegisterBase;
+    FRegisterCount := SavedRegisterCount;
+    FRegisters := @FRegisterStack[FRegisterBase];
+    FLocalCellBase := SavedLocalCellBase;
+    FLocalCellCount := SavedLocalCellCount;
+    FLocalCells := @FLocalCellStack[FLocalCellBase];
   end;
 end;
 
