@@ -6,7 +6,6 @@ interface
 
 uses
   Goccia.Arguments.Collection,
-  Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
   Goccia.Values.Primitives;
 
@@ -14,15 +13,13 @@ type
   TGocciaGlobalProxy = class
   private
     FConstructorValue: TGocciaValue;
-    FThrowError: TGocciaThrowErrorCallback;
 
     function ProxyConstruct(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function ProxyRevocable(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
   public
-    constructor Create(const AScope: TGocciaScope;
-      const AThrowError: TGocciaThrowErrorCallback);
+    constructor Create(const AScope: TGocciaScope);
 
     property ConstructorValue: TGocciaValue read FConstructorValue;
   end;
@@ -39,13 +36,10 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.ProxyValue;
 
-constructor TGocciaGlobalProxy.Create(const AScope: TGocciaScope;
-  const AThrowError: TGocciaThrowErrorCallback);
+constructor TGocciaGlobalProxy.Create(const AScope: TGocciaScope);
 var
   ConstructorFn: TGocciaNativeFunctionValue;
 begin
-  FThrowError := AThrowError;
-
   ConstructorFn := TGocciaNativeFunctionValue.Create(ProxyConstruct,
     CONSTRUCTOR_PROXY, 2);
   ConstructorFn.SetProperty(PROP_REVOCABLE,
@@ -56,7 +50,7 @@ begin
   AScope.DefineLexicalBinding(CONSTRUCTOR_PROXY, FConstructorValue, dtConst);
 end;
 
-// ES2026 $28.2.1 Proxy(target, handler)
+// ES2026 §28.2.1 Proxy(target, handler)
 function TGocciaGlobalProxy.ProxyConstruct(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
@@ -88,7 +82,7 @@ begin
     TGocciaObjectValue(HandlerArg));
 end;
 
-// ES2026 $28.2.2 Proxy.revocable(target, handler)
+// ES2026 §28.2.2 Proxy.revocable(target, handler)
 function TGocciaGlobalProxy.ProxyRevocable(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
@@ -127,7 +121,7 @@ begin
   // Keep the Revoker reachable from the GC graph: the native function
   // captures it via a method pointer (opaque to the GC), so store it
   // as a non-enumerable property so MarkReferences traces it.
-  ResultObj.DefineProperty('__revoker',
+  ResultObj.DefineProperty(PROP_REVOKER_INTERNAL,
     TGocciaPropertyDescriptorData.Create(Revoker, []));
 
   Result := ResultObj;

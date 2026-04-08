@@ -103,6 +103,7 @@ const
   PROP_REVOCABLE                 = 'revocable';
   PROP_REVOKE                    = 'revoke';
   PROP_PROXY                     = 'proxy';
+  PROP_REVOKER_INTERNAL          = '__revoker';
 
 implementation
 

@@ -250,7 +250,7 @@ begin
   if ggFFI in FGlobals then
     FBuiltinFFI := TGocciaGlobalFFI.Create(CONSTRUCTOR_FFI, Scope, FThrowError);
   if ggProxy in FGlobals then
-    FBuiltinProxy := TGocciaGlobalProxy.Create(Scope, FThrowError);
+    FBuiltinProxy := TGocciaGlobalProxy.Create(Scope);
 
   FBuiltinGlobalString := TGocciaGlobalString.Create(CONSTRUCTOR_STRING, Scope, FThrowError);
   FBuiltinGlobals := TGocciaGlobals.Create('Globals', Scope, FThrowError);

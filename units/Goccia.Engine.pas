@@ -389,7 +389,7 @@ begin
   if ggArrayBuffer in FGlobals then
     FBuiltinArrayBuffer := TGocciaGlobalArrayBuffer.Create(CONSTRUCTOR_ARRAY_BUFFER, Scope, ThrowError);
   if ggProxy in FGlobals then
-    FBuiltinProxy := TGocciaGlobalProxy.Create(Scope, ThrowError);
+    FBuiltinProxy := TGocciaGlobalProxy.Create(Scope);
   if ggFFI in FGlobals then
     FBuiltinFFI := TGocciaGlobalFFI.Create(CONSTRUCTOR_FFI, Scope, ThrowError);
 
