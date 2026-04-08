@@ -106,6 +106,17 @@ type
     procedure MarkReferences; override;
   end;
 
+  { Result object for Proxy.revocable — holds the Revoker via an
+    internal field (not a JS-visible property) so the GC can trace it
+    without exposing implementation state through reflection APIs. }
+  TGocciaRevocableProxyResult = class(TGocciaObjectValue)
+  private
+    FRevoker: TGocciaProxyRevoker;
+  public
+    constructor Create(const ARevoker: TGocciaProxyRevoker);
+    procedure MarkReferences; override;
+  end;
+
 implementation
 
 uses
@@ -197,6 +208,7 @@ var
   Trap: TGocciaValue;
   Args: TGocciaArgumentsCollection;
   TrapResult: TGocciaValue;
+  TargetDesc: TGocciaPropertyDescriptor;
 begin
   CheckRevoked;
   Trap := GetTrap(PROP_SET);
@@ -214,6 +226,24 @@ begin
           AName + '''');
     finally
       Args.Free;
+    end;
+
+    // ES2026 §28.1.1 step 11-12: Invariant validation after truthy result.
+    if FTarget is TGocciaObjectValue then
+    begin
+      TargetDesc := TGocciaObjectValue(FTarget).GetOwnPropertyDescriptor(AName);
+      if Assigned(TargetDesc) and not TargetDesc.Configurable then
+      begin
+        // Non-configurable, non-writable data property: value must match
+        if (TargetDesc is TGocciaPropertyDescriptorData) and
+           not TargetDesc.Writable and
+           (TGocciaPropertyDescriptorData(TargetDesc).Value <> AValue) then
+          ThrowTypeError('Proxy set: cannot change value of non-configurable, non-writable property ''' + AName + '''');
+        // Non-configurable accessor without setter
+        if (TargetDesc is TGocciaPropertyDescriptorAccessor) and
+           not Assigned(TGocciaPropertyDescriptorAccessor(TargetDesc).Setter) then
+          ThrowTypeError('Proxy set: cannot set non-configurable accessor property ''' + AName + ''' without a setter');
+      end;
     end;
   end
   else
@@ -242,13 +272,16 @@ begin
       Args.Free;
     end;
 
-    // ES2026 §28.1.1 step 9-10: Invariant — if trap returns false,
-    // target must not have a non-configurable own property with that name.
+    // ES2026 §28.1.1 step 9-10: Invariant checks when trap returns false.
     if (not Result) and (FTarget is TGocciaObjectValue) then
     begin
       TargetDesc := TGocciaObjectValue(FTarget).GetOwnPropertyDescriptor(AName);
+      // Cannot hide non-configurable own property
       if Assigned(TargetDesc) and not TargetDesc.Configurable then
         ThrowTypeError('Proxy has trap returned false for non-configurable property ''' + AName + '''');
+      // Cannot hide own property on non-extensible target
+      if Assigned(TargetDesc) and not TGocciaObjectValue(FTarget).Extensible then
+        ThrowTypeError('Proxy has trap returned false for property on non-extensible target');
     end;
   end
   else
@@ -361,13 +394,16 @@ begin
       Args.Free;
     end;
 
-    // ES2026 §28.1.1 step 11: Invariant — if trap returns true,
-    // target must not have a non-configurable own property with that name.
+    // ES2026 §28.1.1 step 11-12: Invariant checks when trap returns true.
     if Result and (FTarget is TGocciaObjectValue) then
     begin
       TargetDesc := TGocciaObjectValue(FTarget).GetOwnPropertyDescriptor(AName);
+      // Cannot delete non-configurable own property
       if Assigned(TargetDesc) and not TargetDesc.Configurable then
         ThrowTypeError('Proxy deleteProperty trap returned true for non-configurable property ''' + AName + '''');
+      // Cannot delete own property on non-extensible target (property still exists)
+      if Assigned(TargetDesc) and not TGocciaObjectValue(FTarget).Extensible then
+        ThrowTypeError('Proxy deleteProperty trap returned true for property on non-extensible target');
     end;
   end
   else
@@ -391,6 +427,7 @@ var
   GetterProp, SetterProp: TGocciaValue;
   HasGetter, HasSetter: Boolean;
   Flags: TPropertyFlags;
+  TargetDesc: TGocciaPropertyDescriptor;
 begin
   CheckRevoked;
   Trap := GetTrap(PROP_GET_OWN_PROPERTY_DESCRIPTOR);
@@ -407,7 +444,18 @@ begin
 
     // Per spec, trap must return an object or undefined (not null)
     if TrapResult is TGocciaUndefinedLiteralValue then
+    begin
+      // ES2026 §28.1.1 step 10-11: Cannot hide non-configurable property
+      if FTarget is TGocciaObjectValue then
+      begin
+        TargetDesc := TGocciaObjectValue(FTarget).GetOwnPropertyDescriptor(AName);
+        if Assigned(TargetDesc) and not TargetDesc.Configurable then
+          ThrowTypeError('Proxy getOwnPropertyDescriptor returned undefined for non-configurable property ''' + AName + '''');
+        if Assigned(TargetDesc) and not TGocciaObjectValue(FTarget).Extensible then
+          ThrowTypeError('Proxy getOwnPropertyDescriptor returned undefined for property on non-extensible target');
+      end;
       Exit(nil);
+    end;
 
     if not (TrapResult is TGocciaObjectValue) then
       ThrowTypeError('Proxy getOwnPropertyDescriptor must return an object or undefined');
@@ -523,8 +571,11 @@ var
   TrapResult: TGocciaValue;
   ResultArray: TGocciaArrayValue;
   Keys: TArray<string>;
-  I: Integer;
+  I, J: Integer;
   Element: TGocciaValue;
+  TargetKeys: TArray<string>;
+  TargetDesc: TGocciaPropertyDescriptor;
+  Found: Boolean;
 begin
   CheckRevoked;
   Trap := GetTrap(PROP_OWN_KEYS);
@@ -546,8 +597,32 @@ begin
     for I := 0 to ResultArray.Elements.Count - 1 do
     begin
       Element := ResultArray.Elements[I];
+      // ES2026 §28.1.1 step 8: Each element must be a String or Symbol.
+      if not (Element is TGocciaStringLiteralValue) and
+         not (Element is TGocciaSymbolValue) then
+        ThrowTypeError('Proxy ownKeys trap result must contain only strings and symbols');
       Keys[I] := Element.ToStringLiteral.Value;
     end;
+
+    // ES2026 §28.1.1 step 17-18: Non-configurable target properties
+    // must appear in the trap result.
+    if FTarget is TGocciaObjectValue then
+    begin
+      TargetKeys := TGocciaObjectValue(FTarget).GetOwnPropertyKeys;
+      for I := 0 to Length(TargetKeys) - 1 do
+      begin
+        TargetDesc := TGocciaObjectValue(FTarget).GetOwnPropertyDescriptor(TargetKeys[I]);
+        if Assigned(TargetDesc) and not TargetDesc.Configurable then
+        begin
+          Found := False;
+          for J := 0 to Length(Keys) - 1 do
+            if Keys[J] = TargetKeys[I] then begin Found := True; Break; end;
+          if not Found then
+            ThrowTypeError('Proxy ownKeys trap result must include non-configurable property ''' + TargetKeys[I] + '''');
+        end;
+      end;
+    end;
+
     Result := Keys;
   end
   else
@@ -610,6 +685,11 @@ begin
     finally
       Args.Free;
     end;
+
+    // ES2026 §10.5.1 step 5: Result must be an Object or null.
+    if not (Result is TGocciaObjectValue) and
+       not (Result is TGocciaNullLiteralValue) then
+      ThrowTypeError('Proxy getPrototypeOf trap must return an object or null');
 
     // ES2026 §28.1.1 step 8: If target is non-extensible, trap result
     // must be the same as the target's actual prototype.
@@ -889,19 +969,14 @@ end;
 
 function TGocciaProxyValue.TypeOf: string;
 begin
-  // Per spec: typeof proxy === typeof target
-  if FRevoked then
-    Result := 'object'
-  else
-    Result := FTarget.TypeOf;
+  // ES2026 §28.1.1: Revocation disables operations, not type
+  // inspection. typeof and IsCallable always reflect the target.
+  Result := FTarget.TypeOf;
 end;
 
 function TGocciaProxyValue.IsCallable: Boolean;
 begin
-  if FRevoked then
-    Result := False
-  else
-    Result := FTarget.IsCallable;
+  Result := FTarget.IsCallable;
 end;
 
 function TGocciaProxyValue.ToStringTag: string;
@@ -951,6 +1026,23 @@ begin
   inherited;
   if Assigned(FProxy) then
     FProxy.MarkReferences;
+end;
+
+{ TGocciaRevocableProxyResult }
+
+constructor TGocciaRevocableProxyResult.Create(
+  const ARevoker: TGocciaProxyRevoker);
+begin
+  inherited Create;
+  FRevoker := ARevoker;
+end;
+
+procedure TGocciaRevocableProxyResult.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FRevoker) then
+    FRevoker.MarkReferences;
 end;
 
 end.

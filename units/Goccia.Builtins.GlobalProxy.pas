@@ -32,7 +32,6 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
   Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.ProxyValue;
 
@@ -113,16 +112,14 @@ begin
     TGocciaObjectValue(HandlerArg));
   Revoker := TGocciaProxyRevoker.Create(ProxyInstance);
 
-  ResultObj := TGocciaObjectValue.Create;
+  // Use TGocciaRevocableProxyResult to hold the Revoker via an
+  // internal Pascal field (not a JS-visible property) so the GC can
+  // trace it without exposing implementation state to reflection APIs.
+  ResultObj := TGocciaRevocableProxyResult.Create(Revoker);
   ResultObj.AssignProperty(PROP_PROXY, ProxyInstance);
   ResultObj.AssignProperty(PROP_REVOKE,
     TGocciaNativeFunctionValue.CreateWithoutPrototype(
       Revoker.RevokeCallback, PROP_REVOKE, 0));
-  // Keep the Revoker reachable from the GC graph: the native function
-  // captures it via a method pointer (opaque to the GC), so store it
-  // as a non-enumerable property so MarkReferences traces it.
-  ResultObj.DefineProperty(PROP_REVOKER_INTERNAL,
-    TGocciaPropertyDescriptorData.Create(Revoker, []));
 
   Result := ResultObj;
 end;
