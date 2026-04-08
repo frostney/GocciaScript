@@ -13,6 +13,7 @@ uses
   Goccia.Builtins.Console,
   Goccia.Builtins.GlobalArray,
   Goccia.Builtins.GlobalArrayBuffer,
+  Goccia.Builtins.GlobalFFI,
   Goccia.Builtins.GlobalMap,
   Goccia.Builtins.GlobalNumber,
   Goccia.Builtins.GlobalObject,
@@ -70,6 +71,7 @@ type
     FBuiltinBenchmark: TGocciaBenchmark;
     FBuiltinTemporal: TGocciaTemporalBuiltin;
     FBuiltinArrayBuffer: TGocciaGlobalArrayBuffer;
+    FBuiltinFFI: TGocciaGlobalFFI;
 
     procedure PinSingletons;
     procedure RegisterBuiltIns;
@@ -188,6 +190,7 @@ begin
   FBuiltinBenchmark.Free;
   FBuiltinTemporal.Free;
   FBuiltinArrayBuffer.Free;
+  FBuiltinFFI.Free;
   inherited;
 end;
 
@@ -241,6 +244,8 @@ begin
     FBuiltinTemporal := TGocciaTemporalBuiltin.Create('Temporal', Scope, FThrowError);
   if ggArrayBuffer in FGlobals then
     FBuiltinArrayBuffer := TGocciaGlobalArrayBuffer.Create(CONSTRUCTOR_ARRAY_BUFFER, Scope, FThrowError);
+  if ggFFI in FGlobals then
+    FBuiltinFFI := TGocciaGlobalFFI.Create('FFI', Scope, FThrowError);
 
   FBuiltinGlobalString := TGocciaGlobalString.Create(CONSTRUCTOR_STRING, Scope, FThrowError);
   FBuiltinGlobals := TGocciaGlobals.Create('Globals', Scope, FThrowError);

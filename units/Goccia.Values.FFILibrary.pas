@@ -93,6 +93,7 @@ var
   IntArgs: array of PtrInt;
   SingleArgs: array of Single;
   DoubleArgs: array of Double;
+  Slots: array of TGocciaFFISlot;
   TempStrings: array of AnsiString;
   I, TempCount: Integer;
   ArgValue: TGocciaValue;
@@ -109,6 +110,7 @@ begin
   SetLength(IntArgs, 0);
   SetLength(SingleArgs, 0);
   SetLength(DoubleArgs, 0);
+  SetLength(Slots, 0);
   TempCount := 0;
 
   case FSignature.ArgClass of
@@ -204,11 +206,95 @@ begin
         DoubleArgs[I] := NumValue.Value;
       end;
     end;
+    facMixed:
+    begin
+      SetLength(Slots, FSignature.ArgCount);
+      SetLength(TempStrings, FSignature.ArgCount);
+      for I := 0 to FSignature.ArgCount - 1 do
+      begin
+        ArgValue := AArgs.GetElement(I);
+        if FFITypeToArgClass(FSignature.ArgTypes[I]) = facDouble then
+        begin
+          NumValue := ArgValue.ToNumberLiteral;
+          Slots[I].AsDouble := NumValue.Value;
+        end
+        else
+        begin
+          // Integer-class argument — same marshalling as facInteger
+          case FSignature.ArgTypes[I] of
+            fftBool:
+              if ArgValue.ToBooleanLiteral.Value then
+                Slots[I].AsInt := 1
+              else
+                Slots[I].AsInt := 0;
+            fftI8, fftI16, fftI32:
+            begin
+              NumValue := ArgValue.ToNumberLiteral;
+              Slots[I].AsInt := PtrInt(Trunc(NumValue.Value));
+            end;
+            fftI64:
+            begin
+              NumValue := ArgValue.ToNumberLiteral;
+              Slots[I].AsInt := PtrInt(Int64(Trunc(NumValue.Value)));
+            end;
+            fftU8, fftU16, fftU32:
+            begin
+              NumValue := ArgValue.ToNumberLiteral;
+              Slots[I].AsInt := PtrInt(PtrUInt(Trunc(NumValue.Value)));
+            end;
+            fftU64:
+            begin
+              NumValue := ArgValue.ToNumberLiteral;
+              Slots[I].AsInt := PtrInt(QWord(Trunc(NumValue.Value)));
+            end;
+            fftPointer:
+            begin
+              if ArgValue is TGocciaFFIPointerValue then
+                Slots[I].AsInt := PtrInt(TGocciaFFIPointerValue(ArgValue).Address)
+              else if ArgValue is TGocciaArrayBufferValue then
+              begin
+                if Length(TGocciaArrayBufferValue(ArgValue).Data) = 0 then
+                  Slots[I].AsInt := 0
+                else
+                  Slots[I].AsInt := PtrInt(@TGocciaArrayBufferValue(ArgValue).Data[0]);
+              end
+              else if ArgValue is TGocciaSharedArrayBufferValue then
+              begin
+                if Length(TGocciaSharedArrayBufferValue(ArgValue).Data) = 0 then
+                  Slots[I].AsInt := 0
+                else
+                  Slots[I].AsInt := PtrInt(@TGocciaSharedArrayBufferValue(ArgValue).Data[0]);
+              end
+              else if ArgValue is TGocciaTypedArrayValue then
+              begin
+                if Length(TGocciaTypedArrayValue(ArgValue).BufferData) = 0 then
+                  Slots[I].AsInt := 0
+                else
+                  Slots[I].AsInt := PtrInt(@TGocciaTypedArrayValue(ArgValue).BufferData[
+                    TGocciaTypedArrayValue(ArgValue).ByteOffset]);
+              end
+              else if ArgValue is TGocciaNullLiteralValue then
+                Slots[I].AsInt := 0
+              else
+                ThrowTypeError('FFI argument ' + IntToStr(I) +
+                  ' must be an ArrayBuffer, TypedArray, FFIPointer, or null');
+            end;
+            fftCString:
+            begin
+              TempStrings[TempCount] := AnsiString(ArgValue.ToStringLiteral.Value);
+              Slots[I].AsInt := PtrInt(PAnsiChar(TempStrings[TempCount]));
+              Inc(TempCount);
+            end;
+          end;
+        end;
+      end;
+    end;
   end;
 
   // Dispatch the call
   FFIDispatchCall(FSymbol, FSignature.ArgCount, FSignature.ArgClass,
-    FSignature.ReturnClass, IntArgs, SingleArgs, DoubleArgs, CallResult);
+    FSignature.ArgBitmask, FSignature.ReturnClass, IntArgs, SingleArgs,
+    DoubleArgs, Slots, CallResult);
 
   // Unmarshal return value
   case FSignature.ReturnType of

@@ -92,10 +92,9 @@ describe("FFILibrary.prototype.bind", () => {
     expect(() => lib.bind("get_answer", { args: ["void"], returns: "i32" })).toThrow(TypeError);
   });
 
-  test("throws on mixed integer/float args", () => {
-    expect(() =>
-      lib.bind("get_answer", { args: ["i32", "f64"], returns: "i32" })
-    ).toThrow(TypeError);
+  test("accepts mixed integer/f64 args", () => {
+    const scale = lib.bind("scale_f64", { args: ["i32", "f64"], returns: "f64" });
+    expect(scale(2, 3.0)).toBe(6);
   });
 
   test("throws when binding from closed library", () => {

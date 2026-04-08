@@ -94,3 +94,21 @@ int sum6(int a, int b, int c, int d, int e, int f) {
 double sum4_f64(double a, double b, double c, double d) {
   return a + b + c + d;
 }
+
+// -- Mixed integer/float args -----------------------------------------------
+
+double scale_f64(int factor, double value) {
+  return factor * value;
+}
+
+double weighted_sum(double a, int weight_a, double b, int weight_b) {
+  return a * weight_a + b * weight_b;
+}
+
+int round_f64(double value) {
+  return (int)(value + 0.5);
+}
+
+double index_scale(int index, double scale, int offset) {
+  return (index + offset) * scale;
+}

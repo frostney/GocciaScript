@@ -4,6 +4,9 @@ unit Goccia.FFI.Types;
 
 interface
 
+uses
+  SysUtils;
+
 type
   TGocciaFFIType = (
     fftVoid,
@@ -15,14 +18,27 @@ type
     fftCString
   );
 
-  TGocciaFFIArgClass = (facInteger, facSingle, facDouble);
+  // Argument class for homogeneous signatures (all args same ABI class).
+  // facMixed indicates a per-position int/double mix (bitmask dispatch).
+  TGocciaFFIArgClass = (facInteger, facSingle, facDouble, facMixed);
   TGocciaFFIReturnClass = (frcVoid, frcInteger, frcSingle, frcDouble);
+
+  // Per-argument slot — carries the native value in the matching union field.
+  TGocciaFFISlot = record
+    case Integer of
+      0: (AsInt: PtrInt);
+      1: (AsSingle: Single);
+      2: (AsDouble: Double);
+  end;
 
   TGocciaFFISignature = record
     ArgTypes: array of TGocciaFFIType;
     ReturnType: TGocciaFFIType;
     ArgCount: Integer;
     ArgClass: TGocciaFFIArgClass;
+    // Per-position bitmask for facMixed: bit I = 1 means arg I is Double,
+    // bit I = 0 means arg I is PtrInt. Only valid when ArgClass = facMixed.
+    ArgBitmask: Integer;
     ReturnClass: TGocciaFFIReturnClass;
   end;
 
@@ -35,6 +51,7 @@ type
 
 const
   MAX_FFI_ARGS = 8;
+  MAX_FFI_MIXED_ARGS = 4;
 
   FFI_TYPE_VOID    = 'void';
   FFI_TYPE_BOOL    = 'bool';
@@ -102,13 +119,15 @@ end;
 function ValidateSignature(var ASignature: TGocciaFFISignature): string;
 var
   I: Integer;
-  FirstClass: TGocciaFFIArgClass;
+  HasInteger, HasSingle, HasDouble: Boolean;
+  Bitmask: Integer;
 begin
   Result := '';
+  ASignature.ArgBitmask := 0;
 
   if ASignature.ArgCount > MAX_FFI_ARGS then
   begin
-    Result := 'FFI supports a maximum of 8 arguments';
+    Result := 'FFI supports a maximum of ' + IntToStr(MAX_FFI_ARGS) + ' arguments';
     Exit;
   end;
 
@@ -126,23 +145,65 @@ begin
   end;
   {$ENDIF}
 
+  ASignature.ReturnClass := FFITypeToReturnClass(ASignature.ReturnType);
+
   if ASignature.ArgCount = 0 then
   begin
     ASignature.ArgClass := facInteger;
-    ASignature.ReturnClass := FFITypeToReturnClass(ASignature.ReturnType);
     Exit;
   end;
 
-  FirstClass := FFITypeToArgClass(ASignature.ArgTypes[0]);
-  for I := 1 to ASignature.ArgCount - 1 do
-    if FFITypeToArgClass(ASignature.ArgTypes[I]) <> FirstClass then
-    begin
-      Result := 'All FFI arguments must be the same type class (all integer, all f32, or all f64). Mixed integer/float signatures are not supported';
-      Exit;
+  // Classify what arg types are present
+  HasInteger := False;
+  HasSingle := False;
+  HasDouble := False;
+  for I := 0 to ASignature.ArgCount - 1 do
+    case FFITypeToArgClass(ASignature.ArgTypes[I]) of
+      facInteger: HasInteger := True;
+      facSingle:  HasSingle := True;
+      facDouble:  HasDouble := True;
     end;
 
-  ASignature.ArgClass := FirstClass;
-  ASignature.ReturnClass := FFITypeToReturnClass(ASignature.ReturnType);
+  // All-homogeneous cases
+  if HasInteger and not HasSingle and not HasDouble then
+  begin
+    ASignature.ArgClass := facInteger;
+    Exit;
+  end;
+  if HasSingle and not HasInteger and not HasDouble then
+  begin
+    ASignature.ArgClass := facSingle;
+    Exit;
+  end;
+  if HasDouble and not HasInteger and not HasSingle then
+  begin
+    ASignature.ArgClass := facDouble;
+    Exit;
+  end;
+
+  // Mixed: only integer + double is supported (f32 cannot mix)
+  if HasSingle then
+  begin
+    Result := 'f32 arguments cannot be mixed with other types. Use f64 instead, or keep all arguments f32';
+    Exit;
+  end;
+
+  // Mixed integer + double
+  if ASignature.ArgCount > MAX_FFI_MIXED_ARGS then
+  begin
+    Result := 'Mixed integer/float signatures support a maximum of ' +
+      IntToStr(MAX_FFI_MIXED_ARGS) + ' arguments';
+    Exit;
+  end;
+
+  // Build per-position bitmask: bit I = 1 means Double
+  Bitmask := 0;
+  for I := 0 to ASignature.ArgCount - 1 do
+    if FFITypeToArgClass(ASignature.ArgTypes[I]) = facDouble then
+      Bitmask := Bitmask or (1 shl I);
+
+  ASignature.ArgClass := facMixed;
+  ASignature.ArgBitmask := Bitmask;
 end;
 
 end.

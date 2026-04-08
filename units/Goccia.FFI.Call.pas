@@ -6,6 +6,9 @@ unit Goccia.FFI.Call;
 // one at runtime. FPC generates the correct platform ABI code for each
 // typed function pointer, so this works on x86-64, AArch64, and x86-32
 // without any assembly or libffi dependency.
+//
+// Mixed int/double signatures (facMixed) are supported for arities 2-4.
+// Each position in the bitmask selects PtrInt (0) or Double (1).
 
 {$I Goccia.inc}
 
@@ -18,16 +21,18 @@ procedure FFIDispatchCall(
   const AFunc: CodePointer;
   const AArgCount: Integer;
   const AArgClass: TGocciaFFIArgClass;
+  const AArgBitmask: Integer;
   const AReturnClass: TGocciaFFIReturnClass;
   const AIntArgs: array of PtrInt;
   const ASingleArgs: array of Single;
   const ADoubleArgs: array of Double;
+  const ASlots: array of TGocciaFFISlot;
   out AResult: TGocciaFFIResult);
 
 implementation
 
 // ==========================================================================
-// Function pointer type definitions
+// Function pointer type definitions — homogeneous signatures
 //
 // Naming convention:
 //   TFFIProc{N}{C}  = procedure with N args of class C; cdecl
@@ -191,7 +196,152 @@ type
   TFFIFuncD8D = function(A0, A1, A2, A3, A4, A5, A6, A7: Double): Double; cdecl;
 
 // ==========================================================================
-// Dispatch helpers — one per arity to keep the main dispatch readable
+// Function pointer type definitions — mixed int/double signatures
+//
+// Naming convention:
+//   TFFIProc{N}_{pattern}  = procedure with N args, pattern per position; cdecl
+//   TFFIFunc{R}{N}_{pattern} = function returning R with N args; cdecl
+//
+//   Pattern characters: N=PtrInt, D=Double (one per position, left to right)
+//   Only patterns that are NOT all-N or all-D appear here (those are the
+//   homogeneous types above).
+// ==========================================================================
+
+type
+  // -- 2 arguments, mixed: ND (bitmask $1) ----------------------------------
+  TFFIProc2_ND  = procedure(A0: PtrInt; A1: Double); cdecl;
+  TFFIFuncN2_ND = function(A0: PtrInt; A1: Double): PtrInt; cdecl;
+  TFFIFuncS2_ND = function(A0: PtrInt; A1: Double): Single; cdecl;
+  TFFIFuncD2_ND = function(A0: PtrInt; A1: Double): Double; cdecl;
+
+  // -- 2 arguments, mixed: DN (bitmask $2) ----------------------------------
+  TFFIProc2_DN  = procedure(A0: Double; A1: PtrInt); cdecl;
+  TFFIFuncN2_DN = function(A0: Double; A1: PtrInt): PtrInt; cdecl;
+  TFFIFuncS2_DN = function(A0: Double; A1: PtrInt): Single; cdecl;
+  TFFIFuncD2_DN = function(A0: Double; A1: PtrInt): Double; cdecl;
+
+  // -- 3 arguments, mixed: NND (bitmask $1) ---------------------------------
+  TFFIProc3_NND  = procedure(A0: PtrInt; A1: PtrInt; A2: Double); cdecl;
+  TFFIFuncN3_NND = function(A0: PtrInt; A1: PtrInt; A2: Double): PtrInt; cdecl;
+  TFFIFuncS3_NND = function(A0: PtrInt; A1: PtrInt; A2: Double): Single; cdecl;
+  TFFIFuncD3_NND = function(A0: PtrInt; A1: PtrInt; A2: Double): Double; cdecl;
+
+  // -- 3 arguments, mixed: NDN (bitmask $2) ---------------------------------
+  TFFIProc3_NDN  = procedure(A0: PtrInt; A1: Double; A2: PtrInt); cdecl;
+  TFFIFuncN3_NDN = function(A0: PtrInt; A1: Double; A2: PtrInt): PtrInt; cdecl;
+  TFFIFuncS3_NDN = function(A0: PtrInt; A1: Double; A2: PtrInt): Single; cdecl;
+  TFFIFuncD3_NDN = function(A0: PtrInt; A1: Double; A2: PtrInt): Double; cdecl;
+
+  // -- 3 arguments, mixed: NDD (bitmask $3) ---------------------------------
+  TFFIProc3_NDD  = procedure(A0: PtrInt; A1: Double; A2: Double); cdecl;
+  TFFIFuncN3_NDD = function(A0: PtrInt; A1: Double; A2: Double): PtrInt; cdecl;
+  TFFIFuncS3_NDD = function(A0: PtrInt; A1: Double; A2: Double): Single; cdecl;
+  TFFIFuncD3_NDD = function(A0: PtrInt; A1: Double; A2: Double): Double; cdecl;
+
+  // -- 3 arguments, mixed: DNN (bitmask $4) ---------------------------------
+  TFFIProc3_DNN  = procedure(A0: Double; A1: PtrInt; A2: PtrInt); cdecl;
+  TFFIFuncN3_DNN = function(A0: Double; A1: PtrInt; A2: PtrInt): PtrInt; cdecl;
+  TFFIFuncS3_DNN = function(A0: Double; A1: PtrInt; A2: PtrInt): Single; cdecl;
+  TFFIFuncD3_DNN = function(A0: Double; A1: PtrInt; A2: PtrInt): Double; cdecl;
+
+  // -- 3 arguments, mixed: DND (bitmask $5) ---------------------------------
+  TFFIProc3_DND  = procedure(A0: Double; A1: PtrInt; A2: Double); cdecl;
+  TFFIFuncN3_DND = function(A0: Double; A1: PtrInt; A2: Double): PtrInt; cdecl;
+  TFFIFuncS3_DND = function(A0: Double; A1: PtrInt; A2: Double): Single; cdecl;
+  TFFIFuncD3_DND = function(A0: Double; A1: PtrInt; A2: Double): Double; cdecl;
+
+  // -- 3 arguments, mixed: DDN (bitmask $6) ---------------------------------
+  TFFIProc3_DDN  = procedure(A0: Double; A1: Double; A2: PtrInt); cdecl;
+  TFFIFuncN3_DDN = function(A0: Double; A1: Double; A2: PtrInt): PtrInt; cdecl;
+  TFFIFuncS3_DDN = function(A0: Double; A1: Double; A2: PtrInt): Single; cdecl;
+  TFFIFuncD3_DDN = function(A0: Double; A1: Double; A2: PtrInt): Double; cdecl;
+
+  // -- 4 arguments, mixed: NNND (bitmask $1) --------------------------------
+  TFFIProc4_NNND  = procedure(A0: PtrInt; A1: PtrInt; A2: PtrInt; A3: Double); cdecl;
+  TFFIFuncN4_NNND = function(A0: PtrInt; A1: PtrInt; A2: PtrInt; A3: Double): PtrInt; cdecl;
+  TFFIFuncS4_NNND = function(A0: PtrInt; A1: PtrInt; A2: PtrInt; A3: Double): Single; cdecl;
+  TFFIFuncD4_NNND = function(A0: PtrInt; A1: PtrInt; A2: PtrInt; A3: Double): Double; cdecl;
+
+  // -- 4 arguments, mixed: NNDN (bitmask $2) --------------------------------
+  TFFIProc4_NNDN  = procedure(A0: PtrInt; A1: PtrInt; A2: Double; A3: PtrInt); cdecl;
+  TFFIFuncN4_NNDN = function(A0: PtrInt; A1: PtrInt; A2: Double; A3: PtrInt): PtrInt; cdecl;
+  TFFIFuncS4_NNDN = function(A0: PtrInt; A1: PtrInt; A2: Double; A3: PtrInt): Single; cdecl;
+  TFFIFuncD4_NNDN = function(A0: PtrInt; A1: PtrInt; A2: Double; A3: PtrInt): Double; cdecl;
+
+  // -- 4 arguments, mixed: NNDD (bitmask $3) --------------------------------
+  TFFIProc4_NNDD  = procedure(A0: PtrInt; A1: PtrInt; A2: Double; A3: Double); cdecl;
+  TFFIFuncN4_NNDD = function(A0: PtrInt; A1: PtrInt; A2: Double; A3: Double): PtrInt; cdecl;
+  TFFIFuncS4_NNDD = function(A0: PtrInt; A1: PtrInt; A2: Double; A3: Double): Single; cdecl;
+  TFFIFuncD4_NNDD = function(A0: PtrInt; A1: PtrInt; A2: Double; A3: Double): Double; cdecl;
+
+  // -- 4 arguments, mixed: NDNN (bitmask $4) --------------------------------
+  TFFIProc4_NDNN  = procedure(A0: PtrInt; A1: Double; A2: PtrInt; A3: PtrInt); cdecl;
+  TFFIFuncN4_NDNN = function(A0: PtrInt; A1: Double; A2: PtrInt; A3: PtrInt): PtrInt; cdecl;
+  TFFIFuncS4_NDNN = function(A0: PtrInt; A1: Double; A2: PtrInt; A3: PtrInt): Single; cdecl;
+  TFFIFuncD4_NDNN = function(A0: PtrInt; A1: Double; A2: PtrInt; A3: PtrInt): Double; cdecl;
+
+  // -- 4 arguments, mixed: NDND (bitmask $5) --------------------------------
+  TFFIProc4_NDND  = procedure(A0: PtrInt; A1: Double; A2: PtrInt; A3: Double); cdecl;
+  TFFIFuncN4_NDND = function(A0: PtrInt; A1: Double; A2: PtrInt; A3: Double): PtrInt; cdecl;
+  TFFIFuncS4_NDND = function(A0: PtrInt; A1: Double; A2: PtrInt; A3: Double): Single; cdecl;
+  TFFIFuncD4_NDND = function(A0: PtrInt; A1: Double; A2: PtrInt; A3: Double): Double; cdecl;
+
+  // -- 4 arguments, mixed: NDDN (bitmask $6) --------------------------------
+  TFFIProc4_NDDN  = procedure(A0: PtrInt; A1: Double; A2: Double; A3: PtrInt); cdecl;
+  TFFIFuncN4_NDDN = function(A0: PtrInt; A1: Double; A2: Double; A3: PtrInt): PtrInt; cdecl;
+  TFFIFuncS4_NDDN = function(A0: PtrInt; A1: Double; A2: Double; A3: PtrInt): Single; cdecl;
+  TFFIFuncD4_NDDN = function(A0: PtrInt; A1: Double; A2: Double; A3: PtrInt): Double; cdecl;
+
+  // -- 4 arguments, mixed: NDDD (bitmask $7) --------------------------------
+  TFFIProc4_NDDD  = procedure(A0: PtrInt; A1: Double; A2: Double; A3: Double); cdecl;
+  TFFIFuncN4_NDDD = function(A0: PtrInt; A1: Double; A2: Double; A3: Double): PtrInt; cdecl;
+  TFFIFuncS4_NDDD = function(A0: PtrInt; A1: Double; A2: Double; A3: Double): Single; cdecl;
+  TFFIFuncD4_NDDD = function(A0: PtrInt; A1: Double; A2: Double; A3: Double): Double; cdecl;
+
+  // -- 4 arguments, mixed: DNNN (bitmask $8) --------------------------------
+  TFFIProc4_DNNN  = procedure(A0: Double; A1: PtrInt; A2: PtrInt; A3: PtrInt); cdecl;
+  TFFIFuncN4_DNNN = function(A0: Double; A1: PtrInt; A2: PtrInt; A3: PtrInt): PtrInt; cdecl;
+  TFFIFuncS4_DNNN = function(A0: Double; A1: PtrInt; A2: PtrInt; A3: PtrInt): Single; cdecl;
+  TFFIFuncD4_DNNN = function(A0: Double; A1: PtrInt; A2: PtrInt; A3: PtrInt): Double; cdecl;
+
+  // -- 4 arguments, mixed: DNND (bitmask $9) --------------------------------
+  TFFIProc4_DNND  = procedure(A0: Double; A1: PtrInt; A2: PtrInt; A3: Double); cdecl;
+  TFFIFuncN4_DNND = function(A0: Double; A1: PtrInt; A2: PtrInt; A3: Double): PtrInt; cdecl;
+  TFFIFuncS4_DNND = function(A0: Double; A1: PtrInt; A2: PtrInt; A3: Double): Single; cdecl;
+  TFFIFuncD4_DNND = function(A0: Double; A1: PtrInt; A2: PtrInt; A3: Double): Double; cdecl;
+
+  // -- 4 arguments, mixed: DNDN (bitmask $A) --------------------------------
+  TFFIProc4_DNDN  = procedure(A0: Double; A1: PtrInt; A2: Double; A3: PtrInt); cdecl;
+  TFFIFuncN4_DNDN = function(A0: Double; A1: PtrInt; A2: Double; A3: PtrInt): PtrInt; cdecl;
+  TFFIFuncS4_DNDN = function(A0: Double; A1: PtrInt; A2: Double; A3: PtrInt): Single; cdecl;
+  TFFIFuncD4_DNDN = function(A0: Double; A1: PtrInt; A2: Double; A3: PtrInt): Double; cdecl;
+
+  // -- 4 arguments, mixed: DNDD (bitmask $B) --------------------------------
+  TFFIProc4_DNDD  = procedure(A0: Double; A1: PtrInt; A2: Double; A3: Double); cdecl;
+  TFFIFuncN4_DNDD = function(A0: Double; A1: PtrInt; A2: Double; A3: Double): PtrInt; cdecl;
+  TFFIFuncS4_DNDD = function(A0: Double; A1: PtrInt; A2: Double; A3: Double): Single; cdecl;
+  TFFIFuncD4_DNDD = function(A0: Double; A1: PtrInt; A2: Double; A3: Double): Double; cdecl;
+
+  // -- 4 arguments, mixed: DDNN (bitmask $C) --------------------------------
+  TFFIProc4_DDNN  = procedure(A0: Double; A1: Double; A2: PtrInt; A3: PtrInt); cdecl;
+  TFFIFuncN4_DDNN = function(A0: Double; A1: Double; A2: PtrInt; A3: PtrInt): PtrInt; cdecl;
+  TFFIFuncS4_DDNN = function(A0: Double; A1: Double; A2: PtrInt; A3: PtrInt): Single; cdecl;
+  TFFIFuncD4_DDNN = function(A0: Double; A1: Double; A2: PtrInt; A3: PtrInt): Double; cdecl;
+
+  // -- 4 arguments, mixed: DDND (bitmask $D) --------------------------------
+  TFFIProc4_DDND  = procedure(A0: Double; A1: Double; A2: PtrInt; A3: Double); cdecl;
+  TFFIFuncN4_DDND = function(A0: Double; A1: Double; A2: PtrInt; A3: Double): PtrInt; cdecl;
+  TFFIFuncS4_DDND = function(A0: Double; A1: Double; A2: PtrInt; A3: Double): Single; cdecl;
+  TFFIFuncD4_DDND = function(A0: Double; A1: Double; A2: PtrInt; A3: Double): Double; cdecl;
+
+  // -- 4 arguments, mixed: DDDN (bitmask $E) --------------------------------
+  TFFIProc4_DDDN  = procedure(A0: Double; A1: Double; A2: Double; A3: PtrInt); cdecl;
+  TFFIFuncN4_DDDN = function(A0: Double; A1: Double; A2: Double; A3: PtrInt): PtrInt; cdecl;
+  TFFIFuncS4_DDDN = function(A0: Double; A1: Double; A2: Double; A3: PtrInt): Single; cdecl;
+  TFFIFuncD4_DDDN = function(A0: Double; A1: Double; A2: Double; A3: PtrInt): Double; cdecl;
+
+// ==========================================================================
+// Dispatch helpers — homogeneous signatures (one per arity)
 // ==========================================================================
 
 procedure Dispatch0(const AFunc: CodePointer; const AReturnClass: TGocciaFFIReturnClass; out AResult: TGocciaFFIResult);
@@ -445,6 +595,204 @@ begin
 end;
 
 // ==========================================================================
+// Dispatch helpers — mixed int/double signatures
+//
+// Each function takes a slot array and a bitmask, then dispatches to the
+// correctly-typed function pointer based on the bitmask pattern. The bitmask
+// encodes per-position types: bit I = 0 means PtrInt, bit I = 1 means Double.
+//
+// Homogeneous patterns (all-0 and all-1) are not handled here; the caller
+// routes those through the existing homogeneous dispatchers.
+// ==========================================================================
+
+procedure DispatchMixed2(const AFunc: CodePointer; const ABitmask: Integer;
+  const AReturnClass: TGocciaFFIReturnClass; const ASlots: array of TGocciaFFISlot;
+  out AResult: TGocciaFFIResult);
+begin
+  case ABitmask of
+    // DN: bit 0 set = arg0 is Double, arg1 is PtrInt
+    $1:
+      case AReturnClass of
+        frcVoid:    begin TFFIProc2_DN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN2_DN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt);
+        frcSingle:  AResult.AsSingle := TFFIFuncS2_DN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt);
+        frcDouble:  AResult.AsDouble := TFFIFuncD2_DN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt);
+      end;
+    // ND: bit 1 set = arg0 is PtrInt, arg1 is Double
+    $2:
+      case AReturnClass of
+        frcVoid:    begin TFFIProc2_ND(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN2_ND(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble);
+        frcSingle:  AResult.AsSingle := TFFIFuncS2_ND(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble);
+        frcDouble:  AResult.AsDouble := TFFIFuncD2_ND(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble);
+      end;
+  end;
+end;
+
+procedure DispatchMixed3(const AFunc: CodePointer; const ABitmask: Integer;
+  const AReturnClass: TGocciaFFIReturnClass; const ASlots: array of TGocciaFFISlot;
+  out AResult: TGocciaFFIResult);
+begin
+  case ABitmask of
+    // DNN: bit 0 set = arg0 is D
+    $1:
+      case AReturnClass of
+        frcVoid:    begin TFFIProc3_DNN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsInt); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN3_DNN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsInt);
+        frcSingle:  AResult.AsSingle := TFFIFuncS3_DNN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsInt);
+        frcDouble:  AResult.AsDouble := TFFIFuncD3_DNN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsInt);
+      end;
+    // NDN: bit 1 set = arg1 is D
+    $2:
+      case AReturnClass of
+        frcVoid:    begin TFFIProc3_NDN(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsInt); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN3_NDN(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsInt);
+        frcSingle:  AResult.AsSingle := TFFIFuncS3_NDN(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsInt);
+        frcDouble:  AResult.AsDouble := TFFIFuncD3_NDN(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsInt);
+      end;
+    // DDN: bits 0,1 set = args 0,1 are D
+    $3:
+      case AReturnClass of
+        frcVoid:    begin TFFIProc3_DDN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsDouble, ASlots[2].AsInt); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN3_DDN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsDouble, ASlots[2].AsInt);
+        frcSingle:  AResult.AsSingle := TFFIFuncS3_DDN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsDouble, ASlots[2].AsInt);
+        frcDouble:  AResult.AsDouble := TFFIFuncD3_DDN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsDouble, ASlots[2].AsInt);
+      end;
+    // NND: bit 2 set = arg2 is D
+    $4:
+      case AReturnClass of
+        frcVoid:    begin TFFIProc3_NND(AFunc)(ASlots[0].AsInt, ASlots[1].AsInt, ASlots[2].AsDouble); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN3_NND(AFunc)(ASlots[0].AsInt, ASlots[1].AsInt, ASlots[2].AsDouble);
+        frcSingle:  AResult.AsSingle := TFFIFuncS3_NND(AFunc)(ASlots[0].AsInt, ASlots[1].AsInt, ASlots[2].AsDouble);
+        frcDouble:  AResult.AsDouble := TFFIFuncD3_NND(AFunc)(ASlots[0].AsInt, ASlots[1].AsInt, ASlots[2].AsDouble);
+      end;
+    // DND: bits 0,2 set = args 0,2 are D
+    $5:
+      case AReturnClass of
+        frcVoid:    begin TFFIProc3_DND(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsDouble); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN3_DND(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsDouble);
+        frcSingle:  AResult.AsSingle := TFFIFuncS3_DND(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsDouble);
+        frcDouble:  AResult.AsDouble := TFFIFuncD3_DND(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsDouble);
+      end;
+    // NDD: bits 1,2 set = args 1,2 are D
+    $6:
+      case AReturnClass of
+        frcVoid:    begin TFFIProc3_NDD(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsDouble); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN3_NDD(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsDouble);
+        frcSingle:  AResult.AsSingle := TFFIFuncS3_NDD(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsDouble);
+        frcDouble:  AResult.AsDouble := TFFIFuncD3_NDD(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsDouble);
+      end;
+  end;
+end;
+
+procedure DispatchMixed4(const AFunc: CodePointer; const ABitmask: Integer;
+  const AReturnClass: TGocciaFFIReturnClass; const ASlots: array of TGocciaFFISlot;
+  out AResult: TGocciaFFIResult);
+begin
+  // Bit I set = arg I is Double. Pattern reads arg0..arg3 left to right.
+  case ABitmask of
+    $1: // DNNN: arg0=D
+      case AReturnClass of
+        frcVoid:    begin TFFIProc4_DNNN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsInt, ASlots[3].AsInt); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN4_DNNN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsInt, ASlots[3].AsInt);
+        frcSingle:  AResult.AsSingle := TFFIFuncS4_DNNN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsInt, ASlots[3].AsInt);
+        frcDouble:  AResult.AsDouble := TFFIFuncD4_DNNN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsInt, ASlots[3].AsInt);
+      end;
+    $2: // NDNN: arg1=D
+      case AReturnClass of
+        frcVoid:    begin TFFIProc4_NDNN(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsInt, ASlots[3].AsInt); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN4_NDNN(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsInt, ASlots[3].AsInt);
+        frcSingle:  AResult.AsSingle := TFFIFuncS4_NDNN(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsInt, ASlots[3].AsInt);
+        frcDouble:  AResult.AsDouble := TFFIFuncD4_NDNN(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsInt, ASlots[3].AsInt);
+      end;
+    $3: // DDNN: args 0,1=D
+      case AReturnClass of
+        frcVoid:    begin TFFIProc4_DDNN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsDouble, ASlots[2].AsInt, ASlots[3].AsInt); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN4_DDNN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsDouble, ASlots[2].AsInt, ASlots[3].AsInt);
+        frcSingle:  AResult.AsSingle := TFFIFuncS4_DDNN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsDouble, ASlots[2].AsInt, ASlots[3].AsInt);
+        frcDouble:  AResult.AsDouble := TFFIFuncD4_DDNN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsDouble, ASlots[2].AsInt, ASlots[3].AsInt);
+      end;
+    $4: // NNDN: arg2=D
+      case AReturnClass of
+        frcVoid:    begin TFFIProc4_NNDN(AFunc)(ASlots[0].AsInt, ASlots[1].AsInt, ASlots[2].AsDouble, ASlots[3].AsInt); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN4_NNDN(AFunc)(ASlots[0].AsInt, ASlots[1].AsInt, ASlots[2].AsDouble, ASlots[3].AsInt);
+        frcSingle:  AResult.AsSingle := TFFIFuncS4_NNDN(AFunc)(ASlots[0].AsInt, ASlots[1].AsInt, ASlots[2].AsDouble, ASlots[3].AsInt);
+        frcDouble:  AResult.AsDouble := TFFIFuncD4_NNDN(AFunc)(ASlots[0].AsInt, ASlots[1].AsInt, ASlots[2].AsDouble, ASlots[3].AsInt);
+      end;
+    $5: // DNDN: args 0,2=D
+      case AReturnClass of
+        frcVoid:    begin TFFIProc4_DNDN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsDouble, ASlots[3].AsInt); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN4_DNDN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsDouble, ASlots[3].AsInt);
+        frcSingle:  AResult.AsSingle := TFFIFuncS4_DNDN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsDouble, ASlots[3].AsInt);
+        frcDouble:  AResult.AsDouble := TFFIFuncD4_DNDN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsDouble, ASlots[3].AsInt);
+      end;
+    $6: // NDDN: args 1,2=D
+      case AReturnClass of
+        frcVoid:    begin TFFIProc4_NDDN(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsDouble, ASlots[3].AsInt); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN4_NDDN(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsDouble, ASlots[3].AsInt);
+        frcSingle:  AResult.AsSingle := TFFIFuncS4_NDDN(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsDouble, ASlots[3].AsInt);
+        frcDouble:  AResult.AsDouble := TFFIFuncD4_NDDN(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsDouble, ASlots[3].AsInt);
+      end;
+    $7: // DDDN: args 0,1,2=D
+      case AReturnClass of
+        frcVoid:    begin TFFIProc4_DDDN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsDouble, ASlots[2].AsDouble, ASlots[3].AsInt); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN4_DDDN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsDouble, ASlots[2].AsDouble, ASlots[3].AsInt);
+        frcSingle:  AResult.AsSingle := TFFIFuncS4_DDDN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsDouble, ASlots[2].AsDouble, ASlots[3].AsInt);
+        frcDouble:  AResult.AsDouble := TFFIFuncD4_DDDN(AFunc)(ASlots[0].AsDouble, ASlots[1].AsDouble, ASlots[2].AsDouble, ASlots[3].AsInt);
+      end;
+    $8: // NNND: arg3=D
+      case AReturnClass of
+        frcVoid:    begin TFFIProc4_NNND(AFunc)(ASlots[0].AsInt, ASlots[1].AsInt, ASlots[2].AsInt, ASlots[3].AsDouble); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN4_NNND(AFunc)(ASlots[0].AsInt, ASlots[1].AsInt, ASlots[2].AsInt, ASlots[3].AsDouble);
+        frcSingle:  AResult.AsSingle := TFFIFuncS4_NNND(AFunc)(ASlots[0].AsInt, ASlots[1].AsInt, ASlots[2].AsInt, ASlots[3].AsDouble);
+        frcDouble:  AResult.AsDouble := TFFIFuncD4_NNND(AFunc)(ASlots[0].AsInt, ASlots[1].AsInt, ASlots[2].AsInt, ASlots[3].AsDouble);
+      end;
+    $9: // DNND: args 0,3=D
+      case AReturnClass of
+        frcVoid:    begin TFFIProc4_DNND(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsInt, ASlots[3].AsDouble); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN4_DNND(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsInt, ASlots[3].AsDouble);
+        frcSingle:  AResult.AsSingle := TFFIFuncS4_DNND(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsInt, ASlots[3].AsDouble);
+        frcDouble:  AResult.AsDouble := TFFIFuncD4_DNND(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsInt, ASlots[3].AsDouble);
+      end;
+    $A: // NDND: args 1,3=D
+      case AReturnClass of
+        frcVoid:    begin TFFIProc4_NDND(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsInt, ASlots[3].AsDouble); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN4_NDND(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsInt, ASlots[3].AsDouble);
+        frcSingle:  AResult.AsSingle := TFFIFuncS4_NDND(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsInt, ASlots[3].AsDouble);
+        frcDouble:  AResult.AsDouble := TFFIFuncD4_NDND(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsInt, ASlots[3].AsDouble);
+      end;
+    $B: // DDND: args 0,1,3=D
+      case AReturnClass of
+        frcVoid:    begin TFFIProc4_DDND(AFunc)(ASlots[0].AsDouble, ASlots[1].AsDouble, ASlots[2].AsInt, ASlots[3].AsDouble); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN4_DDND(AFunc)(ASlots[0].AsDouble, ASlots[1].AsDouble, ASlots[2].AsInt, ASlots[3].AsDouble);
+        frcSingle:  AResult.AsSingle := TFFIFuncS4_DDND(AFunc)(ASlots[0].AsDouble, ASlots[1].AsDouble, ASlots[2].AsInt, ASlots[3].AsDouble);
+        frcDouble:  AResult.AsDouble := TFFIFuncD4_DDND(AFunc)(ASlots[0].AsDouble, ASlots[1].AsDouble, ASlots[2].AsInt, ASlots[3].AsDouble);
+      end;
+    $C: // NNDD: args 2,3=D
+      case AReturnClass of
+        frcVoid:    begin TFFIProc4_NNDD(AFunc)(ASlots[0].AsInt, ASlots[1].AsInt, ASlots[2].AsDouble, ASlots[3].AsDouble); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN4_NNDD(AFunc)(ASlots[0].AsInt, ASlots[1].AsInt, ASlots[2].AsDouble, ASlots[3].AsDouble);
+        frcSingle:  AResult.AsSingle := TFFIFuncS4_NNDD(AFunc)(ASlots[0].AsInt, ASlots[1].AsInt, ASlots[2].AsDouble, ASlots[3].AsDouble);
+        frcDouble:  AResult.AsDouble := TFFIFuncD4_NNDD(AFunc)(ASlots[0].AsInt, ASlots[1].AsInt, ASlots[2].AsDouble, ASlots[3].AsDouble);
+      end;
+    $D: // DNDD: args 0,2,3=D
+      case AReturnClass of
+        frcVoid:    begin TFFIProc4_DNDD(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsDouble, ASlots[3].AsDouble); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN4_DNDD(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsDouble, ASlots[3].AsDouble);
+        frcSingle:  AResult.AsSingle := TFFIFuncS4_DNDD(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsDouble, ASlots[3].AsDouble);
+        frcDouble:  AResult.AsDouble := TFFIFuncD4_DNDD(AFunc)(ASlots[0].AsDouble, ASlots[1].AsInt, ASlots[2].AsDouble, ASlots[3].AsDouble);
+      end;
+    $E: // NDDD: args 1,2,3=D
+      case AReturnClass of
+        frcVoid:    begin TFFIProc4_NDDD(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsDouble, ASlots[3].AsDouble); AResult.AsInt := 0; end;
+        frcInteger: AResult.AsInt := TFFIFuncN4_NDDD(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsDouble, ASlots[3].AsDouble);
+        frcSingle:  AResult.AsSingle := TFFIFuncS4_NDDD(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsDouble, ASlots[3].AsDouble);
+        frcDouble:  AResult.AsDouble := TFFIFuncD4_NDDD(AFunc)(ASlots[0].AsInt, ASlots[1].AsDouble, ASlots[2].AsDouble, ASlots[3].AsDouble);
+      end;
+  end;
+end;
+
+// ==========================================================================
 // Main dispatch entry point
 // ==========================================================================
 
@@ -452,10 +800,12 @@ procedure FFIDispatchCall(
   const AFunc: CodePointer;
   const AArgCount: Integer;
   const AArgClass: TGocciaFFIArgClass;
+  const AArgBitmask: Integer;
   const AReturnClass: TGocciaFFIReturnClass;
   const AIntArgs: array of PtrInt;
   const ASingleArgs: array of Single;
   const ADoubleArgs: array of Double;
+  const ASlots: array of TGocciaFFISlot;
   out AResult: TGocciaFFIResult);
 begin
   FillChar(AResult, SizeOf(AResult), 0);
@@ -499,6 +849,12 @@ begin
         6: Dispatch6D(AFunc, AReturnClass, ADoubleArgs, AResult);
         7: Dispatch7D(AFunc, AReturnClass, ADoubleArgs, AResult);
         8: Dispatch8D(AFunc, AReturnClass, ADoubleArgs, AResult);
+      end;
+    facMixed:
+      case AArgCount of
+        2: DispatchMixed2(AFunc, AArgBitmask, AReturnClass, ASlots, AResult);
+        3: DispatchMixed3(AFunc, AArgBitmask, AReturnClass, ASlots, AResult);
+        4: DispatchMixed4(AFunc, AArgBitmask, AReturnClass, ASlots, AResult);
       end;
   end;
 end;
