@@ -342,6 +342,12 @@ begin
         FResults.Add(CreateResultEntry(RESULT_TYPE_THROW, E.Value));
         raise;
       end;
+      on E: TGocciaError do
+      begin
+        FResults.Add(CreateResultEntry(RESULT_TYPE_THROW,
+          CreateErrorObject(ErrorDisplayName(E), E.Message)));
+        raise;
+      end;
       on E: Exception do
       begin
         FResults.Add(CreateResultEntry(RESULT_TYPE_THROW,

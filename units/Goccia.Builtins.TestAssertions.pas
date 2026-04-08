@@ -3131,14 +3131,14 @@ begin
   Target := TGocciaObjectValue(AArgs.GetElement(0));
   MethodName := TGocciaStringLiteralValue(AArgs.GetElement(1)).Value;
 
-  ExistingValue := Target.GetProperty(MethodName);
-  if (ExistingValue is TGocciaUndefinedLiteralValue) then
+  if not Target.HasProperty(MethodName) then
   begin
     ThrowError('spyOn: cannot spy on non-existent property "' + MethodName + '"', 0, 0);
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 
-  if not (ExistingValue is TGocciaFunctionBase) then
+  ExistingValue := Target.GetProperty(MethodName);
+  if not Assigned(ExistingValue) or not (ExistingValue is TGocciaFunctionBase) then
   begin
     ThrowError('spyOn: property "' + MethodName + '" is not a function', 0, 0);
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
