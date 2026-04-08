@@ -1674,6 +1674,9 @@ var
   MockFn: TGocciaMockFunctionValue;
   WasCalled: Boolean;
 begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 0, 'toHaveBeenCalled',
+    TGocciaTestAssertions(FTestAssertions).ThrowError);
+
   if not (FActualValue is TGocciaMockFunctionValue) then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveBeenCalled',
@@ -1707,6 +1710,7 @@ var
   MockFn: TGocciaMockFunctionValue;
   ExpectedTimes: Integer;
   Matches: Boolean;
+  NumVal: TGocciaNumberLiteralValue;
 begin
   if not (FActualValue is TGocciaMockFunctionValue) then
   begin
@@ -1719,7 +1723,12 @@ begin
     TGocciaTestAssertions(FTestAssertions).ThrowError);
 
   MockFn := TGocciaMockFunctionValue(FActualValue);
-  ExpectedTimes := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+  NumVal := AArgs.GetElement(0).ToNumberLiteral;
+  if NumVal.IsNaN or NumVal.IsInfinity or NumVal.IsNegativeInfinity or
+     (NumVal.Value < 0) or (Frac(NumVal.Value) <> 0) then
+    TGocciaTestAssertions(FTestAssertions).ThrowError(
+      'toHaveBeenCalledTimes expects a non-negative integer', 0, 0);
+  ExpectedTimes := Trunc(NumVal.Value);
   Matches := MockFn.MockCalls.Count = ExpectedTimes;
 
   if FIsNegated then
@@ -1859,6 +1868,7 @@ function TGocciaExpectationValue.ToHaveBeenNthCalledWith(const AArgs: TGocciaArg
 var
   MockFn: TGocciaMockFunctionValue;
   N: Integer;
+  NumVal: TGocciaNumberLiteralValue;
   NthCallArgs: TGocciaArrayValue;
   Matches: Boolean;
   J: Integer;
@@ -1878,7 +1888,12 @@ begin
   end;
 
   MockFn := TGocciaMockFunctionValue(FActualValue);
-  N := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+  NumVal := AArgs.GetElement(0).ToNumberLiteral;
+  if NumVal.IsNaN or NumVal.IsInfinity or NumVal.IsNegativeInfinity or
+     (NumVal.Value < 1) or (Frac(NumVal.Value) <> 0) then
+    TGocciaTestAssertions(FTestAssertions).ThrowError(
+      'toHaveBeenNthCalledWith expects a positive integer index', 0, 0);
+  N := Trunc(NumVal.Value);
 
   if (N < 1) or (N > MockFn.MockCalls.Count) then
   begin
@@ -1927,6 +1942,9 @@ var
   ResultObj: TGocciaObjectValue;
   ResultType: TGocciaValue;
 begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 0, 'toHaveReturned',
+    TGocciaTestAssertions(FTestAssertions).ThrowError);
+
   if not (FActualValue is TGocciaMockFunctionValue) then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveReturned',
@@ -1971,6 +1989,7 @@ function TGocciaExpectationValue.ToHaveReturnedTimes(const AArgs: TGocciaArgumen
 var
   MockFn: TGocciaMockFunctionValue;
   ExpectedTimes, ActualCount, I: Integer;
+  NumVal: TGocciaNumberLiteralValue;
   ResultObj: TGocciaObjectValue;
   ResultType: TGocciaValue;
   Matches: Boolean;
@@ -1986,7 +2005,12 @@ begin
     TGocciaTestAssertions(FTestAssertions).ThrowError);
 
   MockFn := TGocciaMockFunctionValue(FActualValue);
-  ExpectedTimes := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+  NumVal := AArgs.GetElement(0).ToNumberLiteral;
+  if NumVal.IsNaN or NumVal.IsInfinity or NumVal.IsNegativeInfinity or
+     (NumVal.Value < 0) or (Frac(NumVal.Value) <> 0) then
+    TGocciaTestAssertions(FTestAssertions).ThrowError(
+      'toHaveReturnedTimes expects a non-negative integer', 0, 0);
+  ExpectedTimes := Trunc(NumVal.Value);
   ActualCount := 0;
 
   for I := 0 to MockFn.MockResults.Count - 1 do
@@ -2135,6 +2159,7 @@ function TGocciaExpectationValue.ToHaveNthReturnedWith(const AArgs: TGocciaArgum
 var
   MockFn: TGocciaMockFunctionValue;
   N: Integer;
+  NumVal: TGocciaNumberLiteralValue;
   Expected: TGocciaValue;
   Matches: Boolean;
   NthResult: TGocciaObjectValue;
@@ -2155,7 +2180,12 @@ begin
   end;
 
   MockFn := TGocciaMockFunctionValue(FActualValue);
-  N := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+  NumVal := AArgs.GetElement(0).ToNumberLiteral;
+  if NumVal.IsNaN or NumVal.IsInfinity or NumVal.IsNegativeInfinity or
+     (NumVal.Value < 1) or (Frac(NumVal.Value) <> 0) then
+    TGocciaTestAssertions(FTestAssertions).ThrowError(
+      'toHaveNthReturnedWith expects a positive integer index', 0, 0);
+  N := Trunc(NumVal.Value);
   Expected := AArgs.GetElement(1);
 
   if (N < 1) or (N > MockFn.MockResults.Count) then

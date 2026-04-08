@@ -387,7 +387,7 @@ fn(1, 2);
 fn("a", "b");
 fn.mock.calls;      // [[1, 2], ["a", "b"]]
 fn.mock.results;    // [{ type: "return", value: undefined }, ...]
-fn.mock.instances;  // [this values for each call]
+fn.mock.instances;  // [this values for each call] (see note below)
 fn.mock.lastCall;   // ["a", "b"]
 
 // Configure behavior
@@ -458,6 +458,8 @@ expect(fn).not.toHaveBeenCalledWith(5, 6);
 ```
 
 All mock matchers use deep equality for argument and return value comparison.
+
+**GocciaScript vs Vitest/Jest:** `mock()` and `spyOn()` are standalone globals in GocciaScript (equivalent to `vi.fn()` / `vi.spyOn()` in Vitest or `jest.fn()` / `jest.spyOn()` in Jest). Tests using these APIs are GocciaScript-specific and will not run in Vitest without adaptation. Additionally, `mock.instances` records the `this` value for every call in GocciaScript, whereas Vitest/Jest only populate `mock.instances` for calls made with `new`.
 
 ### Lifecycle Hooks
 
@@ -697,6 +699,8 @@ expect([...set.values()]).toEqual([1, 2, 3]);
 | Emoji identifiers | Supported | Not supported by V8/Rollup |
 | Arrow methods `this` | Binds to owning object | Inherits from enclosing scope |
 | Global `parseInt`, `isNaN`, etc. | Not available (use `Number.*`) | Available as global functions |
+| `mock()` / `spyOn()` | Standalone globals | `vi.fn()` / `vi.spyOn()` (Vitest) or `jest.fn()` / `jest.spyOn()` (Jest) |
+| `mock.instances` | Records `this` for every call | Only populated for `new` calls |
 
 ## Test Principles
 
