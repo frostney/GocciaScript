@@ -9,6 +9,22 @@ function GetCommit: string;
 
 implementation
 
+{$IFDEF PRODUCTION}
+
+{$I Goccia.Version.Generated.inc}
+
+function GetVersion: string;
+begin
+  Result := BAKED_VERSION;
+end;
+
+function GetCommit: string;
+begin
+  Result := BAKED_COMMIT;
+end;
+
+{$ELSE}
+
 uses
   Process,
   SysUtils;
@@ -70,5 +86,7 @@ end;
 
 initialization
   Initialize;
+
+{$ENDIF}
 
 end.

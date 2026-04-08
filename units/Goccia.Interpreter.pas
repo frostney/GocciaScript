@@ -18,7 +18,6 @@ uses
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
-  Goccia.Logger,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Loader,

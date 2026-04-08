@@ -2,14 +2,28 @@
 
 set -euo pipefail
 
-if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
-  echo "Usage: $0 <build-dir> <artifact-dir> [--include-tests]" >&2
+usage() {
+  echo "Usage: $0 <build-dir> <artifact-dir> [--include-tests] [--strip]" >&2
   exit 1
+}
+
+if [ "$#" -lt 2 ] || [ "$#" -gt 4 ]; then
+  usage
 fi
 
 build_dir="$1"
 artifact_dir="$2"
-include_tests="${3:-}"
+shift 2
+
+include_tests=""
+do_strip=""
+for arg in "$@"; do
+  case "$arg" in
+    --include-tests) include_tests=1 ;;
+    --strip)         do_strip=1 ;;
+    *)               usage ;;
+  esac
+done
 
 mkdir -p "$artifact_dir"
 
@@ -38,7 +52,7 @@ for src in "${entrypoints[@]}"; do
   fi
 done
 
-if [ "$include_tests" = "--include-tests" ]; then
+if [ -n "$include_tests" ]; then
   copied_test=0
 
   for test_bin in "$build_dir"/Goccia.*.Test "$build_dir"/Goccia.*.Test.exe; do
@@ -52,6 +66,12 @@ if [ "$include_tests" = "--include-tests" ]; then
     echo "::error::No Pascal unit test binaries found in $build_dir"
     exit 1
   fi
+fi
+
+if [ -n "$do_strip" ]; then
+  for bin in "$artifact_dir"/*; do
+    [ -f "$bin" ] && strip "$bin" 2>/dev/null || true
+  done
 fi
 
 echo "Staged artifacts:"
