@@ -10,6 +10,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Values.ArrayValue,
   Goccia.Values.FunctionBase,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -28,6 +29,8 @@ type
     FSpyTarget: TGocciaObjectValue;
     FSpyMethodName: string;
     FSpyOriginalValue: TGocciaValue;
+    FSpyOriginalDescriptor: TGocciaPropertyDescriptor;
+    FSpyWasOwnProperty: Boolean;
     FMockObject: TGocciaObjectValue;
     procedure SetupMethods;
     procedure InvalidateMockObject;
@@ -85,10 +88,10 @@ uses
 
   GarbageCollector.Generic,
 
+  Goccia.Error,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectPropertyDescriptor;
+  Goccia.Values.NativeFunction;
 
 const
   MOCK_DEFAULT_NAME = 'mock';
@@ -135,6 +138,10 @@ begin
   FSpyTarget := ATarget;
   FSpyMethodName := AMethodName;
   FSpyOriginalValue := OriginalValue;
+
+  // Capture whether this is an own property and its descriptor for proper restore
+  FSpyOriginalDescriptor := ATarget.GetOwnPropertyDescriptor(AMethodName);
+  FSpyWasOwnProperty := Assigned(FSpyOriginalDescriptor);
 
   // Spy passes through to original by default
   if Assigned(OriginalValue) and (OriginalValue is TGocciaFunctionBase) then
@@ -200,8 +207,15 @@ function TGocciaMockFunctionValue.CreateResultEntry(const AResultType: string;
   const AValue: TGocciaValue): TGocciaObjectValue;
 begin
   Result := TGocciaObjectValue.Create;
-  Result.AssignProperty(PROP_TYPE, TGocciaStringLiteralValue.Create(AResultType));
-  Result.AssignProperty(PROP_VALUE, AValue);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(Result);
+  try
+    Result.AssignProperty(PROP_TYPE, TGocciaStringLiteralValue.Create(AResultType));
+    Result.AssignProperty(PROP_VALUE, AValue);
+  finally
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(Result);
+  end;
 end;
 
 function TGocciaMockFunctionValue.BuildCallsArray: TGocciaArrayValue;
@@ -236,15 +250,22 @@ var
   LastCall: TGocciaValue;
 begin
   Result := TGocciaObjectValue.Create;
-  Result.AssignProperty(PROP_CALLS, BuildCallsArray);
-  Result.AssignProperty(PROP_RESULTS, BuildResultsArray);
-  Result.AssignProperty(PROP_INSTANCES, BuildInstancesArray);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(Result);
+  try
+    Result.AssignProperty(PROP_CALLS, BuildCallsArray);
+    Result.AssignProperty(PROP_RESULTS, BuildResultsArray);
+    Result.AssignProperty(PROP_INSTANCES, BuildInstancesArray);
 
-  if FCalls.Count > 0 then
-    LastCall := FCalls[FCalls.Count - 1]
-  else
-    LastCall := TGocciaUndefinedLiteralValue.UndefinedValue;
-  Result.AssignProperty(PROP_LAST_CALL, LastCall);
+    if FCalls.Count > 0 then
+      LastCall := FCalls[FCalls.Count - 1]
+    else
+      LastCall := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result.AssignProperty(PROP_LAST_CALL, LastCall);
+  finally
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(Result);
+  end;
 end;
 
 function TGocciaMockFunctionValue.GetFunctionLength: Integer;
@@ -291,6 +312,12 @@ begin
         FResults.Add(CreateResultEntry(RESULT_TYPE_THROW, E.Value));
         raise;
       end;
+      on E: Exception do
+      begin
+        FResults.Add(CreateResultEntry(RESULT_TYPE_THROW,
+          TGocciaStringLiteralValue.Create(E.Message)));
+        raise;
+      end;
     end;
     Exit;
   end;
@@ -314,6 +341,12 @@ begin
       on E: TGocciaThrowValue do
       begin
         FResults.Add(CreateResultEntry(RESULT_TYPE_THROW, E.Value));
+        raise;
+      end;
+      on E: Exception do
+      begin
+        FResults.Add(CreateResultEntry(RESULT_TYPE_THROW,
+          TGocciaStringLiteralValue.Create(E.Message)));
         raise;
       end;
     end;
@@ -463,11 +496,16 @@ function TGocciaMockFunctionValue.DoMockRestore(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if Assigned(FSpyTarget) and Assigned(FSpyOriginalValue) then
+  if Assigned(FSpyTarget) then
   begin
-    FSpyTarget.DefineProperty(FSpyMethodName,
-      TGocciaPropertyDescriptorData.Create(FSpyOriginalValue,
-        [pfEnumerable, pfConfigurable, pfWritable]));
+    if FSpyWasOwnProperty and Assigned(FSpyOriginalDescriptor) then
+      // Restore the original own-property descriptor (preserves accessor/flags)
+      FSpyTarget.DefineProperty(FSpyMethodName,
+        TGocciaPropertyDescriptorData.Create(FSpyOriginalValue,
+          FSpyOriginalDescriptor.Flags))
+    else
+      // Property was inherited — remove the shadowing own property
+      FSpyTarget.DeleteProperty(FSpyMethodName);
   end;
 
   // Also reset tracking

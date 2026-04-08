@@ -3105,6 +3105,12 @@ begin
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 
+  if not (ExistingValue is TGocciaFunctionBase) then
+  begin
+    ThrowError('spyOn: property "' + MethodName + '" is not a function', 0, 0);
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
   Result := TGocciaMockFunctionValue.CreateSpy(Target, MethodName);
 end;
 

@@ -379,8 +379,8 @@ When `.toMatch()` receives a `RegExp`, the matcher uses regex semantics but does
 
 ```javascript
 // Create a mock function
-const fn = mock();                    // Returns undefined by default
-const fn = mock((x) => x * 2);       // With an implementation
+const fn = mock();                     // Returns undefined by default
+const fnWithImpl = mock((x) => x * 2); // With an implementation
 
 // Call tracking
 fn(1, 2);
