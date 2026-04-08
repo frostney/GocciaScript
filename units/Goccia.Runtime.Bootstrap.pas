@@ -18,6 +18,7 @@ uses
   Goccia.Builtins.GlobalNumber,
   Goccia.Builtins.GlobalObject,
   Goccia.Builtins.GlobalPromise,
+  Goccia.Builtins.GlobalProxy,
   Goccia.Builtins.GlobalRegExp,
   Goccia.Builtins.Globals,
   Goccia.Builtins.GlobalSet,
@@ -72,6 +73,7 @@ type
     FBuiltinTemporal: TGocciaTemporalBuiltin;
     FBuiltinArrayBuffer: TGocciaGlobalArrayBuffer;
     FBuiltinFFI: TGocciaGlobalFFI;
+    FBuiltinProxy: TGocciaGlobalProxy;
 
     procedure PinSingletons;
     procedure RegisterBuiltIns;
@@ -191,6 +193,7 @@ begin
   FBuiltinTemporal.Free;
   FBuiltinArrayBuffer.Free;
   FBuiltinFFI.Free;
+  FBuiltinProxy.Free;
   inherited;
 end;
 
@@ -246,6 +249,8 @@ begin
     FBuiltinArrayBuffer := TGocciaGlobalArrayBuffer.Create(CONSTRUCTOR_ARRAY_BUFFER, Scope, FThrowError);
   if ggFFI in FGlobals then
     FBuiltinFFI := TGocciaGlobalFFI.Create(CONSTRUCTOR_FFI, Scope, FThrowError);
+  if ggProxy in FGlobals then
+    FBuiltinProxy := TGocciaGlobalProxy.Create(Scope, FThrowError);
 
   FBuiltinGlobalString := TGocciaGlobalString.Create(CONSTRUCTOR_STRING, Scope, FThrowError);
   FBuiltinGlobals := TGocciaGlobals.Create('Globals', Scope, FThrowError);
