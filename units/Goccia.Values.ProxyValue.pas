@@ -124,6 +124,7 @@ uses
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Evaluator.Comparison,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
@@ -182,6 +183,7 @@ function TGocciaProxyValue.GetProperty(const AName: string): TGocciaValue;
 var
   Trap: TGocciaValue;
   Args: TGocciaArgumentsCollection;
+  TargetDesc: TGocciaPropertyDescriptor;
 begin
   CheckRevoked;
   Trap := GetTrap(PROP_GET);
@@ -195,6 +197,25 @@ begin
       Result := InvokeTrap(Trap, Args);
     finally
       Args.Free;
+    end;
+
+    // ES2026 §28.1.1 step 8-9: Invariant validation.
+    if FTarget is TGocciaObjectValue then
+    begin
+      TargetDesc := TGocciaObjectValue(FTarget).GetOwnPropertyDescriptor(AName);
+      if Assigned(TargetDesc) and not TargetDesc.Configurable then
+      begin
+        // Non-configurable, non-writable data: result must be SameValue
+        if (TargetDesc is TGocciaPropertyDescriptorData) and
+           not TargetDesc.Writable and
+           not IsSameValue(TGocciaPropertyDescriptorData(TargetDesc).Value, Result) then
+          ThrowTypeError('Proxy get: value mismatch for non-configurable, non-writable property ''' + AName + '''');
+        // Non-configurable accessor without getter: result must be undefined
+        if (TargetDesc is TGocciaPropertyDescriptorAccessor) and
+           not Assigned(TGocciaPropertyDescriptorAccessor(TargetDesc).Getter) and
+           not (Result is TGocciaUndefinedLiteralValue) then
+          ThrowTypeError('Proxy get: must return undefined for non-configurable accessor without getter ''' + AName + '''');
+      end;
     end;
   end
   else
@@ -237,7 +258,7 @@ begin
         // Non-configurable, non-writable data property: value must match
         if (TargetDesc is TGocciaPropertyDescriptorData) and
            not TargetDesc.Writable and
-           (TGocciaPropertyDescriptorData(TargetDesc).Value <> AValue) then
+           not IsSameValue(TGocciaPropertyDescriptorData(TargetDesc).Value, AValue) then
           ThrowTypeError('Proxy set: cannot change value of non-configurable, non-writable property ''' + AName + '''');
         // Non-configurable accessor without setter
         if (TargetDesc is TGocciaPropertyDescriptorAccessor) and
@@ -300,6 +321,7 @@ var
   Trap: TGocciaValue;
   Args: TGocciaArgumentsCollection;
   TrapResult: TGocciaValue;
+  TargetDesc: TGocciaPropertyDescriptor;
 begin
   CheckRevoked;
   Trap := GetTrap(PROP_HAS);
@@ -313,6 +335,16 @@ begin
       Result := TrapResult.ToBooleanLiteral.Value;
     finally
       Args.Free;
+    end;
+
+    // ES2026 §28.1.1 step 9-10: Invariant checks (mirror HasTrap).
+    if (not Result) and (FTarget is TGocciaObjectValue) then
+    begin
+      TargetDesc := TGocciaObjectValue(FTarget).GetOwnSymbolPropertyDescriptor(ASymbol);
+      if Assigned(TargetDesc) and not TargetDesc.Configurable then
+        ThrowTypeError('Proxy has trap returned false for non-configurable symbol property');
+      if Assigned(TargetDesc) and not TGocciaObjectValue(FTarget).Extensible then
+        ThrowTypeError('Proxy has trap returned false for symbol property on non-extensible target');
     end;
   end
   else
@@ -341,6 +373,7 @@ function TGocciaProxyValue.GetSymbolProperty(
 var
   Trap: TGocciaValue;
   Args: TGocciaArgumentsCollection;
+  TargetDesc: TGocciaPropertyDescriptor;
 begin
   CheckRevoked;
   Trap := GetTrap(PROP_GET);
@@ -354,6 +387,23 @@ begin
       Result := InvokeTrap(Trap, Args);
     finally
       Args.Free;
+    end;
+
+    // ES2026 §28.1.1 step 8-9: Invariant validation for symbol keys.
+    if FTarget is TGocciaObjectValue then
+    begin
+      TargetDesc := TGocciaObjectValue(FTarget).GetOwnSymbolPropertyDescriptor(ASymbol);
+      if Assigned(TargetDesc) and not TargetDesc.Configurable then
+      begin
+        if (TargetDesc is TGocciaPropertyDescriptorData) and
+           not TargetDesc.Writable and
+           not IsSameValue(TGocciaPropertyDescriptorData(TargetDesc).Value, Result) then
+          ThrowTypeError('Proxy get: value mismatch for non-configurable, non-writable symbol property');
+        if (TargetDesc is TGocciaPropertyDescriptorAccessor) and
+           not Assigned(TGocciaPropertyDescriptorAccessor(TargetDesc).Getter) and
+           not (Result is TGocciaUndefinedLiteralValue) then
+          ThrowTypeError('Proxy get: must return undefined for non-configurable accessor without getter');
+      end;
     end;
   end
   else
