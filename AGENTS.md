@@ -38,10 +38,12 @@ printf "const x = 2 + 2; x;" | ./build/ScriptLoader        # Execute stdin sourc
 ./build/ScriptLoader example.js --coverage                 # Execute with line and branch coverage
 ./build/ScriptLoader example.js --coverage --coverage-format=lcov --coverage-output=coverage.lcov  # Coverage with lcov output
 ./build/ScriptLoader example.js --coverage --coverage-format=json --coverage-output=coverage.json  # Coverage with JSON output
+./build/ScriptLoader example.js --asi                              # Execute with automatic semicolon insertion
 ./build/REPL                                      # Start interactive REPL (interpreted)
 ./build/REPL --mode=bytecode                      # Start the REPL via bytecode VM
 ./build/REPL --mode=bytecode --timing             # Bytecode REPL with per-line timing
 ./build/REPL --import-map=imports.json            # Start the REPL with an explicit import map
+./build/REPL --asi                                # Start the REPL with automatic semicolon insertion
 ./build/TestRunner tests/                                                      # Run all JavaScript tests
 ./build/TestRunner tests --import-map=imports.json                             # Run tests with an explicit import map
 ./build/TestRunner tests/language/expressions/                                 # Run a test category
@@ -49,6 +51,7 @@ printf "const x = 2 + 2; x;" | ./build/ScriptLoader        # Execute stdin sourc
 ./build/TestRunner tests --silent                                              # Suppress all console output
 ./build/TestRunner tests --output=results.json                                 # Write test results as JSON
 ./build/TestRunner tests --mode=bytecode                                       # Run tests via the Goccia bytecode VM
+./build/TestRunner tests/language/asi --asi                                     # Run ASI tests with automatic semicolon insertion
 ./build/TestRunner tests --coverage                                            # Run tests with line and branch coverage
 ./build/TestRunner tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov  # Coverage with lcov output
 ./build/TestRunner tests --coverage --coverage-format=json --coverage-output=coverage.json  # Coverage with JSON output
@@ -242,7 +245,7 @@ GocciaScript intentionally excludes these JavaScript features — do **not** add
 - `function` keyword (use arrow functions or shorthand methods)
 - `==` and `!=` loose equality (use `===`/`!==`)
 - `eval()` and `arguments` object
-- Automatic semicolon insertion (semicolons are required)
+- Automatic semicolon insertion (semicolons required by default; ASI available as opt-in via `Engine.ASIEnabled := True` or `--asi` CLI flag)
 - `with` statement
 - Traditional loops (`for`, `while`, `do...while`) — use `for...of`, `for await...of`, or array methods instead. `for...of` and `for await...of` are supported.
 - Default imports/exports — use named imports/exports
@@ -524,7 +527,7 @@ See [docs/testing.md](docs/testing.md) for the complete testing guide.
 
 - **Primary:** JavaScript end-to-end tests in `tests/` directory — these are the source of truth for correctness
 - **Secondary:** Pascal unit tests in `units/*.Test.pas` — only for internal implementation details
-- **Test directories:** `tests/language/async-await/` — async functions, await expressions, async class/object methods, error handling; `tests/language/for-of/` — for...of loops, destructuring, break, iterators, for-await-of; `tests/language/testing/` — `expect-toMatch.js` (regex/substring matching); `TGocciaExpectationValue` matchers (including mock matchers) are tested in `units/Goccia.Builtins.TestAssertions.Test.pas`, not via JS end-to-end tests; `tests/built-ins/Array/fromAsync.js` — Array.fromAsync with async/sync iterables; `tests/built-ins/Symbol/asyncIterator.js` — Symbol.asyncIterator well-known symbol; `tests/built-ins/ArrayBuffer/` — ArrayBuffer constructor, `isView`, `slice`, `Symbol.toStringTag`; `tests/built-ins/SharedArrayBuffer/` — SharedArrayBuffer constructor, `slice`, `Symbol.toStringTag`; `tests/built-ins/TypedArray/` — constructors, element access, prototype methods, static methods, iterators, buffer sharing, edge cases (NaN/Infinity handling, clamping, negative indices); `tests/built-ins/constructors/` — `new` requirement for built-in constructors; `tests/built-ins/structuredClone/arraybuffer.js` — structuredClone of ArrayBuffer/SharedArrayBuffer
+- **Test directories:** `tests/language/asi/` — automatic semicolon insertion (requires `--asi` flag: `./build/TestRunner tests/language/asi --asi`); `tests/language/async-await/` — async functions, await expressions, async class/object methods, error handling; `tests/language/for-of/` — for...of loops, destructuring, break, iterators, for-await-of; `tests/built-ins/Array/fromAsync.js` — Array.fromAsync with async/sync iterables; `tests/built-ins/Symbol/asyncIterator.js` — Symbol.asyncIterator well-known symbol; `tests/built-ins/ArrayBuffer/` — ArrayBuffer constructor, `isView`, `slice`, `Symbol.toStringTag`; `tests/built-ins/SharedArrayBuffer/` — SharedArrayBuffer constructor, `slice`, `Symbol.toStringTag`; `tests/built-ins/TypedArray/` — constructors, element access, prototype methods, static methods, iterators, buffer sharing, edge cases (NaN/Infinity handling, clamping, negative indices); `tests/built-ins/constructors/` — `new` requirement for built-in constructors; `tests/built-ins/structuredClone/arraybuffer.js` — structuredClone of ArrayBuffer/SharedArrayBuffer
 - **JS test framework:** built-in `describe`/`test`/`expect` (enabled via `ggTestAssertions`). Supports nested `describe` blocks (suite names are composed with ` > ` separators), `test.skip`/`describe.skip` for unconditional skipping, and `skipIf(condition)`/`runIf(condition)` on both `describe` and `test` for conditional execution. Skip state is inherited by nested describes. Test callbacks can be `async` — `await` works directly in the test body and inside `expect()` calls (e.g., `expect(await somePromise).toBe(42)`). Returning a Promise from a non-async test callback is supported for backward compatibility. Lifecycle hooks (`beforeEach`/`afterEach`) and benchmark callbacks (`bench()`) also support `async` functions with `await`.
 - **Available matcher highlights:** `expect()` supports equality and collection matchers including `.toEqual`, `.toStrictEqual` (currently an alias of `.toEqual` for Vitest compatibility), `.toContain`, `.toContainEqual`, `.toMatch` (string substring or `RegExp`, without mutating `lastIndex`), and `.toMatchObject`, plus the existing truthiness, length, property, instance, and error assertions.
 - **`.resolves` / `.rejects`:** Vitest/Jest-compatible Promise unwrapping on the `expect()` object. `await expect(promise).resolves.toBe(42)` unwraps a fulfilled Promise; `await expect(promise).rejects.toThrow(TypeError)` unwraps a rejected Promise. Both are getter properties (like `.not`) that drain the microtask queue and return a new expectation with the unwrapped value. `.rejects.toThrow(ErrorType)` checks the rejection reason's error name. Both require an actual Promise — call async functions explicitly: `expect(fn())` not `expect(fn)`.

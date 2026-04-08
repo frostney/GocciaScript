@@ -30,6 +30,7 @@ type
     FGlobalScope: TGocciaGlobalScope;
     FFileName: string;
     FSourceLines: TStringList;
+    FASIEnabled: Boolean;
     FJSXEnabled: Boolean;
     FModuleLoader: TGocciaModuleLoader;
     FOwnsModuleLoader: Boolean;
@@ -38,6 +39,7 @@ type
     function GetContentProvider: TGocciaModuleContentProvider;
     function GetGlobalModules: TOrderedStringMap<TGocciaModule>;
     function GetResolver: TGocciaModuleResolver;
+    procedure SetASIEnabled(const AValue: Boolean);
     procedure SetJSXEnabled(const AValue: Boolean);
     procedure SetResolver(const AValue: TGocciaModuleResolver);
   public
@@ -49,6 +51,7 @@ type
     function Execute(const AProgram: TGocciaProgram): TGocciaValue;
     function LoadModule(const AModulePath, AImportingFilePath: string): TGocciaModule;
 
+    property ASIEnabled: Boolean read FASIEnabled write SetASIEnabled;
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
     property JSXEnabled: Boolean read FJSXEnabled write SetJSXEnabled;
     property ContentProvider: TGocciaModuleContentProvider read GetContentProvider;
@@ -149,6 +152,12 @@ end;
 function TGocciaInterpreter.GetResolver: TGocciaModuleResolver;
 begin
   Result := FModuleLoader.Resolver;
+end;
+
+procedure TGocciaInterpreter.SetASIEnabled(const AValue: Boolean);
+begin
+  FASIEnabled := AValue;
+  FModuleLoader.ASIEnabled := AValue;
 end;
 
 procedure TGocciaInterpreter.SetJSXEnabled(const AValue: Boolean);

@@ -74,6 +74,18 @@ end;
 
 The `TStringList` is passed by reference — update its contents and call `Execute` again to run new code in the same global scope. Variables, functions, and classes defined in previous executions remain available.
 
+### Automatic Semicolon Insertion
+
+ASI is disabled by default. To enable ECMAScript-compliant automatic semicolon insertion (ES2026 §12.10), set the `ASIEnabled` property after creating the engine:
+
+```pascal
+Engine := TGocciaEngine.Create('app.js', Source, TGocciaEngine.DefaultGlobals);
+Engine.ASIEnabled := True;  // Semicolons are now optional per ES2026 rules
+Engine.Execute;
+```
+
+When enabled, the parser inserts virtual semicolons at newline boundaries, before `}`, and at EOF. Restricted productions (`return`, `throw`, `break`) follow the `[no LineTerminator here]` rules.
+
 ### Timing
 
 All `RunScript*` methods and the `Execute` method return a `TGocciaScriptResult` record that includes nanosecond-precision timing for each pipeline phase:

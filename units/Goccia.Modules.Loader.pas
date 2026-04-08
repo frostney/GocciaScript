@@ -18,6 +18,7 @@ uses
 type
   TGocciaModuleLoader = class
   private
+    FASIEnabled: Boolean;
     FContentProvider: TGocciaModuleContentProvider;
     FEntryFileName: string;
     FGlobalModules: TOrderedStringMap<TGocciaModule>;
@@ -50,6 +51,7 @@ type
       read FContentProvider;
     property GlobalModules: TOrderedStringMap<TGocciaModule>
       read FGlobalModules;
+    property ASIEnabled: Boolean read FASIEnabled write FASIEnabled;
     property JSXEnabled: Boolean read FJSXEnabled write FJSXEnabled;
     property Resolver: TGocciaModuleResolver read FResolver;
   end;
@@ -234,6 +236,7 @@ begin
         try
           Parser := TGocciaParser.Create(Lexer.ScanTokens, ResolvedPath,
             Lexer.SourceLines);
+          Parser.AutomaticSemicolonInsertion := FASIEnabled;
           try
             ProgramNode := Parser.Parse;
             try

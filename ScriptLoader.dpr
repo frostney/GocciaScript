@@ -60,6 +60,7 @@ var
   GCoverageLcovEnabled: Boolean = False;
   GCoverageJsonEnabled: Boolean = False;
   GCoverageOutputPath: string = '';
+  GASIEnabled: Boolean = False;
 
 function ParseSource(const ASource: TStringList; const AFileName: string;
   const AGlobals: TGocciaGlobalBuiltins; const ASuppressWarnings: Boolean;
@@ -94,6 +95,7 @@ begin
       ALexTimeNanoseconds := LexEnd - StartTime;
 
       Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
+      Parser.AutomaticSemicolonInsertion := GASIEnabled;
       try
         Result := Parser.Parse;
         ParseEnd := GetNanoseconds;
@@ -260,6 +262,7 @@ var
 begin
   Engine := TGocciaEngine.Create(AFileName, ASource, TGocciaEngine.DefaultGlobals);
   try
+    Engine.ASIEnabled := GASIEnabled;
     Engine.SuppressWarnings := GJsonOutput;
     ConfigureConsole(Engine.BuiltinConsole, AOutputLines);
     ApplyDataGlobalsToEngine(Engine);
@@ -295,6 +298,7 @@ begin
   StartTime := GetNanoseconds;
   Backend := TGocciaBytecodeBackend.Create(AFileName);
   try
+    Backend.ASIEnabled := GASIEnabled;
     Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
     ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
     ApplyDataGlobalsToBytecodeBackend(Backend);
@@ -351,6 +355,7 @@ begin
   try
     Backend := TGocciaBytecodeBackend.Create(AFileName);
     try
+      Backend.ASIEnabled := GASIEnabled;
       Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
       ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
       ApplyDataGlobalsToBytecodeBackend(Backend);
@@ -594,6 +599,7 @@ begin
   WriteLn('  --output=json           Write structured JSON result to stdout');
   WriteLn('  --output=<path>         Output file path (used with --emit)');
   WriteLn('  --silent                Suppress console output from the script');
+  WriteLn('  --asi                   Enable automatic semicolon insertion');
   WriteLn('  --coverage              Enable line and branch coverage reporting');
   WriteLn('  --coverage-format=lcov|json  Coverage output format (implies --coverage)');
   WriteLn('  --coverage-output=<file>     Coverage output file (paired with --coverage-format)');
@@ -708,6 +714,8 @@ begin
       end
       else if Arg = '--silent' then
         GSilentConsole := True
+      else if Arg = '--asi' then
+        GASIEnabled := True
       else if Arg = '--coverage' then
         GCoverageEnabled := True
       else if Arg = '--coverage-format=lcov' then
