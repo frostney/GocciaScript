@@ -3404,6 +3404,8 @@ begin
     while Running and (Frame.IP < Template.CodeCount) do
     begin
       try
+        while Running and (Frame.IP < Template.CodeCount) do
+        begin
         Instruction := Template.GetInstructionUnchecked(Frame.IP);
         Inc(Frame.IP);
 
@@ -4952,6 +4954,7 @@ begin
         Exit(FRegisters[A]);
         else
           raise Exception.CreateFmt('Unsupported Goccia VM opcode in minimal executor: %d', [Op]);
+        end;
         end;
       except
         on E: EGocciaBytecodeThrow do
