@@ -279,6 +279,14 @@ jobs:
         if: runner.os != 'Windows'
         run: chmod +x build/*
 
+      - name: Build FFI fixture library
+        if: runner.os != 'Windows'
+        run: ./fixtures/ffi/build.sh
+
+      - name: Build FFI fixture library (Windows)
+        if: runner.os == 'Windows'
+        run: gcc -shared -o fixtures/ffi/libfixture.dll fixtures/ffi/fixture.c
+
       - name: Run all JavaScript tests (interpreted)
         run: ./build/TestRunner tests --asi --silent --no-progress --output=test-results-interpreted.json
 

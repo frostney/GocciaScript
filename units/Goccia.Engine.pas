@@ -14,6 +14,7 @@ uses
   Goccia.Builtins.Console,
   Goccia.Builtins.GlobalArray,
   Goccia.Builtins.GlobalArrayBuffer,
+  Goccia.Builtins.GlobalFFI,
   Goccia.Builtins.GlobalMap,
   Goccia.Builtins.GlobalNumber,
   Goccia.Builtins.GlobalObject,
@@ -76,7 +77,8 @@ type
     ggBenchmark,
     ggTemporal,
     ggJSX,
-    ggArrayBuffer
+    ggArrayBuffer,
+    ggFFI
   );
 
   TGocciaGlobalBuiltins = set of TGocciaGlobalBuiltin;
@@ -127,6 +129,7 @@ type
     FBuiltinBenchmark: TGocciaBenchmark;
     FBuiltinTemporal: TGocciaTemporalBuiltin;
     FBuiltinArrayBuffer: TGocciaGlobalArrayBuffer;
+    FBuiltinFFI: TGocciaGlobalFFI;
     FPreviousExceptionMask: TFPUExceptionMask;
     FASIEnabled: Boolean;
     FSuppressWarnings: Boolean;
@@ -196,6 +199,7 @@ type
     property BuiltinTemporal: TGocciaTemporalBuiltin read FBuiltinTemporal;
     property BuiltinArrayBuffer: TGocciaGlobalArrayBuffer read FBuiltinArrayBuffer;
     property ASIEnabled: Boolean read FASIEnabled write SetASIEnabled;
+    property BuiltinFFI: TGocciaGlobalFFI read FBuiltinFFI;
     property SuppressWarnings: Boolean read FSuppressWarnings write FSuppressWarnings;
     property LastTiming: TGocciaScriptResult read FLastTiming;
   end;
@@ -316,6 +320,7 @@ begin
     FBuiltinBenchmark.Free;
     FBuiltinTemporal.Free;
     FBuiltinArrayBuffer.Free;
+    FBuiltinFFI.Free;
     FInjectedGlobals.Free;
     FInterpreter.Free;
     if FOwnsModuleLoader then
@@ -378,6 +383,8 @@ begin
     FBuiltinTemporal := TGocciaTemporalBuiltin.Create('Temporal', Scope, ThrowError);
   if ggArrayBuffer in FGlobals then
     FBuiltinArrayBuffer := TGocciaGlobalArrayBuffer.Create(CONSTRUCTOR_ARRAY_BUFFER, Scope, ThrowError);
+  if ggFFI in FGlobals then
+    FBuiltinFFI := TGocciaGlobalFFI.Create(CONSTRUCTOR_FFI, Scope, ThrowError);
 
   // Always-registered built-ins
   FBuiltinGlobalString := TGocciaGlobalString.Create(CONSTRUCTOR_STRING, Scope, ThrowError);

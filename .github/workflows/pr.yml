@@ -62,6 +62,9 @@ jobs:
       - name: Make binaries executable
         run: chmod +x build/*
 
+      - name: Build FFI fixture library
+        run: ./fixtures/ffi/build.sh
+
       - name: Run all JavaScript tests
         run: ./build/TestRunner tests ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --asi --silent --no-progress --output=test-results-${{ matrix.mode }}.json
 
