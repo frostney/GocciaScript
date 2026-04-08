@@ -283,8 +283,20 @@ jobs:
         if: runner.os != 'Windows'
         run: ./fixtures/ffi/build.sh
 
-      - name: Build FFI fixture library (Windows)
-        if: runner.os == 'Windows'
+      - name: Set up MSYS2 (MINGW32)
+        if: matrix.target == 'i386-win32'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW32
+          install: mingw-w64-i686-gcc
+
+      - name: Build FFI fixture library (Windows 32-bit)
+        if: matrix.target == 'i386-win32'
+        shell: msys2 {0}
+        run: gcc -shared -o fixtures/ffi/libfixture.dll fixtures/ffi/fixture.c
+
+      - name: Build FFI fixture library (Windows 64-bit)
+        if: runner.os == 'Windows' && matrix.target != 'i386-win32'
         run: gcc -shared -o fixtures/ffi/libfixture.dll fixtures/ffi/fixture.c
 
       - name: Run all JavaScript tests (interpreted)
