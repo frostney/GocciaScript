@@ -280,10 +280,10 @@ jobs:
         run: chmod +x build/*
 
       - name: Run all JavaScript tests (interpreted)
-        run: ./build/TestRunner tests --silent --no-progress --output=test-results-interpreted.json
+        run: ./build/TestRunner tests --asi --silent --no-progress --output=test-results-interpreted.json
 
       - name: Run all JavaScript tests (bytecode)
-        run: ./build/TestRunner tests --mode=bytecode --silent --no-progress --output=test-results-bytecode.json
+        run: ./build/TestRunner tests --asi --mode=bytecode --silent --no-progress --output=test-results-bytecode.json
 
       - name: Check TestRunner CLI behaviour
         run: |
