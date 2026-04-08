@@ -29,6 +29,7 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.PropertyNames,
   Goccia.FFI.DynamicLibrary,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FFILibrary,
@@ -54,9 +55,9 @@ begin
 
   Members := TGocciaMemberCollection.Create;
   try
-    Members.AddNamedMethod('open', FFIOpen, 1, gmkStaticMethod);
-    Members.AddAccessor('nullptr', FFINullptrGetter, nil, [pfConfigurable], gmkStaticGetter);
-    Members.AddAccessor('suffix', FFISuffixGetter, nil, [pfConfigurable], gmkStaticGetter);
+    Members.AddNamedMethod(PROP_OPEN, FFIOpen, 1, gmkStaticMethod);
+    Members.AddAccessor(PROP_NULLPTR, FFINullptrGetter, nil, [pfConfigurable], gmkStaticGetter);
+    Members.AddAccessor(PROP_SUFFIX, FFISuffixGetter, nil, [pfConfigurable], gmkStaticGetter);
     FStaticMembers := Members.ToDefinitions;
   finally
     Members.Free;
@@ -83,7 +84,12 @@ begin
       ThrowTypeError(E.Message);
   end;
 
-  Result := TGocciaFFILibraryValue.Create(Handle);
+  try
+    Result := TGocciaFFILibraryValue.Create(Handle);
+  except
+    Handle.Free;
+    raise;
+  end;
 end;
 
 function TGocciaGlobalFFI.FFINullptrGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

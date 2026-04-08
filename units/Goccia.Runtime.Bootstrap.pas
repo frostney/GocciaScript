@@ -245,7 +245,7 @@ begin
   if ggArrayBuffer in FGlobals then
     FBuiltinArrayBuffer := TGocciaGlobalArrayBuffer.Create(CONSTRUCTOR_ARRAY_BUFFER, Scope, FThrowError);
   if ggFFI in FGlobals then
-    FBuiltinFFI := TGocciaGlobalFFI.Create('FFI', Scope, FThrowError);
+    FBuiltinFFI := TGocciaGlobalFFI.Create(CONSTRUCTOR_FFI, Scope, FThrowError);
 
   FBuiltinGlobalString := TGocciaGlobalString.Create(CONSTRUCTOR_STRING, Scope, FThrowError);
   FBuiltinGlobals := TGocciaGlobals.Create('Globals', Scope, FThrowError);

@@ -84,6 +84,9 @@ const
   PROP_LAST_CALL              = 'lastCall';
   PROP_IS_NULL                = 'isNull';
   PROP_FFI_ADDRESS            = 'address';
+  PROP_OPEN                   = 'open';
+  PROP_NULLPTR                = 'nullptr';
+  PROP_SUFFIX                 = 'suffix';
 
 implementation
 
