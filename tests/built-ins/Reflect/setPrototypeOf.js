@@ -40,6 +40,14 @@ describe("Reflect.setPrototypeOf", () => {
     expect(Reflect.setPrototypeOf(obj, null)).toBe(true);
   });
 
+  test("returns false when prototype would create a cycle", () => {
+    const a = {};
+    const b = {};
+    expect(Reflect.setPrototypeOf(a, b)).toBe(true);
+    expect(Reflect.setPrototypeOf(b, a)).toBe(false);
+    expect(Reflect.getPrototypeOf(b)).toBe(Object.getPrototypeOf({}));
+  });
+
   test("throws TypeError if target is not an object", () => {
     expect(() => Reflect.setPrototypeOf(42, {})).toThrow(TypeError);
     expect(() => Reflect.setPrototypeOf("str", {})).toThrow(TypeError);

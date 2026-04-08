@@ -55,16 +55,8 @@ uses
 
 procedure RequireObjectTarget(const ATarget: TGocciaValue; const AMethodName: string);
 begin
-  if not (ATarget is TGocciaObjectValue) and not (ATarget is TGocciaClassValue) then
+  if not (ATarget is TGocciaObjectValue) then
     ThrowTypeError(Format('%s: target must be an object', [AMethodName]));
-end;
-
-function AsObjectValue(const ATarget: TGocciaValue): TGocciaObjectValue;
-begin
-  if ATarget is TGocciaClassValue then
-    Result := TGocciaClassValue(ATarget).Prototype
-  else
-    Result := TGocciaObjectValue(ATarget);
 end;
 
 { TGocciaGlobalReflect }
@@ -281,7 +273,7 @@ begin
   if HasGet then
   begin
     Getter := DescriptorObject.GetProperty(PROP_GET);
-    if not (Getter is TGocciaUndefinedLiteralValue) and not Getter.IsCallable then
+    if not (Getter is TGocciaUndefinedLiteralValue) and not (Getter is TGocciaFunctionBase) then
       ThrowTypeError('Reflect.defineProperty: getter must be a function or undefined');
     if Getter is TGocciaUndefinedLiteralValue then
       Getter := nil;
@@ -289,7 +281,7 @@ begin
   if HasSet then
   begin
     Setter := DescriptorObject.GetProperty(PROP_SET);
-    if not (Setter is TGocciaUndefinedLiteralValue) and not Setter.IsCallable then
+    if not (Setter is TGocciaUndefinedLiteralValue) and not (Setter is TGocciaFunctionBase) then
       ThrowTypeError('Reflect.defineProperty: setter must be a function or undefined');
     if Setter is TGocciaUndefinedLiteralValue then
       Setter := nil;
@@ -342,7 +334,7 @@ begin
   // Step 1: If target is not an Object, throw a TypeError exception
   RequireObjectTarget(Target, 'Reflect.deleteProperty');
 
-  Obj := AsObjectValue(Target);
+  Obj := TGocciaObjectValue(Target);
 
   // Step 2: Let key be ? ToPropertyKey(propertyKey)
   // Step 3: Return ? target.[[Delete]](key)
@@ -499,7 +491,7 @@ begin
   // Step 1: If target is not an Object, throw a TypeError exception
   RequireObjectTarget(Target, 'Reflect.has');
 
-  Obj := AsObjectValue(Target);
+  Obj := TGocciaObjectValue(Target);
 
   // Step 2: Let key be ? ToPropertyKey(propertyKey)
   if PropKey is TGocciaSymbolValue then
@@ -630,6 +622,7 @@ end;
 function TGocciaGlobalReflect.ReflectSetPrototypeOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Target, ProtoArg: TGocciaValue;
+  Walker: TGocciaObjectValue;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Reflect.setPrototypeOf', ThrowError);
 
@@ -665,6 +658,21 @@ begin
   begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
+  end;
+
+  // ES2026 §10.1.2 OrdinarySetPrototypeOf step 4: Cycle detection
+  if ProtoArg is TGocciaObjectValue then
+  begin
+    Walker := TGocciaObjectValue(ProtoArg);
+    while Assigned(Walker) do
+    begin
+      if Walker = TGocciaObjectValue(Target) then
+      begin
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+        Exit;
+      end;
+      Walker := Walker.Prototype;
+    end;
   end;
 
   if ProtoArg is TGocciaNullLiteralValue then
