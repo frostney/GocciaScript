@@ -1,0 +1,724 @@
+unit Goccia.Values.ProxyValue;
+
+{$I Goccia.inc}
+
+interface
+
+uses
+  Goccia.Arguments.Collection,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
+
+type
+  TGocciaProxyValue = class(TGocciaObjectValue)
+  private
+    FTarget: TGocciaValue;
+    FHandler: TGocciaObjectValue;
+    FRevoked: Boolean;
+
+    procedure CheckRevoked;
+    function GetTrap(const ATrapName: string): TGocciaValue;
+    function InvokeTrap(const ATrap: TGocciaValue;
+      const AArgs: TGocciaArgumentsCollection): TGocciaValue;
+  public
+    constructor Create(const ATarget: TGocciaValue;
+      const AHandler: TGocciaObjectValue);
+
+    // ES2026 $28.1.1 [[Get]](P, Receiver)
+    function GetProperty(const AName: string): TGocciaValue; override;
+
+    // ES2026 $28.1.1 [[Set]](P, V, Receiver)
+    procedure AssignProperty(const AName: string; const AValue: TGocciaValue;
+      const ACanCreate: Boolean = True); override;
+
+    // ES2026 $28.1.1 [[HasProperty]](P)
+    function HasTrap(const AName: string): Boolean;
+
+    // ES2026 $28.1.1 [[Delete]](P)
+    function DeleteProperty(const AName: string): Boolean; override;
+
+    // ES2026 $28.1.1 [[GetOwnProperty]](P)
+    function GetOwnPropertyDescriptor(
+      const AName: string): TGocciaPropertyDescriptor; override;
+
+    // ES2026 $28.1.1 [[DefineOwnProperty]](P, Desc)
+    procedure DefineProperty(const AName: string;
+      const ADescriptor: TGocciaPropertyDescriptor); override;
+
+    // ES2026 $28.1.1 [[OwnPropertyKeys]]()
+    function GetOwnPropertyKeys: TArray<string>; override;
+    function GetOwnPropertyNames: TArray<string>; override;
+    function GetEnumerablePropertyNames: TArray<string>; override;
+    function GetAllPropertyNames: TArray<string>; override;
+    function HasOwnProperty(const AName: string): Boolean; override;
+
+    // ES2026 $28.1.1 [[GetPrototypeOf]]()
+    function GetPrototypeTrap: TGocciaValue;
+
+    // ES2026 $28.1.1 [[SetPrototypeOf]](V)
+    function SetPrototypeTrap(const AProto: TGocciaValue): Boolean;
+
+    // ES2026 $28.1.1 [[IsExtensible]]()
+    function IsExtensibleTrap: Boolean;
+
+    // ES2026 $28.1.1 [[PreventExtensions]]()
+    procedure PreventExtensions; override;
+
+    // ES2026 $28.1.1 [[Call]](thisArgument, argumentsList)
+    function ApplyTrap(const AArguments: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+
+    // ES2026 $28.1.1 [[Construct]](argumentsList, newTarget)
+    function ConstructTrap(
+      const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+
+    function TypeOf: string; override;
+    function IsCallable: Boolean; override;
+    function ToStringTag: string; override;
+
+    procedure MarkReferences; override;
+
+    procedure Revoke;
+
+    property Target: TGocciaValue read FTarget;
+    property Handler: TGocciaObjectValue read FHandler;
+    property Revoked: Boolean read FRevoked;
+  end;
+
+  { Helper class for Proxy.revocable — captures the proxy reference
+    so the revoke callback can set FRevoked without closures. }
+  TGocciaProxyRevoker = class(TGocciaObjectValue)
+  private
+    FProxy: TGocciaProxyValue;
+  public
+    constructor Create(const AProxy: TGocciaProxyValue);
+    function RevokeCallback(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    procedure MarkReferences; override;
+  end;
+
+implementation
+
+uses
+  SysUtils,
+
+  Goccia.Constants.ConstructorNames,
+  Goccia.Constants.PropertyNames,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
+  Goccia.Values.HoleValue,
+  Goccia.Values.NativeFunction;
+
+{ TGocciaProxyValue }
+
+constructor TGocciaProxyValue.Create(const ATarget: TGocciaValue;
+  const AHandler: TGocciaObjectValue);
+begin
+  inherited Create;
+  FTarget := ATarget;
+  FHandler := AHandler;
+  FRevoked := False;
+end;
+
+procedure TGocciaProxyValue.CheckRevoked;
+begin
+  if FRevoked then
+    ThrowTypeError('Cannot perform operation on a revoked proxy');
+end;
+
+function TGocciaProxyValue.GetTrap(const ATrapName: string): TGocciaValue;
+var
+  TrapValue: TGocciaValue;
+begin
+  TrapValue := FHandler.GetProperty(ATrapName);
+  if (TrapValue is TGocciaUndefinedLiteralValue) or
+     (TrapValue is TGocciaNullLiteralValue) then
+    Result := nil
+  else if not TrapValue.IsCallable then
+    ThrowTypeError('Proxy handler trap ''' + ATrapName + ''' is not a function')
+  else
+    Result := TrapValue;
+end;
+
+function TGocciaProxyValue.InvokeTrap(const ATrap: TGocciaValue;
+  const AArgs: TGocciaArgumentsCollection): TGocciaValue;
+begin
+  if ATrap is TGocciaFunctionBase then
+    Result := TGocciaFunctionBase(ATrap).Call(AArgs, FHandler)
+  else
+    ThrowTypeError('Proxy trap is not callable');
+end;
+
+// ES2026 $28.1.1 [[Get]](P, Receiver)
+function TGocciaProxyValue.GetProperty(const AName: string): TGocciaValue;
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+begin
+  CheckRevoked;
+  Trap := GetTrap(PROP_GET);
+  if Assigned(Trap) then
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      Args.Add(TGocciaStringLiteralValue.Create(AName));
+      Args.Add(Self);
+      Result := InvokeTrap(Trap, Args);
+    finally
+      Args.Free;
+    end;
+  end
+  else
+    Result := FTarget.GetProperty(AName);
+end;
+
+// ES2026 $28.1.1 [[Set]](P, V, Receiver)
+procedure TGocciaProxyValue.AssignProperty(const AName: string;
+  const AValue: TGocciaValue; const ACanCreate: Boolean = True);
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  TrapResult: TGocciaValue;
+begin
+  CheckRevoked;
+  Trap := GetTrap(PROP_SET);
+  if Assigned(Trap) then
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      Args.Add(TGocciaStringLiteralValue.Create(AName));
+      Args.Add(AValue);
+      Args.Add(Self);
+      TrapResult := InvokeTrap(Trap, Args);
+      if not TrapResult.ToBooleanLiteral.Value then
+        ThrowTypeError('Proxy set handler returned false for property ''' +
+          AName + '''');
+    finally
+      Args.Free;
+    end;
+  end
+  else
+    FTarget.SetProperty(AName, AValue);
+end;
+
+// ES2026 $28.1.1 [[HasProperty]](P)
+function TGocciaProxyValue.HasTrap(const AName: string): Boolean;
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  TrapResult: TGocciaValue;
+begin
+  CheckRevoked;
+  Trap := GetTrap(PROP_HAS);
+  if Assigned(Trap) then
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      Args.Add(TGocciaStringLiteralValue.Create(AName));
+      TrapResult := InvokeTrap(Trap, Args);
+      Result := TrapResult.ToBooleanLiteral.Value;
+    finally
+      Args.Free;
+    end;
+  end
+  else
+  begin
+    if FTarget is TGocciaObjectValue then
+      Result := TGocciaObjectValue(FTarget).HasProperty(AName)
+    else
+      Result := False;
+  end;
+end;
+
+function TGocciaProxyValue.HasOwnProperty(const AName: string): Boolean;
+begin
+  // Delegate to HasTrap which handles both trap and fallback
+  Result := HasTrap(AName);
+end;
+
+// ES2026 $28.1.1 [[Delete]](P)
+function TGocciaProxyValue.DeleteProperty(const AName: string): Boolean;
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  TrapResult: TGocciaValue;
+begin
+  CheckRevoked;
+  Trap := GetTrap(PROP_DELETE_PROPERTY);
+  if Assigned(Trap) then
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      Args.Add(TGocciaStringLiteralValue.Create(AName));
+      TrapResult := InvokeTrap(Trap, Args);
+      Result := TrapResult.ToBooleanLiteral.Value;
+    finally
+      Args.Free;
+    end;
+  end
+  else
+  begin
+    if FTarget is TGocciaObjectValue then
+      Result := TGocciaObjectValue(FTarget).DeleteProperty(AName)
+    else
+      Result := True;
+  end;
+end;
+
+// ES2026 $28.1.1 [[GetOwnProperty]](P)
+function TGocciaProxyValue.GetOwnPropertyDescriptor(
+  const AName: string): TGocciaPropertyDescriptor;
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  TrapResult: TGocciaValue;
+  ResultObj: TGocciaObjectValue;
+  ValueProp, WritableProp, EnumProp, ConfigProp: TGocciaValue;
+  Flags: TPropertyFlags;
+begin
+  CheckRevoked;
+  Trap := GetTrap(PROP_GET_OWN_PROPERTY_DESCRIPTOR);
+  if Assigned(Trap) then
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      Args.Add(TGocciaStringLiteralValue.Create(AName));
+      TrapResult := InvokeTrap(Trap, Args);
+    finally
+      Args.Free;
+    end;
+
+    if (TrapResult is TGocciaUndefinedLiteralValue) or
+       (TrapResult is TGocciaNullLiteralValue) then
+      Exit(nil);
+
+    if not (TrapResult is TGocciaObjectValue) then
+      ThrowTypeError('Proxy getOwnPropertyDescriptor must return an object or undefined');
+
+    ResultObj := TGocciaObjectValue(TrapResult);
+    Flags := [];
+
+    EnumProp := ResultObj.GetProperty(PROP_ENUMERABLE);
+    if Assigned(EnumProp) and EnumProp.ToBooleanLiteral.Value then
+      Include(Flags, pfEnumerable);
+
+    ConfigProp := ResultObj.GetProperty(PROP_CONFIGURABLE);
+    if Assigned(ConfigProp) and ConfigProp.ToBooleanLiteral.Value then
+      Include(Flags, pfConfigurable);
+
+    WritableProp := ResultObj.GetProperty(PROP_WRITABLE);
+    if Assigned(WritableProp) and WritableProp.ToBooleanLiteral.Value then
+      Include(Flags, pfWritable);
+
+    ValueProp := ResultObj.GetProperty(PROP_VALUE);
+    Result := TGocciaPropertyDescriptorData.Create(ValueProp, Flags);
+  end
+  else
+  begin
+    if FTarget is TGocciaObjectValue then
+      Result := TGocciaObjectValue(FTarget).GetOwnPropertyDescriptor(AName)
+    else
+      Result := nil;
+  end;
+end;
+
+// ES2026 $28.1.1 [[DefineOwnProperty]](P, Desc)
+procedure TGocciaProxyValue.DefineProperty(const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor);
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  DescObj: TGocciaObjectValue;
+  TrapResult: TGocciaValue;
+begin
+  CheckRevoked;
+  Trap := GetTrap(PROP_DEFINE_PROPERTY);
+  if Assigned(Trap) then
+  begin
+    // Build descriptor object
+    DescObj := TGocciaObjectValue.Create;
+    if ADescriptor is TGocciaPropertyDescriptorData then
+    begin
+      DescObj.AssignProperty(PROP_VALUE,
+        TGocciaPropertyDescriptorData(ADescriptor).Value);
+      DescObj.AssignProperty(PROP_WRITABLE,
+        TGocciaBooleanLiteralValue.Create(ADescriptor.Writable));
+    end;
+    DescObj.AssignProperty(PROP_ENUMERABLE,
+      TGocciaBooleanLiteralValue.Create(ADescriptor.Enumerable));
+    DescObj.AssignProperty(PROP_CONFIGURABLE,
+      TGocciaBooleanLiteralValue.Create(ADescriptor.Configurable));
+
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      Args.Add(TGocciaStringLiteralValue.Create(AName));
+      Args.Add(DescObj);
+      TrapResult := InvokeTrap(Trap, Args);
+      if not TrapResult.ToBooleanLiteral.Value then
+        ThrowTypeError(
+          'Proxy defineProperty handler returned false for property ''' +
+          AName + '''');
+    finally
+      Args.Free;
+    end;
+  end
+  else
+  begin
+    if FTarget is TGocciaObjectValue then
+      TGocciaObjectValue(FTarget).DefineProperty(AName, ADescriptor)
+    else
+      ThrowTypeError('Cannot define property on non-object target');
+  end;
+end;
+
+// ES2026 $28.1.1 [[OwnPropertyKeys]]()
+function TGocciaProxyValue.GetOwnPropertyKeys: TArray<string>;
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  TrapResult: TGocciaValue;
+  ResultArray: TGocciaArrayValue;
+  Keys: TArray<string>;
+  I: Integer;
+  Element: TGocciaValue;
+begin
+  CheckRevoked;
+  Trap := GetTrap(PROP_OWN_KEYS);
+  if Assigned(Trap) then
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      TrapResult := InvokeTrap(Trap, Args);
+    finally
+      Args.Free;
+    end;
+
+    if not (TrapResult is TGocciaArrayValue) then
+      ThrowTypeError('Proxy ownKeys must return an array');
+
+    ResultArray := TGocciaArrayValue(TrapResult);
+    SetLength(Keys, ResultArray.Elements.Count);
+    for I := 0 to ResultArray.Elements.Count - 1 do
+    begin
+      Element := ResultArray.Elements[I];
+      Keys[I] := Element.ToStringLiteral.Value;
+    end;
+    Result := Keys;
+  end
+  else
+  begin
+    if FTarget is TGocciaObjectValue then
+      Result := TGocciaObjectValue(FTarget).GetOwnPropertyKeys
+    else
+      SetLength(Result, 0);
+  end;
+end;
+
+function TGocciaProxyValue.GetOwnPropertyNames: TArray<string>;
+begin
+  Result := GetOwnPropertyKeys;
+end;
+
+function TGocciaProxyValue.GetEnumerablePropertyNames: TArray<string>;
+begin
+  // For proxies with ownKeys trap, return all keys (filtering by
+  // enumerability would require getOwnPropertyDescriptor for each key).
+  // Without a trap, delegate to target.
+  Result := GetOwnPropertyKeys;
+end;
+
+function TGocciaProxyValue.GetAllPropertyNames: TArray<string>;
+begin
+  Result := GetOwnPropertyKeys;
+end;
+
+// ES2026 $28.1.1 [[GetPrototypeOf]]()
+function TGocciaProxyValue.GetPrototypeTrap: TGocciaValue;
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+begin
+  CheckRevoked;
+  Trap := GetTrap(PROP_GET_PROTOTYPE_OF);
+  if Assigned(Trap) then
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      Result := InvokeTrap(Trap, Args);
+    finally
+      Args.Free;
+    end;
+  end
+  else
+  begin
+    if FTarget is TGocciaObjectValue then
+    begin
+      if Assigned(TGocciaObjectValue(FTarget).Prototype) then
+        Result := TGocciaObjectValue(FTarget).Prototype
+      else
+        Result := TGocciaNullLiteralValue.NullValue;
+    end
+    else
+      Result := TGocciaNullLiteralValue.NullValue;
+  end;
+end;
+
+// ES2026 $28.1.1 [[SetPrototypeOf]](V)
+function TGocciaProxyValue.SetPrototypeTrap(
+  const AProto: TGocciaValue): Boolean;
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  TrapResult: TGocciaValue;
+begin
+  CheckRevoked;
+  Trap := GetTrap(PROP_SET_PROTOTYPE_OF);
+  if Assigned(Trap) then
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      Args.Add(AProto);
+      TrapResult := InvokeTrap(Trap, Args);
+      Result := TrapResult.ToBooleanLiteral.Value;
+    finally
+      Args.Free;
+    end;
+  end
+  else
+  begin
+    if FTarget is TGocciaObjectValue then
+    begin
+      if AProto is TGocciaObjectValue then
+        TGocciaObjectValue(FTarget).Prototype := TGocciaObjectValue(AProto)
+      else if (AProto is TGocciaNullLiteralValue) then
+        TGocciaObjectValue(FTarget).Prototype := nil;
+      Result := True;
+    end
+    else
+      Result := False;
+  end;
+end;
+
+// ES2026 $28.1.1 [[IsExtensible]]()
+function TGocciaProxyValue.IsExtensibleTrap: Boolean;
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  TrapResult: TGocciaValue;
+begin
+  CheckRevoked;
+  Trap := GetTrap(PROP_IS_EXTENSIBLE);
+  if Assigned(Trap) then
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      TrapResult := InvokeTrap(Trap, Args);
+      Result := TrapResult.ToBooleanLiteral.Value;
+    finally
+      Args.Free;
+    end;
+  end
+  else
+  begin
+    if FTarget is TGocciaObjectValue then
+      Result := TGocciaObjectValue(FTarget).Extensible
+    else
+      Result := False;
+  end;
+end;
+
+// ES2026 $28.1.1 [[PreventExtensions]]()
+procedure TGocciaProxyValue.PreventExtensions;
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  TrapResult: TGocciaValue;
+begin
+  CheckRevoked;
+  Trap := GetTrap(PROP_PREVENT_EXTENSIONS);
+  if Assigned(Trap) then
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      TrapResult := InvokeTrap(Trap, Args);
+      if not TrapResult.ToBooleanLiteral.Value then
+        ThrowTypeError('Proxy preventExtensions handler returned false');
+    finally
+      Args.Free;
+    end;
+  end
+  else
+  begin
+    if FTarget is TGocciaObjectValue then
+      TGocciaObjectValue(FTarget).PreventExtensions;
+  end;
+end;
+
+// ES2026 $28.1.1 [[Call]](thisArgument, argumentsList)
+function TGocciaProxyValue.ApplyTrap(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  ArgsArray: TGocciaArrayValue;
+  I: Integer;
+begin
+  CheckRevoked;
+
+  if not FTarget.IsCallable then
+    ThrowTypeError('Proxy apply trap called on non-function target');
+
+  Trap := GetTrap(PROP_APPLY);
+  if Assigned(Trap) then
+  begin
+    // Build arguments array
+    ArgsArray := TGocciaArrayValue.Create;
+    for I := 0 to AArguments.Length - 1 do
+      ArgsArray.Elements.Add(AArguments.GetElement(I));
+
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      Args.Add(AThisValue);
+      Args.Add(ArgsArray);
+      Result := InvokeTrap(Trap, Args);
+    finally
+      Args.Free;
+    end;
+  end
+  else
+  begin
+    // No apply trap: call the target directly
+    if FTarget is TGocciaFunctionBase then
+      Result := TGocciaFunctionBase(FTarget).Call(AArguments, AThisValue)
+    else
+      ThrowTypeError('Proxy target is not callable');
+  end;
+end;
+
+// ES2026 $28.1.1 [[Construct]](argumentsList, newTarget)
+function TGocciaProxyValue.ConstructTrap(
+  const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  ArgsArray: TGocciaArrayValue;
+  I: Integer;
+begin
+  CheckRevoked;
+
+  Trap := GetTrap(PROP_CONSTRUCT);
+  if Assigned(Trap) then
+  begin
+    // Build arguments array
+    ArgsArray := TGocciaArrayValue.Create;
+    for I := 0 to AArguments.Length - 1 do
+      ArgsArray.Elements.Add(AArguments.GetElement(I));
+
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      Args.Add(ArgsArray);
+      Args.Add(Self);
+      Result := InvokeTrap(Trap, Args);
+      if Result.IsPrimitive then
+        ThrowTypeError('Proxy construct handler must return an object');
+    finally
+      Args.Free;
+    end;
+  end
+  else
+  begin
+    // No construct trap: construct the target directly
+    if FTarget is TGocciaNativeFunctionValue then
+      Result := TGocciaNativeFunctionValue(FTarget).Call(AArguments,
+        TGocciaHoleValue.HoleValue)
+    else if FTarget is TGocciaFunctionBase then
+      Result := TGocciaFunctionBase(FTarget).Call(AArguments,
+        TGocciaHoleValue.HoleValue)
+    else
+      ThrowTypeError('Proxy target is not a constructor');
+  end;
+end;
+
+function TGocciaProxyValue.TypeOf: string;
+begin
+  // Per spec: typeof proxy === typeof target
+  if FRevoked then
+    Result := 'object'
+  else
+    Result := FTarget.TypeOf;
+end;
+
+function TGocciaProxyValue.IsCallable: Boolean;
+begin
+  if FRevoked then
+    Result := False
+  else
+    Result := FTarget.IsCallable;
+end;
+
+function TGocciaProxyValue.ToStringTag: string;
+begin
+  Result := CONSTRUCTOR_PROXY;
+end;
+
+procedure TGocciaProxyValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+
+  if Assigned(FTarget) then
+    FTarget.MarkReferences;
+  if Assigned(FHandler) then
+    FHandler.MarkReferences;
+end;
+
+procedure TGocciaProxyValue.Revoke;
+begin
+  FRevoked := True;
+end;
+
+{ TGocciaProxyRevoker }
+
+constructor TGocciaProxyRevoker.Create(const AProxy: TGocciaProxyValue);
+begin
+  inherited Create;
+  FProxy := AProxy;
+end;
+
+function TGocciaProxyRevoker.RevokeCallback(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if Assigned(FProxy) then
+  begin
+    FProxy.Revoke;
+    FProxy := nil;
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+procedure TGocciaProxyRevoker.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FProxy) then
+    FProxy.MarkReferences;
+end;
+
+end.

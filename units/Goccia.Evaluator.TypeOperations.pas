@@ -30,6 +30,7 @@ uses
   Goccia.Values.FunctionValue,
   Goccia.Values.HoleValue,
   Goccia.Values.NativeFunction,
+  Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue;
 
 function EvaluateTypeof(const AOperand: TGocciaValue): TGocciaValue;
@@ -154,6 +155,18 @@ begin
 
   if ALeft is TGocciaSymbolValue then
   begin
+    // Proxy has trap for symbol keys: delegate to HasTrap with the
+    // symbol description as the property name. The has trap receives
+    // the symbol description string; symbol-keyed has traps are not
+    // yet fully spec-compliant but cover the common patterns.
+    if ARight is TGocciaProxyValue then
+    begin
+      if TGocciaProxyValue(ARight).HasTrap(TGocciaSymbolValue(ALeft).ToStringLiteral.Value) then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+      Exit;
+    end;
     if ARight is TGocciaObjectValue then
     begin
       if TGocciaObjectValue(ARight).HasSymbolProperty(TGocciaSymbolValue(ALeft)) then
@@ -167,6 +180,16 @@ begin
   end;
 
   PropertyName := ALeft.ToStringLiteral.Value;
+
+  // Proxy intercept: has trap takes precedence over all other checks
+  if ARight is TGocciaProxyValue then
+  begin
+    if TGocciaProxyValue(ARight).HasTrap(PropertyName) then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
+    Exit;
+  end;
 
   if ARight is TGocciaArrayValue then
   begin

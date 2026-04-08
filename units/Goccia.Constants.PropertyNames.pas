@@ -83,6 +83,22 @@ const
   PROP_INSTANCES              = 'instances';
   PROP_LAST_CALL              = 'lastCall';
 
+  // Proxy handler trap names
+  PROP_HAS                       = 'has';
+  PROP_DELETE_PROPERTY            = 'deleteProperty';
+  PROP_APPLY                     = 'apply';
+  PROP_CONSTRUCT                 = 'construct';
+  PROP_OWN_KEYS                  = 'ownKeys';
+  PROP_GET_OWN_PROPERTY_DESCRIPTOR = 'getOwnPropertyDescriptor';
+  PROP_DEFINE_PROPERTY           = 'defineProperty';
+  PROP_GET_PROTOTYPE_OF          = 'getPrototypeOf';
+  PROP_SET_PROTOTYPE_OF          = 'setPrototypeOf';
+  PROP_IS_EXTENSIBLE             = 'isExtensible';
+  PROP_PREVENT_EXTENSIONS        = 'preventExtensions';
+  PROP_REVOCABLE                 = 'revocable';
+  PROP_REVOKE                    = 'revoke';
+  PROP_PROXY                     = 'proxy';
+
 implementation
 
 end.
