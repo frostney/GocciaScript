@@ -350,7 +350,7 @@ The `arguments` object is an array-like (but not array) object with confusing be
 
 ### Automatic Semicolon Insertion
 
-**Excluded.** Semicolons are required.
+**Opt-in.** Semicolons are required by default.
 
 ASI rules are complex and can lead to unexpected behavior:
 
@@ -360,7 +360,25 @@ return
   { value: 42 }
 ```
 
-GocciaScript requires explicit semicolons, preventing this class of bugs.
+GocciaScript requires explicit semicolons by default, preventing this class of bugs. However, ASI can be enabled as an opt-in feature for greater ECMAScript compatibility:
+
+```bash
+# Enable ASI via CLI
+./build/ScriptLoader example.js --asi
+./build/TestRunner tests/ --asi
+./build/REPL --asi
+```
+
+```pascal
+// Enable ASI via the engine API
+Engine := TGocciaEngine.Create(FileName, Source, TGocciaEngine.DefaultGlobals);
+Engine.ASIEnabled := True;
+```
+
+When enabled, GocciaScript follows the ECMAScript ASI rules (ES2026 §12.10):
+- A semicolon is inserted when a newline separates the current and next token
+- A semicolon is inserted before `}` or at EOF
+- Restricted productions (`return`, `throw`, `break`) follow the `[no LineTerminator here]` rules
 
 ### Traditional Loops (`for`, `while`, `do...while`)
 

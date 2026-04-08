@@ -63,7 +63,7 @@ jobs:
         run: chmod +x build/*
 
       - name: Run all JavaScript tests
-        run: ./build/TestRunner tests ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --silent --no-progress --output=test-results-${{ matrix.mode }}.json
+        run: ./build/TestRunner tests ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --asi --silent --no-progress --output=test-results-${{ matrix.mode }}.json
 
       - name: Check TestRunner CLI behaviour
         run: |

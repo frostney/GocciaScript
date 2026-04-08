@@ -58,6 +58,7 @@ var
   GImportMapPath: string = '';
   GInlineAliases: TStringList = nil;
   GMode: TGocciaEngineBackend = ebTreeWalk;
+  GASIEnabled: Boolean = False;
 
 procedure PopulateFileResult(const AFileResult: TBenchmarkFileResult;
   const AScriptResult: TGocciaObjectValue; const AReporter: TBenchmarkReporter);
@@ -167,6 +168,7 @@ begin
     try
       Engine := TGocciaEngine.Create(AFileName, Source, BenchGlobals);
       try
+        Engine.ASIEnabled := GASIEnabled;
         ConfigureModuleResolver(Engine.Resolver, AFileName, GImportMapPath,
           GInlineAliases);
         if GShowProgress and Assigned(Engine.BuiltinBenchmark) then
@@ -247,6 +249,7 @@ begin
     try
       Backend := TGocciaBytecodeBackend.Create(AFileName);
       try
+        Backend.ASIEnabled := GASIEnabled;
         Backend.RegisterBuiltIns(BenchGlobals);
         ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
           GImportMapPath, GInlineAliases);
@@ -258,6 +261,7 @@ begin
           LexEnd := GetNanoseconds;
 
           Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
+          Parser.AutomaticSemicolonInsertion := GASIEnabled;
           try
             ProgramNode := Parser.Parse;
             ParseEnd := GetNanoseconds;
@@ -353,6 +357,7 @@ begin
   try
     Engine := TGocciaEngine.Create(AFileName, ASource, BenchGlobals);
     try
+      Engine.ASIEnabled := GASIEnabled;
       ConfigureModuleResolver(Engine.Resolver, AFileName, GImportMapPath,
         GInlineAliases);
       if GShowProgress and Assigned(Engine.BuiltinBenchmark) then
@@ -424,6 +429,7 @@ begin
   try
     Backend := TGocciaBytecodeBackend.Create(AFileName);
     try
+      Backend.ASIEnabled := GASIEnabled;
       Backend.RegisterBuiltIns(BenchGlobals);
       ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
         GImportMapPath, GInlineAliases);
@@ -435,6 +441,7 @@ begin
         LexEnd := GetNanoseconds;
 
         Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
+        Parser.AutomaticSemicolonInsertion := GASIEnabled;
         try
           ProgramNode := Parser.Parse;
           ParseEnd := GetNanoseconds;
@@ -651,15 +658,18 @@ begin
         Inc(I);
         GInlineAliases.Add(ParamStr(I));
       end
+      else if Arg = '--asi' then
+        GASIEnabled := True
       else if Arg = '--mode=interpreted' then
         GMode := ebTreeWalk
       else if Arg = '--mode=bytecode' then
         GMode := ebBytecode
       else if (Arg = '--help') or (Arg = '-h') then
       begin
-        WriteLn('Usage: BenchmarkRunner [path...|-] [--format=console|text|csv|json [--output=file]] ... [--no-progress] [--mode=interpreted|bytecode] [--import-map=file] [--alias key=value]');
+        WriteLn('Usage: BenchmarkRunner [path...|-] [--format=console|text|csv|json [--output=file]] ... [--no-progress] [--mode=interpreted|bytecode] [--import-map=file] [--alias key=value] [--asi]');
         WriteLn('  -                       Read benchmark source from stdin');
         WriteLn('  (omitted path)          Read benchmark source from stdin');
+        WriteLn('  --asi                   Enable automatic semicolon insertion');
         Exit;
       end
       else if Copy(Arg, 1, 7) = '--mode=' then
