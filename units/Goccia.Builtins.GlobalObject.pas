@@ -56,9 +56,7 @@ uses
   Goccia.Evaluator.Comparison,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
-  Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
-  Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
@@ -614,7 +612,7 @@ begin
   end;
 
   // Step 2: Return ? TestIntegrityLevel(O, frozen)
-  if TGocciaObjectValue(AArgs.GetElement(0)).IsFrozen then
+  if TGocciaObjectValue(AArgs.GetElement(0)).Frozen then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -708,7 +706,7 @@ begin
   end;
 
   // Step 2: Return ? TestIntegrityLevel(O, sealed)
-  if TGocciaObjectValue(AArgs.GetElement(0)).IsSealed then
+  if TGocciaObjectValue(AArgs.GetElement(0)).Sealed then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -745,7 +743,7 @@ begin
   end;
 
   // Step 2: Return ? IsExtensible(O)
-  if TGocciaObjectValue(AArgs.GetElement(0)).IsExtensible then
+  if TGocciaObjectValue(AArgs.GetElement(0)).Extensible then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -768,7 +766,7 @@ begin
     ThrowError('Object prototype may only be an Object or null', 0, 0);
 
   // Step 3: If Type(O) is not Object, return O (handled above via throw)
-  if not TGocciaObjectValue(AArgs.GetElement(0)).IsExtensible then
+  if not TGocciaObjectValue(AArgs.GetElement(0)).Extensible then
     ThrowError('Object.setPrototypeOf called on non-extensible object', 0, 0);
 
   // Step 4: Let status be ? O.[[SetPrototypeOf]](proto)

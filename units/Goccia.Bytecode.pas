@@ -19,11 +19,6 @@ const
   VALIDATE_OP_REQUIRE_OBJECT = 0;
   VALIDATE_OP_REQUIRE_ITERABLE = 1;
 
-  { Classification boundary for colder language-orchestration ops used by IsSemanticOp.
-    Non-core generic arithmetic/bitwise opcodes also live in 128..166, but they are
-    still treated as hot execution ops in the VM loop rather than semantic helpers. }
-  OP_SEM_FIRST = 167;
-
   MIN_SBX: Int16 = -32768;
   MAX_SBX: Int16 = 32767;
 
@@ -171,8 +166,6 @@ function DecodeBx(const AInstruction: UInt32): UInt16; inline;
 function DecodesBx(const AInstruction: UInt32): Int16; inline;
 function DecodeAx(const AInstruction: UInt32): Int32; inline;
 
-function IsSemanticOp(const AInstruction: UInt32): Boolean; inline;
-
 implementation
 
 const
@@ -241,11 +234,6 @@ end;
 function DecodeAx(const AInstruction: UInt32): Int32;
 begin
   Result := Int32((AInstruction shr 8) and $FFFFFF) - SBIAS_24;
-end;
-
-function IsSemanticOp(const AInstruction: UInt32): Boolean;
-begin
-  Result := (AInstruction and $FF) >= OP_SEM_FIRST;
 end;
 
 end.

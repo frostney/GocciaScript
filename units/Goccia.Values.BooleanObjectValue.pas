@@ -38,7 +38,6 @@ implementation
 uses
   GarbageCollector.Generic,
 
-  Goccia.Constants.PropertyNames,
   Goccia.Values.NativeFunction;
 
 constructor TGocciaBooleanObjectValue.Create(const APrimitive: TGocciaBooleanLiteralValue; const AClass: TGocciaClassValue = nil);

@@ -11,9 +11,7 @@ uses
 
   OrderedStringMap,
 
-  Goccia.AST.Expressions,
   Goccia.AST.Node,
-  Goccia.AST.Statements,
   Goccia.ControlFlow,
   Goccia.Error,
   Goccia.Evaluator,
@@ -23,12 +21,6 @@ uses
   Goccia.Modules.Loader,
   Goccia.Modules.Resolver,
   Goccia.Scope,
-  Goccia.Utils,
-  Goccia.Values.ArrayValue,
-  Goccia.Values.ClassValue,
-  Goccia.Values.Error,
-  Goccia.Values.FunctionValue,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -56,7 +48,6 @@ type
     destructor Destroy; override;
     function Execute(const AProgram: TGocciaProgram): TGocciaValue;
     function LoadModule(const AModulePath, AImportingFilePath: string): TGocciaModule;
-    procedure CheckForModuleReload(const AModule: TGocciaModule);
 
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
     property JSXEnabled: Boolean read FJSXEnabled write SetJSXEnabled;
@@ -143,11 +134,6 @@ end;
 function TGocciaInterpreter.LoadModule(const AModulePath, AImportingFilePath: string): TGocciaModule;
 begin
   Result := FModuleLoader.LoadModule(AModulePath, AImportingFilePath);
-end;
-
-procedure TGocciaInterpreter.CheckForModuleReload(const AModule: TGocciaModule);
-begin
-  FModuleLoader.CheckForModuleReload(AModule);
 end;
 
 function TGocciaInterpreter.GetContentProvider: TGocciaModuleContentProvider;

@@ -7,8 +7,7 @@ interface
 uses
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives;
+  Goccia.Values.ObjectValue;
 
 type
   TGocciaBuiltin = class

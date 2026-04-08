@@ -8,7 +8,6 @@ uses
   Generics.Collections,
 
   Goccia.Arguments.Collection,
-  Goccia.AST.Node,
   Goccia.Scope,
   Goccia.Values.FunctionValue,
   Goccia.Values.Primitives;

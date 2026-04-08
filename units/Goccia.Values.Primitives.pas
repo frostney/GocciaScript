@@ -155,7 +155,6 @@ type
     property Value: string read FValue;
   end;
 
-  function IsPrimitive(const AValue: TGocciaValue): Boolean;
   procedure PinPrimitiveSingletons;
 
 implementation
@@ -168,8 +167,7 @@ uses
 
   Goccia.Constants,
   Goccia.Constants.TypeNames,
-  Goccia.TextFiles,
-  Goccia.Values.ClassHelper;
+  Goccia.TextFiles;
 
 { TGocciaValue }
 
@@ -208,11 +206,6 @@ begin
 end;
 
 { Utility functions }
-
-function IsPrimitive(const AValue: TGocciaValue): Boolean;
-begin
-  Result := AValue.IsPrimitive;
-end;
 
 procedure PinPrimitiveSingletons;
 begin

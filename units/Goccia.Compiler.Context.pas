@@ -9,9 +9,7 @@ uses
 
   HashMap,
 
-  Goccia.AST.Expressions,
   Goccia.AST.Node,
-  Goccia.AST.Statements,
   Goccia.Bytecode,
   Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Debug,

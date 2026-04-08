@@ -68,7 +68,6 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.FunctionValue,
   Goccia.Values.HoleValue,
   Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
