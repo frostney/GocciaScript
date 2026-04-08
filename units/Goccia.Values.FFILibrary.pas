@@ -49,12 +49,15 @@ uses
 
   Goccia.FFI.Call,
   Goccia.FFI.Types,
+  Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FFIPointer,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SharedArrayBufferValue,
+  Goccia.Values.SymbolValue,
+  Goccia.Values.TypedArrayValue;
 
 const
   FFI_LIBRARY_TAG = 'FFILibrary';
@@ -146,10 +149,33 @@ begin
           begin
             if ArgValue is TGocciaFFIPointerValue then
               IntArgs[I] := PtrInt(TGocciaFFIPointerValue(ArgValue).Address)
+            else if ArgValue is TGocciaArrayBufferValue then
+            begin
+              if Length(TGocciaArrayBufferValue(ArgValue).Data) = 0 then
+                IntArgs[I] := 0
+              else
+                IntArgs[I] := PtrInt(@TGocciaArrayBufferValue(ArgValue).Data[0]);
+            end
+            else if ArgValue is TGocciaSharedArrayBufferValue then
+            begin
+              if Length(TGocciaSharedArrayBufferValue(ArgValue).Data) = 0 then
+                IntArgs[I] := 0
+              else
+                IntArgs[I] := PtrInt(@TGocciaSharedArrayBufferValue(ArgValue).Data[0]);
+            end
+            else if ArgValue is TGocciaTypedArrayValue then
+            begin
+              if Length(TGocciaTypedArrayValue(ArgValue).BufferData) = 0 then
+                IntArgs[I] := 0
+              else
+                IntArgs[I] := PtrInt(@TGocciaTypedArrayValue(ArgValue).BufferData[
+                  TGocciaTypedArrayValue(ArgValue).ByteOffset]);
+            end
             else if ArgValue is TGocciaNullLiteralValue then
               IntArgs[I] := 0
             else
-              ThrowTypeError('FFI argument ' + IntToStr(I) + ' must be an FFIPointer or null');
+              ThrowTypeError('FFI argument ' + IntToStr(I) +
+                ' must be an ArrayBuffer, TypedArray, FFIPointer, or null');
           end;
           fftCString:
           begin
@@ -214,7 +240,7 @@ begin
     fftF64:
       Result := TGocciaNumberLiteralValue.Create(CallResult.AsDouble);
     fftPointer:
-      Result := TGocciaFFIPointerValue.Create(Pointer(CallResult.AsInt), 0, fpoBorrowed);
+      Result := TGocciaFFIPointerValue.Create(Pointer(CallResult.AsInt));
     fftCString:
     begin
       if CallResult.AsInt = 0 then
@@ -415,7 +441,7 @@ begin
     on E: Exception do
       ThrowTypeError(E.Message);
   end;
-  Result := TGocciaFFIPointerValue.Create(Pointer(SymPtr), 0, fpoBorrowed);
+  Result := TGocciaFFIPointerValue.Create(Pointer(SymPtr));
 end;
 
 function TGocciaFFILibraryValue.Close(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

@@ -9,7 +9,7 @@ describe("FFI.nullptr", () => {
   });
 
   test("can be passed as a pointer argument", () => {
-    const lib = FFI.open("./fixtures/ffi/libfixture.dylib");
+    const lib = FFI.open("./fixtures/ffi/libfixture" + FFI.suffix);
     const isNull = lib.bind("is_null", { args: ["pointer"], returns: "i32" });
     expect(isNull(FFI.nullptr)).toBe(1);
     lib.close();

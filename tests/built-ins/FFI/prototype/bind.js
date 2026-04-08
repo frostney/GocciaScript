@@ -1,5 +1,5 @@
 describe("FFILibrary.prototype.bind", () => {
-  const lib = FFI.open("./fixtures/ffi/libfixture.dylib");
+  const lib = FFI.open("./fixtures/ffi/libfixture" + FFI.suffix);
 
   test("binds and calls a no-arg function returning i32", () => {
     const getAnswer = lib.bind("get_answer", { args: [], returns: "i32" });
@@ -99,7 +99,7 @@ describe("FFILibrary.prototype.bind", () => {
   });
 
   test("throws when binding from closed library", () => {
-    const closed = FFI.open("./fixtures/ffi/libfixture.dylib");
+    const closed = FFI.open("./fixtures/ffi/libfixture" + FFI.suffix);
     closed.close();
     expect(() => closed.bind("get_answer", { args: [], returns: "i32" })).toThrow(TypeError);
   });

@@ -1,5 +1,5 @@
 describe("FFILibrary.prototype.symbol", () => {
-  const lib = FFI.open("./fixtures/ffi/libfixture.dylib");
+  const lib = FFI.open("./fixtures/ffi/libfixture" + FFI.suffix);
 
   test("returns an FFIPointer for a known symbol", () => {
     const ptr = lib.symbol("get_answer");
@@ -12,7 +12,7 @@ describe("FFILibrary.prototype.symbol", () => {
   });
 
   test("throws when looking up symbol in closed library", () => {
-    const closed = FFI.open("./fixtures/ffi/libfixture.dylib");
+    const closed = FFI.open("./fixtures/ffi/libfixture" + FFI.suffix);
     closed.close();
     expect(() => closed.symbol("get_answer")).toThrow(TypeError);
   });

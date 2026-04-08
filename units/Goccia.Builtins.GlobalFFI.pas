@@ -18,9 +18,8 @@ type
     class var FStaticMembers: array of TGocciaMemberDefinition;
   published
     function FFIOpen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function FFIAlloc(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function FFIFree(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FFINullptrGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function FFISuffixGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
@@ -36,6 +35,17 @@ uses
   Goccia.Values.FFIPointer,
   Goccia.Values.ObjectPropertyDescriptor;
 
+const
+  {$IFDEF DARWIN}
+  SHARED_LIBRARY_SUFFIX = '.dylib';
+  {$ELSE}
+  {$IFDEF WINDOWS}
+  SHARED_LIBRARY_SUFFIX = '.dll';
+  {$ELSE}
+  SHARED_LIBRARY_SUFFIX = '.so';
+  {$ENDIF}
+  {$ENDIF}
+
 constructor TGocciaGlobalFFI.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
   Members: TGocciaMemberCollection;
@@ -45,9 +55,8 @@ begin
   Members := TGocciaMemberCollection.Create;
   try
     Members.AddNamedMethod('open', FFIOpen, 1, gmkStaticMethod);
-    Members.AddNamedMethod('alloc', FFIAlloc, 1, gmkStaticMethod);
-    Members.AddNamedMethod('free', FFIFree, 1, gmkStaticMethod);
     Members.AddAccessor('nullptr', FFINullptrGetter, nil, [pfConfigurable], gmkStaticGetter);
+    Members.AddAccessor('suffix', FFISuffixGetter, nil, [pfConfigurable], gmkStaticGetter);
     FStaticMembers := Members.ToDefinitions;
   finally
     Members.Free;
@@ -77,46 +86,14 @@ begin
   Result := TGocciaFFILibraryValue.Create(Handle);
 end;
 
-function TGocciaGlobalFFI.FFIAlloc(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  Num: TGocciaNumberLiteralValue;
-  Size: Integer;
-  Mem: Pointer;
-begin
-  if AArgs.Length < 1 then
-    ThrowTypeError('FFI.alloc requires a size argument');
-
-  Num := AArgs.GetElement(0).ToNumberLiteral;
-  if Num.IsNaN or Num.IsInfinite or (Num.Value < 0) or (Num.Value <> Trunc(Num.Value)) then
-    ThrowRangeError('Invalid allocation size');
-
-  Size := Trunc(Num.Value);
-  if Size = 0 then
-    ThrowRangeError('Cannot allocate zero bytes');
-
-  Mem := GetMem(Size);
-  FillChar(Mem^, Size, 0);
-  Result := TGocciaFFIPointerValue.Create(Mem, Size, fpoOwned);
-end;
-
-function TGocciaGlobalFFI.FFIFree(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  Ptr: TGocciaFFIPointerValue;
-begin
-  if AArgs.Length < 1 then
-    ThrowTypeError('FFI.free requires an FFIPointer argument');
-
-  if not (AArgs.GetElement(0) is TGocciaFFIPointerValue) then
-    ThrowTypeError('FFI.free requires an FFIPointer argument');
-
-  Ptr := TGocciaFFIPointerValue(AArgs.GetElement(0));
-  Ptr.FreeAllocation;
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-end;
-
 function TGocciaGlobalFFI.FFINullptrGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaFFIPointerValue.NullPointer;
+end;
+
+function TGocciaGlobalFFI.FFISuffixGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaStringLiteralValue.Create(SHARED_LIBRARY_SUFFIX);
 end;
 
 end.
