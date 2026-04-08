@@ -55,9 +55,11 @@ printf "const x = 2 + 2; x;" | ./build/ScriptLoader        # Execute stdin sourc
 ./build/TestRunner tests --coverage                                            # Run tests with line and branch coverage
 ./build/TestRunner tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov  # Coverage with lcov output
 ./build/TestRunner tests --coverage --coverage-format=json --coverage-output=coverage.json  # Coverage with JSON output
-./build/BenchmarkRunner benchmarks/                                               # Run all benchmarks
+./build/BenchmarkRunner benchmarks/                                               # Run all benchmarks (microbenchmarks + algorithms)
+./build/BenchmarkRunner benchmarks/algorithms/                                    # Run algorithmic benchmarks only
 ./build/BenchmarkRunner benchmarks --import-map=imports.json                      # Run benchmarks with an explicit import map
-./build/BenchmarkRunner benchmarks/fibonacci.js                                   # Run a specific benchmark
+./build/BenchmarkRunner benchmarks/fibonacci.js                                   # Run a specific microbenchmark
+./build/BenchmarkRunner benchmarks/algorithms/richards.js                         # Run a specific algorithmic benchmark
 printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/BenchmarkRunner # Run benchmark source from stdin
 ./build/BenchmarkRunner benchmarks --format=json --output=out.json                # Export as JSON
 ./build/BenchmarkRunner benchmarks --format=console --format=json --output=out.json # Console + JSON

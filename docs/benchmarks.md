@@ -146,6 +146,10 @@ The non-zero exit code ensures CI pipelines fail when benchmarks crash or produc
 
 ## Available Benchmarks
 
+### Microbenchmarks
+
+Microbenchmarks test individual language features in isolation. They live directly in `benchmarks/`.
+
 | File | Covers |
 |------|--------|
 | `benchmarks/fibonacci.js` | Recursive vs iterative computation |
@@ -163,6 +167,25 @@ The non-zero exit code ensures CI pipelines fail when benchmarks crash or produc
 | `benchmarks/iterators.js` | Iterator.from, user-defined iterables, lazy iterator helpers, built-in iterator chaining |
 | `benchmarks/for-of.js` | for...of with arrays, strings, Sets, Maps, destructuring, for-await-of |
 | `benchmarks/async-await.js` | Single/multiple awaits, await non-Promise, try/catch, Promise.all, nested async |
+
+### Algorithmic Benchmarks
+
+Algorithmic benchmarks exercise multiple engine subsystems in combination (allocation + GC pressure + method dispatch + arithmetic, etc.), revealing bottlenecks that isolated feature benchmarks hide. They live in `benchmarks/algorithms/` and are adapted from classic JavaScript benchmark suites (Octane, Computer Language Benchmarks Game) or implement GocciaScript-native workloads. All algorithms replace `for`/`while` loops with idiomatic GocciaScript patterns: recursion, `for...of`, iterator protocol, and array methods.
+
+| File | Source | Subsystems tested |
+|------|--------|-------------------|
+| `algorithms/splay-tree.js` | Octane 2.0 Splay | Object graph allocation, recursive pointer-chasing, GC pressure |
+| `algorithms/nbody.js` | Benchmarks Game | Sustained float arithmetic, object property mutation, `for...of` iteration |
+| `algorithms/binary-tree.js` | Benchmarks Game | Pure allocation throughput, recursion depth, GC mark-and-sweep |
+| `algorithms/richards.js` | Octane 2.0 Richards | OOP scheduling simulation, closure dispatch, bitwise state machines |
+| `algorithms/deltablue.js` | Octane 2.0 DeltaBlue | Deep class hierarchies, polymorphic method dispatch, constraint graph traversal |
+| `algorithms/spectral-norm.js` | Benchmarks Game | Array `map`/`reduce` at scale, closure capture, float throughput |
+| `algorithms/matrix.js` | Inspired by SunSpider/Linpack | Nested `reduce`/`map`, array-of-array access, float arithmetic |
+| `algorithms/raytrace.js` | Octane 2.0 RayTrace | Vector math classes, per-pixel object creation, reflection recursion |
+| `algorithms/string-tokenizer.js` | Custom | `for...of` over strings, character-by-character scanning, token object creation |
+| `algorithms/json-transform.js` | Inspired by Kraken | JSON parse/stringify at scale, `Object.entries` pipelines, Map aggregation |
+| `algorithms/towers-of-hanoi.js` | Classic CS | Pure function call overhead, deep recursion (32K–524K calls) |
+| `algorithms/pattern-matching.js` | Inspired by Octane RegExp | Multi-pattern `matchAll`, iterator consumption, Map aggregation |
 
 ## Sample Output
 
