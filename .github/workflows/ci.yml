@@ -285,7 +285,14 @@ jobs:
 
       - name: Build FFI fixture library (Windows)
         if: runner.os == 'Windows'
-        run: gcc -shared -o fixtures/ffi/libfixture.dll fixtures/ffi/fixture.c
+        run: |
+          if [ "${{ matrix.target }}" = "i386-win32" ]; then
+            # 32-bit TestRunner needs a 32-bit DLL; install the i686 MinGW toolchain
+            C:/msys64/usr/bin/pacman.exe -S --noconfirm mingw-w64-i686-gcc
+            C:/msys64/mingw32/bin/gcc.exe -shared -o fixtures/ffi/libfixture.dll fixtures/ffi/fixture.c
+          else
+            gcc -shared -o fixtures/ffi/libfixture.dll fixtures/ffi/fixture.c
+          fi
 
       - name: Run all JavaScript tests (interpreted)
         run: ./build/TestRunner tests --asi --silent --no-progress --output=test-results-interpreted.json
