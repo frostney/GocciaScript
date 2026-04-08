@@ -81,7 +81,6 @@ uses
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
-  Goccia.Logger,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper;

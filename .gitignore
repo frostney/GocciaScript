@@ -3,6 +3,9 @@
 *.ppu
 *.rsj
 
+# Generated files
+units/Goccia.Version.Generated.inc
+
 # Build files
 build/*.exe
 build/GocciaJSON5Check
