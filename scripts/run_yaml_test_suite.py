@@ -42,21 +42,22 @@ begin
   Source := TStringList.Create;
   Parser := TGocciaYAMLParser.Create;
   try
-    Source.LoadFromFile(ParamStr(1));
-    Documents := Parser.ParseDocuments(Source.Text);
-    Documents.Free;
-    Halt(0);
-  except
-    on E: Exception do
-    begin
-      Writeln(E.Message);
-      Halt(1);
+    try
+      Source.LoadFromFile(ParamStr(1));
+      Documents := Parser.ParseDocuments(Source.Text);
+      Documents.Free;
+    except
+      on E: Exception do
+      begin
+        Writeln(E.Message);
+        Halt(1);
+      end;
     end;
+  finally
+    Parser.Free;
+    Source.Free;
+    TGarbageCollector.Shutdown;
   end;
-
-  Parser.Free;
-  Source.Free;
-  TGarbageCollector.Shutdown;
 end.
 """
 
