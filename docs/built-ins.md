@@ -29,7 +29,9 @@ TGocciaGlobalBuiltin = (
   ggBenchmark,        // suite, bench, runBenchmarks (benchmarking only)
   ggTemporal,         // Temporal namespace (dates, times, durations, instants)
   ggJSX,             // JSX transformer support
-  ggArrayBuffer      // ArrayBuffer constructor and prototype
+  ggArrayBuffer,     // ArrayBuffer constructor and prototype
+  ggFFI,             // Foreign Function Interface
+  ggReflect          // Reflect API
 );
 ```
 
@@ -38,7 +40,7 @@ The default set used by `ScriptLoader` and `REPL`:
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
                   ggGlobalNumber, ggPromise, ggJSON, ggJSON5, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap,
-                  ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
+                  ggPerformance, ggTemporal, ggJSX, ggArrayBuffer, ggReflect];
 ```
 
 The `TestRunner` adds `ggTestAssertions` to inject the test framework.
@@ -1078,3 +1080,23 @@ suite("group name", () => {
 **Result object** (returned by `runBenchmarks()`):
 
 Each benchmark result includes: `name`, `suite`, `opsPerSec`, `meanMs`, `iterations`, `totalMs`, `variancePercentage`, and optionally `error`.
+
+### Reflect (`Goccia.Builtins.GlobalReflect.pas`)
+
+The `Reflect` object provides methods for interceptable JavaScript operations. Unlike `Object.*` methods which throw on failure, `Reflect` methods that operate on property descriptors return boolean results. All `Reflect` methods throw `TypeError` when the target is not an object.
+
+| Method | Description |
+|--------|-------------|
+| `Reflect.apply(target, thisArg, args)` | Calls a function with the given `this` value and arguments array |
+| `Reflect.construct(target, args [, newTarget])` | Creates an instance like `new target(...args)`, optionally with a different `newTarget` prototype |
+| `Reflect.defineProperty(target, key, attrs)` | Like `Object.defineProperty` but returns `true`/`false` instead of throwing |
+| `Reflect.deleteProperty(target, key)` | Deletes a property, returns `true`/`false` |
+| `Reflect.get(target, key [, receiver])` | Gets a property value. Supports symbol keys. |
+| `Reflect.getOwnPropertyDescriptor(target, key)` | Returns an own property descriptor or `undefined` |
+| `Reflect.getPrototypeOf(target)` | Returns the prototype of the target |
+| `Reflect.has(target, key)` | Like the `in` operator — checks property existence on the prototype chain |
+| `Reflect.isExtensible(target)` | Returns whether the target is extensible |
+| `Reflect.ownKeys(target)` | Returns an array of own string keys followed by own symbol keys |
+| `Reflect.preventExtensions(target)` | Prevents new properties, returns `true` |
+| `Reflect.set(target, key, value [, receiver])` | Sets a property value. Supports symbol keys. Returns `true`/`false`. |
+| `Reflect.setPrototypeOf(target, proto)` | Sets the prototype. Returns `false` for non-extensible objects (instead of throwing). |

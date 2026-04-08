@@ -20,6 +20,7 @@ uses
   Goccia.Builtins.GlobalObject,
   Goccia.Builtins.GlobalPromise,
   Goccia.Builtins.GlobalProxy,
+  Goccia.Builtins.GlobalReflect,
   Goccia.Builtins.GlobalRegExp,
   Goccia.Builtins.Globals,
   Goccia.Builtins.GlobalSet,
@@ -80,7 +81,8 @@ type
     ggJSX,
     ggArrayBuffer,
     ggProxy,
-    ggFFI
+    ggFFI,
+    ggReflect
   );
 
   TGocciaGlobalBuiltins = set of TGocciaGlobalBuiltin;
@@ -98,7 +100,7 @@ type
 type
   TGocciaEngine = class
   public
-    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggJSON5, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer, ggProxy];
+    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggJSON5, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer, ggProxy, ggReflect];
   private
     FInterpreter: TGocciaInterpreter;
     FFileName: string;
@@ -133,6 +135,7 @@ type
     FBuiltinArrayBuffer: TGocciaGlobalArrayBuffer;
     FBuiltinProxy: TGocciaGlobalProxy;
     FBuiltinFFI: TGocciaGlobalFFI;
+    FBuiltinReflect: TGocciaGlobalReflect;
     FPreviousExceptionMask: TFPUExceptionMask;
     FASIEnabled: Boolean;
     FSuppressWarnings: Boolean;
@@ -204,6 +207,7 @@ type
     property BuiltinProxy: TGocciaGlobalProxy read FBuiltinProxy;
     property ASIEnabled: Boolean read FASIEnabled write SetASIEnabled;
     property BuiltinFFI: TGocciaGlobalFFI read FBuiltinFFI;
+    property BuiltinReflect: TGocciaGlobalReflect read FBuiltinReflect;
     property SuppressWarnings: Boolean read FSuppressWarnings write FSuppressWarnings;
     property LastTiming: TGocciaScriptResult read FLastTiming;
   end;
@@ -326,6 +330,7 @@ begin
     FBuiltinArrayBuffer.Free;
     FBuiltinProxy.Free;
     FBuiltinFFI.Free;
+    FBuiltinReflect.Free;
     FInjectedGlobals.Free;
     FInterpreter.Free;
     if FOwnsModuleLoader then
@@ -392,6 +397,8 @@ begin
     FBuiltinProxy := TGocciaGlobalProxy.Create(Scope);
   if ggFFI in FGlobals then
     FBuiltinFFI := TGocciaGlobalFFI.Create(CONSTRUCTOR_FFI, Scope, ThrowError);
+  if ggReflect in FGlobals then
+    FBuiltinReflect := TGocciaGlobalReflect.Create('Reflect', Scope, ThrowError);
 
   // Always-registered built-ins
   FBuiltinGlobalString := TGocciaGlobalString.Create(CONSTRUCTOR_STRING, Scope, ThrowError);
