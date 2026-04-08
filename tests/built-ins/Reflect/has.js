@@ -25,6 +25,13 @@ describe("Reflect.has", () => {
     expect(Reflect.has(arr, "length")).toBe(true);
   });
 
+  test("works with symbol keys", () => {
+    const sym = Symbol("myKey");
+    const obj = { [sym]: "value" };
+    expect(Reflect.has(obj, sym)).toBe(true);
+    expect(Reflect.has(obj, Symbol("other"))).toBe(false);
+  });
+
   test("throws TypeError if target is not an object", () => {
     expect(() => Reflect.has(42, "x")).toThrow(TypeError);
     expect(() => Reflect.has("str", "x")).toThrow(TypeError);

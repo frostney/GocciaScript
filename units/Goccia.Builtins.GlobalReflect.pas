@@ -55,8 +55,16 @@ uses
 
 procedure RequireObjectTarget(const ATarget: TGocciaValue; const AMethodName: string);
 begin
-  if not (ATarget is TGocciaObjectValue) then
+  if not (ATarget is TGocciaObjectValue) and not (ATarget is TGocciaClassValue) then
     ThrowTypeError(Format('%s: target must be an object', [AMethodName]));
+end;
+
+function AsObjectValue(const ATarget: TGocciaValue): TGocciaObjectValue;
+begin
+  if ATarget is TGocciaClassValue then
+    Result := TGocciaClassValue(ATarget).Prototype
+  else
+    Result := TGocciaObjectValue(ATarget);
 end;
 
 { TGocciaGlobalReflect }
@@ -273,15 +281,23 @@ begin
   if HasGet then
   begin
     Getter := DescriptorObject.GetProperty(PROP_GET);
+    if not (Getter is TGocciaUndefinedLiteralValue) and not Getter.IsCallable then
+      ThrowTypeError('Reflect.defineProperty: getter must be a function or undefined');
     if Getter is TGocciaUndefinedLiteralValue then
       Getter := nil;
   end;
   if HasSet then
   begin
     Setter := DescriptorObject.GetProperty(PROP_SET);
+    if not (Setter is TGocciaUndefinedLiteralValue) and not Setter.IsCallable then
+      ThrowTypeError('Reflect.defineProperty: setter must be a function or undefined');
     if Setter is TGocciaUndefinedLiteralValue then
       Setter := nil;
   end;
+
+  // ES2026 §6.2.5.5 ToPropertyDescriptor step 10: mixed data+accessor is invalid
+  if (HasValue or DescriptorObject.HasProperty(PROP_WRITABLE)) and (HasGet or HasSet) then
+    ThrowTypeError('Reflect.defineProperty: descriptor cannot have both accessor and data properties');
 
   PropertyFlags := [];
   if Enumerable then
@@ -315,6 +331,7 @@ end;
 function TGocciaGlobalReflect.ReflectDeleteProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Target, PropKey: TGocciaValue;
+  Obj: TGocciaObjectValue;
   PropertyName: string;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Reflect.deleteProperty', ThrowError);
@@ -325,11 +342,27 @@ begin
   // Step 1: If target is not an Object, throw a TypeError exception
   RequireObjectTarget(Target, 'Reflect.deleteProperty');
 
-  // Step 2: Let key be ? ToPropertyKey(propertyKey)
-  PropertyName := PropKey.ToStringLiteral.Value;
+  Obj := AsObjectValue(Target);
 
+  // Step 2: Let key be ? ToPropertyKey(propertyKey)
   // Step 3: Return ? target.[[Delete]](key)
-  if TGocciaObjectValue(Target).DeleteProperty(PropertyName) then
+  if PropKey is TGocciaSymbolValue then
+  begin
+    // Symbol key deletion: check if symbol property exists and is configurable
+    if Obj.HasSymbolProperty(TGocciaSymbolValue(PropKey)) then
+    begin
+      if Obj.DeleteProperty(TGocciaSymbolValue(PropKey).Description) then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+    end
+    else
+      Result := TGocciaBooleanLiteralValue.TrueValue;
+    Exit;
+  end;
+
+  PropertyName := PropKey.ToStringLiteral.Value;
+  if Obj.DeleteProperty(PropertyName) then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -455,6 +488,7 @@ end;
 function TGocciaGlobalReflect.ReflectHas(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Target, PropKey: TGocciaValue;
+  Obj: TGocciaObjectValue;
   PropertyName: string;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Reflect.has', ThrowError);
@@ -465,11 +499,22 @@ begin
   // Step 1: If target is not an Object, throw a TypeError exception
   RequireObjectTarget(Target, 'Reflect.has');
 
+  Obj := AsObjectValue(Target);
+
   // Step 2: Let key be ? ToPropertyKey(propertyKey)
+  if PropKey is TGocciaSymbolValue then
+  begin
+    if Obj.HasSymbolProperty(TGocciaSymbolValue(PropKey)) then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
+    Exit;
+  end;
+
   PropertyName := PropKey.ToStringLiteral.Value;
 
   // Step 3: Return ? target.[[HasProperty]](key)
-  if TGocciaObjectValue(Target).HasProperty(PropertyName) then
+  if Obj.HasProperty(PropertyName) then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -599,6 +644,23 @@ begin
     ThrowTypeError('Reflect.setPrototypeOf: proto must be an object or null');
 
   // Step 3: Return ? target.[[SetPrototypeOf]](proto)
+  // ES2026 §10.1.2 OrdinarySetPrototypeOf step 2: If SameValue(V, current) return true
+  if ProtoArg is TGocciaNullLiteralValue then
+  begin
+    if not Assigned(TGocciaObjectValue(Target).Prototype) then
+    begin
+      Result := TGocciaBooleanLiteralValue.TrueValue;
+      Exit;
+    end;
+  end
+  else if (ProtoArg is TGocciaObjectValue) and
+          (TGocciaObjectValue(Target).Prototype = TGocciaObjectValue(ProtoArg)) then
+  begin
+    Result := TGocciaBooleanLiteralValue.TrueValue;
+    Exit;
+  end;
+
+  // ES2026 §10.1.2 OrdinarySetPrototypeOf step 3: If extensible is false, return false
   if not TGocciaObjectValue(Target).Extensible then
   begin
     Result := TGocciaBooleanLiteralValue.FalseValue;

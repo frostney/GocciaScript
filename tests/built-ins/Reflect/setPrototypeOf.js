@@ -20,11 +20,24 @@ describe("Reflect.setPrototypeOf", () => {
     expect(Reflect.getPrototypeOf(obj)).toBe(null);
   });
 
-  test("returns false for non-extensible objects", () => {
+  test("returns false for non-extensible objects with different prototype", () => {
     const obj = {};
     Object.preventExtensions(obj);
     const result = Reflect.setPrototypeOf(obj, { y: 2 });
     expect(result).toBe(false);
+  });
+
+  test("returns true for non-extensible objects when prototype is unchanged", () => {
+    const proto = { x: 1 };
+    const obj = Object.create(proto);
+    Object.preventExtensions(obj);
+    expect(Reflect.setPrototypeOf(obj, proto)).toBe(true);
+  });
+
+  test("returns true for non-extensible object with null prototype set to null", () => {
+    const obj = Object.create(null);
+    Object.preventExtensions(obj);
+    expect(Reflect.setPrototypeOf(obj, null)).toBe(true);
   });
 
   test("throws TypeError if target is not an object", () => {

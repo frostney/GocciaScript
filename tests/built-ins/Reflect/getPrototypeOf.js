@@ -22,8 +22,7 @@ describe("Reflect.getPrototypeOf", () => {
       }
     }
     const a = new Animal();
-    const proto = Reflect.getPrototypeOf(a);
-    expect(proto !== null).toBe(true);
+    expect(Reflect.getPrototypeOf(a)).toBe(Animal.prototype);
   });
 
   test("throws TypeError if target is not an object", () => {
