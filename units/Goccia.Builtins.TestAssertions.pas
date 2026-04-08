@@ -1959,7 +1959,7 @@ begin
     if MockFn.MockResults[I] is TGocciaObjectValue then
     begin
       ResultObj := TGocciaObjectValue(MockFn.MockResults[I]);
-      ResultType := ResultObj.GetProperty('type');
+      ResultType := ResultObj.GetProperty(PROP_TYPE);
       if (ResultType is TGocciaStringLiteralValue) and
          (TGocciaStringLiteralValue(ResultType).Value = 'return') then
       begin
@@ -2017,7 +2017,7 @@ begin
     if MockFn.MockResults[I] is TGocciaObjectValue then
     begin
       ResultObj := TGocciaObjectValue(MockFn.MockResults[I]);
-      ResultType := ResultObj.GetProperty('type');
+      ResultType := ResultObj.GetProperty(PROP_TYPE);
       if (ResultType is TGocciaStringLiteralValue) and
          (TGocciaStringLiteralValue(ResultType).Value = 'return') then
         Inc(ActualCount);
@@ -2069,11 +2069,11 @@ begin
     if MockFn.MockResults[I] is TGocciaObjectValue then
     begin
       ResultObj := TGocciaObjectValue(MockFn.MockResults[I]);
-      ResultType := ResultObj.GetProperty('type');
+      ResultType := ResultObj.GetProperty(PROP_TYPE);
       if (ResultType is TGocciaStringLiteralValue) and
          (TGocciaStringLiteralValue(ResultType).Value = 'return') then
       begin
-        ResultValue := ResultObj.GetProperty('value');
+        ResultValue := ResultObj.GetProperty(PROP_VALUE);
         if IsDeepEqual(ResultValue, Expected) then
         begin
           Found := True;
@@ -2131,8 +2131,8 @@ begin
   end;
 
   LastResult := TGocciaObjectValue(MockFn.MockResults[MockFn.MockResults.Count - 1]);
-  ResultType := LastResult.GetProperty('type');
-  ResultValue := LastResult.GetProperty('value');
+  ResultType := LastResult.GetProperty(PROP_TYPE);
+  ResultValue := LastResult.GetProperty(PROP_VALUE);
 
   Matches := (ResultType is TGocciaStringLiteralValue) and
     (TGocciaStringLiteralValue(ResultType).Value = 'return') and
@@ -2200,8 +2200,8 @@ begin
   end;
 
   NthResult := TGocciaObjectValue(MockFn.MockResults[N - 1]);
-  ResultType := NthResult.GetProperty('type');
-  ResultValue := NthResult.GetProperty('value');
+  ResultType := NthResult.GetProperty(PROP_TYPE);
+  ResultValue := NthResult.GetProperty(PROP_VALUE);
 
   Matches := (ResultType is TGocciaStringLiteralValue) and
     (TGocciaStringLiteralValue(ResultType).Value = 'return') and
@@ -3097,8 +3097,15 @@ function TGocciaTestAssertions.MockFunction(const AArgs: TGocciaArgumentsCollect
 var
   Impl: TGocciaValue;
 begin
-  if (AArgs.Length > 0) and (AArgs.GetElement(0) is TGocciaFunctionBase) then
-    Impl := AArgs.GetElement(0)
+  if AArgs.Length > 0 then
+  begin
+    if not (AArgs.GetElement(0) is TGocciaFunctionBase) then
+    begin
+      ThrowError('mock() expects a function argument or no arguments', 0, 0);
+      Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+    end;
+    Impl := AArgs.GetElement(0);
+  end
   else
     Impl := nil;
 

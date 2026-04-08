@@ -22,10 +22,10 @@ type
     FResults: TGocciaValueList;
     FInstances: TGocciaValueList;
     FImplementation: TGocciaValue;
-    FImplementationOnce: TGocciaValueList;
+    FOnceQueue: TGocciaValueList;
+    FOnceIsImpl: array of Boolean;
     FDefaultReturnValue: TGocciaValue;
     FHasDefaultReturnValue: Boolean;
-    FReturnValuesOnce: TGocciaValueList;
     FSpyTarget: TGocciaObjectValue;
     FSpyMethodName: string;
     FSpyOriginalValue: TGocciaValue;
@@ -88,6 +88,7 @@ uses
 
   GarbageCollector.Generic,
 
+  Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -97,12 +98,6 @@ const
   MOCK_DEFAULT_NAME = 'mock';
   RESULT_TYPE_RETURN = 'return';
   RESULT_TYPE_THROW = 'throw';
-  PROP_TYPE = 'type';
-  PROP_VALUE = 'value';
-  PROP_CALLS = 'calls';
-  PROP_RESULTS = 'results';
-  PROP_INSTANCES = 'instances';
-  PROP_LAST_CALL = 'lastCall';
 
 { TGocciaMockFunctionValue }
 
@@ -114,8 +109,8 @@ begin
   FCalls := TGocciaValueList.Create(False);
   FResults := TGocciaValueList.Create(False);
   FInstances := TGocciaValueList.Create(False);
-  FImplementationOnce := TGocciaValueList.Create(False);
-  FReturnValuesOnce := TGocciaValueList.Create(False);
+  FOnceQueue := TGocciaValueList.Create(False);
+  SetLength(FOnceIsImpl, 0);
   FImplementation := AImplementation;
   FHasDefaultReturnValue := False;
   FDefaultReturnValue := nil;
@@ -157,8 +152,7 @@ begin
   FCalls.Free;
   FResults.Free;
   FInstances.Free;
-  FImplementationOnce.Free;
-  FReturnValuesOnce.Free;
+  FOnceQueue.Free;
   inherited;
 end;
 
@@ -298,40 +292,44 @@ begin
   InvalidateMockObject;
 
   // Determine what to execute:
-  // 1. One-shot implementation (FIFO)
-  if FImplementationOnce.Count > 0 then
+  // 1. One-shot queue (implementations and return values share a single FIFO)
+  if FOnceQueue.Count > 0 then
   begin
-    ImplFn := FImplementationOnce[0];
-    FImplementationOnce.Delete(0);
-    try
-      Result := TGocciaFunctionBase(ImplFn).Call(AArguments, AThisValue);
+    if FOnceIsImpl[0] then
+    begin
+      // One-shot implementation
+      ImplFn := FOnceQueue[0];
+      FOnceQueue.Delete(0);
+      Delete(FOnceIsImpl, 0, 1);
+      try
+        Result := TGocciaFunctionBase(ImplFn).Call(AArguments, AThisValue);
+        FResults.Add(CreateResultEntry(RESULT_TYPE_RETURN, Result));
+      except
+        on E: TGocciaThrowValue do
+        begin
+          FResults.Add(CreateResultEntry(RESULT_TYPE_THROW, E.Value));
+          raise;
+        end;
+        on E: Exception do
+        begin
+          FResults.Add(CreateResultEntry(RESULT_TYPE_THROW,
+            TGocciaStringLiteralValue.Create(E.Message)));
+          raise;
+        end;
+      end;
+    end
+    else
+    begin
+      // One-shot return value
+      Result := FOnceQueue[0];
+      FOnceQueue.Delete(0);
+      Delete(FOnceIsImpl, 0, 1);
       FResults.Add(CreateResultEntry(RESULT_TYPE_RETURN, Result));
-    except
-      on E: TGocciaThrowValue do
-      begin
-        FResults.Add(CreateResultEntry(RESULT_TYPE_THROW, E.Value));
-        raise;
-      end;
-      on E: Exception do
-      begin
-        FResults.Add(CreateResultEntry(RESULT_TYPE_THROW,
-          TGocciaStringLiteralValue.Create(E.Message)));
-        raise;
-      end;
     end;
     Exit;
   end;
 
-  // 2. One-shot return value (FIFO)
-  if FReturnValuesOnce.Count > 0 then
-  begin
-    Result := FReturnValuesOnce[0];
-    FReturnValuesOnce.Delete(0);
-    FResults.Add(CreateResultEntry(RESULT_TYPE_RETURN, Result));
-    Exit;
-  end;
-
-  // 3. Permanent implementation
+  // 2. Permanent implementation
   if Assigned(FImplementation) and (FImplementation is TGocciaFunctionBase) then
   begin
     try
@@ -353,7 +351,7 @@ begin
     Exit;
   end;
 
-  // 4. Default return value
+  // 3. Default return value
   if FHasDefaultReturnValue then
   begin
     Result := FDefaultReturnValue;
@@ -361,7 +359,7 @@ begin
     Exit;
   end;
 
-  // 5. Return undefined
+  // 4. Return undefined
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   FResults.Add(CreateResultEntry(RESULT_TYPE_RETURN, Result));
 end;
@@ -385,13 +383,9 @@ begin
     if Assigned(FInstances[I]) then
       FInstances[I].MarkReferences;
 
-  for I := 0 to FImplementationOnce.Count - 1 do
-    if Assigned(FImplementationOnce[I]) then
-      FImplementationOnce[I].MarkReferences;
-
-  for I := 0 to FReturnValuesOnce.Count - 1 do
-    if Assigned(FReturnValuesOnce[I]) then
-      FReturnValuesOnce[I].MarkReferences;
+  for I := 0 to FOnceQueue.Count - 1 do
+    if Assigned(FOnceQueue[I]) then
+      FOnceQueue[I].MarkReferences;
 
   if Assigned(FImplementation) then
     FImplementation.MarkReferences;
@@ -426,9 +420,16 @@ end;
 function TGocciaMockFunctionValue.DoMockImplementationOnce(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Len: Integer;
 begin
   if (AArgs.Length > 0) and (AArgs.GetElement(0) is TGocciaFunctionBase) then
-    FImplementationOnce.Add(AArgs.GetElement(0));
+  begin
+    FOnceQueue.Add(AArgs.GetElement(0));
+    Len := Length(FOnceIsImpl);
+    SetLength(FOnceIsImpl, Len + 1);
+    FOnceIsImpl[Len] := True;
+  end;
 
   Result := Self;
 end;
@@ -453,11 +454,17 @@ end;
 function TGocciaMockFunctionValue.DoMockReturnValueOnce(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Len: Integer;
 begin
   if AArgs.Length > 0 then
-    FReturnValuesOnce.Add(AArgs.GetElement(0))
+    FOnceQueue.Add(AArgs.GetElement(0))
   else
-    FReturnValuesOnce.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+    FOnceQueue.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+
+  Len := Length(FOnceIsImpl);
+  SetLength(FOnceIsImpl, Len + 1);
+  FOnceIsImpl[Len] := False;
 
   Result := Self;
 end;
@@ -482,8 +489,8 @@ begin
   FCalls.Clear;
   FResults.Clear;
   FInstances.Clear;
-  FImplementationOnce.Clear;
-  FReturnValuesOnce.Clear;
+  FOnceQueue.Clear;
+  SetLength(FOnceIsImpl, 0);
   FImplementation := nil;
   FDefaultReturnValue := nil;
   FHasDefaultReturnValue := False;
