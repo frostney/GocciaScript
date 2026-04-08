@@ -112,3 +112,15 @@ int round_f64(double value) {
 double index_scale(int index, double scale, int offset) {
   return (index + offset) * scale;
 }
+
+double mixed5(int a, double b, int c, double d, int e) {
+  return a + b + c + d + e;
+}
+
+double mixed6(int a, double b, int c, double d, int e, double f) {
+  return a + b + c + d + e + f;
+}
+
+double mixed8(int a, double b, int c, double d, int e, double f, int g, double h) {
+  return a + b + c + d + e + f + g + h;
+}

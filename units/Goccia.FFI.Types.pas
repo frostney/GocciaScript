@@ -18,12 +18,9 @@ type
     fftCString
   );
 
-  // Argument class for homogeneous signatures (all args same ABI class).
-  // facMixed indicates a per-position int/double mix (bitmask dispatch).
   TGocciaFFIArgClass = (facInteger, facSingle, facDouble, facMixed);
   TGocciaFFIReturnClass = (frcVoid, frcInteger, frcSingle, frcDouble);
 
-  // Per-argument slot — carries the native value in the matching union field.
   TGocciaFFISlot = record
     case Integer of
       0: (AsInt: PtrInt);
@@ -36,8 +33,6 @@ type
     ReturnType: TGocciaFFIType;
     ArgCount: Integer;
     ArgClass: TGocciaFFIArgClass;
-    // Per-position bitmask for facMixed: bit I = 1 means arg I is Double,
-    // bit I = 0 means arg I is PtrInt. Only valid when ArgClass = facMixed.
     ArgBitmask: Integer;
     ReturnClass: TGocciaFFIReturnClass;
   end;
@@ -49,9 +44,32 @@ type
       2: (AsDouble: Double);
   end;
 
+  // Call state record for the assembly trampolines (64-bit only).
+  // Pascal fills the arrays; the asm stub loads them into registers and calls.
+  // Layout must have deterministic offsets — see constants below.
+  {$PUSH}{$PACKRECORDS 8}
+  TGocciaFFICallState = record
+    FuncPtr:  CodePointer;              // offset   0
+    GprCount: Integer;                  // offset   8
+    FprCount: Integer;                  // offset  12
+    Gpr:      array[0..7] of PtrInt;    // offset  16  (8 x 8 = 64 bytes)
+    Fpr:      array[0..7] of Double;    // offset  80  (8 x 8 = 64 bytes)
+    RetInt:   PtrInt;                   // offset 144
+    RetFloat: Double;                   // offset 152
+  end;
+  {$POP}
+
 const
   MAX_FFI_ARGS = 8;
-  MAX_FFI_MIXED_ARGS = 4;
+
+  // Offset constants for the assembly trampolines
+  FFI_STATE_FUNC_PTR  = 0;
+  FFI_STATE_GPR_COUNT = 8;
+  FFI_STATE_FPR_COUNT = 12;
+  FFI_STATE_GPR       = 16;
+  FFI_STATE_FPR       = 80;
+  FFI_STATE_RET_INT   = 144;
+  FFI_STATE_RET_FLOAT = 152;
 
   FFI_TYPE_VOID    = 'void';
   FFI_TYPE_BOOL    = 'bool';
@@ -92,7 +110,7 @@ begin
   else if AName = FFI_TYPE_POINTER then Result := fftPointer
   else if AName = FFI_TYPE_CSTRING then Result := fftCString
   else
-    Result := fftVoid; // Caller must check for unknown types
+    Result := fftVoid;
 end;
 
 function FFITypeToArgClass(const AType: TGocciaFFIType): TGocciaFFIArgClass;
@@ -153,7 +171,6 @@ begin
     Exit;
   end;
 
-  // Classify what arg types are present
   HasInteger := False;
   HasSingle := False;
   HasDouble := False;
@@ -164,7 +181,6 @@ begin
       facDouble:  HasDouble := True;
     end;
 
-  // All-homogeneous cases
   if HasInteger and not HasSingle and not HasDouble then
   begin
     ASignature.ArgClass := facInteger;
@@ -181,22 +197,19 @@ begin
     Exit;
   end;
 
-  // Mixed: only integer + double is supported (f32 cannot mix)
   if HasSingle then
   begin
     Result := 'f32 arguments cannot be mixed with other types. Use f64 instead, or keep all arguments f32';
     Exit;
   end;
 
-  // Mixed integer + double
-  if ASignature.ArgCount > MAX_FFI_MIXED_ARGS then
-  begin
-    Result := 'Mixed integer/float signatures support a maximum of ' +
-      IntToStr(MAX_FFI_MIXED_ARGS) + ' arguments';
-    Exit;
-  end;
+  // Mixed integer + double — supported via assembly trampoline on 64-bit,
+  // not supported on 32-bit (no register split on cdecl stack ABI)
+  {$IFNDEF CPU64}
+  Result := 'Mixed integer/float signatures are not supported on 32-bit platforms';
+  Exit;
+  {$ENDIF}
 
-  // Build per-position bitmask: bit I = 1 means Double
   Bitmask := 0;
   for I := 0 to ASignature.ArgCount - 1 do
     if FFITypeToArgClass(ASignature.ArgTypes[I]) = facDouble then

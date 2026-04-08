@@ -93,12 +93,15 @@ var
   IntArgs: array of PtrInt;
   SingleArgs: array of Single;
   DoubleArgs: array of Double;
-  Slots: array of TGocciaFFISlot;
   TempStrings: array of AnsiString;
   I, TempCount: Integer;
   ArgValue: TGocciaValue;
   NumValue: TGocciaNumberLiteralValue;
   CallResult: TGocciaFFIResult;
+  {$IFDEF CPU64}
+  State: TGocciaFFICallState;
+  GprIdx, FprIdx: Integer;
+  {$ENDIF}
 begin
   // Validate arg count
   if AArgs.Length < FSignature.ArgCount then
@@ -110,7 +113,6 @@ begin
   SetLength(IntArgs, 0);
   SetLength(SingleArgs, 0);
   SetLength(DoubleArgs, 0);
-  SetLength(Slots, 0);
   TempCount := 0;
 
   case FSignature.ArgClass of
@@ -208,7 +210,13 @@ begin
     end;
     facMixed:
     begin
-      SetLength(Slots, FSignature.ArgCount);
+      {$IFDEF CPU64}
+      // Fill TGocciaFFICallState with separate GPR/FPR counters and
+      // call the assembly trampoline directly
+      FillChar(State, SizeOf(State), 0);
+      State.FuncPtr := FSymbol;
+      GprIdx := 0;
+      FprIdx := 0;
       SetLength(TempStrings, FSignature.ArgCount);
       for I := 0 to FSignature.ArgCount - 1 do
       begin
@@ -216,65 +224,58 @@ begin
         if FFITypeToArgClass(FSignature.ArgTypes[I]) = facDouble then
         begin
           NumValue := ArgValue.ToNumberLiteral;
-          Slots[I].AsDouble := NumValue.Value;
+          {$IFDEF MSWINDOWS}
+          // Win64: positional — double goes in both Gpr[I] and Fpr[I]
+          State.Fpr[I] := NumValue.Value;
+          Move(State.Fpr[I], State.Gpr[I], SizeOf(Double));
+          {$ELSE}
+          // System V / AArch64: separate counter
+          State.Fpr[FprIdx] := NumValue.Value;
+          Inc(FprIdx);
+          {$ENDIF}
         end
         else
         begin
-          // Integer-class argument — same marshalling as facInteger
+          // Integer-class argument
           case FSignature.ArgTypes[I] of
             fftBool:
               if ArgValue.ToBooleanLiteral.Value then
-                Slots[I].AsInt := 1
+                {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := 1
               else
-                Slots[I].AsInt := 0;
+                {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := 0;
             fftI8, fftI16, fftI32:
             begin
               NumValue := ArgValue.ToNumberLiteral;
-              Slots[I].AsInt := PtrInt(Trunc(NumValue.Value));
+              {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(Trunc(NumValue.Value));
             end;
             fftI64:
             begin
               NumValue := ArgValue.ToNumberLiteral;
-              Slots[I].AsInt := PtrInt(Int64(Trunc(NumValue.Value)));
+              {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(Int64(Trunc(NumValue.Value)));
             end;
             fftU8, fftU16, fftU32:
             begin
               NumValue := ArgValue.ToNumberLiteral;
-              Slots[I].AsInt := PtrInt(PtrUInt(Trunc(NumValue.Value)));
+              {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(PtrUInt(Trunc(NumValue.Value)));
             end;
             fftU64:
             begin
               NumValue := ArgValue.ToNumberLiteral;
-              Slots[I].AsInt := PtrInt(QWord(Trunc(NumValue.Value)));
+              {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(QWord(Trunc(NumValue.Value)));
             end;
             fftPointer:
             begin
               if ArgValue is TGocciaFFIPointerValue then
-                Slots[I].AsInt := PtrInt(TGocciaFFIPointerValue(ArgValue).Address)
+                {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(TGocciaFFIPointerValue(ArgValue).Address)
               else if ArgValue is TGocciaArrayBufferValue then
               begin
                 if Length(TGocciaArrayBufferValue(ArgValue).Data) = 0 then
-                  Slots[I].AsInt := 0
+                  {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := 0
                 else
-                  Slots[I].AsInt := PtrInt(@TGocciaArrayBufferValue(ArgValue).Data[0]);
-              end
-              else if ArgValue is TGocciaSharedArrayBufferValue then
-              begin
-                if Length(TGocciaSharedArrayBufferValue(ArgValue).Data) = 0 then
-                  Slots[I].AsInt := 0
-                else
-                  Slots[I].AsInt := PtrInt(@TGocciaSharedArrayBufferValue(ArgValue).Data[0]);
-              end
-              else if ArgValue is TGocciaTypedArrayValue then
-              begin
-                if Length(TGocciaTypedArrayValue(ArgValue).BufferData) = 0 then
-                  Slots[I].AsInt := 0
-                else
-                  Slots[I].AsInt := PtrInt(@TGocciaTypedArrayValue(ArgValue).BufferData[
-                    TGocciaTypedArrayValue(ArgValue).ByteOffset]);
+                  {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(@TGocciaArrayBufferValue(ArgValue).Data[0]);
               end
               else if ArgValue is TGocciaNullLiteralValue then
-                Slots[I].AsInt := 0
+                {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := 0
               else
                 ThrowTypeError('FFI argument ' + IntToStr(I) +
                   ' must be an ArrayBuffer, TypedArray, FFIPointer, or null');
@@ -282,19 +283,29 @@ begin
             fftCString:
             begin
               TempStrings[TempCount] := AnsiString(ArgValue.ToStringLiteral.Value);
-              Slots[I].AsInt := PtrInt(PAnsiChar(TempStrings[TempCount]));
+              {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := PtrInt(PAnsiChar(TempStrings[TempCount]));
               Inc(TempCount);
             end;
           end;
+          {$IFNDEF MSWINDOWS}
+          Inc(GprIdx);
+          {$ENDIF}
         end;
       end;
+      State.GprCount := GprIdx;
+      State.FprCount := FprIdx;
+      FFITrampolineCall(State);
+      // Convert trampoline results to CallResult
+      CallResult.AsInt := State.RetInt;
+      CallResult.AsDouble := State.RetFloat;
+      {$ENDIF}
     end;
   end;
 
-  // Dispatch the call
-  FFIDispatchCall(FSymbol, FSignature.ArgCount, FSignature.ArgClass,
-    FSignature.ArgBitmask, FSignature.ReturnClass, IntArgs, SingleArgs,
-    DoubleArgs, Slots, CallResult);
+  // Dispatch the homogeneous call (mixed already dispatched above via trampoline)
+  if FSignature.ArgClass <> facMixed then
+    FFIDispatchCall(FSymbol, FSignature.ArgCount, FSignature.ArgClass,
+      FSignature.ReturnClass, IntArgs, SingleArgs, DoubleArgs, CallResult);
 
   // Unmarshal return value
   case FSignature.ReturnType of

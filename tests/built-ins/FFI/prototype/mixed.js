@@ -35,24 +35,36 @@ describe("FFILibrary.prototype.bind (mixed int/float signatures)", () => {
     expect(indexScale(0, 1.5, 10)).toBe(15); // (0 + 10) * 1.5
   });
 
-  test("mixed signatures no longer throw", () => {
-    // This used to throw TypeError — now it works
-    const scale = lib.bind("scale_f64", { args: ["i32", "f64"], returns: "f64" });
-    expect(typeof scale).toBe("function");
+  test("calls a 5-arg mixed function", () => {
+    const m5 = lib.bind("mixed5", {
+      args: ["i32", "f64", "i32", "f64", "i32"],
+      returns: "f64",
+    });
+    // a + b + c + d + e
+    expect(m5(1, 2.5, 3, 4.5, 5)).toBe(16);
+  });
+
+  test("calls a 6-arg mixed function", () => {
+    const m6 = lib.bind("mixed6", {
+      args: ["i32", "f64", "i32", "f64", "i32", "f64"],
+      returns: "f64",
+    });
+    // a + b + c + d + e + f
+    expect(m6(1, 2.0, 3, 4.0, 5, 6.0)).toBe(21);
+  });
+
+  test("calls an 8-arg mixed function", () => {
+    const m8 = lib.bind("mixed8", {
+      args: ["i32", "f64", "i32", "f64", "i32", "f64", "i32", "f64"],
+      returns: "f64",
+    });
+    // a + b + c + d + e + f + g + h
+    expect(m8(1, 2.0, 3, 4.0, 5, 6.0, 7, 8.0)).toBe(36);
   });
 
   test("f32 mixing still throws", () => {
     expect(() =>
       lib.bind("get_answer", { args: ["i32", "f32"], returns: "i32" })
-    ).toThrow(TypeError);
-  });
-
-  test("mixed signatures over 4 args throw", () => {
-    expect(() =>
-      lib.bind("get_answer", {
-        args: ["i32", "f64", "i32", "f64", "i32"],
-        returns: "i32",
-      })
     ).toThrow(TypeError);
   });
 });
