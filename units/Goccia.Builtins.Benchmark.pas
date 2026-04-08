@@ -83,7 +83,6 @@ uses
 
   Goccia.MicrotaskQueue,
   Goccia.Values.ArrayValue,
-  Goccia.Values.ClassHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue;
 

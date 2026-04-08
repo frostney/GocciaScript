@@ -51,8 +51,7 @@ uses
   Goccia.Bytecode,
   Goccia.Bytecode.Debug,
   Goccia.Compiler.Expressions,
-  Goccia.Compiler.Statements,
-  Goccia.Constants.ConstructorNames;
+  Goccia.Compiler.Statements;
 
 { TGocciaCompiler }
 

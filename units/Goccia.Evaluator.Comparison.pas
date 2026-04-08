@@ -80,11 +80,6 @@ function IsDeepEqualInternal(const AActual, AExpected: TGocciaValue;
 function IsPartialDeepEqualInternal(const AActual, AExpected: TGocciaValue;
   var AComparedPairs: TComparedValuePairArray): Boolean; forward;
 
-function IsNegativeZero(const AValue: TGocciaNumberLiteralValue): Boolean; inline;
-begin
-  Result := AValue.IsNegativeZero;
-end;
-
 function IsStrictEqual(const ALeft, ARight: TGocciaValue): Boolean;
 begin
   if (ALeft is TGocciaUndefinedLiteralValue) and (ARight is TGocciaUndefinedLiteralValue) then
@@ -191,7 +186,7 @@ begin
     if (TGocciaNumberLiteralValue(ALeft).Value = 0) and (TGocciaNumberLiteralValue(ARight).Value = 0) then
     begin
       // Use our safe signed zero detection
-      Result := IsNegativeZero(TGocciaNumberLiteralValue(ALeft)) = IsNegativeZero(TGocciaNumberLiteralValue(ARight));
+      Result := TGocciaNumberLiteralValue(ALeft).IsNegativeZero = TGocciaNumberLiteralValue(ARight).IsNegativeZero;
       Exit;
     end;
 
@@ -370,11 +365,8 @@ begin
     Exit;
   end;
 
-  // Handle objects (but not arrays/sets/maps which inherit from TGocciaObjectValue)
-  if (AActual is TGocciaObjectValue) and (AExpected is TGocciaObjectValue) and
-     not (AActual is TGocciaArrayValue) and not (AExpected is TGocciaArrayValue) and
-     not (AActual is TGocciaSetValue) and not (AExpected is TGocciaSetValue) and
-     not (AActual is TGocciaMapValue) and not (AExpected is TGocciaMapValue) then
+  // Handle objects (arrays/sets/maps already handled by earlier branches)
+  if (AActual is TGocciaObjectValue) and (AExpected is TGocciaObjectValue) then
   begin
     ActualObj := TGocciaObjectValue(AActual);
     ExpectedObj := TGocciaObjectValue(AExpected);
@@ -448,10 +440,7 @@ begin
     Exit;
   end;
 
-  if (AActual is TGocciaObjectValue) and (AExpected is TGocciaObjectValue) and
-     not (AActual is TGocciaArrayValue) and not (AExpected is TGocciaArrayValue) and
-     not (AActual is TGocciaSetValue) and not (AExpected is TGocciaSetValue) and
-     not (AActual is TGocciaMapValue) and not (AExpected is TGocciaMapValue) then
+  if (AActual is TGocciaObjectValue) and (AExpected is TGocciaObjectValue) then
   begin
     ActualObj := TGocciaObjectValue(AActual);
     ExpectedObj := TGocciaObjectValue(AExpected);

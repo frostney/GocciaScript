@@ -58,14 +58,12 @@ type
     function Contains(const AName: string): Boolean; inline;
     function GetOwnBindingNames: TGocciaStringArray; inline;
 
-    // Walk the parent chain to find the nearest this / owning class / superclass
-    function FindThisValue: TGocciaValue;
+    // Walk the parent chain to find the nearest owning class / superclass
     function FindOwningClass: TGocciaValue;
     function FindSuperClass: TGocciaValue;
 
     property Parent: TGocciaScope read FParent;
     property ThisValue: TGocciaValue read FThisValue write FThisValue;
-    function GetThisProperty(const AName: string): TGocciaValue;
     property ScopeKind: TGocciaScopeKind read FScopeKind;
     property CustomLabel: string read FCustomLabel;
     property OnError: TGocciaThrowErrorCallback read FOnError write FOnError;
@@ -138,9 +136,7 @@ uses
   GarbageCollector.Generic,
 
   Goccia.Error,
-  Goccia.Keywords.Reserved,
-  Goccia.Values.ClassHelper,
-  Goccia.Values.ObjectValue;
+  Goccia.Keywords.Reserved;
 
 { TGocciaScope }
 
@@ -192,20 +188,6 @@ end;
 
 function TGocciaScope.GetSuperClass: TGocciaValue;
 begin
-  Result := nil;
-end;
-
-function TGocciaScope.FindThisValue: TGocciaValue;
-var
-  Current: TGocciaScope;
-begin
-  Current := Self;
-  while Assigned(Current) do
-  begin
-    Result := Current.GetThisValue;
-    if Assigned(Result) then Exit;
-    Current := Current.FParent;
-  end;
   Result := nil;
 end;
 
@@ -354,14 +336,6 @@ begin
     Result := FThisValue
   else
     Result := GetValue(AName);
-end;
-
-function TGocciaScope.GetThisProperty(const AName: string): TGocciaValue;
-begin
-  if (ThisValue is TGocciaObjectValue) then
-    Result := TGocciaObjectValue(ThisValue).GetProperty(AName)
-  else
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaScope.ContainsOwnLexicalBinding(const AName: string): Boolean; inline;

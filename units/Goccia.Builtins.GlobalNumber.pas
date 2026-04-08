@@ -35,7 +35,6 @@ uses
   SysUtils,
 
   Goccia.Arguments.Validator,
-  Goccia.Values.ClassHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor;
 

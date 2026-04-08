@@ -46,7 +46,6 @@ type
     constructor Create;
     destructor Destroy; override;
 
-    function AllocateObject(const AObject: TGCManagedObject): TGCManagedObject;
     procedure RegisterObject(const AObject: TGCManagedObject);
     procedure UnregisterObject(const AObject: TGCManagedObject);
     procedure PinObject(const AObject: TGCManagedObject);
@@ -153,15 +152,6 @@ begin
   FRootObjects.Free;
   FActiveRootStack.Free;
   inherited;
-end;
-
-function TGarbageCollector.AllocateObject(
-  const AObject: TGCManagedObject): TGCManagedObject;
-begin
-  AObject.GCIndex := FManagedObjects.Count;
-  FManagedObjects.Add(AObject);
-  Inc(FAllocationsSinceLastGC);
-  Result := AObject;
 end;
 
 procedure TGarbageCollector.RegisterObject(

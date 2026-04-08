@@ -66,7 +66,6 @@ uses
   Goccia.MicrotaskQueue,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
-  Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
   Goccia.Values.MapValue,

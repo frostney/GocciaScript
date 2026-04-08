@@ -131,7 +131,6 @@ procedure ExposeSharedPrototypeOnConstructor(const AShared: TObject;
 implementation
 
 uses
-  Goccia.Constants.PropertyNames,
   Goccia.SharedPrototype,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,

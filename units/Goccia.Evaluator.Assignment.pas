@@ -10,9 +10,6 @@ uses
   Goccia.Values.Primitives,
   Goccia.Values.SymbolValue;
 
-// Property definition with descriptor (falls back to SetProperty for non-objects)
-procedure DefinePropertyOnValue(const AObj: TGocciaValue; const APropName: string; const AValue: TGocciaValue);
-
 // Property assignment with error handling for non-objects
 procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
 
@@ -27,26 +24,14 @@ implementation
 
 uses
   Goccia.Evaluator.Arithmetic,
-  Goccia.Values.ArrayValue,
-  Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue;
 
-procedure DefinePropertyOnValue(const AObj: TGocciaValue; const APropName: string; const AValue: TGocciaValue);
-begin
-  if (AObj is TGocciaObjectValue) then
-    TGocciaObjectValue(AObj).DefineProperty(APropName,
-      TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]))
-  else
-    AObj.SetProperty(APropName, AValue);
-end;
-
 procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
 begin
-  if (AObj is TGocciaInstanceValue) or (AObj is TGocciaObjectValue) or
-     (AObj is TGocciaClassValue) or (AObj is TGocciaArrayValue) then
+  if (AObj is TGocciaObjectValue) or (AObj is TGocciaClassValue) then
     AObj.SetProperty(APropertyName, AValue)
   else if Assigned(AOnError) then
     // AOnError is not invoked here — ThrowTypeError must be used because this is

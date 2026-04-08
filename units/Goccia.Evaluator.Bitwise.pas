@@ -17,9 +17,6 @@ function EvaluateBitwiseNot(const AOperand: TGocciaValue): TGocciaValue; inline;
 
 implementation
 
-uses
-  Goccia.Values.ClassHelper;
-
 function EvaluateBitwiseAnd(const ALeft, ARight: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaNumberLiteralValue.Create(Trunc(ALeft.ToNumberLiteral.Value) and Trunc(ARight.ToNumberLiteral.Value));

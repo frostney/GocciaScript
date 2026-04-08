@@ -22,7 +22,6 @@ uses
   Math,
 
   Goccia.Evaluator.Bitwise,
-  Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
   Goccia.Values.SymbolValue,
   Goccia.Values.ToPrimitive;
