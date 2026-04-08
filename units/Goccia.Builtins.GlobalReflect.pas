@@ -312,10 +312,15 @@ begin
       Obj.DefineSymbolProperty(SymbolKey, Descriptor)
     else
       Obj.DefineProperty(PropertyName, Descriptor);
+    // DefineProperty/DefineSymbolProperty takes ownership on success
+    Descriptor := nil;
     Result := TGocciaBooleanLiteralValue.TrueValue;
   except
     on TGocciaThrowValue do
+    begin
+      Descriptor.Free;
       Result := TGocciaBooleanLiteralValue.FalseValue;
+    end;
   end;
 end;
 
