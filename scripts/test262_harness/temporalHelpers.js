@@ -10,10 +10,10 @@ const formatPropertyName = (propertyKey, objectName = "") => {
   if (typeof propertyKey === "symbol") {
     if (Symbol.keyFor(propertyKey) !== undefined) {
       return `${objectName}[Symbol.for('${Symbol.keyFor(propertyKey)}')]`;
-    } else if (propertyKey.description.startsWith("Symbol.")) {
+    } else if (propertyKey.description && propertyKey.description.startsWith("Symbol.")) {
       return `${objectName}[${propertyKey.description}]`;
     }
-    return `${objectName}[Symbol('${propertyKey.description}')]`;
+    return `${objectName}[Symbol('${propertyKey.description ?? ""}')]`;
   }
   if (typeof propertyKey === "string") {
     if (propertyKey !== String(Number(propertyKey))) {
@@ -304,7 +304,6 @@ const TemporalHelpers = {
     assert.throws(RangeError, () => checkFunc({}), "plain object");
 
     const expected = [
-      `get ${propertyName}.toString`,
       `call ${propertyName}.toString`,
     ];
     const actual = [];
@@ -323,7 +322,6 @@ const TemporalHelpers = {
     assert.throws(RangeError, () => checkFunc({}), "plain object");
 
     const expected = [
-      "get roundingIncrement.valueOf",
       "call roundingIncrement.valueOf",
     ];
     const actual = [];

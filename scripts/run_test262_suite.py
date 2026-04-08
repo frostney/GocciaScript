@@ -462,6 +462,7 @@ def evaluate_suite(
                     runner_cmd,
                     capture_output=True,
                     timeout=runner_timeout,
+                    check=False,
                 )
                 runner_output = (
                     process.stdout.decode("utf-8", errors="replace")
@@ -475,7 +476,18 @@ def evaluate_suite(
                 raw_json = json_output.read_bytes().decode("utf-8", errors="replace")
                 # Strip control characters that test262 tests may inject
                 clean_json = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw_json)
-                tr_results = json.loads(clean_json)
+                try:
+                    tr_results = json.loads(clean_json)
+                except json.JSONDecodeError as e:
+                    print(f"Warning: Failed to parse TestRunner JSON: {e}")
+                    summary["errors"] += len(batch_tests)
+                    for _, _, tid in batch_tests:
+                        results.append(
+                            {"id": tid, "status": "ERROR", "message": f"JSON parse error: {e}"}
+                        )
+                    tr_results = None
+                if tr_results is None:
+                    continue
                 tr_passed = int(tr_results.get("passed", 0))
                 tr_failed = int(tr_results.get("failed", 0))
                 tr_skipped = int(tr_results.get("skipped", 0))
