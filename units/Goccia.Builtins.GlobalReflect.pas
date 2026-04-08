@@ -340,16 +340,10 @@ begin
   // Step 3: Return ? target.[[Delete]](key)
   if PropKey is TGocciaSymbolValue then
   begin
-    // Symbol key deletion: check if symbol property exists and is configurable
-    if Obj.HasSymbolProperty(TGocciaSymbolValue(PropKey)) then
-    begin
-      if Obj.DeleteProperty(TGocciaSymbolValue(PropKey).Description) then
-        Result := TGocciaBooleanLiteralValue.TrueValue
-      else
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-    end
+    if Obj.DeleteSymbolProperty(TGocciaSymbolValue(PropKey)) then
+      Result := TGocciaBooleanLiteralValue.TrueValue
     else
-      Result := TGocciaBooleanLiteralValue.TrueValue;
+      Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
 
@@ -598,19 +592,16 @@ begin
   RequireObjectTarget(Target, 'Reflect.set');
 
   // Step 2: Let key be ? ToPropertyKey(propertyKey)
-  if PropKey is TGocciaSymbolValue then
-  begin
-    TGocciaObjectValue(Target).AssignSymbolProperty(
-      TGocciaSymbolValue(PropKey), Value);
-    Result := TGocciaBooleanLiteralValue.TrueValue;
-    Exit;
-  end;
-
-  PropertyName := PropKey.ToStringLiteral.Value;
-
   // Step 3-4: Return ? target.[[Set]](key, V, receiver)
   try
-    TGocciaObjectValue(Target).AssignProperty(PropertyName, Value);
+    if PropKey is TGocciaSymbolValue then
+      TGocciaObjectValue(Target).AssignSymbolProperty(
+        TGocciaSymbolValue(PropKey), Value)
+    else
+    begin
+      PropertyName := PropKey.ToStringLiteral.Value;
+      TGocciaObjectValue(Target).AssignProperty(PropertyName, Value);
+    end;
     Result := TGocciaBooleanLiteralValue.TrueValue;
   except
     on TGocciaThrowValue do
