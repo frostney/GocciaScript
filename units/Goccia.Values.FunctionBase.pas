@@ -94,11 +94,13 @@ uses
 
   GarbageCollector.Generic,
 
+  Goccia.Arguments.ArrayLike,
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
   Goccia.Error,
   Goccia.ObjectModel,
   Goccia.Values.ArrayValue,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
 
 { TGocciaFunctionBase }
@@ -297,74 +299,58 @@ begin
   end;
 end;
 
+// ES2026 §20.2.3.1 Function.prototype.apply(thisArg, argArray)
 function TGocciaFunctionSharedPrototype.FunctionApply(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   CallArgs: TGocciaArgumentsCollection;
   NewThisValue: TGocciaValue;
-  I: Integer;
+  ArgArray: TGocciaValue;
   ArrVal: TGocciaArrayValue;
-  ArrayObj: TGocciaObjectValue;
-  LengthProp: TGocciaValue;
-  ArrayLength: Integer;
 begin
+  // Step 1: Perform ? RequireObjectCoercible(this)
   if not AThisValue.IsCallable then
-    raise TGocciaError.Create('Function.prototype.apply called on non-function', 0, 0, '', nil);
+    ThrowTypeError('Function.prototype.apply called on non-function');
 
+  // thisArg
   if AArgs.Length > 0 then
     NewThisValue := AArgs.GetElement(0)
   else
     NewThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  CallArgs := nil;
-  try
-    if AArgs.Length > 1 then
-    begin
-      // Fast path: direct element access for TGocciaArrayValue
-      if AArgs.GetElement(1) is TGocciaArrayValue then
-      begin
-        ArrVal := TGocciaArrayValue(AArgs.GetElement(1));
-        case ArrVal.Elements.Count of
-          0:
-            Exit(TGocciaFunctionBase(AThisValue).CallNoArgs(NewThisValue));
-          1:
-            Exit(TGocciaFunctionBase(AThisValue).CallOneArg(ArrVal.Elements[0], NewThisValue));
-          2:
-            Exit(TGocciaFunctionBase(AThisValue).CallTwoArgs(ArrVal.Elements[0],
-              ArrVal.Elements[1], NewThisValue));
-          3:
-            Exit(TGocciaFunctionBase(AThisValue).CallThreeArgs(ArrVal.Elements[0],
-              ArrVal.Elements[1], ArrVal.Elements[2], NewThisValue));
-        end;
-        CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(ArrVal.Elements.Count);
-        for I := 0 to ArrVal.Elements.Count - 1 do
-          CallArgs.Add(ArrVal.Elements[I]);
-      end
-      // Generic path: array-like objects with length + numeric indices
-      else if AArgs.GetElement(1) is TGocciaObjectValue then
-      begin
-        ArrayObj := TGocciaObjectValue(AArgs.GetElement(1));
-        LengthProp := ArrayObj.GetProperty(PROP_LENGTH);
-        if not (LengthProp is TGocciaUndefinedLiteralValue) then
-        begin
-          ArrayLength := Trunc((LengthProp as TGocciaNumberLiteralValue).Value);
-          CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(ArrayLength);
-          for I := 0 to ArrayLength - 1 do
-            CallArgs.Add(ArrayObj.GetProperty(IntToStr(I)));
-        end;
-      end
-      else if not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) and not (AArgs.GetElement(1) is TGocciaNullLiteralValue) then
-      begin
-        raise TGocciaError.Create('Function.prototype.apply: second argument must be an array', 0, 0, '', nil);
-      end;
+  // Step 2: If argArray is undefined or null, return F.[[Call]](thisArg, <<>>)
+  if AArgs.Length <= 1 then
+    Exit(TGocciaFunctionBase(AThisValue).CallNoArgs(NewThisValue));
+
+  ArgArray := AArgs.GetElement(1);
+  if (ArgArray is TGocciaUndefinedLiteralValue) or
+     (ArgArray is TGocciaNullLiteralValue) then
+    Exit(TGocciaFunctionBase(AThisValue).CallNoArgs(NewThisValue));
+
+  // Fast path: small arrays use specialized call methods
+  if ArgArray is TGocciaArrayValue then
+  begin
+    ArrVal := TGocciaArrayValue(ArgArray);
+    case ArrVal.Elements.Count of
+      0:
+        Exit(TGocciaFunctionBase(AThisValue).CallNoArgs(NewThisValue));
+      1:
+        Exit(TGocciaFunctionBase(AThisValue).CallOneArg(ArrVal.Elements[0], NewThisValue));
+      2:
+        Exit(TGocciaFunctionBase(AThisValue).CallTwoArgs(ArrVal.Elements[0],
+          ArrVal.Elements[1], NewThisValue));
+      3:
+        Exit(TGocciaFunctionBase(AThisValue).CallThreeArgs(ArrVal.Elements[0],
+          ArrVal.Elements[1], ArrVal.Elements[2], NewThisValue));
     end;
+  end;
 
-    if not Assigned(CallArgs) then
-      CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(0);
-
+  // Step 3: Let argList be ? CreateListFromArrayLike(argArray)
+  CallArgs := CreateListFromArrayLike(ArgArray, 'Function.prototype.apply');
+  try
+    // Step 4: Return ? Call(func, thisArg, argList)
     Result := TGocciaFunctionBase(AThisValue).Call(CallArgs, NewThisValue);
   finally
-    if Assigned(CallArgs) then
-      CallArgs.Free;
+    CallArgs.Free;
   end;
 end;
 

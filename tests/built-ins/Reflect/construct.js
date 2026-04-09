@@ -52,9 +52,48 @@ describe("Reflect.construct", () => {
     expect(() => Reflect.construct(Foo, [], () => {})).toThrow(TypeError);
   });
 
-  test("throws TypeError if argumentsList is not an array", () => {
+  test("works with array-like objects", () => {
+    class Point {
+      constructor(x, y) {
+        this.x = x;
+        this.y = y;
+      }
+    }
+    const arrayLike = { 0: 3, 1: 4, length: 2 };
+    const point = Reflect.construct(Point, arrayLike);
+    expect(point.x).toBe(3);
+    expect(point.y).toBe(4);
+    expect(point instanceof Point).toBe(true);
+  });
+
+  test("works with array-like object with zero length", () => {
+    class Empty {
+      constructor() {
+        this.value = "constructed";
+      }
+    }
+    const obj = Reflect.construct(Empty, { length: 0 });
+    expect(obj.value).toBe("constructed");
+  });
+
+  test("works with array-like object with missing indices", () => {
+    class Pair {
+      constructor(a, b) {
+        this.a = a;
+        this.b = b;
+      }
+    }
+    const arrayLike = { 0: "first", length: 2 };
+    const pair = Reflect.construct(Pair, arrayLike);
+    expect(pair.a).toBe("first");
+    expect(pair.b).toBe(undefined);
+  });
+
+  test("throws TypeError if argumentsList is not an object", () => {
     class Foo {}
     expect(() => Reflect.construct(Foo, "not-array")).toThrow(TypeError);
+    expect(() => Reflect.construct(Foo, 42)).toThrow(TypeError);
+    expect(() => Reflect.construct(Foo, true)).toThrow(TypeError);
   });
 
   test("newTarget prototype is visible during constructor execution", () => {

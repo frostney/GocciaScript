@@ -33,8 +33,35 @@ describe("Reflect.apply", () => {
     expect(() => Reflect.apply("string", undefined, [])).toThrow(TypeError);
   });
 
-  test("throws TypeError if argumentsList is not an array", () => {
+  test("works with array-like objects", () => {
+    const fn = (a, b, c) => a + b + c;
+    const arrayLike = { 0: 10, 1: 20, 2: 30, length: 3 };
+    expect(Reflect.apply(fn, undefined, arrayLike)).toBe(60);
+  });
+
+  test("works with array-like object with zero length", () => {
+    const fn = () => "no-args";
+    expect(Reflect.apply(fn, undefined, { length: 0 })).toBe("no-args");
+  });
+
+  test("works with array-like object with missing indices", () => {
+    const fn = (a, b) => [a, b];
+    const arrayLike = { 0: "x", length: 2 };
+    const result = Reflect.apply(fn, undefined, arrayLike);
+    expect(result[0]).toBe("x");
+    expect(result[1]).toBe(undefined);
+  });
+
+  test("works with array-like object with string length", () => {
+    const fn = (a) => a;
+    const arrayLike = { 0: "hello", length: "1" };
+    expect(Reflect.apply(fn, undefined, arrayLike)).toBe("hello");
+  });
+
+  test("throws TypeError if argumentsList is not an object", () => {
     const fn = () => {};
     expect(() => Reflect.apply(fn, undefined, "not-array")).toThrow(TypeError);
+    expect(() => Reflect.apply(fn, undefined, 42)).toThrow(TypeError);
+    expect(() => Reflect.apply(fn, undefined, true)).toThrow(TypeError);
   });
 });
