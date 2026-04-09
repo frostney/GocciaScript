@@ -191,16 +191,13 @@ end;
 function TGocciaGlobalReflect.ReflectDefineProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Target, PropKey, Attrs: TGocciaValue;
-  Obj, DescriptorObject: TGocciaObjectValue;
+  Obj: TGocciaObjectValue;
+  DescriptorObject: TGocciaObjectValue;
   PropertyName: string;
   Descriptor: TGocciaPropertyDescriptor;
   ExistingDescriptor: TGocciaPropertyDescriptor;
-  Enumerable, Configurable, Writable: Boolean;
-  Value, Getter, Setter: TGocciaValue;
-  PropertyFlags: TPropertyFlags;
   IsSymbolKey: Boolean;
   SymbolKey: TGocciaSymbolValue;
-  HasValue, HasGet, HasSet: Boolean;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 3, 'Reflect.defineProperty', ThrowError);
 
@@ -235,76 +232,7 @@ begin
   end;
 
   // Step 3: Let desc be ? ToPropertyDescriptor(Attributes)
-  Enumerable := False;
-  Configurable := False;
-  Writable := False;
-  Value := nil;
-  Getter := nil;
-  Setter := nil;
-
-  if Assigned(ExistingDescriptor) then
-  begin
-    Enumerable := ExistingDescriptor.Enumerable;
-    Configurable := ExistingDescriptor.Configurable;
-    if ExistingDescriptor is TGocciaPropertyDescriptorData then
-    begin
-      Writable := ExistingDescriptor.Writable;
-      Value := TGocciaPropertyDescriptorData(ExistingDescriptor).Value;
-    end
-    else if ExistingDescriptor is TGocciaPropertyDescriptorAccessor then
-    begin
-      Getter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
-      Setter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
-    end;
-  end;
-
-  HasValue := DescriptorObject.HasProperty(PROP_VALUE);
-  HasGet := DescriptorObject.HasProperty(PROP_GET);
-  HasSet := DescriptorObject.HasProperty(PROP_SET);
-
-  if DescriptorObject.HasProperty(PROP_ENUMERABLE) then
-    Enumerable := DescriptorObject.GetProperty(PROP_ENUMERABLE).ToBooleanLiteral.Value;
-  if DescriptorObject.HasProperty(PROP_CONFIGURABLE) then
-    Configurable := DescriptorObject.GetProperty(PROP_CONFIGURABLE).ToBooleanLiteral.Value;
-  if DescriptorObject.HasProperty(PROP_WRITABLE) then
-    Writable := DescriptorObject.GetProperty(PROP_WRITABLE).ToBooleanLiteral.Value;
-  if HasValue then
-    Value := DescriptorObject.GetProperty(PROP_VALUE);
-  if HasGet then
-  begin
-    Getter := DescriptorObject.GetProperty(PROP_GET);
-    if not (Getter is TGocciaUndefinedLiteralValue) and not (Getter is TGocciaFunctionBase) then
-      ThrowTypeError('Reflect.defineProperty: getter must be a function or undefined');
-    if Getter is TGocciaUndefinedLiteralValue then
-      Getter := nil;
-  end;
-  if HasSet then
-  begin
-    Setter := DescriptorObject.GetProperty(PROP_SET);
-    if not (Setter is TGocciaUndefinedLiteralValue) and not (Setter is TGocciaFunctionBase) then
-      ThrowTypeError('Reflect.defineProperty: setter must be a function or undefined');
-    if Setter is TGocciaUndefinedLiteralValue then
-      Setter := nil;
-  end;
-
-  // ES2026 §6.2.5.5 ToPropertyDescriptor step 10: mixed data+accessor is invalid
-  if (HasValue or DescriptorObject.HasProperty(PROP_WRITABLE)) and (HasGet or HasSet) then
-    ThrowTypeError('Reflect.defineProperty: descriptor cannot have both accessor and data properties');
-
-  PropertyFlags := [];
-  if Enumerable then
-    Include(PropertyFlags, pfEnumerable);
-  if Configurable then
-    Include(PropertyFlags, pfConfigurable);
-  if Writable then
-    Include(PropertyFlags, pfWritable);
-
-  if HasValue or DescriptorObject.HasProperty(PROP_WRITABLE) or
-     (Assigned(ExistingDescriptor) and (ExistingDescriptor is TGocciaPropertyDescriptorData) and not HasGet and not HasSet) or
-     (not Assigned(ExistingDescriptor) and not HasGet and not HasSet) then
-    Descriptor := TGocciaPropertyDescriptorData.Create(Value, PropertyFlags)
-  else
-    Descriptor := TGocciaPropertyDescriptorAccessor.Create(Getter, Setter, PropertyFlags);
+  Descriptor := ToPropertyDescriptor(DescriptorObject, ExistingDescriptor);
 
   // Step 4: Return target.[[DefineOwnProperty]](key, desc) — returns boolean
   try

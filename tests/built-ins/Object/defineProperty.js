@@ -351,3 +351,84 @@ test("Object.defineProperty with empty object", () => {
   Object.defineProperty(obj, "empty", {});
   expect(obj.empty).toBeUndefined();
 });
+
+test("Object.defineProperty rejects mixed data and accessor descriptors", () => {
+  const obj = {};
+
+  // value + get is invalid
+  expect(() => {
+    Object.defineProperty(obj, "mixed1", {
+      value: 1,
+      get: () => 2,
+    });
+  }).toThrow(TypeError);
+
+  // value + set is invalid
+  expect(() => {
+    Object.defineProperty(obj, "mixed2", {
+      value: 1,
+      set: (v) => {},
+    });
+  }).toThrow(TypeError);
+
+  // writable + get is invalid
+  expect(() => {
+    Object.defineProperty(obj, "mixed3", {
+      writable: true,
+      get: () => 2,
+    });
+  }).toThrow(TypeError);
+
+  // writable + set is invalid
+  expect(() => {
+    Object.defineProperty(obj, "mixed4", {
+      writable: false,
+      set: (v) => {},
+    });
+  }).toThrow(TypeError);
+});
+
+test("Object.defineProperty rejects non-callable getter and setter", () => {
+  const obj = {};
+
+  // getter must be a function or undefined
+  expect(() => {
+    Object.defineProperty(obj, "badGet", {
+      get: 42,
+    });
+  }).toThrow(TypeError);
+
+  expect(() => {
+    Object.defineProperty(obj, "badGet2", {
+      get: "not a function",
+    });
+  }).toThrow(TypeError);
+
+  // setter must be a function or undefined
+  expect(() => {
+    Object.defineProperty(obj, "badSet", {
+      set: 42,
+    });
+  }).toThrow(TypeError);
+
+  expect(() => {
+    Object.defineProperty(obj, "badSet2", {
+      set: "not a function",
+    });
+  }).toThrow(TypeError);
+
+  // undefined getter/setter is allowed (getter-only or setter-only)
+  Object.defineProperty(obj, "getOnly", {
+    get: () => 99,
+    set: undefined,
+    configurable: true,
+  });
+  expect(obj.getOnly).toBe(99);
+
+  Object.defineProperty(obj, "setOnly", {
+    get: undefined,
+    set: (v) => {},
+    configurable: true,
+  });
+  expect(obj.setOnly).toBeUndefined();
+});
