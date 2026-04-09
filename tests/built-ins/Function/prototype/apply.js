@@ -79,6 +79,11 @@ describe("Function.prototype.apply", () => {
     expect(fn.apply(undefined, { 0: "ignored", length: "bar" })).toBe(0);
   });
 
+  test("throws RangeError for excessively large array-like length", () => {
+    const fn = () => {};
+    expect(() => fn.apply(undefined, { length: 2000000000 })).toThrow(RangeError);
+  });
+
   test("throws TypeError if argArray is not an object", () => {
     const fn = () => {};
     expect(() => fn.apply(undefined, "not-array")).toThrow(TypeError);

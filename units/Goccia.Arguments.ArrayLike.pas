@@ -24,6 +24,12 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue;
 
+const
+  // Ceiling for array-like argument lists. The ES spec caps ToLength at 2^53−1,
+  // but allocating that many elements is infeasible. This limit prevents
+  // pathological OOM from script-controlled length values like { length: 2e9 }.
+  MAX_ARGUMENTS_LIST_LENGTH = 1048576; // 2^20
+
 // ES2026 §7.3.18 CreateListFromArrayLike(obj [, elementTypes])
 function CreateListFromArrayLike(const AValue: TGocciaValue; const AMethodName: string): TGocciaArgumentsCollection;
 var
@@ -51,7 +57,6 @@ begin
   // ES2026 §7.3.18 step 2: Let len be ? LengthOfArrayLike(obj)
   // ES2026 §7.3.3 LengthOfArrayLike: ToLength(? Get(obj, "length"))
   // ES2026 §7.1.22 ToLength: NaN/negative → 0, spec caps at 2^53−1.
-  // Practical cap: MaxInt (Len is Integer); larger allocations are infeasible.
   ArrayObj := TGocciaObjectValue(AValue);
   LengthProp := ArrayObj.GetProperty(PROP_LENGTH);
   if not Assigned(LengthProp) or
@@ -69,6 +74,11 @@ begin
     else
       Len := Trunc(LengthValue);
   end;
+
+  // Guard against pathological lengths before allocating
+  if Len > MAX_ARGUMENTS_LIST_LENGTH then
+    ThrowRangeError(Format('%s: arguments list length %d exceeds maximum of %d',
+      [AMethodName, Len, MAX_ARGUMENTS_LIST_LENGTH]));
 
   // ES2026 §7.3.18 steps 3-5: Iterate and collect elements
   Result := TGocciaArgumentsCollection.CreateWithCapacity(Len);
