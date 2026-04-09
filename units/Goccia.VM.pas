@@ -378,6 +378,24 @@ begin
   Result := RegisterFloat(AValue);
 end;
 
+// Integer-only result: skips IsNaN/IsInfinite/Frac checks that VMNumberRegister
+// performs, since integer arithmetic on LongInt-range inputs cannot produce
+// NaN, Infinity, negative zero, or fractional results.
+// Uses implicit Double assignment (not Int64 * 1.0) to avoid AArch64 FPC 3.2.2
+// codegen bug where Int64 * 1.0 produces wrong results near LongInt boundaries.
+function VMIntResult(const AValue: Int64): TGocciaRegister; inline;
+var
+  FloatValue: Double;
+begin
+  if (AValue >= Low(LongInt)) and (AValue <= High(LongInt)) then
+    Result := RegisterInt(AValue)
+  else
+  begin
+    FloatValue := AValue;
+    Result := RegisterFloat(FloatValue);
+  end;
+end;
+
 function VMInfinityWithSign(const APositive: Boolean): TGocciaNumberLiteralValue; inline;
 begin
   if APositive then
@@ -3586,7 +3604,10 @@ begin
         end;
 
       OP_TO_PRIMITIVE:
-        SetRegisterFast(A, ToPrimitive(GetRegisterFast(B)));
+        if FRegisters[B].Kind <> grkObject then
+          FRegisters[A] := FRegisters[B]
+        else
+          SetRegisterFast(A, ToPrimitive(GetRegisterFast(B)));
 
       OP_LOAD_INT:
         FRegisters[A] := RegisterInt(DecodesBx(Instruction));
@@ -3648,7 +3669,7 @@ begin
       end;
 
       OP_JUMP_IF_TRUE:
-        if GetRegister(A).ToBooleanLiteral.Value then
+        if RegisterToBoolean(FRegisters[A]) then
         begin
           if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
             TGocciaCoverageTracker.Instance.RecordBranchHit(
@@ -3667,7 +3688,7 @@ begin
             Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 1);
 
       OP_JUMP_IF_FALSE:
-        if not GetRegister(A).ToBooleanLiteral.Value then
+        if not RegisterToBoolean(FRegisters[A]) then
         begin
           if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
             TGocciaCoverageTracker.Instance.RecordBranchHit(
@@ -3724,15 +3745,39 @@ begin
         if not FHandlerStack.IsEmpty then
           FHandlerStack.Pop;
 
-      OP_ADD_INT, OP_ADD_FLOAT:
+      OP_ADD_INT:
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := VMIntResult(FRegisters[B].IntValue +
+            FRegisters[C].IntValue)
+        else
+          FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) +
+            RegisterToDouble(FRegisters[C]));
+
+      OP_ADD_FLOAT:
         FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) +
           RegisterToDouble(FRegisters[C]));
 
-      OP_SUB_INT, OP_SUB_FLOAT:
+      OP_SUB_INT:
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := VMIntResult(FRegisters[B].IntValue -
+            FRegisters[C].IntValue)
+        else
+          FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) -
+            RegisterToDouble(FRegisters[C]));
+
+      OP_SUB_FLOAT:
         FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) -
           RegisterToDouble(FRegisters[C]));
 
-      OP_MUL_INT, OP_MUL_FLOAT:
+      OP_MUL_INT:
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := VMIntResult(FRegisters[B].IntValue *
+            FRegisters[C].IntValue)
+        else
+          FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) *
+            RegisterToDouble(FRegisters[C]));
+
+      OP_MUL_FLOAT:
         FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) *
           RegisterToDouble(FRegisters[C]));
 
@@ -3744,41 +3789,77 @@ begin
         FRegisters[A] := VMNumberRegister(FMod(RegisterToDouble(FRegisters[B]),
           RegisterToDouble(FRegisters[C])));
 
-      OP_EQ_INT, OP_EQ_FLOAT:
-        if RegisterToDouble(FRegisters[B]) = RegisterToDouble(FRegisters[C]) then
-          SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
+      OP_EQ_INT:
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterBoolean(
+            FRegisters[B].IntValue = FRegisters[C].IntValue)
         else
-          SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+          FRegisters[A] := RegisterBoolean(
+            RegisterToDouble(FRegisters[B]) = RegisterToDouble(FRegisters[C]));
 
-      OP_NEQ_INT, OP_NEQ_FLOAT:
-        if RegisterToDouble(FRegisters[B]) <> RegisterToDouble(FRegisters[C]) then
-          SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
-        else
-          SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+      OP_EQ_FLOAT:
+        FRegisters[A] := RegisterBoolean(
+          RegisterToDouble(FRegisters[B]) = RegisterToDouble(FRegisters[C]));
 
-      OP_LT_INT, OP_LT_FLOAT:
-        if RegisterToDouble(FRegisters[B]) < RegisterToDouble(FRegisters[C]) then
-          SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
+      OP_NEQ_INT:
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterBoolean(
+            FRegisters[B].IntValue <> FRegisters[C].IntValue)
         else
-          SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+          FRegisters[A] := RegisterBoolean(
+            RegisterToDouble(FRegisters[B]) <> RegisterToDouble(FRegisters[C]));
 
-      OP_GT_INT, OP_GT_FLOAT:
-        if RegisterToDouble(FRegisters[B]) > RegisterToDouble(FRegisters[C]) then
-          SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
-        else
-          SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+      OP_NEQ_FLOAT:
+        FRegisters[A] := RegisterBoolean(
+          RegisterToDouble(FRegisters[B]) <> RegisterToDouble(FRegisters[C]));
 
-      OP_LTE_INT, OP_LTE_FLOAT:
-        if RegisterToDouble(FRegisters[B]) <= RegisterToDouble(FRegisters[C]) then
-          SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
+      OP_LT_INT:
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterBoolean(
+            FRegisters[B].IntValue < FRegisters[C].IntValue)
         else
-          SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+          FRegisters[A] := RegisterBoolean(
+            RegisterToDouble(FRegisters[B]) < RegisterToDouble(FRegisters[C]));
 
-      OP_GTE_INT, OP_GTE_FLOAT:
-        if RegisterToDouble(FRegisters[B]) >= RegisterToDouble(FRegisters[C]) then
-          SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
+      OP_LT_FLOAT:
+        FRegisters[A] := RegisterBoolean(
+          RegisterToDouble(FRegisters[B]) < RegisterToDouble(FRegisters[C]));
+
+      OP_GT_INT:
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterBoolean(
+            FRegisters[B].IntValue > FRegisters[C].IntValue)
         else
-          SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+          FRegisters[A] := RegisterBoolean(
+            RegisterToDouble(FRegisters[B]) > RegisterToDouble(FRegisters[C]));
+
+      OP_GT_FLOAT:
+        FRegisters[A] := RegisterBoolean(
+          RegisterToDouble(FRegisters[B]) > RegisterToDouble(FRegisters[C]));
+
+      OP_LTE_INT:
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterBoolean(
+            FRegisters[B].IntValue <= FRegisters[C].IntValue)
+        else
+          FRegisters[A] := RegisterBoolean(
+            RegisterToDouble(FRegisters[B]) <= RegisterToDouble(FRegisters[C]));
+
+      OP_LTE_FLOAT:
+        FRegisters[A] := RegisterBoolean(
+          RegisterToDouble(FRegisters[B]) <= RegisterToDouble(FRegisters[C]));
+
+      OP_GTE_INT:
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterBoolean(
+            FRegisters[B].IntValue >= FRegisters[C].IntValue)
+        else
+          FRegisters[A] := RegisterBoolean(
+            RegisterToDouble(FRegisters[B]) >= RegisterToDouble(FRegisters[C]));
+
+      OP_GTE_FLOAT:
+        FRegisters[A] := RegisterBoolean(
+          RegisterToDouble(FRegisters[B]) >= RegisterToDouble(FRegisters[C]));
 
       OP_NEG_INT, OP_NEG_FLOAT:
         FRegisters[A] := VMNumberRegister(-RegisterToDouble(FRegisters[B]));
@@ -4206,7 +4287,14 @@ begin
 
       OP_ADD:
       begin
-        if RegisterIsNumericScalar(FRegisters[B]) and
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+        begin
+          if FProfilingOpcodes then
+            TGocciaProfiler.Instance.RecordScalarHit;
+          FRegisters[A] := VMIntResult(FRegisters[B].IntValue +
+            FRegisters[C].IntValue);
+        end
+        else if RegisterIsNumericScalar(FRegisters[B]) and
            RegisterIsNumericScalar(FRegisters[C]) then
         begin
           if FProfilingOpcodes then
@@ -4256,7 +4344,13 @@ begin
 
       OP_SUB:
       begin
-        if RegisterIsNumericScalar(FRegisters[B]) and
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+          FRegisters[A] := VMIntResult(FRegisters[B].IntValue -
+            FRegisters[C].IntValue);
+        end
+        else if RegisterIsNumericScalar(FRegisters[B]) and
            RegisterIsNumericScalar(FRegisters[C]) then
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
@@ -4272,7 +4366,13 @@ begin
 
       OP_MUL:
       begin
-        if RegisterIsNumericScalar(FRegisters[B]) and
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+          FRegisters[A] := VMIntResult(FRegisters[B].IntValue *
+            FRegisters[C].IntValue);
+        end
+        else if RegisterIsNumericScalar(FRegisters[B]) and
            RegisterIsNumericScalar(FRegisters[C]) then
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
@@ -4362,14 +4462,28 @@ begin
         SetRegister(A, VMBitwiseNotValue(GetRegister(B)));
 
       OP_EQ:
-        SetRegister(A, GetRegister(B).IsEqual(GetRegister(C)));
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterBoolean(
+            FRegisters[B].IntValue = FRegisters[C].IntValue)
+        else
+          SetRegister(A, GetRegister(B).IsEqual(GetRegister(C)));
 
       OP_NEQ:
-        SetRegister(A, GetRegister(B).IsNotEqual(GetRegister(C)));
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterBoolean(
+            FRegisters[B].IntValue <> FRegisters[C].IntValue)
+        else
+          SetRegister(A, GetRegister(B).IsNotEqual(GetRegister(C)));
 
       OP_LT:
       begin
-        if RegisterIsNumericScalar(FRegisters[B]) and
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+          FRegisters[A] := RegisterBoolean(FRegisters[B].IntValue <
+            FRegisters[C].IntValue);
+        end
+        else if RegisterIsNumericScalar(FRegisters[B]) and
            RegisterIsNumericScalar(FRegisters[C]) then
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
@@ -4393,7 +4507,13 @@ begin
 
       OP_GT:
       begin
-        if RegisterIsNumericScalar(FRegisters[B]) and
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+          FRegisters[A] := RegisterBoolean(FRegisters[B].IntValue >
+            FRegisters[C].IntValue);
+        end
+        else if RegisterIsNumericScalar(FRegisters[B]) and
            RegisterIsNumericScalar(FRegisters[C]) then
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
@@ -4417,7 +4537,13 @@ begin
 
       OP_LTE:
       begin
-        if RegisterIsNumericScalar(FRegisters[B]) and
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+          FRegisters[A] := RegisterBoolean(FRegisters[B].IntValue <=
+            FRegisters[C].IntValue);
+        end
+        else if RegisterIsNumericScalar(FRegisters[B]) and
            RegisterIsNumericScalar(FRegisters[C]) then
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
@@ -4441,7 +4567,13 @@ begin
 
       OP_GTE:
       begin
-        if RegisterIsNumericScalar(FRegisters[B]) and
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+          FRegisters[A] := RegisterBoolean(FRegisters[B].IntValue >=
+            FRegisters[C].IntValue);
+        end
+        else if RegisterIsNumericScalar(FRegisters[B]) and
            RegisterIsNumericScalar(FRegisters[C]) then
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;

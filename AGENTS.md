@@ -393,9 +393,33 @@ Dictionary-based string interning (`TDictionary<string, TGocciaStringLiteralValu
 
 **FPC 3.2.2 generic VMT pitfall:** FPC 3.2.2 creates per-unit VMTs for generic specializations. When a generic with a generic base class is specialized across multiple units, `{$OBJECTCHECKS ON}` can cause "Invalid type cast" failures if instances are type-cast across unit boundaries. All map types (`TOrderedStringMap`, `THashMap`, `TOrderedMap`) inherit from `TBaseMap`. This is safe because map instances are used as fields and local variables — they are never passed as base-class parameters or cross-unit type-cast. The VMT pitfall only applies when using `is`/`as` operators or `InheritsFrom` on generic instances across units. For `TObjectList<T>` (where cross-unit casts are common), named type aliases remain required. See [docs/spikes/fpc-generics-performance.md](docs/spikes/fpc-generics-performance.md) for the benchmark analysis confirming generics have zero runtime cost.
 
-### Platform Pitfall: `Double(Int64)` on AArch64
+### Platform Pitfall: `Int64` to `Double` Conversion on AArch64
 
-On FPC 3.2.2 AArch64, `Double(Int64Var)` performs a bit reinterpretation, not a value conversion. Use implicit promotion instead: `Int64Var * 1.0` or `Int64Var * 1000000.0`. See [docs/code-style.md](docs/code-style.md) for details.
+FPC 3.2.2 AArch64 has two bugs affecting `Int64` → `Double` conversion:
+
+1. **`Double(Int64Var)` bit reinterpretation** ([FPC #35886](https://gitlab.com/freepascal.org/fpc/source/-/issues/35886)): In `{$mode delphi}`, an explicit `Double(Int64Var)` cast performs Turbo Pascal-style bit reinterpretation instead of value conversion. Fixed in FPC trunk (3.3.1) but not backported to 3.2.x.
+
+2. **`Int64 * 1.0` wrong results near ±2³¹**: Mixed `Int64 * Double` arithmetic (including `* 1.0`, `+ 0.0`, `/ 1.0`) produces wrong results for values near the `LongInt` boundary (±2,147,483,648). FPC appears to use a 32-bit `SCVTF` instruction instead of 64-bit for the Int64→Double promotion in arithmetic expressions. Not yet reported upstream.
+
+**Safe conversion:** Use implicit assignment or function parameter passing — both use the correct 64-bit conversion path:
+
+```pascal
+// WRONG — bit reinterpretation in Delphi mode (Bug A)
+Result := Double(SomeInt64);
+
+// WRONG — wrong results near ±2^31 on AArch64 (Bug B)
+Result := SomeInt64 * 1.0;
+
+// CORRECT — implicit assignment
+var D: Double;
+D := SomeInt64;
+
+// CORRECT — implicit promotion at function call boundary
+// (e.g., passing Int64 to a parameter declared as Double)
+Result := TGocciaNumberLiteralValue.Create(SomeInt64);
+```
+
+See [docs/code-style.md](docs/code-style.md) for details.
 
 ### Platform Pitfall: Endian-Dependent Byte Indexing
 

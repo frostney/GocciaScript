@@ -113,7 +113,7 @@ begin
       Result := TGocciaBooleanLiteralValue.TrueValue;
   end
   else if AName = PROP_FFI_ADDRESS then
-    Result := TGocciaNumberLiteralValue.Create(PtrUInt(FAddress) * 1.0)
+    Result := TGocciaNumberLiteralValue.Create(PtrUInt(FAddress))
   else
     Result := inherited GetProperty(AName);
 end;
@@ -146,7 +146,7 @@ begin
   if not (AThisValue is TGocciaFFIPointerValue) then
     ThrowTypeError('FFIPointer.address requires an FFIPointer');
   Result := TGocciaNumberLiteralValue.Create(
-    PtrUInt(TGocciaFFIPointerValue(AThisValue).FAddress) * 1.0);
+    PtrUInt(TGocciaFFIPointerValue(AThisValue).FAddress));
 end;
 
 end.

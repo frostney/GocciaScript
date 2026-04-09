@@ -421,7 +421,7 @@ begin
     fftI32:
       Result := TGocciaNumberLiteralValue.Create(LongInt(CallResult.AsInt));
     fftI64:
-      Result := TGocciaNumberLiteralValue.Create(Int64(CallResult.AsInt) * 1.0);
+      Result := TGocciaNumberLiteralValue.Create(Int64(CallResult.AsInt));
     fftU8:
       Result := TGocciaNumberLiteralValue.Create(Byte(CallResult.AsInt));
     fftU16:
@@ -429,7 +429,7 @@ begin
     fftU32:
       Result := TGocciaNumberLiteralValue.Create(LongWord(CallResult.AsInt));
     fftU64:
-      Result := TGocciaNumberLiteralValue.Create(QWord(CallResult.AsInt) * 1.0);
+      Result := TGocciaNumberLiteralValue.Create(QWord(CallResult.AsInt));
     fftF32:
       Result := TGocciaNumberLiteralValue.Create(CallResult.AsSingle);
     fftF64:
