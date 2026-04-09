@@ -54,6 +54,7 @@ uses
   Goccia.Arguments.Validator,
   Goccia.Constants.PropertyNames,
   Goccia.Evaluator.Comparison,
+  Goccia.PropertyDescriptor.Utils,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
@@ -393,16 +394,8 @@ var
   DescriptorObject: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
   ExistingDescriptor: TGocciaPropertyDescriptor;
-  Enumerable: Boolean;
-  Configurable: Boolean;
-  Writable: Boolean;
-  Value: TGocciaValue;
-  Getter: TGocciaValue;
-  Setter: TGocciaValue;
-  PropertyFlags: TPropertyFlags;
   IsSymbolKey: Boolean;
   SymbolKey: TGocciaSymbolValue;
-  HasValue, HasGet, HasSet: Boolean;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 3, 'Object.defineProperty', ThrowError);
 
@@ -434,76 +427,7 @@ begin
   end;
 
   // Step 3: Let desc be ? ToPropertyDescriptor(Attributes)
-  Enumerable := False;
-  Configurable := False;
-  Writable := False;
-  Value := nil;
-  Getter := nil;
-  Setter := nil;
-
-  if Assigned(ExistingDescriptor) then
-  begin
-    Enumerable := ExistingDescriptor.Enumerable;
-    Configurable := ExistingDescriptor.Configurable;
-    if ExistingDescriptor is TGocciaPropertyDescriptorData then
-    begin
-      Writable := ExistingDescriptor.Writable;
-      Value := TGocciaPropertyDescriptorData(ExistingDescriptor).Value;
-    end
-    else if ExistingDescriptor is TGocciaPropertyDescriptorAccessor then
-    begin
-      Getter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
-      Setter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
-    end;
-  end;
-
-  HasValue := DescriptorObject.HasProperty(PROP_VALUE);
-  HasGet := DescriptorObject.HasProperty(PROP_GET);
-  HasSet := DescriptorObject.HasProperty(PROP_SET);
-
-  if DescriptorObject.HasProperty(PROP_ENUMERABLE) then
-    Enumerable := DescriptorObject.GetProperty(PROP_ENUMERABLE).ToBooleanLiteral.Value;
-  if DescriptorObject.HasProperty(PROP_CONFIGURABLE) then
-    Configurable := DescriptorObject.GetProperty(PROP_CONFIGURABLE).ToBooleanLiteral.Value;
-  if DescriptorObject.HasProperty(PROP_WRITABLE) then
-    Writable := DescriptorObject.GetProperty(PROP_WRITABLE).ToBooleanLiteral.Value;
-  if HasValue then
-    Value := DescriptorObject.GetProperty(PROP_VALUE);
-  if HasGet then
-  begin
-    Getter := DescriptorObject.GetProperty(PROP_GET);
-    if not (Getter is TGocciaUndefinedLiteralValue) and not Getter.IsCallable then
-      ThrowError('TypeError: Object.defineProperty: getter must be a function or undefined', 0, 0);
-    if Getter is TGocciaUndefinedLiteralValue then
-      Getter := nil;
-  end;
-  if HasSet then
-  begin
-    Setter := DescriptorObject.GetProperty(PROP_SET);
-    if not (Setter is TGocciaUndefinedLiteralValue) and not Setter.IsCallable then
-      ThrowError('TypeError: Object.defineProperty: setter must be a function or undefined', 0, 0);
-    if Setter is TGocciaUndefinedLiteralValue then
-      Setter := nil;
-  end;
-
-  PropertyFlags := [];
-  if Enumerable then
-    Include(PropertyFlags, pfEnumerable);
-  if Configurable then
-    Include(PropertyFlags, pfConfigurable);
-  if Writable then
-    Include(PropertyFlags, pfWritable);
-
-  if HasValue or DescriptorObject.HasProperty(PROP_WRITABLE) or
-     (Assigned(ExistingDescriptor) and (ExistingDescriptor is TGocciaPropertyDescriptorData) and not HasGet and not HasSet) or
-     (not Assigned(ExistingDescriptor) and not HasGet and not HasSet) then
-  begin
-    Descriptor := TGocciaPropertyDescriptorData.Create(Value, PropertyFlags);
-  end
-  else
-  begin
-    Descriptor := TGocciaPropertyDescriptorAccessor.Create(Getter, Setter, PropertyFlags);
-  end;
+  Descriptor := ToPropertyDescriptor(DescriptorObject, ExistingDescriptor);
 
   // Step 4: Perform ? DefinePropertyOrThrow(O, key, desc)
   if IsSymbolKey then

@@ -120,6 +120,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | VM | `Goccia.VM*.pas` | Register execution, closures, upvalues, exception handlers |
 | Runtime bootstrap | `Goccia.Runtime.Bootstrap.pas` | Shared built-in and global initialization |
 | Shared values | `Goccia.Values.*.pas` | Arrays, objects, classes, promises, iterators, primitives |
+| Property descriptors | `Goccia.PropertyDescriptor.Utils.pas` | Shared `ToPropertyDescriptor` (ES2026 §6.2.5.5) for Object/Reflect |
 | Garbage collector | `GarbageCollector.Generic.pas` | Shared GC for interpreter and bytecode execution |
 | Profiler | `Goccia.Profiler*.pas` | Bytecode opcode/function profiling, pair tracking, allocation counting |
 
