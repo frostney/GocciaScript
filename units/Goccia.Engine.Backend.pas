@@ -87,6 +87,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Coverage,
   Goccia.Error,
+  Goccia.Profiler,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
   Goccia.Scope.Redeclaration,
@@ -196,9 +197,17 @@ begin
   GC.Enabled := False;
   FMinimalVM.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
     and TGocciaCoverageTracker.Instance.Enabled;
+  FMinimalVM.ProfilingOpcodes := Assigned(TGocciaProfiler.Instance)
+    and TGocciaProfiler.Instance.Enabled
+    and (pmOpcodes in TGocciaProfiler.Instance.Mode);
+  FMinimalVM.ProfilingFunctions := Assigned(TGocciaProfiler.Instance)
+    and TGocciaProfiler.Instance.Enabled
+    and (pmFunctions in TGocciaProfiler.Instance.Mode);
+  GProfilingAllocations := FMinimalVM.ProfilingFunctions;
   try
     Result := FMinimalVM.ExecuteModule(AModule);
   finally
+    GProfilingAllocations := False;
     GC.Enabled := WasEnabled;
   end;
 end;

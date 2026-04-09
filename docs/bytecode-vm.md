@@ -31,6 +31,8 @@ Public bytecode artifacts use the `.gbc` extension.
 | VM execution | `Goccia.VM.pas` |
 | Frames / closures / upvalues | `Goccia.VM.CallFrame.pas`, `Goccia.VM.Closure.pas`, `Goccia.VM.Upvalue.pas` |
 | Backend entry point | `Goccia.Engine.Backend.pas` |
+| Opcode name lookup | `Goccia.Bytecode.OpCodeNames.pas` |
+| Profiler | `Goccia.Profiler.pas`, `Goccia.Profiler.Report.pas` |
 
 ## Core Design
 
@@ -102,6 +104,17 @@ Recent VM cleanup and optimization work has focused on reducing per-instruction 
 - keep fast register access limited to proven hot/simple paths; local-slot and complex property paths should only move to fast access when they stay correct and measurably improve throughput
 
 The current optimization target is reducing bytecode-mode suite time further without diverging interpreter and bytecode semantics.
+
+## Profiling
+
+The `--profile` flag on ScriptLoader enables language-level profiling of the bytecode VM. See [profiling.md](profiling.md) for the full guide.
+
+- `--profile=opcodes` — opcode frequency histogram, opcode pair frequency (superinstruction candidates), and scalar fast-path hit rate for generic arithmetic/comparison opcodes
+- `--profile=functions` — per-function self-time, total-time, call count, and heap allocation count
+- `--profile=all` — both
+- `--profile-output=path.json` — JSON export
+
+The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Coverage.pas`). Zero overhead when disabled. Opcode counting adds ~1% overhead; function timing adds ~3%.
 
 ## Binary Format
 

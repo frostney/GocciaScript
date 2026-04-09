@@ -73,6 +73,7 @@ type
     FIsAsync: Boolean;
     FIsArrow: Boolean;
     FTypeCheckPreambleSize: UInt8;
+    FProfileIndex: Integer;
     FStringConstantIndex: TOrderedStringMap<UInt16>;
     function GetFunctionCount: Integer;
   public
@@ -122,6 +123,7 @@ type
     property IsAsync: Boolean read FIsAsync write FIsAsync;
     property IsArrow: Boolean read FIsArrow write FIsArrow;
     property TypeCheckPreambleSize: UInt8 read FTypeCheckPreambleSize write FTypeCheckPreambleSize;
+    property ProfileIndex: Integer read FProfileIndex write FProfileIndex;
   end;
 
 implementation
@@ -155,6 +157,7 @@ begin
   FLocalTypeCount := 0;
   FLocalStrictCount := 0;
   FIsArrow := False;
+  FProfileIndex := -1;
 end;
 
 destructor TGocciaFunctionTemplate.Destroy;
