@@ -26,6 +26,8 @@ uses
   Goccia.Lexer,
   Goccia.Modules.Configuration,
   Goccia.Parser,
+  Goccia.Profiler,
+  Goccia.Profiler.Report,
   Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
   Goccia.ScriptLoader.JSON,
@@ -61,6 +63,10 @@ var
   GCoverageJsonEnabled: Boolean = False;
   GCoverageOutputPath: string = '';
   GASIEnabled: Boolean = False;
+  GProfileOpcodes: Boolean = False;
+  GProfileFunctions: Boolean = False;
+  GProfileOutputPath: string = '';
+  GProfileFormatFlamegraph: Boolean = False;
 
 function ParseSource(const ASource: TStringList; const AFileName: string;
   const AGlobals: TGocciaGlobalBuiltins; const ASuppressWarnings: Boolean;
@@ -603,6 +609,9 @@ begin
   WriteLn('  --coverage              Enable line and branch coverage reporting');
   WriteLn('  --coverage-format=lcov|json  Coverage output format (implies --coverage)');
   WriteLn('  --coverage-output=<file>     Coverage output file (paired with --coverage-format)');
+  WriteLn('  --profile=opcodes|functions|all  Enable bytecode profiling (implies --mode=bytecode)');
+  WriteLn('  --profile-output=<file>          Write profile results as JSON');
+  WriteLn('  --profile-format=flamegraph      Write collapsed stack format for flame graph visualization');
 end;
 
 var
@@ -739,6 +748,41 @@ begin
         GCoverageOutputPath := Copy(Arg, 19, MaxInt);
         GCoverageEnabled := True;
       end
+      else if Arg = '--profile=opcodes' then
+        GProfileOpcodes := True
+      else if Arg = '--profile=functions' then
+        GProfileFunctions := True
+      else if Arg = '--profile=all' then
+      begin
+        GProfileOpcodes := True;
+        GProfileFunctions := True;
+      end
+      else if Copy(Arg, 1, 10) = '--profile=' then
+      begin
+        WriteLn('Error: Unknown profile mode "', Copy(Arg, 11, MaxInt),
+          '". Use "opcodes", "functions", or "all".');
+        ExitCode := 1;
+        Exit;
+      end
+      else if Copy(Arg, 1, 17) = '--profile-output=' then
+      begin
+        GProfileOutputPath := Copy(Arg, 18, MaxInt);
+        if GProfileOutputPath = '' then
+        begin
+          WriteLn('Error: --profile-output requires a non-empty path.');
+          ExitCode := 1;
+          Exit;
+        end;
+      end
+      else if Arg = '--profile-format=flamegraph' then
+        GProfileFormatFlamegraph := True
+      else if Copy(Arg, 1, 18) = '--profile-format=' then
+      begin
+        WriteLn('Error: Unknown profile format "', Copy(Arg, 19, MaxInt),
+          '". Use "flamegraph".');
+        ExitCode := 1;
+        Exit;
+      end
       else if Copy(Arg, 1, 2) <> '--' then
         Paths.Add(Arg)
       else
@@ -772,10 +816,44 @@ begin
       Exit;
     end;
 
+    // --profile-format implies --profile=functions when no explicit --profile given
+    if GProfileFormatFlamegraph and not (GProfileOpcodes or GProfileFunctions) then
+      GProfileFunctions := True;
+
+    // Profiling requires bytecode mode regardless of --mode flag
+    if GProfileOpcodes or GProfileFunctions then
+      GMode := emBytecode;
+
+    if (GProfileOutputPath <> '') and not (GProfileOpcodes or GProfileFunctions) then
+    begin
+      WriteLn('Error: --profile-output requires --profile=opcodes|functions|all.');
+      ExitCode := 1;
+      Exit;
+    end;
+
+    if GProfileFormatFlamegraph and (GProfileOutputPath = '') then
+    begin
+      WriteLn('Error: --profile-format=flamegraph requires --profile-output=<path>.');
+      ExitCode := 1;
+      Exit;
+    end;
+
     if GCoverageEnabled then
     begin
       TGocciaCoverageTracker.Initialize;
       TGocciaCoverageTracker.Instance.Enabled := True;
+    end;
+    if GProfileOpcodes or GProfileFunctions then
+    begin
+      TGocciaProfiler.Initialize;
+      TGocciaProfiler.Instance.Enabled := True;
+      TGocciaProfiler.Instance.Mode := [];
+      if GProfileOpcodes then
+        TGocciaProfiler.Instance.Mode :=
+          TGocciaProfiler.Instance.Mode + [pmOpcodes];
+      if GProfileFunctions then
+        TGocciaProfiler.Instance.Mode :=
+          TGocciaProfiler.Instance.Mode + [pmFunctions];
     end;
     try
       try
@@ -813,9 +891,34 @@ begin
         if GCoverageJsonEnabled and (GCoverageOutputPath <> '') then
           WriteCoverageJSON(TGocciaCoverageTracker.Instance, GCoverageOutputPath);
       end;
+
+      if (GProfileOpcodes or GProfileFunctions) and
+         Assigned(TGocciaProfiler.Instance) then
+      begin
+        if not GJsonOutput then
+        begin
+          if GProfileOpcodes then
+          begin
+            PrintOpcodeProfile(TGocciaProfiler.Instance);
+            PrintOpcodePairProfile(TGocciaProfiler.Instance);
+            PrintScalarHitRate(TGocciaProfiler.Instance);
+          end;
+          if GProfileFunctions then
+            PrintFunctionProfile(TGocciaProfiler.Instance);
+        end;
+        if GProfileOutputPath <> '' then
+        begin
+          if GProfileFormatFlamegraph then
+            WriteCollapsedStacks(TGocciaProfiler.Instance, GProfileOutputPath)
+          else
+            WriteProfileJSON(TGocciaProfiler.Instance, GProfileOutputPath);
+        end;
+      end;
     finally
       if GCoverageEnabled then
         TGocciaCoverageTracker.Shutdown;
+      if GProfileOpcodes or GProfileFunctions then
+        TGocciaProfiler.Shutdown;
     end;
   finally
     Paths.Free;

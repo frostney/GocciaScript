@@ -167,6 +167,7 @@ uses
 
   Goccia.Constants,
   Goccia.Constants.TypeNames,
+  Goccia.Profiler,
   Goccia.TextFiles;
 
 { TGocciaValue }
@@ -176,6 +177,8 @@ begin
   inherited;
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.RegisterObject(Self);
+  if GProfilingAllocations and Assigned(TGocciaProfiler.Instance) then
+    TGocciaProfiler.Instance.RecordAllocation;
 end;
 
 function TGocciaValue.RuntimeCopy: TGocciaValue;

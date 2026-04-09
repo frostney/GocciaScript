@@ -39,6 +39,11 @@ printf "const x = 2 + 2; x;" | ./build/ScriptLoader        # Execute stdin sourc
 ./build/ScriptLoader example.js --coverage --coverage-format=lcov --coverage-output=coverage.lcov  # Coverage with lcov output
 ./build/ScriptLoader example.js --coverage --coverage-format=json --coverage-output=coverage.json  # Coverage with JSON output
 ./build/ScriptLoader example.js --asi                              # Execute with automatic semicolon insertion
+./build/ScriptLoader example.js --profile=opcodes                  # Opcode histogram, pair frequency, scalar hit rate (bytecode)
+./build/ScriptLoader example.js --profile=functions                # Function self-time, allocations (bytecode)
+./build/ScriptLoader example.js --profile=all                      # All profiling data (bytecode)
+./build/ScriptLoader example.js --profile=all --profile-output=profile.json  # Profile with JSON export
+./build/ScriptLoader example.js --profile=functions --profile-format=flamegraph --profile-output=flamegraph.txt  # Flame graph export
 ./build/REPL                                      # Start interactive REPL (interpreted)
 ./build/REPL --mode=bytecode                      # Start the REPL via bytecode VM
 ./build/REPL --mode=bytecode --timing             # Bytecode REPL with per-line timing
@@ -116,6 +121,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Runtime bootstrap | `Goccia.Runtime.Bootstrap.pas` | Shared built-in and global initialization |
 | Shared values | `Goccia.Values.*.pas` | Arrays, objects, classes, promises, iterators, primitives |
 | Garbage collector | `GarbageCollector.Generic.pas` | Shared GC for interpreter and bytecode execution |
+| Profiler | `Goccia.Profiler*.pas` | Bytecode opcode/function profiling, pair tracking, allocation counting |
 
 **Bytecode design rules:**
 
@@ -564,6 +570,7 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 | [docs/built-ins.md](docs/built-ins.md) | Available built-ins, registration system, adding new ones |
 | [docs/adding-built-in-types.md](docs/adding-built-in-types.md) | Step-by-step guide for adding new built-in types |
 | [docs/testing.md](docs/testing.md) | Test organization, writing tests, running tests |
+| [docs/profiling.md](docs/profiling.md) | Bytecode VM profiling: opcodes, pairs, scalar hit rate, function timing, allocations |
 | [docs/benchmarks.md](docs/benchmarks.md) | Benchmark runner, output formats, writing benchmarks, CI comparison |
 | [docs/build-system.md](docs/build-system.md) | Build commands, configuration, CI/CD |
 | [docs/language-restrictions.md](docs/language-restrictions.md) | Supported/excluded features with rationale |

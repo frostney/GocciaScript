@@ -73,6 +73,8 @@ type
     FCurrentModuleExports: TGocciaValueMap;
     FActiveDecoratorSession: TObject;
     FCoverageEnabled: Boolean;
+    FProfilingOpcodes: Boolean;
+    FProfilingFunctions: Boolean;
     FPreviousExceptionMask: TFPUExceptionMask;
     FArgumentPool: TGocciaArgumentsPoolArray;
     FArgumentPoolCount: Integer;
@@ -181,6 +183,8 @@ type
     property GlobalScope: TGocciaScope read FGlobalScope write FGlobalScope;
     property Interpreter: TGocciaInterpreter read FInterpreter write FInterpreter;
     property CoverageEnabled: Boolean read FCoverageEnabled write FCoverageEnabled;
+    property ProfilingOpcodes: Boolean read FProfilingOpcodes write FProfilingOpcodes;
+    property ProfilingFunctions: Boolean read FProfilingFunctions write FProfilingFunctions;
   end;
 
 implementation
@@ -190,6 +194,7 @@ uses
   SysUtils,
 
   GarbageCollector.Generic,
+  TimingUtils,
 
   Goccia.CallStack,
   Goccia.Constants.ConstructorNames,
@@ -199,6 +204,7 @@ uses
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.Evaluator.Decorators,
+  Goccia.Profiler,
   Goccia.Timeout,
   Goccia.Values.ClassHelper,
   Goccia.Values.EnumValue,
@@ -3419,7 +3425,10 @@ var
   BoundFunction: TGocciaBoundFunctionValue;
   JumpOffset: Integer;
   PrevCovLine, CovLine: UInt32;
+  ProfileEntryTimestamp: Int64;
 begin
+  Template := nil;
+  ProfileEntryTimestamp := 0;
   SavedRegisterBase := FRegisterBase;
   SavedRegisterCount := FRegisterCount;
   SavedLocalCellBase := FLocalCellBase;
@@ -3449,6 +3458,24 @@ begin
       TGocciaCoverageTracker.Instance.RecordLineHit(
         Template.DebugInfo.SourceFile,
         Template.DebugInfo.GetLineMapEntry(0).Line);
+
+    // Function profiling: register template and record entry timestamp
+    if FProfilingFunctions and Assigned(TGocciaProfiler.Instance) then
+    begin
+      if Template.ProfileIndex < 0 then
+      begin
+        if Assigned(Template.DebugInfo) and (Template.DebugInfo.LineMapCount > 0) then
+          Template.ProfileIndex := TGocciaProfiler.Instance.RegisterTemplate(
+            Template.Name, Template.DebugInfo.SourceFile,
+            Template.DebugInfo.GetLineMapEntry(0).Line)
+        else
+          Template.ProfileIndex := TGocciaProfiler.Instance.RegisterTemplate(
+            Template.Name, '', 0);
+      end;
+      ProfileEntryTimestamp := GetNanoseconds;
+      TGocciaProfiler.Instance.PushFunction(
+        Template.ProfileIndex, ProfileEntryTimestamp);
+    end;
 
     SetLocalRaw(0, AThisValue);
     if AUseFixedArgs then
@@ -3496,6 +3523,8 @@ begin
         end;
 
         Op := DecodeOp(Instruction);
+        if FProfilingOpcodes then
+          TGocciaProfiler.Instance.RecordOpcode(Op);
         A := DecodeA(Instruction);
         B := DecodeB(Instruction);
         C := DecodeC(Instruction);
@@ -4179,9 +4208,16 @@ begin
       begin
         if RegisterIsNumericScalar(FRegisters[B]) and
            RegisterIsNumericScalar(FRegisters[C]) then
+        begin
+          if FProfilingOpcodes then
+            TGocciaProfiler.Instance.RecordScalarHit;
           FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) +
-            RegisterToDouble(FRegisters[C]))
-        else if (((FRegisters[B].Kind = grkObject) and
+            RegisterToDouble(FRegisters[C]));
+        end
+        else begin
+          if FProfilingOpcodes then
+            TGocciaProfiler.Instance.RecordScalarMiss;
+          if (((FRegisters[B].Kind = grkObject) and
                   (FRegisters[B].ObjectValue is TGocciaStringLiteralValue)) or
                  ((FRegisters[C].Kind = grkObject) and
                   (FRegisters[C].ObjectValue is TGocciaStringLiteralValue))) and
@@ -4215,56 +4251,87 @@ begin
           else
             SetRegister(A, VMAddValues(LeftValue, RightValue));
         end;
+        end;
       end;
 
       OP_SUB:
       begin
         if RegisterIsNumericScalar(FRegisters[B]) and
            RegisterIsNumericScalar(FRegisters[C]) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
           FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) -
-            RegisterToDouble(FRegisters[C]))
+            RegisterToDouble(FRegisters[C]));
+        end
         else
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
           SetRegister(A, VMSubtractValues(GetRegisterFast(B), GetRegisterFast(C)));
+        end;
       end;
 
       OP_MUL:
       begin
         if RegisterIsNumericScalar(FRegisters[B]) and
            RegisterIsNumericScalar(FRegisters[C]) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
           FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) *
-            RegisterToDouble(FRegisters[C]))
+            RegisterToDouble(FRegisters[C]));
+        end
         else
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
           SetRegister(A, VMMultiplyValues(GetRegisterFast(B), GetRegisterFast(C)));
+        end;
       end;
 
       OP_DIV:
       begin
         if RegisterIsNumericScalar(FRegisters[B]) and
            RegisterIsNumericScalar(FRegisters[C]) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
           FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) /
-            RegisterToDouble(FRegisters[C]))
+            RegisterToDouble(FRegisters[C]));
+        end
         else
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
           SetRegister(A, VMDivideValues(GetRegisterFast(B), GetRegisterFast(C)));
+        end;
       end;
 
       OP_MOD:
       begin
         if RegisterIsNumericScalar(FRegisters[B]) and
            RegisterIsNumericScalar(FRegisters[C]) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
           FRegisters[A] := VMNumberRegister(FMod(RegisterToDouble(FRegisters[B]),
-            RegisterToDouble(FRegisters[C])))
+            RegisterToDouble(FRegisters[C])));
+        end
         else
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
           SetRegister(A, VMModuloValues(GetRegisterFast(B), GetRegisterFast(C)));
+        end;
       end;
 
       OP_POW:
       begin
         if RegisterIsNumericScalar(FRegisters[B]) and
            RegisterIsNumericScalar(FRegisters[C]) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
           FRegisters[A] := VMNumberRegister(Power(RegisterToDouble(FRegisters[B]),
-            RegisterToDouble(FRegisters[C])))
+            RegisterToDouble(FRegisters[C])));
+        end
         else
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
           SetRegister(A, VMPowerValues(GetRegisterFast(B), GetRegisterFast(C)));
+        end;
       end;
 
       OP_NEG:
@@ -4304,10 +4371,14 @@ begin
       begin
         if RegisterIsNumericScalar(FRegisters[B]) and
            RegisterIsNumericScalar(FRegisters[C]) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
           FRegisters[A] := RegisterBoolean(RegisterToDouble(FRegisters[B]) <
-            RegisterToDouble(FRegisters[C]))
+            RegisterToDouble(FRegisters[C]));
+        end
         else
         begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
           LeftValue := GetRegisterFast(B);
           RightValue := GetRegisterFast(C);
           if (LeftValue is TGocciaStringLiteralValue) and
@@ -4324,10 +4395,14 @@ begin
       begin
         if RegisterIsNumericScalar(FRegisters[B]) and
            RegisterIsNumericScalar(FRegisters[C]) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
           FRegisters[A] := RegisterBoolean(RegisterToDouble(FRegisters[B]) >
-            RegisterToDouble(FRegisters[C]))
+            RegisterToDouble(FRegisters[C]));
+        end
         else
         begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
           LeftValue := GetRegisterFast(B);
           RightValue := GetRegisterFast(C);
           if (LeftValue is TGocciaStringLiteralValue) and
@@ -4344,10 +4419,14 @@ begin
       begin
         if RegisterIsNumericScalar(FRegisters[B]) and
            RegisterIsNumericScalar(FRegisters[C]) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
           FRegisters[A] := RegisterBoolean(RegisterToDouble(FRegisters[B]) <=
-            RegisterToDouble(FRegisters[C]))
+            RegisterToDouble(FRegisters[C]));
+        end
         else
         begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
           LeftValue := GetRegisterFast(B);
           RightValue := GetRegisterFast(C);
           if (LeftValue is TGocciaStringLiteralValue) and
@@ -4364,10 +4443,14 @@ begin
       begin
         if RegisterIsNumericScalar(FRegisters[B]) and
            RegisterIsNumericScalar(FRegisters[C]) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
           FRegisters[A] := RegisterBoolean(RegisterToDouble(FRegisters[B]) >=
-            RegisterToDouble(FRegisters[C]))
+            RegisterToDouble(FRegisters[C]));
+        end
         else
         begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
           LeftValue := GetRegisterFast(B);
           RightValue := GetRegisterFast(C);
           if (LeftValue is TGocciaStringLiteralValue) and
@@ -5120,6 +5203,10 @@ begin
     end;
     Result := RegisterUndefined;
   finally
+    if FProfilingFunctions and Assigned(Template) and
+       (Template.ProfileIndex >= 0) then
+      TGocciaProfiler.Instance.PopFunction(
+        Template.ProfileIndex, GetNanoseconds);
     if Assigned(TGocciaCallStack.Instance) then
       TGocciaCallStack.Instance.Pop;
     while FHandlerStack.Count > SavedHandlerCount do
