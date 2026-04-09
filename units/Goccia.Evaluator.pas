@@ -119,6 +119,7 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
+  Goccia.Values.ProxyValue,
   Goccia.Values.SetValue,
   Goccia.Values.SymbolValue,
   Goccia.Values.ToPrimitive;
@@ -598,7 +599,9 @@ begin
       TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
         ACallExpression.Line, ACallExpression.Column);
     try
-      if Callee is TGocciaNativeFunctionValue then
+      if Callee is TGocciaProxyValue then
+        Result := TGocciaProxyValue(Callee).ApplyTrap(Arguments, ThisValue)
+      else if Callee is TGocciaNativeFunctionValue then
         Result := TGocciaNativeFunctionValue(Callee).Call(Arguments, ThisValue)
       else if Callee is TGocciaFunctionValue then
         Result := TGocciaFunctionValue(Callee).Call(Arguments, ThisValue)
@@ -1686,7 +1689,11 @@ begin
       TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
         ANewExpression.Line, ANewExpression.Column);
     try
-      if Callee is TGocciaClassValue then
+      if Callee is TGocciaProxyValue then
+      begin
+        Result := TGocciaProxyValue(Callee).ConstructTrap(Arguments);
+      end
+      else if Callee is TGocciaClassValue then
       begin
         Result := InstantiateClass(TGocciaClassValue(Callee), Arguments, AContext);
       end

@@ -59,6 +59,7 @@ uses
   Goccia.Values.ClassValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue;
 
 constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
@@ -627,6 +628,13 @@ begin
   if not (AArgs.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.getPrototypeOf called on non-object', 0, 0);
 
+  // Proxy intercept: delegate to getPrototypeOf trap
+  if AArgs.GetElement(0) is TGocciaProxyValue then
+  begin
+    Result := TGocciaProxyValue(AArgs.GetElement(0)).GetPrototypeTrap;
+    Exit;
+  end;
+
   // Step 2: Return ? obj.[[GetPrototypeOf]]()
   if Assigned(TGocciaObjectValue(AArgs.GetElement(0)).Prototype) then
     Result := TGocciaObjectValue(AArgs.GetElement(0)).Prototype
@@ -742,6 +750,16 @@ begin
     Exit;
   end;
 
+  // Proxy intercept: delegate to isExtensible trap
+  if AArgs.GetElement(0) is TGocciaProxyValue then
+  begin
+    if TGocciaProxyValue(AArgs.GetElement(0)).IsExtensibleTrap then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
+    Exit;
+  end;
+
   // Step 2: Return ? IsExtensible(O)
   if TGocciaObjectValue(AArgs.GetElement(0)).Extensible then
     Result := TGocciaBooleanLiteralValue.TrueValue
@@ -764,6 +782,15 @@ begin
   ProtoArg := AArgs.GetElement(1);
   if not (ProtoArg is TGocciaObjectValue) and not (ProtoArg is TGocciaNullLiteralValue) then
     ThrowError('Object prototype may only be an Object or null', 0, 0);
+
+  // Proxy intercept: delegate to setPrototypeOf trap
+  if AArgs.GetElement(0) is TGocciaProxyValue then
+  begin
+    if not TGocciaProxyValue(AArgs.GetElement(0)).SetPrototypeTrap(ProtoArg) then
+      ThrowError('setPrototypeOf trap returned false', 0, 0);
+    Result := AArgs.GetElement(0);
+    Exit;
+  end;
 
   // Step 3: If Type(O) is not Object, return O (handled above via throw)
   if not TGocciaObjectValue(AArgs.GetElement(0)).Extensible then

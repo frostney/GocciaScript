@@ -14,6 +14,7 @@ const
   CONSTRUCTOR_SYMBOL   = 'Symbol';
   CONSTRUCTOR_SET      = 'Set';
   CONSTRUCTOR_MAP      = 'Map';
+  CONSTRUCTOR_PROXY    = 'Proxy';
   CONSTRUCTOR_PERFORMANCE  = 'Performance';
   CONSTRUCTOR_PROMISE      = 'Promise';
   CONSTRUCTOR_ITERATOR     = 'Iterator';

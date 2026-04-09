@@ -205,6 +205,7 @@ uses
   Goccia.Values.IteratorValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.PromiseValue,
+  Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue,
   Goccia.Values.ToPrimitive;
 
@@ -2147,6 +2148,13 @@ var
   Context: TGocciaEvaluationContext;
   ConstructorName: string;
 begin
+  // ES2026 §28.1.1 [[Construct]](argumentsList, newTarget)
+  if AConstructor is TGocciaProxyValue then
+  begin
+    Result := TGocciaProxyValue(AConstructor).ConstructTrap(AArguments);
+    Exit;
+  end;
+
   if AConstructor is TGocciaVMClassValue then
   begin
     Result := TGocciaVMClassValue(AConstructor).Instantiate(AArguments);
@@ -3215,12 +3223,28 @@ begin
 
   if (AKey is TGocciaSymbolValue) and (AObject is TGocciaObjectValue) then
   begin
+    // ES2026 §28.1.1 [[HasProperty]](P) — symbol key
+    if AObject is TGocciaProxyValue then
+    begin
+      if TGocciaProxyValue(AObject).HasSymbolTrap(TGocciaSymbolValue(AKey)) then
+        Exit(TGocciaBooleanLiteralValue.TrueValue);
+      Exit(TGocciaBooleanLiteralValue.FalseValue);
+    end;
     if TGocciaObjectValue(AObject).HasSymbolProperty(TGocciaSymbolValue(AKey)) then
       Exit(TGocciaBooleanLiteralValue.TrueValue);
     Exit(TGocciaBooleanLiteralValue.FalseValue);
   end;
 
   KeyStr := KeyToPropertyName(AKey);
+
+  // ES2026 §28.1.1 [[HasProperty]](P) — string key
+  if AObject is TGocciaProxyValue then
+  begin
+    if TGocciaProxyValue(AObject).HasTrap(KeyStr) then
+      Exit(TGocciaBooleanLiteralValue.TrueValue);
+    Exit(TGocciaBooleanLiteralValue.FalseValue);
+  end;
+
   if AObject is TGocciaArrayValue then
   begin
     if TryGetArrayIndex(AKey, Index) then
@@ -3256,6 +3280,9 @@ function TGocciaVM.InvokeFunctionValue(const ACallee: TGocciaValue;
 var
   CalleeDesc: string;
 begin
+  // ES2026 §28.1.1 [[Call]](thisArgument, argumentsList)
+  if ACallee is TGocciaProxyValue then
+    Exit(TGocciaProxyValue(ACallee).ApplyTrap(AArguments, AThisValue));
   if ACallee is TGocciaBytecodeFunctionValue then
     Exit(TGocciaBytecodeFunctionValue(ACallee).Call(AArguments, AThisValue));
   if ACallee is TGocciaFunctionBase then
