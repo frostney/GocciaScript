@@ -110,6 +110,30 @@ Function Profile:
 }
 ```
 
+## Flame Graph Export
+
+`--profile-format=flamegraph --profile-output=flamegraph.txt` writes collapsed stack traces, viewable in [speedscope](https://speedscope.app) (drag and drop) or renderable to SVG via [FlameGraph](https://github.com/brendangregg/FlameGraph):
+
+```bash
+./build/ScriptLoader script.js --profile=functions --profile-format=flamegraph --profile-output=flamegraph.txt
+
+# View in browser
+open https://speedscope.app  # drag flamegraph.txt into the page
+
+# Or render to SVG
+flamegraph.pl flamegraph.txt > flamegraph.svg
+```
+
+Each line is a semicolon-separated call stack with a self-time weight in microseconds:
+
+```
+<module>;fib;fib;fib 4170
+<module>;fib;fib 1
+<module>;fib 1
+```
+
+This shows the JS function call hierarchy that external profilers like `sample` cannot see — `sample` would show all these as the same recursive `ExecuteClosureRegistersInternal` frame.
+
 ## Combining with `sample` (macOS)
 
 The profiler and `sample` are complementary. The profiler sees inside the dispatch loop (opcodes, JS functions, allocations). `sample` sees outside it (FPC runtime overhead, memory management, exception frames).
@@ -150,7 +174,7 @@ The profiler's allocation count per function tells you *which JS function* drive
 | Unit | Role |
 |------|------|
 | `Goccia.Profiler.pas` | Singleton tracker: opcode counts, pair matrix, scalar hit/miss, function profiles with timing stack |
-| `Goccia.Profiler.Report.pas` | Console output and JSON export |
+| `Goccia.Profiler.Report.pas` | Console output, JSON export, and collapsed stack export |
 | `Goccia.Bytecode.OpCodeNames.pas` | Opcode ordinal to human-readable name (cold path, report generation only) |
 
 The profiler follows the same singleton pattern as `Goccia.Coverage.pas`: `Initialize`/`Instance`/`Shutdown`, boolean `Enabled` flag, zero overhead when disabled. Opcode counting and pair tracking use static arrays (no heap allocation in the hot path). Function profiling uses a timing stack for correct self-time calculation across recursive calls. Allocation tracking hooks into `TGocciaValue.AfterConstruction` via a global `GProfilingAllocations` boolean, attributing each allocation to the function on top of the profiler's timing stack.

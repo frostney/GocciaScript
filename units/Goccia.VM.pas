@@ -3460,7 +3460,7 @@ begin
         Template.DebugInfo.GetLineMapEntry(0).Line);
 
     // Function profiling: register template and record entry timestamp
-    if FProfilingFunctions then
+    if FProfilingFunctions and Assigned(TGocciaProfiler.Instance) then
     begin
       if Template.ProfileIndex < 0 then
       begin
@@ -5203,7 +5203,8 @@ begin
     end;
     Result := RegisterUndefined;
   finally
-    if FProfilingFunctions and (Template.ProfileIndex >= 0) then
+    if FProfilingFunctions and Assigned(Template) and
+       (Template.ProfileIndex >= 0) then
       TGocciaProfiler.Instance.PopFunction(
         Template.ProfileIndex, GetNanoseconds);
     if Assigned(TGocciaCallStack.Instance) then

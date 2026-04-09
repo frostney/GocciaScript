@@ -4,6 +4,9 @@ unit Goccia.Profiler;
 
 interface
 
+uses
+  OrderedStringMap;
+
 const
   MAX_OPCODE_ORDINAL = 255;
   OPCODE_PAIR_SIZE = 256;
@@ -45,6 +48,7 @@ type
     FMode: TGocciaProfileMode;
     FEnabled: Boolean;
     FOpcodeCount: array[0..MAX_OPCODE_ORDINAL] of Int64;
+    FHasPrevOp: Boolean;
     FPrevOp: UInt8;
     FOpcodePairs: PGocciaOpcodePairArray;
     FScalarHits: Int64;
@@ -53,6 +57,7 @@ type
     FFunctionProfileCount: Integer;
     FTimingStack: array of TGocciaProfilingStackEntry;
     FTimingStackCount: Integer;
+    FCollapsedStacks: TOrderedStringMap<Int64>;
   public
     class function Instance: TGocciaProfiler;
     class procedure Initialize;
@@ -82,6 +87,7 @@ type
     property FunctionProfileCount: Integer read FFunctionProfileCount;
     property ScalarHits: Int64 read FScalarHits;
     property ScalarMisses: Int64 read FScalarMisses;
+    property CollapsedStacks: TOrderedStringMap<Int64> read FCollapsedStacks;
   end;
 
 implementation
@@ -117,6 +123,7 @@ begin
   FMode := [];
   for I := 0 to MAX_OPCODE_ORDINAL do
     FOpcodeCount[I] := 0;
+  FHasPrevOp := False;
   FPrevOp := 0;
   GetMem(FOpcodePairs, SizeOf(TGocciaOpcodePairArray));
   FillChar(FOpcodePairs^, SizeOf(TGocciaOpcodePairArray), 0);
@@ -126,10 +133,12 @@ begin
   SetLength(FFunctionProfiles, INITIAL_FUNCTION_PROFILE_CAPACITY);
   FTimingStackCount := 0;
   SetLength(FTimingStack, INITIAL_TIMING_STACK_CAPACITY);
+  FCollapsedStacks := TOrderedStringMap<Int64>.Create;
 end;
 
 destructor TGocciaProfiler.Destroy;
 begin
+  FCollapsedStacks.Free;
   if Assigned(FOpcodePairs) then
     FreeMem(FOpcodePairs);
   inherited;
@@ -138,8 +147,10 @@ end;
 procedure TGocciaProfiler.RecordOpcode(const AOp: UInt8);
 begin
   Inc(FOpcodeCount[AOp]);
-  Inc(FOpcodePairs^[FPrevOp, AOp]);
+  if FHasPrevOp then
+    Inc(FOpcodePairs^[FPrevOp, AOp]);
   FPrevOp := AOp;
+  FHasPrevOp := True;
 end;
 
 procedure TGocciaProfiler.RecordScalarHit;
@@ -190,7 +201,9 @@ end;
 procedure TGocciaProfiler.PopFunction(const AProfileIndex: Integer;
   const ATimestamp: Int64);
 var
-  Elapsed, SelfTime: Int64;
+  Elapsed, SelfTime, SelfTimeMicroseconds, ExistingValue: Int64;
+  StackPath: string;
+  I: Integer;
 begin
   if FTimingStackCount <= 0 then Exit;
   Dec(FTimingStackCount);
@@ -200,6 +213,33 @@ begin
   Inc(FFunctionProfiles[AProfileIndex].SelfTimeNanoseconds, SelfTime);
   if FTimingStackCount > 0 then
     Inc(FTimingStack[FTimingStackCount - 1].ChildTimeAccumulated, Elapsed);
+
+  // Build collapsed stack path for flame graph export
+  StackPath := '';
+  for I := 0 to FTimingStackCount - 1 do
+  begin
+    if StackPath <> '' then
+      StackPath := StackPath + ';';
+    if FFunctionProfiles[FTimingStack[I].ProfileIndex].TemplateName <> '' then
+      StackPath := StackPath + FFunctionProfiles[FTimingStack[I].ProfileIndex].TemplateName
+    else
+      StackPath := StackPath + '<anonymous>';
+  end;
+  if StackPath <> '' then
+    StackPath := StackPath + ';';
+  if FFunctionProfiles[AProfileIndex].TemplateName <> '' then
+    StackPath := StackPath + FFunctionProfiles[AProfileIndex].TemplateName
+  else
+    StackPath := StackPath + '<anonymous>';
+
+  SelfTimeMicroseconds := SelfTime div 1000;
+  if SelfTimeMicroseconds > 0 then
+  begin
+    if FCollapsedStacks.TryGetValue(StackPath, ExistingValue) then
+      FCollapsedStacks.AddOrSetValue(StackPath, ExistingValue + SelfTimeMicroseconds)
+    else
+      FCollapsedStacks.Add(StackPath, SelfTimeMicroseconds);
+  end;
 end;
 
 function TGocciaProfiler.GetOpcodeCount(const AOp: UInt8): Int64;

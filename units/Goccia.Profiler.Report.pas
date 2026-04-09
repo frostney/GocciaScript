@@ -13,6 +13,8 @@ procedure PrintScalarHitRate(const AProfiler: TGocciaProfiler);
 procedure PrintFunctionProfile(const AProfiler: TGocciaProfiler);
 procedure WriteProfileJSON(const AProfiler: TGocciaProfiler;
   const AOutputPath: string);
+procedure WriteCollapsedStacks(const AProfiler: TGocciaProfiler;
+  const AOutputPath: string);
 
 implementation
 
@@ -21,6 +23,7 @@ uses
   Math,
   SysUtils,
 
+  BaseMap,
   StringBuffer,
   TimingUtils,
 
@@ -306,7 +309,10 @@ var
   Hits, Misses, ScalarTotal: Int64;
   FirstEntry: Boolean;
   Output: TStringList;
+  InvariantFormat: TFormatSettings;
 begin
+  InvariantFormat := DefaultFormatSettings;
+  InvariantFormat.DecimalSeparator := '.';
   Buf := TStringBuffer.Create(8192);
   Buf.Append('{');
 
@@ -330,7 +336,7 @@ begin
       else
         Pct := 0.0;
       Buf.Append(Format(#10'    {"opcode": "%s", "count": %d, "percentage": %.1f}', [
-        EscapeJSONString(OpCodeName(I)), Count, Pct]));
+        EscapeJSONString(OpCodeName(I)), Count, Pct], InvariantFormat));
     end;
   end;
   Buf.Append(#10'  ],');
@@ -362,7 +368,8 @@ begin
   Buf.Append(Format(#10'  "scalarFastPath": {"hits": %d, "misses": %d, "total": %d', [
     Hits, Misses, ScalarTotal]));
   if ScalarTotal > 0 then
-    Buf.Append(Format(', "hitRate": %.1f', [Hits * 100.0 / ScalarTotal]));
+    Buf.Append(Format(', "hitRate": %.1f', [Hits * 100.0 / ScalarTotal],
+      InvariantFormat));
   Buf.Append('},');
 
   // Functions section
@@ -394,6 +401,24 @@ begin
   Output := TStringList.Create;
   try
     Output.Text := Buf.ToString;
+    Output.SaveToFile(AOutputPath);
+  finally
+    Output.Free;
+  end;
+end;
+
+{ Collapsed Stack Export (Flame Graph) }
+
+procedure WriteCollapsedStacks(const AProfiler: TGocciaProfiler;
+  const AOutputPath: string);
+var
+  Output: TStringList;
+  Pair: TBaseMap<string, Int64>.TKeyValuePair;
+begin
+  Output := TStringList.Create;
+  try
+    for Pair in AProfiler.CollapsedStacks do
+      Output.Add(Pair.Key + ' ' + IntToStr(Pair.Value));
     Output.SaveToFile(AOutputPath);
   finally
     Output.Free;

@@ -43,6 +43,7 @@ printf "const x = 2 + 2; x;" | ./build/ScriptLoader        # Execute stdin sourc
 ./build/ScriptLoader example.js --profile=functions                # Function self-time, allocations (bytecode)
 ./build/ScriptLoader example.js --profile=all                      # All profiling data (bytecode)
 ./build/ScriptLoader example.js --profile=all --profile-output=profile.json  # Profile with JSON export
+./build/ScriptLoader example.js --profile=functions --profile-format=flamegraph --profile-output=flamegraph.txt  # Flame graph export
 ./build/REPL                                      # Start interactive REPL (interpreted)
 ./build/REPL --mode=bytecode                      # Start the REPL via bytecode VM
 ./build/REPL --mode=bytecode --timing             # Bytecode REPL with per-line timing
