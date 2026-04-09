@@ -6,7 +6,7 @@
 
 The `--profile` flag on ScriptLoader enables language-level profiling of the bytecode VM. It operates inside the dispatch loop, providing data that external profilers (like `sample` or `callgrind`) cannot see — which opcodes execute, which JS functions are hot, and where the VM allocates.
 
-Profiling implies `--mode=bytecode` automatically. Zero overhead when not enabled (boolean guard on the dispatch loop, same pattern as `--coverage`).
+Profiling implies `--mode=bytecode` automatically. Near-zero overhead when disabled (boolean guard on the dispatch loop, same pattern as `--coverage`). The guard branches are consistently not-taken and well-predicted, but they are present in the compiled binary.
 
 ## CLI Usage
 
@@ -33,7 +33,7 @@ echo 'const x = 1 + 2; x;' | ./build/ScriptLoader --profile=all
 
 Counts how many times each bytecode opcode executes. Sorted by frequency descending.
 
-```
+```text
 Opcode Profile:
   Opcode                                             Count        %
   OP_GET_LOCAL                                       54728    19.2%
@@ -49,7 +49,7 @@ Opcode Profile:
 
 Counts how often each two-instruction sequence executes. Shows the top 20 pairs.
 
-```
+```text
 Opcode Pairs (top 20):
   Previous                                      Current                                            Count        %
   OP_GET_LOCAL                              -> OP_LOAD_INT                                     87918017    15.4%
@@ -64,7 +64,7 @@ Opcode Pairs (top 20):
 
 For the generic arithmetic and comparison opcodes (`OP_ADD`, `OP_SUB`, `OP_MUL`, `OP_DIV`, `OP_MOD`, `OP_POW`, `OP_LT`, `OP_GT`, `OP_LTE`, `OP_GTE`), tracks how often the `RegisterIsNumericScalar` fast path hits versus falls through to the slow (boxing/polymorphic) path.
 
-```
+```text
 Scalar Fast-Path:
   Hits:      109897525 (100.0%)
   Misses:            0 (  0.0%)
@@ -77,7 +77,7 @@ Scalar Fast-Path:
 
 Per-function breakdown: self-time (exclusive — time in the function minus time in callees), total-time (inclusive), call count, and allocation count (heap-allocated `TGocciaValue` instances created during that function's execution).
 
-```
+```text
 Function Profile:
   Self Time    Total Time      Calls     Allocs  Function                       Location
   19.78s       443.42s      43959011   13584073  fib                            script.js:1
@@ -126,7 +126,7 @@ flamegraph.pl flamegraph.txt > flamegraph.svg
 
 Each line is a semicolon-separated call stack with a self-time weight in microseconds:
 
-```
+```text
 <module>;fib;fib;fib 4170
 <module>;fib;fib 1
 <module>;fib 1

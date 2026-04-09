@@ -449,11 +449,16 @@ procedure WriteCollapsedStacks(const AProfiler: TGocciaProfiler;
 var
   Output: TStringList;
   Pair: TBaseMap<string, Int64>.TKeyValuePair;
+  Microseconds: Int64;
 begin
   Output := TStringList.Create;
   try
     for Pair in AProfiler.CollapsedStacks do
-      Output.Add(Pair.Key + ' ' + IntToStr(Pair.Value));
+    begin
+      Microseconds := Pair.Value div 1000;
+      if Microseconds > 0 then
+        Output.Add(Pair.Key + ' ' + IntToStr(Microseconds));
+    end;
     Output.SaveToFile(AOutputPath);
   finally
     Output.Free;

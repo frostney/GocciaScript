@@ -202,18 +202,20 @@ end;
 procedure TGocciaProfiler.PopFunction(const AProfileIndex: Integer;
   const ATimestamp: Int64);
 var
-  Elapsed, SelfTime, SelfTimeMicroseconds: Int64;
+  Elapsed, SelfTime: Int64;
+  PoppedIndex: Integer;
   ExistingValue: Int64;
   StackPath: string;
   I: Integer;
 begin
   if FTimingStackCount <= 0 then Exit;
-  if (AProfileIndex < 0) or (AProfileIndex >= FFunctionProfileCount) then Exit;
   Dec(FTimingStackCount);
+  PoppedIndex := FTimingStack[FTimingStackCount].ProfileIndex;
+  if (PoppedIndex < 0) or (PoppedIndex >= FFunctionProfileCount) then Exit;
   Elapsed := ATimestamp - FTimingStack[FTimingStackCount].EntryTimestamp;
   SelfTime := Elapsed - FTimingStack[FTimingStackCount].ChildTimeAccumulated;
-  Inc(FFunctionProfiles[AProfileIndex].TotalTimeNanoseconds, Elapsed);
-  Inc(FFunctionProfiles[AProfileIndex].SelfTimeNanoseconds, SelfTime);
+  Inc(FFunctionProfiles[PoppedIndex].TotalTimeNanoseconds, Elapsed);
+  Inc(FFunctionProfiles[PoppedIndex].SelfTimeNanoseconds, SelfTime);
   if FTimingStackCount > 0 then
     Inc(FTimingStack[FTimingStackCount - 1].ChildTimeAccumulated, Elapsed);
 
@@ -230,18 +232,18 @@ begin
   end;
   if StackPath <> '' then
     StackPath := StackPath + ';';
-  if FFunctionProfiles[AProfileIndex].TemplateName <> '' then
-    StackPath := StackPath + FFunctionProfiles[AProfileIndex].TemplateName
+  if FFunctionProfiles[PoppedIndex].TemplateName <> '' then
+    StackPath := StackPath + FFunctionProfiles[PoppedIndex].TemplateName
   else
     StackPath := StackPath + '<anonymous>';
 
-  SelfTimeMicroseconds := SelfTime div 1000;
-  if SelfTimeMicroseconds > 0 then
+  // Accumulate self-time in nanoseconds (converted to microseconds at export)
+  if SelfTime > 0 then
   begin
     if FCollapsedStacks.TryGetValue(StackPath, ExistingValue) then
-      FCollapsedStacks.AddOrSetValue(StackPath, ExistingValue + SelfTimeMicroseconds)
+      FCollapsedStacks.AddOrSetValue(StackPath, ExistingValue + SelfTime)
     else
-      FCollapsedStacks.Add(StackPath, SelfTimeMicroseconds);
+      FCollapsedStacks.Add(StackPath, SelfTime);
   end;
 end;
 
