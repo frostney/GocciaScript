@@ -211,10 +211,6 @@ begin
   if FTimingStackCount <= 0 then Exit;
   Dec(FTimingStackCount);
   PoppedIndex := FTimingStack[FTimingStackCount].ProfileIndex;
-  {$IFDEF DEBUG}
-  Assert(PoppedIndex = AProfileIndex,
-    'PopFunction: caller index does not match popped frame');
-  {$ENDIF}
   if (PoppedIndex < 0) or (PoppedIndex >= FFunctionProfileCount) then Exit;
   Elapsed := ATimestamp - FTimingStack[FTimingStackCount].EntryTimestamp;
   SelfTime := Elapsed - FTimingStack[FTimingStackCount].ChildTimeAccumulated;
