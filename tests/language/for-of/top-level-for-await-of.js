@@ -3,7 +3,17 @@ description: Top-level for-await-of outside async functions
 features: [for-of, async-await, top-level-await]
 ---*/
 
+// True top-level for-await-of: runs at module scope, not inside any function
+const topLevelResult = [];
+for await (const value of [Promise.resolve(1), Promise.resolve(2), Promise.resolve(3)]) {
+  topLevelResult.push(value);
+}
+
 describe("top-level for-await-of", () => {
+  test("for-await-of iterates at file scope", () => {
+    expect(topLevelResult).toEqual([1, 2, 3]);
+  });
+
   test("iterates async iterable at top level", async () => {
     const asyncIterable = {
       [Symbol.asyncIterator]() {

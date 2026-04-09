@@ -3,15 +3,55 @@ description: Top-level await (ES2022+) allows await outside async functions
 features: [async-await, top-level-await]
 ---*/
 
+// True top-level await: these run at module scope, not inside any function
+const resolvedValue = await Promise.resolve(42);
+const nonPromiseValue = await 99;
+const chainedValue = await Promise.resolve(10).then((v) => v * 2);
+const thenable = {
+  then(resolve) {
+    resolve("thenable-result");
+  },
+};
+const thenableValue = await thenable;
+
+const [allA, allB, allC] = await Promise.all([
+  Promise.resolve(1),
+  Promise.resolve(2),
+  Promise.resolve(3),
+]);
+
+let topLevelRejection;
+try {
+  await Promise.reject("top-level rejection");
+} catch (e) {
+  topLevelRejection = e;
+}
+
 describe("top-level await", () => {
-  test("await resolves a Promise at top level", async () => {
-    const x = await Promise.resolve(42);
-    expect(x).toBe(42);
+  test("await resolves a Promise at file scope", () => {
+    expect(resolvedValue).toBe(42);
   });
 
-  test("await with non-Promise value passes through", async () => {
-    const x = await 42;
-    expect(x).toBe(42);
+  test("await passes through non-Promise values at file scope", () => {
+    expect(nonPromiseValue).toBe(99);
+  });
+
+  test("await resolves chained Promises at file scope", () => {
+    expect(chainedValue).toBe(20);
+  });
+
+  test("await unwraps thenables at file scope", () => {
+    expect(thenableValue).toBe("thenable-result");
+  });
+
+  test("await works with Promise.all at file scope", () => {
+    expect(allA).toBe(1);
+    expect(allB).toBe(2);
+    expect(allC).toBe(3);
+  });
+
+  test("await try-catch handles rejection at file scope", () => {
+    expect(topLevelRejection).toBe("top-level rejection");
   });
 
   test("await undefined returns undefined", async () => {
@@ -32,21 +72,6 @@ describe("top-level await", () => {
   test("await boolean passes through", async () => {
     const x = await true;
     expect(x).toBe(true);
-  });
-
-  test("await chained Promises", async () => {
-    const x = await Promise.resolve(10).then((v) => v * 2);
-    expect(x).toBe(20);
-  });
-
-  test("await thenable objects", async () => {
-    const thenable = {
-      then(resolve) {
-        resolve(99);
-      },
-    };
-    const x = await thenable;
-    expect(x).toBe(99);
   });
 
   test("multiple sequential top-level awaits", async () => {
@@ -71,16 +96,6 @@ describe("top-level await", () => {
     const fn = async () => 42;
     const x = await fn();
     expect(x).toBe(42);
-  });
-
-  test("top-level await with try-catch on rejection", async () => {
-    let caught;
-    try {
-      await Promise.reject("top-level error");
-    } catch (e) {
-      caught = e;
-    }
-    expect(caught).toBe("top-level error");
   });
 
   test("top-level await in array literal", async () => {
@@ -121,17 +136,6 @@ describe("top-level await", () => {
     const obj = { x: 1 };
     const result = await obj;
     expect(result).toBe(obj);
-  });
-
-  test("top-level await with Promise.all", async () => {
-    const [a, b, c] = await Promise.all([
-      Promise.resolve(1),
-      Promise.resolve(2),
-      Promise.resolve(3),
-    ]);
-    expect(a).toBe(1);
-    expect(b).toBe(2);
-    expect(c).toBe(3);
   });
 
   test("top-level await with nested async functions", async () => {

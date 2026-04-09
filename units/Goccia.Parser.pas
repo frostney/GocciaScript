@@ -57,6 +57,7 @@ type
     FWarnings: array of TGocciaParserWarning;
     FWarningCount: Integer;
     FInAsyncFunction: Integer;
+    FFunctionDepth: Integer;
     FPrivateClassContexts: TObjectList<TGocciaPrivateClassContext>;
     FSkipPrivateNameValidation: Integer;
     FAutomaticSemicolonInsertion: Boolean;
@@ -254,6 +255,7 @@ begin
   FCurrent := 0;
   FWarningCount := 0;
   FInAsyncFunction := 0;
+  FFunctionDepth := 0;
   FPrivateClassContexts := TObjectList<TGocciaPrivateClassContext>.Create(True);
 end;
 
@@ -676,7 +678,7 @@ var
   Right: TGocciaExpression;
 begin
   // ES2026 §16.1 top-level await / §15.8.2 AwaitExpression: await UnaryExpression
-  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) then
+  if ((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) then
   begin
     Operator := Advance; // consume 'await'
     Right := Unary;
@@ -1000,12 +1002,14 @@ begin
         SSuggestArrowFunctionSyntax);
 
       Inc(FInAsyncFunction);
+      Inc(FFunctionDepth);
       try
         if Match(gttLeftBrace) then
           ArrowBody := BlockStatement
         else
           ArrowBody := Expression;
       finally
+        Dec(FFunctionDepth);
         Dec(FInAsyncFunction);
       end;
 
@@ -1435,7 +1439,12 @@ begin
   end;
   Consume(gttLeftBrace, 'Expected "{" before getter body',
     SSuggestOpenBraceGetterBody);
-  Result := TGocciaGetterExpression.Create(BlockStatement, Line, Column);
+  Inc(FFunctionDepth);
+  try
+    Result := TGocciaGetterExpression.Create(BlockStatement, Line, Column);
+  finally
+    Dec(FFunctionDepth);
+  end;
 end;
 
 function TGocciaParser.ParseSetterExpression: TGocciaSetterExpression;
@@ -1467,7 +1476,12 @@ begin
   end;
   Consume(gttLeftBrace, 'Expected "{" before setter body',
     SSuggestOpenBraceSetterBody);
-  Result := TGocciaSetterExpression.Create(ParamName, BlockStatement, Line, Column);
+  Inc(FFunctionDepth);
+  try
+    Result := TGocciaSetterExpression.Create(ParamName, BlockStatement, Line, Column);
+  finally
+    Dec(FFunctionDepth);
+  end;
 end;
 
 function TGocciaParser.ParseObjectMethodBody(const ALine, AColumn: Integer): TGocciaExpression;
@@ -1492,21 +1506,26 @@ begin
   Consume(gttLeftBrace, 'Expected "{" before method body',
     SSuggestOpenBraceMethodBody);
 
-  Statements := TObjectList<TGocciaASTNode>.Create(True);
+  Inc(FFunctionDepth);
   try
-    while not Check(gttRightBrace) and not IsAtEnd do
-    begin
-      Stmt := Statement;
-      Statements.Add(Stmt);
-    end;
+    Statements := TObjectList<TGocciaASTNode>.Create(True);
+    try
+      while not Check(gttRightBrace) and not IsAtEnd do
+      begin
+        Stmt := Statement;
+        Statements.Add(Stmt);
+      end;
 
-    Consume(gttRightBrace, 'Expected "}" after method body',
-      SSuggestCloseBlock);
-    Body := TGocciaBlockStatement.Create(Statements, ALine, AColumn);
-    Result := TGocciaMethodExpression.Create(Parameters, Body, ALine, AColumn);
-  except
-    Statements.Free;
-    raise;
+      Consume(gttRightBrace, 'Expected "}" after method body',
+        SSuggestCloseBlock);
+      Body := TGocciaBlockStatement.Create(Statements, ALine, AColumn);
+      Result := TGocciaMethodExpression.Create(Parameters, Body, ALine, AColumn);
+    except
+      Statements.Free;
+      raise;
+    end;
+  finally
+    Dec(FFunctionDepth);
   end;
 end;
 
@@ -1535,10 +1554,15 @@ begin
   Consume(gttArrow, 'Expected "=>" in arrow function',
     SSuggestArrowFunctionSyntax);
 
-  if Match(gttLeftBrace) then
-    Body := BlockStatement
-  else
-    Body := Expression;
+  Inc(FFunctionDepth);
+  try
+    if Match(gttLeftBrace) then
+      Body := BlockStatement
+    else
+      Body := Expression;
+  finally
+    Dec(FFunctionDepth);
+  end;
 
   ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, Body, Line, Column);
   ArrowFn.ReturnType := FnReturnType;
@@ -2085,7 +2109,7 @@ begin
   BindingPattern := nil;
 
   // for-await-of: 'await' appears between 'for' and '(' (async or top-level)
-  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) then
+  if ((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) then
   begin
     IsAwait := True;
     Advance; // consume 'await'
@@ -2372,34 +2396,39 @@ begin
   Consume(gttLeftBrace, 'Expected "{" before method body',
     SSuggestOpenBraceMethodBody);
 
-  Statements := TObjectList<TGocciaASTNode>.Create(True);
+  Inc(FFunctionDepth);
   try
-    while not Check(gttRightBrace) and not IsAtEnd do
-    begin
-      Stmt := Statement;
-      if Stmt is TGocciaExpressionStatement then
+    Statements := TObjectList<TGocciaASTNode>.Create(True);
+    try
+      while not Check(gttRightBrace) and not IsAtEnd do
       begin
-        if not Check(gttSemicolon) then
-          Statements.Add(Stmt)
-        else
+        Stmt := Statement;
+        if Stmt is TGocciaExpressionStatement then
         begin
-          Advance;
+          if not Check(gttSemicolon) then
+            Statements.Add(Stmt)
+          else
+          begin
+            Advance;
+            Statements.Add(Stmt);
+          end;
+        end
+        else
           Statements.Add(Stmt);
-        end;
-      end
-      else
-        Statements.Add(Stmt);
-    end;
+      end;
 
-    Consume(gttRightBrace, 'Expected "}" after method body',
-      SSuggestCloseBlock);
-    Body := TGocciaBlockStatement.Create(Statements, Line, Column);
-    Result := TGocciaClassMethod.Create(Name, Parameters, Body, AIsStatic, Line, Column);
-    Result.GenericParams := MethodGenericParams;
-    Result.ReturnType := MethodReturnType;
-  except
-    Statements.Free;
-    raise;
+      Consume(gttRightBrace, 'Expected "}" after method body',
+        SSuggestCloseBlock);
+      Body := TGocciaBlockStatement.Create(Statements, Line, Column);
+      Result := TGocciaClassMethod.Create(Name, Parameters, Body, AIsStatic, Line, Column);
+      Result.GenericParams := MethodGenericParams;
+      Result.ReturnType := MethodReturnType;
+    except
+      Statements.Free;
+      raise;
+    end;
+  finally
+    Dec(FFunctionDepth);
   end;
 end;
 
