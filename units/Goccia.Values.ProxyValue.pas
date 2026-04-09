@@ -48,6 +48,10 @@ type
     // ES2026 §28.1.1 [[DefineOwnProperty]](P, Desc)
     procedure DefineProperty(const AName: string;
       const ADescriptor: TGocciaPropertyDescriptor); override;
+    function TryDefineProperty(const AName: string;
+      const ADescriptor: TGocciaPropertyDescriptor): Boolean; override;
+    function TryDefineSymbolProperty(const ASymbol: TGocciaSymbolValue;
+      const ADescriptor: TGocciaPropertyDescriptor): Boolean; override;
 
     // ES2026 §28.1.1 [[OwnPropertyKeys]]()
     function GetOwnPropertyKeys: TArray<string>; override;
@@ -792,6 +796,124 @@ begin
       TGocciaObjectValue(FTarget).DefineProperty(AName, ADescriptor)
     else
       ThrowTypeError('Cannot define property on non-object target');
+  end;
+end;
+
+// ES2026 §10.5.6 [[DefineOwnProperty]](P, Desc) — boolean variant
+// Returns false instead of throwing when the trap returns a falsy value.
+function TGocciaProxyValue.TryDefineProperty(const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  DescObj: TGocciaObjectValue;
+  TrapResult: TGocciaValue;
+begin
+  CheckRevoked;
+  Trap := GetTrap(PROP_DEFINE_PROPERTY);
+  if Assigned(Trap) then
+  begin
+    // Build descriptor object — preserve accessor vs data shape
+    DescObj := TGocciaObjectValue.Create;
+    if ADescriptor is TGocciaPropertyDescriptorAccessor then
+    begin
+      DescObj.AssignProperty(PROP_GET,
+        TGocciaPropertyDescriptorAccessor(ADescriptor).Getter);
+      DescObj.AssignProperty(PROP_SET,
+        TGocciaPropertyDescriptorAccessor(ADescriptor).Setter);
+    end
+    else if ADescriptor is TGocciaPropertyDescriptorData then
+    begin
+      DescObj.AssignProperty(PROP_VALUE,
+        TGocciaPropertyDescriptorData(ADescriptor).Value);
+      DescObj.AssignProperty(PROP_WRITABLE,
+        TGocciaBooleanLiteralValue.Create(ADescriptor.Writable));
+    end;
+    DescObj.AssignProperty(PROP_ENUMERABLE,
+      TGocciaBooleanLiteralValue.Create(ADescriptor.Enumerable));
+    DescObj.AssignProperty(PROP_CONFIGURABLE,
+      TGocciaBooleanLiteralValue.Create(ADescriptor.Configurable));
+
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      Args.Add(TGocciaStringLiteralValue.Create(AName));
+      Args.Add(DescObj);
+      TrapResult := InvokeTrap(Trap, Args);
+      Result := TrapResult.ToBooleanLiteral.Value;
+    finally
+      Args.Free;
+    end;
+    ADescriptor.Free;
+  end
+  else
+  begin
+    if FTarget is TGocciaObjectValue then
+      Result := TGocciaObjectValue(FTarget).TryDefineProperty(AName, ADescriptor)
+    else
+    begin
+      ADescriptor.Free;
+      Result := False;
+    end;
+  end;
+end;
+
+// ES2026 §10.5.6 [[DefineOwnProperty]](P, Desc) — symbol key, boolean variant
+function TGocciaProxyValue.TryDefineSymbolProperty(
+  const ASymbol: TGocciaSymbolValue;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  DescObj: TGocciaObjectValue;
+  TrapResult: TGocciaValue;
+begin
+  CheckRevoked;
+  Trap := GetTrap(PROP_DEFINE_PROPERTY);
+  if Assigned(Trap) then
+  begin
+    // Build descriptor object — preserve accessor vs data shape
+    DescObj := TGocciaObjectValue.Create;
+    if ADescriptor is TGocciaPropertyDescriptorAccessor then
+    begin
+      DescObj.AssignProperty(PROP_GET,
+        TGocciaPropertyDescriptorAccessor(ADescriptor).Getter);
+      DescObj.AssignProperty(PROP_SET,
+        TGocciaPropertyDescriptorAccessor(ADescriptor).Setter);
+    end
+    else if ADescriptor is TGocciaPropertyDescriptorData then
+    begin
+      DescObj.AssignProperty(PROP_VALUE,
+        TGocciaPropertyDescriptorData(ADescriptor).Value);
+      DescObj.AssignProperty(PROP_WRITABLE,
+        TGocciaBooleanLiteralValue.Create(ADescriptor.Writable));
+    end;
+    DescObj.AssignProperty(PROP_ENUMERABLE,
+      TGocciaBooleanLiteralValue.Create(ADescriptor.Enumerable));
+    DescObj.AssignProperty(PROP_CONFIGURABLE,
+      TGocciaBooleanLiteralValue.Create(ADescriptor.Configurable));
+
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      Args.Add(ASymbol);
+      Args.Add(DescObj);
+      TrapResult := InvokeTrap(Trap, Args);
+      Result := TrapResult.ToBooleanLiteral.Value;
+    finally
+      Args.Free;
+    end;
+    ADescriptor.Free;
+  end
+  else
+  begin
+    if FTarget is TGocciaObjectValue then
+      Result := TGocciaObjectValue(FTarget).TryDefineSymbolProperty(ASymbol, ADescriptor)
+    else
+    begin
+      ADescriptor.Free;
+      Result := False;
+    end;
   end;
 end;
 

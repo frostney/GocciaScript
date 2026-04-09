@@ -160,4 +160,89 @@ describe("Reflect.set", () => {
     const result = Reflect.set(target, "newProp", 42, receiver);
     expect(result).toBe(false);
   });
+
+  test("proxy receiver: defineProperty trap invoked when creating property", () => {
+    const target = { x: 1 };
+    const log = [];
+    const receiver = new Proxy({}, {
+      defineProperty(t, key, desc) {
+        log.push({ key, value: desc.value });
+        return Reflect.defineProperty(t, key, desc);
+      },
+    });
+    const result = Reflect.set(target, "x", 42, receiver);
+    expect(result).toBe(true);
+    expect(log.length).toBe(1);
+    expect(log[0].key).toBe("x");
+    expect(log[0].value).toBe(42);
+  });
+
+  test("proxy receiver: defineProperty trap invoked when updating existing property", () => {
+    const target = { x: 1 };
+    const log = [];
+    const inner = { x: 10 };
+    const receiver = new Proxy(inner, {
+      defineProperty(t, key, desc) {
+        log.push({ key, value: desc.value });
+        return Reflect.defineProperty(t, key, desc);
+      },
+    });
+    const result = Reflect.set(target, "x", 99, receiver);
+    expect(result).toBe(true);
+    expect(log.length).toBe(1);
+    expect(log[0].key).toBe("x");
+    expect(log[0].value).toBe(99);
+  });
+
+  test("proxy receiver: returns false when defineProperty trap returns false", () => {
+    const target = { x: 1 };
+    const receiver = new Proxy({}, {
+      defineProperty() { return false; },
+    });
+    const result = Reflect.set(target, "x", 42, receiver);
+    expect(result).toBe(false);
+  });
+
+  test("proxy receiver: symbol key routes through defineProperty trap", () => {
+    const sym = Symbol("s");
+    const target = {};
+    target[sym] = 1;
+    const log = [];
+    const receiver = new Proxy({}, {
+      defineProperty(t, key, desc) {
+        log.push({ key, value: desc.value });
+        return Reflect.defineProperty(t, key, desc);
+      },
+    });
+    const result = Reflect.set(target, sym, 42, receiver);
+    expect(result).toBe(true);
+    expect(log.length).toBe(1);
+    expect(log[0].value).toBe(42);
+  });
+
+  test("proxy receiver: symbol key returns false when defineProperty trap returns false", () => {
+    const sym = Symbol("s");
+    const target = {};
+    target[sym] = 1;
+    const receiver = new Proxy({}, {
+      defineProperty() { return false; },
+    });
+    const result = Reflect.set(target, sym, 42, receiver);
+    expect(result).toBe(false);
+  });
+
+  test("returns false (not throw) when receiver defineProperty fails on non-configurable", () => {
+    const target = { x: 1 };
+    const receiver = {};
+    Object.defineProperty(receiver, "x", {
+      value: 0,
+      writable: true,
+      configurable: false,
+    });
+    // Target has writable data, receiver has non-configurable writable data —
+    // OrdinaryDefineOwnProperty succeeds for a value-only update.
+    const result = Reflect.set(target, "x", 42, receiver);
+    expect(result).toBe(true);
+    expect(receiver.x).toBe(42);
+  });
 });

@@ -49,6 +49,7 @@ type
     function ToNumberLiteral: TGocciaNumberLiteralValue; override;
 
     procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); virtual;
+    function TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean; virtual;
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); virtual;
     function AssignPropertyWithReceiver(const AName: string; const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean; virtual;
 
@@ -71,6 +72,7 @@ type
     function GetOwnPropertyKeys: TArray<string>; virtual;
 
     procedure DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
+    function TryDefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor): Boolean; virtual;
     procedure AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
     function AssignSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean; virtual;
     function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue; virtual;
@@ -613,15 +615,14 @@ begin
       if (ReceiverDesc is TGocciaPropertyDescriptorAccessor) or
          (not ReceiverDesc.Writable) then
         Exit(False);
-      TGocciaPropertyDescriptorData(ReceiverDesc).Value := AValue;
-      Exit(True);
+      // Step 2d.iii-iv: Receiver.[[DefineOwnProperty]](P, { [[Value]]: V })
+      Exit(ReceiverObj.TryDefineProperty(AName,
+        TGocciaPropertyDescriptorData.Create(AValue, ReceiverDesc.Flags)));
     end;
     // Step 2e: CreateDataProperty(Receiver, P, V)
-    if not ReceiverObj.Extensible then
-      Exit(False);
-    ReceiverObj.DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
-      [pfEnumerable, pfConfigurable, pfWritable]));
-    Exit(True);
+    Exit(ReceiverObj.TryDefineProperty(AName,
+      TGocciaPropertyDescriptorData.Create(AValue,
+        [pfEnumerable, pfConfigurable, pfWritable])));
   end;
 
   if OwnDesc is TGocciaPropertyDescriptorData then
@@ -643,18 +644,16 @@ begin
       // Step 2d.ii: If existingDescriptor.[[Writable]] is false, return false
       if not ReceiverDesc.Writable then
         Exit(False);
-      // Step 2d.iii-iv: Update value on receiver
-      TGocciaPropertyDescriptorData(ReceiverDesc).Value := AValue;
-      Exit(True);
+      // Step 2d.iii-iv: Receiver.[[DefineOwnProperty]](P, { [[Value]]: V })
+      Exit(ReceiverObj.TryDefineProperty(AName,
+        TGocciaPropertyDescriptorData.Create(AValue, ReceiverDesc.Flags)));
     end
     else
     begin
       // Step 2e: CreateDataProperty(Receiver, P, V)
-      if not ReceiverObj.Extensible then
-        Exit(False);
-      ReceiverObj.DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
-        [pfEnumerable, pfConfigurable, pfWritable]));
-      Exit(True);
+      Exit(ReceiverObj.TryDefineProperty(AName,
+        TGocciaPropertyDescriptorData.Create(AValue,
+          [pfEnumerable, pfConfigurable, pfWritable])));
     end;
   end;
 
@@ -687,6 +686,41 @@ begin
   end;
 
   FProperties.Add(AName, ADescriptor);
+end;
+
+// ES2026 §10.1.6.1 OrdinaryDefineOwnProperty(O, P, Desc)
+// Boolean variant — returns false instead of throwing on non-configurable
+// conflicts or non-extensible objects.
+function TGocciaObjectValue.TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+var
+  ExistingDescriptor: TGocciaPropertyDescriptor;
+begin
+  if FProperties.TryGetValue(AName, ExistingDescriptor) then
+  begin
+    if not ExistingDescriptor.Configurable then
+    begin
+      // ES2026 §10.1.6.3 step 7.g: Non-configurable data descriptor —
+      // allow value update only when existing is writable and new is also data.
+      if (ExistingDescriptor is TGocciaPropertyDescriptorData) and
+         (ADescriptor is TGocciaPropertyDescriptorData) and
+         ExistingDescriptor.Writable then
+      begin
+        ExistingDescriptor.Free;
+        FProperties.Add(AName, ADescriptor);
+        Exit(True);
+      end;
+      ADescriptor.Free;
+      Exit(False);
+    end;
+    ExistingDescriptor.Free;
+  end
+  else if not FExtensible then
+  begin
+    ADescriptor.Free;
+    Exit(False);
+  end;
+  FProperties.Add(AName, ADescriptor);
+  Result := True;
 end;
 
 function TGocciaObjectValue.GetOwnPropertyNames: TArray<string>;
@@ -924,6 +958,43 @@ begin
   FSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
 end;
 
+// ES2026 §10.1.6.1 OrdinaryDefineOwnProperty(O, P, Desc) — symbol variant
+// Boolean variant — returns false instead of throwing on non-configurable
+// conflicts or non-extensible objects.
+function TGocciaObjectValue.TryDefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+var
+  ExistingDescriptor: TGocciaPropertyDescriptor;
+begin
+  if FSymbolDescriptors.TryGetValue(ASymbol, ExistingDescriptor) then
+  begin
+    if not ExistingDescriptor.Configurable then
+    begin
+      // ES2026 §10.1.6.3 step 7.g: Non-configurable data descriptor —
+      // allow value update only when existing is writable and new is also data.
+      if (ExistingDescriptor is TGocciaPropertyDescriptorData) and
+         (ADescriptor is TGocciaPropertyDescriptorData) and
+         ExistingDescriptor.Writable then
+      begin
+        ExistingDescriptor.Free;
+        FSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
+        Exit(True);
+      end;
+      ADescriptor.Free;
+      Exit(False);
+    end;
+    ExistingDescriptor.Free;
+  end
+  else if not FExtensible then
+  begin
+    ADescriptor.Free;
+    Exit(False);
+  end
+  else
+    FSymbolInsertionOrder.Add(ASymbol);
+  FSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
+  Result := True;
+end;
+
 procedure TGocciaObjectValue.AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
 var
   Descriptor: TGocciaPropertyDescriptor;
@@ -1031,15 +1102,14 @@ begin
       if (ReceiverDesc is TGocciaPropertyDescriptorAccessor) or
          (not ReceiverDesc.Writable) then
         Exit(False);
-      TGocciaPropertyDescriptorData(ReceiverDesc).Value := AValue;
-      Exit(True);
+      // Step 2d.iii-iv: Receiver.[[DefineOwnProperty]](P, { [[Value]]: V })
+      Exit(ReceiverObj.TryDefineSymbolProperty(ASymbol,
+        TGocciaPropertyDescriptorData.Create(AValue, ReceiverDesc.Flags)));
     end;
     // Step 2e: CreateDataProperty(Receiver, P, V)
-    if not ReceiverObj.Extensible then
-      Exit(False);
-    ReceiverObj.DefineSymbolProperty(ASymbol, TGocciaPropertyDescriptorData.Create(AValue,
-      [pfEnumerable, pfConfigurable, pfWritable]));
-    Exit(True);
+    Exit(ReceiverObj.TryDefineSymbolProperty(ASymbol,
+      TGocciaPropertyDescriptorData.Create(AValue,
+        [pfEnumerable, pfConfigurable, pfWritable])));
   end;
 
   if OwnDesc is TGocciaPropertyDescriptorData then
@@ -1061,18 +1131,16 @@ begin
       // Step 2d.ii: If existingDescriptor.[[Writable]] is false, return false
       if not ReceiverDesc.Writable then
         Exit(False);
-      // Step 2d.iii-iv: Update value on receiver
-      TGocciaPropertyDescriptorData(ReceiverDesc).Value := AValue;
-      Exit(True);
+      // Step 2d.iii-iv: Receiver.[[DefineOwnProperty]](P, { [[Value]]: V })
+      Exit(ReceiverObj.TryDefineSymbolProperty(ASymbol,
+        TGocciaPropertyDescriptorData.Create(AValue, ReceiverDesc.Flags)));
     end
     else
     begin
       // Step 2e: CreateDataProperty(Receiver, P, V)
-      if not ReceiverObj.Extensible then
-        Exit(False);
-      ReceiverObj.DefineSymbolProperty(ASymbol, TGocciaPropertyDescriptorData.Create(AValue,
-        [pfEnumerable, pfConfigurable, pfWritable]));
-      Exit(True);
+      Exit(ReceiverObj.TryDefineSymbolProperty(ASymbol,
+        TGocciaPropertyDescriptorData.Create(AValue,
+          [pfEnumerable, pfConfigurable, pfWritable])));
     end;
   end;
 
