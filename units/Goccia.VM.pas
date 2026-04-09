@@ -936,7 +936,8 @@ type
   public
     constructor Create(const AVM: TGocciaVM; const AName: string;
       const ASuperClass: TGocciaClassValue);
-    function Instantiate(const AArguments: TGocciaArgumentsCollection): TGocciaValue; override;
+    function Instantiate(const AArguments: TGocciaArgumentsCollection;
+      const ANewTarget: TGocciaClassValue = nil): TGocciaValue; override;
     function InstantiateRegisters(
       const AArguments: TGocciaRegisterArray): TGocciaRegister;
     function GetProperty(const AName: string): TGocciaValue; override;
@@ -1317,14 +1318,23 @@ begin
   inherited;
 end;
 
+// ES2026 §10.2.2 [[Construct]](argumentsList, newTarget)
 function TGocciaVMClassValue.Instantiate(
-  const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaClassValue): TGocciaValue;
 var
   Instance: TGocciaObjectValue;
   WalkClass: TGocciaClassValue;
   NativeInstance: TGocciaObjectValue;
   ConstructorToCall: TGocciaMethodValue;
+  InstancePrototype: TGocciaObjectValue;
 begin
+  // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget)
+  if Assigned(ANewTarget) then
+    InstancePrototype := ANewTarget.Prototype
+  else
+    InstancePrototype := Prototype;
+
   NativeInstance := nil;
   WalkClass := Self;
   while Assigned(WalkClass) do
@@ -1335,17 +1345,18 @@ begin
     WalkClass := WalkClass.SuperClass;
   end;
 
+  // ES2026 §10.2.2 step 6: Set proto on the instance before constructor runs
   if Assigned(NativeInstance) then
   begin
     Instance := NativeInstance;
-    Instance.Prototype := Prototype;
+    Instance.Prototype := InstancePrototype;
     if NativeInstance is TGocciaInstanceValue then
       TGocciaInstanceValue(NativeInstance).ClassValue := Self;
   end
   else
   begin
     Instance := TGocciaInstanceValue.Create(Self);
-    Instance.Prototype := Prototype;
+    Instance.Prototype := InstancePrototype;
   end;
 
   if Assigned(FConstructorValue) then
