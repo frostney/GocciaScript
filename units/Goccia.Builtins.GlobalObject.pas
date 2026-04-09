@@ -54,7 +54,6 @@ uses
   Goccia.Arguments.Validator,
   Goccia.Constants.PropertyNames,
   Goccia.Evaluator.Comparison,
-  Goccia.PropertyDescriptor.Utils,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
