@@ -18,7 +18,7 @@ It's based on the thought "What if we implement ECMAScript today, but without th
 - **Template Literals**: String interpolation with `${expression}`
 - **Destructuring**: Array and object destructuring patterns
 - **Spread/Rest**: `...` operator for arrays, objects, and function parameters
-- **Async/Await**: `async` arrow functions and methods, `await` expressions
+- **Async/Await**: `async` arrow functions and methods, `await` expressions, top-level `await`
 - **Iteration**: `for...of` loops over iterables (arrays, strings, Sets, Maps, custom iterables)
 - **Async Iteration**: `for await...of` loops over async iterables
 - **Regular Expressions**: `RegExp`, regex literals, and string integration via `match`, `matchAll`, `replace`, `replaceAll`, `search`, and `split`
@@ -46,7 +46,7 @@ It's based on the thought "What if we implement ECMAScript today, but without th
 | `Promise` | Constructor, `.then`/`.catch`/`.finally`, `all`/`allSettled`/`race`/`any` |
 | `Object.freeze`, `Object.isFrozen` | Immutable objects |
 | `Array.from`, `Array.of`, `Array.fromAsync` | Array construction (sync and async) |
-| `async`/`await` | `async () => { await promise; }` |
+| `async`/`await` | `async () => { await promise; }`, top-level `await` |
 | `for...of` | `for (const x of iterable) { ... }` |
 
 ### ECMAScript 2022–2025 Features
@@ -257,6 +257,20 @@ Runtime parsers are available for JSON5, TOML, YAML, and JSONL. See [Built-in Ob
 `TOML.parse(sourceText)` parses TOML 1.1.0 configuration data. `YAML.parse(sourceText)` handles common configuration files including block scalars, anchors/aliases, merge keys, and YAML 1.2 tag resolution. See [Language Restrictions](docs/language-restrictions.md#modules) and [Design Decisions](docs/design-decisions.md) for the full conformance details.
 
 JSONL parsing is also available via `JSONL.parse(text)` and `JSONL.parseChunk(text)`, and `.jsonl` files can be imported as structured-data modules.
+
+**Async/await** with full Promise support, including top-level `await`:
+
+```javascript
+const fetchData = async () => {
+  const result = await Promise.resolve({ status: "ok" });
+  return result;
+};
+
+// Top-level await (ES2022+)
+const data = await fetchData();
+```
+
+**Strict equality only** — `===` and `!==` (no `==` or `!=`).
 
 For a full guided walkthrough, see the [Tutorial](docs/tutorial.md). For the complete list of what's supported and excluded, see [Language Restrictions](docs/language-restrictions.md).
 

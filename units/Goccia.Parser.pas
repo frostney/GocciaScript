@@ -675,8 +675,8 @@ var
   Operator: TGocciaToken;
   Right: TGocciaExpression;
 begin
-  // ES2026 §15.8.2 AwaitExpression: await UnaryExpression
-  if (FInAsyncFunction > 0) and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) then
+  // ES2026 §16.1 top-level await / §15.8.2 AwaitExpression: await UnaryExpression
+  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) then
   begin
     Operator := Advance; // consume 'await'
     Right := Unary;
@@ -2084,8 +2084,8 @@ begin
   IsAwait := False;
   BindingPattern := nil;
 
-  // for-await-of: 'await' appears between 'for' and '(' (async context only)
-  if (FInAsyncFunction > 0) and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) then
+  // for-await-of: 'await' appears between 'for' and '(' (async or top-level)
+  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) then
   begin
     IsAwait := True;
     Advance; // consume 'await'
