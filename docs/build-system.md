@@ -279,7 +279,7 @@ Runs on the full platform matrix:
 
 **`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + examples, main only) — Uploads production binaries after all checks pass, deriving the executable names from the top-level `*.dpr` entrypoints.
 
-**`release`** (needs test + toml-compliance + json5-compliance + benchmark + examples, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the top-level `*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), and creates a GitHub release using `softprops/action-gh-release`.
+**`release`** (needs test + toml-compliance + json5-compliance + benchmark + examples, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the top-level `*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), generates categorized release notes via [git-cliff](https://git-cliff.org/) (`cliff.toml`), and creates a GitHub release using `softprops/action-gh-release`.
 
 ### `pr.yml` — Pull requests
 
@@ -300,6 +300,59 @@ Runs on **ubuntu-latest x64 only** (single runner, no matrix).
 **`examples`** (needs build) — Runs all example scripts from the `examples/` folder.
 
 FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, benchmark, example, and TOML conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, benchmark, and example jobs do the same.
+
+## Changelog
+
+The project maintains a `CHANGELOG.md` generated from git history using [git-cliff](https://git-cliff.org/). The configuration lives in `cliff.toml` at the project root.
+
+### How It Works
+
+Commits are categorized by their leading verb into groups:
+
+| Verb prefix | Category |
+|-------------|----------|
+| `Add`, `Implement`, `Support`, `Allow`, `Create`, `Enable` | 🚀 Added |
+| `Fix`, `Fixes`, `Route`, `Thread`, `Harden`, `Handle` | 🐛 Fixed |
+| `Improve`, `Include`, `Make` | ✨ Improved |
+| `Replace`, `Optimize`, `Promote`, `Eliminate`, `Bypass`, `Inline` | ⚡ Performance |
+| `Remove` | 🗑️ Removed |
+| `Refactor`, `Extract`, `Update`, `Strip` | 🏗️ Internal |
+
+Merge commits are automatically excluded.
+
+### Generating the Changelog
+
+```bash
+# Install git-cliff
+brew install git-cliff           # macOS
+cargo install git-cliff          # Any platform with Rust
+
+# Generate full changelog
+git-cliff -o CHANGELOG.md
+
+# Preview unreleased changes
+git-cliff --unreleased
+
+# Preview the latest release notes
+git-cliff --latest --strip header
+```
+
+### CI Integration
+
+The release job in `ci.yml` uses the [`orhun/git-cliff-action`](https://github.com/orhun/git-cliff-action) to generate categorized release notes for each tagged release. GitHub's auto-generated release notes (`.github/release.yml`) provide an additional PR-label-based view.
+
+### PR Labels
+
+PRs should be labeled for the GitHub release notes categorization:
+
+| Label | Category |
+|-------|----------|
+| `new feature` | 🚀 New Features |
+| `spec compliance` | 📐 Compliance |
+| `bug`, `os specific` | 🐛 Bug Fixes |
+| `performance` | ⚡ Performance |
+| `documentation` | 📖 Documentation |
+| `internal` | 🏗️ Internal |
 
 ## Auto-Formatter
 

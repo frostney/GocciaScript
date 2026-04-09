@@ -975,10 +975,41 @@ jobs:
             rm -rf "$pkg_dir"
           done
 
+      - name: Generate release notes
+        uses: orhun/git-cliff-action@v4
+        id: changelog
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: RELEASE_NOTES.md
+          GITHUB_REPO: ${{ github.repository }}
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
           files: |
             gocciascript-*.tar.gz
             gocciascript-*.zip
+
+      - name: Generate full changelog
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: -o CHANGELOG.md
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Commit changelog to main
+        run: |
+          git checkout main
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          if git diff --cached --quiet; then
+            echo "No changelog changes to commit"
+          else
+            git commit -m "Update CHANGELOG.md for ${GITHUB_REF_NAME}"
+            git push origin main
+          fi
