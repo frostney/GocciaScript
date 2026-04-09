@@ -67,6 +67,18 @@ describe("Function.prototype.apply", () => {
     expect(fn.apply(undefined, arrayLike)).toBe("hello");
   });
 
+  test("treats absent length as zero", () => {
+    const fn = (...args) => args.length;
+    expect(fn.apply(undefined, {})).toBe(0);
+    expect(fn.apply(undefined, { 0: "ignored" })).toBe(0);
+  });
+
+  test("treats non-numeric string length as zero", () => {
+    const fn = (...args) => args.length;
+    expect(fn.apply(undefined, { length: "foo" })).toBe(0);
+    expect(fn.apply(undefined, { 0: "ignored", length: "bar" })).toBe(0);
+  });
+
   test("throws TypeError if argArray is not an object", () => {
     const fn = () => {};
     expect(() => fn.apply(undefined, "not-array")).toThrow(TypeError);

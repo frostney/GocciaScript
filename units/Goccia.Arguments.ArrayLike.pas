@@ -16,6 +16,7 @@ function CreateListFromArrayLike(const AValue: TGocciaValue; const AMethodName: 
 implementation
 
 uses
+  Math,
   SysUtils,
 
   Goccia.Constants.PropertyNames,
@@ -29,6 +30,7 @@ var
   ArrVal: TGocciaArrayValue;
   ArrayObj: TGocciaObjectValue;
   LengthProp: TGocciaValue;
+  LengthValue: Double;
   Len, I: Integer;
   Element: TGocciaValue;
 begin
@@ -48,17 +50,23 @@ begin
 
   // ES2026 §7.3.18 step 2: Let len be ? LengthOfArrayLike(obj)
   // ES2026 §7.3.3 LengthOfArrayLike: ToLength(? Get(obj, "length"))
+  // ES2026 §7.1.22 ToLength: NaN/negative → 0, cap at 2^53−1
   ArrayObj := TGocciaObjectValue(AValue);
   LengthProp := ArrayObj.GetProperty(PROP_LENGTH);
-  if (LengthProp is TGocciaUndefinedLiteralValue) or
+  if not Assigned(LengthProp) or
+     (LengthProp is TGocciaUndefinedLiteralValue) or
      (LengthProp is TGocciaNullLiteralValue) then
     Len := 0
   else
   begin
-    Len := Trunc(LengthProp.ToNumberLiteral.Value);
-    // ES2026 §7.1.22 ToLength step 2: If len <= 0, return +0
-    if Len < 0 then
-      Len := 0;
+    LengthValue := LengthProp.ToNumberLiteral.Value;
+    // Trunc raises EInvalidOp for NaN/Infinity in FPC 3.2.2
+    if IsNan(LengthValue) or (LengthValue <= 0) then
+      Len := 0
+    else if LengthValue >= MaxInt then
+      Len := MaxInt
+    else
+      Len := Trunc(LengthValue);
   end;
 
   // ES2026 §7.3.18 steps 3-5: Iterate and collect elements
