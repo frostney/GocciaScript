@@ -158,7 +158,7 @@ begin
   for I := 0 to EntryCount - 1 do
   begin
     if Total > 0 then
-      Pct := (Entries[I].Count * 1.0 / Total) * 100.0
+      Pct := (Entries[I].Count / Total) * 100.0
     else
       Pct := 0.0;
     WriteLn(Format('  %-40s %15d %7.1f%%', [
@@ -219,7 +219,7 @@ begin
   for I := 0 to Min(EntryCount, MAX_OPCODE_PAIRS_DISPLAYED) - 1 do
   begin
     if Total > 0 then
-      Pct := (Entries[I].Count * 1.0 / Total) * 100.0
+      Pct := (Entries[I].Count / Total) * 100.0
     else
       Pct := 0.0;
     WriteLn(Format('  %-40s  -> %-40s %15d %7.1f%%', [
@@ -248,7 +248,7 @@ begin
     Exit;
   end;
 
-  HitPct := (Hits * 1.0 / Total) * 100.0;
+  HitPct := (Hits / Total) * 100.0;
 
   WriteLn;
   WriteLn('Scalar Fast-Path:');
@@ -367,7 +367,7 @@ begin
         Buf.AppendChar(',');
       FirstEntry := False;
       if Total > 0 then
-        Pct := (Count * 1.0 / Total) * 100.0
+        Pct := (Count / Total) * 100.0
       else
         Pct := 0.0;
       Buf.Append(Format(#10'    {"opcode": "%s", "count": %d, "percentage": %.1f}', [

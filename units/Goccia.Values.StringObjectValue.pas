@@ -1699,7 +1699,7 @@ begin
     Exit;
   end;
 
-  Result := TGocciaNumberLiteralValue.Create(CodePoint * 1.0);
+  Result := TGocciaNumberLiteralValue.Create(CodePoint);
 end;
 
 // ES2026 §22.1.3.11 String.prototype.localeCompare(that)

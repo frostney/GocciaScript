@@ -415,7 +415,7 @@ end;
 
 procedure TGocciaJSONVisitor.OnInteger(const AValue: Int64);
 begin
-  EmitValue(TGocciaNumberLiteralValue.Create(AValue * 1.0));
+  EmitValue(TGocciaNumberLiteralValue.Create(AValue));
 end;
 
 procedure TGocciaJSONVisitor.OnFloat(const AValue: Double);

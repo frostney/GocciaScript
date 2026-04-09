@@ -291,7 +291,7 @@ begin
   else
     CountVal := Trunc(Current.ToNumberLiteral.Value) + 1;
 
-  FCounters.AssignProperty(LabelStr, TGocciaNumberLiteralValue.Create(CountVal * 1.0));
+  FCounters.AssignProperty(LabelStr, TGocciaNumberLiteralValue.Create(CountVal));
   EmitLine(GroupPrefix + LabelStr + ': ' + IntToStr(CountVal));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;

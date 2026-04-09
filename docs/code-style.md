@@ -312,21 +312,49 @@ When a method only needs to expose elements for iteration, an indexed getter wit
 
 ## Platform-Specific Pitfalls
 
-### `Double(Int64)` on FPC 3.2.2 AArch64
+### `Int64` to `Double` Conversion on FPC 3.2.2
 
-On FPC 3.2.2 targeting AArch64 (Apple Silicon), an explicit `Double(Int64Var)` cast performs a **bit reinterpretation** instead of a value conversion. This produces garbage floating-point values (e.g., `Double(Int64(1000))` yields `~4.94e-315` instead of `1000.0`).
+FPC 3.2.2 has **two bugs** affecting `Int64` → `Double` conversion. Bug A is a Delphi-mode front-end issue that affects **all platforms**. Bug B is an AArch64-specific codegen issue.
 
-**Workaround:** Use implicit promotion via arithmetic instead of explicit casts:
+#### Bug A: `Double(Int64Var)` bit reinterpretation — [FPC #35886](https://gitlab.com/freepascal.org/fpc/source/-/issues/35886)
 
-```pascal
-// WRONG on AArch64 — bit-casts instead of converting
-Result := Double(FEpochMilliseconds) * 1000000.0;
+In `{$mode delphi}`, an explicit `Double(Int64Var)` cast performs a **Turbo Pascal-style bit reinterpretation** instead of a value conversion. This produces garbage floating-point values (e.g., `Double(Int64(1000))` yields `~4.94e-315` instead of `1000.0`). This is a compiler front-end bug in `defcmp.pas` that affects all platforms in Delphi mode. Fixed in FPC trunk (3.3.1, [commit `1da43f67`](https://gitlab.com/freepascal.org/fpc/source/-/commit/1da43f67d40dd92ea2fb1cfa327d6088fa838aa7)) but **not backported** to 3.2.x.
 
-// CORRECT — implicit promotion via multiplication
-Result := FEpochMilliseconds * 1000000.0;
+#### Bug B: `Int64 * 1.0` wrong results near ±2³¹ (AArch64 only)
+
+Mixed `Int64 * Double` arithmetic produces **wrong results** for `Int64` values near the `LongInt` boundary (±2,147,483,648). This affects all arithmetic operators (`*`, `+`, `-`, `/`) where one operand is `Int64` and the other is `Double`. FPC appears to use a 32-bit `SCVTF` instruction instead of 64-bit when promoting `Int64` through arithmetic expressions. This is AArch64-specific and has **not yet been reported upstream**.
+
+```text
+// Observed on FPC 3.2.2 AArch64, all optimization levels:
+Int64(-2147483647) * 1.0  →  -2147483648   // WRONG (should be -2147483647)
+Int64(-2147483649) * 1.0  →  -2147483648   // WRONG (should be -2147483649)
+Int64( 2147483649) * 1.0  →   2147483648   // WRONG (should be  2147483649)
+Int64(-3000000000) * 1.0  →  -3000000000   // correct (far from boundary)
 ```
 
-This affects any code that converts `Int64` fields to `Double` for floating-point arithmetic. The same issue applies to intermediate `Int64` local variables cast to `Double`.
+#### Safe conversion
+
+Use **implicit assignment** or **function parameter passing** — both use the correct 64-bit conversion path and are unaffected by either bug:
+
+```pascal
+// WRONG — bit reinterpretation in Delphi mode (Bug A)
+Result := Double(FEpochMilliseconds) * 1000000.0;
+
+// WRONG — wrong results near ±2^31 on AArch64 (Bug B)
+Result := FEpochMilliseconds * 1.0;
+
+// CORRECT — implicit assignment
+var D: Double;
+D := FEpochMilliseconds;
+Result := D * 1000000.0;
+
+// CORRECT — implicit promotion at function call boundary
+// When passing Int64 to a function/constructor that takes Double,
+// FPC generates the correct 64-bit SCVTF instruction.
+Result := TGocciaNumberLiteralValue.Create(SomeInt64Value);
+```
+
+This affects any code that converts `Int64` fields to `Double` for floating-point arithmetic. Note that `Int64 / Int64` is safe — FPC's `/` operator already returns `Extended` for integer operands, so no explicit promotion is needed for division.
 
 ### Endian-Dependent Byte Indexing
 
