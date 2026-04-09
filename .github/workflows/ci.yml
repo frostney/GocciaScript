@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 env:
   FPC_VERSION: "3.2.2"
@@ -1010,17 +1011,21 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH" origin/main
+          git checkout -B "$BRANCH" origin/main
           git add CHANGELOG.md
           if git diff --cached --quiet; then
             echo "No changelog changes"
           else
             git commit -m "Update CHANGELOG.md for ${VERSION}"
-            git push origin "$BRANCH"
-            gh pr create \
-              --title "Update CHANGELOG.md for ${VERSION}" \
-              --body "Auto-generated changelog update for the ${VERSION} release." \
-              --base main \
-              --head "$BRANCH" \
-              --label internal
+            git push --force-with-lease origin "$BRANCH"
+            if gh pr view "$BRANCH" --json state --jq .state 2>/dev/null | grep -q OPEN; then
+              echo "PR already exists for $BRANCH"
+            else
+              gh pr create \
+                --title "Update CHANGELOG.md for ${VERSION}" \
+                --body "Auto-generated changelog update for the ${VERSION} release." \
+                --base main \
+                --head "$BRANCH" \
+                --label internal
+            fi
           fi

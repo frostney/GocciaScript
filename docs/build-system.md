@@ -318,7 +318,7 @@ Commits are categorized by their leading verb into groups:
 | `Remove` | 🗑️ Removed |
 | `Refactor`, `Extract`, `Update`, `Strip` | 🏗️ Internal |
 
-Merge commits are automatically excluded.
+This table shows common prefixes. See `cliff.toml` for the complete list of patterns, which includes additional verb-specific and phrase-specific matchers.
 
 ### Generating the Changelog
 
