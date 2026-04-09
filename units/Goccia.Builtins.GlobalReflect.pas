@@ -40,6 +40,7 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Arguments.ArrayLike,
   Goccia.Arguments.Validator,
   Goccia.Constants.PropertyNames,
   Goccia.Utils,
@@ -100,9 +101,7 @@ function TGocciaGlobalReflect.ReflectApply(const AArgs: TGocciaArgumentsCollecti
 var
   Target, ThisArg: TGocciaValue;
   ArgsList: TGocciaValue;
-  ArgsArray: TGocciaArrayValue;
   CallArgs: TGocciaArgumentsCollection;
-  I: Integer;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 3, 'Reflect.apply', ThrowError);
 
@@ -115,15 +114,8 @@ begin
     ThrowTypeError('Reflect.apply: target must be a function');
 
   // Step 2: Let args be ? CreateListFromArrayLike(argumentsList)
-  if not (ArgsList is TGocciaArrayValue) then
-    ThrowTypeError('Reflect.apply: argumentsList must be an array');
-
-  ArgsArray := TGocciaArrayValue(ArgsList);
-  CallArgs := TGocciaArgumentsCollection.Create;
+  CallArgs := CreateListFromArrayLike(ArgsList, 'Reflect.apply');
   try
-    for I := 0 to ArgsArray.Elements.Count - 1 do
-      CallArgs.Add(ArgsArray.Elements[I]);
-
     // Step 3: Return ? Call(target, thisArgument, args)
     Result := TGocciaFunctionBase(Target).Call(CallArgs, ThisArg);
   finally
@@ -137,10 +129,7 @@ var
   Target: TGocciaValue;
   ArgsList: TGocciaValue;
   NewTarget: TGocciaValue;
-  ArgsArray: TGocciaArrayValue;
   CallArgs: TGocciaArgumentsCollection;
-  Instance: TGocciaValue;
-  I: Integer;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Reflect.construct', ThrowError);
 
@@ -152,36 +141,27 @@ begin
     ThrowTypeError('Reflect.construct: target must be a constructor');
 
   // Step 2: Let args be ? CreateListFromArrayLike(argumentsList)
-  if not (ArgsList is TGocciaArrayValue) then
-    ThrowTypeError('Reflect.construct: argumentsList must be an array');
-
-  // Step 3: If IsConstructor(newTarget) is false, throw a TypeError exception
-  if AArgs.Length >= 3 then
-  begin
-    NewTarget := AArgs.GetElement(2);
-    if not (NewTarget is TGocciaClassValue) then
-      ThrowTypeError('Reflect.construct: newTarget must be a constructor');
-  end
-  else
-    NewTarget := Target;
-
-  ArgsArray := TGocciaArrayValue(ArgsList);
-  CallArgs := TGocciaArgumentsCollection.Create;
+  CallArgs := CreateListFromArrayLike(ArgsList, 'Reflect.construct');
   try
-    for I := 0 to ArgsArray.Elements.Count - 1 do
-      CallArgs.Add(ArgsArray.Elements[I]);
+    // Step 3: If IsConstructor(newTarget) is false, throw a TypeError exception
+    if AArgs.Length >= 3 then
+    begin
+      NewTarget := AArgs.GetElement(2);
+      if not (NewTarget is TGocciaClassValue) then
+        ThrowTypeError('Reflect.construct: newTarget must be a constructor');
+    end
+    else
+      NewTarget := Target;
 
     // Step 4: Return ? Construct(target, args, newTarget)
     // Pass newTarget so the instance prototype is set before the constructor runs
     if NewTarget <> Target then
-      Instance := TGocciaClassValue(Target).Instantiate(CallArgs, TGocciaClassValue(NewTarget))
+      Result := TGocciaClassValue(Target).Instantiate(CallArgs, TGocciaClassValue(NewTarget))
     else
-      Instance := TGocciaClassValue(Target).Instantiate(CallArgs);
+      Result := TGocciaClassValue(Target).Instantiate(CallArgs);
   finally
     CallArgs.Free;
   end;
-
-  Result := Instance;
 end;
 
 // ES2026 §28.1.3 Reflect.defineProperty(target, propertyKey, attributes)
