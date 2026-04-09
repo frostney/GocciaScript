@@ -199,13 +199,14 @@ begin
     try
       Args.Add(FTarget);
       Args.Add(TGocciaStringLiteralValue.Create(AName));
-      Args.Add(Self);
+      // ES2026 §10.5.8 step 7: Pass the receiver, not the proxy itself
+      Args.Add(AThisContext);
       Result := InvokeTrap(Trap, Args);
     finally
       Args.Free;
     end;
 
-    // ES2026 §28.1.1 step 8-9: Invariant validation.
+    // ES2026 §10.5.8 step 8-9: Invariant validation.
     if FTarget is TGocciaObjectValue then
     begin
       TargetDesc := TGocciaObjectValue(FTarget).GetOwnPropertyDescriptor(AName);
@@ -224,6 +225,9 @@ begin
       end;
     end;
   end
+  else if FTarget is TGocciaObjectValue then
+    // ES2026 §10.5.8 step 10: Return ? target.[[Get]](P, Receiver)
+    Result := TGocciaObjectValue(FTarget).GetPropertyWithContext(AName, AThisContext)
   else
     Result := FTarget.GetProperty(AName);
 end;

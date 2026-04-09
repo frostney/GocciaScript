@@ -601,10 +601,22 @@ begin
     // Step 1a-b: Walk prototype chain
     if Assigned(FPrototype) then
       Exit(FPrototype.AssignPropertyWithReceiver(AName, AValue, AReceiver));
-    // Step 1c: No prototype — treat as absent, create on receiver
+    // Step 1c: No prototype — ownDesc defaults to writable data descriptor,
+    // fall through to step 2 which consults Receiver.[[GetOwnProperty]](P)
     if not (AReceiver is TGocciaObjectValue) then
       Exit(False);
     ReceiverObj := TGocciaObjectValue(AReceiver);
+    ReceiverDesc := ReceiverObj.GetOwnPropertyDescriptor(AName);
+    if Assigned(ReceiverDesc) then
+    begin
+      // Step 2d: Receiver already has own property P
+      if (ReceiverDesc is TGocciaPropertyDescriptorAccessor) or
+         (not ReceiverDesc.Writable) then
+        Exit(False);
+      TGocciaPropertyDescriptorData(ReceiverDesc).Value := AValue;
+      Exit(True);
+    end;
+    // Step 2e: CreateDataProperty(Receiver, P, V)
     if not ReceiverObj.Extensible then
       Exit(False);
     ReceiverObj.DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
@@ -1007,10 +1019,22 @@ begin
     // Step 1a-b: Walk prototype chain
     if Assigned(FPrototype) then
       Exit(FPrototype.AssignSymbolPropertyWithReceiver(ASymbol, AValue, AReceiver));
-    // Step 1c: No prototype — treat as absent, create on receiver
+    // Step 1c: No prototype — ownDesc defaults to writable data descriptor,
+    // fall through to step 2 which consults Receiver.[[GetOwnProperty]](P)
     if not (AReceiver is TGocciaObjectValue) then
       Exit(False);
     ReceiverObj := TGocciaObjectValue(AReceiver);
+    ReceiverDesc := ReceiverObj.GetOwnSymbolPropertyDescriptor(ASymbol);
+    if Assigned(ReceiverDesc) then
+    begin
+      // Step 2d: Receiver already has own property P
+      if (ReceiverDesc is TGocciaPropertyDescriptorAccessor) or
+         (not ReceiverDesc.Writable) then
+        Exit(False);
+      TGocciaPropertyDescriptorData(ReceiverDesc).Value := AValue;
+      Exit(True);
+    end;
+    // Step 2e: CreateDataProperty(Receiver, P, V)
     if not ReceiverObj.Extensible then
       Exit(False);
     ReceiverObj.DefineSymbolProperty(ASymbol, TGocciaPropertyDescriptorData.Create(AValue,
