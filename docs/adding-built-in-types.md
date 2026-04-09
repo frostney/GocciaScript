@@ -2,6 +2,13 @@
 
 *For contributors adding a new built-in type to the engine — a step-by-step recipe.*
 
+## Executive Summary
+
+- **10-step recipe** — Value type, built-in registration, class value subclass, engine integration, constants, structuredClone, tests, benchmarks, documentation
+- **Key patterns** — Shared prototype singleton (GC-pinned), `ThisValue` for method callbacks (not `Self`), `MarkReferences` for GC
+- **Engine integration** — Add enum flag, `DefaultGlobals`, field, `RegisterBuiltIns`, `RegisterBuiltinConstructors`, destructor cleanup
+- **Checklist included** — Complete checklist at the end of the document for verification
+
 This guide walks through every step needed to add a new built-in type to GocciaScript. Follow the steps in order; each section references the exact files and patterns involved.
 
 ## Overview

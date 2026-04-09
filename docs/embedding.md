@@ -2,6 +2,13 @@
 
 *For FreePascal developers who want to embed the GocciaScript engine in their own applications.*
 
+## Executive Summary
+
+- **Quick start** — `TGocciaEngine.RunScript('code')` for one-shot execution; `TGocciaEngine.Create(...)` for long-lived engines
+- **Sandboxing** — Control available built-ins via `TGocciaGlobalBuiltins` flags; inject custom globals via `DefineLexicalBinding`
+- **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, and global modules
+- **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
+
 GocciaScript is designed to be embedded in FreePascal applications. The `TGocciaEngine` class provides the public API for executing scripts, controlling available built-ins, and injecting custom globals.
 
 ## Quick Start
@@ -315,7 +322,8 @@ The `TGocciaGlobalBuiltins` set controls which built-in objects are available to
 
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
-                  ggGlobalNumber, ggPromise, ggJSON, ggJSON5, ggTOML, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
+                  ggGlobalNumber, ggPromise, ggJSON, ggJSON5, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap,
+                  ggPerformance, ggTemporal, ggJSX, ggArrayBuffer, ggProxy, ggReflect];
 ```
 
 ### Available Flags
@@ -329,6 +337,7 @@ DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
 | `ggGlobalNumber` | `Number.*` | `parseInt`, `isNaN`, constants, etc. |
 | `ggJSON` | `JSON.parse`, `JSON.stringify` | Serialization |
 | `ggJSON5` | `JSON5.parse`, `JSON5.stringify` | JSON5 configuration parsing and serialization |
+| `ggJSONL` | `JSONL.parse`, `JSONL.parseChunk` | Newline-delimited JSON parsing |
 | `ggTOML` | `TOML.parse` | TOML 1.1.0 configuration parsing |
 | `ggSymbol` | `Symbol`, `Symbol.for`, `Symbol.keyFor` | Unique property keys |
 | `ggSet` | `Set` constructor and methods | Unique value collections |
@@ -338,6 +347,9 @@ DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
 | `ggTemporal` | `Temporal.*` | Dates, times, durations, instants |
 | `ggJSX` | JSX transformer | Source-to-source JSX → `createElement` pre-pass |
 | `ggArrayBuffer` | `ArrayBuffer`, `SharedArrayBuffer`, TypedArrays | Binary data buffers and typed views |
+| `ggProxy` | `Proxy`, `Proxy.revocable` | ES2026 Proxy with handler traps |
+| `ggReflect` | `Reflect.*` | Reflect API (apply, construct, defineProperty, etc.) |
+| `ggFFI` | `FFI.open`, `FFILibrary`, `FFIPointer` | Foreign Function Interface for native shared libraries (not in DefaultGlobals) |
 | `ggTestAssertions` | `describe`, `test`, `expect` | Testing framework |
 | `ggBenchmark` | `suite`, `bench` | Benchmark framework |
 

@@ -2,6 +2,13 @@
 
 *For contributors measuring performance or adding new benchmarks.*
 
+## Executive Summary
+
+- **`suite`/`bench` API** — `bench(name, { setup?, run, teardown? })` with auto-calibration, warmup, and IQR outlier filtering
+- **Four output formats** — `console` (default), `text`, `csv`, `json`; configurable via `--format` and `--output`
+- **CI integration** — PR workflow posts benchmark comparison comments with range-overlap classification
+- **Environment tuning** — Calibration time, warmup iterations, and measurement rounds configurable via environment variables
+
 GocciaScript includes a benchmark runner for measuring execution performance. Benchmarks live in the `benchmarks/` directory and use a `suite`/`bench` API.
 
 ## Running Benchmarks

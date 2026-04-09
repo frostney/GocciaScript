@@ -2,6 +2,13 @@
 
 Chronological record of key architectural and implementation decisions. Each entry gives a 1–3 sentence summary with links to the detailed documentation.
 
+## Executive Summary
+
+- **Bytecode fold-in** — The bytecode backend is now Goccia-owned, operating directly on `TGocciaValue` with dedicated opcodes
+- **Evaluator design** — Pure functions, virtual dispatch, `TGocciaControlFlow` records (not exceptions) for break/return
+- **Data structures** — Custom hash maps (4-6x faster than `TDictionary`), `TStringBuffer` (not `TStringBuilder`), no string interning
+- **FPC findings** — Generics have zero runtime cost; virtual dispatch is constant-time; ObjFPC vs Delphi mode has zero performance impact
+
 ## Bytecode VM Fold-In
 
 **Fold the old Souffle VM into GocciaScript proper.** The bytecode backend is no longer treated as a language-agnostic subsystem. The decision was driven by repeated failed attempts to remove the bridge, constraints on fast-path optimization while preserving generic abstractions, and Win32 memory pressure caused by bridged builtin-heavy execution. The target architecture keeps the interpreter path, but runs bytecode directly on `TGocciaValue`, shared runtime objects, and Goccia-owned bytecode units and opcodes. See [design-decisions.md § Bytecode VM](design-decisions.md#bytecode-vm) and [bytecode-vm.md](bytecode-vm.md).

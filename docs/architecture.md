@@ -2,6 +2,13 @@
 
 *For contributors who need to understand how source code flows through the system.*
 
+## Executive Summary
+
+- **Shared frontend** — Lexer, Parser, and AST are shared between interpreter and bytecode backends
+- **Two backends** — tree-walk interpreter (default) and register-based bytecode VM (`--mode=bytecode`)
+- **Unified runtime** — Both backends share the same value types, built-ins, scope chain, and mark-and-sweep GC
+- **Goccia-specific** — The bytecode VM operates directly on `TGocciaValue`, not a generic VM abstraction
+
 ## Overview
 
 GocciaScript has two execution backends:

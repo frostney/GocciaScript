@@ -2,6 +2,13 @@
 
 *For contributors adding or modifying built-in objects, and for script authors looking up available APIs.*
 
+## Executive Summary
+
+- **Flag-gated registration** — Each built-in is controlled by a `TGocciaGlobalBuiltins` flag (e.g., `ggConsole`, `ggMath`, `ggJSON`), enabling sandboxed execution
+- **23 built-in flags** — Console, Math, Object, Array, Number, JSON, JSON5, JSONL, TOML, YAML, Symbol, Set, Map, Promise, Performance, Temporal, JSX, ArrayBuffer, FFI, Proxy, Reflect, plus test/benchmark frameworks
+- **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
+- **Always-present globals** — `globalThis` and `Goccia` namespace are registered after all flag-gated built-ins
+
 GocciaScript provides a set of built-in global objects that mirror JavaScript's standard library. Each built-in is implemented as a Pascal unit and registered by the engine based on configuration flags.
 
 ## Registration System
@@ -31,6 +38,7 @@ TGocciaGlobalBuiltin = (
   ggJSX,             // JSX transformer support
   ggArrayBuffer,     // ArrayBuffer constructor and prototype
   ggFFI,             // Foreign Function Interface
+  ggProxy,           // Proxy constructor with handler traps
   ggReflect          // Reflect API
 );
 ```
@@ -40,7 +48,7 @@ The default set used by `ScriptLoader` and `REPL`:
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
                   ggGlobalNumber, ggPromise, ggJSON, ggJSON5, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap,
-                  ggPerformance, ggTemporal, ggJSX, ggArrayBuffer, ggReflect];
+                  ggPerformance, ggTemporal, ggJSX, ggArrayBuffer, ggProxy, ggReflect];
 ```
 
 The `TestRunner` adds `ggTestAssertions` to inject the test framework.
@@ -1000,6 +1008,37 @@ TypedArrays provide array-like views over ArrayBuffer data with fixed element ty
 
 **Not supported:** `BigInt64Array`, `BigUint64Array` (BigInt types), `DataView`.
 
+### FFI (`Goccia.Builtins.GlobalFFI.pas`)
+
+Foreign Function Interface for calling native shared libraries. Only available when `ggFFI` is enabled (not in `DefaultGlobals`).
+
+**FFI global object:**
+
+| Method/Property | Description |
+|--------|-------------|
+| `FFI.open(path)` | Open a dynamic library, returns an `FFILibrary` |
+| `FFI.nullptr` | Singleton null pointer value |
+| `FFI.suffix` | Platform library suffix (`.dylib`, `.so`, `.dll`) |
+
+**FFILibrary methods:**
+
+| Method/Property | Description |
+|--------|-------------|
+| `library.bind(funcName, signature)` | Bind a native function. `signature` is `{ args: ['i32', ...], returns: 'i32' }`. Returns a callable function. |
+| `library.symbol(name)` | Get raw pointer to a named symbol |
+| `library.close()` | Unload the library |
+| `library.path` | Full path to the loaded library |
+| `library.closed` | Whether the library has been closed |
+
+**FFIPointer properties:**
+
+| Property | Description |
+|----------|-------------|
+| `ptr.address` | Numeric address |
+| `ptr.isNull` | Whether pointer is null |
+
+**Supported FFI types:** `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`, `pointer`, `cstring`, `bool`, `void` (return only). `i64`/`u64` are not available on i386. Max 8 arguments per function. Pointer arguments accept `FFIPointer`, `ArrayBuffer`, `SharedArrayBuffer`, `TypedArray`, or `null`.
+
 ### Test Assertions (`Goccia.Builtins.TestAssertions.pas`)
 
 Only available when `ggTestAssertions` is enabled.
@@ -1080,6 +1119,42 @@ suite("group name", () => {
 **Result object** (returned by `runBenchmarks()`):
 
 Each benchmark result includes: `name`, `suite`, `opsPerSec`, `meanMs`, `iterations`, `totalMs`, `variancePercentage`, and optionally `error`.
+
+### Proxy (`Goccia.Builtins.GlobalProxy.pas`, `Goccia.Values.ProxyValue.pas`)
+
+ES2026 Proxy constructor with all 13 handler traps and invariant enforcement.
+
+**Constructor:**
+
+| Constructor | Description |
+|-------------|-------------|
+| `new Proxy(target, handler)` | Create a proxy wrapping `target` with `handler` traps. Both must be objects; throws `TypeError` otherwise. |
+
+**Static methods:**
+
+| Method | Description |
+|--------|-------------|
+| `Proxy.revocable(target, handler)` | Returns `{ proxy, revoke }`. Calling `revoke()` causes all subsequent trap operations to throw `TypeError`. |
+
+**Supported traps:**
+
+| Trap | Handler Signature | Triggered by |
+|------|-------------------|-------------|
+| `get` | `(target, prop, receiver)` | Property read (`proxy.x`, `proxy[key]`) |
+| `set` | `(target, prop, value, receiver) → boolean` | Property write (`proxy.x = v`) |
+| `has` | `(target, prop) → boolean` | `key in proxy` |
+| `deleteProperty` | `(target, prop) → boolean` | `delete proxy.x` |
+| `getOwnPropertyDescriptor` | `(target, prop) → descriptor \| undefined` | `Object.getOwnPropertyDescriptor(proxy, key)` |
+| `defineProperty` | `(target, prop, descriptor) → boolean` | `Object.defineProperty(proxy, key, desc)` |
+| `getPrototypeOf` | `(target) → object \| null` | `Object.getPrototypeOf(proxy)` |
+| `setPrototypeOf` | `(target, proto) → boolean` | `Object.setPrototypeOf(proxy, proto)` |
+| `isExtensible` | `(target) → boolean` | `Object.isExtensible(proxy)` |
+| `preventExtensions` | `(target) → boolean` | `Object.preventExtensions(proxy)` |
+| `ownKeys` | `(target) → array` | `Object.keys(proxy)`, `Reflect.ownKeys(proxy)` |
+| `apply` | `(target, thisArg, args)` | Function call `proxy(...)` (callable proxies only) |
+| `construct` | `(target, args, newTarget) → object` | `new proxy(...)` (callable proxies only) |
+
+All traps support both string and symbol property keys. Each trap enforces ES2026 invariants (e.g., `get` on a non-configurable non-writable property must return the same value).
 
 ### Reflect (`Goccia.Builtins.GlobalReflect.pas`)
 

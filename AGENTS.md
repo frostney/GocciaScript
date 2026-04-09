@@ -122,6 +122,8 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Shared values | `Goccia.Values.*.pas` | Arrays, objects, classes, promises, iterators, primitives |
 | Garbage collector | `GarbageCollector.Generic.pas` | Shared GC for interpreter and bytecode execution |
 | Profiler | `Goccia.Profiler*.pas` | Bytecode opcode/function profiling, pair tracking, allocation counting |
+| Proxy | `Goccia.Values.ProxyValue.pas` | ES2026 Proxy with all 13 handler traps and invariant enforcement |
+| FFI | `Goccia.FFI*.pas`, `Goccia.Values.FFI*.pas` | Foreign Function Interface for native shared libraries |
 
 **Bytecode design rules:**
 
@@ -129,7 +131,6 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 - Bytecode mode uses the same runtime objects as the interpreter.
 - Use `Goccia.Bytecode*` and `Goccia.VM*` names in new code.
 - Use `.gbc`, not `.sbc`.
-- WASM emission is removed pre-1.0.
 - Prefer Goccia-specific opcodes over generic extension layers when the semantics are language-owned.
 
 ## Development Workflow
@@ -182,6 +183,12 @@ git commit -m "Add Array.prototype.flat and flatMap"
 
 Do **not** commit directly to `main`. All changes go through branches.
 
+### Issues and Pull Requests
+
+When creating GitHub issues, use the issue template (`.github/ISSUE_TEMPLATE/default.md`) which requires: Summary, Why, Current behavior, Expected behavior, and Scope notes.
+
+When creating pull requests, use the PR template (`.github/pull_request_template.md`) which requires: a Summary section (describe the change, note constraints, link related issues) and a Testing checklist (JS/TS test verification, documentation updates, optional Pascal tests, optional benchmark verification).
+
 ## Critical Rules
 
 These rules **must** be followed when modifying the codebase:
@@ -232,17 +239,22 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
 
 ### 4. Garbage Collector Awareness
 
-GocciaScript uses a **unified mark-and-sweep garbage collector** shared by both the interpreter and the bytecode VM. Marking uses a generation counter (`FGCMark`/`FCurrentMark`) with `TGCManagedObject.AdvanceMark` providing O(1) mark-clear instead of an O(n) loop. All GC-managed objects used by the runtime inherit from `TGCManagedObject` (`GarbageCollector.Managed.pas`), which provides the `GCMarked` property (backward-compatible), `GCIndex` (for O(1) unregistration), and virtual `MarkReferences` method. A single `TGarbageCollector` singleton (`GarbageCollector.Generic.pas`) manages all objects in one pool via `Initialize`, `Instance`, and `Shutdown`. Automatic collection (`CollectIfNeeded`) is disabled during bytecode execution; both the BenchmarkRunner and TestRunner call `Collect` after each file to reclaim memory between script executions. All `TGocciaValue` instances auto-register with the GC via `AfterConstruction`. The GC provides three collection methods: `Collect`, `CollectIfNeeded`, and `CollectYoung(AWatermark)`. The `Watermark` property captures the current allocation position for use with `CollectYoung`. During benchmark measurement, GC is explicitly disabled (`Enabled := False`) for both interpreter and bytecode modes to ensure identical GC behavior; a full `Collect` runs before measurement to provide a clean heap baseline, and `CollectYoung` runs between rounds to prevent OOM on memory-constrained platforms (e.g. 32-bit Windows with ~2 GB address space). Key rules:
+GocciaScript uses a **unified mark-and-sweep garbage collector** shared by both the interpreter and bytecode VM. Key rules:
 
-- **AST literal values** are unregistered from the GC by `TGocciaLiteralExpression.Create` and owned by the AST node. The evaluator calls `Value.RuntimeCopy` to produce fresh GC-managed values when evaluating literals.
-- **Singleton values** (e.g., `UndefinedValue`, `TrueValue`, `NaNValue`) are pinned via `TGarbageCollector.Instance.PinObject` during engine initialization (consolidated in `PinPrimitiveSingletons`; the hole singleton is pinned alongside the runtime bootstrap).
-- **VM register rooting** only traverses object-bearing register slots. Scalar `TGocciaRegister` values do not participate in GC marking until they are boxed at an object/runtime boundary.
-- **Shared prototype singletons** (String, Number, Array, Set, Map, Function, Symbol, ArrayBuffer, SharedArrayBuffer, TypedArray) are pinned inside each type's `InitializePrototype` method. `TGocciaSharedPrototype.Create` automatically pins both the prototype object and the method host via `TGarbageCollector.Instance.PinObject` — no manual pinning is needed after calling `TGocciaSharedPrototype.Create`. Prefer `Goccia.ObjectModel` member-definition tables plus `RegisterMemberDefinitions` over ad hoc `RegisterNativeMethod` blocks when adding or refactoring prototype/static surfaces. All prototype method callbacks must use `ThisValue` (not `Self`) to access instance data, since `Self` refers to the method host singleton. **Object.prototype** is the `ObjectConstructor.Prototype` created in `RegisterBuiltinConstructors` — it hosts `toString()` (ES2026 §20.1.3.6) and is stored in `TGocciaObjectValue.SharedObjectPrototype` so the evaluator can assign it as the prototype of object literals.
-- **Pinned values, temp roots, and root scopes** are stored in `TDictionary<T, Boolean>` for O(1) membership checks.
-- **Values held only by Pascal code** (not in any GocciaScript scope) must be protected with `AddTempRoot`/`RemoveTempRoot` for the duration they are needed. Example: benchmark functions held in a `TObjectList`.
-- **On-demand collection with stack protection** — When triggering `CollectIfNeeded` from Pascal code that holds a `TGCManagedObject` on the stack (not yet stored in any scope), use the protected overload `CollectIfNeeded(AProtect)`. It temporarily pushes the value onto the active root stack during collection, preventing it from being swept. The no-arg `CollectIfNeeded` is only safe at points where all live values are already rooted (pinned, temp-rooted, in scopes, or on the VM register file).
-- **Scopes** register with the GC via `RegisterObject` in their constructor and unregister via `UnregisterObject` in their destructor. Active call scopes are tracked via `PushActiveRoot`/`PopActiveRoot` in `TGocciaFunctionValue.Call`.
-- Each value type must override `MarkReferences` to mark all `TGocciaValue` references it holds (prototype, closure, elements, property values, etc.).
+- **Generation-based marking** — `TGCManagedObject.AdvanceMark` provides O(1) mark-clear. All GC-managed objects inherit from `TGCManagedObject` and auto-register via `AfterConstruction`.
+- **Singleton management** — `TGarbageCollector.Instance` manages all objects. `Initialize`/`Instance`/`Shutdown` lifecycle.
+- **AST literal values** are unregistered from the GC by `TGocciaLiteralExpression.Create` and owned by the AST node. The evaluator calls `Value.RuntimeCopy` to produce fresh GC-managed values.
+- **Singleton values** (`UndefinedValue`, `TrueValue`, `NaNValue`, etc.) are pinned via `PinObject` during engine initialization (consolidated in `PinPrimitiveSingletons`).
+- **Shared prototype singletons** are pinned automatically by `TGocciaSharedPrototype.Create` — no manual pinning needed.
+- **Values held only by Pascal code** (not in any GocciaScript scope) must be protected with `AddTempRoot`/`RemoveTempRoot`.
+- **On-demand collection** — Use `CollectIfNeeded(AProtect)` when holding a `TGCManagedObject` on the stack. The no-arg `CollectIfNeeded` is only safe when all live values are already rooted.
+- **Scopes** register/unregister with the GC in their constructor/destructor. Active call scopes tracked via `PushActiveRoot`/`PopActiveRoot`.
+- **VM register rooting** only traverses object-bearing register slots.
+- Each value type must override `MarkReferences` to mark all `TGocciaValue` references it holds.
+- **Pinned values, temp roots, and root scopes** use `TDictionary<T, Boolean>` for O(1) membership.
+- Automatic collection is disabled during bytecode execution; TestRunner and BenchmarkRunner call `Collect` after each file.
+
+See [docs/value-system.md](docs/value-system.md#gc-integration) for the GC integration details.
 
 ### 5. Language Restrictions
 
@@ -263,54 +275,34 @@ See [docs/language-restrictions.md](docs/language-restrictions.md) for the full 
 
 ### 6. Types as Comments
 
-GocciaScript supports the TC39 Types as Comments proposal. Type annotations are **parsed by the frontend** and preserved as raw strings on AST nodes. In **interpreted mode**, annotations are ignored at runtime (true "types as comments"). In **bytecode mode**, the compiler uses annotations and inferred types to emit `OP_CHECK_TYPE` guards and typed opcodes — reassignment to an incompatible type throws `TypeError` at runtime. See the typed-local bytecode rules in the Architecture section for the enforcement contract. Key parser helpers:
+GocciaScript supports the TC39 Types as Comments proposal. Type annotations are parsed and preserved as raw strings on AST nodes. In interpreted mode, annotations are ignored. In bytecode mode, the compiler uses annotations and inferred types to emit `OP_CHECK_TYPE` guards. See [docs/language-restrictions.md](docs/language-restrictions.md#types-as-comments) for supported syntax.
 
-- **`CollectTypeAnnotation(Terminators)`** — Consumes type tokens with balanced bracket tracking, returning the raw text. Stops at any terminator token at depth 0.
-- **`CollectGenericParameters`** — Consumes `<...>` generic parameter lists, returning the raw text.
+**Key parser helpers:** `CollectTypeAnnotation(Terminators)` consumes type tokens with balanced bracket tracking. `CollectGenericParameters` consumes `<...>` generic parameter lists.
 
-AST nodes with type fields: `TGocciaParameter` (`TypeAnnotation`, `IsOptional`), `TGocciaVariableInfo` (`TypeAnnotation`), `TGocciaDestructuringDeclaration` (`TypeAnnotation`), `TGocciaArrowFunctionExpression` (`ReturnType`), `TGocciaClassMethod` (`ReturnType`, `GenericParams`), `TGocciaClassDefinition` (`GenericParams`, `ImplementsClause`, `InstancePropertyTypes`), `TGocciaTryStatement` (`CatchParamType`).
+**AST nodes with type fields:** `TGocciaParameter` (`TypeAnnotation`, `IsOptional`), `TGocciaVariableInfo` (`TypeAnnotation`), `TGocciaDestructuringDeclaration` (`TypeAnnotation`), `TGocciaArrowFunctionExpression` (`ReturnType`), `TGocciaClassMethod` (`ReturnType`, `GenericParams`), `TGocciaClassDefinition` (`GenericParams`, `ImplementsClause`, `InstancePropertyTypes`), `TGocciaTryStatement` (`CatchParamType`).
 
-`type`/`interface` declarations and `import type`/`export type` produce `TGocciaEmptyStatement` (no-op at runtime). Access modifiers (`public`, `protected`, `private`, `readonly`, `override`, `abstract`) in class bodies are consumed and discarded.
+`type`/`interface` declarations and `import type`/`export type` produce `TGocciaEmptyStatement`. Access modifiers in class bodies are consumed and discarded.
 
 ### 7. Decorators
 
-GocciaScript supports TC39 Stage 3 decorators ([proposal-decorators](https://github.com/tc39/proposal-decorators)) and decorator metadata ([proposal-decorator-metadata](https://github.com/tc39/proposal-decorator-metadata)).
+GocciaScript supports TC39 Stage 3 decorators and decorator metadata. See [docs/language-restrictions.md](docs/language-restrictions.md#decorators) for supported syntax.
 
-**Lexer:** `@` is tokenized as `gttAt` in `Goccia.Lexer.pas`.
+**Key implementation details for contributors:**
 
-**Parser:** `ParseDecorators` collects decorator lists; `ParseDecoratorExpression` parses restricted expressions (identifier, member access, call — no private member access or computed access). `ParseClassBody` stores decorators on the unified `TGocciaClassElement` record. Class-level decorators are stored on `TGocciaClassDefinition.FDecorators`.
-
-**AST:** `TGocciaDecoratorList = array of TGocciaExpression` in `Goccia.AST.Expressions.pas`. `TGocciaClassElementKind` (method, getter, setter, field, accessor) and `TGocciaClassElement` record in `Goccia.AST.Statements.pas`. The `FElements` array preserves source order.
-
-**Evaluator:** `EvaluateClassDefinition` in `Goccia.Evaluator.pas` implements three-phase decorator evaluation: (1) evaluate all decorator expressions in source order, (2) call decorators bottom-up with context objects, (3) apply results. Auto-accessors generate private backing fields with getter/setter pairs; the field initializer is registered on the backing field name (e.g. `__accessor_x`), not the public accessor name. The entire decorator pipeline is wrapped in `try..finally` to ensure `MetadataObject` temp root removal and collector cleanup even if a decorator throws. Decorator context properties use `Goccia.Constants.PropertyNames` constants (`PROP_KIND`, `PROP_NAME`, `PROP_STATIC`, `PROP_PRIVATE`, `PROP_METADATA`, `PROP_ACCESS`, `PROP_ADD_INITIALIZER`).
-
-**Helper classes** in `Goccia.Evaluator.Decorators.pas` and `Goccia.Values.AutoAccessor.pas` work around FPC's lack of anonymous closures by encapsulating captured state as class instances whose methods serve as native function callbacks.
-
-**GC awareness:** `TGocciaClassValue.MarkReferences` must mark `FMethodInitializers`, `FFieldInitializers`, and `FDecoratorFieldInitializers[].Initializer` — these hold `TGocciaValue` references to decorator initializer functions that would otherwise be collected.
-
-**`Symbol.metadata`:** `TGocciaSymbolValue.WellKnownMetadata` (lazily initialized, GC-pinned). Registered on the `Symbol` constructor in `Goccia.Builtins.GlobalSymbol.pas`.
-
-**Contextual keyword:** `KEYWORD_ACCESSOR = 'accessor'` in `Goccia.Keywords.Contextual.pas`.
-
-**Not supported:** Parameter decorators.
+- **Parser:** `ParseDecorators` collects lists; `ParseDecoratorExpression` parses identifiers, member access, and calls. `TGocciaClassElement` record in `Goccia.AST.Statements.pas` stores decorators.
+- **Evaluator:** Three-phase evaluation in `EvaluateClassDefinition`: (1) evaluate expressions in source order, (2) call decorators bottom-up with context objects, (3) apply results. Auto-accessors generate private backing fields.
+- **GC:** `TGocciaClassValue.MarkReferences` must mark `FMethodInitializers`, `FFieldInitializers`, and `FDecoratorFieldInitializers[].Initializer`.
+- **Constants:** Decorator context properties use `Goccia.Constants.PropertyNames` constants (`PROP_KIND`, `PROP_NAME`, `PROP_STATIC`, `PROP_PRIVATE`, `PROP_METADATA`, `PROP_ACCESS`, `PROP_ADD_INITIALIZER`).
+- **`Symbol.metadata`:** `TGocciaSymbolValue.WellKnownMetadata` (lazily initialized, GC-pinned).
+- **Contextual keyword:** `KEYWORD_ACCESSOR = 'accessor'` in `Goccia.Keywords.Contextual.pas`.
+- **Not supported:** Parameter decorators.
 
 ### 8. `this` Binding Semantics
 
-Two function forms exist with separate AST nodes and runtime types:
+- **Arrow functions** (`TGocciaArrowFunctionExpression` / `TGocciaArrowFunctionValue`) — always inherit `this` from lexical scope via `BindThis` override
+- **Shorthand methods** (`TGocciaMethodExpression` / `TGocciaFunctionValue`) — receive call-site `this` from the receiver
 
-- **Arrow functions** (`(x) => x + 1`) — AST: `TGocciaArrowFunctionExpression`, Runtime: `TGocciaArrowFunctionValue`. Always inherit `this` from their lexical (closure) scope via `BindThis` override.
-- **Shorthand methods** (`method() { ... }`) — AST: `TGocciaMethodExpression`, Runtime: `TGocciaFunctionValue`. Receive call-site `this` from the receiver.
-
-`this` binding is resolved via virtual dispatch on `TGocciaFunctionValue.BindThis` — no boolean flags or runtime branches. Async variants (`TGocciaAsyncFunctionValue`, `TGocciaAsyncArrowFunctionValue`, `TGocciaAsyncMethodValue`) inherit `this` binding from their non-async superclasses. Array prototype callbacks pass `undefined` as `ThisValue`, so arrow callbacks correctly inherit their enclosing scope's `this`.
-
-At the scope level, `this`, owning class, and super class are resolved via VMT-based chain-walking:
-- `Scope.FindThisValue` — walks the parent chain calling `GetThisValue` (virtual) on each scope.
-- `Scope.FindOwningClass` / `Scope.FindSuperClass` — same pattern for class resolution.
-- `Scope.ResolveIdentifier(Name)` — unified identifier lookup that handles `this` (via `FindThisValue`) and keyword constants before falling back to the scope chain.
-
-Use `Goccia.Keywords.Reserved` and `Goccia.Keywords.Contextual` constants (`KEYWORD_THIS`, `KEYWORD_SUPER`, `KEYWORD_GET`, `KEYWORD_TYPE`, etc.) instead of hardcoded string literals when referencing JavaScript keywords.
-
-See [docs/design-decisions.md](docs/design-decisions.md) for the full design rationale.
+`this` binding is resolved via virtual dispatch on `TGocciaFunctionValue.BindThis`. Async variants inherit binding from their non-async superclasses. Scope-level resolution uses VMT-based chain-walking (`FindThisValue`, `FindOwningClass`, `FindSuperClass`, `ResolveIdentifier`). Use `Goccia.Keywords.Reserved` constants (`KEYWORD_THIS`, `KEYWORD_SUPER`) instead of hardcoded strings. See [docs/value-system.md](docs/value-system.md#functions) and [docs/design-decisions.md](docs/design-decisions.md).
 
 ## Code Style
 
@@ -371,71 +363,21 @@ The section numbers reference [ECMA-262](https://tc39.es/ecma262/) (the living s
 
 ### Do Not Implement String Interning
 
-Dictionary-based string interning (`TDictionary<string, TGocciaStringLiteralValue>` cache) was attempted and **benchmarked at -4% across 172 benchmarks** (49 regressions, 3 improvements). The hash + lookup cost per string exceeds FreePascal's allocation cost. See [docs/design-decisions.md](docs/design-decisions.md) for the full analysis and alternative approaches.
+Benchmarked at -4% across 172 benchmarks. See [docs/design-decisions.md](docs/design-decisions.md).
 
 ### Do Not Use TStringBuilder
 
-`TStringBuilder` (both `TUnicodeStringBuilder` and `TAnsiStringBuilder`) triggers a **750x slowdown** from FPC's default heap manager when used without preallocation, due to pathological repeated grow-free cycles. Even preallocated, it is ~2x slower than `TStringBuffer` due to virtual dispatch and bounds-checking overhead. Use `TStringBuffer` (`StringBuffer.pas`) instead for all string building. `TStringBuffer` is an advanced record with preallocated doubling growth, within 1.1–1.7x of raw `SetLength + Move` writes, and requires no `try/finally` cleanup (the backing `AnsiString` is refcounted and compiler-managed). See [docs/spikes/fpc-string-performance.md](docs/spikes/fpc-string-performance.md) for the full benchmark analysis.
+Use `TStringBuffer` (`StringBuffer.pas`) instead — `TStringBuilder` triggers a 750x slowdown without preallocation. See [docs/spikes/fpc-string-performance.md](docs/spikes/fpc-string-performance.md).
 
 ### Do Not Use TDictionary on Hot Paths
 
-`TDictionary` from `Generics.Collections` carries RTTI-based hashing and `IEqualityComparer` interface dispatch overhead that is significant at small-to-medium sizes (N=20–100), which covers the majority of runtime maps (object properties, scope bindings, class methods). Use purpose-built maps instead:
-
-| Use case | Recommended map | Rationale |
-|----------|----------------|-----------|
-| String-keyed, order needed | `TOrderedStringMap<V>` | 4–6× faster inserts than `TDictionary` at N=20–100; preserves insertion order per spec |
-| Generic key, order needed | `TOrderedMap<K,V>` | Virtual hash/equality; parity with `TDictionary` at typical sizes |
-| Any key, no order needed | `THashMap<K,V>` | Backshift deletion (no tombstones); 2× faster inserts for pointer keys at scale |
-| Scope chain bindings | `TOrderedStringMap<V>` | Hash-based O(1) lookup per scope level; chain walking is `TGocciaScope`'s responsibility |
-| Cold-path collections | `TDictionary` acceptable | Acceptable where insert/lookup performance is not critical |
-
-`TFPDataHashTable` must **never** be used — it has catastrophic insert performance due to per-node heap allocation (400,000 ns/insert vs 50 ns for `TOrderedStringMap` at N=20). See [docs/spikes/fpc-hashmap-performance.md](docs/spikes/fpc-hashmap-performance.md) for the full benchmark analysis.
+Use purpose-built maps instead: `TOrderedStringMap<V>` for string-keyed ordered maps (4-6x faster), `THashMap<K,V>` for unordered maps, `TOrderedMap<K,V>` for generic ordered maps. `TDictionary` is acceptable on cold paths. **Never** use `TFPDataHashTable`. See [docs/code-style.md](docs/code-style.md#hash-map-selection) and [docs/spikes/fpc-hashmap-performance.md](docs/spikes/fpc-hashmap-performance.md).
 
 **FPC 3.2.2 generic VMT pitfall:** FPC 3.2.2 creates per-unit VMTs for generic specializations. When a generic with a generic base class is specialized across multiple units, `{$OBJECTCHECKS ON}` can cause "Invalid type cast" failures if instances are type-cast across unit boundaries. All map types (`TOrderedStringMap`, `THashMap`, `TOrderedMap`) inherit from `TBaseMap`. This is safe because map instances are used as fields and local variables — they are never passed as base-class parameters or cross-unit type-cast. The VMT pitfall only applies when using `is`/`as` operators or `InheritsFrom` on generic instances across units. For `TObjectList<T>` (where cross-unit casts are common), named type aliases remain required. See [docs/spikes/fpc-generics-performance.md](docs/spikes/fpc-generics-performance.md) for the benchmark analysis confirming generics have zero runtime cost.
 
-### Platform Pitfall: `Int64` to `Double` Conversion
+### Platform Pitfalls
 
-FPC 3.2.2 has two bugs affecting `Int64` → `Double` conversion:
-
-1. **`Double(Int64Var)` bit reinterpretation** ([FPC #35886](https://gitlab.com/freepascal.org/fpc/source/-/issues/35886)): In `{$mode delphi}`, an explicit `Double(Int64Var)` cast performs Turbo Pascal-style bit reinterpretation instead of value conversion. This is a cross-platform Delphi-mode front-end bug (not AArch64-specific). Fixed in FPC trunk (3.3.1) but not backported to 3.2.x.
-
-2. **`Int64 * 1.0` wrong results near ±2³¹ (AArch64 only)**: Mixed `Int64 * Double` arithmetic (including `* 1.0`, `+ 0.0`, `/ 1.0`) produces wrong results for values near the `LongInt` boundary (±2,147,483,648). FPC appears to use a 32-bit `SCVTF` instruction instead of 64-bit for the Int64→Double promotion in arithmetic expressions. Not yet reported upstream.
-
-**Safe conversion:** Use implicit assignment or function parameter passing — both use the correct 64-bit conversion path:
-
-```pascal
-// WRONG — bit reinterpretation in Delphi mode (Bug A)
-Result := Double(SomeInt64);
-
-// WRONG — wrong results near ±2^31 on AArch64 (Bug B)
-Result := SomeInt64 * 1.0;
-
-// CORRECT — implicit assignment
-var D: Double;
-D := SomeInt64;
-
-// CORRECT — implicit promotion at function call boundary
-// (e.g., passing Int64 to a parameter declared as Double)
-Result := TGocciaNumberLiteralValue.Create(SomeInt64);
-```
-
-See [docs/code-style.md](docs/code-style.md) for details.
-
-### Platform Pitfall: Endian-Dependent Byte Indexing
-
-Do **not** use `Bytes[7] and $80` to check the sign bit of a `Double`. This assumes little-endian byte layout. Instead, overlay with `Int64 absolute` and test `Bits < 0`:
-
-```pascal
-var
-  V: Double;
-  Bits: Int64 absolute V;
-begin
-  V := SomeDouble;
-  IsNegative := Bits < 0;  // endian-neutral sign bit check
-end;
-```
-
-This pattern is used in `TGocciaNumberLiteralValue.GetIsNegativeZero` and `IsNegativeZeroFloat` in `Goccia.Compiler.ConstantFolding.pas`.
+Two FPC 3.2.2 bugs affect `Int64` → `Double` conversion: (1) `Double(Int64Var)` does bit reinterpretation in Delphi mode, (2) `Int64 * 1.0` gives wrong results near ±2³¹ on AArch64. **Safe:** use implicit assignment (`D := SomeInt64;`) or function parameter passing. For sign-bit checks on `Double`, use `Int64 absolute` overlay (`Bits < 0`), not byte indexing. See [docs/code-style.md](docs/code-style.md#platform-specific-pitfalls).
 
 ### Terminology
 
@@ -445,142 +387,72 @@ This pattern is used in `TGocciaNumberLiteralValue.GetIsNegativeZero` and `IsNeg
 
 ### Design Patterns in Use
 
-- **Singleton** for special values (`undefined`, `null`, `true`, `false`, `NaN`, `Infinity`) and shared prototype singletons (String, Number, Array, Set, Map, Function, Symbol, ArrayBuffer, SharedArrayBuffer, TypedArray — each type uses `class var FShared: TGocciaSharedPrototype` + `InitializePrototype` guarded by `if Assigned`; `TGocciaSharedPrototype.Create` handles GC pinning automatically)
+See [docs/code-style.md](docs/code-style.md#design-patterns) for full descriptions with code examples.
+
+- **Singleton** for special values and shared prototype singletons (pinned via `TGocciaSharedPrototype.Create`)
 - **Factory method** for scope creation (`CreateChild`, with optional capacity hint)
 - **Context object** for evaluation state (`TGocciaEvaluationContext`)
-- **Virtual dispatch** for property access (`GetProperty`/`SetProperty`), type discrimination (`IsPrimitive`/`IsCallable`), and scope chain resolution (`GetThisValue`/`GetOwningClass`/`GetSuperClass`) on the `TGocciaValue` and `TGocciaScope` hierarchies
+- **Virtual dispatch** for property access, type discrimination, and scope chain resolution
 - **Chain of responsibility** for scope lookup
 - **Parser combinator** for binary expressions (`ParseBinaryExpression` shared helper)
 - **Recursive descent** for parsing
-- **Mark-and-sweep** for garbage collection (`TGarbageCollector` singleton; one GC for both interpreter and VM)
+- **Mark-and-sweep** for garbage collection
 - **Shared helpers** for evaluator deduplication (`EvaluateStatements`, `SpreadIterableInto`, `EvaluateSimpleNumericBinaryOp`)
 
 ## Value System
 
-See [docs/value-system.md](docs/value-system.md) for the complete value system documentation.
+All values inherit from `TGocciaValue`. See [docs/value-system.md](docs/value-system.md) for the complete documentation.
 
-All values inherit from `TGocciaValue`. Virtual methods on the base class eliminate type-checking at call sites:
+**Key virtual methods on `TGocciaValue`:**
 - `GetProperty(Name)` / `SetProperty(Name, Value)` — Polymorphic property access. Returns `nil` / no-op by default.
-- `IsPrimitive` — Returns `True` for null, undefined, boolean, number, and string types. Use `Value.IsPrimitive` instead of multi-`is` check chains.
-- `IsCallable` — Returns `True` for functions and classes. Use `Value.IsCallable` instead of `(Value is TGocciaFunctionBase)` or `(Value is TGocciaFunctionValue) or (Value is TGocciaNativeFunctionValue)`.
+- `IsPrimitive` — `True` for null, undefined, boolean, number, string. Use instead of multi-`is` checks.
+- `IsCallable` — `True` for functions and classes. **Exception:** When casting to `TGocciaFunctionBase` after the check, use `is TGocciaFunctionBase` instead (since `TGocciaClassValue` inherits from `TGocciaValue`, not `TGocciaFunctionBase`).
 
-The evaluator calls these directly (`Value.GetProperty(Name)`, `Value.IsPrimitive`, `Value.IsCallable`) without type-checking or interface queries. **Prefer these VMT methods over `is` type checks for fundamental type-system properties.** Do not add VMT methods for optional built-in types (e.g., Symbol, Set, Map) — these are toggled via `TGocciaGlobalBuiltins` flags and should use standard RTTI (`is`) checks instead. **Exception:** When the code needs to cast to `TGocciaFunctionBase` after the check (e.g., to call `.Call()`), use `is TGocciaFunctionBase` instead of `IsCallable`, because `IsCallable` also returns `True` for `TGocciaClassValue` which inherits from `TGocciaValue`, not `TGocciaFunctionBase`.
+**Error construction:** Centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowTypeError`, `ThrowRangeError`, `ThrowError`). All runtime errors must use these helpers so exceptions are catchable from JavaScript `try...catch`. Built-in argument validation uses `TGocciaArgumentValidator`. All error objects receive a `stack` property via `Goccia.CallStack.pas`.
 
-Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowTypeError`, `ThrowRangeError`, `ThrowError`, `CreateErrorObject`, etc.). All error objects — both user-created via `new Error()` and runtime-thrown via `ThrowTypeError`/`ThrowError` etc. — are linked to the correct error type prototype (e.g., `GTypeErrorProto`, `GRangeErrorProto`). This ensures `instanceof TypeError`, `instanceof RangeError`, etc. work correctly for both user-constructed and internally-thrown errors. **All runtime errors must use these helpers** (never `TGocciaError.Create` directly) so the exception is a `TGocciaThrowValue` with a proper JS Error object, catchable from JavaScript `try...catch`. The global error prototypes are exposed from `Goccia.Builtins.Globals.pas` and follow the ES2026 prototype hierarchy: `TypeError.prototype` → `Error.prototype` → `Object.prototype`. All error objects receive a `stack` property containing a formatted stack trace captured at the point of construction. The call stack is maintained by `Goccia.CallStack.pas`, a singleton that tracks function name, file path, and line/column for each active call frame. Built-in argument validation uses `TGocciaArgumentValidator` (`Goccia.Arguments.Validator.pas`).
+**Symbol coercion:** `ToNumberLiteral` throws `TypeError`. Implicit string coercion (template literals, `+`) must check for symbols at the operator level. Symbols use a shared prototype singleton with `description` getter and `toString()` method.
 
-**Symbol coercion:** `TGocciaSymbolValue.ToNumberLiteral` throws `TypeError` (symbols cannot convert to numbers). `ToStringLiteral` returns `"Symbol(description)"` for internal use (display, property keys), but implicit string coercion (template literals, `+` operator, `String.prototype.concat`) must check for symbols and throw `TypeError` at the operator level. See `Goccia.Evaluator.Arithmetic.pas` and `Goccia.Evaluator.pas` for the pattern. Symbols use a shared prototype singleton (like String, Number, Array) with `description` as an accessor getter and `toString()` as a method. `Symbol.prototype` is exposed on the Symbol constructor function.
-
-**Well-known symbols:** `Symbol.iterator` is a well-known symbol singleton accessed via `TGocciaSymbolValue.WellKnownIterator`. `Symbol.species` is accessed via `TGocciaSymbolValue.WellKnownSpecies`. `Symbol.metadata` is accessed via `TGocciaSymbolValue.WellKnownMetadata`. All are lazily initialized and GC-pinned. The `TGocciaGlobalSymbol` built-in uses these same instances.
-
-**`Symbol.species` semantics:** The `[Symbol.species]` static getter is registered on `Array`, `Map`, and `Set` constructors in `Goccia.Engine.pas`. The default getter returns `this`, so subclasses inherit the correct constructor. Array prototype methods (`map`, `filter`, `slice`, `concat`, `flat`, `flatMap`, `splice`) use the `ArraySpeciesCreate` helper (`Goccia.Values.ArrayValue.pas`) to create result arrays via the species constructor, enabling subclass-aware array derivation. User-defined classes can override `static get [Symbol.species]()` to control which constructor is used for derived arrays. `TGocciaClassValue` supports symbol-keyed static properties via `FStaticSymbolDescriptors`, `DefineSymbolProperty`, and `GetSymbolPropertyWithReceiver` (which preserves the original receiver when traversing the superclass chain for getter invocation).
-
-**Iterator protocol:** `TGocciaIteratorValue` (`Goccia.Values.IteratorValue.pas`) is the abstract base class for all iterators, providing the shared prototype with helper methods and a virtual `AdvanceNext` method. Iterators are organized into a class hierarchy across four files:
-
-1. **Concrete** (`Goccia.Values.Iterator.Concrete.pas`) — `TGocciaArrayIteratorValue`, `TGocciaStringIteratorValue`, `TGocciaMapIteratorValue`, `TGocciaSetIteratorValue`. Each overrides `AdvanceNext` for its collection type and uses sub-kind enums (`TGocciaArrayIteratorKind`, `TGocciaMapIteratorKind`, `TGocciaSetIteratorKind`) for values/keys/entries variants.
-2. **Lazy** (`Goccia.Values.Iterator.Lazy.pas`) — `TGocciaLazyMapIteratorValue`, `TGocciaLazyFilterIteratorValue`, `TGocciaLazyTakeIteratorValue`, `TGocciaLazyDropIteratorValue`, `TGocciaLazyFlatMapIteratorValue`. Each wraps a source iterator and advances on-demand (one element per `next()` call).
-3. **Generic** (`Goccia.Values.Iterator.Generic.pas`) — `TGocciaGenericIteratorValue` wraps user-defined iterator objects (plain objects with `next()` method), enabling user-defined iterables to work with spread, destructuring, and `Array.from()`.
-
-All subclasses inherit from `TGocciaIteratorValue`, so existing `is TGocciaIteratorValue` checks in the evaluator work with zero changes. The evaluator's `GetIteratorFromValue` helper resolves iterators by checking for `[Symbol.iterator]` symbol properties on objects (including boxing primitives), and wraps plain `{next()}` objects as generic iterators. A global `Iterator` object with `Iterator.from()` and `Iterator.prototype` is always registered.
-
-**Async functions:** `TGocciaAsyncFunctionValue`, `TGocciaAsyncArrowFunctionValue`, and `TGocciaAsyncMethodValue` (`Goccia.Values.AsyncFunctionValue.pas`) are subclasses of their non-async counterparts. Their `Call` method wraps `ExecuteBody` in a try/except, creating a `TGocciaPromiseValue` that resolves on success or rejects on `TGocciaThrowValue`. Arrow async functions inherit lexical `this` via virtual dispatch on `BindThis`.
+**Well-known symbols:** `TGocciaSymbolValue.WellKnownIterator`, `.WellKnownAsyncIterator`, `.WellKnownSpecies`, `.WellKnownMetadata` — all lazily initialized and GC-pinned.
 
 ## Built-in Objects
 
-See [docs/built-ins.md](docs/built-ins.md) for documentation on all built-ins and how to add new ones.
+See [docs/built-ins.md](docs/built-ins.md) for complete documentation on all built-ins and how to add new ones.
 
 Built-ins are registered by the engine via `TGocciaGlobalBuiltins` flags:
 
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
- ggGlobalNumber, ggPromise, ggJSON, ggTOML, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer, ggReflect];
+ ggGlobalNumber, ggPromise, ggJSON, ggJSON5, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer, ggProxy, ggReflect];
 ```
 
-The TestRunner adds `ggTestAssertions` for the test framework (`describe`, `test`, `expect`).
-The BenchmarkRunner adds `ggBenchmark` for the benchmark framework (`suite`, `bench`, `runBenchmarks`). The `bench()` API takes a name and an options object: `bench(name, { setup?, run, teardown? })`. The `setup` function runs once before warmup and its return value is passed to `run` and `teardown`, including when that setup result is `undefined`. All three callbacks may be `async` — the resolved value of an `async setup` is passed to `run` and `teardown`, and each phase awaits completion before proceeding. The `run` phase is measured as `opsPerSec` and `meanMs` (per-iteration). Setup and teardown are additionally timed and reported as `setupMs` and `teardownMs` (one-shot, not per-iteration). It supports multiple `--format=console|text|csv|json` flags in a single command (each optionally followed by `--output=file`), `--no-progress` for CI builds, and benchmark calibration via environment variables (`GOCCIA_BENCH_CALIBRATION_MS`, `GOCCIA_BENCH_ROUNDS`, etc.). The BenchmarkRunner exits with code 1 if any benchmark has a non-empty error or produces zero `OpsPerSec`/`MeanMs` values, ensuring CI pipelines fail on benchmark crashes or empty results.
+The TestRunner adds `ggTestAssertions`; the BenchmarkRunner adds `ggBenchmark`. FFI (`ggFFI`) is available but not in `DefaultGlobals`.
 
-`Array.fromAsync(asyncItems [, mapfn [, thisArg]])` creates an array from an async iterable, sync iterable, or array-like, returning a `Promise<Array>`. It tries `[Symbol.asyncIterator]` first, falls back to `[Symbol.iterator]`, then array-like. Each element value is awaited (Promises resolved via synchronous microtask drain).
+After all flag-gated built-ins, two always-present `const` globals are created: `globalThis` (self-referential global object) and `Goccia` (engine metadata with `version`, `commit`, `builtIns`, `strictTypes`, and `semver`).
 
-**`Symbol.asyncIterator`:** `TGocciaSymbolValue.WellKnownAsyncIterator` (lazily initialized, GC-pinned). Registered on the `Symbol` constructor in `Goccia.Builtins.GlobalSymbol.pas`. Used by `for await...of` and `Array.fromAsync` to obtain async iterators.
-
-### JSX Support (Opt-in)
-
-JSX is handled by a **standalone pre-pass transformer** (`Goccia.JSX.Transformer.pas`) that runs before the lexer/parser pipeline when `ggJSX` is enabled. It converts JSX syntax into `createElement` function calls:
-
-```javascript
-// Input (JSX)
-const el = <div className="active">Hello {name}</div>;
-
-// Output (after transformation)
-const el = createElement("div", { className: "active" }, "Hello ", name);
-```
-
-The transformer generates an internal source map (`Goccia.JSX.SourceMap.pas`) so that errors in transformed code report correct original line/column numbers. When `ggJSX` is not in the globals set (the default), the transformer is skipped entirely — zero overhead.
-
-**Runtime contract:** Users must provide their own `createElement` function (and `Fragment` for fragments) in scope:
-
-```javascript
-const createElement = (tag, props, ...children) => ({ tag, props, children });
-const Fragment = Symbol("Fragment");
-```
-
-**Custom factory via pragmas:** The factory and fragment names can be overridden per-file using pragma comments at the top of the file:
-
-```javascript
-/* @jsxFactory h */
-/* @jsxFragment Frag */
-
-const h = (tag, props, ...children) => ({ tag, props, children });
-const Frag = Symbol("Frag");
-const el = <div>hello</div>; // → h("div", null, "hello")
-```
-
-Both `//` and `/* */` comment styles are supported. The pragma must be the first non-whitespace content of the comment.
-
-**Supported file extensions:** `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`. The ScriptLoader, TestRunner, and BenchmarkRunner all discover files with these extensions when scanning directories. A warning is emitted when JSX syntax is found in `.js`, `.ts`, or `.mjs` files, suggesting the use of `.jsx`/`.tsx` instead.
-
-**Disabling JSX:**
-
-```pascal
-// Without JSX — zero overhead
-Result := TGocciaEngine.RunScript(Source, FileName, DefaultGlobals - [ggJSX]);
-```
-
-**Supported JSX features:** elements, self-closing tags, fragments (`<>...</>`), string/expression/boolean attributes, spread attributes (`{...props}`), shorthand props (`<div {value} />` → `value={value}`), expression children (`{expr}`), nested JSX, dotted component names (`<Foo.Bar />`), uppercase tags as identifier references, `@jsxFactory`/`@jsxFragment` pragmas.
-
-After all flag-gated built-ins are registered, the engine also creates two always-present `const` globals:
-- **`globalThis`** — A `const` plain object containing all global scope bindings, with a self-referential `globalThis` property.
-- **`Goccia`** — Engine metadata and utility namespace with `version` (semver from git tag, or tag + `-dev`), `commit` (short git hash), `builtIns` (array of enabled `TGocciaGlobalBuiltin` flag names via RTTI), `strictTypes` (`true` in bytecode mode where strict local type enforcement is active — covering both explicit type annotations and types inferred from literal initializers — `false` in interpreted mode), and `semver` (SemVer 2.0.0 API namespace).
+**JSX:** Opt-in pre-pass transformer (`Goccia.JSX.Transformer.pas`) converts JSX to `createElement` calls. Users provide their own `createElement`/`Fragment`. Custom factory via `@jsxFactory`/`@jsxFragment` pragmas. See [docs/language-restrictions.md](docs/language-restrictions.md#jsx-opt-in).
 
 ## Testing
 
 See [docs/testing.md](docs/testing.md) for the complete testing guide.
 
-- **Primary:** JavaScript end-to-end tests in `tests/` directory — these are the source of truth for correctness
-- **Secondary:** Pascal unit tests in `units/*.Test.pas` — only for internal implementation details
-- **Test directories:** `tests/language/asi/` — automatic semicolon insertion (requires `--asi` flag: `./build/TestRunner tests/language/asi --asi`); `tests/language/async-await/` — async functions, await expressions, async class/object methods, error handling; `tests/language/for-of/` — for...of loops, destructuring, break, iterators, for-await-of; `tests/built-ins/Array/fromAsync.js` — Array.fromAsync with async/sync iterables; `tests/built-ins/Symbol/asyncIterator.js` — Symbol.asyncIterator well-known symbol; `tests/built-ins/ArrayBuffer/` — ArrayBuffer constructor, `isView`, `slice`, `Symbol.toStringTag`; `tests/built-ins/SharedArrayBuffer/` — SharedArrayBuffer constructor, `slice`, `Symbol.toStringTag`; `tests/built-ins/TypedArray/` — constructors, element access, prototype methods, static methods, iterators, buffer sharing, edge cases (NaN/Infinity handling, clamping, negative indices); `tests/built-ins/constructors/` — `new` requirement for built-in constructors; `tests/built-ins/structuredClone/arraybuffer.js` — structuredClone of ArrayBuffer/SharedArrayBuffer; `tests/built-ins/Reflect/` — Reflect API (apply, construct, defineProperty, deleteProperty, get, getOwnPropertyDescriptor, getPrototypeOf, has, isExtensible, ownKeys, preventExtensions, set, setPrototypeOf)
-- **JS test framework:** built-in `describe`/`test`/`expect` (enabled via `ggTestAssertions`). Supports nested `describe` blocks (suite names are composed with ` > ` separators), `test.skip`/`describe.skip` for unconditional skipping, and `skipIf(condition)`/`runIf(condition)` on both `describe` and `test` for conditional execution. Skip state is inherited by nested describes. Test callbacks can be `async` — `await` works directly in the test body and inside `expect()` calls (e.g., `expect(await somePromise).toBe(42)`). Returning a Promise from a non-async test callback is supported for backward compatibility. Lifecycle hooks (`beforeAll`/`beforeEach`/`afterEach`/`afterAll`) and benchmark callbacks (`bench()`) also support `async` functions with `await`. `onTestFinished(fn)` registers a per-test cleanup callback from inside the test body — it runs after all `afterEach` hooks and is scoped to the current test only.
-- **Available matcher highlights:** `expect()` supports equality and collection matchers including `.toEqual`, `.toStrictEqual` (currently an alias of `.toEqual` for Vitest compatibility), `.toContain`, `.toContainEqual`, `.toMatch` (string substring or `RegExp`, without mutating `lastIndex`), and `.toMatchObject`, plus the existing truthiness, length, property, instance, and error assertions.
-- **`.resolves` / `.rejects`:** Vitest/Jest-compatible Promise unwrapping on the `expect()` object. `await expect(promise).resolves.toBe(42)` unwraps a fulfilled Promise; `await expect(promise).rejects.toThrow(TypeError)` unwraps a rejected Promise. Both are getter properties (like `.not`) that drain the microtask queue and return a new expectation with the unwrapped value. `.rejects.toThrow(ErrorType)` checks the rejection reason's error name. Both require an actual Promise — call async functions explicitly: `expect(fn())` not `expect(fn)`.
-- **`.toThrow()` best practice:** Always pass an explicit error constructor (`TypeError`, `RangeError`, `Error`, etc.) to `.toThrow()` — e.g. `expect(() => null.foo).toThrow(TypeError)`. Bare `.toThrow()` only asserts *something* throws; the constructor form also verifies the error type.
-- **Mock functions:** `mock()` and `spyOn()` are standalone test globals (not on a `vi` object). `mock()` creates a mock function with call tracking; `mock(impl)` wraps an implementation. `spyOn(object, methodName)` wraps an existing method with a spy that passes through by default. Mock functions expose a `.mock` property with `.calls` (array of argument arrays), `.results` (array of `{ type, value }` objects), `.instances` (array of `this` values), and `.lastCall`. Chainable methods: `.mockImplementation(fn)`, `.mockImplementationOnce(fn)`, `.mockReturnValue(val)`, `.mockReturnValueOnce(val)`, `.mockClear()`, `.mockReset()`, `.mockRestore()` (spies only), `.mockName(name)`, `.getMockName()`. Mock matchers: `.toHaveBeenCalled()`, `.toHaveBeenCalledTimes(n)`, `.toHaveBeenCalledWith(...)`, `.toHaveBeenLastCalledWith(...)`, `.toHaveBeenNthCalledWith(n, ...)`, `.toHaveReturned()`, `.toHaveReturnedTimes(n)`, `.toHaveReturnedWith(val)`, `.toHaveLastReturnedWith(val)`, `.toHaveNthReturnedWith(n, val)`. All mock matchers support `.not` negation and use deep equality.
-- **Pascal test framework:** `TestRunner.pas` provides generic `Expect<T>(...).ToBe(...)` assertions. `Expect<T>` is a **standalone function** (not a method on `TTestSuite`) to avoid FPC 3.2.2 AArch64 compiler crash with cross-unit generic method inheritance.
-- **NaN checks:** In Pascal tests, use `Value.ToNumberLiteral.IsNaN` (not `Math.IsNaN`) — special values store `0.0` internally
+- **Primary:** JavaScript end-to-end tests in `tests/` — source of truth for correctness
+- **Secondary:** Pascal unit tests in `units/*.Test.pas`
+- **JS test framework:** `describe`/`test`/`expect` with async support, `.resolves`/`.rejects`, mock functions (`mock()`/`spyOn()`), lifecycle hooks, and Vitest-compatible matchers
+- **Key matchers:** `.toBe`, `.toEqual`, `.toContain`, `.toMatch`, `.toThrow(ErrorType)`, `.toHaveBeenCalledWith(...)`, plus `.not` negation
+- **Test directories:** Organized by feature under `tests/language/` and `tests/built-ins/` (includes `Proxy/` with all 13 trap test files, `FFI/` with library loading and binding tests)
+- **Pascal test framework:** Generic `Expect<T>(...).ToBe(...)` assertions. NaN checks: use `Value.ToNumberLiteral.IsNaN` (not `Math.IsNaN`)
 
 ## Build System
 
 See [docs/build-system.md](docs/build-system.md) for build system details.
 
 - Build script: `./build.pas` (FreePascal script via `instantfpc`)
-- Build modes: `--dev` (default, debug info, checks) / `--prod` (O4, stripped, smart-linked)
-- Clean: `clean` target removes stale `.ppu`, `.o`, `.res` files from `build/` — runs automatically on full builds, or chain it explicitly (e.g. `./build.pas clean loader`)
-- Shared path config: `config.cfg`
-- Shared directives: `units/Goccia.inc` (overflow/range checks conditional on `PRODUCTION` define)
+- Build modes: `--dev` (default) / `--prod` (O4, stripped, smart-linked)
 - Output directory: `build/`
-- CI: Two workflow files — `ci.yml` (main + tags, full matrix, all checks + release) and `pr.yml` (PRs, ubuntu-latest x64 only, JavaScript tests, Pascal unit tests, examples, and benchmark comparison comment). All matrix strategies use `fail-fast: false`. Post-build jobs (`test`, `benchmark`, `examples`) are independent. The PR `build` job uploads a staged `build-pr` artifact containing binaries derived from the repo's top-level `*.dpr` entrypoints plus Pascal test executables. The `examples` jobs smoke-test stdin execution for `ScriptLoader`, and the `benchmark` jobs smoke-test stdin execution for `BenchmarkRunner`. Intermediate artifacts stage binaries derived from the repo's top-level `*.dpr` entrypoints; release archives bundle those shipped binaries plus `tests/`, `benchmarks/`, and `examples/`. Windows artifacts are labeled x86 (FPC produces i386-win32 binaries on the x64 runner).
-- Auto-formatter: `./format.pas` (instantfpc script, no build step) — auto-fixes uses clause ordering, PascalCase function names, and parameter `A` prefix naming
-- Pre-commit hook: [Lefthook](https://github.com/evilmartians/lefthook) (`lefthook.yml`) — requires `lefthook install` after cloning
-- Editor setup: `.vscode/settings.json` (format-on-save) + `.vscode/extensions.json` (recommended extensions)
-- Changelog: `CHANGELOG.md` is auto-generated from git history via [git-cliff](https://git-cliff.org/) (`cliff.toml`). Run `git-cliff -o CHANGELOG.md` to regenerate. Release notes in CI are generated by the `orhun/git-cliff-action`. GitHub release notes are additionally categorized by PR labels via `.github/release.yml`.
+- Auto-formatter: `./format.pas` — auto-fixes uses clause ordering, PascalCase naming, parameter prefixes
+- Pre-commit hook: [Lefthook](https://github.com/evilmartians/lefthook) (`lefthook.yml`)
+- CI: `ci.yml` (main + tags, full matrix) and `pr.yml` (PRs, ubuntu-latest x64 only, with benchmark comparison)
+- Changelog: `CHANGELOG.md` is auto-generated via [git-cliff](https://git-cliff.org/) (`cliff.toml`). Run `git-cliff -o CHANGELOG.md` to regenerate.
 
 ## Documentation Index
 

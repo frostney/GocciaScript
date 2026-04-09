@@ -2,6 +2,13 @@
 
 *For contributors analyzing bytecode VM performance.*
 
+## Executive Summary
+
+- **Language-level profiling** — Operates inside the VM dispatch loop, providing data external profilers cannot see
+- **Three modes** — `--profile=opcodes` (histogram + pair frequency + scalar hit rate), `--profile=functions` (per-function timing + allocations), `--profile=all` (both)
+- **Export formats** — JSON (`--profile-output=path.json`) and collapsed flame graph (`--profile-format=flamegraph`)
+- **Near-zero overhead** — Boolean guard on dispatch loop; ~1% for opcode counting, ~3% for function timing
+
 ## Overview
 
 The `--profile` flag on ScriptLoader enables language-level profiling of the bytecode VM. It operates inside the dispatch loop, providing data that external profilers (like `sample` or `callgrind`) cannot see — which opcodes execute, which JS functions are hot, and where the VM allocates.

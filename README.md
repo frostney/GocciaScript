@@ -86,7 +86,7 @@ See [Language Restrictions](docs/language-restrictions.md) for details on suppor
 
 ### Built-in Objects
 
-`console`, `Math`, `JSON`, `JSON5`, `TOML`, `YAML`, `Object`, `Array`, `Number`, `String`, `RegExp`, `Symbol`, `Set`, `Map`, `Promise`, `Temporal`, `Iterator`, `ArrayBuffer`, `SharedArrayBuffer`, TypedArrays (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`) with ArrayBuffer and SharedArrayBuffer backing, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`, `DOMException`).
+`console`, `Math`, `JSON`, `JSON5`, `TOML`, `YAML`, `Object`, `Array`, `Number`, `String`, `RegExp`, `Symbol`, `Set`, `Map`, `Promise`, `Temporal`, `Iterator`, `Proxy`, `Reflect`, `ArrayBuffer`, `SharedArrayBuffer`, TypedArrays (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`) with ArrayBuffer and SharedArrayBuffer backing, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`, `DOMException`).
 
 See [Built-in Objects](docs/built-ins.md) for the complete API reference.
 
@@ -156,7 +156,7 @@ Script files may start with a Unix shebang line like `#!/usr/bin/env goccia`; Go
 
 ### Run via Bytecode
 
-GocciaScript includes a bytecode execution backend. The public bytecode artifact is `.gbc`, and WASM emission is not supported.
+GocciaScript includes a bytecode execution backend. The public bytecode artifact is `.gbc`.
 
 ```bash
 # Compile and execute via bytecode
@@ -233,129 +233,30 @@ The benchmark runner auto-calibrates iterations per benchmark, reports ops/sec w
 
 ## Quick Tour
 
-GocciaScript looks like modern JavaScript — with a few intentional differences. Here's a taste of the language.
+GocciaScript looks like modern JavaScript — with a few intentional differences:
 
-**Arrow functions only** — no `function` keyword:
-
-```javascript
-const greet = (name) => `Hello, ${name}!`;
-const add = (a, b) => a + b;
-```
-
-**No traditional loops** — use array methods and `for...of`:
-
-```javascript
-const numbers = [1, 2, 3, 4, 5];
-const doubled = numbers.map((n) => n * 2);
-const sum = numbers.reduce((total, n) => total + n, 0);
-
-for (const n of numbers) {
-  console.log(n);
-}
-```
-
-**Classes** with private fields, getters, and inheritance:
-
-```javascript
-class Account {
-  #balance = 0;
-
-  deposit(amount) {
-    this.#balance = this.#balance + amount;
-  }
-
-  get balance() {
-    return this.#balance;
-  }
-}
-```
-
-**Modules** with named imports/exports (no default exports):
-
-```javascript
-// math.js
-export const add = (a, b) => a + b;
-
-// app.js
-import { add } from "./math.js";
-```
+- **Arrow functions only** — `const greet = (name) => \`Hello, ${name}!\`;` (no `function` keyword)
+- **No traditional loops** — `numbers.map((n) => n * 2)` or `for (const n of numbers) { ... }`
+- **Classes** with private fields — `class Account { #balance = 0; ... }`
+- **Named imports/exports only** — `import { add } from "./math.js";` (no default exports)
+- **Strict equality only** — `===` and `!==` (no `==` or `!=`)
 
 The CLI tools share WHATWG-style import map support with `--import-map=<file.json>`, `--alias key=value`, and automatic `goccia.json` discovery for project-level module aliases.
 
-Structured data files and text assets can also be consumed directly:
+Structured data files and text assets can also be imported directly:
 
 ```javascript
 import { name, version } from "./package.json";
-import { name as packageName, debug } from "./config.toml";
-import { name as appName, debug } from "./config.yaml";
-import { "0" as firstDoc, "1" as secondDoc } from "./multi.yaml";
-import { "0" as firstRecord, "1" as secondRecord } from "./events.jsonl";
+import { name as packageName } from "./config.toml";
+import { name as appName } from "./config.yaml";
 import { content, metadata } from "./README.md";
 ```
 
-Text asset modules currently support `.txt` and `.md`. They expose two named exports: `content` (the UTF-8 file text as a string, with `\r\n` and bare `\r` canonicalized to `\n`) and `metadata` (a frozen object with `kind`, `path`, `fileName`, `extension`, and `byteLength`).
+Runtime parsers are available for JSON5, TOML, YAML, and JSONL. See [Built-in Objects](docs/built-ins.md) and [Language Restrictions](docs/language-restrictions.md) for the full data format reference.
 
-For JSON5 in runtime code, use the built-in parser:
+`TOML.parse(sourceText)` parses TOML 1.1.0 configuration data. `YAML.parse(sourceText)` handles common configuration files including block scalars, anchors/aliases, merge keys, and YAML 1.2 tag resolution. See [Language Restrictions](docs/language-restrictions.md#modules) and [Design Decisions](docs/design-decisions.md) for the full conformance details.
 
-```javascript
-const config = JSON5.parse(sourceText);
-const formatted = JSON5.stringify(
-  { host: "localhost", retries: Infinity, enabled: true },
-  { space: 2, quote: '"' },
-);
-```
-
-For TOML in runtime code, use the built-in parser:
-
-```javascript
-const config = TOML.parse(sourceText);
-```
-
-If you want a YAML stream as an array in runtime code instead of module exports, use the explicit document parser:
-
-```javascript
-const docs = YAML.parseDocuments(sourceText);
-```
-
-`YAML.parse(sourceText)` also returns an array when the input uses explicit `---` document markers, matching Bun's YAML runtime behavior.
-
-`TOML.parse(sourceText)` parses TOML 1.1.0 configuration data into normal Goccia values. TOML date/time values currently map to validated string scalars in runtime code and module imports, which keeps the v1 surface stable while leaving room for future Temporal interop.
-
-The TOML surface is also checked against the official `toml-test` corpus in CI across the supported platform matrix. You can rerun the official suite locally with `python3 scripts/run_toml_test_suite.py`, or reuse a prebuilt decoder with `python3 scripts/run_toml_test_suite.py --harness=./build/GocciaTOMLCheck`.
-
-JSONL is also available both as a runtime parser and as a structured-data module format:
-
-```javascript
-const records = JSONL.parse('{"id":1}\n{"id":2}\n');
-const chunk = JSONL.parseChunk('{"id":1}\n{"id":');
-```
-
-`.jsonl` module imports expose each non-empty line as a zero-based string export (`"0"`, `"1"`, ...), keeping the import surface consistent with string-literal named imports and multi-document structured-data modules.
-
-The current YAML surface already handles common configuration files, including mappings, sequences, block and multiline flow collections (including single-pair mapping items like `[foo: bar]`, empty implicit keys, trailing commas, and stricter rejection of malformed empty interior entries), anchors, aliases, merge keys, self-referential alias graphs for mappings and sequences, block scalars (`|`, `>`, chomping modifiers, and indentation indicators), multiline plain and quoted scalar folding, YAML 1.2 numeric scalar resolution (including base-prefixed integers, exponent forms, and validated digit separators), YAML double-quoted escapes (`\x`, `\u`, `\U`, line continuations, and YAML-specific escapes), and document directives/tags such as `%YAML`, `%TAG`, `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`, `!!seq`, `!!map`, `!!timestamp`, and `!!binary`. Directives are still validated as document-preamble syntax, so they are rejected if they appear after document content without an intervening document boundary.
-
-Tagged values now preserve runtime metadata through `.tagName` and `.value`. Custom tags wrap the parsed underlying value instead of being discarded, while `!!timestamp` validates ISO date/date-time input and `!!binary` validates and decodes base64 payloads.
-
-Explicit keys (`? key`) are also supported, including omitted explicit values and zero-indented sequence values. Non-scalar YAML keys are canonicalized into stable JSON-like strings at parse time so mappings remain representable as Goccia objects, and anchored mapping keys now parse instead of being rejected outright.
-
-YAML support is being built with two explicit compatibility goals:
-- Full YAML 1.2 compatibility
-- Bun-compatible runtime/module semantics where they make sense in GocciaScript
-
-The current implementation is still incremental and does not yet cover the full YAML 1.2 surface. The detailed conformance snapshot and remaining gap clusters live in [docs/design-decisions.md](docs/design-decisions.md). The official `yaml-test-suite` parse-validity check can be rerun locally with `python3 scripts/run_yaml_test_suite.py`.
-
-JSON5 parsing is checked against the official `json5/json5` parser test corpus, and the same compliance command also runs the upstream-aligned JSON5 stringify suite. You can rerun that combined check locally with `python3 scripts/run_json5_test_suite.py`, or reuse a prebuilt parser decoder with `python3 scripts/run_json5_test_suite.py --harness=./build/GocciaJSON5Check`. The stringify half covers special numeric values (`Infinity`, `-Infinity`, `NaN`), trailing-comma pretty printing, replacers, boxed primitives, and JSON5 quote selection/overrides.
-
-**Async/await** with full Promise support:
-
-```javascript
-const fetchData = async () => {
-  const result = await Promise.resolve({ status: "ok" });
-  return result;
-};
-```
-
-**Strict equality only** — `===` and `!==` (no `==` or `!=`).
+JSONL parsing is also available via `JSONL.parse(text)` and `JSONL.parseChunk(text)`, and `.jsonl` files can be imported as structured-data modules.
 
 For a full guided walkthrough, see the [Tutorial](docs/tutorial.md). For the complete list of what's supported and excluded, see [Language Restrictions](docs/language-restrictions.md).
 
