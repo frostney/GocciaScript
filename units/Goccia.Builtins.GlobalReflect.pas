@@ -172,14 +172,11 @@ begin
       CallArgs.Add(ArgsArray.Elements[I]);
 
     // Step 4: Return ? Construct(target, args, newTarget)
-    Instance := TGocciaClassValue(Target).Instantiate(CallArgs);
-
-    // If newTarget differs from target, set prototype to newTarget.prototype
-    if (NewTarget <> Target) and (Instance is TGocciaObjectValue) then
-    begin
-      if Assigned(TGocciaClassValue(NewTarget).Prototype) then
-        TGocciaObjectValue(Instance).Prototype := TGocciaClassValue(NewTarget).Prototype;
-    end;
+    // Pass newTarget so the instance prototype is set before the constructor runs
+    if NewTarget <> Target then
+      Instance := TGocciaClassValue(Target).Instantiate(CallArgs, TGocciaClassValue(NewTarget))
+    else
+      Instance := TGocciaClassValue(Target).Instantiate(CallArgs);
   finally
     CallArgs.Free;
   end;

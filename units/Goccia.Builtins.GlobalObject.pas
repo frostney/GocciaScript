@@ -429,10 +429,17 @@ begin
   Descriptor := ToPropertyDescriptor(DescriptorObject, ExistingDescriptor);
 
   // Step 4: Perform ? DefinePropertyOrThrow(O, key, desc)
-  if IsSymbolKey then
-    Obj.DefineSymbolProperty(SymbolKey, Descriptor)
-  else
-    Obj.DefineProperty(PropertyName, Descriptor);
+  // DefineProperty/DefineSymbolProperty takes ownership on success;
+  // free Descriptor and re-raise if the call throws.
+  try
+    if IsSymbolKey then
+      Obj.DefineSymbolProperty(SymbolKey, Descriptor)
+    else
+      Obj.DefineProperty(PropertyName, Descriptor);
+  except
+    Descriptor.Free;
+    raise;
+  end;
 
   // Step 5: Return O
   Result := Obj;

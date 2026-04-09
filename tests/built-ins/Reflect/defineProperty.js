@@ -62,6 +62,15 @@ describe("Reflect.defineProperty", () => {
     expect(() => Reflect.defineProperty("str", "x", { value: 1 })).toThrow(TypeError);
   });
 
+  test("throws TypeError if descriptor is not an object", () => {
+    const obj = {};
+    expect(() => Reflect.defineProperty(obj, "x", 42)).toThrow(TypeError);
+    expect(() => Reflect.defineProperty(obj, "y", null)).toThrow(TypeError);
+    expect(() => Reflect.defineProperty(obj, "z", "string")).toThrow(TypeError);
+    expect(() => Reflect.defineProperty(obj, "w", true)).toThrow(TypeError);
+    expect(() => Reflect.defineProperty(obj, "v", undefined)).toThrow(TypeError);
+  });
+
   test("throws TypeError for mixed data and accessor descriptors", () => {
     const obj = {};
 

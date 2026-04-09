@@ -56,4 +56,57 @@ describe("Reflect.construct", () => {
     class Foo {}
     expect(() => Reflect.construct(Foo, "not-array")).toThrow(TypeError);
   });
+
+  test("newTarget prototype is visible during constructor execution", () => {
+    class Bar {}
+    class Foo {
+      constructor() {
+        this.protoWasCorrect = (Object.getPrototypeOf(this) === Bar.prototype);
+      }
+    }
+
+    const obj = Reflect.construct(Foo, [], Bar);
+    expect(obj instanceof Bar).toBe(true);
+    expect(obj.protoWasCorrect).toBe(true);
+  });
+
+  test("newTarget prototype is visible for instanceof during construction", () => {
+    class Bar {}
+    class Base {
+      constructor() {
+        this.isBar = (this instanceof Bar);
+      }
+    }
+
+    const obj = Reflect.construct(Base, [], Bar);
+    expect(obj.isBar).toBe(true);
+  });
+
+  test("constructor can call inherited methods from newTarget prototype", () => {
+    class Target {
+      constructor() {
+        this.greeting = this.greet();
+      }
+    }
+    class NewTarget {
+      greet() {
+        return "hello from NewTarget";
+      }
+    }
+
+    const obj = Reflect.construct(Target, [], NewTarget);
+    expect(obj.greeting).toBe("hello from NewTarget");
+  });
+
+  test("newTarget same as target preserves default behavior", () => {
+    class Foo {
+      constructor() {
+        this.isFoo = (this instanceof Foo);
+      }
+    }
+
+    const obj = Reflect.construct(Foo, [], Foo);
+    expect(obj instanceof Foo).toBe(true);
+    expect(obj.isFoo).toBe(true);
+  });
 });

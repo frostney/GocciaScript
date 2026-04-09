@@ -97,7 +97,8 @@ type
     function GetPrivateMethod(const AName: string): TGocciaMethodValue;
     procedure AppendOwnPrivateNames(const ANames: TStrings);
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; virtual;
-    function Instantiate(const AArguments: TGocciaArgumentsCollection): TGocciaValue; virtual;
+    function Instantiate(const AArguments: TGocciaArgumentsCollection;
+      const ANewTarget: TGocciaClassValue = nil): TGocciaValue; virtual;
     function EstimatedInstancePropertyCapacity: Integer;
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
@@ -782,13 +783,22 @@ begin
   end;
 end;
 
-function TGocciaClassValue.Instantiate(const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+// ES2026 §10.2.2 [[Construct]](argumentsList, newTarget)
+function TGocciaClassValue.Instantiate(const AArguments: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaClassValue): TGocciaValue;
 var
   Instance: TGocciaObjectValue;
   WalkClass: TGocciaClassValue;
   NativeInstance: TGocciaObjectValue;
   ConstructorToCall: TGocciaMethodValue;
+  InstancePrototype: TGocciaObjectValue;
 begin
+  // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget)
+  if Assigned(ANewTarget) then
+    InstancePrototype := ANewTarget.Prototype
+  else
+    InstancePrototype := FPrototype;
+
   NativeInstance := nil;
   WalkClass := Self;
   while Assigned(WalkClass) do
@@ -799,10 +809,11 @@ begin
     WalkClass := WalkClass.SuperClass;
   end;
 
+  // ES2026 §10.2.2 step 6: Set proto on the instance before constructor runs
   if Assigned(NativeInstance) then
   begin
     Instance := NativeInstance;
-    Instance.Prototype := FPrototype;
+    Instance.Prototype := InstancePrototype;
     if NativeInstance is TGocciaInstanceValue then
       TGocciaInstanceValue(NativeInstance).ClassValue := Self;
   end
@@ -810,7 +821,7 @@ begin
   begin
     Instance := TGocciaInstanceValue.Create(Self,
       EstimatedInstancePropertyCapacity);
-    Instance.Prototype := FPrototype;
+    Instance.Prototype := InstancePrototype;
   end;
 
   ConstructorToCall := FConstructorMethod;
