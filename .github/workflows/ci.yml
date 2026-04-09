@@ -1001,15 +1001,26 @@ jobs:
         env:
           GITHUB_REPO: ${{ github.repository }}
 
-      - name: Commit changelog to main
+      - name: Open changelog PR
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git checkout main
+          VERSION="${GITHUB_REF_NAME}"
+          BRANCH="changelog/${VERSION}"
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH" origin/main
           git add CHANGELOG.md
           if git diff --cached --quiet; then
-            echo "No changelog changes to commit"
+            echo "No changelog changes"
           else
-            git commit -m "Update CHANGELOG.md for ${GITHUB_REF_NAME}"
-            git push origin main
+            git commit -m "Update CHANGELOG.md for ${VERSION}"
+            git push origin "$BRANCH"
+            gh pr create \
+              --title "Update CHANGELOG.md for ${VERSION}" \
+              --body "Auto-generated changelog update for the ${VERSION} release." \
+              --base main \
+              --head "$BRANCH" \
+              --label internal
           fi

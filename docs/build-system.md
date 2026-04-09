@@ -339,7 +339,7 @@ git-cliff --latest --strip header
 
 ### CI Integration
 
-The release job in `ci.yml` uses the [`orhun/git-cliff-action`](https://github.com/orhun/git-cliff-action) to generate categorized release notes for each tagged release. GitHub's auto-generated release notes (`.github/release.yml`) provide an additional PR-label-based view.
+The release job in `ci.yml` uses the [`orhun/git-cliff-action`](https://github.com/orhun/git-cliff-action) to generate categorized release notes for each tagged release. After the GitHub release is created, the job regenerates the full `CHANGELOG.md` and opens a PR to merge it into `main` (via a `changelog/<version>` branch). This avoids branch protection issues and keeps the changelog update visible in the normal review flow. GitHub's auto-generated release notes (`.github/release.yml`) provide an additional PR-label-based view.
 
 ### PR Labels
 
