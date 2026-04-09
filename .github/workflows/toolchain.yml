@@ -280,6 +280,10 @@ jobs:
                 cross_fpc="$PREFIX/lib/fpc/${FPC_VERSION}/ppca64"
                 wrapper="$PREFIX/bin/ppca64-wrapper"
                 ;;
+              *)
+                echo "::error::Unsupported CPU target: ${cpu}"
+                exit 1
+                ;;
             esac
 
             # Extract cross-compilation flags from extra_opts for manual
