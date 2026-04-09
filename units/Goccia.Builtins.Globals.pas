@@ -203,17 +203,22 @@ begin
   Result := CreateErrorObject(AName, Message, 1);
   Result.Prototype := AProto;
 
-  { Step 4: InstallErrorCause(O, options) }
+  { Step 4: InstallErrorCause(O, options) — ES2026 §20.5.8.1 }
   OptionsIndex := 1;
   if AArgs.Length > OptionsIndex then
   begin
     OptionsArg := AArgs.GetElement(OptionsIndex);
     if OptionsArg is TGocciaObjectValue then
     begin
-      { Step 4a: If options has "cause", CreateDataPropertyOrThrow(O, "cause", cause) }
-      CauseValue := OptionsArg.GetProperty(PROP_CAUSE);
-      if (CauseValue <> nil) and not (CauseValue is TGocciaUndefinedLiteralValue) then
-        Result.AssignProperty(PROP_CAUSE, CauseValue);
+      { Step 4a: If HasProperty(options, "cause"), CreateNonEnumerableDataPropertyOrThrow(O, "cause", cause) }
+      if TGocciaObjectValue(OptionsArg).HasProperty(PROP_CAUSE) then
+      begin
+        CauseValue := OptionsArg.GetProperty(PROP_CAUSE);
+        if CauseValue = nil then
+          CauseValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        Result.DefineProperty(PROP_CAUSE,
+          TGocciaPropertyDescriptorData.Create(CauseValue, [pfConfigurable, pfWritable]));
+      end;
     end;
   end;
   { Step 5: Return O }
@@ -318,15 +323,20 @@ begin
   { Step 6: CreateDataPropertyOrThrow(O, "errors", CreateArrayFromList(errorsList)) }
   ErrorObj.AssignProperty(PROP_ERRORS, ErrorsArray);
 
-  { Step 4: InstallErrorCause(O, options) }
+  { Step 4: InstallErrorCause(O, options) — ES2026 §20.5.8.1 }
   if AArgs.Length > 2 then
   begin
     OptionsArg := AArgs.GetElement(2);
     if OptionsArg is TGocciaObjectValue then
     begin
-      CauseValue := OptionsArg.GetProperty(PROP_CAUSE);
-      if (CauseValue <> nil) and not (CauseValue is TGocciaUndefinedLiteralValue) then
-        ErrorObj.AssignProperty(PROP_CAUSE, CauseValue);
+      if TGocciaObjectValue(OptionsArg).HasProperty(PROP_CAUSE) then
+      begin
+        CauseValue := OptionsArg.GetProperty(PROP_CAUSE);
+        if CauseValue = nil then
+          CauseValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        ErrorObj.DefineProperty(PROP_CAUSE,
+          TGocciaPropertyDescriptorData.Create(CauseValue, [pfConfigurable, pfWritable]));
+      end;
     end;
   end;
 
