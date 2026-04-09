@@ -205,7 +205,7 @@ jobs:
           ls -la build/
 
       - name: Stage build artifacts
-        run: bash ./.github/scripts/stage-build-artifacts.sh build ci-artifacts --include-tests
+        run: bash ./.github/scripts/stage-build-artifacts.sh build ci-artifacts --include-tests --strip
 
       - name: Stage TOML compliance harness
         run: |
@@ -908,7 +908,7 @@ jobs:
           path: build/
 
       - name: Stage release artifacts
-        run: bash ./.github/scripts/stage-build-artifacts.sh build release-artifacts --strip
+        run: bash ./.github/scripts/stage-build-artifacts.sh build release-artifacts
 
       - name: Upload release artifact bundle
         uses: actions/upload-artifact@v5
@@ -960,7 +960,7 @@ jobs:
             display="${DISPLAY_NAMES[$target]}"
             archive_name="gocciascript-${VERSION}-${display}"
             pkg_dir="${archive_name}"
-            bash ./.github/scripts/stage-build-artifacts.sh "$artifact_dir" "$pkg_dir" --strip
+            bash ./.github/scripts/stage-build-artifacts.sh "$artifact_dir" "$pkg_dir"
 
             cp -r tests/ "$pkg_dir/tests/"
             cp -r benchmarks/ "$pkg_dir/benchmarks/"

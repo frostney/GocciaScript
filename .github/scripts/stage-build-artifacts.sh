@@ -70,7 +70,10 @@ fi
 
 if [ -n "$do_strip" ]; then
   for bin in "$artifact_dir"/*; do
-    [ -f "$bin" ] && strip "$bin" 2>/dev/null || true
+    if [ -f "$bin" ]; then
+      # Prefer llvm-strip (handles Mach-O, ELF, and PE/COFF) over platform strip
+      llvm-strip "$bin" 2>/dev/null || strip "$bin" 2>/dev/null || true
+    fi
   done
 fi
 
