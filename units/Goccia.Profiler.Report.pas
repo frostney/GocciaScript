@@ -49,13 +49,58 @@ type
     SelfTimeNanoseconds: Int64;
   end;
 
-function EscapeJSONString(const AValue: string): string;
+procedure QuickSortPairs(var AEntries: array of TOpcodePairEntry;
+  const ALow, AHigh: Integer);
+var
+  Lo, Hi: Integer;
+  Pivot: Int64;
+  Temp: TOpcodePairEntry;
 begin
-  Result := StringReplace(AValue, '\', '\\', [rfReplaceAll]);
-  Result := StringReplace(Result, '"', '\"', [rfReplaceAll]);
-  Result := StringReplace(Result, #10, '\n', [rfReplaceAll]);
-  Result := StringReplace(Result, #13, '\r', [rfReplaceAll]);
-  Result := StringReplace(Result, #9, '\t', [rfReplaceAll]);
+  Lo := ALow;
+  Hi := AHigh;
+  Pivot := AEntries[(ALow + AHigh) div 2].Count;
+  repeat
+    while AEntries[Lo].Count > Pivot do Inc(Lo);
+    while AEntries[Hi].Count < Pivot do Dec(Hi);
+    if Lo <= Hi then
+    begin
+      Temp := AEntries[Lo];
+      AEntries[Lo] := AEntries[Hi];
+      AEntries[Hi] := Temp;
+      Inc(Lo);
+      Dec(Hi);
+    end;
+  until Lo > Hi;
+  if ALow < Hi then QuickSortPairs(AEntries, ALow, Hi);
+  if Lo < AHigh then QuickSortPairs(AEntries, Lo, AHigh);
+end;
+
+function EscapeJSONString(const AValue: string): string;
+var
+  Buf: TStringBuffer;
+  I: Integer;
+  Ch: Char;
+begin
+  Buf := TStringBuffer.Create(Length(AValue) + 16);
+  for I := 1 to Length(AValue) do
+  begin
+    Ch := AValue[I];
+    case Ch of
+      '\': Buf.Append('\\');
+      '"': Buf.Append('\"');
+      #8:  Buf.Append('\b');
+      #9:  Buf.Append('\t');
+      #10: Buf.Append('\n');
+      #12: Buf.Append('\f');
+      #13: Buf.Append('\r');
+    else
+      if Ord(Ch) < 32 then
+        Buf.Append('\u00' + IntToHex(Ord(Ch), 2))
+      else
+        Buf.AppendChar(AnsiChar(Ch));
+    end;
+  end;
+  Result := Buf.ToString;
 end;
 
 { Console: Opcode Profile }
@@ -132,10 +177,9 @@ var
   Entries: array of TOpcodePairEntry;
   EntryCount: Integer;
   Prev, Cur: Integer;
-  I, J: Integer;
+  I: Integer;
   Total: Int64;
   Pct: Double;
-  Temp: TOpcodePairEntry;
   Count: Int64;
 begin
   EntryCount := 0;
@@ -163,18 +207,9 @@ begin
     Exit;
   end;
 
-  // Sort descending by count (insertion sort)
-  for I := 1 to EntryCount - 1 do
-  begin
-    Temp := Entries[I];
-    J := I - 1;
-    while (J >= 0) and (Entries[J].Count < Temp.Count) do
-    begin
-      Entries[J + 1] := Entries[J];
-      Dec(J);
-    end;
-    Entries[J + 1] := Temp;
-  end;
+  // Sort descending by count
+  if EntryCount > 1 then
+    QuickSortPairs(Entries, 0, EntryCount - 1);
 
   WriteLn;
   WriteLn('Opcode Pairs (top ', MAX_OPCODE_PAIRS_DISPLAYED, '):');

@@ -189,6 +189,7 @@ end;
 procedure TGocciaProfiler.PushFunction(const AProfileIndex: Integer;
   const ATimestamp: Int64);
 begin
+  if (AProfileIndex < 0) or (AProfileIndex >= FFunctionProfileCount) then Exit;
   if FTimingStackCount >= Length(FTimingStack) then
     SetLength(FTimingStack, FTimingStackCount * 2 + 16);
   FTimingStack[FTimingStackCount].ProfileIndex := AProfileIndex;
@@ -201,11 +202,13 @@ end;
 procedure TGocciaProfiler.PopFunction(const AProfileIndex: Integer;
   const ATimestamp: Int64);
 var
-  Elapsed, SelfTime, SelfTimeMicroseconds, ExistingValue: Int64;
+  Elapsed, SelfTime, SelfTimeMicroseconds: Int64;
+  ExistingValue: Int64;
   StackPath: string;
   I: Integer;
 begin
   if FTimingStackCount <= 0 then Exit;
+  if (AProfileIndex < 0) or (AProfileIndex >= FFunctionProfileCount) then Exit;
   Dec(FTimingStackCount);
   Elapsed := ATimestamp - FTimingStack[FTimingStackCount].EntryTimestamp;
   SelfTime := Elapsed - FTimingStack[FTimingStackCount].ChildTimeAccumulated;

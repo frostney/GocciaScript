@@ -43,7 +43,7 @@ Opcode Profile:
   Total                                             284582
 ```
 
-**How to read it:** The percentages show where the VM spends its instruction budget. High `OP_CALL`/`OP_RETURN` percentages indicate call-overhead-bound code. High `OP_TO_PRIMITIVE` suggests the compiler is emitting generic opcodes where typed opcodes would suffice. High `OP_GET_PROP_CONST` points to property-access-heavy code that might benefit from inline caching.
+**How to read it:** The percentages show where the VM spends its instruction budget. A large share of `OP_CALL`/`OP_RETURN` indicates call-overhead-bound code. Elevated `OP_TO_PRIMITIVE` counts suggest the compiler is emitting generic opcodes where typed opcodes would suffice. Frequent `OP_GET_PROP_CONST` points to property-access-heavy code that might benefit from inline caching.
 
 ### Opcode Pair Frequency (`--profile=opcodes`)
 
