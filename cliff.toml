@@ -1,0 +1,112 @@
+[changelog]
+header = """
+# Changelog
+
+All notable changes to GocciaScript are documented in this file.\n
+"""
+body = """
+{%- macro remote_url() -%}https://github.com/frostney/GocciaScript{%- endmacro -%}
+
+{% if version -%}
+  ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else -%}
+  ## [Unreleased]
+{% endif -%}
+
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits %}
+  - {{ commit.message | split(pat="\n") | first | trim }}
+{%- endfor %}
+{% endfor %}\n
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = false
+filter_unconventional = false
+split_commits = false
+protect_breaking_commits = false
+tag_pattern = "[0-9]*"
+sort_commits = "newest"
+commit_parsers = [
+  { message = "^Add ", group = "🚀 Added" },
+  { message = "^Implement ", group = "🚀 Added" },
+  { message = "^Support ", group = "🚀 Added" },
+  { message = "^Allow ", group = "🚀 Added" },
+  { message = "^Create ", group = "🚀 Added" },
+  { message = "^Ignore leading shebang", group = "🚀 Added" },
+  { message = "^Enable ", group = "🚀 Added" },
+
+  { message = "^Fix ", group = "🐛 Fixed" },
+  { message = "^Fixes ", group = "🐛 Fixed" },
+  { message = "^Route ", group = "🐛 Fixed" },
+  { message = "^Thread ", group = "🐛 Fixed" },
+  { message = "^Harden ", group = "🐛 Fixed" },
+  { message = "^Handle ", group = "🐛 Fixed" },
+  { message = "^Normalize ", group = "🐛 Fixed" },
+  { message = "^Preserve ", group = "🐛 Fixed" },
+  { message = "^Unify newline", group = "🐛 Fixed" },
+
+  { message = "^Improve ", group = "✨ Improved" },
+  { message = "^Include ", group = "✨ Improved" },
+  { message = "^Make ", group = "✨ Improved" },
+  { message = "^Merge GocciaScript metadata", group = "✨ Improved" },
+  { message = "^Report ", group = "✨ Improved" },
+  { message = "^Expand ", group = "✨ Improved" },
+  { message = "^Refresh ", group = "✨ Improved" },
+
+  { message = "^Replace ", group = "⚡ Performance" },
+  { message = "^Optimize ", group = "⚡ Performance" },
+  { message = "^Promote ", group = "⚡ Performance" },
+  { message = "^Pre-materialize ", group = "⚡ Performance" },
+  { message = "^Mark .* inline", group = "⚡ Performance" },
+  { message = "^Eliminate ", group = "⚡ Performance" },
+  { message = "^Bypass ", group = "⚡ Performance" },
+  { message = "^Inline ", group = "⚡ Performance" },
+  { message = "^Extend constant folding", group = "⚡ Performance" },
+  { message = "^Disable runtime checks for production", group = "⚡ Performance" },
+  { message = "^Experiment:", group = "⚡ Performance" },
+  { message = "^Switch to microsecond timing", group = "⚡ Performance" },
+  { message = "^Garbage collector memory", group = "⚡ Performance" },
+  { message = "^Update hashmap hierarchy", group = "⚡ Performance" },
+  { message = "^Promise and iterator optimis", group = "⚡ Performance" },
+  { message = "^for of array fast path", group = "⚡ Performance" },
+
+  { message = "^Remove ", group = "🗑️ Removed" },
+
+  { message = "^Refactor", group = "🏗️ Internal" },
+  { message = "^Extract ", group = "🏗️ Internal" },
+  { message = "^Fold Souffle", group = "🏗️ Internal" },
+  { message = "^De-couple ", group = "🏗️ Internal" },
+  { message = "^Unify garbage collector", group = "🏗️ Internal" },
+  { message = "^Unify blueprint bridge", group = "🏗️ Internal" },
+  { message = "^Set prototype.constructor on native", group = "🏗️ Internal" },
+  { message = "^Convert spike PDFs", group = "🏗️ Internal" },
+  { message = "^Print LOC", group = "🏗️ Internal" },
+  { message = "^Test JSON output via public CLI", group = "🏗️ Internal" },
+
+  { message = "^Update ", group = "🏗️ Internal" },
+  { message = "^Strip ", group = "🏗️ Internal" },
+  { message = "^Stage ", group = "🏗️ Internal" },
+  { message = "^Build 32-bit FFI", group = "🏗️ Internal" },
+  { message = "^Change wasm-tests CI", group = "🏗️ Internal" },
+  { message = "^CI ", group = "🏗️ Internal" },
+  { message = "^GocciaScript bytecode benchmarks in PRs", group = "🏗️ Internal" },
+  { message = "^Use range-based benchmark", group = "🏗️ Internal" },
+  { message = "^Potential Windows BenchmarkRunner", group = "🏗️ Internal" },
+  { message = "^High benchmark variance", group = "🏗️ Internal" },
+  { message = "^Benchmark tests regression", group = "🏗️ Internal" },
+  { message = "^Benchmark runner exit codes", group = "🏗️ Internal" },
+  { message = "^Environment specific test failure", group = "🏗️ Internal" },
+
+  { message = "^Merge branch", skip = true },
+  { message = "^Merge pull request", skip = true },
+
+  { message = ".*", group = "📖 Other" },
+]
+
+[remote.github]
+owner = "frostney"
+repo = "GocciaScript"

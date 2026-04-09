@@ -1,0 +1,30 @@
+changelog:
+  exclude:
+    labels:
+      - duplicate
+      - invalid
+      - wontfix
+      - question
+  categories:
+    - title: "🚀 New Features"
+      labels:
+        - new feature
+    - title: "📐 Compliance"
+      labels:
+        - spec compliance
+    - title: "🐛 Bug Fixes"
+      labels:
+        - bug
+        - os specific
+    - title: "⚡ Performance"
+      labels:
+        - performance
+    - title: "📖 Documentation"
+      labels:
+        - documentation
+    - title: "🏗️ Internal"
+      labels:
+        - internal
+    - title: "Other Changes"
+      labels:
+        - "*"
