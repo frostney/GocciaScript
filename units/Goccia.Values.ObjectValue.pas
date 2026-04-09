@@ -75,6 +75,7 @@ type
     function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue;
     function GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
     function HasSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean; virtual;
+    function DeleteSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean;
     function GetEnumerableSymbolProperties: TArray<TPair<TGocciaSymbolValue, TGocciaValue>>;
     function GetOwnSymbols: TArray<TGocciaSymbolValue>;
 
@@ -968,6 +969,35 @@ end;
 function TGocciaObjectValue.HasSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean;
 begin
   Result := FSymbolDescriptors.ContainsKey(ASymbol);
+end;
+
+// ES2026 §10.1.10 [[Delete]](P)
+function TGocciaObjectValue.DeleteSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  I: Integer;
+begin
+  if not FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  if not Descriptor.Configurable then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  FSymbolDescriptors.Remove(ASymbol);
+  for I := FSymbolInsertionOrder.Count - 1 downto 0 do
+    if FSymbolInsertionOrder[I] = ASymbol then
+    begin
+      FSymbolInsertionOrder.Delete(I);
+      Break;
+    end;
+  Descriptor.Free;
+  Result := True;
 end;
 
 function TGocciaObjectValue.GetEnumerableSymbolProperties: TArray<TPair<TGocciaSymbolValue, TGocciaValue>>;
