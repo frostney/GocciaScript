@@ -2,6 +2,13 @@
 
 *For developers who know JavaScript and want to learn GocciaScript — a guided walkthrough from hello world to a multi-file async program.*
 
+## Executive Summary
+
+- **Familiar syntax** — GocciaScript is modern JavaScript minus the quirks; `.js` files, no transpilation needed
+- **Key differences** — No `var`/`function`/`==`/loops; use `let`/`const`, arrow functions, `===`, `for...of`/array methods
+- **Full walkthrough** — Variables, arrow functions, arrays, objects, classes, modules, async/await
+- **Next steps** — Links to language restrictions, built-in API reference, and example programs
+
 ## What is GocciaScript?
 
 GocciaScript is a subset of JavaScript implemented in FreePascal. It strips away the quirks of early ECMAScript — `var`, `function`, loose equality, `eval`, traditional loops — and keeps the modern parts: arrow functions, classes with private fields, async/await, modules, and implicit strict mode. If you've written modern JavaScript, you already know most of GocciaScript.

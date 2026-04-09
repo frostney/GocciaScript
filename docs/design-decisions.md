@@ -396,7 +396,7 @@ The tree-walk interpreter directly evaluates AST nodes via recursive function ca
 
 ### Why Register-Based?
 
-Stack-based VMs (like the JVM and WASM) are simpler to compile to and have smaller instruction encoding. Register-based VMs (like Lua 5, LuaJIT, and Dalvik) need fewer instructions per operation and avoid redundant stack manipulations. For WASM output, register-to-stack translation is straightforward — the VM architecture doesn't need to mirror the target. Register-based was chosen for execution performance.
+Stack-based VMs (like the JVM and WASM) are simpler to compile to and have smaller instruction encoding. Register-based VMs (like Lua 5, LuaJIT, and Dalvik) need fewer instructions per operation and avoid redundant stack manipulations. Register-based was chosen for execution performance.
 
 ### Why Two Tiers?
 

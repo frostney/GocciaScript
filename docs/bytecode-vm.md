@@ -2,6 +2,13 @@
 
 *For contributors working on the bytecode backend.*
 
+## Executive Summary
+
+- **Two execution modes** — tree-walk interpreter (default) and bytecode VM (`--mode=bytecode`), sharing the same frontend, runtime objects, and GC
+- **Goccia-owned VM** — executes directly on `TGocciaValue` with tagged `TGocciaRegister` values; not a generic VM layer
+- **Opcode space** — core instructions (0-127) for hot paths, semantic instructions (128-255) for colder operations like imports/exports
+- **Binary format** — `.gbc` files with little-endian encoding, `GBC\0` magic, and version constant
+
 ## Overview
 
 GocciaScript has two execution modes:
@@ -128,7 +135,6 @@ The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Cov
 - `--mode=bytecode` runs the Goccia VM directly.
 - The full JavaScript suite passes in bytecode mode.
 - The old generic VM/runtime bridge has been removed from the active build.
-- WASM emission has been removed pre-1.0.
 
 ## Contributor Notes
 

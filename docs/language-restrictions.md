@@ -2,6 +2,13 @@
 
 *For script authors learning what GocciaScript supports and excludes, and for contributors understanding the design boundaries.*
 
+## Executive Summary
+
+- **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules (named only)
+- **Excluded by design** — `var`, `function` keyword, `==`/`!=`, `eval`, `arguments`, traditional loops, `with`, default imports/exports
+- **Graceful handling** — Excluded syntax parses successfully but executes as a no-op with a warning and suggestion
+- **Opt-in features** — ASI (`--asi`), JSX (`ggJSX`), types as comments, decorators, enums
+
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision.
 
 ## Guiding Principle
@@ -617,8 +624,8 @@ The transformer generates an internal source map for accurate error line/column 
 
 - `RegExp(pattern, flags?)` and `new RegExp(pattern, flags?)`
 - Regex literals: `/pattern/flags`
-- Flags: `g`, `i`, `m`, `s`, `u`, `y`
-- RegExp instance properties: `source`, canonicalized `flags`, `lastIndex`, `global`, `ignoreCase`, `multiline`, `dotAll`, `unicode`, `sticky`
+- Flags: `d`, `g`, `i`, `m`, `s`, `u`, `v`, `y`
+- RegExp instance properties: `source`, canonicalized `flags`, `lastIndex`, `global`, `ignoreCase`, `multiline`, `dotAll`, `unicode`, `sticky`, `unicodeSets`, `hasIndices`
 - `RegExp.prototype.exec()`, `test()`, `toString()`, and the `Symbol.match`, `Symbol.matchAll`, `Symbol.replace`, `Symbol.search`, and `Symbol.split` hooks
 - String integrations for `replace`, `replaceAll`, `split`, `match`, `matchAll`, and `search`, including custom protocol objects with the corresponding well-known symbol methods
 
@@ -628,8 +635,9 @@ Regex literals are lexed context-sensitively so `/` still works as division in e
 
 Current gaps from full ECMAScript RegExp semantics:
 
-- The `u` flag is accepted and exposed, but matching still does not implement full ECMAScript Unicode semantics.
-- Named capture groups, indices (`d`), and Unicode sets (`v`) are not supported.
+- The `u` flag enables Unicode-aware matching with property escapes (`\p{Letter}`) and code point escapes (`\u{1F600}`), but does not yet cover the full ECMAScript Unicode specification.
+- The `v` flag (Unicode sets) is accepted and exposed but full set notation is not yet implemented beyond basic `u` flag behavior.
+- The `d` flag (indices) is accepted and exposed but match indices are not yet populated.
 
 ## Intentional Divergences from ECMAScript
 

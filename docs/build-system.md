@@ -2,6 +2,13 @@
 
 *For contributors setting up their development environment or troubleshooting builds.*
 
+## Executive Summary
+
+- **Self-hosted build** — `./build.pas` is a FreePascal script via `instantfpc`; no Make/CMake/npm required
+- **Two modes** — `--dev` (default: debug info, checks) and `--prod` (O4, stripped, smart-linked)
+- **CI/CD** — `ci.yml` for main/tags (full platform matrix), `pr.yml` for PRs (ubuntu-latest x64 only, with benchmark comparison)
+- **Auto-formatter** — `./format.pas` with Lefthook pre-commit hook enforces code style automatically
+
 GocciaScript uses a self-hosted build script written in FreePascal, executed via `instantfpc`. No external build tools (Make, CMake, npm) are required beyond the FreePascal compiler itself.
 
 ## Prerequisites

@@ -2,6 +2,13 @@
 
 *For contributors writing, running, or debugging tests.*
 
+## Executive Summary
+
+- **JavaScript tests are primary** — End-to-end `.js` tests in `tests/` are the source of truth; Pascal unit tests are secondary
+- **Built-in test framework** — `describe`/`test`/`expect` with async support, mock functions, lifecycle hooks, and Vitest-compatible matchers
+- **One method per file** — Each test file focuses on a single method; edge cases are co-located with happy-path tests
+- **Run with**: `./build.pas testrunner && ./build/TestRunner tests`
+
 JavaScript end-to-end tests are the **primary** way of testing GocciaScript and ensuring ECMAScript compatibility. Every new feature or bug fix should include tests that exercise the full pipeline (lexer → parser → evaluator) through the same public surface that users call. Pascal unit tests exist as a secondary layer for low-level runtime and value system validation.
 
 When choosing where to add coverage, prefer the most public entry point available:

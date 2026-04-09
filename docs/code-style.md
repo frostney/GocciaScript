@@ -2,6 +2,13 @@
 
 *For contributors writing or reviewing FreePascal code in this repository.*
 
+## Executive Summary
+
+- **Naming** — PascalCase functions, `TGoccia*` classes, `F` prefix fields, `A` prefix parameters, no abbreviations
+- **Constants** — Use centralized constant units (`Goccia.Constants.*`, `Goccia.Keywords.*`, `Goccia.FileExtensions`) instead of hardcoded literals
+- **Performance** — Use `TStringBuffer` (not `TStringBuilder`), purpose-built hash maps (not `TDictionary`) on hot paths, and `TObjectList<T>` type aliases for cross-unit generics
+- **Auto-formatting** — `./format.pas` enforces uses clause ordering, PascalCase naming, and parameter prefixes; runs via Lefthook pre-commit hook
+
 This document describes the coding conventions and patterns used throughout the GocciaScript codebase.
 
 ## Pascal Conventions

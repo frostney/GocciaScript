@@ -2,6 +2,13 @@
 
 *For contributors working on the runtime — type coercion, property access, or adding new value types.*
 
+## Executive Summary
+
+- **`TGocciaValue` hierarchy** — All runtime values inherit from `TGocciaValue`; primitives, objects, arrays, functions, classes, iterators, and typed arrays each have dedicated subclasses
+- **Virtual property access** — `GetProperty`/`SetProperty` are virtual methods on the base class, eliminating type checks at call sites
+- **GC integration** — Every value auto-registers via `AfterConstruction`; subclasses override `MarkReferences` to mark owned references
+- **Shared prototype singletons** — String, Number, Array, Set, Map, Symbol, Function, and TypedArray types share a single class-level prototype instance, pinned by the GC
+
 The value system is the foundation of GocciaScript's runtime. Every piece of data — numbers, strings, objects, functions — is represented as a `TGocciaValue` or one of its subclasses.
 
 ## Type Hierarchy
