@@ -312,9 +312,9 @@ When a method only needs to expose elements for iteration, an indexed getter wit
 
 ## Platform-Specific Pitfalls
 
-### `Int64` to `Double` Conversion on FPC 3.2.2 AArch64
+### `Int64` to `Double` Conversion on FPC 3.2.2
 
-FPC 3.2.2 targeting AArch64 (Apple Silicon) has **two bugs** affecting `Int64` → `Double` conversion:
+FPC 3.2.2 has **two bugs** affecting `Int64` → `Double` conversion. Bug A is a Delphi-mode front-end issue that affects **all platforms**. Bug B is an AArch64-specific codegen issue.
 
 #### Bug A: `Double(Int64Var)` bit reinterpretation — [FPC #35886](https://gitlab.com/freepascal.org/fpc/source/-/issues/35886)
 
