@@ -79,7 +79,7 @@ class C {
 }
 ```
 
-**`await` expressions:** Only valid inside `async` functions. Suspends execution until the Promise settles; returns the fulfilled value or throws the rejection reason.
+**`await` expressions:** Valid inside `async` functions and at the top level (ES2022+ top-level `await`). Suspends execution until the Promise settles; returns the fulfilled value or throws the rejection reason. Top-level `await` works identically in both interpreted and bytecode modes.
 
 **Return semantics:** Async functions always return a Promise. If the body returns a value, the Promise resolves to that value. If the body throws, the Promise rejects.
 
@@ -443,14 +443,20 @@ for (const [a, b] of [[1, 2], [3, 4]]) { console.log(a + b); }
 
 ### `for await...of`
 
-Iterates over async iterables using `[Symbol.asyncIterator]`. Requires an async function context:
+Iterates over async iterables using `[Symbol.asyncIterator]`. Works inside `async` functions and at the top level (with top-level `await`):
 
 ```javascript
+// Inside an async function
 const fn = async () => {
   for await (const x of asyncIterable) {
     console.log(x);
   }
 };
+
+// At the top level (ES2022+)
+for await (const x of asyncIterable) {
+  console.log(x);
+}
 ```
 
 Each value is awaited before the loop body runs. Works with sync iterables too — Promises yielded by a sync iterator are awaited.

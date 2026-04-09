@@ -439,7 +439,7 @@ See [docs/testing.md](docs/testing.md) for the complete testing guide.
 - **Secondary:** Pascal unit tests in `units/*.Test.pas`
 - **JS test framework:** `describe`/`test`/`expect` with async support, `.resolves`/`.rejects`, mock functions (`mock()`/`spyOn()`), lifecycle hooks, and Vitest-compatible matchers
 - **Key matchers:** `.toBe`, `.toEqual`, `.toContain`, `.toMatch`, `.toThrow(ErrorType)`, `.toHaveBeenCalledWith(...)`, plus `.not` negation
-- **Test directories:** Organized by feature under `tests/language/` and `tests/built-ins/` (includes `Proxy/` with all 13 trap test files, `FFI/` with library loading and binding tests)
+- **Test directories:** Organized by feature under `tests/language/` (includes `async-await/` with top-level await, `for-of/` with top-level for-await-of) and `tests/built-ins/` (includes `Proxy/` with all 13 trap test files, `FFI/` with library loading and binding tests)
 - **Pascal test framework:** Generic `Expect<T>(...).ToBe(...)` assertions. NaN checks: use `Value.ToNumberLiteral.IsNaN` (not `Math.IsNaN`)
 
 ## Build System
