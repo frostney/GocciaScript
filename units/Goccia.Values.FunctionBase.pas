@@ -38,6 +38,7 @@ type
 
     // Override GetProperty to provide call, apply, bind methods and length/name
     function GetProperty(const AName: string): TGocciaValue; override;
+    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
 
     // Abstract method that subclasses must implement
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; virtual;
@@ -120,6 +121,11 @@ end;
 
 function TGocciaFunctionBase.GetProperty(const AName: string): TGocciaValue;
 begin
+  Result := GetPropertyWithContext(AName, Self);
+end;
+
+function TGocciaFunctionBase.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+begin
   // ECMAScript: Function.length and Function.name
   if AName = PROP_LENGTH then
   begin
@@ -131,7 +137,7 @@ begin
     Result := TGocciaStringLiteralValue.Create(GetFunctionName);
     Exit;
   end;
-  Result := inherited GetProperty(AName);
+  Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 
 function TGocciaFunctionBase.GetFunctionLength: Integer;

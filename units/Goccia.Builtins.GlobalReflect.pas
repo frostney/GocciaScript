@@ -317,13 +317,8 @@ begin
 
   PropertyName := PropKey.ToStringLiteral.Value;
 
-  // When an explicit receiver is provided, use GetPropertyWithContext to thread
-  // the receiver through to accessor getters. Otherwise use virtual GetProperty
-  // for correct dispatch on subclasses (arrays handle length/indices specially).
-  if AArgs.Length >= 3 then
-    Result := TGocciaObjectValue(Target).GetPropertyWithContext(PropertyName, Receiver)
-  else
-    Result := TGocciaObjectValue(Target).GetProperty(PropertyName);
+  // Step 4: Return ? target.[[Get]](key, receiver)
+  Result := TGocciaObjectValue(Target).GetPropertyWithContext(PropertyName, Receiver);
 end;
 
 // ES2026 §28.1.6 Reflect.getOwnPropertyDescriptor(target, propertyKey)

@@ -32,6 +32,7 @@ type
     constructor Create(const AAddress: Pointer);
 
     function GetProperty(const AName: string): TGocciaValue; override;
+    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToStringTag: string; override;
     procedure MarkReferences; override;
 
@@ -105,6 +106,11 @@ end;
 
 function TGocciaFFIPointerValue.GetProperty(const AName: string): TGocciaValue;
 begin
+  Result := GetPropertyWithContext(AName, Self);
+end;
+
+function TGocciaFFIPointerValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+begin
   if AName = PROP_IS_NULL then
   begin
     if Assigned(FAddress) then
@@ -115,7 +121,7 @@ begin
   else if AName = PROP_FFI_ADDRESS then
     Result := TGocciaNumberLiteralValue.Create(PtrUInt(FAddress) * 1.0)
   else
-    Result := inherited GetProperty(AName);
+    Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 
 function TGocciaFFIPointerValue.ToStringTag: string;

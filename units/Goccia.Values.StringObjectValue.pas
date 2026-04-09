@@ -26,6 +26,7 @@ type
     destructor Destroy; override;
     function TypeName: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
+    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
 
     procedure InitializePrototype;
     procedure MarkReferences; override;
@@ -280,6 +281,11 @@ begin
 end;
 
 function TGocciaStringObjectValue.GetProperty(const AName: string): TGocciaValue;
+begin
+  Result := GetPropertyWithContext(AName, Self);
+end;
+
+function TGocciaStringObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 var
   Index: Integer;
   StringValue: string;
@@ -295,12 +301,12 @@ begin
     Exit;
   end;
 
-  Result := inherited GetProperty(AName);
+  Result := inherited GetPropertyWithContext(AName, AThisContext);
   if not (Result is TGocciaUndefinedLiteralValue) then
     Exit;
 
   if Assigned(FSharedStringPrototype) then
-    Result := FSharedStringPrototype.GetPropertyWithContext(AName, Self);
+    Result := FSharedStringPrototype.GetPropertyWithContext(AName, AThisContext);
 end;
 
 procedure TGocciaStringObjectValue.InitializePrototype;

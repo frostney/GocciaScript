@@ -32,6 +32,7 @@ type
     destructor Destroy; override;
 
     function GetProperty(const AName: string): TGocciaValue; override;
+    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToStringTag: string; override;
     procedure MarkReferences; override;
 
@@ -502,6 +503,11 @@ end;
 
 function TGocciaFFILibraryValue.GetProperty(const AName: string): TGocciaValue;
 begin
+  Result := GetPropertyWithContext(AName, Self);
+end;
+
+function TGocciaFFILibraryValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+begin
   if AName = PROP_FFI_PATH then
     Result := TGocciaStringLiteralValue.Create(FHandle.Path)
   else if AName = PROP_FFI_CLOSED then
@@ -512,7 +518,7 @@ begin
       Result := TGocciaBooleanLiteralValue.FalseValue;
   end
   else
-    Result := inherited GetProperty(AName);
+    Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 
 function TGocciaFFILibraryValue.ToStringTag: string;

@@ -28,6 +28,7 @@ type
 
     // ES2026 §28.1.1 [[Get]](P, Receiver)
     function GetProperty(const AName: string): TGocciaValue; override;
+    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
 
     // ES2026 §28.1.1 [[Set]](P, V, Receiver)
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue;
@@ -180,6 +181,11 @@ end;
 
 // ES2026 §28.1.1 [[Get]](P, Receiver)
 function TGocciaProxyValue.GetProperty(const AName: string): TGocciaValue;
+begin
+  Result := GetPropertyWithContext(AName, Self);
+end;
+
+function TGocciaProxyValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 var
   Trap: TGocciaValue;
   Args: TGocciaArgumentsCollection;

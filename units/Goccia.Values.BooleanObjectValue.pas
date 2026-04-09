@@ -23,6 +23,7 @@ type
     constructor Create(const APrimitive: TGocciaBooleanLiteralValue; const AClass: TGocciaClassValue = nil);
     procedure InitializePrototype;
     function GetProperty(const AName: string): TGocciaValue; override;
+    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
 
     class function GetSharedPrototype: TGocciaObjectValue;
@@ -79,12 +80,17 @@ end;
 
 function TGocciaBooleanObjectValue.GetProperty(const AName: string): TGocciaValue;
 begin
-  Result := inherited GetProperty(AName);
+  Result := GetPropertyWithContext(AName, Self);
+end;
+
+function TGocciaBooleanObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+begin
+  Result := inherited GetPropertyWithContext(AName, AThisContext);
   if not (Result is TGocciaUndefinedLiteralValue) then
     Exit;
 
   if Assigned(FSharedBooleanPrototype) then
-    Result := FSharedBooleanPrototype.GetPropertyWithContext(AName, Self);
+    Result := FSharedBooleanPrototype.GetPropertyWithContext(AName, AThisContext);
 end;
 
 class function TGocciaBooleanObjectValue.GetSharedPrototype: TGocciaObjectValue;

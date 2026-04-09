@@ -50,14 +50,14 @@ type
 
     procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); virtual;
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); virtual;
-    function AssignPropertyWithReceiver(const AName: string; const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean;
+    function AssignPropertyWithReceiver(const AName: string; const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean; virtual;
 
     procedure RegisterNativeMethod(const AMethod: TGocciaValue);
     procedure RegisterConstant(const AName: string; const AValue: TGocciaValue);
 
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
-    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; virtual;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; virtual;
     function HasProperty(const AName: string): Boolean;
     function HasOwnProperty(const AName: string): Boolean; virtual;
@@ -72,9 +72,9 @@ type
 
     procedure DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
     procedure AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
-    function AssignSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean;
+    function AssignSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean; virtual;
     function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue; virtual;
-    function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue;
+    function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue; virtual;
     function GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
     function HasSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean; virtual;
     function DeleteSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean;
