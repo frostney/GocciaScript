@@ -324,7 +324,7 @@ In `{$mode delphi}`, an explicit `Double(Int64Var)` cast performs a **Turbo Pasc
 
 Mixed `Int64 * Double` arithmetic produces **wrong results** for `Int64` values near the `LongInt` boundary (±2,147,483,648). This affects all arithmetic operators (`*`, `+`, `-`, `/`) where one operand is `Int64` and the other is `Double`. FPC appears to use a 32-bit `SCVTF` instruction instead of 64-bit when promoting `Int64` through arithmetic expressions. This is AArch64-specific and has **not yet been reported upstream**.
 
-```
+```text
 // Observed on FPC 3.2.2 AArch64, all optimization levels:
 Int64(-2147483647) * 1.0  →  -2147483648   // WRONG (should be -2147483647)
 Int64(-2147483649) * 1.0  →  -2147483648   // WRONG (should be -2147483649)
