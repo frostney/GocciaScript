@@ -6,7 +6,7 @@
 
 - **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules (named only)
 - **Excluded by design** — `var`, `function` keyword, `==`/`!=`, `eval`, `arguments`, traditional loops, `with`, default imports/exports
-- **Graceful handling** — Excluded syntax parses successfully but executes as a no-op with a warning and suggestion
+- **Graceful handling** — Parser-recognized excluded syntax (`var`, `function`, `==`, loops, `with`) parses successfully but executes as a no-op with a warning and suggestion
 - **Opt-in features** — ASI (`--asi`), JSX (`ggJSX`), types as comments, decorators, enums
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision.

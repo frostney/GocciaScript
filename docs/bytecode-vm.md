@@ -6,7 +6,7 @@
 
 - **Two execution modes** — tree-walk interpreter (default) and bytecode VM (`--mode=bytecode`), sharing the same frontend, runtime objects, and GC
 - **Goccia-owned VM** — executes directly on `TGocciaValue` with tagged `TGocciaRegister` values; not a generic VM layer
-- **Opcode space** — core instructions (0-127) for hot paths, semantic instructions (128-255) for colder operations like imports/exports
+- **Opcode space** — core instructions (0-127) for hot paths, non-core generic ops (128-166), and semantic/helper instructions (167-255) for colder operations like imports/exports
 - **Binary format** — `.gbc` files with little-endian encoding, `GBC\0` magic, and version constant
 
 ## Overview

@@ -5,7 +5,7 @@
 ## Executive Summary
 
 - **Flag-gated registration** — Each built-in is controlled by a `TGocciaGlobalBuiltins` flag (e.g., `ggConsole`, `ggMath`, `ggJSON`), enabling sandboxed execution
-- **22 built-in flags** — Console, Math, Object, Array, Number, JSON, JSON5, JSONL, TOML, YAML, Symbol, Set, Map, Promise, Performance, Temporal, JSX, ArrayBuffer, FFI, Proxy, Reflect, plus test/benchmark frameworks
+- **23 built-in flags** — Console, Math, Object, Array, Number, JSON, JSON5, JSONL, TOML, YAML, Symbol, Set, Map, Promise, Performance, Temporal, JSX, ArrayBuffer, FFI, Proxy, Reflect, plus test/benchmark frameworks
 - **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
 - **Always-present globals** — `globalThis` and `Goccia` namespace are registered after all flag-gated built-ins
 
