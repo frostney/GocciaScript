@@ -369,7 +369,7 @@ end;
 
 ### ToPropertyDescriptor
 
-The `ToPropertyDescriptor` helper (`Goccia.PropertyDescriptor.Utils.pas`) implements ES2026 §6.2.5.5. It is the single entry point for parsing a JavaScript descriptor object into a `TGocciaPropertyDescriptorData` or `TGocciaPropertyDescriptorAccessor`. Both `Object.defineProperty` and `Reflect.defineProperty` delegate to this helper, ensuring identical semantics:
+The `ToPropertyDescriptor` helper (`Goccia.Values.ObjectPropertyDescriptor.pas`) implements ES2026 §6.2.5.5. It is the single entry point for parsing a JavaScript descriptor object into a `TGocciaPropertyDescriptorData` or `TGocciaPropertyDescriptorAccessor`. Both `Object.defineProperty` and `Reflect.defineProperty` delegate to this helper, ensuring identical semantics:
 
 - Inherits unspecified attributes from an existing descriptor (if any)
 - Validates that `get`/`set` values are callable or `undefined` (throws `TypeError`)
