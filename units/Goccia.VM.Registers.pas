@@ -1,6 +1,7 @@
 unit Goccia.VM.Registers;
 
 {$I Goccia.inc}
+{$POINTERMATH ON}
 
 interface
 
@@ -30,6 +31,7 @@ type
       3: (ObjectValue: TGocciaValue);
   end;
 
+  PGocciaRegister = ^TGocciaRegister;
   TGocciaRegisterArray = array of TGocciaRegister;
 
 function RegisterUndefined: TGocciaRegister; inline;
