@@ -28,6 +28,7 @@ type
 
     // ES2026 §28.1.1 [[Get]](P, Receiver)
     function GetProperty(const AName: string): TGocciaValue; override;
+    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
 
     // ES2026 §28.1.1 [[Set]](P, V, Receiver)
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue;
@@ -55,11 +56,22 @@ type
     function GetAllPropertyNames: TArray<string>; override;
     function HasOwnProperty(const AName: string): Boolean; override;
 
+    // ES2026 §10.5.9 [[Set]](P, V, Receiver) — receiver-aware
+    function AssignPropertyWithReceiver(const AName: string;
+      const AValue: TGocciaValue;
+      const AReceiver: TGocciaValue): Boolean; override;
+
     // Symbol-keyed property access via get/has traps
     function GetSymbolProperty(
       const ASymbol: TGocciaSymbolValue): TGocciaValue; override;
+    function GetSymbolPropertyWithReceiver(
+      const ASymbol: TGocciaSymbolValue;
+      const AReceiver: TGocciaValue): TGocciaValue; override;
     function HasSymbolProperty(
       const ASymbol: TGocciaSymbolValue): Boolean; override;
+    function AssignSymbolPropertyWithReceiver(
+      const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue;
+      const AReceiver: TGocciaValue): Boolean; override;
 
     // ES2026 §28.1.1 [[GetPrototypeOf]]()
     function GetPrototypeTrap: TGocciaValue;
@@ -180,6 +192,11 @@ end;
 
 // ES2026 §28.1.1 [[Get]](P, Receiver)
 function TGocciaProxyValue.GetProperty(const AName: string): TGocciaValue;
+begin
+  Result := GetPropertyWithContext(AName, Self);
+end;
+
+function TGocciaProxyValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 var
   Trap: TGocciaValue;
   Args: TGocciaArgumentsCollection;
@@ -193,13 +210,14 @@ begin
     try
       Args.Add(FTarget);
       Args.Add(TGocciaStringLiteralValue.Create(AName));
-      Args.Add(Self);
+      // ES2026 §10.5.8 step 7: Pass the receiver, not the proxy itself
+      Args.Add(AThisContext);
       Result := InvokeTrap(Trap, Args);
     finally
       Args.Free;
     end;
 
-    // ES2026 §28.1.1 step 8-9: Invariant validation.
+    // ES2026 §10.5.8 step 8-9: Invariant validation.
     if FTarget is TGocciaObjectValue then
     begin
       TargetDesc := TGocciaObjectValue(FTarget).GetOwnPropertyDescriptor(AName);
@@ -218,6 +236,9 @@ begin
       end;
     end;
   end
+  else if FTarget is TGocciaObjectValue then
+    // ES2026 §10.5.8 step 10: Return ? target.[[Get]](P, Receiver)
+    Result := TGocciaObjectValue(FTarget).GetPropertyWithContext(AName, AThisContext)
   else
     Result := FTarget.GetProperty(AName);
 end;
@@ -269,6 +290,62 @@ begin
   end
   else
     FTarget.SetProperty(AName, AValue);
+end;
+
+// ES2026 §10.5.9 [[Set]](P, V, Receiver) — receiver-aware, returns Boolean
+function TGocciaProxyValue.AssignPropertyWithReceiver(const AName: string;
+  const AValue: TGocciaValue;
+  const AReceiver: TGocciaValue): Boolean;
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  TrapResult: TGocciaValue;
+  TargetDesc: TGocciaPropertyDescriptor;
+begin
+  CheckRevoked;
+  Trap := GetTrap(PROP_SET);
+  if Assigned(Trap) then
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      Args.Add(TGocciaStringLiteralValue.Create(AName));
+      Args.Add(AValue);
+      Args.Add(AReceiver);
+      TrapResult := InvokeTrap(Trap, Args);
+      if not TrapResult.ToBooleanLiteral.Value then
+        Exit(False);
+    finally
+      Args.Free;
+    end;
+
+    // ES2026 §10.5.9 step 11-12: Invariant validation after truthy result.
+    if FTarget is TGocciaObjectValue then
+    begin
+      TargetDesc := TGocciaObjectValue(FTarget).GetOwnPropertyDescriptor(AName);
+      if Assigned(TargetDesc) and not TargetDesc.Configurable then
+      begin
+        // Non-configurable, non-writable data property: value must match
+        if (TargetDesc is TGocciaPropertyDescriptorData) and
+           not TargetDesc.Writable and
+           not IsSameValue(TGocciaPropertyDescriptorData(TargetDesc).Value, AValue) then
+          ThrowTypeError('Proxy set: cannot change value of non-configurable, non-writable property ''' + AName + '''');
+        // Non-configurable accessor without setter
+        if (TargetDesc is TGocciaPropertyDescriptorAccessor) and
+           not Assigned(TGocciaPropertyDescriptorAccessor(TargetDesc).Setter) then
+          ThrowTypeError('Proxy set: cannot set non-configurable accessor property ''' + AName + ''' without a setter');
+      end;
+    end;
+
+    Result := True;
+  end
+  else
+  begin
+    if FTarget is TGocciaObjectValue then
+      Result := TGocciaObjectValue(FTarget).AssignPropertyWithReceiver(AName, AValue, AReceiver)
+    else
+      Result := False;
+  end;
 end;
 
 // ES2026 §28.1.1 [[HasProperty]](P)
@@ -412,6 +489,111 @@ begin
       Result := TGocciaObjectValue(FTarget).GetSymbolProperty(ASymbol)
     else
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+end;
+
+// ES2026 §10.5.8 [[Get]](P, Receiver) — symbol key, receiver-aware
+function TGocciaProxyValue.GetSymbolPropertyWithReceiver(
+  const ASymbol: TGocciaSymbolValue;
+  const AReceiver: TGocciaValue): TGocciaValue;
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  TargetDesc: TGocciaPropertyDescriptor;
+begin
+  CheckRevoked;
+  Trap := GetTrap(PROP_GET);
+  if Assigned(Trap) then
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      Args.Add(ASymbol);
+      Args.Add(AReceiver);
+      Result := InvokeTrap(Trap, Args);
+    finally
+      Args.Free;
+    end;
+
+    // ES2026 §10.5.8 step 8-9: Invariant validation for symbol keys.
+    if FTarget is TGocciaObjectValue then
+    begin
+      TargetDesc := TGocciaObjectValue(FTarget).GetOwnSymbolPropertyDescriptor(ASymbol);
+      if Assigned(TargetDesc) and not TargetDesc.Configurable then
+      begin
+        if (TargetDesc is TGocciaPropertyDescriptorData) and
+           not TargetDesc.Writable and
+           not IsSameValue(TGocciaPropertyDescriptorData(TargetDesc).Value, Result) then
+          ThrowTypeError('Proxy get: value mismatch for non-configurable, non-writable symbol property');
+        if (TargetDesc is TGocciaPropertyDescriptorAccessor) and
+           not Assigned(TGocciaPropertyDescriptorAccessor(TargetDesc).Getter) and
+           not (Result is TGocciaUndefinedLiteralValue) then
+          ThrowTypeError('Proxy get: must return undefined for non-configurable accessor without getter');
+      end;
+    end;
+  end
+  else
+  begin
+    if FTarget is TGocciaObjectValue then
+      Result := TGocciaObjectValue(FTarget).GetSymbolPropertyWithReceiver(ASymbol, AReceiver)
+    else
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+end;
+
+// ES2026 §10.5.9 [[Set]](P, V, Receiver) — symbol key, receiver-aware
+function TGocciaProxyValue.AssignSymbolPropertyWithReceiver(
+  const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue;
+  const AReceiver: TGocciaValue): Boolean;
+var
+  Trap: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  TrapResult: TGocciaValue;
+  TargetDesc: TGocciaPropertyDescriptor;
+begin
+  CheckRevoked;
+  Trap := GetTrap(PROP_SET);
+  if Assigned(Trap) then
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(FTarget);
+      Args.Add(ASymbol);
+      Args.Add(AValue);
+      Args.Add(AReceiver);
+      TrapResult := InvokeTrap(Trap, Args);
+      if not TrapResult.ToBooleanLiteral.Value then
+        Exit(False);
+    finally
+      Args.Free;
+    end;
+
+    // ES2026 §10.5.9 step 11-12: Invariant validation after truthy result.
+    if FTarget is TGocciaObjectValue then
+    begin
+      TargetDesc := TGocciaObjectValue(FTarget).GetOwnSymbolPropertyDescriptor(ASymbol);
+      if Assigned(TargetDesc) and not TargetDesc.Configurable then
+      begin
+        // Non-configurable, non-writable data property: value must match
+        if (TargetDesc is TGocciaPropertyDescriptorData) and
+           not TargetDesc.Writable and
+           not IsSameValue(TGocciaPropertyDescriptorData(TargetDesc).Value, AValue) then
+          ThrowTypeError('Proxy set: cannot change value of non-configurable, non-writable symbol property');
+        // Non-configurable accessor without setter
+        if (TargetDesc is TGocciaPropertyDescriptorAccessor) and
+           not Assigned(TGocciaPropertyDescriptorAccessor(TargetDesc).Setter) then
+          ThrowTypeError('Proxy set: cannot set non-configurable accessor symbol property without a setter');
+      end;
+    end;
+
+    Result := True;
+  end
+  else
+  begin
+    if FTarget is TGocciaObjectValue then
+      Result := TGocciaObjectValue(FTarget).AssignSymbolPropertyWithReceiver(ASymbol, AValue, AReceiver)
+    else
+      Result := False;
   end;
 end;
 

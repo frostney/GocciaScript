@@ -49,6 +49,7 @@ type
     procedure SetEntry(const AKey, AValue: TGocciaValue);
 
     function GetProperty(const AName: string): TGocciaValue; override;
+    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToArray: TGocciaArrayValue;
     function ToStringTag: string; override;
 
@@ -208,10 +209,15 @@ end;
 
 function TGocciaMapValue.GetProperty(const AName: string): TGocciaValue;
 begin
+  Result := GetPropertyWithContext(AName, Self);
+end;
+
+function TGocciaMapValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+begin
   if AName = PROP_SIZE then
     Result := TGocciaNumberLiteralValue.Create(FEntries.Count)
   else
-    Result := inherited GetProperty(AName);
+    Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 
 function TGocciaMapValue.ToArray: TGocciaArrayValue;

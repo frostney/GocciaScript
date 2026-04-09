@@ -184,6 +184,7 @@ type
     function TypeName: string; override;
     function ToStringLiteral: TGocciaStringLiteralValue; override;
     function GetProperty(const AName: string): TGocciaValue; override;
+    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function GetPrivateProperty(const AName: string; const AAccessClass: TGocciaClassValue): TGocciaValue;
@@ -1130,6 +1131,11 @@ begin
 end;
 
 function TGocciaInstanceValue.GetProperty(const AName: string): TGocciaValue;
+begin
+  Result := GetPropertyWithContext(AName, Self);
+end;
+
+function TGocciaInstanceValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 var
   Descriptor: TGocciaPropertyDescriptor;
   Args: TGocciaArgumentsCollection;
@@ -1147,7 +1153,7 @@ begin
         Args := TGocciaArgumentsCollection.CreateWithCapacity(0);
         try
           Result := TGocciaFunctionBase(TGocciaPropertyDescriptorAccessor(Descriptor).Getter)
-            .Call(Args, Self);
+            .Call(Args, AThisContext);
         finally
           Args.Free;
         end;
@@ -1160,10 +1166,10 @@ begin
     Exit;
   end;
 
-  // Check for getters/setters on the prototype with this instance as context
+  // Check for getters/setters on the prototype with the receiver as context
   if Assigned(FPrototype) then
   begin
-    Result := FPrototype.GetPropertyWithContext(AName, Self);
+    Result := FPrototype.GetPropertyWithContext(AName, AThisContext);
     if not (Result is TGocciaUndefinedLiteralValue) then
       Exit;
   end;

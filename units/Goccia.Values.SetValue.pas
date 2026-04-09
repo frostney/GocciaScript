@@ -47,6 +47,7 @@ type
     procedure AddItem(const AValue: TGocciaValue);
 
     function GetProperty(const AName: string): TGocciaValue; override;
+    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToArray: TGocciaArrayValue;
     function ToStringTag: string; override;
 
@@ -195,10 +196,15 @@ end;
 
 function TGocciaSetValue.GetProperty(const AName: string): TGocciaValue;
 begin
+  Result := GetPropertyWithContext(AName, Self);
+end;
+
+function TGocciaSetValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+begin
   if AName = PROP_SIZE then
     Result := TGocciaNumberLiteralValue.Create(FItems.Count)
   else
-    Result := inherited GetProperty(AName);
+    Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 
 function TGocciaSetValue.ToArray: TGocciaArrayValue;

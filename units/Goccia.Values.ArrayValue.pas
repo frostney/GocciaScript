@@ -47,6 +47,7 @@ type
     function SetElement(const AIndex: Integer; const AValue: TGocciaValue): Boolean;
     function TypeName: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
+    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function HasOwnProperty(const AName: string): Boolean; override;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
@@ -1664,6 +1665,11 @@ begin
 end;
 
 function TGocciaArrayValue.GetProperty(const AName: string): TGocciaValue;
+begin
+  Result := GetPropertyWithContext(AName, Self);
+end;
+
+function TGocciaArrayValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 var
   Index: Integer;
 begin
@@ -1689,7 +1695,7 @@ begin
   else
   begin
     // Fall back to regular object property lookup
-    Result := inherited GetProperty(AName);
+    Result := inherited GetPropertyWithContext(AName, AThisContext);
   end;
 end;
 

@@ -287,7 +287,7 @@ end;
 // ES2026 §28.1.5 Reflect.get(target, propertyKey [, receiver])
 function TGocciaGlobalReflect.ReflectGet(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Target, PropKey: TGocciaValue;
+  Target, PropKey, Receiver: TGocciaValue;
   PropertyName: string;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Reflect.get', ThrowError);
@@ -298,10 +298,18 @@ begin
   // Step 1: If target is not an Object, throw a TypeError exception
   RequireObjectTarget(Target, 'Reflect.get');
 
+  // Step 3: If receiver is not present, set receiver to target
+  if AArgs.Length >= 3 then
+    Receiver := AArgs.GetElement(2)
+  else
+    Receiver := Target;
+
   // Step 2: Let key be ? ToPropertyKey(propertyKey)
+  // Step 4: Return ? target.[[Get]](key, receiver)
   if PropKey is TGocciaSymbolValue then
   begin
-    Result := TGocciaObjectValue(Target).GetSymbolProperty(TGocciaSymbolValue(PropKey));
+    Result := TGocciaObjectValue(Target).GetSymbolPropertyWithReceiver(
+      TGocciaSymbolValue(PropKey), Receiver);
     if Result = nil then
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
@@ -309,8 +317,8 @@ begin
 
   PropertyName := PropKey.ToStringLiteral.Value;
 
-  // Step 3-4: Return ? target.[[Get]](key, receiver)
-  Result := TGocciaObjectValue(Target).GetProperty(PropertyName);
+  // Step 4: Return ? target.[[Get]](key, receiver)
+  Result := TGocciaObjectValue(Target).GetPropertyWithContext(PropertyName, Receiver);
 end;
 
 // ES2026 §28.1.6 Reflect.getOwnPropertyDescriptor(target, propertyKey)
@@ -509,8 +517,9 @@ end;
 // ES2026 §28.1.12 Reflect.set(target, propertyKey, V [, receiver])
 function TGocciaGlobalReflect.ReflectSet(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Target, PropKey, Value: TGocciaValue;
+  Target, PropKey, Value, Receiver: TGocciaValue;
   PropertyName: string;
+  Success: Boolean;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 3, 'Reflect.set', ThrowError);
 
@@ -521,22 +530,28 @@ begin
   // Step 1: If target is not an Object, throw a TypeError exception
   RequireObjectTarget(Target, 'Reflect.set');
 
+  // Step 4: If receiver is not present, set receiver to target
+  if AArgs.Length >= 4 then
+    Receiver := AArgs.GetElement(3)
+  else
+    Receiver := Target;
+
   // Step 2: Let key be ? ToPropertyKey(propertyKey)
-  // Step 3-4: Return ? target.[[Set]](key, V, receiver)
-  try
-    if PropKey is TGocciaSymbolValue then
-      TGocciaObjectValue(Target).AssignSymbolProperty(
-        TGocciaSymbolValue(PropKey), Value)
-    else
-    begin
-      PropertyName := PropKey.ToStringLiteral.Value;
-      TGocciaObjectValue(Target).AssignProperty(PropertyName, Value);
-    end;
-    Result := TGocciaBooleanLiteralValue.TrueValue;
-  except
-    on TGocciaThrowValue do
-      Result := TGocciaBooleanLiteralValue.FalseValue;
+  // Step 3, 5: Return ? target.[[Set]](key, V, receiver)
+  if PropKey is TGocciaSymbolValue then
+    Success := TGocciaObjectValue(Target).AssignSymbolPropertyWithReceiver(
+      TGocciaSymbolValue(PropKey), Value, Receiver)
+  else
+  begin
+    PropertyName := PropKey.ToStringLiteral.Value;
+    Success := TGocciaObjectValue(Target).AssignPropertyWithReceiver(
+      PropertyName, Value, Receiver);
   end;
+
+  if Success then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 // ES2026 §28.1.13 Reflect.setPrototypeOf(target, proto)

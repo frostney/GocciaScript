@@ -24,6 +24,7 @@ type
   public
     constructor Create(const APrimitive: TGocciaNumberLiteralValue; const AClass: TGocciaClassValue = nil);
     function GetProperty(const AName: string): TGocciaValue; override;
+    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure InitializePrototype;
     procedure MarkReferences; override;
 
@@ -73,12 +74,17 @@ end;
 
 function TGocciaNumberObjectValue.GetProperty(const AName: string): TGocciaValue;
 begin
-  Result := inherited GetProperty(AName);
+  Result := GetPropertyWithContext(AName, Self);
+end;
+
+function TGocciaNumberObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+begin
+  Result := inherited GetPropertyWithContext(AName, AThisContext);
   if not (Result is TGocciaUndefinedLiteralValue) then
     Exit;
 
   if Assigned(FSharedNumberPrototype) then
-    Result := FSharedNumberPrototype.GetPropertyWithContext(AName, Self);
+    Result := FSharedNumberPrototype.GetPropertyWithContext(AName, AThisContext);
 end;
 
 procedure TGocciaNumberObjectValue.InitializePrototype;

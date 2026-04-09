@@ -30,6 +30,7 @@ type
     constructor Create(const AClass: TGocciaClassValue); overload;
 
     function GetProperty(const AName: string): TGocciaValue; override;
+    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToStringTag: string; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
@@ -166,10 +167,15 @@ end;
 
 function TGocciaSharedArrayBufferValue.GetProperty(const AName: string): TGocciaValue;
 begin
+  Result := GetPropertyWithContext(AName, Self);
+end;
+
+function TGocciaSharedArrayBufferValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+begin
   if AName = PROP_BYTE_LENGTH then
     Result := TGocciaNumberLiteralValue.Create(Length(FData))
   else
-    Result := inherited GetProperty(AName);
+    Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 
 function TGocciaSharedArrayBufferValue.ToStringTag: string;

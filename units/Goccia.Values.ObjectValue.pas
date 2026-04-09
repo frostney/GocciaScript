@@ -50,13 +50,14 @@ type
 
     procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); virtual;
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); virtual;
+    function AssignPropertyWithReceiver(const AName: string; const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean; virtual;
 
     procedure RegisterNativeMethod(const AMethod: TGocciaValue);
     procedure RegisterConstant(const AName: string; const AValue: TGocciaValue);
 
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
-    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; virtual;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; virtual;
     function HasProperty(const AName: string): Boolean;
     function HasOwnProperty(const AName: string): Boolean; virtual;
@@ -71,8 +72,9 @@ type
 
     procedure DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
     procedure AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
+    function AssignSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean; virtual;
     function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue; virtual;
-    function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue;
+    function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue; virtual;
     function GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
     function HasSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean; virtual;
     function DeleteSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean;
@@ -583,6 +585,96 @@ begin
     [pfEnumerable, pfConfigurable, pfWritable]));
 end;
 
+// ES2026 §10.1.9.2 OrdinarySetWithOwnDescriptor(O, P, V, Receiver, ownDesc)
+function TGocciaObjectValue.AssignPropertyWithReceiver(const AName: string; const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean;
+var
+  OwnDesc, ReceiverDesc: TGocciaPropertyDescriptor;
+  Accessor: TGocciaPropertyDescriptorAccessor;
+  Args: TGocciaArgumentsCollection;
+  ReceiverObj: TGocciaObjectValue;
+begin
+  // Step 1: Let ownDesc be O.[[GetOwnProperty]](P)
+  OwnDesc := GetOwnPropertyDescriptor(AName);
+
+  if OwnDesc = nil then
+  begin
+    // Step 1a-b: Walk prototype chain
+    if Assigned(FPrototype) then
+      Exit(FPrototype.AssignPropertyWithReceiver(AName, AValue, AReceiver));
+    // Step 1c: No prototype — ownDesc defaults to writable data descriptor,
+    // fall through to step 2 which consults Receiver.[[GetOwnProperty]](P)
+    if not (AReceiver is TGocciaObjectValue) then
+      Exit(False);
+    ReceiverObj := TGocciaObjectValue(AReceiver);
+    ReceiverDesc := ReceiverObj.GetOwnPropertyDescriptor(AName);
+    if Assigned(ReceiverDesc) then
+    begin
+      // Step 2d: Receiver already has own property P
+      if (ReceiverDesc is TGocciaPropertyDescriptorAccessor) or
+         (not ReceiverDesc.Writable) then
+        Exit(False);
+      TGocciaPropertyDescriptorData(ReceiverDesc).Value := AValue;
+      Exit(True);
+    end;
+    // Step 2e: CreateDataProperty(Receiver, P, V)
+    if not ReceiverObj.Extensible then
+      Exit(False);
+    ReceiverObj.DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
+      [pfEnumerable, pfConfigurable, pfWritable]));
+    Exit(True);
+  end;
+
+  if OwnDesc is TGocciaPropertyDescriptorData then
+  begin
+    // Step 2a: If ownDesc.[[Writable]] is false, return false
+    if not OwnDesc.Writable then
+      Exit(False);
+    // Step 2b: If Receiver is not an Object, return false
+    if not (AReceiver is TGocciaObjectValue) then
+      Exit(False);
+    ReceiverObj := TGocciaObjectValue(AReceiver);
+    // Step 2c: Let existingDescriptor be Receiver.[[GetOwnProperty]](P)
+    ReceiverDesc := ReceiverObj.GetOwnPropertyDescriptor(AName);
+    if Assigned(ReceiverDesc) then
+    begin
+      // Step 2d.i: If IsAccessorDescriptor(existingDescriptor), return false
+      if ReceiverDesc is TGocciaPropertyDescriptorAccessor then
+        Exit(False);
+      // Step 2d.ii: If existingDescriptor.[[Writable]] is false, return false
+      if not ReceiverDesc.Writable then
+        Exit(False);
+      // Step 2d.iii-iv: Update value on receiver
+      TGocciaPropertyDescriptorData(ReceiverDesc).Value := AValue;
+      Exit(True);
+    end
+    else
+    begin
+      // Step 2e: CreateDataProperty(Receiver, P, V)
+      if not ReceiverObj.Extensible then
+        Exit(False);
+      ReceiverObj.DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
+        [pfEnumerable, pfConfigurable, pfWritable]));
+      Exit(True);
+    end;
+  end;
+
+  // Step 3-7: Accessor descriptor
+  Accessor := TGocciaPropertyDescriptorAccessor(OwnDesc);
+  // Step 4-5: If setter is undefined, return false
+  if not Assigned(Accessor.Setter) or not Accessor.Setter.IsCallable then
+    Exit(False);
+  // Step 6: Call(setter, Receiver, « V »)
+  Args := TGocciaArgumentsCollection.Create;
+  try
+    Args.Add(AValue);
+    TGocciaFunctionBase(Accessor.Setter).Call(Args, AReceiver);
+  finally
+    Args.Free;
+  end;
+  // Step 7: Return true
+  Result := True;
+end;
+
 procedure TGocciaObjectValue.DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
 var
   ExistingDescriptor: TGocciaPropertyDescriptor;
@@ -909,6 +1001,96 @@ begin
     ThrowTypeError('Cannot add symbol property, object is not extensible');
 
   DefineSymbolProperty(ASymbol, TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]));
+end;
+
+// ES2026 §10.1.9.2 OrdinarySetWithOwnDescriptor(O, P, V, Receiver, ownDesc) — symbol variant
+function TGocciaObjectValue.AssignSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean;
+var
+  OwnDesc, ReceiverDesc: TGocciaPropertyDescriptor;
+  Accessor: TGocciaPropertyDescriptorAccessor;
+  Args: TGocciaArgumentsCollection;
+  ReceiverObj: TGocciaObjectValue;
+begin
+  // Step 1: Let ownDesc be O.[[GetOwnProperty]](P)
+  OwnDesc := GetOwnSymbolPropertyDescriptor(ASymbol);
+
+  if OwnDesc = nil then
+  begin
+    // Step 1a-b: Walk prototype chain
+    if Assigned(FPrototype) then
+      Exit(FPrototype.AssignSymbolPropertyWithReceiver(ASymbol, AValue, AReceiver));
+    // Step 1c: No prototype — ownDesc defaults to writable data descriptor,
+    // fall through to step 2 which consults Receiver.[[GetOwnProperty]](P)
+    if not (AReceiver is TGocciaObjectValue) then
+      Exit(False);
+    ReceiverObj := TGocciaObjectValue(AReceiver);
+    ReceiverDesc := ReceiverObj.GetOwnSymbolPropertyDescriptor(ASymbol);
+    if Assigned(ReceiverDesc) then
+    begin
+      // Step 2d: Receiver already has own property P
+      if (ReceiverDesc is TGocciaPropertyDescriptorAccessor) or
+         (not ReceiverDesc.Writable) then
+        Exit(False);
+      TGocciaPropertyDescriptorData(ReceiverDesc).Value := AValue;
+      Exit(True);
+    end;
+    // Step 2e: CreateDataProperty(Receiver, P, V)
+    if not ReceiverObj.Extensible then
+      Exit(False);
+    ReceiverObj.DefineSymbolProperty(ASymbol, TGocciaPropertyDescriptorData.Create(AValue,
+      [pfEnumerable, pfConfigurable, pfWritable]));
+    Exit(True);
+  end;
+
+  if OwnDesc is TGocciaPropertyDescriptorData then
+  begin
+    // Step 2a: If ownDesc.[[Writable]] is false, return false
+    if not OwnDesc.Writable then
+      Exit(False);
+    // Step 2b: If Receiver is not an Object, return false
+    if not (AReceiver is TGocciaObjectValue) then
+      Exit(False);
+    ReceiverObj := TGocciaObjectValue(AReceiver);
+    // Step 2c: Let existingDescriptor be Receiver.[[GetOwnProperty]](P)
+    ReceiverDesc := ReceiverObj.GetOwnSymbolPropertyDescriptor(ASymbol);
+    if Assigned(ReceiverDesc) then
+    begin
+      // Step 2d.i: If IsAccessorDescriptor(existingDescriptor), return false
+      if ReceiverDesc is TGocciaPropertyDescriptorAccessor then
+        Exit(False);
+      // Step 2d.ii: If existingDescriptor.[[Writable]] is false, return false
+      if not ReceiverDesc.Writable then
+        Exit(False);
+      // Step 2d.iii-iv: Update value on receiver
+      TGocciaPropertyDescriptorData(ReceiverDesc).Value := AValue;
+      Exit(True);
+    end
+    else
+    begin
+      // Step 2e: CreateDataProperty(Receiver, P, V)
+      if not ReceiverObj.Extensible then
+        Exit(False);
+      ReceiverObj.DefineSymbolProperty(ASymbol, TGocciaPropertyDescriptorData.Create(AValue,
+        [pfEnumerable, pfConfigurable, pfWritable]));
+      Exit(True);
+    end;
+  end;
+
+  // Step 3-7: Accessor descriptor
+  Accessor := TGocciaPropertyDescriptorAccessor(OwnDesc);
+  // Step 4-5: If setter is undefined, return false
+  if not Assigned(Accessor.Setter) or not Accessor.Setter.IsCallable then
+    Exit(False);
+  // Step 6: Call(setter, Receiver, « V »)
+  Args := TGocciaArgumentsCollection.Create;
+  try
+    Args.Add(AValue);
+    TGocciaFunctionBase(Accessor.Setter).Call(Args, AReceiver);
+  finally
+    Args.Free;
+  end;
+  // Step 7: Return true
+  Result := True;
 end;
 
 function TGocciaObjectValue.GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;

@@ -58,6 +58,7 @@ type
     function DoReject(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     function GetProperty(const AName: string): TGocciaValue; override;
+    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToStringTag: string; override;
 
     procedure MarkReferences; override;
@@ -626,7 +627,12 @@ end;
 
 function TGocciaPromiseValue.GetProperty(const AName: string): TGocciaValue;
 begin
-  Result := inherited GetProperty(AName);
+  Result := GetPropertyWithContext(AName, Self);
+end;
+
+function TGocciaPromiseValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+begin
+  Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 
 function TGocciaPromiseValue.ToStringTag: string;
