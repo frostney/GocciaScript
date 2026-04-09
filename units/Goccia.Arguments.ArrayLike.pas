@@ -50,7 +50,8 @@ begin
 
   // ES2026 §7.3.18 step 2: Let len be ? LengthOfArrayLike(obj)
   // ES2026 §7.3.3 LengthOfArrayLike: ToLength(? Get(obj, "length"))
-  // ES2026 §7.1.22 ToLength: NaN/negative → 0, cap at 2^53−1
+  // ES2026 §7.1.22 ToLength: NaN/negative → 0, spec caps at 2^53−1.
+  // Practical cap: MaxInt (Len is Integer); larger allocations are infeasible.
   ArrayObj := TGocciaObjectValue(AValue);
   LengthProp := ArrayObj.GetProperty(PROP_LENGTH);
   if not Assigned(LengthProp) or
