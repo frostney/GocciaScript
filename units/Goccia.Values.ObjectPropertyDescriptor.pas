@@ -114,8 +114,12 @@ var
   Enumerable, Configurable, Writable: Boolean;
   Value, Getter, Setter: TGocciaValue;
   PropertyFlags: TPropertyFlags;
-  HasValue, HasGet, HasSet: Boolean;
+  HasValue, HasGet, HasSet, HasWritable: Boolean;
 begin
+  // ES2026 §6.2.5.5 step 1: If Desc is not an Object, throw a TypeError
+  if not (ADescriptorObject is TGocciaObjectValue) then
+    ThrowTypeError('property descriptor must be an object');
+
   DescObj := TGocciaObjectValue(ADescriptorObject);
 
   Enumerable := False;
@@ -146,12 +150,13 @@ begin
   HasValue := DescObj.HasProperty(PROP_VALUE);
   HasGet := DescObj.HasProperty(PROP_GET);
   HasSet := DescObj.HasProperty(PROP_SET);
+  HasWritable := DescObj.HasProperty(PROP_WRITABLE);
 
   if DescObj.HasProperty(PROP_ENUMERABLE) then
     Enumerable := DescObj.GetProperty(PROP_ENUMERABLE).ToBooleanLiteral.Value;
   if DescObj.HasProperty(PROP_CONFIGURABLE) then
     Configurable := DescObj.GetProperty(PROP_CONFIGURABLE).ToBooleanLiteral.Value;
-  if DescObj.HasProperty(PROP_WRITABLE) then
+  if HasWritable then
     Writable := DescObj.GetProperty(PROP_WRITABLE).ToBooleanLiteral.Value;
   if HasValue then
     Value := DescObj.GetProperty(PROP_VALUE);
@@ -177,7 +182,7 @@ begin
   end;
 
   // ES2026 §6.2.5.5 step 10: mixed data+accessor is invalid
-  if (HasValue or DescObj.HasProperty(PROP_WRITABLE)) and (HasGet or HasSet) then
+  if (HasValue or HasWritable) and (HasGet or HasSet) then
     ThrowTypeError('descriptor cannot have both accessor and data properties');
 
   // Build flags
@@ -190,12 +195,16 @@ begin
     Include(PropertyFlags, pfWritable);
 
   // Construct the appropriate descriptor type
-  if HasValue or DescObj.HasProperty(PROP_WRITABLE) or
+  if HasValue or HasWritable or
      (Assigned(AExistingDescriptor) and (AExistingDescriptor is TGocciaPropertyDescriptorData) and not HasGet and not HasSet) or
      (not Assigned(AExistingDescriptor) and not HasGet and not HasSet) then
     Result := TGocciaPropertyDescriptorData.Create(Value, PropertyFlags)
   else
+  begin
+    // Accessor descriptors determine writability via FSetter, not pfWritable
+    Exclude(PropertyFlags, pfWritable);
     Result := TGocciaPropertyDescriptorAccessor.Create(Getter, Setter, PropertyFlags);
+  end;
 end;
 
 end.
