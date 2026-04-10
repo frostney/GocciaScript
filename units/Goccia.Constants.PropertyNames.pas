@@ -87,6 +87,8 @@ const
   PROP_OPEN                   = 'open';
   PROP_NULLPTR                = 'nullptr';
   PROP_SUFFIX                 = 'suffix';
+  PROP_MODE                   = 'mode';
+  PROP_PADDING                = 'padding';
   PROP_ALPHABET               = 'alphabet';
   PROP_OMIT_PADDING           = 'omitPadding';
   PROP_LAST_CHUNK_HANDLING    = 'lastChunkHandling';
