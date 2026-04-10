@@ -5,6 +5,7 @@ unit Goccia.Builtins.JSON;
 interface
 
 uses
+  Classes,
   Generics.Collections,
 
   Goccia.Arguments.Collection,
@@ -23,8 +24,10 @@ type
   private
     class var FStaticMembers: array of TGocciaMemberDefinition;
     FParser: TGocciaJSONParser;
-    FStringifier: TGocciaJSONStringifier;
     FReplacerTraversalStack: TList<TGocciaObjectValue>;
+    FReviverSourceIndex: Integer;
+    FReviverSourceTexts: TStringList;
+    FStringifier: TGocciaJSONStringifier;
 
     function ApplyReviver(const AHolder: TGocciaValue; const AKey: string; const AReviver: TGocciaValue): TGocciaValue;
     function ApplyReplacer(const AHolder: TGocciaValue; const AKey: string; const AValue: TGocciaValue; const AReplacer: TGocciaValue): TGocciaValue;
@@ -90,7 +93,7 @@ begin
   inherited;
 end;
 
-// §25.5.1.1 InternalizeJSONProperty ( holder, name, reviver )
+// ES2026 §25.5.1.1 InternalizeJSONProperty ( holder, name, reviver )
 function TGocciaJSONBuiltin.ApplyReviver(const AHolder: TGocciaValue; const AKey: string; const AReviver: TGocciaValue): TGocciaValue;
 var
   Value, NewValue: TGocciaValue;
@@ -99,6 +102,7 @@ var
   I: Integer;
   PropKey: string;
   Args: TGocciaArgumentsCollection;
+  Context: TGocciaObjectValue;
 begin
   // Step 1: Let val be ? Get(holder, name).
   Value := AHolder.GetProperty(AKey);
@@ -138,18 +142,37 @@ begin
     end;
   end;
 
-  // Step 3: Return ? Call(reviver, holder, « name, val »).
-  Args := TGocciaArgumentsCollection.Create;
-  Args.Add(TGocciaStringLiteralValue.Create(AKey));
-  Args.Add(Value);
-  Result := InvokeCallable(AReviver, Args, AHolder);
+  // ES2026 §25.5.1.1 step 3: Build the context object for source text access.
+  Context := TGocciaObjectValue.Create;
+  if not (Value is TGocciaObjectValue) and Assigned(FReviverSourceTexts) and
+    (FReviverSourceIndex < FReviverSourceTexts.Count) then
+  begin
+    Context.AssignProperty(PROP_SOURCE,
+      TGocciaStringLiteralValue.Create(FReviverSourceTexts[FReviverSourceIndex]));
+    Inc(FReviverSourceIndex);
+  end;
+
+  // Step 4: Return ? Call(reviver, holder, « name, val, context »).
+  Args := TGocciaArgumentsCollection.CreateWithCapacity(3);
+  try
+    Args.Add(TGocciaStringLiteralValue.Create(AKey));
+    Args.Add(Value);
+    Args.Add(Context);
+    Result := InvokeCallable(AReviver, Args, AHolder);
+  finally
+    Args.Free;
+  end;
 end;
 
-// §25.5.1 JSON.parse ( text [ , reviver ] )
+// ES2026 §25.5.1 JSON.parse ( text [ , reviver ] )
 function TGocciaJSONBuiltin.JSONParse(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
+  HasReviver: Boolean;
+  PreviousSourceIndex: Integer;
+  PreviousSourceTexts: TStringList;
   Reviver: TGocciaValue;
   Root: TGocciaObjectValue;
+  SourceTexts: TStringList;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'JSON.parse', ThrowError);
 
@@ -157,30 +180,52 @@ begin
   if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
     ThrowError('JSON.parse: argument must be a string', 0, 0);
 
-  // Step 2: Parse jsonString as a JSON text (throw SyntaxError on failure).
-  // Let unfiltered be the result.
-  try
-    Result := FParser.Parse(AArgs.GetElement(0).ToStringLiteral.Value);
-  except
-    on E: Exception do
-      ThrowSyntaxError(E.Message);
-  end;
+  // Step 2-3: Parse and optionally apply the reviver with source text access.
+  HasReviver := (AArgs.Length >= 2) and AArgs.GetElement(1).IsCallable;
 
-  // Step 3: If reviver is callable, wrap in root object and apply InternalizeJSONProperty.
-  if AArgs.Length >= 2 then
+  if HasReviver then
   begin
     Reviver := AArgs.GetElement(1);
-    if Reviver.IsCallable then
-    begin
-      // Step 3a: Let root be OrdinaryObjectCreate(null).
+    SourceTexts := TStringList.Create;
+    try
+      // Step 2: Parse with source text tracking for the reviver context.
+      try
+        FParser.ParseWithSources(
+          AArgs.GetElement(0).ToStringLiteral.Value, Result, SourceTexts);
+      except
+        on E: Exception do
+          ThrowSyntaxError(E.Message);
+      end;
+
+      // Step 3: Wrap in root object and apply InternalizeJSONProperty.
       Root := TGocciaObjectValue.Create;
-      // Step 3b: Perform ! CreateDataPropertyOrThrow(root, "", unfiltered).
       Root.AssignProperty('', Result);
-      // Step 3c: Return ? InternalizeJSONProperty(root, "", reviver).
-      Result := ApplyReviver(Root, '', Reviver);
+
+      // Save/restore for reentrancy (reviver may call JSON.parse).
+      PreviousSourceTexts := FReviverSourceTexts;
+      PreviousSourceIndex := FReviverSourceIndex;
+      FReviverSourceTexts := SourceTexts;
+      FReviverSourceIndex := 0;
+      try
+        Result := ApplyReviver(Root, '', Reviver);
+      finally
+        FReviverSourceTexts := PreviousSourceTexts;
+        FReviverSourceIndex := PreviousSourceIndex;
+      end;
+    finally
+      SourceTexts.Free;
+    end;
+  end
+  else
+  begin
+    // No reviver — parse without source text collection.
+    try
+      Result := FParser.Parse(AArgs.GetElement(0).ToStringLiteral.Value);
+    except
+      on E: Exception do
+        ThrowSyntaxError(E.Message);
     end;
   end;
-  // Step 4: Else return unfiltered.
 end;
 
 // §25.5.2 steps 7-8: Resolve the gap (indentation) string from the space argument.

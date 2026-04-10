@@ -147,8 +147,10 @@ All methods handle `NaN` and `Infinity` edge cases correctly.
 
 | Method | Description |
 |--------|-------------|
-| `JSON.parse(text, reviver?)` | Parse JSON string to value, with optional reviver function |
+| `JSON.parse(text, reviver?)` | Parse JSON string to value, with optional reviver function that receives source text access |
 | `JSON.stringify(value, replacer?, space?)` | Convert value to JSON string, with optional replacer (function or array) and indentation |
+
+**Source text access (ES2024):** When a reviver is provided, it receives three arguments: `(key, value, context)`. The `context` parameter is an object. For primitive JSON values (numbers, strings, booleans, `null`), the context contains a `source` property with the raw JSON text that produced the value — including quotes for strings, exact numeric notation, and escape sequences as written. For objects and arrays, the context object has no `source` property. This enables lossless round-tripping of numeric precision and format-aware value reconstruction.
 
 The JSON parser is a recursive descent implementation. Special handling:
 - `NaN` → `null` in stringify
@@ -163,10 +165,10 @@ The JSON parser is a recursive descent implementation. Special handling:
 
 | Method | Description |
 |--------|-------------|
-| `JSON5.parse(text, reviver?)` | Parse JSON5 text to a value, with optional reviver function |
+| `JSON5.parse(text, reviver?)` | Parse JSON5 text to a value, with optional reviver function that receives source text access |
 | `JSON5.stringify(value, replacerOrOptions?, space?)` | Serialize a value with JSON5 syntax, including special numeric values and optional `quote` override |
 
-`JSON5.parse` delegates to the standalone `TGocciaJSON5Parser` utility in `Goccia.JSON5`. The JSON5 parser shares the same core capability-driven parser engine as strict JSON, so `JSON.parse(...)` stays strict while `JSON5.parse(...)` opts into comments, trailing commas, single-quoted strings, unquoted identifier keys, hexadecimal numbers, signed numbers, `Infinity`, `NaN`, line continuations, and ECMAScript whitespace extensions.
+`JSON5.parse` delegates to the standalone `TGocciaJSON5Parser` utility in `Goccia.JSON5`. The JSON5 parser shares the same core capability-driven parser engine as strict JSON, so `JSON.parse(...)` stays strict while `JSON5.parse(...)` opts into comments, trailing commas, single-quoted strings, unquoted identifier keys, hexadecimal numbers, signed numbers, `Infinity`, `NaN`, line continuations, and ECMAScript whitespace extensions. Source text access works identically to `JSON.parse`: the reviver receives `(key, value, context)` where `context.source` preserves the raw JSON5 text for primitives (including extended literals like `Infinity`, `NaN`, `0xFF`, and `+1`).
 
 `JSON5.stringify` delegates to `TGocciaJSON5Stringifier`, which reuses the same shared serialization core as strict JSON but switches to JSON5 formatting rules. That means unquoted identifier keys, single- or double-quoted strings (with optional `{ quote: "'" | '"' }` override), preserved `Infinity` / `-Infinity` / `NaN`, trailing commas when pretty-printing, `toJSON5()` preference over `toJSON()`, and the same replacer / space semantics as JSON plus the upstream JSON5 options-object form `{ replacer, space, quote }`.
 

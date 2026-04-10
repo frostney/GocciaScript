@@ -5,6 +5,7 @@ unit Goccia.Builtins.JSON5;
 interface
 
 uses
+  Classes,
   Generics.Collections,
 
   Goccia.Arguments.Collection,
@@ -23,8 +24,10 @@ type
   private
     class var FStaticMembers: array of TGocciaMemberDefinition;
     FParser: TGocciaJSON5Parser;
-    FStringifier: TGocciaJSON5Stringifier;
     FReplacerTraversalStack: TList<TGocciaObjectValue>;
+    FReviverSourceIndex: Integer;
+    FReviverSourceTexts: TStringList;
+    FStringifier: TGocciaJSON5Stringifier;
 
     function ApplyReviver(const AHolder: TGocciaValue; const AKey: string;
       const AReviver: TGocciaValue): TGocciaValue;
@@ -148,11 +151,13 @@ begin
   inherited;
 end;
 
+// ES2026 §25.5.1.1 InternalizeJSONProperty ( holder, name, reviver )
 function TGocciaJSON5Builtin.ApplyReviver(const AHolder: TGocciaValue;
   const AKey: string; const AReviver: TGocciaValue): TGocciaValue;
 var
   Args: TGocciaArgumentsCollection;
   Arr: TGocciaArrayValue;
+  Context: TGocciaObjectValue;
   I: Integer;
   NewValue: TGocciaValue;
   Obj: TGocciaObjectValue;
@@ -189,10 +194,21 @@ begin
     end;
   end;
 
-  Args := TGocciaArgumentsCollection.Create;
+  // Build the context object for source text access.
+  Context := TGocciaObjectValue.Create;
+  if not (Value is TGocciaObjectValue) and Assigned(FReviverSourceTexts) and
+    (FReviverSourceIndex < FReviverSourceTexts.Count) then
+  begin
+    Context.AssignProperty(PROP_SOURCE,
+      TGocciaStringLiteralValue.Create(FReviverSourceTexts[FReviverSourceIndex]));
+    Inc(FReviverSourceIndex);
+  end;
+
+  Args := TGocciaArgumentsCollection.CreateWithCapacity(3);
   try
     Args.Add(TGocciaStringLiteralValue.Create(AKey));
     Args.Add(Value);
+    Args.Add(Context);
     Result := InvokeCallable(AReviver, Args, AHolder);
   finally
     Args.Free;
@@ -524,29 +540,58 @@ function TGocciaJSON5Builtin.JSON5Parse(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
+  HasReviver: Boolean;
+  PreviousSourceIndex: Integer;
+  PreviousSourceTexts: TStringList;
   Reviver: TGocciaValue;
   Root: TGocciaObjectValue;
+  SourceTexts: TStringList;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'JSON5.parse', ThrowError);
 
   if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
     ThrowError('JSON5.parse: argument must be a string', 0, 0);
 
-  try
-    Result := FParser.Parse(AArgs.GetElement(0).ToStringLiteral.Value);
-  except
-    on E: Exception do
-      ThrowSyntaxError(E.Message);
-  end;
+  HasReviver := (AArgs.Length >= 2) and AArgs.GetElement(1).IsCallable;
 
-  if AArgs.Length >= 2 then
+  if HasReviver then
   begin
     Reviver := AArgs.GetElement(1);
-    if Reviver.IsCallable then
-    begin
+    SourceTexts := TStringList.Create;
+    try
+      try
+        FParser.ParseWithSources(
+          AArgs.GetElement(0).ToStringLiteral.Value, Result, SourceTexts);
+      except
+        on E: Exception do
+          ThrowSyntaxError(E.Message);
+      end;
+
       Root := TGocciaObjectValue.Create;
       Root.AssignProperty('', Result);
-      Result := ApplyReviver(Root, '', Reviver);
+
+      // Save/restore for reentrancy (reviver may call JSON5.parse).
+      PreviousSourceTexts := FReviverSourceTexts;
+      PreviousSourceIndex := FReviverSourceIndex;
+      FReviverSourceTexts := SourceTexts;
+      FReviverSourceIndex := 0;
+      try
+        Result := ApplyReviver(Root, '', Reviver);
+      finally
+        FReviverSourceTexts := PreviousSourceTexts;
+        FReviverSourceIndex := PreviousSourceIndex;
+      end;
+    finally
+      SourceTexts.Free;
+    end;
+  end
+  else
+  begin
+    try
+      Result := FParser.Parse(AArgs.GetElement(0).ToStringLiteral.Value);
+    except
+      on E: Exception do
+        ThrowSyntaxError(E.Message);
     end;
   end;
 end;

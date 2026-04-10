@@ -430,6 +430,8 @@ The TestRunner adds `ggTestAssertions`; the BenchmarkRunner adds `ggBenchmark`. 
 
 After all flag-gated built-ins, two always-present `const` globals are created: `globalThis` (self-referential global object) and `Goccia` (engine metadata with `version`, `commit`, `builtIns`, `strictTypes`, and `semver`).
 
+**JSON/JSON5 source text access (ES2024):** `JSON.parse` and `JSON5.parse` revivers receive `(key, value, context)` where `context` is an object with a `source` property for primitive values (the raw JSON/JSON5 text as written). Objects and arrays get an empty context (no `source` property). Source text collection is implemented via `TAbstractJSONParser.OnValueStart` (position tracking hook in `JSONParser.pas`) and `TGocciaJSONVisitor.RecordSourceText` (captures the raw substring). `TGocciaJSONParser.ParseWithSources` returns both the value tree and a flat source text list consumed in depth-first order by `ApplyReviver`. See [docs/built-ins.md](docs/built-ins.md) for details.
+
 **JSX:** Opt-in pre-pass transformer (`Goccia.JSX.Transformer.pas`) converts JSX to `createElement` calls. Users provide their own `createElement`/`Fragment`. Custom factory via `@jsxFactory`/`@jsxFragment` pragmas. See [docs/language-restrictions.md](docs/language-restrictions.md#jsx-opt-in).
 
 ## Testing
