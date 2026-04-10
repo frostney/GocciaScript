@@ -247,6 +247,7 @@ uses
   Goccia.Values.SharedArrayBufferValue,
   Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
+  Goccia.Values.Uint8ArrayEncoding,
   Goccia.Version;
 
 constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins);
@@ -597,6 +598,7 @@ var
   TAConstructor: TGocciaTypedArrayClassValue;
   BPE: TGocciaNumberLiteralValue;
   FromFn, OfFn: TGocciaTypedArrayStaticFrom;
+  Encoding: TGocciaUint8ArrayEncoding;
 begin
   TAConstructor := TGocciaTypedArrayClassValue.Create(AName, nil, AKind);
   TGocciaTypedArrayValue.ExposePrototype(TAConstructor);
@@ -611,6 +613,31 @@ begin
   OfFn := TGocciaTypedArrayStaticFrom.Create(AKind);
   TAConstructor.SetProperty(PROP_OF,
     TGocciaNativeFunctionValue.CreateWithoutPrototype(OfFn.TypedArrayOf, 'of', 0));
+
+  // Uint8Array-only: Base64/Hex encoding methods (TC39 Uint8Array Base64)
+  if AKind = takUint8 then
+  begin
+    Encoding := TGocciaUint8ArrayEncoding.Create;
+
+    // Static methods on Uint8Array constructor
+    TAConstructor.SetProperty(PROP_FROM_BASE64,
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(Encoding.FromBase64, 'fromBase64', 1));
+    TAConstructor.SetProperty(PROP_FROM_HEX,
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(Encoding.FromHex, 'fromHex', 1));
+
+    // Prototype methods on Uint8Array.prototype
+    TAConstructor.Prototype.AssignProperty(PROP_TO_BASE64,
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(Encoding.ToBase64, 'toBase64', 0));
+    TAConstructor.Prototype.AssignProperty(PROP_TO_HEX,
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(Encoding.ToHex, 'toHex', 0));
+    TAConstructor.Prototype.AssignProperty(PROP_SET_FROM_BASE64,
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(Encoding.SetFromBase64, 'setFromBase64', 1));
+    TAConstructor.Prototype.AssignProperty(PROP_SET_FROM_HEX,
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(Encoding.SetFromHex, 'setFromHex', 1));
+
+    // Uint8Array instances use constructor's prototype (encoding methods + shared chain)
+    TGocciaTypedArrayValue.SetUint8Prototype(TAConstructor.Prototype);
+  end;
 
   FInterpreter.GlobalScope.DefineLexicalBinding(AName, TAConstructor, dtConst);
 end;
