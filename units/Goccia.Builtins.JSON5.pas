@@ -541,6 +541,8 @@ function TGocciaJSON5Builtin.JSON5Parse(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   HasReviver: Boolean;
+  PreviousSourceIndex: Integer;
+  PreviousSourceTexts: TStringList;
   Reviver: TGocciaValue;
   Root: TGocciaObjectValue;
   SourceTexts: TStringList;
@@ -568,13 +570,16 @@ begin
       Root := TGocciaObjectValue.Create;
       Root.AssignProperty('', Result);
 
+      // Save/restore for reentrancy (reviver may call JSON5.parse).
+      PreviousSourceTexts := FReviverSourceTexts;
+      PreviousSourceIndex := FReviverSourceIndex;
       FReviverSourceTexts := SourceTexts;
       FReviverSourceIndex := 0;
       try
         Result := ApplyReviver(Root, '', Reviver);
       finally
-        FReviverSourceTexts := nil;
-        FReviverSourceIndex := 0;
+        FReviverSourceTexts := PreviousSourceTexts;
+        FReviverSourceIndex := PreviousSourceIndex;
       end;
     finally
       SourceTexts.Free;

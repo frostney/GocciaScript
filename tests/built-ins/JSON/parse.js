@@ -318,3 +318,22 @@ test("JSON.parse reviver source with negative numbers", () => {
   });
   expect(src).toBe("-42");
 });
+
+test("JSON.parse reviver source text is reentrant", () => {
+  const outerSources = [];
+  const result = JSON.parse('{"a":1,"b":2}', (key, value, context) => {
+    if (key !== "") {
+      outerSources.push(context.source);
+      // Nested JSON.parse with its own reviver must not clobber outer state.
+      const inner = JSON.parse('"nested"', (k, v, ctx) => {
+        expect(ctx.source).toBe('"nested"');
+        return v;
+      });
+      expect(inner).toBe("nested");
+    }
+    return value;
+  });
+  expect(outerSources).toEqual(["1", "2"]);
+  expect(result.a).toBe(1);
+  expect(result.b).toBe(2);
+});

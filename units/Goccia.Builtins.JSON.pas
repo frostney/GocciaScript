@@ -168,6 +168,8 @@ end;
 function TGocciaJSONBuiltin.JSONParse(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   HasReviver: Boolean;
+  PreviousSourceIndex: Integer;
+  PreviousSourceTexts: TStringList;
   Reviver: TGocciaValue;
   Root: TGocciaObjectValue;
   SourceTexts: TStringList;
@@ -199,13 +201,16 @@ begin
       Root := TGocciaObjectValue.Create;
       Root.AssignProperty('', Result);
 
+      // Save/restore for reentrancy (reviver may call JSON.parse).
+      PreviousSourceTexts := FReviverSourceTexts;
+      PreviousSourceIndex := FReviverSourceIndex;
       FReviverSourceTexts := SourceTexts;
       FReviverSourceIndex := 0;
       try
         Result := ApplyReviver(Root, '', Reviver);
       finally
-        FReviverSourceTexts := nil;
-        FReviverSourceIndex := 0;
+        FReviverSourceTexts := PreviousSourceTexts;
+        FReviverSourceIndex := PreviousSourceIndex;
       end;
     finally
       SourceTexts.Free;
