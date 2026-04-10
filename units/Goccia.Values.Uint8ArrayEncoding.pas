@@ -28,6 +28,7 @@ uses
   SysUtils,
 
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue,
   Goccia.Values.TypedArrayValue;
@@ -394,42 +395,32 @@ begin
 
   SetLength(Result.Bytes, Result.ByteLength);
 
-  // Step 7: Decode full 4-char chunks
+  // Step 7: Decode full 4-char chunks — only consume when all 3 output bytes fit
   Pos := 1;
   OutPos := 0;
   for I := 0 to FullChunks - 1 do
   begin
-    if OutPos >= Result.ByteLength then Break;
+    if OutPos + 3 > Result.ByteLength then Break;
     V0 := DecodeTable[Ord(Cleaned[Pos])];
     V1 := DecodeTable[Ord(Cleaned[Pos + 1])];
     V2 := DecodeTable[Ord(Cleaned[Pos + 2])];
     V3 := DecodeTable[Ord(Cleaned[Pos + 3])];
-    if OutPos < Result.ByteLength then
-    begin
-      Result.Bytes[OutPos] := (V0 shl 2) or (V1 shr 4);
-      Inc(OutPos);
-    end;
-    if OutPos < Result.ByteLength then
-    begin
-      Result.Bytes[OutPos] := ((V1 and $0F) shl 4) or (V2 shr 2);
-      Inc(OutPos);
-    end;
-    if OutPos < Result.ByteLength then
-    begin
-      Result.Bytes[OutPos] := ((V2 and $03) shl 6) or V3;
-      Inc(OutPos);
-    end;
+    Result.Bytes[OutPos]     := (V0 shl 2) or (V1 shr 4);
+    Result.Bytes[OutPos + 1] := ((V1 and $0F) shl 4) or (V2 shr 2);
+    Result.Bytes[OutPos + 2] := ((V2 and $03) shl 6) or V3;
+    Inc(OutPos, 3);
     Inc(Pos, 4);
   end;
 
-  // Step 8: Decode remainder
-  if (Remainder >= 2) and (OutPos < Result.ByteLength) then
+  // Step 8: Decode remainder — only consume when all output bytes fit
+  // 2 trailing chars → 1 byte; 3 trailing chars → 2 bytes
+  if (Remainder >= 2) and (OutPos + (Remainder - 1) <= Result.ByteLength) then
   begin
     V0 := DecodeTable[Ord(Cleaned[Pos])];
     V1 := DecodeTable[Ord(Cleaned[Pos + 1])];
     Result.Bytes[OutPos] := (V0 shl 2) or (V1 shr 4);
     Inc(OutPos);
-    if (Remainder >= 3) and (OutPos < Result.ByteLength) then
+    if Remainder >= 3 then
     begin
       V2 := DecodeTable[Ord(Cleaned[Pos + 2])];
       Result.Bytes[OutPos] := ((V1 and $0F) shl 4) or (V2 shr 2);
@@ -566,9 +557,14 @@ begin
     TA.BufferData[TA.ByteOffset + I] := DecResult.Bytes[I];
 
   ResultObj := TGocciaObjectValue.Create;
-  ResultObj.AssignProperty(PROP_READ, TGocciaNumberLiteralValue.Create(DecResult.CharsRead));
-  ResultObj.AssignProperty(PROP_WRITTEN, TGocciaNumberLiteralValue.Create(Written));
-  Result := ResultObj;
+  TGarbageCollector.Instance.AddTempRoot(ResultObj);
+  try
+    ResultObj.AssignProperty(PROP_READ, TGocciaNumberLiteralValue.Create(DecResult.CharsRead));
+    ResultObj.AssignProperty(PROP_WRITTEN, TGocciaNumberLiteralValue.Create(Written));
+    Result := ResultObj;
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(ResultObj);
+  end;
 end;
 
 // ES2026 §5.1.4 Uint8Array.prototype.setFromHex(string)
@@ -612,9 +608,14 @@ begin
     CharsRead := 0;
 
   ResultObj := TGocciaObjectValue.Create;
-  ResultObj.AssignProperty(PROP_READ, TGocciaNumberLiteralValue.Create(CharsRead));
-  ResultObj.AssignProperty(PROP_WRITTEN, TGocciaNumberLiteralValue.Create(Written));
-  Result := ResultObj;
+  TGarbageCollector.Instance.AddTempRoot(ResultObj);
+  try
+    ResultObj.AssignProperty(PROP_READ, TGocciaNumberLiteralValue.Create(CharsRead));
+    ResultObj.AssignProperty(PROP_WRITTEN, TGocciaNumberLiteralValue.Create(Written));
+    Result := ResultObj;
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(ResultObj);
+  end;
 end;
 
 // ES2026 §5.2.1 Uint8Array.fromBase64(string [, options])

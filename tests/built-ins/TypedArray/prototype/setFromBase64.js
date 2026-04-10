@@ -15,12 +15,25 @@ describe("Uint8Array.prototype.setFromBase64", () => {
     expect(result.written).toBe(3);
   });
 
-  test("stops writing when target is full", () => {
+  test("does not consume chunk when output would overflow target", () => {
+    // "QUJD" decodes to 3 bytes (ABC) but target only has 2 bytes
+    // A full 4-char chunk produces 3 bytes atomically — can't partially write it
     const target = new Uint8Array(2);
     const result = target.setFromBase64("QUJD");
-    expect(result.written).toBe(2);
+    expect(result.read).toBe(0);
+    expect(result.written).toBe(0);
+  });
+
+  test("consumes only chunks that fully fit in target", () => {
+    // "QUJDREVG" = "QUJD" (ABC, 3 bytes) + "REVG" (DEF, 3 bytes)
+    // Target has 4 bytes: first chunk (3 bytes) fits, second chunk (3 bytes) does not
+    const target = new Uint8Array(4);
+    const result = target.setFromBase64("QUJDREVG");
+    expect(result.read).toBe(4);
+    expect(result.written).toBe(3);
     expect(target[0]).toBe(65);
     expect(target[1]).toBe(66);
+    expect(target[2]).toBe(67);
   });
 
   test("handles empty input", () => {
