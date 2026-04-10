@@ -642,6 +642,7 @@ begin
         gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
         gttEqual, gttNotEqual,
         gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign, gttNullishCoalescingAssign,
+        gttLogicalAndAssign, gttLogicalOrAssign,
         gttInstanceof, gttIn]);
   end;
 end;
@@ -1578,6 +1579,7 @@ var
 begin
   Left := Conditional;
   if Match([gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign, gttNullishCoalescingAssign,
+             gttLogicalAndAssign, gttLogicalOrAssign,
              gttBitwiseAndAssign, gttBitwiseOrAssign, gttBitwiseXorAssign, gttLeftShiftAssign, gttRightShiftAssign, gttUnsignedRightShiftAssign]) then
   begin
     Operator := Previous.TokenType;

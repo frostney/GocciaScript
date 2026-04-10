@@ -938,14 +938,24 @@ begin
         AddToken(gttGreater);
     '&':
       if Match('&') then
-        AddToken(gttAnd)
+      begin
+        if Match('=') then
+          AddToken(gttLogicalAndAssign)
+        else
+          AddToken(gttAnd);
+      end
       else if Match('=') then
         AddToken(gttBitwiseAndAssign)
       else
         AddToken(gttBitwiseAnd);
     '|':
       if Match('|') then
-        AddToken(gttOr)
+      begin
+        if Match('=') then
+          AddToken(gttLogicalOrAssign)
+        else
+          AddToken(gttOr);
+      end
       else if Match('=') then
         AddToken(gttBitwiseOrAssign)
       else

@@ -1122,15 +1122,38 @@ begin
   end;
 end;
 
-// ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??= AssignmentExpression
+// ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression AssignmentOperator AssignmentExpression
 function TGocciaCompoundAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   CurrentValue, RhsValue: TGocciaValue;
 begin
   CurrentValue := AContext.Scope.GetValue(Name);
+  // ES2026 §13.15.2 step 3: ??=
   if Operator = gttNullishCoalescingAssign then
   begin
     if not IsNullishAssignmentValue(CurrentValue) then
+      Exit(CurrentValue);
+
+    Result := Value.Evaluate(AContext);
+    AContext.Scope.AssignLexicalBinding(Name, Result);
+    Exit;
+  end;
+
+  // ES2026 §13.15.2 step 3: &&=
+  if Operator = gttLogicalAndAssign then
+  begin
+    if not CurrentValue.ToBooleanLiteral.Value then
+      Exit(CurrentValue);
+
+    Result := Value.Evaluate(AContext);
+    AContext.Scope.AssignLexicalBinding(Name, Result);
+    Exit;
+  end;
+
+  // ES2026 §13.15.2 step 3: ||=
+  if Operator = gttLogicalOrAssign then
+  begin
+    if CurrentValue.ToBooleanLiteral.Value then
       Exit(CurrentValue);
 
     Result := Value.Evaluate(AContext);
@@ -1144,16 +1167,39 @@ begin
   AContext.Scope.AssignLexicalBinding(Name, Result);
 end;
 
-// ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??= AssignmentExpression
+// ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression AssignmentOperator AssignmentExpression
 function TGocciaPropertyCompoundAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Obj, CurrentValue, RhsValue: TGocciaValue;
 begin
   Obj := ObjectExpr.Evaluate(AContext);
   CurrentValue := NormalizeAssignmentValue(Obj.GetProperty(PropertyName));
+  // ES2026 §13.15.2 step 3: ??=
   if Operator = gttNullishCoalescingAssign then
   begin
     if not IsNullishAssignmentValue(CurrentValue) then
+      Exit(CurrentValue);
+
+    Result := Value.Evaluate(AContext);
+    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column);
+    Exit;
+  end;
+
+  // ES2026 §13.15.2 step 3: &&=
+  if Operator = gttLogicalAndAssign then
+  begin
+    if not CurrentValue.ToBooleanLiteral.Value then
+      Exit(CurrentValue);
+
+    Result := Value.Evaluate(AContext);
+    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column);
+    Exit;
+  end;
+
+  // ES2026 §13.15.2 step 3: ||=
+  if Operator = gttLogicalOrAssign then
+  begin
+    if CurrentValue.ToBooleanLiteral.Value then
       Exit(CurrentValue);
 
     Result := Value.Evaluate(AContext);
@@ -1166,11 +1212,28 @@ begin
   Result := NormalizeAssignmentValue(Obj.GetProperty(PropertyName));
 end;
 
-// ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??= AssignmentExpression
+// ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression AssignmentOperator AssignmentExpression
 function TGocciaComputedPropertyCompoundAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Obj, PropertyKeyValue, CurrentValue, RhsValue: TGocciaValue;
   PropName: string;
+
+  function ShortCircuits: Boolean; inline;
+  begin
+    case Operator of
+      gttNullishCoalescingAssign: Result := not IsNullishAssignmentValue(CurrentValue);
+      gttLogicalAndAssign: Result := not CurrentValue.ToBooleanLiteral.Value;
+      gttLogicalOrAssign: Result := CurrentValue.ToBooleanLiteral.Value;
+    else
+      Result := False;
+    end;
+  end;
+
+  function IsShortCircuitOperator: Boolean; inline;
+  begin
+    Result := Operator in [gttNullishCoalescingAssign, gttLogicalAndAssign, gttLogicalOrAssign];
+  end;
+
 begin
   Obj := ObjectExpr.Evaluate(AContext);
   PropertyKeyValue := PropertyExpression.Evaluate(AContext);
@@ -1183,9 +1246,9 @@ begin
       CurrentValue := NormalizeAssignmentValue(
         TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue)));
 
-    if Operator = gttNullishCoalescingAssign then
+    if IsShortCircuitOperator then
     begin
-      if not IsNullishAssignmentValue(CurrentValue) then
+      if ShortCircuits then
         Exit(CurrentValue);
 
       Result := Value.Evaluate(AContext);
@@ -1209,9 +1272,9 @@ begin
 
   PropName := PropertyKeyValue.ToStringLiteral.Value;
   CurrentValue := NormalizeAssignmentValue(Obj.GetProperty(PropName));
-  if Operator = gttNullishCoalescingAssign then
+  if IsShortCircuitOperator then
   begin
-    if not IsNullishAssignmentValue(CurrentValue) then
+    if ShortCircuits then
       Exit(CurrentValue);
 
     Result := Value.Evaluate(AContext);

@@ -1839,9 +1839,10 @@ var
   ArithOp: TGocciaTokenType;
   JumpIdx, OkJump: Integer;
 begin
-  // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??= AssignmentExpression
-  if AExpr.Operator = gttNullishCoalescingAssign then
+  // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??=/&&=/||= AssignmentExpression
+  if IsShortCircuitAssignment(AExpr.Operator) then
   begin
+    Op := ShortCircuitJumpOp(AExpr.Operator);
     LocalIdx := ACtx.Scope.ResolveLocal(AExpr.Name);
     if LocalIdx >= 0 then
     begin
@@ -1849,7 +1850,7 @@ begin
       begin
         EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest,
           ACtx.Template.AddConstantString(AExpr.Name)));
-        JumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NULLISH, ADest);
+        JumpIdx := EmitJumpInstruction(ACtx, Op, ADest);
         if ACtx.Scope.GetLocal(LocalIdx).IsConst then
         begin
           MsgIdx := ACtx.Template.AddConstantString(
@@ -1871,7 +1872,7 @@ begin
       Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
       if ADest <> Slot then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
-      JumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NULLISH, ADest);
+      JumpIdx := EmitJumpInstruction(ACtx, Op, ADest);
       if ACtx.Scope.GetLocal(LocalIdx).IsConst then
       begin
         MsgIdx := ACtx.Template.AddConstantString(
@@ -1900,7 +1901,7 @@ begin
     if UpvalIdx >= 0 then
     begin
       EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, ADest, UInt16(UpvalIdx)));
-      JumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NULLISH, ADest);
+      JumpIdx := EmitJumpInstruction(ACtx, Op, ADest);
       if ACtx.Scope.GetUpvalue(UpvalIdx).IsConst then
       begin
         MsgIdx := ACtx.Template.AddConstantString(
@@ -1939,7 +1940,7 @@ begin
     ACtx.Scope.FreeRegister;
 
     EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest, NameIdx));
-    JumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NULLISH, ADest);
+    JumpIdx := EmitJumpInstruction(ACtx, Op, ADest);
     ACtx.CompileExpression(AExpr.Value, ADest);
     EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ADest, NameIdx));
     PatchJumpTarget(ACtx, JumpIdx);
@@ -2029,8 +2030,8 @@ var
   PropIdx: UInt16;
   JumpIdx: Integer;
 begin
-  // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??= AssignmentExpression
-  if AExpr.Operator = gttNullishCoalescingAssign then
+  // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??=/&&=/||= AssignmentExpression
+  if IsShortCircuitAssignment(AExpr.Operator) then
   begin
     ObjReg := ACtx.Scope.AllocateRegister;
     CurReg := ACtx.Scope.AllocateRegister;
@@ -2041,7 +2042,7 @@ begin
       raise Exception.Create('Constant pool overflow: property name index exceeds 255');
     EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, CurReg, ObjReg,
       UInt8(PropIdx)));
-    JumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NULLISH, CurReg);
+    JumpIdx := EmitJumpInstruction(ACtx, ShortCircuitJumpOp(AExpr.Operator), CurReg);
     ACtx.CompileExpression(AExpr.Value, CurReg);
     EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ObjReg, UInt8(PropIdx),
       CurReg));
@@ -2088,8 +2089,8 @@ var
   Op: TGocciaOpCode;
   JumpIdx: Integer;
 begin
-  // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??= AssignmentExpression
-  if AExpr.Operator = gttNullishCoalescingAssign then
+  // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??=/&&=/||= AssignmentExpression
+  if IsShortCircuitAssignment(AExpr.Operator) then
   begin
     ObjReg := ACtx.Scope.AllocateRegister;
     KeyReg := ACtx.Scope.AllocateRegister;
@@ -2098,7 +2099,7 @@ begin
     ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
     ACtx.CompileExpression(AExpr.PropertyExpression, KeyReg);
     EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, CurReg, ObjReg, KeyReg));
-    JumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NULLISH, CurReg);
+    JumpIdx := EmitJumpInstruction(ACtx, ShortCircuitJumpOp(AExpr.Operator), CurReg);
     ACtx.CompileExpression(AExpr.Value, CurReg);
     EmitInstruction(ACtx, EncodeABC(OP_ARRAY_SET, ObjReg, KeyReg, CurReg));
     PatchJumpTarget(ACtx, JumpIdx);
@@ -2353,8 +2354,8 @@ var
   PropIdx: UInt16;
   JumpIdx: Integer;
 begin
-  // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??= AssignmentExpression
-  if AExpr.Operator = gttNullishCoalescingAssign then
+  // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??=/&&=/||= AssignmentExpression
+  if IsShortCircuitAssignment(AExpr.Operator) then
   begin
     ObjReg := ACtx.Scope.AllocateRegister;
     CurReg := ACtx.Scope.AllocateRegister;
@@ -2364,7 +2365,7 @@ begin
     if PropIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: private property name index exceeds 255');
     EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, CurReg, ObjReg, UInt8(PropIdx)));
-    JumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NULLISH, CurReg);
+    JumpIdx := EmitJumpInstruction(ACtx, ShortCircuitJumpOp(AExpr.Operator), CurReg);
     ACtx.CompileExpression(AExpr.Value, CurReg);
     EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ObjReg, UInt8(PropIdx), CurReg));
     PatchJumpTarget(ACtx, JumpIdx);
