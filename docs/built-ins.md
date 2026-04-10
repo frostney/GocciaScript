@@ -500,7 +500,7 @@ ErrorName: message
     at outerFunction (filePath:line:col)
 ```
 
-### Iterator (`Goccia.Values.IteratorValue.pas`, `Iterator.Concrete.pas`, `Iterator.Lazy.pas`, `Iterator.Generic.pas`)
+### Iterator (`Goccia.Values.IteratorValue.pas`, `Iterator.Concrete.pas`, `Iterator.Lazy.pas`, `Iterator.Concat.pas`, `Iterator.Generic.pas`)
 
 All built-in iterators (Array, String, Map, Set) share a common `Iterator.prototype` with helper methods per the ECMAScript Iterator Helpers proposal:
 
@@ -526,11 +526,12 @@ Iterators are consumed once — calling `next()` past the end returns `{value: u
 
 **User-defined iterables:** Objects with a `[Symbol.iterator]()` method that returns a plain `{next()}` object are fully supported. They work with spread, destructuring, `Array.from()`, and `Iterator.from()`.
 
-**Static method:**
+**Static methods:**
 
 | Method | Description |
 |--------|-------------|
 | `Iterator.from(value)` | Wrap an iterable, iterator, or `{next()}` object as a proper Iterator with helper methods |
+| `Iterator.concat(...items)` | Concatenate multiple iterables into a single lazy iterator (TC39 Iterator Sequencing). All arguments are validated upfront as iterables; iterators are opened lazily as each iterable is consumed. |
 | `Iterator.prototype` | The shared iterator prototype (accessible for inspection) |
 
 ### Symbol (`Goccia.Builtins.GlobalSymbol.pas`)

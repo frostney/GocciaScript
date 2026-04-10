@@ -34,6 +34,7 @@ type
     function IteratorFind(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IteratorFlatMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IteratorFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function IteratorConcat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     class procedure EnsurePrototypeInitialized;
     procedure InitializePrototype;
@@ -64,6 +65,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
+  Goccia.Values.Iterator.Concat,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.Generic,
   Goccia.Values.Iterator.Lazy,
@@ -191,6 +193,7 @@ begin
     Members := TGocciaMemberCollection.Create;
     try
       Members.AddNamedMethod('from', FPrototypeMethodHost.IteratorFrom, 1, gmkStaticMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('concat', FPrototypeMethodHost.IteratorConcat, 0, gmkStaticMethod, [gmfNoFunctionPrototype]);
       FStaticMembers := Members.ToDefinitions;
     finally
       Members.Free;
@@ -608,6 +611,48 @@ begin
 
   ThrowTypeError('Iterator.from requires an iterable or iterator-like object');
   Result := nil;
+end;
+
+{ Iterator.concat() }
+
+// TC39 Iterator Sequencing §1 Iterator.concat ( ...items )
+function TGocciaIteratorValue.IteratorConcat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  I: Integer;
+  Item, IteratorMethod: TGocciaValue;
+  Iterables: array of TGocciaConcatIterableRecord;
+begin
+  // TC39 Iterator Sequencing §1 step 1: Let iterables be a new empty List.
+  SetLength(Iterables, AArgs.Length);
+
+  // TC39 Iterator Sequencing §1 step 2: For each element item of items
+  for I := 0 to AArgs.Length - 1 do
+  begin
+    Item := AArgs.GetElement(I);
+
+    if Item is TGocciaStringLiteralValue then
+    begin
+      // Strings are iterable primitives — handle specially
+      Iterables[I].Iterable := Item;
+      Iterables[I].IteratorMethod := nil;
+    end
+    else if Item is TGocciaObjectValue then
+    begin
+      // TC39 Iterator Sequencing §1 step 2b: Let method be GetMethod(item, @@iterator)
+      IteratorMethod := TGocciaObjectValue(Item).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+      // TC39 Iterator Sequencing §1 step 2c: If method is undefined, throw TypeError
+      if not Assigned(IteratorMethod) or (IteratorMethod is TGocciaUndefinedLiteralValue) or not IteratorMethod.IsCallable then
+        ThrowTypeError('Iterator.concat requires all arguments to be iterable');
+      Iterables[I].Iterable := Item;
+      Iterables[I].IteratorMethod := IteratorMethod;
+    end
+    else
+      // TC39 Iterator Sequencing §1 step 2a: If item is not an Object, throw TypeError
+      ThrowTypeError('Iterator.concat requires all arguments to be iterable');
+  end;
+
+  // TC39 Iterator Sequencing §1 steps 3-6: Create iterator from closure
+  Result := TGocciaConcatIteratorValue.Create(Iterables);
 end;
 
 end.
