@@ -88,25 +88,14 @@ describe("numeric separators", () => {
     expect(1e-1_0).toBe(1e-10);
   });
 
-  test("invalid: trailing separator is a syntax error", () => {
-    expect(() => eval("1_000_")).toThrow();
-  });
-
-  test("invalid: leading separator after prefix is a syntax error", () => {
-    expect(() => eval("0x_FF")).toThrow();
-    expect(() => eval("0b_10")).toThrow();
-    expect(() => eval("0o_77")).toThrow();
-  });
-
-  test("invalid: consecutive separators is a syntax error", () => {
-    expect(() => eval("1__000")).toThrow();
-  });
-
-  test("invalid: separator adjacent to decimal point is a syntax error", () => {
-    expect(() => eval("1_.5")).toThrow();
-  });
-
-  test("invalid: separator after exponent indicator is a syntax error", () => {
-    expect(() => eval("1e_10")).toThrow();
-  });
+  // Invalid separator placement (trailing, leading, consecutive, adjacent to
+  // decimal point or exponent) is rejected at lex time, before any JS code
+  // executes. These cases cannot be tested from within JS because `eval` is
+  // excluded in GocciaScript and any file containing the invalid literal would
+  // fail to parse entirely. Lex-level rejection is verified via ScriptLoader:
+  //   printf '1_000_' | ./build/ScriptLoader   → SyntaxError
+  //   printf '0x_FF'  | ./build/ScriptLoader   → SyntaxError
+  //   printf '1__000' | ./build/ScriptLoader   → SyntaxError
+  //   printf '1_.5'   | ./build/ScriptLoader   → SyntaxError
+  //   printf '1e_10'  | ./build/ScriptLoader   → SyntaxError
 });
