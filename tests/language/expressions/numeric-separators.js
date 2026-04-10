@@ -85,15 +85,6 @@ describe("numeric separators", () => {
   });
 
   // Invalid separator placement (trailing, leading, consecutive, adjacent to
-  // decimal point or exponent) is rejected at lex time, before any JS code
-  // executes. These cases cannot be tested from within JS because `eval` is
-  // excluded in GocciaScript and any file containing the invalid literal would
-  // fail to parse entirely. Lex-level rejection is verified via ScriptLoader:
-  //   printf '1_000_' | ./build/ScriptLoader   → SyntaxError
-  //   printf '0x_FF'  | ./build/ScriptLoader   → SyntaxError
-  //   printf '1__000' | ./build/ScriptLoader   → SyntaxError
-  //   printf '0_1'    | ./build/ScriptLoader   → SyntaxError
-  //   printf '1_.5'   | ./build/ScriptLoader   → SyntaxError
-  //   printf '1._5'   | ./build/ScriptLoader   → SyntaxError
-  //   printf '1e_10'  | ./build/ScriptLoader   → SyntaxError
+  // decimal point or exponent) is rejected at lex time. These are tested via
+  // the "Check numeric separator rejection" CI step in ci.yml and pr.yml.
 });
