@@ -240,6 +240,139 @@ suite("Iterator.concat", () => {
   });
 });
 
+suite("Iterator.zip", () => {
+  const arr10 = Array.from({ length: 10 }, (_, i) => i);
+  const arr20 = Array.from({ length: 20 }, (_, i) => i);
+  const arr50 = Array.from({ length: 50 }, (_, i) => i);
+
+  bench("zip 2 arrays (10 + 10 elements)", {
+    run: () => {
+      const result = Iterator.zip([arr10, arr10]).toArray();
+    },
+  });
+
+  bench("zip 3 arrays (10 elements each)", {
+    run: () => {
+      const result = Iterator.zip([arr10, arr10, arr10]).toArray();
+    },
+  });
+
+  bench("zip 2 arrays (20 + 20 elements)", {
+    run: () => {
+      const result = Iterator.zip([arr20, arr20]).toArray();
+    },
+  });
+
+  bench("zip 2 arrays (50 + 50 elements)", {
+    run: () => {
+      const result = Iterator.zip([arr50, arr50]).toArray();
+    },
+  });
+
+  bench("zip shortest mode (20 + 10 elements)", {
+    run: () => {
+      const result = Iterator.zip([arr20, arr10]).toArray();
+    },
+  });
+
+  bench("zip longest mode (10 + 20 elements)", {
+    run: () => {
+      const result = Iterator.zip([arr10, arr20], { mode: "longest", padding: [0, 0] }).toArray();
+    },
+  });
+
+  bench("zip strict mode (20 + 20 elements)", {
+    run: () => {
+      const result = Iterator.zip([arr20, arr20], { mode: "strict" }).toArray();
+    },
+  });
+
+  bench("zip + map + toArray (20 + 20 elements)", {
+    run: () => {
+      const result = Iterator.zip([arr20, arr20])
+        .map(([a, b]) => a + b)
+        .toArray();
+    },
+  });
+
+  bench("zip + filter + toArray (20 + 20 elements)", {
+    run: () => {
+      const result = Iterator.zip([arr20, arr20])
+        .filter(([a, b]) => a % 2 === 0)
+        .toArray();
+    },
+  });
+
+  bench("zip Sets (15 + 15 elements)", {
+    setup: () => ({
+      a: new Set(Array.from({ length: 15 }, (_, i) => i)),
+      b: new Set(Array.from({ length: 15 }, (_, i) => i + 15)),
+    }),
+    run: (ctx) => {
+      const result = Iterator.zip([ctx.a, ctx.b]).toArray();
+    },
+  });
+});
+
+suite("Iterator.zipKeyed", () => {
+  bench("zipKeyed 2 keys (10 elements each)", {
+    setup: () => ({
+      x: Array.from({ length: 10 }, (_, i) => i),
+      y: Array.from({ length: 10 }, (_, i) => i * 2),
+    }),
+    run: (data) => {
+      const result = Iterator.zipKeyed(data).toArray();
+    },
+  });
+
+  bench("zipKeyed 3 keys (20 elements each)", {
+    setup: () => ({
+      name: Array.from({ length: 20 }, (_, i) => "item" + i),
+      value: Array.from({ length: 20 }, (_, i) => i * 10),
+      flag: Array.from({ length: 20 }, (_, i) => i % 2 === 0),
+    }),
+    run: (data) => {
+      const result = Iterator.zipKeyed(data).toArray();
+    },
+  });
+
+  bench("zipKeyed longest mode (10 + 20 elements)", {
+    setup: () => ({
+      short: Array.from({ length: 10 }, (_, i) => i),
+      long: Array.from({ length: 20 }, (_, i) => i),
+    }),
+    run: (data) => {
+      const result = Iterator.zipKeyed(data, {
+        mode: "longest",
+        padding: { short: 0, long: 0 },
+      }).toArray();
+    },
+  });
+
+  bench("zipKeyed strict mode (20 + 20 elements)", {
+    setup: () => ({
+      a: Array.from({ length: 20 }, (_, i) => i),
+      b: Array.from({ length: 20 }, (_, i) => i * 3),
+    }),
+    run: (data) => {
+      const result = Iterator.zipKeyed(data, { mode: "strict" }).toArray();
+    },
+  });
+
+  bench("zipKeyed + filter + map (20 elements)", {
+    setup: () => ({
+      x: Array.from({ length: 20 }, (_, i) => i),
+      y: Array.from({ length: 20 }, (_, i) => i * 5),
+    }),
+    run: (data) => {
+      const result = Iterator.zipKeyed(data)
+        .filter(({ x }) => x > 10)
+        .map(({ x, y }) => x + y)
+        .toArray();
+    },
+  });
+});
+
 suite("built-in iterator helpers", () => {
   const arr50 = Array.from({ length: 50 }, (_, i) => i);
 
