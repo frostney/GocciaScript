@@ -36,12 +36,20 @@ describe("btoa", () => {
   });
 
   test("throws InvalidCharacterError for characters > U+00FF", () => {
-    // U+0100 (Latin Extended-A) — first character outside Latin-1 range
-    expect(() => btoa(String.fromCharCode(0x0100))).toThrow();
-    // U+4E2D (Chinese character 中)
-    expect(() => btoa("中")).toThrow();
-    // Mixed: ASCII followed by out-of-range
-    expect(() => btoa("abc" + String.fromCharCode(0x100))).toThrow();
+    const inputs = [
+      String.fromCharCode(0x0100), // U+0100 (Latin Extended-A)
+      "中",                         // U+4E2D (Chinese character)
+      "abc" + String.fromCharCode(0x100), // Mixed: ASCII followed by out-of-range
+    ];
+    inputs.forEach((input) => {
+      try {
+        btoa(input);
+        expect(true).toBe(false); // should not reach here
+      } catch (e) {
+        expect(e.name).toBe("InvalidCharacterError");
+        expect(e.code).toBe(5);
+      }
+    });
   });
 
   test("throws TypeError when called with no arguments", () => {
@@ -49,10 +57,10 @@ describe("btoa", () => {
   });
 
   test("coerces non-string arguments to string", () => {
-    expect(btoa("123")).toBe("MTIz");
-    expect(btoa("true")).toBe("dHJ1ZQ==");
-    expect(btoa("null")).toBe("bnVsbA==");
-    expect(btoa("undefined")).toBe("dW5kZWZpbmVk");
+    expect(btoa(123)).toBe("MTIz");
+    expect(btoa(true)).toBe("dHJ1ZQ==");
+    expect(btoa(null)).toBe("bnVsbA==");
+    expect(btoa(undefined)).toBe("dW5kZWZpbmVk");
   });
 
   test("handles padding correctly for various input lengths", () => {

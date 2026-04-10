@@ -699,7 +699,7 @@ function TGocciaGlobals.AtobCallback(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Data, Cleaned, Decoded, ResultStr: string;
-  I: Integer;
+  I, CleanedLen, ResultLen: Integer;
   B: Byte;
   Remainder: Integer;
 begin
@@ -711,10 +711,15 @@ begin
   Data := AArgs.GetElement(0).ToStringLiteral.Value;
 
   // Step 3: Remove ASCII whitespace (U+0009, U+000A, U+000C, U+000D, U+0020)
-  Cleaned := '';
+  SetLength(Cleaned, Length(Data));
+  CleanedLen := 0;
   for I := 1 to Length(Data) do
     if not (Data[I] in [#9, #10, #12, #13, ' ']) then
-      Cleaned := Cleaned + Data[I];
+    begin
+      Inc(CleanedLen);
+      Cleaned[CleanedLen] := Data[I];
+    end;
+  SetLength(Cleaned, CleanedLen);
 
   // Step 4: If length mod 4 = 0, remove 1 or 2 trailing '=' characters
   if (Length(Cleaned) > 0) and (Length(Cleaned) mod 4 = 0) then
@@ -752,15 +757,25 @@ begin
 
   // Step 8: Convert decoded bytes to a string (Latin-1 interpretation)
   // Bytes > 0x7F need to be re-encoded as 2-byte UTF-8 sequences
-  ResultStr := '';
+  SetLength(ResultStr, Length(Decoded) * 2);
+  ResultLen := 0;
   for I := 1 to Length(Decoded) do
   begin
     B := Ord(Decoded[I]);
     if B < $80 then
-      ResultStr := ResultStr + Chr(B)
+    begin
+      Inc(ResultLen);
+      ResultStr[ResultLen] := Chr(B);
+    end
     else
-      ResultStr := ResultStr + Chr($C0 or (B shr 6)) + Chr($80 or (B and $3F));
+    begin
+      Inc(ResultLen);
+      ResultStr[ResultLen] := Chr($C0 or (B shr 6));
+      Inc(ResultLen);
+      ResultStr[ResultLen] := Chr($80 or (B and $3F));
+    end;
   end;
+  SetLength(ResultStr, ResultLen);
 
   Result := TGocciaStringLiteralValue.Create(ResultStr);
 end;
