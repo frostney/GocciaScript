@@ -205,10 +205,14 @@ begin
   end;
 
   Args := TGocciaArgumentsCollection.CreateWithCapacity(3);
-  Args.Add(TGocciaStringLiteralValue.Create(AKey));
-  Args.Add(Value);
-  Args.Add(Context);
-  Result := InvokeCallable(AReviver, Args, AHolder);
+  try
+    Args.Add(TGocciaStringLiteralValue.Create(AKey));
+    Args.Add(Value);
+    Args.Add(Context);
+    Result := InvokeCallable(AReviver, Args, AHolder);
+  finally
+    Args.Free;
+  end;
 end;
 
 function TGocciaJSON5Builtin.ApplyToJSON(const AValue: TGocciaValue;

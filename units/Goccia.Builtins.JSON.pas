@@ -154,10 +154,14 @@ begin
 
   // Step 4: Return ? Call(reviver, holder, « name, val, context »).
   Args := TGocciaArgumentsCollection.CreateWithCapacity(3);
-  Args.Add(TGocciaStringLiteralValue.Create(AKey));
-  Args.Add(Value);
-  Args.Add(Context);
-  Result := InvokeCallable(AReviver, Args, AHolder);
+  try
+    Args.Add(TGocciaStringLiteralValue.Create(AKey));
+    Args.Add(Value);
+    Args.Add(Context);
+    Result := InvokeCallable(AReviver, Args, AHolder);
+  finally
+    Args.Free;
+  end;
 end;
 
 // ES2026 §25.5.1 JSON.parse ( text [ , reviver ] )
