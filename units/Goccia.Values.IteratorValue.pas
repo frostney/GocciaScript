@@ -789,6 +789,7 @@ begin
             PaddingIterator := GetIteratorFromIterable(PaddingVal);
             if PaddingIterator = nil then
               ThrowTypeError('Iterator.zip: padding must be iterable');
+            GC.AddTempRoot(PaddingIterator);
             PaddingItems := TGocciaValueList.Create(False);
             try
               PaddingItem := PaddingIterator.DirectNext(PaddingDone);
@@ -804,6 +805,7 @@ begin
               end;
             finally
               PaddingItems.Free;
+              GC.RemoveTempRoot(PaddingIterator);
             end;
           end;
         end;
