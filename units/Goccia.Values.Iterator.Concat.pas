@@ -190,7 +190,10 @@ procedure TGocciaConcatIteratorValue.Close;
 begin
   inherited;
   if Assigned(FCurrentIterator) then
+  begin
     FCurrentIterator.Close;
+    FCurrentIterator := nil;
+  end;
 end;
 
 procedure TGocciaConcatIteratorValue.MarkReferences;
