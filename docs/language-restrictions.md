@@ -157,6 +157,7 @@ C[Symbol.metadata].decorated; // true
 - Optional chaining (`?.` for property access, computed access, and method calls).
 - Bitwise operators (`&`, `|`, `^`, `<<`, `>>`, `>>>`).
 - Ternary operator (`? :`).
+- Numeric literals: decimal, hex (`0x`), binary (`0b`), octal (`0o`), scientific notation, and numeric separators (`1_000_000`, `0xFF_FF`, `0b1010_0001`, `0o77_77`, `1.5e1_0`).
 - Template literals with interpolation.
 - Destructuring (array and object patterns).
 - Spread operator (`...`).

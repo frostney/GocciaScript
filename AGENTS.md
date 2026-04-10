@@ -455,7 +455,7 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 - Auto-formatter: `./format.pas` — auto-fixes uses clause ordering, PascalCase naming, parameter prefixes
 - Pre-commit hook: [Lefthook](https://github.com/evilmartians/lefthook) (`lefthook.yml`)
 - CI: `ci.yml` (main + tags, full matrix) and `pr.yml` (PRs, ubuntu-latest x64 only, with benchmark comparison)
-- Changelog: `CHANGELOG.md` is auto-generated via [git-cliff](https://git-cliff.org/) (`cliff.toml`). Run `git-cliff -o CHANGELOG.md` to regenerate.
+- Changelog: `CHANGELOG.md` is auto-generated via [git-cliff](https://git-cliff.org/) (`cliff.toml`). Run `git-cliff -o CHANGELOG.md` to regenerate. **Do not edit `CHANGELOG.md` manually — it will be overwritten.**
 
 ## Documentation Index
 

@@ -119,7 +119,7 @@ resourcestring
   SSuggestSwitchCaseOrDefault = 'Switch bodies contain case/default labels: case value: ... or default: ...';
   SSuggestMissingCatchOrFinally = 'Add catch (e) { ... } or finally { ... } after the try block';
   SSuggestDeclarePrivateField = 'Declare the private field in the class body, or move this code inside the class';
-  SSuggestNumberFormatValid = 'Valid formats: integers (123), decimals (1.23), hex (0xFF), binary (0b101), octal (0o777)';
+  SSuggestNumberFormatValid = 'Valid formats: integers (123), decimals (1.23), hex (0xFF), binary (0b101), octal (0o777). Numeric separators allowed (1_000)';
 
   // Lexer errors — strings, templates, regex
   SSuggestCloseBlockComment = 'Add "*/" to close the block comment';
@@ -135,6 +135,7 @@ resourcestring
   SSuggestBinaryNumberFormat = 'Binary numbers start with 0b followed by 0 or 1 (e.g., 0b1010)';
   SSuggestOctalNumberFormat = 'Octal numbers start with 0o followed by digits 0-7 (e.g., 0o755)';
   SSuggestScientificNotation = 'Scientific notation needs digits after e (e.g., 1e10 or 3.14e-2)';
+  SSuggestNumericSeparator = 'Numeric separators (_) must be placed between digits (e.g., 1_000, 0xFF_FF)';
 
   // Lexer errors — escapes and characters
   SSuggestUnicodeEscapeFormat = 'Unicode escapes use \uXXXX (4 hex digits) or \u{XXXXXX} (1-6 hex digits)';
