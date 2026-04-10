@@ -97,5 +97,6 @@ describe("numeric separators", () => {
   //   printf '0x_FF'  | ./build/ScriptLoader   → SyntaxError
   //   printf '1__000' | ./build/ScriptLoader   → SyntaxError
   //   printf '1_.5'   | ./build/ScriptLoader   → SyntaxError
+  //   printf '1._5'   | ./build/ScriptLoader   → SyntaxError
   //   printf '1e_10'  | ./build/ScriptLoader   → SyntaxError
 });

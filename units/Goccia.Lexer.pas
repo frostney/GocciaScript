@@ -699,7 +699,10 @@ begin
     end;
   end;
 
-  if (Peek = '.') and CharInSet(PeekNext, ['0'..'9']) then
+  if (Peek = '.') and (PeekNext = '_') then
+    raise TGocciaLexerError.Create('Numeric separator must be between digits',
+      FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator)
+  else if (Peek = '.') and CharInSet(PeekNext, ['0'..'9']) then
   begin
     Advance;
     while CharInSet(Peek, ['0'..'9', '_']) do
