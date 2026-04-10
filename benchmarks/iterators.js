@@ -184,6 +184,62 @@ suite("iterator helpers — user-defined source", () => {
   });
 });
 
+suite("Iterator.concat", () => {
+  const arr10 = Array.from({ length: 10 }, (_, i) => i);
+  const arr20 = Array.from({ length: 20 }, (_, i) => i);
+
+  bench("concat 2 arrays (10 + 10 elements)", {
+    run: () => {
+      const result = Iterator.concat(arr10, arr10).toArray();
+    },
+  });
+
+  bench("concat 5 arrays (10 elements each)", {
+    run: () => {
+      const result = Iterator.concat(arr10, arr10, arr10, arr10, arr10).toArray();
+    },
+  });
+
+  bench("concat 2 arrays (20 + 20 elements)", {
+    run: () => {
+      const result = Iterator.concat(arr20, arr20).toArray();
+    },
+  });
+
+  bench("concat + filter + toArray (20 + 20 elements)", {
+    run: () => {
+      const result = Iterator.concat(arr20, arr20)
+        .filter((x) => x % 2 === 0)
+        .toArray();
+    },
+  });
+
+  bench("concat + map + take (20 + 20 elements, take 10)", {
+    run: () => {
+      const result = Iterator.concat(arr20, arr20)
+        .map((x) => x * 3)
+        .take(10)
+        .toArray();
+    },
+  });
+
+  bench("concat Sets (15 + 15 elements)", {
+    setup: () => ({
+      a: new Set(Array.from({ length: 15 }, (_, i) => i)),
+      b: new Set(Array.from({ length: 15 }, (_, i) => i + 15)),
+    }),
+    run: (ctx) => {
+      const result = Iterator.concat(ctx.a, ctx.b).toArray();
+    },
+  });
+
+  bench("concat strings (13 + 13 characters)", {
+    run: () => {
+      const result = Iterator.concat("abcdefghijklm", "nopqrstuvwxyz").toArray();
+    },
+  });
+});
+
 suite("built-in iterator helpers", () => {
   const arr50 = Array.from({ length: 50 }, (_, i) => i);
 
