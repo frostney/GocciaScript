@@ -239,7 +239,7 @@ GocciaScript uses a layered error approach:
 
 ## Mark-and-Sweep Garbage Collector
 
-GocciaScript runs inside a FreePascal host with manual memory management, but the interpreter itself has no built-in memory management for the values it creates. In long-running contexts — benchmarking, the REPL, or extended user sessions — the heap grows unboundedly without automatic reclamation. The runtime therefore uses a tracing garbage collector (`Goccia.GarbageCollector.pas`) to manage the lifecycle of interpreter-created values.
+GocciaScript runs inside a FreePascal host with manual memory management, but neither the interpreter nor the bytecode VM has built-in memory management for the values it creates. In long-running contexts — benchmarking, the REPL, or extended user sessions — the heap grows unboundedly without automatic reclamation. The runtime therefore uses a unified tracing garbage collector (`Goccia.GarbageCollector.pas`) shared by both execution backends to manage the lifecycle of all runtime values.
 
 **Why not manual memory management?**
 
