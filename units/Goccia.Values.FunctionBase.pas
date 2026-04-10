@@ -93,12 +93,11 @@ uses
   Math,
   SysUtils,
 
-  GarbageCollector.Generic,
-
   Goccia.Arguments.ArrayLike,
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
   Goccia.Error,
+  Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,

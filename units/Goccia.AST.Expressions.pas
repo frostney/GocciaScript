@@ -548,12 +548,11 @@ type
 implementation
 
 uses
-  GarbageCollector.Generic,
-
   Goccia.Coverage,
   Goccia.Evaluator,
   Goccia.Evaluator.Arithmetic,
   Goccia.Evaluator.Assignment,
+  Goccia.GarbageCollector,
   Goccia.RegExp.Runtime,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,

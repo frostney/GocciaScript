@@ -7,9 +7,8 @@ interface
 uses
   Generics.Collections,
 
-  GarbageCollector.Managed,
-
   Goccia.Error.ThrowErrorCallback,
+  Goccia.GarbageCollector,
   Goccia.Scope.BindingMap,
   Goccia.Token,
   Goccia.Values.Primitives;
@@ -132,8 +131,6 @@ implementation
 
 uses
   SysUtils,
-
-  GarbageCollector.Generic,
 
   Goccia.Error,
   Goccia.Keywords.Reserved;
@@ -358,8 +355,7 @@ end;
 
 procedure TGocciaScope.MarkReferences;
 var
-  Bindings: TGocciaScopeBindingMap.TValueArray;
-  I: Integer;
+  Pair: TGocciaScopeBindingMap.TKeyValuePair;
 begin
   if GCMarked then Exit;
   inherited;
@@ -370,10 +366,9 @@ begin
   if Assigned(FThisValue) then
     FThisValue.MarkReferences;
 
-  Bindings := FLexicalBindings.Values;
-  for I := 0 to Length(Bindings) - 1 do
-    if Assigned(Bindings[I].Value) then
-      Bindings[I].Value.MarkReferences;
+  for Pair in FLexicalBindings do
+    if Assigned(Pair.Value.Value) then
+      Pair.Value.Value.MarkReferences;
 end;
 
 { TGocciaGlobalScope }

@@ -62,8 +62,7 @@ type
 implementation
 
 uses
-  GarbageCollector.Generic,
-
+  Goccia.GarbageCollector,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,

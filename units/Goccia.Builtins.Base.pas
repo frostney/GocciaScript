@@ -28,7 +28,7 @@ type
 implementation
 
 uses
-  GarbageCollector.Generic;
+  Goccia.GarbageCollector;
 
 constructor TGocciaBuiltin.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin

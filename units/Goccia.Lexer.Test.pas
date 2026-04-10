@@ -6,9 +6,9 @@ uses
   Generics.Collections,
   SysUtils,
 
-  GarbageCollector.Generic,
   TestRunner,
 
+  Goccia.GarbageCollector,
   Goccia.Lexer,
   Goccia.TestSetup,
   Goccia.Token;

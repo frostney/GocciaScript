@@ -67,9 +67,9 @@ uses
   DateUtils,
   SysUtils,
 
-  GarbageCollector.Generic,
   TimingUtils,
 
+  Goccia.GarbageCollector,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,

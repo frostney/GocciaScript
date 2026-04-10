@@ -37,8 +37,7 @@ type
 implementation
 
 uses
-  GarbageCollector.Generic,
-
+  Goccia.GarbageCollector,
   Goccia.Values.NativeFunction;
 
 constructor TGocciaBooleanObjectValue.Create(const APrimitive: TGocciaBooleanLiteralValue; const AClass: TGocciaClassValue = nil);

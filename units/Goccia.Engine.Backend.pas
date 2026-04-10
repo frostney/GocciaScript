@@ -81,12 +81,11 @@ implementation
 uses
   SysUtils,
 
-  GarbageCollector.Generic,
-
   Goccia.CallStack,
   Goccia.Constants.PropertyNames,
   Goccia.Coverage,
   Goccia.Error,
+  Goccia.GarbageCollector,
   Goccia.Profiler,
   Goccia.Scope,
   Goccia.Scope.BindingMap,

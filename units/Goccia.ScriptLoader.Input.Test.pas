@@ -6,9 +6,9 @@ uses
   Classes,
   SysUtils,
 
-  GarbageCollector.Generic,
   TestRunner,
 
+  Goccia.GarbageCollector,
   Goccia.ScriptLoader.Input,
   Goccia.TestSetup;
 

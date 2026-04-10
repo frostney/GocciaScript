@@ -40,10 +40,9 @@ implementation
 uses
   SysUtils,
 
-  GarbageCollector.Generic,
-
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Utils,
   Goccia.Values.Error,

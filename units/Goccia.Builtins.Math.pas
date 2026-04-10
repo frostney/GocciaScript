@@ -65,11 +65,10 @@ implementation
 uses
   Math,
 
-  GarbageCollector.Generic,
-
   Goccia.Arguments.Converter,
   Goccia.Arguments.Validator,
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,

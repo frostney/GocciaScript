@@ -31,8 +31,7 @@ procedure InitializeEnumSymbols(const AEnum: TGocciaEnumValue);
 implementation
 
 uses
-  GarbageCollector.Generic,
-
+  Goccia.GarbageCollector,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.SymbolValue;
 

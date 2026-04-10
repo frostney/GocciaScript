@@ -58,11 +58,11 @@ implementation
 uses
   Classes,
 
-  GarbageCollector.Generic,
   HashMap,
 
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,

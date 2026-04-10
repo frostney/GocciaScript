@@ -47,9 +47,8 @@ uses
   Math,
   SysUtils,
 
-  GarbageCollector.Generic,
-
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
 

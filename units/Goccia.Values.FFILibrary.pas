@@ -46,10 +46,9 @@ implementation
 uses
   SysUtils,
 
-  GarbageCollector.Generic,
-
   Goccia.FFI.Call,
   Goccia.FFI.Types,
+  Goccia.GarbageCollector,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,

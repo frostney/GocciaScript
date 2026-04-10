@@ -23,9 +23,8 @@ type
 implementation
 
 uses
-  GarbageCollector.Generic,
-
   Goccia.FileExtensions,
+  Goccia.GarbageCollector,
   Goccia.JSON,
   Goccia.TextFiles,
   Goccia.Values.ObjectValue,

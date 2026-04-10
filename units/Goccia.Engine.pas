@@ -221,7 +221,6 @@ uses
   SysUtils,
   TypInfo,
 
-  GarbageCollector.Generic,
   TimingUtils,
 
   Goccia.CallStack,
@@ -229,6 +228,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Coverage,
   Goccia.Error,
+  Goccia.GarbageCollector,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.MicrotaskQueue,

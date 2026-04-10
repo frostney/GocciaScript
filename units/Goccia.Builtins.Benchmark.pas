@@ -79,8 +79,7 @@ uses
   Math,
   SysUtils,
 
-  GarbageCollector.Generic,
-
+  Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Values.ArrayValue,
   Goccia.Values.NativeFunction,

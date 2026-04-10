@@ -55,10 +55,9 @@ uses
   StrUtils,
   SysUtils,
 
-  GarbageCollector.Generic,
-
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.RegExp.Runtime,
   Goccia.Utils,
   Goccia.Values.ArrayValue,

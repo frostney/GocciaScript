@@ -6,9 +6,9 @@ uses
   Classes,
   SysUtils,
 
-  GarbageCollector.Generic,
   StringBuffer,
 
+  Goccia.GarbageCollector,
   Goccia.TextFiles,
   Goccia.TOML,
   Goccia.Values.Primitives;

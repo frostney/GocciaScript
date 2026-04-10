@@ -7,9 +7,9 @@ uses
   Math,
   SysUtils,
 
-  GarbageCollector.Generic,
   StringBuffer,
 
+  Goccia.GarbageCollector,
   Goccia.JSON5,
   Goccia.TextFiles,
   Goccia.Values.ArrayValue,

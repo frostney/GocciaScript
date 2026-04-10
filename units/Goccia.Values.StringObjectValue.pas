@@ -81,9 +81,8 @@ uses
   StrUtils,
   SysUtils,
 
-  GarbageCollector.Generic,
-
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.RegExp.Runtime,
   Goccia.Utils,
   Goccia.Values.ArrayValue,

@@ -86,10 +86,9 @@ implementation
 uses
   SysUtils,
 
-  GarbageCollector.Generic,
-
   Goccia.Constants.PropertyNames,
   Goccia.Error,
+  Goccia.GarbageCollector,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;

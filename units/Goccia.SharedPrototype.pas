@@ -22,9 +22,8 @@ type
 implementation
 
 uses
-  GarbageCollector.Generic,
-
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Values.ClassValue;
 
 constructor TGocciaSharedPrototype.Create(const AMethodHost: TGocciaValue);

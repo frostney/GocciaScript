@@ -80,10 +80,9 @@ type
 implementation
 
 uses
-  GarbageCollector.Generic,
-
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,

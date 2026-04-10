@@ -7,7 +7,6 @@ uses
   Generics.Collections,
   SysUtils,
 
-  GarbageCollector.Generic,
   TestRunner,
 
   Goccia.AST.Expressions,
@@ -21,6 +20,7 @@ uses
   Goccia.Compiler,
   Goccia.Compiler.Scope,
   Goccia.Error,
+  Goccia.GarbageCollector,
   Goccia.Lexer,
   Goccia.Parser,
   Goccia.TestSetup,
