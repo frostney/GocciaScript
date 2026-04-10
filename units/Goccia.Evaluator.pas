@@ -2652,13 +2652,30 @@ begin
     Exit;
   end;
 
-  if APrivatePropertyCompoundAssignmentExpression.Operator = gttNullishCoalescingAssign then
+  // ES2026 §13.15.2 step 3: short-circuit logical/nullish assignment
+  if APrivatePropertyCompoundAssignmentExpression.Operator in
+     [gttNullishCoalescingAssign, gttLogicalAndAssign, gttLogicalOrAssign] then
   begin
-    if not ((CurrentValue is TGocciaUndefinedLiteralValue) or
-            (CurrentValue is TGocciaNullLiteralValue)) then
-    begin
-      Result := CurrentValue;
-      Exit;
+    case APrivatePropertyCompoundAssignmentExpression.Operator of
+      gttNullishCoalescingAssign:
+        if not ((CurrentValue is TGocciaUndefinedLiteralValue) or
+                (CurrentValue is TGocciaNullLiteralValue)) then
+        begin
+          Result := CurrentValue;
+          Exit;
+        end;
+      gttLogicalAndAssign:
+        if not CurrentValue.ToBooleanLiteral.Value then
+        begin
+          Result := CurrentValue;
+          Exit;
+        end;
+      gttLogicalOrAssign:
+        if CurrentValue.ToBooleanLiteral.Value then
+        begin
+          Result := CurrentValue;
+          Exit;
+        end;
     end;
 
     Value := EvaluateExpression(APrivatePropertyCompoundAssignmentExpression.Value, AContext);

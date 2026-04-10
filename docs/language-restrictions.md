@@ -154,6 +154,7 @@ C[Symbol.metadata].decorated; // true
 - Logical operators (`&&`, `||`, `!`).
 - Nullish coalescing (`??`).
 - Nullish coalescing assignment (`??=`).
+- Logical assignment (`&&=`, `||=`).
 - Optional chaining (`?.` for property access, computed access, and method calls).
 - Bitwise operators (`&`, `|`, `^`, `<<`, `>>`, `>>>`).
 - Ternary operator (`? :`).

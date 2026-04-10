@@ -54,6 +54,10 @@ function TokenTypeToRuntimeOp(
   const ATokenType: TGocciaTokenType): TGocciaOpCode;
 function CompoundOpToRuntimeOp(
   const ATokenType: TGocciaTokenType): TGocciaOpCode;
+function IsShortCircuitAssignment(
+  const ATokenType: TGocciaTokenType): Boolean; inline;
+function ShortCircuitJumpOp(
+  const ATokenType: TGocciaTokenType): TGocciaOpCode; inline;
 
 implementation
 
@@ -179,6 +183,25 @@ begin
     gttUnsignedRightShiftAssign: Result := OP_USHR;
   else
     Result := OP_ADD;
+  end;
+end;
+
+function IsShortCircuitAssignment(
+  const ATokenType: TGocciaTokenType): Boolean;
+begin
+  Result := ATokenType in [gttNullishCoalescingAssign,
+    gttLogicalAndAssign, gttLogicalOrAssign];
+end;
+
+function ShortCircuitJumpOp(
+  const ATokenType: TGocciaTokenType): TGocciaOpCode;
+begin
+  case ATokenType of
+    gttNullishCoalescingAssign: Result := OP_JUMP_IF_NOT_NULLISH;
+    gttLogicalAndAssign:        Result := OP_JUMP_IF_FALSE;
+    gttLogicalOrAssign:         Result := OP_JUMP_IF_TRUE;
+  else
+    Result := OP_JUMP_IF_NOT_NULLISH;
   end;
 end;
 
