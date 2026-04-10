@@ -590,10 +590,14 @@ begin
   AddToken(gttRegex, PatternBuffer.ToString + REGEX_SEPARATOR + Flags);
 end;
 
+// ES2026 §12.9.3 NumericLiteral
 procedure TGocciaLexer.ScanNumber;
 var
   Ch: Char;
+  HasSeparator: Boolean;
+  Lexeme: string;
 begin
+  HasSeparator := False;
   Ch := Peek;
 
   if Ch = '0' then
@@ -607,8 +611,19 @@ begin
       if not CharInSet(Peek, ['0'..'9', 'a'..'f', 'A'..'F']) then
         raise TGocciaLexerError.Create('Invalid hexadecimal number', FLine, FColumn, FFileName, GetSourceLines,
           SSuggestHexNumberFormat);
-      while CharInSet(Peek, ['0'..'9', 'a'..'f', 'A'..'F']) do
-        Advance;
+      while CharInSet(Peek, ['0'..'9', 'a'..'f', 'A'..'F', '_']) do
+      begin
+        if Peek = '_' then
+        begin
+          HasSeparator := True;
+          Advance;
+          if not CharInSet(Peek, ['0'..'9', 'a'..'f', 'A'..'F']) then
+            raise TGocciaLexerError.Create('Numeric separator must be between digits',
+              FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
+        end
+        else
+          Advance;
+      end;
     end
     else if (Ch = 'b') or (Ch = 'B') then
     begin
@@ -616,8 +631,19 @@ begin
       if not CharInSet(Peek, ['0', '1']) then
         raise TGocciaLexerError.Create('Invalid binary number', FLine, FColumn, FFileName, GetSourceLines,
           SSuggestBinaryNumberFormat);
-      while CharInSet(Peek, ['0', '1']) do
-        Advance;
+      while CharInSet(Peek, ['0', '1', '_']) do
+      begin
+        if Peek = '_' then
+        begin
+          HasSeparator := True;
+          Advance;
+          if not CharInSet(Peek, ['0', '1']) then
+            raise TGocciaLexerError.Create('Numeric separator must be between digits',
+              FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
+        end
+        else
+          Advance;
+      end;
     end
     else if (Ch = 'o') or (Ch = 'O') then
     begin
@@ -625,26 +651,67 @@ begin
       if not CharInSet(Peek, ['0'..'7']) then
         raise TGocciaLexerError.Create('Invalid octal number', FLine, FColumn, FFileName, GetSourceLines,
           SSuggestOctalNumberFormat);
-      while CharInSet(Peek, ['0'..'7']) do
-        Advance;
+      while CharInSet(Peek, ['0'..'7', '_']) do
+      begin
+        if Peek = '_' then
+        begin
+          HasSeparator := True;
+          Advance;
+          if not CharInSet(Peek, ['0'..'7']) then
+            raise TGocciaLexerError.Create('Numeric separator must be between digits',
+              FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
+        end
+        else
+          Advance;
+      end;
     end
     else
     begin
+      // ES2021 §12.9.3: numeric separators are not allowed after a leading 0
+      // in DecimalIntegerLiteral (0 is a standalone production).
+      if Peek = '_' then
+        raise TGocciaLexerError.Create('Numeric separator cannot be used after leading 0',
+          FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
       while CharInSet(Peek, ['0'..'9']) do
         Advance;
     end;
   end
   else
   begin
-    while CharInSet(Peek, ['0'..'9']) do
-      Advance;
+    while CharInSet(Peek, ['0'..'9', '_']) do
+    begin
+      if Peek = '_' then
+      begin
+        HasSeparator := True;
+        Advance;
+        if not CharInSet(Peek, ['0'..'9']) then
+          raise TGocciaLexerError.Create('Numeric separator must be between digits',
+            FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
+      end
+      else
+        Advance;
+    end;
   end;
 
-  if (Peek = '.') and CharInSet(PeekNext, ['0'..'9']) then
+  if (Peek = '.') and (PeekNext = '_') then
+    raise TGocciaLexerError.Create('Numeric separator must be between digits',
+      FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator)
+  else if (Peek = '.') and CharInSet(PeekNext, ['0'..'9']) then
   begin
     Advance;
-    while CharInSet(Peek, ['0'..'9']) do
-      Advance;
+    while CharInSet(Peek, ['0'..'9', '_']) do
+    begin
+      if Peek = '_' then
+      begin
+        HasSeparator := True;
+        Advance;
+        if not CharInSet(Peek, ['0'..'9']) then
+          raise TGocciaLexerError.Create('Numeric separator must be between digits',
+            FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
+      end
+      else
+        Advance;
+    end;
   end;
 
   if CharInSet(Peek, ['e', 'E']) then
@@ -655,11 +722,25 @@ begin
     if not CharInSet(Peek, ['0'..'9']) then
       raise TGocciaLexerError.Create('Invalid scientific notation', FLine, FColumn, FFileName, GetSourceLines,
         SSuggestScientificNotation);
-    while CharInSet(Peek, ['0'..'9']) do
-      Advance;
+    while CharInSet(Peek, ['0'..'9', '_']) do
+    begin
+      if Peek = '_' then
+      begin
+        HasSeparator := True;
+        Advance;
+        if not CharInSet(Peek, ['0'..'9']) then
+          raise TGocciaLexerError.Create('Numeric separator must be between digits',
+            FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
+      end
+      else
+        Advance;
+    end;
   end;
 
-  AddToken(gttNumber, Copy(FSource, FStart, FCurrent - FStart));
+  Lexeme := Copy(FSource, FStart, FCurrent - FStart);
+  if HasSeparator then
+    Lexeme := StringReplace(Lexeme, '_', '', [rfReplaceAll]);
+  AddToken(gttNumber, Lexeme);
 end;
 
 function TGocciaLexer.IsValidIdentifierChar(const C: Char): Boolean;

@@ -884,6 +884,47 @@ jobs:
           test "$error_status_bc" -eq 1
           printf '%s\n' "$error_output_bc" | grep -q 'SyntaxError'
 
+      - name: Check numeric separator rejection
+        run: |
+          # Trailing separator
+          set +e; out="$(printf '1_000_;\n' | ./build/ScriptLoader 2>&1)"; st=$?; set -e
+          test "$st" -eq 1
+          printf '%s\n' "$out" | grep -q 'Numeric separator must be between digits'
+
+          # Leading separator after hex prefix
+          set +e; out="$(printf '0x_FF;\n' | ./build/ScriptLoader 2>&1)"; st=$?; set -e
+          test "$st" -eq 1
+
+          # Leading separator after binary prefix
+          set +e; out="$(printf '0b_10;\n' | ./build/ScriptLoader 2>&1)"; st=$?; set -e
+          test "$st" -eq 1
+
+          # Leading separator after octal prefix
+          set +e; out="$(printf '0o_77;\n' | ./build/ScriptLoader 2>&1)"; st=$?; set -e
+          test "$st" -eq 1
+
+          # Consecutive separators
+          set +e; out="$(printf '1__000;\n' | ./build/ScriptLoader 2>&1)"; st=$?; set -e
+          test "$st" -eq 1
+          printf '%s\n' "$out" | grep -q 'Numeric separator must be between digits'
+
+          # Separator after leading 0
+          set +e; out="$(printf '0_1;\n' | ./build/ScriptLoader 2>&1)"; st=$?; set -e
+          test "$st" -eq 1
+          printf '%s\n' "$out" | grep -q 'Numeric separator cannot be used after leading 0'
+
+          # Separator before decimal point
+          set +e; out="$(printf '1_.5;\n' | ./build/ScriptLoader 2>&1)"; st=$?; set -e
+          test "$st" -eq 1
+
+          # Separator after decimal point
+          set +e; out="$(printf '1._5;\n' | ./build/ScriptLoader 2>&1)"; st=$?; set -e
+          test "$st" -eq 1
+
+          # Separator after exponent indicator
+          set +e; out="$(printf '1e_10;\n' | ./build/ScriptLoader 2>&1)"; st=$?; set -e
+          test "$st" -eq 1
+
   artifacts:
     needs: [test, toml-compliance, json5-compliance, benchmark, examples]
     if: github.ref == 'refs/heads/main'
