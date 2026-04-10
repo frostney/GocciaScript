@@ -64,7 +64,7 @@ begin
   FCurrentIterator := nil;
 end;
 
-// TC39 Iterator Sequencing §1 step 3.a: Open the next iterable's iterator
+// TC39 Iterator Sequencing §1 Iterator.concat ( ...items ) — steps 3.a.i-iii
 function TGocciaConcatIteratorValue.OpenNextIterator: Boolean;
 var
   CallArgs: TGocciaArgumentsCollection;
@@ -104,7 +104,7 @@ begin
   Result := True;
 end;
 
-// TC39 Iterator Sequencing §1 step 3.a.v: Yield values from each iterable in sequence
+// TC39 Iterator Sequencing §1 Iterator.concat ( ...items ) — step 3.a.iv-v
 function TGocciaConcatIteratorValue.AdvanceNext: TGocciaObjectValue;
 var
   InnerResult: TGocciaObjectValue;
@@ -134,16 +134,21 @@ begin
       FCurrentIterator := nil;
     end;
 
-    if not OpenNextIterator then
-    begin
+    try
+      if not OpenNextIterator then
+      begin
+        FDone := True;
+        Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
+        Exit;
+      end;
+    except
       FDone := True;
-      Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
-      Exit;
+      raise;
     end;
   until False;
 end;
 
-// TC39 Iterator Sequencing §1 step 3.a.v: DirectNext variant for performance
+// TC39 Iterator Sequencing §1 Iterator.concat ( ...items ) — step 3.a.iv-v (DirectNext)
 function TGocciaConcatIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
 var
   InnerDone: Boolean;
@@ -176,12 +181,17 @@ begin
       FCurrentIterator := nil;
     end;
 
-    if not OpenNextIterator then
-    begin
+    try
+      if not OpenNextIterator then
+      begin
+        FDone := True;
+        ADone := True;
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+        Exit;
+      end;
+    except
       FDone := True;
-      ADone := True;
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
+      raise;
     end;
   until False;
 end;
