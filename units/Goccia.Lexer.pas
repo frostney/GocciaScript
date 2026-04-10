@@ -667,19 +667,13 @@ begin
     end
     else
     begin
-      while CharInSet(Peek, ['0'..'9', '_']) do
-      begin
-        if Peek = '_' then
-        begin
-          HasSeparator := True;
-          Advance;
-          if not CharInSet(Peek, ['0'..'9']) then
-            raise TGocciaLexerError.Create('Numeric separator must be between digits',
-              FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
-        end
-        else
-          Advance;
-      end;
+      // ES2021 §12.9.3: numeric separators are not allowed after a leading 0
+      // in DecimalIntegerLiteral (0 is a standalone production).
+      if Peek = '_' then
+        raise TGocciaLexerError.Create('Numeric separator cannot be used after leading 0',
+          FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
+      while CharInSet(Peek, ['0'..'9']) do
+        Advance;
     end;
   end
   else

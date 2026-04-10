@@ -74,10 +74,6 @@ describe("numeric separators", () => {
     expect(typeof 0o77_77).toBe("number");
   });
 
-  test("separator with zero prefix decimal", () => {
-    expect(0_1).toBe(1);
-  });
-
   test("separator in negative expressions", () => {
     expect(-1_000).toBe(-1000);
     expect(-0xFF_FF).toBe(-65535);
@@ -96,6 +92,7 @@ describe("numeric separators", () => {
   //   printf '1_000_' | ./build/ScriptLoader   → SyntaxError
   //   printf '0x_FF'  | ./build/ScriptLoader   → SyntaxError
   //   printf '1__000' | ./build/ScriptLoader   → SyntaxError
+  //   printf '0_1'    | ./build/ScriptLoader   → SyntaxError
   //   printf '1_.5'   | ./build/ScriptLoader   → SyntaxError
   //   printf '1._5'   | ./build/ScriptLoader   → SyntaxError
   //   printf '1e_10'  | ./build/ScriptLoader   → SyntaxError
