@@ -633,6 +633,7 @@ The transformer generates an internal source map for accurate error line/column 
 - Regex literals: `/pattern/flags`
 - Flags: `d`, `g`, `i`, `m`, `s`, `u`, `v`, `y`
 - RegExp instance properties: `source`, canonicalized `flags`, `lastIndex`, `global`, `ignoreCase`, `multiline`, `dotAll`, `unicode`, `sticky`, `unicodeSets`, `hasIndices`
+- `RegExp.escape()` (TC39 RegExp Escaping proposal)
 - `RegExp.prototype.exec()`, `test()`, `toString()`, and the `Symbol.match`, `Symbol.matchAll`, `Symbol.replace`, `Symbol.search`, and `Symbol.split` hooks
 - String integrations for `replace`, `replaceAll`, `split`, `match`, `matchAll`, and `search`, including custom protocol objects with the corresponding well-known symbol methods
 

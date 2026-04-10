@@ -382,6 +382,12 @@ RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pat
 | `unicodeSets` | `true` when the `v` flag is present |
 | `hasIndices` | `true` when the `d` flag is present |
 
+**Static methods:**
+
+| Method | Description |
+|--------|-------------|
+| `escape(string)` | Returns a string with all regex-significant characters escaped so the result can be safely interpolated into a pattern. Implements the TC39 RegExp Escaping proposal. Syntax characters are backslash-escaped; ClassSet-reserved punctuators, whitespace, and line terminators are hex-encoded (`\xHH` / `\uHHHH`). A leading digit or ASCII letter is also hex-encoded to prevent ambiguity with backreferences. |
+
 **Prototype methods:**
 
 | Method | Description |
