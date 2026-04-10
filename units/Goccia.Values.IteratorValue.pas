@@ -75,6 +75,17 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
+procedure CloseIteratorPreservingError(const AIterator: TGocciaIteratorValue);
+begin
+  if not Assigned(AIterator) then
+    Exit;
+  try
+    AIterator.Close;
+  except
+    // Preserve the original abrupt-completion error when cleanup also throws.
+  end;
+end;
+
 function CreateIteratorResult(const AValue: TGocciaValue; const ADone: Boolean): TGocciaObjectValue;
 begin
   Result := TGocciaObjectValue.Create;
@@ -676,43 +687,63 @@ var
   Mode: TGocciaZipMode;
   Items: TGocciaValueList;
   PaddingItems: TGocciaValueList;
-  I, Count: Integer;
+  I, J, Count, Acquired: Integer;
   ModeStr: string;
+  GC: TGarbageCollector;
 begin
   // TC39 Joint Iteration §1.1 step 1: If iterables is not an Object, throw TypeError
   if AArgs.Length < 1 then
     ThrowTypeError('Iterator.zip requires an argument');
 
   IterablesArg := AArgs.GetElement(0);
+  GC := TGarbageCollector.Instance;
 
   // TC39 Joint Iteration §1.1 step 2: Get iterator from iterables
   OuterIterator := GetIteratorFromIterable(IterablesArg);
   if OuterIterator = nil then
     ThrowTypeError('Iterator.zip: first argument must be iterable');
 
-  // TC39 Joint Iteration §1.1 step 3: Collect all inner iterables
-  Items := TGocciaValueList.Create(False);
+  GC.AddTempRoot(OuterIterator);
   try
-    Item := OuterIterator.DirectNext(OuterDone);
-    while not OuterDone do
-    begin
-      Items.Add(Item);
+    // TC39 Joint Iteration §1.1 step 3: Collect all inner iterables
+    Items := TGocciaValueList.Create(False);
+    try
       Item := OuterIterator.DirectNext(OuterDone);
-    end;
+      while not OuterDone do
+      begin
+        Items.Add(Item);
+        Item := OuterIterator.DirectNext(OuterDone);
+      end;
 
-    Count := Items.Count;
-    SetLength(Iterators, Count);
+      Count := Items.Count;
+      SetLength(Iterators, Count);
+      Acquired := 0;
 
-    // TC39 Joint Iteration §1.1 step 4: Get iterators from each iterable
-    for I := 0 to Count - 1 do
-    begin
-      InnerIterator := GetIteratorFromIterable(Items[I]);
-      if InnerIterator = nil then
-        ThrowTypeError('Iterator.zip: all items in iterables must be iterable');
-      Iterators[I] := InnerIterator;
+      // TC39 Joint Iteration §1.1 step 4: Get iterators from each iterable
+      try
+        for I := 0 to Count - 1 do
+        begin
+          InnerIterator := GetIteratorFromIterable(Items[I]);
+          if InnerIterator = nil then
+            ThrowTypeError('Iterator.zip: all items in iterables must be iterable');
+          Iterators[I] := InnerIterator;
+          GC.AddTempRoot(InnerIterator);
+          Acquired := I + 1;
+        end;
+      except
+        // Close and unroot already-acquired iterators before re-raising
+        for J := 0 to Acquired - 1 do
+        begin
+          CloseIteratorPreservingError(Iterators[J]);
+          GC.RemoveTempRoot(Iterators[J]);
+        end;
+        raise;
+      end;
+    finally
+      Items.Free;
     end;
   finally
-    Items.Free;
+    GC.RemoveTempRoot(OuterIterator);
   end;
 
   // TC39 Joint Iteration §1.1 step 5: Parse options
@@ -721,62 +752,68 @@ begin
   for I := 0 to Count - 1 do
     Padding[I] := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  if AArgs.Length >= 2 then
-  begin
-    OptionsArg := AArgs.GetElement(1);
-    if Assigned(OptionsArg) and not (OptionsArg is TGocciaUndefinedLiteralValue) then
+  try
+    if AArgs.Length >= 2 then
     begin
-      if not (OptionsArg is TGocciaObjectValue) then
-        ThrowTypeError('Iterator.zip: options must be an object');
-
-      // TC39 Joint Iteration §1.1 step 5a: Get mode
-      ModeVal := OptionsArg.GetProperty(PROP_MODE);
-      if Assigned(ModeVal) and not (ModeVal is TGocciaUndefinedLiteralValue) then
+      OptionsArg := AArgs.GetElement(1);
+      if Assigned(OptionsArg) and not (OptionsArg is TGocciaUndefinedLiteralValue) then
       begin
-        if not (ModeVal is TGocciaStringLiteralValue) then
-          ThrowTypeError('Iterator.zip: mode must be a string');
-        ModeStr := TGocciaStringLiteralValue(ModeVal).Value;
-        if ModeStr = ZIP_MODE_SHORTEST then
-          Mode := zmShortest
-        else if ModeStr = ZIP_MODE_LONGEST then
-          Mode := zmLongest
-        else if ModeStr = ZIP_MODE_STRICT then
-          Mode := zmStrict
-        else
-          ThrowRangeError('Iterator.zip: invalid mode "' + ModeStr + '"');
-      end;
+        if not (OptionsArg is TGocciaObjectValue) then
+          ThrowTypeError('Iterator.zip: options must be an object');
 
-      // TC39 Joint Iteration §1.1 step 5b: Get padding (only for longest mode)
-      if Mode = zmLongest then
-      begin
-        PaddingVal := OptionsArg.GetProperty(PROP_PADDING);
-        if Assigned(PaddingVal) and not (PaddingVal is TGocciaUndefinedLiteralValue) then
+        // TC39 Joint Iteration §1.1 step 5a: Get mode
+        ModeVal := OptionsArg.GetProperty(PROP_MODE);
+        if Assigned(ModeVal) and not (ModeVal is TGocciaUndefinedLiteralValue) then
         begin
-          PaddingIterator := GetIteratorFromIterable(PaddingVal);
-          if PaddingIterator = nil then
-            ThrowTypeError('Iterator.zip: padding must be iterable');
-          PaddingItems := TGocciaValueList.Create(False);
-          try
-            PaddingItem := PaddingIterator.DirectNext(PaddingDone);
-            while not PaddingDone do
-            begin
-              PaddingItems.Add(PaddingItem);
+          if not (ModeVal is TGocciaStringLiteralValue) then
+            ThrowTypeError('Iterator.zip: mode must be a string');
+          ModeStr := TGocciaStringLiteralValue(ModeVal).Value;
+          if ModeStr = ZIP_MODE_SHORTEST then
+            Mode := zmShortest
+          else if ModeStr = ZIP_MODE_LONGEST then
+            Mode := zmLongest
+          else if ModeStr = ZIP_MODE_STRICT then
+            Mode := zmStrict
+          else
+            ThrowRangeError('Iterator.zip: invalid mode "' + ModeStr + '"');
+        end;
+
+        // TC39 Joint Iteration §1.1 step 5b: Get padding (only for longest mode)
+        if Mode = zmLongest then
+        begin
+          PaddingVal := OptionsArg.GetProperty(PROP_PADDING);
+          if Assigned(PaddingVal) and not (PaddingVal is TGocciaUndefinedLiteralValue) then
+          begin
+            PaddingIterator := GetIteratorFromIterable(PaddingVal);
+            if PaddingIterator = nil then
+              ThrowTypeError('Iterator.zip: padding must be iterable');
+            PaddingItems := TGocciaValueList.Create(False);
+            try
               PaddingItem := PaddingIterator.DirectNext(PaddingDone);
+              while not PaddingDone do
+              begin
+                PaddingItems.Add(PaddingItem);
+                PaddingItem := PaddingIterator.DirectNext(PaddingDone);
+              end;
+              for I := 0 to Count - 1 do
+              begin
+                if I < PaddingItems.Count then
+                  Padding[I] := PaddingItems[I];
+              end;
+            finally
+              PaddingItems.Free;
             end;
-            for I := 0 to Count - 1 do
-            begin
-              if I < PaddingItems.Count then
-                Padding[I] := PaddingItems[I];
-            end;
-          finally
-            PaddingItems.Free;
           end;
         end;
       end;
     end;
-  end;
 
-  Result := TGocciaZipIteratorValue.Create(Iterators, Padding, Mode);
+    Result := TGocciaZipIteratorValue.Create(Iterators, Padding, Mode);
+  finally
+    // Unroot iterators — the zip iterator now owns them via MarkReferences
+    for I := 0 to Count - 1 do
+      GC.RemoveTempRoot(Iterators[I]);
+  end;
 end;
 
 { Iterator.zipKeyed() }
@@ -794,8 +831,9 @@ var
   Iterators: array of TGocciaIteratorValue;
   Padding: array of TGocciaValue;
   Mode: TGocciaZipMode;
-  I, Count: Integer;
+  I, J, Count, Acquired: Integer;
   ModeStr: string;
+  GC: TGarbageCollector;
 begin
   // TC39 Joint Iteration §1.2 step 1: If iterables is not an Object, throw TypeError
   if AArgs.Length < 1 then
@@ -805,19 +843,34 @@ begin
   if not (IterablesArg is TGocciaObjectValue) then
     ThrowTypeError('Iterator.zipKeyed: first argument must be an object');
 
+  GC := TGarbageCollector.Instance;
+
   // TC39 Joint Iteration §1.2 step 2: Get own enumerable property keys
   Keys := TGocciaObjectValue(IterablesArg).GetEnumerablePropertyNames;
   Count := Length(Keys);
 
   // TC39 Joint Iteration §1.2 step 3: Get iterators from each property value
   SetLength(Iterators, Count);
-  for I := 0 to Count - 1 do
-  begin
-    PropValue := IterablesArg.GetProperty(Keys[I]);
-    InnerIterator := GetIteratorFromIterable(PropValue);
-    if InnerIterator = nil then
-      ThrowTypeError('Iterator.zipKeyed: property "' + Keys[I] + '" value must be iterable');
-    Iterators[I] := InnerIterator;
+  Acquired := 0;
+  try
+    for I := 0 to Count - 1 do
+    begin
+      PropValue := IterablesArg.GetProperty(Keys[I]);
+      InnerIterator := GetIteratorFromIterable(PropValue);
+      if InnerIterator = nil then
+        ThrowTypeError('Iterator.zipKeyed: property "' + Keys[I] + '" value must be iterable');
+      Iterators[I] := InnerIterator;
+      GC.AddTempRoot(InnerIterator);
+      Acquired := I + 1;
+    end;
+  except
+    // Close and unroot already-acquired iterators before re-raising
+    for J := 0 to Acquired - 1 do
+    begin
+      CloseIteratorPreservingError(Iterators[J]);
+      GC.RemoveTempRoot(Iterators[J]);
+    end;
+    raise;
   end;
 
   // TC39 Joint Iteration §1.2 step 4: Parse options
@@ -826,51 +879,57 @@ begin
   for I := 0 to Count - 1 do
     Padding[I] := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  if AArgs.Length >= 2 then
-  begin
-    OptionsArg := AArgs.GetElement(1);
-    if Assigned(OptionsArg) and not (OptionsArg is TGocciaUndefinedLiteralValue) then
+  try
+    if AArgs.Length >= 2 then
     begin
-      if not (OptionsArg is TGocciaObjectValue) then
-        ThrowTypeError('Iterator.zipKeyed: options must be an object');
-
-      // TC39 Joint Iteration §1.2 step 4a: Get mode
-      ModeVal := OptionsArg.GetProperty(PROP_MODE);
-      if Assigned(ModeVal) and not (ModeVal is TGocciaUndefinedLiteralValue) then
+      OptionsArg := AArgs.GetElement(1);
+      if Assigned(OptionsArg) and not (OptionsArg is TGocciaUndefinedLiteralValue) then
       begin
-        if not (ModeVal is TGocciaStringLiteralValue) then
-          ThrowTypeError('Iterator.zipKeyed: mode must be a string');
-        ModeStr := TGocciaStringLiteralValue(ModeVal).Value;
-        if ModeStr = ZIP_MODE_SHORTEST then
-          Mode := zmShortest
-        else if ModeStr = ZIP_MODE_LONGEST then
-          Mode := zmLongest
-        else if ModeStr = ZIP_MODE_STRICT then
-          Mode := zmStrict
-        else
-          ThrowRangeError('Iterator.zipKeyed: invalid mode "' + ModeStr + '"');
-      end;
+        if not (OptionsArg is TGocciaObjectValue) then
+          ThrowTypeError('Iterator.zipKeyed: options must be an object');
 
-      // TC39 Joint Iteration §1.2 step 4b: Get padding (only for longest mode)
-      if Mode = zmLongest then
-      begin
-        PaddingVal := OptionsArg.GetProperty(PROP_PADDING);
-        if Assigned(PaddingVal) and not (PaddingVal is TGocciaUndefinedLiteralValue) then
+        // TC39 Joint Iteration §1.2 step 4a: Get mode
+        ModeVal := OptionsArg.GetProperty(PROP_MODE);
+        if Assigned(ModeVal) and not (ModeVal is TGocciaUndefinedLiteralValue) then
         begin
-          if not (PaddingVal is TGocciaObjectValue) then
-            ThrowTypeError('Iterator.zipKeyed: padding must be an object');
-          for I := 0 to Count - 1 do
+          if not (ModeVal is TGocciaStringLiteralValue) then
+            ThrowTypeError('Iterator.zipKeyed: mode must be a string');
+          ModeStr := TGocciaStringLiteralValue(ModeVal).Value;
+          if ModeStr = ZIP_MODE_SHORTEST then
+            Mode := zmShortest
+          else if ModeStr = ZIP_MODE_LONGEST then
+            Mode := zmLongest
+          else if ModeStr = ZIP_MODE_STRICT then
+            Mode := zmStrict
+          else
+            ThrowRangeError('Iterator.zipKeyed: invalid mode "' + ModeStr + '"');
+        end;
+
+        // TC39 Joint Iteration §1.2 step 4b: Get padding (only for longest mode)
+        if Mode = zmLongest then
+        begin
+          PaddingVal := OptionsArg.GetProperty(PROP_PADDING);
+          if Assigned(PaddingVal) and not (PaddingVal is TGocciaUndefinedLiteralValue) then
           begin
-            PropValue := PaddingVal.GetProperty(Keys[I]);
-            if Assigned(PropValue) and not (PropValue is TGocciaUndefinedLiteralValue) then
-              Padding[I] := PropValue;
+            if not (PaddingVal is TGocciaObjectValue) then
+              ThrowTypeError('Iterator.zipKeyed: padding must be an object');
+            for I := 0 to Count - 1 do
+            begin
+              PropValue := PaddingVal.GetProperty(Keys[I]);
+              if Assigned(PropValue) and not (PropValue is TGocciaUndefinedLiteralValue) then
+                Padding[I] := PropValue;
+            end;
           end;
         end;
       end;
     end;
-  end;
 
-  Result := TGocciaZipKeyedIteratorValue.Create(Keys, Iterators, Padding, Mode);
+    Result := TGocciaZipKeyedIteratorValue.Create(Keys, Iterators, Padding, Mode);
+  finally
+    // Unroot iterators — the zipKeyed iterator now owns them via MarkReferences
+    for I := 0 to Count - 1 do
+      GC.RemoveTempRoot(Iterators[I]);
+  end;
 end;
 
 end.
