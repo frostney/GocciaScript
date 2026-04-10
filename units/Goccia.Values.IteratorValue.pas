@@ -690,6 +690,7 @@ var
   I, J, Count, Acquired: Integer;
   ModeStr: string;
   GC: TGarbageCollector;
+  Success: Boolean;
 begin
   // TC39 Joint Iteration §1.1 step 1: If iterables is not an Object, throw TypeError
   if AArgs.Length < 1 then
@@ -752,6 +753,7 @@ begin
   for I := 0 to Count - 1 do
     Padding[I] := TGocciaUndefinedLiteralValue.UndefinedValue;
 
+  Success := False;
   try
     if AArgs.Length >= 2 then
     begin
@@ -809,7 +811,14 @@ begin
     end;
 
     Result := TGocciaZipIteratorValue.Create(Iterators, Padding, Mode);
+    Success := True;
   finally
+    // On error, close all iterators so generator finally blocks run
+    if not Success then
+    begin
+      for I := 0 to Count - 1 do
+        CloseIteratorPreservingError(Iterators[I]);
+    end;
     // Unroot iterators — the zip iterator now owns them via MarkReferences
     for I := 0 to Count - 1 do
       GC.RemoveTempRoot(Iterators[I]);
@@ -834,6 +843,7 @@ var
   I, J, Count, Acquired: Integer;
   ModeStr: string;
   GC: TGarbageCollector;
+  Success: Boolean;
 begin
   // TC39 Joint Iteration §1.2 step 1: If iterables is not an Object, throw TypeError
   if AArgs.Length < 1 then
@@ -879,6 +889,7 @@ begin
   for I := 0 to Count - 1 do
     Padding[I] := TGocciaUndefinedLiteralValue.UndefinedValue;
 
+  Success := False;
   try
     if AArgs.Length >= 2 then
     begin
@@ -925,7 +936,14 @@ begin
     end;
 
     Result := TGocciaZipKeyedIteratorValue.Create(Keys, Iterators, Padding, Mode);
+    Success := True;
   finally
+    // On error, close all iterators so generator finally blocks run
+    if not Success then
+    begin
+      for I := 0 to Count - 1 do
+        CloseIteratorPreservingError(Iterators[I]);
+    end;
     // Unroot iterators — the zipKeyed iterator now owns them via MarkReferences
     for I := 0 to Count - 1 do
       GC.RemoveTempRoot(Iterators[I]);
