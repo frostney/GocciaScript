@@ -123,6 +123,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Garbage collector | `Goccia.GarbageCollector.pas` | Unified mark-and-sweep GC for interpreter and bytecode execution |
 | Profiler | `Goccia.Profiler*.pas` | Bytecode opcode/function profiling, pair tracking, allocation counting |
 | Proxy | `Goccia.Values.ProxyValue.pas` | ES2026 Proxy with all 13 handler traps and invariant enforcement |
+| Uint8Array encoding | `Goccia.Values.Uint8ArrayEncoding.pas` | Uint8Array Base64/Hex: `toBase64`, `fromBase64`, `toHex`, `fromHex`, `setFromBase64`, `setFromHex` |
 | FFI | `Goccia.FFI*.pas`, `Goccia.Values.FFI*.pas` | Foreign Function Interface for native shared libraries |
 
 **Bytecode design rules:**

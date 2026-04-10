@@ -28,6 +28,7 @@ type
   private
     class var FShared: TGocciaSharedPrototype;
     class var FPrototypeMembers: array of TGocciaMemberDefinition;
+    class var FUint8Prototype: TGocciaObjectValue;
   private
     FBufferValue: TGocciaValue;
     FBufferData: TBytes;
@@ -59,6 +60,7 @@ type
     class function KindName(const AKind: TGocciaTypedArrayKind): string;
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
     class procedure SetSharedPrototypeParent(const AParent: TGocciaObjectValue);
+    class procedure SetUint8Prototype(const APrototype: TGocciaObjectValue);
 
     property BufferValue: TGocciaValue read FBufferValue;
     property BufferData: TBytes read FBufferData;
@@ -375,7 +377,9 @@ begin
   FBufferValue := Buf;
   FBufferData := Buf.Data;
   InitializePrototype;
-  if Assigned(FShared) then
+  if (AKind = takUint8) and Assigned(FUint8Prototype) then
+    FPrototype := FUint8Prototype
+  else if Assigned(FShared) then
     FPrototype := FShared.Prototype;
 end;
 
@@ -397,7 +401,9 @@ begin
     FLength := (System.Length(ABuffer.Data) - AByteOffset) div BPE;
 
   InitializePrototype;
-  if Assigned(FShared) then
+  if (AKind = takUint8) and Assigned(FUint8Prototype) then
+    FPrototype := FUint8Prototype
+  else if Assigned(FShared) then
     FPrototype := FShared.Prototype;
 end;
 
@@ -419,7 +425,9 @@ begin
     FLength := (System.Length(ASharedBuffer.Data) - AByteOffset) div BPE;
 
   InitializePrototype;
-  if Assigned(FShared) then
+  if (AKind = takUint8) and Assigned(FUint8Prototype) then
+    FPrototype := FUint8Prototype
+  else if Assigned(FShared) then
     FPrototype := FShared.Prototype;
 end;
 
@@ -499,6 +507,11 @@ class procedure TGocciaTypedArrayValue.SetSharedPrototypeParent(const AParent: T
 begin
   if Assigned(FShared) and not Assigned(FShared.Prototype.Prototype) then
     FShared.Prototype.Prototype := AParent;
+end;
+
+class procedure TGocciaTypedArrayValue.SetUint8Prototype(const APrototype: TGocciaObjectValue);
+begin
+  FUint8Prototype := APrototype;
 end;
 
 { Property access — indexed elements }

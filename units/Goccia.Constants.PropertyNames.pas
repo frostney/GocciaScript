@@ -89,6 +89,16 @@ const
   PROP_SUFFIX                 = 'suffix';
   PROP_MODE                   = 'mode';
   PROP_PADDING                = 'padding';
+  PROP_ALPHABET               = 'alphabet';
+  PROP_OMIT_PADDING           = 'omitPadding';
+  PROP_LAST_CHUNK_HANDLING    = 'lastChunkHandling';
+  PROP_WRITTEN                = 'written';
+  PROP_TO_BASE64              = 'toBase64';
+  PROP_TO_HEX                 = 'toHex';
+  PROP_FROM_BASE64            = 'fromBase64';
+  PROP_FROM_HEX               = 'fromHex';
+  PROP_SET_FROM_BASE64        = 'setFromBase64';
+  PROP_SET_FROM_HEX           = 'setFromHex';
 
   // Proxy handler trap names
   PROP_HAS                       = 'has';

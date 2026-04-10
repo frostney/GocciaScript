@@ -1021,6 +1021,22 @@ TypedArrays provide array-like views over ArrayBuffer data with fixed element ty
 | `ta.entries()` | Iterator over [index, value] pairs |
 | `ta[Symbol.iterator]()` | Same as `values()` |
 
+**Uint8Array Base64/Hex encoding** (TC39 Uint8Array Base64, `Goccia.Values.Uint8ArrayEncoding.pas`):
+
+These methods are available only on `Uint8Array`, not on other TypedArray types.
+
+| Static method | Description |
+|--------|-------------|
+| `Uint8Array.fromBase64(string [, options])` | Decode a base64 string to a new Uint8Array. Options: `alphabet` (`"base64"` or `"base64url"`), `lastChunkHandling` (`"loose"`, `"strict"`, or `"stop-before-partial"`) |
+| `Uint8Array.fromHex(string)` | Decode a hex string (case-insensitive) to a new Uint8Array. Throws `SyntaxError` on odd length or invalid characters |
+
+| Prototype method | Description |
+|--------|-------------|
+| `u8.toBase64([options])` | Encode bytes as a base64 string. Options: `alphabet` (`"base64"` or `"base64url"`), `omitPadding` (boolean, default `false`) |
+| `u8.toHex()` | Encode bytes as a lowercase hex string |
+| `u8.setFromBase64(string [, options])` | Decode base64 into this array. Returns `{ read, written }`. Same options as `fromBase64` |
+| `u8.setFromHex(string)` | Decode hex into this array. Returns `{ read, written }` |
+
 **Value encoding:** Integer types use fixed-width truncation (overflow wraps). `Uint8ClampedArray` clamps to [0, 255] with half-to-even rounding. `Float32Array` rounds to IEEE 754 single precision. `Float64Array` preserves full double precision. NaN is stored as 0 in integer types and as NaN in float types.
 
 **Not supported:** `BigInt64Array`, `BigUint64Array` (BigInt types), `DataView`.
