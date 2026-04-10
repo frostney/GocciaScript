@@ -532,6 +532,8 @@ Iterators are consumed once — calling `next()` past the end returns `{value: u
 |--------|-------------|
 | `Iterator.from(value)` | Wrap an iterable, iterator, or `{next()}` object as a proper Iterator with helper methods |
 | `Iterator.concat(...items)` | Concatenate multiple iterables into a single lazy iterator (TC39 Iterator Sequencing). All arguments are validated upfront as iterables; iterators are opened lazily as each iterable is consumed. |
+| `Iterator.zip(iterables, options?)` | Combine multiple iterables into an iterator of arrays (TC39 Joint Iteration). `iterables` is an iterable of iterables. `options.mode` can be `"shortest"` (default), `"longest"`, or `"strict"`. In `"longest"` mode, `options.padding` (an iterable) provides fill values for exhausted iterables. |
+| `Iterator.zipKeyed(iterables, options?)` | Combine keyed iterables into an iterator of objects (TC39 Joint Iteration). `iterables` is an object whose values are iterables. Each yielded object has the same keys as the input. Same `mode`/`padding` options as `zip`, but `padding` is an object with matching keys. |
 | `Iterator.prototype` | The shared iterator prototype (accessible for inspection) |
 
 ### Symbol (`Goccia.Builtins.GlobalSymbol.pas`)

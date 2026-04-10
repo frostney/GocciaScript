@@ -87,6 +87,8 @@ const
   PROP_OPEN                   = 'open';
   PROP_NULLPTR                = 'nullptr';
   PROP_SUFFIX                 = 'suffix';
+  PROP_MODE                   = 'mode';
+  PROP_PADDING                = 'padding';
 
   // Proxy handler trap names
   PROP_HAS                       = 'has';
