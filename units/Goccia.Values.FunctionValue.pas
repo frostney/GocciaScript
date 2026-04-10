@@ -73,13 +73,12 @@ implementation
 uses
   SysUtils,
 
-  GarbageCollector.Generic,
-
   Goccia.AST.Statements,
   Goccia.ControlFlow,
   Goccia.Coverage,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
+  Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper;
 

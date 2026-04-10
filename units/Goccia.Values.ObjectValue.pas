@@ -110,11 +110,11 @@ implementation
 uses
   SysUtils,
 
-  GarbageCollector.Generic,
   StringBuffer,
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -123,18 +123,7 @@ uses
 
 procedure MarkPropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor);
 begin
-  if ADescriptor is TGocciaPropertyDescriptorData then
-  begin
-    if Assigned(TGocciaPropertyDescriptorData(ADescriptor).Value) then
-      TGocciaPropertyDescriptorData(ADescriptor).Value.MarkReferences;
-  end
-  else if ADescriptor is TGocciaPropertyDescriptorAccessor then
-  begin
-    if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
-      TGocciaPropertyDescriptorAccessor(ADescriptor).Getter.MarkReferences;
-    if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
-      TGocciaPropertyDescriptorAccessor(ADescriptor).Setter.MarkReferences;
-  end;
+  ADescriptor.MarkValues;
 end;
 
 { TGocciaObjectValue }
@@ -402,9 +391,7 @@ end;
 procedure TGocciaObjectValue.MarkReferences;
 var
   Pair: TGocciaPropertyMap.TKeyValuePair;
-  SymKeys: array of TGocciaSymbolValue;
-  SymDescs: array of TGocciaPropertyDescriptor;
-  I: Integer;
+  SymPair: TSymbolDescriptorMap.TKeyValuePair;
 begin
   if GCMarked then Exit;
   inherited;
@@ -413,14 +400,12 @@ begin
     FPrototype.MarkReferences;
 
   for Pair in FProperties do
-    MarkPropertyDescriptor(Pair.Value);
+    Pair.Value.MarkValues;
 
-  SymKeys := FSymbolDescriptors.Keys;
-  SymDescs := FSymbolDescriptors.Values;
-  for I := 0 to Length(SymKeys) - 1 do
+  for SymPair in FSymbolDescriptors do
   begin
-    SymKeys[I].MarkReferences;
-    MarkPropertyDescriptor(SymDescs[I]);
+    SymPair.Key.MarkReferences;
+    SymPair.Value.MarkValues;
   end;
 end;
 

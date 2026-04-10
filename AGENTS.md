@@ -120,7 +120,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | VM | `Goccia.VM*.pas` | Register execution, closures, upvalues, exception handlers |
 | Runtime bootstrap | `Goccia.Runtime.Bootstrap.pas` | Shared built-in and global initialization |
 | Shared values | `Goccia.Values.*.pas` | Arrays, objects, classes, promises, iterators, primitives |
-| Garbage collector | `GarbageCollector.Generic.pas` | Shared GC for interpreter and bytecode execution |
+| Garbage collector | `Goccia.GarbageCollector.pas` | Unified mark-and-sweep GC for interpreter and bytecode execution |
 | Profiler | `Goccia.Profiler*.pas` | Bytecode opcode/function profiling, pair tracking, allocation counting |
 | Proxy | `Goccia.Values.ProxyValue.pas` | ES2026 Proxy with all 13 handler traps and invariant enforcement |
 | FFI | `Goccia.FFI*.pas`, `Goccia.Values.FFI*.pas` | Foreign Function Interface for native shared libraries |
@@ -251,7 +251,8 @@ GocciaScript uses a **unified mark-and-sweep garbage collector** shared by both 
 - **Scopes** register/unregister with the GC in their constructor/destructor. Active call scopes tracked via `PushActiveRoot`/`PopActiveRoot`.
 - **VM register rooting** only traverses object-bearing register slots.
 - Each value type must override `MarkReferences` to mark all `TGocciaValue` references it holds.
-- **Pinned values, temp roots, and root scopes** use `TDictionary<T, Boolean>` for O(1) membership.
+- **Pinned values, temp roots, and root scopes** use `THashMap<TGCManagedObject, Boolean>` (`TGCObjectSet`) for O(1) membership.
+- **Adaptive threshold** — after each collection, the threshold scales to `max(DEFAULT_GC_THRESHOLD, surviving_count)`, reducing collection frequency for large heaps.
 - Automatic collection is disabled during bytecode execution; TestRunner and BenchmarkRunner call `Collect` after each file.
 
 See [docs/value-system.md](docs/value-system.md#gc-integration) for the GC integration details.

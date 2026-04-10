@@ -651,7 +651,7 @@ For long-running engines (REPL-style), the GC runs automatically. If you need to
 
 ```pascal
 uses
-  GarbageCollector.Generic;
+  Goccia.GarbageCollector;
 
 TGarbageCollector.Instance.Collect;
 ```

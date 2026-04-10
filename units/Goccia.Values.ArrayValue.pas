@@ -109,13 +109,13 @@ uses
   Math,
   SysUtils,
 
-  GarbageCollector.Generic,
   StringBuffer,
 
   Goccia.Arguments.Callbacks,
   Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.Evaluator.Comparison,
+  Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Utils.Arrays,
   Goccia.Values.ClassHelper,

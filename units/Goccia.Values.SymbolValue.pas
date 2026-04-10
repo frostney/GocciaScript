@@ -71,11 +71,11 @@ type
 implementation
 
 uses
-  GarbageCollector.Generic,
   HashMap,
 
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
+  Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,

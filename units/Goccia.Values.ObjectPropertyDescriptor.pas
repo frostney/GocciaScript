@@ -21,6 +21,7 @@ type
     function GetWritable: Boolean; inline;
   public
     constructor Create(const AFlags: TPropertyFlags);
+    procedure MarkValues; virtual;
 
     property Flags: TPropertyFlags read FFlags;
     property Enumerable: Boolean read GetEnumerable;
@@ -33,6 +34,7 @@ type
     FValue: TGocciaValue;
   public
     constructor Create(const AValue: TGocciaValue; const AFlags: TPropertyFlags);
+    procedure MarkValues; override;
 
     property Value: TGocciaValue read FValue write FValue;
   end;
@@ -45,6 +47,7 @@ type
     function GetWritable: Boolean; inline;
   public
     constructor Create(const AGetter: TGocciaValue; const ASetter: TGocciaValue; const AFlags: TPropertyFlags);
+    procedure MarkValues; override;
 
     property Getter: TGocciaValue read FGetter;
     property Setter: TGocciaValue read FSetter;
@@ -86,10 +89,21 @@ begin
   Result := pfWritable in FFlags;
 end;
 
+procedure TGocciaPropertyDescriptor.MarkValues;
+begin
+  // No-op base: subclasses override to mark their value references
+end;
+
 constructor TGocciaPropertyDescriptorData.Create(const AValue: TGocciaValue; const AFlags: TPropertyFlags);
 begin
   inherited Create(AFlags);
   FValue := AValue;
+end;
+
+procedure TGocciaPropertyDescriptorData.MarkValues;
+begin
+  if Assigned(FValue) then
+    FValue.MarkReferences;
 end;
 
 constructor TGocciaPropertyDescriptorAccessor.Create(const AGetter: TGocciaValue; const ASetter: TGocciaValue; const AFlags: TPropertyFlags);
@@ -97,6 +111,14 @@ begin
   inherited Create(AFlags);
   FGetter := AGetter;
   FSetter := ASetter;
+end;
+
+procedure TGocciaPropertyDescriptorAccessor.MarkValues;
+begin
+  if Assigned(FGetter) then
+    FGetter.MarkReferences;
+  if Assigned(FSetter) then
+    FSetter.MarkReferences;
 end;
 
 function TGocciaPropertyDescriptorAccessor.GetWritable: Boolean;

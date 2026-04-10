@@ -193,7 +193,6 @@ uses
   Generics.Collections,
   SysUtils,
 
-  GarbageCollector.Generic,
   TimingUtils,
 
   Goccia.CallStack,
@@ -204,6 +203,7 @@ uses
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.Evaluator.Decorators,
+  Goccia.GarbageCollector,
   Goccia.Profiler,
   Goccia.Timeout,
   Goccia.Values.ClassHelper,

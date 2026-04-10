@@ -1,4 +1,4 @@
-unit GarbageCollector.Generic;
+unit Goccia.GarbageCollector;
 
 {$I Goccia.inc}
 
@@ -7,23 +7,39 @@ interface
 uses
   Generics.Collections,
 
-  GarbageCollector.Managed;
+  HashMap;
 
 type
+  TGCManagedObject = class
+  private class var
+    FCurrentMark: Cardinal;
+  private
+    FGCMark: Cardinal;
+    FGCIndex: Integer;
+    function GetGCMarked: Boolean; inline;
+    procedure SetGCMarked(const AValue: Boolean); inline;
+  public
+    class procedure AdvanceMark; static; inline;
+    procedure MarkReferences; virtual;
+    // Called by the GC sweep instead of Free. Default calls Free.
+    // Override to return the object to a pool instead of deallocating.
+    procedure Recycle; virtual;
+    property GCMarked: Boolean read GetGCMarked write SetGCMarked;
+    property GCIndex: Integer read FGCIndex write FGCIndex;
+  end;
+
   TGCManagedObjectList = TObjectList<TGCManagedObject>;
-  TGCRootMarker = procedure of object;
+  TGCObjectSet = THashMap<TGCManagedObject, Boolean>;
 
   TGarbageCollector = class
   private class var
     FInstance: TGarbageCollector;
   private
     FManagedObjects: TGCManagedObjectList;
-    FPinnedObjects: TDictionary<TGCManagedObject, Boolean>;
-    FTempRoots: TDictionary<TGCManagedObject, Boolean>;
-    FRootObjects: TDictionary<TGCManagedObject, Boolean>;
+    FPinnedObjects: TGCObjectSet;
+    FTempRoots: TGCObjectSet;
+    FRootObjects: TGCObjectSet;
     FActiveRootStack: TGCManagedObjectList;
-
-    FExternalRootMarkers: array of TGCRootMarker;
 
     FAllocationsSinceLastGC: Integer;
     FGCThreshold: Integer;
@@ -31,7 +47,14 @@ type
     FCollecting: Boolean;
     FTotalCollected: Int64;
     FTotalCollections: Integer;
-    FNilSlots: Integer;
+
+    {$IFDEF GC_TIMING}
+    FTotalMarkTimeNs: Int64;
+    FTotalSweepTimeNs: Int64;
+    FTotalGCTimeNs: Int64;
+    FMaxMarkTimeNs: Int64;
+    FMaxSweepTimeNs: Int64;
+    {$ENDIF}
 
     function GetManagedObjectCount: Integer;
     function GetWatermark: Integer; inline;
@@ -59,9 +82,6 @@ type
     procedure PushActiveRoot(const AObject: TGCManagedObject);
     procedure PopActiveRoot;
 
-    procedure AddExternalRootMarker(const AMarker: TGCRootMarker);
-    procedure RemoveExternalRootMarker(const AMarker: TGCRootMarker);
-
     // Full mark-and-sweep of all managed objects. Unconditional — ignores
     // the Enabled flag and always runs. Use when a clean heap is required
     // (e.g. between script executions or before benchmark measurement).
@@ -85,6 +105,10 @@ type
     // Safe for benchmark measurement where old objects are read-only.
     procedure CollectYoung(const AWatermark: Integer);
 
+    {$IFDEF GC_TIMING}
+    procedure PrintTimingSummary;
+    {$ENDIF}
+
     property Enabled: Boolean read FEnabled write FEnabled;
     property Threshold: Integer read FGCThreshold write FGCThreshold;
     property TotalCollected: Int64 read FTotalCollected;
@@ -102,10 +126,42 @@ const
 
 implementation
 
-{$IFDEF GC_DEBUG}
+{$IF DEFINED(GC_DEBUG) OR DEFINED(GC_TIMING)}
 uses
-  SysUtils;
+  SysUtils
+  {$IFDEF GC_TIMING},
+  TimingUtils{$ENDIF};
 {$ENDIF}
+
+{ TGCManagedObject }
+
+class procedure TGCManagedObject.AdvanceMark;
+begin
+  Inc(FCurrentMark);
+  if FCurrentMark = 0 then
+    FCurrentMark := 1;
+end;
+
+function TGCManagedObject.GetGCMarked: Boolean;
+begin
+  Result := FGCMark = FCurrentMark;
+end;
+
+procedure TGCManagedObject.SetGCMarked(const AValue: Boolean);
+begin
+  if AValue then
+    FGCMark := FCurrentMark;
+end;
+
+procedure TGCManagedObject.MarkReferences;
+begin
+  FGCMark := FCurrentMark;
+end;
+
+procedure TGCManagedObject.Recycle;
+begin
+  Free;
+end;
 
 { TGarbageCollector }
 
@@ -130,9 +186,9 @@ constructor TGarbageCollector.Create;
 begin
   inherited Create;
   FManagedObjects := TGCManagedObjectList.Create(False);
-  FPinnedObjects := TDictionary<TGCManagedObject, Boolean>.Create;
-  FTempRoots := TDictionary<TGCManagedObject, Boolean>.Create;
-  FRootObjects := TDictionary<TGCManagedObject, Boolean>.Create;
+  FPinnedObjects := TGCObjectSet.Create;
+  FTempRoots := TGCObjectSet.Create;
+  FRootObjects := TGCObjectSet.Create;
   FActiveRootStack := TGCManagedObjectList.Create(False);
   FAllocationsSinceLastGC := 0;
   FGCThreshold := DEFAULT_GC_THRESHOLD;
@@ -140,12 +196,20 @@ begin
   FCollecting := False;
   FTotalCollected := 0;
   FTotalCollections := 0;
-  FNilSlots := 0;
-  SetLength(FExternalRootMarkers, 0);
+  {$IFDEF GC_TIMING}
+  FTotalMarkTimeNs := 0;
+  FTotalSweepTimeNs := 0;
+  FTotalGCTimeNs := 0;
+  FMaxMarkTimeNs := 0;
+  FMaxSweepTimeNs := 0;
+  {$ENDIF}
 end;
 
 destructor TGarbageCollector.Destroy;
 begin
+  {$IFDEF GC_TIMING}
+  PrintTimingSummary;
+  {$ENDIF}
   FManagedObjects.Free;
   FPinnedObjects.Free;
   FTempRoots.Free;
@@ -173,13 +237,12 @@ begin
   begin
     FManagedObjects[Idx] := nil;
     AObject.GCIndex := -1;
-    Inc(FNilSlots);
   end;
 end;
 
 procedure TGarbageCollector.PinObject(const AObject: TGCManagedObject);
 begin
-  if Assigned(AObject) and not FPinnedObjects.ContainsKey(AObject) then
+  if Assigned(AObject) then
     FPinnedObjects.Add(AObject, True);
 end;
 
@@ -192,7 +255,7 @@ end;
 procedure TGarbageCollector.AddTempRoot(
   const AObject: TGCManagedObject);
 begin
-  if Assigned(AObject) and not FTempRoots.ContainsKey(AObject) then
+  if Assigned(AObject) then
     FTempRoots.Add(AObject, True);
 end;
 
@@ -211,8 +274,7 @@ end;
 procedure TGarbageCollector.AddRootObject(
   const AObject: TGCManagedObject);
 begin
-  if not FRootObjects.ContainsKey(AObject) then
-    FRootObjects.Add(AObject, True);
+  FRootObjects.Add(AObject, True);
 end;
 
 procedure TGarbageCollector.RemoveRootObject(
@@ -233,53 +295,22 @@ begin
     FActiveRootStack.Delete(FActiveRootStack.Count - 1);
 end;
 
-procedure TGarbageCollector.AddExternalRootMarker(
-  const AMarker: TGCRootMarker);
-var
-  Len: Integer;
-begin
-  Len := Length(FExternalRootMarkers);
-  SetLength(FExternalRootMarkers, Len + 1);
-  FExternalRootMarkers[Len] := AMarker;
-end;
-
-procedure TGarbageCollector.RemoveExternalRootMarker(
-  const AMarker: TGCRootMarker);
-var
-  I, WriteIdx: Integer;
-begin
-  WriteIdx := 0;
-  for I := 0 to Length(FExternalRootMarkers) - 1 do
-  begin
-    if (TMethod(FExternalRootMarkers[I]).Code <> TMethod(AMarker).Code) or
-       (TMethod(FExternalRootMarkers[I]).Data <> TMethod(AMarker).Data) then
-    begin
-      FExternalRootMarkers[WriteIdx] := FExternalRootMarkers[I];
-      Inc(WriteIdx);
-    end;
-  end;
-  SetLength(FExternalRootMarkers, WriteIdx);
-end;
-
 procedure TGarbageCollector.MarkRoots;
 var
-  Obj: TGCManagedObject;
+  Pair: TGCObjectSet.TKeyValuePair;
   I: Integer;
 begin
-  for Obj in FPinnedObjects.Keys do
-    Obj.MarkReferences;
+  for Pair in FPinnedObjects do
+    Pair.Key.MarkReferences;
 
-  for Obj in FTempRoots.Keys do
-    Obj.MarkReferences;
+  for Pair in FTempRoots do
+    Pair.Key.MarkReferences;
 
-  for Obj in FRootObjects.Keys do
-    Obj.MarkReferences;
+  for Pair in FRootObjects do
+    Pair.Key.MarkReferences;
 
   for I := 0 to FActiveRootStack.Count - 1 do
     FActiveRootStack[I].MarkReferences;
-
-  for I := 0 to Length(FExternalRootMarkers) - 1 do
-    FExternalRootMarkers[I]();
 end;
 
 procedure TGarbageCollector.SweepObjects;
@@ -305,7 +336,7 @@ begin
     else
     begin
       Obj.GCIndex := -1;
-      Obj.Free;
+      Obj.Recycle;
       Inc(Collected);
     end;
   end;
@@ -313,23 +344,56 @@ begin
   FManagedObjects.Count := WriteIdx;
   if FManagedObjects.Capacity > 4 * WriteIdx + 256 then
     FManagedObjects.Capacity := WriteIdx + (WriteIdx div 2);
-  FNilSlots := 0;
   FTotalCollected := FTotalCollected + Collected;
 end;
 
 procedure TGarbageCollector.Collect;
 var
   BeforeCount: Integer;
+  {$IFDEF GC_TIMING}
+  StartNs, AfterMarkNs, EndNs: Int64;
+  MarkNs, SweepNs, TotalNs: Int64;
+  {$ENDIF}
 begin
   if FCollecting then Exit;
   FCollecting := True;
   try
-    BeforeCount := FManagedObjects.Count - FNilSlots;
+    BeforeCount := FManagedObjects.Count;
     TGCManagedObject.AdvanceMark;
+    {$IFDEF GC_TIMING}
+    StartNs := GetNanoseconds;
+    {$ENDIF}
     MarkRoots;
+    {$IFDEF GC_TIMING}
+    AfterMarkNs := GetNanoseconds;
+    {$ENDIF}
     SweepObjects;
     FAllocationsSinceLastGC := 0;
+
+    // Adaptive threshold: next collection after allocating as many
+    // objects as survived, amortizing collection cost to O(1) per
+    // allocation. Small heaps keep the default minimum.
+    FGCThreshold := FManagedObjects.Count;
+    if FGCThreshold < DEFAULT_GC_THRESHOLD then
+      FGCThreshold := DEFAULT_GC_THRESHOLD;
+
     Inc(FTotalCollections);
+    {$IFDEF GC_TIMING}
+    EndNs := GetNanoseconds;
+    MarkNs := AfterMarkNs - StartNs;
+    SweepNs := EndNs - AfterMarkNs;
+    TotalNs := EndNs - StartNs;
+    FTotalMarkTimeNs := FTotalMarkTimeNs + MarkNs;
+    FTotalSweepTimeNs := FTotalSweepTimeNs + SweepNs;
+    FTotalGCTimeNs := FTotalGCTimeNs + TotalNs;
+    if MarkNs > FMaxMarkTimeNs then
+      FMaxMarkTimeNs := MarkNs;
+    if SweepNs > FMaxSweepTimeNs then
+      FMaxSweepTimeNs := SweepNs;
+    WriteLn(Format('[GC] Collect: mark=%s sweep=%s total=%s (%d before, %d after)',
+      [FormatDuration(MarkNs), FormatDuration(SweepNs), FormatDuration(TotalNs),
+       BeforeCount, FManagedObjects.Count]));
+    {$ENDIF}
     {$IFDEF GC_DEBUG}
     WriteLn(Format('[GC] Collect: %d -> %d objects (%d freed)',
       [BeforeCount, FManagedObjects.Count, BeforeCount - FManagedObjects.Count]));
@@ -405,7 +469,7 @@ begin
       else
       begin
         Obj.GCIndex := -1;
-        Obj.Free;
+        Obj.Recycle;
         Inc(Collected);
       end;
     end;
@@ -426,6 +490,31 @@ begin
   end;
 end;
 
+{$IFDEF GC_TIMING}
+procedure TGarbageCollector.PrintTimingSummary;
+var
+  AvgMarkNs, AvgSweepNs, AvgGCNs: Int64;
+begin
+  WriteLn('[GC] === Timing Summary ===');
+  WriteLn(Format('[GC] Total collections: %d', [FTotalCollections]));
+  WriteLn(Format('[GC] Total GC time: %s (mark=%s, sweep=%s)',
+    [FormatDuration(FTotalGCTimeNs), FormatDuration(FTotalMarkTimeNs),
+     FormatDuration(FTotalSweepTimeNs)]));
+  if FTotalCollections > 0 then
+  begin
+    AvgMarkNs := FTotalMarkTimeNs div FTotalCollections;
+    AvgSweepNs := FTotalSweepTimeNs div FTotalCollections;
+    AvgGCNs := FTotalGCTimeNs div FTotalCollections;
+    WriteLn(Format('[GC] Average per collection: %s (mark=%s, sweep=%s)',
+      [FormatDuration(AvgGCNs), FormatDuration(AvgMarkNs),
+       FormatDuration(AvgSweepNs)]));
+    WriteLn(Format('[GC] Max single collection: mark=%s, sweep=%s',
+      [FormatDuration(FMaxMarkTimeNs), FormatDuration(FMaxSweepTimeNs)]));
+  end;
+  WriteLn(Format('[GC] Total objects collected: %d', [FTotalCollected]));
+end;
+{$ENDIF}
+
 function TGarbageCollector.GetWatermark: Integer;
 begin
   Result := FManagedObjects.Count;
@@ -433,7 +522,10 @@ end;
 
 function TGarbageCollector.GetManagedObjectCount: Integer;
 begin
-  Result := FManagedObjects.Count - FNilSlots;
+  Result := FManagedObjects.Count;
 end;
+
+initialization
+  TGCManagedObject.FCurrentMark := 1;
 
 end.

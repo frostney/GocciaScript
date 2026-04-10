@@ -96,10 +96,9 @@ type
 implementation
 
 uses
-  GarbageCollector.Generic,
-
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Scope,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,

@@ -82,7 +82,7 @@ implementation
 uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
-  GarbageCollector.Generic,
+  Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,

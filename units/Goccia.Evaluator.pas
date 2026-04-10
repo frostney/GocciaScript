@@ -82,7 +82,6 @@ uses
   Classes,
   SysUtils,
 
-  GarbageCollector.Generic,
   OrderedStringMap,
   StringBuffer,
 
@@ -98,6 +97,7 @@ uses
   Goccia.Evaluator.Comparison,
   Goccia.Evaluator.Decorators,
   Goccia.Evaluator.TypeOperations,
+  Goccia.GarbageCollector,
   Goccia.Keywords.Reserved,
   Goccia.Lexer,
   Goccia.MicrotaskQueue,

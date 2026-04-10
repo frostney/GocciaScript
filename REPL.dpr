@@ -7,7 +7,6 @@ uses
   Generics.Collections,
   SysUtils,
 
-  GarbageCollector.Generic,
   TimingUtils,
 
   Goccia.AST.Node,
@@ -15,6 +14,7 @@ uses
   Goccia.Engine,
   Goccia.Engine.Backend,
   Goccia.Error,
+  Goccia.GarbageCollector,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.MicrotaskQueue,

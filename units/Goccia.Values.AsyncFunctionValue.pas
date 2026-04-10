@@ -33,8 +33,7 @@ implementation
 uses
   SysUtils,
 
-  GarbageCollector.Generic,
-
+  Goccia.GarbageCollector,
   Goccia.Values.Error,
   Goccia.Values.PromiseValue;
 

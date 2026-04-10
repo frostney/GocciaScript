@@ -203,13 +203,12 @@ implementation
 uses
   SysUtils,
 
-  GarbageCollector.Generic,
-
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
   Goccia.Error,
+  Goccia.GarbageCollector,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.AutoAccessor,

@@ -64,9 +64,8 @@ type
 implementation
 
 uses
-  GarbageCollector.Generic,
-
-  Goccia.Coverage;
+  Goccia.Coverage,
+  Goccia.GarbageCollector;
 
 { TGocciaInterpreter }
 

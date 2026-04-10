@@ -7,8 +7,9 @@ interface
 uses
   Generics.Collections,
 
-  GarbageCollector.Managed,
-  OrderedStringMap;
+  OrderedStringMap,
+
+  Goccia.GarbageCollector;
 
 type
   TGocciaBooleanLiteralValue = class;
@@ -162,8 +163,6 @@ implementation
 uses
   Math,
   SysUtils,
-
-  GarbageCollector.Generic,
 
   Goccia.Constants,
   Goccia.Constants.TypeNames,

@@ -7,9 +7,9 @@ interface
 uses
   SysUtils,
 
-  GarbageCollector.Generic,
   OrderedStringMap,
 
+  Goccia.GarbageCollector,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;

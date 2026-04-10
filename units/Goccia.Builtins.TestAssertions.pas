@@ -273,13 +273,13 @@ uses
   Math,
   SysUtils,
 
-  GarbageCollector.Generic,
   TimingUtils,
 
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Evaluator,
   Goccia.Evaluator.Comparison,
+  Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.RegExp.Runtime,
   Goccia.Values.ClassHelper,

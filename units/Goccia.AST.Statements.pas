@@ -438,9 +438,8 @@ implementation
 uses
   SysUtils,
 
-  GarbageCollector.Generic,
-
   Goccia.Evaluator,
+  Goccia.GarbageCollector,
   Goccia.Modules,
   Goccia.Scope.BindingMap,
   Goccia.Token,

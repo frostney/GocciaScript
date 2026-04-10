@@ -43,9 +43,8 @@ implementation
 uses
   SysUtils,
 
-  GarbageCollector.Generic,
-
   Goccia.Arguments.Collection,
+  Goccia.GarbageCollector,
   Goccia.Timeout,
   Goccia.Values.Error,
   Goccia.Values.FunctionBase,
