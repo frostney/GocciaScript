@@ -604,12 +604,24 @@ begin
   end;
 end;
 
+const
+  UNICODE_REPLACEMENT_CHARACTER = $FFFD;
+
+{ Returns True if the byte at AIndex is a valid UTF-8 continuation byte (10xxxxxx). }
+function IsContinuationByte(const AString: string; const AIndex, ALength: Integer): Boolean; inline;
+begin
+  Result := (AIndex <= ALength) and ((Ord(AString[AIndex]) and $C0) = $80);
+end;
+
 { Decode a single UTF-8 code point starting at position AIndex in AUTF8String.
-  Advances AIndex past the decoded sequence. Returns the Unicode code point value. }
+  Advances AIndex past the decoded sequence. Returns the Unicode code point value.
+  Returns U+FFFD for malformed or truncated sequences. }
 function NextUTF8CodePoint(const AUTF8String: string; var AIndex: Integer): Integer;
 var
   B: Byte;
+  Len: Integer;
 begin
+  Len := Length(AUTF8String);
   B := Ord(AUTF8String[AIndex]);
   if B < $80 then
   begin
@@ -618,35 +630,46 @@ begin
   end
   else if (B and $E0) = $C0 then
   begin
-    Result := (B and $1F) shl 6;
     Inc(AIndex);
-    if AIndex <= Length(AUTF8String) then
-      Result := Result or (Ord(AUTF8String[AIndex]) and $3F);
+    if not IsContinuationByte(AUTF8String, AIndex, Len) then
+      Exit(UNICODE_REPLACEMENT_CHARACTER);
+    Result := ((B and $1F) shl 6) or (Ord(AUTF8String[AIndex]) and $3F);
     Inc(AIndex);
   end
   else if (B and $F0) = $E0 then
   begin
+    Inc(AIndex);
+    if not IsContinuationByte(AUTF8String, AIndex, Len) then
+      Exit(UNICODE_REPLACEMENT_CHARACTER);
     Result := (B and $0F) shl 12;
+    Result := Result or ((Ord(AUTF8String[AIndex]) and $3F) shl 6);
     Inc(AIndex);
-    if AIndex <= Length(AUTF8String) then
-      Result := Result or ((Ord(AUTF8String[AIndex]) and $3F) shl 6);
+    if not IsContinuationByte(AUTF8String, AIndex, Len) then
+      Exit(UNICODE_REPLACEMENT_CHARACTER);
+    Result := Result or (Ord(AUTF8String[AIndex]) and $3F);
     Inc(AIndex);
-    if AIndex <= Length(AUTF8String) then
-      Result := Result or (Ord(AUTF8String[AIndex]) and $3F);
+  end
+  else if (B and $F8) = $F0 then
+  begin
+    Inc(AIndex);
+    if not IsContinuationByte(AUTF8String, AIndex, Len) then
+      Exit(UNICODE_REPLACEMENT_CHARACTER);
+    Result := (B and $07) shl 18;
+    Result := Result or ((Ord(AUTF8String[AIndex]) and $3F) shl 12);
+    Inc(AIndex);
+    if not IsContinuationByte(AUTF8String, AIndex, Len) then
+      Exit(UNICODE_REPLACEMENT_CHARACTER);
+    Result := Result or ((Ord(AUTF8String[AIndex]) and $3F) shl 6);
+    Inc(AIndex);
+    if not IsContinuationByte(AUTF8String, AIndex, Len) then
+      Exit(UNICODE_REPLACEMENT_CHARACTER);
+    Result := Result or (Ord(AUTF8String[AIndex]) and $3F);
     Inc(AIndex);
   end
   else
   begin
-    Result := (B and $07) shl 18;
-    Inc(AIndex);
-    if AIndex <= Length(AUTF8String) then
-      Result := Result or ((Ord(AUTF8String[AIndex]) and $3F) shl 12);
-    Inc(AIndex);
-    if AIndex <= Length(AUTF8String) then
-      Result := Result or ((Ord(AUTF8String[AIndex]) and $3F) shl 6);
-    Inc(AIndex);
-    if AIndex <= Length(AUTF8String) then
-      Result := Result or (Ord(AUTF8String[AIndex]) and $3F);
+    // Invalid lead byte (bare continuation or 0xFE/0xFF)
+    Result := UNICODE_REPLACEMENT_CHARACTER;
     Inc(AIndex);
   end;
 end;
