@@ -102,4 +102,48 @@ No \\\\n's!",
     expect(() => JSON5.parse("{\\u00A0: 1}")).toThrow(SyntaxError);
     expect(() => JSON5.parse("/*")).toThrow(SyntaxError);
   });
+
+  test("reviver receives context with source for primitives", () => {
+    const sources = {};
+    JSON5.parse("{a: 42, b: 'hello', c: true, d: null}", (key, value, context) => {
+      if (key !== "" && context.source !== undefined) {
+        sources[key] = context.source;
+      }
+      return value;
+    });
+    expect(sources.a).toBe("42");
+    expect(sources.b).toBe("'hello'");
+    expect(sources.c).toBe("true");
+    expect(sources.d).toBe("null");
+  });
+
+  test("reviver context has no source for objects and arrays", () => {
+    const results = [];
+    JSON5.parse("{obj: {x: 1}, arr: [2]}", (key, value, context) => {
+      if (key !== "") {
+        results.push({ key, has: "source" in context });
+      }
+      return value;
+    });
+    expect(results).toEqual([
+      { key: "x", has: true },
+      { key: "obj", has: false },
+      { key: "0", has: true },
+      { key: "arr", has: false },
+    ]);
+  });
+
+  test("reviver source preserves raw JSON5 text", () => {
+    const sources = {};
+    JSON5.parse("{a: Infinity, b: NaN, c: 0xFF, d: +1}", (key, value, context) => {
+      if (key !== "" && context.source !== undefined) {
+        sources[key] = context.source;
+      }
+      return value;
+    });
+    expect(sources.a).toBe("Infinity");
+    expect(sources.b).toBe("NaN");
+    expect(sources.c).toBe("0xFF");
+    expect(sources.d).toBe("+1");
+  });
 });

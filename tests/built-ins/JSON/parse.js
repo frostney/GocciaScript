@@ -197,3 +197,124 @@ test("JSON.parse reviver visits nested properties before parents", () => {
 
   expect(keys).toEqual(["inner", "outer", "0", "list", ""]);
 });
+
+test("JSON.parse reviver receives context with source for number", () => {
+  let receivedSource;
+  JSON.parse("42", (key, value, context) => {
+    if (key === "") {
+      receivedSource = context.source;
+    }
+    return value;
+  });
+  expect(receivedSource).toBe("42");
+});
+
+test("JSON.parse reviver receives context with source for string", () => {
+  let receivedSource;
+  JSON.parse('"hello"', (key, value, context) => {
+    if (key === "") {
+      receivedSource = context.source;
+    }
+    return value;
+  });
+  expect(receivedSource).toBe('"hello"');
+});
+
+test("JSON.parse reviver receives context with source for boolean and null", () => {
+  const sources = [];
+  JSON.parse("[true, false, null]", (key, value, context) => {
+    if (key !== "") {
+      sources.push(context.source);
+    }
+    return value;
+  });
+  expect(sources).toEqual(["true", "false", "null"]);
+});
+
+test("JSON.parse reviver context has no source for objects and arrays", () => {
+  const contextHasSource = [];
+  JSON.parse('{"a":{"b":1},"c":[2]}', (key, value, context) => {
+    if (key !== "") {
+      contextHasSource.push({ key, has: "source" in context });
+    }
+    return value;
+  });
+  expect(contextHasSource).toEqual([
+    { key: "b", has: true },
+    { key: "a", has: false },
+    { key: "0", has: true },
+    { key: "c", has: false },
+  ]);
+});
+
+test("JSON.parse reviver source preserves raw JSON text", () => {
+  const sources = {};
+  JSON.parse('{"a":"caf\\u00e9","b":1e2,"c":-0}', (key, value, context) => {
+    if (key !== "" && context.source !== undefined) {
+      sources[key] = context.source;
+    }
+    return value;
+  });
+  expect(sources.a).toBe('"caf\\u00e9"');
+  expect(sources.b).toBe("1e2");
+  expect(sources.c).toBe("-0");
+});
+
+test("JSON.parse reviver source for nested array primitives", () => {
+  const sources = [];
+  JSON.parse("[[1, 2], [3]]", (key, value, context) => {
+    if (context.source !== undefined) {
+      sources.push(context.source);
+    }
+    return value;
+  });
+  expect(sources).toEqual(["1", "2", "3"]);
+});
+
+test("JSON.parse reviver source for root primitive", () => {
+  const rootSources = [];
+  const check = (json) => {
+    JSON.parse(json, (key, value, context) => {
+      if (key === "") {
+        rootSources.push(context.source);
+      }
+      return value;
+    });
+  };
+  check("42");
+  check('"text"');
+  check("true");
+  check("null");
+  expect(rootSources).toEqual(["42", '"text"', "true", "null"]);
+});
+
+test("JSON.parse reviver context is always an object", () => {
+  const contextTypes = [];
+  JSON.parse('{"a":1}', (key, value, context) => {
+    contextTypes.push(typeof context);
+    return value;
+  });
+  expect(contextTypes).toEqual(["object", "object"]);
+});
+
+test("JSON.parse reviver source with decimal numbers", () => {
+  let src;
+  JSON.parse("3.14", (key, value, context) => {
+    if (key === "") {
+      src = context.source;
+    }
+    return value;
+  });
+  expect(src).toBe("3.14");
+});
+
+test("JSON.parse reviver source with negative numbers", () => {
+  let src;
+  JSON.parse("-42", (key, value, context) => {
+    if (key === "") {
+      src = context.source;
+    }
+    return value;
+  });
+  expect(src).toBe("-42");
+});

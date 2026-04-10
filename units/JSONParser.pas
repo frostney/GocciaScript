@@ -109,6 +109,10 @@ type
     procedure OnEndObject; virtual; abstract;
     procedure OnBeginArray; virtual; abstract;
     procedure OnEndArray; virtual; abstract;
+    procedure OnValueStart; virtual;
+
+    property CurrentPosition: Integer read FPosition;
+    property SourceTextData: UTF8String read FText;
   public
     constructor Create; overload; virtual;
     constructor Create(
@@ -363,6 +367,11 @@ begin
     Inc(FPosition, Length(Result));
 end;
 
+procedure TAbstractJSONParser.OnValueStart;
+begin
+  // No-op by default. Subclasses override to track value source positions.
+end;
+
 procedure TAbstractJSONParser.DoParseValue;
 var
   Ch: Char;
@@ -370,6 +379,8 @@ begin
   SkipWhitespace;
   if IsAtEnd then
     RaiseParseError('Unexpected end of JSON input');
+
+  OnValueStart;
 
   Ch := PeekChar;
   case Ch of

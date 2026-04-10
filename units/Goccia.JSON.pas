@@ -5,6 +5,7 @@ unit Goccia.JSON;
 interface
 
 uses
+  Classes,
   Generics.Collections,
   SysUtils,
 
@@ -26,6 +27,8 @@ type
     constructor Create(
       const ACapabilities: TJSONParserCapabilities); overload;
     function Parse(const AText: UTF8String): TGocciaValue; virtual;
+    procedure ParseWithSources(const AText: UTF8String;
+      out AValue: TGocciaValue; const ASourceTexts: TStringList);
   end;
 
   TGocciaJSONStringifier = class
@@ -60,8 +63,6 @@ type
 implementation
 
 uses
-  Classes,
-
   StringBuffer,
 
   Goccia.Arguments.Collection,
@@ -76,9 +77,13 @@ uses
 type
   TGocciaJSONVisitor = class(TAbstractJSONParser)
   private
-    FStack: TList<TGocciaValue>;
+    FCollectSources: Boolean;
     FKeyStack: TStringList;
     FResult: TGocciaValue;
+    FSourceTexts: TStringList;
+    FStack: TList<TGocciaValue>;
+    FValueStartPosition: Integer;
+    procedure RecordSourceText;
   protected
     procedure OnNull; override;
     procedure OnBoolean(const AValue: Boolean); override;
@@ -90,6 +95,7 @@ type
     procedure OnEndObject; override;
     procedure OnBeginArray; override;
     procedure OnEndArray; override;
+    procedure OnValueStart; override;
     procedure EmitValue(const AValue: TGocciaValue);
   public
     constructor Create;
@@ -97,6 +103,8 @@ type
       const ACapabilities: TJSONParserCapabilities);
     destructor Destroy; override;
     function Parse(const AText: UTF8String): TGocciaValue;
+    property CollectSources: Boolean read FCollectSources write FCollectSources;
+    property SourceTexts: TStringList read FSourceTexts;
   end;
 
 const
@@ -345,6 +353,26 @@ begin
   end;
 end;
 
+procedure TGocciaJSONParser.ParseWithSources(const AText: UTF8String;
+  out AValue: TGocciaValue; const ASourceTexts: TStringList);
+var
+  Visitor: TGocciaJSONVisitor;
+begin
+  Visitor := TGocciaJSONVisitor.Create(FCapabilities);
+  try
+    Visitor.CollectSources := True;
+    try
+      AValue := Visitor.Parse(AText);
+      ASourceTexts.Assign(Visitor.SourceTexts);
+    except
+      on E: EJSONParseError do
+        raise EGocciaJSONParseError.Create(E.Message);
+    end;
+  finally
+    Visitor.Free;
+  end;
+end;
+
 { TGocciaJSONVisitor }
 
 constructor TGocciaJSONVisitor.Create;
@@ -358,13 +386,16 @@ begin
   inherited Create(ACapabilities);
   FStack := TList<TGocciaValue>.Create;
   FKeyStack := TStringList.Create;
+  FSourceTexts := TStringList.Create;
   FResult := nil;
+  FCollectSources := False;
 end;
 
 destructor TGocciaJSONVisitor.Destroy;
 begin
   FStack.Free;
   FKeyStack.Free;
+  FSourceTexts.Free;
   inherited;
 end;
 
@@ -372,6 +403,18 @@ function TGocciaJSONVisitor.Parse(const AText: UTF8String): TGocciaValue;
 begin
   DoParse(AText);
   Result := FResult;
+end;
+
+procedure TGocciaJSONVisitor.OnValueStart;
+begin
+  FValueStartPosition := CurrentPosition;
+end;
+
+procedure TGocciaJSONVisitor.RecordSourceText;
+begin
+  if FCollectSources then
+    FSourceTexts.Add(Copy(string(SourceTextData), FValueStartPosition,
+      CurrentPosition - FValueStartPosition));
 end;
 
 procedure TGocciaJSONVisitor.EmitValue(const AValue: TGocciaValue);
@@ -397,11 +440,13 @@ end;
 
 procedure TGocciaJSONVisitor.OnNull;
 begin
+  RecordSourceText;
   EmitValue(TGocciaNullLiteralValue.NullValue);
 end;
 
 procedure TGocciaJSONVisitor.OnBoolean(const AValue: Boolean);
 begin
+  RecordSourceText;
   if AValue then
     EmitValue(TGocciaBooleanLiteralValue.TrueValue)
   else
@@ -410,16 +455,19 @@ end;
 
 procedure TGocciaJSONVisitor.OnString(const AValue: string);
 begin
+  RecordSourceText;
   EmitValue(TGocciaStringLiteralValue.Create(AValue));
 end;
 
 procedure TGocciaJSONVisitor.OnInteger(const AValue: Int64);
 begin
+  RecordSourceText;
   EmitValue(TGocciaNumberLiteralValue.Create(AValue));
 end;
 
 procedure TGocciaJSONVisitor.OnFloat(const AValue: Double);
 begin
+  RecordSourceText;
   EmitValue(TGocciaNumberLiteralValue.Create(AValue));
 end;
 
