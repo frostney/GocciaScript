@@ -2694,6 +2694,8 @@ begin
           SetterArgs.Free;
         end;
       end
+      else if AccessClass.HasPrivateGetter(APrivatePropertyCompoundAssignmentExpression.PrivateName) then
+        ThrowPrivateSetterMissingError(APrivatePropertyCompoundAssignmentExpression.PrivateName)
       else
         Instance.SetPrivateProperty(APrivatePropertyCompoundAssignmentExpression.PrivateName, Result, AccessClass);
     end

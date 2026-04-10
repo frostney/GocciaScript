@@ -118,3 +118,39 @@ test("logical AND assignment throws for unresolved identifiers", () => {
     missingAndValue &&= 1;
   }).toThrow(ReferenceError);
 });
+
+test("logical AND assignment uses private accessors and throws for getter-only fields", () => {
+  class GetterOnly {
+    #storage = 10;
+
+    get #value() {
+      return this.#storage;
+    }
+
+    update(value) {
+      return this.#value &&= value;
+    }
+  }
+
+  const obj = new GetterOnly();
+  expect(() => {
+    obj.update(99);
+  }).toThrow(TypeError);
+});
+
+test("logical AND assignment short-circuits getter-only private accessors when falsy", () => {
+  class GetterOnly {
+    #storage = 0;
+
+    get #value() {
+      return this.#storage;
+    }
+
+    update(value) {
+      return this.#value &&= value;
+    }
+  }
+
+  const obj = new GetterOnly();
+  expect(obj.update(99)).toBe(0);
+});
