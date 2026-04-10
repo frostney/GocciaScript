@@ -20,10 +20,13 @@ type
     FRegExpConstructor: TGocciaNativeFunctionValue;
     FRegExpPrototype: TGocciaObjectValue;
     class var FPrototypeMembers: array of TGocciaMemberDefinition;
+    class var FStaticMembers: array of TGocciaMemberDefinition;
 
     function RegExpConstructorFn(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
   published
+    function RegExpEscape(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     function RegExpExec(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function RegExpTest(const AArgs: TGocciaArgumentsCollection;
@@ -319,7 +322,177 @@ begin
   FRegExpConstructor.AssignProperty(PROP_PROTOTYPE, FRegExpPrototype);
   FRegExpPrototype.AssignProperty(PROP_CONSTRUCTOR, FRegExpConstructor);
 
+  if Length(FStaticMembers) = 0 then
+  begin
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddMethod(RegExpEscape, 1, gmkStaticMethod);
+      FStaticMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+  end;
+  RegisterMemberDefinitions(FRegExpConstructor, FStaticMembers);
+
   AScope.DefineLexicalBinding(AName, FRegExpConstructor, dtConst);
+end;
+
+function IsECMAScriptWhiteSpaceOrLineTerminator(
+  const ACodePoint: Cardinal): Boolean; inline;
+begin
+  case ACodePoint of
+    // ES2026 §12.2 White Space
+    $0009, $000B, $000C, $0020, $00A0, $FEFF,
+    // ES2026 §12.2 White Space — Unicode Zs category
+    $1680, $2000..$200A, $202F, $205F, $3000,
+    // ES2026 §12.3 Line Terminators
+    $000A, $000D, $2028, $2029:
+      Result := True;
+  else
+    Result := False;
+  end;
+end;
+
+function DecodeUTF8CodePoint(const AStr: string; const AIndex: Integer;
+  out ACodePoint: Cardinal): Integer;
+var
+  B1: Byte;
+begin
+  B1 := Ord(AStr[AIndex]);
+
+  // Single byte (ASCII)
+  if B1 < $80 then
+  begin
+    ACodePoint := B1;
+    Result := 1;
+  end
+  // 2-byte sequence
+  else if ((B1 and $E0) = $C0) and (AIndex + 1 <= Length(AStr)) then
+  begin
+    ACodePoint := ((B1 and $1F) shl 6) or
+                  (Ord(AStr[AIndex + 1]) and $3F);
+    Result := 2;
+  end
+  // 3-byte sequence
+  else if ((B1 and $F0) = $E0) and (AIndex + 2 <= Length(AStr)) then
+  begin
+    ACodePoint := ((B1 and $0F) shl 12) or
+                  ((Ord(AStr[AIndex + 1]) and $3F) shl 6) or
+                  (Ord(AStr[AIndex + 2]) and $3F);
+    Result := 3;
+  end
+  // 4-byte sequence
+  else if ((B1 and $F8) = $F0) and (AIndex + 3 <= Length(AStr)) then
+  begin
+    ACodePoint := ((B1 and $07) shl 18) or
+                  ((Ord(AStr[AIndex + 1]) and $3F) shl 12) or
+                  ((Ord(AStr[AIndex + 2]) and $3F) shl 6) or
+                  (Ord(AStr[AIndex + 3]) and $3F);
+    Result := 4;
+  end
+  else
+  begin
+    // Invalid or incomplete sequence — treat as single byte
+    ACodePoint := B1;
+    Result := 1;
+  end;
+end;
+
+// TC39 RegExp Escaping §1.1.1 EncodeForRegExpEscape(c)
+function EncodeForRegExpEscape(const ACodePoint: Cardinal): string;
+var
+  High, Low: Cardinal;
+begin
+  if ACodePoint <= $FF then
+    Result := '\x' + LowerCase(IntToHex(ACodePoint, 2))
+  else if ACodePoint <= $FFFF then
+    Result := '\u' + LowerCase(IntToHex(ACodePoint, 4))
+  else
+  begin
+    // TC39 RegExp Escaping §1.1.1 step 3-7: surrogate pair encoding
+    High := $D800 + ((ACodePoint - $10000) shr 10);
+    Low := $DC00 + ((ACodePoint - $10000) and $3FF);
+    Result := '\u' + LowerCase(IntToHex(High, 4)) +
+              '\u' + LowerCase(IntToHex(Low, 4));
+  end;
+end;
+
+// TC39 RegExp Escaping §1.1 RegExp.escape(string)
+function TGocciaGlobalRegExp.RegExpEscape(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+const
+  SYNTAX_CHARACTERS = ['^', '$', '\', '.', '*', '+', '?',
+    '(', ')', '[', ']', '{', '}', '|', '/'];
+  CLASS_SET_RESERVED_PUNCTUATORS = ['&', '-', '!', '#', '%', ',',
+    ':', ';', '<', '=', '>', '@', '`', '~'];
+var
+  Arg: TGocciaValue;
+  Input, Escaped: string;
+  I, ByteLen: Integer;
+  CodePoint: Cardinal;
+  IsFirst: Boolean;
+begin
+  // TC39 RegExp Escaping §1.1 step 1
+  if AArgs.Length = 0 then
+    ThrowTypeError('RegExp.escape requires a string argument');
+
+  Arg := AArgs.GetElement(0);
+  if not (Arg is TGocciaStringLiteralValue) then
+    ThrowTypeError('First argument to RegExp.escape must be a string');
+
+  Input := Arg.ToStringLiteral.Value;
+  Escaped := '';
+  IsFirst := True;
+  I := 1;
+
+  while I <= Length(Input) do
+  begin
+    ByteLen := DecodeUTF8CodePoint(Input, I, CodePoint);
+
+    // TC39 RegExp Escaping §1.1 step 4a: first code point is digit or letter
+    if IsFirst and (CodePoint < $80) and
+       CharInSet(Chr(CodePoint), ['0'..'9', 'a'..'z', 'A'..'Z']) then
+    begin
+      Escaped := Escaped + EncodeForRegExpEscape(CodePoint);
+      IsFirst := False;
+      Inc(I, ByteLen);
+      Continue;
+    end;
+
+    IsFirst := False;
+
+    // TC39 RegExp Escaping §1.1 step 4b: SyntaxCharacter or solidus
+    if (CodePoint < $80) and CharInSet(Chr(CodePoint), SYNTAX_CHARACTERS) then
+    begin
+      Escaped := Escaped + '\' + Chr(CodePoint);
+      Inc(I, ByteLen);
+      Continue;
+    end;
+
+    // TC39 RegExp Escaping §1.1 step 4c: ClassSetReservedPunctuator
+    if (CodePoint < $80) and
+       CharInSet(Chr(CodePoint), CLASS_SET_RESERVED_PUNCTUATORS) then
+    begin
+      Escaped := Escaped + EncodeForRegExpEscape(CodePoint);
+      Inc(I, ByteLen);
+      Continue;
+    end;
+
+    // TC39 RegExp Escaping §1.1 step 4d: WhiteSpace or LineTerminator
+    if IsECMAScriptWhiteSpaceOrLineTerminator(CodePoint) then
+    begin
+      Escaped := Escaped + EncodeForRegExpEscape(CodePoint);
+      Inc(I, ByteLen);
+      Continue;
+    end;
+
+    // TC39 RegExp Escaping §1.1 step 4e: pass through
+    Escaped := Escaped + Copy(Input, I, ByteLen);
+    Inc(I, ByteLen);
+  end;
+
+  Result := TGocciaStringLiteralValue.Create(Escaped);
 end;
 
 // ES2026 §22.2.3.1 RegExp ( pattern, flags )
