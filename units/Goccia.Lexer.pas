@@ -590,7 +590,7 @@ begin
   AddToken(gttRegex, PatternBuffer.ToString + REGEX_SEPARATOR + Flags);
 end;
 
-// ES2021 §12.9.3 NumericLiteral
+// ES2026 §12.9.3 NumericLiteral
 procedure TGocciaLexer.ScanNumber;
 var
   Ch: Char;
