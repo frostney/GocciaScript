@@ -14,6 +14,7 @@ const
   AGGREGATE_ERROR_NAME  = 'AggregateError';
   DOM_EXCEPTION_NAME    = 'DOMException';
   DATA_CLONE_ERROR_NAME = 'DataCloneError';
+  INVALID_CHARACTER_ERROR_NAME = 'InvalidCharacterError';
 
 implementation
 

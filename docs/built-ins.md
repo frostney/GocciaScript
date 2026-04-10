@@ -468,10 +468,16 @@ The constructor-backed objects mirror the `node-semver` public fields and core i
 |----------|-------------|
 | `queueMicrotask(callback)` | Enqueue a callback to run as a microtask. Throws `TypeError` if the argument is not callable. |
 | `structuredClone(value)` | Deep-clone a value using the structured clone algorithm. Handles objects, arrays, `Map`, `Set`, and circular references. Throws `DOMException` with name `"DataCloneError"` (code 25) for non-cloneable types (functions, symbols). |
+| `btoa(data)` | Encode a binary string (each character code ≤ U+00FF) to base64. Throws `DOMException` with name `"InvalidCharacterError"` (code 5) if any character code exceeds U+00FF. |
+| `atob(data)` | Decode a base64 string to a binary string. Uses WHATWG forgiving-base64-decode: strips ASCII whitespace, tolerates missing `=` padding. Throws `DOMException` with name `"InvalidCharacterError"` (code 5) for invalid base64 input. |
 
 `queueMicrotask` shares the same microtask queue used by Promise reactions. Callbacks run after the current synchronous code completes but before the engine returns control. If a callback throws, the error is silently discarded and remaining microtasks still execute.
 
 `structuredClone` creates a deep copy following the HTML spec's structured clone algorithm. Primitives are returned as-is. Objects, arrays, Maps, and Sets are recursively cloned. Circular references and shared references within the object graph are preserved (the same cloned object is reused). Non-serializable values (functions, symbols) throw a `DOMException` with `name: "DataCloneError"` and `code: 25`, matching browser and Node.js behavior. Accessor properties (getters/setters) are read via the getter and the resulting value is cloned as a data property on the clone.
+
+`btoa` encodes a string to base64 following the WHATWG HTML spec §8.3. Each character in the input must have a code point ≤ U+00FF (Latin-1 range); characters outside this range throw a `DOMException` with name `"InvalidCharacterError"` and legacy code 5. The input is interpreted as a byte sequence where each code point maps 1:1 to a byte value.
+
+`atob` decodes a base64 string following the WHATWG forgiving-base64-decode algorithm. ASCII whitespace (U+0009, U+000A, U+000C, U+000D, U+0020) is stripped before decoding. Missing `=` padding is tolerated. Invalid characters or an invalid length (length mod 4 = 1 after cleanup) throw a `DOMException` with name `"InvalidCharacterError"` and legacy code 5. The decoded bytes are returned as a string where each byte becomes a character (Latin-1 interpretation).
 
 **Error constructors:** `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `DOMException`
 

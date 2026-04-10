@@ -26,6 +26,9 @@ procedure ThrowSyntaxError(const AMessage: string);
 { Raises a TGocciaThrowValue with a DataCloneError (DOMException with code 25) }
 procedure ThrowDataCloneError(const AMessage: string);
 
+{ Raises a TGocciaThrowValue with an InvalidCharacterError (DOMException with code 5) }
+procedure ThrowInvalidCharacterError(const AMessage: string);
+
 { Raises a TGocciaThrowValue with a generic Error }
 procedure ThrowError(const AMessage: string);
 
@@ -106,6 +109,18 @@ begin
   ErrorObj := CreateErrorObject(DATA_CLONE_ERROR_NAME, AMessage);
   ErrorObj.HasErrorData := False;
   ErrorObj.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(25));
+  if Assigned(GDOMExceptionProto) then
+    ErrorObj.Prototype := GDOMExceptionProto;
+  raise TGocciaThrowValue.Create(ErrorObj);
+end;
+
+procedure ThrowInvalidCharacterError(const AMessage: string);
+var
+  ErrorObj: TGocciaObjectValue;
+begin
+  ErrorObj := CreateErrorObject(INVALID_CHARACTER_ERROR_NAME, AMessage);
+  ErrorObj.HasErrorData := False;
+  ErrorObj.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(5));
   if Assigned(GDOMExceptionProto) then
     ErrorObj.Prototype := GDOMExceptionProto;
   raise TGocciaThrowValue.Create(ErrorObj);
