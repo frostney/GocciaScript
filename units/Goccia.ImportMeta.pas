@@ -35,6 +35,10 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
 
+const
+  PINNED_OBJECTS_PER_MODULE = 3;
+  PINNED_INITIAL_CAPACITY = 8;
+
 var
   ImportMetaCache: TOrderedStringMap<TGocciaObjectValue>;
   PinnedObjects: array of TGCManagedObject;
@@ -72,8 +76,16 @@ begin
     ThrowTypeError('import.meta.resolve requires a specifier argument');
 
   Specifier := AArgs.GetElement(0).ToStringLiteral.Value;
-  BaseDirectory := ExtractFilePath(ExpandFileName(FModuleFilePath));
-  ResolvedPath := ExpandFileName(BaseDirectory + Specifier);
+
+  // Absolute specifiers resolve directly; relative ones resolve against the module directory
+  if (Length(Specifier) > 0) and ((Specifier[1] = '/') or
+     (Length(Specifier) >= 2) and (Specifier[2] = ':')) then
+    ResolvedPath := ExpandFileName(Specifier)
+  else
+  begin
+    BaseDirectory := ExtractFilePath(ExpandFileName(FModuleFilePath));
+    ResolvedPath := ExpandFileName(IncludeTrailingPathDelimiter(BaseDirectory) + Specifier);
+  end;
   Result := TGocciaStringLiteralValue.Create(FilePathToUrl(ResolvedPath));
 end;
 
@@ -115,12 +127,12 @@ begin
     TGarbageCollector.Instance.PinObject(ResolveHelper);
     TGarbageCollector.Instance.PinObject(TGCManagedObject(ResolveFunction));
 
-    if PinnedCount + 3 > Length(PinnedObjects) then
-      SetLength(PinnedObjects, PinnedCount * 2 + 8);
+    if PinnedCount + PINNED_OBJECTS_PER_MODULE > Length(PinnedObjects) then
+      SetLength(PinnedObjects, PinnedCount * 2 + PINNED_INITIAL_CAPACITY);
     PinnedObjects[PinnedCount] := MetaObject;
     PinnedObjects[PinnedCount + 1] := ResolveHelper;
     PinnedObjects[PinnedCount + 2] := TGCManagedObject(ResolveFunction);
-    Inc(PinnedCount, 3);
+    Inc(PinnedCount, PINNED_OBJECTS_PER_MODULE);
   end;
 
   // ES2026 §13.3.12.1 step 4e: cache on module record

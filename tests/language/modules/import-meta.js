@@ -61,6 +61,11 @@ describe("import.meta", () => {
     expect(resolved.includes("helpers/math.js")).toBe(true);
   });
 
+  test("import.meta.resolve handles absolute paths", () => {
+    const resolved = import.meta.resolve("/absolute/path/file.js");
+    expect(resolved).toBe("file:///absolute/path/file.js");
+  });
+
   test("import.meta.resolve throws without arguments", () => {
     expect(() => import.meta.resolve()).toThrow(TypeError);
   });
