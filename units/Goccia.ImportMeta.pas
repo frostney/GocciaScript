@@ -37,12 +37,33 @@ uses
 
 const
   PINNED_OBJECTS_PER_MODULE = 3;
+  PINNED_GROWTH_MULTIPLIER = 2;
   PINNED_INITIAL_CAPACITY = 8;
 
 var
   ImportMetaCache: TOrderedStringMap<TGocciaObjectValue>;
   PinnedObjects: array of TGCManagedObject;
   PinnedCount: Integer;
+
+// RFC 3986 §2.3 — percent-encode path characters that are not unreserved or '/'
+function PercentEncodePath(const APath: string): string;
+var
+  I: Integer;
+  Ch: Char;
+begin
+  Result := '';
+  for I := 1 to Length(APath) do
+  begin
+    Ch := APath[I];
+    case Ch of
+      'A'..'Z', 'a'..'z', '0'..'9', '-', '.', '_', '~', '/',
+      ':', '@', '!', '$', '&', '''', '(', ')', '*', '+', ',', ';', '=':
+        Result := Result + Ch;
+    else
+      Result := Result + '%' + IntToHex(Ord(Ch), 2);
+    end;
+  end;
+end;
 
 function FilePathToUrl(const AFilePath: string): string;
 var
@@ -51,9 +72,9 @@ begin
   AbsolutePath := ExpandFileName(AFilePath);
   {$IFDEF MSWINDOWS}
   AbsolutePath := StringReplace(AbsolutePath, '\', '/', [rfReplaceAll]);
-  Result := 'file:///' + AbsolutePath;
+  Result := 'file:///' + PercentEncodePath(AbsolutePath);
   {$ELSE}
-  Result := 'file://' + AbsolutePath;
+  Result := 'file://' + PercentEncodePath(AbsolutePath);
   {$ENDIF}
 end;
 
@@ -128,7 +149,7 @@ begin
     TGarbageCollector.Instance.PinObject(TGCManagedObject(ResolveFunction));
 
     if PinnedCount + PINNED_OBJECTS_PER_MODULE > Length(PinnedObjects) then
-      SetLength(PinnedObjects, PinnedCount * 2 + PINNED_INITIAL_CAPACITY);
+      SetLength(PinnedObjects, PinnedCount * PINNED_GROWTH_MULTIPLIER + PINNED_INITIAL_CAPACITY);
     PinnedObjects[PinnedCount] := MetaObject;
     PinnedObjects[PinnedCount + 1] := ResolveHelper;
     PinnedObjects[PinnedCount + 2] := TGCManagedObject(ResolveFunction);

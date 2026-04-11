@@ -66,6 +66,16 @@ describe("import.meta", () => {
     expect(resolved).toBe("file:///absolute/path/file.js");
   });
 
+  test("import.meta.resolve percent-encodes special characters", () => {
+    const resolved = import.meta.resolve("/path with spaces/file#1.js");
+    expect(resolved).toBe("file:///path%20with%20spaces/file%231.js");
+  });
+
+  test("import.meta.url percent-encodes spaces in the path", () => {
+    // The URL should not contain raw spaces
+    expect(import.meta.url.includes(" ")).toBe(false);
+  });
+
   test("import.meta.resolve throws without arguments", () => {
     expect(() => import.meta.resolve()).toThrow(TypeError);
   });
