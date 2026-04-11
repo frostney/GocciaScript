@@ -7,6 +7,7 @@ describe("TypedArray constructors", () => {
     test("Uint16Array is defined", () => { expect(Uint16Array).toBeDefined(); });
     test("Int32Array is defined", () => { expect(Int32Array).toBeDefined(); });
     test("Uint32Array is defined", () => { expect(Uint32Array).toBeDefined(); });
+    test("Float16Array is defined", () => { expect(Float16Array).toBeDefined(); });
     test("Float32Array is defined", () => { expect(Float32Array).toBeDefined(); });
     test("Float64Array is defined", () => { expect(Float64Array).toBeDefined(); });
   });
@@ -153,6 +154,7 @@ describe("TypedArray constructors", () => {
     test("Uint16Array.BYTES_PER_ELEMENT === 2", () => { expect(Uint16Array.BYTES_PER_ELEMENT).toBe(2); });
     test("Int32Array.BYTES_PER_ELEMENT === 4", () => { expect(Int32Array.BYTES_PER_ELEMENT).toBe(4); });
     test("Uint32Array.BYTES_PER_ELEMENT === 4", () => { expect(Uint32Array.BYTES_PER_ELEMENT).toBe(4); });
+    test("Float16Array.BYTES_PER_ELEMENT === 2", () => { expect(Float16Array.BYTES_PER_ELEMENT).toBe(2); });
     test("Float32Array.BYTES_PER_ELEMENT === 4", () => { expect(Float32Array.BYTES_PER_ELEMENT).toBe(4); });
     test("Float64Array.BYTES_PER_ELEMENT === 8", () => { expect(Float64Array.BYTES_PER_ELEMENT).toBe(8); });
 

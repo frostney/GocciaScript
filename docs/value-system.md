@@ -622,7 +622,7 @@ Self-references in initializers are supported via a child scope that binds each 
 
 ## TypedArray
 
-`TGocciaTypedArrayValue` extends `TGocciaInstanceValue` (`Goccia.Values.TypedArrayValue.pas`). Provides array-like views over ArrayBuffer data with fixed element types. Nine non-BigInt types are supported: `Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`.
+`TGocciaTypedArrayValue` extends `TGocciaInstanceValue` (`Goccia.Values.TypedArrayValue.pas`). Provides array-like views over ArrayBuffer data with fixed element types. Ten non-BigInt types are supported: `Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float16Array`, `Float32Array`, `Float64Array`. `Float16Array` uses IEEE 754 half-precision (binary16) with conversion helpers in `Goccia.Float16.pas`.
 
 - **Internal storage** — `FBufferValue: TGocciaValue` (the underlying buffer — either `TGocciaArrayBufferValue` or `TGocciaSharedArrayBufferValue`, returned by `.buffer`), `FBufferData: TBytes` (shared reference to the buffer's byte array for element access), `FByteOffset: Integer`, `FLength: Integer`, `FKind: TGocciaTypedArrayKind`.
 - **Shared prototype singleton** — All TypedArray instances (regardless of kind) share a single prototype (`FShared: TGocciaSharedPrototype`). Prototype methods are registered once during `InitializePrototype`. The prototype and method host are pinned automatically by `TGocciaSharedPrototype.Create`.

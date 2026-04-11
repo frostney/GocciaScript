@@ -131,6 +131,7 @@ See [Adding a New Built-in Type](adding-built-in-types.md) for the complete step
 | `Math.asinh(x)` | Inverse hyperbolic sine |
 | `Math.atanh(x)` | Inverse hyperbolic tangent |
 | `Math.expm1(x)` | e^x - 1 (precise for small x) |
+| `Math.f16round(x)` | Nearest 16-bit float (ES2025) |
 | `Math.fround(x)` | Nearest 32-bit float |
 | `Math.hypot(x, y)` | Square root of sum of squares |
 | `Math.imul(a, b)` | 32-bit integer multiplication |
@@ -938,7 +939,7 @@ A fixed-length raw binary data buffer intended for shared-memory use. In GocciaS
 
 ### TypedArrays (`Goccia.Values.TypedArrayValue.pas`)
 
-TypedArrays provide array-like views over ArrayBuffer data with fixed element types. All TypedArray constructors are gated behind the `ggArrayBuffer` flag. GocciaScript supports 9 non-BigInt TypedArray types:
+TypedArrays provide array-like views over ArrayBuffer data with fixed element types. All TypedArray constructors are gated behind the `ggArrayBuffer` flag. GocciaScript supports 10 non-BigInt TypedArray types:
 
 | Type | Element size | Value range |
 |------|-------------|-------------|
@@ -949,6 +950,7 @@ TypedArrays provide array-like views over ArrayBuffer data with fixed element ty
 | `Uint16Array` | 2 bytes | 0 to 65535 |
 | `Int32Array` | 4 bytes | -2147483648 to 2147483647 |
 | `Uint32Array` | 4 bytes | 0 to 4294967295 |
+| `Float16Array` | 2 bytes | IEEE 754 half-precision (ES2025) |
 | `Float32Array` | 4 bytes | IEEE 754 single-precision |
 | `Float64Array` | 8 bytes | IEEE 754 double-precision |
 
@@ -1037,7 +1039,7 @@ These methods are available only on `Uint8Array`, not on other TypedArray types.
 | `u8.setFromBase64(string [, options])` | Decode base64 into this array. Returns `{ read, written }`. Same options as `fromBase64` |
 | `u8.setFromHex(string)` | Decode hex into this array. Returns `{ read, written }` |
 
-**Value encoding:** Integer types use fixed-width truncation (overflow wraps). `Uint8ClampedArray` clamps to [0, 255] with half-to-even rounding. `Float32Array` rounds to IEEE 754 single precision. `Float64Array` preserves full double precision. NaN is stored as 0 in integer types and as NaN in float types.
+**Value encoding:** Integer types use fixed-width truncation (overflow wraps). `Uint8ClampedArray` clamps to [0, 255] with half-to-even rounding. `Float16Array` rounds to IEEE 754 half precision (max finite ±65504, epsilon 2⁻¹⁰ at 1.0). `Float32Array` rounds to IEEE 754 single precision. `Float64Array` preserves full double precision. NaN is stored as 0 in integer types and as NaN in float types.
 
 **Not supported:** `BigInt64Array`, `BigUint64Array` (BigInt types), `DataView`.
 

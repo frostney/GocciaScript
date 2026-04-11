@@ -21,7 +21,7 @@ type
     takInt8, takUint8, takUint8Clamped,
     takInt16, takUint16,
     takInt32, takUint32,
-    takFloat32, takFloat64
+    takFloat16, takFloat32, takFloat64
   );
 
   TGocciaTypedArrayValue = class(TGocciaInstanceValue)
@@ -130,6 +130,7 @@ uses
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Float16,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -142,7 +143,7 @@ class function TGocciaTypedArrayValue.BytesPerElement(const AKind: TGocciaTypedA
 begin
   case AKind of
     takInt8, takUint8, takUint8Clamped: Result := 1;
-    takInt16, takUint16: Result := 2;
+    takInt16, takUint16, takFloat16: Result := 2;
     takInt32, takUint32, takFloat32: Result := 4;
     takFloat64: Result := 8;
   else
@@ -160,6 +161,7 @@ begin
     takUint16: Result := CONSTRUCTOR_UINT16_ARRAY;
     takInt32: Result := CONSTRUCTOR_INT32_ARRAY;
     takUint32: Result := CONSTRUCTOR_UINT32_ARRAY;
+    takFloat16: Result := CONSTRUCTOR_FLOAT16_ARRAY;
     takFloat32: Result := CONSTRUCTOR_FLOAT32_ARRAY;
     takFloat64: Result := CONSTRUCTOR_FLOAT64_ARRAY;
   else
@@ -215,6 +217,11 @@ begin
       Move(FBufferData[Offset], U32, 4);
       I64 := U32;
       Result := I64;
+    end;
+    takFloat16:
+    begin
+      Move(FBufferData[Offset], U16, 2);
+      Result := Float16ToDouble(U16);
     end;
     takFloat32:
     begin
@@ -288,6 +295,11 @@ begin
       U32 := LongWord(Trunc(AValue));
       Move(U32, FBufferData[Offset], 4);
     end;
+    takFloat16:
+    begin
+      U16 := DoubleToFloat16(AValue);
+      Move(U16, FBufferData[Offset], 2);
+    end;
     takFloat32:
     begin
       F32 := AValue;
@@ -305,9 +317,15 @@ procedure WriteFloatDirect(var AData: TBytes;
   const AOffset: Integer; const AKind: TGocciaTypedArrayKind;
   const AValue: Double);
 var
+  F16: Word;
   F32: Single;
 begin
   case AKind of
+    takFloat16:
+    begin
+      F16 := DoubleToFloat16(AValue);
+      Move(F16, AData[AOffset], 2);
+    end;
     takFloat32:
     begin
       F32 := AValue;
@@ -324,7 +342,7 @@ var
 begin
   if ANum.IsNaN then
   begin
-    if FKind in [takFloat32, takFloat64] then
+    if FKind in [takFloat16, takFloat32, takFloat64] then
     begin
       Offset := FByteOffset + AIndex * BytesPerElement(FKind);
       WriteFloatDirect(FBufferData, Offset, FKind, ANum.Value);
@@ -336,7 +354,7 @@ begin
   begin
     case FKind of
       takUint8Clamped: WriteElement(AIndex, 255);
-      takFloat32, takFloat64:
+      takFloat16, takFloat32, takFloat64:
       begin
         Offset := FByteOffset + AIndex * BytesPerElement(FKind);
         WriteFloatDirect(FBufferData, Offset, FKind, ANum.Value);
@@ -348,7 +366,7 @@ begin
   else if ANum.IsNegativeInfinity then
   begin
     case FKind of
-      takFloat32, takFloat64:
+      takFloat16, takFloat32, takFloat64:
       begin
         Offset := FByteOffset + AIndex * BytesPerElement(FKind);
         WriteFloatDirect(FBufferData, Offset, FKind, ANum.Value);
