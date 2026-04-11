@@ -1715,7 +1715,7 @@ begin
   DescReg      := ACtx.Scope.AllocateRegister;
 
   ObjectIdx   := ACtx.Template.AddConstantString(CONSTRUCTOR_OBJECT);
-  DefPropIdx  := ACtx.Template.AddConstantString('defineProperty');
+  DefPropIdx  := ACtx.Template.AddConstantString(PROP_DEFINE_PROPERTY);
   PropNameIdx := ACtx.Template.AddConstantString(APropName);
   ValuePropIdx := ACtx.Template.AddConstantString(PROP_VALUE);
   if (ObjectIdx > High(UInt16)) or (DefPropIdx > High(UInt8)) or
@@ -1760,7 +1760,7 @@ begin
   FreezeArgReg := ACtx.Scope.AllocateRegister;
 
   ObjectIdx := ACtx.Template.AddConstantString(CONSTRUCTOR_OBJECT);
-  FreezeIdx := ACtx.Template.AddConstantString('freeze');
+  FreezeIdx := ACtx.Template.AddConstantString(PROP_FREEZE);
   if (ObjectIdx > High(UInt16)) or (FreezeIdx > High(UInt8)) then
     raise Exception.Create('Constant pool overflow');
 
