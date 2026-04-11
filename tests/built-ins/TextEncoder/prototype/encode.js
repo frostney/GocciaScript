@@ -99,4 +99,8 @@ describe("TextEncoder.prototype.encode", () => {
     expect(result[1]).toBe(0xBF);
     expect(result[2]).toBe(0xBD);
   });
+
+  test("throws TypeError when called on a non-TextEncoder receiver", () => {
+    expect(() => TextEncoder.prototype.encode.call({}, "x")).toThrow(TypeError);
+  });
 });

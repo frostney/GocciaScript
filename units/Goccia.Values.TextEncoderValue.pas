@@ -182,6 +182,8 @@ end;
 function TGocciaTextEncoderValue.EncodingGetter(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
+  if not (AThisValue is TGocciaTextEncoderValue) then
+    ThrowTypeError('TextEncoder.prototype.encoding: illegal invocation');
   // TextEncoder always uses UTF-8 — no instance state required.
   Result := TGocciaStringLiteralValue.Create(ENCODING_UTF8);
 end;
@@ -195,6 +197,8 @@ var
   NewTA: TGocciaTypedArrayValue;
   I: Integer;
 begin
+  if not (AThisValue is TGocciaTextEncoderValue) then
+    ThrowTypeError('TextEncoder.prototype.encode: illegal invocation');
   // Step 1: Let input be the empty string.
   Input := '';
   // Step 2: If input is given, convert to a scalar-value string.
@@ -220,6 +224,8 @@ var
   I, J, SeqLen, Written, Read, DestLen: Integer;
   ResultObj: TGocciaObjectValue;
 begin
+  if not (AThisValue is TGocciaTextEncoderValue) then
+    ThrowTypeError('TextEncoder.prototype.encodeInto: illegal invocation');
   if AArgs.Length < 2 then
     ThrowTypeError(
       'TextEncoder.prototype.encodeInto requires source and destination arguments');

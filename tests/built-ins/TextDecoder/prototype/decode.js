@@ -62,11 +62,25 @@ describe("TextDecoder.prototype.decode", () => {
     expect(dec.decode(bytes)).toBe("\u0000");
   });
 
-  test("non-fatal mode returns a string for invalid bytes (no throw)", () => {
-    // Non-fatal mode — result may be garbled but must produce a string.
-    const bytes = new Uint8Array([0xFF]);
-    const result = dec.decode(bytes);
-    expect(typeof result).toBe("string");
+  test("non-fatal mode replaces 0xFF with U+FFFD", () => {
+    // Per WHATWG Encoding §4.1: ill-formed bytes become U+FFFD.
+    expect(dec.decode(new Uint8Array([0xFF]))).toBe("\uFFFD");
+  });
+
+  test("non-fatal mode replaces truncated 2-byte sequence with U+FFFD", () => {
+    expect(dec.decode(new Uint8Array([0xC3]))).toBe("\uFFFD");
+  });
+
+  test("non-fatal mode replaces surrogate bytes (ED A0 80) with three U+FFFDs", () => {
+    // ED is rejected at its second byte (A0 > 9F for the ED leading byte);
+    // then A0 and 80 are orphaned continuation bytes → three replacements.
+    // Matches WHATWG spec and browser behaviour.
+    expect(dec.decode(new Uint8Array([0xED, 0xA0, 0x80]))).toBe("\uFFFD\uFFFD\uFFFD");
+  });
+
+  test("non-fatal mode preserves valid sequences between invalid bytes", () => {
+    // 'H' (0x48) + invalid 0xFF + 'i' (0x69) → H + U+FFFD + i
+    expect(dec.decode(new Uint8Array([0x48, 0xFF, 0x69]))).toBe("H\uFFFDi");
   });
 
   test("fatal mode throws TypeError for invalid UTF-8 byte sequence", () => {

@@ -158,6 +158,126 @@ begin
   end;
 end;
 
+// WHATWG Encoding §4.1: decode UTF-8 bytes with replacement semantics.
+// Each ill-formed byte (invalid leading byte, truncated sequence, overlong,
+// surrogate, or out-of-range code point) emits U+FFFD (EF BF BD) and advances
+// the cursor by one byte.
+function DecodeUTF8WithReplacement(const AData: TBytes;
+  const AOffset, ALength: Integer): string;
+const
+  FFFD_0 = $EF;
+  FFFD_1 = $BF;
+  FFFD_2 = $BD;
+var
+  OutBytes: array of Byte;
+  OutPos, I, SeqLen, K: Integer;
+  B, NextByte: Byte;
+  Valid: Boolean;
+  U8: UTF8String;
+begin
+  if ALength = 0 then
+  begin
+    Result := '';
+    Exit;
+  end;
+  // Worst case: every input byte becomes 3 bytes of U+FFFD.
+  SetLength(OutBytes, ALength * 3);
+  OutPos := 0;
+  I := AOffset;
+  while I < AOffset + ALength do
+  begin
+    B := AData[I];
+    // Determine the expected sequence length from the leading byte.
+    if B and $80 = 0 then
+      SeqLen := 1
+    else if (B and $E0 = $C0) and (B >= $C2) then
+      SeqLen := 2
+    else if B and $F0 = $E0 then
+      SeqLen := 3
+    else if (B and $F8 = $F0) and (B <= $F4) then
+      SeqLen := 4
+    else
+      SeqLen := 0;
+
+    if SeqLen = 0 then
+    begin
+      // Invalid leading byte ($80-$BF, $C0, $C1, $F5-$FF).
+      OutBytes[OutPos]     := FFFD_0;
+      OutBytes[OutPos + 1] := FFFD_1;
+      OutBytes[OutPos + 2] := FFFD_2;
+      Inc(OutPos, 3);
+      Inc(I);
+    end
+    else if I + SeqLen > AOffset + ALength then
+    begin
+      // Truncated sequence — not enough bytes remain.
+      OutBytes[OutPos]     := FFFD_0;
+      OutBytes[OutPos + 1] := FFFD_1;
+      OutBytes[OutPos + 2] := FFFD_2;
+      Inc(OutPos, 3);
+      Inc(I);
+    end
+    else if SeqLen = 1 then
+    begin
+      // ASCII — always valid, pass through directly.
+      OutBytes[OutPos] := B;
+      Inc(OutPos);
+      Inc(I);
+    end
+    else
+    begin
+      // Multi-byte: validate all continuation bytes (must be 10xxxxxx).
+      Valid := True;
+      for K := 1 to SeqLen - 1 do
+        if (AData[I + K] and $C0) <> $80 then
+        begin
+          Valid := False;
+          Break;
+        end;
+
+      // Second-byte range guards (same constraints as IsValidUTF8).
+      if Valid then
+      begin
+        NextByte := AData[I + 1];
+        case SeqLen of
+          3:
+          begin
+            if (B = $E0) and (NextByte < $A0) then Valid := False; // overlong
+            if (B = $ED) and (NextByte > $9F) then Valid := False; // surrogate
+          end;
+          4:
+          begin
+            if (B = $F0) and (NextByte < $90) then Valid := False; // overlong
+            if (B = $F4) and (NextByte > $8F) then Valid := False; // > U+10FFFF
+          end;
+        end;
+      end;
+
+      if Valid then
+      begin
+        for K := 0 to SeqLen - 1 do
+          OutBytes[OutPos + K] := AData[I + K];
+        Inc(OutPos, SeqLen);
+        Inc(I, SeqLen);
+      end
+      else
+      begin
+        // Invalid sequence — emit U+FFFD and retreat to next byte.
+        OutBytes[OutPos]     := FFFD_0;
+        OutBytes[OutPos + 1] := FFFD_1;
+        OutBytes[OutPos + 2] := FFFD_2;
+        Inc(OutPos, 3);
+        Inc(I);
+      end;
+    end;
+  end;
+
+  SetLength(U8, OutPos);
+  if OutPos > 0 then
+    Move(OutBytes[0], U8[1], OutPos);
+  Result := string(U8);
+end;
+
 { TGocciaTextDecoderValue }
 
 constructor TGocciaTextDecoderValue.Create(const AClass: TGocciaClassValue = nil);
@@ -352,16 +472,23 @@ begin
     Dec(DataLen, MIN_BOM_LENGTH);
   end;
 
-  // Fatal mode: validate UTF-8 before decoding.
-  // Per WHATWG Encoding §8.2.4 step 5: throw a TypeError on failure.
-  if Obj.FFatal and not IsValidUTF8(Data, Offset, DataLen) then
-    ThrowTypeError('TextDecoder.prototype.decode: invalid UTF-8 byte sequence');
-
-  // Decode: treat the raw bytes as a UTF-8 string.
-  SetLength(U8, DataLen);
-  if DataLen > 0 then
-    Move(Data[Offset], U8[1], DataLen);
-  Result := TGocciaStringLiteralValue.Create(string(U8));
+  // WHATWG Encoding §8.2.4 step 5: fatal vs. replacement decoding.
+  if Obj.FFatal then
+  begin
+    // Fatal mode: reject any ill-formed byte sequence with a TypeError.
+    if not IsValidUTF8(Data, Offset, DataLen) then
+      ThrowTypeError(
+        'TextDecoder.prototype.decode: invalid UTF-8 byte sequence');
+    // All bytes are well-formed — raw copy is safe.
+    SetLength(U8, DataLen);
+    if DataLen > 0 then
+      Move(Data[Offset], U8[1], DataLen);
+    Result := TGocciaStringLiteralValue.Create(string(U8));
+  end
+  else
+    // Non-fatal mode: replace each ill-formed sequence with U+FFFD.
+    Result := TGocciaStringLiteralValue.Create(
+      DecodeUTF8WithReplacement(Data, Offset, DataLen));
 end;
 
 end.

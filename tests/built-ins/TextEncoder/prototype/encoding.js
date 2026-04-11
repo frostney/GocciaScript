@@ -10,4 +10,10 @@ describe("TextEncoder.prototype.encoding", () => {
     expect(desc.set).toBe(undefined);
     expect(desc.configurable).toBe(true);
   });
+
+  test("throws TypeError when called on a non-TextEncoder receiver", () => {
+    expect(() =>
+      Object.getOwnPropertyDescriptor(TextEncoder.prototype, "encoding").get.call({})
+    ).toThrow(TypeError);
+  });
 });
