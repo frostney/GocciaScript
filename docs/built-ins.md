@@ -913,7 +913,7 @@ A raw binary data buffer. Supports both fixed-length and resizable modes. Intern
 |--------|-------------|
 | `buf.slice(begin?, end?)` | Returns a new ArrayBuffer containing bytes from `begin` (inclusive) to `end` (exclusive). Supports negative indices (count from end). Clamps out-of-range indices. Defaults: `begin` = 0, `end` = `byteLength`. Throws `TypeError` if detached. |
 | `buf.resize(newLength)` | Resizes a resizable buffer to `newLength` bytes. Preserves existing data up to `min(old, new)` length; zero-fills growth. Throws `TypeError` if fixed-length or detached. Throws `RangeError` if `newLength > maxByteLength`. Returns `undefined`. |
-| `buf.transfer([newLength])` | Copies data into a new buffer and detaches the original. `newLength` defaults to current `byteLength`. Preserves resizability: if the source was resizable, the new buffer's `maxByteLength` is `max(newLength, originalMaxByteLength)`. Throws `TypeError` if detached. |
+| `buf.transfer([newLength])` | Copies data into a new buffer and detaches the original. `newLength` defaults to current `byteLength`. Preserves resizability: if the source was resizable, the new buffer keeps the original `maxByteLength`. Throws `RangeError` if `newLength` exceeds that cap, and `TypeError` if detached. |
 | `buf.transferToFixedLength([newLength])` | Like `transfer`, but always produces a fixed-length (non-resizable) result. `newLength` defaults to current `byteLength`. Throws `TypeError` if detached. |
 
 **structuredClone:** ArrayBuffer instances are cloneable. The byte contents are copied into a new buffer.

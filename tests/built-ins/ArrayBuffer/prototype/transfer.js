@@ -80,13 +80,17 @@ describe("ArrayBuffer.prototype.transfer", () => {
     expect(newBuf.maxByteLength).toBe(16);
   });
 
-  test("transfer of resizable with larger size updates maxByteLength", () => {
+  test("transfer of resizable with larger size throws RangeError", () => {
     const buf = new ArrayBuffer(4, { maxByteLength: 8 });
-    const newBuf = buf.transfer(12);
+    expect(() => buf.transfer(12)).toThrow(RangeError);
+  });
+
+  test("transfer of resizable preserves original maxByteLength", () => {
+    const buf = new ArrayBuffer(4, { maxByteLength: 16 });
+    const newBuf = buf.transfer(8);
     expect(newBuf.resizable).toBe(true);
-    expect(newBuf.byteLength).toBe(12);
-    // maxByteLength = max(newLength, originalMaxByteLength)
-    expect(newBuf.maxByteLength).toBe(12);
+    expect(newBuf.byteLength).toBe(8);
+    expect(newBuf.maxByteLength).toBe(16);
   });
 
   test("transfer of fixed-length buffer returns fixed-length", () => {

@@ -65,4 +65,32 @@ describe("ArrayBuffer constructor with maxByteLength option", () => {
   test("throws RangeError for negative maxByteLength", () => {
     expect(() => new ArrayBuffer(0, { maxByteLength: -1 })).toThrow(RangeError);
   });
+
+  test("primitive options are silently ignored per spec", () => {
+    // ES2026 §25.1.3.7: If options is not an Object, return empty
+    const buf1 = new ArrayBuffer(8, 42);
+    expect(buf1.resizable).toBe(false);
+    expect(buf1.byteLength).toBe(8);
+
+    const buf2 = new ArrayBuffer(8, "hello");
+    expect(buf2.resizable).toBe(false);
+
+    const buf3 = new ArrayBuffer(8, true);
+    expect(buf3.resizable).toBe(false);
+
+    const buf4 = new ArrayBuffer(8, null);
+    expect(buf4.resizable).toBe(false);
+  });
+
+  test("NaN maxByteLength is coerced to 0 via ToIndex", () => {
+    const buf = new ArrayBuffer(0, { maxByteLength: NaN });
+    expect(buf.resizable).toBe(true);
+    expect(buf.maxByteLength).toBe(0);
+  });
+
+  test("fractional maxByteLength is truncated via ToIndex", () => {
+    const buf = new ArrayBuffer(0, { maxByteLength: 8.9 });
+    expect(buf.resizable).toBe(true);
+    expect(buf.maxByteLength).toBe(8);
+  });
 });

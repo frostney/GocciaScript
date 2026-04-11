@@ -31,7 +31,7 @@ describe("get ArrayBuffer.prototype.maxByteLength", () => {
     expect(buf.maxByteLength).toBe(0);
   });
 
-  test("reflects current byteLength for fixed after resize attempt", () => {
+  test("reflects current byteLength for fixed buffers", () => {
     const buf = new ArrayBuffer(8);
     expect(buf.maxByteLength).toBe(8);
   });

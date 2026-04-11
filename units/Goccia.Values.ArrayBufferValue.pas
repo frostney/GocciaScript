@@ -79,6 +79,8 @@ end;
 
 // ES2026 §6.2.4.2 ToIndex(value)
 function ToIndex(const AValue: TGocciaValue): Integer;
+const
+  MAX_ECMA_INDEX = 9007199254740991.0;
 var
   Num: TGocciaNumberLiteralValue;
   IntegerIndex: Double;
@@ -100,7 +102,8 @@ begin
   else
     IntegerIndex := Trunc(Num.Value);
 
-  if (IntegerIndex < 0) or (IntegerIndex > 9007199254740991) then
+  if (IntegerIndex < 0) or (IntegerIndex > MAX_ECMA_INDEX) or
+     (IntegerIndex > High(Integer)) then
     ThrowRangeError('Invalid array buffer length');
 
   Result := Trunc(IntegerIndex);
@@ -214,11 +217,11 @@ begin
   if AArguments.Length > 1 then
   begin
     OptionsArg := AArguments.GetElement(1);
-    if not (OptionsArg is TGocciaUndefinedLiteralValue) then
+    // ES2026 §25.1.3.7 GetArrayBufferMaxByteLengthOption step 2:
+    // If options is not an Object, return empty
+    if not (OptionsArg is TGocciaUndefinedLiteralValue) and
+       not OptionsArg.IsPrimitive then
     begin
-      if OptionsArg.IsPrimitive then
-        ThrowTypeError('Options argument must be an object');
-
       MaxByteLengthValue := OptionsArg.GetProperty(PROP_MAX_BYTE_LENGTH);
       if Assigned(MaxByteLengthValue) and not (MaxByteLengthValue is TGocciaUndefinedLiteralValue) then
         RequestedMaxByteLength := ToIndex(MaxByteLengthValue);
@@ -402,8 +405,10 @@ var
   NewMaxByteLength, CopyLength: Integer;
 begin
   // ES2026 §25.1.2.4 steps 5-6: Determine new maxByteLength
+  // Preserve the original maxByteLength; AllocateArrayBuffer throws RangeError
+  // if newByteLength > newMaxByteLength
   if APreserveResizability and (ABuf.FMaxByteLength >= 0) then
-    NewMaxByteLength := Max(ANewLength, ABuf.FMaxByteLength)
+    NewMaxByteLength := ABuf.FMaxByteLength
   else
     NewMaxByteLength := ABuf.NO_MAX_BYTE_LENGTH;
 
