@@ -31,8 +31,12 @@ implementation
 uses
   Math,
 
+  Goccia.Constants.PropertyNames,
   Goccia.Values.ErrorHelper,
   Goccia.Values.TypedArrayValue;
+
+const
+  NO_MAX_BYTE_LENGTH = -1;
 
 constructor TGocciaGlobalArrayBuffer.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
@@ -53,11 +57,14 @@ begin
   RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 end;
 
-// ES2026 §25.1.4.1 ArrayBuffer(length) — ToIndex(undefined) returns 0
+// ES2026 §25.1.4.1 ArrayBuffer(length [, options])
 function TGocciaGlobalArrayBuffer.ArrayBufferConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Num: TGocciaNumberLiteralValue;
   Len: Integer;
+  OptionsArg, MaxByteLengthValue: TGocciaValue;
+  RequestedMaxByteLength: Integer;
+  MaxNum: TGocciaNumberLiteralValue;
 begin
   if AArgs.Length = 0 then
   begin
@@ -71,7 +78,32 @@ begin
     ThrowRangeError('Invalid array buffer length');
 
   Len := Trunc(Num.Value);
-  Result := TGocciaArrayBufferValue.Create(Len);
+
+  // ES2026 §25.1.4.1 step 3: GetArrayBufferMaxByteLengthOption(options)
+  RequestedMaxByteLength := NO_MAX_BYTE_LENGTH;
+  if AArgs.Length > 1 then
+  begin
+    OptionsArg := AArgs.GetElement(1);
+    if Assigned(OptionsArg) and not (OptionsArg is TGocciaUndefinedLiteralValue) then
+    begin
+      if OptionsArg.IsPrimitive then
+        ThrowTypeError('Options argument must be an object');
+
+      MaxByteLengthValue := OptionsArg.GetProperty(PROP_MAX_BYTE_LENGTH);
+      if Assigned(MaxByteLengthValue) and not (MaxByteLengthValue is TGocciaUndefinedLiteralValue) then
+      begin
+        MaxNum := MaxByteLengthValue.ToNumberLiteral;
+        if MaxNum.IsNaN or MaxNum.IsInfinite or (MaxNum.Value < 0) or (MaxNum.Value <> Trunc(MaxNum.Value)) then
+          ThrowRangeError('Invalid maxByteLength');
+        RequestedMaxByteLength := Trunc(MaxNum.Value);
+      end;
+    end;
+  end;
+
+  if RequestedMaxByteLength >= 0 then
+    Result := TGocciaArrayBufferValue.Create(Len, RequestedMaxByteLength)
+  else
+    Result := TGocciaArrayBufferValue.Create(Len);
 end;
 
 // ES2026 §25.1.5.1 ArrayBuffer.isView(arg)
