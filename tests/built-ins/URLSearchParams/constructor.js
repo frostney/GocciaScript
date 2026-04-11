@@ -72,4 +72,10 @@ describe("URLSearchParams constructor", () => {
       new URLSearchParams([[]]);
     }).toThrow(TypeError);
   });
+
+  test("malformed pair with more than 2 elements throws", () => {
+    expect(() => {
+      new URLSearchParams([["a", "1", "extra"]]);
+    }).toThrow(TypeError);
+  });
 });

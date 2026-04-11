@@ -269,8 +269,9 @@ begin
     if not Assigned(Outer.Elements[I]) or not (Outer.Elements[I] is TGocciaArrayValue) then
       ThrowTypeError('Failed to construct URLSearchParams: The provided value cannot be converted to a sequence');
     Inner := TGocciaArrayValue(Outer.Elements[I]);
-    if Inner.Elements.Count < 2 then
-      ThrowTypeError('Failed to construct URLSearchParams: Sequence initializer must contain pairs');
+    // WHATWG URL §5.2: each pair must contain exactly two items
+    if Inner.Elements.Count <> 2 then
+      ThrowTypeError('Failed to construct URLSearchParams: Sequence initializer must contain pairs with exactly two items');
     Param.Name := '';
     Param.Value := '';
     if Assigned(Inner.Elements[0]) then

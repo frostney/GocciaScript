@@ -44,6 +44,7 @@ uses
   SysUtils,
 
   Goccia.Arguments.Validator,
+  Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.URL.Parser,
   Goccia.Values.ErrorHelper,
@@ -81,7 +82,7 @@ var
   URLStr, BaseStr: string;
   Parsed, BaseParsed: TGocciaURLRecord;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'URL.canParse', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, CONSTRUCTOR_URL + '.' + PROP_CAN_PARSE, ThrowError);
   URLStr := AArgs.GetElement(0).ToStringLiteral.Value;
 
   if AArgs.Length >= 2 then
@@ -112,7 +113,7 @@ var
   Parsed, BaseParsed: TGocciaURLRecord;
   URLObj: TGocciaURLValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'URL.parse', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, CONSTRUCTOR_URL + '.' + PROP_PARSE, ThrowError);
   URLStr := AArgs.GetElement(0).ToStringLiteral.Value;
 
   if AArgs.Length >= 2 then
