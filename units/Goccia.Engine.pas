@@ -239,6 +239,7 @@ uses
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.MicrotaskQueue,
+  Goccia.Platform,
   Goccia.Scope,
   Goccia.Scope.Redeclaration,
   Goccia.Token,
@@ -718,6 +719,7 @@ const
   PREFIX_LENGTH = 2; // Strip 'gg' prefix from enum names
 var
   GocciaObj: TGocciaObjectValue;
+  BuildObj: TGocciaObjectValue;
   BuiltInsArray: TGocciaArrayValue;
   Flag: TGocciaGlobalBuiltin;
   Name: string;
@@ -729,12 +731,19 @@ begin
     BuiltInsArray.Elements.Add(TGocciaStringLiteralValue.Create(Copy(Name, PREFIX_LENGTH + 1, Length(Name) - PREFIX_LENGTH)));
   end;
 
+  BuildObj := TGocciaObjectValue.Create;
+  BuildObj.DefineProperty('os', TGocciaPropertyDescriptorData.Create(
+    TGocciaStringLiteralValue.Create(GetBuildOS), [pfEnumerable]));
+  BuildObj.DefineProperty('arch', TGocciaPropertyDescriptorData.Create(
+    TGocciaStringLiteralValue.Create(GetBuildArch), [pfEnumerable]));
+
   GocciaObj := TGocciaObjectValue.Create;
   GocciaObj.AssignProperty('version', TGocciaStringLiteralValue.Create(GetVersion));
   GocciaObj.AssignProperty('commit', TGocciaStringLiteralValue.Create(GetCommit));
   GocciaObj.AssignProperty('builtIns', BuiltInsArray);
   GocciaObj.AssignProperty(PROP_STRICT_TYPES, TGocciaBooleanLiteralValue.FalseValue);
   GocciaObj.AssignProperty(SEMVER_NAMESPACE_PROPERTY, CreateSemverNamespace);
+  GocciaObj.AssignProperty('build', BuildObj);
 
   FInterpreter.GlobalScope.DefineLexicalBinding('Goccia', GocciaObj, dtConst);
 end;
