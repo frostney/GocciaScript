@@ -90,7 +90,7 @@ begin
   FModuleFilePath := AModuleFilePath;
 end;
 
-// ES2026 §13.3.12.1.1 HostGetImportMetaProperties — resolve(specifier)
+// ES2026 §13.3.12.1.1 HostGetImportMetaProperties(moduleRecord)
 function TGocciaImportMetaResolveHelper.Resolve(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
@@ -116,7 +116,7 @@ end;
 
 { Cache functions }
 
-// ES2026 §13.3.12.1 Runtime Semantics: Evaluation — ImportMeta
+// ES2026 §13.3.12.1 ImportMeta : import . meta
 function GetOrCreateImportMeta(const AFilePath: string): TGocciaObjectValue;
 var
   MetaObject: TGocciaObjectValue;
@@ -135,11 +135,11 @@ begin
   // ES2026 §13.3.12.1 step 4a: OrdinaryObjectCreate(null)
   MetaObject := TGocciaObjectValue.Create(nil);
 
-  // ES2026 §13.3.12.1.1 HostGetImportMetaProperties — url
+  // ES2026 §13.3.12.1.1 HostGetImportMetaProperties step: url
   MetaObject.AssignProperty(PROP_URL,
     TGocciaStringLiteralValue.Create(FilePathToUrl(CanonicalPath)));
 
-  // ES2026 §13.3.12.1.1 HostGetImportMetaProperties — resolve
+  // ES2026 §13.3.12.1.1 HostGetImportMetaProperties step: resolve
   ResolveHelper := TGocciaImportMetaResolveHelper.Create(CanonicalPath);
   ResolveFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
     ResolveHelper.Resolve, PROP_RESOLVE, 1);

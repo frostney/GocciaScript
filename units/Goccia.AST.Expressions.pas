@@ -1439,7 +1439,7 @@ begin
   end;
 end;
 
-// ES2026 §13.3.12.1 Runtime Semantics: Evaluation — ImportMeta
+// ES2026 §13.3.12.1 ImportMeta : import . meta
 function TGocciaImportMetaExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
   Result := GetOrCreateImportMeta(AContext.CurrentFilePath);
