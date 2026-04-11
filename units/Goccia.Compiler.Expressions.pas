@@ -74,6 +74,8 @@ procedure CompileThis(const ACtx: TGocciaCompilationContext;
   const ADest: UInt8);
 procedure CompileSuperAccess(const ACtx: TGocciaCompilationContext;
   const ADest: UInt8);
+procedure CompileImportMeta(const ACtx: TGocciaCompilationContext;
+  const ADest: UInt8);
 
 procedure EmitDefaultParameters(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray);
@@ -2444,6 +2446,12 @@ begin
   end;
 
   EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
+end;
+
+procedure CompileImportMeta(const ACtx: TGocciaCompilationContext;
+  const ADest: UInt8);
+begin
+  EmitInstruction(ACtx, EncodeABC(OP_IMPORT_META, ADest, 0, 0));
 end;
 
 end.

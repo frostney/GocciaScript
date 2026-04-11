@@ -204,6 +204,7 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.Decorators,
   Goccia.GarbageCollector,
+  Goccia.ImportMeta,
   Goccia.Profiler,
   Goccia.Timeout,
   Goccia.Values.ClassHelper,
@@ -5119,6 +5120,9 @@ begin
         ExportBindingValue(
           Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue,
           GetRegister(A));
+
+      OP_IMPORT_META:
+        SetRegister(A, GetOrCreateImportMeta(FCurrentModuleSourcePath));
 
       OP_THROW:
         raise EGocciaBytecodeThrow.Create(GetRegister(A));

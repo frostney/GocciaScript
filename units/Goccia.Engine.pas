@@ -229,6 +229,7 @@ uses
   Goccia.Coverage,
   Goccia.Error,
   Goccia.GarbageCollector,
+  Goccia.ImportMeta,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.MicrotaskQueue,
@@ -332,6 +333,7 @@ begin
     FBuiltinProxy.Free;
     FBuiltinFFI.Free;
     FBuiltinReflect.Free;
+    ClearImportMetaCache;
     FInjectedGlobals.Free;
     FInterpreter.Free;
     if FOwnsModuleLoader then

@@ -105,6 +105,7 @@ resourcestring
   SSuggestComputedPropertyNeedsValue = 'Add '': value'' after the computed property (e.g., [key]: value)';
 
   // Imports and exports
+  SSuggestImportMetaSyntax = 'Use import.meta to access module metadata (e.g., import.meta.url)';
   SSuggestStringImportAs = 'Use: import { "name" as localName } from "module"';
   SSuggestStringExportAs = 'Use: export { localName as "export-name" }';
   SSuggestDestructuringExportDeclareFirst = 'Declare first, then export: const x = ...; export { x };';
