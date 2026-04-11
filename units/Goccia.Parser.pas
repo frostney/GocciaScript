@@ -2952,7 +2952,8 @@ begin
         if Length(MemberDecorators) > 0 then
           raise TGocciaSyntaxError.Create(
             'Decorators cannot be applied to static blocks',
-            Peek.Line, Peek.Column, FFileName, FSourceLines);
+            Peek.Line, Peek.Column, FFileName, FSourceLines,
+            SSuggestStaticBlockNoDecorators);
         Consume(gttLeftBrace, 'Expected "{" after "static"',
           SSuggestOpenBraceClassBody);
         SetLength(Elements, Length(Elements) + 1);
