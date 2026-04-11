@@ -47,6 +47,7 @@ type
 implementation
 
 uses
+  Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -158,8 +159,12 @@ begin
 end;
 
 function TGocciaTemporalInstantValue.TotalNanoseconds: Double;
+var
+  MsFloat: Double;
 begin
-  Result := FEpochMilliseconds * 1000000.0 + FSubMillisecondNanoseconds;
+  // Safe Int64 → Double conversion (FPC 3.2.2 AArch64 bug: Int64 * Double gives wrong results)
+  MsFloat := FEpochMilliseconds;
+  Result := MsFloat * 1000000.0 + FSubMillisecondNanoseconds;
 end;
 
 { Getters }
@@ -320,46 +325,44 @@ var
   Inst: TGocciaTemporalInstantValue;
   UnitStr: string;
   Arg: TGocciaValue;
+  OptionsObj: TGocciaObjectValue;
   TotalNs, Divisor, Rounded, NewMs: Int64;
   NewSubMs: Integer;
+  SmallestUnit: TTemporalUnit;
+  Mode: TTemporalRoundingMode;
+  Increment: Integer;
 begin
   Inst := AsInstant(AThisValue, 'Instant.prototype.round');
   Arg := AArgs.GetElement(0);
 
+  Mode := rmHalfExpand;
+  Increment := 1;
+
   if Arg is TGocciaStringLiteralValue then
-    UnitStr := TGocciaStringLiteralValue(Arg).Value
+  begin
+    UnitStr := TGocciaStringLiteralValue(Arg).Value;
+    if not GetTemporalUnitFromString(UnitStr, SmallestUnit) then
+      ThrowRangeError('Invalid unit for Instant.prototype.round: ' + UnitStr);
+  end
   else if Arg is TGocciaObjectValue then
   begin
-    Arg := TGocciaObjectValue(Arg).GetProperty('smallestUnit');
-    if (Arg = nil) or (Arg is TGocciaUndefinedLiteralValue) then
+    OptionsObj := TGocciaObjectValue(Arg);
+    SmallestUnit := GetSmallestUnit(OptionsObj, tuNone);
+    if SmallestUnit = tuNone then
       ThrowRangeError('round() requires a smallestUnit option');
-    UnitStr := Arg.ToStringLiteral.Value;
+    Mode := GetRoundingMode(OptionsObj, rmHalfExpand);
+    Increment := GetRoundingIncrement(OptionsObj, 1);
   end
   else
   begin
     ThrowTypeError('Instant.prototype.round requires a string or options object');
-    UnitStr := '';
+    SmallestUnit := tuNanosecond;
   end;
 
   TotalNs := Inst.FEpochMilliseconds * 1000000 + Inst.FSubMillisecondNanoseconds;
+  Divisor := UnitToNanoseconds(SmallestUnit) * Increment;
+  Rounded := RoundWithMode(TotalNs, Divisor, Mode);
 
-  if UnitStr = 'hour' then Divisor := Int64(3600000000000)
-  else if UnitStr = 'minute' then Divisor := Int64(60000000000)
-  else if UnitStr = 'second' then Divisor := Int64(1000000000)
-  else if UnitStr = 'millisecond' then Divisor := 1000000
-  else if UnitStr = 'microsecond' then Divisor := 1000
-  else if UnitStr = 'nanosecond' then Divisor := 1
-  else
-  begin
-    ThrowRangeError('Invalid unit for Instant.prototype.round: ' + UnitStr);
-    Divisor := 1;
-  end;
-
-  // HalfExpand rounding: round half-values away from zero
-  if TotalNs >= 0 then
-    Rounded := ((TotalNs + (Divisor div 2)) div Divisor) * Divisor
-  else
-    Rounded := -((((-TotalNs) + (Divisor div 2)) div Divisor) * Divisor);
   NewMs := Rounded div 1000000;
   NewSubMs := Integer(Rounded mod 1000000);
   if NewSubMs < 0 then

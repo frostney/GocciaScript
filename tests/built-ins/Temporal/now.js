@@ -40,4 +40,18 @@ describe.runIf(isTemporal)("Temporal.Now", () => {
     expect(str.length > 0).toBe(true);
   });
 
+  test("timeZoneId() returns a non-empty string", () => {
+    const tz = Temporal.Now.timeZoneId();
+    expect(typeof tz).toBe("string");
+    expect(tz.length > 0).toBe(true);
+  });
+
+  test("zonedDateTimeISO() returns a ZonedDateTime", () => {
+    const zdt = Temporal.Now.zonedDateTimeISO();
+    expect(zdt.epochMilliseconds > 0).toBe(true);
+    expect(typeof zdt.timeZoneId).toBe("string");
+    expect(zdt.timeZoneId.length > 0).toBe(true);
+    expect(zdt.year > 2020).toBe(true);
+  });
+
 });

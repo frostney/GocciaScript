@@ -1,0 +1,571 @@
+unit Goccia.Values.TemporalPlainYearMonth;
+
+{$I Goccia.inc}
+
+interface
+
+uses
+  Goccia.Arguments.Collection,
+  Goccia.ObjectModel,
+  Goccia.SharedPrototype,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
+
+type
+  TGocciaTemporalPlainYearMonthValue = class(TGocciaObjectValue)
+  private
+    class var FShared: TGocciaSharedPrototype;
+    class var FPrototypeMembers: array of TGocciaMemberDefinition;
+  private
+    FYear: Integer;
+    FMonth: Integer;
+    FReferenceDay: Integer;
+  published
+    function GetCalendarId(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetMonth(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetMonthCode(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetDaysInMonth(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetDaysInYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetMonthsInYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetInLeapYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+
+    function YearMonthWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function YearMonthAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function YearMonthSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function YearMonthUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function YearMonthSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function YearMonthEquals(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function YearMonthToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function YearMonthToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function YearMonthValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function YearMonthToPlainDate(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+
+    procedure InitializePrototype;
+  public
+    constructor Create(const AYear, AMonth: Integer; const AReferenceDay: Integer = 1); overload;
+
+    function ToStringTag: string; override;
+    class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
+
+    property Year: Integer read FYear;
+    property Month: Integer read FMonth;
+    property ReferenceDay: Integer read FReferenceDay;
+  end;
+
+implementation
+
+uses
+  SysUtils,
+
+  Goccia.Temporal.Utils,
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.TemporalDuration,
+  Goccia.Values.TemporalPlainDate;
+
+function FormatYearMonthString(const AYear, AMonth: Integer): string;
+begin
+  Result := PadISOYear(AYear) + '-' + PadTwo(AMonth);
+end;
+
+function TryParseYearMonthDigits(const AStr: string; var APos: Integer; const ACount: Integer; out AValue: Integer): Boolean;
+var
+  I: Integer;
+  C: Char;
+begin
+  AValue := 0;
+  if APos + ACount - 1 > Length(AStr) then
+  begin
+    Result := False;
+    Exit;
+  end;
+  for I := 0 to ACount - 1 do
+  begin
+    C := AStr[APos + I];
+    if (C < '0') or (C > '9') then
+    begin
+      Result := False;
+      Exit;
+    end;
+    AValue := AValue * 10 + (Ord(C) - Ord('0'));
+  end;
+  Inc(APos, ACount);
+  Result := True;
+end;
+
+function AsPlainYearMonth(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainYearMonthValue;
+begin
+  if not (AValue is TGocciaTemporalPlainYearMonthValue) then
+    ThrowTypeError(AMethod + ' called on non-PlainYearMonth');
+  Result := TGocciaTemporalPlainYearMonthValue(AValue);
+end;
+
+function CoercePlainYearMonth(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainYearMonthValue;
+var
+  Obj: TGocciaObjectValue;
+  V, VMonth: TGocciaValue;
+  S: string;
+  Pos, Year, Month, Sign: Integer;
+begin
+  if AValue is TGocciaTemporalPlainYearMonthValue then
+    Result := TGocciaTemporalPlainYearMonthValue(AValue)
+  else if AValue is TGocciaStringLiteralValue then
+  begin
+    // Parse YYYY-MM format
+    S := TGocciaStringLiteralValue(AValue).Value;
+    Pos := 1;
+    Sign := 1;
+
+    if (Pos <= Length(S)) and (S[Pos] = '+') then
+    begin
+      Inc(Pos);
+      if not TryParseYearMonthDigits(S, Pos, 6, Year) then
+        ThrowTypeError('Invalid year-month string for ' + AMethod);
+    end
+    else if (Pos <= Length(S)) and (S[Pos] = '-') then
+    begin
+      Inc(Pos);
+      Sign := -1;
+      if not TryParseYearMonthDigits(S, Pos, 6, Year) then
+        ThrowTypeError('Invalid year-month string for ' + AMethod);
+    end
+    else
+    begin
+      if not TryParseYearMonthDigits(S, Pos, 4, Year) then
+        ThrowTypeError('Invalid year-month string for ' + AMethod);
+    end;
+
+    Year := Year * Sign;
+
+    if (Pos > Length(S)) or (S[Pos] <> '-') then
+      ThrowTypeError('Invalid year-month string for ' + AMethod);
+    Inc(Pos);
+
+    if not TryParseYearMonthDigits(S, Pos, 2, Month) then
+      ThrowTypeError('Invalid year-month string for ' + AMethod);
+
+    if Pos <= Length(S) then
+      ThrowTypeError('Invalid year-month string for ' + AMethod);
+
+    Result := TGocciaTemporalPlainYearMonthValue.Create(Year, Month);
+  end
+  else if AValue is TGocciaObjectValue then
+  begin
+    Obj := TGocciaObjectValue(AValue);
+    V := Obj.GetProperty('year');
+    if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError(AMethod + ' requires year and month properties');
+    VMonth := Obj.GetProperty('month');
+    if (VMonth = nil) or (VMonth is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError(AMethod + ' requires year and month properties');
+    Result := TGocciaTemporalPlainYearMonthValue.Create(
+      Trunc(V.ToNumberLiteral.Value),
+      Trunc(VMonth.ToNumberLiteral.Value));
+  end
+  else
+  begin
+    ThrowTypeError(AMethod + ' requires a PlainYearMonth, string, or object');
+    Result := nil;
+  end;
+end;
+
+{ TGocciaTemporalPlainYearMonthValue }
+
+constructor TGocciaTemporalPlainYearMonthValue.Create(const AYear, AMonth: Integer; const AReferenceDay: Integer = 1);
+var
+  MaxDay: Integer;
+begin
+  inherited Create(nil);
+  if (AMonth < 1) or (AMonth > 12) then
+    ThrowRangeError('Invalid month: ' + IntToStr(AMonth));
+  FYear := AYear;
+  FMonth := AMonth;
+  MaxDay := Goccia.Temporal.Utils.DaysInMonth(AYear, AMonth);
+  if AReferenceDay < 1 then
+    FReferenceDay := 1
+  else if AReferenceDay > MaxDay then
+    FReferenceDay := MaxDay
+  else
+    FReferenceDay := AReferenceDay;
+  InitializePrototype;
+  if Assigned(FShared) then
+    FPrototype := FShared.Prototype;
+end;
+
+procedure TGocciaTemporalPlainYearMonthValue.InitializePrototype;
+var
+  Members: TGocciaMemberCollection;
+begin
+  if Assigned(FShared) then Exit;
+  FShared := TGocciaSharedPrototype.Create(Self);
+  if Length(FPrototypeMembers) = 0 then
+  begin
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddAccessor('calendarId', GetCalendarId, nil, [pfConfigurable]);
+      Members.AddAccessor('year', GetYear, nil, [pfConfigurable]);
+      Members.AddAccessor('month', GetMonth, nil, [pfConfigurable]);
+      Members.AddAccessor('monthCode', GetMonthCode, nil, [pfConfigurable]);
+      Members.AddAccessor('daysInMonth', GetDaysInMonth, nil, [pfConfigurable]);
+      Members.AddAccessor('daysInYear', GetDaysInYear, nil, [pfConfigurable]);
+      Members.AddAccessor('monthsInYear', GetMonthsInYear, nil, [pfConfigurable]);
+      Members.AddAccessor('inLeapYear', GetInLeapYear, nil, [pfConfigurable]);
+      Members.AddMethod(YearMonthWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(YearMonthAdd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(YearMonthSubtract, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(YearMonthUntil, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(YearMonthSince, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(YearMonthEquals, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(YearMonthToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(YearMonthToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(YearMonthValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(YearMonthToPlainDate, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      FPrototypeMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+  end;
+  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+end;
+
+class procedure TGocciaTemporalPlainYearMonthValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
+begin
+  if not Assigned(FShared) then
+    TGocciaTemporalPlainYearMonthValue.Create(1970, 1);
+  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+end;
+
+function TGocciaTemporalPlainYearMonthValue.ToStringTag: string;
+begin
+  Result := 'Temporal.PlainYearMonth';
+end;
+
+{ Getters }
+
+// TC39 Temporal §10.3.3 get Temporal.PlainYearMonth.prototype.calendarId
+function TGocciaTemporalPlainYearMonthValue.GetCalendarId(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  AsPlainYearMonth(AThisValue, 'get PlainYearMonth.calendarId');
+  Result := TGocciaStringLiteralValue.Create('iso8601');
+end;
+
+// TC39 Temporal §10.3.4 get Temporal.PlainYearMonth.prototype.year
+function TGocciaTemporalPlainYearMonthValue.GetYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaNumberLiteralValue.Create(AsPlainYearMonth(AThisValue, 'get PlainYearMonth.year').FYear);
+end;
+
+// TC39 Temporal §10.3.5 get Temporal.PlainYearMonth.prototype.month
+function TGocciaTemporalPlainYearMonthValue.GetMonth(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaNumberLiteralValue.Create(AsPlainYearMonth(AThisValue, 'get PlainYearMonth.month').FMonth);
+end;
+
+// TC39 Temporal §10.3.6 get Temporal.PlainYearMonth.prototype.monthCode
+function TGocciaTemporalPlainYearMonthValue.GetMonthCode(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaStringLiteralValue.Create('M' + PadTwo(AsPlainYearMonth(AThisValue, 'get PlainYearMonth.monthCode').FMonth));
+end;
+
+// TC39 Temporal §10.3.7 get Temporal.PlainYearMonth.prototype.daysInMonth
+function TGocciaTemporalPlainYearMonthValue.GetDaysInMonth(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  YM: TGocciaTemporalPlainYearMonthValue;
+begin
+  YM := AsPlainYearMonth(AThisValue, 'get PlainYearMonth.daysInMonth');
+  Result := TGocciaNumberLiteralValue.Create(Goccia.Temporal.Utils.DaysInMonth(YM.FYear, YM.FMonth));
+end;
+
+// TC39 Temporal §10.3.8 get Temporal.PlainYearMonth.prototype.daysInYear
+function TGocciaTemporalPlainYearMonthValue.GetDaysInYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  YM: TGocciaTemporalPlainYearMonthValue;
+begin
+  YM := AsPlainYearMonth(AThisValue, 'get PlainYearMonth.daysInYear');
+  Result := TGocciaNumberLiteralValue.Create(Goccia.Temporal.Utils.DaysInYear(YM.FYear));
+end;
+
+// TC39 Temporal §10.3.9 get Temporal.PlainYearMonth.prototype.monthsInYear
+function TGocciaTemporalPlainYearMonthValue.GetMonthsInYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  AsPlainYearMonth(AThisValue, 'get PlainYearMonth.monthsInYear');
+  Result := TGocciaNumberLiteralValue.Create(12);
+end;
+
+// TC39 Temporal §10.3.10 get Temporal.PlainYearMonth.prototype.inLeapYear
+function TGocciaTemporalPlainYearMonthValue.GetInLeapYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if Goccia.Temporal.Utils.IsLeapYear(AsPlainYearMonth(AThisValue, 'get PlainYearMonth.inLeapYear').FYear) then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
+{ Methods }
+
+// TC39 Temporal §10.3.11 Temporal.PlainYearMonth.prototype.with(temporalYearMonthLike)
+function TGocciaTemporalPlainYearMonthValue.YearMonthWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  YM: TGocciaTemporalPlainYearMonthValue;
+  Obj: TGocciaObjectValue;
+  V: TGocciaValue;
+  NewYear, NewMonth: Integer;
+
+  function GetFieldOr(const AName: string; const ADefault: Integer): Integer;
+  var
+    Val: TGocciaValue;
+  begin
+    Val := Obj.GetProperty(AName);
+    if (Val = nil) or (Val is TGocciaUndefinedLiteralValue) then
+      Result := ADefault
+    else
+      Result := Trunc(Val.ToNumberLiteral.Value);
+  end;
+
+begin
+  YM := AsPlainYearMonth(AThisValue, 'PlainYearMonth.prototype.with');
+  V := AArgs.GetElement(0);
+  if not (V is TGocciaObjectValue) then
+    ThrowTypeError('PlainYearMonth.prototype.with requires an object argument');
+  Obj := TGocciaObjectValue(V);
+
+  NewYear := GetFieldOr('year', YM.FYear);
+  NewMonth := GetFieldOr('month', YM.FMonth);
+  Result := TGocciaTemporalPlainYearMonthValue.Create(NewYear, NewMonth, YM.FReferenceDay);
+end;
+
+// TC39 Temporal §10.3.12 Temporal.PlainYearMonth.prototype.add(temporalDurationLike)
+function TGocciaTemporalPlainYearMonthValue.YearMonthAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  YM: TGocciaTemporalPlainYearMonthValue;
+  Dur: TGocciaTemporalDurationValue;
+  Arg: TGocciaValue;
+  ObjArg: TGocciaObjectValue;
+  DurRec: TTemporalDurationRecord;
+  NewYear, NewMonth: Integer;
+
+  function GetDurFieldOr(const AObj: TGocciaObjectValue; const AName: string; const ADefault: Int64): Int64;
+  var
+    Val: TGocciaValue;
+  begin
+    Val := AObj.GetProperty(AName);
+    if (Val = nil) or (Val is TGocciaUndefinedLiteralValue) then
+      Result := ADefault
+    else
+      Result := Trunc(Val.ToNumberLiteral.Value);
+  end;
+
+begin
+  YM := AsPlainYearMonth(AThisValue, 'PlainYearMonth.prototype.add');
+  Arg := AArgs.GetElement(0);
+
+  if Arg is TGocciaTemporalDurationValue then
+    Dur := TGocciaTemporalDurationValue(Arg)
+  else if Arg is TGocciaStringLiteralValue then
+  begin
+    if not TryParseISODuration(TGocciaStringLiteralValue(Arg).Value, DurRec) then
+      ThrowTypeError('Invalid duration string');
+    Dur := TGocciaTemporalDurationValue.Create(
+      DurRec.Years, DurRec.Months, DurRec.Weeks, DurRec.Days,
+      DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
+      DurRec.Milliseconds, DurRec.Microseconds, DurRec.Nanoseconds);
+  end
+  else if Arg is TGocciaObjectValue then
+  begin
+    ObjArg := TGocciaObjectValue(Arg);
+    Dur := TGocciaTemporalDurationValue.Create(
+      GetDurFieldOr(ObjArg, 'years', 0),
+      GetDurFieldOr(ObjArg, 'months', 0),
+      0, 0, 0, 0, 0, 0, 0, 0);
+  end
+  else
+  begin
+    ThrowTypeError('PlainYearMonth.prototype.add requires a Duration or string');
+    Dur := nil;
+  end;
+
+  // Add years then months (days/time components are ignored for PlainYearMonth)
+  NewYear := YM.FYear + Integer(Dur.Years);
+  NewMonth := YM.FMonth + Integer(Dur.Months);
+
+  // Normalize month overflow
+  while NewMonth > 12 do
+  begin
+    Inc(NewYear);
+    Dec(NewMonth, 12);
+  end;
+  while NewMonth < 1 do
+  begin
+    Dec(NewYear);
+    Inc(NewMonth, 12);
+  end;
+
+  Result := TGocciaTemporalPlainYearMonthValue.Create(NewYear, NewMonth, YM.FReferenceDay);
+end;
+
+// TC39 Temporal §10.3.13 Temporal.PlainYearMonth.prototype.subtract(temporalDurationLike)
+function TGocciaTemporalPlainYearMonthValue.YearMonthSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Dur: TGocciaTemporalDurationValue;
+  Arg: TGocciaValue;
+  ObjArg: TGocciaObjectValue;
+  DurRec: TTemporalDurationRecord;
+  NegatedDur: TGocciaTemporalDurationValue;
+  NewArgs: TGocciaArgumentsCollection;
+
+  function GetDurFieldOr(const AObj: TGocciaObjectValue; const AName: string; const ADefault: Int64): Int64;
+  var
+    Val: TGocciaValue;
+  begin
+    Val := AObj.GetProperty(AName);
+    if (Val = nil) or (Val is TGocciaUndefinedLiteralValue) then
+      Result := ADefault
+    else
+      Result := Trunc(Val.ToNumberLiteral.Value);
+  end;
+
+begin
+  Arg := AArgs.GetElement(0);
+
+  if Arg is TGocciaTemporalDurationValue then
+    Dur := TGocciaTemporalDurationValue(Arg)
+  else if Arg is TGocciaStringLiteralValue then
+  begin
+    if not TryParseISODuration(TGocciaStringLiteralValue(Arg).Value, DurRec) then
+      ThrowTypeError('Invalid duration string');
+    Dur := TGocciaTemporalDurationValue.Create(
+      DurRec.Years, DurRec.Months, DurRec.Weeks, DurRec.Days,
+      DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
+      DurRec.Milliseconds, DurRec.Microseconds, DurRec.Nanoseconds);
+  end
+  else if Arg is TGocciaObjectValue then
+  begin
+    ObjArg := TGocciaObjectValue(Arg);
+    Dur := TGocciaTemporalDurationValue.Create(
+      GetDurFieldOr(ObjArg, 'years', 0),
+      GetDurFieldOr(ObjArg, 'months', 0),
+      0, 0, 0, 0, 0, 0, 0, 0);
+  end
+  else
+  begin
+    ThrowTypeError('PlainYearMonth.prototype.subtract requires a Duration or string');
+    Dur := nil;
+  end;
+
+  NegatedDur := TGocciaTemporalDurationValue.Create(
+    -Dur.Years, -Dur.Months, -Dur.Weeks, -Dur.Days,
+    -Dur.Hours, -Dur.Minutes, -Dur.Seconds,
+    -Dur.Milliseconds, -Dur.Microseconds, -Dur.Nanoseconds);
+
+  NewArgs := TGocciaArgumentsCollection.Create([NegatedDur]);
+  try
+    Result := YearMonthAdd(NewArgs, AThisValue);
+  finally
+    NewArgs.Free;
+  end;
+end;
+
+// TC39 Temporal §10.3.14 Temporal.PlainYearMonth.prototype.until(other)
+function TGocciaTemporalPlainYearMonthValue.YearMonthUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  YM, Other: TGocciaTemporalPlainYearMonthValue;
+  TotalMonths1, TotalMonths2, DiffMonths: Int64;
+  DiffYears, RemMonths: Int64;
+begin
+  YM := AsPlainYearMonth(AThisValue, 'PlainYearMonth.prototype.until');
+  Other := CoercePlainYearMonth(AArgs.GetElement(0), 'PlainYearMonth.prototype.until');
+
+  TotalMonths1 := Int64(YM.FYear) * 12 + Int64(YM.FMonth);
+  TotalMonths2 := Int64(Other.FYear) * 12 + Int64(Other.FMonth);
+  DiffMonths := TotalMonths2 - TotalMonths1;
+
+  DiffYears := DiffMonths div 12;
+  RemMonths := DiffMonths mod 12;
+
+  Result := TGocciaTemporalDurationValue.Create(DiffYears, RemMonths, 0, 0, 0, 0, 0, 0, 0, 0);
+end;
+
+// TC39 Temporal §10.3.15 Temporal.PlainYearMonth.prototype.since(other)
+function TGocciaTemporalPlainYearMonthValue.YearMonthSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  YM, Other: TGocciaTemporalPlainYearMonthValue;
+  TotalMonths1, TotalMonths2, DiffMonths: Int64;
+  DiffYears, RemMonths: Int64;
+begin
+  YM := AsPlainYearMonth(AThisValue, 'PlainYearMonth.prototype.since');
+  Other := CoercePlainYearMonth(AArgs.GetElement(0), 'PlainYearMonth.prototype.since');
+
+  TotalMonths1 := Int64(YM.FYear) * 12 + Int64(YM.FMonth);
+  TotalMonths2 := Int64(Other.FYear) * 12 + Int64(Other.FMonth);
+  DiffMonths := TotalMonths1 - TotalMonths2;
+
+  DiffYears := DiffMonths div 12;
+  RemMonths := DiffMonths mod 12;
+
+  Result := TGocciaTemporalDurationValue.Create(DiffYears, RemMonths, 0, 0, 0, 0, 0, 0, 0, 0);
+end;
+
+// TC39 Temporal §10.3.16 Temporal.PlainYearMonth.prototype.equals(other)
+function TGocciaTemporalPlainYearMonthValue.YearMonthEquals(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  YM, Other: TGocciaTemporalPlainYearMonthValue;
+begin
+  YM := AsPlainYearMonth(AThisValue, 'PlainYearMonth.prototype.equals');
+  Other := CoercePlainYearMonth(AArgs.GetElement(0), 'PlainYearMonth.prototype.equals');
+
+  if (YM.FYear = Other.FYear) and (YM.FMonth = Other.FMonth) then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
+// TC39 Temporal §10.3.17 Temporal.PlainYearMonth.prototype.toString()
+function TGocciaTemporalPlainYearMonthValue.YearMonthToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  YM: TGocciaTemporalPlainYearMonthValue;
+begin
+  YM := AsPlainYearMonth(AThisValue, 'PlainYearMonth.prototype.toString');
+  Result := TGocciaStringLiteralValue.Create(FormatYearMonthString(YM.FYear, YM.FMonth));
+end;
+
+// TC39 Temporal §10.3.18 Temporal.PlainYearMonth.prototype.toJSON()
+function TGocciaTemporalPlainYearMonthValue.YearMonthToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  YM: TGocciaTemporalPlainYearMonthValue;
+begin
+  YM := AsPlainYearMonth(AThisValue, 'PlainYearMonth.prototype.toJSON');
+  Result := TGocciaStringLiteralValue.Create(FormatYearMonthString(YM.FYear, YM.FMonth));
+end;
+
+// TC39 Temporal §10.3.19 Temporal.PlainYearMonth.prototype.valueOf()
+function TGocciaTemporalPlainYearMonthValue.YearMonthValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  ThrowTypeError('Temporal.PlainYearMonth.prototype.valueOf cannot be used; use toString or compare instead');
+  Result := nil;
+end;
+
+// TC39 Temporal §10.3.20 Temporal.PlainYearMonth.prototype.toPlainDate(item)
+function TGocciaTemporalPlainYearMonthValue.YearMonthToPlainDate(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  YM: TGocciaTemporalPlainYearMonthValue;
+  Arg, V: TGocciaValue;
+  Obj: TGocciaObjectValue;
+  Day: Integer;
+begin
+  YM := AsPlainYearMonth(AThisValue, 'PlainYearMonth.prototype.toPlainDate');
+  Arg := AArgs.GetElement(0);
+
+  if not (Arg is TGocciaObjectValue) then
+    ThrowTypeError('PlainYearMonth.prototype.toPlainDate requires an object with a day property');
+  Obj := TGocciaObjectValue(Arg);
+
+  V := Obj.GetProperty('day');
+  if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
+    ThrowTypeError('PlainYearMonth.prototype.toPlainDate requires a day property');
+
+  Day := Trunc(V.ToNumberLiteral.Value);
+  Result := TGocciaTemporalPlainDateValue.Create(YM.FYear, YM.FMonth, Day);
+end;
+
+end.

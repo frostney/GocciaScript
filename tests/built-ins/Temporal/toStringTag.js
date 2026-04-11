@@ -21,6 +21,9 @@ describe.runIf(isTemporal)("Temporal[Symbol.toStringTag]", () => {
   test("Temporal.hasOwnProperty works", () => {
     expect(Temporal.hasOwnProperty("Now")).toBe(true);
     expect(Temporal.hasOwnProperty("Duration")).toBe(true);
+    expect(Temporal.hasOwnProperty("PlainYearMonth")).toBe(true);
+    expect(Temporal.hasOwnProperty("PlainMonthDay")).toBe(true);
+    expect(Temporal.hasOwnProperty("ZonedDateTime")).toBe(true);
     expect(Temporal.hasOwnProperty("missing")).toBe(false);
   });
 });

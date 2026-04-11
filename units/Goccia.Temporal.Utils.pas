@@ -61,6 +61,13 @@ function TryParseISOTime(const AStr: string; out ATime: TTemporalTimeRecord): Bo
 function TryParseISODateTime(const AStr: string; out ADate: TTemporalDateRecord; out ATime: TTemporalTimeRecord): Boolean;
 function TryParseISODuration(const AStr: string; out ADuration: TTemporalDurationRecord): Boolean;
 
+function TryParseISOYearMonth(const AStr: string; out AYear, AMonth: Integer): Boolean;
+function TryParseISOMonthDay(const AStr: string; out AMonth, ADay: Integer): Boolean;
+function TryParseISODateTimeWithOffset(const AStr: string; out ADate: TTemporalDateRecord;
+  out ATime: TTemporalTimeRecord; out AOffsetSeconds: Integer; out ATimeZone: string): Boolean;
+function FormatYearMonthString(const AYear, AMonth: Integer): string;
+function FormatMonthDayString(const AMonth, ADay: Integer): string;
+
 function CompareIntegers(const A, B: Integer): Integer; inline;
 function CompareDates(const AYear1, AMonth1, ADay1, AYear2, AMonth2, ADay2: Integer): Integer;
 function CompareTimes(const AHour1, AMinute1, ASecond1, AMs1, AUs1, ANs1,
@@ -655,6 +662,179 @@ begin
   Result := CompareIntegers(AUs1, AUs2);
   if Result <> 0 then Exit;
   Result := CompareIntegers(ANs1, ANs2);
+end;
+
+function FormatYearMonthString(const AYear, AMonth: Integer): string;
+begin
+  Result := PadISOYear(AYear) + '-' + PadTwo(AMonth);
+end;
+
+function FormatMonthDayString(const AMonth, ADay: Integer): string;
+begin
+  Result := PadTwo(AMonth) + '-' + PadTwo(ADay);
+end;
+
+function TryParseISOYearMonth(const AStr: string; out AYear, AMonth: Integer): Boolean;
+var
+  Pos, Sign: Integer;
+  C: Char;
+begin
+  Result := False;
+  AYear := 0;
+  AMonth := 0;
+  Pos := 1;
+  Sign := 1;
+
+  if Pos > Length(AStr) then Exit;
+
+  C := AStr[Pos];
+  if C = '+' then
+  begin
+    Inc(Pos);
+    if not TryParseDigits(AStr, Pos, 6, AYear) then Exit;
+  end
+  else if C = '-' then
+  begin
+    Inc(Pos);
+    Sign := -1;
+    if not TryParseDigits(AStr, Pos, 6, AYear) then Exit;
+  end
+  else
+  begin
+    if not TryParseDigits(AStr, Pos, 4, AYear) then Exit;
+  end;
+
+  AYear := AYear * Sign;
+
+  if (Pos > Length(AStr)) or (AStr[Pos] <> '-') then Exit;
+  Inc(Pos);
+
+  if not TryParseDigits(AStr, Pos, 2, AMonth) then Exit;
+
+  if Pos <= Length(AStr) then Exit;
+
+  if (AMonth < 1) or (AMonth > 12) then Exit;
+
+  Result := True;
+end;
+
+function TryParseISOMonthDay(const AStr: string; out AMonth, ADay: Integer): Boolean;
+var
+  Pos: Integer;
+begin
+  Result := False;
+  AMonth := 0;
+  ADay := 0;
+  Pos := 1;
+
+  if not TryParseDigits(AStr, Pos, 2, AMonth) then Exit;
+
+  if (Pos > Length(AStr)) or (AStr[Pos] <> '-') then Exit;
+  Inc(Pos);
+
+  if not TryParseDigits(AStr, Pos, 2, ADay) then Exit;
+
+  if Pos <= Length(AStr) then Exit;
+
+  if (AMonth < 1) or (AMonth > 12) then Exit;
+  // Validate day against month in a leap year (1972) to allow Feb 29
+  if (ADay < 1) or (ADay > DaysInMonth(1972, AMonth)) then Exit;
+
+  Result := True;
+end;
+
+function TryParseISODateTimeWithOffset(const AStr: string; out ADate: TTemporalDateRecord;
+  out ATime: TTemporalTimeRecord; out AOffsetSeconds: Integer; out ATimeZone: string): Boolean;
+var
+  TPos, BracketStart, BracketEnd, I: Integer;
+  DatePart, Rest, TimePart, OffsetPart: string;
+  OffsetSign, OffsetH, OffsetM: Integer;
+  FracVal: Int64;
+  FracDigits: Integer;
+  ParsePos: Integer;
+begin
+  Result := False;
+  AOffsetSeconds := 0;
+  ATimeZone := '';
+  ATime.Hour := 0;
+  ATime.Minute := 0;
+  ATime.Second := 0;
+  ATime.Millisecond := 0;
+  ATime.Microsecond := 0;
+  ATime.Nanosecond := 0;
+
+  TPos := System.Pos('T', AStr);
+  if TPos = 0 then
+    TPos := System.Pos('t', AStr);
+  if TPos = 0 then Exit;
+
+  DatePart := Copy(AStr, 1, TPos - 1);
+  Rest := Copy(AStr, TPos + 1, Length(AStr) - TPos);
+
+  if not TryParseISODate(DatePart, ADate) then Exit;
+
+  // Extract timezone annotation [timezone] from end
+  BracketStart := System.Pos('[', Rest);
+  if BracketStart > 0 then
+  begin
+    BracketEnd := System.Pos(']', Rest);
+    if BracketEnd > BracketStart then
+    begin
+      ATimeZone := Copy(Rest, BracketStart + 1, BracketEnd - BracketStart - 1);
+      Rest := Copy(Rest, 1, BracketStart - 1);
+    end;
+  end;
+
+  // Find offset: look for Z, +, or - after time digits
+  // Time is at least HH:MM (5 chars)
+  OffsetPart := '';
+  if (Length(Rest) > 0) and (Rest[Length(Rest)] = 'Z') then
+  begin
+    AOffsetSeconds := 0;
+    Rest := Copy(Rest, 1, Length(Rest) - 1);
+    if ATimeZone = '' then
+      ATimeZone := 'UTC';
+  end
+  else
+  begin
+    // Look for +/- offset after time portion
+    I := Length(Rest);
+    while I > 0 do
+    begin
+      if (Rest[I] = '+') or (Rest[I] = '-') then
+      begin
+        OffsetPart := Copy(Rest, I, Length(Rest) - I + 1);
+        Rest := Copy(Rest, 1, I - 1);
+        Break;
+      end;
+      Dec(I);
+    end;
+
+    if OffsetPart <> '' then
+    begin
+      if OffsetPart[1] = '+' then OffsetSign := 1 else OffsetSign := -1;
+      ParsePos := 2;
+      if not TryParseDigits(OffsetPart, ParsePos, 2, OffsetH) then Exit;
+      OffsetM := 0;
+      if (ParsePos <= Length(OffsetPart)) and (OffsetPart[ParsePos] = ':') then
+      begin
+        Inc(ParsePos);
+        if not TryParseDigits(OffsetPart, ParsePos, 2, OffsetM) then Exit;
+      end
+      else if ParsePos + 1 <= Length(OffsetPart) then
+        TryParseDigits(OffsetPart, ParsePos, 2, OffsetM);
+      AOffsetSeconds := OffsetSign * (OffsetH * 3600 + OffsetM * 60);
+    end;
+  end;
+
+  // Parse time portion from Rest
+  TimePart := Rest;
+  if Length(TimePart) > 0 then
+  begin
+    if not TryParseISOTime(TimePart, ATime) then Exit;
+  end;
+
+  Result := True;
 end;
 
 end.

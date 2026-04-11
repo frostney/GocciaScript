@@ -45,17 +45,36 @@ type
     function PlainDateTimeFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function PlainDateTimeCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
+    // PlainYearMonth constructor + statics
+    function PlainYearMonthConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PlainYearMonthFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PlainYearMonthCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+
+    // PlainMonthDay constructor + statics
+    function PlainMonthDayConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PlainMonthDayFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+
+    // ZonedDateTime constructor + statics
+    function ZonedDateTimeConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ZonedDateTimeFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ZonedDateTimeCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+
     // Temporal.Now
     function NowInstant(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function NowPlainDateISO(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function NowPlainTimeISO(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function NowPlainDateTimeISO(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function NowTimeZoneId(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function NowZonedDateTimeISO(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure RegisterDuration;
     procedure RegisterInstant;
     procedure RegisterPlainDate;
     procedure RegisterPlainTime;
     procedure RegisterPlainDateTime;
+    procedure RegisterPlainYearMonth;
+    procedure RegisterPlainMonthDay;
+    procedure RegisterZonedDateTime;
     procedure RegisterNow;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
@@ -70,6 +89,8 @@ uses
   TimingUtils,
 
   Goccia.GarbageCollector,
+  Goccia.Temporal.Options,
+  Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -79,7 +100,10 @@ uses
   Goccia.Values.TemporalInstant,
   Goccia.Values.TemporalPlainDate,
   Goccia.Values.TemporalPlainDateTime,
-  Goccia.Values.TemporalPlainTime;
+  Goccia.Values.TemporalPlainMonthDay,
+  Goccia.Values.TemporalPlainTime,
+  Goccia.Values.TemporalPlainYearMonth,
+  Goccia.Values.TemporalZonedDateTime;
 
 { TGocciaTemporalBuiltin }
 
@@ -98,6 +122,9 @@ begin
     RegisterPlainDate;
     RegisterPlainTime;
     RegisterPlainDateTime;
+    RegisterPlainYearMonth;
+    RegisterPlainMonthDay;
+    RegisterZonedDateTime;
     RegisterNow;
 
     TemporalMembers[0] := DefineSymbolDataProperty(
@@ -284,7 +311,7 @@ end;
 
 function TGocciaTemporalBuiltin.InstantConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  EpochNs: Double;
+  EpochNs, MsFloat: Double;
   Ms: Int64;
   SubMs: Integer;
 begin
@@ -293,7 +320,9 @@ begin
 
   EpochNs := AArgs.GetElement(0).ToNumberLiteral.Value;
   Ms := Trunc(EpochNs / 1000000);
-  SubMs := Trunc(EpochNs - Ms * 1000000.0);
+  // Safe Int64 → Double conversion (FPC 3.2.2 AArch64 bug: Int64 * Double gives wrong results)
+  MsFloat := Ms;
+  SubMs := Trunc(EpochNs - MsFloat * 1000000.0);
 
   Result := TGocciaTemporalInstantValue.Create(Ms, SubMs);
 end;
@@ -341,7 +370,7 @@ end;
 
 function TGocciaTemporalBuiltin.InstantFromEpochNanoseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  EpochNs: Double;
+  EpochNs, MsFloat: Double;
   Ms: Int64;
   SubMs: Integer;
 begin
@@ -349,7 +378,9 @@ begin
     ThrowTypeError('Temporal.Instant.fromEpochNanoseconds requires an argument');
   EpochNs := AArgs.GetElement(0).ToNumberLiteral.Value;
   Ms := Trunc(EpochNs / 1000000);
-  SubMs := Trunc(EpochNs - Ms * 1000000.0);
+  // Safe Int64 → Double conversion (FPC 3.2.2 AArch64 bug: Int64 * Double gives wrong results)
+  MsFloat := Ms;
+  SubMs := Trunc(EpochNs - MsFloat * 1000000.0);
   Result := TGocciaTemporalInstantValue.Create(Ms, SubMs);
 end;
 
@@ -427,13 +458,24 @@ end;
 
 function TGocciaTemporalBuiltin.PlainDateFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Arg: TGocciaValue;
+  Arg, OptionsArg: TGocciaValue;
   D: TGocciaTemporalPlainDateValue;
   DateRec: TTemporalDateRecord;
   TimeRec: TTemporalTimeRecord;
   Obj: TGocciaObjectValue;
+  Y, Mo, Dy, MaxDay: Integer;
+  Overflow: TTemporalOverflow;
 begin
   Arg := AArgs.GetElement(0);
+
+  // Parse overflow option from second argument
+  Overflow := toConstrain;
+  if AArgs.Length >= 2 then
+  begin
+    OptionsArg := AArgs.GetElement(1);
+    if (OptionsArg is TGocciaObjectValue) then
+      Overflow := GetOverflowOption(TGocciaObjectValue(OptionsArg));
+  end;
 
   if Arg is TGocciaTemporalPlainDateValue then
   begin
@@ -452,10 +494,19 @@ begin
   else if Arg is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(Arg);
-    Result := TGocciaTemporalPlainDateValue.Create(
-      Trunc(Obj.GetProperty('year').ToNumberLiteral.Value),
-      Trunc(Obj.GetProperty('month').ToNumberLiteral.Value),
-      Trunc(Obj.GetProperty('day').ToNumberLiteral.Value));
+    Y := Trunc(Obj.GetProperty('year').ToNumberLiteral.Value);
+    Mo := Trunc(Obj.GetProperty('month').ToNumberLiteral.Value);
+    Dy := Trunc(Obj.GetProperty('day').ToNumberLiteral.Value);
+
+    MaxDay := DaysInMonth(Y, Mo);
+    if Dy > MaxDay then
+    begin
+      if Overflow = toReject then
+        ThrowRangeError('Day ' + IntToStr(Dy) + ' out of range for month ' + IntToStr(Mo));
+      Dy := MaxDay;
+    end;
+
+    Result := TGocciaTemporalPlainDateValue.Create(Y, Mo, Dy);
   end
   else
   begin
@@ -765,6 +816,311 @@ begin
   Result := TGocciaNumberLiteralValue.Create(Cmp);
 end;
 
+{ PlainYearMonth }
+
+procedure TGocciaTemporalBuiltin.RegisterPlainYearMonth;
+var
+  ConstructorMethod: TGocciaNativeFunctionValue;
+begin
+  ConstructorMethod := TGocciaNativeFunctionValue.Create(PlainYearMonthConstructorFn, 'PlainYearMonth', 2);
+  TGocciaTemporalPlainYearMonthValue.ExposePrototype(ConstructorMethod);
+  ConstructorMethod.AssignProperty('from',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainYearMonthFrom, 'from', 1));
+  ConstructorMethod.AssignProperty('compare',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainYearMonthCompare, 'compare', 2));
+  FTemporalNamespace.AssignProperty('PlainYearMonth', ConstructorMethod);
+end;
+
+function TGocciaTemporalBuiltin.PlainYearMonthConstructorFn(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  RefDay: Integer;
+begin
+  if AArgs.Length < 2 then
+    ThrowTypeError('Temporal.PlainYearMonth requires year, month arguments');
+
+  RefDay := 1;
+  if (AArgs.Length >= 3) and not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
+    RefDay := Trunc(AArgs.GetElement(2).ToNumberLiteral.Value);
+
+  Result := TGocciaTemporalPlainYearMonthValue.Create(
+    Trunc(AArgs.GetElement(0).ToNumberLiteral.Value),
+    Trunc(AArgs.GetElement(1).ToNumberLiteral.Value),
+    RefDay);
+end;
+
+function TGocciaTemporalBuiltin.PlainYearMonthFrom(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Arg: TGocciaValue;
+  YM: TGocciaTemporalPlainYearMonthValue;
+  Y, M: Integer;
+  Obj: TGocciaObjectValue;
+begin
+  Arg := AArgs.GetElement(0);
+
+  if Arg is TGocciaTemporalPlainYearMonthValue then
+  begin
+    YM := TGocciaTemporalPlainYearMonthValue(Arg);
+    Result := TGocciaTemporalPlainYearMonthValue.Create(YM.Year, YM.Month, YM.ReferenceDay);
+  end
+  else if Arg is TGocciaStringLiteralValue then
+  begin
+    if not TryParseISOYearMonth(TGocciaStringLiteralValue(Arg).Value, Y, M) then
+      ThrowRangeError('Invalid ISO year-month string');
+    Result := TGocciaTemporalPlainYearMonthValue.Create(Y, M);
+  end
+  else if Arg is TGocciaObjectValue then
+  begin
+    Obj := TGocciaObjectValue(Arg);
+    Result := TGocciaTemporalPlainYearMonthValue.Create(
+      Trunc(Obj.GetProperty('year').ToNumberLiteral.Value),
+      Trunc(Obj.GetProperty('month').ToNumberLiteral.Value));
+  end
+  else
+  begin
+    ThrowTypeError('Temporal.PlainYearMonth.from requires a string, PlainYearMonth, or object');
+    Result := nil;
+  end;
+end;
+
+function TGocciaTemporalBuiltin.PlainYearMonthCompare(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  YM1, YM2: TGocciaTemporalPlainYearMonthValue;
+
+  function CoerceYearMonth(const AArg: TGocciaValue): TGocciaTemporalPlainYearMonthValue;
+  var
+    Y, M: Integer;
+  begin
+    if AArg is TGocciaTemporalPlainYearMonthValue then
+      Result := TGocciaTemporalPlainYearMonthValue(AArg)
+    else if AArg is TGocciaStringLiteralValue then
+    begin
+      if not TryParseISOYearMonth(TGocciaStringLiteralValue(AArg).Value, Y, M) then
+      begin
+        ThrowRangeError('Invalid ISO year-month string');
+        Result := nil;
+      end
+      else
+        Result := TGocciaTemporalPlainYearMonthValue.Create(Y, M);
+    end
+    else
+    begin
+      ThrowTypeError('Temporal.PlainYearMonth.compare requires PlainYearMonth arguments');
+      Result := nil;
+    end;
+  end;
+
+begin
+  YM1 := CoerceYearMonth(AArgs.GetElement(0));
+  YM2 := CoerceYearMonth(AArgs.GetElement(1));
+
+  if YM1.Year < YM2.Year then
+    Result := TGocciaNumberLiteralValue.Create(-1)
+  else if YM1.Year > YM2.Year then
+    Result := TGocciaNumberLiteralValue.Create(1)
+  else if YM1.Month < YM2.Month then
+    Result := TGocciaNumberLiteralValue.Create(-1)
+  else if YM1.Month > YM2.Month then
+    Result := TGocciaNumberLiteralValue.Create(1)
+  else
+    Result := TGocciaNumberLiteralValue.ZeroValue;
+end;
+
+{ PlainMonthDay }
+
+procedure TGocciaTemporalBuiltin.RegisterPlainMonthDay;
+var
+  ConstructorMethod: TGocciaNativeFunctionValue;
+begin
+  ConstructorMethod := TGocciaNativeFunctionValue.Create(PlainMonthDayConstructorFn, 'PlainMonthDay', 2);
+  TGocciaTemporalPlainMonthDayValue.ExposePrototype(ConstructorMethod);
+  ConstructorMethod.AssignProperty('from',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainMonthDayFrom, 'from', 1));
+  FTemporalNamespace.AssignProperty('PlainMonthDay', ConstructorMethod);
+end;
+
+function TGocciaTemporalBuiltin.PlainMonthDayConstructorFn(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AArgs.Length < 2 then
+    ThrowTypeError('Temporal.PlainMonthDay requires month, day arguments');
+
+  Result := TGocciaTemporalPlainMonthDayValue.Create(
+    Trunc(AArgs.GetElement(0).ToNumberLiteral.Value),
+    Trunc(AArgs.GetElement(1).ToNumberLiteral.Value));
+end;
+
+function TGocciaTemporalBuiltin.PlainMonthDayFrom(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Arg, V: TGocciaValue;
+  MD: TGocciaTemporalPlainMonthDayValue;
+  Obj: TGocciaObjectValue;
+  M, D: Integer;
+  MonthCodeStr: string;
+begin
+  Arg := AArgs.GetElement(0);
+
+  if Arg is TGocciaTemporalPlainMonthDayValue then
+  begin
+    MD := TGocciaTemporalPlainMonthDayValue(Arg);
+    Result := TGocciaTemporalPlainMonthDayValue.Create(MD.Month, MD.Day, MD.ReferenceYear);
+  end
+  else if Arg is TGocciaStringLiteralValue then
+  begin
+    if not TryParseISOMonthDay(TGocciaStringLiteralValue(Arg).Value, M, D) then
+      ThrowRangeError('Invalid ISO month-day string');
+    Result := TGocciaTemporalPlainMonthDayValue.Create(M, D);
+  end
+  else if Arg is TGocciaObjectValue then
+  begin
+    Obj := TGocciaObjectValue(Arg);
+    D := Trunc(Obj.GetProperty('day').ToNumberLiteral.Value);
+    // Support both monthCode (e.g., "M07") and month (numeric)
+    V := Obj.GetProperty('monthCode');
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
+      // Parse monthCode like "M07" to extract month number
+      MonthCodeStr := V.ToStringLiteral.Value;
+      if (Length(MonthCodeStr) >= 2) and (MonthCodeStr[1] = 'M') then
+        M := StrToIntDef(Copy(MonthCodeStr, 2, Length(MonthCodeStr) - 1), 0)
+      else
+        M := 0;
+    end
+    else
+    begin
+      V := Obj.GetProperty('month');
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+        M := Trunc(V.ToNumberLiteral.Value)
+      else
+        M := 0;
+    end;
+    Result := TGocciaTemporalPlainMonthDayValue.Create(M, D);
+  end
+  else
+  begin
+    ThrowTypeError('Temporal.PlainMonthDay.from requires a string, PlainMonthDay, or object');
+    Result := nil;
+  end;
+end;
+
+{ ZonedDateTime }
+
+procedure TGocciaTemporalBuiltin.RegisterZonedDateTime;
+var
+  ConstructorMethod: TGocciaNativeFunctionValue;
+begin
+  ConstructorMethod := TGocciaNativeFunctionValue.Create(ZonedDateTimeConstructorFn, 'ZonedDateTime', 2);
+  TGocciaTemporalZonedDateTimeValue.ExposePrototype(ConstructorMethod);
+  ConstructorMethod.AssignProperty('from',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(ZonedDateTimeFrom, 'from', 1));
+  ConstructorMethod.AssignProperty('compare',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(ZonedDateTimeCompare, 'compare', 2));
+  FTemporalNamespace.AssignProperty('ZonedDateTime', ConstructorMethod);
+end;
+
+// TC39 Temporal §6.1.1 new Temporal.ZonedDateTime(epochNanoseconds, timeZone)
+function TGocciaTemporalBuiltin.ZonedDateTimeConstructorFn(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  EpochNs, MsFloat: Double;
+  Ms: Int64;
+  SubMs: Integer;
+  TZ: string;
+begin
+  if AArgs.Length < 2 then
+    ThrowTypeError('Temporal.ZonedDateTime requires epochNanoseconds and timeZone arguments');
+
+  EpochNs := AArgs.GetElement(0).ToNumberLiteral.Value;
+  Ms := Trunc(EpochNs / 1000000);
+  // Safe Int64 → Double conversion (FPC 3.2.2 AArch64 bug: Int64 * Double gives wrong results)
+  MsFloat := Ms;
+  SubMs := Trunc(EpochNs - MsFloat * 1000000.0);
+  TZ := AArgs.GetElement(1).ToStringLiteral.Value;
+
+  Result := TGocciaTemporalZonedDateTimeValue.Create(Ms, SubMs, TZ);
+end;
+
+function TGocciaTemporalBuiltin.ZonedDateTimeFrom(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Arg: TGocciaValue;
+  ZDT: TGocciaTemporalZonedDateTimeValue;
+  DateRec: TTemporalDateRecord;
+  TimeRec: TTemporalTimeRecord;
+  TZ: string;
+  EpochMs: Int64;
+  SubMs, OffsetSeconds: Integer;
+begin
+  Arg := AArgs.GetElement(0);
+
+  if Arg is TGocciaTemporalZonedDateTimeValue then
+  begin
+    ZDT := TGocciaTemporalZonedDateTimeValue(Arg);
+    Result := TGocciaTemporalZonedDateTimeValue.Create(
+      ZDT.EpochMilliseconds, ZDT.SubMillisecondNanoseconds, ZDT.TimeZone);
+  end
+  else if Arg is TGocciaStringLiteralValue then
+  begin
+    if not TryParseISODateTimeWithOffset(TGocciaStringLiteralValue(Arg).Value,
+        DateRec, TimeRec, OffsetSeconds, TZ) then
+      ThrowRangeError('Invalid ISO zoned date-time string');
+
+    // Compute UTC epoch from wall-clock time
+    EpochMs := DateToEpochDays(DateRec.Year, DateRec.Month, DateRec.Day) * Int64(86400000) +
+               Int64(TimeRec.Hour) * 3600000 + Int64(TimeRec.Minute) * 60000 +
+               Int64(TimeRec.Second) * 1000 + TimeRec.Millisecond;
+    SubMs := TimeRec.Microsecond * 1000 + TimeRec.Nanosecond;
+
+    // Apply offset to convert wall-clock to UTC
+    EpochMs := EpochMs - Int64(OffsetSeconds) * 1000;
+
+    if TZ = '' then
+      TZ := 'UTC';
+
+    Result := TGocciaTemporalZonedDateTimeValue.Create(EpochMs, SubMs, TZ);
+  end
+  else
+  begin
+    ThrowTypeError('Temporal.ZonedDateTime.from requires a string or ZonedDateTime');
+    Result := nil;
+  end;
+end;
+
+function TGocciaTemporalBuiltin.ZonedDateTimeCompare(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Z1, Z2: TGocciaTemporalZonedDateTimeValue;
+
+  function CoerceZDT(const AArg: TGocciaValue): TGocciaTemporalZonedDateTimeValue;
+  begin
+    if AArg is TGocciaTemporalZonedDateTimeValue then
+      Result := TGocciaTemporalZonedDateTimeValue(AArg)
+    else
+    begin
+      ThrowTypeError('Temporal.ZonedDateTime.compare requires ZonedDateTime arguments');
+      Result := nil;
+    end;
+  end;
+
+begin
+  Z1 := CoerceZDT(AArgs.GetElement(0));
+  Z2 := CoerceZDT(AArgs.GetElement(1));
+
+  if Z1.EpochMilliseconds < Z2.EpochMilliseconds then
+    Result := TGocciaNumberLiteralValue.Create(-1)
+  else if Z1.EpochMilliseconds > Z2.EpochMilliseconds then
+    Result := TGocciaNumberLiteralValue.Create(1)
+  else if Z1.SubMillisecondNanoseconds < Z2.SubMillisecondNanoseconds then
+    Result := TGocciaNumberLiteralValue.Create(-1)
+  else if Z1.SubMillisecondNanoseconds > Z2.SubMillisecondNanoseconds then
+    Result := TGocciaNumberLiteralValue.Create(1)
+  else
+    Result := TGocciaNumberLiteralValue.ZeroValue;
+end;
+
 { Temporal.Now }
 
 procedure TGocciaTemporalBuiltin.RegisterNow;
@@ -776,6 +1132,8 @@ begin
   NowObj.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NowPlainDateISO, 'plainDateISO', 0));
   NowObj.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NowPlainTimeISO, 'plainTimeISO', 0));
   NowObj.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NowPlainDateTimeISO, 'plainDateTimeISO', 0));
+  NowObj.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NowTimeZoneId, 'timeZoneId', 0));
+  NowObj.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NowZonedDateTimeISO, 'zonedDateTimeISO', 0));
   FTemporalNamespace.AssignProperty('Now', NowObj);
 end;
 
@@ -810,6 +1168,38 @@ begin
   DecodeDate(Now, Y, Mo, D);
   DecodeTime(Now, H, Mi, S, Ms);
   Result := TGocciaTemporalPlainDateTimeValue.Create(Y, Mo, D, H, Mi, S, Ms, 0, 0);
+end;
+
+// TC39 Temporal §2.2.1 Temporal.Now.timeZoneId()
+function TGocciaTemporalBuiltin.NowTimeZoneId(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaStringLiteralValue.Create(GetSystemTimeZoneId);
+end;
+
+// TC39 Temporal §2.2.2 Temporal.Now.zonedDateTimeISO([timeZone])
+function TGocciaTemporalBuiltin.NowZonedDateTimeISO(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  EpochNs: Int64;
+  TZ: string;
+  Arg: TGocciaValue;
+begin
+  EpochNs := GetEpochNanoseconds;
+
+  if AArgs.Length >= 1 then
+  begin
+    Arg := AArgs.GetElement(0);
+    if not (Arg is TGocciaUndefinedLiteralValue) then
+      TZ := Arg.ToStringLiteral.Value
+    else
+      TZ := GetSystemTimeZoneId;
+  end
+  else
+    TZ := GetSystemTimeZoneId;
+
+  Result := TGocciaTemporalZonedDateTimeValue.Create(
+    EpochNs div 1000000, Integer(EpochNs mod 1000000), TZ);
 end;
 
 end.

@@ -146,4 +146,28 @@ describe.runIf(isTemporal)("Temporal.PlainDateTime", () => {
     expect(Temporal.PlainDateTime.compare(dt1, dt1)).toBe(0);
   });
 
+  test("toPlainYearMonth()", () => {
+    const dt = new Temporal.PlainDateTime(2024, 3, 15, 13, 45, 30);
+    const ym = dt.toPlainYearMonth();
+    expect(ym.year).toBe(2024);
+    expect(ym.month).toBe(3);
+  });
+
+  test("toPlainMonthDay()", () => {
+    const dt = new Temporal.PlainDateTime(2024, 3, 15, 13, 45, 30);
+    const md = dt.toPlainMonthDay();
+    expect(md.monthCode).toBe("M03");
+    expect(md.day).toBe(15);
+  });
+
+  test("toZonedDateTime()", () => {
+    const dt = new Temporal.PlainDateTime(2024, 3, 15, 13, 45, 30);
+    const zdt = dt.toZonedDateTime("UTC");
+    expect(zdt.year).toBe(2024);
+    expect(zdt.month).toBe(3);
+    expect(zdt.day).toBe(15);
+    expect(zdt.hour).toBe(13);
+    expect(zdt.timeZoneId).toBe("UTC");
+  });
+
 });

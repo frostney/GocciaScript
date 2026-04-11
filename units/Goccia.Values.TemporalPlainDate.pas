@@ -46,6 +46,9 @@ type
     function DateToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DateValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DateToPlainDateTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DateToPlainYearMonth(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DateToPlainMonthDay(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DateToZonedDateTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure InitializePrototype;
   public
@@ -63,12 +66,16 @@ implementation
 
 uses
   Goccia.GarbageCollector,
+  Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.TemporalDuration,
   Goccia.Values.TemporalPlainDateTime,
-  Goccia.Values.TemporalPlainTime;
+  Goccia.Values.TemporalPlainMonthDay,
+  Goccia.Values.TemporalPlainTime,
+  Goccia.Values.TemporalPlainYearMonth,
+  Goccia.Values.TemporalZonedDateTime;
 
 function GetDurFieldOr(const AObj: TGocciaObjectValue; const AName: string; const ADefault: Int64): Int64;
 var
@@ -183,6 +190,9 @@ begin
       Members.AddMethod(DateToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(DateValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(DateToPlainDateTime, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DateToPlainYearMonth, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DateToPlainMonthDay, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DateToZonedDateTime, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       FPrototypeMembers := Members.ToDefinitions;
     finally
       Members.Free;
@@ -568,6 +578,56 @@ begin
 
   Result := TGocciaTemporalPlainDateTimeValue.Create(D.FYear, D.FMonth, D.FDay,
     Hour, Minute, Second, Ms, Us, Ns);
+end;
+
+function TGocciaTemporalPlainDateValue.DateToPlainYearMonth(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  D: TGocciaTemporalPlainDateValue;
+begin
+  D := AsPlainDate(AThisValue, 'PlainDate.prototype.toPlainYearMonth');
+  Result := TGocciaTemporalPlainYearMonthValue.Create(D.FYear, D.FMonth);
+end;
+
+function TGocciaTemporalPlainDateValue.DateToPlainMonthDay(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  D: TGocciaTemporalPlainDateValue;
+begin
+  D := AsPlainDate(AThisValue, 'PlainDate.prototype.toPlainMonthDay');
+  Result := TGocciaTemporalPlainMonthDayValue.Create(D.FMonth, D.FDay);
+end;
+
+function TGocciaTemporalPlainDateValue.DateToZonedDateTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  D: TGocciaTemporalPlainDateValue;
+  Arg: TGocciaValue;
+  TimeZoneStr: string;
+  EpochMs: Int64;
+  OffsetSec: Integer;
+begin
+  D := AsPlainDate(AThisValue, 'PlainDate.prototype.toZonedDateTime');
+  Arg := AArgs.GetElement(0);
+
+  if Arg is TGocciaStringLiteralValue then
+    TimeZoneStr := TGocciaStringLiteralValue(Arg).Value
+  else if Arg is TGocciaObjectValue then
+  begin
+    Arg := TGocciaObjectValue(Arg).GetProperty('timeZone');
+    if (Arg = nil) or (Arg is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError('PlainDate.prototype.toZonedDateTime requires a timeZone');
+    TimeZoneStr := Arg.ToStringLiteral.Value;
+  end
+  else
+  begin
+    ThrowTypeError('PlainDate.prototype.toZonedDateTime requires a timezone string or options object');
+    TimeZoneStr := '';
+  end;
+
+  // Compute epoch ms for midnight of this date in UTC, then adjust for timezone
+  EpochMs := DateToEpochDays(D.FYear, D.FMonth, D.FDay) * Int64(86400000);
+  OffsetSec := GetUtcOffsetSeconds(TimeZoneStr, EpochMs div 1000);
+  EpochMs := EpochMs - Int64(OffsetSec) * 1000;
+
+  Result := TGocciaTemporalZonedDateTimeValue.Create(EpochMs, 0, TimeZoneStr);
 end;
 
 end.
