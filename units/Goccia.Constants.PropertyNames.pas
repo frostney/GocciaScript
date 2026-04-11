@@ -107,6 +107,21 @@ const
   PROP_SET_FROM_HEX           = 'setFromHex';
   PROP_RAW                    = 'raw';
 
+  // URL and URLSearchParams properties
+  PROP_HREF             = 'href';
+  PROP_ORIGIN           = 'origin';
+  PROP_PROTOCOL         = 'protocol';
+  PROP_USERNAME         = 'username';
+  PROP_PASSWORD         = 'password';
+  PROP_HOST             = 'host';
+  PROP_HOSTNAME         = 'hostname';
+  PROP_PORT             = 'port';
+  PROP_PATHNAME         = 'pathname';
+  PROP_SEARCH           = 'search';
+  PROP_SEARCH_PARAMS    = 'searchParams';
+  PROP_HASH             = 'hash';
+  PROP_CAN_PARSE        = 'canParse';
+
   // Proxy handler trap names
   PROP_HAS                       = 'has';
   PROP_DELETE_PROPERTY            = 'deleteProperty';
