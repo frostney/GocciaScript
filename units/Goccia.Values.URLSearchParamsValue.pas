@@ -104,6 +104,7 @@ uses
   SysUtils,
 
   Goccia.Constants.ConstructorNames,
+  Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
   Goccia.URL.Parser,
   Goccia.Utils,
@@ -145,31 +146,31 @@ begin
   begin
     Members := TGocciaMemberCollection.Create;
     try
-      Members.AddNamedMethod('append', URLSearchParamsAppend, 2,
+      Members.AddNamedMethod(PROP_APPEND, URLSearchParamsAppend, 2,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('delete', URLSearchParamsDelete, 1,
+      Members.AddNamedMethod(PROP_DELETE, URLSearchParamsDelete, 1,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('get', URLSearchParamsGet, 1,
+      Members.AddNamedMethod(PROP_GET, URLSearchParamsGet, 1,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('getAll', URLSearchParamsGetAll, 1,
+      Members.AddNamedMethod(PROP_GET_ALL, URLSearchParamsGetAll, 1,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('has', URLSearchParamsHas, 1,
+      Members.AddNamedMethod(PROP_HAS, URLSearchParamsHas, 1,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('set', URLSearchParamsSet, 2,
+      Members.AddNamedMethod(PROP_SET, URLSearchParamsSet, 2,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('sort', URLSearchParamsSort, 0,
+      Members.AddNamedMethod(PROP_SORT, URLSearchParamsSort, 0,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('toString', URLSearchParamsToString, 0,
+      Members.AddNamedMethod(PROP_TO_STRING, URLSearchParamsToString, 0,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('keys', URLSearchParamsKeys, 0,
+      Members.AddNamedMethod(PROP_KEYS, URLSearchParamsKeys, 0,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('values', URLSearchParamsValues, 0,
+      Members.AddNamedMethod(PROP_VALUES, URLSearchParamsValues, 0,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('entries', URLSearchParamsEntries, 0,
+      Members.AddNamedMethod(PROP_ENTRIES, URLSearchParamsEntries, 0,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('forEach', URLSearchParamsForEach, 1,
+      Members.AddNamedMethod(PROP_FOR_EACH, URLSearchParamsForEach, 1,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddAccessor('size',
+      Members.AddAccessor(PROP_SIZE,
         URLSearchParamsSizeGetter, nil,
         [pfConfigurable, pfEnumerable]);
       Members.AddSymbolMethod(
@@ -573,7 +574,8 @@ begin
   if not (AThisValue is TGocciaURLSearchParamsValue) then
     ThrowTypeError('URLSearchParams.prototype.forEach: not a URLSearchParams');
   Self_ := TGocciaURLSearchParamsValue(AThisValue);
-  if AArgs.Length = 0 then Exit;
+  // §6.2: callbackFn is required; GetElement(0) returns undefined when absent,
+  // which then fails the IsCallable check and throws TypeError as required.
   Callback := AArgs.GetElement(0);
   // §6.2 step 3: if callbackFn is not callable, throw TypeError
   if not Callback.IsCallable then
@@ -658,7 +660,12 @@ begin
   else if Init is TGocciaArrayValue then
     ParseFromArray(Init)
   else if Init is TGocciaObjectValue then
-    ParseFromObject(TGocciaObjectValue(Init));
+    ParseFromObject(TGocciaObjectValue(Init))
+  else
+  begin
+    // §5.2: coerce non-object, non-string, non-array init to USVString (e.g. numbers)
+    ParseFromString(Init.ToStringLiteral.Value);
+  end;
 end;
 
 procedure TGocciaURLSearchParamsValue.MarkReferences;

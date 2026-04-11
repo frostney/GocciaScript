@@ -129,6 +129,15 @@ const
   PROP_PARSE            = 'parse';
   PROP_CAN_PARSE        = 'canParse';
 
+  // URLSearchParams prototype method names
+  PROP_APPEND    = 'append';
+  PROP_DELETE    = 'delete';
+  PROP_GET_ALL   = 'getAll';
+  PROP_SORT      = 'sort';
+  PROP_KEYS      = 'keys';
+  PROP_ENTRIES   = 'entries';
+  PROP_FOR_EACH  = 'forEach';
+
   // Proxy handler trap names
   PROP_HAS                       = 'has';
   PROP_DELETE_PROPERTY            = 'deleteProperty';

@@ -78,4 +78,11 @@ describe("URLSearchParams constructor", () => {
       new URLSearchParams([["a", "1", "extra"]]);
     }).toThrow(TypeError);
   });
+
+  test("numeric argument is coerced to string and parsed", () => {
+    // URLSearchParams(123) coerces 123 to "123" then parses as form-encoded
+    const params = new URLSearchParams(123);
+    // "123" (no "=") parses as key "123" with empty value → "123="
+    expect(params.toString()).toBe("123=");
+  });
 });

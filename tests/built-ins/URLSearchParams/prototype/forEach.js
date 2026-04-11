@@ -67,4 +67,11 @@ describe("URLSearchParams.prototype.forEach", () => {
       params.forEach(42);
     }).toThrow(TypeError);
   });
+
+  test("throws TypeError when called with no arguments", () => {
+    const params = new URLSearchParams("a=1");
+    expect(() => {
+      params.forEach();
+    }).toThrow(TypeError);
+  });
 });
