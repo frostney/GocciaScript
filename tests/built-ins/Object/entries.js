@@ -30,3 +30,30 @@ test("Object.entries does not return an array of [key, value] pairs for its prot
     ["y", 5],
   ]);
 });
+
+test("Object.entries with number coerces to empty array", () => {
+  expect(Object.entries(42)).toEqual([]);
+  expect(Object.entries(0)).toEqual([]);
+});
+
+test("Object.entries with boolean coerces to empty array", () => {
+  expect(Object.entries(true)).toEqual([]);
+  expect(Object.entries(false)).toEqual([]);
+});
+
+test("Object.entries with string returns index/character pairs", () => {
+  expect(Object.entries("str")).toEqual([
+    ["0", "s"],
+    ["1", "t"],
+    ["2", "r"],
+  ]);
+  expect(Object.entries("")).toEqual([]);
+});
+
+test("Object.entries throws for null", () => {
+  expect(() => Object.entries(null)).toThrow(TypeError);
+});
+
+test("Object.entries throws for undefined", () => {
+  expect(() => Object.entries(undefined)).toThrow(TypeError);
+});

@@ -71,3 +71,18 @@ test("Object.assign with no sources returns target unchanged", () => {
   expect(result).toBe(target);
   expect(result.a).toBe(1);
 });
+
+test("Object.assign throws for null target", () => {
+  expect(() => Object.assign(null, {})).toThrow(TypeError);
+});
+
+test("Object.assign throws for undefined target", () => {
+  expect(() => Object.assign(undefined, {})).toThrow(TypeError);
+});
+
+test("Object.assign with null or undefined source skips them", () => {
+  const target = { a: 1 };
+  const result = Object.assign(target, null, undefined, { b: 2 });
+  expect(result.a).toBe(1);
+  expect(result.b).toBe(2);
+});

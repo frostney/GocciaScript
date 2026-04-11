@@ -36,3 +36,23 @@ test("works with Symbol.iterator", () => {
   expect(symbols.length).toBe(1);
   expect(symbols[0]).toBe(Symbol.iterator);
 });
+
+test("with number coerces to empty array", () => {
+  expect(Object.getOwnPropertySymbols(42)).toEqual([]);
+});
+
+test("with boolean coerces to empty array", () => {
+  expect(Object.getOwnPropertySymbols(true)).toEqual([]);
+});
+
+test("with string coerces to empty array", () => {
+  expect(Object.getOwnPropertySymbols("str")).toEqual([]);
+});
+
+test("throws for null", () => {
+  expect(() => Object.getOwnPropertySymbols(null)).toThrow(TypeError);
+});
+
+test("throws for undefined", () => {
+  expect(() => Object.getOwnPropertySymbols(undefined)).toThrow(TypeError);
+});
