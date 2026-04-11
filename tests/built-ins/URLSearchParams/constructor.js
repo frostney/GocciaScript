@@ -60,4 +60,16 @@ describe("URLSearchParams constructor", () => {
     const params = new URLSearchParams("a=hello+world");
     expect(params.get("a")).toBe("hello world");
   });
+
+  test("malformed pair with fewer than 2 elements throws", () => {
+    expect(() => {
+      new URLSearchParams([["only-name"]]);
+    }).toThrow(TypeError);
+  });
+
+  test("malformed pair with no elements throws", () => {
+    expect(() => {
+      new URLSearchParams([[]]);
+    }).toThrow(TypeError);
+  });
 });

@@ -4,6 +4,12 @@ features: [URLSearchParams]
 ---*/
 
 describe("URLSearchParams.prototype.sort", () => {
+  test("sorting url.searchParams updates url.search", () => {
+    const url = new URL("https://example.com/path?b=2&a=1");
+    url.searchParams.sort();
+    expect(url.search).toBe("?a=1&b=2");
+  });
+
   test("sorts params by name in ascending order", () => {
     const params = new URLSearchParams("c=3&a=1&b=2");
     params.sort();

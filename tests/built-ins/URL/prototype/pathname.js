@@ -42,7 +42,7 @@ describe("URL.prototype.pathname", () => {
     expect(url.href).toBe("https://example.com/new?q=1");
   });
 
-  test("setting empty pathname results in slash", () => {
+  test("setting pathname to '/' results in slash", () => {
     const url = new URL("https://example.com/path");
     url.pathname = "/";
     expect(url.pathname).toBe("/");

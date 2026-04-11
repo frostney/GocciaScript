@@ -120,6 +120,7 @@ const
   PROP_SEARCH           = 'search';
   PROP_SEARCH_PARAMS    = 'searchParams';
   PROP_HASH             = 'hash';
+  PROP_PARSE            = 'parse';
   PROP_CAN_PARSE        = 'canParse';
 
   // Proxy handler trap names

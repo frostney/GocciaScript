@@ -67,7 +67,9 @@ function ParseFormEncoded(const AInput: string;
 implementation
 
 uses
-  SysUtils;
+  SysUtils,
+
+  StringBuffer;
 
 // ---------------------------------------------------------------------------
 // Character helpers
@@ -227,32 +229,36 @@ function PercentEncodeForUserinfo(const AInput: string): string;
 var
   I: Integer;
   B: Byte;
+  Buffer: TStringBuffer;
 begin
-  Result := '';
+  Buffer := TStringBuffer.Create(Length(AInput) * 2);
   for I := 1 to Length(AInput) do
   begin
     B := Ord(AInput[I]);
     if (B > $7F) or InUserinfoPercentEncodeSet(B) then
-      Result := Result + PercentEncode(B)
+      Buffer.Append(PercentEncode(B))
     else
-      Result := Result + AInput[I];
+      Buffer.AppendChar(AInput[I]);
   end;
+  Result := Buffer.ToString;
 end;
 
 function PercentEncodeForPath(const AInput: string): string;
 var
   I: Integer;
   B: Byte;
+  Buffer: TStringBuffer;
 begin
-  Result := '';
+  Buffer := TStringBuffer.Create(Length(AInput) * 2);
   for I := 1 to Length(AInput) do
   begin
     B := Ord(AInput[I]);
     if (B > $7F) or InPathPercentEncodeSet(B) then
-      Result := Result + PercentEncode(B)
+      Buffer.Append(PercentEncode(B))
     else
-      Result := Result + AInput[I];
+      Buffer.AppendChar(AInput[I]);
   end;
+  Result := Buffer.ToString;
 end;
 
 function PercentEncodeForQuery(const AInput: string;
@@ -260,42 +266,46 @@ function PercentEncodeForQuery(const AInput: string;
 var
   I: Integer;
   B: Byte;
+  Buffer: TStringBuffer;
 begin
-  Result := '';
+  Buffer := TStringBuffer.Create(Length(AInput) * 2);
   for I := 1 to Length(AInput) do
   begin
     B := Ord(AInput[I]);
     if AIsSpecial then
     begin
       if (B > $7F) or InSpecialQueryPercentEncodeSet(B) then
-        Result := Result + PercentEncode(B)
+        Buffer.Append(PercentEncode(B))
       else
-        Result := Result + AInput[I];
+        Buffer.AppendChar(AInput[I]);
     end
     else
     begin
       if (B > $7F) or InQueryPercentEncodeSet(B) then
-        Result := Result + PercentEncode(B)
+        Buffer.Append(PercentEncode(B))
       else
-        Result := Result + AInput[I];
+        Buffer.AppendChar(AInput[I]);
     end;
   end;
+  Result := Buffer.ToString;
 end;
 
 function PercentEncodeForFragment(const AInput: string): string;
 var
   I: Integer;
   B: Byte;
+  Buffer: TStringBuffer;
 begin
-  Result := '';
+  Buffer := TStringBuffer.Create(Length(AInput) * 2);
   for I := 1 to Length(AInput) do
   begin
     B := Ord(AInput[I]);
     if (B > $7F) or InFragmentPercentEncodeSet(B) then
-      Result := Result + PercentEncode(B)
+      Buffer.Append(PercentEncode(B))
     else
-      Result := Result + AInput[I];
+      Buffer.AppendChar(AInput[I]);
   end;
+  Result := Buffer.ToString;
 end;
 
 // application/x-www-form-urlencoded encoding

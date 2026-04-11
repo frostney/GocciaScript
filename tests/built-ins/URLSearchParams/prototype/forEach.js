@@ -57,4 +57,14 @@ describe("URLSearchParams.prototype.forEach", () => {
     });
     expect(count).toBe(3);
   });
+
+  test("throws TypeError when callback is not callable", () => {
+    const params = new URLSearchParams("a=1");
+    expect(() => {
+      params.forEach(null);
+    }).toThrow(TypeError);
+    expect(() => {
+      params.forEach(42);
+    }).toThrow(TypeError);
+  });
 });

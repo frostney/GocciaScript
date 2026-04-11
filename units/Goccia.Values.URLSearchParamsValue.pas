@@ -263,22 +263,21 @@ begin
   FList.Clear;
   if not (AArr is TGocciaArrayValue) then Exit;
   Outer := TGocciaArrayValue(AArr);
+  // WHATWG URL §5.2: each pair must contain exactly 2 elements per sequence<sequence<USVString>>
   for I := 0 to Outer.Elements.Count - 1 do
   begin
-    if Assigned(Outer.Elements[I]) and (Outer.Elements[I] is TGocciaArrayValue) then
-    begin
-      Inner := TGocciaArrayValue(Outer.Elements[I]);
-      if Inner.Elements.Count >= 2 then
-      begin
-        Param.Name := '';
-        Param.Value := '';
-        if Assigned(Inner.Elements[0]) then
-          Param.Name := Inner.Elements[0].ToStringLiteral.Value;
-        if Assigned(Inner.Elements[1]) then
-          Param.Value := Inner.Elements[1].ToStringLiteral.Value;
-        FList.Add(Param);
-      end;
-    end;
+    if not Assigned(Outer.Elements[I]) or not (Outer.Elements[I] is TGocciaArrayValue) then
+      ThrowTypeError('Failed to construct URLSearchParams: The provided value cannot be converted to a sequence');
+    Inner := TGocciaArrayValue(Outer.Elements[I]);
+    if Inner.Elements.Count < 2 then
+      ThrowTypeError('Failed to construct URLSearchParams: Sequence initializer must contain pairs');
+    Param.Name := '';
+    Param.Value := '';
+    if Assigned(Inner.Elements[0]) then
+      Param.Name := Inner.Elements[0].ToStringLiteral.Value;
+    if Assigned(Inner.Elements[1]) then
+      Param.Value := Inner.Elements[1].ToStringLiteral.Value;
+    FList.Add(Param);
   end;
 end;
 
@@ -565,7 +564,7 @@ function TGocciaURLSearchParamsValue.URLSearchParamsForEach(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Self_: TGocciaURLSearchParamsValue;
-  Callback: TGocciaValue;
+  Callback, ThisArg: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
 begin
@@ -575,7 +574,15 @@ begin
   Self_ := TGocciaURLSearchParamsValue(AThisValue);
   if AArgs.Length = 0 then Exit;
   Callback := AArgs.GetElement(0);
-  if not Callback.IsCallable then Exit;
+  // §6.2 step 3: if callbackFn is not callable, throw TypeError
+  if not Callback.IsCallable then
+    ThrowTypeError('URLSearchParams.prototype.forEach: callback is not a function');
+
+  // §6.2 step 4: optional thisArg (second argument)
+  if AArgs.Length >= 2 then
+    ThisArg := AArgs.GetElement(1)
+  else
+    ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   for I := 0 to Self_.FList.Count - 1 do
   begin
@@ -584,7 +591,7 @@ begin
       TGocciaStringLiteralValue.Create(Self_.FList[I].Name),
       AThisValue]);
     try
-      InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      InvokeCallable(Callback, CallArgs, ThisArg);
     finally
       CallArgs.Free;
     end;
@@ -657,7 +664,11 @@ procedure TGocciaURLSearchParamsValue.MarkReferences;
 begin
   if GCMarked then Exit;
   inherited;
-  // FURLRef is a non-owning back-reference; the URL object marks us
+  // Mark the owning URL so it stays live as long as this URLSearchParams is
+  // reachable, preventing use-after-free when the user holds only a direct
+  // reference to a url.searchParams object.
+  if Assigned(FURLRef) then
+    TGocciaURLValue(FURLRef).MarkReferences;
 end;
 
 end.

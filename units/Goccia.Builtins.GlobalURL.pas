@@ -43,6 +43,8 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Arguments.Validator,
+  Goccia.Constants.PropertyNames,
   Goccia.URL.Parser,
   Goccia.Values.ErrorHelper,
   Goccia.Values.URLSearchParamsValue,
@@ -63,8 +65,8 @@ begin
 
   Members := TGocciaMemberCollection.Create;
   try
-    Members.AddNamedMethod('canParse', CanParse, 1, gmkStaticMethod);
-    Members.AddNamedMethod('parse', Parse, 1, gmkStaticMethod);
+    Members.AddNamedMethod(PROP_CAN_PARSE, CanParse, 1, gmkStaticMethod);
+    Members.AddNamedMethod(PROP_PARSE, Parse, 1, gmkStaticMethod);
     FStaticMembers := Members.ToDefinitions;
   finally
     Members.Free;
@@ -79,11 +81,7 @@ var
   URLStr, BaseStr: string;
   Parsed, BaseParsed: TGocciaURLRecord;
 begin
-  if AArgs.Length = 0 then
-  begin
-    Result := TGocciaBooleanLiteralValue.FalseValue;
-    Exit;
-  end;
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'URL.canParse', ThrowError);
   URLStr := AArgs.GetElement(0).ToStringLiteral.Value;
 
   if AArgs.Length >= 2 then
@@ -114,11 +112,7 @@ var
   Parsed, BaseParsed: TGocciaURLRecord;
   URLObj: TGocciaURLValue;
 begin
-  if AArgs.Length = 0 then
-  begin
-    Result := TGocciaNullLiteralValue.NullValue;
-    Exit;
-  end;
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'URL.parse', ThrowError);
   URLStr := AArgs.GetElement(0).ToStringLiteral.Value;
 
   if AArgs.Length >= 2 then

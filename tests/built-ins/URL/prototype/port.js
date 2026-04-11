@@ -51,5 +51,6 @@ describe("URL.prototype.port", () => {
     const url = new URL("https://example.com:8080/path");
     url.port = "443";
     expect(url.port).toBe("");
+    expect(url.href).toBe("https://example.com/path");
   });
 });

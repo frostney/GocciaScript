@@ -4,6 +4,12 @@ features: [URLSearchParams]
 ---*/
 
 describe("URLSearchParams.prototype.delete", () => {
+  test("deleting via url.searchParams updates url.search", () => {
+    const url = new URL("https://example.com/?a=1&a=2&b=3");
+    url.searchParams.delete("a");
+    expect(url.search).toBe("?b=3");
+  });
+
   test("deletes all entries with the given name", () => {
     const params = new URLSearchParams("a=1&b=2&a=3");
     params.delete("a");

@@ -27,7 +27,7 @@ describe("URL.prototype.href", () => {
   test("setter with just a different path updates href", () => {
     const url = new URL("https://example.com/old");
     url.href = "https://example.com/new";
-    expect(url.pathname).toBe("/new");
+    expect(url.href).toBe("https://example.com/new");
   });
 
   test("setter throws TypeError for invalid URL", () => {

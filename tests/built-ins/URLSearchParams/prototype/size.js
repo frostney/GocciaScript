@@ -31,7 +31,7 @@ describe("URLSearchParams.prototype.size", () => {
     expect(params.size).toBe(1);
   });
 
-  test("unchanged after set that replaces duplicates", () => {
+  test("decreases when set removes duplicate entries", () => {
     const params = new URLSearchParams("a=1&a=2&a=3");
     params.set("a", "x");
     expect(params.size).toBe(1);
