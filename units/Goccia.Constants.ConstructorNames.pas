@@ -37,6 +37,9 @@ const
 
   CONSTRUCTOR_FFI                  = 'FFI';
 
+  CONSTRUCTOR_TEXT_ENCODER = 'TextEncoder';
+  CONSTRUCTOR_TEXT_DECODER = 'TextDecoder';
+
 implementation
 
 end.

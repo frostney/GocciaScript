@@ -2,6 +2,10 @@ import { childUrl, childMeta } from "./helpers/import-meta-child.js";
 import { getUrl } from "./helpers/import-meta-function.js";
 
 describe("import.meta", () => {
+  // On Windows, file URLs include a drive letter (e.g. file:///D:/...).
+  // Detect by checking our own URL so absolute-path tests can expect the exact result.
+  const driveMatch = import.meta.url.match(/^file:\/\/\/([A-Z]:)/);
+
   test("import.meta is an object", () => {
     expect(typeof import.meta).toBe("object");
   });
@@ -63,12 +67,20 @@ describe("import.meta", () => {
 
   test("import.meta.resolve handles absolute paths", () => {
     const resolved = import.meta.resolve("/absolute/path/file.js");
-    expect(resolved).toBe("file:///absolute/path/file.js");
+    // On Windows, ExpandFileName prepends the current drive letter (e.g. D:)
+    const expected = driveMatch
+      ? "file:///" + driveMatch[1] + "/absolute/path/file.js"
+      : "file:///absolute/path/file.js";
+    expect(resolved).toBe(expected);
   });
 
   test("import.meta.resolve percent-encodes special characters", () => {
     const resolved = import.meta.resolve("/path with spaces/file#1.js");
-    expect(resolved).toBe("file:///path%20with%20spaces/file%231.js");
+    // On Windows, ExpandFileName prepends the current drive letter (e.g. D:)
+    const expected = driveMatch
+      ? "file:///" + driveMatch[1] + "/path%20with%20spaces/file%231.js"
+      : "file:///path%20with%20spaces/file%231.js";
+    expect(resolved).toBe(expected);
   });
 
   test("import.meta.url percent-encodes spaces in the path", () => {

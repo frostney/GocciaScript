@@ -435,7 +435,17 @@ A `const` global providing engine metadata and Goccia-owned utility APIs:
 | `commit` | `string` | Short git commit hash (e.g., `"a1b2c3d"`) |
 | `builtIns` | `string[]` | Names of the enabled `TGocciaGlobalBuiltin` flags (e.g., `["Console", "Math", "GlobalObject", ...]`), derived via RTTI at runtime |
 | `strictTypes` | `boolean` | `true` in bytecode mode where strict local type enforcement is active (covering both explicit type annotations and types inferred from literal initializers); `false` in interpreted mode |
+| `build` | `object` | Compile-time platform information (see below) |
 | `semver` | `object` | SemVer 2.0.0 API namespace (see below) |
+
+**`Goccia.build`**
+
+`Goccia.build` exposes compile-time platform information, mirroring `Deno.build`:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `os` | `string` | Operating system: `"darwin"`, `"linux"`, `"windows"`, `"freebsd"`, `"netbsd"`, `"openbsd"`, `"android"`, `"aix"`, `"solaris"`, or `"unknown"` |
+| `arch` | `string` | Processor architecture: `"x86_64"`, `"aarch64"`, `"x86"`, `"arm"`, `"powerpc64"`, `"powerpc"`, or `"unknown"` |
 
 **`Goccia.semver`**
 
