@@ -1118,7 +1118,7 @@ end;
 
 function TGocciaTemplateWithInterpolationExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Result := EvaluateTemplateWithInterpolation(Self, AContext);
 end;
 
 // ES2026 §13.3.11 Runtime Semantics: Evaluation — Tagged Templates

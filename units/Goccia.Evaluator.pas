@@ -57,6 +57,7 @@ function EvaluateDestructuringAssignment(const ADestructuringAssignmentExpressio
 function EvaluateEnumDeclaration(const AEnumDeclaration: TGocciaEnumDeclaration; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateDestructuringDeclaration(const ADestructuringDeclaration: TGocciaDestructuringDeclaration; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateTemplateLiteral(const ATemplateLiteralExpression: TGocciaTemplateLiteralExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateTemplateWithInterpolation(const ATemplateWithInterpolationExpression: TGocciaTemplateWithInterpolationExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateTaggedTemplate(const ATaggedTemplateExpression: TGocciaTaggedTemplateExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateTemplateExpression(const AExpressionText: string; const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer): TGocciaValue;
 function EvaluateAwait(const AAwaitExpression: TGocciaAwaitExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -2881,67 +2882,38 @@ begin
   Result := Instance;
 end;
 
+// Template literals without real interpolations are returned as static strings.
+// The parser pre-segments templates with interpolations into
+// TGocciaTemplateWithInterpolationExpression, so this function only handles
+// the no-interpolation case.
 function EvaluateTemplateLiteral(const ATemplateLiteralExpression: TGocciaTemplateLiteralExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
-var
-  Template: string;
-  SB: TStringBuffer;
-  I, Start: Integer;
-  BraceCount: Integer;
-  ExpressionText: string;
-  ExpressionValue: TGocciaValue;
 begin
-  Template := ATemplateLiteralExpression.Value;
-  SB := TStringBuffer.Create(Length(Template));
-  I := 1;
-  while I <= Length(Template) do
+  Result := TGocciaStringLiteralValue.Create(ATemplateLiteralExpression.Value);
+end;
+
+// ES2026 §13.2.8 Template Literals — evaluate a pre-segmented template with
+// interpolation expressions. Parts alternate between string literal nodes
+// (static text) and expression nodes (interpolated values).
+function EvaluateTemplateWithInterpolation(const ATemplateWithInterpolationExpression: TGocciaTemplateWithInterpolationExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  SB: TStringBuffer;
+  I: Integer;
+  PartValue: TGocciaValue;
+begin
+  SB := TStringBuffer.Create;
+  for I := 0 to ATemplateWithInterpolationExpression.Parts.Count - 1 do
   begin
-    if (I < Length(Template)) and (Template[I] = '$') and (Template[I + 1] = '{') then
-    begin
-      I := I + 2;
-      Start := I;
-
-      BraceCount := 1;
-      while (I <= Length(Template)) and (BraceCount > 0) do
-      begin
-        if Template[I] = '{' then
-          Inc(BraceCount)
-        else if Template[I] = '}' then
-          Dec(BraceCount);
-        if BraceCount > 0 then
-          Inc(I);
-      end;
-
-      if BraceCount > 0 then
-      begin
-        AContext.OnError('Unterminated template expression', ATemplateLiteralExpression.Line, ATemplateLiteralExpression.Column);
-        Result := TGocciaStringLiteralValue.Create(Template);
-        Exit;
-      end;
-
-      ExpressionText := Trim(Copy(Template, Start, I - Start));
-      if ExpressionText <> '' then
-      begin
-        ExpressionValue := EvaluateTemplateExpression(ExpressionText, AContext, ATemplateLiteralExpression.Line, ATemplateLiteralExpression.Column);
-        if ExpressionValue <> nil then
-        begin
-          if ExpressionValue is TGocciaSymbolValue then
-            ThrowTypeError('Cannot convert a Symbol value to a string');
-          // ES2026 §13.15.5.1 step 5e: ToString(value) on each substitution
-          SB.Append(ToECMAString(ExpressionValue).Value);
-        end
-        else
-          SB.Append('undefined');
-      end;
-
-      Inc(I);
-    end
+    PartValue := EvaluateExpression(ATemplateWithInterpolationExpression.Parts[I], AContext);
+    if PartValue = nil then
+      SB.Append('undefined')
     else
     begin
-      SB.AppendChar(Template[I]);
-      Inc(I);
+      if PartValue is TGocciaSymbolValue then
+        ThrowTypeError('Cannot convert a Symbol value to a string');
+      // ES2026 §13.15.5.1 step 5e: ToString(value) on each substitution
+      SB.Append(ToECMAString(PartValue).Value);
     end;
   end;
-
   Result := TGocciaStringLiteralValue.Create(SB.ToString);
 end;
 

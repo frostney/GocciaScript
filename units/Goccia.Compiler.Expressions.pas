@@ -103,9 +103,6 @@ uses
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Keywords.Reserved,
-  Goccia.Lexer,
-  Goccia.Parser,
-  Goccia.TextFiles,
   Goccia.Token,
   Goccia.Values.Primitives;
 
@@ -1549,133 +1546,21 @@ begin
   end;
 end;
 
+// Template literals without real interpolations are emitted as constant strings.
+// The parser pre-segments templates with interpolations into
+// TGocciaTemplateWithInterpolationExpression, so this function only handles
+// the no-interpolation case.
 procedure CompileTemplateLiteral(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaTemplateLiteralExpression; const ADest: UInt8);
-var
-  Template: string;
-  I, Start, BraceCount: Integer;
-  ExprText, StaticPart: string;
-  PartReg: UInt8;
-  HasParts: Boolean;
-  Lexer: TGocciaLexer;
-  Parser: TGocciaParser;
-  ProgramNode: TGocciaProgram;
-  Tokens: TObjectList<TGocciaToken>;
-  SourceLines: TStringList;
-  ParsedExpr: TGocciaExpression;
 begin
-  Template := AExpr.Value;
-
-  if Pos('${', Template) = 0 then
-  begin
-    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ADest,
-      ACtx.Template.AddConstantString(Template)));
-    Exit;
-  end;
-
-  HasParts := False;
-  I := 1;
-  while I <= Length(Template) do
-  begin
-    if (I < Length(Template)) and (Template[I] = '$') and (Template[I + 1] = '{') then
-    begin
-      Inc(I, 2);
-      Start := I;
-      BraceCount := 1;
-      while (I <= Length(Template)) and (BraceCount > 0) do
-      begin
-        if Template[I] = '{' then
-          Inc(BraceCount)
-        else if Template[I] = '}' then
-          Dec(BraceCount);
-        if BraceCount > 0 then
-          Inc(I);
-      end;
-
-      ExprText := Trim(Copy(Template, Start, I - Start));
-      Inc(I);
-
-      if ExprText <> '' then
-      begin
-        Lexer := TGocciaLexer.Create('(' + ExprText + ');', ACtx.SourcePath);
-        try
-          Tokens := Lexer.ScanTokens;
-          SourceLines := CreateUTF8StringList(ExprText);
-          try
-            Parser := TGocciaParser.Create(Tokens, ACtx.SourcePath, SourceLines);
-            try
-              ProgramNode := Parser.ParseUnchecked;
-              try
-                ParsedExpr := nil;
-                if (ProgramNode.Body.Count > 0) and
-                   (ProgramNode.Body[0] is TGocciaExpressionStatement) then
-                  ParsedExpr := TGocciaExpressionStatement(
-                    ProgramNode.Body[0]).Expression;
-
-                if Assigned(ParsedExpr) then
-                begin
-                  if not HasParts then
-                  begin
-                    ACtx.CompileExpression(ParsedExpr, ADest);
-                    EmitInstruction(ACtx, EncodeABC(OP_TO_STRING, ADest, ADest, 0));
-                    HasParts := True;
-                  end
-                  else
-                  begin
-                    PartReg := ACtx.Scope.AllocateRegister;
-                    ACtx.CompileExpression(ParsedExpr, PartReg);
-                    EmitInstruction(ACtx, EncodeABC(OP_TO_STRING, PartReg, PartReg, 0));
-                    EmitInstruction(ACtx, EncodeABC(OP_ADD, ADest, ADest, PartReg));
-                    ACtx.Scope.FreeRegister;
-                  end;
-                end;
-              finally
-                ProgramNode.Free;
-              end;
-            finally
-              Parser.Free;
-            end;
-          finally
-            SourceLines.Free;
-          end;
-        finally
-          Lexer.Free;
-        end;
-      end;
-    end
-    else
-    begin
-      Start := I;
-      while (I <= Length(Template)) and
-        not ((I < Length(Template)) and (Template[I] = '$') and (Template[I + 1] = '{')) do
-        Inc(I);
-
-      StaticPart := Copy(Template, Start, I - Start);
-      if StaticPart <> '' then
-      begin
-        if not HasParts then
-        begin
-          EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ADest,
-            ACtx.Template.AddConstantString(StaticPart)));
-          HasParts := True;
-        end
-        else
-        begin
-          PartReg := ACtx.Scope.AllocateRegister;
-          EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, PartReg,
-            ACtx.Template.AddConstantString(StaticPart)));
-          EmitInstruction(ACtx, EncodeABC(OP_ADD, ADest, ADest, PartReg));
-          ACtx.Scope.FreeRegister;
-        end;
-      end;
-    end;
-  end;
-
-  if not HasParts then
-    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ADest,
-      ACtx.Template.AddConstantString('')));
+  EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ADest,
+    ACtx.Template.AddConstantString(AExpr.Value)));
 end;
 
+// ES2026 §13.15.5.1 Template Literals — compile pre-segmented template.
+// Expression parts must use OP_TO_STRING to apply the "string" ToPrimitive
+// hint (preferring toString() over valueOf()), matching the spec's ToString
+// semantics rather than OP_ADD's "default" hint.
 procedure CompileTemplateWithInterpolation(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaTemplateWithInterpolationExpression; const ADest: UInt8);
 var
@@ -1695,6 +1580,9 @@ begin
   begin
     PartReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(AExpr.Parts[I], PartReg);
+    // ES2026 §13.15.5.1 step 5e: ToString(value) on each substitution
+    if not (AExpr.Parts[I] is TGocciaLiteralExpression) then
+      EmitInstruction(ACtx, EncodeABC(OP_TO_STRING, PartReg, PartReg, 0));
     EmitInstruction(ACtx, EncodeABC(OP_ADD, ADest, ADest, PartReg));
     ACtx.Scope.FreeRegister;
   end;
