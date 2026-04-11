@@ -7,6 +7,7 @@ interface
 uses
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
+  Goccia.Constants.ConstructorNames,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
   Goccia.Values.NativeFunction,
@@ -33,7 +34,7 @@ constructor TGocciaGlobalTextDecoder.Create(const AName: string;
 begin
   inherited Create(AName, AScope, AThrowError);
   FTextDecoderConstructor := TGocciaNativeFunctionValue.Create(
-    TextDecoderConstructorFn, 'TextDecoder', 0);
+    TextDecoderConstructorFn, CONSTRUCTOR_TEXT_DECODER, 0);
   TGocciaTextDecoderValue.ExposePrototype(FTextDecoderConstructor);
 end;
 

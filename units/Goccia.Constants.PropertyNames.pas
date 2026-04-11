@@ -109,6 +109,9 @@ const
   PROP_ENCODING               = 'encoding';
   PROP_FATAL                  = 'fatal';
   PROP_IGNORE_BOM             = 'ignoreBOM';
+  PROP_ENCODE                 = 'encode';
+  PROP_ENCODE_INTO            = 'encodeInto';
+  PROP_DECODE                 = 'decode';
 
   // Proxy handler trap names
   PROP_HAS                       = 'has';

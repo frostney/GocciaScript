@@ -125,6 +125,27 @@ begin
       Exit;
     end;
 
+    // Second-byte range checks required by RFC 3629 to reject overlong
+    // sequences, UTF-16 surrogate pairs, and code points above U+10FFFF.
+    if SeqLen = 3 then
+    begin
+      case B of
+        $E0: // Overlong: second byte must be A0-BF (U+0800 minimum).
+          if AData[I + 1] < $A0 then begin Result := False; Exit; end;
+        $ED: // Surrogate range U+D800-U+DFFF: second byte must be 80-9F.
+          if AData[I + 1] > $9F then begin Result := False; Exit; end;
+      end;
+    end
+    else if SeqLen = 4 then
+    begin
+      case B of
+        $F0: // Overlong: second byte must be 90-BF (U+10000 minimum).
+          if AData[I + 1] < $90 then begin Result := False; Exit; end;
+        $F4: // Limit to U+10FFFF: second byte must be 80-8F.
+          if AData[I + 1] > $8F then begin Result := False; Exit; end;
+      end;
+    end;
+
     // Validate each continuation byte (must be 10xxxxxx).
     for J := 1 to SeqLen - 1 do
       if (AData[I + J] and $C0) <> $80 then
@@ -206,7 +227,7 @@ begin
       Members.AddAccessor(PROP_ENCODING, EncodingGetter, nil, [pfConfigurable]);
       Members.AddAccessor(PROP_FATAL, FatalGetter, nil, [pfConfigurable]);
       Members.AddAccessor(PROP_IGNORE_BOM, IgnoreBOMGetter, nil, [pfConfigurable]);
-      Members.AddNamedMethod('decode', Decode, 1, gmkPrototypeMethod,
+      Members.AddNamedMethod(PROP_DECODE, Decode, 1, gmkPrototypeMethod,
         [gmfNoFunctionPrototype]);
       FPrototypeMembers := Members.ToDefinitions;
     finally

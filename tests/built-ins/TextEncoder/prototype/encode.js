@@ -82,4 +82,21 @@ describe("TextEncoder.prototype.encode", () => {
     expect(result[0]).toBe(0xC2);
     expect(result[1]).toBe(0x80);
   });
+
+  test("lone high surrogate (\\uD800) is encoded as U+FFFD (EF BF BD)", () => {
+    // Per WHATWG Encoding §8.3.2: TextEncoder normalises lone surrogates to U+FFFD.
+    const result = enc.encode("\uD800");
+    expect(result.length).toBe(3);
+    expect(result[0]).toBe(0xEF);
+    expect(result[1]).toBe(0xBF);
+    expect(result[2]).toBe(0xBD);
+  });
+
+  test("lone low surrogate (\\uDFFF) is encoded as U+FFFD (EF BF BD)", () => {
+    const result = enc.encode("\uDFFF");
+    expect(result.length).toBe(3);
+    expect(result[0]).toBe(0xEF);
+    expect(result[1]).toBe(0xBF);
+    expect(result[2]).toBe(0xBD);
+  });
 });

@@ -81,6 +81,29 @@ describe("TextDecoder.prototype.decode", () => {
     expect(() => fatalDec.decode(bad)).toThrow(TypeError);
   });
 
+  test("fatal mode rejects overlong 3-byte sequence (E0 80 80)", () => {
+    // E0 must be followed by A0-BF; 80 is overlong.
+    const fatalDec = new TextDecoder("utf-8", { fatal: true });
+    expect(() => fatalDec.decode(new Uint8Array([0xE0, 0x80, 0x80]))).toThrow(TypeError);
+  });
+
+  test("fatal mode rejects UTF-16 surrogate pair (ED A0 80 = U+D800)", () => {
+    const fatalDec = new TextDecoder("utf-8", { fatal: true });
+    expect(() => fatalDec.decode(new Uint8Array([0xED, 0xA0, 0x80]))).toThrow(TypeError);
+  });
+
+  test("fatal mode rejects overlong 4-byte sequence (F0 80 80 80)", () => {
+    // F0 must be followed by 90-BF; 80 is overlong.
+    const fatalDec = new TextDecoder("utf-8", { fatal: true });
+    expect(() => fatalDec.decode(new Uint8Array([0xF0, 0x80, 0x80, 0x80]))).toThrow(TypeError);
+  });
+
+  test("fatal mode rejects code point above U+10FFFF (F4 90 80 80)", () => {
+    // F4 must be followed by 80-8F; 90 exceeds U+10FFFF.
+    const fatalDec = new TextDecoder("utf-8", { fatal: true });
+    expect(() => fatalDec.decode(new Uint8Array([0xF4, 0x90, 0x80, 0x80]))).toThrow(TypeError);
+  });
+
   test("fatal mode accepts valid UTF-8 without throwing", () => {
     const fatalDec = new TextDecoder("utf-8", { fatal: true });
     const bytes = new Uint8Array([72, 101, 108, 108, 111]);
