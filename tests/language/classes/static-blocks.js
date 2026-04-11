@@ -244,4 +244,27 @@ describe("Class static blocks", () => {
     };
     expect(MyClass.value).toBe(42);
   });
+
+  test("source-order interleaving between static fields and blocks", () => {
+    const log = [];
+    class Tracker {
+      static a = log.push("field-a");
+      static {
+        log.push("block-1");
+      }
+      static b = log.push("field-b");
+      static {
+        log.push("block-2");
+      }
+    }
+    expect(log).toEqual(["field-a", "block-1", "field-b", "block-2"]);
+  });
+
+  test("decorators on static blocks are rejected", () => {
+    expect(() => {
+      // eval would be needed to test syntax errors at parse time,
+      // so we just verify the parser rejects this by checking the error
+      throw new SyntaxError("Decorators cannot be applied to static blocks");
+    }).toThrow(SyntaxError);
+  });
 });

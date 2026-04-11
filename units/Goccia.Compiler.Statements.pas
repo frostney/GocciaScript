@@ -2108,38 +2108,72 @@ begin
      HasAccessorInitializers(ClassDef) then
     CompileFieldInitializer(ACtx, ClassReg, ClassDef);
 
-  for StaticPropPair in ClassDef.StaticProperties do
+  // Static fields without FElements entries (legacy / no static blocks)
+  if Length(ClassDef.FElements) = 0 then
   begin
-    ValReg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(StaticPropPair.Value, ValReg);
-    KeyIdx := ACtx.Template.AddConstantString(StaticPropPair.Key);
-    if KeyIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ClassReg,
-      UInt8(KeyIdx), ValReg));
-    ACtx.Scope.FreeRegister;
-  end;
+    for StaticPropPair in ClassDef.StaticProperties do
+    begin
+      ValReg := ACtx.Scope.AllocateRegister;
+      ACtx.CompileExpression(StaticPropPair.Value, ValReg);
+      KeyIdx := ACtx.Template.AddConstantString(StaticPropPair.Key);
+      if KeyIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
+      EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ClassReg,
+        UInt8(KeyIdx), ValReg));
+      ACtx.Scope.FreeRegister;
+    end;
 
-  for StaticPropPair in ClassDef.PrivateStaticProperties do
-  begin
-    ValReg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(StaticPropPair.Value, ValReg);
-    KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + StaticPropPair.Key);
-    if KeyIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
-      ClassReg, UInt8(KeyIdx), 0));
-    EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ClassReg,
-      UInt8(KeyIdx), ValReg));
-    ACtx.Scope.FreeRegister;
+    for StaticPropPair in ClassDef.PrivateStaticProperties do
+    begin
+      ValReg := ACtx.Scope.AllocateRegister;
+      ACtx.CompileExpression(StaticPropPair.Value, ValReg);
+      KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + StaticPropPair.Key);
+      if KeyIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
+      EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
+        ClassReg, UInt8(KeyIdx), 0));
+      EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ClassReg,
+        UInt8(KeyIdx), ValReg));
+      ACtx.Scope.FreeRegister;
+    end;
   end;
 
   CompileComputedElements(ACtx, ClassReg, ClassDef);
 
-  // ES2022 §15.7.14: compile static blocks
+  // ES2022 §15.7.14: compile static fields and static blocks in source order
   for I := 0 to High(ClassDef.FElements) do
+  begin
     if ClassDef.FElements[I].Kind = cekStaticBlock then
-      CompileStaticBlock(ACtx, ClassReg, ClassDef.FElements[I].StaticBlockBody);
+      CompileStaticBlock(ACtx, ClassReg, ClassDef.FElements[I].StaticBlockBody)
+    else if (ClassDef.FElements[I].Kind = cekField) and ClassDef.FElements[I].IsStatic then
+    begin
+      ValReg := ACtx.Scope.AllocateRegister;
+      if Assigned(ClassDef.FElements[I].FieldInitializer) then
+        ACtx.CompileExpression(ClassDef.FElements[I].FieldInitializer, ValReg)
+      else
+        EmitInstruction(ACtx, EncodeABx(OP_LOAD_UNDEFINED, ValReg, 0));
+      if ClassDef.FElements[I].IsPrivate then
+      begin
+        KeyIdx := ACtx.Template.AddConstantString(
+          '#' + PrivPrefix + ClassDef.FElements[I].Name);
+        if KeyIdx > High(UInt8) then
+          raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
+        EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
+          ClassReg, UInt8(KeyIdx), 0));
+        EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ClassReg,
+          UInt8(KeyIdx), ValReg));
+      end
+      else
+      begin
+        KeyIdx := ACtx.Template.AddConstantString(ClassDef.FElements[I].Name);
+        if KeyIdx > High(UInt8) then
+          raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
+        EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ClassReg,
+          UInt8(KeyIdx), ValReg));
+      end;
+      ACtx.Scope.FreeRegister;
+    end;
+  end;
 
   if HasSuper then
     CompileDecoratorAndAccessorPass(ACtx, ClassReg, ClassDef, SuperReg)
@@ -2276,38 +2310,72 @@ begin
      HasAccessorInitializers(ClassDef) then
     CompileFieldInitializer(ACtx, ADest, ClassDef);
 
-  for StaticPropPair in ClassDef.StaticProperties do
+  // Static fields without FElements entries (legacy / no static blocks)
+  if Length(ClassDef.FElements) = 0 then
   begin
-    ValReg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(StaticPropPair.Value, ValReg);
-    KeyIdx := ACtx.Template.AddConstantString(StaticPropPair.Key);
-    if KeyIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ADest,
-      UInt8(KeyIdx), ValReg));
-    ACtx.Scope.FreeRegister;
-  end;
+    for StaticPropPair in ClassDef.StaticProperties do
+    begin
+      ValReg := ACtx.Scope.AllocateRegister;
+      ACtx.CompileExpression(StaticPropPair.Value, ValReg);
+      KeyIdx := ACtx.Template.AddConstantString(StaticPropPair.Key);
+      if KeyIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
+      EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ADest,
+        UInt8(KeyIdx), ValReg));
+      ACtx.Scope.FreeRegister;
+    end;
 
-  for StaticPropPair in ClassDef.PrivateStaticProperties do
-  begin
-    ValReg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(StaticPropPair.Value, ValReg);
-    KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + StaticPropPair.Key);
-    if KeyIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
-      ADest, UInt8(KeyIdx), 0));
-    EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ADest,
-      UInt8(KeyIdx), ValReg));
-    ACtx.Scope.FreeRegister;
+    for StaticPropPair in ClassDef.PrivateStaticProperties do
+    begin
+      ValReg := ACtx.Scope.AllocateRegister;
+      ACtx.CompileExpression(StaticPropPair.Value, ValReg);
+      KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + StaticPropPair.Key);
+      if KeyIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
+      EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
+        ADest, UInt8(KeyIdx), 0));
+      EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ADest,
+        UInt8(KeyIdx), ValReg));
+      ACtx.Scope.FreeRegister;
+    end;
   end;
 
   CompileComputedElements(ACtx, ADest, ClassDef);
 
-  // ES2022 §15.7.14: compile static blocks
+  // ES2022 §15.7.14: compile static fields and static blocks in source order
   for I := 0 to High(ClassDef.FElements) do
+  begin
     if ClassDef.FElements[I].Kind = cekStaticBlock then
-      CompileStaticBlock(ACtx, ADest, ClassDef.FElements[I].StaticBlockBody);
+      CompileStaticBlock(ACtx, ADest, ClassDef.FElements[I].StaticBlockBody)
+    else if (ClassDef.FElements[I].Kind = cekField) and ClassDef.FElements[I].IsStatic then
+    begin
+      ValReg := ACtx.Scope.AllocateRegister;
+      if Assigned(ClassDef.FElements[I].FieldInitializer) then
+        ACtx.CompileExpression(ClassDef.FElements[I].FieldInitializer, ValReg)
+      else
+        EmitInstruction(ACtx, EncodeABx(OP_LOAD_UNDEFINED, ValReg, 0));
+      if ClassDef.FElements[I].IsPrivate then
+      begin
+        KeyIdx := ACtx.Template.AddConstantString(
+          '#' + PrivPrefix + ClassDef.FElements[I].Name);
+        if KeyIdx > High(UInt8) then
+          raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
+        EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
+          ADest, UInt8(KeyIdx), 0));
+        EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ADest,
+          UInt8(KeyIdx), ValReg));
+      end
+      else
+      begin
+        KeyIdx := ACtx.Template.AddConstantString(ClassDef.FElements[I].Name);
+        if KeyIdx > High(UInt8) then
+          raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
+        EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ADest,
+          UInt8(KeyIdx), ValReg));
+      end;
+      ACtx.Scope.FreeRegister;
+    end;
+  end;
 
   if HasSuper then
   begin

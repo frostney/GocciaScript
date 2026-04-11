@@ -1824,16 +1824,20 @@ begin
       ClassValue.AddMethod(MethodPair.Key, Method);
   end;
 
-  for PropertyPair in AClassDef.StaticProperties do
+  // Static fields without FElements entries (legacy / no static blocks)
+  if Length(AClassDef.FElements) = 0 then
   begin
-    PropertyValue := EvaluateExpression(PropertyPair.Value, AContext);
-    ClassValue.SetProperty(PropertyPair.Key, PropertyValue);
-  end;
+    for PropertyPair in AClassDef.StaticProperties do
+    begin
+      PropertyValue := EvaluateExpression(PropertyPair.Value, AContext);
+      ClassValue.SetProperty(PropertyPair.Key, PropertyValue);
+    end;
 
-  for PropertyPair in AClassDef.PrivateStaticProperties do
-  begin
-    PropertyValue := EvaluateExpression(PropertyPair.Value, AContext);
-    ClassValue.AddPrivateStaticProperty(PropertyPair.Key, PropertyValue);
+    for PropertyPair in AClassDef.PrivateStaticProperties do
+    begin
+      PropertyValue := EvaluateExpression(PropertyPair.Value, AContext);
+      ClassValue.AddPrivateStaticProperty(PropertyPair.Key, PropertyValue);
+    end;
   end;
 
   // Store instance property definitions on the class in declaration order
@@ -2005,16 +2009,35 @@ begin
     end;
   end;
 
-  // ES2022 §15.7.14 ClassStaticBlockDefinition: execute static blocks with this = class
+  // ES2022 §15.7.14: evaluate static fields and static blocks in source order
   for I := 0 to High(AClassDef.FElements) do
   begin
-    if AClassDef.FElements[I].Kind <> cekStaticBlock then
-      Continue;
-    ExecuteStaticBlock(AClassDef.FElements[I].StaticBlockBody, AContext, ClassValue);
+    Elem := AClassDef.FElements[I];
+    if Elem.Kind = cekStaticBlock then
+      ExecuteStaticBlock(Elem.StaticBlockBody, AContext, ClassValue)
+    else if (Elem.Kind = cekField) and Elem.IsStatic then
+    begin
+      if Assigned(Elem.FieldInitializer) then
+        PropertyValue := EvaluateExpression(Elem.FieldInitializer, AContext)
+      else
+        PropertyValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      if Elem.IsPrivate then
+        ClassValue.AddPrivateStaticProperty(Elem.Name, PropertyValue)
+      else
+        ClassValue.SetProperty(Elem.Name, PropertyValue);
+    end;
   end;
 
   // TC39 proposal-decorators §3.2 ApplyDecoratorsToClassDefinition
-  HasDecorators := (Length(AClassDef.FDecorators) > 0) or (Length(AClassDef.FElements) > 0);
+  HasDecorators := Length(AClassDef.FDecorators) > 0;
+  if not HasDecorators then
+    for I := 0 to High(AClassDef.FElements) do
+      if (Length(AClassDef.FElements[I].Decorators) > 0) or
+         (AClassDef.FElements[I].Kind = cekAccessor) then
+      begin
+        HasDecorators := True;
+        Break;
+      end;
 
   if HasDecorators then
   begin
