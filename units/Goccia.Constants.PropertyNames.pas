@@ -106,6 +106,9 @@ const
   PROP_SET_FROM_BASE64        = 'setFromBase64';
   PROP_SET_FROM_HEX           = 'setFromHex';
   PROP_RAW                    = 'raw';
+  PROP_ENCODING               = 'encoding';
+  PROP_FATAL                  = 'fatal';
+  PROP_IGNORE_BOM             = 'ignoreBOM';
 
   // Proxy handler trap names
   PROP_HAS                       = 'has';
