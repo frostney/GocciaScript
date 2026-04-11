@@ -31,4 +31,10 @@ describe("Object.setPrototypeOf", () => {
   test("throws for undefined first argument", () => {
     expect(() => Object.setPrototypeOf(undefined, null)).toThrow(TypeError);
   });
+
+  test("throws TypeError when proto is not Object or null", () => {
+    expect(() => Object.setPrototypeOf({}, 1)).toThrow(TypeError);
+    expect(() => Object.setPrototypeOf({}, "str")).toThrow(TypeError);
+    expect(() => Object.setPrototypeOf({}, true)).toThrow(TypeError);
+  });
 });

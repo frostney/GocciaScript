@@ -26,6 +26,12 @@ test("Object.hasOwn with string returns true for character indices", () => {
   expect(Object.hasOwn("str", "length")).toBe(true);
 });
 
+test("Object.hasOwn with string rejects non-canonical indices", () => {
+  // "01" and "-0" are not valid string indices per ES2026 §10.4.3
+  expect(Object.hasOwn("str", "01")).toBe(false);
+  expect(Object.hasOwn("str", "-0")).toBe(false);
+});
+
 test("Object.hasOwn throws for null", () => {
   expect(() => Object.hasOwn(null, "foo")).toThrow(TypeError);
 });

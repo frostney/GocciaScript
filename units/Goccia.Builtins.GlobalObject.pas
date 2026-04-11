@@ -762,7 +762,7 @@ begin
   // Step 2: If Type(proto) is neither Object nor Null, throw a TypeError exception
   ProtoArg := AArgs.GetElement(1);
   if not (ProtoArg is TGocciaObjectValue) and not (ProtoArg is TGocciaNullLiteralValue) then
-    ThrowError('Object prototype may only be an Object or null', 0, 0);
+    ThrowTypeError('Object prototype may only be an Object or null');
 
   // Step 3: If Type(O) is not Object, return O (primitives are immutable)
   if not (AArgs.GetElement(0) is TGocciaObjectValue) then

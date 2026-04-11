@@ -82,6 +82,12 @@ test("Object.getOwnPropertyDescriptor with string returns length descriptor", ()
   expect(desc.configurable).toBe(false);
 });
 
+test("Object.getOwnPropertyDescriptor with non-canonical string index returns undefined", () => {
+  // "01" and "-0" are not canonical string indices per ES2026 §10.4.3
+  expect(Object.getOwnPropertyDescriptor("str", "01")).toBeUndefined();
+  expect(Object.getOwnPropertyDescriptor("str", "-0")).toBeUndefined();
+});
+
 test("Object.getOwnPropertyDescriptor throws for null", () => {
   expect(() => Object.getOwnPropertyDescriptor(null, "foo")).toThrow(TypeError);
 });

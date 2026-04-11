@@ -320,56 +320,73 @@ end;
 // Character indices are enumerable, non-writable, non-configurable data properties.
 
 // ES2026 §10.4.3.3 StringExoticObject [[OwnPropertyKeys]] (enumerable string keys)
+// Character indices come first, then any expando own enumerable properties.
 function TGocciaStringObjectValue.GetEnumerablePropertyNames: TArray<string>;
 var
   StringValue: string;
+  InheritedNames: TArray<string>;
   I: Integer;
 begin
   StringValue := FPrimitive.ToStringLiteral.Value;
-  SetLength(Result, Length(StringValue));
+  InheritedNames := inherited GetEnumerablePropertyNames;
+  SetLength(Result, Length(StringValue) + Length(InheritedNames));
   for I := 0 to Length(StringValue) - 1 do
     Result[I] := IntToStr(I);
+  for I := 0 to High(InheritedNames) do
+    Result[Length(StringValue) + I] := InheritedNames[I];
 end;
 
 function TGocciaStringObjectValue.GetEnumerablePropertyValues: TArray<TGocciaValue>;
 var
   StringValue: string;
+  InheritedValues: TArray<TGocciaValue>;
   I: Integer;
 begin
   StringValue := FPrimitive.ToStringLiteral.Value;
-  SetLength(Result, Length(StringValue));
+  InheritedValues := inherited GetEnumerablePropertyValues;
+  SetLength(Result, Length(StringValue) + Length(InheritedValues));
   for I := 0 to Length(StringValue) - 1 do
     Result[I] := TGocciaStringLiteralValue.Create(StringValue[I + 1]);
+  for I := 0 to High(InheritedValues) do
+    Result[Length(StringValue) + I] := InheritedValues[I];
 end;
 
 function TGocciaStringObjectValue.GetEnumerablePropertyEntries: TArray<TPair<string, TGocciaValue>>;
 var
   StringValue: string;
+  InheritedEntries: TArray<TPair<string, TGocciaValue>>;
   I: Integer;
   Entry: TPair<string, TGocciaValue>;
 begin
   StringValue := FPrimitive.ToStringLiteral.Value;
-  SetLength(Result, Length(StringValue));
+  InheritedEntries := inherited GetEnumerablePropertyEntries;
+  SetLength(Result, Length(StringValue) + Length(InheritedEntries));
   for I := 0 to Length(StringValue) - 1 do
   begin
     Entry.Key := IntToStr(I);
     Entry.Value := TGocciaStringLiteralValue.Create(StringValue[I + 1]);
     Result[I] := Entry;
   end;
+  for I := 0 to High(InheritedEntries) do
+    Result[Length(StringValue) + I] := InheritedEntries[I];
 end;
 
 // ES2026 §10.4.3.6 StringExoticObject [[OwnPropertyKeys]] (all own string keys)
+// Indices first, then 'length', then any expando own properties.
 function TGocciaStringObjectValue.GetAllPropertyNames: TArray<string>;
 var
   StringValue: string;
+  InheritedNames: TArray<string>;
   I: Integer;
 begin
   StringValue := FPrimitive.ToStringLiteral.Value;
-  // Integer indices + 'length' (non-enumerable)
-  SetLength(Result, Length(StringValue) + 1);
+  InheritedNames := inherited GetAllPropertyNames;
+  SetLength(Result, Length(StringValue) + 1 + Length(InheritedNames));
   for I := 0 to Length(StringValue) - 1 do
     Result[I] := IntToStr(I);
   Result[Length(StringValue)] := PROP_LENGTH;
+  for I := 0 to High(InheritedNames) do
+    Result[Length(StringValue) + 1 + I] := InheritedNames[I];
 end;
 
 // ES2026 §10.4.3.1 StringExoticObject [[GetOwnProperty]](P)
@@ -378,7 +395,9 @@ var
   Index: Integer;
   StringValue: string;
 begin
-  if TryStrToInt(AName, Index) then
+  // Only canonical non-negative decimal integers are string indices (e.g. "0", "1",
+  // not "01" or "-0"). AName = IntToStr(Index) ensures round-trip canonicality.
+  if TryStrToInt(AName, Index) and (AName = IntToStr(Index)) then
   begin
     StringValue := FPrimitive.ToStringLiteral.Value;
     if (Index >= 0) and (Index < Length(StringValue)) then
@@ -409,7 +428,8 @@ var
   Index: Integer;
   StringValue: string;
 begin
-  if TryStrToInt(AName, Index) then
+  // Same canonical check as GetOwnPropertyDescriptor: reject "01", "-0", etc.
+  if TryStrToInt(AName, Index) and (AName = IntToStr(Index)) then
   begin
     StringValue := FPrimitive.ToStringLiteral.Value;
     Result := (Index >= 0) and (Index < Length(StringValue));
