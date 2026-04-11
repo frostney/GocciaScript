@@ -5,9 +5,12 @@ unit Goccia.Values.StringObjectValue;
 interface
 
 uses
+  Generics.Collections,
+
   Goccia.Arguments.Collection,
   Goccia.ObjectModel,
   Goccia.Values.ClassValue,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -27,6 +30,12 @@ type
     function TypeName: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
+    function GetEnumerablePropertyNames: TArray<string>; override;
+    function GetEnumerablePropertyValues: TArray<TGocciaValue>; override;
+    function GetEnumerablePropertyEntries: TArray<TPair<string, TGocciaValue>>; override;
+    function GetAllPropertyNames: TArray<string>; override;
+    function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
+    function HasOwnProperty(const AName: string): Boolean; override;
 
     procedure InitializePrototype;
     procedure MarkReferences; override;
@@ -89,7 +98,6 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.RegExp,
-  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
 { TGocciaStringObjectValue }
@@ -306,6 +314,113 @@ begin
 
   if Assigned(FSharedStringPrototype) then
     Result := FSharedStringPrototype.GetPropertyWithContext(AName, AThisContext);
+end;
+
+// ES2026 §10.4.3.6 StringExoticObject [[OwnPropertyKeys]]
+// Character indices are enumerable, non-writable, non-configurable data properties.
+
+// ES2026 §10.4.3.3 StringExoticObject [[OwnPropertyKeys]] (enumerable string keys)
+function TGocciaStringObjectValue.GetEnumerablePropertyNames: TArray<string>;
+var
+  StringValue: string;
+  I: Integer;
+begin
+  StringValue := FPrimitive.ToStringLiteral.Value;
+  SetLength(Result, Length(StringValue));
+  for I := 0 to Length(StringValue) - 1 do
+    Result[I] := IntToStr(I);
+end;
+
+function TGocciaStringObjectValue.GetEnumerablePropertyValues: TArray<TGocciaValue>;
+var
+  StringValue: string;
+  I: Integer;
+begin
+  StringValue := FPrimitive.ToStringLiteral.Value;
+  SetLength(Result, Length(StringValue));
+  for I := 0 to Length(StringValue) - 1 do
+    Result[I] := TGocciaStringLiteralValue.Create(StringValue[I + 1]);
+end;
+
+function TGocciaStringObjectValue.GetEnumerablePropertyEntries: TArray<TPair<string, TGocciaValue>>;
+var
+  StringValue: string;
+  I: Integer;
+  Entry: TPair<string, TGocciaValue>;
+begin
+  StringValue := FPrimitive.ToStringLiteral.Value;
+  SetLength(Result, Length(StringValue));
+  for I := 0 to Length(StringValue) - 1 do
+  begin
+    Entry.Key := IntToStr(I);
+    Entry.Value := TGocciaStringLiteralValue.Create(StringValue[I + 1]);
+    Result[I] := Entry;
+  end;
+end;
+
+// ES2026 §10.4.3.6 StringExoticObject [[OwnPropertyKeys]] (all own string keys)
+function TGocciaStringObjectValue.GetAllPropertyNames: TArray<string>;
+var
+  StringValue: string;
+  I: Integer;
+begin
+  StringValue := FPrimitive.ToStringLiteral.Value;
+  // Integer indices + 'length' (non-enumerable)
+  SetLength(Result, Length(StringValue) + 1);
+  for I := 0 to Length(StringValue) - 1 do
+    Result[I] := IntToStr(I);
+  Result[Length(StringValue)] := PROP_LENGTH;
+end;
+
+// ES2026 §10.4.3.1 StringExoticObject [[GetOwnProperty]](P)
+function TGocciaStringObjectValue.GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
+var
+  Index: Integer;
+  StringValue: string;
+begin
+  if TryStrToInt(AName, Index) then
+  begin
+    StringValue := FPrimitive.ToStringLiteral.Value;
+    if (Index >= 0) and (Index < Length(StringValue)) then
+    begin
+      // String character indices: enumerable, non-writable, non-configurable
+      Result := TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create(StringValue[Index + 1]),
+        [pfEnumerable]);
+      Exit;
+    end;
+  end;
+
+  if AName = PROP_LENGTH then
+  begin
+    // length: non-enumerable, non-writable, non-configurable
+    Result := TGocciaPropertyDescriptorData.Create(
+      TGocciaNumberLiteralValue.Create(Length(FPrimitive.ToStringLiteral.Value)),
+      []);
+    Exit;
+  end;
+
+  Result := inherited GetOwnPropertyDescriptor(AName);
+end;
+
+// ES2026 §10.4.3.1 StringExoticObject [[GetOwnProperty]](P) — existence check
+function TGocciaStringObjectValue.HasOwnProperty(const AName: string): Boolean;
+var
+  Index: Integer;
+  StringValue: string;
+begin
+  if TryStrToInt(AName, Index) then
+  begin
+    StringValue := FPrimitive.ToStringLiteral.Value;
+    Result := (Index >= 0) and (Index < Length(StringValue));
+    Exit;
+  end;
+  if AName = PROP_LENGTH then
+  begin
+    Result := True;
+    Exit;
+  end;
+  Result := inherited HasOwnProperty(AName);
 end;
 
 procedure TGocciaStringObjectValue.InitializePrototype;

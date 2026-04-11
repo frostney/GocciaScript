@@ -177,12 +177,28 @@ describe("Object.getOwnPropertyDescriptors", () => {
     expect(descs.b.configurable).toBe(false);
   });
 
-  test("throws TypeError for non-object argument", () => {
-    expect(() => Object.getOwnPropertyDescriptors(42)).toThrow();
-    expect(() => Object.getOwnPropertyDescriptors("str")).toThrow();
-    expect(() => Object.getOwnPropertyDescriptors(true)).toThrow();
-    expect(() => Object.getOwnPropertyDescriptors(null)).toThrow();
-    expect(() => Object.getOwnPropertyDescriptors(undefined)).toThrow();
+  test("with number coerces to empty descriptor object", () => {
+    expect(Object.getOwnPropertyDescriptors(42)).toEqual({});
+    expect(Object.getOwnPropertyDescriptors(true)).toEqual({});
+  });
+
+  test("with string returns character index descriptors", () => {
+    const descs = Object.getOwnPropertyDescriptors("hi");
+    expect(descs["0"].value).toBe("h");
+    expect(descs["0"].enumerable).toBe(true);
+    expect(descs["0"].writable).toBe(false);
+    expect(descs["0"].configurable).toBe(false);
+    expect(descs["1"].value).toBe("i");
+    expect(descs["length"].value).toBe(2);
+    expect(descs["length"].enumerable).toBe(false);
+  });
+
+  test("throws TypeError for null", () => {
+    expect(() => Object.getOwnPropertyDescriptors(null)).toThrow(TypeError);
+  });
+
+  test("throws TypeError for undefined", () => {
+    expect(() => Object.getOwnPropertyDescriptors(undefined)).toThrow(TypeError);
   });
 
   test("works with frozen objects", () => {

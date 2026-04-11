@@ -25,4 +25,23 @@ describe("Object.getPrototypeOf", () => {
     const proto = Object.getPrototypeOf(a);
     expect(proto !== null).toBe(true);
   });
+
+  test("with number coerces to wrapper — returns a value", () => {
+    // Primitives are coerced via ToObject; boxed number has the number prototype
+    const proto = Object.getPrototypeOf(42);
+    expect(proto !== undefined).toBe(true);
+  });
+
+  test("with boolean coerces to wrapper — returns a value", () => {
+    const proto = Object.getPrototypeOf(true);
+    expect(proto !== undefined).toBe(true);
+  });
+
+  test("throws for null", () => {
+    expect(() => Object.getPrototypeOf(null)).toThrow(TypeError);
+  });
+
+  test("throws for undefined", () => {
+    expect(() => Object.getPrototypeOf(undefined)).toThrow(TypeError);
+  });
 });

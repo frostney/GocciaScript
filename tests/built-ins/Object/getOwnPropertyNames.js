@@ -79,4 +79,30 @@ describe("Object.getOwnPropertyNames", () => {
     expect(allNames).toContain("enumerable");
     expect(allNames).toContain("nonEnumerable");
   });
+
+  test("with number coerces to empty array", () => {
+    expect(Object.getOwnPropertyNames(42)).toEqual([]);
+    expect(Object.getOwnPropertyNames(0)).toEqual([]);
+  });
+
+  test("with boolean coerces to empty array", () => {
+    expect(Object.getOwnPropertyNames(true)).toEqual([]);
+    expect(Object.getOwnPropertyNames(false)).toEqual([]);
+  });
+
+  test("with string returns character indices and length", () => {
+    const names = Object.getOwnPropertyNames("str");
+    expect(names).toContain("0");
+    expect(names).toContain("1");
+    expect(names).toContain("2");
+    expect(names).toContain("length");
+  });
+
+  test("throws for null", () => {
+    expect(() => Object.getOwnPropertyNames(null)).toThrow(TypeError);
+  });
+
+  test("throws for undefined", () => {
+    expect(() => Object.getOwnPropertyNames(undefined)).toThrow(TypeError);
+  });
 });
