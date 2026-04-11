@@ -882,13 +882,14 @@ Provides current time in various representations.
 
 ### ArrayBuffer (`Goccia.Builtins.GlobalArrayBuffer.pas`, `Goccia.Values.ArrayBufferValue.pas`)
 
-A fixed-length raw binary data buffer. Internally backed by a zero-initialized `TBytes` array.
+A raw binary data buffer. Supports both fixed-length and resizable modes. Internally backed by a zero-initialized `TBytes` array. Resizable buffers are created by passing `{ maxByteLength }` in the options argument. Buffers can be transferred (moving ownership to a new buffer and detaching the original).
 
 **Constructor:**
 
 | Constructor | Description |
 |-------------|-------------|
-| `new ArrayBuffer(length)` | Create a buffer with the given byte length (must be a non-negative integer). Throws `RangeError` for negative, fractional, NaN, or Infinity values. |
+| `new ArrayBuffer(length)` | Create a fixed-length buffer with the given byte length (must be a non-negative integer). Throws `RangeError` for negative, fractional, NaN, or Infinity values. |
+| `new ArrayBuffer(length, { maxByteLength })` | Create a resizable buffer with the given initial byte length and maximum capacity. Throws `RangeError` if `length > maxByteLength`. |
 
 **Static methods:**
 
@@ -900,14 +901,20 @@ A fixed-length raw binary data buffer. Internally backed by a zero-initialized `
 
 | Property | Description |
 |----------|-------------|
-| `buf.byteLength` | The size, in bytes, of the ArrayBuffer (read-only getter) |
+| `buf.byteLength` | The current size in bytes. Returns 0 for detached buffers. |
+| `buf.maxByteLength` | Maximum byte length for resizable buffers; equals `byteLength` for fixed-length buffers. Returns 0 for detached buffers. |
+| `buf.resizable` | `true` if the buffer was created with `maxByteLength`, `false` otherwise. Preserved after detachment. |
+| `buf.detached` | `true` if the buffer has been detached (via `transfer` or `transferToFixedLength`), `false` otherwise. |
 | `buf[Symbol.toStringTag]` | `"ArrayBuffer"` |
 
 **Prototype methods:**
 
 | Method | Description |
 |--------|-------------|
-| `buf.slice(begin?, end?)` | Returns a new ArrayBuffer containing bytes from `begin` (inclusive) to `end` (exclusive). Supports negative indices (count from end). Clamps out-of-range indices. Defaults: `begin` = 0, `end` = `byteLength`. |
+| `buf.slice(begin?, end?)` | Returns a new ArrayBuffer containing bytes from `begin` (inclusive) to `end` (exclusive). Supports negative indices (count from end). Clamps out-of-range indices. Defaults: `begin` = 0, `end` = `byteLength`. Throws `TypeError` if detached. |
+| `buf.resize(newLength)` | Resizes a resizable buffer to `newLength` bytes. Preserves existing data up to `min(old, new)` length; zero-fills growth. Throws `TypeError` if fixed-length or detached. Throws `RangeError` if `newLength > maxByteLength`. Returns `undefined`. |
+| `buf.transfer([newLength])` | Copies data into a new buffer and detaches the original. `newLength` defaults to current `byteLength`. Preserves resizability: if the source was resizable, the new buffer keeps the original `maxByteLength`. Throws `RangeError` if `newLength` exceeds that cap, and `TypeError` if detached. |
+| `buf.transferToFixedLength([newLength])` | Like `transfer`, but always produces a fixed-length (non-resizable) result. `newLength` defaults to current `byteLength`. Throws `TypeError` if detached. |
 
 **structuredClone:** ArrayBuffer instances are cloneable. The byte contents are copied into a new buffer.
 
