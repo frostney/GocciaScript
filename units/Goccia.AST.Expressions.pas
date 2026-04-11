@@ -689,7 +689,11 @@ end;
 // the identical object reference.
 procedure TGocciaTaggedTemplateExpression.SetCachedTemplateObject(const AValue: TGocciaValue);
 begin
-  if Assigned(TGarbageCollector.Instance) then
+  if AValue = FTemplateObject then
+    Exit;
+  if Assigned(FTemplateObject) and Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.UnpinObject(FTemplateObject);
+  if Assigned(AValue) and Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.PinObject(AValue);
   FTemplateObject := AValue;
 end;

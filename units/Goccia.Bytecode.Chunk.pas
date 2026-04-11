@@ -149,7 +149,9 @@ type
 implementation
 
 uses
-  SysUtils;
+  SysUtils,
+
+  Goccia.GarbageCollector;
 
 function FloatBitsAreNaN(const AValue: Double): Boolean; inline;
 var
@@ -181,7 +183,16 @@ begin
 end;
 
 destructor TGocciaFunctionTemplate.Destroy;
+var
+  I: Integer;
 begin
+  // Unpin any template objects that were built and cached during VM execution.
+  // Guard against the GC already having been shut down.
+  if Assigned(TGarbageCollector.Instance) then
+    for I := 0 to FTemplateObjectCacheCount - 1 do
+      if Assigned(FTemplateObjectCaches[I]) then
+        TGarbageCollector.Instance.UnpinObject(
+          TGCManagedObject(FTemplateObjectCaches[I]));
   FStringConstantIndex.Free;
   FFunctions.Free;
   FDebugInfo.Free;
@@ -305,15 +316,15 @@ begin
   Inc(FConstantCount);
 end;
 
-// ES2026 §13.2.8.3 GetTemplateObject — register a bckTemplateObject constant.
-// The VM will build, freeze, and pin the template object on first execution of
-// the corresponding OP_LOAD_CONST instruction, then reuse it for all subsequent
-// executions of the same Parse Node.
+// ES2026 §13.2.8.3 GetTemplateObject(templateLiteral)
 function TGocciaFunctionTemplate.AddConstantTemplateObject(
   const ACookedStrings, ARawStrings: array of string): UInt16;
 var
   K: Integer;
 begin
+  if Length(ACookedStrings) <> Length(ARawStrings) then
+    raise Exception.Create(
+      'Template payload length mismatch: cooked vs raw');
   if FConstantCount > High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
