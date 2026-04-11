@@ -84,6 +84,8 @@ type
     FCookedStrings: TGocciaTemplateStrings;
     FRawStrings: TGocciaTemplateStrings;
     FExpressions: TObjectList<TGocciaExpression>;
+    // ES2026 §13.2.8.3: cached per-call-site template object (nil until first evaluation)
+    FTemplateObject: TGocciaValue;
   public
     constructor Create(const ATag: TGocciaExpression;
       const ACookedStrings, ARawStrings: TGocciaTemplateStrings;
@@ -91,10 +93,14 @@ type
       const ALine, AColumn: Integer);
     destructor Destroy; override;
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    // Pins AValue in the GC and stores it as the call-site template object cache.
+    // Must only be called once (when FTemplateObject is nil).
+    procedure SetCachedTemplateObject(const AValue: TGocciaValue);
     property Tag: TGocciaExpression read FTag;
     property CookedStrings: TGocciaTemplateStrings read FCookedStrings;
     property RawStrings: TGocciaTemplateStrings read FRawStrings;
     property Expressions: TObjectList<TGocciaExpression> read FExpressions;
+    property TemplateObject: TGocciaValue read FTemplateObject;
   end;
 
   TGocciaIdentifierExpression = class(TGocciaExpression)
@@ -671,7 +677,21 @@ destructor TGocciaTaggedTemplateExpression.Destroy;
 begin
   FTag.Free;
   FExpressions.Free;
+  // Release the GC pin so the template object can be collected once no live
+  // references remain.  Guard against the GC already having been shut down.
+  if Assigned(FTemplateObject) and Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.UnpinObject(FTemplateObject);
   inherited;
+end;
+
+// ES2026 §13.2.8.3 GetTemplateObject — pin and cache the frozen template object
+// for this call site so that all future evaluations of this Parse Node return
+// the identical object reference.
+procedure TGocciaTaggedTemplateExpression.SetCachedTemplateObject(const AValue: TGocciaValue);
+begin
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.PinObject(AValue);
+  FTemplateObject := AValue;
 end;
 
 { TGocciaIdentifierExpression }

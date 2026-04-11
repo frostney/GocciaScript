@@ -1829,6 +1829,12 @@ begin
   if ArgCount > High(UInt8) then
     raise Exception.Create('Compiler error: too many tagged template substitutions (>254)');
 
+  // TODO(#268): The bytecode path rebuilds the template object on every call,
+  // violating ES2026 §13.2.8.3 GetTemplateObject identity.  A per-call-site
+  // cache (e.g. a new OP_GET_TEMPLATE_OBJ opcode backed by a slot table in
+  // TGocciaFunctionTemplate) is required so that repeated executions of this
+  // instruction within the same function return the identical frozen object.
+
   CompileTagCalleeRegisters(ACtx, AExpr.Tag, BaseReg, ObjReg, IsMethodCall);
 
   // ES2026 §13.2.8.3 GetTemplateObject: build the frozen template object as arg0
