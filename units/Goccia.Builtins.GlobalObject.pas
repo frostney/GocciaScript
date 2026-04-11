@@ -365,12 +365,22 @@ begin
   begin
     ClassObj := TGocciaClassValue(AArgs.GetElement(0));
     // Step 2: Let key be ? ToPropertyKey(P)
-    PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
     // Step 3: Return ? HasOwnProperty(obj, key)
-    if not (ClassObj.GetProperty(PropertyName) is TGocciaUndefinedLiteralValue) then
-      Result := TGocciaBooleanLiteralValue.TrueValue
+    if AArgs.GetElement(1) is TGocciaSymbolValue then
+    begin
+      if not (ClassObj.GetSymbolProperty(TGocciaSymbolValue(AArgs.GetElement(1))) is TGocciaUndefinedLiteralValue) then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+    end
     else
-      Result := TGocciaBooleanLiteralValue.FalseValue;
+    begin
+      PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
+      if not (ClassObj.GetProperty(PropertyName) is TGocciaUndefinedLiteralValue) then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+    end;
     Exit;
   end;
 
@@ -380,13 +390,22 @@ begin
     TGarbageCollector.Instance.AddTempRoot(Obj);
   try
     // Step 2: Let key be ? ToPropertyKey(P)
-    PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
-
     // Step 3: Return ? HasOwnProperty(obj, key)
-    if Obj.HasOwnProperty(PropertyName) then
-      Result := TGocciaBooleanLiteralValue.TrueValue
+    if AArgs.GetElement(1) is TGocciaSymbolValue then
+    begin
+      if Obj.HasSymbolProperty(TGocciaSymbolValue(AArgs.GetElement(1))) then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+    end
     else
-      Result := TGocciaBooleanLiteralValue.FalseValue;
+    begin
+      PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
+      if Obj.HasOwnProperty(PropertyName) then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+    end;
   finally
     if Assigned(TGarbageCollector.Instance) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then

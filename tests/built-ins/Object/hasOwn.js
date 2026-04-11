@@ -32,6 +32,24 @@ test("Object.hasOwn with string rejects non-canonical indices", () => {
   expect(Object.hasOwn("str", "-0")).toBe(false);
 });
 
+test("Object.hasOwn with symbol key", () => {
+  const sym = Symbol("key");
+  const obj = {};
+  obj[sym] = 42;
+  expect(Object.hasOwn(obj, sym)).toBe(true);
+  expect(Object.hasOwn(obj, Symbol("key"))).toBe(false);
+  expect(Object.hasOwn({}, sym)).toBe(false);
+});
+
+test("Object.hasOwn with symbol key does not match prototype symbol", () => {
+  const sym = Symbol("inherited");
+  const proto = {};
+  proto[sym] = 1;
+  const child = Object.create(proto);
+  expect(Object.hasOwn(child, sym)).toBe(false);
+  expect(Object.hasOwn(proto, sym)).toBe(true);
+});
+
 test("Object.hasOwn throws for null", () => {
   expect(() => Object.hasOwn(null, "foo")).toThrow(TypeError);
 });
