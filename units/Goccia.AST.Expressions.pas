@@ -76,6 +76,27 @@ type
     property Parts: TObjectList<TGocciaExpression> read FParts;
   end;
 
+  TGocciaTemplateStrings = array of string;
+
+  TGocciaTaggedTemplateExpression = class(TGocciaExpression)
+  private
+    FTag: TGocciaExpression;
+    FCookedStrings: TGocciaTemplateStrings;
+    FRawStrings: TGocciaTemplateStrings;
+    FExpressions: TObjectList<TGocciaExpression>;
+  public
+    constructor Create(const ATag: TGocciaExpression;
+      const ACookedStrings, ARawStrings: TGocciaTemplateStrings;
+      const AExpressions: TObjectList<TGocciaExpression>;
+      const ALine, AColumn: Integer);
+    destructor Destroy; override;
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    property Tag: TGocciaExpression read FTag;
+    property CookedStrings: TGocciaTemplateStrings read FCookedStrings;
+    property RawStrings: TGocciaTemplateStrings read FRawStrings;
+    property Expressions: TObjectList<TGocciaExpression> read FExpressions;
+  end;
+
   TGocciaIdentifierExpression = class(TGocciaExpression)
   private
     FName: string;
@@ -626,6 +647,27 @@ begin
   FParts := AParts;
 end;
 
+{ TGocciaTaggedTemplateExpression }
+
+constructor TGocciaTaggedTemplateExpression.Create(const ATag: TGocciaExpression;
+  const ACookedStrings, ARawStrings: TGocciaTemplateStrings;
+  const AExpressions: TObjectList<TGocciaExpression>;
+  const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FTag := ATag;
+  FCookedStrings := ACookedStrings;
+  FRawStrings := ARawStrings;
+  FExpressions := AExpressions;
+end;
+
+destructor TGocciaTaggedTemplateExpression.Destroy;
+begin
+  FTag.Free;
+  FExpressions.Free;
+  inherited;
+end;
+
 { TGocciaIdentifierExpression }
 
 constructor TGocciaIdentifierExpression.Create(const AName: string;
@@ -1071,6 +1113,12 @@ end;
 function TGocciaTemplateWithInterpolationExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+// ES2026 §13.3.11 Runtime Semantics: Evaluation — Tagged Templates
+function TGocciaTaggedTemplateExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+begin
+  Result := EvaluateTaggedTemplate(Self, AContext);
 end;
 
 function TGocciaIdentifierExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;

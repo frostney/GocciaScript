@@ -57,6 +57,7 @@ function EvaluateDestructuringAssignment(const ADestructuringAssignmentExpressio
 function EvaluateEnumDeclaration(const AEnumDeclaration: TGocciaEnumDeclaration; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateDestructuringDeclaration(const ADestructuringDeclaration: TGocciaDestructuringDeclaration; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateTemplateLiteral(const ATemplateLiteralExpression: TGocciaTemplateLiteralExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateTaggedTemplate(const ATaggedTemplateExpression: TGocciaTaggedTemplateExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateTemplateExpression(const AExpressionText: string; const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer): TGocciaValue;
 function EvaluateAwait(const AAwaitExpression: TGocciaAwaitExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function AwaitValue(const AValue: TGocciaValue): TGocciaValue;
@@ -2942,6 +2943,100 @@ begin
   end;
 
   Result := TGocciaStringLiteralValue.Create(SB.ToString);
+end;
+
+// ES2026 §13.3.11 Runtime Semantics: Evaluation — Tagged Templates
+function EvaluateTaggedTemplate(const ATaggedTemplateExpression: TGocciaTaggedTemplateExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  Callee, ThisValue, ExprValue: TGocciaValue;
+  MemberExpr: TGocciaMemberExpression;
+  CookedArray, RawArray: TGocciaArrayValue;
+  Arguments: TGocciaArgumentsCollection;
+  I: Integer;
+  CalleeName: string;
+begin
+  CheckExecutionTimeout;
+
+  // ES2026 §13.3.11 step 1: Evaluate the tag expression
+  if ATaggedTemplateExpression.Tag is TGocciaMemberExpression then
+  begin
+    MemberExpr := TGocciaMemberExpression(ATaggedTemplateExpression.Tag);
+    Callee := EvaluateMember(MemberExpr, AContext, ThisValue);
+  end
+  else
+  begin
+    Callee := EvaluateExpression(ATaggedTemplateExpression.Tag, AContext);
+    ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+
+  // ES2026 §13.3.11 step 2: GetTemplateObject — build the template object
+  // Build the raw array
+  RawArray := TGocciaArrayValue.Create;
+  TGarbageCollector.Instance.AddTempRoot(RawArray);
+  try
+    for I := 0 to Length(ATaggedTemplateExpression.RawStrings) - 1 do
+      RawArray.Elements.Add(TGocciaStringLiteralValue.Create(ATaggedTemplateExpression.RawStrings[I]));
+    RawArray.Freeze;
+
+    // Build the cooked array (the template object)
+    CookedArray := TGocciaArrayValue.Create;
+    TGarbageCollector.Instance.AddTempRoot(CookedArray);
+    try
+      for I := 0 to Length(ATaggedTemplateExpression.CookedStrings) - 1 do
+        CookedArray.Elements.Add(TGocciaStringLiteralValue.Create(ATaggedTemplateExpression.CookedStrings[I]));
+      // ES2026 §13.2.8.3 step 8: Define raw as non-enumerable, non-writable, non-configurable
+      CookedArray.DefineProperty(PROP_RAW,
+        TGocciaPropertyDescriptorData.Create(RawArray, []));
+      // ES2026 §13.2.8.3 step 12: Freeze the template object
+      CookedArray.Freeze;
+
+      // ES2026 §13.3.11 step 3: Evaluate substitution expressions and build arguments
+      Arguments := TGocciaArgumentsCollection.Create;
+      try
+        Arguments.Add(CookedArray);
+        for I := 0 to ATaggedTemplateExpression.Expressions.Count - 1 do
+        begin
+          ExprValue := EvaluateExpression(ATaggedTemplateExpression.Expressions[I], AContext);
+          Arguments.Add(ExprValue);
+        end;
+
+        // ES2026 §13.3.11 step 4: Call the tag function
+        if Callee is TGocciaNativeFunctionValue then
+          CalleeName := TGocciaNativeFunctionValue(Callee).Name
+        else if Callee is TGocciaFunctionValue then
+          CalleeName := TGocciaFunctionValue(Callee).Name
+        else
+          CalleeName := '';
+
+        if Assigned(TGocciaCallStack.Instance) then
+          TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
+            ATaggedTemplateExpression.Line, ATaggedTemplateExpression.Column);
+        try
+          if Callee is TGocciaProxyValue then
+            Result := TGocciaProxyValue(Callee).ApplyTrap(Arguments, ThisValue)
+          else if Callee is TGocciaNativeFunctionValue then
+            Result := TGocciaNativeFunctionValue(Callee).Call(Arguments, ThisValue)
+          else if Callee is TGocciaFunctionValue then
+            Result := TGocciaFunctionValue(Callee).Call(Arguments, ThisValue)
+          else if Callee is TGocciaBoundFunctionValue then
+            Result := TGocciaBoundFunctionValue(Callee).Call(Arguments, ThisValue)
+          else if Callee is TGocciaFunctionBase then
+            Result := TGocciaFunctionBase(Callee).Call(Arguments, ThisValue)
+          else
+            ThrowTypeError(Format('%s is not a function', [Callee.TypeName]));
+        finally
+          if Assigned(TGocciaCallStack.Instance) then
+            TGocciaCallStack.Instance.Pop;
+        end;
+      finally
+        Arguments.Free;
+      end;
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(CookedArray);
+    end;
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(RawArray);
+  end;
 end;
 
 // Lightweight template expression evaluator - handles 95% of common cases without full parsing

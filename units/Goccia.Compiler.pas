@@ -138,6 +138,8 @@ begin
     Goccia.Compiler.Expressions.CompileArray(Ctx, TGocciaArrayExpression(AExpr), ADest)
   else if AExpr is TGocciaObjectExpression then
     Goccia.Compiler.Expressions.CompileObject(Ctx, TGocciaObjectExpression(AExpr), ADest)
+  else if AExpr is TGocciaTaggedTemplateExpression then
+    Goccia.Compiler.Expressions.CompileTaggedTemplate(Ctx, TGocciaTaggedTemplateExpression(AExpr), ADest)
   else if AExpr is TGocciaTemplateWithInterpolationExpression then
     Goccia.Compiler.Expressions.CompileTemplateWithInterpolation(Ctx, TGocciaTemplateWithInterpolationExpression(AExpr), ADest)
   else if AExpr is TGocciaTemplateLiteralExpression then

@@ -91,14 +91,15 @@ Current instruction families:
 Some opcode families intentionally use flags or mode operands instead of one opcode per syntax form. For example:
 
 - accessor definition uses constant-key and dynamic-key instructions plus getter/setter and static/instance flags
-- collection helpers use a shared opcode for object spread, object rest, and iterable-to-array spread
+- collection helpers use a shared opcode (`OP_COLLECTION_OP`) for object spread, object rest, and iterable-to-array spread
 - validation uses a shared opcode for require-object and require-iterable checks
 
 Current opcode design rules:
 
-- add explicit Goccia opcodes for stable language/runtime behaviour
-- do not introduce old generic VM naming into new instructions
-- prefer direct bytecode operations over extension multiplexers when semantics are first-class in GocciaScript
+- add explicit Goccia opcodes for stable, hot, language-owned behaviour
+- do not introduce generic VM naming into new instructions
+- do not add an opcode for something already reachable through existing call dispatch — if a built-in (e.g. `Object.freeze`) already goes through `OP_CALL_METHOD`, emit that call sequence from the compiler rather than adding a new opcode or sub-mode
+- prefer mode operands on shared opcodes over proliferating single-purpose opcodes for cold or infrequent operations
 
 ## Performance Direction
 

@@ -20,6 +20,7 @@ const
   PROP_PROTOTYPE    = 'prototype';
   PROP_TO_STRING    = 'toString';
   PROP_VALUE_OF     = 'valueOf';
+  PROP_FREEZE       = 'freeze';
   PROP_DESCRIPTION  = 'description';
   PROP_SOURCE       = 'source';
   PROP_FLAGS        = 'flags';
@@ -102,6 +103,7 @@ const
   PROP_FROM_HEX               = 'fromHex';
   PROP_SET_FROM_BASE64        = 'setFromBase64';
   PROP_SET_FROM_HEX           = 'setFromHex';
+  PROP_RAW                    = 'raw';
 
   // Proxy handler trap names
   PROP_HAS                       = 'has';

@@ -354,6 +354,7 @@ String constructor available as `String()`.
 |--------|-------------|
 | `String.fromCharCode(...codes)` | Create string from UTF-16 code units |
 | `String.fromCodePoint(...codePoints)` | Create string from Unicode code points |
+| `String.raw(template, ...substitutions)` | Create string from raw template strings (escape sequences not processed) |
 
 String prototype methods are implemented on string values:
 

@@ -160,7 +160,7 @@ C[Symbol.metadata].decorated; // true
 - Bitwise operators (`&`, `|`, `^`, `<<`, `>>`, `>>>`).
 - Ternary operator (`? :`).
 - Numeric literals: decimal, hex (`0x`), binary (`0b`), octal (`0o`), scientific notation, and numeric separators (`1_000_000`, `0xFF_FF`, `0b1010_0001`, `0o77_77`, `1.5e1_0`).
-- Template literals with interpolation.
+- Template literals with interpolation and tagged templates (`tag\`...\``, `String.raw`).
 - Destructuring (array and object patterns).
 - Spread operator (`...`).
 - `typeof`, `instanceof`, `in`, `delete`.
