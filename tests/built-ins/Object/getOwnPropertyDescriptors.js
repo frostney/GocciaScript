@@ -205,6 +205,12 @@ describe("Object.getOwnPropertyDescriptors", () => {
     expect(descs.a.configurable).toBe(false);
   });
 
+  test("ignores extra arguments", () => {
+    const obj = { a: 1 };
+    const descs = Object.getOwnPropertyDescriptors(obj, "extra", 123);
+    expect(descs.a.value).toBe(1);
+  });
+
   test("can be used with Object.defineProperties for shallow clone", () => {
     const original = { x: 1, y: 2 };
     Object.defineProperty(original, "z", {
