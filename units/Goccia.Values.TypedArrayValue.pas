@@ -902,7 +902,7 @@ begin
   SortLen := TA.FLength;
 
   // For float kinds, partition NaN values to the end before sorting
-  IsFloat := TA.FKind in [takFloat32, takFloat64];
+  IsFloat := TA.FKind in [takFloat16, takFloat32, takFloat64];
   if IsFloat and not HasCompare then
   begin
     NaNCount := 0;
@@ -989,7 +989,7 @@ begin
     StartIdx := 0;
   if SearchNum.IsInfinite then
   begin
-    if not (TA.FKind in [takFloat32, takFloat64]) then
+    if not (TA.FKind in [takFloat16, takFloat32, takFloat64]) then
       Exit(TGocciaNumberLiteralValue.Create(-1));
     for I := StartIdx to TA.FLength - 1 do
       if Math.IsInfinite(TA.ReadElement(I)) and
@@ -1028,7 +1028,7 @@ begin
     StartIdx := TA.FLength - 1;
   if SearchNum.IsInfinite then
   begin
-    if not (TA.FKind in [takFloat32, takFloat64]) then
+    if not (TA.FKind in [takFloat16, takFloat32, takFloat64]) then
       Exit(TGocciaNumberLiteralValue.Create(-1));
     for I := Min(StartIdx, TA.FLength - 1) downto 0 do
       if Math.IsInfinite(TA.ReadElement(I)) and
@@ -1066,7 +1066,7 @@ begin
   // SameValueZero: NaN === NaN for includes
   if SearchNum.IsNaN then
   begin
-    if TA.FKind in [takFloat32, takFloat64] then
+    if TA.FKind in [takFloat16, takFloat32, takFloat64] then
       for I := StartIdx to TA.FLength - 1 do
         if Math.IsNaN(TA.ReadElement(I)) then
           Exit(TGocciaBooleanLiteralValue.TrueValue);
@@ -1074,7 +1074,7 @@ begin
   end;
   if SearchNum.IsInfinite then
   begin
-    if not (TA.FKind in [takFloat32, takFloat64]) then
+    if not (TA.FKind in [takFloat16, takFloat32, takFloat64]) then
       Exit(TGocciaBooleanLiteralValue.FalseValue);
     for I := StartIdx to TA.FLength - 1 do
       if Math.IsInfinite(TA.ReadElement(I)) and

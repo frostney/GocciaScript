@@ -316,7 +316,7 @@ suite("Math.f16round", () => {
     },
   });
 
-  bench("f16round vs fround", {
+  bench("f16round over 100 values", {
     setup: () => {
       const values = [];
       for (const i of Array(100).keys()) values.push(i * 1.337);

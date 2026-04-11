@@ -248,6 +248,18 @@ describe("Float16Array", () => {
       expect(ta.includes(99)).toBe(false);
     });
 
+    test("indexOf()/lastIndexOf()/includes() handle float special values", () => {
+      const ta = new Float16Array([NaN, Infinity, -Infinity, 1]);
+      // includes uses SameValueZero: NaN === NaN
+      expect(ta.includes(NaN)).toBe(true);
+      // indexOf uses strict equality: NaN !== NaN
+      expect(ta.indexOf(NaN)).toBe(-1);
+      expect(ta.indexOf(Infinity)).toBe(1);
+      expect(ta.lastIndexOf(-Infinity)).toBe(2);
+      expect(ta.includes(Infinity)).toBe(true);
+      expect(ta.includes(-Infinity)).toBe(true);
+    });
+
     test("map()", () => {
       const ta = new Float16Array([1, 2, 3]);
       const mapped = ta.map((x) => x * 2);
@@ -276,6 +288,16 @@ describe("Float16Array", () => {
       expect(ta[0]).toBe(1);
       expect(ta[1]).toBe(2);
       expect(ta[2]).toBe(3);
+    });
+
+    test("sort() moves NaN values to the end", () => {
+      const ta = new Float16Array([3, NaN, 1, NaN, 2]);
+      ta.sort();
+      expect(ta[0]).toBe(1);
+      expect(ta[1]).toBe(2);
+      expect(ta[2]).toBe(3);
+      expect(Number.isNaN(ta[3])).toBe(true);
+      expect(Number.isNaN(ta[4])).toBe(true);
     });
 
     test("reverse()", () => {
