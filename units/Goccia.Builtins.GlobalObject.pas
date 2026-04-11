@@ -29,6 +29,7 @@ type
     function ObjectHasOwn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ObjectGetOwnPropertyNames(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ObjectGetOwnPropertyDescriptor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectGetOwnPropertyDescriptors(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ObjectDefineProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ObjectDefineProperties(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ObjectGetOwnPropertySymbols(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -62,6 +63,41 @@ uses
   Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue;
 
+// ES2026 §6.2.6.4 FromPropertyDescriptor(Desc)
+function FromPropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor): TGocciaObjectValue;
+begin
+  Result := TGocciaObjectValue.Create;
+  if ADescriptor.Enumerable then
+    Result.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.TrueValue)
+  else
+    Result.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.FalseValue);
+  if ADescriptor.Configurable then
+    Result.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.TrueValue)
+  else
+    Result.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.FalseValue);
+
+  if ADescriptor is TGocciaPropertyDescriptorData then
+  begin
+    Result.AssignProperty(PROP_VALUE, TGocciaPropertyDescriptorData(ADescriptor).Value);
+    if ADescriptor.Writable then
+      Result.AssignProperty(PROP_WRITABLE, TGocciaBooleanLiteralValue.TrueValue)
+    else
+      Result.AssignProperty(PROP_WRITABLE, TGocciaBooleanLiteralValue.FalseValue);
+  end
+  else if ADescriptor is TGocciaPropertyDescriptorAccessor then
+  begin
+    if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
+      Result.AssignProperty(PROP_GET, TGocciaPropertyDescriptorAccessor(ADescriptor).Getter)
+    else
+      Result.AssignProperty(PROP_GET, TGocciaUndefinedLiteralValue.UndefinedValue);
+
+    if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
+      Result.AssignProperty(PROP_SET, TGocciaPropertyDescriptorAccessor(ADescriptor).Setter)
+    else
+      Result.AssignProperty(PROP_SET, TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+end;
+
 constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
   Members: TGocciaMemberCollection;
@@ -79,6 +115,7 @@ begin
     Members.AddMethod(ObjectHasOwn, 2, gmkStaticMethod);
     Members.AddMethod(ObjectGetOwnPropertyNames, 1, gmkStaticMethod);
     Members.AddMethod(ObjectGetOwnPropertyDescriptor, 2, gmkStaticMethod);
+    Members.AddMethod(ObjectGetOwnPropertyDescriptors, 1, gmkStaticMethod);
     Members.AddMethod(ObjectDefineProperty, 3, gmkStaticMethod);
     Members.AddMethod(ObjectDefineProperties, 2, gmkStaticMethod);
     Members.AddMethod(ObjectGetOwnPropertySymbols, 1, gmkStaticMethod);
@@ -325,7 +362,7 @@ end;
 // ES2026 §20.1.2.6 Object.getOwnPropertyDescriptor(O, P)
 function TGocciaGlobalObject.ObjectGetOwnPropertyDescriptor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Obj, DescriptorObj: TGocciaObjectValue;
+  Obj: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
   PropertyName: string;
 begin
@@ -347,42 +384,53 @@ begin
   end;
   // Step 4: Return FromPropertyDescriptor(desc)
   if Descriptor = nil then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue
+  else
+    Result := FromPropertyDescriptor(Descriptor);
+end;
+
+// ES2026 §20.1.2.7 Object.getOwnPropertyDescriptors(O)
+function TGocciaGlobalObject.ObjectGetOwnPropertyDescriptors(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Obj, Descriptors: TGocciaObjectValue;
+  PropertyNames: TArray<string>;
+  OwnSymbols: TArray<TGocciaSymbolValue>;
+  Descriptor: TGocciaPropertyDescriptor;
+  I: Integer;
+begin
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.getOwnPropertyDescriptors', ThrowError);
+
+  // Step 1: Let obj be ? ToObject(O)
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
+    ThrowError('Object.getOwnPropertyDescriptors called on non-object', 0, 0);
+
+  Obj := TGocciaObjectValue(AArgs.GetElement(0));
+  // Step 2: Let ownKeys be ? obj.[[OwnPropertyKeys]]()
+  // Step 3: Let descriptors be OrdinaryObjectCreate(%Object.prototype%)
+  Descriptors := TGocciaObjectValue.Create;
+
+  // Step 4: For each element key of ownKeys (string keys)
+  PropertyNames := Obj.GetAllPropertyNames;
+  for I := 0 to High(PropertyNames) do
   begin
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end else begin
-    DescriptorObj := TGocciaObjectValue.Create;
-    if Descriptor.Enumerable then
-      DescriptorObj.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.TrueValue)
-    else
-      DescriptorObj.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.FalseValue);
-    if Descriptor.Configurable then
-      DescriptorObj.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.TrueValue)
-    else
-      DescriptorObj.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.FalseValue);
-
-    if Descriptor is TGocciaPropertyDescriptorData then
-    begin
-      DescriptorObj.AssignProperty(PROP_VALUE, TGocciaPropertyDescriptorData(Descriptor).Value);
-      if Descriptor.Writable then
-        DescriptorObj.AssignProperty(PROP_WRITABLE, TGocciaBooleanLiteralValue.TrueValue)
-      else
-        DescriptorObj.AssignProperty(PROP_WRITABLE, TGocciaBooleanLiteralValue.FalseValue);
-    end
-    else if Descriptor is TGocciaPropertyDescriptorAccessor then
-    begin
-      if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
-        DescriptorObj.AssignProperty(PROP_GET, TGocciaPropertyDescriptorAccessor(Descriptor).Getter)
-      else
-        DescriptorObj.AssignProperty(PROP_GET, TGocciaUndefinedLiteralValue.UndefinedValue);
-
-      if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
-        DescriptorObj.AssignProperty(PROP_SET, TGocciaPropertyDescriptorAccessor(Descriptor).Setter)
-      else
-        DescriptorObj.AssignProperty(PROP_SET, TGocciaUndefinedLiteralValue.UndefinedValue);
-    end;
-
-    Result := DescriptorObj;
+    // Step 4a: Let desc be ? obj.[[GetOwnProperty]](key)
+    Descriptor := Obj.GetOwnPropertyDescriptor(PropertyNames[I]);
+    // Step 4b-c: Let descriptor be FromPropertyDescriptor(desc) and add to result
+    if Descriptor <> nil then
+      Descriptors.AssignProperty(PropertyNames[I], FromPropertyDescriptor(Descriptor));
   end;
+
+  // Step 4 continued: For each element key of ownKeys (symbol keys)
+  OwnSymbols := Obj.GetOwnSymbols;
+  for I := 0 to High(OwnSymbols) do
+  begin
+    Descriptor := Obj.GetOwnSymbolPropertyDescriptor(OwnSymbols[I]);
+    if Descriptor <> nil then
+      Descriptors.AssignSymbolProperty(OwnSymbols[I], FromPropertyDescriptor(Descriptor));
+  end;
+
+  // Step 5: Return descriptors
+  Result := Descriptors;
 end;
 
 // ES2026 §20.1.2.3 Object.defineProperty(O, P, Attributes)
