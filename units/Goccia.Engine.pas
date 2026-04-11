@@ -26,6 +26,8 @@ uses
   Goccia.Builtins.GlobalSet,
   Goccia.Builtins.GlobalString,
   Goccia.Builtins.GlobalSymbol,
+  Goccia.Builtins.GlobalTextDecoder,
+  Goccia.Builtins.GlobalTextEncoder,
   Goccia.Builtins.JSON,
   Goccia.Builtins.JSON5,
   Goccia.Builtins.JSONL,
@@ -82,7 +84,9 @@ type
     ggArrayBuffer,
     ggProxy,
     ggFFI,
-    ggReflect
+    ggReflect,
+    ggTextEncoder,
+    ggTextDecoder
   );
 
   TGocciaGlobalBuiltins = set of TGocciaGlobalBuiltin;
@@ -100,7 +104,7 @@ type
 type
   TGocciaEngine = class
   public
-    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggJSON5, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer, ggProxy, ggReflect];
+    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggJSON5, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer, ggProxy, ggReflect, ggTextEncoder, ggTextDecoder];
   private
     FInterpreter: TGocciaInterpreter;
     FFileName: string;
@@ -136,6 +140,8 @@ type
     FBuiltinProxy: TGocciaGlobalProxy;
     FBuiltinFFI: TGocciaGlobalFFI;
     FBuiltinReflect: TGocciaGlobalReflect;
+    FBuiltinTextEncoder: TGocciaGlobalTextEncoder;
+    FBuiltinTextDecoder: TGocciaGlobalTextDecoder;
     FPreviousExceptionMask: TFPUExceptionMask;
     FASIEnabled: Boolean;
     FSuppressWarnings: Boolean;
@@ -249,6 +255,8 @@ uses
   Goccia.Values.SharedArrayBufferValue,
   Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
+  Goccia.Values.TextDecoderValue,
+  Goccia.Values.TextEncoderValue,
   Goccia.Values.Uint8ArrayEncoding,
   Goccia.Version;
 
@@ -334,6 +342,8 @@ begin
     FBuiltinProxy.Free;
     FBuiltinFFI.Free;
     FBuiltinReflect.Free;
+    FBuiltinTextEncoder.Free;
+    FBuiltinTextDecoder.Free;
     ClearImportMetaCache;
     FInjectedGlobals.Free;
     FInterpreter.Free;
@@ -403,6 +413,12 @@ begin
     FBuiltinFFI := TGocciaGlobalFFI.Create(CONSTRUCTOR_FFI, Scope, ThrowError);
   if ggReflect in FGlobals then
     FBuiltinReflect := TGocciaGlobalReflect.Create('Reflect', Scope, ThrowError);
+  if ggTextEncoder in FGlobals then
+    FBuiltinTextEncoder := TGocciaGlobalTextEncoder.Create(
+      CONSTRUCTOR_TEXT_ENCODER, Scope, ThrowError);
+  if ggTextDecoder in FGlobals then
+    FBuiltinTextDecoder := TGocciaGlobalTextDecoder.Create(
+      CONSTRUCTOR_TEXT_DECODER, Scope, ThrowError);
 
   // Always-registered built-ins
   FBuiltinGlobalString := TGocciaGlobalString.Create(CONSTRUCTOR_STRING, Scope, ThrowError);
@@ -452,6 +468,16 @@ end;
 procedure ExposeSetPrototype(const AConstructor: TGocciaValue);
 begin
   TGocciaSetValue.ExposePrototype(AConstructor);
+end;
+
+procedure ExposeTextEncoderPrototype(const AConstructor: TGocciaValue);
+begin
+  TGocciaTextEncoderValue.ExposePrototype(AConstructor);
+end;
+
+procedure ExposeTextDecoderPrototype(const AConstructor: TGocciaValue);
+begin
+  TGocciaTextDecoderValue.ExposePrototype(AConstructor);
 end;
 
 procedure TGocciaEngine.RegisterBuiltinConstructors;
@@ -518,6 +544,32 @@ begin
     TypeDef.AddSpeciesGetter := True;
     RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
     SetConstructor := TGocciaSetClassValue(GenericConstructor);
+  end;
+
+  if ggTextEncoder in FGlobals then
+  begin
+    TypeDef.ConstructorName := CONSTRUCTOR_TEXT_ENCODER;
+    TypeDef.Kind := gtdkNativeInstanceType;
+    TypeDef.ClassValueClass := TGocciaTextEncoderClassValue;
+    TypeDef.ExposePrototype := @ExposeTextEncoderPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := nil;
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  end;
+
+  if ggTextDecoder in FGlobals then
+  begin
+    TypeDef.ConstructorName := CONSTRUCTOR_TEXT_DECODER;
+    TypeDef.Kind := gtdkNativeInstanceType;
+    TypeDef.ClassValueClass := TGocciaTextDecoderClassValue;
+    TypeDef.ExposePrototype := @ExposeTextDecoderPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := nil;
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   end;
 
   if ggArrayBuffer in FGlobals then
