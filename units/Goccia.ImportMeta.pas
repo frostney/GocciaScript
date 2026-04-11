@@ -72,7 +72,11 @@ begin
   AbsolutePath := ExpandFileName(AFilePath);
   {$IFDEF MSWINDOWS}
   AbsolutePath := StringReplace(AbsolutePath, '\', '/', [rfReplaceAll]);
-  Result := 'file:///' + PercentEncodePath(AbsolutePath);
+  // RFC 8089 §2 — UNC paths map to file://server/share/..., not file:///
+  if (Length(AbsolutePath) >= 2) and (AbsolutePath[1] = '/') and (AbsolutePath[2] = '/') then
+    Result := 'file:' + PercentEncodePath(AbsolutePath)
+  else
+    Result := 'file:///' + PercentEncodePath(AbsolutePath);
   {$ELSE}
   Result := 'file://' + PercentEncodePath(AbsolutePath);
   {$ENDIF}
@@ -99,8 +103,8 @@ begin
   Specifier := AArgs.GetElement(0).ToStringLiteral.Value;
 
   // Absolute specifiers resolve directly; relative ones resolve against the module directory
-  if (Length(Specifier) > 0) and ((Specifier[1] = '/') or
-     (Length(Specifier) >= 2) and (Specifier[2] = ':')) then
+  if (Length(Specifier) > 0) and ((Specifier[1] = '/') or (Specifier[1] = '\') or
+     ((Length(Specifier) >= 2) and (Specifier[2] = ':'))) then
     ResolvedPath := ExpandFileName(Specifier)
   else
   begin
