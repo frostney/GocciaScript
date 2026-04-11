@@ -39,6 +39,9 @@ const
   CONSTRUCTOR_URL                  = 'URL';
   CONSTRUCTOR_URL_SEARCH_PARAMS    = 'URLSearchParams';
 
+  CONSTRUCTOR_TEXT_ENCODER = 'TextEncoder';
+  CONSTRUCTOR_TEXT_DECODER = 'TextDecoder';
+
 implementation
 
 end.

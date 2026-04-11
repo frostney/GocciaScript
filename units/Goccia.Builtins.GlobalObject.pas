@@ -55,9 +55,12 @@ uses
   Goccia.Arguments.Validator,
   Goccia.Constants.PropertyNames,
   Goccia.Evaluator.Comparison,
+  Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
+  Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ProxyValue,
@@ -96,6 +99,33 @@ begin
     else
       Result.AssignProperty(PROP_SET, TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
+end;
+
+// ES2026 §7.1.18 ToObject(argument)
+function ToObject(const AValue: TGocciaValue): TGocciaObjectValue;
+var
+  Boxed: TGocciaObjectValue;
+begin
+  if (AValue is TGocciaUndefinedLiteralValue) or (AValue is TGocciaNullLiteralValue) then
+    ThrowTypeError('Cannot convert undefined or null to object');
+
+  if AValue is TGocciaObjectValue then
+  begin
+    Result := TGocciaObjectValue(AValue);
+    Exit;
+  end;
+
+  // Box primitives (boolean, number, string)
+  Boxed := AValue.Box;
+  if Assigned(Boxed) then
+  begin
+    Result := Boxed;
+    Exit;
+  end;
+
+  // Symbol and other non-coercible types
+  ThrowTypeError('Cannot convert value to object');
+  Result := nil;
 end;
 
 constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
@@ -165,19 +195,25 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.keys', ThrowError);
 
   // Step 1: Let obj be ? ToObject(O)
-  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
-    ThrowError('Object.keys called on non-object', 0, 0);
+  Obj := ToObject(AArgs.GetElement(0));
+  if Assigned(TGarbageCollector.Instance) and
+     not (AArgs.GetElement(0) is TGocciaObjectValue) then
+    TGarbageCollector.Instance.AddTempRoot(Obj);
+  try
+    Keys := TGocciaArrayValue.Create;
 
-  Obj := TGocciaObjectValue(AArgs.GetElement(0));
-  Keys := TGocciaArrayValue.Create;
+    // Step 2: Let nameList be ? EnumerableOwnProperties(obj, key)
+    Names := Obj.GetEnumerablePropertyNames;
+    // Step 3: Return CreateArrayFromList(nameList)
+    for I := 0 to High(Names) do
+      Keys.Elements.Add(TGocciaStringLiteralValue.Create(Names[I]));
 
-  // Step 2: Let nameList be ? EnumerableOwnProperties(obj, key)
-  Names := Obj.GetEnumerablePropertyNames;
-  // Step 3: Return CreateArrayFromList(nameList)
-  for I := 0 to High(Names) do
-    Keys.Elements.Add(TGocciaStringLiteralValue.Create(Names[I]));
-
-  Result := Keys;
+    Result := Keys;
+  finally
+    if Assigned(TGarbageCollector.Instance) and
+       not (AArgs.GetElement(0) is TGocciaObjectValue) then
+      TGarbageCollector.Instance.RemoveTempRoot(Obj);
+  end;
 end;
 
 // ES2026 §20.1.2.22 Object.values(O)
@@ -191,19 +227,25 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.values', ThrowError);
 
   // Step 1: Let obj be ? ToObject(O)
-  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
-    ThrowError('Object.values called on non-object', 0, 0);
+  Obj := ToObject(AArgs.GetElement(0));
+  if Assigned(TGarbageCollector.Instance) and
+     not (AArgs.GetElement(0) is TGocciaObjectValue) then
+    TGarbageCollector.Instance.AddTempRoot(Obj);
+  try
+    Values := TGocciaArrayValue.Create;
 
-  Obj := TGocciaObjectValue(AArgs.GetElement(0));
-  Values := TGocciaArrayValue.Create;
+    // Step 2: Let nameList be ? EnumerableOwnProperties(obj, value)
+    PropertyValues := Obj.GetEnumerablePropertyValues;
+    // Step 3: Return CreateArrayFromList(nameList)
+    for I := 0 to High(PropertyValues) do
+      Values.Elements.Add(PropertyValues[I]);
 
-  // Step 2: Let nameList be ? EnumerableOwnProperties(obj, value)
-  PropertyValues := Obj.GetEnumerablePropertyValues;
-  // Step 3: Return CreateArrayFromList(nameList)
-  for I := 0 to High(PropertyValues) do
-    Values.Elements.Add(PropertyValues[I]);
-
-  Result := Values;
+    Result := Values;
+  finally
+    if Assigned(TGarbageCollector.Instance) and
+       not (AArgs.GetElement(0) is TGocciaObjectValue) then
+      TGarbageCollector.Instance.RemoveTempRoot(Obj);
+  end;
 end;
 
 // ES2026 §20.1.2.5 Object.entries(O)
@@ -218,24 +260,30 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.entries', ThrowError);
 
   // Step 1: Let obj be ? ToObject(O)
-  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
-    ThrowError('Object.entries called on non-object', 0, 0);
+  Obj := ToObject(AArgs.GetElement(0));
+  if Assigned(TGarbageCollector.Instance) and
+     not (AArgs.GetElement(0) is TGocciaObjectValue) then
+    TGarbageCollector.Instance.AddTempRoot(Obj);
+  try
+    Entries := TGocciaArrayValue.Create;
 
-  Obj := TGocciaObjectValue(AArgs.GetElement(0));
-  Entries := TGocciaArrayValue.Create;
+    // Step 2: Let nameList be ? EnumerableOwnProperties(obj, key+value)
+    PropertyEntries := Obj.GetEnumerablePropertyEntries;
+    // Step 3: Return CreateArrayFromList(nameList) — each entry is a [key, value] pair
+    for I := 0 to High(PropertyEntries) do
+    begin
+      Entry := TGocciaArrayValue.Create;
+      Entry.Elements.Add(TGocciaStringLiteralValue.Create(PropertyEntries[I].Key));
+      Entry.Elements.Add(PropertyEntries[I].Value);
+      Entries.Elements.Add(Entry);
+    end;
 
-  // Step 2: Let nameList be ? EnumerableOwnProperties(obj, key+value)
-  PropertyEntries := Obj.GetEnumerablePropertyEntries;
-  // Step 3: Return CreateArrayFromList(nameList) — each entry is a [key, value] pair
-  for I := 0 to High(PropertyEntries) do
-  begin
-    Entry := TGocciaArrayValue.Create;
-    Entry.Elements.Add(TGocciaStringLiteralValue.Create(PropertyEntries[I].Key));
-    Entry.Elements.Add(PropertyEntries[I].Value);
-    Entries.Elements.Add(Entry);
+    Result := Entries;
+  finally
+    if Assigned(TGarbageCollector.Instance) and
+       not (AArgs.GetElement(0) is TGocciaObjectValue) then
+      TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
-
-  Result := Entries;
 end;
 
 // ES2026 §20.1.2.1 Object.assign(target, ...sources)
@@ -249,28 +297,33 @@ begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.assign', ThrowError);
 
   // Step 1: Let to be ? ToObject(target)
-  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
-    ThrowError('Object.assign called on non-object', 0, 0);
-
-  InitialObj := TGocciaObjectValue(AArgs.GetElement(0));
-
-  // Step 2: For each element nextSource of sources
-  for I := 1 to AArgs.Length - 1 do
-  begin
-    if (AArgs.GetElement(I) is TGocciaObjectValue) then
+  InitialObj := ToObject(AArgs.GetElement(0));
+  if Assigned(TGarbageCollector.Instance) and
+     not (AArgs.GetElement(0) is TGocciaObjectValue) then
+    TGarbageCollector.Instance.AddTempRoot(InitialObj);
+  try
+    // Step 2: For each element nextSource of sources
+    for I := 1 to AArgs.Length - 1 do
     begin
-      Source := TGocciaObjectValue(AArgs.GetElement(I));
+      if (AArgs.GetElement(I) is TGocciaObjectValue) then
+      begin
+        Source := TGocciaObjectValue(AArgs.GetElement(I));
 
-      // Step 3: Let keys be ? EnumerableOwnProperties(nextSource, key+value)
-      PropertyEntries := Source.GetEnumerablePropertyEntries;
-      // Step 4: For each element key, Get value and Set on target
-      for J := 0 to High(PropertyEntries) do
-        InitialObj.AssignProperty(PropertyEntries[J].Key, PropertyEntries[J].Value);
+        // Step 3: Let keys be ? EnumerableOwnProperties(nextSource, key+value)
+        PropertyEntries := Source.GetEnumerablePropertyEntries;
+        // Step 4: For each element key, Get value and Set on target
+        for J := 0 to High(PropertyEntries) do
+          InitialObj.AssignProperty(PropertyEntries[J].Key, PropertyEntries[J].Value);
+      end;
     end;
-  end;
 
-  // Step 5: Return to
-  Result := InitialObj;
+    // Step 5: Return to
+    Result := InitialObj;
+  finally
+    if Assigned(TGarbageCollector.Instance) and
+       not (AArgs.GetElement(0) is TGocciaObjectValue) then
+      TGarbageCollector.Instance.RemoveTempRoot(InitialObj);
+  end;
 end;
 
 // ES2026 §20.1.2.2 Object.create(O [, Properties])
@@ -312,27 +365,52 @@ begin
   begin
     ClassObj := TGocciaClassValue(AArgs.GetElement(0));
     // Step 2: Let key be ? ToPropertyKey(P)
-    PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
     // Step 3: Return ? HasOwnProperty(obj, key)
-    if not (ClassObj.GetProperty(PropertyName) is TGocciaUndefinedLiteralValue) then
-      Result := TGocciaBooleanLiteralValue.TrueValue
+    if AArgs.GetElement(1) is TGocciaSymbolValue then
+    begin
+      if not (ClassObj.GetSymbolProperty(TGocciaSymbolValue(AArgs.GetElement(1))) is TGocciaUndefinedLiteralValue) then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+    end
     else
-      Result := TGocciaBooleanLiteralValue.FalseValue;
+    begin
+      PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
+      if not (ClassObj.GetProperty(PropertyName) is TGocciaUndefinedLiteralValue) then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+    end;
     Exit;
   end;
 
-  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
-    ThrowError('Object.hasOwn called on non-object', 0, 0);
-
-  Obj := TGocciaObjectValue(AArgs.GetElement(0));
-  // Step 2: Let key be ? ToPropertyKey(P)
-  PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
-
-  // Step 3: Return ? HasOwnProperty(obj, key)
-  if Obj.HasOwnProperty(PropertyName) then
-    Result := TGocciaBooleanLiteralValue.TrueValue
-  else
-    Result := TGocciaBooleanLiteralValue.FalseValue;
+  Obj := ToObject(AArgs.GetElement(0));
+  if Assigned(TGarbageCollector.Instance) and
+     not (AArgs.GetElement(0) is TGocciaObjectValue) then
+    TGarbageCollector.Instance.AddTempRoot(Obj);
+  try
+    // Step 2: Let key be ? ToPropertyKey(P)
+    // Step 3: Return ? HasOwnProperty(obj, key)
+    if AArgs.GetElement(1) is TGocciaSymbolValue then
+    begin
+      if Obj.HasSymbolProperty(TGocciaSymbolValue(AArgs.GetElement(1))) then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+    end
+    else
+    begin
+      PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
+      if Obj.HasOwnProperty(PropertyName) then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+    end;
+  finally
+    if Assigned(TGarbageCollector.Instance) and
+       not (AArgs.GetElement(0) is TGocciaObjectValue) then
+      TGarbageCollector.Instance.RemoveTempRoot(Obj);
+  end;
 end;
 
 // ES2026 §20.1.2.8 Object.getOwnPropertyNames(O)
@@ -345,18 +423,25 @@ var
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.getOwnPropertyNames', ThrowError);
 
-  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
-    ThrowError('Object.getOwnPropertyNames called on non-object', 0, 0);
+  // Step 1: Let obj be ? ToObject(O)
+  Obj := ToObject(AArgs.GetElement(0));
+  if Assigned(TGarbageCollector.Instance) and
+     not (AArgs.GetElement(0) is TGocciaObjectValue) then
+    TGarbageCollector.Instance.AddTempRoot(Obj);
+  try
+    Names := TGocciaArrayValue.Create;
 
-  Obj := TGocciaObjectValue(AArgs.GetElement(0));
-  Names := TGocciaArrayValue.Create;
+    // Step 1: Return GetOwnPropertyKeys(O, string)
+    PropertyNames := Obj.GetAllPropertyNames;
+    for I := 0 to High(PropertyNames) do
+      Names.Elements.Add(TGocciaStringLiteralValue.Create(PropertyNames[I]));
 
-  // Step 1: Return GetOwnPropertyKeys(O, string)
-  PropertyNames := Obj.GetAllPropertyNames;
-  for I := 0 to High(PropertyNames) do
-    Names.Elements.Add(TGocciaStringLiteralValue.Create(PropertyNames[I]));
-
-  Result := Names;
+    Result := Names;
+  finally
+    if Assigned(TGarbageCollector.Instance) and
+       not (AArgs.GetElement(0) is TGocciaObjectValue) then
+      TGarbageCollector.Instance.RemoveTempRoot(Obj);
+  end;
 end;
 
 // ES2026 §20.1.2.6 Object.getOwnPropertyDescriptor(O, P)
@@ -369,24 +454,30 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.getOwnPropertyDescriptor', ThrowError);
 
   // Step 1: Let obj be ? ToObject(O)
-  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
-    ThrowError('Object.getOwnPropertyDescriptor called on non-object', 0, 0);
-
-  Obj := TGocciaObjectValue(AArgs.GetElement(0));
-  // Step 2: Let key be ? ToPropertyKey(P)
-  // Step 3: Let desc be ? O.[[GetOwnProperty]](key)
-  if AArgs.GetElement(1) is TGocciaSymbolValue then
-    Descriptor := Obj.GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(AArgs.GetElement(1)))
-  else
-  begin
-    PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
-    Descriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
+  Obj := ToObject(AArgs.GetElement(0));
+  if Assigned(TGarbageCollector.Instance) and
+     not (AArgs.GetElement(0) is TGocciaObjectValue) then
+    TGarbageCollector.Instance.AddTempRoot(Obj);
+  try
+    // Step 2: Let key be ? ToPropertyKey(P)
+    // Step 3: Let desc be ? O.[[GetOwnProperty]](key)
+    if AArgs.GetElement(1) is TGocciaSymbolValue then
+      Descriptor := Obj.GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(AArgs.GetElement(1)))
+    else
+    begin
+      PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
+      Descriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
+    end;
+    // Step 4: Return FromPropertyDescriptor(desc)
+    if Descriptor = nil then
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue
+    else
+      Result := FromPropertyDescriptor(Descriptor);
+  finally
+    if Assigned(TGarbageCollector.Instance) and
+       not (AArgs.GetElement(0) is TGocciaObjectValue) then
+      TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
-  // Step 4: Return FromPropertyDescriptor(desc)
-  if Descriptor = nil then
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue
-  else
-    Result := FromPropertyDescriptor(Descriptor);
 end;
 
 // ES2026 §20.1.2.7 Object.getOwnPropertyDescriptors(O)
@@ -401,36 +492,42 @@ begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.getOwnPropertyDescriptors', ThrowError);
 
   // Step 1: Let obj be ? ToObject(O)
-  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
-    ThrowError('Object.getOwnPropertyDescriptors called on non-object', 0, 0);
+  Obj := ToObject(AArgs.GetElement(0));
+  if Assigned(TGarbageCollector.Instance) and
+     not (AArgs.GetElement(0) is TGocciaObjectValue) then
+    TGarbageCollector.Instance.AddTempRoot(Obj);
+  try
+    // Step 2: Let ownKeys be ? obj.[[OwnPropertyKeys]]()
+    // Step 3: Let descriptors be OrdinaryObjectCreate(%Object.prototype%)
+    Descriptors := TGocciaObjectValue.Create;
 
-  Obj := TGocciaObjectValue(AArgs.GetElement(0));
-  // Step 2: Let ownKeys be ? obj.[[OwnPropertyKeys]]()
-  // Step 3: Let descriptors be OrdinaryObjectCreate(%Object.prototype%)
-  Descriptors := TGocciaObjectValue.Create;
+    // Step 4: For each element key of ownKeys (string keys)
+    PropertyNames := Obj.GetAllPropertyNames;
+    for I := 0 to High(PropertyNames) do
+    begin
+      // Step 4a: Let desc be ? obj.[[GetOwnProperty]](key)
+      Descriptor := Obj.GetOwnPropertyDescriptor(PropertyNames[I]);
+      // Step 4b-c: Let descriptor be FromPropertyDescriptor(desc) and add to result
+      if Descriptor <> nil then
+        Descriptors.AssignProperty(PropertyNames[I], FromPropertyDescriptor(Descriptor));
+    end;
 
-  // Step 4: For each element key of ownKeys (string keys)
-  PropertyNames := Obj.GetAllPropertyNames;
-  for I := 0 to High(PropertyNames) do
-  begin
-    // Step 4a: Let desc be ? obj.[[GetOwnProperty]](key)
-    Descriptor := Obj.GetOwnPropertyDescriptor(PropertyNames[I]);
-    // Step 4b-c: Let descriptor be FromPropertyDescriptor(desc) and add to result
-    if Descriptor <> nil then
-      Descriptors.AssignProperty(PropertyNames[I], FromPropertyDescriptor(Descriptor));
+    // Step 4 continued: For each element key of ownKeys (symbol keys)
+    OwnSymbols := Obj.GetOwnSymbols;
+    for I := 0 to High(OwnSymbols) do
+    begin
+      Descriptor := Obj.GetOwnSymbolPropertyDescriptor(OwnSymbols[I]);
+      if Descriptor <> nil then
+        Descriptors.AssignSymbolProperty(OwnSymbols[I], FromPropertyDescriptor(Descriptor));
+    end;
+
+    // Step 5: Return descriptors
+    Result := Descriptors;
+  finally
+    if Assigned(TGarbageCollector.Instance) and
+       not (AArgs.GetElement(0) is TGocciaObjectValue) then
+      TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
-
-  // Step 4 continued: For each element key of ownKeys (symbol keys)
-  OwnSymbols := Obj.GetOwnSymbols;
-  for I := 0 to High(OwnSymbols) do
-  begin
-    Descriptor := Obj.GetOwnSymbolPropertyDescriptor(OwnSymbols[I]);
-    if Descriptor <> nil then
-      Descriptors.AssignSymbolProperty(OwnSymbols[I], FromPropertyDescriptor(Descriptor));
-  end;
-
-  // Step 5: Return descriptors
-  Result := Descriptors;
 end;
 
 // ES2026 §20.1.2.3 Object.defineProperty(O, P, Attributes)
@@ -543,21 +640,25 @@ var
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.getOwnPropertySymbols', ThrowError);
 
-  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
-  begin
-    Result := TGocciaArrayValue.Create;
-    Exit;
+  // Step 1: Let obj be ? ToObject(O)
+  Obj := ToObject(AArgs.GetElement(0));
+  if Assigned(TGarbageCollector.Instance) and
+     not (AArgs.GetElement(0) is TGocciaObjectValue) then
+    TGarbageCollector.Instance.AddTempRoot(Obj);
+  try
+    Arr := TGocciaArrayValue.Create;
+
+    // Step 1: Return GetOwnPropertyKeys(O, symbol)
+    OwnSymbols := Obj.GetOwnSymbols;
+    for I := 0 to High(OwnSymbols) do
+      Arr.Elements.Add(OwnSymbols[I]);
+
+    Result := Arr;
+  finally
+    if Assigned(TGarbageCollector.Instance) and
+       not (AArgs.GetElement(0) is TGocciaObjectValue) then
+      TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
-
-  Obj := TGocciaObjectValue(AArgs.GetElement(0));
-  Arr := TGocciaArrayValue.Create;
-
-  // Step 1: Return GetOwnPropertyKeys(O, symbol)
-  OwnSymbols := Obj.GetOwnSymbols;
-  for I := 0 to High(OwnSymbols) do
-    Arr.Elements.Add(OwnSymbols[I]);
-
-  Result := Arr;
 end;
 
 // ES2026 §20.1.2.6 Object.freeze(O)
@@ -599,25 +700,34 @@ end;
 
 // ES2026 §20.1.2.12 Object.getPrototypeOf(O)
 function TGocciaGlobalObject.ObjectGetPrototypeOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Obj: TGocciaObjectValue;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.getPrototypeOf', ThrowError);
 
   // Step 1: Let obj be ? ToObject(O)
-  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
-    ThrowError('Object.getPrototypeOf called on non-object', 0, 0);
+  Obj := ToObject(AArgs.GetElement(0));
+  if Assigned(TGarbageCollector.Instance) and
+     not (AArgs.GetElement(0) is TGocciaObjectValue) then
+    TGarbageCollector.Instance.AddTempRoot(Obj);
+  try
+    // Proxy intercept: delegate to getPrototypeOf trap
+    if Obj is TGocciaProxyValue then
+    begin
+      Result := TGocciaProxyValue(Obj).GetPrototypeTrap;
+      Exit;
+    end;
 
-  // Proxy intercept: delegate to getPrototypeOf trap
-  if AArgs.GetElement(0) is TGocciaProxyValue then
-  begin
-    Result := TGocciaProxyValue(AArgs.GetElement(0)).GetPrototypeTrap;
-    Exit;
+    // Step 2: Return ? obj.[[GetPrototypeOf]]()
+    if Assigned(Obj.Prototype) then
+      Result := Obj.Prototype
+    else
+      Result := TGocciaNullLiteralValue.NullValue;
+  finally
+    if Assigned(TGarbageCollector.Instance) and
+       not (AArgs.GetElement(0) is TGocciaObjectValue) then
+      TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
-
-  // Step 2: Return ? obj.[[GetPrototypeOf]]()
-  if Assigned(TGocciaObjectValue(AArgs.GetElement(0)).Prototype) then
-    Result := TGocciaObjectValue(AArgs.GetElement(0)).Prototype
-  else
-    Result := TGocciaNullLiteralValue.NullValue;
 end;
 
 // ES2026 §20.1.2.7 Object.fromEntries(iterable)
@@ -752,14 +862,22 @@ var
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.setPrototypeOf', ThrowError);
 
-  // Step 1: Perform ? RequireObjectCoercible(O)
-  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
-    ThrowError('Object.setPrototypeOf called on non-object', 0, 0);
+  // Step 1: Perform ? RequireObjectCoercible(O) — throws for undefined/null
+  if (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) or
+     (AArgs.GetElement(0) is TGocciaNullLiteralValue) then
+    ThrowTypeError('Cannot convert undefined or null to object');
 
   // Step 2: If Type(proto) is neither Object nor Null, throw a TypeError exception
   ProtoArg := AArgs.GetElement(1);
   if not (ProtoArg is TGocciaObjectValue) and not (ProtoArg is TGocciaNullLiteralValue) then
-    ThrowError('Object prototype may only be an Object or null', 0, 0);
+    ThrowTypeError('Object prototype may only be an Object or null');
+
+  // Step 3: If Type(O) is not Object, return O (primitives are immutable)
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
+  begin
+    Result := AArgs.GetElement(0);
+    Exit;
+  end;
 
   // Proxy intercept: delegate to setPrototypeOf trap
   if AArgs.GetElement(0) is TGocciaProxyValue then

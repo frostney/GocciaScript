@@ -106,6 +106,12 @@ const
   PROP_SET_FROM_BASE64        = 'setFromBase64';
   PROP_SET_FROM_HEX           = 'setFromHex';
   PROP_RAW                    = 'raw';
+  PROP_ENCODING               = 'encoding';
+  PROP_FATAL                  = 'fatal';
+  PROP_IGNORE_BOM             = 'ignoreBOM';
+  PROP_ENCODE                 = 'encode';
+  PROP_ENCODE_INTO            = 'encodeInto';
+  PROP_DECODE                 = 'decode';
 
   // URL and URLSearchParams properties
   PROP_HREF             = 'href';
