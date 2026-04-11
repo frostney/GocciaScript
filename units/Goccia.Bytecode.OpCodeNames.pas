@@ -85,6 +85,7 @@ begin
     OP_CLASS_ADD_METHOD_CONST:         Result := 'OP_CLASS_ADD_METHOD_CONST';
     OP_CLASS_SET_FIELD_INITIALIZER:    Result := 'OP_CLASS_SET_FIELD_INITIALIZER';
     OP_CLASS_DECLARE_PRIVATE_STATIC_CONST: Result := 'OP_CLASS_DECLARE_PRIVATE_STATIC_CONST';
+    OP_CLASS_EXEC_STATIC_BLOCK:        Result := 'OP_CLASS_EXEC_STATIC_BLOCK';
     OP_TO_PRIMITIVE:                   Result := 'OP_TO_PRIMITIVE';
     OP_UNPACK:                         Result := 'OP_UNPACK';
     OP_LOAD_NULL:                      Result := 'OP_LOAD_NULL';

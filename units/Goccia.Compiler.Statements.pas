@@ -1740,6 +1740,72 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
+// ES2022 §15.7.14 ClassStaticBlockDefinition
+procedure CompileStaticBlock(const ACtx: TGocciaCompilationContext;
+  const AClassReg: UInt8; const ABody: TGocciaBlockStatement);
+var
+  OldTemplate: TGocciaFunctionTemplate;
+  OldScope: TGocciaCompilerScope;
+  ChildTemplate: TGocciaFunctionTemplate;
+  ChildScope: TGocciaCompilerScope;
+  ChildCtx: TGocciaCompilationContext;
+  FuncIdx: UInt16;
+  FnReg: UInt8;
+  I: Integer;
+  Node: TGocciaASTNode;
+  Reg: UInt8;
+begin
+  OldTemplate := ACtx.Template;
+  OldScope := ACtx.Scope;
+
+  ChildTemplate := TGocciaFunctionTemplate.Create('<static block>');
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.ParameterCount := 0;
+  ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
+
+  ChildScope.DeclareLocal(KEYWORD_THIS, False);
+
+  ACtx.SwapState(ChildTemplate, ChildScope);
+
+  ChildCtx := ACtx;
+  ChildCtx.Template := ChildTemplate;
+  ChildCtx.Scope := ChildScope;
+
+  for I := 0 to ABody.Nodes.Count - 1 do
+  begin
+    Node := ABody.Nodes[I];
+    if Node is TGocciaStatement then
+      ACtx.CompileStatement(TGocciaStatement(Node))
+    else if Node is TGocciaExpression then
+    begin
+      Reg := ACtx.Scope.AllocateRegister;
+      ACtx.CompileExpression(TGocciaExpression(Node), Reg);
+      ACtx.Scope.FreeRegister;
+    end;
+  end;
+
+  EmitInstruction(ChildCtx, EncodeABx(OP_LOAD_UNDEFINED, 0, 0));
+  EmitInstruction(ChildCtx, EncodeABC(OP_RETURN, 0, 0, 0));
+
+  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+
+  for I := 0 to ChildScope.UpvalueCount - 1 do
+    ChildTemplate.AddUpvalueDescriptor(
+      ChildScope.GetUpvalue(I).IsLocal,
+      ChildScope.GetUpvalue(I).Index);
+
+  ACtx.SwapState(OldTemplate, OldScope);
+  ChildScope.Free;
+
+  FuncIdx := OldTemplate.AddFunction(ChildTemplate);
+  FnReg := ACtx.Scope.AllocateRegister;
+  EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, FnReg, FuncIdx));
+
+  EmitInstruction(ACtx, EncodeABC(OP_CLASS_EXEC_STATIC_BLOCK,
+    AClassReg, FnReg, 0));
+  ACtx.Scope.FreeRegister;
+end;
+
 function ElementDescriptor(const AKind: TGocciaClassElementKind;
   const AName: string; const AIsStatic, AIsPrivate: Boolean): string;
 var
@@ -1752,6 +1818,7 @@ begin
     cekSetter: KindChar := 's';
     cekField: KindChar := 'f';
     cekAccessor: KindChar := 'a';
+    cekStaticBlock: KindChar := 'b';
   else
     KindChar := 'm';
   end;
@@ -1936,7 +2003,7 @@ var
   GetterPair: TGocciaGetterExpressionMap.TKeyValuePair;
   SetterPair: TGocciaSetterExpressionMap.TKeyValuePair;
   StaticPropPair: TGocciaExpressionMap.TKeyValuePair;
-  LocalIdx, UpvalIdx: Integer;
+  I, LocalIdx, UpvalIdx: Integer;
   HasSuper: Boolean;
   PrivPrefix: string;
 begin
@@ -2068,6 +2135,11 @@ begin
   end;
 
   CompileComputedElements(ACtx, ClassReg, ClassDef);
+
+  // ES2022 §15.7.14: compile static blocks
+  for I := 0 to High(ClassDef.FElements) do
+    if ClassDef.FElements[I].Kind = cekStaticBlock then
+      CompileStaticBlock(ACtx, ClassReg, ClassDef.FElements[I].StaticBlockBody);
 
   if HasSuper then
     CompileDecoratorAndAccessorPass(ACtx, ClassReg, ClassDef, SuperReg)
@@ -2231,6 +2303,11 @@ begin
   end;
 
   CompileComputedElements(ACtx, ADest, ClassDef);
+
+  // ES2022 §15.7.14: compile static blocks
+  for I := 0 to High(ClassDef.FElements) do
+    if ClassDef.FElements[I].Kind = cekStaticBlock then
+      CompileStaticBlock(ACtx, ADest, ClassDef.FElements[I].StaticBlockBody);
 
   if HasSuper then
   begin

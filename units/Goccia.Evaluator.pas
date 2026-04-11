@@ -1741,6 +1741,20 @@ begin
       AClassExpression.Line, AClassExpression.Column);
 end;
 
+// ES2022 §15.7.14 ClassStaticBlockDefinition: execute static block body
+procedure ExecuteStaticBlock(const ABody: TGocciaBlockStatement;
+  const AContext: TGocciaEvaluationContext; const AClassValue: TGocciaClassValue);
+var
+  BlockScope: TGocciaClassInitScope;
+  BlockContext: TGocciaEvaluationContext;
+begin
+  BlockScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue);
+  BlockScope.ThisValue := AClassValue;
+  BlockContext := AContext;
+  BlockContext.Scope := BlockScope;
+  EvaluateStatements(ABody.Nodes, BlockContext);
+end;
+
 function EvaluateClassDefinition(const AClassDef: TGocciaClassDefinition; const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer): TGocciaClassValue;
 var
   SuperClass: TGocciaClassValue;
@@ -1989,6 +2003,14 @@ begin
 
       ClassValue.AddAutoAccessor(Elem.Name, AccessorBackingName, Elem.IsStatic);
     end;
+  end;
+
+  // ES2022 §15.7.14 ClassStaticBlockDefinition: execute static blocks with this = class
+  for I := 0 to High(AClassDef.FElements) do
+  begin
+    if AClassDef.FElements[I].Kind <> cekStaticBlock then
+      Continue;
+    ExecuteStaticBlock(AClassDef.FElements[I].StaticBlockBody, AContext, ClassValue);
   end;
 
   // TC39 proposal-decorators §3.2 ApplyDecoratorsToClassDefinition

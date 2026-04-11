@@ -90,6 +90,7 @@ class C {
 - Getters and setters.
 - Private fields and methods (`#field`).
 - Static properties.
+- Static blocks (`static { ... }`).
 - Inheritance with `extends` and `super`.
 - Decorators (see [Decorators](#decorators) below).
 
