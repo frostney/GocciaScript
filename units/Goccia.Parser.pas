@@ -2946,6 +2946,28 @@ begin
 
       IsStatic := Match(gttStatic);
 
+      // ES2022 §15.7.14 ClassStaticBlockDefinition: static { ... }
+      if IsStatic and Check(gttLeftBrace) then
+      begin
+        if Length(MemberDecorators) > 0 then
+          raise TGocciaSyntaxError.Create(
+            'Decorators cannot be applied to static blocks',
+            Peek.Line, Peek.Column, FFileName, FSourceLines,
+            SSuggestStaticBlockNoDecorators);
+        Consume(gttLeftBrace, 'Expected "{" after "static"',
+          SSuggestOpenBraceClassBody);
+        SetLength(Elements, Length(Elements) + 1);
+        Elements[High(Elements)].Kind := cekStaticBlock;
+        Elements[High(Elements)].Name := '';
+        Elements[High(Elements)].IsStatic := True;
+        Elements[High(Elements)].IsPrivate := False;
+        Elements[High(Elements)].IsComputed := False;
+        Elements[High(Elements)].ComputedKeyExpression := nil;
+        Elements[High(Elements)].Decorators := nil;
+        Elements[High(Elements)].StaticBlockBody := BlockStatement;
+        Continue;
+      end;
+
       while Check(gttIdentifier) and
         ((Peek.Lexeme = KEYWORD_PUBLIC) or (Peek.Lexeme = KEYWORD_PROTECTED) or (Peek.Lexeme = KEYWORD_PRIVATE) or
          (Peek.Lexeme = KEYWORD_READONLY) or (Peek.Lexeme = KEYWORD_OVERRIDE) or (Peek.Lexeme = KEYWORD_ABSTRACT)) do
@@ -3072,7 +3094,7 @@ begin
         ConsumeSemicolonOrASI('Expected ";" after property',
           SSuggestAddSemicolon);
 
-        if Length(MemberDecorators) > 0 then
+        if (Length(MemberDecorators) > 0) or IsStatic then
         begin
           SetLength(Elements, Length(Elements) + 1);
           Elements[High(Elements)].Kind := cekField;
@@ -3113,7 +3135,7 @@ begin
           Advance;
         PropertyValue := TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, Peek.Line, Peek.Column);
 
-        if Length(MemberDecorators) > 0 then
+        if (Length(MemberDecorators) > 0) or IsStatic then
         begin
           SetLength(Elements, Length(Elements) + 1);
           Elements[High(Elements)].Kind := cekField;

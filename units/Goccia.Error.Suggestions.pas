@@ -97,6 +97,7 @@ resourcestring
   SSuggestClassMemberSyntax = 'Class members can be methods, properties, or accessors. Type modifiers (public, private, readonly) are supported as comments';
   SSuggestClassMemberExpectedSyntax = 'Class members can be: methods name() {}, properties name = value, or typed declarations name: Type;';
   SSuggestDecoratorsOnlyClasses = 'Decorators can only be applied to class declarations or class elements';
+  SSuggestStaticBlockNoDecorators = 'Remove the decorator — static blocks cannot be decorated';
   SSuggestGetterNoParameters = 'Getters must have no parameters — remove the parameters';
   SSuggestSetterOneParameter = 'Setters take exactly one parameter: set name(value) { ... }';
   SSuggestProvideSetterParameterName = 'Provide a name for the setter parameter';

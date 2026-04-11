@@ -223,7 +223,8 @@ type
     cekGetter,
     cekSetter,
     cekField,
-    cekAccessor
+    cekAccessor,
+    cekStaticBlock
   );
 
   // TC39 proposal-decorators: unified class element with optional decorators
@@ -240,6 +241,7 @@ type
     GetterNode: TGocciaGetterExpression;
     SetterNode: TGocciaSetterExpression;
     FieldInitializer: TGocciaExpression;
+    StaticBlockBody: TGocciaBlockStatement;
     TypeAnnotation: string;
   end;
 
@@ -532,6 +534,8 @@ end;
   end;
 
   destructor TGocciaClassDefinition.Destroy;
+  var
+    I: Integer;
   begin
     FMethods.Free;
     FGetters.Free;
@@ -546,6 +550,9 @@ end;
       FPrivateMethods.Free;
     if Assigned(FPrivateStaticProperties) then
       FPrivateStaticProperties.Free;
+    for I := 0 to High(FElements) do
+      if (FElements[I].Kind = cekStaticBlock) and Assigned(FElements[I].StaticBlockBody) then
+        FElements[I].StaticBlockBody.Free;
     inherited;
   end;
 

@@ -4114,6 +4114,28 @@ begin
             GlobalName, TGocciaUndefinedLiteralValue.UndefinedValue);
       end;
 
+      // ES2022 §15.7.14: execute static block closure with this = class
+      OP_CLASS_EXEC_STATIC_BLOCK:
+      begin
+        if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaBytecodeFunctionValue) then
+          ExecuteClosureRegisters0(
+            TGocciaBytecodeFunctionValue(FRegisters[B].ObjectValue).FClosure,
+            FRegisters[A])
+        else if (FRegisters[B].Kind = grkObject) and
+                Assigned(FRegisters[B].ObjectValue) and
+                FRegisters[B].ObjectValue.IsCallable then
+        begin
+          CallArgs := AcquireArguments(0);
+          try
+            InvokeFunctionValue(RegisterToValue(FRegisters[B]),
+              CallArgs, RegisterToValue(FRegisters[A]));
+          finally
+            ReleaseArguments(CallArgs);
+          end;
+        end;
+      end;
+
       OP_GET_PROP_CONST:
         if (FRegisters[B].Kind = grkObject) and Assigned(FRegisters[B].ObjectValue) then
         begin
