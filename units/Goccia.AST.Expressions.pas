@@ -403,6 +403,11 @@ type
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
   end;
 
+  TGocciaImportMetaExpression = class(TGocciaExpression)
+  public
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+  end;
+
   TGocciaHoleExpression = class(TGocciaExpression)
   public
     constructor Create(const ALine, AColumn: Integer);
@@ -574,6 +579,7 @@ uses
   Goccia.Evaluator.Arithmetic,
   Goccia.Evaluator.Assignment,
   Goccia.GarbageCollector,
+  Goccia.ImportMeta,
   Goccia.RegExp.Runtime,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
@@ -1479,6 +1485,12 @@ begin
     AContext.OnError('super can only be used in a class method', Line, Column);
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
+end;
+
+// ES2026 §13.3.12.1 ImportMeta : import . meta
+function TGocciaImportMetaExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+begin
+  Result := GetOrCreateImportMeta(AContext.CurrentFilePath);
 end;
 
 function TGocciaHoleExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;

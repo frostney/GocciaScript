@@ -8,6 +8,7 @@ const
   // Module system
   KEYWORD_AS           = 'as';
   KEYWORD_FROM         = 'from';
+  KEYWORD_META         = 'meta';
 
   // Class bodies
   KEYWORD_STATIC       = 'static';

@@ -154,6 +154,8 @@ begin
   begin
     Goccia.Compiler.Expressions.CompileSuperAccess(Ctx, ADest);
   end
+  else if AExpr is TGocciaImportMetaExpression then
+    Goccia.Compiler.Expressions.CompileImportMeta(Ctx, ADest)
   else if AExpr is TGocciaPrivatePropertyCompoundAssignmentExpression then
     Goccia.Compiler.Expressions.CompilePrivatePropertyCompoundAssignment(Ctx,
       TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr), ADest)

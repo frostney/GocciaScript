@@ -61,7 +61,7 @@ In the current VM:
 
 - core instructions cover hot execution paths such as locals, arithmetic, comparisons, property/index access, calls, construction, iteration, and class/object setup
 - semantic instructions already include generic arithmetic and bitwise operations in `128..140`
-- module and async orchestration currently starts at `167` (`IMPORT`, `EXPORT`, `AWAIT`)
+- module and async orchestration currently starts at `167` (`IMPORT`, `EXPORT`, `AWAIT`, `IMPORT_META`)
 
 The current encoding helpers are defined in `Goccia.Bytecode.pas`:
 
@@ -86,7 +86,7 @@ Current instruction families:
 - object and array operations
 - class construction and member definition
 - calls, construction, iteration, globals, and string coercion
-- semantic-only imports/exports and await
+- semantic-only imports/exports, import.meta, and await
 
 Some opcode families intentionally use flags or mode operands instead of one opcode per syntax form. For example:
 

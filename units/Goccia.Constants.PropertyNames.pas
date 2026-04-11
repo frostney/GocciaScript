@@ -65,6 +65,8 @@ const
   PROP_BYTES_PER_ELEMENT = 'BYTES_PER_ELEMENT';
   PROP_FROM             = 'from';
   PROP_OF               = 'of';
+  PROP_URL              = 'url';
+  PROP_RESOLVE          = 'resolve';
   PROP_HAS_OWN_PROPERTY       = 'hasOwnProperty';
   PROP_IS_PROTOTYPE_OF        = 'isPrototypeOf';
   PROP_PROPERTY_IS_ENUMERABLE = 'propertyIsEnumerable';

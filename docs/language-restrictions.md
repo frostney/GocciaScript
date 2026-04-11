@@ -265,6 +265,19 @@ Warning: Wildcard re-exports (export * from ...) are not supported in GocciaScri
   --> script.js:2:1
 ```
 
+`import.meta` (ES2026 §13.3.12) is supported and provides per-module metadata. The `import.meta` object has a null prototype and is identity-stable — the same object is returned on every access within the same module. Two host-defined properties are available:
+
+- **`import.meta.url`** — a `file://` URL string for the current module's absolute path (e.g., `file:///Users/me/project/src/main.js`).
+- **`import.meta.resolve(specifier)`** — a synchronous function that resolves a module specifier relative to the current module's directory and returns the resolved `file://` URL string. Throws `TypeError` if called without arguments.
+
+```javascript
+// Access the current module's URL
+const currentUrl = import.meta.url;
+
+// Resolve a sibling module's path
+const helperUrl = import.meta.resolve("./helpers/math.js");
+```
+
 Dynamic `import()` is parsed as a normal call expression. Because there is no global `import` binding in GocciaScript, calling it currently fails at runtime with `ReferenceError` unless user code defines its own `import` identifier.
 
 ### Data Structures

@@ -1092,6 +1092,23 @@ begin
     Token := Previous;
     Result := TGocciaSuperExpression.Create(Token.Line, Token.Column);
   end
+  else if Match(gttImport) then
+  begin
+    // ES2026 §13.3.12 MetaProperty — import.meta
+    Token := Previous;
+    Consume(gttDot, 'Expected "." after "import" in expression context',
+      SSuggestImportMetaSyntax);
+    if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_META) then
+    begin
+      Advance;
+      Result := TGocciaImportMetaExpression.Create(Token.Line, Token.Column);
+    end
+    else
+      raise TGocciaSyntaxError.Create(
+        'The only valid meta property for import is "import.meta"',
+        Peek.Line, Peek.Column, FFileName, FSourceLines,
+        SSuggestImportMetaSyntax);
+  end
   else if Match(gttClass) then
   begin
     Token := Previous;
@@ -1894,6 +1911,8 @@ begin
     Result := ClassDeclaration
   else if Match(gttEnum) then
     Result := EnumDeclaration
+  else if Check(gttImport) and CheckNext(gttDot) then
+    Result := ExpressionStatement
   else if Match(gttImport) then
     Result := ImportDeclaration
   else if Match(gttExport) then

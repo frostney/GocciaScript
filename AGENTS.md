@@ -125,6 +125,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Proxy | `Goccia.Values.ProxyValue.pas` | ES2026 Proxy with all 13 handler traps and invariant enforcement |
 | Uint8Array encoding | `Goccia.Values.Uint8ArrayEncoding.pas` | Uint8Array Base64/Hex: `toBase64`, `fromBase64`, `toHex`, `fromHex`, `setFromBase64`, `setFromHex` |
 | FFI | `Goccia.FFI*.pas`, `Goccia.Values.FFI*.pas` | Foreign Function Interface for native shared libraries |
+| import.meta | `Goccia.ImportMeta.pas` | Per-module metadata object with `url` and `resolve()` (ES2026 §13.3.12) |
 
 **Bytecode design rules:**
 
@@ -443,7 +444,7 @@ See [docs/testing.md](docs/testing.md) for the complete testing guide.
 - **Secondary:** Pascal unit tests in `units/*.Test.pas`
 - **JS test framework:** `describe`/`test`/`expect` with async support, `.resolves`/`.rejects`, mock functions (`mock()`/`spyOn()`), lifecycle hooks, and Vitest-compatible matchers
 - **Key matchers:** `.toBe`, `.toEqual`, `.toContain`, `.toMatch`, `.toThrow(ErrorType)`, `.toHaveBeenCalledWith(...)`, plus `.not` negation
-- **Test directories:** Organized by feature under `tests/language/` (includes `async-await/` with top-level await, `for-of/` with top-level for-await-of) and `tests/built-ins/` (includes `Proxy/` with all 13 trap test files, `FFI/` with library loading and binding tests)
+- **Test directories:** Organized by feature under `tests/language/` (includes `async-await/` with top-level await, `for-of/` with top-level for-await-of, `modules/` with import.meta tests) and `tests/built-ins/` (includes `Proxy/` with all 13 trap test files, `FFI/` with library loading and binding tests)
 - **Pascal test framework:** Generic `Expect<T>(...).ToBe(...)` assertions. NaN checks: use `Value.ToNumberLiteral.IsNaN` (not `Math.IsNaN`)
 
 ## Build System

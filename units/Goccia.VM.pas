@@ -204,6 +204,7 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.Decorators,
   Goccia.GarbageCollector,
+  Goccia.ImportMeta,
   Goccia.Profiler,
   Goccia.Timeout,
   Goccia.Values.ClassHelper,
@@ -5141,6 +5142,13 @@ begin
         ExportBindingValue(
           Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue,
           GetRegister(A));
+
+      // ES2026 §13.3.12.1 — import.meta binds lexically to the defining module
+      OP_IMPORT_META:
+        if Assigned(Template.DebugInfo) and (Template.DebugInfo.SourceFile <> '') then
+          SetRegister(A, GetOrCreateImportMeta(Template.DebugInfo.SourceFile))
+        else
+          SetRegister(A, GetOrCreateImportMeta(FCurrentModuleSourcePath));
 
       OP_THROW:
         raise EGocciaBytecodeThrow.Create(GetRegister(A));
