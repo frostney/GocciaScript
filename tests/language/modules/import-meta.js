@@ -1,4 +1,5 @@
 import { childUrl, childMeta } from "./helpers/import-meta-child.js";
+import { getUrl } from "./helpers/import-meta-function.js";
 
 describe("import.meta", () => {
   test("import.meta is an object", () => {
@@ -85,5 +86,13 @@ describe("import.meta", () => {
 
   test("child module import.meta.url starts with file://", () => {
     expect(childUrl.startsWith("file://")).toBe(true);
+  });
+
+  test("exported function preserves lexical import.meta binding", () => {
+    // import.meta binds lexically: an exported function should report
+    // the defining module's URL, not the calling module's URL
+    const fnUrl = getUrl();
+    expect(fnUrl.includes("import-meta-function.js")).toBe(true);
+    expect(fnUrl).not.toBe(import.meta.url);
   });
 });

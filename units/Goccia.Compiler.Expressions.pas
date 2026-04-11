@@ -2448,6 +2448,7 @@ begin
   EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
 end;
 
+// ES2026 §13.3.12 MetaProperty — import.meta
 procedure CompileImportMeta(const ACtx: TGocciaCompilationContext;
   const ADest: UInt8);
 begin

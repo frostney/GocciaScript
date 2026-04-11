@@ -37,6 +37,8 @@ uses
 
 var
   ImportMetaCache: TOrderedStringMap<TGocciaObjectValue>;
+  PinnedObjects: array of TGCManagedObject;
+  PinnedCount: Integer;
 
 function FilePathToUrl(const AFilePath: string): string;
 var
@@ -112,6 +114,13 @@ begin
     TGarbageCollector.Instance.PinObject(MetaObject);
     TGarbageCollector.Instance.PinObject(ResolveHelper);
     TGarbageCollector.Instance.PinObject(TGCManagedObject(ResolveFunction));
+
+    if PinnedCount + 3 > Length(PinnedObjects) then
+      SetLength(PinnedObjects, PinnedCount * 2 + 8);
+    PinnedObjects[PinnedCount] := MetaObject;
+    PinnedObjects[PinnedCount + 1] := ResolveHelper;
+    PinnedObjects[PinnedCount + 2] := TGCManagedObject(ResolveFunction);
+    Inc(PinnedCount, 3);
   end;
 
   // ES2026 §13.3.12.1 step 4e: cache on module record
@@ -121,13 +130,15 @@ end;
 
 procedure ClearImportMetaCache;
 var
-  Pair: TOrderedStringMap<TGocciaObjectValue>.TKeyValuePair;
+  I: Integer;
 begin
   if Assigned(ImportMetaCache) then
   begin
     if Assigned(TGarbageCollector.Instance) then
-      for Pair in ImportMetaCache do
-        TGarbageCollector.Instance.UnpinObject(Pair.Value);
+      for I := 0 to PinnedCount - 1 do
+        TGarbageCollector.Instance.UnpinObject(PinnedObjects[I]);
+    SetLength(PinnedObjects, 0);
+    PinnedCount := 0;
     FreeAndNil(ImportMetaCache);
   end;
 end;
