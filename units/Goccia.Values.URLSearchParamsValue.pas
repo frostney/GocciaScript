@@ -103,6 +103,8 @@ implementation
 uses
   SysUtils,
 
+  StringBuffer,
+
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
@@ -204,13 +206,20 @@ end;
 function TGocciaURLSearchParamsValue.Serialize: string;
 var
   I: Integer;
+  Buffer: TStringBuffer;
 begin
-  Result := '';
+  if FList.Count = 0 then
+  begin
+    Result := '';
+    Exit;
+  end;
+  Buffer := TStringBuffer.Create(FList.Count * 16);
   for I := 0 to FList.Count - 1 do
   begin
-    if I > 0 then Result := Result + '&';
-    Result := Result + SerializeFormEncoded(FList[I].Name, FList[I].Value);
+    if I > 0 then Buffer.AppendChar('&');
+    Buffer.Append(SerializeFormEncoded(FList[I].Name, FList[I].Value));
   end;
+  Result := Buffer.ToString;
 end;
 
 // WHATWG URL §5.2 application/x-www-form-urlencoded parser
