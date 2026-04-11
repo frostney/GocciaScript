@@ -1698,10 +1698,7 @@ begin
   end;
 end;
 
-// Emit Object.defineProperty(AObjReg, propName, {value: AValueReg}) via standard call dispatch.
-// Omitting enumerable/writable/configurable in the descriptor defaults them all to false per spec,
-// making this the correct way to attach the non-enumerable .raw property on the template object
-// (ES2026 §13.2.8.3 step 8).
+// ES2026 §13.2.8.3 GetTemplateObject — step 8: DefinePropertyOrThrow(template, "raw", {...})
 procedure EmitDefineNonEnumerableProperty(const ACtx: TGocciaCompilationContext;
   const AObjReg, AValueReg: UInt8; const APropName: string);
 var
@@ -1747,9 +1744,7 @@ begin
   ACtx.Scope.FreeRegister; // GlobalObjReg
 end;
 
-// Emit Object.freeze(AReg) using existing OP_GET_GLOBAL / OP_GET_PROP_CONST / OP_CALL_METHOD.
-// No special opcode needed — Object.freeze is a regular built-in that already goes through
-// the VM's standard call dispatch.
+// ES2026 §13.2.8.3 GetTemplateObject — step 12: SetIntegrityLevel(template, frozen)
 procedure EmitObjectFreeze(const ACtx: TGocciaCompilationContext; const AReg: UInt8);
 var
   GlobalObjReg, FreezeReg, FreezeArgReg: UInt8;
@@ -1777,53 +1772,67 @@ begin
   ACtx.Scope.FreeRegister; // GlobalObjReg
 end;
 
-// ES2026 §13.3.11 Tagged Templates — bytecode compilation
-procedure CompileTaggedTemplate(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaTaggedTemplateExpression; const ADest: UInt8);
+// Resolves the tag callee into a register pair ready for OP_CALL or OP_CALL_METHOD.
+// For a member-expression tag (obj.method`...`):
+//   allocates [AObjReg, ABaseReg] in that order so the VM finds the receiver at BaseReg-1,
+//   compiles the object into AObjReg, and fetches the property into ABaseReg.
+// For any other tag expression: allocates only ABaseReg and compiles the callee into it.
+// AIsMethodCall tells the caller which opcode to emit and whether to free AObjReg afterward.
+procedure CompileTagCalleeRegisters(const ACtx: TGocciaCompilationContext;
+  const ATagExpr: TGocciaExpression;
+  out ABaseReg, AObjReg: UInt8;
+  out AIsMethodCall: Boolean);
 var
-  ObjReg, BaseReg, Arg0Reg, TempReg, PartReg: UInt8;
-  PropIdx: UInt16;
-  ArgCount, I: Integer;
   MemberExpr: TGocciaMemberExpression;
-  IsMethodCall: Boolean;
+  PropIdx: UInt16;
 begin
-  IsMethodCall := AExpr.Tag is TGocciaMemberExpression;
-  ArgCount := 1 + AExpr.Expressions.Count; // template object + substitution values
-  if ArgCount > High(UInt8) then
-    raise Exception.Create('Compiler error: too many tagged template substitutions (>254)');
-
-  if IsMethodCall then
+  AIsMethodCall := ATagExpr is TGocciaMemberExpression;
+  if AIsMethodCall then
   begin
-    MemberExpr := TGocciaMemberExpression(AExpr.Tag);
-    ObjReg := ACtx.Scope.AllocateRegister;
-    BaseReg := ACtx.Scope.AllocateRegister;
+    MemberExpr := TGocciaMemberExpression(ATagExpr);
+    AObjReg  := ACtx.Scope.AllocateRegister;
+    ABaseReg := ACtx.Scope.AllocateRegister;
 
-    ACtx.CompileExpression(MemberExpr.ObjectExpr, ObjReg);
+    ACtx.CompileExpression(MemberExpr.ObjectExpr, AObjReg);
     if MemberExpr.Computed then
     begin
-      ACtx.CompileExpression(MemberExpr.PropertyExpression, BaseReg);
-      EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, BaseReg, ObjReg, BaseReg));
+      ACtx.CompileExpression(MemberExpr.PropertyExpression, ABaseReg);
+      EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, ABaseReg, AObjReg, ABaseReg));
     end
     else
     begin
       PropIdx := ACtx.Template.AddConstantString(MemberExpr.PropertyName);
       if PropIdx > High(UInt8) then
         raise Exception.Create('Constant pool overflow');
-      EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, BaseReg, ObjReg, UInt8(PropIdx)));
+      EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, ABaseReg, AObjReg, UInt8(PropIdx)));
     end;
   end
   else
   begin
-    BaseReg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(AExpr.Tag, BaseReg);
-    ObjReg := 0; // unused
+    ABaseReg := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(ATagExpr, ABaseReg);
+    AObjReg := 0; // unused — caller must not free when AIsMethodCall = false
   end;
+end;
 
-  // Build the template object (first argument, Arg0Reg = BaseReg + 1)
+// ES2026 §13.3.11 TaggedTemplate
+procedure CompileTaggedTemplate(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaTaggedTemplateExpression; const ADest: UInt8);
+var
+  ObjReg, BaseReg, Arg0Reg, TempReg, PartReg: UInt8;
+  ArgCount, I: Integer;
+  IsMethodCall: Boolean;
+begin
+  ArgCount := 1 + AExpr.Expressions.Count; // template object + substitution values
+  if ArgCount > High(UInt8) then
+    raise Exception.Create('Compiler error: too many tagged template substitutions (>254)');
+
+  CompileTagCalleeRegisters(ACtx, AExpr.Tag, BaseReg, ObjReg, IsMethodCall);
+
+  // ES2026 §13.2.8.3 GetTemplateObject: build the frozen template object as arg0
   Arg0Reg := ACtx.Scope.AllocateRegister;
   TempReg := ACtx.Scope.AllocateRegister;
 
-  // Build raw array in TempReg
   EmitInstruction(ACtx, EncodeABC(OP_NEW_ARRAY, TempReg, 0, 0));
   for I := 0 to Length(AExpr.RawStrings) - 1 do
   begin
@@ -1835,7 +1844,6 @@ begin
   end;
   EmitObjectFreeze(ACtx, TempReg);
 
-  // Build cooked array in Arg0Reg
   EmitInstruction(ACtx, EncodeABC(OP_NEW_ARRAY, Arg0Reg, 0, 0));
   for I := 0 to Length(AExpr.CookedStrings) - 1 do
   begin
@@ -1850,25 +1858,21 @@ begin
   EmitDefineNonEnumerableProperty(ACtx, Arg0Reg, TempReg, PROP_RAW);
   EmitObjectFreeze(ACtx, Arg0Reg);
 
-  // Free TempReg (raw array no longer needed in a register)
-  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister; // TempReg — raw array referenced through .raw; no longer in a register
 
-  // Compile interpolation expressions into subsequent argument registers
+  // ES2026 §13.3.11 step 3: evaluate substitutions into argument registers
   for I := 0 to AExpr.Expressions.Count - 1 do
     ACtx.CompileExpression(AExpr.Expressions[I], ACtx.Scope.AllocateRegister);
 
-  // Emit the call
   if IsMethodCall then
     EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount), 0))
   else
     EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt8(ArgCount), 0));
 
-  // Free argument registers (expressions + Arg0Reg)
   for I := 0 to AExpr.Expressions.Count - 1 do
     ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister; // Arg0Reg
 
-  // Move result to destination
   if ADest <> BaseReg then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
 
