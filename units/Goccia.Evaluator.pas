@@ -2939,8 +2939,9 @@ begin
     try
       for I := 0 to Length(ATaggedTemplateExpression.CookedStrings) - 1 do
         CookedArray.Elements.Add(TGocciaStringLiteralValue.Create(ATaggedTemplateExpression.CookedStrings[I]));
-      // ES2026 §13.2.8.3 step 10: Set the raw property
-      CookedArray.AssignProperty(PROP_RAW, RawArray);
+      // ES2026 §13.2.8.3 step 8: Define raw as non-enumerable, non-writable, non-configurable
+      CookedArray.DefineProperty(PROP_RAW,
+        TGocciaPropertyDescriptorData.Create(RawArray, []));
       // ES2026 §13.2.8.3 step 12: Freeze the template object
       CookedArray.Freeze;
 

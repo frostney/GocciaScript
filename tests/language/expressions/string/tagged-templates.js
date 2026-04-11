@@ -55,6 +55,21 @@ describe("tagged templates", () => {
     expect(Object.isFrozen(templateObj.raw)).toBe(true);
   });
 
+  test("raw property is non-enumerable", () => {
+    // ES2026 §13.2.8.3 step 8: raw must be non-enumerable, non-writable, non-configurable
+    let templateObj;
+    const tag = (strings) => {
+      templateObj = strings;
+    };
+
+    tag`hello`;
+    expect(Object.keys(templateObj)).not.toContain("raw");
+    const desc = Object.getOwnPropertyDescriptor(templateObj, "raw");
+    expect(desc.enumerable).toBe(false);
+    expect(desc.writable).toBe(false);
+    expect(desc.configurable).toBe(false);
+  });
+
   test("template without interpolations", () => {
     const tag = (strings) => strings[0];
     expect(tag`hello world`).toBe("hello world");

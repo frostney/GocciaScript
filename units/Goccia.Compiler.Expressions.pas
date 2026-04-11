@@ -1698,6 +1698,55 @@ begin
   end;
 end;
 
+// Emit Object.defineProperty(AObjReg, propName, {value: AValueReg}) via standard call dispatch.
+// Omitting enumerable/writable/configurable in the descriptor defaults them all to false per spec,
+// making this the correct way to attach the non-enumerable .raw property on the template object
+// (ES2026 §13.2.8.3 step 8).
+procedure EmitDefineNonEnumerableProperty(const ACtx: TGocciaCompilationContext;
+  const AObjReg, AValueReg: UInt8; const APropName: string);
+var
+  GlobalObjReg, DefPropReg, ObjArgReg, NameArgReg, DescReg: UInt8;
+  ObjectIdx, DefPropIdx, ValuePropIdx, PropNameIdx: UInt16;
+begin
+  GlobalObjReg := ACtx.Scope.AllocateRegister;
+  DefPropReg   := ACtx.Scope.AllocateRegister;
+  ObjArgReg    := ACtx.Scope.AllocateRegister;
+  NameArgReg   := ACtx.Scope.AllocateRegister;
+  DescReg      := ACtx.Scope.AllocateRegister;
+
+  ObjectIdx   := ACtx.Template.AddConstantString(CONSTRUCTOR_OBJECT);
+  DefPropIdx  := ACtx.Template.AddConstantString('defineProperty');
+  PropNameIdx := ACtx.Template.AddConstantString(APropName);
+  ValuePropIdx := ACtx.Template.AddConstantString(PROP_VALUE);
+  if (ObjectIdx > High(UInt16)) or (DefPropIdx > High(UInt8)) or
+     (PropNameIdx > High(UInt16)) or (ValuePropIdx > High(UInt8)) then
+    raise Exception.Create('Constant pool overflow');
+
+  // Look up Object.defineProperty
+  EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, GlobalObjReg, ObjectIdx));
+  EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, DefPropReg, GlobalObjReg, UInt8(DefPropIdx)));
+
+  // Argument 1: the target object
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, ObjArgReg, AObjReg, 0));
+
+  // Argument 2: the property name string
+  EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, NameArgReg, PropNameIdx));
+
+  // Argument 3: the descriptor {value: AValueReg}
+  // Omitting enumerable/writable/configurable → all default to false per spec
+  EmitInstruction(ACtx, EncodeABC(OP_NEW_OBJECT, DescReg, 0, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, DescReg, UInt8(ValuePropIdx), AValueReg));
+
+  // Object.defineProperty(obj, propName, descriptor) — 3 args
+  EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, DefPropReg, 3, 0));
+
+  ACtx.Scope.FreeRegister; // DescReg
+  ACtx.Scope.FreeRegister; // NameArgReg
+  ACtx.Scope.FreeRegister; // ObjArgReg
+  ACtx.Scope.FreeRegister; // DefPropReg
+  ACtx.Scope.FreeRegister; // GlobalObjReg
+end;
+
 // Emit Object.freeze(AReg) using existing OP_GET_GLOBAL / OP_GET_PROP_CONST / OP_CALL_METHOD.
 // No special opcode needed — Object.freeze is a regular built-in that already goes through
 // the VM's standard call dispatch.
@@ -1733,13 +1782,15 @@ procedure CompileTaggedTemplate(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaTaggedTemplateExpression; const ADest: UInt8);
 var
   ObjReg, BaseReg, Arg0Reg, TempReg, PartReg: UInt8;
-  PropIdx, RawPropIdx: UInt16;
+  PropIdx: UInt16;
   ArgCount, I: Integer;
   MemberExpr: TGocciaMemberExpression;
   IsMethodCall: Boolean;
 begin
   IsMethodCall := AExpr.Tag is TGocciaMemberExpression;
   ArgCount := 1 + AExpr.Expressions.Count; // template object + substitution values
+  if ArgCount > High(UInt8) then
+    raise Exception.Create('Compiler error: too many tagged template substitutions (>254)');
 
   if IsMethodCall then
   begin
@@ -1795,11 +1846,8 @@ begin
     ACtx.Scope.FreeRegister;
   end;
 
-  // Set raw property on cooked array
-  RawPropIdx := ACtx.Template.AddConstantString(PROP_RAW);
-  if RawPropIdx > High(UInt8) then
-    raise Exception.Create('Constant pool overflow');
-  EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, Arg0Reg, UInt8(RawPropIdx), TempReg));
+  // ES2026 §13.2.8.3 step 8: define .raw as non-enumerable, non-writable, non-configurable
+  EmitDefineNonEnumerableProperty(ACtx, Arg0Reg, TempReg, PROP_RAW);
   EmitObjectFreeze(ACtx, Arg0Reg);
 
   // Free TempReg (raw array no longer needed in a register)
