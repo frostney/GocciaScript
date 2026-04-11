@@ -93,8 +93,9 @@ type
       const ALine, AColumn: Integer);
     destructor Destroy; override;
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
-    // Pins AValue in the GC and stores it as the call-site template object cache.
-    // Must only be called once (when FTemplateObject is nil).
+    // Update the call-site template object cache: no-op when AValue equals the
+    // current cached value; otherwise unpins the old value, pins AValue, and
+    // stores it.  Passing nil clears and unpins the cache.
     procedure SetCachedTemplateObject(const AValue: TGocciaValue);
     property Tag: TGocciaExpression read FTag;
     property CookedStrings: TGocciaTemplateStrings read FCookedStrings;
@@ -684,9 +685,7 @@ begin
   inherited;
 end;
 
-// ES2026 §13.2.8.3 GetTemplateObject — pin and cache the frozen template object
-// for this call site so that all future evaluations of this Parse Node return
-// the identical object reference.
+// ES2026 §13.2.8.3 GetTemplateObject(templateLiteral)
 procedure TGocciaTaggedTemplateExpression.SetCachedTemplateObject(const AValue: TGocciaValue);
 begin
   if AValue = FTemplateObject then
