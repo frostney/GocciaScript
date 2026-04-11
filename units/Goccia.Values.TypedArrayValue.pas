@@ -57,6 +57,7 @@ type
     procedure MarkReferences; override;
 
     class function BytesPerElement(const AKind: TGocciaTypedArrayKind): Integer;
+    class function IsFloatKind(const AKind: TGocciaTypedArrayKind): Boolean; inline;
     class function KindName(const AKind: TGocciaTypedArrayKind): string;
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
     class procedure SetSharedPrototypeParent(const AParent: TGocciaObjectValue);
@@ -149,6 +150,11 @@ begin
   else
     Result := 1;
   end;
+end;
+
+class function TGocciaTypedArrayValue.IsFloatKind(const AKind: TGocciaTypedArrayKind): Boolean;
+begin
+  Result := AKind in [takFloat16, takFloat32, takFloat64];
 end;
 
 class function TGocciaTypedArrayValue.KindName(const AKind: TGocciaTypedArrayKind): string;
@@ -342,7 +348,7 @@ var
 begin
   if ANum.IsNaN then
   begin
-    if FKind in [takFloat16, takFloat32, takFloat64] then
+    if IsFloatKind(FKind) then
     begin
       Offset := FByteOffset + AIndex * BytesPerElement(FKind);
       WriteFloatDirect(FBufferData, Offset, FKind, ANum.Value);
@@ -902,7 +908,7 @@ begin
   SortLen := TA.FLength;
 
   // For float kinds, partition NaN values to the end before sorting
-  IsFloat := TA.FKind in [takFloat16, takFloat32, takFloat64];
+  IsFloat := IsFloatKind(TA.FKind);
   if IsFloat and not HasCompare then
   begin
     NaNCount := 0;
@@ -989,7 +995,7 @@ begin
     StartIdx := 0;
   if SearchNum.IsInfinite then
   begin
-    if not (TA.FKind in [takFloat16, takFloat32, takFloat64]) then
+    if not (IsFloatKind(TA.FKind)) then
       Exit(TGocciaNumberLiteralValue.Create(-1));
     for I := StartIdx to TA.FLength - 1 do
       if Math.IsInfinite(TA.ReadElement(I)) and
@@ -1028,7 +1034,7 @@ begin
     StartIdx := TA.FLength - 1;
   if SearchNum.IsInfinite then
   begin
-    if not (TA.FKind in [takFloat16, takFloat32, takFloat64]) then
+    if not (IsFloatKind(TA.FKind)) then
       Exit(TGocciaNumberLiteralValue.Create(-1));
     for I := Min(StartIdx, TA.FLength - 1) downto 0 do
       if Math.IsInfinite(TA.ReadElement(I)) and
@@ -1066,7 +1072,7 @@ begin
   // SameValueZero: NaN === NaN for includes
   if SearchNum.IsNaN then
   begin
-    if TA.FKind in [takFloat16, takFloat32, takFloat64] then
+    if IsFloatKind(TA.FKind) then
       for I := StartIdx to TA.FLength - 1 do
         if Math.IsNaN(TA.ReadElement(I)) then
           Exit(TGocciaBooleanLiteralValue.TrueValue);
@@ -1074,7 +1080,7 @@ begin
   end;
   if SearchNum.IsInfinite then
   begin
-    if not (TA.FKind in [takFloat16, takFloat32, takFloat64]) then
+    if not (IsFloatKind(TA.FKind)) then
       Exit(TGocciaBooleanLiteralValue.FalseValue);
     for I := StartIdx to TA.FLength - 1 do
       if Math.IsInfinite(TA.ReadElement(I)) and
