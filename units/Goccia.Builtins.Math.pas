@@ -48,6 +48,7 @@ type
     function MathAsinh(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MathAtanh(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MathExpm1(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MathF16round(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MathFround(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MathHypot(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MathImul(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -68,6 +69,7 @@ uses
   Goccia.Arguments.Converter,
   Goccia.Arguments.Validator,
   Goccia.Constants.PropertyNames,
+  Goccia.Float16,
   Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
@@ -128,6 +130,7 @@ begin
     Members.AddMethod(MathAsinh, 1, gmkStaticMethod);
     Members.AddMethod(MathAtanh, 1, gmkStaticMethod);
     Members.AddMethod(MathExpm1, 1, gmkStaticMethod);
+    Members.AddMethod(MathF16round, 1, gmkStaticMethod);
     Members.AddMethod(MathFround, 1, gmkStaticMethod);
     Members.AddMethod(MathHypot, 2, gmkStaticMethod);
     Members.AddMethod(MathImul, 2, gmkStaticMethod);
@@ -824,6 +827,27 @@ begin
     Result := TGocciaNumberLiteralValue.InfinityValue
   else
     Result := TGocciaNumberLiteralValue.Create(Exp(NumberArg.Value) - 1.0);
+end;
+
+// ES2026 §21.3.2.17 Math.f16round ( x )
+function TGocciaMath.MathF16round(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  NumberArg: TGocciaNumberLiteralValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.f16round', ThrowError);
+
+  // Step 1: Let n be ? ToNumber(x).
+  NumberArg := AArgs.GetElement(0).ToNumberLiteral;
+  // Step 2: If n is NaN, return NaN. If n is ±∞ or ±0, return n.
+  if NumberArg.IsNaN then
+    Result := TGocciaNumberLiteralValue.NaNValue
+  else if NumberArg.IsInfinity then
+    Result := TGocciaNumberLiteralValue.InfinityValue
+  else if NumberArg.IsNegativeInfinity then
+    Result := TGocciaNumberLiteralValue.NegativeInfinityValue
+  // Step 3: Return the result of rounding n to the nearest float16 value.
+  else
+    Result := TGocciaNumberLiteralValue.Create(Float16ToDouble(DoubleToFloat16(NumberArg.Value)));
 end;
 
 // §21.3.2.17 Math.fround ( x )

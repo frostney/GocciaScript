@@ -31,6 +31,7 @@ const
   CONSTRUCTOR_UINT16_ARRAY         = 'Uint16Array';
   CONSTRUCTOR_INT32_ARRAY          = 'Int32Array';
   CONSTRUCTOR_UINT32_ARRAY         = 'Uint32Array';
+  CONSTRUCTOR_FLOAT16_ARRAY        = 'Float16Array';
   CONSTRUCTOR_FLOAT32_ARRAY        = 'Float32Array';
   CONSTRUCTOR_FLOAT64_ARRAY        = 'Float64Array';
 

@@ -21,7 +21,7 @@ type
     takInt8, takUint8, takUint8Clamped,
     takInt16, takUint16,
     takInt32, takUint32,
-    takFloat32, takFloat64
+    takFloat16, takFloat32, takFloat64
   );
 
   TGocciaTypedArrayValue = class(TGocciaInstanceValue)
@@ -57,6 +57,7 @@ type
     procedure MarkReferences; override;
 
     class function BytesPerElement(const AKind: TGocciaTypedArrayKind): Integer;
+    class function IsFloatKind(const AKind: TGocciaTypedArrayKind): Boolean; inline;
     class function KindName(const AKind: TGocciaTypedArrayKind): string;
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
     class procedure SetSharedPrototypeParent(const AParent: TGocciaObjectValue);
@@ -130,6 +131,7 @@ uses
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Float16,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -142,12 +144,17 @@ class function TGocciaTypedArrayValue.BytesPerElement(const AKind: TGocciaTypedA
 begin
   case AKind of
     takInt8, takUint8, takUint8Clamped: Result := 1;
-    takInt16, takUint16: Result := 2;
+    takInt16, takUint16, takFloat16: Result := 2;
     takInt32, takUint32, takFloat32: Result := 4;
     takFloat64: Result := 8;
   else
     Result := 1;
   end;
+end;
+
+class function TGocciaTypedArrayValue.IsFloatKind(const AKind: TGocciaTypedArrayKind): Boolean;
+begin
+  Result := AKind in [takFloat16, takFloat32, takFloat64];
 end;
 
 class function TGocciaTypedArrayValue.KindName(const AKind: TGocciaTypedArrayKind): string;
@@ -160,6 +167,7 @@ begin
     takUint16: Result := CONSTRUCTOR_UINT16_ARRAY;
     takInt32: Result := CONSTRUCTOR_INT32_ARRAY;
     takUint32: Result := CONSTRUCTOR_UINT32_ARRAY;
+    takFloat16: Result := CONSTRUCTOR_FLOAT16_ARRAY;
     takFloat32: Result := CONSTRUCTOR_FLOAT32_ARRAY;
     takFloat64: Result := CONSTRUCTOR_FLOAT64_ARRAY;
   else
@@ -215,6 +223,11 @@ begin
       Move(FBufferData[Offset], U32, 4);
       I64 := U32;
       Result := I64;
+    end;
+    takFloat16:
+    begin
+      Move(FBufferData[Offset], U16, 2);
+      Result := Float16ToDouble(U16);
     end;
     takFloat32:
     begin
@@ -288,6 +301,11 @@ begin
       U32 := LongWord(Trunc(AValue));
       Move(U32, FBufferData[Offset], 4);
     end;
+    takFloat16:
+    begin
+      U16 := DoubleToFloat16(AValue);
+      Move(U16, FBufferData[Offset], 2);
+    end;
     takFloat32:
     begin
       F32 := AValue;
@@ -305,9 +323,15 @@ procedure WriteFloatDirect(var AData: TBytes;
   const AOffset: Integer; const AKind: TGocciaTypedArrayKind;
   const AValue: Double);
 var
+  F16: Word;
   F32: Single;
 begin
   case AKind of
+    takFloat16:
+    begin
+      F16 := DoubleToFloat16(AValue);
+      Move(F16, AData[AOffset], 2);
+    end;
     takFloat32:
     begin
       F32 := AValue;
@@ -324,7 +348,7 @@ var
 begin
   if ANum.IsNaN then
   begin
-    if FKind in [takFloat32, takFloat64] then
+    if IsFloatKind(FKind) then
     begin
       Offset := FByteOffset + AIndex * BytesPerElement(FKind);
       WriteFloatDirect(FBufferData, Offset, FKind, ANum.Value);
@@ -336,7 +360,7 @@ begin
   begin
     case FKind of
       takUint8Clamped: WriteElement(AIndex, 255);
-      takFloat32, takFloat64:
+      takFloat16, takFloat32, takFloat64:
       begin
         Offset := FByteOffset + AIndex * BytesPerElement(FKind);
         WriteFloatDirect(FBufferData, Offset, FKind, ANum.Value);
@@ -348,7 +372,7 @@ begin
   else if ANum.IsNegativeInfinity then
   begin
     case FKind of
-      takFloat32, takFloat64:
+      takFloat16, takFloat32, takFloat64:
       begin
         Offset := FByteOffset + AIndex * BytesPerElement(FKind);
         WriteFloatDirect(FBufferData, Offset, FKind, ANum.Value);
@@ -884,7 +908,7 @@ begin
   SortLen := TA.FLength;
 
   // For float kinds, partition NaN values to the end before sorting
-  IsFloat := TA.FKind in [takFloat32, takFloat64];
+  IsFloat := IsFloatKind(TA.FKind);
   if IsFloat and not HasCompare then
   begin
     NaNCount := 0;
@@ -971,7 +995,7 @@ begin
     StartIdx := 0;
   if SearchNum.IsInfinite then
   begin
-    if not (TA.FKind in [takFloat32, takFloat64]) then
+    if not (IsFloatKind(TA.FKind)) then
       Exit(TGocciaNumberLiteralValue.Create(-1));
     for I := StartIdx to TA.FLength - 1 do
       if Math.IsInfinite(TA.ReadElement(I)) and
@@ -1010,7 +1034,7 @@ begin
     StartIdx := TA.FLength - 1;
   if SearchNum.IsInfinite then
   begin
-    if not (TA.FKind in [takFloat32, takFloat64]) then
+    if not (IsFloatKind(TA.FKind)) then
       Exit(TGocciaNumberLiteralValue.Create(-1));
     for I := Min(StartIdx, TA.FLength - 1) downto 0 do
       if Math.IsInfinite(TA.ReadElement(I)) and
@@ -1048,7 +1072,7 @@ begin
   // SameValueZero: NaN === NaN for includes
   if SearchNum.IsNaN then
   begin
-    if TA.FKind in [takFloat32, takFloat64] then
+    if IsFloatKind(TA.FKind) then
       for I := StartIdx to TA.FLength - 1 do
         if Math.IsNaN(TA.ReadElement(I)) then
           Exit(TGocciaBooleanLiteralValue.TrueValue);
@@ -1056,7 +1080,7 @@ begin
   end;
   if SearchNum.IsInfinite then
   begin
-    if not (TA.FKind in [takFloat32, takFloat64]) then
+    if not (IsFloatKind(TA.FKind)) then
       Exit(TGocciaBooleanLiteralValue.FalseValue);
     for I := StartIdx to TA.FLength - 1 do
       if Math.IsInfinite(TA.ReadElement(I)) and
