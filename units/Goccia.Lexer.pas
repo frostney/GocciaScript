@@ -470,10 +470,16 @@ begin
 end;
 
 procedure TGocciaLexer.ScanTemplate;
+const
+  TEMPLATE_RAW_SEPARATOR = #1;
 var
   SB: TStringBuffer;
+  RawSB: TStringBuffer;
+  C: Char;
+  RawStart, J: Integer;
 begin
   SB := TStringBuffer.Create;
+  RawSB := TStringBuffer.Create;
   while (Peek <> '`') and not IsAtEnd do
   begin
     if Peek = #13 then
@@ -483,29 +489,57 @@ begin
         Advance;
       Inc(FLine);
       FColumn := 0;
+      // ES2026 §12.9.6: TV and TRV both normalize CR and CRLF to LF
       SB.AppendChar(#10);
+      RawSB.AppendChar(#10);
     end
     else if Peek = #10 then
     begin
       Inc(FLine);
       FColumn := 0;
-      SB.AppendChar(Advance);
+      C := Advance;
+      SB.AppendChar(C);
+      RawSB.AppendChar(C);
     end
     else if Peek = '\' then
     begin
-      Advance;
+      Advance; // consume '\'
       if not IsAtEnd then
       begin
         case Peek of
-          '`': begin SB.AppendChar('`'); Advance; end;
-          '$': begin SB.AppendChar('$'); Advance; end;
+          '`':
+          begin
+            SB.AppendChar('`');
+            RawSB.AppendChar('\');
+            RawSB.AppendChar('`');
+            Advance;
+          end;
+          '$':
+          begin
+            SB.AppendChar('$');
+            RawSB.AppendChar('\');
+            RawSB.AppendChar('$');
+            Advance;
+          end;
         else
-          ProcessEscapeSequence(SB);
+          begin
+            // Capture raw escape sequence by tracking source positions
+            RawSB.AppendChar('\');
+            RawStart := FCurrent;
+            ProcessEscapeSequence(SB);
+            // Copy the raw source text consumed by the escape sequence
+            for J := RawStart to FCurrent - 1 do
+              RawSB.AppendChar(FSource[J]);
+          end;
         end;
       end;
     end
     else
-      SB.AppendChar(Advance);
+    begin
+      C := Advance;
+      SB.AppendChar(C);
+      RawSB.AppendChar(C);
+    end;
   end;
 
   if IsAtEnd then
@@ -513,7 +547,7 @@ begin
       FFileName, GetSourceLines, SSuggestCloseTemplate);
 
   Advance; // Closing backtick
-  AddToken(gttTemplate, SB.ToString);
+  AddToken(gttTemplate, SB.ToString + TEMPLATE_RAW_SEPARATOR + RawSB.ToString);
 end;
 
 procedure TGocciaLexer.ScanRegexLiteral;

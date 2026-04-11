@@ -93,3 +93,90 @@ suite("string methods", () => {
     },
   });
 });
+
+suite("tagged templates", () => {
+  // Baseline: identity tag — measures pure tag dispatch + template object construction cost
+  const identity = (strings) => strings[0];
+
+  bench("identity tag, no substitutions", {
+    run: () => {
+      const result = identity`hello world`;
+    },
+  });
+
+  // Compare tag dispatch against equivalent plain function call
+  const join = (strings, ...values) =>
+    strings.reduce((acc, str, i) => acc + str + (values[i] !== undefined ? String(values[i]) : ""), "");
+
+  bench("tag with 1 substitution", {
+    run: () => {
+      const x = 42;
+      const result = join`value: ${x}`;
+    },
+  });
+
+  bench("tag with 3 substitutions", {
+    run: () => {
+      const a = 1;
+      const b = 2;
+      const c = 3;
+      const result = join`${a} + ${b} = ${c}`;
+    },
+  });
+
+  bench("tag with 6 substitutions", {
+    run: () => {
+      const a = 1;
+      const b = 2;
+      const c = 3;
+      const d = 4;
+      const e = 5;
+      const f = 6;
+      const result = join`${a}-${b}-${c}-${d}-${e}-${f}`;
+    },
+  });
+
+  // String.raw: measures the built-in tag path
+  bench("String.raw, no substitutions", {
+    run: () => {
+      const result = String.raw`hello\nworld\ttab`;
+    },
+  });
+
+  bench("String.raw, 2 substitutions", {
+    run: () => {
+      const a = "foo";
+      const b = "bar";
+      const result = String.raw`prefix\t${a}\n${b}\tsuffix`;
+    },
+  });
+
+  // Accessing .raw inside tag — measures template object property access
+  const rawJoin = (strings) =>
+    strings.raw.reduce((acc, str, i) =>
+      acc + str + (i < strings.raw.length - 1 ? "|" : ""), "");
+
+  bench("tag accessing .raw array", {
+    run: () => {
+      const result = rawJoin`line\none\ttwo\\three`;
+    },
+  });
+
+  // Method as tag — measures this-binding through member expression tag
+  const formatter = {
+    prefix: "[LOG] ",
+    tag(strings, ...values) {
+      return this.prefix + strings.reduce(
+        (acc, str, i) => acc + str + (values[i] !== undefined ? String(values[i]) : ""), ""
+      );
+    },
+  };
+
+  bench("method as tag (this binding)", {
+    run: () => {
+      const level = "info";
+      const msg = "started";
+      const result = formatter.tag`${level}: ${msg}`;
+    },
+  });
+});

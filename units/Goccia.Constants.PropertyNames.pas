@@ -99,6 +99,7 @@ const
   PROP_FROM_HEX               = 'fromHex';
   PROP_SET_FROM_BASE64        = 'setFromBase64';
   PROP_SET_FROM_HEX           = 'setFromHex';
+  PROP_RAW                    = 'raw';
 
   // Proxy handler trap names
   PROP_HAS                       = 'has';

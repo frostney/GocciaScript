@@ -137,6 +137,9 @@ type
     function Exponentiation: TGocciaExpression;
     function Unary: TGocciaExpression;
     function Call: TGocciaExpression;
+    function ParseTaggedTemplate(const ATag: TGocciaExpression;
+      const ATemplateToken: TGocciaToken;
+      const ALine, AColumn: Integer): TGocciaTaggedTemplateExpression;
     function Primary: TGocciaExpression;
     function ArrayLiteral: TGocciaExpression;
     function ObjectLiteral: TGocciaExpression;
@@ -196,6 +199,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved,
+  Goccia.Lexer,
   Goccia.Values.Primitives;
 
 { TGocciaPrivateClassContext }
@@ -850,9 +854,167 @@ begin
       Result := TGocciaIncrementExpression.Create(Result, Previous.TokenType, False,
         Line, Column);
     end
+    // ES2026 §13.3.11 Tagged Templates: tag`...`
+    else if Check(gttTemplate) then
+    begin
+      Token := Advance;
+      Line := Token.Line;
+      Column := Token.Column;
+      Result := ParseTaggedTemplate(Result, Token, Line, Column);
+    end
     else
       Break;
   end;
+end;
+
+// ES2026 §13.3.11 Tagged Templates
+function TGocciaParser.ParseTaggedTemplate(const ATag: TGocciaExpression;
+  const ATemplateToken: TGocciaToken;
+  const ALine, AColumn: Integer): TGocciaTaggedTemplateExpression;
+const
+  TEMPLATE_RAW_SEPARATOR = #1;
+var
+  Lexeme, CookedFull, RawFull: string;
+  SepPos: Integer;
+  CookedStrings, RawStrings: TGocciaTemplateStrings;
+  Expressions: TObjectList<TGocciaExpression>;
+  I, Start, BraceCount, StringCount: Integer;
+  ExprText: string;
+  Lexer: TGocciaLexer;
+  Parser: TGocciaParser;
+  ProgramNode: TGocciaProgram;
+  Tokens: TObjectList<TGocciaToken>;
+  SourceLines: TStringList;
+  ParsedExpr: TGocciaExpression;
+begin
+  Lexeme := ATemplateToken.Lexeme;
+  SepPos := Pos(TEMPLATE_RAW_SEPARATOR, Lexeme);
+  if SepPos > 0 then
+  begin
+    CookedFull := Copy(Lexeme, 1, SepPos - 1);
+    RawFull := Copy(Lexeme, SepPos + 1, MaxInt);
+  end
+  else
+  begin
+    CookedFull := Lexeme;
+    RawFull := Lexeme;
+  end;
+
+  // Split both cooked and raw at ${...} boundaries
+  // Both share the same interpolation markers since ${...} is not affected by escapes
+  Expressions := TObjectList<TGocciaExpression>.Create(True);
+  SetLength(CookedStrings, 0);
+  SetLength(RawStrings, 0);
+  StringCount := 0;
+
+  I := 1;
+  Start := 1;
+  while I <= Length(CookedFull) do
+  begin
+    if (I < Length(CookedFull)) and (CookedFull[I] = '$') and (CookedFull[I + 1] = '{') then
+    begin
+      // Add the static string part before this interpolation
+      SetLength(CookedStrings, StringCount + 1);
+      CookedStrings[StringCount] := Copy(CookedFull, Start, I - Start);
+      Inc(StringCount);
+
+      Inc(I, 2); // skip '${'
+      Start := I;
+
+      // Find matching closing brace
+      BraceCount := 1;
+      while (I <= Length(CookedFull)) and (BraceCount > 0) do
+      begin
+        if CookedFull[I] = '{' then
+          Inc(BraceCount)
+        else if CookedFull[I] = '}' then
+          Dec(BraceCount);
+        if BraceCount > 0 then
+          Inc(I);
+      end;
+
+      ExprText := Trim(Copy(CookedFull, Start, I - Start));
+      Inc(I); // skip '}'
+      Start := I;
+
+      // Parse the interpolation expression
+      if ExprText <> '' then
+      begin
+        Lexer := TGocciaLexer.Create('(' + ExprText + ');', FFileName);
+        try
+          Tokens := Lexer.ScanTokens;
+          SourceLines := TStringList.Create;
+          SourceLines.Text := ExprText;
+          try
+            Parser := TGocciaParser.Create(Tokens, FFileName, SourceLines);
+            try
+              ProgramNode := Parser.ParseUnchecked;
+              try
+                ParsedExpr := nil;
+                if (ProgramNode.Body.Count > 0) and
+                   (ProgramNode.Body[0] is TGocciaExpressionStatement) then
+                  ParsedExpr := TGocciaExpressionStatement(ProgramNode.Body[0]).Expression;
+
+                if Assigned(ParsedExpr) then
+                  Expressions.Add(ParsedExpr);
+              finally
+                ProgramNode.Free;
+              end;
+            finally
+              Parser.Free;
+            end;
+          finally
+            SourceLines.Free;
+          end;
+        finally
+          Lexer.Free;
+        end;
+      end;
+    end
+    else
+      Inc(I);
+  end;
+
+  // Add the final static string part
+  SetLength(CookedStrings, StringCount + 1);
+  CookedStrings[StringCount] := Copy(CookedFull, Start, I - Start);
+
+  // Now split the raw string at the same boundaries
+  // We use the same brace-counting approach on RawFull since ${...} appears identically
+  SetLength(RawStrings, 0);
+  StringCount := 0;
+  I := 1;
+  Start := 1;
+  while I <= Length(RawFull) do
+  begin
+    if (I < Length(RawFull)) and (RawFull[I] = '$') and (RawFull[I + 1] = '{') then
+    begin
+      SetLength(RawStrings, StringCount + 1);
+      RawStrings[StringCount] := Copy(RawFull, Start, I - Start);
+      Inc(StringCount);
+
+      Inc(I, 2);
+      BraceCount := 1;
+      while (I <= Length(RawFull)) and (BraceCount > 0) do
+      begin
+        if RawFull[I] = '{' then
+          Inc(BraceCount)
+        else if RawFull[I] = '}' then
+          Dec(BraceCount);
+        if BraceCount > 0 then
+          Inc(I);
+      end;
+      Inc(I);
+      Start := I;
+    end
+    else
+      Inc(I);
+  end;
+  SetLength(RawStrings, StringCount + 1);
+  RawStrings[StringCount] := Copy(RawFull, Start, I - Start);
+
+  Result := TGocciaTaggedTemplateExpression.Create(ATag, CookedStrings, RawStrings,
+    Expressions, ALine, AColumn);
 end;
 
 function TGocciaParser.Primary: TGocciaExpression;
@@ -901,7 +1063,12 @@ begin
   else if Match(gttTemplate) then
   begin
     Token := Previous;
-    Result := TGocciaTemplateLiteralExpression.Create(Token.Lexeme, Token.Line, Token.Column);
+    SeparatorPos := Pos(#1, Token.Lexeme);
+    if SeparatorPos > 0 then
+      Result := TGocciaTemplateLiteralExpression.Create(
+        Copy(Token.Lexeme, 1, SeparatorPos - 1), Token.Line, Token.Column)
+    else
+      Result := TGocciaTemplateLiteralExpression.Create(Token.Lexeme, Token.Line, Token.Column);
   end
   else if Match(gttRegex) then
   begin

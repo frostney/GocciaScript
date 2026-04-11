@@ -5204,6 +5204,7 @@ begin
                   TGocciaArrayValue(FRegisters[A].ObjectValue).Elements.Add(
                     TGocciaArrayValue(DoneValue).GetElement(I));
             end;
+
         else
           raise Exception.CreateFmt('Unsupported collection helper mode: %d', [B]);
         end;

@@ -46,6 +46,8 @@ procedure CompileRegexLiteral(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaRegexLiteralExpression; const ADest: UInt8);
 procedure CompileTemplateWithInterpolation(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaTemplateWithInterpolationExpression; const ADest: UInt8);
+procedure CompileTaggedTemplate(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaTaggedTemplateExpression; const ADest: UInt8);
 procedure CompileNewExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaNewExpression; const ADest: UInt8);
 procedure CompileComputedPropertyAssignment(const ACtx: TGocciaCompilationContext;
@@ -1694,6 +1696,137 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_ADD, ADest, ADest, PartReg));
     ACtx.Scope.FreeRegister;
   end;
+end;
+
+// Emit Object.freeze(AReg) using existing OP_GET_GLOBAL / OP_GET_PROP_CONST / OP_CALL_METHOD.
+// No special opcode needed — Object.freeze is a regular built-in that already goes through
+// the VM's standard call dispatch.
+procedure EmitObjectFreeze(const ACtx: TGocciaCompilationContext; const AReg: UInt8);
+var
+  GlobalObjReg, FreezeReg, FreezeArgReg: UInt8;
+  ObjectIdx, FreezeIdx: UInt16;
+begin
+  GlobalObjReg := ACtx.Scope.AllocateRegister;
+  FreezeReg := ACtx.Scope.AllocateRegister;
+  FreezeArgReg := ACtx.Scope.AllocateRegister;
+
+  ObjectIdx := ACtx.Template.AddConstantString(CONSTRUCTOR_OBJECT);
+  FreezeIdx := ACtx.Template.AddConstantString('freeze');
+  if (ObjectIdx > High(UInt16)) or (FreezeIdx > High(UInt8)) then
+    raise Exception.Create('Constant pool overflow');
+
+  EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, GlobalObjReg, ObjectIdx));
+  EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, FreezeReg, GlobalObjReg, UInt8(FreezeIdx)));
+  // Move the target array into the argument register
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, FreezeArgReg, AReg, 0));
+  // OP_CALL_METHOD: function in FreezeReg, this = GlobalObjReg (FreezeReg - 1), 1 arg
+  EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, FreezeReg, 1, 0));
+  // Result lands in FreezeReg but we discard it; the array is frozen in place
+
+  ACtx.Scope.FreeRegister; // FreezeArgReg
+  ACtx.Scope.FreeRegister; // FreezeReg
+  ACtx.Scope.FreeRegister; // GlobalObjReg
+end;
+
+// ES2026 §13.3.11 Tagged Templates — bytecode compilation
+procedure CompileTaggedTemplate(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaTaggedTemplateExpression; const ADest: UInt8);
+var
+  ObjReg, BaseReg, Arg0Reg, TempReg, PartReg: UInt8;
+  PropIdx, RawPropIdx: UInt16;
+  ArgCount, I: Integer;
+  MemberExpr: TGocciaMemberExpression;
+  IsMethodCall: Boolean;
+begin
+  IsMethodCall := AExpr.Tag is TGocciaMemberExpression;
+  ArgCount := 1 + AExpr.Expressions.Count; // template object + substitution values
+
+  if IsMethodCall then
+  begin
+    MemberExpr := TGocciaMemberExpression(AExpr.Tag);
+    ObjReg := ACtx.Scope.AllocateRegister;
+    BaseReg := ACtx.Scope.AllocateRegister;
+
+    ACtx.CompileExpression(MemberExpr.ObjectExpr, ObjReg);
+    if MemberExpr.Computed then
+    begin
+      ACtx.CompileExpression(MemberExpr.PropertyExpression, BaseReg);
+      EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, BaseReg, ObjReg, BaseReg));
+    end
+    else
+    begin
+      PropIdx := ACtx.Template.AddConstantString(MemberExpr.PropertyName);
+      if PropIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow');
+      EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, BaseReg, ObjReg, UInt8(PropIdx)));
+    end;
+  end
+  else
+  begin
+    BaseReg := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(AExpr.Tag, BaseReg);
+    ObjReg := 0; // unused
+  end;
+
+  // Build the template object (first argument, Arg0Reg = BaseReg + 1)
+  Arg0Reg := ACtx.Scope.AllocateRegister;
+  TempReg := ACtx.Scope.AllocateRegister;
+
+  // Build raw array in TempReg
+  EmitInstruction(ACtx, EncodeABC(OP_NEW_ARRAY, TempReg, 0, 0));
+  for I := 0 to Length(AExpr.RawStrings) - 1 do
+  begin
+    PartReg := ACtx.Scope.AllocateRegister;
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, PartReg,
+      ACtx.Template.AddConstantString(AExpr.RawStrings[I])));
+    EmitInstruction(ACtx, EncodeABC(OP_ARRAY_PUSH, TempReg, PartReg, 0));
+    ACtx.Scope.FreeRegister;
+  end;
+  EmitObjectFreeze(ACtx, TempReg);
+
+  // Build cooked array in Arg0Reg
+  EmitInstruction(ACtx, EncodeABC(OP_NEW_ARRAY, Arg0Reg, 0, 0));
+  for I := 0 to Length(AExpr.CookedStrings) - 1 do
+  begin
+    PartReg := ACtx.Scope.AllocateRegister;
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, PartReg,
+      ACtx.Template.AddConstantString(AExpr.CookedStrings[I])));
+    EmitInstruction(ACtx, EncodeABC(OP_ARRAY_PUSH, Arg0Reg, PartReg, 0));
+    ACtx.Scope.FreeRegister;
+  end;
+
+  // Set raw property on cooked array
+  RawPropIdx := ACtx.Template.AddConstantString(PROP_RAW);
+  if RawPropIdx > High(UInt8) then
+    raise Exception.Create('Constant pool overflow');
+  EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, Arg0Reg, UInt8(RawPropIdx), TempReg));
+  EmitObjectFreeze(ACtx, Arg0Reg);
+
+  // Free TempReg (raw array no longer needed in a register)
+  ACtx.Scope.FreeRegister;
+
+  // Compile interpolation expressions into subsequent argument registers
+  for I := 0 to AExpr.Expressions.Count - 1 do
+    ACtx.CompileExpression(AExpr.Expressions[I], ACtx.Scope.AllocateRegister);
+
+  // Emit the call
+  if IsMethodCall then
+    EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount), 0))
+  else
+    EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt8(ArgCount), 0));
+
+  // Free argument registers (expressions + Arg0Reg)
+  for I := 0 to AExpr.Expressions.Count - 1 do
+    ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister; // Arg0Reg
+
+  // Move result to destination
+  if ADest <> BaseReg then
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+
+  ACtx.Scope.FreeRegister; // BaseReg
+  if IsMethodCall then
+    ACtx.Scope.FreeRegister; // ObjReg
 end;
 
 procedure CompileNewExpression(const ACtx: TGocciaCompilationContext;
