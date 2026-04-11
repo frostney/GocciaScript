@@ -122,7 +122,7 @@ end;
 procedure TGocciaBytecodeWriter.WriteFunctionTemplate(
   const AProto: TGocciaFunctionTemplate);
 var
-  I: Integer;
+  I, J: Integer;
   Constant: TGocciaBytecodeConstant;
   Descriptor: TGocciaUpvalueDescriptor;
   Handler: TGocciaExceptionHandler;
@@ -152,6 +152,16 @@ begin
         WriteDouble(Constant.FloatValue);
       bckString:
         WriteString(Constant.StringValue);
+      bckTemplateObject:
+      begin
+        // Serialise cooked and raw string arrays; CachedValue is runtime-only
+        WriteUInt16(UInt16(Length(Constant.CookedStrings)));
+        for J := 0 to Length(Constant.CookedStrings) - 1 do
+          WriteString(Constant.CookedStrings[J]);
+        WriteUInt16(UInt16(Length(Constant.RawStrings)));
+        for J := 0 to Length(Constant.RawStrings) - 1 do
+          WriteString(Constant.RawStrings[J]);
+      end;
     end;
   end;
 
@@ -307,13 +317,14 @@ var
   Name: string;
   MaxRegs, ParamCount, UpvalueCount, LocalTypeCount, LocalStrictCount: UInt8;
   CodeCount: UInt32;
-  ConstCount, FuncCount, HandlerCount: UInt16;
-  I: Integer;
+  ConstCount, FuncCount, HandlerCount, StrCount: UInt16;
+  I, J: Integer;
   ConstKind: UInt8;
   HasDebug: Boolean;
   DebugInfo: TGocciaDebugInfo;
   SourceFile: string;
   LineMapCount, LocalCount: UInt32;
+  CookedStrings, RawStrings: TGocciaBytecodeStringArray;
 begin
   Name := ReadString;
   MaxRegs := ReadUInt8;
@@ -344,6 +355,18 @@ begin
       bckInteger: Result.AddConstantInteger(ReadInt64);
       bckFloat:   Result.AddConstantFloat(ReadDouble);
       bckString:  Result.AddConstantString(ReadString);
+      bckTemplateObject:
+      begin
+        StrCount := ReadUInt16;
+        SetLength(CookedStrings, StrCount);
+        for J := 0 to StrCount - 1 do
+          CookedStrings[J] := ReadString;
+        StrCount := ReadUInt16;
+        SetLength(RawStrings, StrCount);
+        for J := 0 to StrCount - 1 do
+          RawStrings[J] := ReadString;
+        Result.AddConstantTemplateObject(CookedStrings, RawStrings);
+      end;
     end;
   end;
 

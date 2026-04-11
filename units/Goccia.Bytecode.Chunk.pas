@@ -18,14 +18,24 @@ type
     bckFalse,
     bckInteger,
     bckFloat,
-    bckString
+    bckString,
+    // ES2026 §13.2.8.3: lazily-built frozen template object, cached per call site.
+    // Replaces the per-call OP_NEW_ARRAY + OP_FREEZE build sequence with a single
+    // OP_LOAD_CONST.  CookedStrings/RawStrings are serialised; CachedValue is
+    // runtime-only (starts nil, populated by the VM on first execution).
+    // IntValue stores the cache slot index in TGocciaFunctionTemplate.
+    bckTemplateObject
   );
+
+  TGocciaBytecodeStringArray = array of string;
 
   TGocciaBytecodeConstant = record
     Kind: TGocciaBytecodeConstantKind;
     IntValue: Int64;
     FloatValue: Double;
     StringValue: string;
+    CookedStrings: TGocciaBytecodeStringArray;  // for bckTemplateObject
+    RawStrings: TGocciaBytecodeStringArray;     // for bckTemplateObject
   end;
 
   TGocciaUpvalueDescriptor = record
@@ -75,6 +85,10 @@ type
     FTypeCheckPreambleSize: UInt8;
     FProfileIndex: Integer;
     FStringConstantIndex: TOrderedStringMap<UInt16>;
+    // Runtime-only cache for bckTemplateObject constants.  Indexed by the slot
+    // number stored in the constant's IntValue field.  Not serialised to .gbc.
+    FTemplateObjectCaches: array of TObject;  // TGocciaValue — typed as TObject to keep GC import out of interface
+    FTemplateObjectCacheCount: Integer;
     function GetFunctionCount: Integer;
   public
     constructor Create(const AName: string);
@@ -87,6 +101,12 @@ type
     function AddConstantInteger(const AValue: Int64): UInt16;
     function AddConstantFloat(const AValue: Double): UInt16;
     function AddConstantString(const AValue: string): UInt16;
+    // ES2026 §13.2.8.3: add a bckTemplateObject constant that the VM will lazily
+    // build and cache on first execution.  Each call site gets its own entry;
+    // no deduplication is performed.
+    function AddConstantTemplateObject(const ACookedStrings, ARawStrings: array of string): UInt16;
+    function GetTemplateObjectCache(const ASlot: Integer): TObject;
+    procedure SetTemplateObjectCache(const ASlot: Integer; const AValue: TObject);
     function AddFunction(const AFunction: TGocciaFunctionTemplate): UInt16;
     procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt8);
     procedure AddExceptionHandler(const ATryStart, ATryEnd, ACatchTarget,
@@ -283,6 +303,51 @@ begin
   Result := UInt16(FConstantCount);
   FStringConstantIndex.Add(AValue, Result);
   Inc(FConstantCount);
+end;
+
+// ES2026 §13.2.8.3 GetTemplateObject — register a bckTemplateObject constant.
+// The VM will build, freeze, and pin the template object on first execution of
+// the corresponding OP_LOAD_CONST instruction, then reuse it for all subsequent
+// executions of the same Parse Node.
+function TGocciaFunctionTemplate.AddConstantTemplateObject(
+  const ACookedStrings, ARawStrings: array of string): UInt16;
+var
+  K: Integer;
+begin
+  if FConstantCount > High(UInt16) then
+    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+  if FConstantCount >= Length(FConstants) then
+    SetLength(FConstants, FConstantCount * 2 + 8);
+  FConstants[FConstantCount].Kind := bckTemplateObject;
+  // IntValue holds the runtime cache slot index in FTemplateObjectCaches
+  FConstants[FConstantCount].IntValue := FTemplateObjectCacheCount;
+  SetLength(FConstants[FConstantCount].CookedStrings, Length(ACookedStrings));
+  for K := 0 to High(ACookedStrings) do
+    FConstants[FConstantCount].CookedStrings[K] := ACookedStrings[K];
+  SetLength(FConstants[FConstantCount].RawStrings, Length(ARawStrings));
+  for K := 0 to High(ARawStrings) do
+    FConstants[FConstantCount].RawStrings[K] := ARawStrings[K];
+  // Grow the runtime cache; the new slot starts nil (built on first VM execution)
+  if FTemplateObjectCacheCount >= Length(FTemplateObjectCaches) then
+    SetLength(FTemplateObjectCaches, FTemplateObjectCacheCount * 2 + 4);
+  Inc(FTemplateObjectCacheCount);
+  Result := UInt16(FConstantCount);
+  Inc(FConstantCount);
+end;
+
+function TGocciaFunctionTemplate.GetTemplateObjectCache(const ASlot: Integer): TObject;
+begin
+  if (ASlot >= 0) and (ASlot < FTemplateObjectCacheCount) then
+    Result := FTemplateObjectCaches[ASlot]
+  else
+    Result := nil;
+end;
+
+procedure TGocciaFunctionTemplate.SetTemplateObjectCache(const ASlot: Integer;
+  const AValue: TObject);
+begin
+  if (ASlot >= 0) and (ASlot < FTemplateObjectCacheCount) then
+    FTemplateObjectCaches[ASlot] := AValue;
 end;
 
 function TGocciaFunctionTemplate.AddFunction(
