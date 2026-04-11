@@ -131,7 +131,7 @@ See [Adding a New Built-in Type](adding-built-in-types.md) for the complete step
 | `Math.asinh(x)` | Inverse hyperbolic sine |
 | `Math.atanh(x)` | Inverse hyperbolic tangent |
 | `Math.expm1(x)` | e^x - 1 (precise for small x) |
-| `Math.f16round(x)` | Nearest 16-bit float (ES2025) |
+| `Math.f16round(x)` | Nearest 16-bit float |
 | `Math.fround(x)` | Nearest 32-bit float |
 | `Math.hypot(x, y)` | Square root of sum of squares |
 | `Math.imul(a, b)` | 32-bit integer multiplication |
@@ -950,7 +950,7 @@ TypedArrays provide array-like views over ArrayBuffer data with fixed element ty
 | `Uint16Array` | 2 bytes | 0 to 65535 |
 | `Int32Array` | 4 bytes | -2147483648 to 2147483647 |
 | `Uint32Array` | 4 bytes | 0 to 4294967295 |
-| `Float16Array` | 2 bytes | IEEE 754 half-precision (ES2025) |
+| `Float16Array` | 2 bytes | IEEE 754 half-precision |
 | `Float32Array` | 4 bytes | IEEE 754 single-precision |
 | `Float64Array` | 8 bytes | IEEE 754 double-precision |
 
