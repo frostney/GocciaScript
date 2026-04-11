@@ -170,9 +170,10 @@ begin
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddNamedMethod(PROP_FOR_EACH, URLSearchParamsForEach, 1,
         gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      // WHATWG URLSearchParams: size is a non-enumerable prototype accessor
       Members.AddAccessor(PROP_SIZE,
         URLSearchParamsSizeGetter, nil,
-        [pfConfigurable, pfEnumerable]);
+        [pfConfigurable]);
       Members.AddSymbolMethod(
         TGocciaSymbolValue.WellKnownIterator,
         '[Symbol.iterator]',
