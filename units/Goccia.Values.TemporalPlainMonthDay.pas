@@ -50,6 +50,7 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.PropertyNames,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -94,10 +95,10 @@ begin
   else if AValue is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(AValue);
-    VDay := Obj.GetProperty('day');
+    VDay := Obj.GetProperty(PROP_DAY);
     if (VDay = nil) or (VDay is TGocciaUndefinedLiteralValue) then
       ThrowTypeError(AMethod + ' requires day property');
-    VMonthCode := Obj.GetProperty('monthCode');
+    VMonthCode := Obj.GetProperty(PROP_MONTH_CODE);
     if Assigned(VMonthCode) and not (VMonthCode is TGocciaUndefinedLiteralValue) then
     begin
       MonthCodeStr := VMonthCode.ToStringLiteral.Value;
@@ -105,10 +106,15 @@ begin
         ThrowTypeError('Invalid monthCode for ' + AMethod);
       if not TryStrToInt(Copy(MonthCodeStr, 2, Length(MonthCodeStr) - 1), MonthPart) then
         ThrowTypeError('Invalid monthCode for ' + AMethod);
+      // Validate month/monthCode consistency when both are provided
+      V := Obj.GetProperty(PROP_MONTH);
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+        if Trunc(V.ToNumberLiteral.Value) <> MonthPart then
+          ThrowRangeError('month and monthCode must match in ' + AMethod);
     end
     else
     begin
-      V := Obj.GetProperty('month');
+      V := Obj.GetProperty(PROP_MONTH);
       if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
         MonthPart := Trunc(V.ToNumberLiteral.Value)
       else
@@ -154,9 +160,9 @@ begin
   begin
     Members := TGocciaMemberCollection.Create;
     try
-      Members.AddAccessor('calendarId', GetCalendarId, nil, [pfConfigurable]);
-      Members.AddAccessor('monthCode', GetMonthCode, nil, [pfConfigurable]);
-      Members.AddAccessor('day', GetDay, nil, [pfConfigurable]);
+      Members.AddAccessor(PROP_CALENDAR_ID, GetCalendarId, nil, [pfConfigurable]);
+      Members.AddAccessor(PROP_MONTH_CODE, GetMonthCode, nil, [pfConfigurable]);
+      Members.AddAccessor(PROP_DAY, GetDay, nil, [pfConfigurable]);
       Members.AddMethod(MonthDayWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(MonthDayEquals, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(MonthDayToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -219,7 +225,7 @@ var
   var
     Val: TGocciaValue;
   begin
-    Val := Obj.GetProperty('day');
+    Val := Obj.GetProperty(PROP_DAY);
     if (Val = nil) or (Val is TGocciaUndefinedLiteralValue) then
       Result := ADefault
     else
@@ -234,7 +240,7 @@ begin
   Obj := TGocciaObjectValue(V);
 
   NewMonth := MD.FMonth;
-  V := Obj.GetProperty('monthCode');
+  V := Obj.GetProperty(PROP_MONTH_CODE);
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
   begin
     MonthCodeStr := V.ToStringLiteral.Value;
@@ -242,10 +248,15 @@ begin
       ThrowTypeError('Invalid monthCode in PlainMonthDay.prototype.with');
     if not TryStrToInt(Copy(MonthCodeStr, 2, Length(MonthCodeStr) - 1), NewMonth) then
       ThrowTypeError('Invalid monthCode in PlainMonthDay.prototype.with');
+    // Validate month/monthCode consistency when both are provided
+    V := Obj.GetProperty(PROP_MONTH);
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+      if Trunc(V.ToNumberLiteral.Value) <> NewMonth then
+        ThrowRangeError('month and monthCode must match in PlainMonthDay.prototype.with');
   end
   else
   begin
-    V := Obj.GetProperty('month');
+    V := Obj.GetProperty(PROP_MONTH);
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
       NewMonth := Trunc(V.ToNumberLiteral.Value);
   end;
@@ -307,7 +318,7 @@ begin
   if not (Arg is TGocciaObjectValue) then
     ThrowTypeError('PlainMonthDay.prototype.toPlainDate requires an object with a year property');
   Obj := TGocciaObjectValue(Arg);
-  V := Obj.GetProperty('year');
+  V := Obj.GetProperty(PROP_YEAR);
   if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
     ThrowTypeError('PlainMonthDay.prototype.toPlainDate requires an object with a year property');
 

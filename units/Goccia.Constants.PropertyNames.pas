@@ -107,6 +107,13 @@ const
   PROP_SET_FROM_HEX           = 'setFromHex';
   PROP_RAW                    = 'raw';
 
+  // Temporal property names
+  PROP_YEAR                   = 'year';
+  PROP_MONTH                  = 'month';
+  PROP_MONTH_CODE             = 'monthCode';
+  PROP_DAY                    = 'day';
+  PROP_CALENDAR_ID            = 'calendarId';
+
   // Proxy handler trap names
   PROP_HAS                       = 'has';
   PROP_DELETE_PROPERTY            = 'deleteProperty';

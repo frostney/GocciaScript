@@ -18,4 +18,9 @@ describe.runIf(isTemporal)("Temporal.PlainMonthDay.prototype.equals", () => {
     const md = new Temporal.PlainMonthDay(7, 16);
     expect(md.equals({ month: 7, day: 16 })).toBe(true);
   });
+
+  test("equals throws on conflicting month and monthCode", () => {
+    const md = new Temporal.PlainMonthDay(7, 16);
+    expect(() => md.equals({ monthCode: "M07", month: 8, day: 16 })).toThrow();
+  });
 });
