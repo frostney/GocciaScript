@@ -5335,6 +5335,17 @@ begin
               else
                 SetRegister(A, E.Value);
             end;
+            on E: Exception do
+            begin
+              LeftValue := CreateErrorObject(ERROR_NAME, E.Message);
+              RightValue := RegisterToValue(FRegisters[A]);
+              if Assigned(RightValue) and
+                 not (RightValue is TGocciaNullLiteralValue) and
+                 not (RightValue is TGocciaUndefinedLiteralValue) then
+                SetRegister(A, CreateSuppressedErrorObject(LeftValue, RightValue))
+              else
+                SetRegister(A, LeftValue);
+            end;
           end;
         end;
       end;

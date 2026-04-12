@@ -1517,7 +1517,7 @@ begin
     if (Value is TGocciaUndefinedLiteralValue) or (Value is TGocciaNullLiteralValue) then
     begin
       // Bind the variable but don't track for disposal
-      AContext.Scope.DefineFromToken(AUsingDeclaration.Variables[I].Name, Value, gttConst);
+      AContext.Scope.DefineLexicalBinding(AUsingDeclaration.Variables[I].Name, Value, dtConst);
 
       // For await using with null/undefined, still record to ensure an await point
       if Hint = dhAsyncDispose then
@@ -1536,7 +1536,7 @@ begin
       end;
 
       // Bind the variable as const (using bindings are not reassignable)
-      AContext.Scope.DefineFromToken(AUsingDeclaration.Variables[I].Name, Value, gttConst);
+      AContext.Scope.DefineLexicalBinding(AUsingDeclaration.Variables[I].Name, Value, dtConst);
 
       // Track for disposal at block exit
       Tracker.AddResource(Value, DisposeMethod, Hint);

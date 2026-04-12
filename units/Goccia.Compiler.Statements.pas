@@ -654,7 +654,7 @@ var
   SavedResourceBase, ResourceCount: Integer;
   CatchReg, ErrorReg: UInt8;
   HandlerJump, EndJump, NullishJump: Integer;
-  SavedResources: array[0..63] of TUsingResourceEntry;
+  SavedResources: array of TUsingResourceEntry;
 begin
   // Check if this block contains any using declarations
   HasUsing := False;
@@ -724,6 +724,7 @@ begin
 
   // Collect resources registered by using declarations in this block
   ResourceCount := GUsingResources.Count - SavedResourceBase;
+  SetLength(SavedResources, ResourceCount);
   for I := 0 to ResourceCount - 1 do
     SavedResources[I] := GUsingResources[SavedResourceBase + I];
 
@@ -755,6 +756,10 @@ begin
   EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
 
   PatchJumpTarget(ACtx, EndJump);
+
+  // Free dispose method registers (in reverse order of allocation)
+  for I := ResourceCount - 1 downto 0 do
+    ACtx.Scope.FreeRegister;
 
   // Free exception handling registers
   ACtx.Scope.FreeRegister; // ErrorReg
