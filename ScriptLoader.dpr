@@ -162,22 +162,27 @@ function CompileSource(const ASource: TStringList; const AFileName: string;
 var
   ProgramNode: TGocciaProgram;
   Compiler: TGocciaCompiler;
+  CompiledModule: TGocciaBytecodeModule;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
   SourceMap: TGocciaSourceMap;
 begin
+  CompiledModule := nil;
   ProgramNode := ParseSource(ASource, AFileName, APreprocessors, ASuppressWarnings,
     LexTimeNanoseconds, ParseTimeNanoseconds, SourceMap);
   try
     Compiler := TGocciaCompiler.Create(AFileName);
     try
-      Result := Compiler.Compile(ProgramNode);
+      CompiledModule := Compiler.Compile(ProgramNode);
       WriteSourceMapIfEnabled(SourceMap, AFileName);
+      Result := CompiledModule;
+      CompiledModule := nil;
     finally
       Compiler.Free;
     end;
   finally
     ProgramNode.Free;
     SourceMap.Free;
+    CompiledModule.Free;
   end;
 end;
 
@@ -310,14 +315,14 @@ begin
       ScriptResult := Engine.Execute;
     finally
       ClearExecutionTimeout;
-    end;
-    SourceMap := Engine.TakeLastSourceMap;
-    try
-      if Assigned(SourceMap) and Assigned(ASource) then
-        SourceMap.SetSourceContent(0, StringListToLFText(ASource));
-      WriteSourceMapIfEnabled(SourceMap, AFileName);
-    finally
-      SourceMap.Free;
+      SourceMap := Engine.TakeLastSourceMap;
+      try
+        if Assigned(SourceMap) and Assigned(ASource) then
+          SourceMap.SetSourceContent(0, StringListToLFText(ASource));
+        WriteSourceMapIfEnabled(SourceMap, AFileName);
+      finally
+        SourceMap.Free;
+      end;
     end;
   finally
     Engine.Free;
