@@ -435,6 +435,18 @@ type
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
   end;
 
+  TGocciaUsingDeclaration = class(TGocciaStatement)
+  private
+    FVariables: TArray<TGocciaVariableInfo>;
+    FIsAwait: Boolean;
+  public
+    constructor Create(const AVariables: TArray<TGocciaVariableInfo>;
+      const AIsAwait: Boolean; const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
+    property Variables: TArray<TGocciaVariableInfo> read FVariables;
+    property IsAwait: Boolean read FIsAwait;
+  end;
+
 implementation
 
 uses
@@ -973,6 +985,21 @@ end;
   function TGocciaClassExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
   begin
     Result := EvaluateClassExpression(Self, AContext);
+  end;
+
+  { TGocciaUsingDeclaration }
+
+  constructor TGocciaUsingDeclaration.Create(const AVariables: TArray<TGocciaVariableInfo>;
+    const AIsAwait: Boolean; const ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FVariables := AVariables;
+    FIsAwait := AIsAwait;
+  end;
+
+  function TGocciaUsingDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := EvaluateUsingDeclaration(Self, AContext);
   end;
 
 end.

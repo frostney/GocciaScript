@@ -112,6 +112,13 @@ const
   PROP_ENCODE                 = 'encode';
   PROP_ENCODE_INTO            = 'encodeInto';
   PROP_DECODE                 = 'decode';
+  PROP_SUPPRESSED             = 'suppressed';
+  PROP_DISPOSED               = 'disposed';
+  PROP_DISPOSE_ASYNC          = 'disposeAsync';
+  PROP_USE                    = 'use';
+  PROP_ADOPT                  = 'adopt';
+  PROP_DEFER                  = 'defer';
+  PROP_MOVE                   = 'move';
 
   // URL and URLSearchParams properties
   PROP_HREF             = 'href';

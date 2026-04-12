@@ -59,6 +59,8 @@ begin
     Result := GURIErrorProto
   else if AName = AGGREGATE_ERROR_NAME then
     Result := GAggregateErrorProto
+  else if AName = SUPPRESSED_ERROR_NAME then
+    Result := GSuppressedErrorProto
   else if AName = ERROR_NAME then
     Result := GErrorProto
   else

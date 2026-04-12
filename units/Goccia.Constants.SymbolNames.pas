@@ -18,6 +18,8 @@ const
   SYMBOL_TO_STRING_TAG        = 'toStringTag';
   SYMBOL_IS_CONCAT_SPREADABLE = 'isConcatSpreadable';
   SYMBOL_METADATA             = 'metadata';
+  SYMBOL_DISPOSE              = 'dispose';
+  SYMBOL_ASYNC_DISPOSE        = 'asyncDispose';
 
 implementation
 

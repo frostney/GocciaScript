@@ -90,6 +90,8 @@ begin
   FSymbolFunction.RegisterConstant(SYMBOL_ASYNC_ITERATOR, TGocciaSymbolValue.WellKnownAsyncIterator);
   FSymbolFunction.RegisterConstant(SYMBOL_IS_CONCAT_SPREADABLE, TGocciaSymbolValue.WellKnownIsConcatSpreadable);
   FSymbolFunction.RegisterConstant(SYMBOL_METADATA, TGocciaSymbolValue.WellKnownMetadata);
+  FSymbolFunction.RegisterConstant(SYMBOL_DISPOSE, TGocciaSymbolValue.WellKnownDispose);
+  FSymbolFunction.RegisterConstant(SYMBOL_ASYNC_DISPOSE, TGocciaSymbolValue.WellKnownAsyncDispose);
 
   // Expose Symbol.prototype (ECMAScript compatible)
   FSymbolFunction.AssignProperty(PROP_PROTOTYPE, TGocciaSymbolValue.SharedPrototype);

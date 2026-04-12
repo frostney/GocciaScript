@@ -174,6 +174,7 @@ type
     function ImportDeclaration: TGocciaStatement;
     function ExportDeclaration: TGocciaStatement;
     function ParseClassBody(const AClassName: string): TGocciaClassDefinition;
+    function UsingStatement: TGocciaStatement;
     function SwitchStatement: TGocciaStatement;
     function BreakStatement: TGocciaStatement;
   public
@@ -2435,6 +2436,25 @@ begin
     Result := TryStatement
   else if Match(gttLeftBrace) then
     Result := BlockStatement
+  // TC39 Explicit Resource Management: using x = expr;
+  // Disambiguate: 'using' followed by identifier is a declaration,
+  // 'using(' or 'using.x' is an expression (function call / member access).
+  else if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_USING) and
+          CheckNext(gttIdentifier) then
+    Result := UsingStatement
+  // TC39 Explicit Resource Management: await using x = expr;
+  else if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) and
+          ((FInAsyncFunction > 0) or (FFunctionDepth = 0)) then
+  begin
+    // Look ahead to check for 'await using identifier' pattern
+    if (FCurrent + 2 < FTokens.Count) and
+       (FTokens[FCurrent + 1].TokenType = gttIdentifier) and
+       (FTokens[FCurrent + 1].Lexeme = KEYWORD_USING) and
+       (FTokens[FCurrent + 2].TokenType = gttIdentifier) then
+      Result := UsingStatement
+    else
+      Result := ExpressionStatement;
+  end
   else if Check(gttIdentifier) and CheckNext(gttColon) then
   begin
     Line := Peek.Line;
@@ -2517,6 +2537,61 @@ begin
       SSuggestAddSemicolon);
     Result := TGocciaVariableDeclaration.Create(Variables, IsConst, Line, Column);
   end;
+end;
+
+// TC39 Explicit Resource Management: using / await using declarations
+function TGocciaParser.UsingStatement: TGocciaStatement;
+var
+  IsAwait: Boolean;
+  Name: string;
+  Initializer: TGocciaExpression;
+  Line, Column: Integer;
+  Variables: TArray<TGocciaVariableInfo>;
+  VariableCount: Integer;
+begin
+  Line := Peek.Line;
+  Column := Peek.Column;
+  IsAwait := False;
+  VariableCount := 0;
+
+  // Check for 'await using' — consume 'await' first
+  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) then
+  begin
+    IsAwait := True;
+    Advance; // consume 'await'
+  end;
+
+  // Consume 'using' (contextual keyword, parsed as identifier)
+  Advance; // consume 'using'
+
+  // Parse one or more variable bindings: using x = expr, y = expr;
+  repeat
+    SetLength(Variables, VariableCount + 1);
+
+    Name := Consume(gttIdentifier, 'Expected variable name after "using"',
+      'Provide an identifier for the disposable resource').Lexeme;
+    Variables[VariableCount].Name := Name;
+
+    // Optional type annotation: using x: Type = expr
+    if Check(gttColon) then
+    begin
+      Advance;
+      Variables[VariableCount].TypeAnnotation :=
+        CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
+    end;
+
+    // using declarations must have an initializer
+    Consume(gttAssign, '"using" declarations must have an initializer',
+      'Add " = <expression>" after the variable name');
+    Initializer := Expression;
+    Variables[VariableCount].Initializer := Initializer;
+
+    Inc(VariableCount);
+  until not Match(gttComma);
+
+  ConsumeSemicolonOrASI('Expected ";" after using declaration',
+    SSuggestAddSemicolon);
+  Result := TGocciaUsingDeclaration.Create(Variables, IsAwait, Line, Column);
 end;
 
 function TGocciaParser.ExpressionStatement: TGocciaStatement;

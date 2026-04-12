@@ -28,6 +28,8 @@ type
     FWellKnownIsConcatSpreadable: TGocciaSymbolValue;
     FWellKnownAsyncIterator: TGocciaSymbolValue;
     FWellKnownMetadata: TGocciaSymbolValue;
+    FWellKnownDispose: TGocciaSymbolValue;
+    FWellKnownAsyncDispose: TGocciaSymbolValue;
   private
     FDescription: string;
     FId: Integer;
@@ -50,6 +52,8 @@ type
     class function WellKnownIsConcatSpreadable: TGocciaSymbolValue;
     class function WellKnownAsyncIterator: TGocciaSymbolValue;
     class function WellKnownMetadata: TGocciaSymbolValue;
+    class function WellKnownDispose: TGocciaSymbolValue;
+    class function WellKnownAsyncDispose: TGocciaSymbolValue;
 
     function TypeName: string; override;
     function TypeOf: string; override;
@@ -285,6 +289,30 @@ begin
       TGarbageCollector.Instance.PinObject(FWellKnownMetadata);
   end;
   Result := FWellKnownMetadata;
+end;
+
+// ES2026 §20.1.2.3 Symbol.dispose
+class function TGocciaSymbolValue.WellKnownDispose: TGocciaSymbolValue;
+begin
+  if not Assigned(FWellKnownDispose) then
+  begin
+    FWellKnownDispose := TGocciaSymbolValue.Create('Symbol.dispose');
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FWellKnownDispose);
+  end;
+  Result := FWellKnownDispose;
+end;
+
+// ES2026 §20.1.2.1 Symbol.asyncDispose
+class function TGocciaSymbolValue.WellKnownAsyncDispose: TGocciaSymbolValue;
+begin
+  if not Assigned(FWellKnownAsyncDispose) then
+  begin
+    FWellKnownAsyncDispose := TGocciaSymbolValue.Create('Symbol.asyncDispose');
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FWellKnownAsyncDispose);
+  end;
+  Result := FWellKnownAsyncDispose;
 end;
 
 constructor TGocciaSymbolValue.Create(const ADescription: string);

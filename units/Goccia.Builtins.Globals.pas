@@ -21,6 +21,7 @@ var
   GSyntaxErrorProto: TGocciaObjectValue;
   GURIErrorProto: TGocciaObjectValue;
   GAggregateErrorProto: TGocciaObjectValue;
+  GSuppressedErrorProto: TGocciaObjectValue;
   GDOMExceptionProto: TGocciaObjectValue;
 
 type
@@ -33,6 +34,7 @@ type
     FSyntaxErrorProto: TGocciaObjectValue;
     FURIErrorProto: TGocciaObjectValue;
     FAggregateErrorProto: TGocciaObjectValue;
+    FSuppressedErrorProto: TGocciaObjectValue;
     FDOMExceptionProto: TGocciaObjectValue;
 
     function BuildErrorObject(const AName: string; const AProto: TGocciaObjectValue; const AArgs: TGocciaArgumentsCollection): TGocciaObjectValue;
@@ -45,6 +47,7 @@ type
     function SyntaxErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function URIErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function AggregateErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SuppressedErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DOMExceptionConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ErrorIsError(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function QueueMicrotaskCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -93,6 +96,7 @@ var
   SyntaxErrorConstructorFunc: TGocciaNativeFunctionValue;
   URIErrorConstructorFunc: TGocciaNativeFunctionValue;
   AggregateErrorConstructorFunc: TGocciaNativeFunctionValue;
+  SuppressedErrorConstructorFunc: TGocciaNativeFunctionValue;
   DOMExceptionConstructorFunc: TGocciaNativeFunctionValue;
   ErrorStaticMembers: TArray<TGocciaMemberDefinition>;
 begin
@@ -130,6 +134,10 @@ begin
   FAggregateErrorProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AGGREGATE_ERROR_NAME));
   FAggregateErrorProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
 
+  FSuppressedErrorProto := TGocciaObjectValue.Create(FErrorProto);
+  FSuppressedErrorProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(SUPPRESSED_ERROR_NAME));
+  FSuppressedErrorProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
+
   FDOMExceptionProto := TGocciaObjectValue.Create(FErrorProto);
   FDOMExceptionProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(ERROR_NAME));
   FDOMExceptionProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
@@ -142,6 +150,7 @@ begin
   GSyntaxErrorProto := FSyntaxErrorProto;
   GURIErrorProto := FURIErrorProto;
   GAggregateErrorProto := FAggregateErrorProto;
+  GSuppressedErrorProto := FSuppressedErrorProto;
   GDOMExceptionProto := FDOMExceptionProto;
 
   ErrorConstructorFunc := TGocciaNativeFunctionValue.Create(ErrorConstructor, ERROR_NAME, 1);
@@ -151,6 +160,7 @@ begin
   SyntaxErrorConstructorFunc := TGocciaNativeFunctionValue.Create(SyntaxErrorConstructor, SYNTAX_ERROR_NAME, 1);
   URIErrorConstructorFunc := TGocciaNativeFunctionValue.Create(URIErrorConstructor, URI_ERROR_NAME, 1);
   AggregateErrorConstructorFunc := TGocciaNativeFunctionValue.Create(AggregateErrorConstructor, AGGREGATE_ERROR_NAME, 2);
+  SuppressedErrorConstructorFunc := TGocciaNativeFunctionValue.Create(SuppressedErrorConstructor, SUPPRESSED_ERROR_NAME, 3);
   DOMExceptionConstructorFunc := TGocciaNativeFunctionValue.Create(DOMExceptionConstructor, DOM_EXCEPTION_NAME, 2);
 
   ErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FErrorProto);
@@ -168,6 +178,7 @@ begin
   SyntaxErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FSyntaxErrorProto);
   URIErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FURIErrorProto);
   AggregateErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FAggregateErrorProto);
+  SuppressedErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FSuppressedErrorProto);
   DOMExceptionConstructorFunc.AssignProperty(PROP_PROTOTYPE, FDOMExceptionProto);
 
   AScope.DefineLexicalBinding(ERROR_NAME, ErrorConstructorFunc, dtConst);
@@ -177,6 +188,7 @@ begin
   AScope.DefineLexicalBinding(SYNTAX_ERROR_NAME, SyntaxErrorConstructorFunc, dtConst);
   AScope.DefineLexicalBinding(URI_ERROR_NAME, URIErrorConstructorFunc, dtConst);
   AScope.DefineLexicalBinding(AGGREGATE_ERROR_NAME, AggregateErrorConstructorFunc, dtConst);
+  AScope.DefineLexicalBinding(SUPPRESSED_ERROR_NAME, SuppressedErrorConstructorFunc, dtConst);
   AScope.DefineLexicalBinding(DOM_EXCEPTION_NAME, DOMExceptionConstructorFunc, dtConst);
 
   AScope.DefineLexicalBinding('queueMicrotask',
@@ -368,6 +380,70 @@ begin
   end;
 
   { Step 7: Return O }
+  Result := ErrorObj;
+end;
+
+{ TC39 Explicit Resource Management §6.1 SuppressedError(error, suppressed [, message [, options]])
+  1. If NewTarget is undefined, let newTarget be the active function object.
+  2. Let O = OrdinaryCreateFromConstructor(newTarget, "%SuppressedError.prototype%").
+  3. If message is not undefined, CreateNonEnumerableDataPropertyOrThrow(O, "message", ToString(message)).
+  4. CreateNonEnumerableDataPropertyOrThrow(O, "error", error).
+  5. CreateNonEnumerableDataPropertyOrThrow(O, "suppressed", suppressed).
+  6. Return O. }
+function TGocciaGlobals.SuppressedErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ErrorObj: TGocciaObjectValue;
+  ErrorArg, SuppressedArg: TGocciaValue;
+  Message: string;
+  OptionsArg, CauseValue: TGocciaValue;
+begin
+  { Step 4: error argument }
+  if AArgs.Length > 0 then
+    ErrorArg := AArgs.GetElement(0)
+  else
+    ErrorArg := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  { Step 5: suppressed argument }
+  if AArgs.Length > 1 then
+    SuppressedArg := AArgs.GetElement(1)
+  else
+    SuppressedArg := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  { Step 3: If message is not undefined, let msg = ToString(message) }
+  if (AArgs.Length > 2) and not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
+    Message := AArgs.GetElement(2).ToStringLiteral.Value
+  else
+    Message := '';
+
+  { Step 2: Let O = OrdinaryCreateFromConstructor }
+  ErrorObj := CreateErrorObject(SUPPRESSED_ERROR_NAME, Message, 1);
+  ErrorObj.Prototype := FSuppressedErrorProto;
+
+  { Step 4: CreateNonEnumerableDataPropertyOrThrow(O, "error", error) }
+  ErrorObj.DefineProperty(PROP_ERROR,
+    TGocciaPropertyDescriptorData.Create(ErrorArg, [pfConfigurable, pfWritable]));
+  { Step 5: CreateNonEnumerableDataPropertyOrThrow(O, "suppressed", suppressed) }
+  ErrorObj.DefineProperty(PROP_SUPPRESSED,
+    TGocciaPropertyDescriptorData.Create(SuppressedArg, [pfConfigurable, pfWritable]));
+
+  { InstallErrorCause(O, options) — ES2026 §20.5.8.1 }
+  if AArgs.Length > 3 then
+  begin
+    OptionsArg := AArgs.GetElement(3);
+    if OptionsArg is TGocciaObjectValue then
+    begin
+      if TGocciaObjectValue(OptionsArg).HasProperty(PROP_CAUSE) then
+      begin
+        CauseValue := OptionsArg.GetProperty(PROP_CAUSE);
+        if CauseValue = nil then
+          CauseValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        ErrorObj.DefineProperty(PROP_CAUSE,
+          TGocciaPropertyDescriptorData.Create(CauseValue, [pfConfigurable, pfWritable]));
+      end;
+    end;
+  end;
+
+  { Step 6: Return O }
   Result := ErrorObj;
 end;
 
