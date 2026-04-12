@@ -1726,7 +1726,8 @@ begin
   // satisfying the per-Parse-Node identity requirement without a new opcode.
   Arg0Reg := ACtx.Scope.AllocateRegister;
   EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, Arg0Reg,
-    ACtx.Template.AddConstantTemplateObject(AExpr.CookedStrings, AExpr.RawStrings)));
+    ACtx.Template.AddConstantTemplateObject(AExpr.CookedStrings, AExpr.RawStrings,
+      AExpr.CookedValid)));
 
   // ES2026 §13.3.11 step 3: evaluate substitutions into argument registers
   for I := 0 to AExpr.Expressions.Count - 1 do
