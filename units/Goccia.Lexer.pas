@@ -66,6 +66,9 @@ type
     procedure SkipHashbang;
     procedure SkipComment;
     procedure SkipBlockComment;
+    function IsLineTerminator: Boolean; inline;
+    function IsUnicodeLineTerminator: Boolean; inline;
+    procedure ConsumeUnicodeLineTerminator;
   public
     constructor Create(const ASource, AFileName: string);
     destructor Destroy; override;
@@ -81,6 +84,13 @@ uses
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved,
   Goccia.TextFiles;
+
+const
+  // ES2026 §12.3 Line Terminators — UTF-8 byte components for LS (U+2028) and PS (U+2029)
+  UTF8_LINE_TERMINATOR_LEAD_BYTE = #$E2;
+  UTF8_LINE_TERMINATOR_CONTINUATION_BYTE = #$80;
+  UTF8_LINE_SEPARATOR_FINAL_BYTE = #$A8;
+  UTF8_PARAGRAPH_SEPARATOR_FINAL_BYTE = #$A9;
 
 function IsValidHexString(const AValue: string): Boolean;
 var
@@ -180,6 +190,36 @@ begin
   UpdateRegexContext(ATokenType);
 end;
 
+// ES2026 §12.3 LineTerminator :: <LF> | <CR> | <LS> | <PS>
+function TGocciaLexer.IsLineTerminator: Boolean;
+begin
+  if IsAtEnd then
+    Exit(False);
+  case FSource[FCurrent] of
+    #10, #13:
+      Result := True;
+  else
+    Result := IsUnicodeLineTerminator;
+  end;
+end;
+
+// ES2026 §12.3 LS (U+2028) = UTF-8 E2 80 A8, PS (U+2029) = UTF-8 E2 80 A9
+function TGocciaLexer.IsUnicodeLineTerminator: Boolean;
+begin
+  Result := (FSource[FCurrent] = UTF8_LINE_TERMINATOR_LEAD_BYTE) and
+            (FCurrent + 2 <= Length(FSource)) and
+            (FSource[FCurrent + 1] = UTF8_LINE_TERMINATOR_CONTINUATION_BYTE) and
+            ((FSource[FCurrent + 2] = UTF8_LINE_SEPARATOR_FINAL_BYTE) or
+             (FSource[FCurrent + 2] = UTF8_PARAGRAPH_SEPARATOR_FINAL_BYTE));
+end;
+
+procedure TGocciaLexer.ConsumeUnicodeLineTerminator;
+begin
+  Inc(FCurrent, 3);
+  Inc(FLine);
+  FColumn := 1;
+end;
+
 procedure TGocciaLexer.SkipWhitespace;
 begin
   while not IsAtEnd do
@@ -193,6 +233,12 @@ begin
           FColumn := 0;
           Advance;
         end;
+      // ES2026 §12.3 Line Terminators — LS (U+2028) and PS (U+2029)
+      UTF8_LINE_TERMINATOR_LEAD_BYTE:
+        if IsUnicodeLineTerminator then
+          ConsumeUnicodeLineTerminator
+        else
+          Break;
       '/':
         if PeekNext = '/' then
           SkipComment
@@ -206,22 +252,24 @@ begin
   end;
 end;
 
+// ES2026 §12.5 HashbangComment :: #! SingleLineCommentCharsₒₚₜ
 procedure TGocciaLexer.SkipHashbang;
 begin
   if (FCurrent <> 1) or (Length(FSource) < 2) or (Copy(FSource, 1, 2) <> '#!') then
     Exit;
 
-  while not IsAtEnd and not CharInSet(Peek, [#10, #13]) do
+  while not IsAtEnd and not IsLineTerminator do
     Advance;
 end;
 
+// ES2026 §12.4 SingleLineComment :: // SingleLineCommentCharsₒₚₜ
 procedure TGocciaLexer.SkipComment;
 begin
   // Skip '//'
   Advance;
   Advance;
 
-  while (Peek <> #10) and not IsAtEnd do
+  while not IsAtEnd and not IsLineTerminator do
     Advance;
 end;
 
@@ -248,6 +296,9 @@ begin
       FColumn := 0;
       Advance;
     end
+    // ES2026 §12.3 Line Terminators — LS (U+2028) and PS (U+2029)
+    else if (Peek = UTF8_LINE_TERMINATOR_LEAD_BYTE) and IsUnicodeLineTerminator then
+      ConsumeUnicodeLineTerminator
     else
       Advance;
   end;
