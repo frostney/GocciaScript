@@ -274,7 +274,7 @@ GocciaScript intentionally excludes these JavaScript features — do **not** add
 - `function` keyword (use arrow functions or shorthand methods)
 - `==` and `!=` loose equality (use `===`/`!==`)
 - `eval()` and `arguments` object
-- Automatic semicolon insertion (semicolons required by default; ASI available as opt-in via `cfASI in Engine.Compatibility` or `--asi` CLI flag)
+- Automatic semicolon insertion (semicolons required by default; ASI available as opt-in via `Engine.ASIEnabled := True`, `cfASI in Engine.Compatibility`, or `--asi` CLI flag)
 - `with` statement
 - Traditional loops (`for`, `while`, `do...while`) — use `for...of`, `for await...of`, or array methods instead. `for...of` and `for await...of` are supported.
 - Default imports/exports — use named imports/exports

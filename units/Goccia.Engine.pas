@@ -225,6 +225,7 @@ uses
   Generics.Collections,
   Math,
   SysUtils,
+  TypInfo,
 
   TimingUtils,
 
@@ -724,12 +725,25 @@ begin
 end;
 
 procedure TGocciaEngine.RegisterGocciaScriptGlobal;
+const
+  PREFIX_LENGTH = 2; // Strip 'gg' prefix from enum names
 var
   GocciaObj: TGocciaObjectValue;
   BuildObj: TGocciaObjectValue;
+  BuiltInsArray: TGocciaArrayValue;
   ShimsArray: TGocciaArrayValue;
+  Flag: TGocciaGlobalBuiltin;
+  Name: string;
   I: Integer;
 begin
+  BuiltInsArray := TGocciaArrayValue.Create;
+  for Flag in FGlobals do
+  begin
+    Name := GetEnumName(TypeInfo(TGocciaGlobalBuiltin), Ord(Flag));
+    BuiltInsArray.Elements.Add(TGocciaStringLiteralValue.Create(
+      Copy(Name, PREFIX_LENGTH + 1, Length(Name) - PREFIX_LENGTH)));
+  end;
+
   BuildObj := TGocciaObjectValue.Create;
   BuildObj.DefineProperty('os', TGocciaPropertyDescriptorData.Create(
     TGocciaStringLiteralValue.Create(GetBuildOS), [pfEnumerable]));
@@ -743,6 +757,7 @@ begin
   GocciaObj := TGocciaObjectValue.Create;
   GocciaObj.AssignProperty('version', TGocciaStringLiteralValue.Create(GetVersion));
   GocciaObj.AssignProperty('commit', TGocciaStringLiteralValue.Create(GetCommit));
+  GocciaObj.AssignProperty('builtIns', BuiltInsArray);
   if FStrictTypes then
     GocciaObj.AssignProperty(PROP_STRICT_TYPES, TGocciaBooleanLiteralValue.TrueValue)
   else
