@@ -15,6 +15,7 @@ type
   TGocciaRegExpNamedGroup = record
     Name: string;
     Index: Integer;
+    DisjunctionPath: array of Integer;
   end;
 
   TGocciaRegExpNamedGroups = array of TGocciaRegExpNamedGroup;
@@ -187,19 +188,124 @@ begin
   Result := -1;
 end;
 
+// ES2025 §22.2.1 Static Semantics: Early Errors — duplicate GroupSpecifier
+// Two disjunction paths share a branch if they agree at every common depth.
+// When they share a branch, both groups can participate in the same match —
+// making duplicate names a SyntaxError.
+function PathsShareBranch(const APathA, APathB: array of Integer): Boolean;
+var
+  MinLength, I: Integer;
+begin
+  MinLength := Min(Length(APathA), Length(APathB));
+  for I := 0 to MinLength - 1 do
+    if APathA[I] <> APathB[I] then
+      Exit(False);
+  Result := True;
+end;
+
+// ES2025 §22.2.2 Runtime Semantics: CompileAtom — \k GroupName
+// Resolve \k<name> backreference when multiple groups share the same name.
+// Returns the TRegExpr-compatible backreference string.
+//
+// When the backreference is outside the disjunction containing the duplicate
+// groups (CompatCount = 0 or > 1), we emit (?:\N1|\N2|...) — an alternation
+// of all candidate backreferences. This is correct because TRegExpr fails
+// (rather than matching empty) when a backreference targets a non-participating
+// group, so the alternation falls through to the participating group's backref.
+// Concatenation (\N1\N2) would be wrong: the non-participating backref would
+// fail and abort the entire match.
+function ResolveNamedBackreference(
+  const ANamedGroups: TGocciaRegExpNamedGroups;
+  const AName: string; const ACurrentPath: array of Integer): string;
+var
+  AllIndices: array of Integer;
+  CompatibleIndices: array of Integer;
+  AllCount, CompatCount, I: Integer;
+begin
+  Result := '';
+  // Collect all group indices with this name
+  AllCount := 0;
+  for I := 0 to High(ANamedGroups) do
+    if ANamedGroups[I].Name = AName then
+      Inc(AllCount);
+  if AllCount = 0 then
+    Exit;
+  if AllCount = 1 then
+  begin
+    // Single group — simple backreference (ES2018 behavior)
+    Result := '\' + IntToStr(FindNamedGroupIndex(ANamedGroups, AName));
+    Exit;
+  end;
+  // ES2025: Multiple groups with same name — resolve via disjunction path
+  SetLength(CompatibleIndices, AllCount);
+  CompatCount := 0;
+  for I := 0 to High(ANamedGroups) do
+    if (ANamedGroups[I].Name = AName) and
+       PathsShareBranch(ANamedGroups[I].DisjunctionPath, ACurrentPath) then
+    begin
+      CompatibleIndices[CompatCount] := ANamedGroups[I].Index;
+      Inc(CompatCount);
+    end;
+  if CompatCount = 1 then
+  begin
+    // Exactly one compatible group — resolve directly
+    Result := '\' + IntToStr(CompatibleIndices[0]);
+    Exit;
+  end;
+  if CompatCount = 0 then
+  begin
+    // Backreference outside the disjunction — collect all groups with this name
+    SetLength(AllIndices, AllCount);
+    AllCount := 0;
+    for I := 0 to High(ANamedGroups) do
+      if ANamedGroups[I].Name = AName then
+      begin
+        AllIndices[AllCount] := ANamedGroups[I].Index;
+        Inc(AllCount);
+      end;
+    // Emit alternation: (?:\1|\2|...) — the participating group's backreference
+    // succeeds while non-participating ones either match empty or fail through
+    Result := '(?:';
+    for I := 0 to AllCount - 1 do
+    begin
+      if I > 0 then
+        Result := Result + '|';
+      Result := Result + '\' + IntToStr(AllIndices[I]);
+    end;
+    Result := Result + ')';
+    Exit;
+  end;
+  // Multiple compatible groups — emit alternation of compatible ones
+  Result := '(?:';
+  for I := 0 to CompatCount - 1 do
+  begin
+    if I > 0 then
+      Result := Result + '|';
+    Result := Result + '\' + IntToStr(CompatibleIndices[I]);
+  end;
+  Result := Result + ')';
+end;
+
 // Pass 1: collect all named groups and their capture indices without modifying
 // the pattern, so that forward \k<name> backreferences can be resolved.
+// ES2025: Also tracks disjunction paths and validates duplicate named groups.
 function CollectNamedGroups(const APattern: string): TGocciaRegExpNamedGroups;
 var
-  I, PatternLength, GroupIndex, CloseAngle: Integer;
+  I, J, K, L, PatternLength, GroupIndex, CloseAngle: Integer;
   InCharClass: Boolean;
   GroupName: string;
+  AltStack: array of Integer;
+  AltStackDepth: Integer;
 begin
   SetLength(Result, 0);
   PatternLength := Length(APattern);
   I := 1;
   GroupIndex := 0;
   InCharClass := False;
+  // ES2025: Initialize disjunction path stack with top-level scope
+  SetLength(AltStack, 64);
+  AltStackDepth := 0;
+  AltStack[0] := 0;
   while I <= PatternLength do
   begin
     if APattern[I] = '\' then
@@ -227,8 +333,27 @@ begin
       Inc(I);
       Continue;
     end;
+    // ES2025: Track disjunction alternatives
+    if APattern[I] = '|' then
+    begin
+      Inc(AltStack[AltStackDepth]);
+      Inc(I);
+      Continue;
+    end;
+    if APattern[I] = ')' then
+    begin
+      if AltStackDepth > 0 then
+        Dec(AltStackDepth);
+      Inc(I);
+      Continue;
+    end;
     if APattern[I] = '(' then
     begin
+      // Push disjunction level for all group types
+      Inc(AltStackDepth);
+      if AltStackDepth >= Length(AltStack) then
+        SetLength(AltStack, AltStackDepth * 2 + 4);
+      AltStack[AltStackDepth] := 0;
       if (I + 1 <= PatternLength) and (APattern[I + 1] = '?') then
       begin
         if (I + 2 <= PatternLength) and (APattern[I + 2] = '<') then
@@ -252,6 +377,10 @@ begin
             SetLength(Result, Length(Result) + 1);
             Result[High(Result)].Name := GroupName;
             Result[High(Result)].Index := GroupIndex;
+            // ES2025: Record disjunction path for duplicate name validation
+            SetLength(Result[High(Result)].DisjunctionPath, AltStackDepth + 1);
+            for J := 0 to AltStackDepth do
+              Result[High(Result)].DisjunctionPath[J] := AltStack[J];
             I := CloseAngle + 1;
             Continue;
           end;
@@ -265,18 +394,32 @@ begin
     end;
     Inc(I);
   end;
+  // ES2025 §22.2.1.1: Validate duplicate named capture groups are in different
+  // alternatives. Two groups with the same name that share a disjunction branch
+  // can both participate in a single match — that is a SyntaxError.
+  for K := 0 to High(Result) - 1 do
+    for L := K + 1 to High(Result) do
+      if (Result[K].Name = Result[L].Name) and
+         PathsShareBranch(Result[K].DisjunctionPath,
+           Result[L].DisjunctionPath) then
+        raise EConvertError.CreateFmt(
+          'Duplicate named capture group: %s', [Result[K].Name]);
 end;
 
 // Pass 2: convert named groups to plain capturing groups and resolve \k<name>
 // backreferences using the complete group map from pass 1.
+// ES2025: Tracks disjunction paths for correct \k<name> resolution with
+// duplicate named capture groups.
 function PreprocessRegExpPattern(const APattern: string;
   out ANamedGroups: TGocciaRegExpNamedGroups): string;
 var
-  I, PatternLength: Integer;
+  I, J, PatternLength: Integer;
   InCharClass: Boolean;
   GroupName: string;
   CloseAngle: Integer;
-  BackrefIndex: Integer;
+  BackrefResult: string;
+  AltStack: array of Integer;
+  AltStackDepth: Integer;
 begin
   // Pass 1: collect all named groups so forward backreferences resolve
   ANamedGroups := CollectNamedGroups(APattern);
@@ -286,17 +429,21 @@ begin
     Result := '';
     Exit;
   end;
-  // Pass 2: emit converted pattern
+  // Pass 2: emit converted pattern with disjunction path tracking
   Result := '';
   I := 1;
   InCharClass := False;
+  // ES2025: Track disjunction path for \k<name> resolution
+  SetLength(AltStack, 64);
+  AltStackDepth := 0;
+  AltStack[0] := 0;
   while I <= PatternLength do
   begin
     if APattern[I] = '\' then
     begin
       if I + 1 <= PatternLength then
       begin
-        // \k<name> backreference: convert to \N numeric backreference
+        // \k<name> backreference: convert to numeric backreference(s)
         if (APattern[I + 1] = 'k') and (I + 2 <= PatternLength) and
            (APattern[I + 2] = '<') then
         begin
@@ -307,12 +454,13 @@ begin
           if CloseAngle <= PatternLength then
           begin
             GroupName := Copy(APattern, I + 3, CloseAngle - I - 3);
-            BackrefIndex := FindNamedGroupIndex(ANamedGroups, GroupName);
-            if BackrefIndex > 0 then
-              Result := Result + '\' + IntToStr(BackrefIndex)
-            else
+            // ES2025: Resolve with duplicate named group awareness
+            BackrefResult := ResolveNamedBackreference(ANamedGroups,
+              GroupName, Copy(AltStack, 0, AltStackDepth + 1));
+            if BackrefResult = '' then
               raise EConvertError.CreateFmt(
                 'Invalid named backreference: %s', [GroupName]);
+            Result := Result + BackrefResult;
             I := CloseAngle + 1;
             Continue;
           end;
@@ -347,8 +495,29 @@ begin
       Inc(I);
       Continue;
     end;
+    // ES2025: Track disjunction alternatives
+    if APattern[I] = '|' then
+    begin
+      Inc(AltStack[AltStackDepth]);
+      Result := Result + '|';
+      Inc(I);
+      Continue;
+    end;
+    if APattern[I] = ')' then
+    begin
+      if AltStackDepth > 0 then
+        Dec(AltStackDepth);
+      Result := Result + ')';
+      Inc(I);
+      Continue;
+    end;
     if APattern[I] = '(' then
     begin
+      // Push disjunction level for all group types
+      Inc(AltStackDepth);
+      if AltStackDepth >= Length(AltStack) then
+        SetLength(AltStack, AltStackDepth * 2 + 4);
+      AltStack[AltStackDepth] := 0;
       if (I + 1 <= PatternLength) and (APattern[I + 1] = '?') then
       begin
         if (I + 2 <= PatternLength) and (APattern[I + 2] = '<') then

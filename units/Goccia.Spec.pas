@@ -159,16 +159,17 @@ const
   // ---------------------------------------------------------------------------
   // ES2025
   // ---------------------------------------------------------------------------
-  ES2025_FEATURES: array[0..8] of TGocciaFeatureEntry = (
-    (Name: 'Set Methods';           Link: 'https://tc39.es/ecma262/#sec-set-objects'),
-    (Name: 'Iterator Helpers';      Link: 'https://tc39.es/ecma262/#sec-iterator-objects'),
-    (Name: 'Promise.try';           Link: 'https://tc39.es/ecma262/#sec-promise.try'),
-    (Name: 'RegExp.escape';         Link: 'https://tc39.es/ecma262/#sec-regexp.escape'),
-    (Name: 'Error.isError';         Link: 'https://tc39.es/ecma262/#sec-error.iserror'),
-    (Name: 'Float16Array';          Link: 'https://tc39.es/ecma262/#sec-typedarray-objects'),
-    (Name: 'Uint8Array Base64/Hex'; Link: 'https://tc39.es/ecma262/#sec-typedarray-objects'),
-    (Name: 'Array.fromAsync';       Link: 'https://tc39.es/ecma262/#sec-array.fromasync'),
-    (Name: 'Math.sumPrecise';       Link: 'https://tc39.es/ecma262/#sec-math.sumprecise')
+  ES2025_FEATURES: array[0..9] of TGocciaFeatureEntry = (
+    (Name: 'Set Methods';                     Link: 'https://tc39.es/ecma262/#sec-set-objects'),
+    (Name: 'Iterator Helpers';                Link: 'https://tc39.es/ecma262/#sec-iterator-objects'),
+    (Name: 'Promise.try';                     Link: 'https://tc39.es/ecma262/#sec-promise.try'),
+    (Name: 'RegExp.escape';                   Link: 'https://tc39.es/ecma262/#sec-regexp.escape'),
+    (Name: 'Duplicate Named Capture Groups';  Link: 'https://tc39.es/ecma262/#sec-regexp-regular-expression-objects'),
+    (Name: 'Error.isError';                   Link: 'https://tc39.es/ecma262/#sec-error.iserror'),
+    (Name: 'Float16Array';                    Link: 'https://tc39.es/ecma262/#sec-typedarray-objects'),
+    (Name: 'Uint8Array Base64/Hex';           Link: 'https://tc39.es/ecma262/#sec-typedarray-objects'),
+    (Name: 'Array.fromAsync';                 Link: 'https://tc39.es/ecma262/#sec-array.fromasync'),
+    (Name: 'Math.sumPrecise';                 Link: 'https://tc39.es/ecma262/#sec-math.sumprecise')
   );
 
   // ---------------------------------------------------------------------------
