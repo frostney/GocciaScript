@@ -85,4 +85,10 @@ describe("URLSearchParams constructor", () => {
     // "123" (no "=") parses as key "123" with empty value → "123="
     expect(params.toString()).toBe("123=");
   });
+
+  test("explicit undefined init creates empty params", () => {
+    const params = new URLSearchParams(undefined);
+    expect(params.size).toBe(0);
+    expect(params.toString()).toBe("");
+  });
 });

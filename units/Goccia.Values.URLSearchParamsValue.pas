@@ -667,6 +667,9 @@ var
 begin
   if AArguments.Length = 0 then Exit;
   Init := AArguments.GetElement(0);
+  // WHATWG Web IDL: explicit undefined receives the default value (empty string),
+  // producing an empty list — same as calling the constructor with no argument.
+  if Init is TGocciaUndefinedLiteralValue then Exit;
   if Init is TGocciaStringLiteralValue then
     ParseFromString(TGocciaStringLiteralValue(Init).Value)
   else if Init is TGocciaURLSearchParamsValue then
