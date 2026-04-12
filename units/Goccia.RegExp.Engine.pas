@@ -186,6 +186,11 @@ begin
         end;
         Inc(J);
       end;
+      // ES2025 §22.2.1: Both add and remove lists empty is a SyntaxError
+      if (J <= PatternLength) and (APattern[J] = ':') and
+         (EnableFlags = '') and (DisableFlags = '') then
+        raise EConvertError.Create(
+          'Invalid regular expression: modifier group must enable or disable at least one flag');
     end;
     Inc(I);
   end;

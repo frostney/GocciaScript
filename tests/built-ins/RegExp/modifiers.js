@@ -218,6 +218,12 @@ test("(?im-ms:...) overlapping flag throws SyntaxError", () => {
   expect(() => { new RegExp("(?im-ms:abc)"); }).toThrow(SyntaxError);
 });
 
+// --- Error cases: empty modifier lists ---
+
+test("(?-:...) empty add and remove throws SyntaxError", () => {
+  expect(() => { new RegExp("(?-:abc)"); }).toThrow(SyntaxError);
+});
+
 // --- Error cases: double dash ---
 
 test("(?i--s:...) double dash throws SyntaxError", () => {
