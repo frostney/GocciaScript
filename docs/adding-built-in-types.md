@@ -6,7 +6,7 @@
 
 - **10-step recipe** — Value type, built-in registration, class value subclass, engine integration, constants, structuredClone, tests, benchmarks, documentation
 - **Key patterns** — Shared prototype singleton (GC-pinned), `ThisValue` for method callbacks (not `Self`), `MarkReferences` for GC
-- **Engine integration** — Add enum flag, `DefaultGlobals`, field, `RegisterBuiltIns`, `RegisterBuiltinConstructors`, destructor cleanup
+- **Engine integration** — Standard built-ins are always registered; add flag-gating only for special-purpose built-ins (TestAssertions, Benchmark, FFI)
 - **Checklist included** — Complete checklist at the end of the document for verification
 
 This guide walks through every step needed to add a new built-in type to GocciaScript. Follow the steps in order; each section references the exact files and patterns involved.
@@ -322,43 +322,36 @@ Six changes needed:
 
 Add `Goccia.Builtins.GlobalYour` (alphabetically sorted).
 
-### 4b. Enum flag
+### 4b. Enum flag (special-purpose built-ins only)
 
-Add to `TGocciaGlobalBuiltin`:
-
-```pascal
-TGocciaGlobalBuiltin = (
-  ...
-  ggYourType
-);
-```
-
-### 4c. DefaultGlobals
-
-Add the flag to the `DefaultGlobals` set (if the built-in should be available by default):
+Standard built-ins are always registered and do not need an enum flag. Add a flag to `TGocciaGlobalBuiltin` only for special-purpose built-ins that should be opt-in:
 
 ```pascal
-const DefaultGlobals: TGocciaGlobalBuiltins = [..., ggYourType];
+TGocciaGlobalBuiltin = (ggTestAssertions, ggBenchmark, ggFFI);
 ```
 
-### 4d. Field declaration
+Most new built-in types are standard and should skip this step entirely.
+
+### 4c. Field declaration
 
 ```pascal
 FBuiltinYour: TGocciaGlobalYour;
 ```
 
-### 4e. RegisterBuiltIns
+### 4d. RegisterBuiltIns
+
+For standard built-ins (no flag-gating needed):
 
 ```pascal
-if ggYourType in FGlobals then
-  FBuiltinYour := TGocciaGlobalYour.Create(
-    CONSTRUCTOR_YOUR, Scope, ThrowError);
+FBuiltinYour := TGocciaGlobalYour.Create(
+  CONSTRUCTOR_YOUR, Scope, ThrowError);
 ```
 
-### 4f. RegisterBuiltinConstructors
+For special-purpose built-ins, guard with a flag check: `if ggYourType in FGlobals then ...`
+
+### 4e. RegisterBuiltinConstructors
 
 ```pascal
-if ggYourType in FGlobals then
 begin
   TypeDef.ConstructorName := CONSTRUCTOR_YOUR;
   TypeDef.Kind := gtdkNativeInstanceType;
@@ -376,17 +369,17 @@ end;
 
 For built-ins that use an existing shared prototype rather than `ExposePrototype`, set `ExposePrototype := nil` and provide `PrototypeProvider := @YourPrototypeProvider`.
 
-### 4g. Destructor
+### 4f. Destructor
 
 ```pascal
 FBuiltinYour.Free;
 ```
 
-### 4h. Implementation uses clause
+### 4g. Implementation uses clause
 
 Add `Goccia.Values.YourValue` (alphabetically sorted).
 
-### 4i. Property (optional)
+### 4h. Property (optional)
 
 ```pascal
 property BuiltinYour: TGocciaGlobalYour read FBuiltinYour;
@@ -526,7 +519,6 @@ Add `YourType` to the built-in objects list.
 
 ### `AGENTS.md`
 
-- Add `ggYourType` to the `DefaultGlobals` reference in the Built-in Objects section.
 - Add value type and built-in unit entries to the component table.
 - Add test directory reference if it contains noteworthy test patterns.
 
@@ -537,8 +529,7 @@ Use this checklist when adding a new built-in type:
 - [ ] Value type unit (`Goccia.Values.YourValue.pas`)
 - [ ] Built-in registration unit (`Goccia.Builtins.GlobalYour.pas`)
 - [ ] Class value subclass in `Goccia.Values.ClassValue.pas`
-- [ ] Engine: enum flag in `TGocciaGlobalBuiltin`
-- [ ] Engine: add to `DefaultGlobals` (if default)
+- [ ] Engine: enum flag in `TGocciaGlobalBuiltin` (special-purpose built-ins only)
 - [ ] Engine: field declaration
 - [ ] Engine: `RegisterBuiltIns` registration
 - [ ] Engine: `RegisterBuiltinConstructors` constructor

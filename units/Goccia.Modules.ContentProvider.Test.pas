@@ -312,7 +312,7 @@ begin
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
       Engine := TGocciaEngine.Create(ENTRY_PATH, Source,
-        TGocciaEngine.DefaultGlobals, ModuleLoader);
+        [], ModuleLoader);
       try
         ScriptResult := Engine.Execute;
       finally
@@ -356,7 +356,7 @@ begin
   try
     Backend := TGocciaBytecodeBackend.Create(EntryPath, ModuleLoader);
     try
-      Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
+      Backend.RegisterBuiltIns([]);
       ProgramNode := CreateProgram(
         'import { value } from "./dep.js";' + LineEnding + 'value;',
         EntryPath);
@@ -452,7 +452,7 @@ begin
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
       Engine := TGocciaEngine.Create(ENTRY_PATH, Source,
-        TGocciaEngine.DefaultGlobals, ModuleLoader);
+        [], ModuleLoader);
       try
         try
           Engine.Execute;
@@ -509,7 +509,7 @@ begin
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
       Engine := TGocciaEngine.Create(ENTRY_PATH, Source,
-        TGocciaEngine.DefaultGlobals, ModuleLoader);
+        [], ModuleLoader);
       try
         RaisedExpected := False;
         try
@@ -568,7 +568,7 @@ begin
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
       Engine := TGocciaEngine.Create(ENTRY_PATH, Source,
-        TGocciaEngine.DefaultGlobals, ModuleLoader);
+        [], ModuleLoader);
       try
         RaisedExpected := False;
         try
@@ -792,7 +792,7 @@ begin
     Engine := TGocciaEngine.Create(
       IncludeTrailingPathDelimiter(TempDirectory) + 'app.js',
       Source,
-      TGocciaEngine.DefaultGlobals);
+      []);
     try
       ScriptResult := Engine.Execute;
     finally
@@ -843,7 +843,7 @@ begin
     Engine := TGocciaEngine.Create(
       IncludeTrailingPathDelimiter(TempDirectory) + 'app.js',
       Source,
-      TGocciaEngine.DefaultGlobals);
+      []);
     try
       ScriptResult := Engine.Execute;
     finally
@@ -882,11 +882,11 @@ begin
     SourceA.Text := '1;';
     SourceB.Text := '2;';
     EngineA := TGocciaEngine.Create(ENTRY_PATH, SourceA,
-      TGocciaEngine.DefaultGlobals, ModuleLoader);
+      [], ModuleLoader);
     try
       try
         EngineB := TGocciaEngine.Create(ENTRY_PATH, SourceB,
-          TGocciaEngine.DefaultGlobals, ModuleLoader);
+          [], ModuleLoader);
         Fail('Expected module loader rebinding to raise an exception.');
       except
         on E: Exception do

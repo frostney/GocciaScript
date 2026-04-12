@@ -69,7 +69,7 @@ var
   GProfileFormatFlamegraph: Boolean = False;
 
 function ParseSource(const ASource: TStringList; const AFileName: string;
-  const AGlobals: TGocciaGlobalBuiltins; const ASuppressWarnings: Boolean;
+  const APreprocessors: TGocciaPreprocessors; const ASuppressWarnings: Boolean;
   out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64): TGocciaProgram;
 var
   SourceText: string;
@@ -86,7 +86,7 @@ begin
   SourceText := StringListToLFText(ASource);
 
   SourceMap := nil;
-  if ggJSX in AGlobals then
+  if ppJSX in APreprocessors then
   begin
     JSXResult := TGocciaJSXTransformer.Transform(SourceText);
     SourceText := JSXResult.Source;
@@ -132,13 +132,13 @@ begin
 end;
 
 function CompileSource(const ASource: TStringList; const AFileName: string;
-  const AGlobals: TGocciaGlobalBuiltins; const ASuppressWarnings: Boolean = False): TGocciaBytecodeModule;
+  const APreprocessors: TGocciaPreprocessors; const ASuppressWarnings: Boolean = False): TGocciaBytecodeModule;
 var
   ProgramNode: TGocciaProgram;
   Compiler: TGocciaCompiler;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
 begin
-  ProgramNode := ParseSource(ASource, AFileName, AGlobals, ASuppressWarnings,
+  ProgramNode := ParseSource(ASource, AFileName, APreprocessors, ASuppressWarnings,
     LexTimeNanoseconds, ParseTimeNanoseconds);
   try
     Compiler := TGocciaCompiler.Create(AFileName);
@@ -266,7 +266,7 @@ var
   Engine: TGocciaEngine;
   ScriptResult: TGocciaScriptResult;
 begin
-  Engine := TGocciaEngine.Create(AFileName, ASource, TGocciaEngine.DefaultGlobals);
+  Engine := TGocciaEngine.Create(AFileName, ASource, []);
   try
     Engine.ASIEnabled := GASIEnabled;
     Engine.SuppressWarnings := GJsonOutput;
@@ -305,13 +305,13 @@ begin
   Backend := TGocciaBytecodeBackend.Create(AFileName);
   try
     Backend.ASIEnabled := GASIEnabled;
-    Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
+    Backend.RegisterBuiltIns([]);
     ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
     ApplyDataGlobalsToBytecodeBackend(Backend);
     ConfigureModuleResolver(Backend.ModuleResolver, AFileName, GImportMapPath,
       GInlineAliases);
 
-    ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultGlobals,
+    ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultPreprocessors,
       GJsonOutput, Result.Timing.LexTimeNanoseconds,
       Result.Timing.ParseTimeNanoseconds);
 
@@ -362,7 +362,7 @@ begin
     Backend := TGocciaBytecodeBackend.Create(AFileName);
     try
       Backend.ASIEnabled := GASIEnabled;
-      Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
+      Backend.RegisterBuiltIns([]);
       ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
       ApplyDataGlobalsToBytecodeBackend(Backend);
       ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
@@ -399,7 +399,7 @@ begin
 
   TGarbageCollector.Initialize;
   try
-    Module := CompileSource(ASource, AFileName, TGocciaEngine.DefaultGlobals,
+    Module := CompileSource(ASource, AFileName, TGocciaEngine.DefaultPreprocessors,
       GJsonOutput);
     try
       Goccia.Bytecode.Binary.SaveModuleToFile(Module, AOutputPath);

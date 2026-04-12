@@ -4,55 +4,30 @@
 
 ## Executive Summary
 
-- **Flag-gated registration** — Each built-in is controlled by a `TGocciaGlobalBuiltins` flag (e.g., `ggConsole`, `ggMath`, `ggJSON`), enabling sandboxed execution
-- **23 built-in flags** — Console, Math, Object, Array, Number, JSON, JSON5, JSONL, TOML, YAML, Symbol, Set, Map, Promise, Performance, Temporal, JSX, ArrayBuffer, FFI, Proxy, Reflect, plus test/benchmark frameworks
+- **Unconditional registration** — Standard built-ins (Console, Math, Object, Array, Number, JSON, JSON5, JSONL, TOML, YAML, Symbol, Set, Map, Promise, Performance, Temporal, ArrayBuffer, Proxy, Reflect) are always registered
+- **Flag-gated extras** — Only `ggTestAssertions`, `ggBenchmark`, and `ggFFI` use flag-gating for opt-in registration
 - **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
-- **Always-present globals** — `globalThis` and `Goccia` namespace are registered after all flag-gated built-ins
+- **Always-present globals** — `globalThis` and `Goccia` namespace are registered after all built-ins
 
-GocciaScript provides a set of built-in global objects that mirror JavaScript's standard library. Each built-in is implemented as a Pascal unit and registered by the engine based on configuration flags.
+GocciaScript provides a set of built-in global objects that mirror JavaScript's standard library. Each built-in is implemented as a Pascal unit and registered unconditionally by the engine. Only test assertions, benchmarks, and FFI use flag-gated registration.
 
 ## Registration System
 
-Built-ins are controlled by the `TGocciaGlobalBuiltins` flag set:
+Standard built-ins (Console, Math, Object, Array, Number, JSON, JSON5, JSONL, TOML, YAML, Symbol, Set, Map, Promise, Performance, Temporal, ArrayBuffer, Proxy, Reflect) are always registered unconditionally by the engine. There is no flag-gating for these — they are available in every execution context.
+
+Only three built-ins use flag-gated registration via the `TGocciaGlobalBuiltins` enum:
 
 ```pascal
 TGocciaGlobalBuiltin = (
-  ggConsole,          // console.log, etc.
-  ggMath,             // Math.PI, Math.floor, etc.
-  ggGlobalObject,     // Object.keys, Object.assign, etc.
-  ggGlobalArray,      // Array.isArray
-  ggGlobalNumber,     // Number.parseInt, Number.isNaN, etc.
-  ggPromise,          // Promise constructor, prototype, static methods, microtask queue
-  ggJSON,             // JSON.parse, JSON.stringify
-  ggJSON5,            // JSON5.parse, JSON5.stringify
-  ggJSONL,            // JSONL.parse, JSONL.parseChunk
-  ggTOML,             // TOML.parse
-  ggYAML,             // YAML.parse, YAML.parseDocuments
-  ggSymbol,           // Symbol, Symbol.for, Symbol.keyFor
-  ggSet,              // Set constructor and prototype
-  ggMap,              // Map constructor and prototype
-  ggPerformance,      // performance.now(), performance.timeOrigin
   ggTestAssertions,   // describe, test, expect (testing only)
   ggBenchmark,        // suite, bench, runBenchmarks (benchmarking only)
-  ggTemporal,         // Temporal namespace (dates, times, durations, instants)
-  ggJSX,             // JSX transformer support
-  ggArrayBuffer,     // ArrayBuffer constructor and prototype
-  ggFFI,             // Foreign Function Interface
-  ggProxy,           // Proxy constructor with handler traps
-  ggReflect          // Reflect API
+  ggFFI              // Foreign Function Interface
 );
-```
-
-The default set used by `ScriptLoader` and `REPL`:
-
-```pascal
-DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
-                  ggGlobalNumber, ggPromise, ggJSON, ggJSON5, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap,
-                  ggPerformance, ggTemporal, ggJSX, ggArrayBuffer, ggProxy, ggReflect];
 ```
 
 The `TestRunner` adds `ggTestAssertions` to inject the test framework.
 The `BenchmarkRunner` adds `ggBenchmark` to inject the benchmark framework.
+FFI (`ggFFI`) is available but must be explicitly enabled.
 
 ## Adding a New Built-in
 
@@ -433,10 +408,12 @@ A `const` global providing engine metadata and Goccia-owned utility APIs:
 |----------|------|-------------|
 | `version` | `string` | Semver version from the latest git tag (e.g., `"0.2.0"`), or tag + `-dev` suffix if there are commits after the tag (e.g., `"0.2.0-dev"`) |
 | `commit` | `string` | Short git commit hash (e.g., `"a1b2c3d"`) |
-| `builtIns` | `string[]` | Names of the enabled `TGocciaGlobalBuiltin` flags (e.g., `["Console", "Math", "GlobalObject", ...]`), derived via RTTI at runtime |
-| `strictTypes` | `boolean` | `true` in bytecode mode where strict local type enforcement is active (covering both explicit type annotations and types inferred from literal initializers); `false` in interpreted mode |
+| `strictTypes` | `boolean` | Configurable at engine creation. Defaults to `false` for interpreter, `true` for bytecode. Controls type enforcement for annotated variables. |
 | `build` | `object` | Compile-time platform information (see below) |
 | `semver` | `object` | SemVer 2.0.0 API namespace (see below) |
+| `spec` | `object` | ES specification features implemented by GocciaScript, keyed by year (e.g., `"2015"`, `"2025"`). Each year maps to an array of `{ name, link }` entries. |
+| `proposal` | `object` | TC39 proposals implemented by GocciaScript, keyed by stage (e.g., `"stage-3"`, `"stage-1"`). Each stage maps to an array of `{ name, link }` entries. |
+| `shims` | `string[]` | Names of registered shims (currently empty, infrastructure for future shim support) |
 
 **`Goccia.build`**
 
@@ -1045,7 +1022,7 @@ A raw binary data buffer. Supports both fixed-length and resizable modes. Intern
 
 ### SharedArrayBuffer (`Goccia.Values.SharedArrayBufferValue.pas`)
 
-A fixed-length raw binary data buffer intended for shared-memory use. In GocciaScript, `SharedArrayBuffer` has the same API as `ArrayBuffer` but is a distinct type (not an instance of `ArrayBuffer`). Both are gated behind the `ggArrayBuffer` flag.
+A fixed-length raw binary data buffer intended for shared-memory use. In GocciaScript, `SharedArrayBuffer` has the same API as `ArrayBuffer` but is a distinct type (not an instance of `ArrayBuffer`).
 
 **Constructor:**
 
@@ -1070,7 +1047,7 @@ A fixed-length raw binary data buffer intended for shared-memory use. In GocciaS
 
 ### TypedArrays (`Goccia.Values.TypedArrayValue.pas`)
 
-TypedArrays provide array-like views over ArrayBuffer data with fixed element types. All TypedArray constructors are gated behind the `ggArrayBuffer` flag. GocciaScript supports 10 non-BigInt TypedArray types:
+TypedArrays provide array-like views over ArrayBuffer data with fixed element types. GocciaScript supports 10 non-BigInt TypedArray types:
 
 | Type | Element size | Value range |
 |------|-------------|-------------|
@@ -1176,7 +1153,7 @@ These methods are available only on `Uint8Array`, not on other TypedArray types.
 
 ### FFI (`Goccia.Builtins.GlobalFFI.pas`)
 
-Foreign Function Interface for calling native shared libraries. Only available when `ggFFI` is enabled (not in `DefaultGlobals`).
+Foreign Function Interface for calling native shared libraries. Only available when `ggFFI` is enabled (not registered by default).
 
 **FFI global object:**
 

@@ -7,7 +7,7 @@
 - **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules (named only)
 - **Excluded by design** — `var`, `function` keyword, `==`/`!=`, `eval`, `arguments`, traditional loops, `with`, default imports/exports
 - **Graceful handling** — Parser-recognized excluded syntax (`var`, `function`, `==`, loops, `with`) parses successfully but executes as a no-op with a warning and suggestion
-- **Opt-in toggles** — ASI (`--asi`), JSX (`ggJSX`)
+- **Opt-in toggles** — ASI (`--asi` / `cfASI in Compatibility`), JSX (`ppJSX in Preprocessors`)
 - **Always-available extensions** — types as comments, decorators, enums
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision.
@@ -407,7 +407,7 @@ GocciaScript requires explicit semicolons by default, preventing this class of b
 
 ```pascal
 // Enable ASI via the engine API
-Engine := TGocciaEngine.Create(FileName, Source, TGocciaEngine.DefaultGlobals);
+Engine := TGocciaEngine.Create(FileName, Source, []);
 Engine.ASIEnabled := True;
 ```
 
@@ -631,7 +631,7 @@ enum Tokens { Alpha = Symbol("alpha") }
 
 ### JSX (Opt-in)
 
-**Supported** when `ggJSX` is enabled. JSX is handled by a source-to-source pre-pass transformer that converts JSX syntax into `createElement` function calls before the main compilation pipeline. This keeps the core lexer/parser/evaluator untouched.
+**Supported** when the JSX preprocessor is enabled (`ppJSX in Preprocessors`). JSX is handled by a source-to-source pre-pass transformer that converts JSX syntax into `createElement` function calls before the main compilation pipeline. This keeps the core lexer/parser/evaluator untouched.
 
 Users must provide their own `createElement` (and `Fragment` for `<>...</>`) in scope:
 
@@ -649,7 +649,7 @@ Lowercase tags produce string tag names (`"div"`, `"span"`); uppercase tags are 
 
 **Custom factory:** The factory and fragment function names can be overridden per-file using pragma comments (`@jsxFactory`, `@jsxFragment`) at the top of the file, before any code.
 
-The transformer generates an internal source map for accurate error line/column reporting. JSX is enabled by default in `DefaultGlobals`; to disable it, exclude `ggJSX` from the globals set.
+The transformer generates an internal source map for accurate error line/column reporting. JSX is enabled by default via `DefaultPreprocessors`; to disable it, set `Engine.Preprocessors := []`.
 
 ### Regular Expressions
 

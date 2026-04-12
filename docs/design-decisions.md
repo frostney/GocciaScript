@@ -307,17 +307,16 @@ This follows the ECMAScript specification's microtask ordering semantics. Thenab
 Built-ins are registered via a `TGocciaGlobalBuiltins` set of flags:
 
 ```pascal
-TGocciaGlobalBuiltin = (ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
-                         ggGlobalNumber, ggPromise, ggJSON, ggTOML, ggYAML,
-                         ggSymbol, ggSet, ggMap, ggTestAssertions, ggBenchmark,
-                         ggTemporal, ggJSX, ggArrayBuffer);
+TGocciaGlobalBuiltin = (ggTestAssertions, ggBenchmark, ggFFI);
 ```
 
-**Why configurable?**
+Standard built-ins (console, Math, Array, Number, Promise, JSON, Symbol, Set, Map, Temporal, ArrayBuffer, etc.) are always registered -- no flag-gating required. The enum now contains only special-purpose built-ins that are opt-in.
 
-- **Security** — Embedding environments can restrict available APIs. A sandboxed script might not get `console`.
+**Why configurable for special-purpose built-ins?**
+
 - **Testing** — The TestRunner enables `ggTestAssertions` to inject `describe`, `test`, and `expect` without polluting the normal runtime.
-- **Minimal footprint** — Only register what's needed.
+- **Benchmarking** — The BenchmarkRunner enables `ggBenchmark` to inject `suite` and `bench`.
+- **FFI** — `ggFFI` enables the Foreign Function Interface for calling native shared libraries, which is disabled by default for security.
 
 ## Global Function Placement
 

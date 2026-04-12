@@ -141,7 +141,7 @@ begin
     Backend.ASIEnabled := GASIEnabled;
     LiveModules := TObjectList<TGocciaBytecodeModule>.Create(True);
     try
-      Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
+      Backend.RegisterBuiltIns([]);
       Backend.GlobalBackedTopLevel := True;
       ConfigureModuleResolver(Backend.ModuleResolver, REPL_FILE_NAME,
         ImportMapPath, InlineAliases);
@@ -167,7 +167,7 @@ begin
         try
           SourceText := StringListToLFText(Source);
 
-          if ggJSX in TGocciaEngine.DefaultGlobals then
+          if ppJSX in TGocciaEngine.DefaultPreprocessors then
           begin
             JSXResult := TGocciaJSXTransformer.Transform(SourceText);
             SourceText := JSXResult.Source;
@@ -248,8 +248,7 @@ begin
   end
   else
   begin
-    Engine := TGocciaEngine.Create(REPL_FILE_NAME, Source,
-      TGocciaEngine.DefaultGlobals);
+    Engine := TGocciaEngine.Create(REPL_FILE_NAME, Source, []);
     Engine.ASIEnabled := GASIEnabled;
     try
       ConfigureModuleResolver(Engine.Resolver, REPL_FILE_NAME, ImportMapPath,

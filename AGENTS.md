@@ -131,6 +131,9 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Temporal types | `Goccia.Values.TemporalPlainYearMonth.pas`, `Goccia.Values.TemporalPlainMonthDay.pas`, `Goccia.Values.TemporalZonedDateTime.pas` | PlainYearMonth, PlainMonthDay, and ZonedDateTime Temporal types |
 | Temporal timezone | `Goccia.Temporal.TimeZone.pas` | IANA timezone resolution, TZif parsing, UTC offset calculation |
 | Temporal options | `Goccia.Temporal.Options.pas` | Shared options bag parsing: rounding modes, overflow, units, fractional digits |
+| Spec | `Goccia.Spec.pas` | Spec/proposal feature data and factory functions |
+| Preprocessors | `Goccia.Engine.pas` | `TGocciaPreprocessor = (ppJSX)` and `TGocciaPreprocessors` — pre-processing system |
+| Compatibility | `Goccia.Engine.pas` | `TGocciaCompatibility = (cfASI)` and `TGocciaCompatibilityFlags` — compatibility layer |
 
 **Bytecode design rules:**
 
@@ -271,7 +274,7 @@ GocciaScript intentionally excludes these JavaScript features — do **not** add
 - `function` keyword (use arrow functions or shorthand methods)
 - `==` and `!=` loose equality (use `===`/`!==`)
 - `eval()` and `arguments` object
-- Automatic semicolon insertion (semicolons required by default; ASI available as opt-in via `Engine.ASIEnabled := True` or `--asi` CLI flag)
+- Automatic semicolon insertion (semicolons required by default; ASI available as opt-in via `cfASI in Engine.Compatibility` or `--asi` CLI flag)
 - `with` statement
 - Traditional loops (`for`, `while`, `do...while`) — use `for...of`, `for await...of`, or array methods instead. `for...of` and `for await...of` are supported.
 - Default imports/exports — use named imports/exports
@@ -426,20 +429,19 @@ All values inherit from `TGocciaValue`. See [docs/value-system.md](docs/value-sy
 
 See [docs/built-ins.md](docs/built-ins.md) for complete documentation on all built-ins and how to add new ones.
 
-Built-ins are registered by the engine via `TGocciaGlobalBuiltins` flags:
+Standard built-ins (Console, Math, Object, Array, Number, Promise, JSON, JSON5, JSONL, TOML, YAML, Symbol, Set, Map, Performance, Temporal, ArrayBuffer, Proxy, Reflect, URL, etc.) are always registered by the engine. Only optional built-ins use the `TGocciaGlobalBuiltins` flag system:
 
 ```pascal
-DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
- ggGlobalNumber, ggPromise, ggJSON, ggJSON5, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer, ggProxy, ggReflect];
+TGocciaGlobalBuiltin = (ggTestAssertions, ggBenchmark, ggFFI);
 ```
 
-The TestRunner adds `ggTestAssertions`; the BenchmarkRunner adds `ggBenchmark`. FFI (`ggFFI`) is available but not in `DefaultGlobals`.
+The TestRunner adds `ggTestAssertions`; the BenchmarkRunner adds `ggBenchmark`. FFI (`ggFFI`) is available but not enabled by default.
 
-After all flag-gated built-ins, two always-present `const` globals are created: `globalThis` (self-referential global object) and `Goccia` (engine metadata with `version`, `commit`, `builtIns`, `strictTypes`, `build`, and `semver`). `Goccia.build` exposes compile-time platform information (`os` and `arch`), mirroring `Deno.build`.
+After all built-ins, two always-present `const` globals are created: `globalThis` (self-referential global object) and `Goccia` (engine metadata with `version`, `commit`, `strictTypes`, `semver`, `build`, `spec`, `proposal`, and `shims`). `Goccia.build` exposes compile-time platform information (`os` and `arch`), mirroring `Deno.build`. `Goccia.spec` and `Goccia.proposal` expose spec and proposal feature data; `Goccia.shims` lists active shims. `strictTypes` is configurable at engine creation.
 
 **JSON/JSON5 source text access (ES2024):** `JSON.parse` and `JSON5.parse` revivers receive `(key, value, context)` where `context` is an object with a `source` property for primitive values (the raw JSON/JSON5 text as written). Objects and arrays get an empty context (no `source` property). Source text collection is implemented via `TAbstractJSONParser.OnValueStart` (position tracking hook in `JSONParser.pas`) and `TGocciaJSONVisitor.RecordSourceText` (captures the raw substring). `TGocciaJSONParser.ParseWithSources` returns both the value tree and a flat source text list consumed in depth-first order by `ApplyReviver`. See [docs/built-ins.md](docs/built-ins.md) for details.
 
-**JSX:** Opt-in pre-pass transformer (`Goccia.JSX.Transformer.pas`) converts JSX to `createElement` calls. Users provide their own `createElement`/`Fragment`. Custom factory via `@jsxFactory`/`@jsxFragment` pragmas. See [docs/language-restrictions.md](docs/language-restrictions.md#jsx-opt-in).
+**JSX:** Opt-in preprocessor (`ppJSX in Engine.Preprocessors`). The JSX transformer (`Goccia.JSX.Transformer.pas`) converts JSX to `createElement` calls as a pre-pass. Users provide their own `createElement`/`Fragment`. Custom factory via `@jsxFactory`/`@jsxFragment` pragmas. See [docs/language-restrictions.md](docs/language-restrictions.md#jsx-opt-in).
 
 ## Testing
 
