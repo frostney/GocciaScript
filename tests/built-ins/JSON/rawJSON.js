@@ -63,6 +63,11 @@ test("JSON.rawJSON throws SyntaxError for invalid JSON", () => {
   expect(() => JSON.rawJSON("{invalid}")).toThrow(SyntaxError);
 });
 
+test("JSON.rawJSON with no arguments proceeds with undefined and throws SyntaxError", () => {
+  // Per spec: ToString(undefined) = "undefined", which is invalid JSON.
+  expect(() => JSON.rawJSON()).toThrow(SyntaxError);
+});
+
 test("JSON.rawJSON throws SyntaxError for object values", () => {
   expect(() => JSON.rawJSON("{}")).toThrow(SyntaxError);
   expect(() => JSON.rawJSON('{"a":1}')).toThrow(SyntaxError);

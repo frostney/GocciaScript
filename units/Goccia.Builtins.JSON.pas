@@ -174,9 +174,11 @@ function TGocciaJSONBuiltin.JSONIsRawJSON(const AArgs: TGocciaArgumentsCollectio
 var
   Value: TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'JSON.isRawJSON', ThrowError);
-
-  Value := AArgs.GetElement(0);
+  // No arity enforcement per spec — missing argument is treated as undefined.
+  if AArgs.Length >= 1 then
+    Value := AArgs.GetElement(0)
+  else
+    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
   // Step 1: If Type(O) is Object and O has an [[IsRawJSON]] internal slot, return true.
   // Step 2: Return false.
   if Value is TGocciaRawJSONValue then
@@ -257,14 +259,18 @@ const
   JSON_WHITESPACE_CR = #13;
   JSON_WHITESPACE_SPACE = #32;
 var
+  TextValue: TGocciaValue;
   JSONString: string;
   Parsed: TGocciaValue;
   FirstChar, LastChar: Char;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'JSON.rawJSON', ThrowError);
-
   // Step 1: Let jsonString be ? ToString(text).
-  JSONString := AArgs.GetElement(0).ToStringLiteral.Value;
+  // No arity enforcement per spec — missing argument is treated as undefined.
+  if AArgs.Length >= 1 then
+    TextValue := AArgs.GetElement(0)
+  else
+    TextValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  JSONString := TextValue.ToStringLiteral.Value;
 
   // Step 2: Throw a SyntaxError if jsonString is the empty string.
   if JSONString = '' then

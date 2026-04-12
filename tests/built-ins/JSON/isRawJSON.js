@@ -37,3 +37,7 @@ test("JSON.isRawJSON returns false for symbols and functions", () => {
   expect(JSON.isRawJSON(Symbol("test"))).toBe(false);
   expect(JSON.isRawJSON(() => {})).toBe(false);
 });
+
+test("JSON.isRawJSON returns false when called with no arguments", () => {
+  expect(JSON.isRawJSON()).toBe(false);
+});
