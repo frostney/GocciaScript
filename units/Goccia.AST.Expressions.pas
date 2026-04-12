@@ -77,18 +77,24 @@ type
   end;
 
   TGocciaTemplateStrings = array of string;
+  // TC39 Template Literal Revision: per-segment validity flags for cooked strings.
+  // True means the cooked value is valid; False means the escape was malformed
+  // and the cooked value should be undefined.
+  TGocciaTemplateCookedValid = array of Boolean;
 
   TGocciaTaggedTemplateExpression = class(TGocciaExpression)
   private
     FTag: TGocciaExpression;
     FCookedStrings: TGocciaTemplateStrings;
     FRawStrings: TGocciaTemplateStrings;
+    FCookedValid: TGocciaTemplateCookedValid;
     FExpressions: TObjectList<TGocciaExpression>;
     // ES2026 §13.2.8.3: cached per-call-site template object (nil until first evaluation)
     FTemplateObject: TGocciaValue;
   public
     constructor Create(const ATag: TGocciaExpression;
       const ACookedStrings, ARawStrings: TGocciaTemplateStrings;
+      const ACookedValid: TGocciaTemplateCookedValid;
       const AExpressions: TObjectList<TGocciaExpression>;
       const ALine, AColumn: Integer);
     destructor Destroy; override;
@@ -100,6 +106,7 @@ type
     property Tag: TGocciaExpression read FTag;
     property CookedStrings: TGocciaTemplateStrings read FCookedStrings;
     property RawStrings: TGocciaTemplateStrings read FRawStrings;
+    property CookedValid: TGocciaTemplateCookedValid read FCookedValid;
     property Expressions: TObjectList<TGocciaExpression> read FExpressions;
     property TemplateObject: TGocciaValue read FTemplateObject;
   end;
@@ -664,6 +671,7 @@ end;
 
 constructor TGocciaTaggedTemplateExpression.Create(const ATag: TGocciaExpression;
   const ACookedStrings, ARawStrings: TGocciaTemplateStrings;
+  const ACookedValid: TGocciaTemplateCookedValid;
   const AExpressions: TObjectList<TGocciaExpression>;
   const ALine, AColumn: Integer);
 begin
@@ -671,6 +679,7 @@ begin
   FTag := ATag;
   FCookedStrings := ACookedStrings;
   FRawStrings := ARawStrings;
+  FCookedValid := ACookedValid;
   FExpressions := AExpressions;
 end;
 

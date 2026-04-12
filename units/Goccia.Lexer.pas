@@ -53,6 +53,12 @@ type
     function ScanUnicodeEscape: string;
     function ScanHexEscape: string;
     procedure ProcessEscapeSequence(var ASB: TStringBuffer);
+    // TC39 Template Literal Revision — template-aware variants that return
+    // False on malformed escapes instead of raising, allowing tagged templates
+    // to set cooked=undefined while preserving the raw source text.
+    function ScanUnicodeEscapeForTemplate(var ASB: TStringBuffer): Boolean;
+    function ScanHexEscapeForTemplate(var ASB: TStringBuffer): Boolean;
+    procedure ProcessTemplateEscapeSequence(var ASB: TStringBuffer; var ASegmentValid: Boolean);
     procedure UpdateRegexContext(const ATokenType: TGocciaTokenType);
     procedure PushParenRegexContext(const AAllowsRegexAfter: Boolean);
     function PopParenRegexContext: Boolean;
@@ -378,6 +384,168 @@ begin
   end;
 end;
 
+// TC39 Template Literal Revision — template-aware Unicode escape scanner.
+// Returns True on success (resolved value appended to ASB), False on malformed
+// escape (cursor advanced past the consumed characters, nothing appended).
+// Does not raise TGocciaLexerError — the caller marks the segment as invalid.
+function TGocciaLexer.ScanUnicodeEscapeForTemplate(var ASB: TStringBuffer): Boolean;
+var
+  CodePoint, LowSurrogate: Cardinal;
+  HexStr: string;
+  I, HexStart, SavedCurrent, SavedColumn: Integer;
+begin
+  // Called after consuming '\u', Peek is the next character
+  if Peek = '{' then
+  begin
+    Advance; // consume '{'
+    HexStart := FCurrent;
+    // Scan hex digits, stopping at '}', backtick, or EOF.
+    // Non-hex characters also stop the scan (invalid escape).
+    while (Peek <> '}') and (Peek <> '`') and not IsAtEnd do
+    begin
+      if not CharInSet(Peek, ['0'..'9', 'a'..'f', 'A'..'F']) then
+        Break;
+      Advance;
+    end;
+    HexStr := Copy(FSource, HexStart, FCurrent - HexStart);
+    if (Peek <> '}') or (HexStr = '') then
+      Exit(False); // unterminated or empty
+    if not IsValidHexString(HexStr) then
+      Exit(False);
+    Advance; // consume '}'
+    CodePoint := StrToInt('$' + HexStr);
+    if CodePoint > $10FFFF then
+      Exit(False);
+  end
+  else
+  begin
+    HexStart := FCurrent;
+    for I := 1 to 4 do
+    begin
+      if IsAtEnd or (Peek = '`') then
+        Exit(False);
+      Advance;
+    end;
+    HexStr := Copy(FSource, HexStart, FCurrent - HexStart);
+    if not IsValidHexString(HexStr) then
+      Exit(False);
+    CodePoint := StrToInt('$' + HexStr);
+  end;
+
+  // ES2026 §12.9.4: Combine UTF-16 surrogate pairs into a single code point
+  if (CodePoint >= $D800) and (CodePoint <= $DBFF) and (Peek = '\') and (PeekNext = 'u') then
+  begin
+    SavedCurrent := FCurrent;
+    SavedColumn := FColumn;
+    Advance; // consume '\'
+    Advance; // consume 'u'
+    HexStart := FCurrent;
+    for I := 1 to 4 do
+    begin
+      if IsAtEnd then
+      begin
+        FCurrent := SavedCurrent;
+        FColumn := SavedColumn;
+        Break;
+      end;
+      Advance;
+    end;
+    HexStr := Copy(FSource, HexStart, FCurrent - HexStart);
+    if (Length(HexStr) = 4) and IsValidHexString(HexStr) then
+    begin
+      LowSurrogate := StrToInt('$' + HexStr);
+      if (LowSurrogate >= $DC00) and (LowSurrogate <= $DFFF) then
+        CodePoint := $10000 + ((CodePoint - $D800) shl 10) + (LowSurrogate - $DC00)
+      else
+      begin
+        FCurrent := SavedCurrent;
+        FColumn := SavedColumn;
+      end;
+    end;
+  end;
+
+  // Convert code point to UTF-8
+  if CodePoint <= $7F then
+    ASB.AppendChar(Chr(CodePoint))
+  else if CodePoint <= $7FF then
+  begin
+    ASB.AppendChar(Chr($C0 or (CodePoint shr 6)));
+    ASB.AppendChar(Chr($80 or (CodePoint and $3F)));
+  end
+  else if CodePoint <= $FFFF then
+  begin
+    ASB.AppendChar(Chr($E0 or (CodePoint shr 12)));
+    ASB.AppendChar(Chr($80 or ((CodePoint shr 6) and $3F)));
+    ASB.AppendChar(Chr($80 or (CodePoint and $3F)));
+  end
+  else if CodePoint <= $10FFFF then
+  begin
+    ASB.AppendChar(Chr($F0 or (CodePoint shr 18)));
+    ASB.AppendChar(Chr($80 or ((CodePoint shr 12) and $3F)));
+    ASB.AppendChar(Chr($80 or ((CodePoint shr 6) and $3F)));
+    ASB.AppendChar(Chr($80 or (CodePoint and $3F)));
+  end
+  else
+    Exit(False);
+  Result := True;
+end;
+
+// TC39 Template Literal Revision — template-aware hex escape scanner.
+// Returns True on success (resolved character appended to ASB), False on
+// malformed escape (cursor advanced past consumed characters).
+function TGocciaLexer.ScanHexEscapeForTemplate(var ASB: TStringBuffer): Boolean;
+var
+  HexStr: string;
+  HexStart: Integer;
+  CodePoint: Cardinal;
+begin
+  // Called after consuming '\x', Peek is the first hex digit
+  if IsAtEnd or (Peek = '`') then
+    Exit(False);
+  HexStart := FCurrent;
+  Advance;
+  if IsAtEnd or (Peek = '`') then
+    Exit(False);
+  Advance;
+  HexStr := Copy(FSource, HexStart, 2);
+  if not IsValidHexString(HexStr) then
+    Exit(False);
+
+  CodePoint := StrToInt('$' + HexStr);
+  ASB.AppendChar(Chr(CodePoint));
+  Result := True;
+end;
+
+// TC39 Template Literal Revision — process an escape sequence in template
+// context. On valid escapes, appends the resolved value to ASB. On invalid
+// \u or \x escapes, sets ASegmentValid to False and does not append to ASB.
+procedure TGocciaLexer.ProcessTemplateEscapeSequence(var ASB: TStringBuffer;
+  var ASegmentValid: Boolean);
+begin
+  case Peek of
+    'n': begin ASB.AppendChar(#10); Advance; end;
+    'r': begin ASB.AppendChar(#13); Advance; end;
+    't': begin ASB.AppendChar(#9); Advance; end;
+    '\': begin ASB.AppendChar('\'); Advance; end;
+    '0': begin ASB.AppendChar(#0); Advance; end;
+    'u':
+    begin
+      Advance;
+      if not ScanUnicodeEscapeForTemplate(ASB) then
+        ASegmentValid := False;
+    end;
+    'x':
+    begin
+      Advance;
+      if not ScanHexEscapeForTemplate(ASB) then
+        ASegmentValid := False;
+    end;
+  else
+    ASB.AppendChar(Peek);
+    Advance;
+  end;
+end;
+
 procedure TGocciaLexer.PushParenRegexContext(const AAllowsRegexAfter: Boolean);
 begin
   if FParenRegexContextCount >= Length(FParenRegexContext) then
@@ -469,17 +637,26 @@ begin
   AddToken(gttString, SB.ToString);
 end;
 
+// TC39 Template Literal Revision: template scanning tolerates malformed escape
+// sequences.  When an invalid \u or \x escape is encountered, the segment is
+// flagged and the token separator changes from #1 to #2 so the parser can
+// detect that cooked values must be re-derived per-segment from the raw string.
 procedure TGocciaLexer.ScanTemplate;
 const
   TEMPLATE_RAW_SEPARATOR = #1;
+  TEMPLATE_INVALID_ESCAPE_SEPARATOR = #2;
 var
   SB: TStringBuffer;
   RawSB: TStringBuffer;
   C: Char;
   RawStart, J: Integer;
+  SegmentValid, HasInvalidEscape: Boolean;
+  Separator: Char;
 begin
   SB := TStringBuffer.Create;
   RawSB := TStringBuffer.Create;
+  HasInvalidEscape := False;
+  SegmentValid := True;
   while (Peek <> '`') and not IsAtEnd do
   begin
     if Peek = #13 then
@@ -523,10 +700,13 @@ begin
           end;
         else
           begin
-            // Capture raw escape sequence by tracking source positions
+            // Capture raw escape sequence by tracking source positions.
+            // Use the template-aware variant that tolerates malformed escapes.
             RawSB.AppendChar('\');
             RawStart := FCurrent;
-            ProcessEscapeSequence(SB);
+            ProcessTemplateEscapeSequence(SB, SegmentValid);
+            if not SegmentValid then
+              HasInvalidEscape := True;
             // Copy the raw source text consumed by the escape sequence
             for J := RawStart to FCurrent - 1 do
               RawSB.AppendChar(FSource[J]);
@@ -547,7 +727,13 @@ begin
       FFileName, GetSourceLines, SSuggestCloseTemplate);
 
   Advance; // Closing backtick
-  AddToken(gttTemplate, SB.ToString + TEMPLATE_RAW_SEPARATOR + RawSB.ToString);
+  // TC39 Template Literal Revision: use #2 separator when the template contains
+  // invalid escape sequences, signalling the parser to re-cook from raw.
+  if HasInvalidEscape then
+    Separator := TEMPLATE_INVALID_ESCAPE_SEPARATOR
+  else
+    Separator := TEMPLATE_RAW_SEPARATOR;
+  AddToken(gttTemplate, SB.ToString + Separator + RawSB.ToString);
 end;
 
 procedure TGocciaLexer.ScanRegexLiteral;

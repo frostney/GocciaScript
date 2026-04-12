@@ -281,4 +281,130 @@ describe("tagged templates", () => {
     const b = tag`hello`;
     expect(a).not.toBe(b);
   });
+
+  // TC39 Template Literal Revision (ES2018): tagged templates tolerate malformed
+  // escape sequences by setting the cooked value to undefined while preserving
+  // the raw source text.
+
+  test("malformed \\xG1 hex escape sets cooked to undefined", () => {
+    let cooked;
+    let raw;
+    const tag = (strings) => { cooked = strings[0]; raw = strings.raw[0]; };
+    tag`\xG1`;
+    expect(cooked).toBe(undefined);
+    expect(raw).toBe("\\xG1");
+  });
+
+  test("malformed \\u{ sets cooked to undefined", () => {
+    let cooked;
+    let raw;
+    const tag = (strings) => { cooked = strings[0]; raw = strings.raw[0]; };
+    tag`\u{`;
+    expect(cooked).toBe(undefined);
+    expect(raw).toBe("\\u{");
+  });
+
+  test("malformed \\u{ZZZZ} sets cooked to undefined", () => {
+    let cooked;
+    let raw;
+    const tag = (strings) => { cooked = strings[0]; raw = strings.raw[0]; };
+    tag`\u{ZZZZ}`;
+    expect(cooked).toBe(undefined);
+    expect(raw).toBe("\\u{ZZZZ}");
+  });
+
+  test("malformed \\u00 (incomplete unicode) sets cooked to undefined", () => {
+    let cooked;
+    let raw;
+    const tag = (strings) => { cooked = strings[0]; raw = strings.raw[0]; };
+    tag`\u00`;
+    expect(cooked).toBe(undefined);
+    expect(raw).toBe("\\u00");
+  });
+
+  test("malformed \\x (no digits) sets cooked to undefined", () => {
+    let cooked;
+    let raw;
+    const tag = (strings) => { cooked = strings[0]; raw = strings.raw[0]; };
+    tag`\xQQ`;
+    expect(cooked).toBe(undefined);
+    expect(raw).toBe("\\xQQ");
+  });
+
+  test("valid segment alongside invalid segment in tagged template", () => {
+    let cooked;
+    let raw;
+    const tag = (strings) => { cooked = strings; raw = strings.raw; };
+    tag`valid${"expr"}\xG1`;
+    // First segment is valid
+    expect(cooked[0]).toBe("valid");
+    expect(raw[0]).toBe("valid");
+    // Second segment has malformed escape → cooked is undefined
+    expect(cooked[1]).toBe(undefined);
+    expect(raw[1]).toBe("\\xG1");
+  });
+
+  test("malformed escape with mixed valid text in same segment", () => {
+    let cooked;
+    let raw;
+    const tag = (strings) => { cooked = strings[0]; raw = strings.raw[0]; };
+    tag`hello\xG1world`;
+    expect(cooked).toBe(undefined);
+    expect(raw).toBe("hello\\xG1world");
+  });
+
+  test("template object with undefined cooked segments is still frozen", () => {
+    let templateObj;
+    const tag = (strings) => { templateObj = strings; return strings; };
+    tag`\xG1`;
+    expect(Object.isFrozen(templateObj)).toBe(true);
+    expect(Object.isFrozen(templateObj.raw)).toBe(true);
+  });
+
+  test("malformed escape does not affect expression evaluation", () => {
+    const values = [];
+    const tag = (strings, ...vals) => { values.push(...vals); return strings; };
+    const x = 42;
+    const result = tag`\xG1${x}end`;
+    expect(values[0]).toBe(42);
+    expect(result[0]).toBe(undefined);
+    expect(result[1]).toBe("end");
+    expect(result.raw[0]).toBe("\\xG1");
+    expect(result.raw[1]).toBe("end");
+  });
+
+  test("call site identity preserved with malformed escapes", () => {
+    const tag = (strings) => strings;
+    const callSite = () => tag`\xG1`;
+    const a = callSite();
+    const b = callSite();
+    expect(a).toBe(b);
+  });
+
+  test("malformed \\u{110000} (code point too large) sets cooked to undefined", () => {
+    let cooked;
+    let raw;
+    const tag = (strings) => { cooked = strings[0]; raw = strings.raw[0]; };
+    tag`\u{110000}`;
+    expect(cooked).toBe(undefined);
+    expect(raw).toBe("\\u{110000}");
+  });
+
+  test("valid unicode escape in tagged template still works", () => {
+    let cooked;
+    let raw;
+    const tag = (strings) => { cooked = strings[0]; raw = strings.raw[0]; };
+    tag`\u0041`;
+    expect(cooked).toBe("A");
+    expect(raw).toBe("\\u0041");
+  });
+
+  test("valid hex escape in tagged template still works", () => {
+    let cooked;
+    let raw;
+    const tag = (strings) => { cooked = strings[0]; raw = strings.raw[0]; };
+    tag`\x41`;
+    expect(cooked).toBe("A");
+    expect(raw).toBe("\\x41");
+  });
 });

@@ -2959,8 +2959,15 @@ begin
       CookedArray := TGocciaArrayValue.Create;
       TGarbageCollector.Instance.AddTempRoot(CookedArray);
       try
+        // TC39 Template Literal Revision: segments with malformed escapes get
+        // cooked=undefined; valid segments get the resolved string value.
         for I := 0 to Length(ATaggedTemplateExpression.CookedStrings) - 1 do
-          CookedArray.Elements.Add(TGocciaStringLiteralValue.Create(ATaggedTemplateExpression.CookedStrings[I]));
+        begin
+          if ATaggedTemplateExpression.CookedValid[I] then
+            CookedArray.Elements.Add(TGocciaStringLiteralValue.Create(ATaggedTemplateExpression.CookedStrings[I]))
+          else
+            CookedArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+        end;
         // ES2026 §13.2.8.3 step 8: Define raw as non-enumerable, non-writable, non-configurable
         CookedArray.DefineProperty(PROP_RAW,
           TGocciaPropertyDescriptorData.Create(RawArray, []));

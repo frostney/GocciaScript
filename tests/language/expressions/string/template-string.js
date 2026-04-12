@@ -43,3 +43,4 @@ test("triple backslash before dollar-brace is literal backslash plus literal dol
   const x = 42;
   expect(`\\\${x}`).toBe("\\${x}");
 });
+

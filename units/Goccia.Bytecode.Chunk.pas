@@ -28,14 +28,17 @@ type
   );
 
   TGocciaBytecodeStringArray = array of string;
+  // TC39 Template Literal Revision: per-segment validity flags for cooked strings.
+  TGocciaBytecodeTemplateCookedValid = array of Boolean;
 
   TGocciaBytecodeConstant = record
     Kind: TGocciaBytecodeConstantKind;
     IntValue: Int64;
     FloatValue: Double;
     StringValue: string;
-    CookedStrings: TGocciaBytecodeStringArray;  // for bckTemplateObject
-    RawStrings: TGocciaBytecodeStringArray;     // for bckTemplateObject
+    CookedStrings: TGocciaBytecodeStringArray;          // for bckTemplateObject
+    RawStrings: TGocciaBytecodeStringArray;             // for bckTemplateObject
+    CookedValid: TGocciaBytecodeTemplateCookedValid;    // for bckTemplateObject
   end;
 
   TGocciaUpvalueDescriptor = record
@@ -104,7 +107,8 @@ type
     // ES2026 §13.2.8.3: add a bckTemplateObject constant that the VM will lazily
     // build and cache on first execution.  Each call site gets its own entry;
     // no deduplication is performed.
-    function AddConstantTemplateObject(const ACookedStrings, ARawStrings: array of string): UInt16;
+    function AddConstantTemplateObject(const ACookedStrings, ARawStrings: array of string;
+      const ACookedValid: array of Boolean): UInt16;
     function GetTemplateObjectCache(const ASlot: Integer): TObject;
     procedure SetTemplateObjectCache(const ASlot: Integer; const AValue: TObject);
     function AddFunction(const AFunction: TGocciaFunctionTemplate): UInt16;
@@ -318,7 +322,8 @@ end;
 
 // ES2026 §13.2.8.3 GetTemplateObject(templateLiteral)
 function TGocciaFunctionTemplate.AddConstantTemplateObject(
-  const ACookedStrings, ARawStrings: array of string): UInt16;
+  const ACookedStrings, ARawStrings: array of string;
+  const ACookedValid: array of Boolean): UInt16;
 var
   K: Integer;
 begin
@@ -338,6 +343,10 @@ begin
   SetLength(FConstants[FConstantCount].RawStrings, Length(ARawStrings));
   for K := 0 to High(ARawStrings) do
     FConstants[FConstantCount].RawStrings[K] := ARawStrings[K];
+  // TC39 Template Literal Revision: per-segment cooked validity flags
+  SetLength(FConstants[FConstantCount].CookedValid, Length(ACookedValid));
+  for K := 0 to High(ACookedValid) do
+    FConstants[FConstantCount].CookedValid[K] := ACookedValid[K];
   // Grow the runtime cache; the new slot starts nil (built on first VM execution)
   if FTemplateObjectCacheCount >= Length(FTemplateObjectCaches) then
     SetLength(FTemplateObjectCaches, FTemplateObjectCacheCount * 2 + 4);

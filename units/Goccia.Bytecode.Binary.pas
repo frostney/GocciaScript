@@ -161,6 +161,9 @@ begin
         WriteUInt16(UInt16(Length(Constant.RawStrings)));
         for J := 0 to Length(Constant.RawStrings) - 1 do
           WriteString(Constant.RawStrings[J]);
+        // TC39 Template Literal Revision: per-segment cooked validity flags
+        for J := 0 to Length(Constant.CookedValid) - 1 do
+          WriteBoolean(Constant.CookedValid[J]);
       end;
     end;
   end;
@@ -325,6 +328,7 @@ var
   SourceFile: string;
   LineMapCount, LocalCount: UInt32;
   CookedStrings, RawStrings: TGocciaBytecodeStringArray;
+  CookedValid: TGocciaBytecodeTemplateCookedValid;
 begin
   Name := ReadString;
   MaxRegs := ReadUInt8;
@@ -365,7 +369,11 @@ begin
         SetLength(RawStrings, StrCount);
         for J := 0 to StrCount - 1 do
           RawStrings[J] := ReadString;
-        Result.AddConstantTemplateObject(CookedStrings, RawStrings);
+        // TC39 Template Literal Revision: per-segment cooked validity flags
+        SetLength(CookedValid, Length(CookedStrings));
+        for J := 0 to Length(CookedStrings) - 1 do
+          CookedValid[J] := ReadBoolean;
+        Result.AddConstantTemplateObject(CookedStrings, RawStrings, CookedValid);
       end;
     end;
   end;

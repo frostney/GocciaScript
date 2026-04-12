@@ -196,6 +196,8 @@ implementation
 uses
   SysUtils,
 
+  StringBuffer,
+
   Goccia.Error,
   Goccia.Error.Suggestions,
   Goccia.Keywords.Contextual,
@@ -868,6 +870,19 @@ begin
   end;
 end;
 
+// Validate that all characters in a string are hexadecimal digits.
+function IsValidHexString(const AValue: string): Boolean;
+var
+  I: Integer;
+begin
+  if Length(AValue) = 0 then
+    Exit(False);
+  for I := 1 to Length(AValue) do
+    if not CharInSet(AValue[I], ['0'..'9', 'a'..'f', 'A'..'F']) then
+      Exit(False);
+  Result := True;
+end;
+
 // Compute the UTF-8 byte count for a Unicode code point.
 function UTF8ByteCount(const ACodePoint: Cardinal): Integer; inline;
 begin
@@ -1049,12 +1064,26 @@ begin
 end;
 
 // Extract cooked and raw full strings from a template token lexeme.
-procedure ExtractTemplateParts(const ALexeme: string; out ACookedFull, ARawFull: string);
+// AHasInvalidEscapes is True when the lexer used the #2 separator to signal
+// that the template contains at least one malformed escape sequence.
+procedure ExtractTemplateParts(const ALexeme: string;
+  out ACookedFull, ARawFull: string; out AHasInvalidEscapes: Boolean);
 const
   TEMPLATE_RAW_SEPARATOR = #1;
+  TEMPLATE_INVALID_ESCAPE_SEPARATOR = #2;
 var
   SepPos: Integer;
 begin
+  AHasInvalidEscapes := False;
+  // Check for the invalid-escape separator first
+  SepPos := Pos(TEMPLATE_INVALID_ESCAPE_SEPARATOR, ALexeme);
+  if SepPos > 0 then
+  begin
+    AHasInvalidEscapes := True;
+    ACookedFull := Copy(ALexeme, 1, SepPos - 1);
+    ARawFull := Copy(ALexeme, SepPos + 1, MaxInt);
+    Exit;
+  end;
   SepPos := Pos(TEMPLATE_RAW_SEPARATOR, ALexeme);
   if SepPos > 0 then
   begin
@@ -1066,6 +1095,249 @@ begin
     ACookedFull := ALexeme;
     ARawFull := ALexeme;
   end;
+end;
+
+// TC39 Template Literal Revision — split a raw template string at real ${...}
+// interpolation boundaries.  Uses only the raw string (no cooked tracking).
+// For boundary detection, skipping \ + 1 char is sufficient because \$ in
+// raw is two characters and never matches the ${ boundary pattern.
+procedure SplitRawAtBoundaries(const ARawFull: string;
+  out ARawSegments, AExpressionTexts: TGocciaTemplateStrings);
+var
+  RawI, StartRaw, SegmentCount, ExprCount, ExprStartRaw, BraceCount: Integer;
+begin
+  SetLength(ARawSegments, 0);
+  SetLength(AExpressionTexts, 0);
+  SegmentCount := 0;
+  ExprCount := 0;
+  RawI := 1;
+  StartRaw := 1;
+
+  while RawI <= Length(ARawFull) do
+  begin
+    if ARawFull[RawI] = '\' then
+    begin
+      // Skip \ and the next character (handles \$, \\, \n, etc.)
+      Inc(RawI, 2);
+    end
+    else if (ARawFull[RawI] = '$') and (RawI < Length(ARawFull)) and
+            (ARawFull[RawI + 1] = '{') then
+    begin
+      // Real interpolation boundary
+      SetLength(ARawSegments, SegmentCount + 1);
+      ARawSegments[SegmentCount] := Copy(ARawFull, StartRaw, RawI - StartRaw);
+      Inc(SegmentCount);
+
+      Inc(RawI, 2); // skip ${
+      ExprStartRaw := RawI;
+
+      // Find matching } by brace counting
+      BraceCount := 1;
+      while (RawI <= Length(ARawFull)) and (BraceCount > 0) do
+      begin
+        if ARawFull[RawI] = '{' then
+          Inc(BraceCount)
+        else if ARawFull[RawI] = '}' then
+          Dec(BraceCount);
+        if BraceCount > 0 then
+          Inc(RawI);
+      end;
+
+      SetLength(AExpressionTexts, ExprCount + 1);
+      AExpressionTexts[ExprCount] := Trim(Copy(ARawFull, ExprStartRaw, RawI - ExprStartRaw));
+      Inc(ExprCount);
+
+      Inc(RawI); // skip closing }
+      StartRaw := RawI;
+    end
+    else
+      Inc(RawI);
+  end;
+
+  // Final segment
+  SetLength(ARawSegments, SegmentCount + 1);
+  ARawSegments[SegmentCount] := Copy(ARawFull, StartRaw, RawI - StartRaw);
+end;
+
+// TC39 Template Literal Revision — cook a Unicode escape from a raw segment.
+// AStr is the raw text, APos is the current position (after 'u' has been
+// consumed). On success, appends the resolved character(s) to ASB and advances
+// APos. Returns False on malformed escape.
+function CookUnicodeEscape(const AStr: string; var APos: Integer;
+  var ASB: TStringBuffer): Boolean;
+var
+  CodePoint, LowSurrogate: Cardinal;
+  HexStr: string;
+  HexStart, I, SavedPos: Integer;
+begin
+  if APos > Length(AStr) then
+    Exit(False);
+
+  if AStr[APos] = '{' then
+  begin
+    Inc(APos); // skip '{'
+    HexStart := APos;
+    while (APos <= Length(AStr)) and (AStr[APos] <> '}') do
+      Inc(APos);
+    if APos > Length(AStr) then
+      Exit(False); // unterminated
+    HexStr := Copy(AStr, HexStart, APos - HexStart);
+    if (HexStr = '') or not IsValidHexString(HexStr) then
+      Exit(False);
+    Inc(APos); // skip '}'
+    CodePoint := StrToInt('$' + HexStr);
+    if CodePoint > $10FFFF then
+      Exit(False);
+  end
+  else
+  begin
+    HexStart := APos;
+    for I := 1 to 4 do
+    begin
+      if APos > Length(AStr) then
+        Exit(False);
+      Inc(APos);
+    end;
+    HexStr := Copy(AStr, HexStart, 4);
+    if not IsValidHexString(HexStr) then
+      Exit(False);
+    CodePoint := StrToInt('$' + HexStr);
+  end;
+
+  // ES2026 §12.9.4: Combine UTF-16 surrogate pairs
+  if (CodePoint >= $D800) and (CodePoint <= $DBFF) and
+     (APos + 5 <= Length(AStr)) and
+     (AStr[APos] = '\') and (AStr[APos + 1] = 'u') then
+  begin
+    SavedPos := APos;
+    Inc(APos, 2); // skip \u
+    HexStr := Copy(AStr, APos, 4);
+    if (Length(HexStr) = 4) and IsValidHexString(HexStr) then
+    begin
+      LowSurrogate := StrToInt('$' + HexStr);
+      if (LowSurrogate >= $DC00) and (LowSurrogate <= $DFFF) then
+      begin
+        CodePoint := $10000 + ((CodePoint - $D800) shl 10) + (LowSurrogate - $DC00);
+        Inc(APos, 4);
+      end
+      else
+        APos := SavedPos; // not a surrogate pair, restore
+    end
+    else
+      APos := SavedPos;
+  end;
+
+  // Convert code point to UTF-8
+  if CodePoint <= $7F then
+    ASB.AppendChar(Chr(CodePoint))
+  else if CodePoint <= $7FF then
+  begin
+    ASB.AppendChar(Chr($C0 or (CodePoint shr 6)));
+    ASB.AppendChar(Chr($80 or (CodePoint and $3F)));
+  end
+  else if CodePoint <= $FFFF then
+  begin
+    ASB.AppendChar(Chr($E0 or (CodePoint shr 12)));
+    ASB.AppendChar(Chr($80 or ((CodePoint shr 6) and $3F)));
+    ASB.AppendChar(Chr($80 or (CodePoint and $3F)));
+  end
+  else if CodePoint <= $10FFFF then
+  begin
+    ASB.AppendChar(Chr($F0 or (CodePoint shr 18)));
+    ASB.AppendChar(Chr($80 or ((CodePoint shr 12) and $3F)));
+    ASB.AppendChar(Chr($80 or ((CodePoint shr 6) and $3F)));
+    ASB.AppendChar(Chr($80 or (CodePoint and $3F)));
+  end
+  else
+    Exit(False);
+  Result := True;
+end;
+
+// TC39 Template Literal Revision — cook a hex escape from a raw segment.
+// AStr is the raw text, APos is the current position (after 'x' has been
+// consumed). On success, appends the resolved character to ASB and advances
+// APos. Returns False on malformed escape.
+function CookHexEscape(const AStr: string; var APos: Integer;
+  var ASB: TStringBuffer): Boolean;
+var
+  HexStr: string;
+  CodePoint: Cardinal;
+begin
+  if APos + 1 > Length(AStr) then
+    Exit(False);
+  HexStr := Copy(AStr, APos, 2);
+  if not IsValidHexString(HexStr) then
+    Exit(False);
+  Inc(APos, 2);
+  CodePoint := StrToInt('$' + HexStr);
+  ASB.AppendChar(Chr(CodePoint));
+  Result := True;
+end;
+
+// TC39 Template Literal Revision — cook a raw template segment into its
+// cooked string value by resolving escape sequences.  Returns True if all
+// escapes are valid (ACooked receives the cooked value).  Returns False if
+// any escape is malformed (the segment's cooked value should be undefined).
+function CookRawSegment(const ARawSegment: string; out ACooked: string): Boolean;
+var
+  SB: TStringBuffer;
+  I: Integer;
+begin
+  SB := TStringBuffer.Create;
+  Result := True;
+  I := 1;
+  while I <= Length(ARawSegment) do
+  begin
+    if ARawSegment[I] = '\' then
+    begin
+      Inc(I); // skip '\'
+      if I > Length(ARawSegment) then
+      begin
+        Result := False;
+        Break;
+      end;
+      case ARawSegment[I] of
+        'n': begin SB.AppendChar(#10); Inc(I); end;
+        'r': begin SB.AppendChar(#13); Inc(I); end;
+        't': begin SB.AppendChar(#9); Inc(I); end;
+        '\': begin SB.AppendChar('\'); Inc(I); end;
+        '0': begin SB.AppendChar(#0); Inc(I); end;
+        '`': begin SB.AppendChar('`'); Inc(I); end;
+        '$': begin SB.AppendChar('$'); Inc(I); end;
+        'u':
+        begin
+          Inc(I); // skip 'u'
+          if not CookUnicodeEscape(ARawSegment, I, SB) then
+          begin
+            Result := False;
+            Break;
+          end;
+        end;
+        'x':
+        begin
+          Inc(I); // skip 'x'
+          if not CookHexEscape(ARawSegment, I, SB) then
+          begin
+            Result := False;
+            Break;
+          end;
+        end;
+      else
+        SB.AppendChar(ARawSegment[I]);
+        Inc(I);
+      end;
+    end
+    else
+    begin
+      SB.AppendChar(ARawSegment[I]);
+      Inc(I);
+    end;
+  end;
+
+  if Result then
+    ACooked := SB.ToString
+  else
+    ACooked := '';
 end;
 
 // Parse a template interpolation expression text into an AST expression node.
@@ -1111,20 +1383,42 @@ begin
 end;
 
 // ES2026 §13.3.11 Tagged Templates
+// TC39 Template Literal Revision: when the template contains malformed escapes,
+// split from the raw string and re-cook each segment individually, marking
+// invalid segments so the evaluator emits undefined for their cooked values.
 function TGocciaParser.ParseTaggedTemplate(const ATag: TGocciaExpression;
   const ATemplateToken: TGocciaToken;
   const ALine, AColumn: Integer): TGocciaTaggedTemplateExpression;
 var
   CookedFull, RawFull: string;
   CookedStrings, RawStrings, ExprTexts: TGocciaTemplateStrings;
+  CookedValid: TGocciaTemplateCookedValid;
   Expressions: TObjectList<TGocciaExpression>;
   ParsedExpr: TGocciaExpression;
+  HasInvalidEscapes: Boolean;
   I: Integer;
 begin
-  ExtractTemplateParts(ATemplateToken.Lexeme, CookedFull, RawFull);
+  ExtractTemplateParts(ATemplateToken.Lexeme, CookedFull, RawFull, HasInvalidEscapes);
 
-  // Split at real interpolation boundaries using raw string for detection
-  SplitTemplateAtBoundaries(CookedFull, RawFull, CookedStrings, RawStrings, ExprTexts);
+  if HasInvalidEscapes then
+  begin
+    // TC39 Template Literal Revision: the cooked string from the lexer is
+    // unreliable because invalid escapes were skipped.  Split using the raw
+    // string only and re-cook each segment individually.
+    SplitRawAtBoundaries(RawFull, RawStrings, ExprTexts);
+    SetLength(CookedStrings, Length(RawStrings));
+    SetLength(CookedValid, Length(RawStrings));
+    for I := 0 to Length(RawStrings) - 1 do
+      CookedValid[I] := CookRawSegment(RawStrings[I], CookedStrings[I]);
+  end
+  else
+  begin
+    // No invalid escapes — use the existing dual-tracking split
+    SplitTemplateAtBoundaries(CookedFull, RawFull, CookedStrings, RawStrings, ExprTexts);
+    SetLength(CookedValid, Length(CookedStrings));
+    for I := 0 to Length(CookedStrings) - 1 do
+      CookedValid[I] := True;
+  end;
 
   // Parse each interpolation expression into an AST node
   Expressions := TObjectList<TGocciaExpression>.Create(True);
@@ -1136,21 +1430,31 @@ begin
   end;
 
   Result := TGocciaTaggedTemplateExpression.Create(ATag, CookedStrings, RawStrings,
-    Expressions, ALine, AColumn);
+    CookedValid, Expressions, ALine, AColumn);
 end;
 
 // ES2026 §13.2.8 Template Literals — pre-segment non-tagged templates at parse
 // time using raw-string boundary detection, so that escaped dollar signs (\$)
 // are never mistaken for interpolation boundaries at evaluation time.
+// TC39 Template Literal Revision: untagged templates with malformed escape
+// sequences raise SyntaxError at parse time (preserving existing behavior).
 function TGocciaParser.ParseTemplateLiteral(const AToken: TGocciaToken): TGocciaExpression;
 var
   CookedFull, RawFull: string;
+  HasInvalidEscapes: Boolean;
   CookedSegments, RawSegments, ExprTexts: TGocciaTemplateStrings;
   Parts: TObjectList<TGocciaExpression>;
   ParsedExpr: TGocciaExpression;
   I: Integer;
 begin
-  ExtractTemplateParts(AToken.Lexeme, CookedFull, RawFull);
+  ExtractTemplateParts(AToken.Lexeme, CookedFull, RawFull, HasInvalidEscapes);
+
+  // TC39 Template Literal Revision: untagged templates must still reject
+  // malformed escape sequences at parse time.
+  if HasInvalidEscapes then
+    raise TGocciaSyntaxError.Create('Invalid escape sequence in template literal',
+      AToken.Line, AToken.Column, FFileName, FSourceLines, '');
+
   SplitTemplateAtBoundaries(CookedFull, RawFull, CookedSegments, RawSegments, ExprTexts);
 
   // No real interpolations — return a simple template literal
