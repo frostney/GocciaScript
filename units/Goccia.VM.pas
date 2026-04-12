@@ -116,7 +116,8 @@ type
       const ATryAsync: Boolean): TGocciaValue;
     function ConstructValue(const AConstructor: TGocciaValue;
       const AArguments: TGocciaArgumentsCollection): TGocciaValue;
-    function ImportModuleValue(const APath: string): TGocciaValue;
+    function ImportModuleValue(const APath: string): TGocciaValue; overload;
+    function ImportModuleValue(const APath, AReferrer: string): TGocciaValue; overload;
     procedure ExportBindingValue(const AName: string; const AValue: TGocciaValue);
     procedure DefineGetterProperty(const ATarget: TGocciaValue; const AName: string;
       const AGetter: TGocciaValue);
@@ -2363,6 +2364,17 @@ begin
   Result := CreateModuleNamespaceObject(Module);
 end;
 
+function TGocciaVM.ImportModuleValue(const APath, AReferrer: string): TGocciaValue;
+var
+  Module: TGocciaModule;
+begin
+  if not Assigned(FInterpreter) then
+    ThrowTypeError('Module loading is not available in TGocciaVM');
+
+  Module := FInterpreter.LoadModule(APath, AReferrer);
+  Result := CreateModuleNamespaceObject(Module);
+end;
+
 procedure TGocciaVM.ExportBindingValue(const AName: string; const AValue: TGocciaValue);
 begin
   if not Assigned(FCurrentModuleExports) then
@@ -3516,6 +3528,7 @@ var
   JumpOffset: Integer;
   PrevCovLine, CovLine: UInt32;
   ProfileEntryTimestamp: Int64;
+  DynImportPromise: TGocciaPromiseValue;
 begin
   Template := nil;
   ProfileEntryTimestamp := 0;
@@ -5213,6 +5226,47 @@ begin
           SetRegister(A, GetOrCreateImportMeta(Template.DebugInfo.SourceFile))
         else
           SetRegister(A, GetOrCreateImportMeta(FCurrentModuleSourcePath));
+
+      // ES2026 §13.3.10.1 ImportCall — import(specifier)
+      OP_DYNAMIC_IMPORT:
+      begin
+        DynImportPromise := TGocciaPromiseValue.Create;
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.AddTempRoot(DynImportPromise);
+        try
+          try
+            if Assigned(Template.DebugInfo) and (Template.DebugInfo.SourceFile <> '') then
+              DynImportPromise.Resolve(ImportModuleValue(
+                VMRegisterToECMAStringFast(FRegisters[B]).Value,
+                Template.DebugInfo.SourceFile))
+            else
+              DynImportPromise.Resolve(ImportModuleValue(
+                VMRegisterToECMAStringFast(FRegisters[B]).Value,
+                FCurrentModuleSourcePath));
+          except
+            on E: EGocciaBytecodeThrow do
+              DynImportPromise.Reject(E.ThrownValue);
+            on E: TGocciaThrowValue do
+              DynImportPromise.Reject(E.Value);
+            on E: TGocciaSyntaxError do
+              DynImportPromise.Reject(
+                CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+            on E: TGocciaTypeError do
+              DynImportPromise.Reject(
+                CreateErrorObject(TYPE_ERROR_NAME, E.Message));
+            on E: TGocciaReferenceError do
+              DynImportPromise.Reject(
+                CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
+            on E: Exception do
+              DynImportPromise.Reject(
+                CreateErrorObject(ERROR_NAME, E.Message));
+          end;
+          SetRegister(A, DynImportPromise);
+        finally
+          if Assigned(TGarbageCollector.Instance) then
+            TGarbageCollector.Instance.RemoveTempRoot(DynImportPromise);
+        end;
+      end;
 
       OP_THROW:
         raise EGocciaBytecodeThrow.Create(GetRegister(A));

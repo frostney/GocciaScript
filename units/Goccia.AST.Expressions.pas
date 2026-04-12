@@ -422,6 +422,15 @@ type
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
   end;
 
+  TGocciaImportCallExpression = class(TGocciaExpression)
+  private
+    FSpecifier: TGocciaExpression;
+  public
+    constructor Create(const ASpecifier: TGocciaExpression; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    property Specifier: TGocciaExpression read FSpecifier;
+  end;
+
   TGocciaHoleExpression = class(TGocciaExpression)
   public
     constructor Create(const ALine, AColumn: Integer);
@@ -588,15 +597,23 @@ type
 implementation
 
 uses
+  SysUtils,
+
+  Goccia.Constants.ErrorNames,
   Goccia.Coverage,
+  Goccia.Error,
   Goccia.Evaluator,
   Goccia.Evaluator.Arithmetic,
   Goccia.Evaluator.Assignment,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
+  Goccia.Modules,
   Goccia.RegExp.Runtime,
   Goccia.Values.ClassValue,
+  Goccia.Values.Error,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue,
+  Goccia.Values.PromiseValue,
   Goccia.Values.SymbolValue;
 
 function IsNullishAssignmentValue(const AValue: TGocciaValue): Boolean; inline;
@@ -1523,6 +1540,52 @@ end;
 function TGocciaImportMetaExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
   Result := GetOrCreateImportMeta(AContext.CurrentFilePath);
+end;
+
+constructor TGocciaImportCallExpression.Create(const ASpecifier: TGocciaExpression; const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FSpecifier := ASpecifier;
+end;
+
+// ES2026 §13.3.10.1 Runtime Semantics: Evaluation — ImportCall
+function TGocciaImportCallExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  SpecifierValue: TGocciaValue;
+  Module: TGocciaModule;
+  Promise: TGocciaPromiseValue;
+  GC: TGarbageCollector;
+begin
+  Promise := TGocciaPromiseValue.Create;
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    GC.AddTempRoot(Promise);
+  try
+    try
+      // ES2026 §13.3.10.1 step 3: Evaluate specifier
+      SpecifierValue := EvaluateExpression(FSpecifier, AContext);
+      // ES2026 §13.3.10.1 step 6-7: HostLoadImportedModule
+      Module := AContext.LoadModule(SpecifierValue.ToStringLiteral.Value,
+        AContext.CurrentFilePath);
+      // ES2026 §13.3.10.1 step 11: Resolve promise with namespace
+      Promise.Resolve(Module.GetNamespaceObject);
+    except
+      on E: TGocciaThrowValue do
+        Promise.Reject(E.Value);
+      on E: TGocciaSyntaxError do
+        Promise.Reject(CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+      on E: TGocciaTypeError do
+        Promise.Reject(CreateErrorObject(TYPE_ERROR_NAME, E.Message));
+      on E: TGocciaReferenceError do
+        Promise.Reject(CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
+      on E: Exception do
+        Promise.Reject(CreateErrorObject(ERROR_NAME, E.Message));
+    end;
+    Result := Promise;
+  finally
+    if Assigned(GC) then
+      GC.RemoveTempRoot(Promise);
+  end;
 end;
 
 function TGocciaHoleExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;

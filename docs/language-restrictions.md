@@ -278,7 +278,19 @@ const currentUrl = import.meta.url;
 const helperUrl = import.meta.resolve("./helpers/math.js");
 ```
 
-Dynamic `import()` is parsed as a normal call expression. Because there is no global `import` binding in GocciaScript, calling it currently fails at runtime with `ReferenceError` unless user code defines its own `import` identifier.
+Dynamic `import()` (ES2026 §13.3.10) is supported. It accepts an arbitrary expression as the module specifier, loads the module synchronously, and returns a Promise that resolves with the module namespace object. On failure, the returned Promise is rejected with the error. Dynamic imports work anywhere expressions are valid — including inside functions, conditionals, and async callbacks.
+
+```javascript
+// Dynamic import with a computed specifier
+const moduleName = "./helpers/math.js";
+const mod = await import(moduleName);
+console.log(mod.add(2, 3)); // 5
+
+// Dynamic import with .then()
+import("./config.json").then((config) => {
+  console.log(config.name);
+});
+```
 
 ### Data Structures
 

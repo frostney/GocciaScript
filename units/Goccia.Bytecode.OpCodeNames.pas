@@ -143,6 +143,7 @@ begin
     OP_EXPORT:                         Result := 'OP_EXPORT';
     OP_AWAIT:                          Result := 'OP_AWAIT';
     OP_IMPORT_META:                    Result := 'OP_IMPORT_META';
+    OP_DYNAMIC_IMPORT:                 Result := 'OP_DYNAMIC_IMPORT';
   else
     Result := Format('OP_UNKNOWN_%d', [AOp]);
   end;

@@ -9,6 +9,7 @@ uses
 
   Goccia.Error.ThrowErrorCallback,
   Goccia.GarbageCollector,
+  Goccia.Modules,
   Goccia.Scope.BindingMap,
   Goccia.Token,
   Goccia.Values.Primitives;
@@ -29,6 +30,7 @@ type
     FScopeKind: TGocciaScopeKind;
     FCustomLabel: string;
     FOnError: TGocciaThrowErrorCallback;
+    FLoadModule: TLoadModuleCallback;
   protected
     function GetThisValue: TGocciaValue; virtual;
     function GetOwningClass: TGocciaValue; virtual;
@@ -66,6 +68,7 @@ type
     property ScopeKind: TGocciaScopeKind read FScopeKind;
     property CustomLabel: string read FCustomLabel;
     property OnError: TGocciaThrowErrorCallback read FOnError write FOnError;
+    property LoadModule: TLoadModuleCallback read FLoadModule write FLoadModule;
   end;
 
   // Root scope with no parent -- used by the interpreter/engine
@@ -146,7 +149,10 @@ begin
   FLexicalBindings := TGocciaScopeBindingMap.Create(ACapacity);
 
   if Assigned(AParent) then
+  begin
     FOnError := AParent.FOnError;
+    FLoadModule := AParent.FLoadModule;
+  end;
 
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.RegisterObject(Self);

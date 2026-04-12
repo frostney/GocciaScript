@@ -86,7 +86,7 @@ Current instruction families:
 - object and array operations
 - class construction and member definition
 - calls, construction, iteration, globals, and string coercion
-- semantic-only imports/exports, import.meta, and await
+- semantic-only imports/exports, dynamic import, import.meta, and await
 
 Some opcode families intentionally use flags or mode operands instead of one opcode per syntax form. For example:
 

@@ -78,6 +78,8 @@ procedure CompileSuperAccess(const ACtx: TGocciaCompilationContext;
   const ADest: UInt8);
 procedure CompileImportMeta(const ACtx: TGocciaCompilationContext;
   const ADest: UInt8);
+procedure CompileDynamicImport(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaImportCallExpression; const ADest: UInt8);
 
 procedure EmitDefaultParameters(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray);
@@ -2505,6 +2507,18 @@ procedure CompileImportMeta(const ACtx: TGocciaCompilationContext;
   const ADest: UInt8);
 begin
   EmitInstruction(ACtx, EncodeABC(OP_IMPORT_META, ADest, 0, 0));
+end;
+
+// ES2026 §13.3.10 ImportCall — import(specifier)
+procedure CompileDynamicImport(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaImportCallExpression; const ADest: UInt8);
+var
+  SpecReg: UInt8;
+begin
+  SpecReg := ACtx.Scope.AllocateRegister;
+  ACtx.CompileExpression(AExpr.Specifier, SpecReg);
+  EmitInstruction(ACtx, EncodeABC(OP_DYNAMIC_IMPORT, ADest, SpecReg, 0));
+  ACtx.Scope.FreeRegister;
 end;
 
 end.
