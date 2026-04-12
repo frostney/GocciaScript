@@ -356,6 +356,7 @@ begin
     FBuiltinTextDecoder.Free;
     FBuiltinURL.Free;
     FBuiltinURLSearchParams.Free;
+    FBuiltinDisposableStack.Free;
     ClearImportMetaCache;
     FInjectedGlobals.Free;
     FShims.Free;

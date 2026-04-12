@@ -148,6 +148,7 @@ begin
   Context.CurrentFilePath := FSourceFilePath;
   Context.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
     and TGocciaCoverageTracker.Instance.Enabled;
+  Context.DisposalTracker := nil;
 
   // Record coverage hit on the declaration line (get/set/constructor/method)
   if Context.CoverageEnabled and (FSourceLine > 0) and (FSourceFilePath <> '') then

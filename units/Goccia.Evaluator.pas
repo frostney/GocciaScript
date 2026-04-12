@@ -1370,6 +1370,16 @@ begin
     Result := nil;
 end;
 
+function HasAsyncDisposals(const ATracker: TGocciaDisposalTracker): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to ATracker.Count - 1 do
+    if ATracker.GetResource(I).Hint = dhAsyncDispose then
+      Exit(True);
+  Result := False;
+end;
+
 function EvaluateBlock(const ABlockStatement: TGocciaBlockStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
   I: Integer;
@@ -1380,6 +1390,7 @@ var
   DisposalError: TGocciaValue;
   CaughtError: TGocciaValue;
   HasCaughtError: Boolean;
+  GC: TGarbageCollector;
 begin
   NeedsChildScope := False;
   HasUsingDeclarations := False;
@@ -1395,21 +1406,35 @@ begin
     end;
   end;
 
-  BlockContext := AContext;
-  if NeedsChildScope then
-    BlockContext.Scope := AContext.Scope.CreateChild(skBlock, 'BlockScope')
-  else
-    BlockContext.Scope := AContext.Scope;
-
-  Tracker := nil;
-  if HasUsingDeclarations then
+  // Fast path: no using declarations — original block evaluation
+  if not HasUsingDeclarations then
   begin
-    Tracker := TGocciaDisposalTracker.Create;
-    BlockContext.DisposalTracker := Tracker;
+    BlockContext := AContext;
+    if NeedsChildScope then
+      BlockContext.Scope := AContext.Scope.CreateChild(skBlock, 'BlockScope')
+    else
+      BlockContext.Scope := AContext.Scope;
+    try
+      Result := EvaluateStatements(ABlockStatement.Nodes, BlockContext);
+      if (Result.Kind = cfkNormal) and (Result.Value = nil) then
+        Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+    finally
+      if NeedsChildScope then
+        BlockContext.Scope.Free;
+    end;
+    Exit;
   end;
+
+  // Slow path: block has using declarations — need disposal at exit
+  BlockContext := AContext;
+  BlockContext.Scope := AContext.Scope.CreateChild(skBlock, 'BlockScope');
+
+  Tracker := TGocciaDisposalTracker.Create;
+  BlockContext.DisposalTracker := Tracker;
 
   CaughtError := nil;
   HasCaughtError := False;
+  GC := TGarbageCollector.Instance;
   try
     try
       Result := EvaluateStatements(ABlockStatement.Nodes, BlockContext);
@@ -1420,32 +1445,44 @@ begin
       begin
         CaughtError := E.Value;
         HasCaughtError := True;
-        // Will be re-raised after disposal
+        // Protect the caught error value from GC during disposal
+        if Assigned(GC) and Assigned(CaughtError) then
+          GC.AddTempRoot(CaughtError);
         Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
       end;
     end;
   finally
     // TC39 Explicit Resource Management: dispose resources at block exit
-    if Assigned(Tracker) then
+    // Route through async path when tracker contains await using entries
+    if HasCaughtError then
     begin
-      if HasCaughtError then
-        DisposalError := DisposeTrackedResources(Tracker, CaughtError)
+      if HasAsyncDisposals(Tracker) then
+        DisposalError := DisposeTrackedResourcesAsync(Tracker, CaughtError)
+      else
+        DisposalError := DisposeTrackedResources(Tracker, CaughtError);
+    end
+    else
+    begin
+      if HasAsyncDisposals(Tracker) then
+        DisposalError := DisposeTrackedResourcesAsync(Tracker, nil)
       else
         DisposalError := DisposeTrackedResources(Tracker, nil);
-      Tracker.Free;
-      BlockContext.DisposalTracker := nil;
+    end;
+    Tracker.Free;
+    BlockContext.DisposalTracker := nil;
 
-      // If disposal produced an error, throw it (may be SuppressedError)
-      if Assigned(DisposalError) then
-        raise TGocciaThrowValue.Create(DisposalError)
-      else if HasCaughtError then
-        raise TGocciaThrowValue.Create(CaughtError);
-    end
+    // Free the block scope before re-raising
+    BlockContext.Scope.Free;
+
+    // Remove GC temp root before re-raising
+    if HasCaughtError and Assigned(GC) and Assigned(CaughtError) then
+      GC.RemoveTempRoot(CaughtError);
+
+    // If disposal produced an error, throw it (may be SuppressedError)
+    if Assigned(DisposalError) then
+      raise TGocciaThrowValue.Create(DisposalError)
     else if HasCaughtError then
       raise TGocciaThrowValue.Create(CaughtError);
-
-    if NeedsChildScope then
-      BlockContext.Scope.Free;
   end;
 end;
 
@@ -1461,7 +1498,8 @@ begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
   // The disposal tracker should have been set by EvaluateBlock
-  if not (AContext.DisposalTracker is TGocciaDisposalTracker) then
+  if (AContext.DisposalTracker = nil) or
+     not (AContext.DisposalTracker is TGocciaDisposalTracker) then
     ThrowTypeError('using declaration outside of a block scope');
   Tracker := TGocciaDisposalTracker(AContext.DisposalTracker);
 

@@ -1,9 +1,11 @@
 describe("DisposableStack.prototype.dispose", () => {
-  test("is idempotent (calling dispose twice does not throw)", () => {
+  test("is idempotent (disposer runs exactly once)", () => {
     const stack = new DisposableStack();
-    stack.use({ [Symbol.dispose]() {} });
+    let calls = 0;
+    stack.use({ [Symbol.dispose]() { calls += 1; } });
     stack.dispose();
-    stack.dispose(); // should not throw
+    stack.dispose(); // second call is a no-op
+    expect(calls).toBe(1);
   });
 
   test("sets disposed to true after disposal", () => {

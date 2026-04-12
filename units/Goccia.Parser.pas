@@ -2443,17 +2443,20 @@ begin
           CheckNext(gttIdentifier) then
     Result := UsingStatement
   // TC39 Explicit Resource Management: await using x = expr;
+  // Detect 'await using identifier' regardless of context, then validate.
   else if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) and
-          ((FInAsyncFunction > 0) or (FFunctionDepth = 0)) then
+          (FCurrent + 2 < FTokens.Count) and
+          (FTokens[FCurrent + 1].TokenType = gttIdentifier) and
+          (FTokens[FCurrent + 1].Lexeme = KEYWORD_USING) and
+          (FTokens[FCurrent + 2].TokenType = gttIdentifier) then
   begin
-    // Look ahead to check for 'await using identifier' pattern
-    if (FCurrent + 2 < FTokens.Count) and
-       (FTokens[FCurrent + 1].TokenType = gttIdentifier) and
-       (FTokens[FCurrent + 1].Lexeme = KEYWORD_USING) and
-       (FTokens[FCurrent + 2].TokenType = gttIdentifier) then
-      Result := UsingStatement
-    else
-      Result := ExpressionStatement;
+    // Reject await using in synchronous function bodies
+    if (FInAsyncFunction = 0) and (FFunctionDepth > 0) then
+      raise TGocciaSyntaxError.Create(
+        '''await using'' is only valid in async functions or at the top level',
+        Peek.Line, Peek.Column, FFileName, FSourceLines,
+        'Wrap in an async function or use ''using'' for synchronous disposal');
+    Result := UsingStatement;
   end
   else if Check(gttIdentifier) and CheckNext(gttColon) then
   begin

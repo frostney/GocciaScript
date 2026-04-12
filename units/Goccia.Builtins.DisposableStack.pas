@@ -30,6 +30,12 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     function StackGetDisposed(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
+
+    // Async variants
+    function AsyncStackUse(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function AsyncStackDispose(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope;
       const AThrowError: TGocciaThrowErrorCallback);
@@ -54,39 +60,39 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
 
-var
-  GTrackerMap: THashMap<TGocciaObjectValue, TGocciaDisposalTracker>;
+type
+  { Internal slot record for DisposableStack/AsyncDisposableStack instances.
+    Stored in a side-channel map keyed by object identity, invisible to JS. }
+  TDisposableStackSlot = record
+    Tracker: TGocciaDisposalTracker;
+    Disposed: Boolean;
+  end;
+  PDisposableStackSlot = ^TDisposableStackSlot;
 
-function EnsureTrackerMap: THashMap<TGocciaObjectValue, TGocciaDisposalTracker>;
+var
+  GSlotMap: THashMap<TGocciaObjectValue, PDisposableStackSlot>;
+
+function EnsureSlotMap: THashMap<TGocciaObjectValue, PDisposableStackSlot>;
 begin
-  if not Assigned(GTrackerMap) then
-    GTrackerMap := THashMap<TGocciaObjectValue, TGocciaDisposalTracker>.Create;
-  Result := GTrackerMap;
+  if not Assigned(GSlotMap) then
+    GSlotMap := THashMap<TGocciaObjectValue, PDisposableStackSlot>.Create;
+  Result := GSlotMap;
 end;
 
-function GetStackTracker(const AThisValue: TGocciaValue): TGocciaDisposalTracker;
+function GetSlot(const AThisValue: TGocciaValue): PDisposableStackSlot;
 var
   Obj: TGocciaObjectValue;
 begin
   if not (AThisValue is TGocciaObjectValue) then
     ThrowTypeError('DisposableStack method called on incompatible receiver');
   Obj := TGocciaObjectValue(AThisValue);
-  if not Assigned(GTrackerMap) or not GTrackerMap.TryGetValue(Obj, Result) then
+  if not Assigned(GSlotMap) or not GSlotMap.TryGetValue(Obj, Result) then
     ThrowTypeError('DisposableStack method called on incompatible receiver');
 end;
 
-function IsStackDisposed(const AObj: TGocciaObjectValue): Boolean;
-var
-  DisposedVal: TGocciaValue;
+procedure RequireNotDisposed(const ASlot: PDisposableStackSlot);
 begin
-  DisposedVal := AObj.GetProperty('__disposed__');
-  Result := Assigned(DisposedVal) and (DisposedVal is TGocciaBooleanLiteralValue) and
-    TGocciaBooleanLiteralValue(DisposedVal).Value;
-end;
-
-procedure RequireNotDisposed(const AObj: TGocciaObjectValue);
-begin
-  if IsStackDisposed(AObj) then
+  if ASlot^.Disposed then
     ThrowReferenceError('DisposableStack has already been disposed');
 end;
 
@@ -94,12 +100,12 @@ end;
 function TGocciaBuiltinDisposableStack.StackUse(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Tracker: TGocciaDisposalTracker;
+  Slot: PDisposableStackSlot;
   Value: TGocciaValue;
   DisposeMethod: TGocciaValue;
 begin
-  RequireNotDisposed(TGocciaObjectValue(AThisValue));
-  Tracker := GetStackTracker(AThisValue);
+  Slot := GetSlot(AThisValue);
+  RequireNotDisposed(Slot);
 
   if AArgs.Length > 0 then
     Value := AArgs.GetElement(0)
@@ -116,7 +122,37 @@ begin
   if not Assigned(DisposeMethod) then
     ThrowTypeError('The value is not disposable (missing [Symbol.dispose])');
 
-  Tracker.AddResource(Value, DisposeMethod, dhSyncDispose);
+  Slot^.Tracker.AddResource(Value, DisposeMethod, dhSyncDispose);
+  Result := Value;
+end;
+
+// TC39 Explicit Resource Management §3.5.3.2 AsyncDisposableStack.prototype.use(value)
+function TGocciaBuiltinDisposableStack.AsyncStackUse(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Slot: PDisposableStackSlot;
+  Value: TGocciaValue;
+  DisposeMethod: TGocciaValue;
+begin
+  Slot := GetSlot(AThisValue);
+  RequireNotDisposed(Slot);
+
+  if AArgs.Length > 0 then
+    Value := AArgs.GetElement(0)
+  else
+    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  if (Value is TGocciaUndefinedLiteralValue) or (Value is TGocciaNullLiteralValue) then
+  begin
+    Result := Value;
+    Exit;
+  end;
+
+  DisposeMethod := GetDisposeMethod(Value, dhAsyncDispose);
+  if not Assigned(DisposeMethod) then
+    ThrowTypeError('The value is not disposable (missing [Symbol.asyncDispose] and [Symbol.dispose])');
+
+  Slot^.Tracker.AddResource(Value, DisposeMethod, dhAsyncDispose);
   Result := Value;
 end;
 
@@ -124,11 +160,11 @@ end;
 function TGocciaBuiltinDisposableStack.StackAdopt(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Tracker: TGocciaDisposalTracker;
+  Slot: PDisposableStackSlot;
   Value, OnDispose: TGocciaValue;
 begin
-  RequireNotDisposed(TGocciaObjectValue(AThisValue));
-  Tracker := GetStackTracker(AThisValue);
+  Slot := GetSlot(AThisValue);
+  RequireNotDisposed(Slot);
 
   if AArgs.Length > 0 then
     Value := AArgs.GetElement(0)
@@ -143,7 +179,7 @@ begin
   if not OnDispose.IsCallable then
     ThrowTypeError('The onDispose argument must be a function');
 
-  Tracker.AddResource(Value, OnDispose, dhSyncDispose);
+  Slot^.Tracker.AddResource(Value, OnDispose, dhSyncDispose);
   Result := Value;
 end;
 
@@ -151,11 +187,11 @@ end;
 function TGocciaBuiltinDisposableStack.StackDefer(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Tracker: TGocciaDisposalTracker;
+  Slot: PDisposableStackSlot;
   OnDispose: TGocciaValue;
 begin
-  RequireNotDisposed(TGocciaObjectValue(AThisValue));
-  Tracker := GetStackTracker(AThisValue);
+  Slot := GetSlot(AThisValue);
+  RequireNotDisposed(Slot);
 
   if AArgs.Length > 0 then
     OnDispose := AArgs.GetElement(0)
@@ -165,7 +201,7 @@ begin
   if not OnDispose.IsCallable then
     ThrowTypeError('The onDispose argument must be a function');
 
-  Tracker.AddResource(TGocciaUndefinedLiteralValue.UndefinedValue, OnDispose, dhSyncDispose);
+  Slot^.Tracker.AddResource(TGocciaUndefinedLiteralValue.UndefinedValue, OnDispose, dhSyncDispose);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -173,30 +209,30 @@ end;
 function TGocciaBuiltinDisposableStack.StackDispose(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Obj: TGocciaObjectValue;
-  Tracker: TGocciaDisposalTracker;
+  Slot: PDisposableStackSlot;
   I: Integer;
   Resource: TGocciaDisposableResource;
   CurrentError: TGocciaValue;
   HasError: Boolean;
 begin
-  Obj := TGocciaObjectValue(AThisValue);
+  Slot := GetSlot(AThisValue);
 
-  if IsStackDisposed(Obj) then
+  // Idempotent: if already disposed, return undefined
+  if Slot^.Disposed then
   begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
 
-  Obj.AssignProperty('__disposed__', TGocciaBooleanLiteralValue.TrueValue);
-  Tracker := GetStackTracker(AThisValue);
+  Slot^.Disposed := True;
 
   CurrentError := nil;
   HasError := False;
 
-  for I := Tracker.Count - 1 downto 0 do
+  // Dispose in reverse order
+  for I := Slot^.Tracker.Count - 1 downto 0 do
   begin
-    Resource := Tracker.GetResource(I);
+    Resource := Slot^.Tracker.GetResource(I);
     if Assigned(Resource.DisposeMethod) and Resource.DisposeMethod.IsCallable then
     begin
       try
@@ -220,13 +256,22 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
+// TC39 Explicit Resource Management §3.5.3.5 AsyncDisposableStack.prototype.disposeAsync()
+function TGocciaBuiltinDisposableStack.AsyncStackDispose(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  // Delegate to sync dispose — full async awaiting requires Promise integration
+  Result := StackDispose(AArgs, AThisValue);
+end;
+
 // TC39 Explicit Resource Management §3.4.3.6 get DisposableStack.prototype.disposed
 function TGocciaBuiltinDisposableStack.StackGetDisposed(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Slot: PDisposableStackSlot;
 begin
-  if not (AThisValue is TGocciaObjectValue) then
-    ThrowTypeError('DisposableStack getter called on incompatible receiver');
-  if IsStackDisposed(TGocciaObjectValue(AThisValue)) then
+  Slot := GetSlot(AThisValue);
+  if Slot^.Disposed then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -234,35 +279,54 @@ end;
 
 function CreateDisposableStackInstance(
   const AHost: TGocciaBuiltinDisposableStack;
-  const AToStringTag: string): TGocciaObjectValue;
+  const AToStringTag: string;
+  const AIsAsync: Boolean): TGocciaObjectValue;
 var
   Instance: TGocciaObjectValue;
-  Tracker: TGocciaDisposalTracker;
+  Slot: PDisposableStackSlot;
   UseFunc, AdoptFunc, DeferFunc, DisposeFunc: TGocciaNativeFunctionValue;
   DisposedGetterFunc: TGocciaNativeFunctionValue;
 begin
   Instance := TGocciaObjectValue.Create;
-  Instance.AssignProperty('__disposed__', TGocciaBooleanLiteralValue.FalseValue);
 
-  Tracker := TGocciaDisposalTracker.Create;
-  EnsureTrackerMap.AddOrSetValue(Instance, Tracker);
+  // Allocate internal slot (side-channel, invisible to JS)
+  New(Slot);
+  Slot^.Tracker := TGocciaDisposalTracker.Create;
+  Slot^.Disposed := False;
+  EnsureSlotMap.AddOrSetValue(Instance, Slot);
 
-  UseFunc := TGocciaNativeFunctionValue.Create(AHost.StackUse, PROP_USE, 1);
+  // Use async-aware methods for AsyncDisposableStack
+  if AIsAsync then
+    UseFunc := TGocciaNativeFunctionValue.Create(AHost.AsyncStackUse, PROP_USE, 1)
+  else
+    UseFunc := TGocciaNativeFunctionValue.Create(AHost.StackUse, PROP_USE, 1);
   AdoptFunc := TGocciaNativeFunctionValue.Create(AHost.StackAdopt, PROP_ADOPT, 2);
   DeferFunc := TGocciaNativeFunctionValue.Create(AHost.StackDefer, PROP_DEFER, 1);
-  DisposeFunc := TGocciaNativeFunctionValue.Create(AHost.StackDispose, 'dispose', 0);
+
+  if AIsAsync then
+    DisposeFunc := TGocciaNativeFunctionValue.Create(AHost.AsyncStackDispose, PROP_DISPOSE_ASYNC, 0)
+  else
+    DisposeFunc := TGocciaNativeFunctionValue.Create(AHost.StackDispose, 'dispose', 0);
   DisposedGetterFunc := TGocciaNativeFunctionValue.Create(AHost.StackGetDisposed, PROP_DISPOSED, 0);
 
   Instance.AssignProperty(PROP_USE, UseFunc);
   Instance.AssignProperty(PROP_ADOPT, AdoptFunc);
   Instance.AssignProperty(PROP_DEFER, DeferFunc);
-  Instance.AssignProperty('dispose', DisposeFunc);
+
+  if AIsAsync then
+    Instance.AssignProperty(PROP_DISPOSE_ASYNC, DisposeFunc)
+  else
+    Instance.AssignProperty('dispose', DisposeFunc);
 
   Instance.DefineProperty(PROP_DISPOSED,
     TGocciaPropertyDescriptorAccessor.Create(DisposedGetterFunc, nil,
       [pfConfigurable, pfEnumerable]));
 
-  Instance.AssignSymbolProperty(TGocciaSymbolValue.WellKnownDispose, DisposeFunc);
+  // Wire up the correct well-known symbol
+  if AIsAsync then
+    Instance.AssignSymbolProperty(TGocciaSymbolValue.WellKnownAsyncDispose, DisposeFunc)
+  else
+    Instance.AssignSymbolProperty(TGocciaSymbolValue.WellKnownDispose, DisposeFunc);
 
   Instance.AssignSymbolProperty(TGocciaSymbolValue.WellKnownToStringTag,
     TGocciaStringLiteralValue.Create(AToStringTag));
@@ -292,22 +356,22 @@ end;
 function TGocciaBuiltinDisposableStack.DisposableStackConstructor(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := CreateDisposableStackInstance(Self, CONSTRUCTOR_DISPOSABLE_STACK);
+  Result := CreateDisposableStackInstance(Self, CONSTRUCTOR_DISPOSABLE_STACK, False);
 end;
 
 function TGocciaBuiltinDisposableStack.AsyncDisposableStackConstructor(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := CreateDisposableStackInstance(Self, CONSTRUCTOR_ASYNC_DISPOSABLE_STACK);
+  Result := CreateDisposableStackInstance(Self, CONSTRUCTOR_ASYNC_DISPOSABLE_STACK, True);
 end;
 
 initialization
 
 finalization
-  if Assigned(GTrackerMap) then
+  if Assigned(GSlotMap) then
   begin
-    GTrackerMap.Free;
-    GTrackerMap := nil;
+    GSlotMap.Free;
+    GSlotMap := nil;
   end;
 
 end.

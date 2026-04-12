@@ -26,6 +26,7 @@ type
     FCount: Integer;
   public
     constructor Create;
+    destructor Destroy; override;
 
     { TC39 Explicit Resource Management §3.5 AddDisposableResource }
     procedure AddResource(const AValue, ADisposeMethod: TGocciaValue;
@@ -56,6 +57,7 @@ uses
   Goccia.CallStack,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
@@ -70,15 +72,47 @@ begin
   SetLength(FResources, 0);
 end;
 
+destructor TGocciaDisposalTracker.Destroy;
+var
+  I: Integer;
+  GC: TGarbageCollector;
+begin
+  // Unroot all tracked values
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+  begin
+    for I := 0 to FCount - 1 do
+    begin
+      if Assigned(FResources[I].ResourceValue) then
+        GC.RemoveTempRoot(FResources[I].ResourceValue);
+      if Assigned(FResources[I].DisposeMethod) then
+        GC.RemoveTempRoot(FResources[I].DisposeMethod);
+    end;
+  end;
+  inherited;
+end;
+
 // TC39 Explicit Resource Management §3.5 AddDisposableResource(disposeCapability, V, hint [, method])
 procedure TGocciaDisposalTracker.AddResource(const AValue, ADisposeMethod: TGocciaValue;
   const AHint: TGocciaDisposalHint);
+var
+  GC: TGarbageCollector;
 begin
   SetLength(FResources, FCount + 1);
   FResources[FCount].ResourceValue := AValue;
   FResources[FCount].DisposeMethod := ADisposeMethod;
   FResources[FCount].Hint := AHint;
   Inc(FCount);
+
+  // Root tracked values so the GC cannot collect them before disposal
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+  begin
+    if Assigned(AValue) then
+      GC.AddTempRoot(AValue);
+    if Assigned(ADisposeMethod) then
+      GC.AddTempRoot(ADisposeMethod);
+  end;
 end;
 
 function TGocciaDisposalTracker.GetResource(const AIndex: Integer): TGocciaDisposableResource;
