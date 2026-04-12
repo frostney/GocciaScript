@@ -112,6 +112,12 @@ const
   PROP_MONTH                  = 'month';
   PROP_MONTH_CODE             = 'monthCode';
   PROP_DAY                    = 'day';
+  PROP_HOUR                   = 'hour';
+  PROP_MINUTE                 = 'minute';
+  PROP_SECOND                 = 'second';
+  PROP_MILLISECOND            = 'millisecond';
+  PROP_MICROSECOND            = 'microsecond';
+  PROP_NANOSECOND             = 'nanosecond';
   PROP_CALENDAR_ID            = 'calendarId';
 
   // Proxy handler trap names

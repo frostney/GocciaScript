@@ -89,6 +89,7 @@ uses
 
   TimingUtils,
 
+  Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
   Goccia.Temporal.Options,
   Goccia.Temporal.TimeZone,
@@ -495,11 +496,11 @@ begin
   else if Arg is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(Arg);
-    V := Obj.GetProperty('year');
+    V := Obj.GetProperty(PROP_YEAR);
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       ThrowTypeError('Temporal.PlainDate.from requires year, month, day properties');
     Y := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty('month');
+    V := Obj.GetProperty(PROP_MONTH);
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       ThrowTypeError('Temporal.PlainDate.from requires year, month, day properties');
     Mo := Trunc(V.ToNumberLiteral.Value);
@@ -512,7 +513,7 @@ begin
       else
         Mo := 12;
     end;
-    V := Obj.GetProperty('day');
+    V := Obj.GetProperty(PROP_DAY);
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       ThrowTypeError('Temporal.PlainDate.from requires year, month, day properties');
     Dy := Trunc(V.ToNumberLiteral.Value);
@@ -646,17 +647,17 @@ begin
   begin
     Obj := TGocciaObjectValue(Arg);
     H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
-    V := Obj.GetProperty('hour');
+    V := Obj.GetProperty(PROP_HOUR);
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then H := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty('minute');
+    V := Obj.GetProperty(PROP_MINUTE);
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mi := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty('second');
+    V := Obj.GetProperty(PROP_SECOND);
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then S := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty('millisecond');
+    V := Obj.GetProperty(PROP_MILLISECOND);
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ms := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty('microsecond');
+    V := Obj.GetProperty(PROP_MICROSECOND);
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Us := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty('nanosecond');
+    V := Obj.GetProperty(PROP_NANOSECOND);
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ns := Trunc(V.ToNumberLiteral.Value);
     Result := TGocciaTemporalPlainTimeValue.Create(H, Mi, S, Ms, Us, Ns);
   end
@@ -779,15 +780,15 @@ begin
   begin
     Obj := TGocciaObjectValue(Arg);
     Y := 0; Mo := 0; D := 0; H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
-    V := Obj.GetProperty('year'); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Y := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty('month'); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mo := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty('day'); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then D := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty('hour'); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then H := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty('minute'); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mi := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty('second'); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then S := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty('millisecond'); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ms := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty('microsecond'); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Us := Trunc(V.ToNumberLiteral.Value);
-    V := Obj.GetProperty('nanosecond'); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ns := Trunc(V.ToNumberLiteral.Value);
+    V := Obj.GetProperty(PROP_YEAR); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Y := Trunc(V.ToNumberLiteral.Value);
+    V := Obj.GetProperty(PROP_MONTH); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mo := Trunc(V.ToNumberLiteral.Value);
+    V := Obj.GetProperty(PROP_DAY); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then D := Trunc(V.ToNumberLiteral.Value);
+    V := Obj.GetProperty(PROP_HOUR); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then H := Trunc(V.ToNumberLiteral.Value);
+    V := Obj.GetProperty(PROP_MINUTE); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mi := Trunc(V.ToNumberLiteral.Value);
+    V := Obj.GetProperty(PROP_SECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then S := Trunc(V.ToNumberLiteral.Value);
+    V := Obj.GetProperty(PROP_MILLISECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ms := Trunc(V.ToNumberLiteral.Value);
+    V := Obj.GetProperty(PROP_MICROSECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Us := Trunc(V.ToNumberLiteral.Value);
+    V := Obj.GetProperty(PROP_NANOSECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ns := Trunc(V.ToNumberLiteral.Value);
     Result := TGocciaTemporalPlainDateTimeValue.Create(Y, Mo, D, H, Mi, S, Ms, Us, Ns);
   end
   else
@@ -877,10 +878,11 @@ end;
 function TGocciaTemporalBuiltin.PlainYearMonthFrom(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Arg, V, V2: TGocciaValue;
+  Arg, V, VMonthCode: TGocciaValue;
   YM: TGocciaTemporalPlainYearMonthValue;
-  Y, M: Integer;
+  Y, M, MonthPart: Integer;
   Obj: TGocciaObjectValue;
+  MonthCodeStr: string;
 begin
   Arg := AArgs.GetElement(0);
 
@@ -898,15 +900,37 @@ begin
   else if Arg is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(Arg);
-    V := Obj.GetProperty('year');
+    V := Obj.GetProperty(PROP_YEAR);
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError('Temporal.PlainYearMonth.from requires year and month properties');
-    V2 := Obj.GetProperty('month');
-    if (V2 = nil) or (V2 is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError('Temporal.PlainYearMonth.from requires year and month properties');
-    Result := TGocciaTemporalPlainYearMonthValue.Create(
-      Trunc(V.ToNumberLiteral.Value),
-      Trunc(V2.ToNumberLiteral.Value));
+      ThrowTypeError('Temporal.PlainYearMonth.from requires year property');
+    Y := Trunc(V.ToNumberLiteral.Value);
+    // Support both monthCode and month, consistent with PlainMonthDay.from
+    VMonthCode := Obj.GetProperty(PROP_MONTH_CODE);
+    if Assigned(VMonthCode) and not (VMonthCode is TGocciaUndefinedLiteralValue) then
+    begin
+      MonthCodeStr := VMonthCode.ToStringLiteral.Value;
+      if (Length(MonthCodeStr) <> 3) or (MonthCodeStr[1] <> 'M') or
+         not (MonthCodeStr[2] in ['0'..'9']) or not (MonthCodeStr[3] in ['0'..'9']) then
+        ThrowTypeError('Invalid monthCode for Temporal.PlainYearMonth.from');
+      if not TryStrToInt(Copy(MonthCodeStr, 2, 2), MonthPart) then
+        ThrowTypeError('Invalid monthCode for Temporal.PlainYearMonth.from');
+      if (MonthPart < 1) or (MonthPart > 12) then
+        ThrowRangeError('monthCode month out of range in Temporal.PlainYearMonth.from');
+      // Check consistency if both month and monthCode are provided
+      V := Obj.GetProperty(PROP_MONTH);
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+        if Trunc(V.ToNumberLiteral.Value) <> MonthPart then
+          ThrowRangeError('month and monthCode must match in Temporal.PlainYearMonth.from');
+      M := MonthPart;
+    end
+    else
+    begin
+      V := Obj.GetProperty(PROP_MONTH);
+      if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
+        ThrowTypeError('Temporal.PlainYearMonth.from requires monthCode or month property');
+      M := Trunc(V.ToNumberLiteral.Value);
+    end;
+    Result := TGocciaTemporalPlainYearMonthValue.Create(Y, M);
   end
   else
   begin
@@ -1010,12 +1034,12 @@ begin
   else if Arg is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(Arg);
-    V := Obj.GetProperty('day');
+    V := Obj.GetProperty(PROP_DAY);
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       ThrowTypeError('Temporal.PlainMonthDay.from requires day property');
     D := Trunc(V.ToNumberLiteral.Value);
     // Support both monthCode (e.g., "M07") and month (numeric)
-    V := Obj.GetProperty('monthCode');
+    V := Obj.GetProperty(PROP_MONTH_CODE);
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
     begin
       // Parse monthCode — must be canonical format M01..M12
@@ -1028,7 +1052,7 @@ begin
     end
     else
     begin
-      V := Obj.GetProperty('month');
+      V := Obj.GetProperty(PROP_MONTH);
       if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
         M := Trunc(V.ToNumberLiteral.Value)
       else
