@@ -93,6 +93,7 @@ begin
     FOwnsModuleLoader := True;
   end;
   FModuleLoader.BindRuntime(FGlobalScope, ThrowError);
+  FGlobalScope.LoadModule := LoadModule;
 end;
 
 destructor TGocciaInterpreter.Destroy;

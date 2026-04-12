@@ -107,6 +107,7 @@ resourcestring
 
   // Imports and exports
   SSuggestImportMetaSyntax = 'Use import.meta to access module metadata (e.g., import.meta.url)';
+  SSuggestDynamicImportSyntax = 'Use import("./module-path") to dynamically load a module';
   SSuggestStringImportAs = 'Use: import { "name" as localName } from "module"';
   SSuggestStringExportAs = 'Use: export { localName as "export-name" }';
   SSuggestDestructuringExportDeclareFirst = 'Declare first, then export: const x = ...; export { x };';

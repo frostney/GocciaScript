@@ -3509,6 +3509,7 @@ var
   JumpOffset: Integer;
   PrevCovLine, CovLine: UInt32;
   ProfileEntryTimestamp: Int64;
+  DynImportPromise: TGocciaPromiseValue;
 begin
   Template := nil;
   ProfileEntryTimestamp := 0;
@@ -5206,6 +5207,32 @@ begin
           SetRegister(A, GetOrCreateImportMeta(Template.DebugInfo.SourceFile))
         else
           SetRegister(A, GetOrCreateImportMeta(FCurrentModuleSourcePath));
+
+      // ES2026 §13.3.10.1 ImportCall — import(specifier)
+      OP_DYNAMIC_IMPORT:
+      begin
+        DynImportPromise := TGocciaPromiseValue.Create;
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.AddTempRoot(DynImportPromise);
+        try
+          try
+            DynImportPromise.Resolve(ImportModuleValue(
+              RegisterToValue(FRegisters[B]).ToStringLiteral.Value));
+          except
+            on E: EGocciaBytecodeThrow do
+              DynImportPromise.Reject(E.ThrownValue);
+            on E: TGocciaThrowValue do
+              DynImportPromise.Reject(E.Value);
+            on E: Exception do
+              DynImportPromise.Reject(
+                CreateErrorObject(ERROR_NAME, E.Message));
+          end;
+          SetRegister(A, DynImportPromise);
+        finally
+          if Assigned(TGarbageCollector.Instance) then
+            TGarbageCollector.Instance.RemoveTempRoot(DynImportPromise);
+        end;
+      end;
 
       OP_THROW:
         raise EGocciaBytecodeThrow.Create(GetRegister(A));

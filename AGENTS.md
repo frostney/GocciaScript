@@ -126,6 +126,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Uint8Array encoding | `Goccia.Values.Uint8ArrayEncoding.pas` | Uint8Array Base64/Hex: `toBase64`, `fromBase64`, `toHex`, `fromHex`, `setFromBase64`, `setFromHex` |
 | FFI | `Goccia.FFI*.pas`, `Goccia.Values.FFI*.pas` | Foreign Function Interface for native shared libraries |
 | import.meta | `Goccia.ImportMeta.pas` | Per-module metadata object with `url` and `resolve()` (ES2026 §13.3.12) |
+| Dynamic import | `Goccia.AST.Expressions.pas` | `import(specifier)` expression returning a Promise with the module namespace (ES2026 §13.3.10) |
 
 **Bytecode design rules:**
 

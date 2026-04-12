@@ -141,10 +141,10 @@ var
   CF: TGocciaControlFlow;
   Context: TGocciaEvaluationContext;
 begin
-  // Set up evaluation context — inherit OnError from the closure scope
+  // Set up evaluation context — inherit OnError and LoadModule from the closure scope
   Context.Scope := FClosure;
   Context.OnError := FClosure.OnError;
-  Context.LoadModule := nil;
+  Context.LoadModule := FClosure.LoadModule;
   Context.CurrentFilePath := FSourceFilePath;
   Context.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
     and TGocciaCoverageTracker.Instance.Enabled;
