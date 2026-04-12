@@ -120,8 +120,7 @@ test("JSON.stringify with replacer function returning raw JSON", () => {
 test("JSON.stringify with indentation and raw JSON", () => {
   const obj = { a: JSON.rawJSON("123"), b: "text" };
   const result = JSON.stringify(obj, null, 2);
-  expect(result).toContain("123");
-  expect(result).toContain('"text"');
+  expect(result).toBe('{\n  "a": 123,\n  "b": "text"\n}');
 });
 
 test("JSON.rawJSON objects are frozen and cannot be modified", () => {
