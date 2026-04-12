@@ -927,6 +927,17 @@ jobs:
 
       - name: Check ScriptLoader source map CLI
         run: |
+          check_map_json() {
+            python3 - "$1" <<'PY'
+          import json, sys
+          with open(sys.argv[1], 'r', encoding='utf-8') as f:
+              data = json.load(f)
+          assert data.get('version') == 3, f"bad version: {data.get('version')}"
+          assert isinstance(data.get('sources'), list) and len(data['sources']) > 0, "missing sources"
+          assert isinstance(data.get('mappings'), str) and data['mappings'] != '', "missing mappings"
+          PY
+          }
+
           # Create a JSX test file
           cat > /tmp/sm-test.jsx << 'JSXEOF'
           const createElement = (t, p, ...c) => ({ t, p, c });
@@ -937,22 +948,26 @@ jobs:
           # --source-map writes .map file (bytecode mode)
           ./build/ScriptLoader /tmp/sm-test.jsx --source-map --mode=bytecode
           test -f /tmp/sm-test.jsx.map
-          grep -q '"version":3' /tmp/sm-test.jsx.map
-          grep -q '"sources":\[' /tmp/sm-test.jsx.map
-          grep -q '"mappings":"' /tmp/sm-test.jsx.map
+          check_map_json /tmp/sm-test.jsx.map
           rm /tmp/sm-test.jsx.map
 
           # --source-map=<path> writes to custom path
           ./build/ScriptLoader /tmp/sm-test.jsx --source-map=/tmp/custom.map --mode=bytecode
           test -f /tmp/custom.map
-          grep -q '"version":3' /tmp/custom.map
+          check_map_json /tmp/custom.map
           rm /tmp/custom.map
 
           # --source-map with --emit
           ./build/ScriptLoader /tmp/sm-test.jsx --emit --source-map
           test -f /tmp/sm-test.jsx.map
-          grep -q '"version":3' /tmp/sm-test.jsx.map
+          check_map_json /tmp/sm-test.jsx.map
           rm /tmp/sm-test.jsx.map /tmp/sm-test.gbc
+
+          # --source-map in interpreted mode
+          ./build/ScriptLoader /tmp/sm-test.jsx --source-map
+          test -f /tmp/sm-test.jsx.map
+          check_map_json /tmp/sm-test.jsx.map
+          rm /tmp/sm-test.jsx.map
 
           # No .map file without --source-map
           ./build/ScriptLoader /tmp/sm-test.jsx --mode=bytecode

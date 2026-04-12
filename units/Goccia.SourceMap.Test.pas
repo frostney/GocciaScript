@@ -155,12 +155,15 @@ begin
   Map := TGocciaSourceMap.Create;
   try
     Map.AddSource('input.js');
-    // Generated line 1, column 0 -> source line 10, column 5
+    // Generated line 1, column 0 (0-based) -> source line 10 (0-based), column 5 (0-based)
     Map.AddMapping(1, 0, 0, 10, 5);
 
-    Expect<Boolean>(Map.Translate(1, 0, SrcLine, SrcCol)).ToBe(True);
-    Expect<Integer>(SrcLine).ToBe(10);
-    Expect<Integer>(SrcCol).ToBe(5);
+    // Translate takes 1-based input (matching parser convention).
+    // Column 1 (1-based) matches generated column 0 (0-based).
+    // Returns 1-based: source line 11, source col 5 + (1 - 0) = 6
+    Expect<Boolean>(Map.Translate(1, 1, SrcLine, SrcCol)).ToBe(True);
+    Expect<Integer>(SrcLine).ToBe(11);
+    Expect<Integer>(SrcCol).ToBe(6);
   finally
     Map.Free;
   end;
@@ -174,13 +177,13 @@ begin
   Map := TGocciaSourceMap.Create;
   try
     Map.AddSource('input.js');
-    // Mapping at gen line 1, col 0 -> source line 10, col 5
+    // Mapping at gen line 1, col 0 (0-based) -> source line 10, col 5 (0-based)
     Map.AddMapping(1, 0, 0, 10, 5);
 
-    // Query at gen line 1, col 3 -> source col should be 5 + 3 = 8
-    Expect<Boolean>(Map.Translate(1, 3, SrcLine, SrcCol)).ToBe(True);
-    Expect<Integer>(SrcLine).ToBe(10);
-    Expect<Integer>(SrcCol).ToBe(8);
+    // Query at gen line 1, col 4 (1-based) -> source col = 5 + (4 - 0) = 9 (1-based)
+    Expect<Boolean>(Map.Translate(1, 4, SrcLine, SrcCol)).ToBe(True);
+    Expect<Integer>(SrcLine).ToBe(11);
+    Expect<Integer>(SrcCol).ToBe(9);
   finally
     Map.Free;
   end;
@@ -207,13 +210,13 @@ begin
   Map := TGocciaSourceMap.Create;
   try
     Map.AddSource('input.js');
-    // Only a mapping on line 1
+    // Only a mapping on line 1 -> source line 10 (0-based)
     Map.AddMapping(1, 0, 0, 10, 0);
 
-    // Query on line 3 should fall back to the line 1 mapping
-    // Source line = 10 + (3 - 1) = 12
+    // Query on line 3 (1-based) should fall back to the line 1 mapping.
+    // Returns 1-based: source line = 10 + 1 + (3 - 1) = 13
     Expect<Boolean>(Map.Translate(3, 5, SrcLine, SrcCol)).ToBe(True);
-    Expect<Integer>(SrcLine).ToBe(12);
+    Expect<Integer>(SrcLine).ToBe(13);
     Expect<Integer>(SrcCol).ToBe(5);
   finally
     Map.Free;

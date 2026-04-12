@@ -26,6 +26,7 @@ type
   private
     FSources: TStringList;
     FNames: TStringList;
+    FSourceRoot: string;
     FSegments: array of TDecodedSegment;
     FSegmentCount: Integer;
     FSegmentCapacity: Integer;
@@ -34,6 +35,7 @@ type
     procedure ParseJSON(const AJSON: string);
     procedure DecodeMappings(const AMappings: string);
     function FindSegment(const AGeneratedLine, AGeneratedColumn: Integer): Integer;
+    function ResolveSourcePath(const ASourcePath: string): string;
     function GetSourceCount: Integer;
     function GetNameCount: Integer;
   public
@@ -110,6 +112,19 @@ begin
   Result := FNames.Count;
 end;
 
+// TC39 Source Map Spec — resolve source path with sourceRoot prefix.
+// Absolute paths (starting with / or containing ://) are returned as-is.
+function TGocciaSourceMapConsumer.ResolveSourcePath(const ASourcePath: string): string;
+begin
+  if FSourceRoot = '' then
+    Exit(ASourcePath);
+  if (Length(ASourcePath) > 0) and (ASourcePath[1] = '/') then
+    Exit(ASourcePath);
+  if Pos('://', ASourcePath) > 0 then
+    Exit(ASourcePath);
+  Result := FSourceRoot + ASourcePath;
+end;
+
 procedure TGocciaSourceMapConsumer.GrowSegments;
 begin
   FSegmentCapacity := FSegmentCapacity * 2;
@@ -135,6 +150,16 @@ begin
   if not (Root is TGocciaObjectValue) then
     raise Exception.Create('Source map must be a JSON object');
   Obj := TGocciaObjectValue(Root);
+
+  // Extract sourceRoot
+  PropValue := Obj.GetProperty('sourceRoot');
+  if Assigned(PropValue) and (PropValue is TGocciaStringLiteralValue) then
+  begin
+    FSourceRoot := TGocciaStringLiteralValue(PropValue).Value;
+    // Ensure trailing separator for non-empty roots
+    if (FSourceRoot <> '') and (FSourceRoot[Length(FSourceRoot)] <> '/') then
+      FSourceRoot := FSourceRoot + '/';
+  end;
 
   // Extract sources array
   PropValue := Obj.GetProperty('sources');
@@ -297,8 +322,9 @@ begin
     Exit(BestIndex);
   end;
 
-  // Find the best matching column within the line
-  BestIndex := LineStart;
+  // Find the best matching column within the line — only select segments
+  // whose generated column is at or before the requested column.
+  BestIndex := -1;
   I := LineStart;
   while (I < FSegmentCount) and (FSegments[I].GeneratedLine = AGeneratedLine) do
   begin
@@ -309,7 +335,13 @@ begin
     Inc(I);
   end;
 
-  Result := BestIndex;
+  // If no segment on this line starts at or before the column, fall back
+  // to the last segment on the preceding line.
+  if BestIndex >= 0 then
+    Exit(BestIndex);
+  if LineStart > 0 then
+    Exit(LineStart - 1);
+  Result := -1;
 end;
 
 function TGocciaSourceMapConsumer.Translate(
@@ -333,7 +365,7 @@ begin
      (FSegments[Idx].SourceIndex >= FSources.Count) then
     Exit;
 
-  ASourceFile := FSources[FSegments[Idx].SourceIndex];
+  ASourceFile := ResolveSourcePath(FSources[FSegments[Idx].SourceIndex]);
   ASourceLine := FSegments[Idx].SourceLine;
   ASourceColumn := FSegments[Idx].SourceColumn;
   Result := True;

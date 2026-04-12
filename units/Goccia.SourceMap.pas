@@ -75,6 +75,7 @@ implementation
 uses
   StringBuffer,
 
+  Goccia.Base64,
   Goccia.SourceMap.VLQ;
 
 { TGocciaSourceMap }
@@ -190,8 +191,9 @@ begin
   end;
 end;
 
-// Translate a generated position back to the original source position.
-// Uses the same algorithm as the previous TGocciaJSXSourceMap.Translate.
+// Translate a generated position (1-based line/column from parser) back to the
+// original source position (1-based, matching caller conventions).
+// Segments store 0-based source coordinates; this method converts on output.
 function TGocciaSourceMap.Translate(const ALine, AColumn: Integer;
   out ASourceLine, ASourceColumn: Integer): Boolean;
 var
@@ -217,9 +219,8 @@ begin
     end;
     if BestIndex < 0 then
       Exit;
-    // SourceLine/SourceColumn are 0-based in segments, but callers use
-    // 1-based line numbers (matching the JSX transformer convention)
-    ASourceLine := FSegments[BestIndex].SourceLine + (ALine - FSegments[BestIndex].GeneratedLine);
+    // Convert 0-based SourceLine to 1-based for callers
+    ASourceLine := FSegments[BestIndex].SourceLine + 1 + (ALine - FSegments[BestIndex].GeneratedLine);
     ASourceColumn := AColumn;
     Result := True;
     Exit;
@@ -237,7 +238,10 @@ begin
     Inc(I);
   end;
 
-  ASourceLine := FSegments[BestIndex].SourceLine;
+  // Convert 0-based SourceLine to 1-based for callers.
+  // Column math: 0-based SourceColumn + (1-based AColumn - 0-based GeneratedColumn)
+  // yields a 1-based result due to the mixed-base arithmetic.
+  ASourceLine := FSegments[BestIndex].SourceLine + 1;
   ASourceColumn := FSegments[BestIndex].SourceColumn + (AColumn - FSegments[BestIndex].GeneratedColumn);
   Result := True;
 end;
@@ -451,54 +455,15 @@ end;
 function TGocciaSourceMap.ToInlineComment: string;
 var
   JSON: string;
-  Encoded: string;
+  JSONBytes: TBytes;
   I: Integer;
-  B: Byte;
-  Remaining, TripleCount, J: Integer;
-  A0, A1, A2: Byte;
-const
-  BASE64_TABLE: string = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 begin
   JSON := ToJSON;
-
-  // Base64 encode the JSON
-  Remaining := Length(JSON) mod 3;
-  TripleCount := Length(JSON) div 3;
-  Encoded := '';
-  J := 1;
-  for I := 1 to TripleCount do
-  begin
-    A0 := Ord(JSON[J]);
-    A1 := Ord(JSON[J + 1]);
-    A2 := Ord(JSON[J + 2]);
-    Encoded := Encoded +
-      BASE64_TABLE[(A0 shr 2) + 1] +
-      BASE64_TABLE[((A0 and 3) shl 4 or (A1 shr 4)) + 1] +
-      BASE64_TABLE[((A1 and 15) shl 2 or (A2 shr 6)) + 1] +
-      BASE64_TABLE[(A2 and 63) + 1];
-    Inc(J, 3);
-  end;
-
-  if Remaining = 1 then
-  begin
-    A0 := Ord(JSON[J]);
-    Encoded := Encoded +
-      BASE64_TABLE[(A0 shr 2) + 1] +
-      BASE64_TABLE[((A0 and 3) shl 4) + 1] +
-      '==';
-  end
-  else if Remaining = 2 then
-  begin
-    A0 := Ord(JSON[J]);
-    A1 := Ord(JSON[J + 1]);
-    Encoded := Encoded +
-      BASE64_TABLE[(A0 shr 2) + 1] +
-      BASE64_TABLE[((A0 and 3) shl 4 or (A1 shr 4)) + 1] +
-      BASE64_TABLE[((A1 and 15) shl 2) + 1] +
-      '=';
-  end;
-
-  Result := '//# sourceMappingURL=data:application/json;charset=utf-8;base64,' + Encoded;
+  SetLength(JSONBytes, Length(JSON));
+  for I := 1 to Length(JSON) do
+    JSONBytes[I - 1] := Ord(JSON[I]);
+  Result := '//# sourceMappingURL=data:application/json;charset=utf-8;base64,' +
+    EncodeBase64Standard(JSONBytes);
 end;
 
 end.

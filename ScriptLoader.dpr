@@ -153,7 +153,8 @@ begin
   ASourceMap.FileName := ExtractFileName(AFileName);
   ASourceMap.SetSourcePath(0, ExtractFileName(AFileName));
   ASourceMap.SaveToFile(OutputPath);
-  WriteLn(SysUtils.Format('  Source map written to %s', [OutputPath]));
+  if not GJsonOutput then
+    WriteLn(SysUtils.Format('  Source map written to %s', [OutputPath]));
 end;
 
 function CompileSource(const ASource: TStringList; const AFileName: string;
@@ -293,6 +294,7 @@ function ExecuteInterpreted(const ASource: TStringList; const AFileName: string;
 var
   Engine: TGocciaEngine;
   ScriptResult: TGocciaScriptResult;
+  SourceMap: TGocciaSourceMap;
 begin
   Engine := TGocciaEngine.Create(AFileName, ASource, []);
   try
@@ -308,6 +310,14 @@ begin
       ScriptResult := Engine.Execute;
     finally
       ClearExecutionTimeout;
+    end;
+    SourceMap := Engine.TakeLastSourceMap;
+    try
+      if Assigned(SourceMap) and Assigned(ASource) then
+        SourceMap.SetSourceContent(0, StringListToLFText(ASource));
+      WriteSourceMapIfEnabled(SourceMap, AFileName);
+    finally
+      SourceMap.Free;
     end;
   finally
     Engine.Free;
