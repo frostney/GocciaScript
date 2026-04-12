@@ -181,3 +181,16 @@ test("exec with duplicate names does not interfere with non-duplicate groups", (
   expect(result.groups.x).toBe("b");
   expect(result.groups.y).toBe("2");
 });
+
+test("exec with duplicate named backreference outside the disjunction", () => {
+  const re = new RegExp("(?:(?<x>a)|(?<x>b))\\k<x>");
+  const r1 = re.exec("aa");
+  expect(r1[0]).toBe("aa");
+  expect(r1.groups.x).toBe("a");
+  const r2 = re.exec("bb");
+  expect(r2[0]).toBe("bb");
+  expect(r2.groups.x).toBe("b");
+  expect(re.exec("a")).toBe(null);
+  expect(re.exec("b")).toBe(null);
+  expect(re.exec("ab")).toBe(null);
+});

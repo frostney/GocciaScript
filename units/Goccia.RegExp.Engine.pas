@@ -188,9 +188,10 @@ begin
   Result := -1;
 end;
 
-// ES2025 §22.2.1.1: Two disjunction paths share a branch if they agree at
-// every common depth. When they share a branch, both groups can participate
-// in the same match — making duplicate names invalid.
+// ES2025 §22.2.1 Static Semantics: Early Errors — duplicate GroupSpecifier
+// Two disjunction paths share a branch if they agree at every common depth.
+// When they share a branch, both groups can participate in the same match —
+// making duplicate names a SyntaxError.
 function PathsShareBranch(const APathA, APathB: array of Integer): Boolean;
 var
   MinLength, I: Integer;
@@ -202,8 +203,17 @@ begin
   Result := True;
 end;
 
-// ES2025 §22.2.1.1: Resolve \k<name> backreference when multiple groups share
-// the same name. Returns the TRegExpr-compatible backreference string.
+// ES2025 §22.2.2 Runtime Semantics: CompileAtom — \k GroupName
+// Resolve \k<name> backreference when multiple groups share the same name.
+// Returns the TRegExpr-compatible backreference string.
+//
+// When the backreference is outside the disjunction containing the duplicate
+// groups (CompatCount = 0 or > 1), we emit (?:\N1|\N2|...) — an alternation
+// of all candidate backreferences. This is correct because TRegExpr fails
+// (rather than matching empty) when a backreference targets a non-participating
+// group, so the alternation falls through to the participating group's backref.
+// Concatenation (\N1\N2) would be wrong: the non-participating backref would
+// fail and abort the entire match.
 function ResolveNamedBackreference(
   const ANamedGroups: TGocciaRegExpNamedGroups;
   const AName: string; const ACurrentPath: array of Integer): string;
