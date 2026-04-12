@@ -581,8 +581,9 @@ begin
 end;
 
 var
-  // Thread-local stack of using resource entries for the current block.
+  // Module-level stack of using resource entries for the current block.
   // Populated by CompileUsingDeclaration, consumed by CompileBlockStatement.
+  // NOTE: Not thread-safe; compiler is assumed to be single-threaded.
   GUsingResources: TList<TUsingResourceEntry>;
 
 // TC39 Explicit Resource Management: compile using / await using declaration.
