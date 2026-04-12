@@ -593,14 +593,18 @@ var
 
 // TC39 Explicit Resource Management: compile using / await using declaration.
 // Emits OP_USING_INIT for each variable to validate and extract the dispose method.
+// Also updates the topmost GPendingFinally entry so that CompileReturnStatement
+// and CompileBreakStatement can emit the correct disposal sequence.
 procedure CompileUsingDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaUsingDeclaration);
 var
-  I: Integer;
+  I, Len: Integer;
   Info: TGocciaVariableInfo;
   ValueSlot, DisposeSlot: UInt8;
   Flags: UInt8;
   Entry: TUsingResourceEntry;
+  PendingIdx: Integer;
+  PendingEntry: TPendingFinallyEntry;
 begin
   for I := 0 to High(AStmt.Variables) do
   begin
@@ -616,9 +620,6 @@ begin
     DisposeSlot := ACtx.Scope.AllocateRegister;
 
     // OP_USING_INIT: A=disposeMethodDest, B=valueSource, C=flags (0=sync, 1=async)
-    // Validates the value, extracts [Symbol.dispose]/[Symbol.asyncDispose],
-    // throws TypeError for non-disposable non-null values.
-    // For null/undefined, sets dest to null (no disposal needed).
     if AStmt.IsAwait then
       Flags := 1
     else
@@ -632,26 +633,45 @@ begin
     if not Assigned(GUsingResources) then
       GUsingResources := TList<TUsingResourceEntry>.Create;
     GUsingResources.Add(Entry);
+
+    // Update the topmost pending-finally entry so return/break can find resources
+    if Assigned(GPendingFinally) and (GPendingFinally.Count > 0) then
+    begin
+      PendingIdx := GPendingFinally.Count - 1;
+      PendingEntry := GPendingFinally[PendingIdx];
+      if not Assigned(PendingEntry.FinallyBlock) then
+      begin
+        Len := Length(PendingEntry.UsingResources);
+        SetLength(PendingEntry.UsingResources, Len + 1);
+        PendingEntry.UsingResources[Len] := Entry;
+        GPendingFinally[PendingIdx] := PendingEntry;
+      end;
+    end;
   end;
 end;
 
 // Emit disposal sequence for using resources in reverse order.
-// Each OP_USING_DISPOSE: A=errorAccum, B=disposeMethod, C=resource|asyncFlag
-// Bit 7 of C encodes the async hint (1 = await using, 0 = sync using).
+// Each OP_USING_DISPOSE: A=errorAccum, B=disposeMethod, C=resource
+// For await using entries, an OP_AWAIT follows the dispose call.
 procedure EmitDisposalSequence(const ACtx: TGocciaCompilationContext;
   const AResources: array of TUsingResourceEntry;
   const AResourceCount: Integer; const AErrorReg: UInt8);
 var
   I: Integer;
-  CField: UInt8;
+  TempReg: UInt8;
 begin
   for I := AResourceCount - 1 downto 0 do
   begin
-    CField := AResources[I].ValueSlot;
-    if AResources[I].IsAwait then
-      CField := CField or $80; // Set bit 7 for async dispose
     EmitInstruction(ACtx, EncodeABC(OP_USING_DISPOSE,
-      AErrorReg, AResources[I].DisposeSlot, CField));
+      AErrorReg, AResources[I].DisposeSlot, AResources[I].ValueSlot));
+    // Emit OP_AWAIT for async dispose to honour the spec await point
+    if AResources[I].IsAwait then
+    begin
+      TempReg := ACtx.Scope.AllocateRegister;
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, TempReg, 0, 0));
+      EmitInstruction(ACtx, EncodeABC(OP_AWAIT, TempReg, TempReg, 0));
+      ACtx.Scope.FreeRegister;
+    end;
   end;
 end;
 
@@ -822,13 +842,13 @@ begin
 end;
 
 // Emit pending finally/disposal blocks before a return or abrupt exit.
+// Handles both regular try/finally blocks and using-block disposal entries.
 procedure EmitPendingCleanup(const ACtx: TGocciaCompilationContext);
 var
-  I, J: Integer;
+  I: Integer;
   SavedFinally: TList<TPendingFinallyEntry>;
   Entry: TPendingFinallyEntry;
-  UsingSnap: array of TUsingResourceEntry;
-  UsingCount: Integer;
+  NullishJump: Integer;
 begin
   if not Assigned(GPendingFinally) or (GPendingFinally.Count = 0) then
     Exit;
@@ -840,17 +860,16 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
     if Assigned(Entry.FinallyBlock) then
       CompileBlockStatement(ACtx, Entry.FinallyBlock)
-    else
+    else if Length(Entry.UsingResources) > 0 then
     begin
-      // Using-block disposal: snapshot current GUsingResources
-      if Assigned(GUsingResources) and (GUsingResources.Count > 0) then
-      begin
-        UsingCount := GUsingResources.Count;
-        SetLength(UsingSnap, UsingCount);
-        for J := 0 to UsingCount - 1 do
-          UsingSnap[J] := GUsingResources[J];
-        EmitDisposalSequence(ACtx, UsingSnap, UsingCount, Entry.UsingErrorReg);
-      end;
+      // Using-block disposal: emit disposal + error handling sequence
+      EmitDisposalSequence(ACtx, Entry.UsingResources,
+        Length(Entry.UsingResources), Entry.UsingErrorReg);
+      // Throw accumulated error if any
+      NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
+        Entry.UsingErrorReg);
+      EmitInstruction(ACtx, EncodeABC(OP_THROW, Entry.UsingErrorReg, 0, 0));
+      PatchJumpTarget(ACtx, NullishJump);
     end;
   end;
   GPendingFinally := SavedFinally;
@@ -1464,6 +1483,8 @@ end;
 procedure CompileBreakStatement(const ACtx: TGocciaCompilationContext);
 var
   I: Integer;
+  Entry: TPendingFinallyEntry;
+  NullishJump: Integer;
 begin
   if not Assigned(GBreakJumps) then
     Exit;
@@ -1471,8 +1492,19 @@ begin
   if Assigned(GPendingFinally) and (GPendingFinally.Count > GBreakFinallyBase) then
     for I := GPendingFinally.Count - 1 downto GBreakFinallyBase do
     begin
+      Entry := GPendingFinally[I];
       EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
-      CompileBlockStatement(ACtx, GPendingFinally[I].FinallyBlock);
+      if Assigned(Entry.FinallyBlock) then
+        CompileBlockStatement(ACtx, Entry.FinallyBlock)
+      else if Length(Entry.UsingResources) > 0 then
+      begin
+        EmitDisposalSequence(ACtx, Entry.UsingResources,
+          Length(Entry.UsingResources), Entry.UsingErrorReg);
+        NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
+          Entry.UsingErrorReg);
+        EmitInstruction(ACtx, EncodeABC(OP_THROW, Entry.UsingErrorReg, 0, 0));
+        PatchJumpTarget(ACtx, NullishJump);
+      end;
     end;
 
   GBreakJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));

@@ -5305,9 +5305,9 @@ begin
       // Calls disposeMethod.call(resource). On error, wraps with SuppressedError
       // if errorAccum already holds an error.
       // TC39 Explicit Resource Management: OP_USING_DISPOSE
-      // A=errorAccum, B=disposeMethod, C=resource|asyncFlag
-      // Bit 7 of C = async hint (1 = await the dispose result).
+      // A=errorAccum, B=disposeMethod, C=resource
       // Calls disposeMethod.call(resource). On error, wraps with SuppressedError.
+      // Async await is handled by a separate OP_AWAIT emitted by the compiler.
       OP_USING_DISPOSE:
       begin
         LeftValue := RegisterToValue(FRegisters[B]); // dispose method
@@ -5316,11 +5316,8 @@ begin
            LeftValue.IsCallable then
         begin
           try
-            RightValue := TGocciaFunctionBase(LeftValue).CallNoArgs(
-              RegisterToValue(FRegisters[C and $7F]));
-            // Await async dispose results (bit 7 of C encodes the hint)
-            if ((C and $80) <> 0) and Assigned(RightValue) then
-              AwaitValue(RightValue);
+            TGocciaFunctionBase(LeftValue).CallNoArgs(
+              RegisterToValue(FRegisters[C]));
           except
             on E: EGocciaBytecodeThrow do
             begin
