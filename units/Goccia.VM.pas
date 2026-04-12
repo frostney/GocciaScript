@@ -116,7 +116,8 @@ type
       const ATryAsync: Boolean): TGocciaValue;
     function ConstructValue(const AConstructor: TGocciaValue;
       const AArguments: TGocciaArgumentsCollection): TGocciaValue;
-    function ImportModuleValue(const APath: string): TGocciaValue;
+    function ImportModuleValue(const APath: string): TGocciaValue; overload;
+    function ImportModuleValue(const APath, AReferrer: string): TGocciaValue; overload;
     procedure ExportBindingValue(const AName: string; const AValue: TGocciaValue);
     procedure DefineGetterProperty(const ATarget: TGocciaValue; const AName: string;
       const AGetter: TGocciaValue);
@@ -2360,6 +2361,17 @@ begin
     ThrowTypeError('Module loading is not available in TGocciaVM');
 
   Module := FInterpreter.LoadModule(APath, FCurrentModuleSourcePath);
+  Result := CreateModuleNamespaceObject(Module);
+end;
+
+function TGocciaVM.ImportModuleValue(const APath, AReferrer: string): TGocciaValue;
+var
+  Module: TGocciaModule;
+begin
+  if not Assigned(FInterpreter) then
+    ThrowTypeError('Module loading is not available in TGocciaVM');
+
+  Module := FInterpreter.LoadModule(APath, AReferrer);
   Result := CreateModuleNamespaceObject(Module);
 end;
 
@@ -5223,13 +5235,28 @@ begin
           TGarbageCollector.Instance.AddTempRoot(DynImportPromise);
         try
           try
-            DynImportPromise.Resolve(ImportModuleValue(
-              RegisterToValue(FRegisters[B]).ToStringLiteral.Value));
+            if Assigned(Template.DebugInfo) and (Template.DebugInfo.SourceFile <> '') then
+              DynImportPromise.Resolve(ImportModuleValue(
+                VMRegisterToECMAStringFast(FRegisters[B]).Value,
+                Template.DebugInfo.SourceFile))
+            else
+              DynImportPromise.Resolve(ImportModuleValue(
+                VMRegisterToECMAStringFast(FRegisters[B]).Value,
+                FCurrentModuleSourcePath));
           except
             on E: EGocciaBytecodeThrow do
               DynImportPromise.Reject(E.ThrownValue);
             on E: TGocciaThrowValue do
               DynImportPromise.Reject(E.Value);
+            on E: TGocciaSyntaxError do
+              DynImportPromise.Reject(
+                CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+            on E: TGocciaTypeError do
+              DynImportPromise.Reject(
+                CreateErrorObject(TYPE_ERROR_NAME, E.Message));
+            on E: TGocciaReferenceError do
+              DynImportPromise.Reject(
+                CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
             on E: Exception do
               DynImportPromise.Reject(
                 CreateErrorObject(ERROR_NAME, E.Message));

@@ -1,4 +1,5 @@
 import { add, multiply, PI } from "./helpers/math-utils.js";
+import { loadDep } from "./helpers/dynamic-import-caller.js";
 
 describe("dynamic import()", () => {
   test("returns a promise that resolves to the module namespace", async () => {
@@ -67,5 +68,13 @@ describe("dynamic import()", () => {
     };
     const result = await loadAndAdd(7, 8);
     expect(result).toBe(15);
+  });
+
+  test("resolves relative to the defining module, not the caller", async () => {
+    // loadDep is exported from helpers/dynamic-import-caller.js and calls
+    // import("./dynamic-import-dep.js") — that path must resolve relative to
+    // the helpers/ directory, not this test file's directory.
+    const dep = await loadDep();
+    expect(dep.SECRET).toBe(42);
   });
 });
