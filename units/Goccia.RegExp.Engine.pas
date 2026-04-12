@@ -96,11 +96,284 @@ begin
     raise EConvertError.Create('Invalid regular expression flags');
 end;
 
+// ES2025 §22.2.1 Static Semantics: Early Errors — RegExp Modifiers
+// Validates inline modifier group syntax (?flags:...) and (?flags-flags:...).
+// Only i, m, s are valid modifier flags. The colon form is required.
+procedure ValidateModifierGroups(const APattern: string);
+var
+  I, J, PatternLength: Integer;
+  InCharClass: Boolean;
+  C: Char;
+  EnableFlags, DisableFlags: string;
+  InDisable: Boolean;
+begin
+  PatternLength := Length(APattern);
+  I := 1;
+  InCharClass := False;
+  while I <= PatternLength do
+  begin
+    if APattern[I] = '\' then
+    begin
+      if I + 1 <= PatternLength then
+        Inc(I, 2)
+      else
+        Inc(I);
+      Continue;
+    end;
+    if APattern[I] = '[' then
+    begin
+      InCharClass := True;
+      Inc(I);
+      Continue;
+    end;
+    if (APattern[I] = ']') and InCharClass then
+    begin
+      InCharClass := False;
+      Inc(I);
+      Continue;
+    end;
+    if InCharClass then
+    begin
+      Inc(I);
+      Continue;
+    end;
+    // ES2025: Check for modifier group prefix (?[ims-]...)
+    if (APattern[I] = '(') and (I + 2 <= PatternLength) and
+       (APattern[I + 1] = '?') and
+       CharInSet(APattern[I + 2], ['i', 'm', 's', '-']) then
+    begin
+      J := I + 2;
+      EnableFlags := '';
+      DisableFlags := '';
+      InDisable := False;
+      while J <= PatternLength do
+      begin
+        C := APattern[J];
+        // ES2025 §22.2.1 step 4: colon terminates modifier prefix
+        if C = ':' then
+          Break;
+        if C = ')' then
+          raise EConvertError.Create(
+            'Invalid regular expression: modifier group must use (?flags:...) syntax');
+        if C = '-' then
+        begin
+          if InDisable then
+            raise EConvertError.Create(
+              'Invalid regular expression: unexpected - in modifier group');
+          InDisable := True;
+          Inc(J);
+          Continue;
+        end;
+        if not CharInSet(C, ['i', 'm', 's']) then
+          raise EConvertError.CreateFmt(
+            'Invalid regular expression: ''%s'' is not a valid modifier flag', [C]);
+        if InDisable then
+        begin
+          if Pos(C, DisableFlags) > 0 then
+            raise EConvertError.CreateFmt(
+              'Invalid regular expression: duplicate modifier flag ''%s''', [C]);
+          if Pos(C, EnableFlags) > 0 then
+            raise EConvertError.CreateFmt(
+              'Invalid regular expression: ''%s'' in both enable and disable', [C]);
+          DisableFlags := DisableFlags + C;
+        end
+        else
+        begin
+          if Pos(C, EnableFlags) > 0 then
+            raise EConvertError.CreateFmt(
+              'Invalid regular expression: duplicate modifier flag ''%s''', [C]);
+          EnableFlags := EnableFlags + C;
+        end;
+        Inc(J);
+      end;
+    end;
+    Inc(I);
+  end;
+end;
+
+// ES2025 §22.2.1 RegExp Modifiers — Transforms inline modifier groups
+// (?flags:...) and (?flags-flags:...) into TRegExpr-compatible syntax.
+// For i and m modifiers: uses (?i)/(?-i)/(?m)/(?-m) toggles inside (?:...)
+// groups (TRegExpr scopes these correctly to groups).
+// For s modifier enable: replaces . with [\s\S] (because TRegExpr's (?s)
+// leaks from groups). For s modifier disable: uses (?-s) toggle (TRegExpr
+// scopes this correctly).
+function PreprocessModifierGroups(const APattern: string): string;
+type
+  TSModifierEntry = record
+    Depth: Integer;
+    PreviousSActive: Boolean;
+  end;
+const
+  DOTALL_REPLACEMENT = '[\s\S]';
+  INITIAL_STACK_SIZE = 32;
+var
+  I, J, PatternLength: Integer;
+  InCharClass: Boolean;
+  GroupDepth: Integer;
+  SStack: array of TSModifierEntry;
+  SStackTop: Integer;
+  CurrentSActive: Boolean;
+  C: Char;
+  EnableFlags, DisableFlags: string;
+  InDisable: Boolean;
+  Toggles: string;
+  NewSActive: Boolean;
+begin
+  PatternLength := Length(APattern);
+  if PatternLength = 0 then
+  begin
+    Result := '';
+    Exit;
+  end;
+  Result := '';
+  I := 1;
+  InCharClass := False;
+  GroupDepth := 0;
+  CurrentSActive := False;
+  SStackTop := -1;
+  SetLength(SStack, INITIAL_STACK_SIZE);
+  while I <= PatternLength do
+  begin
+    // Handle escape sequences
+    if APattern[I] = '\' then
+    begin
+      if I + 1 <= PatternLength then
+      begin
+        Result := Result + APattern[I] + APattern[I + 1];
+        Inc(I, 2);
+      end
+      else
+      begin
+        Result := Result + APattern[I];
+        Inc(I);
+      end;
+      Continue;
+    end;
+    // Handle character classes (copy as-is, no dot transformation)
+    if APattern[I] = '[' then
+    begin
+      InCharClass := True;
+      Result := Result + APattern[I];
+      Inc(I);
+      Continue;
+    end;
+    if (APattern[I] = ']') and InCharClass then
+    begin
+      InCharClass := False;
+      Result := Result + APattern[I];
+      Inc(I);
+      Continue;
+    end;
+    if InCharClass then
+    begin
+      Result := Result + APattern[I];
+      Inc(I);
+      Continue;
+    end;
+    // ES2025: Transform . based on current s modifier state
+    if APattern[I] = '.' then
+    begin
+      if CurrentSActive then
+        Result := Result + DOTALL_REPLACEMENT
+      else
+        Result := Result + '.';
+      Inc(I);
+      Continue;
+    end;
+    // Handle closing paren — pop s state if this closes a modifier group
+    if APattern[I] = ')' then
+    begin
+      if (SStackTop >= 0) and (SStack[SStackTop].Depth = GroupDepth) then
+      begin
+        CurrentSActive := SStack[SStackTop].PreviousSActive;
+        Dec(SStackTop);
+      end;
+      Dec(GroupDepth);
+      Result := Result + ')';
+      Inc(I);
+      Continue;
+    end;
+    // Handle opening paren — check for modifier group prefix
+    if APattern[I] = '(' then
+    begin
+      Inc(GroupDepth);
+      if (I + 1 <= PatternLength) and (APattern[I + 1] = '?') and
+         (I + 2 <= PatternLength) and
+         CharInSet(APattern[I + 2], ['i', 'm', 's', '-']) then
+      begin
+        // Parse modifier flags up to ':'
+        J := I + 2;
+        EnableFlags := '';
+        DisableFlags := '';
+        InDisable := False;
+        while (J <= PatternLength) and (APattern[J] <> ':') and
+              (APattern[J] <> ')') do
+        begin
+          C := APattern[J];
+          if C = '-' then
+          begin
+            InDisable := True;
+            Inc(J);
+            Continue;
+          end;
+          if CharInSet(C, ['i', 'm', 's']) then
+          begin
+            if InDisable then
+              DisableFlags := DisableFlags + C
+            else
+              EnableFlags := EnableFlags + C;
+          end;
+          Inc(J);
+        end;
+        if (J <= PatternLength) and (APattern[J] = ':') then
+        begin
+          // Valid modifier group — transform to TRegExpr-compatible syntax
+          // Build i/m toggles (TRegExpr scopes these correctly to groups)
+          Toggles := '';
+          if Pos('i', EnableFlags) > 0 then Toggles := Toggles + '(?i)';
+          if Pos('m', EnableFlags) > 0 then Toggles := Toggles + '(?m)';
+          if Pos('i', DisableFlags) > 0 then Toggles := Toggles + '(?-i)';
+          if Pos('m', DisableFlags) > 0 then Toggles := Toggles + '(?-m)';
+          // s disable uses TRegExpr toggle (correctly scoped to groups)
+          if Pos('s', DisableFlags) > 0 then Toggles := Toggles + '(?-s)';
+          // Determine new s state (s enable uses dot transformation)
+          NewSActive := CurrentSActive;
+          if Pos('s', EnableFlags) > 0 then NewSActive := True;
+          if Pos('s', DisableFlags) > 0 then NewSActive := False;
+          // Push s state if s modifier changed
+          if NewSActive <> CurrentSActive then
+          begin
+            Inc(SStackTop);
+            if SStackTop >= Length(SStack) then
+              SetLength(SStack, SStackTop * 2 + 4);
+            SStack[SStackTop].Depth := GroupDepth;
+            SStack[SStackTop].PreviousSActive := CurrentSActive;
+            CurrentSActive := NewSActive;
+          end;
+          // Emit non-capturing group with toggles
+          Result := Result + '(?:' + Toggles;
+          I := J + 1;
+          Continue;
+        end;
+      end;
+      // Regular group or non-modifier (?...) — pass through
+      Result := Result + APattern[I];
+      Inc(I);
+      Continue;
+    end;
+    // Default: copy character as-is
+    Result := Result + APattern[I];
+    Inc(I);
+  end;
+end;
+
 // ES2026 §22.2.3.1 RegExp ( pattern, flags ) — validation step
 procedure ValidateRegExpPattern(const APattern, AFlags: string);
 var
   Matcher: TRegExpr;
   NormalizedPattern: string;
+  ExecutablePattern: string;
   ConvertedPattern: string;
   DiscardedGroups: TGocciaRegExpNamedGroups;
   IsUnicode: Boolean;
@@ -109,9 +382,13 @@ begin
   NormalizedPattern := NormalizeRegExpSource(APattern);
   if NormalizedPattern = EMPTY_REGEX then
     Exit;
+  ExecutablePattern := GetExecutableRegExpPattern(NormalizedPattern);
+  // ES2025: Validate inline modifier groups before transformation
+  ValidateModifierGroups(ExecutablePattern);
+  // ES2025: Transform modifier groups into TRegExpr-compatible syntax
+  ExecutablePattern := PreprocessModifierGroups(ExecutablePattern);
   IsUnicode := HasRegExpFlag(AFlags, 'u');
-  ConvertedPattern := PreprocessRegExpPattern(
-    GetExecutableRegExpPattern(NormalizedPattern), DiscardedGroups);
+  ConvertedPattern := PreprocessRegExpPattern(ExecutablePattern, DiscardedGroups);
   // ES2026 §22.2.2.9: Apply Unicode pattern preprocessing when u flag is set
   if IsUnicode then
     ConvertedPattern := PreprocessUnicodePattern(ConvertedPattern);
@@ -563,6 +840,7 @@ function ExecuteRegExp(const APattern, AFlags, AInput: string;
 var
   Matcher: TRegExpr;
   I: Integer;
+  ExecutablePattern: string;
   ConvertedPattern: string;
   NamedGroups: TGocciaRegExpNamedGroups;
   IsUnicode: Boolean;
@@ -589,8 +867,10 @@ begin
     AResult.Groups[0].Value := '';
     Exit(True);
   end;
-  ConvertedPattern := PreprocessRegExpPattern(
-    GetExecutableRegExpPattern(APattern), NamedGroups);
+  // ES2025: Transform modifier groups before named group preprocessing
+  ExecutablePattern := PreprocessModifierGroups(
+    GetExecutableRegExpPattern(APattern));
+  ConvertedPattern := PreprocessRegExpPattern(ExecutablePattern, NamedGroups);
   // ES2026 §22.2.2.9: Apply Unicode pattern preprocessing when u flag is set
   if IsUnicode then
     ConvertedPattern := PreprocessUnicodePattern(ConvertedPattern);
