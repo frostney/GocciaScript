@@ -386,6 +386,7 @@ RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pat
 
 **Behavior notes:**
 
+- **Inline modifier groups** (`(?ims-ims:...)`) are supported per ES2025 RegExp Modifiers. Only `i` (ignoreCase), `m` (multiline), and `s` (dotAll) are valid modifier flags. The colon form is required — bare `(?ims)` without `:` is a `SyntaxError`. Duplicate flags and flags appearing in both enable and disable sections are rejected. Modifiers are scoped to the group body; outer flags are unaffected.
 - **Named capture groups** (`(?<name>...)`) are supported. Match results include a `groups` property (an object with `null` prototype) mapping group names to matched strings. Non-participating named groups are `undefined`. When no named groups exist, `groups` is `undefined`.
 - **Duplicate named capture groups:** the same group name may appear in different alternatives of a disjunction (`|`). For example, `/(?<year>\d{4})-\d{2}|\d{2}-(?<year>\d{4})/`. The `groups` property on the match result returns the value from whichever alternative participated; non-participating duplicates are `undefined`. Using the same name in the same alternative (where both groups could participate) is a `SyntaxError`.
 - **Named backreferences** (`\k<name>`) reference a previously captured named group within the same pattern. With duplicate named capture groups, `\k<name>` resolves to the group with that name in the same alternative branch.

@@ -159,11 +159,12 @@ const
   // ---------------------------------------------------------------------------
   // ES2025
   // ---------------------------------------------------------------------------
-  ES2025_FEATURES: array[0..9] of TGocciaFeatureEntry = (
+  ES2025_FEATURES: array[0..10] of TGocciaFeatureEntry = (
     (Name: 'Set Methods';                     Link: 'https://tc39.es/ecma262/#sec-set-objects'),
     (Name: 'Iterator Helpers';                Link: 'https://tc39.es/ecma262/#sec-iterator-objects'),
     (Name: 'Promise.try';                     Link: 'https://tc39.es/ecma262/#sec-promise.try'),
     (Name: 'RegExp.escape';                   Link: 'https://tc39.es/ecma262/#sec-regexp.escape'),
+    (Name: 'RegExp Modifiers';                Link: 'https://tc39.es/ecma262/#sec-regexp-regular-expression-objects'),
     (Name: 'Duplicate Named Capture Groups';  Link: 'https://tc39.es/ecma262/#sec-regexp-regular-expression-objects'),
     (Name: 'Error.isError';                   Link: 'https://tc39.es/ecma262/#sec-error.iserror'),
     (Name: 'Float16Array';                    Link: 'https://tc39.es/ecma262/#sec-typedarray-objects'),
