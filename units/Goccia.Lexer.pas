@@ -91,6 +91,7 @@ const
   UTF8_LINE_TERMINATOR_CONTINUATION_BYTE = #$80;
   UTF8_LINE_SEPARATOR_FINAL_BYTE = #$A8;
   UTF8_PARAGRAPH_SEPARATOR_FINAL_BYTE = #$A9;
+  UTF8_LINE_TERMINATOR_BYTE_LENGTH = 3;
 
 function IsValidHexString(const AValue: string): Boolean;
 var
@@ -215,7 +216,7 @@ end;
 
 procedure TGocciaLexer.ConsumeUnicodeLineTerminator;
 begin
-  Inc(FCurrent, 3);
+  Inc(FCurrent, UTF8_LINE_TERMINATOR_BYTE_LENGTH);
   Inc(FLine);
   FColumn := 1;
 end;
@@ -758,6 +759,19 @@ begin
       SB.AppendChar(C);
       RawSB.AppendChar(C);
     end
+    // ES2026 §12.9.6: TV = TRV; TRV of LS/PS preserves the original code point
+    else if (Peek = UTF8_LINE_TERMINATOR_LEAD_BYTE) and IsUnicodeLineTerminator then
+    begin
+      for J := 0 to UTF8_LINE_TERMINATOR_BYTE_LENGTH - 1 do
+      begin
+        C := FSource[FCurrent + J];
+        SB.AppendChar(C);
+        RawSB.AppendChar(C);
+      end;
+      Inc(FCurrent, UTF8_LINE_TERMINATOR_BYTE_LENGTH);
+      Inc(FLine);
+      FColumn := 0;
+    end
     else if Peek = '\' then
     begin
       Advance; // consume '\'
@@ -830,19 +844,20 @@ begin
   PatternBuffer := TStringBuffer.Create;
   InCharacterClass := False;
 
+  // ES2026 §12.9.5: RegularExpressionNonTerminator :: SourceCharacter but not LineTerminator
   while not IsAtEnd do
   begin
-    C := Advance;
-
-    if C = #10 then
+    if IsLineTerminator then
       raise TGocciaLexerError.Create('Unterminated regular expression literal',
         FLine, FColumn, FFileName, GetSourceLines,
         SSuggestCloseRegex);
 
+    C := Advance;
+
     if C = '\' then
     begin
       PatternBuffer.AppendChar(C);
-      if IsAtEnd then
+      if IsAtEnd or IsLineTerminator then
         raise TGocciaLexerError.Create('Unterminated regular expression literal',
           FLine, FColumn, FFileName, GetSourceLines,
           SSuggestCloseRegex);
