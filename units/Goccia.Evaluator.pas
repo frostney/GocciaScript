@@ -1511,7 +1511,7 @@ begin
   for I := 0 to Length(AUsingDeclaration.Variables) - 1 do
   begin
     // TC39 Explicit Resource Management §3.4 CreateDisposableResource
-    Value := AUsingDeclaration.Variables[I].Initializer.Evaluate(AContext);
+    Value := EvaluateExpression(AUsingDeclaration.Variables[I].Initializer, AContext);
 
     // null and undefined are silently skipped (no error, no disposal)
     if (Value is TGocciaUndefinedLiteralValue) or (Value is TGocciaNullLiteralValue) then
