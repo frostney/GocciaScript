@@ -160,7 +160,7 @@ C[Symbol.metadata].decorated; // true
 - Bitwise operators (`&`, `|`, `^`, `<<`, `>>`, `>>>`).
 - Ternary operator (`? :`).
 - Numeric literals: decimal, hex (`0x`), binary (`0b`), octal (`0o`), scientific notation, and numeric separators (`1_000_000`, `0xFF_FF`, `0b1010_0001`, `0o77_77`, `1.5e1_0`).
-- Template literals with interpolation and tagged templates (`tag\`...\``, `String.raw`). Tagged templates support the TC39 Template Literal Revision (ES2018): malformed escape sequences (e.g., `\u{`, `\xG1`) set the cooked segment to `undefined` while preserving the raw source text; untagged templates still throw `SyntaxError` for invalid escapes.
+- Template literals with interpolation and tagged templates (``tag`...```, `String.raw`). Tagged templates support the TC39 Template Literal Revision (ES2018): malformed escape sequences (e.g., `\u{`, `\xG1`) set the cooked segment to `undefined` while preserving the raw source text; untagged templates still throw `SyntaxError` for invalid escapes.
 - Destructuring (array and object patterns).
 - Spread operator (`...`).
 - `typeof`, `instanceof`, `in`, `delete`.
