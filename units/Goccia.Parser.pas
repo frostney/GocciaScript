@@ -1069,6 +1069,8 @@ begin
 end;
 
 // Parse a template interpolation expression text into an AST expression node.
+// Note: Tokens are owned by the Lexer (FTokens with OwnsObjects=True) and freed
+// when the Lexer is destroyed — they must not be freed separately.
 function ParseInterpolationExpression(const AExprText, AFileName: string): TGocciaExpression;
 var
   Lexer: TGocciaLexer;
