@@ -34,4 +34,14 @@ describe.runIf(isTemporal)("Temporal.PlainMonthDay.from", () => {
   test("from throws on missing month", () => {
     expect(() => Temporal.PlainMonthDay.from({ day: 15 })).toThrow();
   });
+
+  test("from rejects non-canonical monthCode", () => {
+    expect(() => Temporal.PlainMonthDay.from({ monthCode: "M1", day: 15 })).toThrow();
+    expect(() => Temporal.PlainMonthDay.from({ monthCode: "M001", day: 15 })).toThrow();
+  });
+
+  test("from rejects out-of-range monthCode", () => {
+    expect(() => Temporal.PlainMonthDay.from({ monthCode: "M13", day: 15 })).toThrow();
+    expect(() => Temporal.PlainMonthDay.from({ monthCode: "M00", day: 15 })).toThrow();
+  });
 });

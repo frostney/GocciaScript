@@ -1018,12 +1018,13 @@ begin
     V := Obj.GetProperty('monthCode');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
     begin
-      // Parse monthCode like "M07" to extract month number
+      // Parse monthCode — must be canonical format M01..M12
       MonthCodeStr := V.ToStringLiteral.Value;
-      if (Length(MonthCodeStr) >= 2) and (MonthCodeStr[1] = 'M') then
-        M := StrToIntDef(Copy(MonthCodeStr, 2, Length(MonthCodeStr) - 1), 0)
-      else
-        M := 0;
+      if (Length(MonthCodeStr) <> 3) or (MonthCodeStr[1] <> 'M') or
+         not (MonthCodeStr[2] in ['0'..'9']) or not (MonthCodeStr[3] in ['0'..'9']) then
+        ThrowTypeError('Invalid monthCode for Temporal.PlainMonthDay.from');
+      if not TryStrToInt(Copy(MonthCodeStr, 2, 2), M) then
+        ThrowTypeError('Invalid monthCode for Temporal.PlainMonthDay.from');
     end
     else
     begin

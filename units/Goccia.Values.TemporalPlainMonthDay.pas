@@ -102,10 +102,13 @@ begin
     if Assigned(VMonthCode) and not (VMonthCode is TGocciaUndefinedLiteralValue) then
     begin
       MonthCodeStr := VMonthCode.ToStringLiteral.Value;
-      if (Length(MonthCodeStr) < 2) or (MonthCodeStr[1] <> 'M') then
+      if (Length(MonthCodeStr) <> 3) or (MonthCodeStr[1] <> 'M') or
+         not (MonthCodeStr[2] in ['0'..'9']) or not (MonthCodeStr[3] in ['0'..'9']) then
         ThrowTypeError('Invalid monthCode for ' + AMethod);
-      if not TryStrToInt(Copy(MonthCodeStr, 2, Length(MonthCodeStr) - 1), MonthPart) then
+      if not TryStrToInt(Copy(MonthCodeStr, 2, 2), MonthPart) then
         ThrowTypeError('Invalid monthCode for ' + AMethod);
+      if (MonthPart < 1) or (MonthPart > 12) then
+        ThrowRangeError('monthCode month out of range in ' + AMethod);
       // Validate month/monthCode consistency when both are provided
       V := Obj.GetProperty(PROP_MONTH);
       if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
@@ -244,10 +247,13 @@ begin
   if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
   begin
     MonthCodeStr := V.ToStringLiteral.Value;
-    if (Length(MonthCodeStr) < 2) or (MonthCodeStr[1] <> 'M') then
+    if (Length(MonthCodeStr) <> 3) or (MonthCodeStr[1] <> 'M') or
+       not (MonthCodeStr[2] in ['0'..'9']) or not (MonthCodeStr[3] in ['0'..'9']) then
       ThrowTypeError('Invalid monthCode in PlainMonthDay.prototype.with');
-    if not TryStrToInt(Copy(MonthCodeStr, 2, Length(MonthCodeStr) - 1), NewMonth) then
+    if not TryStrToInt(Copy(MonthCodeStr, 2, 2), NewMonth) then
       ThrowTypeError('Invalid monthCode in PlainMonthDay.prototype.with');
+    if (NewMonth < 1) or (NewMonth > 12) then
+      ThrowRangeError('monthCode month out of range in PlainMonthDay.prototype.with');
     // Validate month/monthCode consistency when both are provided
     V := Obj.GetProperty(PROP_MONTH);
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
