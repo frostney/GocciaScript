@@ -1450,17 +1450,25 @@ begin
   ExtractTemplateParts(AToken.Lexeme, CookedFull, RawFull, HasInvalidEscapes);
 
   // TC39 Template Literal Revision: untagged templates must still reject
-  // malformed escape sequences at parse time.
+  // malformed escape sequences at parse time.  HasInvalidEscapes is set for
+  // the whole flat token (including ${...} bodies), so we split into static
+  // segments first and only reject if a static segment has an invalid escape.
   if HasInvalidEscapes then
-    raise TGocciaSyntaxError.Create('Invalid escape sequence in template literal',
-      AToken.Line, AToken.Column, FFileName, FSourceLines, '');
-
-  SplitTemplateAtBoundaries(CookedFull, RawFull, CookedSegments, RawSegments, ExprTexts);
+  begin
+    SplitRawAtBoundaries(RawFull, RawSegments, ExprTexts);
+    SetLength(CookedSegments, Length(RawSegments));
+    for I := 0 to Length(RawSegments) - 1 do
+      if not CookRawSegment(RawSegments[I], CookedSegments[I]) then
+        raise TGocciaSyntaxError.Create('Invalid escape sequence in template literal',
+          AToken.Line, AToken.Column, FFileName, FSourceLines, '');
+  end
+  else
+    SplitTemplateAtBoundaries(CookedFull, RawFull, CookedSegments, RawSegments, ExprTexts);
 
   // No real interpolations — return a simple template literal
   if Length(ExprTexts) = 0 then
   begin
-    Result := TGocciaTemplateLiteralExpression.Create(CookedFull, AToken.Line, AToken.Column);
+    Result := TGocciaTemplateLiteralExpression.Create(CookedSegments[0], AToken.Line, AToken.Column);
     Exit;
   end;
 

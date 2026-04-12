@@ -432,7 +432,9 @@ begin
     CodePoint := StrToInt('$' + HexStr);
   end;
 
-  // ES2026 §12.9.4: Combine UTF-16 surrogate pairs into a single code point
+  // ES2026 §12.9.4: Combine UTF-16 surrogate pairs into a single code point.
+  // Guard against scanning past the closing backtick when the low surrogate
+  // probe is incomplete or malformed — restore the cursor on every failure path.
   if (CodePoint >= $D800) and (CodePoint <= $DBFF) and (Peek = '\') and (PeekNext = 'u') then
   begin
     SavedCurrent := FCurrent;
@@ -442,7 +444,7 @@ begin
     HexStart := FCurrent;
     for I := 1 to 4 do
     begin
-      if IsAtEnd then
+      if IsAtEnd or (Peek = '`') then
       begin
         FCurrent := SavedCurrent;
         FColumn := SavedColumn;
@@ -461,6 +463,11 @@ begin
         FCurrent := SavedCurrent;
         FColumn := SavedColumn;
       end;
+    end
+    else
+    begin
+      FCurrent := SavedCurrent;
+      FColumn := SavedColumn;
     end;
   end;
 
