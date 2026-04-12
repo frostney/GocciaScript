@@ -125,6 +125,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Proxy | `Goccia.Values.ProxyValue.pas` | ES2026 Proxy with all 13 handler traps and invariant enforcement |
 | Uint8Array encoding | `Goccia.Values.Uint8ArrayEncoding.pas` | Uint8Array Base64/Hex: `toBase64`, `fromBase64`, `toHex`, `fromHex`, `setFromBase64`, `setFromHex` |
 | FFI | `Goccia.FFI*.pas`, `Goccia.Values.FFI*.pas` | Foreign Function Interface for native shared libraries |
+| URI encoding | `Goccia.URI.pas` | Shared `encodeURI`/`decodeURI`/`encodeURIComponent`/`decodeURIComponent` and `PercentEncodePath` |
 | import.meta | `Goccia.ImportMeta.pas` | Per-module metadata object with `url` and `resolve()` (ES2026 §13.3.12) |
 
 **Bytecode design rules:**

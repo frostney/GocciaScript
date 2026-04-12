@@ -482,6 +482,10 @@ The constructor-backed objects mirror the `node-semver` public fields and core i
 | `structuredClone(value)` | Deep-clone a value using the structured clone algorithm. Handles objects, arrays, `Map`, `Set`, and circular references. Throws `DOMException` with name `"DataCloneError"` (code 25) for non-cloneable types (functions, symbols). |
 | `btoa(data)` | Encode a binary string (each character code ≤ U+00FF) to base64. Throws `DOMException` with name `"InvalidCharacterError"` (code 5) if any character code exceeds U+00FF. |
 | `atob(data)` | Decode a base64 string to a binary string. Uses WHATWG forgiving-base64-decode: strips ASCII whitespace, tolerates missing `=` padding. Throws `DOMException` with name `"InvalidCharacterError"` (code 5) for invalid base64 input. |
+| `encodeURI(uriString)` | Encode a complete URI, preserving reserved characters (`;/?:@&=+$,#`) and unreserved characters. Multi-byte characters are UTF-8 encoded. Throws `URIError` for lone surrogates. |
+| `decodeURI(encodedURI)` | Decode a percent-encoded URI. Does **not** decode reserved characters (`%3B`, `%2F`, etc.). Throws `URIError` for malformed percent sequences or invalid UTF-8. |
+| `encodeURIComponent(uriComponent)` | Encode a URI component. Only unreserved characters (`A-Z a-z 0-9 - _ . ! ~ * ' ( )`) are preserved. Throws `URIError` for lone surrogates. |
+| `decodeURIComponent(encodedURIComponent)` | Decode a percent-encoded URI component. Decodes all percent sequences including reserved characters. Throws `URIError` for malformed percent sequences or invalid UTF-8. |
 
 `queueMicrotask` shares the same microtask queue used by Promise reactions. Callbacks run after the current synchronous code completes but before the engine returns control. If a callback throws, the error is silently discarded and remaining microtasks still execute.
 
@@ -490,6 +494,8 @@ The constructor-backed objects mirror the `node-semver` public fields and core i
 `btoa` encodes a string to base64 following the WHATWG HTML spec §8.3. Each character in the input must have a code point ≤ U+00FF (Latin-1 range); characters outside this range throw a `DOMException` with name `"InvalidCharacterError"` and legacy code 5. The input is interpreted as a byte sequence where each code point maps 1:1 to a byte value.
 
 `atob` decodes a base64 string following the WHATWG forgiving-base64-decode algorithm. ASCII whitespace (U+0009, U+000A, U+000C, U+000D, U+0020) is stripped before decoding. Missing `=` padding is tolerated. Invalid characters or an invalid length (length mod 4 = 1 after cleanup) throw a `DOMException` with name `"InvalidCharacterError"` and legacy code 5. The decoded bytes are returned as a string where each byte becomes a character (Latin-1 interpretation).
+
+`encodeURI` / `decodeURI` / `encodeURIComponent` / `decodeURIComponent` implement ES2026 §19.2.6. The shared encoding/decoding logic lives in `Goccia.URI.pas` and is also used by `import.meta.url` for file-path percent-encoding. Multi-byte Unicode characters are encoded as UTF-8 octets, each percent-encoded individually (e.g., `encodeURIComponent("中")` → `%E4%B8%AD`). Lone surrogates (U+D800–U+DFFF) throw `URIError`. Decoding validates UTF-8 well-formedness: overlong encodings, truncated sequences, and code points above U+10FFFF all throw `URIError`. `decodeURI` re-emits reserved characters as uppercase percent-encoded sequences even when the input uses lowercase hex digits (e.g., `%2f` → `%2F`).
 
 **Error constructors:** `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `DOMException`
 
