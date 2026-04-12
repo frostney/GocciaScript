@@ -512,8 +512,6 @@ Labels exist primarily for `break`/`continue` targets in nested loops. Since Goc
 The following standard ECMAScript built-ins are **not yet implemented** and may be added in future versions:
 
 - **WeakMap / WeakSet / WeakRef / FinalizationRegistry** — Weak reference collections and finalizers. These require tight GC integration. Deferred until demand warrants the complexity.
-- **URI functions** (`encodeURI`, `decodeURI`, `encodeURIComponent`, `decodeURIComponent`) — URL encoding/decoding.
-- **atob / btoa** — Base64 encoding/decoding.
 
 ## Types as Comments
 

@@ -32,6 +32,7 @@ uses
   OrderedStringMap,
 
   Goccia.Constants.PropertyNames,
+  Goccia.URI,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
 
@@ -44,26 +45,6 @@ var
   ImportMetaCache: TOrderedStringMap<TGocciaObjectValue>;
   PinnedObjects: array of TGCManagedObject;
   PinnedCount: Integer;
-
-// RFC 3986 §2.3 — percent-encode path characters that are not unreserved or '/'
-function PercentEncodePath(const APath: string): string;
-var
-  I: Integer;
-  Ch: Char;
-begin
-  Result := '';
-  for I := 1 to Length(APath) do
-  begin
-    Ch := APath[I];
-    case Ch of
-      'A'..'Z', 'a'..'z', '0'..'9', '-', '.', '_', '~', '/',
-      ':', '@', '!', '$', '&', '''', '(', ')', '*', '+', ',', ';', '=':
-        Result := Result + Ch;
-    else
-      Result := Result + '%' + IntToHex(Ord(Ch), 2);
-    end;
-  end;
-end;
 
 function FilePathToUrl(const AFilePath: string): string;
 var
