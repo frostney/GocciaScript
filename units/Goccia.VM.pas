@@ -204,6 +204,7 @@ uses
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Coverage,
+  Goccia.DisposalTracker,
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.Evaluator.Decorators,
@@ -5265,6 +5266,76 @@ begin
         finally
           if Assigned(TGarbageCollector.Instance) then
             TGarbageCollector.Instance.RemoveTempRoot(DynImportPromise);
+        end;
+      end;
+
+      // TC39 Explicit Resource Management: OP_USING_INIT
+      // A=dest (dispose method), B=value, C=flags (0=sync, 1=async)
+      // Validates value has [Symbol.dispose]/[Symbol.asyncDispose], stores method in A.
+      // For null/undefined, stores null. Throws TypeError if not disposable.
+      OP_USING_INIT:
+      begin
+        LeftValue := RegisterToValue(FRegisters[B]);
+        if (LeftValue is TGocciaUndefinedLiteralValue) or
+           (LeftValue is TGocciaNullLiteralValue) then
+          FRegisters[A] := RegisterNull
+        else
+        begin
+          if C = 1 then
+            RightValue := GetDisposeMethod(LeftValue, dhAsyncDispose)
+          else
+            RightValue := GetDisposeMethod(LeftValue, dhSyncDispose);
+          if not Assigned(RightValue) then
+          begin
+            if C = 1 then
+              raise EGocciaBytecodeThrow.Create(
+                CreateErrorObject(TYPE_ERROR_NAME,
+                  'Value is not disposable (missing [Symbol.asyncDispose] and [Symbol.dispose])'))
+            else
+              raise EGocciaBytecodeThrow.Create(
+                CreateErrorObject(TYPE_ERROR_NAME,
+                  'Value is not disposable (missing [Symbol.dispose])'));
+          end;
+          SetRegister(A, RightValue);
+        end;
+      end;
+
+      // TC39 Explicit Resource Management: OP_USING_DISPOSE
+      // A=errorAccum, B=disposeMethod, C=resource
+      // Calls disposeMethod.call(resource). On error, wraps with SuppressedError
+      // if errorAccum already holds an error.
+      OP_USING_DISPOSE:
+      begin
+        LeftValue := RegisterToValue(FRegisters[B]); // dispose method
+        if Assigned(LeftValue) and not (LeftValue is TGocciaNullLiteralValue) and
+           not (LeftValue is TGocciaUndefinedLiteralValue) and
+           LeftValue.IsCallable then
+        begin
+          try
+            TGocciaFunctionBase(LeftValue).CallNoArgs(
+              RegisterToValue(FRegisters[C]));
+          except
+            on E: EGocciaBytecodeThrow do
+            begin
+              RightValue := RegisterToValue(FRegisters[A]);
+              if Assigned(RightValue) and
+                 not (RightValue is TGocciaNullLiteralValue) and
+                 not (RightValue is TGocciaUndefinedLiteralValue) then
+                SetRegister(A, CreateSuppressedErrorObject(E.ThrownValue, RightValue))
+              else
+                SetRegister(A, E.ThrownValue);
+            end;
+            on E: TGocciaThrowValue do
+            begin
+              RightValue := RegisterToValue(FRegisters[A]);
+              if Assigned(RightValue) and
+                 not (RightValue is TGocciaNullLiteralValue) and
+                 not (RightValue is TGocciaUndefinedLiteralValue) then
+                SetRegister(A, CreateSuppressedErrorObject(E.Value, RightValue))
+              else
+                SetRegister(A, E.Value);
+            end;
+          end;
         end;
       end;
 

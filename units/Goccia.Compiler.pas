@@ -231,7 +231,10 @@ begin
     Goccia.Compiler.Statements.CompileEnumDeclaration(Ctx, TGocciaEnumDeclaration(AStmt))
   else if AStmt is TGocciaExportEnumDeclaration then
     Goccia.Compiler.Statements.CompileExportEnumDeclaration(Ctx,
-      TGocciaExportEnumDeclaration(AStmt));
+      TGocciaExportEnumDeclaration(AStmt))
+  else if AStmt is TGocciaUsingDeclaration then
+    Goccia.Compiler.Statements.CompileUsingDeclaration(Ctx,
+      TGocciaUsingDeclaration(AStmt));
 end;
 
 procedure TGocciaCompiler.DoCompileFunctionBody(const ABody: TGocciaASTNode);

@@ -51,6 +51,9 @@ procedure CompileEnumDeclaration(const ACtx: TGocciaCompilationContext;
 procedure CompileExportEnumDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExportEnumDeclaration);
 
+procedure CompileUsingDeclaration(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaUsingDeclaration);
+
 procedure CompileClassDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaClassDeclaration);
 procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
@@ -86,6 +89,12 @@ uses
 type
   TPendingFinallyEntry = record
     FinallyBlock: TGocciaBlockStatement;
+  end;
+
+  TUsingResourceEntry = record
+    ValueSlot: UInt8;
+    DisposeSlot: UInt8;
+    IsAwait: Boolean;
   end;
 
 var
@@ -571,6 +580,68 @@ begin
   end;
 end;
 
+var
+  // Thread-local stack of using resource entries for the current block.
+  // Populated by CompileUsingDeclaration, consumed by CompileBlockStatement.
+  GUsingResources: TList<TUsingResourceEntry>;
+
+// TC39 Explicit Resource Management: compile using / await using declaration.
+// Emits OP_USING_INIT for each variable to validate and extract the dispose method.
+procedure CompileUsingDeclaration(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaUsingDeclaration);
+var
+  I: Integer;
+  Info: TGocciaVariableInfo;
+  ValueSlot, DisposeSlot: UInt8;
+  Flags: UInt8;
+  Entry: TUsingResourceEntry;
+begin
+  for I := 0 to High(AStmt.Variables) do
+  begin
+    Info := AStmt.Variables[I];
+
+    // Declare the using variable as const
+    ValueSlot := ACtx.Scope.DeclareLocal(Info.Name, True);
+
+    // Compile the initializer into the value slot
+    ACtx.CompileExpression(Info.Initializer, ValueSlot);
+
+    // Allocate a hidden register for the dispose method
+    DisposeSlot := ACtx.Scope.AllocateRegister;
+
+    // OP_USING_INIT: A=disposeMethodDest, B=valueSource, C=flags (0=sync, 1=async)
+    // Validates the value, extracts [Symbol.dispose]/[Symbol.asyncDispose],
+    // throws TypeError for non-disposable non-null values.
+    // For null/undefined, sets dest to null (no disposal needed).
+    if AStmt.IsAwait then
+      Flags := 1
+    else
+      Flags := 0;
+    EmitInstruction(ACtx, EncodeABC(OP_USING_INIT, DisposeSlot, ValueSlot, Flags));
+
+    // Track for disposal at block exit
+    Entry.ValueSlot := ValueSlot;
+    Entry.DisposeSlot := DisposeSlot;
+    Entry.IsAwait := AStmt.IsAwait;
+    if not Assigned(GUsingResources) then
+      GUsingResources := TList<TUsingResourceEntry>.Create;
+    GUsingResources.Add(Entry);
+  end;
+end;
+
+// Emit disposal sequence for using resources in reverse order.
+// Each OP_USING_DISPOSE: A=errorAccum, B=disposeMethod, C=resource
+procedure EmitDisposalSequence(const ACtx: TGocciaCompilationContext;
+  const AResources: array of TUsingResourceEntry;
+  const AResourceCount: Integer; const AErrorReg: UInt8);
+var
+  I: Integer;
+begin
+  for I := AResourceCount - 1 downto 0 do
+    EmitInstruction(ACtx, EncodeABC(OP_USING_DISPOSE,
+      AErrorReg, AResources[I].DisposeSlot, AResources[I].ValueSlot));
+end;
+
 procedure CompileBlockStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaBlockStatement);
 var
@@ -579,9 +650,62 @@ var
   ClosedCount: Integer;
   Node: TGocciaASTNode;
   Reg: UInt8;
+  HasUsing: Boolean;
+  SavedResourceBase, ResourceCount: Integer;
+  CatchReg, ErrorReg: UInt8;
+  HandlerJump, EndJump, NullishJump: Integer;
+  SavedResources: array[0..63] of TUsingResourceEntry;
 begin
+  // Check if this block contains any using declarations
+  HasUsing := False;
+  for I := 0 to AStmt.Nodes.Count - 1 do
+    if AStmt.Nodes[I] is TGocciaUsingDeclaration then
+    begin
+      HasUsing := True;
+      Break;
+    end;
+
+  // Fast path: no using declarations, original block compilation
+  if not HasUsing then
+  begin
+    ACtx.Scope.BeginScope;
+    for I := 0 to AStmt.Nodes.Count - 1 do
+    begin
+      Node := AStmt.Nodes[I];
+      if Node is TGocciaStatement then
+        ACtx.CompileStatement(TGocciaStatement(Node))
+      else if Node is TGocciaExpression then
+      begin
+        Reg := ACtx.Scope.AllocateRegister;
+        ACtx.CompileExpression(TGocciaExpression(Node), Reg);
+        ACtx.Scope.FreeRegister;
+      end;
+    end;
+    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+    for I := 0 to ClosedCount - 1 do
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+    Exit;
+  end;
+
+  // Slow path: block with using declarations — compile as try/finally
   ACtx.Scope.BeginScope;
 
+  // Remember the starting point of using resources for this block
+  if not Assigned(GUsingResources) then
+    GUsingResources := TList<TUsingResourceEntry>.Create;
+  SavedResourceBase := GUsingResources.Count;
+
+  // Allocate registers for exception handling
+  CatchReg := ACtx.Scope.AllocateRegister;
+  ErrorReg := ACtx.Scope.AllocateRegister;
+
+  // Initialize error accumulator to null (no error yet)
+  EmitInstruction(ACtx, EncodeABC(OP_LOAD_NULL, ErrorReg, 0, 0));
+
+  // Set up exception handler — catches any throw from the block body
+  HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, CatchReg);
+
+  // Compile all statements in the block (including using declarations)
   for I := 0 to AStmt.Nodes.Count - 1 do
   begin
     Node := AStmt.Nodes[I];
@@ -594,6 +718,47 @@ begin
       ACtx.Scope.FreeRegister;
     end;
   end;
+
+  // Normal exit: pop handler, run disposal
+  EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+
+  // Collect resources registered by using declarations in this block
+  ResourceCount := GUsingResources.Count - SavedResourceBase;
+  for I := 0 to ResourceCount - 1 do
+    SavedResources[I] := GUsingResources[SavedResourceBase + I];
+
+  // Remove the entries we consumed
+  for I := GUsingResources.Count - 1 downto SavedResourceBase do
+    GUsingResources.Delete(I);
+
+  // Normal path: dispose resources in reverse order
+  EmitDisposalSequence(ACtx, SavedResources, ResourceCount, ErrorReg);
+
+  // If any disposal error accumulated, throw it
+  NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, ErrorReg);
+  EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
+  PatchJumpTarget(ACtx, NullishJump);
+
+  // Jump past the exception handler
+  EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+
+  // Exception handler: save the caught error, then dispose and re-throw
+  PatchJumpTarget(ACtx, HandlerJump);
+
+  // Move caught exception to error accumulator
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, ErrorReg, CatchReg, 0));
+
+  // Dispose resources (SuppressedError chaining handled by OP_USING_DISPOSE)
+  EmitDisposalSequence(ACtx, SavedResources, ResourceCount, ErrorReg);
+
+  // Re-throw the accumulated error
+  EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
+
+  PatchJumpTarget(ACtx, EndJump);
+
+  // Free exception handling registers
+  ACtx.Scope.FreeRegister; // ErrorReg
+  ACtx.Scope.FreeRegister; // CatchReg
 
   ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
   for I := 0 to ClosedCount - 1 do

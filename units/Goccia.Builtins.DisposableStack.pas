@@ -58,7 +58,8 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.VM.Exception;
 
 type
   { Internal slot record for DisposableStack/AsyncDisposableStack instances.
@@ -238,6 +239,14 @@ begin
       try
         TGocciaFunctionBase(Resource.DisposeMethod).CallNoArgs(Resource.ResourceValue);
       except
+        on E: EGocciaBytecodeThrow do
+        begin
+          if HasError then
+            CurrentError := CreateSuppressedErrorObject(E.ThrownValue, CurrentError)
+          else
+            CurrentError := E.ThrownValue;
+          HasError := True;
+        end;
         on E: TGocciaThrowValue do
         begin
           if HasError then
