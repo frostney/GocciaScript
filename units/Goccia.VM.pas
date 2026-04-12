@@ -79,6 +79,9 @@ type
     FArgumentPool: TGocciaArgumentsPoolArray;
     FArgumentPoolCount: Integer;
     function ConstantToValue(const AConstant: TGocciaBytecodeConstant): TGocciaValue;
+    // ES2026 §13.2.8.3 GetTemplateObject — lazy-build helper for bckTemplateObject constants.
+    function BuildTemplateObjectConstant(const ATemplate: TGocciaFunctionTemplate;
+      const AConstantIndex: Integer): TGocciaValue;
     function AcquireArguments(const ACapacity: Integer = 0): TGocciaArgumentsCollection;
     procedure ReleaseArguments(const AArguments: TGocciaArgumentsCollection);
     procedure AcquireRegisters(const ACount: Integer);
@@ -1704,6 +1707,56 @@ begin
       Result := TGocciaStringLiteralValue.Create(AConstant.StringValue);
   else
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+end;
+
+// ES2026 §13.2.8.3 GetTemplateObject — return the cached frozen template object
+// for the call site identified by AConstantIndex, building and pinning it on
+// the first execution of this instruction for the given function template.
+// Every subsequent execution of the same OP_LOAD_CONST instruction within the
+// same template returns the identical object reference, satisfying the spec's
+// per-Parse-Node identity requirement without any new opcodes.
+function TGocciaVM.BuildTemplateObjectConstant(const ATemplate: TGocciaFunctionTemplate;
+  const AConstantIndex: Integer): TGocciaValue;
+var
+  Constant: TGocciaBytecodeConstant;
+  Slot: Integer;
+  CookedArray, RawArray: TGocciaArrayValue;
+  I: Integer;
+begin
+  Constant := ATemplate.GetConstantUnchecked(AConstantIndex);
+  Slot := Integer(Constant.IntValue);
+  Result := TGocciaValue(ATemplate.GetTemplateObjectCache(Slot));
+  if Assigned(Result) then
+    Exit;
+
+  // First execution: build, freeze, and pin the template object
+  RawArray := TGocciaArrayValue.Create;
+  TGarbageCollector.Instance.AddTempRoot(RawArray);
+  try
+    for I := 0 to Length(Constant.RawStrings) - 1 do
+      RawArray.Elements.Add(TGocciaStringLiteralValue.Create(Constant.RawStrings[I]));
+    RawArray.Freeze;
+
+    CookedArray := TGocciaArrayValue.Create;
+    TGarbageCollector.Instance.AddTempRoot(CookedArray);
+    try
+      for I := 0 to Length(Constant.CookedStrings) - 1 do
+        CookedArray.Elements.Add(TGocciaStringLiteralValue.Create(Constant.CookedStrings[I]));
+      // ES2026 §13.2.8.3 step 8: raw is non-enumerable, non-writable, non-configurable
+      CookedArray.DefineProperty(PROP_RAW,
+        TGocciaPropertyDescriptorData.Create(RawArray, []));
+      // ES2026 §13.2.8.3 step 12: freeze the template object
+      CookedArray.Freeze;
+      // ES2026 §13.2.8.3 step 13: cache keyed by this Parse Node (template slot)
+      TGarbageCollector.Instance.PinObject(CookedArray);
+      ATemplate.SetTemplateObjectCache(Slot, CookedArray);
+      Result := CookedArray;
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(CookedArray);
+    end;
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(RawArray);
   end;
 end;
 
@@ -3560,8 +3613,12 @@ begin
         C := DecodeC(Instruction);
         case TGocciaOpCode(Op) of
       OP_LOAD_CONST:
-        FRegisters[A] := ValueToRegister(
-          ConstantToValue(Template.GetConstantUnchecked(DecodeBx(Instruction))));
+        // ES2026 §13.2.8.3: bckTemplateObject constants are lazily built and cached
+        if Template.GetConstantUnchecked(DecodeBx(Instruction)).Kind = bckTemplateObject then
+          FRegisters[A] := ValueToRegister(BuildTemplateObjectConstant(Template, DecodeBx(Instruction)))
+        else
+          FRegisters[A] := ValueToRegister(
+            ConstantToValue(Template.GetConstantUnchecked(DecodeBx(Instruction))));
 
       OP_LOAD_UNDEFINED:
         FRegisters[A] := RegisterUndefined;

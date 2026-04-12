@@ -251,4 +251,34 @@ describe("tagged templates", () => {
     expect(strings[0]).toBe("\\${x}");
     expect(values.length).toBe(0);
   });
+
+  test("same call site returns the identical template object on every invocation (ES2026 §13.2.8.3)", () => {
+    // The spec requires GetTemplateObject to return the same frozen object for
+    // repeated evaluations of the same Parse Node (call site).
+    const tag = (strings) => strings;
+    const callSite = () => tag`hello`;
+    const a = callSite();
+    const b = callSite();
+    expect(a).toBe(b);
+  });
+
+  test("template object identity is preserved with substitutions", () => {
+    const tag = (strings) => strings;
+    let x = 1;
+    const callSite = () => tag`hello ${x} world`;
+    const a = callSite();
+    x = 2;
+    const b = callSite();
+    // The template object (strings array) must be identical; only the substitution differs
+    expect(a).toBe(b);
+  });
+
+  test("different call sites produce different template objects even with identical content", () => {
+    const tag = (strings) => strings;
+    // Two syntactically distinct tagged template expressions are two separate
+    // Parse Nodes and therefore map to separate entries in [[TemplateMap]].
+    const a = tag`hello`;
+    const b = tag`hello`;
+    expect(a).not.toBe(b);
+  });
 });

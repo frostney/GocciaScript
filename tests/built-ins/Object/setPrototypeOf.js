@@ -17,4 +17,24 @@ describe("Object.setPrototypeOf", () => {
     Object.setPrototypeOf(obj, null);
     expect(Object.getPrototypeOf(obj)).toBe(null);
   });
+
+  test("returns primitive unchanged for non-null/undefined non-object", () => {
+    expect(Object.setPrototypeOf(42, null)).toBe(42);
+    expect(Object.setPrototypeOf(true, null)).toBe(true);
+    expect(Object.setPrototypeOf("str", null)).toBe("str");
+  });
+
+  test("throws for null first argument", () => {
+    expect(() => Object.setPrototypeOf(null, null)).toThrow(TypeError);
+  });
+
+  test("throws for undefined first argument", () => {
+    expect(() => Object.setPrototypeOf(undefined, null)).toThrow(TypeError);
+  });
+
+  test("throws TypeError when proto is not Object or null", () => {
+    expect(() => Object.setPrototypeOf({}, 1)).toThrow(TypeError);
+    expect(() => Object.setPrototypeOf({}, "str")).toThrow(TypeError);
+    expect(() => Object.setPrototypeOf({}, true)).toThrow(TypeError);
+  });
 });

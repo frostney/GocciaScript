@@ -1709,7 +1709,7 @@ end;
 procedure CompileTaggedTemplate(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaTaggedTemplateExpression; const ADest: UInt8);
 var
-  ObjReg, BaseReg, Arg0Reg, TempReg, PartReg: UInt8;
+  ObjReg, BaseReg, Arg0Reg: UInt8;
   ArgCount, I: Integer;
   IsMethodCall: Boolean;
 begin
@@ -1719,36 +1719,14 @@ begin
 
   CompileTagCalleeRegisters(ACtx, AExpr.Tag, BaseReg, ObjReg, IsMethodCall);
 
-  // ES2026 §13.2.8.3 GetTemplateObject: build the frozen template object as arg0
+  // ES2026 §13.2.8.3 GetTemplateObject — emit a single OP_LOAD_CONST with a
+  // bckTemplateObject constant.  The VM lazily builds, freezes, and pins the
+  // template object on first execution of this instruction, then returns the
+  // identical cached object on every subsequent call to the same call site,
+  // satisfying the per-Parse-Node identity requirement without a new opcode.
   Arg0Reg := ACtx.Scope.AllocateRegister;
-  TempReg := ACtx.Scope.AllocateRegister;
-
-  EmitInstruction(ACtx, EncodeABC(OP_NEW_ARRAY, TempReg, 0, 0));
-  for I := 0 to Length(AExpr.RawStrings) - 1 do
-  begin
-    PartReg := ACtx.Scope.AllocateRegister;
-    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, PartReg,
-      ACtx.Template.AddConstantString(AExpr.RawStrings[I])));
-    EmitInstruction(ACtx, EncodeABC(OP_ARRAY_PUSH, TempReg, PartReg, 0));
-    ACtx.Scope.FreeRegister;
-  end;
-  EmitObjectFreeze(ACtx, TempReg);
-
-  EmitInstruction(ACtx, EncodeABC(OP_NEW_ARRAY, Arg0Reg, 0, 0));
-  for I := 0 to Length(AExpr.CookedStrings) - 1 do
-  begin
-    PartReg := ACtx.Scope.AllocateRegister;
-    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, PartReg,
-      ACtx.Template.AddConstantString(AExpr.CookedStrings[I])));
-    EmitInstruction(ACtx, EncodeABC(OP_ARRAY_PUSH, Arg0Reg, PartReg, 0));
-    ACtx.Scope.FreeRegister;
-  end;
-
-  // ES2026 §13.2.8.3 step 8: define .raw as non-enumerable, non-writable, non-configurable
-  EmitDefineNonEnumerableProperty(ACtx, Arg0Reg, TempReg, PROP_RAW);
-  EmitObjectFreeze(ACtx, Arg0Reg);
-
-  ACtx.Scope.FreeRegister; // TempReg — raw array referenced through .raw; no longer in a register
+  EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, Arg0Reg,
+    ACtx.Template.AddConstantTemplateObject(AExpr.CookedStrings, AExpr.RawStrings)));
 
   // ES2026 §13.3.11 step 3: evaluate substitutions into argument registers
   for I := 0 to AExpr.Expressions.Count - 1 do
