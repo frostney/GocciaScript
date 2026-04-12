@@ -605,7 +605,7 @@ Both `TGocciaEngine` and `TGocciaVM` mask all FPU exceptions on creation (via `S
 
 ## Microtask Queue (Promises)
 
-When `ggPromise` is included in the globals set, the engine initializes a singleton microtask queue (`TGocciaMicrotaskQueue`) alongside the GC. Promise `.then()` callbacks are enqueued as microtasks and **drained automatically** after each `Execute`, `ExecuteWithTiming`, or `ExecuteProgram` call. Embedders do not need to drain the queue manually.
+The engine initializes a singleton microtask queue (`TGocciaMicrotaskQueue`) alongside the GC. Promise `.then()` callbacks are enqueued as microtasks and **drained automatically** after each `Execute`, `ExecuteWithTiming`, or `ExecuteProgram` call. Embedders do not need to drain the queue manually.
 
 This means:
 - All synchronous code in the script runs to completion first.

@@ -19,9 +19,13 @@ function CreateProposalObject: TGocciaObjectValue;
 implementation
 
 uses
+  Goccia.Constants.PropertyNames,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.Primitives;
+
+const
+  PROP_LINK = 'link';
 
 const
   // ---------------------------------------------------------------------------
@@ -197,8 +201,8 @@ var
   Obj: TGocciaObjectValue;
 begin
   Obj := TGocciaObjectValue.Create;
-  Obj.AssignProperty('name', TGocciaStringLiteralValue.Create(AEntry.Name));
-  Obj.AssignProperty('link', TGocciaStringLiteralValue.Create(AEntry.Link));
+  Obj.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AEntry.Name));
+  Obj.AssignProperty(PROP_LINK, TGocciaStringLiteralValue.Create(AEntry.Link));
   Result := Obj;
 end;
 

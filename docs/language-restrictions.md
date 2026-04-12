@@ -650,7 +650,7 @@ Lowercase tags produce string tag names (`"div"`, `"span"`); uppercase tags are 
 
 **Custom factory:** The factory and fragment function names can be overridden per-file using pragma comments (`@jsxFactory`, `@jsxFragment`) at the top of the file, before any code.
 
-The transformer generates an internal source map for accurate error line/column reporting. JSX is enabled by default via `DefaultPreprocessors`; to disable it, set `Engine.Preprocessors := []`.
+The transformer generates an internal source map for accurate error line/column reporting. JSX is enabled by default via `DefaultPreprocessors`; embedders can disable it with `Exclude(Engine.Preprocessors, ppJSX)`.
 
 ### Regular Expressions
 
