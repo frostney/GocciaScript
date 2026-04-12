@@ -748,6 +748,8 @@ begin
   end;
 end;
 
+// ES2026 §12.9.4 Template Literal Lexical Components
+//
 // Scans a template interpolation expression with full lexical awareness.
 // Called after ${ has been consumed.  Tracks brace depth starting at 1 and
 // stops when the matching } is found WITHOUT consuming it — the caller is
@@ -866,11 +868,11 @@ begin
         begin
           if Peek = '/' then
           begin
-            // Line comment — consume until end of line
+            // Line comment — consume until line terminator (LF, CR, LS, PS)
             C := Advance;
             ASB.AppendChar(C);
             ARawSB.AppendChar(C);
-            while not IsAtEnd and (Peek <> #10) and (Peek <> #13) do
+            while not IsAtEnd and not IsLineTerminator do
             begin
               C := Advance;
               ASB.AppendChar(C);
