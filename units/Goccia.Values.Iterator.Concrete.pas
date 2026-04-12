@@ -67,13 +67,30 @@ type
     procedure MarkReferences; override;
   end;
 
+  TGocciaURLSearchParamsIteratorKind = (spikKeys, spikValues, spikEntries);
+
+  TGocciaURLSearchParamsIteratorValue = class(TGocciaIteratorValue)
+  private
+    FSource: TGocciaValue;
+    FIndex: Integer;
+    FKind: TGocciaURLSearchParamsIteratorKind;
+  public
+    constructor Create(const ASource: TGocciaValue;
+      const AKind: TGocciaURLSearchParamsIteratorKind);
+    function AdvanceNext: TGocciaObjectValue; override;
+    function DirectNext(out ADone: Boolean): TGocciaValue; override;
+    function ToStringTag: string; override;
+    procedure MarkReferences; override;
+  end;
+
 implementation
 
 uses
   Goccia.Values.ArrayValue,
   Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
-  Goccia.Values.SetValue;
+  Goccia.Values.SetValue,
+  Goccia.Values.URLSearchParamsValue;
 
 { TGocciaArrayIteratorValue }
 
@@ -430,6 +447,109 @@ begin
 end;
 
 procedure TGocciaSetIteratorValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FSource) then
+    FSource.MarkReferences;
+end;
+
+{ TGocciaURLSearchParamsIteratorValue }
+
+constructor TGocciaURLSearchParamsIteratorValue.Create(const ASource: TGocciaValue;
+  const AKind: TGocciaURLSearchParamsIteratorKind);
+begin
+  inherited Create;
+  FSource := ASource;
+  FIndex := 0;
+  FKind := AKind;
+end;
+
+function TGocciaURLSearchParamsIteratorValue.AdvanceNext: TGocciaObjectValue;
+var
+  Params: TGocciaURLSearchParamsValue;
+  EntryArray: TGocciaArrayValue;
+begin
+  if FDone then
+  begin
+    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
+    Exit;
+  end;
+
+  Params := TGocciaURLSearchParamsValue(FSource);
+  if FIndex >= Params.List.Count then
+  begin
+    FDone := True;
+    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
+    Exit;
+  end;
+
+  case FKind of
+    spikKeys:
+      Result := CreateIteratorResult(
+        TGocciaStringLiteralValue.Create(Params.List[FIndex].Name), False);
+    spikValues:
+      Result := CreateIteratorResult(
+        TGocciaStringLiteralValue.Create(Params.List[FIndex].Value), False);
+    spikEntries:
+    begin
+      EntryArray := TGocciaArrayValue.Create;
+      EntryArray.Elements.Add(
+        TGocciaStringLiteralValue.Create(Params.List[FIndex].Name));
+      EntryArray.Elements.Add(
+        TGocciaStringLiteralValue.Create(Params.List[FIndex].Value));
+      Result := CreateIteratorResult(EntryArray, False);
+    end;
+  end;
+  Inc(FIndex);
+end;
+
+function TGocciaURLSearchParamsIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
+var
+  Params: TGocciaURLSearchParamsValue;
+  EntryArray: TGocciaArrayValue;
+begin
+  if FDone then
+  begin
+    ADone := True;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  Params := TGocciaURLSearchParamsValue(FSource);
+  if FIndex >= Params.List.Count then
+  begin
+    FDone := True;
+    ADone := True;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  ADone := False;
+  case FKind of
+    spikKeys:
+      Result := TGocciaStringLiteralValue.Create(Params.List[FIndex].Name);
+    spikValues:
+      Result := TGocciaStringLiteralValue.Create(Params.List[FIndex].Value);
+    spikEntries:
+    begin
+      EntryArray := TGocciaArrayValue.Create;
+      EntryArray.Elements.Add(
+        TGocciaStringLiteralValue.Create(Params.List[FIndex].Name));
+      EntryArray.Elements.Add(
+        TGocciaStringLiteralValue.Create(Params.List[FIndex].Value));
+      Result := EntryArray;
+    end;
+  end;
+  Inc(FIndex);
+end;
+
+function TGocciaURLSearchParamsIteratorValue.ToStringTag: string;
+begin
+  Result := 'URLSearchParams Iterator';
+end;
+
+procedure TGocciaURLSearchParamsIteratorValue.MarkReferences;
 begin
   if GCMarked then Exit;
   inherited;

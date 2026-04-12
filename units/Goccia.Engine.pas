@@ -28,6 +28,7 @@ uses
   Goccia.Builtins.GlobalSymbol,
   Goccia.Builtins.GlobalTextDecoder,
   Goccia.Builtins.GlobalTextEncoder,
+  Goccia.Builtins.GlobalURL,
   Goccia.Builtins.JSON,
   Goccia.Builtins.JSON5,
   Goccia.Builtins.JSONL,
@@ -86,7 +87,8 @@ type
     ggFFI,
     ggReflect,
     ggTextEncoder,
-    ggTextDecoder
+    ggTextDecoder,
+    ggURL
   );
 
   TGocciaGlobalBuiltins = set of TGocciaGlobalBuiltin;
@@ -104,7 +106,7 @@ type
 type
   TGocciaEngine = class
   public
-    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggJSON5, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer, ggProxy, ggReflect, ggTextEncoder, ggTextDecoder];
+    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggJSON5, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer, ggProxy, ggReflect, ggTextEncoder, ggTextDecoder, ggURL];
   private
     FInterpreter: TGocciaInterpreter;
     FFileName: string;
@@ -142,6 +144,8 @@ type
     FBuiltinReflect: TGocciaGlobalReflect;
     FBuiltinTextEncoder: TGocciaGlobalTextEncoder;
     FBuiltinTextDecoder: TGocciaGlobalTextDecoder;
+    FBuiltinURL: TGocciaGlobalURL;
+    FBuiltinURLSearchParams: TGocciaGlobalURLSearchParams;
     FPreviousExceptionMask: TFPUExceptionMask;
     FASIEnabled: Boolean;
     FSuppressWarnings: Boolean;
@@ -214,6 +218,8 @@ type
     property ASIEnabled: Boolean read FASIEnabled write SetASIEnabled;
     property BuiltinFFI: TGocciaGlobalFFI read FBuiltinFFI;
     property BuiltinReflect: TGocciaGlobalReflect read FBuiltinReflect;
+    property BuiltinURL: TGocciaGlobalURL read FBuiltinURL;
+    property BuiltinURLSearchParams: TGocciaGlobalURLSearchParams read FBuiltinURLSearchParams;
     property SuppressWarnings: Boolean read FSuppressWarnings write FSuppressWarnings;
     property LastTiming: TGocciaScriptResult read FLastTiming;
   end;
@@ -258,6 +264,8 @@ uses
   Goccia.Values.TextDecoderValue,
   Goccia.Values.TextEncoderValue,
   Goccia.Values.Uint8ArrayEncoding,
+  Goccia.Values.URLSearchParamsValue,
+  Goccia.Values.URLValue,
   Goccia.Version;
 
 constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins);
@@ -344,6 +352,8 @@ begin
     FBuiltinReflect.Free;
     FBuiltinTextEncoder.Free;
     FBuiltinTextDecoder.Free;
+    FBuiltinURL.Free;
+    FBuiltinURLSearchParams.Free;
     ClearImportMetaCache;
     FInjectedGlobals.Free;
     FInterpreter.Free;
@@ -419,6 +429,12 @@ begin
   if ggTextDecoder in FGlobals then
     FBuiltinTextDecoder := TGocciaGlobalTextDecoder.Create(
       CONSTRUCTOR_TEXT_DECODER, Scope, ThrowError);
+  if ggURL in FGlobals then
+  begin
+    FBuiltinURL := TGocciaGlobalURL.Create(CONSTRUCTOR_URL, Scope, ThrowError);
+    FBuiltinURLSearchParams := TGocciaGlobalURLSearchParams.Create(
+      CONSTRUCTOR_URL_SEARCH_PARAMS, Scope, ThrowError);
+  end;
 
   // Always-registered built-ins
   FBuiltinGlobalString := TGocciaGlobalString.Create(CONSTRUCTOR_STRING, Scope, ThrowError);
@@ -480,6 +496,16 @@ begin
   TGocciaTextDecoderValue.ExposePrototype(AConstructor);
 end;
 
+procedure ExposeURLPrototype(const AConstructor: TGocciaValue);
+begin
+  TGocciaURLValue.ExposePrototype(AConstructor);
+end;
+
+procedure ExposeURLSearchParamsPrototype(const AConstructor: TGocciaValue);
+begin
+  TGocciaURLSearchParamsValue.ExposePrototype(AConstructor);
+end;
+
 procedure TGocciaEngine.RegisterBuiltinConstructors;
 var
   Key: string;
@@ -494,6 +520,8 @@ var
   NumberConstructor: TGocciaNumberClassValue;
   BooleanConstructor: TGocciaBooleanClassValue;
   PerformanceConstructor: TGocciaNativeFunctionValue;
+  URLConstructor: TGocciaURLClassValue;
+  URLSearchParamsConstructor: TGocciaURLSearchParamsClassValue;
   TypeDef: TGocciaTypeDefinition;
 begin
   TGocciaObjectValue.InitializeSharedPrototype;
@@ -570,6 +598,31 @@ begin
     TypeDef.PrototypeParent := ObjectConstructor.Prototype;
     TypeDef.AddSpeciesGetter := False;
     RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  end;
+
+  if ggURL in FGlobals then
+  begin
+    TypeDef.ConstructorName := CONSTRUCTOR_URL;
+    TypeDef.Kind := gtdkCollectionLikeNativeType;
+    TypeDef.ClassValueClass := TGocciaURLClassValue;
+    TypeDef.ExposePrototype := @ExposeURLPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinURL);
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    URLConstructor := TGocciaURLClassValue(GenericConstructor);
+
+    TypeDef.ConstructorName := CONSTRUCTOR_URL_SEARCH_PARAMS;
+    TypeDef.Kind := gtdkCollectionLikeNativeType;
+    TypeDef.ClassValueClass := TGocciaURLSearchParamsClassValue;
+    TypeDef.ExposePrototype := @ExposeURLSearchParamsPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinURLSearchParams);
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    URLSearchParamsConstructor := TGocciaURLSearchParamsClassValue(GenericConstructor);
   end;
 
   if ggArrayBuffer in FGlobals then

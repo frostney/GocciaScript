@@ -27,6 +27,7 @@ uses
   Goccia.Builtins.GlobalSymbol,
   Goccia.Builtins.GlobalTextDecoder,
   Goccia.Builtins.GlobalTextEncoder,
+  Goccia.Builtins.GlobalURL,
   Goccia.Builtins.JSON,
   Goccia.Builtins.JSON5,
   Goccia.Builtins.JSONL,
@@ -80,6 +81,8 @@ type
     FBuiltinReflect: TGocciaGlobalReflect;
     FBuiltinTextEncoder: TGocciaGlobalTextEncoder;
     FBuiltinTextDecoder: TGocciaGlobalTextDecoder;
+    FBuiltinURL: TGocciaGlobalURL;
+    FBuiltinURLSearchParams: TGocciaGlobalURLSearchParams;
 
     procedure PinSingletons;
     procedure RegisterBuiltIns;
@@ -122,6 +125,8 @@ uses
   Goccia.Values.TextDecoderValue,
   Goccia.Values.TextEncoderValue,
   Goccia.Values.Uint8ArrayEncoding,
+  Goccia.Values.URLSearchParamsValue,
+  Goccia.Values.URLValue,
   Goccia.Version;
 
 function ObjectPrototypeProvider: TGocciaObjectValue;
@@ -177,6 +182,16 @@ begin
   TGocciaTextDecoderValue.ExposePrototype(AConstructor);
 end;
 
+procedure ExposeURLPrototype(const AConstructor: TGocciaValue);
+begin
+  TGocciaURLValue.ExposePrototype(AConstructor);
+end;
+
+procedure ExposeURLSearchParamsPrototype(const AConstructor: TGocciaValue);
+begin
+  TGocciaURLSearchParamsValue.ExposePrototype(AConstructor);
+end;
+
 constructor TGocciaRuntimeBootstrap.Create(const AInterpreter: TGocciaInterpreter;
   const AGlobals: TGocciaGlobalBuiltins; const AThrowError: TGocciaThrowErrorCallback);
 begin
@@ -217,6 +232,8 @@ begin
   FBuiltinReflect.Free;
   FBuiltinTextEncoder.Free;
   FBuiltinTextDecoder.Free;
+  FBuiltinURL.Free;
+  FBuiltinURLSearchParams.Free;
   inherited;
 end;
 
@@ -282,6 +299,12 @@ begin
   if ggTextDecoder in FGlobals then
     FBuiltinTextDecoder := TGocciaGlobalTextDecoder.Create(
       CONSTRUCTOR_TEXT_DECODER, Scope, FThrowError);
+  if ggURL in FGlobals then
+  begin
+    FBuiltinURL := TGocciaGlobalURL.Create(CONSTRUCTOR_URL, Scope, FThrowError);
+    FBuiltinURLSearchParams := TGocciaGlobalURLSearchParams.Create(
+      CONSTRUCTOR_URL_SEARCH_PARAMS, Scope, FThrowError);
+  end;
 
   FBuiltinGlobalString := TGocciaGlobalString.Create(CONSTRUCTOR_STRING, Scope, FThrowError);
   FBuiltinGlobals := TGocciaGlobals.Create('Globals', Scope, FThrowError);
@@ -303,6 +326,8 @@ var
   NumberConstructor: TGocciaNumberClassValue;
   BooleanConstructor: TGocciaBooleanClassValue;
   PerformanceConstructor: TGocciaNativeFunctionValue;
+  URLConstructor: TGocciaURLClassValue;
+  URLSearchParamsConstructor: TGocciaURLSearchParamsClassValue;
   TypeDef: TGocciaTypeDefinition;
 begin
   TGocciaObjectValue.InitializeSharedPrototype;
@@ -379,6 +404,31 @@ begin
     TypeDef.PrototypeParent := ObjectConstructor.Prototype;
     TypeDef.AddSpeciesGetter := False;
     RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  end;
+
+  if ggURL in FGlobals then
+  begin
+    TypeDef.ConstructorName := CONSTRUCTOR_URL;
+    TypeDef.Kind := gtdkCollectionLikeNativeType;
+    TypeDef.ClassValueClass := TGocciaURLClassValue;
+    TypeDef.ExposePrototype := @ExposeURLPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinURL);
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    URLConstructor := TGocciaURLClassValue(GenericConstructor);
+
+    TypeDef.ConstructorName := CONSTRUCTOR_URL_SEARCH_PARAMS;
+    TypeDef.Kind := gtdkCollectionLikeNativeType;
+    TypeDef.ClassValueClass := TGocciaURLSearchParamsClassValue;
+    TypeDef.ExposePrototype := @ExposeURLSearchParamsPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinURLSearchParams);
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    URLSearchParamsConstructor := TGocciaURLSearchParamsClassValue(GenericConstructor);
   end;
 
   if ggArrayBuffer in FGlobals then
