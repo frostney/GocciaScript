@@ -225,8 +225,17 @@ begin
   while not IsAtEnd do
   begin
     case Peek of
-      ' ', #13, #9:
+      ' ', #9:
         Advance;
+      // ES2026 §12.3 LineTerminator — CR and CRLF
+      #13:
+        begin
+          Advance;
+          if (not IsAtEnd) and (Peek = #10) then
+            Advance;
+          Inc(FLine);
+          FColumn := 1;
+        end;
       #10:
         begin
           Inc(FLine);
@@ -289,6 +298,15 @@ begin
         Advance; // Skip the closing '/'
         Exit;
       end;
+    end
+    // ES2026 §12.3 LineTerminator — CR and CRLF
+    else if Peek = #13 then
+    begin
+      Advance;
+      if (not IsAtEnd) and (Peek = #10) then
+        Advance;
+      Inc(FLine);
+      FColumn := 1;
     end
     else if Peek = #10 then
     begin
