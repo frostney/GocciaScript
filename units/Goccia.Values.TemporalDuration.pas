@@ -489,6 +489,7 @@ begin
     GetFieldOr('nanoseconds', D.FNanoseconds));
 end;
 
+// TC39 Temporal §7.3.21 Temporal.Duration.prototype.round(roundTo)
 function TGocciaTemporalDurationValue.DurationRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D: TGocciaTemporalDurationValue;
@@ -535,7 +536,19 @@ begin
   if SmallestUnit = tuNone then
     SmallestUnit := tuNanosecond;
   if LargestUnit = tuNone then
-    LargestUnit := SmallestUnit;
+  begin
+    // Default largestUnit to the largest defined unit of the duration
+    if D.FDays <> 0 then LargestUnit := tuDay
+    else if D.FHours <> 0 then LargestUnit := tuHour
+    else if D.FMinutes <> 0 then LargestUnit := tuMinute
+    else if D.FSeconds <> 0 then LargestUnit := tuSecond
+    else if D.FMilliseconds <> 0 then LargestUnit := tuMillisecond
+    else if D.FMicroseconds <> 0 then LargestUnit := tuMicrosecond
+    else LargestUnit := SmallestUnit;
+    // Ensure largestUnit >= smallestUnit
+    if Ord(LargestUnit) > Ord(SmallestUnit) then
+      LargestUnit := SmallestUnit;
+  end;
 
   // Compute total nanoseconds (for time-only durations)
   TotalNs := D.FNanoseconds +
@@ -596,8 +609,15 @@ begin
   end;
   ResultNs := RemNs;
 
-  Result := TGocciaTemporalDurationValue.Create(0, 0, 0, ResultDays,
-    ResultHours, ResultMinutes, ResultSeconds, ResultMs, ResultUs, ResultNs);
+  // Extract weeks from days if largestUnit allows it
+  if Ord(LargestUnit) <= Ord(tuWeek) then
+  begin
+    Result := TGocciaTemporalDurationValue.Create(0, 0, ResultDays div 7, ResultDays mod 7,
+      ResultHours, ResultMinutes, ResultSeconds, ResultMs, ResultUs, ResultNs);
+  end
+  else
+    Result := TGocciaTemporalDurationValue.Create(0, 0, 0, ResultDays,
+      ResultHours, ResultMinutes, ResultSeconds, ResultMs, ResultUs, ResultNs);
 end;
 
 function TGocciaTemporalDurationValue.DurationTotal(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

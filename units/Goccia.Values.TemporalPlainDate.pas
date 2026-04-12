@@ -585,7 +585,7 @@ var
   D: TGocciaTemporalPlainDateValue;
 begin
   D := AsPlainDate(AThisValue, 'PlainDate.prototype.toPlainYearMonth');
-  Result := TGocciaTemporalPlainYearMonthValue.Create(D.FYear, D.FMonth);
+  Result := TGocciaTemporalPlainYearMonthValue.Create(D.FYear, D.FMonth, D.FDay);
 end;
 
 function TGocciaTemporalPlainDateValue.DateToPlainMonthDay(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -593,7 +593,7 @@ var
   D: TGocciaTemporalPlainDateValue;
 begin
   D := AsPlainDate(AThisValue, 'PlainDate.prototype.toPlainMonthDay');
-  Result := TGocciaTemporalPlainMonthDayValue.Create(D.FMonth, D.FDay);
+  Result := TGocciaTemporalPlainMonthDayValue.Create(D.FMonth, D.FDay, D.FYear);
 end;
 
 function TGocciaTemporalPlainDateValue.DateToZonedDateTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

@@ -1,6 +1,6 @@
 /*---
 description: Temporal[Symbol.toStringTag]
-features: [temporal]
+features: [Temporal]
 ---*/
 
 const isTemporal = typeof Temporal !== "undefined";

@@ -248,7 +248,7 @@ end;
 function RoundWithMode(const AValue: Int64; const ADivisor: Int64; const AMode: TTemporalRoundingMode): Int64;
 var
   Quotient, Remainder: Int64;
-  AbsRemainder, HalfDivisor: Int64;
+  AbsRemainder: Int64;
 begin
   if ADivisor = 1 then
   begin
@@ -266,7 +266,6 @@ begin
   end;
 
   AbsRemainder := Abs(Remainder);
-  HalfDivisor := ADivisor div 2;
 
   case AMode of
     rmTrunc:
@@ -287,7 +286,7 @@ begin
     end;
     rmHalfExpand:
     begin
-      if AbsRemainder >= HalfDivisor then
+      if AbsRemainder * 2 >= ADivisor then
       begin
         if AValue > 0 then
           Result := (Quotient + 1) * ADivisor
@@ -299,7 +298,7 @@ begin
     end;
     rmHalfTrunc:
     begin
-      if AbsRemainder > HalfDivisor then
+      if AbsRemainder * 2 > ADivisor then
       begin
         if AValue > 0 then
           Result := (Quotient + 1) * ADivisor
@@ -311,11 +310,11 @@ begin
     end;
     rmHalfCeil:
     begin
-      if AbsRemainder >= HalfDivisor then
+      if AbsRemainder * 2 >= ADivisor then
       begin
         if AValue > 0 then
           Result := (Quotient + 1) * ADivisor
-        else if AbsRemainder > HalfDivisor then
+        else if AbsRemainder * 2 > ADivisor then
           Result := (Quotient - 1) * ADivisor
         else
           Result := Quotient * ADivisor;
@@ -325,11 +324,11 @@ begin
     end;
     rmHalfFloor:
     begin
-      if AbsRemainder >= HalfDivisor then
+      if AbsRemainder * 2 >= ADivisor then
       begin
         if AValue < 0 then
           Result := (Quotient - 1) * ADivisor
-        else if AbsRemainder > HalfDivisor then
+        else if AbsRemainder * 2 > ADivisor then
           Result := (Quotient + 1) * ADivisor
         else
           Result := Quotient * ADivisor;
@@ -339,14 +338,14 @@ begin
     end;
     rmHalfEven:
     begin
-      if AbsRemainder > HalfDivisor then
+      if AbsRemainder * 2 > ADivisor then
       begin
         if AValue > 0 then
           Result := (Quotient + 1) * ADivisor
         else
           Result := (Quotient - 1) * ADivisor;
       end
-      else if AbsRemainder = HalfDivisor then
+      else if AbsRemainder * 2 = ADivisor then
       begin
         // Round to even
         if Odd(Quotient) then

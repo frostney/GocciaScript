@@ -144,10 +144,10 @@ begin
   if UseV2 then
   begin
     // Skip v1 data to reach v2 header
-    Offset := TZIF_MAGIC_LENGTH + TZIF_HEADER_SIZE + V1DataSize;
+    Offset := TZIF_HEADER_SIZE + V1DataSize;
 
     // Validate we have enough data for v2 header
-    if Offset + TZIF_MAGIC_LENGTH + TZIF_HEADER_SIZE > ASize then
+    if Offset + TZIF_HEADER_SIZE > ASize then
       Exit;
 
     // Check v2 magic bytes
@@ -180,7 +180,7 @@ begin
   else
   begin
     // Use v1 data
-    Offset := TZIF_MAGIC_LENGTH + TZIF_HEADER_SIZE;
+    Offset := TZIF_HEADER_SIZE;
 
     // Validate we have enough data
     if Offset + TimeCnt * TZIF_V1_TRANSITION_SIZE + TimeCnt * TZIF_TYPE_INDEX_SIZE +
@@ -235,6 +235,30 @@ begin
   Result := True;
 end;
 
+function IsValidTimeZoneName(const AName: string): Boolean;
+var
+  I, SegStart: Integer;
+begin
+  Result := False;
+  if Length(AName) = 0 then Exit;
+  // Reject absolute paths
+  if AName[1] = '/' then Exit;
+  // Check each path segment for . and ..
+  SegStart := 1;
+  for I := 1 to Length(AName) + 1 do
+  begin
+    if (I > Length(AName)) or (AName[I] = '/') then
+    begin
+      // Check segment
+      if I = SegStart then Exit; // empty segment (double slash)
+      if (I - SegStart = 1) and (AName[SegStart] = '.') then Exit; // "."
+      if (I - SegStart = 2) and (AName[SegStart] = '.') and (AName[SegStart + 1] = '.') then Exit; // ".."
+      SegStart := I + 1;
+    end;
+  end;
+  Result := True;
+end;
+
 {$IFDEF UNIX}
 function LoadTimeZoneData(const ATimeZone: string; out AData: TTimeZoneData): Boolean;
 var
@@ -253,6 +277,9 @@ begin
     Result := True;
     Exit;
   end;
+
+  if not IsValidTimeZoneName(ATimeZone) then
+    Exit;
 
   FilePath := ZONEINFO_PATH + ATimeZone;
   if not FileExists(FilePath) then
@@ -373,6 +400,11 @@ begin
   if ATimeZone = UTC_TIMEZONE_ID then
   begin
     Result := True;
+    Exit;
+  end;
+  if not IsValidTimeZoneName(ATimeZone) then
+  begin
+    Result := False;
     Exit;
   end;
   Result := FileExists(ZONEINFO_PATH + ATimeZone);

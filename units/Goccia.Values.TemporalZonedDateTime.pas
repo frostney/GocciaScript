@@ -509,9 +509,18 @@ begin
 end;
 
 function TGocciaTemporalZonedDateTimeValue.GetHoursInDay(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Zdt: TGocciaTemporalZonedDateTimeValue;
+  LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
+  StartOfDayMs, StartOfNextDayMs: Int64;
+  NextDayRec: TTemporalDateRecord;
 begin
-  AsZonedDateTime(AThisValue, 'get ZonedDateTime.hoursInDay');
-  Result := TGocciaNumberLiteralValue.Create(HOURS_PER_DAY);
+  Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.hoursInDay');
+  ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
+  StartOfDayMs := LocalToEpochMs(LYear, LMonth, LDay, 0, 0, 0, 0, Zdt.FTimeZone);
+  NextDayRec := AddDaysToDate(LYear, LMonth, LDay, 1);
+  StartOfNextDayMs := LocalToEpochMs(NextDayRec.Year, NextDayRec.Month, NextDayRec.Day, 0, 0, 0, 0, Zdt.FTimeZone);
+  Result := TGocciaNumberLiteralValue.Create((StartOfNextDayMs - StartOfDayMs) / 3600000);
 end;
 
 function TGocciaTemporalZonedDateTimeValue.GetHour(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -722,7 +731,9 @@ begin
         ThrowTypeError('Invalid time string for ZonedDateTime.prototype.withPlainTime');
       NewHour := TimeRec.Hour; NewMinute := TimeRec.Minute; NewSecond := TimeRec.Second;
       NewMs := TimeRec.Millisecond; NewUs := TimeRec.Microsecond; NewNs := TimeRec.Nanosecond;
-    end;
+    end
+    else
+      ThrowTypeError('ZonedDateTime.prototype.withPlainTime requires a PlainTime or string');
   end;
 
   NewEpochMs := LocalToEpochMs(LYear, LMonth, LDay, NewHour, NewMinute, NewSecond, NewMs, Zdt.FTimeZone);
@@ -874,6 +885,10 @@ var
   Zdt: TGocciaTemporalZonedDateTimeValue;
   UnitStr: string;
   Arg: TGocciaValue;
+  SmallestUnit: TTemporalUnit;
+  Mode: TTemporalRoundingMode;
+  Increment: Integer;
+  OptionsObj: TGocciaObjectValue;
   LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
   TotalNs, Divisor, Rounded, ExtraDays: Int64;
   Balanced: TTemporalTimeRecord;
@@ -884,14 +899,34 @@ begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.round');
   Arg := AArgs.GetElement(0);
 
+  Mode := rmHalfExpand;
+  Increment := 1;
+
   if Arg is TGocciaStringLiteralValue then
-    UnitStr := TGocciaStringLiteralValue(Arg).Value
+  begin
+    UnitStr := TGocciaStringLiteralValue(Arg).Value;
+  end
   else if Arg is TGocciaObjectValue then
   begin
-    Arg := TGocciaObjectValue(Arg).GetProperty('smallestUnit');
-    if (Arg = nil) or (Arg is TGocciaUndefinedLiteralValue) then
+    OptionsObj := TGocciaObjectValue(Arg);
+    SmallestUnit := GetSmallestUnit(OptionsObj, tuNone);
+    if SmallestUnit = tuNone then
       ThrowRangeError('round() requires a smallestUnit option');
-    UnitStr := Arg.ToStringLiteral.Value;
+    Mode := GetRoundingMode(OptionsObj, rmHalfExpand);
+    Increment := GetRoundingIncrement(OptionsObj, 1);
+    // Convert unit enum to string for the existing unit dispatch
+    case SmallestUnit of
+      tuDay: UnitStr := 'day';
+      tuHour: UnitStr := 'hour';
+      tuMinute: UnitStr := 'minute';
+      tuSecond: UnitStr := 'second';
+      tuMillisecond: UnitStr := 'millisecond';
+      tuMicrosecond: UnitStr := 'microsecond';
+      tuNanosecond: UnitStr := 'nanosecond';
+    else
+      ThrowRangeError('Invalid unit for ZonedDateTime.prototype.round');
+      UnitStr := '';
+    end;
   end
   else
   begin
@@ -909,9 +944,11 @@ begin
                Int64(LMs) * NANOSECONDS_PER_MILLISECOND +
                Int64(LUs) * NANOSECONDS_PER_MICROSECOND +
                LNs;
-    // Half of a day in nanoseconds
-    if TotalNs >= NANOSECONDS_PER_DAY div 2 then
-      DateRec := AddDaysToDate(LYear, LMonth, LDay, 1)
+    Divisor := NANOSECONDS_PER_DAY * Increment;
+    Rounded := RoundWithMode(TotalNs, Divisor, Mode);
+    ExtraDays := Rounded div NANOSECONDS_PER_DAY;
+    if ExtraDays > 0 then
+      DateRec := AddDaysToDate(LYear, LMonth, LDay, ExtraDays)
     else
     begin
       DateRec.Year := LYear;
@@ -941,8 +978,8 @@ begin
     Divisor := 1;
   end;
 
-  // HalfExpand rounding
-  Rounded := ((TotalNs + (Divisor div 2)) div Divisor) * Divisor;
+  Divisor := Divisor * Increment;
+  Rounded := RoundWithMode(TotalNs, Divisor, Mode);
   Balanced := BalanceTime(0, 0, 0, 0, 0, Rounded, ExtraDays);
   DateRec := AddDaysToDate(LYear, LMonth, LDay, ExtraDays);
 

@@ -822,7 +822,12 @@ begin
         if not TryParseDigits(OffsetPart, ParsePos, 2, OffsetM) then Exit;
       end
       else if ParsePos + 1 <= Length(OffsetPart) then
-        TryParseDigits(OffsetPart, ParsePos, 2, OffsetM);
+      begin
+        if not TryParseDigits(OffsetPart, ParsePos, 2, OffsetM) then Exit;
+      end;
+      // Validate ranges and ensure no trailing characters
+      if (OffsetH > 23) or (OffsetM > 59) then Exit;
+      if ParsePos <= Length(OffsetPart) then Exit;
       AOffsetSeconds := OffsetSign * (OffsetH * 3600 + OffsetM * 60);
     end;
   end;

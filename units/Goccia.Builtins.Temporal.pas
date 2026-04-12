@@ -53,6 +53,7 @@ type
     // PlainMonthDay constructor + statics
     function PlainMonthDayConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function PlainMonthDayFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PlainMonthDayCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     // ZonedDateTime constructor + statics
     function ZonedDateTimeConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -458,7 +459,7 @@ end;
 
 function TGocciaTemporalBuiltin.PlainDateFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Arg, OptionsArg: TGocciaValue;
+  Arg, OptionsArg, V: TGocciaValue;
   D: TGocciaTemporalPlainDateValue;
   DateRec: TTemporalDateRecord;
   TimeRec: TTemporalTimeRecord;
@@ -494,9 +495,18 @@ begin
   else if Arg is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(Arg);
-    Y := Trunc(Obj.GetProperty('year').ToNumberLiteral.Value);
-    Mo := Trunc(Obj.GetProperty('month').ToNumberLiteral.Value);
-    Dy := Trunc(Obj.GetProperty('day').ToNumberLiteral.Value);
+    V := Obj.GetProperty('year');
+    if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError('Temporal.PlainDate.from requires year, month, day properties');
+    Y := Trunc(V.ToNumberLiteral.Value);
+    V := Obj.GetProperty('month');
+    if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError('Temporal.PlainDate.from requires year, month, day properties');
+    Mo := Trunc(V.ToNumberLiteral.Value);
+    V := Obj.GetProperty('day');
+    if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError('Temporal.PlainDate.from requires year, month, day properties');
+    Dy := Trunc(V.ToNumberLiteral.Value);
 
     MaxDay := DaysInMonth(Y, Mo);
     if Dy > MaxDay then
@@ -852,7 +862,7 @@ end;
 function TGocciaTemporalBuiltin.PlainYearMonthFrom(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Arg: TGocciaValue;
+  Arg, V, V2: TGocciaValue;
   YM: TGocciaTemporalPlainYearMonthValue;
   Y, M: Integer;
   Obj: TGocciaObjectValue;
@@ -873,9 +883,15 @@ begin
   else if Arg is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(Arg);
+    V := Obj.GetProperty('year');
+    if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError('Temporal.PlainYearMonth.from requires year and month properties');
+    V2 := Obj.GetProperty('month');
+    if (V2 = nil) or (V2 is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError('Temporal.PlainYearMonth.from requires year and month properties');
     Result := TGocciaTemporalPlainYearMonthValue.Create(
-      Trunc(Obj.GetProperty('year').ToNumberLiteral.Value),
-      Trunc(Obj.GetProperty('month').ToNumberLiteral.Value));
+      Trunc(V.ToNumberLiteral.Value),
+      Trunc(V2.ToNumberLiteral.Value));
   end
   else
   begin
@@ -938,6 +954,8 @@ begin
   TGocciaTemporalPlainMonthDayValue.ExposePrototype(ConstructorMethod);
   ConstructorMethod.AssignProperty('from',
     TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainMonthDayFrom, 'from', 1));
+  ConstructorMethod.AssignProperty('compare',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainMonthDayCompare, 'compare', 2));
   FTemporalNamespace.AssignProperty('PlainMonthDay', ConstructorMethod);
 end;
 
@@ -977,7 +995,10 @@ begin
   else if Arg is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(Arg);
-    D := Trunc(Obj.GetProperty('day').ToNumberLiteral.Value);
+    V := Obj.GetProperty('day');
+    if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError('Temporal.PlainMonthDay.from requires day property');
+    D := Trunc(V.ToNumberLiteral.Value);
     // Support both monthCode (e.g., "M07") and month (numeric)
     V := Obj.GetProperty('monthCode');
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
@@ -1004,6 +1025,50 @@ begin
     ThrowTypeError('Temporal.PlainMonthDay.from requires a string, PlainMonthDay, or object');
     Result := nil;
   end;
+end;
+
+function TGocciaTemporalBuiltin.PlainMonthDayCompare(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  MD1, MD2: TGocciaTemporalPlainMonthDayValue;
+
+  function CoerceMD(const AArg: TGocciaValue): TGocciaTemporalPlainMonthDayValue;
+  var
+    M, D: Integer;
+  begin
+    if AArg is TGocciaTemporalPlainMonthDayValue then
+      Result := TGocciaTemporalPlainMonthDayValue(AArg)
+    else if AArg is TGocciaStringLiteralValue then
+    begin
+      if not TryParseISOMonthDay(TGocciaStringLiteralValue(AArg).Value, M, D) then
+      begin
+        ThrowRangeError('Invalid ISO month-day string');
+        Result := nil;
+      end
+      else
+        Result := TGocciaTemporalPlainMonthDayValue.Create(M, D);
+    end
+    else
+    begin
+      ThrowTypeError('Temporal.PlainMonthDay.compare requires PlainMonthDay arguments');
+      Result := nil;
+    end;
+  end;
+
+begin
+  MD1 := CoerceMD(AArgs.GetElement(0));
+  MD2 := CoerceMD(AArgs.GetElement(1));
+
+  if MD1.Month < MD2.Month then
+    Result := TGocciaNumberLiteralValue.Create(-1)
+  else if MD1.Month > MD2.Month then
+    Result := TGocciaNumberLiteralValue.Create(1)
+  else if MD1.Day < MD2.Day then
+    Result := TGocciaNumberLiteralValue.Create(-1)
+  else if MD1.Day > MD2.Day then
+    Result := TGocciaNumberLiteralValue.Create(1)
+  else
+    Result := TGocciaNumberLiteralValue.ZeroValue;
 end;
 
 { ZonedDateTime }
@@ -1078,7 +1143,7 @@ begin
     EpochMs := EpochMs - Int64(OffsetSeconds) * 1000;
 
     if TZ = '' then
-      TZ := 'UTC';
+      ThrowRangeError('Temporal.ZonedDateTime.from requires a timezone annotation (e.g., [UTC])');
 
     Result := TGocciaTemporalZonedDateTimeValue.Create(EpochMs, SubMs, TZ);
   end

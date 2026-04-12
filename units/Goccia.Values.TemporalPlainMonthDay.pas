@@ -176,17 +176,20 @@ end;
 
 { Getters }
 
+// TC39 Temporal §11.3.3 get Temporal.PlainMonthDay.prototype.calendarId
 function TGocciaTemporalPlainMonthDayValue.GetCalendarId(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   AsPlainMonthDay(AThisValue, 'get PlainMonthDay.calendarId');
   Result := TGocciaStringLiteralValue.Create('iso8601');
 end;
 
+// TC39 Temporal §11.3.4 get Temporal.PlainMonthDay.prototype.monthCode
 function TGocciaTemporalPlainMonthDayValue.GetMonthCode(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaStringLiteralValue.Create('M' + PadTwo(AsPlainMonthDay(AThisValue, 'get PlainMonthDay.monthCode').FMonth));
 end;
 
+// TC39 Temporal §11.3.5 get Temporal.PlainMonthDay.prototype.day
 function TGocciaTemporalPlainMonthDayValue.GetDay(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaNumberLiteralValue.Create(AsPlainMonthDay(AThisValue, 'get PlainMonthDay.day').FDay);
@@ -194,6 +197,7 @@ end;
 
 { Methods }
 
+// TC39 Temporal §11.3.6 Temporal.PlainMonthDay.prototype.with(temporalMonthDayLike)
 function TGocciaTemporalPlainMonthDayValue.MonthDayWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   MD: TGocciaTemporalPlainMonthDayValue;
@@ -235,6 +239,7 @@ begin
   Result := TGocciaTemporalPlainMonthDayValue.Create(NewMonth, NewDay, MD.FReferenceYear);
 end;
 
+// TC39 Temporal §11.3.7 Temporal.PlainMonthDay.prototype.equals(other)
 function TGocciaTemporalPlainMonthDayValue.MonthDayEquals(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   MD, Other: TGocciaTemporalPlainMonthDayValue;
@@ -248,6 +253,7 @@ begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
+// TC39 Temporal §11.3.8 Temporal.PlainMonthDay.prototype.toString([options])
 function TGocciaTemporalPlainMonthDayValue.MonthDayToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   MD: TGocciaTemporalPlainMonthDayValue;
@@ -256,6 +262,7 @@ begin
   Result := TGocciaStringLiteralValue.Create(PadTwo(MD.FMonth) + '-' + PadTwo(MD.FDay));
 end;
 
+// TC39 Temporal §11.3.9 Temporal.PlainMonthDay.prototype.toJSON()
 function TGocciaTemporalPlainMonthDayValue.MonthDayToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   MD: TGocciaTemporalPlainMonthDayValue;
@@ -264,12 +271,14 @@ begin
   Result := TGocciaStringLiteralValue.Create(PadTwo(MD.FMonth) + '-' + PadTwo(MD.FDay));
 end;
 
+// TC39 Temporal §11.3.10 Temporal.PlainMonthDay.prototype.valueOf()
 function TGocciaTemporalPlainMonthDayValue.MonthDayValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   ThrowTypeError('Temporal.PlainMonthDay.prototype.valueOf cannot be used; use toString or compare instead');
   Result := nil;
 end;
 
+// TC39 Temporal §11.3.11 Temporal.PlainMonthDay.prototype.toPlainDate(item)
 function TGocciaTemporalPlainMonthDayValue.MonthDayToPlainDate(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   MD: TGocciaTemporalPlainMonthDayValue;

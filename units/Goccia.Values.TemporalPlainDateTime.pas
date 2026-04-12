@@ -682,17 +682,11 @@ begin
 
   if SmallestUnit = tuDay then
   begin
-    // Round to nearest day using the specified rounding mode
-    Divisor := NANOSECONDS_PER_DAY;
+    // Round to nearest day using the specified rounding mode and increment
+    Divisor := NANOSECONDS_PER_DAY * Increment;
     Rounded := RoundWithMode(TotalNs, Divisor, Mode);
-    if Rounded >= Divisor then
-      DateRec := AddDaysToDate(D.FYear, D.FMonth, D.FDay, 1)
-    else
-    begin
-      DateRec.Year := D.FYear;
-      DateRec.Month := D.FMonth;
-      DateRec.Day := D.FDay;
-    end;
+    ExtraDays := Rounded div NANOSECONDS_PER_DAY;
+    DateRec := AddDaysToDate(D.FYear, D.FMonth, D.FDay, ExtraDays);
     Result := TGocciaTemporalPlainDateTimeValue.Create(DateRec.Year, DateRec.Month, DateRec.Day, 0, 0, 0, 0, 0, 0);
     Exit;
   end;
@@ -771,7 +765,7 @@ var
   D: TGocciaTemporalPlainDateTimeValue;
 begin
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.toPlainYearMonth');
-  Result := TGocciaTemporalPlainYearMonthValue.Create(D.FYear, D.FMonth);
+  Result := TGocciaTemporalPlainYearMonthValue.Create(D.FYear, D.FMonth, D.FDay);
 end;
 
 function TGocciaTemporalPlainDateTimeValue.DateTimeToPlainMonthDay(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -779,7 +773,7 @@ var
   D: TGocciaTemporalPlainDateTimeValue;
 begin
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.toPlainMonthDay');
-  Result := TGocciaTemporalPlainMonthDayValue.Create(D.FMonth, D.FDay);
+  Result := TGocciaTemporalPlainMonthDayValue.Create(D.FMonth, D.FDay, D.FYear);
 end;
 
 function TGocciaTemporalPlainDateTimeValue.DateTimeToZonedDateTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
