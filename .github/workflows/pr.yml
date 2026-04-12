@@ -459,6 +459,41 @@ jobs:
           set +e; out="$(printf '1e_10;\n' | ./build/ScriptLoader 2>&1)"; st=$?; set -e
           test "$st" -eq 1
 
+      - name: Check ScriptLoader source map CLI
+        run: |
+          # Create a JSX test file
+          cat > /tmp/sm-test.jsx << 'JSXEOF'
+          const createElement = (t, p, ...c) => ({ t, p, c });
+          const el = <div id="test">hello</div>;
+          el;
+          JSXEOF
+
+          # --source-map writes .map file (bytecode mode)
+          ./build/ScriptLoader /tmp/sm-test.jsx --source-map --mode=bytecode
+          test -f /tmp/sm-test.jsx.map
+          grep -q '"version":3' /tmp/sm-test.jsx.map
+          grep -q '"sources":\[' /tmp/sm-test.jsx.map
+          grep -q '"mappings":"' /tmp/sm-test.jsx.map
+          rm /tmp/sm-test.jsx.map
+
+          # --source-map=<path> writes to custom path
+          ./build/ScriptLoader /tmp/sm-test.jsx --source-map=/tmp/custom.map --mode=bytecode
+          test -f /tmp/custom.map
+          grep -q '"version":3' /tmp/custom.map
+          rm /tmp/custom.map
+
+          # --source-map with --emit
+          ./build/ScriptLoader /tmp/sm-test.jsx --emit --source-map
+          test -f /tmp/sm-test.jsx.map
+          grep -q '"version":3' /tmp/sm-test.jsx.map
+          rm /tmp/sm-test.jsx.map /tmp/sm-test.gbc
+
+          # No .map file without --source-map
+          ./build/ScriptLoader /tmp/sm-test.jsx --mode=bytecode
+          test ! -f /tmp/sm-test.jsx.map
+
+          rm /tmp/sm-test.jsx
+
   benchmark-comment:
     needs: benchmark
     runs-on: ubuntu-latest
