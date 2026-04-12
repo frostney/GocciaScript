@@ -296,7 +296,7 @@ end;
 // Notify the owning URL that our params have changed
 procedure TGocciaURLSearchParamsValue.UpdateURL;
 begin
-  if Assigned(FURLRef) then
+  if Assigned(FURLRef) and (FURLRef is TGocciaURLValue) then
     TGocciaURLValue(FURLRef).SetSearchFromParams(Self);
 end;
 
@@ -578,6 +578,7 @@ var
   Self_: TGocciaURLSearchParamsValue;
   Callback, ThisArg: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
+  Pair: TGocciaURLSearchParam;
   I: Integer;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -597,17 +598,23 @@ begin
   else
     ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  for I := 0 to Self_.FList.Count - 1 do
+  // §6.2: snapshot each pair before invoking the callback so that
+  // mutations to FList during the callback (append/delete/set) do not
+  // cause out-of-bounds access on a now-shorter list.
+  I := 0;
+  while I < Self_.FList.Count do
   begin
+    Pair := Self_.FList[I];
     CallArgs := TGocciaArgumentsCollection.Create([
-      TGocciaStringLiteralValue.Create(Self_.FList[I].Value),
-      TGocciaStringLiteralValue.Create(Self_.FList[I].Name),
+      TGocciaStringLiteralValue.Create(Pair.Value),
+      TGocciaStringLiteralValue.Create(Pair.Name),
       AThisValue]);
     try
       InvokeCallable(Callback, CallArgs, ThisArg);
     finally
       CallArgs.Free;
     end;
+    Inc(I);
   end;
 end;
 
@@ -685,7 +692,7 @@ begin
   // Mark the owning URL so it stays live as long as this URLSearchParams is
   // reachable, preventing use-after-free when the user holds only a direct
   // reference to a url.searchParams object.
-  if Assigned(FURLRef) then
+  if Assigned(FURLRef) and (FURLRef is TGocciaURLValue) then
     TGocciaURLValue(FURLRef).MarkReferences;
 end;
 
