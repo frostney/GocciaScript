@@ -125,6 +125,10 @@ All methods handle `NaN` and `Infinity` edge cases correctly.
 |--------|-------------|
 | `JSON.parse(text, reviver?)` | Parse JSON string to value, with optional reviver function that receives source text access |
 | `JSON.stringify(value, replacer?, space?)` | Convert value to JSON string, with optional replacer (function or array) and indentation |
+| `JSON.rawJSON(text)` | Create a raw JSON value object for verbatim serialization (ES2026 §25.5.2.4) |
+| `JSON.isRawJSON(value)` | Return `true` if the value was created by `JSON.rawJSON()` (ES2026 §25.5.2.3) |
+
+**Raw JSON (ES2026):** `JSON.rawJSON(text)` creates a frozen, null-prototype object with a `rawJSON` property containing the original text. The input must be valid JSON representing a primitive value (string, number, boolean, or null) — objects and arrays are rejected. Leading/trailing whitespace and empty strings throw `SyntaxError`. During `JSON.stringify`, raw JSON values are emitted verbatim without re-serialization, enabling lossless round-tripping of values like large integers (`9007199254740993`) that exceed IEEE-754 `Number` precision. Replacer functions can return `JSON.rawJSON()` values. `JSON.isRawJSON(value)` checks for the internal `[[IsRawJSON]]` slot — objects that merely mimic the structure (e.g., `{ rawJSON: "123" }`) return `false`.
 
 **Source text access (ES2024):** When a reviver is provided, it receives three arguments: `(key, value, context)`. The `context` parameter is an object. For primitive JSON values (numbers, strings, booleans, `null`), the context contains a `source` property with the raw JSON text that produced the value — including quotes for strings, exact numeric notation, and escape sequences as written. For objects and arrays, the context object has no `source` property. This enables lossless round-tripping of numeric precision and format-aware value reconstruction.
 

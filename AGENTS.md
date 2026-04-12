@@ -131,6 +131,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Temporal types | `Goccia.Values.TemporalPlainYearMonth.pas`, `Goccia.Values.TemporalPlainMonthDay.pas`, `Goccia.Values.TemporalZonedDateTime.pas` | PlainYearMonth, PlainMonthDay, and ZonedDateTime Temporal types |
 | Temporal timezone | `Goccia.Temporal.TimeZone.pas` | IANA timezone resolution, TZif parsing, UTC offset calculation |
 | Temporal options | `Goccia.Temporal.Options.pas` | Shared options bag parsing: rounding modes, overflow, units, fractional digits |
+| Raw JSON | `Goccia.Values.RawJSON.pas` | `JSON.rawJSON()` frozen value with `[[IsRawJSON]]` internal slot |
 | Spec | `Goccia.Spec.pas` | Spec/proposal feature data and factory functions |
 | Preprocessors | `Goccia.Engine.pas` | `TGocciaPreprocessor = (ppJSX)` and `TGocciaPreprocessors` — pre-processing system |
 | Compatibility | `Goccia.Engine.pas` | `TGocciaCompatibility = (cfASI)` and `TGocciaCompatibilityFlags` — compatibility layer |
@@ -326,7 +327,7 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 - **No abbreviations:** Use full words in class, function, method, and type names (e.g., `TGarbageCollector` not `TGC`). Exceptions: `AST`, `JSON`, `REPL`, `ISO`, `Utils`.
 - **File extension constants:** Use `Goccia.FileExtensions` constants (`EXT_JS`, `EXT_JSX`, `EXT_TS`, `EXT_TSX`, `EXT_MJS`, `EXT_JSON`, `EXT_JSON5`, `EXT_JSONL`, `EXT_TOML`, `EXT_YAML`, `EXT_YML`, `EXT_TXT`, `EXT_MD`, `EXT_GBC`) instead of hardcoded string literals. Use the shared extension arrays/helpers (`ScriptExtensions`, `ModuleImportExtensions`, `IsScriptExtension`, `IsTextAssetExtension`, `IsJSXNativeExtension`, etc.) instead of duplicating extension lists or ad-hoc checks.
 - **Runtime constants:** Use the split constant units instead of hardcoded string literals for property names, type names, error names, constructor names, and symbol names:
-  - `Goccia.Constants.PropertyNames` — `PROP_LENGTH`, `PROP_NAME`, `PROP_CONSTRUCTOR`, `PROP_PROTOTYPE`, `PROP_GET`, `PROP_SET`, `PROP_KIND`, `PROP_STATIC`, `PROP_PRIVATE`, `PROP_METADATA`, `PROP_ACCESS`, `PROP_INIT`, `PROP_ADD_INITIALIZER`, `PROP_STRICT_TYPES`, etc.
+  - `Goccia.Constants.PropertyNames` — `PROP_LENGTH`, `PROP_NAME`, `PROP_CONSTRUCTOR`, `PROP_PROTOTYPE`, `PROP_GET`, `PROP_SET`, `PROP_KIND`, `PROP_STATIC`, `PROP_PRIVATE`, `PROP_METADATA`, `PROP_ACCESS`, `PROP_INIT`, `PROP_ADD_INITIALIZER`, `PROP_STRICT_TYPES`, `PROP_RAW_JSON`, etc.
   - `Goccia.Constants.TypeNames` — `OBJECT_TYPE_NAME`, `STRING_TYPE_NAME`, `FUNCTION_TYPE_NAME`, etc.
   - `Goccia.Constants.ErrorNames` — `ERROR_NAME`, `TYPE_ERROR_NAME`, `RANGE_ERROR_NAME`, etc.
   - `Goccia.Constants.ConstructorNames` — `CONSTRUCTOR_OBJECT`, `CONSTRUCTOR_ARRAY`, `CONSTRUCTOR_STRING`, `CONSTRUCTOR_MAP`, etc.
@@ -440,6 +441,8 @@ The TestRunner adds `ggTestAssertions`; the BenchmarkRunner adds `ggBenchmark`. 
 After all built-ins, two always-present `const` globals are created: `globalThis` (self-referential global object) and `Goccia` (engine metadata with `version`, `commit`, `strictTypes`, `semver`, `build`, `spec`, `proposal`, and `shims`). `Goccia.build` exposes compile-time platform information (`os` and `arch`), mirroring `Deno.build`. `Goccia.spec` and `Goccia.proposal` expose spec and proposal feature data; `Goccia.shims` lists active shims. `strictTypes` is configurable at engine creation.
 
 **JSON/JSON5 source text access (ES2024):** `JSON.parse` and `JSON5.parse` revivers receive `(key, value, context)` where `context` is an object with a `source` property for primitive values (the raw JSON/JSON5 text as written). Objects and arrays get an empty context (no `source` property). Source text collection is implemented via `TAbstractJSONParser.OnValueStart` (position tracking hook in `JSONParser.pas`) and `TGocciaJSONVisitor.RecordSourceText` (captures the raw substring). `TGocciaJSONParser.ParseWithSources` returns both the value tree and a flat source text list consumed in depth-first order by `ApplyReviver`. See [docs/built-ins.md](docs/built-ins.md) for details.
+
+**JSON.rawJSON / JSON.isRawJSON (ES2026):** `JSON.rawJSON(text)` creates a frozen, null-prototype `TGocciaRawJSONValue` with a `rawJSON` property. The `[[IsRawJSON]]` internal slot is modeled by the class identity (`is TGocciaRawJSONValue`). During `JSON.stringify`, `StringifyPreparedValue` checks for `TGocciaRawJSONValue` and emits the raw text verbatim. `TransformWithReplacer` passes raw JSON values through without recursion. The input must be valid JSON representing a primitive (string, number, boolean, or null); objects, arrays, empty strings, and leading/trailing whitespace throw `SyntaxError`.
 
 **JSX:** Enabled by default via `DefaultPreprocessors`. The JSX transformer (`Goccia.JSX.Transformer.pas`) converts JSX to `createElement` calls as a pre-pass. Users provide their own `createElement`/`Fragment`. Custom factory via `@jsxFactory`/`@jsxFragment` pragmas. Embedders can disable via `Engine.Preprocessors := []`. See [docs/language-restrictions.md](docs/language-restrictions.md#jsx).
 
