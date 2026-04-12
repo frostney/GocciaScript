@@ -68,6 +68,7 @@ type
     function DurationAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DurationSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DurationWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DurationRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DurationToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DurationToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DurationValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -79,6 +80,7 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor;
@@ -180,6 +182,7 @@ begin
       Members.AddMethod(DurationAdd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(DurationSubtract, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(DurationWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DurationRound, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(DurationTotal, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(DurationToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(DurationToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -484,6 +487,140 @@ begin
     GetFieldOr('milliseconds', D.FMilliseconds),
     GetFieldOr('microseconds', D.FMicroseconds),
     GetFieldOr('nanoseconds', D.FNanoseconds));
+end;
+
+// TC39 Temporal §7.3.21 Temporal.Duration.prototype.round(roundTo)
+function TGocciaTemporalDurationValue.DurationRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  D: TGocciaTemporalDurationValue;
+  Arg: TGocciaValue;
+  OptionsObj: TGocciaObjectValue;
+  SmallestUnit, LargestUnit: TTemporalUnit;
+  Mode: TTemporalRoundingMode;
+  Increment: Integer;
+  TotalNs, Divisor, Rounded: Int64;
+  RemNs: Int64;
+  ResultDays, ResultHours, ResultMinutes, ResultSeconds: Int64;
+  ResultMs, ResultUs, ResultNs: Int64;
+begin
+  D := AsDuration(AThisValue, 'Duration.prototype.round');
+  Arg := AArgs.GetElement(0);
+
+  if (D.FYears <> 0) or (D.FMonths <> 0) then
+    ThrowRangeError('Duration with years or months requires relativeTo for round()');
+
+  SmallestUnit := tuNone;
+  LargestUnit := tuNone;
+  Mode := rmHalfExpand;
+  Increment := 1;
+
+  if Arg is TGocciaStringLiteralValue then
+  begin
+    if not GetTemporalUnitFromString(TGocciaStringLiteralValue(Arg).Value, SmallestUnit) then
+      ThrowRangeError('Invalid unit for Duration.prototype.round: ' + TGocciaStringLiteralValue(Arg).Value);
+  end
+  else if Arg is TGocciaObjectValue then
+  begin
+    OptionsObj := TGocciaObjectValue(Arg);
+    SmallestUnit := GetSmallestUnit(OptionsObj, tuNone);
+    LargestUnit := GetLargestUnit(OptionsObj, tuNone);
+    Mode := GetRoundingMode(OptionsObj, rmHalfExpand);
+    Increment := GetRoundingIncrement(OptionsObj, 1);
+  end
+  else
+    ThrowTypeError('Duration.prototype.round requires a string or options object');
+
+  // If only largestUnit is specified, rebalance without rounding
+  if (SmallestUnit = tuNone) and (LargestUnit = tuNone) then
+    ThrowRangeError('round() requires at least a smallestUnit or largestUnit');
+  if SmallestUnit = tuNone then
+    SmallestUnit := tuNanosecond;
+  if LargestUnit = tuNone then
+  begin
+    // Default largestUnit to the largest defined unit of the duration
+    if D.FDays <> 0 then LargestUnit := tuDay
+    else if D.FHours <> 0 then LargestUnit := tuHour
+    else if D.FMinutes <> 0 then LargestUnit := tuMinute
+    else if D.FSeconds <> 0 then LargestUnit := tuSecond
+    else if D.FMilliseconds <> 0 then LargestUnit := tuMillisecond
+    else if D.FMicroseconds <> 0 then LargestUnit := tuMicrosecond
+    else LargestUnit := SmallestUnit;
+    // Ensure largestUnit >= smallestUnit
+    if Ord(LargestUnit) > Ord(SmallestUnit) then
+      LargestUnit := SmallestUnit;
+  end;
+
+  // Compute total nanoseconds (for time-only durations)
+  TotalNs := D.FNanoseconds +
+             D.FMicroseconds * NANOSECONDS_PER_MICROSECOND +
+             D.FMilliseconds * NANOSECONDS_PER_MILLISECOND +
+             D.FSeconds * NANOSECONDS_PER_SECOND +
+             D.FMinutes * NANOSECONDS_PER_MINUTE +
+             D.FHours * NANOSECONDS_PER_HOUR +
+             D.FDays * NANOSECONDS_PER_DAY +
+             D.FWeeks * 7 * NANOSECONDS_PER_DAY;
+
+  // Round to smallestUnit
+  if SmallestUnit <> tuNanosecond then
+  begin
+    if SmallestUnit = tuWeek then
+      Divisor := NANOSECONDS_PER_DAY * 7 * Increment
+    else
+      Divisor := UnitToNanoseconds(SmallestUnit) * Increment;
+    TotalNs := RoundWithMode(TotalNs, Divisor, Mode);
+  end;
+
+  // Break down from largestUnit
+  ResultDays := 0;
+  ResultHours := 0;
+  ResultMinutes := 0;
+  ResultSeconds := 0;
+  ResultMs := 0;
+  ResultUs := 0;
+  ResultNs := 0;
+  RemNs := TotalNs;
+
+  if Ord(LargestUnit) <= Ord(tuDay) then
+  begin
+    ResultDays := RemNs div NANOSECONDS_PER_DAY;
+    RemNs := RemNs mod NANOSECONDS_PER_DAY;
+  end;
+  if Ord(LargestUnit) <= Ord(tuHour) then
+  begin
+    ResultHours := RemNs div NANOSECONDS_PER_HOUR;
+    RemNs := RemNs mod NANOSECONDS_PER_HOUR;
+  end;
+  if Ord(LargestUnit) <= Ord(tuMinute) then
+  begin
+    ResultMinutes := RemNs div NANOSECONDS_PER_MINUTE;
+    RemNs := RemNs mod NANOSECONDS_PER_MINUTE;
+  end;
+  if Ord(LargestUnit) <= Ord(tuSecond) then
+  begin
+    ResultSeconds := RemNs div NANOSECONDS_PER_SECOND;
+    RemNs := RemNs mod NANOSECONDS_PER_SECOND;
+  end;
+  if Ord(LargestUnit) <= Ord(tuMillisecond) then
+  begin
+    ResultMs := RemNs div NANOSECONDS_PER_MILLISECOND;
+    RemNs := RemNs mod NANOSECONDS_PER_MILLISECOND;
+  end;
+  if Ord(LargestUnit) <= Ord(tuMicrosecond) then
+  begin
+    ResultUs := RemNs div NANOSECONDS_PER_MICROSECOND;
+    RemNs := RemNs mod NANOSECONDS_PER_MICROSECOND;
+  end;
+  ResultNs := RemNs;
+
+  // Extract weeks from days if largestUnit allows it
+  if Ord(LargestUnit) <= Ord(tuWeek) then
+  begin
+    Result := TGocciaTemporalDurationValue.Create(0, 0, ResultDays div 7, ResultDays mod 7,
+      ResultHours, ResultMinutes, ResultSeconds, ResultMs, ResultUs, ResultNs);
+  end
+  else
+    Result := TGocciaTemporalDurationValue.Create(0, 0, 0, ResultDays,
+      ResultHours, ResultMinutes, ResultSeconds, ResultMs, ResultUs, ResultNs);
 end;
 
 function TGocciaTemporalDurationValue.DurationTotal(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
