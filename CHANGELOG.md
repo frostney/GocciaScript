@@ -2,7 +2,7 @@
 
 All notable changes to GocciaScript are documented in this file.
 
-## [Unreleased]
+## [0.6.1] - 2026-04-09
 
 ### 🏗️ Internal
 
@@ -17,10 +17,13 @@ All notable changes to GocciaScript are documented in this file.
 
 ### 📖 Other
 
+- Streamline project docs and contributor guidance (#250)
 - VM improvements including fixing AArch64 Int64-to-Double conversion paths (#242)
 
 ### 🚀 Added
 
+- Add automated changelog generation with git-cliff (#248)
+- Add Error.cause support (#249)
 - Support array-like arguments for apply and Reflect (#244)
 
 ## [0.6.0] - 2026-04-09
