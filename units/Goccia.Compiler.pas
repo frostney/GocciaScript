@@ -243,6 +243,7 @@ var
   I: Integer;
   Node: TGocciaASTNode;
   Reg: UInt8;
+  HasUsing: Boolean;
   SavedFinally: TObject;
 begin
   SavedFinally := Goccia.Compiler.Statements.SavePendingFinally;
@@ -250,16 +251,32 @@ begin
     if ABody is TGocciaBlockStatement then
     begin
       Block := TGocciaBlockStatement(ABody);
+
+      // Check if the body contains using declarations — if so, delegate
+      // to CompileBlockStatement which handles the try/finally disposal.
+      HasUsing := False;
       for I := 0 to Block.Nodes.Count - 1 do
-      begin
-        Node := Block.Nodes[I];
-        if Node is TGocciaStatement then
-          DoCompileStatement(TGocciaStatement(Node))
-        else if Node is TGocciaExpression then
+        if Block.Nodes[I] is TGocciaUsingDeclaration then
         begin
-          Reg := FCurrentScope.AllocateRegister;
-          DoCompileExpression(TGocciaExpression(Node), Reg);
-          FCurrentScope.FreeRegister;
+          HasUsing := True;
+          Break;
+        end;
+
+      if HasUsing then
+        Goccia.Compiler.Statements.CompileBlockStatement(BuildContext, Block)
+      else
+      begin
+        for I := 0 to Block.Nodes.Count - 1 do
+        begin
+          Node := Block.Nodes[I];
+          if Node is TGocciaStatement then
+            DoCompileStatement(TGocciaStatement(Node))
+          else if Node is TGocciaExpression then
+          begin
+            Reg := FCurrentScope.AllocateRegister;
+            DoCompileExpression(TGocciaExpression(Node), Reg);
+            FCurrentScope.FreeRegister;
+          end;
         end;
       end;
       EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
