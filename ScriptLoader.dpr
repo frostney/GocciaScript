@@ -21,7 +21,6 @@ uses
   Goccia.Error,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
-  Goccia.JSX.SourceMap,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Modules.Configuration,
@@ -31,6 +30,7 @@ uses
   Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
   Goccia.ScriptLoader.JSON,
+  Goccia.SourceMap,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
   Goccia.Timeout,
@@ -67,14 +67,16 @@ var
   GProfileFunctions: Boolean = False;
   GProfileOutputPath: string = '';
   GProfileFormatFlamegraph: Boolean = False;
+  GSourceMapEnabled: Boolean = False;
+  GSourceMapOutputPath: string = '';
 
 function ParseSource(const ASource: TStringList; const AFileName: string;
   const APreprocessors: TGocciaPreprocessors; const ASuppressWarnings: Boolean;
-  out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64): TGocciaProgram;
+  out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
+  out ASourceMap: TGocciaSourceMap): TGocciaProgram;
 var
   SourceText: string;
   JSXResult: TGocciaJSXTransformResult;
-  SourceMap: TGocciaSourceMap;
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
@@ -85,12 +87,14 @@ begin
   StartTime := GetNanoseconds;
   SourceText := StringListToLFText(ASource);
 
-  SourceMap := nil;
+  ASourceMap := nil;
   if ppJSX in APreprocessors then
   begin
     JSXResult := TGocciaJSXTransformer.Transform(SourceText);
     SourceText := JSXResult.Source;
-    SourceMap := JSXResult.SourceMap;
+    ASourceMap := JSXResult.SourceMap;
+    if Assigned(ASourceMap) then
+      ASourceMap.SetSourceContent(0, StringListToLFText(ASource));
   end;
 
   try
@@ -114,8 +118,8 @@ begin
             WriteLn(SysUtils.Format('Warning: %s', [Warning.Message]));
             if Warning.Suggestion <> '' then
               WriteLn(SysUtils.Format('  Suggestion: %s', [Warning.Suggestion]));
-            if Assigned(SourceMap) and
-               SourceMap.Translate(Warning.Line, Warning.Column, OrigLine, OrigCol) then
+            if Assigned(ASourceMap) and
+               ASourceMap.Translate(Warning.Line, Warning.Column, OrigLine, OrigCol) then
               WriteLn(SysUtils.Format('  --> %s:%d:%d', [AFileName, OrigLine, OrigCol]))
             else
               WriteLn(SysUtils.Format('  --> %s:%d:%d', [AFileName, Warning.Line, Warning.Column]));
@@ -126,9 +130,31 @@ begin
     finally
       Lexer.Free;
     end;
-  finally
-    SourceMap.Free;
+  except
+    ASourceMap.Free;
+    ASourceMap := nil;
+    raise;
   end;
+end;
+
+procedure WriteSourceMapIfEnabled(const ASourceMap: TGocciaSourceMap;
+  const AFileName: string);
+var
+  OutputPath: string;
+begin
+  if not GSourceMapEnabled then
+    Exit;
+  if not Assigned(ASourceMap) then
+    Exit;
+  if GSourceMapOutputPath <> '' then
+    OutputPath := GSourceMapOutputPath
+  else
+    OutputPath := AFileName + EXT_MAP;
+  ASourceMap.FileName := ExtractFileName(AFileName);
+  ASourceMap.SetSourcePath(0, ExtractFileName(AFileName));
+  ASourceMap.SaveToFile(OutputPath);
+  if not GJsonOutput then
+    WriteLn(SysUtils.Format('  Source map written to %s', [OutputPath]));
 end;
 
 function CompileSource(const ASource: TStringList; const AFileName: string;
@@ -136,19 +162,27 @@ function CompileSource(const ASource: TStringList; const AFileName: string;
 var
   ProgramNode: TGocciaProgram;
   Compiler: TGocciaCompiler;
+  CompiledModule: TGocciaBytecodeModule;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
+  SourceMap: TGocciaSourceMap;
 begin
+  CompiledModule := nil;
   ProgramNode := ParseSource(ASource, AFileName, APreprocessors, ASuppressWarnings,
-    LexTimeNanoseconds, ParseTimeNanoseconds);
+    LexTimeNanoseconds, ParseTimeNanoseconds, SourceMap);
   try
     Compiler := TGocciaCompiler.Create(AFileName);
     try
-      Result := Compiler.Compile(ProgramNode);
+      CompiledModule := Compiler.Compile(ProgramNode);
+      WriteSourceMapIfEnabled(SourceMap, AFileName);
+      Result := CompiledModule;
+      CompiledModule := nil;
     finally
       Compiler.Free;
     end;
   finally
     ProgramNode.Free;
+    SourceMap.Free;
+    CompiledModule.Free;
   end;
 end;
 
@@ -265,6 +299,7 @@ function ExecuteInterpreted(const ASource: TStringList; const AFileName: string;
 var
   Engine: TGocciaEngine;
   ScriptResult: TGocciaScriptResult;
+  SourceMap: TGocciaSourceMap;
 begin
   Engine := TGocciaEngine.Create(AFileName, ASource, []);
   try
@@ -280,6 +315,14 @@ begin
       ScriptResult := Engine.Execute;
     finally
       ClearExecutionTimeout;
+      SourceMap := Engine.TakeLastSourceMap;
+      try
+        if Assigned(SourceMap) and Assigned(ASource) then
+          SourceMap.SetSourceContent(0, StringListToLFText(ASource));
+        WriteSourceMapIfEnabled(SourceMap, AFileName);
+      finally
+        SourceMap.Free;
+      end;
     end;
   finally
     Engine.Free;
@@ -299,6 +342,7 @@ var
   ProgramNode: TGocciaProgram;
   Module: TGocciaBytecodeModule;
   Backend: TGocciaBytecodeBackend;
+  SourceMap: TGocciaSourceMap;
   StartTime, CompileStart, CompileEnd, ExecEnd: Int64;
 begin
   StartTime := GetNanoseconds;
@@ -313,20 +357,22 @@ begin
 
     ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultPreprocessors,
       GJsonOutput, Result.Timing.LexTimeNanoseconds,
-      Result.Timing.ParseTimeNanoseconds);
-
-    if Assigned(TGocciaCoverageTracker.Instance) and
-       TGocciaCoverageTracker.Instance.Enabled and Assigned(ASource) then
-      TGocciaCoverageTracker.Instance.RegisterSourceFile(
-        AFileName, CountExecutableLines(ASource));
-
+      Result.Timing.ParseTimeNanoseconds, SourceMap);
     try
+      WriteSourceMapIfEnabled(SourceMap, AFileName);
+
+      if Assigned(TGocciaCoverageTracker.Instance) and
+         TGocciaCoverageTracker.Instance.Enabled and Assigned(ASource) then
+        TGocciaCoverageTracker.Instance.RegisterSourceFile(
+          AFileName, CountExecutableLines(ASource));
+
       CompileStart := GetNanoseconds;
       Module := Backend.CompileToModule(ProgramNode);
       CompileEnd := GetNanoseconds;
       Result.Timing.CompileTimeNanoseconds := CompileEnd - CompileStart;
     finally
       ProgramNode.Free;
+      SourceMap.Free;
     end;
 
     try
@@ -612,6 +658,8 @@ begin
   WriteLn('  --profile=opcodes|functions|all  Enable bytecode profiling (implies --mode=bytecode)');
   WriteLn('  --profile-output=<file>          Write profile results as JSON');
   WriteLn('  --profile-format=flamegraph      Write collapsed stack format for flame graph visualization');
+  WriteLn('  --source-map                     Write a .map source map file alongside the output');
+  WriteLn('  --source-map=<file>              Write source map to a specific file path');
 end;
 
 var
@@ -783,6 +831,19 @@ begin
         ExitCode := 1;
         Exit;
       end
+      else if Arg = '--source-map' then
+        GSourceMapEnabled := True
+      else if Copy(Arg, 1, 13) = '--source-map=' then
+      begin
+        GSourceMapOutputPath := Copy(Arg, 14, MaxInt);
+        GSourceMapEnabled := True;
+        if GSourceMapOutputPath = '' then
+        begin
+          WriteLn('Error: --source-map= requires a non-empty path.');
+          ExitCode := 1;
+          Exit;
+        end;
+      end
       else if Copy(Arg, 1, 2) <> '--' then
         Paths.Add(Arg)
       else
@@ -805,6 +866,24 @@ begin
     if GJsonOutput and (Paths.Count > 1) then
     begin
       WriteLn('Error: --output=json supports a single input path.');
+      ExitCode := 1;
+      Exit;
+    end;
+
+    if GSourceMapEnabled and (GSourceMapOutputPath = '') and
+       ((Paths.Count = 0) or
+        ((Paths.Count = 1) and IsStdinPath(Paths[0]))) then
+    begin
+      WriteLn('Error: --source-map=<file> is required when reading source from stdin.');
+      ExitCode := 1;
+      Exit;
+    end;
+
+    if (GSourceMapOutputPath <> '') and
+       ((Paths.Count > 1) or
+        ((Paths.Count = 1) and DirectoryExists(Paths[0]))) then
+    begin
+      WriteLn('Error: --source-map=<file> supports a single input file or stdin.');
       ExitCode := 1;
       Exit;
     end;

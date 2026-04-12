@@ -44,6 +44,8 @@ printf "const x = 2 + 2; x;" | ./build/ScriptLoader        # Execute stdin sourc
 ./build/ScriptLoader example.js --profile=all                      # All profiling data (bytecode)
 ./build/ScriptLoader example.js --profile=all --profile-output=profile.json  # Profile with JSON export
 ./build/ScriptLoader example.js --profile=functions --profile-format=flamegraph --profile-output=flamegraph.txt  # Flame graph export
+./build/ScriptLoader example.jsx --source-map --mode=bytecode     # Write .map source map alongside execution
+./build/ScriptLoader example.jsx --source-map=out.map --emit      # Write source map to specific path with bytecode emit
 ./build/REPL                                      # Start interactive REPL (interpreted)
 ./build/REPL --mode=bytecode                      # Start the REPL via bytecode VM
 ./build/REPL --mode=bytecode --timing             # Bytecode REPL with per-line timing
@@ -133,6 +135,9 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Temporal options | `Goccia.Temporal.Options.pas` | Shared options bag parsing: rounding modes, overflow, units, fractional digits |
 | Raw JSON | `Goccia.Values.RawJSON.pas` | `JSON.rawJSON()` frozen value with `[[IsRawJSON]]` internal slot |
 | Spec | `Goccia.Spec.pas` | Spec/proposal feature data and factory functions |
+| Source map | `Goccia.SourceMap.pas` | TC39 Source Map v3 builder, JSON serializer, and position translator |
+| Source map VLQ | `Goccia.SourceMap.VLQ.pas` | VLQ Base64 encoding/decoding for source map mappings |
+| Source map consumer | `Goccia.SourceMap.Consumer.pas` | Source map v3 JSON parser and reverse lookup |
 | Preprocessors | `Goccia.Engine.pas` | `TGocciaPreprocessor = (ppJSX)` and `TGocciaPreprocessors` — pre-processing system |
 | Compatibility | `Goccia.Engine.pas` | `TGocciaCompatibility = (cfASI)` and `TGocciaCompatibilityFlags` — compatibility layer |
 

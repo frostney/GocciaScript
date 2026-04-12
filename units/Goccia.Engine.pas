@@ -43,7 +43,6 @@ uses
   Goccia.JSON,
   Goccia.JSON5,
   Goccia.JSONL,
-  Goccia.JSX.SourceMap,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Loader,
@@ -51,6 +50,7 @@ uses
   Goccia.ObjectModel,
   Goccia.ObjectModel.Engine,
   Goccia.Parser,
+  Goccia.SourceMap,
   Goccia.TextFiles,
   Goccia.TOML,
   Goccia.Values.ClassValue,
@@ -137,6 +137,7 @@ type
     FShims: TStringList;
     FSuppressWarnings: Boolean;
     FLastTiming: TGocciaScriptResult;
+    FLastSourceMap: TGocciaSourceMap;
     function GetASIEnabled: Boolean;
     procedure SetASIEnabled(const AValue: Boolean);
     procedure SetPreprocessors(const AValue: TGocciaPreprocessors);
@@ -216,6 +217,9 @@ type
     property BuiltinURLSearchParams: TGocciaGlobalURLSearchParams read FBuiltinURLSearchParams;
     property SuppressWarnings: Boolean read FSuppressWarnings write FSuppressWarnings;
     property LastTiming: TGocciaScriptResult read FLastTiming;
+    // Source map from the most recent JSX transform, if any.
+    // Ownership transfers to the caller when read (set to nil after access).
+    function TakeLastSourceMap: TGocciaSourceMap;
   end;
 
 
@@ -355,6 +359,7 @@ begin
     FBuiltinURL.Free;
     FBuiltinURLSearchParams.Free;
     ClearImportMetaCache;
+    FLastSourceMap.Free;
     FInjectedGlobals.Free;
     FShims.Free;
     FInterpreter.Free;
@@ -1030,10 +1035,17 @@ begin
   finally
     if FLastTiming.TotalTimeNanoseconds = 0 then
       FLastTiming.TotalTimeNanoseconds := GetNanoseconds - StartTime;
-    SourceMap.Free;
+    FLastSourceMap.Free;
+    FLastSourceMap := SourceMap;
   end;
 
   Result := FLastTiming;
+end;
+
+function TGocciaEngine.TakeLastSourceMap: TGocciaSourceMap;
+begin
+  Result := FLastSourceMap;
+  FLastSourceMap := nil;
 end;
 
 function TGocciaEngine.ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;

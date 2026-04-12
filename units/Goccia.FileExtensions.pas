@@ -19,6 +19,7 @@ const
   EXT_TXT  = '.txt';
   EXT_MD   = '.md';
   EXT_GBC  = '.gbc';
+  EXT_MAP  = '.map';
 
   ScriptExtensions: array[0..4] of string = (
     EXT_JS, EXT_JSX, EXT_TS, EXT_TSX, EXT_MJS

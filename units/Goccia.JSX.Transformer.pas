@@ -10,9 +10,9 @@ uses
 
   StringBuffer,
 
-  Goccia.JSX.SourceMap,
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved,
+  Goccia.SourceMap,
   Goccia.TextFiles;
 
 type
@@ -119,7 +119,8 @@ begin
     Transformer.FLastTokenKind := ltkNone;
     Transformer.FHasJSX := False;
     Transformer.FOutput := TStringBuffer.Create(Length(ASource));
-    Transformer.FSourceMap := TGocciaSourceMap.Create;
+    Transformer.FSourceMap := TGocciaSourceMap.Create('');
+    Transformer.FSourceMap.AddSource('');
     try
       Transformer.ScanPragmas;
       Transformer.TransformSource;
@@ -203,7 +204,8 @@ end;
 procedure TGocciaJSXTransformer.EmitMapped(const AText: string;
   const ASourceLine, ASourceColumn: Integer);
 begin
-  FSourceMap.AddMapping(FOutputLine, FOutputColumn, ASourceLine, ASourceColumn);
+  FSourceMap.AddMapping(FOutputLine, FOutputColumn - 1, 0,
+    ASourceLine - 1, ASourceColumn - 1);
   Emit(AText);
 end;
 
@@ -226,7 +228,8 @@ end;
 
 procedure TGocciaJSXTransformer.AddIdentityMapping;
 begin
-  FSourceMap.AddMapping(FOutputLine, FOutputColumn, FLine, FColumn);
+  FSourceMap.AddMapping(FOutputLine, FOutputColumn - 1, 0,
+    FLine - 1, FColumn - 1);
 end;
 
 procedure TGocciaJSXTransformer.CopyChar;
@@ -892,7 +895,8 @@ begin
       ChildStartLine := FLine;
       ChildStartColumn := FColumn;
       Emit(', ');
-      FSourceMap.AddMapping(FOutputLine, FOutputColumn, ChildStartLine, ChildStartColumn);
+      FSourceMap.AddMapping(FOutputLine, FOutputColumn - 1, 0,
+        ChildStartLine - 1, ChildStartColumn - 1);
       TransformJSXElement;
     end
     else if CurrentChar = '{' then
@@ -901,7 +905,8 @@ begin
       ChildStartColumn := FColumn;
       AdvanceInput;
       Emit(', ');
-      FSourceMap.AddMapping(FOutputLine, FOutputColumn, ChildStartLine, ChildStartColumn);
+      FSourceMap.AddMapping(FOutputLine, FOutputColumn - 1, 0,
+        ChildStartLine - 1, ChildStartColumn - 1);
       CopyJSXExpression;
       if not IsAtEnd and (CurrentChar = '}') then
         AdvanceInput;
