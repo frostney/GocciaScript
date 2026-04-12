@@ -631,16 +631,23 @@ begin
 end;
 
 // Emit disposal sequence for using resources in reverse order.
-// Each OP_USING_DISPOSE: A=errorAccum, B=disposeMethod, C=resource
+// Each OP_USING_DISPOSE: A=errorAccum, B=disposeMethod, C=resource|asyncFlag
+// Bit 7 of C encodes the async hint (1 = await using, 0 = sync using).
 procedure EmitDisposalSequence(const ACtx: TGocciaCompilationContext;
   const AResources: array of TUsingResourceEntry;
   const AResourceCount: Integer; const AErrorReg: UInt8);
 var
   I: Integer;
+  CField: UInt8;
 begin
   for I := AResourceCount - 1 downto 0 do
+  begin
+    CField := AResources[I].ValueSlot;
+    if AResources[I].IsAwait then
+      CField := CField or $80; // Set bit 7 for async dispose
     EmitInstruction(ACtx, EncodeABC(OP_USING_DISPOSE,
-      AErrorReg, AResources[I].DisposeSlot, AResources[I].ValueSlot));
+      AErrorReg, AResources[I].DisposeSlot, CField));
+  end;
 end;
 
 procedure CompileBlockStatement(const ACtx: TGocciaCompilationContext;
