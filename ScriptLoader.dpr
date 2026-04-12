@@ -171,10 +171,10 @@ begin
     Compiler := TGocciaCompiler.Create(AFileName);
     try
       Result := Compiler.Compile(ProgramNode);
+      WriteSourceMapIfEnabled(SourceMap, AFileName);
     finally
       Compiler.Free;
     end;
-    WriteSourceMapIfEnabled(SourceMap, AFileName);
   finally
     ProgramNode.Free;
     SourceMap.Free;
@@ -355,22 +355,19 @@ begin
       Result.Timing.ParseTimeNanoseconds, SourceMap);
     try
       WriteSourceMapIfEnabled(SourceMap, AFileName);
-    finally
-      SourceMap.Free;
-    end;
 
-    if Assigned(TGocciaCoverageTracker.Instance) and
-       TGocciaCoverageTracker.Instance.Enabled and Assigned(ASource) then
-      TGocciaCoverageTracker.Instance.RegisterSourceFile(
-        AFileName, CountExecutableLines(ASource));
+      if Assigned(TGocciaCoverageTracker.Instance) and
+         TGocciaCoverageTracker.Instance.Enabled and Assigned(ASource) then
+        TGocciaCoverageTracker.Instance.RegisterSourceFile(
+          AFileName, CountExecutableLines(ASource));
 
-    try
       CompileStart := GetNanoseconds;
       Module := Backend.CompileToModule(ProgramNode);
       CompileEnd := GetNanoseconds;
       Result.Timing.CompileTimeNanoseconds := CompileEnd - CompileStart;
     finally
       ProgramNode.Free;
+      SourceMap.Free;
     end;
 
     try
@@ -864,6 +861,24 @@ begin
     if GJsonOutput and (Paths.Count > 1) then
     begin
       WriteLn('Error: --output=json supports a single input path.');
+      ExitCode := 1;
+      Exit;
+    end;
+
+    if GSourceMapEnabled and (GSourceMapOutputPath = '') and
+       ((Paths.Count = 0) or
+        ((Paths.Count = 1) and IsStdinPath(Paths[0]))) then
+    begin
+      WriteLn('Error: --source-map=<file> is required when reading source from stdin.');
+      ExitCode := 1;
+      Exit;
+    end;
+
+    if (GSourceMapOutputPath <> '') and
+       ((Paths.Count > 1) or
+        ((Paths.Count = 1) and DirectoryExists(Paths[0]))) then
+    begin
+      WriteLn('Error: --source-map=<file> supports a single input file or stdin.');
       ExitCode := 1;
       Exit;
     end;
