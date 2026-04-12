@@ -503,10 +503,25 @@ begin
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       ThrowTypeError('Temporal.PlainDate.from requires year, month, day properties');
     Mo := Trunc(V.ToNumberLiteral.Value);
+    if (Mo < 1) or (Mo > 12) then
+    begin
+      if Overflow = toReject then
+        ThrowRangeError('Month ' + IntToStr(Mo) + ' out of range');
+      if Mo < 1 then
+        Mo := 1
+      else
+        Mo := 12;
+    end;
     V := Obj.GetProperty('day');
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       ThrowTypeError('Temporal.PlainDate.from requires year, month, day properties');
     Dy := Trunc(V.ToNumberLiteral.Value);
+    if Dy < 1 then
+    begin
+      if Overflow = toReject then
+        ThrowRangeError('Day ' + IntToStr(Dy) + ' out of range');
+      Dy := 1;
+    end;
 
     MaxDay := DaysInMonth(Y, Mo);
     if Dy > MaxDay then
@@ -1018,6 +1033,8 @@ begin
       else
         M := 0;
     end;
+    if (M < 1) or (M > 12) then
+      ThrowTypeError('Temporal.PlainMonthDay.from requires a valid month property');
     Result := TGocciaTemporalPlainMonthDayValue.Create(M, D);
   end
   else
@@ -1160,12 +1177,36 @@ var
   Z1, Z2: TGocciaTemporalZonedDateTimeValue;
 
   function CoerceZDT(const AArg: TGocciaValue): TGocciaTemporalZonedDateTimeValue;
+  var
+    CoerceDateRec: TTemporalDateRecord;
+    CoerceTimeRec: TTemporalTimeRecord;
+    CoerceOffsetSeconds: Integer;
+    CoerceTZ: string;
+    CoerceEpochMs: Int64;
+    CoerceSubMs: Integer;
   begin
     if AArg is TGocciaTemporalZonedDateTimeValue then
       Result := TGocciaTemporalZonedDateTimeValue(AArg)
+    else if AArg is TGocciaStringLiteralValue then
+    begin
+      if not TryParseISODateTimeWithOffset(TGocciaStringLiteralValue(AArg).Value,
+          CoerceDateRec, CoerceTimeRec, CoerceOffsetSeconds, CoerceTZ) then
+        ThrowRangeError('Invalid ISO zoned date-time string');
+
+      CoerceEpochMs := DateToEpochDays(CoerceDateRec.Year, CoerceDateRec.Month, CoerceDateRec.Day) * Int64(86400000) +
+                       Int64(CoerceTimeRec.Hour) * 3600000 + Int64(CoerceTimeRec.Minute) * 60000 +
+                       Int64(CoerceTimeRec.Second) * 1000 + CoerceTimeRec.Millisecond;
+      CoerceSubMs := CoerceTimeRec.Microsecond * 1000 + CoerceTimeRec.Nanosecond;
+      CoerceEpochMs := CoerceEpochMs - Int64(CoerceOffsetSeconds) * 1000;
+
+      if CoerceTZ = '' then
+        ThrowRangeError('Temporal.ZonedDateTime.compare requires a timezone annotation (e.g., [UTC])');
+
+      Result := TGocciaTemporalZonedDateTimeValue.Create(CoerceEpochMs, CoerceSubMs, CoerceTZ);
+    end
     else
     begin
-      ThrowTypeError('Temporal.ZonedDateTime.compare requires ZonedDateTime arguments');
+      ThrowTypeError('Temporal.ZonedDateTime.compare requires ZonedDateTime or string arguments');
       Result := nil;
     end;
   end;

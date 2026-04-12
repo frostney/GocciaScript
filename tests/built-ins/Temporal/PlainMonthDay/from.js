@@ -30,4 +30,8 @@ describe.runIf(isTemporal)("Temporal.PlainMonthDay.from", () => {
     expect(md.monthCode).toBe("M07");
     expect(md.day).toBe(4);
   });
+
+  test("from throws on missing month", () => {
+    expect(() => Temporal.PlainMonthDay.from({ day: 15 })).toThrow();
+  });
 });

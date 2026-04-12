@@ -13,4 +13,9 @@ describe.runIf(isTemporal)("Temporal.PlainMonthDay.prototype.equals", () => {
     expect(a.equals(b)).toBe(true);
     expect(a.equals(c)).toBe(false);
   });
+
+  test("equals accepts object with numeric month", () => {
+    const md = new Temporal.PlainMonthDay(7, 16);
+    expect(md.equals({ month: 7, day: 16 })).toBe(true);
+  });
 });

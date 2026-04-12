@@ -30,4 +30,15 @@ describe.runIf(isTemporal)("Temporal.PlainDate.from", () => {
       Temporal.PlainDate.from({ year: 2024, month: 2, day: 30 }, { overflow: "reject" });
     }).toThrow(RangeError);
   });
+
+  test("from with overflow constrain clamps month", () => {
+    const d = Temporal.PlainDate.from({ year: 2024, month: 13, day: 15 }, { overflow: "constrain" });
+    expect(d.month).toBe(12);
+    expect(d.day).toBe(15);
+  });
+
+  test("from with overflow constrain clamps day to 1", () => {
+    const d = Temporal.PlainDate.from({ year: 2024, month: 3, day: 0 }, { overflow: "constrain" });
+    expect(d.day).toBe(1);
+  });
 });

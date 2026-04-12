@@ -71,7 +71,7 @@ var
   DashPos: Integer;
   MonthPart, DayPart: Integer;
   Obj: TGocciaObjectValue;
-  VMonthCode, VDay: TGocciaValue;
+  V, VMonthCode, VDay: TGocciaValue;
   MonthCodeStr: string;
 begin
   if AValue is TGocciaTemporalPlainMonthDayValue then
@@ -94,17 +94,26 @@ begin
   else if AValue is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(AValue);
-    VMonthCode := Obj.GetProperty('monthCode');
-    if (VMonthCode = nil) or (VMonthCode is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError(AMethod + ' requires monthCode and day properties');
     VDay := Obj.GetProperty('day');
     if (VDay = nil) or (VDay is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError(AMethod + ' requires monthCode and day properties');
-    MonthCodeStr := VMonthCode.ToStringLiteral.Value;
-    if (Length(MonthCodeStr) < 2) or (MonthCodeStr[1] <> 'M') then
-      ThrowTypeError('Invalid monthCode for ' + AMethod);
-    if not TryStrToInt(Copy(MonthCodeStr, 2, Length(MonthCodeStr) - 1), MonthPart) then
-      ThrowTypeError('Invalid monthCode for ' + AMethod);
+      ThrowTypeError(AMethod + ' requires day property');
+    VMonthCode := Obj.GetProperty('monthCode');
+    if Assigned(VMonthCode) and not (VMonthCode is TGocciaUndefinedLiteralValue) then
+    begin
+      MonthCodeStr := VMonthCode.ToStringLiteral.Value;
+      if (Length(MonthCodeStr) < 2) or (MonthCodeStr[1] <> 'M') then
+        ThrowTypeError('Invalid monthCode for ' + AMethod);
+      if not TryStrToInt(Copy(MonthCodeStr, 2, Length(MonthCodeStr) - 1), MonthPart) then
+        ThrowTypeError('Invalid monthCode for ' + AMethod);
+    end
+    else
+    begin
+      V := Obj.GetProperty('month');
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+        MonthPart := Trunc(V.ToNumberLiteral.Value)
+      else
+        ThrowTypeError(AMethod + ' requires monthCode or month property');
+    end;
     Result := TGocciaTemporalPlainMonthDayValue.Create(
       MonthPart, Trunc(VDay.ToNumberLiteral.Value));
   end
@@ -233,6 +242,12 @@ begin
       ThrowTypeError('Invalid monthCode in PlainMonthDay.prototype.with');
     if not TryStrToInt(Copy(MonthCodeStr, 2, Length(MonthCodeStr) - 1), NewMonth) then
       ThrowTypeError('Invalid monthCode in PlainMonthDay.prototype.with');
+  end
+  else
+  begin
+    V := Obj.GetProperty('month');
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+      NewMonth := Trunc(V.ToNumberLiteral.Value);
   end;
 
   NewDay := GetDayFieldOr(MD.FDay);

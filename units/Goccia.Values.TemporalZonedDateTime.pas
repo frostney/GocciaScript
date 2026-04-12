@@ -269,7 +269,9 @@ constructor TGocciaTemporalZonedDateTimeValue.Create(const AEpochMilliseconds: I
 begin
   inherited Create(nil);
   if ATimeZone = '' then
-    ThrowTypeError('ZonedDateTime requires a timezone');
+    ThrowRangeError('ZonedDateTime requires a timezone');
+  if not IsValidTimeZone(ATimeZone) then
+    ThrowRangeError('Unknown timezone: ' + ATimeZone);
 
   FEpochMilliseconds := AEpochMilliseconds;
   FSubMillisecondNanoseconds := ASubMillisecondNanoseconds;
@@ -895,6 +897,7 @@ var
   DateRec: TTemporalDateRecord;
   NewEpochMs: Int64;
   NewSubMs: Integer;
+  StartEpochMs, NextEpochMs, DayNs: Int64;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.round');
   Arg := AArgs.GetElement(0);
@@ -938,15 +941,23 @@ begin
 
   if UnitStr = 'day' then
   begin
+    // Compute actual day length in nanoseconds (DST-aware)
+    StartEpochMs := LocalToEpochMs(LYear, LMonth, LDay, 0, 0, 0, 0, Zdt.FTimeZone);
+    DateRec := AddDaysToDate(LYear, LMonth, LDay, 1);
+    NextEpochMs := LocalToEpochMs(DateRec.Year, DateRec.Month, DateRec.Day, 0, 0, 0, 0, Zdt.FTimeZone);
+    DayNs := (NextEpochMs - StartEpochMs) * NANOSECONDS_PER_MILLISECOND;
+    if DayNs <= 0 then
+      DayNs := NANOSECONDS_PER_DAY;  // Fallback for edge cases
+
     TotalNs := Int64(LHour) * NANOSECONDS_PER_HOUR +
                Int64(LMinute) * NANOSECONDS_PER_MINUTE +
                Int64(LSecond) * NANOSECONDS_PER_SECOND +
                Int64(LMs) * NANOSECONDS_PER_MILLISECOND +
                Int64(LUs) * NANOSECONDS_PER_MICROSECOND +
                LNs;
-    Divisor := NANOSECONDS_PER_DAY * Increment;
+    Divisor := DayNs * Increment;
     Rounded := RoundWithMode(TotalNs, Divisor, Mode);
-    ExtraDays := Rounded div NANOSECONDS_PER_DAY;
+    ExtraDays := Rounded div DayNs;
     if ExtraDays > 0 then
       DateRec := AddDaysToDate(LYear, LMonth, LDay, ExtraDays)
     else

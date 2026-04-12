@@ -563,7 +563,10 @@ begin
   // Round to smallestUnit
   if SmallestUnit <> tuNanosecond then
   begin
-    Divisor := UnitToNanoseconds(SmallestUnit) * Increment;
+    if SmallestUnit = tuWeek then
+      Divisor := NANOSECONDS_PER_DAY * 7 * Increment
+    else
+      Divisor := UnitToNanoseconds(SmallestUnit) * Increment;
     TotalNs := RoundWithMode(TotalNs, Divisor, Mode);
   end;
 

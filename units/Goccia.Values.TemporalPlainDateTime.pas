@@ -802,6 +802,9 @@ begin
     TimeZoneStr := '';
   end;
 
+  if not IsValidTimeZone(TimeZoneStr) then
+    ThrowRangeError('PlainDateTime.prototype.toZonedDateTime: unknown timezone ' + TimeZoneStr);
+
   // Compute epoch ms from local components
   EpochMs := DateToEpochDays(D.FYear, D.FMonth, D.FDay) * Int64(86400000) +
              Int64(D.FHour) * 3600000 + Int64(D.FMinute) * 60000 +

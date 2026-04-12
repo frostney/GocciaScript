@@ -13,4 +13,12 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime.compare", () => {
     expect(Temporal.ZonedDateTime.compare(b, a)).toBe(1);
     expect(Temporal.ZonedDateTime.compare(a, a)).toBe(0);
   });
+
+  test("compare accepts ISO strings", () => {
+    const result = Temporal.ZonedDateTime.compare(
+      "2024-03-15T12:00:00+00:00[UTC]",
+      "2024-03-15T13:00:00+00:00[UTC]"
+    );
+    expect(result).toBe(-1);
+  });
 });

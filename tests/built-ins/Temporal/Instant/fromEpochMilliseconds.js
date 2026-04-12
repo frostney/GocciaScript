@@ -20,4 +20,9 @@ describe.runIf(isTemporal)("Temporal.Instant.fromEpochMilliseconds", () => {
     const instant = Temporal.Instant.fromEpochMilliseconds(-86400000);
     expect(instant.epochMilliseconds).toBe(-86400000);
   });
+
+  test("epochNanoseconds getter", () => {
+    const instant = Temporal.Instant.fromEpochMilliseconds(5000);
+    expect(instant.epochNanoseconds).toBe(5000000000);
+  });
 });

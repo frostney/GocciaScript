@@ -25,4 +25,11 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.round", () => {
     const rounded = d.round({ smallestUnit: "hour", roundingMode: "floor" });
     expect(rounded.hours).toBe(1);
   });
+
+  test("round with smallestUnit week", () => {
+    const d = Temporal.Duration.from({ days: 10 });
+    const rounded = d.round({ smallestUnit: "week", roundingMode: "trunc" });
+    expect(rounded.weeks).toBe(1);
+    expect(rounded.days).toBe(0);
+  });
 });
