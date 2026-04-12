@@ -51,6 +51,10 @@ type
     function StructuredCloneCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function BtoaCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function AtobCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function EncodeURICallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DecodeURICallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function EncodeURIComponentCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DecodeURIComponentCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
@@ -68,6 +72,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
+  Goccia.URI,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -185,6 +190,18 @@ begin
 
   AScope.DefineLexicalBinding('atob',
     TGocciaNativeFunctionValue.Create(AtobCallback, 'atob', 1), dtConst);
+
+  AScope.DefineLexicalBinding('encodeURI',
+    TGocciaNativeFunctionValue.Create(EncodeURICallback, 'encodeURI', 1), dtConst);
+
+  AScope.DefineLexicalBinding('decodeURI',
+    TGocciaNativeFunctionValue.Create(DecodeURICallback, 'decodeURI', 1), dtConst);
+
+  AScope.DefineLexicalBinding('encodeURIComponent',
+    TGocciaNativeFunctionValue.Create(EncodeURIComponentCallback, 'encodeURIComponent', 1), dtConst);
+
+  AScope.DefineLexicalBinding('decodeURIComponent',
+    TGocciaNativeFunctionValue.Create(DecodeURIComponentCallback, 'decodeURIComponent', 1), dtConst);
 end;
 
 { NativeError ( message [ , options ] ) — §20.5.6.1.1 (shared by all NativeError constructors)
@@ -801,6 +818,74 @@ begin
   SetLength(ResultStr, ResultLen);
 
   Result := TGocciaStringLiteralValue.Create(ResultStr);
+end;
+
+// ES2026 §19.2.6.2 encodeURI(uriString)
+function TGocciaGlobals.EncodeURICallback(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  URIString: string;
+begin
+  // Step 1: Let uriString be ? ToString(uriString)
+  if AArgs.Length = 0 then
+    URIString := 'undefined'
+  else
+    URIString := AArgs.GetElement(0).ToStringLiteral.Value;
+
+  // Step 2: Let unescapedURISet be uriReserved + uriUnescaped + "#"
+  // Step 3: Return ? Encode(uriString, unescapedURISet)
+  Result := TGocciaStringLiteralValue.Create(EncodeURI(URIString));
+end;
+
+// ES2026 §19.2.6.3 decodeURI(encodedURI)
+function TGocciaGlobals.DecodeURICallback(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  EncodedURI: string;
+begin
+  // Step 1: Let encodedURI be ? ToString(encodedURI)
+  if AArgs.Length = 0 then
+    EncodedURI := 'undefined'
+  else
+    EncodedURI := AArgs.GetElement(0).ToStringLiteral.Value;
+
+  // Step 2: Let reservedURISet be uriReserved + "#"
+  // Step 3: Return ? Decode(encodedURI, reservedURISet)
+  Result := TGocciaStringLiteralValue.Create(DecodeURI(EncodedURI));
+end;
+
+// ES2026 §19.2.6.4 encodeURIComponent(uriComponent)
+function TGocciaGlobals.EncodeURIComponentCallback(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ComponentString: string;
+begin
+  // Step 1: Let componentString be ? ToString(uriComponent)
+  if AArgs.Length = 0 then
+    ComponentString := 'undefined'
+  else
+    ComponentString := AArgs.GetElement(0).ToStringLiteral.Value;
+
+  // Step 2: Let unescapedURIComponentSet be uriUnescaped
+  // Step 3: Return ? Encode(componentString, unescapedURIComponentSet)
+  Result := TGocciaStringLiteralValue.Create(EncodeURIComponent(ComponentString));
+end;
+
+// ES2026 §19.2.6.5 decodeURIComponent(encodedURIComponent)
+function TGocciaGlobals.DecodeURIComponentCallback(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ComponentString: string;
+begin
+  // Step 1: Let componentString be ? ToString(encodedURIComponent)
+  if AArgs.Length = 0 then
+    ComponentString := 'undefined'
+  else
+    ComponentString := AArgs.GetElement(0).ToStringLiteral.Value;
+
+  // Step 2: Let reservedURIComponentSet be the empty String
+  // Step 3: Return ? Decode(componentString, reservedURIComponentSet)
+  Result := TGocciaStringLiteralValue.Create(DecodeURIComponent(ComponentString));
 end;
 
 end.

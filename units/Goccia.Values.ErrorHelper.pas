@@ -29,6 +29,9 @@ procedure ThrowDataCloneError(const AMessage: string);
 { Raises a TGocciaThrowValue with an InvalidCharacterError (DOMException with code 5) }
 procedure ThrowInvalidCharacterError(const AMessage: string);
 
+{ Raises a TGocciaThrowValue with a URIError }
+procedure ThrowURIError(const AMessage: string);
+
 { Raises a TGocciaThrowValue with a generic Error }
 procedure ThrowError(const AMessage: string);
 
@@ -124,6 +127,11 @@ begin
   if Assigned(GDOMExceptionProto) then
     ErrorObj.Prototype := GDOMExceptionProto;
   raise TGocciaThrowValue.Create(ErrorObj);
+end;
+
+procedure ThrowURIError(const AMessage: string);
+begin
+  raise TGocciaThrowValue.Create(CreateErrorObject(URI_ERROR_NAME, AMessage));
 end;
 
 procedure ThrowError(const AMessage: string);

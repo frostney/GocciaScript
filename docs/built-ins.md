@@ -482,6 +482,10 @@ The constructor-backed objects mirror the `node-semver` public fields and core i
 | `structuredClone(value)` | Deep-clone a value using the structured clone algorithm. Handles objects, arrays, `Map`, `Set`, and circular references. Throws `DOMException` with name `"DataCloneError"` (code 25) for non-cloneable types (functions, symbols). |
 | `btoa(data)` | Encode a binary string (each character code ≤ U+00FF) to base64. Throws `DOMException` with name `"InvalidCharacterError"` (code 5) if any character code exceeds U+00FF. |
 | `atob(data)` | Decode a base64 string to a binary string. Uses WHATWG forgiving-base64-decode: strips ASCII whitespace, tolerates missing `=` padding. Throws `DOMException` with name `"InvalidCharacterError"` (code 5) for invalid base64 input. |
+| `encodeURI(uriString)` | Encode a complete URI, preserving reserved characters (`;/?:@&=+$,#`) and unreserved characters. Multi-byte characters are UTF-8 encoded. Throws `URIError` for lone surrogates. |
+| `decodeURI(encodedURI)` | Decode a percent-encoded URI. Does **not** decode reserved characters (`%3B`, `%2F`, etc.). Throws `URIError` for malformed percent sequences or invalid UTF-8. |
+| `encodeURIComponent(uriComponent)` | Encode a URI component. Only unreserved characters (`A-Z a-z 0-9 - _ . ! ~ * ' ( )`) are preserved. Throws `URIError` for lone surrogates. |
+| `decodeURIComponent(encodedURIComponent)` | Decode a percent-encoded URI component. Decodes all percent sequences including reserved characters. Throws `URIError` for malformed percent sequences or invalid UTF-8. |
 
 `queueMicrotask` shares the same microtask queue used by Promise reactions. Callbacks run after the current synchronous code completes but before the engine returns control. If a callback throws, the error is silently discarded and remaining microtasks still execute.
 
@@ -490,6 +494,8 @@ The constructor-backed objects mirror the `node-semver` public fields and core i
 `btoa` encodes a string to base64 following the WHATWG HTML spec §8.3. Each character in the input must have a code point ≤ U+00FF (Latin-1 range); characters outside this range throw a `DOMException` with name `"InvalidCharacterError"` and legacy code 5. The input is interpreted as a byte sequence where each code point maps 1:1 to a byte value.
 
 `atob` decodes a base64 string following the WHATWG forgiving-base64-decode algorithm. ASCII whitespace (U+0009, U+000A, U+000C, U+000D, U+0020) is stripped before decoding. Missing `=` padding is tolerated. Invalid characters or an invalid length (length mod 4 = 1 after cleanup) throw a `DOMException` with name `"InvalidCharacterError"` and legacy code 5. The decoded bytes are returned as a string where each byte becomes a character (Latin-1 interpretation).
+
+`encodeURI` / `decodeURI` / `encodeURIComponent` / `decodeURIComponent` implement ES2026 §19.2.6. The shared encoding/decoding logic lives in `Goccia.URI.pas` and is also used by `import.meta.url` for file-path percent-encoding. Multi-byte Unicode characters are encoded as UTF-8 octets, each percent-encoded individually (e.g., `encodeURIComponent("中")` → `%E4%B8%AD`). Lone surrogates (U+D800–U+DFFF) throw `URIError`. Decoding validates UTF-8 well-formedness: overlong encodings, truncated sequences, and code points above U+10FFFF all throw `URIError`. `decodeURI` re-emits reserved characters as uppercase percent-encoded sequences even when the input uses lowercase hex digits (e.g., `%2f` → `%2F`).
 
 **Error constructors:** `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `DOMException`
 
@@ -737,12 +743,15 @@ An implementation of the ECMAScript Temporal API (Stage 3 proposal) providing mo
 **Namespace structure:**
 
 ```javascript
-Temporal.Now          // Current time utilities
-Temporal.Duration     // Time duration representation
-Temporal.Instant      // Absolute point in time (epoch-based)
-Temporal.PlainDate    // Calendar date (no time/timezone)
-Temporal.PlainTime    // Wall-clock time (no date/timezone)
+Temporal.Now           // Current time utilities
+Temporal.Duration      // Time duration representation
+Temporal.Instant       // Absolute point in time (epoch-based)
+Temporal.PlainDate     // Calendar date (no time/timezone)
+Temporal.PlainTime     // Wall-clock time (no date/timezone)
 Temporal.PlainDateTime // Date + time (no timezone)
+Temporal.PlainYearMonth // Year and month (no day/time/timezone)
+Temporal.PlainMonthDay  // Month and day (no year/time/timezone)
+Temporal.ZonedDateTime  // Date + time + timezone
 ```
 
 #### Temporal.Duration
@@ -771,6 +780,7 @@ Represents a length of time with 10 components (years through nanoseconds).
 | `subtract(other)` | Subtract another duration |
 | `with(fields)` | Return new duration with overridden fields |
 | `total(unit)` | Convert to total of a single unit (e.g., `"hours"`). Accepts a string or options object `{ unit, relativeTo? }`. Throws `RangeError` if duration has non-zero years/months without `relativeTo`. Calendar-relative conversion (`relativeTo`) is not yet supported. |
+| `round(options)` | Round the duration. Accepts a string (smallestUnit) or options object `{ smallestUnit, largestUnit, roundingMode, roundingIncrement }`. Rebalances components from `largestUnit` down. Throws `RangeError` if duration has years/months (requires `relativeTo`, not yet supported). At least `smallestUnit` or `largestUnit` must be specified. |
 | `toString()` / `toJSON()` | ISO 8601 duration string (e.g., `"P1Y2M3DT4H5M6S"`) |
 | `valueOf()` | Throws TypeError (prevents implicit coercion) |
 
@@ -781,7 +791,7 @@ Represents a calendar date without time or timezone.
 | Constructor / Static | Description |
 |---------------------|-------------|
 | `new Temporal.PlainDate(year, month, day)` | Create from components |
-| `Temporal.PlainDate.from(item)` | Create from string (`"2024-03-15"`), PlainDate, or object |
+| `Temporal.PlainDate.from(item [, options])` | Create from string (`"2024-03-15"`), PlainDate, or object. Options: `{ overflow }` where overflow is `"constrain"` (default, clamps out-of-range values) or `"reject"` (throws RangeError). |
 | `Temporal.PlainDate.compare(one, two)` | Compare two dates (-1, 0, 1) |
 
 | Getter | Description |
@@ -801,6 +811,9 @@ Represents a calendar date without time or timezone.
 | `until(other)` / `since(other)` | Difference as Duration |
 | `equals(other)` | Equality check |
 | `toPlainDateTime(time?)` | Combine with a time |
+| `toPlainYearMonth()` | Extract year and month as PlainYearMonth |
+| `toPlainMonthDay()` | Extract month and day as PlainMonthDay |
+| `toZonedDateTime(timeZone)` | Combine with a timezone (string or `{ timeZone }` object) to create a ZonedDateTime at midnight |
 | `toString()` / `toJSON()` | ISO date string (e.g., `"2024-03-15"`) |
 | `valueOf()` | Throws TypeError |
 
@@ -824,9 +837,9 @@ Represents a wall-clock time without date or timezone.
 | `with(fields)` | Return new time with overridden fields |
 | `add(duration)` / `subtract(duration)` | Time arithmetic (wraps at midnight) |
 | `until(other)` / `since(other)` | Difference as Duration |
-| `round(unit)` | Round to nearest unit |
+| `round(options)` | Round to nearest unit. Accepts a string (smallestUnit) or options object `{ smallestUnit, roundingMode, roundingIncrement }`. |
 | `equals(other)` | Equality check |
-| `toString()` / `toJSON()` | ISO time string (e.g., `"13:45:30"`) |
+| `toString([options])` / `toJSON()` | ISO time string (e.g., `"13:45:30"`). `toString` accepts `{ fractionalSecondDigits }` (0-9 or `"auto"`). |
 | `valueOf()` | Throws TypeError |
 
 #### Temporal.PlainDateTime
@@ -849,10 +862,13 @@ Represents a date and time without timezone. Combines PlainDate and PlainTime.
 | `withPlainTime(time?)` | Replace time component |
 | `add(duration)` / `subtract(duration)` | Date-time arithmetic |
 | `until(other)` / `since(other)` | Difference as Duration |
-| `round(unit)` | Round to nearest unit |
+| `round(options)` | Round to nearest unit. Accepts a string (smallestUnit) or options object `{ smallestUnit, roundingMode, roundingIncrement }`. |
 | `equals(other)` | Equality check |
 | `toPlainDate()` / `toPlainTime()` | Extract date or time component |
-| `toString()` / `toJSON()` | ISO string (e.g., `"2024-03-15T13:45:30"`) |
+| `toPlainYearMonth()` | Extract year and month as PlainYearMonth |
+| `toPlainMonthDay()` | Extract month and day as PlainMonthDay |
+| `toZonedDateTime(timeZone)` | Combine with a timezone (string or `{ timeZone }` object) to create a ZonedDateTime |
+| `toString([options])` / `toJSON()` | ISO string (e.g., `"2024-03-15T13:45:30"`). `toString` accepts `{ fractionalSecondDigits }` (0-9 or `"auto"`). |
 | `valueOf()` | Throws TypeError |
 
 #### Temporal.Instant
@@ -876,9 +892,104 @@ Represents an absolute point in time (epoch-based), independent of calendar or t
 |--------|-------------|
 | `add(duration)` / `subtract(duration)` | Time arithmetic (no calendar units) |
 | `until(other)` / `since(other)` | Difference as Duration |
-| `round(unit)` | Round to nearest unit |
+| `round(options)` | Round to nearest unit. Accepts a string (smallestUnit) or options object `{ smallestUnit, roundingMode, roundingIncrement }`. |
 | `equals(other)` | Equality check |
-| `toString()` / `toJSON()` | ISO string with UTC (e.g., `"2024-03-15T13:45:30Z"`) |
+| `toString([options])` / `toJSON()` | ISO string with UTC (e.g., `"2024-03-15T13:45:30Z"`). `toString` accepts `{ fractionalSecondDigits }` (0-9 or `"auto"`). |
+| `valueOf()` | Throws TypeError |
+
+#### Temporal.PlainYearMonth
+
+Represents a year and month without a day, time, or timezone.
+
+| Constructor / Static | Description |
+|---------------------|-------------|
+| `new Temporal.PlainYearMonth(year, month)` | Create from components |
+| `Temporal.PlainYearMonth.from(item)` | Create from string (`"2024-03"`), PlainYearMonth, or object |
+| `Temporal.PlainYearMonth.compare(one, two)` | Compare two year-months (-1, 0, 1) |
+
+| Getter | Description |
+|--------|-------------|
+| `calendarId` | Always `"iso8601"` |
+| `year`, `month` | Date components |
+| `monthCode` | `"M01"` through `"M12"` |
+| `daysInMonth`, `daysInYear`, `monthsInYear` | Calendar info |
+| `inLeapYear` | Boolean |
+
+| Method | Description |
+|--------|-------------|
+| `with(fields)` | Return new year-month with overridden fields |
+| `add(duration)` / `subtract(duration)` | Year-month arithmetic (years and months only) |
+| `until(other)` / `since(other)` | Difference as Duration (years and months) |
+| `equals(other)` | Equality check |
+| `toPlainDate(item)` | Combine with a day (`{ day }`) to create a PlainDate |
+| `toString()` / `toJSON()` | ISO string (e.g., `"2024-03"`) |
+| `valueOf()` | Throws TypeError |
+
+#### Temporal.PlainMonthDay
+
+Represents a month and day without a year, time, or timezone. Uses a reference year (1972) for validation.
+
+| Constructor / Static | Description |
+|---------------------|-------------|
+| `new Temporal.PlainMonthDay(month, day)` | Create from components |
+| `Temporal.PlainMonthDay.from(item)` | Create from string (`"12-25"`), PlainMonthDay, or object with `{ monthCode, day }` |
+| `Temporal.PlainMonthDay.compare(one, two)` | Compare two month-days (-1, 0, 1) |
+
+| Getter | Description |
+|--------|-------------|
+| `calendarId` | Always `"iso8601"` |
+| `monthCode` | `"M01"` through `"M12"` |
+| `day` | Day of month |
+
+| Method | Description |
+|--------|-------------|
+| `with(fields)` | Return new month-day with overridden fields (accepts `monthCode` and `day`) |
+| `equals(other)` | Equality check |
+| `toPlainDate(item)` | Combine with a year (`{ year }`) to create a PlainDate |
+| `toString()` / `toJSON()` | Month-day string (e.g., `"12-25"`) |
+| `valueOf()` | Throws TypeError |
+
+#### Temporal.ZonedDateTime
+
+Represents an absolute date and time in a specific timezone. Combines an instant (epoch-based) with a timezone identifier for wall-clock interpretation.
+
+| Constructor / Static | Description |
+|---------------------|-------------|
+| `new Temporal.ZonedDateTime(epochNanoseconds, timeZone)` | Create from epoch nanoseconds and timezone ID |
+| `Temporal.ZonedDateTime.from(item)` | Create from ISO string with timezone annotation (e.g., `"2024-03-15T13:45:30+05:30[Asia/Kolkata]"`), ZonedDateTime, or object |
+| `Temporal.ZonedDateTime.compare(one, two)` | Compare two zoned date-times (-1, 0, 1) |
+
+| Getter | Description |
+|--------|-------------|
+| `calendarId` | Always `"iso8601"` |
+| `timeZoneId` | IANA timezone identifier (e.g., `"America/New_York"`) |
+| `year`, `month`, `monthCode`, `day` | Date components (wall-clock, timezone-adjusted) |
+| `dayOfWeek`, `dayOfYear`, `weekOfYear`, `yearOfWeek` | ISO week-date components |
+| `daysInWeek`, `daysInMonth`, `daysInYear`, `monthsInYear` | Calendar info |
+| `inLeapYear` | Boolean |
+| `hoursInDay` | Hours in the wall-clock day (accounts for DST transitions) |
+| `hour`, `minute`, `second` | Time components |
+| `millisecond`, `microsecond`, `nanosecond` | Sub-second components |
+| `offset` | UTC offset string (e.g., `"+05:30"`) |
+| `offsetNanoseconds` | UTC offset in nanoseconds |
+| `epochMilliseconds` | Milliseconds since Unix epoch |
+| `epochNanoseconds` | Nanoseconds since Unix epoch (as number) |
+
+| Method | Description |
+|--------|-------------|
+| `with(fields)` | Return new ZonedDateTime with overridden fields |
+| `withPlainDate(date)` | Replace date component |
+| `withPlainTime(time?)` | Replace time component |
+| `withTimeZone(timeZone)` | Re-interpret the same instant in a different timezone |
+| `add(duration)` / `subtract(duration)` | Date-time arithmetic |
+| `until(other)` / `since(other)` | Difference as Duration |
+| `round(options)` | Round to nearest unit. Accepts a string (smallestUnit) or options object `{ smallestUnit, roundingMode, roundingIncrement }`. |
+| `equals(other)` | Equality check |
+| `startOfDay()` | Return ZonedDateTime at the start of the wall-clock day |
+| `toInstant()` | Extract the underlying Instant |
+| `toPlainDate()` / `toPlainTime()` | Extract date or time component |
+| `toPlainDateTime()` | Extract date-time without timezone |
+| `toString([options])` / `toJSON()` | ISO string with offset and timezone annotation (e.g., `"2024-03-15T13:45:30+05:30[Asia/Kolkata]"`). `toString` accepts `{ fractionalSecondDigits }` (0-9 or `"auto"`). |
 | `valueOf()` | Throws TypeError |
 
 #### Temporal.Now
@@ -887,7 +998,9 @@ Provides current time in various representations.
 
 | Method | Description |
 |--------|-------------|
+| `Temporal.Now.timeZoneId()` | System timezone identifier (e.g., `"America/New_York"`) |
 | `Temporal.Now.instant()` | Current time as Instant |
+| `Temporal.Now.zonedDateTimeISO([timeZone])` | Current date-time as ZonedDateTime in the given timezone (defaults to system timezone) |
 | `Temporal.Now.plainDateISO()` | Current date as PlainDate |
 | `Temporal.Now.plainTimeISO()` | Current time as PlainTime |
 | `Temporal.Now.plainDateTimeISO()` | Current date-time as PlainDateTime |

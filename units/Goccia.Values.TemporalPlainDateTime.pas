@@ -61,6 +61,9 @@ type
     function DateTimeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DateTimeToPlainDate(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DateTimeToPlainTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DateTimeToPlainYearMonth(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DateTimeToPlainMonthDay(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DateTimeToZonedDateTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure InitializePrototype;
   public
@@ -84,12 +87,17 @@ type
 implementation
 
 uses
+  Goccia.Temporal.Options,
+  Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.TemporalDuration,
   Goccia.Values.TemporalPlainDate,
-  Goccia.Values.TemporalPlainTime;
+  Goccia.Values.TemporalPlainMonthDay,
+  Goccia.Values.TemporalPlainTime,
+  Goccia.Values.TemporalPlainYearMonth,
+  Goccia.Values.TemporalZonedDateTime;
 
 function AsPlainDateTime(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainDateTimeValue;
 begin
@@ -221,6 +229,9 @@ begin
       Members.AddMethod(DateTimeValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(DateTimeToPlainDate, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(DateTimeToPlainTime, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DateTimeToPlainYearMonth, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DateTimeToPlainMonthDay, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DateTimeToZonedDateTime, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       FPrototypeMembers := Members.ToDefinitions;
     finally
       Members.Free;
@@ -630,60 +641,58 @@ var
   D: TGocciaTemporalPlainDateTimeValue;
   UnitStr: string;
   Arg: TGocciaValue;
+  OptionsObj: TGocciaObjectValue;
   TotalNs, Divisor, Rounded, ExtraDays: Int64;
   Balanced: TTemporalTimeRecord;
   DateRec: TTemporalDateRecord;
+  SmallestUnit: TTemporalUnit;
+  Mode: TTemporalRoundingMode;
+  Increment: Integer;
 begin
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.round');
   Arg := AArgs.GetElement(0);
 
+  Mode := rmHalfExpand;
+  Increment := 1;
+
   if Arg is TGocciaStringLiteralValue then
-    UnitStr := TGocciaStringLiteralValue(Arg).Value
+  begin
+    UnitStr := TGocciaStringLiteralValue(Arg).Value;
+    if not GetTemporalUnitFromString(UnitStr, SmallestUnit) then
+      ThrowRangeError('Invalid unit for PlainDateTime.prototype.round: ' + UnitStr);
+  end
   else if Arg is TGocciaObjectValue then
   begin
-    Arg := TGocciaObjectValue(Arg).GetProperty('smallestUnit');
-    if (Arg = nil) or (Arg is TGocciaUndefinedLiteralValue) then
+    OptionsObj := TGocciaObjectValue(Arg);
+    SmallestUnit := GetSmallestUnit(OptionsObj, tuNone);
+    if SmallestUnit = tuNone then
       ThrowRangeError('round() requires a smallestUnit option');
-    UnitStr := Arg.ToStringLiteral.Value;
+    Mode := GetRoundingMode(OptionsObj, rmHalfExpand);
+    Increment := GetRoundingIncrement(OptionsObj, 1);
   end
   else
   begin
     ThrowTypeError('PlainDateTime.prototype.round requires a string or options object');
-    UnitStr := '';
+    SmallestUnit := tuNanosecond;
   end;
 
   TotalNs := Int64(D.FNanosecond) + Int64(D.FMicrosecond) * 1000 + Int64(D.FMillisecond) * 1000000 +
              Int64(D.FSecond) * Int64(1000000000) + Int64(D.FMinute) * Int64(60000000000) +
              Int64(D.FHour) * Int64(3600000000000);
 
-  if UnitStr = 'day' then
+  if SmallestUnit = tuDay then
   begin
-    // Round to nearest day
-    if TotalNs >= Int64(43200000000000) then
-      DateRec := AddDaysToDate(D.FYear, D.FMonth, D.FDay, 1)
-    else
-    begin
-      DateRec.Year := D.FYear;
-      DateRec.Month := D.FMonth;
-      DateRec.Day := D.FDay;
-    end;
+    // Round to nearest day using the specified rounding mode and increment
+    Divisor := NANOSECONDS_PER_DAY * Increment;
+    Rounded := RoundWithMode(TotalNs, Divisor, Mode);
+    ExtraDays := Rounded div NANOSECONDS_PER_DAY;
+    DateRec := AddDaysToDate(D.FYear, D.FMonth, D.FDay, ExtraDays);
     Result := TGocciaTemporalPlainDateTimeValue.Create(DateRec.Year, DateRec.Month, DateRec.Day, 0, 0, 0, 0, 0, 0);
     Exit;
   end;
 
-  if UnitStr = 'hour' then Divisor := Int64(3600000000000)
-  else if UnitStr = 'minute' then Divisor := Int64(60000000000)
-  else if UnitStr = 'second' then Divisor := Int64(1000000000)
-  else if UnitStr = 'millisecond' then Divisor := 1000000
-  else if UnitStr = 'microsecond' then Divisor := 1000
-  else if UnitStr = 'nanosecond' then Divisor := 1
-  else
-  begin
-    ThrowRangeError('Invalid unit for PlainDateTime.prototype.round: ' + UnitStr);
-    Divisor := 1;
-  end;
-
-  Rounded := ((TotalNs + (Divisor div 2)) div Divisor) * Divisor;
+  Divisor := UnitToNanoseconds(SmallestUnit) * Increment;
+  Rounded := RoundWithMode(TotalNs, Divisor, Mode);
   Balanced := BalanceTime(0, 0, 0, 0, 0, Rounded, ExtraDays);
   DateRec := AddDaysToDate(D.FYear, D.FMonth, D.FDay, ExtraDays);
 
@@ -749,6 +758,63 @@ begin
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.toPlainTime');
   Result := TGocciaTemporalPlainTimeValue.Create(D.FHour, D.FMinute, D.FSecond,
     D.FMillisecond, D.FMicrosecond, D.FNanosecond);
+end;
+
+function TGocciaTemporalPlainDateTimeValue.DateTimeToPlainYearMonth(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  D: TGocciaTemporalPlainDateTimeValue;
+begin
+  D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.toPlainYearMonth');
+  Result := TGocciaTemporalPlainYearMonthValue.Create(D.FYear, D.FMonth, D.FDay);
+end;
+
+function TGocciaTemporalPlainDateTimeValue.DateTimeToPlainMonthDay(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  D: TGocciaTemporalPlainDateTimeValue;
+begin
+  D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.toPlainMonthDay');
+  Result := TGocciaTemporalPlainMonthDayValue.Create(D.FMonth, D.FDay, D.FYear);
+end;
+
+function TGocciaTemporalPlainDateTimeValue.DateTimeToZonedDateTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  D: TGocciaTemporalPlainDateTimeValue;
+  Arg: TGocciaValue;
+  TimeZoneStr: string;
+  EpochMs: Int64;
+  OffsetSec: Integer;
+begin
+  D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.toZonedDateTime');
+  Arg := AArgs.GetElement(0);
+
+  if Arg is TGocciaStringLiteralValue then
+    TimeZoneStr := TGocciaStringLiteralValue(Arg).Value
+  else if Arg is TGocciaObjectValue then
+  begin
+    Arg := TGocciaObjectValue(Arg).GetProperty('timeZone');
+    if (Arg = nil) or (Arg is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError('PlainDateTime.prototype.toZonedDateTime requires a timeZone');
+    TimeZoneStr := Arg.ToStringLiteral.Value;
+  end
+  else
+  begin
+    ThrowTypeError('PlainDateTime.prototype.toZonedDateTime requires a timezone string or options object');
+    TimeZoneStr := '';
+  end;
+
+  if not IsValidTimeZone(TimeZoneStr) then
+    ThrowRangeError('PlainDateTime.prototype.toZonedDateTime: unknown timezone ' + TimeZoneStr);
+
+  // Compute epoch ms from local components
+  EpochMs := DateToEpochDays(D.FYear, D.FMonth, D.FDay) * Int64(86400000) +
+             Int64(D.FHour) * 3600000 + Int64(D.FMinute) * 60000 +
+             Int64(D.FSecond) * 1000 + D.FMillisecond;
+  // Adjust for timezone offset
+  OffsetSec := GetUtcOffsetSeconds(TimeZoneStr, EpochMs div 1000);
+  EpochMs := EpochMs - Int64(OffsetSec) * 1000;
+
+  Result := TGocciaTemporalZonedDateTimeValue.Create(EpochMs,
+    D.FMicrosecond * 1000 + D.FNanosecond, TimeZoneStr);
 end;
 
 end.

@@ -60,6 +60,7 @@ type
 implementation
 
 uses
+  Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -426,50 +427,44 @@ var
   T: TGocciaTemporalPlainTimeValue;
   UnitStr: string;
   Arg: TGocciaValue;
+  OptionsObj: TGocciaObjectValue;
   TotalNs, Divisor, Rounded: Int64;
   ExtraDays: Int64;
   Balanced: TTemporalTimeRecord;
+  SmallestUnit: TTemporalUnit;
+  Mode: TTemporalRoundingMode;
+  Increment: Integer;
 begin
   T := AsPlainTime(AThisValue, 'PlainTime.prototype.round');
   Arg := AArgs.GetElement(0);
 
+  Mode := rmHalfExpand;
+  Increment := 1;
+
   if Arg is TGocciaStringLiteralValue then
-    UnitStr := TGocciaStringLiteralValue(Arg).Value
+  begin
+    UnitStr := TGocciaStringLiteralValue(Arg).Value;
+    if not GetTemporalUnitFromString(UnitStr, SmallestUnit) then
+      ThrowRangeError('Invalid unit for PlainTime.prototype.round: ' + UnitStr);
+  end
   else if Arg is TGocciaObjectValue then
   begin
-    Arg := TGocciaObjectValue(Arg).GetProperty('smallestUnit');
-    if (Arg = nil) or (Arg is TGocciaUndefinedLiteralValue) then
+    OptionsObj := TGocciaObjectValue(Arg);
+    SmallestUnit := GetSmallestUnit(OptionsObj, tuNone);
+    if SmallestUnit = tuNone then
       ThrowRangeError('round() requires a smallestUnit option');
-    UnitStr := Arg.ToStringLiteral.Value;
+    Mode := GetRoundingMode(OptionsObj, rmHalfExpand);
+    Increment := GetRoundingIncrement(OptionsObj, 1);
   end
   else
   begin
     ThrowTypeError('PlainTime.prototype.round requires a string or options object');
-    UnitStr := '';
+    SmallestUnit := tuNanosecond;
   end;
 
   TotalNs := TimeToTotalNanoseconds(T);
-
-  if UnitStr = 'hour' then
-    Divisor := Int64(3600000000000)
-  else if UnitStr = 'minute' then
-    Divisor := Int64(60000000000)
-  else if UnitStr = 'second' then
-    Divisor := Int64(1000000000)
-  else if UnitStr = 'millisecond' then
-    Divisor := 1000000
-  else if UnitStr = 'microsecond' then
-    Divisor := 1000
-  else if UnitStr = 'nanosecond' then
-    Divisor := 1
-  else
-  begin
-    ThrowRangeError('Invalid unit for PlainTime.prototype.round: ' + UnitStr);
-    Divisor := 1;
-  end;
-
-  // Half-expand rounding
-  Rounded := ((TotalNs + (Divisor div 2)) div Divisor) * Divisor;
+  Divisor := UnitToNanoseconds(SmallestUnit) * Increment;
+  Rounded := RoundWithMode(TotalNs, Divisor, Mode);
 
   Balanced := BalanceTime(0, 0, 0, 0, 0, Rounded, ExtraDays);
 
@@ -495,10 +490,19 @@ end;
 function TGocciaTemporalPlainTimeValue.TimeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   T: TGocciaTemporalPlainTimeValue;
+  Arg: TGocciaValue;
+  FracDigits: Integer;
 begin
   T := AsPlainTime(AThisValue, 'PlainTime.prototype.toString');
+  Arg := AArgs.GetElement(0);
+  FracDigits := -1; // auto
+
+  if Assigned(Arg) and (Arg is TGocciaObjectValue) then
+    FracDigits := GetFractionalSecondDigits(TGocciaObjectValue(Arg));
+
   Result := TGocciaStringLiteralValue.Create(
-    FormatTimeString(T.FHour, T.FMinute, T.FSecond, T.FMillisecond, T.FMicrosecond, T.FNanosecond));
+    FormatTimeWithPrecision(T.FHour, T.FMinute, T.FSecond,
+      T.FMillisecond, T.FMicrosecond, T.FNanosecond, FracDigits));
 end;
 
 function TGocciaTemporalPlainTimeValue.TimeToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
