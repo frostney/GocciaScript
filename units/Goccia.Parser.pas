@@ -956,7 +956,7 @@ begin
     end
     else
     begin
-      AExpressionTexts[ExprCount] := Trim(RawParts[I]);
+      AExpressionTexts[ExprCount] := RawParts[I];
       Inc(ExprCount);
     end;
   end;
@@ -1031,7 +1031,7 @@ begin
     end
     else
     begin
-      AExpressionTexts[ExprCount] := Trim(Parts[I]);
+      AExpressionTexts[ExprCount] := Parts[I];
       Inc(ExprCount);
     end;
   end;

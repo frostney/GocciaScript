@@ -121,4 +121,10 @@ describe("template interpolation boundary detection", () => {
     const x = `${a}|${b}|${c}`;
     expect(x).toBe("[object Object]|}|3");
   });
+
+  test("line comment at end of interpolation expression", () => {
+    const x = `${1 // trailing comment
+}`;
+    expect(x).toBe("1");
+  });
 });

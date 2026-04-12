@@ -645,6 +645,7 @@ end;
 procedure TGocciaLexer.ScanNestedTemplateInExpression(var ASB, ARawSB: TStringBuffer);
 var
   C: Char;
+  J: Integer;
 begin
   while not IsAtEnd do
   begin
@@ -704,7 +705,7 @@ begin
         if Peek = #10 then
           Advance;
         Inc(FLine);
-        FColumn := 0;
+        FColumn := 1;
         ASB.AppendChar(#10);
         ARawSB.AppendChar(#10);
       end;
@@ -715,6 +716,27 @@ begin
         Advance;
         ASB.AppendChar(C);
         ARawSB.AppendChar(C);
+      end;
+      UTF8_LINE_TERMINATOR_LEAD_BYTE:
+      begin
+        if IsUnicodeLineTerminator then
+        begin
+          for J := 0 to UTF8_LINE_TERMINATOR_BYTE_LENGTH - 1 do
+          begin
+            C := FSource[FCurrent + J];
+            ASB.AppendChar(C);
+            ARawSB.AppendChar(C);
+          end;
+          Inc(FCurrent, UTF8_LINE_TERMINATOR_BYTE_LENGTH);
+          Inc(FLine);
+          FColumn := 1;
+        end
+        else
+        begin
+          Advance;
+          ASB.AppendChar(C);
+          ARawSB.AppendChar(C);
+        end;
       end;
     else
       begin
@@ -738,10 +760,10 @@ end;
 //   - Template literals `…` (with nested ${…} via mutual recursion)
 //   - Line comments //…
 //   - Block comments /*…*/
-//   - Line terminators (CR, CRLF, LF) with line/column tracking
+//   - Line terminators (CR, CRLF, LF, LS, PS) with line/column tracking
 procedure TGocciaLexer.ScanInterpolationExpression(var ASB, ARawSB: TStringBuffer);
 var
-  BraceCount: Integer;
+  BraceCount, J: Integer;
   C, Quote: Char;
 begin
   BraceCount := 1;
@@ -806,7 +828,7 @@ begin
               if Peek = #10 then
                 Advance;
               Inc(FLine);
-              FColumn := 0;
+              FColumn := 1;
               ASB.AppendChar(#10);
               ARawSB.AppendChar(#10);
             end
@@ -883,7 +905,7 @@ begin
                 if Peek = #10 then
                   Advance;
                 Inc(FLine);
-                FColumn := 0;
+                FColumn := 1;
                 ASB.AppendChar(#10);
                 ARawSB.AppendChar(#10);
               end
@@ -912,7 +934,7 @@ begin
         if Peek = #10 then
           Advance;
         Inc(FLine);
-        FColumn := 0;
+        FColumn := 1;
         ASB.AppendChar(#10);
         ARawSB.AppendChar(#10);
       end;
@@ -923,6 +945,27 @@ begin
         Advance;
         ASB.AppendChar(C);
         ARawSB.AppendChar(C);
+      end;
+      UTF8_LINE_TERMINATOR_LEAD_BYTE:
+      begin
+        if IsUnicodeLineTerminator then
+        begin
+          for J := 0 to UTF8_LINE_TERMINATOR_BYTE_LENGTH - 1 do
+          begin
+            C := FSource[FCurrent + J];
+            ASB.AppendChar(C);
+            ARawSB.AppendChar(C);
+          end;
+          Inc(FCurrent, UTF8_LINE_TERMINATOR_BYTE_LENGTH);
+          Inc(FLine);
+          FColumn := 1;
+        end
+        else
+        begin
+          Advance;
+          ASB.AppendChar(C);
+          ARawSB.AppendChar(C);
+        end;
       end;
     else
       begin
