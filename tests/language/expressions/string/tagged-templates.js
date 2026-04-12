@@ -407,4 +407,56 @@ describe("tagged templates", () => {
     expect(cooked).toBe("A");
     expect(raw).toBe("\\x41");
   });
+
+  test("interpolation with string containing } preserves segments", () => {
+    let strings;
+    let values;
+    const tag = (s, ...v) => { strings = s; values = v; };
+    tag`a${"}"}b`;
+    expect(strings[0]).toBe("a");
+    expect(strings[1]).toBe("b");
+    expect(values[0]).toBe("}");
+  });
+
+  test("interpolation with object literal preserves segments", () => {
+    let strings;
+    let values;
+    const tag = (s, ...v) => { strings = s; values = v; };
+    tag`start${{x: 1}}end`;
+    expect(strings[0]).toBe("start");
+    expect(strings[1]).toBe("end");
+    expect(typeof values[0]).toBe("object");
+  });
+
+  test("interpolation with block comment containing } preserves segments", () => {
+    let strings;
+    let values;
+    const tag = (s, ...v) => { strings = s; values = v; };
+    tag`pre${/*}*/42}post`;
+    expect(strings[0]).toBe("pre");
+    expect(strings[1]).toBe("post");
+    expect(values[0]).toBe(42);
+  });
+
+  test("interpolation with nested template preserves segments", () => {
+    let strings;
+    let values;
+    const tag = (s, ...v) => { strings = s; values = v; };
+    tag`outer${`inner`}tail`;
+    expect(strings[0]).toBe("outer");
+    expect(strings[1]).toBe("tail");
+    expect(values[0]).toBe("inner");
+  });
+
+  test("malformed escape with complex interpolation boundary", () => {
+    let cooked;
+    let raw;
+    let values;
+    const tag = (s, ...v) => { cooked = s; raw = s.raw; values = v; };
+    tag`\xGG${"}"}end`;
+    expect(cooked[0]).toBe(undefined);
+    expect(raw[0]).toBe("\\xGG");
+    expect(cooked[1]).toBe("end");
+    expect(values[0]).toBe("}");
+  });
 });

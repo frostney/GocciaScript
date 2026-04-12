@@ -59,6 +59,15 @@ type
     function ScanUnicodeEscapeForTemplate(var ASB: TStringBuffer): Boolean;
     function ScanHexEscapeForTemplate(var ASB: TStringBuffer): Boolean;
     procedure ProcessTemplateEscapeSequence(var ASB: TStringBuffer; var ASegmentValid: Boolean);
+    // Lexically-aware ${...} boundary detection for template literals.
+    // ScanInterpolationExpression scans an expression body after ${ has been
+    // consumed, tracking braces, strings, comments, and nested templates.
+    // Stops without consuming the matching }.
+    procedure ScanInterpolationExpression(var ASB, ARawSB: TStringBuffer);
+    // Scans a nested template literal body within an interpolation expression.
+    // Called after the opening backtick has been consumed and appended.
+    // Handles \`, \$, and nested ${...} via mutual recursion.
+    procedure ScanNestedTemplateInExpression(var ASB, ARawSB: TStringBuffer);
     procedure UpdateRegexContext(const ATokenType: TGocciaTokenType);
     procedure PushParenRegexContext(const AAllowsRegexAfter: Boolean);
     function PopParenRegexContext: Boolean;
@@ -627,6 +636,304 @@ begin
   end;
 end;
 
+// Scans a nested template literal body within an interpolation expression.
+// Called after the opening backtick has been consumed and appended to the
+// buffers.  Consumes characters up to and including the closing backtick,
+// appending all content to both ASB and ARawSB verbatim.  Handles escaped
+// backticks (\`), escaped dollars (\$), and nested ${...} interpolations
+// via mutual recursion with ScanInterpolationExpression.
+procedure TGocciaLexer.ScanNestedTemplateInExpression(var ASB, ARawSB: TStringBuffer);
+var
+  C: Char;
+begin
+  while not IsAtEnd do
+  begin
+    C := Peek;
+    case C of
+      '`':
+      begin
+        // Closing backtick of nested template
+        Advance;
+        ASB.AppendChar(C);
+        ARawSB.AppendChar(C);
+        Exit;
+      end;
+      '\':
+      begin
+        // Escape sequence — consume \ and next char verbatim
+        Advance;
+        ASB.AppendChar(C);
+        ARawSB.AppendChar(C);
+        if not IsAtEnd then
+        begin
+          C := Advance;
+          ASB.AppendChar(C);
+          ARawSB.AppendChar(C);
+        end;
+      end;
+      '$':
+      begin
+        if PeekNext = '{' then
+        begin
+          // Nested interpolation within nested template
+          Advance; // consume $
+          ASB.AppendChar('$');
+          ARawSB.AppendChar('$');
+          Advance; // consume {
+          ASB.AppendChar('{');
+          ARawSB.AppendChar('{');
+          ScanInterpolationExpression(ASB, ARawSB);
+          // ScanInterpolationExpression leaves the closing } unconsumed
+          if not IsAtEnd then
+          begin
+            Advance; // consume }
+            ASB.AppendChar('}');
+            ARawSB.AppendChar('}');
+          end;
+        end
+        else
+        begin
+          Advance;
+          ASB.AppendChar(C);
+          ARawSB.AppendChar(C);
+        end;
+      end;
+      #13:
+      begin
+        Advance;
+        if Peek = #10 then
+          Advance;
+        Inc(FLine);
+        FColumn := 0;
+        ASB.AppendChar(#10);
+        ARawSB.AppendChar(#10);
+      end;
+      #10:
+      begin
+        Inc(FLine);
+        FColumn := 0;
+        Advance;
+        ASB.AppendChar(C);
+        ARawSB.AppendChar(C);
+      end;
+    else
+      begin
+        Advance;
+        ASB.AppendChar(C);
+        ARawSB.AppendChar(C);
+      end;
+    end;
+  end;
+end;
+
+// Scans a template interpolation expression with full lexical awareness.
+// Called after ${ has been consumed.  Tracks brace depth starting at 1 and
+// stops when the matching } is found WITHOUT consuming it — the caller is
+// responsible for consuming the closing }.  All characters within the
+// expression body are appended verbatim to both ASB and ARawSB.
+//
+// Lexical constructs handled:
+//   - Nested braces {…}
+//   - String literals '…' and "…" (with \ escapes)
+//   - Template literals `…` (with nested ${…} via mutual recursion)
+//   - Line comments //…
+//   - Block comments /*…*/
+//   - Line terminators (CR, CRLF, LF) with line/column tracking
+procedure TGocciaLexer.ScanInterpolationExpression(var ASB, ARawSB: TStringBuffer);
+var
+  BraceCount: Integer;
+  C, Quote: Char;
+begin
+  BraceCount := 1;
+  while (BraceCount > 0) and not IsAtEnd do
+  begin
+    C := Peek;
+    case C of
+      '{':
+      begin
+        Inc(BraceCount);
+        Advance;
+        ASB.AppendChar(C);
+        ARawSB.AppendChar(C);
+      end;
+      '}':
+      begin
+        Dec(BraceCount);
+        if BraceCount > 0 then
+        begin
+          Advance;
+          ASB.AppendChar(C);
+          ARawSB.AppendChar(C);
+        end;
+        // When BraceCount = 0, leave the closing } unconsumed for the caller
+      end;
+      '''', '"':
+      begin
+        // String literal — scan until matching unescaped quote
+        Quote := C;
+        Advance;
+        ASB.AppendChar(C);
+        ARawSB.AppendChar(C);
+        while not IsAtEnd do
+        begin
+          C := Peek;
+          if C = '\' then
+          begin
+            // Escape — consume \ and the next character verbatim
+            Advance;
+            ASB.AppendChar(C);
+            ARawSB.AppendChar(C);
+            if not IsAtEnd then
+            begin
+              C := Advance;
+              ASB.AppendChar(C);
+              ARawSB.AppendChar(C);
+            end;
+          end
+          else if C = Quote then
+          begin
+            Advance;
+            ASB.AppendChar(C);
+            ARawSB.AppendChar(C);
+            Break;
+          end
+          else
+          begin
+            // Track line terminators inside strings
+            if C = #13 then
+            begin
+              Advance;
+              if Peek = #10 then
+                Advance;
+              Inc(FLine);
+              FColumn := 0;
+              ASB.AppendChar(#10);
+              ARawSB.AppendChar(#10);
+            end
+            else if C = #10 then
+            begin
+              Inc(FLine);
+              FColumn := 0;
+              Advance;
+              ASB.AppendChar(C);
+              ARawSB.AppendChar(C);
+            end
+            else
+            begin
+              Advance;
+              ASB.AppendChar(C);
+              ARawSB.AppendChar(C);
+            end;
+          end;
+        end;
+      end;
+      '`':
+      begin
+        // Nested template literal — delegate to mutual recursion
+        Advance;
+        ASB.AppendChar(C);
+        ARawSB.AppendChar(C);
+        ScanNestedTemplateInExpression(ASB, ARawSB);
+      end;
+      '/':
+      begin
+        Advance;
+        ASB.AppendChar(C);
+        ARawSB.AppendChar(C);
+        if not IsAtEnd then
+        begin
+          if Peek = '/' then
+          begin
+            // Line comment — consume until end of line
+            C := Advance;
+            ASB.AppendChar(C);
+            ARawSB.AppendChar(C);
+            while not IsAtEnd and (Peek <> #10) and (Peek <> #13) do
+            begin
+              C := Advance;
+              ASB.AppendChar(C);
+              ARawSB.AppendChar(C);
+            end;
+          end
+          else if Peek = '*' then
+          begin
+            // Block comment — consume until */
+            C := Advance; // consume *
+            ASB.AppendChar(C);
+            ARawSB.AppendChar(C);
+            while not IsAtEnd do
+            begin
+              C := Peek;
+              if C = '*' then
+              begin
+                Advance;
+                ASB.AppendChar(C);
+                ARawSB.AppendChar(C);
+                if not IsAtEnd and (Peek = '/') then
+                begin
+                  C := Advance;
+                  ASB.AppendChar(C);
+                  ARawSB.AppendChar(C);
+                  Break;
+                end;
+              end
+              else if C = #13 then
+              begin
+                Advance;
+                if Peek = #10 then
+                  Advance;
+                Inc(FLine);
+                FColumn := 0;
+                ASB.AppendChar(#10);
+                ARawSB.AppendChar(#10);
+              end
+              else if C = #10 then
+              begin
+                Inc(FLine);
+                FColumn := 0;
+                Advance;
+                ASB.AppendChar(C);
+                ARawSB.AppendChar(C);
+              end
+              else
+              begin
+                Advance;
+                ASB.AppendChar(C);
+                ARawSB.AppendChar(C);
+              end;
+            end;
+          end;
+          // If neither // nor /*, the / was already appended — continue
+        end;
+      end;
+      #13:
+      begin
+        Advance;
+        if Peek = #10 then
+          Advance;
+        Inc(FLine);
+        FColumn := 0;
+        ASB.AppendChar(#10);
+        ARawSB.AppendChar(#10);
+      end;
+      #10:
+      begin
+        Inc(FLine);
+        FColumn := 0;
+        Advance;
+        ASB.AppendChar(C);
+        ARawSB.AppendChar(C);
+      end;
+    else
+      begin
+        Advance;
+        ASB.AppendChar(C);
+        ARawSB.AppendChar(C);
+      end;
+    end;
+  end;
+end;
+
 procedure TGocciaLexer.PushParenRegexContext(const AAllowsRegexAfter: Boolean);
 begin
   if FParenRegexContextCount >= Length(FParenRegexContext) then
@@ -726,6 +1033,7 @@ procedure TGocciaLexer.ScanTemplate;
 const
   TEMPLATE_RAW_SEPARATOR = #1;
   TEMPLATE_INVALID_ESCAPE_SEPARATOR = #2;
+  TEMPLATE_EXPRESSION_BOUNDARY = #3;
 var
   SB: TStringBuffer;
   RawSB: TStringBuffer;
@@ -807,6 +1115,22 @@ begin
           end;
         end;
       end;
+    end
+    else if (Peek = '$') and (PeekNext = '{') then
+    begin
+      // Interpolation expression boundary — detect and record with lexical
+      // awareness so braces inside strings, comments, and nested templates
+      // do not confuse the boundary detection.
+      Advance; // consume $
+      Advance; // consume {
+      SB.AppendChar(TEMPLATE_EXPRESSION_BOUNDARY);
+      RawSB.AppendChar(TEMPLATE_EXPRESSION_BOUNDARY);
+      ScanInterpolationExpression(SB, RawSB);
+      // ScanInterpolationExpression leaves the closing } unconsumed
+      if not IsAtEnd then
+        Advance; // consume closing }
+      SB.AppendChar(TEMPLATE_EXPRESSION_BOUNDARY);
+      RawSB.AppendChar(TEMPLATE_EXPRESSION_BOUNDARY);
     end
     else
     begin

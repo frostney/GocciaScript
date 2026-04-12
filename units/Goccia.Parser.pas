@@ -883,184 +883,83 @@ begin
   Result := True;
 end;
 
-// Compute the UTF-8 byte count for a Unicode code point.
-function UTF8ByteCount(const ACodePoint: Cardinal): Integer; inline;
+
+// Split a string at #3 (TEMPLATE_EXPRESSION_BOUNDARY) markers embedded by the
+// lexer during ScanTemplate.  Returns all parts: even-indexed parts are static
+// template segments, odd-indexed parts are interpolation expression texts.
+procedure SplitOnBoundaryMarker(const AStr: string; out AParts: TGocciaTemplateStrings);
+const
+  TEMPLATE_EXPRESSION_BOUNDARY = #3;
+var
+  I, Start, PartCount: Integer;
 begin
-  if ACodePoint <= $7F then
-    Result := 1
-  else if ACodePoint <= $7FF then
-    Result := 2
-  else if ACodePoint <= $FFFF then
-    Result := 3
-  else
-    Result := 4;
+  SetLength(AParts, 0);
+  PartCount := 0;
+  Start := 1;
+  for I := 1 to Length(AStr) do
+  begin
+    if AStr[I] = TEMPLATE_EXPRESSION_BOUNDARY then
+    begin
+      SetLength(AParts, PartCount + 1);
+      AParts[PartCount] := Copy(AStr, Start, I - Start);
+      Inc(PartCount);
+      Start := I + 1;
+    end;
+  end;
+  // Final part (after last marker, or entire string if no markers)
+  SetLength(AParts, PartCount + 1);
+  AParts[PartCount] := Copy(AStr, Start, Length(AStr) - Start + 1);
 end;
 
-// Parse a hex string into a cardinal, returning 0 on invalid input.
-function SafeHexToCardinal(const AHexStr: string): Cardinal;
-begin
-  if AHexStr = '' then
-    Result := 0
-  else
-    Result := Cardinal(StrToIntDef('$' + AHexStr, 0));
-end;
-
-// Split a template token's cooked and raw strings at real ${...} interpolation
-// boundaries. Uses the raw string for boundary detection (where \$ is preserved
-// as two characters, preventing phantom boundaries from escaped dollar signs).
-// Walks both strings in parallel, tracking how escape sequences map between the
-// two representations.
-//
-// The escape length mapping mirrors Goccia.Lexer.ScanTemplate exactly:
-//   \$ \` \n \r \t \\ \0 \<other>: raw=2, cooked=1
-//   \xHH:                          raw=4, cooked=1
-//   \uHHHH:                        raw=6, cooked=UTF8ByteCount(codepoint)
-//   \uHHHH\uHHHH (surrogate pair): raw=12, cooked=UTF8ByteCount(combined)
-//   \u{H...}:                       raw=4+len(hex), cooked=UTF8ByteCount(codepoint)
+// Split a template token's cooked and raw strings at interpolation boundaries.
+// The lexer embeds #3 boundary markers around expression texts during
+// ScanTemplate with full lexical awareness (strings, comments, nested
+// templates), so this function simply splits on those markers.
+// Even-indexed parts are static segments; odd-indexed parts are expressions.
 procedure SplitTemplateAtBoundaries(const ACookedFull, ARawFull: string;
   out ACookedSegments, ARawSegments: TGocciaTemplateStrings;
   out AExpressionTexts: TGocciaTemplateStrings);
-const
-  HIGH_SURROGATE_MIN = $D800;
-  HIGH_SURROGATE_MAX = $DBFF;
-  LOW_SURROGATE_MIN = $DC00;
-  LOW_SURROGATE_MAX = $DFFF;
-  SURROGATE_OFFSET = $10000;
-  SURROGATE_SHIFT = 10;
 var
-  RawI, CookedI, StartRaw, StartCooked, SegmentCount, ExprCount: Integer;
-  BraceCount, ExprStartRaw: Integer;
-  CodePoint, LowSurrogate: Cardinal;
-  HexStart, HexEnd: Integer;
+  CookedParts, RawParts: TGocciaTemplateStrings;
+  I, StaticCount, ExprCount: Integer;
 begin
-  SetLength(ACookedSegments, 0);
-  SetLength(ARawSegments, 0);
-  SetLength(AExpressionTexts, 0);
-  SegmentCount := 0;
+  SplitOnBoundaryMarker(ACookedFull, CookedParts);
+  SplitOnBoundaryMarker(ARawFull, RawParts);
+
+  // Even-indexed parts are static segments, odd-indexed are expressions
+  StaticCount := 0;
   ExprCount := 0;
-
-  RawI := 1;
-  CookedI := 1;
-  StartRaw := 1;
-  StartCooked := 1;
-
-  while RawI <= Length(ARawFull) do
+  for I := 0 to Length(RawParts) - 1 do
   begin
-    if ARawFull[RawI] = '\' then
-    begin
-      // Escape sequence in raw — advance past it in both strings.
-      // The raw string preserves escape sequences verbatim; the cooked string
-      // has the resolved value (produced by Goccia.Lexer.ScanTemplate).
-      Inc(RawI); // skip '\'
-      if RawI <= Length(ARawFull) then
-      begin
-        case ARawFull[RawI] of
-          'x':
-          begin
-            // \xHH: raw=4 total (\xHH), cooked=1 byte
-            Inc(RawI, 3); // skip 'x', H, H
-            Inc(CookedI);
-          end;
-          'u':
-          begin
-            Inc(RawI); // skip 'u'
-            if (RawI <= Length(ARawFull)) and (ARawFull[RawI] = '{') then
-            begin
-              // \u{H...}: variable raw length, cooked=UTF8ByteCount
-              Inc(RawI); // skip '{'
-              HexStart := RawI;
-              while (RawI <= Length(ARawFull)) and (ARawFull[RawI] <> '}') do
-                Inc(RawI);
-              HexEnd := RawI;
-              CodePoint := SafeHexToCardinal(Copy(ARawFull, HexStart, HexEnd - HexStart));
-              Inc(RawI); // skip '}'
-              Inc(CookedI, UTF8ByteCount(CodePoint));
-            end
-            else
-            begin
-              // \uHHHH: raw=6 total, cooked=UTF8ByteCount. May form surrogate pair.
-              CodePoint := SafeHexToCardinal(Copy(ARawFull, RawI, 4));
-              Inc(RawI, 4); // skip HHHH
-              // ES2026 §12.9.4: check for UTF-16 surrogate pair
-              if (CodePoint >= HIGH_SURROGATE_MIN) and (CodePoint <= HIGH_SURROGATE_MAX) and
-                 (RawI + 5 <= Length(ARawFull)) and
-                 (ARawFull[RawI] = '\') and (ARawFull[RawI + 1] = 'u') then
-              begin
-                LowSurrogate := SafeHexToCardinal(Copy(ARawFull, RawI + 2, 4));
-                if (LowSurrogate >= LOW_SURROGATE_MIN) and (LowSurrogate <= LOW_SURROGATE_MAX) then
-                begin
-                  CodePoint := SURROGATE_OFFSET +
-                    ((CodePoint - HIGH_SURROGATE_MIN) shl SURROGATE_SHIFT) +
-                    (LowSurrogate - LOW_SURROGATE_MIN);
-                  Inc(RawI, 6); // skip \uHHHH of low surrogate
-                end;
-              end;
-              Inc(CookedI, UTF8ByteCount(CodePoint));
-            end;
-          end;
-        else
-          // All other escapes: \n \r \t \\ \0 \$ \` \<other>
-          // raw=2 total (\ + char), cooked=1 byte
-          Inc(RawI); // skip the escaped character
-          Inc(CookedI);
-        end;
-      end;
-    end
-    else if (ARawFull[RawI] = '$') and (RawI < Length(ARawFull)) and
-            (ARawFull[RawI + 1] = '{') then
-    begin
-      // Real interpolation boundary (unescaped $ followed by {)
-      // Record the static text segments up to this point
-      SetLength(ACookedSegments, SegmentCount + 1);
-      ACookedSegments[SegmentCount] := Copy(ACookedFull, StartCooked, CookedI - StartCooked);
-      SetLength(ARawSegments, SegmentCount + 1);
-      ARawSegments[SegmentCount] := Copy(ARawFull, StartRaw, RawI - StartRaw);
-      Inc(SegmentCount);
-
-      // Skip ${ in both strings
-      Inc(RawI, 2);
-      Inc(CookedI, 2);
-      ExprStartRaw := RawI;
-
-      // Find matching } by brace counting (expression text is identical in both)
-      BraceCount := 1;
-      while (RawI <= Length(ARawFull)) and (BraceCount > 0) do
-      begin
-        if ARawFull[RawI] = '{' then
-          Inc(BraceCount)
-        else if ARawFull[RawI] = '}' then
-          Dec(BraceCount);
-        if BraceCount > 0 then
-        begin
-          Inc(RawI);
-          Inc(CookedI);
-        end;
-      end;
-
-      // Record expression text (identical in raw and cooked)
-      SetLength(AExpressionTexts, ExprCount + 1);
-      AExpressionTexts[ExprCount] := Trim(Copy(ARawFull, ExprStartRaw, RawI - ExprStartRaw));
+    if I mod 2 = 0 then
+      Inc(StaticCount)
+    else
       Inc(ExprCount);
+  end;
 
-      // Skip closing }
-      Inc(RawI);
-      Inc(CookedI);
-      StartRaw := RawI;
-      StartCooked := CookedI;
+  SetLength(ACookedSegments, StaticCount);
+  SetLength(ARawSegments, StaticCount);
+  SetLength(AExpressionTexts, ExprCount);
+
+  StaticCount := 0;
+  ExprCount := 0;
+  for I := 0 to Length(RawParts) - 1 do
+  begin
+    if I mod 2 = 0 then
+    begin
+      ARawSegments[StaticCount] := RawParts[I];
+      if I < Length(CookedParts) then
+        ACookedSegments[StaticCount] := CookedParts[I]
+      else
+        ACookedSegments[StaticCount] := '';
+      Inc(StaticCount);
     end
     else
     begin
-      // Normal character — advance both by 1
-      Inc(RawI);
-      Inc(CookedI);
+      AExpressionTexts[ExprCount] := Trim(RawParts[I]);
+      Inc(ExprCount);
     end;
   end;
-
-  // Record the final static text segments
-  SetLength(ACookedSegments, SegmentCount + 1);
-  ACookedSegments[SegmentCount] := Copy(ACookedFull, StartCooked, CookedI - StartCooked);
-  SetLength(ARawSegments, SegmentCount + 1);
-  ARawSegments[SegmentCount] := Copy(ARawFull, StartRaw, RawI - StartRaw);
 end;
 
 // Extract cooked and raw full strings from a template token lexeme.
@@ -1097,66 +996,45 @@ begin
   end;
 end;
 
-// TC39 Template Literal Revision — split a raw template string at real ${...}
-// interpolation boundaries.  Uses only the raw string (no cooked tracking).
-// For boundary detection, skipping \ + 1 char is sufficient because \$ in
-// raw is two characters and never matches the ${ boundary pattern.
+// TC39 Template Literal Revision — split a raw template string at interpolation
+// boundaries.  The lexer embeds #3 boundary markers with full lexical awareness,
+// so this function simply splits on those markers.
 procedure SplitRawAtBoundaries(const ARawFull: string;
   out ARawSegments, AExpressionTexts: TGocciaTemplateStrings);
 var
-  RawI, StartRaw, SegmentCount, ExprCount, ExprStartRaw, BraceCount: Integer;
+  Parts: TGocciaTemplateStrings;
+  I, StaticCount, ExprCount: Integer;
 begin
-  SetLength(ARawSegments, 0);
-  SetLength(AExpressionTexts, 0);
-  SegmentCount := 0;
+  SplitOnBoundaryMarker(ARawFull, Parts);
+
+  StaticCount := 0;
   ExprCount := 0;
-  RawI := 1;
-  StartRaw := 1;
-
-  while RawI <= Length(ARawFull) do
+  for I := 0 to Length(Parts) - 1 do
   begin
-    if ARawFull[RawI] = '\' then
-    begin
-      // Skip \ and the next character (handles \$, \\, \n, etc.)
-      Inc(RawI, 2);
-    end
-    else if (ARawFull[RawI] = '$') and (RawI < Length(ARawFull)) and
-            (ARawFull[RawI + 1] = '{') then
-    begin
-      // Real interpolation boundary
-      SetLength(ARawSegments, SegmentCount + 1);
-      ARawSegments[SegmentCount] := Copy(ARawFull, StartRaw, RawI - StartRaw);
-      Inc(SegmentCount);
-
-      Inc(RawI, 2); // skip ${
-      ExprStartRaw := RawI;
-
-      // Find matching } by brace counting
-      BraceCount := 1;
-      while (RawI <= Length(ARawFull)) and (BraceCount > 0) do
-      begin
-        if ARawFull[RawI] = '{' then
-          Inc(BraceCount)
-        else if ARawFull[RawI] = '}' then
-          Dec(BraceCount);
-        if BraceCount > 0 then
-          Inc(RawI);
-      end;
-
-      SetLength(AExpressionTexts, ExprCount + 1);
-      AExpressionTexts[ExprCount] := Trim(Copy(ARawFull, ExprStartRaw, RawI - ExprStartRaw));
-      Inc(ExprCount);
-
-      Inc(RawI); // skip closing }
-      StartRaw := RawI;
-    end
+    if I mod 2 = 0 then
+      Inc(StaticCount)
     else
-      Inc(RawI);
+      Inc(ExprCount);
   end;
 
-  // Final segment
-  SetLength(ARawSegments, SegmentCount + 1);
-  ARawSegments[SegmentCount] := Copy(ARawFull, StartRaw, RawI - StartRaw);
+  SetLength(ARawSegments, StaticCount);
+  SetLength(AExpressionTexts, ExprCount);
+
+  StaticCount := 0;
+  ExprCount := 0;
+  for I := 0 to Length(Parts) - 1 do
+  begin
+    if I mod 2 = 0 then
+    begin
+      ARawSegments[StaticCount] := Parts[I];
+      Inc(StaticCount);
+    end
+    else
+    begin
+      AExpressionTexts[ExprCount] := Trim(Parts[I]);
+      Inc(ExprCount);
+    end;
+  end;
 end;
 
 // Convert a Unicode code point to its UTF-8 string representation.
