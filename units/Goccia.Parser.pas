@@ -1167,6 +1167,7 @@ function CookUnicodeEscape(const AStr: string; var APos: Integer;
   var ASB: TStringBuffer): Boolean;
 var
   CodePoint, LowSurrogate: Cardinal;
+  CodePointValue: QWord;
   HexStr: string;
   HexStart, I, SavedPos: Integer;
 begin
@@ -1185,9 +1186,12 @@ begin
     if (HexStr = '') or not IsValidHexString(HexStr) then
       Exit(False);
     Inc(APos); // skip '}'
-    CodePoint := StrToInt('$' + HexStr);
-    if CodePoint > $10FFFF then
+    // Use TryStrToQWord to safely handle arbitrarily long hex payloads
+    // without raising on overflow (e.g. \u{FFFFFFFF}).
+    if not TryStrToQWord('$' + HexStr, CodePointValue) or
+       (CodePointValue > $10FFFF) then
       Exit(False);
+    CodePoint := Cardinal(CodePointValue);
   end
   else
   begin

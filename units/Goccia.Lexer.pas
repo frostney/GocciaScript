@@ -391,6 +391,7 @@ end;
 function TGocciaLexer.ScanUnicodeEscapeForTemplate(var ASB: TStringBuffer): Boolean;
 var
   CodePoint, LowSurrogate: Cardinal;
+  CodePointValue: QWord;
   HexStr: string;
   I, HexStart, SavedCurrent, SavedColumn: Integer;
 begin
@@ -413,9 +414,12 @@ begin
     if not IsValidHexString(HexStr) then
       Exit(False);
     Advance; // consume '}'
-    CodePoint := StrToInt('$' + HexStr);
-    if CodePoint > $10FFFF then
+    // Use TryStrToQWord to safely handle arbitrarily long hex payloads
+    // without raising on overflow (e.g. \u{FFFFFFFF}).
+    if not TryStrToQWord('$' + HexStr, CodePointValue) or
+       (CodePointValue > $10FFFF) then
       Exit(False);
+    CodePoint := Cardinal(CodePointValue);
   end
   else
   begin
