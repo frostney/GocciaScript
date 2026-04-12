@@ -7,7 +7,8 @@
 - **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules (named only)
 - **Excluded by design** — `var`, `function` keyword, `==`/`!=`, `eval`, `arguments`, traditional loops, `with`, default imports/exports
 - **Graceful handling** — Parser-recognized excluded syntax (`var`, `function`, `==`, loops, `with`) parses successfully but executes as a no-op with a warning and suggestion
-- **Opt-in toggles** — ASI (`--asi` / `cfASI in Compatibility`), JSX (`ppJSX in Preprocessors`)
+- **Opt-in toggles** — ASI (`--asi` / `Engine.ASIEnabled := True`)
+- **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 - **Always-available extensions** — types as comments, decorators, enums
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision.
@@ -629,9 +630,9 @@ enum Tokens { Alpha = Symbol("alpha") }
 - Parameter properties in constructors (`constructor(public x: number)`).
 - Angle-bracket type assertions (`<string>value`) — use `value as string` instead.
 
-### JSX (Opt-in)
+### JSX
 
-**Supported** when the JSX preprocessor is enabled (`ppJSX in Preprocessors`). JSX is handled by a source-to-source pre-pass transformer that converts JSX syntax into `createElement` function calls before the main compilation pipeline. This keeps the core lexer/parser/evaluator untouched.
+**Enabled by default** via `DefaultPreprocessors`. JSX is handled by a source-to-source pre-pass transformer that converts JSX syntax into `createElement` function calls before the main compilation pipeline. This keeps the core lexer/parser/evaluator untouched. Embedders can disable JSX via `Engine.Preprocessors := []`.
 
 Users must provide their own `createElement` (and `Fragment` for `<>...</>`) in scope:
 
