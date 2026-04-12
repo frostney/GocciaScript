@@ -63,7 +63,7 @@ var
   Result: TGocciaValue;
 begin
   Source := TStringList.Create;
-  Engine := TGocciaEngine.Create('session', Source, TGocciaEngine.DefaultGlobals);
+  Engine := TGocciaEngine.Create('session', Source, []);
   try
     // First execution — defines a variable
     Source.Text := 'const x = 42;';
@@ -86,7 +86,7 @@ The `TStringList` is passed by reference — update its contents and call `Execu
 ASI is disabled by default. To enable ECMAScript-compliant automatic semicolon insertion (ES2026 §12.10), set the `ASIEnabled` property after creating the engine:
 
 ```pascal
-Engine := TGocciaEngine.Create('app.js', Source, TGocciaEngine.DefaultGlobals);
+Engine := TGocciaEngine.Create('app.js', Source, []);
 Engine.ASIEnabled := True;  // Semicolons are now optional per ES2026 rules
 Engine.Execute;
 ```
@@ -106,7 +106,7 @@ uses
 var
   ScriptResult: TGocciaScriptResult;
 begin
-  ScriptResult := TGocciaEngine.RunScript(Source, 'bench.js', TGocciaEngine.DefaultGlobals);
+  ScriptResult := TGocciaEngine.RunScript(Source, 'bench.js', []);
   WriteLn('Lex: ', FormatDuration(ScriptResult.LexTimeNanoseconds));
   WriteLn('Parse: ', FormatDuration(ScriptResult.ParseTimeNanoseconds));
   WriteLn('Execute: ', FormatDuration(ScriptResult.ExecuteTimeNanoseconds));
@@ -188,7 +188,7 @@ var
   Engine: TGocciaEngine;
 begin
   Resolver := TMyResolver.Create('/path/to/project');
-  Engine := TGocciaEngine.Create('app.js', Source, TGocciaEngine.DefaultGlobals, Resolver);
+  Engine := TGocciaEngine.Create('app.js', Source, [], Resolver);
   try
     Engine.Execute;
   finally
@@ -270,7 +270,7 @@ begin
       Provider);
     try
       Engine := TGocciaEngine.Create('memory:/app.js', Source,
-        TGocciaEngine.DefaultGlobals, ModuleLoader);
+        [], ModuleLoader);
       try
         Engine.Execute;
       finally
@@ -314,60 +314,39 @@ console.log(version);  // "1.0.0"
 
 This provides the foundation for future built-in module packages that can be coupled to `TGocciaGlobalBuiltins` flags.
 
-## Controlling Built-ins
+## Built-in Registration
 
-The `TGocciaGlobalBuiltins` set controls which built-in objects are available to scripts. This is the primary sandboxing mechanism.
+Standard built-ins (Console, Math, Object, Array, Number, JSON, JSON5, JSONL, TOML, YAML, Symbol, Set, Map, Performance, Promise, Temporal, ArrayBuffer, TypedArrays, Proxy, Reflect, TextEncoder, TextDecoder, URL) are always registered unconditionally. They are not flag-gated.
 
-### Default Set
+### Special-Purpose Flags
 
-```pascal
-DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
-                  ggGlobalNumber, ggPromise, ggJSON, ggJSON5, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap,
-                  ggPerformance, ggTemporal, ggJSX, ggArrayBuffer, ggProxy, ggReflect];
-```
-
-### Available Flags
+The `TGocciaGlobalBuiltins` set controls three special-purpose built-ins that are off by default:
 
 | Flag | Provides | Notes |
 |------|----------|-------|
-| `ggConsole` | `console.*` | `log`, `warn`, `error`, `info`, `debug`, `dir`, `assert`, `count`, `time`, etc. |
-| `ggMath` | `Math.*` | Constants and functions |
-| `ggGlobalObject` | `Object.*` | `keys`, `assign`, `create`, `freeze`, etc. |
-| `ggGlobalArray` | `Array.isArray`, `Array.from`, `Array.of` | Static array methods |
-| `ggGlobalNumber` | `Number.*` | `parseInt`, `isNaN`, constants, etc. |
-| `ggJSON` | `JSON.parse`, `JSON.stringify` | Serialization |
-| `ggJSON5` | `JSON5.parse`, `JSON5.stringify` | JSON5 configuration parsing and serialization |
-| `ggJSONL` | `JSONL.parse`, `JSONL.parseChunk` | Newline-delimited JSON parsing |
-| `ggTOML` | `TOML.parse` | TOML 1.1.0 configuration parsing |
-| `ggSymbol` | `Symbol`, `Symbol.for`, `Symbol.keyFor` | Unique property keys |
-| `ggSet` | `Set` constructor and methods | Unique value collections |
-| `ggMap` | `Map` constructor and methods | Key-value collections |
-| `ggPromise` | `Promise` | Async operations with microtask queue |
-| `ggPerformance` | `performance` | Monotonic timing and time origin metadata |
-| `ggTemporal` | `Temporal.*` | Dates, times, durations, instants |
-| `ggJSX` | JSX transformer | Source-to-source JSX → `createElement` pre-pass |
-| `ggArrayBuffer` | `ArrayBuffer`, `SharedArrayBuffer`, TypedArrays | Binary data buffers and typed views |
-| `ggProxy` | `Proxy`, `Proxy.revocable` | ES2026 Proxy with handler traps |
-| `ggReflect` | `Reflect.*` | Reflect API (apply, construct, defineProperty, etc.) |
-| `ggFFI` | `FFI.open`, `FFILibrary`, `FFIPointer` | Foreign Function Interface for native shared libraries (not in DefaultGlobals) |
-| `ggTestAssertions` | `describe`, `test`, `expect` | Testing framework |
-| `ggBenchmark` | `suite`, `bench` | Benchmark framework |
-
-### Sandboxed Execution
-
-To run untrusted code with minimal capabilities:
-
-```pascal
-// No console, no JSON, no collections — just core language + math
-TGocciaEngine.RunScript(UntrustedCode, 'sandbox.js',
-  [ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber]);
-```
+| `ggTestAssertions` | `describe`, `test`, `expect` | Testing framework (TestRunner adds this) |
+| `ggBenchmark` | `suite`, `bench` | Benchmark framework (BenchmarkRunner adds this) |
+| `ggFFI` | `FFI.open`, `FFILibrary`, `FFIPointer` | Foreign Function Interface for native shared libraries |
 
 To add the test framework for a custom test runner:
 
 ```pascal
-TGocciaEngine.RunScriptFromFile('tests/my-test.js',
-  TGocciaEngine.DefaultGlobals + [ggTestAssertions]);
+TGocciaEngine.RunScriptFromFile('tests/my-test.js', [ggTestAssertions]);
+```
+
+### Preprocessors and Compatibility
+
+| System | Type | Default | Purpose |
+|--------|------|---------|---------|
+| `Preprocessors` | `TGocciaPreprocessors` | `[ppJSX]` | Source transformations before parsing |
+| `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | Parser behavior toggles |
+| `StrictTypes` | `Boolean` | `False` (interpreter), `True` (bytecode) | Type enforcement for annotated variables |
+
+```pascal
+Engine := TGocciaEngine.Create('app.js', Source, []);
+Engine.Preprocessors := [];              // Disable JSX
+Engine.ASIEnabled := True;               // Enable ASI (convenience for cfASI)
+Engine.StrictTypes := True;              // Enable strict type enforcement
 ```
 
 ## Injecting Custom Globals
@@ -391,7 +370,7 @@ var
 begin
   Source := TStringList.Create;
   Source.Text := 'console.log("version: " + APP_VERSION);';
-  Engine := TGocciaEngine.Create('app.js', Source, TGocciaEngine.DefaultGlobals);
+  Engine := TGocciaEngine.Create('app.js', Source, []);
   try
     // Inject a constant into the global scope
     Engine.Interpreter.GlobalScope.DefineLexicalBinding(
@@ -444,7 +423,7 @@ begin
   Host := TMyHost.Create;
   Source := TStringList.Create;
   Source.Text := 'const ts = getTimestamp(); console.log(ts);';
-  Engine := TGocciaEngine.Create('app.js', Source, TGocciaEngine.DefaultGlobals);
+  Engine := TGocciaEngine.Create('app.js', Source, []);
   try
     // Create a native function: callback, name, arity (-1 for variadic)
     Func := TGocciaNativeFunctionValue.Create(Host.GetTimestamp, 'getTimestamp', 0);
@@ -528,7 +507,7 @@ begin
   API := TFileSystemAPI.Create;
   Source := TStringList.Create;
   Source.Text := 'const content = fs.readFile("data.txt"); console.log(content);';
-  Engine := TGocciaEngine.Create('app.js', Source, TGocciaEngine.DefaultGlobals);
+  Engine := TGocciaEngine.Create('app.js', Source, []);
   try
     FSObject := TGocciaObjectValue.Create;
     FSObject.RegisterNativeMethod(
@@ -626,7 +605,7 @@ Both `TGocciaEngine` and `TGocciaVM` mask all FPU exceptions on creation (via `S
 
 ## Microtask Queue (Promises)
 
-When `ggPromise` is included in the globals set, the engine initializes a singleton microtask queue (`TGocciaMicrotaskQueue`) alongside the GC. Promise `.then()` callbacks are enqueued as microtasks and **drained automatically** after each `Execute`, `ExecuteWithTiming`, or `ExecuteProgram` call. Embedders do not need to drain the queue manually.
+The engine initializes a singleton microtask queue (`TGocciaMicrotaskQueue`) alongside the GC. Promise `.then()` callbacks are enqueued as microtasks and **drained automatically** after each `Execute`, `ExecuteWithTiming`, or `ExecuteProgram` call. Embedders do not need to drain the queue manually.
 
 This means:
 - All synchronous code in the script runs to completion first.

@@ -159,7 +159,7 @@ var
   ScriptResult: TGocciaObjectValue;
   FileResult: TBenchmarkFileResult;
 begin
-  BenchGlobals := TGocciaEngine.DefaultGlobals + [ggBenchmark];
+  BenchGlobals := [ggBenchmark];
 
   Source := ReadUTF8FileLines(AFileName);
   try
@@ -232,14 +232,14 @@ var
   BenchGlobals: TGocciaGlobalBuiltins;
   LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd: Int64;
 begin
-  BenchGlobals := TGocciaEngine.DefaultGlobals + [ggBenchmark];
+  BenchGlobals := [ggBenchmark];
 
   Source := ReadUTF8FileLines(AFileName);
   try
     Source.Add('runBenchmarks();');
 
     SourceText := StringListToLFText(Source);
-    if ggJSX in BenchGlobals then
+    if ppJSX in TGocciaEngine.DefaultPreprocessors then
     begin
       JSXResult := TGocciaJSXTransformer.Transform(SourceText);
       SourceText := JSXResult.Source;
@@ -351,7 +351,7 @@ var
   ScriptResult: TGocciaObjectValue;
   FileResult: TBenchmarkFileResult;
 begin
-  BenchGlobals := TGocciaEngine.DefaultGlobals + [ggBenchmark];
+  BenchGlobals := [ggBenchmark];
   ASource.Add('runBenchmarks();');
 
   try
@@ -415,11 +415,11 @@ var
   BenchGlobals: TGocciaGlobalBuiltins;
   LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd: Int64;
 begin
-  BenchGlobals := TGocciaEngine.DefaultGlobals + [ggBenchmark];
+  BenchGlobals := [ggBenchmark];
   ASource.Add('runBenchmarks();');
 
   SourceText := StringListToLFText(ASource);
-  if ggJSX in BenchGlobals then
+  if ppJSX in TGocciaEngine.DefaultPreprocessors then
   begin
     JSXResult := TGocciaJSXTransformer.Transform(SourceText);
     SourceText := JSXResult.Source;

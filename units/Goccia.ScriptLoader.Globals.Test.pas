@@ -89,7 +89,7 @@ begin
 
   Source := CreateEmptySource;
   Engine := TGocciaEngine.Create('<globals-test>', Source,
-    TGocciaEngine.DefaultGlobals);
+    []);
   try
     Engine.InjectGlobalsFromTOML(ReadFileText(TempFileName));
 
@@ -112,7 +112,7 @@ var
 begin
   Source := CreateEmptySource;
   Engine := TGocciaEngine.Create('<globals-test>', Source,
-    TGocciaEngine.DefaultGlobals);
+    []);
   try
     Engine.InjectGlobalsFromJSON5(
       '{' + LineEnding +
@@ -145,7 +145,7 @@ var
 begin
   Source := CreateEmptySource;
   Engine := TGocciaEngine.Create('<globals-test>', Source,
-    TGocciaEngine.DefaultGlobals);
+    []);
   try
     Engine.InjectGlobalsFromTOML(
       'name = "goccia"' + LineEnding +
@@ -179,7 +179,7 @@ var
 begin
   Backend := TGocciaBytecodeBackend.Create('<globals-test>');
   try
-    Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
+    Backend.RegisterBuiltIns([]);
     Backend.InjectGlobalsFromTOML(
       'name = "goccia"' + LineEnding +
       'release = 2026-04-04T12:30:45Z' + LineEnding +
@@ -206,7 +206,7 @@ var
 begin
   Backend := TGocciaBytecodeBackend.Create('<globals-test>');
   try
-    Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
+    Backend.RegisterBuiltIns([]);
     Backend.InjectGlobalsFromJSON5(
       '{' + LineEnding +
       '  answer: +42,' + LineEnding +

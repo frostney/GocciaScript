@@ -43,7 +43,7 @@ Overflow and range checks are **enabled** — correctness is prioritized over ra
 | Private fields | `F` prefix | `FValue`, `FPrototype` |
 | Functions/Procedures | PascalCase | `Evaluate`, `EvaluateBinary` |
 | Methods | PascalCase | `GetProperty`, `ToStringLiteral` |
-| Constants | PascalCase or UPPER_CASE | `DefaultGlobals`, `NaN` |
+| Constants | PascalCase or UPPER_CASE | `DefaultPreprocessors`, `NaN` |
 | Parameters | `A` prefix (multi-letter only) | `AScope`, `AValue`, `AFileName` |
 | Enums | `TGoccia<Name>` for type, lowercase prefix for values | `TGocciaScopeKind`, `skGlobal` |
 

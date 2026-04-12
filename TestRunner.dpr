@@ -117,7 +117,7 @@ var
   EngineResult: TGocciaScriptResult;
   TestGlobals: TGocciaGlobalBuiltins;
 begin
-  TestGlobals := TGocciaEngine.DefaultGlobals + [ggTestAssertions, ggFFI];
+  TestGlobals := [ggTestAssertions, ggFFI];
   ScriptResult := CreateDefaultScriptResult;
 
   Source := nil;
@@ -195,7 +195,7 @@ var
   OrigLine, OrigCol, I: Integer;
   LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd: Int64;
 begin
-  TestGlobals := TGocciaEngine.DefaultGlobals + [ggTestAssertions, ggFFI];
+  TestGlobals := [ggTestAssertions, ggFFI];
   ScriptResult := CreateDefaultScriptResult;
 
   Source := nil;
@@ -217,7 +217,7 @@ begin
 
     SourceText := StringListToLFText(Source);
     SourceMap := nil;
-    if ggJSX in TestGlobals then
+    if ppJSX in TGocciaEngine.DefaultPreprocessors then
     begin
       JSXResult := TGocciaJSXTransformer.Transform(SourceText);
       SourceText := JSXResult.Source;

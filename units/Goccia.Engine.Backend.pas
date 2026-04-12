@@ -41,8 +41,13 @@ type
     FBootstrapSource: TStringList;
     FOwnsModuleLoader: Boolean;
     FInjectedGlobals: TStringList;
-    FASIEnabled: Boolean;
+    FPreprocessors: TGocciaPreprocessors;
+    FCompatibility: TGocciaCompatibilityFlags;
+    FStrictTypes: Boolean;
+    FShims: TStringList;
     FGlobalBackedTopLevel: Boolean;
+    function GetASIEnabled: Boolean;
+    procedure SetASIEnabled(const AValue: Boolean);
     function GetContentProvider: TGocciaModuleContentProvider;
     function GetModuleResolver: TGocciaModuleResolver;
     procedure RequireGlobalsBootstrapReady;
@@ -71,7 +76,11 @@ type
     property ContentProvider: TGocciaModuleContentProvider read GetContentProvider;
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
       write FGlobalBackedTopLevel;
-    property ASIEnabled: Boolean read FASIEnabled write FASIEnabled;
+    property Preprocessors: TGocciaPreprocessors read FPreprocessors write FPreprocessors;
+    property Compatibility: TGocciaCompatibilityFlags read FCompatibility write FCompatibility;
+    property ASIEnabled: Boolean read GetASIEnabled write SetASIEnabled;
+    property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
+    property Shims: TStringList read FShims;
     property ModuleLoader: TGocciaModuleLoader read FModuleLoader;
     property ModuleResolver: TGocciaModuleResolver read GetModuleResolver;
   end;
@@ -82,7 +91,6 @@ uses
   SysUtils,
 
   Goccia.CallStack,
-  Goccia.Constants.PropertyNames,
   Goccia.Coverage,
   Goccia.Error,
   Goccia.GarbageCollector,
@@ -110,6 +118,10 @@ begin
   FBootstrap := nil;
   FBootstrapSource := nil;
   FInjectedGlobals := TStringList.Create;
+  FPreprocessors := TGocciaEngine.DefaultPreprocessors;
+  FCompatibility := TGocciaEngine.DefaultCompatibility;
+  FStrictTypes := True;
+  FShims := TStringList.Create;
 end;
 
 constructor TGocciaBytecodeBackend.Create(const ASourcePath: string;
@@ -132,6 +144,10 @@ begin
   FBootstrap := nil;
   FBootstrapSource := nil;
   FInjectedGlobals := TStringList.Create;
+  FPreprocessors := TGocciaEngine.DefaultPreprocessors;
+  FCompatibility := TGocciaEngine.DefaultCompatibility;
+  FStrictTypes := True;
+  FShims := TStringList.Create;
 end;
 
 destructor TGocciaBytecodeBackend.Destroy;
@@ -143,6 +159,7 @@ begin
   FInterpreter.Free;
   FBootstrapSource.Free;
   FInjectedGlobals.Free;
+  FShims.Free;
   if FOwnsModuleLoader then
     FModuleLoader.Free;
   inherited;
@@ -395,17 +412,27 @@ begin
   FBootstrapSource := EmptySource;
   FInterpreter := TGocciaInterpreter.Create(FSourcePath, FBootstrapSource,
     FModuleLoader);
-  FInterpreter.JSXEnabled := ggJSX in AGlobals;
-  FInterpreter.ASIEnabled := FASIEnabled;
+  FInterpreter.JSXEnabled := ppJSX in FPreprocessors;
+  FInterpreter.ASIEnabled := cfASI in FCompatibility;
   TGarbageCollector.Instance.AddRootObject(FInterpreter.GlobalScope);
-  FBootstrap := TGocciaRuntimeBootstrap.Create(FInterpreter, AGlobals, ThrowError);
+  FBootstrap := TGocciaRuntimeBootstrap.Create(FInterpreter, AGlobals, ThrowError,
+    FStrictTypes, FShims);
 
   FMinimalVM.GlobalScope := FInterpreter.GlobalScope;
   FMinimalVM.Interpreter := FInterpreter;
+end;
 
-  if FInterpreter.GlobalScope.GetValue('Goccia') is TGocciaObjectValue then
-    TGocciaObjectValue(FInterpreter.GlobalScope.GetValue('Goccia'))
-      .AssignProperty(PROP_STRICT_TYPES, TGocciaBooleanLiteralValue.TrueValue);
+function TGocciaBytecodeBackend.GetASIEnabled: Boolean;
+begin
+  Result := cfASI in FCompatibility;
+end;
+
+procedure TGocciaBytecodeBackend.SetASIEnabled(const AValue: Boolean);
+begin
+  if AValue then
+    Include(FCompatibility, cfASI)
+  else
+    Exclude(FCompatibility, cfASI);
 end;
 
 function TGocciaBytecodeBackend.GetContentProvider: TGocciaModuleContentProvider;

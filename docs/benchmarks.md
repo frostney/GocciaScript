@@ -120,7 +120,7 @@ The `BenchmarkRunner` program:
 
 1. Parses CLI arguments (`--format`, `--output`, and the benchmark path or stdin marker).
 2. Scans the provided path for `.js` files.
-3. For each file, creates a `TGocciaEngine` with `DefaultGlobals + [ggBenchmark]`.
+3. For each file, creates a `TGocciaEngine` with `[ggBenchmark]`.
 4. Loads the source and appends a `runBenchmarks()` call.
 5. Executes the script — the engine measures lex, parse, and execute phases separately with nanosecond precision via `TimingUtils.GetNanoseconds`.
 6. `suite()` calls execute immediately, registering `bench()` entries.
