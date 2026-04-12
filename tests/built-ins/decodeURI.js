@@ -42,11 +42,13 @@ describe("decodeURI", () => {
     expect(decodeURI("%23")).toBe("%23"); // #
   });
 
-  test("normalizes lowercase reserved hex to uppercase", () => {
-    // When a reserved char is percent-encoded, decodeURI re-emits it with uppercase hex
-    expect(decodeURI("%3b")).toBe("%3B"); // ;
-    expect(decodeURI("%2f")).toBe("%2F"); // /
-    expect(decodeURI("%3f")).toBe("%3F"); // ?
+  test("preserves original hex case for reserved characters", () => {
+    // ES2026 §19.2.6.2: reserved escapes are preserved verbatim, not normalized
+    expect(decodeURI("%3b")).toBe("%3b"); // ;
+    expect(decodeURI("%2f")).toBe("%2f"); // /
+    expect(decodeURI("%3f")).toBe("%3f"); // ?
+    expect(decodeURI("%3B")).toBe("%3B"); // ; (uppercase stays uppercase)
+    expect(decodeURI("%2F")).toBe("%2F"); // / (uppercase stays uppercase)
   });
 
   test("decodes multi-byte UTF-8 sequences", () => {

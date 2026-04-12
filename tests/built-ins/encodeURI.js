@@ -84,6 +84,13 @@ describe("encodeURI", () => {
     expect(encodeURI()).toBe("undefined");
   });
 
+  test("throws URIError for lone surrogate input", () => {
+    expect(() => encodeURI("\uD800")).toThrow(URIError);
+    expect(() => encodeURI("\uDFFF")).toThrow(URIError);
+    expect(() => encodeURI("abc\uD800")).toThrow(URIError);
+    expect(() => encodeURI("\uDC00xyz")).toThrow(URIError);
+  });
+
   test("round-trips with decodeURI", () => {
     const inputs = [
       "https://example.com/path?query=value&other=123#fragment",

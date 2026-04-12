@@ -273,7 +273,7 @@ end;
 function Decode(const AString: string; const AReservedSet: TSysCharSet): string;
 var
   Buffer: TStringBuffer;
-  I, Len, ByteCount, J: Integer;
+  I, Len, ByteCount, J, EscapeStart: Integer;
   B, B2: Byte;
   CodePoint: Integer;
   UTF8Bytes: array[0..3] of Byte;
@@ -294,6 +294,9 @@ begin
     end
     else
     begin
+      // ES2026 §19.2.6.2 step 4b: capture start position of the escape
+      EscapeStart := I;
+
       // Decode the first percent-encoded byte
       B := DecodePercentByte(AString, I, Len);
 
@@ -303,8 +306,8 @@ begin
         DecodedChar := Chr(B);
         if DecodedChar in AReservedSet then
         begin
-          // Reserved characters are re-emitted as percent-encoded (uppercase)
-          Buffer.Append(PercentEncodeByte(B));
+          // ES2026 §19.2.6.2 step 4b.ii.1: preserve original escape verbatim
+          Buffer.Append(Copy(AString, EscapeStart, 3));
         end
         else
           Buffer.Append(DecodedChar);
