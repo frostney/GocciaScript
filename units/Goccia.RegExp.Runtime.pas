@@ -91,6 +91,14 @@ begin
   if Length(AMatchResult.NamedGroups) > 0 then
   begin
     GroupsObject := TGocciaObjectValue.Create(nil);
+    // ES2025: Two-pass approach for duplicate named capture groups.
+    // Pass 1: Initialize all unique names to undefined.
+    for I := 0 to High(AMatchResult.NamedGroups) do
+      GroupsObject.AssignProperty(AMatchResult.NamedGroups[I].Name,
+        TGocciaUndefinedLiteralValue.UndefinedValue);
+    // Pass 2: Overwrite with matched values. For duplicate names, only the
+    // participating group's value is set — non-participating duplicates are
+    // skipped, preserving the correct value regardless of iteration order.
     for I := 0 to High(AMatchResult.NamedGroups) do
     begin
       GroupIndex := AMatchResult.NamedGroups[I].Index;
@@ -98,10 +106,7 @@ begin
          AMatchResult.Groups[GroupIndex].Matched then
         GroupsObject.AssignProperty(AMatchResult.NamedGroups[I].Name,
           TGocciaStringLiteralValue.Create(
-            AMatchResult.Groups[GroupIndex].Value))
-      else
-        GroupsObject.AssignProperty(AMatchResult.NamedGroups[I].Name,
-          TGocciaUndefinedLiteralValue.UndefinedValue);
+            AMatchResult.Groups[GroupIndex].Value));
     end;
     MatchArray.AssignProperty(PROP_GROUPS, GroupsObject);
   end

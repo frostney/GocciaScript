@@ -661,6 +661,7 @@ The transformer generates an internal source map for accurate error line/column 
 - Flags: `d`, `g`, `i`, `m`, `s`, `u`, `v`, `y`
 - RegExp instance properties: `source`, canonicalized `flags`, `lastIndex`, `global`, `ignoreCase`, `multiline`, `dotAll`, `unicode`, `sticky`, `unicodeSets`, `hasIndices`
 - `RegExp.escape()` (TC39 RegExp Escaping proposal)
+- Duplicate named capture groups (ES2025): the same group name may appear in different alternatives of a disjunction (`|`), e.g., `/(?<year>\d{4})-\d{2}|\d{2}-(?<year>\d{4})/`. The `groups` property returns the value from whichever alternative participated, and `\k<name>` backreferences resolve to the correct group within each alternative.
 - `RegExp.prototype.exec()`, `test()`, `toString()`, and the `Symbol.match`, `Symbol.matchAll`, `Symbol.replace`, `Symbol.search`, and `Symbol.split` hooks
 - String integrations for `replace`, `replaceAll`, `split`, `match`, `matchAll`, and `search`, including custom protocol objects with the corresponding well-known symbol methods
 
