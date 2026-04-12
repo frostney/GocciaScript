@@ -70,6 +70,7 @@ uses
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
+  Goccia.Values.RawJSON,
   Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
   Goccia.Values.WrapperPrimitives;
@@ -819,6 +820,10 @@ function TGocciaJSONStringifier.StringifyPreparedValue(const AValue: TGocciaValu
 var
   EffectiveValue: TGocciaValue;
 begin
+  // ES2026 §25.5.2.2 step 4a: If value has [[IsRawJSON]], return its raw text verbatim.
+  if AValue is TGocciaRawJSONValue then
+    Exit(TGocciaRawJSONValue(AValue).RawText);
+
   EffectiveValue := UnboxWrappedPrimitive(AValue);
 
   if EffectiveValue is TGocciaNullLiteralValue then

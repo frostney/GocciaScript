@@ -17,7 +17,8 @@ uses
   Goccia.Scope,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives;
+  Goccia.Values.Primitives,
+  Goccia.Values.RawJSON;
 
 type
   TGocciaJSONBuiltin = class(TGocciaBuiltin)
@@ -38,7 +39,9 @@ type
     function StringifyWithAllowList(const AValue: TGocciaValue; const AAllowList: TGocciaArrayValue; const AGap: string): string;
   protected
   published
+    function JSONIsRawJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function JSONParse(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function JSONRawJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function JSONStringify(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
@@ -70,7 +73,9 @@ begin
 
   Members := TGocciaMemberCollection.Create;
   try
+    Members.AddMethod(JSONIsRawJSON, 1, gmkStaticMethod);
     Members.AddMethod(JSONParse, 1, gmkStaticMethod);
+    Members.AddMethod(JSONRawJSON, 1, gmkStaticMethod);
     Members.AddMethod(JSONStringify, 1, gmkStaticMethod);
     Members.AddSymbolDataProperty(
       TGocciaSymbolValue.WellKnownToStringTag,
@@ -164,6 +169,24 @@ begin
   end;
 end;
 
+// ES2026 §25.5.2.3 JSON.isRawJSON ( O )
+function TGocciaJSONBuiltin.JSONIsRawJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Value: TGocciaValue;
+begin
+  // No arity enforcement per spec — missing argument is treated as undefined.
+  if AArgs.Length >= 1 then
+    Value := AArgs.GetElement(0)
+  else
+    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+  // Step 1: If Type(O) is Object and O has an [[IsRawJSON]] internal slot, return true.
+  // Step 2: Return false.
+  if Value is TGocciaRawJSONValue then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
 // ES2026 §25.5.1 JSON.parse ( text [ , reviver ] )
 function TGocciaJSONBuiltin.JSONParse(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -226,6 +249,57 @@ begin
         ThrowSyntaxError(E.Message);
     end;
   end;
+end;
+
+// ES2026 §25.5.2.4 JSON.rawJSON ( text )
+function TGocciaJSONBuiltin.JSONRawJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+const
+  JSON_WHITESPACE_TAB = #9;
+  JSON_WHITESPACE_LF = #10;
+  JSON_WHITESPACE_CR = #13;
+  JSON_WHITESPACE_SPACE = #32;
+var
+  TextValue: TGocciaValue;
+  JSONString: string;
+  Parsed: TGocciaValue;
+  FirstChar, LastChar: Char;
+begin
+  // Step 1: Let jsonString be ? ToString(text).
+  // No arity enforcement per spec — missing argument is treated as undefined.
+  if AArgs.Length >= 1 then
+    TextValue := AArgs.GetElement(0)
+  else
+    TextValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  JSONString := TextValue.ToStringLiteral.Value;
+
+  // Step 2: Throw a SyntaxError if jsonString is the empty string.
+  if JSONString = '' then
+    ThrowSyntaxError('JSON.rawJSON: empty string is not valid JSON');
+
+  // Step 2 (continued): Throw a SyntaxError if the first or last code unit is whitespace.
+  FirstChar := JSONString[1];
+  LastChar := JSONString[Length(JSONString)];
+  if (FirstChar = JSON_WHITESPACE_TAB) or (FirstChar = JSON_WHITESPACE_LF) or
+    (FirstChar = JSON_WHITESPACE_CR) or (FirstChar = JSON_WHITESPACE_SPACE) then
+    ThrowSyntaxError('JSON.rawJSON: input must not have leading whitespace');
+  if (LastChar = JSON_WHITESPACE_TAB) or (LastChar = JSON_WHITESPACE_LF) or
+    (LastChar = JSON_WHITESPACE_CR) or (LastChar = JSON_WHITESPACE_SPACE) then
+    ThrowSyntaxError('JSON.rawJSON: input must not have trailing whitespace');
+
+  // Step 3: Parse jsonString as a JSON text. Throw SyntaxError if invalid.
+  try
+    Parsed := FParser.Parse(UTF8String(JSONString));
+  except
+    on E: Exception do
+      ThrowSyntaxError('JSON.rawJSON: ' + E.Message);
+  end;
+
+  // Step 3 (continued): Throw SyntaxError if outermost value is object or array.
+  if (Parsed is TGocciaObjectValue) then
+    ThrowSyntaxError('JSON.rawJSON: value must be a JSON primitive (not an object or array)');
+
+  // Steps 4-7: Create frozen object with null prototype, [[IsRawJSON]], and "rawJSON" property.
+  Result := TGocciaRawJSONValue.Create(JSONString);
 end;
 
 // §25.5.2 steps 7-8: Resolve the gap (indentation) string from the space argument.
@@ -312,6 +386,13 @@ begin
 
   // Step 3: If replacer returned undefined, signal omission.
   if Replaced is TGocciaUndefinedLiteralValue then
+  begin
+    Result := Replaced;
+    Exit;
+  end;
+
+  // ES2026 §25.5.2.2 step 4a: If result has [[IsRawJSON]], pass through directly.
+  if Replaced is TGocciaRawJSONValue then
   begin
     Result := Replaced;
     Exit;
