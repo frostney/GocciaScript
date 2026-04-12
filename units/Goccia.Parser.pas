@@ -140,6 +140,7 @@ type
     function ParseTaggedTemplate(const ATag: TGocciaExpression;
       const ATemplateToken: TGocciaToken;
       const ALine, AColumn: Integer): TGocciaTaggedTemplateExpression;
+    function ParseTemplateLiteral(const AToken: TGocciaToken): TGocciaExpression;
     function Primary: TGocciaExpression;
     function ArrayLiteral: TGocciaExpression;
     function ObjectLiteral: TGocciaExpression;
@@ -867,154 +868,321 @@ begin
   end;
 end;
 
-// ES2026 §13.3.11 Tagged Templates
-function TGocciaParser.ParseTaggedTemplate(const ATag: TGocciaExpression;
-  const ATemplateToken: TGocciaToken;
-  const ALine, AColumn: Integer): TGocciaTaggedTemplateExpression;
+// Compute the UTF-8 byte count for a Unicode code point.
+function UTF8ByteCount(const ACodePoint: Cardinal): Integer; inline;
+begin
+  if ACodePoint <= $7F then
+    Result := 1
+  else if ACodePoint <= $7FF then
+    Result := 2
+  else if ACodePoint <= $FFFF then
+    Result := 3
+  else
+    Result := 4;
+end;
+
+// Parse a hex string into a cardinal, returning 0 on invalid input.
+function SafeHexToCardinal(const AHexStr: string): Cardinal;
+begin
+  if AHexStr = '' then
+    Result := 0
+  else
+    Result := Cardinal(StrToIntDef('$' + AHexStr, 0));
+end;
+
+// Split a template token's cooked and raw strings at real ${...} interpolation
+// boundaries. Uses the raw string for boundary detection (where \$ is preserved
+// as two characters, preventing phantom boundaries from escaped dollar signs).
+// Walks both strings in parallel, tracking how escape sequences map between the
+// two representations.
+//
+// The escape length mapping mirrors Goccia.Lexer.ScanTemplate exactly:
+//   \$ \` \n \r \t \\ \0 \<other>: raw=2, cooked=1
+//   \xHH:                          raw=4, cooked=1
+//   \uHHHH:                        raw=6, cooked=UTF8ByteCount(codepoint)
+//   \uHHHH\uHHHH (surrogate pair): raw=12, cooked=UTF8ByteCount(combined)
+//   \u{H...}:                       raw=4+len(hex), cooked=UTF8ByteCount(codepoint)
+procedure SplitTemplateAtBoundaries(const ACookedFull, ARawFull: string;
+  out ACookedSegments, ARawSegments: TGocciaTemplateStrings;
+  out AExpressionTexts: TGocciaTemplateStrings);
+const
+  HIGH_SURROGATE_MIN = $D800;
+  HIGH_SURROGATE_MAX = $DBFF;
+  LOW_SURROGATE_MIN = $DC00;
+  LOW_SURROGATE_MAX = $DFFF;
+  SURROGATE_OFFSET = $10000;
+  SURROGATE_SHIFT = 10;
+var
+  RawI, CookedI, StartRaw, StartCooked, SegmentCount, ExprCount: Integer;
+  BraceCount, ExprStartRaw: Integer;
+  CodePoint, LowSurrogate: Cardinal;
+  HexStart, HexEnd: Integer;
+begin
+  SetLength(ACookedSegments, 0);
+  SetLength(ARawSegments, 0);
+  SetLength(AExpressionTexts, 0);
+  SegmentCount := 0;
+  ExprCount := 0;
+
+  RawI := 1;
+  CookedI := 1;
+  StartRaw := 1;
+  StartCooked := 1;
+
+  while RawI <= Length(ARawFull) do
+  begin
+    if ARawFull[RawI] = '\' then
+    begin
+      // Escape sequence in raw — advance past it in both strings.
+      // The raw string preserves escape sequences verbatim; the cooked string
+      // has the resolved value (produced by Goccia.Lexer.ScanTemplate).
+      Inc(RawI); // skip '\'
+      if RawI <= Length(ARawFull) then
+      begin
+        case ARawFull[RawI] of
+          'x':
+          begin
+            // \xHH: raw=4 total (\xHH), cooked=1 byte
+            Inc(RawI, 3); // skip 'x', H, H
+            Inc(CookedI);
+          end;
+          'u':
+          begin
+            Inc(RawI); // skip 'u'
+            if (RawI <= Length(ARawFull)) and (ARawFull[RawI] = '{') then
+            begin
+              // \u{H...}: variable raw length, cooked=UTF8ByteCount
+              Inc(RawI); // skip '{'
+              HexStart := RawI;
+              while (RawI <= Length(ARawFull)) and (ARawFull[RawI] <> '}') do
+                Inc(RawI);
+              HexEnd := RawI;
+              CodePoint := SafeHexToCardinal(Copy(ARawFull, HexStart, HexEnd - HexStart));
+              Inc(RawI); // skip '}'
+              Inc(CookedI, UTF8ByteCount(CodePoint));
+            end
+            else
+            begin
+              // \uHHHH: raw=6 total, cooked=UTF8ByteCount. May form surrogate pair.
+              CodePoint := SafeHexToCardinal(Copy(ARawFull, RawI, 4));
+              Inc(RawI, 4); // skip HHHH
+              // ES2026 §12.9.4: check for UTF-16 surrogate pair
+              if (CodePoint >= HIGH_SURROGATE_MIN) and (CodePoint <= HIGH_SURROGATE_MAX) and
+                 (RawI + 5 <= Length(ARawFull)) and
+                 (ARawFull[RawI] = '\') and (ARawFull[RawI + 1] = 'u') then
+              begin
+                LowSurrogate := SafeHexToCardinal(Copy(ARawFull, RawI + 2, 4));
+                if (LowSurrogate >= LOW_SURROGATE_MIN) and (LowSurrogate <= LOW_SURROGATE_MAX) then
+                begin
+                  CodePoint := SURROGATE_OFFSET +
+                    ((CodePoint - HIGH_SURROGATE_MIN) shl SURROGATE_SHIFT) +
+                    (LowSurrogate - LOW_SURROGATE_MIN);
+                  Inc(RawI, 6); // skip \uHHHH of low surrogate
+                end;
+              end;
+              Inc(CookedI, UTF8ByteCount(CodePoint));
+            end;
+          end;
+        else
+          // All other escapes: \n \r \t \\ \0 \$ \` \<other>
+          // raw=2 total (\ + char), cooked=1 byte
+          Inc(RawI); // skip the escaped character
+          Inc(CookedI);
+        end;
+      end;
+    end
+    else if (ARawFull[RawI] = '$') and (RawI < Length(ARawFull)) and
+            (ARawFull[RawI + 1] = '{') then
+    begin
+      // Real interpolation boundary (unescaped $ followed by {)
+      // Record the static text segments up to this point
+      SetLength(ACookedSegments, SegmentCount + 1);
+      ACookedSegments[SegmentCount] := Copy(ACookedFull, StartCooked, CookedI - StartCooked);
+      SetLength(ARawSegments, SegmentCount + 1);
+      ARawSegments[SegmentCount] := Copy(ARawFull, StartRaw, RawI - StartRaw);
+      Inc(SegmentCount);
+
+      // Skip ${ in both strings
+      Inc(RawI, 2);
+      Inc(CookedI, 2);
+      ExprStartRaw := RawI;
+
+      // Find matching } by brace counting (expression text is identical in both)
+      BraceCount := 1;
+      while (RawI <= Length(ARawFull)) and (BraceCount > 0) do
+      begin
+        if ARawFull[RawI] = '{' then
+          Inc(BraceCount)
+        else if ARawFull[RawI] = '}' then
+          Dec(BraceCount);
+        if BraceCount > 0 then
+        begin
+          Inc(RawI);
+          Inc(CookedI);
+        end;
+      end;
+
+      // Record expression text (identical in raw and cooked)
+      SetLength(AExpressionTexts, ExprCount + 1);
+      AExpressionTexts[ExprCount] := Trim(Copy(ARawFull, ExprStartRaw, RawI - ExprStartRaw));
+      Inc(ExprCount);
+
+      // Skip closing }
+      Inc(RawI);
+      Inc(CookedI);
+      StartRaw := RawI;
+      StartCooked := CookedI;
+    end
+    else
+    begin
+      // Normal character — advance both by 1
+      Inc(RawI);
+      Inc(CookedI);
+    end;
+  end;
+
+  // Record the final static text segments
+  SetLength(ACookedSegments, SegmentCount + 1);
+  ACookedSegments[SegmentCount] := Copy(ACookedFull, StartCooked, CookedI - StartCooked);
+  SetLength(ARawSegments, SegmentCount + 1);
+  ARawSegments[SegmentCount] := Copy(ARawFull, StartRaw, RawI - StartRaw);
+end;
+
+// Extract cooked and raw full strings from a template token lexeme.
+procedure ExtractTemplateParts(const ALexeme: string; out ACookedFull, ARawFull: string);
 const
   TEMPLATE_RAW_SEPARATOR = #1;
 var
-  Lexeme, CookedFull, RawFull: string;
   SepPos: Integer;
-  CookedStrings, RawStrings: TGocciaTemplateStrings;
-  Expressions: TObjectList<TGocciaExpression>;
-  I, Start, BraceCount, StringCount: Integer;
-  ExprText: string;
+begin
+  SepPos := Pos(TEMPLATE_RAW_SEPARATOR, ALexeme);
+  if SepPos > 0 then
+  begin
+    ACookedFull := Copy(ALexeme, 1, SepPos - 1);
+    ARawFull := Copy(ALexeme, SepPos + 1, MaxInt);
+  end
+  else
+  begin
+    ACookedFull := ALexeme;
+    ARawFull := ALexeme;
+  end;
+end;
+
+// Parse a template interpolation expression text into an AST expression node.
+// Note: Tokens are owned by the Lexer (FTokens with OwnsObjects=True) and freed
+// when the Lexer is destroyed — they must not be freed separately.
+function ParseInterpolationExpression(const AExprText, AFileName: string): TGocciaExpression;
+var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
   Tokens: TObjectList<TGocciaToken>;
   SourceLines: TStringList;
-  ParsedExpr: TGocciaExpression;
 begin
-  Lexeme := ATemplateToken.Lexeme;
-  SepPos := Pos(TEMPLATE_RAW_SEPARATOR, Lexeme);
-  if SepPos > 0 then
-  begin
-    CookedFull := Copy(Lexeme, 1, SepPos - 1);
-    RawFull := Copy(Lexeme, SepPos + 1, MaxInt);
-  end
-  else
-  begin
-    CookedFull := Lexeme;
-    RawFull := Lexeme;
-  end;
+  Result := nil;
+  if AExprText = '' then
+    Exit;
 
-  // Split both cooked and raw at ${...} boundaries
-  // Both share the same interpolation markers since ${...} is not affected by escapes
-  Expressions := TObjectList<TGocciaExpression>.Create(True);
-  SetLength(CookedStrings, 0);
-  SetLength(RawStrings, 0);
-  StringCount := 0;
-
-  I := 1;
-  Start := 1;
-  while I <= Length(CookedFull) do
-  begin
-    if (I < Length(CookedFull)) and (CookedFull[I] = '$') and (CookedFull[I + 1] = '{') then
-    begin
-      // Add the static string part before this interpolation
-      SetLength(CookedStrings, StringCount + 1);
-      CookedStrings[StringCount] := Copy(CookedFull, Start, I - Start);
-      Inc(StringCount);
-
-      Inc(I, 2); // skip '${'
-      Start := I;
-
-      // Find matching closing brace
-      BraceCount := 1;
-      while (I <= Length(CookedFull)) and (BraceCount > 0) do
-      begin
-        if CookedFull[I] = '{' then
-          Inc(BraceCount)
-        else if CookedFull[I] = '}' then
-          Dec(BraceCount);
-        if BraceCount > 0 then
-          Inc(I);
-      end;
-
-      ExprText := Trim(Copy(CookedFull, Start, I - Start));
-      Inc(I); // skip '}'
-      Start := I;
-
-      // Parse the interpolation expression
-      if ExprText <> '' then
-      begin
-        Lexer := TGocciaLexer.Create('(' + ExprText + ');', FFileName);
+  Lexer := TGocciaLexer.Create('(' + AExprText + ');', AFileName);
+  try
+    Tokens := Lexer.ScanTokens;
+    SourceLines := TStringList.Create;
+    SourceLines.Text := AExprText;
+    try
+      Parser := TGocciaParser.Create(Tokens, AFileName, SourceLines);
+      try
+        ProgramNode := Parser.ParseUnchecked;
         try
-          Tokens := Lexer.ScanTokens;
-          SourceLines := TStringList.Create;
-          SourceLines.Text := ExprText;
-          try
-            Parser := TGocciaParser.Create(Tokens, FFileName, SourceLines);
-            try
-              ProgramNode := Parser.ParseUnchecked;
-              try
-                ParsedExpr := nil;
-                if (ProgramNode.Body.Count > 0) and
-                   (ProgramNode.Body[0] is TGocciaExpressionStatement) then
-                  ParsedExpr := TGocciaExpressionStatement(ProgramNode.Body[0]).Expression;
-
-                if Assigned(ParsedExpr) then
-                  Expressions.Add(ParsedExpr);
-              finally
-                ProgramNode.Free;
-              end;
-            finally
-              Parser.Free;
-            end;
-          finally
-            SourceLines.Free;
-          end;
+          if (ProgramNode.Body.Count > 0) and
+             (ProgramNode.Body[0] is TGocciaExpressionStatement) then
+            Result := TGocciaExpressionStatement(ProgramNode.Body[0]).Expression;
         finally
-          Lexer.Free;
+          ProgramNode.Free;
         end;
+      finally
+        Parser.Free;
       end;
-    end
-    else
-      Inc(I);
+    finally
+      SourceLines.Free;
+    end;
+  finally
+    Lexer.Free;
   end;
+end;
 
-  // Add the final static string part
-  SetLength(CookedStrings, StringCount + 1);
-  CookedStrings[StringCount] := Copy(CookedFull, Start, I - Start);
+// ES2026 §13.3.11 Tagged Templates
+function TGocciaParser.ParseTaggedTemplate(const ATag: TGocciaExpression;
+  const ATemplateToken: TGocciaToken;
+  const ALine, AColumn: Integer): TGocciaTaggedTemplateExpression;
+var
+  CookedFull, RawFull: string;
+  CookedStrings, RawStrings, ExprTexts: TGocciaTemplateStrings;
+  Expressions: TObjectList<TGocciaExpression>;
+  ParsedExpr: TGocciaExpression;
+  I: Integer;
+begin
+  ExtractTemplateParts(ATemplateToken.Lexeme, CookedFull, RawFull);
 
-  // Now split the raw string at the same boundaries
-  // We use the same brace-counting approach on RawFull since ${...} appears identically
-  SetLength(RawStrings, 0);
-  StringCount := 0;
-  I := 1;
-  Start := 1;
-  while I <= Length(RawFull) do
+  // Split at real interpolation boundaries using raw string for detection
+  SplitTemplateAtBoundaries(CookedFull, RawFull, CookedStrings, RawStrings, ExprTexts);
+
+  // Parse each interpolation expression into an AST node
+  Expressions := TObjectList<TGocciaExpression>.Create(True);
+  for I := 0 to Length(ExprTexts) - 1 do
   begin
-    if (I < Length(RawFull)) and (RawFull[I] = '$') and (RawFull[I + 1] = '{') then
-    begin
-      SetLength(RawStrings, StringCount + 1);
-      RawStrings[StringCount] := Copy(RawFull, Start, I - Start);
-      Inc(StringCount);
-
-      Inc(I, 2);
-      BraceCount := 1;
-      while (I <= Length(RawFull)) and (BraceCount > 0) do
-      begin
-        if RawFull[I] = '{' then
-          Inc(BraceCount)
-        else if RawFull[I] = '}' then
-          Dec(BraceCount);
-        if BraceCount > 0 then
-          Inc(I);
-      end;
-      Inc(I);
-      Start := I;
-    end
-    else
-      Inc(I);
+    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName);
+    if Assigned(ParsedExpr) then
+      Expressions.Add(ParsedExpr);
   end;
-  SetLength(RawStrings, StringCount + 1);
-  RawStrings[StringCount] := Copy(RawFull, Start, I - Start);
 
   Result := TGocciaTaggedTemplateExpression.Create(ATag, CookedStrings, RawStrings,
     Expressions, ALine, AColumn);
+end;
+
+// ES2026 §13.2.8 Template Literals — pre-segment non-tagged templates at parse
+// time using raw-string boundary detection, so that escaped dollar signs (\$)
+// are never mistaken for interpolation boundaries at evaluation time.
+function TGocciaParser.ParseTemplateLiteral(const AToken: TGocciaToken): TGocciaExpression;
+var
+  CookedFull, RawFull: string;
+  CookedSegments, RawSegments, ExprTexts: TGocciaTemplateStrings;
+  Parts: TObjectList<TGocciaExpression>;
+  ParsedExpr: TGocciaExpression;
+  I: Integer;
+begin
+  ExtractTemplateParts(AToken.Lexeme, CookedFull, RawFull);
+  SplitTemplateAtBoundaries(CookedFull, RawFull, CookedSegments, RawSegments, ExprTexts);
+
+  // No real interpolations — return a simple template literal
+  if Length(ExprTexts) = 0 then
+  begin
+    Result := TGocciaTemplateLiteralExpression.Create(CookedFull, AToken.Line, AToken.Column);
+    Exit;
+  end;
+
+  // Has real interpolations — build a pre-segmented template expression.
+  // Parts alternate: string literal, expression, string literal, expression, ..., string literal
+  Parts := TObjectList<TGocciaExpression>.Create(True);
+
+  for I := 0 to Length(ExprTexts) - 1 do
+  begin
+    // Add the cooked static text segment before this interpolation
+    Parts.Add(TGocciaLiteralExpression.Create(
+      TGocciaStringLiteralValue.Create(CookedSegments[I]),
+      AToken.Line, AToken.Column));
+
+    // Parse and add the interpolation expression
+    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName);
+    if Assigned(ParsedExpr) then
+      Parts.Add(ParsedExpr);
+  end;
+
+  // Add the final cooked static text segment
+  Parts.Add(TGocciaLiteralExpression.Create(
+    TGocciaStringLiteralValue.Create(CookedSegments[Length(CookedSegments) - 1]),
+    AToken.Line, AToken.Column));
+
+  Result := TGocciaTemplateWithInterpolationExpression.Create(Parts, AToken.Line, AToken.Column);
 end;
 
 function TGocciaParser.Primary: TGocciaExpression;
@@ -1063,12 +1231,7 @@ begin
   else if Match(gttTemplate) then
   begin
     Token := Previous;
-    SeparatorPos := Pos(#1, Token.Lexeme);
-    if SeparatorPos > 0 then
-      Result := TGocciaTemplateLiteralExpression.Create(
-        Copy(Token.Lexeme, 1, SeparatorPos - 1), Token.Line, Token.Column)
-    else
-      Result := TGocciaTemplateLiteralExpression.Create(Token.Lexeme, Token.Line, Token.Column);
+    Result := ParseTemplateLiteral(Token);
   end
   else if Match(gttRegex) then
   begin

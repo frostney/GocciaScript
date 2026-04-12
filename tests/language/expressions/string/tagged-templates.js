@@ -191,6 +191,67 @@ describe("tagged templates", () => {
     expect(raw[0]).toBe("\\`\\$");
   });
 
+  test("escaped dollar-brace is not an interpolation boundary", () => {
+    const x = 42;
+    let strings;
+    let values;
+    const tag = (s, ...v) => { strings = s; values = v; };
+    tag`\${x}`;
+    expect(strings.length).toBe(1);
+    expect(strings[0]).toBe("${x}");
+    expect(values.length).toBe(0);
+    expect(strings.raw[0]).toBe("\\${x}");
+  });
+
+  test("escaped backslash before real interpolation", () => {
+    const x = 42;
+    let strings;
+    let values;
+    const tag = (s, ...v) => { strings = s; values = v; };
+    tag`\\${x}`;
+    expect(strings.length).toBe(2);
+    expect(strings[0]).toBe("\\");
+    expect(strings[1]).toBe("");
+    expect(values.length).toBe(1);
+    expect(values[0]).toBe(42);
+    expect(strings.raw[0]).toBe("\\\\");
+    expect(strings.raw[1]).toBe("");
+  });
+
+  test("mixed escaped and real interpolations", () => {
+    const a = 1;
+    const b = 2;
+    let strings;
+    let values;
+    const tag = (s, ...v) => { strings = s; values = v; };
+    tag`\${a} ${b}`;
+    expect(strings.length).toBe(2);
+    expect(strings[0]).toBe("${a} ");
+    expect(strings[1]).toBe("");
+    expect(values.length).toBe(1);
+    expect(values[0]).toBe(2);
+  });
+
+  test("escaped dollar without brace is literal", () => {
+    let strings;
+    const tag = (s) => { strings = s; };
+    tag`price: \$5`;
+    expect(strings.length).toBe(1);
+    expect(strings[0]).toBe("price: $5");
+    expect(strings.raw[0]).toBe("price: \\$5");
+  });
+
+  test("triple backslash before dollar-brace is escaped backslash plus escaped dollar", () => {
+    const x = 42;
+    let strings;
+    let values;
+    const tag = (s, ...v) => { strings = s; values = v; };
+    tag`\\\${x}`;
+    expect(strings.length).toBe(1);
+    expect(strings[0]).toBe("\\${x}");
+    expect(values.length).toBe(0);
+  });
+
   test("same call site returns the identical template object on every invocation (ES2026 §13.2.8.3)", () => {
     // The spec requires GetTemplateObject to return the same frozen object for
     // repeated evaluations of the same Parse Node (call site).
