@@ -348,11 +348,10 @@ var
       if Assigned(GC) then
         GC.AddTempRoot(AwaitedPromise);
       try
-        if AwaitedPromise.State = gpsPending then
-        begin
-          if Assigned(TGocciaMicrotaskQueue.Instance) then
-            TGocciaMicrotaskQueue.Instance.DrainQueue;
-        end;
+        // ES2026 §27.7.5.3: Drain microtask queue for both pending and
+        // already-settled promises to introduce a microtask boundary
+        if Assigned(TGocciaMicrotaskQueue.Instance) then
+          TGocciaMicrotaskQueue.Instance.DrainQueue;
         if AwaitedPromise.State = gpsFulfilled then
           Result := AwaitedPromise.PromiseResult
         else if AwaitedPromise.State = gpsRejected then
@@ -365,7 +364,13 @@ var
       end;
     end
     else
+    begin
+      // ES2026 §27.7.5.3 step 2: Await wraps the value in Promise.resolve(),
+      // introducing a microtask boundary even for non-promise values
+      if Assigned(TGocciaMicrotaskQueue.Instance) then
+        TGocciaMicrotaskQueue.Instance.DrainQueue;
       Result := AValue;
+    end;
   end;
 
   procedure AddElement(const AIndex: Integer; const AValue: TGocciaValue);
