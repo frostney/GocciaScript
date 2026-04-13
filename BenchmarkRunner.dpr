@@ -9,6 +9,7 @@ uses
 
   TimingUtils,
 
+  Goccia.Application,
   Goccia.AST.Node,
   Goccia.Benchmark.Reporter,
   Goccia.Builtins.Benchmark,
@@ -693,9 +694,15 @@ type
     FOutputFile: TGocciaStringOption;
   protected
     procedure Configure; override;
+    function UsageLine: string; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
     function GlobalBuiltins: TGocciaGlobalBuiltins; override;
   end;
+
+function TBenchmarkRunnerApp.UsageLine: string;
+begin
+  Result := '[path...|-] [options]';
+end;
 
 procedure TBenchmarkRunnerApp.Configure;
 begin
@@ -766,6 +773,5 @@ begin
 end;
 
 begin
-  ExitCode := TGocciaCLIApplication.RunCLI(TBenchmarkRunnerApp,
-    'BenchmarkRunner', 'BenchmarkRunner [path...|-] [options]');
+  ExitCode := TGocciaApplication.RunApplication(TBenchmarkRunnerApp, 'BenchmarkRunner');
 end.

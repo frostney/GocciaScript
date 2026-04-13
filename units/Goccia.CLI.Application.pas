@@ -12,11 +12,8 @@ uses
   Goccia.CLI.Options;
 
 type
-  TGocciaCLIApplicationClass = class of TGocciaCLIApplication;
-
   TGocciaCLIApplication = class(TGocciaApplication)
   private
-    FUsageLine: string;
     FHelp: TGocciaFlagOption;
     FEngineOptions: TGocciaEngineOptions;
     FCoverageOptions: TGocciaCoverageOptions;
@@ -28,6 +25,7 @@ type
     procedure ShutdownSingletons;
   protected
     procedure Configure; virtual; abstract;
+    function UsageLine: string; virtual; abstract;
     procedure Execute; override;
     procedure ExecuteWithPaths(const APaths: TStringList); virtual; abstract;
     procedure Validate; virtual;
@@ -44,10 +42,8 @@ type
     property CoverageOptions: TGocciaCoverageOptions read FCoverageOptions;
     property ProfilerOptions: TGocciaProfilerOptions read FProfilerOptions;
   public
-    constructor Create(const AName, AUsageLine: string);
+    constructor Create(const AName: string); override;
     destructor Destroy; override;
-    class function RunCLI(const AClass: TGocciaCLIApplicationClass;
-      const AName, AUsageLine: string): Integer;
   end;
 
 implementation
@@ -61,10 +57,9 @@ uses
 
 { TGocciaCLIApplication }
 
-constructor TGocciaCLIApplication.Create(const AName, AUsageLine: string);
+constructor TGocciaCLIApplication.Create(const AName: string);
 begin
   inherited Create(AName);
-  FUsageLine := AUsageLine;
   FOwnedOptions := TGocciaOptionBaseList.Create(True);
   FEngineOptions := nil;
   FCoverageOptions := nil;
@@ -213,7 +208,7 @@ begin
   try
     if FHelp.Present then
     begin
-      HelpText := GenerateHelpText(Name, FUsageLine, FAllOptions);
+      HelpText := GenerateHelpText(Name, UsageLine, FAllOptions);
       Write(HelpText);
       Exit;
     end;
@@ -229,20 +224,6 @@ begin
     end;
   finally
     Paths.Free;
-  end;
-end;
-
-class function TGocciaCLIApplication.RunCLI(
-  const AClass: TGocciaCLIApplicationClass;
-  const AName, AUsageLine: string): Integer;
-var
-  App: TGocciaCLIApplication;
-begin
-  App := AClass.Create(AName, AUsageLine);
-  try
-    Result := App.Run;
-  finally
-    App.Free;
   end;
 end;
 

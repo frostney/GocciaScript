@@ -10,6 +10,7 @@ uses
 
   TimingUtils,
 
+  Goccia.Application,
   Goccia.AST.Node,
   Goccia.Builtins.TestConsole,
   Goccia.Bytecode.Module,
@@ -63,25 +64,11 @@ type
     FOutputFile: TGocciaStringOption;
   protected
     procedure Configure; override;
+    function UsageLine: string; override;
     procedure Validate; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
     function GlobalBuiltins: TGocciaGlobalBuiltins; override;
   private
-    function ShowProgress: Boolean;
-    function ShowResults: Boolean;
-    function ExitOnFirstFailure: Boolean;
-    function SilentConsole: Boolean;
-    function OutputFile: string;
-    function ImportMapPath: string;
-    function InlineAliases: TStringList;
-    function Mode: TGocciaEngineBackend;
-    function ASIEnabled: Boolean;
-    function TimeoutMilliseconds: Integer;
-    function CoverageEnabled: Boolean;
-    function CoverageLcovEnabled: Boolean;
-    function CoverageJsonEnabled: Boolean;
-    function CoverageOutputPath: string;
-
     function RunGocciaScriptInterpreted(const AFileName: string): TTestFileResult;
     function RunGocciaScriptBytecode(const AFileName: string): TTestFileResult;
     function RunGocciaScript(const AFileName: string): TTestFileResult;
@@ -171,6 +158,11 @@ begin
     CoverageOptions.Enabled.Apply('');
 end;
 
+function TTestRunnerApp.UsageLine: string;
+begin
+  Result := '<path...> [options]';
+end;
+
 procedure TTestRunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
   Files: TStringList;
@@ -201,22 +193,28 @@ begin
 
     if Files.Count = 1 then
     begin
-      if ShowProgress then
+      if not FNoProgress.Present then
         WriteLn('[1/1] ', Files[0]);
       PrintTestResults(RunScriptFromFile(Files[0]));
     end
     else
       PrintTestResults(RunScriptsFromFiles(Files));
 
-    if CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+    if (CoverageOptions.Enabled.Present or CoverageOptions.Format.Present or
+        CoverageOptions.OutputPath.Present) and
+       Assigned(TGocciaCoverageTracker.Instance) then
     begin
       PrintCoverageSummary(TGocciaCoverageTracker.Instance);
       if Files.Count = 1 then
         PrintCoverageDetail(TGocciaCoverageTracker.Instance, Files[0]);
-      if CoverageLcovEnabled and (CoverageOutputPath <> '') then
-        WriteCoverageLcov(TGocciaCoverageTracker.Instance, CoverageOutputPath);
-      if CoverageJsonEnabled and (CoverageOutputPath <> '') then
-        WriteCoverageJSON(TGocciaCoverageTracker.Instance, CoverageOutputPath);
+      if CoverageOptions.Format.Present and (CoverageOptions.Format.Value = cfLcov) and
+         (CoverageOptions.OutputPath.ValueOr('') <> '') then
+        WriteCoverageLcov(TGocciaCoverageTracker.Instance,
+          CoverageOptions.OutputPath.ValueOr(''));
+      if CoverageOptions.Format.Present and (CoverageOptions.Format.Value = cfJson) and
+         (CoverageOptions.OutputPath.ValueOr('') <> '') then
+        WriteCoverageJSON(TGocciaCoverageTracker.Instance,
+          CoverageOptions.OutputPath.ValueOr(''));
     end;
   finally
     Files.Free;
@@ -226,83 +224,6 @@ end;
 function TTestRunnerApp.GlobalBuiltins: TGocciaGlobalBuiltins;
 begin
   Result := [ggTestAssertions, ggFFI];
-end;
-
-function TTestRunnerApp.ShowProgress: Boolean;
-begin
-  Result := not FNoProgress.Present;
-end;
-
-function TTestRunnerApp.ShowResults: Boolean;
-begin
-  Result := not FNoResults.Present;
-end;
-
-function TTestRunnerApp.ExitOnFirstFailure: Boolean;
-begin
-  Result := FExitOnFirst.Present;
-end;
-
-function TTestRunnerApp.SilentConsole: Boolean;
-begin
-  Result := FSilent.Present;
-end;
-
-function TTestRunnerApp.OutputFile: string;
-begin
-  Result := FOutputFile.ValueOr('');
-end;
-
-function TTestRunnerApp.ImportMapPath: string;
-begin
-  Result := EngineOptions.ImportMap.ValueOr('');
-end;
-
-function TTestRunnerApp.InlineAliases: TStringList;
-begin
-  Result := EngineOptions.Aliases.Values;
-end;
-
-function TTestRunnerApp.Mode: TGocciaEngineBackend;
-begin
-  case EngineOptions.Mode.ValueOr(emInterpreted) of
-    emInterpreted: Result := ebTreeWalk;
-    emBytecode:    Result := ebBytecode;
-  end;
-end;
-
-function TTestRunnerApp.ASIEnabled: Boolean;
-begin
-  Result := EngineOptions.ASI.Present;
-end;
-
-function TTestRunnerApp.TimeoutMilliseconds: Integer;
-begin
-  Result := EngineOptions.Timeout.ValueOr(0);
-end;
-
-function TTestRunnerApp.CoverageEnabled: Boolean;
-begin
-  Result := CoverageOptions.Enabled.Present or
-            CoverageOptions.Format.Present or
-            CoverageOptions.OutputPath.Present;
-end;
-
-function TTestRunnerApp.CoverageLcovEnabled: Boolean;
-begin
-  Result := CoverageOptions.Format.Present and
-            (CoverageOptions.Format.Value = cfLcov);
-end;
-
-function TTestRunnerApp.CoverageJsonEnabled: Boolean;
-begin
-  Result := CoverageOptions.Format.Present and
-            (CoverageOptions.Format.Value = cfJson);
-end;
-
-function TTestRunnerApp.CoverageOutputPath: string;
-begin
-  Result := CoverageOptions.OutputPath.ValueOr('');
 end;
 
 function TTestRunnerApp.RunGocciaScriptInterpreted(const AFileName: string): TTestFileResult;
@@ -332,23 +253,23 @@ begin
     end;
 
     Source.Add(Format('runTests({ exitOnFirstFailure: %s, showTestResults: false });',
-      [BoolToStr(ExitOnFirstFailure, 'true', 'false')]));
+      [BoolToStr(FExitOnFirst.Present, 'true', 'false')]));
 
     try
       SilentCon := nil;
       Engine := TGocciaEngine.Create(AFileName, Source, TestGlobals);
       try
-        Engine.ASIEnabled := ASIEnabled;
-        ConfigureModuleResolver(Engine.Resolver, AFileName, ImportMapPath,
-          InlineAliases);
-        if SilentConsole then
+        Engine.ASIEnabled := EngineOptions.ASI.Present;
+        ConfigureModuleResolver(Engine.Resolver, AFileName,
+          EngineOptions.ImportMap.ValueOr(''), EngineOptions.Aliases.Values);
+        if FSilent.Present then
         begin
           SilentCon := TGocciaTestConsole.Create;
           SilentCon.Silence(Engine.BuiltinConsole.BuiltinObject);
           Engine.SuppressWarnings := True;
         end;
 
-        StartExecutionTimeout(TimeoutMilliseconds);
+        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
         try
           EngineResult := Engine.Execute;
         finally
@@ -426,7 +347,7 @@ begin
     end;
 
     Source.Add(Format('runTests({ exitOnFirstFailure: %s, showTestResults: false });',
-      [BoolToStr(ExitOnFirstFailure, 'true', 'false')]));
+      [BoolToStr(FExitOnFirst.Present, 'true', 'false')]));
 
     SourceText := StringListToLFText(Source);
     SourceMap := nil;
@@ -440,10 +361,10 @@ begin
     try try
       Backend := TGocciaBytecodeBackend.Create(AFileName);
       try
-        Backend.ASIEnabled := ASIEnabled;
+        Backend.ASIEnabled := EngineOptions.ASI.Present;
         Backend.RegisterBuiltIns(TestGlobals);
         ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
-          ImportMapPath, InlineAliases);
+          EngineOptions.ImportMap.ValueOr(''), EngineOptions.Aliases.Values);
 
         LexStart := GetNanoseconds;
         Lexer := TGocciaLexer.Create(SourceText, AFileName);
@@ -452,7 +373,7 @@ begin
           LexEnd := GetNanoseconds;
 
           Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
-          Parser.AutomaticSemicolonInsertion := ASIEnabled;
+          Parser.AutomaticSemicolonInsertion := EngineOptions.ASI.Present;
           try
             ProgramNode := Parser.Parse;
             ParseEnd := GetNanoseconds;
@@ -462,7 +383,7 @@ begin
               TGocciaCoverageTracker.Instance.RegisterSourceFile(
                 AFileName, CountExecutableLines(Lexer.SourceLines));
 
-            if not SilentConsole then
+            if not FSilent.Present then
               for I := 0 to Parser.WarningCount - 1 do
               begin
                 Warning := Parser.GetWarning(I);
@@ -488,7 +409,7 @@ begin
         end;
 
         try
-          StartExecutionTimeout(TimeoutMilliseconds);
+          StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
           try
             ResultValue := Backend.RunModule(Module);
           finally
@@ -545,9 +466,9 @@ end;
 
 function TTestRunnerApp.RunGocciaScript(const AFileName: string): TTestFileResult;
 begin
-  case Mode of
-    ebTreeWalk:  Result := RunGocciaScriptInterpreted(AFileName);
-    ebBytecode: Result := RunGocciaScriptBytecode(AFileName);
+  case EngineOptions.Mode.ValueOr(emInterpreted) of
+    emInterpreted: Result := RunGocciaScriptInterpreted(AFileName);
+    emBytecode:    Result := RunGocciaScriptBytecode(AFileName);
   end;
 end;
 
@@ -622,7 +543,7 @@ begin
 
   for I := 0 to AFiles.Count - 1 do
   begin
-    if ShowProgress then
+    if not FNoProgress.Present then
       WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, AFiles.Count, AFiles[I]]));
     FileResult := RunScriptFromFile(AFiles[I]);
     if FileResult.TestResult = nil then
@@ -648,7 +569,7 @@ begin
     if Assigned(GC) then
       GC.Collect;
 
-    if ExitOnFirstFailure and (FailedCount > 0) then
+    if FExitOnFirst.Present and (FailedCount > 0) then
       Break;
   end;
 
@@ -676,10 +597,10 @@ var
   FailedTests: TGocciaValue;
   FailedArray: TGocciaArrayValue;
   I: Integer;
-  CurrentMode: TGocciaEngineBackend;
+  IsBytecodeMode: Boolean;
 begin
-  CurrentMode := Mode;
-  if CurrentMode = ebBytecode then
+  IsBytecodeMode := EngineOptions.Mode.ValueOr(emInterpreted) = emBytecode;
+  if IsBytecodeMode then
     TotalNanoseconds := AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds
   else
     TotalNanoseconds := AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds;
@@ -687,7 +608,7 @@ begin
   Lines := TStringList.Create;
   try
     Lines.Add('{');
-    Lines.Add(Format('  "mode": "%s",', [IfThen(CurrentMode = ebBytecode, 'bytecode', 'interpreted')]));
+    Lines.Add(Format('  "mode": "%s",', [IfThen(IsBytecodeMode, 'bytecode', 'interpreted')]));
     Lines.Add(Format('  "totalFiles": %d,', [Round(AResult.TestResult.GetProperty('totalTests').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "totalTests": %d,', [Round(AResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "passed": %d,', [Round(AResult.TestResult.GetProperty('passed').ToNumberLiteral.Value)]));
@@ -697,7 +618,7 @@ begin
     Lines.Add(Format('  "durationNanoseconds": %d,', [Round(AResult.TestResult.GetProperty('duration').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "lexTimeNanoseconds": %d,', [AResult.TotalLexNanoseconds]));
     Lines.Add(Format('  "parseTimeNanoseconds": %d,', [AResult.TotalParseNanoseconds]));
-    if CurrentMode = ebBytecode then
+    if IsBytecodeMode then
       Lines.Add(Format('  "compileTimeNanoseconds": %d,', [AResult.TotalCompileNanoseconds]));
     Lines.Add(Format('  "executeTimeNanoseconds": %d,', [AResult.TotalExecNanoseconds]));
     Lines.Add(Format('  "totalEngineNanoseconds": %d,', [TotalNanoseconds]));
@@ -735,7 +656,7 @@ var
   DurationNanoseconds: Int64;
   RunCount: Double;
   PerTestNanoseconds: Int64;
-  CurrentMode: TGocciaEngineBackend;
+  IsBytecodeMode: Boolean;
   CurrentOutputFile: string;
 begin
   ExitCode := 0;
@@ -751,9 +672,9 @@ begin
   DurationNanoseconds := Round(TestResult.GetProperty('duration').ToNumberLiteral.Value);
   RunCount := StrToFloat(TotalRunTests);
 
-  CurrentMode := Mode;
+  IsBytecodeMode := EngineOptions.Mode.ValueOr(emInterpreted) = emBytecode;
 
-  if ShowResults then
+  if not FNoResults.Present then
   begin
     Writeln('Test Results Test Files: ', TestResult.GetProperty('totalTests').ToStringLiteral.Value);
     Writeln(Format('Test Results Run Tests: %s', [TotalRunTests]));
@@ -766,7 +687,7 @@ begin
       Writeln(Format('Test Results Skipped: %s (%2.2f%%)', [TotalSkipped, (StrToFloat(TotalSkipped) / RunCount * 100)]));
       Writeln(Format('Test Results Assertions: %s', [TotalAssertions]));
       Writeln(Format('Test Results Test Duration: %s (%s/test)', [FormatDuration(DurationNanoseconds), FormatDuration(PerTestNanoseconds)]));
-      if CurrentMode = ebBytecode then
+      if IsBytecodeMode then
         Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
           [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds),
            FormatDuration(AResult.TotalCompileNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
@@ -779,7 +700,7 @@ begin
     end;
   end;
 
-  CurrentOutputFile := OutputFile;
+  CurrentOutputFile := FOutputFile.ValueOr('');
   if CurrentOutputFile <> '' then
     WriteResultsJSON(AResult, CurrentOutputFile);
 
@@ -787,12 +708,6 @@ begin
     ExitCode := 1;
 end;
 
-var
-  RunResult: Integer;
-
 begin
-  RunResult := TGocciaCLIApplication.RunCLI(TTestRunnerApp,
-    'TestRunner', '<path...> [options]');
-  if RunResult <> 0 then
-    ExitCode := RunResult;
+  ExitCode := TGocciaApplication.RunApplication(TTestRunnerApp, 'TestRunner');
 end.

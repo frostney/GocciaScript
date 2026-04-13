@@ -21,7 +21,7 @@ type
     function GlobalBuiltins: TGocciaGlobalBuiltins; virtual;
     property Name: string read FName;
   public
-    constructor Create(const AName: string);
+    constructor Create(const AName: string); virtual;
     function Run: Integer;
     class function RunApplication(const AClass: TGocciaApplicationClass;
       const AName: string): Integer;
@@ -32,7 +32,6 @@ implementation
 uses
   Goccia.Error,
   Goccia.Error.Detail,
-  Goccia.GarbageCollector,
   Goccia.Terminal.Colors,
   Goccia.Values.Error,
   Goccia.VM.Exception;
@@ -66,19 +65,14 @@ end;
 function TGocciaApplication.Run: Integer;
 begin
   Result := 0;
-  TGarbageCollector.Initialize;
   try
-    try
-      Execute;
-    except
-      on E: Exception do
-      begin
-        HandleError(E);
-        Result := 1;
-      end;
+    Execute;
+  except
+    on E: Exception do
+    begin
+      HandleError(E);
+      Result := 1;
     end;
-  finally
-    TGarbageCollector.Shutdown;
   end;
 end;
 
