@@ -13,16 +13,14 @@ function FormatREPLValue(const AValue: TGocciaValue;
 implementation
 
 uses
-  Generics.Collections,
   SysUtils,
 
   StringBuffer,
 
-  Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.JSON,
   Goccia.RegExp.Runtime,
   Goccia.Terminal.Colors,
-  Goccia.Values.ArrayValue,
   Goccia.Values.FunctionBase,
   Goccia.Values.MapValue,
   Goccia.Values.ObjectValue,
@@ -31,11 +29,7 @@ uses
   Goccia.Values.SymbolValue;
 
 const
-  MAX_INSPECT_DEPTH = 2;
-  INDENT_SIZE = 2;
-
-type
-  TVisitedSet = TList<TGocciaValue>;
+  REPL_INDENT = '  ';
 
 function EscapeString(const AValue: string): string;
 var
@@ -62,60 +56,89 @@ begin
   end;
 end;
 
-function Indent(const ADepth: Integer): string;
+function StringifyIndented(const AValue: TGocciaValue): string;
+var
+  Stringifier: TGocciaJSONStringifier;
 begin
-  Result := StringOfChar(' ', ADepth * INDENT_SIZE);
+  Stringifier := TGocciaJSONStringifier.Create;
+  try
+    Result := Stringifier.Stringify(AValue, REPL_INDENT);
+  finally
+    Stringifier.Free;
+  end;
 end;
 
-function InspectValue(const AValue: TGocciaValue;
-  const AUseColor: Boolean; const ADepth: Integer;
-  const AVisited: TVisitedSet): string; forward;
-
-function InspectObjectProperties(const AObj: TGocciaObjectValue;
-  const AUseColor: Boolean; const ADepth: Integer;
-  const AVisited: TVisitedSet): string;
+function StringifyCompact(const AValue: TGocciaValue): string;
 var
-  Key: string;
+  Stringifier: TGocciaJSONStringifier;
+begin
+  Stringifier := TGocciaJSONStringifier.Create;
+  try
+    Result := Stringifier.Stringify(AValue);
+  finally
+    Stringifier.Free;
+  end;
+end;
+
+function FormatMapValue(const AMap: TGocciaMapValue): string;
+var
   SB: TStringBuffer;
-  First: Boolean;
-  ChildIndent: string;
+  I: Integer;
 begin
   SB := TStringBuffer.Create;
-  First := True;
-  ChildIndent := Indent(ADepth + 1);
-  for Key in AObj.GetEnumerablePropertyNames do
+  SB.Append('Map(' + IntToStr(AMap.Entries.Count) + ')');
+  if AMap.Entries.Count = 0 then
+    SB.Append(' {}')
+  else
   begin
-    if not First then
-      SB.AppendChar(',');
-    First := False;
-    SB.Append(LineEnding);
-    SB.Append(ChildIndent);
-    SB.Append(Key);
-    SB.Append(': ');
-    SB.Append(InspectValue(AObj.GetProperty(Key), AUseColor, ADepth + 1,
-      AVisited));
+    SB.Append(' { ');
+    for I := 0 to AMap.Entries.Count - 1 do
+    begin
+      if I > 0 then
+        SB.Append(', ');
+      SB.Append(StringifyCompact(AMap.Entries[I].Key));
+      SB.Append(' => ');
+      SB.Append(StringifyCompact(AMap.Entries[I].Value));
+    end;
+    SB.Append(' }');
   end;
   Result := SB.ToString;
 end;
 
-function InspectValue(const AValue: TGocciaValue;
-  const AUseColor: Boolean; const ADepth: Integer;
-  const AVisited: TVisitedSet): string;
+function FormatSetValue(const ASet: TGocciaSetValue): string;
 var
-  Arr: TGocciaArrayValue;
-  Obj: TGocciaObjectValue;
-  MapVal: TGocciaMapValue;
-  SetVal: TGocciaSetValue;
-  PromiseVal: TGocciaPromiseValue;
-  I: Integer;
   SB: TStringBuffer;
-  Tag, Props, ErrorName, ErrorMessage, ChildIndent, ParentIndent: string;
+  I: Integer;
 begin
-  // nil -> undefined
+  SB := TStringBuffer.Create;
+  SB.Append('Set(' + IntToStr(ASet.Items.Count) + ')');
+  if ASet.Items.Count = 0 then
+    SB.Append(' {}')
+  else
+  begin
+    SB.Append(' { ');
+    for I := 0 to ASet.Items.Count - 1 do
+    begin
+      if I > 0 then
+        SB.Append(', ');
+      SB.Append(StringifyCompact(ASet.Items[I]));
+    end;
+    SB.Append(' }');
+  end;
+  Result := SB.ToString;
+end;
+
+function FormatREPLValue(const AValue: TGocciaValue;
+  const AUseColor: Boolean): string;
+var
+  Tag: string;
+  Obj: TGocciaObjectValue;
+  PromiseVal: TGocciaPromiseValue;
+begin
   if AValue = nil then
     Exit(Colorize('undefined', ANSI_GRAY, AUseColor));
 
-  // Primitives — no depth tracking needed
+  // Primitives — JSON.stringify loses these, so handle directly
   if AValue is TGocciaUndefinedLiteralValue then
     Exit(Colorize('undefined', ANSI_GRAY, AUseColor));
   if AValue is TGocciaNullLiteralValue then
@@ -130,7 +153,7 @@ begin
   if AValue is TGocciaSymbolValue then
     Exit(Colorize(AValue.ToStringLiteral.Value, ANSI_GREEN, AUseColor));
 
-  // Functions
+  // Functions — JSON.stringify returns null for these
   if AValue is TGocciaFunctionBase then
   begin
     Tag := TGocciaFunctionBase(AValue).GetProperty(PROP_NAME).ToStringLiteral.Value;
@@ -140,191 +163,47 @@ begin
       Exit(Colorize('[Function (anonymous)]', ANSI_CYAN, AUseColor));
   end;
 
-  // Circular reference detection
-  if AVisited.IndexOf(AValue) >= 0 then
-    Exit(Colorize('[Circular]', ANSI_CYAN, AUseColor));
-
-  // At depth limit, show abbreviated type tag
-  if ADepth >= MAX_INSPECT_DEPTH then
+  // Promises — JSON.stringify would show empty object
+  if AValue is TGocciaPromiseValue then
   begin
-    if AValue is TGocciaArrayValue then
-      Exit(Colorize('[Array]', ANSI_CYAN, AUseColor));
-    if AValue is TGocciaMapValue then
-      Exit(Colorize('[Map]', ANSI_CYAN, AUseColor));
-    if AValue is TGocciaSetValue then
-      Exit(Colorize('[Set]', ANSI_CYAN, AUseColor));
-    if AValue is TGocciaObjectValue then
-      Exit(Colorize('[Object]', ANSI_CYAN, AUseColor));
-    Exit(AValue.ToStringLiteral.Value);
+    PromiseVal := TGocciaPromiseValue(AValue);
+    case PromiseVal.State of
+      gpsPending:
+        Exit('Promise { ' + Colorize('<pending>', ANSI_CYAN, AUseColor) + ' }');
+      gpsFulfilled:
+        Exit('Promise { ' + FormatREPLValue(PromiseVal.PromiseResult,
+          AUseColor) + ' }');
+      gpsRejected:
+        Exit('Promise { ' + Colorize('<rejected>', ANSI_RED, AUseColor) + ' ' +
+          FormatREPLValue(PromiseVal.PromiseResult, AUseColor) + ' }');
+    end;
   end;
 
-  ChildIndent := Indent(ADepth + 1);
-  ParentIndent := Indent(ADepth);
-
-  AVisited.Add(AValue);
-  try
-    // Arrays
-    if AValue is TGocciaArrayValue then
-    begin
-      Arr := TGocciaArrayValue(AValue);
-      if Arr.Elements.Count = 0 then
-        Exit('[]');
-      SB := TStringBuffer.Create;
-      SB.AppendChar('[');
-      for I := 0 to Arr.Elements.Count - 1 do
-      begin
-        if I > 0 then
-          SB.AppendChar(',');
-        SB.Append(LineEnding);
-        SB.Append(ChildIndent);
-        SB.Append(InspectValue(Arr.Elements[I], AUseColor, ADepth + 1,
-          AVisited));
-      end;
-      SB.Append(LineEnding);
-      SB.Append(ParentIndent);
-      SB.AppendChar(']');
-      Result := SB.ToString;
-    end
-
-    // Maps
-    else if AValue is TGocciaMapValue then
-    begin
-      MapVal := TGocciaMapValue(AValue);
-      SB := TStringBuffer.Create;
-      SB.Append('Map(' + IntToStr(MapVal.Entries.Count) + ')');
-      if MapVal.Entries.Count = 0 then
-      begin
-        SB.Append(' {}');
-      end
-      else
-      begin
-        SB.Append(' {');
-        for I := 0 to MapVal.Entries.Count - 1 do
-        begin
-          if I > 0 then
-            SB.AppendChar(',');
-          SB.Append(LineEnding);
-          SB.Append(ChildIndent);
-          SB.Append(InspectValue(MapVal.Entries[I].Key, AUseColor,
-            ADepth + 1, AVisited));
-          SB.Append(' => ');
-          SB.Append(InspectValue(MapVal.Entries[I].Value, AUseColor,
-            ADepth + 1, AVisited));
-        end;
-        SB.Append(LineEnding);
-        SB.Append(ParentIndent);
-        SB.AppendChar('}');
-      end;
-      Result := SB.ToString;
-    end
-
-    // Sets
-    else if AValue is TGocciaSetValue then
-    begin
-      SetVal := TGocciaSetValue(AValue);
-      SB := TStringBuffer.Create;
-      SB.Append('Set(' + IntToStr(SetVal.Items.Count) + ')');
-      if SetVal.Items.Count = 0 then
-      begin
-        SB.Append(' {}');
-      end
-      else
-      begin
-        SB.Append(' {');
-        for I := 0 to SetVal.Items.Count - 1 do
-        begin
-          if I > 0 then
-            SB.AppendChar(',');
-          SB.Append(LineEnding);
-          SB.Append(ChildIndent);
-          SB.Append(InspectValue(SetVal.Items[I], AUseColor, ADepth + 1,
-            AVisited));
-        end;
-        SB.Append(LineEnding);
-        SB.Append(ParentIndent);
-        SB.AppendChar('}');
-      end;
-      Result := SB.ToString;
-    end
-
-    // Promises
-    else if AValue is TGocciaPromiseValue then
-    begin
-      PromiseVal := TGocciaPromiseValue(AValue);
-      case PromiseVal.State of
-        gpsPending:
-          Result := 'Promise { ' + Colorize('<pending>', ANSI_CYAN, AUseColor)
-            + ' }';
-        gpsFulfilled:
-          Result := 'Promise { ' + InspectValue(PromiseVal.PromiseResult,
-            AUseColor, ADepth + 1, AVisited) + ' }';
-        gpsRejected:
-          Result := 'Promise { ' + Colorize('<rejected>', ANSI_RED, AUseColor)
-            + ' ' + InspectValue(PromiseVal.PromiseResult, AUseColor,
-            ADepth + 1, AVisited) + ' }';
-      end;
-    end
-
-    // General objects (including errors and RegExp)
-    else if AValue is TGocciaObjectValue then
-    begin
-      Obj := TGocciaObjectValue(AValue);
-
-      // Error objects
-      if Obj.HasErrorData then
-      begin
-        ErrorName := Obj.GetProperty(PROP_NAME).ToStringLiteral.Value;
-        ErrorMessage := Obj.GetProperty(PROP_MESSAGE).ToStringLiteral.Value;
-        Result := Colorize(ErrorName + ': ' + ErrorMessage, ANSI_RED,
-          AUseColor);
-      end
-
-      // RegExp objects
-      else if IsRegExpValue(AValue) then
-      begin
-        Result := Colorize(RegExpObjectToString(AValue), ANSI_RED, AUseColor);
-      end
-
-      // Plain objects and class instances
-      else
-      begin
-        SB := TStringBuffer.Create;
-        Tag := Obj.ToStringTag;
-        if (Tag <> '') and (Tag <> CONSTRUCTOR_OBJECT) then
-          SB.Append(Tag + ' ');
-        Props := InspectObjectProperties(Obj, AUseColor, ADepth, AVisited);
-        if Props = '' then
-          SB.Append('{}')
-        else
-        begin
-          SB.AppendChar('{');
-          SB.Append(Props);
-          SB.Append(LineEnding);
-          SB.Append(ParentIndent);
-          SB.AppendChar('}');
-        end;
-        Result := SB.ToString;
-      end;
-    end
-
-    else
-      Result := AValue.ToStringLiteral.Value;
-  finally
-    AVisited.Remove(AValue);
+  // Error objects — show name: message instead of properties
+  if (AValue is TGocciaObjectValue) and
+    TGocciaObjectValue(AValue).HasErrorData then
+  begin
+    Obj := TGocciaObjectValue(AValue);
+    Exit(Colorize(
+      Obj.GetProperty(PROP_NAME).ToStringLiteral.Value + ': ' +
+      Obj.GetProperty(PROP_MESSAGE).ToStringLiteral.Value,
+      ANSI_RED, AUseColor));
   end;
-end;
 
-function FormatREPLValue(const AValue: TGocciaValue;
-  const AUseColor: Boolean): string;
-var
-  Visited: TVisitedSet;
-begin
-  Visited := TVisitedSet.Create;
-  try
-    Result := InspectValue(AValue, AUseColor, 0, Visited);
-  finally
-    Visited.Free;
-  end;
+  // RegExp — JSON.stringify would show empty object
+  if IsRegExpValue(AValue) then
+    Exit(Colorize(RegExpObjectToString(AValue), ANSI_RED, AUseColor));
+
+  // Maps — JSON.stringify can't see internal entries
+  if AValue is TGocciaMapValue then
+    Exit(FormatMapValue(TGocciaMapValue(AValue)));
+
+  // Sets — JSON.stringify can't see internal items
+  if AValue is TGocciaSetValue then
+    Exit(FormatSetValue(TGocciaSetValue(AValue)));
+
+  // Objects and arrays — delegate to JSON.stringify with 2-space indent
+  Result := StringifyIndented(AValue);
 end;
 
 end.
