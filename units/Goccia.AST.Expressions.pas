@@ -1573,11 +1573,11 @@ begin
       on E: TGocciaThrowValue do
         Promise.Reject(E.Value);
       on E: TGocciaSyntaxError do
-        Promise.Reject(CreateErrorObject(SYNTAX_ERROR_NAME, E));
+        Promise.Reject(CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
       on E: TGocciaTypeError do
-        Promise.Reject(CreateErrorObject(TYPE_ERROR_NAME, E));
+        Promise.Reject(CreateErrorObject(TYPE_ERROR_NAME, E.Message));
       on E: TGocciaReferenceError do
-        Promise.Reject(CreateErrorObject(REFERENCE_ERROR_NAME, E));
+        Promise.Reject(CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
       on E: Exception do
         Promise.Reject(CreateErrorObject(ERROR_NAME, E.Message));
     end;

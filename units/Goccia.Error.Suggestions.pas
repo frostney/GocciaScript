@@ -148,10 +148,6 @@ resourcestring
   SSuggestInvalidCharacter = 'This character is not valid in GocciaScript. Check for typos';
   SSuggestInvalidDoubleDot = 'Did you mean "..." (spread operator)? Two dots is not valid syntax';
 
-  // Types as comments / strict type enforcement (bytecode OP_CHECK_TYPE)
-  SSuggestStrictTypeMismatch =
-    'Use a value that matches the declared type (Types as Comments), or remove the type annotation to disable enforcement.';
-
 implementation
 
 end.

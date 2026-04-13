@@ -11,7 +11,6 @@ const
   PROP_FILE_NAME    = 'fileName';
   PROP_CONTENT      = 'content';
   PROP_MESSAGE      = 'message';
-  PROP_SUGGESTION   = 'suggestion';
   PROP_CAUSE        = 'cause';
   PROP_CODE         = 'code';
   PROP_STACK        = 'stack';
