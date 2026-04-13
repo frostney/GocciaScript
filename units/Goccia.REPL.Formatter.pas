@@ -30,6 +30,7 @@ uses
 
 const
   REPL_INDENT = '  ';
+  MAX_INSPECT_ITEMS = 100;
 
 function EscapeString(const AValue: string): string;
 var
@@ -68,22 +69,11 @@ begin
   end;
 end;
 
-function StringifyCompact(const AValue: TGocciaValue): string;
-var
-  Stringifier: TGocciaJSONStringifier;
-begin
-  Stringifier := TGocciaJSONStringifier.Create;
-  try
-    Result := Stringifier.Stringify(AValue);
-  finally
-    Stringifier.Free;
-  end;
-end;
-
-function FormatMapValue(const AMap: TGocciaMapValue): string;
+function FormatMapValue(const AMap: TGocciaMapValue;
+  const AUseColor: Boolean): string;
 var
   SB: TStringBuffer;
-  I: Integer;
+  I, Remaining: Integer;
 begin
   SB := TStringBuffer.Create;
   SB.Append('Map(' + IntToStr(AMap.Entries.Count) + ')');
@@ -94,21 +84,28 @@ begin
     SB.Append(' { ');
     for I := 0 to AMap.Entries.Count - 1 do
     begin
+      if I >= MAX_INSPECT_ITEMS then
+      begin
+        Remaining := AMap.Entries.Count - MAX_INSPECT_ITEMS;
+        SB.Append(', ... ' + IntToStr(Remaining) + ' more');
+        Break;
+      end;
       if I > 0 then
         SB.Append(', ');
-      SB.Append(StringifyCompact(AMap.Entries[I].Key));
+      SB.Append(FormatREPLValue(AMap.Entries[I].Key, AUseColor));
       SB.Append(' => ');
-      SB.Append(StringifyCompact(AMap.Entries[I].Value));
+      SB.Append(FormatREPLValue(AMap.Entries[I].Value, AUseColor));
     end;
     SB.Append(' }');
   end;
   Result := SB.ToString;
 end;
 
-function FormatSetValue(const ASet: TGocciaSetValue): string;
+function FormatSetValue(const ASet: TGocciaSetValue;
+  const AUseColor: Boolean): string;
 var
   SB: TStringBuffer;
-  I: Integer;
+  I, Remaining: Integer;
 begin
   SB := TStringBuffer.Create;
   SB.Append('Set(' + IntToStr(ASet.Items.Count) + ')');
@@ -119,9 +116,15 @@ begin
     SB.Append(' { ');
     for I := 0 to ASet.Items.Count - 1 do
     begin
+      if I >= MAX_INSPECT_ITEMS then
+      begin
+        Remaining := ASet.Items.Count - MAX_INSPECT_ITEMS;
+        SB.Append(', ... ' + IntToStr(Remaining) + ' more');
+        Break;
+      end;
       if I > 0 then
         SB.Append(', ');
-      SB.Append(StringifyCompact(ASet.Items[I]));
+      SB.Append(FormatREPLValue(ASet.Items[I], AUseColor));
     end;
     SB.Append(' }');
   end;
@@ -171,11 +174,19 @@ begin
       gpsPending:
         Exit('Promise { ' + Colorize('<pending>', ANSI_CYAN, AUseColor) + ' }');
       gpsFulfilled:
-        Exit('Promise { ' + FormatREPLValue(PromiseVal.PromiseResult,
-          AUseColor) + ' }');
+        if PromiseVal.PromiseResult = AValue then
+          Exit('Promise { ' + Colorize('[Circular]', ANSI_CYAN, AUseColor) +
+            ' }')
+        else
+          Exit('Promise { ' + FormatREPLValue(PromiseVal.PromiseResult,
+            AUseColor) + ' }');
       gpsRejected:
-        Exit('Promise { ' + Colorize('<rejected>', ANSI_RED, AUseColor) + ' ' +
-          FormatREPLValue(PromiseVal.PromiseResult, AUseColor) + ' }');
+        if PromiseVal.PromiseResult = AValue then
+          Exit('Promise { ' + Colorize('<rejected>', ANSI_RED, AUseColor) +
+            ' ' + Colorize('[Circular]', ANSI_CYAN, AUseColor) + ' }')
+        else
+          Exit('Promise { ' + Colorize('<rejected>', ANSI_RED, AUseColor) +
+            ' ' + FormatREPLValue(PromiseVal.PromiseResult, AUseColor) + ' }');
     end;
   end;
 
@@ -196,11 +207,11 @@ begin
 
   // Maps — JSON.stringify can't see internal entries
   if AValue is TGocciaMapValue then
-    Exit(FormatMapValue(TGocciaMapValue(AValue)));
+    Exit(FormatMapValue(TGocciaMapValue(AValue), AUseColor));
 
   // Sets — JSON.stringify can't see internal items
   if AValue is TGocciaSetValue then
-    Exit(FormatSetValue(TGocciaSetValue(AValue)));
+    Exit(FormatSetValue(TGocciaSetValue(AValue), AUseColor));
 
   // Objects and arrays — delegate to JSON.stringify with 2-space indent
   Result := StringifyIndented(AValue);
