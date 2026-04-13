@@ -652,26 +652,22 @@ end;
 
 // Emit disposal sequence for using resources in reverse order.
 // Each OP_USING_DISPOSE: A=errorAccum, B=disposeMethod, C=resource
-// For await using entries, an OP_AWAIT follows the dispose call.
+// OP_USING_DISPOSE writes the call result back into B, so for await using
+// we emit OP_AWAIT on DisposeSlot to await the actual dispose Promise.
 procedure EmitDisposalSequence(const ACtx: TGocciaCompilationContext;
   const AResources: array of TUsingResourceEntry;
   const AResourceCount: Integer; const AErrorReg: UInt8);
 var
   I: Integer;
-  TempReg: UInt8;
 begin
   for I := AResourceCount - 1 downto 0 do
   begin
     EmitInstruction(ACtx, EncodeABC(OP_USING_DISPOSE,
       AErrorReg, AResources[I].DisposeSlot, AResources[I].ValueSlot));
-    // Emit OP_AWAIT for async dispose to honour the spec await point
+    // Await the actual dispose result for async resources
     if AResources[I].IsAwait then
-    begin
-      TempReg := ACtx.Scope.AllocateRegister;
-      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, TempReg, 0, 0));
-      EmitInstruction(ACtx, EncodeABC(OP_AWAIT, TempReg, TempReg, 0));
-      ACtx.Scope.FreeRegister;
-    end;
+      EmitInstruction(ACtx, EncodeABC(OP_AWAIT,
+        AResources[I].DisposeSlot, AResources[I].DisposeSlot, 0));
   end;
 end;
 
@@ -843,36 +839,47 @@ end;
 
 // Emit pending finally/disposal blocks before a return or abrupt exit.
 // Handles both regular try/finally blocks and using-block disposal entries.
+// Processes entries from innermost to outermost. Each entry is temporarily
+// popped so that if a finally block contains a nested return, that return
+// sees the remaining outer entries for its own cleanup.
 procedure EmitPendingCleanup(const ACtx: TGocciaCompilationContext);
 var
-  I: Integer;
-  SavedFinally: TList<TPendingFinallyEntry>;
   Entry: TPendingFinallyEntry;
   NullishJump: Integer;
+  Entries: array of TPendingFinallyEntry;
+  I, Count: Integer;
 begin
   if not Assigned(GPendingFinally) or (GPendingFinally.Count = 0) then
     Exit;
-  SavedFinally := GPendingFinally;
-  GPendingFinally := nil;
-  for I := SavedFinally.Count - 1 downto 0 do
+  // Snapshot and remove all entries; process innermost first
+  Count := GPendingFinally.Count;
+  SetLength(Entries, Count);
+  for I := 0 to Count - 1 do
+    Entries[I] := GPendingFinally[I];
+  // Process from innermost to outermost. Before compiling each entry,
+  // trim the list so only older entries remain visible to nested returns.
+  for I := Count - 1 downto 0 do
   begin
-    Entry := SavedFinally[I];
+    // Remove this entry (and any above it that were already processed)
+    if GPendingFinally.Count > I then
+      GPendingFinally.Delete(I);
+    Entry := Entries[I];
     EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
     if Assigned(Entry.FinallyBlock) then
       CompileBlockStatement(ACtx, Entry.FinallyBlock)
     else if Length(Entry.UsingResources) > 0 then
     begin
-      // Using-block disposal: emit disposal + error handling sequence
       EmitDisposalSequence(ACtx, Entry.UsingResources,
         Length(Entry.UsingResources), Entry.UsingErrorReg);
-      // Throw accumulated error if any
       NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
         Entry.UsingErrorReg);
       EmitInstruction(ACtx, EncodeABC(OP_THROW, Entry.UsingErrorReg, 0, 0));
       PatchJumpTarget(ACtx, NullishJump);
     end;
   end;
-  GPendingFinally := SavedFinally;
+  // Restore all entries for the normal-path compilation
+  for I := 0 to Count - 1 do
+    GPendingFinally.Insert(I, Entries[I]);
 end;
 
 procedure CompileReturnStatement(const ACtx: TGocciaCompilationContext;
