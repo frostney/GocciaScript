@@ -263,6 +263,18 @@ Exceptions to `const`:
 - `out` parameters (which are written, not read)
 - `var` parameters (which are both read and written)
 
+### CLI Option Naming
+
+When adding command-line options to CLI tools:
+
+- **Flag names** use `--kebab-case` (e.g., `--no-progress`, `--exit-on-first-failure`, `--import-map`)
+- **Enum option values** are auto-derived from Pascal enum names via RTTI. The convention is a 2-character lowercase prefix stripped from the enum name:
+  - `TGocciaExecutionMode = (emInterpreted, emBytecode)` → CLI values: `interpreted`, `bytecode`
+  - `TGocciaCoverageFormat = (cfLcov, cfJson)` → CLI values: `lcov`, `json`
+  - `TGocciaProfileMode = (pmOpcodes, pmFunctions, pmAll)` → CLI values: `opcodes`, `functions`, `all`
+- **Option groups** use a `Group` string for help text organization (e.g., `'Engine'`, `'Coverage'`, `'Profiler'`)
+- **Repeatable options** (like `--alias`) support both `--alias=key=value` and `--alias key=value` (space form) via `AcceptsSpaceForm`
+
 ### File Organization
 
 Each unit follows this structure:

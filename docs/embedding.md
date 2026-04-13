@@ -659,6 +659,40 @@ The repository includes four embedding examples:
 
 These serve as reference implementations for the patterns described above.
 
+## Application Base Class
+
+`TGocciaApplication` (`Goccia.Application.pas`) provides the standard lifecycle for any GocciaScript host application. It manages GC initialization/shutdown and unified error handling, with no CLI dependency.
+
+```pascal
+type
+  TMyApp = class(TGocciaApplication)
+  protected
+    procedure Execute; override;
+  end;
+
+procedure TMyApp.Execute;
+begin
+  // Your application logic here
+  // GC is already initialized; errors are caught by HandleError
+end;
+
+begin
+  ExitCode := TGocciaApplication.RunApplication(TMyApp, 'MyApp');
+end.
+```
+
+**What the base class handles:**
+- `TGarbageCollector.Initialize` / `Shutdown` lifecycle
+- Exception dispatch via virtual `HandleError` (supports `TGocciaError`, `TGocciaThrowValue`, `EGocciaBytecodeThrow` with full source context and colored output)
+- Exit code management (0 = success, 1 = error)
+
+**Overridable hooks:**
+- `Execute` (abstract) — your application logic
+- `HandleError(AException)` — customize error display (e.g., JSON output)
+- `GlobalBuiltins` — return `TGocciaGlobalBuiltins` set for optional built-in registration
+
+For CLI tools, use `TGocciaCLIApplication` instead, which adds argument parsing, help generation, and singleton lifecycle management on top of `TGocciaApplication`.
+
 ## Minimal Embedding Checklist
 
 1. Add `units/` to your FreePascal unit search path (or use `config.cfg`)

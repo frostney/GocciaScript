@@ -13,12 +13,14 @@ uses
   Goccia.Builtins.Console,
   Goccia.Bytecode.Binary,
   Goccia.Bytecode.Module,
+  Goccia.CLI.Application,
+  Goccia.CLI.Options,
   Goccia.Compiler,
   Goccia.Constants.PropertyNames,
   Goccia.Coverage,
   Goccia.Coverage.Report,
   Goccia.Engine,
-  Goccia.Engine.BytecodeBackend,
+  Goccia.Engine.Backend,
   Goccia.Error,
   Goccia.Error.Detail,
   Goccia.FileExtensions,
@@ -45,38 +47,223 @@ uses
   FileUtils in 'units/FileUtils.pas';
 
 type
-  TExecutionMode = (emInterpreted, emBytecode);
-
   TScriptExecutionReport = record
     ResultValue: TGocciaValue;
     Timing: TScriptLoaderTiming;
   end;
 
-var
-  GMode: TExecutionMode = emInterpreted;
-  GOutputPath: string = '';
-  GEmitOnly: Boolean = False;
-  GJsonOutput: Boolean = False;
-  GSilentConsole: Boolean = False;
-  GTimeoutMilliseconds: Integer = 0;
-  GImportMapPath: string = '';
-  GGlobalsFiles: TStringList = nil;
-  GInlineGlobals: TStringList = nil;
-  GInlineAliases: TStringList = nil;
-  GCoverageEnabled: Boolean = False;
-  GCoverageLcovEnabled: Boolean = False;
-  GCoverageJsonEnabled: Boolean = False;
-  GCoverageOutputPath: string = '';
-  GASIEnabled: Boolean = False;
-  GProfileOpcodes: Boolean = False;
-  GProfileFunctions: Boolean = False;
-  GProfileOutputPath: string = '';
-  GProfileFormatFlamegraph: Boolean = False;
-  GSourceMapEnabled: Boolean = False;
-  GSourceMapOutputPath: string = '';
+  TScriptLoaderApp = class(TGocciaCLIApplication)
+  private
+    FEmit: TGocciaStringOption;
+    FOutputPath: TGocciaStringOption;
+    FSilent: TGocciaFlagOption;
+    FSourceMap: TGocciaStringOption;
+    FGlobalFiles: TGocciaRepeatableOption;
+    FInlineGlobals: TGocciaRepeatableOption;
+    FLastPaths: TStringList;
 
-function ParseSource(const ASource: TStringList; const AFileName: string;
-  const APreprocessors: TGocciaPreprocessors; const ASuppressWarnings: Boolean;
+    function IsJsonOutput: Boolean;
+    function IsEmitOnly: Boolean;
+    function IsSilentConsole: Boolean;
+    function IsSourceMapEnabled: Boolean;
+    function SourceMapOutputPath: string;
+    function OutputFilePath: string;
+    function EffectiveMode: TGocciaExecutionMode;
+    function IsProfileOpcodes: Boolean;
+    function IsProfileFunctions: Boolean;
+    function IsCoverageEnabled: Boolean;
+    function IsCoverageLcov: Boolean;
+    function IsCoverageJson: Boolean;
+
+    function ParseSource(const ASource: TStringList; const AFileName: string;
+      const APreprocessors: TGocciaPreprocessors; const ASuppressWarnings: Boolean;
+      out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
+      out ASourceMap: TGocciaSourceMap): TGocciaProgram;
+    function CompileSource(const ASource: TStringList; const AFileName: string;
+      const APreprocessors: TGocciaPreprocessors;
+      const ASuppressWarnings: Boolean = False): TGocciaBytecodeModule;
+    procedure WriteSourceMapIfEnabled(const ASourceMap: TGocciaSourceMap;
+      const AFileName: string);
+    procedure ConfigureConsole(const AConsole: TGocciaConsole;
+      const AOutputLines: TStrings);
+    procedure ApplyDataGlobalsToEngine(const AEngine: TGocciaEngine);
+    procedure ApplyModuleGlobalsToEngine(const AEngine: TGocciaEngine);
+    procedure ApplyDataGlobalsToBytecodeBackend(const ABackend: TGocciaBytecodeBackend);
+    procedure ApplyModuleGlobalsToBytecodeBackend(const ABackend: TGocciaBytecodeBackend);
+    function ExecuteInterpreted(const ASource: TStringList; const AFileName: string;
+      const AOutputLines: TStrings): TScriptExecutionReport;
+    function ExecuteBytecodeFromSource(const ASource: TStringList; const AFileName: string;
+      const AOutputLines: TStrings): TScriptExecutionReport;
+    function ExecuteBytecodeFromFile(const AFileName: string;
+      const AOutputLines: TStrings): TScriptExecutionReport;
+    procedure EmitBytecode(const ASource: TStringList; const AFileName,
+      AOutputPath: string);
+    procedure PrintHumanReadableResult(const AFileName: string;
+      const AReport: TScriptExecutionReport; const AExtension: string);
+    procedure RunSource(const ASource: TStringList; const AFileName: string);
+    procedure RunScriptFromFile(const AFileName: string);
+    procedure RunScriptFromStdin;
+    procedure RunScripts(const APath: string);
+  protected
+    procedure Configure; override;
+    procedure Validate; override;
+    procedure ExecuteWithPaths(const APaths: TStringList); override;
+    procedure HandleError(const AException: Exception); override;
+    procedure AfterExecute; override;
+  end;
+
+{ TScriptLoaderApp - Property helpers }
+
+function TScriptLoaderApp.IsJsonOutput: Boolean;
+begin
+  Result := FOutputPath.Present and (FOutputPath.Value = 'json');
+end;
+
+function TScriptLoaderApp.IsEmitOnly: Boolean;
+begin
+  Result := FEmit.Present;
+end;
+
+function TScriptLoaderApp.IsSilentConsole: Boolean;
+begin
+  Result := FSilent.Present;
+end;
+
+function TScriptLoaderApp.IsSourceMapEnabled: Boolean;
+begin
+  Result := FSourceMap.Present;
+end;
+
+function TScriptLoaderApp.SourceMapOutputPath: string;
+begin
+  if FSourceMap.Present and (FSourceMap.Value <> '') then
+    Result := FSourceMap.Value
+  else
+    Result := '';
+end;
+
+function TScriptLoaderApp.OutputFilePath: string;
+begin
+  if FOutputPath.Present and (FOutputPath.Value <> 'json') then
+    Result := FOutputPath.Value
+  else
+    Result := '';
+end;
+
+function TScriptLoaderApp.EffectiveMode: TGocciaExecutionMode;
+begin
+  Result := EngineOptions.Mode.ValueOr(emInterpreted);
+end;
+
+function TScriptLoaderApp.IsProfileOpcodes: Boolean;
+var
+  Mode: Goccia.CLI.Options.TGocciaProfileMode;
+begin
+  Result := ProfilerOptions.Mode.Present;
+  if Result then
+  begin
+    Mode := ProfilerOptions.Mode.Value;
+    Result := (Mode = Goccia.CLI.Options.pmOpcodes) or
+              (Mode = Goccia.CLI.Options.pmAll);
+  end;
+end;
+
+function TScriptLoaderApp.IsProfileFunctions: Boolean;
+var
+  Mode: Goccia.CLI.Options.TGocciaProfileMode;
+begin
+  Result := ProfilerOptions.Mode.Present;
+  if Result then
+  begin
+    Mode := ProfilerOptions.Mode.Value;
+    Result := (Mode = Goccia.CLI.Options.pmFunctions) or
+              (Mode = Goccia.CLI.Options.pmAll);
+  end;
+end;
+
+function TScriptLoaderApp.IsCoverageEnabled: Boolean;
+begin
+  Result := CoverageOptions.Enabled.Present or CoverageOptions.Format.Present or
+    CoverageOptions.OutputPath.Present;
+end;
+
+function TScriptLoaderApp.IsCoverageLcov: Boolean;
+begin
+  Result := CoverageOptions.Format.Present and
+    (CoverageOptions.Format.Value = cfLcov);
+end;
+
+function TScriptLoaderApp.IsCoverageJson: Boolean;
+begin
+  Result := CoverageOptions.Format.Present and
+    (CoverageOptions.Format.Value = cfJson);
+end;
+
+{ TScriptLoaderApp - Configure }
+
+procedure TScriptLoaderApp.Configure;
+begin
+  AddEngineOptions;
+  AddCoverageOptions;
+  AddProfilerOptions;
+
+  FEmit := AddString('emit',
+    'Compile to .gbc file (no execution); optional value: bytecode');
+  FOutputPath := AddString('output',
+    'Output path (used with --emit) or "json" for structured JSON output');
+  FSilent := AddFlag('silent', 'Suppress console output from the script');
+  FSourceMap := AddString('source-map',
+    'Write a .map source map file (optional: explicit path)');
+  FGlobalFiles := AddRepeatable('globals',
+    'Inject globals from a JSON/JSON5/TOML/YAML file or a module with named exports');
+  FGlobalFiles.AcceptsSpaceForm := False;
+  FInlineGlobals := AddRepeatable('global',
+    'Inject a single global; value is parsed as JSON or kept as a string');
+  FInlineGlobals.AcceptsSpaceForm := True;
+end;
+
+{ TScriptLoaderApp - Validate }
+
+procedure TScriptLoaderApp.Validate;
+begin
+  inherited Validate;
+
+  if FEmit.Present then
+  begin
+    if (FEmit.Value <> '') and (FEmit.Value <> 'bytecode') then
+      raise TGocciaParseError.CreateFmt(
+        'Unknown emit format "%s". Use "bytecode".', [FEmit.Value]);
+  end;
+
+  if IsJsonOutput and IsEmitOnly then
+    raise TGocciaParseError.Create('--output=json cannot be used with --emit.');
+
+  if EngineOptions.Timeout.Present and (EngineOptions.Timeout.Value < 0) then
+    raise TGocciaParseError.Create('--timeout must be 0 or greater.');
+
+  // --profile-format implies --profile=functions when no explicit --profile given
+  if ProfilerOptions.Format.Present and not ProfilerOptions.Mode.Present then
+    ProfilerOptions.Mode.Apply('functions');
+
+  // Profiling requires bytecode mode regardless of --mode flag
+  if ProfilerOptions.Mode.Present then
+    EngineOptions.Mode.Apply('bytecode');
+
+  if ProfilerOptions.OutputPath.Present and not ProfilerOptions.Mode.Present then
+    raise TGocciaParseError.Create(
+      '--profile-output requires --profile=opcodes|functions|all.');
+
+  if ProfilerOptions.Format.Present and (ProfilerOptions.Format.Value = pfFlamegraph) and
+     not ProfilerOptions.OutputPath.Present then
+    raise TGocciaParseError.Create(
+      '--profile-format=flamegraph requires --profile-output=<path>.');
+end;
+
+{ TScriptLoaderApp - Core logic }
+
+function TScriptLoaderApp.ParseSource(const ASource: TStringList;
+  const AFileName: string; const APreprocessors: TGocciaPreprocessors;
+  const ASuppressWarnings: Boolean;
   out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
   out ASourceMap: TGocciaSourceMap): TGocciaProgram;
 var
@@ -110,7 +297,7 @@ begin
       ALexTimeNanoseconds := LexEnd - StartTime;
 
       Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
-      Parser.AutomaticSemicolonInsertion := GASIEnabled;
+      Parser.AutomaticSemicolonInsertion := EngineOptions.ASI.Present;
       try
         Result := Parser.Parse;
         ParseEnd := GetNanoseconds;
@@ -142,28 +329,29 @@ begin
   end;
 end;
 
-procedure WriteSourceMapIfEnabled(const ASourceMap: TGocciaSourceMap;
-  const AFileName: string);
+procedure TScriptLoaderApp.WriteSourceMapIfEnabled(
+  const ASourceMap: TGocciaSourceMap; const AFileName: string);
 var
-  OutputPath: string;
+  MapOutputPath: string;
 begin
-  if not GSourceMapEnabled then
+  if not IsSourceMapEnabled then
     Exit;
   if not Assigned(ASourceMap) then
     Exit;
-  if GSourceMapOutputPath <> '' then
-    OutputPath := GSourceMapOutputPath
+  if SourceMapOutputPath <> '' then
+    MapOutputPath := SourceMapOutputPath
   else
-    OutputPath := AFileName + EXT_MAP;
+    MapOutputPath := AFileName + EXT_MAP;
   ASourceMap.FileName := ExtractFileName(AFileName);
   ASourceMap.SetSourcePath(0, ExtractFileName(AFileName));
-  ASourceMap.SaveToFile(OutputPath);
-  if not GJsonOutput then
-    WriteLn(SysUtils.Format('  Source map written to %s', [OutputPath]));
+  ASourceMap.SaveToFile(MapOutputPath);
+  if not IsJsonOutput then
+    WriteLn(SysUtils.Format('  Source map written to %s', [MapOutputPath]));
 end;
 
-function CompileSource(const ASource: TStringList; const AFileName: string;
-  const APreprocessors: TGocciaPreprocessors; const ASuppressWarnings: Boolean = False): TGocciaBytecodeModule;
+function TScriptLoaderApp.CompileSource(const ASource: TStringList;
+  const AFileName: string; const APreprocessors: TGocciaPreprocessors;
+  const ASuppressWarnings: Boolean): TGocciaBytecodeModule;
 var
   ProgramNode: TGocciaProgram;
   Compiler: TGocciaCompiler;
@@ -191,14 +379,14 @@ begin
   end;
 end;
 
-procedure ConfigureConsole(const AConsole: TGocciaConsole;
+procedure TScriptLoaderApp.ConfigureConsole(const AConsole: TGocciaConsole;
   const AOutputLines: TStrings);
 begin
   if not Assigned(AConsole) then
     Exit;
 
-  AConsole.Enabled := not GSilentConsole;
-  if GJsonOutput and not GSilentConsole then
+  AConsole.Enabled := not IsSilentConsole;
+  if IsJsonOutput and not IsSilentConsole then
     AConsole.OutputLines := AOutputLines
   else
     AConsole.OutputLines := nil;
@@ -231,76 +419,78 @@ begin
     AReport.Timing));
 end;
 
-procedure ApplyDataGlobalsToEngine(const AEngine: TGocciaEngine);
+procedure TScriptLoaderApp.ApplyDataGlobalsToEngine(const AEngine: TGocciaEngine);
 var
   I: Integer;
   Pair: TScriptLoaderGlobalPair;
 begin
-  for I := 0 to GGlobalsFiles.Count - 1 do
-    if IsStructuredGlobalsFile(GGlobalsFiles[I]) then
+  for I := 0 to FGlobalFiles.Values.Count - 1 do
+    if IsStructuredGlobalsFile(FGlobalFiles.Values[I]) then
     begin
-      if IsYAMLGlobalsFile(GGlobalsFiles[I]) then
-        AEngine.InjectGlobalsFromYAML(ReadFileText(GGlobalsFiles[I]))
-      else if IsJSON5GlobalsFile(GGlobalsFiles[I]) then
-        AEngine.InjectGlobalsFromJSON5(ReadFileText(GGlobalsFiles[I]))
-      else if IsTOMLGlobalsFile(GGlobalsFiles[I]) then
-        AEngine.InjectGlobalsFromTOML(ReadFileText(GGlobalsFiles[I]))
+      if IsYAMLGlobalsFile(FGlobalFiles.Values[I]) then
+        AEngine.InjectGlobalsFromYAML(ReadFileText(FGlobalFiles.Values[I]))
+      else if IsJSON5GlobalsFile(FGlobalFiles.Values[I]) then
+        AEngine.InjectGlobalsFromJSON5(ReadFileText(FGlobalFiles.Values[I]))
+      else if IsTOMLGlobalsFile(FGlobalFiles.Values[I]) then
+        AEngine.InjectGlobalsFromTOML(ReadFileText(FGlobalFiles.Values[I]))
       else
-        AEngine.InjectGlobalsFromJSON(ReadFileText(GGlobalsFiles[I]));
+        AEngine.InjectGlobalsFromJSON(ReadFileText(FGlobalFiles.Values[I]));
     end;
 
-  for I := 0 to GInlineGlobals.Count - 1 do
+  for I := 0 to FInlineGlobals.Values.Count - 1 do
   begin
-    Pair := ParseGlobalPair(GInlineGlobals[I]);
+    Pair := ParseGlobalPair(FInlineGlobals.Values[I]);
     AEngine.InjectGlobal(Pair.Key, ParseInlineGlobalValue(Pair.ValueText));
   end;
 end;
 
-procedure ApplyModuleGlobalsToEngine(const AEngine: TGocciaEngine);
+procedure TScriptLoaderApp.ApplyModuleGlobalsToEngine(const AEngine: TGocciaEngine);
 var
   I: Integer;
 begin
-  for I := 0 to GGlobalsFiles.Count - 1 do
-    if not IsStructuredGlobalsFile(GGlobalsFiles[I]) then
-      AEngine.InjectGlobalsFromModule(GGlobalsFiles[I]);
+  for I := 0 to FGlobalFiles.Values.Count - 1 do
+    if not IsStructuredGlobalsFile(FGlobalFiles.Values[I]) then
+      AEngine.InjectGlobalsFromModule(FGlobalFiles.Values[I]);
 end;
 
-procedure ApplyDataGlobalsToBytecodeBackend(const ABackend: TGocciaBytecodeBackend);
+procedure TScriptLoaderApp.ApplyDataGlobalsToBytecodeBackend(
+  const ABackend: TGocciaBytecodeBackend);
 var
   I: Integer;
   Pair: TScriptLoaderGlobalPair;
 begin
-  for I := 0 to GGlobalsFiles.Count - 1 do
-    if IsStructuredGlobalsFile(GGlobalsFiles[I]) then
+  for I := 0 to FGlobalFiles.Values.Count - 1 do
+    if IsStructuredGlobalsFile(FGlobalFiles.Values[I]) then
     begin
-      if IsYAMLGlobalsFile(GGlobalsFiles[I]) then
-        ABackend.InjectGlobalsFromYAML(ReadFileText(GGlobalsFiles[I]))
-      else if IsJSON5GlobalsFile(GGlobalsFiles[I]) then
-        ABackend.InjectGlobalsFromJSON5(ReadFileText(GGlobalsFiles[I]))
-      else if IsTOMLGlobalsFile(GGlobalsFiles[I]) then
-        ABackend.InjectGlobalsFromTOML(ReadFileText(GGlobalsFiles[I]))
+      if IsYAMLGlobalsFile(FGlobalFiles.Values[I]) then
+        ABackend.InjectGlobalsFromYAML(ReadFileText(FGlobalFiles.Values[I]))
+      else if IsJSON5GlobalsFile(FGlobalFiles.Values[I]) then
+        ABackend.InjectGlobalsFromJSON5(ReadFileText(FGlobalFiles.Values[I]))
+      else if IsTOMLGlobalsFile(FGlobalFiles.Values[I]) then
+        ABackend.InjectGlobalsFromTOML(ReadFileText(FGlobalFiles.Values[I]))
       else
-        ABackend.InjectGlobalsFromJSON(ReadFileText(GGlobalsFiles[I]));
+        ABackend.InjectGlobalsFromJSON(ReadFileText(FGlobalFiles.Values[I]));
     end;
 
-  for I := 0 to GInlineGlobals.Count - 1 do
+  for I := 0 to FInlineGlobals.Values.Count - 1 do
   begin
-    Pair := ParseGlobalPair(GInlineGlobals[I]);
+    Pair := ParseGlobalPair(FInlineGlobals.Values[I]);
     ABackend.RegisterGlobal(Pair.Key, ParseInlineGlobalValue(Pair.ValueText));
   end;
 end;
 
-procedure ApplyModuleGlobalsToBytecodeBackend(const ABackend: TGocciaBytecodeBackend);
+procedure TScriptLoaderApp.ApplyModuleGlobalsToBytecodeBackend(
+  const ABackend: TGocciaBytecodeBackend);
 var
   I: Integer;
 begin
-  for I := 0 to GGlobalsFiles.Count - 1 do
-    if not IsStructuredGlobalsFile(GGlobalsFiles[I]) then
-      ABackend.InjectGlobalsFromModule(GGlobalsFiles[I]);
+  for I := 0 to FGlobalFiles.Values.Count - 1 do
+    if not IsStructuredGlobalsFile(FGlobalFiles.Values[I]) then
+      ABackend.InjectGlobalsFromModule(FGlobalFiles.Values[I]);
 end;
 
-function ExecuteInterpreted(const ASource: TStringList; const AFileName: string;
-  const AOutputLines: TStrings): TScriptExecutionReport;
+function TScriptLoaderApp.ExecuteInterpreted(const ASource: TStringList;
+  const AFileName: string; const AOutputLines: TStrings): TScriptExecutionReport;
 var
   Engine: TGocciaEngine;
   ScriptResult: TGocciaScriptResult;
@@ -308,13 +498,13 @@ var
 begin
   Engine := TGocciaEngine.Create(AFileName, ASource, []);
   try
-    Engine.ASIEnabled := GASIEnabled;
-    Engine.SuppressWarnings := GJsonOutput;
+    Engine.ASIEnabled := EngineOptions.ASI.Present;
+    Engine.SuppressWarnings := IsJsonOutput;
     ConfigureConsole(Engine.BuiltinConsole, AOutputLines);
     ApplyDataGlobalsToEngine(Engine);
-    ConfigureModuleResolver(Engine.Resolver, AFileName, GImportMapPath,
-      GInlineAliases);
-    StartExecutionTimeout(GTimeoutMilliseconds);
+    ConfigureModuleResolver(Engine.Resolver, AFileName,
+      EngineOptions.ImportMap.ValueOr(''), EngineOptions.Aliases.Values);
+    StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
     try
       ApplyModuleGlobalsToEngine(Engine);
       ScriptResult := Engine.Execute;
@@ -341,8 +531,8 @@ begin
   Result.Timing.TotalTimeNanoseconds := ScriptResult.TotalTimeNanoseconds;
 end;
 
-function ExecuteBytecodeFromSource(const ASource: TStringList; const AFileName: string;
-  const AOutputLines: TStrings): TScriptExecutionReport;
+function TScriptLoaderApp.ExecuteBytecodeFromSource(const ASource: TStringList;
+  const AFileName: string; const AOutputLines: TStrings): TScriptExecutionReport;
 var
   ProgramNode: TGocciaProgram;
   Module: TGocciaBytecodeModule;
@@ -353,15 +543,15 @@ begin
   StartTime := GetNanoseconds;
   Backend := TGocciaBytecodeBackend.Create(AFileName);
   try
-    Backend.ASIEnabled := GASIEnabled;
+    Backend.ASIEnabled := EngineOptions.ASI.Present;
     Backend.RegisterBuiltIns([]);
     ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
     ApplyDataGlobalsToBytecodeBackend(Backend);
-    ConfigureModuleResolver(Backend.ModuleResolver, AFileName, GImportMapPath,
-      GInlineAliases);
+    ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
+      EngineOptions.ImportMap.ValueOr(''), EngineOptions.Aliases.Values);
 
     ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultPreprocessors,
-      GJsonOutput, Result.Timing.LexTimeNanoseconds,
+      IsJsonOutput, Result.Timing.LexTimeNanoseconds,
       Result.Timing.ParseTimeNanoseconds, SourceMap);
     try
       WriteSourceMapIfEnabled(SourceMap, AFileName);
@@ -381,7 +571,7 @@ begin
     end;
 
     try
-      StartExecutionTimeout(GTimeoutMilliseconds);
+      StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
       try
         ApplyModuleGlobalsToBytecodeBackend(Backend);
         Result.ResultValue := Backend.RunModule(Module);
@@ -399,7 +589,7 @@ begin
   end;
 end;
 
-function ExecuteBytecodeFromFile(const AFileName: string;
+function TScriptLoaderApp.ExecuteBytecodeFromFile(const AFileName: string;
   const AOutputLines: TStrings): TScriptExecutionReport;
 var
   Module: TGocciaBytecodeModule;
@@ -412,13 +602,13 @@ begin
   try
     Backend := TGocciaBytecodeBackend.Create(AFileName);
     try
-      Backend.ASIEnabled := GASIEnabled;
+      Backend.ASIEnabled := EngineOptions.ASI.Present;
       Backend.RegisterBuiltIns([]);
       ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
       ApplyDataGlobalsToBytecodeBackend(Backend);
       ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
-        GImportMapPath, GInlineAliases);
-      StartExecutionTimeout(GTimeoutMilliseconds);
+        EngineOptions.ImportMap.ValueOr(''), EngineOptions.Aliases.Values);
+      StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
       try
         ApplyModuleGlobalsToBytecodeBackend(Backend);
         Result.ResultValue := Backend.RunModule(Module);
@@ -439,8 +629,8 @@ begin
   end;
 end;
 
-procedure EmitBytecode(const ASource: TStringList; const AFileName,
-  AOutputPath: string);
+procedure TScriptLoaderApp.EmitBytecode(const ASource: TStringList;
+  const AFileName, AOutputPath: string);
 var
   Module: TGocciaBytecodeModule;
   StartTime, EndTime: Int64;
@@ -448,24 +638,19 @@ begin
   WriteLn('Compiling: ', AFileName);
   StartTime := GetNanoseconds;
 
-  TGarbageCollector.Initialize;
+  Module := CompileSource(ASource, AFileName, TGocciaEngine.DefaultPreprocessors,
+    IsJsonOutput);
   try
-    Module := CompileSource(ASource, AFileName, TGocciaEngine.DefaultPreprocessors,
-      GJsonOutput);
-    try
-      Goccia.Bytecode.Binary.SaveModuleToFile(Module, AOutputPath);
-      EndTime := GetNanoseconds;
-      WriteLn(SysUtils.Format('  Compiled to %s (%s)',
-        [AOutputPath, FormatDuration(EndTime - StartTime)]));
-    finally
-      Module.Free;
-    end;
+    Goccia.Bytecode.Binary.SaveModuleToFile(Module, AOutputPath);
+    EndTime := GetNanoseconds;
+    WriteLn(SysUtils.Format('  Compiled to %s (%s)',
+      [AOutputPath, FormatDuration(EndTime - StartTime)]));
   finally
-    TGarbageCollector.Shutdown;
+    Module.Free;
   end;
 end;
 
-procedure PrintHumanReadableResult(const AFileName: string;
+procedure TScriptLoaderApp.PrintHumanReadableResult(const AFileName: string;
   const AReport: TScriptExecutionReport; const AExtension: string);
 var
   LoadTimeNanoseconds: Int64;
@@ -480,7 +665,7 @@ begin
        FormatDuration(AReport.Timing.ExecuteTimeNanoseconds),
        FormatDuration(AReport.Timing.TotalTimeNanoseconds)]));
   end
-  else if GMode = emBytecode then
+  else if EffectiveMode = emBytecode then
   begin
     WriteLn('Running script (bytecode): ', AFileName);
     WriteLn(SysUtils.Format('  Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
@@ -503,9 +688,10 @@ begin
   WriteLn('Result: ', AReport.ResultValue.ToStringLiteral.Value);
 end;
 
-procedure RunSource(const ASource: TStringList; const AFileName: string);
+procedure TScriptLoaderApp.RunSource(const ASource: TStringList;
+  const AFileName: string);
 var
-  Extension, OutputPath: string;
+  Extension, EmitOutputPath: string;
   Report: TScriptExecutionReport;
   OutputLines: TStringList;
   StartTime: Int64;
@@ -514,7 +700,7 @@ begin
   Report.ResultValue := nil;
 
   OutputLines := nil;
-  if GJsonOutput then
+  if IsJsonOutput then
     OutputLines := TStringList.Create;
   try
     StartTime := GetNanoseconds;
@@ -523,24 +709,24 @@ begin
 
       if Extension = EXT_GBC then
         Report := ExecuteBytecodeFromFile(AFileName, OutputLines)
-      else if GEmitOnly then
+      else if IsEmitOnly then
       begin
-        if GOutputPath <> '' then
-          OutputPath := GOutputPath
+        if OutputFilePath <> '' then
+          EmitOutputPath := OutputFilePath
         else if AFileName = STDIN_FILE_NAME then
           raise Exception.Create('--output=<path> is required when emitting bytecode from stdin.')
         else
-          OutputPath := ChangeFileExt(AFileName, EXT_GBC);
-        EmitBytecode(ASource, AFileName, OutputPath);
+          EmitOutputPath := ChangeFileExt(AFileName, EXT_GBC);
+        EmitBytecode(ASource, AFileName, EmitOutputPath);
         Exit;
       end
       else
-        case GMode of
+        case EffectiveMode of
           emInterpreted: Report := ExecuteInterpreted(ASource, AFileName, OutputLines);
           emBytecode:    Report := ExecuteBytecodeFromSource(ASource, AFileName, OutputLines);
         end;
 
-      if GJsonOutput then
+      if IsJsonOutput then
         PrintJSONSuccess(Report, OutputLines)
       else
         PrintHumanReadableResult(AFileName, Report, Extension);
@@ -556,7 +742,7 @@ begin
             Report.Timing.LexTimeNanoseconds -
             Report.Timing.ParseTimeNanoseconds -
             Report.Timing.CompileTimeNanoseconds;
-        if GJsonOutput then
+        if IsJsonOutput then
           PrintJSONError(E, Report, OutputLines, AFileName)
         else if E is TGocciaError then
           WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
@@ -574,7 +760,7 @@ begin
   end;
 end;
 
-procedure RunScriptFromFile(const AFileName: string);
+procedure TScriptLoaderApp.RunScriptFromFile(const AFileName: string);
 var
   Source: TStringList;
 begin
@@ -592,7 +778,7 @@ begin
   end;
 end;
 
-procedure RunScriptFromStdin;
+procedure TScriptLoaderApp.RunScriptFromStdin;
 var
   Source: TStringList;
 begin
@@ -604,7 +790,7 @@ begin
   end;
 end;
 
-procedure RunScripts(const APath: string);
+procedure TScriptLoaderApp.RunScripts(const APath: string);
 var
   Files: TStringList;
   I: Integer;
@@ -617,7 +803,7 @@ begin
 
   if DirectoryExists(APath) then
   begin
-    if GJsonOutput then
+    if IsJsonOutput then
       raise Exception.Create('--output=json does not support directory input.');
 
     Files := FindAllFiles(APath, ScriptExtensions);
@@ -638,386 +824,102 @@ begin
     raise Exception.Create('Path not found: ' + APath);
 end;
 
-procedure PrintUsage;
+{ TScriptLoaderApp - ExecuteWithPaths }
+
+procedure TScriptLoaderApp.ExecuteWithPaths(const APaths: TStringList);
+var
+  I: Integer;
 begin
-  WriteLn('Usage: ScriptLoader [file|directory|-] [options]');
-  WriteLn;
-  WriteLn('  <file>                  Script (.js, .jsx, .ts, .tsx, .mjs) or bytecode (.gbc)');
-  WriteLn('  <directory>             Run all scripts in directory');
-  WriteLn('  -                       Read source from stdin');
-  WriteLn('  (omitted path)          Read source from stdin');
-  WriteLn;
-  WriteLn('Options:');
-  WriteLn('  --mode=interpreted      Tree-walk interpreter (default)');
-  WriteLn('  --mode=bytecode         Compile to bytecode and execute on the Goccia VM');
-  WriteLn('  --emit                  Compile to .gbc file (no execution)');
-  WriteLn('  --emit=bytecode         Compile to .gbc file (explicit, same as --emit)');
-  WriteLn('  --import-map=<path>     Load WHATWG-style import map JSON before execution');
-  WriteLn('  --alias key=value       Add an inline import-map-style alias (exact match unless key ends with "/")');
-  WriteLn('  --global name=value     Inject a single global; value is parsed as JSON or kept as a string');
-  WriteLn('  --globals=<path>        Inject globals from a JSON/JSON5/TOML/YAML file or a module with named exports');
-  WriteLn('  --timeout=<ms>          Abort execution if it runs longer than the given milliseconds');
-  WriteLn('  --output=json           Write structured JSON result to stdout');
-  WriteLn('  --output=<path>         Output file path (used with --emit)');
-  WriteLn('  --silent                Suppress console output from the script');
-  WriteLn('  --asi                   Enable automatic semicolon insertion');
-  WriteLn('  --coverage              Enable line and branch coverage reporting');
-  WriteLn('  --coverage-format=lcov|json  Coverage output format (implies --coverage)');
-  WriteLn('  --coverage-output=<file>     Coverage output file (paired with --coverage-format)');
-  WriteLn('  --profile=opcodes|functions|all  Enable bytecode profiling (implies --mode=bytecode)');
-  WriteLn('  --profile-output=<file>          Write profile results as JSON');
-  WriteLn('  --profile-format=flamegraph      Write collapsed stack format for flame graph visualization');
-  WriteLn('  --source-map                     Write a .map source map file alongside the output');
-  WriteLn('  --source-map=<file>              Write source map to a specific file path');
+  FLastPaths := APaths;
+
+  if IsJsonOutput and (APaths.Count > 1) then
+    raise TGocciaParseError.Create('--output=json supports a single input path.');
+
+  if IsSourceMapEnabled and (SourceMapOutputPath = '') and
+     ((APaths.Count = 0) or
+      ((APaths.Count = 1) and IsStdinPath(APaths[0]))) then
+    raise TGocciaParseError.Create(
+      '--source-map=<file> is required when reading source from stdin.');
+
+  if (SourceMapOutputPath <> '') and
+     ((APaths.Count > 1) or
+      ((APaths.Count = 1) and DirectoryExists(APaths[0]))) then
+    raise TGocciaParseError.Create(
+      '--source-map=<file> supports a single input file or stdin.');
+
+  if APaths.Count = 0 then
+    RunScriptFromStdin
+  else
+    for I := 0 to APaths.Count - 1 do
+    begin
+      if I > 0 then
+        WriteLn;
+      RunScripts(APaths[I]);
+    end;
 end;
 
-var
-  Paths: TStringList;
-  I: Integer;
-  Arg, ModeStr, EmitStr, TimeoutStr: string;
+{ TScriptLoaderApp - HandleError }
+
+procedure TScriptLoaderApp.HandleError(const AException: Exception);
+begin
+  if IsJsonOutput then
+    WriteLn(BuildErrorJSON('', ExceptionToScriptLoaderErrorInfo(AException),
+      Default(TScriptLoaderTiming)))
+  else
+    inherited HandleError(AException);
+end;
+
+{ TScriptLoaderApp - AfterExecute }
+
+procedure TScriptLoaderApp.AfterExecute;
+begin
+  if IsCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+  begin
+    if not IsJsonOutput then
+    begin
+      PrintCoverageSummary(TGocciaCoverageTracker.Instance);
+      if Assigned(FLastPaths) and (FLastPaths.Count = 1) and
+         FileExists(FLastPaths[0]) then
+        PrintCoverageDetail(TGocciaCoverageTracker.Instance, FLastPaths[0]);
+    end;
+    if IsCoverageLcov and (CoverageOptions.OutputPath.ValueOr('') <> '') then
+      WriteCoverageLcov(TGocciaCoverageTracker.Instance,
+        CoverageOptions.OutputPath.Value);
+    if IsCoverageJson and (CoverageOptions.OutputPath.ValueOr('') <> '') then
+      WriteCoverageJSON(TGocciaCoverageTracker.Instance,
+        CoverageOptions.OutputPath.Value);
+  end;
+
+  if (IsProfileOpcodes or IsProfileFunctions) and
+     Assigned(TGocciaProfiler.Instance) then
+  begin
+    if not IsJsonOutput then
+    begin
+      if IsProfileOpcodes then
+      begin
+        PrintOpcodeProfile(TGocciaProfiler.Instance);
+        PrintOpcodePairProfile(TGocciaProfiler.Instance);
+        PrintScalarHitRate(TGocciaProfiler.Instance);
+      end;
+      if IsProfileFunctions then
+        PrintFunctionProfile(TGocciaProfiler.Instance);
+    end;
+    if ProfilerOptions.OutputPath.Present then
+    begin
+      if ProfilerOptions.Format.Present and
+         (ProfilerOptions.Format.Value = pfFlamegraph) then
+        WriteCollapsedStacks(TGocciaProfiler.Instance,
+          ProfilerOptions.OutputPath.Value)
+      else
+        WriteProfileJSON(TGocciaProfiler.Instance,
+          ProfilerOptions.OutputPath.Value);
+    end;
+  end;
+end;
+
+{ Entry point }
 
 begin
-  GMode := emInterpreted;
-  GOutputPath := '';
-  GEmitOnly := False;
-  GJsonOutput := False;
-  GSilentConsole := False;
-  GTimeoutMilliseconds := 0;
-  GImportMapPath := '';
-  GGlobalsFiles := TStringList.Create;
-  GInlineGlobals := TStringList.Create;
-  GInlineAliases := TStringList.Create;
-
-  Paths := TStringList.Create;
-  try
-    I := 1;
-    while I <= ParamCount do
-    begin
-      Arg := ParamStr(I);
-      if Copy(Arg, 1, 7) = '--mode=' then
-      begin
-        ModeStr := Copy(Arg, 8, MaxInt);
-        if ModeStr = 'interpreted' then
-          GMode := emInterpreted
-        else if ModeStr = 'bytecode' then
-          GMode := emBytecode
-        else
-        begin
-          WriteLn('Error: Unknown mode "', ModeStr, '". Use "interpreted" or "bytecode".');
-          ExitCode := 1;
-          Exit;
-        end;
-      end
-      else if Copy(Arg, 1, 7) = '--emit=' then
-      begin
-        GEmitOnly := True;
-        EmitStr := Copy(Arg, 8, MaxInt);
-        if (EmitStr <> 'bytecode') and (EmitStr <> '') then
-        begin
-          WriteLn('Error: Unknown emit format "', EmitStr, '". Use "bytecode".');
-          ExitCode := 1;
-          Exit;
-        end;
-      end
-      else if Arg = '--emit' then
-        GEmitOnly := True
-      else if (Arg = '--help') or (Arg = '-h') then
-      begin
-        PrintUsage;
-        Exit;
-      end
-      else if Copy(Arg, 1, 9) = '--output=' then
-      begin
-        GOutputPath := Copy(Arg, 10, MaxInt);
-        if GOutputPath = 'json' then
-          GJsonOutput := True;
-      end
-      else if Copy(Arg, 1, 13) = '--import-map=' then
-      begin
-        GImportMapPath := Copy(Arg, 14, MaxInt);
-        if GImportMapPath = '' then
-        begin
-          WriteLn('Error: --import-map requires a non-empty path.');
-          ExitCode := 1;
-          Exit;
-        end;
-      end
-      else if Copy(Arg, 1, 8) = '--alias=' then
-        GInlineAliases.Add(Copy(Arg, 9, MaxInt))
-      else if Copy(Arg, 1, 10) = '--globals=' then
-        GGlobalsFiles.Add(Copy(Arg, 11, MaxInt))
-      else if Copy(Arg, 1, 10) = '--timeout=' then
-      begin
-        TimeoutStr := Copy(Arg, 11, MaxInt);
-        if not TryStrToInt(TimeoutStr, GTimeoutMilliseconds) then
-        begin
-          WriteLn('Error: --timeout must be an integer number of milliseconds.');
-          ExitCode := 1;
-          Exit;
-        end;
-      end
-      else if Arg = '--global' then
-      begin
-        if I = ParamCount then
-        begin
-          WriteLn('Error: --global requires a name=value argument.');
-          ExitCode := 1;
-          Exit;
-        end;
-        Inc(I);
-        GInlineGlobals.Add(ParamStr(I));
-      end
-      else if Arg = '--alias' then
-      begin
-        if I = ParamCount then
-        begin
-          WriteLn('Error: --alias requires a key=value argument.');
-          ExitCode := 1;
-          Exit;
-        end;
-        Inc(I);
-        GInlineAliases.Add(ParamStr(I));
-      end
-      else if Arg = '--silent' then
-        GSilentConsole := True
-      else if Arg = '--asi' then
-        GASIEnabled := True
-      else if Arg = '--coverage' then
-        GCoverageEnabled := True
-      else if Arg = '--coverage-format=lcov' then
-      begin
-        GCoverageLcovEnabled := True;
-        GCoverageEnabled := True;
-      end
-      else if Arg = '--coverage-format=json' then
-      begin
-        GCoverageJsonEnabled := True;
-        GCoverageEnabled := True;
-      end
-      else if Copy(Arg, 1, 18) = '--coverage-format=' then
-      begin
-        WriteLn('Error: Unknown coverage format "', Copy(Arg, 19, MaxInt), '". Use "lcov" or "json".');
-        ExitCode := 1;
-        Exit;
-      end
-      else if Copy(Arg, 1, 18) = '--coverage-output=' then
-      begin
-        GCoverageOutputPath := Copy(Arg, 19, MaxInt);
-        GCoverageEnabled := True;
-      end
-      else if Arg = '--profile=opcodes' then
-        GProfileOpcodes := True
-      else if Arg = '--profile=functions' then
-        GProfileFunctions := True
-      else if Arg = '--profile=all' then
-      begin
-        GProfileOpcodes := True;
-        GProfileFunctions := True;
-      end
-      else if Copy(Arg, 1, 10) = '--profile=' then
-      begin
-        WriteLn('Error: Unknown profile mode "', Copy(Arg, 11, MaxInt),
-          '". Use "opcodes", "functions", or "all".');
-        ExitCode := 1;
-        Exit;
-      end
-      else if Copy(Arg, 1, 17) = '--profile-output=' then
-      begin
-        GProfileOutputPath := Copy(Arg, 18, MaxInt);
-        if GProfileOutputPath = '' then
-        begin
-          WriteLn('Error: --profile-output requires a non-empty path.');
-          ExitCode := 1;
-          Exit;
-        end;
-      end
-      else if Arg = '--profile-format=flamegraph' then
-        GProfileFormatFlamegraph := True
-      else if Copy(Arg, 1, 18) = '--profile-format=' then
-      begin
-        WriteLn('Error: Unknown profile format "', Copy(Arg, 19, MaxInt),
-          '". Use "flamegraph".');
-        ExitCode := 1;
-        Exit;
-      end
-      else if Arg = '--source-map' then
-        GSourceMapEnabled := True
-      else if Copy(Arg, 1, 13) = '--source-map=' then
-      begin
-        GSourceMapOutputPath := Copy(Arg, 14, MaxInt);
-        GSourceMapEnabled := True;
-        if GSourceMapOutputPath = '' then
-        begin
-          WriteLn('Error: --source-map= requires a non-empty path.');
-          ExitCode := 1;
-          Exit;
-        end;
-      end
-      else if Copy(Arg, 1, 2) <> '--' then
-        Paths.Add(Arg)
-      else
-      begin
-        WriteLn('Error: Unknown option "', Arg, '".');
-        PrintUsage;
-        ExitCode := 1;
-        Exit;
-      end;
-      Inc(I);
-    end;
-
-    if GJsonOutput and GEmitOnly then
-    begin
-      WriteLn('Error: --output=json cannot be used with --emit.');
-      ExitCode := 1;
-      Exit;
-    end;
-
-    if GJsonOutput and (Paths.Count > 1) then
-    begin
-      WriteLn('Error: --output=json supports a single input path.');
-      ExitCode := 1;
-      Exit;
-    end;
-
-    if GSourceMapEnabled and (GSourceMapOutputPath = '') and
-       ((Paths.Count = 0) or
-        ((Paths.Count = 1) and IsStdinPath(Paths[0]))) then
-    begin
-      WriteLn('Error: --source-map=<file> is required when reading source from stdin.');
-      ExitCode := 1;
-      Exit;
-    end;
-
-    if (GSourceMapOutputPath <> '') and
-       ((Paths.Count > 1) or
-        ((Paths.Count = 1) and DirectoryExists(Paths[0]))) then
-    begin
-      WriteLn('Error: --source-map=<file> supports a single input file or stdin.');
-      ExitCode := 1;
-      Exit;
-    end;
-
-    if GTimeoutMilliseconds < 0 then
-    begin
-      WriteLn('Error: --timeout must be 0 or greater.');
-      ExitCode := 1;
-      Exit;
-    end;
-
-    // --profile-format implies --profile=functions when no explicit --profile given
-    if GProfileFormatFlamegraph and not (GProfileOpcodes or GProfileFunctions) then
-      GProfileFunctions := True;
-
-    // Profiling requires bytecode mode regardless of --mode flag
-    if GProfileOpcodes or GProfileFunctions then
-      GMode := emBytecode;
-
-    if (GProfileOutputPath <> '') and not (GProfileOpcodes or GProfileFunctions) then
-    begin
-      WriteLn('Error: --profile-output requires --profile=opcodes|functions|all.');
-      ExitCode := 1;
-      Exit;
-    end;
-
-    if GProfileFormatFlamegraph and (GProfileOutputPath = '') then
-    begin
-      WriteLn('Error: --profile-format=flamegraph requires --profile-output=<path>.');
-      ExitCode := 1;
-      Exit;
-    end;
-
-    if GCoverageEnabled then
-    begin
-      TGocciaCoverageTracker.Initialize;
-      TGocciaCoverageTracker.Instance.Enabled := True;
-    end;
-    if GProfileOpcodes or GProfileFunctions then
-    begin
-      TGocciaProfiler.Initialize;
-      TGocciaProfiler.Instance.Enabled := True;
-      TGocciaProfiler.Instance.Mode := [];
-      if GProfileOpcodes then
-        TGocciaProfiler.Instance.Mode :=
-          TGocciaProfiler.Instance.Mode + [pmOpcodes];
-      if GProfileFunctions then
-        TGocciaProfiler.Instance.Mode :=
-          TGocciaProfiler.Instance.Mode + [pmFunctions];
-    end;
-    try
-      try
-        if Paths.Count = 0 then
-          RunScriptFromStdin
-        else
-          for I := 0 to Paths.Count - 1 do
-          begin
-            if I > 0 then
-              WriteLn;
-            RunScripts(Paths[I]);
-          end;
-      except
-        on E: Exception do
-        begin
-          if GJsonOutput then
-            WriteLn(BuildErrorJSON('', ExceptionToScriptLoaderErrorInfo(E),
-              Default(TScriptLoaderTiming)))
-          else if E is TGocciaError then
-            WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
-          else if E is TGocciaThrowValue then
-            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, '', nil, IsColorTerminal))
-          else if E is EGocciaBytecodeThrow then
-            WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue, '', nil, IsColorTerminal))
-          else
-            WriteLn('Error: ', E.Message);
-          ExitCode := 1;
-        end;
-      end;
-
-      if GCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
-      begin
-        if not GJsonOutput then
-        begin
-          PrintCoverageSummary(TGocciaCoverageTracker.Instance);
-          if (Paths.Count = 1) and FileExists(Paths[0]) then
-            PrintCoverageDetail(TGocciaCoverageTracker.Instance, Paths[0]);
-        end;
-        if GCoverageLcovEnabled and (GCoverageOutputPath <> '') then
-          WriteCoverageLcov(TGocciaCoverageTracker.Instance, GCoverageOutputPath);
-        if GCoverageJsonEnabled and (GCoverageOutputPath <> '') then
-          WriteCoverageJSON(TGocciaCoverageTracker.Instance, GCoverageOutputPath);
-      end;
-
-      if (GProfileOpcodes or GProfileFunctions) and
-         Assigned(TGocciaProfiler.Instance) then
-      begin
-        if not GJsonOutput then
-        begin
-          if GProfileOpcodes then
-          begin
-            PrintOpcodeProfile(TGocciaProfiler.Instance);
-            PrintOpcodePairProfile(TGocciaProfiler.Instance);
-            PrintScalarHitRate(TGocciaProfiler.Instance);
-          end;
-          if GProfileFunctions then
-            PrintFunctionProfile(TGocciaProfiler.Instance);
-        end;
-        if GProfileOutputPath <> '' then
-        begin
-          if GProfileFormatFlamegraph then
-            WriteCollapsedStacks(TGocciaProfiler.Instance, GProfileOutputPath)
-          else
-            WriteProfileJSON(TGocciaProfiler.Instance, GProfileOutputPath);
-        end;
-      end;
-    finally
-      if GCoverageEnabled then
-        TGocciaCoverageTracker.Shutdown;
-      if GProfileOpcodes or GProfileFunctions then
-        TGocciaProfiler.Shutdown;
-    end;
-  finally
-    Paths.Free;
-    GGlobalsFiles.Free;
-    GInlineGlobals.Free;
-    GInlineAliases.Free;
-  end;
+  ExitCode := TGocciaCLIApplication.RunCLI(TScriptLoaderApp,
+    'ScriptLoader', '[file|directory|-] [options]');
 end.

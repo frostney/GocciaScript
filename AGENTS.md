@@ -108,6 +108,8 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 
 **Bytecode pipeline:** Source → Lexer → Parser → Compiler → Goccia Bytecode → Goccia VM → Result
 
+**CLI pipeline:** Options → `ParseCommandLine` → `Validate` → `InitializeSingletons` → `ExecuteWithPaths` → `AfterExecute` → `ShutdownSingletons`
+
 **Key components:**
 
 | Component | File | Role |
@@ -140,6 +142,12 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Source map consumer | `Goccia.SourceMap.Consumer.pas` | Source map v3 JSON parser and reverse lookup |
 | Preprocessors | `Goccia.Engine.pas` | `TGocciaPreprocessor = (ppJSX)` and `TGocciaPreprocessors` — pre-processing system |
 | Compatibility | `Goccia.Engine.pas` | `TGocciaCompatibility = (cfASI)` and `TGocciaCompatibilityFlags` — compatibility layer |
+| Application base | `Goccia.Application.pas` | Embeddable application lifecycle (GC, error handling) |
+| CLI options | `Goccia.CLI.Options.pas` | Option class hierarchy, RTTI enum discovery, option groups |
+| CLI parser | `Goccia.CLI.Parser.pas` | Command-line argument parsing via virtual dispatch |
+| CLI help | `Goccia.CLI.Help.pas` | Auto-generated help text from option definitions |
+| CLI engine setup | `Goccia.CLI.EngineSetup.pas` | Engine/backend configuration from parsed options |
+| CLI application | `Goccia.CLI.Application.pas` | CLI application base with parsing, help, singleton lifecycle |
 
 **Bytecode design rules:**
 
@@ -415,6 +423,7 @@ See [docs/code-style.md](docs/code-style.md#design-patterns) for full descriptio
 - **Recursive descent** for parsing
 - **Mark-and-sweep** for garbage collection
 - **Shared helpers** for evaluator deduplication (`EvaluateStatements`, `SpreadIterableInto`, `EvaluateSimpleNumericBinaryOp`)
+- **Template method** for CLI application lifecycle (`TGocciaApplication.Run` → `Execute`, `TGocciaCLIApplication.Execute` → `Configure` → `Validate` → `ExecuteWithPaths` → `AfterExecute`)
 
 ## Value System
 
