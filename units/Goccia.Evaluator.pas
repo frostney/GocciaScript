@@ -1653,13 +1653,13 @@ end;
 function PascalExceptionToErrorObject(const E: Exception): TGocciaValue;
 begin
   if E is TGocciaTypeError then
-    Result := CreateErrorObject(TYPE_ERROR_NAME, E.Message)
+    Result := CreateErrorObject(TYPE_ERROR_NAME, TGocciaError(E))
   else if E is TGocciaReferenceError then
-    Result := CreateErrorObject(REFERENCE_ERROR_NAME, E.Message)
+    Result := CreateErrorObject(REFERENCE_ERROR_NAME, TGocciaError(E))
   else if E is TGocciaSyntaxError then
-    Result := CreateErrorObject(SYNTAX_ERROR_NAME, E.Message)
+    Result := CreateErrorObject(SYNTAX_ERROR_NAME, TGocciaError(E))
   else if E is TGocciaRuntimeError then
-    Result := CreateErrorObject(ERROR_NAME, E.Message)
+    Result := CreateErrorObject(ERROR_NAME, TGocciaError(E))
   else
     Result := CreateErrorObject(ERROR_NAME, E.Message);
 end;

@@ -5,11 +5,18 @@ unit Goccia.Values.ErrorHelper;
 interface
 
 uses
+  Goccia.Error,
   Goccia.Values.ObjectValue;
 
 { Creates a JavaScript error object with the given name and message.
-  ASkipTop controls how many frames to skip from the top of the call stack. }
-function CreateErrorObject(const AName, AMessage: string; const ASkipTop: Integer = 0): TGocciaObjectValue;
+  ASkipTop controls how many frames to skip from the top of the call stack.
+  Optional ASuggestion is exposed as err.suggestion when non-empty. }
+function CreateErrorObject(const AName, AMessage: string;
+  const ASkipTop: Integer = 0; const ASuggestion: string = ''): TGocciaObjectValue; overload;
+
+{ Same as CreateErrorObject(AName, AError.Message, ...) plus AError.Suggestion. }
+function CreateErrorObject(const AName: string; const AError: TGocciaError;
+  const ASkipTop: Integer = 0): TGocciaObjectValue; overload;
 
 { Raises a TGocciaThrowValue with a TypeError }
 procedure ThrowTypeError(const AMessage: string);
@@ -68,7 +75,8 @@ begin
 end;
 
 // ES2026 §10.4.4.4 [[ErrorData]]
-function CreateErrorObject(const AName, AMessage: string; const ASkipTop: Integer = 0): TGocciaObjectValue;
+function CreateErrorObject(const AName, AMessage: string;
+  const ASkipTop: Integer = 0; const ASuggestion: string = ''): TGocciaObjectValue; overload;
 var
   Proto: TGocciaObjectValue;
 begin
@@ -81,10 +89,20 @@ begin
   Result.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AName));
   Result.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(AMessage));
 
+  if ASuggestion <> '' then
+    Result.AssignProperty(PROP_SUGGESTION,
+      TGocciaStringLiteralValue.Create(ASuggestion));
+
   if Assigned(TGocciaCallStack.Instance) then
     Result.AssignProperty(PROP_STACK,
       TGocciaStringLiteralValue.Create(
         TGocciaCallStack.Instance.CaptureStackTrace(AName, AMessage, ASkipTop)));
+end;
+
+function CreateErrorObject(const AName: string; const AError: TGocciaError;
+  const ASkipTop: Integer = 0): TGocciaObjectValue; overload;
+begin
+  Result := CreateErrorObject(AName, AError.Message, ASkipTop, AError.Suggestion);
 end;
 
 procedure ThrowTypeError(const AMessage: string);

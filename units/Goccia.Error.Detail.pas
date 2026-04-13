@@ -103,7 +103,16 @@ var
   Line, Col: Integer;
   EffectiveFileName: string;
   StackValue: TGocciaValue;
+  SuggestionStr: string;
+  SuggValue: TGocciaValue;
 begin
+  SuggestionStr := '';
+  if AThrown is TGocciaObjectValue then
+  begin
+    SuggValue := TGocciaObjectValue(AThrown).GetProperty(PROP_SUGGESTION);
+    if Assigned(SuggValue) and (SuggValue is TGocciaStringLiteralValue) then
+      SuggestionStr := TGocciaStringLiteralValue(SuggValue).Value;
+  end;
   if ExtractThrowLocation(AThrown, ErrorName, ErrorMessage, FrameFileName, Line, Col) and
      Assigned(ASourceLines) and (Line > 0) and (Line <= ASourceLines.Count) then
   begin
@@ -112,7 +121,8 @@ begin
     else
       EffectiveFileName := AFileName;
     Result := FormatErrorWithSourceContext(
-      ErrorName, ErrorMessage, EffectiveFileName, Line, Col, ASourceLines, AUseColor);
+      ErrorName, ErrorMessage, EffectiveFileName, Line, Col, ASourceLines, AUseColor,
+      SuggestionStr);
   end
   else
   begin

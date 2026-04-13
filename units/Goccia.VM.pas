@@ -100,6 +100,9 @@ type
     procedure SetLocal(const AIndex: Integer; const AValue: TGocciaValue); inline;
     procedure SetLocalFast(const AIndex: Integer; const AValue: TGocciaValue); inline;
     procedure SetLocalRaw(const AIndex: Integer; const AValue: TGocciaRegister); inline;
+    procedure StrictTypeCheckRegister(const ATemplate: TGocciaFunctionTemplate;
+      const AFrame: TGocciaVMCallFrame; const AValue: TGocciaValue;
+      const AExpected: TGocciaLocalType);
     function MatchesNullishKind(const AValue: TGocciaValue; const AKind: UInt8): Boolean;
     function TryGetArrayIndex(const AKey: TGocciaValue; out AIndex: Integer): Boolean;
     function TryGetArrayIndexRegister(const AKey: TGocciaRegister;
@@ -194,6 +197,7 @@ type
 implementation
 
 uses
+  Classes,
   Generics.Collections,
   SysUtils,
 
@@ -206,6 +210,7 @@ uses
   Goccia.Coverage,
   Goccia.DisposalTracker,
   Goccia.Error,
+  Goccia.Error.Suggestions,
   Goccia.Evaluator,
   Goccia.Evaluator.Decorators,
   Goccia.GarbageCollector,
@@ -386,51 +391,72 @@ end;
 
 
 // Runtime guard for strict local types emitted as OP_CHECK_TYPE in bytecode mode.
-const
-  STRICT_TYPE_MISMATCH_SUGGESTION =
-    'Use a value that matches the declared type (Types as Comments), or remove the type annotation to disable enforcement.';
-
-function VMStrictTypeMismatchMessage(const ATypeName, AExpectedLabel: string): string; inline;
-begin
-  Result := 'Type ''' + ATypeName + ''' is not assignable to type ''' + AExpectedLabel +
-    '''' + sLineBreak + 'Suggestion: ' + STRICT_TYPE_MISMATCH_SUGGESTION;
-end;
-
-procedure VMStrictTypeCheckRegisterValue(const AValue: TGocciaValue;
+procedure TGocciaVM.StrictTypeCheckRegister(const ATemplate: TGocciaFunctionTemplate;
+  const AFrame: TGocciaVMCallFrame; const AValue: TGocciaValue;
   const AExpected: TGocciaLocalType);
+var
+  Line, Col: Integer;
+  SrcFile: string;
+  SourceLines: TStringList;
+  PC: Integer;
+  ExpectedLabel: string;
 begin
   case AExpected of
     sltInteger:
       begin
-        if not (AValue is TGocciaNumberLiteralValue) or
-           AValue.ToNumberLiteral.IsNaN or
-           AValue.ToNumberLiteral.IsInfinite or
-           (Frac(AValue.ToNumberLiteral.Value) <> 0.0) then
-          ThrowTypeError(VMStrictTypeMismatchMessage(AValue.TypeName, 'integer'));
+        if (AValue is TGocciaNumberLiteralValue) and
+           not AValue.ToNumberLiteral.IsNaN and
+           not AValue.ToNumberLiteral.IsInfinite and
+           (Frac(AValue.ToNumberLiteral.Value) = 0.0) then
+          Exit;
+        ExpectedLabel := 'integer';
       end;
     sltFloat:
       begin
-        if not (AValue is TGocciaNumberLiteralValue) then
-          ThrowTypeError(VMStrictTypeMismatchMessage(AValue.TypeName, 'number'));
+        if AValue is TGocciaNumberLiteralValue then
+          Exit;
+        ExpectedLabel := 'number';
       end;
     sltBoolean:
       begin
-        if not (AValue is TGocciaBooleanLiteralValue) then
-          ThrowTypeError(VMStrictTypeMismatchMessage(AValue.TypeName, 'boolean'));
+        if AValue is TGocciaBooleanLiteralValue then
+          Exit;
+        ExpectedLabel := 'boolean';
       end;
     sltString:
       begin
-        if not (AValue is TGocciaStringLiteralValue) then
-          ThrowTypeError(VMStrictTypeMismatchMessage(AValue.TypeName, 'string'));
+        if AValue is TGocciaStringLiteralValue then
+          Exit;
+        ExpectedLabel := 'string';
       end;
     sltReference:
       begin
-        if AValue.IsPrimitive then
-          ThrowTypeError(VMStrictTypeMismatchMessage(AValue.TypeName, 'object'));
+        if not AValue.IsPrimitive then
+          Exit;
+        ExpectedLabel := 'object';
       end;
   else
-    // sltUntyped: no runtime check
+    Exit;
   end;
+
+  PC := AFrame.IP - 1;
+  Line := 0;
+  Col := 0;
+  SrcFile := FCurrentModuleSourcePath;
+  SourceLines := nil;
+  if Assigned(ATemplate.DebugInfo) then
+  begin
+    Line := ATemplate.DebugInfo.GetLineForPC(PC);
+    Col := ATemplate.DebugInfo.GetColumnForPC(PC);
+    if ATemplate.DebugInfo.SourceFile <> '' then
+      SrcFile := ATemplate.DebugInfo.SourceFile;
+  end;
+  if Assigned(FInterpreter) and (SrcFile = FInterpreter.FileName) then
+    SourceLines := FInterpreter.SourceLines;
+
+  raise TGocciaTypeError.Create(
+    'Type ''' + AValue.TypeName + ''' is not assignable to type ''' + ExpectedLabel + '''',
+    Line, Col, SrcFile, SourceLines, SSuggestStrictTypeMismatch);
 end;
 
 // Integer-only result: skips IsNaN/IsInfinite/Frac checks that VMNumberRegister
@@ -3706,7 +3732,7 @@ begin
         FRegisters[A] := RegisterHole;
 
       OP_CHECK_TYPE:
-        VMStrictTypeCheckRegisterValue(GetRegister(A), TGocciaLocalType(B));
+        StrictTypeCheckRegister(Template, Frame, GetRegister(A), TGocciaLocalType(B));
 
       OP_TO_PRIMITIVE:
         if FRegisters[B].Kind <> grkObject then
@@ -5266,13 +5292,13 @@ begin
               DynImportPromise.Reject(E.Value);
             on E: TGocciaSyntaxError do
               DynImportPromise.Reject(
-                CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+                CreateErrorObject(SYNTAX_ERROR_NAME, E));
             on E: TGocciaTypeError do
               DynImportPromise.Reject(
-                CreateErrorObject(TYPE_ERROR_NAME, E.Message));
+                CreateErrorObject(TYPE_ERROR_NAME, E));
             on E: TGocciaReferenceError do
               DynImportPromise.Reject(
-                CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
+                CreateErrorObject(REFERENCE_ERROR_NAME, E));
             on E: Exception do
               DynImportPromise.Reject(
                 CreateErrorObject(ERROR_NAME, E.Message));
@@ -5364,11 +5390,11 @@ begin
             begin
               // Preserve typed error names for native Goccia exceptions
               if E is TGocciaTypeError then
-                LeftValue := CreateErrorObject(TYPE_ERROR_NAME, E.Message)
+                LeftValue := CreateErrorObject(TYPE_ERROR_NAME, TGocciaError(E))
               else if E is TGocciaReferenceError then
-                LeftValue := CreateErrorObject(REFERENCE_ERROR_NAME, E.Message)
+                LeftValue := CreateErrorObject(REFERENCE_ERROR_NAME, TGocciaError(E))
               else if E is TGocciaSyntaxError then
-                LeftValue := CreateErrorObject(SYNTAX_ERROR_NAME, E.Message)
+                LeftValue := CreateErrorObject(SYNTAX_ERROR_NAME, TGocciaError(E))
               else
                 LeftValue := CreateErrorObject(ERROR_NAME, E.Message);
               RightValue := RegisterToValue(FRegisters[A]);
@@ -5555,11 +5581,11 @@ begin
             FHandlerStack.Pop;
             Frame.IP := Handler.CatchIP;
             SetRegister(Handler.CatchRegister,
-              CreateErrorObject(TYPE_ERROR_NAME, E.Message));
+              CreateErrorObject(TYPE_ERROR_NAME, E));
           end
           else
             raise EGocciaBytecodeThrow.Create(
-              CreateErrorObject(TYPE_ERROR_NAME, E.Message));
+              CreateErrorObject(TYPE_ERROR_NAME, E));
         end;
         on E: TGocciaReferenceError do
         begin
@@ -5570,11 +5596,11 @@ begin
             FHandlerStack.Pop;
             Frame.IP := Handler.CatchIP;
             SetRegister(Handler.CatchRegister,
-              CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
+              CreateErrorObject(REFERENCE_ERROR_NAME, E));
           end
           else
             raise EGocciaBytecodeThrow.Create(
-              CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
+              CreateErrorObject(REFERENCE_ERROR_NAME, E));
         end;
         on E: TGocciaSyntaxError do
         begin
@@ -5585,11 +5611,11 @@ begin
             FHandlerStack.Pop;
             Frame.IP := Handler.CatchIP;
             SetRegister(Handler.CatchRegister,
-              CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+              CreateErrorObject(SYNTAX_ERROR_NAME, E));
           end
           else
             raise EGocciaBytecodeThrow.Create(
-              CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+              CreateErrorObject(SYNTAX_ERROR_NAME, E));
         end;
         on E: TGocciaRuntimeError do
         begin
@@ -5600,11 +5626,11 @@ begin
             FHandlerStack.Pop;
             Frame.IP := Handler.CatchIP;
             SetRegister(Handler.CatchRegister,
-              CreateErrorObject(ERROR_NAME, E.Message));
+              CreateErrorObject(ERROR_NAME, TGocciaError(E)));
           end
           else
             raise EGocciaBytecodeThrow.Create(
-              CreateErrorObject(ERROR_NAME, E.Message));
+              CreateErrorObject(ERROR_NAME, TGocciaError(E)));
         end;
       end;
     end;

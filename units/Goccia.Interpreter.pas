@@ -52,12 +52,14 @@ type
     function LoadModule(const AModulePath, AImportingFilePath: string): TGocciaModule;
 
     property ASIEnabled: Boolean read FASIEnabled write SetASIEnabled;
+    property FileName: string read FFileName;
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
     property JSXEnabled: Boolean read FJSXEnabled write SetJSXEnabled;
     property ContentProvider: TGocciaModuleContentProvider read GetContentProvider;
     property ModuleLoader: TGocciaModuleLoader read FModuleLoader;
     property Resolver: TGocciaModuleResolver read GetResolver write SetResolver;
     property GlobalModules: TOrderedStringMap<TGocciaModule> read GetGlobalModules;
+    property SourceLines: TStringList read FSourceLines;
   end;
 
 
