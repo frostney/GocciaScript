@@ -35,6 +35,7 @@ uses
   Goccia.Values.Error,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
+  Goccia.VM.Exception,
 
   FileUtils in 'units/FileUtils.pas';
 
@@ -346,6 +347,12 @@ begin
         MakeErrorFileResult(AFileName,
           FormatThrowDetail(E.Value, AFileName, Source, False), AReporter);
       end;
+      on E: EGocciaBytecodeThrow do
+      begin
+        WriteLn(StdErr, FormatThrowDetail(E.ThrownValue, AFileName, Source, IsColorTerminal));
+        MakeErrorFileResult(AFileName,
+          FormatThrowDetail(E.ThrownValue, AFileName, Source, False), AReporter);
+      end;
       on E: Exception do
         MakeErrorFileResult(AFileName, E.Message, AReporter);
     end;
@@ -389,7 +396,12 @@ begin
       if GShowProgress and Assigned(Engine.BuiltinBenchmark) then
         Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
 
-      EngineResult := Engine.Execute;
+      StartExecutionTimeout(GTimeoutMilliseconds);
+      try
+        EngineResult := Engine.Execute;
+      finally
+        ClearExecutionTimeout;
+      end;
       FileResult.FileName := AFileName;
       FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
       FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
@@ -498,7 +510,12 @@ begin
         Backend.Bootstrap.BuiltinBenchmark.OnBeforeMeasurement := Backend.ClearTransientCaches;
 
       try
-        ResultValue := Backend.RunModule(Module);
+        StartExecutionTimeout(GTimeoutMilliseconds);
+        try
+          ResultValue := Backend.RunModule(Module);
+        finally
+          ClearExecutionTimeout;
+        end;
         ExecEnd := GetNanoseconds;
 
         FileResult.FileName := AFileName;
@@ -537,6 +554,12 @@ begin
       WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, ASource, IsColorTerminal));
       MakeErrorFileResult(AFileName,
         FormatThrowDetail(E.Value, AFileName, ASource, False), AReporter);
+    end;
+    on E: EGocciaBytecodeThrow do
+    begin
+      WriteLn(StdErr, FormatThrowDetail(E.ThrownValue, AFileName, ASource, IsColorTerminal));
+      MakeErrorFileResult(AFileName,
+        FormatThrowDetail(E.ThrownValue, AFileName, ASource, False), AReporter);
     end;
     on E: Exception do
       MakeErrorFileResult(AFileName, E.Message, AReporter);
@@ -700,9 +723,10 @@ begin
         GASIEnabled := True
       else if Copy(Arg, 1, 10) = '--timeout=' then
       begin
-        if not TryStrToInt(Copy(Arg, 11, MaxInt), GTimeoutMilliseconds) then
+        if not TryStrToInt(Copy(Arg, 11, MaxInt), GTimeoutMilliseconds) or
+           (GTimeoutMilliseconds < 0) then
         begin
-          WriteLn('Error: --timeout must be an integer number of milliseconds.');
+          WriteLn('Error: --timeout must be a non-negative integer number of milliseconds.');
           ExitCode := 1;
           Exit;
         end;

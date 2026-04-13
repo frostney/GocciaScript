@@ -15,7 +15,7 @@ export default defineConfig({
 
       "tests/**/modules/local-module.js",
 
-      "tests/languages/modules/yaml-*.js",
+      "tests/language/modules/yaml-*.js",
 
       "tests/**/types-as-comments/**/*.js",
       "tests/**/enums/**/*.js",

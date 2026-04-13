@@ -695,9 +695,10 @@ begin
         GASIEnabled := True
       else if Copy(Arg, 1, 10) = '--timeout=' then
       begin
-        if not TryStrToInt(Copy(Arg, 11, MaxInt), GTimeoutMilliseconds) then
+        if not TryStrToInt(Copy(Arg, 11, MaxInt), GTimeoutMilliseconds) or
+           (GTimeoutMilliseconds < 0) then
         begin
-          WriteLn('Error: --timeout must be an integer number of milliseconds.');
+          WriteLn('Error: --timeout must be a non-negative integer number of milliseconds.');
           ExitCode := 1;
           Exit;
         end;

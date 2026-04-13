@@ -3620,7 +3620,11 @@ begin
         IsComputed := True;
         MemberName := '';
       end
-      else if Check(gttNumber) or Check(gttString) then
+      else if Check(gttNumber) then
+      begin
+        MemberName := FloatToStr(ConvertNumberLiteral(Advance.Lexeme));
+      end
+      else if Check(gttString) then
       begin
         MemberName := Advance.Lexeme;
       end

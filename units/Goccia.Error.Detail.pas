@@ -9,10 +9,10 @@ uses
 
   Goccia.Values.Primitives;
 
-{ Extracts the first stack frame's line and column from a JS error object's
-  stack trace string. Returns True if a location was found. }
+{ Extracts the first stack frame's line, column, and filename from a JS error
+  object's stack trace string. Returns True if a location was found. }
 function ExtractThrowLocation(const AThrown: TGocciaValue;
-  out AErrorName, AErrorMessage: string;
+  out AErrorName, AErrorMessage, AFrameFileName: string;
   out ALine, AColumn: Integer): Boolean;
 
 { Formats a detailed error message for a TGocciaThrowValue, including source
@@ -32,7 +32,7 @@ uses
   Goccia.Values.ObjectValue;
 
 function ExtractThrowLocation(const AThrown: TGocciaValue;
-  out AErrorName, AErrorMessage: string;
+  out AErrorName, AErrorMessage, AFrameFileName: string;
   out ALine, AColumn: Integer): Boolean;
 var
   StackValue, MsgValue, NameValue: TGocciaValue;
@@ -44,6 +44,7 @@ begin
   AColumn := 0;
   AErrorName := 'Error';
   AErrorMessage := '';
+  AFrameFileName := '';
 
   if not (AThrown is TGocciaObjectValue) then Exit;
 
@@ -79,7 +80,7 @@ begin
     Dec(ColonPos2);
   if ColonPos2 <= ParenPos then Exit;
 
-  TryStrToInt(Copy(StackStr, ColonPos2 + 1, I - ColonPos2), AColumn);
+  if not TryStrToInt(Copy(StackStr, ColonPos2 + 1, I - ColonPos2), AColumn) then Exit;
 
   // Parse ":line" before that
   ColonPos1 := ColonPos2 - 1;
@@ -87,21 +88,32 @@ begin
     Dec(ColonPos1);
   if ColonPos1 <= ParenPos then Exit;
 
-  Result := TryStrToInt(Copy(StackStr, ColonPos1 + 1, ColonPos2 - ColonPos1 - 1), ALine);
+  if not TryStrToInt(Copy(StackStr, ColonPos1 + 1, ColonPos2 - ColonPos1 - 1), ALine) then Exit;
+
+  // Extract filename between '(' and the first ':'
+  AFrameFileName := Copy(StackStr, ParenPos + 1, ColonPos1 - ParenPos - 1);
+  Result := True;
 end;
 
 function FormatThrowDetail(const AThrown: TGocciaValue;
   const AFileName: string; const ASourceLines: TStringList;
   const AUseColor: Boolean): string;
 var
-  ErrorName, ErrorMessage: string;
+  ErrorName, ErrorMessage, FrameFileName: string;
   Line, Col: Integer;
+  EffectiveFileName: string;
   StackValue: TGocciaValue;
 begin
-  if ExtractThrowLocation(AThrown, ErrorName, ErrorMessage, Line, Col) and
+  if ExtractThrowLocation(AThrown, ErrorName, ErrorMessage, FrameFileName, Line, Col) and
      Assigned(ASourceLines) and (Line > 0) and (Line <= ASourceLines.Count) then
+  begin
+    if FrameFileName <> '' then
+      EffectiveFileName := FrameFileName
+    else
+      EffectiveFileName := AFileName;
     Result := FormatErrorWithSourceContext(
-      ErrorName, ErrorMessage, AFileName, Line, Col, ASourceLines, AUseColor)
+      ErrorName, ErrorMessage, EffectiveFileName, Line, Col, ASourceLines, AUseColor);
+  end
   else
   begin
     // Fallback: just show the stack trace or message

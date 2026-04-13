@@ -121,6 +121,9 @@ uses
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction;
 
+const
+  MAX_PROTOTYPE_CHAIN_DEPTH = 256;
+
 procedure MarkPropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor);
 begin
   ADescriptor.MarkValues;
@@ -537,7 +540,8 @@ begin
   while Assigned(Proto) do
   begin
     Inc(ChainDepth);
-    if ChainDepth > 256 then Break; // Guard against prototype chain cycles
+    if ChainDepth > MAX_PROTOTYPE_CHAIN_DEPTH then
+      ThrowTypeError('Prototype chain depth exceeded safety limit while setting ''' + AName + '''');
     if Proto.FProperties.TryGetValue(AName, Descriptor) then
     begin
       if Descriptor is TGocciaPropertyDescriptorAccessor then

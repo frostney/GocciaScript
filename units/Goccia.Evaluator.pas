@@ -1119,17 +1119,13 @@ begin
   if Iterator = nil then
   begin
     if AForOfStatement.Iterable is TGocciaIdentifierExpression then
-      raise TGocciaTypeError.Create(
-        Format('''%s'' is not iterable — ''%s'' is of type ''%s'' which does not implement the iterator protocol',
-          [TGocciaIdentifierExpression(AForOfStatement.Iterable).Name,
-           TGocciaIdentifierExpression(AForOfStatement.Iterable).Name,
-           IterableValue.TypeName]),
-        AForOfStatement.Line, AForOfStatement.Column, '', nil)
+      ThrowTypeError(Format('''%s'' is not iterable — ''%s'' is of type ''%s'' which does not implement the iterator protocol',
+        [TGocciaIdentifierExpression(AForOfStatement.Iterable).Name,
+         TGocciaIdentifierExpression(AForOfStatement.Iterable).Name,
+         IterableValue.TypeName]))
     else
-      raise TGocciaTypeError.Create(
-        Format('''%s'' is not iterable — values of type ''%s'' do not implement the iterator protocol',
-          [IterableValue.TypeName, IterableValue.TypeName]),
-        AForOfStatement.Line, AForOfStatement.Column, '', nil);
+      ThrowTypeError(Format('''%s'' is not iterable — values of type ''%s'' do not implement the iterator protocol',
+        [IterableValue.TypeName, IterableValue.TypeName]));
   end;
 
   if AForOfStatement.IsConst then
