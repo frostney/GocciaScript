@@ -5347,7 +5347,15 @@ begin
             end;
             on E: Exception do
             begin
-              LeftValue := CreateErrorObject(ERROR_NAME, E.Message);
+              // Preserve typed error names for native Goccia exceptions
+              if E is TGocciaTypeError then
+                LeftValue := CreateErrorObject(TYPE_ERROR_NAME, E.Message)
+              else if E is TGocciaReferenceError then
+                LeftValue := CreateErrorObject(REFERENCE_ERROR_NAME, E.Message)
+              else if E is TGocciaSyntaxError then
+                LeftValue := CreateErrorObject(SYNTAX_ERROR_NAME, E.Message)
+              else
+                LeftValue := CreateErrorObject(ERROR_NAME, E.Message);
               RightValue := RegisterToValue(FRegisters[A]);
               if Assigned(RightValue) and
                  not (RightValue is TGocciaNullLiteralValue) and
