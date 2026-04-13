@@ -34,8 +34,8 @@ uses
 
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Evaluator,
   Goccia.GarbageCollector,
-  Goccia.MicrotaskQueue,
   Goccia.Utils,
   Goccia.Utils.Arrays,
   Goccia.Values.ArrayValue,
@@ -333,40 +333,11 @@ var
   IteratorMethod, IteratorObj, NextMethod, NextResult, DoneValue: TGocciaValue;
   Iterator: TGocciaIteratorValue;
   IterResult: TGocciaObjectValue;
-  AwaitedPromise: TGocciaPromiseValue;
   EmptyArgs, MapArgs, ConstructorArgs: TGocciaArgumentsCollection;
   Mapping, UseConstructor: Boolean;
   K, Len: Integer;
   LengthValue: TGocciaValue;
   GC: TGarbageCollector;
-
-  function AwaitValue(const AValue: TGocciaValue): TGocciaValue;
-  begin
-    if AValue is TGocciaPromiseValue then
-    begin
-      AwaitedPromise := TGocciaPromiseValue(AValue);
-      if Assigned(GC) then
-        GC.AddTempRoot(AwaitedPromise);
-      try
-        if AwaitedPromise.State = gpsPending then
-        begin
-          if Assigned(TGocciaMicrotaskQueue.Instance) then
-            TGocciaMicrotaskQueue.Instance.DrainQueue;
-        end;
-        if AwaitedPromise.State = gpsFulfilled then
-          Result := AwaitedPromise.PromiseResult
-        else if AwaitedPromise.State = gpsRejected then
-          raise TGocciaThrowValue.Create(AwaitedPromise.PromiseResult)
-        else
-          ThrowTypeError('await: Promise did not settle after microtask drain');
-      finally
-        if Assigned(GC) then
-          GC.RemoveTempRoot(AwaitedPromise);
-      end;
-    end
-    else
-      Result := AValue;
-  end;
 
   procedure AddElement(const AIndex: Integer; const AValue: TGocciaValue);
   begin

@@ -1061,12 +1061,20 @@ begin
     end
     else
     begin
+      // ES2026 §27.7.5.3 step 2: Await wraps the value in Promise.resolve(),
+      // introducing a microtask boundary even for non-thenable objects
+      if Assigned(TGocciaMicrotaskQueue.Instance) then
+        TGocciaMicrotaskQueue.Instance.DrainQueue;
       Result := AValue;
       Exit;
     end;
   end
   else
   begin
+    // ES2026 §27.7.5.3 step 2: Await wraps the value in Promise.resolve(),
+    // introducing a microtask boundary even for primitive values
+    if Assigned(TGocciaMicrotaskQueue.Instance) then
+      TGocciaMicrotaskQueue.Instance.DrainQueue;
     Result := AValue;
     Exit;
   end;
@@ -1074,6 +1082,10 @@ begin
   try
     if Promise.State <> gpsPending then
     begin
+      // ES2026 §27.7.5.3 step 3-4: Even already-settled promises introduce
+      // a microtask boundary (the continuation is a PromiseReactionJob)
+      if Assigned(TGocciaMicrotaskQueue.Instance) then
+        TGocciaMicrotaskQueue.Instance.DrainQueue;
       if Promise.State = gpsFulfilled then
         Result := Promise.PromiseResult
       else
