@@ -384,6 +384,50 @@ begin
   Result := RegisterFloat(AValue);
 end;
 
+
+// ES2026 Types-as-comments: runtime guard for OP_CHECK_TYPE (compiler emits Ord(TGocciaLocalType) in operand B).
+procedure VMStrictTypeCheckRegisterValue(const AValue: TGocciaValue;
+  const AExpected: TGocciaLocalType);
+begin
+  case AExpected of
+    sltInteger:
+      begin
+        if not (AValue is TGocciaNumberLiteralValue) or
+           AValue.ToNumberLiteral.IsNaN or
+           AValue.ToNumberLiteral.IsInfinite or
+           (Frac(AValue.ToNumberLiteral.Value) <> 0.0) then
+          ThrowTypeError('Type ''' + AValue.TypeName +
+            ''' is not assignable to type ''integer''');
+      end;
+    sltFloat:
+      begin
+        if not (AValue is TGocciaNumberLiteralValue) then
+          ThrowTypeError('Type ''' + AValue.TypeName +
+            ''' is not assignable to type ''number''');
+      end;
+    sltBoolean:
+      begin
+        if not (AValue is TGocciaBooleanLiteralValue) then
+          ThrowTypeError('Type ''' + AValue.TypeName +
+            ''' is not assignable to type ''boolean''');
+      end;
+    sltString:
+      begin
+        if not (AValue is TGocciaStringLiteralValue) then
+          ThrowTypeError('Type ''' + AValue.TypeName +
+            ''' is not assignable to type ''string''');
+      end;
+    sltReference:
+      begin
+        if AValue.IsPrimitive then
+          ThrowTypeError('Type ''' + AValue.TypeName +
+            ''' is not assignable to type ''object''');
+      end;
+  else
+    // sltUntyped: no runtime check
+  end;
+end;
+
 // Integer-only result: skips IsNaN/IsInfinite/Frac checks that VMNumberRegister
 // performs, since integer arithmetic on LongInt-range inputs cannot produce
 // NaN, Infinity, negative zero, or fractional results.
@@ -3657,41 +3701,7 @@ begin
         FRegisters[A] := RegisterHole;
 
       OP_CHECK_TYPE:
-        case TGocciaLocalType(B) of
-          sltInteger:
-            begin
-              if not (GetRegister(A) is TGocciaNumberLiteralValue) or
-                 GetRegister(A).ToNumberLiteral.IsNaN or
-                 GetRegister(A).ToNumberLiteral.IsInfinite or
-                 (Frac(GetRegister(A).ToNumberLiteral.Value) <> 0.0) then
-                ThrowTypeError('Type ''' + GetRegister(A).TypeName +
-                  ''' is not assignable to type ''integer''');
-            end;
-          sltFloat:
-            begin
-              if not (GetRegister(A) is TGocciaNumberLiteralValue) then
-                ThrowTypeError('Type ''' + GetRegister(A).TypeName +
-                  ''' is not assignable to type ''number''');
-            end;
-          sltBoolean:
-            begin
-              if not (GetRegister(A) is TGocciaBooleanLiteralValue) then
-                ThrowTypeError('Type ''' + GetRegister(A).TypeName +
-                  ''' is not assignable to type ''boolean''');
-            end;
-          sltString:
-            begin
-              if not (GetRegister(A) is TGocciaStringLiteralValue) then
-                ThrowTypeError('Type ''' + GetRegister(A).TypeName +
-                  ''' is not assignable to type ''string''');
-            end;
-          sltReference:
-            begin
-              if GetRegister(A).IsPrimitive then
-                ThrowTypeError('Type ''' + GetRegister(A).TypeName +
-                  ''' is not assignable to type ''object''');
-            end;
-        end;
+        VMStrictTypeCheckRegisterValue(GetRegister(A), TGocciaLocalType(B));
 
       OP_TO_PRIMITIVE:
         if FRegisters[B].Kind <> grkObject then

@@ -101,6 +101,7 @@ uses
   Goccia.Bytecode.Debug,
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.Statements,
+  Goccia.Compiler.TypeRules,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
@@ -333,11 +334,6 @@ begin
   end;
 end;
 
-
-function IsKnownNumeric(const AType: TGocciaLocalType): Boolean; inline;
-begin
-  Result := AType in [sltInteger, sltFloat];
-end;
 
 function IsArithmeticCompoundAssign(const ATokenType: TGocciaTokenType;
   out AArithOp: TGocciaTokenType): Boolean;
@@ -2037,8 +2033,8 @@ begin
 
     LocalType := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
     ValType := ExpressionType(ACtx.Scope, AExpr.Value);
-    if (LocalType in [sltInteger, sltFloat]) and
-       (ValType in [sltInteger, sltFloat]) and
+    if IsKnownNumeric(LocalType) and
+       IsKnownNumeric(ValType) and
        IsArithmeticCompoundAssign(AExpr.Operator, ArithOp) and
        TryFloatOp(ArithOp, FloatOp) then
       EmitInstruction(ACtx, EncodeABC(FloatOp, Slot, Slot, RegVal))
