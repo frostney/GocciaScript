@@ -5316,13 +5316,14 @@ begin
            LeftValue.IsCallable then
         begin
           try
+            // Clear B before the call so that if it throws, the follow-up
+            // OP_AWAIT sees null instead of the stale dispose function.
+            FRegisters[B] := RegisterNull;
             RightValue := TGocciaFunctionBase(LeftValue).CallNoArgs(
               RegisterToValue(FRegisters[C]));
             // Store result in B so a follow-up OP_AWAIT can await it
             if Assigned(RightValue) then
-              SetRegister(B, RightValue)
-            else
-              FRegisters[B] := RegisterNull;
+              SetRegister(B, RightValue);
           except
             on E: EGocciaBytecodeThrow do
             begin
