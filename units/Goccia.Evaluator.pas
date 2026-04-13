@@ -249,7 +249,9 @@ begin
       end;
     end
     else
-      ThrowTypeError('Spread syntax requires an iterable');
+      ThrowTypeError(Format(
+        'Spread syntax requires an iterable — ''%s'' is not iterable. Only arrays, strings, sets, maps, and objects with Symbol.iterator can be spread',
+        [ASpreadValue.TypeName]));
   end;
 end;
 
@@ -615,7 +617,27 @@ begin
         Result := TGocciaFunctionBase(Callee).Call(Arguments, ThisValue)
       else
       begin
-        ThrowTypeError(Format('%s is not a function', [Callee.TypeName]));
+        MemberExpr := nil;
+        if ACallExpression.Callee is TGocciaMemberExpression then
+          MemberExpr := TGocciaMemberExpression(ACallExpression.Callee);
+
+        if Assigned(MemberExpr) and (MemberExpr.ObjectExpr is TGocciaIdentifierExpression) then
+          ThrowTypeError(Format('%s.%s is not a function — ''%s'' is of type ''%s'' which does not have method ''%s''',
+            [TGocciaIdentifierExpression(MemberExpr.ObjectExpr).Name,
+             MemberExpr.PropertyName,
+             TGocciaIdentifierExpression(MemberExpr.ObjectExpr).Name,
+             ThisValue.TypeName,
+             MemberExpr.PropertyName]))
+        else if Assigned(MemberExpr) then
+          ThrowTypeError(Format('''%s'' is of type ''%s'' which does not have method ''%s''',
+            [ThisValue.TypeName, ThisValue.TypeName, MemberExpr.PropertyName]))
+        else if ACallExpression.Callee is TGocciaIdentifierExpression then
+          ThrowTypeError(Format('''%s'' is not a function — ''%s'' is of type ''%s'' and cannot be called as a function',
+            [TGocciaIdentifierExpression(ACallExpression.Callee).Name,
+             TGocciaIdentifierExpression(ACallExpression.Callee).Name,
+             Callee.TypeName]))
+        else
+          ThrowTypeError(Format('%s is not a function', [Callee.TypeName]));
       end;
     finally
       if Assigned(TGocciaCallStack.Instance) then
@@ -769,7 +791,24 @@ begin
       Result := BoxedValue.GetProperty(PropertyName);
     end
     else if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError('Cannot read properties of ' + Obj.ToStringLiteral.Value + ' (reading ''' + PropertyName + ''')')
+    begin
+      if AMemberExpression.ObjectExpr is TGocciaMemberExpression then
+        ThrowTypeError(Format(
+          'Cannot read property ''%s'' of %s — ''%s'' evaluated to %s and does not have property ''%s''',
+          [PropertyName, Obj.ToStringLiteral.Value,
+           TGocciaMemberExpression(AMemberExpression.ObjectExpr).PropertyName,
+           Obj.ToStringLiteral.Value, PropertyName]))
+      else if AMemberExpression.ObjectExpr is TGocciaIdentifierExpression then
+        ThrowTypeError(Format(
+          'Cannot read property ''%s'' of %s — ''%s'' is %s and does not have property ''%s''',
+          [PropertyName, Obj.ToStringLiteral.Value,
+           TGocciaIdentifierExpression(AMemberExpression.ObjectExpr).Name,
+           Obj.ToStringLiteral.Value, PropertyName]))
+      else
+        ThrowTypeError(Format(
+          'Cannot read property ''%s'' of %s',
+          [PropertyName, Obj.ToStringLiteral.Value]));
+    end
     else
     begin
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -1078,7 +1117,16 @@ begin
   IterableValue := EvaluateExpression(AForOfStatement.Iterable, AContext);
   Iterator := GetIteratorFromValue(IterableValue);
   if Iterator = nil then
-    raise TGocciaTypeError.Create('Value is not iterable', AForOfStatement.Line, AForOfStatement.Column, '', nil);
+  begin
+    if AForOfStatement.Iterable is TGocciaIdentifierExpression then
+      ThrowTypeError(Format('''%s'' is not iterable — ''%s'' is of type ''%s'' which does not implement the iterator protocol',
+        [TGocciaIdentifierExpression(AForOfStatement.Iterable).Name,
+         TGocciaIdentifierExpression(AForOfStatement.Iterable).Name,
+         IterableValue.TypeName]))
+    else
+      ThrowTypeError(Format('''%s'' is not iterable — values of type ''%s'' do not implement the iterator protocol',
+        [IterableValue.TypeName, IterableValue.TypeName]));
+  end;
 
   if AForOfStatement.IsConst then
     DeclarationType := dtConst
@@ -1201,7 +1249,9 @@ begin
   begin
     Iterator := GetIteratorFromValue(IterableValue);
     if Iterator = nil then
-      ThrowTypeError('Value is not iterable');
+      ThrowTypeError(Format(
+        '''%s'' is not iterable — values of type ''%s'' do not implement the iterator protocol',
+        [IterableValue.TypeName, IterableValue.TypeName]));
 
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.AddTempRoot(Iterator);
@@ -1706,7 +1756,14 @@ begin
       end
       else
       begin
-        ThrowTypeError(Callee.TypeName + ' is not a constructor');
+        if ANewExpression.Callee is TGocciaIdentifierExpression then
+          ThrowTypeError(Format('''%s'' is not a constructor — ''%s'' is of type ''%s'' and cannot be used with ''new''',
+            [TGocciaIdentifierExpression(ANewExpression.Callee).Name,
+             TGocciaIdentifierExpression(ANewExpression.Callee).Name,
+             Callee.TypeName]))
+        else
+          ThrowTypeError(Format('%s is not a constructor — values of type ''%s'' cannot be used with ''new''',
+            [Callee.TypeName, Callee.TypeName]));
       end;
     finally
       if Assigned(TGocciaCallStack.Instance) then
@@ -1913,18 +1970,41 @@ begin
       ClassValue.AddStaticSetter(SetterPair.Key, SetterFunction);
   end;
 
-  // Handle computed accessors in source declaration order via FElements
+  // Handle computed members (methods, getters, setters) in source order via FElements
   for I := 0 to High(AClassDef.FElements) do
   begin
     Elem := AClassDef.FElements[I];
     if not Elem.IsComputed then
       Continue;
-    if not (Elem.Kind in [cekGetter, cekSetter]) then
+    if not (Elem.Kind in [cekMethod, cekGetter, cekSetter]) then
       Continue;
 
     ComputedKey := EvaluateExpression(Elem.ComputedKeyExpression, AContext);
 
     case Elem.Kind of
+      cekMethod:
+      begin
+        Method := TGocciaMethodValue(EvaluateClassMethod(Elem.MethodNode, AContext, SuperClass));
+        Method.OwningClass := ClassValue;
+        if ComputedKey is TGocciaSymbolValue then
+        begin
+          if Elem.IsStatic then
+            ClassValue.DefineSymbolProperty(
+              TGocciaSymbolValue(ComputedKey),
+              TGocciaPropertyDescriptorData.Create(Method, [pfWritable, pfConfigurable]))
+          else
+            ClassValue.Prototype.DefineSymbolProperty(
+              TGocciaSymbolValue(ComputedKey),
+              TGocciaPropertyDescriptorData.Create(Method, [pfWritable, pfConfigurable]));
+        end
+        else
+        begin
+          if Elem.IsStatic then
+            ClassValue.SetProperty(ComputedKey.ToStringLiteral.Value, Method)
+          else
+            ClassValue.AddMethod(ComputedKey.ToStringLiteral.Value, Method);
+        end;
+      end;
       cekGetter:
       begin
         GetterFunction := TGocciaFunctionValue(EvaluateGetter(Elem.GetterNode, AContext));
@@ -3018,7 +3098,9 @@ begin
       else if Callee is TGocciaFunctionBase then
         Result := TGocciaFunctionBase(Callee).Call(Arguments, ThisValue)
       else
-        ThrowTypeError(Format('%s is not a function', [Callee.TypeName]));
+        ThrowTypeError(Format(
+          '%s is not a function — tagged template literals require the tag to be a callable function',
+          [Callee.TypeName]));
     finally
       if Assigned(TGocciaCallStack.Instance) then
         TGocciaCallStack.Instance.Pop;
@@ -3358,7 +3440,9 @@ var
   J: Integer;
 begin
   if (AValue is TGocciaNullLiteralValue) or (AValue is TGocciaUndefinedLiteralValue) then
-    ThrowTypeError('Cannot destructure null or undefined');
+    ThrowTypeError(Format(
+      'Cannot destructure %s — array destructuring requires an iterable value',
+      [AValue.ToStringLiteral.Value]));
 
   if AValue is TGocciaArrayValue then
   begin
@@ -3423,7 +3507,9 @@ begin
   begin
     Iterator := GetIteratorFromValue(AValue);
     if not Assigned(Iterator) then
-      ThrowTypeError('Value is not iterable');
+      ThrowTypeError(Format(
+        '''%s'' is not iterable — array destructuring requires an iterable value (array, string, set, map, or object with Symbol.iterator)',
+        [AValue.TypeName]));
 
     TGarbageCollector.Instance.AddTempRoot(Iterator);
     try
@@ -3479,9 +3565,13 @@ begin
   if not (AValue is TGocciaObjectValue) then
   begin
     if (AValue is TGocciaNullLiteralValue) or (AValue is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError('Cannot destructure null or undefined')
+      ThrowTypeError(Format(
+        'Cannot destructure %s — object destructuring requires an object value',
+        [AValue.ToStringLiteral.Value]))
     else
-      ThrowTypeError('Cannot destructure non-object value');
+      ThrowTypeError(Format(
+        'Cannot destructure value of type ''%s'' — object destructuring requires an object value',
+        [AValue.TypeName]));
   end;
 
   ObjectValue := TGocciaObjectValue(AValue);

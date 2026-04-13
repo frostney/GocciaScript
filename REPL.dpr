@@ -14,6 +14,7 @@ uses
   Goccia.Engine,
   Goccia.Engine.Backend,
   Goccia.Error,
+  Goccia.Error.Detail,
   Goccia.GarbageCollector,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
@@ -25,6 +26,7 @@ uses
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
   Goccia.Token,
+  Goccia.Values.Error,
   Goccia.Values.Primitives,
   Goccia.Version;
 
@@ -225,6 +227,9 @@ begin
             ExecEnd := GetNanoseconds;
             if E is TGocciaError then
               WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+            else if E is TGocciaThrowValue then
+              WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value,
+                REPL_FILE_NAME, Source, IsColorTerminal))
             else
               WriteLn('Error: ', E.Message);
           end;
@@ -276,6 +281,9 @@ begin
           begin
             if E is TGocciaError then
               WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+            else if E is TGocciaThrowValue then
+              WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value,
+                REPL_FILE_NAME, Source, IsColorTerminal))
             else
               WriteLn('Error: ', E.Message);
           end;

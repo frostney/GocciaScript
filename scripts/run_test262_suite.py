@@ -40,7 +40,7 @@ from test262_syntax_filter import is_eligible  # noqa: E402
 
 SUITE_REPO_URL = "https://github.com/tc39/test262.git"
 SUITE_BRANCH = "main"
-DEFAULT_TIMEOUT_SECONDS = 10
+DEFAULT_TIMEOUT_SECONDS = 5
 DEFAULT_CATEGORIES = ("language", "built-ins")
 
 # Paths relative to this script
@@ -143,6 +143,8 @@ INCLUDE_MAP: dict[str, str] = {
     "fnGlobalObject.js": "fnGlobalObject.js",
     "nativeFunctionMatcher.js": "nativeFunctionMatcher.js",
     "byteConversionValues.js": "byteConversionValues.js",
+    "proxyTrapsHelper.js": "proxyTrapsHelper.js",
+    "regExpUtils.js": "regExpUtils.js",
 }
 
 
@@ -270,12 +272,15 @@ def run_negative_parse_test(
     expected_error: str,
     timeout: int,
     asi: bool = False,
+    mode: str = "interpreted",
 ) -> tuple[bool, str, float]:
     """Run a negative parse-phase test via ScriptLoader stdin."""
     start = time.monotonic()
     cmd = [str(script_loader)]
     if asi:
         cmd.append("--asi")
+    if mode != "interpreted":
+        cmd.append(f"--mode={mode}")
     try:
         process = subprocess.run(
             cmd,
@@ -315,6 +320,7 @@ def evaluate_suite(
     verbose: bool,
     harness_files: dict[str, str],
     asi: bool = False,
+    mode: str = "interpreted",
 ) -> dict:
     test_dir = suite_dir / "test"
     all_tests = discover_tests(suite_dir, categories, filter_glob)
@@ -449,24 +455,27 @@ def evaluate_suite(
             runner_cmd = [
                 str(test_runner),
                 str(temp_dir),
-                "--no-progress",
                 "--silent",
                 f"--output={json_output}",
+                f"--timeout={timeout * 1000}",
             ]
             if asi:
                 runner_cmd.append("--asi")
+            if mode != "interpreted":
+                runner_cmd.append(f"--mode={mode}")
 
             try:
                 runner_timeout = max(timeout * len(batch_tests), 120) + 60
+                # Stream stdout (progress) to terminal in real-time;
+                # capture stderr for error diagnostics
                 process = subprocess.run(
                     runner_cmd,
-                    capture_output=True,
+                    stderr=subprocess.PIPE,
                     timeout=runner_timeout,
                     check=False,
                 )
                 runner_output = (
-                    process.stdout.decode("utf-8", errors="replace")
-                    + process.stderr.decode("utf-8", errors="replace")
+                    process.stderr.decode("utf-8", errors="replace")
                 ).strip()
             except subprocess.TimeoutExpired:
                 runner_output = "TestRunner global timeout"
@@ -499,20 +508,21 @@ def evaluate_suite(
                     failed_set: set[str] = set()
                     failed_messages: dict[str, str] = {}
                     for name in tr_failed_tests:
+                        # Extract first line for matching (detailed messages are multiline)
+                        first_line = name.split("\n")[0]
                         # Case 1: "test262: <test_id> > <description>"
-                        m = re.match(r"test262:\s*(.+?)\s*>", name)
+                        m = re.match(r"test262:\s*(.+?)\s*>", first_line)
                         if m:
                             failed_set.add(m.group(1))
                             failed_messages[m.group(1)] = name
                             continue
                         # Case 2: "<filepath>: <error>" (parse/load error)
-                        m2 = re.search(r"[/\\]([^/\\]+\.js)(?:\s*:\s*(.+))?$", name)
+                        m2 = re.search(r"[/\\]([^/\\]+\.js)(?:\s*:\s*(.+))?$", first_line)
                         if m2:
                             fname = m2.group(1)
                             test_id_guess = file_to_test_id.get(fname, fname.replace("__", "/"))
                             failed_set.add(test_id_guess)
-                            msg = m2.group(2) or name
-                            failed_messages[test_id_guess] = msg
+                            failed_messages[test_id_guess] = name
                         else:
                             failed_set.add(name)
                             failed_messages[name] = name
@@ -562,7 +572,8 @@ def evaluate_suite(
             expected_error = negative.get("type", "SyntaxError")
 
             passed, output, duration = run_negative_parse_test(
-                script_loader, body, expected_error, timeout, asi=asi
+                script_loader, body, expected_error, timeout, asi=asi,
+                mode=mode
             )
 
             if output == "TIMEOUT":
@@ -665,14 +676,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--asi",
         action="store_true",
+        default=True,
+        help="Enable automatic semicolon insertion (default: True, required for test262).",
+    )
+    parser.add_argument(
+        "--no-asi",
+        action="store_true",
         default=False,
-        help="Enable automatic semicolon insertion (pass --asi to TestRunner/ScriptLoader).",
+        help="Disable automatic semicolon insertion.",
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="bytecode",
+        help="Execution mode: interpreted or bytecode (default: bytecode).",
     )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+
+    # --no-asi overrides the default-True --asi
+    if args.no_asi:
+        args.asi = False
 
     suite_dir, temp_checkout = ensure_suite_checkout(args.suite_dir)
     test_runner = ensure_binary("TestRunner", args.test_runner, "testrunner")
@@ -691,8 +718,8 @@ def main() -> int:
         print(f"Filter:        {args.filter}")
     if args.max_tests:
         print(f"Max tests:     {args.max_tests}")
-    if args.asi:
-        print("ASI:           enabled")
+    print(f"ASI:           {'enabled' if args.asi else 'disabled'}")
+    print(f"Mode:          {args.mode}")
     print()
 
     report = evaluate_suite(
@@ -706,6 +733,7 @@ def main() -> int:
         verbose=args.verbose,
         harness_files=harness_files,
         asi=args.asi,
+        mode=args.mode,
     )
 
     if args.output is not None:
@@ -761,8 +789,8 @@ def main() -> int:
         for r in failing[:30]:
             print(f"  [{r['status']}] {r['id']}")
             if r.get("message"):
-                for line in r["message"].split("\n")[:2]:
-                    print(f"         {line[:120]}")
+                for line in r["message"].split("\n")[:10]:
+                    print(f"         {line[:200]}")
         print()
 
     if temp_checkout is not None:

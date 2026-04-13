@@ -486,19 +486,20 @@ begin
     Exit;
   end;
 
+  // ES2026 §12.10 rules 2-3: } and EOF always terminate a statement.
+  // These are mandatory ASI points in the spec and apply regardless of
+  // whether full ASI is enabled.
+  if Check(gttRightBrace) or Check(gttEOF) then
+    Exit;
+
   if not FAutomaticSemicolonInsertion then
   begin
     Consume(gttSemicolon, AMessage, ASuggestion);
     Exit;
   end;
 
-  // ES2026 §12.10 rules:
-  //   1. Newline between previous token and current token
-  //   2. Current token is }
-  //   3. Current token is EOF
-  if (Previous.Line < Peek.Line) or
-     Check(gttRightBrace) or
-     Check(gttEOF) then
+  // ES2026 §12.10 rule 1: newline between previous and current token
+  if Previous.Line < Peek.Line then
     Exit;
 
   Consume(gttSemicolon, AMessage, ASuggestion);
@@ -509,9 +510,12 @@ function TGocciaParser.CheckSemicolonOrASI: Boolean;
 begin
   if Check(gttSemicolon) then
     Exit(True);
+  // ES2026 §12.10 rules 2-3: } and EOF always terminate a statement
+  if Check(gttRightBrace) or Check(gttEOF) then
+    Exit(True);
   if not FAutomaticSemicolonInsertion then
     Exit(False);
-  Result := (Previous.Line < Peek.Line) or Check(gttRightBrace) or Check(gttEOF);
+  Result := Previous.Line < Peek.Line;
 end;
 
 function TGocciaParser.IsIdentifierNameToken(
@@ -2323,6 +2327,10 @@ begin
     Advance;
     Result := Statement;
   end
+  else if Match(gttSemicolon) then
+  begin
+    Result := TGocciaEmptyStatement.Create(Previous.Line, Previous.Column);
+  end
   else
     Result := ExpressionStatement;
 end;
@@ -3603,6 +3611,23 @@ begin
           MemberName := Consume(gttIdentifier, 'Expected property name after "set"',
             SSuggestProvideSetterPropertyName).Lexeme;
       end
+      else if Check(gttLeftBracket) then
+      begin
+        Advance;
+        ComputedKeyExpression := Expression;
+        Consume(gttRightBracket, 'Expected "]" after computed property name',
+          SSuggestCloseBracketComputedPropertyName);
+        IsComputed := True;
+        MemberName := '';
+      end
+      else if Check(gttNumber) then
+      begin
+        MemberName := FloatToStr(ConvertNumberLiteral(Advance.Lexeme));
+      end
+      else if Check(gttString) then
+      begin
+        MemberName := Advance.Lexeme;
+      end
       else
       begin
         MemberName := Consume(gttIdentifier, 'Expected method or property name',
@@ -3821,21 +3846,25 @@ begin
         Method.Name := MemberName;
         Method.IsAsync := IsAsync;
 
-        if Length(MemberDecorators) > 0 then
+        if (Length(MemberDecorators) > 0) or IsComputed then
         begin
           SetLength(Elements, Length(Elements) + 1);
           Elements[High(Elements)].Kind := cekMethod;
           Elements[High(Elements)].Name := MemberName;
           Elements[High(Elements)].IsStatic := IsStatic;
           Elements[High(Elements)].IsPrivate := IsPrivate;
-          Elements[High(Elements)].IsComputed := False;
-          Elements[High(Elements)].ComputedKeyExpression := nil;
+          Elements[High(Elements)].IsComputed := IsComputed;
+          Elements[High(Elements)].ComputedKeyExpression := ComputedKeyExpression;
           Elements[High(Elements)].Decorators := MemberDecorators;
           Elements[High(Elements)].MethodNode := Method;
           Elements[High(Elements)].IsAsync := IsAsync;
         end;
 
-        if IsPrivate then
+        if IsComputed then
+        begin
+          // Computed methods are stored in Elements; evaluated at runtime
+        end
+        else if IsPrivate then
           PrivateMethods.Add(MemberName, Method)
         else
           Methods.Add(MemberName, Method);

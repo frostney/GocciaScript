@@ -167,7 +167,8 @@ uses
   Goccia.Constants,
   Goccia.Constants.TypeNames,
   Goccia.Profiler,
-  Goccia.TextFiles;
+  Goccia.TextFiles,
+  Goccia.Timeout;
 
 { TGocciaValue }
 
@@ -178,6 +179,7 @@ begin
     TGarbageCollector.Instance.RegisterObject(Self);
   if GProfilingAllocations and Assigned(TGocciaProfiler.Instance) then
     TGocciaProfiler.Instance.RecordAllocation;
+  CheckExecutionTimeout;
 end;
 
 function TGocciaValue.RuntimeCopy: TGocciaValue;

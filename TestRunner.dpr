@@ -19,6 +19,7 @@ uses
   Goccia.Engine,
   Goccia.Engine.BytecodeBackend,
   Goccia.Error,
+  Goccia.Error.Detail,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.JSX.Transformer,
@@ -28,8 +29,10 @@ uses
   Goccia.SourceMap,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
+  Goccia.Timeout,
   Goccia.Token,
   Goccia.Values.ArrayValue,
+  Goccia.Values.Error,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
 
@@ -49,6 +52,7 @@ var
   GCoverageJsonEnabled: Boolean = False;
   GCoverageOutputPath: string = '';
   GASIEnabled: Boolean = False;
+  GTimeoutMilliseconds: Integer = 0;
 
 type
   TTestFileResult = record
@@ -151,7 +155,12 @@ begin
           Engine.SuppressWarnings := True;
         end;
 
-        EngineResult := Engine.Execute;
+        StartExecutionTimeout(GTimeoutMilliseconds);
+        try
+          EngineResult := Engine.Execute;
+        finally
+          ClearExecutionTimeout;
+        end;
       finally
         SilentConsole.Free;
         Engine.Free;
@@ -164,10 +173,21 @@ begin
       on E: Exception do
       begin
         if E is TGocciaError then
-          WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+        begin
+          WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal));
+          MarkLoadError(ScriptResult, AFileName, TGocciaError(E).GetDetailedMessage);
+        end
+        else if E is TGocciaThrowValue then
+        begin
+          WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal));
+          MarkLoadError(ScriptResult, AFileName,
+            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, False));
+        end
         else
+        begin
           WriteLn('Fatal error: ', E.Message);
-        MarkLoadError(ScriptResult, AFileName, E.Message);
+          MarkLoadError(ScriptResult, AFileName, E.Message);
+        end;
         Result := MakeEmptyTestResult(ScriptResult);
       end;
     end;
@@ -275,7 +295,12 @@ begin
         end;
 
         try
-          ResultValue := Backend.RunModule(Module);
+          StartExecutionTimeout(GTimeoutMilliseconds);
+          try
+            ResultValue := Backend.RunModule(Module);
+          finally
+            ClearExecutionTimeout;
+          end;
           ExecEnd := GetNanoseconds;
 
           if ResultValue is TGocciaObjectValue then
@@ -299,10 +324,21 @@ begin
       on E: Exception do
       begin
         if E is TGocciaError then
-          WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+        begin
+          WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal));
+          MarkLoadError(ScriptResult, AFileName, TGocciaError(E).GetDetailedMessage);
+        end
+        else if E is TGocciaThrowValue then
+        begin
+          WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal));
+          MarkLoadError(ScriptResult, AFileName,
+            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, False));
+        end
         else
+        begin
           WriteLn('Fatal error: ', E.Message);
-        MarkLoadError(ScriptResult, AFileName, E.Message);
+          MarkLoadError(ScriptResult, AFileName, E.Message);
+        end;
         Result := MakeEmptyTestResult(ScriptResult);
       end;
     end;
@@ -657,6 +693,16 @@ begin
       end
       else if Arg = '--asi' then
         GASIEnabled := True
+      else if Copy(Arg, 1, 10) = '--timeout=' then
+      begin
+        if not TryStrToInt(Copy(Arg, 11, MaxInt), GTimeoutMilliseconds) or
+           (GTimeoutMilliseconds < 0) then
+        begin
+          WriteLn('Error: --timeout must be a non-negative integer number of milliseconds.');
+          ExitCode := 1;
+          Exit;
+        end;
+      end
       else if Copy(Arg, 1, 2) = '--' then
       begin
         WriteLn('Error: Unknown option "', Arg, '"');
@@ -681,6 +727,7 @@ begin
       WriteLn('  --output=<file>         Write test results as JSON to file');
       WriteLn('  --mode=interpreted|bytecode  Execution backend (default: interpreted)');
       WriteLn('  --asi                   Enable automatic semicolon insertion');
+      WriteLn('  --timeout=<ms>          Per-file execution timeout in milliseconds');
       WriteLn('  --coverage              Enable line and branch coverage reporting');
       WriteLn('  --coverage-format=lcov|json  Coverage output format (implies --coverage)');
       WriteLn('  --coverage-output=<file>     Coverage output file (paired with --coverage-format)');

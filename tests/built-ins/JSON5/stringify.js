@@ -1,4 +1,6 @@
-describe("JSON5.stringify", () => {
+const hasJSON5 = typeof JSON5 !== "undefined";
+
+describe.runIf(hasJSON5)("JSON5.stringify", () => {
   test("stringifies objects with JSON5 key and string syntax", () => {
     expect(JSON5.stringify({ a: 1 })).toBe("{a:1}");
     expect(JSON5.stringify({ "a-b": 1 })).toBe("{'a-b':1}");
@@ -29,13 +31,31 @@ describe("JSON5.stringify", () => {
     expect(JSON5.stringify("abc")).toBe("'abc'");
     expect(JSON5.stringify("abc'")).toBe('"abc\'"');
     expect(
-      JSON5.stringify(
-        String.fromCodePoint(92, 8, 12, 10, 13, 9, 11, 0, 15),
-      ),
+      JSON5.stringify(String.fromCodePoint(92, 8, 12, 10, 13, 9, 11, 0, 15)),
     ).toBe(
       String.fromCodePoint(
-        39, 92, 92, 92, 98, 92, 102, 92, 110, 92, 114, 92, 116, 92, 118,
-        92, 48, 92, 120, 48, 70, 39,
+        39,
+        92,
+        92,
+        92,
+        98,
+        92,
+        102,
+        92,
+        110,
+        92,
+        114,
+        92,
+        116,
+        92,
+        118,
+        92,
+        48,
+        92,
+        120,
+        48,
+        70,
+        39,
       ),
     );
     expect(JSON5.stringify("\0\x001")).toBe("'\\0\\x001'");
@@ -118,22 +138,24 @@ describe("JSON5.stringify", () => {
   test("supports options objects and quote overrides", () => {
     const emojiIndent = "🙂".repeat(12);
 
-    expect(
-      JSON5.stringify({ a: 1, b: 2, 3: 3 }, { replacer: ["a", 3] }),
-    ).toBe("{a:1,'3':3}");
+    expect(JSON5.stringify({ a: 1, b: 2, 3: 3 }, { replacer: ["a", 3] })).toBe(
+      "{a:1,'3':3}",
+    );
     expect(JSON5.stringify([1], { space: 2 })).toBe("[\n  1,\n]");
     expect(JSON5.stringify([1], { space: new Number(2) })).toBe("[\n  1,\n]");
     expect(JSON5.stringify([1], { space: NaN })).toBe("[1]");
-    expect(JSON5.stringify([1], { space: Infinity })).toBe("[\n          1,\n]");
+    expect(JSON5.stringify([1], { space: Infinity })).toBe(
+      "[\n          1,\n]",
+    );
     expect(JSON5.stringify([1], { space: emojiIndent })).toBe(
       `[\n${"🙂".repeat(10)}1,\n]`,
     );
-    expect(
-      JSON5.stringify({ 'a"': '1"' }, { quote: '"' }),
-    ).toBe("{\"a\\\"\":\"1\\\"\"}");
-    expect(
-      JSON5.stringify({ "a'": "1'" }, { quote: "'" }),
-    ).toBe("{'a\\'':'1\\''}");
+    expect(JSON5.stringify({ 'a"': '1"' }, { quote: '"' })).toBe(
+      '{"a\\"":"1\\""}',
+    );
+    expect(JSON5.stringify({ "a'": "1'" }, { quote: "'" })).toBe(
+      "{'a\\'':'1\\''}",
+    );
   });
 
   test("matches JSON semantics for omitted and nullified values", () => {

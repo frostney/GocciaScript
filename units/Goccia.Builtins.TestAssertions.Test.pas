@@ -14,6 +14,7 @@ uses
   Goccia.AST.Node,
   Goccia.Builtins.TestAssertions,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.RegExp.Runtime,
   Goccia.Scope,
   Goccia.TestSetup,
   Goccia.Values.ArrayValue,
@@ -23,7 +24,9 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
-  Goccia.Values.SetValue;
+  Goccia.Values.PromiseValue,
+  Goccia.Values.SetValue,
+  Goccia.Values.SymbolValue;
 
 type
   TTestExpectationMatchers = class(TestRunner.TTestSuite)
@@ -74,6 +77,8 @@ type
     procedure TestToMatchSubstring;
     procedure TestToMatchMissingSubstring;
     procedure TestToMatchOnNonString;
+    procedure TestToMatchRegExpPattern;
+    procedure TestToMatchRegExpNegated;
 
     { toBeNull }
     procedure TestToBeNullWithNull;
@@ -349,6 +354,77 @@ type
     procedure SetupTests; override;
   end;
 
+  TTestOnTestFinished = class(TestRunner.TTestSuite)
+  private
+    FScope: TGocciaScope;
+    FAssertions: TGocciaTestAssertions;
+    FRecordedEvents: TStringList;
+
+    procedure DummyThrowError(const AMessage: string; const ALine, AColumn: Integer);
+    function ResolveGlobalCallable(const AName: string): TGocciaFunctionBase;
+    function CreateRunOptions: TGocciaArgumentsCollection;
+    function RunRegisteredTests: TGocciaObjectValue;
+
+    // Callbacks for test body and hooks (FPC 3.2.2 has no anonymous functions)
+    function RecordTestBodyCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function RecordFinishedCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function RecordFinishedACallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function RecordFinishedBCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function RecordAfterEachCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+
+    // Suite registration callbacks
+    function RegisterSuiteWithOnTestFinished(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function RegisterSuiteWithMultipleCallbacks(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function RegisterSuiteWithAfterEachAndCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function RegisterSuiteWithScopedCallbacks(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+
+    // Test body callbacks that register onTestFinished
+    function TestBodyWithOnTestFinished(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TestBodyWithMultipleCallbacks(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TestBodyWithAfterEachCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TestBodyNoCallbacks(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+
+    { onTestFinished }
+    procedure TestOnTestFinishedCallbackRuns;
+    procedure TestOnTestFinishedMultipleInOrder;
+    procedure TestOnTestFinishedRunsAfterAfterEach;
+    procedure TestOnTestFinishedScopedToCurrentTest;
+  public
+    procedure BeforeAll; override;
+    procedure AfterAll; override;
+    procedure BeforeEach; override;
+    procedure AfterEach; override;
+    procedure SetupTests; override;
+  end;
+
+  TTestResolvesAndRejects = class(TestRunner.TTestSuite)
+  private
+    FScope: TGocciaScope;
+    FAssertions: TGocciaTestAssertions;
+
+    procedure DummyThrowError(const AMessage: string; const ALine, AColumn: Integer);
+
+    function MakeExpectation(const AValue: TGocciaValue; const AIsNegated: Boolean = False): TGocciaExpectationValue;
+    procedure ExpectPass(const AValue: TGocciaValue);
+    procedure ExpectFail(const AValue: TGocciaValue);
+
+    { resolves }
+    procedure TestResolvesWithFulfilledPromise;
+    procedure TestResolvesFailsWithRejectedPromise;
+    procedure TestResolvesFailsWithNonPromise;
+    procedure TestResolvesWithNegation;
+
+    { rejects }
+    procedure TestRejectsWithRejectedPromise;
+    procedure TestRejectsFailsWithFulfilledPromise;
+    procedure TestRejectsFailsWithNonPromise;
+  public
+    procedure BeforeAll; override;
+    procedure AfterAll; override;
+    procedure BeforeEach; override;
+    procedure SetupTests; override;
+  end;
+
 procedure TTestExpectationMatchers.DummyThrowError(const AMessage: string; const ALine, AColumn: Integer);
 begin
   raise Exception.Create(AMessage);
@@ -427,6 +503,8 @@ begin
   Test('toMatch passes for string substrings', TestToMatchSubstring);
   Test('toMatch fails for missing substrings', TestToMatchMissingSubstring);
   Test('toMatch on non-string fails cleanly', TestToMatchOnNonString);
+  Test('toMatch passes for RegExp pattern', TestToMatchRegExpPattern);
+  Test('not.toMatch passes for non-matching RegExp', TestToMatchRegExpNegated);
 
   { toBeNull }
   Test('toBeNull passes for null', TestToBeNullWithNull);
@@ -932,6 +1010,38 @@ begin
   A := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('1')]);
   try
     ExpectFail(MakeExpectation(TGocciaNumberLiteralValue.Create(1)).ToMatch(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestExpectationMatchers.TestToMatchRegExpPattern;
+var
+  A: TGocciaArgumentsCollection;
+  RegExpObj: TGocciaValue;
+begin
+  RegExpObj := CreateRegExpObject('wo.ld', '');
+  TGocciaObjectValue(RegExpObj).AssignSymbolProperty(
+    TGocciaSymbolValue.WellKnownToStringTag, TGocciaStringLiteralValue.Create('RegExp'));
+  A := TGocciaArgumentsCollection.Create([RegExpObj]);
+  try
+    ExpectPass(MakeExpectation(TGocciaStringLiteralValue.Create('hello world')).ToMatch(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestExpectationMatchers.TestToMatchRegExpNegated;
+var
+  A: TGocciaArgumentsCollection;
+  RegExpObj: TGocciaValue;
+begin
+  RegExpObj := CreateRegExpObject('z+', '');
+  TGocciaObjectValue(RegExpObj).AssignSymbolProperty(
+    TGocciaSymbolValue.WellKnownToStringTag, TGocciaStringLiteralValue.Create('RegExp'));
+  A := TGocciaArgumentsCollection.Create([RegExpObj]);
+  try
+    ExpectPass(MakeExpectation(TGocciaStringLiteralValue.Create('hello world'), True).ToMatch(A, nil));
   finally
     A.Free;
   end;
@@ -3718,10 +3828,555 @@ begin
   end;
 end;
 
+{ ============================================================================ }
+{ TTestOnTestFinished                                                        }
+{ ============================================================================ }
+
+procedure TTestOnTestFinished.DummyThrowError(const AMessage: string; const ALine, AColumn: Integer);
+begin
+  raise Exception.Create(AMessage);
+end;
+
+procedure TTestOnTestFinished.BeforeAll;
+begin
+  FRecordedEvents := TStringList.Create;
+end;
+
+procedure TTestOnTestFinished.AfterAll;
+begin
+  FRecordedEvents.Free;
+end;
+
+procedure TTestOnTestFinished.BeforeEach;
+begin
+  FRecordedEvents.Clear;
+  FScope := TGocciaGlobalScope.Create;
+  FAssertions := TGocciaTestAssertions.Create('test', FScope, DummyThrowError);
+  FAssertions.SuppressOutput := True;
+end;
+
+procedure TTestOnTestFinished.AfterEach;
+begin
+  FAssertions.Free;
+  FScope.Free;
+end;
+
+function TTestOnTestFinished.ResolveGlobalCallable(const AName: string): TGocciaFunctionBase;
+var
+  Value: TGocciaValue;
+begin
+  Value := FScope.ResolveIdentifier(AName);
+  if not Assigned(Value) then
+    raise Exception.CreateFmt('Expected global "%s" to be defined', [AName]);
+  if not (Value is TGocciaFunctionBase) then
+    raise Exception.CreateFmt('Expected global "%s" to be callable', [AName]);
+  Result := TGocciaFunctionBase(Value);
+end;
+
+function TTestOnTestFinished.CreateRunOptions: TGocciaArgumentsCollection;
+var
+  Params: TGocciaObjectValue;
+begin
+  Params := TGocciaObjectValue.Create;
+  Params.AssignProperty('showTestResults', TGocciaBooleanLiteralValue.Create(False));
+  Result := TGocciaArgumentsCollection.Create([Params]);
+end;
+
+function TTestOnTestFinished.RunRegisteredTests: TGocciaObjectValue;
+var
+  RunArgs: TGocciaArgumentsCollection;
+begin
+  RunArgs := CreateRunOptions;
+  try
+    Result := FAssertions.RunTests(RunArgs, nil) as TGocciaObjectValue;
+  finally
+    RunArgs.Free;
+  end;
+end;
+
+function TTestOnTestFinished.RecordTestBodyCallback(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  FRecordedEvents.Add('test-body');
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TTestOnTestFinished.RecordFinishedCallback(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  FRecordedEvents.Add('finished');
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TTestOnTestFinished.RecordFinishedACallback(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  FRecordedEvents.Add('finished-A');
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TTestOnTestFinished.RecordFinishedBCallback(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  FRecordedEvents.Add('finished-B');
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TTestOnTestFinished.RecordAfterEachCallback(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  FRecordedEvents.Add('afterEach');
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TTestOnTestFinished.TestBodyWithOnTestFinished(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  OnTestFinishedFunc: TGocciaFunctionBase;
+  CallbackArgs: TGocciaArgumentsCollection;
+begin
+  OnTestFinishedFunc := ResolveGlobalCallable('onTestFinished');
+  CallbackArgs := TGocciaArgumentsCollection.Create([
+    TGocciaNativeFunctionValue.Create(RecordFinishedCallback, 'finishedCallback', 0)
+  ]);
+  try
+    OnTestFinishedFunc.Call(CallbackArgs, nil);
+  finally
+    CallbackArgs.Free;
+  end;
+  FRecordedEvents.Add('test-body');
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TTestOnTestFinished.TestBodyWithMultipleCallbacks(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  OnTestFinishedFunc: TGocciaFunctionBase;
+  CallbackArgs: TGocciaArgumentsCollection;
+begin
+  OnTestFinishedFunc := ResolveGlobalCallable('onTestFinished');
+
+  CallbackArgs := TGocciaArgumentsCollection.Create([
+    TGocciaNativeFunctionValue.Create(RecordFinishedACallback, 'finishedA', 0)
+  ]);
+  try
+    OnTestFinishedFunc.Call(CallbackArgs, nil);
+  finally
+    CallbackArgs.Free;
+  end;
+
+  CallbackArgs := TGocciaArgumentsCollection.Create([
+    TGocciaNativeFunctionValue.Create(RecordFinishedBCallback, 'finishedB', 0)
+  ]);
+  try
+    OnTestFinishedFunc.Call(CallbackArgs, nil);
+  finally
+    CallbackArgs.Free;
+  end;
+
+  FRecordedEvents.Add('test-body');
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TTestOnTestFinished.TestBodyWithAfterEachCallback(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  OnTestFinishedFunc: TGocciaFunctionBase;
+  CallbackArgs: TGocciaArgumentsCollection;
+begin
+  OnTestFinishedFunc := ResolveGlobalCallable('onTestFinished');
+  CallbackArgs := TGocciaArgumentsCollection.Create([
+    TGocciaNativeFunctionValue.Create(RecordFinishedCallback, 'finishedCallback', 0)
+  ]);
+  try
+    OnTestFinishedFunc.Call(CallbackArgs, nil);
+  finally
+    CallbackArgs.Free;
+  end;
+  FRecordedEvents.Add('test-body');
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TTestOnTestFinished.TestBodyNoCallbacks(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  FRecordedEvents.Add('test-body-no-cb');
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TTestOnTestFinished.RegisterSuiteWithOnTestFinished(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  TestFunc: TGocciaFunctionBase;
+  TestArgs: TGocciaArgumentsCollection;
+begin
+  TestFunc := ResolveGlobalCallable('test');
+  TestArgs := TGocciaArgumentsCollection.Create([
+    TGocciaStringLiteralValue.Create('test with callback'),
+    TGocciaNativeFunctionValue.Create(TestBodyWithOnTestFinished, 'testBody', 0)
+  ]);
+  try
+    TestFunc.Call(TestArgs, nil);
+  finally
+    TestArgs.Free;
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TTestOnTestFinished.RegisterSuiteWithMultipleCallbacks(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  TestFunc: TGocciaFunctionBase;
+  TestArgs: TGocciaArgumentsCollection;
+begin
+  TestFunc := ResolveGlobalCallable('test');
+  TestArgs := TGocciaArgumentsCollection.Create([
+    TGocciaStringLiteralValue.Create('test with multiple callbacks'),
+    TGocciaNativeFunctionValue.Create(TestBodyWithMultipleCallbacks, 'testBody', 0)
+  ]);
+  try
+    TestFunc.Call(TestArgs, nil);
+  finally
+    TestArgs.Free;
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TTestOnTestFinished.RegisterSuiteWithAfterEachAndCallback(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  TestFunc, AfterEachFunc: TGocciaFunctionBase;
+  TestArgs, HookArgs: TGocciaArgumentsCollection;
+begin
+  AfterEachFunc := ResolveGlobalCallable('afterEach');
+  HookArgs := TGocciaArgumentsCollection.Create([
+    TGocciaNativeFunctionValue.Create(RecordAfterEachCallback, 'afterEachCallback', 0)
+  ]);
+  try
+    AfterEachFunc.Call(HookArgs, nil);
+  finally
+    HookArgs.Free;
+  end;
+
+  TestFunc := ResolveGlobalCallable('test');
+  TestArgs := TGocciaArgumentsCollection.Create([
+    TGocciaStringLiteralValue.Create('test with afterEach and callback'),
+    TGocciaNativeFunctionValue.Create(TestBodyWithAfterEachCallback, 'testBody', 0)
+  ]);
+  try
+    TestFunc.Call(TestArgs, nil);
+  finally
+    TestArgs.Free;
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TTestOnTestFinished.RegisterSuiteWithScopedCallbacks(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  TestFunc: TGocciaFunctionBase;
+  TestArgs: TGocciaArgumentsCollection;
+begin
+  TestFunc := ResolveGlobalCallable('test');
+
+  // First test registers a callback
+  TestArgs := TGocciaArgumentsCollection.Create([
+    TGocciaStringLiteralValue.Create('test with callback'),
+    TGocciaNativeFunctionValue.Create(TestBodyWithOnTestFinished, 'testBody', 0)
+  ]);
+  try
+    TestFunc.Call(TestArgs, nil);
+  finally
+    TestArgs.Free;
+  end;
+
+  // Second test does NOT register any callback
+  TestArgs := TGocciaArgumentsCollection.Create([
+    TGocciaStringLiteralValue.Create('test without callback'),
+    TGocciaNativeFunctionValue.Create(TestBodyNoCallbacks, 'testBodyNoCb', 0)
+  ]);
+  try
+    TestFunc.Call(TestArgs, nil);
+  finally
+    TestArgs.Free;
+  end;
+
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+procedure TTestOnTestFinished.SetupTests;
+begin
+  Test('onTestFinished callback runs after test', TestOnTestFinishedCallbackRuns);
+  Test('multiple onTestFinished callbacks run in registration order', TestOnTestFinishedMultipleInOrder);
+  Test('onTestFinished runs after afterEach hooks', TestOnTestFinishedRunsAfterAfterEach);
+  Test('onTestFinished callbacks are scoped to the current test', TestOnTestFinishedScopedToCurrentTest);
+end;
+
+procedure TTestOnTestFinished.TestOnTestFinishedCallbackRuns;
+var
+  DescribeFunc: TGocciaFunctionBase;
+  SuiteArgs: TGocciaArgumentsCollection;
+begin
+  DescribeFunc := ResolveGlobalCallable('describe');
+  SuiteArgs := TGocciaArgumentsCollection.Create([
+    TGocciaStringLiteralValue.Create('suite'),
+    TGocciaNativeFunctionValue.Create(RegisterSuiteWithOnTestFinished, 'registerSuite', 0)
+  ]);
+  try
+    DescribeFunc.Call(SuiteArgs, nil);
+  finally
+    SuiteArgs.Free;
+  end;
+
+  RunRegisteredTests;
+  // Order: test-body, finished
+  Expect<Integer>(FRecordedEvents.Count).ToBe(2);
+  Expect<String>(FRecordedEvents[0]).ToBe('test-body');
+  Expect<String>(FRecordedEvents[1]).ToBe('finished');
+end;
+
+procedure TTestOnTestFinished.TestOnTestFinishedMultipleInOrder;
+var
+  DescribeFunc: TGocciaFunctionBase;
+  SuiteArgs: TGocciaArgumentsCollection;
+begin
+  DescribeFunc := ResolveGlobalCallable('describe');
+  SuiteArgs := TGocciaArgumentsCollection.Create([
+    TGocciaStringLiteralValue.Create('suite'),
+    TGocciaNativeFunctionValue.Create(RegisterSuiteWithMultipleCallbacks, 'registerSuite', 0)
+  ]);
+  try
+    DescribeFunc.Call(SuiteArgs, nil);
+  finally
+    SuiteArgs.Free;
+  end;
+
+  RunRegisteredTests;
+  // Order: test-body, finished-A, finished-B
+  Expect<Integer>(FRecordedEvents.Count).ToBe(3);
+  Expect<String>(FRecordedEvents[0]).ToBe('test-body');
+  Expect<String>(FRecordedEvents[1]).ToBe('finished-A');
+  Expect<String>(FRecordedEvents[2]).ToBe('finished-B');
+end;
+
+procedure TTestOnTestFinished.TestOnTestFinishedRunsAfterAfterEach;
+var
+  DescribeFunc: TGocciaFunctionBase;
+  SuiteArgs: TGocciaArgumentsCollection;
+begin
+  DescribeFunc := ResolveGlobalCallable('describe');
+  SuiteArgs := TGocciaArgumentsCollection.Create([
+    TGocciaStringLiteralValue.Create('suite'),
+    TGocciaNativeFunctionValue.Create(RegisterSuiteWithAfterEachAndCallback, 'registerSuite', 0)
+  ]);
+  try
+    DescribeFunc.Call(SuiteArgs, nil);
+  finally
+    SuiteArgs.Free;
+  end;
+
+  RunRegisteredTests;
+  // Order: test-body, afterEach, finished
+  Expect<Integer>(FRecordedEvents.Count).ToBe(3);
+  Expect<String>(FRecordedEvents[0]).ToBe('test-body');
+  Expect<String>(FRecordedEvents[1]).ToBe('afterEach');
+  Expect<String>(FRecordedEvents[2]).ToBe('finished');
+end;
+
+procedure TTestOnTestFinished.TestOnTestFinishedScopedToCurrentTest;
+var
+  DescribeFunc: TGocciaFunctionBase;
+  SuiteArgs: TGocciaArgumentsCollection;
+begin
+  DescribeFunc := ResolveGlobalCallable('describe');
+  SuiteArgs := TGocciaArgumentsCollection.Create([
+    TGocciaStringLiteralValue.Create('suite'),
+    TGocciaNativeFunctionValue.Create(RegisterSuiteWithScopedCallbacks, 'registerSuite', 0)
+  ]);
+  try
+    DescribeFunc.Call(SuiteArgs, nil);
+  finally
+    SuiteArgs.Free;
+  end;
+
+  RunRegisteredTests;
+  // First test: test-body, finished. Second test: test-body-no-cb (no "finished" callback)
+  Expect<Integer>(FRecordedEvents.Count).ToBe(3);
+  Expect<String>(FRecordedEvents[0]).ToBe('test-body');
+  Expect<String>(FRecordedEvents[1]).ToBe('finished');
+  Expect<String>(FRecordedEvents[2]).ToBe('test-body-no-cb');
+end;
+
+{ ============================================================================ }
+{ TTestResolvesAndRejects                                                     }
+{ ============================================================================ }
+
+procedure TTestResolvesAndRejects.DummyThrowError(const AMessage: string; const ALine, AColumn: Integer);
+begin
+  raise Exception.Create(AMessage);
+end;
+
+procedure TTestResolvesAndRejects.BeforeAll;
+begin
+  FScope := TGocciaGlobalScope.Create;
+  FAssertions := TGocciaTestAssertions.Create('test', FScope, DummyThrowError);
+  FAssertions.SuppressOutput := True;
+end;
+
+procedure TTestResolvesAndRejects.AfterAll;
+begin
+  FAssertions.Free;
+  FScope.Free;
+end;
+
+procedure TTestResolvesAndRejects.BeforeEach;
+begin
+  FAssertions.ResetCurrentTestState;
+end;
+
+function TTestResolvesAndRejects.MakeExpectation(const AValue: TGocciaValue; const AIsNegated: Boolean): TGocciaExpectationValue;
+begin
+  Result := TGocciaExpectationValue.Create(AValue, FAssertions, AIsNegated);
+end;
+
+procedure TTestResolvesAndRejects.ExpectPass(const AValue: TGocciaValue);
+begin
+  Expect<Boolean>(AValue = TGocciaUndefinedLiteralValue.UndefinedValue).ToBe(True);
+  Expect<Boolean>(FAssertions.CurrentTestHasFailures).ToBe(False);
+end;
+
+procedure TTestResolvesAndRejects.ExpectFail(const AValue: TGocciaValue);
+begin
+  Expect<Boolean>(AValue = TGocciaUndefinedLiteralValue.UndefinedValue).ToBe(True);
+  Expect<Boolean>(FAssertions.CurrentTestHasFailures).ToBe(True);
+end;
+
+procedure TTestResolvesAndRejects.SetupTests;
+begin
+  { resolves }
+  Test('resolves with fulfilled Promise unwraps value', TestResolvesWithFulfilledPromise);
+  Test('resolves fails with rejected Promise', TestResolvesFailsWithRejectedPromise);
+  Test('resolves fails with non-Promise value', TestResolvesFailsWithNonPromise);
+  Test('resolves with negation passes for different value', TestResolvesWithNegation);
+
+  { rejects }
+  Test('rejects with rejected Promise unwraps reason', TestRejectsWithRejectedPromise);
+  Test('rejects fails with fulfilled Promise', TestRejectsFailsWithFulfilledPromise);
+  Test('rejects fails with non-Promise value', TestRejectsFailsWithNonPromise);
+end;
+
+procedure TTestResolvesAndRejects.TestResolvesWithFulfilledPromise;
+var
+  Promise: TGocciaPromiseValue;
+  Resolved: TGocciaExpectationValue;
+  A: TGocciaArgumentsCollection;
+begin
+  Promise := TGocciaPromiseValue.Create;
+  Promise.Resolve(TGocciaNumberLiteralValue.Create(42));
+
+  Resolved := MakeExpectation(Promise).GetResolves(nil, nil) as TGocciaExpectationValue;
+  A := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(42)]);
+  try
+    ExpectPass(Resolved.ToBe(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestResolvesAndRejects.TestResolvesFailsWithRejectedPromise;
+var
+  Promise: TGocciaPromiseValue;
+  ResolvedExpectation: TGocciaValue;
+begin
+  Promise := TGocciaPromiseValue.Create;
+  Promise.Reject(TGocciaStringLiteralValue.Create('error'));
+
+  ResolvedExpectation := MakeExpectation(Promise).GetResolves(nil, nil);
+  // GetResolves should record a failure for rejected promises
+  Expect<Boolean>(FAssertions.CurrentTestHasFailures).ToBe(True);
+  Expect<Boolean>(ResolvedExpectation is TGocciaExpectationValue).ToBe(True);
+end;
+
+procedure TTestResolvesAndRejects.TestResolvesFailsWithNonPromise;
+var
+  ResolvedExpectation: TGocciaValue;
+begin
+  ResolvedExpectation := MakeExpectation(TGocciaNumberLiteralValue.Create(42)).GetResolves(nil, nil);
+  // GetResolves should record a failure for non-Promise values
+  Expect<Boolean>(FAssertions.CurrentTestHasFailures).ToBe(True);
+  Expect<Boolean>(ResolvedExpectation is TGocciaExpectationValue).ToBe(True);
+end;
+
+procedure TTestResolvesAndRejects.TestResolvesWithNegation;
+var
+  Promise: TGocciaPromiseValue;
+  Resolved: TGocciaExpectationValue;
+  A: TGocciaArgumentsCollection;
+begin
+  Promise := TGocciaPromiseValue.Create;
+  Promise.Resolve(TGocciaNumberLiteralValue.Create(10));
+
+  // Create non-negated expectation, GetResolves preserves negation state
+  // Then chain with GetNot to negate, then ToBe(20) should pass
+  Resolved := MakeExpectation(Promise).GetResolves(nil, nil) as TGocciaExpectationValue;
+  // Get .not on the resolved expectation
+  Resolved := Resolved.GetNot(nil, nil) as TGocciaExpectationValue;
+  A := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(20)]);
+  try
+    ExpectPass(Resolved.ToBe(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestResolvesAndRejects.TestRejectsWithRejectedPromise;
+var
+  Promise: TGocciaPromiseValue;
+  Rejected: TGocciaExpectationValue;
+  A: TGocciaArgumentsCollection;
+begin
+  Promise := TGocciaPromiseValue.Create;
+  Promise.Reject(TGocciaStringLiteralValue.Create('error'));
+
+  Rejected := MakeExpectation(Promise).GetRejects(nil, nil) as TGocciaExpectationValue;
+  A := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('error')]);
+  try
+    ExpectPass(Rejected.ToBe(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestResolvesAndRejects.TestRejectsFailsWithFulfilledPromise;
+var
+  Promise: TGocciaPromiseValue;
+  RejectedExpectation: TGocciaValue;
+begin
+  Promise := TGocciaPromiseValue.Create;
+  Promise.Resolve(TGocciaNumberLiteralValue.Create(42));
+
+  RejectedExpectation := MakeExpectation(Promise).GetRejects(nil, nil);
+  // GetRejects should record a failure for fulfilled promises
+  Expect<Boolean>(FAssertions.CurrentTestHasFailures).ToBe(True);
+  Expect<Boolean>(RejectedExpectation is TGocciaExpectationValue).ToBe(True);
+end;
+
+procedure TTestResolvesAndRejects.TestRejectsFailsWithNonPromise;
+var
+  RejectedExpectation: TGocciaValue;
+begin
+  RejectedExpectation := MakeExpectation(TGocciaNumberLiteralValue.Create(42)).GetRejects(nil, nil);
+  // GetRejects should record a failure for non-Promise values
+  Expect<Boolean>(FAssertions.CurrentTestHasFailures).ToBe(True);
+  Expect<Boolean>(RejectedExpectation is TGocciaExpectationValue).ToBe(True);
+end;
+
 begin
   TestRunnerProgram.AddSuite(TTestExpectationMatchers.Create('Test Assertions - Expectation Matchers'));
   TestRunnerProgram.AddSuite(TTestSkipAndConditionalAPIs.Create('Test Assertions - Skip and Conditional APIs'));
   TestRunnerProgram.AddSuite(TTestMockAndSpyAPIs.Create('Test Assertions - Mock and Spy APIs'));
+  TestRunnerProgram.AddSuite(TTestOnTestFinished.Create('Test Assertions - onTestFinished'));
+  TestRunnerProgram.AddSuite(TTestResolvesAndRejects.Create('Test Assertions - Resolves and Rejects'));
   TestRunnerProgram.Run;
 
   ExitCode := TestResultToExitCode;

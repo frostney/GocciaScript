@@ -121,6 +121,9 @@ uses
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction;
 
+const
+  MAX_PROTOTYPE_CHAIN_DEPTH = 256;
+
 procedure MarkPropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor);
 begin
   ADescriptor.MarkValues;
@@ -497,6 +500,7 @@ var
   Accessor: TGocciaPropertyDescriptorAccessor;
   Args: TGocciaArgumentsCollection;
   Proto: TGocciaObjectValue;
+  ChainDepth: Integer;
 begin
   if FFrozen then
     ThrowTypeError('Cannot assign to read only property ''' + AName + ''' of frozen object');
@@ -532,8 +536,12 @@ begin
 
   // ES2026 §10.1.9 step 2-3: Walk prototype chain for inherited accessor descriptors
   Proto := FPrototype;
+  ChainDepth := 0;
   while Assigned(Proto) do
   begin
+    Inc(ChainDepth);
+    if ChainDepth > MAX_PROTOTYPE_CHAIN_DEPTH then
+      ThrowTypeError('Prototype chain depth exceeded safety limit while setting ''' + AName + '''');
     if Proto.FProperties.TryGetValue(AName, Descriptor) then
     begin
       if Descriptor is TGocciaPropertyDescriptorAccessor then

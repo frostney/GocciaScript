@@ -1,4 +1,6 @@
-describe("JSON5.parse", () => {
+const hasJSON5 = typeof JSON5 !== "undefined";
+
+describe.runIf(hasJSON5)("JSON5.parse", () => {
   test("parses comments, trailing commas, and unquoted keys", () => {
     const value = JSON5.parse(`
 {
@@ -57,30 +59,33 @@ No \\\\n's!",
   });
 
   test("preserves __proto__ as data", () => {
-    const value = JSON5.parse('{__proto__: 1}');
+    const value = JSON5.parse("{__proto__: 1}");
     expect(value["__proto__"]).toBe(1);
   });
 
   test("supports reviver transforms", () => {
-    const value = JSON5.parse('{answer: 21, nested: { count: 1 }}', (key, item) => {
-      if (typeof item === "number") {
-        return item * 2;
-      }
-      return item;
-    });
+    const value = JSON5.parse(
+      "{answer: 21, nested: { count: 1 }}",
+      (key, item) => {
+        if (typeof item === "number") {
+          return item * 2;
+        }
+        return item;
+      },
+    );
 
     expect(value.answer).toBe(42);
     expect(value.nested.count).toBe(2);
   });
 
   test("reviver can remove object properties and array elements", () => {
-    const objectValue = JSON5.parse('{keep: 1, drop: 2}', (key, item) => {
+    const objectValue = JSON5.parse("{keep: 1, drop: 2}", (key, item) => {
       if (key === "drop") {
         return undefined;
       }
       return item;
     });
-    const arrayValue = JSON5.parse('[1, 2, 3]', (key, item) => {
+    const arrayValue = JSON5.parse("[1, 2, 3]", (key, item) => {
       if (key === "1") {
         return undefined;
       }
@@ -105,12 +110,15 @@ No \\\\n's!",
 
   test("reviver receives context with source for primitives", () => {
     const sources = {};
-    JSON5.parse("{a: 42, b: 'hello', c: true, d: null}", (key, value, context) => {
-      if (key !== "" && context.source !== undefined) {
-        sources[key] = context.source;
-      }
-      return value;
-    });
+    JSON5.parse(
+      "{a: 42, b: 'hello', c: true, d: null}",
+      (key, value, context) => {
+        if (key !== "" && context.source !== undefined) {
+          sources[key] = context.source;
+        }
+        return value;
+      },
+    );
     expect(sources.a).toBe("42");
     expect(sources.b).toBe("'hello'");
     expect(sources.c).toBe("true");
@@ -135,12 +143,15 @@ No \\\\n's!",
 
   test("reviver source preserves raw JSON5 text", () => {
     const sources = {};
-    JSON5.parse("{a: Infinity, b: NaN, c: 0xFF, d: +1}", (key, value, context) => {
-      if (key !== "" && context.source !== undefined) {
-        sources[key] = context.source;
-      }
-      return value;
-    });
+    JSON5.parse(
+      "{a: Infinity, b: NaN, c: 0xFF, d: +1}",
+      (key, value, context) => {
+        if (key !== "" && context.source !== undefined) {
+          sources[key] = context.source;
+        }
+        return value;
+      },
+    );
     expect(sources.a).toBe("Infinity");
     expect(sources.b).toBe("NaN");
     expect(sources.c).toBe("0xFF");

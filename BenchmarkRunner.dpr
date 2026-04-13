@@ -18,6 +18,7 @@ uses
   Goccia.Engine,
   Goccia.Engine.BytecodeBackend,
   Goccia.Error,
+  Goccia.Error.Detail,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.JSX.Transformer,
@@ -28,10 +29,13 @@ uses
   Goccia.SourceMap,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
+  Goccia.Timeout,
   Goccia.Token,
   Goccia.Values.ArrayValue,
+  Goccia.Values.Error,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
+  Goccia.VM.Exception,
 
   FileUtils in 'units/FileUtils.pas';
 
@@ -59,6 +63,7 @@ var
   GInlineAliases: TStringList = nil;
   GMode: TGocciaEngineBackend = ebTreeWalk;
   GASIEnabled: Boolean = False;
+  GTimeoutMilliseconds: Integer = 0;
 
 procedure PopulateFileResult(const AFileResult: TBenchmarkFileResult;
   const AScriptResult: TGocciaObjectValue; const AReporter: TBenchmarkReporter);
@@ -174,7 +179,12 @@ begin
         if GShowProgress and Assigned(Engine.BuiltinBenchmark) then
           Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
 
-        EngineResult := Engine.Execute;
+        StartExecutionTimeout(GTimeoutMilliseconds);
+        try
+          EngineResult := Engine.Execute;
+        finally
+          ClearExecutionTimeout;
+        end;
         FileResult.FileName := AFileName;
         FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
         FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
@@ -201,7 +211,13 @@ begin
       on E: TGocciaError do
       begin
         WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
-        MakeErrorFileResult(AFileName, E.Message, AReporter);
+        MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
+      end;
+      on E: TGocciaThrowValue do
+      begin
+        WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, Source, IsColorTerminal));
+        MakeErrorFileResult(AFileName,
+          FormatThrowDetail(E.Value, AFileName, Source, False), AReporter);
       end;
       on E: Exception do
         MakeErrorFileResult(AFileName, E.Message, AReporter);
@@ -286,7 +302,12 @@ begin
           Backend.Bootstrap.BuiltinBenchmark.OnBeforeMeasurement := Backend.ClearTransientCaches;
 
         try
-          ResultValue := Backend.RunModule(Module);
+          StartExecutionTimeout(GTimeoutMilliseconds);
+          try
+            ResultValue := Backend.RunModule(Module);
+          finally
+            ClearExecutionTimeout;
+          end;
           ExecEnd := GetNanoseconds;
 
           FileResult.FileName := AFileName;
@@ -318,7 +339,19 @@ begin
       on E: TGocciaError do
       begin
         WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
-        MakeErrorFileResult(AFileName, E.Message, AReporter);
+        MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
+      end;
+      on E: TGocciaThrowValue do
+      begin
+        WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, Source, IsColorTerminal));
+        MakeErrorFileResult(AFileName,
+          FormatThrowDetail(E.Value, AFileName, Source, False), AReporter);
+      end;
+      on E: EGocciaBytecodeThrow do
+      begin
+        WriteLn(StdErr, FormatThrowDetail(E.ThrownValue, AFileName, Source, IsColorTerminal));
+        MakeErrorFileResult(AFileName,
+          FormatThrowDetail(E.ThrownValue, AFileName, Source, False), AReporter);
       end;
       on E: Exception do
         MakeErrorFileResult(AFileName, E.Message, AReporter);
@@ -363,7 +396,12 @@ begin
       if GShowProgress and Assigned(Engine.BuiltinBenchmark) then
         Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
 
-      EngineResult := Engine.Execute;
+      StartExecutionTimeout(GTimeoutMilliseconds);
+      try
+        EngineResult := Engine.Execute;
+      finally
+        ClearExecutionTimeout;
+      end;
       FileResult.FileName := AFileName;
       FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
       FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
@@ -390,7 +428,13 @@ begin
     on E: TGocciaError do
     begin
       WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
-      MakeErrorFileResult(AFileName, E.Message, AReporter);
+      MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
+    end;
+    on E: TGocciaThrowValue do
+    begin
+      WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, ASource, IsColorTerminal));
+      MakeErrorFileResult(AFileName,
+        FormatThrowDetail(E.Value, AFileName, ASource, False), AReporter);
     end;
     on E: Exception do
       MakeErrorFileResult(AFileName, E.Message, AReporter);
@@ -466,7 +510,12 @@ begin
         Backend.Bootstrap.BuiltinBenchmark.OnBeforeMeasurement := Backend.ClearTransientCaches;
 
       try
-        ResultValue := Backend.RunModule(Module);
+        StartExecutionTimeout(GTimeoutMilliseconds);
+        try
+          ResultValue := Backend.RunModule(Module);
+        finally
+          ClearExecutionTimeout;
+        end;
         ExecEnd := GetNanoseconds;
 
         FileResult.FileName := AFileName;
@@ -498,7 +547,19 @@ begin
     on E: TGocciaError do
     begin
       WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
-      MakeErrorFileResult(AFileName, E.Message, AReporter);
+      MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
+    end;
+    on E: TGocciaThrowValue do
+    begin
+      WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, ASource, IsColorTerminal));
+      MakeErrorFileResult(AFileName,
+        FormatThrowDetail(E.Value, AFileName, ASource, False), AReporter);
+    end;
+    on E: EGocciaBytecodeThrow do
+    begin
+      WriteLn(StdErr, FormatThrowDetail(E.ThrownValue, AFileName, ASource, IsColorTerminal));
+      MakeErrorFileResult(AFileName,
+        FormatThrowDetail(E.ThrownValue, AFileName, ASource, False), AReporter);
     end;
     on E: Exception do
       MakeErrorFileResult(AFileName, E.Message, AReporter);
@@ -660,16 +721,27 @@ begin
       end
       else if Arg = '--asi' then
         GASIEnabled := True
+      else if Copy(Arg, 1, 10) = '--timeout=' then
+      begin
+        if not TryStrToInt(Copy(Arg, 11, MaxInt), GTimeoutMilliseconds) or
+           (GTimeoutMilliseconds < 0) then
+        begin
+          WriteLn('Error: --timeout must be a non-negative integer number of milliseconds.');
+          ExitCode := 1;
+          Exit;
+        end;
+      end
       else if Arg = '--mode=interpreted' then
         GMode := ebTreeWalk
       else if Arg = '--mode=bytecode' then
         GMode := ebBytecode
       else if (Arg = '--help') or (Arg = '-h') then
       begin
-        WriteLn('Usage: BenchmarkRunner [path...|-] [--format=console|text|csv|json [--output=file]] ... [--no-progress] [--mode=interpreted|bytecode] [--import-map=file] [--alias key=value] [--asi]');
+        WriteLn('Usage: BenchmarkRunner [path...|-] [--format=console|text|csv|json [--output=file]] ... [--no-progress] [--mode=interpreted|bytecode] [--import-map=file] [--alias key=value] [--asi] [--timeout=ms]');
         WriteLn('  -                       Read benchmark source from stdin');
         WriteLn('  (omitted path)          Read benchmark source from stdin');
         WriteLn('  --asi                   Enable automatic semicolon insertion');
+        WriteLn('  --timeout=<ms>          Per-file execution timeout in milliseconds');
         Exit;
       end
       else if Copy(Arg, 1, 7) = '--mode=' then
