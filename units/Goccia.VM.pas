@@ -385,7 +385,17 @@ begin
 end;
 
 
-// ES2026 Types-as-comments: runtime guard for OP_CHECK_TYPE (compiler emits Ord(TGocciaLocalType) in operand B).
+// Runtime guard for strict local types emitted as OP_CHECK_TYPE in bytecode mode.
+const
+  STRICT_TYPE_MISMATCH_SUGGESTION =
+    'Use a value that matches the declared type (Types as Comments), or remove the type annotation to disable enforcement.';
+
+function VMStrictTypeMismatchMessage(const ATypeName, AExpectedLabel: string): string; inline;
+begin
+  Result := 'Type ''' + ATypeName + ''' is not assignable to type ''' + AExpectedLabel +
+    '''' + sLineBreak + 'Suggestion: ' + STRICT_TYPE_MISMATCH_SUGGESTION;
+end;
+
 procedure VMStrictTypeCheckRegisterValue(const AValue: TGocciaValue;
   const AExpected: TGocciaLocalType);
 begin
@@ -396,32 +406,27 @@ begin
            AValue.ToNumberLiteral.IsNaN or
            AValue.ToNumberLiteral.IsInfinite or
            (Frac(AValue.ToNumberLiteral.Value) <> 0.0) then
-          ThrowTypeError('Type ''' + AValue.TypeName +
-            ''' is not assignable to type ''integer''');
+          ThrowTypeError(VMStrictTypeMismatchMessage(AValue.TypeName, 'integer'));
       end;
     sltFloat:
       begin
         if not (AValue is TGocciaNumberLiteralValue) then
-          ThrowTypeError('Type ''' + AValue.TypeName +
-            ''' is not assignable to type ''number''');
+          ThrowTypeError(VMStrictTypeMismatchMessage(AValue.TypeName, 'number'));
       end;
     sltBoolean:
       begin
         if not (AValue is TGocciaBooleanLiteralValue) then
-          ThrowTypeError('Type ''' + AValue.TypeName +
-            ''' is not assignable to type ''boolean''');
+          ThrowTypeError(VMStrictTypeMismatchMessage(AValue.TypeName, 'boolean'));
       end;
     sltString:
       begin
         if not (AValue is TGocciaStringLiteralValue) then
-          ThrowTypeError('Type ''' + AValue.TypeName +
-            ''' is not assignable to type ''string''');
+          ThrowTypeError(VMStrictTypeMismatchMessage(AValue.TypeName, 'string'));
       end;
     sltReference:
       begin
         if AValue.IsPrimitive then
-          ThrowTypeError('Type ''' + AValue.TypeName +
-            ''' is not assignable to type ''object''');
+          ThrowTypeError(VMStrictTypeMismatchMessage(AValue.TypeName, 'object'));
       end;
   else
     // sltUntyped: no runtime check

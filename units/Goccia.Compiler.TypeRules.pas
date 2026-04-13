@@ -7,12 +7,12 @@ interface
 uses
   Goccia.Bytecode.Chunk;
 
-function TypesAreCompatible(const AProduced, AExpected: TGocciaLocalType): Boolean;
+function TypesAreCompatible(const AProduced, AExpected: TGocciaLocalType): Boolean; inline;
 function IsKnownNumeric(const AType: TGocciaLocalType): Boolean; inline;
 
 implementation
 
-function TypesAreCompatible(const AProduced, AExpected: TGocciaLocalType): Boolean;
+function TypesAreCompatible(const AProduced, AExpected: TGocciaLocalType): Boolean; inline;
 begin
   if AProduced = sltUntyped then
     Exit(False);
