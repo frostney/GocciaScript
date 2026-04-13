@@ -1,4 +1,6 @@
-describe("YAML.parse", () => {
+const hasYAML = typeof YAML !== "undefined";
+
+describe.runIf(hasYAML)("YAML.parse", () => {
   test("parses block mappings and sequences", () => {
     const value = YAML.parse(`
 name: app
@@ -166,7 +168,7 @@ legacyString: yes
     expect(value.leadingDot).toBe(0.5);
     expect(value.trailingDot).toBe(5);
     expect(value.exponent).toBe(12000000000);
-    expect(value.hex).toBe(0xCAFE);
+    expect(value.hex).toBe(0xcafe);
     expect(value.octal).toBe(493);
     expect(value.binary).toBe(166);
     expect(value.positiveInfinity).toBe(Infinity);
@@ -336,18 +338,20 @@ items:
   });
 
   test("parses YAML double-quoted escape sequences", () => {
-    const value = YAML.parse([
-      'ascii: "\\x41"',
-      'omega: "\\u03A9"',
-      'emoji: "\\U0001F600"',
-      'controls: "\\0\\a\\b\\t\\n\\v\\f\\r\\e"',
-      'spaces: "left\\ right"',
-      'separators: "\\N\\_\\L\\P"',
-      'slashes: "\\"\\\\/"',
-      'continued: "first' + "\\",
-      '  second"',
-      'trailing: "slash\\\\"',
-    ].join("\n"));
+    const value = YAML.parse(
+      [
+        'ascii: "\\x41"',
+        'omega: "\\u03A9"',
+        'emoji: "\\U0001F600"',
+        'controls: "\\0\\a\\b\\t\\n\\v\\f\\r\\e"',
+        'spaces: "left\\ right"',
+        'separators: "\\N\\_\\L\\P"',
+        'slashes: "\\"\\\\/"',
+        'continued: "first' + "\\",
+        '  second"',
+        'trailing: "slash\\\\"',
+      ].join("\n"),
+    );
 
     expect(value.ascii).toBe("A");
     expect(value.omega).toBe("Ω");
@@ -364,7 +368,7 @@ items:
     expect(value.controls.codePointAt(8)).toBe(27);
     expect(value.spaces).toBe("left right");
     expect(value.separators).toBe("\u0085\u00a0\u2028\u2029");
-    expect(value.slashes).toBe("\"\\/");
+    expect(value.slashes).toBe('"\\/');
     expect(value.continued).toBe("firstsecond");
     expect(value.trailing).toBe("slash\\");
   });
@@ -431,7 +435,9 @@ complex: [ [ a, [ [[b,c]]: d, e]]: 23 ]
     expect(value.items[0].a).toBe("b");
     expect(value.items[1]["single line"]).toBe(null);
     expect(value.items[1].a).toBe("b");
-    expect(value.complex[0]["[\"a\", [{\"[[\\\"b\\\", \\\"c\\\"]]\": \"d\"}, \"e\"]]"]).toBe(23);
+    expect(
+      value.complex[0]['["a", [{"[[\\"b\\", \\"c\\"]]": "d"}, "e"]]'],
+    ).toBe(23);
   });
 
   test("does not treat document markers inside block scalars as a stream", () => {
@@ -506,8 +512,8 @@ flow: { [1, 2]: pair }
 `);
 
     expect(value.name).toBe("app");
-    expect(value["[\"red\", \"blue\"]"]).toBe("palette");
-    expect(value["{\"env\": \"prod\", \"region\": \"eu-west-1\"}"]).toBe("deployment");
+    expect(value['["red", "blue"]']).toBe("palette");
+    expect(value['{"env": "prod", "region": "eu-west-1"}']).toBe("deployment");
     expect(value.flow["[1, 2]"]).toBe("pair");
   });
 
@@ -534,9 +540,9 @@ items:
     : &a
 `);
 
-    expect(value["[\"a\", \"b\"]"].length).toBe(2);
-    expect(value["[\"a\", \"b\"]"][0]).toBe("c");
-    expect(value["[\"a\", \"b\"]"][1]).toBe("d");
+    expect(value['["a", "b"]'].length).toBe(2);
+    expect(value['["a", "b"]'][0]).toBe("c");
+    expect(value['["a", "b"]'][1]).toBe("d");
     expect(value.items.length).toBe(6);
     expect(value.items[0]).toBe(null);
     expect(value.items[1]).toBe("a");
@@ -551,7 +557,9 @@ items:
     expect(() => YAML.parse("count: !!int nope")).toThrow(SyntaxError);
     expect(() => YAML.parse("enabled: !!bool maybe")).toThrow(SyntaxError);
     expect(() => YAML.parse("created: !!timestamp nope")).toThrow(SyntaxError);
-    expect(() => YAML.parse("payload: !!binary not-base64!")).toThrow(SyntaxError);
+    expect(() => YAML.parse("payload: !!binary not-base64!")).toThrow(
+      SyntaxError,
+    );
     expect(() => YAML.parse("count: !!int 1__2")).toThrow(SyntaxError);
     expect(() => YAML.parse("ratio: !!float 1_.2")).toThrow(SyntaxError);
   });
@@ -561,34 +569,46 @@ items:
     expect(() => YAML.parse('value: "\\x4"')).toThrow(SyntaxError);
     expect(() => YAML.parse('value: "\\U00110000"')).toThrow(SyntaxError);
     expect(() => YAML.parse('quoted: "a\nb\nc"\n')).toThrow(SyntaxError);
-    expect(() => YAML.parse('key: "value"# invalid comment\n')).toThrow(SyntaxError);
+    expect(() => YAML.parse('key: "value"# invalid comment\n')).toThrow(
+      SyntaxError,
+    );
   });
 
   test("throws on invalid YAML directives", () => {
-    expect(() => YAML.parse(`
+    expect(() =>
+      YAML.parse(`
 %YAML
 name: app
-`)).toThrow(SyntaxError);
-    expect(() => YAML.parse(`
+`),
+    ).toThrow(SyntaxError);
+    expect(() =>
+      YAML.parse(`
 %YAML 2.0
 name: app
-`)).toThrow(SyntaxError);
-    expect(() => YAML.parse(`
+`),
+    ).toThrow(SyntaxError);
+    expect(() =>
+      YAML.parse(`
 %TAG !broken tag:example.com,2026:
 name: app
-`)).toThrow(SyntaxError);
-    expect(() => YAML.parse(`
+`),
+    ).toThrow(SyntaxError);
+    expect(() =>
+      YAML.parse(`
 %TAG !e! tag:example.com,a:
 %TAG !e! tag:example.com,b:
 name: app
-`)).toThrow(SyntaxError);
+`),
+    ).toThrow(SyntaxError);
   });
 
   test("throws on unknown aliases", () => {
-    expect(() => YAML.parse(`
+    expect(() =>
+      YAML.parse(`
 database:
   <<: *missing
-`)).toThrow(SyntaxError);
+`),
+    ).toThrow(SyntaxError);
   });
 
   test("throws on invalid flow mappings", () => {

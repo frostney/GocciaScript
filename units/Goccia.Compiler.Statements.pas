@@ -78,6 +78,7 @@ uses
   Goccia.Bytecode,
   Goccia.Bytecode.Debug,
   Goccia.Compiler.Expressions,
+  Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
   Goccia.Keywords.Reserved,
   Goccia.Token,
@@ -1567,6 +1568,97 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
+procedure CompileComputedMethodBody(const ACtx: TGocciaCompilationContext;
+  const AClassReg: UInt8; const AKeyReg: UInt8;
+  const AMethod: TGocciaClassMethod; const AIsStatic: Boolean);
+var
+  OldTemplate: TGocciaFunctionTemplate;
+  OldScope: TGocciaCompilerScope;
+  ChildTemplate: TGocciaFunctionTemplate;
+  ChildScope: TGocciaCompilerScope;
+  ChildCtx: TGocciaCompilationContext;
+  FuncIdx: UInt16;
+  FnReg, TargetReg: UInt8;
+  ProtoNameIdx: UInt16;
+  FormalCount, RestParamIndex, I: Integer;
+begin
+  OldTemplate := ACtx.Template;
+  OldScope := ACtx.Scope;
+
+  ChildTemplate := TGocciaFunctionTemplate.Create('<method [computed]>');
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.IsAsync := AMethod.IsAsync;
+  ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
+
+  ChildScope.DeclareLocal(KEYWORD_THIS, False);
+  ChildTemplate.ParameterCount := Length(AMethod.Parameters);
+
+  FormalCount := -1;
+  RestParamIndex := -1;
+  for I := 0 to High(AMethod.Parameters) do
+  begin
+    if AMethod.Parameters[I].IsRest or
+       Assigned(AMethod.Parameters[I].DefaultValue) then
+    begin
+      if FormalCount < 0 then
+        FormalCount := I;
+      if AMethod.Parameters[I].IsRest then
+        RestParamIndex := I;
+    end;
+    ChildScope.DeclareLocal(AMethod.Parameters[I].Name, False);
+  end;
+  if FormalCount < 0 then
+    FormalCount := Length(AMethod.Parameters);
+  ChildTemplate.FormalParameterCount := UInt8(FormalCount);
+  if Assigned(ACtx.FormalParameterCounts) then
+    ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
+
+  ACtx.SwapState(ChildTemplate, ChildScope);
+  EmitLineMapping(ACtx, AMethod.Line, AMethod.Column);
+
+  ChildCtx := ACtx;
+  ChildCtx.Template := ChildTemplate;
+  ChildCtx.Scope := ChildScope;
+
+  if RestParamIndex >= 0 then
+    EmitInstruction(ChildCtx, EncodeABC(OP_PACK_ARGS,
+      UInt8(ChildScope.ResolveLocal(
+        AMethod.Parameters[RestParamIndex].Name)),
+      UInt8(RestParamIndex), 0));
+
+  EmitDefaultParameters(ChildCtx, AMethod.Parameters);
+
+  ACtx.CompileFunctionBody(AMethod.Body);
+  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+
+  for I := 0 to ChildScope.UpvalueCount - 1 do
+    ChildTemplate.AddUpvalueDescriptor(
+      ChildScope.GetUpvalue(I).IsLocal,
+      ChildScope.GetUpvalue(I).Index);
+
+  ACtx.SwapState(OldTemplate, OldScope);
+  ChildScope.Free;
+
+  FuncIdx := OldTemplate.AddFunction(ChildTemplate);
+  FnReg := ACtx.Scope.AllocateRegister;
+  EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, FnReg, FuncIdx));
+
+  if AIsStatic then
+    // Static: class[key] = method
+    EmitInstruction(ACtx, EncodeABC(OP_SET_INDEX, AClassReg, AKeyReg, FnReg))
+  else
+  begin
+    // Instance: class.prototype[key] = method
+    TargetReg := ACtx.Scope.AllocateRegister;
+    ProtoNameIdx := ACtx.Template.AddConstantString(PROP_PROTOTYPE);
+    EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, TargetReg,
+      AClassReg, UInt8(ProtoNameIdx)));
+    EmitInstruction(ACtx, EncodeABC(OP_SET_INDEX, TargetReg, AKeyReg, FnReg));
+    ACtx.Scope.FreeRegister;
+  end;
+  ACtx.Scope.FreeRegister;
+end;
+
 procedure CompileComputedElements(const ACtx: TGocciaCompilationContext;
   const ATargetReg: UInt8; const AClassDef: TGocciaClassDefinition);
 var
@@ -1599,6 +1691,9 @@ begin
         else
           CompileComputedSetterBody(ACtx, ATargetReg, KeyReg,
             Elem.SetterNode, OP_DEFINE_ACCESSOR_DYNAMIC, ACCESSOR_FLAG_SETTER);
+      cekMethod:
+        CompileComputedMethodBody(ACtx, ATargetReg, KeyReg,
+          Elem.MethodNode, Elem.IsStatic);
     end;
 
     ACtx.Scope.FreeRegister;
@@ -2380,7 +2475,11 @@ begin
   if HasSuper then
   begin
     CompileDecoratorAndAccessorPass(ACtx, ADest, ClassDef, SuperReg);
-    ACtx.Scope.FreeRegister;
+    // Only free __super__ manually when there is no name binding scope —
+    // when HasNameBinding is true, __super__ lives inside the inner scope
+    // and EndScope below will free it together with the name binding local.
+    if not HasNameBinding then
+      ACtx.Scope.FreeRegister;
   end
   else
     CompileDecoratorAndAccessorPass(ACtx, ADest, ClassDef, -1);

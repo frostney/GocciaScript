@@ -52,6 +52,15 @@ type
 
 function ErrorDisplayName(const AError: TGocciaError): string;
 
+{ Formats a detailed error message with source context and caret pointer.
+  Can be used for any error source — TGocciaError, TGocciaThrowValue, etc. }
+function FormatErrorWithSourceContext(
+  const ADisplayName, AMessage, AFileName: string;
+  const ALine, AColumn: Integer;
+  const ASourceLines: TStringList;
+  const AUseColor: Boolean = False;
+  const ASuggestion: string = ''): string;
+
 implementation
 
 uses
@@ -141,49 +150,47 @@ begin
   CopySourceLines(AOriginalSourceLines);
 end;
 
-function TGocciaError.GetDetailedMessage: string;
-begin
-  Result := GetDetailedMessage(False);
-end;
-
-function TGocciaError.GetDetailedMessage(const AUseColor: Boolean): string;
+function FormatErrorWithSourceContext(
+  const ADisplayName, AMessage, AFileName: string;
+  const ALine, AColumn: Integer;
+  const ASourceLines: TStringList;
+  const AUseColor: Boolean = False;
+  const ASuggestion: string = ''): string;
 var
   Buffer: TStringBuffer;
-  DisplayName: string;
   GutterWidth, LineNum, I: Integer;
   FirstContextLine, LastContextLine: Integer;
   LineStr, Gutter, CaretStr: string;
 begin
   Buffer := TStringBuffer.Create(512);
 
-  // Error header: SyntaxError: message
-  DisplayName := ErrorDisplayName(Self);
-  Buffer.Append(Colorize(DisplayName + ': ', ANSI_BOLD + ANSI_RED, AUseColor));
-  Buffer.Append(Colorize(Message, ANSI_BOLD, AUseColor));
+  // Error header: TypeError: message
+  Buffer.Append(Colorize(ADisplayName + ': ', ANSI_BOLD + ANSI_RED, AUseColor));
+  Buffer.Append(Colorize(AMessage, ANSI_BOLD, AUseColor));
   Buffer.Append(sLineBreak);
 
   // Suggestion line
-  if FSuggestion <> '' then
+  if ASuggestion <> '' then
   begin
     Buffer.Append('  ');
-    Buffer.Append(Colorize('Suggestion: ' + FSuggestion, ANSI_YELLOW, AUseColor));
+    Buffer.Append(Colorize('Suggestion: ' + ASuggestion, ANSI_YELLOW, AUseColor));
     Buffer.Append(sLineBreak);
   end;
 
   // Location: --> file:line:column
   Buffer.Append('  ');
-  Buffer.Append(Colorize(Format('--> %s:%d:%d', [FFileName, FLine, FColumn]), ANSI_CYAN, AUseColor));
+  Buffer.Append(Colorize(Format('--> %s:%d:%d', [AFileName, ALine, AColumn]), ANSI_CYAN, AUseColor));
   Buffer.Append(sLineBreak);
 
   // Source context lines
-  if Assigned(FSourceLines) and (FLine > 0) and (FLine <= FSourceLines.Count) then
+  if Assigned(ASourceLines) and (ALine > 0) and (ALine <= ASourceLines.Count) then
   begin
-    FirstContextLine := FLine - CONTEXT_LINES_BEFORE;
+    FirstContextLine := ALine - CONTEXT_LINES_BEFORE;
     if FirstContextLine < 1 then
       FirstContextLine := 1;
-    LastContextLine := FLine + CONTEXT_LINES_AFTER;
-    if LastContextLine > FSourceLines.Count then
-      LastContextLine := FSourceLines.Count;
+    LastContextLine := ALine + CONTEXT_LINES_AFTER;
+    if LastContextLine > ASourceLines.Count then
+      LastContextLine := ASourceLines.Count;
 
     // Calculate gutter width based on largest line number
     GutterWidth := Length(IntToStr(LastContextLine));
@@ -191,17 +198,17 @@ begin
       GutterWidth := 4;
 
     // Lines before
-    for LineNum := FirstContextLine to FLine - 1 do
+    for LineNum := FirstContextLine to ALine - 1 do
     begin
       Gutter := Format('%' + IntToStr(GutterWidth) + 'd | ', [LineNum]);
       Buffer.Append(Colorize(Gutter, ANSI_DIM, AUseColor));
-      Buffer.Append(FSourceLines[LineNum - 1]);
+      Buffer.Append(ASourceLines[LineNum - 1]);
       Buffer.Append(sLineBreak);
     end;
 
     // Error line (bold)
-    LineStr := FSourceLines[FLine - 1];
-    Gutter := Format('%' + IntToStr(GutterWidth) + 'd | ', [FLine]);
+    LineStr := ASourceLines[ALine - 1];
+    Gutter := Format('%' + IntToStr(GutterWidth) + 'd | ', [ALine]);
     Buffer.Append(Colorize(Gutter, ANSI_DIM, AUseColor));
     Buffer.Append(Colorize(LineStr, ANSI_BOLD, AUseColor));
     Buffer.Append(sLineBreak);
@@ -211,7 +218,7 @@ begin
     for I := 1 to GutterWidth do
       CaretStr := CaretStr + ' ';
     CaretStr := CaretStr + ' | ';
-    for I := 1 to FColumn - 1 do
+    for I := 1 to AColumn - 1 do
       if (I <= Length(LineStr)) and (LineStr[I] = #9) then
         CaretStr := CaretStr + #9
       else
@@ -220,16 +227,28 @@ begin
     Buffer.Append(sLineBreak);
 
     // Lines after
-    for LineNum := FLine + 1 to LastContextLine do
+    for LineNum := ALine + 1 to LastContextLine do
     begin
       Gutter := Format('%' + IntToStr(GutterWidth) + 'd | ', [LineNum]);
       Buffer.Append(Colorize(Gutter, ANSI_DIM, AUseColor));
-      Buffer.Append(FSourceLines[LineNum - 1]);
+      Buffer.Append(ASourceLines[LineNum - 1]);
       Buffer.Append(sLineBreak);
     end;
   end;
 
   Result := Buffer.ToString;
+end;
+
+function TGocciaError.GetDetailedMessage: string;
+begin
+  Result := GetDetailedMessage(False);
+end;
+
+function TGocciaError.GetDetailedMessage(const AUseColor: Boolean): string;
+begin
+  Result := FormatErrorWithSourceContext(
+    ErrorDisplayName(Self), Message, FFileName,
+    FLine, FColumn, FSourceLines, AUseColor, FSuggestion);
 end;
 
 end.

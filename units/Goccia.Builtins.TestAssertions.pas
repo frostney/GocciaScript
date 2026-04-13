@@ -289,6 +289,28 @@ uses
   Goccia.Values.PromiseValue,
   Goccia.Values.SetValue;
 
+function FormatThrowValueDetail(const AValue: TGocciaValue): string;
+var
+  MsgValue, StackValue: TGocciaValue;
+begin
+  if AValue is TGocciaObjectValue then
+  begin
+    MsgValue := TGocciaObjectValue(AValue).GetProperty(PROP_MESSAGE);
+    StackValue := TGocciaObjectValue(AValue).GetProperty(PROP_STACK);
+    if Assigned(StackValue) and (StackValue is TGocciaStringLiteralValue) and
+       (TGocciaStringLiteralValue(StackValue).Value <> '') then
+      Result := TGocciaStringLiteralValue(StackValue).Value
+    else if Assigned(MsgValue) and (MsgValue is TGocciaStringLiteralValue) then
+      Result := TGocciaStringLiteralValue(MsgValue).Value
+    else
+      Result := AValue.ToStringLiteral.Value;
+  end
+  else if Assigned(AValue) then
+    Result := AValue.ToStringLiteral.Value
+  else
+    Result := '(unknown error)';
+end;
+
 { TGocciaTestSuite }
 
 procedure AddTempRootIfNeeded(const AValue: TGocciaValue);
@@ -2747,6 +2769,7 @@ var
   AfterCallbacks: TGocciaArgumentsCollection;
   TestResult: TGocciaValue;
   RejectionReason: string;
+  ExceptionDetail, ExceptionSummary: string;
   FailureRecorded: Boolean;
   EffectiveSuiteName: string;
   HookFailed: Boolean;
@@ -2894,15 +2917,30 @@ begin
             begin
               if Assigned(TGocciaMicrotaskQueue.Instance) then
                 TGocciaMicrotaskQueue.Instance.ClearQueue;
-              AssertionFailed('test execution', 'Test threw an exception: ' +
-                E.Message);
+              if E is TGocciaError then
+              begin
+                ExceptionDetail := TGocciaError(E).GetDetailedMessage;
+                ExceptionSummary := E.Message;
+              end
+              else if E is TGocciaThrowValue then
+              begin
+                ExceptionDetail := FormatThrowValueDetail(
+                  TGocciaThrowValue(E).Value);
+                ExceptionSummary := ExceptionDetail;
+              end
+              else
+              begin
+                ExceptionDetail := E.Message;
+                ExceptionSummary := E.Message;
+              end;
+              AssertionFailed('test execution', ExceptionDetail);
               if FTestStats.CurrentSuiteName <> '' then
                 AFailedTestDetails.Add('Test "' + TestCase.Name +
                   '" in suite "' + FTestStats.CurrentSuiteName + '": ' +
-                  E.Message)
+                  ExceptionSummary)
               else
                 AFailedTestDetails.Add('Test "' + TestCase.Name + '": ' +
-                  E.Message);
+                  ExceptionSummary);
               FailureRecorded := True;
             end;
           end;

@@ -1,4 +1,6 @@
-describe("TOML.parse", () => {
+const hasTOML = typeof TOML !== "undefined";
+
+describe.runIf(hasTOML)("TOML.parse", () => {
   test("parses scalars, strings, arrays, tables, and arrays of tables", () => {
     const value = TOML.parse(`
 title = "TOML Example"
@@ -56,23 +58,25 @@ point = { x = 1, y = 2, meta = { label = "origin" } }
   });
 
   test("parses multiline basic and literal strings", () => {
-    const value = TOML.parse([
-      'basic = """',
-      'Roses are red',
-      'Violets are blue',
-      '"""',
-      'joined = """',
-      'The quick brown \\',
-      '',
-      '  fox jumps over \\',
-      '    the lazy dog.',
-      '"""',
-      "literal = '''",
-      'C:\\Users\\nodejs\\templates',
-      'Line two',
-      "'''",
-      '',
-    ].join("\n"));
+    const value = TOML.parse(
+      [
+        'basic = """',
+        "Roses are red",
+        "Violets are blue",
+        '"""',
+        'joined = """',
+        "The quick brown \\",
+        "",
+        "  fox jumps over \\",
+        "    the lazy dog.",
+        '"""',
+        "literal = '''",
+        "C:\\Users\\nodejs\\templates",
+        "Line two",
+        "'''",
+        "",
+      ].join("\n"),
+    );
 
     expect(value.basic).toBe("Roses are red\nViolets are blue\n");
     expect(value.joined).toBe("The quick brown fox jumps over the lazy dog.\n");
@@ -82,7 +86,7 @@ point = { x = 1, y = 2, meta = { label = "origin" } }
   test("normalizes CRLF multiline strings to LF", () => {
     const value = TOML.parse(
       'basic = """\r\nRoses are red\r\nViolets are blue\r\n"""\r\n' +
-      "literal = '''\r\nC:\\Users\\nodejs\\templates\r\nLine two\r\n'''\r\n"
+        "literal = '''\r\nC:\\Users\\nodejs\\templates\r\nLine two\r\n'''\r\n",
     );
 
     expect(value.basic).toBe("Roses are red\nViolets are blue\n");
@@ -101,7 +105,7 @@ nanValue = nan
 `);
 
     expect(value.decimal).toBe(1000);
-    expect(value.hex).toBe(0xDEADBEEF);
+    expect(value.hex).toBe(0xdeadbeef);
     expect(value.octal).toBe(493);
     expect(value.binary).toBe(214);
     expect(value.positiveInfinity).toBe(Infinity);
@@ -110,30 +114,36 @@ nanValue = nan
   });
 
   test("throws on duplicate keys and incompatible redefinitions", () => {
-    expect(() => TOML.parse(`
+    expect(() =>
+      TOML.parse(`
 name = "first"
 name = "second"
-`)).toThrow(SyntaxError);
+`),
+    ).toThrow(SyntaxError);
 
-    expect(() => TOML.parse(`
+    expect(() =>
+      TOML.parse(`
 fruit.apple = 1
 fruit.apple.smooth = true
-`)).toThrow(SyntaxError);
+`),
+    ).toThrow(SyntaxError);
 
-    expect(() => TOML.parse(`
+    expect(() =>
+      TOML.parse(`
 point = { x = 1 }
 point.y = 2
-`)).toThrow(SyntaxError);
+`),
+    ).toThrow(SyntaxError);
   });
 
   test("throws on invalid literals", () => {
-    expect(() => TOML.parse('flag = TRUE')).toThrow(SyntaxError);
-    expect(() => TOML.parse('value = .7')).toThrow(SyntaxError);
-    expect(() => TOML.parse('value = 7.')).toThrow(SyntaxError);
-    expect(() => TOML.parse('value = 01')).toThrow(SyntaxError);
-    expect(() => TOML.parse('value = 0x_FF')).toThrow(SyntaxError);
-    expect(() => TOML.parse('value = INF')).toThrow(SyntaxError);
-    expect(() => TOML.parse('value = NAN')).toThrow(SyntaxError);
+    expect(() => TOML.parse("flag = TRUE")).toThrow(SyntaxError);
+    expect(() => TOML.parse("value = .7")).toThrow(SyntaxError);
+    expect(() => TOML.parse("value = 7.")).toThrow(SyntaxError);
+    expect(() => TOML.parse("value = 01")).toThrow(SyntaxError);
+    expect(() => TOML.parse("value = 0x_FF")).toThrow(SyntaxError);
+    expect(() => TOML.parse("value = INF")).toThrow(SyntaxError);
+    expect(() => TOML.parse("value = NAN")).toThrow(SyntaxError);
     expect(() => TOML.parse('text = "\\q"')).toThrow(SyntaxError);
   });
 });

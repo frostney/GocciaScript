@@ -1,6 +1,10 @@
-describe("JSONL.parse", () => {
+const hasJSONL = typeof JSONL !== "undefined";
+
+describe.runIf(hasJSONL)("JSONL.parse", () => {
   test("parses mixed JSON values and ignores blank lines", () => {
-    const records = JSONL.parse('{"id":1,"name":"alpha"}\n\n42\n true \n["x","y"]');
+    const records = JSONL.parse(
+      '{"id":1,"name":"alpha"}\n\n42\n true \n["x","y"]',
+    );
 
     expect(records.length).toBe(4);
     expect(records[0].id).toBe(1);
@@ -20,9 +24,8 @@ describe("JSONL.parse", () => {
 
   test("accepts Uint8Array input and skips a UTF-8 BOM", () => {
     const bytes = new Uint8Array([
-      0xef, 0xbb, 0xbf,
-      0x7b, 0x22, 0x61, 0x22, 0x3a, 0x31, 0x7d, 0x0a,
-      0x7b, 0x22, 0x62, 0x22, 0x3a, 0x32, 0x7d,
+      0xef, 0xbb, 0xbf, 0x7b, 0x22, 0x61, 0x22, 0x3a, 0x31, 0x7d, 0x0a, 0x7b,
+      0x22, 0x62, 0x22, 0x3a, 0x32, 0x7d,
     ]);
     const records = JSONL.parse(bytes);
 

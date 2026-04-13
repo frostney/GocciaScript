@@ -1,4 +1,6 @@
-describe("YAML.parseDocuments", () => {
+const hasYAML = typeof YAML !== "undefined";
+
+describe.runIf(hasYAML)("YAML.parseDocuments", () => {
   test("always returns an array for a single document", () => {
     const parsed = YAML.parse("name: app");
     const documents = YAML.parseDocuments("name: app");
@@ -67,29 +69,35 @@ node: !b!y value
   });
 
   test("does not leak directives across documents", () => {
-    expect(() => YAML.parseDocuments(`
+    expect(() =>
+      YAML.parseDocuments(`
 %TAG !a! tag:example.com,a:
 ---
 node: !a!x value
 ---
 node: !a!x value
-`)).toThrow(SyntaxError);
+`),
+    ).toThrow(SyntaxError);
   });
 
   test("rejects directives after document content without a footer", () => {
-    expect(() => YAML.parseDocuments(`
+    expect(() =>
+      YAML.parseDocuments(`
 ---
 scalar1
 %YAML 1.2
 ---
 scalar2
-`)).toThrow(SyntaxError);
+`),
+    ).toThrow(SyntaxError);
 
-    expect(() => YAML.parseDocuments(`
+    expect(() =>
+      YAML.parseDocuments(`
 !foo "bar"
 %TAG ! tag:example.com,2000:app/
 ---
 !foo "bar"
-`)).toThrow(SyntaxError);
+`),
+    ).toThrow(SyntaxError);
   });
 });

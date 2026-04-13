@@ -497,6 +497,7 @@ var
   Accessor: TGocciaPropertyDescriptorAccessor;
   Args: TGocciaArgumentsCollection;
   Proto: TGocciaObjectValue;
+  ChainDepth: Integer;
 begin
   if FFrozen then
     ThrowTypeError('Cannot assign to read only property ''' + AName + ''' of frozen object');
@@ -532,8 +533,11 @@ begin
 
   // ES2026 §10.1.9 step 2-3: Walk prototype chain for inherited accessor descriptors
   Proto := FPrototype;
+  ChainDepth := 0;
   while Assigned(Proto) do
   begin
+    Inc(ChainDepth);
+    if ChainDepth > 256 then Break; // Guard against prototype chain cycles
     if Proto.FProperties.TryGetValue(AName, Descriptor) then
     begin
       if Descriptor is TGocciaPropertyDescriptorAccessor then

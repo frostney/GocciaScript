@@ -14,11 +14,13 @@ uses
   Goccia.Bytecode.Binary,
   Goccia.Bytecode.Module,
   Goccia.Compiler,
+  Goccia.Constants.PropertyNames,
   Goccia.Coverage,
   Goccia.Coverage.Report,
   Goccia.Engine,
   Goccia.Engine.BytecodeBackend,
   Goccia.Error,
+  Goccia.Error.Detail,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.JSX.Transformer,
@@ -35,7 +37,10 @@ uses
   Goccia.TextFiles,
   Goccia.Timeout,
   Goccia.Token,
+  Goccia.Values.Error,
+  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
+  Goccia.VM.Exception,
 
   FileUtils in 'units/FileUtils.pas';
 
@@ -555,6 +560,10 @@ begin
           PrintJSONError(E, Report, OutputLines, AFileName)
         else if E is TGocciaError then
           WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+        else if E is TGocciaThrowValue then
+          WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, ASource, IsColorTerminal))
+        else if E is EGocciaBytecodeThrow then
+          WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue, AFileName, ASource, IsColorTerminal))
         else
           WriteLn('Fatal error: ', E.Message);
         ExitCode := 1;
@@ -951,6 +960,12 @@ begin
           if GJsonOutput then
             WriteLn(BuildErrorJSON('', ExceptionToScriptLoaderErrorInfo(E),
               Default(TScriptLoaderTiming)))
+          else if E is TGocciaError then
+            WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+          else if E is TGocciaThrowValue then
+            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, '', nil, IsColorTerminal))
+          else if E is EGocciaBytecodeThrow then
+            WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue, '', nil, IsColorTerminal))
           else
             WriteLn('Error: ', E.Message);
           ExitCode := 1;
