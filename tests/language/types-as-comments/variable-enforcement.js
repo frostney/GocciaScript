@@ -91,8 +91,7 @@ test("error message includes type names", () => {
   }
   expect(err !== null).toBe(true);
   expect(err instanceof TypeError).toBe(true);
-  expect(err.message).toContain("Type 'string' is not assignable to type 'number'");
-  expect(err.message).toContain("Suggestion:");
+  expect(err.message).toBe("Type 'string' is not assignable to type 'number'");
 });
 
 }); // describe
