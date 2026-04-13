@@ -12,6 +12,7 @@ uses
   Goccia.Builtins.Base,
   Goccia.Builtins.Benchmark,
   Goccia.Builtins.Console,
+  Goccia.Builtins.DisposableStack,
   Goccia.Builtins.GlobalArray,
   Goccia.Builtins.GlobalArrayBuffer,
   Goccia.Builtins.GlobalFFI,
@@ -86,6 +87,7 @@ type
     FBuiltinTextDecoder: TGocciaGlobalTextDecoder;
     FBuiltinURL: TGocciaGlobalURL;
     FBuiltinURLSearchParams: TGocciaGlobalURLSearchParams;
+    FBuiltinDisposableStack: TGocciaBuiltinDisposableStack;
 
     procedure PinSingletons;
     procedure RegisterBuiltIns;
@@ -242,6 +244,7 @@ begin
   FBuiltinTextDecoder.Free;
   FBuiltinURL.Free;
   FBuiltinURLSearchParams.Free;
+  FBuiltinDisposableStack.Free;
   inherited;
 end;
 
@@ -295,6 +298,7 @@ begin
 
   FBuiltinGlobalString := TGocciaGlobalString.Create(CONSTRUCTOR_STRING, Scope, FThrowError);
   FBuiltinGlobals := TGocciaGlobals.Create('Globals', Scope, FThrowError);
+  FBuiltinDisposableStack := TGocciaBuiltinDisposableStack.Create(CONSTRUCTOR_DISPOSABLE_STACK, Scope, FThrowError);
   Scope.DefineLexicalBinding(CONSTRUCTOR_ITERATOR, TGocciaIteratorValue.CreateGlobalObject, dtConst);
   RegisterBuiltinConstructors;
 end;

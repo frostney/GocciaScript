@@ -42,6 +42,10 @@ const
   CONSTRUCTOR_TEXT_ENCODER = 'TextEncoder';
   CONSTRUCTOR_TEXT_DECODER = 'TextDecoder';
 
+  CONSTRUCTOR_DISPOSABLE_STACK       = 'DisposableStack';
+  CONSTRUCTOR_ASYNC_DISPOSABLE_STACK = 'AsyncDisposableStack';
+  CONSTRUCTOR_SUPPRESSED_ERROR       = 'SuppressedError';
+
 implementation
 
 end.

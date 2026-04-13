@@ -252,6 +252,8 @@ begin
                 Context.OnError := FOnError;
                 Context.LoadModule := LoadModule;
                 Context.CurrentFilePath := ResolvedPath;
+                Context.CoverageEnabled := False;
+                Context.DisposalTracker := nil;
 
                 for I := 0 to ProgramNode.Body.Count - 1 do
                   EvaluateStatement(ProgramNode.Body[I], Context);

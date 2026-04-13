@@ -12,6 +12,7 @@ uses
   Goccia.Builtins.Base,
   Goccia.Builtins.Benchmark,
   Goccia.Builtins.Console,
+  Goccia.Builtins.DisposableStack,
   Goccia.Builtins.GlobalArray,
   Goccia.Builtins.GlobalArrayBuffer,
   Goccia.Builtins.GlobalFFI,
@@ -130,6 +131,7 @@ type
     FBuiltinTextDecoder: TGocciaGlobalTextDecoder;
     FBuiltinURL: TGocciaGlobalURL;
     FBuiltinURLSearchParams: TGocciaGlobalURLSearchParams;
+    FBuiltinDisposableStack: TGocciaBuiltinDisposableStack;
     FPreviousExceptionMask: TFPUExceptionMask;
     FPreprocessors: TGocciaPreprocessors;
     FCompatibility: TGocciaCompatibilityFlags;
@@ -358,6 +360,7 @@ begin
     FBuiltinTextDecoder.Free;
     FBuiltinURL.Free;
     FBuiltinURLSearchParams.Free;
+    FBuiltinDisposableStack.Free;
     ClearImportMetaCache;
     FLastSourceMap.Free;
     FInjectedGlobals.Free;
@@ -422,6 +425,7 @@ begin
   // Always-registered built-ins
   FBuiltinGlobalString := TGocciaGlobalString.Create(CONSTRUCTOR_STRING, Scope, ThrowError);
   FBuiltinGlobals := TGocciaGlobals.Create('Globals', Scope, ThrowError);
+  FBuiltinDisposableStack := TGocciaBuiltinDisposableStack.Create('DisposableStack', Scope, ThrowError);
   Scope.DefineLexicalBinding(CONSTRUCTOR_ITERATOR, TGocciaIteratorValue.CreateGlobalObject, dtConst);
   RegisterBuiltinConstructors;
 end;

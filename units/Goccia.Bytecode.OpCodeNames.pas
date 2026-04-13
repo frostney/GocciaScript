@@ -144,6 +144,8 @@ begin
     OP_AWAIT:                          Result := 'OP_AWAIT';
     OP_IMPORT_META:                    Result := 'OP_IMPORT_META';
     OP_DYNAMIC_IMPORT:                 Result := 'OP_DYNAMIC_IMPORT';
+    OP_USING_INIT:                     Result := 'OP_USING_INIT';
+    OP_USING_DISPOSE:                  Result := 'OP_USING_DISPOSE';
   else
     Result := Format('OP_UNKNOWN_%d', [AOp]);
   end;

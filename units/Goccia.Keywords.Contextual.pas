@@ -22,6 +22,9 @@ const
   KEYWORD_OF           = 'of';
   KEYWORD_YIELD        = 'yield';
 
+  // Explicit Resource Management
+  KEYWORD_USING        = 'using';
+
   // Types as Comments (parsed, ignored at runtime)
   KEYWORD_TYPE         = 'type';
   KEYWORD_INTERFACE    = 'interface';

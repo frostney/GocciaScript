@@ -204,6 +204,7 @@ uses
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Coverage,
+  Goccia.DisposalTracker,
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.Evaluator.Decorators,
@@ -5265,6 +5266,105 @@ begin
         finally
           if Assigned(TGarbageCollector.Instance) then
             TGarbageCollector.Instance.RemoveTempRoot(DynImportPromise);
+        end;
+      end;
+
+      // TC39 Explicit Resource Management: OP_USING_INIT
+      // A=dest (dispose method), B=value, C=flags (0=sync, 1=async)
+      // Validates value has [Symbol.dispose]/[Symbol.asyncDispose], stores method in A.
+      // For null/undefined, stores null. Throws TypeError if not disposable.
+      OP_USING_INIT:
+      begin
+        LeftValue := RegisterToValue(FRegisters[B]);
+        if (LeftValue is TGocciaUndefinedLiteralValue) or
+           (LeftValue is TGocciaNullLiteralValue) then
+          FRegisters[A] := RegisterNull
+        else
+        begin
+          if C = 1 then
+            RightValue := GetDisposeMethod(LeftValue, dhAsyncDispose)
+          else
+            RightValue := GetDisposeMethod(LeftValue, dhSyncDispose);
+          if not Assigned(RightValue) then
+          begin
+            if C = 1 then
+              raise EGocciaBytecodeThrow.Create(
+                CreateErrorObject(TYPE_ERROR_NAME,
+                  'Value is not disposable (missing [Symbol.asyncDispose] and [Symbol.dispose])'))
+            else
+              raise EGocciaBytecodeThrow.Create(
+                CreateErrorObject(TYPE_ERROR_NAME,
+                  'Value is not disposable (missing [Symbol.dispose])'));
+          end;
+          SetRegister(A, RightValue);
+        end;
+      end;
+
+      // TC39 Explicit Resource Management: OP_USING_DISPOSE
+      // A=errorAccum, B=disposeMethod, C=resource
+      // Calls disposeMethod.call(resource). On error, wraps with SuppressedError
+      // if errorAccum already holds an error.
+      // TC39 Explicit Resource Management: OP_USING_DISPOSE
+      // A=errorAccum, B=disposeMethod (overwritten with call result), C=resource
+      // Calls disposeMethod.call(resource). Stores result in B for OP_AWAIT.
+      // On error, wraps with SuppressedError in A.
+      OP_USING_DISPOSE:
+      begin
+        LeftValue := RegisterToValue(FRegisters[B]); // dispose method
+        if Assigned(LeftValue) and not (LeftValue is TGocciaNullLiteralValue) and
+           not (LeftValue is TGocciaUndefinedLiteralValue) and
+           LeftValue.IsCallable then
+        begin
+          try
+            // Clear B before the call so that if it throws, the follow-up
+            // OP_AWAIT sees null instead of the stale dispose function.
+            FRegisters[B] := RegisterNull;
+            RightValue := TGocciaFunctionBase(LeftValue).CallNoArgs(
+              RegisterToValue(FRegisters[C]));
+            // Store result in B so a follow-up OP_AWAIT can await it
+            if Assigned(RightValue) then
+              SetRegister(B, RightValue);
+          except
+            on E: EGocciaBytecodeThrow do
+            begin
+              RightValue := RegisterToValue(FRegisters[A]);
+              if Assigned(RightValue) and
+                 not (RightValue is TGocciaNullLiteralValue) and
+                 not (RightValue is TGocciaUndefinedLiteralValue) then
+                SetRegister(A, CreateSuppressedErrorObject(E.ThrownValue, RightValue))
+              else
+                SetRegister(A, E.ThrownValue);
+            end;
+            on E: TGocciaThrowValue do
+            begin
+              RightValue := RegisterToValue(FRegisters[A]);
+              if Assigned(RightValue) and
+                 not (RightValue is TGocciaNullLiteralValue) and
+                 not (RightValue is TGocciaUndefinedLiteralValue) then
+                SetRegister(A, CreateSuppressedErrorObject(E.Value, RightValue))
+              else
+                SetRegister(A, E.Value);
+            end;
+            on E: Exception do
+            begin
+              // Preserve typed error names for native Goccia exceptions
+              if E is TGocciaTypeError then
+                LeftValue := CreateErrorObject(TYPE_ERROR_NAME, E.Message)
+              else if E is TGocciaReferenceError then
+                LeftValue := CreateErrorObject(REFERENCE_ERROR_NAME, E.Message)
+              else if E is TGocciaSyntaxError then
+                LeftValue := CreateErrorObject(SYNTAX_ERROR_NAME, E.Message)
+              else
+                LeftValue := CreateErrorObject(ERROR_NAME, E.Message);
+              RightValue := RegisterToValue(FRegisters[A]);
+              if Assigned(RightValue) and
+                 not (RightValue is TGocciaNullLiteralValue) and
+                 not (RightValue is TGocciaUndefinedLiteralValue) then
+                SetRegister(A, CreateSuppressedErrorObject(LeftValue, RightValue))
+              else
+                SetRegister(A, LeftValue);
+            end;
+          end;
         end;
       end;
 
