@@ -34,8 +34,8 @@ uses
 
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Evaluator,
   Goccia.GarbageCollector,
-  Goccia.MicrotaskQueue,
   Goccia.Utils,
   Goccia.Utils.Arrays,
   Goccia.Values.ArrayValue,
@@ -333,45 +333,11 @@ var
   IteratorMethod, IteratorObj, NextMethod, NextResult, DoneValue: TGocciaValue;
   Iterator: TGocciaIteratorValue;
   IterResult: TGocciaObjectValue;
-  AwaitedPromise: TGocciaPromiseValue;
   EmptyArgs, MapArgs, ConstructorArgs: TGocciaArgumentsCollection;
   Mapping, UseConstructor: Boolean;
   K, Len: Integer;
   LengthValue: TGocciaValue;
   GC: TGarbageCollector;
-
-  function AwaitValue(const AValue: TGocciaValue): TGocciaValue;
-  begin
-    if AValue is TGocciaPromiseValue then
-    begin
-      AwaitedPromise := TGocciaPromiseValue(AValue);
-      if Assigned(GC) then
-        GC.AddTempRoot(AwaitedPromise);
-      try
-        // ES2026 §27.7.5.3: Drain microtask queue for both pending and
-        // already-settled promises to introduce a microtask boundary
-        if Assigned(TGocciaMicrotaskQueue.Instance) then
-          TGocciaMicrotaskQueue.Instance.DrainQueue;
-        if AwaitedPromise.State = gpsFulfilled then
-          Result := AwaitedPromise.PromiseResult
-        else if AwaitedPromise.State = gpsRejected then
-          raise TGocciaThrowValue.Create(AwaitedPromise.PromiseResult)
-        else
-          ThrowTypeError('await: Promise did not settle after microtask drain');
-      finally
-        if Assigned(GC) then
-          GC.RemoveTempRoot(AwaitedPromise);
-      end;
-    end
-    else
-    begin
-      // ES2026 §27.7.5.3 step 2: Await wraps the value in Promise.resolve(),
-      // introducing a microtask boundary even for non-promise values
-      if Assigned(TGocciaMicrotaskQueue.Instance) then
-        TGocciaMicrotaskQueue.Instance.DrainQueue;
-      Result := AValue;
-    end;
-  end;
 
   procedure AddElement(const AIndex: Integer; const AValue: TGocciaValue);
   begin
