@@ -402,7 +402,7 @@ The PR workflow (`.github/workflows/pr.yml`) includes shell-level smoke tests th
 | Stdin smoke tests | Piped input executes correctly in both interpreted and bytecode modes |
 | BenchmarkRunner output | `--format=json` produces valid JSON with benchmark structure |
 
-These tests do not require building from source -- they download pre-built binaries from the build job. To add a new CLI behavior check, add a step to the appropriate job in `pr.yml`.
+This table is non-exhaustive — the [pr.yml workflow](../.github/workflows/pr.yml) is the source of truth. The intent is to check all CLI flags, all parser error display paths, and all output format correctness. To add a new CLI behavior check, add a step to the appropriate job in `pr.yml`.
 
 ## Pascal Unit Tests (Tertiary)
 
