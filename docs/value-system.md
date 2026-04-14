@@ -679,9 +679,8 @@ The GC design rationale (why mark-and-sweep, why not reference counting, AST lit
 
 See [Errors](errors.md) for the complete list of error types, user-facing display format, and JSON output envelope.
 
-`TGocciaError` carries JavaScript error information:
+JavaScript error objects are represented as `TGocciaObjectValue` instances with `name`, `message`, and `stack` string properties. Error constructors (`new TypeError(...)`, `new RangeError(...)`, etc.) create these objects via `CreateErrorObject` in `Goccia.Values.ErrorHelper.pas`.
 
-- `Name` — Error type (`Error`, `TypeError`, `ReferenceError`, `RangeError`)
-- `Message` — Error description
+Throwing is implemented via `TGocciaThrowValue`, a Pascal `Exception` subclass that wraps any `TGocciaValue` (the thrown value). The evaluator catches `TGocciaThrowValue` and extracts the wrapped value for `catch` blocks.
 
-Error constructors are registered as globals, creating `TGocciaError` instances that can be `throw`n and `catch`ed.
+`TGocciaError` is a separate Pascal `Exception` subclass (not a `TGocciaValue`) used for parser and lexer errors (`TGocciaSyntaxError`, `TGocciaLexerError`, `TGocciaRuntimeError`). These are internal Pascal exceptions, not JavaScript error objects.
