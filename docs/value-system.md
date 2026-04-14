@@ -617,15 +617,15 @@ Self-references in initializers are supported via a child scope that binds each 
 
 ### Number Representation
 
-Numbers store a single `Double` value. Special values (`NaN`, `Infinity`, `-Infinity`, `-0`) are handled via IEEE 754 directly with property accessors (`IsNaN`, `IsInfinity`, `IsNegativeZero`).
+Numbers are represented by a single `Double` payload (`FValue`). Special values (`NaN`, `Infinity`, `-Infinity`, `-0`) are detected via property accessors (`IsNaN`, `IsInfinity`, `IsNegativeZero`) that delegate to `Math.IsNaN`, `Math.IsInfinite`, and an endian-neutral sign-bit check — the same helpers described in the [Numbers](#numbers) section above.
 
-**Why property accessors for special values?**
+**Why property accessors matter:**
 
-- **NaN identity** — IEEE 754 `NaN ≠ NaN`, but JavaScript needs `NaN` to be identifiable. A dedicated enum avoids floating-point comparison pitfalls.
-- **Negative zero** — `-0` and `+0` are equal in IEEE 754 but distinguishable in JavaScript (`Object.is(-0, +0)` is `false`). Explicit tracking prevents this from being lost.
-- **Display correctness** — `NaN.toString()` must return `"NaN"`, not some floating-point artifact.
+- **NaN identity** — IEEE 754 `NaN ≠ NaN`, but JavaScript operations need reliable classification. Always use `IsNaN` rather than raw numeric comparison.
+- **Negative zero** — `-0` and `+0` are equal in IEEE 754 but distinguishable in JavaScript (`Object.is(-0, +0)` is `false`). The `IsNegativeZero` accessor encapsulates the sign-bit check.
+- **Display correctness** — `NaN.toString()` must return `"NaN"`, not a floating-point artifact. The accessors ensure correct string conversion.
 
-**Pitfall: `Value = 0` for special numbers.** Since `NaN`, `Infinity`, `-Infinity`, and `-0` all store `FValue = 0.0`, any code checking `Value = 0` must first verify the value isn't one of these special types. The `IsActualZero` helper in the arithmetic evaluator encapsulates this check: `(Value = 0) and not IsNaN and not IsInfinite`. Similarly, the `NumericRank` helper in `Goccia.Values.ArrayValue.pas` maps each special value to a distinct `Double` for correct sort ordering.
+**Pitfall: raw `Value = 0` checks.** IEEE 754 `NaN` and `Infinity` values have specific bit patterns, but any code comparing `Value = 0` should also guard against negative zero. The `IsActualZero` helper in the arithmetic evaluator encapsulates this: `(Value = 0) and not IsNaN and not IsInfinite`. Similarly, the `NumericRank` helper in `Goccia.Values.ArrayValue.pas` maps each special value to a distinct sort key.
 
 ### `this` Binding Design
 
