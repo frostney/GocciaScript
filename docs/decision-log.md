@@ -5,7 +5,7 @@ Chronological record of key architectural and implementation decisions, newest f
 ## How to add an entry
 
 ```markdown
-**YYYY-MM-DD** · `area` — Summary of the decision and why. [#PR](../../pull/N). [detail link](file.md#anchor).
+**YYYY-MM-DD** · `area` — Summary of the decision and why. [#PR](https://github.com/frostney/GocciaScript/pull/N). [detail link](file.md#anchor).
 ```
 
 - **Date** — When the decision was made
@@ -17,15 +17,15 @@ Chronological record of key architectural and implementation decisions, newest f
 
 **2026-03-25** · `bytecode` — Unify heap object hierarchy. `TGocciaValue` now inherits from `TGocciaCompiledHeapObject`, removing the bridge between interpreter and bytecode value models. [bytecode-vm.md § Design Rationale](bytecode-vm.md#design-rationale).
 
-**2026-03-18** · `data-structures` — Custom hash maps over TDictionary. Purpose-built `TOrderedStringMap`, `THashMap`, and `TOrderedMap` replace `TDictionary` on hot paths with 4–6× faster inserts at typical sizes. [#66](../../pull/66). [spikes/fpc-hashmap-performance.md](spikes/fpc-hashmap-performance.md).
+**2026-03-18** · `data-structures` — Custom hash maps over TDictionary. Purpose-built `TOrderedStringMap`, `THashMap`, and `TOrderedMap` replace `TDictionary` on hot paths with 4–6× faster inserts at typical sizes. [#66](https://github.com/frostney/GocciaScript/pull/66). [spikes/fpc-hashmap-performance.md](spikes/fpc-hashmap-performance.md).
 
-**2026-03-11** · `strings` — TStringBuffer over TStringBuilder. Both `TUnicodeStringBuilder` and `TAnsiStringBuilder` trigger a 750× slowdown from FPC's heap manager without preallocation. `TStringBuffer` (advanced record with doubling growth) is ~2× faster even with preallocation. [#65](../../pull/65). [spikes/fpc-string-performance.md](spikes/fpc-string-performance.md).
+**2026-03-11** · `strings` — TStringBuffer over TStringBuilder. Both `TUnicodeStringBuilder` and `TAnsiStringBuilder` trigger a 750× slowdown from FPC's heap manager without preallocation. `TStringBuffer` (advanced record with doubling growth) is ~2× faster even with preallocation. [#65](https://github.com/frostney/GocciaScript/pull/65). [spikes/fpc-string-performance.md](spikes/fpc-string-performance.md).
 
-**2026-03-08** · `interpreter` — VMT dispatch on AST nodes. Expression and statement evaluation uses virtual dispatch instead of `if ... is` type check chains. Eliminates `TObject.InheritsFrom` overhead (18.4% of interpreted instructions in callgrind profiling). [#51](../../pull/51). [core-patterns.md § Virtual Dispatch Value System](core-patterns.md#virtual-dispatch-value-system).
+**2026-03-08** · `interpreter` — VMT dispatch on AST nodes. Expression and statement evaluation uses virtual dispatch instead of `if ... is` type check chains. Eliminates `TObject.InheritsFrom` overhead (18.4% of interpreted instructions in callgrind profiling). [#51](https://github.com/frostney/GocciaScript/pull/51). [core-patterns.md § Virtual Dispatch Value System](core-patterns.md#virtual-dispatch-value-system).
 
-**2026-03-08** · `interpreter` — `TGocciaControlFlow` for break/return. `break` and `return` use result records (`cfkBreak`, `cfkReturn`) instead of Pascal exceptions, eliminating `FPC_SETJMP` overhead from the interpreter's hot path. [#45](../../pull/45). [interpreter.md § Error Handling Strategy](interpreter.md#error-handling-strategy).
+**2026-03-08** · `interpreter` — `TGocciaControlFlow` for break/return. `break` and `return` use result records (`cfkBreak`, `cfkReturn`) instead of Pascal exceptions, eliminating `FPC_SETJMP` overhead from the interpreter's hot path. [#45](https://github.com/frostney/GocciaScript/pull/45). [interpreter.md § Error Handling Strategy](interpreter.md#error-handling-strategy).
 
-**2026-03-05** · `bytecode` — Feature parity between bytecode and interpreter. The bytecode backend passes the full JavaScript test suite. [#39](../../pull/39). [bytecode-vm.md](bytecode-vm.md).
+**2026-03-05** · `bytecode` — Feature parity between bytecode and interpreter. The bytecode backend passes the full JavaScript test suite. [#39](https://github.com/frostney/GocciaScript/pull/39). [bytecode-vm.md](bytecode-vm.md).
 
 **2026-02-20** · `strings` — No string interning. Dictionary-based string interning was benchmarked at −4% across 172 benchmarks. FPC's COW semantics make allocation effectively free; the hash + lookup cost exceeds it. [core-patterns.md § String Interning](core-patterns.md#string-interning--attempted-and-rejected).
 

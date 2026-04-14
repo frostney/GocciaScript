@@ -52,10 +52,11 @@ Public bytecode artifacts use the `.gbc` extension.
 
 ## Opcode Layout
 
-The opcode space is split into two ranges:
+The opcode space is split into three tiers:
 
 - `0..127`: core VM instructions
-- `128..255`: semantic / non-core space
+- `128..166`: non-core generic arithmetic/bitwise operations
+- `167..255`: semantic helper/orchestration operations
 
 In the current VM:
 
@@ -149,18 +150,19 @@ The tree-walk interpreter directly evaluates AST nodes via recursive function ca
 
 Stack-based VMs (like the JVM and WASM) are simpler to compile to and have smaller instruction encoding. Register-based VMs (like Lua 5, LuaJIT, and Dalvik) need fewer instructions per operation and avoid redundant stack manipulations. Register-based was chosen for execution performance.
 
-### Why Two Tiers?
+### Why Three Tiers?
 
-The solution is a split opcode space:
+The solution is a split opcode space with three tiers:
 
 - **Core range (0–127):** register, control-flow, closure, literal, and other hot/stable VM operations.
-- **Semantic range (128–255):** colder language-level operations that are still explicit bytecode, such as generic arithmetic/comparison, imports/exports, and await.
+- **Non-core generic range (128–166):** generic arithmetic and bitwise operations that are still explicit bytecode but handle mixed or untyped operands.
+- **Semantic helper range (167–255):** colder language-level orchestration operations such as imports/exports, dynamic import, `import.meta`, await, and resource disposal.
 
 This split keeps the dispatch surface organized while still allowing the backend to be explicitly Goccia-specific.
 
 ### Why Shared Runtime Values?
 
-The current VM uses `TGocciaValue` directly instead of maintaining a second value representation.
+The VM shares the `TGocciaValue` object model with the interpreter rather than maintaining a second value representation. Registers use `TGocciaRegister` — a tagged variant record (`Goccia.VM.Registers.pas`) that keeps booleans, integers, and floats unboxed as scalars. Values only cross into `TGocciaValue` when they leave the register file (e.g., property access, function calls, GC marking).
 
 That choice removes:
 
@@ -169,7 +171,7 @@ That choice removes:
 - bridge-only GC root management
 - bytecode/runtime disagreement over `undefined`, `null`, and sparse array holes
 
-The trade-off is that arithmetic fast paths need to be built on top of shared Goccia values rather than a separate unboxed record representation.
+The trade-off is that arithmetic fast paths are split between scalar register operations (typed opcodes like `OP_ADD_INT` / `OP_ADD_FLOAT`) and generic `TGocciaValue` fallbacks (like `OP_ADD`).
 
 ### Compiler-Side Desugaring
 

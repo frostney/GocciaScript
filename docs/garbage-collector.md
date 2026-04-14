@@ -60,7 +60,7 @@ When working with the GC, follow these rules:
 
 ### Why Not Reference Counting?
 
-`TGocciaValue` inherits from `TInterfacedObject`, which provides automatic reference counting. However, values are stored as class references (`TGocciaValue`), not interface references. Switching to interface variables throughout the evaluator would require a large-scale refactor and introduce circular reference issues (objects referencing their prototypes and vice versa).
+`TGocciaValue` inherits from `TGCManagedObject`, which is a plain `TObject` descendant — there is no reference counting. Values are stored as class references (`TGocciaValue`), and lifetime is managed entirely by the mark-and-sweep GC. Using interface-based reference counting would require a large-scale refactor and introduce circular reference issues (objects referencing their prototypes and vice versa).
 
 ### Why Mark-and-Sweep?
 
