@@ -11,12 +11,7 @@
 
 ## Overview
 
-GocciaScript has two execution backends:
-
-- **Interpreter mode**: tree-walk execution over the AST
-- **Bytecode mode**: compilation to Goccia bytecode and execution on `TGocciaVM`
-
-Both backends share the same frontend, runtime objects, built-ins, and garbage collector.
+GocciaScript has two execution backends — interpreter (tree-walk over the AST) and bytecode (`TGocciaVM`). Both share the same frontend, runtime objects, built-ins, and garbage collector. See [Bytecode VM](bytecode-vm.md) for the bytecode backend's architecture.
 
 ## Pipelines
 

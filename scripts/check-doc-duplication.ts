@@ -119,7 +119,7 @@ const NUM_HASHES = 128;
 const NUM_BANDS = 32;
 const ROWS_PER_BAND = NUM_HASHES / NUM_BANDS; // 4
 const EXTENSIONS = new Set([".md", ".mdx"]);
-const IGNORE_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "vendor"]);
+const IGNORE_DIRS = new Set(["node_modules", ".git", ".agents", "dist", "build", ".next", "vendor"]);
 
 // Utility: generate an index array [0, 1, ..., n-1]
 const range = (n: number): number[] => Array.from({ length: n }, (_, i) => i);
@@ -212,15 +212,20 @@ const tokenise = (content: string, file: string): WordEntry[] => {
 
 // ── Suffix array + LCP ────────────────────────────────────────────────
 
+// Cap suffix comparison depth. For MIN_WORDS=35, we only need to compare
+// enough words to distinguish suffixes for clone detection. Comparing beyond
+// this depth doesn't change which clones we find, but dramatically reduces
+// sort time from O(n² log n) to O(n · CAP · log n).
+const SUFFIX_CMP_CAP = 64;
+const CMP_RANGE = range(SUFFIX_CMP_CAP);
+
 const buildSuffixArray = (words: string[]): Int32Array => {
   const n = words.length;
   const indices = new Int32Array(n);
   for (const i of range(n)) indices[i] = i;
-  // Pre-allocate full range once to avoid per-comparison allocation
-  const fullRange = range(n);
   indices.sort((a, b) => {
-    const len = Math.min(n - a, n - b);
-    for (const k of fullRange) {
+    const len = Math.min(n - a, n - b, SUFFIX_CMP_CAP);
+    for (const k of CMP_RANGE) {
       if (k >= len) break;
       if (words[a + k] < words[b + k]) return -1;
       if (words[a + k] > words[b + k]) return 1;
@@ -239,7 +244,9 @@ const buildLCPArray = (words: string[], sa: Int32Array): Int32Array => {
   for (const i of range(n)) {
     if (rank[i] > 0) {
       const j = sa[rank[i] - 1];
-      for (const _ of range(n)) {
+      // Extend match using Kasai's algorithm (amortized O(n) total).
+      // Use CMP_RANGE to bound per-call iteration without allocation.
+      for (const _ of CMP_RANGE) {
         if (!(i + h < n && j + h < n && words[i + h] === words[j + h])) break;
         h++;
       }
@@ -701,6 +708,7 @@ const main = (): void => {
   const corpus: WordEntry[] = [];
   const allParagraphs: Paragraph[] = [];
 
+  let fileIndex = 0;
   for (const file of files) {
     const content = readFileSync(file, "utf-8");
     const headings = buildHeadingIndex(content);
@@ -714,6 +722,10 @@ const main = (): void => {
       cleaned.push(inCode ? "" : line);
     }
     corpus.push(...tokenise(cleaned.join("\n"), file));
+    // Insert a unique sentinel between files so suffix-array matches
+    // cannot span across file boundaries.
+    corpus.push({ word: `\0FILE_BOUNDARY_${fileIndex}`, loc: { file, line: 0, col: 0 } });
+    fileIndex++;
     allParagraphs.push(...extractParagraphs(content, file, headings));
   }
 
