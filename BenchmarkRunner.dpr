@@ -27,7 +27,6 @@ uses
   Goccia.GarbageCollector,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
-  Goccia.Modules.Configuration,
   Goccia.Parser,
   Goccia.ScriptLoader.Input,
   Goccia.SourceMap,
@@ -149,35 +148,61 @@ begin
   AReporter.AddFileResult(FileResult);
 end;
 
-procedure CollectBenchmarkFileInterpreted(const AFileName: string;
-  const AReporter: TBenchmarkReporter; const AShowProgress, AASIEnabled: Boolean;
-  const AImportMapPath: string; const AInlineAliases: TStringList;
-  const ATimeoutMilliseconds: Integer);
+type
+  TBenchmarkRunnerApp = class(TGocciaCLIApplication)
+  private
+    FNoProgress: TGocciaFlagOption;
+    FFormats: TGocciaRepeatableOption;
+    FOutputFile: TGocciaStringOption;
+    procedure CollectBenchmarkFileInterpreted(const AFileName: string;
+      const AReporter: TBenchmarkReporter; const AShowProgress: Boolean);
+    procedure CollectBenchmarkFileBytecode(const AFileName: string;
+      const AReporter: TBenchmarkReporter; const AShowProgress: Boolean);
+    procedure CollectBenchmarkFile(const AFileName: string;
+      const AReporter: TBenchmarkReporter; const AMode: TGocciaEngineBackend;
+      const AShowProgress: Boolean);
+    procedure CollectBenchmarkSourceInterpreted(const ASource: TStringList;
+      const AFileName: string; const AReporter: TBenchmarkReporter;
+      const AShowProgress: Boolean);
+    procedure CollectBenchmarkSourceBytecode(const ASource: TStringList;
+      const AFileName: string; const AReporter: TBenchmarkReporter;
+      const AShowProgress: Boolean);
+    procedure CollectBenchmarkSource(const ASource: TStringList;
+      const AFileName: string; const AReporter: TBenchmarkReporter;
+      const AMode: TGocciaEngineBackend; const AShowProgress: Boolean);
+    procedure RunBenchmarksFromStdin(const AReports: array of TReportSpec;
+      const AMode: TGocciaEngineBackend; const AShowProgress: Boolean);
+    procedure RunBenchmarks(const APaths: TStringList;
+      const AReports: array of TReportSpec;
+      const AMode: TGocciaEngineBackend; const AShowProgress: Boolean);
+  protected
+    procedure Configure; override;
+    function UsageLine: string; override;
+    procedure ExecuteWithPaths(const APaths: TStringList); override;
+    function GlobalBuiltins: TGocciaGlobalBuiltins; override;
+  end;
+
+procedure TBenchmarkRunnerApp.CollectBenchmarkFileInterpreted(
+  const AFileName: string; const AReporter: TBenchmarkReporter;
+  const AShowProgress: Boolean);
 var
   Source: TStringList;
   Engine: TGocciaEngine;
   GC: TGarbageCollector;
-  BenchGlobals: TGocciaGlobalBuiltins;
   EngineResult: TGocciaScriptResult;
   ScriptResult: TGocciaObjectValue;
   FileResult: TBenchmarkFileResult;
 begin
-  BenchGlobals := [ggBenchmark];
-
   Source := ReadUTF8FileLines(AFileName);
   try
     Source.Add('runBenchmarks();');
 
     try
-      Engine := TGocciaEngine.Create(AFileName, Source, BenchGlobals);
+      Engine := CreateEngine(AFileName, Source);
       try
-        Engine.ASIEnabled := AASIEnabled;
-        ConfigureModuleResolver(Engine.Resolver, AFileName, AImportMapPath,
-          AInlineAliases);
         if AShowProgress and Assigned(Engine.BuiltinBenchmark) then
           Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
 
-        StartExecutionTimeout(ATimeoutMilliseconds);
         try
           EngineResult := Engine.Execute;
         finally
@@ -227,10 +252,9 @@ begin
   end;
 end;
 
-procedure CollectBenchmarkFileBytecode(const AFileName: string;
-  const AReporter: TBenchmarkReporter; const AShowProgress, AASIEnabled: Boolean;
-  const AImportMapPath: string; const AInlineAliases: TStringList;
-  const ATimeoutMilliseconds: Integer);
+procedure TBenchmarkRunnerApp.CollectBenchmarkFileBytecode(
+  const AFileName: string; const AReporter: TBenchmarkReporter;
+  const AShowProgress: Boolean);
 var
   Source: TStringList;
   SourceText: string;
@@ -245,11 +269,8 @@ var
   ResultValue: TGocciaValue;
   FileResult: TBenchmarkFileResult;
   ScriptResult: TGocciaObjectValue;
-  BenchGlobals: TGocciaGlobalBuiltins;
   LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd: Int64;
 begin
-  BenchGlobals := [ggBenchmark];
-
   Source := ReadUTF8FileLines(AFileName);
   try
     Source.Add('runBenchmarks();');
@@ -263,13 +284,8 @@ begin
     end;
 
     try
-      Backend := TGocciaBytecodeBackend.Create(AFileName);
+      Backend := CreateBytecodeBackend(AFileName);
       try
-        Backend.ASIEnabled := AASIEnabled;
-        Backend.RegisterBuiltIns(BenchGlobals);
-        ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
-          AImportMapPath, AInlineAliases);
-
         LexStart := GetNanoseconds;
         Lexer := TGocciaLexer.Create(SourceText, AFileName);
         try
@@ -277,7 +293,7 @@ begin
           LexEnd := GetNanoseconds;
 
           Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
-          Parser.AutomaticSemicolonInsertion := AASIEnabled;
+          Parser.AutomaticSemicolonInsertion := EngineOptions.ASI.Present;
           try
             ProgramNode := Parser.Parse;
             ParseEnd := GetNanoseconds;
@@ -302,7 +318,6 @@ begin
           Backend.Bootstrap.BuiltinBenchmark.OnBeforeMeasurement := Backend.ClearTransientCaches;
 
         try
-          StartExecutionTimeout(ATimeoutMilliseconds);
           try
             ResultValue := Backend.RunModule(Module);
           finally
@@ -363,50 +378,38 @@ begin
   end;
 end;
 
-procedure CollectBenchmarkFile(const AFileName: string;
+procedure TBenchmarkRunnerApp.CollectBenchmarkFile(const AFileName: string;
   const AReporter: TBenchmarkReporter; const AMode: TGocciaEngineBackend;
-  const AShowProgress, AASIEnabled: Boolean;
-  const AImportMapPath: string; const AInlineAliases: TStringList;
-  const ATimeoutMilliseconds: Integer);
+  const AShowProgress: Boolean);
 begin
   case AMode of
     ebTreeWalk:  CollectBenchmarkFileInterpreted(AFileName, AReporter,
-      AShowProgress, AASIEnabled, AImportMapPath, AInlineAliases,
-      ATimeoutMilliseconds);
+      AShowProgress);
     ebBytecode: CollectBenchmarkFileBytecode(AFileName, AReporter,
-      AShowProgress, AASIEnabled, AImportMapPath, AInlineAliases,
-      ATimeoutMilliseconds);
+      AShowProgress);
   else
     raise Exception.CreateFmt('Unsupported execution backend: %d', [Ord(AMode)]);
   end;
 end;
 
-procedure CollectBenchmarkSourceInterpreted(const ASource: TStringList;
-  const AFileName: string; const AReporter: TBenchmarkReporter;
-  const AShowProgress, AASIEnabled: Boolean;
-  const AImportMapPath: string; const AInlineAliases: TStringList;
-  const ATimeoutMilliseconds: Integer);
+procedure TBenchmarkRunnerApp.CollectBenchmarkSourceInterpreted(
+  const ASource: TStringList; const AFileName: string;
+  const AReporter: TBenchmarkReporter; const AShowProgress: Boolean);
 var
   Engine: TGocciaEngine;
   GC: TGarbageCollector;
-  BenchGlobals: TGocciaGlobalBuiltins;
   EngineResult: TGocciaScriptResult;
   ScriptResult: TGocciaObjectValue;
   FileResult: TBenchmarkFileResult;
 begin
-  BenchGlobals := [ggBenchmark];
   ASource.Add('runBenchmarks();');
 
   try
-    Engine := TGocciaEngine.Create(AFileName, ASource, BenchGlobals);
+    Engine := CreateEngine(AFileName, ASource);
     try
-      Engine.ASIEnabled := AASIEnabled;
-      ConfigureModuleResolver(Engine.Resolver, AFileName, AImportMapPath,
-        AInlineAliases);
       if AShowProgress and Assigned(Engine.BuiltinBenchmark) then
         Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
 
-      StartExecutionTimeout(ATimeoutMilliseconds);
       try
         EngineResult := Engine.Execute;
       finally
@@ -451,11 +454,9 @@ begin
   end;
 end;
 
-procedure CollectBenchmarkSourceBytecode(const ASource: TStringList;
-  const AFileName: string; const AReporter: TBenchmarkReporter;
-  const AShowProgress, AASIEnabled: Boolean;
-  const AImportMapPath: string; const AInlineAliases: TStringList;
-  const ATimeoutMilliseconds: Integer);
+procedure TBenchmarkRunnerApp.CollectBenchmarkSourceBytecode(
+  const ASource: TStringList; const AFileName: string;
+  const AReporter: TBenchmarkReporter; const AShowProgress: Boolean);
 var
   SourceText: string;
   JSXResult: TGocciaJSXTransformResult;
@@ -469,10 +470,8 @@ var
   ResultValue: TGocciaValue;
   FileResult: TBenchmarkFileResult;
   ScriptResult: TGocciaObjectValue;
-  BenchGlobals: TGocciaGlobalBuiltins;
   LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd: Int64;
 begin
-  BenchGlobals := [ggBenchmark];
   ASource.Add('runBenchmarks();');
 
   SourceText := StringListToLFText(ASource);
@@ -484,13 +483,8 @@ begin
   end;
 
   try
-    Backend := TGocciaBytecodeBackend.Create(AFileName);
+    Backend := CreateBytecodeBackend(AFileName);
     try
-      Backend.ASIEnabled := AASIEnabled;
-      Backend.RegisterBuiltIns(BenchGlobals);
-      ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
-        AImportMapPath, AInlineAliases);
-
       LexStart := GetNanoseconds;
       Lexer := TGocciaLexer.Create(SourceText, AFileName);
       try
@@ -498,7 +492,7 @@ begin
         LexEnd := GetNanoseconds;
 
         Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
-        Parser.AutomaticSemicolonInsertion := AASIEnabled;
+        Parser.AutomaticSemicolonInsertion := EngineOptions.ASI.Present;
         try
           ProgramNode := Parser.Parse;
           ParseEnd := GetNanoseconds;
@@ -523,7 +517,6 @@ begin
         Backend.Bootstrap.BuiltinBenchmark.OnBeforeMeasurement := Backend.ClearTransientCaches;
 
       try
-        StartExecutionTimeout(ATimeoutMilliseconds);
         try
           ResultValue := Backend.RunModule(Module);
         finally
@@ -579,30 +572,23 @@ begin
   end;
 end;
 
-procedure CollectBenchmarkSource(const ASource: TStringList;
+procedure TBenchmarkRunnerApp.CollectBenchmarkSource(const ASource: TStringList;
   const AFileName: string; const AReporter: TBenchmarkReporter;
-  const AMode: TGocciaEngineBackend;
-  const AShowProgress, AASIEnabled: Boolean;
-  const AImportMapPath: string; const AInlineAliases: TStringList;
-  const ATimeoutMilliseconds: Integer);
+  const AMode: TGocciaEngineBackend; const AShowProgress: Boolean);
 begin
   case AMode of
-    ebTreeWalk: CollectBenchmarkSourceInterpreted(ASource, AFileName, AReporter,
-      AShowProgress, AASIEnabled, AImportMapPath, AInlineAliases,
-      ATimeoutMilliseconds);
-    ebBytecode: CollectBenchmarkSourceBytecode(ASource, AFileName, AReporter,
-      AShowProgress, AASIEnabled, AImportMapPath, AInlineAliases,
-      ATimeoutMilliseconds);
+    ebTreeWalk: CollectBenchmarkSourceInterpreted(ASource, AFileName,
+      AReporter, AShowProgress);
+    ebBytecode: CollectBenchmarkSourceBytecode(ASource, AFileName,
+      AReporter, AShowProgress);
   else
     raise Exception.CreateFmt('Unsupported execution backend: %d', [Ord(AMode)]);
   end;
 end;
 
-procedure RunBenchmarksFromStdin(const AReports: array of TReportSpec;
-  const AMode: TGocciaEngineBackend;
-  const AShowProgress, AASIEnabled: Boolean;
-  const AImportMapPath: string; const AInlineAliases: TStringList;
-  const ATimeoutMilliseconds: Integer);
+procedure TBenchmarkRunnerApp.RunBenchmarksFromStdin(
+  const AReports: array of TReportSpec;
+  const AMode: TGocciaEngineBackend; const AShowProgress: Boolean);
 var
   Source: TStringList;
   Reporter: TBenchmarkReporter;
@@ -612,8 +598,7 @@ begin
   Reporter := TBenchmarkReporter.Create;
   try
     CollectBenchmarkSource(Source, STDIN_FILE_NAME, Reporter,
-      AMode, AShowProgress, AASIEnabled, AImportMapPath, AInlineAliases,
-      ATimeoutMilliseconds);
+      AMode, AShowProgress);
     for J := 0 to Length(AReports) - 1 do
     begin
       Reporter.Render(AReports[J].Format);
@@ -631,12 +616,9 @@ begin
   end;
 end;
 
-procedure RunBenchmarks(const APaths: TStringList;
+procedure TBenchmarkRunnerApp.RunBenchmarks(const APaths: TStringList;
   const AReports: array of TReportSpec;
-  const AMode: TGocciaEngineBackend;
-  const AShowProgress, AASIEnabled: Boolean;
-  const AImportMapPath: string; const AInlineAliases: TStringList;
-  const ATimeoutMilliseconds: Integer);
+  const AMode: TGocciaEngineBackend; const AShowProgress: Boolean);
 var
   Files: TStringList;
   I, J, P: Integer;
@@ -663,8 +645,7 @@ begin
     begin
       if AShowProgress then
         WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, Files.Count, ExtractFileName(Files[I])]));
-      CollectBenchmarkFile(Files[I], Reporter, AMode, AShowProgress,
-        AASIEnabled, AImportMapPath, AInlineAliases, ATimeoutMilliseconds);
+      CollectBenchmarkFile(Files[I], Reporter, AMode, AShowProgress);
     end;
     if AShowProgress and (Files.Count > 0) then
       WriteLn;
@@ -686,19 +667,6 @@ begin
   end;
 end;
 
-type
-  TBenchmarkRunnerApp = class(TGocciaCLIApplication)
-  private
-    FNoProgress: TGocciaFlagOption;
-    FFormats: TGocciaRepeatableOption;
-    FOutputFile: TGocciaStringOption;
-  protected
-    procedure Configure; override;
-    function UsageLine: string; override;
-    procedure ExecuteWithPaths(const APaths: TStringList); override;
-    function GlobalBuiltins: TGocciaGlobalBuiltins; override;
-  end;
-
 function TBenchmarkRunnerApp.UsageLine: string;
 begin
   Result := '[path...|-] [options]';
@@ -709,7 +677,6 @@ begin
   AddEngineOptions;
   FNoProgress := AddFlag('no-progress', 'Suppress progress output');
   FFormats := AddRepeatable('format', 'Output format (console, text, csv, json)');
-  FFormats.AcceptsSpaceForm := False;
   FOutputFile := AddString('output', 'Output file path (attaches to last --format)');
 end;
 
@@ -723,16 +690,9 @@ var
   Reports: array of TReportSpec;
   ReportCount, I: Integer;
   Mode: TGocciaEngineBackend;
-  ShowProgress, ASIEnabled: Boolean;
-  ImportMapPath: string;
-  InlineAliases: TStringList;
-  TimeoutMilliseconds: Integer;
+  ShowProgress: Boolean;
 begin
   ShowProgress := not FNoProgress.Present;
-  ASIEnabled := EngineOptions.ASI.Present;
-  ImportMapPath := EngineOptions.ImportMap.ValueOr('');
-  InlineAliases := EngineOptions.Aliases.Values;
-  TimeoutMilliseconds := EngineOptions.Timeout.ValueOr(0);
 
   if EngineOptions.Mode.ValueOr(emInterpreted) = emBytecode then
     Mode := ebBytecode
@@ -759,16 +719,13 @@ begin
   end;
 
   if APaths.Count = 0 then
-    RunBenchmarksFromStdin(Reports, Mode, ShowProgress, ASIEnabled,
-      ImportMapPath, InlineAliases, TimeoutMilliseconds)
+    RunBenchmarksFromStdin(Reports, Mode, ShowProgress)
   else
   begin
     if (APaths.Count = 1) and IsStdinPath(APaths[0]) then
-      RunBenchmarksFromStdin(Reports, Mode, ShowProgress, ASIEnabled,
-        ImportMapPath, InlineAliases, TimeoutMilliseconds)
+      RunBenchmarksFromStdin(Reports, Mode, ShowProgress)
     else
-      RunBenchmarks(APaths, Reports, Mode, ShowProgress, ASIEnabled,
-        ImportMapPath, InlineAliases, TimeoutMilliseconds);
+      RunBenchmarks(APaths, Reports, Mode, ShowProgress);
   end;
 end;
 

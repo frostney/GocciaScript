@@ -69,7 +69,6 @@ type
   TGocciaRepeatableOption = class(TGocciaOptionBase)
   private
     FValues: TStringList;
-    FAcceptsSpaceForm: Boolean;
   public
     constructor Create(const ALongName, AHelpText: string; const AGroup: string = '');
     destructor Destroy; override;
@@ -78,13 +77,13 @@ type
     function FormatForHelp: string; override;
 
     property Values: TStringList read FValues;
-    property AcceptsSpaceForm: Boolean read FAcceptsSpaceForm write FAcceptsSpaceForm;
   end;
 
   TGocciaEnumOption<T> = class(TGocciaOptionBase)
   private
     FOrdinal: Integer;
     FPrefixLength: Integer;
+    function JoinStrippedNames(const ASeparator: string): string;
   public
     constructor Create(const ALongName, AHelpText: string; const AGroup: string = '';
       const APrefixLength: Integer = 2);
@@ -287,7 +286,6 @@ constructor TGocciaRepeatableOption.Create(const ALongName, AHelpText: string;
 begin
   inherited Create(ALongName, AHelpText, AGroup);
   FValues := TStringList.Create;
-  FAcceptsSpaceForm := True;
 end;
 
 destructor TGocciaRepeatableOption.Destroy;
@@ -317,39 +315,51 @@ begin
   FPrefixLength := APrefixLength;
 end;
 
-procedure TGocciaEnumOption<T>.Apply(const AValue: string);
+function TGocciaEnumOption<T>.JoinStrippedNames(
+  const ASeparator: string): string;
 var
   TypeData: PTypeData;
   I: Integer;
   EnumName: string;
   Stripped: string;
-  LowerValue: string;
-  ValidList: string;
 begin
   TypeData := GetTypeData(TypeInfo(T));
-  LowerValue := LowerCase(AValue);
-  ValidList := '';
-
+  Result := '';
   for I := TypeData^.MinValue to TypeData^.MaxValue do
   begin
     EnumName := GetEnumName(TypeInfo(T), I);
     Stripped := LowerCase(Copy(EnumName, FPrefixLength + 1,
       Length(EnumName) - FPrefixLength));
+    if Result <> '' then
+      Result := Result + ASeparator;
+    Result := Result + Stripped;
+  end;
+end;
 
-    if Stripped = LowerValue then
+procedure TGocciaEnumOption<T>.Apply(const AValue: string);
+var
+  TypeData: PTypeData;
+  I: Integer;
+  EnumName: string;
+  LowerValue: string;
+begin
+  TypeData := GetTypeData(TypeInfo(T));
+  LowerValue := LowerCase(AValue);
+
+  for I := TypeData^.MinValue to TypeData^.MaxValue do
+  begin
+    EnumName := GetEnumName(TypeInfo(T), I);
+    if LowerCase(Copy(EnumName, FPrefixLength + 1,
+       Length(EnumName) - FPrefixLength)) = LowerValue then
     begin
       FOrdinal := I;
       FPresent := True;
       Exit;
     end;
-
-    if ValidList <> '' then
-      ValidList := ValidList + ', ';
-    ValidList := ValidList + Stripped;
   end;
 
   raise TGocciaParseError.CreateFmt('Invalid value for --%s: %s (valid: %s)',
-    [LongName, AValue, ValidList]);
+    [LongName, AValue, JoinStrippedNames(', ')]);
 end;
 
 function TGocciaEnumOption<T>.Value: T;
@@ -366,50 +376,13 @@ begin
 end;
 
 function TGocciaEnumOption<T>.ValidValues: string;
-var
-  TypeData: PTypeData;
-  I: Integer;
-  EnumName: string;
-  Stripped: string;
 begin
-  TypeData := GetTypeData(TypeInfo(T));
-  Result := '';
-
-  for I := TypeData^.MinValue to TypeData^.MaxValue do
-  begin
-    EnumName := GetEnumName(TypeInfo(T), I);
-    Stripped := LowerCase(Copy(EnumName, FPrefixLength + 1,
-      Length(EnumName) - FPrefixLength));
-
-    if Result <> '' then
-      Result := Result + ', ';
-    Result := Result + Stripped;
-  end;
+  Result := JoinStrippedNames(', ');
 end;
 
 function TGocciaEnumOption<T>.FormatForHelp: string;
-var
-  TypeData: PTypeData;
-  I: Integer;
-  EnumName: string;
-  Stripped: string;
-  ValueList: string;
 begin
-  TypeData := GetTypeData(TypeInfo(T));
-  ValueList := '';
-
-  for I := TypeData^.MinValue to TypeData^.MaxValue do
-  begin
-    EnumName := GetEnumName(TypeInfo(T), I);
-    Stripped := LowerCase(Copy(EnumName, FPrefixLength + 1,
-      Length(EnumName) - FPrefixLength));
-
-    if ValueList <> '' then
-      ValueList := ValueList + '|';
-    ValueList := ValueList + Stripped;
-  end;
-
-  Result := '--' + LongName + '=' + ValueList;
+  Result := '--' + LongName + '=' + JoinStrippedNames('|');
 end;
 
 { TGocciaOptionList }
@@ -482,7 +455,6 @@ begin
     'Path to import map JSON file', 'Engine');
   FAliases := TGocciaRepeatableOption.Create('alias',
     'Import alias (e.g. @/=./src/)', 'Engine');
-  FAliases.AcceptsSpaceForm := True;
   FTimeout := TGocciaIntegerOption.Create('timeout',
     'Per-file timeout in milliseconds', 'Engine');
 end;

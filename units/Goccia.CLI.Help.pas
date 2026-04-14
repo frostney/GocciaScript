@@ -71,31 +71,33 @@ begin
   end;
 
   Buffer := TStringBuffer.Create(512);
-
-  Buffer.Append('Usage: ' + AProgramName + ' ' + AUsageLine);
-  Buffer.Append(sLineBreak);
-
-  for I := 0 to GroupCount - 1 do
-  begin
-    Buffer.Append(sLineBreak);
-    Buffer.Append(Groups[I].Header);
+  try
+    Buffer.Append('Usage: ' + AProgramName + ' ' + AUsageLine);
     Buffer.Append(sLineBreak);
 
-    for J := 0 to Groups[I].Lines.Count - 1 do
+    for I := 0 to GroupCount - 1 do
     begin
-      FormattedName := Groups[I].Lines[J];
-      Option := TGocciaOptionBase(Groups[I].Lines.Objects[J]);
-
-      Padding := StringOfChar(' ', MaxWidth - Length(FormattedName) + COLUMN_GAP);
-
-      Buffer.Append('  ' + FormattedName + Padding + Option.HelpText);
       Buffer.Append(sLineBreak);
+      Buffer.Append(Groups[I].Header);
+      Buffer.Append(sLineBreak);
+
+      for J := 0 to Groups[I].Lines.Count - 1 do
+      begin
+        FormattedName := Groups[I].Lines[J];
+        Option := TGocciaOptionBase(Groups[I].Lines.Objects[J]);
+
+        Padding := StringOfChar(' ', MaxWidth - Length(FormattedName) + COLUMN_GAP);
+
+        Buffer.Append('  ' + FormattedName + Padding + Option.HelpText);
+        Buffer.Append(sLineBreak);
+      end;
     end;
 
-    Groups[I].Lines.Free;
+    Result := Buffer.ToString;
+  finally
+    for I := 0 to GroupCount - 1 do
+      Groups[I].Lines.Free;
   end;
-
-  Result := Buffer.ToString;
 end;
 
 end.

@@ -90,8 +90,8 @@ begin
           raise TGocciaParseError.CreateFmt('Unknown option: --%s', [Name]);
 
         if (Value = '') and (not HasEquals) and
-           (Option is TGocciaRepeatableOption) and
-           TGocciaRepeatableOption(Option).AcceptsSpaceForm then
+           not (Option is TGocciaFlagOption) and
+           (Option is TGocciaRepeatableOption) then
         begin
           if I >= Count then
             raise TGocciaParseError.CreateFmt(

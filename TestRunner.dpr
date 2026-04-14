@@ -27,7 +27,6 @@ uses
   Goccia.GarbageCollector,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
-  Goccia.Modules.Configuration,
   Goccia.Parser,
   Goccia.SourceMap,
   Goccia.Terminal.Colors,
@@ -233,9 +232,7 @@ var
   Engine: TGocciaEngine;
   SilentCon: TGocciaTestConsole;
   EngineResult: TGocciaScriptResult;
-  TestGlobals: TGocciaGlobalBuiltins;
 begin
-  TestGlobals := [ggTestAssertions, ggFFI];
   ScriptResult := CreateDefaultScriptResult;
 
   Source := nil;
@@ -257,11 +254,8 @@ begin
 
     try
       SilentCon := nil;
-      Engine := TGocciaEngine.Create(AFileName, Source, TestGlobals);
+      Engine := CreateEngine(AFileName, Source);
       try
-        Engine.ASIEnabled := EngineOptions.ASI.Present;
-        ConfigureModuleResolver(Engine.Resolver, AFileName,
-          EngineOptions.ImportMap.ValueOr(''), EngineOptions.Aliases.Values);
         if FSilent.Present then
         begin
           SilentCon := TGocciaTestConsole.Create;
@@ -269,7 +263,6 @@ begin
           Engine.SuppressWarnings := True;
         end;
 
-        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
         try
           EngineResult := Engine.Execute;
         finally
@@ -325,11 +318,9 @@ var
   Backend: TGocciaBytecodeBackend;
   ScriptResult: TGocciaObjectValue;
   ResultValue: TGocciaValue;
-  TestGlobals: TGocciaGlobalBuiltins;
   OrigLine, OrigCol, I: Integer;
   LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd: Int64;
 begin
-  TestGlobals := [ggTestAssertions, ggFFI];
   ScriptResult := CreateDefaultScriptResult;
 
   Source := nil;
@@ -359,13 +350,8 @@ begin
     end;
 
     try try
-      Backend := TGocciaBytecodeBackend.Create(AFileName);
+      Backend := CreateBytecodeBackend(AFileName);
       try
-        Backend.ASIEnabled := EngineOptions.ASI.Present;
-        Backend.RegisterBuiltIns(TestGlobals);
-        ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
-          EngineOptions.ImportMap.ValueOr(''), EngineOptions.Aliases.Values);
-
         LexStart := GetNanoseconds;
         Lexer := TGocciaLexer.Create(SourceText, AFileName);
         try
@@ -409,7 +395,6 @@ begin
         end;
 
         try
-          StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
           try
             ResultValue := Backend.RunModule(Module);
           finally

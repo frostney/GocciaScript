@@ -9,7 +9,9 @@ uses
   SysUtils,
 
   Goccia.Application,
-  Goccia.CLI.Options;
+  Goccia.CLI.Options,
+  Goccia.Engine,
+  Goccia.Engine.Backend;
 
 type
   TGocciaCLIApplication = class(TGocciaApplication)
@@ -38,6 +40,10 @@ type
     function AddInteger(const AName, AHelp: string): TGocciaIntegerOption;
     function AddRepeatable(const AName, AHelp: string): TGocciaRepeatableOption;
     function Add(const AOption: TGocciaOptionBase): TGocciaOptionBase;
+    function CreateEngine(const AFileName: string;
+      const ASource: TStringList): TGocciaEngine;
+    function CreateBytecodeBackend(
+      const AFileName: string): TGocciaBytecodeBackend;
     property EngineOptions: TGocciaEngineOptions read FEngineOptions;
     property CoverageOptions: TGocciaCoverageOptions read FCoverageOptions;
     property ProfilerOptions: TGocciaProfilerOptions read FProfilerOptions;
@@ -53,7 +59,9 @@ uses
   Goccia.CLI.Help,
   Goccia.CLI.Parser,
   Goccia.Coverage,
-  Goccia.Profiler;
+  Goccia.Modules.Configuration,
+  Goccia.Profiler,
+  Goccia.Timeout;
 
 { TGocciaCLIApplication }
 
@@ -166,6 +174,35 @@ begin
   Result := AOption;
 end;
 
+function TGocciaCLIApplication.CreateEngine(const AFileName: string;
+  const ASource: TStringList): TGocciaEngine;
+begin
+  Result := TGocciaEngine.Create(AFileName, ASource, GlobalBuiltins);
+  if Assigned(FEngineOptions) then
+  begin
+    Result.ASIEnabled := FEngineOptions.ASI.Present;
+    ConfigureModuleResolver(Result.Resolver, AFileName,
+      FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
+    if FEngineOptions.Timeout.Present and (FEngineOptions.Timeout.Value > 0) then
+      StartExecutionTimeout(FEngineOptions.Timeout.Value);
+  end;
+end;
+
+function TGocciaCLIApplication.CreateBytecodeBackend(
+  const AFileName: string): TGocciaBytecodeBackend;
+begin
+  Result := TGocciaBytecodeBackend.Create(AFileName);
+  Result.RegisterBuiltIns(GlobalBuiltins);
+  if Assigned(FEngineOptions) then
+  begin
+    Result.ASIEnabled := FEngineOptions.ASI.Present;
+    ConfigureModuleResolver(Result.ModuleResolver, AFileName,
+      FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
+    if FEngineOptions.Timeout.Present and (FEngineOptions.Timeout.Value > 0) then
+      StartExecutionTimeout(FEngineOptions.Timeout.Value);
+  end;
+end;
+
 procedure TGocciaCLIApplication.Validate;
 begin
   // Override point for subclasses
@@ -178,7 +215,7 @@ end;
 
 procedure TGocciaCLIApplication.InitializeSingletons;
 begin
-  if Assigned(FCoverageOptions) and FCoverageOptions.Enabled.Present then
+  if Assigned(FCoverageOptions) then
     InitializeCoverageIfEnabled(FCoverageOptions);
   if Assigned(FProfilerOptions) then
     InitializeProfilerIfEnabled(FProfilerOptions);
@@ -186,10 +223,10 @@ end;
 
 procedure TGocciaCLIApplication.ShutdownSingletons;
 begin
-  if Assigned(FProfilerOptions) and Assigned(TGocciaProfiler.Instance) then
-    TGocciaProfiler.Shutdown;
-  if Assigned(FCoverageOptions) and Assigned(TGocciaCoverageTracker.Instance) then
-    TGocciaCoverageTracker.Shutdown;
+  if Assigned(FProfilerOptions) then
+    ShutdownProfilerIfEnabled(FProfilerOptions);
+  if Assigned(FCoverageOptions) then
+    ShutdownCoverageIfEnabled(FCoverageOptions);
 end;
 
 procedure TGocciaCLIApplication.Execute;

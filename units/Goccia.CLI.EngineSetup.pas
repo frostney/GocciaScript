@@ -5,16 +5,7 @@ unit Goccia.CLI.EngineSetup;
 interface
 
 uses
-  Goccia.CLI.Options,
-  Goccia.Engine,
-  Goccia.Engine.Backend;
-
-procedure ConfigureEngine(const AEngine: TGocciaEngine;
-  const AOptions: TGocciaEngineOptions; const AEntryFileName: string);
-
-procedure ConfigureBytecodeBackend(const ABackend: TGocciaBytecodeBackend;
-  const AOptions: TGocciaEngineOptions; const AEntryFileName: string;
-  const AGlobals: TGocciaGlobalBuiltins);
+  Goccia.CLI.Options;
 
 procedure InitializeCoverageIfEnabled(const AOptions: TGocciaCoverageOptions);
 procedure ShutdownCoverageIfEnabled(const AOptions: TGocciaCoverageOptions);
@@ -26,35 +17,7 @@ implementation
 
 uses
   Goccia.Coverage,
-  Goccia.Modules.Configuration,
-  Goccia.Profiler,
-  Goccia.Timeout;
-
-procedure ConfigureEngine(const AEngine: TGocciaEngine;
-  const AOptions: TGocciaEngineOptions; const AEntryFileName: string);
-begin
-  AEngine.ASIEnabled := AOptions.ASI.Present;
-
-  ConfigureModuleResolver(AEngine.Resolver, AEntryFileName,
-    AOptions.ImportMap.ValueOr(''), AOptions.Aliases.Values);
-
-  if AOptions.Timeout.Present and (AOptions.Timeout.Value > 0) then
-    StartExecutionTimeout(AOptions.Timeout.Value);
-end;
-
-procedure ConfigureBytecodeBackend(const ABackend: TGocciaBytecodeBackend;
-  const AOptions: TGocciaEngineOptions; const AEntryFileName: string;
-  const AGlobals: TGocciaGlobalBuiltins);
-begin
-  ABackend.ASIEnabled := AOptions.ASI.Present;
-  ABackend.RegisterBuiltIns(AGlobals);
-
-  ConfigureModuleResolver(ABackend.ModuleResolver, AEntryFileName,
-    AOptions.ImportMap.ValueOr(''), AOptions.Aliases.Values);
-
-  if AOptions.Timeout.Present and (AOptions.Timeout.Value > 0) then
-    StartExecutionTimeout(AOptions.Timeout.Value);
-end;
+  Goccia.Profiler;
 
 procedure InitializeCoverageIfEnabled(const AOptions: TGocciaCoverageOptions);
 begin

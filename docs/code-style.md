@@ -273,7 +273,7 @@ When adding command-line options to CLI tools:
   - `TGocciaCoverageFormat = (cfLcov, cfJson)` → CLI values: `lcov`, `json`
   - `TGocciaProfileMode = (pmOpcodes, pmFunctions, pmAll)` → CLI values: `opcodes`, `functions`, `all`
 - **Option groups** use a `Group` string for help text organization (e.g., `'Engine'`, `'Coverage'`, `'Profiler'`)
-- **Repeatable options** (like `--alias`) support both `--alias=key=value` and `--alias key=value` (space form) via `AcceptsSpaceForm`
+- **Value options** require `--name=value` (equals form). Repeatable options (`--alias`, `--global`) also accept `--name value` (space form). Flags take no value.
 
 ### File Organization
 

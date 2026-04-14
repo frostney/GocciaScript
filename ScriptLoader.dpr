@@ -28,7 +28,6 @@ uses
   Goccia.GarbageCollector,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
-  Goccia.Modules.Configuration,
   Goccia.Parser,
   Goccia.Profiler,
   Goccia.Profiler.Report,
@@ -123,10 +122,8 @@ begin
     'Write a .map source map file (optional: explicit path)');
   FGlobalFiles := AddRepeatable('globals',
     'Inject globals from a JSON/JSON5/TOML/YAML file or a module with named exports');
-  FGlobalFiles.AcceptsSpaceForm := False;
   FInlineGlobals := AddRepeatable('global',
     'Inject a single global; value is parsed as JSON or kept as a string');
-  FInlineGlobals.AcceptsSpaceForm := True;
 end;
 
 { TScriptLoaderApp - Validate }
@@ -402,15 +399,11 @@ var
   ScriptResult: TGocciaScriptResult;
   SourceMap: TGocciaSourceMap;
 begin
-  Engine := TGocciaEngine.Create(AFileName, ASource, []);
+  Engine := CreateEngine(AFileName, ASource);
   try
-    Engine.ASIEnabled := EngineOptions.ASI.Present;
     Engine.SuppressWarnings := (FOutputPath.Present and (FOutputPath.Value = 'json'));
     ConfigureConsole(Engine.BuiltinConsole, AOutputLines);
     ApplyDataGlobalsToEngine(Engine);
-    ConfigureModuleResolver(Engine.Resolver, AFileName,
-      EngineOptions.ImportMap.ValueOr(''), EngineOptions.Aliases.Values);
-    StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
     try
       ApplyModuleGlobalsToEngine(Engine);
       ScriptResult := Engine.Execute;
@@ -447,14 +440,10 @@ var
   StartTime, CompileStart, CompileEnd, ExecEnd: Int64;
 begin
   StartTime := GetNanoseconds;
-  Backend := TGocciaBytecodeBackend.Create(AFileName);
+  Backend := CreateBytecodeBackend(AFileName);
   try
-    Backend.ASIEnabled := EngineOptions.ASI.Present;
-    Backend.RegisterBuiltIns([]);
     ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
     ApplyDataGlobalsToBytecodeBackend(Backend);
-    ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
-      EngineOptions.ImportMap.ValueOr(''), EngineOptions.Aliases.Values);
 
     ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultPreprocessors,
       (FOutputPath.Present and (FOutputPath.Value = 'json')), Result.Timing.LexTimeNanoseconds,
@@ -477,7 +466,6 @@ begin
     end;
 
     try
-      StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
       try
         ApplyModuleGlobalsToBytecodeBackend(Backend);
         Result.ResultValue := Backend.RunModule(Module);
@@ -506,15 +494,10 @@ begin
   Module := Goccia.Bytecode.Binary.LoadModuleFromFile(AFileName);
   LoadEnd := GetNanoseconds;
   try
-    Backend := TGocciaBytecodeBackend.Create(AFileName);
+    Backend := CreateBytecodeBackend(AFileName);
     try
-      Backend.ASIEnabled := EngineOptions.ASI.Present;
-      Backend.RegisterBuiltIns([]);
       ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
       ApplyDataGlobalsToBytecodeBackend(Backend);
-      ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
-        EngineOptions.ImportMap.ValueOr(''), EngineOptions.Aliases.Values);
-      StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
       try
         ApplyModuleGlobalsToBytecodeBackend(Backend);
         Result.ResultValue := Backend.RunModule(Module);
