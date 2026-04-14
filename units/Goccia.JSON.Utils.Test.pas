@@ -94,10 +94,15 @@ end;
 procedure TJSONUtilsTests.TestPreservesMultibyteUTF8;
 var
   EAcute: string;
+  Grinning: string;
 begin
   EAcute := #$C3#$A9; // UTF-8 for U+00E9 (e with acute accent)
   Expect<string>(EscapeJSONString(EAcute)).ToBe(EAcute);
   Expect<string>(EscapeJSONString('caf' + EAcute)).ToBe('caf' + EAcute);
+
+  Grinning := #$F0#$9F#$98#$80; // UTF-8 for U+1F600 (grinning face emoji)
+  Expect<string>(EscapeJSONString(Grinning)).ToBe(Grinning);
+  Expect<string>(EscapeJSONString('face' + Grinning)).ToBe('face' + Grinning);
 end;
 
 // QuoteJSONString should wrap the escaped body in literal double-quote chars
