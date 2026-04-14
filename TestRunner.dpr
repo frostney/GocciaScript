@@ -10,9 +10,12 @@ uses
 
   TimingUtils,
 
+  Goccia.Application,
   Goccia.AST.Node,
   Goccia.Builtins.TestConsole,
   Goccia.Bytecode.Module,
+  Goccia.CLI.Application,
+  Goccia.CLI.Options,
   Goccia.Compiler,
   Goccia.Coverage,
   Goccia.Coverage.Report,
@@ -24,7 +27,6 @@ uses
   Goccia.GarbageCollector,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
-  Goccia.Modules.Configuration,
   Goccia.Parser,
   Goccia.SourceMap,
   Goccia.Terminal.Colors,
@@ -38,26 +40,41 @@ uses
 
   FileUtils in 'units/FileUtils.pas';
 
-var
-  GShowProgress: Boolean = True;
-  GShowResults: Boolean = True;
-  GExitOnFirstFailure: Boolean = False;
-  GSilentConsole: Boolean = False;
-  GOutputFile: string = '';
-  GImportMapPath: string = '';
-  GInlineAliases: TStringList = nil;
-  GMode: TGocciaEngineBackend = ebTreeWalk;
-  GCoverageEnabled: Boolean = False;
-  GCoverageLcovEnabled: Boolean = False;
-  GCoverageJsonEnabled: Boolean = False;
-  GCoverageOutputPath: string = '';
-  GASIEnabled: Boolean = False;
-  GTimeoutMilliseconds: Integer = 0;
-
 type
   TTestFileResult = record
     TestResult: TGocciaObjectValue;
     Timing: TGocciaScriptResult;
+  end;
+
+  TAggregatedTestResult = record
+    TestResult: TGocciaObjectValue;
+    TotalLexNanoseconds: Int64;
+    TotalParseNanoseconds: Int64;
+    TotalCompileNanoseconds: Int64;
+    TotalExecNanoseconds: Int64;
+  end;
+
+  TTestRunnerApp = class(TGocciaCLIApplication)
+  private
+    FNoProgress: TGocciaFlagOption;
+    FNoResults: TGocciaFlagOption;
+    FExitOnFirst: TGocciaFlagOption;
+    FSilent: TGocciaFlagOption;
+    FOutputFile: TGocciaStringOption;
+  protected
+    procedure Configure; override;
+    function UsageLine: string; override;
+    procedure Validate; override;
+    procedure ExecuteWithPaths(const APaths: TStringList); override;
+    function GlobalBuiltins: TGocciaGlobalBuiltins; override;
+  private
+    function RunGocciaScriptInterpreted(const AFileName: string): TTestFileResult;
+    function RunGocciaScriptBytecode(const AFileName: string): TTestFileResult;
+    function RunGocciaScript(const AFileName: string): TTestFileResult;
+    function RunScriptFromFile(const AFileName: string): TAggregatedTestResult;
+    function RunScriptsFromFiles(const AFiles: TStringList): TAggregatedTestResult;
+    procedure WriteResultsJSON(const AResult: TAggregatedTestResult; const AFileName: string);
+    procedure PrintTestResults(const AResult: TAggregatedTestResult);
   end;
 
 function MakeEmptyTestResult(const AScriptResult: TGocciaObjectValue): TTestFileResult;
@@ -112,16 +129,110 @@ begin
     TGocciaStringLiteralValue.Create(AFileName + ': ' + AMessage));
 end;
 
-function RunGocciaScriptInterpreted(const AFileName: string): TTestFileResult;
+function EscapeJSONString(const S: string): string;
+begin
+  Result := StringReplace(S, '\', '\\', [rfReplaceAll]);
+  Result := StringReplace(Result, '"', '\"', [rfReplaceAll]);
+  Result := StringReplace(Result, #10, '\n', [rfReplaceAll]);
+  Result := StringReplace(Result, #13, '\r', [rfReplaceAll]);
+  Result := StringReplace(Result, #9, '\t', [rfReplaceAll]);
+end;
+
+{ TTestRunnerApp }
+
+procedure TTestRunnerApp.Configure;
+begin
+  AddEngineOptions;
+  AddCoverageOptions;
+  FNoProgress := AddFlag('no-progress', 'Suppress per-file progress output');
+  FNoResults := AddFlag('no-results', 'Suppress test results summary');
+  FExitOnFirst := AddFlag('exit-on-first-failure', 'Stop on first test failure');
+  FSilent := AddFlag('silent', 'Suppress console output from test scripts');
+  FOutputFile := AddString('output', 'Write test results as JSON to file');
+end;
+
+procedure TTestRunnerApp.Validate;
+begin
+  if CoverageOptions.Format.Present or CoverageOptions.OutputPath.Present then
+    CoverageOptions.Enabled.Apply('');
+end;
+
+function TTestRunnerApp.UsageLine: string;
+begin
+  Result := '<path...> [options]';
+end;
+
+procedure TTestRunnerApp.ExecuteWithPaths(const APaths: TStringList);
+var
+  Files: TStringList;
+  I: Integer;
+begin
+  if APaths.Count = 0 then
+  begin
+    WriteLn('Error: No paths specified. Run with --help for usage.');
+    ExitCode := 1;
+    Exit;
+  end;
+
+  Files := TStringList.Create;
+  try
+    for I := 0 to APaths.Count - 1 do
+    begin
+      if DirectoryExists(APaths[I]) then
+        Files.AddStrings(FindAllFiles(APaths[I], ScriptExtensions))
+      else if FileExists(APaths[I]) then
+        Files.Add(APaths[I])
+      else
+      begin
+        WriteLn('Error: Path not found: ', APaths[I]);
+        ExitCode := 1;
+        Exit;
+      end;
+    end;
+
+    if Files.Count = 1 then
+    begin
+      if not FNoProgress.Present then
+        WriteLn('[1/1] ', Files[0]);
+      PrintTestResults(RunScriptFromFile(Files[0]));
+    end
+    else
+      PrintTestResults(RunScriptsFromFiles(Files));
+
+    if (CoverageOptions.Enabled.Present or CoverageOptions.Format.Present or
+        CoverageOptions.OutputPath.Present) and
+       Assigned(TGocciaCoverageTracker.Instance) then
+    begin
+      PrintCoverageSummary(TGocciaCoverageTracker.Instance);
+      if Files.Count = 1 then
+        PrintCoverageDetail(TGocciaCoverageTracker.Instance, Files[0]);
+      if CoverageOptions.Format.Matches(cfLcov) and
+         (CoverageOptions.OutputPath.ValueOr('') <> '') then
+        WriteCoverageLcov(TGocciaCoverageTracker.Instance,
+          CoverageOptions.OutputPath.ValueOr(''));
+      if CoverageOptions.Format.Matches(cfJson) and
+         (CoverageOptions.OutputPath.ValueOr('') <> '') then
+        WriteCoverageJSON(TGocciaCoverageTracker.Instance,
+          CoverageOptions.OutputPath.ValueOr(''));
+    end;
+  finally
+    Files.Free;
+  end;
+end;
+
+function TTestRunnerApp.GlobalBuiltins: TGocciaGlobalBuiltins;
+begin
+  Result := [ggTestAssertions, ggFFI];
+end;
+
+function TTestRunnerApp.RunGocciaScriptInterpreted(const AFileName: string): TTestFileResult;
 var
   Source: TStringList;
   ScriptResult, FileResult: TGocciaObjectValue;
   Engine: TGocciaEngine;
-  SilentConsole: TGocciaTestConsole;
+  SilentCon: TGocciaTestConsole;
   EngineResult: TGocciaScriptResult;
-  TestGlobals: TGocciaGlobalBuiltins;
 begin
-  TestGlobals := [ggTestAssertions, ggFFI];
   ScriptResult := CreateDefaultScriptResult;
 
   Source := nil;
@@ -139,30 +250,27 @@ begin
     end;
 
     Source.Add(Format('runTests({ exitOnFirstFailure: %s, showTestResults: false });',
-      [BoolToStr(GExitOnFirstFailure, 'true', 'false')]));
+      [BoolToStr(FExitOnFirst.Present, 'true', 'false')]));
 
     try
-      SilentConsole := nil;
-      Engine := TGocciaEngine.Create(AFileName, Source, TestGlobals);
+      SilentCon := nil;
+      Engine := CreateEngine(AFileName, Source);
       try
-        Engine.ASIEnabled := GASIEnabled;
-        ConfigureModuleResolver(Engine.Resolver, AFileName, GImportMapPath,
-          GInlineAliases);
-        if GSilentConsole then
+        if FSilent.Present then
         begin
-          SilentConsole := TGocciaTestConsole.Create;
-          SilentConsole.Silence(Engine.BuiltinConsole.BuiltinObject);
+          SilentCon := TGocciaTestConsole.Create;
+          SilentCon.Silence(Engine.BuiltinConsole.BuiltinObject);
           Engine.SuppressWarnings := True;
         end;
 
-        StartExecutionTimeout(GTimeoutMilliseconds);
+        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
         try
           EngineResult := Engine.Execute;
         finally
           ClearExecutionTimeout;
         end;
       finally
-        SilentConsole.Free;
+        SilentCon.Free;
         Engine.Free;
       end;
       Result.Timing := EngineResult;
@@ -196,7 +304,7 @@ begin
   end;
 end;
 
-function RunGocciaScriptBytecode(const AFileName: string): TTestFileResult;
+function TTestRunnerApp.RunGocciaScriptBytecode(const AFileName: string): TTestFileResult;
 var
   Source: TStringList;
   SourceText: string;
@@ -211,11 +319,9 @@ var
   Backend: TGocciaBytecodeBackend;
   ScriptResult: TGocciaObjectValue;
   ResultValue: TGocciaValue;
-  TestGlobals: TGocciaGlobalBuiltins;
   OrigLine, OrigCol, I: Integer;
   LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd: Int64;
 begin
-  TestGlobals := [ggTestAssertions, ggFFI];
   ScriptResult := CreateDefaultScriptResult;
 
   Source := nil;
@@ -233,7 +339,7 @@ begin
     end;
 
     Source.Add(Format('runTests({ exitOnFirstFailure: %s, showTestResults: false });',
-      [BoolToStr(GExitOnFirstFailure, 'true', 'false')]));
+      [BoolToStr(FExitOnFirst.Present, 'true', 'false')]));
 
     SourceText := StringListToLFText(Source);
     SourceMap := nil;
@@ -245,13 +351,8 @@ begin
     end;
 
     try try
-      Backend := TGocciaBytecodeBackend.Create(AFileName);
+      Backend := CreateBytecodeBackend(AFileName);
       try
-        Backend.ASIEnabled := GASIEnabled;
-        Backend.RegisterBuiltIns(TestGlobals);
-        ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
-          GImportMapPath, GInlineAliases);
-
         LexStart := GetNanoseconds;
         Lexer := TGocciaLexer.Create(SourceText, AFileName);
         try
@@ -259,7 +360,7 @@ begin
           LexEnd := GetNanoseconds;
 
           Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
-          Parser.AutomaticSemicolonInsertion := GASIEnabled;
+          Parser.AutomaticSemicolonInsertion := EngineOptions.ASI.Present;
           try
             ProgramNode := Parser.Parse;
             ParseEnd := GetNanoseconds;
@@ -269,7 +370,7 @@ begin
               TGocciaCoverageTracker.Instance.RegisterSourceFile(
                 AFileName, CountExecutableLines(Lexer.SourceLines));
 
-            if not GSilentConsole then
+            if not FSilent.Present then
               for I := 0 to Parser.WarningCount - 1 do
               begin
                 Warning := Parser.GetWarning(I);
@@ -294,8 +395,8 @@ begin
           Lexer.Free;
         end;
 
+        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
         try
-          StartExecutionTimeout(GTimeoutMilliseconds);
           try
             ResultValue := Backend.RunModule(Module);
           finally
@@ -350,24 +451,15 @@ begin
   end;
 end;
 
-function RunGocciaScript(const AFileName: string): TTestFileResult;
+function TTestRunnerApp.RunGocciaScript(const AFileName: string): TTestFileResult;
 begin
-  case GMode of
-    ebTreeWalk:  Result := RunGocciaScriptInterpreted(AFileName);
-    ebBytecode: Result := RunGocciaScriptBytecode(AFileName);
+  case EngineOptions.Mode.ValueOr(emInterpreted) of
+    emInterpreted: Result := RunGocciaScriptInterpreted(AFileName);
+    emBytecode:    Result := RunGocciaScriptBytecode(AFileName);
   end;
 end;
 
-type
-  TAggregatedTestResult = record
-    TestResult: TGocciaObjectValue;
-    TotalLexNanoseconds: Int64;
-    TotalParseNanoseconds: Int64;
-    TotalCompileNanoseconds: Int64;
-    TotalExecNanoseconds: Int64;
-  end;
-
-function RunScriptFromFile(const AFileName: string): TAggregatedTestResult;
+function TTestRunnerApp.RunScriptFromFile(const AFileName: string): TAggregatedTestResult;
 var
   FileResult: TTestFileResult;
 begin
@@ -395,7 +487,7 @@ begin
   end;
 end;
 
-function RunScriptsFromFiles(const AFiles: TStringList): TAggregatedTestResult;
+function TTestRunnerApp.RunScriptsFromFiles(const AFiles: TStringList): TAggregatedTestResult;
 var
   GC: TGarbageCollector;
   I, J: Integer;
@@ -438,7 +530,7 @@ begin
 
   for I := 0 to AFiles.Count - 1 do
   begin
-    if GShowProgress then
+    if not FNoProgress.Present then
       WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, AFiles.Count, AFiles[I]]));
     FileResult := RunScriptFromFile(AFiles[I]);
     if FileResult.TestResult = nil then
@@ -464,7 +556,7 @@ begin
     if Assigned(GC) then
       GC.Collect;
 
-    if GExitOnFirstFailure and (FailedCount > 0) then
+    if FExitOnFirst.Present and (FailedCount > 0) then
       Break;
   end;
 
@@ -473,7 +565,7 @@ begin
     GC.RemoveTempRoot(AllTestResults);
     GC.RemoveTempRoot(AllFailedTests);
   end;
-  
+
   AllTestResults.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(AFiles.Count * 1.0));
   AllTestResults.AssignProperty('passed', TGocciaNumberLiteralValue.Create(PassedCount));
   AllTestResults.AssignProperty('failed', TGocciaNumberLiteralValue.Create(FailedCount));
@@ -481,28 +573,21 @@ begin
   AllTestResults.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(TotalRunCount));
   AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.Create(TotalDuration));
   AllTestResults.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(TotalAssertions));
-  
+
   Result.TestResult := AllTestResults;
 end;
 
-function EscapeJSONString(const S: string): string;
-begin
-  Result := StringReplace(S, '\', '\\', [rfReplaceAll]);
-  Result := StringReplace(Result, '"', '\"', [rfReplaceAll]);
-  Result := StringReplace(Result, #10, '\n', [rfReplaceAll]);
-  Result := StringReplace(Result, #13, '\r', [rfReplaceAll]);
-  Result := StringReplace(Result, #9, '\t', [rfReplaceAll]);
-end;
-
-procedure WriteResultsJSON(const AResult: TAggregatedTestResult; const AFileName: string);
+procedure TTestRunnerApp.WriteResultsJSON(const AResult: TAggregatedTestResult; const AFileName: string);
 var
   Lines: TStringList;
   TotalNanoseconds: Int64;
   FailedTests: TGocciaValue;
   FailedArray: TGocciaArrayValue;
   I: Integer;
+  IsBytecodeMode: Boolean;
 begin
-  if GMode = ebBytecode then
+  IsBytecodeMode := EngineOptions.Mode.Matches(emBytecode);
+  if IsBytecodeMode then
     TotalNanoseconds := AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds
   else
     TotalNanoseconds := AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds;
@@ -510,7 +595,7 @@ begin
   Lines := TStringList.Create;
   try
     Lines.Add('{');
-    Lines.Add(Format('  "mode": "%s",', [IfThen(GMode = ebBytecode, 'bytecode', 'interpreted')]));
+    Lines.Add(Format('  "mode": "%s",', [IfThen(IsBytecodeMode, 'bytecode', 'interpreted')]));
     Lines.Add(Format('  "totalFiles": %d,', [Round(AResult.TestResult.GetProperty('totalTests').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "totalTests": %d,', [Round(AResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "passed": %d,', [Round(AResult.TestResult.GetProperty('passed').ToNumberLiteral.Value)]));
@@ -520,7 +605,7 @@ begin
     Lines.Add(Format('  "durationNanoseconds": %d,', [Round(AResult.TestResult.GetProperty('duration').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "lexTimeNanoseconds": %d,', [AResult.TotalLexNanoseconds]));
     Lines.Add(Format('  "parseTimeNanoseconds": %d,', [AResult.TotalParseNanoseconds]));
-    if GMode = ebBytecode then
+    if IsBytecodeMode then
       Lines.Add(Format('  "compileTimeNanoseconds": %d,', [AResult.TotalCompileNanoseconds]));
     Lines.Add(Format('  "executeTimeNanoseconds": %d,', [AResult.TotalExecNanoseconds]));
     Lines.Add(Format('  "totalEngineNanoseconds": %d,', [TotalNanoseconds]));
@@ -547,7 +632,7 @@ begin
   end;
 end;
 
-procedure PrintTestResults(const AResult: TAggregatedTestResult);
+procedure TTestRunnerApp.PrintTestResults(const AResult: TAggregatedTestResult);
 var
   TestResult: TGocciaObjectValue;
   TotalRunTests: String;
@@ -558,6 +643,8 @@ var
   DurationNanoseconds: Int64;
   RunCount: Double;
   PerTestNanoseconds: Int64;
+  IsBytecodeMode: Boolean;
+  CurrentOutputFile: string;
 begin
   ExitCode := 0;
   TestResult := AResult.TestResult;
@@ -572,7 +659,9 @@ begin
   DurationNanoseconds := Round(TestResult.GetProperty('duration').ToNumberLiteral.Value);
   RunCount := StrToFloat(TotalRunTests);
 
-  if GShowResults then
+  IsBytecodeMode := EngineOptions.Mode.Matches(emBytecode);
+
+  if not FNoResults.Present then
   begin
     Writeln('Test Results Test Files: ', TestResult.GetProperty('totalTests').ToStringLiteral.Value);
     Writeln(Format('Test Results Run Tests: %s', [TotalRunTests]));
@@ -585,7 +674,7 @@ begin
       Writeln(Format('Test Results Skipped: %s (%2.2f%%)', [TotalSkipped, (StrToFloat(TotalSkipped) / RunCount * 100)]));
       Writeln(Format('Test Results Assertions: %s', [TotalAssertions]));
       Writeln(Format('Test Results Test Duration: %s (%s/test)', [FormatDuration(DurationNanoseconds), FormatDuration(PerTestNanoseconds)]));
-      if GMode = ebBytecode then
+      if IsBytecodeMode then
         Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
           [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds),
            FormatDuration(AResult.TotalCompileNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
@@ -598,194 +687,18 @@ begin
     end;
   end;
 
-  if GOutputFile <> '' then
-    WriteResultsJSON(AResult, GOutputFile);
+  CurrentOutputFile := FOutputFile.ValueOr('');
+  if CurrentOutputFile <> '' then
+    WriteResultsJSON(AResult, CurrentOutputFile);
 
   if StrToFloat(TotalFailed) > 0 then
     ExitCode := 1;
 end;
 
 var
-  Files: TStringList;
-  Paths: TStringList;
-  I: Integer;
-  Arg: string;
-
+  RunResult: Integer;
 begin
-  GShowProgress := True;
-  GShowResults := True;
-  GExitOnFirstFailure := False;
-  GSilentConsole := False;
-  GImportMapPath := '';
-  GMode := ebTreeWalk;
-  GInlineAliases := TStringList.Create;
-  Paths := TStringList.Create;
-  try
-    I := 1;
-    while I <= ParamCount do
-    begin
-      Arg := ParamStr(I);
-      if Arg = '--no-progress' then
-        GShowProgress := False
-      else if Arg = '--no-results' then
-        GShowResults := False
-      else if Arg = '--exit-on-first-failure' then
-        GExitOnFirstFailure := True
-      else if Arg = '--silent' then
-        GSilentConsole := True
-      else if Copy(Arg, 1, 13) = '--import-map=' then
-      begin
-        GImportMapPath := Copy(Arg, 14, MaxInt);
-        if GImportMapPath = '' then
-        begin
-          WriteLn('Error: --import-map requires a non-empty path.');
-          ExitCode := 1;
-          Exit;
-        end;
-      end
-      else if Copy(Arg, 1, 8) = '--alias=' then
-        GInlineAliases.Add(Copy(Arg, 9, MaxInt))
-      else if Copy(Arg, 1, 9) = '--output=' then
-        GOutputFile := Copy(Arg, 10, MaxInt)
-      else if Arg = '--alias' then
-      begin
-        if I = ParamCount then
-        begin
-          WriteLn('Error: --alias requires a key=value argument.');
-          ExitCode := 1;
-          Exit;
-        end;
-        Inc(I);
-        GInlineAliases.Add(ParamStr(I));
-      end
-      else if Arg = '--mode=interpreted' then
-        GMode := ebTreeWalk
-      else if Arg = '--mode=bytecode' then
-        GMode := ebBytecode
-      else if Copy(Arg, 1, 7) = '--mode=' then
-      begin
-        WriteLn('Error: Unknown mode "', Copy(Arg, 8, MaxInt), '". Use "interpreted" or "bytecode".');
-        ExitCode := 1;
-        Exit;
-      end
-      else if Arg = '--coverage' then
-        GCoverageEnabled := True
-      else if Arg = '--coverage-format=lcov' then
-      begin
-        GCoverageLcovEnabled := True;
-        GCoverageEnabled := True;
-      end
-      else if Arg = '--coverage-format=json' then
-      begin
-        GCoverageJsonEnabled := True;
-        GCoverageEnabled := True;
-      end
-      else if Copy(Arg, 1, 18) = '--coverage-format=' then
-      begin
-        WriteLn('Error: Unknown coverage format "', Copy(Arg, 19, MaxInt), '". Use "lcov" or "json".');
-        ExitCode := 1;
-        Exit;
-      end
-      else if Copy(Arg, 1, 18) = '--coverage-output=' then
-      begin
-        GCoverageOutputPath := Copy(Arg, 19, MaxInt);
-        GCoverageEnabled := True;
-      end
-      else if Arg = '--asi' then
-        GASIEnabled := True
-      else if Copy(Arg, 1, 10) = '--timeout=' then
-      begin
-        if not TryStrToInt(Copy(Arg, 11, MaxInt), GTimeoutMilliseconds) or
-           (GTimeoutMilliseconds < 0) then
-        begin
-          WriteLn('Error: --timeout must be a non-negative integer number of milliseconds.');
-          ExitCode := 1;
-          Exit;
-        end;
-      end
-      else if Copy(Arg, 1, 2) = '--' then
-      begin
-        WriteLn('Error: Unknown option "', Arg, '"');
-        ExitCode := 1;
-        Exit;
-      end
-      else
-        Paths.Add(Arg);
-      Inc(I);
-    end;
-
-    if Paths.Count = 0 then
-    begin
-      WriteLn('Usage: TestRunner <path...> [options]');
-      WriteLn('  <path...>               Script files (.js, .jsx, .ts, .tsx, .mjs) or directories');
-      WriteLn('  --no-progress           Suppress per-file progress output');
-      WriteLn('  --no-results            Suppress test results summary');
-      WriteLn('  --exit-on-first-failure Stop on first test failure');
-      WriteLn('  --silent                Suppress console output from test scripts');
-      WriteLn('  --import-map=<file>     Load an explicit import map JSON for module resolution');
-      WriteLn('  --alias key=value       Add an inline import-map-style alias');
-      WriteLn('  --output=<file>         Write test results as JSON to file');
-      WriteLn('  --mode=interpreted|bytecode  Execution backend (default: interpreted)');
-      WriteLn('  --asi                   Enable automatic semicolon insertion');
-      WriteLn('  --timeout=<ms>          Per-file execution timeout in milliseconds');
-      WriteLn('  --coverage              Enable line and branch coverage reporting');
-      WriteLn('  --coverage-format=lcov|json  Coverage output format (implies --coverage)');
-      WriteLn('  --coverage-output=<file>     Coverage output file (paired with --coverage-format)');
-      ExitCode := 1;
-    end
-    else
-    begin
-      if GCoverageEnabled then
-      begin
-        TGocciaCoverageTracker.Initialize;
-        TGocciaCoverageTracker.Instance.Enabled := True;
-      end;
-      try
-        Files := TStringList.Create;
-        try
-          for I := 0 to Paths.Count - 1 do
-          begin
-            if DirectoryExists(Paths[I]) then
-              Files.AddStrings(FindAllFiles(Paths[I], ScriptExtensions))
-            else if FileExists(Paths[I]) then
-              Files.Add(Paths[I])
-            else
-            begin
-              WriteLn('Error: Path not found: ', Paths[I]);
-              ExitCode := 1;
-              Exit;
-            end;
-          end;
-
-          if Files.Count = 1 then
-          begin
-            if GShowProgress then
-              WriteLn('[1/1] ', Files[0]);
-            PrintTestResults(RunScriptFromFile(Files[0]));
-          end
-          else
-            PrintTestResults(RunScriptsFromFiles(Files));
-
-          if GCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
-          begin
-            PrintCoverageSummary(TGocciaCoverageTracker.Instance);
-            if Files.Count = 1 then
-              PrintCoverageDetail(TGocciaCoverageTracker.Instance, Files[0]);
-            if GCoverageLcovEnabled and (GCoverageOutputPath <> '') then
-              WriteCoverageLcov(TGocciaCoverageTracker.Instance, GCoverageOutputPath);
-            if GCoverageJsonEnabled and (GCoverageOutputPath <> '') then
-              WriteCoverageJSON(TGocciaCoverageTracker.Instance, GCoverageOutputPath);
-          end;
-        finally
-          Files.Free;
-        end;
-      finally
-        if GCoverageEnabled then
-          TGocciaCoverageTracker.Shutdown;
-      end;
-    end;
-  finally
-    GInlineAliases.Free;
-    Paths.Free;
-  end;
+  RunResult := TGocciaApplication.RunApplication(TTestRunnerApp, 'TestRunner');
+  if RunResult <> 0 then
+    ExitCode := RunResult;
 end.

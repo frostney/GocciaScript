@@ -51,6 +51,41 @@ For **tree-walk execution**, see [Interpreter](interpreter.md); for **bytecode e
 - Sparse arrays use a dedicated hole sentinel.
 - Precompiled bytecode uses the `.gbc` format.
 
+## CLI Library
+
+The CLI tools share a two-level application class hierarchy and a declarative option parsing system.
+
+**Application classes:**
+
+- `TGocciaApplication` (`Goccia.Application.pas`) — embeddable base for any GocciaScript host. Manages GC lifecycle (`Initialize`/`Shutdown`) and unified error handling (`HandleError` virtual). No CLI dependency.
+- `TGocciaCLIApplication` (`Goccia.CLI.Application.pas`) — extends `TGocciaApplication` with CLI concerns: argument parsing, help generation, option registration, and coverage/profiler singleton lifecycle. Tools override `Configure` (register options) and `ExecuteWithPaths` (business logic).
+
+**Option class hierarchy** (`Goccia.CLI.Options.pas`):
+
+- `TGocciaOptionBase` → `TGocciaFlagOption`, `TGocciaStringOption`, `TGocciaIntegerOption`, `TGocciaRepeatableOption`, `TGocciaEnumOption<T>`
+- The parser calls `Option.Apply(Value)` via virtual dispatch — no pointer arithmetic
+- `TGocciaEnumOption<T>` uses RTTI (`GetEnumName` + prefix stripping) to auto-discover valid values
+- Predefined option groups (`TGocciaEngineOptions`, `TGocciaCoverageOptions`, `TGocciaProfilerOptions`) bundle related options with owning lifecycle
+
+**CLI lifecycle** (`TGocciaCLIApplication.Execute`):
+
+1. `Configure` — register option groups and tool-specific flags
+2. `ParseCommandLine` — parse `ParamStr` via virtual `Apply` dispatch
+3. `Validate` — post-parse semantic checks (e.g., conflicting flags)
+4. `InitializeSingletons` — coverage tracker, profiler
+5. `ExecuteWithPaths` — tool business logic
+6. `AfterExecute` — reporting hooks
+7. `ShutdownSingletons` — cleanup in reverse order
+
+**Tool mapping:**
+
+| Tool | Base Class | Overrides |
+|------|-----------|-----------|
+| REPL | `TGocciaApplication` | `Execute` (interactive loop) |
+| ScriptLoader | `TGocciaCLIApplication` | `Configure`, `Validate`, `ExecuteWithPaths`, `HandleError`, `AfterExecute` |
+| TestRunner | `TGocciaCLIApplication` | `Configure`, `ExecuteWithPaths`, `GlobalBuiltins` |
+| BenchmarkRunner | `TGocciaCLIApplication` | `Configure`, `ExecuteWithPaths`, `GlobalBuiltins` |
+
 ## Duplication Boundaries (beneficial vs harmful)
 
 The interpreter and bytecode backend are **intentionally separate control-flow mechanisms** (tree-walk vs register VM). Sharing the **same** `TGocciaValue` model and virtual property access is the architectural consolidation point; you should not try to merge those backends into one execution path.
