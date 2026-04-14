@@ -229,14 +229,14 @@ features: [addition, arithmetic]
 ### Run All Tests
 
 ```bash
-# Interpreted mode (default)
-./build/TestRunner tests
+# Interpreted mode (default) — include --asi for ASI test coverage
+./build/TestRunner tests --asi
 
 # Bytecode mode
-./build/TestRunner tests --mode=bytecode
+./build/TestRunner tests --mode=bytecode --asi
 ```
 
-Both modes must pass. CI runs the full suite in both interpreted and bytecode mode as separate matrix jobs.
+Both modes must pass. The `--asi` flag enables automatic semicolon insertion tests under `tests/language/asi/`. CI runs the full suite with `--asi` in both interpreted and bytecode mode as separate matrix jobs.
 
 ### Run a Specific Test File
 

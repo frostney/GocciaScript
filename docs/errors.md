@@ -12,7 +12,7 @@
 
 ## Error Types
 
-GocciaScript supports the standard ECMAScript error constructors plus two additional types. All error types inherit from `Error` and work with `instanceof`.
+GocciaScript supports the standard ECMAScript error constructors plus two additional types. All JavaScript-visible error types inherit from `Error` and work with `instanceof`. `TimeoutError` is CLI-only and not exposed as a JavaScript constructor.
 
 | Type | Thrown when | MDN |
 |------|-----------|-----|
@@ -143,7 +143,7 @@ Each frame shows the function name (or `<anonymous>`), the file path, and the li
 
 ## Error.cause
 
-All error constructors accept an optional second argument -- an options object with a `cause` property. This follows [ES2022 Error Cause](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error/cause):
+Most error constructors accept an options object with a `cause` property, following [ES2022 Error Cause](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error/cause). The options argument position varies by constructor: second for `Error`, `TypeError`, `RangeError`, `ReferenceError`, `SyntaxError`, and `URIError`; third for `AggregateError` (`new AggregateError(errors, message, options)`); fourth for `SuppressedError` (`new SuppressedError(error, suppressed, message, options)`).
 
 ```javascript
 const original = new Error("disk full");
