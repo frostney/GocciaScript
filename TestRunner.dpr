@@ -25,6 +25,7 @@ uses
   Goccia.Error.Detail,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
+  Goccia.JSON.Utils,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
@@ -127,15 +128,6 @@ begin
   AResult.AssignProperty('failed', TGocciaNumberLiteralValue.Create(1));
   TGocciaArrayValue(AResult.GetProperty('failedTests')).Elements.Add(
     TGocciaStringLiteralValue.Create(AFileName + ': ' + AMessage));
-end;
-
-function EscapeJSONString(const S: string): string;
-begin
-  Result := StringReplace(S, '\', '\\', [rfReplaceAll]);
-  Result := StringReplace(Result, '"', '\"', [rfReplaceAll]);
-  Result := StringReplace(Result, #10, '\n', [rfReplaceAll]);
-  Result := StringReplace(Result, #13, '\r', [rfReplaceAll]);
-  Result := StringReplace(Result, #9, '\t', [rfReplaceAll]);
 end;
 
 { TTestRunnerApp }

@@ -44,48 +44,12 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.JSON,
+  Goccia.JSON.Utils,
   Goccia.Timeout,
   Goccia.Values.Error,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue,
   Goccia.VM.Exception;
-
-function EscapeJSONString(const AValue: string): string;
-var
-  I: Integer;
-  Ch: Char;
-  Buffer: TStringBuffer;
-begin
-  Buffer := TStringBuffer.Create(Length(AValue));
-  for I := 1 to Length(AValue) do
-  begin
-    Ch := AValue[I];
-    case Ch of
-      '"': Buffer.Append('\"');
-      '\': Buffer.Append('\\');
-      '/': Buffer.Append('\/');
-      #8: Buffer.Append('\b');
-      #9: Buffer.Append('\t');
-      #10: Buffer.Append('\n');
-      #12: Buffer.Append('\f');
-      #13: Buffer.Append('\r');
-    else
-      if Ord(Ch) < 32 then
-      begin
-        Buffer.Append('\u');
-        Buffer.Append(IntToHex(Ord(Ch), 4));
-      end
-      else
-        Buffer.AppendChar(Ch);
-    end;
-  end;
-  Result := Buffer.ToString;
-end;
-
-function QuoteJSONString(const AValue: string): string;
-begin
-  Result := '"' + EscapeJSONString(AValue) + '"';
-end;
 
 function NanosecondsToMillisecondsText(const ANanoseconds: Int64): string;
 begin

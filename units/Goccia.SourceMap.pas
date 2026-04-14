@@ -41,7 +41,6 @@ type
     procedure GrowSegments;
     function FindLineStart(const AGeneratedLine: Integer): Integer;
     function EncodeMappings: string;
-    function EscapeJSONString(const AValue: string): string;
   public
     constructor Create(const AFile: string = '');
     destructor Destroy; override;
@@ -76,6 +75,7 @@ uses
   StringBuffer,
 
   Goccia.Base64,
+  Goccia.JSON.Utils,
   Goccia.SourceMap.VLQ;
 
 { TGocciaSourceMap }
@@ -244,38 +244,6 @@ begin
   ASourceLine := FSegments[BestIndex].SourceLine + 1;
   ASourceColumn := FSegments[BestIndex].SourceColumn + (AColumn - FSegments[BestIndex].GeneratedColumn);
   Result := True;
-end;
-
-function TGocciaSourceMap.EscapeJSONString(const AValue: string): string;
-var
-  Buffer: TStringBuffer;
-  I: Integer;
-  Ch: Char;
-begin
-  Buffer := TStringBuffer.Create(Length(AValue));
-  for I := 1 to Length(AValue) do
-  begin
-    Ch := AValue[I];
-    case Ch of
-      '"':  Buffer.Append('\"');
-      '\':  Buffer.Append('\\');
-      '/':  Buffer.Append('\/');
-      #8:   Buffer.Append('\b');
-      #9:   Buffer.Append('\t');
-      #10:  Buffer.Append('\n');
-      #12:  Buffer.Append('\f');
-      #13:  Buffer.Append('\r');
-    else
-      if Ord(Ch) < 32 then
-      begin
-        Buffer.Append('\u');
-        Buffer.Append(IntToHex(Ord(Ch), 4));
-      end
-      else
-        Buffer.AppendChar(Ch);
-    end;
-  end;
-  Result := Buffer.ToString;
 end;
 
 // TC39 Source Map Spec — Mappings encoding

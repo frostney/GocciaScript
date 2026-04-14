@@ -10,45 +10,12 @@ uses
   StringBuffer,
 
   Goccia.GarbageCollector,
+  Goccia.JSON.Utils,
   Goccia.JSON5,
   Goccia.TextFiles,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
-
-function EscapeJSONString(const AValue: string): string;
-var
-  C: Char;
-begin
-  Result := '';
-  for C in AValue do
-    case C of
-      '"':
-        Result := Result + '\"';
-      '\':
-        Result := Result + '\\';
-      #8:
-        Result := Result + '\b';
-      #9:
-        Result := Result + '\t';
-      #10:
-        Result := Result + '\n';
-      #12:
-        Result := Result + '\f';
-      #13:
-        Result := Result + '\r';
-    else
-      if Ord(C) < 32 then
-        Result := Result + '\u' + IntToHex(Ord(C), 4)
-      else
-        Result := Result + C;
-    end;
-end;
-
-function QuoteJSONString(const AValue: string): string;
-begin
-  Result := '"' + EscapeJSONString(AValue) + '"';
-end;
 
 function SameDoubleBits(const ALeft, ARight: Double): Boolean;
 var
