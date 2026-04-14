@@ -443,17 +443,20 @@ MathObj.DefineProperty('PI', TGocciaNumberLiteralValue.Create(Pi), False);
 MathObj.DefineProperty('floor', TGocciaNativeFunction.Create(@MathFloor), False);
 ```
 
-### Visitor-like Dispatch (Evaluator)
+### Virtual Dispatch (Evaluator)
 
-The evaluator dispatches on AST node type using `is` checks:
+Expression and statement evaluation use **VMT dispatch** on AST nodes: `TGocciaExpression.Evaluate` and `TGocciaStatement.Execute` are abstract virtual methods; each AST subclass overrides the appropriate entry point. The wrappers in `Goccia.Evaluator.pas` record coverage when enabled, then delegate:
 
 ```pascal
-if Node is TGocciaBinaryExpression then
-  Result := EvaluateBinary(TGocciaBinaryExpression(Node), Context)
-else if Node is TGocciaCallExpression then
-  Result := EvaluateCall(TGocciaCallExpression(Node), Context)
-// ...
+function EvaluateExpression(const AExpression: TGocciaExpression;
+  const AContext: TGocciaEvaluationContext): TGocciaValue;
+begin
+  // coverage ...
+  Result := AExpression.Evaluate(AContext);
+end;
 ```
+
+The top-level `Evaluate` helper still distinguishes **expressions vs statements** with a small `is TGocciaExpression` / `is TGocciaStatement` split before routing; that is not the per-node hot path.
 
 See [spikes/fpc-dispatch-performance.md](spikes/fpc-dispatch-performance.md) for the benchmark analysis comparing virtual, interface, and manual VMT dispatch.
 
