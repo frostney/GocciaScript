@@ -21,4 +21,8 @@ describe("JSONC import", () => {
     expect(database.host).toBe("db.example.com");
     expect(database.port).toBe(3306);
   });
+
+  test("fails on malformed JSONC", () => {
+    expect(() => JSON5.parse('{ "key": }')).toThrow(SyntaxError);
+  });
 });
