@@ -12,6 +12,7 @@ const
   EXT_MJS  = '.mjs';
   EXT_JSON = '.json';
   EXT_JSON5 = '.json5';
+  EXT_JSONC = '.jsonc';
   EXT_JSONL = '.jsonl';
   EXT_TOML = '.toml';
   EXT_YAML = '.yaml';
@@ -29,9 +30,9 @@ const
     EXT_JSX, EXT_TSX
   );
 
-  ModuleImportExtensions: array[0..12] of string = (
+  ModuleImportExtensions: array[0..13] of string = (
     EXT_JS, EXT_JSX, EXT_TS, EXT_TSX, EXT_MJS,
-    EXT_JSON, EXT_JSON5, EXT_JSONL, EXT_TOML, EXT_YAML, EXT_YML,
+    EXT_JSON, EXT_JSON5, EXT_JSONC, EXT_JSONL, EXT_TOML, EXT_YAML, EXT_YML,
     EXT_TXT, EXT_MD
   );
 
@@ -87,7 +88,7 @@ var
   Ext: string;
 begin
   Ext := LowerCase(AExtension);
-  Result := Ext = EXT_JSON5;
+  Result := (Ext = EXT_JSON5) or (Ext = EXT_JSONC);
 end;
 
 function IsYAMLExtension(const AExtension: string): Boolean;

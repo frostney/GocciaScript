@@ -1,0 +1,12 @@
+{
+  // JSONC: JSON with Comments
+  "name": "goccia-jsonc",
+  "version": "2.0.0",
+  "debug": false,
+  "maxRetries": 5,
+  "tags": ["stable", "release"],
+  "database": {
+    "host": "db.example.com",
+    "port": 3306
+  }
+}
