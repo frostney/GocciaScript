@@ -622,7 +622,7 @@ Numbers are represented by a single `Double` payload (`FValue`). Special values 
 - **Negative zero** — `-0` and `+0` are equal in IEEE 754 but distinguishable in JavaScript (`Object.is(-0, +0)` is `false`). The `IsNegativeZero` accessor encapsulates the sign-bit check.
 - **Display correctness** — `NaN.toString()` must return `"NaN"`, not a floating-point artifact. The accessors ensure correct string conversion.
 
-**Pitfall: raw `Value = 0` checks.** IEEE 754 `NaN` and `Infinity` values have specific bit patterns, but any code comparing `Value = 0` should also guard against negative zero. The `IsActualZero` helper in the arithmetic evaluator encapsulates this: `(Value = 0) and not IsNaN and not IsInfinite`. Similarly, the `NumericRank` helper in `Goccia.Values.ArrayValue.pas` maps each special value to a distinct sort key.
+**Pitfall: raw `Value = 0` checks.** The `IsActualZero` helper in `Goccia.Evaluator.Arithmetic.pas` uses `(Value = 0) and not IsNaN and not IsInfinite` — this intentionally treats `-0` as zero, which is correct for exponentiation (`(-0)^0 === 1`). In contexts where `-0` must be distinguished (e.g. `Object.is`, sort ordering), use `IsNegativeZero` explicitly. The `NumericRank` helper in `Goccia.Values.ArrayValue.pas` maps each special value to a distinct sort key for this purpose.
 
 ### `this` Binding Design
 
