@@ -3,6 +3,7 @@ program ScriptLoader;
 {$I Goccia.inc}
 
 uses
+  {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes,
   Generics.Collections,
   SysUtils,
@@ -37,6 +38,8 @@ uses
   Goccia.SourceMap,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
+  Goccia.Threading,
+  Goccia.Threading.Init,
   Goccia.Timeout,
   Goccia.Token,
   Goccia.Values.Error,
@@ -90,6 +93,10 @@ type
     procedure RunSource(const ASource: TStringList; const AFileName: string);
     procedure RunScriptFromFile(const AFileName: string);
     procedure RunScriptFromStdin;
+    procedure ScriptWorkerProc(const AFileName: string; const AIndex: Integer;
+      out AConsoleOutput: string; out AErrorMessage: string; AData: Pointer);
+    procedure RunScriptsParallel(const AFiles: TStringList;
+      const AJobCount: Integer);
     procedure RunScripts(const APath: string);
   protected
     procedure Configure; override;
@@ -682,6 +689,46 @@ begin
   end;
 end;
 
+procedure TScriptLoaderApp.ScriptWorkerProc(const AFileName: string;
+  const AIndex: Integer; out AConsoleOutput: string;
+  out AErrorMessage: string; AData: Pointer);
+begin
+  AConsoleOutput := '';
+  AErrorMessage := '';
+  try
+    RunScriptFromFile(AFileName);
+  except
+    on E: Exception do
+    begin
+      AErrorMessage := E.Message;
+      ExitCode := 1;
+    end;
+  end;
+end;
+
+procedure TScriptLoaderApp.RunScriptsParallel(const AFiles: TStringList;
+  const AJobCount: Integer);
+var
+  Pool: TGocciaThreadPool;
+  I: Integer;
+begin
+  EnsureSharedPrototypesInitialized(GlobalBuiltins);
+
+  Pool := TGocciaThreadPool.Create(AJobCount);
+  try
+    Pool.RunAll(AFiles, ScriptWorkerProc);
+
+    for I := 0 to AFiles.Count - 1 do
+      if Pool.Results[I].ErrorMessage <> '' then
+      begin
+        WriteLn('Error in ', AFiles[I], ': ', Pool.Results[I].ErrorMessage);
+        ExitCode := 1;
+      end;
+  finally
+    Pool.Free;
+  end;
+end;
+
 procedure TScriptLoaderApp.RunScripts(const APath: string);
 var
   Files: TStringList;
@@ -700,12 +747,15 @@ begin
 
     Files := FindAllFiles(APath, ScriptExtensions);
     try
-      for I := 0 to Files.Count - 1 do
-      begin
-        if I > 0 then
-          WriteLn;
-        RunScriptFromFile(Files[I]);
-      end;
+      if GetJobCount(Files.Count) > 1 then
+        RunScriptsParallel(Files, GetJobCount(Files.Count))
+      else
+        for I := 0 to Files.Count - 1 do
+        begin
+          if I > 0 then
+            WriteLn;
+          RunScriptFromFile(Files[I]);
+        end;
     finally
       Files.Free;
     end;

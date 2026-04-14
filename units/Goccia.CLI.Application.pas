@@ -17,6 +17,7 @@ type
   TGocciaCLIApplication = class(TGocciaApplication)
   private
     FHelp: TGocciaFlagOption;
+    FJobs: TGocciaIntegerOption;
     FEngineOptions: TGocciaEngineOptions;
     FCoverageOptions: TGocciaCoverageOptions;
     FProfilerOptions: TGocciaProfilerOptions;
@@ -44,6 +45,9 @@ type
       const ASource: TStringList): TGocciaEngine;
     function CreateBytecodeBackend(
       const AFileName: string): TGocciaBytecodeBackend;
+    { Returns the effective job count: --jobs value, or ProcessorCount,
+      capped to AFileCount. Returns 1 when parallelism is not desired. }
+    function GetJobCount(const AFileCount: Integer): Integer;
     property EngineOptions: TGocciaEngineOptions read FEngineOptions;
     property CoverageOptions: TGocciaCoverageOptions read FCoverageOptions;
     property ProfilerOptions: TGocciaProfilerOptions read FProfilerOptions;
@@ -55,6 +59,8 @@ type
 implementation
 
 uses
+  Math,
+
   Goccia.CLI.EngineSetup,
   Goccia.CLI.Help,
   Goccia.CLI.Parser,
@@ -73,6 +79,7 @@ begin
   FCoverageOptions := nil;
   FProfilerOptions := nil;
   FHelp := nil;
+  FJobs := nil;
 end;
 
 destructor TGocciaCLIApplication.Destroy;
@@ -82,6 +89,7 @@ begin
   FCoverageOptions.Free;
   FProfilerOptions.Free;
   FHelp.Free;
+  FJobs.Free;
   inherited Destroy;
 end;
 
@@ -209,6 +217,17 @@ begin
   // Override point for subclasses
 end;
 
+function TGocciaCLIApplication.GetJobCount(const AFileCount: Integer): Integer;
+begin
+  if AFileCount <= 1 then
+    Exit(1);
+  if Assigned(FJobs) and FJobs.Present then
+    Result := Max(1, FJobs.Value)
+  else
+    Result := TThread.ProcessorCount;
+  Result := Min(Result, AFileCount);
+end;
+
 procedure TGocciaCLIApplication.InitializeSingletons;
 begin
   if Assigned(FCoverageOptions) then
@@ -235,7 +254,14 @@ begin
   FHelp := TGocciaFlagOption.Create('help', 'Show this help message');
   FHelp.ShortName := 'h';
 
+  FJobs := TGocciaIntegerOption.Create('jobs', 'Number of parallel worker threads');
+  FJobs.ShortName := 'j';
+  // FJobs is freed in the destructor; add it to FAllOptions manually below
+
   BuildAllOptions;
+  // Append --jobs after BuildAllOptions so it appears in help
+  SetLength(FAllOptions, Length(FAllOptions) + 1);
+  FAllOptions[High(FAllOptions)] := FJobs;
 
   Paths := ParseCommandLine(FAllOptions);
   try

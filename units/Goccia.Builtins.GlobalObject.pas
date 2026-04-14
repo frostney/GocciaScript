@@ -16,7 +16,6 @@ uses
 type
   TGocciaGlobalObject = class(TGocciaBuiltin)
   private
-    class var FStaticMembers: array of TGocciaMemberDefinition;
   protected
     // Native methods
   published
@@ -65,6 +64,9 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue;
+
+threadvar
+  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 // ES2026 §6.2.6.4 FromPropertyDescriptor(Desc)
 function FromPropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor): TGocciaObjectValue;

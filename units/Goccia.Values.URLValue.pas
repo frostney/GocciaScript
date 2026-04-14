@@ -19,9 +19,6 @@ uses
 type
   TGocciaURLValue = class(TGocciaInstanceValue)
   private
-    class var FShared: TGocciaSharedPrototype;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-  private
     // WHATWG URL §4.1 URL record components (stored parsed)
     FScheme: string;       // e.g. 'https' — no ':'
     FUsername: string;     // percent-encoded
@@ -141,6 +138,10 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
+
+threadvar
+  FShared: TGocciaSharedPrototype;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 { TGocciaURLValue }
 

@@ -17,7 +17,6 @@ uses
 type
   TGocciaTOMLBuiltin = class(TGocciaBuiltin)
   private
-    class var FStaticMembers: array of TGocciaMemberDefinition;
     FParser: TGocciaTOMLParser;
   published
     function TOMLParse(const AArgs: TGocciaArgumentsCollection;
@@ -36,6 +35,9 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
+
+threadvar
+  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 constructor TGocciaTOMLBuiltin.Create(const AName: string;
   const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);

@@ -15,8 +15,6 @@ type
   TGocciaCallFrameArray = array of TGocciaCallFrame;
 
   TGocciaCallStack = class
-  private class var
-    FInstance: TGocciaCallStack;
   private
     FFrames: array of TGocciaCallFrame;
     FCount: Integer;
@@ -48,22 +46,25 @@ uses
 const
   INITIAL_CAPACITY = 32;
 
+threadvar
+  CallStackThreadInstance: TGocciaCallStack;
+
 { TGocciaCallStack }
 
 class function TGocciaCallStack.Instance: TGocciaCallStack;
 begin
-  Result := FInstance;
+  Result := CallStackThreadInstance;
 end;
 
 class procedure TGocciaCallStack.Initialize;
 begin
-  if not Assigned(FInstance) then
-    FInstance := TGocciaCallStack.Create;
+  if not Assigned(CallStackThreadInstance) then
+    CallStackThreadInstance := TGocciaCallStack.Create;
 end;
 
 class procedure TGocciaCallStack.Shutdown;
 begin
-  FreeAndNil(FInstance);
+  FreeAndNil(CallStackThreadInstance);
 end;
 
 constructor TGocciaCallStack.Create;

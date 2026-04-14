@@ -22,7 +22,6 @@ uses
 type
   TGocciaJSON5Builtin = class(TGocciaBuiltin)
   private
-    class var FStaticMembers: array of TGocciaMemberDefinition;
     FParser: TGocciaJSON5Parser;
     FReplacerTraversalStack: TList<TGocciaObjectValue>;
     FReviverSourceIndex: Integer;
@@ -76,6 +75,9 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
   Goccia.Values.WrapperPrimitives;
+
+threadvar
+  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 function UTF8SequenceLengthFromLeadByte(const AChar: Char): Integer;
 var

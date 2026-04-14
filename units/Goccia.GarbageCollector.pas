@@ -11,8 +11,6 @@ uses
 
 type
   TGCManagedObject = class
-  private class var
-    FCurrentMark: Cardinal;
   private
     FGCMark: Cardinal;
     FGCIndex: Integer;
@@ -32,8 +30,6 @@ type
   TGCObjectSet = THashMap<TGCManagedObject, Boolean>;
 
   TGarbageCollector = class
-  private class var
-    FInstance: TGarbageCollector;
   private
     FManagedObjects: TGCManagedObjectList;
     FPinnedObjects: TGCObjectSet;
@@ -133,29 +129,33 @@ uses
   TimingUtils{$ENDIF};
 {$ENDIF}
 
+threadvar
+  GCCurrentMark: Cardinal;
+  GCThreadInstance: TGarbageCollector;
+
 { TGCManagedObject }
 
 class procedure TGCManagedObject.AdvanceMark;
 begin
-  Inc(FCurrentMark);
-  if FCurrentMark = 0 then
-    FCurrentMark := 1;
+  Inc(GCCurrentMark);
+  if GCCurrentMark = 0 then
+    GCCurrentMark := 1;
 end;
 
 function TGCManagedObject.GetGCMarked: Boolean;
 begin
-  Result := FGCMark = FCurrentMark;
+  Result := FGCMark = GCCurrentMark;
 end;
 
 procedure TGCManagedObject.SetGCMarked(const AValue: Boolean);
 begin
   if AValue then
-    FGCMark := FCurrentMark;
+    FGCMark := GCCurrentMark;
 end;
 
 procedure TGCManagedObject.MarkReferences;
 begin
-  FGCMark := FCurrentMark;
+  FGCMark := GCCurrentMark;
 end;
 
 procedure TGCManagedObject.Recycle;
@@ -167,19 +167,22 @@ end;
 
 class function TGarbageCollector.Instance: TGarbageCollector;
 begin
-  Result := FInstance;
+  Result := GCThreadInstance;
 end;
 
 class procedure TGarbageCollector.Initialize;
 begin
-  if not Assigned(FInstance) then
-    FInstance := TGarbageCollector.Create;
+  if not Assigned(GCThreadInstance) then
+  begin
+    GCThreadInstance := TGarbageCollector.Create;
+    GCCurrentMark := 1;
+  end;
 end;
 
 class procedure TGarbageCollector.Shutdown;
 begin
-  FInstance.Free;
-  FInstance := nil;
+  GCThreadInstance.Free;
+  GCThreadInstance := nil;
 end;
 
 constructor TGarbageCollector.Create;
@@ -526,6 +529,6 @@ begin
 end;
 
 initialization
-  TGCManagedObject.FCurrentMark := 1;
+  GCCurrentMark := 1;
 
 end.

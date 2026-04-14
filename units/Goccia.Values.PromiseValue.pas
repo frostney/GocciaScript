@@ -36,9 +36,6 @@ type
 
   TGocciaPromiseValue = class(TGocciaObjectValue)
   private
-    class var FShared: TGocciaSharedPrototype;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-  private
     FState: TGocciaPromiseState;
     FResult: TGocciaValue;
     FReactions: TList<TGocciaPromiseReaction>;
@@ -89,6 +86,10 @@ uses
   Goccia.Values.FunctionBase,
   Goccia.Values.NativeFunction,
   Goccia.VM.Exception;
+
+threadvar
+  FShared: TGocciaSharedPrototype;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 type
   TGocciaFinallyPassthrough = class(TGocciaObjectValue)

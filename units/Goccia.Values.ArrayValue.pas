@@ -15,10 +15,6 @@ uses
 type
   TGocciaArrayValue = class(TGocciaInstanceValue)
   private
-    class var FSharedArrayPrototype: TGocciaObjectValue;
-    class var FPrototypeMethodHost: TGocciaArrayValue;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-
     // Helper methods for reducing duplication
     function ValidateArrayMethodCall(const AMethodName: string; const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue; const ARequiresCallback: Boolean = True): TGocciaValue;
@@ -116,6 +112,7 @@ uses
   Goccia.Error,
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
+  Goccia.SharedPrototype,
   Goccia.Utils,
   Goccia.Utils.Arrays,
   Goccia.Values.ClassHelper,
@@ -125,6 +122,11 @@ uses
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.SymbolValue,
   Goccia.Values.ToPrimitive;
+
+threadvar
+  FSharedArrayPrototype: TGocciaObjectValue;
+  FPrototypeMethodHost: TGocciaArrayValue;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 function DefaultCompare(constref A, B: TGocciaValue): Integer;
 var
@@ -330,7 +332,8 @@ begin
     TGocciaClassValue(AConstructor).ReplacePrototype(FSharedArrayPrototype)
   else if AConstructor is TGocciaObjectValue then
     TGocciaObjectValue(AConstructor).AssignProperty(PROP_PROTOTYPE, FSharedArrayPrototype);
-  FSharedArrayPrototype.AssignProperty(PROP_CONSTRUCTOR, AConstructor);
+  if not FSharedArrayPrototype.HasProperty(PROP_CONSTRUCTOR) then
+    FSharedArrayPrototype.AssignProperty(PROP_CONSTRUCTOR, AConstructor);
 end;
 
 destructor TGocciaArrayValue.Destroy;

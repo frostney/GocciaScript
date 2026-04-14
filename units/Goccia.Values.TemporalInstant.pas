@@ -14,9 +14,6 @@ uses
 type
   TGocciaTemporalInstantValue = class(TGocciaObjectValue)
   private
-    class var FShared: TGocciaSharedPrototype;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-  private
     FEpochMilliseconds: Int64;
     FSubMillisecondNanoseconds: Integer;
 
@@ -52,6 +49,10 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.TemporalDuration;
+
+threadvar
+  FShared: TGocciaSharedPrototype;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 function AsInstant(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalInstantValue;
 begin

@@ -5,8 +5,16 @@ unit Goccia.SharedPrototype;
 interface
 
 uses
+  SyncObjs,
+
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
+
+var
+  { Critical section protecting writes to shared prototype objects from
+    concurrent threads. Used by ExposeOnConstructor and the older
+    ExposePrototype class methods (e.g. TGocciaArrayValue). }
+  GSharedPrototypeLock: TCriticalSection;
 
 type
   TGocciaSharedPrototype = class
@@ -46,7 +54,18 @@ begin
     TGocciaClassValue(AConstructor).ReplacePrototype(FPrototype)
   else if AConstructor is TGocciaObjectValue then
     TGocciaObjectValue(AConstructor).AssignProperty(PROP_PROTOTYPE, FPrototype);
-  FPrototype.AssignProperty(PROP_CONSTRUCTOR, AConstructor);
+  // Only write constructor to the shared prototype if not yet set.
+  // After EnsureSharedPrototypesInitialized runs on the main thread,
+  // this property is already populated. Skipping the write on worker
+  // threads avoids a data race on the prototype's property hash map.
+  if not FPrototype.HasProperty(PROP_CONSTRUCTOR) then
+    FPrototype.AssignProperty(PROP_CONSTRUCTOR, AConstructor);
 end;
+
+initialization
+  GSharedPrototypeLock := TCriticalSection.Create;
+
+finalization
+  GSharedPrototypeLock.Free;
 
 end.

@@ -17,7 +17,6 @@ uses
 type
   TGocciaYAMLBuiltin = class(TGocciaBuiltin)
   private
-    class var FStaticMembers: array of TGocciaMemberDefinition;
     FParser: TGocciaYAMLParser;
   published
     function YAMLParse(const AArgs: TGocciaArgumentsCollection;
@@ -38,6 +37,9 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
+
+threadvar
+  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 constructor TGocciaYAMLBuiltin.Create(const AName: string;
   const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);

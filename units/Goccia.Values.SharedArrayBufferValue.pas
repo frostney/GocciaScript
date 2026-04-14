@@ -17,9 +17,6 @@ uses
 type
   TGocciaSharedArrayBufferValue = class(TGocciaInstanceValue)
   private
-    class var FShared: TGocciaSharedPrototype;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-  private
     FData: TBytes;
 
     function GetByteLength: Integer;
@@ -55,6 +52,10 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
+
+threadvar
+  FShared: TGocciaSharedPrototype;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 function TGocciaSharedArrayBufferValue.GetByteLength: Integer;
 begin

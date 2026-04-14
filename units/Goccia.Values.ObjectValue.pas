@@ -20,10 +20,6 @@ type
 
   TGocciaObjectValue = class(TGocciaValue)
   private
-    class var FSharedObjectPrototype: TGocciaObjectValue;
-    class var FPrototypeMethodHost: TGocciaObjectValue;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-  private
   protected
     FProperties: TGocciaPropertyMap;
     FSymbolDescriptors: TSymbolDescriptorMap;
@@ -35,7 +31,9 @@ type
     FHasErrorData: Boolean;
   public
     class procedure InitializeSharedPrototype;
-    class property SharedObjectPrototype: TGocciaObjectValue read FSharedObjectPrototype write FSharedObjectPrototype;
+    class function GetSharedObjectPrototype: TGocciaObjectValue; static;
+    class procedure SetSharedObjectPrototype(const AValue: TGocciaObjectValue); static;
+    class property SharedObjectPrototype: TGocciaObjectValue read GetSharedObjectPrototype write SetSharedObjectPrototype;
     constructor Create(const APrototype: TGocciaObjectValue = nil;
       const APropertyCapacity: Integer = 0);
     destructor Destroy; override;
@@ -121,6 +119,11 @@ uses
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction;
 
+threadvar
+  FSharedObjectPrototype: TGocciaObjectValue;
+  FPrototypeMethodHost: TGocciaObjectValue;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
 const
   MAX_PROTOTYPE_CHAIN_DEPTH = 256;
 
@@ -130,6 +133,16 @@ begin
 end;
 
 { TGocciaObjectValue }
+
+class function TGocciaObjectValue.GetSharedObjectPrototype: TGocciaObjectValue;
+begin
+  Result := FSharedObjectPrototype;
+end;
+
+class procedure TGocciaObjectValue.SetSharedObjectPrototype(const AValue: TGocciaObjectValue);
+begin
+  FSharedObjectPrototype := AValue;
+end;
 
 constructor TGocciaObjectValue.Create(const APrototype: TGocciaObjectValue = nil;
   const APropertyCapacity: Integer = 0);

@@ -3,6 +3,7 @@ program TestRunner;
 {$I Goccia.inc}
 
 uses
+  {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes,
   Generics.Collections,
   StrUtils,
@@ -38,9 +39,33 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
 
+  Goccia.Threading,
+  Goccia.Threading.Init,
+
   FileUtils in 'units/FileUtils.pas';
 
 type
+  { Plain-data record for extracting test results from GC-managed objects.
+    Used by the parallel path to pass results across thread boundaries
+    without referencing GC-managed TGocciaValue instances. }
+  TTestWorkerData = record
+    Passed: Double;
+    Failed: Double;
+    Skipped: Double;
+    TotalRunTests: Double;
+    Assertions: Double;
+    Duration: Double;
+    FailedTestNames: array of string;
+    LexNs: Int64;
+    ParseNs: Int64;
+    CompileNs: Int64;
+    ExecNs: Int64;
+    ErrorMessage: string;
+  end;
+
+  TTestWorkerDataArray = array[0..MaxInt div SizeOf(TTestWorkerData) - 1] of TTestWorkerData;
+  PTestWorkerDataArray = ^TTestWorkerDataArray;
+
   TTestFileResult = record
     TestResult: TGocciaObjectValue;
     Timing: TGocciaScriptResult;
@@ -73,6 +98,9 @@ type
     function RunGocciaScript(const AFileName: string): TTestFileResult;
     function RunScriptFromFile(const AFileName: string): TAggregatedTestResult;
     function RunScriptsFromFiles(const AFiles: TStringList): TAggregatedTestResult;
+    function RunScriptsFromFilesParallel(const AFiles: TStringList; const AJobCount: Integer): TAggregatedTestResult;
+    procedure TestWorkerProc(const AFileName: string; const AIndex: Integer;
+      out AConsoleOutput: string; out AErrorMessage: string; AData: Pointer);
     procedure WriteResultsJSON(const AResult: TAggregatedTestResult; const AFileName: string);
     procedure PrintTestResults(const AResult: TAggregatedTestResult);
   end;
@@ -196,6 +224,8 @@ begin
         WriteLn('[1/1] ', Files[0]);
       PrintTestResults(RunScriptFromFile(Files[0]));
     end
+    else if GetJobCount(Files.Count) > 1 then
+      PrintTestResults(RunScriptsFromFilesParallel(Files, GetJobCount(Files.Count)))
     else
       PrintTestResults(RunScriptsFromFiles(Files));
 
@@ -573,6 +603,192 @@ begin
   AllTestResults.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(TotalRunCount));
   AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.Create(TotalDuration));
   AllTestResults.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(TotalAssertions));
+
+  Result.TestResult := AllTestResults;
+end;
+
+{ Worker procedure executed on each thread for a single file.
+  Runs the script, extracts numeric results into a thread-safe record,
+  and frees all GC-managed objects before returning. }
+procedure TTestRunnerApp.TestWorkerProc(const AFileName: string;
+  const AIndex: Integer; out AConsoleOutput: string;
+  out AErrorMessage: string; AData: Pointer);
+var
+  FileResult: TTestFileResult;
+  TestResult: TGocciaObjectValue;
+  FailedTests: TGocciaValue;
+  FailedArr: TGocciaArrayValue;
+  WorkerResults: PTestWorkerDataArray;
+  I: Integer;
+begin
+  AConsoleOutput := '';
+  AErrorMessage := '';
+  WorkerResults := PTestWorkerDataArray(AData);
+
+  try
+    FileResult := RunGocciaScript(AFileName);
+    TestResult := FileResult.TestResult;
+
+    if TestResult <> nil then
+    begin
+      WorkerResults^[AIndex].Passed := TestResult.GetProperty('passed').ToNumberLiteral.Value;
+      WorkerResults^[AIndex].Failed := TestResult.GetProperty('failed').ToNumberLiteral.Value;
+      WorkerResults^[AIndex].Skipped := TestResult.GetProperty('skipped').ToNumberLiteral.Value;
+      WorkerResults^[AIndex].TotalRunTests := TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value;
+      WorkerResults^[AIndex].Assertions := TestResult.GetProperty('assertions').ToNumberLiteral.Value;
+      WorkerResults^[AIndex].Duration := TestResult.GetProperty('duration').ToNumberLiteral.Value;
+      WorkerResults^[AIndex].LexNs := FileResult.Timing.LexTimeNanoseconds;
+      WorkerResults^[AIndex].ParseNs := FileResult.Timing.ParseTimeNanoseconds;
+      WorkerResults^[AIndex].CompileNs := FileResult.Timing.CompileTimeNanoseconds;
+      WorkerResults^[AIndex].ExecNs := FileResult.Timing.ExecuteTimeNanoseconds;
+
+      FailedTests := TestResult.GetProperty('failedTests');
+      if FailedTests is TGocciaArrayValue then
+      begin
+        FailedArr := TGocciaArrayValue(FailedTests);
+        SetLength(WorkerResults^[AIndex].FailedTestNames, FailedArr.Elements.Count);
+        for I := 0 to FailedArr.Elements.Count - 1 do
+          WorkerResults^[AIndex].FailedTestNames[I] := FailedArr.Elements[I].ToStringLiteral.Value;
+      end;
+    end
+    else
+      WorkerResults^[AIndex].ErrorMessage := 'Test result was nil';
+  except
+    on E: TGocciaError do
+    begin
+      WorkerResults^[AIndex].ErrorMessage := E.GetDetailedMessage;
+      WorkerResults^[AIndex].Failed := 1;
+      WorkerResults^[AIndex].TotalRunTests := 1;
+      SetLength(WorkerResults^[AIndex].FailedTestNames, 1);
+      WorkerResults^[AIndex].FailedTestNames[0] := AFileName + ': ' + E.GetDetailedMessage;
+    end;
+    on E: TGocciaThrowValue do
+    begin
+      WorkerResults^[AIndex].ErrorMessage := E.Message;
+      WorkerResults^[AIndex].Failed := 1;
+      WorkerResults^[AIndex].TotalRunTests := 1;
+      SetLength(WorkerResults^[AIndex].FailedTestNames, 1);
+      WorkerResults^[AIndex].FailedTestNames[0] := AFileName + ': ' + E.Message;
+    end;
+    on E: Exception do
+    begin
+      WorkerResults^[AIndex].ErrorMessage := E.Message;
+      WorkerResults^[AIndex].Failed := 1;
+      WorkerResults^[AIndex].TotalRunTests := 1;
+      SetLength(WorkerResults^[AIndex].FailedTestNames, 1);
+      WorkerResults^[AIndex].FailedTestNames[0] := AFileName + ': ' + E.Message;
+    end;
+  end;
+
+  // No GC.Collect — worker GC is disabled to avoid FGCMark races on
+  // shared objects. All thread-local objects are freed in bulk when
+  // ShutdownThreadRuntime destroys the thread-local GC.
+end;
+
+function TTestRunnerApp.RunScriptsFromFilesParallel(
+  const AFiles: TStringList; const AJobCount: Integer): TAggregatedTestResult;
+var
+  Pool: TGocciaThreadPool;
+  WorkerData: array of TTestWorkerData;
+  GC: TGarbageCollector;
+  I, J: Integer;
+  AllTestResults: TGocciaObjectValue;
+  AllFailedTests: TGocciaArrayValue;
+  PassedCount, FailedCount, SkippedCount, TotalRunCount, TotalAssertions, TotalDuration: Double;
+begin
+  SetLength(WorkerData, AFiles.Count);
+  for I := 0 to AFiles.Count - 1 do
+  begin
+    WorkerData[I].Passed := 0;
+    WorkerData[I].Failed := 0;
+    WorkerData[I].Skipped := 0;
+    WorkerData[I].TotalRunTests := 0;
+    WorkerData[I].Assertions := 0;
+    WorkerData[I].Duration := 0;
+    WorkerData[I].LexNs := 0;
+    WorkerData[I].ParseNs := 0;
+    WorkerData[I].CompileNs := 0;
+    WorkerData[I].ExecNs := 0;
+    WorkerData[I].ErrorMessage := '';
+    SetLength(WorkerData[I].FailedTestNames, 0);
+  end;
+
+  if not FNoProgress.Present then
+    WriteLn(SysUtils.Format('Running %d files with %d workers...', [AFiles.Count, AJobCount]));
+
+  // Force all shared prototypes to be initialised on the main thread
+  // before any worker thread starts, avoiding class-var race conditions.
+  EnsureSharedPrototypesInitialized(GlobalBuiltins);
+
+  Pool := TGocciaThreadPool.Create(AJobCount);
+  try
+    Pool.RunAll(AFiles, TestWorkerProc, @WorkerData[0]);
+  finally
+    Pool.Free;
+  end;
+
+  // Aggregate results on the main thread using GC-managed objects
+  GC := TGarbageCollector.Instance;
+
+  AllTestResults := TGocciaObjectValue.Create;
+  AllFailedTests := TGocciaArrayValue.Create;
+
+  if Assigned(GC) then
+  begin
+    GC.AddTempRoot(AllTestResults);
+    GC.AddTempRoot(AllFailedTests);
+  end;
+
+  PassedCount := 0;
+  FailedCount := 0;
+  SkippedCount := 0;
+  TotalRunCount := 0;
+  TotalAssertions := 0;
+  TotalDuration := 0;
+  Result.TotalLexNanoseconds := 0;
+  Result.TotalParseNanoseconds := 0;
+  Result.TotalCompileNanoseconds := 0;
+  Result.TotalExecNanoseconds := 0;
+
+  for I := 0 to AFiles.Count - 1 do
+  begin
+    if not FNoProgress.Present then
+      WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, AFiles.Count, AFiles[I]]));
+
+    if WorkerData[I].ErrorMessage <> '' then
+      WriteLn(WorkerData[I].ErrorMessage);
+
+    PassedCount := PassedCount + WorkerData[I].Passed;
+    FailedCount := FailedCount + WorkerData[I].Failed;
+    SkippedCount := SkippedCount + WorkerData[I].Skipped;
+    TotalRunCount := TotalRunCount + WorkerData[I].TotalRunTests;
+    TotalAssertions := TotalAssertions + WorkerData[I].Assertions;
+    TotalDuration := TotalDuration + WorkerData[I].Duration;
+
+    Result.TotalLexNanoseconds := Result.TotalLexNanoseconds + WorkerData[I].LexNs;
+    Result.TotalParseNanoseconds := Result.TotalParseNanoseconds + WorkerData[I].ParseNs;
+    Result.TotalCompileNanoseconds := Result.TotalCompileNanoseconds + WorkerData[I].CompileNs;
+    Result.TotalExecNanoseconds := Result.TotalExecNanoseconds + WorkerData[I].ExecNs;
+
+    for J := 0 to High(WorkerData[I].FailedTestNames) do
+      AllFailedTests.Elements.Add(
+        TGocciaStringLiteralValue.Create(WorkerData[I].FailedTestNames[J]));
+  end;
+
+  AllTestResults.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(AFiles.Count * 1.0));
+  AllTestResults.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(TotalRunCount));
+  AllTestResults.AssignProperty('passed', TGocciaNumberLiteralValue.Create(PassedCount));
+  AllTestResults.AssignProperty('failed', TGocciaNumberLiteralValue.Create(FailedCount));
+  AllTestResults.AssignProperty('skipped', TGocciaNumberLiteralValue.Create(SkippedCount));
+  AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.Create(TotalDuration));
+  AllTestResults.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(TotalAssertions));
+  AllTestResults.AssignProperty('failedTests', AllFailedTests);
+
+  if Assigned(GC) then
+  begin
+    GC.RemoveTempRoot(AllTestResults);
+    GC.RemoveTempRoot(AllFailedTests);
+  end;
 
   Result.TestResult := AllTestResults;
 end;

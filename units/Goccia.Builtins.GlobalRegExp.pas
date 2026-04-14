@@ -19,8 +19,6 @@ type
   private
     FRegExpConstructor: TGocciaNativeFunctionValue;
     FRegExpPrototype: TGocciaObjectValue;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-    class var FStaticMembers: array of TGocciaMemberDefinition;
 
     function RegExpConstructorFn(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -66,6 +64,10 @@ uses
   Goccia.Values.Iterator.RegExp,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
+
+threadvar
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 function GetRegExpBooleanProperty(const AValue: TGocciaObjectValue;
   const AName: string): Boolean;

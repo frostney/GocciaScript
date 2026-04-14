@@ -17,9 +17,6 @@ uses
 type
   TGocciaArrayBufferValue = class(TGocciaInstanceValue)
   private
-    class var FShared: TGocciaSharedPrototype;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-  private
     const NO_MAX_BYTE_LENGTH = -1;
   private
     FData: TBytes;
@@ -69,6 +66,10 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
+
+threadvar
+  FShared: TGocciaSharedPrototype;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 function RequireArrayBuffer(const AThisValue: TGocciaValue; const AMethodName: string): TGocciaArrayBufferValue;
 begin

@@ -45,6 +45,7 @@ implementation
 
 uses
   Goccia.Constants.PropertyNames,
+  Goccia.SharedPrototype,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
@@ -110,7 +111,8 @@ begin
   else if Assigned(ATypeDefinition.PrototypeProvider) then
   begin
     AConstructor.ReplacePrototype(ATypeDefinition.PrototypeProvider());
-    AConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, AConstructor);
+    if not AConstructor.Prototype.HasProperty(PROP_CONSTRUCTOR) then
+      AConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, AConstructor);
   end
   else
     raise EGocciaObjectModelError.CreateFmt(

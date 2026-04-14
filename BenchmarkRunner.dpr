@@ -3,6 +3,7 @@ program BenchmarkRunner;
 {$I Goccia.inc}
 
 uses
+  {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes,
   Generics.Collections,
   SysUtils,
@@ -40,6 +41,9 @@ uses
   Goccia.Values.Primitives,
   Goccia.VM.Exception,
 
+  Goccia.Threading,
+  Goccia.Threading.Init,
+
   FileUtils in 'units/FileUtils.pas';
 
 type
@@ -59,6 +63,10 @@ begin
   else
     WriteLn(SysUtils.Format('  [%d/%d] %s', [AIndex, ATotal, ABenchName]));
 end;
+
+type
+  TBenchmarkFileResultArray = array[0..MaxInt div SizeOf(TBenchmarkFileResult) - 1] of TBenchmarkFileResult;
+  PBenchmarkFileResultArray = ^TBenchmarkFileResultArray;
 
 procedure PopulateFileResult(const AFileResult: TBenchmarkFileResult;
   const AScriptResult: TGocciaObjectValue; const AReporter: TBenchmarkReporter);
@@ -172,6 +180,9 @@ type
       const AMode: TGocciaEngineBackend; const AShowProgress: Boolean);
     procedure RunBenchmarksFromStdin(const AReports: array of TReportSpec;
       const AMode: TGocciaEngineBackend; const AShowProgress: Boolean);
+    procedure BenchmarkWorkerProc(const AFileName: string;
+      const AIndex: Integer; out AConsoleOutput: string;
+      out AErrorMessage: string; AData: Pointer);
     procedure RunBenchmarks(const APaths: TStringList;
       const AReports: array of TReportSpec;
       const AMode: TGocciaEngineBackend; const AShowProgress: Boolean);
@@ -590,6 +601,54 @@ begin
   end;
 end;
 
+{ Worker procedure executed on each thread for a single benchmark file.
+  Runs the benchmark, extracts the TBenchmarkFileResult into a pre-allocated
+  array, and frees all GC-managed objects before returning. }
+procedure TBenchmarkRunnerApp.BenchmarkWorkerProc(const AFileName: string;
+  const AIndex: Integer; out AConsoleOutput: string;
+  out AErrorMessage: string; AData: Pointer);
+var
+  WorkerReporter: TBenchmarkReporter;
+  WorkerResults: PBenchmarkFileResultArray;
+  Mode: TGocciaEngineBackend;
+begin
+  AConsoleOutput := '';
+  AErrorMessage := '';
+  WorkerResults := PBenchmarkFileResultArray(AData);
+
+  if EngineOptions.Mode.Matches(emBytecode) then
+    Mode := ebBytecode
+  else
+    Mode := ebTreeWalk;
+
+  WorkerReporter := TBenchmarkReporter.Create;
+  try
+    try
+      CollectBenchmarkFile(AFileName, WorkerReporter, Mode, False);
+      if WorkerReporter.FileCount > 0 then
+        WorkerResults^[AIndex] := WorkerReporter.Files[0];
+    except
+      on E: Exception do
+      begin
+        AErrorMessage := E.Message;
+        WorkerResults^[AIndex].FileName := AFileName;
+        WorkerResults^[AIndex].LexTimeNanoseconds := 0;
+        WorkerResults^[AIndex].ParseTimeNanoseconds := 0;
+        WorkerResults^[AIndex].CompileTimeNanoseconds := 0;
+        WorkerResults^[AIndex].ExecuteTimeNanoseconds := 0;
+        WorkerResults^[AIndex].TotalBenchmarks := 0;
+        WorkerResults^[AIndex].DurationNanoseconds := 0;
+        SetLength(WorkerResults^[AIndex].Entries, 1);
+        WorkerResults^[AIndex].Entries[0].Suite := '';
+        WorkerResults^[AIndex].Entries[0].Name := '(fatal)';
+        WorkerResults^[AIndex].Entries[0].Error := E.Message;
+      end;
+    end;
+  finally
+    WorkerReporter.Free;
+  end;
+end;
+
 procedure TBenchmarkRunnerApp.RunBenchmarksFromStdin(
   const AReports: array of TReportSpec;
   const AMode: TGocciaEngineBackend; const AShowProgress: Boolean);
@@ -625,8 +684,10 @@ procedure TBenchmarkRunnerApp.RunBenchmarks(const APaths: TStringList;
   const AMode: TGocciaEngineBackend; const AShowProgress: Boolean);
 var
   Files: TStringList;
-  I, J, P: Integer;
+  I, J, P, JobCount: Integer;
   Reporter: TBenchmarkReporter;
+  Pool: TGocciaThreadPool;
+  WorkerData: array of TBenchmarkFileResult;
 begin
   Files := TStringList.Create;
   Reporter := TBenchmarkReporter.Create;
@@ -645,12 +706,58 @@ begin
       end;
     end;
 
-    for I := 0 to Files.Count - 1 do
+    JobCount := GetJobCount(Files.Count);
+    if JobCount > 1 then
     begin
+      { Parallel path: pre-allocate result array, run workers, then
+        add results to the reporter on the main thread in file order. }
+      SetLength(WorkerData, Files.Count);
+      for I := 0 to Files.Count - 1 do
+      begin
+        WorkerData[I].FileName := '';
+        WorkerData[I].LexTimeNanoseconds := 0;
+        WorkerData[I].ParseTimeNanoseconds := 0;
+        WorkerData[I].CompileTimeNanoseconds := 0;
+        WorkerData[I].ExecuteTimeNanoseconds := 0;
+        WorkerData[I].TotalBenchmarks := 0;
+        WorkerData[I].DurationNanoseconds := 0;
+        SetLength(WorkerData[I].Entries, 0);
+      end;
+
       if AShowProgress then
-        WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, Files.Count, ExtractFileName(Files[I])]));
-      CollectBenchmarkFile(Files[I], Reporter, AMode, AShowProgress);
+        WriteLn(SysUtils.Format('Running %d files with %d workers...',
+          [Files.Count, JobCount]));
+
+      EnsureSharedPrototypesInitialized(GlobalBuiltins);
+
+      Pool := TGocciaThreadPool.Create(JobCount);
+      try
+        Pool.RunAll(Files, BenchmarkWorkerProc, @WorkerData[0]);
+      finally
+        Pool.Free;
+      end;
+
+      { Collect results on the main thread in original file order. }
+      for I := 0 to Files.Count - 1 do
+      begin
+        if AShowProgress then
+          WriteLn(SysUtils.Format('[%d/%d] %s',
+            [I + 1, Files.Count, ExtractFileName(Files[I])]));
+        Reporter.AddFileResult(WorkerData[I]);
+      end;
+    end
+    else
+    begin
+      { Sequential path: run each file in order on the main thread. }
+      for I := 0 to Files.Count - 1 do
+      begin
+        if AShowProgress then
+          WriteLn(SysUtils.Format('[%d/%d] %s',
+            [I + 1, Files.Count, ExtractFileName(Files[I])]));
+        CollectBenchmarkFile(Files[I], Reporter, AMode, AShowProgress);
+      end;
     end;
+
     if AShowProgress and (Files.Count > 0) then
       WriteLn;
 

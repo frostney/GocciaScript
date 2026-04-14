@@ -46,6 +46,7 @@ type
     procedure RenderCSV;
     procedure RenderJSON;
 
+    function GetFileResult(AIndex: Integer): TBenchmarkFileResult;
     function FormatOpsPerSec(const AOps: Double): string;
     function EscapeCSV(const S: string): string;
     function EscapeJSON(const S: string): string;
@@ -60,6 +61,8 @@ type
     procedure WriteToStdOut;
     function HasFailures: Boolean;
     property Output: TStringList read FOutput;
+    property FileCount: Integer read FFileCount;
+    property Files[AIndex: Integer]: TBenchmarkFileResult read GetFileResult;
   end;
 
 function ParseReportFormat(const S: string): TBenchmarkReportFormat;
@@ -100,6 +103,11 @@ destructor TBenchmarkReporter.Destroy;
 begin
   FOutput.Free;
   inherited Destroy;
+end;
+
+function TBenchmarkReporter.GetFileResult(AIndex: Integer): TBenchmarkFileResult;
+begin
+  Result := FFiles[AIndex];
 end;
 
 procedure TBenchmarkReporter.AddFileResult(const AResult: TBenchmarkFileResult);

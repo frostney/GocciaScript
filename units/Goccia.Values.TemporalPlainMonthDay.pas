@@ -14,9 +14,6 @@ uses
 type
   TGocciaTemporalPlainMonthDayValue = class(TGocciaObjectValue)
   private
-    class var FShared: TGocciaSharedPrototype;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-  private
     FMonth: Integer;
     FDay: Integer;
     FReferenceYear: Integer;
@@ -55,6 +52,10 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.TemporalPlainDate;
+
+threadvar
+  FShared: TGocciaSharedPrototype;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 const
   DEFAULT_REFERENCE_YEAR = 1972;

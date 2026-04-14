@@ -55,8 +55,6 @@ type
   TGocciaCoverageFileMap = TOrderedStringMap<TGocciaFileCoverage>;
 
   TGocciaCoverageTracker = class
-  private class var
-    FInstance: TGocciaCoverageTracker;
   private
     FFiles: TGocciaCoverageFileMap;
     FEnabled: Boolean;
@@ -405,20 +403,23 @@ end;
 
 { TGocciaCoverageTracker }
 
+threadvar
+  CoverageTrackerThreadInstance: TGocciaCoverageTracker;
+
 class function TGocciaCoverageTracker.Instance: TGocciaCoverageTracker;
 begin
-  Result := FInstance;
+  Result := CoverageTrackerThreadInstance;
 end;
 
 class procedure TGocciaCoverageTracker.Initialize;
 begin
-  if not Assigned(FInstance) then
-    FInstance := TGocciaCoverageTracker.Create;
+  if not Assigned(CoverageTrackerThreadInstance) then
+    CoverageTrackerThreadInstance := TGocciaCoverageTracker.Create;
 end;
 
 class procedure TGocciaCoverageTracker.Shutdown;
 begin
-  FreeAndNil(FInstance);
+  FreeAndNil(CoverageTrackerThreadInstance);
 end;
 
 constructor TGocciaCoverageTracker.Create;

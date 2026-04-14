@@ -16,10 +16,6 @@ type
   private
     FPrimitive: TGocciaNumberLiteralValue;
 
-    class var FSharedNumberPrototype: TGocciaObjectValue;
-    class var FPrototypeMethodHost: TGocciaNumberObjectValue;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-
     function ExtractPrimitive(const AValue: TGocciaValue): TGocciaNumberLiteralValue;
   public
     constructor Create(const APrimitive: TGocciaNumberLiteralValue; const AClass: TGocciaClassValue = nil);
@@ -51,6 +47,11 @@ uses
   Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
+
+threadvar
+  FSharedNumberPrototype: TGocciaObjectValue;
+  FPrototypeMethodHost: TGocciaNumberObjectValue;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 function TGocciaNumberObjectValue.ExtractPrimitive(const AValue: TGocciaValue): TGocciaNumberLiteralValue;
 begin

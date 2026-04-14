@@ -14,10 +14,6 @@ uses
 type
   TGocciaBooleanObjectValue = class(TGocciaInstanceValue)
   private
-    class var FSharedBooleanPrototype: TGocciaObjectValue;
-    class var FPrototypeMethodHost: TGocciaBooleanObjectValue;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-  private
     FPrimitive: TGocciaBooleanLiteralValue;
   public
     constructor Create(const APrimitive: TGocciaBooleanLiteralValue; const AClass: TGocciaClassValue = nil);
@@ -39,6 +35,11 @@ implementation
 uses
   Goccia.GarbageCollector,
   Goccia.Values.NativeFunction;
+
+threadvar
+  FSharedBooleanPrototype: TGocciaObjectValue;
+  FPrototypeMethodHost: TGocciaBooleanObjectValue;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 constructor TGocciaBooleanObjectValue.Create(const APrimitive: TGocciaBooleanLiteralValue; const AClass: TGocciaClassValue = nil);
 begin

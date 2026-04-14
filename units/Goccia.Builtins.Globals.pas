@@ -13,7 +13,7 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
-var
+threadvar
   GErrorProto: TGocciaObjectValue;
   GTypeErrorProto: TGocciaObjectValue;
   GReferenceErrorProto: TGocciaObjectValue;

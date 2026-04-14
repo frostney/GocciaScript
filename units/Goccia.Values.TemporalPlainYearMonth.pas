@@ -14,9 +14,6 @@ uses
 type
   TGocciaTemporalPlainYearMonthValue = class(TGocciaObjectValue)
   private
-    class var FShared: TGocciaSharedPrototype;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-  private
     FYear: Integer;
     FMonth: Integer;
     FReferenceDay: Integer;
@@ -63,6 +60,10 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.TemporalDuration,
   Goccia.Values.TemporalPlainDate;
+
+threadvar
+  FShared: TGocciaSharedPrototype;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 function FormatYearMonthString(const AYear, AMonth: Integer): string;
 begin

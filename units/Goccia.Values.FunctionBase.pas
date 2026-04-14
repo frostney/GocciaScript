@@ -26,8 +26,6 @@ type
 
   // Base class for all callable functions
   TGocciaFunctionBase = class(TGocciaObjectValue)
-  private class var
-    FSharedPrototype: TGocciaFunctionSharedPrototype;
   protected
     // Subclasses should override these to provide name/length
     function GetFunctionLength: Integer; virtual;
@@ -102,6 +100,9 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
+
+threadvar
+  FSharedPrototype: TGocciaFunctionSharedPrototype;
 
 { TGocciaFunctionBase }
 
@@ -253,9 +254,9 @@ var
 begin
   inherited Create;
 
-  // Set the class var early to prevent infinite recursion when creating
+  // Set the threadvar early to prevent infinite recursion when creating
   // TGocciaNativeFunctionValue instances (which inherit from TGocciaFunctionBase)
-  TGocciaFunctionBase.FSharedPrototype := Self;
+  FSharedPrototype := Self;
 
   Members[0] := DefineNamedMethod('call', FunctionCall, 1);
   Members[1] := DefineNamedMethod('apply', FunctionApply, 2);
