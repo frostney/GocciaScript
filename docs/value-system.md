@@ -512,10 +512,10 @@ All functions share a prototype that provides `call`, `apply`, and `bind`:
 Wraps a Pascal callback for built-in operations:
 
 ```pascal
-TGocciaNativeFunctionValueCallback = function(
-  Args: TGocciaValueArray;
-  ThisValue: TGocciaValue
-): TGocciaValue;
+TGocciaNativeFunctionCallback = function(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue
+): TGocciaValue of object;
 ```
 
 ## Classes
