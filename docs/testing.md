@@ -406,7 +406,7 @@ These tests do not require building from source -- they download pre-built binar
 
 ## Pascal Unit Tests (Tertiary)
 
-Pascal unit tests are the tertiary testing layer for low-level value system internals. They validate things that are difficult to test through JavaScript alone (e.g., memory layout, internal type conversion edge cases).
+Pascal unit tests are the tertiary testing layer for low-level internals that are difficult to validate through JavaScript alone (e.g., value representation, function/scope internals, and test-framework state behavior).
 
 | Test File | Tests |
 |-----------|-------|
