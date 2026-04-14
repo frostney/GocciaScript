@@ -378,10 +378,11 @@ end;
 
 function TGocciaEnumOption<T>.Matches(const AValue: T): Boolean;
 var
-  ArdinalValue: Integer;
+  OrdinalValue: Integer;
 begin
-  Move(AValue, ArdinalValue, SizeOf(T));
-  Result := FPresent and (FOrdinal = ArdinalValue);
+  OrdinalValue := 0;
+  Move(AValue, OrdinalValue, SizeOf(T));
+  Result := FPresent and (FOrdinal = OrdinalValue);
 end;
 
 function TGocciaEnumOption<T>.ValidValues: string;
