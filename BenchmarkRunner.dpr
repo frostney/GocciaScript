@@ -203,6 +203,7 @@ begin
         if AShowProgress and Assigned(Engine.BuiltinBenchmark) then
           Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
 
+        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
         try
           EngineResult := Engine.Execute;
         finally
@@ -317,6 +318,7 @@ begin
         if Assigned(Backend.Bootstrap) and Assigned(Backend.Bootstrap.BuiltinBenchmark) then
           Backend.Bootstrap.BuiltinBenchmark.OnBeforeMeasurement := Backend.ClearTransientCaches;
 
+        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
         try
           try
             ResultValue := Backend.RunModule(Module);
@@ -410,6 +412,7 @@ begin
       if AShowProgress and Assigned(Engine.BuiltinBenchmark) then
         Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
 
+      StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
       try
         EngineResult := Engine.Execute;
       finally
@@ -516,6 +519,7 @@ begin
       if Assigned(Backend.Bootstrap) and Assigned(Backend.Bootstrap.BuiltinBenchmark) then
         Backend.Bootstrap.BuiltinBenchmark.OnBeforeMeasurement := Backend.ClearTransientCaches;
 
+      StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
       try
         try
           ResultValue := Backend.RunModule(Module);
@@ -694,7 +698,7 @@ var
 begin
   ShowProgress := not FNoProgress.Present;
 
-  if EngineOptions.Mode.ValueOr(emInterpreted) = emBytecode then
+  if EngineOptions.Mode.Matches(emBytecode) then
     Mode := ebBytecode
   else
     Mode := ebTreeWalk;

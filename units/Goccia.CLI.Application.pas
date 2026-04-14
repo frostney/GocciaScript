@@ -183,8 +183,6 @@ begin
     Result.ASIEnabled := FEngineOptions.ASI.Present;
     ConfigureModuleResolver(Result.Resolver, AFileName,
       FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
-    if FEngineOptions.Timeout.Present and (FEngineOptions.Timeout.Value > 0) then
-      StartExecutionTimeout(FEngineOptions.Timeout.Value);
   end;
 end;
 
@@ -198,8 +196,6 @@ begin
     Result.ASIEnabled := FEngineOptions.ASI.Present;
     ConfigureModuleResolver(Result.ModuleResolver, AFileName,
       FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
-    if FEngineOptions.Timeout.Present and (FEngineOptions.Timeout.Value > 0) then
-      StartExecutionTimeout(FEngineOptions.Timeout.Value);
   end;
 end;
 

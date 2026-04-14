@@ -225,7 +225,7 @@ begin
   try
     Opt.Apply('interpreted');
     Expect<Boolean>(Opt.Present).ToBe(True);
-    Expect<Boolean>(Opt.Value = emInterpreted).ToBe(True);
+    Expect<Boolean>(Opt.Matches(emInterpreted)).ToBe(True);
   finally
     Opt.Free;
   end;
@@ -239,7 +239,7 @@ begin
   try
     Opt.Apply('bytecode');
     Expect<Boolean>(Opt.Present).ToBe(True);
-    Expect<Boolean>(Opt.Value = emBytecode).ToBe(True);
+    Expect<Boolean>(Opt.Matches(emBytecode)).ToBe(True);
   finally
     Opt.Free;
   end;

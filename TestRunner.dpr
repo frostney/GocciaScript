@@ -206,11 +206,11 @@ begin
       PrintCoverageSummary(TGocciaCoverageTracker.Instance);
       if Files.Count = 1 then
         PrintCoverageDetail(TGocciaCoverageTracker.Instance, Files[0]);
-      if CoverageOptions.Format.Present and (CoverageOptions.Format.Value = cfLcov) and
+      if CoverageOptions.Format.Matches(cfLcov) and
          (CoverageOptions.OutputPath.ValueOr('') <> '') then
         WriteCoverageLcov(TGocciaCoverageTracker.Instance,
           CoverageOptions.OutputPath.ValueOr(''));
-      if CoverageOptions.Format.Present and (CoverageOptions.Format.Value = cfJson) and
+      if CoverageOptions.Format.Matches(cfJson) and
          (CoverageOptions.OutputPath.ValueOr('') <> '') then
         WriteCoverageJSON(TGocciaCoverageTracker.Instance,
           CoverageOptions.OutputPath.ValueOr(''));
@@ -263,6 +263,7 @@ begin
           Engine.SuppressWarnings := True;
         end;
 
+        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
         try
           EngineResult := Engine.Execute;
         finally
@@ -394,6 +395,7 @@ begin
           Lexer.Free;
         end;
 
+        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
         try
           try
             ResultValue := Backend.RunModule(Module);
@@ -584,7 +586,7 @@ var
   I: Integer;
   IsBytecodeMode: Boolean;
 begin
-  IsBytecodeMode := EngineOptions.Mode.ValueOr(emInterpreted) = emBytecode;
+  IsBytecodeMode := EngineOptions.Mode.Matches(emBytecode);
   if IsBytecodeMode then
     TotalNanoseconds := AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds
   else
@@ -657,7 +659,7 @@ begin
   DurationNanoseconds := Round(TestResult.GetProperty('duration').ToNumberLiteral.Value);
   RunCount := StrToFloat(TotalRunTests);
 
-  IsBytecodeMode := EngineOptions.Mode.ValueOr(emInterpreted) = emBytecode;
+  IsBytecodeMode := EngineOptions.Mode.Matches(emBytecode);
 
   if not FNoResults.Present then
   begin
@@ -693,6 +695,10 @@ begin
     ExitCode := 1;
 end;
 
+var
+  RunResult: Integer;
 begin
-  ExitCode := TGocciaApplication.RunApplication(TTestRunnerApp, 'TestRunner');
+  RunResult := TGocciaApplication.RunApplication(TTestRunnerApp, 'TestRunner');
+  if RunResult <> 0 then
+    ExitCode := RunResult;
 end.

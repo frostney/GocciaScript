@@ -75,6 +75,7 @@ The CLI tools share a two-level application class hierarchy and a declarative op
 7. `ShutdownSingletons` — cleanup in reverse order
 
 **Tool mapping:**
+
 | Tool | Base Class | Overrides |
 |------|-----------|-----------|
 | REPL | `TGocciaApplication` | `Execute` (interactive loop) |

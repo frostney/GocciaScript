@@ -93,7 +93,8 @@ begin
            not (Option is TGocciaFlagOption) and
            (Option is TGocciaRepeatableOption) then
         begin
-          if I >= Count then
+          if (I >= Count) or
+             (Copy(ParamStr(I + 1), 1, 1) = SHORT_FLAG_CHAR) then
             raise TGocciaParseError.CreateFmt(
               '--%s requires a value', [Name]);
           Inc(I);

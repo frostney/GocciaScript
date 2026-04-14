@@ -93,7 +93,14 @@ begin
             Exit;
           end;
 
-          IsBytecodeMode := EngineOpts.Mode.ValueOr(emInterpreted) = emBytecode;
+          if Positionals.Count > 0 then
+          begin
+            WriteLn('Error: Unexpected argument "', Positionals[0], '". The REPL does not accept file arguments.');
+            ExitCode := 1;
+            Exit;
+          end;
+
+          IsBytecodeMode := EngineOpts.Mode.Matches(emBytecode);
 
           if IsBytecodeMode then
             WriteLn('Goccia REPL v' + GetVersion + ' (bytecode)')

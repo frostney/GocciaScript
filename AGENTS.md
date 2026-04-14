@@ -108,7 +108,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 
 **Bytecode pipeline:** Source → Lexer → Parser → Compiler → Goccia Bytecode → Goccia VM → Result
 
-**CLI pipeline:** Options → `ParseCommandLine` → `Validate` → `InitializeSingletons` → `ExecuteWithPaths` → `AfterExecute` → `ShutdownSingletons`
+**CLI pipeline:** `Configure` → `ParseCommandLine` → `Validate` → `InitializeSingletons` → `ExecuteWithPaths` → `AfterExecute` → `ShutdownSingletons`
 
 **Key components:**
 

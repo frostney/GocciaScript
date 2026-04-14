@@ -157,7 +157,7 @@ begin
     raise TGocciaParseError.Create(
       '--profile-output requires --profile=opcodes|functions|all.');
 
-  if ProfilerOptions.Format.Present and (ProfilerOptions.Format.Value = pfFlamegraph) and
+  if ProfilerOptions.Format.Matches(pfFlamegraph) and
      not ProfilerOptions.OutputPath.Present then
     raise TGocciaParseError.Create(
       '--profile-format=flamegraph requires --profile-output=<path>.');
@@ -404,6 +404,7 @@ begin
     Engine.SuppressWarnings := (FOutputPath.Present and (FOutputPath.Value = 'json'));
     ConfigureConsole(Engine.BuiltinConsole, AOutputLines);
     ApplyDataGlobalsToEngine(Engine);
+    StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
     try
       ApplyModuleGlobalsToEngine(Engine);
       ScriptResult := Engine.Execute;
@@ -465,6 +466,7 @@ begin
       SourceMap.Free;
     end;
 
+    StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
     try
       try
         ApplyModuleGlobalsToBytecodeBackend(Backend);
@@ -498,6 +500,7 @@ begin
     try
       ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
       ApplyDataGlobalsToBytecodeBackend(Backend);
+      StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
       try
         ApplyModuleGlobalsToBytecodeBackend(Backend);
         Result.ResultValue := Backend.RunModule(Module);
@@ -554,7 +557,7 @@ begin
        FormatDuration(AReport.Timing.ExecuteTimeNanoseconds),
        FormatDuration(AReport.Timing.TotalTimeNanoseconds)]));
   end
-  else if EngineOptions.Mode.ValueOr(emInterpreted) = emBytecode then
+  else if EngineOptions.Mode.Matches(emBytecode) then
   begin
     WriteLn('Running script (bytecode): ', AFileName);
     WriteLn(SysUtils.Format('  Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
@@ -776,11 +779,11 @@ begin
          FileExists(FLastPaths[0]) then
         PrintCoverageDetail(TGocciaCoverageTracker.Instance, FLastPaths[0]);
     end;
-    if CoverageOptions.Format.Present and (CoverageOptions.Format.Value = cfLcov) and
+    if CoverageOptions.Format.Matches(cfLcov) and
        (CoverageOptions.OutputPath.ValueOr('') <> '') then
       WriteCoverageLcov(TGocciaCoverageTracker.Instance,
         CoverageOptions.OutputPath.Value);
-    if CoverageOptions.Format.Present and (CoverageOptions.Format.Value = cfJson) and
+    if CoverageOptions.Format.Matches(cfJson) and
        (CoverageOptions.OutputPath.ValueOr('') <> '') then
       WriteCoverageJSON(TGocciaCoverageTracker.Instance,
         CoverageOptions.OutputPath.Value);
@@ -813,8 +816,7 @@ begin
     end;
     if ProfilerOptions.OutputPath.Present then
     begin
-      if ProfilerOptions.Format.Present and
-         (ProfilerOptions.Format.Value = pfFlamegraph) then
+      if ProfilerOptions.Format.Matches(pfFlamegraph) then
         WriteCollapsedStacks(TGocciaProfiler.Instance,
           ProfilerOptions.OutputPath.Value)
       else
@@ -826,6 +828,10 @@ end;
 
 { Entry point }
 
+var
+  RunResult: Integer;
 begin
-  ExitCode := TGocciaApplication.RunApplication(TScriptLoaderApp, 'ScriptLoader');
+  RunResult := TGocciaApplication.RunApplication(TScriptLoaderApp, 'ScriptLoader');
+  if RunResult <> 0 then
+    ExitCode := RunResult;
 end.

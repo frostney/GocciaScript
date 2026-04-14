@@ -94,6 +94,7 @@ type
 
     function Value: T;
     function ValueOr(const ADefault: T): T;
+    function Matches(const AValue: T): Boolean;
   end;
 
   TGocciaOptionBaseList = TObjectList<TGocciaOptionBase>;
@@ -373,6 +374,14 @@ begin
     Result := Value
   else
     Result := ADefault;
+end;
+
+function TGocciaEnumOption<T>.Matches(const AValue: T): Boolean;
+var
+  ArdinalValue: Integer;
+begin
+  Move(AValue, ArdinalValue, SizeOf(T));
+  Result := FPresent and (FOrdinal = ArdinalValue);
 end;
 
 function TGocciaEnumOption<T>.ValidValues: string;

@@ -268,7 +268,7 @@ Exceptions to `const`:
 When adding command-line options to CLI tools:
 
 - **Flag names** use `--kebab-case` (e.g., `--no-progress`, `--exit-on-first-failure`, `--import-map`)
-- **Enum option values** are auto-derived from Pascal enum names via RTTI. The convention is a 2-character lowercase prefix stripped from the enum name:
+- **Enum option values** are auto-derived from Pascal enum names via RTTI. The default convention strips a 2-character lowercase prefix; override with the `APrefixLength` constructor parameter for non-standard prefixes:
   - `TGocciaExecutionMode = (emInterpreted, emBytecode)` → CLI values: `interpreted`, `bytecode`
   - `TGocciaCoverageFormat = (cfLcov, cfJson)` → CLI values: `lcov`, `json`
   - `TGocciaProfileMode = (pmOpcodes, pmFunctions, pmAll)` → CLI values: `opcodes`, `functions`, `all`
