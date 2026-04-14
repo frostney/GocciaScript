@@ -316,7 +316,7 @@ This provides the foundation for future built-in module packages that can be cou
 
 ## Built-in Registration
 
-Standard built-ins (Console, Math, Object, Array, Number, JSON, JSON5, JSONL, TOML, YAML, Symbol, Set, Map, Performance, Promise, Temporal, ArrayBuffer, TypedArrays, Proxy, Reflect, TextEncoder, TextDecoder, URL) are always registered unconditionally. They are not flag-gated.
+The standard built-ins (Console, Math, Object, Array, etc.) are documented in [Built-ins — Registration System](built-ins.md#registration-system). They are always registered unconditionally and are not flag-gated.
 
 ### Special-Purpose Flags
 
@@ -565,7 +565,7 @@ end;
 
 ## Error Handling
 
-GocciaScript errors surface as Pascal exceptions. Wrap execution in `try...except`:
+GocciaScript errors surface as Pascal exceptions. See [Errors](errors.md) for the JavaScript-side error types, display format, and JSON output envelope. On the Pascal side, wrap execution in `try...except`:
 
 ```pascal
 uses
@@ -595,7 +595,7 @@ end;
 | `TGocciaRuntimeError` | Execution errors (type errors, reference errors, throw statements) |
 | `TGocciaTypeError` | Type-specific runtime error |
 | `TGocciaReferenceError` | Undefined variable access |
-| `TGocciaRangeError` | Value out of range |
+| `TGocciaThrowValue` | JavaScript `throw` — wraps any thrown value including `RangeError` |
 
 ## FPU Exception Mask
 
@@ -608,6 +608,7 @@ Both `TGocciaEngine` and `TGocciaVM` mask all FPU exceptions on creation (via `S
 The engine initializes a singleton microtask queue (`TGocciaMicrotaskQueue`) alongside the GC. Promise `.then()` callbacks are enqueued as microtasks and **drained automatically** after each `Execute`, `ExecuteWithTiming`, or `ExecuteProgram` call. Embedders do not need to drain the queue manually.
 
 This means:
+
 - All synchronous code in the script runs to completion first.
 - All pending `.then()` callbacks fire after the script finishes.
 - Chained `.then()` handlers are processed in the same drain cycle.

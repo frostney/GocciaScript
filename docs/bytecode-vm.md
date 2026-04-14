@@ -43,7 +43,7 @@ Public bytecode artifacts use the `.gbc` extension.
 
 ## Core Design
 
-- The VM register file uses tagged `TGocciaRegister` values internally; hot scalar kinds stay unboxed until they cross an object/runtime boundary.
+- The register file uses tagged values that keep scalars unboxed until they cross a runtime boundary (see [Design Direction](architecture.md#design-direction)).
 - The VM uses the same value classes as the interpreter: arrays, objects, classes, promises, functions, symbols, enums, and built-ins.
 - `undefined`, `null`, booleans, and hole values use shared singleton objects.
 - Sparse arrays use `TGocciaHoleValue.HoleValue`, not raw `nil`.
@@ -52,10 +52,11 @@ Public bytecode artifacts use the `.gbc` extension.
 
 ## Opcode Layout
 
-The opcode space is split into two ranges:
+The opcode space is split into three tiers:
 
 - `0..127`: core VM instructions
-- `128..255`: semantic / non-core space
+- `128..166`: non-core generic arithmetic/bitwise operations
+- `167..255`: semantic helper/orchestration operations
 
 In the current VM:
 
@@ -136,6 +137,89 @@ The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Cov
 - `--mode=bytecode` runs the Goccia VM directly.
 - The full JavaScript suite passes in bytecode mode.
 - The old generic VM/runtime bridge has been removed from the active build.
+
+## Design Rationale
+
+GocciaScript includes a bytecode execution backend built specifically for GocciaScript. The current VM is not a language-agnostic subsystem: it executes directly on `TGocciaValue`, shares the same runtime objects as the interpreter, and uses a Goccia-owned opcode surface.
+
+### Why a Bytecode VM?
+
+The tree-walk interpreter directly evaluates AST nodes via recursive function calls. This is simple and debuggable, but carries overhead from VMT dispatch on every AST node, deep call stacks for nested expressions, and no opportunity for instruction-level optimization. A bytecode VM trades compilation cost for faster execution: flat instruction dispatch, register-based operands, and a compact in-memory representation.
+
+### Why Register-Based?
+
+Stack-based VMs (like the JVM and WASM) are simpler to compile to and have smaller instruction encoding. Register-based VMs (like Lua 5, LuaJIT, and Dalvik) need fewer instructions per operation and avoid redundant stack manipulations. Register-based was chosen for execution performance.
+
+### Why Three Tiers?
+
+The solution is a split opcode space with three tiers:
+
+- **Core range (0–127):** register, control-flow, closure, literal, and other hot/stable VM operations.
+- **Non-core generic range (128–166):** generic arithmetic and bitwise operations that are still explicit bytecode but handle mixed or untyped operands.
+- **Semantic helper range (167–255):** colder language-level orchestration operations such as imports/exports, dynamic import, `import.meta`, await, and resource disposal.
+
+This split keeps the dispatch surface organized while still allowing the backend to be explicitly Goccia-specific.
+
+### Why Shared Runtime Values?
+
+The VM shares the `TGocciaValue` object model with the interpreter rather than maintaining a second value representation. Registers use `TGocciaRegister` — a tagged variant record (`Goccia.VM.Registers.pas`) that keeps booleans, integers, and floats unboxed as scalars. Values only cross into `TGocciaValue` when they leave the register file (e.g., property access, function calls, GC marking).
+
+That choice removes:
+
+- conversion layers between interpreter values and VM values
+- duplicate object models for arrays, objects, classes, and promises
+- bridge-only GC root management
+- bytecode/runtime disagreement over `undefined`, `null`, and sparse array holes
+
+The trade-off is that arithmetic fast paths are split between scalar register operations (typed opcodes like `OP_ADD_INT` / `OP_ADD_FLOAT`) and generic `TGocciaValue` fallbacks (like `OP_ADD`).
+
+### Compiler-Side Desugaring
+
+Language features are compiled into compact bytecode instruction sequences rather than expanding the opcode surface unnecessarily:
+
+- **Nullish coalescing (`??`) and nullish coalescing assignment (`??=`)** — The compiler emits `OP_JUMP_IF_NOT_NULLISH` in its nullish-match mode, so `undefined`, `null`, and internal hole values all follow the same short-circuit path without extra comparison instructions.
+- **Template literals** — The compiler parses interpolations at compile time, emits string constants and `OP_TO_STRING` for expression parts, then chains `OP_CONCAT` instructions.
+- **Object spread** — The compiler emits dedicated Goccia bytecode rather than routing through a generic extension dispatcher.
+
+This keeps the emitted bytecode compact and makes opcode additions deliberate instead of reactive.
+
+### How Opcode Additions Work
+
+New opcodes should be added only when an operation is both common enough and semantically stable enough to justify a dedicated instruction.
+
+Prefer:
+
+- explicit Goccia opcodes for core language/runtime behaviour
+- compiler lowering to existing instructions for syntactic sugar
+- flags or operands when an operation is a mode of an existing instruction rather than a new concept
+
+### Tier 1 Property Flags vs Tier 2 Visibility
+
+Property **mutability** (writable/configurable) is still a VM concern. Bulk operations like freeze and seal remain derived from the lower-level property-flag operations:
+
+- `SetEntryFlags(key, flags)` — modify flags on a single property
+- `PutWithFlags(key, value, flags)` — create a property with specific flags
+- `PreventExtensions` — stop new properties from being added
+- `Freeze` = iterate all entries, set flags to 0, prevent extensions (a convenience, not a primitive)
+
+Property **visibility** and **accessor semantics** remain part of the higher-level object/class model rather than low-level property-flag storage.
+
+### Spread Calling Consolidation
+
+Spread-based calls use the flags byte on `OP_CALL` and `OP_CALL_METHOD`. Spread is treated as a mode of the call instruction rather than as a separate opcode family.
+
+### Rejected Findings
+
+During code review, the following findings were investigated and determined to be non-issues:
+
+- **`SBIAS_24` (`Goccia.Bytecode.pas`)** — The 24-bit signed bias constant 8388607 is correct. The 24-bit unsigned range 0..16777215 centered at 8388607 gives a signed range of −8388607..+8388608. This is standard Lua-style bias encoding.
+- **Token list leak in `Goccia.Compiler.Test.pas`** — `Lexer.ScanTokens` returns the lexer's own `FTokens` list (freed in the lexer's destructor). Adding manual `Tokens.Free` causes a double-free crash.
+
+## Related documents
+
+- [Architecture](architecture.md) — Shared frontend and both backends at a glance
+- [Interpreter](interpreter.md) — Tree-walk backend (`Goccia.Interpreter`, `Goccia.Evaluator.*`)
+- [Core patterns](core-patterns.md) — Recurring Pascal conventions and terminology
 
 ## Contributor Notes
 

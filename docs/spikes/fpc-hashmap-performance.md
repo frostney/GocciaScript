@@ -14,7 +14,7 @@ This investigation designs, implements, and benchmarks a family of purpose-built
 
 All maps inherit from a single generic base class, `TBaseMap<TKey, TValue>`, which defines the shared API contract and concrete iteration. Hash and equality logic stays in each subclass where it can be inlined or overridden as appropriate:
 
-```
+```text
 TBaseMap<K, V>
 ├─ TOrderedMap<K, V>          insertion-ordered, virtual Hash/Equal
 │   └─ TOrderedStringMap<V>   overrides for string content

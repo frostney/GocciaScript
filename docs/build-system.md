@@ -13,10 +13,7 @@ GocciaScript uses a self-hosted build script written in FreePascal, executed via
 
 ## Prerequisites
 
-- **FreePascal** (`fpc`) — Install via:
-  - macOS: `brew install fpc`
-  - Ubuntu/Debian: `sudo apt-get install fpc`
-  - Windows: `choco install freepascal`
+See [Prerequisites](../README.md#prerequisites) in the README for FPC installation instructions.
 
 - **instantfpc** — Comes bundled with FreePascal. Used to run `build.pas` as a script.
 
@@ -130,6 +127,12 @@ printf 'import { add } from "@/math"; add(1, 2);' | ./build/ScriptLoader
 # Abort long-running scripts
 printf "const f = () => f(); f();" | ./build/ScriptLoader --timeout=100
 
+# Write .map source map alongside execution
+./build/ScriptLoader example.jsx --source-map --mode=bytecode
+
+# Write source map to specific path with bytecode emit
+./build/ScriptLoader example.jsx --source-map=out.map --emit
+
 # Run tests via bytecode VM
 ./build/TestRunner tests --mode=bytecode
 
@@ -158,7 +161,7 @@ Intermediate files (`.o`, `.ppu`) also go to `build/` to keep the source tree cl
 
 ### `config.cfg` (Shared Flags)
 
-```
+```text
 -Fu./units      # Unit search path
 -Fi./units      # Include file search path
 -FUbuild        # Unit output directory
@@ -228,7 +231,7 @@ The GitHub Actions cross-compilation workflow uses a reduced cached FPC toolchai
 
 ## Project Structure for Compilation
 
-```
+```text
 GocciaScript/
 ├── build.pas          # Build script (entry point)
 ├── config.cfg         # Shared FPC configuration
@@ -255,7 +258,7 @@ GitHub Actions CI is split into two workflow files:
 
 ### `ci.yml` — Push to main + tags
 
-```
+```text
 build → test (JS + native)   → artifacts (main only)
       → toml-compliance      →
       → benchmark            →
@@ -290,7 +293,7 @@ Runs on the full platform matrix:
 
 ### `pr.yml` — Pull requests
 
-```
+```text
 build → test (JS + native)
       → benchmark → PR comment (comparison)
       → examples
@@ -376,7 +379,7 @@ The project includes `./format.pas`, an `instantfpc` script that auto-fixes Pasc
 The formatter runs automatically on staged `.pas`/`.dpr` files before each commit via [Lefthook](https://github.com/evilmartians/lefthook). To enable this after cloning:
 
 ```bash
-# Install Lefthook (see docs/code-style.md for all platforms)
+# Install Lefthook (see CONTRIBUTING.md for all platforms)
 brew install lefthook     # macOS
 sudo snap install lefthook  # Linux
 scoop install lefthook    # Windows
@@ -399,3 +402,7 @@ fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- BenchmarkRunner.dpr
 ```
 
 The `-v` flags suppress verbose output to keep the build clean. Use `fpc @config.cfg REPL.dpr` for full verbose output during debugging.
+
+## Build System Design Decision
+
+The build script (`build.pas`) is a FreePascal script executed via `instantfpc` — a cross-platform, out-of-the-box solution within the FreePascal ecosystem that requires no external build tools.
