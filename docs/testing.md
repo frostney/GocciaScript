@@ -358,7 +358,7 @@ promise.catch((err) => {
 
 ## Testing Strategy Design Decision
 
-JavaScript end-to-end tests are the **primary** testing mechanism. Every new feature or bug fix must include tests that validate the behavior through the full pipeline (lexer → parser → evaluator) using the most public surface available.
+JavaScript end-to-end tests are the **primary** testing mechanism. Every new feature or bug fix must include tests that validate the behavior through the full pipeline (lexer → parser → interpreter/VM execution) using the most public surface available. CI runs all tests in both interpreted and bytecode mode.
 
 - **Specification by example** -- Each test file is a runnable specification of expected behavior.
 - **End-to-end validation** -- Tests exercise the full pipeline, catching integration issues that unit tests would miss.
