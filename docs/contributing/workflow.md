@@ -53,7 +53,7 @@ Every change should follow this sequence:
 2. **Implement** on that branch, following [Critical rules](../../CONTRIBUTING.md#critical-rules) and [Code style](code-style.md).
 3. **Annotate spec references** — For ECMAScript behavior, add `// ESYYYY` spec comments as described in [ECMAScript spec annotations](code-style.md#ecmascript-spec-annotations).
 4. **Add or update tests** — JavaScript tests under `tests/` are primary; Pascal units under `units/*.Test.pas` when you touch AST, evaluator, or value types. See [testing.md](../testing.md) and [Critical rules](../../CONTRIBUTING.md#critical-rules).
-5. **Update documentation** that your change affects (`README.md`, `docs/*`, and CONTRIBUTING.md when workflow, rules, or style change). Edit **AGENTS.md** only when **agent-specific** guidance changes—not to duplicate CONTRIBUTING.
+5. **Update documentation** that your change affects (`README.md`, `docs/*`, and CONTRIBUTING.md when workflow, rules, or style change). Edit **AGENTS.md** only when **agent-specific** guidance changes—not to duplicate CONTRIBUTING. If the change introduces a new **architectural or design decision** (not just a feature addition), add an entry to [decision-log.md](../decision-log.md) following the template there.
 6. **Commit** with a clear message. Do not commit directly to `main`.
 
 ```bash

@@ -473,17 +473,17 @@ On failure, `ToBe` produces descriptive messages like `Expected "hello" to be "w
 
 ### NaN Checks in Pascal Tests
 
-When testing for NaN, use the `IsNaN` property on `TGocciaNumberLiteralValue` rather than `Math.IsNaN()`:
+When testing for NaN, use the `IsNaN` property on `TGocciaNumberLiteralValue`:
 
 ```pascal
-// Correct — uses the internal special value flag
+// Correct — uses the property accessor
 Expect<Boolean>(Value.ToNumberLiteral.IsNaN).ToBe(True);
 
-// WRONG — NaN values store 0.0 internally, so Math.IsNaN returns False
-IsNaN(Value.ToNumberLiteral.Value)  // always False!
+// Also correct — IsNaN delegates to Math.IsNaN(FValue) internally
+Math.IsNaN(Value.ToNumberLiteral.Value)
 ```
 
-This is because GocciaScript represents NaN via a `FSpecialValue = nsvNaN` flag with `FValue` set to 0 (avoiding floating-point NaN propagation issues). The `IsNaN` property checks the flag; `Math.IsNaN` checks the stored double.
+`TGocciaNumberLiteralValue` stores a single `Double` in `FValue` using standard IEEE 754 bit patterns for NaN, Infinity, and -0. The `IsNaN`, `IsInfinity`, and `IsNegativeZero` property accessors delegate to `Math.IsNaN`, `Math.IsInfinite`, and an endian-neutral sign-bit check respectively. Prefer the property accessors for readability.
 
 #### Testing the Test Framework Itself
 
