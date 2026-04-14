@@ -565,7 +565,7 @@ end;
 
 ## Error Handling
 
-GocciaScript errors surface as Pascal exceptions. Wrap execution in `try...except`:
+GocciaScript errors surface as Pascal exceptions. See [Errors](errors.md) for the JavaScript-side error types, display format, and JSON output envelope. On the Pascal side, wrap execution in `try...except`:
 
 ```pascal
 uses

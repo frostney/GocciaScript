@@ -4,18 +4,22 @@
 
 ## Executive Summary
 
-- **JavaScript tests are primary** — End-to-end `.js` tests in `tests/` are the source of truth; Pascal unit tests are secondary
+- **Three testing layers** — JavaScript end-to-end tests (primary), CLI behavior tests (secondary), Pascal unit tests (tertiary)
 - **Built-in test framework** — `describe`/`test`/`expect` with async support, mock functions, lifecycle hooks, and Vitest-compatible matchers
 - **One method per file** — Each test file focuses on a single method; edge cases are co-located with happy-path tests
 - **Run with**: `./build.pas testrunner && ./build/TestRunner tests --asi`
 
-JavaScript end-to-end tests are the **primary** way of testing GocciaScript and ensuring ECMAScript compatibility. Every new feature or bug fix should include tests that exercise the full pipeline (lexer → parser → evaluator) through the same public surface that users call. Pascal unit tests exist as a secondary layer for low-level runtime and value system validation.
+GocciaScript uses three testing layers in priority order:
+
+1. **JavaScript end-to-end tests (primary)** -- `.js` tests in `tests/` that exercise the full pipeline through the same public surface that users call. CI runs the full suite in both **interpreted** and **bytecode** mode. Every new feature or bug fix should include tests at this layer.
+2. **CLI behavior tests (CI integration)** -- Shell-level checks in `.github/workflows/pr.yml` that verify `ScriptLoader`, `TestRunner`, and `BenchmarkRunner` CLI behavior: JSON output structure, coverage CLI (console summary, lcov, JSON, branch coverage), error display (source context, caret, suggestions), numeric separator rejection, source map generation, stdin smoke tests, timeout handling, global injection, and benchmark output format.
+3. **Pascal unit tests (tertiary)** -- Native `*.Test.pas` coverage for low-level runtime and value system internals that are not reachable through a stable public API.
 
 When choosing where to add coverage, prefer the most public entry point available:
 
 - JavaScript feature behavior: add or extend tests under `tests/`
-- CLI behavior (`ScriptLoader`, `TestRunner`, `BenchmarkRunner`): add command-level or workflow-level smoke tests that assert on the visible output
-- Pascal unit tests: prefer visible public behavior and deterministic input/output, and add native `*.Test.pas` coverage only when the behavior is genuinely internal or shared in a way that is not reachable through a stable public API
+- CLI behavior (`ScriptLoader`, `TestRunner`, `BenchmarkRunner`): add command-level smoke tests in `pr.yml` that assert on visible output
+- Pascal unit tests: add native `*.Test.pas` coverage only when the behavior is genuinely internal or not reachable through a documented user-facing entry point
 
 Avoid tests that lock onto private helper functions or transient implementation structure when the same behavior can be validated through a documented user-facing command or script entry point. Where native Pascal tests are still appropriate, keep them as stateless and repeatable as possible so they behave like pure input/output checks rather than process-sensitive probes.
 
@@ -192,6 +196,28 @@ test("JSON.stringify preserves round-trip precision for large fractional doubles
 });
 ```
 
+### Cross-Platform Newline Rules for Data Format Parsers
+
+When a parser implements a format with spec-defined newline semantics, test the format semantics directly instead of inheriting the host OS newline convention.
+
+- Do not treat `LineEnding` / `sLineBreak` as the expected runtime result for parsed data just because the test is running on Windows.
+- Prefer explicit `\r\n` or `#13#10` fixtures when adding regression tests for multiline parsing, folding, or block-scalar behavior.
+- Assert the format-defined canonical result. Example: TOML multiline strings normalize recognized newlines to LF (`\n`) even when the source text uses CRLF.
+- For parser inputs that come from files, use the shared `Goccia.TextFiles` helpers (`ReadUTF8FileText`, `ReadUTF8FileLines`, `StringListToLFText`) instead of `TStringList.LoadFromFile` or `string(UTF8String(...))`. Keep the text as `UTF8String` until parser entry, canonicalize parser-facing source text to LF through the shared helpers, and add at least one regression that hits the real file-loading path with non-ASCII data.
+- When code needs a "10 characters" or "first identifier code point" style rule on UTF-8 text, do not use raw `Length`, `Copy`, or byte indexing on `string`/`UTF8String`; those operate on bytes under our FPC settings.
+- Keep one public-surface regression in `tests/` and, when the parser exposes a reusable native utility like `TGocciaTOMLParser`, add a focused Pascal regression alongside it as well.
+
+### Test Metadata (Optional)
+
+Test files can include JSDoc-style metadata inspired by test262:
+
+```javascript
+/*---
+description: Tests for basic addition operations
+features: [addition, arithmetic]
+---*/
+```
+
 ## Running Tests
 
 ### Build the TestRunner
@@ -203,8 +229,14 @@ test("JSON.stringify preserves round-trip precision for large fractional doubles
 ### Run All Tests
 
 ```bash
+# Interpreted mode (default)
 ./build/TestRunner tests
+
+# Bytecode mode
+./build/TestRunner tests --mode=bytecode
 ```
+
+Both modes must pass. CI runs the full suite in both interpreted and bytecode mode as separate matrix jobs.
 
 ### Run a Specific Test File
 
@@ -328,12 +360,14 @@ promise.catch((err) => {
 
 JavaScript end-to-end tests are the **primary** testing mechanism. Every new feature or bug fix must include tests that validate the behavior through the full pipeline (lexer → parser → evaluator) using the most public surface available.
 
-- **Specification by example** — Each test file is a runnable specification of expected behavior.
-- **End-to-end validation** — Tests exercise the full pipeline, catching integration issues that unit tests would miss.
-- **Readable specifications** — JavaScript test files are readable by anyone familiar with Jest/Vitest conventions.
-- **Source of truth** — If a behavior isn't covered by a JavaScript test, it isn't guaranteed.
+- **Specification by example** -- Each test file is a runnable specification of expected behavior.
+- **End-to-end validation** -- Tests exercise the full pipeline, catching integration issues that unit tests would miss.
+- **Readable specifications** -- JavaScript test files are readable by anyone familiar with Jest/Vitest conventions.
+- **Source of truth** -- If a behavior isn't covered by a JavaScript test, it isn't guaranteed.
 
-Pascal unit tests (`*.Test.pas`) exist as a secondary layer for behavior that cannot be reached through script code or other documented user-facing entry points. Even there, prefer stateless, repeatable input/output checks over tests that are tightly coupled to incidental implementation structure.
+CLI behavior tests in `pr.yml` form the second layer, verifying that the command-line tools produce correct output structure, handle error cases gracefully, and that flags like `--coverage`, `--output=json`, `--source-map`, and `--timeout` work end-to-end. These tests run in CI on every pull request.
+
+Pascal unit tests (`*.Test.pas`) exist as a tertiary layer for behavior that cannot be reached through script code or other documented user-facing entry points. Even there, prefer stateless, repeatable input/output checks over tests that are tightly coupled to incidental implementation structure.
 
 ## How the TestRunner Works
 
@@ -348,9 +382,31 @@ The `TestRunner` program:
 7. Aggregates pass/fail/skip counts across all files.
 8. Prints a summary with total statistics.
 
-## Pascal Unit Tests (Secondary)
+## CLI Behavior Tests (CI Integration)
 
-Pascal unit tests are a secondary testing layer for low-level value system internals. They validate things that are difficult to test through JavaScript alone (e.g., memory layout, internal type conversion edge cases).
+The PR workflow (`.github/workflows/pr.yml`) includes shell-level smoke tests that verify CLI tool behavior on every pull request. These checks assert on command output rather than internal state, catching regressions in the user-facing interface.
+
+**What the CLI tests cover:**
+
+| Area | What is checked |
+|------|----------------|
+| TestRunner JSON output | `--output` produces valid JSON with `mode`, `totalFiles` fields |
+| TestRunner coverage | `--coverage` prints summary; `--coverage-format=lcov` and `--coverage-format=json` write valid output files; branch coverage includes `BRDA`/`BRF` entries |
+| ScriptLoader JSON output | `--output=json` envelope includes `ok`, `value`, `output` fields |
+| ScriptLoader error display | Syntax errors show source context, caret, and suggestions |
+| ScriptLoader coverage | `--coverage` summary, lcov/json file output, bytecode mode coverage |
+| ScriptLoader source maps | `--source-map` writes valid source map JSON; rejects stdin without explicit path |
+| Numeric separator rejection | Trailing, leading, consecutive separators and invalid positions produce errors |
+| Timeout handling | `--timeout` produces `TimeoutError` in JSON output |
+| Global injection | `--global`, `--globals` file/module injection, collision detection |
+| Stdin smoke tests | Piped input executes correctly in both interpreted and bytecode modes |
+| BenchmarkRunner output | `--format=json` produces valid JSON with benchmark structure |
+
+These tests do not require building from source -- they download pre-built binaries from the build job. To add a new CLI behavior check, add a step to the appropriate job in `pr.yml`.
+
+## Pascal Unit Tests (Tertiary)
+
+Pascal unit tests are the tertiary testing layer for low-level value system internals. They validate things that are difficult to test through JavaScript alone (e.g., memory layout, internal type conversion edge cases).
 
 | Test File | Tests |
 |-----------|-------|

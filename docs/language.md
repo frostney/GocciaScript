@@ -754,7 +754,7 @@ const isFinite = Number.isFinite;
 
 ## Strictness Guarantees
 
-GocciaScript operates in an implicit strict mode:
+GocciaScript operates in an implicit strict mode (see [Errors](errors.md) for the full error type reference):
 
 - All variables must be declared before use.
 - Duplicate parameter names are forbidden.

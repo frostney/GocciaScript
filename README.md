@@ -232,12 +232,14 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 
 | Document | Description |
 |----------|-------------|
+| [Project Goals](docs/goals.md) | Why GocciaScript exists: sandboxed AI agent runtime and embeddable desktop platform |
 | [Tutorial](docs/tutorial.md) | Your first GocciaScript program — a guided walkthrough for newcomers |
 | [Language](docs/language.md) | ECMAScript subset, excluded features, and rationale |
 | [Language Tables](docs/language-tables.md) | Quick-reference: ECMAScript feature matrix and TC39 proposal status |
 | [Built-in Objects](docs/built-ins.md) | Available built-ins and API reference |
 | [Temporal Built-ins](docs/built-ins-temporal.md) | Temporal API: dates, times, durations, time zones |
 | [Binary Data Built-ins](docs/built-ins-binary-data.md) | ArrayBuffer, SharedArrayBuffer, TypedArray API |
+| [Errors](docs/errors.md) | Error types, parser/runtime display, JSON output, `Error.cause`, `try`/`catch`/`finally` |
 | [Architecture](docs/architecture.md) | Pipelines, main layers, design direction, duplication boundaries |
 | [Interpreter](docs/interpreter.md) · [Bytecode VM](docs/bytecode-vm.md) | Tree-walk and bytecode execution backends |
 | [Core patterns](docs/core-patterns.md) | Recurring implementation patterns, internal terminology |

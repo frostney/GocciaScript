@@ -124,7 +124,7 @@ Scopes form a tree with parent pointers, implementing lexical scoping:
 
 ### Error Handling Strategy
 
-GocciaScript uses a layered error approach:
+GocciaScript uses a layered error approach (see [Errors](errors.md) for the full error type reference and user-facing display format):
 
 1. **Compile-time errors** (lexer/parser) use Pascal exceptions (`TGocciaLexerError`, `TGocciaSyntaxError`) — these terminate parsing immediately.
 2. **Runtime errors** use a callback pattern (`OnError` in `TGocciaEvaluationContext`) — this keeps evaluator functions pure.

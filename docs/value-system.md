@@ -381,7 +381,7 @@ Objects support `Object.freeze()` via an `FFrozen` flag on `TGocciaObjectValue`:
 
 ### Error Helpers (`Goccia.Values.ErrorHelper.pas`)
 
-A utility unit that centralizes JavaScript error object construction. Instead of manually building error objects at every throw site, code uses:
+A utility unit that centralizes JavaScript [error](errors.md) object construction. Instead of manually building error objects at every throw site, code uses:
 
 ```pascal
 ThrowTypeError('Cannot set property on non-object');
@@ -676,6 +676,8 @@ Private fields use **composite keys** (`ClassName:FieldName`) in the instance's 
 The GC design rationale (why mark-and-sweep, why not reference counting, AST literal ownership) lives in [Garbage Collector](garbage-collector.md).
 
 ## Error Values
+
+See [Errors](errors.md) for the complete list of error types, user-facing display format, and JSON output envelope.
 
 `TGocciaError` carries JavaScript error information:
 

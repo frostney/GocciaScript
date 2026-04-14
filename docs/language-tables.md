@@ -75,7 +75,11 @@
 | [Types as Comments](https://tc39.es/proposal-type-annotations/) | 1 | Supported — TypeScript-style annotations parsed, preserved on AST, enforced in bytecode mode |
 | [Enum Declarations](https://github.com/tc39/proposal-enum) | 0 | Supported — frozen, null-prototype enum objects with `Symbol.iterator` |
 
+## Runtime Extensions
+
+GocciaScript provides a `Goccia` global object with engine metadata and runtime APIs beyond the ECMAScript specification, including `spec` (implemented ES features by year) and `proposal` (implemented TC39 proposals by stage). See [Built-in Objects — Goccia object](built-ins.md#global-constants-functions-and-error-constructors-gocciabuiltinsglobalspas) for the full property reference.
+
 ## Related documents
 
-- **Language** — [language.md](language.md) — Detailed semantics, examples, restrictions, and rationale
-- **Built-ins** — [built-ins.md](built-ins.md) — API reference for all built-in types and functions
+- **Language** -- [language.md](language.md) -- Detailed semantics, examples, restrictions, and rationale
+- **Built-ins** -- [built-ins.md](built-ins.md) -- API reference for all built-in types and functions
