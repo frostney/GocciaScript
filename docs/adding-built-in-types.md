@@ -26,7 +26,7 @@ Adding a built-in type like `Set`, `Map`, or `ArrayBuffer` requires changes acro
 | 7 | `units/Goccia.Builtins.Globals.pas` | structuredClone support (if cloneable) |
 | 8 | `tests/built-ins/YourType/` | JavaScript tests |
 | 9 | `benchmarks/yourtype.js` | Benchmarks |
-| 10 | `docs/built-ins.md`, `README.md`, `AGENTS.md` | Documentation |
+| 10 | `docs/built-ins.md`, `README.md`, other `docs/*` as needed | Documentation |
 
 ## Step 1: Value Type (`Goccia.Values.YourValue.pas`)
 
@@ -443,7 +443,7 @@ Create test files under `tests/built-ins/YourType/`. Follow the file layout conv
 - **Static methods at the top level** — `YourType/staticMethod.js` (no separate `static/` folder).
 - **Edge cases are co-located** — NaN handling, boundary conditions, error cases belong in the same file as the happy-path tests for that method. Do **not** create a separate `edge-cases.js`.
 
-```
+```text
 tests/built-ins/YourType/
   constructor.js           # new YourType(...) constructor variants + error cases
   toString-tag.js          # Symbol.toStringTag
@@ -517,10 +517,10 @@ Add a section with method tables:
 
 Add `YourType` to the built-in objects list.
 
-### `AGENTS.md`
+### Other documentation
 
-- Add value type and built-in unit entries to the component table.
-- Add test directory reference if it contains noteworthy test patterns.
+- Update [docs/built-ins.md](built-ins.md) and [README.md](../README.md) as needed.
+- If you introduce a new major engine layer or file-level component worth listing, update [docs/architecture.md](architecture.md) (or the doc index in [CONTRIBUTING.md](../CONTRIBUTING.md)) instead of maintaining a separate table elsewhere.
 
 ## Checklist
 
@@ -540,7 +540,7 @@ Use this checklist when adding a new built-in type:
 - [ ] structuredClone support in `Goccia.Builtins.Globals.pas` (if cloneable)
 - [ ] JavaScript tests in `tests/built-ins/YourType/`
 - [ ] Benchmarks in `benchmarks/yourtype.js`
-- [ ] Documentation in `docs/built-ins.md`, `README.md`, `AGENTS.md`
+- [ ] Documentation in `docs/built-ins.md`, `README.md`, and other docs as needed (see [CONTRIBUTING.md](../CONTRIBUTING.md))
 - [ ] All existing tests still pass
 - [ ] Build succeeds (`./build.pas clean loader`)
 
@@ -559,4 +559,4 @@ Use this checklist when adding a new built-in type:
 3. **`IsInfinity` vs `IsInfinite`** -- `IsInfinity` checks only positive infinity. Use `IsInfinite` to check both positive and negative.
 4. **Circular interface dependencies** -- If your value type and `ClassValue` need each other, put the value type in `ClassValue`'s *implementation* uses clause (not interface).
 5. **Stale build artifacts** -- After adding new units, run `./build.pas clean loader` to avoid FPC internal errors from stale `.ppu` files.
-6. **Never use `.ToNumberLiteral.Value` for special numbers** -- `NaN`, `Infinity`, `-Infinity`, and `-0` all store `FValue = 0.0` internally (see [design-decisions.md](design-decisions.md#number-representation)). Code that reads `.Value` without first checking `IsNaN`/`IsInfinite`/`IsNegativeZero` will silently treat these as zero. Always check the special value flags first and handle each case explicitly. This applies to any code that converts a `TGocciaNumberLiteralValue` to a raw `Double` for storage, comparison, or arithmetic -- including binary buffer writes, search comparisons, and fill values. See `Goccia.Values.TypedArrayValue.WriteNumberLiteral` and `Goccia.Evaluator.Arithmetic.pas` for the canonical patterns.
+6. **Use property accessors for special numbers** -- `TGocciaNumberLiteralValue` stores a single `Double` in `FValue` using standard IEEE 754 bit patterns. Use the `IsNaN`, `IsInfinity`, and `IsNegativeZero` property accessors rather than raw `FValue` comparisons when you need to distinguish special values. For negative zero specifically, `IsNegativeZero` uses an endian-neutral sign-bit check. See `Goccia.Values.TypedArrayValue.WriteNumberLiteral` and `Goccia.Evaluator.Arithmetic.pas` for the canonical patterns.

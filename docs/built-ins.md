@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-- **Unconditional registration** — Standard built-ins (Console, Math, Object, Array, String, Number, RegExp, JSON, JSON5, JSONL, TOML, YAML, Symbol, Set, Map, Promise, Performance, Temporal, ArrayBuffer, SharedArrayBuffer, TypedArrays, Proxy, Reflect, Iterator, TextEncoder, TextDecoder, URL, URLSearchParams) are always registered
+- **Unconditional registration** — Standard built-ins (Console, Math, Object, Array, String, Number, RegExp, JSON, JSON5, JSONL, TOML, YAML, Symbol, Set, Map, Promise, Performance, Temporal, ArrayBuffer, SharedArrayBuffer, TypedArrays, Proxy, Reflect, Iterator, TextEncoder, TextDecoder, URL, URLSearchParams, DisposableStack, AsyncDisposableStack) are always registered
 - **Flag-gated extras** — Only `ggTestAssertions`, `ggBenchmark`, and `ggFFI` use flag-gating for opt-in registration
 - **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
 - **Always-present globals** — `globalThis` and `Goccia` namespace are registered after all built-ins
@@ -37,6 +37,8 @@ See [Adding a New Built-in Type](adding-built-in-types.md) for the complete step
 
 ### Console (`Goccia.Builtins.Console.pas`)
 
+Implements the [WHATWG Console Standard](https://developer.mozilla.org/en-US/docs/Web/API/console). **Not implemented:** `console.dirxml`, `console.groupCollapsed`, `console.profile`, `console.profileEnd`, `console.timeStamp`.
+
 | Method | Description |
 |--------|-------------|
 | `console.log(...args)` | Output to stdout with space-separated values |
@@ -59,67 +61,21 @@ See [Adding a New Built-in Type](adding-built-in-types.md) for the complete step
 
 ### Math (`Goccia.Builtins.Math.pas`)
 
-**Constants:**
+Implements the [ECMAScript Math object](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Math). See [MDN Math reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Math) for the full API.
 
-| Constant | Value |
-|----------|-------|
-| `Math.PI` | 3.14159265358979... |
-| `Math.E` | 2.71828182845904... |
-| `Math.LN2` | 0.693147... |
-| `Math.LN10` | 2.302585... |
-| `Math.LOG2E` | 1.442695... |
-| `Math.LOG10E` | 0.434294... |
-| `Math.SQRT2` | 1.414213... |
-| `Math.SQRT1_2` | 0.707106... |
+**Full standard compliance** — all ES2026 constants and methods are available.
 
-**Methods:**
+**TC39 extras (not yet on MDN):**
 
 | Method | Description |
 |--------|-------------|
-| `Math.abs(x)` | Absolute value |
-| `Math.floor(x)` | Round down |
-| `Math.ceil(x)` | Round up |
-| `Math.round(x)` | Round to nearest |
-| `Math.trunc(x)` | Truncate decimal |
-| `Math.max(...args)` | Maximum value |
-| `Math.min(...args)` | Minimum value |
-| `Math.pow(base, exp)` | Exponentiation |
-| `Math.sqrt(x)` | Square root |
-| `Math.random()` | Random [0, 1) |
-| `Math.sign(x)` | Sign (-1, 0, 1) |
-| `Math.clamp(x, min, max)` | Clamp to range (TC39 proposal) |
-| `Math.exp(x)` | e^x |
-| `Math.log(x)` | Natural logarithm |
-| `Math.log10(x)` | Base-10 logarithm |
-| `Math.sin(x)` | Sine |
-| `Math.cos(x)` | Cosine |
-| `Math.tan(x)` | Tangent |
-| `Math.acos(x)` | Arc cosine |
-| `Math.asin(x)` | Arc sine |
-| `Math.atan(x)` | Arc tangent |
-| `Math.atan2(y, x)` | Arc tangent of y/x |
-| `Math.cbrt(x)` | Cube root |
-| `Math.cosh(x)` | Hyperbolic cosine |
-| `Math.sinh(x)` | Hyperbolic sine |
-| `Math.tanh(x)` | Hyperbolic tangent |
-| `Math.acosh(x)` | Inverse hyperbolic cosine |
-| `Math.asinh(x)` | Inverse hyperbolic sine |
-| `Math.atanh(x)` | Inverse hyperbolic tangent |
-| `Math.expm1(x)` | e^x - 1 (precise for small x) |
-| `Math.f16round(x)` | Nearest 16-bit float |
-| `Math.fround(x)` | Nearest 32-bit float |
-| `Math.hypot(x, y)` | Square root of sum of squares |
-| `Math.imul(a, b)` | 32-bit integer multiplication |
-| `Math.log1p(x)` | ln(1 + x) (precise for small x) |
-| `Math.log2(x)` | Base-2 logarithm |
-| `Math.clz32(x)` | Count leading zeros (32-bit) |
-| `Math.sumPrecise(iterable)` | Precise sum of iterable of numbers (TC39 proposal) |
-
-All methods handle `NaN` and `Infinity` edge cases correctly.
-
-`Math.sumPrecise(iterable)` takes an iterable of numbers and returns their sum using Kahan-Babuska-Neumaier compensated summation, avoiding floating-point precision loss from naive addition. Throws `TypeError` if the argument is not iterable (e.g., `null`, `undefined`, numbers, plain objects without `[Symbol.iterator]`). Non-number values in the iterable also throw `TypeError`. An empty iterable returns `-0`. If any element is `NaN`, returns `NaN`. Mixed `+Infinity` and `-Infinity` returns `NaN`.
+| `Math.clamp(x, min, max)` | Clamp to range ([proposal-math-clamp](https://github.com/tc39/proposal-math-clamp)) |
+| `Math.f16round(x)` | Nearest 16-bit float (ES2025) |
+| `Math.sumPrecise(iterable)` | Precise sum via Kahan-Babuska-Neumaier compensated summation ([proposal-math-sum](https://github.com/tc39/proposal-math-sum)). Throws `TypeError` for non-iterable or non-number elements. Empty iterable returns `-0`. Mixed `±Infinity` returns `NaN`. |
 
 ### JSON (`Goccia.Builtins.JSON.pas`)
+
+Implements the [ECMAScript JSON object](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON) including ES2024 source text access and ES2026 Raw JSON.
 
 | Method | Description |
 |--------|-------------|
@@ -133,6 +89,7 @@ All methods handle `NaN` and `Infinity` edge cases correctly.
 **Source text access (ES2024):** When a reviver is provided, it receives three arguments: `(key, value, context)`. The `context` parameter is an object. For primitive JSON values (numbers, strings, booleans, `null`), the context contains a `source` property with the raw JSON text that produced the value — including quotes for strings, exact numeric notation, and escape sequences as written. For objects and arrays, the context object has no `source` property. This enables lossless round-tripping of numeric precision and format-aware value reconstruction.
 
 The JSON parser is a recursive descent implementation. Special handling:
+
 - `NaN` → `null` in stringify
 - `undefined` → omitted in objects, `null` in arrays
 - Functions → omitted in objects, `null` in arrays
@@ -169,7 +126,7 @@ Tagged values preserve runtime metadata through `.tagName` and `.value`. Custom 
 
 Explicit keys (`? key`) are supported, including omitted explicit values and zero-indented sequence values. Because GocciaScript mappings are backed by string-keyed objects, non-scalar YAML keys are canonicalized into stable JSON-like strings during parsing, and anchored mapping keys now parse instead of being rejected outright.
 
-Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time while keeping Bun-compatible YAML runtime behavior where practical. The current parser is still a partial implementation. The detailed conformance snapshot lives in [docs/design-decisions.md](design-decisions.md), and the official parse-validity check can be rerun with `python3 scripts/run_yaml_test_suite.py`.
+Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time while keeping Bun-compatible YAML runtime behavior where practical. The current parser is still a partial implementation. The detailed conformance snapshot lives in [docs/decision-log.md](decision-log.md), and the official parse-validity check can be rerun with `python3 scripts/run_yaml_test_suite.py`.
 
 ### JSONL (`Goccia.Builtins.JSONL.pas`)
 
@@ -190,47 +147,19 @@ Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time wh
 
 TOML date/time values currently map to validated string scalars rather than Temporal values. This keeps the runtime and module-import behavior stable for v1 while leaving room for future Temporal-aware interop.
 
-Compatibility goal: GocciaScript is targeting full TOML 1.1.0 support over time. The detailed conformance notes live in [docs/design-decisions.md](design-decisions.md), and the official `toml-test` rerun command is `python3 scripts/run_toml_test_suite.py` or `python3 scripts/run_toml_test_suite.py --harness=./build/GocciaTOMLCheck` when you already have the decoder harness built.
+Compatibility goal: GocciaScript is targeting full TOML 1.1.0 support over time. The detailed conformance notes live in [docs/decision-log.md](decision-log.md), and the official `toml-test` rerun command is `python3 scripts/run_toml_test_suite.py` or `python3 scripts/run_toml_test_suite.py --harness=./build/GocciaTOMLCheck` when you already have the decoder harness built.
 
 ### Object (`Goccia.Builtins.GlobalObject.pas`)
 
-| Method | Description |
-|--------|-------------|
-| `Object.keys(obj)` | Own enumerable property names |
-| `Object.values(obj)` | Own enumerable property values |
-| `Object.entries(obj)` | Own enumerable [key, value] pairs |
-| `Object.assign(target, ...sources)` | Copy properties |
-| `Object.create(proto)` | Create with prototype |
-| `Object.is(a, b)` | Same-value equality (handles -0, NaN) |
-| `Object.hasOwn(obj, prop)` | Own property check (supports class values; checks static properties, not private fields) |
-| `Object.defineProperty(obj, prop, desc)` | Define/update property descriptor (merges with existing) |
-| `Object.defineProperties(obj, props)` | Define multiple descriptors |
-| `Object.getOwnPropertyNames(obj)` | All own property names |
-| `Object.getOwnPropertyDescriptor(obj, prop)` | Get property descriptor |
-| `Object.getOwnPropertySymbols(obj)` | All own symbol-keyed properties |
-| `Object.freeze(obj)` | Freeze object (make all properties non-writable/non-configurable) |
-| `Object.isFrozen(obj)` | Check if object is frozen |
-| `Object.getPrototypeOf(obj)` | Get the prototype of an object |
-| `Object.fromEntries(entries)` | Create object from `[[key, value], ...]` array |
-| `Object.seal(obj)` | Seal object (prevent new properties, keep existing writable) |
-| `Object.isSealed(obj)` | Check if object is sealed |
-| `Object.preventExtensions(obj)` | Prevent new properties from being added |
-| `Object.isExtensible(obj)` | Check if object is extensible |
-| `Object.setPrototypeOf(obj, proto)` | Set the prototype of an object |
-| `Object.groupBy(iterable, callback)` | Group elements by callback return value |
+Implements the [ECMAScript Object](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object). See [MDN Object reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object) for the full API.
 
-**Prototype methods (registered on `Object.prototype` in `Goccia.Engine.pas`):**
+**Full standard compliance** — all ES2026 static methods and prototype methods are available.
 
-| Method | Description |
-|--------|-------------|
-| `Object.prototype.toString()` | Returns `[object Tag]` where Tag is `Symbol.toStringTag` if present, or the built-in type tag (e.g. `Object`, `Array`, `Function`, `Set`, `Map`, `Promise`, `ArrayBuffer`). Handles primitives via `.call()`: `undefined` → `[object Undefined]`, `null` → `[object Null]`, booleans → `[object Boolean]`, numbers → `[object Number]`, strings → `[object String]`, symbols → `[object Symbol]`. |
-| `Object.prototype.hasOwnProperty(V)` | Returns `true` if the object has the named own property (not inherited). Property key is coerced to string. |
-| `Object.prototype.isPrototypeOf(V)` | Walks `V`'s prototype chain to check if `this` appears in it. Returns `false` for non-object arguments. |
-| `Object.prototype.propertyIsEnumerable(V)` | Returns `true` if the named own property exists and has the enumerable flag set. |
-| `Object.prototype.toLocaleString()` | Calls `this.toString()` and returns the result. |
-| `Object.prototype.valueOf()` | Returns `this` (identity for objects). |
+**GocciaScript-specific behavior:** `Object.hasOwn` supports class values and checks static properties (not private fields).
 
 ### Array (`Goccia.Builtins.GlobalArray.pas`)
+
+Implements the [ECMAScript Array](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array). **Not implemented:** `Array.prototype.reduceRight`, `Array.prototype.toLocaleString`.
 
 **Static methods:**
 
@@ -285,45 +214,15 @@ Compatibility goal: GocciaScript is targeting full TOML 1.1.0 support over time.
 
 ### Number (`Goccia.Builtins.GlobalNumber.pas`)
 
-**Constants:**
+Implements the [ECMAScript Number](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number). See [MDN Number reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number) for the full API.
 
-| Constant | Value |
-|----------|-------|
-| `Number.NaN` | Not-a-Number |
-| `Number.POSITIVE_INFINITY` | Positive infinity |
-| `Number.NEGATIVE_INFINITY` | Negative infinity |
-| `Number.MAX_SAFE_INTEGER` | 2^53 - 1 (9007199254740991) |
-| `Number.MIN_SAFE_INTEGER` | -(2^53 - 1) |
-| `Number.MAX_VALUE` | Largest representable number |
-| `Number.MIN_VALUE` | Smallest positive number |
-| `Number.EPSILON` | Smallest difference between 1 and next float |
+**Full standard compliance** — all ES2026 static methods, constants, and prototype methods are available.
 
-**Methods:**
-
-| Method | Description |
-|--------|-------------|
-| `Number.parseInt(str, radix?)` | Parse integer (supports radix 2-36) |
-| `Number.parseFloat(str)` | Parse floating-point |
-| `Number.isFinite(value)` | Check if finite number |
-| `Number.isNaN(value)` | Check if NaN |
-| `Number.isInteger(value)` | Check if integer |
-| `Number.isSafeInteger(value)` | Check if safe integer (within ±2^53-1) |
-
-These are **not** available as global functions — see [language-restrictions.md](language-restrictions.md#no-global-parseint-parsefloat-isnan-isfinite) for the rationale and polyfill pattern.
-
-**Prototype methods** (available on number values via auto-boxing):
-
-| Method | Description |
-|--------|-------------|
-| `num.toFixed(digits?)` | Format with fixed-point notation (0-100 digits, default 0) |
-| `num.toString(radix?)` | Convert to string (supports radix 10 and 16) |
-| `num.valueOf()` | Return the primitive number value |
-| `num.toPrecision(precision?)` | Format to specified significant digits |
-| `num.toExponential(fractionDigits?)` | Format in exponential notation |
-
-All prototype methods correctly handle special values — `NaN`, `Infinity`, `-Infinity`, and `-0` return their standard string representations rather than attempting numeric formatting.
+**GocciaScript difference:** `parseInt`, `parseFloat`, `isNaN`, and `isFinite` are only available as `Number.*` static methods — not as global functions. See [language.md](language.md#no-global-parseint-parsefloat-isnan-isfinite) for the rationale.
 
 ### String (`Goccia.Builtins.GlobalString.pas`)
+
+Implements the [ECMAScript String](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String). **Not implemented:** `String.prototype.toLocaleLowerCase`, `String.prototype.toLocaleUpperCase`.
 
 String constructor available as `String()`.
 
@@ -344,6 +243,8 @@ String prototype methods are implemented on string values:
 `[Symbol.iterator]()` returns an iterator that yields individual characters.
 
 ### RegExp (`Goccia.Builtins.GlobalRegExp.pas`)
+
+Implements the [ECMAScript RegExp](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp) including ES2025 modifiers, duplicate named groups, and the TC39 `RegExp.escape` proposal.
 
 RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pattern/flags`) are also supported in both interpreted and bytecode execution modes. Calling `RegExp(existingRegExp)` without `new` and without an explicit `flags` argument returns the original regex object; `new RegExp(existingRegExp)` clones it.
 
@@ -503,13 +404,15 @@ All error constructors accept an optional second argument `options` with a `caus
 
 Each creates an error object with `name`, `message`, and `stack` properties. The `stack` property is a formatted string with the following structure:
 
-```
+```text
 ErrorName: message
     at functionName (filePath:line:col)
     at outerFunction (filePath:line:col)
 ```
 
 ### Iterator (`Goccia.Values.IteratorValue.pas`, `Iterator.Concrete.pas`, `Iterator.Lazy.pas`, `Iterator.Concat.pas`, `Iterator.Generic.pas`)
+
+Implements the [ECMAScript Iterator Helpers proposal](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Iterator) and TC39 Iterator Sequencing / Joint Iteration proposals.
 
 All built-in iterators (Array, String, Map, Set) share a common `Iterator.prototype` with helper methods per the ECMAScript Iterator Helpers proposal:
 
@@ -546,6 +449,8 @@ Iterators are consumed once — calling `next()` past the end returns `{value: u
 | `Iterator.prototype` | The shared iterator prototype (accessible for inspection) |
 
 ### Symbol (`Goccia.Builtins.GlobalSymbol.pas`)
+
+Implements [ECMAScript Symbol](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol). **Not implemented:** `Symbol.unscopables`. Also includes `Symbol.metadata` (TC39 decorator metadata), `Symbol.dispose`, and `Symbol.asyncDispose` (TC39 explicit resource management) beyond the base standard.
 
 Symbols are unique, immutable primitive values used as property keys.
 
@@ -586,6 +491,8 @@ obj[sym]; // "value"
 
 ### Set (`Goccia.Builtins.GlobalSet.pas`)
 
+Implements the [ECMAScript Set](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Set) including ES2025 Set methods (`union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom`).
+
 A collection of unique values with insertion-order iteration.
 
 | Method/Property | Description |
@@ -612,6 +519,8 @@ A collection of unique values with insertion-order iteration.
 Sets are iterable: `[...mySet]` spreads the set's values into an array.
 
 ### Map (`Goccia.Builtins.GlobalMap.pas`)
+
+Implements the [ECMAScript Map](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map) including TC39 `Map.prototype.getOrInsert`/`getOrInsertComputed` (proposal-upsert).
 
 A collection of key-value pairs with insertion-order iteration. Any value (including objects) can be a key.
 
@@ -641,6 +550,8 @@ A collection of key-value pairs with insertion-order iteration. Any value (inclu
 Maps are iterable: `[...myMap]` spreads the map into an array of `[key, value]` pairs.
 
 ### Promise (`Goccia.Builtins.GlobalPromise.pas`, `Goccia.Values.PromiseValue.pas`)
+
+Implements the [ECMAScript Promise](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise) including `Promise.withResolvers()` (ES2024) and `Promise.try()` (ES2025). See [MDN Promise reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise) for the standard API.
 
 An implementation of ECMAScript Promises with a synchronous microtask queue. `.then()` callbacks are always deferred (never synchronous), matching spec behavior.
 
@@ -719,443 +630,13 @@ Core High Resolution Time API:
 
 `Performance()` and `new Performance()` both throw `TypeError` (`"Illegal constructor"`), matching the web platform's non-constructible interface object behavior.
 
-### Temporal (`Goccia.Builtins.Temporal.pas`)
+### Temporal
 
-An implementation of the ECMAScript Temporal API (Stage 3 proposal) providing modern date/time handling. ISO 8601 calendar only. All Temporal types are immutable — operations return new instances.
+See [Temporal Built-ins](built-ins-temporal.md) for the complete Temporal API reference (PlainDate, PlainTime, PlainDateTime, Duration, Instant, ZonedDateTime, and more).
 
-**Namespace structure:**
+### Binary Data (ArrayBuffer, SharedArrayBuffer, TypedArrays)
 
-```javascript
-Temporal.Now           // Current time utilities
-Temporal.Duration      // Time duration representation
-Temporal.Instant       // Absolute point in time (epoch-based)
-Temporal.PlainDate     // Calendar date (no time/timezone)
-Temporal.PlainTime     // Wall-clock time (no date/timezone)
-Temporal.PlainDateTime // Date + time (no timezone)
-Temporal.PlainYearMonth // Year and month (no day/time/timezone)
-Temporal.PlainMonthDay  // Month and day (no year/time/timezone)
-Temporal.ZonedDateTime  // Date + time + timezone
-```
-
-#### Temporal.Duration
-
-Represents a length of time with 10 components (years through nanoseconds).
-
-| Constructor / Static | Description |
-|---------------------|-------------|
-| `new Temporal.Duration(y?, mo?, w?, d?, h?, min?, s?, ms?, us?, ns?)` | Create from components (all default to 0) |
-| `Temporal.Duration.from(item)` | Create from string (`"P1Y2M3DT4H5M6S"`), Duration, or object |
-| `Temporal.Duration.compare(one, two)` | Compare two durations (-1, 0, 1) |
-
-| Getter | Description |
-|--------|-------------|
-| `years`, `months`, `weeks`, `days` | Date components |
-| `hours`, `minutes`, `seconds` | Time components |
-| `milliseconds`, `microseconds`, `nanoseconds` | Sub-second components |
-| `sign` | -1, 0, or 1 |
-| `blank` | True if all components are zero |
-
-| Method | Description |
-|--------|-------------|
-| `negated()` | Return negated duration |
-| `abs()` | Return absolute duration |
-| `add(other)` | Add another duration |
-| `subtract(other)` | Subtract another duration |
-| `with(fields)` | Return new duration with overridden fields |
-| `total(unit)` | Convert to total of a single unit (e.g., `"hours"`). Accepts a string or options object `{ unit, relativeTo? }`. Throws `RangeError` if duration has non-zero years/months without `relativeTo`. Calendar-relative conversion (`relativeTo`) is not yet supported. |
-| `round(options)` | Round the duration. Accepts a string (smallestUnit) or options object `{ smallestUnit, largestUnit, roundingMode, roundingIncrement }`. Rebalances components from `largestUnit` down. Throws `RangeError` if duration has years/months (requires `relativeTo`, not yet supported). At least `smallestUnit` or `largestUnit` must be specified. |
-| `toString()` / `toJSON()` | ISO 8601 duration string (e.g., `"P1Y2M3DT4H5M6S"`) |
-| `valueOf()` | Throws TypeError (prevents implicit coercion) |
-
-#### Temporal.PlainDate
-
-Represents a calendar date without time or timezone.
-
-| Constructor / Static | Description |
-|---------------------|-------------|
-| `new Temporal.PlainDate(year, month, day)` | Create from components |
-| `Temporal.PlainDate.from(item [, options])` | Create from string (`"2024-03-15"`), PlainDate, or object. Options: `{ overflow }` where overflow is `"constrain"` (default, clamps out-of-range values) or `"reject"` (throws RangeError). |
-| `Temporal.PlainDate.compare(one, two)` | Compare two dates (-1, 0, 1) |
-
-| Getter | Description |
-|--------|-------------|
-| `calendarId` | Always `"iso8601"` |
-| `year`, `month`, `day` | Date components |
-| `monthCode` | `"M01"` through `"M12"` |
-| `dayOfWeek` | 1 (Monday) through 7 (Sunday) |
-| `dayOfYear`, `weekOfYear`, `yearOfWeek` | ISO week-date components |
-| `daysInWeek`, `daysInMonth`, `daysInYear`, `monthsInYear` | Calendar info |
-| `inLeapYear` | Boolean |
-
-| Method | Description |
-|--------|-------------|
-| `with(fields)` | Return new date with overridden fields |
-| `add(duration)` / `subtract(duration)` | Date arithmetic |
-| `until(other)` / `since(other)` | Difference as Duration |
-| `equals(other)` | Equality check |
-| `toPlainDateTime(time?)` | Combine with a time |
-| `toPlainYearMonth()` | Extract year and month as PlainYearMonth |
-| `toPlainMonthDay()` | Extract month and day as PlainMonthDay |
-| `toZonedDateTime(timeZone)` | Combine with a timezone (string or `{ timeZone }` object) to create a ZonedDateTime at midnight |
-| `toString()` / `toJSON()` | ISO date string (e.g., `"2024-03-15"`) |
-| `valueOf()` | Throws TypeError |
-
-#### Temporal.PlainTime
-
-Represents a wall-clock time without date or timezone.
-
-| Constructor / Static | Description |
-|---------------------|-------------|
-| `new Temporal.PlainTime(h?, min?, s?, ms?, us?, ns?)` | Create from components (all default to 0) |
-| `Temporal.PlainTime.from(item)` | Create from string (`"13:45:30"`), PlainTime, or object |
-| `Temporal.PlainTime.compare(one, two)` | Compare two times (-1, 0, 1) |
-
-| Getter | Description |
-|--------|-------------|
-| `hour`, `minute`, `second` | Time components |
-| `millisecond`, `microsecond`, `nanosecond` | Sub-second components |
-
-| Method | Description |
-|--------|-------------|
-| `with(fields)` | Return new time with overridden fields |
-| `add(duration)` / `subtract(duration)` | Time arithmetic (wraps at midnight) |
-| `until(other)` / `since(other)` | Difference as Duration |
-| `round(options)` | Round to nearest unit. Accepts a string (smallestUnit) or options object `{ smallestUnit, roundingMode, roundingIncrement }`. |
-| `equals(other)` | Equality check |
-| `toString([options])` / `toJSON()` | ISO time string (e.g., `"13:45:30"`). `toString` accepts `{ fractionalSecondDigits }` (0-9 or `"auto"`). |
-| `valueOf()` | Throws TypeError |
-
-#### Temporal.PlainDateTime
-
-Represents a date and time without timezone. Combines PlainDate and PlainTime.
-
-| Constructor / Static | Description |
-|---------------------|-------------|
-| `new Temporal.PlainDateTime(y, mo, d, h?, min?, s?, ms?, us?, ns?)` | Create from components |
-| `Temporal.PlainDateTime.from(item)` | Create from string, PlainDateTime, or object |
-| `Temporal.PlainDateTime.compare(one, two)` | Compare two date-times (-1, 0, 1) |
-
-| Getter | Description |
-|--------|-------------|
-| All PlainDate getters + all PlainTime getters | Combined date and time access |
-
-| Method | Description |
-|--------|-------------|
-| `with(fields)` | Return new date-time with overridden fields |
-| `withPlainTime(time?)` | Replace time component |
-| `add(duration)` / `subtract(duration)` | Date-time arithmetic |
-| `until(other)` / `since(other)` | Difference as Duration |
-| `round(options)` | Round to nearest unit. Accepts a string (smallestUnit) or options object `{ smallestUnit, roundingMode, roundingIncrement }`. |
-| `equals(other)` | Equality check |
-| `toPlainDate()` / `toPlainTime()` | Extract date or time component |
-| `toPlainYearMonth()` | Extract year and month as PlainYearMonth |
-| `toPlainMonthDay()` | Extract month and day as PlainMonthDay |
-| `toZonedDateTime(timeZone)` | Combine with a timezone (string or `{ timeZone }` object) to create a ZonedDateTime |
-| `toString([options])` / `toJSON()` | ISO string (e.g., `"2024-03-15T13:45:30"`). `toString` accepts `{ fractionalSecondDigits }` (0-9 or `"auto"`). |
-| `valueOf()` | Throws TypeError |
-
-#### Temporal.Instant
-
-Represents an absolute point in time (epoch-based), independent of calendar or timezone.
-
-| Constructor / Static | Description |
-|---------------------|-------------|
-| `new Temporal.Instant(epochNanoseconds)` | Create from epoch nanoseconds |
-| `Temporal.Instant.from(item)` | Create from string or Instant |
-| `Temporal.Instant.fromEpochMilliseconds(ms)` | Create from epoch milliseconds |
-| `Temporal.Instant.fromEpochNanoseconds(ns)` | Create from epoch nanoseconds |
-| `Temporal.Instant.compare(one, two)` | Compare two instants (-1, 0, 1) |
-
-| Getter | Description |
-|--------|-------------|
-| `epochMilliseconds` | Milliseconds since Unix epoch |
-| `epochNanoseconds` | Nanoseconds since Unix epoch (as number) |
-
-| Method | Description |
-|--------|-------------|
-| `add(duration)` / `subtract(duration)` | Time arithmetic (no calendar units) |
-| `until(other)` / `since(other)` | Difference as Duration |
-| `round(options)` | Round to nearest unit. Accepts a string (smallestUnit) or options object `{ smallestUnit, roundingMode, roundingIncrement }`. |
-| `equals(other)` | Equality check |
-| `toString([options])` / `toJSON()` | ISO string with UTC (e.g., `"2024-03-15T13:45:30Z"`). `toString` accepts `{ fractionalSecondDigits }` (0-9 or `"auto"`). |
-| `valueOf()` | Throws TypeError |
-
-#### Temporal.PlainYearMonth
-
-Represents a year and month without a day, time, or timezone.
-
-| Constructor / Static | Description |
-|---------------------|-------------|
-| `new Temporal.PlainYearMonth(year, month)` | Create from components |
-| `Temporal.PlainYearMonth.from(item)` | Create from string (`"2024-03"`), PlainYearMonth, or object |
-| `Temporal.PlainYearMonth.compare(one, two)` | Compare two year-months (-1, 0, 1) |
-
-| Getter | Description |
-|--------|-------------|
-| `calendarId` | Always `"iso8601"` |
-| `year`, `month` | Date components |
-| `monthCode` | `"M01"` through `"M12"` |
-| `daysInMonth`, `daysInYear`, `monthsInYear` | Calendar info |
-| `inLeapYear` | Boolean |
-
-| Method | Description |
-|--------|-------------|
-| `with(fields)` | Return new year-month with overridden fields |
-| `add(duration)` / `subtract(duration)` | Year-month arithmetic (years and months only) |
-| `until(other)` / `since(other)` | Difference as Duration (years and months) |
-| `equals(other)` | Equality check |
-| `toPlainDate(item)` | Combine with a day (`{ day }`) to create a PlainDate |
-| `toString()` / `toJSON()` | ISO string (e.g., `"2024-03"`) |
-| `valueOf()` | Throws TypeError |
-
-#### Temporal.PlainMonthDay
-
-Represents a month and day without a year, time, or timezone. Uses a reference year (1972) for validation.
-
-| Constructor / Static | Description |
-|---------------------|-------------|
-| `new Temporal.PlainMonthDay(month, day)` | Create from components |
-| `Temporal.PlainMonthDay.from(item)` | Create from string (`"12-25"`), PlainMonthDay, or object with `{ monthCode, day }` |
-| `Temporal.PlainMonthDay.compare(one, two)` | Compare two month-days (-1, 0, 1) |
-
-| Getter | Description |
-|--------|-------------|
-| `calendarId` | Always `"iso8601"` |
-| `monthCode` | `"M01"` through `"M12"` |
-| `day` | Day of month |
-
-| Method | Description |
-|--------|-------------|
-| `with(fields)` | Return new month-day with overridden fields (accepts `monthCode` and `day`) |
-| `equals(other)` | Equality check |
-| `toPlainDate(item)` | Combine with a year (`{ year }`) to create a PlainDate |
-| `toString()` / `toJSON()` | Month-day string (e.g., `"12-25"`) |
-| `valueOf()` | Throws TypeError |
-
-#### Temporal.ZonedDateTime
-
-Represents an absolute date and time in a specific timezone. Combines an instant (epoch-based) with a timezone identifier for wall-clock interpretation.
-
-| Constructor / Static | Description |
-|---------------------|-------------|
-| `new Temporal.ZonedDateTime(epochNanoseconds, timeZone)` | Create from epoch nanoseconds and timezone ID |
-| `Temporal.ZonedDateTime.from(item)` | Create from ISO string with timezone annotation (e.g., `"2024-03-15T13:45:30+05:30[Asia/Kolkata]"`), ZonedDateTime, or object |
-| `Temporal.ZonedDateTime.compare(one, two)` | Compare two zoned date-times (-1, 0, 1) |
-
-| Getter | Description |
-|--------|-------------|
-| `calendarId` | Always `"iso8601"` |
-| `timeZoneId` | IANA timezone identifier (e.g., `"America/New_York"`) |
-| `year`, `month`, `monthCode`, `day` | Date components (wall-clock, timezone-adjusted) |
-| `dayOfWeek`, `dayOfYear`, `weekOfYear`, `yearOfWeek` | ISO week-date components |
-| `daysInWeek`, `daysInMonth`, `daysInYear`, `monthsInYear` | Calendar info |
-| `inLeapYear` | Boolean |
-| `hoursInDay` | Hours in the wall-clock day (accounts for DST transitions) |
-| `hour`, `minute`, `second` | Time components |
-| `millisecond`, `microsecond`, `nanosecond` | Sub-second components |
-| `offset` | UTC offset string (e.g., `"+05:30"`) |
-| `offsetNanoseconds` | UTC offset in nanoseconds |
-| `epochMilliseconds` | Milliseconds since Unix epoch |
-| `epochNanoseconds` | Nanoseconds since Unix epoch (as number) |
-
-| Method | Description |
-|--------|-------------|
-| `with(fields)` | Return new ZonedDateTime with overridden fields |
-| `withPlainDate(date)` | Replace date component |
-| `withPlainTime(time?)` | Replace time component |
-| `withTimeZone(timeZone)` | Re-interpret the same instant in a different timezone |
-| `add(duration)` / `subtract(duration)` | Date-time arithmetic |
-| `until(other)` / `since(other)` | Difference as Duration |
-| `round(options)` | Round to nearest unit. Accepts a string (smallestUnit) or options object `{ smallestUnit, roundingMode, roundingIncrement }`. |
-| `equals(other)` | Equality check |
-| `startOfDay()` | Return ZonedDateTime at the start of the wall-clock day |
-| `toInstant()` | Extract the underlying Instant |
-| `toPlainDate()` / `toPlainTime()` | Extract date or time component |
-| `toPlainDateTime()` | Extract date-time without timezone |
-| `toString([options])` / `toJSON()` | ISO string with offset and timezone annotation (e.g., `"2024-03-15T13:45:30+05:30[Asia/Kolkata]"`). `toString` accepts `{ fractionalSecondDigits }` (0-9 or `"auto"`). |
-| `valueOf()` | Throws TypeError |
-
-#### Temporal.Now
-
-Provides current time in various representations.
-
-| Method | Description |
-|--------|-------------|
-| `Temporal.Now.timeZoneId()` | System timezone identifier (e.g., `"America/New_York"`) |
-| `Temporal.Now.instant()` | Current time as Instant |
-| `Temporal.Now.zonedDateTimeISO([timeZone])` | Current date-time as ZonedDateTime in the given timezone (defaults to system timezone) |
-| `Temporal.Now.plainDateISO()` | Current date as PlainDate |
-| `Temporal.Now.plainTimeISO()` | Current time as PlainTime |
-| `Temporal.Now.plainDateTimeISO()` | Current date-time as PlainDateTime |
-
-### ArrayBuffer (`Goccia.Builtins.GlobalArrayBuffer.pas`, `Goccia.Values.ArrayBufferValue.pas`)
-
-A raw binary data buffer. Supports both fixed-length and resizable modes. Internally backed by a zero-initialized `TBytes` array. Resizable buffers are created by passing `{ maxByteLength }` in the options argument. Buffers can be transferred (moving ownership to a new buffer and detaching the original).
-
-**Constructor:**
-
-| Constructor | Description |
-|-------------|-------------|
-| `new ArrayBuffer(length)` | Create a fixed-length buffer with the given byte length (must be a non-negative integer). Throws `RangeError` for negative, fractional, NaN, or Infinity values. |
-| `new ArrayBuffer(length, { maxByteLength })` | Create a resizable buffer with the given initial byte length and maximum capacity. Throws `RangeError` if `length > maxByteLength`. |
-
-**Static methods:**
-
-| Method | Description |
-|--------|-------------|
-| `ArrayBuffer.isView(arg)` | Returns `true` if `arg` is a TypedArray, `false` otherwise |
-
-**Prototype properties:**
-
-| Property | Description |
-|----------|-------------|
-| `buf.byteLength` | The current size in bytes. Returns 0 for detached buffers. |
-| `buf.maxByteLength` | Maximum byte length for resizable buffers; equals `byteLength` for fixed-length buffers. Returns 0 for detached buffers. |
-| `buf.resizable` | `true` if the buffer was created with `maxByteLength`, `false` otherwise. Preserved after detachment. |
-| `buf.detached` | `true` if the buffer has been detached (via `transfer` or `transferToFixedLength`), `false` otherwise. |
-| `buf[Symbol.toStringTag]` | `"ArrayBuffer"` |
-
-**Prototype methods:**
-
-| Method | Description |
-|--------|-------------|
-| `buf.slice(begin?, end?)` | Returns a new ArrayBuffer containing bytes from `begin` (inclusive) to `end` (exclusive). Supports negative indices (count from end). Clamps out-of-range indices. Defaults: `begin` = 0, `end` = `byteLength`. Throws `TypeError` if detached. |
-| `buf.resize(newLength)` | Resizes a resizable buffer to `newLength` bytes. Preserves existing data up to `min(old, new)` length; zero-fills growth. Throws `TypeError` if fixed-length or detached. Throws `RangeError` if `newLength > maxByteLength`. Returns `undefined`. |
-| `buf.transfer([newLength])` | Copies data into a new buffer and detaches the original. `newLength` defaults to current `byteLength`. Preserves resizability: if the source was resizable, the new buffer keeps the original `maxByteLength`. Throws `RangeError` if `newLength` exceeds that cap, and `TypeError` if detached. |
-| `buf.transferToFixedLength([newLength])` | Like `transfer`, but always produces a fixed-length (non-resizable) result. `newLength` defaults to current `byteLength`. Throws `TypeError` if detached. |
-
-**structuredClone:** ArrayBuffer instances are cloneable. The byte contents are copied into a new buffer.
-
-### SharedArrayBuffer (`Goccia.Values.SharedArrayBufferValue.pas`)
-
-A fixed-length raw binary data buffer intended for shared-memory use. In GocciaScript, `SharedArrayBuffer` has the same API as `ArrayBuffer` but is a distinct type (not an instance of `ArrayBuffer`).
-
-**Constructor:**
-
-| Constructor | Description |
-|-------------|-------------|
-| `new SharedArrayBuffer(length)` | Create a buffer with the given byte length (must be a non-negative integer). Throws `RangeError` for negative, fractional, NaN, or Infinity values. |
-
-**Prototype properties:**
-
-| Property | Description |
-|----------|-------------|
-| `sab.byteLength` | The size, in bytes, of the SharedArrayBuffer (read-only getter) |
-| `sab[Symbol.toStringTag]` | `"SharedArrayBuffer"` |
-
-**Prototype methods:**
-
-| Method | Description |
-|--------|-------------|
-| `sab.slice(begin?, end?)` | Returns a new SharedArrayBuffer containing bytes from `begin` (inclusive) to `end` (exclusive). Supports negative indices. Clamps out-of-range indices. |
-
-**structuredClone:** SharedArrayBuffer instances are cloneable. The byte contents are copied into a new buffer.
-
-### TypedArrays (`Goccia.Values.TypedArrayValue.pas`)
-
-TypedArrays provide array-like views over ArrayBuffer data with fixed element types. GocciaScript supports 10 non-BigInt TypedArray types:
-
-| Type | Element size | Value range |
-|------|-------------|-------------|
-| `Int8Array` | 1 byte | -128 to 127 |
-| `Uint8Array` | 1 byte | 0 to 255 |
-| `Uint8ClampedArray` | 1 byte | 0 to 255 (clamped) |
-| `Int16Array` | 2 bytes | -32768 to 32767 |
-| `Uint16Array` | 2 bytes | 0 to 65535 |
-| `Int32Array` | 4 bytes | -2147483648 to 2147483647 |
-| `Uint32Array` | 4 bytes | 0 to 4294967295 |
-| `Float16Array` | 2 bytes | IEEE 754 half-precision |
-| `Float32Array` | 4 bytes | IEEE 754 single-precision |
-| `Float64Array` | 8 bytes | IEEE 754 double-precision |
-
-**Constructors:**
-
-| Constructor | Description |
-|-------------|-------------|
-| `new TypedArray()` | Zero-length typed array with its own buffer |
-| `new TypedArray(length)` | Creates array of `length` elements, zero-initialized |
-| `new TypedArray(typedArray)` | Copies elements from another typed array (with type conversion) |
-| `new TypedArray(array)` | Creates from a regular array |
-| `new TypedArray(buffer [, byteOffset [, length]])` | Creates a view over an ArrayBuffer or SharedArrayBuffer. The `.buffer` property returns the original buffer object. |
-
-**Static properties:**
-
-| Property | Description |
-|----------|-------------|
-| `TypedArray.BYTES_PER_ELEMENT` | Element size in bytes |
-
-**Static methods:**
-
-| Method | Description |
-|--------|-------------|
-| `TypedArray.from(source [, mapFn])` | Creates from array or typed array, with optional mapping |
-| `TypedArray.of(...items)` | Creates from argument list |
-
-**Instance properties (getters):**
-
-| Property | Description |
-|----------|-------------|
-| `ta.buffer` | The underlying ArrayBuffer |
-| `ta.byteLength` | Total size in bytes |
-| `ta.byteOffset` | Offset into the buffer |
-| `ta.length` | Number of elements |
-| `ta.BYTES_PER_ELEMENT` | Element size in bytes |
-
-**Prototype methods:**
-
-| Method | Description |
-|--------|-------------|
-| `ta.at(index)` | Element at index (supports negative) |
-| `ta.fill(value [, start [, end]])` | Fill range with value |
-| `ta.copyWithin(target, start [, end])` | Copy elements within array |
-| `ta.slice(start?, end?)` | New typed array from slice |
-| `ta.subarray(begin?, end?)` | New view sharing the same buffer |
-| `ta.set(source [, offset])` | Copy from array/typed array into this |
-| `ta.reverse()` | Reverse in place |
-| `ta.sort([compareFn])` | Sort in place (numeric default) |
-| `ta.indexOf(value [, fromIndex])` | First index of value |
-| `ta.lastIndexOf(value [, fromIndex])` | Last index of value |
-| `ta.includes(value [, fromIndex])` | Whether value exists (SameValueZero) |
-| `ta.find(predicate)` | First element matching predicate |
-| `ta.findIndex(predicate)` | First index matching predicate |
-| `ta.findLast(predicate)` | Last element matching predicate |
-| `ta.findLastIndex(predicate)` | Last index matching predicate |
-| `ta.every(predicate)` | Whether all elements match |
-| `ta.some(predicate)` | Whether any element matches |
-| `ta.forEach(callback)` | Call function for each element |
-| `ta.map(callback)` | New typed array from mapping |
-| `ta.filter(predicate)` | New typed array from filter |
-| `ta.reduce(callback [, initialValue])` | Reduce left-to-right |
-| `ta.reduceRight(callback [, initialValue])` | Reduce right-to-left |
-| `ta.join(separator?)` | Join elements as string |
-| `ta.toString()` | Same as `join()` |
-| `ta.toReversed()` | New reversed copy |
-| `ta.toSorted([compareFn])` | New sorted copy |
-| `ta.with(index, value)` | New copy with one element replaced |
-| `ta.values()` | Iterator over values |
-| `ta.keys()` | Iterator over indices |
-| `ta.entries()` | Iterator over [index, value] pairs |
-| `ta[Symbol.iterator]()` | Same as `values()` |
-
-**Uint8Array Base64/Hex encoding** (TC39 Uint8Array Base64, `Goccia.Values.Uint8ArrayEncoding.pas`):
-
-These methods are available only on `Uint8Array`, not on other TypedArray types.
-
-| Static method | Description |
-|--------|-------------|
-| `Uint8Array.fromBase64(string [, options])` | Decode a base64 string to a new Uint8Array. Options: `alphabet` (`"base64"` or `"base64url"`), `lastChunkHandling` (`"loose"`, `"strict"`, or `"stop-before-partial"`) |
-| `Uint8Array.fromHex(string)` | Decode a hex string (case-insensitive) to a new Uint8Array. Throws `SyntaxError` on odd length or invalid characters |
-
-| Prototype method | Description |
-|--------|-------------|
-| `u8.toBase64([options])` | Encode bytes as a base64 string. Options: `alphabet` (`"base64"` or `"base64url"`), `omitPadding` (boolean, default `false`) |
-| `u8.toHex()` | Encode bytes as a lowercase hex string |
-| `u8.setFromBase64(string [, options])` | Decode base64 into this array. Returns `{ read, written }`. Same options as `fromBase64` |
-| `u8.setFromHex(string)` | Decode hex into this array. Returns `{ read, written }` |
-
-**Value encoding:** Integer types use fixed-width truncation (overflow wraps). `Uint8ClampedArray` clamps to [0, 255] with half-to-even rounding. `Float16Array` rounds to IEEE 754 half precision (max finite ±65504, epsilon 2⁻¹⁰ at 1.0). `Float32Array` rounds to IEEE 754 single precision. `Float64Array` preserves full double precision. NaN is stored as 0 in integer types and as NaN in float types.
-
-**Not supported:** `BigInt64Array`, `BigUint64Array` (BigInt types), `DataView`.
+See [Binary Data Built-ins](built-ins-binary-data.md) for the complete ArrayBuffer, SharedArrayBuffer, and TypedArray API reference.
 
 ### FFI (`Goccia.Builtins.GlobalFFI.pas`)
 
@@ -1271,56 +752,42 @@ Each benchmark result includes: `name`, `suite`, `opsPerSec`, `meanMs`, `iterati
 
 ### Proxy (`Goccia.Builtins.GlobalProxy.pas`, `Goccia.Values.ProxyValue.pas`)
 
-ES2026 Proxy constructor with all 13 handler traps and invariant enforcement.
+Implements the [ECMAScript Proxy](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Proxy). See [MDN Proxy reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Proxy) for the full API.
 
-**Constructor:**
-
-| Constructor | Description |
-|-------------|-------------|
-| `new Proxy(target, handler)` | Create a proxy wrapping `target` with `handler` traps. Both must be objects; throws `TypeError` otherwise. |
-
-**Static methods:**
-
-| Method | Description |
-|--------|-------------|
-| `Proxy.revocable(target, handler)` | Returns `{ proxy, revoke }`. Calling `revoke()` causes all subsequent trap operations to throw `TypeError`. |
-
-**Supported traps:**
-
-| Trap | Handler Signature | Triggered by |
-|------|-------------------|-------------|
-| `get` | `(target, prop, receiver)` | Property read (`proxy.x`, `proxy[key]`) |
-| `set` | `(target, prop, value, receiver) → boolean` | Property write (`proxy.x = v`) |
-| `has` | `(target, prop) → boolean` | `key in proxy` |
-| `deleteProperty` | `(target, prop) → boolean` | `delete proxy.x` |
-| `getOwnPropertyDescriptor` | `(target, prop) → descriptor \| undefined` | `Object.getOwnPropertyDescriptor(proxy, key)` |
-| `defineProperty` | `(target, prop, descriptor) → boolean` | `Object.defineProperty(proxy, key, desc)` |
-| `getPrototypeOf` | `(target) → object \| null` | `Object.getPrototypeOf(proxy)` |
-| `setPrototypeOf` | `(target, proto) → boolean` | `Object.setPrototypeOf(proxy, proto)` |
-| `isExtensible` | `(target) → boolean` | `Object.isExtensible(proxy)` |
-| `preventExtensions` | `(target) → boolean` | `Object.preventExtensions(proxy)` |
-| `ownKeys` | `(target) → array` | `Object.keys(proxy)`, `Reflect.ownKeys(proxy)` |
-| `apply` | `(target, thisArg, args)` | Function call `proxy(...)` (callable proxies only) |
-| `construct` | `(target, args, newTarget) → object` | `new proxy(...)` (callable proxies only) |
-
-All traps support both string and symbol property keys. Each trap enforces ES2026 invariants (e.g., `get` on a non-configurable non-writable property must return the same value).
+**GocciaScript differences:** None -- all 13 handler traps are supported with full invariant enforcement. Both string and symbol property keys work. `Proxy.revocable()` is supported.
 
 ### Reflect (`Goccia.Builtins.GlobalReflect.pas`)
 
-The `Reflect` object provides methods for interceptable JavaScript operations. Unlike `Object.*` methods which throw on failure, `Reflect` methods that operate on property descriptors return boolean results. All `Reflect` methods throw `TypeError` when the target is not an object.
+Implements the [ECMAScript Reflect](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Reflect). See [MDN Reflect reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Reflect) for the full API.
 
-| Method | Description |
-|--------|-------------|
-| `Reflect.apply(target, thisArg, args)` | Calls a function with the given `this` value and arguments array |
-| `Reflect.construct(target, args [, newTarget])` | Creates an instance like `new target(...args)`, optionally with a different `newTarget` prototype |
-| `Reflect.defineProperty(target, key, attrs)` | Like `Object.defineProperty` but returns `true`/`false` instead of throwing |
-| `Reflect.deleteProperty(target, key)` | Deletes a property, returns `true`/`false` |
-| `Reflect.get(target, key [, receiver])` | Gets a property value. Supports symbol keys. |
-| `Reflect.getOwnPropertyDescriptor(target, key)` | Returns an own property descriptor or `undefined` |
-| `Reflect.getPrototypeOf(target)` | Returns the prototype of the target |
-| `Reflect.has(target, key)` | Like the `in` operator — checks property existence on the prototype chain |
-| `Reflect.isExtensible(target)` | Returns whether the target is extensible |
-| `Reflect.ownKeys(target)` | Returns an array of own string keys followed by own symbol keys |
-| `Reflect.preventExtensions(target)` | Prevents new properties, returns `true` |
-| `Reflect.set(target, key, value [, receiver])` | Sets a property value. Supports symbol keys. Returns `true`/`false`. |
-| `Reflect.setPrototypeOf(target, proto)` | Sets the prototype. Returns `false` for non-extensible objects (instead of throwing). |
+**GocciaScript differences:** None -- all 13 Reflect methods are supported with both string and symbol property keys.
+
+### TextEncoder (`Goccia.Builtins.GlobalTextEncoder.pas`)
+
+Implements the [Encoding Standard TextEncoder](https://developer.mozilla.org/en-US/docs/Web/API/TextEncoder). See [MDN TextEncoder reference](https://developer.mozilla.org/en-US/docs/Web/API/TextEncoder) for the full API.
+
+**GocciaScript differences:** None -- full standard compliance (UTF-8 only, with `encode` and `encodeInto`).
+
+### TextDecoder (`Goccia.Builtins.GlobalTextDecoder.pas`)
+
+Implements the [Encoding Standard TextDecoder](https://developer.mozilla.org/en-US/docs/Web/API/TextDecoder). See [MDN TextDecoder reference](https://developer.mozilla.org/en-US/docs/Web/API/TextDecoder) for the full API.
+
+**GocciaScript differences:** Only `"utf-8"` encoding is supported. The `fatal` and `ignoreBOM` options are accepted.
+
+### URL (`Goccia.Builtins.GlobalURL.pas`)
+
+Implements the [WHATWG URL Standard](https://developer.mozilla.org/en-US/docs/Web/API/URL). See [MDN URL reference](https://developer.mozilla.org/en-US/docs/Web/API/URL) for the full API.
+
+**GocciaScript differences:** None -- full standard compliance.
+
+### URLSearchParams (`Goccia.Values.URLSearchParamsValue.pas`)
+
+Implements the [WHATWG URLSearchParams](https://developer.mozilla.org/en-US/docs/Web/API/URLSearchParams). See [MDN URLSearchParams reference](https://developer.mozilla.org/en-US/docs/Web/API/URLSearchParams) for the full API.
+
+**GocciaScript differences:** None -- full standard compliance.
+
+### DisposableStack / AsyncDisposableStack (`Goccia.Builtins.DisposableStack.pas`)
+
+Implements the [TC39 Explicit Resource Management proposal](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/DisposableStack). See [MDN DisposableStack reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/DisposableStack) for the full API.
+
+**GocciaScript differences:** None -- full proposal compliance. Both `DisposableStack` (sync) and `AsyncDisposableStack` (async) are supported. `SuppressedError` is thrown when both the block body and a disposer throw, with `error` (body error) and `suppressed` (dispose error) properties.

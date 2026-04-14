@@ -38,6 +38,26 @@ jobs:
           retention-days: 1
           path: pr-artifacts/*
 
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Lint Markdown
+        uses: DavidAnson/markdownlint-cli2-action@v19
+
+      - name: Check doc symbol references
+        run: npx tsx scripts/check-doc-symbols.ts
+
+      - name: Check doc duplication
+        run: npx tsx scripts/check-doc-duplication.ts
+
+      - name: Check doc file length
+        run: npx tsx scripts/check-doc-length.ts
+
+      - name: Check doc links
+        run: npx tsx scripts/check-doc-links.ts
+
   test:
     needs: build
     runs-on: ubuntu-latest
