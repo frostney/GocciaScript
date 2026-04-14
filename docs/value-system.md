@@ -105,9 +105,6 @@ classDiagram
     class TGocciaTypedArrayValue {
         Typed view over ArrayBuffer
     }
-    class TGocciaError {
-        Error objects
-    }
 ```
 
 ## GC Integration
