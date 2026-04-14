@@ -169,7 +169,7 @@ Tagged values preserve runtime metadata through `.tagName` and `.value`. Custom 
 
 Explicit keys (`? key`) are supported, including omitted explicit values and zero-indented sequence values. Because GocciaScript mappings are backed by string-keyed objects, non-scalar YAML keys are canonicalized into stable JSON-like strings during parsing, and anchored mapping keys now parse instead of being rejected outright.
 
-Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time while keeping Bun-compatible YAML runtime behavior where practical. The current parser is still a partial implementation. The detailed conformance snapshot lives in [docs/design-decisions.md](design-decisions.md), and the official parse-validity check can be rerun with `python3 scripts/run_yaml_test_suite.py`.
+Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time while keeping Bun-compatible YAML runtime behavior where practical. The current parser is still a partial implementation. The detailed conformance snapshot lives in [docs/decision-log.md](decision-log.md), and the official parse-validity check can be rerun with `python3 scripts/run_yaml_test_suite.py`.
 
 ### JSONL (`Goccia.Builtins.JSONL.pas`)
 
@@ -190,7 +190,7 @@ Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time wh
 
 TOML date/time values currently map to validated string scalars rather than Temporal values. This keeps the runtime and module-import behavior stable for v1 while leaving room for future Temporal-aware interop.
 
-Compatibility goal: GocciaScript is targeting full TOML 1.1.0 support over time. The detailed conformance notes live in [docs/design-decisions.md](design-decisions.md), and the official `toml-test` rerun command is `python3 scripts/run_toml_test_suite.py` or `python3 scripts/run_toml_test_suite.py --harness=./build/GocciaTOMLCheck` when you already have the decoder harness built.
+Compatibility goal: GocciaScript is targeting full TOML 1.1.0 support over time. The detailed conformance notes live in [docs/decision-log.md](decision-log.md), and the official `toml-test` rerun command is `python3 scripts/run_toml_test_suite.py` or `python3 scripts/run_toml_test_suite.py --harness=./build/GocciaTOMLCheck` when you already have the decoder harness built.
 
 ### Object (`Goccia.Builtins.GlobalObject.pas`)
 
@@ -309,7 +309,7 @@ Compatibility goal: GocciaScript is targeting full TOML 1.1.0 support over time.
 | `Number.isInteger(value)` | Check if integer |
 | `Number.isSafeInteger(value)` | Check if safe integer (within ±2^53-1) |
 
-These are **not** available as global functions — see [language-restrictions.md](language-restrictions.md#no-global-parseint-parsefloat-isnan-isfinite) for the rationale and polyfill pattern.
+These are **not** available as global functions — see [language.md](language.md#no-global-parseint-parsefloat-isnan-isfinite) for the rationale and polyfill pattern.
 
 **Prototype methods** (available on number values via auto-boxing):
 

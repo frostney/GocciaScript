@@ -376,7 +376,7 @@ The project includes `./format.pas`, an `instantfpc` script that auto-fixes Pasc
 The formatter runs automatically on staged `.pas`/`.dpr` files before each commit via [Lefthook](https://github.com/evilmartians/lefthook). To enable this after cloning:
 
 ```bash
-# Install Lefthook (see docs/code-style.md for all platforms)
+# Install Lefthook (see CONTRIBUTING.md for all platforms)
 brew install lefthook     # macOS
 sudo snap install lefthook  # Linux
 scoop install lefthook    # Windows
@@ -399,3 +399,7 @@ fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- BenchmarkRunner.dpr
 ```
 
 The `-v` flags suppress verbose output to keep the build clean. Use `fpc @config.cfg REPL.dpr` for full verbose output during debugging.
+
+## Build System Design Decision
+
+The build script (`build.pas`) is a FreePascal script executed via `instantfpc` — a cross-platform, out-of-the-box solution within the FreePascal ecosystem that requires no external build tools.

@@ -1,17 +1,78 @@
-# Language Restrictions
+# Language
 
-*For script authors learning what GocciaScript supports and excludes, and for contributors understanding the design boundaries.*
+*GocciaScript's ECMAScript subset: what we implement, TC39 proposals, and what we exclude.*
 
 ## Executive Summary
 
 - **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules (named only)
+- **TC39 proposals** — Decorators, decorator metadata, types as comments, enums, Temporal, `Math.clamp`, `Math.sumPrecise`, `Map.prototype.getOrInsert`, `Error.isError`
 - **Excluded by design** — `var`, `function` keyword, `==`/`!=`, `eval`, `arguments`, traditional loops, `with`, default imports/exports
 - **Graceful handling** — Parser-recognized excluded syntax (`var`, `function`, `==`, loops, `with`) parses successfully but executes as a no-op with a warning and suggestion
 - **Opt-in toggles** — ASI (`--asi` / `Engine.ASIEnabled := True`)
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
-- **Always-available extensions** — types as comments, decorators, enums
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision.
+
+## ECMAScript Feature Summary
+
+| Feature | Spec | Status |
+|---------|------|--------|
+| `let` / `const` | ES2015 | Supported |
+| Arrow functions | ES2015 | Supported |
+| Classes (constructor, methods, static, getters/setters) | ES2015 | Supported |
+| Template literals | ES2015 | Supported |
+| Destructuring (array, object) | ES2015 | Supported |
+| Spread / rest (`...`) | ES2015 | Supported |
+| `for...of` | ES2015 | Supported |
+| `Symbol` | ES2015 | Supported |
+| `Promise` | ES2015 | Supported |
+| ES modules (`import` / `export`) | ES2015 | Supported (named only) |
+| `var` | ES1 | Excluded — use `let`/`const` |
+| `function` keyword | ES1 | Excluded — use arrow functions or shorthand methods |
+| `==` / `!=` (loose equality) | ES1 | Excluded — use `===` / `!==` |
+| `eval()` | ES1 | Excluded |
+| `arguments` object | ES1 | Excluded — use rest parameters |
+| `for` / `while` / `do...while` | ES1 | Excluded — use `for...of` or array methods |
+| `with` statement | ES1 | Excluded |
+| Generators (`function*`) | ES2015 | Not supported |
+| Default exports / imports | ES2015 | Excluded — use named exports |
+| Nullish coalescing (`??`) | ES2020 | Supported |
+| Optional chaining (`?.`) | ES2020 | Supported |
+| Logical assignment (`&&=`, `\|\|=`, `??=`) | ES2021 | Supported |
+| Private fields and methods (`#field`) | ES2022 | Supported |
+| Static class blocks | ES2022 | Supported |
+| `Array.prototype.at` | ES2022 | Supported |
+| `Object.hasOwn` | ES2022 | Supported |
+| `structuredClone` | ES2022 | Supported |
+| Top-level `await` | ES2022 | Supported |
+| `Array.prototype.findLast`, `findLastIndex` | ES2023 | Supported |
+| `Array.prototype.toReversed`, `toSorted`, `toSpliced`, `with` | ES2023 | Supported |
+| `Object.groupBy`, `Map.groupBy` | ES2024 | Supported |
+| `Promise.withResolvers` | ES2024 | Supported |
+| `String.prototype.isWellFormed`, `toWellFormed` | ES2024 | Supported |
+| Set methods (`union`, `intersection`, `difference`, etc.) | ES2025 | Supported |
+| `Promise.try` | ES2025 | Supported |
+| Iterator Helpers (`map`, `filter`, `take`, `drop`, etc.) | ES2025 | Supported |
+| `import.meta` | ES2026 | Supported |
+| Dynamic `import()` | ES2026 | Supported |
+| `RegExp` (literals, flags `d`/`g`/`i`/`m`/`s`/`u`/`v`/`y`) | ES2015+ | Supported |
+| ASI (automatic semicolon insertion) | ES1 | Opt-in (`--asi`) |
+| Global `parseInt`, `parseFloat`, `isNaN`, `isFinite` | ES1 | Excluded — use `Number.*` |
+
+## TC39 Proposals
+
+| Proposal | Stage | Status |
+|----------|-------|--------|
+| [Decorators](https://github.com/tc39/proposal-decorators) | 3 | Supported — class, method, field, getter/setter, auto-accessor decorators with `addInitializer` |
+| [Decorator Metadata](https://github.com/tc39/proposal-decorator-metadata) | 3 | Supported — `Symbol.metadata` for decorator-attached class metadata with inheritance |
+| [Types as Comments](https://tc39.es/proposal-type-annotations/) | 1 | Supported — TypeScript-style annotations parsed, preserved on AST, enforced in bytecode mode |
+| [Enum Declarations](https://github.com/tc39/proposal-enum) | 0 | Supported — frozen, null-prototype enum objects with `Symbol.iterator` |
+| [Temporal](https://tc39.es/proposal-temporal/) | 3 | Supported — `Temporal.PlainDate`, `Temporal.Duration`, `Temporal.Instant`, etc. |
+| [`Math.clamp`](https://github.com/tc39/proposal-math-clamp) | 3 | Supported |
+| [`Math.sumPrecise`](https://github.com/tc39/proposal-math-sum) | 3 | Supported |
+| [`Map.prototype.getOrInsert`](https://github.com/tc39/proposal-upsert) | 3 | Supported — `getOrInsert` and `getOrInsertComputed` |
+| [`Error.isError`](https://github.com/tc39/proposal-is-error) | 4 | Supported |
+| [`RegExp.escape`](https://github.com/tc39/proposal-regex-escaping) | 3 | Supported |
 
 ## Guiding Principle
 
@@ -93,7 +154,7 @@ class C {
 - Static properties.
 - Static blocks (`static { ... }`).
 - Inheritance with `extends` and `super`.
-- Decorators (see [Decorators](#decorators) below).
+- Decorators (see [Decorators](#decorators) in TC39 Proposals below).
 
 ```javascript
 class Counter {
@@ -102,52 +163,6 @@ class Counter {
   get value() { return this.#count; }
 }
 ```
-
-### Decorators
-
-TC39 Stage 3 decorators ([proposal-decorators](https://github.com/tc39/proposal-decorators)) and decorator metadata ([proposal-decorator-metadata](https://github.com/tc39/proposal-decorator-metadata)) are fully supported.
-
-**Supported decorator targets:**
-- Class declarations (`@decorator class C {}`)
-- Instance and static methods (`@decorator method() {}`)
-- Getters and setters (`@decorator get x() {}`, `@decorator set x(v) {}`)
-- Class fields (`@decorator field = value;`)
-- Auto-accessors (`@decorator accessor prop = value;`)
-- Private elements (`@decorator #method() {}`)
-
-**Decorator context object properties:** `kind`, `name`, `access` (with `get`/`set`), `static`, `private`, `addInitializer`, `metadata`.
-
-**Decorator expressions:** Identifiers (`@log`), member access (`@decorators.log`), call expressions (`@factory(arg)`), and parenthesized expressions (`@(expr)`).
-
-**Auto-accessors:** The `accessor` keyword creates a property backed by a private storage slot with generated getter/setter methods:
-
-```javascript
-class C {
-  accessor name = "default";
-}
-// Equivalent to a private #name field with get name() / set name(v)
-```
-
-**`addInitializer`:** Decorators can register initialization callbacks via `context.addInitializer()`. Timing depends on decorator kind:
-- Class decorators: after the class is fully defined and static fields are assigned.
-- Static method/getter/setter: during class definition, after static methods are placed.
-- Non-static method/getter/setter: during class construction, before field initialization.
-- Field/accessor: during construction, immediately after the decorated element is initialized.
-
-**`Symbol.metadata`:** Each decorated class receives a `[Symbol.metadata]` property containing a null-prototype object. Metadata objects inherit from the parent class's metadata via prototype chain.
-
-```javascript
-const meta = (value, context) => {
-  context.metadata.decorated = true;
-};
-
-@meta
-class C {}
-
-C[Symbol.metadata].decorated; // true
-```
-
-**Not supported:** Parameter decorators.
 
 ### Expressions
 
@@ -248,7 +263,7 @@ Non-scalar YAML keys are canonicalized into stable JSON-like strings. Explicit s
 
 Namespace imports (`import * as ns from "./module.js"`) are also supported for script modules, structured-data modules, and text-asset modules. They produce a frozen, null-prototype namespace object whose enumerable own properties are copied from the module's export table at import time, so JSON, JSON5, JSONL, TOML, YAML, `.txt`, and `.md` modules can all be consumed either through named imports or through a namespace object snapshot.
 
-This YAML surface is still partial. The detailed conformance snapshot lives in [docs/design-decisions.md](design-decisions.md), and the official parse-validity check can be rerun with `python3 scripts/run_yaml_test_suite.py`.
+This YAML surface is still partial. See the [decision log](decision-log.md) for the YAML conformance snapshot, and the official parse-validity check can be rerun with `python3 scripts/run_yaml_test_suite.py`.
 
 // Directory/index resolution
 import { setup } from "./utils";  // resolves to ./utils/index.js (or .ts, .jsx, etc.)
@@ -307,6 +322,277 @@ Standard escape sequences in string literals and template literals:
 - `\xHH` — Hex byte escape (e.g., `"\x41"` → `"A"`)
 - `\uXXXX` — 4-digit Unicode escape (e.g., `"\u0041"` → `"A"`)
 - `\u{XXXXX}` — Variable-length Unicode escape (e.g., `"\u{1F4A9}"` → `"💩"`)
+
+### Supported Iteration
+
+GocciaScript supports iteration via `for...of` and `for await...of`, which work with the iterator protocol.
+
+#### `for...of`
+
+Iterates over sync iterables using `[Symbol.iterator]`:
+
+- **Arrays** — Yields each element.
+- **Strings** — Yields each character.
+- **Sets** — Yields each value.
+- **Maps** — Yields `[key, value]` pairs.
+- **Custom iterables** — Any object with a `[Symbol.iterator]()` method that returns an iterator.
+
+```javascript
+for (const x of [1, 2, 3]) { console.log(x); }
+for (const c of "hello") { console.log(c); }
+for (const [k, v] of new Map([["a", 1]])) { console.log(k, v); }
+```
+
+**Destructuring in bindings:** The loop variable can use destructuring patterns:
+
+```javascript
+for (const [a, b] of [[1, 2], [3, 4]]) { console.log(a + b); }
+```
+
+**`break`:** Exits the loop early. Supported inside `for...of`.
+
+#### `for await...of`
+
+Iterates over async iterables using `[Symbol.asyncIterator]`. Works inside `async` functions and at the top level (with top-level `await`):
+
+```javascript
+// Inside an async function
+const fn = async () => {
+  for await (const x of asyncIterable) {
+    console.log(x);
+  }
+};
+
+// At the top level (ES2022+)
+for await (const x of asyncIterable) {
+  console.log(x);
+}
+```
+
+Each value is awaited before the loop body runs. Works with sync iterables too — Promises yielded by a sync iterator are awaited.
+
+### JSX
+
+**Enabled by default** via `DefaultPreprocessors`. JSX is handled by a source-to-source pre-pass transformer that converts JSX syntax into `createElement` function calls before the main compilation pipeline. This keeps the core lexer/parser/evaluator untouched. Embedders can disable JSX via `Engine.Preprocessors := []`.
+
+Users must provide their own `createElement` (and `Fragment` for `<>...</>`) in scope:
+
+```javascript
+const createElement = (tag, props, ...children) => ({ tag, props, children });
+const Fragment = Symbol("Fragment");
+
+const el = <div className="active">Hello {name}</div>;
+// Transformed to: createElement("div", { className: "active" }, "Hello ", name)
+```
+
+**Supported syntax:** Elements, self-closing tags (`<br />`), fragments (`<>...</>`), string/expression/boolean attributes, spread attributes (`{...props}`), shorthand props (`<div {value} />` → `value={value}`), expression children (`{expr}`), nested JSX in expressions, dotted component names (`<Foo.Bar />`).
+
+Lowercase tags produce string tag names (`"div"`, `"span"`); uppercase tags are passed as identifier references (component functions/classes).
+
+**Custom factory:** The factory and fragment function names can be overridden per-file using pragma comments (`@jsxFactory`, `@jsxFragment`) at the top of the file, before any code.
+
+The transformer generates an internal source map for accurate error line/column reporting. JSX is enabled by default via `DefaultPreprocessors`; embedders can disable it with `Exclude(Engine.Preprocessors, ppJSX)`.
+
+### Regular Expressions
+
+**Supported.** GocciaScript implements:
+
+- `RegExp(pattern, flags?)` and `new RegExp(pattern, flags?)`
+- Regex literals: `/pattern/flags`
+- Flags: `d`, `g`, `i`, `m`, `s`, `u`, `v`, `y`
+- RegExp instance properties: `source`, canonicalized `flags`, `lastIndex`, `global`, `ignoreCase`, `multiline`, `dotAll`, `unicode`, `sticky`, `unicodeSets`, `hasIndices`
+- `RegExp.escape()` (TC39 RegExp Escaping proposal)
+- Duplicate named capture groups: the same group name may appear in different alternatives of a disjunction (`|`), e.g., `/(?<year>\d{4})-\d{2}|\d{2}-(?<year>\d{4})/`. The `groups` property returns the value from whichever alternative participated, and `\k<name>` backreferences resolve to the correct group within each alternative.
+- `RegExp.prototype.exec()`, `test()`, `toString()`, and the `Symbol.match`, `Symbol.matchAll`, `Symbol.replace`, `Symbol.search`, and `Symbol.split` hooks
+- String integrations for `replace`, `replaceAll`, `split`, `match`, `matchAll`, and `search`, including custom protocol objects with the corresponding well-known symbol methods
+
+`RegExp(existingRegExp)` without `new` and without an explicit flags argument returns the original regex object. `new RegExp(existingRegExp)` still creates a clone.
+
+Regex literals are lexed context-sensitively so `/` still works as division in expression contexts.
+
+Current gaps from full ECMAScript RegExp semantics:
+
+- The `u` flag enables Unicode-aware matching with property escapes (`\p{Letter}`) and code point escapes (`\u{1F600}`), but does not yet cover the full ECMAScript Unicode specification.
+- The `v` flag (Unicode sets) is accepted and exposed but full set notation is not yet implemented beyond basic `u` flag behavior.
+- The `d` flag (indices) is accepted and exposed but match indices are not yet populated.
+
+## TC39 Proposals
+
+GocciaScript implements several active TC39 proposals alongside the core ECMAScript subset.
+
+### Decorators (Stage 3)
+
+TC39 Stage 3 decorators ([proposal-decorators](https://github.com/tc39/proposal-decorators)) and decorator metadata ([proposal-decorator-metadata](https://github.com/tc39/proposal-decorator-metadata)) are fully supported.
+
+**Supported decorator targets:**
+- Class declarations (`@decorator class C {}`)
+- Instance and static methods (`@decorator method() {}`)
+- Getters and setters (`@decorator get x() {}`, `@decorator set x(v) {}`)
+- Class fields (`@decorator field = value;`)
+- Auto-accessors (`@decorator accessor prop = value;`)
+- Private elements (`@decorator #method() {}`)
+
+**Decorator context object properties:** `kind`, `name`, `access` (with `get`/`set`), `static`, `private`, `addInitializer`, `metadata`.
+
+**Decorator expressions:** Identifiers (`@log`), member access (`@decorators.log`), call expressions (`@factory(arg)`), and parenthesized expressions (`@(expr)`).
+
+**Auto-accessors:** The `accessor` keyword creates a property backed by a private storage slot with generated getter/setter methods:
+
+```javascript
+class C {
+  accessor name = "default";
+}
+// Equivalent to a private #name field with get name() / set name(v)
+```
+
+**`addInitializer`:** Decorators can register initialization callbacks via `context.addInitializer()`. Timing depends on decorator kind:
+- Class decorators: after the class is fully defined and static fields are assigned.
+- Static method/getter/setter: during class definition, after static methods are placed.
+- Non-static method/getter/setter: during class construction, before field initialization.
+- Field/accessor: during construction, immediately after the decorated element is initialized.
+
+**`Symbol.metadata`:** Each decorated class receives a `[Symbol.metadata]` property containing a null-prototype object. Metadata objects inherit from the parent class's metadata via prototype chain.
+
+```javascript
+const meta = (value, context) => {
+  context.metadata.decorated = true;
+};
+
+@meta
+class C {}
+
+C[Symbol.metadata].decorated; // true
+```
+
+**Not supported:** Parameter decorators.
+
+### Decorator Metadata (Stage 3)
+
+Decorator metadata is part of the decorators implementation above. Each decorated class receives a `[Symbol.metadata]` property containing a null-prototype object. Metadata objects inherit from the parent class's metadata via prototype chain. See [proposal-decorator-metadata](https://github.com/tc39/proposal-decorator-metadata).
+
+### Types as Comments (Stage 1)
+
+GocciaScript supports the [TC39 Types as Comments](https://tc39.es/proposal-type-annotations/) proposal. TypeScript-style type annotations are parsed but have **no runtime effect** — they are treated as comments by the evaluator. Raw type strings are preserved on AST nodes for potential future optimization.
+
+#### Supported Syntax
+
+```javascript
+// Variable type annotations
+let x: number = 42;
+const name: string = "hello";
+let value: string | number = "test";
+
+// Parameter type annotations (simple, optional, rest, destructuring)
+const add = (a: number, b: number): number => a + b;
+const greet = (name?: string) => name === undefined ? "hi" : "hi " + name;
+const sum = (...nums: number[]) => nums.reduce((a, b) => a + b, 0);
+const first = ({ name, age }: { name: string, age: number }) => name;
+
+// Return type annotations
+const double = (x: number): number => x * 2;
+
+// Type and interface declarations (skipped entirely)
+type Point = { x: number, y: number };
+interface Animal { name: string; speak(): string; }
+
+// import type / export type (skipped entirely)
+import type { Foo } from './types.js';
+export type { Bar };
+
+// Mixed type/value named bindings keep runtime imports/exports for value bindings
+import { parseSourceFile, type SourceFile } from "./parser.js";
+export { value, type ValueShape };
+
+// export interface declarations are skipped entirely
+export interface Serializable {
+  toJSON(): string;
+}
+
+// as Type and as const assertions
+const x = 42 as number;
+const colors = ["red", "green"] as const;
+
+// Class annotations: field types, generics, implements, access modifiers
+class Box<T> implements Container {
+  public value: T;
+  private label?: string;
+  readonly id: number = 1;
+  constructor(value: T) { this.value = value; }
+  get(): T { return this.value; }
+}
+
+// Catch parameter type annotation
+try { throw new Error("oops"); } catch (e: Error) { }
+```
+
+#### Not Supported
+
+- Namespaces (`namespace Foo { ... }`).
+- Parameter properties in constructors (`constructor(public x: number)`).
+- Angle-bracket type assertions (`<string>value`) — use `value as string` instead.
+
+### Enum Declarations (Stage 0)
+
+GocciaScript supports the [TC39 proposal-enum](https://github.com/tc39/proposal-enum) `enum` declaration. Enums create frozen, null-prototype objects with typed member values.
+
+```javascript
+enum Direction {
+  Up = 0,
+  Down = 1,
+  Left = 2,
+  Right = 3
+}
+
+Direction.Up;           // 0
+typeof Direction;       // "object"
+[...Direction];         // [["Up", 0], ["Down", 1], ["Left", 2], ["Right", 3]]
+
+// Self-references: members can reference prior members and the enum itself
+enum Flags {
+  Read = 1,
+  Write = 2,
+  ReadWrite = Read | Flags.Write
+}
+
+// Allowed value types: Number, String, Symbol
+enum Color { Red = "red", Green = "green" }
+enum Tokens { Alpha = Symbol("alpha") }
+```
+
+**Semantics:**
+- All members require explicit initializers (no auto-initialization).
+- Member values must be Number, String, or Symbol — other types throw `TypeError`.
+- Enum objects have a `null` prototype and are non-extensible.
+- Members are non-writable and non-configurable.
+- `Symbol.iterator` yields `[key, value]` entry pairs in declaration order.
+- `Symbol.toStringTag` is set to the enum name.
+- `export enum` is supported for module exports.
+
+**Not supported (future directions in proposal):**
+- Auto-initializers (`enum E { A, B, C }`).
+- Algebraic Data Type (ADT) enums.
+- Enum decorators.
+- `enum` expressions.
+
+### Temporal (Stage 3)
+
+Modern date/time API. See [Built-in Objects](built-ins.md) for the full Temporal API reference. See [proposal-temporal](https://tc39.es/proposal-temporal/).
+
+### Math.clamp (Stage 3)
+
+Clamp a value to a range: `Math.clamp(value, min, max)`. See [proposal-math-clamp](https://github.com/tc39/proposal-math-clamp).
+
+### Math.sumPrecise (Stage 3)
+
+Precise summation of iterables using a compensated algorithm: `Math.sumPrecise(iterable)`. See [proposal-math-sum](https://github.com/tc39/proposal-math-sum).
+
+### Map.prototype.getOrInsert (Stage 3)
+
+Get existing value or insert a default/computed value: `map.getOrInsert(key, default)`, `map.getOrInsertComputed(key, callbackFn)`. See [proposal-upsert](https://github.com/tc39/proposal-upsert).
+
+### Error.isError (Stage 4)
+
+Reliable brand check for error objects: `Error.isError(value)`. See [proposal-is-error](https://github.com/tc39/proposal-is-error).
 
 ## Excluded Features
 
@@ -429,7 +715,7 @@ Warning: 'for' loops are not supported in GocciaScript
 
 The parser uses balanced-parenthesis tracking (`SkipBalancedParens`) to correctly skip the loop condition even when it contains nested parentheses (e.g., `for (let i = Math.max(0, 1); i < fn(x); i++)`), then `SkipStatementOrBlock` to skip the loop body. This ensures subsequent code executes correctly.
 
-Traditional loops encourage imperative, mutation-heavy code. GocciaScript supports `for...of` and `for await...of` for iteration (see [Supported Iteration](#supported-iteration) below), and favors functional iteration through array methods:
+Traditional loops encourage imperative, mutation-heavy code. GocciaScript supports `for...of` and `for await...of` for iteration (see [Supported Iteration](#supported-iteration) above), and favors functional iteration through array methods:
 
 ```javascript
 // Instead of: for (let i = 0; i < items.length; i++) { ... }
@@ -441,54 +727,6 @@ items.reduce((acc, item) => acc + item, 0);
 ```
 
 `break` and `continue` are available inside `switch` statements and inside `for...of`/`for await...of` loops.
-
-## Supported Iteration
-
-GocciaScript supports iteration via `for...of` and `for await...of`, which work with the iterator protocol.
-
-### `for...of`
-
-Iterates over sync iterables using `[Symbol.iterator]`:
-
-- **Arrays** — Yields each element.
-- **Strings** — Yields each character.
-- **Sets** — Yields each value.
-- **Maps** — Yields `[key, value]` pairs.
-- **Custom iterables** — Any object with a `[Symbol.iterator]()` method that returns an iterator.
-
-```javascript
-for (const x of [1, 2, 3]) { console.log(x); }
-for (const c of "hello") { console.log(c); }
-for (const [k, v] of new Map([["a", 1]])) { console.log(k, v); }
-```
-
-**Destructuring in bindings:** The loop variable can use destructuring patterns:
-
-```javascript
-for (const [a, b] of [[1, 2], [3, 4]]) { console.log(a + b); }
-```
-
-**`break`:** Exits the loop early. Supported inside `for...of`.
-
-### `for await...of`
-
-Iterates over async iterables using `[Symbol.asyncIterator]`. Works inside `async` functions and at the top level (with top-level `await`):
-
-```javascript
-// Inside an async function
-const fn = async () => {
-  for await (const x of asyncIterable) {
-    console.log(x);
-  }
-};
-
-// At the top level (ES2022+)
-for await (const x of asyncIterable) {
-  console.log(x);
-}
-```
-
-Each value is awaited before the loop body runs. Works with sync iterables too — Promises yielded by a sync iterator are awaited.
 
 ### `with` Statement
 
@@ -525,155 +763,6 @@ Labels exist primarily for `break`/`continue` targets in nested loops. Since Goc
 The following standard ECMAScript built-ins are **not yet implemented** and may be added in future versions:
 
 - **WeakMap / WeakSet / WeakRef / FinalizationRegistry** — Weak reference collections and finalizers. These require tight GC integration. Deferred until demand warrants the complexity.
-
-## Types as Comments
-
-GocciaScript supports the [TC39 Types as Comments](https://tc39.es/proposal-type-annotations/) proposal. TypeScript-style type annotations are parsed but have **no runtime effect** — they are treated as comments by the evaluator. Raw type strings are preserved on AST nodes for potential future optimization.
-
-### Supported Syntax
-
-```javascript
-// Variable type annotations
-let x: number = 42;
-const name: string = "hello";
-let value: string | number = "test";
-
-// Parameter type annotations (simple, optional, rest, destructuring)
-const add = (a: number, b: number): number => a + b;
-const greet = (name?: string) => name === undefined ? "hi" : "hi " + name;
-const sum = (...nums: number[]) => nums.reduce((a, b) => a + b, 0);
-const first = ({ name, age }: { name: string, age: number }) => name;
-
-// Return type annotations
-const double = (x: number): number => x * 2;
-
-// Type and interface declarations (skipped entirely)
-type Point = { x: number, y: number };
-interface Animal { name: string; speak(): string; }
-
-// import type / export type (skipped entirely)
-import type { Foo } from './types.js';
-export type { Bar };
-
-// Mixed type/value named bindings keep runtime imports/exports for value bindings
-import { parseSourceFile, type SourceFile } from "./parser.js";
-export { value, type ValueShape };
-
-// export interface declarations are skipped entirely
-export interface Serializable {
-  toJSON(): string;
-}
-
-// as Type and as const assertions
-const x = 42 as number;
-const colors = ["red", "green"] as const;
-
-// Class annotations: field types, generics, implements, access modifiers
-class Box<T> implements Container {
-  public value: T;
-  private label?: string;
-  readonly id: number = 1;
-  constructor(value: T) { this.value = value; }
-  get(): T { return this.value; }
-}
-
-// Catch parameter type annotation
-try { throw new Error("oops"); } catch (e: Error) { }
-```
-
-### Enums (TC39 proposal-enum)
-
-GocciaScript supports the [TC39 proposal-enum](https://github.com/tc39/proposal-enum) `enum` declaration. Enums create frozen, null-prototype objects with typed member values.
-
-```javascript
-enum Direction {
-  Up = 0,
-  Down = 1,
-  Left = 2,
-  Right = 3
-}
-
-Direction.Up;           // 0
-typeof Direction;       // "object"
-[...Direction];         // [["Up", 0], ["Down", 1], ["Left", 2], ["Right", 3]]
-
-// Self-references: members can reference prior members and the enum itself
-enum Flags {
-  Read = 1,
-  Write = 2,
-  ReadWrite = Read | Flags.Write
-}
-
-// Allowed value types: Number, String, Symbol
-enum Color { Red = "red", Green = "green" }
-enum Tokens { Alpha = Symbol("alpha") }
-```
-
-**Semantics:**
-- All members require explicit initializers (no auto-initialization).
-- Member values must be Number, String, or Symbol — other types throw `TypeError`.
-- Enum objects have a `null` prototype and are non-extensible.
-- Members are non-writable and non-configurable.
-- `Symbol.iterator` yields `[key, value]` entry pairs in declaration order.
-- `Symbol.toStringTag` is set to the enum name.
-- `export enum` is supported for module exports.
-
-**Not supported (future directions in proposal):**
-- Auto-initializers (`enum E { A, B, C }`).
-- Algebraic Data Type (ADT) enums.
-- Enum decorators.
-- `enum` expressions.
-
-### Not Supported
-
-- Namespaces (`namespace Foo { ... }`).
-- Parameter properties in constructors (`constructor(public x: number)`).
-- Angle-bracket type assertions (`<string>value`) — use `value as string` instead.
-
-### JSX
-
-**Enabled by default** via `DefaultPreprocessors`. JSX is handled by a source-to-source pre-pass transformer that converts JSX syntax into `createElement` function calls before the main compilation pipeline. This keeps the core lexer/parser/evaluator untouched. Embedders can disable JSX via `Engine.Preprocessors := []`.
-
-Users must provide their own `createElement` (and `Fragment` for `<>...</>`) in scope:
-
-```javascript
-const createElement = (tag, props, ...children) => ({ tag, props, children });
-const Fragment = Symbol("Fragment");
-
-const el = <div className="active">Hello {name}</div>;
-// Transformed to: createElement("div", { className: "active" }, "Hello ", name)
-```
-
-**Supported syntax:** Elements, self-closing tags (`<br />`), fragments (`<>...</>`), string/expression/boolean attributes, spread attributes (`{...props}`), shorthand props (`<div {value} />` → `value={value}`), expression children (`{expr}`), nested JSX in expressions, dotted component names (`<Foo.Bar />`).
-
-Lowercase tags produce string tag names (`"div"`, `"span"`); uppercase tags are passed as identifier references (component functions/classes).
-
-**Custom factory:** The factory and fragment function names can be overridden per-file using pragma comments (`@jsxFactory`, `@jsxFragment`) at the top of the file, before any code.
-
-The transformer generates an internal source map for accurate error line/column reporting. JSX is enabled by default via `DefaultPreprocessors`; embedders can disable it with `Exclude(Engine.Preprocessors, ppJSX)`.
-
-### Regular Expressions
-
-**Supported.** GocciaScript implements:
-
-- `RegExp(pattern, flags?)` and `new RegExp(pattern, flags?)`
-- Regex literals: `/pattern/flags`
-- Flags: `d`, `g`, `i`, `m`, `s`, `u`, `v`, `y`
-- RegExp instance properties: `source`, canonicalized `flags`, `lastIndex`, `global`, `ignoreCase`, `multiline`, `dotAll`, `unicode`, `sticky`, `unicodeSets`, `hasIndices`
-- `RegExp.escape()` (TC39 RegExp Escaping proposal)
-- Duplicate named capture groups: the same group name may appear in different alternatives of a disjunction (`|`), e.g., `/(?<year>\d{4})-\d{2}|\d{2}-(?<year>\d{4})/`. The `groups` property returns the value from whichever alternative participated, and `\k<name>` backreferences resolve to the correct group within each alternative.
-- `RegExp.prototype.exec()`, `test()`, `toString()`, and the `Symbol.match`, `Symbol.matchAll`, `Symbol.replace`, `Symbol.search`, and `Symbol.split` hooks
-- String integrations for `replace`, `replaceAll`, `split`, `match`, `matchAll`, and `search`, including custom protocol objects with the corresponding well-known symbol methods
-
-`RegExp(existingRegExp)` without `new` and without an explicit flags argument returns the original regex object. `new RegExp(existingRegExp)` still creates a clone.
-
-Regex literals are lexed context-sensitively so `/` still works as division in expression contexts.
-
-Current gaps from full ECMAScript RegExp semantics:
-
-- The `u` flag enables Unicode-aware matching with property escapes (`\p{Letter}`) and code point escapes (`\u{1F600}`), but does not yet cover the full ECMAScript Unicode specification.
-- The `v` flag (Unicode sets) is accepted and exposed but full set notation is not yet implemented beyond basic `u` flag behavior.
-- The `d` flag (indices) is accepted and exposed but match indices are not yet populated.
 
 ## Intentional Divergences from ECMAScript
 

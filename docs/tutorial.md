@@ -316,13 +316,15 @@ Here's a quick reference of GocciaScript's key restrictions:
 | `isNaN(x)` | Not available as global | `Number.isNaN(x)` |
 | `import x from "mod"` | Not supported | `import { x } from "mod"` |
 
-These restrictions are intentional — they eliminate common sources of bugs and security issues. See [Language Restrictions](language-restrictions.md) for the full rationale.
+These restrictions are intentional — they eliminate common sources of bugs and security issues. See [Language](language.md) for the full rationale.
 
 ## Next Steps
 
 You now have a working understanding of GocciaScript. Here's where to go from here:
 
-- **[Language Restrictions](language-restrictions.md)** — Full list of what's supported and what's excluded, with rationale
+- **[Language](language.md)** — Full list of what's supported and what's excluded, with rationale
 - **[Built-in Objects](built-ins.md)** — Complete API reference for all built-in objects (Array, String, Map, Set, Promise, Temporal, etc.)
 - **[`examples/`](../examples/)** — More example programs: classes, promises, and unsupported feature demos
-- **[Architecture](architecture.md)** — How the engine works under the hood, for contributors
+- **[Architecture](architecture.md)** — Pipelines and main layers
+- **[Interpreter](interpreter.md)** and **[Bytecode VM](bytecode-vm.md)** — Tree-walk vs bytecode execution backends
+- **[Core patterns](core-patterns.md)** — Recurring implementation patterns, internal terminology

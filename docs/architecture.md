@@ -1,6 +1,6 @@
 # Architecture
 
-*For contributors who need to understand how source code flows through the system.*
+*How source flows through the engine: shared frontend, two backends, and the main Pascal layers.*
 
 ## Executive Summary
 
@@ -36,12 +36,17 @@ Source -> JSX Transformer (optional) -> Lexer -> Parser -> Compiler -> Goccia By
 
 | Layer | Units | Responsibility |
 |-------|-------|----------------|
+| Engine | `Goccia.Engine`, `Goccia.Engine.Backend` | Top-level orchestration, built-in registration, backend selection |
+| JSX | `Goccia.JSX.Transformer` | Optional pre-pass converting JSX to `createElement` calls |
 | Frontend | `Goccia.Lexer`, `Goccia.Parser`, `Goccia.AST.*` | Source to AST |
 | Interpreter | `Goccia.Interpreter`, `Goccia.Evaluator.*` | Tree-walk execution |
 | Bytecode compiler | `Goccia.Compiler*` | AST to bytecode templates/modules |
 | Bytecode format | `Goccia.Bytecode*` | Opcodes, templates, modules, binary I/O, debug info |
 | Bytecode VM | `Goccia.VM*` | Register execution, closures, upvalues, handlers |
 | Shared runtime | `Goccia.Values.*`, `Goccia.Scope`, `Goccia.Runtime.Bootstrap` | Built-ins, objects, classes, arrays, promises, globals |
+| GC | `Goccia.GarbageCollector` | Mark-and-sweep garbage collection |
+
+For **tree-walk execution**, see [Interpreter](interpreter.md); for **bytecode execution**, see [Bytecode VM](bytecode-vm.md). For **recurring implementation patterns** and **terminology** (Define vs Assign, bindings, …), see [Core patterns](core-patterns.md).
 
 ## Design Direction
 
@@ -63,6 +68,9 @@ When in doubt: preserve pipeline separation; consolidate **policy and mechanical
 
 ## Related Documents
 
-- [Bytecode VM](bytecode-vm.md)
+- [Interpreter](interpreter.md) — Tree-walk pipeline and evaluator model
+- [Bytecode VM](bytecode-vm.md) — Compiler, opcodes, register VM
+- [Core patterns](core-patterns.md) — Recurring implementation patterns, internal terminology
 - [Build System](build-system.md)
 - [Decision Log](decision-log.md)
+- [Contributing](../CONTRIBUTING.md) — Single contribution standard (workflow, mandatory rules, testing, Pascal style, quick reference)

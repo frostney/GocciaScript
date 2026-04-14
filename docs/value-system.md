@@ -249,7 +249,7 @@ end;
 
 Special number singletons: `NaNValue`, `PositiveInfinityValue`, `NegativeInfinityValue`, `NegativeZeroValue`.
 
-**Checking for special values:** Always use the property accessors (`IsNaN`, `IsInfinity`, `IsNegativeZero`) rather than inspecting `FValue` directly. Since special values store `0.0` in `FValue`, standard floating-point checks like `Math.IsNaN(FValue)` will return incorrect results. `IsNegativeZero` uses an endian-neutral `Int64 absolute` overlay (`Bits < 0`) to detect the sign bit — see [docs/code-style.md](code-style.md) for the pattern. When checking for actual zero (not a special value), use `(Value = 0) and not IsNaN and not IsInfinite` — see `IsActualZero` in `Goccia.Evaluator.Arithmetic.pas` for the canonical helper. Similarly, the sort comparator in `Goccia.Values.ArrayValue.pas` uses `NumericRank` to map each special value to a distinct `Double` for correct ordering.
+**Checking for special values:** Always use the property accessors (`IsNaN`, `IsInfinity`, `IsNegativeZero`) rather than inspecting `FValue` directly. Since special values store `0.0` in `FValue`, standard floating-point checks like `Math.IsNaN(FValue)` will return incorrect results. `IsNegativeZero` uses an endian-neutral `Int64 absolute` overlay (`Bits < 0`) to detect the sign bit — see [CONTRIBUTING.md](../CONTRIBUTING.md#endian-dependent-byte-indexing) for the pattern. When checking for actual zero (not a special value), use `(Value = 0) and not IsNaN and not IsInfinite` — see `IsActualZero` in `Goccia.Evaluator.Arithmetic.pas` for the canonical helper. Similarly, the sort comparator in `Goccia.Values.ArrayValue.pas` uses `NumericRank` to map each special value to a distinct `Double` for correct ordering.
 
 ### Number Prototype (`TGocciaNumberObjectValue`)
 
@@ -637,6 +637,98 @@ Self-references in initializers are supported via a child scope that binds each 
 - **Class values** — `TGocciaTypedArrayClassValue` (one per kind) handles `new TypedArray(...)` construction. `TGocciaTypedArrayStaticFrom` provides `from` and `of` static methods.
 
 **Search semantics:** `indexOf` and `lastIndexOf` use strict equality (`NaN !== NaN` — always returns -1 for NaN). `includes` uses SameValueZero (`NaN === NaN` — finds NaN in float arrays via `Math.IsNaN`). All three handle Infinity/-Infinity by comparing actual IEEE 754 doubles for float arrays (where Infinity is stored as-is) and returning -1/false for integer arrays (where Infinity truncates to 0, losing identity).
+
+## Design Rationale
+
+### Number Representation
+
+Numbers use a dual representation — a `Double` for normal values and a `TGocciaNumberSpecialValue` enum for `NaN`, `+Infinity`, `-Infinity`, and `-0`:
+
+**Why not just `Double`?**
+
+- **NaN identity** — IEEE 754 `NaN ≠ NaN`, but JavaScript needs `NaN` to be identifiable. A dedicated enum avoids floating-point comparison pitfalls.
+- **Negative zero** — `-0` and `+0` are equal in IEEE 754 but distinguishable in JavaScript (`Object.is(-0, +0)` is `false`). Explicit tracking prevents this from being lost.
+- **Display correctness** — `NaN.toString()` must return `"NaN"`, not some floating-point artifact.
+
+**Pitfall: `Value = 0` for special numbers.** Since `NaN`, `Infinity`, `-Infinity`, and `-0` all store `FValue = 0.0`, any code checking `Value = 0` must first verify the value isn't one of these special types. The `IsActualZero` helper in the arithmetic evaluator encapsulates this check: `(Value = 0) and not IsNaN and not IsInfinite`. Similarly, the `NumericRank` helper in `Goccia.Values.ArrayValue.pas` maps each special value to a distinct `Double` for correct sort ordering.
+
+### `this` Binding Design
+
+GocciaScript distinguishes two function forms — arrow functions and shorthand methods — with distinct `this` semantics that match ECMAScript strict mode.
+
+**The problem:** GocciaScript has no `function` keyword. Arrow functions and shorthand methods have fundamentally different `this` semantics, but they need distinct representation at both the AST and runtime levels.
+
+**The solution:** Separate AST nodes and runtime types:
+
+| Syntax | AST Node | Runtime Type | `this` binding |
+|--------|----------|-------------|---------------|
+| `(x) => x + 1` | `TGocciaArrowFunctionExpression` | `TGocciaArrowFunctionValue` | Lexical (closure scope) |
+| `method() { ... }` | `TGocciaMethodExpression` | `TGocciaFunctionValue` | Call-site (receiver) |
+| `class { method() {} }` | `TGocciaClassMethod` | `TGocciaMethodValue` | Call-site (receiver) |
+
+The runtime uses virtual dispatch — `TGocciaFunctionValue.BindThis` is a virtual method overridden by `TGocciaArrowFunctionValue` — so `this` binding resolution has no branch overhead.
+
+**Why this design?**
+
+- **Type-safe dispatch** — The `this` binding strategy is encoded in the type hierarchy rather than a boolean flag. The vtable resolves the correct `BindThis` at zero cost.
+- **Self-documenting** — Reading the code, you know what a `TGocciaArrowFunctionValue` does vs a `TGocciaFunctionValue` without checking a flag.
+- **ECMAScript fidelity** — Arrow functions always capture `this` from their defining scope; methods receive `this` from their call site. This matches the spec exactly.
+- **Strict mode by default** — Standalone calls to either form receive `undefined` as `this`, matching strict mode. There is no implicit global `this`.
+- **Callback correctness** — Array prototype methods (`map`, `filter`, `reduce`) pass `undefined` as `ThisValue` to callbacks. Arrow function callbacks correctly inherit their enclosing method's `this`; extracted method references receive `undefined`, preventing accidental `this` leakage.
+
+### Property Descriptor System
+
+Object properties follow ECMAScript's property descriptor model:
+
+- **Data descriptors** — `{ value, writable, enumerable, configurable }`
+- **Accessor descriptors** — `{ get, set, enumerable, configurable }`
+- **Insertion order** — Properties maintain their creation order, matching JavaScript's `Object.keys()` ordering guarantee.
+- **Descriptor merging** — `Object.defineProperty` merges the new descriptor with the existing one when the property already exists. Unspecified attributes retain their current values rather than resetting to defaults. This matches ECMAScript spec behavior (e.g., `Object.defineProperty(obj, "x", { enumerable: false })` only changes `enumerable`, preserving `writable`, `configurable`, and `value`).
+- **Strict mode `delete`** — Deleting a non-configurable property throws `TypeError`, matching ECMAScript strict mode semantics. `DeleteProperty` returns `False` for non-configurable properties, and the evaluator converts this into a `TypeError` at the call site. Deleting a non-existent property returns `true` (no error).
+
+This is more complex than a simple key-value map, but it's necessary for `Object.defineProperty`, getters/setters, and non-enumerable properties like prototype methods.
+
+Class getters and setters are stored as accessor descriptors on the class prototype. `TGocciaObjectValue.GetProperty` and `AssignProperty` are `virtual`, and `TGocciaInstanceValue` overrides both to intercept property access — checking the prototype for accessor descriptors and invoking getter/setter functions with the instance as `this` context.
+
+### Private Field Storage
+
+Private fields use **composite keys** (`ClassName:FieldName`) in the instance's private property dictionary. This solves the inheritance shadowing problem where a base class and a derived class both declare a private field with the same name — in JavaScript, `Base.#x` and `Derived.#x` are completely separate slots.
+
+- **Storage** — Private fields are stored on `TGocciaInstanceValue.FPrivateProperties` using keys like `"Base:x"` and `"Derived:x"`.
+- **Access resolution** — When a method accesses `this.#x`, the evaluator resolves which class declared the method (via `FindOwningClass`, which walks the scope chain for `TGocciaMethodCallScope` or `TGocciaClassInitScope` using virtual dispatch) and uses that class name to build the composite key.
+- **Private getters/setters** — Stored separately from public ones on `TGocciaClassValue` in `FPrivateGetters`/`FPrivateSetters`, because they don't participate in the prototype's property descriptor chain.
+- **Declaration order** — Instance property initializers run in source declaration order, enforced via `TStringList` order tracking from the parser through to the class value.
+
+### Mark-and-Sweep Garbage Collector
+
+GocciaScript runs inside a FreePascal host with manual memory management, but neither the interpreter nor the bytecode VM has built-in memory management for the values it creates. In long-running contexts — benchmarking, the REPL, or extended user sessions — the heap grows unboundedly without automatic reclamation. The runtime therefore uses a unified tracing garbage collector (`Goccia.GarbageCollector.pas`) shared by both execution backends to manage the lifecycle of all runtime values.
+
+**Why not manual memory management?**
+
+- **Aliased references** — A value assigned to multiple variables, captured in a closure, and stored in an array has no single owner. Determining when to free it requires tracking all references.
+- **Shared prototype singletons** — String, Number, Array, Set, Map, Function, and Symbol prototype objects are class-level singletons shared across all instances of their type. Each type's `InitializePrototype` creates the singleton once (guarded by `if Assigned`) and pins it with `TGarbageCollector.Instance.PinObject`. Manual lifetime tracking of these shared singletons would be fragile.
+- **Closure captures** — Arrow functions capture their enclosing scope, creating non-obvious reference chains between scopes and values.
+
+**Why not reference counting (via `TInterfacedObject`)?**
+
+`TGocciaValue` inherits from `TInterfacedObject`, which provides automatic reference counting. However, values are stored as class references (`TGocciaValue`), not interface references. Switching to interface variables throughout the evaluator would require a large-scale refactor and introduce circular reference issues (objects referencing their prototypes and vice versa).
+
+**Why mark-and-sweep?**
+
+- **Simplicity** — Two phases (mark reachable, sweep unreachable) with straightforward implementation.
+- **Handles cycles** — Circular references between objects, closures, and scopes are collected correctly.
+- **O(1) membership checks** — Pinned objects, temp roots, and root objects are stored in `THashMap<TGCManagedObject, Boolean>` (`TGCObjectSet`) for O(1) `PinObject`, `AddRootObject`, `AddTempRoot`, and `RemoveTempRoot` operations, avoiding O(n) linear scans on every allocation.
+- **Generation-counter mark tracking** — Instead of clearing the `GCMarked` flag on every object at the start of each collection (an O(n) pass), the GC uses a generation counter (`TGCManagedObject.FCurrentMark`). `AdvanceMark` increments the counter in O(1), and an object is considered "marked" when its `FGCMark` matches `FCurrentMark`. This eliminates a full pass over the managed objects list per collection.
+- **O(1) `UnregisterObject`** — Each managed object stores its index in the managed objects list (`GCIndex`). Unregistration nils the slot at the known index instead of performing an O(n) linear scan. The sweep phase compacts nil slots during its existing pass.
+- **Adaptive threshold** — After each collection, the threshold scales to `max(DEFAULT_GC_THRESHOLD, surviving_count)`, so large heaps collect proportionally less often, amortizing collection cost to O(1) per allocation.
+- **`Recycle` virtual method** — Sweep calls `Obj.Recycle` instead of `Obj.Free`. The default calls `Free`, but subclasses can override to return objects to a pool.
+- **Measurable impact** — Both the BenchmarkRunner and TestRunner call `Collect` after each file to reclaim memory between script executions.
+
+**AST literal ownership:**
+
+The parser creates `TGocciaValue` instances (numbers, strings, booleans) and stores them inside `TGocciaLiteralExpression` AST nodes. These values are owned by the AST, not the GC. `TGocciaLiteralExpression.Create` calls `TGarbageCollector.Instance.UnregisterObject` to remove the value from GC tracking, and `TGocciaLiteralExpression.Destroy` frees the value (unless it is a singleton like `UndefinedValue`, `TrueValue`, or `FalseValue`).
+
+When the evaluator encounters a literal expression, it calls `Value.RuntimeCopy` to produce a fresh GC-managed runtime value. This cleanly separates compile-time constants (owned by the AST) from runtime values (managed by the GC). The overhead is minimal: integers 0-255 hit the `SmallInt` cache (zero allocation), booleans return singletons, and strings benefit from FreePascal's copy-on-write semantics.
 
 ## Error Values
 
