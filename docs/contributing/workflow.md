@@ -2,6 +2,12 @@
 
 *Branch workflow, local setup, and verification for every contributor.*
 
+## Executive Summary
+
+- **Local setup** — Install Lefthook for pre-commit formatting, then `lefthook install`
+- **Branch workflow** — Branch from `main`, implement with [critical rules](../../CONTRIBUTING.md#critical-rules) and [code style](code-style.md), add tests, update docs, commit
+- **Verification** — `./build.pas testrunner && ./build/TestRunner tests` before every push
+
 ## Local setup
 
 After cloning, install [Lefthook](https://github.com/evilmartians/lefthook) so `./format.pas` runs on pre-commit:

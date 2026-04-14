@@ -443,7 +443,7 @@ Create test files under `tests/built-ins/YourType/`. Follow the file layout conv
 - **Static methods at the top level** — `YourType/staticMethod.js` (no separate `static/` folder).
 - **Edge cases are co-located** — NaN handling, boundary conditions, error cases belong in the same file as the happy-path tests for that method. Do **not** create a separate `edge-cases.js`.
 
-```
+```text
 tests/built-ins/YourType/
   constructor.js           # new YourType(...) constructor variants + error cases
   toString-tag.js          # Symbol.toStringTag

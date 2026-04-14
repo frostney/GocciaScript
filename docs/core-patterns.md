@@ -2,6 +2,14 @@
 
 *Recurring implementation conventions in the Pascal codebase (scopes, parser, prototypes, built-ins) and shared vocabulary (Define vs Assign, bindings, …).*
 
+## Executive Summary
+
+- **Singleton pattern** — Primitive singletons (`undefined`, `null`, `true`, `false`, `NaN`) use class-var + class-function, pinned by the GC
+- **Factory method** — Scopes are created via `CreateChild`, never directly instantiated
+- **Builder pattern** — Built-in objects constructed by creating a `TGocciaObjectValue` and adding methods one at a time
+- **Shared prototype singleton** — Each built-in type shares a single class-level prototype instance via `TGocciaSharedPrototype`
+- **Define vs Assign** — `Define` creates a new binding; `Assign` changes an existing one — distinct operations throughout the codebase
+
 For **pipelines and layers**, see [Architecture](architecture.md). For the **execution backends**, see [Interpreter](interpreter.md) (tree-walk) and [Bytecode VM](bytecode-vm.md) (register VM, `.gbc`).
 
 ## Recurring implementation patterns

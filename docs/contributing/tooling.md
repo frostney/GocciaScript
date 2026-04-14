@@ -2,6 +2,12 @@
 
 *Auto-formatting, editor configuration, and platform-specific pitfalls for FreePascal development.*
 
+## Executive Summary
+
+- **Auto-formatter** — `./format.pas` auto-fixes uses clauses, PascalCase naming, parameter prefixes, and stray spaces; runs via Lefthook pre-commit hook
+- **Editor config** — `.editorconfig` + VSCode/Cursor extensions for zero-config formatting on save
+- **Platform pitfalls** — FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific); endian-dependent byte indexing
+
 ## Auto-Formatting
 
 The project includes `./format.pas`, an instantfpc script that formats Pascal source files. It runs automatically as a pre-commit hook via [Lefthook](https://github.com/evilmartians/lefthook) and can also be invoked manually — no build step needed.

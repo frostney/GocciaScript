@@ -22,7 +22,7 @@ classDiagram
     TGocciaValue <|-- TGocciaStringLiteralValue
     TGocciaValue <|-- TGocciaSymbolValue
     TGocciaValue <|-- TGocciaObjectValue
-    TGocciaValue <|-- TGocciaNativeFunction
+    TGocciaValue <|-- TGocciaNativeFunctionValue
     TGocciaValue <|-- TGocciaError
 
     TGocciaObjectValue <|-- TGocciaArrayValue
@@ -92,7 +92,7 @@ classDiagram
     class TGocciaInstanceValue {
         new Foo()
     }
-    class TGocciaNativeFunction {
+    class TGocciaNativeFunctionValue {
         Built-in Pascal functions
     }
     class TGocciaArrayBufferValue {
@@ -111,31 +111,7 @@ classDiagram
 
 ## GC Integration
 
-Every `TGocciaValue` participates in the mark-and-sweep garbage collector:
-
-```pascal
-TGCManagedObject = class
-private class var
-  FCurrentMark: Cardinal;      // Generation counter — incremented each collection
-private
-  FGCMark: Cardinal;           // Per-object mark — matches FCurrentMark when alive
-  FGCIndex: Integer;           // Index in FManagedObjects for O(1) unregistration
-public
-  class procedure AdvanceMark; static; inline;
-  procedure MarkReferences; virtual;
-  property GCMarked: Boolean read GetGCMarked write SetGCMarked;
-  property GCIndex: Integer read FGCIndex write FGCIndex;
-end;
-
-TGocciaValue = class(TGCManagedObject)
-  procedure AfterConstruction; override;  // Auto-registers with GC
-  function RuntimeCopy: TGocciaValue; virtual;  // Create a GC-managed copy
-end;
-```
-
-- **`AfterConstruction`** — Every value auto-registers with `TGarbageCollector.Instance` upon creation.
-- **`MarkReferences`** — Base implementation sets `FGCMark := FCurrentMark` (marking the object as alive for the current collection). Subclasses override this to also mark values they reference (e.g., `TGocciaObjectValue` marks its prototype and property values, `TGocciaFunctionValue` marks its closure scope, `TGocciaArrayValue` marks its elements). The `if GCMarked then Exit;` guard at the top of each override prevents re-visiting objects in cyclic reference graphs.
-- **`RuntimeCopy`** — Creates a fresh GC-managed copy of the value. Used by the evaluator when evaluating literal expressions: AST-owned literal values are not tracked by the GC, so `RuntimeCopy` produces a runtime value that is. The default implementation returns `Self` (for singletons and complex values). Primitives override this: numbers use the `SmallInt` cache for 0-255, booleans return singletons, strings create new instances (cheap due to copy-on-write).
+Every `TGocciaValue` participates in the unified mark-and-sweep garbage collector. Values auto-register via `AfterConstruction`; subclasses override `MarkReferences` to mark owned references. See [Garbage Collector](garbage-collector.md) for the full GC architecture, contributor rules, and design rationale.
 
 ## Type Discrimination via Virtual Dispatch
 
@@ -174,6 +150,7 @@ Returns `True` for values that can be invoked as functions. Overridden by:
 | All others | `False` (inherited default) |
 
 Used by:
+
 - `ToPrimitive` — to check whether `valueOf()` and `toString()` results are callable before invoking them.
 - `Function.prototype.call/apply/bind` — to validate that the receiver is callable.
 - Array method callbacks (`map`, `filter`, `reduce`, `sort`, etc.) — to validate user-provided callbacks.
@@ -232,24 +209,17 @@ function BooleanValue(B: Boolean): TGocciaBooleanLiteralValue;
 
 ### Numbers
 
-Numbers use a dual representation to handle JavaScript's special numeric values correctly:
+Simple wrapper around a `Double`:
 
 ```pascal
-TGocciaNumberSpecialValue = (nsvNone, nsvNaN, nsvPositiveInfinity,
-                              nsvNegativeInfinity, nsvNegativeZero);
-
 TGocciaNumberLiteralValue = class(TGocciaValue)
   FValue: Double;
-  FSpecialValue: TGocciaNumberSpecialValue;
 end;
 ```
 
-- Normal numbers: `FSpecialValue = nsvNone`, value in `FValue`.
-- Special values: `FSpecialValue` set, `FValue` stored as `0` (not the actual special floating-point value).
-
 Special number singletons: `NaNValue`, `PositiveInfinityValue`, `NegativeInfinityValue`, `NegativeZeroValue`.
 
-**Checking for special values:** Always use the property accessors (`IsNaN`, `IsInfinity`, `IsNegativeZero`) rather than inspecting `FValue` directly. Since special values store `0.0` in `FValue`, standard floating-point checks like `Math.IsNaN(FValue)` will return incorrect results. `IsNegativeZero` uses an endian-neutral `Int64 absolute` overlay (`Bits < 0`) to detect the sign bit — see [CONTRIBUTING.md](../CONTRIBUTING.md#endian-dependent-byte-indexing) for the pattern. When checking for actual zero (not a special value), use `(Value = 0) and not IsNaN and not IsInfinite` — see `IsActualZero` in `Goccia.Evaluator.Arithmetic.pas` for the canonical helper. Similarly, the sort comparator in `Goccia.Values.ArrayValue.pas` uses `NumericRank` to map each special value to a distinct `Double` for correct ordering.
+**Checking for special values:** Use the property accessors (`IsNaN`, `IsInfinity`, `IsNegativeZero`) which delegate to `Math.IsNaN`, `Math.IsInfinite`, and an endian-neutral `Int64 absolute` sign-bit check respectively. See [Tooling](contributing/tooling.md#endian-dependent-byte-indexing) for the endian-neutral pattern.
 
 ### Number Prototype (`TGocciaNumberObjectValue`)
 
@@ -351,6 +321,7 @@ Conversion follows ECMAScript specification semantics:
 Objects use ECMAScript-compliant property descriptors:
 
 **Data descriptors:**
+
 ```pascal
 TGocciaPropertyDescriptorData = class
   Value: TGocciaValue;
@@ -361,6 +332,7 @@ end;
 ```
 
 **Accessor descriptors:**
+
 ```pascal
 TGocciaPropertyDescriptorAccessor = class
   Getter: TGocciaValue;   // Get function
@@ -448,10 +420,8 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 
 - **Key equality** — Uses `IsSameValueZero` for key lookup.
 - **Internal storage** — `FEntries: TList<TGocciaMapEntry>` where each entry is a `record` with `Key` and `Value` fields.
-- **Shared prototype singleton** — All map instances share a single class-level prototype (`FSharedMapPrototype`). Methods are registered once during `InitializePrototype` and pinned with the GC. Each method operates through `ThisValue` to access instance data.
+- Maps follow the same implementation pattern as Sets (see [Sets](#sets) above): prototype-registered methods, dynamic `size` via `GetProperty`, and `ToArray` spreadability.
 - **Methods** — `get`, `set`, `has`, `delete`, `clear`, `forEach`, `keys`, `values`, `entries` — all registered on the shared prototype.
-- **`size`** — Returned dynamically via `GetProperty` override.
-- **Spreadable** — `ToArray` converts to a `TGocciaArrayValue` of `[key, value]` pairs for spread syntax support.
 
 ## Promises
 
@@ -520,6 +490,7 @@ When array prototype methods (`map`, `filter`, `reduce`, `forEach`, etc.) invoke
 ### Methods (`TGocciaMethodValue`)
 
 Extends `TGocciaFunctionValue` with:
+
 - **`SuperClass`** — Reference for `super` calls.
 - **`OwningClass`** — The class that declared this method. When called, `TGocciaMethodValue.CreateCallScope` creates a `TGocciaMethodCallScope` that carries both `SuperClass` and `OwningClass` as typed fields. The evaluator resolves these via `FindSuperClass` and `FindOwningClass` which walk the scope chain using virtual dispatch.
 
@@ -535,12 +506,12 @@ All functions share a prototype that provides `call`, `apply`, and `bind`:
 
 `bind` returns a `TGocciaBoundFunctionValue` that combines bound arguments with call-time arguments. Bound functions compute `length` as `max(0, original.length - boundArgs.length)` and `name` as `"bound " + original.name` per ECMAScript spec.
 
-### Native Functions (`TGocciaNativeFunction`)
+### Native Functions (`TGocciaNativeFunctionValue`)
 
 Wraps a Pascal callback for built-in operations:
 
 ```pascal
-TGocciaNativeFunctionCallback = function(
+TGocciaNativeFunctionValueCallback = function(
   Args: TGocciaValueArray;
   ThisValue: TGocciaValue
 ): TGocciaValue;
@@ -551,6 +522,7 @@ TGocciaNativeFunctionCallback = function(
 ### Class Values (`TGocciaClassValue`)
 
 Represent class constructors. Store:
+
 - Constructor method
 - Instance methods (on prototype)
 - Static methods
@@ -564,6 +536,7 @@ Represent class constructors. Store:
 ### Instance Values (`TGocciaInstanceValue`)
 
 Created by `new ClassName()`. Extend `TGocciaObjectValue` with:
+
 - **Virtual property dispatch** — `GetProperty` and `AssignProperty` override the base class methods to intercept property access and assignment. This enables getter/setter invocation: reads check the prototype for accessor descriptors and invoke getters with the instance as `this`; writes check for setters before falling back to direct property creation.
 - **Private property storage** using **composite keys** (`ClassName:FieldName`) — this enables proper inheritance shadowing where `Base.#x` and `Derived.#x` are distinct fields even when they share the same name.
 - **Class reference** for `instanceof` checks
@@ -590,6 +563,7 @@ Field initializers have access to `this` (the instance being constructed) and ca
 ### Enum Values (`TGocciaEnumValue`)
 
 Created by `enum` declarations (TC39 proposal-enum). Extend `TGocciaObjectValue` with:
+
 - **Null prototype** — `Object.create(null)` semantics
 - **Non-extensible** — `Object.preventExtensions` applied after construction
 - **Non-writable, non-configurable members** — defined via `TGocciaPropertyDescriptorData` with `[pfEnumerable]` flags only
@@ -642,9 +616,9 @@ Self-references in initializers are supported via a child scope that binds each 
 
 ### Number Representation
 
-Numbers use a dual representation — a `Double` for normal values and a `TGocciaNumberSpecialValue` enum for `NaN`, `+Infinity`, `-Infinity`, and `-0`:
+Numbers store a single `Double` value. Special values (`NaN`, `Infinity`, `-Infinity`, `-0`) are handled via IEEE 754 directly with property accessors (`IsNaN`, `IsInfinity`, `IsNegativeZero`).
 
-**Why not just `Double`?**
+**Why property accessors for special values?**
 
 - **NaN identity** — IEEE 754 `NaN ≠ NaN`, but JavaScript needs `NaN` to be identifiable. A dedicated enum avoids floating-point comparison pitfalls.
 - **Negative zero** — `-0` and `+0` are equal in IEEE 754 but distinguishable in JavaScript (`Object.is(-0, +0)` is `false`). Explicit tracking prevents this from being lost.
@@ -699,40 +673,14 @@ Private fields use **composite keys** (`ClassName:FieldName`) in the instance's 
 - **Private getters/setters** — Stored separately from public ones on `TGocciaClassValue` in `FPrivateGetters`/`FPrivateSetters`, because they don't participate in the prototype's property descriptor chain.
 - **Declaration order** — Instance property initializers run in source declaration order, enforced via `TStringList` order tracking from the parser through to the class value.
 
-### Mark-and-Sweep Garbage Collector
+### Garbage Collector
 
-GocciaScript runs inside a FreePascal host with manual memory management, but neither the interpreter nor the bytecode VM has built-in memory management for the values it creates. In long-running contexts — benchmarking, the REPL, or extended user sessions — the heap grows unboundedly without automatic reclamation. The runtime therefore uses a unified tracing garbage collector (`Goccia.GarbageCollector.pas`) shared by both execution backends to manage the lifecycle of all runtime values.
-
-**Why not manual memory management?**
-
-- **Aliased references** — A value assigned to multiple variables, captured in a closure, and stored in an array has no single owner. Determining when to free it requires tracking all references.
-- **Shared prototype singletons** — String, Number, Array, Set, Map, Function, and Symbol prototype objects are class-level singletons shared across all instances of their type. Each type's `InitializePrototype` creates the singleton once (guarded by `if Assigned`) and pins it with `TGarbageCollector.Instance.PinObject`. Manual lifetime tracking of these shared singletons would be fragile.
-- **Closure captures** — Arrow functions capture their enclosing scope, creating non-obvious reference chains between scopes and values.
-
-**Why not reference counting (via `TInterfacedObject`)?**
-
-`TGocciaValue` inherits from `TInterfacedObject`, which provides automatic reference counting. However, values are stored as class references (`TGocciaValue`), not interface references. Switching to interface variables throughout the evaluator would require a large-scale refactor and introduce circular reference issues (objects referencing their prototypes and vice versa).
-
-**Why mark-and-sweep?**
-
-- **Simplicity** — Two phases (mark reachable, sweep unreachable) with straightforward implementation.
-- **Handles cycles** — Circular references between objects, closures, and scopes are collected correctly.
-- **O(1) membership checks** — Pinned objects, temp roots, and root objects are stored in `THashMap<TGCManagedObject, Boolean>` (`TGCObjectSet`) for O(1) `PinObject`, `AddRootObject`, `AddTempRoot`, and `RemoveTempRoot` operations, avoiding O(n) linear scans on every allocation.
-- **Generation-counter mark tracking** — Instead of clearing the `GCMarked` flag on every object at the start of each collection (an O(n) pass), the GC uses a generation counter (`TGCManagedObject.FCurrentMark`). `AdvanceMark` increments the counter in O(1), and an object is considered "marked" when its `FGCMark` matches `FCurrentMark`. This eliminates a full pass over the managed objects list per collection.
-- **O(1) `UnregisterObject`** — Each managed object stores its index in the managed objects list (`GCIndex`). Unregistration nils the slot at the known index instead of performing an O(n) linear scan. The sweep phase compacts nil slots during its existing pass.
-- **Adaptive threshold** — After each collection, the threshold scales to `max(DEFAULT_GC_THRESHOLD, surviving_count)`, so large heaps collect proportionally less often, amortizing collection cost to O(1) per allocation.
-- **`Recycle` virtual method** — Sweep calls `Obj.Recycle` instead of `Obj.Free`. The default calls `Free`, but subclasses can override to return objects to a pool.
-- **Measurable impact** — Both the BenchmarkRunner and TestRunner call `Collect` after each file to reclaim memory between script executions.
-
-**AST literal ownership:**
-
-The parser creates `TGocciaValue` instances (numbers, strings, booleans) and stores them inside `TGocciaLiteralExpression` AST nodes. These values are owned by the AST, not the GC. `TGocciaLiteralExpression.Create` calls `TGarbageCollector.Instance.UnregisterObject` to remove the value from GC tracking, and `TGocciaLiteralExpression.Destroy` frees the value (unless it is a singleton like `UndefinedValue`, `TrueValue`, or `FalseValue`).
-
-When the evaluator encounters a literal expression, it calls `Value.RuntimeCopy` to produce a fresh GC-managed runtime value. This cleanly separates compile-time constants (owned by the AST) from runtime values (managed by the GC). The overhead is minimal: integers 0-255 hit the `SmallInt` cache (zero allocation), booleans return singletons, and strings benefit from FreePascal's copy-on-write semantics.
+The GC design rationale (why mark-and-sweep, why not reference counting, AST literal ownership) lives in [Garbage Collector](garbage-collector.md).
 
 ## Error Values
 
 `TGocciaError` carries JavaScript error information:
+
 - `Name` — Error type (`Error`, `TypeError`, `ReferenceError`, `RangeError`)
 - `Message` — Error description
 

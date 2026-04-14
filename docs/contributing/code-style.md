@@ -2,6 +2,13 @@
 
 *Authoritative FreePascal naming, structure, and performance conventions for the GocciaScript codebase.*
 
+## Executive Summary
+
+- **Naming** — PascalCase functions, `TGoccia*` classes, `F` prefix fields, `A` prefix parameters, no abbreviations
+- **Constants** — Use centralized constant units (`Goccia.Constants.*`, `Goccia.Keywords.*`, `Goccia.FileExtensions`) instead of hardcoded literals
+- **Performance** — Use `TStringBuffer` (not `TStringBuilder`), purpose-built hash maps (not `TDictionary`) on hot paths, and `TObjectList<T>` type aliases for cross-unit generics
+- **Auto-formatting** — `./format.pas` enforces uses clause ordering, PascalCase naming, and parameter prefixes; see [Tooling](tooling.md) for setup
+
 **At a glance** (details follow in the subsections):
 
 - **Naming** — PascalCase functions and methods; `TGoccia*` classes; **`F`** = private fields; **`A`** = multi-letter parameters; full words, no abbreviations (exceptions: `AST`, `JSON`, `REPL`, `ISO`, `Utils`); locals: PascalCase, no underscores, no numeric suffixes
@@ -260,6 +267,7 @@ procedure ProcessValue(Value: TGocciaValue; Name: string);
 ```
 
 Exceptions to `const`:
+
 - Parameters that are genuinely modified inside the function (e.g., loop counters, accumulator records)
 - `out` parameters (which are written, not read)
 - `var` parameters (which are both read and written)

@@ -2,6 +2,14 @@
 
 *Tree-walk execution over the AST: `Goccia.Interpreter` and `Goccia.Evaluator.*`, sharing the same runtime values as bytecode mode but not the same control path.*
 
+## Executive Summary
+
+- **Pipeline** — Source → JSX Transformer → Lexer → Parser → Interpreter → Evaluator → `TGocciaValue`
+- **Pure evaluator** — Same expression + context always produces the same result; state changes happen through scope and value objects
+- **VMT dispatch** — Expression/statement evaluation dispatches through virtual method tables on AST nodes
+- **Scope chain** — Lexical scoping via `TGocciaScope.CreateChild`; no direct instantiation
+- **Shared runtime** — Both interpreter and bytecode modes produce `TGocciaValue` results on the same object model
+
 For **pipelines and the layer diagram**, see [Architecture](architecture.md). For **register VM execution and `.gbc`**, see [Bytecode VM](bytecode-vm.md).
 
 ## Pipeline
@@ -73,7 +81,7 @@ State changes (variable bindings, object mutations) happen through the scope and
 
 **Performance-aware evaluation:** Template literal evaluation and `Array.ToStringLiteral` use `TStringBuffer` for O(n) string assembly instead of O(n^2) repeated concatenation. `Boolean.ToNumberLiteral` returns the existing `ZeroValue`/`OneValue` singletons rather than allocating, avoiding an allocation on every boolean-to-number coercion. `Function.prototype.apply` uses a fast path for `TGocciaArrayValue` arguments (direct `Elements[I]` access) instead of per-element `IntToStr` + `GetProperty`. Numeric binary operations that share a common pattern (subtraction, multiplication, exponentiation) are consolidated through `EvaluateSimpleNumericBinaryOp` to avoid code duplication while maintaining clear semantics.
 
-**IEEE-754 correctness:** Arithmetic operations handle special number values (`NaN`, `Infinity`, `-Infinity`, `-0`) via the `TGocciaNumberSpecialValue` enum rather than the stored `Double` (which is `0.0` for all special values). Division uses explicit `IsNegativeZero` checks to compute correct signed results (e.g., `1 / -Infinity` → `-0`, `-1 / 0` → `-Infinity`). Exponentiation uses an `IsActualZero` guard to distinguish true zero exponents from special values with `Value = 0.0`, and checks `RightNum.IsInfinite` before `RightNum.Value = 0` to correctly handle infinite exponents. The sort comparator (`CallCompareFunc`) maps infinite comparison results to `±1` to avoid passing `0.0` (the internal value of `Infinity`) to the quicksort partitioning logic. Negative zero detection (`IsNegativeZero`) uses an endian-neutral `Int64 absolute` overlay to check the sign bit (`Bits < 0`) instead of byte-indexed checks (`Bytes[7] and $80`) that assume little-endian layout.
+**IEEE-754 correctness:** Arithmetic operations handle special number values (`NaN`, `Infinity`, `-Infinity`, `-0`) via property accessors on `TGocciaNumberLiteralValue` (`IsNaN`, `IsInfinite`, `IsNegativeZero`). Division uses explicit `IsNegativeZero` checks to compute correct signed results (e.g., `1 / -Infinity` → `-0`, `-1 / 0` → `-Infinity`). Exponentiation uses an `IsActualZero` guard to distinguish true zero exponents, and checks `RightNum.IsInfinite` before `RightNum.Value = 0` to correctly handle infinite exponents. The sort comparator (`CallCompareFunc`) maps infinite comparison results to `±1` to avoid passing raw `Double` values to the quicksort partitioning logic. Negative zero detection (`IsNegativeZero`) uses an endian-neutral `Int64 absolute` overlay to check the sign bit (`Bits < 0`) instead of byte-indexed checks that assume little-endian layout.
 
 ### Scope Chain Design
 
@@ -83,7 +91,7 @@ Scopes form a tree with parent pointers, implementing lexical scoping:
 - **`OnError` on scopes** — Each scope carries a reference to the error handler callback, inherited from its parent. This allows closures and callbacks to always find the correct error handler without global state.
 - **Temporal Dead Zone** — `let`/`const` bindings are registered before initialization, enforcing TDZ semantics (accessing before `=` throws `ReferenceError`).
 - **Module scope isolation** — Modules execute in `skModule` scopes (children of the global scope), preventing module-internal variables from leaking into the global scope.
-- **Module path resolution** — `TGocciaModuleResolver.Resolve` handles alias expansion using import-map semantics (exact match for keys without `/`, prefix match for keys with `/`, longest matching key wins), resolves `./` and `../` paths relative to the importing file's directory, tries the shared module import extensions (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.json`, `.json5`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.txt`, `.md`) and index files for extensionless imports, then expands to an absolute path. `TGocciaModuleResolver.LoadImportMap` resolves import-map values relative to the map file and `DiscoverProjectConfig` walks parent directories looking for `goccia.json`. Absolute paths are used as cache keys to prevent loading the same file via different relative paths. Global modules (bare specifiers registered via `Engine.RegisterGlobalModule`) are checked before the resolver runs. Custom resolvers can be injected by subclassing `TGocciaModuleResolver` and overriding the `Resolve` method.
+- **Module path resolution** — `TGocciaModuleResolver` handles alias expansion via its inherited `Resolve` method using import-map semantics (exact match for keys without `/`, prefix match for keys with `/`, longest matching key wins), resolves `./` and `../` paths relative to the importing file's directory, tries the shared module import extensions (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.json`, `.json5`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.txt`, `.md`) and index files for extensionless imports, then expands to an absolute path. `TGocciaModuleResolver.LoadImportMap` resolves import-map values relative to the map file and `DiscoverProjectConfig` walks parent directories looking for `goccia.json`. Absolute paths are used as cache keys to prevent loading the same file via different relative paths. Global modules (bare specifiers registered via `Engine.RegisterGlobalModule`) are checked before the resolver runs. Custom resolvers can be injected by subclassing `TGocciaModuleResolver` and overriding the `Resolve` method.
 - **Circular dependency handling** — Modules are added to the cache (`FModules`) before execution and to a loading set (`FLoadingModules`) for the duration. If a circular import is encountered, the partially-populated module is returned from cache. Inline exports (`export const`) that execute before the circular import point are available; `export { x }` declarations processed post-execution are not. This matches the observable behavior of ES module live bindings for the common case.
 - **Namespace imports** — `import * as ns from "./module.js"` now materializes a namespace object from `TGocciaModule.ExportsTable` instead of being skipped by the parser. The namespace object is created with a null prototype, populated with enumerable read-only data properties for each export, then frozen before binding. The result is an import-time snapshot rather than a live export mirror, which keeps namespace imports lightweight while matching the expected read-only shape for both script modules and structured-data modules.
 - **JSON module imports** — Files ending in `.json` are handled by `LoadJsonModule`, which parses the file via `TGocciaJSONParser` (`Goccia.JSON` unit) and exposes each top-level object key as a named export. JSON modules bypass the lexer/parser/evaluator pipeline entirely, keeping the import path unified (`import { key } from "./file.json"`). Non-object JSON root values (arrays, primitives) produce a module with no exports. JSON modules participate in the same caching and path resolution as JS modules.
@@ -148,7 +156,6 @@ This follows the ECMAScript specification's microtask ordering semantics. Thenab
 | Context | When microtasks drain |
 |---------|----------------------|
 | `TGocciaEngine.Execute` | After `Interpreter.Execute` completes |
-| `TGocciaEngine.ExecuteWithTiming` | After interpreter execution, before timing snapshot |
 | `TGocciaEngine.ExecuteProgram` | After interpreter execution |
 | Test framework | After each test callback |
 | Benchmark runner | After warmup, calibration batches, and each measurement round |
@@ -164,5 +171,5 @@ This follows the ECMAScript specification's microtask ordering semantics. Thenab
 - [Architecture](architecture.md) — Shared frontend, both backends, main layers, design direction
 - [Bytecode VM](bytecode-vm.md) — Compiler output, opcodes, `TGocciaVM`
 - [Core patterns](core-patterns.md) — Recurring implementation patterns and internal terminology
-- [Value system](value-system.md) — `TGocciaValue` hierarchy and property access
-- [Contributing](../CONTRIBUTING.md) — Workflow and Pascal code style when you modify the repository
+- [Value system](value-system.md) — `TGocciaValue` hierarchy
+- [Contributing](../CONTRIBUTING.md) — Workflow and code style

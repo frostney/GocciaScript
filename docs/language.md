@@ -11,68 +11,7 @@
 - **Opt-in toggles** — ASI (`--asi` / `Engine.ASIEnabled := True`)
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
-GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision.
-
-## ECMAScript Feature Summary
-
-| Feature | Spec | Status |
-|---------|------|--------|
-| `let` / `const` | ES2015 | Supported |
-| Arrow functions | ES2015 | Supported |
-| Classes (constructor, methods, static, getters/setters) | ES2015 | Supported |
-| Template literals | ES2015 | Supported |
-| Destructuring (array, object) | ES2015 | Supported |
-| Spread / rest (`...`) | ES2015 | Supported |
-| `for...of` | ES2015 | Supported |
-| `Symbol` | ES2015 | Supported |
-| `Promise` | ES2015 | Supported |
-| ES modules (`import` / `export`) | ES2015 | Supported (named only) |
-| `var` | ES1 | Excluded — use `let`/`const` |
-| `function` keyword | ES1 | Excluded — use arrow functions or shorthand methods |
-| `==` / `!=` (loose equality) | ES1 | Excluded — use `===` / `!==` |
-| `eval()` | ES1 | Excluded |
-| `arguments` object | ES1 | Excluded — use rest parameters |
-| `for` / `while` / `do...while` | ES1 | Excluded — use `for...of` or array methods |
-| `with` statement | ES1 | Excluded |
-| Generators (`function*`) | ES2015 | Not supported |
-| Default exports / imports | ES2015 | Excluded — use named exports |
-| Nullish coalescing (`??`) | ES2020 | Supported |
-| Optional chaining (`?.`) | ES2020 | Supported |
-| Logical assignment (`&&=`, `\|\|=`, `??=`) | ES2021 | Supported |
-| Private fields and methods (`#field`) | ES2022 | Supported |
-| Static class blocks | ES2022 | Supported |
-| `Array.prototype.at` | ES2022 | Supported |
-| `Object.hasOwn` | ES2022 | Supported |
-| `structuredClone` | ES2022 | Supported |
-| Top-level `await` | ES2022 | Supported |
-| `Array.prototype.findLast`, `findLastIndex` | ES2023 | Supported |
-| `Array.prototype.toReversed`, `toSorted`, `toSpliced`, `with` | ES2023 | Supported |
-| `Object.groupBy`, `Map.groupBy` | ES2024 | Supported |
-| `Promise.withResolvers` | ES2024 | Supported |
-| `String.prototype.isWellFormed`, `toWellFormed` | ES2024 | Supported |
-| Set methods (`union`, `intersection`, `difference`, etc.) | ES2025 | Supported |
-| `Promise.try` | ES2025 | Supported |
-| Iterator Helpers (`map`, `filter`, `take`, `drop`, etc.) | ES2025 | Supported |
-| `import.meta` | ES2026 | Supported |
-| Dynamic `import()` | ES2026 | Supported |
-| `RegExp` (literals, flags `d`/`g`/`i`/`m`/`s`/`u`/`v`/`y`) | ES2015+ | Supported |
-| ASI (automatic semicolon insertion) | ES1 | Opt-in (`--asi`) |
-| Global `parseInt`, `parseFloat`, `isNaN`, `isFinite` | ES1 | Excluded — use `Number.*` |
-
-## TC39 Proposals
-
-| Proposal | Stage | Status |
-|----------|-------|--------|
-| [Decorators](https://github.com/tc39/proposal-decorators) | 3 | Supported — class, method, field, getter/setter, auto-accessor decorators with `addInitializer` |
-| [Decorator Metadata](https://github.com/tc39/proposal-decorator-metadata) | 3 | Supported — `Symbol.metadata` for decorator-attached class metadata with inheritance |
-| [Types as Comments](https://tc39.es/proposal-type-annotations/) | 1 | Supported — TypeScript-style annotations parsed, preserved on AST, enforced in bytecode mode |
-| [Enum Declarations](https://github.com/tc39/proposal-enum) | 0 | Supported — frozen, null-prototype enum objects with `Symbol.iterator` |
-| [Temporal](https://tc39.es/proposal-temporal/) | 3 | Supported — `Temporal.PlainDate`, `Temporal.Duration`, `Temporal.Instant`, etc. |
-| [`Math.clamp`](https://github.com/tc39/proposal-math-clamp) | 3 | Supported |
-| [`Math.sumPrecise`](https://github.com/tc39/proposal-math-sum) | 3 | Supported |
-| [`Map.prototype.getOrInsert`](https://github.com/tc39/proposal-upsert) | 3 | Supported — `getOrInsert` and `getOrInsertComputed` |
-| [`Error.isError`](https://github.com/tc39/proposal-is-error) | 4 | Supported |
-| [`RegExp.escape`](https://github.com/tc39/proposal-regex-escaping) | 3 | Supported |
+GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
 
 ## Guiding Principle
 
@@ -99,7 +38,7 @@ const name = "Goccia";
 - `fn.call()`, `fn.apply()`, `fn.bind()` for explicit `this` binding.
 - `fn.length` — Number of formal parameters (before defaults/rest).
 - `fn.name` — Function name (inferred from variable declarations for anonymous functions).
-- Type annotations on parameters and return types (parsed and ignored at runtime — see [Types as Comments](#types-as-comments) below).
+- Type annotations on parameters and return types (parsed and ignored at runtime — see [Types as Comments](#types-as-comments-stage-1) below).
 - `async`/`await` — Async functions return Promises; `await` suspends until the Promise settles (see [Async Functions](#async-functions) below).
 
 ```javascript
@@ -154,7 +93,7 @@ class C {
 - Static properties.
 - Static blocks (`static { ... }`).
 - Inheritance with `extends` and `super`.
-- Decorators (see [Decorators](#decorators) in TC39 Proposals below).
+- Decorators (see [Decorators](#decorators-stage-3) in TC39 Proposals below).
 
 ```javascript
 class Counter {
@@ -176,7 +115,7 @@ class Counter {
 - Bitwise operators (`&`, `|`, `^`, `<<`, `>>`, `>>>`).
 - Ternary operator (`? :`).
 - Numeric literals: decimal, hex (`0x`), binary (`0b`), octal (`0o`), scientific notation, and numeric separators (`1_000_000`, `0xFF_FF`, `0b1010_0001`, `0o77_77`, `1.5e1_0`).
-- Template literals with interpolation and tagged templates (``tag`...```, `String.raw`). Tagged templates support the TC39 Template Literal Revision (ES2018): malformed escape sequences (e.g., `\u{`, `\xG1`) set the cooked segment to `undefined` while preserving the raw source text; untagged templates still throw `SyntaxError` for invalid escapes.
+- Template literals with interpolation and tagged templates (``tag`...```,`String.raw`). Tagged templates support the TC39 Template Literal Revision (ES2018): malformed escape sequences (e.g.,`\u{`,`\xG1`) set the cooked segment to`undefined` while preserving the raw source text; untagged templates still throw `SyntaxError` for invalid escapes.
 - Destructuring (array and object patterns).
 - Spread operator (`...`).
 - `typeof`, `instanceof`, `in`, `delete`.
@@ -193,6 +132,28 @@ class Counter {
 - Block statements
 - `for...of` and `for await...of` (see [Supported Iteration](#supported-iteration))
 - `import`/`export` (ES module system — named exports only, no default exports)
+
+### Explicit Resource Management
+
+`using` and `await using` declarations (TC39 Stage 3 [Explicit Resource Management](https://github.com/tc39/proposal-explicit-resource-management)) are supported.
+
+- `using` — Synchronous disposal. When the enclosing block exits, `[Symbol.dispose]()` is called on the bound value.
+- `await using` — Asynchronous disposal. When the enclosing block exits, `[Symbol.asyncDispose]()` is awaited.
+- `DisposableStack` and `AsyncDisposableStack` are available as built-in constructors.
+- `Symbol.dispose` and `Symbol.asyncDispose` are well-known symbols.
+- `SuppressedError` is thrown when both the block body and a disposer throw.
+
+```javascript
+{
+  using file = openFile("data.txt");
+  // file is automatically disposed when this block exits
+}
+
+const fn = async () => {
+  await using conn = openConnection();
+  // conn is asynchronously disposed when this block exits
+};
+```
 
 ### Modules
 
@@ -416,7 +377,7 @@ Current gaps from full ECMAScript RegExp semantics:
 - The `v` flag (Unicode sets) is accepted and exposed but full set notation is not yet implemented beyond basic `u` flag behavior.
 - The `d` flag (indices) is accepted and exposed but match indices are not yet populated.
 
-## TC39 Proposals
+## TC39 Proposal Details
 
 GocciaScript implements several active TC39 proposals alongside the core ECMAScript subset.
 
@@ -425,6 +386,7 @@ GocciaScript implements several active TC39 proposals alongside the core ECMAScr
 TC39 Stage 3 decorators ([proposal-decorators](https://github.com/tc39/proposal-decorators)) and decorator metadata ([proposal-decorator-metadata](https://github.com/tc39/proposal-decorator-metadata)) are fully supported.
 
 **Supported decorator targets:**
+
 - Class declarations (`@decorator class C {}`)
 - Instance and static methods (`@decorator method() {}`)
 - Getters and setters (`@decorator get x() {}`, `@decorator set x(v) {}`)
@@ -446,6 +408,7 @@ class C {
 ```
 
 **`addInitializer`:** Decorators can register initialization callbacks via `context.addInitializer()`. Timing depends on decorator kind:
+
 - Class decorators: after the class is fully defined and static fields are assigned.
 - Static method/getter/setter: during class definition, after static methods are placed.
 - Non-static method/getter/setter: during class construction, before field initialization.
@@ -468,7 +431,7 @@ C[Symbol.metadata].decorated; // true
 
 ### Decorator Metadata (Stage 3)
 
-Decorator metadata is part of the decorators implementation above. Each decorated class receives a `[Symbol.metadata]` property containing a null-prototype object. Metadata objects inherit from the parent class's metadata via prototype chain. See [proposal-decorator-metadata](https://github.com/tc39/proposal-decorator-metadata).
+Decorator metadata works as described in [Decorators](#decorators-stage-3) — each decorated class receives a `Symbol.metadata` property with prototype-chain inheritance. See [proposal-decorator-metadata](https://github.com/tc39/proposal-decorator-metadata).
 
 ### Types as Comments (Stage 1)
 
@@ -560,6 +523,7 @@ enum Tokens { Alpha = Symbol("alpha") }
 ```
 
 **Semantics:**
+
 - All members require explicit initializers (no auto-initialization).
 - Member values must be Number, String, or Symbol — other types throw `TypeError`.
 - Enum objects have a `null` prototype and are non-extensible.
@@ -569,6 +533,7 @@ enum Tokens { Alpha = Symbol("alpha") }
 - `export enum` is supported for module exports.
 
 **Not supported (future directions in proposal):**
+
 - Auto-initializers (`enum E { A, B, C }`).
 - Algebraic Data Type (ADT) enums.
 - Enum decorators.
@@ -625,6 +590,7 @@ Warning: 'function' declarations are not supported in GocciaScript
 Function expressions in assignment position evaluate to `undefined`. Generator function declarations (`function*`) are also skipped.
 
 The `function` keyword creates several problems:
+
 - **`this` binding confusion** — Regular functions have their own `this` that changes based on how they're called.
 - **Hoisting** — Function declarations are hoisted, making code order misleading.
 - **`arguments` object** — Creates an implicit magic variable.
@@ -699,6 +665,7 @@ Engine.ASIEnabled := True;
 ```
 
 When enabled, GocciaScript follows the ECMAScript ASI rules (ES2026 §12.10):
+
 - A semicolon is inserted when a newline separates the current and next token
 - A semicolon is inserted before `}` or at EOF
 - Restricted productions (`return`, `throw`, `break`) follow the `[no LineTerminator here]` rules

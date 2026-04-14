@@ -25,8 +25,9 @@ When your change affects behavior visible to users or contributors, update the r
 
 **Documentation standards:**
 
-- **Executive summary** — Every document except the decision log must open with a bulleted executive summary.
+- **Executive summary** — Every `docs/` file except the decision log must include a `## Executive Summary` heading with 3–6 bulleted key points, placed after the title and subtitle. Root-level files (README, CONTRIBUTING, AGENTS) are navigation entry points and are exempt. An italic subtitle alone does not satisfy this requirement.
 - **No duplication** — Each topic has one authoritative document with the full detail. Other documents that reference it use a one-liner and link back. Do not maintain the same content in two places.
+- **Spikes are snapshots** — Files under `docs/spikes/` are point-in-time investigation records. Do not update them after the initial creation; if findings change, add a new decision log entry and link to it.
 
 `docs/` files are about the GocciaScript project (engine, language, runtime). Contributing guides are about FreePascal contribution standards. Match the voice and structure of the target document.
 

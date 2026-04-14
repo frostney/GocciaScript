@@ -1,6 +1,6 @@
 # GocciaScript
 
-![](./logo.png)
+![GocciaScript logo](./logo.png)
 
 A drop of JavaScript — A subset of ECMAScript 2026+ implemented in FreePascal
 
@@ -157,7 +157,7 @@ printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./bu
 ./build/BenchmarkRunner benchmarks --format=csv --output=results.csv
 ```
 
-The benchmark runner auto-calibrates iterations per benchmark, reports ops/sec with variance (CV%) and engine-level timing breakdown (lex/parse/execute). Output formats: `console` (default), `text`, `csv`, `json`. Calibration and measurement parameters are configurable via environment variables — see [Benchmarks](docs/benchmarks.md) for details.
+The benchmark runner auto-calibrates iterations per benchmark, reports ops/sec with variance (CV%) and engine-level timing breakdown (lex/parse/execute). Output formats: `console` (default), `text`, `csv`, `json`. Calibration and measurement parameters are configurable via [environment variables](docs/benchmarks.md#configuring-benchmark-parameters).
 
 ## Quick Tour
 
@@ -233,15 +233,20 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 | Document | Description |
 |----------|-------------|
 | [Tutorial](docs/tutorial.md) | Your first GocciaScript program — a guided walkthrough for newcomers |
-| [Language](docs/language.md) | ECMAScript subset, TC39 proposals, excluded features, and rationale |
-| [Built-in Objects](docs/built-ins.md) | Available built-ins and complete API reference |
+| [Language](docs/language.md) | ECMAScript subset, excluded features, and rationale |
+| [Language Tables](docs/language-tables.md) | Quick-reference: ECMAScript feature matrix and TC39 proposal status |
+| [Built-in Objects](docs/built-ins.md) | Available built-ins and API reference |
+| [Temporal Built-ins](docs/built-ins-temporal.md) | Temporal API: dates, times, durations, time zones |
+| [Binary Data Built-ins](docs/built-ins-binary-data.md) | ArrayBuffer, SharedArrayBuffer, TypedArray API |
 | [Architecture](docs/architecture.md) | Pipelines, main layers, design direction, duplication boundaries |
 | [Interpreter](docs/interpreter.md) · [Bytecode VM](docs/bytecode-vm.md) | Tree-walk and bytecode execution backends |
 | [Core patterns](docs/core-patterns.md) | Recurring implementation patterns, internal terminology |
 | [Value System](docs/value-system.md) | Type hierarchy, virtual property access, primitives, objects |
+| [Garbage Collector](docs/garbage-collector.md) | Mark-and-sweep GC: architecture, contributor rules, design rationale |
 | [Adding Built-in Types](docs/adding-built-in-types.md) | Step-by-step guide for adding new built-in types |
 | [Embedding the Engine](docs/embedding.md) | Embedding GocciaScript in FreePascal applications |
-| [Testing](docs/testing.md) | Test organization, writing tests, running tests |
+| [Testing](docs/testing.md) | Test organization, running tests, coverage, CI |
+| [Test Framework API](docs/testing-api.md) | Assertions, mocks, lifecycle hooks, async patterns |
 | [Benchmarks](docs/benchmarks.md) | Benchmark runner, output formats, writing benchmarks |
 | [Build System](docs/build-system.md) | Build commands, compiler configuration, CI/CD |
 | [Profiling](docs/profiling.md) | Bytecode VM profiling: opcodes, functions, output formats |

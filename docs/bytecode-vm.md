@@ -43,7 +43,7 @@ Public bytecode artifacts use the `.gbc` extension.
 
 ## Core Design
 
-- The VM register file uses tagged `TGocciaRegister` values internally; hot scalar kinds stay unboxed until they cross an object/runtime boundary.
+- The register file uses tagged values that keep scalars unboxed until they cross a runtime boundary (see [Design Direction](architecture.md#design-direction)).
 - The VM uses the same value classes as the interpreter: arrays, objects, classes, promises, functions, symbols, enums, and built-ins.
 - `undefined`, `null`, booleans, and hole values use shared singleton objects.
 - Sparse arrays use `TGocciaHoleValue.HoleValue`, not raw `nil`.
