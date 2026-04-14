@@ -22,15 +22,16 @@ classDiagram
     TGocciaValue <|-- TGocciaStringLiteralValue
     TGocciaValue <|-- TGocciaSymbolValue
     TGocciaValue <|-- TGocciaObjectValue
-    TGocciaValue <|-- TGocciaNativeFunctionValue
-    TGocciaValue <|-- TGocciaError
+    TGocciaValue <|-- TGocciaClassValue
 
+    TGocciaObjectValue <|-- TGocciaFunctionBase
+    TGocciaFunctionBase <|-- TGocciaFunctionValue
+    TGocciaFunctionBase <|-- TGocciaNativeFunctionValue
+    TGocciaFunctionBase <|-- TGocciaBoundFunctionValue
     TGocciaObjectValue <|-- TGocciaArrayValue
     TGocciaObjectValue <|-- TGocciaSetValue
     TGocciaObjectValue <|-- TGocciaMapValue
     TGocciaObjectValue <|-- TGocciaPromiseValue
-    TGocciaObjectValue <|-- TGocciaFunctionValue
-    TGocciaObjectValue <|-- TGocciaClassValue
     TGocciaObjectValue <|-- TGocciaInstanceValue
     TGocciaObjectValue <|-- TGocciaEnumValue
     TGocciaObjectValue <|-- TGocciaIteratorValue

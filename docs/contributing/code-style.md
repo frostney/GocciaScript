@@ -53,6 +53,8 @@ Overflow and range checks are **enabled** — correctness is prioritized over ra
 | Local variables | PascalCase; **no** underscores; **no** trailing digit suffixes (`Value1`, `temp2`) | `CandidateScope`, `ResolvedName` |
 | Enums | `TGoccia<Name>` for type, lowercase prefix for values | `TGocciaScopeKind`, `skGlobal` |
 
+> **Note:** A few legacy utility units (`BaseMap.pas`, `HashMap.pas`, `OrderedMap.pas`, `FileUtils.pas`, etc.) predate the `Goccia.*` naming convention and have not been renamed. New units should always follow the convention.
+
 Do **not** use `snake_case` or `mixed_Case` for locals — use full words in PascalCase. Do **not** disambiguate with numeric suffixes; choose a descriptive name (`PrimaryScope`, `FallbackScope`) instead. Short single-letter names in very small scopes (e.g. loop `I`, `J`) remain acceptable.
 
 ### Centralized Constants

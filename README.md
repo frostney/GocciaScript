@@ -213,7 +213,7 @@ flowchart LR
     AST --> Compiler["Bytecode Compiler"] --> VM["Goccia VM"] --> Result2["Result"]
 ```
 
-Both backends share the same value types, built-ins, scope chain, and mark-and-sweep GC. The bytecode backend is a Goccia-owned VM that executes directly on `TGocciaValue`, not a generic VM layer.
+Both backends share the same value types, built-ins, scope chain, and mark-and-sweep GC. The bytecode backend is a Goccia-owned VM with tagged `TGocciaRegister` values (unboxed scalars) that fall back to `TGocciaValue` for heap objects, not a generic VM layer.
 
 See [Architecture](docs/architecture.md) for pipelines and layers, [Interpreter](docs/interpreter.md) for the tree-walk backend, [Bytecode VM](docs/bytecode-vm.md) for the bytecode backend, and [Core patterns](docs/core-patterns.md) for implementation patterns and internal terminology.
 
