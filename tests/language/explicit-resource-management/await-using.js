@@ -46,21 +46,29 @@ describe("await using declaration", () => {
   });
 
   test("await using null is silently skipped", async () => {
-    let reached = false;
+    const order = [];
+    // Schedule a microtask before the block to observe the async boundary
+    Promise.resolve().then(() => order.push("microtask"));
     {
       await using resource = null;
-      reached = true;
     }
-    expect(reached).toBe(true);
+    // The block-exit await point drains microtasks, so the callback runs
+    // during disposal — before "after" is pushed
+    order.push("after");
+    expect(order).toEqual(["microtask", "after"]);
   });
 
   test("await using undefined is silently skipped", async () => {
-    let reached = false;
+    const order = [];
+    // Schedule a microtask before the block to observe the async boundary
+    Promise.resolve().then(() => order.push("microtask"));
     {
       await using resource = undefined;
-      reached = true;
     }
-    expect(reached).toBe(true);
+    // The block-exit await point drains microtasks, so the callback runs
+    // during disposal — before "after" is pushed
+    order.push("after");
+    expect(order).toEqual(["microtask", "after"]);
   });
 
   test("throws TypeError for non-disposable value", async () => {

@@ -12,7 +12,8 @@ uses
   Goccia.AST.Statements,
   Goccia.Bytecode.Chunk,
   Goccia.Compiler.Context,
-  Goccia.Compiler.Scope;
+  Goccia.Compiler.Scope,
+  Goccia.Compiler.TypeRules;
 
 procedure CompileExpressionStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExpressionStatement);
@@ -62,7 +63,6 @@ procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
 function TypeAnnotationToLocalType(const AAnnotation: string): TGocciaLocalType;
 function IsArrayTypeAnnotation(const AAnnotation: string): Boolean;
 function StripArrayLayer(const AAnnotation: string): string;
-function TypesAreCompatible(const AProduced, AExpected: TGocciaLocalType): Boolean;
 function InferLocalType(const AExpr: TGocciaExpression): TGocciaLocalType;
 function ExpressionType(const AScope: TGocciaCompilerScope;
   const AExpr: TGocciaExpression): TGocciaLocalType;
@@ -233,22 +233,6 @@ begin
       end;
     end;
   end;
-end;
-
-function TypesAreCompatible(const AProduced, AExpected: TGocciaLocalType): Boolean;
-begin
-  if AProduced = sltUntyped then
-    Exit(False);
-  if AProduced = AExpected then
-    Exit(True);
-  if (AExpected = sltFloat) and (AProduced = sltInteger) then
-    Exit(True);
-  Result := False;
-end;
-
-function IsKnownNumeric(const AType: TGocciaLocalType): Boolean; inline;
-begin
-  Result := AType in [sltInteger, sltFloat];
 end;
 
 function IsArithmeticOp(const ATokenType: TGocciaTokenType): Boolean;

@@ -9,6 +9,8 @@ const
   NULL_TYPE_NAME      = 'null';
   UNDEFINED_TYPE_NAME = 'undefined';
   BOOLEAN_TYPE_NAME   = 'boolean';
+  { Strict local type (types-as-comments) distinct from NUMBER_TYPE_NAME. }
+  INTEGER_TYPE_NAME   = 'integer';
   NUMBER_TYPE_NAME    = 'number';
   STRING_TYPE_NAME    = 'string';
   SYMBOL_TYPE_NAME    = 'symbol';
