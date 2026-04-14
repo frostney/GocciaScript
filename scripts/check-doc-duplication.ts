@@ -13,7 +13,7 @@
  *   npx tsx scripts/check-doc-duplication.ts                # scan project root
  *   npx tsx scripts/check-doc-duplication.ts --suggest       # include fix suggestions
  *   npx tsx scripts/check-doc-duplication.ts --json          # JSON output
- *   MD_FALLOW_MIN_WORDS=15 npx tsx ...                       # tune exact threshold
+ *   DOC_DUP_MIN_WORDS=15 npx tsx ...                         # tune exact threshold
  */
 
 import { readFileSync, readdirSync, existsSync, lstatSync, realpathSync } from "fs";
@@ -111,10 +111,10 @@ const ROOT = join(__dirname, "..");
 //   after stopword removal.  Only paragraphs with ≥ FUZZY_MIN_WORDS are compared.
 //
 // All thresholds are overridable via environment variables.
-const MIN_WORDS = parseInt(process.env.MD_FALLOW_MIN_WORDS ?? "35", 10);
-const MIN_LOCATIONS = parseInt(process.env.MD_FALLOW_MIN_LOCATIONS ?? "2", 10);
-const FUZZY_THRESHOLD = parseFloat(process.env.MD_FALLOW_FUZZY_THRESHOLD ?? "0.65");
-const FUZZY_MIN_WORDS = parseInt(process.env.MD_FALLOW_FUZZY_MIN_WORDS ?? "15", 10);
+const MIN_WORDS = parseInt(process.env.DOC_DUP_MIN_WORDS ?? "35", 10);
+const MIN_LOCATIONS = parseInt(process.env.DOC_DUP_MIN_LOCATIONS ?? "2", 10);
+const FUZZY_THRESHOLD = parseFloat(process.env.DOC_DUP_FUZZY_THRESHOLD ?? "0.65");
+const FUZZY_MIN_WORDS = parseInt(process.env.DOC_DUP_FUZZY_MIN_WORDS ?? "15", 10);
 const NUM_HASHES = 128;
 const NUM_BANDS = 32;
 const ROWS_PER_BAND = NUM_HASHES / NUM_BANDS; // 4
@@ -190,6 +190,11 @@ const findSectionSlug = (headings: HeadingEntry[], line: number): string | null 
 
 // ── Tokenisation ───────────────────────────────────────────────────────
 
+// Strip URLs (bare and markdown-link targets) before tokenising so that
+// shared links don't inflate similarity scores.
+const URL_RE = /https?:\/\/[^\s)>\]]+/g;
+const stripUrls = (line: string): string => line.replace(URL_RE, "");
+
 const WORD_RE = /[a-zA-Z0-9_\-'.]+/g;
 
 const tokenise = (content: string, file: string): WordEntry[] => {
@@ -197,7 +202,8 @@ const tokenise = (content: string, file: string): WordEntry[] => {
   const lines = content.split("\n");
   for (const [li, line] of lines.entries()) {
     if (/^```/.test(line) || /^<!--/.test(line) || /^---$/.test(line.trim())) continue;
-    for (const m of line.matchAll(WORD_RE)) {
+    const cleaned = stripUrls(line);
+    for (const m of cleaned.matchAll(WORD_RE)) {
       entries.push({ word: m[0].toLowerCase(), loc: { file, line: li + 1, col: m.index! + 1 } });
     }
   }
@@ -314,7 +320,7 @@ const pushParagraph = (
   lines: string[], file: string, startLine: number, endLineExcl: number,
   headings: HeadingEntry[], out: Paragraph[],
 ): void => {
-  const text = lines.join(" ");
+  const text = stripUrls(lines.join(" "));
   const words: string[] = [];
   for (const m of text.matchAll(WORD_RE)) words.push(m[0].toLowerCase());
   if (words.length >= FUZZY_MIN_WORDS) {
@@ -685,7 +691,7 @@ const main = (): void => {
   const filtered = args.filter((a) => !a.startsWith("--"));
   const root = filtered[0] ?? ROOT;
 
-  console.error(`md-fallow: scanning ${root} (min ${MIN_WORDS} exact, fuzzy ≥${(FUZZY_THRESHOLD * 100).toFixed(0)}%, stopwords filtered)`);
+  console.error(`doc-duplication: scanning ${root} (min ${MIN_WORDS} exact, fuzzy ≥${(FUZZY_THRESHOLD * 100).toFixed(0)}%, stopwords filtered)`);
 
   const files = findMarkdownFiles(root);
   if (files.length === 0) { console.error("No markdown files found."); process.exit(0); }
