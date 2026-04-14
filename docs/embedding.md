@@ -683,11 +683,13 @@ end.
 ```
 
 **What the base class handles:**
+
 - `TGarbageCollector.Initialize` / `Shutdown` lifecycle
 - Exception dispatch via virtual `HandleError` (supports `TGocciaError`, `TGocciaThrowValue`, `EGocciaBytecodeThrow` with full source context and colored output)
 - Exit code management (0 = success, 1 = error)
 
 **Overridable hooks:**
+
 - `Execute` (abstract) — your application logic
 - `HandleError(AException)` — customize error display (e.g., JSON output)
 - `GlobalBuiltins` — return `TGocciaGlobalBuiltins` set for optional built-in registration

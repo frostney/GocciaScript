@@ -56,16 +56,19 @@ For **tree-walk execution**, see [Interpreter](interpreter.md); for **bytecode e
 The CLI tools share a two-level application class hierarchy and a declarative option parsing system.
 
 **Application classes:**
+
 - `TGocciaApplication` (`Goccia.Application.pas`) — embeddable base for any GocciaScript host. Manages GC lifecycle (`Initialize`/`Shutdown`) and unified error handling (`HandleError` virtual). No CLI dependency.
 - `TGocciaCLIApplication` (`Goccia.CLI.Application.pas`) — extends `TGocciaApplication` with CLI concerns: argument parsing, help generation, option registration, and coverage/profiler singleton lifecycle. Tools override `Configure` (register options) and `ExecuteWithPaths` (business logic).
 
 **Option class hierarchy** (`Goccia.CLI.Options.pas`):
+
 - `TGocciaOptionBase` → `TGocciaFlagOption`, `TGocciaStringOption`, `TGocciaIntegerOption`, `TGocciaRepeatableOption`, `TGocciaEnumOption<T>`
 - The parser calls `Option.Apply(Value)` via virtual dispatch — no pointer arithmetic
 - `TGocciaEnumOption<T>` uses RTTI (`GetEnumName` + prefix stripping) to auto-discover valid values
 - Predefined option groups (`TGocciaEngineOptions`, `TGocciaCoverageOptions`, `TGocciaProfilerOptions`) bundle related options with owning lifecycle
 
 **CLI lifecycle** (`TGocciaCLIApplication.Execute`):
+
 1. `Configure` — register option groups and tool-specific flags
 2. `ParseCommandLine` — parse `ParamStr` via virtual `Apply` dispatch
 3. `Validate` — post-parse semantic checks (e.g., conflicting flags)
