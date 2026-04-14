@@ -57,6 +57,8 @@ procedure TScriptLoaderGlobalsTests.TestDetectsStructuredGlobalsFilesByExtension
 begin
   Expect<Boolean>(IsStructuredGlobalsFile('config.json5')).ToBe(True);
   Expect<Boolean>(IsJSON5GlobalsFile('config.json5')).ToBe(True);
+  Expect<Boolean>(IsStructuredGlobalsFile('config.jsonc')).ToBe(True);
+  Expect<Boolean>(IsJSON5GlobalsFile('config.jsonc')).ToBe(True);
   Expect<Boolean>(IsStructuredGlobalsFile('config.toml')).ToBe(True);
   Expect<Boolean>(IsTOMLGlobalsFile('config.toml')).ToBe(True);
   Expect<Boolean>(IsYAMLGlobalsFile('config.toml')).ToBe(False);
