@@ -203,6 +203,7 @@ uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Constants.TypeNames,
   Goccia.Coverage,
   Goccia.DisposalTracker,
   Goccia.Error,
@@ -397,31 +398,31 @@ begin
            AValue.ToNumberLiteral.IsInfinite or
            (Frac(AValue.ToNumberLiteral.Value) <> 0.0) then
           ThrowTypeError('Type ''' + AValue.TypeName +
-            ''' is not assignable to type ''integer''');
+            ''' is not assignable to type ''' + INTEGER_TYPE_NAME + '''');
       end;
     sltFloat:
       begin
         if not (AValue is TGocciaNumberLiteralValue) then
           ThrowTypeError('Type ''' + AValue.TypeName +
-            ''' is not assignable to type ''number''');
+            ''' is not assignable to type ''' + NUMBER_TYPE_NAME + '''');
       end;
     sltBoolean:
       begin
         if not (AValue is TGocciaBooleanLiteralValue) then
           ThrowTypeError('Type ''' + AValue.TypeName +
-            ''' is not assignable to type ''boolean''');
+            ''' is not assignable to type ''' + BOOLEAN_TYPE_NAME + '''');
       end;
     sltString:
       begin
         if not (AValue is TGocciaStringLiteralValue) then
           ThrowTypeError('Type ''' + AValue.TypeName +
-            ''' is not assignable to type ''string''');
+            ''' is not assignable to type ''' + STRING_TYPE_NAME + '''');
       end;
     sltReference:
       begin
         if AValue.IsPrimitive then
           ThrowTypeError('Type ''' + AValue.TypeName +
-            ''' is not assignable to type ''object''');
+            ''' is not assignable to type ''' + OBJECT_TYPE_NAME + '''');
       end;
   else
     // sltUntyped: no runtime check
