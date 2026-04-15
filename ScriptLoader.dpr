@@ -214,7 +214,7 @@ begin
         ParseEnd := GetNanoseconds;
         AParseTimeNanoseconds := ParseEnd - LexEnd;
 
-        if not ASuppressWarnings then
+        if (not ASuppressWarnings) and (not GIsWorkerThread) then
           for I := 0 to Parser.WarningCount - 1 do
           begin
             Warning := Parser.GetWarning(I);
@@ -295,7 +295,7 @@ begin
   if not Assigned(AConsole) then
     Exit;
 
-  AConsole.Enabled := not FSilent.Present;
+  AConsole.Enabled := (not FSilent.Present) and (not GIsWorkerThread);
   if (FOutputPath.Present and (FOutputPath.Value = 'json')) and not FSilent.Present then
     AConsole.OutputLines := AOutputLines
   else
@@ -408,7 +408,8 @@ var
 begin
   Engine := CreateEngine(AFileName, ASource);
   try
-    Engine.SuppressWarnings := (FOutputPath.Present and (FOutputPath.Value = 'json'));
+    Engine.SuppressWarnings := GIsWorkerThread or
+      (FOutputPath.Present and (FOutputPath.Value = 'json'));
     ConfigureConsole(Engine.BuiltinConsole, AOutputLines);
     ApplyDataGlobalsToEngine(Engine);
     StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
@@ -554,6 +555,8 @@ procedure TScriptLoaderApp.PrintHumanReadableResult(const AFileName: string;
 var
   LoadTimeNanoseconds: Int64;
 begin
+  if GIsWorkerThread then Exit;
+
   if AExtension = EXT_GBC then
   begin
     LoadTimeNanoseconds := AReport.Timing.TotalTimeNanoseconds -
@@ -641,16 +644,19 @@ begin
             Report.Timing.LexTimeNanoseconds -
             Report.Timing.ParseTimeNanoseconds -
             Report.Timing.CompileTimeNanoseconds;
-        if (FOutputPath.Present and (FOutputPath.Value = 'json')) then
-          PrintJSONError(E, Report, OutputLines, AFileName)
-        else if E is TGocciaError then
-          WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
-        else if E is TGocciaThrowValue then
-          WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, ASource, IsColorTerminal))
-        else if E is EGocciaBytecodeThrow then
-          WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue, AFileName, ASource, IsColorTerminal))
-        else
-          WriteLn('Fatal error: ', E.Message);
+        if not GIsWorkerThread then
+        begin
+          if (FOutputPath.Present and (FOutputPath.Value = 'json')) then
+            PrintJSONError(E, Report, OutputLines, AFileName)
+          else if E is TGocciaError then
+            WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+          else if E is TGocciaThrowValue then
+            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, ASource, IsColorTerminal))
+          else if E is EGocciaBytecodeThrow then
+            WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue, AFileName, ASource, IsColorTerminal))
+          else
+            WriteLn('Fatal error: ', E.Message);
+        end;
         ExitCode := 1;
       end;
     end;
