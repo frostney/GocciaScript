@@ -270,7 +270,8 @@ begin
     except
       on E: EStreamError do
       begin
-        WriteLn('Error loading test file: ', E.Message);
+        if not GIsWorkerThread then
+          WriteLn('Error loading test file: ', E.Message);
         MarkLoadError(ScriptResult, AFileName, E.Message);
         Result := MakeEmptyTestResult(ScriptResult);
         Exit;
@@ -284,11 +285,18 @@ begin
       SilentCon := nil;
       Engine := CreateEngine(AFileName, Source);
       try
-        if FSilent.Present then
+        if FSilent.Present or GIsWorkerThread then
         begin
           SilentCon := TGocciaTestConsole.Create;
           SilentCon.Silence(Engine.BuiltinConsole.BuiltinObject);
           Engine.SuppressWarnings := True;
+          // Note: TGocciaTestAssertions.SuppressOutput is intentionally NOT
+          // set here.  Under -O4 on x86_64-darwin the inlined property
+          // access causes a hang — an FPC code-gen issue.  The Silence()
+          // call above already replaces the JS console methods with no-ops,
+          // which suppresses most test-framework output.  Any remaining
+          // Pascal-level WriteLn calls in the assertions builtin are
+          // guarded by GIsWorkerThread at each call site.
         end;
 
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
@@ -310,18 +318,21 @@ begin
       begin
         if E is TGocciaError then
         begin
-          WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal));
+          if not GIsWorkerThread then
+            WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal));
           MarkLoadError(ScriptResult, AFileName, TGocciaError(E).GetDetailedMessage);
         end
         else if E is TGocciaThrowValue then
         begin
-          WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal));
+          if not GIsWorkerThread then
+            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal));
           MarkLoadError(ScriptResult, AFileName,
             FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, False));
         end
         else
         begin
-          WriteLn('Fatal error: ', E.Message);
+          if not GIsWorkerThread then
+            WriteLn('Fatal error: ', E.Message);
           MarkLoadError(ScriptResult, AFileName, E.Message);
         end;
         Result := MakeEmptyTestResult(ScriptResult);
@@ -359,7 +370,8 @@ begin
     except
       on E: EStreamError do
       begin
-        WriteLn('Error loading test file: ', E.Message);
+        if not GIsWorkerThread then
+          WriteLn('Error loading test file: ', E.Message);
         MarkLoadError(ScriptResult, AFileName, E.Message);
         Result := MakeEmptyTestResult(ScriptResult);
         Exit;
@@ -398,7 +410,7 @@ begin
               TGocciaCoverageTracker.Instance.RegisterSourceFile(
                 AFileName, CountExecutableLines(Lexer.SourceLines));
 
-            if not FSilent.Present then
+            if (not FSilent.Present) and (not GIsWorkerThread) then
               for I := 0 to Parser.WarningCount - 1 do
               begin
                 Warning := Parser.GetWarning(I);
@@ -454,18 +466,21 @@ begin
       begin
         if E is TGocciaError then
         begin
-          WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal));
+          if not GIsWorkerThread then
+            WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal));
           MarkLoadError(ScriptResult, AFileName, TGocciaError(E).GetDetailedMessage);
         end
         else if E is TGocciaThrowValue then
         begin
-          WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal));
+          if not GIsWorkerThread then
+            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal));
           MarkLoadError(ScriptResult, AFileName,
             FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, False));
         end
         else
         begin
-          WriteLn('Fatal error: ', E.Message);
+          if not GIsWorkerThread then
+            WriteLn('Fatal error: ', E.Message);
           MarkLoadError(ScriptResult, AFileName, E.Message);
         end;
         Result := MakeEmptyTestResult(ScriptResult);

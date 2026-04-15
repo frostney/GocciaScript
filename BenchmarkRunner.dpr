@@ -245,12 +245,14 @@ begin
     except
       on E: TGocciaError do
       begin
-        WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
+        if not GIsWorkerThread then
+          WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
         MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
       end;
       on E: TGocciaThrowValue do
       begin
-        WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, Source, IsColorTerminal));
+        if not GIsWorkerThread then
+          WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, Source, IsColorTerminal));
         MakeErrorFileResult(AFileName,
           FormatThrowDetail(E.Value, AFileName, Source, False), AReporter);
       end;
@@ -366,18 +368,21 @@ begin
     except
       on E: TGocciaError do
       begin
-        WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
+        if not GIsWorkerThread then
+          WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
         MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
       end;
       on E: TGocciaThrowValue do
       begin
-        WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, Source, IsColorTerminal));
+        if not GIsWorkerThread then
+          WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, Source, IsColorTerminal));
         MakeErrorFileResult(AFileName,
           FormatThrowDetail(E.Value, AFileName, Source, False), AReporter);
       end;
       on E: EGocciaBytecodeThrow do
       begin
-        WriteLn(StdErr, FormatThrowDetail(E.ThrownValue, AFileName, Source, IsColorTerminal));
+        if not GIsWorkerThread then
+          WriteLn(StdErr, FormatThrowDetail(E.ThrownValue, AFileName, Source, IsColorTerminal));
         MakeErrorFileResult(AFileName,
           FormatThrowDetail(E.ThrownValue, AFileName, Source, False), AReporter);
       end;

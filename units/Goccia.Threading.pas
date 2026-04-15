@@ -22,6 +22,14 @@ uses
   Classes,
   SyncObjs;
 
+threadvar
+  { True on worker threads spawned by TGocciaThreadPool.  Code that can
+    run on either the main thread or a worker should check this flag
+    before calling WriteLn, because FPC's standard I/O is not
+    thread-safe — concurrent WriteLn calls corrupt the shared Output
+    TextRec buffer and cause access violations. }
+  GIsWorkerThread: Boolean;
+
 type
   { Callback executed on each worker thread for a single file.
     Implementations must NOT call WriteLn directly — capture output in
@@ -146,6 +154,7 @@ uses
 
 procedure InitThreadRuntime(AEnableCoverage: Boolean);
 begin
+  GIsWorkerThread := True;
   TGarbageCollector.Initialize;
   // Disable automatic GC on worker threads. Shared immutable objects
   // (primitive singletons, shared prototypes) have a single FGCMark field
