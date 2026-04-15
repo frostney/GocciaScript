@@ -17,7 +17,6 @@ uses
 type
   TGocciaGlobalArrayBuffer = class(TGocciaBuiltin)
   private
-    class var FStaticMembers: array of TGocciaMemberDefinition;
     FArrayBufferConstructor: TGocciaNativeFunctionValue;
   published
     function ArrayBufferConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -34,6 +33,9 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Values.ErrorHelper,
   Goccia.Values.TypedArrayValue;
+
+threadvar
+  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 const
   NO_MAX_BYTE_LENGTH = -1;

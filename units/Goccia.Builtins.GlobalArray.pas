@@ -16,7 +16,6 @@ uses
 type
   TGocciaGlobalArray = class(TGocciaBuiltin)
   private
-    class var FStaticMembers: array of TGocciaMemberDefinition;
   protected
   published
     function IsArray(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -50,6 +49,9 @@ uses
   Goccia.Values.PromiseValue,
   Goccia.Values.SymbolValue,
   Goccia.VM.Exception;
+
+threadvar
+  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 constructor TGocciaGlobalArray.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var

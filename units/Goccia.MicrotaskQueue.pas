@@ -20,8 +20,6 @@ type
   end;
 
   TGocciaMicrotaskQueue = class
-  private class var
-    FInstance: TGocciaMicrotaskQueue;
   private
     FQueue: TList<TGocciaMicrotask>;
   public
@@ -51,20 +49,23 @@ uses
   Goccia.Values.PromiseValue,
   Goccia.VM.Exception;
 
+threadvar
+  MicrotaskQueueThreadInstance: TGocciaMicrotaskQueue;
+
 class function TGocciaMicrotaskQueue.Instance: TGocciaMicrotaskQueue;
 begin
-  Result := FInstance;
+  Result := MicrotaskQueueThreadInstance;
 end;
 
 class procedure TGocciaMicrotaskQueue.Initialize;
 begin
-  if not Assigned(FInstance) then
-    FInstance := TGocciaMicrotaskQueue.Create;
+  if not Assigned(MicrotaskQueueThreadInstance) then
+    MicrotaskQueueThreadInstance := TGocciaMicrotaskQueue.Create;
 end;
 
 class procedure TGocciaMicrotaskQueue.Shutdown;
 begin
-  FreeAndNil(FInstance);
+  FreeAndNil(MicrotaskQueueThreadInstance);
 end;
 
 constructor TGocciaMicrotaskQueue.Create;

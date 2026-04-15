@@ -55,8 +55,6 @@ type
   TGocciaCoverageFileMap = TOrderedStringMap<TGocciaFileCoverage>;
 
   TGocciaCoverageTracker = class
-  private class var
-    FInstance: TGocciaCoverageTracker;
   private
     FFiles: TGocciaCoverageFileMap;
     FEnabled: Boolean;
@@ -79,6 +77,11 @@ type
       const ALine, AColumn, ABranchIndex: Integer);
 
     function GetFileCoverage(const AFilePath: string): TGocciaFileCoverage;
+
+    { Merge all coverage data from ASource into this tracker.
+      Line hits and branch hits are summed. Files present in ASource
+      but not in this tracker are created with 0 executable lines. }
+    procedure MergeFrom(const ASource: TGocciaCoverageTracker);
 
     property Files: TGocciaCoverageFileMap read FFiles;
     property Enabled: Boolean read FEnabled write FEnabled;
@@ -405,20 +408,23 @@ end;
 
 { TGocciaCoverageTracker }
 
+threadvar
+  CoverageTrackerThreadInstance: TGocciaCoverageTracker;
+
 class function TGocciaCoverageTracker.Instance: TGocciaCoverageTracker;
 begin
-  Result := FInstance;
+  Result := CoverageTrackerThreadInstance;
 end;
 
 class procedure TGocciaCoverageTracker.Initialize;
 begin
-  if not Assigned(FInstance) then
-    FInstance := TGocciaCoverageTracker.Create;
+  if not Assigned(CoverageTrackerThreadInstance) then
+    CoverageTrackerThreadInstance := TGocciaCoverageTracker.Create;
 end;
 
 class procedure TGocciaCoverageTracker.Shutdown;
 begin
-  FreeAndNil(FInstance);
+  FreeAndNil(CoverageTrackerThreadInstance);
 end;
 
 constructor TGocciaCoverageTracker.Create;
@@ -486,6 +492,41 @@ function TGocciaCoverageTracker.GetFileCoverage(
 begin
   if not FFiles.TryGetValue(AFilePath, Result) then
     Result := nil;
+end;
+
+procedure TGocciaCoverageTracker.MergeFrom(const ASource: TGocciaCoverageTracker);
+var
+  IterState, I: Integer;
+  Key: string;
+  SrcFile, DstFile: TGocciaFileCoverage;
+  Branch: TGocciaCoverageBranch;
+begin
+  if (ASource = nil) or (ASource.Files = nil) then Exit;
+
+  IterState := 0;
+  while ASource.Files.GetNextEntry(IterState, Key, SrcFile) do
+  begin
+    DstFile := GetOrCreateFile(Key);
+    { If the destination was auto-created with 0 executable lines but the
+      source has a proper count, adopt it. }
+    if (DstFile.ExecutableLines = 0) and (SrcFile.ExecutableLines > 0) then
+      DstFile.FExecutableLines := SrcFile.ExecutableLines;
+
+    { Merge line hits — sum counts for each line. }
+    for I := 1 to SrcFile.LineHitCount - 1 do
+      if SrcFile.GetLineHitCount(I) > 0 then
+        DstFile.RecordLineHit(I);
+
+    { Merge branch hits. }
+    for I := 0 to SrcFile.Branches.Count - 1 do
+    begin
+      Branch := SrcFile.Branches[I];
+      if Branch.HitCount > 0 then
+        DstFile.RecordBranchHit(Branch.Line, Branch.Column, Branch.BranchIndex)
+      else
+        DstFile.EnsureBranchExists(Branch.Line, Branch.Column, Branch.BranchIndex);
+    end;
+  end;
 end;
 
 end.

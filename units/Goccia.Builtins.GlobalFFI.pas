@@ -14,8 +14,6 @@ uses
 
 type
   TGocciaGlobalFFI = class(TGocciaBuiltin)
-  private
-    class var FStaticMembers: array of TGocciaMemberDefinition;
   published
     function FFIOpen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FFINullptrGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -35,6 +33,9 @@ uses
   Goccia.Values.FFILibrary,
   Goccia.Values.FFIPointer,
   Goccia.Values.ObjectPropertyDescriptor;
+
+threadvar
+  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 const
   {$IFDEF DARWIN}

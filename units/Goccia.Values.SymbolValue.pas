@@ -12,9 +12,6 @@ uses
 type
   TGocciaSymbolValue = class(TGocciaValue)
   private class var
-    FSharedPrototype: TGocciaValue;
-    FMethodHost: TGocciaSymbolValue;
-    FPrototypeMembers: array of TGocciaMemberDefinition;
     FWellKnownIterator: TGocciaSymbolValue;
     FWellKnownMatch: TGocciaSymbolValue;
     FWellKnownMatchAll: TGocciaSymbolValue;
@@ -85,9 +82,14 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue;
 
-var
-  GNextSymbolId: Integer = 0;
-  GSymbolRegistry: THashMap<Integer, TGocciaSymbolValue> = nil;
+threadvar
+  FSharedPrototype: TGocciaValue;
+  FMethodHost: TGocciaSymbolValue;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+threadvar
+  GNextSymbolId: Integer;
+  GSymbolRegistry: THashMap<Integer, TGocciaSymbolValue>;
 
 function TGocciaSymbolValue.SymbolToString(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;

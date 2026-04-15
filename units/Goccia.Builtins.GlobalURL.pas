@@ -17,8 +17,6 @@ uses
 
 type
   TGocciaGlobalURL = class(TGocciaBuiltin)
-  private
-    class var FStaticMembers: array of TGocciaMemberDefinition;
   published
     // WHATWG URL §4.7.3 URL.canParse(url[, base])
     function CanParse(const AArgs: TGocciaArgumentsCollection;
@@ -50,6 +48,9 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.URLSearchParamsValue,
   Goccia.Values.URLValue;
+
+threadvar
+  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 { TGocciaGlobalURL }
 

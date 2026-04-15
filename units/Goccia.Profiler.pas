@@ -37,13 +37,11 @@ type
     0..OPCODE_PAIR_SIZE - 1] of Int64;
   PGocciaOpcodePairArray = ^TGocciaOpcodePairArray;
 
-var
+threadvar
   GProfilingAllocations: Boolean;
 
 type
   TGocciaProfiler = class
-  private class var
-    FInstance: TGocciaProfiler;
   private
     FMode: TGocciaProfileMode;
     FEnabled: Boolean;
@@ -97,20 +95,23 @@ uses
 
 { TGocciaProfiler }
 
+threadvar
+  ProfilerThreadInstance: TGocciaProfiler;
+
 class function TGocciaProfiler.Instance: TGocciaProfiler;
 begin
-  Result := FInstance;
+  Result := ProfilerThreadInstance;
 end;
 
 class procedure TGocciaProfiler.Initialize;
 begin
-  if not Assigned(FInstance) then
-    FInstance := TGocciaProfiler.Create;
+  if not Assigned(ProfilerThreadInstance) then
+    ProfilerThreadInstance := TGocciaProfiler.Create;
 end;
 
 class procedure TGocciaProfiler.Shutdown;
 begin
-  FreeAndNil(FInstance);
+  FreeAndNil(ProfilerThreadInstance);
 end;
 
 constructor TGocciaProfiler.Create;

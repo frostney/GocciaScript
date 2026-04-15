@@ -103,10 +103,10 @@ type
     UsingErrorReg: UInt8;
   end;
 
-var
-  GBreakJumps: TList<Integer> = nil;
+threadvar
+  GBreakJumps: TList<Integer>;
   GPendingFinally: TList<TPendingFinallyEntry>;
-  GBreakFinallyBase: Integer = 0;
+  GBreakFinallyBase: Integer;
 
 procedure CompileExpressionStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExpressionStatement);
@@ -570,10 +570,9 @@ begin
   end;
 end;
 
-var
+threadvar
   // Module-level stack of using resource entries for the current block.
   // Populated by CompileUsingDeclaration, consumed by CompileBlockStatement.
-  // NOTE: Not thread-safe; compiler is assumed to be single-threaded.
   GUsingResources: TList<TUsingResourceEntry>;
 
 // TC39 Explicit Resource Management: compile using / await using declaration.

@@ -3,6 +3,7 @@ program REPL;
 {$I units/Goccia.inc}
 
 uses
+  {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes,
   Generics.Collections,
   SysUtils,

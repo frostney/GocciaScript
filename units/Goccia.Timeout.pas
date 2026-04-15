@@ -23,10 +23,10 @@ const
   TIMEOUT_CHECK_INTERVAL = 1024;
   TIMEOUT_ALWAYS_CHECK_THRESHOLD_MS = 16;
 
-var
-  GTimeoutMilliseconds: Integer = 0;
-  GStartNanoseconds: Int64 = 0;
-  GCheckCounter: Integer = 0;
+threadvar
+  GTimeoutMilliseconds: Integer;
+  GStartNanoseconds: Int64;
+  GCheckCounter: Integer;
 
 procedure StartExecutionTimeout(const ATimeoutMilliseconds: Integer);
 begin

@@ -18,7 +18,6 @@ uses
 type
   TGocciaConsole = class(TGocciaBuiltin)
   private
-    class var FStaticMembers: array of TGocciaMemberDefinition;
     FTimers: TGocciaObjectValue;
     FCounters: TGocciaObjectValue;
     FGroupDepth: Integer;
@@ -67,6 +66,9 @@ uses
   TimingUtils,
 
   Goccia.Values.ArrayValue;
+
+threadvar
+  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 constructor TGocciaConsole.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var

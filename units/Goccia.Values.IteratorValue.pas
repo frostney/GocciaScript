@@ -12,12 +12,6 @@ uses
 
 type
   TGocciaIteratorValue = class(TGocciaObjectValue)
-  private
-    class var FSharedIteratorPrototype: TGocciaObjectValue;
-    class var FPrototypeMethodHost: TGocciaIteratorValue;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-    class var FStaticMembers: array of TGocciaMemberDefinition;
-  private
   public
     function IteratorNext(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IteratorSelf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -74,6 +68,12 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
+
+threadvar
+  FSharedIteratorPrototype: TGocciaObjectValue;
+  FPrototypeMethodHost: TGocciaIteratorValue;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 procedure CloseIteratorPreservingError(const AIterator: TGocciaIteratorValue);
 begin

@@ -26,10 +26,6 @@ type
 
   TGocciaTypedArrayValue = class(TGocciaInstanceValue)
   private
-    class var FShared: TGocciaSharedPrototype;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-    class var FUint8Prototype: TGocciaObjectValue;
-  private
     FBufferValue: TGocciaValue;
     FBufferData: TBytes;
     FByteOffset: Integer;
@@ -139,6 +135,11 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
+
+threadvar
+  FShared: TGocciaSharedPrototype;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+  FUint8Prototype: TGocciaObjectValue;
 
 class function TGocciaTypedArrayValue.BytesPerElement(const AKind: TGocciaTypedArrayKind): Integer;
 begin

@@ -28,9 +28,6 @@ type
 
   TGocciaURLSearchParamsValue = class(TGocciaInstanceValue)
   private
-    class var FShared: TGocciaSharedPrototype;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-  private
     FList: TGocciaURLSearchParamList;
     // Back-reference to the owning URL object for update notifications.
     // Stored as TObject to avoid a circular interface-section dependency.
@@ -118,6 +115,10 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
   Goccia.Values.URLValue;
+
+threadvar
+  FShared: TGocciaSharedPrototype;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 { TGocciaURLSearchParamsValue }
 

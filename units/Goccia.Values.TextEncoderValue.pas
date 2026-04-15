@@ -15,9 +15,6 @@ uses
 type
   TGocciaTextEncoderValue = class(TGocciaInstanceValue)
   private
-    class var FShared: TGocciaSharedPrototype;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-  private
     // Getter
     function EncodingGetter(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -49,6 +46,10 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.TypedArrayValue;
+
+threadvar
+  FShared: TGocciaSharedPrototype;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 const
   ENCODING_UTF8 = 'utf-8';

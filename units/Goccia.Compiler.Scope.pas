@@ -337,8 +337,8 @@ begin
   Result := '';
 end;
 
-var
-  GClassPrivateCounter: Integer = 0;
+threadvar
+  GClassPrivateCounter: Integer;
 
 function NextClassPrivatePrefix: string;
 begin

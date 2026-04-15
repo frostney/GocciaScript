@@ -23,7 +23,6 @@ type
   private
     FGlobalRegistry: TOrderedStringMap<TGocciaSymbolValue>;
     FSymbolFunction: TGocciaNativeFunctionValue;
-    class var FStaticMembers: array of TGocciaMemberDefinition;
 
     // Well-known symbols
     FIteratorSymbol: TGocciaSymbolValue;
@@ -46,6 +45,9 @@ uses
   Goccia.Constants.SymbolNames,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue;
+
+threadvar
+  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 constructor TGocciaGlobalSymbol.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var

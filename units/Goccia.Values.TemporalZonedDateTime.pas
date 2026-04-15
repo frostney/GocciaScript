@@ -14,9 +14,6 @@ uses
 type
   TGocciaTemporalZonedDateTimeValue = class(TGocciaObjectValue)
   private
-    class var FShared: TGocciaSharedPrototype;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-  private
     FEpochMilliseconds: Int64;
     FSubMillisecondNanoseconds: Integer;
     FTimeZone: string;
@@ -95,6 +92,10 @@ uses
   Goccia.Values.TemporalPlainDate,
   Goccia.Values.TemporalPlainDateTime,
   Goccia.Values.TemporalPlainTime;
+
+threadvar
+  FShared: TGocciaSharedPrototype;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 const
   MILLISECONDS_PER_SECOND = 1000;

@@ -154,7 +154,7 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
-var
+threadvar
   GPublishedGetterHosts: TObjectList<TObject>;
 
 function KindToString(const AKind: TGocciaMemberKind): string;
@@ -476,6 +476,8 @@ var
 begin
   GetterHost := TGocciaPublishedGetterHost.Create(
     AInstanceClass, APascalPropertyName, True);
+  if not Assigned(GPublishedGetterHosts) then
+    GPublishedGetterHosts := TObjectList<TObject>.Create(True);
   GPublishedGetterHosts.Add(GetterHost);
   Result := DefineAccessor(AExposedName, GetterHost.Invoke, nil, AFlags, AKind);
 end;
@@ -488,6 +490,8 @@ var
 begin
   GetterHost := TGocciaPublishedGetterHost.Create(
     AMethodHost.ClassType, APascalPropertyName, False, AMethodHost);
+  if not Assigned(GPublishedGetterHosts) then
+    GPublishedGetterHosts := TObjectList<TObject>.Create(True);
   GPublishedGetterHosts.Add(GetterHost);
   Result := DefineAccessor(AExposedName, GetterHost.Invoke, nil, AFlags, AKind);
 end;
@@ -761,8 +765,5 @@ end;
 
 initialization
   GPublishedGetterHosts := TObjectList<TObject>.Create(True);
-
-finalization
-  GPublishedGetterHosts.Free;
 
 end.

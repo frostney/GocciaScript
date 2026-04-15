@@ -15,8 +15,6 @@ uses
 
 type
   TGocciaMath = class(TGocciaBuiltin)
-  private
-    class var FStaticMembers: array of TGocciaMemberDefinition;
   published
     function MathAbs(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MathFloor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -79,6 +77,9 @@ uses
   Goccia.Values.IteratorValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
+
+threadvar
+  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 { TGocciaMath }
 

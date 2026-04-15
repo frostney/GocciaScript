@@ -35,7 +35,7 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
 
-var
+threadvar
   GRegExpPrototype: TGocciaObjectValue;
 
 function GetRegExpPrototype: TGocciaValue;

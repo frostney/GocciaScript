@@ -23,7 +23,6 @@ uses
 type
   TGocciaJSONBuiltin = class(TGocciaBuiltin)
   private
-    class var FStaticMembers: array of TGocciaMemberDefinition;
     FParser: TGocciaJSONParser;
     FReplacerTraversalStack: TList<TGocciaObjectValue>;
     FReviverSourceIndex: Integer;
@@ -60,6 +59,9 @@ uses
   Goccia.Values.HoleValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
+
+threadvar
+  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 constructor TGocciaJSONBuiltin.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var

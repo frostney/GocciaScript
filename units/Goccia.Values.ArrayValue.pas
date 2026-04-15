@@ -15,10 +15,6 @@ uses
 type
   TGocciaArrayValue = class(TGocciaInstanceValue)
   private
-    class var FSharedArrayPrototype: TGocciaObjectValue;
-    class var FPrototypeMethodHost: TGocciaArrayValue;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-
     // Helper methods for reducing duplication
     function ValidateArrayMethodCall(const AMethodName: string; const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue; const ARequiresCallback: Boolean = True): TGocciaValue;
@@ -125,6 +121,11 @@ uses
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.SymbolValue,
   Goccia.Values.ToPrimitive;
+
+threadvar
+  FSharedArrayPrototype: TGocciaObjectValue;
+  FPrototypeMethodHost: TGocciaArrayValue;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 function DefaultCompare(constref A, B: TGocciaValue): Integer;
 var

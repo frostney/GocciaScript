@@ -19,10 +19,6 @@ type
   private
     FPrimitive: TGocciaStringLiteralValue;
 
-    class var FSharedStringPrototype: TGocciaObjectValue;
-    class var FPrototypeMethodHost: TGocciaStringObjectValue;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-
     function ExtractStringValue(const AValue: TGocciaValue): string;
   public
     constructor Create(const APrimitive: TGocciaStringLiteralValue; const AClass: TGocciaClassValue = nil);
@@ -99,6 +95,11 @@ uses
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.RegExp,
   Goccia.Values.SymbolValue;
+
+threadvar
+  FSharedStringPrototype: TGocciaObjectValue;
+  FPrototypeMethodHost: TGocciaStringObjectValue;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 { TGocciaStringObjectValue }
 

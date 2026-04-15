@@ -81,6 +81,8 @@ printf "const x = 2 + 2; x;" | ./build/ScriptLoader # Execute stdin source
 ./build/TestRunner tests --coverage # Run tests with line and branch coverage
 ./build/TestRunner tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov # Coverage with lcov output
 ./build/TestRunner tests --coverage --coverage-format=json --coverage-output=coverage.json # Coverage with JSON output
+./build/TestRunner tests --jobs=4 # Run tests with 4 parallel workers
+./build/TestRunner tests -j 1 # Force sequential execution (no threading)
 ./build/BenchmarkRunner benchmarks/ # Run all benchmarks
 ./build/BenchmarkRunner benchmarks --import-map=imports.json # Run benchmarks with an explicit import map
 ./build/BenchmarkRunner benchmarks/fibonacci.js # Run a specific benchmark
@@ -89,6 +91,7 @@ printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./bu
 ./build/BenchmarkRunner benchmarks --format=console --format=json --output=out.json # Console + JSON
 ./build/BenchmarkRunner benchmarks --no-progress # Suppress progress (CI)
 ./build/BenchmarkRunner benchmarks --mode=bytecode # Benchmarks via the Goccia bytecode VM
+./build/BenchmarkRunner benchmarks --jobs=4 # Run benchmarks with 4 parallel workers
 ```
 
 ### Compile and run (common workflows)

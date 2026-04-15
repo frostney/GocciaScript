@@ -20,7 +20,6 @@ uses
 type
   TGocciaJSONLBuiltin = class(TGocciaBuiltin)
   private
-    class var FStaticMembers: array of TGocciaMemberDefinition;
     FParser: TGocciaJSONLParser;
 
     class function ClampOffset(const AValue, ALimit: Integer): Integer; static;
@@ -49,6 +48,9 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
+
+threadvar
+  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 constructor TGocciaJSONLBuiltin.Create(const AName: string;
   const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);

@@ -258,6 +258,7 @@ Both modes must pass. The `--asi` flag enables automatic semicolon insertion tes
 | `--no-results` | Suppress test results summary |
 | `--exit-on-first-failure` | Stop on first test failure |
 | `--silent` | Suppress all console output from test scripts |
+| `--jobs=N` / `-j N` | Number of parallel worker threads (default: CPU count) |
 
 ```bash
 # CI-friendly: no progress, stop on first failure
@@ -265,6 +266,9 @@ Both modes must pass. The `--asi` flag enables automatic semicolon insertion tes
 
 # Silent mode: only show results, suppress script console output
 ./build/TestRunner tests --silent
+
+# Run tests with 4 parallel workers; --jobs=1 forces sequential execution
+./build/TestRunner tests --jobs=4
 ```
 
 **Official YAML Suite**

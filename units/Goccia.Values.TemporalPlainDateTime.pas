@@ -14,9 +14,6 @@ uses
 type
   TGocciaTemporalPlainDateTimeValue = class(TGocciaObjectValue)
   private
-    class var FShared: TGocciaSharedPrototype;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-  private
     FYear: Integer;
     FMonth: Integer;
     FDay: Integer;
@@ -98,6 +95,10 @@ uses
   Goccia.Values.TemporalPlainTime,
   Goccia.Values.TemporalPlainYearMonth,
   Goccia.Values.TemporalZonedDateTime;
+
+threadvar
+  FShared: TGocciaSharedPrototype;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 function AsPlainDateTime(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainDateTimeValue;
 begin

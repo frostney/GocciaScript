@@ -18,10 +18,6 @@ uses
 type
   TGocciaFFIPointerValue = class(TGocciaObjectValue)
   private
-    class var FShared: TGocciaSharedPrototype;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-    class var FNullPointer: TGocciaFFIPointerValue;
-  private
     FAddress: Pointer;
 
     procedure InitializePrototype;
@@ -49,6 +45,11 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
+
+threadvar
+  FShared: TGocciaSharedPrototype;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+  FNullPointer: TGocciaFFIPointerValue;
 
 const
   FFI_POINTER_TAG = 'FFIPointer';

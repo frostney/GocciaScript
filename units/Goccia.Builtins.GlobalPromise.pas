@@ -17,7 +17,6 @@ uses
 type
   TGocciaGlobalPromise = class(TGocciaBuiltin)
   private
-    class var FStaticMembers: array of TGocciaMemberDefinition;
     FPromiseConstructor: TGocciaNativeFunctionValue;
 
     function ExtractPromiseArray(const AArgs: TGocciaArgumentsCollection): TGocciaArrayValue;
@@ -53,6 +52,9 @@ uses
   Goccia.Values.PromiseValue,
   Goccia.Values.SetValue,
   Goccia.VM.Exception;
+
+threadvar
+  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 type
   TPromiseAllState = class(TGocciaObjectValue)

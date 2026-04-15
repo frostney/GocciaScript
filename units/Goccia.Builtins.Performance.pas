@@ -40,10 +40,6 @@ type
 
   TGocciaPerformance = class(TGocciaBuiltin)
   private
-    class var FShared: TGocciaSharedPrototype;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-    class var FPrototypeMethodHost: TGocciaPerformancePrototypeHost;
-
     class procedure InitializePrototype;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
@@ -62,6 +58,11 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
+
+threadvar
+  FShared: TGocciaSharedPrototype;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+  FPrototypeMethodHost: TGocciaPerformancePrototypeHost;
 
 function RequirePerformanceThis(const AThisValue: TGocciaValue): TGocciaPerformanceValue;
 begin
@@ -90,7 +91,7 @@ begin
   FTimeOriginMonotonicNanoseconds := (MonotonicBefore + MonotonicAfter) div 2;
 
   TGocciaPerformance.InitializePrototype;
-  FPrototype := TGocciaPerformance.FShared.Prototype;
+  FPrototype := FShared.Prototype;
 end;
 
 { TGocciaPerformancePrototypeHost }

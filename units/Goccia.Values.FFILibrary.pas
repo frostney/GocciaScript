@@ -15,9 +15,6 @@ uses
 type
   TGocciaFFILibraryValue = class(TGocciaObjectValue)
   private
-    class var FShared: TGocciaSharedPrototype;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-  private
     FHandle: TGocciaFFILibraryHandle;
 
     procedure InitializePrototype;
@@ -58,6 +55,10 @@ uses
   Goccia.Values.SharedArrayBufferValue,
   Goccia.Values.SymbolValue,
   Goccia.Values.TypedArrayValue;
+
+threadvar
+  FShared: TGocciaSharedPrototype;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 const
   FFI_LIBRARY_TAG = 'FFILibrary';

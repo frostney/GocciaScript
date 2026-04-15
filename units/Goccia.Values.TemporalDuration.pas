@@ -14,9 +14,6 @@ uses
 type
   TGocciaTemporalDurationValue = class(TGocciaObjectValue)
   private
-    class var FShared: TGocciaSharedPrototype;
-    class var FPrototypeMembers: array of TGocciaMemberDefinition;
-  private
     FYears: Int64;
     FMonths: Int64;
     FWeeks: Int64;
@@ -84,6 +81,10 @@ uses
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor;
+
+threadvar
+  FShared: TGocciaSharedPrototype;
+  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 function AsDuration(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalDurationValue;
 begin

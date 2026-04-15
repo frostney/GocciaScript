@@ -15,8 +15,6 @@ uses
 
 type
   TGocciaGlobalNumber = class(TGocciaBuiltin)
-  private
-    class var FStaticMembers: array of TGocciaMemberDefinition;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   published
@@ -37,6 +35,9 @@ uses
   Goccia.Arguments.Validator,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor;
+
+threadvar
+  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 constructor TGocciaGlobalNumber.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
