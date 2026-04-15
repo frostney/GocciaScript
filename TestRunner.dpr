@@ -218,6 +218,12 @@ begin
       end;
     end;
 
+    if GetJobCount(Files.Count) > 1 then
+      WriteLn(SysUtils.Format('Running %d files with %d workers',
+        [Files.Count, GetJobCount(Files.Count)]))
+    else if not FNoProgress.Present then
+      WriteLn(SysUtils.Format('Running %d files', [Files.Count]));
+
     if Files.Count = 1 then
     begin
       if not FNoProgress.Present then
@@ -712,9 +718,6 @@ begin
     WorkerData[I].ErrorMessage := '';
     SetLength(WorkerData[I].FailedTestNames, 0);
   end;
-
-  if not FNoProgress.Present then
-    WriteLn(SysUtils.Format('Running %d files with %d workers...', [AFiles.Count, AJobCount]));
 
   // Force all shared prototypes to be initialised on the main thread
   // before any worker thread starts, avoiding class-var race conditions.

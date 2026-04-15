@@ -136,6 +136,11 @@ printf "const f = () => f(); f();" | ./build/ScriptLoader --timeout=100
 # Run tests via bytecode VM
 ./build/TestRunner tests --mode=bytecode
 
+# Control parallel worker threads (default: CPU count; --jobs=1 forces sequential)
+./build/ScriptLoader example.js --jobs=4
+./build/TestRunner tests --jobs=4
+./build/BenchmarkRunner benchmarks --jobs=1
+
 # Run benchmarks via bytecode VM
 ./build/BenchmarkRunner benchmarks --mode=bytecode
 printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/BenchmarkRunner - --mode=bytecode

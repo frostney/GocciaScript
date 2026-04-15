@@ -112,7 +112,6 @@ uses
   Goccia.Error,
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
-  Goccia.SharedPrototype,
   Goccia.Utils,
   Goccia.Utils.Arrays,
   Goccia.Values.ClassHelper,
@@ -332,8 +331,7 @@ begin
     TGocciaClassValue(AConstructor).ReplacePrototype(FSharedArrayPrototype)
   else if AConstructor is TGocciaObjectValue then
     TGocciaObjectValue(AConstructor).AssignProperty(PROP_PROTOTYPE, FSharedArrayPrototype);
-  if not FSharedArrayPrototype.HasProperty(PROP_CONSTRUCTOR) then
-    FSharedArrayPrototype.AssignProperty(PROP_CONSTRUCTOR, AConstructor);
+  FSharedArrayPrototype.AssignProperty(PROP_CONSTRUCTOR, AConstructor);
 end;
 
 destructor TGocciaArrayValue.Destroy;

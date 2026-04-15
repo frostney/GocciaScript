@@ -136,6 +136,9 @@ GocciaScript has 3400+ JavaScript unit tests covering language features, built-i
 # Run a specific test
 ./build.pas testrunner && ./build/TestRunner tests/language/expressions/addition/basic-addition.js
 
+# Run tests with 4 parallel workers
+./build.pas testrunner && ./build/TestRunner tests --jobs=4
+
 # Run tests in standard JavaScript (Vitest) for cross-compatibility
 npx vitest run
 ```
@@ -151,6 +154,9 @@ npx vitest run
 
 # Run a benchmark from stdin
 printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/BenchmarkRunner
+
+# Run benchmarks sequentially (single worker)
+./build/BenchmarkRunner benchmarks --jobs=1
 
 # Export as JSON or CSV
 ./build/BenchmarkRunner benchmarks --format=json --output=results.json

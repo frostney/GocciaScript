@@ -27,6 +27,9 @@ GocciaScript includes a benchmark runner for measuring execution performance. Be
 printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/BenchmarkRunner
 printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/BenchmarkRunner - --mode=bytecode
 
+# Run benchmarks with 2 parallel workers (default: CPU count)
+./build/BenchmarkRunner benchmarks --jobs=2
+
 # Export results in different formats
 ./build/BenchmarkRunner benchmarks --format=json --output=results.json
 ./build/BenchmarkRunner benchmarks --format=csv --output=results.csv

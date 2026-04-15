@@ -748,7 +748,11 @@ begin
     Files := FindAllFiles(APath, ScriptExtensions);
     try
       if GetJobCount(Files.Count) > 1 then
-        RunScriptsParallel(Files, GetJobCount(Files.Count))
+      begin
+        WriteLn(SysUtils.Format('Running %d files with %d workers',
+          [Files.Count, GetJobCount(Files.Count)]));
+        RunScriptsParallel(Files, GetJobCount(Files.Count));
+      end
       else
         for I := 0 to Files.Count - 1 do
         begin

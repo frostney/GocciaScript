@@ -707,6 +707,13 @@ begin
     end;
 
     JobCount := GetJobCount(Files.Count);
+
+    if JobCount > 1 then
+      WriteLn(SysUtils.Format('Running %d files with %d workers',
+        [Files.Count, JobCount]))
+    else if AShowProgress then
+      WriteLn(SysUtils.Format('Running %d files', [Files.Count]));
+
     if JobCount > 1 then
     begin
       { Parallel path: pre-allocate result array, run workers, then
@@ -723,10 +730,6 @@ begin
         WorkerData[I].DurationNanoseconds := 0;
         SetLength(WorkerData[I].Entries, 0);
       end;
-
-      if AShowProgress then
-        WriteLn(SysUtils.Format('Running %d files with %d workers...',
-          [Files.Count, JobCount]));
 
       EnsureSharedPrototypesInitialized(GlobalBuiltins);
 
