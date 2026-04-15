@@ -52,14 +52,18 @@ type
     FResults: TGocciaWorkerResultArray;
     FWorkerProc: TGocciaWorkerProc;
     FCancelled: PBoolean;
+    FCancelOnError: Boolean;
+    FEnableCoverage: Boolean;
+    FCoverageTracker: TObject;  // TGocciaCoverageTracker, kept alive for merge
     FData: Pointer;
   protected
     procedure Execute; override;
   public
     constructor Create(const AWorkItems: TGocciaWorkItemArray;
       AWorkerProc: TGocciaWorkerProc; ACancelled: PBoolean;
-      AData: Pointer);
+      ACancelOnError: Boolean; AEnableCoverage: Boolean; AData: Pointer);
     property Results: TGocciaWorkerResultArray read FResults;
+    property CoverageTracker: TObject read FCoverageTracker;
   end;
 
   { Simple thread pool that partitions files across N workers.
@@ -68,7 +72,10 @@ type
   private
     FWorkerCount: Integer;
     FResults: TGocciaWorkerResultArray;
+    FWorkers: array of TGocciaFileWorker;
     FCancelled: Boolean;
+    FCancelOnError: Boolean;
+    FEnableCoverage: Boolean;
   public
     constructor Create(AWorkerCount: Integer);
 
@@ -81,14 +88,25 @@ type
     { Signal workers to skip remaining files. }
     procedure Cancel;
 
+    { Merge per-worker coverage into the main thread's tracker.
+      Only meaningful when EnableCoverage is True. }
+    procedure MergeCoverageInto(ATarget: TObject);
+
     property Results: TGocciaWorkerResultArray read FResults;
     property WorkerCount: Integer read FWorkerCount;
     property Cancelled: Boolean read FCancelled;
+    { When True, the first worker error automatically cancels remaining files. }
+    { When True, the first worker error automatically cancels remaining files. }
+    property CancelOnError: Boolean read FCancelOnError write FCancelOnError;
+    { When True, each worker initialises a per-thread coverage tracker.
+      After RunAll, use MergeCoverage to collect results. }
+    property EnableCoverage: Boolean read FEnableCoverage write FEnableCoverage;
   end;
 
   { Initialise the thread-local runtime for the calling thread.
-    Must be called at the start of each worker thread. }
-  procedure InitThreadRuntime;
+    Must be called at the start of each worker thread.
+    Set AEnableCoverage to initialise a per-thread coverage tracker. }
+  procedure InitThreadRuntime(AEnableCoverage: Boolean = False);
 
   { Shut down the thread-local runtime for the calling thread.
     Must be called before the worker thread exits. }
@@ -101,13 +119,14 @@ uses
   SysUtils,
 
   Goccia.CallStack,
+  Goccia.Coverage,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Values.Primitives;
 
 { Thread runtime lifecycle }
 
-procedure InitThreadRuntime;
+procedure InitThreadRuntime(AEnableCoverage: Boolean);
 begin
   TGarbageCollector.Initialize;
   // Disable automatic GC on worker threads. Shared immutable objects
@@ -120,10 +139,17 @@ begin
   TGocciaCallStack.Initialize;
   TGocciaMicrotaskQueue.Initialize;
   PinPrimitiveSingletons;
+  if AEnableCoverage then
+  begin
+    TGocciaCoverageTracker.Initialize;
+    TGocciaCoverageTracker.Instance.Enabled := True;
+  end;
 end;
 
 procedure ShutdownThreadRuntime;
 begin
+  // Coverage tracker is NOT shut down here — the main thread reads it
+  // after workers complete, then merges into the main tracker.
   TGocciaMicrotaskQueue.Shutdown;
   TGocciaCallStack.Shutdown;
   TGarbageCollector.Shutdown;
@@ -132,13 +158,17 @@ end;
 { TGocciaFileWorker }
 
 constructor TGocciaFileWorker.Create(const AWorkItems: TGocciaWorkItemArray;
-  AWorkerProc: TGocciaWorkerProc; ACancelled: PBoolean; AData: Pointer);
+  AWorkerProc: TGocciaWorkerProc; ACancelled: PBoolean;
+  ACancelOnError: Boolean; AEnableCoverage: Boolean; AData: Pointer);
 begin
   inherited Create(True); // Create suspended
   FreeOnTerminate := False;
   FWorkItems := AWorkItems;
   FWorkerProc := AWorkerProc;
   FCancelled := ACancelled;
+  FCancelOnError := ACancelOnError;
+  FEnableCoverage := AEnableCoverage;
+  FCoverageTracker := nil;
   FData := AData;
   SetLength(FResults, Length(FWorkItems));
 end;
@@ -148,7 +178,7 @@ var
   I: Integer;
   ConsoleOut, ErrorMsg: string;
 begin
-  InitThreadRuntime;
+  InitThreadRuntime(FEnableCoverage);
   try
     for I := 0 to High(FWorkItems) do
     begin
@@ -182,8 +212,16 @@ begin
           FResults[I].ConsoleOutput := ConsoleOut;
         end;
       end;
+
+      { Cancel remaining files across all workers on first error. }
+      if FCancelOnError and (not FResults[I].Success) then
+        FCancelled^ := True;
     end;
   finally
+    { Detach the coverage tracker before shutting down the runtime so
+      the main thread can read it after the worker completes. }
+    if FEnableCoverage then
+      FCoverageTracker := TGocciaCoverageTracker.Instance;
     ShutdownThreadRuntime;
   end;
 end;
@@ -195,12 +233,13 @@ begin
   inherited Create;
   FWorkerCount := Max(1, AWorkerCount);
   FCancelled := False;
+  FCancelOnError := False;
+  FEnableCoverage := False;
 end;
 
 procedure TGocciaThreadPool.RunAll(const AFiles: TStringList;
   AWorkerProc: TGocciaWorkerProc; AData: Pointer);
 var
-  Workers: array of TGocciaFileWorker;
   WorkItems: array of TGocciaWorkItemArray;
   FileCount, I, WorkerIdx, ResultIdx: Integer;
 begin
@@ -225,56 +264,62 @@ begin
   end;
 
   // Create and start workers
-  SetLength(Workers, FWorkerCount);
+  SetLength(FWorkers, FWorkerCount);
   for I := 0 to FWorkerCount - 1 do
   begin
     if Length(WorkItems[I]) > 0 then
     begin
-      Workers[I] := TGocciaFileWorker.Create(WorkItems[I], AWorkerProc,
-        @FCancelled, AData);
-      Workers[I].Start;
+      FWorkers[I] := TGocciaFileWorker.Create(WorkItems[I], AWorkerProc,
+        @FCancelled, FCancelOnError, FEnableCoverage, AData);
+      FWorkers[I].Start;
     end
     else
-      Workers[I] := nil;
+      FWorkers[I] := nil;
   end;
 
   // Wait for all workers
   for I := 0 to FWorkerCount - 1 do
-    if Assigned(Workers[I]) then
-      Workers[I].WaitFor;
+    if Assigned(FWorkers[I]) then
+      FWorkers[I].WaitFor;
 
   // Collect results in original file order
   SetLength(FResults, FileCount);
   for I := 0 to FWorkerCount - 1 do
   begin
-    if Assigned(Workers[I]) then
+    if Assigned(FWorkers[I]) then
     begin
       // Check for unhandled exceptions in the worker thread
-      if Assigned(Workers[I].FatalException) then
+      if Assigned(FWorkers[I].FatalException) then
       begin
         WriteLn(StdErr, 'Worker thread ', I, ' fatal: ',
-          Exception(Workers[I].FatalException).Message);
+          Exception(FWorkers[I].FatalException).Message);
       end;
-      for ResultIdx := 0 to High(Workers[I].Results) do
+      for ResultIdx := 0 to High(FWorkers[I].Results) do
       begin
-        if Workers[I].Results[ResultIdx].FileName <> '' then
-          FResults[Workers[I].Results[ResultIdx].Index] := Workers[I].Results[ResultIdx]
+        if FWorkers[I].Results[ResultIdx].FileName <> '' then
+          FResults[FWorkers[I].Results[ResultIdx].Index] := FWorkers[I].Results[ResultIdx]
         else
         begin
           { Worker died before processing this slot — fill from work items. }
           FResults[WorkItems[I][ResultIdx].Index].Index := WorkItems[I][ResultIdx].Index;
           FResults[WorkItems[I][ResultIdx].Index].FileName := WorkItems[I][ResultIdx].FileName;
           FResults[WorkItems[I][ResultIdx].Index].Success := False;
-          if Assigned(Workers[I].FatalException) then
+          if Assigned(FWorkers[I].FatalException) then
             FResults[WorkItems[I][ResultIdx].Index].ErrorMessage :=
-              Exception(Workers[I].FatalException).Message
+              Exception(FWorkers[I].FatalException).Message
           else
             FResults[WorkItems[I][ResultIdx].Index].ErrorMessage := 'Worker terminated unexpectedly';
           FResults[WorkItems[I][ResultIdx].Index].ConsoleOutput := '';
           FResults[WorkItems[I][ResultIdx].Index].Data := nil;
         end;
       end;
-      Workers[I].Free;
+      { Don't free workers yet if coverage is enabled — MergeCoverageInto
+        needs access to their coverage trackers. }
+      if not FEnableCoverage then
+      begin
+        FWorkers[I].Free;
+        FWorkers[I] := nil;
+      end;
     end;
   end;
 end;
@@ -282,6 +327,24 @@ end;
 procedure TGocciaThreadPool.Cancel;
 begin
   FCancelled := True;
+end;
+
+procedure TGocciaThreadPool.MergeCoverageInto(ATarget: TObject);
+var
+  I: Integer;
+  WorkerTracker: TGocciaCoverageTracker;
+begin
+  if not FEnableCoverage then Exit;
+  for I := 0 to High(FWorkers) do
+  begin
+    if Assigned(FWorkers[I]) and Assigned(FWorkers[I].CoverageTracker) then
+    begin
+      WorkerTracker := TGocciaCoverageTracker(FWorkers[I].CoverageTracker);
+      TGocciaCoverageTracker(ATarget).MergeFrom(WorkerTracker);
+      WorkerTracker.Free;
+    end;
+    FreeAndNil(FWorkers[I]);
+  end;
 end;
 
 end.

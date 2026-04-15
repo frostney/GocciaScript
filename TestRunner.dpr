@@ -230,7 +230,7 @@ begin
         WriteLn('[1/1] ', Files[0]);
       PrintTestResults(RunScriptFromFile(Files[0]));
     end
-    else if not FExitOnFirst.Present and (GetJobCount(Files.Count) > 1) then
+    else if GetJobCount(Files.Count) > 1 then
       PrintTestResults(RunScriptsFromFilesParallel(Files, GetJobCount(Files.Count)))
     else
       PrintTestResults(RunScriptsFromFiles(Files));
@@ -725,7 +725,11 @@ begin
 
   Pool := TGocciaThreadPool.Create(AJobCount);
   try
+    Pool.CancelOnError := FExitOnFirst.Present;
+    Pool.EnableCoverage := CoverageOptions.Enabled.Present;
     Pool.RunAll(AFiles, TestWorkerProc, @WorkerData[0]);
+    if Pool.EnableCoverage and Assigned(TGocciaCoverageTracker.Instance) then
+      Pool.MergeCoverageInto(TGocciaCoverageTracker.Instance);
   finally
     Pool.Free;
   end;

@@ -255,9 +255,6 @@ function TGocciaCLIApplication.GetJobCount(const AFileCount: Integer): Integer;
 begin
   if AFileCount <= 1 then
     Exit(1);
-  { Coverage tracking is not yet thread-safe — force sequential. }
-  if Assigned(FCoverageOptions) and FCoverageOptions.Enabled.Present then
-    Exit(1);
   if Assigned(FJobs) and FJobs.Present then
     Result := Max(1, FJobs.Value)
   else
