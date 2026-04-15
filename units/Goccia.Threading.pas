@@ -309,6 +309,7 @@ var
   Queue: TGocciaWorkQueue;
   FileCount, I, J: Integer;
 begin
+  FCancelled := False;
   FileCount := AFiles.Count;
   if FileCount = 0 then
   begin
@@ -326,19 +327,23 @@ begin
 
   Queue := TGocciaWorkQueue.Create(AllItems);
   try
-    // Create and start workers
+    // Create and start workers. Track how many started so we can
+    // wait/free only those if a later Create/Start raises.
     SetLength(FWorkers, FWorkerCount);
+    for I := 0 to FWorkerCount - 1 do
+      FWorkers[I] := nil;
+
     for I := 0 to FWorkerCount - 1 do
     begin
       FWorkers[I] := TGocciaFileWorker.Create(Queue, AWorkerProc,
         @FCancelled, FCancelOnError, FEnableCoverage, AData);
       FWorkers[I].Start;
     end;
-
-    // Wait for all workers
-    for I := 0 to FWorkerCount - 1 do
-      FWorkers[I].WaitFor;
   finally
+    // Wait for all started workers before freeing the queue
+    for I := 0 to FWorkerCount - 1 do
+      if Assigned(FWorkers[I]) then
+        FWorkers[I].WaitFor;
     Queue.Free;
   end;
 
