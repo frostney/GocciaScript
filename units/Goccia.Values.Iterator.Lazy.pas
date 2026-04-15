@@ -82,6 +82,8 @@ implementation
 uses
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -551,7 +553,7 @@ begin
     if not Assigned(FInnerIterator) then
     begin
       FSourceIterator.Close;
-      ThrowTypeError('Iterator.prototype.flatMap callback must return an iterable');
+      ThrowTypeError(SErrorIteratorFlatMapMustReturnIterable, SSuggestIteratorFlatMapCallable);
     end;
 
     InnerResult := FInnerIterator.AdvanceNext;
@@ -611,7 +613,7 @@ begin
     if not Assigned(FInnerIterator) then
     begin
       FSourceIterator.Close;
-      ThrowTypeError('Iterator.prototype.flatMap callback must return an iterable');
+      ThrowTypeError(SErrorIteratorFlatMapMustReturnIterable, SSuggestIteratorFlatMapCallable);
     end;
 
     InnerValue := FInnerIterator.DirectNext(InnerDone);

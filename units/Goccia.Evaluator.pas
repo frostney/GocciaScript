@@ -95,6 +95,8 @@ uses
   Goccia.Coverage,
   Goccia.DisposalTracker,
   Goccia.Error,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Evaluator.Arithmetic,
   Goccia.Evaluator.Assignment,
   Goccia.Evaluator.Bitwise,
@@ -251,9 +253,9 @@ begin
       end;
     end
     else
-      ThrowTypeError(Format(
-        'Spread syntax requires an iterable — ''%s'' is not iterable. Only arrays, strings, sets, maps, and objects with Symbol.iterator can be spread',
-        [ASpreadValue.TypeName]));
+      ThrowTypeError(
+        SErrorSpreadRequiresIterable,
+        SSuggestSpreadRequiresIterable);
   end;
 end;
 
@@ -452,7 +454,7 @@ begin
     gttMinus:
       begin
         if Operand is TGocciaSymbolValue then
-          ThrowTypeError('Cannot convert a Symbol value to a number');
+          ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
         if (Operand is TGocciaNumberLiteralValue) then
         begin
           if TGocciaNumberLiteralValue(Operand).IsInfinity then
@@ -476,7 +478,7 @@ begin
     gttPlus:
     begin
       if Operand is TGocciaSymbolValue then
-        ThrowTypeError('Cannot convert a Symbol value to a number');
+        ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
       Result := Operand.ToNumberLiteral;
     end;
     gttTypeof:
@@ -624,22 +626,30 @@ begin
           MemberExpr := TGocciaMemberExpression(ACallExpression.Callee);
 
         if Assigned(MemberExpr) and (MemberExpr.ObjectExpr is TGocciaIdentifierExpression) then
-          ThrowTypeError(Format('%s.%s is not a function — ''%s'' is of type ''%s'' which does not have method ''%s''',
-            [TGocciaIdentifierExpression(MemberExpr.ObjectExpr).Name,
-             MemberExpr.PropertyName,
-             TGocciaIdentifierExpression(MemberExpr.ObjectExpr).Name,
-             ThisValue.TypeName,
-             MemberExpr.PropertyName]))
+          ThrowTypeError(
+            Format(SErrorMemberNotFunction,
+              [TGocciaIdentifierExpression(MemberExpr.ObjectExpr).Name,
+               MemberExpr.PropertyName]),
+            Format('''%s'' is of type ''%s'' which does not have method ''%s''',
+              [TGocciaIdentifierExpression(MemberExpr.ObjectExpr).Name,
+               ThisValue.TypeName,
+               MemberExpr.PropertyName]))
         else if Assigned(MemberExpr) then
-          ThrowTypeError(Format('''%s'' is of type ''%s'' which does not have method ''%s''',
-            [ThisValue.TypeName, ThisValue.TypeName, MemberExpr.PropertyName]))
+          ThrowTypeError(
+            Format(SErrorMemberNotFunction,
+              [ThisValue.TypeName, MemberExpr.PropertyName]),
+            Format('''%s'' is of type ''%s'' which does not have method ''%s''',
+              [ThisValue.TypeName, ThisValue.TypeName, MemberExpr.PropertyName]))
         else if ACallExpression.Callee is TGocciaIdentifierExpression then
-          ThrowTypeError(Format('''%s'' is not a function — ''%s'' is of type ''%s'' and cannot be called as a function',
-            [TGocciaIdentifierExpression(ACallExpression.Callee).Name,
-             TGocciaIdentifierExpression(ACallExpression.Callee).Name,
-             Callee.TypeName]))
+          ThrowTypeError(
+            Format(SErrorNotFunction,
+              [TGocciaIdentifierExpression(ACallExpression.Callee).Name]),
+            Format('''%s'' is of type ''%s'' and cannot be called as a function',
+              [TGocciaIdentifierExpression(ACallExpression.Callee).Name,
+               Callee.TypeName]))
         else
-          ThrowTypeError(Format('%s is not a function', [Callee.TypeName]));
+          ThrowTypeError(Format(SErrorValueNotFunction, [Callee.TypeName]),
+            SSuggestNotFunctionType);
       end;
     finally
       if Assigned(TGocciaCallStack.Instance) then
@@ -750,7 +760,8 @@ begin
     if PropertyValue is TGocciaSymbolValue then
     begin
       if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
-        ThrowTypeError('Cannot read properties of ' + Obj.ToStringLiteral.Value + ' (reading ''Symbol()'')');
+        ThrowTypeError(Format(SErrorCannotReadPropertiesOf, [Obj.ToStringLiteral.Value, 'Symbol()']),
+          SSuggestCheckNullBeforeAccess);
 
       if Obj is TGocciaClassValue then
       begin
@@ -795,21 +806,24 @@ begin
     else if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
     begin
       if AMemberExpression.ObjectExpr is TGocciaMemberExpression then
-        ThrowTypeError(Format(
-          'Cannot read property ''%s'' of %s — ''%s'' evaluated to %s and does not have property ''%s''',
-          [PropertyName, Obj.ToStringLiteral.Value,
-           TGocciaMemberExpression(AMemberExpression.ObjectExpr).PropertyName,
-           Obj.ToStringLiteral.Value, PropertyName]))
+        ThrowTypeError(
+          Format(SErrorCannotReadPropertyOf,
+            [PropertyName, Obj.ToStringLiteral.Value]),
+          Format('''%s'' evaluated to %s and does not have property ''%s''',
+            [TGocciaMemberExpression(AMemberExpression.ObjectExpr).PropertyName,
+             Obj.ToStringLiteral.Value, PropertyName]))
       else if AMemberExpression.ObjectExpr is TGocciaIdentifierExpression then
-        ThrowTypeError(Format(
-          'Cannot read property ''%s'' of %s — ''%s'' is %s and does not have property ''%s''',
-          [PropertyName, Obj.ToStringLiteral.Value,
-           TGocciaIdentifierExpression(AMemberExpression.ObjectExpr).Name,
-           Obj.ToStringLiteral.Value, PropertyName]))
+        ThrowTypeError(
+          Format(SErrorCannotReadPropertyOf,
+            [PropertyName, Obj.ToStringLiteral.Value]),
+          Format('''%s'' is %s and does not have property ''%s''',
+            [TGocciaIdentifierExpression(AMemberExpression.ObjectExpr).Name,
+             Obj.ToStringLiteral.Value, PropertyName]))
       else
         ThrowTypeError(Format(
-          'Cannot read property ''%s'' of %s',
-          [PropertyName, Obj.ToStringLiteral.Value]));
+          SErrorCannotReadPropertyOf,
+          [PropertyName, Obj.ToStringLiteral.Value]),
+          SSuggestCheckNullBeforeAccess);
     end
     else
     begin
@@ -1101,7 +1115,7 @@ begin
     else if Promise.State = gpsRejected then
       raise TGocciaThrowValue.Create(Promise.PromiseResult)
     else
-      ThrowTypeError('await: Promise did not settle after microtask drain');
+      ThrowTypeError(SErrorAwaitPromiseUnsettled, SSuggestAwaitMicrotaskDrain);
   finally
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.RemoveTempRoot(Promise);
@@ -1133,13 +1147,16 @@ begin
   if Iterator = nil then
   begin
     if AForOfStatement.Iterable is TGocciaIdentifierExpression then
-      ThrowTypeError(Format('''%s'' is not iterable — ''%s'' is of type ''%s'' which does not implement the iterator protocol',
-        [TGocciaIdentifierExpression(AForOfStatement.Iterable).Name,
-         TGocciaIdentifierExpression(AForOfStatement.Iterable).Name,
-         IterableValue.TypeName]))
+      ThrowTypeError(
+        Format(SErrorNotIterable,
+          [TGocciaIdentifierExpression(AForOfStatement.Iterable).Name]),
+        Format('''%s'' is of type ''%s'' which does not implement the iterator protocol',
+          [TGocciaIdentifierExpression(AForOfStatement.Iterable).Name,
+           IterableValue.TypeName]))
     else
-      ThrowTypeError(Format('''%s'' is not iterable — values of type ''%s'' do not implement the iterator protocol',
-        [IterableValue.TypeName, IterableValue.TypeName]));
+      ThrowTypeError(
+        Format(SErrorNotIterable, [IterableValue.TypeName]),
+        SSuggestIteratorProtocol);
   end;
 
   if AForOfStatement.IsConst then
@@ -1218,7 +1235,7 @@ begin
       try
         NextMethod := IteratorObj.GetProperty(PROP_NEXT);
         if not Assigned(NextMethod) or not NextMethod.IsCallable then
-          ThrowTypeError('Async iterator .next is not callable');
+          ThrowTypeError(SErrorAsyncIteratorNextNotCallable, SSuggestAsyncIteratorProtocol);
 
         while True do
         begin
@@ -1228,7 +1245,8 @@ begin
 
           // ES2026 §7.4.2 step 5: If nextResult is not an Object, throw a TypeError
           if NextResult.IsPrimitive then
-            ThrowTypeError('Iterator result ' + NextResult.ToStringLiteral.Value + ' is not an object');
+            ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.ToStringLiteral.Value]),
+              SSuggestIteratorResultObject);
 
           DoneValue := NextResult.GetProperty(PROP_DONE);
           if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
@@ -1263,9 +1281,9 @@ begin
   begin
     Iterator := GetIteratorFromValue(IterableValue);
     if Iterator = nil then
-      ThrowTypeError(Format(
-        '''%s'' is not iterable — values of type ''%s'' do not implement the iterator protocol',
-        [IterableValue.TypeName, IterableValue.TypeName]));
+      ThrowTypeError(
+        Format(SErrorNotIterable, [IterableValue.TypeName]),
+        SSuggestIteratorProtocol);
 
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.AddTempRoot(Iterator);
@@ -1562,7 +1580,7 @@ begin
   // The disposal tracker should have been set by EvaluateBlock
   if (AContext.DisposalTracker = nil) or
      not (AContext.DisposalTracker is TGocciaDisposalTracker) then
-    ThrowTypeError('using declaration outside of a block scope');
+    ThrowTypeError(SErrorUsingOutsideBlock, SSuggestUsingInsideBlock);
   Tracker := TGocciaDisposalTracker(AContext.DisposalTracker);
 
   if AUsingDeclaration.IsAwait then
@@ -1592,9 +1610,9 @@ begin
       if not Assigned(DisposeMethod) then
       begin
         if Hint = dhAsyncDispose then
-          ThrowTypeError('Value is not disposable (missing [Symbol.asyncDispose] and [Symbol.dispose])')
+          ThrowTypeError(SErrorNotAsyncDisposable, SSuggestDisposable)
         else
-          ThrowTypeError('Value is not disposable (missing [Symbol.dispose])');
+          ThrowTypeError(SErrorNotDisposable, SSuggestDisposable);
       end;
 
       // Bind the variable as const (using bindings are not reassignable)
@@ -1801,7 +1819,7 @@ begin
       if not ((MemberValue is TGocciaNumberLiteralValue) or
               (MemberValue is TGocciaStringLiteralValue) or
               (MemberValue is TGocciaSymbolValue)) then
-        ThrowTypeError('Enum member initializer must evaluate to a Number, String, or Symbol value');
+        ThrowTypeError(SErrorEnumInitializer, SSuggestEnumValueType);
 
       EnumValue.DefineProperty(AEnumDeclaration.Members[I].Name,
         TGocciaPropertyDescriptorData.Create(MemberValue, [pfEnumerable]));
@@ -2003,13 +2021,17 @@ begin
       else
       begin
         if ANewExpression.Callee is TGocciaIdentifierExpression then
-          ThrowTypeError(Format('''%s'' is not a constructor — ''%s'' is of type ''%s'' and cannot be used with ''new''',
-            [TGocciaIdentifierExpression(ANewExpression.Callee).Name,
-             TGocciaIdentifierExpression(ANewExpression.Callee).Name,
-             Callee.TypeName]))
+          ThrowTypeError(
+            Format(SErrorNotConstructor,
+              [TGocciaIdentifierExpression(ANewExpression.Callee).Name]),
+            Format('''%s'' is of type ''%s'' and cannot be used with ''new''',
+              [TGocciaIdentifierExpression(ANewExpression.Callee).Name,
+               Callee.TypeName]))
         else
-          ThrowTypeError(Format('%s is not a constructor — values of type ''%s'' cannot be used with ''new''',
-            [Callee.TypeName, Callee.TypeName]));
+          ThrowTypeError(
+            Format(SErrorValueNotConstructor, [Callee.TypeName]),
+            Format('values of type ''%s'' cannot be used with ''new''',
+              [Callee.TypeName]));
       end;
     finally
       if Assigned(TGocciaCallStack.Instance) then
@@ -2410,7 +2432,7 @@ begin
       begin
         DecoratorFn := EvaluatedElementDecorators[I][J];
         if not DecoratorFn.IsCallable then
-          ThrowTypeError('Decorator must be a function');
+          ThrowTypeError(SErrorDecoratorMustBeFunction, SSuggestDecoratorFunction);
 
         // Build context object
         ContextObject := TGocciaObjectValue.Create;
@@ -2624,7 +2646,7 @@ begin
     begin
       DecoratorFn := EvaluatedClassDecorators[I];
       if not DecoratorFn.IsCallable then
-        ThrowTypeError('Decorator must be a function');
+        ThrowTypeError(SErrorDecoratorMustBeFunction, SSuggestDecoratorFunction);
 
       ContextObject := TGocciaObjectValue.Create;
       ContextObject.AssignProperty(PROP_KIND, TGocciaStringLiteralValue.Create('class'));
@@ -2740,19 +2762,20 @@ end;
 
 procedure ThrowPrivateGetterMissingError(const APrivateName: string);
 begin
-  ThrowTypeError(Format('Private accessor #%s was defined without a getter',
-    [APrivateName]));
+  ThrowTypeError(Format(SErrorPrivateGetterMissing,
+    [APrivateName]), SSuggestPrivateFieldAccess);
 end;
 
 procedure ThrowPrivateSetterMissingError(const APrivateName: string);
 begin
-  ThrowTypeError(Format('Private accessor #%s was defined without a setter',
-    [APrivateName]));
+  ThrowTypeError(Format(SErrorPrivateSetterMissing,
+    [APrivateName]), SSuggestPrivateFieldAccess);
 end;
 
 procedure ThrowPrivateBrandError(const APrivateName: string);
 begin
-  ThrowTypeError(Format('Private field #%s is not accessible', [APrivateName]));
+  ThrowTypeError(Format(SErrorPrivateFieldInaccessible, [APrivateName]),
+    SSuggestPrivateFieldAccess);
 end;
 
 procedure EnsurePrivateStaticBrand(const AReceiver,
@@ -3235,7 +3258,7 @@ begin
     else
     begin
       if PartValue is TGocciaSymbolValue then
-        ThrowTypeError('Cannot convert a Symbol value to a string');
+        ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
       // ES2026 §13.15.5.1 step 5e: ToString(value) on each substitution
       SB.Append(ToECMAString(PartValue).Value);
     end;
@@ -3344,9 +3367,9 @@ begin
       else if Callee is TGocciaFunctionBase then
         Result := TGocciaFunctionBase(Callee).Call(Arguments, ThisValue)
       else
-        ThrowTypeError(Format(
-          '%s is not a function — tagged template literals require the tag to be a callable function',
-          [Callee.TypeName]));
+        ThrowTypeError(
+          Format(SErrorValueNotFunction, [Callee.TypeName]),
+          SSuggestTaggedTemplateCallable);
     finally
       if Assigned(TGocciaCallStack.Instance) then
         TGocciaCallStack.Instance.Pop;
@@ -3494,7 +3517,7 @@ begin
         if (LeftVal <> nil) and (RightVal <> nil) then
         begin
           if (LeftVal is TGocciaSymbolValue) or (RightVal is TGocciaSymbolValue) then
-            ThrowTypeError('Cannot convert a Symbol value to a string');
+            ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
           if (LeftVal is TGocciaStringLiteralValue) or (RightVal is TGocciaStringLiteralValue) then
             Result := TGocciaStringLiteralValue.Create(LeftVal.ToStringLiteral.Value + RightVal.ToStringLiteral.Value)
           else
@@ -3686,9 +3709,9 @@ var
   J: Integer;
 begin
   if (AValue is TGocciaNullLiteralValue) or (AValue is TGocciaUndefinedLiteralValue) then
-    ThrowTypeError(Format(
-      'Cannot destructure %s — array destructuring requires an iterable value',
-      [AValue.ToStringLiteral.Value]));
+    ThrowTypeError(
+      Format(SErrorCannotDestructure, [AValue.ToStringLiteral.Value]),
+      SSuggestDestructureRequiresIterable);
 
   if AValue is TGocciaArrayValue then
   begin
@@ -3753,9 +3776,9 @@ begin
   begin
     Iterator := GetIteratorFromValue(AValue);
     if not Assigned(Iterator) then
-      ThrowTypeError(Format(
-        '''%s'' is not iterable — array destructuring requires an iterable value (array, string, set, map, or object with Symbol.iterator)',
-        [AValue.TypeName]));
+      ThrowTypeError(
+        Format(SErrorNotIterable, [AValue.TypeName]),
+        SSuggestDestructureRequiresIterable);
 
     TGarbageCollector.Instance.AddTempRoot(Iterator);
     try
@@ -3811,13 +3834,13 @@ begin
   if not (AValue is TGocciaObjectValue) then
   begin
     if (AValue is TGocciaNullLiteralValue) or (AValue is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError(Format(
-        'Cannot destructure %s — object destructuring requires an object value',
-        [AValue.ToStringLiteral.Value]))
+      ThrowTypeError(
+        Format(SErrorCannotDestructure, [AValue.ToStringLiteral.Value]),
+        SSuggestDestructureRequiresObject)
     else
-      ThrowTypeError(Format(
-        'Cannot destructure value of type ''%s'' — object destructuring requires an object value',
-        [AValue.TypeName]));
+      ThrowTypeError(
+        Format(SErrorCannotDestructureType, [AValue.TypeName]),
+        SSuggestDestructureRequiresObject);
   end;
 
   ObjectValue := TGocciaObjectValue(AValue);
@@ -3957,7 +3980,8 @@ begin
       else
       begin
         if not ArrayValue.DeleteProperty(PropertyName) then
-          ThrowTypeError('Cannot delete property ''' + PropertyName + ''' of [object Array]');
+          ThrowTypeError(Format(SErrorCannotDeletePropertyOf, [PropertyName, '[object Array]']),
+            SSuggestCannotDeleteNonConfigurable);
         Result := TGocciaBooleanLiteralValue.TrueValue;
       end;
     end
@@ -3965,7 +3989,8 @@ begin
     begin
       ObjectValue := TGocciaObjectValue(ObjValue);
       if not ObjectValue.DeleteProperty(PropertyName) then
-        ThrowTypeError('Cannot delete property ''' + PropertyName + ''' of [object Object]');
+        ThrowTypeError(Format(SErrorCannotDeletePropertyOf, [PropertyName, '[object Object]']),
+          SSuggestCannotDeleteNonConfigurable);
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end
     else

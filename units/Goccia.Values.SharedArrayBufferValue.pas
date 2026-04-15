@@ -49,6 +49,8 @@ uses
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
@@ -144,7 +146,7 @@ begin
     IntegerIndex := 0
   else if Num.IsInfinite then
   begin
-    ThrowRangeError('Invalid shared array buffer length');
+    ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
     Exit;
   end
   else
@@ -152,7 +154,7 @@ begin
 
   // Step 3: If integerIndex is not in [0, 2^53-1], throw RangeError
   if (IntegerIndex < 0) or (IntegerIndex > 9007199254740991) then
-    ThrowRangeError('Invalid shared array buffer length');
+    ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
 
   Len := Trunc(IntegerIndex);
   SetLength(FData, Len);
@@ -188,7 +190,9 @@ end;
 function TGocciaSharedArrayBufferValue.SharedArrayBufferByteLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaSharedArrayBufferValue) then
-    ThrowTypeError('SharedArrayBuffer.prototype.byteLength requires a SharedArrayBuffer');
+    ThrowTypeError(Format(SErrorRequiresSharedArrayBuffer,
+      ['SharedArrayBuffer.prototype.byteLength']),
+      SSuggestSharedArrayBufferThisType);
   Result := TGocciaNumberLiteralValue.Create(Length(TGocciaSharedArrayBufferValue(AThisValue).FData));
 end;
 
@@ -201,7 +205,9 @@ var
   NewBuf: TGocciaSharedArrayBufferValue;
 begin
   if not (AThisValue is TGocciaSharedArrayBufferValue) then
-    ThrowTypeError('SharedArrayBuffer.prototype.slice requires a SharedArrayBuffer');
+    ThrowTypeError(Format(SErrorRequiresSharedArrayBuffer,
+      ['SharedArrayBuffer.prototype.slice']),
+      SSuggestSharedArrayBufferThisType);
 
   Buf := TGocciaSharedArrayBufferValue(AThisValue);
   Len := Length(Buf.FData);
@@ -245,7 +251,7 @@ begin
 
   // ES2026 §25.2.5.6 step 11: If new.[[ArrayBufferData]] is O.[[ArrayBufferData]], throw TypeError
   if Pointer(NewBuf.FData) = Pointer(Buf.FData) then
-    ThrowTypeError('SharedArrayBuffer subclass returned this from species constructor');
+    ThrowTypeError(SErrorSharedArrayBufferSpeciesReturnedThis, SSuggestSpeciesConstructor);
 
   if NewLen > 0 then
     Move(Buf.FData[First], NewBuf.FData[0], NewLen);

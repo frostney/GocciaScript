@@ -23,6 +23,8 @@ uses
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Keywords.Reserved,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -150,8 +152,9 @@ var
 begin
   // ECMAScript: right operand must be an object, not a primitive
   if ARight.IsPrimitive then
-    ThrowTypeError('Cannot use ''' + KEYWORD_IN + ''' operator to search for ''' +
-      ALeft.ToStringLiteral.Value + ''' in ' + ARight.ToStringLiteral.Value);
+    ThrowTypeError(Format(SErrorCannotUseInOperator,
+      [ALeft.ToStringLiteral.Value, ARight.ToStringLiteral.Value]),
+      SSuggestCheckNullBeforeAccess);
 
   if ALeft is TGocciaSymbolValue then
   begin

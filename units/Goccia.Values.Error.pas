@@ -17,9 +17,13 @@ type
   TGocciaThrowValue = class(Exception)
   private
     FValue: TGocciaValue;
+    FSuggestion: string;
   public
-    constructor Create(const AValue: TGocciaValue);
+    constructor Create(const AValue: TGocciaValue); overload;
+    constructor Create(const AValue: TGocciaValue;
+      const ASuggestion: string); overload;
     property Value: TGocciaValue read FValue;
+    property Suggestion: string read FSuggestion;
   end;
 
 implementation
@@ -30,6 +34,15 @@ constructor TGocciaThrowValue.Create(const AValue: TGocciaValue);
 begin
   inherited Create('');
   FValue := AValue;
+  FSuggestion := '';
+end;
+
+constructor TGocciaThrowValue.Create(const AValue: TGocciaValue;
+  const ASuggestion: string);
+begin
+  inherited Create('');
+  FValue := AValue;
+  FSuggestion := ASuggestion;
 end;
 
 end.

@@ -67,6 +67,8 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper;
 
@@ -146,7 +148,7 @@ begin
     Exit;
   end;
   if not GetTemporalUnitFromString(S, Result) then
-    ThrowRangeError('Invalid smallestUnit: ' + S);
+    ThrowRangeError(Format(SErrorInvalidSmallestUnit, [S]), SSuggestTemporalValidUnits);
 end;
 
 function GetLargestUnit(const AOptions: TGocciaObjectValue; const ADefault: TTemporalUnit): TTemporalUnit;
@@ -160,7 +162,7 @@ begin
     Exit;
   end;
   if not GetTemporalUnitFromString(S, Result) then
-    ThrowRangeError('Invalid largestUnit: ' + S);
+    ThrowRangeError(Format(SErrorInvalidLargestUnit, [S]), SSuggestTemporalValidUnits);
 end;
 
 function GetRoundingMode(const AOptions: TGocciaObjectValue; const ADefault: TTemporalRoundingMode): TTemporalRoundingMode;
@@ -174,14 +176,14 @@ begin
     Exit;
   end;
   if not GetRoundingModeFromString(S, Result) then
-    ThrowRangeError('Invalid roundingMode: ' + S);
+    ThrowRangeError(Format(SErrorInvalidRoundingMode, [S]), SSuggestTemporalRoundingMode);
 end;
 
 function GetRoundingIncrement(const AOptions: TGocciaObjectValue; const ADefault: Integer): Integer;
 begin
   Result := GetOptionInteger(AOptions, 'roundingIncrement', ADefault);
   if Result < 1 then
-    ThrowRangeError('roundingIncrement must be >= 1');
+    ThrowRangeError(SErrorRoundingIncrementMin, SSuggestTemporalRoundArg);
 end;
 
 function GetOverflowOption(const AOptions: TGocciaObjectValue): TTemporalOverflow;
@@ -194,7 +196,7 @@ begin
   else if S = 'reject' then
     Result := toReject
   else
-    ThrowRangeError('Invalid overflow option: ' + S);
+    ThrowRangeError(Format(SErrorInvalidOverflow, [S]), SSuggestTemporalOverflow);
 end;
 
 function GetFractionalSecondDigits(const AOptions: TGocciaObjectValue): Integer;
@@ -219,13 +221,13 @@ begin
     if S = 'auto' then
       Result := -1
     else
-      ThrowRangeError('Invalid fractionalSecondDigits: ' + S);
+      ThrowRangeError(Format(SErrorInvalidFractionalDigits, [S]), SSuggestTemporalRoundArg);
   end
   else
   begin
     Result := Trunc(V.ToNumberLiteral.Value);
     if (Result < 0) or (Result > 9) then
-      ThrowRangeError('fractionalSecondDigits must be 0-9 or "auto"');
+      ThrowRangeError(SErrorFractionalDigitsRange, SSuggestTemporalRoundArg);
   end;
 end;
 
@@ -240,7 +242,7 @@ begin
     tuNanosecond: Result := 1;
     tuDay: Result := NANOSECONDS_PER_DAY;
   else
-    ThrowRangeError('Cannot convert calendar unit to nanoseconds');
+    ThrowRangeError(SErrorCannotConvertCalendarUnit, SSuggestTemporalValidUnits);
     Result := 1;
   end;
 end;

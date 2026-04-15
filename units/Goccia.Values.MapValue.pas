@@ -63,6 +63,8 @@ implementation
 uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Utils,
@@ -469,7 +471,7 @@ begin
   else
     CallbackArg := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not CallbackArg.IsCallable then
-    ThrowTypeError('Map.getOrInsertComputed: callbackfn is not a function');
+    ThrowTypeError(SErrorMapGetOrInsertComputedNotCallable, SSuggestMapCallbackRequired);
 
   // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
   //   If SameValueZero(p.[[Key]], key) is true, return p.[[Value]]

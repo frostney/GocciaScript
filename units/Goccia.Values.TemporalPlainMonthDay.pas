@@ -48,6 +48,8 @@ uses
   SysUtils,
 
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -63,7 +65,7 @@ const
 function AsPlainMonthDay(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainMonthDayValue;
 begin
   if not (AValue is TGocciaTemporalPlainMonthDayValue) then
-    ThrowTypeError(AMethod + ' called on non-PlainMonthDay');
+    ThrowTypeError(AMethod + ' called on non-PlainMonthDay', SSuggestTemporalThisType);
   Result := TGocciaTemporalPlainMonthDayValue(AValue);
 end;
 
@@ -86,11 +88,11 @@ begin
     S := TGocciaStringLiteralValue(AValue).Value;
     DashPos := Pos('-', S);
     if (DashPos < 2) or (DashPos >= Length(S)) then
-      ThrowTypeError('Invalid month-day string for ' + AMethod);
+      ThrowTypeError(Format(SErrorInvalidMonthDayStringFor, [AMethod]), SSuggestTemporalISOFormat);
     if not TryStrToInt(Copy(S, 1, DashPos - 1), MonthPart) then
-      ThrowTypeError('Invalid month-day string for ' + AMethod);
+      ThrowTypeError(Format(SErrorInvalidMonthDayStringFor, [AMethod]), SSuggestTemporalISOFormat);
     if not TryStrToInt(Copy(S, DashPos + 1, Length(S) - DashPos), DayPart) then
-      ThrowTypeError('Invalid month-day string for ' + AMethod);
+      ThrowTypeError(Format(SErrorInvalidMonthDayStringFor, [AMethod]), SSuggestTemporalISOFormat);
     Result := TGocciaTemporalPlainMonthDayValue.Create(MonthPart, DayPart);
   end
   else if AValue is TGocciaObjectValue then
@@ -98,23 +100,23 @@ begin
     Obj := TGocciaObjectValue(AValue);
     VDay := Obj.GetProperty(PROP_DAY);
     if (VDay = nil) or (VDay is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError(AMethod + ' requires day property');
+      ThrowTypeError(AMethod + ' requires day property', SSuggestTemporalFromArg);
     VMonthCode := Obj.GetProperty(PROP_MONTH_CODE);
     if Assigned(VMonthCode) and not (VMonthCode is TGocciaUndefinedLiteralValue) then
     begin
       MonthCodeStr := VMonthCode.ToStringLiteral.Value;
       if (Length(MonthCodeStr) <> 3) or (MonthCodeStr[1] <> 'M') or
          not (MonthCodeStr[2] in ['0'..'9']) or not (MonthCodeStr[3] in ['0'..'9']) then
-        ThrowTypeError('Invalid monthCode for ' + AMethod);
+        ThrowTypeError(Format(SErrorInvalidMonthCodeFor, [AMethod]), SSuggestTemporalMonthCode);
       if not TryStrToInt(Copy(MonthCodeStr, 2, 2), MonthPart) then
-        ThrowTypeError('Invalid monthCode for ' + AMethod);
+        ThrowTypeError(Format(SErrorInvalidMonthCodeFor, [AMethod]), SSuggestTemporalMonthCode);
       if (MonthPart < 1) or (MonthPart > 12) then
-        ThrowRangeError('monthCode month out of range in ' + AMethod);
+        ThrowRangeError(Format(SErrorMonthCodeOutOfRangeIn, [AMethod]), SSuggestTemporalMonthCode);
       // Validate month/monthCode consistency when both are provided
       V := Obj.GetProperty(PROP_MONTH);
       if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
         if Trunc(V.ToNumberLiteral.Value) <> MonthPart then
-          ThrowRangeError('month and monthCode must match in ' + AMethod);
+          ThrowRangeError(Format(SErrorMonthCodeMismatchIn, [AMethod]), SSuggestTemporalMonthCode);
     end
     else
     begin
@@ -122,14 +124,14 @@ begin
       if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
         MonthPart := Trunc(V.ToNumberLiteral.Value)
       else
-        ThrowTypeError(AMethod + ' requires monthCode or month property');
+        ThrowTypeError(AMethod + ' requires monthCode or month property', SSuggestTemporalFromArg);
     end;
     Result := TGocciaTemporalPlainMonthDayValue.Create(
       MonthPart, Trunc(VDay.ToNumberLiteral.Value));
   end
   else
   begin
-    ThrowTypeError(AMethod + ' requires a PlainMonthDay, string, or object');
+    ThrowTypeError(AMethod + ' requires a PlainMonthDay, string, or object', SSuggestTemporalFromArg);
     Result := nil;
   end;
 end;
@@ -145,7 +147,7 @@ constructor TGocciaTemporalPlainMonthDayValue.Create(const AMonth, ADay, ARefere
 begin
   inherited Create(nil);
   if not IsValidDate(AReferenceYear, AMonth, ADay) then
-    ThrowRangeError('Invalid month-day: ' + PadTwo(AMonth) + '-' + PadTwo(ADay));
+    ThrowRangeError(Format(SErrorInvalidMonthDay, [PadTwo(AMonth) + '-' + PadTwo(ADay)]), SSuggestTemporalDateRange);
   FMonth := AMonth;
   FDay := ADay;
   FReferenceYear := AReferenceYear;
@@ -240,7 +242,7 @@ begin
   MD := AsPlainMonthDay(AThisValue, 'PlainMonthDay.prototype.with');
   V := AArgs.GetElement(0);
   if not (V is TGocciaObjectValue) then
-    ThrowTypeError('PlainMonthDay.prototype.with requires an object argument');
+    ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['PlainMonthDay']), SSuggestTemporalWithObject);
   Obj := TGocciaObjectValue(V);
 
   NewMonth := MD.FMonth;
@@ -250,16 +252,16 @@ begin
     MonthCodeStr := V.ToStringLiteral.Value;
     if (Length(MonthCodeStr) <> 3) or (MonthCodeStr[1] <> 'M') or
        not (MonthCodeStr[2] in ['0'..'9']) or not (MonthCodeStr[3] in ['0'..'9']) then
-      ThrowTypeError('Invalid monthCode in PlainMonthDay.prototype.with');
+      ThrowTypeError(Format(SErrorInvalidMonthCodeFor, ['PlainMonthDay.prototype.with']), SSuggestTemporalMonthCode);
     if not TryStrToInt(Copy(MonthCodeStr, 2, 2), NewMonth) then
-      ThrowTypeError('Invalid monthCode in PlainMonthDay.prototype.with');
+      ThrowTypeError(Format(SErrorInvalidMonthCodeFor, ['PlainMonthDay.prototype.with']), SSuggestTemporalMonthCode);
     if (NewMonth < 1) or (NewMonth > 12) then
-      ThrowRangeError('monthCode month out of range in PlainMonthDay.prototype.with');
+      ThrowRangeError(Format(SErrorMonthCodeOutOfRangeIn, ['PlainMonthDay.prototype.with']), SSuggestTemporalMonthCode);
     // Validate month/monthCode consistency when both are provided
     V := Obj.GetProperty(PROP_MONTH);
     if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
       if Trunc(V.ToNumberLiteral.Value) <> NewMonth then
-        ThrowRangeError('month and monthCode must match in PlainMonthDay.prototype.with');
+        ThrowRangeError(Format(SErrorMonthCodeMismatchIn, ['PlainMonthDay.prototype.with']), SSuggestTemporalMonthCode);
   end
   else
   begin
@@ -307,7 +309,7 @@ end;
 // TC39 Temporal §11.3.10 Temporal.PlainMonthDay.prototype.valueOf()
 function TGocciaTemporalPlainMonthDayValue.MonthDayValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  ThrowTypeError('Temporal.PlainMonthDay.prototype.valueOf cannot be used; use toString or compare instead');
+  ThrowTypeError(Format(SErrorTemporalValueOf, ['PlainMonthDay', 'toString or compare']), SSuggestTemporalNoValueOf);
   Result := nil;
 end;
 
@@ -323,11 +325,11 @@ begin
   Arg := AArgs.GetElement(0);
 
   if not (Arg is TGocciaObjectValue) then
-    ThrowTypeError('PlainMonthDay.prototype.toPlainDate requires an object with a year property');
+    ThrowTypeError(SErrorPlainMonthDayToPlainDateRequiresYear, SSuggestTemporalToPlainDateYear);
   Obj := TGocciaObjectValue(Arg);
   V := Obj.GetProperty(PROP_YEAR);
   if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
-    ThrowTypeError('PlainMonthDay.prototype.toPlainDate requires an object with a year property');
+    ThrowTypeError(SErrorPlainMonthDayToPlainDateRequiresYear, SSuggestTemporalToPlainDateYear);
 
   YearValue := Trunc(V.ToNumberLiteral.Value);
   Result := TGocciaTemporalPlainDateValue.Create(YearValue, MD.FMonth, MD.FDay);

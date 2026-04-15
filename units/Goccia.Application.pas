@@ -55,7 +55,7 @@ begin
   if AException is TGocciaError then
     WriteLn(TGocciaError(AException).GetDetailedMessage(UseColor))
   else if AException is TGocciaThrowValue then
-    WriteLn(FormatThrowDetail(TGocciaThrowValue(AException).Value, '', nil, UseColor))
+    WriteLn(FormatThrowDetail(TGocciaThrowValue(AException).Value, '', nil, UseColor, TGocciaThrowValue(AException).Suggestion))
   else if AException is EGocciaBytecodeThrow then
     WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(AException).ThrownValue, '', nil, UseColor))
   else

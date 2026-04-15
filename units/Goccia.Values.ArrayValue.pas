@@ -23,6 +23,7 @@ type
     procedure FlattenInto(const ATarget: TGocciaArrayValue; const ADepth: Integer);
     procedure ThrowError(const AMessage: string; const AArgs: array of const); overload; inline;
     procedure ThrowError(const AMessage: string); overload; inline;
+    procedure ThrowError(const AMessage: string; const AArgs: array of const; const ASuggestion: string); overload; inline;
   protected
     FElements: TGocciaValueList;
   public
@@ -110,6 +111,8 @@ uses
   Goccia.Arguments.Callbacks,
   Goccia.Constants.PropertyNames,
   Goccia.Error,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Utils,
@@ -167,7 +170,8 @@ begin
 
     // Step 7: If IsConstructor(C) is false, throw TypeError
     if not (Species is TGocciaClassValue) then
-      ThrowTypeError('Species is not a constructor');
+      ThrowTypeError(SErrorSpeciesNotConstructor,
+        SSuggestSpeciesConstructor);
 
     // Step 8: Return Construct(C, « length »)
     SpeciesClass := TGocciaClassValue(Species);
@@ -356,7 +360,8 @@ begin
     begin
       Len := TGocciaNumberLiteralValue(LenArg).Value;
       if (Len <> Trunc(Len)) or (Len < 0) or (Len > 4294967295) then
-        ThrowRangeError('Invalid array length');
+        ThrowRangeError(SErrorInvalidArrayLength,
+          SSuggestArrayLengthRange);
       for I := 0 to Trunc(Len) - 1 do
         FElements.Add(TGocciaHoleValue.HoleValue);
     end
@@ -400,6 +405,11 @@ begin
   ThrowError(AMessage, []);
 end;
 
+procedure TGocciaArrayValue.ThrowError(const AMessage: string; const AArgs: array of const; const ASuggestion: string);
+begin
+  raise TGocciaError.Create(Format(AMessage, AArgs), 0, 0, '', nil, ASuggestion);
+end;
+
 function TGocciaArrayValue.GetLengthProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaNumberLiteralValue.Create(TGocciaArrayValue(AThisValue).Elements.Count);
@@ -439,22 +449,22 @@ function TGocciaArrayValue.ValidateArrayMethodCall(const AMethodName: string; co
   const AThisValue: TGocciaValue; const ARequiresCallback: Boolean = True): TGocciaValue;
 begin
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.%s called on non-array', [AMethodName]);
+    ThrowError(SErrorArrayMethodCalledOnNonArray, [AMethodName], SSuggestArrayThisType);
 
   if AArgs.Length < 1 then
-    ThrowError('Array.%s expects callback function', [AMethodName]);
+    ThrowError(SErrorArrayMethodExpectsCallback, [AMethodName], SSuggestIteratorCallable);
 
   Result := AArgs.GetElement(0);
 
   if ARequiresCallback then
   begin
     if not Result.IsCallable then
-      ThrowError('Callback must be a function');
+      ThrowError(SErrorCallbackMustBeFunction, [], SSuggestIteratorCallable);
   end
   else
   begin
     if Result is TGocciaUndefinedLiteralValue then
-      ThrowError('Callback must not be undefined');
+      ThrowError(SErrorCallbackMustNotBeUndefined, [], SSuggestIteratorCallable);
   end;
 end;
 
@@ -565,7 +575,8 @@ begin
   else
   begin
     if Arr.Elements.Count = 0 then
-      ThrowTypeError('Reduce of empty array with no initial value');
+      ThrowTypeError(SErrorReduceEmptyArray,
+        SSuggestReduceInitialValue);
     Accumulator := Arr.Elements[0];
     StartIndex := 1;
   end;
@@ -643,7 +654,7 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.join called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['join'], SSuggestArrayThisType);
 
   // Step 2: Let len be LengthOfArrayLike(O)
   Arr := TGocciaArrayValue(AThisValue);
@@ -697,7 +708,7 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.includes called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['includes'], SSuggestArrayThisType);
 
   // Step 2: Let len be LengthOfArrayLike(O)
   Arr := TGocciaArrayValue(AThisValue);
@@ -839,7 +850,7 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.flat called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['flat'], SSuggestArrayThisType);
 
   // Step 2: Let sourceLen be LengthOfArrayLike(O)
   Arr := TGocciaArrayValue(AThisValue);
@@ -850,7 +861,7 @@ begin
   if AArgs.Length > 0 then
   begin
     if not (AArgs.GetElement(0) is TGocciaNumberLiteralValue) then
-      ThrowError('Array.flat expects depth argument to be a number');
+      ThrowError(SErrorArrayFlatExpectsNumber, [], SSuggestArrayThisType);
 
     DepthNum := AArgs.GetElement(0).ToNumberLiteral;
     if DepthNum.IsNaN then
@@ -978,7 +989,7 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.slice called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['slice'], SSuggestArrayThisType);
 
   // Step 2: Let len be LengthOfArrayLike(O)
   Arr := TGocciaArrayValue(AThisValue);
@@ -1200,13 +1211,13 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.with called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['with'], SSuggestArrayThisType);
 
   // Step 2: Let len be LengthOfArrayLike(O)
   Arr := TGocciaArrayValue(AThisValue);
 
   if AArgs.Length < 2 then
-    ThrowError('Array.with requires index and value arguments');
+    ThrowError(SErrorArrayWithRequiresArgs, [], SSuggestArrayThisType);
 
   // Step 3: Let relativeIndex be ToIntegerOrInfinity(index)
   Index := ToIntegerFromArgs(AArgs);
@@ -1221,7 +1232,8 @@ begin
 
   // Step 6: If actualIndex >= len or actualIndex < 0, throw RangeError
   if (ActualIndex < 0) or (ActualIndex >= Arr.Elements.Count) then
-    ThrowRangeError('Invalid index for Array.with');
+    ThrowRangeError(SErrorInvalidArrayWithIndex,
+      Format('index must be between %d and %d', [-Arr.Elements.Count, Arr.Elements.Count - 1]));
 
   // Step 7: Let A be ArrayCreate(len)
   ResultArray := TGocciaArrayValue.Create;
@@ -1248,14 +1260,14 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.copyWithin called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['copyWithin'], SSuggestArrayThisType);
 
   // Step 2: Let len be LengthOfArrayLike(O)
   Arr := TGocciaArrayValue(AThisValue);
   Len := Arr.Elements.Count;
 
   if AArgs.Length < 1 then
-    ThrowError('Array.copyWithin requires a target argument');
+    ThrowError(SErrorArrayCopyWithinRequiresTarget, [], SSuggestArrayThisType);
 
   // Step 3: Let relativeTarget be ToIntegerOrInfinity(target)
   Target := ToIntegerFromArgs(AArgs);
@@ -1300,7 +1312,7 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.indexOf called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['indexOf'], SSuggestArrayThisType);
 
   // Step 2: Let len be LengthOfArrayLike(O)
   Arr := TGocciaArrayValue(AThisValue);
@@ -1350,7 +1362,7 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.lastIndexOf called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['lastIndexOf'], SSuggestArrayThisType);
 
   // Step 2: Let len be LengthOfArrayLike(O)
   Arr := TGocciaArrayValue(AThisValue);
@@ -1401,7 +1413,7 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.concat called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['concat'], SSuggestArrayThisType);
 
   // Step 2: Let A be ArraySpeciesCreate(O, 0)
   Arr := TGocciaArrayValue(AThisValue);
@@ -1440,7 +1452,7 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.reverse called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['reverse'], SSuggestArrayThisType);
 
   // Step 2: Let len be LengthOfArrayLike(O)
   Arr := TGocciaArrayValue(AThisValue);
@@ -1471,7 +1483,7 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.toReversed called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['toReversed'], SSuggestArrayThisType);
 
   // Step 2: Let len be LengthOfArrayLike(O)
   Arr := TGocciaArrayValue(AThisValue);
@@ -1498,7 +1510,7 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.toSorted called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['toSorted'], SSuggestArrayThisType);
 
   // Step 2: If comparefn is not undefined and IsCallable(comparefn) is false, throw TypeError
   // Step 3: Let len be LengthOfArrayLike(O)
@@ -1515,7 +1527,7 @@ begin
     CustomSortFunction := AArgs.GetElement(0);
 
     if not CustomSortFunction.IsCallable then
-      ThrowError('Custom sort function must be a function');
+      ThrowError(SErrorCustomSortMustBeFunction, [], SSuggestCallbackRequired);
 
     CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
     try
@@ -1541,7 +1553,7 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.toSpliced called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['toSpliced'], SSuggestArrayThisType);
 
   // Step 2: Let len be LengthOfArrayLike(O)
   Arr := TGocciaArrayValue(AThisValue);
@@ -1759,7 +1771,7 @@ var
   CallArgs: TGocciaArgumentsCollection;
 begin
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.sort called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['sort'], SSuggestArrayThisType);
 
   Arr := TGocciaArrayValue(AThisValue);
 
@@ -1768,7 +1780,7 @@ begin
     CustomSortFunction := AArgs.GetElement(0);
 
     if not CustomSortFunction.IsCallable then
-      ThrowError('Custom sort function must be a function');
+      ThrowError(SErrorCustomSortMustBeFunction, [], SSuggestCallbackRequired);
 
     CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
     try
@@ -1792,7 +1804,7 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.splice called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['splice'], SSuggestArrayThisType);
 
   // Step 2: Let len be LengthOfArrayLike(O)
   Arr := TGocciaArrayValue(AThisValue);
@@ -1847,7 +1859,7 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.shift called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['shift'], SSuggestArrayThisType);
 
   // Step 2: Let len be LengthOfArrayLike(O)
   Arr := TGocciaArrayValue(AThisValue);
@@ -1873,7 +1885,7 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.unshift called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['unshift'], SSuggestArrayThisType);
 
   // Step 2: Let len be LengthOfArrayLike(O)
   Arr := TGocciaArrayValue(AThisValue);
@@ -1896,7 +1908,7 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.fill called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['fill'], SSuggestArrayThisType);
 
   // Step 2: Let len be LengthOfArrayLike(O)
   Arr := TGocciaArrayValue(AThisValue);
@@ -1934,7 +1946,7 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.at called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['at'], SSuggestArrayThisType);
 
   // Step 2: Let len be LengthOfArrayLike(O)
   Arr := TGocciaArrayValue(AThisValue);
@@ -1964,7 +1976,7 @@ end;
 function TGocciaArrayValue.ArrayValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.values called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['values'], SSuggestArrayThisType);
   // Step 1: Let O be ToObject(this value)
   // Step 2: Return CreateArrayIterator(O, value)
   Result := TGocciaArrayIteratorValue.Create(AThisValue, akValues);
@@ -1974,7 +1986,7 @@ end;
 function TGocciaArrayValue.ArrayKeys(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.keys called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['keys'], SSuggestArrayThisType);
   // Step 1: Let O be ToObject(this value)
   // Step 2: Return CreateArrayIterator(O, key)
   Result := TGocciaArrayIteratorValue.Create(AThisValue, akKeys);
@@ -1984,7 +1996,7 @@ end;
 function TGocciaArrayValue.ArrayEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('Array.entries called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['entries'], SSuggestArrayThisType);
   // Step 1: Let O be ToObject(this value)
   // Step 2: Return CreateArrayIterator(O, key+value)
   Result := TGocciaArrayIteratorValue.Create(AThisValue, akEntries);
@@ -1994,7 +2006,7 @@ end;
 function TGocciaArrayValue.ArraySymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaArrayValue) then
-    ThrowError('[Symbol.iterator] called on non-array');
+    ThrowError(SErrorArrayMethodCalledOnNonArray, ['[Symbol.iterator]'], SSuggestArrayThisType);
   // Step 1: Return the result of calling Array.prototype.values
   Result := TGocciaArrayIteratorValue.Create(AThisValue, akValues);
 end;

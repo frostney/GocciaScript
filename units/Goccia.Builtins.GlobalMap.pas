@@ -22,8 +22,11 @@ type
 implementation
 
 uses
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction;
 
@@ -49,9 +52,9 @@ begin
   // Step 1: Let groups be GroupBy(items, callbackfn, zero)
   // (Validate arguments first)
   if not (AArgs.GetElement(0) is TGocciaArrayValue) then
-    ThrowError('Map.groupBy requires an iterable as first argument', 0, 0);
+    ThrowTypeError(SErrorMapGroupByRequiresIterable, SSuggestNotIterable);
   if not AArgs.GetElement(1).IsCallable then
-    ThrowError('Map.groupBy requires a callback function as second argument', 0, 0);
+    ThrowTypeError(SErrorMapGroupByRequiresCallback, SSuggestCallbackRequired);
 
   Items := TGocciaArrayValue(AArgs.GetElement(0));
   Callback := AArgs.GetElement(1);

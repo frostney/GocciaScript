@@ -252,9 +252,9 @@ begin
       on E: TGocciaThrowValue do
       begin
         if not GIsWorkerThread then
-          WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, Source, IsColorTerminal));
+          WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, Source, IsColorTerminal, E.Suggestion));
         MakeErrorFileResult(AFileName,
-          FormatThrowDetail(E.Value, AFileName, Source, False), AReporter);
+          FormatThrowDetail(E.Value, AFileName, Source, False, E.Suggestion), AReporter);
       end;
       on E: Exception do
         MakeErrorFileResult(AFileName, E.Message, AReporter);
@@ -375,9 +375,9 @@ begin
       on E: TGocciaThrowValue do
       begin
         if not GIsWorkerThread then
-          WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, Source, IsColorTerminal));
+          WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, Source, IsColorTerminal, E.Suggestion));
         MakeErrorFileResult(AFileName,
-          FormatThrowDetail(E.Value, AFileName, Source, False), AReporter);
+          FormatThrowDetail(E.Value, AFileName, Source, False, E.Suggestion), AReporter);
       end;
       on E: EGocciaBytecodeThrow do
       begin
@@ -464,9 +464,9 @@ begin
     end;
     on E: TGocciaThrowValue do
     begin
-      WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, ASource, IsColorTerminal));
+      WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, ASource, IsColorTerminal, E.Suggestion));
       MakeErrorFileResult(AFileName,
-        FormatThrowDetail(E.Value, AFileName, ASource, False), AReporter);
+        FormatThrowDetail(E.Value, AFileName, ASource, False, E.Suggestion), AReporter);
     end;
     on E: Exception do
       MakeErrorFileResult(AFileName, E.Message, AReporter);
@@ -577,9 +577,9 @@ begin
     end;
     on E: TGocciaThrowValue do
     begin
-      WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, ASource, IsColorTerminal));
+      WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, ASource, IsColorTerminal, E.Suggestion));
       MakeErrorFileResult(AFileName,
-        FormatThrowDetail(E.Value, AFileName, ASource, False), AReporter);
+        FormatThrowDetail(E.Value, AFileName, ASource, False, E.Suggestion), AReporter);
     end;
     on E: EGocciaBytecodeThrow do
     begin

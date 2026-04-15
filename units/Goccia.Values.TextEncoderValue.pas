@@ -41,6 +41,8 @@ uses
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -184,7 +186,9 @@ function TGocciaTextEncoderValue.EncodingGetter(const AArgs: TGocciaArgumentsCol
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaTextEncoderValue) then
-    ThrowTypeError('TextEncoder.prototype.encoding: illegal invocation');
+    ThrowTypeError(Format(SErrorTextEncoderIllegalInvocation,
+      ['TextEncoder.prototype.encoding']),
+      SSuggestTextEncoderThisType);
   // TextEncoder always uses UTF-8 — no instance state required.
   Result := TGocciaStringLiteralValue.Create(ENCODING_UTF8);
 end;
@@ -199,7 +203,9 @@ var
   I: Integer;
 begin
   if not (AThisValue is TGocciaTextEncoderValue) then
-    ThrowTypeError('TextEncoder.prototype.encode: illegal invocation');
+    ThrowTypeError(Format(SErrorTextEncoderIllegalInvocation,
+      ['TextEncoder.prototype.encode']),
+      SSuggestTextEncoderThisType);
   // Step 1: Let input be the empty string.
   Input := '';
   // Step 2: If input is given, convert to a scalar-value string.
@@ -226,10 +232,11 @@ var
   ResultObj: TGocciaObjectValue;
 begin
   if not (AThisValue is TGocciaTextEncoderValue) then
-    ThrowTypeError('TextEncoder.prototype.encodeInto: illegal invocation');
+    ThrowTypeError(Format(SErrorTextEncoderIllegalInvocation,
+      ['TextEncoder.prototype.encodeInto']),
+      SSuggestTextEncoderThisType);
   if AArgs.Length < 2 then
-    ThrowTypeError(
-      'TextEncoder.prototype.encodeInto requires source and destination arguments');
+    ThrowTypeError(SErrorTextEncoderEncodeIntoArgs, SSuggestTextEncoderEncodeIntoArgs);
 
   if AArgs.GetElement(0) is TGocciaUndefinedLiteralValue then
     Source := ''
@@ -237,12 +244,10 @@ begin
     Source := AArgs.GetElement(0).ToStringLiteral.Value;
 
   if not (AArgs.GetElement(1) is TGocciaTypedArrayValue) then
-    ThrowTypeError(
-      'TextEncoder.prototype.encodeInto: destination must be a Uint8Array');
+    ThrowTypeError(SErrorTextEncoderEncodeIntoDestType, SSuggestTextEncoderEncodeIntoArgs);
   Dest := TGocciaTypedArrayValue(AArgs.GetElement(1));
   if Dest.Kind <> takUint8 then
-    ThrowTypeError(
-      'TextEncoder.prototype.encodeInto: destination must be a Uint8Array');
+    ThrowTypeError(SErrorTextEncoderEncodeIntoDestType, SSuggestTextEncoderEncodeIntoArgs);
 
   // Convert source to USVString bytes (lone surrogates normalized to U+FFFD).
   Bytes := StringToUTF8Bytes(Source);

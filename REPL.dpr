@@ -203,7 +203,8 @@ begin
                       WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
                     else if E is TGocciaThrowValue then
                       WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value,
-                        REPL_FILE_NAME, Source, IsColorTerminal))
+                        REPL_FILE_NAME, Source, IsColorTerminal,
+                        TGocciaThrowValue(E).Suggestion))
                     else
                       WriteLn('Error: ', E.Message);
                   end;
@@ -256,7 +257,8 @@ begin
                       WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
                     else if E is TGocciaThrowValue then
                       WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value,
-                        REPL_FILE_NAME, Source, IsColorTerminal))
+                        REPL_FILE_NAME, Source, IsColorTerminal,
+                        TGocciaThrowValue(E).Suggestion))
                     else
                       WriteLn('Error: ', E.Message);
                   end;

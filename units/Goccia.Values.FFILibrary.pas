@@ -43,6 +43,8 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.FFI.Call,
   Goccia.FFI.Types,
   Goccia.GarbageCollector,
@@ -111,9 +113,9 @@ var
 begin
   // Validate arg count
   if AArgs.Length < FSignature.ArgCount then
-    ThrowTypeError('FFI function ' + FName + ' expects ' +
-      IntToStr(FSignature.ArgCount) + ' arguments, got ' +
-      IntToStr(AArgs.Length));
+    ThrowTypeError(Format(SErrorFFIFuncArgCount,
+      [FName, FSignature.ArgCount, AArgs.Length]),
+      SSuggestFFIUsage);
 
   // Marshal arguments into native arrays
   SetLength(IntArgs, 0);
@@ -184,8 +186,8 @@ begin
             else if ArgValue is TGocciaNullLiteralValue then
               IntArgs[I] := 0
             else
-              ThrowTypeError('FFI argument ' + IntToStr(I) +
-                ' must be an ArrayBuffer, TypedArray, FFIPointer, or null');
+              ThrowTypeError(Format(SErrorFFIArgMustBeBufferOrNull, [I]),
+                SSuggestFFIUsage);
           end;
           fftCString:
           begin
@@ -298,8 +300,8 @@ begin
               else if ArgValue is TGocciaNullLiteralValue then
                 {$IFDEF MSWINDOWS}State.Gpr[I]{$ELSE}State.Gpr[GprIdx]{$ENDIF} := 0
               else
-                ThrowTypeError('FFI argument ' + IntToStr(I) +
-                  ' must be an ArrayBuffer, TypedArray, FFIPointer, or null');
+                ThrowTypeError(Format(SErrorFFIArgMustBeBufferOrNull, [I]),
+                SSuggestFFIUsage);
             end;
             fftCString:
             begin
@@ -377,8 +379,8 @@ begin
               else if ArgValue is TGocciaNullLiteralValue then
                 IntVal := 0
               else
-                ThrowTypeError('FFI argument ' + IntToStr(I) +
-                  ' must be an ArrayBuffer, TypedArray, FFIPointer, or null');
+                ThrowTypeError(Format(SErrorFFIArgMustBeBufferOrNull, [I]),
+                SSuggestFFIUsage);
             end;
             fftCString:
             begin
@@ -545,10 +547,10 @@ var
   ValidationError: string;
 begin
   if AArgs.Length < 2 then
-    ThrowTypeError('bind requires a function name and a signature object');
+    ThrowTypeError(SErrorFFIBindRequiresNameAndSig, SSuggestFFIUsage);
 
   if not (AArgs.GetElement(1) is TGocciaObjectValue) then
-    ThrowTypeError('bind second argument must be a signature object { args: [...], returns: "..." }');
+    ThrowTypeError(SErrorFFIBindSigObject, SSuggestFFIUsage);
 
   SigObj := TGocciaObjectValue(AArgs.GetElement(1));
 
@@ -564,9 +566,9 @@ begin
       TypeName := ArgsArray.Elements[I].ToStringLiteral.Value;
       Result.ArgTypes[I] := ParseFFIType(TypeName);
       if (Result.ArgTypes[I] = fftVoid) and (TypeName <> FFI_TYPE_VOID) then
-        ThrowTypeError('Unknown FFI type: ' + TypeName);
+        ThrowTypeError(Format(SErrorFFIUnknownType, [TypeName]), SSuggestFFIUsage);
       if Result.ArgTypes[I] = fftVoid then
-        ThrowTypeError('void is not a valid argument type');
+        ThrowTypeError(SErrorFFIVoidNotValidArg, SSuggestFFIUsage);
     end;
   end
   else if (ArgsField = nil) or (ArgsField is TGocciaUndefinedLiteralValue) then
@@ -575,7 +577,7 @@ begin
     SetLength(Result.ArgTypes, 0);
   end
   else
-    ThrowTypeError('signature args must be an array of type strings');
+    ThrowTypeError(SErrorFFISigArgsMustBeArray, SSuggestFFIUsage);
 
   // Parse return type
   ReturnsField := SigObj.GetProperty('returns');
@@ -584,17 +586,17 @@ begin
     ReturnStr := TGocciaStringLiteralValue(ReturnsField).Value;
     Result.ReturnType := ParseFFIType(ReturnStr);
     if (Result.ReturnType = fftVoid) and (ReturnStr <> FFI_TYPE_VOID) then
-      ThrowTypeError('Unknown FFI return type: ' + ReturnStr);
+      ThrowTypeError(Format(SErrorFFIUnknownReturnType, [ReturnStr]), SSuggestFFIUsage);
   end
   else if (ReturnsField = nil) or (ReturnsField is TGocciaUndefinedLiteralValue) then
     Result.ReturnType := fftVoid
   else
-    ThrowTypeError('signature returns must be a type string');
+    ThrowTypeError(SErrorFFISigReturnsMustBeString, SSuggestFFIUsage);
 
   // Validate
   ValidationError := ValidateSignature(Result);
   if ValidationError <> '' then
-    ThrowTypeError(ValidationError);
+    ThrowTypeError(ValidationError, SSuggestFFIUsage);
 end;
 
 function TGocciaFFILibraryValue.Bind(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -606,11 +608,11 @@ var
   BoundFunc: TGocciaFFIBoundFunction;
 begin
   if not (AThisValue is TGocciaFFILibraryValue) then
-    ThrowTypeError('bind requires an FFILibrary');
+    ThrowTypeError(SErrorFFIBindRequiresLibrary, SSuggestFFILibraryOpen);
   Lib := TGocciaFFILibraryValue(AThisValue);
 
   if Lib.FHandle.IsClosed then
-    ThrowTypeError('Cannot bind from a closed library');
+    ThrowTypeError(SErrorFFIBindLibraryClosed, SSuggestFFILibraryOpen);
 
   FuncName := AArgs.GetElement(0).ToStringLiteral.Value;
   Sig := ParseSignatureFromArgs(AArgs, FuncName);
@@ -619,7 +621,7 @@ begin
     SymbolPtr := Lib.FHandle.FindSymbol(FuncName);
   except
     on E: Exception do
-      ThrowTypeError(E.Message);
+      ThrowTypeError(E.Message, SSuggestFFIUsage);
   end;
   BoundFunc := TGocciaFFIBoundFunction.Create(SymbolPtr, Sig, FuncName);
   Result := TGocciaNativeFunctionValue.CreateWithoutPrototype(
@@ -633,21 +635,21 @@ var
   SymPtr: CodePointer;
 begin
   if not (AThisValue is TGocciaFFILibraryValue) then
-    ThrowTypeError('symbol requires an FFILibrary');
+    ThrowTypeError(SErrorFFISymbolRequiresLibrary, SSuggestFFILibraryOpen);
   Lib := TGocciaFFILibraryValue(AThisValue);
 
   if Lib.FHandle.IsClosed then
-    ThrowTypeError('Cannot look up symbol in a closed library');
+    ThrowTypeError(SErrorFFISymbolLibraryClosed, SSuggestFFILibraryOpen);
 
   if AArgs.Length < 1 then
-    ThrowTypeError('symbol requires a symbol name');
+    ThrowTypeError(SErrorFFISymbolRequiresName, SSuggestFFIUsage);
 
   SymName := AArgs.GetElement(0).ToStringLiteral.Value;
   try
     SymPtr := Lib.FHandle.FindSymbol(SymName);
   except
     on E: Exception do
-      ThrowTypeError(E.Message);
+      ThrowTypeError(E.Message, SSuggestFFIUsage);
   end;
   Result := TGocciaFFIPointerValue.Create(Pointer(SymPtr));
 end;
@@ -657,7 +659,7 @@ var
   Lib: TGocciaFFILibraryValue;
 begin
   if not (AThisValue is TGocciaFFILibraryValue) then
-    ThrowTypeError('close requires an FFILibrary');
+    ThrowTypeError(SErrorFFICloseRequiresLibrary, SSuggestFFILibraryOpen);
   Lib := TGocciaFFILibraryValue(AThisValue);
   Lib.FHandle.Close;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -666,7 +668,7 @@ end;
 function TGocciaFFILibraryValue.PathGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaFFILibraryValue) then
-    ThrowTypeError('FFILibrary.path requires an FFILibrary');
+    ThrowTypeError(SErrorFFIPathRequiresLibrary, SSuggestFFILibraryOpen);
   Result := TGocciaStringLiteralValue.Create(
     TGocciaFFILibraryValue(AThisValue).FHandle.Path);
 end;
@@ -674,7 +676,7 @@ end;
 function TGocciaFFILibraryValue.ClosedGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaFFILibraryValue) then
-    ThrowTypeError('FFILibrary.closed requires an FFILibrary');
+    ThrowTypeError(SErrorFFIClosedRequiresLibrary, SSuggestFFILibraryOpen);
   if TGocciaFFILibraryValue(AThisValue).FHandle.IsClosed then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else

@@ -53,6 +53,8 @@ uses
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -307,8 +309,9 @@ begin
     begin
       Normalized := NormalizeEncodingLabel(LabelArg.ToStringLiteral.Value);
       if Normalized = '' then
-        ThrowRangeError('TextDecoder: The encoding label provided (' +
-          LabelArg.ToStringLiteral.Value + ') is invalid.');
+        ThrowRangeError(Format(SErrorTextDecoderInvalidEncoding,
+          [LabelArg.ToStringLiteral.Value]),
+          SSuggestTextDecoderThisType);
       FEncoding := Normalized;
     end;
   end;
@@ -320,7 +323,7 @@ begin
     if not (OptionsArg is TGocciaUndefinedLiteralValue) then
     begin
       if not (OptionsArg is TGocciaObjectValue) then
-        ThrowTypeError('TextDecoder: options must be an object or undefined');
+        ThrowTypeError(SErrorTextDecoderOptionsMustBeObject, SSuggestTextDecoderThisType);
 
       FatalOpt := TGocciaObjectValue(OptionsArg).GetProperty(PROP_FATAL);
       if Assigned(FatalOpt) and not (FatalOpt is TGocciaUndefinedLiteralValue) then
@@ -384,7 +387,7 @@ var
   Obj: TGocciaTextDecoderValue;
 begin
   if not (AThisValue is TGocciaTextDecoderValue) then
-    ThrowTypeError('TextDecoder.prototype.encoding: illegal invocation');
+    ThrowTypeError(SErrorTextDecoderEncodingIllegalInvocation, SSuggestTextDecoderThisType);
   Obj := TGocciaTextDecoderValue(AThisValue);
   Result := TGocciaStringLiteralValue.Create(Obj.FEncoding);
 end;
@@ -396,7 +399,7 @@ var
   Obj: TGocciaTextDecoderValue;
 begin
   if not (AThisValue is TGocciaTextDecoderValue) then
-    ThrowTypeError('TextDecoder.prototype.fatal: illegal invocation');
+    ThrowTypeError(SErrorTextDecoderFatalIllegalInvocation, SSuggestTextDecoderThisType);
   Obj := TGocciaTextDecoderValue(AThisValue);
   if Obj.FFatal then
     Result := TGocciaBooleanLiteralValue.TrueValue
@@ -411,7 +414,7 @@ var
   Obj: TGocciaTextDecoderValue;
 begin
   if not (AThisValue is TGocciaTextDecoderValue) then
-    ThrowTypeError('TextDecoder.prototype.ignoreBOM: illegal invocation');
+    ThrowTypeError(SErrorTextDecoderIgnoreBOMIllegalInvocation, SSuggestTextDecoderThisType);
   Obj := TGocciaTextDecoderValue(AThisValue);
   if Obj.FIgnoreBOM then
     Result := TGocciaBooleanLiteralValue.TrueValue
@@ -430,7 +433,7 @@ var
   U8: UTF8String;
 begin
   if not (AThisValue is TGocciaTextDecoderValue) then
-    ThrowTypeError('TextDecoder.prototype.decode: illegal invocation');
+    ThrowTypeError(SErrorTextDecoderDecodeIllegalInvocation, SSuggestTextDecoderThisType);
   Obj := TGocciaTextDecoderValue(AThisValue);
 
   // No input or undefined input — return empty string.
@@ -460,8 +463,7 @@ begin
     DataLen := Length(Data);
   end
   else
-    ThrowTypeError(
-      'TextDecoder.prototype.decode: input must be an ArrayBuffer or ArrayBufferView');
+    ThrowTypeError(SErrorTextDecoderDecodeInputType, SSuggestTextDecoderThisType);
 
   // Strip the UTF-8 BOM (EF BB BF) unless ignoreBOM is true.
   if not Obj.FIgnoreBOM and (DataLen >= MIN_BOM_LENGTH) and
@@ -478,8 +480,7 @@ begin
   begin
     // Fatal mode: reject any ill-formed byte sequence with a TypeError.
     if not IsValidUTF8(Data, Offset, DataLen) then
-      ThrowTypeError(
-        'TextDecoder.prototype.decode: invalid UTF-8 byte sequence');
+      ThrowTypeError(SErrorTextDecoderDecodeInvalidUTF8, SSuggestTextDecoderThisType);
     // All bytes are well-formed — raw copy is safe.
     SetLength(U8, DataLen);
     if DataLen > 0 then

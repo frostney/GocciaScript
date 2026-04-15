@@ -136,6 +136,8 @@ uses
   SysUtils,
 
   Goccia.Error,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Keywords.Reserved;
 
 { TGocciaScope }
@@ -226,6 +228,7 @@ procedure TGocciaScope.DefineLexicalBinding(const AName: string; const AValue: T
 var
   LexicalBinding: TLexicalBinding;
   ExistingLexicalBinding: TLexicalBinding;
+  Error: TGocciaSyntaxError;
 begin
   // Check for redeclaration errors
   if FLexicalBindings.TryGetValue(AName, ExistingLexicalBinding) then
@@ -234,8 +237,9 @@ begin
     case ADeclarationType of
       dtLet, dtConst:
         begin
-          // let/const cannot be redeclared
-          raise TGocciaSyntaxError.Create(Format('Identifier ''%s'' has already been declared', [AName]), ALine, AColumn, '', nil);
+          Error := TGocciaSyntaxError.Create(Format(SErrorIdentifierAlreadyDeclared, [AName]), ALine, AColumn, '', nil);
+          Error.Suggestion := SSuggestAlreadyDeclared;
+          raise Error;
         end;
     end;
   end;
@@ -288,11 +292,17 @@ begin
   begin
     // Check if variable is initialized (temporal dead zone for let/const)
     if not LexicalBinding.IsAccessible then
-      raise TGocciaReferenceError.Create(Format('Cannot access ''%s'' before initialization', [AName]), ALine, AColumn, '', nil);
+      raise TGocciaReferenceError.Create(
+        Format(SErrorCannotAccessBeforeInit, [AName]),
+        ALine, AColumn, '', nil,
+        SSuggestTemporalDeadZone);
 
     // Check if variable is writable
     if not LexicalBinding.Writable then
-      raise TGocciaTypeError.Create(Format('Assignment to constant variable ''%s''', [AName]), ALine, AColumn, '', nil);
+      raise TGocciaTypeError.Create(
+        Format(SErrorAssignToConstant, [AName]),
+        ALine, AColumn, '', nil,
+        SSuggestUseLetNotConst);
 
     // Update the value and mark as initialized
     LexicalBinding.Value := AValue;
@@ -309,7 +319,10 @@ begin
   end;
 
   // Variable not found in any scope - strict mode always throws
-  raise TGocciaReferenceError.Create(Format('Undefined variable: %s', [AName]), ALine, AColumn, '', nil);
+  raise TGocciaReferenceError.Create(
+    Format(SErrorUndefinedVariable, [AName]),
+    ALine, AColumn, '', nil,
+    SSuggestDeclareBeforeUse);
 end;
 
 function TGocciaScope.GetLexicalBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding;
@@ -319,13 +332,19 @@ begin
   if FLexicalBindings.TryGetValue(AName, LexicalBinding) then
   begin
     if not LexicalBinding.IsAccessible then
-      raise TGocciaReferenceError.Create(Format('Cannot access ''%s'' before initialization', [AName]), ALine, AColumn, '', nil);
+      raise TGocciaReferenceError.Create(
+        Format(SErrorCannotAccessBeforeInit, [AName]),
+        ALine, AColumn, '', nil,
+        SSuggestTemporalDeadZone);
     Result := LexicalBinding;
   end
   else if Assigned(FParent) then
     Result := FParent.GetLexicalBinding(AName, ALine, AColumn)
   else
-    raise TGocciaReferenceError.Create(Format('Undefined variable: %s', [AName]), ALine, AColumn, '', nil);
+    raise TGocciaReferenceError.Create(
+      Format(SErrorUndefinedVariable, [AName]),
+      ALine, AColumn, '', nil,
+      SSuggestDeclareBeforeUse);
 end;
 
 function TGocciaScope.GetValue(const AName: string): TGocciaValue;

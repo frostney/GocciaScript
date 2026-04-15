@@ -53,6 +53,8 @@ uses
   SysUtils,
 
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Utils,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -203,7 +205,7 @@ begin
 
   // Step 1: Let jsonString be ? ToString(text).
   if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowError('JSON.parse: argument must be a string', 0, 0);
+    ThrowTypeError(SErrorJSONParseArgMustBeString, SSuggestStringArgRequired);
 
   // Step 2-3: Parse and optionally apply the reviver with source text access.
   HasReviver := (AArgs.Length >= 2) and AArgs.GetElement(1).IsCallable;
@@ -219,7 +221,7 @@ begin
           AArgs.GetElement(0).ToStringLiteral.Value, Result, SourceTexts);
       except
         on E: Exception do
-          ThrowSyntaxError(E.Message);
+          ThrowSyntaxError(E.Message, SSuggestJSONFormat);
       end;
 
       // Step 3: Wrap in root object and apply InternalizeJSONProperty.
@@ -248,7 +250,7 @@ begin
       Result := FParser.Parse(AArgs.GetElement(0).ToStringLiteral.Value);
     except
       on E: Exception do
-        ThrowSyntaxError(E.Message);
+        ThrowSyntaxError(E.Message, SSuggestJSONFormat);
     end;
   end;
 end;
@@ -276,29 +278,29 @@ begin
 
   // Step 2: Throw a SyntaxError if jsonString is the empty string.
   if JSONString = '' then
-    ThrowSyntaxError('JSON.rawJSON: empty string is not valid JSON');
+    ThrowSyntaxError(SErrorJSONRawJSONEmptyString, SSuggestJSONFormat);
 
   // Step 2 (continued): Throw a SyntaxError if the first or last code unit is whitespace.
   FirstChar := JSONString[1];
   LastChar := JSONString[Length(JSONString)];
   if (FirstChar = JSON_WHITESPACE_TAB) or (FirstChar = JSON_WHITESPACE_LF) or
     (FirstChar = JSON_WHITESPACE_CR) or (FirstChar = JSON_WHITESPACE_SPACE) then
-    ThrowSyntaxError('JSON.rawJSON: input must not have leading whitespace');
+    ThrowSyntaxError(SErrorJSONRawJSONLeadingWhitespace, SSuggestJSONFormat);
   if (LastChar = JSON_WHITESPACE_TAB) or (LastChar = JSON_WHITESPACE_LF) or
     (LastChar = JSON_WHITESPACE_CR) or (LastChar = JSON_WHITESPACE_SPACE) then
-    ThrowSyntaxError('JSON.rawJSON: input must not have trailing whitespace');
+    ThrowSyntaxError(SErrorJSONRawJSONTrailingWhitespace, SSuggestJSONFormat);
 
   // Step 3: Parse jsonString as a JSON text. Throw SyntaxError if invalid.
   try
     Parsed := FParser.Parse(UTF8String(JSONString));
   except
     on E: Exception do
-      ThrowSyntaxError('JSON.rawJSON: ' + E.Message);
+      ThrowSyntaxError(Format(SErrorJSONRawJSONInvalid, [E.Message]), SSuggestJSONFormat);
   end;
 
   // Step 3 (continued): Throw SyntaxError if outermost value is object or array.
   if (Parsed is TGocciaObjectValue) then
-    ThrowSyntaxError('JSON.rawJSON: value must be a JSON primitive (not an object or array)');
+    ThrowSyntaxError(SErrorJSONRawJSONMustBePrimitive, SSuggestJSONFormat);
 
   // Steps 4-7: Create frozen object with null prototype, [[IsRawJSON]], and "rawJSON" property.
   Result := TGocciaRawJSONValue.Create(JSONString);
@@ -404,7 +406,7 @@ begin
   if Replaced is TGocciaArrayValue then
   begin
     if FReplacerTraversalStack.IndexOf(TGocciaArrayValue(Replaced)) <> -1 then
-      ThrowTypeError('Converting circular structure to JSON');
+      ThrowTypeError(SErrorJSONCircularStructure, SSuggestJSONFormat);
 
     FReplacerTraversalStack.Add(TGocciaArrayValue(Replaced));
     Arr := TGocciaArrayValue(Replaced);
@@ -425,7 +427,7 @@ begin
   else if (Replaced is TGocciaObjectValue) and not (Replaced is TGocciaArrayValue) then
   begin
     if FReplacerTraversalStack.IndexOf(TGocciaObjectValue(Replaced)) <> -1 then
-      ThrowTypeError('Converting circular structure to JSON');
+      ThrowTypeError(SErrorJSONCircularStructure, SSuggestJSONFormat);
 
     FReplacerTraversalStack.Add(TGocciaObjectValue(Replaced));
     Obj := TGocciaObjectValue(Replaced);
@@ -557,7 +559,7 @@ begin
     on E: TGocciaThrowValue do
       raise;
     on E: Exception do
-      ThrowError('JSON.stringify error: ' + E.Message, 0, 0);
+      ThrowTypeError(Format(SErrorJSONStringifyError, [E.Message]), SSuggestJSONFormat);
   end;
 end;
 

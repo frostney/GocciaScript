@@ -26,6 +26,8 @@ implementation
 uses
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase;
 
@@ -161,13 +163,13 @@ begin
      (ReturnMethod is TGocciaNullLiteralValue) then
     Exit;
   if not ReturnMethod.IsCallable then
-    ThrowTypeError('Iterator return property must be callable');
+    ThrowTypeError(SErrorIteratorReturnMustBeCallable, SSuggestIteratorProtocol);
 
   CallArgs := TGocciaArgumentsCollection.Create;
   try
     ReturnResult := TGocciaFunctionBase(ReturnMethod).Call(CallArgs, FSource);
     if not (ReturnResult is TGocciaObjectValue) then
-      ThrowTypeError('Iterator return() must return an object');
+      ThrowTypeError(SErrorIteratorReturnObject, SSuggestIteratorResultObject);
   finally
     CallArgs.Free;
   end;

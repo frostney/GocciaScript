@@ -77,6 +77,8 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
@@ -89,7 +91,7 @@ threadvar
 function AsDuration(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalDurationValue;
 begin
   if not (AValue is TGocciaTemporalDurationValue) then
-    ThrowTypeError(AMethod + ' called on non-Duration');
+    ThrowTypeError(AMethod + ' called on non-Duration', SSuggestTemporalThisType);
   Result := TGocciaTemporalDurationValue(AValue);
 end;
 
@@ -148,7 +150,7 @@ begin
                  (AHours < 0) or (AMinutes < 0) or (ASeconds < 0) or
                  (AMilliseconds < 0) or (AMicroseconds < 0) or (ANanoseconds < 0);
   if HasPositive and HasNegative then
-    ThrowRangeError('Duration fields must not have mixed signs');
+    ThrowRangeError(SErrorDurationMixedSigns, SSuggestTemporalDurationSigns);
 
   InitializePrototype;
   if Assigned(FShared) then
@@ -395,13 +397,13 @@ begin
         DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
         DurRec.Milliseconds, DurRec.Microseconds, DurRec.Nanoseconds)
     else
-      ThrowTypeError('Invalid duration string');
+      ThrowTypeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
   end
   else if Arg is TGocciaObjectValue then
     Other := DurationFromObject(TGocciaObjectValue(Arg))
   else
   begin
-    ThrowTypeError('Invalid argument to Duration.prototype.add');
+    ThrowTypeError(SErrorInvalidDurationAddArg, SSuggestTemporalDurationArg);
     Other := nil;
   end;
 
@@ -433,13 +435,13 @@ begin
         DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
         DurRec.Milliseconds, DurRec.Microseconds, DurRec.Nanoseconds)
     else
-      ThrowTypeError('Invalid duration string');
+      ThrowTypeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
   end
   else if Arg is TGocciaObjectValue then
     Other := DurationFromObject(TGocciaObjectValue(Arg))
   else
   begin
-    ThrowTypeError('Invalid argument to Duration.prototype.subtract');
+    ThrowTypeError(SErrorInvalidDurationSubtractArg, SSuggestTemporalDurationArg);
     Other := nil;
   end;
 
@@ -474,7 +476,7 @@ begin
   D := AsDuration(AThisValue, 'Duration.prototype.with');
   V := AArgs.GetElement(0);
   if not (V is TGocciaObjectValue) then
-    ThrowTypeError('Duration.prototype.with requires an object argument');
+    ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['Duration']), SSuggestTemporalWithObject);
   Obj := TGocciaObjectValue(V);
 
   Result := TGocciaTemporalDurationValue.Create(
@@ -508,7 +510,7 @@ begin
   Arg := AArgs.GetElement(0);
 
   if (D.FYears <> 0) or (D.FMonths <> 0) then
-    ThrowRangeError('Duration with years or months requires relativeTo for round()');
+    ThrowRangeError(SErrorDurationRoundRequiresRelativeTo, SSuggestTemporalRelativeTo);
 
   SmallestUnit := tuNone;
   LargestUnit := tuNone;
@@ -518,7 +520,7 @@ begin
   if Arg is TGocciaStringLiteralValue then
   begin
     if not GetTemporalUnitFromString(TGocciaStringLiteralValue(Arg).Value, SmallestUnit) then
-      ThrowRangeError('Invalid unit for Duration.prototype.round: ' + TGocciaStringLiteralValue(Arg).Value);
+      ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Duration.prototype.round', TGocciaStringLiteralValue(Arg).Value]), SSuggestTemporalValidUnits);
   end
   else if Arg is TGocciaObjectValue then
   begin
@@ -529,11 +531,11 @@ begin
     Increment := GetRoundingIncrement(OptionsObj, 1);
   end
   else
-    ThrowTypeError('Duration.prototype.round requires a string or options object');
+    ThrowTypeError(Format(SErrorTemporalRoundRequiresStringOrOptions, ['Duration']), SSuggestTemporalRoundArg);
 
   // If only largestUnit is specified, rebalance without rounding
   if (SmallestUnit = tuNone) and (LargestUnit = tuNone) then
-    ThrowRangeError('round() requires at least a smallestUnit or largestUnit');
+    ThrowRangeError(SErrorDurationRoundRequiresUnit, SSuggestTemporalRoundArg);
   if SmallestUnit = tuNone then
     SmallestUnit := tuNanosecond;
   if LargestUnit = tuNone then
@@ -645,7 +647,7 @@ begin
 
     Arg := OptionsObj.GetProperty('unit');
     if (Arg = nil) or (Arg is TGocciaUndefinedLiteralValue) then
-      ThrowRangeError('total() requires a unit option');
+      ThrowRangeError(SErrorDurationTotalRequiresUnit, SSuggestTemporalValidUnits);
     UnitStr := Arg.ToStringLiteral.Value;
 
     RelToArg := OptionsObj.GetProperty('relativeTo');
@@ -653,16 +655,16 @@ begin
   end
   else
   begin
-    ThrowTypeError('Duration.prototype.total requires a string or options object');
+    ThrowTypeError(SErrorDurationTotalRequiresStringOrOptions, SSuggestTemporalValidUnits);
     UnitStr := '';
   end;
 
   if (D.FYears <> 0) or (D.FMonths <> 0) then
   begin
     if HasRelativeTo then
-      ThrowRangeError('relativeTo for Duration.prototype.total is not yet supported')
+      ThrowRangeError(SErrorDurationTotalRelativeToUnsupported, SSuggestTemporalRelativeTo)
     else
-      ThrowRangeError('Duration with years or months requires relativeTo for total()');
+      ThrowRangeError(SErrorDurationTotalRequiresRelativeTo, SSuggestTemporalRelativeTo);
   end;
 
   TotalNs := D.FNanoseconds +
@@ -692,7 +694,7 @@ begin
     Result := TGocciaNumberLiteralValue.Create(TotalNs / 6.048e14)
   else
   begin
-    ThrowRangeError('Invalid unit for Duration.prototype.total: ' + UnitStr);
+    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Duration.prototype.total', UnitStr]), SSuggestTemporalValidUnits);
     Result := nil;
   end;
 end;
@@ -711,7 +713,7 @@ end;
 
 function TGocciaTemporalDurationValue.DurationValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  ThrowTypeError('Temporal.Duration.prototype.valueOf cannot be used; use toString or compare instead');
+  ThrowTypeError(Format(SErrorTemporalValueOf, ['Duration', 'toString or compare']), SSuggestTemporalNoValueOf);
   Result := nil;
 end;
 

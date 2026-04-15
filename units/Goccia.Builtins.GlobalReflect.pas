@@ -41,6 +41,8 @@ uses
   Goccia.Arguments.ArrayLike,
   Goccia.Arguments.Validator,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
@@ -58,7 +60,7 @@ threadvar
 procedure RequireObjectTarget(const ATarget: TGocciaValue; const AMethodName: string);
 begin
   if not (ATarget is TGocciaObjectValue) then
-    ThrowTypeError(Format('%s: target must be an object', [AMethodName]));
+    ThrowTypeError(Format(SErrorReflectTargetMustBeObject, [AMethodName]), SSuggestReflectObjectArg);
 end;
 
 { TGocciaGlobalReflect }
@@ -112,7 +114,7 @@ begin
 
   // Step 1: If IsCallable(target) is false, throw a TypeError exception
   if not (Target is TGocciaFunctionBase) then
-    ThrowTypeError('Reflect.apply: target must be a function');
+    ThrowTypeError(SErrorReflectApplyTargetMustBeFunction, SSuggestNotFunctionType);
 
   // Step 2: Let args be ? CreateListFromArrayLike(argumentsList)
   CallArgs := CreateListFromArrayLike(ArgsList, 'Reflect.apply');
@@ -139,7 +141,7 @@ begin
 
   // Step 1: If IsConstructor(target) is false, throw a TypeError exception
   if not (Target is TGocciaClassValue) then
-    ThrowTypeError('Reflect.construct: target must be a constructor');
+    ThrowTypeError(SErrorReflectConstructTargetMustBeConstructor, SSuggestNotConstructorType);
 
   // Step 2: Let args be ? CreateListFromArrayLike(argumentsList)
   CallArgs := CreateListFromArrayLike(ArgsList, 'Reflect.construct');
@@ -149,7 +151,7 @@ begin
     begin
       NewTarget := AArgs.GetElement(2);
       if not (NewTarget is TGocciaClassValue) then
-        ThrowTypeError('Reflect.construct: newTarget must be a constructor');
+        ThrowTypeError(SErrorReflectConstructNewTargetMustBeConstructor, SSuggestNotConstructorType);
     end
     else
       NewTarget := Target;
@@ -187,7 +189,7 @@ begin
   RequireObjectTarget(Target, 'Reflect.defineProperty');
 
   if not (Attrs is TGocciaObjectValue) then
-    ThrowTypeError('Reflect.defineProperty: attributes must be an object');
+    ThrowTypeError(SErrorReflectDefinePropertyAttrsMustBeObject, SSuggestPropertyDescriptorObject);
 
   Obj := TGocciaObjectValue(Target);
   DescriptorObject := TGocciaObjectValue(Attrs);
@@ -551,7 +553,7 @@ begin
 
   // Step 2: If Type(proto) is neither Object nor Null, throw a TypeError exception
   if not (ProtoArg is TGocciaObjectValue) and not (ProtoArg is TGocciaNullLiteralValue) then
-    ThrowTypeError('Reflect.setPrototypeOf: proto must be an object or null');
+    ThrowTypeError(SErrorReflectSetPrototypeOfProtoType, SSuggestReflectObjectArg);
 
   // Step 3: Return ? target.[[SetPrototypeOf]](proto)
   // ES2026 §10.1.2 OrdinarySetPrototypeOf step 2: If SameValue(V, current) return true

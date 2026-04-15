@@ -34,6 +34,8 @@ implementation
 uses
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
@@ -92,7 +94,7 @@ begin
 
     // TC39 Iterator Sequencing §1 step 3.a.ii: If iter is not an Object, throw TypeError
     if not (IteratorObj is TGocciaObjectValue) then
-      ThrowTypeError('Iterator.concat: [Symbol.iterator]() must return an object');
+      ThrowTypeError(SErrorIteratorConcatMustReturnObject, SSuggestIteratorProtocol);
 
     if IteratorObj is TGocciaIteratorValue then
       FCurrentIterator := TGocciaIteratorValue(IteratorObj)

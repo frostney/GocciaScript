@@ -32,6 +32,8 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
@@ -76,13 +78,13 @@ function TGocciaTOMLBuiltin.TOMLParse(
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'TOML.parse', ThrowError);
   if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowError('TOML.parse: argument must be a string', 0, 0);
+    ThrowTypeError(SErrorTOMLParseArgMustBeString, SSuggestStringArgRequired);
 
   try
     Result := FParser.Parse(AArgs.GetElement(0).ToStringLiteral.Value);
   except
     on E: EGocciaTOMLParseError do
-      ThrowSyntaxError(E.Message);
+      ThrowSyntaxError(E.Message, SSuggestTOMLSyntax);
   end;
 end;
 

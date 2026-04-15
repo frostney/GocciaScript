@@ -76,6 +76,8 @@ uses
   Goccia.AST.Statements,
   Goccia.ControlFlow,
   Goccia.Coverage,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.GarbageCollector,
@@ -251,7 +253,7 @@ begin
       Exit;
     end;
     if CF.Kind = cfkBreak then
-      ThrowSyntaxError('Illegal break statement');
+      ThrowSyntaxError(SErrorIllegalBreakStatement, SSuggestExpressionExpected);
   end;
 end;
 

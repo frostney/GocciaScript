@@ -44,6 +44,7 @@ implementation
 uses
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
@@ -145,7 +146,7 @@ begin
       Result := FParser.Parse(Bytes);
     end
     else
-      ThrowTypeError('JSONL.parse: argument must be a string or Uint8Array');
+      ThrowTypeError(SErrorJSONLParseArgType);
   except
     on E: EGocciaJSONLInvalidInputError do
       ThrowTypeError(E.Message);
@@ -242,7 +243,7 @@ begin
       Exit;
     end;
 
-    ThrowTypeError('JSONL.parseChunk: argument must be a string or Uint8Array');
+    ThrowTypeError(SErrorJSONLParseChunkArgType);
   except
     on E: EGocciaJSONLInvalidInputError do
       ThrowTypeError(E.Message);

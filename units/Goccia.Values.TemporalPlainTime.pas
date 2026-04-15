@@ -57,6 +57,10 @@ type
 implementation
 
 uses
+  SysUtils,
+
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
@@ -70,7 +74,7 @@ threadvar
 function AsPlainTime(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainTimeValue;
 begin
   if not (AValue is TGocciaTemporalPlainTimeValue) then
-    ThrowTypeError(AMethod + ' called on non-PlainTime');
+    ThrowTypeError(AMethod + ' called on non-PlainTime', SSuggestTemporalThisType);
   Result := TGocciaTemporalPlainTimeValue(AValue);
 end;
 
@@ -86,7 +90,7 @@ begin
   else if AValue is TGocciaStringLiteralValue then
   begin
     if not TryParseISOTime(TGocciaStringLiteralValue(AValue).Value, TimeRec) then
-      ThrowTypeError('Invalid ISO time string for ' + AMethod);
+      ThrowTypeError(Format(SErrorTemporalInvalidISOStringFor, ['time', AMethod]), SSuggestTemporalISOFormat);
     Result := TGocciaTemporalPlainTimeValue.Create(
       TimeRec.Hour, TimeRec.Minute, TimeRec.Second,
       TimeRec.Millisecond, TimeRec.Microsecond, TimeRec.Nanosecond);
@@ -111,7 +115,7 @@ begin
   end
   else
   begin
-    ThrowTypeError(AMethod + ' requires a PlainTime, string, or object');
+    ThrowTypeError(AMethod + ' requires a PlainTime, string, or object', SSuggestTemporalFromArg);
     Result := nil;
   end;
 end;
@@ -132,7 +136,7 @@ constructor TGocciaTemporalPlainTimeValue.Create(const AHour, AMinute, ASecond, 
 begin
   inherited Create(nil);
   if not IsValidTime(AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond) then
-    ThrowRangeError('Invalid time');
+    ThrowRangeError(SErrorInvalidTime, SSuggestTemporalDateRange);
   FHour := AHour;
   FMinute := AMinute;
   FSecond := ASecond;
@@ -245,7 +249,7 @@ begin
   T := AsPlainTime(AThisValue, 'PlainTime.prototype.with');
   V := AArgs.GetElement(0);
   if not (V is TGocciaObjectValue) then
-    ThrowTypeError('PlainTime.prototype.with requires an object argument');
+    ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['PlainTime']), SSuggestTemporalWithObject);
   Obj := TGocciaObjectValue(V);
 
   Result := TGocciaTemporalPlainTimeValue.Create(
@@ -277,7 +281,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODuration(TGocciaStringLiteralValue(Arg).Value, DurRec) then
-      ThrowTypeError('Invalid duration string');
+      ThrowTypeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
     Dur := TGocciaTemporalDurationValue.Create(
       DurRec.Years, DurRec.Months, DurRec.Weeks, DurRec.Days,
       DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
@@ -303,7 +307,7 @@ begin
   end
   else
   begin
-    ThrowTypeError('PlainTime.prototype.add requires a Duration or string');
+    ThrowTypeError(Format(SErrorTemporalAddRequiresDuration, ['PlainTime']), SSuggestTemporalDurationArg);
     Dur := nil;
   end;
 
@@ -341,7 +345,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODuration(TGocciaStringLiteralValue(Arg).Value, DurRec) then
-      ThrowTypeError('Invalid duration string');
+      ThrowTypeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
     Dur := TGocciaTemporalDurationValue.Create(
       DurRec.Years, DurRec.Months, DurRec.Weeks, DurRec.Days,
       DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
@@ -367,7 +371,7 @@ begin
   end
   else
   begin
-    ThrowTypeError('PlainTime.prototype.subtract requires a Duration or string');
+    ThrowTypeError(Format(SErrorTemporalSubtractRequiresDuration, ['PlainTime']), SSuggestTemporalDurationArg);
     Dur := nil;
   end;
 
@@ -446,20 +450,20 @@ begin
   begin
     UnitStr := TGocciaStringLiteralValue(Arg).Value;
     if not GetTemporalUnitFromString(UnitStr, SmallestUnit) then
-      ThrowRangeError('Invalid unit for PlainTime.prototype.round: ' + UnitStr);
+      ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainTime.prototype.round', UnitStr]), SSuggestTemporalValidUnits);
   end
   else if Arg is TGocciaObjectValue then
   begin
     OptionsObj := TGocciaObjectValue(Arg);
     SmallestUnit := GetSmallestUnit(OptionsObj, tuNone);
     if SmallestUnit = tuNone then
-      ThrowRangeError('round() requires a smallestUnit option');
+      ThrowRangeError(SErrorTemporalRoundRequiresSmallestUnit, SSuggestTemporalRoundArg);
     Mode := GetRoundingMode(OptionsObj, rmHalfExpand);
     Increment := GetRoundingIncrement(OptionsObj, 1);
   end
   else
   begin
-    ThrowTypeError('PlainTime.prototype.round requires a string or options object');
+    ThrowTypeError(Format(SErrorTemporalRoundRequiresStringOrOptions, ['PlainTime']), SSuggestTemporalRoundArg);
     SmallestUnit := tuNanosecond;
   end;
 
@@ -517,7 +521,7 @@ end;
 
 function TGocciaTemporalPlainTimeValue.TimeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  ThrowTypeError('Temporal.PlainTime.prototype.valueOf cannot be used; use toString or compare instead');
+  ThrowTypeError(Format(SErrorTemporalValueOf, ['PlainTime', 'toString or compare']), SSuggestTemporalNoValueOf);
   Result := nil;
 end;
 

@@ -20,7 +20,7 @@ function ExtractThrowLocation(const AThrown: TGocciaValue;
   Falls back to the stack trace or bare message when context is unavailable. }
 function FormatThrowDetail(const AThrown: TGocciaValue;
   const AFileName: string; const ASourceLines: TStringList;
-  const AUseColor: Boolean): string;
+  const AUseColor: Boolean; const ASuggestion: string = ''): string;
 
 implementation
 
@@ -97,7 +97,7 @@ end;
 
 function FormatThrowDetail(const AThrown: TGocciaValue;
   const AFileName: string; const ASourceLines: TStringList;
-  const AUseColor: Boolean): string;
+  const AUseColor: Boolean; const ASuggestion: string = ''): string;
 var
   ErrorName, ErrorMessage, FrameFileName: string;
   Line, Col: Integer;
@@ -111,8 +111,10 @@ begin
       EffectiveFileName := FrameFileName
     else
       EffectiveFileName := AFileName;
+
     Result := FormatErrorWithSourceContext(
-      ErrorName, ErrorMessage, EffectiveFileName, Line, Col, ASourceLines, AUseColor);
+      ErrorName, ErrorMessage, EffectiveFileName, Line, Col, ASourceLines,
+      AUseColor, ASuggestion);
   end
   else
   begin

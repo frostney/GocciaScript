@@ -104,6 +104,8 @@ uses
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.URL.Parser,
   Goccia.Utils,
@@ -279,11 +281,11 @@ begin
   for I := 0 to Outer.Elements.Count - 1 do
   begin
     if not Assigned(Outer.Elements[I]) or not (Outer.Elements[I] is TGocciaArrayValue) then
-      ThrowTypeError('Failed to construct URLSearchParams: The provided value cannot be converted to a sequence');
+      ThrowTypeError(SErrorURLSearchParamsNotSequence, SSuggestURLSearchParamsInit);
     Inner := TGocciaArrayValue(Outer.Elements[I]);
     // WHATWG URL §5.2: each pair must contain exactly two items
     if Inner.Elements.Count <> 2 then
-      ThrowTypeError('Failed to construct URLSearchParams: Sequence initializer must contain pairs with exactly two items');
+      ThrowTypeError(SErrorURLSearchParamsPairSize, SSuggestURLSearchParamsInit);
     Param.Name := '';
     Param.Value := '';
     if Assigned(Inner.Elements[0]) then
@@ -315,7 +317,7 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not (AThisValue is TGocciaURLSearchParamsValue) then
-    ThrowTypeError('URLSearchParams.prototype.append: not a URLSearchParams');
+    ThrowTypeError(SErrorURLSearchParamsAppendNotInstance, SSuggestURLSearchParamsThisType);
   Self_ := TGocciaURLSearchParamsValue(AThisValue);
   if AArgs.Length < 2 then Exit;
   Param.Name := AArgs.GetElement(0).ToStringLiteral.Value;
@@ -336,7 +338,7 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not (AThisValue is TGocciaURLSearchParamsValue) then
-    ThrowTypeError('URLSearchParams.prototype.delete: not a URLSearchParams');
+    ThrowTypeError(SErrorURLSearchParamsDeleteNotInstance, SSuggestURLSearchParamsThisType);
   Self_ := TGocciaURLSearchParamsValue(AThisValue);
   if AArgs.Length = 0 then Exit;
   Name := AArgs.GetElement(0).ToStringLiteral.Value;
@@ -374,7 +376,7 @@ var
   I: Integer;
 begin
   if not (AThisValue is TGocciaURLSearchParamsValue) then
-    ThrowTypeError('URLSearchParams.prototype.get: not a URLSearchParams');
+    ThrowTypeError(SErrorURLSearchParamsGetNotInstance, SSuggestURLSearchParamsThisType);
   Self_ := TGocciaURLSearchParamsValue(AThisValue);
   if AArgs.Length = 0 then
   begin
@@ -402,7 +404,7 @@ var
   I: Integer;
 begin
   if not (AThisValue is TGocciaURLSearchParamsValue) then
-    ThrowTypeError('URLSearchParams.prototype.getAll: not a URLSearchParams');
+    ThrowTypeError(SErrorURLSearchParamsGetAllNotInstance, SSuggestURLSearchParamsThisType);
   Self_ := TGocciaURLSearchParamsValue(AThisValue);
   Arr := TGocciaArrayValue.Create;
   if AArgs.Length > 0 then
@@ -426,7 +428,7 @@ var
   I: Integer;
 begin
   if not (AThisValue is TGocciaURLSearchParamsValue) then
-    ThrowTypeError('URLSearchParams.prototype.has: not a URLSearchParams');
+    ThrowTypeError(SErrorURLSearchParamsHasNotInstance, SSuggestURLSearchParamsThisType);
   Self_ := TGocciaURLSearchParamsValue(AThisValue);
   if AArgs.Length = 0 then
   begin
@@ -465,7 +467,7 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not (AThisValue is TGocciaURLSearchParamsValue) then
-    ThrowTypeError('URLSearchParams.prototype.set: not a URLSearchParams');
+    ThrowTypeError(SErrorURLSearchParamsSetNotInstance, SSuggestURLSearchParamsThisType);
   Self_ := TGocciaURLSearchParamsValue(AThisValue);
   if AArgs.Length < 2 then Exit;
   Name := AArgs.GetElement(0).ToStringLiteral.Value;
@@ -512,7 +514,7 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not (AThisValue is TGocciaURLSearchParamsValue) then
-    ThrowTypeError('URLSearchParams.prototype.sort: not a URLSearchParams');
+    ThrowTypeError(SErrorURLSearchParamsSortNotInstance, SSuggestURLSearchParamsThisType);
   Self_ := TGocciaURLSearchParamsValue(AThisValue);
 
   // Stable sort by name (Unicode code unit order) — insertion sort
@@ -536,7 +538,7 @@ function TGocciaURLSearchParamsValue.URLSearchParamsToString(
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaURLSearchParamsValue) then
-    ThrowTypeError('URLSearchParams.prototype.toString: not a URLSearchParams');
+    ThrowTypeError(SErrorURLSearchParamsToStringNotInstance, SSuggestURLSearchParamsThisType);
   Result := TGocciaStringLiteralValue.Create(
     TGocciaURLSearchParamsValue(AThisValue).Serialize);
 end;
@@ -547,7 +549,7 @@ function TGocciaURLSearchParamsValue.URLSearchParamsKeys(
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaURLSearchParamsValue) then
-    ThrowTypeError('URLSearchParams.prototype.keys: not a URLSearchParams');
+    ThrowTypeError(SErrorURLSearchParamsKeysNotInstance, SSuggestURLSearchParamsThisType);
   Result := TGocciaURLSearchParamsIteratorValue.Create(AThisValue, spikKeys);
 end;
 
@@ -557,7 +559,7 @@ function TGocciaURLSearchParamsValue.URLSearchParamsValues(
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaURLSearchParamsValue) then
-    ThrowTypeError('URLSearchParams.prototype.values: not a URLSearchParams');
+    ThrowTypeError(SErrorURLSearchParamsValuesNotInstance, SSuggestURLSearchParamsThisType);
   Result := TGocciaURLSearchParamsIteratorValue.Create(AThisValue, spikValues);
 end;
 
@@ -567,7 +569,7 @@ function TGocciaURLSearchParamsValue.URLSearchParamsEntries(
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaURLSearchParamsValue) then
-    ThrowTypeError('URLSearchParams.prototype.entries: not a URLSearchParams');
+    ThrowTypeError(SErrorURLSearchParamsEntriesNotInstance, SSuggestURLSearchParamsThisType);
   Result := TGocciaURLSearchParamsIteratorValue.Create(AThisValue, spikEntries);
 end;
 
@@ -584,14 +586,14 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not (AThisValue is TGocciaURLSearchParamsValue) then
-    ThrowTypeError('URLSearchParams.prototype.forEach: not a URLSearchParams');
+    ThrowTypeError(SErrorURLSearchParamsForEachNotInstance, SSuggestURLSearchParamsThisType);
   Self_ := TGocciaURLSearchParamsValue(AThisValue);
   // §6.2: callbackFn is required; GetElement(0) returns undefined when absent,
   // which then fails the IsCallable check and throws TypeError as required.
   Callback := AArgs.GetElement(0);
   // §6.2 step 3: if callbackFn is not callable, throw TypeError
   if not Callback.IsCallable then
-    ThrowTypeError('URLSearchParams.prototype.forEach: callback is not a function');
+    ThrowTypeError(SErrorURLSearchParamsForEachNotCallable, SSuggestCallbackRequired);
 
   // §6.2 step 4: optional thisArg (second argument)
   if AArgs.Length >= 2 then
@@ -625,7 +627,7 @@ function TGocciaURLSearchParamsValue.URLSearchParamsSizeGetter(
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaURLSearchParamsValue) then
-    ThrowTypeError('URLSearchParams size getter: not a URLSearchParams');
+    ThrowTypeError(SErrorURLSearchParamsSizeNotInstance, SSuggestURLSearchParamsThisType);
   Result := TGocciaNumberLiteralValue.Create(
     TGocciaURLSearchParamsValue(AThisValue).FList.Count);
 end;
@@ -636,7 +638,7 @@ function TGocciaURLSearchParamsValue.URLSearchParamsSymbolIterator(
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaURLSearchParamsValue) then
-    ThrowTypeError('URLSearchParams[Symbol.iterator]: not a URLSearchParams');
+    ThrowTypeError(SErrorURLSearchParamsIteratorNotInstance, SSuggestURLSearchParamsThisType);
   Result := TGocciaURLSearchParamsIteratorValue.Create(AThisValue, spikEntries);
 end;
 

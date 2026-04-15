@@ -90,6 +90,8 @@ uses
   TimingUtils,
 
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Temporal.Options,
   Goccia.Temporal.TimeZone,
@@ -222,7 +224,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODuration(TGocciaStringLiteralValue(Arg).Value, DurRec) then
-      ThrowRangeError('Invalid ISO duration string');
+      ThrowRangeError(SErrorInvalidISODuration, SSuggestTemporalDurationArg);
     Result := TGocciaTemporalDurationValue.Create(
       DurRec.Years, DurRec.Months, DurRec.Weeks, DurRec.Days,
       DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
@@ -239,7 +241,7 @@ begin
   end
   else
   begin
-    ThrowTypeError('Temporal.Duration.from requires a string, Duration, or object');
+    ThrowTypeError(SErrorTemporalDurationFromArg, SSuggestTemporalFromArg);
     Result := nil;
   end;
 end;
@@ -259,7 +261,7 @@ var
     else if AArg is TGocciaStringLiteralValue then
     begin
       if not TryParseISODuration(TGocciaStringLiteralValue(AArg).Value, DurRec) then
-        ThrowRangeError('Invalid ISO duration string');
+        ThrowRangeError(SErrorInvalidISODuration, SSuggestTemporalDurationArg);
       Result := TGocciaTemporalDurationValue.Create(
         DurRec.Years, DurRec.Months, DurRec.Weeks, DurRec.Days,
         DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
@@ -267,7 +269,7 @@ var
     end
     else
     begin
-      ThrowTypeError('Temporal.Duration.compare requires Duration arguments');
+      ThrowTypeError(SErrorTemporalDurationCompareArg, SSuggestTemporalCompareArg);
       Result := nil;
     end;
   end;
@@ -318,7 +320,7 @@ var
   SubMs: Integer;
 begin
   if AArgs.Length < 1 then
-    ThrowTypeError('Temporal.Instant requires epochNanoseconds argument');
+    ThrowTypeError(SErrorTemporalInstantRequiresEpoch, SSuggestTemporalFromArg);
 
   EpochNs := AArgs.GetElement(0).ToNumberLiteral.Value;
   Ms := Trunc(EpochNs / 1000000);
@@ -348,7 +350,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODateTime(TGocciaStringLiteralValue(Arg).Value, DateRec, TimeRec) then
-      ThrowTypeError('Invalid ISO instant string');
+      ThrowTypeError(SErrorInvalidISOInstant, SSuggestTemporalISOFormat);
     EpochMs := DateToEpochDays(DateRec.Year, DateRec.Month, DateRec.Day) * Int64(86400000) +
                Int64(TimeRec.Hour) * 3600000 + Int64(TimeRec.Minute) * 60000 +
                Int64(TimeRec.Second) * 1000 + TimeRec.Millisecond;
@@ -357,7 +359,7 @@ begin
   end
   else
   begin
-    ThrowTypeError('Temporal.Instant.from requires a string or Instant');
+    ThrowTypeError(SErrorTemporalInstantFromArg, SSuggestTemporalFromArg);
     Result := nil;
   end;
 end;
@@ -365,7 +367,7 @@ end;
 function TGocciaTemporalBuiltin.InstantFromEpochMilliseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if AArgs.Length < 1 then
-    ThrowTypeError('Temporal.Instant.fromEpochMilliseconds requires an argument');
+    ThrowTypeError(SErrorTemporalInstantFromEpochMillis, SSuggestTemporalFromArg);
   Result := TGocciaTemporalInstantValue.Create(
     Trunc(AArgs.GetElement(0).ToNumberLiteral.Value), 0);
 end;
@@ -377,7 +379,7 @@ var
   SubMs: Integer;
 begin
   if AArgs.Length < 1 then
-    ThrowTypeError('Temporal.Instant.fromEpochNanoseconds requires an argument');
+    ThrowTypeError(SErrorTemporalInstantFromEpochNanos, SSuggestTemporalFromArg);
   EpochNs := AArgs.GetElement(0).ToNumberLiteral.Value;
   Ms := Trunc(EpochNs / 1000000);
   // Safe Int64 → Double conversion (FPC 3.2.2 AArch64 bug: Int64 * Double gives wrong results)
@@ -402,7 +404,7 @@ var
     else if AArg is TGocciaStringLiteralValue then
     begin
       if not TryParseISODateTime(TGocciaStringLiteralValue(AArg).Value, DateRec, TimeRec) then
-        ThrowTypeError('Invalid ISO instant string');
+        ThrowTypeError(SErrorInvalidISOInstant, SSuggestTemporalISOFormat);
       EpochMs := DateToEpochDays(DateRec.Year, DateRec.Month, DateRec.Day) * Int64(86400000) +
                  Int64(TimeRec.Hour) * 3600000 + Int64(TimeRec.Minute) * 60000 +
                  Int64(TimeRec.Second) * 1000 + TimeRec.Millisecond;
@@ -411,7 +413,7 @@ var
     end
     else
     begin
-      ThrowTypeError('Temporal.Instant.compare requires Instant arguments');
+      ThrowTypeError(SErrorTemporalInstantCompareArg, SSuggestTemporalCompareArg);
       Result := nil;
     end;
   end;
@@ -450,7 +452,7 @@ end;
 function TGocciaTemporalBuiltin.PlainDateConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if AArgs.Length < 3 then
-    ThrowTypeError('Temporal.PlainDate requires year, month, day arguments');
+    ThrowTypeError(SErrorTemporalPlainDateArgs, SSuggestTemporalDateRange);
 
   Result := TGocciaTemporalPlainDateValue.Create(
     Trunc(AArgs.GetElement(0).ToNumberLiteral.Value),
@@ -491,23 +493,23 @@ begin
     else if TryParseISODateTime(TGocciaStringLiteralValue(Arg).Value, DateRec, TimeRec) then
       Result := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day)
     else
-      ThrowTypeError('Invalid ISO date string');
+      ThrowTypeError(SErrorInvalidISODate, SSuggestTemporalISOFormat);
   end
   else if Arg is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(Arg);
     V := Obj.GetProperty(PROP_YEAR);
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError('Temporal.PlainDate.from requires year, month, day properties');
+      ThrowTypeError(SErrorTemporalPlainDateFromProps, SSuggestTemporalFromArg);
     Y := Trunc(V.ToNumberLiteral.Value);
     V := Obj.GetProperty(PROP_MONTH);
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError('Temporal.PlainDate.from requires year, month, day properties');
+      ThrowTypeError(SErrorTemporalPlainDateFromProps, SSuggestTemporalFromArg);
     Mo := Trunc(V.ToNumberLiteral.Value);
     if (Mo < 1) or (Mo > 12) then
     begin
       if Overflow = toReject then
-        ThrowRangeError('Month ' + IntToStr(Mo) + ' out of range');
+        ThrowRangeError(Format(SErrorTemporalMonthOutOfRange, [Mo]), SSuggestTemporalDateRange);
       if Mo < 1 then
         Mo := 1
       else
@@ -515,12 +517,12 @@ begin
     end;
     V := Obj.GetProperty(PROP_DAY);
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError('Temporal.PlainDate.from requires year, month, day properties');
+      ThrowTypeError(SErrorTemporalPlainDateFromProps, SSuggestTemporalFromArg);
     Dy := Trunc(V.ToNumberLiteral.Value);
     if Dy < 1 then
     begin
       if Overflow = toReject then
-        ThrowRangeError('Day ' + IntToStr(Dy) + ' out of range');
+        ThrowRangeError(Format(SErrorTemporalDayOutOfRange, [Dy]), SSuggestTemporalDateRange);
       Dy := 1;
     end;
 
@@ -528,7 +530,7 @@ begin
     if Dy > MaxDay then
     begin
       if Overflow = toReject then
-        ThrowRangeError('Day ' + IntToStr(Dy) + ' out of range for month ' + IntToStr(Mo));
+        ThrowRangeError(Format(SErrorTemporalDayOutOfRangeForMonth, [Dy, Mo]), SSuggestTemporalDateRange);
       Dy := MaxDay;
     end;
 
@@ -536,7 +538,7 @@ begin
   end
   else
   begin
-    ThrowTypeError('Temporal.PlainDate.from requires a string, PlainDate, or object');
+    ThrowTypeError(SErrorTemporalPlainDateFromArg, SSuggestTemporalFromArg);
     Result := nil;
   end;
 end;
@@ -560,13 +562,13 @@ var
         Result := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day)
       else
       begin
-        ThrowTypeError('Invalid ISO date string');
+        ThrowTypeError(SErrorInvalidISODate, SSuggestTemporalISOFormat);
         Result := nil;
       end;
     end
     else
     begin
-      ThrowTypeError('Temporal.PlainDate.compare requires PlainDate arguments');
+      ThrowTypeError(SErrorTemporalPlainDateCompareArg, SSuggestTemporalCompareArg);
       Result := nil;
     end;
   end;
@@ -638,7 +640,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISOTime(TGocciaStringLiteralValue(Arg).Value, TimeRec) then
-      ThrowTypeError('Invalid ISO time string');
+      ThrowTypeError(SErrorInvalidISOTime, SSuggestTemporalISOFormat);
     Result := TGocciaTemporalPlainTimeValue.Create(
       TimeRec.Hour, TimeRec.Minute, TimeRec.Second,
       TimeRec.Millisecond, TimeRec.Microsecond, TimeRec.Nanosecond);
@@ -663,7 +665,7 @@ begin
   end
   else
   begin
-    ThrowTypeError('Temporal.PlainTime.from requires a string, PlainTime, or object');
+    ThrowTypeError(SErrorTemporalPlainTimeFromArg, SSuggestTemporalFromArg);
     Result := nil;
   end;
 end;
@@ -682,7 +684,7 @@ var
     begin
       if not TryParseISOTime(TGocciaStringLiteralValue(AArg).Value, TimeRec) then
       begin
-        ThrowTypeError('Invalid ISO time string');
+        ThrowTypeError(SErrorInvalidISOTime, SSuggestTemporalISOFormat);
         Result := nil;
       end
       else
@@ -692,7 +694,7 @@ var
     end
     else
     begin
-      ThrowTypeError('Temporal.PlainTime.compare requires PlainTime arguments');
+      ThrowTypeError(SErrorTemporalPlainTimeCompareArg, SSuggestTemporalCompareArg);
       Result := nil;
     end;
   end;
@@ -741,7 +743,7 @@ function TGocciaTemporalBuiltin.PlainDateTimeConstructorFn(const AArgs: TGocciaA
 
 begin
   if AArgs.Length < 3 then
-    ThrowTypeError('Temporal.PlainDateTime requires at least year, month, day arguments');
+    ThrowTypeError(SErrorTemporalPlainDateTimeArgs, SSuggestTemporalDateRange);
 
   Result := TGocciaTemporalPlainDateTimeValue.Create(
     GetArgOr(0, 0), GetArgOr(1, 0), GetArgOr(2, 0),
@@ -770,7 +772,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODateTime(TGocciaStringLiteralValue(Arg).Value, DateRec, TimeRec) then
-      ThrowTypeError('Invalid ISO date-time string');
+      ThrowTypeError(SErrorInvalidISODateTime, SSuggestTemporalISOFormat);
     Result := TGocciaTemporalPlainDateTimeValue.Create(
       DateRec.Year, DateRec.Month, DateRec.Day,
       TimeRec.Hour, TimeRec.Minute, TimeRec.Second,
@@ -793,7 +795,7 @@ begin
   end
   else
   begin
-    ThrowTypeError('Temporal.PlainDateTime.from requires a string, PlainDateTime, or object');
+    ThrowTypeError(SErrorTemporalPlainDateTimeFromArg, SSuggestTemporalFromArg);
     Result := nil;
   end;
 end;
@@ -814,7 +816,7 @@ var
     begin
       if not TryParseISODateTime(TGocciaStringLiteralValue(AArg).Value, DateRec, TimeRec) then
       begin
-        ThrowTypeError('Invalid ISO date-time string');
+        ThrowTypeError(SErrorInvalidISODateTime, SSuggestTemporalISOFormat);
         Result := nil;
       end
       else
@@ -825,7 +827,7 @@ var
     end
     else
     begin
-      ThrowTypeError('Temporal.PlainDateTime.compare requires PlainDateTime arguments');
+      ThrowTypeError(SErrorTemporalPlainDateTimeCompareArg, SSuggestTemporalCompareArg);
       Result := nil;
     end;
   end;
@@ -863,7 +865,7 @@ var
   RefDay: Integer;
 begin
   if AArgs.Length < 2 then
-    ThrowTypeError('Temporal.PlainYearMonth requires year, month arguments');
+    ThrowTypeError(SErrorTemporalPlainYearMonthArgs, SSuggestTemporalDateRange);
 
   RefDay := 1;
   if (AArgs.Length >= 3) and not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
@@ -894,7 +896,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISOYearMonth(TGocciaStringLiteralValue(Arg).Value, Y, M) then
-      ThrowRangeError('Invalid ISO year-month string');
+      ThrowRangeError(SErrorInvalidISOYearMonth, SSuggestTemporalISOFormat);
     Result := TGocciaTemporalPlainYearMonthValue.Create(Y, M);
   end
   else if Arg is TGocciaObjectValue then
@@ -902,7 +904,7 @@ begin
     Obj := TGocciaObjectValue(Arg);
     V := Obj.GetProperty(PROP_YEAR);
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError('Temporal.PlainYearMonth.from requires year property');
+      ThrowTypeError(SErrorTemporalPlainYearMonthFromYear, SSuggestTemporalFromArg);
     Y := Trunc(V.ToNumberLiteral.Value);
     // Support both monthCode and month, consistent with PlainMonthDay.from
     VMonthCode := Obj.GetProperty(PROP_MONTH_CODE);
@@ -911,30 +913,30 @@ begin
       MonthCodeStr := VMonthCode.ToStringLiteral.Value;
       if (Length(MonthCodeStr) <> 3) or (MonthCodeStr[1] <> 'M') or
          not (MonthCodeStr[2] in ['0'..'9']) or not (MonthCodeStr[3] in ['0'..'9']) then
-        ThrowTypeError('Invalid monthCode for Temporal.PlainYearMonth.from');
+        ThrowTypeError(SErrorInvalidMonthCodeYearMonth, SSuggestTemporalMonthCode);
       if not TryStrToInt(Copy(MonthCodeStr, 2, 2), MonthPart) then
-        ThrowTypeError('Invalid monthCode for Temporal.PlainYearMonth.from');
+        ThrowTypeError(SErrorInvalidMonthCodeYearMonth, SSuggestTemporalMonthCode);
       if (MonthPart < 1) or (MonthPart > 12) then
-        ThrowRangeError('monthCode month out of range in Temporal.PlainYearMonth.from');
+        ThrowRangeError(SErrorMonthCodeOutOfRange, SSuggestTemporalMonthCode);
       // Check consistency if both month and monthCode are provided
       V := Obj.GetProperty(PROP_MONTH);
       if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
         if Trunc(V.ToNumberLiteral.Value) <> MonthPart then
-          ThrowRangeError('month and monthCode must match in Temporal.PlainYearMonth.from');
+          ThrowRangeError(SErrorMonthCodeMismatch, SSuggestTemporalMonthCode);
       M := MonthPart;
     end
     else
     begin
       V := Obj.GetProperty(PROP_MONTH);
       if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
-        ThrowTypeError('Temporal.PlainYearMonth.from requires monthCode or month property');
+        ThrowTypeError(SErrorTemporalPlainYearMonthFromMonth, SSuggestTemporalFromArg);
       M := Trunc(V.ToNumberLiteral.Value);
     end;
     Result := TGocciaTemporalPlainYearMonthValue.Create(Y, M);
   end
   else
   begin
-    ThrowTypeError('Temporal.PlainYearMonth.from requires a string, PlainYearMonth, or object');
+    ThrowTypeError(SErrorTemporalPlainYearMonthFromArg, SSuggestTemporalFromArg);
     Result := nil;
   end;
 end;
@@ -954,7 +956,7 @@ var
     begin
       if not TryParseISOYearMonth(TGocciaStringLiteralValue(AArg).Value, Y, M) then
       begin
-        ThrowRangeError('Invalid ISO year-month string');
+        ThrowRangeError(SErrorInvalidISOYearMonth, SSuggestTemporalISOFormat);
         Result := nil;
       end
       else
@@ -962,7 +964,7 @@ var
     end
     else
     begin
-      ThrowTypeError('Temporal.PlainYearMonth.compare requires PlainYearMonth arguments');
+      ThrowTypeError(SErrorTemporalPlainYearMonthCompareArg, SSuggestTemporalCompareArg);
       Result := nil;
     end;
   end;
@@ -1002,7 +1004,7 @@ function TGocciaTemporalBuiltin.PlainMonthDayConstructorFn(const AArgs: TGocciaA
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if AArgs.Length < 2 then
-    ThrowTypeError('Temporal.PlainMonthDay requires month, day arguments');
+    ThrowTypeError(SErrorTemporalPlainMonthDayArgs, SSuggestTemporalDateRange);
 
   Result := TGocciaTemporalPlainMonthDayValue.Create(
     Trunc(AArgs.GetElement(0).ToNumberLiteral.Value),
@@ -1028,7 +1030,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISOMonthDay(TGocciaStringLiteralValue(Arg).Value, M, D) then
-      ThrowRangeError('Invalid ISO month-day string');
+      ThrowRangeError(SErrorInvalidISOMonthDay, SSuggestTemporalISOFormat);
     Result := TGocciaTemporalPlainMonthDayValue.Create(M, D);
   end
   else if Arg is TGocciaObjectValue then
@@ -1036,7 +1038,7 @@ begin
     Obj := TGocciaObjectValue(Arg);
     V := Obj.GetProperty(PROP_DAY);
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError('Temporal.PlainMonthDay.from requires day property');
+      ThrowTypeError(SErrorTemporalPlainMonthDayFromDay, SSuggestTemporalFromArg);
     D := Trunc(V.ToNumberLiteral.Value);
     // Support both monthCode (e.g., "M07") and month (numeric)
     V := Obj.GetProperty(PROP_MONTH_CODE);
@@ -1046,9 +1048,9 @@ begin
       MonthCodeStr := V.ToStringLiteral.Value;
       if (Length(MonthCodeStr) <> 3) or (MonthCodeStr[1] <> 'M') or
          not (MonthCodeStr[2] in ['0'..'9']) or not (MonthCodeStr[3] in ['0'..'9']) then
-        ThrowTypeError('Invalid monthCode for Temporal.PlainMonthDay.from');
+        ThrowTypeError(SErrorInvalidMonthCodeMonthDay, SSuggestTemporalMonthCode);
       if not TryStrToInt(Copy(MonthCodeStr, 2, 2), M) then
-        ThrowTypeError('Invalid monthCode for Temporal.PlainMonthDay.from');
+        ThrowTypeError(SErrorInvalidMonthCodeMonthDay, SSuggestTemporalMonthCode);
     end
     else
     begin
@@ -1059,12 +1061,12 @@ begin
         M := 0;
     end;
     if (M < 1) or (M > 12) then
-      ThrowTypeError('Temporal.PlainMonthDay.from requires a valid month property');
+      ThrowTypeError(SErrorTemporalPlainMonthDayFromMonth, SSuggestTemporalDateRange);
     Result := TGocciaTemporalPlainMonthDayValue.Create(M, D);
   end
   else
   begin
-    ThrowTypeError('Temporal.PlainMonthDay.from requires a string, PlainMonthDay, or object');
+    ThrowTypeError(SErrorTemporalPlainMonthDayFromArg, SSuggestTemporalFromArg);
     Result := nil;
   end;
 end;
@@ -1084,7 +1086,7 @@ var
     begin
       if not TryParseISOMonthDay(TGocciaStringLiteralValue(AArg).Value, M, D) then
       begin
-        ThrowRangeError('Invalid ISO month-day string');
+        ThrowRangeError(SErrorInvalidISOMonthDay, SSuggestTemporalISOFormat);
         Result := nil;
       end
       else
@@ -1092,7 +1094,7 @@ var
     end
     else
     begin
-      ThrowTypeError('Temporal.PlainMonthDay.compare requires PlainMonthDay arguments');
+      ThrowTypeError(SErrorTemporalPlainMonthDayCompareArg, SSuggestTemporalCompareArg);
       Result := nil;
     end;
   end;
@@ -1138,7 +1140,7 @@ var
   TZ: string;
 begin
   if AArgs.Length < 2 then
-    ThrowTypeError('Temporal.ZonedDateTime requires epochNanoseconds and timeZone arguments');
+    ThrowTypeError(SErrorTemporalZonedDateTimeArgs, SSuggestTemporalTimezone);
 
   EpochNs := AArgs.GetElement(0).ToNumberLiteral.Value;
   Ms := Trunc(EpochNs / 1000000);
@@ -1173,7 +1175,7 @@ begin
   begin
     if not TryParseISODateTimeWithOffset(TGocciaStringLiteralValue(Arg).Value,
         DateRec, TimeRec, OffsetSeconds, TZ) then
-      ThrowRangeError('Invalid ISO zoned date-time string');
+      ThrowRangeError(SErrorInvalidISOZonedDateTime, SSuggestTemporalISOFormat);
 
     // Compute UTC epoch from wall-clock time
     EpochMs := DateToEpochDays(DateRec.Year, DateRec.Month, DateRec.Day) * Int64(86400000) +
@@ -1185,13 +1187,13 @@ begin
     EpochMs := EpochMs - Int64(OffsetSeconds) * 1000;
 
     if TZ = '' then
-      ThrowRangeError('Temporal.ZonedDateTime.from requires a timezone annotation (e.g., [UTC])');
+      ThrowRangeError(SErrorTemporalZonedDateTimeRequiresTZ, SSuggestTemporalTimezone);
 
     Result := TGocciaTemporalZonedDateTimeValue.Create(EpochMs, SubMs, TZ);
   end
   else
   begin
-    ThrowTypeError('Temporal.ZonedDateTime.from requires a string or ZonedDateTime');
+    ThrowTypeError(SErrorTemporalZonedDateTimeFromArg, SSuggestTemporalFromArg);
     Result := nil;
   end;
 end;
@@ -1216,7 +1218,7 @@ var
     begin
       if not TryParseISODateTimeWithOffset(TGocciaStringLiteralValue(AArg).Value,
           CoerceDateRec, CoerceTimeRec, CoerceOffsetSeconds, CoerceTZ) then
-        ThrowRangeError('Invalid ISO zoned date-time string');
+        ThrowRangeError(SErrorInvalidISOZonedDateTime, SSuggestTemporalISOFormat);
 
       CoerceEpochMs := DateToEpochDays(CoerceDateRec.Year, CoerceDateRec.Month, CoerceDateRec.Day) * Int64(86400000) +
                        Int64(CoerceTimeRec.Hour) * 3600000 + Int64(CoerceTimeRec.Minute) * 60000 +
@@ -1225,13 +1227,13 @@ var
       CoerceEpochMs := CoerceEpochMs - Int64(CoerceOffsetSeconds) * 1000;
 
       if CoerceTZ = '' then
-        ThrowRangeError('Temporal.ZonedDateTime.compare requires a timezone annotation (e.g., [UTC])');
+        ThrowRangeError(SErrorTemporalZonedDateTimeCompareTZ, SSuggestTemporalTimezone);
 
       Result := TGocciaTemporalZonedDateTimeValue.Create(CoerceEpochMs, CoerceSubMs, CoerceTZ);
     end
     else
     begin
-      ThrowTypeError('Temporal.ZonedDateTime.compare requires ZonedDateTime or string arguments');
+      ThrowTypeError(SErrorTemporalZonedDateTimeCompareArg, SSuggestTemporalCompareArg);
       Result := nil;
     end;
   end;

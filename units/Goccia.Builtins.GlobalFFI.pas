@@ -28,6 +28,8 @@ uses
   SysUtils,
 
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.FFI.DynamicLibrary,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FFILibrary,
@@ -74,7 +76,7 @@ var
   Handle: TGocciaFFILibraryHandle;
 begin
   if AArgs.Length < 1 then
-    ThrowTypeError('FFI.open requires a library path');
+    ThrowTypeError(SErrorFFIOpenRequiresPath, SSuggestFFILibraryOpen);
 
   LibPath := AArgs.GetElement(0).ToStringLiteral.Value;
 
@@ -82,7 +84,7 @@ begin
     Handle := TGocciaFFILibraryHandle.Create(LibPath);
   except
     on E: Exception do
-      ThrowTypeError(E.Message);
+      ThrowTypeError(E.Message, SSuggestFFILibraryOpen);
   end;
 
   try

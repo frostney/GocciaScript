@@ -41,6 +41,10 @@ type
 implementation
 
 uses
+  SysUtils,
+
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -140,7 +144,7 @@ end;
 function TGocciaFFIPointerValue.IsNullGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaFFIPointerValue) then
-    ThrowTypeError('FFIPointer.isNull requires an FFIPointer');
+    ThrowTypeError(Format(SErrorFFIPointerRequiresFFIPointer, [PROP_IS_NULL]), SSuggestFFIUsage);
   if Assigned(TGocciaFFIPointerValue(AThisValue).FAddress) then
     Result := TGocciaBooleanLiteralValue.FalseValue
   else
@@ -150,7 +154,7 @@ end;
 function TGocciaFFIPointerValue.AddressGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaFFIPointerValue) then
-    ThrowTypeError('FFIPointer.address requires an FFIPointer');
+    ThrowTypeError(Format(SErrorFFIPointerRequiresFFIPointer, [PROP_FFI_ADDRESS]), SSuggestFFIUsage);
   Result := TGocciaNumberLiteralValue.Create(
     PtrUInt(TGocciaFFIPointerValue(AThisValue).FAddress));
 end;

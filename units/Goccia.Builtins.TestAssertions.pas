@@ -277,6 +277,8 @@ uses
 
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Evaluator,
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
@@ -285,6 +287,7 @@ uses
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
   Goccia.Values.SetValue;
@@ -535,16 +538,16 @@ begin
     FTestAssertions.ThrowError);
 
   if not (AArguments.GetElement(0) is TGocciaStringLiteralValue) then
-    FTestAssertions.ThrowError(GetFunctionName +
-      ' expects first argument to be a string', 0, 0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(Format(SErrorFunctionExpectsStringFirst,
+      [GetFunctionName]), SSuggestTestUsage);
 
   if not (AArguments.GetElement(1) is TGocciaFunctionBase) then
-    FTestAssertions.ThrowError(GetFunctionName +
-      ' expects second argument to be a function', 0, 0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(Format(SErrorFunctionExpectsFunctionSecond,
+      [GetFunctionName]), SSuggestTestUsage);
 
   if not (FTable is TGocciaArrayValue) then
-    FTestAssertions.ThrowError(GetFunctionName +
-      '.each expects a table array', 0, 0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(Format(SErrorFunctionExpectsTableArray,
+      [GetFunctionName]), SSuggestTestUsage);
 
   BaseName := AArguments.GetElement(0).ToStringLiteral.Value;
   Callback := TGocciaFunctionBase(AArguments.GetElement(1));
@@ -1490,7 +1493,7 @@ begin
       Exit;
     end;
 
-    FTestAssertions.ThrowError('toThrow expects actual value to be a function', 0, 0);
+    ThrowTypeError(SErrorToThrowExpectsFunction, SSuggestTestUsage);
     Exit;
   end;
 
@@ -1750,8 +1753,8 @@ begin
   NumVal := AArgs.GetElement(0).ToNumberLiteral;
   if NumVal.IsNaN or NumVal.IsInfinity or NumVal.IsNegativeInfinity or
      (NumVal.Value < 0) or (NumVal.Value > High(Integer)) or (Frac(NumVal.Value) <> 0) then
-    TGocciaTestAssertions(FTestAssertions).ThrowError(
-      'toHaveBeenCalledTimes expects a non-negative integer', 0, 0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(
+      SErrorToHaveBeenCalledTimesExpectsInt, SSuggestTestUsage);
   ExpectedTimes := Trunc(NumVal.Value);
   Matches := MockFn.MockCalls.Count = ExpectedTimes;
 
@@ -1906,8 +1909,8 @@ begin
 
   if AArgs.Length < 1 then
   begin
-    TGocciaTestAssertions(FTestAssertions).ThrowError(
-      'toHaveBeenNthCalledWith requires at least 1 argument (call index)', 0, 0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(
+      SErrorToHaveBeenNthCalledWithRequiresArg, SSuggestTestUsage);
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 
@@ -1915,8 +1918,8 @@ begin
   NumVal := AArgs.GetElement(0).ToNumberLiteral;
   if NumVal.IsNaN or NumVal.IsInfinity or NumVal.IsNegativeInfinity or
      (NumVal.Value < 1) or (NumVal.Value > High(Integer)) or (Frac(NumVal.Value) <> 0) then
-    TGocciaTestAssertions(FTestAssertions).ThrowError(
-      'toHaveBeenNthCalledWith expects a positive integer index', 0, 0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(
+      SErrorToHaveBeenNthCalledWithExpectsInt, SSuggestTestUsage);
   N := Trunc(NumVal.Value);
 
   if (N < 1) or (N > MockFn.MockCalls.Count) then
@@ -2032,8 +2035,8 @@ begin
   NumVal := AArgs.GetElement(0).ToNumberLiteral;
   if NumVal.IsNaN or NumVal.IsInfinity or NumVal.IsNegativeInfinity or
      (NumVal.Value < 0) or (NumVal.Value > High(Integer)) or (Frac(NumVal.Value) <> 0) then
-    TGocciaTestAssertions(FTestAssertions).ThrowError(
-      'toHaveReturnedTimes expects a non-negative integer', 0, 0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(
+      SErrorToHaveReturnedTimesExpectsInt, SSuggestTestUsage);
   ExpectedTimes := Trunc(NumVal.Value);
   ActualCount := 0;
 
@@ -2203,8 +2206,8 @@ begin
   NumVal := AArgs.GetElement(0).ToNumberLiteral;
   if NumVal.IsNaN or NumVal.IsInfinity or NumVal.IsNegativeInfinity or
      (NumVal.Value < 1) or (NumVal.Value > High(Integer)) or (Frac(NumVal.Value) <> 0) then
-    TGocciaTestAssertions(FTestAssertions).ThrowError(
-      'toHaveNthReturnedWith expects a positive integer index', 0, 0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(
+      SErrorToHaveNthReturnedWithExpectsInt, SSuggestTestUsage);
   N := Trunc(NumVal.Value);
   Expected := AArgs.GetElement(1);
 
@@ -2462,11 +2465,10 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 2, AFunctionName, ThrowError);
 
   if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowError(AFunctionName + ' expects first argument to be a string', 0, 0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(Format(SErrorFunctionExpectsStringFirst, [AFunctionName]), SSuggestTestUsage);
 
   if not (AArgs.GetElement(1) is TGocciaFunctionBase) then
-    ThrowError(AFunctionName + ' expects second argument to be a function', 0,
-      0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(Format(SErrorFunctionExpectsFunctionSecond, [AFunctionName]), SSuggestTestUsage);
 
   ASuiteName := AArgs.GetElement(0).ToStringLiteral.Value;
   ASuiteFunction := TGocciaFunctionBase(AArgs.GetElement(1));
@@ -2480,11 +2482,10 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 2, AFunctionName, ThrowError);
 
   if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowError(AFunctionName + ' expects first argument to be a string', 0, 0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(Format(SErrorFunctionExpectsStringFirst, [AFunctionName]), SSuggestTestUsage);
 
   if not (AArgs.GetElement(1) is TGocciaFunctionBase) then
-    ThrowError(AFunctionName + ' expects second argument to be a function', 0,
-      0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(Format(SErrorFunctionExpectsFunctionSecond, [AFunctionName]), SSuggestTestUsage);
 
   ATestName := AArgs.GetElement(0).ToStringLiteral.Value;
   ATestFunction := TGocciaFunctionBase(AArgs.GetElement(1));
@@ -2498,7 +2499,7 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, AHookName, ThrowError);
 
   if not (AArgs.GetElement(0) is TGocciaFunctionBase) then
-    ThrowError(AHookName + ' expects a function argument', 0, 0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(Format(SErrorFunctionExpectsFunctionArg, [AHookName]), SSuggestTestUsage);
 
   GetCurrentRegistrationSuite.AddHook(TGocciaFunctionBase(AArgs.GetElement(0)),
     APhase);
@@ -3150,7 +3151,7 @@ begin
   begin
     if not (AArgs.GetElement(0) is TGocciaFunctionBase) then
     begin
-      ThrowError('mock() expects a function argument or no arguments', 0, 0);
+      Goccia.Values.ErrorHelper.ThrowTypeError(SErrorMockExpectsFunctionOrNoArgs, SSuggestTestUsage);
       Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
     end;
     Impl := AArgs.GetElement(0);
@@ -3171,13 +3172,13 @@ begin
 
   if not (AArgs.GetElement(0) is TGocciaObjectValue) then
   begin
-    ThrowError('spyOn expects first argument to be an object', 0, 0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(SErrorSpyOnExpectsObject, SSuggestTestUsage);
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 
   if not (AArgs.GetElement(1) is TGocciaStringLiteralValue) then
   begin
-    ThrowError('spyOn expects second argument to be a string (method name)', 0, 0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(SErrorSpyOnExpectsString, SSuggestTestUsage);
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 
@@ -3186,14 +3187,14 @@ begin
 
   if not Target.HasProperty(MethodName) then
   begin
-    ThrowError('spyOn: cannot spy on non-existent property "' + MethodName + '"', 0, 0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(Format(SErrorSpyOnNonExistentProperty, [MethodName]), SSuggestTestUsage);
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 
   ExistingValue := Target.GetProperty(MethodName);
   if not Assigned(ExistingValue) or not (ExistingValue is TGocciaFunctionBase) then
   begin
-    ThrowError('spyOn: property "' + MethodName + '" is not a function', 0, 0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(Format(SErrorSpyOnPropertyNotFunction, [MethodName]), SSuggestTestUsage);
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 
@@ -3255,7 +3256,7 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'describe.each', ThrowError);
 
   if not (AArgs.GetElement(0) is TGocciaArrayValue) then
-    ThrowError('describe.each expects a table array', 0, 0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(Format(SErrorFunctionExpectsTableArray, ['describe.each']), SSuggestTestUsage);
 
   Result := TGocciaParameterizedRegistrationFunction.Create(Self,
     AArgs.GetElement(0), prtDescribe);
@@ -3336,7 +3337,7 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'test.each', ThrowError);
 
   if not (AArgs.GetElement(0) is TGocciaArrayValue) then
-    ThrowError('test.each expects a table array', 0, 0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(Format(SErrorFunctionExpectsTableArray, ['test.each']), SSuggestTestUsage);
 
   Result := TGocciaParameterizedRegistrationFunction.Create(Self,
     AArgs.GetElement(0), prtTest);
@@ -3347,7 +3348,7 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'test.todo', ThrowError);
 
   if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowError('test.todo expects first argument to be a string', 0, 0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(SErrorTestTodoExpectsString, SSuggestTestUsage);
 
   RegisterTestEntry(AArgs.GetElement(0).ToStringLiteral.Value, nil, nil, False,
     False, True);
@@ -3396,7 +3397,7 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'onTestFinished', ThrowError);
 
   if not (AArgs.GetElement(0) is TGocciaFunctionBase) then
-    ThrowError('onTestFinished expects a function argument', 0, 0);
+    Goccia.Values.ErrorHelper.ThrowTypeError(SErrorOnTestFinishedExpectsFunction, SSuggestTestUsage);
 
   AddTempRootIfNeeded(AArgs.GetElement(0));
   FOnTestFinishedCallbacks.Add(AArgs.GetElement(0));

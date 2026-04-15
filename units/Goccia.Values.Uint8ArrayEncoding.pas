@@ -28,6 +28,8 @@ uses
   SysUtils,
 
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue,
@@ -103,7 +105,8 @@ function RequireUint8Array(const AThisValue: TGocciaValue; const AMethod: string
 begin
   if not (AThisValue is TGocciaTypedArrayValue) or
      (TGocciaTypedArrayValue(AThisValue).Kind <> takUint8) then
-    ThrowTypeError(AMethod + ' requires that |this| be a Uint8Array');
+    ThrowTypeError(Format(SErrorRequiresUint8Array, [AMethod]),
+      SSuggestUint8ArrayThisType);
   Result := TGocciaTypedArrayValue(AThisValue);
 end;
 
@@ -119,7 +122,7 @@ begin
     begin
       Result := AlphabetVal.ToStringLiteral.Value;
       if (Result <> ALPHABET_BASE64) and (Result <> ALPHABET_BASE64URL) then
-        ThrowTypeError('Invalid alphabet: expected "base64" or "base64url"');
+        ThrowTypeError(SErrorInvalidAlphabet, SSuggestBase64Format);
     end;
   end;
 end;
@@ -150,7 +153,7 @@ begin
       Result := Val.ToStringLiteral.Value;
       if (Result <> LAST_CHUNK_LOOSE) and (Result <> LAST_CHUNK_STRICT) and
          (Result <> LAST_CHUNK_STOP_BEFORE_PARTIAL) then
-        ThrowTypeError('Invalid lastChunkHandling: expected "loose", "strict", or "stop-before-partial"');
+        ThrowTypeError(SErrorInvalidLastChunkHandling, SSuggestBase64Format);
     end;
   end;
 end;
@@ -310,7 +313,7 @@ begin
   begin
     Ch := Cleaned[I];
     if (Ord(Ch) > 127) or (DecodeTable[Ord(Ch)] = INVALID_BASE64_VALUE) then
-      ThrowSyntaxError('Invalid character in base64 string');
+      ThrowSyntaxError(SErrorInvalidBase64Character, SSuggestBase64Format);
   end;
 
   // Step 4: Compute full chunks and remainder
@@ -328,7 +331,7 @@ begin
       Remainder := 0;
     end
     else
-      ThrowSyntaxError('Invalid base64 string: incomplete chunk');
+      ThrowSyntaxError(SErrorBase64IncompleteChunk, SSuggestBase64Format);
   end;
 
   if Remainder > 0 then
@@ -345,22 +348,22 @@ begin
           V0 := DecodeTable[Ord(Cleaned[PadStart - 1])];
           V1 := DecodeTable[Ord(Cleaned[PadStart])];
           if (V1 and $0F) <> 0 then
-            ThrowSyntaxError('Invalid base64 string: non-zero padding bits');
+            ThrowSyntaxError(SErrorBase64NonZeroPaddingBits, SSuggestBase64Format);
         end
         else if (Remainder = 3) and (CleanedLen - PadStart = 1) then
         begin
           // 3 data + 1 pad = 4: OK, check overflow bits
           V0 := DecodeTable[Ord(Cleaned[PadStart])];
           if (V0 and $03) <> 0 then
-            ThrowSyntaxError('Invalid base64 string: non-zero padding bits');
+            ThrowSyntaxError(SErrorBase64NonZeroPaddingBits, SSuggestBase64Format);
         end
         else
-          ThrowSyntaxError('Invalid base64 string: malformed padding');
+          ThrowSyntaxError(SErrorBase64MalformedPadding, SSuggestBase64Format);
       end
       else
       begin
         // In strict mode without padding, partial chunks are invalid
-        ThrowSyntaxError('Invalid base64 string: incomplete chunk in strict mode');
+        ThrowSyntaxError(SErrorBase64IncompleteChunkStrict, SSuggestBase64Format);
       end;
     end
     else if ALastChunkHandling = LAST_CHUNK_STOP_BEFORE_PARTIAL then
@@ -380,7 +383,7 @@ begin
     // Actually if Remainder = 0 and HasPadding, the padding was stripped from a complete set
     // which means padding was erroneous
     if PadStart <> CleanedLen then
-      ThrowSyntaxError('Invalid base64 string: unexpected padding');
+      ThrowSyntaxError(SErrorBase64UnexpectedPadding, SSuggestBase64Format);
   end;
 
   // Step 6: Compute output size
@@ -481,7 +484,7 @@ begin
     if not (Options is TGocciaUndefinedLiteralValue) then
     begin
       if not (Options is TGocciaObjectValue) then
-        ThrowTypeError('Uint8Array.prototype.toBase64: options must be an object');
+        ThrowTypeError(SErrorToBase64OptionsNotObject, SSuggestBase64Format);
       Alphabet := ReadAlphabetOption(Options);
       OmitPadding := ReadOmitPaddingOption(Options);
     end;
@@ -527,9 +530,9 @@ begin
   TA := RequireUint8Array(AThisValue, 'Uint8Array.prototype.setFromBase64');
 
   if AArgs.Length = 0 then
-    ThrowTypeError('Uint8Array.prototype.setFromBase64 requires a string argument');
+    ThrowTypeError(SErrorSetFromBase64RequiresString, SSuggestStringArgRequired);
   if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowTypeError('Uint8Array.prototype.setFromBase64: first argument must be a string');
+    ThrowTypeError(SErrorSetFromBase64FirstArgString, SSuggestStringArgRequired);
 
   Input := AArgs.GetElement(0).ToStringLiteral.Value;
 
@@ -541,7 +544,7 @@ begin
     if not (Options is TGocciaUndefinedLiteralValue) then
     begin
       if not (Options is TGocciaObjectValue) then
-        ThrowTypeError('Uint8Array.prototype.setFromBase64: options must be an object');
+        ThrowTypeError(SErrorSetFromBase64OptionsNotObject, SSuggestBase64Format);
       Alphabet := ReadAlphabetOption(Options);
       LastChunkHandling := ReadLastChunkHandlingOption(Options);
     end;
@@ -580,14 +583,14 @@ begin
   TA := RequireUint8Array(AThisValue, 'Uint8Array.prototype.setFromHex');
 
   if AArgs.Length = 0 then
-    ThrowTypeError('Uint8Array.prototype.setFromHex requires a string argument');
+    ThrowTypeError(SErrorSetFromHexRequiresString, SSuggestStringArgRequired);
   if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowTypeError('Uint8Array.prototype.setFromHex: first argument must be a string');
+    ThrowTypeError(SErrorSetFromHexFirstArgString, SSuggestStringArgRequired);
 
   Input := AArgs.GetElement(0).ToStringLiteral.Value;
 
   if (Length(Input) mod 2) <> 0 then
-    ThrowSyntaxError('Invalid hex string: odd length');
+    ThrowSyntaxError(SErrorInvalidHexOddLength, SSuggestHexFormat);
 
   Written := 0;
   CharsRead := 0;
@@ -597,7 +600,7 @@ begin
     Hi := HexCharToNibble(Input[I]);
     Lo := HexCharToNibble(Input[I + 1]);
     if (Hi < 0) or (Lo < 0) then
-      ThrowSyntaxError('Invalid character in hex string');
+      ThrowSyntaxError(SErrorInvalidHexCharacter, SSuggestHexFormat);
     TA.BufferData[TA.ByteOffset + Written] := Byte((Hi shl 4) or Lo);
     Inc(Written);
     Inc(I, 2);
@@ -629,9 +632,9 @@ var
   I: Integer;
 begin
   if AArgs.Length = 0 then
-    ThrowTypeError('Uint8Array.fromBase64 requires a string argument');
+    ThrowTypeError(SErrorFromBase64RequiresString, SSuggestStringArgRequired);
   if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowTypeError('Uint8Array.fromBase64: first argument must be a string');
+    ThrowTypeError(SErrorFromBase64FirstArgString, SSuggestStringArgRequired);
 
   Input := AArgs.GetElement(0).ToStringLiteral.Value;
 
@@ -643,7 +646,7 @@ begin
     if not (Options is TGocciaUndefinedLiteralValue) then
     begin
       if not (Options is TGocciaObjectValue) then
-        ThrowTypeError('Uint8Array.fromBase64: options must be an object');
+        ThrowTypeError(SErrorFromBase64OptionsNotObject, SSuggestBase64Format);
       Alphabet := ReadAlphabetOption(Options);
       LastChunkHandling := ReadLastChunkHandlingOption(Options);
     end;
@@ -667,14 +670,14 @@ var
   NewTA: TGocciaTypedArrayValue;
 begin
   if AArgs.Length = 0 then
-    ThrowTypeError('Uint8Array.fromHex requires a string argument');
+    ThrowTypeError(SErrorFromHexRequiresString, SSuggestStringArgRequired);
   if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowTypeError('Uint8Array.fromHex: first argument must be a string');
+    ThrowTypeError(SErrorFromHexFirstArgString, SSuggestStringArgRequired);
 
   Input := AArgs.GetElement(0).ToStringLiteral.Value;
 
   if (Length(Input) mod 2) <> 0 then
-    ThrowSyntaxError('Invalid hex string: odd length');
+    ThrowSyntaxError(SErrorInvalidHexOddLength, SSuggestHexFormat);
 
   ByteLen := Length(Input) div 2;
   NewTA := TGocciaTypedArrayValue.Create(takUint8, ByteLen);
@@ -684,7 +687,7 @@ begin
     Hi := HexCharToNibble(Input[I * 2 + 1]);
     Lo := HexCharToNibble(Input[I * 2 + 2]);
     if (Hi < 0) or (Lo < 0) then
-      ThrowSyntaxError('Invalid character in hex string');
+      ThrowSyntaxError(SErrorInvalidHexCharacter, SSuggestHexFormat);
     NewTA.BufferData[NewTA.ByteOffset + I] := Byte((Hi shl 4) or Lo);
   end;
 

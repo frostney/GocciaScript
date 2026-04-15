@@ -21,6 +21,8 @@ implementation
 uses
   Math,
 
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Evaluator.Bitwise,
   Goccia.Values.ErrorHelper,
   Goccia.Values.SymbolValue,
@@ -38,7 +40,7 @@ function ToNumericPair(const ALeft, ARight: TGocciaValue;
   out ALeftNum, ARightNum: TGocciaNumberLiteralValue): Boolean;
 begin
   if (ALeft is TGocciaSymbolValue) or (ARight is TGocciaSymbolValue) then
-    ThrowTypeError('Cannot convert a Symbol value to a number');
+    ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
   ALeftNum := ALeft.ToNumberLiteral;
   ARightNum := ARight.ToNumberLiteral;
   Result := not (ALeftNum.IsNaN or ARightNum.IsNaN);
@@ -53,7 +55,7 @@ begin
   PrimRight := ToPrimitive(ARight);
 
   if (PrimLeft is TGocciaSymbolValue) or (PrimRight is TGocciaSymbolValue) then
-    ThrowTypeError('Cannot convert a Symbol value to a string');
+    ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
 
   if (PrimLeft is TGocciaStringLiteralValue) or (PrimRight is TGocciaStringLiteralValue) then
   begin

@@ -21,6 +21,8 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.ObjectModel,
   Goccia.Semver,
   Goccia.Values.ArrayValue,
@@ -326,7 +328,7 @@ var
   I: Integer;
 begin
   if not (AValue is TGocciaArrayValue) then
-    ThrowTypeError('Expected an array of versions');
+    ThrowTypeError(SErrorExpectedArrayOfVersions, SSuggestSemverUsage);
   ArrayValue := TGocciaArrayValue(AValue);
   SetLength(Result, ArrayValue.Elements.Count);
   for I := 0 to ArrayValue.Elements.Count - 1 do
@@ -455,9 +457,9 @@ function TGocciaSemverNamespaceHost.HandleSemverException(
   const E: Exception): TGocciaValue;
 begin
   if E is EGocciaSemverTypeError then
-    ThrowTypeError(E.Message)
+    ThrowTypeError(E.Message, SSuggestSemverUsage)
   else if E is EGocciaSemverError then
-    ThrowError(E.Message)
+    ThrowError(E.Message, SSuggestSemverUsage)
   else
     raise E;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -468,7 +470,7 @@ function TGocciaSemverNamespaceHost.RequireStringArgument(
   const AMethodName: string): string;
 begin
   if AArgs.Length <= AIndex then
-    ThrowTypeError(AMethodName + ' requires a string argument');
+    ThrowTypeError(AMethodName + ' requires a string argument', SSuggestStringArgRequired);
   Result := AArgs.GetElement(AIndex).ToStringLiteral.Value;
 end;
 
@@ -688,7 +690,7 @@ begin
       Identifier := '';
     if not TryIncrement(ThisSemver.Version, AArgs.GetElement(0).ToStringLiteral.Value,
       ThisSemver.Options, Identifier, False, False, Updated) then
-      ThrowError('invalid increment');
+      ThrowError(SErrorSemverInvalidIncrement, SSuggestSemverUsage);
     UpdatedSemver := MustParseSemver(Updated, ThisSemver.Options);
     WriteSemverProperties(TGocciaObjectValue(AThisValue), UpdatedSemver);
     Result := AThisValue;

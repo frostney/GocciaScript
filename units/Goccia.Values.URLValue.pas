@@ -131,6 +131,8 @@ uses
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.URL.Parser,
   Goccia.Values.ArrayValue,
@@ -342,7 +344,7 @@ function TGocciaURLValue.URLHrefGetter(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL href getter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['href getter']), SSuggestURLThisType);
   Result := TGocciaStringLiteralValue.Create(
     TGocciaURLValue(AThisValue).ComputeHref);
 end;
@@ -354,7 +356,7 @@ var
   URLRec: TGocciaURLRecord;
 begin
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL origin getter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['origin getter']), SSuggestURLThisType);
   U := TGocciaURLValue(AThisValue);
   FillChar(URLRec, SizeOf(URLRec), 0);
   URLRec.Scheme := U.FScheme;
@@ -368,7 +370,7 @@ function TGocciaURLValue.URLProtocolGetter(const AArgs: TGocciaArgumentsCollecti
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL protocol getter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['protocol getter']), SSuggestURLThisType);
   Result := TGocciaStringLiteralValue.Create(
     TGocciaURLValue(AThisValue).FScheme + ':');
 end;
@@ -377,7 +379,7 @@ function TGocciaURLValue.URLUsernameGetter(const AArgs: TGocciaArgumentsCollecti
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL username getter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['username getter']), SSuggestURLThisType);
   Result := TGocciaStringLiteralValue.Create(
     TGocciaURLValue(AThisValue).FUsername);
 end;
@@ -386,7 +388,7 @@ function TGocciaURLValue.URLPasswordGetter(const AArgs: TGocciaArgumentsCollecti
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL password getter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['password getter']), SSuggestURLThisType);
   Result := TGocciaStringLiteralValue.Create(
     TGocciaURLValue(AThisValue).FPassword);
 end;
@@ -398,7 +400,7 @@ var
   H: string;
 begin
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL host getter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['host getter']), SSuggestURLThisType);
   U := TGocciaURLValue(AThisValue);
   H := U.FHost;
   if U.FPort <> URL_NULL_PORT then
@@ -410,7 +412,7 @@ function TGocciaURLValue.URLHostnameGetter(const AArgs: TGocciaArgumentsCollecti
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL hostname getter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['hostname getter']), SSuggestURLThisType);
   Result := TGocciaStringLiteralValue.Create(
     TGocciaURLValue(AThisValue).FHost);
 end;
@@ -421,7 +423,7 @@ var
   U: TGocciaURLValue;
 begin
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL port getter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['port getter']), SSuggestURLThisType);
   U := TGocciaURLValue(AThisValue);
   if U.FPort = URL_NULL_PORT then
     Result := TGocciaStringLiteralValue.Create('')
@@ -433,7 +435,7 @@ function TGocciaURLValue.URLPathnameGetter(const AArgs: TGocciaArgumentsCollecti
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL pathname getter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['pathname getter']), SSuggestURLThisType);
   Result := TGocciaStringLiteralValue.Create(
     TGocciaURLValue(AThisValue).FPathname);
 end;
@@ -444,7 +446,7 @@ var
   U: TGocciaURLValue;
 begin
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL search getter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['search getter']), SSuggestURLThisType);
   U := TGocciaURLValue(AThisValue);
   if U.FHasNullQuery or (U.FQuery = '') then
     Result := TGocciaStringLiteralValue.Create('')
@@ -459,7 +461,7 @@ var
   U: TGocciaURLValue;
 begin
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL searchParams getter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['searchParams getter']), SSuggestURLThisType);
   U := TGocciaURLValue(AThisValue);
 
   // Lazy initialization of the search params object
@@ -480,7 +482,7 @@ var
   U: TGocciaURLValue;
 begin
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL hash getter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['hash getter']), SSuggestURLThisType);
   U := TGocciaURLValue(AThisValue);
   if U.FHasNullFragment or (U.FFragment = '') then
     Result := TGocciaStringLiteralValue.Create('')
@@ -502,13 +504,13 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL href setter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['href setter']), SSuggestURLThisType);
   U := TGocciaURLValue(AThisValue);
   if AArgs.Length = 0 then Exit;
   NewHref := AArgs.GetElement(0).ToStringLiteral.Value;
   Parsed := ParseURL(NewHref);
   if not Parsed.IsValid then
-    ThrowTypeError('Invalid URL: ' + NewHref);
+    ThrowTypeError(Format(SErrorInvalidURL, [NewHref]), SSuggestURLFormat);
   U.FScheme := Parsed.Scheme;
   U.FUsername := Parsed.Username;
   U.FPassword := Parsed.Password;
@@ -534,7 +536,7 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL protocol setter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['protocol setter']), SSuggestURLThisType);
   U := TGocciaURLValue(AThisValue);
   if AArgs.Length = 0 then Exit;
   Input := AArgs.GetElement(0).ToStringLiteral.Value;
@@ -570,7 +572,7 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL username setter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['username setter']), SSuggestURLThisType);
   U := TGocciaURLValue(AThisValue);
   // Cannot set credentials on a URL with no host or file: scheme
   if U.FHasNullHost or (U.FScheme = 'file') then Exit;
@@ -586,7 +588,7 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL password setter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['password setter']), SSuggestURLThisType);
   U := TGocciaURLValue(AThisValue);
   if U.FHasNullHost or (U.FScheme = 'file') then Exit;
   if AArgs.Length = 0 then Exit;
@@ -604,7 +606,7 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL host setter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['host setter']), SSuggestURLThisType);
   U := TGocciaURLValue(AThisValue);
   if U.FHasOpaquePath then Exit;
   if AArgs.Length = 0 then Exit;
@@ -631,7 +633,7 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL hostname setter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['hostname setter']), SSuggestURLThisType);
   U := TGocciaURLValue(AThisValue);
   if U.FHasOpaquePath then Exit;
   if AArgs.Length = 0 then Exit;
@@ -657,7 +659,7 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL port setter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['port setter']), SSuggestURLThisType);
   U := TGocciaURLValue(AThisValue);
   if U.FHasNullHost or (U.FScheme = 'file') then Exit;
   if AArgs.Length = 0 then Exit;
@@ -686,7 +688,7 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL pathname setter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['pathname setter']), SSuggestURLThisType);
   U := TGocciaURLValue(AThisValue);
   if U.FHasOpaquePath then Exit;
   if AArgs.Length = 0 then Exit;
@@ -716,7 +718,7 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL search setter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['search setter']), SSuggestURLThisType);
   U := TGocciaURLValue(AThisValue);
   if AArgs.Length = 0 then Exit;
   Input := AArgs.GetElement(0).ToStringLiteral.Value;
@@ -745,7 +747,7 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL hash setter: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['hash setter']), SSuggestURLThisType);
   U := TGocciaURLValue(AThisValue);
   if AArgs.Length = 0 then Exit;
   Input := AArgs.GetElement(0).ToStringLiteral.Value;
@@ -772,7 +774,7 @@ function TGocciaURLValue.URLToString(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL.prototype.toString: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['prototype.toString']), SSuggestURLThisType);
   Result := TGocciaStringLiteralValue.Create(
     TGocciaURLValue(AThisValue).ComputeHref);
 end;
@@ -782,7 +784,7 @@ function TGocciaURLValue.URLToJSON(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaURLValue) then
-    ThrowTypeError('URL.prototype.toJSON: not a URL');
+    ThrowTypeError(Format(SErrorURLNotURL, ['prototype.toJSON']), SSuggestURLThisType);
   Result := TGocciaStringLiteralValue.Create(
     TGocciaURLValue(AThisValue).ComputeHref);
 end;
@@ -819,7 +821,7 @@ var
   Parsed, BaseParsed: TGocciaURLRecord;
 begin
   if AArguments.Length = 0 then
-    ThrowTypeError('URL constructor: 1 argument required');
+    ThrowTypeError(SErrorURLConstructorRequiresArg, SSuggestURLFormat);
 
   URLStr := AArguments.GetElement(0).ToStringLiteral.Value;
 
@@ -829,14 +831,14 @@ begin
     BaseStr := AArguments.GetElement(1).ToStringLiteral.Value;
     BaseParsed := ParseURL(BaseStr);
     if not BaseParsed.IsValid then
-      ThrowTypeError('Invalid base URL: ' + BaseStr);
+      ThrowTypeError(Format(SErrorInvalidBaseURL, [BaseStr]), SSuggestURLFormat);
     Parsed := ParseURLWithBase(URLStr, BaseParsed);
   end
   else
     Parsed := ParseURL(URLStr);
 
   if not Parsed.IsValid then
-    ThrowTypeError('Invalid URL: ' + URLStr);
+    ThrowTypeError(Format(SErrorInvalidURL, [URLStr]), SSuggestURLFormat);
 
   FScheme := Parsed.Scheme;
   FUsername := Parsed.Username;

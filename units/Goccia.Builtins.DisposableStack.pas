@@ -51,6 +51,8 @@ uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.DisposalTracker,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Scope.BindingMap,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -85,16 +87,16 @@ var
   Obj: TGocciaObjectValue;
 begin
   if not (AThisValue is TGocciaObjectValue) then
-    ThrowTypeError('DisposableStack method called on incompatible receiver');
+    ThrowTypeError(SErrorDisposableStackIncompatibleReceiver, SSuggestDisposableStackThisType);
   Obj := TGocciaObjectValue(AThisValue);
   if not Assigned(GSlotMap) or not GSlotMap.TryGetValue(Obj, Result) then
-    ThrowTypeError('DisposableStack method called on incompatible receiver');
+    ThrowTypeError(SErrorDisposableStackIncompatibleReceiver, SSuggestDisposableStackThisType);
 end;
 
 procedure RequireNotDisposed(const ASlot: PDisposableStackSlot);
 begin
   if ASlot^.Disposed then
-    ThrowReferenceError('DisposableStack has already been disposed');
+    ThrowReferenceError(SErrorDisposableStackAlreadyDisposed, SSuggestDisposableStackAlreadyDisposed);
 end;
 
 // TC39 Explicit Resource Management §3.4.3.2 DisposableStack.prototype.use(value)
@@ -121,7 +123,7 @@ begin
 
   DisposeMethod := GetDisposeMethod(Value, dhSyncDispose);
   if not Assigned(DisposeMethod) then
-    ThrowTypeError('The value is not disposable (missing [Symbol.dispose])');
+    ThrowTypeError(SErrorValueNotDisposable, SSuggestDisposable);
 
   Slot^.Tracker.AddResource(Value, DisposeMethod, dhSyncDispose);
   Result := Value;
@@ -151,7 +153,7 @@ begin
 
   DisposeMethod := GetDisposeMethod(Value, dhAsyncDispose);
   if not Assigned(DisposeMethod) then
-    ThrowTypeError('The value is not disposable (missing [Symbol.asyncDispose] and [Symbol.dispose])');
+    ThrowTypeError(SErrorValueNotAsyncDisposable, SSuggestDisposable);
 
   Slot^.Tracker.AddResource(Value, DisposeMethod, dhAsyncDispose);
   Result := Value;
@@ -178,7 +180,7 @@ begin
     OnDispose := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   if not OnDispose.IsCallable then
-    ThrowTypeError('The onDispose argument must be a function');
+    ThrowTypeError(SErrorOnDisposeMustBeFunction, SSuggestNotFunctionType);
 
   Slot^.Tracker.AddResource(Value, OnDispose, dhSyncDispose);
   Result := Value;
@@ -200,7 +202,7 @@ begin
     OnDispose := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   if not OnDispose.IsCallable then
-    ThrowTypeError('The onDispose argument must be a function');
+    ThrowTypeError(SErrorOnDisposeMustBeFunction, SSuggestNotFunctionType);
 
   Slot^.Tracker.AddResource(TGocciaUndefinedLiteralValue.UndefinedValue, OnDispose, dhSyncDispose);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;

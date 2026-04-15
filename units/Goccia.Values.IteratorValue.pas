@@ -56,6 +56,8 @@ uses
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -223,7 +225,7 @@ end;
 function TGocciaIteratorValue.IteratorNext(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
-    ThrowTypeError('Iterator.prototype.next called on non-iterator');
+    ThrowTypeError(SErrorIteratorNextNonIterator, SSuggestIteratorThisType);
   Result := TGocciaIteratorValue(AThisValue).AdvanceNext;
 end;
 
@@ -237,9 +239,10 @@ end;
 function TGocciaIteratorValue.IteratorMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
-    ThrowTypeError('Iterator.prototype.map called on non-iterator');
+    ThrowTypeError(SErrorIteratorMapNonIterator, SSuggestIteratorThisType);
   if (AArgs.Length < 1) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError('Iterator.prototype.map requires a callable argument');
+    ThrowTypeError(SErrorIteratorMapCallable,
+      SSuggestIteratorCallable);
 
   Result := TGocciaLazyMapIteratorValue.Create(
     TGocciaIteratorValue(AThisValue), AArgs.GetElement(0)
@@ -249,9 +252,10 @@ end;
 function TGocciaIteratorValue.IteratorFilter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
-    ThrowTypeError('Iterator.prototype.filter called on non-iterator');
+    ThrowTypeError(SErrorIteratorFilterNonIterator, SSuggestIteratorThisType);
   if (AArgs.Length < 1) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError('Iterator.prototype.filter requires a callable argument');
+    ThrowTypeError(SErrorIteratorFilterCallable,
+      SSuggestIteratorCallable);
 
   Result := TGocciaLazyFilterIteratorValue.Create(
     TGocciaIteratorValue(AThisValue), AArgs.GetElement(0)
@@ -263,13 +267,14 @@ var
   Limit: Integer;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
-    ThrowTypeError('Iterator.prototype.take called on non-iterator');
+    ThrowTypeError(SErrorIteratorTakeNonIterator, SSuggestIteratorThisType);
   if AArgs.Length < 1 then
-    ThrowRangeError('Iterator.prototype.take requires an argument');
+    ThrowRangeError(SErrorIteratorTakeRequiresArg, SSuggestIteratorNonNegative);
 
   Limit := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
   if Limit < 0 then
-    ThrowRangeError('Iterator.prototype.take argument must be non-negative');
+    ThrowRangeError(SErrorIteratorTakeNonNegative,
+      SSuggestIteratorNonNegative);
 
   Result := TGocciaLazyTakeIteratorValue.Create(
     TGocciaIteratorValue(AThisValue), Limit
@@ -281,13 +286,14 @@ var
   DropCount: Integer;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
-    ThrowTypeError('Iterator.prototype.drop called on non-iterator');
+    ThrowTypeError(SErrorIteratorDropNonIterator, SSuggestIteratorThisType);
   if AArgs.Length < 1 then
-    ThrowRangeError('Iterator.prototype.drop requires an argument');
+    ThrowRangeError(SErrorIteratorDropRequiresArg, SSuggestIteratorNonNegative);
 
   DropCount := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
   if DropCount < 0 then
-    ThrowRangeError('Iterator.prototype.drop argument must be non-negative');
+    ThrowRangeError(SErrorIteratorDropNonNegative,
+      SSuggestIteratorNonNegative);
 
   Result := TGocciaLazyDropIteratorValue.Create(
     TGocciaIteratorValue(AThisValue), DropCount
@@ -297,9 +303,10 @@ end;
 function TGocciaIteratorValue.IteratorFlatMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
-    ThrowTypeError('Iterator.prototype.flatMap called on non-iterator');
+    ThrowTypeError(SErrorIteratorFlatMapNonIterator, SSuggestIteratorThisType);
   if (AArgs.Length < 1) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError('Iterator.prototype.flatMap requires a callable argument');
+    ThrowTypeError(SErrorIteratorFlatMapCallable,
+      SSuggestIteratorFlatMapCallable);
 
   Result := TGocciaLazyFlatMapIteratorValue.Create(
     TGocciaIteratorValue(AThisValue), AArgs.GetElement(0)
@@ -316,9 +323,10 @@ var
   Index: Integer;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
-    ThrowTypeError('Iterator.prototype.forEach called on non-iterator');
+    ThrowTypeError(SErrorIteratorForEachNonIterator, SSuggestIteratorThisType);
   if (AArgs.Length < 1) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError('Iterator.prototype.forEach requires a callable argument');
+    ThrowTypeError(SErrorIteratorForEachCallable,
+      SSuggestIteratorCallable);
 
   Iterator := TGocciaIteratorValue(AThisValue);
   Callback := AArgs.GetElement(0);
@@ -355,9 +363,10 @@ var
   Index: Integer;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
-    ThrowTypeError('Iterator.prototype.reduce called on non-iterator');
+    ThrowTypeError(SErrorIteratorReduceNonIterator, SSuggestIteratorThisType);
   if (AArgs.Length < 1) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError('Iterator.prototype.reduce requires a callable argument');
+    ThrowTypeError(SErrorIteratorReduceCallable,
+      SSuggestIteratorCallable);
 
   Iterator := TGocciaIteratorValue(AThisValue);
   Callback := AArgs.GetElement(0);
@@ -374,7 +383,8 @@ begin
       begin
         Accumulator := Iterator.DirectNext(Done);
         if Done then
-          ThrowTypeError('Reduce of empty iterator with no initial value');
+          ThrowTypeError(SErrorReduceEmptyIterator,
+            SSuggestReduceInitialValue);
         Index := 1;
       end;
 
@@ -417,7 +427,7 @@ var
   Done: Boolean;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
-    ThrowTypeError('Iterator.prototype.toArray called on non-iterator');
+    ThrowTypeError(SErrorIteratorToArrayNonIterator, SSuggestIteratorThisType);
 
   Iterator := TGocciaIteratorValue(AThisValue);
   ResultArray := TGocciaArrayValue.Create;
@@ -447,9 +457,10 @@ var
   Index: Integer;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
-    ThrowTypeError('Iterator.prototype.some called on non-iterator');
+    ThrowTypeError(SErrorIteratorSomeNonIterator, SSuggestIteratorThisType);
   if (AArgs.Length < 1) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError('Iterator.prototype.some requires a callable argument');
+    ThrowTypeError(SErrorIteratorSomeCallable,
+      SSuggestIteratorCallable);
 
   Iterator := TGocciaIteratorValue(AThisValue);
   Callback := AArgs.GetElement(0);
@@ -489,9 +500,10 @@ var
   Index: Integer;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
-    ThrowTypeError('Iterator.prototype.every called on non-iterator');
+    ThrowTypeError(SErrorIteratorEveryNonIterator, SSuggestIteratorThisType);
   if (AArgs.Length < 1) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError('Iterator.prototype.every requires a callable argument');
+    ThrowTypeError(SErrorIteratorEveryCallable,
+      SSuggestIteratorCallable);
 
   Iterator := TGocciaIteratorValue(AThisValue);
   Callback := AArgs.GetElement(0);
@@ -531,9 +543,10 @@ var
   Index: Integer;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
-    ThrowTypeError('Iterator.prototype.find called on non-iterator');
+    ThrowTypeError(SErrorIteratorFindNonIterator, SSuggestIteratorThisType);
   if (AArgs.Length < 1) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError('Iterator.prototype.find requires a callable argument');
+    ThrowTypeError(SErrorIteratorFindCallable,
+      SSuggestIteratorCallable);
 
   Iterator := TGocciaIteratorValue(AThisValue);
   Callback := AArgs.GetElement(0);
@@ -573,7 +586,7 @@ var
   CallArgs: TGocciaArgumentsCollection;
 begin
   if AArgs.Length < 1 then
-    ThrowTypeError('Iterator.from requires an argument');
+    ThrowTypeError(SErrorIteratorFromRequiresArg, SSuggestIteratorFromArg);
 
   Value := AArgs.GetElement(0);
 
@@ -624,7 +637,8 @@ begin
     Exit;
   end;
 
-  ThrowTypeError('Iterator.from requires an iterable or iterator-like object');
+  ThrowTypeError(SErrorIteratorFromRequiresIterable,
+    SSuggestIteratorFromArg);
   Result := nil;
 end;
 
@@ -657,13 +671,13 @@ begin
       IteratorMethod := TGocciaObjectValue(Item).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
       // TC39 Iterator Sequencing §1 step 2c: If method is undefined, throw TypeError
       if not Assigned(IteratorMethod) or (IteratorMethod is TGocciaUndefinedLiteralValue) or not IteratorMethod.IsCallable then
-        ThrowTypeError('Iterator.concat requires all arguments to be iterable');
+        ThrowTypeError(SErrorIteratorConcatNotIterable, SSuggestNotIterable);
       Iterables[I].Iterable := Item;
       Iterables[I].IteratorMethod := IteratorMethod;
     end
     else
       // TC39 Iterator Sequencing §1 step 2a: If item is not an Object, throw TypeError
-      ThrowTypeError('Iterator.concat requires all arguments to be iterable');
+      ThrowTypeError(SErrorIteratorConcatNotIterable, SSuggestNotIterable);
   end;
 
   // TC39 Iterator Sequencing §1 steps 3-6: Create iterator from closure
@@ -694,7 +708,7 @@ var
 begin
   // TC39 Joint Iteration §1.1 step 1: If iterables is not an Object, throw TypeError
   if AArgs.Length < 1 then
-    ThrowTypeError('Iterator.zip requires an argument');
+    ThrowTypeError(SErrorIteratorZipRequiresArg, SSuggestNotIterable);
 
   IterablesArg := AArgs.GetElement(0);
   GC := TGarbageCollector.Instance;
@@ -702,7 +716,7 @@ begin
   // TC39 Joint Iteration §1.1 step 2: Get iterator from iterables
   OuterIterator := GetIteratorFromIterable(IterablesArg);
   if OuterIterator = nil then
-    ThrowTypeError('Iterator.zip: first argument must be iterable');
+    ThrowTypeError(SErrorIteratorZipFirstIterable, SSuggestNotIterable);
 
   GC.AddTempRoot(OuterIterator);
   try
@@ -726,7 +740,7 @@ begin
         begin
           InnerIterator := GetIteratorFromIterable(Items[I]);
           if InnerIterator = nil then
-            ThrowTypeError('Iterator.zip: all items in iterables must be iterable');
+            ThrowTypeError(SErrorIteratorZipItemIterable, SSuggestNotIterable);
           Iterators[I] := InnerIterator;
           GC.AddTempRoot(InnerIterator);
           Acquired := I + 1;
@@ -761,14 +775,14 @@ begin
       if Assigned(OptionsArg) and not (OptionsArg is TGocciaUndefinedLiteralValue) then
       begin
         if not (OptionsArg is TGocciaObjectValue) then
-          ThrowTypeError('Iterator.zip: options must be an object');
+          ThrowTypeError(SErrorIteratorZipOptionsObject, SSuggestIteratorZipOptions);
 
         // TC39 Joint Iteration §1.1 step 5a: Get mode
         ModeVal := OptionsArg.GetProperty(PROP_MODE);
         if Assigned(ModeVal) and not (ModeVal is TGocciaUndefinedLiteralValue) then
         begin
           if not (ModeVal is TGocciaStringLiteralValue) then
-            ThrowTypeError('Iterator.zip: mode must be a string');
+            ThrowTypeError(SErrorIteratorZipModeString, SSuggestIteratorZipMode);
           ModeStr := TGocciaStringLiteralValue(ModeVal).Value;
           if ModeStr = ZIP_MODE_SHORTEST then
             Mode := zmShortest
@@ -777,7 +791,7 @@ begin
           else if ModeStr = ZIP_MODE_STRICT then
             Mode := zmStrict
           else
-            ThrowRangeError('Iterator.zip: invalid mode "' + ModeStr + '"');
+            ThrowRangeError(Format(SErrorIteratorZipInvalidMode, [ModeStr]), SSuggestIteratorZipMode);
         end;
 
         // TC39 Joint Iteration §1.1 step 5b: Get padding (only for longest mode)
@@ -788,7 +802,7 @@ begin
           begin
             PaddingIterator := GetIteratorFromIterable(PaddingVal);
             if PaddingIterator = nil then
-              ThrowTypeError('Iterator.zip: padding must be iterable');
+              ThrowTypeError(SErrorIteratorZipPaddingIterable, SSuggestNotIterable);
             GC.AddTempRoot(PaddingIterator);
             PaddingItems := TGocciaValueList.Create(False);
             try
@@ -849,11 +863,11 @@ var
 begin
   // TC39 Joint Iteration §1.2 step 1: If iterables is not an Object, throw TypeError
   if AArgs.Length < 1 then
-    ThrowTypeError('Iterator.zipKeyed requires an argument');
+    ThrowTypeError(SErrorIteratorZipKeyedRequiresArg, SSuggestNotIterable);
 
   IterablesArg := AArgs.GetElement(0);
   if not (IterablesArg is TGocciaObjectValue) then
-    ThrowTypeError('Iterator.zipKeyed: first argument must be an object');
+    ThrowTypeError(SErrorIteratorZipKeyedFirstObject, SSuggestIteratorZipKeyedArg);
 
   GC := TGarbageCollector.Instance;
 
@@ -870,7 +884,7 @@ begin
       PropValue := IterablesArg.GetProperty(Keys[I]);
       InnerIterator := GetIteratorFromIterable(PropValue);
       if InnerIterator = nil then
-        ThrowTypeError('Iterator.zipKeyed: property "' + Keys[I] + '" value must be iterable');
+        ThrowTypeError(Format(SErrorIteratorZipKeyedPropertyNotIterable, [Keys[I]]), SSuggestNotIterable);
       Iterators[I] := InnerIterator;
       GC.AddTempRoot(InnerIterator);
       Acquired := I + 1;
@@ -899,14 +913,14 @@ begin
       if Assigned(OptionsArg) and not (OptionsArg is TGocciaUndefinedLiteralValue) then
       begin
         if not (OptionsArg is TGocciaObjectValue) then
-          ThrowTypeError('Iterator.zipKeyed: options must be an object');
+          ThrowTypeError(SErrorIteratorZipKeyedOptionsObject, SSuggestIteratorZipOptions);
 
         // TC39 Joint Iteration §1.2 step 4a: Get mode
         ModeVal := OptionsArg.GetProperty(PROP_MODE);
         if Assigned(ModeVal) and not (ModeVal is TGocciaUndefinedLiteralValue) then
         begin
           if not (ModeVal is TGocciaStringLiteralValue) then
-            ThrowTypeError('Iterator.zipKeyed: mode must be a string');
+            ThrowTypeError(SErrorIteratorZipKeyedModeString, SSuggestIteratorZipMode);
           ModeStr := TGocciaStringLiteralValue(ModeVal).Value;
           if ModeStr = ZIP_MODE_SHORTEST then
             Mode := zmShortest
@@ -915,7 +929,7 @@ begin
           else if ModeStr = ZIP_MODE_STRICT then
             Mode := zmStrict
           else
-            ThrowRangeError('Iterator.zipKeyed: invalid mode "' + ModeStr + '"');
+            ThrowRangeError(Format(SErrorIteratorZipKeyedInvalidMode, [ModeStr]), SSuggestIteratorZipMode);
         end;
 
         // TC39 Joint Iteration §1.2 step 4b: Get padding (only for longest mode)
@@ -925,7 +939,7 @@ begin
           if Assigned(PaddingVal) and not (PaddingVal is TGocciaUndefinedLiteralValue) then
           begin
             if not (PaddingVal is TGocciaObjectValue) then
-              ThrowTypeError('Iterator.zipKeyed: padding must be an object');
+              ThrowTypeError(SErrorIteratorZipKeyedPaddingObject, SSuggestIteratorZipKeyedPadding);
             for I := 0 to Count - 1 do
             begin
               PropValue := PaddingVal.GetProperty(Keys[I]);

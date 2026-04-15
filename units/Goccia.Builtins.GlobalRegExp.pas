@@ -55,6 +55,8 @@ uses
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.RegExp.Runtime,
   Goccia.Utils,
@@ -436,11 +438,11 @@ var
 begin
   // TC39 RegExp Escaping §1.1 step 1
   if AArgs.Length = 0 then
-    ThrowTypeError('RegExp.escape requires a string argument');
+    ThrowTypeError(SErrorRegExpEscapeRequiresString, SSuggestRegExpEscapeString);
 
   Arg := AArgs.GetElement(0);
   if not (Arg is TGocciaStringLiteralValue) then
-    ThrowTypeError('First argument to RegExp.escape must be a string');
+    ThrowTypeError(SErrorRegExpEscapeArgMustBeString, SSuggestRegExpEscapeString);
 
   Input := Arg.ToStringLiteral.Value;
   Escaped := '';
@@ -548,7 +550,7 @@ var
   MatchValue: TGocciaValue;
 begin
   if not IsRegExpValue(AThisValue) then
-    ThrowTypeError('RegExp.prototype.exec called on non-RegExp object');
+    ThrowTypeError(SErrorRegExpExecNonRegExp, SSuggestRegExpThisType);
 
   if AArgs.Length > 0 then
     Input := AArgs.GetElement(0).ToStringLiteral.Value
@@ -569,7 +571,7 @@ var
   MatchValue: TGocciaValue;
 begin
   if not IsRegExpValue(AThisValue) then
-    ThrowTypeError('RegExp.prototype.test called on non-RegExp object');
+    ThrowTypeError(SErrorRegExpTestNonRegExp, SSuggestRegExpThisType);
 
   if AArgs.Length > 0 then
     Input := AArgs.GetElement(0).ToStringLiteral.Value
@@ -586,7 +588,7 @@ function TGocciaGlobalRegExp.RegExpToStringMethod(
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not IsRegExpValue(AThisValue) then
-    ThrowTypeError('RegExp.prototype.toString called on non-RegExp object');
+    ThrowTypeError(SErrorRegExpToStringNonRegExp, SSuggestRegExpThisType);
 
   Result := TGocciaStringLiteralValue.Create(RegExpObjectToString(AThisValue));
 end;
@@ -603,7 +605,7 @@ var
   MatchIndex, MatchEnd, NextIndex: Integer;
 begin
   if not IsRegExpValue(AThisValue) then
-    ThrowTypeError('RegExp.prototype[Symbol.match] called on non-RegExp object');
+    ThrowTypeError(SErrorRegExpMatchNonRegExp, SSuggestRegExpThisType);
 
   if AArgs.Length > 0 then
     Input := AArgs.GetElement(0).ToStringLiteral.Value
@@ -643,7 +645,7 @@ var
   IsGlobal: Boolean;
 begin
   if not IsRegExpValue(AThisValue) then
-    ThrowTypeError('RegExp.prototype[Symbol.matchAll] called on non-RegExp object');
+    ThrowTypeError(SErrorRegExpMatchAllNonRegExp, SSuggestRegExpThisType);
 
   if AArgs.Length > 0 then
     Input := AArgs.GetElement(0).ToStringLiteral.Value
@@ -670,7 +672,7 @@ var
   MatchIndex, MatchEnd, NextIndex, SearchIndex, OutputIndex: Integer;
 begin
   if not IsRegExpValue(AThisValue) then
-    ThrowTypeError('RegExp.prototype[Symbol.replace] called on non-RegExp object');
+    ThrowTypeError(SErrorRegExpReplaceNonRegExp, SSuggestRegExpThisType);
 
   if AArgs.Length > 0 then
     Input := AArgs.GetElement(0).ToStringLiteral.Value
@@ -735,7 +737,7 @@ var
   MatchIndex, MatchEnd, NextIndex: Integer;
 begin
   if not IsRegExpValue(AThisValue) then
-    ThrowTypeError('RegExp.prototype[Symbol.search] called on non-RegExp object');
+    ThrowTypeError(SErrorRegExpSearchNonRegExp, SSuggestRegExpThisType);
 
   if AArgs.Length > 0 then
     Input := AArgs.GetElement(0).ToStringLiteral.Value
@@ -766,7 +768,7 @@ var
   I: Integer;
 begin
   if not IsRegExpValue(AThisValue) then
-    ThrowTypeError('RegExp.prototype[Symbol.split] called on non-RegExp object');
+    ThrowTypeError(SErrorRegExpSplitNonRegExp, SSuggestRegExpThisType);
 
   if AArgs.Length > 0 then
     Input := AArgs.GetElement(0).ToStringLiteral.Value

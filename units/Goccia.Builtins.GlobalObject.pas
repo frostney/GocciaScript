@@ -53,6 +53,8 @@ uses
 
   Goccia.Arguments.Validator,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Utils,
@@ -109,7 +111,7 @@ var
   Boxed: TGocciaObjectValue;
 begin
   if (AValue is TGocciaUndefinedLiteralValue) or (AValue is TGocciaNullLiteralValue) then
-    ThrowTypeError('Cannot convert undefined or null to object');
+    ThrowTypeError(SErrorCannotConvertNullOrUndefined, SSuggestCheckNullBeforeAccess);
 
   if AValue is TGocciaObjectValue then
   begin
@@ -126,7 +128,7 @@ begin
   end;
 
   // Symbol and other non-coercible types
-  ThrowTypeError('Cannot convert value to object');
+  ThrowTypeError(SErrorCannotConvertValueToObject, SSuggestObjectArgType);
   Result := nil;
 end;
 
@@ -340,7 +342,7 @@ begin
 
   // Step 1: If Type(O) is neither Object nor Null, throw a TypeError exception
   if not (ProtoArg is TGocciaObjectValue) and not (ProtoArg is TGocciaNullLiteralValue) then
-    ThrowError('Object.create called on non-object', 0, 0);
+    ThrowTypeError(SErrorObjectCreateCalledOnNonObject, SSuggestObjectArgType);
 
   // Step 2: Let obj be OrdinaryObjectCreate(O)
   if ProtoArg is TGocciaObjectValue then
@@ -348,7 +350,7 @@ begin
   else if ProtoArg is TGocciaNullLiteralValue then
     Result := TGocciaObjectValue.Create(nil)
   else
-    ThrowError('Object.create called on non-object', 0, 0);
+    ThrowTypeError(SErrorObjectCreateCalledOnNonObject, SSuggestObjectArgType);
   // Step 3: If Properties is not undefined, perform ObjectDefineProperties(obj, Properties)
   // Step 4: Return obj
 end;
@@ -547,10 +549,10 @@ begin
 
   // Step 1: If Type(O) is not Object, throw a TypeError exception
   if not (AArgs.GetElement(0) is TGocciaObjectValue) then
-    ThrowError('Object.defineProperty called on non-object', 0, 0);
+    ThrowTypeError(SErrorObjectDefinePropertyCalledOnNonObject, SSuggestObjectArgType);
 
   if not (AArgs.GetElement(2) is TGocciaObjectValue) then
-    ThrowError('Object.defineProperty: descriptor must be an object', 0, 0);
+    ThrowTypeError(SErrorObjectDefinePropertyDescriptorMustBeObject, SSuggestObjectArgType);
 
   Obj := TGocciaObjectValue(AArgs.GetElement(0));
   DescriptorObject := TGocciaObjectValue(AArgs.GetElement(2));
@@ -604,11 +606,11 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.defineProperties', ThrowError);
 
   if not (AArgs.GetElement(0) is TGocciaObjectValue) then
-    ThrowError('Object.defineProperties called on non-object', 0, 0);
+    ThrowTypeError(SErrorObjectDefinePropertiesCalledOnNonObject, SSuggestObjectArgType);
 
   // Step 1: Let props be ? ToObject(Properties)
   if not (AArgs.GetElement(1) is TGocciaObjectValue) then
-    ThrowError('Object.defineProperties: properties must be an object', 0, 0);
+    ThrowTypeError(SErrorObjectDefinePropertiesMustBeObject, SSuggestObjectArgType);
 
   Obj := TGocciaObjectValue(AArgs.GetElement(0));
   PropertiesDescriptor := TGocciaObjectValue(AArgs.GetElement(1));
@@ -746,7 +748,7 @@ begin
 
   // Step 1: Perform ? RequireObjectCoercible(iterable)
   if not (AArgs.GetElement(0) is TGocciaArrayValue) then
-    ThrowError('Object.fromEntries requires an iterable of key-value pairs', 0, 0);
+    ThrowTypeError(SErrorObjectFromEntriesRequiresIterable, SSuggestNotIterable);
 
   Entries := TGocciaArrayValue(AArgs.GetElement(0));
   // Step 2: Let obj be OrdinaryObjectCreate(%Object.prototype%)
@@ -756,11 +758,11 @@ begin
   for I := 0 to Entries.Elements.Count - 1 do
   begin
     if not (Entries.Elements[I] is TGocciaArrayValue) then
-      ThrowError('Object.fromEntries requires an iterable of key-value pairs', 0, 0);
+      ThrowTypeError(SErrorObjectFromEntriesRequiresIterable, SSuggestNotIterable);
 
     Entry := TGocciaArrayValue(Entries.Elements[I]);
     if Entry.Elements.Count < 2 then
-      ThrowError('Object.fromEntries requires each entry to have at least 2 elements', 0, 0);
+      ThrowTypeError(SErrorObjectFromEntriesRequiresPairs, SSuggestNotIterable);
 
     // Step 3a: Let key be entry[0], let value be entry[1]
     Key := Entry.Elements[0].ToStringLiteral.Value;
@@ -867,12 +869,12 @@ begin
   // Step 1: Perform ? RequireObjectCoercible(O) — throws for undefined/null
   if (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) or
      (AArgs.GetElement(0) is TGocciaNullLiteralValue) then
-    ThrowTypeError('Cannot convert undefined or null to object');
+    ThrowTypeError(SErrorCannotConvertNullOrUndefined, SSuggestCheckNullBeforeAccess);
 
   // Step 2: If Type(proto) is neither Object nor Null, throw a TypeError exception
   ProtoArg := AArgs.GetElement(1);
   if not (ProtoArg is TGocciaObjectValue) and not (ProtoArg is TGocciaNullLiteralValue) then
-    ThrowTypeError('Object prototype may only be an Object or null');
+    ThrowTypeError(SErrorObjectPrototypeMustBeObjectOrNull, SSuggestObjectArgType);
 
   // Step 3: If Type(O) is not Object, return O (primitives are immutable)
   if not (AArgs.GetElement(0) is TGocciaObjectValue) then
@@ -885,14 +887,14 @@ begin
   if AArgs.GetElement(0) is TGocciaProxyValue then
   begin
     if not TGocciaProxyValue(AArgs.GetElement(0)).SetPrototypeTrap(ProtoArg) then
-      ThrowError('setPrototypeOf trap returned false', 0, 0);
+      ThrowTypeError(SErrorSetPrototypeOfTrapReturnedFalse, SSuggestObjectArgType);
     Result := AArgs.GetElement(0);
     Exit;
   end;
 
   // Step 3: If Type(O) is not Object, return O (handled above via throw)
   if not TGocciaObjectValue(AArgs.GetElement(0)).Extensible then
-    ThrowError('Object.setPrototypeOf called on non-extensible object', 0, 0);
+    ThrowTypeError(SErrorSetPrototypeOfNonExtensible, SSuggestObjectNotExtensible);
 
   // Step 4: Let status be ? O.[[SetPrototypeOf]](proto)
   if ProtoArg is TGocciaNullLiteralValue then
@@ -919,9 +921,9 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.groupBy', ThrowError);
 
   if not (AArgs.GetElement(0) is TGocciaArrayValue) then
-    ThrowError('Object.groupBy requires an iterable as first argument', 0, 0);
+    ThrowTypeError(SErrorObjectGroupByRequiresIterable, SSuggestNotIterable);
   if not AArgs.GetElement(1).IsCallable then
-    ThrowError('Object.groupBy requires a callback function as second argument', 0, 0);
+    ThrowTypeError(SErrorObjectGroupByRequiresCallback, SSuggestCallbackRequired);
 
   // Step 1: Let groups be ? GroupBy(items, callbackfn, property)
   Items := TGocciaArrayValue(AArgs.GetElement(0));

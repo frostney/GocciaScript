@@ -12,28 +12,35 @@ uses
 function CreateErrorObject(const AName, AMessage: string; const ASkipTop: Integer = 0): TGocciaObjectValue;
 
 { Raises a TGocciaThrowValue with a TypeError }
-procedure ThrowTypeError(const AMessage: string);
+procedure ThrowTypeError(const AMessage: string); overload;
+procedure ThrowTypeError(const AMessage, ASuggestion: string); overload;
 
 { Raises a TGocciaThrowValue with a RangeError }
-procedure ThrowRangeError(const AMessage: string);
+procedure ThrowRangeError(const AMessage: string); overload;
+procedure ThrowRangeError(const AMessage, ASuggestion: string); overload;
 
 { Raises a TGocciaThrowValue with a ReferenceError }
-procedure ThrowReferenceError(const AMessage: string);
+procedure ThrowReferenceError(const AMessage: string); overload;
+procedure ThrowReferenceError(const AMessage, ASuggestion: string); overload;
 
 { Raises a TGocciaThrowValue with a SyntaxError }
-procedure ThrowSyntaxError(const AMessage: string);
+procedure ThrowSyntaxError(const AMessage: string); overload;
+procedure ThrowSyntaxError(const AMessage, ASuggestion: string); overload;
 
 { Raises a TGocciaThrowValue with a DataCloneError (DOMException with code 25) }
-procedure ThrowDataCloneError(const AMessage: string);
+procedure ThrowDataCloneError(const AMessage: string); overload;
+procedure ThrowDataCloneError(const AMessage, ASuggestion: string); overload;
 
 { Raises a TGocciaThrowValue with an InvalidCharacterError (DOMException with code 5) }
 procedure ThrowInvalidCharacterError(const AMessage: string);
 
 { Raises a TGocciaThrowValue with a URIError }
-procedure ThrowURIError(const AMessage: string);
+procedure ThrowURIError(const AMessage: string); overload;
+procedure ThrowURIError(const AMessage, ASuggestion: string); overload;
 
 { Raises a TGocciaThrowValue with a generic Error }
-procedure ThrowError(const AMessage: string);
+procedure ThrowError(const AMessage: string); overload;
+procedure ThrowError(const AMessage, ASuggestion: string); overload;
 
 implementation
 
@@ -87,9 +94,21 @@ begin
         TGocciaCallStack.Instance.CaptureStackTrace(AName, AMessage, ASkipTop)));
 end;
 
+{ Shared raise helper — creates the error object and raises with optional suggestion }
+procedure RaiseNativeError(const AErrorName, AMessage, ASuggestion: string);
+begin
+  raise TGocciaThrowValue.Create(
+    CreateErrorObject(AErrorName, AMessage), ASuggestion);
+end;
+
 procedure ThrowTypeError(const AMessage: string);
 begin
   raise TGocciaThrowValue.Create(CreateErrorObject(TYPE_ERROR_NAME, AMessage));
+end;
+
+procedure ThrowTypeError(const AMessage, ASuggestion: string);
+begin
+  RaiseNativeError(TYPE_ERROR_NAME, AMessage, ASuggestion);
 end;
 
 procedure ThrowRangeError(const AMessage: string);
@@ -97,14 +116,29 @@ begin
   raise TGocciaThrowValue.Create(CreateErrorObject(RANGE_ERROR_NAME, AMessage));
 end;
 
+procedure ThrowRangeError(const AMessage, ASuggestion: string);
+begin
+  RaiseNativeError(RANGE_ERROR_NAME, AMessage, ASuggestion);
+end;
+
 procedure ThrowReferenceError(const AMessage: string);
 begin
   raise TGocciaThrowValue.Create(CreateErrorObject(REFERENCE_ERROR_NAME, AMessage));
 end;
 
+procedure ThrowReferenceError(const AMessage, ASuggestion: string);
+begin
+  RaiseNativeError(REFERENCE_ERROR_NAME, AMessage, ASuggestion);
+end;
+
 procedure ThrowSyntaxError(const AMessage: string);
 begin
   raise TGocciaThrowValue.Create(CreateErrorObject(SYNTAX_ERROR_NAME, AMessage));
+end;
+
+procedure ThrowSyntaxError(const AMessage, ASuggestion: string);
+begin
+  RaiseNativeError(SYNTAX_ERROR_NAME, AMessage, ASuggestion);
 end;
 
 procedure ThrowDataCloneError(const AMessage: string);
@@ -117,6 +151,18 @@ begin
   if Assigned(GDOMExceptionProto) then
     ErrorObj.Prototype := GDOMExceptionProto;
   raise TGocciaThrowValue.Create(ErrorObj);
+end;
+
+procedure ThrowDataCloneError(const AMessage, ASuggestion: string);
+var
+  ErrorObj: TGocciaObjectValue;
+begin
+  ErrorObj := CreateErrorObject(DATA_CLONE_ERROR_NAME, AMessage);
+  ErrorObj.HasErrorData := False;
+  ErrorObj.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(25));
+  if Assigned(GDOMExceptionProto) then
+    ErrorObj.Prototype := GDOMExceptionProto;
+  raise TGocciaThrowValue.Create(ErrorObj, ASuggestion);
 end;
 
 procedure ThrowInvalidCharacterError(const AMessage: string);
@@ -136,9 +182,19 @@ begin
   raise TGocciaThrowValue.Create(CreateErrorObject(URI_ERROR_NAME, AMessage));
 end;
 
+procedure ThrowURIError(const AMessage, ASuggestion: string);
+begin
+  RaiseNativeError(URI_ERROR_NAME, AMessage, ASuggestion);
+end;
+
 procedure ThrowError(const AMessage: string);
 begin
   raise TGocciaThrowValue.Create(CreateErrorObject(ERROR_NAME, AMessage));
+end;
+
+procedure ThrowError(const AMessage, ASuggestion: string);
+begin
+  RaiseNativeError(ERROR_NAME, AMessage, ASuggestion);
 end;
 
 end.

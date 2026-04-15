@@ -207,6 +207,8 @@ uses
   Goccia.Coverage,
   Goccia.DisposalTracker,
   Goccia.Error,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Evaluator,
   Goccia.Evaluator.Decorators,
   Goccia.GarbageCollector,
@@ -340,7 +342,8 @@ begin
   if not Result then
     Exit;
   if not TGocciaPropertyDescriptorData(Descriptor).Writable then
-    ThrowTypeError('Cannot assign to read only property ''' + AName + '''');
+    ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]),
+      SSuggestReadOnlyProperty);
   TGocciaPropertyDescriptorData(Descriptor).Value := AValue;
 end;
 
@@ -397,32 +400,32 @@ begin
            AValue.ToNumberLiteral.IsNaN or
            AValue.ToNumberLiteral.IsInfinite or
            (Frac(AValue.ToNumberLiteral.Value) <> 0.0) then
-          ThrowTypeError('Type ''' + AValue.TypeName +
-            ''' is not assignable to type ''' + INTEGER_TYPE_NAME + '''');
+          ThrowTypeError(Format(SErrorTypeNotAssignable, [AValue.TypeName, INTEGER_TYPE_NAME]),
+            SSuggestTypeEnforcement);
       end;
     sltFloat:
       begin
         if not (AValue is TGocciaNumberLiteralValue) then
-          ThrowTypeError('Type ''' + AValue.TypeName +
-            ''' is not assignable to type ''' + NUMBER_TYPE_NAME + '''');
+          ThrowTypeError(Format(SErrorTypeNotAssignable, [AValue.TypeName, NUMBER_TYPE_NAME]),
+            SSuggestTypeEnforcement);
       end;
     sltBoolean:
       begin
         if not (AValue is TGocciaBooleanLiteralValue) then
-          ThrowTypeError('Type ''' + AValue.TypeName +
-            ''' is not assignable to type ''' + BOOLEAN_TYPE_NAME + '''');
+          ThrowTypeError(Format(SErrorTypeNotAssignable, [AValue.TypeName, BOOLEAN_TYPE_NAME]),
+            SSuggestTypeEnforcement);
       end;
     sltString:
       begin
         if not (AValue is TGocciaStringLiteralValue) then
-          ThrowTypeError('Type ''' + AValue.TypeName +
-            ''' is not assignable to type ''' + STRING_TYPE_NAME + '''');
+          ThrowTypeError(Format(SErrorTypeNotAssignable, [AValue.TypeName, STRING_TYPE_NAME]),
+            SSuggestTypeEnforcement);
       end;
     sltReference:
       begin
         if AValue.IsPrimitive then
-          ThrowTypeError('Type ''' + AValue.TypeName +
-            ''' is not assignable to type ''' + OBJECT_TYPE_NAME + '''');
+          ThrowTypeError(Format(SErrorTypeNotAssignable, [AValue.TypeName, OBJECT_TYPE_NAME]),
+            SSuggestTypeEnforcement);
       end;
   else
     // sltUntyped: no runtime check
@@ -459,7 +462,7 @@ function VMToNumericPair(const ALeft, ARight: TGocciaValue;
   out ALeftNum, ARightNum: TGocciaNumberLiteralValue): Boolean; inline;
 begin
   if (ALeft is TGocciaSymbolValue) or (ARight is TGocciaSymbolValue) then
-    ThrowTypeError('Cannot convert a Symbol value to a number');
+    ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
   ALeftNum := ALeft.ToNumberLiteral;
   ARightNum := ARight.ToNumberLiteral;
   Result := not (ALeftNum.IsNaN or ARightNum.IsNaN);
@@ -578,14 +581,14 @@ begin
     Exit(TGocciaStringLiteralValue(AValue));
 
   if AValue is TGocciaSymbolValue then
-    ThrowTypeError('Cannot convert a Symbol value to a string');
+    ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
 
   if AValue.IsPrimitive then
     Exit(AValue.ToStringLiteral);
 
   PrimitiveValue := ToPrimitive(AValue, tphString);
   if PrimitiveValue is TGocciaSymbolValue then
-    ThrowTypeError('Cannot convert a Symbol value to a string');
+    ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
   Result := PrimitiveValue.ToStringLiteral;
 end;
 
@@ -613,7 +616,7 @@ begin
         if AValue.ObjectValue is TGocciaStringLiteralValue then
           Exit(TGocciaStringLiteralValue(AValue.ObjectValue));
         if AValue.ObjectValue is TGocciaSymbolValue then
-          ThrowTypeError('Cannot convert a Symbol value to a string');
+          ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
         if Assigned(AValue.ObjectValue) then
           Exit(VMToECMAStringFast(AValue.ObjectValue));
       end;
@@ -749,7 +752,7 @@ begin
   PrimRight := ToPrimitive(ARight);
 
   if (PrimLeft is TGocciaSymbolValue) or (PrimRight is TGocciaSymbolValue) then
-    ThrowTypeError('Cannot convert a Symbol value to a string');
+    ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
 
   if (PrimLeft is TGocciaStringLiteralValue) or (PrimRight is TGocciaStringLiteralValue) then
     Exit(TGocciaStringLiteralValue.Create(
@@ -2166,8 +2169,8 @@ begin
       end;
       NextResult := AwaitValue(NextResult);
       if NextResult.IsPrimitive then
-        ThrowTypeError('Iterator result ' + NextResult.ToStringLiteral.Value +
-          ' is not an object');
+        ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.ToStringLiteral.Value]),
+          SSuggestIteratorResultObject);
       DoneValue := NextResult.GetProperty(PROP_DONE);
       DoneFlag := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
       if not DoneFlag then
@@ -2326,7 +2329,8 @@ begin
     end;
   end;
 
-  ThrowTypeError(AIterable.TypeName + ' is not iterable');
+  ThrowTypeError(Format(SErrorNotIterable, [AIterable.TypeName]),
+    SSuggestNotIterable);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -2375,8 +2379,9 @@ begin
   if AConstructor is TGocciaBytecodeFunctionValue then
   begin
     if TGocciaBytecodeFunctionValue(AConstructor).FClosure.Template.IsArrow then
-      ThrowTypeError(TGocciaBytecodeFunctionValue(AConstructor).GetProperty(PROP_NAME)
-        .ToStringLiteral.Value + ' is not a constructor');
+      ThrowTypeError(Format(SErrorNotConstructor, [TGocciaBytecodeFunctionValue(AConstructor).GetProperty(PROP_NAME)
+        .ToStringLiteral.Value]),
+        SSuggestNotConstructorType);
   end;
 
   if AConstructor is TGocciaFunctionBase then
@@ -2395,7 +2400,8 @@ begin
     Exit;
   end;
 
-  ThrowTypeError(AConstructor.TypeName + ' is not a constructor');
+  ThrowTypeError(Format(SErrorValueNotConstructor, [AConstructor.TypeName]),
+    SSuggestNotConstructorType);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -2404,7 +2410,7 @@ var
   Module: TGocciaModule;
 begin
   if not Assigned(FInterpreter) then
-    ThrowTypeError('Module loading is not available in TGocciaVM');
+    ThrowTypeError(SErrorModuleNotAvailableInVM);
 
   Module := FInterpreter.LoadModule(APath, FCurrentModuleSourcePath);
   Result := CreateModuleNamespaceObject(Module);
@@ -2415,7 +2421,7 @@ var
   Module: TGocciaModule;
 begin
   if not Assigned(FInterpreter) then
-    ThrowTypeError('Module loading is not available in TGocciaVM');
+    ThrowTypeError(SErrorModuleNotAvailableInVM);
 
   Module := FInterpreter.LoadModule(APath, AReferrer);
   Result := CreateModuleNamespaceObject(Module);
@@ -2663,8 +2669,8 @@ begin
     if not (MemberValue is TGocciaNumberLiteralValue) and
        not (MemberValue is TGocciaStringLiteralValue) and
        not (MemberValue is TGocciaSymbolValue) then
-      ThrowTypeError('Enum member ''' + Key +
-        ''' must be a number, string, or symbol');
+      ThrowTypeError(Format(SErrorEnumMemberType, [Key]),
+        SSuggestEnumValueType);
 
     EnumObj.DefineProperty(Key,
       TGocciaPropertyDescriptorData.Create(MemberValue, [pfEnumerable]));
@@ -2860,7 +2866,7 @@ begin
   if not (ClassVal is TGocciaClassValue) then
     Exit;
   if not ADecoratorFn.IsCallable then
-    ThrowTypeError('Decorator must be a function');
+    ThrowTypeError(SErrorDecoratorMustBeFunction, SSuggestDecoratorFunction);
 
   ContextObject := TGocciaObjectValue.Create;
   ContextObject.AssignProperty(PROP_KIND,
@@ -2886,7 +2892,7 @@ begin
      not (DecoratorResult is TGocciaUndefinedLiteralValue) then
   begin
     if not (DecoratorResult is TGocciaClassValue) then
-      ThrowTypeError('Class decorator must return a class or undefined');
+      ThrowTypeError(SErrorClassDecoratorReturn, SSuggestDecoratorFunction);
     Session.ClassValue := DecoratorResult;
   end;
 end;
@@ -2917,7 +2923,7 @@ begin
   if not (ClassVal is TGocciaClassValue) then
     Exit;
   if not ADecoratorFn.IsCallable then
-    ThrowTypeError('Decorator must be a function');
+    ThrowTypeError(SErrorDecoratorMustBeFunction, SSuggestDecoratorFunction);
 
   ParseElementDescriptor(ADescriptor, Kind, Name, Flags);
   IsStatic := (Flags and 1) <> 0;
@@ -3058,7 +3064,7 @@ begin
     'm':
       begin
         if not DecoratorResult.IsCallable then
-          ThrowTypeError('Method decorator must return a function or undefined');
+          ThrowTypeError(SErrorMethodDecoratorReturn, SSuggestDecoratorFunction);
         if IsPrivate then
           TGocciaClassValue(ClassVal).Prototype.AssignProperty(
             '#' + Name, DecoratorResult)
@@ -3071,7 +3077,7 @@ begin
     'g':
       begin
         if not DecoratorResult.IsCallable then
-          ThrowTypeError('Getter decorator must return a function or undefined');
+          ThrowTypeError(SErrorGetterDecoratorReturn, SSuggestDecoratorFunction);
         if IsStatic then
           TGocciaClassValue(ClassVal).AddStaticGetter(
             Name, TGocciaFunctionValue(DecoratorResult))
@@ -3091,7 +3097,7 @@ begin
     's':
       begin
         if not DecoratorResult.IsCallable then
-          ThrowTypeError('Setter decorator must return a function or undefined');
+          ThrowTypeError(SErrorSetterDecoratorReturn, SSuggestDecoratorFunction);
         if IsStatic then
           TGocciaClassValue(ClassVal).AddStaticSetter(
             Name, TGocciaFunctionValue(DecoratorResult))
@@ -3111,14 +3117,14 @@ begin
     'f':
       begin
         if not DecoratorResult.IsCallable then
-          ThrowTypeError('Field decorator must return a function or undefined');
+          ThrowTypeError(SErrorFieldDecoratorReturn, SSuggestDecoratorFunction);
         TGocciaClassValue(ClassVal).AddFieldInitializer(
           Name, DecoratorResult, IsPrivate, IsStatic);
       end;
     'a':
       begin
         if not (DecoratorResult is TGocciaObjectValue) then
-          ThrowTypeError('Accessor decorator must return an object or undefined');
+          ThrowTypeError(SErrorAccessorDecoratorReturn, SSuggestDecoratorFunction);
         DecResultObj := TGocciaObjectValue(DecoratorResult);
         NewGetter := DecResultObj.GetProperty(PROP_GET);
         NewSetter := DecResultObj.GetProperty(PROP_SET);
@@ -3242,9 +3248,11 @@ var
   EmptyArgs: TGocciaArgumentsCollection;
 begin
   if AObject is TGocciaNullLiteralValue then
-    ThrowTypeError('Cannot read properties of null (reading ''' + AKey + ''')');
+    ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull, [AKey]),
+      SSuggestCheckNullBeforeAccess);
   if AObject is TGocciaUndefinedLiteralValue then
-    ThrowTypeError('Cannot read properties of undefined (reading ''' + AKey + ''')');
+    ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined, [AKey]),
+      SSuggestCheckNullBeforeAccess);
 
   if (AKey <> '') and (AKey[1] = '#') then
   begin
@@ -3263,10 +3271,12 @@ begin
         end;
       end;
       if TGocciaClassValue(AObject).HasOwnPrivateSetter(PrivateName) then
-        ThrowTypeError('Private accessor ' + AKey + ' was defined without a getter');
+        ThrowTypeError(Format(SErrorPrivateAccessorNoGetter, [AKey]),
+          SSuggestPrivateFieldAccess);
       if TryGetRawPrivateValue(AObject, AKey, Result) then
         Exit;
-      ThrowTypeError('Private field ' + AKey + ' is not accessible');
+      ThrowTypeError(Format(SErrorPrivateFieldNotAccessible, [AKey]),
+        SSuggestPrivateFieldAccess);
     end;
 
     if AObject is TGocciaObjectValue then
@@ -3279,7 +3289,8 @@ begin
         begin
           if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
             Exit(AObject.GetProperty(AKey));
-          ThrowTypeError('Private accessor ' + AKey + ' was defined without a getter');
+          ThrowTypeError(Format(SErrorPrivateAccessorNoGetter, [AKey]),
+            SSuggestPrivateFieldAccess);
         end;
         Current := Current.Prototype;
       end;
@@ -3311,9 +3322,11 @@ var
   PrivateName: string;
 begin
   if AObject is TGocciaNullLiteralValue then
-    ThrowTypeError('Cannot set properties of null (setting ''' + AKey + ''')');
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [AKey]),
+      SSuggestCheckNullBeforeAccess);
   if AObject is TGocciaUndefinedLiteralValue then
-    ThrowTypeError('Cannot set properties of undefined (setting ''' + AKey + ''')');
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined, [AKey]),
+      SSuggestCheckNullBeforeAccess);
   if (AKey <> '') and (AKey[1] = '#') then
   begin
     PrivateName := Copy(AKey, 2, MaxInt);
@@ -3332,13 +3345,15 @@ begin
         Exit;
       end;
       if TGocciaClassValue(AObject).HasOwnPrivateGetter(PrivateName) then
-        ThrowTypeError('Private accessor ' + AKey + ' was defined without a setter');
+        ThrowTypeError(Format(SErrorPrivateAccessorNoSetter, [AKey]),
+          SSuggestPrivateFieldAccess);
       if TGocciaClassValue(AObject).HasOwnPrivateStaticProperty(AKey) then
       begin
         TGocciaClassValue(AObject).AddPrivateStaticProperty(AKey, AValue);
         Exit;
       end;
-      ThrowTypeError('Private field ' + AKey + ' is not accessible');
+      ThrowTypeError(Format(SErrorPrivateFieldNotAccessible, [AKey]),
+        SSuggestPrivateFieldAccess);
     end;
 
     if AObject is TGocciaObjectValue then
@@ -3354,7 +3369,8 @@ begin
           Exit;
         end;
         if Descriptor is TGocciaPropertyDescriptorAccessor then
-          ThrowTypeError('Private accessor ' + AKey + ' was defined without a setter');
+          ThrowTypeError(Format(SErrorPrivateAccessorNoSetter, [AKey]),
+            SSuggestPrivateFieldAccess);
         Current := Current.Prototype;
       end;
     end;
@@ -3417,8 +3433,8 @@ begin
      (AObject is TGocciaBooleanLiteralValue) or
      (AObject is TGocciaNumberLiteralValue) or
      (AObject is TGocciaStringLiteralValue) then
-    ThrowTypeError('Cannot use ''in'' operator to search for ''' +
-      AKey.ToStringLiteral.Value + ''' in ' + AObject.ToStringLiteral.Value);
+    ThrowTypeError(Format(SErrorCannotUseInOperator, [AKey.ToStringLiteral.Value, AObject.ToStringLiteral.Value]),
+      SSuggestCheckNullBeforeAccess);
 
   if (AKey is TGocciaSymbolValue) and (AObject is TGocciaObjectValue) then
   begin
@@ -3492,7 +3508,8 @@ begin
     CalleeDesc := ACallee.TypeName
   else
     CalleeDesc := 'undefined';
-  ThrowTypeError(CalleeDesc + ' is not a function');
+  ThrowTypeError(Format(SErrorValueNotFunction, [CalleeDesc]),
+    SSuggestNotFunctionType);
 end;
 
 function TGocciaVM.ExecuteClosureRegisters(const AClosure: TGocciaBytecodeClosure;
@@ -4269,9 +4286,8 @@ begin
             Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue) then
             FRegisters[A] := RegisterBoolean(True)
           else
-            ThrowTypeError('Cannot delete property ''' +
-              Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue +
-              ''' of [object Object]');
+            ThrowTypeError(Format(SErrorCannotDeletePropertyOf, [Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue, '[object Object]']),
+              SSuggestCannotDeleteNonConfigurable);
         end
         else
           FRegisters[A] := RegisterBoolean(True);
@@ -5151,8 +5167,8 @@ begin
 
             IterResult := AwaitValue(IterResult);
             if IterResult.IsPrimitive then
-              ThrowTypeError('Iterator result ' +
-                IterResult.ToStringLiteral.Value + ' is not an object');
+              ThrowTypeError(Format(SErrorIteratorResultNotObject, [IterResult.ToStringLiteral.Value]),
+                SSuggestIteratorResultObject);
 
             DoneValue := IterResult.GetProperty(PROP_DONE);
             if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
@@ -5475,9 +5491,8 @@ begin
           VALIDATE_OP_REQUIRE_OBJECT:
             begin
               if FRegisters[A].Kind in [grkNull, grkUndefined] then
-                ThrowTypeError('Cannot destructure ' +
-                  RegisterToValue(FRegisters[A]).ToStringLiteral.Value +
-                  ' as it is not an object');
+                ThrowTypeError(Format(SErrorCannotDestructureNotObject, [RegisterToValue(FRegisters[A]).ToStringLiteral.Value]),
+                  SSuggestDestructureRequiresObject);
             end;
 
           VALIDATE_OP_REQUIRE_ITERABLE:

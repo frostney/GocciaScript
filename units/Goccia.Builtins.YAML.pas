@@ -34,6 +34,8 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
@@ -79,13 +81,13 @@ function TGocciaYAMLBuiltin.YAMLParse(
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'YAML.parse', ThrowError);
   if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowError('YAML.parse: argument must be a string', 0, 0);
+    ThrowTypeError(SErrorYAMLParseArgMustBeString, SSuggestStringArgRequired);
 
   try
     Result := FParser.Parse(AArgs.GetElement(0).ToStringLiteral.Value);
   except
     on E: Exception do
-      ThrowSyntaxError(E.Message);
+      ThrowSyntaxError(E.Message, SSuggestYAMLSyntax);
   end;
 end;
 
@@ -95,13 +97,13 @@ function TGocciaYAMLBuiltin.YAMLParseDocuments(
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'YAML.parseDocuments', ThrowError);
   if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowError('YAML.parseDocuments: argument must be a string', 0, 0);
+    ThrowTypeError(SErrorYAMLParseDocumentsArgMustBeString, SSuggestStringArgRequired);
 
   try
     Result := FParser.ParseDocuments(AArgs.GetElement(0).ToStringLiteral.Value);
   except
     on E: Exception do
-      ThrowSyntaxError(E.Message);
+      ThrowSyntaxError(E.Message, SSuggestYAMLSyntax);
   end;
 end;
 
