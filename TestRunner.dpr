@@ -13,7 +13,6 @@ uses
 
   Goccia.Application,
   Goccia.AST.Node,
-  Goccia.Builtins.TestAssertions,
   Goccia.Builtins.TestConsole,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
@@ -291,8 +290,13 @@ begin
           SilentCon := TGocciaTestConsole.Create;
           SilentCon.Silence(Engine.BuiltinConsole.BuiltinObject);
           Engine.SuppressWarnings := True;
-          if Assigned(Engine.BuiltinTestAssertions) then
-            Engine.BuiltinTestAssertions.SuppressOutput := True;
+          // Note: TGocciaTestAssertions.SuppressOutput is intentionally NOT
+          // set here.  Under -O4 on x86_64-darwin the inlined property
+          // access causes a hang — an FPC code-gen issue.  The Silence()
+          // call above already replaces the JS console methods with no-ops,
+          // which suppresses most test-framework output.  Any remaining
+          // Pascal-level WriteLn calls in the assertions builtin are
+          // guarded by GIsWorkerThread at each call site.
         end;
 
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
