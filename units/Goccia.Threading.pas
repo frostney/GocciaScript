@@ -5,6 +5,10 @@
   thread-local runtime (GC, CallStack, MicrotaskQueue) and shuts it down
   on completion, so there is zero shared mutable state between workers.
 
+  Workers pull files from a shared queue so that fast workers naturally
+  pick up more files, keeping all cores busy even when file execution
+  times vary widely.
+
   Results are collected in submission order so callers can print output
   deterministically. }
 
@@ -46,10 +50,24 @@ type
 
   TGocciaWorkItemArray = array of TGocciaWorkItem;
 
+  { Shared work queue — workers pull the next item under a lock. }
+  TGocciaWorkQueue = class
+  private
+    FItems: TGocciaWorkItemArray;
+    FNextIndex: Integer;
+    FLock: TRTLCriticalSection;
+  public
+    constructor Create(const AItems: TGocciaWorkItemArray);
+    destructor Destroy; override;
+    { Returns True and fills AItem if work remains, False when exhausted. }
+    function TryDequeue(out AItem: TGocciaWorkItem): Boolean;
+  end;
+
   TGocciaFileWorker = class(TThread)
   private
-    FWorkItems: TGocciaWorkItemArray;
+    FQueue: TGocciaWorkQueue;
     FResults: TGocciaWorkerResultArray;
+    FResultCount: Integer;
     FWorkerProc: TGocciaWorkerProc;
     FCancelled: PBoolean;
     FCancelOnError: Boolean;
@@ -59,14 +77,15 @@ type
   protected
     procedure Execute; override;
   public
-    constructor Create(const AWorkItems: TGocciaWorkItemArray;
+    constructor Create(AQueue: TGocciaWorkQueue;
       AWorkerProc: TGocciaWorkerProc; ACancelled: PBoolean;
       ACancelOnError: Boolean; AEnableCoverage: Boolean; AData: Pointer);
     property Results: TGocciaWorkerResultArray read FResults;
+    property ResultCount: Integer read FResultCount;
     property CoverageTracker: TObject read FCoverageTracker;
   end;
 
-  { Simple thread pool that partitions files across N workers.
+  { Thread pool that dispatches files to workers via a shared queue.
     Call RunAll to execute, then read Results in original file order. }
   TGocciaThreadPool = class
   private
@@ -96,10 +115,9 @@ type
     property WorkerCount: Integer read FWorkerCount;
     property Cancelled: Boolean read FCancelled;
     { When True, the first worker error automatically cancels remaining files. }
-    { When True, the first worker error automatically cancels remaining files. }
     property CancelOnError: Boolean read FCancelOnError write FCancelOnError;
     { When True, each worker initialises a per-thread coverage tracker.
-      After RunAll, use MergeCoverage to collect results. }
+      After RunAll, use MergeCoverageInto to collect results. }
     property EnableCoverage: Boolean read FEnableCoverage write FEnableCoverage;
   end;
 
@@ -155,66 +173,113 @@ begin
   TGarbageCollector.Shutdown;
 end;
 
+{ TGocciaWorkQueue }
+
+constructor TGocciaWorkQueue.Create(const AItems: TGocciaWorkItemArray);
+begin
+  inherited Create;
+  FItems := AItems;
+  FNextIndex := 0;
+  InitCriticalSection(FLock);
+end;
+
+destructor TGocciaWorkQueue.Destroy;
+begin
+  DoneCriticalSection(FLock);
+  inherited;
+end;
+
+function TGocciaWorkQueue.TryDequeue(out AItem: TGocciaWorkItem): Boolean;
+var
+  Idx: Integer;
+begin
+  EnterCriticalSection(FLock);
+  try
+    if FNextIndex < Length(FItems) then
+    begin
+      Idx := FNextIndex;
+      Inc(FNextIndex);
+      AItem := FItems[Idx];
+      Result := True;
+    end
+    else
+      Result := False;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
 { TGocciaFileWorker }
 
-constructor TGocciaFileWorker.Create(const AWorkItems: TGocciaWorkItemArray;
+constructor TGocciaFileWorker.Create(AQueue: TGocciaWorkQueue;
   AWorkerProc: TGocciaWorkerProc; ACancelled: PBoolean;
   ACancelOnError: Boolean; AEnableCoverage: Boolean; AData: Pointer);
 begin
   inherited Create(True); // Create suspended
   FreeOnTerminate := False;
-  FWorkItems := AWorkItems;
+  FQueue := AQueue;
   FWorkerProc := AWorkerProc;
   FCancelled := ACancelled;
   FCancelOnError := ACancelOnError;
   FEnableCoverage := AEnableCoverage;
   FCoverageTracker := nil;
   FData := AData;
-  SetLength(FResults, Length(FWorkItems));
+  FResultCount := 0;
+  // Pre-allocate generously; actual count tracked by FResultCount.
+  SetLength(FResults, 0);
 end;
 
 procedure TGocciaFileWorker.Execute;
 var
-  I: Integer;
+  Item: TGocciaWorkItem;
   ConsoleOut, ErrorMsg: string;
+  Idx: Integer;
 begin
   InitThreadRuntime(FEnableCoverage);
   try
-    for I := 0 to High(FWorkItems) do
+    while FQueue.TryDequeue(Item) do
     begin
       if FCancelled^ then
       begin
-        FResults[I].Index := FWorkItems[I].Index;
-        FResults[I].FileName := FWorkItems[I].FileName;
-        FResults[I].Success := False;
-        FResults[I].ErrorMessage := 'Cancelled';
-        FResults[I].ConsoleOutput := '';
-        FResults[I].Data := nil;
+        Idx := FResultCount;
+        Inc(FResultCount);
+        if Idx >= Length(FResults) then
+          SetLength(FResults, Max(8, Length(FResults) * 2));
+        FResults[Idx].Index := Item.Index;
+        FResults[Idx].FileName := Item.FileName;
+        FResults[Idx].Success := False;
+        FResults[Idx].ErrorMessage := 'Cancelled';
+        FResults[Idx].ConsoleOutput := '';
+        FResults[Idx].Data := nil;
         Continue;
       end;
 
       ConsoleOut := '';
       ErrorMsg := '';
-      FResults[I].Index := FWorkItems[I].Index;
-      FResults[I].FileName := FWorkItems[I].FileName;
-      FResults[I].Data := FData;
+      Idx := FResultCount;
+      Inc(FResultCount);
+      if Idx >= Length(FResults) then
+        SetLength(FResults, Max(8, Length(FResults) * 2));
+      FResults[Idx].Index := Item.Index;
+      FResults[Idx].FileName := Item.FileName;
+      FResults[Idx].Data := FData;
       try
-        FWorkerProc(FWorkItems[I].FileName, FWorkItems[I].Index,
+        FWorkerProc(Item.FileName, Item.Index,
           ConsoleOut, ErrorMsg, FData);
-        FResults[I].Success := ErrorMsg = '';
-        FResults[I].ErrorMessage := ErrorMsg;
-        FResults[I].ConsoleOutput := ConsoleOut;
+        FResults[Idx].Success := ErrorMsg = '';
+        FResults[Idx].ErrorMessage := ErrorMsg;
+        FResults[Idx].ConsoleOutput := ConsoleOut;
       except
         on E: Exception do
         begin
-          FResults[I].Success := False;
-          FResults[I].ErrorMessage := E.ClassName + ': ' + E.Message;
-          FResults[I].ConsoleOutput := ConsoleOut;
+          FResults[Idx].Success := False;
+          FResults[Idx].ErrorMessage := E.ClassName + ': ' + E.Message;
+          FResults[Idx].ConsoleOutput := ConsoleOut;
         end;
       end;
 
       { Cancel remaining files across all workers on first error. }
-      if FCancelOnError and (not FResults[I].Success) then
+      if FCancelOnError and (not FResults[Idx].Success) then
         FCancelled^ := True;
     end;
   finally
@@ -240,8 +305,9 @@ end;
 procedure TGocciaThreadPool.RunAll(const AFiles: TStringList;
   AWorkerProc: TGocciaWorkerProc; AData: Pointer);
 var
-  WorkItems: array of TGocciaWorkItemArray;
-  FileCount, I, WorkerIdx, ResultIdx: Integer;
+  AllItems: TGocciaWorkItemArray;
+  Queue: TGocciaWorkQueue;
+  FileCount, I, J: Integer;
 begin
   FileCount := AFiles.Count;
   if FileCount = 0 then
@@ -250,76 +316,61 @@ begin
     Exit;
   end;
 
-  // Partition files round-robin across workers
-  SetLength(WorkItems, FWorkerCount);
-  for I := 0 to FWorkerCount - 1 do
-    SetLength(WorkItems[I], 0);
-
+  // Build the shared work item array
+  SetLength(AllItems, FileCount);
   for I := 0 to FileCount - 1 do
   begin
-    WorkerIdx := I mod FWorkerCount;
-    SetLength(WorkItems[WorkerIdx], Length(WorkItems[WorkerIdx]) + 1);
-    WorkItems[WorkerIdx][High(WorkItems[WorkerIdx])].FileName := AFiles[I];
-    WorkItems[WorkerIdx][High(WorkItems[WorkerIdx])].Index := I;
+    AllItems[I].FileName := AFiles[I];
+    AllItems[I].Index := I;
   end;
 
-  // Create and start workers
-  SetLength(FWorkers, FWorkerCount);
-  for I := 0 to FWorkerCount - 1 do
-  begin
-    if Length(WorkItems[I]) > 0 then
+  Queue := TGocciaWorkQueue.Create(AllItems);
+  try
+    // Create and start workers
+    SetLength(FWorkers, FWorkerCount);
+    for I := 0 to FWorkerCount - 1 do
     begin
-      FWorkers[I] := TGocciaFileWorker.Create(WorkItems[I], AWorkerProc,
+      FWorkers[I] := TGocciaFileWorker.Create(Queue, AWorkerProc,
         @FCancelled, FCancelOnError, FEnableCoverage, AData);
       FWorkers[I].Start;
-    end
-    else
-      FWorkers[I] := nil;
-  end;
+    end;
 
-  // Wait for all workers
-  for I := 0 to FWorkerCount - 1 do
-    if Assigned(FWorkers[I]) then
+    // Wait for all workers
+    for I := 0 to FWorkerCount - 1 do
       FWorkers[I].WaitFor;
+  finally
+    Queue.Free;
+  end;
 
   // Collect results in original file order
   SetLength(FResults, FileCount);
+  // Initialise all slots so we can detect missing results
+  for I := 0 to FileCount - 1 do
+  begin
+    FResults[I].Index := I;
+    FResults[I].FileName := AFiles[I];
+    FResults[I].Success := False;
+    FResults[I].ErrorMessage := '';
+    FResults[I].ConsoleOutput := '';
+    FResults[I].Data := nil;
+  end;
+
   for I := 0 to FWorkerCount - 1 do
   begin
-    if Assigned(FWorkers[I]) then
+    // Check for unhandled exceptions in the worker thread
+    if Assigned(FWorkers[I].FatalException) then
+      WriteLn(StdErr, 'Worker thread ', I, ' fatal: ',
+        Exception(FWorkers[I].FatalException).Message);
+
+    for J := 0 to FWorkers[I].ResultCount - 1 do
+      FResults[FWorkers[I].Results[J].Index] := FWorkers[I].Results[J];
+
+    { Don't free workers yet if coverage is enabled — MergeCoverageInto
+      needs access to their coverage trackers. }
+    if not FEnableCoverage then
     begin
-      // Check for unhandled exceptions in the worker thread
-      if Assigned(FWorkers[I].FatalException) then
-      begin
-        WriteLn(StdErr, 'Worker thread ', I, ' fatal: ',
-          Exception(FWorkers[I].FatalException).Message);
-      end;
-      for ResultIdx := 0 to High(FWorkers[I].Results) do
-      begin
-        if FWorkers[I].Results[ResultIdx].FileName <> '' then
-          FResults[FWorkers[I].Results[ResultIdx].Index] := FWorkers[I].Results[ResultIdx]
-        else
-        begin
-          { Worker died before processing this slot — fill from work items. }
-          FResults[WorkItems[I][ResultIdx].Index].Index := WorkItems[I][ResultIdx].Index;
-          FResults[WorkItems[I][ResultIdx].Index].FileName := WorkItems[I][ResultIdx].FileName;
-          FResults[WorkItems[I][ResultIdx].Index].Success := False;
-          if Assigned(FWorkers[I].FatalException) then
-            FResults[WorkItems[I][ResultIdx].Index].ErrorMessage :=
-              Exception(FWorkers[I].FatalException).Message
-          else
-            FResults[WorkItems[I][ResultIdx].Index].ErrorMessage := 'Worker terminated unexpectedly';
-          FResults[WorkItems[I][ResultIdx].Index].ConsoleOutput := '';
-          FResults[WorkItems[I][ResultIdx].Index].Data := nil;
-        end;
-      end;
-      { Don't free workers yet if coverage is enabled — MergeCoverageInto
-        needs access to their coverage trackers. }
-      if not FEnableCoverage then
-      begin
-        FWorkers[I].Free;
-        FWorkers[I] := nil;
-      end;
+      FWorkers[I].Free;
+      FWorkers[I] := nil;
     end;
   end;
 end;
