@@ -257,11 +257,16 @@ begin
   // Set the threadvar early to prevent infinite recursion when creating
   // TGocciaNativeFunctionValue instances (which inherit from TGocciaFunctionBase)
   FSharedPrototype := Self;
-
-  Members[0] := DefineNamedMethod('call', FunctionCall, 1);
-  Members[1] := DefineNamedMethod('apply', FunctionApply, 2);
-  Members[2] := DefineNamedMethod('bind', FunctionBind, 1);
-  RegisterMemberDefinitions(Self, Members);
+  try
+    Members[0] := DefineNamedMethod('call', FunctionCall, 1);
+    Members[1] := DefineNamedMethod('apply', FunctionApply, 2);
+    Members[2] := DefineNamedMethod('bind', FunctionBind, 1);
+    RegisterMemberDefinitions(Self, Members);
+  except
+    if FSharedPrototype = Self then
+      FSharedPrototype := nil;
+    raise;
+  end;
 end;
 
 function TGocciaFunctionSharedPrototype.FunctionCall(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

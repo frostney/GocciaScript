@@ -87,9 +87,9 @@ threadvar
   FMethodHost: TGocciaSymbolValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
-var
-  GNextSymbolId: Integer = 0;
-  GSymbolRegistry: THashMap<Integer, TGocciaSymbolValue> = nil;
+threadvar
+  GNextSymbolId: Integer;
+  GSymbolRegistry: THashMap<Integer, TGocciaSymbolValue>;
 
 function TGocciaSymbolValue.SymbolToString(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;

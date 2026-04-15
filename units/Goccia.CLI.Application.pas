@@ -69,6 +69,40 @@ uses
   Goccia.Profiler,
   Goccia.Timeout;
 
+{ FPC 3.2.2 GetCPUCount uses wrong _SC_NPROCESSORS_ONLN constants on
+  macOS (expects Linux 84, actual macOS value is 58) and may also fail
+  on some Linux configurations.  Call sysconf / sysctlbyname directly
+  with the correct per-OS constant so we always detect all cores. }
+
+{$IFDEF UNIX}
+function libc_sysconf(Name: Integer): Int64; cdecl; external 'c' name 'sysconf';
+{$ENDIF}
+
+function GetProcessorCount: Integer;
+{$IFDEF UNIX}
+const
+  {$IFDEF DARWIN}
+  SC_NPROCESSORS_ONLN = 58;
+  {$ELSE}
+  SC_NPROCESSORS_ONLN = 84;   { Linux }
+  {$ENDIF}
+var
+  N: Int64;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  N := libc_sysconf(SC_NPROCESSORS_ONLN);
+  if N > 0 then
+    Result := Integer(N)
+  else
+    Result := 1;
+  {$ELSE}
+  Result := TThread.ProcessorCount;
+  if Result < 1 then
+    Result := 1;
+  {$ENDIF}
+end;
+
 { TGocciaCLIApplication }
 
 constructor TGocciaCLIApplication.Create(const AName: string);
@@ -221,10 +255,13 @@ function TGocciaCLIApplication.GetJobCount(const AFileCount: Integer): Integer;
 begin
   if AFileCount <= 1 then
     Exit(1);
+  { Coverage tracking is not yet thread-safe — force sequential. }
+  if Assigned(FCoverageOptions) and FCoverageOptions.Enabled.Present then
+    Exit(1);
   if Assigned(FJobs) and FJobs.Present then
     Result := Max(1, FJobs.Value)
   else
-    Result := TThread.ProcessorCount;
+    Result := GetProcessorCount;
   Result := Min(Result, AFileCount);
 end;
 

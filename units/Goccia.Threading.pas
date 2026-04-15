@@ -256,7 +256,24 @@ begin
           Exception(Workers[I].FatalException).Message);
       end;
       for ResultIdx := 0 to High(Workers[I].Results) do
-        FResults[Workers[I].Results[ResultIdx].Index] := Workers[I].Results[ResultIdx];
+      begin
+        if Workers[I].Results[ResultIdx].FileName <> '' then
+          FResults[Workers[I].Results[ResultIdx].Index] := Workers[I].Results[ResultIdx]
+        else
+        begin
+          { Worker died before processing this slot — fill from work items. }
+          FResults[WorkItems[I][ResultIdx].Index].Index := WorkItems[I][ResultIdx].Index;
+          FResults[WorkItems[I][ResultIdx].Index].FileName := WorkItems[I][ResultIdx].FileName;
+          FResults[WorkItems[I][ResultIdx].Index].Success := False;
+          if Assigned(Workers[I].FatalException) then
+            FResults[WorkItems[I][ResultIdx].Index].ErrorMessage :=
+              Exception(Workers[I].FatalException).Message
+          else
+            FResults[WorkItems[I][ResultIdx].Index].ErrorMessage := 'Worker terminated unexpectedly';
+          FResults[WorkItems[I][ResultIdx].Index].ConsoleOutput := '';
+          FResults[WorkItems[I][ResultIdx].Index].Data := nil;
+        end;
+      end;
       Workers[I].Free;
     end;
   end;

@@ -230,7 +230,7 @@ begin
         WriteLn('[1/1] ', Files[0]);
       PrintTestResults(RunScriptFromFile(Files[0]));
     end
-    else if GetJobCount(Files.Count) > 1 then
+    else if not FExitOnFirst.Present and (GetJobCount(Files.Count) > 1) then
       PrintTestResults(RunScriptsFromFilesParallel(Files, GetJobCount(Files.Count)))
     else
       PrintTestResults(RunScriptsFromFiles(Files));
