@@ -9,43 +9,10 @@ uses
   StringBuffer,
 
   Goccia.GarbageCollector,
+  Goccia.JSON.Utils,
   Goccia.TextFiles,
   Goccia.TOML,
   Goccia.Values.Primitives;
-
-function EscapeJSONString(const AValue: string): string;
-var
-  Buffer: TStringBuffer;
-  Ch: Char;
-  I: Integer;
-begin
-  Buffer := TStringBuffer.Create(Length(AValue));
-  for I := 1 to Length(AValue) do
-  begin
-    Ch := AValue[I];
-    case Ch of
-      '"': Buffer.Append('\"');
-      '\': Buffer.Append('\\');
-      '/': Buffer.Append('\/');
-      #8: Buffer.Append('\b');
-      #9: Buffer.Append('\t');
-      #10: Buffer.Append('\n');
-      #12: Buffer.Append('\f');
-      #13: Buffer.Append('\r');
-    else
-      if Ord(Ch) < 32 then
-        Buffer.Append('\u' + IntToHex(Ord(Ch), 4))
-      else
-        Buffer.AppendChar(Ch);
-    end;
-  end;
-  Result := Buffer.ToString;
-end;
-
-function QuoteJSONString(const AValue: string): string;
-begin
-  Result := '"' + EscapeJSONString(AValue) + '"';
-end;
 
 function ScalarKindName(const AKind: TGocciaTOMLScalarKind): string;
 begin

@@ -27,7 +27,8 @@ uses
   StringBuffer,
   TimingUtils,
 
-  Goccia.Bytecode.OpCodeNames;
+  Goccia.Bytecode.OpCodeNames,
+  Goccia.JSON.Utils;
 
 const
   MAX_OPCODE_PAIRS_DISPLAYED = 20;
@@ -75,33 +76,6 @@ begin
   if Lo < AHigh then QuickSortPairs(AEntries, Lo, AHigh);
 end;
 
-function EscapeJSONString(const AValue: string): string;
-var
-  Buf: TStringBuffer;
-  I: Integer;
-  Ch: Char;
-begin
-  Buf := TStringBuffer.Create(Length(AValue) + 16);
-  for I := 1 to Length(AValue) do
-  begin
-    Ch := AValue[I];
-    case Ch of
-      '\': Buf.Append('\\');
-      '"': Buf.Append('\"');
-      #8:  Buf.Append('\b');
-      #9:  Buf.Append('\t');
-      #10: Buf.Append('\n');
-      #12: Buf.Append('\f');
-      #13: Buf.Append('\r');
-    else
-      if Ord(Ch) < 32 then
-        Buf.Append('\u00' + IntToHex(Ord(Ch), 2))
-      else
-        Buf.AppendChar(AnsiChar(Ch));
-    end;
-  end;
-  Result := Buf.ToString;
-end;
 
 { Console: Opcode Profile }
 

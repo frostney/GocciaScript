@@ -42,7 +42,6 @@ type
     function ApplyToJSON(const AValue: TGocciaValue; const AKey: string): TGocciaValue;
     function ChooseQuoteChar(const AStr: string): Char;
     function CircularErrorName: string;
-    function EscapeJSONString(const AStr: string): string;
     function EscapeJSON5String(const AStr: string; const AQuote: Char): string;
     function IsJSON5IdentifierKey(const AKey: string): Boolean;
     function ShouldOmitObjectProperty(const AValue: TGocciaValue): Boolean;
@@ -67,6 +66,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
+  Goccia.JSON.Utils,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
@@ -683,41 +683,6 @@ begin
     Result := ''''
   else
     Result := '"';
-end;
-
-function TGocciaJSONStringifier.EscapeJSONString(const AStr: string): string;
-var
-  Ch: Char;
-  I: Integer;
-  SB: TStringBuffer;
-begin
-  SB := TStringBuffer.Create(Length(AStr));
-  try
-    for I := 1 to Length(AStr) do
-    begin
-      Ch := AStr[I];
-      case Ch of
-        '"': SB.Append('\"');
-        '\': SB.Append('\\');
-        '/': SB.Append('\/');
-        #8: AppendEscapedChar(SB, 'b');
-        #12: AppendEscapedChar(SB, 'f');
-        #10: AppendEscapedChar(SB, 'n');
-        #13: AppendEscapedChar(SB, 'r');
-        #9: AppendEscapedChar(SB, 't');
-      else
-        if Ord(Ch) < 32 then
-        begin
-          SB.Append('\u');
-          SB.Append(IntToHex(Ord(Ch), 4));
-        end
-        else
-          SB.AppendChar(Ch);
-      end;
-    end;
-    Result := SB.ToString;
-  finally
-  end;
 end;
 
 function TGocciaJSONStringifier.EscapeJSON5String(const AStr: string;
