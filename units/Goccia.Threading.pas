@@ -156,6 +156,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
   Goccia.MicrotaskQueue,
+  Goccia.Temporal.TimeZone,
   Goccia.Values.Primitives;
 
 { Thread runtime lifecycle }
@@ -188,6 +189,7 @@ begin
   ClearImportMetaCache;
   ClearDisposableStackSlotMap;
   ClearSemverHosts;
+  ClearTimeZoneCache;
   TGocciaMicrotaskQueue.Shutdown;
   TGocciaCallStack.Shutdown;
   TGarbageCollector.Shutdown;
@@ -387,11 +389,30 @@ begin
           'within watchdog timeout (', AWatchdogMs, 'ms). ',
           'Cancelling remaining work.');
         FCancelled := True;
-        // Give workers a brief grace period to notice the cancellation
-        // and drain, then collect thread state.
+        // Bounded grace period: poll for 5 seconds to let workers
+        // notice the cancellation flag. If any worker is truly stuck
+        // (e.g. in a system call), we skip WaitFor and let the OS
+        // reclaim the thread on process exit rather than hanging.
+        WatchdogStart := GetNanoseconds;
+        repeat
+          AllFinished := True;
+          for I := 0 to FWorkerCount - 1 do
+            if Assigned(FWorkers[I]) and not FWorkers[I].Finished then
+            begin
+              AllFinished := False;
+              Break;
+            end;
+          if not AllFinished then
+            Sleep(100);
+        until AllFinished or
+          (((GetNanoseconds - WatchdogStart) div 1000000) >= 5000);
+        // Collect only the workers that actually finished.
         for I := 0 to FWorkerCount - 1 do
-          if Assigned(FWorkers[I]) then
+          if Assigned(FWorkers[I]) and FWorkers[I].Finished then
             FWorkers[I].WaitFor;
+        if not AllFinished then
+          WriteLn(StdErr, 'Warning: some workers did not finish ',
+            'within grace period. Skipping WaitFor to avoid hang.');
       end
       else
         for I := 0 to FWorkerCount - 1 do

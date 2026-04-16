@@ -379,9 +379,16 @@ begin
 end;
 
 procedure ClearDisposableStackSlotMap;
+var
+  Pair: THashMap<TGocciaObjectValue, PDisposableStackSlot>.TKeyValuePair;
 begin
   if Assigned(GSlotMap) then
   begin
+    for Pair in GSlotMap do
+    begin
+      Pair.Value^.Tracker.Free;
+      Dispose(Pair.Value);
+    end;
     GSlotMap.Free;
     GSlotMap := nil;
   end;

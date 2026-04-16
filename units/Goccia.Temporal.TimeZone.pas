@@ -23,6 +23,7 @@ function IsValidTimeZone(const ATimeZone: string): Boolean;
 function GetUtcOffsetSeconds(const ATimeZone: string; const AEpochSeconds: Int64): Integer;
 function FormatOffsetString(const AOffsetSeconds: Integer): string;
 function ParseOffsetString(const AStr: string; out AOffsetSeconds: Integer): Boolean;
+procedure ClearTimeZoneCache;
 
 implementation
 
@@ -526,6 +527,12 @@ begin
 
   AOffsetSeconds := Sign * (Hours * MINUTES_PER_HOUR * SECONDS_PER_MINUTE + Minutes * SECONDS_PER_MINUTE);
   Result := True;
+end;
+
+procedure ClearTimeZoneCache;
+begin
+  SetLength(CachedTimeZones, 0);
+  CachedTimeZoneCount := 0;
 end;
 
 initialization

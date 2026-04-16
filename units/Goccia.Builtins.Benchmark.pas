@@ -93,7 +93,10 @@ const
   MAX_MEASUREMENT_ROUNDS = 50;
   IQR_MULTIPLIER = 1.5;
 
-threadvar
+var
+  { Set once by InitBenchmarkConfig in the initialization section, then
+    read-only during execution. Plain var is safe because the values are
+    frozen before any worker thread is spawned. }
   WARMUP_ITERATIONS: Integer;
   MIN_CALIBRATION_MS: Int64;
   CALIBRATION_BATCH: Int64;

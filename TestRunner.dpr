@@ -715,6 +715,8 @@ var
   AllTestResults: TGocciaObjectValue;
   AllFailedTests: TGocciaArrayValue;
   PassedCount, FailedCount, SkippedCount, TotalRunCount, TotalAssertions, TotalDuration: Double;
+  EffectiveTimeoutMs: Integer;
+  WatchdogMs: Integer;
 begin
   SetLength(WorkerData, AFiles.Count);
   for I := 0 to AFiles.Count - 1 do
@@ -744,9 +746,15 @@ begin
     // Watchdog = 2x the per-file timeout × ceiling(files/workers) + grace.
     // This gives workers enough time to hit their per-file timeout before
     // the watchdog fires, while still preventing indefinite hangs.
-    Pool.RunAll(AFiles, TestWorkerProc, @WorkerData[0],
-      2 * EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS) *
-        ((AFiles.Count + AJobCount - 1) div AJobCount) + 10000);
+    // When the effective timeout is 0 (user passed --timeout=0), disable
+    // the watchdog entirely so the no-timeout contract is honoured.
+    EffectiveTimeoutMs := EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS);
+    if EffectiveTimeoutMs > 0 then
+      WatchdogMs := 2 * EffectiveTimeoutMs *
+        ((AFiles.Count + AJobCount - 1) div AJobCount) + 10000
+    else
+      WatchdogMs := 0;
+    Pool.RunAll(AFiles, TestWorkerProc, @WorkerData[0], WatchdogMs);
     if Pool.EnableCoverage and Assigned(TGocciaCoverageTracker.Instance) then
       Pool.MergeCoverageInto(TGocciaCoverageTracker.Instance);
   finally
