@@ -96,7 +96,6 @@ end;
 // ES2026 §25.1.4.1 ArrayBuffer(length [, options])
 function TGocciaGlobalArrayBuffer.ArrayBufferConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Num: TGocciaNumberLiteralValue;
   Len: Integer;
   OptionsArg, MaxByteLengthValue: TGocciaValue;
   RequestedMaxByteLength: Integer;
@@ -107,12 +106,7 @@ begin
     Exit;
   end;
 
-  Num := AArgs.GetElement(0).ToNumberLiteral;
-
-  if Num.IsNaN or Num.IsInfinite or (Num.Value < 0) or (Num.Value <> Trunc(Num.Value)) then
-    ThrowRangeError(SErrorInvalidArrayBufferLength, SSuggestArrayLengthRange);
-
-  Len := Trunc(Num.Value);
+  Len := ConstructorToIndex(AArgs.GetElement(0));
 
   // ES2026 §25.1.4.1 step 3: GetArrayBufferMaxByteLengthOption(options)
   // ES2026 §25.1.3.7 step 2: If options is not an Object, return empty
