@@ -40,6 +40,7 @@ type
     FFiles: array of TBenchmarkFileResult;
     FFileCount: Integer;
     FOutput: TStringList;
+    FWallClockDurationNanoseconds: Int64;
 
     procedure RenderConsole;
     procedure RenderText;
@@ -63,6 +64,7 @@ type
     property Output: TStringList read FOutput;
     property FileCount: Integer read FFileCount;
     property Files[AIndex: Integer]: TBenchmarkFileResult read GetFileResult;
+    property WallClockDurationNanoseconds: Int64 read FWallClockDurationNanoseconds write FWallClockDurationNanoseconds;
   end;
 
 function ParseReportFormat(const S: string): TBenchmarkReportFormat;
@@ -96,6 +98,7 @@ begin
   inherited Create;
   FOutput := TStringList.Create;
   FFileCount := 0;
+  FWallClockDurationNanoseconds := 0;
   SetLength(FFiles, 0);
 end;
 
@@ -236,6 +239,9 @@ begin
       FOutput.Add('');
   end;
 
+  if FWallClockDurationNanoseconds > 0 then
+    TotalDurationNanoseconds := FWallClockDurationNanoseconds;
+
   FOutput.Add('');
   FOutput.Add('Benchmark Summary');
   FOutput.Add(SysUtils.Format('  Total benchmarks: %d', [TotalBenchmarks]));
@@ -287,6 +293,9 @@ begin
     TotalBenchmarks := TotalBenchmarks + FFiles[F].TotalBenchmarks;
     TotalDurationNanoseconds := TotalDurationNanoseconds + FFiles[F].DurationNanoseconds;
   end;
+
+  if FWallClockDurationNanoseconds > 0 then
+    TotalDurationNanoseconds := FWallClockDurationNanoseconds;
 
   FOutput.Add('');
   FOutput.Add(SysUtils.Format('Total: %d benchmarks in %s',
@@ -386,6 +395,9 @@ begin
     if F < FFileCount - 1 then
       FOutput[FOutput.Count - 1] := FOutput[FOutput.Count - 1] + ',';
   end;
+
+  if FWallClockDurationNanoseconds > 0 then
+    TotalDurationNanoseconds := FWallClockDurationNanoseconds;
 
   FOutput.Add('  ],');
   FOutput.Add(SysUtils.Format('  "totalBenchmarks": %d,', [TotalBenchmarks]));

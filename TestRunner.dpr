@@ -714,7 +714,8 @@ var
   I, J: Integer;
   AllTestResults: TGocciaObjectValue;
   AllFailedTests: TGocciaArrayValue;
-  PassedCount, FailedCount, SkippedCount, TotalRunCount, TotalAssertions, TotalDuration: Double;
+  PassedCount, FailedCount, SkippedCount, TotalRunCount, TotalAssertions: Double;
+  WallClockStart, WallClockDuration: Int64;
   EffectiveTimeoutMs: Integer;
   WatchdogMs: Integer;
 begin
@@ -738,6 +739,8 @@ begin
   // Force all shared prototypes to be initialised on the main thread
   // before any worker thread starts, avoiding class-var race conditions.
   EnsureSharedPrototypesInitialized(GlobalBuiltins);
+
+  WallClockStart := GetNanoseconds;
 
   Pool := TGocciaThreadPool.Create(AJobCount);
   try
@@ -778,7 +781,6 @@ begin
   SkippedCount := 0;
   TotalRunCount := 0;
   TotalAssertions := 0;
-  TotalDuration := 0;
   Result.TotalLexNanoseconds := 0;
   Result.TotalParseNanoseconds := 0;
   Result.TotalCompileNanoseconds := 0;
@@ -797,7 +799,6 @@ begin
     SkippedCount := SkippedCount + WorkerData[I].Skipped;
     TotalRunCount := TotalRunCount + WorkerData[I].TotalRunTests;
     TotalAssertions := TotalAssertions + WorkerData[I].Assertions;
-    TotalDuration := TotalDuration + WorkerData[I].Duration;
 
     Result.TotalLexNanoseconds := Result.TotalLexNanoseconds + WorkerData[I].LexNs;
     Result.TotalParseNanoseconds := Result.TotalParseNanoseconds + WorkerData[I].ParseNs;
@@ -809,12 +810,14 @@ begin
         TGocciaStringLiteralValue.Create(WorkerData[I].FailedTestNames[J]));
   end;
 
+  WallClockDuration := GetNanoseconds - WallClockStart;
+
   AllTestResults.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(AFiles.Count * 1.0));
   AllTestResults.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(TotalRunCount));
   AllTestResults.AssignProperty('passed', TGocciaNumberLiteralValue.Create(PassedCount));
   AllTestResults.AssignProperty('failed', TGocciaNumberLiteralValue.Create(FailedCount));
   AllTestResults.AssignProperty('skipped', TGocciaNumberLiteralValue.Create(SkippedCount));
-  AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.Create(TotalDuration));
+  AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.Create(WallClockDuration * 1.0));
   AllTestResults.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(TotalAssertions));
   AllTestResults.AssignProperty('failedTests', AllFailedTests);
 

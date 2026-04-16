@@ -693,6 +693,7 @@ var
   Reporter: TBenchmarkReporter;
   Pool: TGocciaThreadPool;
   WorkerData: array of TBenchmarkFileResult;
+  WallClockStart: Int64;
 begin
   Files := TStringList.Create;
   Reporter := TBenchmarkReporter.Create;
@@ -738,12 +739,16 @@ begin
 
       EnsureSharedPrototypesInitialized(GlobalBuiltins);
 
+      WallClockStart := GetNanoseconds;
+
       Pool := TGocciaThreadPool.Create(JobCount);
       try
         Pool.RunAll(Files, BenchmarkWorkerProc, @WorkerData[0]);
       finally
         Pool.Free;
       end;
+
+      Reporter.WallClockDurationNanoseconds := GetNanoseconds - WallClockStart;
 
       { Collect results on the main thread in original file order. }
       for I := 0 to Files.Count - 1 do
