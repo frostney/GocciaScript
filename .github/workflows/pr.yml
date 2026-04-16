@@ -92,6 +92,7 @@ jobs:
         run: |
           grep -q '"mode": "${{ matrix.mode }}"' test-results-${{ matrix.mode }}.json
           grep -q '"totalFiles":' test-results-${{ matrix.mode }}.json
+          grep -q '"jobCount":' test-results-${{ matrix.mode }}.json
 
       - name: Check TestRunner coverage CLI
         run: |
@@ -192,6 +193,7 @@ jobs:
         run: |
           grep -q '"files": \[' benchmark-${{ matrix.mode }}.json
           grep -q '"totalBenchmarks":' benchmark-${{ matrix.mode }}.json
+          grep -q '"jobCount":' benchmark-${{ matrix.mode }}.json
 
       - name: Check BenchmarkRunner CLI behaviour
         env:
