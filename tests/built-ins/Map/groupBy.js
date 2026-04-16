@@ -81,9 +81,9 @@ describe("Map.groupBy", () => {
   });
 
   test("throws TypeError for non-iterable", () => {
-    expect(() => Map.groupBy(42, () => "a")).toThrow();
-    expect(() => Map.groupBy(true, () => "a")).toThrow();
-    expect(() => Map.groupBy(null, () => "a")).toThrow();
+    expect(() => Map.groupBy(42, () => "a")).toThrow(TypeError);
+    expect(() => Map.groupBy(true, () => "a")).toThrow(TypeError);
+    expect(() => Map.groupBy(null, () => "a")).toThrow(TypeError);
   });
 
   test("empty iterable returns empty Map", () => {

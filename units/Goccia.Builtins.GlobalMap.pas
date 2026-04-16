@@ -58,12 +58,11 @@ var
   IteratorMethod, IteratorObj, NextMethod, CurrentValue: TGocciaValue;
   Iterator: TGocciaIteratorValue;
   Done: Boolean;
-  I, J: Integer;
-  Found: Boolean;
+  I: Integer;
 
   procedure AddToGroup(const AValue: TGocciaValue; const AIndex: Integer);
   var
-    K: Integer;
+    EntryIndex: Integer;
   begin
     CallArgs := TGocciaArgumentsCollection.Create;
     try
@@ -74,20 +73,11 @@ var
       CallArgs.Free;
     end;
 
-    // If key matches an existing group, use that group
-    Found := False;
-    for K := 0 to ResultMap.Entries.Count - 1 do
-    begin
-      if ResultMap.Entries[K].Key.ToStringLiteral.Value = GroupKey.ToStringLiteral.Value then
-      begin
-        GroupArray := TGocciaArrayValue(ResultMap.Entries[K].Value);
-        Found := True;
-        Break;
-      end;
-    end;
-
-    // Otherwise, create a new group for this key
-    if not Found then
+    // Use Map's SameValueZero lookup to preserve key identity (1 vs "1", etc.)
+    EntryIndex := ResultMap.FindEntry(GroupKey);
+    if EntryIndex >= 0 then
+      GroupArray := TGocciaArrayValue(ResultMap.Entries[EntryIndex].Value)
+    else
     begin
       GroupArray := TGocciaArrayValue.Create;
       ResultMap.SetEntry(GroupKey, GroupArray);
@@ -113,11 +103,16 @@ begin
   if Source is TGocciaArrayValue then
   begin
     SourceArray := TGocciaArrayValue(Source);
-    I := 0;
-    while I < SourceArray.Elements.Count do
-    begin
-      AddToGroup(SourceArray.Elements[I], I);
-      Inc(I);
+    TGarbageCollector.Instance.AddTempRoot(ResultMap);
+    try
+      I := 0;
+      while I < SourceArray.Elements.Count do
+      begin
+        AddToGroup(SourceArray.Elements[I], I);
+        Inc(I);
+      end;
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(ResultMap);
     end;
     Result := ResultMap;
     Exit;
