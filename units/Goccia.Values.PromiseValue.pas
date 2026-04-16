@@ -78,6 +78,8 @@ implementation
 uses
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Values.ClassValue,
@@ -297,7 +299,7 @@ begin
   begin
     FState := gpsRejected;
     FResult := Goccia.Values.ErrorHelper.CreateErrorObject(TYPE_ERROR_NAME,
-      'Chaining cycle detected for promise');
+      SErrorPromiseChainingCycle);
     TriggerReactions;
     Exit;
   end;
@@ -356,7 +358,7 @@ begin
             else if ThenMethod is TGocciaClassValue then
               TGocciaClassValue(ThenMethod).Call(ThenArgs, AValue)
             else
-              Goccia.Values.ErrorHelper.ThrowTypeError('then is not a function');
+              Goccia.Values.ErrorHelper.ThrowTypeError(SErrorThenNotFunction, SSuggestPromiseThisType);
           except
             on E: EGocciaBytecodeThrow do
             begin
@@ -580,7 +582,7 @@ var
   OnFulfilled, OnRejected: TGocciaValue;
 begin
   if not (AThisValue is TGocciaPromiseValue) then
-    Goccia.Values.ErrorHelper.ThrowTypeError('Promise.prototype.then called on non-Promise');
+    Goccia.Values.ErrorHelper.ThrowTypeError(SErrorPromiseThenNonPromise, SSuggestPromiseThisType);
 
   P := TGocciaPromiseValue(AThisValue);
 
@@ -616,7 +618,7 @@ var
   OnFinally: TGocciaValue;
 begin
   if not (AThisValue is TGocciaPromiseValue) then
-    Goccia.Values.ErrorHelper.ThrowTypeError('Promise.prototype.finally called on non-Promise');
+    Goccia.Values.ErrorHelper.ThrowTypeError(SErrorPromiseFinallyNonPromise, SSuggestPromiseThisType);
 
   OnFinally := nil;
   if (AArgs.Length > 0) and AArgs.GetElement(0).IsCallable then

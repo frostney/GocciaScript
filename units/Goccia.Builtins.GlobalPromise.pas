@@ -41,6 +41,8 @@ uses
 
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Utils,
@@ -422,7 +424,7 @@ begin
   begin
     FState.Settled := True;
     ErrorObj := Goccia.Values.ErrorHelper.CreateErrorObject(AGGREGATE_ERROR_NAME,
-      'All promises were rejected');
+      SErrorAllPromisesRejected);
     ErrorObj.AssignProperty(PROP_ERRORS, FState.Errors);
     FState.ResultPromise.Reject(ErrorObj);
   end;
@@ -489,11 +491,11 @@ var
 begin
   { Step 2: If IsCallable(executor) is false, throw a TypeError }
   if AArgs.Length = 0 then
-    Goccia.Values.ErrorHelper.ThrowTypeError('Promise resolver undefined is not a function');
+    Goccia.Values.ErrorHelper.ThrowTypeError(SErrorPromiseResolverUndefinedNotFunction, SSuggestPromiseResolver);
 
   Executor := AArgs.GetElement(0);
   if not Executor.IsCallable then
-    Goccia.Values.ErrorHelper.ThrowTypeError('Promise resolver is not a function');
+    Goccia.Values.ErrorHelper.ThrowTypeError(SErrorPromiseResolverNotFunction, SSuggestPromiseResolver);
 
   { Steps 3-4: Let promise = OrdinaryCreateFromConstructor; set state to pending }
   Promise := TGocciaPromiseValue.Create;
@@ -611,7 +613,7 @@ begin
   else
   begin
     Goccia.Values.ErrorHelper.ThrowTypeError(
-      Iterable.ToStringLiteral.Value + ' is not iterable');
+      Iterable.ToStringLiteral.Value + ' is not iterable', SSuggestNotIterable);
     Result := nil;
   end;
 end;
@@ -868,7 +870,7 @@ begin
   if InputArray.Elements.Count = 0 then
   begin
     ErrorObj := Goccia.Values.ErrorHelper.CreateErrorObject(AGGREGATE_ERROR_NAME,
-      'All promises were rejected');
+      SErrorAllPromisesRejected);
     ErrorObj.AssignProperty(PROP_ERRORS, TGocciaArrayValue.Create);
     ResultPromise.Reject(ErrorObj);
     Result := ResultPromise;
@@ -952,11 +954,11 @@ begin
 
   { Step 2: If IsCallable(callbackfn) is false, throw a TypeError }
   if AArgs.Length = 0 then
-    Goccia.Values.ErrorHelper.ThrowTypeError('Promise.try requires a callback function');
+    Goccia.Values.ErrorHelper.ThrowTypeError(SErrorPromiseTryRequiresCallback, SSuggestCallbackRequired);
 
   Callback := AArgs.GetElement(0);
   if not Callback.IsCallable then
-    Goccia.Values.ErrorHelper.ThrowTypeError('Promise.try requires a callback function');
+    Goccia.Values.ErrorHelper.ThrowTypeError(SErrorPromiseTryRequiresCallback, SSuggestCallbackRequired);
 
   { Step 4: Let status = Call(callbackfn, undefined) }
   try

@@ -43,6 +43,8 @@ implementation
 uses
   Goccia.Constants.PropertyNames,
   Goccia.Constants.SymbolNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue;
 
@@ -175,7 +177,7 @@ begin
 
   { Step 1: If Type(sym) is not Symbol, throw a TypeError }
   if not (Arg is TGocciaSymbolValue) then
-    ThrowTypeError('Symbol.keyFor requires that the first argument be a symbol');
+    ThrowTypeError(SErrorSymbolKeyForRequiresSymbol, SSuggestSymbolKeyForArg);
 
   { Step 2: Search GlobalSymbolRegistry for matching symbol }
   for Pair in FGlobalRegistry do

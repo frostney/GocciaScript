@@ -325,9 +325,9 @@ begin
         else if E is TGocciaThrowValue then
         begin
           if not GIsWorkerThread then
-            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal));
+            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal, TGocciaThrowValue(E).Suggestion));
           MarkLoadError(ScriptResult, AFileName,
-            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, False));
+            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, False, TGocciaThrowValue(E).Suggestion));
         end
         else
         begin
@@ -473,9 +473,9 @@ begin
         else if E is TGocciaThrowValue then
         begin
           if not GIsWorkerThread then
-            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal));
+            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal, TGocciaThrowValue(E).Suggestion));
           MarkLoadError(ScriptResult, AFileName,
-            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, False));
+            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, False, TGocciaThrowValue(E).Suggestion));
         end
         else
         begin

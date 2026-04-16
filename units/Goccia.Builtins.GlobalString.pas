@@ -30,6 +30,8 @@ uses
   StringBuffer,
 
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -94,10 +96,10 @@ begin
   begin
     NumArg := AArgs.GetElement(I).ToNumberLiteral;
     if NumArg.IsNaN or NumArg.IsInfinity or NumArg.IsNegativeInfinity then
-      ThrowRangeError('Invalid code point');
+      ThrowRangeError(SErrorInvalidCodePoint, SSuggestCodePointRange);
     RawValue := NumArg.Value;
     if (RawValue < 0) or (RawValue > $10FFFF) or (RawValue <> Trunc(RawValue)) then
-      ThrowRangeError(FloatToStr(RawValue) + ' is not a valid code point');
+      ThrowRangeError(Format(SErrorNotValidCodePoint, [FloatToStr(RawValue)]), SSuggestCodePointRange);
     CodePoint := Trunc(RawValue);
 
     if CodePoint < $80 then
@@ -124,17 +126,19 @@ var
   NextSub: TGocciaValue;
 begin
   if AArgs.Length = 0 then
-    ThrowTypeError('Cannot convert undefined to object');
+    ThrowTypeError(Format(SErrorCannotConvertToObject, ['undefined']), SSuggestCheckNullBeforeAccess);
 
   // ES2026 §22.1.2.4 step 1-2: Let cooked be ToObject(template)
   TemplateObj := AArgs.GetElement(0);
   if (TemplateObj is TGocciaUndefinedLiteralValue) or (TemplateObj is TGocciaNullLiteralValue) then
-    ThrowTypeError('Cannot convert ' + TemplateObj.TypeName + ' to object');
+    ThrowTypeError(Format(SErrorCannotConvertToObject, [TemplateObj.TypeName]), SSuggestCheckNullBeforeAccess);
 
   // ES2026 §22.1.2.4 step 3: Let raw be ToObject(Get(cooked, "raw"))
   RawValue := TemplateObj.GetProperty(PROP_RAW);
-  if not Assigned(RawValue) or (RawValue is TGocciaUndefinedLiteralValue) or (RawValue is TGocciaNullLiteralValue) then
-    ThrowTypeError('Cannot convert ' + 'undefined' + ' to object');
+  if not Assigned(RawValue) or (RawValue is TGocciaUndefinedLiteralValue) then
+    ThrowTypeError(Format(SErrorCannotConvertToObject, ['undefined']), SSuggestCheckNullBeforeAccess)
+  else if RawValue is TGocciaNullLiteralValue then
+    ThrowTypeError(Format(SErrorCannotConvertToObject, ['null']), SSuggestCheckNullBeforeAccess);
   RawObj := RawValue;
 
   // ES2026 §22.1.2.4 step 4: Let literalSegments be LengthOfArrayLike(raw)

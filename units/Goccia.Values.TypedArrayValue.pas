@@ -127,6 +127,8 @@ uses
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Float16,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -609,7 +611,7 @@ end;
 function RequireTypedArray(const AThisValue: TGocciaValue; const AMethod: string): TGocciaTypedArrayValue;
 begin
   if not (AThisValue is TGocciaTypedArrayValue) then
-    ThrowTypeError(AMethod + ' requires a TypedArray');
+    ThrowTypeError(Format(SErrorTypedArrayRequiresTypedArray, [AMethod]), SSuggestTypedArrayThisType);
   Result := TGocciaTypedArrayValue(AThisValue);
 end;
 
@@ -843,13 +845,13 @@ var
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.set');
   if AArgs.Length = 0 then
-    ThrowTypeError('TypedArray.prototype.set requires at least one argument');
+    ThrowTypeError(SErrorTypedArraySetRequiresArg, SSuggestTypedArraySetSource);
 
   if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
   begin
     TargetOffset := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value);
     if TargetOffset < 0 then
-      ThrowRangeError('TypedArray.prototype.set offset must be >= 0');
+      ThrowRangeError(SErrorTypedArraySetOffsetNonNegative, SSuggestTypedArrayLength);
   end
   else
     TargetOffset := 0;
@@ -858,7 +860,7 @@ begin
   begin
     SrcTA := TGocciaTypedArrayValue(AArgs.GetElement(0));
     if TargetOffset + SrcTA.FLength > TA.FLength then
-      ThrowRangeError('Source is too large');
+      ThrowRangeError(SErrorTypedArraySourceTooLarge, SSuggestTypedArrayLength);
     for I := 0 to SrcTA.FLength - 1 do
       TA.WriteElement(TargetOffset + I, SrcTA.ReadElement(I));
   end
@@ -866,12 +868,12 @@ begin
   begin
     SrcArray := TGocciaArrayValue(AArgs.GetElement(0));
     if TargetOffset + SrcArray.Elements.Count > TA.FLength then
-      ThrowRangeError('Source is too large');
+      ThrowRangeError(SErrorTypedArraySourceTooLarge, SSuggestTypedArrayLength);
     for I := 0 to SrcArray.Elements.Count - 1 do
       TA.WriteNumberLiteral(TargetOffset + I, SrcArray.Elements[I].ToNumberLiteral);
   end
   else
-    ThrowTypeError('TypedArray.prototype.set argument must be an array or typed array');
+    ThrowTypeError(SErrorTypedArraySetArgType, SSuggestTypedArraySetSource);
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -1106,7 +1108,7 @@ var
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.find');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError('TypedArray.prototype.find requires a callable argument');
+    ThrowTypeError(SErrorTypedArrayFindCallable, SSuggestTypedArrayCallable);
   if AArgs.Length > 1 then
     ThisArg := AArgs.GetElement(1)
   else
@@ -1130,7 +1132,7 @@ var
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.findIndex');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError('TypedArray.prototype.findIndex requires a callable argument');
+    ThrowTypeError(SErrorTypedArrayFindIndexCallable, SSuggestTypedArrayCallable);
   if AArgs.Length > 1 then
     ThisArg := AArgs.GetElement(1)
   else
@@ -1154,7 +1156,7 @@ var
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.findLast');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError('TypedArray.prototype.findLast requires a callable argument');
+    ThrowTypeError(SErrorTypedArrayFindLastCallable, SSuggestTypedArrayCallable);
   if AArgs.Length > 1 then
     ThisArg := AArgs.GetElement(1)
   else
@@ -1178,7 +1180,7 @@ var
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.findLastIndex');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError('TypedArray.prototype.findLastIndex requires a callable argument');
+    ThrowTypeError(SErrorTypedArrayFindLastIndexCallable, SSuggestTypedArrayCallable);
   if AArgs.Length > 1 then
     ThisArg := AArgs.GetElement(1)
   else
@@ -1202,7 +1204,7 @@ var
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.every');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError('TypedArray.prototype.every requires a callable argument');
+    ThrowTypeError(SErrorTypedArrayEveryCallable, SSuggestTypedArrayCallable);
   if AArgs.Length > 1 then
     ThisArg := AArgs.GetElement(1)
   else
@@ -1227,7 +1229,7 @@ var
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.some');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError('TypedArray.prototype.some requires a callable argument');
+    ThrowTypeError(SErrorTypedArraySomeCallable, SSuggestTypedArrayCallable);
   if AArgs.Length > 1 then
     ThisArg := AArgs.GetElement(1)
   else
@@ -1252,7 +1254,7 @@ var
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.forEach');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError('TypedArray.prototype.forEach requires a callable argument');
+    ThrowTypeError(SErrorTypedArrayForEachCallable, SSuggestTypedArrayCallable);
   if AArgs.Length > 1 then
     ThisArg := AArgs.GetElement(1)
   else
@@ -1273,7 +1275,7 @@ var
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.map');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError('TypedArray.prototype.map requires a callable argument');
+    ThrowTypeError(SErrorTypedArrayMapCallable, SSuggestTypedArrayCallable);
   if AArgs.Length > 1 then
     ThisArg := AArgs.GetElement(1)
   else
@@ -1300,7 +1302,7 @@ var
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.filter');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError('TypedArray.prototype.filter requires a callable argument');
+    ThrowTypeError(SErrorTypedArrayFilterCallable, SSuggestTypedArrayCallable);
   if AArgs.Length > 1 then
     ThisArg := AArgs.GetElement(1)
   else
@@ -1337,7 +1339,7 @@ var
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.reduce');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError('TypedArray.prototype.reduce requires a callable argument');
+    ThrowTypeError(SErrorTypedArrayReduceCallable, SSuggestTypedArrayCallable);
 
   if AArgs.Length >= 2 then
   begin
@@ -1347,7 +1349,7 @@ begin
   else
   begin
     if TA.FLength = 0 then
-      ThrowTypeError('Reduce of empty typed array with no initial value');
+      ThrowTypeError(SErrorReduceEmptyTypedArray, SSuggestReduceInitialValue);
     Accumulator := TGocciaNumberLiteralValue.Create(TA.ReadElement(0));
     I := 1;
   end;
@@ -1379,7 +1381,7 @@ var
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.reduceRight');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
-    ThrowTypeError('TypedArray.prototype.reduceRight requires a callable argument');
+    ThrowTypeError(SErrorTypedArrayReduceRightCallable, SSuggestTypedArrayCallable);
 
   if AArgs.Length >= 2 then
   begin
@@ -1389,7 +1391,7 @@ begin
   else
   begin
     if TA.FLength = 0 then
-      ThrowTypeError('Reduce of empty typed array with no initial value');
+      ThrowTypeError(SErrorReduceEmptyTypedArray, SSuggestReduceInitialValue);
     Accumulator := TGocciaNumberLiteralValue.Create(TA.ReadElement(TA.FLength - 1));
     I := TA.FLength - 2;
   end;
@@ -1490,7 +1492,7 @@ begin
   if ActualIndex < 0 then
     ActualIndex := TA.FLength + ActualIndex;
   if (ActualIndex < 0) or (ActualIndex >= TA.FLength) then
-    ThrowRangeError('Invalid index');
+    ThrowRangeError(SErrorInvalidTypedArrayIndex, SSuggestTypedArrayLength);
   // ES2026 §23.2.3.36 step 7: Let numericValue be ? ToNumber(value)
   if AArgs.Length > 1 then
     NewNum := AArgs.GetElement(1).ToNumberLiteral
@@ -1602,27 +1604,27 @@ begin
       ByteOff := 0;
 
     if ByteOff < 0 then
-      ThrowRangeError('Start offset of ' + TGocciaTypedArrayValue.KindName(FKind) + ' must be non-negative');
+      ThrowRangeError(Format(SErrorTypedArrayStartOffsetNonNegative, [TGocciaTypedArrayValue.KindName(FKind)]), SSuggestTypedArrayLength);
     if (ByteOff mod BPE) <> 0 then
-      ThrowRangeError('Start offset of ' + TGocciaTypedArrayValue.KindName(FKind) + ' should be a multiple of ' + IntToStr(BPE));
+      ThrowRangeError(Format(SErrorTypedArrayStartOffsetMultiple, [TGocciaTypedArrayValue.KindName(FKind), BPE]), SSuggestTypedArrayAlignment);
     if ByteOff > System.Length(Buf.Data) then
-      ThrowRangeError('Start offset is outside the bounds of the buffer');
+      ThrowRangeError(SErrorTypedArrayStartOffsetBounds, SSuggestTypedArrayLength);
 
     if AArguments.Length > 2 then
     begin
       ElemLen := Trunc(AArguments.GetElement(2).ToNumberLiteral.Value);
       if ElemLen < 0 then
-        ThrowRangeError('Invalid typed array length');
+        ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
       if Int64(ByteOff) + Int64(ElemLen) * Int64(BPE) > Int64(System.Length(Buf.Data)) then
-        ThrowRangeError('Invalid typed array length');
+        ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
     end
     else
     begin
       if ((Int64(System.Length(Buf.Data)) - Int64(ByteOff)) mod Int64(BPE)) <> 0 then
-        ThrowRangeError('Byte length of ' + TGocciaTypedArrayValue.KindName(FKind) + ' should be a multiple of ' + IntToStr(BPE));
+        ThrowRangeError(Format(SErrorTypedArrayByteLengthMultiple, [TGocciaTypedArrayValue.KindName(FKind), BPE]), SSuggestTypedArrayAlignment);
       ElemLen := Integer((Int64(System.Length(Buf.Data)) - Int64(ByteOff)) div Int64(BPE));
       if ElemLen < 0 then
-        ThrowRangeError('Invalid typed array length');
+        ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
     end;
 
     Exit(TGocciaTypedArrayValue.Create(FKind, Buf, ByteOff, ElemLen));
@@ -1638,27 +1640,27 @@ begin
       ByteOff := 0;
 
     if ByteOff < 0 then
-      ThrowRangeError('Start offset of ' + TGocciaTypedArrayValue.KindName(FKind) + ' must be non-negative');
+      ThrowRangeError(Format(SErrorTypedArrayStartOffsetNonNegative, [TGocciaTypedArrayValue.KindName(FKind)]), SSuggestTypedArrayLength);
     if (ByteOff mod BPE) <> 0 then
-      ThrowRangeError('Start offset of ' + TGocciaTypedArrayValue.KindName(FKind) + ' should be a multiple of ' + IntToStr(BPE));
+      ThrowRangeError(Format(SErrorTypedArrayStartOffsetMultiple, [TGocciaTypedArrayValue.KindName(FKind), BPE]), SSuggestTypedArrayAlignment);
     if ByteOff > System.Length(SAB.Data) then
-      ThrowRangeError('Start offset is outside the bounds of the buffer');
+      ThrowRangeError(SErrorTypedArrayStartOffsetBounds, SSuggestTypedArrayLength);
 
     if AArguments.Length > 2 then
     begin
       ElemLen := Trunc(AArguments.GetElement(2).ToNumberLiteral.Value);
       if ElemLen < 0 then
-        ThrowRangeError('Invalid typed array length');
+        ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
       if Int64(ByteOff) + Int64(ElemLen) * Int64(BPE) > Int64(System.Length(SAB.Data)) then
-        ThrowRangeError('Invalid typed array length');
+        ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
     end
     else
     begin
       if ((Int64(System.Length(SAB.Data)) - Int64(ByteOff)) mod Int64(BPE)) <> 0 then
-        ThrowRangeError('Byte length of ' + TGocciaTypedArrayValue.KindName(FKind) + ' should be a multiple of ' + IntToStr(BPE));
+        ThrowRangeError(Format(SErrorTypedArrayByteLengthMultiple, [TGocciaTypedArrayValue.KindName(FKind), BPE]), SSuggestTypedArrayAlignment);
       ElemLen := Integer((Int64(System.Length(SAB.Data)) - Int64(ByteOff)) div Int64(BPE));
       if ElemLen < 0 then
-        ThrowRangeError('Invalid typed array length');
+        ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
     end;
 
     Exit(TGocciaTypedArrayValue.Create(FKind, SAB, ByteOff, ElemLen));
@@ -1682,7 +1684,7 @@ begin
   begin
     Len := Trunc(Num.Value);
     if Len < 0 then
-      ThrowRangeError('Invalid typed array length');
+      ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
   end;
   Result := TGocciaTypedArrayValue.Create(FKind, Len);
 end;
@@ -1711,7 +1713,7 @@ var
   MapArgs: TGocciaArgumentsCollection;
 begin
   if AArgs.Length = 0 then
-    ThrowTypeError('TypedArray.from requires at least one argument');
+    ThrowTypeError(SErrorTypedArrayFromRequiresArg, SSuggestTypedArraySetSource);
   Source := AArgs.GetElement(0);
   HasMapFn := False;
   MapFn := nil;
@@ -1719,7 +1721,7 @@ begin
   begin
     MapFnArg := AArgs.GetElement(1);
     if not MapFnArg.IsCallable then
-      ThrowTypeError('TypedArray.from mapfn must be a function');
+      ThrowTypeError(SErrorTypedArrayFromMapFn, SSuggestTypedArrayCallable);
     HasMapFn := True;
     MapFn := TGocciaFunctionBase(MapFnArg);
   end;
@@ -1774,7 +1776,7 @@ begin
     Exit(NewTA);
   end;
 
-  ThrowTypeError('TypedArray.from requires an array-like or iterable source');
+  ThrowTypeError(SErrorTypedArrayFromSource, SSuggestTypedArraySetSource);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 

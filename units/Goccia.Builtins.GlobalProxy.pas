@@ -29,6 +29,8 @@ implementation
 uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
   Goccia.Values.NativeFunction,
@@ -58,24 +60,24 @@ var
 begin
   // Proxy must be called with new
   if not (AThisValue is TGocciaHoleValue) then
-    ThrowTypeError('Constructor Proxy requires ''new''');
+    ThrowTypeError(SErrorProxyRequiresNew, SSuggestRequiresNew);
 
   if AArgs.Length < 2 then
-    ThrowTypeError('Cannot create proxy with a non-object as target or handler');
+    ThrowTypeError(SErrorProxyNonObjectTargetOrHandler, SSuggestProxyTargetType);
 
   TargetArg := AArgs.GetElement(0);
   HandlerArg := AArgs.GetElement(1);
 
   // Target must be an object (or function)
   if TargetArg.IsPrimitive then
-    ThrowTypeError('Cannot create proxy with a non-object as target or handler');
+    ThrowTypeError(SErrorProxyNonObjectTargetOrHandler, SSuggestProxyTargetType);
 
   // Handler must be an object
   if HandlerArg.IsPrimitive then
-    ThrowTypeError('Cannot create proxy with a non-object as target or handler');
+    ThrowTypeError(SErrorProxyNonObjectTargetOrHandler, SSuggestProxyTargetType);
 
   if not (HandlerArg is TGocciaObjectValue) then
-    ThrowTypeError('Cannot create proxy with a non-object as target or handler');
+    ThrowTypeError(SErrorProxyNonObjectTargetOrHandler, SSuggestProxyTargetType);
 
   Result := TGocciaProxyValue.Create(TargetArg,
     TGocciaObjectValue(HandlerArg));
@@ -92,21 +94,21 @@ var
   ResultObj: TGocciaObjectValue;
 begin
   if AArgs.Length < 2 then
-    ThrowTypeError('Cannot create proxy with a non-object as target or handler');
+    ThrowTypeError(SErrorProxyNonObjectTargetOrHandler, SSuggestProxyTargetType);
 
   TargetArg := AArgs.GetElement(0);
   HandlerArg := AArgs.GetElement(1);
 
   // Target must be an object (or function)
   if TargetArg.IsPrimitive then
-    ThrowTypeError('Cannot create proxy with a non-object as target or handler');
+    ThrowTypeError(SErrorProxyNonObjectTargetOrHandler, SSuggestProxyTargetType);
 
   // Handler must be an object
   if HandlerArg.IsPrimitive then
-    ThrowTypeError('Cannot create proxy with a non-object as target or handler');
+    ThrowTypeError(SErrorProxyNonObjectTargetOrHandler, SSuggestProxyTargetType);
 
   if not (HandlerArg is TGocciaObjectValue) then
-    ThrowTypeError('Cannot create proxy with a non-object as target or handler');
+    ThrowTypeError(SErrorProxyNonObjectTargetOrHandler, SSuggestProxyTargetType);
 
   ProxyInstance := TGocciaProxyValue.Create(TargetArg,
     TGocciaObjectValue(HandlerArg));

@@ -57,6 +57,8 @@ uses
   Goccia.CallStack,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -180,7 +182,7 @@ begin
     if Assigned(Method) and not (Method is TGocciaUndefinedLiteralValue) then
     begin
       if not Method.IsCallable then
-        ThrowTypeError('Property [Symbol.asyncDispose] is not a function');
+        ThrowTypeError(Format(SErrorDisposePropertyNotFunction, ['asyncDispose']), SSuggestDisposable);
       Result := Method;
       Exit;
     end;
@@ -191,7 +193,7 @@ begin
     if Assigned(Method) and not (Method is TGocciaUndefinedLiteralValue) then
     begin
       if not Method.IsCallable then
-        ThrowTypeError('Property [Symbol.dispose] is not a function');
+        ThrowTypeError(Format(SErrorDisposePropertyNotFunction, ['dispose']), SSuggestDisposable);
       Result := Method;
       Exit;
     end;
@@ -206,7 +208,7 @@ begin
     if Assigned(Method) and not (Method is TGocciaUndefinedLiteralValue) then
     begin
       if not Method.IsCallable then
-        ThrowTypeError('Property [Symbol.dispose] is not a function');
+        ThrowTypeError(Format(SErrorDisposePropertyNotFunction, ['dispose']), SSuggestDisposable);
       Result := Method;
       Exit;
     end;

@@ -82,6 +82,8 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Temporal.Options,
   Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
@@ -110,7 +112,7 @@ const
 function AsZonedDateTime(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalZonedDateTimeValue;
 begin
   if not (AValue is TGocciaTemporalZonedDateTimeValue) then
-    ThrowTypeError(AMethod + ' called on non-ZonedDateTime');
+    ThrowTypeError(AMethod + ' called on non-ZonedDateTime', SSuggestTemporalThisType);
   Result := TGocciaTemporalZonedDateTimeValue(AValue);
 end;
 
@@ -130,9 +132,9 @@ begin
     // Parse ISO with timezone annotation: 2024-03-15T13:45:30+05:30[Asia/Kolkata]
     if not TryParseISODateTimeWithOffset(TGocciaStringLiteralValue(AValue).Value,
       DateRec, TimeRec, OffsetSeconds, TimeZoneStr) then
-      ThrowTypeError('Invalid ISO ZonedDateTime string for ' + AMethod);
+      ThrowTypeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]), SSuggestTemporalISOFormat);
     if TimeZoneStr = '' then
-      ThrowTypeError(AMethod + ' requires a timezone annotation in the string');
+      ThrowTypeError(SErrorZonedDateTimeRequiresTZAnnotation, SSuggestTemporalTimezone);
 
     // Convert parsed local time to epoch ms using the parsed offset
     EpochMs := DateToEpochDays(DateRec.Year, DateRec.Month, DateRec.Day) * MILLISECONDS_PER_DAY +
@@ -147,7 +149,7 @@ begin
   end
   else
   begin
-    ThrowTypeError(AMethod + ' requires a ZonedDateTime or string');
+    ThrowTypeError(AMethod + ' requires a ZonedDateTime or string', SSuggestTemporalFromArg);
     Result := nil;
   end;
 end;
@@ -234,7 +236,7 @@ begin
   else if AArg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODuration(TGocciaStringLiteralValue(AArg).Value, DurRec) then
-      ThrowTypeError('Invalid duration string for ' + AMethod);
+      ThrowTypeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
     Result := TGocciaTemporalDurationValue.Create(
       DurRec.Years, DurRec.Months, DurRec.Weeks, DurRec.Days,
       DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
@@ -258,7 +260,7 @@ begin
   end
   else
   begin
-    ThrowTypeError(AMethod + ' requires a Duration, string, or object');
+    ThrowTypeError(AMethod + ' requires a Duration, string, or object', SSuggestTemporalDurationArg);
     Result := nil;
   end;
 end;
@@ -270,9 +272,9 @@ constructor TGocciaTemporalZonedDateTimeValue.Create(const AEpochMilliseconds: I
 begin
   inherited Create(nil);
   if ATimeZone = '' then
-    ThrowRangeError('ZonedDateTime requires a timezone');
+    ThrowRangeError(SErrorZonedDateTimeRequiresTZ, SSuggestTemporalTimezone);
   if not IsValidTimeZone(ATimeZone) then
-    ThrowRangeError('Unknown timezone: ' + ATimeZone);
+    ThrowRangeError(Format(SErrorUnknownTimezone, [ATimeZone]), SSuggestTemporalTimezone);
 
   FEpochMilliseconds := AEpochMilliseconds;
   FSubMillisecondNanoseconds := ASubMillisecondNanoseconds;
@@ -649,7 +651,7 @@ begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.with');
   V := AArgs.GetElement(0);
   if not (V is TGocciaObjectValue) then
-    ThrowTypeError('ZonedDateTime.prototype.with requires an object argument');
+    ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['ZonedDateTime']), SSuggestTemporalWithObject);
   Obj := TGocciaObjectValue(V);
 
   ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
@@ -686,12 +688,12 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODate(TGocciaStringLiteralValue(Arg).Value, DateRec) then
-      ThrowTypeError('Invalid date string for ZonedDateTime.prototype.withPlainDate');
+      ThrowTypeError(SErrorInvalidDateStringForZDT, SSuggestTemporalISOFormat);
     PlainDate := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day);
   end
   else
   begin
-    ThrowTypeError('ZonedDateTime.prototype.withPlainDate requires a PlainDate or string');
+    ThrowTypeError(SErrorZDTWithPlainDateArg, SSuggestTemporalFromArg);
     PlainDate := nil;
   end;
 
@@ -731,12 +733,12 @@ begin
     else if Arg is TGocciaStringLiteralValue then
     begin
       if not TryParseISOTime(TGocciaStringLiteralValue(Arg).Value, TimeRec) then
-        ThrowTypeError('Invalid time string for ZonedDateTime.prototype.withPlainTime');
+        ThrowTypeError(SErrorInvalidTimeStringForZDT, SSuggestTemporalISOFormat);
       NewHour := TimeRec.Hour; NewMinute := TimeRec.Minute; NewSecond := TimeRec.Second;
       NewMs := TimeRec.Millisecond; NewUs := TimeRec.Microsecond; NewNs := TimeRec.Nanosecond;
     end
     else
-      ThrowTypeError('ZonedDateTime.prototype.withPlainTime requires a PlainTime or string');
+      ThrowTypeError(SErrorZDTWithPlainTimeArg, SSuggestTemporalFromArg);
   end;
 
   NewEpochMs := LocalToEpochMs(LYear, LMonth, LDay, NewHour, NewMinute, NewSecond, NewMs, Zdt.FTimeZone);
@@ -754,11 +756,11 @@ begin
   Arg := AArgs.GetElement(0);
 
   if (Arg = nil) or (Arg is TGocciaUndefinedLiteralValue) then
-    ThrowTypeError('ZonedDateTime.prototype.withTimeZone requires a timezone argument');
+    ThrowTypeError(SErrorZDTWithTimeZoneArg, SSuggestTemporalTimezone);
 
   NewTimeZone := Arg.ToStringLiteral.Value;
   if NewTimeZone = '' then
-    ThrowTypeError('ZonedDateTime.prototype.withTimeZone requires a non-empty timezone');
+    ThrowTypeError(SErrorZDTWithTimeZoneNonEmpty, SSuggestTemporalTimezone);
 
   // Keep the same epoch instant, just change the timezone
   Result := TGocciaTemporalZonedDateTimeValue.Create(
@@ -915,7 +917,7 @@ begin
     OptionsObj := TGocciaObjectValue(Arg);
     SmallestUnit := GetSmallestUnit(OptionsObj, tuNone);
     if SmallestUnit = tuNone then
-      ThrowRangeError('round() requires a smallestUnit option');
+      ThrowRangeError(SErrorTemporalRoundRequiresSmallestUnit, SSuggestTemporalRoundArg);
     Mode := GetRoundingMode(OptionsObj, rmHalfExpand);
     Increment := GetRoundingIncrement(OptionsObj, 1);
     // Convert unit enum to string for the existing unit dispatch
@@ -928,13 +930,13 @@ begin
       tuMicrosecond: UnitStr := 'microsecond';
       tuNanosecond: UnitStr := 'nanosecond';
     else
-      ThrowRangeError('Invalid unit for ZonedDateTime.prototype.round');
+      ThrowRangeError(SErrorInvalidZDTRoundUnit, SSuggestTemporalValidUnits);
       UnitStr := '';
     end;
   end
   else
   begin
-    ThrowTypeError('ZonedDateTime.prototype.round requires a string or options object');
+    ThrowTypeError(Format(SErrorTemporalRoundRequiresStringOrOptions, ['ZonedDateTime']), SSuggestTemporalRoundArg);
     UnitStr := '';
   end;
 
@@ -986,7 +988,7 @@ begin
   else if UnitStr = 'nanosecond' then Divisor := 1
   else
   begin
-    ThrowRangeError('Invalid unit for ZonedDateTime.prototype.round: ' + UnitStr);
+    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['ZonedDateTime.prototype.round', UnitStr]), SSuggestTemporalValidUnits);
     Divisor := 1;
   end;
 
@@ -1105,7 +1107,7 @@ end;
 // TC39 Temporal §6.3.40 Temporal.ZonedDateTime.prototype.valueOf()
 function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  ThrowTypeError('Temporal.ZonedDateTime.prototype.valueOf cannot be used; use epochMilliseconds, epochNanoseconds, or compare instead');
+  ThrowTypeError(Format(SErrorTemporalValueOf, ['ZonedDateTime', 'epochMilliseconds, epochNanoseconds, or compare']), SSuggestTemporalNoValueOf);
   Result := nil;
 end;
 

@@ -21,6 +21,8 @@ implementation
 uses
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -82,7 +84,7 @@ begin
     end;
 
     // ES2026 §7.1.1 step 3e: Throw TypeError if no method returned a primitive
-    ThrowTypeError('Cannot convert object to primitive value');
+    ThrowTypeError(SErrorCannotConvertToPrimitive, SSuggestToPrimitive);
   end;
 
   Result := AValue;
@@ -100,7 +102,7 @@ begin
   end;
 
   if AValue is TGocciaSymbolValue then
-    ThrowTypeError('Cannot convert a Symbol value to a string');
+    ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
 
   if AValue.IsPrimitive then
   begin
@@ -111,7 +113,7 @@ begin
   // ES2026 §7.1.17 step 1: ToPrimitive(argument, string)
   Prim := ToPrimitive(AValue, tphString);
   if Prim is TGocciaSymbolValue then
-    ThrowTypeError('Cannot convert a Symbol value to a string');
+    ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
   Result := Prim.ToStringLiteral;
 end;
 

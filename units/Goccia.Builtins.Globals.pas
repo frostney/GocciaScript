@@ -73,6 +73,8 @@ uses
 
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.URI,
@@ -497,11 +499,11 @@ var
 begin
   { Step 1: If IsCallable(callback) is false, throw a TypeError }
   if AArgs.Length = 0 then
-    ThrowTypeError('Failed to execute ''queueMicrotask'': 1 argument required, but only 0 present.');
+    ThrowTypeError(SErrorQueueMicrotaskArgRequired, SSuggestCallbackRequired);
 
   Callback := AArgs.GetElement(0);
   if not Callback.IsCallable then
-    ThrowTypeError('Failed to execute ''queueMicrotask'': parameter 1 is not of type ''Function''.');
+    ThrowTypeError(SErrorQueueMicrotaskNotFunction, SSuggestCallbackRequired);
 
   { Step 2: HostEnqueueMicrotask(callback) }
   Task.Handler := Callback;
@@ -650,10 +652,10 @@ begin
     Exit(AValue);
 
   if AValue is TGocciaSymbolValue then
-    ThrowDataCloneError(AValue.ToStringLiteral.Value + ' could not be cloned.');
+    ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [AValue.ToStringLiteral.Value]), SSuggestStructuredClone);
 
   if AValue.IsCallable then
-    ThrowDataCloneError(AValue.ToStringLiteral.Value + ' could not be cloned.');
+    ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [AValue.ToStringLiteral.Value]), SSuggestStructuredClone);
 
   if AMemory.TryGetValue(AValue, Existing) then
     Exit(Existing);
@@ -671,7 +673,7 @@ begin
   else if AValue is TGocciaObjectValue then
     Result := CloneObject(TGocciaObjectValue(AValue), AMemory)
   else
-    ThrowDataCloneError('value could not be cloned.');
+    ThrowDataCloneError(SErrorStructuredCloneValueNotCloneable, SSuggestStructuredClone);
 end;
 
 function TGocciaGlobals.StructuredCloneCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -681,7 +683,7 @@ var
   I: Integer;
 begin
   if AArgs.Length = 0 then
-    ThrowTypeError('Failed to execute ''structuredClone'': 1 argument required, but only 0 present.');
+    ThrowTypeError(SErrorStructuredCloneArgRequired, SSuggestObjectArgType);
 
   Memory := THashMap<TGocciaValue, TGocciaValue>.Create;
   try
@@ -776,7 +778,7 @@ var
 begin
   // Step 1: If no argument, throw TypeError
   if AArgs.Length = 0 then
-    ThrowTypeError('Failed to execute ''btoa'': 1 argument required, but only 0 present.');
+    ThrowTypeError(SErrorBtoaRequiresArg, SSuggestStringArgRequired);
 
   // Step 2: Let data be ToString(argument)
   Data := AArgs.GetElement(0).ToStringLiteral.Value;
@@ -821,7 +823,7 @@ var
 begin
   // Step 1: If no argument, throw TypeError
   if AArgs.Length = 0 then
-    ThrowTypeError('Failed to execute ''atob'': 1 argument required, but only 0 present.');
+    ThrowTypeError(SErrorAtobRequiresArg, SSuggestStringArgRequired);
 
   // Step 2: Let data be ToString(argument)
   Data := AArgs.GetElement(0).ToStringLiteral.Value;

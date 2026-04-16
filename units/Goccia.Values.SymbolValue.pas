@@ -76,6 +76,8 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Values.ErrorHelper,
@@ -95,7 +97,7 @@ function TGocciaSymbolValue.SymbolToString(const AArgs: TGocciaArgumentsCollecti
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaSymbolValue) then
-    ThrowTypeError('Symbol.prototype.toString requires that ''this'' be a Symbol');
+    ThrowTypeError(SErrorSymbolProtoToStringRequiresSymbol, SSuggestSymbolThisType);
   Result := AThisValue.ToStringLiteral;
 end;
 
@@ -103,7 +105,7 @@ function TGocciaSymbolValue.GetDescription(const AArgs: TGocciaArgumentsCollecti
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaSymbolValue) then
-    ThrowTypeError('Symbol.prototype.description requires that ''this'' be a Symbol');
+    ThrowTypeError(SErrorSymbolProtoDescriptionRequiresSymbol, SSuggestSymbolThisType);
   if TGocciaSymbolValue(AThisValue).FDescription <> '' then
     Result := TGocciaStringLiteralValue.Create(TGocciaSymbolValue(AThisValue).FDescription)
   else
@@ -356,7 +358,7 @@ end;
 
 function TGocciaSymbolValue.ToNumberLiteral: TGocciaNumberLiteralValue;
 begin
-  ThrowTypeError('Cannot convert a Symbol value to a number');
+  ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
   Result := nil;
 end;
 

@@ -87,6 +87,8 @@ uses
   SysUtils,
 
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.RegExp.Runtime,
   Goccia.Utils,
@@ -255,7 +257,7 @@ begin
   else if AValue is TGocciaStringObjectValue then
     Result := TGocciaStringObjectValue(AValue).Primitive.Value
   else if AValue is TGocciaSymbolValue then
-    ThrowTypeError('Cannot convert a Symbol value to a string')
+    ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion)
   else
     Result := AValue.ToStringLiteral.Value;
 end;
@@ -1026,7 +1028,7 @@ begin
   if not (ReplaceMethod is TGocciaUndefinedLiteralValue) then
   begin
     if not ReplaceMethod.IsCallable then
-      ThrowTypeError('@@replace is not callable');
+      ThrowTypeError(SErrorSymbolReplaceNotCallable, SSuggestWellKnownSymbolCallable);
     CallArgs := TGocciaArgumentsCollection.Create([
       TGocciaStringLiteralValue.Create(StringValue),
       ReplaceArg
@@ -1151,14 +1153,14 @@ begin
 
   if IsRegExpValue(SearchArg) and
      not GetRegExpBooleanProperty(TGocciaObjectValue(SearchArg), PROP_GLOBAL) then
-    ThrowTypeError('String.prototype.replaceAll requires a global RegExp');
+    ThrowTypeError(SErrorReplaceAllRequiresGlobalRegExp, SSuggestReplaceAllGlobalFlag);
 
   ReplaceMethod := GetMethodBySymbol(SearchArg,
     TGocciaSymbolValue.WellKnownReplace);
   if not (ReplaceMethod is TGocciaUndefinedLiteralValue) then
   begin
     if not ReplaceMethod.IsCallable then
-      ThrowTypeError('@@replace is not callable');
+      ThrowTypeError(SErrorSymbolReplaceNotCallable, SSuggestWellKnownSymbolCallable);
     CallArgs := TGocciaArgumentsCollection.Create([
       TGocciaStringLiteralValue.Create(StringValue),
       ReplaceArg
@@ -1301,7 +1303,7 @@ begin
     if not (SplitMethod is TGocciaUndefinedLiteralValue) then
     begin
       if not SplitMethod.IsCallable then
-        ThrowTypeError('@@split is not callable');
+        ThrowTypeError(SErrorSymbolSplitNotCallable, SSuggestWellKnownSymbolCallable);
       if HasLimit then
         CallArgs := TGocciaArgumentsCollection.Create([
           TGocciaStringLiteralValue.Create(StringValue),
@@ -1437,7 +1439,7 @@ begin
     if not (MatchMethod is TGocciaUndefinedLiteralValue) then
     begin
       if not MatchMethod.IsCallable then
-        ThrowTypeError('@@match is not callable');
+        ThrowTypeError(SErrorSymbolMatchNotCallable, SSuggestWellKnownSymbolCallable);
       CallArgs := TGocciaArgumentsCollection.Create([
         TGocciaStringLiteralValue.Create(StringValue)
       ]);
@@ -1502,7 +1504,7 @@ begin
   if (AArgs.Length > 0) and IsRegExpValue(AArgs.GetElement(0)) and
      not GetRegExpBooleanProperty(TGocciaObjectValue(AArgs.GetElement(0)),
        PROP_GLOBAL) then
-    ThrowTypeError('String.prototype.matchAll requires a global RegExp');
+    ThrowTypeError(SErrorMatchAllRequiresGlobalRegExp, SSuggestReplaceAllGlobalFlag);
 
   if AArgs.Length > 0 then
   begin
@@ -1511,7 +1513,7 @@ begin
     if not (MatchAllMethod is TGocciaUndefinedLiteralValue) then
     begin
       if not MatchAllMethod.IsCallable then
-        ThrowTypeError('@@matchAll is not callable');
+        ThrowTypeError(SErrorSymbolMatchAllNotCallable, SSuggestWellKnownSymbolCallable);
       CallArgs := TGocciaArgumentsCollection.Create([
         TGocciaStringLiteralValue.Create(StringValue)
       ]);
@@ -1551,7 +1553,7 @@ begin
     if not (SearchMethod is TGocciaUndefinedLiteralValue) then
     begin
       if not SearchMethod.IsCallable then
-        ThrowTypeError('@@search is not callable');
+        ThrowTypeError(SErrorSymbolSearchNotCallable, SSuggestWellKnownSymbolCallable);
       CallArgs := TGocciaArgumentsCollection.Create([
         TGocciaStringLiteralValue.Create(StringValue)
       ]);
@@ -1608,7 +1610,7 @@ begin
 
   // Step 4: If n < 0 or n = +∞, throw a RangeError exception
   if CountValue.IsInfinity or CountValue.IsNegativeInfinity or (CountValue.Value < 0) then
-    ThrowRangeError('Invalid count value: ' + CountValue.ToStringLiteral.Value);
+    ThrowRangeError(Format(SErrorInvalidRepeatCount, [CountValue.ToStringLiteral.Value]), SSuggestRepeatCountRange);
 
   // Step 5: If n = 0, return ""
   // Step 6: Return S repeated n times
@@ -1718,7 +1720,7 @@ begin
   for I := 0 to AArgs.Length - 1 do
   begin
     if AArgs.GetElement(I) is TGocciaSymbolValue then
-      ThrowTypeError('Cannot convert a Symbol value to a string');
+      ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
     StringValue := StringValue + AArgs.GetElement(I).ToStringLiteral.Value;
   end;
 
@@ -1884,7 +1886,7 @@ begin
 
   // Step 4: If f is not one of "NFC", "NFD", "NFKC", "NFKD", throw a RangeError
   if (Form <> 'NFC') and (Form <> 'NFD') and (Form <> 'NFKC') and (Form <> 'NFKD') then
-    ThrowRangeError('The normalization form should be one of NFC, NFD, NFKC, NFKD');
+    ThrowRangeError(SErrorInvalidNormalizationForm, SSuggestNormalizationForm);
 
   // Step 5: Return the Unicode Normalization Form f of S
   Result := TGocciaStringLiteralValue.Create(StringValue);
@@ -1899,7 +1901,7 @@ var
 begin
   // ES2026 §22.1.3.8 step 1: Let O be RequireObjectCoercible(this value)
   if (AThisValue is TGocciaUndefinedLiteralValue) or (AThisValue is TGocciaNullLiteralValue) then
-    ThrowTypeError('String.prototype.isWellFormed requires that ''this'' not be null or undefined');
+    ThrowTypeError(SErrorIsWellFormedRequiresNonNullish, SSuggestCheckNullBeforeAccess);
   // Step 2: Let S be ToString(O)
   StringValue := ExtractStringValue(AThisValue);
   // Step 3: Return IsStringWellFormedUnicode(S)
@@ -1960,7 +1962,7 @@ var
 begin
   // ES2026 §22.1.3.33 step 1: Let O be RequireObjectCoercible(this value)
   if (AThisValue is TGocciaUndefinedLiteralValue) or (AThisValue is TGocciaNullLiteralValue) then
-    ThrowTypeError('String.prototype.toWellFormed requires that ''this'' not be null or undefined');
+    ThrowTypeError(SErrorToWellFormedRequiresNonNullish, SSuggestCheckNullBeforeAccess);
   // Step 2: Let S be ToString(O)
   StringValue := ExtractStringValue(AThisValue);
   // Step 3: Let result be ""

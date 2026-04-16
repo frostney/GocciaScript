@@ -66,6 +66,8 @@ implementation
 
 uses
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue;
 
@@ -140,7 +142,7 @@ var
 begin
   // ES2026 §6.2.5.5 step 1: If Desc is not an Object, throw a TypeError
   if not (ADescriptorObject is TGocciaObjectValue) then
-    ThrowTypeError('property descriptor must be an object');
+    ThrowTypeError(SErrorPropertyDescriptorMustBeObject, SSuggestPropertyDescriptorObject);
 
   DescObj := TGocciaObjectValue(ADescriptorObject);
 
@@ -188,7 +190,7 @@ begin
   begin
     Getter := DescObj.GetProperty(PROP_GET);
     if not (Getter is TGocciaUndefinedLiteralValue) and not Getter.IsCallable then
-      ThrowTypeError('getter must be a function or undefined');
+      ThrowTypeError(SErrorGetterMustBeFunctionOrUndefined, SSuggestNotFunctionType);
     if Getter is TGocciaUndefinedLiteralValue then
       Getter := nil;
   end;
@@ -198,14 +200,14 @@ begin
   begin
     Setter := DescObj.GetProperty(PROP_SET);
     if not (Setter is TGocciaUndefinedLiteralValue) and not Setter.IsCallable then
-      ThrowTypeError('setter must be a function or undefined');
+      ThrowTypeError(SErrorSetterMustBeFunctionOrUndefined, SSuggestNotFunctionType);
     if Setter is TGocciaUndefinedLiteralValue then
       Setter := nil;
   end;
 
   // ES2026 §6.2.5.5 step 10: mixed data+accessor is invalid
   if (HasValue or HasWritable) and (HasGet or HasSet) then
-    ThrowTypeError('descriptor cannot have both accessor and data properties');
+    ThrowTypeError(SErrorDescriptorMixedAccessorData, SSuggestPropertyDescriptorObject);
 
   // Build flags
   PropertyFlags := [];

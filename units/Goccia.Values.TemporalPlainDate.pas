@@ -62,6 +62,10 @@ type
 implementation
 
 uses
+  SysUtils,
+
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
@@ -92,7 +96,7 @@ end;
 function AsPlainDate(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainDateValue;
 begin
   if not (AValue is TGocciaTemporalPlainDateValue) then
-    ThrowTypeError(AMethod + ' called on non-PlainDate');
+    ThrowTypeError(AMethod + ' called on non-PlainDate', SSuggestTemporalThisType);
   Result := TGocciaTemporalPlainDateValue(AValue);
 end;
 
@@ -113,7 +117,7 @@ begin
       if TryParseISODateTime(TGocciaStringLiteralValue(AValue).Value, DateRec, TimeRec) then
         Result := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day)
       else
-        ThrowTypeError('Invalid ISO date string for ' + AMethod);
+        ThrowTypeError(Format(SErrorTemporalInvalidISOStringFor, ['date', AMethod]), SSuggestTemporalISOFormat);
     end
     else
       Result := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day);
@@ -123,13 +127,13 @@ begin
     Obj := TGocciaObjectValue(AValue);
     V := Obj.GetProperty('year');
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError(AMethod + ' requires year, month, day properties');
+      ThrowTypeError(AMethod + ' requires year, month, day properties', SSuggestTemporalFromArg);
     VMonth := Obj.GetProperty('month');
     if (VMonth = nil) or (VMonth is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError(AMethod + ' requires year, month, day properties');
+      ThrowTypeError(AMethod + ' requires year, month, day properties', SSuggestTemporalFromArg);
     VDay := Obj.GetProperty('day');
     if (VDay = nil) or (VDay is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError(AMethod + ' requires year, month, day properties');
+      ThrowTypeError(AMethod + ' requires year, month, day properties', SSuggestTemporalFromArg);
     Result := TGocciaTemporalPlainDateValue.Create(
       Trunc(V.ToNumberLiteral.Value),
       Trunc(VMonth.ToNumberLiteral.Value),
@@ -137,7 +141,7 @@ begin
   end
   else
   begin
-    ThrowTypeError(AMethod + ' requires a PlainDate, string, or object');
+    ThrowTypeError(AMethod + ' requires a PlainDate, string, or object', SSuggestTemporalFromArg);
     Result := nil;
   end;
 end;
@@ -148,7 +152,7 @@ constructor TGocciaTemporalPlainDateValue.Create(const AYear, AMonth, ADay: Inte
 begin
   inherited Create(nil);
   if not IsValidDate(AYear, AMonth, ADay) then
-    ThrowRangeError('Invalid date: ' + FormatDateString(AYear, AMonth, ADay));
+    ThrowRangeError(Format(SErrorInvalidDate, [FormatDateString(AYear, AMonth, ADay)]), SSuggestTemporalDateRange);
   FYear := AYear;
   FMonth := AMonth;
   FDay := ADay;
@@ -334,7 +338,7 @@ begin
   D := AsPlainDate(AThisValue, 'PlainDate.prototype.with');
   V := AArgs.GetElement(0);
   if not (V is TGocciaObjectValue) then
-    ThrowTypeError('PlainDate.prototype.with requires an object argument');
+    ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['PlainDate']), SSuggestTemporalWithObject);
   Obj := TGocciaObjectValue(V);
 
   NewYear := GetFieldOr('year', D.FYear);
@@ -361,7 +365,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODuration(TGocciaStringLiteralValue(Arg).Value, DurRec) then
-      ThrowTypeError('Invalid duration string');
+      ThrowTypeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
     Dur := TGocciaTemporalDurationValue.Create(
       DurRec.Years, DurRec.Months, DurRec.Weeks, DurRec.Days,
       DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
@@ -379,7 +383,7 @@ begin
   end
   else
   begin
-    ThrowTypeError('PlainDate.prototype.add requires a Duration or string');
+    ThrowTypeError(Format(SErrorTemporalAddRequiresDuration, ['PlainDate']), SSuggestTemporalDurationArg);
     Dur := nil;
   end;
 
@@ -428,7 +432,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODuration(TGocciaStringLiteralValue(Arg).Value, DurRec) then
-      ThrowTypeError('Invalid duration string');
+      ThrowTypeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
     Dur := TGocciaTemporalDurationValue.Create(
       DurRec.Years, DurRec.Months, DurRec.Weeks, DurRec.Days,
       DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
@@ -446,7 +450,7 @@ begin
   end
   else
   begin
-    ThrowTypeError('PlainDate.prototype.subtract requires a Duration or string');
+    ThrowTypeError(Format(SErrorTemporalSubtractRequiresDuration, ['PlainDate']), SSuggestTemporalDurationArg);
     Dur := nil;
   end;
 
@@ -527,7 +531,7 @@ end;
 
 function TGocciaTemporalPlainDateValue.DateValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  ThrowTypeError('Temporal.PlainDate.prototype.valueOf cannot be used; use toString or compare instead');
+  ThrowTypeError(Format(SErrorTemporalValueOf, ['PlainDate', 'toString or compare']), SSuggestTemporalNoValueOf);
   Result := nil;
 end;
 
@@ -614,12 +618,12 @@ begin
   begin
     Arg := TGocciaObjectValue(Arg).GetProperty('timeZone');
     if (Arg = nil) or (Arg is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError('PlainDate.prototype.toZonedDateTime requires a timeZone');
+      ThrowTypeError(SErrorPlainDateToZonedRequiresTZ, SSuggestTemporalTimezone);
     TimeZoneStr := Arg.ToStringLiteral.Value;
   end
   else
   begin
-    ThrowTypeError('PlainDate.prototype.toZonedDateTime requires a timezone string or options object');
+    ThrowTypeError(SErrorPlainDateToZonedRequiresStringOrOptions, SSuggestTemporalTimezone);
     TimeZoneStr := '';
   end;
 

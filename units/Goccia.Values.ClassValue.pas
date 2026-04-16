@@ -224,6 +224,8 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
   Goccia.Error,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
@@ -961,7 +963,7 @@ begin
         Exit;
         end
         else
-          ThrowTypeError('Cannot set property on class with getter-only accessor');
+          ThrowTypeError(SErrorClassSetterOnlyAccessor, SSuggestPropertyHasOnlyGetter);
       end;
       Break;
     end;
@@ -1047,7 +1049,7 @@ begin
   else if (FName = CONSTRUCTOR_ARRAY) or (FName = CONSTRUCTOR_OBJECT) then
     Result := Instantiate(AArguments)
   else
-    ThrowTypeError('Class constructor ' + FName + ' cannot be invoked without ''new''');
+    ThrowTypeError(Format(SErrorClassConstructorRequiresNew, [FName]), SSuggestRequiresNew);
 end;
 
 { TGocciaArrayClassValue }
@@ -1244,7 +1246,7 @@ begin
      (Descriptor is TGocciaPropertyDescriptorData) then
   begin
     if not TGocciaPropertyDescriptorData(Descriptor).Writable then
-      ThrowTypeError('Cannot assign to read only property ''' + AName + '''');
+      ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]), SSuggestCannotDeleteNonConfigurable);
     TGocciaPropertyDescriptorData(Descriptor).Value := AValue;
     Exit;
   end;
@@ -1270,21 +1272,20 @@ begin
       end
       else if Descriptor is TGocciaPropertyDescriptorAccessor then
       begin
-        ThrowTypeError('Cannot set property ' + AName + ' of #<' + ToStringTag +
-          '> which has only a getter');
+        ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [AName, ToStringTag]), SSuggestPropertyHasOnlyGetter);
       end
       else if (Descriptor is TGocciaPropertyDescriptorData) and
               (not TGocciaPropertyDescriptorData(Descriptor).Writable) then
-        ThrowTypeError('Cannot assign to read only property ''' + AName + '''');
+        ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]), SSuggestCannotDeleteNonConfigurable);
     end;
     Proto := Proto.Prototype;
   end;
 
   if not ACanCreate then
-    ThrowTypeError('Cannot assign to non-existent property ''' + AName + '''');
+    ThrowTypeError(Format(SErrorCannotAssignNonExistent, [AName]), SSuggestCannotDeleteNonConfigurable);
 
   if not FExtensible then
-    ThrowTypeError('Cannot add property ''' + AName + ''', object is not extensible');
+    ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]), SSuggestObjectNotExtensible);
 
   DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
     [pfEnumerable, pfConfigurable, pfWritable]));

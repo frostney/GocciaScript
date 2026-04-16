@@ -112,6 +112,8 @@ uses
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Values.ErrorHelper,
@@ -202,7 +204,7 @@ var
 begin
   // Step 2: Let O be ? ToObject(this value)
   if (AThisValue is TGocciaUndefinedLiteralValue) or (AThisValue is TGocciaNullLiteralValue) then
-    ThrowTypeError('Cannot convert undefined or null to object');
+    ThrowTypeError(SErrorCannotConvertNullOrUndefined, SSuggestCheckNullBeforeAccess);
 
   if not (AThisValue is TGocciaObjectValue) then
     Exit(TGocciaBooleanLiteralValue.FalseValue);
@@ -243,7 +245,7 @@ begin
 
   // Step 2: Let O be ? ToObject(this value)
   if (AThisValue is TGocciaUndefinedLiteralValue) or (AThisValue is TGocciaNullLiteralValue) then
-    ThrowTypeError('Cannot convert undefined or null to object');
+    ThrowTypeError(SErrorCannotConvertNullOrUndefined, SSuggestCheckNullBeforeAccess);
   if not (AThisValue is TGocciaObjectValue) then
     Exit(TGocciaBooleanLiteralValue.FalseValue);
 
@@ -271,7 +273,7 @@ var
 begin
   // Step 2: Let O be ? ToObject(this value)
   if (AThisValue is TGocciaUndefinedLiteralValue) or (AThisValue is TGocciaNullLiteralValue) then
-    ThrowTypeError('Cannot convert undefined or null to object');
+    ThrowTypeError(SErrorCannotConvertNullOrUndefined, SSuggestCheckNullBeforeAccess);
 
   if not (AThisValue is TGocciaObjectValue) then
     Exit(TGocciaBooleanLiteralValue.FalseValue);
@@ -516,7 +518,7 @@ var
   ChainDepth: Integer;
 begin
   if FFrozen then
-    ThrowTypeError('Cannot assign to read only property ''' + AName + ''' of frozen object');
+    ThrowTypeError(Format(SErrorReadOnlyPropertyFrozen, [AName]), SSuggestCannotDeleteNonConfigurable);
 
   if FProperties.TryGetValue(AName, Descriptor) then
   begin
@@ -534,7 +536,7 @@ begin
         end;
         Exit;
       end;
-      ThrowTypeError('Cannot set property ' + AName + ' of #<' + ToStringTag + '> which has only a getter');
+      ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [AName, ToStringTag]), SSuggestPropertyHasOnlyGetter);
     end
     else if Descriptor is TGocciaPropertyDescriptorData then
     begin
@@ -543,7 +545,7 @@ begin
         TGocciaPropertyDescriptorData(Descriptor).Value := AValue;
         Exit;
       end;
-      ThrowTypeError('Cannot assign to read only property ''' + AName + '''');
+      ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]), SSuggestCannotDeleteNonConfigurable);
     end;
   end;
 
@@ -554,7 +556,7 @@ begin
   begin
     Inc(ChainDepth);
     if ChainDepth > MAX_PROTOTYPE_CHAIN_DEPTH then
-      ThrowTypeError('Prototype chain depth exceeded safety limit while setting ''' + AName + '''');
+      ThrowTypeError(Format(SErrorProtoChainDepthExceeded, [AName]), SSuggestPrototypeChainTooDeep);
     if Proto.FProperties.TryGetValue(AName, Descriptor) then
     begin
       if Descriptor is TGocciaPropertyDescriptorAccessor then
@@ -571,12 +573,12 @@ begin
           end;
           Exit;
         end;
-        ThrowTypeError('Cannot set property ' + AName + ' of #<' + ToStringTag + '> which has only a getter');
+        ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [AName, ToStringTag]), SSuggestPropertyHasOnlyGetter);
       end
       else if Descriptor is TGocciaPropertyDescriptorData then
       begin
         if not TGocciaPropertyDescriptorData(Descriptor).Writable then
-          ThrowTypeError('Cannot assign to read only property ''' + AName + '''');
+          ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]), SSuggestCannotDeleteNonConfigurable);
         Break;
       end;
     end;
@@ -584,10 +586,10 @@ begin
   end;
 
   if not ACanCreate then
-    ThrowTypeError('Cannot assign to non-existent property ''' + AName + '''');
+    ThrowTypeError(Format(SErrorCannotAssignNonExistent, [AName]), SSuggestCannotDeleteNonConfigurable);
 
   if not FExtensible then
-    ThrowTypeError('Cannot add property ''' + AName + ''', object is not extensible');
+    ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]), SSuggestObjectNotExtensible);
 
   DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
     [pfEnumerable, pfConfigurable, pfWritable]));
@@ -687,7 +689,7 @@ begin
   if FProperties.TryGetValue(AName, ExistingDescriptor) then
   begin
     if not ExistingDescriptor.Configurable then
-      ThrowTypeError('Cannot redefine non-configurable property ''' + AName + '''');
+      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]), SSuggestCannotDeleteNonConfigurable);
     ExistingDescriptor.Free;
   end;
 
@@ -955,7 +957,7 @@ begin
   if FSymbolDescriptors.TryGetValue(ASymbol, ExistingDescriptor) then
   begin
     if not ExistingDescriptor.Configurable then
-      ThrowTypeError('Cannot redefine non-configurable property ''' + ASymbol.ToStringLiteral.Value + '''');
+      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [ASymbol.ToStringLiteral.Value]), SSuggestCannotDeleteNonConfigurable);
     ExistingDescriptor.Free;
   end
   else
@@ -1009,7 +1011,7 @@ var
   Current: TGocciaObjectValue;
 begin
   if FFrozen then
-    ThrowTypeError('Cannot assign to property of frozen object');
+    ThrowTypeError(SErrorCannotAssignFrozenObject, SSuggestCannotDeleteNonConfigurable);
 
   if FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
   begin
@@ -1028,7 +1030,7 @@ begin
         end;
         Exit;
       end;
-      ThrowTypeError('Cannot set property which has only a getter');
+      ThrowTypeError(SErrorSetSymbolOnlyGetter, SSuggestPropertyHasOnlyGetter);
     end
     else if Descriptor is TGocciaPropertyDescriptorData then
     begin
@@ -1038,7 +1040,7 @@ begin
         Descriptor.Free;
         Exit;
       end;
-      ThrowTypeError('Cannot assign to read only symbol property');
+      ThrowTypeError(SErrorReadOnlySymbolProperty, SSuggestCannotDeleteNonConfigurable);
     end;
   end;
 
@@ -1062,12 +1064,12 @@ begin
           end;
           Exit;
         end;
-        ThrowTypeError('Cannot set property which has only a getter');
+        ThrowTypeError(SErrorSetSymbolOnlyGetter, SSuggestPropertyHasOnlyGetter);
       end
       else if Descriptor is TGocciaPropertyDescriptorData then
       begin
         if not TGocciaPropertyDescriptorData(Descriptor).Writable then
-          ThrowTypeError('Cannot assign to read only symbol property');
+          ThrowTypeError(SErrorReadOnlySymbolProperty, SSuggestCannotDeleteNonConfigurable);
         Break;
       end;
     end;
@@ -1075,7 +1077,7 @@ begin
   end;
 
   if not FExtensible then
-    ThrowTypeError('Cannot add symbol property, object is not extensible');
+    ThrowTypeError(SErrorCannotAddSymbolNotExtensible, SSuggestObjectNotExtensible);
 
   DefineSymbolProperty(ASymbol, TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]));
 end;

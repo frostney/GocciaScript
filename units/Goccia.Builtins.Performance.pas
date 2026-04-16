@@ -55,6 +55,8 @@ uses
 
   TimingUtils,
 
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
@@ -67,7 +69,7 @@ threadvar
 function RequirePerformanceThis(const AThisValue: TGocciaValue): TGocciaPerformanceValue;
 begin
   if not (AThisValue is TGocciaPerformanceValue) then
-    ThrowTypeError('Method Performance called on incompatible receiver');
+    ThrowTypeError(SErrorPerformanceIncompatibleReceiver, SSuggestPerformanceThisType);
   Result := TGocciaPerformanceValue(AThisValue);
 end;
 
@@ -99,7 +101,7 @@ end;
 function TGocciaPerformancePrototypeHost.PerformanceConstructorCall(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  ThrowTypeError('Illegal constructor');
+  ThrowTypeError(SErrorIllegalConstructor, SSuggestIllegalConstructor);
 end;
 
 // High Resolution Time Level 3 §7.1 Performance.now()

@@ -52,6 +52,8 @@ implementation
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -261,7 +263,7 @@ begin
         begin
           CloseAllIterators;
           FDone := True;
-          ThrowTypeError('Iterator.zip: iterables have different lengths in strict mode');
+          ThrowTypeError(SErrorIteratorZipStrictLengthMismatch, SSuggestIteratorZipMode);
         end;
         if AllDone then
         begin
@@ -448,7 +450,7 @@ begin
         begin
           CloseAllIterators;
           FDone := True;
-          ThrowTypeError('Iterator.zipKeyed: iterables have different lengths in strict mode');
+          ThrowTypeError(SErrorIteratorZipKeyedStrictLengthMismatch, SSuggestIteratorZipMode);
         end;
         if AllDone then
         begin

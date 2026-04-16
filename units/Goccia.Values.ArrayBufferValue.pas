@@ -63,6 +63,8 @@ uses
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
@@ -74,7 +76,7 @@ threadvar
 function RequireArrayBuffer(const AThisValue: TGocciaValue; const AMethodName: string): TGocciaArrayBufferValue;
 begin
   if not (AThisValue is TGocciaArrayBufferValue) then
-    ThrowTypeError(AMethodName + ' requires an ArrayBuffer');
+    ThrowTypeError(Format(SErrorRequiresArrayBuffer, [AMethodName]), SSuggestArrayBufferThisType);
   Result := TGocciaArrayBufferValue(AThisValue);
 end;
 
@@ -97,7 +99,7 @@ begin
     IntegerIndex := 0
   else if Num.IsInfinite then
   begin
-    ThrowRangeError('Invalid array buffer length');
+    ThrowRangeError(SErrorInvalidArrayBufferLength, SSuggestArrayLengthRange);
     Exit(0);
   end
   else
@@ -105,7 +107,7 @@ begin
 
   if (IntegerIndex < 0) or (IntegerIndex > MAX_ECMA_INDEX) or
      (IntegerIndex > High(Integer)) then
-    ThrowRangeError('Invalid array buffer length');
+    ThrowRangeError(SErrorInvalidArrayBufferLength, SSuggestArrayLengthRange);
 
   Result := Trunc(IntegerIndex);
 end;
@@ -138,7 +140,7 @@ begin
   if AMaxByteLength >= 0 then
   begin
     if AByteLength > AMaxByteLength then
-      ThrowRangeError('ArrayBuffer byte length must not exceed maxByteLength');
+      ThrowRangeError(SErrorArrayBufferExceedsMaxByteLength, SSuggestArrayBufferResizable);
     FMaxByteLength := AMaxByteLength;
   end
   else
@@ -233,7 +235,7 @@ begin
   if RequestedMaxByteLength >= 0 then
   begin
     if Len > RequestedMaxByteLength then
-      ThrowRangeError('ArrayBuffer byte length must not exceed maxByteLength');
+      ThrowRangeError(SErrorArrayBufferExceedsMaxByteLength, SSuggestArrayBufferResizable);
     FMaxByteLength := RequestedMaxByteLength;
   end
   else
@@ -369,11 +371,11 @@ begin
 
   // ES2026 §25.1.6.5 step 4: If IsDetachedBuffer(O), throw TypeError
   if Buf.FDetached then
-    ThrowTypeError('Cannot resize a detached ArrayBuffer');
+    ThrowTypeError(SErrorCannotResizeDetachedArrayBuffer, SSuggestArrayBufferDetached);
 
   // ES2026 §25.1.6.5 step 5: If IsFixedLengthArrayBuffer(O), throw TypeError
   if Buf.FMaxByteLength < 0 then
-    ThrowTypeError('Cannot resize a fixed-length ArrayBuffer');
+    ThrowTypeError(SErrorCannotResizeFixedLengthArrayBuffer, SSuggestArrayBufferResizable);
 
   // ES2026 §25.1.6.5 step 6: Let newByteLength be ToIndex(newLength)
   if AArgs.Length > 0 then
@@ -383,7 +385,7 @@ begin
 
   // ES2026 §25.1.6.5 step 7: If newByteLength > maxByteLength, throw RangeError
   if NewByteLength > Buf.FMaxByteLength then
-    ThrowRangeError('ArrayBuffer resize exceeds maxByteLength');
+    ThrowRangeError(SErrorArrayBufferResizeExceedsMax, SSuggestArrayBufferResizable);
 
   // ES2026 §25.1.6.5 steps 10-16: Create new data block and copy
   OldByteLength := Length(Buf.FData);
@@ -439,7 +441,7 @@ begin
 
   // ES2026 §25.1.6.6 step 2: If IsDetachedBuffer(O), throw TypeError
   if Buf.FDetached then
-    ThrowTypeError('Cannot transfer a detached ArrayBuffer');
+    ThrowTypeError(SErrorCannotTransferDetachedArrayBuffer, SSuggestArrayBufferDetached);
 
   // ES2026 §25.1.6.6 step 1: newLength defaults to current byteLength
   if (AArgs.Length = 0) or (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
@@ -461,7 +463,7 @@ begin
 
   // ES2026 §25.1.6.7 step 2: If IsDetachedBuffer(O), throw TypeError
   if Buf.FDetached then
-    ThrowTypeError('Cannot transfer a detached ArrayBuffer');
+    ThrowTypeError(SErrorCannotTransferDetachedArrayBuffer, SSuggestArrayBufferDetached);
 
   // ES2026 §25.1.6.7 step 1: newLength defaults to current byteLength
   if (AArgs.Length = 0) or (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
@@ -485,7 +487,7 @@ begin
 
   // ES2026 §25.1.6.8 step 4: If IsDetachedBuffer(O), throw TypeError
   if Buf.FDetached then
-    ThrowTypeError('Cannot slice a detached ArrayBuffer');
+    ThrowTypeError(SErrorCannotSliceDetachedArrayBuffer, SSuggestArrayBufferDetached);
 
   Len := Length(Buf.FData);
 

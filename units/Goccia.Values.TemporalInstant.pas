@@ -44,6 +44,10 @@ type
 implementation
 
 uses
+  SysUtils,
+
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
@@ -57,7 +61,7 @@ threadvar
 function AsInstant(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalInstantValue;
 begin
   if not (AValue is TGocciaTemporalInstantValue) then
-    ThrowTypeError(AMethod + ' called on non-Instant');
+    ThrowTypeError(AMethod + ' called on non-Instant', SSuggestTemporalThisType);
   Result := TGocciaTemporalInstantValue(AValue);
 end;
 
@@ -74,7 +78,7 @@ begin
   begin
     // Parse as ISO date-time and convert to epoch
     if not TryParseISODateTime(TGocciaStringLiteralValue(AValue).Value, DateRec, TimeRec) then
-      ThrowTypeError('Invalid ISO instant string for ' + AMethod);
+      ThrowTypeError(Format(SErrorTemporalInvalidISOStringFor, ['instant', AMethod]), SSuggestTemporalISOFormat);
     EpochMs := DateToEpochDays(DateRec.Year, DateRec.Month, DateRec.Day) * Int64(86400000) +
                Int64(TimeRec.Hour) * 3600000 + Int64(TimeRec.Minute) * 60000 +
                Int64(TimeRec.Second) * 1000 + TimeRec.Millisecond;
@@ -83,7 +87,7 @@ begin
   end
   else
   begin
-    ThrowTypeError(AMethod + ' requires an Instant or string');
+    ThrowTypeError(AMethod + ' requires an Instant or string', SSuggestTemporalFromArg);
     Result := nil;
   end;
 end;
@@ -202,20 +206,20 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODuration(TGocciaStringLiteralValue(Arg).Value, DurRec) then
-      ThrowTypeError('Invalid duration string');
+      ThrowTypeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
     Dur := TGocciaTemporalDurationValue.Create(0, 0, 0, DurRec.Days,
       DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
       DurRec.Milliseconds, DurRec.Microseconds, DurRec.Nanoseconds);
   end
   else
   begin
-    ThrowTypeError('Instant.prototype.add requires a Duration or string');
+    ThrowTypeError(Format(SErrorTemporalAddRequiresDuration, ['Instant']), SSuggestTemporalDurationArg);
     Dur := nil;
   end;
 
   // Instant only supports time-based duration
   if (Dur.Years <> 0) or (Dur.Months <> 0) or (Dur.Weeks <> 0) then
-    ThrowRangeError('Instant.prototype.add does not support years, months, or weeks');
+    ThrowRangeError(SErrorInstantAddNoCalendar, SSuggestTemporalDurationArg);
 
   NewMs := Inst.FEpochMilliseconds +
            Dur.Days * Int64(86400000) +
@@ -246,19 +250,19 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODuration(TGocciaStringLiteralValue(Arg).Value, DurRec) then
-      ThrowTypeError('Invalid duration string');
+      ThrowTypeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
     Dur := TGocciaTemporalDurationValue.Create(0, 0, 0, DurRec.Days,
       DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
       DurRec.Milliseconds, DurRec.Microseconds, DurRec.Nanoseconds);
   end
   else
   begin
-    ThrowTypeError('Instant.prototype.subtract requires a Duration or string');
+    ThrowTypeError(Format(SErrorTemporalSubtractRequiresDuration, ['Instant']), SSuggestTemporalDurationArg);
     Dur := nil;
   end;
 
   if (Dur.Years <> 0) or (Dur.Months <> 0) or (Dur.Weeks <> 0) then
-    ThrowRangeError('Instant.prototype.subtract does not support years, months, or weeks');
+    ThrowRangeError(SErrorInstantSubtractNoCalendar, SSuggestTemporalDurationArg);
 
   NewMs := Inst.FEpochMilliseconds -
            Dur.Days * Int64(86400000) -
@@ -343,20 +347,20 @@ begin
   begin
     UnitStr := TGocciaStringLiteralValue(Arg).Value;
     if not GetTemporalUnitFromString(UnitStr, SmallestUnit) then
-      ThrowRangeError('Invalid unit for Instant.prototype.round: ' + UnitStr);
+      ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.round', UnitStr]), SSuggestTemporalValidUnits);
   end
   else if Arg is TGocciaObjectValue then
   begin
     OptionsObj := TGocciaObjectValue(Arg);
     SmallestUnit := GetSmallestUnit(OptionsObj, tuNone);
     if SmallestUnit = tuNone then
-      ThrowRangeError('round() requires a smallestUnit option');
+      ThrowRangeError(SErrorTemporalRoundRequiresSmallestUnit, SSuggestTemporalRoundArg);
     Mode := GetRoundingMode(OptionsObj, rmHalfExpand);
     Increment := GetRoundingIncrement(OptionsObj, 1);
   end
   else
   begin
-    ThrowTypeError('Instant.prototype.round requires a string or options object');
+    ThrowTypeError(Format(SErrorTemporalRoundRequiresStringOrOptions, ['Instant']), SSuggestTemporalRoundArg);
     SmallestUnit := tuNanosecond;
   end;
 
@@ -432,7 +436,7 @@ end;
 
 function TGocciaTemporalInstantValue.InstantValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  ThrowTypeError('Temporal.Instant.prototype.valueOf cannot be used; use epochMilliseconds, epochNanoseconds, or compare instead');
+  ThrowTypeError(Format(SErrorTemporalValueOf, ['Instant', 'epochMilliseconds, epochNanoseconds, or compare']), SSuggestTemporalNoValueOf);
   Result := nil;
 end;
 

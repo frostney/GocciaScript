@@ -68,6 +68,8 @@ uses
   SysUtils,
 
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Utils,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -291,7 +293,7 @@ begin
   if Replaced is TGocciaArrayValue then
   begin
     if FReplacerTraversalStack.IndexOf(TGocciaArrayValue(Replaced)) <> -1 then
-      ThrowTypeError('Converting circular structure to JSON5');
+      ThrowTypeError(SErrorCircularStructureToJSON5, SSuggestJSONFormat);
 
     FReplacerTraversalStack.Add(TGocciaArrayValue(Replaced));
     Arr := TGocciaArrayValue(Replaced);
@@ -313,7 +315,7 @@ begin
     not (Replaced is TGocciaArrayValue) then
   begin
     if FReplacerTraversalStack.IndexOf(TGocciaObjectValue(Replaced)) <> -1 then
-      ThrowTypeError('Converting circular structure to JSON5');
+      ThrowTypeError(SErrorCircularStructureToJSON5, SSuggestJSONFormat);
 
     FReplacerTraversalStack.Add(TGocciaObjectValue(Replaced));
     Obj := TGocciaObjectValue(Replaced);
@@ -489,7 +491,7 @@ begin
   if TransformedValue is TGocciaArrayValue then
   begin
     if FReplacerTraversalStack.IndexOf(TGocciaArrayValue(TransformedValue)) <> -1 then
-      ThrowTypeError('Converting circular structure to JSON5');
+      ThrowTypeError(SErrorCircularStructureToJSON5, SSuggestJSONFormat);
 
     FReplacerTraversalStack.Add(TGocciaArrayValue(TransformedValue));
     Arr := TGocciaArrayValue(TransformedValue);
@@ -512,7 +514,7 @@ begin
     not (TransformedValue is TGocciaArrayValue) then
   begin
     if FReplacerTraversalStack.IndexOf(TGocciaObjectValue(TransformedValue)) <> -1 then
-      ThrowTypeError('Converting circular structure to JSON5');
+      ThrowTypeError(SErrorCircularStructureToJSON5, SSuggestJSONFormat);
 
     FReplacerTraversalStack.Add(TGocciaObjectValue(TransformedValue));
     Obj := TGocciaObjectValue(TransformedValue);
@@ -552,7 +554,7 @@ begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'JSON5.parse', ThrowError);
 
   if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowError('JSON5.parse: argument must be a string', 0, 0);
+    ThrowTypeError(SErrorJSON5ParseArgMustBeString, SSuggestStringArgRequired);
 
   HasReviver := (AArgs.Length >= 2) and AArgs.GetElement(1).IsCallable;
 
@@ -566,7 +568,7 @@ begin
           AArgs.GetElement(0).ToStringLiteral.Value, Result, SourceTexts);
       except
         on E: Exception do
-          ThrowSyntaxError(E.Message);
+          ThrowSyntaxError(E.Message, SSuggestJSONFormat);
       end;
 
       Root := TGocciaObjectValue.Create;
@@ -593,7 +595,7 @@ begin
       Result := FParser.Parse(AArgs.GetElement(0).ToStringLiteral.Value);
     except
       on E: Exception do
-        ThrowSyntaxError(E.Message);
+        ThrowSyntaxError(E.Message, SSuggestJSONFormat);
     end;
   end;
 end;
@@ -678,7 +680,7 @@ begin
     on E: TGocciaThrowValue do
       raise;
     on E: Exception do
-      ThrowError('JSON5.stringify error: ' + E.Message, 0, 0);
+      ThrowTypeError(Format(SErrorJSON5StringifyError, [E.Message]), SSuggestJSONFormat);
   end;
 end;
 

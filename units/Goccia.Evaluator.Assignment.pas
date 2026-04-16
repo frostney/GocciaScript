@@ -23,6 +23,8 @@ function PerformIncrement(const AOldValue: TGocciaValue; const AIsIncrement: Boo
 implementation
 
 uses
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Evaluator.Arithmetic,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
@@ -38,7 +40,7 @@ begin
     // a JavaScript-level TypeError (TGocciaThrowValue), not an interpreter-level
     // runtime error (TGocciaRuntimeError) which is what AOnError produces.
     // The Assigned check guards against raising in contexts without error handling.
-    ThrowTypeError('Cannot set property on non-object');
+    ThrowTypeError(SErrorCannotSetPropertyOnNonObject, SSuggestCheckNullBeforeAccess);
 end;
 
 procedure PerformPropertyCompoundAssignment(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);

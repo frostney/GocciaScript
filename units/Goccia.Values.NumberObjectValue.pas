@@ -44,6 +44,8 @@ uses
   SysUtils,
 
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
@@ -295,7 +297,7 @@ begin
     FractionDigits := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
     // Step 5: If f < 0 or f > 100, throw a RangeError exception
     if (FractionDigits < 0) or (FractionDigits > 100) then
-      ThrowRangeError('toExponential() argument must be between 0 and 100');
+      ThrowRangeError(SErrorToExponentialArgRange, SSuggestNumberRange);
   end
   else
     FractionDigits := -1;

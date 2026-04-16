@@ -32,6 +32,8 @@ uses
   OrderedStringMap,
 
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.URI,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
@@ -79,7 +81,7 @@ var
   Specifier, BaseDirectory, ResolvedPath: string;
 begin
   if AArgs.Length = 0 then
-    ThrowTypeError('import.meta.resolve requires a specifier argument');
+    ThrowTypeError(SErrorImportMetaResolveRequiresArg, SSuggestImportMetaUsage);
 
   Specifier := AArgs.GetElement(0).ToStringLiteral.Value;
 

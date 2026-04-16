@@ -31,6 +31,8 @@ uses
 
   StringBuffer,
 
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Values.ErrorHelper;
 
 const
@@ -224,10 +226,10 @@ begin
             Continue;
           end
           else
-            ThrowURIError('URI malformed');
+            ThrowURIError(SErrorURIMalformed, SSuggestURIEncoding);
         end
         else
-          ThrowURIError('URI malformed');
+          ThrowURIError(SErrorURIMalformed, SSuggestURIEncoding);
       end;
 
       // ES2026 §19.2.6.1 step 4d.vi: percent-encode UTF-8 octets
@@ -264,7 +266,7 @@ begin
   if (AIndex + 2 > ALength) or
      not IsASCIIHexDigit(AString[AIndex + 1]) or
      not IsASCIIHexDigit(AString[AIndex + 2]) then
-    ThrowURIError('URI malformed');
+    ThrowURIError(SErrorURIMalformed, SSuggestURIEncoding);
   Result := (HexVal(AString[AIndex + 1]) shl 4) or HexVal(AString[AIndex + 2]);
   Inc(AIndex, 3);
 end;
@@ -323,7 +325,7 @@ begin
         else if (B and $F8) = $F0 then
           ByteCount := 4
         else
-          ThrowURIError('URI malformed');
+          ThrowURIError(SErrorURIMalformed, SSuggestURIEncoding);
 
         UTF8Bytes[0] := B;
 
@@ -331,10 +333,10 @@ begin
         for J := 1 to ByteCount - 1 do
         begin
           if (I > Len) or (AString[I] <> '%') then
-            ThrowURIError('URI malformed');
+            ThrowURIError(SErrorURIMalformed, SSuggestURIEncoding);
           B2 := DecodePercentByte(AString, I, Len);
           if (B2 and $C0) <> $80 then
-            ThrowURIError('URI malformed');
+            ThrowURIError(SErrorURIMalformed, SSuggestURIEncoding);
           UTF8Bytes[J] := B2;
         end;
 
@@ -355,17 +357,17 @@ begin
 
         // Lone surrogates are invalid
         if IsSurrogate(CodePoint) then
-          ThrowURIError('URI malformed');
+          ThrowURIError(SErrorURIMalformed, SSuggestURIEncoding);
 
         // Overlong encodings are invalid
         if ((ByteCount = 2) and (CodePoint < $80)) or
            ((ByteCount = 3) and (CodePoint < $800)) or
            ((ByteCount = 4) and (CodePoint < $10000)) then
-          ThrowURIError('URI malformed');
+          ThrowURIError(SErrorURIMalformed, SSuggestURIEncoding);
 
         // Code points above U+10FFFF are invalid
         if CodePoint > $10FFFF then
-          ThrowURIError('URI malformed');
+          ThrowURIError(SErrorURIMalformed, SSuggestURIEncoding);
 
         // Append the decoded UTF-8 bytes directly
         for J := 0 to ByteCount - 1 do

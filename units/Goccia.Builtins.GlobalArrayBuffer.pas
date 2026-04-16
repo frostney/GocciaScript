@@ -31,6 +31,8 @@ uses
   Math,
 
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Values.ErrorHelper,
   Goccia.Values.TypedArrayValue;
 
@@ -78,7 +80,7 @@ begin
     IntegerIndex := 0
   else if Num.IsInfinite then
   begin
-    ThrowRangeError('Invalid array buffer length');
+    ThrowRangeError(SErrorInvalidArrayBufferLength, SSuggestArrayLengthRange);
     Exit(0);
   end
   else
@@ -86,7 +88,7 @@ begin
 
   if (IntegerIndex < 0) or (IntegerIndex > MAX_ECMA_INDEX) or
      (IntegerIndex > High(Integer)) then
-    ThrowRangeError('Invalid array buffer length');
+    ThrowRangeError(SErrorInvalidArrayBufferLength, SSuggestArrayLengthRange);
 
   Result := Trunc(IntegerIndex);
 end;
@@ -108,7 +110,7 @@ begin
   Num := AArgs.GetElement(0).ToNumberLiteral;
 
   if Num.IsNaN or Num.IsInfinite or (Num.Value < 0) or (Num.Value <> Trunc(Num.Value)) then
-    ThrowRangeError('Invalid array buffer length');
+    ThrowRangeError(SErrorInvalidArrayBufferLength, SSuggestArrayLengthRange);
 
   Len := Trunc(Num.Value);
 

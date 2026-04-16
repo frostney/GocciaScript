@@ -67,6 +67,8 @@ uses
   Goccia.Arguments.Converter,
   Goccia.Arguments.Validator,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Float16,
   Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
@@ -382,7 +384,7 @@ begin
   // Step 5: If lower > upper, throw a RangeError.
   if MinVal.IsGreaterThan(MaxVal).Value then
   begin
-    ThrowError('RangeError: Invalid range in Math.clamp', 0, 0);
+    ThrowRangeError(SErrorMathClampInvalidRange, SSuggestNumberRange);
     Exit;
   end;
 
@@ -1019,7 +1021,7 @@ function TGocciaMath.MathSumPrecise(const AArgs: TGocciaArgumentsCollection; con
     T: Double;
   begin
     if not (AElement is TGocciaNumberLiteralValue) then
-      Goccia.Values.ErrorHelper.ThrowTypeError('Math.sumPrecise: element is not a number');
+      Goccia.Values.ErrorHelper.ThrowTypeError(SErrorMathSumPreciseNotNumber, SSuggestNumberRange);
     NumVal := TGocciaNumberLiteralValue(AElement);
     AHasAnyValue := True;
     if NumVal.IsNaN then
@@ -1102,7 +1104,7 @@ begin
     end;
 
     if not Assigned(Iterator) then
-      Goccia.Values.ErrorHelper.ThrowTypeError('Math.sumPrecise: argument is not iterable');
+      Goccia.Values.ErrorHelper.ThrowTypeError(SErrorMathSumPreciseNotIterable, SSuggestNotIterable);
 
     TGarbageCollector.Instance.AddTempRoot(Iterator);
     try

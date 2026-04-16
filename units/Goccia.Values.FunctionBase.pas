@@ -95,6 +95,8 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
   Goccia.Error,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Values.ArrayValue,
@@ -320,7 +322,7 @@ var
 begin
   // Step 1: Perform ? RequireObjectCoercible(this)
   if not AThisValue.IsCallable then
-    ThrowTypeError('Function.prototype.apply called on non-function');
+    ThrowTypeError(SErrorFunctionApplyNonFunction, SSuggestFunctionApply);
 
   // thisArg
   if AArgs.Length > 0 then

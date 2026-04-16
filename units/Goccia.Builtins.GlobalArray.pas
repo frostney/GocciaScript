@@ -33,6 +33,8 @@ uses
 
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Evaluator,
   Goccia.GarbageCollector,
   Goccia.Utils,
@@ -155,7 +157,8 @@ begin
     begin
       // Step 3a: If IsCallable(mapfn) is false, throw TypeError
       if not MapCallback.IsCallable then
-        ThrowTypeError('Array.from: when provided, the second argument must be a function');
+        ThrowTypeError(SErrorArrayFromMapFn,
+          SSuggestArrayFromMapFn);
       // Step 3b: Let mapping be true
       Mapping := True;
       if AArgs.Length > 2 then
@@ -251,7 +254,7 @@ begin
           Iterator := nil;
 
         if not Assigned(Iterator) then
-          ThrowTypeError('[Symbol.iterator] did not return a valid iterator');
+          ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
 
         // Step 5a-b: If IsConstructor(C), Construct(C, « »); else ArrayCreate(0)
         ResultObj := ConstructOrCreate(0);
@@ -366,7 +369,7 @@ var
       CloseResult := TGocciaFunctionBase(ReturnMethod).Call(CloseArgs, AIterator);
       CloseResult := AwaitValue(CloseResult);
       if not (CloseResult is TGocciaObjectValue) then
-        ThrowTypeError('Iterator return() must return an object');
+        ThrowTypeError(SErrorIteratorReturnObject, SSuggestIteratorProtocol);
     finally
       CloseArgs.Free;
     end;
@@ -457,7 +460,7 @@ begin
           try
             NextMethod := IteratorObj.GetProperty(PROP_NEXT);
             if not Assigned(NextMethod) or not NextMethod.IsCallable then
-              ThrowTypeError('Async iterator .next is not callable');
+              ThrowTypeError(SErrorAsyncIteratorNextNotCallable, SSuggestIteratorProtocol);
 
             K := 0;
             EmptyArgs := TGocciaArgumentsCollection.Create;
@@ -472,7 +475,8 @@ begin
 
                   // ES2026 §7.4.2 step 5: If nextResult is not an Object, throw a TypeError
                   if NextResult.IsPrimitive then
-                    ThrowTypeError('Iterator result ' + NextResult.ToStringLiteral.Value + ' is not an object');
+                    ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.ToStringLiteral.Value]),
+                      SSuggestIteratorResultObject);
 
                   // TC39 Array.fromAsync §2.1.1.1 step 4.b.iii: IteratorComplete(next)
                   DoneValue := NextResult.GetProperty(PROP_DONE);
