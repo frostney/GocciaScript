@@ -766,6 +766,8 @@ begin
     Pool.Free;
   end;
 
+  WallClockDuration := GetNanoseconds - WallClockStart;
+
   // Aggregate results on the main thread using GC-managed objects
   GC := TGarbageCollector.Instance;
 
@@ -812,14 +814,12 @@ begin
         TGocciaStringLiteralValue.Create(WorkerData[I].FailedTestNames[J]));
   end;
 
-  WallClockDuration := GetNanoseconds - WallClockStart;
-
   AllTestResults.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(AFiles.Count * 1.0));
   AllTestResults.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(TotalRunCount));
   AllTestResults.AssignProperty('passed', TGocciaNumberLiteralValue.Create(PassedCount));
   AllTestResults.AssignProperty('failed', TGocciaNumberLiteralValue.Create(FailedCount));
   AllTestResults.AssignProperty('skipped', TGocciaNumberLiteralValue.Create(SkippedCount));
-  AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.Create(WallClockDuration * 1.0));
+  AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.Create(WallClockDuration));
   AllTestResults.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(TotalAssertions));
   AllTestResults.AssignProperty('failedTests', AllFailedTests);
 
