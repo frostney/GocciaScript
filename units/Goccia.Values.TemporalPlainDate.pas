@@ -64,6 +64,7 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
@@ -125,15 +126,15 @@ begin
   else if AValue is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(AValue);
-    V := Obj.GetProperty('year');
+    V := Obj.GetProperty(PROP_YEAR);
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError(AMethod + ' requires year, month, day properties', SSuggestTemporalFromArg);
-    VMonth := Obj.GetProperty('month');
+      ThrowTypeError(Format('%s requires %s, %s, %s properties', [AMethod, PROP_YEAR, PROP_MONTH, PROP_DAY]), SSuggestTemporalFromArg);
+    VMonth := Obj.GetProperty(PROP_MONTH);
     if (VMonth = nil) or (VMonth is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError(AMethod + ' requires year, month, day properties', SSuggestTemporalFromArg);
-    VDay := Obj.GetProperty('day');
+      ThrowTypeError(Format('%s requires %s, %s, %s properties', [AMethod, PROP_YEAR, PROP_MONTH, PROP_DAY]), SSuggestTemporalFromArg);
+    VDay := Obj.GetProperty(PROP_DAY);
     if (VDay = nil) or (VDay is TGocciaUndefinedLiteralValue) then
-      ThrowTypeError(AMethod + ' requires year, month, day properties', SSuggestTemporalFromArg);
+      ThrowTypeError(Format('%s requires %s, %s, %s properties', [AMethod, PROP_YEAR, PROP_MONTH, PROP_DAY]), SSuggestTemporalFromArg);
     Result := TGocciaTemporalPlainDateValue.Create(
       Trunc(V.ToNumberLiteral.Value),
       Trunc(VMonth.ToNumberLiteral.Value),
