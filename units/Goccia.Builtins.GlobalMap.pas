@@ -147,43 +147,48 @@ begin
     IteratorMethod := TGocciaObjectValue(Source).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
     if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
     begin
-      CallArgs := TGocciaArgumentsCollection.Create;
-      try
-        IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, Source);
-      finally
-        CallArgs.Free;
-      end;
-
-      if IteratorObj is TGocciaIteratorValue then
-        Iterator := TGocciaIteratorValue(IteratorObj)
-      else if IteratorObj is TGocciaObjectValue then
-      begin
-        NextMethod := IteratorObj.GetProperty(PROP_NEXT);
-        if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
-          Iterator := TGocciaGenericIteratorValue.Create(IteratorObj)
-        else
-          Iterator := nil;
-      end
-      else
-        Iterator := nil;
-
-      if not Assigned(Iterator) then
-        ThrowTypeError(SErrorMapGroupByRequiresIterable, SSuggestNotIterable);
-
-      TGarbageCollector.Instance.AddTempRoot(Iterator);
+      // Root ResultMap before calling [Symbol.iterator]() — that call
+      // executes user code and may trigger GC.
       TGarbageCollector.Instance.AddTempRoot(ResultMap);
       try
-        I := 0;
-        CurrentValue := Iterator.DirectNext(Done);
-        while not Done do
+        CallArgs := TGocciaArgumentsCollection.Create;
+        try
+          IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, Source);
+        finally
+          CallArgs.Free;
+        end;
+
+        if IteratorObj is TGocciaIteratorValue then
+          Iterator := TGocciaIteratorValue(IteratorObj)
+        else if IteratorObj is TGocciaObjectValue then
         begin
-          AddToGroup(CurrentValue, I);
-          Inc(I);
+          NextMethod := IteratorObj.GetProperty(PROP_NEXT);
+          if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
+            Iterator := TGocciaGenericIteratorValue.Create(IteratorObj)
+          else
+            Iterator := nil;
+        end
+        else
+          Iterator := nil;
+
+        if not Assigned(Iterator) then
+          ThrowTypeError(SErrorMapGroupByRequiresIterable, SSuggestNotIterable);
+
+        TGarbageCollector.Instance.AddTempRoot(Iterator);
+        try
+          I := 0;
           CurrentValue := Iterator.DirectNext(Done);
+          while not Done do
+          begin
+            AddToGroup(CurrentValue, I);
+            Inc(I);
+            CurrentValue := Iterator.DirectNext(Done);
+          end;
+        finally
+          TGarbageCollector.Instance.RemoveTempRoot(Iterator);
         end;
       finally
         TGarbageCollector.Instance.RemoveTempRoot(ResultMap);
-        TGarbageCollector.Instance.RemoveTempRoot(Iterator);
       end;
       Result := ResultMap;
       Exit;
