@@ -142,14 +142,14 @@ begin
     Year := Year * Sign;
 
     if (Pos > Length(S)) or (S[Pos] <> '-') then
-      ThrowTypeError(Format(SErrorInvalidYearMonthStringFor, [AMethod]), SSuggestTemporalISOFormat);
+      ThrowRangeError(Format(SErrorInvalidYearMonthStringFor, [AMethod]), SSuggestTemporalISOFormat);
     Inc(Pos);
 
     if not TryParseYearMonthDigits(S, Pos, 2, Month) then
-      ThrowTypeError(Format(SErrorInvalidYearMonthStringFor, [AMethod]), SSuggestTemporalISOFormat);
+      ThrowRangeError(Format(SErrorInvalidYearMonthStringFor, [AMethod]), SSuggestTemporalISOFormat);
 
     if Pos <= Length(S) then
-      ThrowTypeError(Format(SErrorInvalidYearMonthStringFor, [AMethod]), SSuggestTemporalISOFormat);
+      ThrowRangeError(Format(SErrorInvalidYearMonthStringFor, [AMethod]), SSuggestTemporalISOFormat);
 
     Result := TGocciaTemporalPlainYearMonthValue.Create(Year, Month);
   end
