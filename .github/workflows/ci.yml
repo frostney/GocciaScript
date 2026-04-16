@@ -310,8 +310,10 @@ jobs:
         run: |
           grep -q '"mode": "interpreted"' test-results-interpreted.json
           grep -q '"totalFiles":' test-results-interpreted.json
+          grep -q '"jobCount":' test-results-interpreted.json
           grep -q '"mode": "bytecode"' test-results-bytecode.json
           grep -q '"totalFiles":' test-results-bytecode.json
+          grep -q '"jobCount":' test-results-bytecode.json
 
       - name: Check TestRunner coverage CLI
         run: |
@@ -654,6 +656,7 @@ jobs:
         run: |
           grep -q '"files": \[' benchmark-${{ matrix.mode }}-results.json
           grep -q '"totalBenchmarks":' benchmark-${{ matrix.mode }}-results.json
+          grep -q '"jobCount":' benchmark-${{ matrix.mode }}-results.json
 
       - name: Cache benchmark baseline
         if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux'

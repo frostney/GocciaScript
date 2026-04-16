@@ -85,6 +85,7 @@ type
     TotalParseNanoseconds: Int64;
     TotalCompileNanoseconds: Int64;
     TotalExecNanoseconds: Int64;
+    JobCount: Integer;
   end;
 
   TTestRunnerApp = class(TGocciaCLIApplication)
@@ -513,6 +514,7 @@ function TTestRunnerApp.RunScriptFromFile(const AFileName: string): TAggregatedT
 var
   FileResult: TTestFileResult;
 begin
+  Result.JobCount := 1;
   Result.TestResult := nil;
   Result.TotalLexNanoseconds := 0;
   Result.TotalParseNanoseconds := 0;
@@ -624,6 +626,7 @@ begin
   AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.Create(TotalDuration));
   AllTestResults.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(TotalAssertions));
 
+  Result.JobCount := 1;
   Result.TestResult := AllTestResults;
 end;
 
@@ -714,7 +717,8 @@ var
   I, J: Integer;
   AllTestResults: TGocciaObjectValue;
   AllFailedTests: TGocciaArrayValue;
-  PassedCount, FailedCount, SkippedCount, TotalRunCount, TotalAssertions, TotalDuration: Double;
+  PassedCount, FailedCount, SkippedCount, TotalRunCount, TotalAssertions: Double;
+  WallClockStart, WallClockDuration: Int64;
   EffectiveTimeoutMs: Integer;
   WatchdogMs: Integer;
 begin
@@ -739,6 +743,8 @@ begin
   // before any worker thread starts, avoiding class-var race conditions.
   EnsureSharedPrototypesInitialized(GlobalBuiltins);
 
+  WallClockStart := GetNanoseconds;
+
   Pool := TGocciaThreadPool.Create(AJobCount);
   try
     Pool.CancelOnError := FExitOnFirst.Present;
@@ -761,6 +767,8 @@ begin
     Pool.Free;
   end;
 
+  WallClockDuration := GetNanoseconds - WallClockStart;
+
   // Aggregate results on the main thread using GC-managed objects
   GC := TGarbageCollector.Instance;
 
@@ -778,7 +786,6 @@ begin
   SkippedCount := 0;
   TotalRunCount := 0;
   TotalAssertions := 0;
-  TotalDuration := 0;
   Result.TotalLexNanoseconds := 0;
   Result.TotalParseNanoseconds := 0;
   Result.TotalCompileNanoseconds := 0;
@@ -797,7 +804,6 @@ begin
     SkippedCount := SkippedCount + WorkerData[I].Skipped;
     TotalRunCount := TotalRunCount + WorkerData[I].TotalRunTests;
     TotalAssertions := TotalAssertions + WorkerData[I].Assertions;
-    TotalDuration := TotalDuration + WorkerData[I].Duration;
 
     Result.TotalLexNanoseconds := Result.TotalLexNanoseconds + WorkerData[I].LexNs;
     Result.TotalParseNanoseconds := Result.TotalParseNanoseconds + WorkerData[I].ParseNs;
@@ -814,7 +820,7 @@ begin
   AllTestResults.AssignProperty('passed', TGocciaNumberLiteralValue.Create(PassedCount));
   AllTestResults.AssignProperty('failed', TGocciaNumberLiteralValue.Create(FailedCount));
   AllTestResults.AssignProperty('skipped', TGocciaNumberLiteralValue.Create(SkippedCount));
-  AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.Create(TotalDuration));
+  AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.Create(WallClockDuration));
   AllTestResults.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(TotalAssertions));
   AllTestResults.AssignProperty('failedTests', AllFailedTests);
 
@@ -824,6 +830,7 @@ begin
     GC.RemoveTempRoot(AllFailedTests);
   end;
 
+  Result.JobCount := AJobCount;
   Result.TestResult := AllTestResults;
 end;
 
@@ -846,6 +853,7 @@ begin
   try
     Lines.Add('{');
     Lines.Add(Format('  "mode": "%s",', [IfThen(IsBytecodeMode, 'bytecode', 'interpreted')]));
+    Lines.Add(Format('  "jobCount": %d,', [AResult.JobCount]));
     Lines.Add(Format('  "totalFiles": %d,', [Round(AResult.TestResult.GetProperty('totalTests').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "totalTests": %d,', [Round(AResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "passed": %d,', [Round(AResult.TestResult.GetProperty('passed').ToNumberLiteral.Value)]));
@@ -894,6 +902,7 @@ var
   RunCount: Double;
   PerTestNanoseconds: Int64;
   IsBytecodeMode: Boolean;
+  IsParallel: Boolean;
   CurrentOutputFile: string;
 begin
   ExitCode := 0;
@@ -910,6 +919,7 @@ begin
   RunCount := StrToFloat(TotalRunTests);
 
   IsBytecodeMode := EngineOptions.Mode.Matches(emBytecode);
+  IsParallel := AResult.JobCount > 1;
 
   if not FNoResults.Present then
   begin
@@ -924,15 +934,46 @@ begin
       Writeln(Format('Test Results Skipped: %s (%2.2f%%)', [TotalSkipped, (StrToFloat(TotalSkipped) / RunCount * 100)]));
       Writeln(Format('Test Results Assertions: %s', [TotalAssertions]));
       Writeln(Format('Test Results Test Duration: %s (%s/test)', [FormatDuration(DurationNanoseconds), FormatDuration(PerTestNanoseconds)]));
-      if IsBytecodeMode then
-        Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
-          [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds),
-           FormatDuration(AResult.TotalCompileNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
-           FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds)]))
+      if IsParallel then
+      begin
+        if IsBytecodeMode then
+        begin
+          Writeln(Format('Test Results Engine Timing (cumulative): Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
+            [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds),
+             FormatDuration(AResult.TotalCompileNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
+             FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds)]));
+          Writeln(Format('Test Results Engine Timing (avg/worker): Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
+            [FormatDuration(AResult.TotalLexNanoseconds div AResult.JobCount),
+             FormatDuration(AResult.TotalParseNanoseconds div AResult.JobCount),
+             FormatDuration(AResult.TotalCompileNanoseconds div AResult.JobCount),
+             FormatDuration(AResult.TotalExecNanoseconds div AResult.JobCount),
+             FormatDuration((AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds) div AResult.JobCount)]));
+        end
+        else
+        begin
+          Writeln(Format('Test Results Engine Timing (cumulative): Lex: %s | Parse: %s | Execute: %s | Total: %s',
+            [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds),
+             FormatDuration(AResult.TotalExecNanoseconds),
+             FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds)]));
+          Writeln(Format('Test Results Engine Timing (avg/worker): Lex: %s | Parse: %s | Execute: %s | Total: %s',
+            [FormatDuration(AResult.TotalLexNanoseconds div AResult.JobCount),
+             FormatDuration(AResult.TotalParseNanoseconds div AResult.JobCount),
+             FormatDuration(AResult.TotalExecNanoseconds div AResult.JobCount),
+             FormatDuration((AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds) div AResult.JobCount)]));
+        end;
+      end
       else
-        Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Execute: %s | Total: %s',
-          [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
-           FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds)]));
+      begin
+        if IsBytecodeMode then
+          Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
+            [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds),
+             FormatDuration(AResult.TotalCompileNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
+             FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds)]))
+        else
+          Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Execute: %s | Total: %s',
+            [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
+             FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds)]));
+      end;
       Writeln(Format('Test Results Failed Tests: %s', [TestResult.GetProperty('failedTests').ToStringLiteral.Value]));
     end;
   end;
