@@ -168,6 +168,7 @@ uses
   Goccia.Constants.TypeNames,
   Goccia.Profiler,
   Goccia.TextFiles,
+  Goccia.Threading,
   Goccia.Timeout;
 
 { TGocciaValue }
@@ -233,7 +234,10 @@ end;
 class function TGocciaNullLiteralValue.NullValue: TGocciaNullLiteralValue;
 begin
   if not Assigned(FNullValue) then
+  begin
+    Assert(not GIsWorkerThread, 'NullValue: must be initialised on main thread');
     FNullValue := TGocciaNullLiteralValue.Create;
+  end;
   Result := FNullValue;
 end;
 
@@ -284,7 +288,10 @@ end;
 class function TGocciaUndefinedLiteralValue.UndefinedValue: TGocciaUndefinedLiteralValue;
 begin
   if not Assigned(FUndefinedValue) then
+  begin
+    Assert(not GIsWorkerThread, 'UndefinedValue: must be initialised on main thread');
     FUndefinedValue := TGocciaUndefinedLiteralValue.Create;
+  end;
   Result := FUndefinedValue;
 end;
 
@@ -330,14 +337,20 @@ end;
 class function TGocciaBooleanLiteralValue.TrueValue: TGocciaBooleanLiteralValue;
 begin
   if not Assigned(FTrueValue) then
+  begin
+    Assert(not GIsWorkerThread, 'TrueValue: must be initialised on main thread');
     FTrueValue := TGocciaBooleanLiteralValue.Create(True);
+  end;
   Result := FTrueValue;
 end;
 
 class function TGocciaBooleanLiteralValue.FalseValue: TGocciaBooleanLiteralValue;
 begin
   if not Assigned(FFalseValue) then
+  begin
+    Assert(not GIsWorkerThread, 'FalseValue: must be initialised on main thread');
     FFalseValue := TGocciaBooleanLiteralValue.Create(False);
+  end;
   Result := FFalseValue;
 end;
 
@@ -425,7 +438,10 @@ end;
 class function TGocciaNumberLiteralValue.NaNValue: TGocciaNumberLiteralValue;
 begin
   if not Assigned(FNanValue) then
+  begin
+    Assert(not GIsWorkerThread, 'NaNValue: must be initialised on main thread');
     FNaNValue := TGocciaNumberLiteralValue.Create(Math.NaN);
+  end;
   Result := FNaNValue;
 end;
 
@@ -435,6 +451,7 @@ var
 begin
   if not Assigned(FNegativeZeroValue) then
   begin
+    Assert(not GIsWorkerThread, 'NegativeZeroValue: must be initialised on main thread');
     NZ := ZERO_VALUE;
     NZ := NZ * (-1.0);
     FNegativeZeroValue := TGocciaNumberLiteralValue.Create(NZ);
@@ -445,28 +462,40 @@ end;
 class function TGocciaNumberLiteralValue.InfinityValue: TGocciaNumberLiteralValue;
 begin
   if not Assigned(FInfinityValue) then
+  begin
+    Assert(not GIsWorkerThread, 'InfinityValue: must be initialised on main thread');
     FInfinityValue := TGocciaNumberLiteralValue.Create(Math.Infinity);
+  end;
   Result := FInfinityValue;
 end;
 
 class function TGocciaNumberLiteralValue.NegativeInfinityValue: TGocciaNumberLiteralValue;
 begin
   if not Assigned(FNegativeInfinityValue) then
+  begin
+    Assert(not GIsWorkerThread, 'NegativeInfinityValue: must be initialised on main thread');
     FNegativeInfinityValue := TGocciaNumberLiteralValue.Create(Math.NegInfinity);
+  end;
   Result := FNegativeInfinityValue;
 end;
 
 class function TGocciaNumberLiteralValue.ZeroValue: TGocciaNumberLiteralValue;
 begin
   if not Assigned(FZeroValue) then
+  begin
+    Assert(not GIsWorkerThread, 'ZeroValue: must be initialised on main thread');
     FZeroValue := TGocciaNumberLiteralValue.Create(ZERO_VALUE);
+  end;
   Result := FZeroValue;
 end;
 
 class function TGocciaNumberLiteralValue.OneValue: TGocciaNumberLiteralValue;
 begin
   if not Assigned(FOneValue) then
+  begin
+    Assert(not GIsWorkerThread, 'OneValue: must be initialised on main thread');
     FOneValue := TGocciaNumberLiteralValue.Create(ONE_VALUE);
+  end;
   Result := FOneValue;
 end;
 

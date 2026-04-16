@@ -51,7 +51,7 @@ const
   SECONDS_PER_MINUTE = 60;
   MAX_SYMLINK_LENGTH = 1024;
 
-var
+threadvar
   CachedTimeZones: array of TTimeZoneData;
   CachedTimeZoneCount: Integer;
 

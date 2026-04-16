@@ -108,9 +108,12 @@ type
 
     { Execute AFiles across worker threads. Blocks until all complete.
       AWorkerProc is called on each worker thread for each file.
-      AData is an opaque pointer passed through to each worker call. }
+      AData is an opaque pointer passed through to each worker call.
+      AWatchdogMs is the maximum total time (in milliseconds) to wait
+      for all workers to finish.  0 means no watchdog (wait forever). }
     procedure RunAll(const AFiles: TStringList;
-      AWorkerProc: TGocciaWorkerProc; AData: Pointer = nil);
+      AWorkerProc: TGocciaWorkerProc; AData: Pointer = nil;
+      AWatchdogMs: Integer = 0);
 
     { Signal workers to skip remaining files. }
     procedure Cancel;
@@ -144,9 +147,14 @@ uses
   Math,
   SysUtils,
 
+  TimingUtils,
+
+  Goccia.Builtins.DisposableStack,
+  Goccia.Builtins.Semver,
   Goccia.CallStack,
   Goccia.Coverage,
   Goccia.GarbageCollector,
+  Goccia.ImportMeta,
   Goccia.MicrotaskQueue,
   Goccia.Values.Primitives;
 
@@ -177,6 +185,9 @@ procedure ShutdownThreadRuntime;
 begin
   // Coverage tracker is NOT shut down here — the main thread reads it
   // after workers complete, then merges into the main tracker.
+  ClearImportMetaCache;
+  ClearDisposableStackSlotMap;
+  ClearSemverHosts;
   TGocciaMicrotaskQueue.Shutdown;
   TGocciaCallStack.Shutdown;
   TGarbageCollector.Shutdown;
@@ -312,11 +323,13 @@ begin
 end;
 
 procedure TGocciaThreadPool.RunAll(const AFiles: TStringList;
-  AWorkerProc: TGocciaWorkerProc; AData: Pointer);
+  AWorkerProc: TGocciaWorkerProc; AData: Pointer; AWatchdogMs: Integer);
 var
   AllItems: TGocciaWorkItemArray;
   Queue: TGocciaWorkQueue;
   FileCount, I, J: Integer;
+  WatchdogStart: Int64;
+  AllFinished: Boolean;
 begin
   FCancelled := False;
   FileCount := AFiles.Count;
@@ -349,10 +362,47 @@ begin
       FWorkers[I].Start;
     end;
   finally
-    // Wait for all started workers before freeing the queue
-    for I := 0 to FWorkerCount - 1 do
-      if Assigned(FWorkers[I]) then
-        FWorkers[I].WaitFor;
+    if AWatchdogMs > 0 then
+    begin
+      // Poll workers with a total watchdog timeout. If any worker hangs
+      // beyond the per-file timeout, this prevents the main thread from
+      // blocking indefinitely on WaitFor.
+      WatchdogStart := GetNanoseconds;
+      repeat
+        AllFinished := True;
+        for I := 0 to FWorkerCount - 1 do
+          if Assigned(FWorkers[I]) and not FWorkers[I].Finished then
+          begin
+            AllFinished := False;
+            Break;
+          end;
+        if not AllFinished then
+          Sleep(100);
+      until AllFinished or
+        (((GetNanoseconds - WatchdogStart) div 1000000) >= AWatchdogMs);
+
+      if not AllFinished then
+      begin
+        WriteLn(StdErr, 'Warning: worker threads did not complete ',
+          'within watchdog timeout (', AWatchdogMs, 'ms). ',
+          'Cancelling remaining work.');
+        FCancelled := True;
+        // Give workers a brief grace period to notice the cancellation
+        // and drain, then collect thread state.
+        for I := 0 to FWorkerCount - 1 do
+          if Assigned(FWorkers[I]) then
+            FWorkers[I].WaitFor;
+      end
+      else
+        for I := 0 to FWorkerCount - 1 do
+          if Assigned(FWorkers[I]) then
+            FWorkers[I].WaitFor;
+    end
+    else
+      // No watchdog — wait indefinitely (original behaviour).
+      for I := 0 to FWorkerCount - 1 do
+        if Assigned(FWorkers[I]) then
+          FWorkers[I].WaitFor;
     Queue.Free;
   end;
 
