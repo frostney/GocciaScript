@@ -514,6 +514,7 @@ function TTestRunnerApp.RunScriptFromFile(const AFileName: string): TAggregatedT
 var
   FileResult: TTestFileResult;
 begin
+  Result.JobCount := 1;
   Result.TestResult := nil;
   Result.TotalLexNanoseconds := 0;
   Result.TotalParseNanoseconds := 0;

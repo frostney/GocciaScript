@@ -880,6 +880,10 @@ jobs:
               const bSkipped = testBytecode ? testBytecode.skipped : 0;
               const iDur = testInterp ? fmtDur(testInterp.durationNanoseconds) : '—';
               const bDur = testBytecode ? fmtDur(testBytecode.durationNanoseconds) : '—';
+              const iJobs = testInterp ? (testInterp.jobCount || 1) : 1;
+              const bJobs = testBytecode ? (testBytecode.jobCount || 1) : 1;
+              const isParallel = iJobs > 1 || bJobs > 1;
+              const timingLabel = isParallel ? ' (cumulative)' : '';
               const iLex = testInterp ? fmtDur(testInterp.lexTimeNanoseconds) : '—';
               const bLex = testBytecode ? fmtDur(testBytecode.lexTimeNanoseconds) : '—';
               const iParse = testInterp ? fmtDur(testInterp.parseTimeNanoseconds) : '—';
@@ -896,12 +900,31 @@ jobs:
                 body += `| Tests | Failed | ${iFailed > 0 ? `${iFailed} ❌` : '0'} | ${bFailed > 0 ? `${bFailed} ❌` : '0'} |\n`;
               if (iSkipped > 0 || bSkipped > 0)
                 body += `| Tests | Skipped | ${iSkipped} | ${bSkipped} |\n`;
+              if (isParallel)
+                body += `| Tests | Workers | ${iJobs} | ${bJobs} |\n`;
               body += `| Tests | Test Duration | ${iDur} | ${bDur} |\n`;
-              body += `| Tests | Lex | ${iLex} | ${bLex} |\n`;
-              body += `| Tests | Parse | ${iParse} | ${bParse} |\n`;
-              body += `| Tests | Compile | — | ${bCompile} |\n`;
-              body += `| Tests | Execute | ${iExec} | ${bExec} |\n`;
-              body += `| Tests | Engine Total | ${iEngine} | ${bEngine} |\n`;
+              body += `| Tests | Lex${timingLabel} | ${iLex} | ${bLex} |\n`;
+              body += `| Tests | Parse${timingLabel} | ${iParse} | ${bParse} |\n`;
+              body += `| Tests | Compile${timingLabel} | — | ${bCompile} |\n`;
+              body += `| Tests | Execute${timingLabel} | ${iExec} | ${bExec} |\n`;
+              body += `| Tests | Engine Total${timingLabel} | ${iEngine} | ${bEngine} |\n`;
+              if (isParallel) {
+                const fmtAvg = (ns, jobs) => jobs > 1 ? fmtDur(ns / jobs) : '—';
+                const iAvgLex = testInterp && iJobs > 1 ? fmtAvg(testInterp.lexTimeNanoseconds, iJobs) : '—';
+                const bAvgLex = testBytecode && bJobs > 1 ? fmtAvg(testBytecode.lexTimeNanoseconds, bJobs) : '—';
+                const iAvgParse = testInterp && iJobs > 1 ? fmtAvg(testInterp.parseTimeNanoseconds, iJobs) : '—';
+                const bAvgParse = testBytecode && bJobs > 1 ? fmtAvg(testBytecode.parseTimeNanoseconds, bJobs) : '—';
+                const bAvgCompile = testBytecode && bJobs > 1 ? fmtAvg(testBytecode.compileTimeNanoseconds, bJobs) : '—';
+                const iAvgExec = testInterp && iJobs > 1 ? fmtAvg(testInterp.executeTimeNanoseconds, iJobs) : '—';
+                const bAvgExec = testBytecode && bJobs > 1 ? fmtAvg(testBytecode.executeTimeNanoseconds, bJobs) : '—';
+                const iAvgEngine = testInterp && iJobs > 1 ? fmtAvg(testInterp.totalEngineNanoseconds, iJobs) : '—';
+                const bAvgEngine = testBytecode && bJobs > 1 ? fmtAvg(testBytecode.totalEngineNanoseconds, bJobs) : '—';
+                body += `| Tests | Lex (avg/worker) | ${iAvgLex} | ${bAvgLex} |\n`;
+                body += `| Tests | Parse (avg/worker) | ${iAvgParse} | ${bAvgParse} |\n`;
+                body += `| Tests | Compile (avg/worker) | — | ${bAvgCompile} |\n`;
+                body += `| Tests | Execute (avg/worker) | ${iAvgExec} | ${bAvgExec} |\n`;
+                body += `| Tests | Engine Total (avg/worker) | ${iAvgEngine} | ${bAvgEngine} |\n`;
+              }
             }
 
             if (benchInterp || benchBytecode) {
