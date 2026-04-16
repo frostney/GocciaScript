@@ -11,6 +11,7 @@ const
   SEMVER_NAMESPACE_PROPERTY = 'semver';
 
 function CreateSemverNamespace: TGocciaObjectValue;
+procedure ClearSemverHosts;
 
 implementation
 
@@ -188,7 +189,7 @@ type
     constructor Create;
   end;
 
-var
+threadvar
   GSemverHosts: TSemverHostList;
 
 const
@@ -1313,6 +1314,8 @@ var
   ReleaseTypesArray: TGocciaSemverStringArray;
 begin
   Host := TGocciaSemverNamespaceHost.Create;
+  if not Assigned(GSemverHosts) then
+    GSemverHosts := TSemverHostList.Create(True);
   GSemverHosts.Add(Host);
 
   Host.FSemverPrototype := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
@@ -1479,10 +1482,15 @@ begin
   Result := NamespaceObject;
 end;
 
+procedure ClearSemverHosts;
+begin
+  FreeAndNil(GSemverHosts);
+end;
+
 initialization
   GSemverHosts := TSemverHostList.Create(True);
 
 finalization
-  GSemverHosts.Free;
+  ClearSemverHosts;
 
 end.

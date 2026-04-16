@@ -45,6 +45,13 @@ uses
 
   FileUtils in 'units/FileUtils.pas';
 
+const
+  { Default per-file execution timeout in milliseconds. Applied when the
+    user does not pass --timeout explicitly. Prevents infinite loops from
+    hanging the process. Override with --timeout=N or disable with
+    --timeout=0. }
+  DEFAULT_TIMEOUT_MS = 30000;  // 30 seconds
+
 type
   { Plain-data record for extracting test results from GC-managed objects.
     Used by the parallel path to pass results across thread boundaries
@@ -299,7 +306,7 @@ begin
           // guarded by GIsWorkerThread at each call site.
         end;
 
-        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS));
         try
           EngineResult := Engine.Execute;
         finally
@@ -435,7 +442,7 @@ begin
           Lexer.Free;
         end;
 
-        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS));
         try
           try
             ResultValue := Backend.RunModule(Module);
@@ -708,6 +715,8 @@ var
   AllTestResults: TGocciaObjectValue;
   AllFailedTests: TGocciaArrayValue;
   PassedCount, FailedCount, SkippedCount, TotalRunCount, TotalAssertions, TotalDuration: Double;
+  EffectiveTimeoutMs: Integer;
+  WatchdogMs: Integer;
 begin
   SetLength(WorkerData, AFiles.Count);
   for I := 0 to AFiles.Count - 1 do
@@ -734,7 +743,18 @@ begin
   try
     Pool.CancelOnError := FExitOnFirst.Present;
     Pool.EnableCoverage := CoverageOptions.Enabled.Present;
-    Pool.RunAll(AFiles, TestWorkerProc, @WorkerData[0]);
+    // Watchdog = 2x the per-file timeout × ceiling(files/workers) + grace.
+    // This gives workers enough time to hit their per-file timeout before
+    // the watchdog fires, while still preventing indefinite hangs.
+    // When the effective timeout is 0 (user passed --timeout=0), disable
+    // the watchdog entirely so the no-timeout contract is honoured.
+    EffectiveTimeoutMs := EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS);
+    if EffectiveTimeoutMs > 0 then
+      WatchdogMs := 2 * EffectiveTimeoutMs *
+        ((AFiles.Count + AJobCount - 1) div AJobCount) + 10000
+    else
+      WatchdogMs := 0;
+    Pool.RunAll(AFiles, TestWorkerProc, @WorkerData[0], WatchdogMs);
     if Pool.EnableCoverage and Assigned(TGocciaCoverageTracker.Instance) then
       Pool.MergeCoverageInto(TGocciaCoverageTracker.Instance);
   finally

@@ -41,6 +41,8 @@ type
       const AThrowError: TGocciaThrowErrorCallback);
   end;
 
+procedure ClearDisposableStackSlotMap;
+
 implementation
 
 uses
@@ -72,7 +74,7 @@ type
   end;
   PDisposableStackSlot = ^TDisposableStackSlot;
 
-var
+threadvar
   GSlotMap: THashMap<TGocciaObjectValue, PDisposableStackSlot>;
 
 function EnsureSlotMap: THashMap<TGocciaObjectValue, PDisposableStackSlot>;
@@ -376,13 +378,25 @@ begin
   Result := CreateDisposableStackInstance(Self, CONSTRUCTOR_ASYNC_DISPOSABLE_STACK, True);
 end;
 
-initialization
-
-finalization
+procedure ClearDisposableStackSlotMap;
+var
+  Pair: THashMap<TGocciaObjectValue, PDisposableStackSlot>.TKeyValuePair;
+begin
   if Assigned(GSlotMap) then
   begin
+    for Pair in GSlotMap do
+    begin
+      Pair.Value^.Tracker.Free;
+      Dispose(Pair.Value);
+    end;
     GSlotMap.Free;
     GSlotMap := nil;
   end;
+end;
+
+initialization
+
+finalization
+  ClearDisposableStackSlotMap;
 
 end.

@@ -80,6 +80,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
+  Goccia.Threading,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue;
@@ -154,6 +155,7 @@ class function TGocciaSymbolValue.WellKnownIterator: TGocciaSymbolValue;
 begin
   if not Assigned(FWellKnownIterator) then
   begin
+    Assert(not GIsWorkerThread, 'WellKnownIterator: must be initialised on main thread');
     FWellKnownIterator := TGocciaSymbolValue.Create('Symbol.iterator');
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.PinObject(FWellKnownIterator);
@@ -165,6 +167,7 @@ class function TGocciaSymbolValue.WellKnownMatch: TGocciaSymbolValue;
 begin
   if not Assigned(FWellKnownMatch) then
   begin
+    Assert(not GIsWorkerThread, 'WellKnownMatch: must be initialised on main thread');
     FWellKnownMatch := TGocciaSymbolValue.Create('Symbol.match');
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.PinObject(FWellKnownMatch);
@@ -176,6 +179,7 @@ class function TGocciaSymbolValue.WellKnownMatchAll: TGocciaSymbolValue;
 begin
   if not Assigned(FWellKnownMatchAll) then
   begin
+    Assert(not GIsWorkerThread, 'WellKnownMatchAll: must be initialised on main thread');
     FWellKnownMatchAll := TGocciaSymbolValue.Create('Symbol.matchAll');
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.PinObject(FWellKnownMatchAll);
@@ -187,6 +191,7 @@ class function TGocciaSymbolValue.WellKnownReplace: TGocciaSymbolValue;
 begin
   if not Assigned(FWellKnownReplace) then
   begin
+    Assert(not GIsWorkerThread, 'WellKnownReplace: must be initialised on main thread');
     FWellKnownReplace := TGocciaSymbolValue.Create('Symbol.replace');
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.PinObject(FWellKnownReplace);
@@ -198,6 +203,7 @@ class function TGocciaSymbolValue.WellKnownSearch: TGocciaSymbolValue;
 begin
   if not Assigned(FWellKnownSearch) then
   begin
+    Assert(not GIsWorkerThread, 'WellKnownSearch: must be initialised on main thread');
     FWellKnownSearch := TGocciaSymbolValue.Create('Symbol.search');
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.PinObject(FWellKnownSearch);
@@ -209,6 +215,7 @@ class function TGocciaSymbolValue.WellKnownSplit: TGocciaSymbolValue;
 begin
   if not Assigned(FWellKnownSplit) then
   begin
+    Assert(not GIsWorkerThread, 'WellKnownSplit: must be initialised on main thread');
     FWellKnownSplit := TGocciaSymbolValue.Create('Symbol.split');
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.PinObject(FWellKnownSplit);
@@ -220,6 +227,7 @@ class function TGocciaSymbolValue.WellKnownSpecies: TGocciaSymbolValue;
 begin
   if not Assigned(FWellKnownSpecies) then
   begin
+    Assert(not GIsWorkerThread, 'WellKnownSpecies: must be initialised on main thread');
     FWellKnownSpecies := TGocciaSymbolValue.Create('Symbol.species');
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.PinObject(FWellKnownSpecies);
@@ -231,6 +239,7 @@ class function TGocciaSymbolValue.WellKnownHasInstance: TGocciaSymbolValue;
 begin
   if not Assigned(FWellKnownHasInstance) then
   begin
+    Assert(not GIsWorkerThread, 'WellKnownHasInstance: must be initialised on main thread');
     FWellKnownHasInstance := TGocciaSymbolValue.Create('Symbol.hasInstance');
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.PinObject(FWellKnownHasInstance);
@@ -242,6 +251,7 @@ class function TGocciaSymbolValue.WellKnownToPrimitive: TGocciaSymbolValue;
 begin
   if not Assigned(FWellKnownToPrimitive) then
   begin
+    Assert(not GIsWorkerThread, 'WellKnownToPrimitive: must be initialised on main thread');
     FWellKnownToPrimitive := TGocciaSymbolValue.Create('Symbol.toPrimitive');
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.PinObject(FWellKnownToPrimitive);
@@ -253,6 +263,7 @@ class function TGocciaSymbolValue.WellKnownToStringTag: TGocciaSymbolValue;
 begin
   if not Assigned(FWellKnownToStringTag) then
   begin
+    Assert(not GIsWorkerThread, 'WellKnownToStringTag: must be initialised on main thread');
     FWellKnownToStringTag := TGocciaSymbolValue.Create('Symbol.toStringTag');
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.PinObject(FWellKnownToStringTag);
@@ -264,6 +275,7 @@ class function TGocciaSymbolValue.WellKnownIsConcatSpreadable: TGocciaSymbolValu
 begin
   if not Assigned(FWellKnownIsConcatSpreadable) then
   begin
+    Assert(not GIsWorkerThread, 'WellKnownIsConcatSpreadable: must be initialised on main thread');
     FWellKnownIsConcatSpreadable := TGocciaSymbolValue.Create('Symbol.isConcatSpreadable');
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.PinObject(FWellKnownIsConcatSpreadable);
@@ -276,6 +288,7 @@ class function TGocciaSymbolValue.WellKnownAsyncIterator: TGocciaSymbolValue;
 begin
   if not Assigned(FWellKnownAsyncIterator) then
   begin
+    Assert(not GIsWorkerThread, 'WellKnownAsyncIterator: must be initialised on main thread');
     FWellKnownAsyncIterator := TGocciaSymbolValue.Create('Symbol.asyncIterator');
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.PinObject(FWellKnownAsyncIterator);
@@ -288,6 +301,7 @@ class function TGocciaSymbolValue.WellKnownMetadata: TGocciaSymbolValue;
 begin
   if not Assigned(FWellKnownMetadata) then
   begin
+    Assert(not GIsWorkerThread, 'WellKnownMetadata: must be initialised on main thread');
     FWellKnownMetadata := TGocciaSymbolValue.Create('Symbol.metadata');
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.PinObject(FWellKnownMetadata);
@@ -300,6 +314,7 @@ class function TGocciaSymbolValue.WellKnownDispose: TGocciaSymbolValue;
 begin
   if not Assigned(FWellKnownDispose) then
   begin
+    Assert(not GIsWorkerThread, 'WellKnownDispose: must be initialised on main thread');
     FWellKnownDispose := TGocciaSymbolValue.Create('Symbol.dispose');
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.PinObject(FWellKnownDispose);
@@ -312,6 +327,7 @@ class function TGocciaSymbolValue.WellKnownAsyncDispose: TGocciaSymbolValue;
 begin
   if not Assigned(FWellKnownAsyncDispose) then
   begin
+    Assert(not GIsWorkerThread, 'WellKnownAsyncDispose: must be initialised on main thread');
     FWellKnownAsyncDispose := TGocciaSymbolValue.Create('Symbol.asyncDispose');
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.PinObject(FWellKnownAsyncDispose);

@@ -43,7 +43,7 @@ const
   PINNED_GROWTH_MULTIPLIER = 2;
   PINNED_INITIAL_CAPACITY = 8;
 
-var
+threadvar
   ImportMetaCache: TOrderedStringMap<TGocciaObjectValue>;
   PinnedObjects: array of TGCManagedObject;
   PinnedCount: Integer;

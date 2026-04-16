@@ -73,10 +73,10 @@ const
 
 { Decoding lookup tables initialized once }
 
-var
+threadvar
   Base64StandardDecode: TBase64DecodeTable;
   Base64UrlDecode: TBase64DecodeTable;
-  TablesInitialized: Boolean = False;
+  TablesInitialized: Boolean;
 
 procedure InitDecodeTables;
 var

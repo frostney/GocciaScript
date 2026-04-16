@@ -108,9 +108,12 @@ type
 
     { Execute AFiles across worker threads. Blocks until all complete.
       AWorkerProc is called on each worker thread for each file.
-      AData is an opaque pointer passed through to each worker call. }
+      AData is an opaque pointer passed through to each worker call.
+      AWatchdogMs is the maximum total time (in milliseconds) to wait
+      for all workers to finish.  0 means no watchdog (wait forever). }
     procedure RunAll(const AFiles: TStringList;
-      AWorkerProc: TGocciaWorkerProc; AData: Pointer = nil);
+      AWorkerProc: TGocciaWorkerProc; AData: Pointer = nil;
+      AWatchdogMs: Integer = 0);
 
     { Signal workers to skip remaining files. }
     procedure Cancel;
@@ -144,10 +147,16 @@ uses
   Math,
   SysUtils,
 
+  TimingUtils,
+
+  Goccia.Builtins.DisposableStack,
+  Goccia.Builtins.Semver,
   Goccia.CallStack,
   Goccia.Coverage,
   Goccia.GarbageCollector,
+  Goccia.ImportMeta,
   Goccia.MicrotaskQueue,
+  Goccia.Temporal.TimeZone,
   Goccia.Values.Primitives;
 
 { Thread runtime lifecycle }
@@ -177,6 +186,10 @@ procedure ShutdownThreadRuntime;
 begin
   // Coverage tracker is NOT shut down here — the main thread reads it
   // after workers complete, then merges into the main tracker.
+  ClearImportMetaCache;
+  ClearDisposableStackSlotMap;
+  ClearSemverHosts;
+  ClearTimeZoneCache;
   TGocciaMicrotaskQueue.Shutdown;
   TGocciaCallStack.Shutdown;
   TGarbageCollector.Shutdown;
@@ -312,13 +325,16 @@ begin
 end;
 
 procedure TGocciaThreadPool.RunAll(const AFiles: TStringList;
-  AWorkerProc: TGocciaWorkerProc; AData: Pointer);
+  AWorkerProc: TGocciaWorkerProc; AData: Pointer; AWatchdogMs: Integer);
 var
   AllItems: TGocciaWorkItemArray;
   Queue: TGocciaWorkQueue;
   FileCount, I, J: Integer;
+  WatchdogStart: Int64;
+  AllFinished, LiveWorkersRemain: Boolean;
 begin
   FCancelled := False;
+  LiveWorkersRemain := False;
   FileCount := AFiles.Count;
   if FileCount = 0 then
   begin
@@ -349,11 +365,73 @@ begin
       FWorkers[I].Start;
     end;
   finally
-    // Wait for all started workers before freeing the queue
-    for I := 0 to FWorkerCount - 1 do
-      if Assigned(FWorkers[I]) then
-        FWorkers[I].WaitFor;
-    Queue.Free;
+    if AWatchdogMs > 0 then
+    begin
+      // Poll workers with a total watchdog timeout. If any worker hangs
+      // beyond the per-file timeout, this prevents the main thread from
+      // blocking indefinitely on WaitFor.
+      WatchdogStart := GetNanoseconds;
+      repeat
+        AllFinished := True;
+        for I := 0 to FWorkerCount - 1 do
+          if Assigned(FWorkers[I]) and not FWorkers[I].Finished then
+          begin
+            AllFinished := False;
+            Break;
+          end;
+        if not AllFinished then
+          Sleep(100);
+      until AllFinished or
+        (((GetNanoseconds - WatchdogStart) div 1000000) >= AWatchdogMs);
+
+      if not AllFinished then
+      begin
+        WriteLn(StdErr, 'Warning: worker threads did not complete ',
+          'within watchdog timeout (', AWatchdogMs, 'ms). ',
+          'Cancelling remaining work.');
+        FCancelled := True;
+        // Bounded grace period: poll for 5 seconds to let workers
+        // notice the cancellation flag.
+        WatchdogStart := GetNanoseconds;
+        repeat
+          AllFinished := True;
+          for I := 0 to FWorkerCount - 1 do
+            if Assigned(FWorkers[I]) and not FWorkers[I].Finished then
+            begin
+              AllFinished := False;
+              Break;
+            end;
+          if not AllFinished then
+            Sleep(100);
+        until AllFinished or
+          (((GetNanoseconds - WatchdogStart) div 1000000) >= 5000);
+        // Collect only the workers that actually finished.
+        for I := 0 to FWorkerCount - 1 do
+          if Assigned(FWorkers[I]) and FWorkers[I].Finished then
+            FWorkers[I].WaitFor;
+        LiveWorkersRemain := not AllFinished;
+        if LiveWorkersRemain then
+          WriteLn(StdErr, 'Warning: some workers did not finish ',
+            'within grace period. Leaking queue and workers to ',
+            'avoid use-after-free; they will be reclaimed on ',
+            'process exit.');
+      end
+      else
+        for I := 0 to FWorkerCount - 1 do
+          if Assigned(FWorkers[I]) then
+            FWorkers[I].WaitFor;
+    end
+    else
+      // No watchdog — wait indefinitely (original behaviour).
+      for I := 0 to FWorkerCount - 1 do
+        if Assigned(FWorkers[I]) then
+          FWorkers[I].WaitFor;
+
+    // Only free the queue when all workers have exited. Live workers
+    // still hold a reference to it via FQueue, so freeing would be
+    // a use-after-free.
+    if not LiveWorkersRemain then
+      Queue.Free;
   end;
 
   // Collect results in original file order
@@ -371,6 +449,11 @@ begin
 
   for I := 0 to FWorkerCount - 1 do
   begin
+    // Skip workers that are still running — accessing their state
+    // would be a data race.
+    if not Assigned(FWorkers[I]) then Continue;
+    if LiveWorkersRemain and (not FWorkers[I].Finished) then Continue;
+
     // Check for unhandled exceptions in the worker thread
     if Assigned(FWorkers[I].FatalException) then
       WriteLn(StdErr, 'Worker thread ', I, ' fatal: ',
