@@ -78,7 +78,7 @@ begin
   begin
     // Parse as ISO date-time and convert to epoch
     if not TryParseISODateTime(TGocciaStringLiteralValue(AValue).Value, DateRec, TimeRec) then
-      ThrowTypeError(Format(SErrorTemporalInvalidISOStringFor, ['instant', AMethod]), SSuggestTemporalISOFormat);
+      ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['instant', AMethod]), SSuggestTemporalISOFormat);
     EpochMs := DateToEpochDays(DateRec.Year, DateRec.Month, DateRec.Day) * Int64(86400000) +
                Int64(TimeRec.Hour) * 3600000 + Int64(TimeRec.Minute) * 60000 +
                Int64(TimeRec.Second) * 1000 + TimeRec.Millisecond;
@@ -206,7 +206,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODuration(TGocciaStringLiteralValue(Arg).Value, DurRec) then
-      ThrowTypeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
+      ThrowRangeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
     Dur := TGocciaTemporalDurationValue.Create(0, 0, 0, DurRec.Days,
       DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
       DurRec.Milliseconds, DurRec.Microseconds, DurRec.Nanoseconds);
@@ -250,7 +250,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODuration(TGocciaStringLiteralValue(Arg).Value, DurRec) then
-      ThrowTypeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
+      ThrowRangeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
     Dur := TGocciaTemporalDurationValue.Create(0, 0, 0, DurRec.Days,
       DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
       DurRec.Milliseconds, DurRec.Microseconds, DurRec.Nanoseconds);

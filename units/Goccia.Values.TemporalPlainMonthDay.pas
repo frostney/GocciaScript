@@ -88,11 +88,11 @@ begin
     S := TGocciaStringLiteralValue(AValue).Value;
     DashPos := Pos('-', S);
     if (DashPos < 2) or (DashPos >= Length(S)) then
-      ThrowTypeError(Format(SErrorInvalidMonthDayStringFor, [AMethod]), SSuggestTemporalISOFormat);
+      ThrowRangeError(Format(SErrorInvalidMonthDayStringFor, [AMethod]), SSuggestTemporalISOFormat);
     if not TryStrToInt(Copy(S, 1, DashPos - 1), MonthPart) then
-      ThrowTypeError(Format(SErrorInvalidMonthDayStringFor, [AMethod]), SSuggestTemporalISOFormat);
+      ThrowRangeError(Format(SErrorInvalidMonthDayStringFor, [AMethod]), SSuggestTemporalISOFormat);
     if not TryStrToInt(Copy(S, DashPos + 1, Length(S) - DashPos), DayPart) then
-      ThrowTypeError(Format(SErrorInvalidMonthDayStringFor, [AMethod]), SSuggestTemporalISOFormat);
+      ThrowRangeError(Format(SErrorInvalidMonthDayStringFor, [AMethod]), SSuggestTemporalISOFormat);
     Result := TGocciaTemporalPlainMonthDayValue.Create(MonthPart, DayPart);
   end
   else if AValue is TGocciaObjectValue then

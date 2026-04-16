@@ -142,7 +142,7 @@ begin
   else if AValue is TGocciaStringLiteralValue then
   begin
     if not TryParseISODateTime(TGocciaStringLiteralValue(AValue).Value, DateRec, TimeRec) then
-      ThrowTypeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time', AMethod]), SSuggestTemporalISOFormat);
+      ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time', AMethod]), SSuggestTemporalISOFormat);
     Result := TGocciaTemporalPlainDateTimeValue.Create(
       DateRec.Year, DateRec.Month, DateRec.Day,
       TimeRec.Hour, TimeRec.Minute, TimeRec.Second,
@@ -439,7 +439,7 @@ begin
     else if Arg is TGocciaStringLiteralValue then
     begin
       if not TryParseISOTime(TGocciaStringLiteralValue(Arg).Value, TimeRec) then
-        ThrowTypeError(SErrorInvalidTimeString, SSuggestTemporalISOFormat);
+        ThrowRangeError(SErrorInvalidTimeString, SSuggestTemporalISOFormat);
       H := TimeRec.Hour; Mi := TimeRec.Minute; S := TimeRec.Second;
       Ms := TimeRec.Millisecond; Us := TimeRec.Microsecond; Ns := TimeRec.Nanosecond;
     end
@@ -472,7 +472,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODuration(TGocciaStringLiteralValue(Arg).Value, DurRec) then
-      ThrowTypeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
+      ThrowRangeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
     Dur := TGocciaTemporalDurationValue.Create(
       DurRec.Years, DurRec.Months, DurRec.Weeks, DurRec.Days,
       DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
@@ -541,7 +541,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODuration(TGocciaStringLiteralValue(Arg).Value, DurRec) then
-      ThrowTypeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
+      ThrowRangeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
     Dur := TGocciaTemporalDurationValue.Create(
       DurRec.Years, DurRec.Months, DurRec.Weeks, DurRec.Days,
       DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
