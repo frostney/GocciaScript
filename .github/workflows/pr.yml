@@ -932,8 +932,13 @@ jobs:
               const bBenchCount = benchBytecode ? benchBytecode.files.reduce((a, f) => a + f.benchmarks.filter(b => !b.error).length, 0) : '—';
               const iBenchDur = benchInterp ? fmtDur(benchInterp.totalDurationNanoseconds) : '—';
               const bBenchDur = benchBytecode ? fmtDur(benchBytecode.totalDurationNanoseconds) : '—';
+              const iBenchJobs = benchInterp ? (benchInterp.jobCount || 1) : 1;
+              const bBenchJobs = benchBytecode ? (benchBytecode.jobCount || 1) : 1;
+              const benchParallel = iBenchJobs > 1 || bBenchJobs > 1;
 
               body += `| Benchmarks | Total | ${iBenchCount} | ${bBenchCount} |\n`;
+              if (benchParallel)
+                body += `| Benchmarks | Workers | ${iBenchJobs} | ${bBenchJobs} |\n`;
               body += `| Benchmarks | Duration | ${iBenchDur} | ${bBenchDur} |\n`;
             }
 

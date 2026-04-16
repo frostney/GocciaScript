@@ -41,6 +41,7 @@ type
     FFileCount: Integer;
     FOutput: TStringList;
     FWallClockDurationNanoseconds: Int64;
+    FJobCount: Integer;
 
     procedure RenderConsole;
     procedure RenderText;
@@ -65,6 +66,7 @@ type
     property FileCount: Integer read FFileCount;
     property Files[AIndex: Integer]: TBenchmarkFileResult read GetFileResult;
     property WallClockDurationNanoseconds: Int64 read FWallClockDurationNanoseconds write FWallClockDurationNanoseconds;
+    property JobCount: Integer read FJobCount write FJobCount;
   end;
 
 function ParseReportFormat(const S: string): TBenchmarkReportFormat;
@@ -99,6 +101,7 @@ begin
   FOutput := TStringList.Create;
   FFileCount := 0;
   FWallClockDurationNanoseconds := 0;
+  FJobCount := 1;
   SetLength(FFiles, 0);
 end;
 
@@ -400,6 +403,7 @@ begin
     TotalDurationNanoseconds := FWallClockDurationNanoseconds;
 
   FOutput.Add('  ],');
+  FOutput.Add(SysUtils.Format('  "jobCount": %d,', [FJobCount]));
   FOutput.Add(SysUtils.Format('  "totalBenchmarks": %d,', [TotalBenchmarks]));
   FOutput.Add(SysUtils.Format('  "totalDurationNanoseconds": %d', [TotalDurationNanoseconds]));
   FOutput.Add('}');

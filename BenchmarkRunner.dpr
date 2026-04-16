@@ -749,6 +749,7 @@ begin
       end;
 
       Reporter.WallClockDurationNanoseconds := GetNanoseconds - WallClockStart;
+      Reporter.JobCount := JobCount;
 
       { Collect results on the main thread in original file order. }
       for I := 0 to Files.Count - 1 do
