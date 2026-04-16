@@ -331,9 +331,10 @@ var
   Queue: TGocciaWorkQueue;
   FileCount, I, J: Integer;
   WatchdogStart: Int64;
-  AllFinished: Boolean;
+  AllFinished, LiveWorkersRemain: Boolean;
 begin
   FCancelled := False;
+  LiveWorkersRemain := False;
   FileCount := AFiles.Count;
   if FileCount = 0 then
   begin
@@ -390,9 +391,7 @@ begin
           'Cancelling remaining work.');
         FCancelled := True;
         // Bounded grace period: poll for 5 seconds to let workers
-        // notice the cancellation flag. If any worker is truly stuck
-        // (e.g. in a system call), we skip WaitFor and let the OS
-        // reclaim the thread on process exit rather than hanging.
+        // notice the cancellation flag.
         WatchdogStart := GetNanoseconds;
         repeat
           AllFinished := True;
@@ -410,9 +409,12 @@ begin
         for I := 0 to FWorkerCount - 1 do
           if Assigned(FWorkers[I]) and FWorkers[I].Finished then
             FWorkers[I].WaitFor;
-        if not AllFinished then
+        LiveWorkersRemain := not AllFinished;
+        if LiveWorkersRemain then
           WriteLn(StdErr, 'Warning: some workers did not finish ',
-            'within grace period. Skipping WaitFor to avoid hang.');
+            'within grace period. Leaking queue and workers to ',
+            'avoid use-after-free; they will be reclaimed on ',
+            'process exit.');
       end
       else
         for I := 0 to FWorkerCount - 1 do
@@ -424,7 +426,12 @@ begin
       for I := 0 to FWorkerCount - 1 do
         if Assigned(FWorkers[I]) then
           FWorkers[I].WaitFor;
-    Queue.Free;
+
+    // Only free the queue when all workers have exited. Live workers
+    // still hold a reference to it via FQueue, so freeing would be
+    // a use-after-free.
+    if not LiveWorkersRemain then
+      Queue.Free;
   end;
 
   // Collect results in original file order
@@ -442,6 +449,11 @@ begin
 
   for I := 0 to FWorkerCount - 1 do
   begin
+    // Skip workers that are still running — accessing their state
+    // would be a data race.
+    if not Assigned(FWorkers[I]) then Continue;
+    if LiveWorkersRemain and (not FWorkers[I].Finished) then Continue;
+
     // Check for unhandled exceptions in the worker thread
     if Assigned(FWorkers[I].FatalException) then
       WriteLn(StdErr, 'Worker thread ', I, ' fatal: ',
