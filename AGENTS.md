@@ -21,7 +21,8 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
 ## Quick checks
 
 ```bash
-./build.pas testrunner && ./build/TestRunner tests   # after substantive changes
+./build.pas testrunner && ./build/TestRunner tests       # after substantive changes
+./build.pas bundler && ./build/GocciaBundler example.js  # build and run the bundler
 ./format.pas --check # before push / PR
 ```
 
@@ -37,6 +38,7 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
 ./build.pas loader # Dev build (--dev is the default)
 ./build.pas testrunner # Dev build of TestRunner
 ./build.pas benchmarkrunner # Dev build of BenchmarkRunner
+./build.pas bundler # Dev build of GocciaBundler
 ./build.pas tests # Dev build of Pascal unit tests
 ./build.pas clean # Clean stale artifacts only (no build)
 ./build.pas clean loader # Clean, then dev build of ScriptLoader
@@ -49,9 +51,6 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
 ./build/ScriptLoader example.js --mode=bytecode # Execute via bytecode VM
 ./build/ScriptLoader example.js --import-map=imports.json # Execute with an explicit import map
 ./build/ScriptLoader example.js --alias @/=./src/ --alias config=./config/default.js # One-off import-map-style aliases
-./build/ScriptLoader example.js --emit # Compile to .gbc (no execution)
-./build/ScriptLoader example.js --emit=bytecode # Compile to .gbc (explicit)
-./build/ScriptLoader example.js --emit --output=out.gbc # Custom output path
 ./build/ScriptLoader out.gbc # Load and execute .gbc bytecode
 printf "const x = 2 + 2; x;" | ./build/ScriptLoader # Execute stdin source
 ./build/ScriptLoader example.js --coverage # Execute with line and branch coverage
@@ -64,7 +63,6 @@ printf "const x = 2 + 2; x;" | ./build/ScriptLoader # Execute stdin source
 ./build/ScriptLoader example.js --profile=all --profile-output=profile.json # Profile with JSON export
 ./build/ScriptLoader example.js --profile=functions --profile-format=flamegraph --profile-output=flamegraph.txt # Flame graph export
 ./build/ScriptLoader example.jsx --source-map --mode=bytecode # Write .map source map alongside execution
-./build/ScriptLoader example.jsx --source-map=out.map --emit # Write source map to specific path with bytecode emit
 ./build/REPL # Start interactive REPL (interpreted)
 ./build/REPL --mode=bytecode # Start the REPL via bytecode VM
 ./build/REPL --mode=bytecode --timing # Bytecode REPL with per-line timing
@@ -92,6 +90,14 @@ printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./bu
 ./build/BenchmarkRunner benchmarks --no-progress # Suppress progress (CI)
 ./build/BenchmarkRunner benchmarks --mode=bytecode # Benchmarks via the Goccia bytecode VM
 ./build/BenchmarkRunner benchmarks --jobs=4 # Run benchmarks with 4 parallel workers
+./build/GocciaBundler example.js # Compile to .gbc (no execution)
+./build/GocciaBundler example.js --output=out.gbc # Custom output path
+./build/GocciaBundler src/ # Compile all scripts in a directory
+./build/GocciaBundler src/ --output=dist/ # Compile directory to output directory
+./build/GocciaBundler example.js --source-map # Write .map source map alongside .gbc
+printf "const x = 2 + 2; x;" | ./build/GocciaBundler --output=out.gbc # Compile stdin to .gbc
+./build/GocciaBundler src/ --jobs=4 # Compile with 4 parallel workers
+./build/GocciaBundler example.js --asi # Compile with automatic semicolon insertion
 ```
 
 ### Compile and run (common workflows)
@@ -120,6 +126,7 @@ fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- REPL.dpr
 fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- ScriptLoader.dpr
 fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- TestRunner.dpr
 fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- BenchmarkRunner.dpr
+fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- GocciaBundler.dpr
 ```
 
 ## Where to go next

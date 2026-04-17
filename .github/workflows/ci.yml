@@ -960,12 +960,6 @@ jobs:
           check_map_json /tmp/custom.map
           rm /tmp/custom.map
 
-          # --source-map with --emit
-          ./build/ScriptLoader /tmp/sm-test.jsx --emit --source-map
-          test -f /tmp/sm-test.jsx.map
-          check_map_json /tmp/sm-test.jsx.map
-          rm /tmp/sm-test.jsx.map /tmp/sm-test.gbc
-
           # --source-map in interpreted mode
           ./build/ScriptLoader /tmp/sm-test.jsx --source-map
           test -f /tmp/sm-test.jsx.map
@@ -985,6 +979,60 @@ jobs:
           printf '%s\n' "$out" | grep -q 'required when reading source from stdin'
 
           rm /tmp/sm-test.jsx
+
+      - name: Check GocciaBundler source map CLI
+        run: |
+          check_map_json() {
+            python3 - "$1" <<'PY'
+          import json, sys
+          with open(sys.argv[1], 'r', encoding='utf-8') as f:
+              data = json.load(f)
+          assert data.get('version') == 3, f"bad version: {data.get('version')}"
+          assert isinstance(data.get('sources'), list) and len(data['sources']) > 0, "missing sources"
+          assert isinstance(data.get('mappings'), str) and data['mappings'] != '', "missing mappings"
+          PY
+          }
+
+          # Create a JSX test file
+          cat > /tmp/bundler-sm.jsx << 'JSXEOF'
+          const createElement = (t, p, ...c) => ({ t, p, c });
+          const el = <div id="test">hello</div>;
+          el;
+          JSXEOF
+
+          # --source-map writes .map file alongside .gbc
+          ./build/GocciaBundler /tmp/bundler-sm.jsx --source-map
+          test -f /tmp/bundler-sm.gbc
+          test -f /tmp/bundler-sm.jsx.map
+          check_map_json /tmp/bundler-sm.jsx.map
+          rm /tmp/bundler-sm.gbc /tmp/bundler-sm.jsx.map
+
+          # --source-map=<path> writes to custom path
+          ./build/GocciaBundler /tmp/bundler-sm.jsx --source-map=/tmp/bundler-custom.map
+          test -f /tmp/bundler-sm.gbc
+          test -f /tmp/bundler-custom.map
+          check_map_json /tmp/bundler-custom.map
+          rm /tmp/bundler-sm.gbc /tmp/bundler-custom.map
+
+          # No .map file without --source-map
+          ./build/GocciaBundler /tmp/bundler-sm.jsx
+          test -f /tmp/bundler-sm.gbc
+          test ! -f /tmp/bundler-sm.jsx.map
+          rm /tmp/bundler-sm.gbc
+
+          # --source-map from stdin derives map path from --output
+          cat > /tmp/bundler-stdin-sm.jsx << 'JSXEOF'
+          const createElement = (t, p, ...c) => ({ t, p, c });
+          const el = <div id="test">hello</div>;
+          el;
+          JSXEOF
+          cat /tmp/bundler-stdin-sm.jsx | ./build/GocciaBundler --output=/tmp/sm-stdin.gbc --source-map
+          test -f /tmp/sm-stdin.gbc
+          test -f /tmp/sm-stdin.gbc.map
+          check_map_json /tmp/sm-stdin.gbc.map
+          rm /tmp/sm-stdin.gbc /tmp/sm-stdin.gbc.map /tmp/bundler-stdin-sm.jsx
+
+          rm /tmp/bundler-sm.jsx
 
   artifacts:
     needs: [test, toml-compliance, json5-compliance, benchmark, examples]

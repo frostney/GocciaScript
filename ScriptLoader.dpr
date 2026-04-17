@@ -17,7 +17,6 @@ uses
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
   Goccia.CLI.Options,
-  Goccia.Compiler,
   Goccia.Constants.PropertyNames,
   Goccia.Coverage,
   Goccia.Coverage.Report,
@@ -57,7 +56,6 @@ type
 
   TScriptLoaderApp = class(TGocciaCLIApplication)
   private
-    FEmit: TGocciaStringOption;
     FOutputPath: TGocciaStringOption;
     FSilent: TGocciaFlagOption;
     FSourceMap: TGocciaStringOption;
@@ -69,9 +67,6 @@ type
       const APreprocessors: TGocciaPreprocessors; const ASuppressWarnings: Boolean;
       out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
       out ASourceMap: TGocciaSourceMap): TGocciaProgram;
-    function CompileSource(const ASource: TStringList; const AFileName: string;
-      const APreprocessors: TGocciaPreprocessors;
-      const ASuppressWarnings: Boolean = False): TGocciaBytecodeModule;
     procedure WriteSourceMapIfEnabled(const ASourceMap: TGocciaSourceMap;
       const AFileName: string);
     procedure ConfigureConsole(const AConsole: TGocciaConsole;
@@ -86,8 +81,6 @@ type
       const AOutputLines: TStrings): TScriptExecutionReport;
     function ExecuteBytecodeFromFile(const AFileName: string;
       const AOutputLines: TStrings): TScriptExecutionReport;
-    procedure EmitBytecode(const ASource: TStringList; const AFileName,
-      AOutputPath: string);
     procedure PrintHumanReadableResult(const AFileName: string;
       const AReport: TScriptExecutionReport; const AExtension: string);
     procedure RunSource(const ASource: TStringList; const AFileName: string);
@@ -120,10 +113,8 @@ begin
   AddCoverageOptions;
   AddProfilerOptions;
 
-  FEmit := AddString('emit',
-    'Compile to .gbc file (no execution); optional value: bytecode');
   FOutputPath := AddString('output',
-    'Output path (used with --emit) or "json" for structured JSON output');
+    '"json" for structured JSON output');
   FSilent := AddFlag('silent', 'Suppress console output from the script');
   FSourceMap := AddString('source-map',
     'Write a .map source map file (optional: explicit path)');
@@ -138,16 +129,6 @@ end;
 procedure TScriptLoaderApp.Validate;
 begin
   inherited Validate;
-
-  if FEmit.Present then
-  begin
-    if (FEmit.Value <> '') and (FEmit.Value <> 'bytecode') then
-      raise TGocciaParseError.CreateFmt(
-        'Unknown emit format "%s". Use "bytecode".', [FEmit.Value]);
-  end;
-
-  if (FOutputPath.Present and (FOutputPath.Value = 'json')) and FEmit.Present then
-    raise TGocciaParseError.Create('--output=json cannot be used with --emit.');
 
   if EngineOptions.Timeout.Present and (EngineOptions.Timeout.Value < 0) then
     raise TGocciaParseError.Create('--timeout must be 0 or greater.');
@@ -257,36 +238,6 @@ begin
   ASourceMap.SaveToFile(MapOutputPath);
   if not (FOutputPath.Present and (FOutputPath.Value = 'json')) then
     WriteLn(SysUtils.Format('  Source map written to %s', [MapOutputPath]));
-end;
-
-function TScriptLoaderApp.CompileSource(const ASource: TStringList;
-  const AFileName: string; const APreprocessors: TGocciaPreprocessors;
-  const ASuppressWarnings: Boolean): TGocciaBytecodeModule;
-var
-  ProgramNode: TGocciaProgram;
-  Compiler: TGocciaCompiler;
-  CompiledModule: TGocciaBytecodeModule;
-  LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
-  SourceMap: TGocciaSourceMap;
-begin
-  CompiledModule := nil;
-  ProgramNode := ParseSource(ASource, AFileName, APreprocessors, ASuppressWarnings,
-    LexTimeNanoseconds, ParseTimeNanoseconds, SourceMap);
-  try
-    Compiler := TGocciaCompiler.Create(AFileName);
-    try
-      CompiledModule := Compiler.Compile(ProgramNode);
-      WriteSourceMapIfEnabled(SourceMap, AFileName);
-      Result := CompiledModule;
-      CompiledModule := nil;
-    finally
-      Compiler.Free;
-    end;
-  finally
-    ProgramNode.Free;
-    SourceMap.Free;
-    CompiledModule.Free;
-  end;
 end;
 
 procedure TScriptLoaderApp.ConfigureConsole(const AConsole: TGocciaConsole;
@@ -529,27 +480,6 @@ begin
   end;
 end;
 
-procedure TScriptLoaderApp.EmitBytecode(const ASource: TStringList;
-  const AFileName, AOutputPath: string);
-var
-  Module: TGocciaBytecodeModule;
-  StartTime, EndTime: Int64;
-begin
-  WriteLn('Compiling: ', AFileName);
-  StartTime := GetNanoseconds;
-
-  Module := CompileSource(ASource, AFileName, TGocciaEngine.DefaultPreprocessors,
-    (FOutputPath.Present and (FOutputPath.Value = 'json')));
-  try
-    Goccia.Bytecode.Binary.SaveModuleToFile(Module, AOutputPath);
-    EndTime := GetNanoseconds;
-    WriteLn(SysUtils.Format('  Compiled to %s (%s)',
-      [AOutputPath, FormatDuration(EndTime - StartTime)]));
-  finally
-    Module.Free;
-  end;
-end;
-
 procedure TScriptLoaderApp.PrintHumanReadableResult(const AFileName: string;
   const AReport: TScriptExecutionReport; const AExtension: string);
 var
@@ -593,7 +523,7 @@ end;
 procedure TScriptLoaderApp.RunSource(const ASource: TStringList;
   const AFileName: string);
 var
-  Extension, EmitOutputPath: string;
+  Extension: string;
   Report: TScriptExecutionReport;
   OutputLines: TStringList;
   StartTime: Int64;
@@ -611,17 +541,6 @@ begin
 
       if Extension = EXT_GBC then
         Report := ExecuteBytecodeFromFile(AFileName, OutputLines)
-      else if FEmit.Present then
-      begin
-        if FOutputPath.Present and (FOutputPath.Value <> 'json') then
-          EmitOutputPath := FOutputPath.Value
-        else if AFileName = STDIN_FILE_NAME then
-          raise Exception.Create('--output=<path> is required when emitting bytecode from stdin.')
-        else
-          EmitOutputPath := ChangeFileExt(AFileName, EXT_GBC);
-        EmitBytecode(ASource, AFileName, EmitOutputPath);
-        Exit;
-      end
       else
         case EngineOptions.Mode.ValueOr(emInterpreted) of
           emInterpreted: Report := ExecuteInterpreted(ASource, AFileName, OutputLines);
