@@ -60,6 +60,18 @@ describe.runIf(isTemporal)("Temporal.Duration magnitude validation", () => {
     expect(() => new Temporal.Duration(0, 0, 0, 0, 0, 0, 9007199254740992)).toThrow(RangeError);
   });
 
+  test("negative days producing normalized seconds <= -(2^53) throws RangeError", () => {
+    expect(() => new Temporal.Duration(0, 0, 0, -104251000000)).toThrow(RangeError);
+  });
+
+  test("negative hours producing normalized seconds <= -(2^53) throws RangeError", () => {
+    expect(() => new Temporal.Duration(0, 0, 0, 0, -2502000000000)).toThrow(RangeError);
+  });
+
+  test("negative seconds at -(2^53) throws RangeError", () => {
+    expect(() => new Temporal.Duration(0, 0, 0, 0, 0, 0, -9007199254740992)).toThrow(RangeError);
+  });
+
   test("moderate day count is valid", () => {
     // 1000 days = 86,400,000 normalized seconds, well under 2^53
     const d = new Temporal.Duration(0, 0, 0, 1000);
