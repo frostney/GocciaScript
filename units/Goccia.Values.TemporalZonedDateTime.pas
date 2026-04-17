@@ -132,9 +132,9 @@ begin
     // Parse ISO with timezone annotation: 2024-03-15T13:45:30+05:30[Asia/Kolkata]
     if not TryParseISODateTimeWithOffset(TGocciaStringLiteralValue(AValue).Value,
       DateRec, TimeRec, OffsetSeconds, TimeZoneStr) then
-      ThrowTypeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]), SSuggestTemporalISOFormat);
+      ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]), SSuggestTemporalISOFormat);
     if TimeZoneStr = '' then
-      ThrowTypeError(SErrorZonedDateTimeRequiresTZAnnotation, SSuggestTemporalTimezone);
+      ThrowRangeError(SErrorZonedDateTimeRequiresTZAnnotation, SSuggestTemporalTimezone);
 
     // Convert parsed local time to epoch ms using the parsed offset
     EpochMs := DateToEpochDays(DateRec.Year, DateRec.Month, DateRec.Day) * MILLISECONDS_PER_DAY +
@@ -236,7 +236,7 @@ begin
   else if AArg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODuration(TGocciaStringLiteralValue(AArg).Value, DurRec) then
-      ThrowTypeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
+      ThrowRangeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
     Result := TGocciaTemporalDurationValue.Create(
       DurRec.Years, DurRec.Months, DurRec.Weeks, DurRec.Days,
       DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
@@ -688,7 +688,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODate(TGocciaStringLiteralValue(Arg).Value, DateRec) then
-      ThrowTypeError(SErrorInvalidDateStringForZDT, SSuggestTemporalISOFormat);
+      ThrowRangeError(SErrorInvalidDateStringForZDT, SSuggestTemporalISOFormat);
     PlainDate := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day);
   end
   else
@@ -733,7 +733,7 @@ begin
     else if Arg is TGocciaStringLiteralValue then
     begin
       if not TryParseISOTime(TGocciaStringLiteralValue(Arg).Value, TimeRec) then
-        ThrowTypeError(SErrorInvalidTimeStringForZDT, SSuggestTemporalISOFormat);
+        ThrowRangeError(SErrorInvalidTimeStringForZDT, SSuggestTemporalISOFormat);
       NewHour := TimeRec.Hour; NewMinute := TimeRec.Minute; NewSecond := TimeRec.Second;
       NewMs := TimeRec.Millisecond; NewUs := TimeRec.Microsecond; NewNs := TimeRec.Nanosecond;
     end

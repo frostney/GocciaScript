@@ -350,7 +350,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODateTime(TGocciaStringLiteralValue(Arg).Value, DateRec, TimeRec) then
-      ThrowTypeError(SErrorInvalidISOInstant, SSuggestTemporalISOFormat);
+      ThrowRangeError(SErrorInvalidISOInstant, SSuggestTemporalISOFormat);
     EpochMs := DateToEpochDays(DateRec.Year, DateRec.Month, DateRec.Day) * Int64(86400000) +
                Int64(TimeRec.Hour) * 3600000 + Int64(TimeRec.Minute) * 60000 +
                Int64(TimeRec.Second) * 1000 + TimeRec.Millisecond;
@@ -404,7 +404,7 @@ var
     else if AArg is TGocciaStringLiteralValue then
     begin
       if not TryParseISODateTime(TGocciaStringLiteralValue(AArg).Value, DateRec, TimeRec) then
-        ThrowTypeError(SErrorInvalidISOInstant, SSuggestTemporalISOFormat);
+        ThrowRangeError(SErrorInvalidISOInstant, SSuggestTemporalISOFormat);
       EpochMs := DateToEpochDays(DateRec.Year, DateRec.Month, DateRec.Day) * Int64(86400000) +
                  Int64(TimeRec.Hour) * 3600000 + Int64(TimeRec.Minute) * 60000 +
                  Int64(TimeRec.Second) * 1000 + TimeRec.Millisecond;
@@ -493,7 +493,7 @@ begin
     else if TryParseISODateTime(TGocciaStringLiteralValue(Arg).Value, DateRec, TimeRec) then
       Result := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day)
     else
-      ThrowTypeError(SErrorInvalidISODate, SSuggestTemporalISOFormat);
+      ThrowRangeError(SErrorInvalidISODate, SSuggestTemporalISOFormat);
   end
   else if Arg is TGocciaObjectValue then
   begin
@@ -562,7 +562,7 @@ var
         Result := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day)
       else
       begin
-        ThrowTypeError(SErrorInvalidISODate, SSuggestTemporalISOFormat);
+        ThrowRangeError(SErrorInvalidISODate, SSuggestTemporalISOFormat);
         Result := nil;
       end;
     end
@@ -640,7 +640,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISOTime(TGocciaStringLiteralValue(Arg).Value, TimeRec) then
-      ThrowTypeError(SErrorInvalidISOTime, SSuggestTemporalISOFormat);
+      ThrowRangeError(SErrorInvalidISOTime, SSuggestTemporalISOFormat);
     Result := TGocciaTemporalPlainTimeValue.Create(
       TimeRec.Hour, TimeRec.Minute, TimeRec.Second,
       TimeRec.Millisecond, TimeRec.Microsecond, TimeRec.Nanosecond);
@@ -684,7 +684,7 @@ var
     begin
       if not TryParseISOTime(TGocciaStringLiteralValue(AArg).Value, TimeRec) then
       begin
-        ThrowTypeError(SErrorInvalidISOTime, SSuggestTemporalISOFormat);
+        ThrowRangeError(SErrorInvalidISOTime, SSuggestTemporalISOFormat);
         Result := nil;
       end
       else
@@ -772,7 +772,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODateTime(TGocciaStringLiteralValue(Arg).Value, DateRec, TimeRec) then
-      ThrowTypeError(SErrorInvalidISODateTime, SSuggestTemporalISOFormat);
+      ThrowRangeError(SErrorInvalidISODateTime, SSuggestTemporalISOFormat);
     Result := TGocciaTemporalPlainDateTimeValue.Create(
       DateRec.Year, DateRec.Month, DateRec.Day,
       TimeRec.Hour, TimeRec.Minute, TimeRec.Second,
@@ -816,7 +816,7 @@ var
     begin
       if not TryParseISODateTime(TGocciaStringLiteralValue(AArg).Value, DateRec, TimeRec) then
       begin
-        ThrowTypeError(SErrorInvalidISODateTime, SSuggestTemporalISOFormat);
+        ThrowRangeError(SErrorInvalidISODateTime, SSuggestTemporalISOFormat);
         Result := nil;
       end
       else
@@ -1061,7 +1061,7 @@ begin
         M := 0;
     end;
     if (M < 1) or (M > 12) then
-      ThrowTypeError(SErrorTemporalPlainMonthDayFromMonth, SSuggestTemporalDateRange);
+      ThrowRangeError(SErrorTemporalPlainMonthDayFromMonth, SSuggestTemporalDateRange);
     Result := TGocciaTemporalPlainMonthDayValue.Create(M, D);
   end
   else

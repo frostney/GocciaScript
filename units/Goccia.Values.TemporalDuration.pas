@@ -397,7 +397,7 @@ begin
         DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
         DurRec.Milliseconds, DurRec.Microseconds, DurRec.Nanoseconds)
     else
-      ThrowTypeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
+      ThrowRangeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
   end
   else if Arg is TGocciaObjectValue then
     Other := DurationFromObject(TGocciaObjectValue(Arg))
@@ -435,7 +435,7 @@ begin
         DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
         DurRec.Milliseconds, DurRec.Microseconds, DurRec.Nanoseconds)
     else
-      ThrowTypeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
+      ThrowRangeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
   end
   else if Arg is TGocciaObjectValue then
     Other := DurationFromObject(TGocciaObjectValue(Arg))

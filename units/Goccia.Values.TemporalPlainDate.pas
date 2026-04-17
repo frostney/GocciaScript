@@ -119,7 +119,7 @@ begin
       if TryParseISODateTime(TGocciaStringLiteralValue(AValue).Value, DateRec, TimeRec) then
         Result := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day)
       else
-        ThrowTypeError(Format(SErrorTemporalInvalidISOStringFor, ['date', AMethod]), SSuggestTemporalISOFormat);
+        ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date', AMethod]), SSuggestTemporalISOFormat);
     end
     else
       Result := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day);
@@ -368,7 +368,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODuration(TGocciaStringLiteralValue(Arg).Value, DurRec) then
-      ThrowTypeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
+      ThrowRangeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
     Dur := TGocciaTemporalDurationValue.Create(
       DurRec.Years, DurRec.Months, DurRec.Weeks, DurRec.Days,
       DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
@@ -435,7 +435,7 @@ begin
   else if Arg is TGocciaStringLiteralValue then
   begin
     if not TryParseISODuration(TGocciaStringLiteralValue(Arg).Value, DurRec) then
-      ThrowTypeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
+      ThrowRangeError(SErrorInvalidDurationString, SSuggestTemporalDurationArg);
     Dur := TGocciaTemporalDurationValue.Create(
       DurRec.Years, DurRec.Months, DurRec.Weeks, DurRec.Days,
       DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
