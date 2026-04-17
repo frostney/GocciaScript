@@ -707,11 +707,11 @@ end;
 function SubDayNanoseconds(const D: TGocciaTemporalDurationValue): Double;
 begin
   Result := D.FNanoseconds +
-            D.FMicroseconds * 1000.0 +
-            D.FMilliseconds * 1000000.0 +
-            D.FSeconds * 1e9 +
-            D.FMinutes * 6e10 +
-            D.FHours * 3.6e12;
+            D.FMicroseconds * NANOSECONDS_PER_MICROSECOND +
+            D.FMilliseconds * NANOSECONDS_PER_MILLISECOND +
+            D.FSeconds * NANOSECONDS_PER_SECOND +
+            D.FMinutes * NANOSECONDS_PER_MINUTE +
+            D.FHours * NANOSECONDS_PER_HOUR;
 end;
 
 // Express the duration as a fractional month count relative to a reference date.
@@ -891,13 +891,13 @@ begin
     RelDate := ParseRelativeTo(RelToArg, 'Duration.prototype.total');
     ResolvedDays := ResolveRelativeDays(RelDate, D.FYears, D.FMonths, D.FWeeks, D.FDays);
 
-    TotalNs := SubDayNanoseconds(D) + ResolvedDays * 8.64e13;
+    TotalNs := SubDayNanoseconds(D) + ResolvedDays * NANOSECONDS_PER_DAY;
   end
   else
   begin
     TotalNs := SubDayNanoseconds(D) +
-               D.FDays * 8.64e13 +
-               D.FWeeks * 6.048e14;
+               D.FDays * NANOSECONDS_PER_DAY +
+               D.FWeeks * 7 * NANOSECONDS_PER_DAY;
   end;
 
   if UnitStr = 'nanoseconds' then
