@@ -56,7 +56,6 @@
 | Resizable `ArrayBuffer` (`resize`, `transfer`, `transferToFixedLength`) | ES2025 | Supported |
 | `import.meta` | ES2020 | Supported |
 | Dynamic `import()` | ES2020 | Supported |
-| `atob` / `btoa` | ES2026 | Supported |
 | `Uint8Array` Base64/Hex (`fromBase64`, `fromHex`, `toBase64`, `toHex`) | ES2026 | Supported |
 | `Error.isError` | ES2026 | Supported |
 | `RegExp.escape` | ES2026 | Supported |
@@ -67,6 +66,7 @@
 | Explicit Resource Management (`using`, `await using`) | ES2026 | Supported |
 | JSON.parse source text access (`JSON.rawJSON`, `JSON.isRawJSON`) | ES2026 | Supported |
 | `Temporal` (dates, times, durations, time zones) | ES2027 | Supported |
+| `atob` / `btoa` | WHATWG | Supported |
 
 ## TC39 Proposals
 
