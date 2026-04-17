@@ -98,12 +98,14 @@ const
   // ---------------------------------------------------------------------------
   // ES2020
   // ---------------------------------------------------------------------------
-  ES2020_FEATURES: array[0..4] of TGocciaFeatureEntry = (
+  ES2020_FEATURES: array[0..6] of TGocciaFeatureEntry = (
     (Name: 'Optional Chaining';            Link: 'https://tc39.es/ecma262/#sec-optional-chains'),
     (Name: 'Nullish Coalescing';           Link: 'https://tc39.es/ecma262/#sec-binary-logical-operators'),
     (Name: 'Promise.allSettled';           Link: 'https://tc39.es/ecma262/#sec-promise.allsettled'),
     (Name: 'globalThis';                   Link: 'https://tc39.es/ecma262/#sec-globalthis'),
-    (Name: 'String.prototype.matchAll';    Link: 'https://tc39.es/ecma262/#sec-string.prototype.matchall')
+    (Name: 'String.prototype.matchAll';    Link: 'https://tc39.es/ecma262/#sec-string.prototype.matchall'),
+    (Name: 'import.meta';                  Link: 'https://tc39.es/ecma262/#sec-import.meta'),
+    (Name: 'Dynamic import()';             Link: 'https://tc39.es/ecma262/#sec-import-calls')
   );
 
   // ---------------------------------------------------------------------------
@@ -145,43 +147,81 @@ const
   // ---------------------------------------------------------------------------
   // ES2024
   // ---------------------------------------------------------------------------
-  ES2024_FEATURES: array[0..7] of TGocciaFeatureEntry = (
+  ES2024_FEATURES: array[0..6] of TGocciaFeatureEntry = (
     (Name: 'Promise.withResolvers';            Link: 'https://tc39.es/ecma262/#sec-promise.withresolvers'),
     (Name: 'Object.groupBy';                   Link: 'https://tc39.es/ecma262/#sec-object.groupby'),
     (Name: 'Map.groupBy';                      Link: 'https://tc39.es/ecma262/#sec-map.groupby'),
     (Name: 'Resizable ArrayBuffer';            Link: 'https://tc39.es/ecma262/#sec-arraybuffer-objects'),
     (Name: 'String.prototype.isWellFormed';    Link: 'https://tc39.es/ecma262/#sec-string.prototype.iswellformed'),
     (Name: 'String.prototype.toWellFormed';    Link: 'https://tc39.es/ecma262/#sec-string.prototype.towellformed'),
-    (Name: 'RegExp v Flag';                    Link: 'https://tc39.es/ecma262/#sec-regexp-regular-expression-objects'),
-    (Name: 'JSON.parse Source Text Access';    Link: 'https://tc39.es/ecma262/#sec-json.parse')
+    (Name: 'RegExp v Flag';                    Link: 'https://tc39.es/ecma262/#sec-regexp-regular-expression-objects')
   );
 
   // ---------------------------------------------------------------------------
   // ES2025
   // ---------------------------------------------------------------------------
-  ES2025_FEATURES: array[0..10] of TGocciaFeatureEntry = (
+  ES2025_FEATURES: array[0..6] of TGocciaFeatureEntry = (
     (Name: 'Set Methods';                     Link: 'https://tc39.es/ecma262/#sec-set-objects'),
     (Name: 'Iterator Helpers';                Link: 'https://tc39.es/ecma262/#sec-iterator-objects'),
     (Name: 'Promise.try';                     Link: 'https://tc39.es/ecma262/#sec-promise.try'),
-    (Name: 'RegExp.escape';                   Link: 'https://tc39.es/ecma262/#sec-regexp.escape'),
     (Name: 'RegExp Modifiers';                Link: 'https://tc39.es/ecma262/#sec-regexp-regular-expression-objects'),
     (Name: 'Duplicate Named Capture Groups';  Link: 'https://tc39.es/ecma262/#sec-regexp-regular-expression-objects'),
-    (Name: 'Error.isError';                   Link: 'https://tc39.es/ecma262/#sec-error.iserror'),
     (Name: 'Float16Array';                    Link: 'https://tc39.es/ecma262/#sec-typedarray-objects'),
-    (Name: 'Uint8Array Base64/Hex';           Link: 'https://tc39.es/ecma262/#sec-typedarray-objects'),
-    (Name: 'Array.fromAsync';                 Link: 'https://tc39.es/ecma262/#sec-array.fromasync'),
-    (Name: 'Math.sumPrecise';                 Link: 'https://tc39.es/ecma262/#sec-math.sumprecise')
+    (Name: 'Math.f16round';                   Link: 'https://tc39.es/ecma262/#sec-math.f16round')
+  );
+
+  // ---------------------------------------------------------------------------
+  // ES2026
+  // ---------------------------------------------------------------------------
+  ES2026_FEATURES: array[0..8] of TGocciaFeatureEntry = (
+    (Name: 'JSON.parse Source Text Access';         Link: 'https://tc39.es/ecma262/#sec-json.parse'),
+    (Name: 'Explicit Resource Management';          Link: 'https://tc39.es/ecma262/#sec-using-declaration'),
+    (Name: 'RegExp.escape';                         Link: 'https://tc39.es/ecma262/#sec-regexp.escape'),
+    (Name: 'Error.isError';                         Link: 'https://tc39.es/ecma262/#sec-error.iserror'),
+    (Name: 'Uint8Array Base64/Hex';                 Link: 'https://tc39.es/ecma262/#sec-typedarray-objects'),
+    (Name: 'Array.fromAsync';                       Link: 'https://tc39.es/ecma262/#sec-array.fromasync'),
+    (Name: 'Math.sumPrecise';                       Link: 'https://tc39.es/ecma262/#sec-math.sumprecise'),
+    (Name: 'Map.prototype.getOrInsert / getOrInsertComputed'; Link: 'https://tc39.es/ecma262/#sec-map.prototype.getorinsert'),
+    (Name: 'Iterator.concat';                       Link: 'https://tc39.es/ecma262/#sec-iterator.concat')
+  );
+
+  // ---------------------------------------------------------------------------
+  // ES2027
+  // ---------------------------------------------------------------------------
+  ES2027_FEATURES: array[0..0] of TGocciaFeatureEntry = (
+    (Name: 'Temporal';  Link: 'https://tc39.es/ecma262/#sec-temporal-objects')
+  );
+
+  // ---------------------------------------------------------------------------
+  // WHATWG / W3C Web Platform APIs
+  // ---------------------------------------------------------------------------
+  WHATWG_FEATURES: array[0..9] of TGocciaFeatureEntry = (
+    (Name: 'console';           Link: 'https://console.spec.whatwg.org/'),
+    (Name: 'structuredClone';   Link: 'https://html.spec.whatwg.org/multipage/structured-data.html#dom-structuredclone'),
+    (Name: 'DOMException';      Link: 'https://webidl.spec.whatwg.org/#idl-DOMException'),
+    (Name: 'atob / btoa';       Link: 'https://html.spec.whatwg.org/multipage/webappapis.html#atob'),
+    (Name: 'queueMicrotask';    Link: 'https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#dom-queuemicrotask'),
+    (Name: 'URL';               Link: 'https://url.spec.whatwg.org/#url-class'),
+    (Name: 'URLSearchParams';   Link: 'https://url.spec.whatwg.org/#urlsearchparams'),
+    (Name: 'TextEncoder';       Link: 'https://encoding.spec.whatwg.org/#textencoder'),
+    (Name: 'TextDecoder';       Link: 'https://encoding.spec.whatwg.org/#textdecoder'),
+    (Name: 'Performance';       Link: 'https://w3c.github.io/hr-time/#dom-performance-now')
   );
 
   // ---------------------------------------------------------------------------
   // TC39 Stage 3
   // ---------------------------------------------------------------------------
-  STAGE3_PROPOSALS: array[0..4] of TGocciaFeatureEntry = (
-    (Name: 'Temporal';              Link: 'https://tc39.es/proposal-temporal/'),
+  STAGE3_PROPOSALS: array[0..2] of TGocciaFeatureEntry = (
     (Name: 'Decorators';            Link: 'https://github.com/tc39/proposal-decorators'),
     (Name: 'Decorator Metadata';    Link: 'https://github.com/tc39/proposal-decorator-metadata'),
-    (Name: 'Iterator Sequencing';   Link: 'https://github.com/tc39/proposal-iterator-sequencing'),
     (Name: 'Joint Iteration';       Link: 'https://github.com/tc39/proposal-joint-iteration')
+  );
+
+  // ---------------------------------------------------------------------------
+  // TC39 Stage 2
+  // ---------------------------------------------------------------------------
+  STAGE2_PROPOSALS: array[0..0] of TGocciaFeatureEntry = (
+    (Name: 'Math.clamp'; Link: 'https://github.com/tc39/proposal-math-clamp')
   );
 
   // ---------------------------------------------------------------------------
@@ -242,6 +282,9 @@ begin
   DefineReadOnlyProperty(Obj, '2023', CreateFeatureArray(ES2023_FEATURES));
   DefineReadOnlyProperty(Obj, '2024', CreateFeatureArray(ES2024_FEATURES));
   DefineReadOnlyProperty(Obj, '2025', CreateFeatureArray(ES2025_FEATURES));
+  DefineReadOnlyProperty(Obj, '2026', CreateFeatureArray(ES2026_FEATURES));
+  DefineReadOnlyProperty(Obj, '2027', CreateFeatureArray(ES2027_FEATURES));
+  DefineReadOnlyProperty(Obj, 'whatwg', CreateFeatureArray(WHATWG_FEATURES));
   Result := Obj;
 end;
 
@@ -251,6 +294,7 @@ var
 begin
   Obj := TGocciaObjectValue.Create;
   DefineReadOnlyProperty(Obj, 'stage-3', CreateFeatureArray(STAGE3_PROPOSALS));
+  DefineReadOnlyProperty(Obj, 'stage-2', CreateFeatureArray(STAGE2_PROPOSALS));
   DefineReadOnlyProperty(Obj, 'stage-1', CreateFeatureArray(STAGE1_PROPOSALS));
   DefineReadOnlyProperty(Obj, 'stage-0', CreateFeatureArray(STAGE0_PROPOSALS));
   Result := Obj;

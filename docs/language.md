@@ -5,7 +5,7 @@
 ## Executive Summary
 
 - **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules (named only)
-- **TC39 proposals** — Decorators, decorator metadata, types as comments, enums, Temporal, `Math.clamp`, `Math.sumPrecise`, `Map.prototype.getOrInsert`, `Error.isError`
+- **TC39 proposals** — Decorators, decorator metadata, types as comments, enums, `Math.clamp`
 - **Excluded by design** — `var`, `function` keyword, `==`/`!=`, `eval`, `arguments`, traditional loops, `with`, default imports/exports
 - **Graceful handling** — Parser-recognized excluded syntax (`var`, `function`, `==`, loops, `with`) parses successfully but executes as a no-op with a warning and suggestion
 - **Opt-in toggles** — ASI (`--asi` / `Engine.ASIEnabled := True`)
@@ -135,7 +135,7 @@ class Counter {
 
 ### Explicit Resource Management
 
-`using` and `await using` declarations (TC39 Stage 3 [Explicit Resource Management](https://github.com/tc39/proposal-explicit-resource-management)) are supported.
+`using` and `await using` declarations (ES2026 [Explicit Resource Management](https://tc39.es/ecma262/#sec-using-declaration)) are supported.
 
 - `using` — Synchronous disposal. When the enclosing block exits, `[Symbol.dispose]()` is called on the bound value.
 - `await using` — Asynchronous disposal. When the enclosing block exits, `[Symbol.asyncDispose]()` is awaited.
@@ -362,7 +362,7 @@ The transformer generates an internal source map for accurate error line/column 
 - Regex literals: `/pattern/flags`
 - Flags: `d`, `g`, `i`, `m`, `s`, `u`, `v`, `y`
 - RegExp instance properties: `source`, canonicalized `flags`, `lastIndex`, `global`, `ignoreCase`, `multiline`, `dotAll`, `unicode`, `sticky`, `unicodeSets`, `hasIndices`
-- `RegExp.escape()` (TC39 RegExp Escaping proposal)
+- `RegExp.escape()` (ES2026)
 - Duplicate named capture groups: the same group name may appear in different alternatives of a disjunction (`|`), e.g., `/(?<year>\d{4})-\d{2}|\d{2}-(?<year>\d{4})/`. The `groups` property returns the value from whichever alternative participated, and `\k<name>` backreferences resolve to the correct group within each alternative.
 - `RegExp.prototype.exec()`, `test()`, `toString()`, and the `Symbol.match`, `Symbol.matchAll`, `Symbol.replace`, `Symbol.search`, and `Symbol.split` hooks
 - String integrations for `replace`, `replaceAll`, `split`, `match`, `matchAll`, and `search`, including custom protocol objects with the corresponding well-known symbol methods
@@ -539,25 +539,25 @@ enum Tokens { Alpha = Symbol("alpha") }
 - Enum decorators.
 - `enum` expressions.
 
-### Temporal (Stage 3)
+### Temporal (ES2027)
 
-Modern date/time API. See [Built-in Objects](built-ins.md) for the full Temporal API reference. See [proposal-temporal](https://tc39.es/proposal-temporal/).
+Modern date/time API. See [Built-in Objects](built-ins.md) for the full Temporal API reference. See [Temporal specification](https://tc39.es/ecma262/#sec-temporal-objects).
 
-### Math.clamp (Stage 3)
+### Math.clamp (Stage 2)
 
 Clamp a value to a range: `Math.clamp(value, min, max)`. See [proposal-math-clamp](https://github.com/tc39/proposal-math-clamp).
 
-### Math.sumPrecise (Stage 3)
+### Math.sumPrecise (ES2026)
 
-Precise summation of iterables using a compensated algorithm: `Math.sumPrecise(iterable)`. See [proposal-math-sum](https://github.com/tc39/proposal-math-sum).
+Precise summation of iterables using a compensated algorithm: `Math.sumPrecise(iterable)`. See [ES2026 §21.3.2.33](https://tc39.es/ecma262/#sec-math.sumprecise).
 
-### Map.prototype.getOrInsert (Stage 3)
+### Map.prototype.getOrInsert (ES2026)
 
-Get existing value or insert a default/computed value: `map.getOrInsert(key, default)`, `map.getOrInsertComputed(key, callbackFn)`. See [proposal-upsert](https://github.com/tc39/proposal-upsert).
+Get existing value or insert a default/computed value: `map.getOrInsert(key, default)`, `map.getOrInsertComputed(key, callbackFn)`. See [ES2026 §24.1.3](https://tc39.es/ecma262/#sec-map.prototype.getorinsert).
 
-### Error.isError (Stage 4)
+### Error.isError (ES2026)
 
-Reliable brand check for error objects: `Error.isError(value)`. See [proposal-is-error](https://github.com/tc39/proposal-is-error).
+Reliable brand check for error objects: `Error.isError(value)`. See [ES2026 §20.5.3.2](https://tc39.es/ecma262/#sec-error.iserror).
 
 ## Excluded Features
 

@@ -2,13 +2,13 @@
 
 *Temporal API reference — dates, times, durations, and time zones.*
 
-Implements the [TC39 Temporal proposal](https://tc39.es/proposal-temporal/docs/). See the [Temporal documentation](https://tc39.es/proposal-temporal/docs/) for the full specification reference.
+Implements the [ECMAScript Temporal API](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Temporal). See the [Temporal documentation](https://tc39.es/proposal-temporal/docs/) for the full specification reference.
 
-**GocciaScript differences:** ISO 8601 calendar only. `Duration.total()` and `Duration.round()` do not yet support `relativeTo` for calendar-relative conversions (years/months). The `v` flag (Unicode sets) for Temporal string parsing is not yet fully implemented beyond basic `u` flag behavior.
+**GocciaScript differences:** ISO 8601 calendar only. `Duration.total()` and `Duration.round()` do not yet support `relativeTo` for calendar-relative conversions (years/months).
 
 ## Executive Summary
 
-- **Modern date/time API** — Implements the ECMAScript Temporal proposal (Stage 3), replacing legacy `Date` with immutable, type-safe alternatives
+- **Modern date/time API** — Implements the ECMAScript Temporal API, replacing legacy `Date` with immutable, type-safe alternatives
 - **Rich type system** — Provides distinct types for dates, times, date-times, instants, durations, year-months, month-days, and timezone-aware date-times
 - **ISO 8601 only** — All types use the ISO 8601 calendar; operations return new instances (immutability by design)
 - **Timezone support** — `ZonedDateTime` and `Temporal.Now` handle IANA timezone identifiers and DST transitions
@@ -16,7 +16,7 @@ Implements the [TC39 Temporal proposal](https://tc39.es/proposal-temporal/docs/)
 
 ## Overview (`Goccia.Builtins.Temporal.pas`)
 
-An implementation of the ECMAScript Temporal API (Stage 3 proposal) providing modern date/time handling. ISO 8601 calendar only. All Temporal types are immutable — operations return new instances.
+An implementation of the ECMAScript Temporal API providing modern date/time handling. ISO 8601 calendar only. All Temporal types are immutable — operations return new instances.
 
 **Namespace structure:**
 

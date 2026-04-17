@@ -63,30 +63,30 @@ Implements the [WHATWG Console Standard](https://developer.mozilla.org/en-US/doc
 
 Implements the [ECMAScript Math object](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Math). See [MDN Math reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Math) for the full API.
 
-**Full standard compliance** — all ES2026 constants and methods are available.
+**Full standard compliance** — all standard constants and methods are available.
 
-**TC39 extras (not yet on MDN):**
+**Extras:**
 
 | Method | Description |
 |--------|-------------|
-| `Math.clamp(x, min, max)` | Clamp to range ([proposal-math-clamp](https://github.com/tc39/proposal-math-clamp)) |
-| `Math.f16round(x)` | Nearest 16-bit float (ES2025) |
-| `Math.sumPrecise(iterable)` | Precise sum via Kahan-Babuska-Neumaier compensated summation ([proposal-math-sum](https://github.com/tc39/proposal-math-sum)). Throws `TypeError` for non-iterable or non-number elements. Empty iterable returns `-0`. Mixed `±Infinity` returns `NaN`. |
+| `Math.clamp(x, min, max)` | Clamp to range (Stage 2 [proposal-math-clamp](https://github.com/tc39/proposal-math-clamp)) |
+| `Math.f16round(x)` | Nearest 16-bit float |
+| `Math.sumPrecise(iterable)` | Precise sum via Kahan-Babuska-Neumaier compensated summation. Throws `TypeError` for non-iterable or non-number elements. Empty iterable returns `-0`. Mixed `±Infinity` returns `NaN`. |
 
 ### JSON (`Goccia.Builtins.JSON.pas`)
 
-Implements the [ECMAScript JSON object](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON) including ES2024 source text access and ES2026 Raw JSON.
+Implements the [ECMAScript JSON object](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON) including source text access and Raw JSON.
 
 | Method | Description |
 |--------|-------------|
 | `JSON.parse(text, reviver?)` | Parse JSON string to value, with optional reviver function that receives source text access |
 | `JSON.stringify(value, replacer?, space?)` | Convert value to JSON string, with optional replacer (function or array) and indentation |
-| `JSON.rawJSON(text)` | Create a raw JSON value object for verbatim serialization (ES2026 §25.5.2.4) |
-| `JSON.isRawJSON(value)` | Return `true` if the value was created by `JSON.rawJSON()` (ES2026 §25.5.2.3) |
+| `JSON.rawJSON(text)` | Create a raw JSON value object for verbatim serialization |
+| `JSON.isRawJSON(value)` | Return `true` if the value was created by `JSON.rawJSON()` |
 
-**Raw JSON (ES2026):** `JSON.rawJSON(text)` creates a frozen, null-prototype object with a `rawJSON` property containing the original text. The input must be valid JSON representing a primitive value (string, number, boolean, or null) — objects and arrays are rejected. Leading/trailing whitespace and empty strings throw `SyntaxError`. During `JSON.stringify`, raw JSON values are emitted verbatim without re-serialization, enabling lossless round-tripping of values like large integers (`9007199254740993`) that exceed IEEE-754 `Number` precision. Replacer functions can return `JSON.rawJSON()` values. `JSON.isRawJSON(value)` checks for the internal `[[IsRawJSON]]` slot — objects that merely mimic the structure (e.g., `{ rawJSON: "123" }`) return `false`.
+**Raw JSON:** `JSON.rawJSON(text)` creates a frozen, null-prototype object with a `rawJSON` property containing the original text. The input must be valid JSON representing a primitive value (string, number, boolean, or null) — objects and arrays are rejected. Leading/trailing whitespace and empty strings throw `SyntaxError`. During `JSON.stringify`, raw JSON values are emitted verbatim without re-serialization, enabling lossless round-tripping of values like large integers (`9007199254740993`) that exceed IEEE-754 `Number` precision. Replacer functions can return `JSON.rawJSON()` values. `JSON.isRawJSON(value)` checks for the internal `[[IsRawJSON]]` slot — objects that merely mimic the structure (e.g., `{ rawJSON: "123" }`) return `false`.
 
-**Source text access (ES2024):** When a reviver is provided, it receives three arguments: `(key, value, context)`. The `context` parameter is an object. For primitive JSON values (numbers, strings, booleans, `null`), the context contains a `source` property with the raw JSON text that produced the value — including quotes for strings, exact numeric notation, and escape sequences as written. For objects and arrays, the context object has no `source` property. This enables lossless round-tripping of numeric precision and format-aware value reconstruction.
+**Source text access:** When a reviver is provided, it receives three arguments: `(key, value, context)`. The `context` parameter is an object. For primitive JSON values (numbers, strings, booleans, `null`), the context contains a `source` property with the raw JSON text that produced the value — including quotes for strings, exact numeric notation, and escape sequences as written. For objects and arrays, the context object has no `source` property. This enables lossless round-tripping of numeric precision and format-aware value reconstruction.
 
 The JSON parser is a recursive descent implementation. Special handling:
 
@@ -153,7 +153,7 @@ Compatibility goal: GocciaScript is targeting full TOML 1.1.0 support over time.
 
 Implements the [ECMAScript Object](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object). See [MDN Object reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object) for the full API.
 
-**Full standard compliance** — all ES2026 static methods and prototype methods are available.
+**Full standard compliance** — all standard static methods and prototype methods are available.
 
 **GocciaScript-specific behavior:** `Object.hasOwn` supports class values and checks static properties (not private fields).
 
@@ -216,7 +216,7 @@ Implements the [ECMAScript Array](https://developer.mozilla.org/en-US/docs/Web/J
 
 Implements the [ECMAScript Number](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number). See [MDN Number reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number) for the full API.
 
-**Full standard compliance** — all ES2026 static methods, constants, and prototype methods are available.
+**Full standard compliance** — all standard static methods, constants, and prototype methods are available.
 
 **GocciaScript difference:** `parseInt`, `parseFloat`, `isNaN`, and `isFinite` are only available as `Number.*` static methods — not as global functions. See [language.md](language.md#no-global-parseint-parsefloat-isnan-isfinite) for the rationale.
 
@@ -244,7 +244,7 @@ String prototype methods are implemented on string values:
 
 ### RegExp (`Goccia.Builtins.GlobalRegExp.pas`)
 
-Implements the [ECMAScript RegExp](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp) including ES2025 modifiers, duplicate named groups, and the TC39 `RegExp.escape` proposal.
+Implements the [ECMAScript RegExp](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp) including modifiers, duplicate named groups, and `RegExp.escape`.
 
 RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pattern/flags`) are also supported in both interpreted and bytecode execution modes. Calling `RegExp(existingRegExp)` without `new` and without an explicit `flags` argument returns the original regex object; `new RegExp(existingRegExp)` clones it.
 
@@ -270,7 +270,7 @@ RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pat
 
 | Method | Description |
 |--------|-------------|
-| `escape(string)` | Returns a string with all regex-significant characters escaped so the result can be safely interpolated into a pattern. Implements the TC39 RegExp Escaping proposal. Syntax characters are backslash-escaped; ClassSet-reserved punctuators, whitespace, and line terminators are hex-encoded (`\xHH` / `\uHHHH`). A leading digit or ASCII letter is also hex-encoded to prevent ambiguity with backreferences. |
+| `escape(string)` | Returns a string with all regex-significant characters escaped so the result can be safely interpolated into a pattern. Implements `RegExp.escape`. Syntax characters are backslash-escaped; ClassSet-reserved punctuators, whitespace, and line terminators are hex-encoded (`\xHH` / `\uHHHH`). A leading digit or ASCII letter is also hex-encoded to prevent ambiguity with backreferences. |
 
 **Prototype methods:**
 
@@ -287,14 +287,14 @@ RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pat
 
 **Behavior notes:**
 
-- **Inline modifier groups** (`(?ims-ims:...)`) are supported per ES2025 RegExp Modifiers. Only `i` (ignoreCase), `m` (multiline), and `s` (dotAll) are valid modifier flags. The colon form is required — bare `(?ims)` without `:` is a `SyntaxError`. Duplicate flags and flags appearing in both enable and disable sections are rejected. Modifiers are scoped to the group body; outer flags are unaffected.
+- **Inline modifier groups** (`(?ims-ims:...)`) are supported per the RegExp Modifiers specification. Only `i` (ignoreCase), `m` (multiline), and `s` (dotAll) are valid modifier flags. The colon form is required — bare `(?ims)` without `:` is a `SyntaxError`. Duplicate flags and flags appearing in both enable and disable sections are rejected. Modifiers are scoped to the group body; outer flags are unaffected.
 - **Named capture groups** (`(?<name>...)`) are supported. Match results include a `groups` property (an object with `null` prototype) mapping group names to matched strings. Non-participating named groups are `undefined`. When no named groups exist, `groups` is `undefined`.
 - **Duplicate named capture groups:** the same group name may appear in different alternatives of a disjunction (`|`). For example, `/(?<year>\d{4})-\d{2}|\d{2}-(?<year>\d{4})/`. The `groups` property on the match result returns the value from whichever alternative participated; non-participating duplicates are `undefined`. Using the same name in the same alternative (where both groups could participate) is a `SyntaxError`.
 - **Named backreferences** (`\k<name>`) reference a previously captured named group within the same pattern. With duplicate named capture groups, `\k<name>` resolves to the group with that name in the same alternative branch.
 - Replacement strings in regex-backed `replace()` and `replaceAll()` support `$$`, `$&`, the pre-match token `$` followed by a backtick, `$'`, numeric captures such as `$1`, and **named group references** `$<name>`. An unmatched `$<name>` produces an empty string; `$<` without a closing `>` is literal.
 - When the replacer is a function and named groups are present, the `groups` object is passed as the last argument after `input`.
 - `String.prototype.match`, `matchAll`, `replace`, `replaceAll`, `search`, and `split` dispatch through the corresponding well-known symbol hooks, so custom protocol objects work as expected.
-- `matchAll()` returns a lazy iterator that advances matches on demand per the ES2026 spec.
+- `matchAll()` returns a lazy iterator that advances matches on demand per the specification.
 - The `u` flag enables Unicode-aware pattern matching. Unicode property escapes (`\p{Letter}`, `\P{ASCII}`, etc.) are expanded to equivalent character classes. Unicode code point escapes (`\u{41}`, `\u{1F600}`) are converted to UTF-8 byte sequences. Supported properties: `L`/`Letter`, `Lu`/`Uppercase_Letter`, `Ll`/`Lowercase_Letter`, `N`/`Number`, `Nd`/`Decimal_Number`, `P`/`Punctuation`, `S`/`Symbol`, `Z`/`Separator`, `Cc`/`Control`, `ASCII`, `ASCII_Hex_Digit`, `White_Space`. Unsupported properties throw `SyntaxError`. The `u` flag also disables TRegExpr's Russian charset extensions and enables correct `AdvanceStringIndex` for multi-byte UTF-8 sequences.
 - The `v` flag (Unicode sets) is accepted and exposed through `.flags` and `.unicodeSets`. The `u` and `v` flags are mutually exclusive. Full Unicode set notation and properties of strings in character classes are not yet implemented beyond basic `u` flag behavior.
 - The `d` flag (indices) is accepted and exposed through `.flags` and `.hasIndices`. Match indices are not yet populated.
@@ -379,11 +379,11 @@ The constructor-backed objects mirror the `node-semver` public fields and core i
 
 `atob` decodes a base64 string following the WHATWG forgiving-base64-decode algorithm. ASCII whitespace (U+0009, U+000A, U+000C, U+000D, U+0020) is stripped before decoding. Missing `=` padding is tolerated. Invalid characters or an invalid length (length mod 4 = 1 after cleanup) throw a `DOMException` with name `"InvalidCharacterError"` and legacy code 5. The decoded bytes are returned as a string where each byte becomes a character (Latin-1 interpretation).
 
-`encodeURI` / `decodeURI` / `encodeURIComponent` / `decodeURIComponent` implement ES2026 §19.2.6. The shared encoding/decoding logic lives in `Goccia.URI.pas` and is also used by `import.meta.url` for file-path percent-encoding. Multi-byte Unicode characters are encoded as UTF-8 octets, each percent-encoded individually (e.g., `encodeURIComponent("中")` → `%E4%B8%AD`). Lone surrogates (U+D800–U+DFFF) throw `URIError`. Decoding validates UTF-8 well-formedness: overlong encodings, truncated sequences, and code points above U+10FFFF all throw `URIError`. `decodeURI` re-emits reserved characters as uppercase percent-encoded sequences even when the input uses lowercase hex digits (e.g., `%2f` → `%2F`).
+`encodeURI` / `decodeURI` / `encodeURIComponent` / `decodeURIComponent` follow the ECMA-262 URI handling specification. The shared encoding/decoding logic lives in `Goccia.URI.pas` and is also used by `import.meta.url` for file-path percent-encoding. Multi-byte Unicode characters are encoded as UTF-8 octets, each percent-encoded individually (e.g., `encodeURIComponent("中")` → `%E4%B8%AD`). Lone surrogates (U+D800–U+DFFF) throw `URIError`. Decoding validates UTF-8 well-formedness: overlong encodings, truncated sequences, and code points above U+10FFFF all throw `URIError`. `decodeURI` re-emits reserved characters as uppercase percent-encoded sequences even when the input uses lowercase hex digits (e.g., `%2f` → `%2F`).
 
 **Error constructors:** `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `DOMException`
 
-**Prototype chain:** All error types follow the ES2026 prototype hierarchy. `TypeError.prototype`, `RangeError.prototype`, etc. inherit from `Error.prototype`. This means `new TypeError("msg") instanceof TypeError` is `true` AND `new TypeError("msg") instanceof Error` is `true`. Cross-type checks return `false` (e.g., `new TypeError("msg") instanceof RangeError` is `false`).
+**Prototype chain:** All error types follow the standard prototype hierarchy. `TypeError.prototype`, `RangeError.prototype`, etc. inherit from `Error.prototype`. This means `new TypeError("msg") instanceof TypeError` is `true` AND `new TypeError("msg") instanceof Error` is `true`. Cross-type checks return `false` (e.g., `new TypeError("msg") instanceof RangeError` is `false`).
 
 **Runtime errors:** Errors thrown internally by the engine (e.g., `TypeError` from accessing a property on `null`/`undefined`, or `RangeError` from invalid `ArrayBuffer` length) have the same prototype chain as user-constructed errors. This means `instanceof` checks work correctly in catch blocks:
 
@@ -398,7 +398,7 @@ try { null.x; } catch (e) {
 
 | Method | Description |
 |--------|-------------|
-| `Error.isError(arg)` | Returns `true` if `arg` is an Error instance (has `[[ErrorData]]` internal slot), `false` otherwise (ES2026) |
+| `Error.isError(arg)` | Returns `true` if `arg` is an Error instance (has `[[ErrorData]]` internal slot), `false` otherwise |
 
 All error constructors accept an optional second argument `options` with a `cause` property. `AggregateError` takes `(errors, message, options?)` where `errors` is an array of error objects. `DOMException` takes `(message?, name?)` where `name` defaults to `"Error"` — the `code` property is automatically set from the legacy error code mapping (e.g., `"DataCloneError"` → 25).
 
@@ -412,7 +412,7 @@ ErrorName: message
 
 ### Iterator (`Goccia.Values.IteratorValue.pas`, `Iterator.Concrete.pas`, `Iterator.Lazy.pas`, `Iterator.Concat.pas`, `Iterator.Generic.pas`)
 
-Implements the [ECMAScript Iterator Helpers proposal](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Iterator) and TC39 Iterator Sequencing / Joint Iteration proposals.
+Implements the [ECMAScript Iterator Helpers](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Iterator), Iterator Sequencing (`Iterator.concat`), and the Stage 3 Joint Iteration proposal (`Iterator.zip`).
 
 All built-in iterators (Array, String, Map, Set) share a common `Iterator.prototype` with helper methods per the ECMAScript Iterator Helpers proposal:
 
@@ -491,7 +491,7 @@ obj[sym]; // "value"
 
 ### Set (`Goccia.Builtins.GlobalSet.pas`)
 
-Implements the [ECMAScript Set](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Set) including ES2025 Set methods (`union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom`).
+Implements the [ECMAScript Set](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Set) including Set methods (`union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom`).
 
 A collection of unique values with insertion-order iteration.
 
@@ -520,7 +520,7 @@ Sets are iterable: `[...mySet]` spreads the set's values into an array.
 
 ### Map (`Goccia.Builtins.GlobalMap.pas`)
 
-Implements the [ECMAScript Map](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map) including TC39 `Map.prototype.getOrInsert`/`getOrInsertComputed` (proposal-upsert).
+Implements the [ECMAScript Map](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map) including `Map.prototype.getOrInsert`/`getOrInsertComputed`.
 
 A collection of key-value pairs with insertion-order iteration. Any value (including objects) can be a key.
 
@@ -538,8 +538,8 @@ A collection of key-value pairs with insertion-order iteration. Any value (inclu
 | `map.values()` | Returns an iterator over values |
 | `map.entries()` | Returns an iterator over `[key, value]` pairs |
 | `map[Symbol.iterator]()` | Returns an entries iterator (same as `entries()`) |
-| `map.getOrInsert(key, default)` | Return value for key if present; otherwise insert default and return it (TC39 proposal-upsert) |
-| `map.getOrInsertComputed(key, cb)` | Return value for key if present; otherwise call `cb(key)`, insert result, and return it (TC39 proposal-upsert) |
+| `map.getOrInsert(key, default)` | Return value for key if present; otherwise insert default and return it |
+| `map.getOrInsertComputed(key, cb)` | Return value for key if present; otherwise call `cb(key)`, insert result, and return it |
 
 **Static methods:**
 
@@ -551,7 +551,7 @@ Maps are iterable: `[...myMap]` spreads the map into an array of `[key, value]` 
 
 ### Promise (`Goccia.Builtins.GlobalPromise.pas`, `Goccia.Values.PromiseValue.pas`)
 
-Implements the [ECMAScript Promise](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise) including `Promise.withResolvers()` (ES2024) and `Promise.try()` (ES2025). See [MDN Promise reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise) for the standard API.
+Implements the [ECMAScript Promise](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise) including `Promise.withResolvers()` and `Promise.try()`. See [MDN Promise reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise) for the standard API.
 
 An implementation of ECMAScript Promises with a synchronous microtask queue. `.then()` callbacks are always deferred (never synchronous), matching spec behavior.
 
@@ -788,6 +788,6 @@ Implements the [WHATWG URLSearchParams](https://developer.mozilla.org/en-US/docs
 
 ### DisposableStack / AsyncDisposableStack (`Goccia.Builtins.DisposableStack.pas`)
 
-Implements the [TC39 Explicit Resource Management proposal](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/DisposableStack). See [MDN DisposableStack reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/DisposableStack) for the full API.
+Implements [Explicit Resource Management](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/DisposableStack). See [MDN DisposableStack reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/DisposableStack) for the full API.
 
 **GocciaScript differences:** None -- full proposal compliance. Both `DisposableStack` (sync) and `AsyncDisposableStack` (async) are supported. `SuppressedError` is thrown when both the block body and a disposer throw, with `error` (body error) and `suppressed` (dispose error) properties.
