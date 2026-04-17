@@ -17,11 +17,10 @@ uses
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
   Goccia.CLI.Options,
-  Goccia.Compiler,
   Goccia.Coverage,
   Goccia.Coverage.Report,
   Goccia.Engine,
-  Goccia.Engine.BytecodeBackend,
+  Goccia.Engine.Backend,
   Goccia.Error,
   Goccia.Error.Detail,
   Goccia.FileExtensions,
@@ -363,7 +362,9 @@ var
   Warning: TGocciaParserWarning;
   ProgramNode: TGocciaProgram;
   Module: TGocciaBytecodeModule;
-  Backend: TGocciaBytecodeBackend;
+  Executor: TGocciaBytecodeExecutor;
+  Engine: TGocciaEngine;
+  SilentCon: TGocciaTestConsole;
   ScriptResult: TGocciaObjectValue;
   ResultValue: TGocciaValue;
   OrigLine, OrigCol, I: Integer;
@@ -399,75 +400,92 @@ begin
     end;
 
     try try
-      Backend := CreateBytecodeBackend(AFileName);
+      Executor := TGocciaBytecodeExecutor.Create;
       try
-        LexStart := GetNanoseconds;
-        Lexer := TGocciaLexer.Create(SourceText, AFileName);
+        Engine := CreateEngine(AFileName, Source, Executor);
         try
-          Tokens := Lexer.ScanTokens;
-          LexEnd := GetNanoseconds;
+          SilentCon := nil;
+          if FSilent.Present or GIsWorkerThread then
+          begin
+            SilentCon := TGocciaTestConsole.Create;
+            SilentCon.Silence(Engine.BuiltinConsole.BuiltinObject);
+            Engine.SuppressWarnings := True;
+          end;
 
-          Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
-          Parser.AutomaticSemicolonInsertion := EngineOptions.ASI.Present;
           try
-            ProgramNode := Parser.Parse;
-            ParseEnd := GetNanoseconds;
-
-            if Assigned(TGocciaCoverageTracker.Instance) and
-               TGocciaCoverageTracker.Instance.Enabled then
-              TGocciaCoverageTracker.Instance.RegisterSourceFile(
-                AFileName, CountExecutableLines(Lexer.SourceLines));
-
-            if (not FSilent.Present) and (not GIsWorkerThread) then
-              for I := 0 to Parser.WarningCount - 1 do
-              begin
-                Warning := Parser.GetWarning(I);
-                WriteLn(Format('Warning: %s', [Warning.Message]));
-                if Warning.Suggestion <> '' then
-                  WriteLn(Format('  Suggestion: %s', [Warning.Suggestion]));
-                if Assigned(SourceMap) and SourceMap.Translate(Warning.Line, Warning.Column, OrigLine, OrigCol) then
-                  WriteLn(Format('  --> %s:%d:%d', [AFileName, OrigLine, OrigCol]))
-                else
-                  WriteLn(Format('  --> %s:%d:%d', [AFileName, Warning.Line, Warning.Column]));
-              end;
+            LexStart := GetNanoseconds;
+            Lexer := TGocciaLexer.Create(SourceText, AFileName);
             try
-              Module := Backend.CompileToModule(ProgramNode);
-              CompileEnd := GetNanoseconds;
+              Tokens := Lexer.ScanTokens;
+              LexEnd := GetNanoseconds;
+
+              Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
+              Parser.AutomaticSemicolonInsertion := EngineOptions.ASI.Present;
+              try
+                ProgramNode := Parser.Parse;
+                ParseEnd := GetNanoseconds;
+
+                if Assigned(TGocciaCoverageTracker.Instance) and
+                   TGocciaCoverageTracker.Instance.Enabled then
+                  TGocciaCoverageTracker.Instance.RegisterSourceFile(
+                    AFileName, CountExecutableLines(Lexer.SourceLines));
+
+                if (not FSilent.Present) and (not GIsWorkerThread) then
+                  for I := 0 to Parser.WarningCount - 1 do
+                  begin
+                    Warning := Parser.GetWarning(I);
+                    WriteLn(Format('Warning: %s', [Warning.Message]));
+                    if Warning.Suggestion <> '' then
+                      WriteLn(Format('  Suggestion: %s', [Warning.Suggestion]));
+                    if Assigned(SourceMap) and SourceMap.Translate(Warning.Line, Warning.Column, OrigLine, OrigCol) then
+                      WriteLn(Format('  --> %s:%d:%d', [AFileName, OrigLine, OrigCol]))
+                    else
+                      WriteLn(Format('  --> %s:%d:%d', [AFileName, Warning.Line, Warning.Column]));
+                  end;
+                try
+                  Module := TGocciaBytecodeExecutor(Engine.Executor).CompileToModule(ProgramNode);
+                  CompileEnd := GetNanoseconds;
+                finally
+                  ProgramNode.Free;
+                end;
+              finally
+                Parser.Free;
+              end;
             finally
-              ProgramNode.Free;
+              Lexer.Free;
+            end;
+
+            StartExecutionTimeout(EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS));
+            try
+              try
+                ResultValue := TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
+              finally
+                ClearExecutionTimeout;
+              end;
+              ExecEnd := GetNanoseconds;
+
+              if ResultValue is TGocciaObjectValue then
+                MergeFileResult(ScriptResult, TGocciaObjectValue(ResultValue));
+
+              Result.TestResult := ScriptResult;
+              Result.Timing.Result := ResultValue;
+              Result.Timing.LexTimeNanoseconds := LexEnd - LexStart;
+              Result.Timing.ParseTimeNanoseconds := ParseEnd - LexEnd;
+              Result.Timing.CompileTimeNanoseconds := CompileEnd - ParseEnd;
+              Result.Timing.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
+              Result.Timing.TotalTimeNanoseconds := ExecEnd - LexStart;
+              Result.Timing.FileName := AFileName;
+            finally
+              Module.Free;
             end;
           finally
-            Parser.Free;
+            SilentCon.Free;
           end;
         finally
-          Lexer.Free;
-        end;
-
-        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS));
-        try
-          try
-            ResultValue := Backend.RunModule(Module);
-          finally
-            ClearExecutionTimeout;
-          end;
-          ExecEnd := GetNanoseconds;
-
-          if ResultValue is TGocciaObjectValue then
-            MergeFileResult(ScriptResult, TGocciaObjectValue(ResultValue));
-
-          Result.TestResult := ScriptResult;
-          Result.Timing.Result := ResultValue;
-          Result.Timing.LexTimeNanoseconds := LexEnd - LexStart;
-          Result.Timing.ParseTimeNanoseconds := ParseEnd - LexEnd;
-          Result.Timing.CompileTimeNanoseconds := CompileEnd - ParseEnd;
-          Result.Timing.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
-          Result.Timing.TotalTimeNanoseconds := ExecEnd - LexStart;
-          Result.Timing.FileName := AFileName;
-        finally
-          Module.Free;
+          Engine.Free;
         end;
       finally
-        Backend.Free;
+        Executor.Free;
       end;
     except
       on E: Exception do

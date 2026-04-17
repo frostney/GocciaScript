@@ -13,7 +13,6 @@ uses
   Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Module,
   Goccia.Evaluator.Context,
-  Goccia.Interpreter,
   Goccia.Modules,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
@@ -65,7 +64,7 @@ type
     FLocalCellCount: Integer;
     FArgCount: Integer;
     FGlobalScope: TGocciaScope;
-    FInterpreter: TGocciaInterpreter;
+    FLoadModule: TLoadModuleCallback;
     FCurrentClosure: TGocciaBytecodeClosure;
     FHandlerStack: TGocciaBytecodeHandlerStack;
     FFrameDepth: Integer;
@@ -185,7 +184,7 @@ type
     function ExecuteFunction(const ATemplate: TGocciaFunctionTemplate): TGocciaValue;
     function ExecuteModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
     property GlobalScope: TGocciaScope read FGlobalScope write FGlobalScope;
-    property Interpreter: TGocciaInterpreter read FInterpreter write FInterpreter;
+    property LoadModule: TLoadModuleCallback read FLoadModule write FLoadModule;
     property CoverageEnabled: Boolean read FCoverageEnabled write FCoverageEnabled;
     property ProfilingOpcodes: Boolean read FProfilingOpcodes write FProfilingOpcodes;
     property ProfilingFunctions: Boolean read FProfilingFunctions write FProfilingFunctions;
@@ -2409,10 +2408,10 @@ function TGocciaVM.ImportModuleValue(const APath: string): TGocciaValue;
 var
   Module: TGocciaModule;
 begin
-  if not Assigned(FInterpreter) then
+  if not Assigned(FLoadModule) then
     ThrowTypeError(SErrorModuleNotAvailableInVM);
 
-  Module := FInterpreter.LoadModule(APath, FCurrentModuleSourcePath);
+  Module := FLoadModule(APath, FCurrentModuleSourcePath);
   Result := CreateModuleNamespaceObject(Module);
 end;
 
@@ -2420,10 +2419,10 @@ function TGocciaVM.ImportModuleValue(const APath, AReferrer: string): TGocciaVal
 var
   Module: TGocciaModule;
 begin
-  if not Assigned(FInterpreter) then
+  if not Assigned(FLoadModule) then
     ThrowTypeError(SErrorModuleNotAvailableInVM);
 
-  Module := FInterpreter.LoadModule(APath, AReferrer);
+  Module := FLoadModule(APath, AReferrer);
   Result := CreateModuleNamespaceObject(Module);
 end;
 

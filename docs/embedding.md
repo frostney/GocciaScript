@@ -286,7 +286,7 @@ begin
 end;
 ```
 
-`TGocciaInterpreter` and `TGocciaBytecodeBackend` also accept injected module loaders. When no loader is supplied, they create a default `TGocciaModuleLoader`, which in turn uses a `TGocciaFileSystemModuleContentProvider` and the standard filesystem-backed resolver.
+`TGocciaEngine` also accepts an injected module loader via its constructor. When no loader is supplied, it creates a default `TGocciaModuleLoader`, which in turn uses a `TGocciaFileSystemModuleContentProvider` and the standard filesystem-backed resolver.
 
 ### Global Modules
 
@@ -649,7 +649,7 @@ end;
 
 ## Existing Embeddings
 
-The repository includes four embedding examples:
+The repository includes five embedding examples:
 
 | Program | File | Description |
 |---------|------|-------------|
@@ -657,6 +657,7 @@ The repository includes four embedding examples:
 | `REPL` | `REPL.dpr` | Interactive read-eval-print loop (long-lived engine) |
 | `TestRunner` | `TestRunner.dpr` | Runs test suites with `ggTestAssertions` enabled |
 | `BenchmarkRunner` | `BenchmarkRunner.dpr` | Runs benchmarks with `ggBenchmark` enabled from files or stdin |
+| `GocciaBundler` | `GocciaBundler.dpr` | Standalone bytecode compiler — compiles source files to `.gbc` without execution |
 
 These serve as reference implementations for the patterns described above.
 
@@ -705,4 +706,4 @@ For CLI tools, use `TGocciaCLIApplication` instead, which adds argument parsing,
 5. Inject custom globals via `Engine.Interpreter.GlobalScope.DefineLexicalBinding(...)`
 6. Handle exceptions from `Goccia.Error`
 7. Free the engine when done (the GC cleans up all runtime values)
-For host-provided configuration data, both `TGocciaEngine` and `TGocciaBytecodeBackend` expose `InjectGlobalsFromJSON(...)`, `InjectGlobalsFromJSON5(...)`, `InjectGlobalsFromTOML(...)`, `InjectGlobalsFromYAML(...)`, and `InjectGlobalsFromModule(...)`. JSON5- and TOML-backed globals use the same top-level-object/table contract as JSON/YAML object globals.
+For host-provided configuration data, `TGocciaEngine` exposes `InjectGlobalsFromJSON(...)`, `InjectGlobalsFromJSON5(...)`, `InjectGlobalsFromTOML(...)`, `InjectGlobalsFromYAML(...)`, and `InjectGlobalsFromModule(...)`. JSON5- and TOML-backed globals use the same top-level-object/table contract as JSON/YAML object globals.

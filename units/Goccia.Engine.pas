@@ -40,6 +40,8 @@ uses
   Goccia.Builtins.TestAssertions,
   Goccia.Builtins.TOML,
   Goccia.Builtins.YAML,
+  Goccia.Evaluator.Context,
+  Goccia.Executor,
   Goccia.Interpreter,
   Goccia.JSON,
   Goccia.JSON5,
@@ -51,6 +53,7 @@ uses
   Goccia.ObjectModel,
   Goccia.ObjectModel.Engine,
   Goccia.Parser,
+  Goccia.Scope,
   Goccia.SourceMap,
   Goccia.TextFiles,
   Goccia.TOML,
@@ -87,19 +90,38 @@ type
     FileName: string;
   end;
 
-type
+  TGocciaInterpreterExecutor = class(TGocciaExecutor)
+  private
+    FInterpreter: TGocciaInterpreter;
+  public
+    constructor Create(const AInterpreter: TGocciaInterpreter);
+    procedure Initialize(const AGlobalScope: TGocciaScope;
+      const AModuleLoader: TGocciaModuleLoader;
+      const ASourcePath: string); override;
+    function ExecuteProgram(
+      const AProgram: TGocciaProgram): TGocciaValue; override;
+    procedure EvaluateModuleBody(const AProgram: TGocciaProgram;
+      const AContext: TGocciaEvaluationContext); override;
+  end;
+
   TGocciaEngine = class
   public
     const DefaultPreprocessors: TGocciaPreprocessors = [ppJSX];
     const DefaultCompatibility: TGocciaCompatibilityFlags = [];
   private
     FInterpreter: TGocciaInterpreter;
-    FFileName: string;
-    FSourceLines: TStringList;
-    FInjectedGlobals: TStringList;
-    FGlobals: TGocciaGlobalBuiltins;
+    FSourcePath: string;
     FModuleLoader: TGocciaModuleLoader;
     FOwnsModuleLoader: Boolean;
+    FInjectedGlobals: TStringList;
+    FPreprocessors: TGocciaPreprocessors;
+    FCompatibility: TGocciaCompatibilityFlags;
+    FStrictTypes: Boolean;
+    FShims: TStringList;
+    FExecutor: TGocciaExecutor;
+    FOwnsExecutor: Boolean;
+    FSourceLines: TStringList;
+    FGlobals: TGocciaGlobalBuiltins;
 
     // Built-in objects
     FBuiltinConsole: TGocciaConsole;
@@ -133,15 +155,13 @@ type
     FBuiltinURLSearchParams: TGocciaGlobalURLSearchParams;
     FBuiltinDisposableStack: TGocciaBuiltinDisposableStack;
     FPreviousExceptionMask: TFPUExceptionMask;
-    FPreprocessors: TGocciaPreprocessors;
-    FCompatibility: TGocciaCompatibilityFlags;
-    FStrictTypes: Boolean;
-    FShims: TStringList;
     FSuppressWarnings: Boolean;
     FLastTiming: TGocciaScriptResult;
     FLastSourceMap: TGocciaSourceMap;
     function GetASIEnabled: Boolean;
     procedure SetASIEnabled(const AValue: Boolean);
+    function GetContentProvider: TGocciaModuleContentProvider;
+    function GetModuleResolver: TGocciaModuleResolver;
     procedure SetPreprocessors(const AValue: TGocciaPreprocessors);
     procedure SetCompatibility(const AValue: TGocciaCompatibilityFlags);
 
@@ -155,15 +175,18 @@ type
     procedure Initialize(const AFileName: string; const ASourceLines: TStringList;
       const AGlobals: TGocciaGlobalBuiltins; const AModuleLoader: TGocciaModuleLoader;
       const AOwnsModuleLoader: Boolean);
-    function GetContentProvider: TGocciaModuleContentProvider;
     function GetResolver: TGocciaModuleResolver;
     function SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap = nil);
-    procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
+    procedure ThrowError(const AMessage: string; const ALine,
+      AColumn: Integer);
   public
     constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AResolver: TGocciaModuleResolver); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AModuleLoader: TGocciaModuleLoader); overload;
+    constructor Create(const AFileName: string; const ASourceLines: TStringList;
+      const AGlobals: TGocciaGlobalBuiltins;
+      const AExecutor: TGocciaExecutor); overload;
     destructor Destroy; override;
 
     function Execute: TGocciaScriptResult;
@@ -171,11 +194,13 @@ type
 
     procedure AddAlias(const APattern, AReplacement: string);
     procedure InjectGlobal(const AKey: string; const AValue: TGocciaValue);
+    procedure RegisterGlobal(const AName: string; const AValue: TGocciaValue);
     procedure InjectGlobalsFromJSON(const AJsonString: string);
     procedure InjectGlobalsFromJSON5(const AJSON5String: UTF8String);
     procedure InjectGlobalsFromTOML(const ATOMLString: UTF8String);
     procedure InjectGlobalsFromYAML(const AYamlString: string);
     procedure InjectGlobalsFromModule(const APath: string);
+    procedure ClearTransientCaches;
     procedure RegisterGlobalModule(const AName: string; const AModule: TGocciaModule);
 
     class function RunScript(const ASource: string; const AFileName: string; const AGlobals: TGocciaGlobalBuiltins): TGocciaScriptResult; overload;
@@ -185,9 +210,17 @@ type
     class function RunScriptFromStringList(const ASource: TStringList; const AFileName: string; const AGlobals: TGocciaGlobalBuiltins): TGocciaScriptResult; overload;
     class function RunScriptFromStringList(const ASource: TStringList; const AFileName: string): TGocciaScriptResult; overload;
 
+    property Executor: TGocciaExecutor read FExecutor;
     property Interpreter: TGocciaInterpreter read FInterpreter;
     property Resolver: TGocciaModuleResolver read GetResolver;
     property ContentProvider: TGocciaModuleContentProvider read GetContentProvider;
+    property ModuleResolver: TGocciaModuleResolver read GetModuleResolver;
+    property ModuleLoader: TGocciaModuleLoader read FModuleLoader;
+    property ASIEnabled: Boolean read GetASIEnabled write SetASIEnabled;
+    property Preprocessors: TGocciaPreprocessors read FPreprocessors write SetPreprocessors;
+    property Compatibility: TGocciaCompatibilityFlags read FCompatibility write SetCompatibility;
+    property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
+    property Shims: TStringList read FShims;
     property BuiltinConsole: TGocciaConsole read FBuiltinConsole;
     property BuiltinMath: TGocciaMath read FBuiltinMath;
     property BuiltinGlobalObject: TGocciaGlobalObject read FBuiltinGlobalObject;
@@ -209,11 +242,6 @@ type
     property BuiltinTemporal: TGocciaTemporalBuiltin read FBuiltinTemporal;
     property BuiltinArrayBuffer: TGocciaGlobalArrayBuffer read FBuiltinArrayBuffer;
     property BuiltinProxy: TGocciaGlobalProxy read FBuiltinProxy;
-    property ASIEnabled: Boolean read GetASIEnabled write SetASIEnabled;
-    property Preprocessors: TGocciaPreprocessors read FPreprocessors write SetPreprocessors;
-    property Compatibility: TGocciaCompatibilityFlags read FCompatibility write SetCompatibility;
-    property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
-    property Shims: TStringList read FShims;
     property BuiltinFFI: TGocciaGlobalFFI read FBuiltinFFI;
     property BuiltinReflect: TGocciaGlobalReflect read FBuiltinReflect;
     property BuiltinURL: TGocciaGlobalURL read FBuiltinURL;
@@ -241,13 +269,13 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Coverage,
   Goccia.Error,
+  Goccia.Evaluator,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.MicrotaskQueue,
   Goccia.Platform,
-  Goccia.Scope,
   Goccia.Scope.Redeclaration,
   Goccia.Shims,
   Goccia.Spec,
@@ -271,6 +299,214 @@ uses
   Goccia.Values.URLValue,
   Goccia.Version;
 
+{ TGocciaInterpreterExecutor }
+
+constructor TGocciaInterpreterExecutor.Create(
+  const AInterpreter: TGocciaInterpreter);
+begin
+  inherited Create;
+  FInterpreter := AInterpreter;
+end;
+
+procedure TGocciaInterpreterExecutor.Initialize(
+  const AGlobalScope: TGocciaScope; const AModuleLoader: TGocciaModuleLoader;
+  const ASourcePath: string);
+begin
+  inherited;
+  AModuleLoader.EvaluateModuleBody := EvaluateModuleBody;
+end;
+
+function TGocciaInterpreterExecutor.ExecuteProgram(
+  const AProgram: TGocciaProgram): TGocciaValue;
+var
+  Start: Int64;
+begin
+  Start := GetNanoseconds;
+  Result := FInterpreter.Execute(AProgram);
+  ExecuteTimeNanoseconds := GetNanoseconds - Start;
+end;
+
+procedure TGocciaInterpreterExecutor.EvaluateModuleBody(
+  const AProgram: TGocciaProgram; const AContext: TGocciaEvaluationContext);
+var
+  I: Integer;
+begin
+  for I := 0 to AProgram.Body.Count - 1 do
+    EvaluateStatement(AProgram.Body[I], AContext);
+end;
+
+{ TGocciaEngine }
+
+function TGocciaEngine.GetASIEnabled: Boolean;
+begin
+  Result := cfASI in FCompatibility;
+end;
+
+function TGocciaEngine.GetContentProvider: TGocciaModuleContentProvider;
+begin
+  Result := FModuleLoader.ContentProvider;
+end;
+
+function TGocciaEngine.GetModuleResolver: TGocciaModuleResolver;
+begin
+  Result := FModuleLoader.Resolver;
+end;
+
+procedure TGocciaEngine.RegisterGlobal(const AName: string;
+  const AValue: TGocciaValue);
+begin
+  if FInterpreter.GlobalScope.ContainsOwnLexicalBinding(AName) then
+  begin
+    if FInjectedGlobals.IndexOf(AName) >= 0 then
+      FInterpreter.GlobalScope.ForceUpdateBinding(AName, AValue)
+    else
+      ThrowError(
+        'Cannot override built-in global "' + AName + '" via globals injection.',
+        0, 0);
+  end
+  else
+  begin
+    FInterpreter.GlobalScope.DefineLexicalBinding(AName, AValue, dtConst);
+    FInjectedGlobals.Add(AName);
+  end;
+end;
+
+procedure TGocciaEngine.InjectGlobalsFromJSON(const AJsonString: string);
+var
+  Parser: TGocciaJSONParser;
+  ParsedValue: TGocciaValue;
+  Obj: TGocciaObjectValue;
+  Key: string;
+begin
+  Parser := TGocciaJSONParser.Create;
+  try
+    ParsedValue := Parser.Parse(AJsonString);
+  finally
+    Parser.Free;
+  end;
+
+  if not (ParsedValue is TGocciaObjectValue) then
+    ThrowError('Globals JSON must be a top-level object.', 0, 0);
+
+  TGarbageCollector.Instance.AddTempRoot(ParsedValue);
+  try
+    Obj := TGocciaObjectValue(ParsedValue);
+    for Key in Obj.GetOwnPropertyKeys do
+      RegisterGlobal(Key, Obj.GetProperty(Key));
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+  end;
+end;
+
+procedure TGocciaEngine.InjectGlobalsFromJSON5(
+  const AJSON5String: UTF8String);
+var
+  Key: string;
+  Obj: TGocciaObjectValue;
+  ParsedValue: TGocciaValue;
+  Parser: TGocciaJSON5Parser;
+begin
+  Parser := TGocciaJSON5Parser.Create;
+  try
+    ParsedValue := Parser.Parse(AJSON5String);
+  finally
+    Parser.Free;
+  end;
+
+  if not (ParsedValue is TGocciaObjectValue) then
+    ThrowError('Globals JSON5 must be a top-level object.', 0, 0);
+
+  TGarbageCollector.Instance.AddTempRoot(ParsedValue);
+  try
+    Obj := TGocciaObjectValue(ParsedValue);
+    for Key in Obj.GetOwnPropertyKeys do
+      RegisterGlobal(Key, Obj.GetProperty(Key));
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+  end;
+end;
+
+procedure TGocciaEngine.InjectGlobalsFromTOML(
+  const ATOMLString: UTF8String);
+var
+  Key: string;
+  Obj: TGocciaObjectValue;
+  ParsedValue: TGocciaValue;
+  Parser: TGocciaTOMLParser;
+begin
+  Parser := TGocciaTOMLParser.Create;
+  try
+    ParsedValue := Parser.Parse(ATOMLString);
+  finally
+    Parser.Free;
+  end;
+
+  if not (ParsedValue is TGocciaObjectValue) then
+    ThrowError('Globals TOML must be a top-level object.', 0, 0);
+
+  TGarbageCollector.Instance.AddTempRoot(ParsedValue);
+  try
+    Obj := TGocciaObjectValue(ParsedValue);
+    for Key in Obj.GetOwnPropertyKeys do
+      RegisterGlobal(Key, Obj.GetProperty(Key));
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+  end;
+end;
+
+procedure TGocciaEngine.InjectGlobalsFromYAML(const AYamlString: string);
+var
+  Documents: TGocciaArrayValue;
+  ParsedDocument: TGocciaValue;
+  Parser: TGocciaYAMLParser;
+  Obj: TGocciaObjectValue;
+  Key: string;
+begin
+  Parser := TGocciaYAMLParser.Create;
+  try
+    Documents := Parser.ParseDocuments(AYamlString);
+  finally
+    Parser.Free;
+  end;
+
+  try
+    if Documents.Elements.Count <> 1 then
+      ThrowError(
+        'Globals YAML must contain exactly one top-level document.', 0, 0);
+
+    ParsedDocument := Documents.Elements[0];
+    if not (ParsedDocument is TGocciaObjectValue) then
+      ThrowError('Globals YAML must be a top-level object.', 0, 0);
+
+    TGarbageCollector.Instance.AddTempRoot(ParsedDocument);
+    Obj := TGocciaObjectValue(ParsedDocument);
+    try
+      for Key in Obj.GetOwnPropertyKeys do
+        RegisterGlobal(Key, Obj.GetProperty(Key));
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(ParsedDocument);
+    end;
+  finally
+    Documents.Free;
+  end;
+end;
+
+procedure TGocciaEngine.InjectGlobalsFromModule(const APath: string);
+var
+  Module: TGocciaModule;
+  ExportPair: TGocciaValueMap.TKeyValuePair;
+begin
+  Module := FModuleLoader.LoadModule(APath, FSourcePath);
+  for ExportPair in Module.ExportsTable do
+    RegisterGlobal(ExportPair.Key, ExportPair.Value);
+end;
+
+procedure TGocciaEngine.ClearTransientCaches;
+begin
+  if Assigned(FExecutor) then
+    FExecutor.ClearTransientCaches;
+end;
+
 constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins);
 begin
   Initialize(AFileName, ASourceLines, AGlobals,
@@ -288,6 +524,16 @@ constructor TGocciaEngine.Create(const AFileName: string;
   const AModuleLoader: TGocciaModuleLoader);
 begin
   Initialize(AFileName, ASourceLines, AGlobals, AModuleLoader, False);
+end;
+
+constructor TGocciaEngine.Create(const AFileName: string;
+  const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins;
+  const AExecutor: TGocciaExecutor);
+begin
+  FExecutor := AExecutor;
+  FOwnsExecutor := False;
+  Initialize(AFileName, ASourceLines, AGlobals,
+    TGocciaModuleLoader.Create(AFileName), True);
 end;
 
 procedure TGocciaEngine.ExecuteShims;
@@ -309,7 +555,7 @@ procedure TGocciaEngine.Initialize(const AFileName: string;
 begin
   FPreviousExceptionMask := GetExceptionMask;
   SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
-  FFileName := AFileName;
+  FSourcePath := AFileName;
   FSourceLines := ASourceLines;
   FGlobals := AGlobals;
   FModuleLoader := AModuleLoader;
@@ -340,6 +586,14 @@ begin
   PinSingletons;
   RegisterBuiltIns;
   ExecuteShims;
+
+  // Set up the executor: use the provided one or default to interpreter mode.
+  if not Assigned(FExecutor) then
+  begin
+    FExecutor := TGocciaInterpreterExecutor.Create(FInterpreter);
+    FOwnsExecutor := True;
+  end;
+  FExecutor.Initialize(FInterpreter.GlobalScope, FModuleLoader, AFileName);
 end;
 
 destructor TGocciaEngine.Destroy;
@@ -382,6 +636,8 @@ begin
     FLastSourceMap.Free;
     FInjectedGlobals.Free;
     FShims.Free;
+    if FOwnsExecutor then
+      FExecutor.Free;
     FInterpreter.Free;
     if FOwnsModuleLoader then
       FModuleLoader.Free;
@@ -800,11 +1056,6 @@ begin
   FInterpreter.GlobalScope.DefineLexicalBinding('Goccia', GocciaObj, dtConst);
 end;
 
-function TGocciaEngine.GetContentProvider: TGocciaModuleContentProvider;
-begin
-  Result := FModuleLoader.ContentProvider;
-end;
-
 function TGocciaEngine.GetResolver: TGocciaModuleResolver;
 begin
   Result := FModuleLoader.Resolver;
@@ -817,153 +1068,7 @@ end;
 
 procedure TGocciaEngine.InjectGlobal(const AKey: string; const AValue: TGocciaValue);
 begin
-  if FInterpreter.GlobalScope.ContainsOwnLexicalBinding(AKey) then
-  begin
-    if FInjectedGlobals.IndexOf(AKey) >= 0 then
-      FInterpreter.GlobalScope.ForceUpdateBinding(AKey, AValue)
-    else
-      raise TGocciaRuntimeError.Create(
-        'Cannot override built-in global "' + AKey + '" via globals injection.',
-        0, 0, FFileName, FSourceLines);
-  end
-  else
-  begin
-    FInterpreter.GlobalScope.DefineLexicalBinding(AKey, AValue, dtConst);
-    FInjectedGlobals.Add(AKey);
-  end;
-end;
-
-procedure TGocciaEngine.InjectGlobalsFromJSON(const AJsonString: string);
-var
-  Parser: TGocciaJSONParser;
-  ParsedValue: TGocciaValue;
-  Obj: TGocciaObjectValue;
-  Key: string;
-begin
-  Parser := TGocciaJSONParser.Create;
-  try
-    ParsedValue := Parser.Parse(AJsonString);
-  finally
-    Parser.Free;
-  end;
-
-  if not (ParsedValue is TGocciaObjectValue) then
-    raise TGocciaRuntimeError.Create('Globals JSON must be a top-level object.',
-      0, 0, FFileName, nil);
-
-  TGarbageCollector.Instance.AddTempRoot(ParsedValue);
-  try
-    Obj := TGocciaObjectValue(ParsedValue);
-    for Key in Obj.GetOwnPropertyKeys do
-      InjectGlobal(Key, Obj.GetProperty(Key));
-  finally
-    TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
-  end;
-end;
-
-procedure TGocciaEngine.InjectGlobalsFromJSON5(const AJSON5String: UTF8String);
-var
-  Key: string;
-  Obj: TGocciaObjectValue;
-  ParsedValue: TGocciaValue;
-  Parser: TGocciaJSON5Parser;
-begin
-  Parser := TGocciaJSON5Parser.Create;
-  try
-    ParsedValue := Parser.Parse(AJSON5String);
-  finally
-    Parser.Free;
-  end;
-
-  if not (ParsedValue is TGocciaObjectValue) then
-    raise TGocciaRuntimeError.Create('Globals JSON5 must be a top-level object.',
-      0, 0, FFileName, nil);
-
-  TGarbageCollector.Instance.AddTempRoot(ParsedValue);
-  try
-    Obj := TGocciaObjectValue(ParsedValue);
-    for Key in Obj.GetOwnPropertyKeys do
-      InjectGlobal(Key, Obj.GetProperty(Key));
-  finally
-    TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
-  end;
-end;
-
-procedure TGocciaEngine.InjectGlobalsFromTOML(const ATOMLString: UTF8String);
-var
-  Key: string;
-  Obj: TGocciaObjectValue;
-  ParsedValue: TGocciaValue;
-  Parser: TGocciaTOMLParser;
-begin
-  Parser := TGocciaTOMLParser.Create;
-  try
-    ParsedValue := Parser.Parse(ATOMLString);
-  finally
-    Parser.Free;
-  end;
-
-  if not (ParsedValue is TGocciaObjectValue) then
-    raise TGocciaRuntimeError.Create('Globals TOML must be a top-level object.',
-      0, 0, FFileName, nil);
-
-  TGarbageCollector.Instance.AddTempRoot(ParsedValue);
-  try
-    Obj := TGocciaObjectValue(ParsedValue);
-    for Key in Obj.GetOwnPropertyKeys do
-      InjectGlobal(Key, Obj.GetProperty(Key));
-  finally
-    TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
-  end;
-end;
-
-procedure TGocciaEngine.InjectGlobalsFromYAML(const AYamlString: string);
-var
-  Documents: TGocciaArrayValue;
-  ParsedDocument: TGocciaValue;
-  Parser: TGocciaYAMLParser;
-  Obj: TGocciaObjectValue;
-  Key: string;
-begin
-  Parser := TGocciaYAMLParser.Create;
-  try
-    Documents := Parser.ParseDocuments(AYamlString);
-  finally
-    Parser.Free;
-  end;
-
-  try
-    if Documents.Elements.Count <> 1 then
-      raise TGocciaRuntimeError.Create(
-        'Globals YAML must contain exactly one top-level document.',
-        0, 0, FFileName, nil);
-
-    ParsedDocument := Documents.Elements[0];
-    if not (ParsedDocument is TGocciaObjectValue) then
-      raise TGocciaRuntimeError.Create(
-        'Globals YAML must be a top-level object.', 0, 0, FFileName, nil);
-
-    TGarbageCollector.Instance.AddTempRoot(ParsedDocument);
-    Obj := TGocciaObjectValue(ParsedDocument);
-    try
-      for Key in Obj.GetOwnPropertyKeys do
-        InjectGlobal(Key, Obj.GetProperty(Key));
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(ParsedDocument);
-    end;
-  finally
-    Documents.Free;
-  end;
-end;
-
-procedure TGocciaEngine.InjectGlobalsFromModule(const APath: string);
-var
-  Module: TGocciaModule;
-  ExportPair: TGocciaValueMap.TKeyValuePair;
-begin
-  Module := FInterpreter.LoadModule(APath, FFileName);
-  for ExportPair in Module.ExportsTable do
-    InjectGlobal(ExportPair.Key, ExportPair.Value);
+  RegisterGlobal(AKey, AValue);
 end;
 
 procedure TGocciaEngine.RegisterGlobalModule(const AName: string; const AModule: TGocciaModule);
@@ -984,7 +1089,7 @@ var
   OrigLine, OrigCol: Integer;
 begin
   FillChar(FLastTiming, SizeOf(FLastTiming), 0);
-  FLastTiming.FileName := FFileName;
+  FLastTiming.FileName := FSourcePath;
   StartTime := GetNanoseconds;
 
   if Assigned(FSourceLines) then
@@ -999,18 +1104,18 @@ begin
     SourceText := JSXResult.Source;
     SourceMap := JSXResult.SourceMap;
     if Assigned(SourceMap) then
-      WarnIfJSXExtensionMismatch(FFileName);
+      WarnIfJSXExtensionMismatch(FSourcePath);
   end;
 
   try
     try
-      Lexer := TGocciaLexer.Create(SourceText, FFileName);
+      Lexer := TGocciaLexer.Create(SourceText, FSourcePath);
       try
         Tokens := Lexer.ScanTokens;
         LexEnd := GetNanoseconds;
         FLastTiming.LexTimeNanoseconds := LexEnd - StartTime;
 
-        Parser := TGocciaParser.Create(Tokens, FFileName, Lexer.SourceLines);
+        Parser := TGocciaParser.Create(Tokens, FSourcePath, Lexer.SourceLines);
         Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
         try
           ProgramNode := Parser.Parse;
@@ -1021,17 +1126,17 @@ begin
           if Assigned(TGocciaCoverageTracker.Instance) and
              TGocciaCoverageTracker.Instance.Enabled then
             TGocciaCoverageTracker.Instance.RegisterSourceFile(
-              FFileName, CountExecutableLines(Lexer.SourceLines));
+              FSourcePath, CountExecutableLines(Lexer.SourceLines));
 
           try
             CheckTopLevelRedeclarations(ProgramNode,
-              FInterpreter.GlobalScope, FFileName);
-            FLastTiming.CompileTimeNanoseconds := 0;
-            FLastTiming.Result := FInterpreter.Execute(ProgramNode);
+              FInterpreter.GlobalScope, FSourcePath);
+            FLastTiming.Result := FExecutor.ExecuteProgram(ProgramNode);
             if Assigned(TGocciaMicrotaskQueue.Instance) then
               TGocciaMicrotaskQueue.Instance.DrainQueue;
             ExecEnd := GetNanoseconds;
-            FLastTiming.ExecuteTimeNanoseconds := ExecEnd - ParseEnd;
+            FLastTiming.CompileTimeNanoseconds := FExecutor.CompileTimeNanoseconds;
+            FLastTiming.ExecuteTimeNanoseconds := FExecutor.ExecuteTimeNanoseconds;
             FLastTiming.TotalTimeNanoseconds := ExecEnd - StartTime;
           finally
             if Assigned(TGocciaMicrotaskQueue.Instance) then
@@ -1072,7 +1177,7 @@ end;
 function TGocciaEngine.ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;
 begin
   try
-    Result := FInterpreter.Execute(AProgram);
+    Result := FExecutor.ExecuteProgram(AProgram);
     if Assigned(TGocciaMicrotaskQueue.Instance) then
       TGocciaMicrotaskQueue.Instance.DrainQueue;
   finally
@@ -1146,20 +1251,15 @@ begin
     if Warning.Suggestion <> '' then
       WriteLn(Format('  Suggestion: %s', [Warning.Suggestion]));
     if Assigned(ASourceMap) and ASourceMap.Translate(Warning.Line, Warning.Column, OrigLine, OrigCol) then
-      WriteLn(Format('  --> %s:%d:%d', [FFileName, OrigLine, OrigCol]))
+      WriteLn(Format('  --> %s:%d:%d', [FSourcePath, OrigLine, OrigCol]))
     else
-      WriteLn(Format('  --> %s:%d:%d', [FFileName, Warning.Line, Warning.Column]));
+      WriteLn(Format('  --> %s:%d:%d', [FSourcePath, Warning.Line, Warning.Column]));
   end;
 end;
 
 function TGocciaEngine.SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := AThisValue;
-end;
-
-function TGocciaEngine.GetASIEnabled: Boolean;
-begin
-  Result := cfASI in FCompatibility;
 end;
 
 procedure TGocciaEngine.SetASIEnabled(const AValue: Boolean);
@@ -1185,7 +1285,7 @@ end;
 
 procedure TGocciaEngine.ThrowError(const AMessage: string; const ALine, AColumn: Integer);
 begin
-  raise TGocciaRuntimeError.Create(AMessage, ALine, AColumn, FFileName, FSourceLines);
+  raise TGocciaRuntimeError.Create(AMessage, ALine, AColumn, FSourcePath, FSourceLines);
 end;
 
 end.

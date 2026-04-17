@@ -176,55 +176,65 @@ end;
 
 procedure TScriptLoaderGlobalsTests.TestBytecodeBackendInjectGlobalsFromTOML;
 var
-  Backend: TGocciaBytecodeBackend;
+  Engine: TGocciaEngine;
+  Executor: TGocciaBytecodeExecutor;
   Obj: TGocciaObjectValue;
+  Source: TStringList;
 begin
-  Backend := TGocciaBytecodeBackend.Create('<globals-test>');
+  Source := CreateEmptySource;
+  Executor := TGocciaBytecodeExecutor.Create;
+  Engine := TGocciaEngine.Create('<globals-test>', Source, [], Executor);
   try
-    Backend.RegisterBuiltIns([]);
-    Backend.InjectGlobalsFromTOML(
+    Engine.InjectGlobalsFromTOML(
       'name = "goccia"' + LineEnding +
       'release = 2026-04-04T12:30:45Z' + LineEnding +
       '[database]' + LineEnding +
       'port = 5432' + LineEnding);
 
-    Expect<string>(Backend.Interpreter.GlobalScope.GetValue('name')
+    Expect<string>(Engine.Interpreter.GlobalScope.GetValue('name')
       .ToStringLiteral.Value).ToBe('goccia');
-    Expect<string>(Backend.Interpreter.GlobalScope.GetValue('release')
+    Expect<string>(Engine.Interpreter.GlobalScope.GetValue('release')
       .ToStringLiteral.Value).ToBe('2026-04-04T12:30:45Z');
 
-    Obj := TGocciaObjectValue(Backend.Interpreter.GlobalScope.GetValue('database'));
+    Obj := TGocciaObjectValue(Engine.Interpreter.GlobalScope.GetValue('database'));
     Expect<Double>(Obj.GetProperty('port').ToNumberLiteral.Value).ToBe(5432);
   finally
-    Backend.Free;
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
   end;
 end;
 
 procedure TScriptLoaderGlobalsTests.TestBytecodeBackendInjectGlobalsFromJSON5;
 var
-  Backend: TGocciaBytecodeBackend;
+  Engine: TGocciaEngine;
+  Executor: TGocciaBytecodeExecutor;
   MaxValue, MinValue: TGocciaNumberLiteralValue;
   Obj: TGocciaObjectValue;
+  Source: TStringList;
 begin
-  Backend := TGocciaBytecodeBackend.Create('<globals-test>');
+  Source := CreateEmptySource;
+  Executor := TGocciaBytecodeExecutor.Create;
+  Engine := TGocciaEngine.Create('<globals-test>', Source, [], Executor);
   try
-    Backend.RegisterBuiltIns([]);
-    Backend.InjectGlobalsFromJSON5(
+    Engine.InjectGlobalsFromJSON5(
       '{' + LineEnding +
       '  answer: +42,' + LineEnding +
       '  limits: { max: Infinity, min: -Infinity, },' + LineEnding +
       '}');
 
-    Expect<Double>(Backend.Interpreter.GlobalScope.GetValue('answer')
+    Expect<Double>(Engine.Interpreter.GlobalScope.GetValue('answer')
       .ToNumberLiteral.Value).ToBe(42);
 
-    Obj := TGocciaObjectValue(Backend.Interpreter.GlobalScope.GetValue('limits'));
+    Obj := TGocciaObjectValue(Engine.Interpreter.GlobalScope.GetValue('limits'));
     MaxValue := Obj.GetProperty('max').ToNumberLiteral;
     MinValue := Obj.GetProperty('min').ToNumberLiteral;
     Expect<Boolean>(MaxValue.IsInfinity).ToBe(True);
     Expect<Boolean>(MinValue.IsNegativeInfinity).ToBe(True);
   finally
-    Backend.Free;
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
   end;
 end;
 

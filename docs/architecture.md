@@ -4,14 +4,16 @@
 
 ## Executive Summary
 
-- **Shared frontend** — Lexer, Parser, and AST are shared between interpreter and bytecode backends
-- **Two backends** — tree-walk interpreter (default) and register-based bytecode VM (`--mode=bytecode`)
-- **Unified runtime** — Both backends share the same value types, built-ins, scope chain, and mark-and-sweep GC
+- **Single engine** — `TGocciaEngine` handles global configuration, built-in registration, and module loading for both execution modes
+- **Execution mode abstraction** — `TGocciaExecutor` is the abstract class; `TGocciaInterpreterExecutor` and `TGocciaBytecodeExecutor` implement it independently
+- **Shared frontend** — Lexer, Parser, and AST are shared between execution modes
+- **Unified runtime** — Both modes share the same value types, built-ins, scope chain, and mark-and-sweep GC
 - **Goccia-specific** — The bytecode VM operates directly on `TGocciaValue`, not a generic VM abstraction
+- **No cross-dependency** — The bytecode executor has no dependency on the interpreter or evaluator units
 
 ## Overview
 
-GocciaScript has two execution backends — interpreter (tree-walk over the AST) and bytecode (`TGocciaVM`). Both share the same frontend, runtime objects, built-ins, and garbage collector. See [Bytecode VM](bytecode-vm.md) for the bytecode backend's architecture.
+GocciaScript has two execution modes — interpreter (tree-walk over the AST) and bytecode (`TGocciaVM`). A single `TGocciaEngine` class orchestrates both, delegating execution to a pluggable `TGocciaExecutor`. Both modes share the same frontend, runtime objects, built-ins, and garbage collector. See [Bytecode VM](bytecode-vm.md) for the bytecode backend's architecture.
 
 ## Pipelines
 
@@ -31,7 +33,10 @@ Source -> JSX Transformer (optional) -> Lexer -> Parser -> Compiler -> Goccia By
 
 | Layer | Units | Responsibility |
 |-------|-------|----------------|
-| Engine | `Goccia.Engine`, `Goccia.Engine.Backend` | Top-level orchestration, built-in registration, backend selection |
+| Engine | `Goccia.Engine` | Single engine class: built-in registration, module loading, executor dispatch |
+| Executor abstraction | `Goccia.Executor` | Abstract `TGocciaExecutor` base class |
+| Interpreter executor | `Goccia.Engine` (`TGocciaInterpreterExecutor`) | Tree-walk execution via `TGocciaInterpreter` |
+| Bytecode executor | `Goccia.Engine.Backend` (`TGocciaBytecodeExecutor`) | Bytecode compile + VM execution; no interpreter dependency |
 | JSX | `Goccia.JSX.Transformer` | Optional pre-pass converting JSX to `createElement` calls |
 | Frontend | `Goccia.Lexer`, `Goccia.Parser`, `Goccia.AST.*` | Source to AST |
 | Interpreter | `Goccia.Interpreter`, `Goccia.Evaluator.*` | Tree-walk execution |
@@ -85,10 +90,28 @@ The CLI tools share a two-level application class hierarchy and a declarative op
 | ScriptLoader | `TGocciaCLIApplication` | `Configure`, `Validate`, `ExecuteWithPaths`, `HandleError`, `AfterExecute` |
 | TestRunner | `TGocciaCLIApplication` | `Configure`, `ExecuteWithPaths`, `GlobalBuiltins` |
 | BenchmarkRunner | `TGocciaCLIApplication` | `Configure`, `ExecuteWithPaths`, `GlobalBuiltins` |
+| GocciaBundler | `TGocciaCLIApplication` | `Configure`, `Validate`, `ExecuteWithPaths` |
+
+## Executor Architecture
+
+The engine uses a **strategy pattern** for execution. `TGocciaExecutor` is the abstract base; two concrete implementations exist:
+
+```text
+TGocciaExecutor (abstract — Goccia.Executor.pas)
+├── TGocciaInterpreterExecutor (Goccia.Engine.pas)
+│     Wraps TGocciaInterpreter for tree-walk execution
+└── TGocciaBytecodeExecutor (Goccia.Engine.Backend.pas)
+      Compiles to bytecode and runs on TGocciaVM
+      No dependency on Goccia.Interpreter or Goccia.Evaluator
+```
+
+The engine always creates a `TGocciaInterpreter` for bootstrapping (global scope creation, built-in registration, shim loading). The executor receives the bootstrapped global scope and module loader via `Initialize`, then handles all program and module body execution independently.
+
+Callers pass an executor to the engine constructor. When none is provided, the engine defaults to `TGocciaInterpreterExecutor`.
 
 ## Duplication Boundaries (beneficial vs harmful)
 
-The interpreter and bytecode backend are **intentionally separate control-flow mechanisms** (tree-walk vs register VM). Sharing the **same** `TGocciaValue` model and virtual property access is the architectural consolidation point; you should not try to merge those backends into one execution path.
+The interpreter and bytecode executors are **intentionally separate control-flow mechanisms** (tree-walk vs register VM). Sharing the **same** `TGocciaValue` model and virtual property access is the architectural consolidation point; you should not try to merge those executors into one execution path.
 
 - **Beneficial separation** — Different layers solving different problems: the lexer/parser/AST frontend vs `Goccia.Evaluator.*` vs `Goccia.Compiler.*` vs `Goccia.VM.*`; standalone format parsers (`Goccia.JSON`, `Goccia.TOML`, …) vs thin `Goccia.Builtins.*` adapters. Duplication *across* those boundaries is often *different representations of the same spec* (AST vs opcodes vs byte streams), not copy-paste to delete blindly.
 

@@ -333,12 +333,14 @@ end;
 
 procedure TModuleContentProviderTests.TestBytecodeBackendUsesInjectedContentProvider;
 var
-  Backend: TGocciaBytecodeBackend;
+  Engine: TGocciaEngine;
+  Executor: TGocciaBytecodeExecutor;
   ModuleLoader: TGocciaModuleLoader;
   Module: TGocciaBytecodeModule;
   ProgramNode: TGocciaProgram;
   Provider: TMemoryModuleContentProvider;
   ResultValue: TGocciaValue;
+  Source: TStringList;
   TempDirectory: string;
   DepPath: string;
   EntryPath: string;
@@ -352,32 +354,46 @@ begin
   Provider := TMemoryModuleContentProvider.Create;
   Provider.AddModule(DepPath, 'export const value = 42;');
 
-  ModuleLoader := TGocciaModuleLoader.Create(EntryPath, nil, Provider);
+  Source := TStringList.Create;
   try
-    Backend := TGocciaBytecodeBackend.Create(EntryPath, ModuleLoader);
-    try
-      Backend.RegisterBuiltIns([]);
-      ProgramNode := CreateProgram(
-        'import { value } from "./dep.js";' + LineEnding + 'value;',
-        EntryPath);
-      try
-        Module := Backend.CompileToModule(ProgramNode);
-      finally
-        ProgramNode.Free;
-      end;
+    Source.Text := 'import { value } from "./dep.js";' + LineEnding + 'value;';
 
+    Executor := TGocciaBytecodeExecutor.Create;
+    try
+      ModuleLoader := TGocciaModuleLoader.Create(EntryPath, nil, Provider);
       try
-        ResultValue := Backend.RunModule(Module);
-        Expect<Boolean>(ResultValue is TGocciaNumberLiteralValue).ToBe(True);
-        Expect<Double>(TGocciaNumberLiteralValue(ResultValue).Value).ToBe(42);
+        Engine := TGocciaEngine.Create(EntryPath, Source, [], ModuleLoader);
+        try
+          Executor.Initialize(Engine.Interpreter.GlobalScope,
+            Engine.ModuleLoader, EntryPath);
+
+          ProgramNode := CreateProgram(
+            'import { value } from "./dep.js";' + LineEnding + 'value;',
+            EntryPath);
+          try
+            Module := Executor.CompileToModule(ProgramNode);
+          finally
+            ProgramNode.Free;
+          end;
+
+          try
+            ResultValue := Executor.RunModule(Module);
+            Expect<Boolean>(ResultValue is TGocciaNumberLiteralValue).ToBe(True);
+            Expect<Double>(TGocciaNumberLiteralValue(ResultValue).Value).ToBe(42);
+          finally
+            Module.Free;
+          end;
+        finally
+          Engine.Free;
+        end;
       finally
-        Module.Free;
+        ModuleLoader.Free;
       end;
     finally
-      Backend.Free;
+      Executor.Free;
     end;
   finally
-    ModuleLoader.Free;
+    Source.Free;
     Provider.Free;
   end;
 end;
