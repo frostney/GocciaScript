@@ -931,6 +931,8 @@ begin
   if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
     Exit;
   ADate.Day := Trunc(V.ToNumberLiteral.Value);
+  if not IsValidDate(ADate.Year, ADate.Month, ADate.Day) then
+    Exit;
   Result := True;
 end;
 

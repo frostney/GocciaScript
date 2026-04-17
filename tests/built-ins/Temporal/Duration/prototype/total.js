@@ -167,4 +167,10 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.total", () => {
     expect(() => d.total({ unit: "days", relativeTo: { year: 2024 } })).toThrow();
     expect(() => d.total({ unit: "days", relativeTo: {} })).toThrow();
   });
+
+  test("total() with relativeTo property bag with invalid date throws", () => {
+    const d = Temporal.Duration.from({ months: 1 });
+    expect(() => d.total({ unit: "days", relativeTo: { year: 2024, month: 13, day: 1 } })).toThrow();
+    expect(() => d.total({ unit: "days", relativeTo: { year: 2024, month: 2, day: 30 } })).toThrow();
+  });
 });

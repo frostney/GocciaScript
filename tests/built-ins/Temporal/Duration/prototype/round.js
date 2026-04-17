@@ -191,4 +191,10 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.round", () => {
     expect(() => d.round({ smallestUnit: "months", relativeTo: { year: 2024, month: 1 } })).toThrow();
     expect(() => d.round({ smallestUnit: "months", relativeTo: {} })).toThrow();
   });
+
+  test("round with relativeTo property bag with invalid date throws", () => {
+    const d = Temporal.Duration.from({ years: 1, months: 6 });
+    expect(() => d.round({ smallestUnit: "months", relativeTo: { year: 2024, month: 13, day: 1 } })).toThrow();
+    expect(() => d.round({ smallestUnit: "months", relativeTo: { year: 2024, month: 2, day: 30 } })).toThrow();
+  });
 });
