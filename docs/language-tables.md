@@ -5,6 +5,7 @@
 ## Executive Summary
 
 - **ECMAScript table** — Feature-by-feature status from ES1 through ES2027, sorted chronologically
+- **Web Platform APIs table** — WHATWG and W3C APIs supported beyond ECMA-262
 - **TC39 proposals table** — Active proposals sorted by stage (highest first), with links to specs
 - **Canonical source** — Detailed semantics, examples, and rationale live in [language.md](language.md)
 
@@ -41,7 +42,6 @@
 | Static class blocks | ES2022 | Supported |
 | `Array.prototype.at` | ES2022 | Supported |
 | `Object.hasOwn` | ES2022 | Supported |
-| `structuredClone` | ES2022 | Supported |
 | Top-level `await` | ES2022 | Supported |
 | `Array.prototype.findLast`, `findLastIndex` | ES2023 | Supported |
 | `Array.prototype.toReversed`, `toSorted`, `toSpliced`, `with` | ES2023 | Supported |
@@ -66,7 +66,23 @@
 | Explicit Resource Management (`using`, `await using`) | ES2026 | Supported |
 | JSON.parse source text access (`JSON.rawJSON`, `JSON.isRawJSON`) | ES2026 | Supported |
 | `Temporal` (dates, times, durations, time zones) | ES2027 | Supported |
-| `atob` / `btoa` | WHATWG | Supported |
+
+## Web Platform APIs
+
+APIs from WHATWG and W3C specifications — not part of ECMA-262, but widely expected in JavaScript runtimes.
+
+| API | Spec | Status |
+|-----|------|--------|
+| `console` (`log`, `warn`, `error`, `info`, `debug`, `dir`, `assert`, `count`, `time`, `table`, `trace`, …) | [WHATWG Console](https://console.spec.whatwg.org/) | Supported |
+| `structuredClone` | [HTML §2.7.3](https://html.spec.whatwg.org/multipage/structured-data.html#dom-structuredclone) | Supported |
+| `DOMException` | [HTML §4.3](https://webidl.spec.whatwg.org/#idl-DOMException) | Supported |
+| `atob` / `btoa` | [HTML §8.3](https://html.spec.whatwg.org/multipage/webappapis.html#atob) | Supported |
+| `queueMicrotask` | [HTML §8.4](https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#dom-queuemicrotask) | Supported |
+| `URL`, `URL.parse`, `URL.canParse` | [WHATWG URL §4](https://url.spec.whatwg.org/#url-class) | Supported |
+| `URLSearchParams` | [WHATWG URL §6](https://url.spec.whatwg.org/#urlsearchparams) | Supported |
+| `TextEncoder` | [WHATWG Encoding §8.3](https://encoding.spec.whatwg.org/#textencoder) | Supported |
+| `TextDecoder` | [WHATWG Encoding §8.2](https://encoding.spec.whatwg.org/#textdecoder) | Supported |
+| `performance.now`, `timeOrigin` | [High Resolution Time](https://w3c.github.io/hr-time/#dom-performance-now) | Supported |
 
 ## TC39 Proposals
 

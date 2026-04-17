@@ -190,6 +190,22 @@ const
   );
 
   // ---------------------------------------------------------------------------
+  // WHATWG / W3C Web Platform APIs
+  // ---------------------------------------------------------------------------
+  WHATWG_FEATURES: array[0..9] of TGocciaFeatureEntry = (
+    (Name: 'console';           Link: 'https://console.spec.whatwg.org/'),
+    (Name: 'structuredClone';   Link: 'https://html.spec.whatwg.org/multipage/structured-data.html#dom-structuredclone'),
+    (Name: 'DOMException';      Link: 'https://webidl.spec.whatwg.org/#idl-DOMException'),
+    (Name: 'atob / btoa';       Link: 'https://html.spec.whatwg.org/multipage/webappapis.html#atob'),
+    (Name: 'queueMicrotask';    Link: 'https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#dom-queuemicrotask'),
+    (Name: 'URL';               Link: 'https://url.spec.whatwg.org/#url-class'),
+    (Name: 'URLSearchParams';   Link: 'https://url.spec.whatwg.org/#urlsearchparams'),
+    (Name: 'TextEncoder';       Link: 'https://encoding.spec.whatwg.org/#textencoder'),
+    (Name: 'TextDecoder';       Link: 'https://encoding.spec.whatwg.org/#textdecoder'),
+    (Name: 'Performance';       Link: 'https://w3c.github.io/hr-time/#dom-performance-now')
+  );
+
+  // ---------------------------------------------------------------------------
   // TC39 Stage 3
   // ---------------------------------------------------------------------------
   STAGE3_PROPOSALS: array[0..2] of TGocciaFeatureEntry = (
@@ -265,6 +281,7 @@ begin
   DefineReadOnlyProperty(Obj, '2025', CreateFeatureArray(ES2025_FEATURES));
   DefineReadOnlyProperty(Obj, '2026', CreateFeatureArray(ES2026_FEATURES));
   DefineReadOnlyProperty(Obj, '2027', CreateFeatureArray(ES2027_FEATURES));
+  DefineReadOnlyProperty(Obj, 'whatwg', CreateFeatureArray(WHATWG_FEATURES));
   Result := Obj;
 end;
 
