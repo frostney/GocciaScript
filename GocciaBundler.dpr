@@ -314,7 +314,7 @@ begin
     for I := 0 to AFiles.Count - 1 do
       if Pool.Results[I].ErrorMessage <> '' then
       begin
-        WriteLn('Error in ', AFiles[I], ': ', Pool.Results[I].ErrorMessage);
+        WriteLn('Error in ', Pool.Results[I].FileName, ': ', Pool.Results[I].ErrorMessage);
         ExitCode := 1;
       end;
   finally
