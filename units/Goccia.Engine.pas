@@ -148,6 +148,7 @@ type
     procedure PinSingletons;
     procedure RegisterBuiltIns;
     procedure RegisterBuiltinConstructors;
+    procedure ExecuteShims;
     procedure RegisterTypedArrayConstructor(const AName: string; const AKind: TGocciaTypedArrayKind; const AObjectConstructor: TGocciaClassValue);
     procedure RegisterGlobalThis;
     procedure RegisterGocciaScriptGlobal;
@@ -248,6 +249,7 @@ uses
   Goccia.Platform,
   Goccia.Scope,
   Goccia.Scope.Redeclaration,
+  Goccia.Shims,
   Goccia.Spec,
   Goccia.Token,
   Goccia.Values.ArrayBufferValue,
@@ -288,6 +290,19 @@ begin
   Initialize(AFileName, ASourceLines, AGlobals, AModuleLoader, False);
 end;
 
+procedure TGocciaEngine.ExecuteShims;
+var
+  I: Integer;
+  Shim: TGocciaShimDefinition;
+begin
+  for I := 0 to DefaultShimCount - 1 do
+  begin
+    Shim := DefaultShim(I);
+    FInterpreter.GlobalScope.DefineLexicalBinding(Shim.Name,
+      LoadShimValue(FInterpreter, Shim), dtConst);
+  end;
+end;
+
 procedure TGocciaEngine.Initialize(const AFileName: string;
   const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins;
   const AModuleLoader: TGocciaModuleLoader; const AOwnsModuleLoader: Boolean);
@@ -321,8 +336,10 @@ begin
   TGarbageCollector.Instance.AddRootObject(FInterpreter.GlobalScope);
 
   FInjectedGlobals := TStringList.Create;
+  RegisterDefaultShimNames(FShims);
   PinSingletons;
   RegisterBuiltIns;
+  ExecuteShims;
 end;
 
 destructor TGocciaEngine.Destroy;

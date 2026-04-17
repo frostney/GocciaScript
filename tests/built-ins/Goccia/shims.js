@@ -10,8 +10,12 @@ describe.runIf(hasGoccia)("Goccia.shims", () => {
     expect(Array.isArray(Goccia.shims)).toBe(true);
   });
 
-  test("shims is currently empty", () => {
-    expect(Goccia.shims.length).toBe(0);
+  test("shims contains registered shim names", () => {
+    expect(Goccia.shims).toContain("atob");
+    expect(Goccia.shims).toContain("btoa");
+    expect(Goccia.shims).toContain("parseInt");
+    expect(Goccia.shims).toContain("parseFloat");
+    expect(Goccia.shims).toContain("Date");
   });
 
   test("shims is read-only", () => {

@@ -51,6 +51,7 @@ type
     function GetContentProvider: TGocciaModuleContentProvider;
     function GetModuleResolver: TGocciaModuleResolver;
     procedure RequireGlobalsBootstrapReady;
+    procedure ExecuteShims;
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
   public
     constructor Create(const ASourcePath: string); overload;
@@ -98,6 +99,7 @@ uses
   Goccia.Scope,
   Goccia.Scope.BindingMap,
   Goccia.Scope.Redeclaration,
+  Goccia.Shims,
   Goccia.Values.ArrayValue,
   Goccia.Values.Error,
   Goccia.Values.ObjectValue;
@@ -396,6 +398,19 @@ begin
     RegisterGlobal(ExportPair.Key, ExportPair.Value);
 end;
 
+procedure TGocciaBytecodeBackend.ExecuteShims;
+var
+  I: Integer;
+  Shim: TGocciaShimDefinition;
+begin
+  for I := 0 to DefaultShimCount - 1 do
+  begin
+    Shim := DefaultShim(I);
+    FInterpreter.GlobalScope.DefineLexicalBinding(Shim.Name,
+      LoadShimValue(FInterpreter, Shim), dtConst);
+  end;
+end;
+
 procedure TGocciaBytecodeBackend.RegisterBuiltIns(
   const AGlobals: TGocciaGlobalBuiltins);
 var
@@ -406,6 +421,8 @@ begin
     TGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);
   FreeAndNil(FInterpreter);
   FreeAndNil(FBootstrapSource);
+
+  RegisterDefaultShimNames(FShims);
 
   EmptySource := TStringList.Create;
   EmptySource.Text := '';
@@ -420,6 +437,8 @@ begin
 
   FMinimalVM.GlobalScope := FInterpreter.GlobalScope;
   FMinimalVM.Interpreter := FInterpreter;
+
+  ExecuteShims;
 end;
 
 function TGocciaBytecodeBackend.GetASIEnabled: Boolean;

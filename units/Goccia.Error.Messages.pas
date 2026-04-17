@@ -625,10 +625,6 @@ resourcestring
   // FFI.open errors
   SErrorFFIOpenRequiresPath = 'FFI.open requires a library path';
 
-  // btoa/atob errors
-  SErrorBtoaRequiresArg = 'Failed to execute ''btoa'': 1 argument required, but only 0 present.';
-  SErrorAtobRequiresArg = 'Failed to execute ''atob'': 1 argument required, but only 0 present.';
-
   // Array method errors
   SErrorArrayMethodCalledOnNonArray = 'Array.%s called on non-array';
   SErrorArrayMethodExpectsCallback = 'Array.%s expects callback function';
