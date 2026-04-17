@@ -539,6 +539,132 @@ jobs:
 
           rm /tmp/sm-test.jsx
 
+      - name: Check GocciaBundler CLI behaviour
+        run: |
+          # Single file compilation
+          printf 'const x = 2 + 2;\nx;\n' > /tmp/bundler-test.js
+          bundler_output="$(./build/GocciaBundler /tmp/bundler-test.js 2>&1)"
+          test -f /tmp/bundler-test.gbc
+          printf '%s\n' "$bundler_output" | grep -q 'Compiling: /tmp/bundler-test.js'
+          printf '%s\n' "$bundler_output" | grep -q 'Compiled to /tmp/bundler-test.gbc'
+
+          # Roundtrip: GocciaBundler emits, ScriptLoader runs
+          roundtrip_output="$(./build/ScriptLoader /tmp/bundler-test.gbc 2>&1)"
+          printf '%s\n' "$roundtrip_output" | grep -q 'Result: 4'
+          rm /tmp/bundler-test.gbc
+
+          # Custom --output path
+          ./build/GocciaBundler /tmp/bundler-test.js --output=/tmp/custom-output.gbc
+          test -f /tmp/custom-output.gbc
+          rm /tmp/custom-output.gbc
+
+          # Stdin compilation (--output required)
+          printf 'const y = 10;\ny;\n' | ./build/GocciaBundler --output=/tmp/stdin-out.gbc
+          test -f /tmp/stdin-out.gbc
+          stdin_roundtrip="$(./build/ScriptLoader /tmp/stdin-out.gbc 2>&1)"
+          printf '%s\n' "$stdin_roundtrip" | grep -q 'Result: 10'
+          rm /tmp/stdin-out.gbc
+
+          # Stdin without --output should fail
+          set +e
+          printf 'const z = 1;\n' | ./build/GocciaBundler 2>&1
+          stdin_no_output_status=$?
+          set -e
+          test "$stdin_no_output_status" -eq 1
+
+          # Directory compilation
+          mkdir -p /tmp/bundler-dir
+          printf 'const a = 1;\n' > /tmp/bundler-dir/a.js
+          printf 'const b = 2;\n' > /tmp/bundler-dir/b.js
+          ./build/GocciaBundler /tmp/bundler-dir
+          test -f /tmp/bundler-dir/a.gbc
+          test -f /tmp/bundler-dir/b.gbc
+          rm -r /tmp/bundler-dir
+
+          # Directory with --output to output directory
+          mkdir -p /tmp/bundler-src /tmp/bundler-dist
+          printf 'const c = 3;\n' > /tmp/bundler-src/c.js
+          ./build/GocciaBundler /tmp/bundler-src --output=/tmp/bundler-dist
+          test -f /tmp/bundler-dist/c.gbc
+          rm -r /tmp/bundler-src /tmp/bundler-dist
+
+          # Multiple positional files
+          printf 'const p = 1;\n' > /tmp/p.js
+          printf 'const q = 2;\n' > /tmp/q.js
+          ./build/GocciaBundler /tmp/p.js /tmp/q.js
+          test -f /tmp/p.gbc
+          test -f /tmp/q.gbc
+          rm /tmp/p.js /tmp/q.js /tmp/p.gbc /tmp/q.gbc
+
+          # .gbc input should be rejected
+          printf 'const r = 1;\n' > /tmp/reject.js
+          ./build/GocciaBundler /tmp/reject.js
+          set +e
+          ./build/GocciaBundler /tmp/reject.gbc 2>&1
+          gbc_status=$?
+          set -e
+          test "$gbc_status" -eq 1
+          rm /tmp/reject.js /tmp/reject.gbc
+
+          # --help
+          help_output="$(./build/GocciaBundler --help 2>&1)"
+          printf '%s\n' "$help_output" | grep -q '\-\-output'
+          printf '%s\n' "$help_output" | grep -q '\-\-source-map'
+          printf '%s\n' "$help_output" | grep -q '\-\-asi'
+          printf '%s\n' "$help_output" | grep -q '\-\-jobs'
+
+          rm /tmp/bundler-test.js
+
+      - name: Check GocciaBundler source map CLI
+        run: |
+          check_map_json() {
+            python3 - "$1" <<'PY'
+          import json, sys
+          with open(sys.argv[1], 'r', encoding='utf-8') as f:
+              data = json.load(f)
+          assert data.get('version') == 3, f"bad version: {data.get('version')}"
+          assert isinstance(data.get('sources'), list) and len(data['sources']) > 0, "missing sources"
+          assert isinstance(data.get('mappings'), str) and data['mappings'] != '', "missing mappings"
+          PY
+          }
+
+          # Create a JSX test file
+          cat > /tmp/bundler-sm.jsx << 'JSXEOF'
+          const createElement = (t, p, ...c) => ({ t, p, c });
+          const el = <div id="test">hello</div>;
+          el;
+          JSXEOF
+
+          # --source-map writes .map file alongside .gbc
+          ./build/GocciaBundler /tmp/bundler-sm.jsx --source-map
+          test -f /tmp/bundler-sm.gbc
+          test -f /tmp/bundler-sm.jsx.map
+          check_map_json /tmp/bundler-sm.jsx.map
+          rm /tmp/bundler-sm.gbc /tmp/bundler-sm.jsx.map
+
+          # --source-map=<path> writes to custom path
+          ./build/GocciaBundler /tmp/bundler-sm.jsx --source-map=/tmp/bundler-custom.map
+          test -f /tmp/bundler-sm.gbc
+          test -f /tmp/bundler-custom.map
+          check_map_json /tmp/bundler-custom.map
+          rm /tmp/bundler-sm.gbc /tmp/bundler-custom.map
+
+          # No .map file without --source-map
+          ./build/GocciaBundler /tmp/bundler-sm.jsx
+          test -f /tmp/bundler-sm.gbc
+          test ! -f /tmp/bundler-sm.jsx.map
+          rm /tmp/bundler-sm.gbc
+
+          # --source-map without explicit path rejects stdin
+          set +e
+          out="$(printf 'const x = 1;\n' | ./build/GocciaBundler --output=/tmp/sm-stdin.gbc --source-map 2>&1)"
+          st=$?
+          set -e
+          test "$st" -eq 1
+          printf '%s\n' "$out" | grep -q 'required when reading source from stdin'
+
+          rm /tmp/bundler-sm.jsx
+
   benchmark-comment:
     needs: benchmark
     runs-on: ubuntu-latest

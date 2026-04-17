@@ -14,6 +14,7 @@ build/REPL
 build/ScriptLoader
 build/TestRunner
 build/BenchmarkRunner
+build/GocciaBundler
 build/*.Test
 build/ppas.sh
 build/ppas.bat

@@ -360,6 +360,21 @@ begin
   WriteLn('BenchmarkRunner built successfully');
 end;
 
+procedure BuildGocciaBundler;
+var
+  Output: string;
+begin
+  WriteLn('Building GocciaBundler...');
+  if not RunCommand('fpc', FPCArgs('GocciaBundler.dpr'), Output) then
+  begin
+    WriteLn(Output);
+    WriteLn('GocciaBundler build failed');
+    Halt(1);
+  end;
+  WriteLn(Output);
+  WriteLn('GocciaBundler built successfully');
+end;
+
 procedure Clean;
 var
   Files: TStringList;
@@ -400,7 +415,9 @@ begin
   else if ATrigger = 'testrunner' then
     BuildTestRunner
   else if ATrigger = 'benchmarkrunner' then
-    BuildBenchmarkRunner;
+    BuildBenchmarkRunner
+  else if ATrigger = 'bundler' then
+    BuildGocciaBundler;
 end;
 
 begin
@@ -438,6 +455,7 @@ begin
     BuildTriggers.Add('loader');
     BuildTriggers.Add('testrunner');
     BuildTriggers.Add('benchmarkrunner');
+    BuildTriggers.Add('bundler');
     BuildTriggers.Add('repl');
   end;
 

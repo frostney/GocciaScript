@@ -38,7 +38,7 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 ./build.pas --prod    # Production build of all components
 ```
 
-Runs a clean (removes stale `.ppu`, `.o`, `.res` from `build/`), then builds all components in order: tests, loader, testrunner, benchmarkrunner, repl.
+Runs a clean (removes stale `.ppu`, `.o`, `.res` from `build/`), then builds all components in order: tests, loader, testrunner, benchmarkrunner, bundler, repl.
 
 ### Build Specific Components
 
@@ -47,6 +47,7 @@ Runs a clean (removes stale `.ppu`, `.o`, `.res` from `build/`), then builds all
 ./build.pas loader           # Script file executor
 ./build.pas testrunner       # JavaScript test runner
 ./build.pas benchmarkrunner  # Performance benchmark runner
+./build.pas bundler          # Bytecode bundler (compile to .gbc)
 ./build.pas tests            # Pascal unit tests
 ```
 
@@ -146,6 +147,42 @@ printf "const f = () => f(); f();" | ./build/ScriptLoader --timeout=100
 printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/BenchmarkRunner - --mode=bytecode
 ```
 
+### GocciaBundler (Standalone Bytecode Compiler)
+
+GocciaBundler is a dedicated tool for compiling source files to `.gbc` bytecode without executing them. It accepts the same input modes as ScriptLoader (file, multiple files, directory, stdin):
+
+```bash
+# Compile a single file (output: example.gbc alongside the source)
+./build/GocciaBundler example.js
+
+# Custom output path
+./build/GocciaBundler example.js --output=dist/example.gbc
+
+# Compile all scripts in a directory (1:1 .gbc output alongside each source)
+./build/GocciaBundler src/
+
+# Compile a directory to a specific output directory
+./build/GocciaBundler src/ --output=dist/
+
+# Compile from stdin (--output required)
+printf "const x = 2 + 2; x;" | ./build/GocciaBundler --output=out.gbc
+
+# Multiple positional files
+./build/GocciaBundler a.js b.js c.js
+
+# Write source map alongside .gbc
+./build/GocciaBundler example.jsx --source-map
+
+# Explicit source map path (single file only)
+./build/GocciaBundler example.jsx --source-map=out.map
+
+# Enable automatic semicolon insertion during parsing
+./build/GocciaBundler example.js --asi
+
+# Parallel compilation (default: CPU count)
+./build/GocciaBundler src/ --jobs=4
+```
+
 See [bytecode-vm.md](bytecode-vm.md) for the bytecode VM architecture and binary format.
 
 ## Build Output
@@ -158,6 +195,7 @@ All compiled binaries go to the `build/` directory:
 | `build/ScriptLoader` | `ScriptLoader.dpr` | Execute `.js` files or stdin input, with optional JSON output |
 | `build/TestRunner` | `TestRunner.dpr` | JavaScript test runner |
 | `build/BenchmarkRunner` | `BenchmarkRunner.dpr` | Performance benchmark runner for files or stdin input |
+| `build/GocciaBundler` | `GocciaBundler.dpr` | Standalone bytecode compiler (source to `.gbc`) |
 | `build/Goccia.Values.Primitives.Test` | `*.Test.pas` | Pascal unit test binaries |
 
 Intermediate files (`.o`, `.ppu`) also go to `build/` to keep the source tree clean.
@@ -244,6 +282,7 @@ GocciaScript/
 ├── ScriptLoader.dpr      # Script loader program source
 ├── TestRunner.dpr        # Test runner program source
 ├── BenchmarkRunner.dpr   # Benchmark runner program source
+├── GocciaBundler.dpr     # Standalone bytecode compiler
 ├── units/
 │   ├── Goccia.inc     # Shared compiler directives
 │   ├── TimingUtils.pas # Cross-platform microsecond timing and duration formatting
@@ -404,6 +443,7 @@ fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- REPL.dpr
 fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- ScriptLoader.dpr
 fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- TestRunner.dpr
 fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- BenchmarkRunner.dpr
+fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- GocciaBundler.dpr
 ```
 
 The `-v` flags suppress verbose output to keep the build clean. Use `fpc @config.cfg REPL.dpr` for full verbose output during debugging.
