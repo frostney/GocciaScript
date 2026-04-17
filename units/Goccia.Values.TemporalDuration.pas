@@ -653,16 +653,22 @@ begin
           until False;
         end;
 
-        WalkDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, WholeUnits * 12);
-        WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
-        NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, (WholeUnits + Sign) * 12);
-        NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
-        PeriodNs := Abs(NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
+        // Align to increment-boundary bucket and compute real calendar span
+        ScaledValue := WholeUnits div Increment;
+        if (WholeUnits < 0) and (WholeUnits mod Increment <> 0) then
+          Dec(ScaledValue);
+        ScaledValue := ScaledValue * Increment;
 
-        ScaledValue := WholeUnits * PeriodNs + (EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs;
-        Divisor := PeriodNs * Increment;
-        RoundedValue := RoundWithMode(ScaledValue, Divisor, Mode);
-        WholeUnits := RoundedValue div PeriodNs;
+        WalkDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, ScaledValue * 12);
+        WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
+        NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, (ScaledValue + Increment) * 12);
+        NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
+        PeriodNs := (NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
+        RoundedValue := RoundWithMode((EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs, PeriodNs, Mode);
+        if RoundedValue >= PeriodNs then
+          WholeUnits := ScaledValue + Increment
+        else
+          WholeUnits := ScaledValue;
 
         Result := TGocciaTemporalDurationValue.Create(WholeUnits, 0, 0, 0, 0, 0, 0, 0, 0, 0);
       end
@@ -691,16 +697,22 @@ begin
           until False;
         end;
 
-        WalkDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, WholeUnits);
-        WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
-        NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, WholeUnits + Sign);
-        NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
-        PeriodNs := Abs(NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
+        // Align to increment-boundary bucket and compute real calendar span
+        ScaledValue := WholeUnits div Increment;
+        if (WholeUnits < 0) and (WholeUnits mod Increment <> 0) then
+          Dec(ScaledValue);
+        ScaledValue := ScaledValue * Increment;
 
-        ScaledValue := WholeUnits * PeriodNs + (EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs;
-        Divisor := PeriodNs * Increment;
-        RoundedValue := RoundWithMode(ScaledValue, Divisor, Mode);
-        WholeUnits := RoundedValue div PeriodNs;
+        WalkDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, ScaledValue);
+        WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
+        NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, ScaledValue + Increment);
+        NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
+        PeriodNs := (NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
+        RoundedValue := RoundWithMode((EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs, PeriodNs, Mode);
+        if RoundedValue >= PeriodNs then
+          WholeUnits := ScaledValue + Increment
+        else
+          WholeUnits := ScaledValue;
 
         if Ord(LargestUnit) <= Ord(tuYear) then
         begin

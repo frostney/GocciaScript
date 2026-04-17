@@ -115,6 +115,17 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.round", () => {
     expect(inDays.days).toBe(393);
   });
 
+  test("round months with roundingIncrement uses real calendar bucket span", () => {
+    // P3M from 2021-01-31: end = 2021-04-30 (clamped). Bucket [2M, 4M]:
+    // 2M = 2021-03-31, 4M = 2021-05-31 → span = 61 days.
+    // Position = 2021-04-30 - 2021-03-31 = 30 days. 30/61 < 0.5 → round to 2M.
+    const d = Temporal.Duration.from({ months: 3 });
+    const rounded = d.round({
+      smallestUnit: "months", roundingIncrement: 2, relativeTo: "2021-01-31"
+    });
+    expect(rounded.months).toBe(2);
+  });
+
   test("round with largestUnit month flattens years", () => {
     const d = Temporal.Duration.from({ years: 1, months: 6 });
     const rounded = d.round({ smallestUnit: "months", largestUnit: "months", relativeTo: "2024-01-01" });
