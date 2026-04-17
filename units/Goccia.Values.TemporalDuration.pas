@@ -705,13 +705,19 @@ begin
 end;
 
 function SubDayNanoseconds(const D: TGocciaTemporalDurationValue): Double;
+var
+  Ns, V: Double;
 begin
-  Result := D.FNanoseconds +
-            D.FMicroseconds * NANOSECONDS_PER_MICROSECOND +
-            D.FMilliseconds * NANOSECONDS_PER_MILLISECOND +
-            D.FSeconds * NANOSECONDS_PER_SECOND +
-            D.FMinutes * NANOSECONDS_PER_MINUTE +
-            D.FHours * NANOSECONDS_PER_HOUR;
+  // Accumulate via implicit Int64->Double assignment to avoid both FPC 3.2.2
+  // bugs: Bug A (Double(Int64) bit reinterpretation) and Bug B (Int64 * 1.0
+  // wrong results near +/-2^31 on AArch64). See docs/contributing/tooling.md.
+  Ns := D.FNanoseconds;
+  V := D.FMicroseconds; Ns := Ns + V * NANOSECONDS_PER_MICROSECOND;
+  V := D.FMilliseconds; Ns := Ns + V * NANOSECONDS_PER_MILLISECOND;
+  V := D.FSeconds;      Ns := Ns + V * NANOSECONDS_PER_SECOND;
+  V := D.FMinutes;      Ns := Ns + V * NANOSECONDS_PER_MINUTE;
+  V := D.FHours;        Ns := Ns + V * NANOSECONDS_PER_HOUR;
+  Result := Ns;
 end;
 
 // Express the duration as a fractional month count relative to a reference date.
@@ -854,7 +860,7 @@ var
   HasRelativeTo: Boolean;
   RelDate: TTemporalDateRecord;
   ResolvedDays: Int64;
-  TotalNs: Double;
+  TotalNs, V: Double;
 begin
   D := AsDuration(AThisValue, 'Duration.prototype.total');
   Arg := AArgs.GetElement(0);
@@ -910,13 +916,14 @@ begin
     RelDate := ParseRelativeTo(RelToArg, 'Duration.prototype.total');
     ResolvedDays := ResolveRelativeDays(RelDate, D.FYears, D.FMonths, D.FWeeks, D.FDays);
 
-    TotalNs := SubDayNanoseconds(D) + ResolvedDays * NANOSECONDS_PER_DAY;
+    V := ResolvedDays;
+    TotalNs := SubDayNanoseconds(D) + V * NANOSECONDS_PER_DAY;
   end
   else
   begin
-    TotalNs := SubDayNanoseconds(D) +
-               D.FDays * NANOSECONDS_PER_DAY +
-               D.FWeeks * 7 * NANOSECONDS_PER_DAY;
+    TotalNs := SubDayNanoseconds(D);
+    V := D.FDays;  TotalNs := TotalNs + V * NANOSECONDS_PER_DAY;
+    V := D.FWeeks; TotalNs := TotalNs + V * 7 * NANOSECONDS_PER_DAY;
   end;
 
   if TargetUnit = tuNanosecond then
