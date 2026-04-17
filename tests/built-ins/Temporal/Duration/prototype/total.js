@@ -99,6 +99,18 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.total", () => {
     expect(() => d.total("years")).toThrow(RangeError);
   });
 
+  test("total() months with time-only overflow into days", () => {
+    // PT8760H = 365 days worth of hours; from 2023-01-01 that lands on 2024-01-01 = 12 months
+    const d = new Temporal.Duration(0, 0, 0, 0, 8760);
+    expect(d.total({ unit: "months", relativeTo: "2023-01-01" })).toBe(12);
+  });
+
+  test("total() years with time-only overflow into days", () => {
+    // PT8760H = 365 days; from 2023-01-01 that is exactly 1 year
+    const d = new Temporal.Duration(0, 0, 0, 0, 8760);
+    expect(d.total({ unit: "years", relativeTo: "2023-01-01" })).toBe(1);
+  });
+
   test("total() with day-clamping edge case", () => {
     // Adding 1 month from Jan 31 → Feb 29 (2024 leap year, clamped)
     const d = Temporal.Duration.from({ months: 1 });

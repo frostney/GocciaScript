@@ -721,12 +721,17 @@ function TotalInMonths(const D: TGocciaTemporalDurationValue;
   const ARelDate: TTemporalDateRecord): TGocciaValue;
 var
   EndRec, CheckRec, SpanRec: TTemporalDateRecord;
-  WholeMonths: Int64;
+  WholeMonths, CarryDays: Int64;
   CheckEpoch, EndEpoch, SpanEpoch: Int64;
   RemainingDays, DaysInSpan: Int64;
-  FracDays, Total: Double;
+  TimeNs, RemainderNs, FracDays, Total: Double;
 begin
-  EndRec := DurationEndDate(ARelDate, D.FYears, D.FMonths, D.FWeeks, D.FDays);
+  // Fold sub-day time overflow into whole days so the calendar walk is accurate
+  TimeNs := SubDayNanoseconds(D);
+  CarryDays := Trunc(TimeNs / NANOSECONDS_PER_DAY);
+  RemainderNs := TimeNs - CarryDays * NANOSECONDS_PER_DAY;
+
+  EndRec := DurationEndDate(ARelDate, D.FYears, D.FMonths, D.FWeeks, D.FDays + CarryDays);
   EndEpoch := DateToEpochDays(EndRec.Year, EndRec.Month, EndRec.Day);
 
   // Estimate whole months
@@ -752,9 +757,9 @@ begin
     CheckEpoch := DateToEpochDays(CheckRec.Year, CheckRec.Month, CheckRec.Day);
   end;
 
-  // Fractional part: remaining days + sub-day time
+  // Fractional part: remaining days + sub-day remainder only
   RemainingDays := EndEpoch - CheckEpoch;
-  FracDays := RemainingDays + SubDayNanoseconds(D) / 8.64e13;
+  FracDays := RemainingDays + RemainderNs / NANOSECONDS_PER_DAY;
 
   // Determine the month span for the fractional calculation
   if FracDays >= 0 then
@@ -783,12 +788,17 @@ function TotalInYears(const D: TGocciaTemporalDurationValue;
   const ARelDate: TTemporalDateRecord): TGocciaValue;
 var
   EndRec, CheckRec, SpanRec: TTemporalDateRecord;
-  WholeYears: Int64;
+  WholeYears, CarryDays: Int64;
   CheckEpoch, EndEpoch, SpanEpoch: Int64;
   RemainingDays, DaysInSpan: Int64;
-  FracDays, Total: Double;
+  TimeNs, RemainderNs, FracDays, Total: Double;
 begin
-  EndRec := DurationEndDate(ARelDate, D.FYears, D.FMonths, D.FWeeks, D.FDays);
+  // Fold sub-day time overflow into whole days so the calendar walk is accurate
+  TimeNs := SubDayNanoseconds(D);
+  CarryDays := Trunc(TimeNs / NANOSECONDS_PER_DAY);
+  RemainderNs := TimeNs - CarryDays * NANOSECONDS_PER_DAY;
+
+  EndRec := DurationEndDate(ARelDate, D.FYears, D.FMonths, D.FWeeks, D.FDays + CarryDays);
   EndEpoch := DateToEpochDays(EndRec.Year, EndRec.Month, EndRec.Day);
 
   // Estimate whole years
@@ -811,7 +821,7 @@ begin
   end;
 
   RemainingDays := EndEpoch - CheckEpoch;
-  FracDays := RemainingDays + SubDayNanoseconds(D) / 8.64e13;
+  FracDays := RemainingDays + RemainderNs / NANOSECONDS_PER_DAY;
 
   if FracDays >= 0 then
   begin
