@@ -273,6 +273,10 @@ begin
     raise TGocciaParseError.Create(
       '--output=<path> is required when compiling from stdin.');
 
+  if DirectoryExists(FOutputPath.Value) then
+    raise TGocciaParseError.Create(
+      '--output must be a file when compiling from stdin.');
+
   Source := ReadSourceFromText(Input);
   try
     EmitBytecode(Source, STDIN_FILE_NAME, FOutputPath.Value);
@@ -291,10 +295,7 @@ begin
     EmitFromFile(AFileName);
   except
     on E: Exception do
-    begin
       AErrorMessage := E.Message;
-      ExitCode := 1;
-    end;
   end;
 end;
 
