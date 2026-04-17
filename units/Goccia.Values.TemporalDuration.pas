@@ -653,11 +653,17 @@ begin
           until False;
         end;
 
-        // Align to increment-boundary bucket and compute real calendar span
-        ScaledValue := WholeUnits div Increment;
-        if (WholeUnits < 0) and (WholeUnits mod Increment <> 0) then
-          Dec(ScaledValue);
-        ScaledValue := ScaledValue * Increment;
+        // Align to increment-boundary bucket. For negative durations the
+        // fractional position extends past WholeUnits in the negative
+        // direction, so use WholeUnits - 1 as alignment base.
+        if Sign < 0 then
+          ScaledValue := WholeUnits - 1
+        else
+          ScaledValue := WholeUnits;
+        if (ScaledValue >= 0) or (ScaledValue mod Increment = 0) then
+          ScaledValue := (ScaledValue div Increment) * Increment
+        else
+          ScaledValue := ((ScaledValue div Increment) - 1) * Increment;
 
         WalkDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, ScaledValue * 12);
         WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
@@ -697,11 +703,15 @@ begin
           until False;
         end;
 
-        // Align to increment-boundary bucket and compute real calendar span
-        ScaledValue := WholeUnits div Increment;
-        if (WholeUnits < 0) and (WholeUnits mod Increment <> 0) then
-          Dec(ScaledValue);
-        ScaledValue := ScaledValue * Increment;
+        // Align to increment-boundary bucket (same sign-aware logic as years)
+        if Sign < 0 then
+          ScaledValue := WholeUnits - 1
+        else
+          ScaledValue := WholeUnits;
+        if (ScaledValue >= 0) or (ScaledValue mod Increment = 0) then
+          ScaledValue := (ScaledValue div Increment) * Increment
+        else
+          ScaledValue := ((ScaledValue div Increment) - 1) * Increment;
 
         WalkDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, ScaledValue);
         WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
