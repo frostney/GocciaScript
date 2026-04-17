@@ -111,6 +111,16 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.total", () => {
     expect(d.total({ unit: "years", relativeTo: "2023-01-01" })).toBe(1);
   });
 
+  test("total() accepts singular unit names", () => {
+    const d = new Temporal.Duration(0, 0, 0, 0, 1, 30);
+    expect(d.total("minute")).toBe(90);
+    expect(d.total("hour")).toBe(1.5);
+    expect(d.total("second")).toBe(5400);
+    expect(d.total("nanosecond")).toBe(5400000000000);
+    expect(d.total("microsecond")).toBe(5400000000);
+    expect(d.total("millisecond")).toBe(5400000);
+  });
+
   test("total() with day-clamping edge case", () => {
     // Adding 1 month from Jan 31 → Feb 29 (2024 leap year, clamped)
     const d = Temporal.Duration.from({ months: 1 });

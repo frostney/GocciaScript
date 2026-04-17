@@ -848,6 +848,7 @@ function TGocciaTemporalDurationValue.DurationTotal(const AArgs: TGocciaArgument
 var
   D: TGocciaTemporalDurationValue;
   UnitStr: string;
+  TargetUnit: TTemporalUnit;
   Arg, RelToArg: TGocciaValue;
   OptionsObj: TGocciaObjectValue;
   HasRelativeTo: Boolean;
@@ -879,13 +880,21 @@ begin
     UnitStr := '';
   end;
 
+  // Validate unit (accepts both singular and plural: 'hour'/'hours', 'day'/'days', etc.)
+  if not GetTemporalUnitFromString(UnitStr, TargetUnit) or
+     (TargetUnit = tuAuto) or (TargetUnit = tuNone) then
+  begin
+    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Duration.prototype.total', UnitStr]), SSuggestTemporalValidUnits);
+    TargetUnit := tuNanosecond;
+  end;
+
   // Calendar target units always require relativeTo
-  if (UnitStr = 'months') or (UnitStr = 'years') then
+  if (TargetUnit = tuMonth) or (TargetUnit = tuYear) then
   begin
     if not HasRelativeTo then
       ThrowRangeError(SErrorDurationTotalRequiresRelativeTo, SSuggestTemporalRelativeTo);
     RelDate := ParseRelativeTo(RelToArg, 'Duration.prototype.total');
-    if UnitStr = 'months' then
+    if TargetUnit = tuMonth then
       Result := TotalInMonths(D, RelDate)
     else
       Result := TotalInYears(D, RelDate);
@@ -910,27 +919,12 @@ begin
                D.FWeeks * 7 * NANOSECONDS_PER_DAY;
   end;
 
-  if UnitStr = 'nanoseconds' then
+  if TargetUnit = tuNanosecond then
     Result := TGocciaNumberLiteralValue.Create(TotalNs)
-  else if UnitStr = 'microseconds' then
-    Result := TGocciaNumberLiteralValue.Create(TotalNs / 1000)
-  else if UnitStr = 'milliseconds' then
-    Result := TGocciaNumberLiteralValue.Create(TotalNs / 1000000)
-  else if UnitStr = 'seconds' then
-    Result := TGocciaNumberLiteralValue.Create(TotalNs / 1e9)
-  else if UnitStr = 'minutes' then
-    Result := TGocciaNumberLiteralValue.Create(TotalNs / 6e10)
-  else if UnitStr = 'hours' then
-    Result := TGocciaNumberLiteralValue.Create(TotalNs / 3.6e12)
-  else if UnitStr = 'days' then
-    Result := TGocciaNumberLiteralValue.Create(TotalNs / 8.64e13)
-  else if UnitStr = 'weeks' then
-    Result := TGocciaNumberLiteralValue.Create(TotalNs / 6.048e14)
+  else if TargetUnit = tuWeek then
+    Result := TGocciaNumberLiteralValue.Create(TotalNs / (7 * NANOSECONDS_PER_DAY))
   else
-  begin
-    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Duration.prototype.total', UnitStr]), SSuggestTemporalValidUnits);
-    Result := nil;
-  end;
+    Result := TGocciaNumberLiteralValue.Create(TotalNs / UnitToNanoseconds(TargetUnit));
 end;
 
 function TGocciaTemporalDurationValue.DurationToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
