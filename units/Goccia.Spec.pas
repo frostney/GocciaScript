@@ -98,12 +98,14 @@ const
   // ---------------------------------------------------------------------------
   // ES2020
   // ---------------------------------------------------------------------------
-  ES2020_FEATURES: array[0..4] of TGocciaFeatureEntry = (
+  ES2020_FEATURES: array[0..6] of TGocciaFeatureEntry = (
     (Name: 'Optional Chaining';            Link: 'https://tc39.es/ecma262/#sec-optional-chains'),
     (Name: 'Nullish Coalescing';           Link: 'https://tc39.es/ecma262/#sec-binary-logical-operators'),
     (Name: 'Promise.allSettled';           Link: 'https://tc39.es/ecma262/#sec-promise.allsettled'),
     (Name: 'globalThis';                   Link: 'https://tc39.es/ecma262/#sec-globalthis'),
-    (Name: 'String.prototype.matchAll';    Link: 'https://tc39.es/ecma262/#sec-string.prototype.matchall')
+    (Name: 'String.prototype.matchAll';    Link: 'https://tc39.es/ecma262/#sec-string.prototype.matchall'),
+    (Name: 'import.meta';                  Link: 'https://tc39.es/ecma262/#sec-import.meta'),
+    (Name: 'Dynamic import()';             Link: 'https://tc39.es/ecma262/#sec-import-calls')
   );
 
   // ---------------------------------------------------------------------------
@@ -158,13 +160,14 @@ const
   // ---------------------------------------------------------------------------
   // ES2025
   // ---------------------------------------------------------------------------
-  ES2025_FEATURES: array[0..5] of TGocciaFeatureEntry = (
+  ES2025_FEATURES: array[0..6] of TGocciaFeatureEntry = (
     (Name: 'Set Methods';                     Link: 'https://tc39.es/ecma262/#sec-set-objects'),
     (Name: 'Iterator Helpers';                Link: 'https://tc39.es/ecma262/#sec-iterator-objects'),
     (Name: 'Promise.try';                     Link: 'https://tc39.es/ecma262/#sec-promise.try'),
     (Name: 'RegExp Modifiers';                Link: 'https://tc39.es/ecma262/#sec-regexp-regular-expression-objects'),
     (Name: 'Duplicate Named Capture Groups';  Link: 'https://tc39.es/ecma262/#sec-regexp-regular-expression-objects'),
-    (Name: 'Float16Array';                    Link: 'https://tc39.es/ecma262/#sec-typedarray-objects')
+    (Name: 'Float16Array';                    Link: 'https://tc39.es/ecma262/#sec-typedarray-objects'),
+    (Name: 'Math.f16round';                   Link: 'https://tc39.es/ecma262/#sec-math.f16round')
   );
 
   // ---------------------------------------------------------------------------
