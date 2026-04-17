@@ -75,7 +75,7 @@ APIs from WHATWG and W3C specifications — not part of ECMA-262, but widely exp
 |-----|------|--------|
 | `console` (`log`, `warn`, `error`, `info`, `debug`, `dir`, `assert`, `count`, `time`, `table`, `trace`, …) | [WHATWG Console](https://console.spec.whatwg.org/) | Supported |
 | `structuredClone` | [HTML §2.7.3](https://html.spec.whatwg.org/multipage/structured-data.html#dom-structuredclone) | Supported |
-| `DOMException` | [HTML §4.3](https://webidl.spec.whatwg.org/#idl-DOMException) | Supported |
+| `DOMException` | [Web IDL](https://webidl.spec.whatwg.org/#idl-DOMException) | Supported |
 | `atob` / `btoa` | [HTML §8.3](https://html.spec.whatwg.org/multipage/webappapis.html#atob) | Supported |
 | `queueMicrotask` | [HTML §8.4](https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#dom-queuemicrotask) | Supported |
 | `URL`, `URL.parse`, `URL.canParse` | [WHATWG URL §4](https://url.spec.whatwg.org/#url-class) | Supported |

@@ -178,7 +178,7 @@ const
     (Name: 'Uint8Array Base64/Hex';                 Link: 'https://tc39.es/ecma262/#sec-typedarray-objects'),
     (Name: 'Array.fromAsync';                       Link: 'https://tc39.es/ecma262/#sec-array.fromasync'),
     (Name: 'Math.sumPrecise';                       Link: 'https://tc39.es/ecma262/#sec-math.sumprecise'),
-    (Name: 'Map.prototype.getOrInsert';             Link: 'https://tc39.es/ecma262/#sec-map.prototype.getorinsert'),
+    (Name: 'Map.prototype.getOrInsert / getOrInsertComputed'; Link: 'https://tc39.es/ecma262/#sec-map.prototype.getorinsert'),
     (Name: 'Iterator.concat';                       Link: 'https://tc39.es/ecma262/#sec-iterator.concat')
   );
 
