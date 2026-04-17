@@ -158,7 +158,7 @@ end;
 procedure TBundlerApp.WriteSourceMapIfEnabled(
   const ASourceMap: TGocciaSourceMap; const AFileName: string);
 var
-  MapOutputPath: string;
+  MapOutputPath, SourceName: string;
 begin
   if not FSourceMap.Present then
     Exit;
@@ -166,9 +166,17 @@ begin
     Exit;
   MapOutputPath := FSourceMap.ValueOr('');
   if MapOutputPath = '' then
-    MapOutputPath := AFileName + EXT_MAP;
-  ASourceMap.FileName := ExtractFileName(AFileName);
-  ASourceMap.SetSourcePath(0, ExtractFileName(AFileName));
+  begin
+    if AFileName = STDIN_FILE_NAME then
+      MapOutputPath := ResolveOutputPath(AFileName) + EXT_MAP
+    else
+      MapOutputPath := AFileName + EXT_MAP;
+  end;
+  SourceName := AFileName;
+  if (SourceName = STDIN_FILE_NAME) and FOutputPath.Present then
+    SourceName := FOutputPath.Value;
+  ASourceMap.FileName := ExtractFileName(SourceName);
+  ASourceMap.SetSourcePath(0, ExtractFileName(SourceName));
   ASourceMap.SaveToFile(MapOutputPath);
   if not GIsWorkerThread then
     WriteLn(SysUtils.Format('  Source map written to %s', [MapOutputPath]));
@@ -363,12 +371,6 @@ begin
       ((APaths.Count = 1) and DirectoryExists(APaths[0]))) then
     raise TGocciaParseError.Create(
       '--output must be a directory when compiling multiple files.');
-
-  if FSourceMap.Present and (FSourceMap.ValueOr('') = '') and
-     ((APaths.Count = 0) or
-      ((APaths.Count = 1) and IsStdinPath(APaths[0]))) then
-    raise TGocciaParseError.Create(
-      '--source-map=<file> is required when reading source from stdin.');
 
   if (FSourceMap.ValueOr('') <> '') and
      ((APaths.Count > 1) or

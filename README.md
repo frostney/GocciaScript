@@ -91,12 +91,9 @@ GocciaScript includes a bytecode execution backend. The public bytecode artifact
 ./build/ScriptLoader example.js --mode=bytecode
 printf "const x = 2 + 2; x;" | ./build/ScriptLoader --mode=bytecode
 
-# Compile to .gbc bytecode file (no execution)
-./build/ScriptLoader example.js --emit
-
-# Custom output path
-./build/ScriptLoader example.js --emit --output=out.gbc
-printf "const x = 2 + 2; x;" | ./build/ScriptLoader --emit --output=out.gbc
+# Compile to .gbc bytecode file (no execution) — use GocciaBundler
+./build/GocciaBundler example.js
+./build/GocciaBundler example.js --output=out.gbc
 
 # Load and execute a pre-compiled .gbc file
 ./build/ScriptLoader example.gbc

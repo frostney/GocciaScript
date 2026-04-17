@@ -51,9 +51,6 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
 ./build/ScriptLoader example.js --mode=bytecode # Execute via bytecode VM
 ./build/ScriptLoader example.js --import-map=imports.json # Execute with an explicit import map
 ./build/ScriptLoader example.js --alias @/=./src/ --alias config=./config/default.js # One-off import-map-style aliases
-./build/ScriptLoader example.js --emit # Compile to .gbc (no execution)
-./build/ScriptLoader example.js --emit=bytecode # Compile to .gbc (explicit)
-./build/ScriptLoader example.js --emit --output=out.gbc # Custom output path
 ./build/ScriptLoader out.gbc # Load and execute .gbc bytecode
 printf "const x = 2 + 2; x;" | ./build/ScriptLoader # Execute stdin source
 ./build/ScriptLoader example.js --coverage # Execute with line and branch coverage
@@ -66,7 +63,6 @@ printf "const x = 2 + 2; x;" | ./build/ScriptLoader # Execute stdin source
 ./build/ScriptLoader example.js --profile=all --profile-output=profile.json # Profile with JSON export
 ./build/ScriptLoader example.js --profile=functions --profile-format=flamegraph --profile-output=flamegraph.txt # Flame graph export
 ./build/ScriptLoader example.jsx --source-map --mode=bytecode # Write .map source map alongside execution
-./build/ScriptLoader example.jsx --source-map=out.map --emit # Write source map to specific path with bytecode emit
 ./build/REPL # Start interactive REPL (interpreted)
 ./build/REPL --mode=bytecode # Start the REPL via bytecode VM
 ./build/REPL --mode=bytecode --timing # Bytecode REPL with per-line timing

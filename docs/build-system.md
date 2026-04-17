@@ -91,11 +91,6 @@ All execution tools support `--mode=bytecode` to compile and run via the Goccia 
 ./build/ScriptLoader example.js --mode=bytecode
 printf "const x = 2 + 2; x;" | ./build/ScriptLoader --mode=bytecode
 
-# Emit bytecode to .gbc file (no execution)
-./build/ScriptLoader example.js --emit
-./build/ScriptLoader example.js --output=output.gbc
-printf "const x = 2 + 2; x;" | ./build/ScriptLoader --emit --output=output.gbc
-
 # Load and execute a pre-compiled .gbc file
 ./build/ScriptLoader output.gbc
 
@@ -130,9 +125,6 @@ printf "const f = () => f(); f();" | ./build/ScriptLoader --timeout=100
 
 # Write .map source map alongside execution
 ./build/ScriptLoader example.jsx --source-map --mode=bytecode
-
-# Write source map to specific path with bytecode emit
-./build/ScriptLoader example.jsx --source-map=out.map --emit
 
 # Run tests via bytecode VM
 ./build/TestRunner tests --mode=bytecode
