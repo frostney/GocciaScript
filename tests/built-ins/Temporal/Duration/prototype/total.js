@@ -134,4 +134,43 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.total", () => {
     // 2020-02-29 to 2021-03-28 = 393 days
     expect(days).toBe(393);
   });
+
+  test("total() with relativeTo as ZonedDateTime", () => {
+    const d = Temporal.Duration.from({ months: 6 });
+    const zdt = Temporal.ZonedDateTime.from("2024-01-01T00:00:00+00:00[UTC]");
+    const days = d.total({ unit: "days", relativeTo: zdt });
+    // Jan(31) + Feb(29) + Mar(31) + Apr(30) + May(31) + Jun(30) = 182
+    expect(days).toBe(182);
+  });
+
+  test("total() with relativeTo as ZonedDateTime converts to years", () => {
+    const d = Temporal.Duration.from({ years: 2 });
+    const zdt = Temporal.ZonedDateTime.from("2024-01-01T12:00:00+00:00[UTC]");
+    expect(d.total({ unit: "years", relativeTo: zdt })).toBe(2);
+  });
+
+  test("total() with relativeTo as property bag", () => {
+    const d = Temporal.Duration.from({ months: 1 });
+    const days = d.total({ unit: "days", relativeTo: { year: 2024, month: 2, day: 1 } });
+    // Feb 2024 is a leap year = 29 days
+    expect(days).toBe(29);
+  });
+
+  test("total() with relativeTo as property bag converts to months", () => {
+    const d = Temporal.Duration.from({ years: 1, months: 6 });
+    expect(d.total({ unit: "months", relativeTo: { year: 2024, month: 1, day: 1 } })).toBe(18);
+  });
+
+  test("total() with relativeTo property bag missing fields throws", () => {
+    const d = Temporal.Duration.from({ months: 1 });
+    expect(() => d.total({ unit: "days", relativeTo: { year: 2024, month: 2 } })).toThrow();
+    expect(() => d.total({ unit: "days", relativeTo: { year: 2024 } })).toThrow();
+    expect(() => d.total({ unit: "days", relativeTo: {} })).toThrow();
+  });
+
+  test("total() with relativeTo property bag with invalid date throws", () => {
+    const d = Temporal.Duration.from({ months: 1 });
+    expect(() => d.total({ unit: "days", relativeTo: { year: 2024, month: 13, day: 1 } })).toThrow();
+    expect(() => d.total({ unit: "days", relativeTo: { year: 2024, month: 2, day: 30 } })).toThrow();
+  });
 });

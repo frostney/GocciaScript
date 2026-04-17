@@ -77,13 +77,16 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Temporal.Options,
+  Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.TemporalPlainDate;
+  Goccia.Values.TemporalPlainDate,
+  Goccia.Values.TemporalZonedDateTime;
 
 threadvar
   FShared: TGocciaSharedPrototype;
@@ -95,6 +98,8 @@ begin
     ThrowTypeError(AMethod + ' called on non-Duration', SSuggestTemporalThisType);
   Result := TGocciaTemporalDurationValue(AValue);
 end;
+
+function ParseRelativeTo(const AValue: TGocciaValue; const AMethod: string): TTemporalDateRecord; forward;
 
 function DurationFromObject(const AObj: TGocciaObjectValue): TGocciaTemporalDurationValue;
 
@@ -521,7 +526,6 @@ var
   Increment: Integer;
   HasRelativeTo: Boolean;
   RelDate: TTemporalDateRecord;
-  RelTimeRec: TTemporalTimeRecord;
   TotalNs, Divisor: Int64;
   RemNs, TimeNs: Int64;
   ResultYears, ResultMonths: Int64;
@@ -559,24 +563,8 @@ begin
     RelToArg := OptionsObj.GetProperty('relativeTo');
     if (RelToArg <> nil) and not (RelToArg is TGocciaUndefinedLiteralValue) then
     begin
-      if RelToArg is TGocciaTemporalPlainDateValue then
-      begin
-        RelDate.Year := TGocciaTemporalPlainDateValue(RelToArg).Year;
-        RelDate.Month := TGocciaTemporalPlainDateValue(RelToArg).Month;
-        RelDate.Day := TGocciaTemporalPlainDateValue(RelToArg).Day;
-        HasRelativeTo := True;
-      end
-      else if RelToArg is TGocciaStringLiteralValue then
-      begin
-        if TryParseISODate(TGocciaStringLiteralValue(RelToArg).Value, RelDate) then
-          HasRelativeTo := True
-        else if TryParseISODateTime(TGocciaStringLiteralValue(RelToArg).Value, RelDate, RelTimeRec) then
-          HasRelativeTo := True
-        else
-          ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['relativeTo', 'Duration.prototype.round']), SSuggestTemporalISOFormat);
-      end
-      else
-        ThrowTypeError('relativeTo must be a Temporal.PlainDate or ISO 8601 string', SSuggestTemporalRelativeTo);
+      RelDate := ParseRelativeTo(RelToArg, 'Duration.prototype.round');
+      HasRelativeTo := True;
     end;
   end
   else
@@ -911,6 +899,43 @@ begin
       ResultHours, ResultMinutes, ResultSeconds, ResultMs, ResultUs, ResultNs);
 end;
 
+function ZonedDateTimeToDateRecord(const AZdt: TGocciaTemporalZonedDateTimeValue): TTemporalDateRecord;
+var
+  OffsetSeconds: Integer;
+  LocalEpochMs, EpochDays, RemainingMs: Int64;
+begin
+  OffsetSeconds := GetUtcOffsetSeconds(AZdt.TimeZone, AZdt.EpochMilliseconds div 1000);
+  LocalEpochMs := AZdt.EpochMilliseconds + Int64(OffsetSeconds) * 1000;
+  EpochDays := LocalEpochMs div 86400000;
+  RemainingMs := LocalEpochMs mod 86400000;
+  if RemainingMs < 0 then
+    Dec(EpochDays);
+  Result := EpochDaysToDate(EpochDays);
+end;
+
+function TryParseDateFromPropertyBag(const AObj: TGocciaObjectValue;
+  out ADate: TTemporalDateRecord): Boolean;
+var
+  V: TGocciaValue;
+begin
+  Result := False;
+  V := AObj.GetProperty(PROP_YEAR);
+  if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
+    Exit;
+  ADate.Year := Trunc(V.ToNumberLiteral.Value);
+  V := AObj.GetProperty(PROP_MONTH);
+  if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
+    Exit;
+  ADate.Month := Trunc(V.ToNumberLiteral.Value);
+  V := AObj.GetProperty(PROP_DAY);
+  if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
+    Exit;
+  ADate.Day := Trunc(V.ToNumberLiteral.Value);
+  if not IsValidDate(ADate.Year, ADate.Month, ADate.Day) then
+    Exit;
+  Result := True;
+end;
+
 function ParseRelativeTo(const AValue: TGocciaValue; const AMethod: string): TTemporalDateRecord;
 var
   DateRec: TTemporalDateRecord;
@@ -924,6 +949,8 @@ begin
     Result.Month := PlainDate.Month;
     Result.Day := PlainDate.Day;
   end
+  else if AValue is TGocciaTemporalZonedDateTimeValue then
+    Result := ZonedDateTimeToDateRecord(TGocciaTemporalZonedDateTimeValue(AValue))
   else if AValue is TGocciaStringLiteralValue then
   begin
     if not TryParseISODate(TGocciaStringLiteralValue(AValue).Value, DateRec) then
@@ -935,6 +962,12 @@ begin
     end
     else
       Result := DateRec;
+  end
+  else if AValue is TGocciaObjectValue then
+  begin
+    if not TryParseDateFromPropertyBag(TGocciaObjectValue(AValue), DateRec) then
+      ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]), SSuggestTemporalRelativeTo);
+    Result := DateRec;
   end
   else
     ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]), SSuggestTemporalRelativeTo);
