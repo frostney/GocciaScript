@@ -586,6 +586,9 @@ begin
       LargestUnit := SmallestUnit;
   end;
 
+  if Ord(LargestUnit) > Ord(SmallestUnit) then
+    ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
+
   // Determine if calendar-relative computation is needed
   NeedCalendar := (D.FYears <> 0) or (D.FMonths <> 0) or
     (Ord(SmallestUnit) <= Ord(tuMonth)) or (Ord(LargestUnit) <= Ord(tuMonth));

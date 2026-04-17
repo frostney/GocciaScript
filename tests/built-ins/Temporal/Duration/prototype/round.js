@@ -107,6 +107,11 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.round", () => {
     expect(() => d.round({ smallestUnit: "months" })).toThrow();
   });
 
+  test("round with largestUnit smaller than smallestUnit throws", () => {
+    const d = Temporal.Duration.from({ days: 10 });
+    expect(() => d.round({ smallestUnit: "month", largestUnit: "day", relativeTo: "2024-01-01" })).toThrow();
+  });
+
   test("round applies years and months as separate calendar steps", () => {
     // 2020-02-29 + 1Y = 2021-02-28 (day clamps), + 1M = 2021-03-28 = 393 days.
     // Collapsing to +13M gives 2021-03-29 = 394 days (wrong).
