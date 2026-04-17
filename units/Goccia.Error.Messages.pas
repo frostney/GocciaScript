@@ -195,8 +195,8 @@ resourcestring
   SErrorDurationRoundRequiresRelativeTo = 'Duration with years or months requires relativeTo for round()';
   SErrorDurationTotalRequiresUnit = 'total() requires a unit option';
   SErrorDurationTotalRequiresRelativeTo = 'Duration with years or months requires relativeTo for total()';
-  SErrorDurationTotalRelativeToUnsupported = 'relativeTo for Duration.prototype.total is not yet supported';
   SErrorDurationTotalRequiresStringOrOptions = 'Duration.prototype.total requires a string or options object';
+  SErrorTemporalInvalidRelativeTo = 'Invalid relativeTo value for %s';
   SErrorInvalidDurationAddArg = 'Invalid argument to Duration.prototype.add';
   SErrorInvalidDurationSubtractArg = 'Invalid argument to Duration.prototype.subtract';
 

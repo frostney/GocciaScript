@@ -82,7 +82,8 @@ uses
   Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.ObjectPropertyDescriptor;
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.TemporalPlainDate;
 
 threadvar
   FShared: TGocciaSharedPrototype;
@@ -626,6 +627,213 @@ begin
       ResultHours, ResultMinutes, ResultSeconds, ResultMs, ResultUs, ResultNs);
 end;
 
+function ParseRelativeTo(const AValue: TGocciaValue; const AMethod: string): TTemporalDateRecord;
+var
+  DateRec: TTemporalDateRecord;
+  TimeRec: TTemporalTimeRecord;
+  PlainDate: TGocciaTemporalPlainDateValue;
+begin
+  if AValue is TGocciaTemporalPlainDateValue then
+  begin
+    PlainDate := TGocciaTemporalPlainDateValue(AValue);
+    Result.Year := PlainDate.Year;
+    Result.Month := PlainDate.Month;
+    Result.Day := PlainDate.Day;
+  end
+  else if AValue is TGocciaStringLiteralValue then
+  begin
+    if not TryParseISODate(TGocciaStringLiteralValue(AValue).Value, DateRec) then
+    begin
+      if TryParseISODateTime(TGocciaStringLiteralValue(AValue).Value, DateRec, TimeRec) then
+        Result := DateRec
+      else
+        ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]), SSuggestTemporalRelativeTo);
+    end
+    else
+      Result := DateRec;
+  end
+  else
+    ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]), SSuggestTemporalRelativeTo);
+end;
+
+// Add AMonths calendar months to a date, clamping the day if needed.
+function AddMonthsToDate(const ADate: TTemporalDateRecord; const AMonths: Int64): TTemporalDateRecord;
+var
+  TotalMonths, Y: Int64;
+  M, D: Integer;
+begin
+  TotalMonths := Int64(ADate.Year) * 12 + Int64(ADate.Month - 1) + AMonths;
+  if TotalMonths >= 0 then
+  begin
+    Y := TotalMonths div 12;
+    M := Integer(TotalMonths mod 12) + 1;
+  end
+  else
+  begin
+    Y := (TotalMonths - 11) div 12;
+    M := Integer(TotalMonths - Y * 12) + 1;
+  end;
+  D := ADate.Day;
+  if D > DaysInMonth(Integer(Y), M) then
+    D := DaysInMonth(Integer(Y), M);
+  Result.Year := Integer(Y);
+  Result.Month := M;
+  Result.Day := D;
+end;
+
+// Compute the end date of a duration applied from a reference date using
+// ISO 8601 calendar arithmetic (add years+months, clamp day, add weeks+days).
+function DurationEndDate(const ADate: TTemporalDateRecord;
+  const AYears, AMonths, AWeeks, ADays: Int64): TTemporalDateRecord;
+var
+  Interm: TTemporalDateRecord;
+begin
+  Interm := AddMonthsToDate(ADate, AYears * 12 + AMonths);
+  Result := AddDaysToDate(Interm.Year, Interm.Month, Interm.Day, AWeeks * 7 + ADays);
+end;
+
+// Resolve calendar-relative duration components (years, months, weeks) to a
+// concrete day count by walking forward from a reference date.
+function ResolveRelativeDays(const ADate: TTemporalDateRecord;
+  const AYears, AMonths, AWeeks, ADays: Int64): Int64;
+var
+  EndRec: TTemporalDateRecord;
+begin
+  EndRec := DurationEndDate(ADate, AYears, AMonths, AWeeks, ADays);
+  Result := DateToEpochDays(EndRec.Year, EndRec.Month, EndRec.Day) -
+            DateToEpochDays(ADate.Year, ADate.Month, ADate.Day);
+end;
+
+function SubDayNanoseconds(const D: TGocciaTemporalDurationValue): Double;
+begin
+  Result := D.FNanoseconds +
+            D.FMicroseconds * 1000.0 +
+            D.FMilliseconds * 1000000.0 +
+            D.FSeconds * 1e9 +
+            D.FMinutes * 6e10 +
+            D.FHours * 3.6e12;
+end;
+
+// Express the duration as a fractional month count relative to a reference date.
+// Walks forward from the reference date by the duration's calendar components,
+// then measures the result in calendar months plus a fractional remainder.
+function TotalInMonths(const D: TGocciaTemporalDurationValue;
+  const ARelDate: TTemporalDateRecord): TGocciaValue;
+var
+  EndRec, CheckRec, SpanRec: TTemporalDateRecord;
+  WholeMonths: Int64;
+  CheckEpoch, EndEpoch, SpanEpoch: Int64;
+  RemainingDays, DaysInSpan: Int64;
+  FracDays, Total: Double;
+begin
+  EndRec := DurationEndDate(ARelDate, D.FYears, D.FMonths, D.FWeeks, D.FDays);
+  EndEpoch := DateToEpochDays(EndRec.Year, EndRec.Month, EndRec.Day);
+
+  // Estimate whole months
+  WholeMonths := Int64(EndRec.Year - ARelDate.Year) * 12 +
+                 Int64(EndRec.Month - ARelDate.Month);
+
+  // Verify estimate by walking from the reference date
+  CheckRec := AddMonthsToDate(ARelDate, WholeMonths);
+  CheckEpoch := DateToEpochDays(CheckRec.Year, CheckRec.Month, CheckRec.Day);
+
+  // Adjust if overshot forward
+  while (WholeMonths > 0) and (CheckEpoch > EndEpoch) do
+  begin
+    Dec(WholeMonths);
+    CheckRec := AddMonthsToDate(ARelDate, WholeMonths);
+    CheckEpoch := DateToEpochDays(CheckRec.Year, CheckRec.Month, CheckRec.Day);
+  end;
+  // Adjust if overshot backward
+  while (WholeMonths < 0) and (CheckEpoch < EndEpoch) do
+  begin
+    Inc(WholeMonths);
+    CheckRec := AddMonthsToDate(ARelDate, WholeMonths);
+    CheckEpoch := DateToEpochDays(CheckRec.Year, CheckRec.Month, CheckRec.Day);
+  end;
+
+  // Fractional part: remaining days + sub-day time
+  RemainingDays := EndEpoch - CheckEpoch;
+  FracDays := RemainingDays + SubDayNanoseconds(D) / 8.64e13;
+
+  // Determine the month span for the fractional calculation
+  if FracDays >= 0 then
+  begin
+    SpanRec := AddMonthsToDate(ARelDate, WholeMonths + 1);
+    SpanEpoch := DateToEpochDays(SpanRec.Year, SpanRec.Month, SpanRec.Day);
+    DaysInSpan := SpanEpoch - CheckEpoch;
+  end
+  else
+  begin
+    SpanRec := AddMonthsToDate(ARelDate, WholeMonths - 1);
+    SpanEpoch := DateToEpochDays(SpanRec.Year, SpanRec.Month, SpanRec.Day);
+    DaysInSpan := CheckEpoch - SpanEpoch;
+  end;
+
+  if DaysInSpan > 0 then
+    Total := WholeMonths + FracDays / DaysInSpan
+  else
+    Total := WholeMonths;
+
+  Result := TGocciaNumberLiteralValue.Create(Total);
+end;
+
+// Express the duration as a fractional year count relative to a reference date.
+function TotalInYears(const D: TGocciaTemporalDurationValue;
+  const ARelDate: TTemporalDateRecord): TGocciaValue;
+var
+  EndRec, CheckRec, SpanRec: TTemporalDateRecord;
+  WholeYears: Int64;
+  CheckEpoch, EndEpoch, SpanEpoch: Int64;
+  RemainingDays, DaysInSpan: Int64;
+  FracDays, Total: Double;
+begin
+  EndRec := DurationEndDate(ARelDate, D.FYears, D.FMonths, D.FWeeks, D.FDays);
+  EndEpoch := DateToEpochDays(EndRec.Year, EndRec.Month, EndRec.Day);
+
+  // Estimate whole years
+  WholeYears := EndRec.Year - ARelDate.Year;
+
+  CheckRec := AddMonthsToDate(ARelDate, WholeYears * 12);
+  CheckEpoch := DateToEpochDays(CheckRec.Year, CheckRec.Month, CheckRec.Day);
+
+  while (WholeYears > 0) and (CheckEpoch > EndEpoch) do
+  begin
+    Dec(WholeYears);
+    CheckRec := AddMonthsToDate(ARelDate, WholeYears * 12);
+    CheckEpoch := DateToEpochDays(CheckRec.Year, CheckRec.Month, CheckRec.Day);
+  end;
+  while (WholeYears < 0) and (CheckEpoch < EndEpoch) do
+  begin
+    Inc(WholeYears);
+    CheckRec := AddMonthsToDate(ARelDate, WholeYears * 12);
+    CheckEpoch := DateToEpochDays(CheckRec.Year, CheckRec.Month, CheckRec.Day);
+  end;
+
+  RemainingDays := EndEpoch - CheckEpoch;
+  FracDays := RemainingDays + SubDayNanoseconds(D) / 8.64e13;
+
+  if FracDays >= 0 then
+  begin
+    SpanRec := AddMonthsToDate(ARelDate, (WholeYears + 1) * 12);
+    SpanEpoch := DateToEpochDays(SpanRec.Year, SpanRec.Month, SpanRec.Day);
+    DaysInSpan := SpanEpoch - CheckEpoch;
+  end
+  else
+  begin
+    SpanRec := AddMonthsToDate(ARelDate, (WholeYears - 1) * 12);
+    SpanEpoch := DateToEpochDays(SpanRec.Year, SpanRec.Month, SpanRec.Day);
+    DaysInSpan := CheckEpoch - SpanEpoch;
+  end;
+
+  if DaysInSpan > 0 then
+    Total := WholeYears + FracDays / DaysInSpan
+  else
+    Total := WholeYears;
+
+  Result := TGocciaNumberLiteralValue.Create(Total);
+end;
+
 function TGocciaTemporalDurationValue.DurationTotal(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D: TGocciaTemporalDurationValue;
@@ -633,6 +841,8 @@ var
   Arg, RelToArg: TGocciaValue;
   OptionsObj: TGocciaObjectValue;
   HasRelativeTo: Boolean;
+  RelDate: TTemporalDateRecord;
+  ResolvedDays: Int64;
   TotalNs: Double;
 begin
   D := AsDuration(AThisValue, 'Duration.prototype.total');
@@ -659,22 +869,36 @@ begin
     UnitStr := '';
   end;
 
-  if (D.FYears <> 0) or (D.FMonths <> 0) then
+  // Calendar target units always require relativeTo
+  if (UnitStr = 'months') or (UnitStr = 'years') then
   begin
-    if HasRelativeTo then
-      ThrowRangeError(SErrorDurationTotalRelativeToUnsupported, SSuggestTemporalRelativeTo)
-    else
+    if not HasRelativeTo then
       ThrowRangeError(SErrorDurationTotalRequiresRelativeTo, SSuggestTemporalRelativeTo);
+    RelDate := ParseRelativeTo(RelToArg, 'Duration.prototype.total');
+    if UnitStr = 'months' then
+      Result := TotalInMonths(D, RelDate)
+    else
+      Result := TotalInYears(D, RelDate);
+    Exit;
   end;
 
-  TotalNs := D.FNanoseconds +
-             D.FMicroseconds * 1000.0 +
-             D.FMilliseconds * 1000000.0 +
-             D.FSeconds * 1e9 +
-             D.FMinutes * 6e10 +
-             D.FHours * 3.6e12 +
-             D.FDays * 8.64e13 +
-             D.FWeeks * 6.048e14;
+  // Calendar source components (years/months) require relativeTo
+  if (D.FYears <> 0) or (D.FMonths <> 0) then
+  begin
+    if not HasRelativeTo then
+      ThrowRangeError(SErrorDurationTotalRequiresRelativeTo, SSuggestTemporalRelativeTo);
+
+    RelDate := ParseRelativeTo(RelToArg, 'Duration.prototype.total');
+    ResolvedDays := ResolveRelativeDays(RelDate, D.FYears, D.FMonths, D.FWeeks, D.FDays);
+
+    TotalNs := SubDayNanoseconds(D) + ResolvedDays * 8.64e13;
+  end
+  else
+  begin
+    TotalNs := SubDayNanoseconds(D) +
+               D.FDays * 8.64e13 +
+               D.FWeeks * 6.048e14;
+  end;
 
   if UnitStr = 'nanoseconds' then
     Result := TGocciaNumberLiteralValue.Create(TotalNs)
