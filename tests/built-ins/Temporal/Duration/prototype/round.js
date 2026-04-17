@@ -137,6 +137,14 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.round", () => {
     expect(rounded.months).toBe(-4);
   });
 
+  test("round large time-only duration to months folds carry days", () => {
+    // PT2000H = ~83.33 days from 2021-01-01:
+    // Jan 31 + Feb 28 = 59 days → 2 months, remainder 24.33/31 ≈ 0.785 → rounds to 3 months
+    const d = Temporal.Duration.from({ hours: 2000 });
+    const rounded = d.round({ smallestUnit: "months", relativeTo: "2021-01-01" });
+    expect(rounded.months).toBe(3);
+  });
+
   test("round with largestUnit month flattens years", () => {
     const d = Temporal.Duration.from({ years: 1, months: 6 });
     const rounded = d.round({ smallestUnit: "months", largestUnit: "months", relativeTo: "2024-01-01" });

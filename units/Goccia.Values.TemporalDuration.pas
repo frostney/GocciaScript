@@ -514,6 +514,7 @@ var
   IntermDate, EndDate, WalkDate, NextDate: TTemporalDateRecord;
   StartEpoch, EndEpoch, WalkEpoch, NextEpoch: Int64;
   WholeUnits, PeriodNs, ScaledValue, RoundedValue: Int64;
+  CarryDays: Int64;
   Sign: Integer;
 begin
   D := AsDuration(AThisValue, 'Duration.prototype.round');
@@ -613,17 +614,19 @@ begin
     if D.FMonths <> 0 then
       IntermDate := AddMonthsToDate(IntermDate.Year, IntermDate.Month, IntermDate.Day,
         D.FMonths);
-    EndDate := AddDaysToDate(IntermDate.Year, IntermDate.Month, IntermDate.Day,
-      D.FWeeks * 7 + D.FDays);
-    StartEpoch := DateToEpochDays(RelDate.Year, RelDate.Month, RelDate.Day);
-    EndEpoch := DateToEpochDays(EndDate.Year, EndDate.Month, EndDate.Day);
-
     TimeNs := D.FNanoseconds +
               D.FMicroseconds * NANOSECONDS_PER_MICROSECOND +
               D.FMilliseconds * NANOSECONDS_PER_MILLISECOND +
               D.FSeconds * NANOSECONDS_PER_SECOND +
               D.FMinutes * NANOSECONDS_PER_MINUTE +
               D.FHours * NANOSECONDS_PER_HOUR;
+    CarryDays := TimeNs div NANOSECONDS_PER_DAY;
+    TimeNs := TimeNs mod NANOSECONDS_PER_DAY;
+
+    EndDate := AddDaysToDate(IntermDate.Year, IntermDate.Month, IntermDate.Day,
+      D.FWeeks * 7 + D.FDays + CarryDays);
+    StartEpoch := DateToEpochDays(RelDate.Year, RelDate.Month, RelDate.Day);
+    EndEpoch := DateToEpochDays(EndDate.Year, EndDate.Month, EndDate.Day);
 
     // --- Round to year or month ---
     if (SmallestUnit = tuYear) or (SmallestUnit = tuMonth) then
