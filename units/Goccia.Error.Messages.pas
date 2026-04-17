@@ -192,6 +192,7 @@ resourcestring
   // Temporal prototype errors — Duration
   SErrorDurationMixedSigns = 'Duration fields must not have mixed signs';
   SErrorDurationRoundRequiresUnit = 'round() requires at least a smallestUnit or largestUnit';
+  SErrorDurationRoundLargestSmallerThanSmallest = 'largestUnit must not be smaller than smallestUnit';
   SErrorDurationRoundRequiresRelativeTo = 'Duration with years or months requires relativeTo for round()';
   SErrorDurationTotalRequiresUnit = 'total() requires a unit option';
   SErrorDurationTotalRequiresRelativeTo = 'Duration with years or months requires relativeTo for total()';

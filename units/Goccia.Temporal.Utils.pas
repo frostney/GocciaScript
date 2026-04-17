@@ -45,6 +45,7 @@ function WeekOfYear(const AYear, AMonth, ADay: Integer): Integer;
 function YearOfWeek(const AYear, AMonth, ADay: Integer): Integer;
 
 function AddDaysToDate(const AYear, AMonth, ADay: Integer; const ADays: Int64): TTemporalDateRecord;
+function AddMonthsToDate(const AYear, AMonth, ADay: Integer; const AMonths: Int64): TTemporalDateRecord;
 function DateToEpochDays(const AYear, AMonth, ADay: Integer): Int64;
 function EpochDaysToDate(const ADays: Int64): TTemporalDateRecord;
 
@@ -247,6 +248,30 @@ var
 begin
   EpochDays := DateToEpochDays(AYear, AMonth, ADay);
   Result := EpochDaysToDate(EpochDays + ADays);
+end;
+
+function AddMonthsToDate(const AYear, AMonth, ADay: Integer; const AMonths: Int64): TTemporalDateRecord;
+var
+  TotalMonths: Int64;
+  NewYear: Int64;
+  NewMonth: Integer;
+  MaxDay: Integer;
+begin
+  TotalMonths := Int64(AYear) * 12 + (AMonth - 1) + AMonths;
+  NewYear := TotalMonths div 12;
+  NewMonth := Integer(TotalMonths mod 12) + 1;
+  if NewMonth < 1 then
+  begin
+    Inc(NewMonth, 12);
+    Dec(NewYear);
+  end;
+  Result.Year := Integer(NewYear);
+  Result.Month := NewMonth;
+  MaxDay := DaysInMonth(Result.Year, Result.Month);
+  if ADay > MaxDay then
+    Result.Day := MaxDay
+  else
+    Result.Day := ADay;
 end;
 
 function BalanceTime(const AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Int64;

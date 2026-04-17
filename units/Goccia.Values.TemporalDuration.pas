@@ -497,26 +497,34 @@ end;
 function TGocciaTemporalDurationValue.DurationRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D: TGocciaTemporalDurationValue;
-  Arg: TGocciaValue;
+  Arg, RelToArg: TGocciaValue;
   OptionsObj: TGocciaObjectValue;
   SmallestUnit, LargestUnit: TTemporalUnit;
   Mode: TTemporalRoundingMode;
   Increment: Integer;
-  TotalNs, Divisor, Rounded: Int64;
-  RemNs: Int64;
+  HasRelativeTo: Boolean;
+  RelDate: TTemporalDateRecord;
+  RelTimeRec: TTemporalTimeRecord;
+  TotalNs, Divisor: Int64;
+  RemNs, TimeNs: Int64;
+  ResultYears, ResultMonths: Int64;
   ResultDays, ResultHours, ResultMinutes, ResultSeconds: Int64;
   ResultMs, ResultUs, ResultNs: Int64;
+  NeedCalendar: Boolean;
+  IntermDate, EndDate, WalkDate, NextDate: TTemporalDateRecord;
+  StartEpoch, EndEpoch, WalkEpoch, NextEpoch: Int64;
+  WholeUnits, PeriodNs, ScaledValue, RoundedValue: Int64;
+  CarryDays: Int64;
+  Sign: Integer;
 begin
   D := AsDuration(AThisValue, 'Duration.prototype.round');
   Arg := AArgs.GetElement(0);
-
-  if (D.FYears <> 0) or (D.FMonths <> 0) then
-    ThrowRangeError(SErrorDurationRoundRequiresRelativeTo, SSuggestTemporalRelativeTo);
 
   SmallestUnit := tuNone;
   LargestUnit := tuNone;
   Mode := rmHalfExpand;
   Increment := 1;
+  HasRelativeTo := False;
 
   if Arg is TGocciaStringLiteralValue then
   begin
@@ -530,51 +538,313 @@ begin
     LargestUnit := GetLargestUnit(OptionsObj, tuNone);
     Mode := GetRoundingMode(OptionsObj, rmHalfExpand);
     Increment := GetRoundingIncrement(OptionsObj, 1);
+
+    RelToArg := OptionsObj.GetProperty('relativeTo');
+    if (RelToArg <> nil) and not (RelToArg is TGocciaUndefinedLiteralValue) then
+    begin
+      if RelToArg is TGocciaTemporalPlainDateValue then
+      begin
+        RelDate.Year := TGocciaTemporalPlainDateValue(RelToArg).Year;
+        RelDate.Month := TGocciaTemporalPlainDateValue(RelToArg).Month;
+        RelDate.Day := TGocciaTemporalPlainDateValue(RelToArg).Day;
+        HasRelativeTo := True;
+      end
+      else if RelToArg is TGocciaStringLiteralValue then
+      begin
+        if TryParseISODate(TGocciaStringLiteralValue(RelToArg).Value, RelDate) then
+          HasRelativeTo := True
+        else if TryParseISODateTime(TGocciaStringLiteralValue(RelToArg).Value, RelDate, RelTimeRec) then
+          HasRelativeTo := True
+        else
+          ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['relativeTo', 'Duration.prototype.round']), SSuggestTemporalISOFormat);
+      end
+      else
+        ThrowTypeError('relativeTo must be a Temporal.PlainDate or ISO 8601 string', SSuggestTemporalRelativeTo);
+    end;
   end
   else
     ThrowTypeError(Format(SErrorTemporalRoundRequiresStringOrOptions, ['Duration']), SSuggestTemporalRoundArg);
 
-  // If only largestUnit is specified, rebalance without rounding
+  // Validate units
   if (SmallestUnit = tuNone) and (LargestUnit = tuNone) then
     ThrowRangeError(SErrorDurationRoundRequiresUnit, SSuggestTemporalRoundArg);
   if SmallestUnit = tuNone then
     SmallestUnit := tuNanosecond;
   if LargestUnit = tuNone then
   begin
-    // Default largestUnit to the largest defined unit of the duration
-    if D.FDays <> 0 then LargestUnit := tuDay
+    if D.FYears <> 0 then LargestUnit := tuYear
+    else if D.FMonths <> 0 then LargestUnit := tuMonth
+    else if D.FWeeks <> 0 then LargestUnit := tuWeek
+    else if D.FDays <> 0 then LargestUnit := tuDay
     else if D.FHours <> 0 then LargestUnit := tuHour
     else if D.FMinutes <> 0 then LargestUnit := tuMinute
     else if D.FSeconds <> 0 then LargestUnit := tuSecond
     else if D.FMilliseconds <> 0 then LargestUnit := tuMillisecond
     else if D.FMicroseconds <> 0 then LargestUnit := tuMicrosecond
     else LargestUnit := SmallestUnit;
-    // Ensure largestUnit >= smallestUnit
     if Ord(LargestUnit) > Ord(SmallestUnit) then
       LargestUnit := SmallestUnit;
   end;
 
-  // Compute total nanoseconds (for time-only durations)
-  TotalNs := D.FNanoseconds +
-             D.FMicroseconds * NANOSECONDS_PER_MICROSECOND +
-             D.FMilliseconds * NANOSECONDS_PER_MILLISECOND +
-             D.FSeconds * NANOSECONDS_PER_SECOND +
-             D.FMinutes * NANOSECONDS_PER_MINUTE +
-             D.FHours * NANOSECONDS_PER_HOUR +
-             D.FDays * NANOSECONDS_PER_DAY +
-             D.FWeeks * 7 * NANOSECONDS_PER_DAY;
+  if Ord(LargestUnit) > Ord(SmallestUnit) then
+    ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
 
-  // Round to smallestUnit
-  if SmallestUnit <> tuNanosecond then
+  // Determine if calendar-relative computation is needed
+  NeedCalendar := (D.FYears <> 0) or (D.FMonths <> 0) or
+    (Ord(SmallestUnit) <= Ord(tuMonth)) or (Ord(LargestUnit) <= Ord(tuMonth));
+
+  if NeedCalendar and not HasRelativeTo then
+    ThrowRangeError(SErrorDurationRoundRequiresRelativeTo, SSuggestTemporalRelativeTo);
+
+  // --- Calendar-relative path ---
+  if NeedCalendar then
   begin
-    if SmallestUnit = tuWeek then
-      Divisor := NANOSECONDS_PER_DAY * 7 * Increment
-    else
-      Divisor := UnitToNanoseconds(SmallestUnit) * Increment;
-    TotalNs := RoundWithMode(TotalNs, Divisor, Mode);
+    Sign := D.ComputeSign;
+    if Sign = 0 then
+    begin
+      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+      Exit;
+    end;
+
+    // Resolve duration to concrete end date. Apply years and months as
+    // separate calendar steps so day-clamping is applied after each,
+    // matching TC39 Temporal semantics (e.g. 2020-02-29 + P1Y1M clamps to
+    // 2021-02-28 after +1Y, then advances to 2021-03-28).
+    IntermDate := RelDate;
+    if D.FYears <> 0 then
+      IntermDate := AddMonthsToDate(IntermDate.Year, IntermDate.Month, IntermDate.Day,
+        D.FYears * 12);
+    if D.FMonths <> 0 then
+      IntermDate := AddMonthsToDate(IntermDate.Year, IntermDate.Month, IntermDate.Day,
+        D.FMonths);
+    TimeNs := D.FNanoseconds +
+              D.FMicroseconds * NANOSECONDS_PER_MICROSECOND +
+              D.FMilliseconds * NANOSECONDS_PER_MILLISECOND +
+              D.FSeconds * NANOSECONDS_PER_SECOND +
+              D.FMinutes * NANOSECONDS_PER_MINUTE +
+              D.FHours * NANOSECONDS_PER_HOUR;
+    CarryDays := TimeNs div NANOSECONDS_PER_DAY;
+    TimeNs := TimeNs mod NANOSECONDS_PER_DAY;
+
+    EndDate := AddDaysToDate(IntermDate.Year, IntermDate.Month, IntermDate.Day,
+      D.FWeeks * 7 + D.FDays + CarryDays);
+    StartEpoch := DateToEpochDays(RelDate.Year, RelDate.Month, RelDate.Day);
+    EndEpoch := DateToEpochDays(EndDate.Year, EndDate.Month, EndDate.Day);
+
+    // --- Round to year or month ---
+    if (SmallestUnit = tuYear) or (SmallestUnit = tuMonth) then
+    begin
+      if SmallestUnit = tuYear then
+      begin
+        // Walk years from relativeTo
+        WholeUnits := 0;
+        if Sign > 0 then
+        begin
+          repeat
+            NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, (WholeUnits + 1) * 12);
+            NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
+            if (NextEpoch > EndEpoch) or ((NextEpoch = EndEpoch) and (TimeNs <= 0)) then
+              Break;
+            Inc(WholeUnits);
+          until False;
+        end
+        else
+        begin
+          repeat
+            NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, (WholeUnits - 1) * 12);
+            NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
+            if (NextEpoch < EndEpoch) or ((NextEpoch = EndEpoch) and (TimeNs >= 0)) then
+              Break;
+            Dec(WholeUnits);
+          until False;
+        end;
+
+        // Align to increment-boundary bucket. For negative durations the
+        // fractional position extends past WholeUnits in the negative
+        // direction, so use WholeUnits - 1 as alignment base.
+        if Sign < 0 then
+          ScaledValue := WholeUnits - 1
+        else
+          ScaledValue := WholeUnits;
+        if (ScaledValue >= 0) or (ScaledValue mod Increment = 0) then
+          ScaledValue := (ScaledValue div Increment) * Increment
+        else
+          ScaledValue := ((ScaledValue div Increment) - 1) * Increment;
+
+        WalkDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, ScaledValue * 12);
+        WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
+        NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, (ScaledValue + Increment) * 12);
+        NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
+        PeriodNs := (NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
+        RoundedValue := RoundWithMode((EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs, PeriodNs, Mode);
+        if RoundedValue >= PeriodNs then
+          WholeUnits := ScaledValue + Increment
+        else
+          WholeUnits := ScaledValue;
+
+        Result := TGocciaTemporalDurationValue.Create(WholeUnits, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+      end
+      else // SmallestUnit = tuMonth
+      begin
+        // Walk months from relativeTo
+        WholeUnits := 0;
+        if Sign > 0 then
+        begin
+          repeat
+            NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, WholeUnits + 1);
+            NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
+            if (NextEpoch > EndEpoch) or ((NextEpoch = EndEpoch) and (TimeNs <= 0)) then
+              Break;
+            Inc(WholeUnits);
+          until False;
+        end
+        else
+        begin
+          repeat
+            NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, WholeUnits - 1);
+            NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
+            if (NextEpoch < EndEpoch) or ((NextEpoch = EndEpoch) and (TimeNs >= 0)) then
+              Break;
+            Dec(WholeUnits);
+          until False;
+        end;
+
+        // Align to increment-boundary bucket (same sign-aware logic as years)
+        if Sign < 0 then
+          ScaledValue := WholeUnits - 1
+        else
+          ScaledValue := WholeUnits;
+        if (ScaledValue >= 0) or (ScaledValue mod Increment = 0) then
+          ScaledValue := (ScaledValue div Increment) * Increment
+        else
+          ScaledValue := ((ScaledValue div Increment) - 1) * Increment;
+
+        WalkDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, ScaledValue);
+        WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
+        NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, ScaledValue + Increment);
+        NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
+        PeriodNs := (NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
+        RoundedValue := RoundWithMode((EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs, PeriodNs, Mode);
+        if RoundedValue >= PeriodNs then
+          WholeUnits := ScaledValue + Increment
+        else
+          WholeUnits := ScaledValue;
+
+        if Ord(LargestUnit) <= Ord(tuYear) then
+        begin
+          ResultYears := WholeUnits div 12;
+          ResultMonths := WholeUnits mod 12;
+        end
+        else
+        begin
+          ResultYears := 0;
+          ResultMonths := WholeUnits;
+        end;
+
+        Result := TGocciaTemporalDurationValue.Create(ResultYears, ResultMonths, 0, 0, 0, 0, 0, 0, 0, 0);
+      end;
+      Exit;
+    end;
+
+    // --- SmallestUnit is week, day, or time: convert to nanoseconds ---
+    TotalNs := (EndEpoch - StartEpoch) * NANOSECONDS_PER_DAY + TimeNs;
+
+    if SmallestUnit <> tuNanosecond then
+    begin
+      if SmallestUnit = tuWeek then
+        Divisor := NANOSECONDS_PER_DAY * 7 * Increment
+      else
+        Divisor := UnitToNanoseconds(SmallestUnit) * Increment;
+      TotalNs := RoundWithMode(TotalNs, Divisor, Mode);
+    end;
+
+    // --- Rebalance to year/month if needed ---
+    if Ord(LargestUnit) <= Ord(tuMonth) then
+    begin
+      ResultDays := TotalNs div NANOSECONDS_PER_DAY;
+      RemNs := TotalNs mod NANOSECONDS_PER_DAY;
+
+      EndEpoch := StartEpoch + ResultDays;
+      WholeUnits := 0;
+      if Sign > 0 then
+      begin
+        repeat
+          NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, WholeUnits + 1);
+          NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
+          if NextEpoch > EndEpoch then Break;
+          Inc(WholeUnits);
+        until False;
+      end
+      else
+      begin
+        repeat
+          NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, WholeUnits - 1);
+          NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
+          if NextEpoch < EndEpoch then Break;
+          Dec(WholeUnits);
+        until False;
+      end;
+
+      WalkDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, WholeUnits);
+      WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
+      ResultDays := EndEpoch - WalkEpoch;
+
+      if Ord(LargestUnit) <= Ord(tuYear) then
+      begin
+        ResultYears := WholeUnits div 12;
+        ResultMonths := WholeUnits mod 12;
+      end
+      else
+      begin
+        ResultYears := 0;
+        ResultMonths := WholeUnits;
+      end;
+
+      ResultHours := RemNs div NANOSECONDS_PER_HOUR;
+      RemNs := RemNs mod NANOSECONDS_PER_HOUR;
+      ResultMinutes := RemNs div NANOSECONDS_PER_MINUTE;
+      RemNs := RemNs mod NANOSECONDS_PER_MINUTE;
+      ResultSeconds := RemNs div NANOSECONDS_PER_SECOND;
+      RemNs := RemNs mod NANOSECONDS_PER_SECOND;
+      ResultMs := RemNs div NANOSECONDS_PER_MILLISECOND;
+      RemNs := RemNs mod NANOSECONDS_PER_MILLISECOND;
+      ResultUs := RemNs div NANOSECONDS_PER_MICROSECOND;
+      ResultNs := RemNs mod NANOSECONDS_PER_MICROSECOND;
+
+      if Ord(LargestUnit) <= Ord(tuWeek) then
+        Result := TGocciaTemporalDurationValue.Create(ResultYears, ResultMonths,
+          ResultDays div 7, ResultDays mod 7,
+          ResultHours, ResultMinutes, ResultSeconds, ResultMs, ResultUs, ResultNs)
+      else
+        Result := TGocciaTemporalDurationValue.Create(ResultYears, ResultMonths, 0, ResultDays,
+          ResultHours, ResultMinutes, ResultSeconds, ResultMs, ResultUs, ResultNs);
+      Exit;
+    end;
+    // Fall through to non-calendar breakdown below
+  end
+  else
+  begin
+    // --- Non-calendar path (existing behavior) ---
+    TotalNs := D.FNanoseconds +
+               D.FMicroseconds * NANOSECONDS_PER_MICROSECOND +
+               D.FMilliseconds * NANOSECONDS_PER_MILLISECOND +
+               D.FSeconds * NANOSECONDS_PER_SECOND +
+               D.FMinutes * NANOSECONDS_PER_MINUTE +
+               D.FHours * NANOSECONDS_PER_HOUR +
+               D.FDays * NANOSECONDS_PER_DAY +
+               D.FWeeks * 7 * NANOSECONDS_PER_DAY;
+
+    if SmallestUnit <> tuNanosecond then
+    begin
+      if SmallestUnit = tuWeek then
+        Divisor := NANOSECONDS_PER_DAY * 7 * Increment
+      else
+        Divisor := UnitToNanoseconds(SmallestUnit) * Increment;
+      TotalNs := RoundWithMode(TotalNs, Divisor, Mode);
+    end;
   end;
 
-  // Break down from largestUnit
+  // Break down from largestUnit (non-calendar output)
   ResultDays := 0;
   ResultHours := 0;
   ResultMinutes := 0;
@@ -616,12 +886,9 @@ begin
   end;
   ResultNs := RemNs;
 
-  // Extract weeks from days if largestUnit allows it
   if Ord(LargestUnit) <= Ord(tuWeek) then
-  begin
     Result := TGocciaTemporalDurationValue.Create(0, 0, ResultDays div 7, ResultDays mod 7,
-      ResultHours, ResultMinutes, ResultSeconds, ResultMs, ResultUs, ResultNs);
-  end
+      ResultHours, ResultMinutes, ResultSeconds, ResultMs, ResultUs, ResultNs)
   else
     Result := TGocciaTemporalDurationValue.Create(0, 0, 0, ResultDays,
       ResultHours, ResultMinutes, ResultSeconds, ResultMs, ResultUs, ResultNs);
