@@ -602,9 +602,17 @@ begin
       Exit;
     end;
 
-    // Resolve duration to concrete end date
-    IntermDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day,
-      D.FYears * 12 + D.FMonths);
+    // Resolve duration to concrete end date. Apply years and months as
+    // separate calendar steps so day-clamping is applied after each,
+    // matching TC39 Temporal semantics (e.g. 2020-02-29 + P1Y1M clamps to
+    // 2021-02-28 after +1Y, then advances to 2021-03-28).
+    IntermDate := RelDate;
+    if D.FYears <> 0 then
+      IntermDate := AddMonthsToDate(IntermDate.Year, IntermDate.Month, IntermDate.Day,
+        D.FYears * 12);
+    if D.FMonths <> 0 then
+      IntermDate := AddMonthsToDate(IntermDate.Year, IntermDate.Month, IntermDate.Day,
+        D.FMonths);
     EndDate := AddDaysToDate(IntermDate.Year, IntermDate.Month, IntermDate.Day,
       D.FWeeks * 7 + D.FDays);
     StartEpoch := DateToEpochDays(RelDate.Year, RelDate.Month, RelDate.Day);
