@@ -222,9 +222,19 @@ begin
     Inc(I);
   end;
 
+  // Step 3b: Check for "Infinity" literal (StrDecimalLiteral :: Infinity)
+  if Copy(InputStr, I, 8) = 'Infinity' then
+  begin
+    if Sign = -1 then
+      Result := TGocciaNumberLiteralValue.NegativeInfinityValue
+    else
+      Result := TGocciaNumberLiteralValue.InfinityValue;
+    Exit;
+  end;
+
   IntegerPart := 0;
 
-  // Step 3b: Parse DecimalDigits (integer part)
+  // Step 3c: Parse DecimalDigits (integer part)
   while I <= Length(InputStr) do
   begin
     C := InputStr[I];
@@ -241,7 +251,7 @@ begin
   FractionalPart := 0;
   FractionDivisor := 1;
 
-  // Step 3c: Parse optional '.' DecimalDigits (fractional part)
+  // Step 3d: Parse optional '.' DecimalDigits (fractional part)
   if (I <= Length(InputStr)) and (InputStr[I] = '.') then
   begin
     Inc(I);

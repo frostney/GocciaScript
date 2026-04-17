@@ -56,4 +56,10 @@ describe("Number.parseInt", () => {
   test("leading plus sign", () => {
     expect(Number.parseInt("+42")).toBe(42);
   });
+
+  test("Infinity returns NaN", () => {
+    expect(Number.isNaN(Number.parseInt("Infinity"))).toBe(true);
+    expect(Number.isNaN(Number.parseInt("-Infinity"))).toBe(true);
+    expect(Number.isNaN(Number.parseInt("+Infinity"))).toBe(true);
+  });
 });

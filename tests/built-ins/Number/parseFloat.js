@@ -24,4 +24,11 @@ describe("Number.parseFloat", () => {
   test("returns NaN for non-parseable strings", () => {
     expect(Number.isNaN(Number.parseFloat("abc"))).toBe(true);
   });
+
+  test("parses Infinity", () => {
+    expect(Number.parseFloat("Infinity")).toBe(Infinity);
+    expect(Number.parseFloat("+Infinity")).toBe(Infinity);
+    expect(Number.parseFloat("-Infinity")).toBe(-Infinity);
+    expect(Number.parseFloat("  Infinity  ")).toBe(Infinity);
+  });
 });
