@@ -16,6 +16,8 @@ describe.runIf(hasGoccia)("Goccia.spec", () => {
     expect(keys.length > 0).toBe(true);
     expect(keys.includes("2015")).toBe(true);
     expect(keys.includes("2025")).toBe(true);
+    expect(keys.includes("2026")).toBe(true);
+    expect(keys.includes("2027")).toBe(true);
   });
 
   test("each year maps to an array of feature entries", () => {

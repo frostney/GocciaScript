@@ -2,7 +2,7 @@
 
 ![GocciaScript logo](./logo.png)
 
-A drop of JavaScript — A subset of ECMAScript 2026+ implemented in FreePascal
+A drop of JavaScript — A subset of ECMAScript 2027+ implemented in FreePascal
 
 It's based on the thought "What if we implement ECMAScript today, but without the quirks of early ECMAScript implementations". Features that are error-prone, redundant, or security risks are intentionally excluded. See [Language](docs/language.md) for the full rationale.
 

@@ -7,14 +7,14 @@
 - **ArrayBuffer** — raw binary data buffers with fixed-length and resizable modes, transfer semantics, and detachment
 - **SharedArrayBuffer** — fixed-length binary buffer with the same API shape as ArrayBuffer but as a distinct type
 - **TypedArrays** — array-like views over buffer data with 10 non-BigInt element types (Int8 through Float64)
-- **Uint8Array encoding** — Base64 and hex encoding/decoding (TC39 Uint8Array Base64 proposal)
+- **Uint8Array encoding** — Base64 and hex encoding/decoding
 - **Not supported** — `BigInt64Array`, `BigUint64Array` (BigInt types), `DataView`
 
 ## ArrayBuffer (`Goccia.Builtins.GlobalArrayBuffer.pas`, `Goccia.Values.ArrayBufferValue.pas`)
 
 Implements the [ECMAScript ArrayBuffer](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/ArrayBuffer). See [MDN ArrayBuffer reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/ArrayBuffer) for the full API.
 
-**Full standard compliance** — includes ES2024 resizable buffers (`maxByteLength`), `transfer`, and `transferToFixedLength`.
+**Full standard compliance** — includes resizable buffers (`maxByteLength`), `transfer`, and `transferToFixedLength`.
 
 Internally backed by a zero-initialized `TBytes` array. ArrayBuffer instances are cloneable via `structuredClone`.
 
@@ -41,7 +41,7 @@ Implements the [ECMAScript TypedArray](https://developer.mozilla.org/en-US/docs/
 | `Uint16Array` | 2 bytes | 0 to 65535 |
 | `Int32Array` | 4 bytes | -2147483648 to 2147483647 |
 | `Uint32Array` | 4 bytes | 0 to 4294967295 |
-| `Float16Array` | 2 bytes | IEEE 754 half-precision (ES2025) |
+| `Float16Array` | 2 bytes | IEEE 754 half-precision |
 | `Float32Array` | 4 bytes | IEEE 754 single-precision |
 | `Float64Array` | 8 bytes | IEEE 754 double-precision |
 
@@ -51,7 +51,7 @@ Implements the [ECMAScript TypedArray](https://developer.mozilla.org/en-US/docs/
 
 ### Uint8Array Base64/Hex encoding (`Goccia.Values.Uint8ArrayEncoding.pas`)
 
-TC39 [Uint8Array Base64](https://github.com/nicolo-ribaudo/proposal-arraybuffer-base64) proposal. These methods are available only on `Uint8Array`, not on other TypedArray types.
+[Uint8Array Base64/Hex encoding](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Uint8Array#base64_and_hex). These methods are available only on `Uint8Array`, not on other TypedArray types.
 
 | Static method | Description |
 |--------|-------------|

@@ -139,6 +139,15 @@ end;
 
 **What not to annotate:** Internal GocciaScript helpers that don't correspond to a spec algorithm (e.g., `EvaluateStatements`, `SpreadIterableInto`, Pascal-specific utilities).
 
+### Documentation — Edition Year vs Proposal Stage
+
+In the **built-in documentation** (`docs/built-ins*.md`), do not annotate features with their ECMAScript edition year. If a feature is part of the ratified standard, it is simply "the standard" — no `(ES2025)` or `(ES2026)` suffix. Only annotate features that are still **TC39 proposals** with their current stage (e.g., "Stage 2", "Stage 3"). This avoids documentation churn every time a new edition is ratified.
+
+- Standard feature: `Math.sumPrecise(iterable)` — Precise summation of iterables.
+- Proposal: `Math.clamp(x, min, max)` — Clamp to range (Stage 2 [proposal-math-clamp](https://github.com/tc39/proposal-math-clamp)).
+
+The **language tables** (`docs/language-tables.md`) are the one place where edition years are listed, as a feature-provenance reference. **Source code** annotations (`// ES2026 §X.Y.Z`) always use the current edition year per the rules above.
+
 ### No Abbreviations
 
 Class names, function names, method names, and type names must use **full words** — do not abbreviate. This keeps the codebase consistent and self-documenting.

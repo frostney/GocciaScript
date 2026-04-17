@@ -145,43 +145,64 @@ const
   // ---------------------------------------------------------------------------
   // ES2024
   // ---------------------------------------------------------------------------
-  ES2024_FEATURES: array[0..7] of TGocciaFeatureEntry = (
+  ES2024_FEATURES: array[0..6] of TGocciaFeatureEntry = (
     (Name: 'Promise.withResolvers';            Link: 'https://tc39.es/ecma262/#sec-promise.withresolvers'),
     (Name: 'Object.groupBy';                   Link: 'https://tc39.es/ecma262/#sec-object.groupby'),
     (Name: 'Map.groupBy';                      Link: 'https://tc39.es/ecma262/#sec-map.groupby'),
     (Name: 'Resizable ArrayBuffer';            Link: 'https://tc39.es/ecma262/#sec-arraybuffer-objects'),
     (Name: 'String.prototype.isWellFormed';    Link: 'https://tc39.es/ecma262/#sec-string.prototype.iswellformed'),
     (Name: 'String.prototype.toWellFormed';    Link: 'https://tc39.es/ecma262/#sec-string.prototype.towellformed'),
-    (Name: 'RegExp v Flag';                    Link: 'https://tc39.es/ecma262/#sec-regexp-regular-expression-objects'),
-    (Name: 'JSON.parse Source Text Access';    Link: 'https://tc39.es/ecma262/#sec-json.parse')
+    (Name: 'RegExp v Flag';                    Link: 'https://tc39.es/ecma262/#sec-regexp-regular-expression-objects')
   );
 
   // ---------------------------------------------------------------------------
   // ES2025
   // ---------------------------------------------------------------------------
-  ES2025_FEATURES: array[0..10] of TGocciaFeatureEntry = (
+  ES2025_FEATURES: array[0..5] of TGocciaFeatureEntry = (
     (Name: 'Set Methods';                     Link: 'https://tc39.es/ecma262/#sec-set-objects'),
     (Name: 'Iterator Helpers';                Link: 'https://tc39.es/ecma262/#sec-iterator-objects'),
     (Name: 'Promise.try';                     Link: 'https://tc39.es/ecma262/#sec-promise.try'),
-    (Name: 'RegExp.escape';                   Link: 'https://tc39.es/ecma262/#sec-regexp.escape'),
     (Name: 'RegExp Modifiers';                Link: 'https://tc39.es/ecma262/#sec-regexp-regular-expression-objects'),
     (Name: 'Duplicate Named Capture Groups';  Link: 'https://tc39.es/ecma262/#sec-regexp-regular-expression-objects'),
-    (Name: 'Error.isError';                   Link: 'https://tc39.es/ecma262/#sec-error.iserror'),
-    (Name: 'Float16Array';                    Link: 'https://tc39.es/ecma262/#sec-typedarray-objects'),
-    (Name: 'Uint8Array Base64/Hex';           Link: 'https://tc39.es/ecma262/#sec-typedarray-objects'),
-    (Name: 'Array.fromAsync';                 Link: 'https://tc39.es/ecma262/#sec-array.fromasync'),
-    (Name: 'Math.sumPrecise';                 Link: 'https://tc39.es/ecma262/#sec-math.sumprecise')
+    (Name: 'Float16Array';                    Link: 'https://tc39.es/ecma262/#sec-typedarray-objects')
+  );
+
+  // ---------------------------------------------------------------------------
+  // ES2026
+  // ---------------------------------------------------------------------------
+  ES2026_FEATURES: array[0..8] of TGocciaFeatureEntry = (
+    (Name: 'JSON.parse Source Text Access';         Link: 'https://tc39.es/ecma262/#sec-json.parse'),
+    (Name: 'Explicit Resource Management';          Link: 'https://tc39.es/ecma262/#sec-using-declaration'),
+    (Name: 'RegExp.escape';                         Link: 'https://tc39.es/ecma262/#sec-regexp.escape'),
+    (Name: 'Error.isError';                         Link: 'https://tc39.es/ecma262/#sec-error.iserror'),
+    (Name: 'Uint8Array Base64/Hex';                 Link: 'https://tc39.es/ecma262/#sec-typedarray-objects'),
+    (Name: 'Array.fromAsync';                       Link: 'https://tc39.es/ecma262/#sec-array.fromasync'),
+    (Name: 'Math.sumPrecise';                       Link: 'https://tc39.es/ecma262/#sec-math.sumprecise'),
+    (Name: 'Map.prototype.getOrInsert';             Link: 'https://tc39.es/ecma262/#sec-map.prototype.getorinsert'),
+    (Name: 'Iterator.concat';                       Link: 'https://tc39.es/ecma262/#sec-iterator.concat')
+  );
+
+  // ---------------------------------------------------------------------------
+  // ES2027
+  // ---------------------------------------------------------------------------
+  ES2027_FEATURES: array[0..0] of TGocciaFeatureEntry = (
+    (Name: 'Temporal';  Link: 'https://tc39.es/ecma262/#sec-temporal-objects')
   );
 
   // ---------------------------------------------------------------------------
   // TC39 Stage 3
   // ---------------------------------------------------------------------------
-  STAGE3_PROPOSALS: array[0..4] of TGocciaFeatureEntry = (
-    (Name: 'Temporal';              Link: 'https://tc39.es/proposal-temporal/'),
+  STAGE3_PROPOSALS: array[0..2] of TGocciaFeatureEntry = (
     (Name: 'Decorators';            Link: 'https://github.com/tc39/proposal-decorators'),
     (Name: 'Decorator Metadata';    Link: 'https://github.com/tc39/proposal-decorator-metadata'),
-    (Name: 'Iterator Sequencing';   Link: 'https://github.com/tc39/proposal-iterator-sequencing'),
     (Name: 'Joint Iteration';       Link: 'https://github.com/tc39/proposal-joint-iteration')
+  );
+
+  // ---------------------------------------------------------------------------
+  // TC39 Stage 2
+  // ---------------------------------------------------------------------------
+  STAGE2_PROPOSALS: array[0..0] of TGocciaFeatureEntry = (
+    (Name: 'Math.clamp'; Link: 'https://github.com/tc39/proposal-math-clamp')
   );
 
   // ---------------------------------------------------------------------------
@@ -242,6 +263,8 @@ begin
   DefineReadOnlyProperty(Obj, '2023', CreateFeatureArray(ES2023_FEATURES));
   DefineReadOnlyProperty(Obj, '2024', CreateFeatureArray(ES2024_FEATURES));
   DefineReadOnlyProperty(Obj, '2025', CreateFeatureArray(ES2025_FEATURES));
+  DefineReadOnlyProperty(Obj, '2026', CreateFeatureArray(ES2026_FEATURES));
+  DefineReadOnlyProperty(Obj, '2027', CreateFeatureArray(ES2027_FEATURES));
   Result := Obj;
 end;
 
@@ -251,6 +274,7 @@ var
 begin
   Obj := TGocciaObjectValue.Create;
   DefineReadOnlyProperty(Obj, 'stage-3', CreateFeatureArray(STAGE3_PROPOSALS));
+  DefineReadOnlyProperty(Obj, 'stage-2', CreateFeatureArray(STAGE2_PROPOSALS));
   DefineReadOnlyProperty(Obj, 'stage-1', CreateFeatureArray(STAGE1_PROPOSALS));
   DefineReadOnlyProperty(Obj, 'stage-0', CreateFeatureArray(STAGE0_PROPOSALS));
   Result := Obj;
