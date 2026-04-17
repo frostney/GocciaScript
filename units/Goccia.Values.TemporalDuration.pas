@@ -688,7 +688,14 @@ function DurationEndDate(const ADate: TTemporalDateRecord;
 var
   Interm: TTemporalDateRecord;
 begin
-  Interm := AddMonthsToDate(ADate, AYears * 12 + AMonths);
+  // Apply years and months as separate steps so the day clamps after each,
+  // matching TC39 Temporal calendar arithmetic (e.g. 2020-02-29 + P1Y1M
+  // clamps to 2021-02-28 after +1Y, then advances to 2021-03-28).
+  Interm := ADate;
+  if AYears <> 0 then
+    Interm := AddMonthsToDate(Interm, AYears * 12);
+  if AMonths <> 0 then
+    Interm := AddMonthsToDate(Interm, AMonths);
   Result := AddDaysToDate(Interm.Year, Interm.Month, Interm.Day, AWeeks * 7 + ADays);
 end;
 

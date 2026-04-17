@@ -126,4 +126,12 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.total", () => {
     const d = Temporal.Duration.from({ months: 1 });
     expect(d.total({ unit: "days", relativeTo: "2024-01-31" })).toBe(29);
   });
+
+  test("total() leap-day clamping with separate year and month steps", () => {
+    // P1Y1M from 2020-02-29: +1Y → 2021-02-28 (clamped), +1M → 2021-03-28
+    const d = Temporal.Duration.from({ years: 1, months: 1 });
+    const days = d.total({ unit: "days", relativeTo: "2020-02-29" });
+    // 2020-02-29 to 2021-03-28 = 393 days
+    expect(days).toBe(393);
+  });
 });
