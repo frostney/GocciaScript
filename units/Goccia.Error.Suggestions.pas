@@ -239,6 +239,7 @@ resourcestring
   SSuggestTemporalNoValueOf = 'Temporal objects cannot be implicitly converted; use toString() or compare() instead';
   SSuggestTemporalValidUnits = 'valid units are: year, month, week, day, hour, minute, second, millisecond, microsecond, nanosecond';
   SSuggestTemporalDurationSigns = 'all duration fields must have the same sign (all positive or all negative)';
+  SSuggestTemporalDurationRange = 'calendar units (years, months, weeks) must be < 2^32 and normalized time must be < 2^53 seconds';
   SSuggestTemporalRelativeTo = 'pass a relativeTo option with a PlainDate or ZonedDateTime for calendar-sensitive operations';
   SSuggestTemporalOverflow = 'valid overflow options are "constrain" or "reject"';
   SSuggestTemporalRoundingMode = 'valid modes: ceil, floor, expand, trunc, halfCeil, halfFloor, halfExpand, halfTrunc, halfEven';
