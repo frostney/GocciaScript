@@ -52,8 +52,6 @@ type
     function ErrorIsError(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function QueueMicrotaskCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StructuredCloneCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function BtoaCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function AtobCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function EncodeURICallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DecodeURICallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function EncodeURIComponentCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -68,7 +66,6 @@ uses
   Classes,
   SysUtils,
 
-  base64,
   HashMap,
 
   Goccia.Constants.ErrorNames,
@@ -198,12 +195,6 @@ begin
 
   AScope.DefineLexicalBinding('structuredClone',
     TGocciaNativeFunctionValue.Create(StructuredCloneCallback, 'structuredClone', 1), dtConst);
-
-  AScope.DefineLexicalBinding('btoa',
-    TGocciaNativeFunctionValue.Create(BtoaCallback, 'btoa', 1), dtConst);
-
-  AScope.DefineLexicalBinding('atob',
-    TGocciaNativeFunctionValue.Create(AtobCallback, 'atob', 1), dtConst);
 
   AScope.DefineLexicalBinding('encodeURI',
     TGocciaNativeFunctionValue.Create(EncodeURICallback, 'encodeURI', 1), dtConst);
@@ -697,205 +688,6 @@ begin
     end;
     Memory.Free;
   end;
-end;
-
-const
-  UNICODE_REPLACEMENT_CHARACTER = $FFFD;
-
-{ Returns True if the byte at AIndex is a valid UTF-8 continuation byte (10xxxxxx). }
-function IsContinuationByte(const AString: string; const AIndex, ALength: Integer): Boolean; inline;
-begin
-  Result := (AIndex <= ALength) and ((Ord(AString[AIndex]) and $C0) = $80);
-end;
-
-{ Decode a single UTF-8 code point starting at position AIndex in AUTF8String.
-  Advances AIndex past the decoded sequence. Returns the Unicode code point value.
-  Returns U+FFFD for malformed or truncated sequences. }
-function NextUTF8CodePoint(const AUTF8String: string; var AIndex: Integer): Integer;
-var
-  B: Byte;
-  Len: Integer;
-begin
-  Len := Length(AUTF8String);
-  B := Ord(AUTF8String[AIndex]);
-  if B < $80 then
-  begin
-    Result := B;
-    Inc(AIndex);
-  end
-  else if (B and $E0) = $C0 then
-  begin
-    Inc(AIndex);
-    if not IsContinuationByte(AUTF8String, AIndex, Len) then
-      Exit(UNICODE_REPLACEMENT_CHARACTER);
-    Result := ((B and $1F) shl 6) or (Ord(AUTF8String[AIndex]) and $3F);
-    Inc(AIndex);
-  end
-  else if (B and $F0) = $E0 then
-  begin
-    Inc(AIndex);
-    if not IsContinuationByte(AUTF8String, AIndex, Len) then
-      Exit(UNICODE_REPLACEMENT_CHARACTER);
-    Result := (B and $0F) shl 12;
-    Result := Result or ((Ord(AUTF8String[AIndex]) and $3F) shl 6);
-    Inc(AIndex);
-    if not IsContinuationByte(AUTF8String, AIndex, Len) then
-      Exit(UNICODE_REPLACEMENT_CHARACTER);
-    Result := Result or (Ord(AUTF8String[AIndex]) and $3F);
-    Inc(AIndex);
-  end
-  else if (B and $F8) = $F0 then
-  begin
-    Inc(AIndex);
-    if not IsContinuationByte(AUTF8String, AIndex, Len) then
-      Exit(UNICODE_REPLACEMENT_CHARACTER);
-    Result := (B and $07) shl 18;
-    Result := Result or ((Ord(AUTF8String[AIndex]) and $3F) shl 12);
-    Inc(AIndex);
-    if not IsContinuationByte(AUTF8String, AIndex, Len) then
-      Exit(UNICODE_REPLACEMENT_CHARACTER);
-    Result := Result or ((Ord(AUTF8String[AIndex]) and $3F) shl 6);
-    Inc(AIndex);
-    if not IsContinuationByte(AUTF8String, AIndex, Len) then
-      Exit(UNICODE_REPLACEMENT_CHARACTER);
-    Result := Result or (Ord(AUTF8String[AIndex]) and $3F);
-    Inc(AIndex);
-  end
-  else
-  begin
-    // Invalid lead byte (bare continuation or 0xFE/0xFF)
-    Result := UNICODE_REPLACEMENT_CHARACTER;
-    Inc(AIndex);
-  end;
-end;
-
-// WHATWG HTML spec §8.3 btoa(data)
-function TGocciaGlobals.BtoaCallback(const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-var
-  Data, RawBytes: string;
-  I, CodePoint, ByteCount: Integer;
-begin
-  // Step 1: If no argument, throw TypeError
-  if AArgs.Length = 0 then
-    ThrowTypeError(SErrorBtoaRequiresArg, SSuggestStringArgRequired);
-
-  // Step 2: Let data be ToString(argument)
-  Data := AArgs.GetElement(0).ToStringLiteral.Value;
-
-  // Step 3: For each code point in data, if > U+00FF throw InvalidCharacterError
-  // Also collect raw byte values (code points 0x00-0xFF map 1:1 to bytes)
-  SetLength(RawBytes, Length(Data));
-  ByteCount := 0;
-  I := 1;
-  while I <= Length(Data) do
-  begin
-    CodePoint := NextUTF8CodePoint(Data, I);
-    if CodePoint > $FF then
-      ThrowInvalidCharacterError(
-        'Failed to execute ''btoa'': The string to be encoded contains characters outside of the Latin1 range.');
-    Inc(ByteCount);
-    RawBytes[ByteCount] := Chr(CodePoint);
-  end;
-  SetLength(RawBytes, ByteCount);
-
-  // Step 4-5: Base64 encode and return
-  Result := TGocciaStringLiteralValue.Create(EncodeStringBase64(RawBytes));
-end;
-
-{ Returns True if AChar is a valid base64 alphabet character (A-Z, a-z, 0-9, +, /) }
-function IsBase64Char(const AChar: Char): Boolean;
-begin
-  Result := ((AChar >= 'A') and (AChar <= 'Z'))
-    or ((AChar >= 'a') and (AChar <= 'z'))
-    or ((AChar >= '0') and (AChar <= '9'))
-    or (AChar = '+') or (AChar = '/');
-end;
-
-// WHATWG HTML spec §8.3 atob(data) — forgiving-base64-decode
-function TGocciaGlobals.AtobCallback(const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-var
-  Data, Cleaned, Decoded, ResultStr: string;
-  I, CleanedLen, ResultLen: Integer;
-  B: Byte;
-  Remainder: Integer;
-begin
-  // Step 1: If no argument, throw TypeError
-  if AArgs.Length = 0 then
-    ThrowTypeError(SErrorAtobRequiresArg, SSuggestStringArgRequired);
-
-  // Step 2: Let data be ToString(argument)
-  Data := AArgs.GetElement(0).ToStringLiteral.Value;
-
-  // Step 3: Remove ASCII whitespace (U+0009, U+000A, U+000C, U+000D, U+0020)
-  SetLength(Cleaned, Length(Data));
-  CleanedLen := 0;
-  for I := 1 to Length(Data) do
-    if not (Data[I] in [#9, #10, #12, #13, ' ']) then
-    begin
-      Inc(CleanedLen);
-      Cleaned[CleanedLen] := Data[I];
-    end;
-  SetLength(Cleaned, CleanedLen);
-
-  // Step 4: If length mod 4 = 0, remove 1 or 2 trailing '=' characters
-  if (Length(Cleaned) > 0) and (Length(Cleaned) mod 4 = 0) then
-  begin
-    if Cleaned[Length(Cleaned)] = '=' then
-    begin
-      SetLength(Cleaned, Length(Cleaned) - 1);
-      if (Length(Cleaned) > 0) and (Cleaned[Length(Cleaned)] = '=') then
-        SetLength(Cleaned, Length(Cleaned) - 1);
-    end;
-  end;
-
-  // Step 5: If length mod 4 = 1, throw InvalidCharacterError
-  Remainder := Length(Cleaned) mod 4;
-  if Remainder = 1 then
-    ThrowInvalidCharacterError(
-      'Failed to execute ''atob'': The string to be decoded is not correctly encoded.');
-
-  // Step 6: If data contains any character not in the base64 alphabet, throw InvalidCharacterError
-  for I := 1 to Length(Cleaned) do
-    if not IsBase64Char(Cleaned[I]) then
-      ThrowInvalidCharacterError(
-        'Failed to execute ''atob'': The string to be decoded is not correctly encoded.');
-
-  // Step 7: Pad to multiple of 4 and decode
-  case Remainder of
-    2: Cleaned := Cleaned + '==';
-    3: Cleaned := Cleaned + '=';
-  end;
-
-  if Cleaned = '' then
-    Exit(TGocciaStringLiteralValue.Create(''));
-
-  Decoded := DecodeStringBase64(Cleaned);
-
-  // Step 8: Convert decoded bytes to a string (Latin-1 interpretation)
-  // Bytes > 0x7F need to be re-encoded as 2-byte UTF-8 sequences
-  SetLength(ResultStr, Length(Decoded) * 2);
-  ResultLen := 0;
-  for I := 1 to Length(Decoded) do
-  begin
-    B := Ord(Decoded[I]);
-    if B < $80 then
-    begin
-      Inc(ResultLen);
-      ResultStr[ResultLen] := Chr(B);
-    end
-    else
-    begin
-      Inc(ResultLen);
-      ResultStr[ResultLen] := Chr($C0 or (B shr 6));
-      Inc(ResultLen);
-      ResultStr[ResultLen] := Chr($80 or (B and $3F));
-    end;
-  end;
-  SetLength(ResultStr, ResultLen);
-
-  Result := TGocciaStringLiteralValue.Create(ResultStr);
 end;
 
 // ES2026 §19.2.6.2 encodeURI(uriString)
