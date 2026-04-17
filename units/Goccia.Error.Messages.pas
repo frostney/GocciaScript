@@ -191,6 +191,8 @@ resourcestring
 
   // Temporal prototype errors — Duration
   SErrorDurationMixedSigns = 'Duration fields must not have mixed signs';
+  SErrorDurationCalendarOutOfRange = 'Duration calendar fields (years, months, weeks) must have absolute value less than 2^32';
+  SErrorDurationTimeOutOfRange = 'Duration time fields out of range: normalized seconds must have absolute value less than 2^53';
   SErrorDurationRoundRequiresUnit = 'round() requires at least a smallestUnit or largestUnit';
   SErrorDurationRoundRequiresRelativeTo = 'Duration with years or months requires relativeTo for round()';
   SErrorDurationTotalRequiresUnit = 'total() requires a unit option';

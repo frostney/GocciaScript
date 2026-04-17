@@ -130,6 +130,7 @@ constructor TGocciaTemporalDurationValue.Create(const AYears, AMonths, AWeeks, A
   AMilliseconds, AMicroseconds, ANanoseconds: Int64);
 var
   HasPositive, HasNegative: Boolean;
+  NormalizedSeconds, V: Double;
 begin
   inherited Create(nil);
   FYears := AYears;
@@ -152,6 +153,22 @@ begin
                  (AMilliseconds < 0) or (AMicroseconds < 0) or (ANanoseconds < 0);
   if HasPositive and HasNegative then
     ThrowRangeError(SErrorDurationMixedSigns, SSuggestTemporalDurationSigns);
+
+  // Validate: calendar unit magnitudes must be < 2^32
+  if (Abs(AYears) >= 4294967296) or (Abs(AMonths) >= 4294967296) or (Abs(AWeeks) >= 4294967296) then
+    ThrowRangeError(SErrorDurationCalendarOutOfRange, SSuggestTemporalDurationRange);
+
+  // Validate: normalized seconds must be < 2^53 (TC39 §7.5.22 step 6-7)
+  // Use implicit Int64->Double assignment to avoid FPC 3.2.2 cast bugs.
+  V := ADays;         NormalizedSeconds := V * 86400;
+  V := AHours;        NormalizedSeconds := NormalizedSeconds + V * 3600;
+  V := AMinutes;      NormalizedSeconds := NormalizedSeconds + V * 60;
+  V := ASeconds;      NormalizedSeconds := NormalizedSeconds + V;
+  V := AMilliseconds; NormalizedSeconds := NormalizedSeconds + V * 1e-3;
+  V := AMicroseconds; NormalizedSeconds := NormalizedSeconds + V * 1e-6;
+  V := ANanoseconds;  NormalizedSeconds := NormalizedSeconds + V * 1e-9;
+  if Abs(NormalizedSeconds) >= 9007199254740992.0 then
+    ThrowRangeError(SErrorDurationTimeOutOfRange, SSuggestTemporalDurationRange);
 
   InitializePrototype;
   if Assigned(FShared) then
