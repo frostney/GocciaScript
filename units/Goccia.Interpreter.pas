@@ -101,6 +101,9 @@ end;
 
 destructor TGocciaInterpreter.Destroy;
 begin
+  if Assigned(FModuleLoader) and (not FOwnsModuleLoader) then
+    FModuleLoader.EvaluateModuleBody := nil;
+
   if not Assigned(TGarbageCollector.Instance) then
     FGlobalScope.Free;
   if FOwnsModuleLoader then
