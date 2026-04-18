@@ -631,8 +631,26 @@ begin
     Exit;
   end;
 
-  // BigInt is never NaN, skip NaN check for BigInt operands
-  if not ((ALeft is TGocciaBigIntValue) or (ARight is TGocciaBigIntValue)) then
+  // NaN guard: BigInt is never NaN, but cross-type BigInt/Number must check the Number operand
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+    { both BigInt, no NaN possible }
+  else if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaNumberLiteralValue) then
+  begin
+    if TGocciaNumberLiteralValue(ARight).IsNaN then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end
+  else if (ALeft is TGocciaNumberLiteralValue) and (ARight is TGocciaBigIntValue) then
+  begin
+    if TGocciaNumberLiteralValue(ALeft).IsNaN then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end
+  else
   begin
     if ALeft.ToNumberLiteral.IsNaN or ARight.ToNumberLiteral.IsNaN then
     begin
@@ -705,8 +723,26 @@ begin
     Exit;
   end;
 
-  // BigInt is never NaN, skip NaN check for BigInt operands
-  if not ((ALeft is TGocciaBigIntValue) or (ARight is TGocciaBigIntValue)) then
+  // NaN guard: BigInt is never NaN, but cross-type BigInt/Number must check the Number operand
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+    { both BigInt, no NaN possible }
+  else if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaNumberLiteralValue) then
+  begin
+    if TGocciaNumberLiteralValue(ARight).IsNaN then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end
+  else if (ALeft is TGocciaNumberLiteralValue) and (ARight is TGocciaBigIntValue) then
+  begin
+    if TGocciaNumberLiteralValue(ALeft).IsNaN then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end
+  else
   begin
     if ALeft.ToNumberLiteral.IsNaN or ARight.ToNumberLiteral.IsNaN then
     begin

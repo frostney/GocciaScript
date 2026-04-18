@@ -148,6 +148,12 @@ Implements the [ECMAScript Number](https://developer.mozilla.org/en-US/docs/Web/
 
 **GocciaScript difference:** `parseInt`, `parseFloat`, `isNaN`, and `isFinite` are only available as `Number.*` static methods — not as global functions. See [language.md](language.md#no-global-parseint-parsefloat-isnan-isfinite) for the rationale.
 
+### BigInt (`Goccia.Builtins.GlobalBigInt.pas`)
+
+Implements [ECMAScript BigInt](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt) (ES2020). See [MDN BigInt reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt) for the full API.
+
+**Not implemented:** `BigInt.asIntN`, `BigInt.asUintN`, `BigInt64Array`, `BigUint64Array`.
+
 ### String (`Goccia.Builtins.GlobalString.pas`)
 
 Implements the [ECMAScript String](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String). **Not implemented:** `String.prototype.toLocaleLowerCase`, `String.prototype.toLocaleUpperCase`.

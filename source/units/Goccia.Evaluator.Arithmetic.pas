@@ -200,7 +200,7 @@ begin
   if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
   begin
     if TGocciaBigIntValue(ARight).Value.IsZero then
-      ThrowTypeError(SErrorBigIntDivisionByZero, SSuggestBigIntNoMixedArithmetic);
+      ThrowRangeError(SErrorBigIntDivisionByZero);
     Result := TGocciaBigIntValue.Create(
       TGocciaBigIntValue(ALeft).Value.Divide(TGocciaBigIntValue(ARight).Value));
     Exit;
@@ -265,7 +265,7 @@ begin
   if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
   begin
     if TGocciaBigIntValue(ARight).Value.IsZero then
-      ThrowTypeError(SErrorBigIntDivisionByZero, SSuggestBigIntNoMixedArithmetic);
+      ThrowRangeError(SErrorBigIntDivisionByZero);
     Result := TGocciaBigIntValue.Create(
       TGocciaBigIntValue(ALeft).Value.Modulo(TGocciaBigIntValue(ARight).Value));
     Exit;
@@ -312,7 +312,7 @@ begin
   if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
   begin
     if TGocciaBigIntValue(ARight).Value.IsNegative then
-      ThrowTypeError(SErrorBigIntNegativeExponent, SSuggestBigIntNoMixedArithmetic);
+      ThrowRangeError(SErrorBigIntNegativeExponent);
     Result := TGocciaBigIntValue.Create(
       TGocciaBigIntValue(ALeft).Value.Power(TGocciaBigIntValue(ARight).Value));
     Exit;

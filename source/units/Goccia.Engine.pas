@@ -637,6 +637,7 @@ begin
     FBuiltinGlobalObject.Free;
     FBuiltinGlobalArray.Free;
     FBuiltinGlobalNumber.Free;
+    FBuiltinGlobalBigInt.Free;
     FBuiltinRegExp.Free;
   FBuiltinGlobalString.Free;
   FBuiltinGlobals.Free;

@@ -4,9 +4,13 @@ features: [bigint]
 ---*/
 
 test("strict equality between BigInts", () => {
-  expect(1n === 1n).toBe(true);
+  const one = 1n;
+  const alsoOne = BigInt("1");
+  expect(one === alsoOne).toBe(true);
   expect(1n === 2n).toBe(false);
-  expect(0n === 0n).toBe(true);
+  const zero = 0n;
+  const alsoZero = BigInt(0);
+  expect(zero === alsoZero).toBe(true);
 });
 
 test("BigInt is never strictly equal to Number", () => {
@@ -16,14 +20,18 @@ test("BigInt is never strictly equal to Number", () => {
 
 test("strict inequality between BigInts", () => {
   expect(1n !== 2n).toBe(true);
-  expect(1n !== 1n).toBe(false);
+  const a = 1n;
+  const b = BigInt("1");
+  expect(a !== b).toBe(false);
 });
 
 test("relational comparisons between BigInts", () => {
   expect(1n < 2n).toBe(true);
   expect(2n > 1n).toBe(true);
-  expect(1n <= 1n).toBe(true);
-  expect(1n >= 1n).toBe(true);
+  const x = 1n;
+  const y = BigInt("1");
+  expect(x <= y).toBe(true);
+  expect(x >= y).toBe(true);
   expect(2n < 1n).toBe(false);
 });
 

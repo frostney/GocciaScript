@@ -98,9 +98,10 @@ const
   // ---------------------------------------------------------------------------
   // ES2020
   // ---------------------------------------------------------------------------
-  ES2020_FEATURES: array[0..6] of TGocciaFeatureEntry = (
+  ES2020_FEATURES: array[0..7] of TGocciaFeatureEntry = (
     (Name: 'Optional Chaining';            Link: 'https://tc39.es/ecma262/#sec-optional-chains'),
     (Name: 'Nullish Coalescing';           Link: 'https://tc39.es/ecma262/#sec-binary-logical-operators'),
+    (Name: 'BigInt';                       Link: 'https://tc39.es/ecma262/#sec-bigint-objects'),
     (Name: 'Promise.allSettled';           Link: 'https://tc39.es/ecma262/#sec-promise.allsettled'),
     (Name: 'globalThis';                   Link: 'https://tc39.es/ecma262/#sec-globalthis'),
     (Name: 'String.prototype.matchAll';    Link: 'https://tc39.es/ecma262/#sec-string.prototype.matchall'),

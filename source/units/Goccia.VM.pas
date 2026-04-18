@@ -506,7 +506,30 @@ begin
   Result := ALeftNum.Value < ARightNum.Value;
 end;
 
+// ES2026 §7.2.14 — cross-type BigInt/Number comparison for VM
+function VMCompareBigIntAndNumber(const ABigInt: TGocciaBigIntValue;
+  const ANumber: TGocciaNumberLiteralValue): Integer; inline;
+var
+  D: Double;
+begin
+  if ANumber.IsNaN then
+    Exit(2); // unordered
+  if ANumber.IsInfinity then
+    Exit(-1);
+  if ANumber.IsNegativeInfinity then
+    Exit(1);
+  D := ABigInt.Value.ToDouble;
+  if D > ANumber.Value then
+    Result := 1
+  else if D < ANumber.Value then
+    Result := -1
+  else
+    Result := 0;
+end;
+
 function VMLessThan(const ALeft, ARight: TGocciaValue): Boolean; inline;
+var
+  Cmp: Integer;
 begin
   if (ALeft is TGocciaUndefinedLiteralValue) or
      (ARight is TGocciaUndefinedLiteralValue) then
@@ -519,10 +542,26 @@ begin
     Exit(TGocciaStringLiteralValue(ALeft).Value <
       TGocciaStringLiteralValue(ARight).Value);
 
+  // ES2026 §7.2.14 — BigInt comparisons
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+    Exit(TGocciaBigIntValue(ALeft).Value.Compare(TGocciaBigIntValue(ARight).Value) < 0);
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaNumberLiteralValue) then
+  begin
+    Cmp := VMCompareBigIntAndNumber(TGocciaBigIntValue(ALeft), TGocciaNumberLiteralValue(ARight));
+    Exit(Cmp = -1);
+  end;
+  if (ALeft is TGocciaNumberLiteralValue) and (ARight is TGocciaBigIntValue) then
+  begin
+    Cmp := VMCompareBigIntAndNumber(TGocciaBigIntValue(ARight), TGocciaNumberLiteralValue(ALeft));
+    Exit(Cmp = 1);
+  end;
+
   Result := VMCompareNumbers(ALeft.ToNumberLiteral, ARight.ToNumberLiteral, False);
 end;
 
 function VMGreaterThan(const ALeft, ARight: TGocciaValue): Boolean; inline;
+var
+  Cmp: Integer;
 begin
   if (ALeft is TGocciaUndefinedLiteralValue) or
      (ARight is TGocciaUndefinedLiteralValue) then
@@ -534,6 +573,20 @@ begin
   if (ALeft is TGocciaStringLiteralValue) and (ARight is TGocciaStringLiteralValue) then
     Exit(TGocciaStringLiteralValue(ALeft).Value >
       TGocciaStringLiteralValue(ARight).Value);
+
+  // ES2026 §7.2.14 — BigInt comparisons
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+    Exit(TGocciaBigIntValue(ALeft).Value.Compare(TGocciaBigIntValue(ARight).Value) > 0);
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaNumberLiteralValue) then
+  begin
+    Cmp := VMCompareBigIntAndNumber(TGocciaBigIntValue(ALeft), TGocciaNumberLiteralValue(ARight));
+    Exit(Cmp = 1);
+  end;
+  if (ALeft is TGocciaNumberLiteralValue) and (ARight is TGocciaBigIntValue) then
+  begin
+    Cmp := VMCompareBigIntAndNumber(TGocciaBigIntValue(ARight), TGocciaNumberLiteralValue(ALeft));
+    Exit(Cmp = -1);
+  end;
 
   Result := VMCompareNumbers(ALeft.ToNumberLiteral, ARight.ToNumberLiteral, True);
 end;
@@ -550,10 +603,26 @@ begin
     Exit(TGocciaStringLiteralValue(ALeft).Value <=
       TGocciaStringLiteralValue(ARight).Value);
 
-  LeftNum := ALeft.ToNumberLiteral;
-  RightNum := ARight.ToNumberLiteral;
-  if LeftNum.IsNaN or RightNum.IsNaN then
-    Exit(False);
+  // NaN guard: cross-type BigInt/Number must check the Number operand
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+    { both BigInt, no NaN possible }
+  else if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaNumberLiteralValue) then
+  begin
+    if TGocciaNumberLiteralValue(ARight).IsNaN then
+      Exit(False);
+  end
+  else if (ALeft is TGocciaNumberLiteralValue) and (ARight is TGocciaBigIntValue) then
+  begin
+    if TGocciaNumberLiteralValue(ALeft).IsNaN then
+      Exit(False);
+  end
+  else
+  begin
+    LeftNum := ALeft.ToNumberLiteral;
+    RightNum := ARight.ToNumberLiteral;
+    if LeftNum.IsNaN or RightNum.IsNaN then
+      Exit(False);
+  end;
   Result := not VMGreaterThan(ALeft, ARight);
 end;
 
@@ -569,10 +638,26 @@ begin
     Exit(TGocciaStringLiteralValue(ALeft).Value >=
       TGocciaStringLiteralValue(ARight).Value);
 
-  LeftNum := ALeft.ToNumberLiteral;
-  RightNum := ARight.ToNumberLiteral;
-  if LeftNum.IsNaN or RightNum.IsNaN then
-    Exit(False);
+  // NaN guard: cross-type BigInt/Number must check the Number operand
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+    { both BigInt, no NaN possible }
+  else if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaNumberLiteralValue) then
+  begin
+    if TGocciaNumberLiteralValue(ARight).IsNaN then
+      Exit(False);
+  end
+  else if (ALeft is TGocciaNumberLiteralValue) and (ARight is TGocciaBigIntValue) then
+  begin
+    if TGocciaNumberLiteralValue(ALeft).IsNaN then
+      Exit(False);
+  end
+  else
+  begin
+    LeftNum := ALeft.ToNumberLiteral;
+    RightNum := ARight.ToNumberLiteral;
+    if LeftNum.IsNaN or RightNum.IsNaN then
+      Exit(False);
+  end;
   Result := not VMLessThan(ALeft, ARight);
 end;
 
@@ -627,44 +712,77 @@ begin
   Result := TGocciaStringLiteralValue.Create('');
 end;
 
+procedure VMCheckBigIntMixed(const ALeft, ARight: TGocciaValue); inline;
+begin
+  if (ALeft is TGocciaBigIntValue) xor (ARight is TGocciaBigIntValue) then
+    ThrowTypeError(SErrorBigIntMixedTypes, SSuggestBigIntNoMixedArithmetic);
+end;
+
 function VMBitwiseAndValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
 begin
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+    Exit(TGocciaBigIntValue.Create(
+      TGocciaBigIntValue(ALeft).Value.BitwiseAnd(TGocciaBigIntValue(ARight).Value)));
+  VMCheckBigIntMixed(ALeft, ARight);
   Result := VMNumberValue(Trunc(ALeft.ToNumberLiteral.Value) and
     Trunc(ARight.ToNumberLiteral.Value));
 end;
 
 function VMBitwiseOrValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
 begin
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+    Exit(TGocciaBigIntValue.Create(
+      TGocciaBigIntValue(ALeft).Value.BitwiseOr(TGocciaBigIntValue(ARight).Value)));
+  VMCheckBigIntMixed(ALeft, ARight);
   Result := VMNumberValue(Trunc(ALeft.ToNumberLiteral.Value) or
     Trunc(ARight.ToNumberLiteral.Value));
 end;
 
 function VMBitwiseXorValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
 begin
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+    Exit(TGocciaBigIntValue.Create(
+      TGocciaBigIntValue(ALeft).Value.BitwiseXor(TGocciaBigIntValue(ARight).Value)));
+  VMCheckBigIntMixed(ALeft, ARight);
   Result := VMNumberValue(Trunc(ALeft.ToNumberLiteral.Value) xor
     Trunc(ARight.ToNumberLiteral.Value));
 end;
 
 function VMLeftShiftValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
 begin
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+    Exit(TGocciaBigIntValue.Create(
+      TGocciaBigIntValue(ALeft).Value.ShiftLeft(
+        TGocciaBigIntValue(ARight).Value.ToInt64)));
+  VMCheckBigIntMixed(ALeft, ARight);
   Result := VMNumberValue(Trunc(ALeft.ToNumberLiteral.Value) shl
     (Trunc(ARight.ToNumberLiteral.Value) and 31));
 end;
 
 function VMRightShiftValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
 begin
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+    Exit(TGocciaBigIntValue.Create(
+      TGocciaBigIntValue(ALeft).Value.ShiftRight(
+        TGocciaBigIntValue(ARight).Value.ToInt64)));
+  VMCheckBigIntMixed(ALeft, ARight);
   Result := VMNumberValue(SarLongint(Int32(Trunc(ALeft.ToNumberLiteral.Value)),
     Trunc(ARight.ToNumberLiteral.Value) and 31));
 end;
 
+// ES2026 §6.1.6.2.11 BigInt::unsignedRightShift — always throws
 function VMUnsignedRightShiftValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
 begin
+  if (ALeft is TGocciaBigIntValue) or (ARight is TGocciaBigIntValue) then
+    ThrowTypeError(SErrorBigIntUnsignedRightShift, SSuggestBigIntNoMixedArithmetic);
   Result := VMNumberValue(Cardinal(Trunc(ALeft.ToNumberLiteral.Value)) shr
     (Trunc(ARight.ToNumberLiteral.Value) and 31));
 end;
 
 function VMBitwiseNotValue(const AOperand: TGocciaValue): TGocciaValue; inline;
 begin
+  if AOperand is TGocciaBigIntValue then
+    Exit(TGocciaBigIntValue.Create(TGocciaBigIntValue(AOperand).Value.BitwiseNot));
   Result := VMNumberValue(not Trunc(AOperand.ToNumberLiteral.Value));
 end;
 
@@ -857,7 +975,7 @@ begin
   if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
   begin
     if TGocciaBigIntValue(ARight).Value.IsZero then
-      ThrowTypeError(SErrorBigIntDivisionByZero, SSuggestBigIntNoMixedArithmetic);
+      ThrowRangeError(SErrorBigIntDivisionByZero);
     Exit(TGocciaBigIntValue.Create(
       TGocciaBigIntValue(ALeft).Value.Divide(TGocciaBigIntValue(ARight).Value)));
   end;
@@ -908,7 +1026,7 @@ begin
   if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
   begin
     if TGocciaBigIntValue(ARight).Value.IsZero then
-      ThrowTypeError(SErrorBigIntDivisionByZero, SSuggestBigIntNoMixedArithmetic);
+      ThrowRangeError(SErrorBigIntDivisionByZero);
     Exit(TGocciaBigIntValue.Create(
       TGocciaBigIntValue(ALeft).Value.Modulo(TGocciaBigIntValue(ARight).Value)));
   end;
@@ -936,7 +1054,7 @@ begin
   if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
   begin
     if TGocciaBigIntValue(ARight).Value.IsNegative then
-      ThrowTypeError(SErrorBigIntNegativeExponent, SSuggestBigIntNoMixedArithmetic);
+      ThrowRangeError(SErrorBigIntNegativeExponent);
     Exit(TGocciaBigIntValue.Create(
       TGocciaBigIntValue(ALeft).Value.Power(TGocciaBigIntValue(ARight).Value)));
   end;
@@ -4624,7 +4742,14 @@ begin
         if RegisterIsNumericScalar(FRegisters[B]) then
           FRegisters[A] := VMNumberRegister(-RegisterToDouble(FRegisters[B]))
         else
-          SetRegister(A, VMNumberValue(-GetRegister(B).ToNumberLiteral.Value));
+        begin
+          LeftValue := GetRegisterFast(B);
+          if LeftValue is TGocciaBigIntValue then
+            SetRegister(A, TGocciaBigIntValue.Create(
+              TGocciaBigIntValue(LeftValue).Value.Negate))
+          else
+            SetRegister(A, VMNumberValue(-LeftValue.ToNumberLiteral.Value));
+        end;
 
       OP_BAND:
         SetRegister(A, VMBitwiseAndValues(GetRegister(B), GetRegister(C)));

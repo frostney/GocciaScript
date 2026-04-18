@@ -208,7 +208,7 @@ begin
     begin
       Radix := Trunc(RadixValue.ToNumberLiteral.Value);
       if (Radix < 2) or (Radix > 36) then
-        ThrowTypeError('toString() radix must be between 2 and 36',
+        ThrowRangeError('toString() radix must be between 2 and 36',
           'provide a radix value between 2 and 36');
     end;
   end;

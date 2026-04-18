@@ -6,9 +6,9 @@
 
 - **ArrayBuffer** — raw binary data buffers with fixed-length and resizable modes, transfer semantics, and detachment
 - **SharedArrayBuffer** — fixed-length binary buffer with the same API shape as ArrayBuffer but as a distinct type
-- **TypedArrays** — array-like views over buffer data with 10 non-BigInt element types (Int8 through Float64)
+- **TypedArrays** — array-like views over buffer data with 10 element types (Int8 through Float64)
 - **Uint8Array encoding** — Base64 and hex encoding/decoding
-- **Not supported** — `BigInt64Array`, `BigUint64Array` (BigInt types), `DataView`
+- **Not supported** — `BigInt64Array`, `BigUint64Array`, `DataView`
 
 ## ArrayBuffer (`Goccia.Builtins.GlobalArrayBuffer.pas`, `Goccia.Values.ArrayBufferValue.pas`)
 
@@ -45,7 +45,7 @@ Implements the [ECMAScript TypedArray](https://developer.mozilla.org/en-US/docs/
 | `Float32Array` | 4 bytes | IEEE 754 single-precision |
 | `Float64Array` | 8 bytes | IEEE 754 double-precision |
 
-**Not supported:** `BigInt64Array`, `BigUint64Array` (BigInt types), `DataView`.
+**Not supported:** `BigInt64Array`, `BigUint64Array`, `DataView`.
 
 **Value encoding:** Integer types use fixed-width truncation (overflow wraps). `Uint8ClampedArray` clamps to [0, 255] with half-to-even rounding. `Float16Array` rounds to IEEE 754 half precision (max finite ±65504, epsilon 2⁻¹⁰ at 1.0). `Float32Array` rounds to IEEE 754 single precision. `Float64Array` preserves full double precision. NaN is stored as 0 in integer types and as NaN in float types.
 
