@@ -74,7 +74,7 @@ Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time wh
 | `CSV.parseChunk(text, options?, start?, end?)` | Parse as many complete CSV rows as possible and return `{ values, read, done, error }` |
 | `CSV.stringify(data, options?, replacer?)` | Convert an array of objects or arrays to CSV text |
 
-**Options:** `{ delimiter: ','  headers: true, skipEmptyLines: false }`. The `delimiter` option supports any single character (e.g., `;` for European CSVs, `|` for pipe-delimited). All parsed values are strings — no type coercion.
+**Options:** `{ delimiter: ',', headers: true, skipEmptyLines: false }`. The `delimiter` option supports any single character (e.g., `;` for European CSVs, `|` for pipe-delimited). All parsed values are strings — no type coercion.
 
 **Reviver:** The optional reviver callback `(key, value, context)` is called for each cell. The `context` object contains `{ quoted: boolean, row: number, column: number }`. The `quoted` flag lets callers distinguish `""` (a quoted empty field) from `,` (an unquoted empty field), enabling patterns like converting unquoted empties to `null` while preserving quoted empties as `""`.
 
