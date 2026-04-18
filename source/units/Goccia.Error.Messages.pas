@@ -20,7 +20,7 @@ resourcestring
   SErrorBigIntToNumber = 'Cannot convert a BigInt value to a number';
   SErrorBigIntMixedTypes = 'Cannot mix BigInt and other types, use explicit conversions';
   SErrorBigIntUnaryPlus = 'Cannot convert a BigInt value to a number';
-  SErrorBigIntNegativeExponent = 'Exponent must be positive';
+  SErrorBigIntNegativeExponent = 'Exponent must be non-negative';
   SErrorBigIntDivisionByZero = 'Division by zero';
   SErrorBigIntUnsignedRightShift = 'Cannot use unsigned right shift with BigInt';
   SErrorBigIntInvalidConversion = 'Cannot convert %s to a BigInt';
