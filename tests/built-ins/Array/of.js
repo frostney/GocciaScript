@@ -49,5 +49,7 @@ describe("Array.of", () => {
   test("has correct name and length", () => {
     expect(Array.of.name).toBe("of");
     expect(Array.of.length).toBe(0);
+    expect(Object.getOwnPropertyDescriptor(Array.of, "name")).not.toBe(undefined);
+    expect(Object.getOwnPropertyDescriptor(Array.of, "length")).not.toBe(undefined);
   });
 });
