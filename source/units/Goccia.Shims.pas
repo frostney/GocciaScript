@@ -207,8 +207,7 @@ const
       FileName: '<shim:hasOwnProperty>';
       Source:
         'export const hasOwnProperty = ((proto) => {'#10 +
-        '  class _H { hasOwnProperty(prop) { return Object.hasOwn(this, prop); } }'#10 +
-        '  const fn = new _H().hasOwnProperty;'#10 +
+        '  const fn = ({ hasOwnProperty(prop) { return Object.hasOwn(this, prop); } }).hasOwnProperty;'#10 +
         '  Object.defineProperty(proto, "hasOwnProperty", {'#10 +
         '    value: fn, writable: true, enumerable: false, configurable: true'#10 +
         '  });'#10 +
