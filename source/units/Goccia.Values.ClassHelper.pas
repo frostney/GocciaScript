@@ -5,6 +5,7 @@ unit Goccia.Values.ClassHelper;
 interface
 
 uses
+  Goccia.Values.BigIntObjectValue,
   Goccia.Values.BooleanObjectValue,
   Goccia.Values.NumberObjectValue,
   Goccia.Values.ObjectValue,
@@ -33,7 +34,11 @@ type
 implementation
 
 uses
-  Math;
+  Math,
+
+  BigInteger,
+
+  Goccia.Values.BigIntValue;
 
   // function TGocciaValueHelper.ToBooleanLiteral: TGocciaBooleanLiteralValue;
   // var
@@ -266,6 +271,12 @@ uses
       Exit;
     end;
 
+    if Self is TGocciaBigIntValue then
+    begin
+      Result := TGocciaBigIntObjectValue.Create(Self);
+      Exit;
+    end;
+
     Result := nil;
   end;
   function TGocciaValueHelper.IsEqual(const AOther: TGocciaValue): TGocciaBooleanLiteralValue;
@@ -293,6 +304,12 @@ uses
     end
     else if (Self is TGocciaStringLiteralValue) and (AOther is TGocciaStringLiteralValue) then
       if TGocciaStringLiteralValue(Self).Value = TGocciaStringLiteralValue(AOther).Value then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue
+    // ES2026 §7.2.16 BigInt strict equality
+    else if (Self is TGocciaBigIntValue) and (AOther is TGocciaBigIntValue) then
+      if TGocciaBigIntValue(Self).Value.Equal(TGocciaBigIntValue(AOther).Value) then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue

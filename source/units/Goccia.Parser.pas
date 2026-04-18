@@ -14,7 +14,8 @@ uses
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
-  Goccia.Token;
+  Goccia.Token,
+  Goccia.Values.Primitives;
 
 type
   TGocciaParserWarning = record
@@ -88,6 +89,7 @@ type
     function ConsumeModuleExportName(const AMessage, ASuggestion: string): TGocciaToken; overload;
     function IsArrowFunction: Boolean;
     function ConvertNumberLiteral(const ALexeme: string): Double;
+    function ConvertBigIntLiteral(const ALexeme: string): TGocciaValue;
     function ParseBinaryExpression(const ANextLevel: TParseFunction; const AOperators: array of TGocciaTokenType): TGocciaExpression;
 
     // Expression parsing (private)
@@ -197,6 +199,7 @@ implementation
 uses
   SysUtils,
 
+  BigInteger,
   StringBuffer,
 
   Goccia.Error,
@@ -204,7 +207,7 @@ uses
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved,
   Goccia.Lexer,
-  Goccia.Values.Primitives;
+  Goccia.Values.BigIntValue;
 
 { TGocciaPrivateClassContext }
 
@@ -1421,6 +1424,12 @@ begin
     Token := Previous;
     Result := TGocciaLiteralExpression.Create(
       TGocciaNumberLiteralValue.Create(ConvertNumberLiteral(Token.Lexeme)), Token.Line, Token.Column);
+  end
+  else if Match(gttBigInt) then
+  begin
+    Token := Previous;
+    Result := TGocciaLiteralExpression.Create(
+      ConvertBigIntLiteral(Token.Lexeme), Token.Line, Token.Column);
   end
   else if Match(gttString) then
   begin
@@ -4354,6 +4363,33 @@ begin
   raise TGocciaSyntaxError.Create('Invalid number format: ' + ALexeme, Peek.Line, Peek.Column,
     FFileName, FSourceLines,
     SSuggestNumberFormatValid);
+end;
+
+// ES2026 §12.9.3 BigIntLiteral
+function TGocciaParser.ConvertBigIntLiteral(const ALexeme: string): TGocciaValue;
+var
+  DigitStr: string;
+begin
+  if Length(ALexeme) >= 3 then
+  begin
+    if (ALexeme[1] = '0') and ((ALexeme[2] = 'x') or (ALexeme[2] = 'X')) then
+    begin
+      DigitStr := Copy(ALexeme, 3, Length(ALexeme) - 2);
+      Exit(TGocciaBigIntValue.Create(TBigInteger.FromHexString(DigitStr)));
+    end
+    else if (ALexeme[1] = '0') and ((ALexeme[2] = 'b') or (ALexeme[2] = 'B')) then
+    begin
+      DigitStr := Copy(ALexeme, 3, Length(ALexeme) - 2);
+      Exit(TGocciaBigIntValue.Create(TBigInteger.FromBinaryString(DigitStr)));
+    end
+    else if (ALexeme[1] = '0') and ((ALexeme[2] = 'o') or (ALexeme[2] = 'O')) then
+    begin
+      DigitStr := Copy(ALexeme, 3, Length(ALexeme) - 2);
+      Exit(TGocciaBigIntValue.Create(TBigInteger.FromOctalString(DigitStr)));
+    end;
+  end;
+
+  Result := TGocciaBigIntValue.Create(TBigInteger.FromDecimalString(ALexeme));
 end;
 
 function TGocciaParser.IsAssignmentPattern(const AExpr: TGocciaExpression): Boolean;

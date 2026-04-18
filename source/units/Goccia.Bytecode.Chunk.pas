@@ -24,7 +24,8 @@ type
     // OP_LOAD_CONST.  CookedStrings/RawStrings are serialised; CachedValue is
     // runtime-only (starts nil, populated by the VM on first execution).
     // IntValue stores the cache slot index in TGocciaFunctionTemplate.
-    bckTemplateObject
+    bckTemplateObject,
+    bckBigInt
   );
 
   TGocciaBytecodeStringArray = array of string;
@@ -104,6 +105,7 @@ type
     function AddConstantInteger(const AValue: Int64): UInt16;
     function AddConstantFloat(const AValue: Double): UInt16;
     function AddConstantString(const AValue: string): UInt16;
+    function AddConstantBigInt(const AValue: string): UInt16;
     // ES2026 §13.2.8.3: add a bckTemplateObject constant that the VM will lazily
     // build and cache on first execution.  Each call site gets its own entry;
     // no deduplication is performed.
@@ -317,6 +319,19 @@ begin
   FConstants[FConstantCount].StringValue := AValue;
   Result := UInt16(FConstantCount);
   FStringConstantIndex.Add(AValue, Result);
+  Inc(FConstantCount);
+end;
+
+function TGocciaFunctionTemplate.AddConstantBigInt(
+  const AValue: string): UInt16;
+begin
+  if FConstantCount > High(UInt16) then
+    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+  if FConstantCount >= Length(FConstants) then
+    SetLength(FConstants, FConstantCount * 2 + 8);
+  FConstants[FConstantCount].Kind := bckBigInt;
+  FConstants[FConstantCount].StringValue := AValue;
+  Result := UInt16(FConstantCount);
   Inc(FConstantCount);
 end;
 

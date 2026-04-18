@@ -68,6 +68,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.JSON.Utils,
   Goccia.Utils,
+  Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
   Goccia.Values.RawJSON,
@@ -837,6 +838,10 @@ begin
     else
       Result := '"' + EscapeJSONString(EffectiveValue.ToStringLiteral.Value) + '"';
   end
+  // ES2026 §25.5.2.5 step 10: BigInt values throw TypeError
+  else if EffectiveValue is TGocciaBigIntValue then
+    ThrowTypeError('Do not know how to serialize a BigInt',
+      'use BigInt.prototype.toString() or a custom replacer')
   else if EffectiveValue.IsCallable then
     Result := 'null'
   else if EffectiveValue is TGocciaSymbolValue then

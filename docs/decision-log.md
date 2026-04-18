@@ -17,6 +17,8 @@ Chronological record of key architectural and implementation decisions, newest f
 
 ---
 
+**2026-04-18** · `runtime` — BigInt primitive type (ES2020). Previously excluded from scope because GocciaScript's use cases did not demand arbitrary-precision integers. Reconsidered because (1) test262 tests for the Temporal API require BigInt as a prerequisite — nanosecond-precision epochs (`Temporal.Instant.epochNanoseconds`) return BigInt values, and (2) several Temporal internals are simplified with BigInt primitives available rather than workarounds. The implementation is self-contained (`TBigInteger` record in `BigInteger.pas`, `TGocciaBigIntValue` wrapping it) with no impact on existing Number paths. `BigInt64Array`/`BigUint64Array` are deferred. [built-ins.md § BigInt](built-ins.md#bigint-gocciabuiltinsglobalbigintpas). [language-tables.md](language-tables.md).
+
 **2026-04-12** · `bytecode` · [#289](https://github.com/frostney/GocciaScript/pull/289) — Source Maps (v3). Source map generation for bytecode compilation and preprocessors (JSX transformer). Maps compiled bytecode instructions back to original source locations for debugging. [bytecode-vm.md § Design Rationale](bytecode-vm.md#design-rationale).
 
 **2026-04-11** · `runtime` · [#276](https://github.com/frostney/GocciaScript/pull/276) — `Goccia.build` platform metadata. Deno.build-compatible shape exposing `os`, `arch`, and `target` for runtime platform detection. [built-ins.md § Global Constants](built-ins.md#global-constants-functions-and-error-constructors-gocciabuiltinsglobalspas).

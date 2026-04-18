@@ -119,7 +119,7 @@ begin
     Exit;
   end;
 
-  // Box primitives (boolean, number, string)
+  // Box primitives (boolean, number, string, bigint)
   Boxed := AValue.Box;
   if Assigned(Boxed) then
   begin

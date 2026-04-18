@@ -12,6 +12,7 @@ const
   CONSTRUCTOR_REGEXP   = 'RegExp';
   CONSTRUCTOR_BOOLEAN  = 'Boolean';
   CONSTRUCTOR_SYMBOL   = 'Symbol';
+  CONSTRUCTOR_BIGINT   = 'BigInt';
   CONSTRUCTOR_SET      = 'Set';
   CONSTRUCTOR_MAP      = 'Map';
   CONSTRUCTOR_PROXY    = 'Proxy';

@@ -17,6 +17,17 @@ resourcestring
   SErrorValueNotFunction = '%s is not a function';
   SErrorSymbolToNumber = 'Cannot convert a Symbol value to a number';
   SErrorSymbolToString = 'Cannot convert a Symbol value to a string';
+  SErrorBigIntToNumber = 'Cannot convert a BigInt value to a number';
+  SErrorBigIntMixedTypes = 'Cannot mix BigInt and other types, use explicit conversions';
+  SErrorBigIntUnaryPlus = 'Cannot convert a BigInt value to a number';
+  SErrorBigIntNegativeExponent = 'Exponent must be non-negative';
+  SErrorBigIntDivisionByZero = 'Division by zero';
+  SErrorBigIntUnsignedRightShift = 'Cannot use unsigned right shift with BigInt';
+  SErrorBigIntInvalidConversion = 'Cannot convert %s to a BigInt';
+  SErrorBigIntNotInteger = 'The number %s cannot be converted to a BigInt because it is not an integer';
+  SErrorBigIntRequiresBigIntValue = '%s requires a BigInt value';
+  SErrorBigIntInvalidRadix = 'toString() radix must be between 2 and 36';
+  SErrorBigIntInvalidIndex = 'Invalid index';
 
   // Type errors — property access
   SErrorCannotReadPropertyOf = 'Cannot read property ''%s'' of %s';

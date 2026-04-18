@@ -37,6 +37,7 @@
 | Generators (`function*`) | ES2015 | Not supported |
 | Nullish coalescing (`??`) | ES2020 | Supported |
 | Optional chaining (`?.`) | ES2020 | Supported |
+| `BigInt` | ES2020 | Supported |
 | Logical assignment (`&&=`, `\|\|=`, `??=`) | ES2021 | Supported |
 | Private fields and methods (`#field`) | ES2022 | Supported |
 | Static class blocks | ES2022 | Supported |

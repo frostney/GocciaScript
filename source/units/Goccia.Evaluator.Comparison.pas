@@ -24,7 +24,11 @@ function LessThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
 implementation
 
 uses
+  BigInteger,
+
   Goccia.Values.ArrayValue,
+  Goccia.Values.BigIntValue,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
   Goccia.Values.ObjectValue,
@@ -134,6 +138,13 @@ begin
     Exit;
   end;
 
+  // ES2026 §7.2.16 BigInt strict equality
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  begin
+    Result := TGocciaBigIntValue(ALeft).Value.Equal(TGocciaBigIntValue(ARight).Value);
+    Exit;
+  end;
+
   Result := ALeft = ARight; // Reference equality for objects
 end;
 
@@ -199,6 +210,13 @@ begin
   if (ALeft is TGocciaStringLiteralValue) and (ARight is TGocciaStringLiteralValue) then
   begin
     Result := TGocciaStringLiteralValue(ALeft).Value = TGocciaStringLiteralValue(ARight).Value;
+    Exit;
+  end;
+
+  // Handle BigInt values
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  begin
+    Result := TGocciaBigIntValue(ALeft).Value.Equal(TGocciaBigIntValue(ARight).Value);
     Exit;
   end;
 
@@ -520,7 +538,59 @@ begin
   end;
 end;
 
+// ES2026 §7.2.14 — cross-type BigInt/Number comparison (mathematical-value)
+function CompareBigIntAndNumber(const ABigInt: TGocciaBigIntValue;
+  const ANumber: TGocciaNumberLiteralValue; const ABigIntIsLeft: Boolean): Integer;
+var
+  NumVal: Double;
+  FloorVal: Double;
+  NumAsBigInt: TBigInteger;
+begin
+  // NaN is always unordered
+  if ANumber.IsNaN then
+    Exit(2); // unordered
+  if ANumber.IsInfinity then
+    Exit(-1); // BigInt < +Infinity
+  if ANumber.IsNegativeInfinity then
+    Exit(1); // BigInt > -Infinity
+
+  NumVal := ANumber.Value;
+
+  // If the Number has a fractional part, compare BigInt against floor
+  if Frac(NumVal) <> 0 then
+  begin
+    FloorVal := System.Int(NumVal); // truncate toward zero
+    if NumVal > 0 then
+    begin
+      // e.g. 1.5: BigInt > 1 means BigInt >= 2 means BigInt > 1.5
+      NumAsBigInt := TBigInteger.FromDouble(FloorVal);
+      Result := ABigInt.Value.Compare(NumAsBigInt);
+      if Result <= 0 then
+        Result := -1 // BigInt <= floor(NumVal), so BigInt < NumVal
+      else
+        Result := 1; // BigInt > floor(NumVal), so BigInt > NumVal
+    end
+    else
+    begin
+      // e.g. -1.5: floor is -2, ceil is -1
+      NumAsBigInt := TBigInteger.FromDouble(FloorVal); // -1 for -1.5 (Int truncates toward zero)
+      Result := ABigInt.Value.Compare(NumAsBigInt);
+      if Result >= 0 then
+        Result := 1 // BigInt >= ceil(NumVal), so BigInt > NumVal
+      else
+        Result := -1; // BigInt < ceil(NumVal), so BigInt < NumVal
+    end;
+    Exit;
+  end;
+
+  // Number is an exact integer — convert to BigInt for precise comparison
+  NumAsBigInt := TBigInteger.FromDouble(NumVal);
+  Result := ABigInt.Value.Compare(NumAsBigInt);
+end;
+
 function GreaterThan(const ALeft, ARight: TGocciaValue): Boolean;
+var
+  Cmp: Integer;
 begin
   // undefined compared to anything is always false
   if (ALeft is TGocciaUndefinedLiteralValue) or (ARight is TGocciaUndefinedLiteralValue) then
@@ -543,6 +613,27 @@ begin
     Exit;
   end;
 
+  // ES2026 §7.2.14 — BigInt vs BigInt
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  begin
+    Result := TGocciaBigIntValue(ALeft).Value.Compare(TGocciaBigIntValue(ARight).Value) > 0;
+    Exit;
+  end;
+
+  // ES2026 §7.2.14 — BigInt vs Number (cross-type)
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaNumberLiteralValue) then
+  begin
+    Cmp := CompareBigIntAndNumber(TGocciaBigIntValue(ALeft), TGocciaNumberLiteralValue(ARight), True);
+    Result := Cmp = 1;
+    Exit;
+  end;
+  if (ALeft is TGocciaNumberLiteralValue) and (ARight is TGocciaBigIntValue) then
+  begin
+    Cmp := CompareBigIntAndNumber(TGocciaBigIntValue(ARight), TGocciaNumberLiteralValue(ALeft), False);
+    Result := Cmp = -1;
+    Exit;
+  end;
+
   // Otherwise, coerce both to numbers and compare (ECMAScript Abstract Relational Comparison)
   Result := CompareNumbers(ALeft.ToNumberLiteral, ARight.ToNumberLiteral, True);
 end;
@@ -562,16 +653,35 @@ begin
     Exit;
   end;
 
-  if ALeft.ToNumberLiteral.IsNaN or ARight.ToNumberLiteral.IsNaN then
+  // NaN guard: cross-type BigInt/Number must check the Number operand
+  if (ALeft is TGocciaBigIntValue) or (ARight is TGocciaBigIntValue) then
   begin
-    Result := False;
-    Exit;
+    if (ARight is TGocciaNumberLiteralValue) and TGocciaNumberLiteralValue(ARight).IsNaN then
+    begin
+      Result := False;
+      Exit;
+    end;
+    if (ALeft is TGocciaNumberLiteralValue) and TGocciaNumberLiteralValue(ALeft).IsNaN then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end
+  else
+  begin
+    if ALeft.ToNumberLiteral.IsNaN or ARight.ToNumberLiteral.IsNaN then
+    begin
+      Result := False;
+      Exit;
+    end;
   end;
 
   Result := not LessThan(ALeft, ARight);
 end;
 
 function LessThan(const ALeft, ARight: TGocciaValue): Boolean;
+var
+  Cmp: Integer;
 begin
   if (ALeft is TGocciaUndefinedLiteralValue) or (ARight is TGocciaUndefinedLiteralValue) then
   begin
@@ -589,6 +699,25 @@ begin
   if (ALeft is TGocciaStringLiteralValue) and (ARight is TGocciaStringLiteralValue) then
   begin
     Result := TGocciaStringLiteralValue(ALeft).Value < TGocciaStringLiteralValue(ARight).Value;
+    Exit;
+  end;
+
+  // ES2026 §7.2.14 — BigInt comparisons
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  begin
+    Result := TGocciaBigIntValue(ALeft).Value.Compare(TGocciaBigIntValue(ARight).Value) < 0;
+    Exit;
+  end;
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaNumberLiteralValue) then
+  begin
+    Cmp := CompareBigIntAndNumber(TGocciaBigIntValue(ALeft), TGocciaNumberLiteralValue(ARight), True);
+    Result := Cmp = -1;
+    Exit;
+  end;
+  if (ALeft is TGocciaNumberLiteralValue) and (ARight is TGocciaBigIntValue) then
+  begin
+    Cmp := CompareBigIntAndNumber(TGocciaBigIntValue(ARight), TGocciaNumberLiteralValue(ALeft), False);
+    Result := Cmp = 1;
     Exit;
   end;
 
@@ -611,10 +740,27 @@ begin
     Exit;
   end;
 
-  if ALeft.ToNumberLiteral.IsNaN or ARight.ToNumberLiteral.IsNaN then
+  // NaN guard: cross-type BigInt/Number must check the Number operand
+  if (ALeft is TGocciaBigIntValue) or (ARight is TGocciaBigIntValue) then
   begin
-    Result := False;
-    Exit;
+    if (ARight is TGocciaNumberLiteralValue) and TGocciaNumberLiteralValue(ARight).IsNaN then
+    begin
+      Result := False;
+      Exit;
+    end;
+    if (ALeft is TGocciaNumberLiteralValue) and TGocciaNumberLiteralValue(ALeft).IsNaN then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end
+  else
+  begin
+    if ALeft.ToNumberLiteral.IsNaN or ARight.ToNumberLiteral.IsNaN then
+    begin
+      Result := False;
+      Exit;
+    end;
   end;
 
   Result := not GreaterThan(ALeft, ARight);
