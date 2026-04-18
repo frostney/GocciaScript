@@ -196,7 +196,7 @@ const
         '  getUTCMilliseconds(): number { const z = this.#utc(); return z ? z.millisecond : NaN; }'#10 +
         '  getTimezoneOffset(): number { const z = this.#local(); return z ? -(z.offsetNanoseconds / 60000000000) : NaN; }'#10 +
         '  toISOString(): string { if (!this.#valid()) throw new RangeError("Invalid time value"); return Temporal.Instant.fromEpochMilliseconds(this.#ms).toString(); }'#10 +
-        '  toJSON(): string { if (!this.#valid()) return null; return this.toISOString(); }'#10 +
+        '  toJSON(): string | null { if (!this.#valid()) return null; return this.toISOString(); }'#10 +
         '  toString(): string {'#10 +
         '    const z = this.#local();'#10 +
         '    if (!z) return "Invalid Date";'#10 +
