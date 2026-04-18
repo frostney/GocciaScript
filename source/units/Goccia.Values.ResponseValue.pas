@@ -101,7 +101,7 @@ begin
   FStatus := 200;
   FStatusText := '';
   FUrl := '';
-  FHeaders := nil;
+  FHeaders := TGocciaHeadersValue.Create;
   SetLength(FBody, 0);
   FBodyUsed := False;
   FRedirected := False;
@@ -283,8 +283,13 @@ begin
   if not (AThisValue is TGocciaResponseValue) then
     ThrowTypeError(SErrorResponseNotResponse, SSuggestResponseThisType);
   R := TGocciaResponseValue(AThisValue);
+  P := TGocciaPromiseValue.Create;
   if R.FBodyUsed then
-    ThrowTypeError(SErrorResponseBodyAlreadyUsed, SSuggestResponseThisType);
+  begin
+    P.Reject(CreateErrorObject('TypeError', SErrorResponseBodyAlreadyUsed));
+    Result := P;
+    Exit;
+  end;
   R.FBodyUsed := True;
 
   // Decode body as UTF-8
@@ -292,7 +297,6 @@ begin
   if Length(R.FBody) > 0 then
     Move(R.FBody[0], U8[1], Length(R.FBody));
 
-  P := TGocciaPromiseValue.Create;
   P.Resolve(TGocciaStringLiteralValue.Create(string(U8)));
   Result := P;
 end;
@@ -310,15 +314,19 @@ begin
   if not (AThisValue is TGocciaResponseValue) then
     ThrowTypeError(SErrorResponseNotResponse, SSuggestResponseThisType);
   R := TGocciaResponseValue(AThisValue);
+  P := TGocciaPromiseValue.Create;
   if R.FBodyUsed then
-    ThrowTypeError(SErrorResponseBodyAlreadyUsed, SSuggestResponseThisType);
+  begin
+    P.Reject(CreateErrorObject('TypeError', SErrorResponseBodyAlreadyUsed));
+    Result := P;
+    Exit;
+  end;
   R.FBodyUsed := True;
 
   SetLength(U8, Length(R.FBody));
   if Length(R.FBody) > 0 then
     Move(R.FBody[0], U8[1], Length(R.FBody));
 
-  P := TGocciaPromiseValue.Create;
   Parser := TGocciaJSONParser.Create;
   try
     try
@@ -345,15 +353,19 @@ begin
   if not (AThisValue is TGocciaResponseValue) then
     ThrowTypeError(SErrorResponseNotResponse, SSuggestResponseThisType);
   R := TGocciaResponseValue(AThisValue);
+  P := TGocciaPromiseValue.Create;
   if R.FBodyUsed then
-    ThrowTypeError(SErrorResponseBodyAlreadyUsed, SSuggestResponseThisType);
+  begin
+    P.Reject(CreateErrorObject('TypeError', SErrorResponseBodyAlreadyUsed));
+    Result := P;
+    Exit;
+  end;
   R.FBodyUsed := True;
 
   AB := TGocciaArrayBufferValue.Create(Length(R.FBody));
   if Length(R.FBody) > 0 then
     Move(R.FBody[0], AB.Data[0], Length(R.FBody));
 
-  P := TGocciaPromiseValue.Create;
   P.Resolve(AB);
   Result := P;
 end;

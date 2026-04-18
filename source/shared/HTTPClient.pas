@@ -120,17 +120,17 @@ begin
   // Parse host:port
   if (Length(Rest) > 0) and (Rest[1] = '[') then
   begin
-    // IPv6
+    // IPv6 — strip brackets for DNS resolution
     I := Pos(']', Rest);
     if I > 0 then
     begin
-      Result.Host := Copy(Rest, 1, I);
+      Result.Host := Copy(Rest, 2, I - 2);
       Rest := Copy(Rest, I + 1, Length(Rest));
       if (Length(Rest) > 0) and (Rest[1] = ':') then
         Result.Port := StrToIntDef(Copy(Rest, 2, Length(Rest)), 0);
     end
     else
-      Result.Host := Rest;
+      Result.Host := Copy(Rest, 2, Length(Rest));
   end
   else
   begin
@@ -633,11 +633,13 @@ var
   CurrentURL, Location, HostHeader: string;
   HasUserAgent: Boolean;
   IsHead: Boolean;
+  Method: string;
 begin
   CurrentURL := AURL;
   Redirects := 0;
   Result.Redirected := False;
-  IsHead := (UpperCase(AMethod) = 'HEAD');
+  Method := UpperCase(AMethod);
+  IsHead := (Method = 'HEAD');
 
   while True do
   begin
@@ -656,7 +658,7 @@ begin
         else
           HostHeader := Parsed.Host + ':' + IntToStr(Parsed.Port);
 
-        Request := AnsiString(AMethod + ' ' + Parsed.Path + ' HTTP/1.1' + CRLF);
+        Request := AnsiString(Method + ' ' + Parsed.Path + ' HTTP/1.1' + CRLF);
         Request := Request + AnsiString('Host: ' + HostHeader + CRLF);
         Request := Request + AnsiString('Connection: close' + CRLF);
 
@@ -705,9 +707,12 @@ begin
         else
           CurrentURL := Location;
 
-        // 303: change method to GET
+        // 303: change method to GET per RFC 7231
         if Raw.StatusCode = 303 then
+        begin
+          Method := 'GET';
           IsHead := False;
+        end;
 
         Continue;
       end;

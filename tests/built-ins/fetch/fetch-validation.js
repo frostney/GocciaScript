@@ -30,6 +30,7 @@ describe("fetch", () => {
 
   test("returns a thenable for GET", () => {
     const p = fetch("http://0.0.0.0:1/");
+    p.catch(() => {});
     expect(typeof p.then).toBe("function");
     expect(typeof p.catch).toBe("function");
   });
@@ -56,16 +57,19 @@ describe("fetch", () => {
   test("accepts URL object as first argument", () => {
     const url = new URL("http://0.0.0.0:1/");
     const p = fetch(url);
+    p.catch(() => {});
     expect(typeof p.then).toBe("function");
   });
 
   test("accepts method option case-insensitively", () => {
     const p = fetch("http://0.0.0.0:1/", { method: "get" });
+    p.catch(() => {});
     expect(typeof p.then).toBe("function");
   });
 
   test("accepts head method", () => {
     const p = fetch("http://0.0.0.0:1/", { method: "HEAD" });
+    p.catch(() => {});
     expect(typeof p.then).toBe("function");
   });
 
@@ -73,12 +77,14 @@ describe("fetch", () => {
     const p = fetch("http://0.0.0.0:1/", {
       headers: { "X-Custom": "value" },
     });
+    p.catch(() => {});
     expect(typeof p.then).toBe("function");
   });
 
   test("accepts headers as Headers instance", () => {
     const h = new Headers({ "X-Custom": "value" });
     const p = fetch("http://0.0.0.0:1/", { headers: h });
+    p.catch(() => {});
     expect(typeof p.then).toBe("function");
   });
 });

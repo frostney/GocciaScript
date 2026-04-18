@@ -13,17 +13,22 @@ PASS=0
 FAIL=0
 TMPFILE="/tmp/goccia-fetch-e2e-$$.js"
 PORT_FILE="/tmp/goccia-fetch-port-$$.txt"
+SERVER_PID=""
 
 cleanup() {
-  [ -f /tmp/goccia-fetch-server.pid ] && kill "$(cat /tmp/goccia-fetch-server.pid)" 2>/dev/null || true
-  rm -f "$TMPFILE" "$PORT_FILE" /tmp/goccia-fetch-server.pid
+  [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true
+  rm -f "$TMPFILE" "$PORT_FILE"
 }
 trap cleanup EXIT
 
 # --- Start test server ---
 
 python3 scripts/fetch_test_server.py "$PORT_FILE" &
-sleep 0.5
+SERVER_PID=$!
+for _ in $(seq 1 50); do
+  [ -s "$PORT_FILE" ] && break
+  sleep 0.1
+done
 PORT="$(cat "$PORT_FILE")"
 BASE="http://127.0.0.1:${PORT}"
 

@@ -12,13 +12,11 @@ Endpoints:
 Usage:
   python3 scripts/fetch_test_server.py <port-file>
 
-Writes the assigned port to <port-file> and its PID to
-/tmp/goccia-fetch-server.pid, then serves until killed.
+Writes the assigned port to <port-file>, then serves until killed.
 """
 
 import http.server
 import json
-import os
 import sys
 
 
@@ -48,7 +46,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
         elif self.path.startswith("/status/"):
-            code = int(self.path.split("/")[-1])
+            raw_code = self.path.rsplit("/", 1)[-1]
+            try:
+                code = int(raw_code)
+            except ValueError:
+                self.send_response(400)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            if code < 100 or code > 599:
+                self.send_response(400)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             self.send_response(code)
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -84,8 +94,6 @@ def main():
 
     with open(sys.argv[1], "w") as f:
         f.write(str(port))
-    with open("/tmp/goccia-fetch-server.pid", "w") as f:
-        f.write(str(os.getpid()))
 
     server.serve_forever()
 

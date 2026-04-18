@@ -23,9 +23,13 @@ describe("Response.prototype.text", () => {
     expect(r.bodyUsed).toBe(true);
   });
 
-  test("throws TypeError on second consumption", async () => {
+  test("rejects with TypeError on second consumption", async () => {
     const r = new Response();
     await r.text();
-    expect(() => r.text()).toThrow(TypeError);
+    let caught;
+    await r.text().catch((e) => {
+      caught = e;
+    });
+    expect(caught instanceof TypeError).toBe(true);
   });
 });
