@@ -157,7 +157,7 @@ const fn = async () => {
 
 ### Modules
 
-ES module syntax with named exports. Supported script file extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`. Structured-data imports are also supported for `.json`, `.json5`, `.jsonl`, `.toml`, `.yaml`, and `.yml`, and text-asset imports are supported for `.txt` and `.md`. Module paths are resolved relative to the importing file. File extensions can be omitted — the resolver tries script, structured-data, and text-asset extensions in order. Directory imports resolve to `index` files. The CLI tools support WHATWG-style import maps through `--import-map=<file.json>`, `--alias key=value`, and implicit `goccia.json` discovery.
+ES module syntax with named exports. Supported script file extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`. Structured-data imports are also supported for `.json`, `.json5`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv`, and text-asset imports are supported for `.txt` and `.md`. Module paths are resolved relative to the importing file. File extensions can be omitted — the resolver tries script, structured-data, and text-asset extensions in order. Directory imports resolve to `index` files. The CLI tools support WHATWG-style import maps through `--import-map=<file.json>`, `--alias key=value`, and implicit `goccia.json` discovery.
 
 ```javascript
 // Named imports (with or without extension)
@@ -206,6 +206,12 @@ import { name, version } from "./package.yaml";
 import { host as dbHost } from "./config.yml";
 import { "0" as firstDoc } from "./multi-doc-index.yaml";
 
+// CSV imports — each data row becomes a string-indexed named export (headers on by default)
+import { "0" as firstRow, "1" as secondRow } from "./data.csv";
+
+// TSV imports — same as CSV but tab-delimited with backslash escaping
+import { "0" as firstRow } from "./data.tsv";
+
 // Text asset imports — content plus frozen metadata
 import { content, metadata } from "./notes.txt";
 import { content as readme, metadata as readmeInfo } from "./README.md";
@@ -218,11 +224,13 @@ Single-document YAML module imports follow the same top-level-object export mode
 
 JSONL (`.jsonl`) imports are also supported. Each non-empty line is parsed as strict JSON and exposed as a named export under its zero-based string index (`"0"`, `"1"`, ...). Blank lines are ignored. If a line is invalid JSON, the load fails with a syntax error that includes the JSONL source line number. In runtime code, `JSONL.parse(...)` returns the full array of records and `JSONL.parseChunk(...)` exposes Bun-compatible streaming state (`values`, `read`, `done`, `error`).
 
+CSV (`.csv`) and TSV (`.tsv`) imports are supported. CSV files are parsed with RFC 4180 semantics (comma-delimited, double-quote escaping), while TSV files use IANA `text/tab-separated-values` semantics (tab-delimited, backslash escaping). Both default to headers mode — the first row becomes property names and each subsequent data row becomes an object. Each data row is exposed as a named export under its zero-based string index (`"0"`, `"1"`, ...). In runtime code, `CSV.parse(...)` / `TSV.parse(...)` return the full array, with optional reviver callbacks that receive `(key, value, { quoted, row, column })` context, and `CSV.parseChunk(...)` / `TSV.parseChunk(...)` expose streaming state.
+
 Text asset imports (`.txt`, `.md`) expose two named exports: `content`, which is the UTF-8 file text as a string with source newlines canonicalized to LF (`\n`), and `metadata`, which is a frozen object with `kind`, `path`, `fileName`, `extension`, and `byteLength`. Namespace imports project those same exports into the frozen null-prototype namespace object.
 
 Non-scalar YAML keys are canonicalized into stable JSON-like strings. Explicit scalar keys work naturally as named exports, and keys that are not valid identifiers can still be imported with string-literal names such as `import { "foo-bar" as fooBar } from "./config.yaml";`. Complex keys only produce useful imports when you know the canonical export string.
 
-Namespace imports (`import * as ns from "./module.js"`) are also supported for script modules, structured-data modules, and text-asset modules. They produce a frozen, null-prototype namespace object whose enumerable own properties are copied from the module's export table at import time, so JSON, JSON5, JSONL, TOML, YAML, `.txt`, and `.md` modules can all be consumed either through named imports or through a namespace object snapshot.
+Namespace imports (`import * as ns from "./module.js"`) are also supported for script modules, structured-data modules, and text-asset modules. They produce a frozen, null-prototype namespace object whose enumerable own properties are copied from the module's export table at import time, so JSON, JSON5, JSONL, TOML, YAML, CSV, TSV, `.txt`, and `.md` modules can all be consumed either through named imports or through a namespace object snapshot.
 
 This YAML surface is still partial. See the [decision log](decision-log.md) for the YAML conformance snapshot, and the official parse-validity check can be rerun with `python3 scripts/run_yaml_test_suite.py`.
 

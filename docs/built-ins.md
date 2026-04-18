@@ -137,6 +137,34 @@ Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time wh
 
 `JSONL.parse(...)` and `JSONL.parseChunk(...)` are designed to match Bun's JSONL runtime surface closely: blank lines are ignored, each non-empty line must be strict JSON, and `Uint8Array` input is supported alongside strings. `parseChunk(...)` returns the next resume offset in `read`, a `done` flag when the provided range was fully consumed, and a `SyntaxError` object in `error` when a delimited record is invalid. Incomplete trailing records are left unread so callers can append more data and resume parsing.
 
+### CSV (`Goccia.Builtins.CSV.pas`)
+
+| Method | Description |
+|--------|-------------|
+| `CSV.parse(text, options?, reviver?)` | Parse RFC 4180 CSV text into an array of objects (headers mode) or array of arrays |
+| `CSV.parseChunk(text, options?, start?, end?)` | Parse as many complete CSV rows as possible and return `{ values, read, done, error }` |
+| `CSV.stringify(data, options?, replacer?)` | Convert an array of objects or arrays to CSV text |
+
+**Options:** `{ delimiter: ','  headers: true, skipEmptyLines: false }`. The `delimiter` option supports any single character (e.g., `;` for European CSVs, `|` for pipe-delimited). All parsed values are strings — no type coercion.
+
+**Reviver:** The optional reviver callback `(key, value, context)` is called for each cell. The `context` object contains `{ quoted: boolean, row: number, column: number }`. The `quoted` flag lets callers distinguish `""` (a quoted empty field) from `,` (an unquoted empty field), enabling patterns like converting unquoted empties to `null` while preserving quoted empties as `""`.
+
+**Replacer:** The optional replacer callback `(key, value)` is called for each cell during `CSV.stringify`, enabling value transformation before serialization.
+
+**Edge cases:** Empty fields are `""`, trailing delimiters create an extra `""` field, empty rows are preserved by default (opt-in `skipEmptyLines`), ragged rows are padded with `""`, and quoting follows RFC 4180 (fields containing the delimiter, `"`, or newline are enclosed in double quotes with `""` escaping).
+
+### TSV (`Goccia.Builtins.TSV.pas`)
+
+| Method | Description |
+|--------|-------------|
+| `TSV.parse(text, options?, reviver?)` | Parse IANA TSV text into an array of objects (headers mode) or array of arrays |
+| `TSV.parseChunk(text, options?, start?, end?)` | Parse as many complete TSV rows as possible and return `{ values, read, done, error }` |
+| `TSV.stringify(data, options?, replacer?)` | Convert an array of objects or arrays to TSV text |
+
+**Options:** `{ headers: true, skipEmptyLines: false }`. No `delimiter` option — TSV always uses tab.
+
+TSV uses IANA `text/tab-separated-values` semantics, which differ fundamentally from CSV: instead of RFC 4180 double-quote escaping, TSV uses **backslash escaping** (`\t` for tab, `\n` for newline, `\r` for carriage return, `\\` for literal backslash). Unrecognized escape sequences preserve the backslash. The reviver, replacer, `parseChunk`, and edge case handling match CSV.
+
 ### TOML (`Goccia.Builtins.TOML.pas`)
 
 | Method | Description |
