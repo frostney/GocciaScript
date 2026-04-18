@@ -75,6 +75,14 @@ describe("Response constructor", () => {
     expect(r.headers.get("content-type")).toBe("text/plain");
   });
 
+  test("throws RangeError for status below 200", () => {
+    expect(() => new Response(null, { status: 100 })).toThrow(RangeError);
+  });
+
+  test("throws RangeError for status above 599", () => {
+    expect(() => new Response(null, { status: 600 })).toThrow(RangeError);
+  });
+
   test("body and init together", async () => {
     const r = new Response("ok", { status: 201, statusText: "Created" });
     expect(r.status).toBe(201);

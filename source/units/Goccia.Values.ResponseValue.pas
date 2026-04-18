@@ -381,7 +381,7 @@ var
   InitObj, HeadersObj: TGocciaObjectValue;
   U8: UTF8String;
   PropNames: TArray<string>;
-  I: Integer;
+  I, StatusVal: Integer;
 begin
   if AArguments.Length = 0 then Exit;
 
@@ -402,10 +402,15 @@ begin
   if not (InitArg is TGocciaObjectValue) then Exit;
   InitObj := TGocciaObjectValue(InitArg);
 
-  // status
+  // status — must be 200-599 per WHATWG Fetch spec
   PropVal := InitObj.GetProperty(PROP_STATUS);
   if Assigned(PropVal) and not (PropVal is TGocciaUndefinedLiteralValue) then
-    FStatus := Trunc(PropVal.ToNumberLiteral.Value);
+  begin
+    StatusVal := Trunc(PropVal.ToNumberLiteral.Value);
+    if (StatusVal < 200) or (StatusVal > 599) then
+      ThrowRangeError('Response status must be in the range 200-599');
+    FStatus := StatusVal;
+  end;
 
   // statusText
   PropVal := InitObj.GetProperty(PROP_STATUS_TEXT);
