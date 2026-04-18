@@ -5,6 +5,8 @@ unit Goccia.Temporal.Options;
 interface
 
 uses
+  BigInteger,
+
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -59,6 +61,7 @@ function GetOverflowOption(const AOptions: TGocciaObjectValue): TTemporalOverflo
 function GetFractionalSecondDigits(const AOptions: TGocciaObjectValue): Integer;
 function UnitToNanoseconds(const AUnit: TTemporalUnit): Int64;
 function RoundWithMode(const AValue: Int64; const ADivisor: Int64; const AMode: TTemporalRoundingMode): Int64;
+function RoundBigIntWithMode(const AValue: TBigInteger; const ADivisor: TBigInteger; const AMode: TTemporalRoundingMode): TBigInteger;
 function FormatTimeWithPrecision(const AHour, AMinute, ASecond, AMillisecond,
   AMicrosecond, ANanosecond: Integer; const AFractionalDigits: Integer): string;
 
@@ -365,6 +368,127 @@ begin
     end;
   else
     Result := Quotient * ADivisor;
+  end;
+end;
+
+function RoundBigIntWithMode(const AValue: TBigInteger; const ADivisor: TBigInteger;
+  const AMode: TTemporalRoundingMode): TBigInteger;
+var
+  Quotient, Remainder, AbsRemainder, Half, AbsDivisor, Two: TBigInteger;
+begin
+  if ADivisor.IsOne then
+    Exit(AValue);
+
+  Quotient := AValue.Divide(ADivisor);
+  Remainder := AValue.Modulo(ADivisor);
+
+  if Remainder.IsZero then
+    Exit(Quotient.Multiply(ADivisor));
+
+  AbsRemainder := Remainder.AbsValue;
+  AbsDivisor := ADivisor.AbsValue;
+  Two := TBigInteger.FromInt64(2);
+
+  case AMode of
+    rmTrunc:
+      Result := Quotient.Multiply(ADivisor);
+    rmFloor:
+    begin
+      if AValue.IsNegative then
+        Result := Quotient.Subtract(TBigInteger.One).Multiply(ADivisor)
+      else
+        Result := Quotient.Multiply(ADivisor);
+    end;
+    rmCeil:
+    begin
+      if AValue.IsPositive then
+        Result := Quotient.Add(TBigInteger.One).Multiply(ADivisor)
+      else
+        Result := Quotient.Multiply(ADivisor);
+    end;
+    rmHalfExpand:
+    begin
+      Half := AbsRemainder.Multiply(Two);
+      if Half.Compare(AbsDivisor) >= 0 then
+      begin
+        if AValue.IsPositive then
+          Result := Quotient.Add(TBigInteger.One).Multiply(ADivisor)
+        else
+          Result := Quotient.Subtract(TBigInteger.One).Multiply(ADivisor);
+      end
+      else
+        Result := Quotient.Multiply(ADivisor);
+    end;
+    rmHalfTrunc:
+    begin
+      Half := AbsRemainder.Multiply(Two);
+      if Half.Compare(AbsDivisor) > 0 then
+      begin
+        if AValue.IsPositive then
+          Result := Quotient.Add(TBigInteger.One).Multiply(ADivisor)
+        else
+          Result := Quotient.Subtract(TBigInteger.One).Multiply(ADivisor);
+      end
+      else
+        Result := Quotient.Multiply(ADivisor);
+    end;
+    rmHalfCeil:
+    begin
+      Half := AbsRemainder.Multiply(Two);
+      if Half.Compare(AbsDivisor) >= 0 then
+      begin
+        if AValue.IsPositive then
+          Result := Quotient.Add(TBigInteger.One).Multiply(ADivisor)
+        else if Half.Compare(AbsDivisor) > 0 then
+          Result := Quotient.Subtract(TBigInteger.One).Multiply(ADivisor)
+        else
+          Result := Quotient.Multiply(ADivisor);
+      end
+      else
+        Result := Quotient.Multiply(ADivisor);
+    end;
+    rmHalfFloor:
+    begin
+      Half := AbsRemainder.Multiply(Two);
+      if Half.Compare(AbsDivisor) >= 0 then
+      begin
+        if AValue.IsNegative then
+          Result := Quotient.Subtract(TBigInteger.One).Multiply(ADivisor)
+        else if Half.Compare(AbsDivisor) > 0 then
+          Result := Quotient.Add(TBigInteger.One).Multiply(ADivisor)
+        else
+          Result := Quotient.Multiply(ADivisor);
+      end
+      else
+        Result := Quotient.Multiply(ADivisor);
+    end;
+    rmHalfEven:
+    begin
+      Half := AbsRemainder.Multiply(Two);
+      if Half.Compare(AbsDivisor) > 0 then
+      begin
+        if AValue.IsPositive then
+          Result := Quotient.Add(TBigInteger.One).Multiply(ADivisor)
+        else
+          Result := Quotient.Subtract(TBigInteger.One).Multiply(ADivisor);
+      end
+      else if Half.Compare(AbsDivisor) = 0 then
+      begin
+        if Quotient.GetBit(0) then
+        begin
+          if AValue.IsPositive then
+            Result := Quotient.Add(TBigInteger.One).Multiply(ADivisor)
+          else
+            Result := Quotient.Subtract(TBigInteger.One).Multiply(ADivisor);
+        end
+        else
+          Result := Quotient.Multiply(ADivisor);
+      end
+      else
+        Result := Quotient.Multiply(ADivisor);
+    end;
+  else
+    Result := Quotient.Multiply(ADivisor);
   end;
 end;
 

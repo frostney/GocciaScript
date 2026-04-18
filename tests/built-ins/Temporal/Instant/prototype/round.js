@@ -18,4 +18,17 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.round", () => {
     const rounded = inst.round({ smallestUnit: "second", roundingMode: "trunc" });
     expect(rounded.epochMilliseconds).toBe(1710510330000);
   });
+
+  test("round at large epoch does not overflow", () => {
+    const inst = Temporal.Instant.fromEpochMilliseconds(1710510330999);
+    const rounded = inst.round("second");
+    expect(rounded.epochMilliseconds).toBe(1710510331000);
+  });
+
+  test("round at extreme epoch boundary", () => {
+    // Near max allowed: 1e8 days = 8.64e15 ms — would overflow Int64 if * 1e6
+    const inst = Temporal.Instant.fromEpochMilliseconds(8640000000000000);
+    const rounded = inst.round("hour");
+    expect(rounded.epochMilliseconds).toBe(8640000000000000);
+  });
 });
