@@ -58,11 +58,9 @@ type
 implementation
 
 uses
-  Classes;
+  Classes,
 
-const
-  UTF8_BOM = #$EF#$BB#$BF;
-  UTF8_BOM_LEN = 3;
+  Goccia.BOM;
 
 class function TGocciaCSVParser.ClampOffset(const AValue,
   ALimit: Integer): Integer;
@@ -76,17 +74,13 @@ end;
 
 class function TGocciaCSVParser.HasUTF8BOM(const AText: string): Boolean;
 begin
-  Result := (Length(AText) >= UTF8_BOM_LEN) and
-    (Copy(AText, 1, UTF8_BOM_LEN) = UTF8_BOM);
+  Result := HasUTF8BOMString(AText);
 end;
 
 class function TGocciaCSVParser.SkipBOM(const AText: string;
   const AStart: Integer): Integer;
 begin
-  if (AStart = 0) and HasUTF8BOM(AText) then
-    Result := UTF8_BOM_LEN
-  else
-    Result := AStart;
+  Result := SkipUTF8BOM(AText, AStart);
 end;
 
 function ParseRow(const AText: string; const ADelimiter: Char;

@@ -21,6 +21,10 @@ type
     ErrorMessage: string;
   end;
 
+  TGocciaTSVFieldInfo = record
+    Value: string;
+  end;
+
   TGocciaTSVParser = class
   private
     class function ClampOffset(const AValue, ALimit: Integer): Integer; static;
@@ -32,6 +36,10 @@ type
     function ParseChunk(const AText: string; const AHeaders: Boolean;
       const ASkipEmptyLines: Boolean; const AStart: Integer = 0;
       const AEnd: Integer = -1): TGocciaTSVChunkParseResult;
+    function ParseWithFieldInfo(const AText: string;
+      const AHeaders: Boolean = True;
+      const ASkipEmptyLines: Boolean = False):
+      TArray<TArray<TGocciaTSVFieldInfo>>;
   end;
 
   TGocciaTSVStringifier = class
@@ -44,11 +52,9 @@ type
 implementation
 
 uses
-  Classes;
+  Classes,
 
-const
-  UTF8_BOM = #$EF#$BB#$BF;
-  UTF8_BOM_LEN = 3;
+  Goccia.BOM;
 
 class function TGocciaTSVParser.ClampOffset(const AValue,
   ALimit: Integer): Integer;
@@ -62,8 +68,7 @@ end;
 
 class function TGocciaTSVParser.HasUTF8BOM(const AText: string): Boolean;
 begin
-  Result := (Length(AText) >= UTF8_BOM_LEN) and
-    (Copy(AText, 1, UTF8_BOM_LEN) = UTF8_BOM);
+  Result := HasUTF8BOMString(AText);
 end;
 
 class function TGocciaTSVParser.UnescapeField(const AField: string): string;
@@ -234,6 +239,51 @@ begin
       Result.Elements.Add(Row);
     end;
   end;
+end;
+
+function TGocciaTSVParser.ParseWithFieldInfo(const AText: string;
+  const AHeaders: Boolean;
+  const ASkipEmptyLines: Boolean): TArray<TArray<TGocciaTSVFieldInfo>>;
+var
+  Consumed: Boolean;
+  Count: Integer;
+  EndIndex: Integer;
+  Fields: TArray<string>;
+  FieldInfoRow: TArray<TGocciaTSVFieldInfo>;
+  I: Integer;
+  Pos: Integer;
+begin
+  Count := 0;
+  SetLength(Result, 16);
+  if Length(AText) = 0 then
+  begin
+    SetLength(Result, 0);
+    Exit;
+  end;
+
+  Pos := 1;
+  EndIndex := Length(AText);
+  if HasUTF8BOM(AText) then
+    Inc(Pos, UTF8_BOM_LEN);
+
+  while Pos <= EndIndex do
+  begin
+    if not ParseTSVRow(AText, Pos, EndIndex, Fields, Consumed) then
+      Break;
+
+    if ASkipEmptyLines and IsEmptyTSVRow(Fields) then
+      Continue;
+
+    SetLength(FieldInfoRow, Length(Fields));
+    for I := 0 to Length(Fields) - 1 do
+      FieldInfoRow[I].Value := Fields[I];
+
+    if Count >= Length(Result) then
+      SetLength(Result, Length(Result) * 2);
+    Result[Count] := FieldInfoRow;
+    Inc(Count);
+  end;
+  SetLength(Result, Count);
 end;
 
 function TGocciaTSVParser.ParseChunk(const AText: string;

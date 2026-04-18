@@ -377,6 +377,38 @@ describe.runIf(hasCSV)("CSV.parse with reviver", () => {
   });
 });
 
+describe.runIf(hasCSV)("CSV.parse skipEmptyLines edge cases", () => {
+  test("skipEmptyLines preserves quoted empty field rows", () => {
+    const result = CSV.parse('""\n\ndata', {
+      headers: false,
+      skipEmptyLines: true,
+    });
+
+    expect(result.length).toBe(2);
+    expect(result[0][0]).toBe("");
+    expect(result[1][0]).toBe("data");
+  });
+
+  test("skipEmptyLines skips blank lines before header row", () => {
+    const result = CSV.parse("\nname,age\nAlice,30", {
+      skipEmptyLines: true,
+    });
+
+    expect(result.length).toBe(1);
+    expect(result[0].name).toBe("Alice");
+    expect(result[0].age).toBe("30");
+  });
+});
+
+describe.runIf(hasCSV)("CSV.parseChunk error reporting", () => {
+  test("returns error message for unterminated quoted field", () => {
+    const result = CSV.parseChunk('name,age\nAlice,"30', {});
+
+    expect(result.done).toBe(false);
+    expect(result.error).not.toBe(null);
+  });
+});
+
 describe.runIf(hasCSV)("CSV metadata", () => {
   test("Symbol.toStringTag is CSV", () => {
     expect(CSV[Symbol.toStringTag]).toBe("CSV");

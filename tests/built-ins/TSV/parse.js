@@ -199,6 +199,69 @@ describe.runIf(hasTSV)("TSV.parse error handling", () => {
   });
 });
 
+describe.runIf(hasTSV)("TSV.parse with reviver", () => {
+  test("reviver receives key, value, and context", () => {
+    const calls = [];
+    TSV.parse("name\tage\nAlice\t30", {}, (key, value, ctx) => {
+      calls.push({ key, value, row: ctx.row, column: ctx.column });
+      return value;
+    });
+
+    expect(calls.length).toBe(2);
+    expect(calls[0].key).toBe("name");
+    expect(calls[0].value).toBe("Alice");
+    expect(calls[0].row).toBe(0);
+    expect(calls[0].column).toBe(0);
+    expect(calls[1].key).toBe("age");
+    expect(calls[1].value).toBe("30");
+    expect(calls[1].column).toBe(1);
+  });
+
+  test("reviver can transform values to numbers", () => {
+    const result = TSV.parse("v\n1\n2\n3", {}, (key, value) => {
+      return Number(value);
+    });
+
+    expect(result[0].v).toBe(1);
+    expect(result[1].v).toBe(2);
+    expect(result[2].v).toBe(3);
+  });
+
+  test("reviver works with headers: false", () => {
+    const result = TSV.parse("a\t1\nb\t2", { headers: false }, (key, value) => {
+      return value.toUpperCase();
+    });
+
+    expect(result[0][0]).toBe("A");
+    expect(result[0][1]).toBe("1");
+    expect(result[1][0]).toBe("B");
+  });
+
+  test("non-callable second arg is treated as options, not reviver", () => {
+    const result = TSV.parse("v\n1", { headers: true });
+
+    expect(result.length).toBe(1);
+    expect(result[0].v).toBe("1");
+  });
+});
+
+describe.runIf(hasTSV)("TSV.parseChunk edge cases", () => {
+  test("handles incomplete row at chunk boundary with done false", () => {
+    const result = TSV.parseChunk("name\tage\nAlice\t30\nBob", {});
+
+    expect(result.values.length).toBe(1);
+    expect(result.values[0].name).toBe("Alice");
+    expect(result.done).toBe(false);
+  });
+
+  test("parseChunk works without options object", () => {
+    const result = TSV.parseChunk("name\tage\nAlice\t30\n");
+
+    expect(result.values.length).toBe(1);
+    expect(result.done).toBe(true);
+  });
+});
+
 describe.runIf(hasTSV)("TSV metadata", () => {
   test("Symbol.toStringTag is TSV", () => {
     expect(TSV[Symbol.toStringTag]).toBe("TSV");

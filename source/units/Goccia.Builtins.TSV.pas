@@ -169,7 +169,18 @@ function TGocciaTSVBuiltin.TSVParse(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
+  Args: TGocciaArgumentsCollection;
+  Context: TGocciaObjectValue;
+  FieldInfoRows: TArray<TArray<TGocciaTSVFieldInfo>>;
   Headers: Boolean;
+  HeaderRow: TArray<TGocciaTSVFieldInfo>;
+  I, J: Integer;
+  Key: string;
+  Obj: TGocciaObjectValue;
+  ParsedResult: TGocciaArrayValue;
+  Reviver: TGocciaValue;
+  ReviverResult: TGocciaValue;
+  Row: TGocciaArrayValue;
   SkipEmptyLines: Boolean;
   Text: string;
 begin
@@ -180,9 +191,83 @@ begin
 
   Text := AArgs.GetElement(0).ToStringLiteral.Value;
   ReadOptions(AArgs, 1, Headers, SkipEmptyLines);
+  Reviver := GetReviver(AArgs, 2);
 
   try
-    Result := FParser.Parse(Text, Headers, SkipEmptyLines);
+    if Assigned(Reviver) then
+    begin
+      FieldInfoRows := FParser.ParseWithFieldInfo(Text, False,
+        SkipEmptyLines);
+
+      ParsedResult := TGocciaArrayValue.Create;
+      if Length(FieldInfoRows) = 0 then
+      begin
+        Result := ParsedResult;
+        Exit;
+      end;
+
+      if Headers then
+      begin
+        HeaderRow := FieldInfoRows[0];
+        for I := 1 to Length(FieldInfoRows) - 1 do
+        begin
+          Obj := TGocciaObjectValue.Create;
+          for J := 0 to Length(HeaderRow) - 1 do
+          begin
+            Key := HeaderRow[J].Value;
+            Context := TGocciaObjectValue.Create;
+            Context.AssignProperty('row',
+              TGocciaNumberLiteralValue.Create(I - 1));
+            Context.AssignProperty('column',
+              TGocciaNumberLiteralValue.Create(J));
+
+            Args := TGocciaArgumentsCollection.CreateWithCapacity(3);
+            Args.Add(TGocciaStringLiteralValue.Create(Key));
+            if J < Length(FieldInfoRows[I]) then
+              Args.Add(
+                TGocciaStringLiteralValue.Create(FieldInfoRows[I][J].Value))
+            else
+              Args.Add(TGocciaStringLiteralValue.Create(''));
+            Args.Add(Context);
+
+            ReviverResult := InvokeCallable(Reviver, Args,
+              TGocciaUndefinedLiteralValue.UndefinedValue);
+            Obj.AssignProperty(Key, ReviverResult);
+          end;
+          ParsedResult.Elements.Add(Obj);
+        end;
+      end
+      else
+      begin
+        for I := 0 to Length(FieldInfoRows) - 1 do
+        begin
+          Row := TGocciaArrayValue.Create;
+          for J := 0 to Length(FieldInfoRows[I]) - 1 do
+          begin
+            Context := TGocciaObjectValue.Create;
+            Context.AssignProperty('row',
+              TGocciaNumberLiteralValue.Create(I));
+            Context.AssignProperty('column',
+              TGocciaNumberLiteralValue.Create(J));
+
+            Args := TGocciaArgumentsCollection.CreateWithCapacity(3);
+            Args.Add(TGocciaNumberLiteralValue.Create(J));
+            Args.Add(
+              TGocciaStringLiteralValue.Create(FieldInfoRows[I][J].Value));
+            Args.Add(Context);
+
+            ReviverResult := InvokeCallable(Reviver, Args,
+              TGocciaUndefinedLiteralValue.UndefinedValue);
+            Row.Elements.Add(ReviverResult);
+          end;
+          ParsedResult.Elements.Add(Row);
+        end;
+      end;
+
+      Result := ParsedResult;
+    end
+    else
+      Result := FParser.Parse(Text, Headers, SkipEmptyLines);
   except
     on E: EGocciaTSVParseError do
       ThrowSyntaxError(E.Message);

@@ -59,12 +59,9 @@ type
 implementation
 
 uses
-  StrUtils;
+  StrUtils,
 
-const
-  UTF8_BOM_BYTE_1 = $EF;
-  UTF8_BOM_BYTE_2 = $BB;
-  UTF8_BOM_BYTE_3 = $BF;
+  Goccia.BOM;
 
 constructor TGocciaJSONLParser.Create;
 begin
@@ -97,10 +94,7 @@ end;
 class function TGocciaJSONLParser.HasUTF8BOM(const ABytes: TBytes;
   const AStart, AEnd: Integer): Boolean;
 begin
-  Result := (AEnd - AStart >= 3) and
-    (ABytes[AStart] = UTF8_BOM_BYTE_1) and
-    (ABytes[AStart + 1] = UTF8_BOM_BYTE_2) and
-    (ABytes[AStart + 2] = UTF8_BOM_BYTE_3);
+  Result := HasUTF8BOMBytes(ABytes, AStart, AEnd);
 end;
 
 class function TGocciaJSONLParser.IsBlankLine(const ALineText: string): Boolean;
