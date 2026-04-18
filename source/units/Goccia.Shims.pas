@@ -207,11 +207,11 @@ const
       FileName: '<shim:hasOwnProperty>';
       Source:
         'export const hasOwnProperty = ((proto) => {'#10 +
-        '  const fn = ({ hasOwnProperty(prop) { return Object.hasOwn(this, prop); } }).hasOwnProperty;'#10 +
         '  Object.defineProperty(proto, "hasOwnProperty", {'#10 +
-        '    value: fn, writable: true, enumerable: false, configurable: true'#10 +
+        '    value(prop) { return Object.hasOwn(this, prop); },'#10 +
+        '    writable: true, enumerable: false, configurable: true'#10 +
         '  });'#10 +
-        '  return fn;'#10 +
+        '  return proto.hasOwnProperty;'#10 +
         '})(Object.getPrototypeOf({}));'
     )
   );
