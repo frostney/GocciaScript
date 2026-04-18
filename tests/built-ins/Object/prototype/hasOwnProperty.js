@@ -96,4 +96,46 @@ describe('Object.prototype.hasOwnProperty', () => {
     expect(obj.hasOwnProperty(Symbol.toStringTag)).toBe(true);
     expect(obj.hasOwnProperty(Symbol.iterator)).toBe(false);
   });
+
+  // §20.1.3.2 vs §20.1.2.9 — behavioral differences from Object.hasOwn
+  // hasOwnProperty is a legacy API; Object.hasOwn is the modern replacement.
+  // These tests document the cases where the two diverge.
+
+  test('overridden hasOwnProperty takes precedence', () => {
+    const obj = {
+      hasOwnProperty: () => false,
+      bar: "exists"
+    };
+    // Legacy behavior: the override wins, returning a wrong answer
+    expect(obj.hasOwnProperty("bar")).toBe(false);
+    // Modern API bypasses the override
+    expect(Object.hasOwn(obj, "bar")).toBe(true);
+  });
+
+  test('not available on null-prototype objects', () => {
+    const obj = Object.create(null);
+    obj.prop = "exists";
+    // Legacy behavior: null-prototype objects lack hasOwnProperty
+    expect(() => obj.hasOwnProperty("prop")).toThrow(TypeError);
+    // Modern API works regardless of prototype chain
+    expect(Object.hasOwn(obj, "prop")).toBe(true);
+  });
+
+  test('Object.prototype.hasOwnProperty.call bypasses override', () => {
+    const obj = {
+      hasOwnProperty: () => false,
+      key: 1
+    };
+    // Defensive call-pattern avoids the override issue
+    expect(Object.prototype.hasOwnProperty.call(obj, "key")).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(obj, "missing")).toBe(false);
+  });
+
+  test('Object.prototype.hasOwnProperty.call works on null-prototype objects', () => {
+    const obj = Object.create(null);
+    obj.a = 1;
+    // The call-pattern also works for null-prototype objects
+    expect(Object.prototype.hasOwnProperty.call(obj, "a")).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(obj, "b")).toBe(false);
+  });
 });

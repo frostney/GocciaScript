@@ -67,7 +67,6 @@ const
   PROP_OF               = 'of';
   PROP_URL              = 'url';
   PROP_RESOLVE          = 'resolve';
-  PROP_HAS_OWN_PROPERTY       = 'hasOwnProperty';
   PROP_IS_PROTOTYPE_OF        = 'isPrototypeOf';
   PROP_PROPERTY_IS_ENUMERABLE = 'propertyIsEnumerable';
   PROP_TO_LOCALE_STRING       = 'toLocaleString';
