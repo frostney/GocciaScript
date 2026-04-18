@@ -70,6 +70,7 @@ uses
   Goccia.AST.Expressions,
   Goccia.AST.Statements,
   Goccia.Constants.PropertyNames,
+  Goccia.CSV,
   Goccia.Error,
   Goccia.FileExtensions,
   Goccia.JSON,
@@ -81,6 +82,7 @@ uses
   Goccia.SourceMap,
   Goccia.TextFiles,
   Goccia.TOML,
+  Goccia.TSV,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
@@ -422,6 +424,8 @@ function TGocciaModuleLoader.LoadStructuredDataModule(
   const AResolvedPath: string): TGocciaModule;
 var
   Content: TGocciaModuleContent;
+  CSVParser: TGocciaCSVParser;
+  CSVRecords: TGocciaArrayValue;
   Documents: TGocciaArrayValue;
   DocumentIndex: Integer;
   Extension: string;
@@ -435,17 +439,55 @@ var
   TOMLParser: TGocciaTOMLParser;
   JSONLParser: TGocciaJSONLParser;
   JSONLRecords: TGocciaArrayValue;
+  TSVParser: TGocciaTSVParser;
+  TSVRecords: TGocciaArrayValue;
   YAMLParser: TGocciaYAMLParser;
   LoadSucceeded: Boolean;
 begin
   Content := FContentProvider.LoadContent(AResolvedPath);
   try
+    CSVRecords := nil;
     Documents := nil;
     JSONLRecords := nil;
+    TSVRecords := nil;
     ParsedDocument := nil;
     ParsedValue := nil;
     Extension := LowerCase(ExtractFileExt(AResolvedPath));
-    if Extension = EXT_JSON then
+    if IsCSVExtension(Extension) then
+    begin
+      CSVParser := TGocciaCSVParser.Create;
+      try
+        try
+          CSVRecords := CSVParser.Parse(Content.Text);
+        except
+          on E: EGocciaCSVParseError do
+            raise TGocciaRuntimeError.Create(
+              Format('Failed to parse CSV module "%s": %s',
+                [AResolvedPath, E.Message]),
+              0, 0, AResolvedPath, nil);
+        end;
+      finally
+        CSVParser.Free;
+      end;
+    end
+    else if IsTSVExtension(Extension) then
+    begin
+      TSVParser := TGocciaTSVParser.Create;
+      try
+        try
+          TSVRecords := TSVParser.Parse(Content.Text);
+        except
+          on E: EGocciaTSVParseError do
+            raise TGocciaRuntimeError.Create(
+              Format('Failed to parse TSV module "%s": %s',
+                [AResolvedPath, E.Message]),
+              0, 0, AResolvedPath, nil);
+        end;
+      finally
+        TSVParser.Free;
+      end;
+    end
+    else if Extension = EXT_JSON then
     begin
       JSONParser := TGocciaJSONParser.Create;
       try
@@ -548,7 +590,19 @@ begin
          IsTOMLExtension(Extension) then
         ParsedDocument := ParsedValue;
 
-      if Assigned(JSONLRecords) then
+      if Assigned(CSVRecords) then
+      begin
+        for DocumentIndex := 0 to CSVRecords.Elements.Count - 1 do
+          Module.ExportsTable.AddOrSetValue(IntToStr(DocumentIndex),
+            CSVRecords.Elements[DocumentIndex]);
+      end
+      else if Assigned(TSVRecords) then
+      begin
+        for DocumentIndex := 0 to TSVRecords.Elements.Count - 1 do
+          Module.ExportsTable.AddOrSetValue(IntToStr(DocumentIndex),
+            TSVRecords.Elements[DocumentIndex]);
+      end
+      else if Assigned(JSONLRecords) then
       begin
         for DocumentIndex := 0 to JSONLRecords.Elements.Count - 1 do
           Module.ExportsTable.AddOrSetValue(IntToStr(DocumentIndex),
@@ -576,6 +630,8 @@ begin
         Module.Free;
     end;
   finally
+    CSVRecords.Free;
+    TSVRecords.Free;
     JSONLRecords.Free;
     Documents.Free;
     Content.Free;

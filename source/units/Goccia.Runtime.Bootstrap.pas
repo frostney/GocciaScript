@@ -12,6 +12,7 @@ uses
   Goccia.Builtins.Base,
   Goccia.Builtins.Benchmark,
   Goccia.Builtins.Console,
+  Goccia.Builtins.CSV,
   Goccia.Builtins.DisposableStack,
   Goccia.Builtins.GlobalArray,
   Goccia.Builtins.GlobalArrayBuffer,
@@ -39,6 +40,7 @@ uses
   Goccia.Builtins.Temporal,
   Goccia.Builtins.TestingLibrary,
   Goccia.Builtins.TOML,
+  Goccia.Builtins.TSV,
   Goccia.Builtins.YAML,
   Goccia.Engine,
   Goccia.Error.ThrowErrorCallback,
@@ -66,10 +68,12 @@ type
     FBuiltinRegExp: TGocciaGlobalRegExp;
     FBuiltinGlobalString: TGocciaGlobalString;
     FBuiltinGlobals: TGocciaGlobals;
+    FBuiltinCSV: TGocciaCSVBuiltin;
     FBuiltinJSON: TGocciaJSONBuiltin;
     FBuiltinJSON5: TGocciaJSON5Builtin;
     FBuiltinTOML: TGocciaTOMLBuiltin;
     FBuiltinJSONL: TGocciaJSONLBuiltin;
+    FBuiltinTSV: TGocciaTSVBuiltin;
     FBuiltinYAML: TGocciaYAMLBuiltin;
     FBuiltinSymbol: TGocciaGlobalSymbol;
     FBuiltinSet: TGocciaGlobalSet;
@@ -223,10 +227,12 @@ begin
   FBuiltinRegExp.Free;
   FBuiltinGlobalString.Free;
   FBuiltinGlobals.Free;
+  FBuiltinCSV.Free;
   FBuiltinJSON.Free;
   FBuiltinJSON5.Free;
   FBuiltinTOML.Free;
   FBuiltinJSONL.Free;
+  FBuiltinTSV.Free;
   FBuiltinYAML.Free;
   FBuiltinSymbol.Free;
   FBuiltinSet.Free;
@@ -266,10 +272,12 @@ begin
   FBuiltinGlobalObject := TGocciaGlobalObject.Create(CONSTRUCTOR_OBJECT, Scope, FThrowError);
   FBuiltinGlobalArray := TGocciaGlobalArray.Create(CONSTRUCTOR_ARRAY, Scope, FThrowError);
   FBuiltinGlobalNumber := TGocciaGlobalNumber.Create(CONSTRUCTOR_NUMBER, Scope, FThrowError);
+  FBuiltinCSV := TGocciaCSVBuiltin.Create('CSV', Scope, FThrowError);
   FBuiltinJSON := TGocciaJSONBuiltin.Create('JSON', Scope, FThrowError);
   FBuiltinJSON5 := TGocciaJSON5Builtin.Create('JSON5', Scope, FThrowError);
   FBuiltinJSONL := TGocciaJSONLBuiltin.Create('JSONL', Scope, FThrowError);
   FBuiltinTOML := TGocciaTOMLBuiltin.Create('TOML', Scope, FThrowError);
+  FBuiltinTSV := TGocciaTSVBuiltin.Create('TSV', Scope, FThrowError);
   FBuiltinYAML := TGocciaYAMLBuiltin.Create('YAML', Scope, FThrowError);
   FBuiltinSymbol := TGocciaGlobalSymbol.Create(CONSTRUCTOR_SYMBOL, Scope, FThrowError);
   FBuiltinSet := TGocciaGlobalSet.Create(CONSTRUCTOR_SET, Scope, FThrowError);

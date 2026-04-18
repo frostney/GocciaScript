@@ -17,6 +17,8 @@ const
   EXT_TOML = '.toml';
   EXT_YAML = '.yaml';
   EXT_YML  = '.yml';
+  EXT_CSV  = '.csv';
+  EXT_TSV  = '.tsv';
   EXT_TXT  = '.txt';
   EXT_MD   = '.md';
   EXT_GBC  = '.gbc';
@@ -30,18 +32,21 @@ const
     EXT_JSX, EXT_TSX
   );
 
-  ModuleImportExtensions: array[0..13] of string = (
+  ModuleImportExtensions: array[0..15] of string = (
     EXT_JS, EXT_JSX, EXT_TS, EXT_TSX, EXT_MJS,
     EXT_JSON, EXT_JSON5, EXT_JSONC, EXT_JSONL, EXT_TOML, EXT_YAML, EXT_YML,
+    EXT_CSV, EXT_TSV,
     EXT_TXT, EXT_MD
   );
 
 function IsScriptExtension(const AExtension: string): Boolean;
+function IsCSVExtension(const AExtension: string): Boolean;
 function IsJSON5Extension(const AExtension: string): Boolean;
 function IsJSONLExtension(const AExtension: string): Boolean;
 function IsJSXNativeExtension(const AExtension: string): Boolean;
 function IsTextAssetExtension(const AExtension: string): Boolean;
 function IsTOMLExtension(const AExtension: string): Boolean;
+function IsTSVExtension(const AExtension: string): Boolean;
 function IsYAMLExtension(const AExtension: string): Boolean;
 function IsStructuredDataExtension(const AExtension: string): Boolean;
 function IsStructuredGlobalsExtension(const AExtension: string): Boolean;
@@ -73,6 +78,14 @@ begin
     if Ext = JSXNativeExtensions[I] then
       Exit(True);
   Result := False;
+end;
+
+function IsCSVExtension(const AExtension: string): Boolean;
+var
+  Ext: string;
+begin
+  Ext := LowerCase(AExtension);
+  Result := Ext = EXT_CSV;
 end;
 
 function IsJSONLExtension(const AExtension: string): Boolean;
@@ -107,6 +120,14 @@ begin
   Result := Ext = EXT_TOML;
 end;
 
+function IsTSVExtension(const AExtension: string): Boolean;
+var
+  Ext: string;
+begin
+  Ext := LowerCase(AExtension);
+  Result := Ext = EXT_TSV;
+end;
+
 function IsTextAssetExtension(const AExtension: string): Boolean;
 var
   Ext: string;
@@ -121,7 +142,8 @@ var
 begin
   Ext := LowerCase(AExtension);
   Result := (Ext = EXT_JSON) or IsJSON5Extension(Ext) or IsJSONLExtension(Ext) or
-    IsTOMLExtension(Ext) or IsYAMLExtension(Ext);
+    IsTOMLExtension(Ext) or IsYAMLExtension(Ext) or IsCSVExtension(Ext) or
+    IsTSVExtension(Ext);
 end;
 
 function IsStructuredGlobalsExtension(const AExtension: string): Boolean;
