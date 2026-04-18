@@ -61,6 +61,25 @@ type
   end;
 
 {$IFDEF MSWINDOWS}
+type
+  PAddrInfo = ^TAddrInfo;
+  TAddrInfo = record
+    ai_flags: LongInt;
+    ai_family: LongInt;
+    ai_socktype: LongInt;
+    ai_protocol: LongInt;
+    ai_addrlen: PtrUInt;
+    ai_canonname: PAnsiChar;
+    ai_addr: PSockAddr;
+    ai_next: PAddrInfo;
+  end;
+
+function Getaddrinfo(ANodeName, AServName: PAnsiChar;
+  AHints: PAddrInfo; out ARes: PAddrInfo): LongInt; stdcall;
+  external WINSOCK2_DLL name 'getaddrinfo';
+procedure Freeaddrinfo(AI: PAddrInfo); stdcall;
+  external WINSOCK2_DLL name 'freeaddrinfo';
+
 var
   GWinSockInitialized: Boolean = False;
 
@@ -217,8 +236,8 @@ begin
     PortStr := AnsiString(IntToStr(APort));
     Res := nil;
 
-    if getaddrinfo(PAnsiChar(AnsiString(AHost)), PAnsiChar(PortStr),
-                   Hints, @Res) <> 0 then
+    if Getaddrinfo(PAnsiChar(AnsiString(AHost)), PAnsiChar(PortStr),
+                   Hints, Res) <> 0 then
       raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
   finally
     Dispose(Hints);
@@ -250,7 +269,7 @@ begin
 
     Result := Sock;
   finally
-    freeaddrinfo(Res);
+    Freeaddrinfo(Res);
   end;
 end;
 {$ENDIF}
