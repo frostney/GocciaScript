@@ -100,6 +100,7 @@ type
     procedure RegisterGlobalThis;
     procedure RegisterGocciaScriptGlobal;
     function SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GocciaGC(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AInterpreter: TGocciaInterpreter; const AGlobals: TGocciaGlobalBuiltins;
       const AThrowError: TGocciaThrowErrorCallback;
@@ -599,6 +600,8 @@ begin
     CreateProposalObject, [pfEnumerable]));
   GocciaObj.DefineProperty('shims', TGocciaPropertyDescriptorData.Create(
     ShimsArray, [pfEnumerable]));
+  GocciaObj.AssignProperty('gc',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(GocciaGC, 'gc', 0));
 
   FInterpreter.GlobalScope.DefineLexicalBinding('Goccia', GocciaObj, dtConst);
 end;
@@ -607,6 +610,17 @@ function TGocciaRuntimeBootstrap.SpeciesGetter(const AArgs: TGocciaArgumentsColl
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := AThisValue;
+end;
+
+function TGocciaRuntimeBootstrap.GocciaGC(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) and GC.Enabled then
+    GC.Collect;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 end.

@@ -183,6 +183,7 @@ type
       const AOwnsModuleLoader: Boolean);
     function GetResolver: TGocciaModuleResolver;
     function SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GocciaGC(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap = nil);
     procedure ThrowError(const AMessage: string; const ALine,
       AColumn: Integer);
@@ -1115,6 +1116,8 @@ begin
     CreateProposalObject, [pfEnumerable]));
   GocciaObj.DefineProperty('shims', TGocciaPropertyDescriptorData.Create(
     ShimsArray, [pfEnumerable]));
+  GocciaObj.AssignProperty('gc',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(GocciaGC, 'gc', 0));
 
   FInterpreter.GlobalScope.DefineLexicalBinding('Goccia', GocciaObj, dtConst);
 end;
@@ -1323,6 +1326,16 @@ end;
 function TGocciaEngine.SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := AThisValue;
+end;
+
+function TGocciaEngine.GocciaGC(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) and GC.Enabled then
+    GC.Collect;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 procedure TGocciaEngine.SetASIEnabled(const AValue: Boolean);
