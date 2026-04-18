@@ -115,17 +115,21 @@ end;
 
 function EvaluateSubtraction(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
+  PrimLeft, PrimRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+
   // ES2026 §6.1.6.2.2 BigInt::subtract
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
   begin
     Result := TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.Subtract(TGocciaBigIntValue(ARight).Value));
+      TGocciaBigIntValue(PrimLeft).Value.Subtract(TGocciaBigIntValue(PrimRight).Value));
     Exit;
   end;
 
-  if not ToNumericPair(ALeft, ARight, LeftNum, RightNum) then
+  if not ToNumericPair(PrimLeft, PrimRight, LeftNum, RightNum) then
   begin
     Result := TGocciaNumberLiteralValue.NaNValue;
     Exit;
@@ -152,19 +156,23 @@ end;
 
 function EvaluateMultiplication(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
+  PrimLeft, PrimRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
   LeftZero, RightZero: Boolean;
   SameSign: Boolean;
 begin
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+
   // ES2026 §6.1.6.2.3 BigInt::multiply
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
   begin
     Result := TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.Multiply(TGocciaBigIntValue(ARight).Value));
+      TGocciaBigIntValue(PrimLeft).Value.Multiply(TGocciaBigIntValue(PrimRight).Value));
     Exit;
   end;
 
-  if not ToNumericPair(ALeft, ARight, LeftNum, RightNum) then
+  if not ToNumericPair(PrimLeft, PrimRight, LeftNum, RightNum) then
   begin
     Result := TGocciaNumberLiteralValue.NaNValue;
     Exit;
@@ -193,20 +201,24 @@ end;
 
 function EvaluateDivision(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
+  PrimLeft, PrimRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
   SameSign: Boolean;
 begin
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+
   // ES2026 §6.1.6.2.6 BigInt::divide — truncates toward zero
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
   begin
-    if TGocciaBigIntValue(ARight).Value.IsZero then
+    if TGocciaBigIntValue(PrimRight).Value.IsZero then
       ThrowRangeError(SErrorBigIntDivisionByZero);
     Result := TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.Divide(TGocciaBigIntValue(ARight).Value));
+      TGocciaBigIntValue(PrimLeft).Value.Divide(TGocciaBigIntValue(PrimRight).Value));
     Exit;
   end;
 
-  if not ToNumericPair(ALeft, ARight, LeftNum, RightNum) then
+  if not ToNumericPair(PrimLeft, PrimRight, LeftNum, RightNum) then
   begin
     Result := TGocciaNumberLiteralValue.NaNValue;
     Exit;
@@ -259,19 +271,23 @@ end;
 
 function EvaluateModulo(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
+  PrimLeft, PrimRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+
   // ES2026 §6.1.6.2.7 BigInt::remainder — sign follows dividend
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
   begin
-    if TGocciaBigIntValue(ARight).Value.IsZero then
+    if TGocciaBigIntValue(PrimRight).Value.IsZero then
       ThrowRangeError(SErrorBigIntDivisionByZero);
     Result := TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.Modulo(TGocciaBigIntValue(ARight).Value));
+      TGocciaBigIntValue(PrimLeft).Value.Modulo(TGocciaBigIntValue(PrimRight).Value));
     Exit;
   end;
 
-  if not ToNumericPair(ALeft, ARight, LeftNum, RightNum) then
+  if not ToNumericPair(PrimLeft, PrimRight, LeftNum, RightNum) then
   begin
     Result := TGocciaNumberLiteralValue.NaNValue;
     Exit;
@@ -306,19 +322,23 @@ end;
 
 function EvaluateExponentiation(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
+  PrimLeft, PrimRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+
   // ES2026 §6.1.6.2.8 BigInt::exponentiate
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
   begin
-    if TGocciaBigIntValue(ARight).Value.IsNegative then
+    if TGocciaBigIntValue(PrimRight).Value.IsNegative then
       ThrowRangeError(SErrorBigIntNegativeExponent);
     Result := TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.Power(TGocciaBigIntValue(ARight).Value));
+      TGocciaBigIntValue(PrimLeft).Value.Power(TGocciaBigIntValue(PrimRight).Value));
     Exit;
   end;
 
-  if not ToNumericPair(ALeft, ARight, LeftNum, RightNum) then
+  if not ToNumericPair(PrimLeft, PrimRight, LeftNum, RightNum) then
   begin
     if IsActualZero(RightNum) then
       Result := TGocciaNumberLiteralValue.OneValue

@@ -5,6 +5,7 @@ unit Goccia.Values.ClassHelper;
 interface
 
 uses
+  Goccia.Values.BigIntObjectValue,
   Goccia.Values.BooleanObjectValue,
   Goccia.Values.NumberObjectValue,
   Goccia.Values.ObjectValue,
@@ -267,6 +268,12 @@ uses
     if Self is TGocciaStringLiteralValue then
     begin
       Result := TGocciaStringObjectValue.Create(Self.ToStringLiteral);
+      Exit;
+    end;
+
+    if Self is TGocciaBigIntValue then
+    begin
+      Result := TGocciaBigIntObjectValue.Create(Self);
       Exit;
     end;
 

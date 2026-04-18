@@ -1055,9 +1055,23 @@ begin
     else
       Result := AArguments.GetElement(0).ToBooleanLiteral;
   end
-  // Array and Object are callable without new (ES2026 §20.1.1, §23.1.1)
-  else if (FName = CONSTRUCTOR_ARRAY) or (FName = CONSTRUCTOR_OBJECT) then
+  else if FName = CONSTRUCTOR_ARRAY then
     Result := Instantiate(AArguments)
+  // ES2026 §20.1.1.1 Object(value): ToObject for primitives, new empty object otherwise
+  else if FName = CONSTRUCTOR_OBJECT then
+  begin
+    if (AArguments.Length > 0) and
+       not (AArguments.GetElement(0) is TGocciaUndefinedLiteralValue) and
+       not (AArguments.GetElement(0) is TGocciaNullLiteralValue) then
+    begin
+      if AArguments.GetElement(0).IsPrimitive then
+        Result := AArguments.GetElement(0).Box
+      else
+        Result := AArguments.GetElement(0);
+    end
+    else
+      Result := Instantiate(AArguments);
+  end
   else
     ThrowTypeError(Format(SErrorClassConstructorRequiresNew, [FName]), SSuggestRequiresNew);
 end;
