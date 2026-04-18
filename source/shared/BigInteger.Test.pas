@@ -1243,8 +1243,8 @@ end;
 
 procedure TBigIntegerTests.TestBitwiseNotPositive;
 begin
-  // ~0 = -1
-  Expect<String>(TBigInteger.Zero.BitwiseNot.ToString).ToBe('-1');
+  // ~5 = -6
+  Expect<String>(TBigInteger.FromInt64(5).BitwiseNot.ToString).ToBe('-6');
 end;
 
 procedure TBigIntegerTests.TestBitwiseNotNegative;
@@ -1255,8 +1255,8 @@ end;
 
 procedure TBigIntegerTests.TestBitwiseNotZero;
 begin
-  // ~5 = -6
-  Expect<String>(TBigInteger.FromInt64(5).BitwiseNot.ToString).ToBe('-6');
+  // ~0 = -1
+  Expect<String>(TBigInteger.Zero.BitwiseNot.ToString).ToBe('-1');
 end;
 
 { ── Shift left ───────────────────────────────────────────────────── }
