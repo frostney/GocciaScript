@@ -42,4 +42,17 @@ describe("trailing-dot numeric literals", () => {
     expect(result[0]).toBe(0);
     expect(result[1]).toBe(1);
   });
+
+  test("hex literal dot is property access, not fractional", () => {
+    expect(0xFF.toString()).toBe("255");
+    expect(0xFF.toString(16)).toBe("ff");
+  });
+
+  test("binary literal dot is property access, not fractional", () => {
+    expect(0b101.toString()).toBe("5");
+  });
+
+  test("octal literal dot is property access, not fractional", () => {
+    expect(0o77.toString()).toBe("63");
+  });
 });
