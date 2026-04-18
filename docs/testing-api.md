@@ -9,7 +9,7 @@
 - **Mock functions** --- `mock()` creates tracked mock functions and `spyOn()` wraps existing methods; both record calls, arguments, return values, and support configurable behavior
 - **Lifecycle hooks** --- `beforeAll`/`afterAll` run once per suite, `beforeEach`/`afterEach` run around every test and are inherited by nested suites, and `onTestFinished` registers per-test cleanup
 - **Async patterns** --- Tests can be `async` functions or return Promises; `.resolves`/`.rejects` matchers unwrap Promises for Vitest/Jest-compatible assertions
-- **Vitest compatibility** --- Tests are designed to pass in both GocciaScript's TestRunner and Vitest, with known divergences around `mock()`/`spyOn()` globals, `Math.clamp`, emoji identifiers, and arrow method `this` binding
+- **Vitest compatibility** --- Tests are designed to pass in both GocciaScript's GocciaTestRunner and Vitest, with known divergences around `mock()`/`spyOn()` globals, `Math.clamp`, emoji identifiers, and arrow method `this` binding
 
 ## Writing Tests
 
@@ -401,7 +401,7 @@ These follow the [Bun test runner API](https://bun.com/reference/bun/test/Descri
 
 ## Cross-Runtime Compatibility (Vitest)
 
-Tests are designed to pass in both GocciaScript's TestRunner and standard JavaScript via [Vitest](https://vitest.dev/). This ensures tests serve as both GocciaScript validation and ECMAScript conformance checks.
+Tests are designed to pass in both GocciaScript's GocciaTestRunner and standard JavaScript via [Vitest](https://vitest.dev/). This ensures tests serve as both GocciaScript validation and ECMAScript conformance checks.
 
 ### Running with Vitest
 

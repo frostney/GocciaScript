@@ -11,7 +11,7 @@
 
 **At a glance** (details follow in the subsections):
 
-- **Naming** — PascalCase functions and methods; `TGoccia*` classes; **`F`** = private fields; **`A`** = multi-letter parameters; full words, no abbreviations (exceptions: `AST`, `JSON`, `REPL`, `ISO`, `Utils`); locals: PascalCase, no underscores, no numeric suffixes
+- **Naming** — PascalCase functions and methods; `TGoccia*` classes; **`F`** = private fields; **`A`** = multi-letter parameters; full words, no abbreviations (exceptions: `AST`, `JSON`, `GocciaREPL`, `ISO`, `Utils`); locals: PascalCase, no underscores, no numeric suffixes
 - **Constants** — `Goccia.Constants.*`, `Goccia.Keywords.*`, `Goccia.FileExtensions` (not string literals)
 - **Performance** — `TStringBuffer` not `TStringBuilder`; purpose-built maps on hot paths; `TObjectList<T>` **named aliases** across units
 - **Formatting** — `./format.pas` + Lefthook; rules under [Tooling](tooling.md)
@@ -30,7 +30,7 @@ Which sets:
 
 ```pascal
 {$mode delphi}           // Delphi-compatible mode
-{H+}                     // Long strings by default
+{$H+}                     // Long strings by default
 {$overflowchecks on}     // Runtime overflow checking
 {$rangechecks on}        // Runtime range checking
 {$modeswitch advancedrecords}   // Records with methods
@@ -166,7 +166,7 @@ IsExternalDecl
 DTAdd
 ```
 
-**Exceptions:** Industry-standard abbreviations are kept as-is: `AST`, `JSON`, `REPL`, `ISO`, `Utils`.
+**Exceptions:** Industry-standard abbreviations are kept as-is: `AST`, `JSON`, `GocciaREPL`, `ISO`, `Utils`.
 
 ### Generic Lists for Class Types
 
@@ -238,7 +238,7 @@ Each unit in the `uses` clause must appear on its own line, following [Embarcade
 1. **System units** — FPC standard library (`Classes`, `SysUtils`, `Math`, `Generics.Collections`, etc.)
 2. **Third-party / non-prefixed project units** — units without `Goccia.*` prefix and without an `in` path (`TimingUtils`, etc.)
 3. **Project units** — `Goccia.*` namespaced units
-4. **Relative units** — units with an explicit `in` path (`FileUtils in 'units/FileUtils.pas'`, etc.)
+4. **Relative units** — units with an explicit `in` path (`FileUtils in 'source/shared/FileUtils.pas'`, etc.)
 
 ```pascal
 uses
@@ -251,7 +251,7 @@ uses
   Goccia.Scope,
   Goccia.Values.Primitives,
 
-  FileUtils in 'units/FileUtils.pas';
+  FileUtils in 'source/shared/FileUtils.pas';
 ```
 
 This ordering is enforced automatically by `./format.pas` via Lefthook pre-commit hook.

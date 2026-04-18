@@ -14,33 +14,33 @@ GocciaScript includes a benchmark runner for measuring execution performance. Be
 ## Running Benchmarks
 
 ```bash
-# Build the BenchmarkRunner
+# Build the GocciaBenchmarkRunner
 ./build.pas benchmarkrunner
 
 # Run all benchmarks
-./build/BenchmarkRunner benchmarks
+./build/GocciaBenchmarkRunner benchmarks
 
 # Run a specific benchmark
-./build/BenchmarkRunner benchmarks/fibonacci.js
+./build/GocciaBenchmarkRunner benchmarks/fibonacci.js
 
 # Run a benchmark from stdin
-printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/BenchmarkRunner
-printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/BenchmarkRunner - --mode=bytecode
+printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner
+printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner - --mode=bytecode
 
 # Run benchmarks with 2 parallel workers (default: CPU count)
-./build/BenchmarkRunner benchmarks --jobs=2
+./build/GocciaBenchmarkRunner benchmarks --jobs=2
 
 # Export results in different formats
-./build/BenchmarkRunner benchmarks --format=json --output=results.json
-./build/BenchmarkRunner benchmarks --format=csv --output=results.csv
-./build/BenchmarkRunner benchmarks --format=text
+./build/GocciaBenchmarkRunner benchmarks --format=json --output=results.json
+./build/GocciaBenchmarkRunner benchmarks --format=csv --output=results.csv
+./build/GocciaBenchmarkRunner benchmarks --format=text
 ```
 
-When no path is provided, `BenchmarkRunner` reads benchmark source from stdin. Use `-` explicitly when you want stdin alongside other CLI flags and still make the input source obvious.
+When no path is provided, `GocciaBenchmarkRunner` reads benchmark source from stdin. Use `-` explicitly when you want stdin alongside other CLI flags and still make the input source obvious.
 
 ## Output Formats
 
-The BenchmarkRunner supports four output formats via the `--format` flag:
+The GocciaBenchmarkRunner supports four output formats via the `--format` flag:
 
 | Format | Description |
 |--------|-------------|
@@ -66,10 +66,10 @@ Example:
 
 ```bash
 # Fast local run with shorter calibration and fewer rounds
-GOCCIA_BENCH_CALIBRATION_MS=50 GOCCIA_BENCH_ROUNDS=3 ./build/BenchmarkRunner benchmarks
+GOCCIA_BENCH_CALIBRATION_MS=50 GOCCIA_BENCH_ROUNDS=3 ./build/GocciaBenchmarkRunner benchmarks
 
 # Thorough serial run with longer calibration and more rounds
-GOCCIA_BENCH_CALIBRATION_MS=500 GOCCIA_BENCH_ROUNDS=15 ./build/BenchmarkRunner benchmarks
+GOCCIA_BENCH_CALIBRATION_MS=500 GOCCIA_BENCH_ROUNDS=15 ./build/GocciaBenchmarkRunner benchmarks
 ```
 
 ## Writing Benchmarks
@@ -117,9 +117,9 @@ setup() → [return value] → warmup(run × N) → calibrate(run × N) → meas
 - When the benchmark IS the creation (e.g., measuring `Array.from` speed), put everything in `run` with no `setup`.
 - The `run` function can be `async` for benchmarking async/await operations.
 
-## How the BenchmarkRunner Works
+## How the GocciaBenchmarkRunner Works
 
-The `BenchmarkRunner` program:
+The `GocciaBenchmarkRunner` program:
 
 1. Parses CLI arguments (`--format`, `--output`, and the benchmark path or stdin marker).
 2. Scans the provided path for `.js` files.
@@ -152,7 +152,7 @@ The non-zero exit code ensures CI pipelines fail when benchmarks crash or produc
 |----------|-------------|
 | `suite(name, fn)` | Group benchmarks (like `describe` in tests). Executes `fn` immediately. |
 | `bench(name, { setup?, run, teardown? })` | Register a benchmark with optional setup/teardown. `run` is called many times during measurement; `setup` and `teardown` run once each and are independently timed. |
-| `runBenchmarks()` | Execute all registered benchmarks and return results. Injected automatically by BenchmarkRunner. |
+| `runBenchmarks()` | Execute all registered benchmarks and return results. Injected automatically by GocciaBenchmarkRunner. |
 
 ## Available Benchmarks
 

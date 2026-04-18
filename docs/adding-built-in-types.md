@@ -17,13 +17,13 @@ Adding a built-in type like `Set`, `Map`, or `ArrayBuffer` requires changes acro
 
 | Step | File(s) | Purpose |
 |------|---------|---------|
-| 1 | `units/Goccia.Values.YourValue.pas` | Value type class (data storage, prototype methods) |
-| 2 | `units/Goccia.Builtins.GlobalYour.pas` | Built-in registration (constructor function, static methods) |
-| 3 | `units/Goccia.Values.ClassValue.pas` | Class value subclass (`CreateNativeInstance`) |
-| 4 | `units/Goccia.Engine.pas` | Engine integration (enum, globals, registration, cleanup) |
-| 5 | `units/Goccia.Constants.ConstructorNames.pas` | Constructor name constant |
-| 6 | `units/Goccia.Constants.PropertyNames.pas` | Property name constants (if needed) |
-| 7 | `units/Goccia.Builtins.Globals.pas` | structuredClone support (if cloneable) |
+| 1 | `source/units/Goccia.Values.YourValue.pas` | Value type class (data storage, prototype methods) |
+| 2 | `source/units/Goccia.Builtins.GlobalYour.pas` | Built-in registration (constructor function, static methods) |
+| 3 | `source/units/Goccia.Values.ClassValue.pas` | Class value subclass (`CreateNativeInstance`) |
+| 4 | `source/units/Goccia.Engine.pas` | Engine integration (enum, globals, registration, cleanup) |
+| 5 | `source/units/Goccia.Constants.ConstructorNames.pas` | Constructor name constant |
+| 6 | `source/units/Goccia.Constants.PropertyNames.pas` | Property name constants (if needed) |
+| 7 | `source/units/Goccia.Builtins.Globals.pas` | structuredClone support (if cloneable) |
 | 8 | `tests/built-ins/YourType/` | JavaScript tests |
 | 9 | `benchmarks/yourtype.js` | Benchmarks |
 | 10 | `docs/built-ins.md`, `README.md`, other `docs/*` as needed | Documentation |
@@ -387,7 +387,7 @@ property BuiltinYour: TGocciaGlobalYour read FBuiltinYour;
 
 ## Step 5: Constructor Name Constant
 
-In `units/Goccia.Constants.ConstructorNames.pas`:
+In `source/units/Goccia.Constants.ConstructorNames.pas`:
 
 ```pascal
 CONSTRUCTOR_YOUR = 'YourType';
@@ -395,7 +395,7 @@ CONSTRUCTOR_YOUR = 'YourType';
 
 ## Step 6: Property Name Constants (if needed)
 
-In `units/Goccia.Constants.PropertyNames.pas`:
+In `source/units/Goccia.Constants.PropertyNames.pas`:
 
 ```pascal
 PROP_YOUR_PROPERTY = 'yourProperty';
@@ -403,7 +403,7 @@ PROP_YOUR_PROPERTY = 'yourProperty';
 
 ## Step 7: structuredClone Support (if cloneable)
 
-In `units/Goccia.Builtins.Globals.pas`:
+In `source/units/Goccia.Builtins.Globals.pas`:
 
 ### 7a. Add to implementation uses clause
 

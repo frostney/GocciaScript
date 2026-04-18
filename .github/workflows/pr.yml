@@ -86,52 +86,52 @@ jobs:
         run: ./fixtures/ffi/build.sh
 
       - name: Run all JavaScript tests
-        run: ./build/TestRunner tests ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --asi --silent --no-progress --output=test-results-${{ matrix.mode }}.json
+        run: ./build/GocciaTestRunner tests ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --asi --silent --no-progress --output=test-results-${{ matrix.mode }}.json
 
-      - name: Check TestRunner CLI behaviour
+      - name: Check GocciaTestRunner CLI behaviour
         run: |
           grep -q '"mode": "${{ matrix.mode }}"' test-results-${{ matrix.mode }}.json
           grep -q '"totalFiles":' test-results-${{ matrix.mode }}.json
           grep -q '"jobCount":' test-results-${{ matrix.mode }}.json
 
-      - name: Check TestRunner coverage CLI
+      - name: Check GocciaTestRunner coverage CLI
         run: |
           # --coverage prints a summary to stdout
-          cov_output="$(./build/TestRunner tests/built-ins/Array/array-creation.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage 2>&1)"
+          cov_output="$(./build/GocciaTestRunner tests/built-ins/Array/array-creation.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage 2>&1)"
           printf '%s\n' "$cov_output" | grep -q 'Coverage Summary:'
           printf '%s\n' "$cov_output" | grep -q 'array-creation.js'
 
           # --coverage-format=lcov --coverage-output writes an lcov file
-          ./build/TestRunner tests/built-ins/Array/array-creation.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage --coverage-format=lcov --coverage-output=cov.lcov
+          ./build/GocciaTestRunner tests/built-ins/Array/array-creation.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage --coverage-format=lcov --coverage-output=cov.lcov
           grep -q '^SF:' cov.lcov
           grep -q '^DA:' cov.lcov
           grep -q '^end_of_record' cov.lcov
           rm cov.lcov
 
           # --coverage-format=json --coverage-output writes a JSON file
-          ./build/TestRunner tests/built-ins/Array/array-creation.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage --coverage-format=json --coverage-output=cov.json
+          ./build/GocciaTestRunner tests/built-ins/Array/array-creation.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage --coverage-format=json --coverage-output=cov.json
           grep -q '"path":' cov.json
           grep -q '"statementMap":' cov.json
           rm cov.json
 
           # order-independent: --coverage-output before --coverage-format
-          ./build/TestRunner tests/built-ins/Array/array-creation.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage --coverage-output=cov2.lcov --coverage-format=lcov
+          ./build/GocciaTestRunner tests/built-ins/Array/array-creation.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage --coverage-output=cov2.lcov --coverage-format=lcov
           grep -q '^DA:' cov2.lcov
           rm cov2.lcov
 
           # single-file detail view shows line annotations
-          detail_output="$(./build/TestRunner tests/built-ins/Array/array-creation.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage 2>&1)"
+          detail_output="$(./build/GocciaTestRunner tests/built-ins/Array/array-creation.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage 2>&1)"
           printf '%s\n' "$detail_output" | grep -Eq '[0-9]+x \|'
 
           # branch coverage: lcov contains BRDA/BRF entries for branching code
-          ./build/TestRunner tests/language/statements/if/if-else-statements.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage --coverage-format=lcov --coverage-output=branch-cov.lcov
+          ./build/GocciaTestRunner tests/language/statements/if/if-else-statements.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage --coverage-format=lcov --coverage-output=branch-cov.lcov
           grep -q '^BRDA:' branch-cov.lcov
           grep -q '^BRF:' branch-cov.lcov
           grep -q '^BRH:' branch-cov.lcov
           rm branch-cov.lcov
 
           # branch coverage: JSON contains branchMap and b entries
-          ./build/TestRunner tests/language/statements/if/if-else-statements.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage --coverage-format=json --coverage-output=branch-cov.json
+          ./build/GocciaTestRunner tests/language/statements/if/if-else-statements.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage --coverage-format=json --coverage-output=branch-cov.json
           grep -q '"branchMap":' branch-cov.json
           grep -q '"b":' branch-cov.json
           rm branch-cov.json
@@ -148,7 +148,7 @@ jobs:
         if: matrix.mode == 'interpreted'
         run: |
           found=0
-          for test_bin in build/Goccia.*.Test build/Goccia.*.Test.exe; do
+          for test_bin in build/*.Test build/*.Test.exe; do
             if [ -f "$test_bin" ]; then
               found=1
               "$test_bin"
@@ -187,40 +187,13 @@ jobs:
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
           GOCCIA_BENCH_ROUNDS: 7
-        run: ./build/BenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress --format=json --output=benchmark-${{ matrix.mode }}.json
+        run: ./build/GocciaBenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress --format=json --output=benchmark-${{ matrix.mode }}.json
 
       - name: Check benchmark CLI behaviour
         run: |
           grep -q '"files": \[' benchmark-${{ matrix.mode }}.json
           grep -q '"totalBenchmarks":' benchmark-${{ matrix.mode }}.json
           grep -q '"jobCount":' benchmark-${{ matrix.mode }}.json
-
-      - name: Check BenchmarkRunner CLI behaviour
-        env:
-          GOCCIA_BENCH_CALIBRATION_MS: 100
-          GOCCIA_BENCH_ROUNDS: 7
-        run: |
-          if [ "${{ matrix.mode }}" = "bytecode" ]; then
-            ./build/BenchmarkRunner benchmarks/fibonacci.js --mode=bytecode --no-progress --format=json --output=benchmark-file-bytecode.json
-            grep -q '"file": "benchmarks/fibonacci.js"' benchmark-file-bytecode.json
-            grep -q '"totalBenchmarks":' benchmark-file-bytecode.json
-
-            printf 'suite("stdin", () => {\n  bench("sum", {\n    run: () => 1 + 1,\n  });\n});\n' | \
-              ./build/BenchmarkRunner - --mode=bytecode --no-progress --format=json --output=benchmark-stdin-bytecode.json
-            grep -q '"files": \[' benchmark-stdin-bytecode.json
-            grep -q '"name": "sum"' benchmark-stdin-bytecode.json
-            grep -q '"totalBenchmarks": 1' benchmark-stdin-bytecode.json
-          else
-            ./build/BenchmarkRunner benchmarks/fibonacci.js --no-progress --format=json --output=benchmark-file.json
-            grep -q '"file": "benchmarks/fibonacci.js"' benchmark-file.json
-            grep -q '"totalBenchmarks":' benchmark-file.json
-
-            printf 'suite("stdin", () => {\n  bench("sum", {\n    run: () => 1 + 1,\n  });\n});\n' | \
-              ./build/BenchmarkRunner --no-progress --format=json --output=benchmark-stdin.json
-            grep -q '"files": \[' benchmark-stdin.json
-            grep -q '"name": "sum"' benchmark-stdin.json
-            grep -q '"totalBenchmarks": 1' benchmark-stdin.json
-          fi
 
       - name: Upload results
         uses: actions/upload-artifact@v5
@@ -229,7 +202,7 @@ jobs:
           retention-days: 1
           path: benchmark-${{ matrix.mode }}.json
 
-  examples:
+  cli:
     needs: build
     runs-on: ubuntu-latest
     defaults:
@@ -249,51 +222,55 @@ jobs:
       - name: Make binaries executable
         run: chmod +x build/*
 
+      # ── Example smoke tests ──
+
       - name: Run example scripts
-        run: ./build/ScriptLoader examples
+        run: ./build/GocciaScriptLoader examples
+
+      # ── GocciaScriptLoader CLI ──
 
       - name: Run stdin smoke tests
         run: |
-          script_output="$(printf 'const x = 2 + 2;\nx;\n' | ./build/ScriptLoader)"
+          script_output="$(printf 'const x = 2 + 2;\nx;\n' | ./build/GocciaScriptLoader)"
           printf '%s\n' "$script_output" | grep -q 'Result: 4'
 
-          script_output_bytecode="$(printf 'const x = 2 + 2;\nx;\n' | ./build/ScriptLoader - --mode=bytecode)"
+          script_output_bytecode="$(printf 'const x = 2 + 2;\nx;\n' | ./build/GocciaScriptLoader - --mode=bytecode)"
           printf '%s\n' "$script_output_bytecode" | grep -q 'Result: 4'
 
-      - name: Check ScriptLoader CLI behaviour
+      - name: Check GocciaScriptLoader CLI behaviour
         run: |
           PYTHON_BIN="$(command -v python3 || command -v python)"
 
-          json_output="$(printf '%s\n' "console.log('hi');" '2 + 2;' | ./build/ScriptLoader --output=json)"
+          json_output="$(printf '%s\n' "console.log('hi');" '2 + 2;' | ./build/GocciaScriptLoader --output=json)"
           printf '%s\n' "$json_output" | grep -q '"ok":true'
           printf '%s\n' "$json_output" | grep -q '"value":4'
           printf '%s\n' "$json_output" | grep -Eq '"output":"hi(\\r)?\\n"'
 
-          json_output_bytecode="$(printf '%s\n' "console.log('hi');" '2 + 2;' | ./build/ScriptLoader - --mode=bytecode --output=json)"
+          json_output_bytecode="$(printf '%s\n' "console.log('hi');" '2 + 2;' | ./build/GocciaScriptLoader - --mode=bytecode --output=json)"
           printf '%s\n' "$json_output_bytecode" | grep -q '"ok":true'
           printf '%s\n' "$json_output_bytecode" | grep -q '"value":4'
           printf '%s\n' "$json_output_bytecode" | grep -Eq '"output":"hi(\\r)?\\n"'
 
-          globals_output="$(printf '%s\n' 'x + y;' | ./build/ScriptLoader --global x=10 --global y=20 --output=json)"
+          globals_output="$(printf '%s\n' 'x + y;' | ./build/GocciaScriptLoader --global x=10 --global y=20 --output=json)"
           printf '%s\n' "$globals_output" | grep -q '"ok":true'
           printf '%s\n' "$globals_output" | grep -q '"value":30'
 
           printf '%s\n' '{"name":"goccia"}' > cli-globals.json
-          globals_file_output="$(printf '%s\n' 'name;' | ./build/ScriptLoader --globals=cli-globals.json --mode=bytecode --output=json)"
+          globals_file_output="$(printf '%s\n' 'name;' | ./build/GocciaScriptLoader --globals=cli-globals.json --mode=bytecode --output=json)"
           printf '%s\n' "$globals_file_output" | grep -q '"ok":true'
           printf '%s\n' "$globals_file_output" | grep -q '"value":"goccia"'
 
           printf '%s\n' '{"name":"file-value"}' > cli-globals.json
-          globals_override_output="$(printf '%s\n' 'name;' | ./build/ScriptLoader --globals=cli-globals.json --global name=override --output=json)"
+          globals_override_output="$(printf '%s\n' 'name;' | ./build/GocciaScriptLoader --globals=cli-globals.json --global name=override --output=json)"
           printf '%s\n' "$globals_override_output" | grep -q '"ok":true'
           printf '%s\n' "$globals_override_output" | grep -q '"value":"override"'
 
-          plain_string_output="$(printf '%s\n' 'name;' | ./build/ScriptLoader --global name=plain-value --output=json)"
+          plain_string_output="$(printf '%s\n' 'name;' | ./build/GocciaScriptLoader --global name=plain-value --output=json)"
           printf '%s\n' "$plain_string_output" | grep -q '"ok":true'
           printf '%s\n' "$plain_string_output" | grep -q '"value":"plain-value"'
 
           printf '%s\n' 'export const name = "module-value";' > cli-globals-module.js
-          globals_module_output="$(printf '%s\n' 'name;' | ./build/ScriptLoader --globals=./cli-globals-module.js --output=json)"
+          globals_module_output="$(printf '%s\n' 'name;' | ./build/GocciaScriptLoader --globals=./cli-globals-module.js --output=json)"
           printf '%s\n' "$globals_module_output" | grep -q '"ok":true'
           printf '%s\n' "$globals_module_output" | grep -q '"value":"module-value"'
 
@@ -305,7 +282,7 @@ jobs:
           script = 'const iterable = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 1 }) }) }; for (const x of iterable) { }' + '\n'
           try:
               result = subprocess.run(
-                  ['./build/ScriptLoader', '--timeout=50', '--output=json'],
+                  ['./build/GocciaScriptLoader', '--timeout=50', '--output=json'],
                   input=script,
                   text=True,
                   capture_output=True,
@@ -335,7 +312,7 @@ jobs:
           script = 'const iterable = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 1 }) }) }; for (const x of iterable) { }' + '\n'
           try:
               result = subprocess.run(
-                  ['./build/ScriptLoader', '-', '--mode=bytecode', '--timeout=50', '--output=json'],
+                  ['./build/GocciaScriptLoader', '-', '--mode=bytecode', '--timeout=50', '--output=json'],
                   input=script,
                   text=True,
                   capture_output=True,
@@ -358,7 +335,7 @@ jobs:
           printf '%s\n' "$timeout_output_bytecode" | grep -q '"message":"Execution timed out after 50ms"'
 
           set +e
-          globals_collision_output="$(printf '%s\n' 'console;' | ./build/ScriptLoader --global console=1 --output=json)"
+          globals_collision_output="$(printf '%s\n' 'console;' | ./build/GocciaScriptLoader --global console=1 --output=json)"
           globals_collision_status=$?
           set -e
           test "$globals_collision_status" -eq 1
@@ -366,7 +343,7 @@ jobs:
           printf '%s\n' "$globals_collision_output" | grep -q 'Cannot override built-in global'
 
           set +e
-          error_output="$(printf '%s\n' "throw new TypeError('boom');" | ./build/ScriptLoader --output=json)"
+          error_output="$(printf '%s\n' "throw new TypeError('boom');" | ./build/GocciaScriptLoader --output=json)"
           error_status=$?
           set -e
           test "$error_status" -eq 1
@@ -374,40 +351,40 @@ jobs:
           printf '%s\n' "$error_output" | grep -q '"type":"TypeError"'
           printf '%s\n' "$error_output" | grep -q '"message":"boom"'
 
-      - name: Check ScriptLoader coverage CLI
+      - name: Check GocciaScriptLoader coverage CLI
         run: |
           # --coverage prints summary
-          cov_output="$(printf 'const x = 5;\nx;\n' | ./build/ScriptLoader --coverage 2>&1)"
+          cov_output="$(printf 'const x = 5;\nx;\n' | ./build/GocciaScriptLoader --coverage 2>&1)"
           printf '%s\n' "$cov_output" | grep -q 'Coverage Summary:'
 
           # --coverage with --output=json does NOT corrupt JSON stdout
-          json_cov_output="$(printf 'const x = 5;\nx;\n' | ./build/ScriptLoader --output=json --coverage 2>&1)"
+          json_cov_output="$(printf 'const x = 5;\nx;\n' | ./build/GocciaScriptLoader --output=json --coverage 2>&1)"
           printf '%s\n' "$json_cov_output" | head -1 | grep -q '^{'
 
           # lcov file output
-          printf 'const x = 5;\nx;\n' | ./build/ScriptLoader --coverage --coverage-format=lcov --coverage-output=sl-cov.lcov
+          printf 'const x = 5;\nx;\n' | ./build/GocciaScriptLoader --coverage --coverage-format=lcov --coverage-output=sl-cov.lcov
           grep -q '^SF:' sl-cov.lcov
           grep -q '^DA:' sl-cov.lcov
           rm sl-cov.lcov
 
           # json file output
-          printf 'const x = 5;\nx;\n' | ./build/ScriptLoader --coverage --coverage-format=json --coverage-output=sl-cov.json
+          printf 'const x = 5;\nx;\n' | ./build/GocciaScriptLoader --coverage --coverage-format=json --coverage-output=sl-cov.json
           grep -q '"path":' sl-cov.json
           rm sl-cov.json
 
           # order-independent flags
-          printf 'const x = 5;\nx;\n' | ./build/ScriptLoader --coverage-output=sl-cov2.lcov --coverage-format=lcov
+          printf 'const x = 5;\nx;\n' | ./build/GocciaScriptLoader --coverage-output=sl-cov2.lcov --coverage-format=lcov
           grep -q '^DA:' sl-cov2.lcov
           rm sl-cov2.lcov
 
           # bytecode mode coverage
-          bytecode_cov="$(printf 'const x = 5;\nx;\n' | ./build/ScriptLoader --mode=bytecode --coverage 2>&1)"
+          bytecode_cov="$(printf 'const x = 5;\nx;\n' | ./build/GocciaScriptLoader --mode=bytecode --coverage 2>&1)"
           printf '%s\n' "$bytecode_cov" | grep -q 'Coverage Summary:'
 
-      - name: Check ScriptLoader error display
+      - name: Check GocciaScriptLoader error display
         run: |
           set +e
-          error_output="$(printf 'const x = 1\nconst y = 2;\n' | ./build/ScriptLoader 2>&1)"
+          error_output="$(printf 'const x = 1\nconst y = 2;\n' | ./build/GocciaScriptLoader 2>&1)"
           error_status=$?
           set -e
           test "$error_status" -eq 1
@@ -416,7 +393,7 @@ jobs:
           printf '%s\n' "$error_output" | grep -qi 'suggestion'
 
           set +e
-          error_output="$(printf 'const s = "hello;\n' | ./build/ScriptLoader 2>&1)"
+          error_output="$(printf 'const s = "hello;\n' | ./build/GocciaScriptLoader 2>&1)"
           error_status=$?
           set -e
           test "$error_status" -eq 1
@@ -424,7 +401,7 @@ jobs:
           printf '%s\n' "$error_output" | grep -q '\^'
 
           set +e
-          json_error="$(printf 'const x = ;\n' | ./build/ScriptLoader --output=json)"
+          json_error="$(printf 'const x = ;\n' | ./build/GocciaScriptLoader --output=json)"
           json_status=$?
           set -e
           test "$json_status" -eq 1
@@ -434,7 +411,7 @@ jobs:
           printf '%s\n' "$json_error" | grep -q '"column":'
 
           set +e
-          error_output_bc="$(printf 'const x = 1\n' | ./build/ScriptLoader - --mode=bytecode 2>&1)"
+          error_output_bc="$(printf 'const x = 1\n' | ./build/GocciaScriptLoader - --mode=bytecode 2>&1)"
           error_status_bc=$?
           set -e
           test "$error_status_bc" -eq 1
@@ -443,45 +420,45 @@ jobs:
       - name: Check numeric separator rejection
         run: |
           # Trailing separator
-          set +e; out="$(printf '1_000_;\n' | ./build/ScriptLoader 2>&1)"; st=$?; set -e
+          set +e; out="$(printf '1_000_;\n' | ./build/GocciaScriptLoader 2>&1)"; st=$?; set -e
           test "$st" -eq 1
           printf '%s\n' "$out" | grep -q 'Numeric separator must be between digits'
 
           # Leading separator after hex prefix
-          set +e; out="$(printf '0x_FF;\n' | ./build/ScriptLoader 2>&1)"; st=$?; set -e
+          set +e; out="$(printf '0x_FF;\n' | ./build/GocciaScriptLoader 2>&1)"; st=$?; set -e
           test "$st" -eq 1
 
           # Leading separator after binary prefix
-          set +e; out="$(printf '0b_10;\n' | ./build/ScriptLoader 2>&1)"; st=$?; set -e
+          set +e; out="$(printf '0b_10;\n' | ./build/GocciaScriptLoader 2>&1)"; st=$?; set -e
           test "$st" -eq 1
 
           # Leading separator after octal prefix
-          set +e; out="$(printf '0o_77;\n' | ./build/ScriptLoader 2>&1)"; st=$?; set -e
+          set +e; out="$(printf '0o_77;\n' | ./build/GocciaScriptLoader 2>&1)"; st=$?; set -e
           test "$st" -eq 1
 
           # Consecutive separators
-          set +e; out="$(printf '1__000;\n' | ./build/ScriptLoader 2>&1)"; st=$?; set -e
+          set +e; out="$(printf '1__000;\n' | ./build/GocciaScriptLoader 2>&1)"; st=$?; set -e
           test "$st" -eq 1
           printf '%s\n' "$out" | grep -q 'Numeric separator must be between digits'
 
           # Separator after leading 0
-          set +e; out="$(printf '0_1;\n' | ./build/ScriptLoader 2>&1)"; st=$?; set -e
+          set +e; out="$(printf '0_1;\n' | ./build/GocciaScriptLoader 2>&1)"; st=$?; set -e
           test "$st" -eq 1
           printf '%s\n' "$out" | grep -q 'Numeric separator cannot be used after leading 0'
 
           # Separator before decimal point
-          set +e; out="$(printf '1_.5;\n' | ./build/ScriptLoader 2>&1)"; st=$?; set -e
+          set +e; out="$(printf '1_.5;\n' | ./build/GocciaScriptLoader 2>&1)"; st=$?; set -e
           test "$st" -eq 1
 
           # Separator after decimal point
-          set +e; out="$(printf '1._5;\n' | ./build/ScriptLoader 2>&1)"; st=$?; set -e
+          set +e; out="$(printf '1._5;\n' | ./build/GocciaScriptLoader 2>&1)"; st=$?; set -e
           test "$st" -eq 1
 
           # Separator after exponent indicator
-          set +e; out="$(printf '1e_10;\n' | ./build/ScriptLoader 2>&1)"; st=$?; set -e
+          set +e; out="$(printf '1e_10;\n' | ./build/GocciaScriptLoader 2>&1)"; st=$?; set -e
           test "$st" -eq 1
 
-      - name: Check ScriptLoader source map CLI
+      - name: Check GocciaScriptLoader source map CLI
         run: |
           check_map_json() {
             python3 - "$1" <<'PY'
@@ -502,36 +479,38 @@ jobs:
           JSXEOF
 
           # --source-map writes .map file (bytecode mode)
-          ./build/ScriptLoader /tmp/sm-test.jsx --source-map --mode=bytecode
+          ./build/GocciaScriptLoader /tmp/sm-test.jsx --source-map --mode=bytecode
           test -f /tmp/sm-test.jsx.map
           check_map_json /tmp/sm-test.jsx.map
           rm /tmp/sm-test.jsx.map
 
           # --source-map=<path> writes to custom path
-          ./build/ScriptLoader /tmp/sm-test.jsx --source-map=/tmp/custom.map --mode=bytecode
+          ./build/GocciaScriptLoader /tmp/sm-test.jsx --source-map=/tmp/custom.map --mode=bytecode
           test -f /tmp/custom.map
           check_map_json /tmp/custom.map
           rm /tmp/custom.map
 
           # --source-map in interpreted mode
-          ./build/ScriptLoader /tmp/sm-test.jsx --source-map
+          ./build/GocciaScriptLoader /tmp/sm-test.jsx --source-map
           test -f /tmp/sm-test.jsx.map
           check_map_json /tmp/sm-test.jsx.map
           rm /tmp/sm-test.jsx.map
 
           # No .map file without --source-map
-          ./build/ScriptLoader /tmp/sm-test.jsx --mode=bytecode
+          ./build/GocciaScriptLoader /tmp/sm-test.jsx --mode=bytecode
           test ! -f /tmp/sm-test.jsx.map
 
           # --source-map without explicit path rejects stdin
           set +e
-          out="$(printf 'const x = 1;\n' | ./build/ScriptLoader --source-map 2>&1)"
+          out="$(printf 'const x = 1;\n' | ./build/GocciaScriptLoader --source-map 2>&1)"
           st=$?
           set -e
           test "$st" -eq 1
           printf '%s\n' "$out" | grep -q 'required when reading source from stdin'
 
           rm /tmp/sm-test.jsx
+
+      # ── GocciaBundler CLI ──
 
       - name: Check GocciaBundler CLI behaviour
         run: |
@@ -543,7 +522,7 @@ jobs:
           printf '%s\n' "$bundler_output" | grep -q 'Compiled to /tmp/bundler-test.gbc'
 
           # Roundtrip: GocciaBundler emits, ScriptLoader runs
-          roundtrip_output="$(./build/ScriptLoader /tmp/bundler-test.gbc 2>&1)"
+          roundtrip_output="$(./build/GocciaScriptLoader /tmp/bundler-test.gbc 2>&1)"
           printf '%s\n' "$roundtrip_output" | grep -q 'Result: 4'
           rm /tmp/bundler-test.gbc
 
@@ -555,7 +534,7 @@ jobs:
           # Stdin compilation (--output required)
           printf 'const y = 10;\ny;\n' | ./build/GocciaBundler --output=/tmp/stdin-out.gbc
           test -f /tmp/stdin-out.gbc
-          stdin_roundtrip="$(./build/ScriptLoader /tmp/stdin-out.gbc 2>&1)"
+          stdin_roundtrip="$(./build/GocciaScriptLoader /tmp/stdin-out.gbc 2>&1)"
           printf '%s\n' "$stdin_roundtrip" | grep -q 'Result: 10'
           rm /tmp/stdin-out.gbc
 
@@ -662,6 +641,33 @@ jobs:
           rm /tmp/sm-stdin.gbc /tmp/sm-stdin.gbc.map /tmp/bundler-stdin-sm.jsx
 
           rm /tmp/bundler-sm.jsx
+
+      # ── GocciaBenchmarkRunner CLI ──
+
+      - name: Check GocciaBenchmarkRunner CLI behaviour
+        env:
+          GOCCIA_BENCH_CALIBRATION_MS: 100
+          GOCCIA_BENCH_ROUNDS: 7
+        run: |
+          ./build/GocciaBenchmarkRunner benchmarks/fibonacci.js --no-progress --format=json --output=benchmark-file.json
+          grep -q '"file": "benchmarks/fibonacci.js"' benchmark-file.json
+          grep -q '"totalBenchmarks":' benchmark-file.json
+
+          printf 'suite("stdin", () => {\n  bench("sum", {\n    run: () => 1 + 1,\n  });\n});\n' | \
+            ./build/GocciaBenchmarkRunner --no-progress --format=json --output=benchmark-stdin.json
+          grep -q '"files": \[' benchmark-stdin.json
+          grep -q '"name": "sum"' benchmark-stdin.json
+          grep -q '"totalBenchmarks": 1' benchmark-stdin.json
+
+          ./build/GocciaBenchmarkRunner benchmarks/fibonacci.js --mode=bytecode --no-progress --format=json --output=benchmark-file-bytecode.json
+          grep -q '"file": "benchmarks/fibonacci.js"' benchmark-file-bytecode.json
+          grep -q '"totalBenchmarks":' benchmark-file-bytecode.json
+
+          printf 'suite("stdin", () => {\n  bench("sum", {\n    run: () => 1 + 1,\n  });\n});\n' | \
+            ./build/GocciaBenchmarkRunner - --mode=bytecode --no-progress --format=json --output=benchmark-stdin-bytecode.json
+          grep -q '"files": \[' benchmark-stdin-bytecode.json
+          grep -q '"name": "sum"' benchmark-stdin-bytecode.json
+          grep -q '"totalBenchmarks": 1' benchmark-stdin-bytecode.json
 
   benchmark-comment:
     needs: benchmark

@@ -5,9 +5,9 @@ Clones (or reuses) the test262 repository, parses YAML frontmatter from
 each test, filters out tests requiring syntax or features that GocciaScript
 intentionally excludes, wraps eligible tests with the GocciaScript-compatible
 harness using Goccia TestAssertions (describe/test/expect), generates temp
-files, and executes them in batch via ``TestRunner``.
+files, and executes them in batch via ``GocciaTestRunner``.
 
-Negative parse-phase tests are run individually via ``ScriptLoader`` since
+Negative parse-phase tests are run individually via ``GocciaScriptLoader`` since
 they expect parsing to fail before any test harness code can execute.
 
 Results are reported as JSON (console + optional file).
@@ -92,7 +92,7 @@ def ensure_suite_checkout(
 
 
 def ensure_binary(name: str, binary_path: Path | None, build_target: str) -> Path:
-    """Locate or build a GocciaScript binary (TestRunner or ScriptLoader)."""
+    """Locate or build a GocciaScript binary (GocciaTestRunner or GocciaScriptLoader)."""
     if binary_path is not None:
         resolved = binary_path.resolve()
         if not resolved.is_file():
@@ -274,7 +274,7 @@ def run_negative_parse_test(
     asi: bool = False,
     mode: str = "interpreted",
 ) -> tuple[bool, str, float]:
-    """Run a negative parse-phase test via ScriptLoader stdin."""
+    """Run a negative parse-phase test via GocciaScriptLoader stdin."""
     start = time.monotonic()
     cmd = [str(script_loader)]
     if asi:
@@ -416,7 +416,7 @@ def evaluate_suite(
     batch_tests = positive_tests + negative_runtime_tests
     if batch_tests:
         print(
-            f"Generating {len(batch_tests)} wrapped test files for TestRunner ..."
+            f"Generating {len(batch_tests)} wrapped test files for GocciaTestRunner ..."
         )
 
         with tempfile.TemporaryDirectory(prefix="test262-goccia.") as tmp:
@@ -449,7 +449,7 @@ def evaluate_suite(
                 out_path.write_text(wrapped, encoding="utf-8")
                 file_to_test_id[safe_name] = test_id
 
-            print(f"Running TestRunner on {len(batch_tests)} tests ...")
+            print(f"Running GocciaTestRunner on {len(batch_tests)} tests ...")
             json_output = temp_dir / "__results.json"
 
             runner_cmd = [
@@ -478,7 +478,7 @@ def evaluate_suite(
                     process.stderr.decode("utf-8", errors="replace")
                 ).strip()
             except subprocess.TimeoutExpired:
-                runner_output = "TestRunner global timeout"
+                runner_output = "GocciaTestRunner global timeout"
                 process = None
 
             if json_output.is_file():
@@ -488,7 +488,7 @@ def evaluate_suite(
                 try:
                     tr_results = json.loads(clean_json)
                 except json.JSONDecodeError as e:
-                    print(f"Warning: Failed to parse TestRunner JSON: {e}")
+                    print(f"Warning: Failed to parse GocciaTestRunner JSON: {e}")
                     summary["errors"] += len(batch_tests)
                     for _, _, tid in batch_tests:
                         results.append(
@@ -538,14 +538,14 @@ def evaluate_suite(
                         results.append({"id": test_id, "status": status, "message": msg})
 
                     print(
-                        f"  TestRunner: {tr_passed} passed, "
+                        f"  GocciaTestRunner: {tr_passed} passed, "
                         f"{tr_failed} failed, {tr_skipped} skipped"
                     )
                     if verbose:
                         for tid in sorted(failed_set)[:50]:
                             print(f"    F {tid}")
             else:
-                print("Warning: TestRunner produced no JSON output")
+                print("Warning: GocciaTestRunner produced no JSON output")
                 if runner_output:
                     for line in runner_output.split("\n")[:10]:
                         print(f"  {line}")
@@ -563,7 +563,7 @@ def evaluate_suite(
     if negative_parse_tests:
         print(
             f"Running {len(negative_parse_tests)} negative parse tests "
-            f"via ScriptLoader ..."
+            f"via GocciaScriptLoader ..."
         )
         for test_path, metadata, test_id in negative_parse_tests:
             source = test_path.read_text(encoding="utf-8")
@@ -629,12 +629,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--test-runner",
         type=Path,
-        help="Prebuilt TestRunner binary.",
+        help="Prebuilt GocciaTestRunner binary.",
     )
     parser.add_argument(
         "--script-loader",
         type=Path,
-        help="Prebuilt ScriptLoader binary.",
+        help="Prebuilt GocciaScriptLoader binary.",
     )
     parser.add_argument(
         "--output",
@@ -702,15 +702,15 @@ def main() -> int:
         args.asi = False
 
     suite_dir, temp_checkout = ensure_suite_checkout(args.suite_dir)
-    test_runner = ensure_binary("TestRunner", args.test_runner, "testrunner")
-    script_loader = ensure_binary("ScriptLoader", args.script_loader, "loader")
+    test_runner = ensure_binary("GocciaTestRunner", args.test_runner, "testrunner")
+    script_loader = ensure_binary("GocciaScriptLoader", args.script_loader, "loader")
     harness_files = load_harness_files()
     categories = tuple(
         c.strip() for c in args.categories.split(",") if c.strip()
     )
 
-    print(f"TestRunner:    {test_runner}")
-    print(f"ScriptLoader:  {script_loader}")
+    print(f"GocciaTestRunner:    {test_runner}")
+    print(f"GocciaScriptLoader:  {script_loader}")
     print(f"Suite:         {suite_dir}")
     print(f"Categories:    {', '.join(categories)}")
     print(f"Timeout:       {args.timeout}s per test")

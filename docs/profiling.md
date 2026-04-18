@@ -11,7 +11,7 @@
 
 ## Overview
 
-The `--profile` flag on ScriptLoader enables language-level profiling of the bytecode VM. It operates inside the dispatch loop, providing data that external profilers (like `sample` or `callgrind`) cannot see — which opcodes execute, which JS functions are hot, and where the VM allocates.
+The `--profile` flag on GocciaScriptLoader enables language-level profiling of the bytecode VM. It operates inside the dispatch loop, providing data that external profilers (like `sample` or `callgrind`) cannot see — which opcodes execute, which JS functions are hot, and where the VM allocates.
 
 Profiling implies `--mode=bytecode` automatically. Near-zero overhead when disabled (boolean guard on the dispatch loop, same pattern as `--coverage`). The guard branches are consistently not-taken and well-predicted, but they are present in the compiled binary.
 
@@ -19,19 +19,19 @@ Profiling implies `--mode=bytecode` automatically. Near-zero overhead when disab
 
 ```bash
 # Opcode profiling: histogram, pair frequency, scalar hit rate
-./build/ScriptLoader script.js --profile=opcodes
+./build/GocciaScriptLoader script.js --profile=opcodes
 
 # Function profiling: self-time, total-time, call count, allocations
-./build/ScriptLoader script.js --profile=functions
+./build/GocciaScriptLoader script.js --profile=functions
 
 # Both
-./build/ScriptLoader script.js --profile=all
+./build/GocciaScriptLoader script.js --profile=all
 
 # JSON export (includes all sections regardless of console mode)
-./build/ScriptLoader script.js --profile=all --profile-output=profile.json
+./build/GocciaScriptLoader script.js --profile=all --profile-output=profile.json
 
 # Stdin works too
-echo 'const x = 1 + 2; x;' | ./build/ScriptLoader --profile=all
+echo 'const x = 1 + 2; x;' | ./build/GocciaScriptLoader --profile=all
 ```
 
 ## Report Sections
@@ -122,7 +122,7 @@ Function Profile:
 `--profile-format=flamegraph --profile-output=flamegraph.txt` writes collapsed stack traces, viewable in [speedscope](https://speedscope.app) (drag and drop) or renderable to SVG via [FlameGraph](https://github.com/brendangregg/FlameGraph):
 
 ```bash
-./build/ScriptLoader script.js --profile=functions --profile-format=flamegraph --profile-output=flamegraph.txt
+./build/GocciaScriptLoader script.js --profile=functions --profile-format=flamegraph --profile-output=flamegraph.txt
 
 # View in browser
 open https://speedscope.app  # drag flamegraph.txt into the page
@@ -152,10 +152,10 @@ Run both on the same production binary for the full picture:
 ./build.pas --prod loader
 
 # Profiler run
-./build/ScriptLoader script.js --profile=all
+./build/GocciaScriptLoader script.js --profile=all
 
 # sample run (no --profile, to avoid measuring profiling overhead)
-./build/ScriptLoader script.js --mode=bytecode &
+./build/GocciaScriptLoader script.js --mode=bytecode &
 PID=$!
 sleep 0.2
 sample "$PID" 10 1 -file sample-output.txt -mayDie

@@ -1,6 +1,6 @@
 program GocciaJSON5Check;
 
-{$I units/Goccia.inc}
+{$I Goccia.inc}
 
 uses
   Classes,

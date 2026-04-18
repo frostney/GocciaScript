@@ -16,7 +16,7 @@ DEFAULT_TIMEOUT_SECONDS = 5
 
 HARNESS_SOURCE = """program GocciaYAMLCheck;
 
-{$I REPO_ROOT/units/Goccia.inc}
+{$I REPO_ROOT/source/units/Goccia.inc}
 
 uses
   SysUtils,
@@ -106,8 +106,8 @@ def compile_harness(repo_root: Path, build_dir: Path) -> Path:
     [
       "fpc",
       "@config.cfg",
-      "-Fuunits",
-      "-Fu.",
+      "-Fusource/units",
+      "-Fusource/shared",
       f"-FU{build_dir}",
       f"-FE{build_dir}",
       str(harness_path),

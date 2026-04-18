@@ -7,18 +7,18 @@
 - **Three testing layers** — JavaScript end-to-end tests (primary), CLI behavior tests (secondary), Pascal unit tests (tertiary)
 - **Built-in test framework** — `describe`/`test`/`expect` with async support, mock functions, lifecycle hooks, and Vitest-compatible matchers
 - **One method per file** — Each test file focuses on a single method; edge cases are co-located with happy-path tests
-- **Run with**: `./build.pas testrunner && ./build/TestRunner tests --asi`
+- **Run with**: `./build.pas testrunner && ./build/GocciaTestRunner tests --asi`
 
 GocciaScript uses three testing layers in priority order:
 
 1. **JavaScript end-to-end tests (primary)** -- `.js` tests in `tests/` that exercise the full pipeline through the same public surface that users call. CI runs the full suite in both **interpreted** and **bytecode** mode. Every new feature or bug fix should include tests at this layer.
-2. **CLI behavior tests (CI integration)** -- Shell-level checks in `.github/workflows/pr.yml` that verify `ScriptLoader`, `TestRunner`, and `BenchmarkRunner` CLI behavior: JSON output structure, coverage CLI (console summary, lcov, JSON, branch coverage), error display (source context, caret, suggestions), numeric separator rejection, source map generation, stdin smoke tests, timeout handling, global injection, and benchmark output format.
+2. **CLI behavior tests (CI integration)** -- Shell-level checks in `.github/workflows/pr.yml` that verify `GocciaScriptLoader`, `GocciaTestRunner`, and `GocciaBenchmarkRunner` CLI behavior: JSON output structure, coverage CLI (console summary, lcov, JSON, branch coverage), error display (source context, caret, suggestions), numeric separator rejection, source map generation, stdin smoke tests, timeout handling, global injection, and benchmark output format.
 3. **Pascal unit tests (tertiary)** -- Native `*.Test.pas` coverage for low-level runtime and value system internals that are not reachable through a stable public API.
 
 When choosing where to add coverage, prefer the most public entry point available:
 
 - JavaScript feature behavior: add or extend tests under `tests/`
-- CLI behavior (`ScriptLoader`, `TestRunner`, `BenchmarkRunner`): add command-level smoke tests in `pr.yml` that assert on visible output
+- CLI behavior (`GocciaScriptLoader`, `GocciaTestRunner`, `GocciaBenchmarkRunner`): add command-level smoke tests in `pr.yml` that assert on visible output
 - Pascal unit tests: add native `*.Test.pas` coverage only when the behavior is genuinely internal or not reachable through a documented user-facing entry point
 
 Avoid tests that lock onto private helper functions or transient implementation structure when the same behavior can be validated through a documented user-facing command or script entry point. Where native Pascal tests are still appropriate, keep them as stateless and repeatable as possible so they behave like pure input/output checks rather than process-sensitive probes.
@@ -220,7 +220,7 @@ features: [addition, arithmetic]
 
 ## Running Tests
 
-### Build the TestRunner
+### Build the GocciaTestRunner
 
 ```bash
 ./build.pas testrunner
@@ -230,10 +230,10 @@ features: [addition, arithmetic]
 
 ```bash
 # Interpreted mode (default) — include --asi for ASI test coverage
-./build/TestRunner tests --asi
+./build/GocciaTestRunner tests --asi
 
 # Bytecode mode
-./build/TestRunner tests --mode=bytecode --asi
+./build/GocciaTestRunner tests --mode=bytecode --asi
 ```
 
 Both modes must pass. The `--asi` flag enables automatic semicolon insertion tests under `tests/language/asi/`. CI runs the full suite with `--asi` in both interpreted and bytecode mode as separate matrix jobs.
@@ -241,16 +241,16 @@ Both modes must pass. The `--asi` flag enables automatic semicolon insertion tes
 ### Run a Specific Test File
 
 ```bash
-./build/TestRunner tests/language/expressions/addition/basic-addition.js
+./build/GocciaTestRunner tests/language/expressions/addition/basic-addition.js
 ```
 
 ### Run a Test Category
 
 ```bash
-./build/TestRunner tests/built-ins/Math/
+./build/GocciaTestRunner tests/built-ins/Math/
 ```
 
-### TestRunner Options
+### GocciaTestRunner Options
 
 | Flag | Description |
 |------|-------------|
@@ -262,13 +262,13 @@ Both modes must pass. The `--asi` flag enables automatic semicolon insertion tes
 
 ```bash
 # CI-friendly: no progress, stop on first failure
-./build/TestRunner tests --no-progress --exit-on-first-failure
+./build/GocciaTestRunner tests --no-progress --exit-on-first-failure
 
 # Silent mode: only show results, suppress script console output
-./build/TestRunner tests --silent
+./build/GocciaTestRunner tests --silent
 
 # Run tests with 4 parallel workers; --jobs=1 forces sequential execution
-./build/TestRunner tests --jobs=4
+./build/GocciaTestRunner tests --jobs=4
 ```
 
 **Official YAML Suite**
@@ -298,7 +298,7 @@ Unlike the YAML script, this harness compares both parse/fail behavior and the o
 
 The TOML runner exits non-zero when any case fails or times out, so it is safe to use directly in CI. When `--harness` is omitted it compiles `scripts/GocciaTOMLCheck.dpr` automatically; CI uses a prebuilt harness from the matrix build artifacts instead.
 
-The harness and any file-backed parser regression must read source text as UTF-8 bytes first and only then hand it to the parser. In this codebase, `{$mode delphi}` + `{H+}` means plain `string` is an `AnsiString` alias with the default/system code page, while `UTF8String` is the explicit `AnsiString(CP_UTF8)` variant. That means a plain `string` temporary is not a “Unicode string that happens to contain UTF-8”; it is a separate ansistring type that may retag or transcode the bytes. On Windows this commonly shows up as mojibake such as `José -> JosÃ©` or Unicode TOML keys no longer matching. Keep raw file-backed TOML text as `UTF8String` until `TGocciaTOMLParser.Parse(...)` / `ParseDocument(...)` receives it.
+The harness and any file-backed parser regression must read source text as UTF-8 bytes first and only then hand it to the parser. In this codebase, `{$mode delphi}` + `{$H+}` means plain `string` is an `AnsiString` alias with the default/system code page, while `UTF8String` is the explicit `AnsiString(CP_UTF8)` variant. That means a plain `string` temporary is not a “Unicode string that happens to contain UTF-8”; it is a separate ansistring type that may retag or transcode the bytes. On Windows this commonly shows up as mojibake such as `José -> JosÃ©` or Unicode TOML keys no longer matching. Keep raw file-backed TOML text as `UTF8String` until `TGocciaTOMLParser.Parse(...)` / `ParseDocument(...)` receives it.
 
 **Official JSON5 Suite**
 
@@ -328,7 +328,7 @@ See [Test Framework API](testing-api.md) for the complete test authoring referen
 
 1. **JavaScript tests are the source of truth** — The JavaScript test suite is the primary mechanism for verifying correctness and ECMAScript compatibility. If a behavior isn't covered by a JavaScript test, it isn't guaranteed.
 
-2. **Isolation** — Each test file is independent. No shared state between files. The TestRunner executes each file in a fresh engine instance.
+2. **Isolation** — Each test file is independent. No shared state between files. The GocciaTestRunner executes each file in a fresh engine instance.
 
 3. **Grouped by feature** — Tests are organized by the feature they validate, mirroring the structure of the language specification. Prototype methods live in `prototype/` subfolders; static methods live in the built-in's root folder.
 
@@ -373,9 +373,9 @@ CLI behavior tests in `pr.yml` form the second layer, verifying that the command
 
 Pascal unit tests (`*.Test.pas`) exist as a tertiary layer for behavior that cannot be reached through script code or other documented user-facing entry points. Even there, prefer stateless, repeatable input/output checks over tests that are tightly coupled to incidental implementation structure.
 
-## How the TestRunner Works
+## How the GocciaTestRunner Works
 
-The `TestRunner` program:
+The `GocciaTestRunner` program:
 
 1. Scans the provided path for `.js`, `.jsx`, `.ts`, `.tsx`, and `.mjs` files.
 2. For each file, creates a fresh `TGocciaEngine` with `[ggTestAssertions, ggFFI]`.
@@ -394,17 +394,17 @@ The PR workflow (`.github/workflows/pr.yml`) includes shell-level smoke tests th
 
 | Area | What is checked |
 |------|----------------|
-| TestRunner JSON output | `--output` produces valid JSON with `mode`, `totalFiles` fields |
-| TestRunner coverage | `--coverage` prints summary; `--coverage-format=lcov` and `--coverage-format=json` write valid output files; branch coverage includes `BRDA`/`BRF` entries |
-| ScriptLoader JSON output | `--output=json` envelope includes `ok`, `value`, `output` fields |
-| ScriptLoader error display | Syntax errors show source context, caret, and suggestions |
-| ScriptLoader coverage | `--coverage` summary, lcov/json file output, bytecode mode coverage |
-| ScriptLoader source maps | `--source-map` writes valid source map JSON; rejects stdin without explicit path |
+| GocciaTestRunner JSON output | `--output` produces valid JSON with `mode`, `totalFiles` fields |
+| GocciaTestRunner coverage | `--coverage` prints summary; `--coverage-format=lcov` and `--coverage-format=json` write valid output files; branch coverage includes `BRDA`/`BRF` entries |
+| GocciaScriptLoader JSON output | `--output=json` envelope includes `ok`, `value`, `output` fields |
+| GocciaScriptLoader error display | Syntax errors show source context, caret, and suggestions |
+| GocciaScriptLoader coverage | `--coverage` summary, lcov/json file output, bytecode mode coverage |
+| GocciaScriptLoader source maps | `--source-map` writes valid source map JSON; rejects stdin without explicit path |
 | Numeric separator rejection | Trailing, leading, consecutive separators and invalid positions produce errors |
 | Timeout handling | `--timeout` produces `TimeoutError` in JSON output |
 | Global injection | `--global`, `--globals` file/module injection, collision detection |
 | Stdin smoke tests | Piped input executes correctly in both interpreted and bytecode modes |
-| BenchmarkRunner output | `--format=json` produces valid JSON with benchmark structure |
+| GocciaBenchmarkRunner output | `--format=json` produces valid JSON with benchmark structure |
 
 This table is non-exhaustive — the [pr.yml workflow](../.github/workflows/pr.yml) is the source of truth. The intent is to check all CLI flags, all parser error display paths, and all output format correctness. To add a new CLI behavior check, add a step to the appropriate job in `pr.yml`.
 
@@ -417,7 +417,7 @@ Pascal unit tests are the tertiary testing layer for low-level internals that ar
 | `Goccia.Values.Primitives.Test.pas` | Primitive value creation, type conversion (`ToStringLiteral`, `ToBooleanLiteral`, `ToNumberLiteral`, `TypeName`, `TypeOf`) |
 | `Goccia.Values.FunctionValue.Test.pas` | Function/method creation, closure capture, parameter handling, scope resolution, AST evaluation |
 | `Goccia.Values.ObjectValue.Test.pas` | Object property operations (`AssignProperty`, `GetProperty`, `DeleteProperty`), prototype chain resolution |
-| `Goccia.Builtins.TestAssertions.Test.pas` | All `TGocciaExpectationValue` matchers (`toBe`, `toEqual`, `toStrictEqual`, `toContainEqual`, `toMatchObject`, `toMatch`, `toBeNull`, `toBeNaN`, `toBeUndefined`, `toBeDefined`, `toBeTruthy`, `toBeFalsy`, `toBeGreaterThan`, `toBeLessThan`, `toContain`, `toHaveLength`, `toHaveProperty`, `toBeCloseTo`, `not`); skip and conditional APIs (`describe.skip`, `describe.skipIf`, `describe.runIf`, `test.skipIf`, `test.runIf`) |
+| `Goccia.Builtins.TestingLibrary.Test.pas` | All `TGocciaExpectationValue` matchers (`toBe`, `toEqual`, `toStrictEqual`, `toContainEqual`, `toMatchObject`, `toMatch`, `toBeNull`, `toBeNaN`, `toBeUndefined`, `toBeDefined`, `toBeTruthy`, `toBeFalsy`, `toBeGreaterThan`, `toBeLessThan`, `toContain`, `toHaveLength`, `toHaveProperty`, `toBeCloseTo`, `not`); skip and conditional APIs (`describe.skip`, `describe.skipIf`, `describe.runIf`, `test.skipIf`, `test.runIf`) |
 
 These compile as standalone executables and run directly:
 
@@ -426,12 +426,12 @@ These compile as standalone executables and run directly:
 ./build/Goccia.Values.Primitives.Test
 ./build/Goccia.Values.FunctionValue.Test
 ./build/Goccia.Values.ObjectValue.Test
-./build/Goccia.Builtins.TestAssertions.Test
+./build/Goccia.Builtins.TestingLibrary.Test
 ```
 
 ### Pascal Test Framework
 
-Pascal tests use `TestRunner.pas` which provides a `TTestSuite` base class and a generic `Expect<T>` fluent assertion API:
+Pascal tests use `TestingPascalLibrary.pas` which provides a `TTestSuite` base class and a generic `Expect<T>` fluent assertion API:
 
 ```pascal
 type
@@ -491,7 +491,7 @@ Math.IsNaN(Value.ToNumberLiteral.Value)
 
 #### Testing the Test Framework Itself
 
-`Goccia.Builtins.TestAssertions.Test.pas` validates the JS-level assertion matchers from Pascal. Since the matchers call `AssertionPassed`/`AssertionFailed` (which update `TGocciaTestAssertions` internal state) rather than raising Pascal exceptions, the native tests use two helpers to verify both the return value and the recorded pass/fail outcome:
+`Goccia.Builtins.TestingLibrary.Test.pas` validates the JS-level assertion matchers from Pascal. Since the matchers call `AssertionPassed`/`AssertionFailed` (which update `TGocciaTestAssertions` internal state) rather than raising Pascal exceptions, the native tests use two helpers to verify both the return value and the recorded pass/fail outcome:
 
 - `ExpectPass(result)` — Asserts the matcher returned `UndefinedValue` **and** `CurrentTestHasFailures` is `False`
 - `ExpectFail(result)` — Asserts the matcher returned `UndefinedValue` **and** `CurrentTestHasFailures` is `True`
@@ -521,11 +521,11 @@ build → test             → artifacts
 
 **`toml-compliance`** (all platforms) — Downloads the prebuilt `GocciaTOMLCheck` harness from the matrix build artifacts, resolves `python3` or `python`, runs `scripts/run_toml_test_suite.py --harness=... --output=toml-test-results-<target>.json`, checks that the JSON summary reports zero failures, and uploads the per-platform TOML conformance report as a workflow artifact.
 
-**`json5-compliance`** (all platforms) — Downloads the prebuilt `GocciaJSON5Check` harness and `TestRunner` binary from the matrix build artifacts, resolves `python3` or `python`, runs `scripts/run_json5_test_suite.py --harness=... --test-runner=... --output=json5-test-results-<target>.json`, checks that both the parser and stringify summaries report zero failures, and uploads the per-platform JSON5 conformance report as a workflow artifact.
+**`json5-compliance`** (all platforms) — Downloads the prebuilt `GocciaJSON5Check` harness and `GocciaTestRunner` binary from the matrix build artifacts, resolves `python3` or `python`, runs `scripts/run_json5_test_suite.py --harness=... --test-runner=... --output=json5-test-results-<target>.json`, checks that both the parser and stringify summaries report zero failures, and uploads the per-platform JSON5 conformance report as a workflow artifact.
 
 **`benchmark`** (needs build, all platforms) — Downloads pre-built binaries, runs all benchmarks.
 
-**`examples`** (needs build, all platforms) — Runs the example scripts and ScriptLoader CLI smoke tests.
+**`examples`** (needs build, all platforms) — Runs the example scripts and GocciaScriptLoader CLI smoke tests.
 
 **`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + examples, `main` only) — Uploads release binaries after all checks pass.
 
@@ -547,22 +547,22 @@ The benchmark comparison comment includes a **Suite Timing** section showing tes
 
 ## Coverage
 
-The TestRunner and ScriptLoader support JavaScript source-level coverage reporting via the `--coverage` flag. Coverage tracks which lines and branches of JavaScript source code are executed at runtime.
+The GocciaTestRunner and GocciaScriptLoader support JavaScript source-level coverage reporting via the `--coverage` flag. Coverage tracks which lines and branches of JavaScript source code are executed at runtime.
 
 ### Usage
 
 ```bash
 # Console summary (printed after test results)
-./build/TestRunner tests --coverage
+./build/GocciaTestRunner tests --coverage
 
 # lcov output (for Codecov, Coveralls, or genhtml)
-./build/TestRunner tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov
+./build/GocciaTestRunner tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov
 
 # JSON output (Istanbul-compatible)
-./build/TestRunner tests --coverage --coverage-format=json --coverage-output=coverage.json
+./build/GocciaTestRunner tests --coverage --coverage-format=json --coverage-output=coverage.json
 
-# ScriptLoader also supports coverage
-./build/ScriptLoader example.js --coverage
+# GocciaScriptLoader also supports coverage
+./build/GocciaScriptLoader example.js --coverage
 ```
 
 ### What is Tracked

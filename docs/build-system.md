@@ -38,7 +38,7 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 ./build.pas --prod    # Production build of all components
 ```
 
-Runs a clean (removes stale `.ppu`, `.o`, `.res` from `build/`), then builds all components in order: tests, loader, testrunner, benchmarkrunner, bundler, repl.
+Runs a clean (removes stale `.ppu`, `.o`, `.res` from `build/compiled/`), then builds all components in order: tests, loader, testrunner, benchmarkrunner, bundler, repl.
 
 ### Build Specific Components
 
@@ -60,7 +60,7 @@ Multiple components can be specified:
 ### Clean Build Artifacts
 
 ```bash
-./build.pas clean              # Remove stale .ppu, .o, .res from build/
+./build.pas clean              # Remove stale .ppu, .o, .res from build/compiled/
 ./build.pas clean loader       # Clean then build loader
 ```
 
@@ -69,9 +69,9 @@ A full build (no specific targets) automatically cleans first.
 ### Compile and Run
 
 ```bash
-./build.pas loader && ./build/ScriptLoader ./example.js
-printf "const x = 2 + 2; x;" | ./build/ScriptLoader
-printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/BenchmarkRunner
+./build.pas loader && ./build/GocciaScriptLoader ./example.js
+printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader
+printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner
 ```
 
 Leading Unix shebang lines such as `#!/usr/bin/env goccia` are treated as comments by the lexer, so executable scripts can be run directly without preprocessing.
@@ -79,7 +79,7 @@ Leading Unix shebang lines such as `#!/usr/bin/env goccia` are treated as commen
 ### Compile and Test
 
 ```bash
-./build.pas testrunner && ./build/TestRunner tests
+./build.pas testrunner && ./build/GocciaTestRunner tests
 ```
 
 ### Bytecode Mode
@@ -88,60 +88,60 @@ All execution tools support `--mode=bytecode` to compile and run via the Goccia 
 
 ```bash
 # Execute via bytecode VM
-./build/ScriptLoader example.js --mode=bytecode
-printf "const x = 2 + 2; x;" | ./build/ScriptLoader --mode=bytecode
+./build/GocciaScriptLoader example.js --mode=bytecode
+printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader --mode=bytecode
 
 # Load and execute a pre-compiled .gbc file
-./build/ScriptLoader output.gbc
+./build/GocciaScriptLoader output.gbc
 
 # Emit structured JSON for programmatic consumers
-printf "console.log('hi'); 2 + 2;" | ./build/ScriptLoader --output=json
+printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=json
 
 # Inject globals from the CLI
-printf "x + y;" | ./build/ScriptLoader --global x=10 --global y=20
-printf "name;" | ./build/ScriptLoader --globals=context.json --output=json
-printf "name;" | ./build/ScriptLoader --globals=context.json5 --output=json
-printf "name;" | ./build/ScriptLoader --globals=context.toml --output=json
+printf "x + y;" | ./build/GocciaScriptLoader --global x=10 --global y=20
+printf "name;" | ./build/GocciaScriptLoader --globals=context.json --output=json
+printf "name;" | ./build/GocciaScriptLoader --globals=context.json5 --output=json
+printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
 # `--global name=value` parses inline values as JSON only; `--globals=file` accepts JSON, JSON5, TOML, or YAML by file extension.
 # Injected globals can override earlier injected values, but not built-in globals like console
 
 # Load an explicit import map
-./build/ScriptLoader app.js --import-map=imports.json
+./build/GocciaScriptLoader app.js --import-map=imports.json
 
 # Add one-off import-map-style aliases from the CLI
-./build/ScriptLoader app.js --alias @/=./src/ --alias config=./config/default.js
+./build/GocciaScriptLoader app.js --alias @/=./src/ --alias config=./config/default.js
 
-# The same module-resolution flags are available on TestRunner, BenchmarkRunner, and REPL.
-./build/TestRunner tests --import-map=imports.json --alias @/=./tests/helpers/
-./build/BenchmarkRunner benchmarks --import-map=imports.json
-./build/REPL --import-map=imports.json
+# The same module-resolution flags are available on GocciaTestRunner, GocciaBenchmarkRunner, and GocciaREPL.
+./build/GocciaTestRunner tests --import-map=imports.json --alias @/=./tests/helpers/
+./build/GocciaBenchmarkRunner benchmarks --import-map=imports.json
+./build/GocciaREPL --import-map=imports.json
 
-# When --import-map is omitted, the CLI walks up from the entry file (or cwd for stdin/REPL)
+# When --import-map is omitted, the CLI walks up from the entry file (or cwd for stdin/GocciaREPL)
 # and uses the first goccia.json it finds.
-printf 'import { add } from "@/math"; add(1, 2);' | ./build/ScriptLoader
+printf 'import { add } from "@/math"; add(1, 2);' | ./build/GocciaScriptLoader
 
 # Abort long-running scripts
-printf "const f = () => f(); f();" | ./build/ScriptLoader --timeout=100
+printf "const f = () => f(); f();" | ./build/GocciaScriptLoader --timeout=100
 
 # Write .map source map alongside execution
-./build/ScriptLoader example.jsx --source-map --mode=bytecode
+./build/GocciaScriptLoader example.jsx --source-map --mode=bytecode
 
 # Run tests via bytecode VM
-./build/TestRunner tests --mode=bytecode
+./build/GocciaTestRunner tests --mode=bytecode
 
 # Control parallel worker threads (default: CPU count; --jobs=1 forces sequential)
-./build/ScriptLoader example.js --jobs=4
-./build/TestRunner tests --jobs=4
-./build/BenchmarkRunner benchmarks --jobs=1
+./build/GocciaScriptLoader example.js --jobs=4
+./build/GocciaTestRunner tests --jobs=4
+./build/GocciaBenchmarkRunner benchmarks --jobs=1
 
 # Run benchmarks via bytecode VM
-./build/BenchmarkRunner benchmarks --mode=bytecode
-printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/BenchmarkRunner - --mode=bytecode
+./build/GocciaBenchmarkRunner benchmarks --mode=bytecode
+printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner - --mode=bytecode
 ```
 
 ### GocciaBundler (Standalone Bytecode Compiler)
 
-GocciaBundler is a dedicated tool for compiling source files to `.gbc` bytecode without executing them. It accepts the same input modes as ScriptLoader (file, multiple files, directory, stdin):
+GocciaBundler is a dedicated tool for compiling source files to `.gbc` bytecode without executing them. It accepts the same input modes as GocciaScriptLoader (file, multiple files, directory, stdin):
 
 ```bash
 # Compile a single file (output: example.gbc alongside the source)
@@ -183,24 +183,27 @@ All compiled binaries go to the `build/` directory:
 
 | Binary | Source | Description |
 |--------|--------|-------------|
-| `build/REPL` | `REPL.dpr` | Interactive read-eval-print loop |
-| `build/ScriptLoader` | `ScriptLoader.dpr` | Execute `.js` files or stdin input, with optional JSON output |
-| `build/TestRunner` | `TestRunner.dpr` | JavaScript test runner |
-| `build/BenchmarkRunner` | `BenchmarkRunner.dpr` | Performance benchmark runner for files or stdin input |
-| `build/GocciaBundler` | `GocciaBundler.dpr` | Standalone bytecode compiler (source to `.gbc`) |
+| `build/GocciaREPL` | `source/app/GocciaREPL.dpr` | Interactive read-eval-print loop |
+| `build/GocciaScriptLoader` | `source/app/GocciaScriptLoader.dpr` | Execute `.js` files or stdin input, with optional JSON output |
+| `build/GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | JavaScript test runner |
+| `build/GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Performance benchmark runner for files or stdin input |
+| `build/GocciaBundler` | `source/app/GocciaBundler.dpr` | Standalone bytecode compiler (source to `.gbc`) |
 | `build/Goccia.Values.Primitives.Test` | `*.Test.pas` | Pascal unit test binaries |
 
-Intermediate files (`.o`, `.ppu`) also go to `build/` to keep the source tree clean.
+Intermediate files (`.o`, `.ppu`) go to `build/compiled/` to keep the source tree clean.
 
 ## Compiler Configuration
 
 ### `config.cfg` (Shared Flags)
 
 ```text
--Fu./units      # Unit search path
--Fi./units      # Include file search path
--FUbuild        # Unit output directory
--FEbuild        # Executable output directory
+-Fu./source/units    # Engine unit search path
+-Fu./source/shared   # Shared infrastructure unit search path
+-Fu./source/app      # CLI application unit search path
+-Fi./source/units    # Engine include file search path
+-Fi./source/shared   # Shared include file search path
+-FUbuild/compiled         # Unit output directory
+-FEbuild             # Executable output directory
 ```
 
 These path flags are shared by both build modes. Mode-specific flags are added by `build.pas`.
@@ -219,13 +222,15 @@ These path flags are shared by both build modes. Mode-specific flags are added b
 | Smart linking | — | `-CX -XX` |
 | Define | — | `-dPRODUCTION` |
 
-### `Goccia.inc`
+### `Shared.inc` and `Goccia.inc`
 
-Shared compiler directives included by all units:
+Common compiler settings live in `source/shared/Shared.inc`, which is included by `source/units/Goccia.inc`. Engine units include `Goccia.inc` (which pulls in `Shared.inc` and adds Goccia-specific defines); shared infrastructure units include `Shared.inc` directly.
+
+`Shared.inc` provides:
 
 ```pascal
 {$mode delphi}                    // Delphi-compatible syntax
-{H+}                              // Long strings (`string` = `AnsiString`) by default
+{$H+}                              // Long strings (`string` = `AnsiString`) by default
 {$IFNDEF PRODUCTION}
   {$overflowchecks on}            // Runtime arithmetic overflow detection
   {$rangechecks on}               // Runtime array bounds checking
@@ -260,7 +265,7 @@ It:
 4. Counts and prints source statistics: total lines of code (LOC), significant lines of code (SLOC, excluding blanks and comments), and file count.
 5. Calls `fpc` with `@config.cfg`, mode-specific flags, and suppressed verbose output flags (`-vw-n-h-i-l-d-u-t-p-c-x-`).
 6. If the `FPC_TARGET_CPU` environment variable is set, prepends `-P<arch>` to the compiler arguments (used by CI to target x86_64 on Windows where the FPC package defaults to i386).
-7. For the `tests` target, auto-discovers all `*.Test.pas` files in `units/`.
+7. For the `tests` target, auto-discovers all `*.Test.pas` files in `source/units/` and `source/shared/`.
 
 The GitHub Actions cross-compilation workflow uses a reduced cached FPC toolchain rather than a full target-side FCL install. It prebuilds the RTL, `rtl-objpas`, `rtl-generics`, and `fcl-process`, and also caches the official `fcl-base` and `regexpr` sources so cross builds can resolve units such as `Base64` and `RegExpr` on demand from the shipped FPC packages.
 
@@ -270,21 +275,37 @@ The GitHub Actions cross-compilation workflow uses a reduced cached FPC toolchai
 GocciaScript/
 ├── build.pas          # Build script (entry point)
 ├── config.cfg         # Shared FPC configuration
-├── REPL.dpr              # REPL program source
-├── ScriptLoader.dpr      # Script loader program source
-├── TestRunner.dpr        # Test runner program source
-├── BenchmarkRunner.dpr   # Benchmark runner program source
-├── GocciaBundler.dpr     # Standalone bytecode compiler
-├── units/
-│   ├── Goccia.inc     # Shared compiler directives
-│   ├── TimingUtils.pas # Cross-platform microsecond timing and duration formatting
-│   ├── Goccia.Bytecode*.pas # Bytecode definitions, templates, modules, binary I/O
-│   ├── Goccia.VM*.pas       # Bytecode VM, frames, closures, upvalues, exceptions
-│   ├── *.pas          # All unit source files
-│   └── *.Test.pas     # Pascal unit test programs
+├── source/
+│   ├── app/              # CLI applications
+│   │   ├── GocciaREPL.dpr              # REPL program source
+│   │   ├── GocciaScriptLoader.dpr      # Script loader program source
+│   │   ├── GocciaTestRunner.dpr        # Test runner program source
+│   │   ├── GocciaBenchmarkRunner.dpr   # Benchmark runner program source
+│   │   ├── GocciaBundler.dpr     # Standalone bytecode compiler
+│   │   ├── Goccia.CLI.Application.pas  # CLI application base class
+│   │   ├── Goccia.CLI.Help.pas         # CLI help generation
+│   │   └── Goccia.CLI.EngineSetup.pas  # Engine setup utilities
+│   ├── shared/           # Shared infrastructure
+│   │   ├── Shared.inc    # Common compiler settings
+│   │   ├── TestingPascalLibrary.pas  # Pascal test framework (TTestSuite)
+│   │   ├── TimingUtils.pas   # Cross-platform timing and duration formatting
+│   │   ├── HashMap.pas       # Purpose-built hash maps
+│   │   ├── OrderedMap.pas    # Ordered hash maps
+│   │   ├── OrderedStringMap.pas  # String-keyed ordered maps
+│   │   ├── StringBuffer.pas  # String buffer
+│   │   ├── FileUtils.pas     # File utilities
+│   │   ├── BaseMap.pas       # Base map type
+│   │   └── JSONParser.pas    # JSON parser
+│   └── units/            # Goccia engine units
+│       ├── Goccia.inc    # Goccia compiler directives (includes Shared.inc)
+│       ├── Goccia.Bytecode*.pas # Bytecode definitions, templates, modules, binary I/O
+│       ├── Goccia.VM*.pas       # Bytecode VM, frames, closures, upvalues, exceptions
+│       ├── *.pas         # All engine unit source files
+│       └── *.Test.pas    # Pascal unit test programs
 └── build/             # All output (gitignored)
-    ├── *.o            # Object files
-    ├── *.ppu          # Compiled unit files
+    ├── lib/           # Intermediate files
+    │   ├── *.o        # Object files
+    │   └── *.ppu      # Compiled unit files
     └── (binaries)     # Executable output
 ```
 
@@ -311,21 +332,21 @@ Runs on the full platform matrix:
 | macOS Latest | x64, ARM64 |
 | Windows Latest | x86 (i386-win32) |
 
-**`build`** — Installs FPC, compiles the top-level `*.dpr` programs with `--prod`, stages those binaries plus Pascal test executables, and uploads that staged set as intermediate artifacts.
+**`build`** — Installs FPC, compiles the `source/app/*.dpr` programs with `--prod`, stages those binaries plus Pascal test executables, and uploads that staged set as intermediate artifacts.
 
 **`test`** (needs build) — Runs all JavaScript tests and Pascal unit tests on all platforms.
 
 **`toml-compliance`** — Downloads the prebuilt `GocciaTOMLCheck` harness from each matrix build artifact, runs the official `toml-test` TOML 1.1.0 suite on every CI platform via `python3 scripts/run_toml_test_suite.py --harness=...`, validates that the JSON summary reports zero failures, and uploads the per-platform JSON report.
 
-**`json5-compliance`** — Downloads the prebuilt `GocciaJSON5Check` harness and `TestRunner` binary from each matrix build artifact, runs `python3 scripts/run_json5_test_suite.py --harness=... --test-runner=...` on every CI platform, validates both the parser and stringify summaries, and uploads the per-platform JSON report.
+**`json5-compliance`** — Downloads the prebuilt `GocciaJSON5Check` harness and `GocciaTestRunner` binary from each matrix build artifact, runs `python3 scripts/run_json5_test_suite.py --harness=... --test-runner=...` on every CI platform, validates both the parser and stringify summaries, and uploads the per-platform JSON report.
 
 **`benchmark`** (needs build) — Runs all benchmarks on all platforms. On main (ubuntu-latest x64), saves benchmark results as JSON to `actions/cache` for PR comparison.
 
 **`examples`** (needs build) — Runs all example scripts from the `examples/` folder on all platforms.
 
-**`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + examples, main only) — Uploads production binaries after all checks pass, deriving the executable names from the top-level `*.dpr` entrypoints.
+**`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + examples, main only) — Uploads production binaries after all checks pass, deriving the executable names from the `source/app/*.dpr` entrypoints.
 
-**`release`** (needs test + toml-compliance + json5-compliance + benchmark + examples, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the top-level `*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), generates categorized release notes via [git-cliff](https://git-cliff.org/) (`cliff.toml`), and creates a GitHub release using `softprops/action-gh-release`.
+**`release`** (needs test + toml-compliance + json5-compliance + benchmark + examples, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the `source/app/*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), generates categorized release notes via [git-cliff](https://git-cliff.org/) (`cliff.toml`), and creates a GitHub release using `softprops/action-gh-release`.
 
 ### `pr.yml` — Pull requests
 
@@ -337,7 +358,7 @@ build → test (JS + native)
 
 Runs on **ubuntu-latest x64 only** (single runner, no matrix).
 
-**`build`** — Installs FPC, compiles all binaries with `--prod`, stages the top-level `*.dpr` binaries plus Pascal test executables, and uploads that staged set as `build-pr`.
+**`build`** — Installs FPC, compiles all binaries with `--prod`, stages the `source/app/*.dpr` binaries plus Pascal test executables, and uploads that staged set as `build-pr`.
 
 **`test`** (needs build) — Runs all JavaScript tests and Pascal unit tests.
 
@@ -431,14 +452,14 @@ The hook configuration is in `lefthook.yml`. It auto-stages formatting fixes (`s
 If you need to bypass the build script:
 
 ```bash
-fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- REPL.dpr
-fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- ScriptLoader.dpr
-fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- TestRunner.dpr
-fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- BenchmarkRunner.dpr
-fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- GocciaBundler.dpr
+fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- source/app/GocciaREPL.dpr
+fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- source/app/GocciaScriptLoader.dpr
+fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- source/app/GocciaTestRunner.dpr
+fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- source/app/GocciaBenchmarkRunner.dpr
+fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- source/app/GocciaBundler.dpr
 ```
 
-The `-v` flags suppress verbose output to keep the build clean. Use `fpc @config.cfg REPL.dpr` for full verbose output during debugging.
+The `-v` flags suppress verbose output to keep the build clean. Use `fpc @config.cfg source/app/GocciaREPL.dpr` for full verbose output during debugging.
 
 ## Build System Design Decision
 

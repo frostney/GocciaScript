@@ -1,6 +1,6 @@
 program GocciaTOMLCheck;
 
-{$I ../units/Goccia.inc}
+{$I Goccia.inc}
 
 uses
   Classes,

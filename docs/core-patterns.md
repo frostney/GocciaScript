@@ -281,8 +281,8 @@ Standard built-ins (console, Math, Array, Number, Promise, JSON, Symbol, Set, Ma
 
 **Why configurable for special-purpose built-ins?**
 
-- **Testing** — The TestRunner enables `ggTestAssertions` to inject `describe`, `test`, and `expect` without polluting the normal runtime.
-- **Benchmarking** — The BenchmarkRunner enables `ggBenchmark` to inject `suite` and `bench`.
+- **Testing** — The GocciaTestRunner enables `ggTestAssertions` to inject `describe`, `test`, and `expect` without polluting the normal runtime.
+- **Benchmarking** — The GocciaBenchmarkRunner enables `ggBenchmark` to inject `suite` and `bench`.
 - **FFI** — `ggFFI` enables the Foreign Function Interface for calling native shared libraries, which is disabled by default for security.
 
 ### Global Function Placement

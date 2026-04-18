@@ -7,7 +7,7 @@ uses
   Classes,
   SysUtils,
 
-  FileUtils in 'units/FileUtils.pas';
+  FileUtils in 'source/shared/FileUtils.pas';
 
 type
   TUnitCategory = (ucSystem, ucThirdParty, ucProject, ucRelative);
@@ -960,17 +960,23 @@ end;
 
 procedure CollectProjectFiles(const ARoot: string; const AFiles: TStringList);
 var
-  DprFiles, PasFiles: TStringList;
+  DprFiles, UnitFiles, SharedFiles, AppFiles: TStringList;
   I: Integer;
   BuildPas, FormatPas: string;
 begin
-  DprFiles := FindAllFiles(ARoot, '.dpr');
-  PasFiles := FindAllFiles(ARoot + '/units', '.pas');
+  DprFiles := FindAllFiles(ARoot + '/source/app', '.dpr');
+  UnitFiles := FindAllFiles(ARoot + '/source/units', '.pas');
+  SharedFiles := FindAllFiles(ARoot + '/source/shared', '.pas');
+  AppFiles := FindAllFiles(ARoot + '/source/app', '.pas');
   try
     for I := 0 to DprFiles.Count - 1 do
       AFiles.Add(DprFiles[I]);
-    for I := 0 to PasFiles.Count - 1 do
-      AFiles.Add(PasFiles[I]);
+    for I := 0 to UnitFiles.Count - 1 do
+      AFiles.Add(UnitFiles[I]);
+    for I := 0 to SharedFiles.Count - 1 do
+      AFiles.Add(SharedFiles[I]);
+    for I := 0 to AppFiles.Count - 1 do
+      AFiles.Add(AppFiles[I]);
     BuildPas := ARoot + '/build.pas';
     if FileExists(BuildPas) then
       AFiles.Add(BuildPas);
@@ -979,7 +985,9 @@ begin
       AFiles.Add(FormatPas);
   finally
     DprFiles.Free;
-    PasFiles.Free;
+    UnitFiles.Free;
+    SharedFiles.Free;
+    AppFiles.Free;
   end;
   AFiles.Sort;
 end;
