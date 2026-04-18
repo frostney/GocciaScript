@@ -61,7 +61,7 @@ implementation
 uses
   StrUtils,
 
-  Goccia.BOM;
+  BOM;
 
 constructor TGocciaJSONLParser.Create;
 begin

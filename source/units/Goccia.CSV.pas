@@ -60,7 +60,7 @@ implementation
 uses
   Classes,
 
-  Goccia.BOM;
+  BOM;
 
 class function TGocciaCSVParser.ClampOffset(const AValue,
   ALimit: Integer): Integer;

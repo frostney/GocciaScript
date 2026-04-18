@@ -1,6 +1,6 @@
-unit Goccia.BOM;
+unit BOM;
 
-{$I Goccia.inc}
+{$I Shared.inc}
 
 interface
 
