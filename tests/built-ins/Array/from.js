@@ -147,4 +147,9 @@ describe("Array.from", () => {
     const result = Array.from(outer, (n) => Array.from(makeCounter(n)));
     expect(result).toEqual([[1], [1, 2], [1, 2, 3]]);
   });
+
+  test("has correct name and length", () => {
+    expect(Array.from.name).toBe("from");
+    expect(Array.from.length).toBe(1);
+  });
 });

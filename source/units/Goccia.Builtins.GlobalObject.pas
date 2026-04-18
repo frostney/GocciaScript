@@ -144,7 +144,7 @@ begin
     Members.AddMethod(ObjectKeys, 1, gmkStaticMethod);
     Members.AddMethod(ObjectValues, 1, gmkStaticMethod);
     Members.AddMethod(ObjectEntries, 1, gmkStaticMethod);
-    Members.AddMethod(ObjectAssign, -1, gmkStaticMethod);
+    Members.AddMethod(ObjectAssign, 2, gmkStaticMethod);
     Members.AddMethod(ObjectCreate, 2, gmkStaticMethod);
     Members.AddMethod(ObjectHasOwn, 2, gmkStaticMethod);
     Members.AddMethod(ObjectGetOwnPropertyNames, 1, gmkStaticMethod);

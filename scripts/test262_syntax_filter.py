@@ -198,8 +198,8 @@ SUPPORTED_FEATURES: dict[str, bool] = {
     "cross-realm": False,
     "caller": False,
     "IsHTMLDDA": False,
-    "resizable-arraybuffer": False,
-    "arraybuffer-transfer": False,
+    "resizable-arraybuffer": True,
+    "arraybuffer-transfer": True,
     "Float16Array": True,
     "Intl": False,
     "Intl.DateTimeFormat": False,
@@ -222,8 +222,8 @@ SUPPORTED_FEATURES: dict[str, bool] = {
     "regexp-modifiers": True,
     "error-cause": True,
     "symbols-as-weakmap-keys": False,
-    "disposition": False,
-    "explicit-resource-management": False,
+    "disposition": True,
+    "explicit-resource-management": True,
     "set-methods": True,
     "Map.groupBy": True,
     "Object.groupBy": True,
@@ -284,6 +284,8 @@ _UNSUPPORTED_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
      re.compile(r"\byield\b")),
     ("labeled_statement",
      re.compile(r"^\s*\w+\s*:\s*(?:for|while|do|if|switch)\b", re.MULTILINE)),
+    ("bigint_literal",
+     re.compile(r"\b\d[\d_]*n\b")),
 ]
 
 
@@ -448,6 +450,8 @@ AVAILABLE_INCLUDES: set[str] = {
     "byteConversionValues.js",
     "proxyTrapsHelper.js",
     "regExpUtils.js",
+    "detachArrayBuffer.js",
+    "doneprintHandle.js",
 }
 
 

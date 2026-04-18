@@ -33,4 +33,9 @@ describe("String.prototype.includes", () => {
   test("empty string does not include non-empty", () => {
     expect("".includes("a")).toBe(false);
   });
+
+  test("has correct name and length", () => {
+    expect(String.prototype.includes.name).toBe("includes");
+    expect(String.prototype.includes.length).toBe(1);
+  });
 });

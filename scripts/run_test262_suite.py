@@ -145,6 +145,8 @@ INCLUDE_MAP: dict[str, str] = {
     "byteConversionValues.js": "byteConversionValues.js",
     "proxyTrapsHelper.js": "proxyTrapsHelper.js",
     "regExpUtils.js": "regExpUtils.js",
+    "detachArrayBuffer.js": "detachArrayBuffer.js",
+    "doneprintHandle.js": "doneprintHandle.js",
 }
 
 
@@ -182,12 +184,27 @@ def _strip_use_strict(body: str) -> str:
 
 
 def wrap_positive_test(
-    harness_source: str, test_body: str, test_id: str, description: str
+    harness_source: str,
+    test_body: str,
+    test_id: str,
+    description: str,
+    is_async: bool = False,
 ) -> str:
     """Wrap a positive test in describe/test with Goccia TestAssertions."""
     body = _strip_use_strict(test_body)
     desc = _escape_js_string(description or test_id)
     tid = _escape_js_string(test_id)
+
+    if is_async:
+        return f"""{harness_source}
+
+describe("test262: {tid}", () => {{
+  test("{desc}", async () => {{
+{body}
+    await __donePromise;
+  }});
+}});
+"""
 
     return f"""{harness_source}
 
@@ -432,6 +449,10 @@ def evaluate_suite(
                 negative = metadata.get("negative")
                 includes = metadata.get("includes", [])
 
+                flags = metadata.get("flags", [])
+                is_async = "async" in flags
+                if is_async and "doneprintHandle.js" not in includes:
+                    includes = [*includes, "doneprintHandle.js"]
                 harness_source = build_harness_source(includes, harness_files)
 
                 if negative is not None and negative.get("phase") == "runtime":
@@ -441,7 +462,8 @@ def evaluate_suite(
                     )
                 else:
                     wrapped = wrap_positive_test(
-                        harness_source, body, test_id, description
+                        harness_source, body, test_id, description,
+                        is_async=is_async,
                     )
 
                 safe_name = test_id.replace("/", "__").replace("\\", "__")
@@ -508,15 +530,25 @@ def evaluate_suite(
                     failed_set: set[str] = set()
                     failed_messages: dict[str, str] = {}
                     for name in tr_failed_tests:
-                        # Extract first line for matching (detailed messages are multiline)
+                        # Case 1: 'Test "<desc>" in suite "test262: <test_id>"'
+                        m = re.search(
+                            r'in suite "test262:\s*(.+?)"', name
+                        )
+                        if m:
+                            tid = m.group(1)
+                            # tid may be the safe filename; map back
+                            real_id = file_to_test_id.get(tid, tid)
+                            failed_set.add(real_id)
+                            failed_messages[real_id] = name
+                            continue
+                        # Case 2: "test262: <test_id> > <description>"
                         first_line = name.split("\n")[0]
-                        # Case 1: "test262: <test_id> > <description>"
                         m = re.match(r"test262:\s*(.+?)\s*>", first_line)
                         if m:
                             failed_set.add(m.group(1))
                             failed_messages[m.group(1)] = name
                             continue
-                        # Case 2: "<filepath>: <error>" (parse/load error)
+                        # Case 3: "<filepath>: <error>" (parse/load error)
                         m2 = re.search(r"[/\\]([^/\\]+\.js)(?:\s*:\s*(.+))?$", first_line)
                         if m2:
                             fname = m2.group(1)

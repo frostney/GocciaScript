@@ -15,3 +15,8 @@ test("Math.abs", () => {
   expect(Math.abs(Infinity)).toBe(Infinity);
   expect(Math.abs(-Infinity)).toBe(Infinity);
 });
+
+test("Math.abs has correct name and length", () => {
+  expect(Math.abs.name).toBe("abs");
+  expect(Math.abs.length).toBe(1);
+});

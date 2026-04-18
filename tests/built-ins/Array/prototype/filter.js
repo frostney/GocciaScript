@@ -88,3 +88,8 @@ test("filter does not mutate the original array", () => {
   arr.filter((x) => x > 3);
   expect(arr).toEqual([1, 2, 3, 4, 5]);
 });
+
+test("filter has correct name and length", () => {
+  expect(Array.prototype.filter.name).toBe("filter");
+  expect(Array.prototype.filter.length).toBe(1);
+});

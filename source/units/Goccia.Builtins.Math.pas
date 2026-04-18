@@ -107,8 +107,8 @@ begin
     Members.AddMethod(MathFloor, 1, gmkStaticMethod);
     Members.AddMethod(MathCeil, 1, gmkStaticMethod);
     Members.AddMethod(MathRound, 1, gmkStaticMethod);
-    Members.AddMethod(MathMax, -1, gmkStaticMethod);
-    Members.AddMethod(MathMin, -1, gmkStaticMethod);
+    Members.AddMethod(MathMax, 2, gmkStaticMethod);
+    Members.AddMethod(MathMin, 2, gmkStaticMethod);
     Members.AddMethod(MathPow, 2, gmkStaticMethod);
     Members.AddMethod(MathSqrt, 1, gmkStaticMethod);
     Members.AddMethod(MathRandom, 0, gmkStaticMethod);

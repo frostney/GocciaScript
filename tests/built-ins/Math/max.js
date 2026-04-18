@@ -19,3 +19,12 @@ test("Math.max", () => {
   expect(Math.max(-Infinity, 1, 2)).toBe(2);
   expect(Math.max(Infinity, -Infinity)).toBe(Infinity);
 });
+
+test("Math.max has correct name and length", () => {
+  expect(Math.max.name).toBe("max");
+  expect(Math.max.length).toBe(2);
+  const desc = Object.getOwnPropertyDescriptor(Math.max, "length");
+  expect(desc.configurable).toBe(true);
+  expect(desc.enumerable).toBe(false);
+  expect(desc.writable).toBe(false);
+});
