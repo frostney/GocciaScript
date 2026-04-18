@@ -95,7 +95,6 @@ type
     property HasErrorData: Boolean read FHasErrorData write FHasErrorData;
   published
     function ObjectPrototypeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function ObjectPrototypeHasOwnProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ObjectPrototypeIsPrototypeOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ObjectPrototypePropertyIsEnumerable(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ObjectPrototypeToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -193,45 +192,6 @@ begin
     Tag := CONSTRUCTOR_OBJECT;
 
   Result := TGocciaStringLiteralValue.Create('[object ' + Tag + ']');
-end;
-
-// ES2026 §20.1.3.2 Object.prototype.hasOwnProperty(V)
-function TGocciaObjectValue.ObjectPrototypeHasOwnProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  Key: string;
-  Obj: TGocciaObjectValue;
-  PropertyArg: TGocciaValue;
-begin
-  // Step 2: Let O be ? ToObject(this value)
-  if (AThisValue is TGocciaUndefinedLiteralValue) or (AThisValue is TGocciaNullLiteralValue) then
-    ThrowTypeError(SErrorCannotConvertNullOrUndefined, SSuggestCheckNullBeforeAccess);
-
-  if not (AThisValue is TGocciaObjectValue) then
-    Exit(TGocciaBooleanLiteralValue.FalseValue);
-
-  Obj := TGocciaObjectValue(AThisValue);
-
-  // Step 1: Let P be ? ToPropertyKey(V)
-  if AArgs.Length = 0 then
-    PropertyArg := TGocciaUndefinedLiteralValue.UndefinedValue
-  else
-    PropertyArg := AArgs.GetElement(0);
-
-  if PropertyArg is TGocciaSymbolValue then
-  begin
-    if Assigned(Obj.GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(PropertyArg))) then
-      Result := TGocciaBooleanLiteralValue.TrueValue
-    else
-      Result := TGocciaBooleanLiteralValue.FalseValue;
-  end
-  else
-  begin
-    Key := PropertyArg.ToStringLiteral.Value;
-    if Obj.HasOwnProperty(Key) then
-      Result := TGocciaBooleanLiteralValue.TrueValue
-    else
-      Result := TGocciaBooleanLiteralValue.FalseValue;
-  end;
 end;
 
 // ES2026 §20.1.3.3 Object.prototype.isPrototypeOf(V)
@@ -362,7 +322,6 @@ begin
     Members := TGocciaMemberCollection.Create;
     try
       Members.AddMethod(FPrototypeMethodHost.ObjectPrototypeToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(FPrototypeMethodHost.ObjectPrototypeHasOwnProperty, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(FPrototypeMethodHost.ObjectPrototypeIsPrototypeOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(FPrototypeMethodHost.ObjectPrototypePropertyIsEnumerable, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(FPrototypeMethodHost.ObjectPrototypeToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -372,11 +331,10 @@ begin
       Members.Free;
     end;
     FPrototypeMembers[0].ExposedName := PROP_TO_STRING;
-    FPrototypeMembers[1].ExposedName := PROP_HAS_OWN_PROPERTY;
-    FPrototypeMembers[2].ExposedName := PROP_IS_PROTOTYPE_OF;
-    FPrototypeMembers[3].ExposedName := PROP_PROPERTY_IS_ENUMERABLE;
-    FPrototypeMembers[4].ExposedName := PROP_TO_LOCALE_STRING;
-    FPrototypeMembers[5].ExposedName := PROP_VALUE_OF;
+    FPrototypeMembers[1].ExposedName := PROP_IS_PROTOTYPE_OF;
+    FPrototypeMembers[2].ExposedName := PROP_PROPERTY_IS_ENUMERABLE;
+    FPrototypeMembers[3].ExposedName := PROP_TO_LOCALE_STRING;
+    FPrototypeMembers[4].ExposedName := PROP_VALUE_OF;
   end;
   RegisterMemberDefinitions(FSharedObjectPrototype, FPrototypeMembers);
 

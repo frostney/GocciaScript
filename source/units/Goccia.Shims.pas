@@ -54,7 +54,7 @@ uses
   Goccia.Token;
 
 const
-  DEFAULT_SHIMS: array[0..6] of TGocciaShimDefinition = (
+  DEFAULT_SHIMS: array[0..7] of TGocciaShimDefinition = (
     ( // WHATWG HTML spec §8.3 — legacy btoa(data) via Uint8Array.toBase64
       Name: 'btoa';
       FileName: '<shim:btoa>';
@@ -201,6 +201,17 @@ const
         '      String(z.year) + " " + pad(z.hour) + ":" + pad(z.minute) + ":" + pad(z.second) + " GMT" + z.offset;'#10 +
         '  }'#10 +
         '};'
+    ),
+    ( // ES2026 §20.1.3.2 — legacy hasOwnProperty via Object.hasOwn
+      Name: 'hasOwnProperty';
+      FileName: '<shim:hasOwnProperty>';
+      Source:
+        'export const hasOwnProperty = ((proto) => {'#10 +
+        '  class _H { hasOwnProperty(prop) { return Object.hasOwn(this, prop); } }'#10 +
+        '  const fn = new _H().hasOwnProperty;'#10 +
+        '  proto.hasOwnProperty = fn;'#10 +
+        '  return fn;'#10 +
+        '})(Object.getPrototypeOf({}));'
     )
   );
 
