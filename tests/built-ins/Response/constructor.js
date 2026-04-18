@@ -75,6 +75,14 @@ describe("Response constructor", () => {
     expect(r.headers.get("content-type")).toBe("text/plain");
   });
 
+  test("response headers are independent from init headers", () => {
+    const h = new Headers({ "X-Test": "original" });
+    const r = new Response(null, { headers: h });
+    expect(r.headers.get("x-test")).toBe("original");
+    // response.headers should be a separate object
+    expect(r.headers).not.toBe(h);
+  });
+
   test("throws RangeError for status below 200", () => {
     expect(() => new Response(null, { status: 100 })).toThrow(RangeError);
   });

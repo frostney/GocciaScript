@@ -422,7 +422,13 @@ begin
   if Assigned(PropVal) and not (PropVal is TGocciaUndefinedLiteralValue) then
   begin
     if PropVal is TGocciaHeadersValue then
-      FHeaders := TGocciaHeadersValue(PropVal)
+    begin
+      // Snapshot: copy entries so caller mutations don't leak through
+      for I := 0 to TGocciaHeadersValue(PropVal).Entries.Count - 1 do
+        FHeaders.AddHeader(
+          TGocciaHeadersValue(PropVal).Entries[I].Name,
+          TGocciaHeadersValue(PropVal).Entries[I].Value);
+    end
     else if PropVal is TGocciaObjectValue then
     begin
       HeadersObj := TGocciaObjectValue(PropVal);
