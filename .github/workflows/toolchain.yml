@@ -10,7 +10,7 @@ on:
 env:
   FPC_VERSION: "3.2.2"
   BINUTILS_VERSION: "2.44"
-  CACHE_VERSION: "v31"
+  CACHE_VERSION: "v32"
 
 jobs:
   build:
@@ -364,6 +364,36 @@ jobs:
             "$cross_fpc" -T"${os}" -O2 -dFPC_SOFT_FPUX80 $pkg_extra_flags \
               -Fu"$rtl_dir" -Fu"$fcl_dir" -FU"$fcl_dir" \
               $process_fi "packages/fcl-process/src/process.pp"
+
+            # Build socket units from packages/rtl-extra (not produced by cross make rtl)
+            # Sockets for Unix/Darwin, WinSock2 for Windows
+            local rtl_extra="packages/rtl-extra/src"
+            echo "--- socket units for ${target} ---"
+            case "$os" in
+              linux)
+                if [ ! -f "$rtl_dir/sockets.ppu" ]; then
+                  "$cross_fpc" -T"${os}" -O2 -dFPC_SOFT_FPUX80 $pkg_extra_flags \
+                    -Fu"$rtl_dir" -FU"$rtl_dir" \
+                    -Fi"${rtl_extra}/inc" -Fi"${rtl_extra}/linux" \
+                    "${rtl_extra}/unix/sockets.pp"
+                fi
+                ;;
+              darwin)
+                if [ ! -f "$rtl_dir/sockets.ppu" ]; then
+                  "$cross_fpc" -T"${os}" -O2 -dFPC_SOFT_FPUX80 $pkg_extra_flags \
+                    -Fu"$rtl_dir" -FU"$rtl_dir" \
+                    -Fi"${rtl_extra}/inc" -Fi"${rtl_extra}/bsd" -Fi"${rtl_extra}/darwin" \
+                    "${rtl_extra}/unix/sockets.pp"
+                fi
+                ;;
+              win32|win64)
+                if [ ! -f "$rtl_dir/winsock2.ppu" ]; then
+                  "$cross_fpc" -T"${os}" -O2 -dFPC_SOFT_FPUX80 $pkg_extra_flags \
+                    -Fu"$rtl_dir" -FU"$rtl_dir" \
+                    "${rtl_extra}/win/winsock2.pp"
+                fi
+                ;;
+            esac
           }
 
           # macOS x86_64
