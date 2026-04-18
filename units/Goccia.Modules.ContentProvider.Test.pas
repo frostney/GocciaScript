@@ -333,12 +333,12 @@ end;
 
 procedure TModuleContentProviderTests.TestBytecodeBackendUsesInjectedContentProvider;
 var
-  Backend: TGocciaBytecodeBackend;
-  ModuleLoader: TGocciaModuleLoader;
-  Module: TGocciaBytecodeModule;
+  Engine: TGocciaEngine;
+  Executor: TGocciaBytecodeExecutor;
   ProgramNode: TGocciaProgram;
   Provider: TMemoryModuleContentProvider;
   ResultValue: TGocciaValue;
+  Source: TStringList;
   TempDirectory: string;
   DepPath: string;
   EntryPath: string;
@@ -352,32 +352,34 @@ begin
   Provider := TMemoryModuleContentProvider.Create;
   Provider.AddModule(DepPath, 'export const value = 42;');
 
-  ModuleLoader := TGocciaModuleLoader.Create(EntryPath, nil, Provider);
+  Source := TStringList.Create;
   try
-    Backend := TGocciaBytecodeBackend.Create(EntryPath, ModuleLoader);
-    try
-      Backend.RegisterBuiltIns([]);
-      ProgramNode := CreateProgram(
-        'import { value } from "./dep.js";' + LineEnding + 'value;',
-        EntryPath);
-      try
-        Module := Backend.CompileToModule(ProgramNode);
-      finally
-        ProgramNode.Free;
-      end;
+    Source.Text := 'import { value } from "./dep.js";' + LineEnding + 'value;';
 
+    Executor := TGocciaBytecodeExecutor.Create;
+    try
+      Engine := TGocciaEngine.Create(EntryPath, Source, [],
+        TGocciaModuleLoader.Create(EntryPath, nil, Provider), Executor);
       try
-        ResultValue := Backend.RunModule(Module);
+        ProgramNode := CreateProgram(
+          'import { value } from "./dep.js";' + LineEnding + 'value;',
+          EntryPath);
+        try
+          ResultValue := Engine.ExecuteProgram(ProgramNode);
+        finally
+          ProgramNode.Free;
+        end;
+
         Expect<Boolean>(ResultValue is TGocciaNumberLiteralValue).ToBe(True);
         Expect<Double>(TGocciaNumberLiteralValue(ResultValue).Value).ToBe(42);
       finally
-        Module.Free;
+        Engine.Free;
       end;
     finally
-      Backend.Free;
+      Executor.Free;
     end;
   finally
-    ModuleLoader.Free;
+    Source.Free;
     Provider.Free;
   end;
 end;

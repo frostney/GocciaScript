@@ -9,17 +9,23 @@ uses
 
   OrderedStringMap,
 
+  Goccia.AST.Node,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.Evaluator.Context,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Resolver,
   Goccia.Scope;
 
 type
+  TGocciaModuleBodyEvaluator = procedure(const AProgram: TGocciaProgram;
+    const AContext: TGocciaEvaluationContext) of object;
+
   TGocciaModuleLoader = class
   private
     FASIEnabled: Boolean;
     FContentProvider: TGocciaModuleContentProvider;
+    FEvaluateModuleBody: TGocciaModuleBodyEvaluator;
     FEntryFileName: string;
     FGlobalModules: TOrderedStringMap<TGocciaModule>;
     FGlobalScope: TGocciaGlobalScope;
@@ -49,6 +55,8 @@ type
 
     property ContentProvider: TGocciaModuleContentProvider
       read FContentProvider;
+    property EvaluateModuleBody: TGocciaModuleBodyEvaluator
+      read FEvaluateModuleBody write FEvaluateModuleBody;
     property GlobalModules: TOrderedStringMap<TGocciaModule>
       read FGlobalModules;
     property ASIEnabled: Boolean read FASIEnabled write FASIEnabled;
@@ -60,12 +68,9 @@ implementation
 
 uses
   Goccia.AST.Expressions,
-  Goccia.AST.Node,
   Goccia.AST.Statements,
   Goccia.Constants.PropertyNames,
   Goccia.Error,
-  Goccia.Evaluator,
-  Goccia.Evaluator.Context,
   Goccia.FileExtensions,
   Goccia.JSON,
   Goccia.JSON5,
@@ -255,8 +260,7 @@ begin
                 Context.CoverageEnabled := False;
                 Context.DisposalTracker := nil;
 
-                for I := 0 to ProgramNode.Body.Count - 1 do
-                  EvaluateStatement(ProgramNode.Body[I], Context);
+                FEvaluateModuleBody(ProgramNode, Context);
 
                 for I := 0 to ProgramNode.Body.Count - 1 do
                 begin

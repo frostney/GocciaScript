@@ -11,7 +11,8 @@ uses
   Goccia.Application,
   Goccia.CLI.Options,
   Goccia.Engine,
-  Goccia.Engine.Backend;
+  Goccia.Engine.Backend,
+  Goccia.Executor;
 
 type
   TGocciaCLIApplication = class(TGocciaApplication)
@@ -42,9 +43,10 @@ type
     function AddRepeatable(const AName, AHelp: string): TGocciaRepeatableOption;
     function Add(const AOption: TGocciaOptionBase): TGocciaOptionBase;
     function CreateEngine(const AFileName: string;
-      const ASource: TStringList): TGocciaEngine;
-    function CreateBytecodeBackend(
-      const AFileName: string): TGocciaBytecodeBackend;
+      const ASource: TStringList): TGocciaEngine; overload;
+    function CreateEngine(const AFileName: string;
+      const ASource: TStringList;
+      const AExecutor: TGocciaExecutor): TGocciaEngine; overload;
     { Returns the effective job count: --jobs value, or ProcessorCount,
       capped to AFileCount. Returns 1 when parallelism is not desired. }
     function GetJobCount(const AFileCount: Integer): Integer;
@@ -220,24 +222,34 @@ function TGocciaCLIApplication.CreateEngine(const AFileName: string;
   const ASource: TStringList): TGocciaEngine;
 begin
   Result := TGocciaEngine.Create(AFileName, ASource, GlobalBuiltins);
-  if Assigned(FEngineOptions) then
-  begin
-    Result.ASIEnabled := FEngineOptions.ASI.Present;
-    ConfigureModuleResolver(Result.Resolver, AFileName,
-      FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
+  try
+    if Assigned(FEngineOptions) then
+    begin
+      Result.ASIEnabled := FEngineOptions.ASI.Present;
+      ConfigureModuleResolver(Result.Resolver, AFileName,
+        FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
+    end;
+  except
+    Result.Free;
+    raise;
   end;
 end;
 
-function TGocciaCLIApplication.CreateBytecodeBackend(
-  const AFileName: string): TGocciaBytecodeBackend;
+function TGocciaCLIApplication.CreateEngine(const AFileName: string;
+  const ASource: TStringList; const AExecutor: TGocciaExecutor): TGocciaEngine;
 begin
-  Result := TGocciaBytecodeBackend.Create(AFileName);
-  Result.RegisterBuiltIns(GlobalBuiltins);
-  if Assigned(FEngineOptions) then
-  begin
-    Result.ASIEnabled := FEngineOptions.ASI.Present;
-    ConfigureModuleResolver(Result.ModuleResolver, AFileName,
-      FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
+  Result := TGocciaEngine.Create(AFileName, ASource, GlobalBuiltins,
+    AExecutor);
+  try
+    if Assigned(FEngineOptions) then
+    begin
+      Result.ASIEnabled := FEngineOptions.ASI.Present;
+      ConfigureModuleResolver(Result.Resolver, AFileName,
+        FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
+    end;
+  except
+    Result.Free;
+    raise;
   end;
 end;
 

@@ -17,11 +17,9 @@ uses
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
   Goccia.CLI.Options,
-  Goccia.Compiler,
   Goccia.Constants.PropertyNames,
   Goccia.Engine,
   Goccia.Engine.Backend,
-  Goccia.Engine.BytecodeBackend,
   Goccia.Error,
   Goccia.Error.Detail,
   Goccia.FileExtensions,
@@ -167,7 +165,7 @@ type
     procedure CollectBenchmarkFileBytecode(const AFileName: string;
       const AReporter: TBenchmarkReporter; const AShowProgress: Boolean);
     procedure CollectBenchmarkFile(const AFileName: string;
-      const AReporter: TBenchmarkReporter; const AMode: TGocciaEngineBackend;
+      const AReporter: TBenchmarkReporter; const AMode: TGocciaExecutionMode;
       const AShowProgress: Boolean);
     procedure CollectBenchmarkSourceInterpreted(const ASource: TStringList;
       const AFileName: string; const AReporter: TBenchmarkReporter;
@@ -177,15 +175,15 @@ type
       const AShowProgress: Boolean);
     procedure CollectBenchmarkSource(const ASource: TStringList;
       const AFileName: string; const AReporter: TBenchmarkReporter;
-      const AMode: TGocciaEngineBackend; const AShowProgress: Boolean);
+      const AMode: TGocciaExecutionMode; const AShowProgress: Boolean);
     procedure RunBenchmarksFromStdin(const AReports: array of TReportSpec;
-      const AMode: TGocciaEngineBackend; const AShowProgress: Boolean);
+      const AMode: TGocciaExecutionMode; const AShowProgress: Boolean);
     procedure BenchmarkWorkerProc(const AFileName: string;
       const AIndex: Integer; out AConsoleOutput: string;
       out AErrorMessage: string; AData: Pointer);
     procedure RunBenchmarks(const APaths: TStringList;
       const AReports: array of TReportSpec;
-      const AMode: TGocciaEngineBackend; const AShowProgress: Boolean);
+      const AMode: TGocciaExecutionMode; const AShowProgress: Boolean);
   protected
     procedure Configure; override;
     function UsageLine: string; override;
@@ -278,7 +276,8 @@ var
   Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
   Module: TGocciaBytecodeModule;
-  Backend: TGocciaBytecodeBackend;
+  Executor: TGocciaBytecodeExecutor;
+  Engine: TGocciaEngine;
   GC: TGarbageCollector;
   ResultValue: TGocciaValue;
   FileResult: TBenchmarkFileResult;
@@ -298,72 +297,76 @@ begin
     end;
 
     try
-      Backend := CreateBytecodeBackend(AFileName);
+      Executor := TGocciaBytecodeExecutor.Create;
       try
-        LexStart := GetNanoseconds;
-        Lexer := TGocciaLexer.Create(SourceText, AFileName);
+        Engine := CreateEngine(AFileName, Source, Executor);
         try
-          Tokens := Lexer.ScanTokens;
-          LexEnd := GetNanoseconds;
-
-          Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
-          Parser.AutomaticSemicolonInsertion := EngineOptions.ASI.Present;
+          LexStart := GetNanoseconds;
+          Lexer := TGocciaLexer.Create(SourceText, AFileName);
           try
-            ProgramNode := Parser.Parse;
-            ParseEnd := GetNanoseconds;
+            Tokens := Lexer.ScanTokens;
+            LexEnd := GetNanoseconds;
 
+            Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
+            Parser.AutomaticSemicolonInsertion := EngineOptions.ASI.Present;
             try
-              Module := Backend.CompileToModule(ProgramNode);
-              CompileEnd := GetNanoseconds;
+              ProgramNode := Parser.Parse;
+              ParseEnd := GetNanoseconds;
+
+              try
+                Module := TGocciaBytecodeExecutor(Engine.Executor).CompileToModule(ProgramNode);
+                CompileEnd := GetNanoseconds;
+              finally
+                ProgramNode.Free;
+              end;
             finally
-              ProgramNode.Free;
+              Parser.Free;
             end;
           finally
-            Parser.Free;
+            Lexer.Free;
           end;
-        finally
-          Lexer.Free;
-        end;
 
-        if AShowProgress and Assigned(Backend.Bootstrap) and
-           Assigned(Backend.Bootstrap.BuiltinBenchmark) then
-          Backend.Bootstrap.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
-        if Assigned(Backend.Bootstrap) and Assigned(Backend.Bootstrap.BuiltinBenchmark) then
-          Backend.Bootstrap.BuiltinBenchmark.OnBeforeMeasurement := Backend.ClearTransientCaches;
+          if AShowProgress and Assigned(Engine.BuiltinBenchmark) then
+            Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
+          if Assigned(Engine.BuiltinBenchmark) then
+            Engine.BuiltinBenchmark.OnBeforeMeasurement := Engine.ClearTransientCaches;
 
-        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
-        try
+          StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
           try
-            ResultValue := Backend.RunModule(Module);
-          finally
-            ClearExecutionTimeout;
-          end;
-          ExecEnd := GetNanoseconds;
+            try
+              ResultValue := TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
+            finally
+              ClearExecutionTimeout;
+            end;
+            ExecEnd := GetNanoseconds;
 
-          FileResult.FileName := AFileName;
-          FileResult.LexTimeNanoseconds := LexEnd - LexStart;
-          FileResult.ParseTimeNanoseconds := ParseEnd - LexEnd;
-          FileResult.CompileTimeNanoseconds := CompileEnd - ParseEnd;
-          FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
+            FileResult.FileName := AFileName;
+            FileResult.LexTimeNanoseconds := LexEnd - LexStart;
+            FileResult.ParseTimeNanoseconds := ParseEnd - LexEnd;
+            FileResult.CompileTimeNanoseconds := CompileEnd - ParseEnd;
+            FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
 
-          GC := TGarbageCollector.Instance;
-          if Assigned(ResultValue) and Assigned(GC) then
-            GC.AddTempRoot(ResultValue);
-
-          ScriptResult := nil;
-          if ResultValue is TGocciaObjectValue then
-            ScriptResult := TGocciaObjectValue(ResultValue);
-          try
-            PopulateFileResult(FileResult, ScriptResult, AReporter);
-          finally
+            GC := TGarbageCollector.Instance;
             if Assigned(ResultValue) and Assigned(GC) then
-              GC.RemoveTempRoot(ResultValue);
+              GC.AddTempRoot(ResultValue);
+
+            ScriptResult := nil;
+            if ResultValue is TGocciaObjectValue then
+              ScriptResult := TGocciaObjectValue(ResultValue);
+            try
+              PopulateFileResult(FileResult, ScriptResult, AReporter);
+            finally
+              if Assigned(ResultValue) and Assigned(GC) then
+                GC.RemoveTempRoot(ResultValue);
+            end;
+          finally
+            Module.Free;
           end;
         finally
-          Module.Free;
+          Engine.Free;
         end;
       finally
-        Backend.Free;
+        Executor.Free;
       end;
     except
       on E: TGocciaError do
@@ -397,16 +400,16 @@ begin
 end;
 
 procedure TBenchmarkRunnerApp.CollectBenchmarkFile(const AFileName: string;
-  const AReporter: TBenchmarkReporter; const AMode: TGocciaEngineBackend;
+  const AReporter: TBenchmarkReporter; const AMode: TGocciaExecutionMode;
   const AShowProgress: Boolean);
 begin
   case AMode of
-    ebTreeWalk:  CollectBenchmarkFileInterpreted(AFileName, AReporter,
+    emInterpreted: CollectBenchmarkFileInterpreted(AFileName, AReporter,
       AShowProgress);
-    ebBytecode: CollectBenchmarkFileBytecode(AFileName, AReporter,
+    emBytecode: CollectBenchmarkFileBytecode(AFileName, AReporter,
       AShowProgress);
   else
-    raise Exception.CreateFmt('Unsupported execution backend: %d', [Ord(AMode)]);
+    raise Exception.CreateFmt('Unsupported execution mode: %d', [Ord(AMode)]);
   end;
 end;
 
@@ -484,7 +487,8 @@ var
   Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
   Module: TGocciaBytecodeModule;
-  Backend: TGocciaBytecodeBackend;
+  Executor: TGocciaBytecodeExecutor;
+  Engine: TGocciaEngine;
   GC: TGarbageCollector;
   ResultValue: TGocciaValue;
   FileResult: TBenchmarkFileResult;
@@ -502,72 +506,76 @@ begin
   end;
 
   try
-    Backend := CreateBytecodeBackend(AFileName);
+    Executor := TGocciaBytecodeExecutor.Create;
     try
-      LexStart := GetNanoseconds;
-      Lexer := TGocciaLexer.Create(SourceText, AFileName);
+      Engine := CreateEngine(AFileName, ASource, Executor);
       try
-        Tokens := Lexer.ScanTokens;
-        LexEnd := GetNanoseconds;
-
-        Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
-        Parser.AutomaticSemicolonInsertion := EngineOptions.ASI.Present;
+        LexStart := GetNanoseconds;
+        Lexer := TGocciaLexer.Create(SourceText, AFileName);
         try
-          ProgramNode := Parser.Parse;
-          ParseEnd := GetNanoseconds;
+          Tokens := Lexer.ScanTokens;
+          LexEnd := GetNanoseconds;
 
+          Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
+          Parser.AutomaticSemicolonInsertion := EngineOptions.ASI.Present;
           try
-            Module := Backend.CompileToModule(ProgramNode);
-            CompileEnd := GetNanoseconds;
+            ProgramNode := Parser.Parse;
+            ParseEnd := GetNanoseconds;
+
+            try
+              Module := TGocciaBytecodeExecutor(Engine.Executor).CompileToModule(ProgramNode);
+              CompileEnd := GetNanoseconds;
+            finally
+              ProgramNode.Free;
+            end;
           finally
-            ProgramNode.Free;
+            Parser.Free;
           end;
         finally
-          Parser.Free;
+          Lexer.Free;
         end;
-      finally
-        Lexer.Free;
-      end;
 
-      if AShowProgress and Assigned(Backend.Bootstrap) and
-         Assigned(Backend.Bootstrap.BuiltinBenchmark) then
-        Backend.Bootstrap.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
-      if Assigned(Backend.Bootstrap) and Assigned(Backend.Bootstrap.BuiltinBenchmark) then
-        Backend.Bootstrap.BuiltinBenchmark.OnBeforeMeasurement := Backend.ClearTransientCaches;
+        if AShowProgress and Assigned(Engine.BuiltinBenchmark) then
+          Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
+        if Assigned(Engine.BuiltinBenchmark) then
+          Engine.BuiltinBenchmark.OnBeforeMeasurement := Engine.ClearTransientCaches;
 
-      StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
-      try
+        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
         try
-          ResultValue := Backend.RunModule(Module);
-        finally
-          ClearExecutionTimeout;
-        end;
-        ExecEnd := GetNanoseconds;
+          try
+            ResultValue := TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
+          finally
+            ClearExecutionTimeout;
+          end;
+          ExecEnd := GetNanoseconds;
 
-        FileResult.FileName := AFileName;
-        FileResult.LexTimeNanoseconds := LexEnd - LexStart;
-        FileResult.ParseTimeNanoseconds := ParseEnd - LexEnd;
-        FileResult.CompileTimeNanoseconds := CompileEnd - ParseEnd;
-        FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
+          FileResult.FileName := AFileName;
+          FileResult.LexTimeNanoseconds := LexEnd - LexStart;
+          FileResult.ParseTimeNanoseconds := ParseEnd - LexEnd;
+          FileResult.CompileTimeNanoseconds := CompileEnd - ParseEnd;
+          FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
 
-        GC := TGarbageCollector.Instance;
-        if Assigned(ResultValue) and Assigned(GC) then
-          GC.AddTempRoot(ResultValue);
-
-        ScriptResult := nil;
-        if ResultValue is TGocciaObjectValue then
-          ScriptResult := TGocciaObjectValue(ResultValue);
-        try
-          PopulateFileResult(FileResult, ScriptResult, AReporter);
-        finally
+          GC := TGarbageCollector.Instance;
           if Assigned(ResultValue) and Assigned(GC) then
-            GC.RemoveTempRoot(ResultValue);
+            GC.AddTempRoot(ResultValue);
+
+          ScriptResult := nil;
+          if ResultValue is TGocciaObjectValue then
+            ScriptResult := TGocciaObjectValue(ResultValue);
+          try
+            PopulateFileResult(FileResult, ScriptResult, AReporter);
+          finally
+            if Assigned(ResultValue) and Assigned(GC) then
+              GC.RemoveTempRoot(ResultValue);
+          end;
+        finally
+          Module.Free;
         end;
       finally
-        Module.Free;
+        Engine.Free;
       end;
     finally
-      Backend.Free;
+      Executor.Free;
     end;
   except
     on E: TGocciaError do
@@ -594,15 +602,15 @@ end;
 
 procedure TBenchmarkRunnerApp.CollectBenchmarkSource(const ASource: TStringList;
   const AFileName: string; const AReporter: TBenchmarkReporter;
-  const AMode: TGocciaEngineBackend; const AShowProgress: Boolean);
+  const AMode: TGocciaExecutionMode; const AShowProgress: Boolean);
 begin
   case AMode of
-    ebTreeWalk: CollectBenchmarkSourceInterpreted(ASource, AFileName,
+    emInterpreted: CollectBenchmarkSourceInterpreted(ASource, AFileName,
       AReporter, AShowProgress);
-    ebBytecode: CollectBenchmarkSourceBytecode(ASource, AFileName,
+    emBytecode: CollectBenchmarkSourceBytecode(ASource, AFileName,
       AReporter, AShowProgress);
   else
-    raise Exception.CreateFmt('Unsupported execution backend: %d', [Ord(AMode)]);
+    raise Exception.CreateFmt('Unsupported execution mode: %d', [Ord(AMode)]);
   end;
 end;
 
@@ -615,16 +623,16 @@ procedure TBenchmarkRunnerApp.BenchmarkWorkerProc(const AFileName: string;
 var
   WorkerReporter: TBenchmarkReporter;
   WorkerResults: PBenchmarkFileResultArray;
-  Mode: TGocciaEngineBackend;
+  Mode: TGocciaExecutionMode;
 begin
   AConsoleOutput := '';
   AErrorMessage := '';
   WorkerResults := PBenchmarkFileResultArray(AData);
 
   if EngineOptions.Mode.Matches(emBytecode) then
-    Mode := ebBytecode
+    Mode := emBytecode
   else
-    Mode := ebTreeWalk;
+    Mode := emInterpreted;
 
   WorkerReporter := TBenchmarkReporter.Create;
   try
@@ -656,7 +664,7 @@ end;
 
 procedure TBenchmarkRunnerApp.RunBenchmarksFromStdin(
   const AReports: array of TReportSpec;
-  const AMode: TGocciaEngineBackend; const AShowProgress: Boolean);
+  const AMode: TGocciaExecutionMode; const AShowProgress: Boolean);
 var
   Source: TStringList;
   Reporter: TBenchmarkReporter;
@@ -686,7 +694,7 @@ end;
 
 procedure TBenchmarkRunnerApp.RunBenchmarks(const APaths: TStringList;
   const AReports: array of TReportSpec;
-  const AMode: TGocciaEngineBackend; const AShowProgress: Boolean);
+  const AMode: TGocciaExecutionMode; const AShowProgress: Boolean);
 var
   Files: TStringList;
   I, J, P, JobCount: Integer;
@@ -814,15 +822,15 @@ procedure TBenchmarkRunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
   Reports: array of TReportSpec;
   ReportCount, I: Integer;
-  Mode: TGocciaEngineBackend;
+  Mode: TGocciaExecutionMode;
   ShowProgress: Boolean;
 begin
   ShowProgress := not FNoProgress.Present;
 
   if EngineOptions.Mode.Matches(emBytecode) then
-    Mode := ebBytecode
+    Mode := emBytecode
   else
-    Mode := ebTreeWalk;
+    Mode := emInterpreted;
 
   ReportCount := FFormats.Values.Count;
   if ReportCount = 0 then

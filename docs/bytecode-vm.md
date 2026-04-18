@@ -5,6 +5,7 @@
 ## Executive Summary
 
 - **Two execution modes** — tree-walk interpreter (default) and bytecode VM (`--mode=bytecode`), sharing the same frontend, runtime objects, and GC
+- **Executor abstraction** — `TGocciaBytecodeExecutor` implements `TGocciaExecutor` with no dependency on the interpreter or evaluator
 - **Goccia-owned VM** — executes directly on `TGocciaValue` with tagged `TGocciaRegister` values; not a generic VM layer
 - **Opcode space** — core instructions (0-127) for hot paths, non-core generic ops (128-166), and semantic/helper instructions (167-255) for colder operations like imports/exports
 - **Binary format** — `.gbc` files with little-endian encoding, `GBC\0` magic, and version constant
@@ -13,10 +14,10 @@
 
 GocciaScript has two execution modes:
 
-- **Interpreter mode**: tree-walk execution over the AST
-- **Bytecode mode**: AST compilation to Goccia bytecode, then execution on `TGocciaVM`
+- **Interpreter mode**: tree-walk execution over the AST via `TGocciaInterpreterExecutor`
+- **Bytecode mode**: AST compilation to Goccia bytecode, then execution on `TGocciaVM` via `TGocciaBytecodeExecutor`
 
-The bytecode backend is no longer a language-agnostic subsystem. It is a Goccia-owned VM that executes directly on `TGocciaValue` and shares the same runtime object model as the interpreter.
+Both modes are implementations of `TGocciaExecutor` (see [Architecture](architecture.md#executor-architecture)). The single `TGocciaEngine` class bootstraps the runtime (global scope, built-ins, shims) and delegates execution to whichever executor is configured. The bytecode executor has no dependency on the interpreter or evaluator — it only uses the compiler and VM.
 
 ## Pipeline
 
@@ -37,7 +38,7 @@ Public bytecode artifacts use the `.gbc` extension.
 | Debug metadata | `Goccia.Bytecode.Debug.pas` |
 | VM execution | `Goccia.VM.pas` |
 | Frames / closures / upvalues | `Goccia.VM.CallFrame.pas`, `Goccia.VM.Closure.pas`, `Goccia.VM.Upvalue.pas` |
-| Backend entry point | `Goccia.Engine.Backend.pas` |
+| Bytecode executor | `Goccia.Engine.Backend.pas` (`TGocciaBytecodeExecutor`) |
 | Opcode name lookup | `Goccia.Bytecode.OpCodeNames.pas` |
 | Profiler | `Goccia.Profiler.pas`, `Goccia.Profiler.Report.pas` |
 

@@ -64,7 +64,7 @@ var
   ScriptResult: TGocciaScriptResult;
 
   { Bytecode mode }
-  Backend: TGocciaBytecodeBackend;
+  BcExecutor: TGocciaBytecodeExecutor;
   LiveModules: TObjectList<TGocciaBytecodeModule>;
   ResultValue: TGocciaValue;
   SourceText: string;
@@ -113,15 +113,17 @@ begin
 
           if IsBytecodeMode then
           begin
-            Backend := TGocciaBytecodeBackend.Create(REPL_FILE_NAME);
-            Backend.ASIEnabled := EngineOpts.ASI.Present;
+            BcExecutor := TGocciaBytecodeExecutor.Create;
+            BcExecutor.GlobalBackedTopLevel := True;
             LiveModules := TObjectList<TGocciaBytecodeModule>.Create(True);
             try
-              Backend.RegisterBuiltIns([]);
-              Backend.GlobalBackedTopLevel := True;
-              ConfigureModuleResolver(Backend.ModuleResolver, REPL_FILE_NAME,
-                EngineOpts.ImportMap.ValueOr(''), EngineOpts.Aliases.Values);
-              while True do
+              Eng := TGocciaEngine.Create(REPL_FILE_NAME, Source, [],
+                BcExecutor);
+              try
+                Eng.ASIEnabled := EngineOpts.ASI.Present;
+                ConfigureModuleResolver(Eng.Resolver, REPL_FILE_NAME,
+                  EngineOpts.ImportMap.ValueOr(''), EngineOpts.Aliases.Values);
+                while True do
               begin
                 ReadResult := Editor.ReadLine('> ', Line);
                 if ReadResult = lrExit then
@@ -163,11 +165,11 @@ begin
                       ParseEnd := GetNanoseconds;
 
                       try
-                        Module := Backend.CompileToModule(ProgramNode);
+                        Module := TGocciaBytecodeExecutor(Eng.Executor).CompileToModule(ProgramNode);
                         CompileEnd := GetNanoseconds;
 
                         try
-                          ResultValue := Backend.RunModule(Module);
+                          ResultValue := TGocciaBytecodeExecutor(Eng.Executor).RunModule(Module);
                           if Assigned(ResultValue) then
                             TGarbageCollector.Instance.AddTempRoot(ResultValue);
                           try
@@ -218,9 +220,12 @@ begin
                      FormatDuration(ExecEnd - CompileEnd),
                      FormatDuration(ExecEnd - StartTime)]));
               end;
+              finally
+                Eng.Free;
+              end;
             finally
               LiveModules.Free;
-              Backend.Free;
+              BcExecutor.Free;
               Editor.Free;
               Source.Free;
             end;

@@ -73,8 +73,6 @@ type
       const AOutputLines: TStrings);
     procedure ApplyDataGlobalsToEngine(const AEngine: TGocciaEngine);
     procedure ApplyModuleGlobalsToEngine(const AEngine: TGocciaEngine);
-    procedure ApplyDataGlobalsToBytecodeBackend(const ABackend: TGocciaBytecodeBackend);
-    procedure ApplyModuleGlobalsToBytecodeBackend(const ABackend: TGocciaBytecodeBackend);
     function ExecuteInterpreted(const ASource: TStringList; const AFileName: string;
       const AOutputLines: TStrings): TScriptExecutionReport;
     function ExecuteBytecodeFromSource(const ASource: TStringList; const AFileName: string;
@@ -314,42 +312,6 @@ begin
       AEngine.InjectGlobalsFromModule(FGlobalFiles.Values[I]);
 end;
 
-procedure TScriptLoaderApp.ApplyDataGlobalsToBytecodeBackend(
-  const ABackend: TGocciaBytecodeBackend);
-var
-  I: Integer;
-  Pair: TScriptLoaderGlobalPair;
-begin
-  for I := 0 to FGlobalFiles.Values.Count - 1 do
-    if IsStructuredGlobalsFile(FGlobalFiles.Values[I]) then
-    begin
-      if IsYAMLGlobalsFile(FGlobalFiles.Values[I]) then
-        ABackend.InjectGlobalsFromYAML(ReadFileText(FGlobalFiles.Values[I]))
-      else if IsJSON5GlobalsFile(FGlobalFiles.Values[I]) then
-        ABackend.InjectGlobalsFromJSON5(ReadFileText(FGlobalFiles.Values[I]))
-      else if IsTOMLGlobalsFile(FGlobalFiles.Values[I]) then
-        ABackend.InjectGlobalsFromTOML(ReadFileText(FGlobalFiles.Values[I]))
-      else
-        ABackend.InjectGlobalsFromJSON(ReadFileText(FGlobalFiles.Values[I]));
-    end;
-
-  for I := 0 to FInlineGlobals.Values.Count - 1 do
-  begin
-    Pair := ParseGlobalPair(FInlineGlobals.Values[I]);
-    ABackend.RegisterGlobal(Pair.Key, ParseInlineGlobalValue(Pair.ValueText));
-  end;
-end;
-
-procedure TScriptLoaderApp.ApplyModuleGlobalsToBytecodeBackend(
-  const ABackend: TGocciaBytecodeBackend);
-var
-  I: Integer;
-begin
-  for I := 0 to FGlobalFiles.Values.Count - 1 do
-    if not IsStructuredGlobalsFile(FGlobalFiles.Values[I]) then
-      ABackend.InjectGlobalsFromModule(FGlobalFiles.Values[I]);
-end;
-
 function TScriptLoaderApp.ExecuteInterpreted(const ASource: TStringList;
   const AFileName: string; const AOutputLines: TStrings): TScriptExecutionReport;
 var
@@ -395,52 +357,58 @@ function TScriptLoaderApp.ExecuteBytecodeFromSource(const ASource: TStringList;
 var
   ProgramNode: TGocciaProgram;
   Module: TGocciaBytecodeModule;
-  Backend: TGocciaBytecodeBackend;
+  Executor: TGocciaBytecodeExecutor;
+  Engine: TGocciaEngine;
   SourceMap: TGocciaSourceMap;
   StartTime, CompileStart, CompileEnd, ExecEnd: Int64;
 begin
   StartTime := GetNanoseconds;
-  Backend := CreateBytecodeBackend(AFileName);
+  Executor := TGocciaBytecodeExecutor.Create;
   try
-    ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
-    ApplyDataGlobalsToBytecodeBackend(Backend);
-
-    ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultPreprocessors,
-      (FOutputPath.Present and (FOutputPath.Value = 'json')), Result.Timing.LexTimeNanoseconds,
-      Result.Timing.ParseTimeNanoseconds, SourceMap);
+    Engine := CreateEngine(AFileName, ASource, Executor);
     try
-      WriteSourceMapIfEnabled(SourceMap, AFileName);
+      ConfigureConsole(Engine.BuiltinConsole, AOutputLines);
+      ApplyDataGlobalsToEngine(Engine);
 
-      if Assigned(TGocciaCoverageTracker.Instance) and
-         TGocciaCoverageTracker.Instance.Enabled and Assigned(ASource) then
-        TGocciaCoverageTracker.Instance.RegisterSourceFile(
-          AFileName, CountExecutableLines(ASource));
-
-      CompileStart := GetNanoseconds;
-      Module := Backend.CompileToModule(ProgramNode);
-      CompileEnd := GetNanoseconds;
-      Result.Timing.CompileTimeNanoseconds := CompileEnd - CompileStart;
-    finally
-      ProgramNode.Free;
-      SourceMap.Free;
-    end;
-
-    StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
-    try
+      ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultPreprocessors,
+        (FOutputPath.Present and (FOutputPath.Value = 'json')), Result.Timing.LexTimeNanoseconds,
+        Result.Timing.ParseTimeNanoseconds, SourceMap);
       try
-        ApplyModuleGlobalsToBytecodeBackend(Backend);
-        Result.ResultValue := Backend.RunModule(Module);
+        WriteSourceMapIfEnabled(SourceMap, AFileName);
+
+        if Assigned(TGocciaCoverageTracker.Instance) and
+           TGocciaCoverageTracker.Instance.Enabled and Assigned(ASource) then
+          TGocciaCoverageTracker.Instance.RegisterSourceFile(
+            AFileName, CountExecutableLines(ASource));
+
+        CompileStart := GetNanoseconds;
+        Module := TGocciaBytecodeExecutor(Engine.Executor).CompileToModule(ProgramNode);
+        CompileEnd := GetNanoseconds;
+        Result.Timing.CompileTimeNanoseconds := CompileEnd - CompileStart;
       finally
-        ClearExecutionTimeout;
+        ProgramNode.Free;
+        SourceMap.Free;
       end;
-      ExecEnd := GetNanoseconds;
-      Result.Timing.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
-      Result.Timing.TotalTimeNanoseconds := ExecEnd - StartTime;
+
+      StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+      try
+        try
+          ApplyModuleGlobalsToEngine(Engine);
+          Result.ResultValue := TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
+        finally
+          ClearExecutionTimeout;
+        end;
+        ExecEnd := GetNanoseconds;
+        Result.Timing.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
+        Result.Timing.TotalTimeNanoseconds := ExecEnd - StartTime;
+      finally
+        Module.Free;
+      end;
     finally
-      Module.Free;
+      Engine.Free;
     end;
   finally
-    Backend.Free;
+    Executor.Free;
   end;
 end;
 
@@ -448,32 +416,38 @@ function TScriptLoaderApp.ExecuteBytecodeFromFile(const AFileName: string;
   const AOutputLines: TStrings): TScriptExecutionReport;
 var
   Module: TGocciaBytecodeModule;
-  Backend: TGocciaBytecodeBackend;
+  Executor: TGocciaBytecodeExecutor;
+  Engine: TGocciaEngine;
   StartTime, LoadEnd, ExecEnd: Int64;
 begin
   StartTime := GetNanoseconds;
   Module := Goccia.Bytecode.Binary.LoadModuleFromFile(AFileName);
   LoadEnd := GetNanoseconds;
   try
-    Backend := CreateBytecodeBackend(AFileName);
+    Executor := TGocciaBytecodeExecutor.Create;
     try
-      ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
-      ApplyDataGlobalsToBytecodeBackend(Backend);
-      StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+      Engine := CreateEngine(AFileName, nil, Executor);
       try
-        ApplyModuleGlobalsToBytecodeBackend(Backend);
-        Result.ResultValue := Backend.RunModule(Module);
+        ConfigureConsole(Engine.BuiltinConsole, AOutputLines);
+        ApplyDataGlobalsToEngine(Engine);
+        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+        try
+          ApplyModuleGlobalsToEngine(Engine);
+          Result.ResultValue := TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
+        finally
+          ClearExecutionTimeout;
+        end;
+        ExecEnd := GetNanoseconds;
+        Result.Timing.LexTimeNanoseconds := 0;
+        Result.Timing.ParseTimeNanoseconds := 0;
+        Result.Timing.CompileTimeNanoseconds := 0;
+        Result.Timing.ExecuteTimeNanoseconds := ExecEnd - LoadEnd;
+        Result.Timing.TotalTimeNanoseconds := ExecEnd - StartTime;
       finally
-        ClearExecutionTimeout;
+        Engine.Free;
       end;
-      ExecEnd := GetNanoseconds;
-      Result.Timing.LexTimeNanoseconds := 0;
-      Result.Timing.ParseTimeNanoseconds := 0;
-      Result.Timing.CompileTimeNanoseconds := 0;
-      Result.Timing.ExecuteTimeNanoseconds := ExecEnd - LoadEnd;
-      Result.Timing.TotalTimeNanoseconds := ExecEnd - StartTime;
     finally
-      Backend.Free;
+      Executor.Free;
     end;
   finally
     Module.Free;
