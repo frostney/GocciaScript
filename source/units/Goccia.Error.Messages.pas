@@ -677,6 +677,14 @@ resourcestring
   SErrorSemverInvalidIncrement = 'invalid increment';
   SErrorJSON5StringifyError = 'JSON5.stringify error: %s';
 
+  // Fetch API
+  SErrorFetchRequiresURL = 'fetch requires a URL argument';
+  SErrorFetchUnsupportedMethod = 'fetch does not support method ''%s''; only GET and HEAD are allowed';
+  SErrorHeadersNotHeaders = 'Headers method called on non-Headers object';
+  SErrorHeadersForEachNotCallable = 'Headers.prototype.forEach: callback is not a function';
+  SErrorResponseNotResponse = 'Response method called on non-Response object';
+  SErrorResponseBodyAlreadyUsed = 'body has already been consumed';
+
 implementation
 
 end.

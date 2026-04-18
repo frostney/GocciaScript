@@ -195,7 +195,7 @@ const
   // ---------------------------------------------------------------------------
   // WHATWG / W3C Web Platform APIs
   // ---------------------------------------------------------------------------
-  WHATWG_FEATURES: array[0..9] of TGocciaFeatureEntry = (
+  WHATWG_FEATURES: array[0..12] of TGocciaFeatureEntry = (
     (Name: 'console';           Link: 'https://console.spec.whatwg.org/'),
     (Name: 'structuredClone';   Link: 'https://html.spec.whatwg.org/multipage/structured-data.html#dom-structuredclone'),
     (Name: 'DOMException';      Link: 'https://webidl.spec.whatwg.org/#idl-DOMException'),
@@ -205,7 +205,10 @@ const
     (Name: 'URLSearchParams';   Link: 'https://url.spec.whatwg.org/#urlsearchparams'),
     (Name: 'TextEncoder';       Link: 'https://encoding.spec.whatwg.org/#textencoder'),
     (Name: 'TextDecoder';       Link: 'https://encoding.spec.whatwg.org/#textdecoder'),
-    (Name: 'Performance';       Link: 'https://w3c.github.io/hr-time/#dom-performance-now')
+    (Name: 'Performance';       Link: 'https://w3c.github.io/hr-time/#dom-performance-now'),
+    (Name: 'fetch';             Link: 'https://fetch.spec.whatwg.org/#fetch-method'),
+    (Name: 'Headers';           Link: 'https://fetch.spec.whatwg.org/#headers-class'),
+    (Name: 'Response';          Link: 'https://fetch.spec.whatwg.org/#response-class')
   );
 
   // ---------------------------------------------------------------------------

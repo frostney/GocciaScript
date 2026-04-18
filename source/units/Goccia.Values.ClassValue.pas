@@ -189,6 +189,14 @@ type
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
   end;
 
+  TGocciaHeadersClassValue = class(TGocciaClassValue)
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+  end;
+
+  TGocciaResponseClassValue = class(TGocciaClassValue)
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+  end;
+
   TGocciaInstanceValue = class(TGocciaObjectValue)
   private
     FClass: TGocciaClassValue;
@@ -232,8 +240,10 @@ uses
   Goccia.Values.AutoAccessor,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.HeadersValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
+  Goccia.Values.ResponseValue,
   Goccia.Values.SetValue,
   Goccia.Values.SharedArrayBufferValue,
   Goccia.Values.TextDecoderValue,
@@ -1113,6 +1123,20 @@ end;
 function TGocciaURLSearchParamsClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
 begin
   Result := TGocciaURLSearchParamsValue.Create(nil);
+end;
+
+{ TGocciaHeadersClassValue }
+
+function TGocciaHeadersClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+begin
+  Result := TGocciaHeadersValue.Create;
+end;
+
+{ TGocciaResponseClassValue }
+
+function TGocciaResponseClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+begin
+  Result := TGocciaResponseValue.Create;
 end;
 
 { TGocciaStringClassValue }

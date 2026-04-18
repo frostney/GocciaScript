@@ -83,10 +83,27 @@ type
     procedure MarkReferences; override;
   end;
 
+  TGocciaHeadersIteratorKind = (hikEntries, hikKeys, hikValues);
+
+  TGocciaHeadersIteratorValue = class(TGocciaIteratorValue)
+  private
+    FSource: TGocciaValue;
+    FIndex: Integer;
+    FKind: TGocciaHeadersIteratorKind;
+  public
+    constructor Create(const ASource: TGocciaValue;
+      const AKind: TGocciaHeadersIteratorKind);
+    function AdvanceNext: TGocciaObjectValue; override;
+    function DirectNext(out ADone: Boolean): TGocciaValue; override;
+    function ToStringTag: string; override;
+    procedure MarkReferences; override;
+  end;
+
 implementation
 
 uses
   Goccia.Values.ArrayValue,
+  Goccia.Values.HeadersValue,
   Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
   Goccia.Values.SetValue,
@@ -550,6 +567,109 @@ begin
 end;
 
 procedure TGocciaURLSearchParamsIteratorValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FSource) then
+    FSource.MarkReferences;
+end;
+
+{ TGocciaHeadersIteratorValue }
+
+constructor TGocciaHeadersIteratorValue.Create(const ASource: TGocciaValue;
+  const AKind: TGocciaHeadersIteratorKind);
+begin
+  inherited Create;
+  FSource := ASource;
+  FIndex := 0;
+  FKind := AKind;
+end;
+
+function TGocciaHeadersIteratorValue.AdvanceNext: TGocciaObjectValue;
+var
+  H: TGocciaHeadersValue;
+  EntryArray: TGocciaArrayValue;
+begin
+  if FDone then
+  begin
+    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
+    Exit;
+  end;
+
+  H := TGocciaHeadersValue(FSource);
+  if FIndex >= H.Entries.Count then
+  begin
+    FDone := True;
+    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
+    Exit;
+  end;
+
+  case FKind of
+    hikEntries:
+    begin
+      EntryArray := TGocciaArrayValue.Create;
+      EntryArray.Elements.Add(
+        TGocciaStringLiteralValue.Create(H.Entries[FIndex].Name));
+      EntryArray.Elements.Add(
+        TGocciaStringLiteralValue.Create(H.Entries[FIndex].Value));
+      Result := CreateIteratorResult(EntryArray, False);
+    end;
+    hikKeys:
+      Result := CreateIteratorResult(
+        TGocciaStringLiteralValue.Create(H.Entries[FIndex].Name), False);
+    hikValues:
+      Result := CreateIteratorResult(
+        TGocciaStringLiteralValue.Create(H.Entries[FIndex].Value), False);
+  end;
+  Inc(FIndex);
+end;
+
+function TGocciaHeadersIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
+var
+  H: TGocciaHeadersValue;
+  EntryArray: TGocciaArrayValue;
+begin
+  if FDone then
+  begin
+    ADone := True;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  H := TGocciaHeadersValue(FSource);
+  if FIndex >= H.Entries.Count then
+  begin
+    FDone := True;
+    ADone := True;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  ADone := False;
+  case FKind of
+    hikEntries:
+    begin
+      EntryArray := TGocciaArrayValue.Create;
+      EntryArray.Elements.Add(
+        TGocciaStringLiteralValue.Create(H.Entries[FIndex].Name));
+      EntryArray.Elements.Add(
+        TGocciaStringLiteralValue.Create(H.Entries[FIndex].Value));
+      Result := EntryArray;
+    end;
+    hikKeys:
+      Result := TGocciaStringLiteralValue.Create(H.Entries[FIndex].Name);
+    hikValues:
+      Result := TGocciaStringLiteralValue.Create(H.Entries[FIndex].Value);
+  end;
+  Inc(FIndex);
+end;
+
+function TGocciaHeadersIteratorValue.ToStringTag: string;
+begin
+  Result := 'Headers Iterator';
+end;
+
+procedure TGocciaHeadersIteratorValue.MarkReferences;
 begin
   if GCMarked then Exit;
   inherited;

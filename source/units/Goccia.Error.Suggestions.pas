@@ -350,6 +350,11 @@ resourcestring
   // Runtime errors — read-only property
   SSuggestReadOnlyProperty = 'the property is read-only and cannot be assigned to';
 
+  // Fetch API
+  SSuggestFetchUsage = 'use fetch(url) or fetch(url, { method: "GET" })';
+  SSuggestHeadersThisType = 'Headers prototype methods must be called on a Headers object';
+  SSuggestResponseThisType = 'Response prototype methods must be called on a Response object';
+
 implementation
 
 end.

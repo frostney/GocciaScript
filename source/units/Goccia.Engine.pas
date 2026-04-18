@@ -16,6 +16,7 @@ uses
   Goccia.Builtins.DisposableStack,
   Goccia.Builtins.GlobalArray,
   Goccia.Builtins.GlobalArrayBuffer,
+  Goccia.Builtins.GlobalFetch,
   Goccia.Builtins.GlobalFFI,
   Goccia.Builtins.GlobalMap,
   Goccia.Builtins.GlobalNumber,
@@ -157,6 +158,7 @@ type
     FBuiltinTextDecoder: TGocciaGlobalTextDecoder;
     FBuiltinURL: TGocciaGlobalURL;
     FBuiltinURLSearchParams: TGocciaGlobalURLSearchParams;
+    FBuiltinFetch: TGocciaGlobalFetch;
     FBuiltinDisposableStack: TGocciaBuiltinDisposableStack;
     FPreviousExceptionMask: TFPUExceptionMask;
     FSuppressWarnings: Boolean;
@@ -293,11 +295,13 @@ uses
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.BooleanObjectValue,
+  Goccia.Values.HeadersValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.NumberObjectValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
+  Goccia.Values.ResponseValue,
   Goccia.Values.SetValue,
   Goccia.Values.SharedArrayBufferValue,
   Goccia.Values.StringObjectValue,
@@ -656,6 +660,7 @@ begin
     FBuiltinTextDecoder.Free;
     FBuiltinURL.Free;
     FBuiltinURLSearchParams.Free;
+    FBuiltinFetch.Free;
     FBuiltinDisposableStack.Free;
     ClearImportMetaCache;
     FLastSourceMap.Free;
@@ -713,6 +718,7 @@ begin
   FBuiltinURL := TGocciaGlobalURL.Create(CONSTRUCTOR_URL, Scope, ThrowError);
   FBuiltinURLSearchParams := TGocciaGlobalURLSearchParams.Create(
     CONSTRUCTOR_URL_SEARCH_PARAMS, Scope, ThrowError);
+  FBuiltinFetch := TGocciaGlobalFetch.Create('Fetch', Scope, ThrowError);
 
   // Special-purpose built-ins: flag-gated.
   if ggTestAssertions in FGlobals then
@@ -791,6 +797,16 @@ end;
 procedure ExposeURLSearchParamsPrototype(const AConstructor: TGocciaValue);
 begin
   TGocciaURLSearchParamsValue.ExposePrototype(AConstructor);
+end;
+
+procedure ExposeHeadersPrototype(const AConstructor: TGocciaValue);
+begin
+  TGocciaHeadersValue.ExposePrototype(AConstructor);
+end;
+
+procedure ExposeResponsePrototype(const AConstructor: TGocciaValue);
+begin
+  TGocciaResponseValue.ExposePrototype(AConstructor);
 end;
 
 procedure TGocciaEngine.RegisterBuiltinConstructors;
@@ -896,6 +912,26 @@ begin
   TypeDef.AddSpeciesGetter := False;
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   URLSearchParamsConstructor := TGocciaURLSearchParamsClassValue(GenericConstructor);
+
+  TypeDef.ConstructorName := CONSTRUCTOR_HEADERS;
+  TypeDef.Kind := gtdkNativeInstanceType;
+  TypeDef.ClassValueClass := TGocciaHeadersClassValue;
+  TypeDef.ExposePrototype := @ExposeHeadersPrototype;
+  TypeDef.PrototypeProvider := nil;
+  TypeDef.StaticSource := nil;
+  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+  TypeDef.AddSpeciesGetter := False;
+  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+
+  TypeDef.ConstructorName := CONSTRUCTOR_RESPONSE;
+  TypeDef.Kind := gtdkNativeInstanceType;
+  TypeDef.ClassValueClass := TGocciaResponseClassValue;
+  TypeDef.ExposePrototype := @ExposeResponsePrototype;
+  TypeDef.PrototypeProvider := nil;
+  TypeDef.StaticSource := nil;
+  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+  TypeDef.AddSpeciesGetter := False;
+  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
 
   ArrayBufferConstructor := TGocciaArrayBufferClassValue.Create(CONSTRUCTOR_ARRAY_BUFFER, nil);
   TGocciaArrayBufferValue.ExposePrototype(ArrayBufferConstructor);
