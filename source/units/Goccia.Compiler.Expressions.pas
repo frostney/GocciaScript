@@ -107,6 +107,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Keywords.Reserved,
   Goccia.Token,
+  Goccia.Values.BigIntValue,
   Goccia.Values.Primitives;
 
 function PrivateKey(const AScope: TGocciaCompilerScope;
@@ -157,6 +158,12 @@ begin
   begin
     Idx := ACtx.Template.AddConstantString(
       TGocciaStringLiteralValue(Value).Value);
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ADest, Idx));
+  end
+  else if Value is TGocciaBigIntValue then
+  begin
+    Idx := ACtx.Template.AddConstantBigInt(
+      TGocciaBigIntValue(Value).Value.ToString);
     EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ADest, Idx));
   end
   else

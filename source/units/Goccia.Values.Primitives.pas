@@ -227,6 +227,7 @@ begin
   TGarbageCollector.Instance.PinObject(TGocciaNumberLiteralValue.NegativeZeroValue);
   TGarbageCollector.Instance.PinObject(TGocciaNumberLiteralValue.InfinityValue);
   TGarbageCollector.Instance.PinObject(TGocciaNumberLiteralValue.NegativeInfinityValue);
+  // BigInt singletons are pinned in TGocciaBigIntValue.BigIntZero/BigIntOne
 end;
 
 { TGocciaNullLiteralValue }

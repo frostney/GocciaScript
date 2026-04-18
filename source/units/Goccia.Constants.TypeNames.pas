@@ -14,6 +14,7 @@ const
   NUMBER_TYPE_NAME    = 'number';
   STRING_TYPE_NAME    = 'string';
   SYMBOL_TYPE_NAME    = 'symbol';
+  BIGINT_TYPE_NAME    = 'bigint';
   FUNCTION_TYPE_NAME  = 'function';
 
 implementation

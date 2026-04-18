@@ -1012,6 +1012,7 @@ begin
     gttRightParen:
       FCanStartRegex := PopParenRegexContext();
     gttNumber,
+    gttBigInt,
     gttString,
     gttTemplate,
     gttRegex,
@@ -1279,9 +1280,11 @@ procedure TGocciaLexer.ScanNumber;
 var
   Ch: Char;
   HasSeparator: Boolean;
+  HasDecimalOrExponent: Boolean;
   Lexeme: string;
 begin
   HasSeparator := False;
+  HasDecimalOrExponent := False;
   Ch := Peek;
 
   if Ch = '0' then
@@ -1382,6 +1385,7 @@ begin
       FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator)
   else if (Peek = '.') and CharInSet(PeekNext, ['0'..'9']) then
   begin
+    HasDecimalOrExponent := True;
     Advance;
     while CharInSet(Peek, ['0'..'9', '_']) do
     begin
@@ -1400,6 +1404,7 @@ begin
 
   if CharInSet(Peek, ['e', 'E']) then
   begin
+    HasDecimalOrExponent := True;
     Advance;
     if CharInSet(Peek, ['+', '-']) then
       Advance;
@@ -1421,10 +1426,22 @@ begin
     end;
   end;
 
-  Lexeme := Copy(FSource, FStart, FCurrent - FStart);
-  if HasSeparator then
-    Lexeme := StringReplace(Lexeme, '_', '', [rfReplaceAll]);
-  AddToken(gttNumber, Lexeme);
+  // ES2026 §12.9.3 BigIntLiteralSuffix: check for 'n' suffix
+  if (Peek = 'n') and (not HasDecimalOrExponent) then
+  begin
+    Advance;
+    Lexeme := Copy(FSource, FStart, FCurrent - FStart - 1); // Exclude 'n'
+    if HasSeparator then
+      Lexeme := StringReplace(Lexeme, '_', '', [rfReplaceAll]);
+    AddToken(gttBigInt, Lexeme);
+  end
+  else
+  begin
+    Lexeme := Copy(FSource, FStart, FCurrent - FStart);
+    if HasSeparator then
+      Lexeme := StringReplace(Lexeme, '_', '', [rfReplaceAll]);
+    AddToken(gttNumber, Lexeme);
+  end;
 end;
 
 function TGocciaLexer.IsValidIdentifierChar(const C: Char): Boolean;

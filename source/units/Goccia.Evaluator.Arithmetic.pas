@@ -21,9 +21,12 @@ implementation
 uses
   Math,
 
+  BigInteger,
+
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Evaluator.Bitwise,
+  Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.SymbolValue,
   Goccia.Values.ToPrimitive;
@@ -36,11 +39,19 @@ begin
     Result := TGocciaNumberLiteralValue.NegativeInfinityValue;
 end;
 
+// ES2026 §6.1.6.2 — check for BigInt mixed-type errors
+procedure CheckBigIntMixedTypes(const ALeft, ARight: TGocciaValue); inline;
+begin
+  if (ALeft is TGocciaBigIntValue) xor (ARight is TGocciaBigIntValue) then
+    ThrowTypeError(SErrorBigIntMixedTypes, SSuggestBigIntNoMixedArithmetic);
+end;
+
 function ToNumericPair(const ALeft, ARight: TGocciaValue;
   out ALeftNum, ARightNum: TGocciaNumberLiteralValue): Boolean;
 begin
   if (ALeft is TGocciaSymbolValue) or (ARight is TGocciaSymbolValue) then
     ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
+  CheckBigIntMixedTypes(ALeft, ARight);
   ALeftNum := ALeft.ToNumberLiteral;
   ARightNum := ARight.ToNumberLiteral;
   Result := not (ALeftNum.IsNaN or ARightNum.IsNaN);
@@ -57,11 +68,22 @@ begin
   if (PrimLeft is TGocciaSymbolValue) or (PrimRight is TGocciaSymbolValue) then
     ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
 
+  // ES2026 §13.15.3 — string concatenation takes priority over BigInt
   if (PrimLeft is TGocciaStringLiteralValue) or (PrimRight is TGocciaStringLiteralValue) then
   begin
     Result := TGocciaStringLiteralValue.Create(PrimLeft.ToStringLiteral.Value + PrimRight.ToStringLiteral.Value);
     Exit;
   end;
+
+  // ES2026 §6.1.6.2.1 BigInt::add
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
+  begin
+    Result := TGocciaBigIntValue.Create(
+      TGocciaBigIntValue(PrimLeft).Value.Add(TGocciaBigIntValue(PrimRight).Value));
+    Exit;
+  end;
+
+  CheckBigIntMixedTypes(PrimLeft, PrimRight);
 
   LeftNum := PrimLeft.ToNumberLiteral;
   RightNum := PrimRight.ToNumberLiteral;
@@ -95,6 +117,14 @@ function EvaluateSubtraction(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
+  // ES2026 §6.1.6.2.2 BigInt::subtract
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  begin
+    Result := TGocciaBigIntValue.Create(
+      TGocciaBigIntValue(ALeft).Value.Subtract(TGocciaBigIntValue(ARight).Value));
+    Exit;
+  end;
+
   if not ToNumericPair(ALeft, ARight, LeftNum, RightNum) then
   begin
     Result := TGocciaNumberLiteralValue.NaNValue;
@@ -126,6 +156,14 @@ var
   LeftZero, RightZero: Boolean;
   SameSign: Boolean;
 begin
+  // ES2026 §6.1.6.2.3 BigInt::multiply
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  begin
+    Result := TGocciaBigIntValue.Create(
+      TGocciaBigIntValue(ALeft).Value.Multiply(TGocciaBigIntValue(ARight).Value));
+    Exit;
+  end;
+
   if not ToNumericPair(ALeft, ARight, LeftNum, RightNum) then
   begin
     Result := TGocciaNumberLiteralValue.NaNValue;
@@ -158,6 +196,16 @@ var
   LeftNum, RightNum: TGocciaNumberLiteralValue;
   SameSign: Boolean;
 begin
+  // ES2026 §6.1.6.2.6 BigInt::divide — truncates toward zero
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  begin
+    if TGocciaBigIntValue(ARight).Value.IsZero then
+      ThrowTypeError(SErrorBigIntDivisionByZero, SSuggestBigIntNoMixedArithmetic);
+    Result := TGocciaBigIntValue.Create(
+      TGocciaBigIntValue(ALeft).Value.Divide(TGocciaBigIntValue(ARight).Value));
+    Exit;
+  end;
+
   if not ToNumericPair(ALeft, ARight, LeftNum, RightNum) then
   begin
     Result := TGocciaNumberLiteralValue.NaNValue;
@@ -213,6 +261,16 @@ function EvaluateModulo(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
+  // ES2026 §6.1.6.2.7 BigInt::remainder — sign follows dividend
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  begin
+    if TGocciaBigIntValue(ARight).Value.IsZero then
+      ThrowTypeError(SErrorBigIntDivisionByZero, SSuggestBigIntNoMixedArithmetic);
+    Result := TGocciaBigIntValue.Create(
+      TGocciaBigIntValue(ALeft).Value.Modulo(TGocciaBigIntValue(ARight).Value));
+    Exit;
+  end;
+
   if not ToNumericPair(ALeft, ARight, LeftNum, RightNum) then
   begin
     Result := TGocciaNumberLiteralValue.NaNValue;
@@ -250,6 +308,16 @@ function EvaluateExponentiation(const ALeft, ARight: TGocciaValue): TGocciaValue
 var
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
+  // ES2026 §6.1.6.2.8 BigInt::exponentiate
+  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  begin
+    if TGocciaBigIntValue(ARight).Value.IsNegative then
+      ThrowTypeError(SErrorBigIntNegativeExponent, SSuggestBigIntNoMixedArithmetic);
+    Result := TGocciaBigIntValue.Create(
+      TGocciaBigIntValue(ALeft).Value.Power(TGocciaBigIntValue(ARight).Value));
+    Exit;
+  end;
+
   if not ToNumericPair(ALeft, ARight, LeftNum, RightNum) then
   begin
     if IsActualZero(RightNum) then

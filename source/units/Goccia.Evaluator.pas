@@ -112,6 +112,7 @@ uses
   Goccia.Token,
   Goccia.Values.ArrayValue,
   Goccia.Values.AsyncFunctionValue,
+  Goccia.Values.BigIntValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.EnumValue,
   Goccia.Values.Error,
@@ -455,7 +456,13 @@ begin
       begin
         if Operand is TGocciaSymbolValue then
           ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
-        if (Operand is TGocciaNumberLiteralValue) then
+        // ES2026 §6.1.6.2.1 BigInt::unaryMinus
+        if Operand is TGocciaBigIntValue then
+        begin
+          Result := TGocciaBigIntValue.Create(
+            TGocciaBigIntValue(Operand).Value.Negate);
+        end
+        else if (Operand is TGocciaNumberLiteralValue) then
         begin
           if TGocciaNumberLiteralValue(Operand).IsInfinity then
             Result := TGocciaNumberLiteralValue.NegativeInfinityValue  // -Infinity = -Infinity
@@ -479,6 +486,9 @@ begin
     begin
       if Operand is TGocciaSymbolValue then
         ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
+      // ES2026 §7.1.4: unary + on BigInt throws TypeError
+      if Operand is TGocciaBigIntValue then
+        ThrowTypeError(SErrorBigIntUnaryPlus, SSuggestBigIntNoImplicitConversion);
       Result := Operand.ToNumberLiteral;
     end;
     gttTypeof:

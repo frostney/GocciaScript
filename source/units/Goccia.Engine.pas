@@ -16,6 +16,7 @@ uses
   Goccia.Builtins.DisposableStack,
   Goccia.Builtins.GlobalArray,
   Goccia.Builtins.GlobalArrayBuffer,
+  Goccia.Builtins.GlobalBigInt,
   Goccia.Builtins.GlobalFetch,
   Goccia.Builtins.GlobalFFI,
   Goccia.Builtins.GlobalMap,
@@ -60,6 +61,7 @@ uses
   Goccia.SourceMap,
   Goccia.TextFiles,
   Goccia.TOML,
+  Goccia.Values.BigIntValue,
   Goccia.Values.ClassValue,
   Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
@@ -132,6 +134,7 @@ type
     FBuiltinGlobalObject: TGocciaGlobalObject;
     FBuiltinGlobalArray: TGocciaGlobalArray;
     FBuiltinGlobalNumber: TGocciaGlobalNumber;
+    FBuiltinGlobalBigInt: TGocciaGlobalBigInt;
     FBuiltinRegExp: TGocciaGlobalRegExp;
     FBuiltinGlobalString: TGocciaGlobalString;
     FBuiltinGlobals: TGocciaGlobals;
@@ -681,6 +684,9 @@ procedure TGocciaEngine.PinSingletons;
 begin
   PinPrimitiveSingletons;
   TGarbageCollector.Instance.PinObject(TGocciaHoleValue.HoleValue);
+  // Eagerly initialize BigInt singletons on the main thread
+  TGocciaBigIntValue.BigIntZero;
+  TGocciaBigIntValue.BigIntOne;
 end;
 
 procedure TGocciaEngine.RegisterBuiltIns;
@@ -695,6 +701,7 @@ begin
   FBuiltinGlobalObject := TGocciaGlobalObject.Create(CONSTRUCTOR_OBJECT, Scope, ThrowError);
   FBuiltinGlobalArray := TGocciaGlobalArray.Create(CONSTRUCTOR_ARRAY, Scope, ThrowError);
   FBuiltinGlobalNumber := TGocciaGlobalNumber.Create(CONSTRUCTOR_NUMBER, Scope, ThrowError);
+  FBuiltinGlobalBigInt := TGocciaGlobalBigInt.Create(CONSTRUCTOR_BIGINT, Scope, ThrowError);
   FBuiltinCSV := TGocciaCSVBuiltin.Create('CSV', Scope, ThrowError);
   FBuiltinJSON := TGocciaJSONBuiltin.Create('JSON', Scope, ThrowError);
   FBuiltinJSON5 := TGocciaJSON5Builtin.Create('JSON5', Scope, ThrowError);

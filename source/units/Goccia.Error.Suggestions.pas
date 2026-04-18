@@ -156,6 +156,8 @@ resourcestring
 
   // Runtime errors — type and call
   SSuggestSymbolNoImplicitConversion = 'use String(symbol) or symbol.toString() for explicit conversion';
+  SSuggestBigIntNoImplicitConversion = 'use BigInt() or Number() for explicit conversion between BigInt and Number';
+  SSuggestBigIntNoMixedArithmetic = 'BigInt values cannot be mixed with other types in arithmetic — convert explicitly';
   SSuggestDecoratorFunction = 'decorators must be expressions that evaluate to a function';
   SSuggestDisposable = 'the value must have a [Symbol.dispose] method to be used with ''using''';
   SSuggestNotFunctionType = 'the value is not callable — only functions can be invoked';
