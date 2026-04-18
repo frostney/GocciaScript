@@ -82,11 +82,14 @@ implementation
 uses
   SysUtils,
 
+  BigInteger,
+
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Temporal.Options,
   Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
+  Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.TemporalDuration,
@@ -616,12 +619,13 @@ end;
 function TGocciaTemporalZonedDateTimeValue.GetEpochNanoseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Zdt: TGocciaTemporalZonedDateTimeValue;
-  MsFloat: Double;
+  BigNs: TBigInteger;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.epochNanoseconds');
-  // Safe Int64 → Double conversion (FPC 3.2.2 AArch64 bug: Int64 * Double gives wrong results)
-  MsFloat := Zdt.FEpochMilliseconds;
-  Result := TGocciaNumberLiteralValue.Create(MsFloat * 1000000.0 + Zdt.FSubMillisecondNanoseconds);
+  BigNs := TBigInteger.FromInt64(Zdt.FEpochMilliseconds)
+    .Multiply(TBigInteger.FromInt64(1000000))
+    .Add(TBigInteger.FromInt64(Zdt.FSubMillisecondNanoseconds));
+  Result := TGocciaBigIntValue.Create(BigNs);
 end;
 
 { Methods }

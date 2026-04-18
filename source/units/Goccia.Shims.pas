@@ -169,8 +169,8 @@ const
         '      this.#ms = dt.toZonedDateTime(Temporal.Now.timeZoneId()).epochMilliseconds;'#10 +
         '    }'#10 +
         '  }'#10 +
-        '  #local() { return new Temporal.ZonedDateTime(this.#ms * 1000000, Temporal.Now.timeZoneId()); }'#10 +
-        '  #utc() { return new Temporal.ZonedDateTime(this.#ms * 1000000, "UTC"); }'#10 +
+        '  #local() { return new Temporal.ZonedDateTime(BigInt(this.#ms) * 1000000n, Temporal.Now.timeZoneId()); }'#10 +
+        '  #utc() { return new Temporal.ZonedDateTime(BigInt(this.#ms) * 1000000n, "UTC"); }'#10 +
         '  getTime(): number { return this.#ms; }'#10 +
         '  valueOf(): number { return this.#ms; }'#10 +
         '  getFullYear(): number { return this.#local().year; }'#10 +

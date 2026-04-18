@@ -18,7 +18,6 @@ type
     FSubMillisecondNanoseconds: Integer;
 
     procedure InitializePrototype;
-    function TotalNanoseconds: Double;
   public
     constructor Create(const AEpochMilliseconds: Int64; const ASubMillisecondNanoseconds: Integer); overload;
 
@@ -46,10 +45,13 @@ implementation
 uses
   SysUtils,
 
+  BigInteger,
+
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
+  Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.TemporalDuration;
@@ -163,15 +165,6 @@ begin
   Result := 'Temporal.Instant';
 end;
 
-function TGocciaTemporalInstantValue.TotalNanoseconds: Double;
-var
-  MsFloat: Double;
-begin
-  // Safe Int64 → Double conversion (FPC 3.2.2 AArch64 bug: Int64 * Double gives wrong results)
-  MsFloat := FEpochMilliseconds;
-  Result := MsFloat * 1000000.0 + FSubMillisecondNanoseconds;
-end;
-
 { Getters }
 
 function TGocciaTemporalInstantValue.GetEpochMilliseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -182,9 +175,13 @@ end;
 function TGocciaTemporalInstantValue.GetEpochNanoseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Inst: TGocciaTemporalInstantValue;
+  BigNs: TBigInteger;
 begin
   Inst := AsInstant(AThisValue, 'get Instant.epochNanoseconds');
-  Result := TGocciaNumberLiteralValue.Create(Inst.TotalNanoseconds);
+  BigNs := TBigInteger.FromInt64(Inst.FEpochMilliseconds)
+    .Multiply(TBigInteger.FromInt64(1000000))
+    .Add(TBigInteger.FromInt64(Inst.FSubMillisecondNanoseconds));
+  Result := TGocciaBigIntValue.Create(BigNs);
 end;
 
 { Methods }
