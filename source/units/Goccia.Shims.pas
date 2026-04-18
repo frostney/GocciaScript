@@ -209,7 +209,9 @@ const
         'export const hasOwnProperty = ((proto) => {'#10 +
         '  class _H { hasOwnProperty(prop) { return Object.hasOwn(this, prop); } }'#10 +
         '  const fn = new _H().hasOwnProperty;'#10 +
-        '  proto.hasOwnProperty = fn;'#10 +
+        '  Object.defineProperty(proto, "hasOwnProperty", {'#10 +
+        '    value: fn, writable: true, enumerable: false, configurable: true'#10 +
+        '  });'#10 +
         '  return fn;'#10 +
         '})(Object.getPrototypeOf({}));'
     )
