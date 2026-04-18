@@ -37,7 +37,7 @@ uses
 
 const
   REPL_FILE_NAME = 'REPL';
-  REPL_USAGE_LINE = '[--timing] [--mode=interpreted|bytecode] [--import-map=file] [--alias key=value] [--asi]';
+  REPL_USAGE_LINE = '[--timing] [--mode=interpreted|bytecode] [--import-map=file] [--alias key=value] [--asi] [--unsafe-ffi]';
 
 type
   TREPLApp = class(TGocciaApplication)
@@ -53,6 +53,7 @@ var
   AllOptions: TGocciaOptionArray;
   Positionals: TStringList;
   IsBytecodeMode: Boolean;
+  Builtins: TGocciaGlobalBuiltins;
 
   Line: string;
   Source: TStringList;
@@ -103,6 +104,10 @@ begin
 
           IsBytecodeMode := EngineOpts.Mode.Matches(emBytecode);
 
+          Builtins := [];
+          if EngineOpts.UnsafeFFI.Present then
+            Include(Builtins, ggFFI);
+
           if IsBytecodeMode then
             WriteLn('Goccia REPL v' + GetVersion + ' (bytecode)')
           else
@@ -117,7 +122,7 @@ begin
             BcExecutor.GlobalBackedTopLevel := True;
             LiveModules := TObjectList<TGocciaBytecodeModule>.Create(True);
             try
-              Eng := TGocciaEngine.Create(REPL_FILE_NAME, Source, [],
+              Eng := TGocciaEngine.Create(REPL_FILE_NAME, Source, Builtins,
                 BcExecutor);
               try
                 Eng.ASIEnabled := EngineOpts.ASI.Present;
@@ -232,7 +237,7 @@ begin
           end
           else
           begin
-            Eng := TGocciaEngine.Create(REPL_FILE_NAME, Source, []);
+            Eng := TGocciaEngine.Create(REPL_FILE_NAME, Source, Builtins);
             Eng.ASIEnabled := EngineOpts.ASI.Present;
             try
               ConfigureModuleResolver(Eng.Resolver, REPL_FILE_NAME,

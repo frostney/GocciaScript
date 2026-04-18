@@ -27,7 +27,7 @@ TGocciaGlobalBuiltin = (
 
 The `GocciaTestRunner` adds `ggTestAssertions` to inject the test framework.
 The `GocciaBenchmarkRunner` adds `ggBenchmark` to inject the benchmark framework.
-FFI (`ggFFI`) is available but must be explicitly enabled.
+FFI (`ggFFI`) requires the `--unsafe-ffi` CLI flag to enable.
 
 ## Adding a New Built-in
 
@@ -574,7 +574,7 @@ See [Binary Data Built-ins](built-ins-binary-data.md) for the complete ArrayBuff
 
 ### FFI (`Goccia.Builtins.GlobalFFI.pas`)
 
-Foreign Function Interface for calling native shared libraries. Only available when `ggFFI` is enabled (not registered by default).
+Foreign Function Interface for calling native shared libraries. Only available when `--unsafe-ffi` is passed on the command line (enables the `ggFFI` flag internally). Not registered by default.
 
 **FFI global object:**
 
