@@ -2,7 +2,7 @@
 
 *JSON, JSON5, YAML, JSONL, CSV, TSV, and TOML API reference.*
 
-### JSON (`Goccia.Builtins.JSON.pas`)
+## JSON (`Goccia.Builtins.JSON.pas`)
 
 Implements the [ECMAScript JSON object](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON) including source text access and Raw JSON.
 
@@ -27,7 +27,7 @@ The JSON parser is a recursive descent implementation. Special handling:
 - `toJSON()` is called before serializing object values
 - Circular references throw `TypeError`
 
-### JSON5 (`Goccia.Builtins.JSON5.pas`)
+## JSON5 (`Goccia.Builtins.JSON5.pas`)
 
 | Method | Description |
 |--------|-------------|
@@ -40,7 +40,7 @@ The JSON parser is a recursive descent implementation. Special handling:
 
 Compatibility goal: GocciaScript is targeting full JSON5 parser compatibility plus upstream-aligned stringify behavior. `python3 scripts/run_json5_test_suite.py` now runs both the official `json5/json5` parser corpus and the local upstream-aligned stringify suite in one command, and `python3 scripts/run_json5_test_suite.py --harness=./build/GocciaJSON5Check` reuses a prebuilt parser decoder when you already have it.
 
-### YAML (`Goccia.Builtins.YAML.pas`)
+## YAML (`Goccia.Builtins.YAML.pas`)
 
 | Method | Description |
 |--------|-------------|
@@ -57,7 +57,7 @@ Explicit keys (`? key`) are supported, including omitted explicit values and zer
 
 Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time while keeping Bun-compatible YAML runtime behavior where practical. The current parser is still a partial implementation. The detailed conformance snapshot lives in [docs/decision-log.md](decision-log.md), and the official parse-validity check can be rerun with `python3 scripts/run_yaml_test_suite.py`.
 
-### JSONL (`Goccia.Builtins.JSONL.pas`)
+## JSONL (`Goccia.Builtins.JSONL.pas`)
 
 | Method | Description |
 |--------|-------------|
@@ -66,7 +66,7 @@ Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time wh
 
 `JSONL.parse(...)` and `JSONL.parseChunk(...)` are designed to match Bun's JSONL runtime surface closely: blank lines are ignored, each non-empty line must be strict JSON, and `Uint8Array` input is supported alongside strings. `parseChunk(...)` returns the next resume offset in `read`, a `done` flag when the provided range was fully consumed, and a `SyntaxError` object in `error` when a delimited record is invalid. Incomplete trailing records are left unread so callers can append more data and resume parsing.
 
-### CSV (`Goccia.Builtins.CSV.pas`)
+## CSV (`Goccia.Builtins.CSV.pas`)
 
 | Method | Description |
 |--------|-------------|
@@ -82,7 +82,7 @@ Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time wh
 
 **Edge cases:** Empty fields are `""`, trailing delimiters create an extra `""` field, empty rows are preserved by default (opt-in `skipEmptyLines`), ragged rows are padded with `""`, and quoting follows RFC 4180 (fields containing the delimiter, `"`, or newline are enclosed in double quotes with `""` escaping).
 
-### TSV (`Goccia.Builtins.TSV.pas`)
+## TSV (`Goccia.Builtins.TSV.pas`)
 
 | Method | Description |
 |--------|-------------|
@@ -98,7 +98,7 @@ Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time wh
 
 TSV uses IANA `text/tab-separated-values` semantics, which differ fundamentally from CSV: instead of RFC 4180 double-quote escaping, TSV uses **backslash escaping** (`\t` for tab, `\n` for newline, `\r` for carriage return, `\\` for literal backslash). Unrecognized escape sequences preserve the backslash. The reviver, replacer, `parseChunk`, and edge case handling match CSV.
 
-### TOML (`Goccia.Builtins.TOML.pas`)
+## TOML (`Goccia.Builtins.TOML.pas`)
 
 | Method | Description |
 |--------|-------------|
