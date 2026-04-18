@@ -462,12 +462,14 @@ begin
   except
     on E: TGocciaError do
     begin
-      WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
+      if not GIsWorkerThread then
+        WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
       MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
     end;
     on E: TGocciaThrowValue do
     begin
-      WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, ASource, IsColorTerminal, E.Suggestion));
+      if not GIsWorkerThread then
+        WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, ASource, IsColorTerminal, E.Suggestion));
       MakeErrorFileResult(AFileName,
         FormatThrowDetail(E.Value, AFileName, ASource, False, E.Suggestion), AReporter);
     end;
@@ -580,18 +582,21 @@ begin
   except
     on E: TGocciaError do
     begin
-      WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
+      if not GIsWorkerThread then
+        WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
       MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
     end;
     on E: TGocciaThrowValue do
     begin
-      WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, ASource, IsColorTerminal, E.Suggestion));
+      if not GIsWorkerThread then
+        WriteLn(StdErr, FormatThrowDetail(E.Value, AFileName, ASource, IsColorTerminal, E.Suggestion));
       MakeErrorFileResult(AFileName,
         FormatThrowDetail(E.Value, AFileName, ASource, False, E.Suggestion), AReporter);
     end;
     on E: EGocciaBytecodeThrow do
     begin
-      WriteLn(StdErr, FormatThrowDetail(E.ThrownValue, AFileName, ASource, IsColorTerminal));
+      if not GIsWorkerThread then
+        WriteLn(StdErr, FormatThrowDetail(E.ThrownValue, AFileName, ASource, IsColorTerminal));
       MakeErrorFileResult(AFileName,
         FormatThrowDetail(E.ThrownValue, AFileName, ASource, False), AReporter);
     end;
@@ -714,7 +719,7 @@ begin
         Files.Add(APaths[P])
       else
       begin
-        WriteLn('Error: Path not found: ', APaths[P]);
+        WriteLn(StdErr, 'Error: Path not found: ', APaths[P]);
         ExitCode := 1;
         Exit;
       end;
@@ -722,11 +727,14 @@ begin
 
     JobCount := GetJobCount(Files.Count);
 
-    if JobCount > 1 then
-      WriteLn(SysUtils.Format('Running %d files with %d workers',
-        [Files.Count, JobCount]))
-    else if AShowProgress then
-      WriteLn(SysUtils.Format('Running %d files', [Files.Count]));
+    if AShowProgress then
+    begin
+      if JobCount > 1 then
+        WriteLn(SysUtils.Format('Running %d files with %d workers',
+          [Files.Count, JobCount]))
+      else
+        WriteLn(SysUtils.Format('Running %d files', [Files.Count]));
+    end;
 
     if JobCount > 1 then
     begin
@@ -850,6 +858,16 @@ begin
     if FOutputFile.Present then
       Reports[ReportCount - 1].OutputFile := FOutputFile.Value;
   end;
+
+  // Suppress progress when structured output (JSON/CSV) goes to stdout so
+  // that human-readable status messages do not corrupt the output document.
+  if ShowProgress then
+    for I := 0 to Length(Reports) - 1 do
+      if (Reports[I].Format in [brfJSON, brfCSV]) and (Reports[I].OutputFile = '') then
+      begin
+        ShowProgress := False;
+        Break;
+      end;
 
   if APaths.Count = 0 then
     RunBenchmarksFromStdin(Reports, Mode, ShowProgress)
