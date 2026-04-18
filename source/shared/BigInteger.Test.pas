@@ -241,8 +241,8 @@ begin
   Test('FromDouble NaN raises', TestFromDoubleNaN);
   Test('FromDouble Infinity raises', TestFromDoubleInfinity);
   Test('FromDouble non-integer raises', TestFromDoubleNonInteger);
-  Test('FromDouble MAX_SAFE_INTEGER', TestFromDoubleMaxSafeInteger);
-  Test('FromDouble -MAX_SAFE_INTEGER', TestFromDoubleNegMaxSafeInteger);
+  Test('FromDouble 2^53 (Int64 fast-path boundary)', TestFromDoubleMaxSafeInteger);
+  Test('FromDouble -2^53 (Int64 fast-path boundary)', TestFromDoubleNegMaxSafeInteger);
 
   { FromDecimalString }
   Test('FromDecimalString "0"', TestFromDecimalStringZero);
