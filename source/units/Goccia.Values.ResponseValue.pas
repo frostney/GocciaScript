@@ -376,9 +376,57 @@ end;
 
 procedure TGocciaResponseValue.InitializeNativeFromArguments(
   const AArguments: TGocciaArgumentsCollection);
+var
+  BodyArg, InitArg, PropVal: TGocciaValue;
+  InitObj, HeadersObj: TGocciaObjectValue;
+  U8: UTF8String;
+  PropNames: TArray<string>;
+  I: Integer;
 begin
-  // Response constructor: new Response() is not commonly used externally
-  // but support it minimally
+  if AArguments.Length = 0 then Exit;
+
+  // Argument 0: body (string or null/undefined)
+  BodyArg := AArguments.GetElement(0);
+  if not ((BodyArg is TGocciaUndefinedLiteralValue) or
+          (BodyArg is TGocciaNullLiteralValue)) then
+  begin
+    U8 := UTF8String(BodyArg.ToStringLiteral.Value);
+    SetLength(FBody, Length(U8));
+    if Length(U8) > 0 then
+      Move(U8[1], FBody[0], Length(U8));
+  end;
+
+  // Argument 1: init dictionary { status, statusText, headers }
+  if AArguments.Length < 2 then Exit;
+  InitArg := AArguments.GetElement(1);
+  if not (InitArg is TGocciaObjectValue) then Exit;
+  InitObj := TGocciaObjectValue(InitArg);
+
+  // status
+  PropVal := InitObj.GetProperty(PROP_STATUS);
+  if Assigned(PropVal) and not (PropVal is TGocciaUndefinedLiteralValue) then
+    FStatus := Trunc(PropVal.ToNumberLiteral.Value);
+
+  // statusText
+  PropVal := InitObj.GetProperty(PROP_STATUS_TEXT);
+  if Assigned(PropVal) and not (PropVal is TGocciaUndefinedLiteralValue) then
+    FStatusText := PropVal.ToStringLiteral.Value;
+
+  // headers
+  PropVal := InitObj.GetProperty(PROP_HEADERS);
+  if Assigned(PropVal) and not (PropVal is TGocciaUndefinedLiteralValue) then
+  begin
+    if PropVal is TGocciaHeadersValue then
+      FHeaders := TGocciaHeadersValue(PropVal)
+    else if PropVal is TGocciaObjectValue then
+    begin
+      HeadersObj := TGocciaObjectValue(PropVal);
+      PropNames := HeadersObj.GetAllPropertyNames;
+      for I := 0 to High(PropNames) do
+        FHeaders.AddHeader(PropNames[I],
+          HeadersObj.GetProperty(PropNames[I]).ToStringLiteral.Value);
+    end;
+  end;
 end;
 
 function TGocciaResponseValue.ToStringTag: string;
