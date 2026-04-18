@@ -37,8 +37,8 @@ type
     procedure TestFromDoubleNaN;
     procedure TestFromDoubleInfinity;
     procedure TestFromDoubleNonInteger;
-    procedure TestFromDoubleMaxSafeInteger;
-    procedure TestFromDoubleNegMaxSafeInteger;
+    procedure TestFromDouble2Pow53;
+    procedure TestFromDoubleNeg2Pow53;
 
     { FromDecimalString }
     procedure TestFromDecimalStringZero;
@@ -237,12 +237,12 @@ begin
   Test('FromDouble(0.0) produces zero', TestFromDoubleZero);
   Test('FromDouble positive integer', TestFromDoublePositive);
   Test('FromDouble negative integer', TestFromDoubleNegative);
-  Test('FromDouble large value (epoch ns)', TestFromDoubleLargeValue);
+  Test('FromDouble large value (epoch ms)', TestFromDoubleLargeValue);
   Test('FromDouble NaN raises', TestFromDoubleNaN);
   Test('FromDouble Infinity raises', TestFromDoubleInfinity);
   Test('FromDouble non-integer raises', TestFromDoubleNonInteger);
-  Test('FromDouble 2^53 (Int64 fast-path boundary)', TestFromDoubleMaxSafeInteger);
-  Test('FromDouble -2^53 (Int64 fast-path boundary)', TestFromDoubleNegMaxSafeInteger);
+  Test('FromDouble 2^53 (Int64 fast-path boundary)', TestFromDouble2Pow53);
+  Test('FromDouble -2^53 (Int64 fast-path boundary)', TestFromDoubleNeg2Pow53);
 
   { FromDecimalString }
   Test('FromDecimalString "0"', TestFromDecimalStringZero);
@@ -519,7 +519,7 @@ procedure TBigIntegerTests.TestFromDoubleLargeValue;
 var
   B: TBigInteger;
 begin
-  // Epoch nanoseconds magnitude — the value that triggered the AArch64 bug
+  // Epoch milliseconds magnitude — the value that triggered the AArch64 bug
   B := TBigInteger.FromDouble(1718451045123.0);
   Expect<Int64>(B.ToInt64).ToBe(Int64(1718451045123));
 end;
@@ -563,7 +563,7 @@ begin
   Expect<Boolean>(Raised).ToBe(True);
 end;
 
-procedure TBigIntegerTests.TestFromDoubleMaxSafeInteger;
+procedure TBigIntegerTests.TestFromDouble2Pow53;
 var
   B: TBigInteger;
 begin
@@ -572,7 +572,7 @@ begin
   Expect<String>(B.ToString).ToBe('9007199254740992');
 end;
 
-procedure TBigIntegerTests.TestFromDoubleNegMaxSafeInteger;
+procedure TBigIntegerTests.TestFromDoubleNeg2Pow53;
 var
   B: TBigInteger;
 begin
