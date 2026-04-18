@@ -152,14 +152,18 @@ const
         '  #ms;'#10 +
         '  static now(): number { return Temporal.Now.instant().epochMilliseconds; }'#10 +
         '  static parse(str: string): number {'#10 +
-        '    return Temporal.Instant.from(String(str)).epochMilliseconds;'#10 +
+        '    try { return Temporal.Instant.from(String(str)).epochMilliseconds; }'#10 +
+        '    catch (e) { return NaN; }'#10 +
         '  }'#10 +
         '  constructor(...args: any[]) {'#10 +
         '    if (args.length === 0) {'#10 +
         '      this.#ms = Temporal.Now.instant().epochMilliseconds;'#10 +
         '    } else if (args.length === 1) {'#10 +
         '      const v = args[0];'#10 +
-        '      this.#ms = typeof v === "number" ? Math.trunc(v) : Temporal.Instant.from(String(v)).epochMilliseconds;'#10 +
+        '      if (typeof v === "number") {'#10 +
+        '        const t = Math.trunc(v);'#10 +
+        '        this.#ms = Number.isFinite(t) && Math.abs(t) <= 8.64e15 ? t : NaN;'#10 +
+        '      } else { this.#ms = Date.parse(String(v)); }'#10 +
         '    } else {'#10 +
         '      const y: number = args[0] >= 0 && args[0] <= 99 ? 1900 + args[0] : args[0];'#10 +
         '      const dt = new Temporal.PlainDateTime('#10 +
@@ -191,8 +195,8 @@ const
         '  getUTCSeconds(): number { const z = this.#utc(); return z ? z.second : NaN; }'#10 +
         '  getUTCMilliseconds(): number { const z = this.#utc(); return z ? z.millisecond : NaN; }'#10 +
         '  getTimezoneOffset(): number { const z = this.#local(); return z ? -(z.offsetNanoseconds / 60000000000) : NaN; }'#10 +
-        '  toISOString(): string { if (!this.#valid()) return "Invalid Date"; return Temporal.Instant.fromEpochMilliseconds(this.#ms).toString(); }'#10 +
-        '  toJSON(): string { return this.toISOString(); }'#10 +
+        '  toISOString(): string { if (!this.#valid()) throw new RangeError("Invalid time value"); return Temporal.Instant.fromEpochMilliseconds(this.#ms).toString(); }'#10 +
+        '  toJSON(): string { if (!this.#valid()) return null; return this.toISOString(); }'#10 +
         '  toString(): string {'#10 +
         '    const z = this.#local();'#10 +
         '    if (!z) return "Invalid Date";'#10 +

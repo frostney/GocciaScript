@@ -20,9 +20,10 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.round", () => {
   });
 
   test("round at large epoch does not overflow", () => {
-    const inst = Temporal.Instant.fromEpochMilliseconds(1710510330999);
+    // 9223372036855 > Int64_MAX / 1e6 — overflows Int64 when * 1e6
+    const inst = Temporal.Instant.fromEpochMilliseconds(9223372036855);
     const rounded = inst.round("second");
-    expect(rounded.epochMilliseconds).toBe(1710510331000);
+    expect(rounded.epochMilliseconds).toBe(9223372037000);
   });
 
   test("round at extreme epoch boundary", () => {
