@@ -721,19 +721,18 @@ end;
 
 { ── ForEach ──────────────────────────────────────────────────────── }
 
-var
-  ForEachKeySum: Integer;
-  ForEachValueSum: Integer;
-
 type
   TForEachHelper = class
+  public
+    KeySum: Integer;
+    ValueSum: Integer;
     procedure Callback(const AKey: Integer; const AValue: Integer);
   end;
 
 procedure TForEachHelper.Callback(const AKey: Integer; const AValue: Integer);
 begin
-  ForEachKeySum := ForEachKeySum + AKey;
-  ForEachValueSum := ForEachValueSum + AValue;
+  KeySum := KeySum + AKey;
+  ValueSum := ValueSum + AValue;
 end;
 
 procedure THashMapTests.TestForEachVisitsAllEntries;
@@ -747,11 +746,11 @@ begin
     Map.Add(1, 10);
     Map.Add(2, 20);
     Map.Add(3, 30);
-    ForEachKeySum := 0;
-    ForEachValueSum := 0;
+    Helper.KeySum := 0;
+    Helper.ValueSum := 0;
     Map.ForEach(Helper.Callback);
-    Expect<Integer>(ForEachKeySum).ToBe(6);
-    Expect<Integer>(ForEachValueSum).ToBe(60);
+    Expect<Integer>(Helper.KeySum).ToBe(6);
+    Expect<Integer>(Helper.ValueSum).ToBe(60);
   finally
     Helper.Free;
     Map.Free;

@@ -53,7 +53,21 @@ Overflow and range checks are **enabled** — correctness is prioritized over ra
 | Local variables | PascalCase; **no** underscores; **no** trailing digit suffixes (`Value1`, `temp2`) | `CandidateScope`, `ResolvedName` |
 | Enums | `TGoccia<Name>` for type, lowercase prefix for values | `TGocciaScopeKind`, `skGlobal` |
 
-> **Note:** Shared infrastructure units that are not GocciaScript-specific (`BaseMap.pas`, `HashMap.pas`, `OrderedMap.pas`, `FileUtils.pas`, etc.) intentionally live outside the `Goccia.*` namespace. Only project-specific units use the `Goccia.<Category>.<Name>.pas` convention.
+### Source Directory Layout and Namespacing
+
+Source files live in three directories under `source/`, each with different naming rules:
+
+| Directory | Purpose | Unit prefix | Include file | Example |
+|-----------|---------|-------------|-------------|---------|
+| `source/units/` | Engine internals — the GocciaScript runtime | `Goccia.*` | `{$I Goccia.inc}` | `Goccia.Values.Primitives.pas` |
+| `source/shared/` | Reusable infrastructure — not GocciaScript-specific | No prefix | `{$I Shared.inc}` | `HashMap.pas`, `StringBuffer.pas`, `CLI.Options.pas` |
+| `source/app/` | CLI application entrypoints and app-level wiring | `Goccia.*` for units, `Goccia` prefix (no dot) for programs | `{$I Goccia.inc}` | `GocciaTestRunner.dpr`, `Goccia.CLI.Application.pas` |
+
+**When to use `Goccia.*`:** Any unit that depends on or extends the GocciaScript engine (runtime values, evaluator, compiler, modules, etc.).
+
+**When to omit the prefix:** Generic data structures, utilities, and framework code that could be extracted to a standalone library. These live in `source/shared/` and use `{$I Shared.inc}` instead of `{$I Goccia.inc}`.
+
+**CLI program naming:** Application `.dpr` files use `Goccia` as a prefix without a dot separator — `GocciaTestRunner.dpr`, `GocciaScriptLoader.dpr`, `GocciaREPL.dpr`. This produces binary names like `build/GocciaTestRunner`.
 
 Do **not** use `snake_case` or `mixed_Case` for locals — use full words in PascalCase. Do **not** disambiguate with numeric suffixes; choose a descriptive name (`PrimaryScope`, `FallbackScope`) instead. Short single-letter names in very small scopes (e.g. loop `I`, `J`) remain acceptable.
 

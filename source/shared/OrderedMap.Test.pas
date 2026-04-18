@@ -891,20 +891,19 @@ end;
 
 { -- ForEach ----------------------------------------------------------- }
 
-var
-  ForEachKeys: array of Integer;
-  ForEachIdx: Integer;
-
 type
   TForEachHelper = class
+  public
+    Keys: array of Integer;
+    Idx: Integer;
     procedure Callback(const AKey: Integer; const AValue: Integer);
   end;
 
 procedure TForEachHelper.Callback(const AKey: Integer; const AValue: Integer);
 begin
-  if ForEachIdx < Length(ForEachKeys) then
-    ForEachKeys[ForEachIdx] := AKey;
-  Inc(ForEachIdx);
+  if Idx < Length(Keys) then
+    Keys[Idx] := AKey;
+  Inc(Idx);
 end;
 
 procedure TOrderedMapTests.TestForEachVisitsInInsertionOrder;
@@ -918,13 +917,13 @@ begin
     Map.Add(30, 300);
     Map.Add(10, 100);
     Map.Add(20, 200);
-    SetLength(ForEachKeys, 3);
-    ForEachIdx := 0;
+    SetLength(Helper.Keys, 3);
+    Helper.Idx := 0;
     Map.ForEach(Helper.Callback);
-    Expect<Integer>(ForEachIdx).ToBe(3);
-    Expect<Integer>(ForEachKeys[0]).ToBe(30);
-    Expect<Integer>(ForEachKeys[1]).ToBe(10);
-    Expect<Integer>(ForEachKeys[2]).ToBe(20);
+    Expect<Integer>(Helper.Idx).ToBe(3);
+    Expect<Integer>(Helper.Keys[0]).ToBe(30);
+    Expect<Integer>(Helper.Keys[1]).ToBe(10);
+    Expect<Integer>(Helper.Keys[2]).ToBe(20);
   finally
     Helper.Free;
     Map.Free;

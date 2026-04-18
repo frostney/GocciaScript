@@ -68,7 +68,7 @@ procedure TFileUtilsTests.AfterEach;
     Path: string;
   begin
     if FindFirst(ADir + PathDelim + '*', faAnyFile, SR) = 0 then
-    begin
+    try
       repeat
         if (SR.Name = '.') or (SR.Name = '..') then
           Continue;
@@ -78,6 +78,7 @@ procedure TFileUtilsTests.AfterEach;
         else
           DeleteFile(Path);
       until FindNext(SR) <> 0;
+    finally
       FindClose(SR);
     end;
     RemoveDir(ADir);
@@ -257,6 +258,7 @@ end;
 procedure TFileUtilsTests.TestSingleExtensionOverloadDelegatesToMulti;
 var
   SingleResult, MultiResult: TStringList;
+  I: Integer;
 begin
   CreateTempFile('a.js');
   CreateTempFile('b.js');
@@ -266,8 +268,8 @@ begin
   try
     Expect<Integer>(SingleResult.Count).ToBe(MultiResult.Count);
     Expect<Boolean>(SingleResult.Count > 0).ToBe(True);
-    Expect<string>(SingleResult[0]).ToBe(MultiResult[0]);
-    Expect<string>(SingleResult[1]).ToBe(MultiResult[1]);
+    for I := 0 to SingleResult.Count - 1 do
+      Expect<string>(SingleResult[I]).ToBe(MultiResult[I]);
   finally
     MultiResult.Free;
     SingleResult.Free;
