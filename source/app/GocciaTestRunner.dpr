@@ -196,7 +196,7 @@ var
 begin
   if APaths.Count = 0 then
   begin
-    WriteLn('Error: No paths specified. Run with --help for usage.');
+    WriteLn(StdErr, 'Error: No paths specified. Run with --help for usage.');
     ExitCode := 1;
     Exit;
   end;
@@ -211,17 +211,20 @@ begin
         Files.Add(APaths[I])
       else
       begin
-        WriteLn('Error: Path not found: ', APaths[I]);
+        WriteLn(StdErr, 'Error: Path not found: ', APaths[I]);
         ExitCode := 1;
         Exit;
       end;
     end;
 
-    if GetJobCount(Files.Count) > 1 then
-      WriteLn(SysUtils.Format('Running %d files with %d workers',
-        [Files.Count, GetJobCount(Files.Count)]))
-    else if not FNoProgress.Present then
-      WriteLn(SysUtils.Format('Running %d files', [Files.Count]));
+    if not FNoProgress.Present then
+    begin
+      if GetJobCount(Files.Count) > 1 then
+        WriteLn(SysUtils.Format('Running %d files with %d workers',
+          [Files.Count, GetJobCount(Files.Count)]))
+      else
+        WriteLn(SysUtils.Format('Running %d files', [Files.Count]));
+    end;
 
     if Files.Count = 1 then
     begin
@@ -549,9 +552,9 @@ begin
     on E: Exception do
     begin
       if E is TGocciaError then
-        WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+        WriteLn(StdErr, TGocciaError(E).GetDetailedMessage(IsColorTerminal))
       else
-        WriteLn('Fatal error: ', E.Message);
+        WriteLn(StdErr, 'Fatal error: ', E.Message);
       ExitCode := 1;
     end;
   end;
@@ -815,7 +818,7 @@ begin
       WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, AFiles.Count, AFiles[I]]));
 
     if WorkerData[I].ErrorMessage <> '' then
-      WriteLn(WorkerData[I].ErrorMessage);
+      WriteLn(StdErr, WorkerData[I].ErrorMessage);
 
     PassedCount := PassedCount + WorkerData[I].Passed;
     FailedCount := FailedCount + WorkerData[I].Failed;
