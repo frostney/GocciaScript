@@ -197,8 +197,8 @@ var
   RadixValue: TGocciaValue;
 begin
   if not (AThisValue is TGocciaBigIntValue) then
-    ThrowTypeError('BigInt.prototype.toString requires a BigInt value',
-      SSuggestBigIntNoImplicitConversion);
+    ThrowTypeError(Format(SErrorBigIntRequiresBigIntValue, ['BigInt.prototype.toString']),
+      SSuggestBigIntRequiresBigIntValue);
 
   Radix := 10;
   if AArgs.Length > 0 then
@@ -208,8 +208,7 @@ begin
     begin
       Radix := Trunc(RadixValue.ToNumberLiteral.Value);
       if (Radix < 2) or (Radix > 36) then
-        ThrowRangeError('toString() radix must be between 2 and 36',
-          'provide a radix value between 2 and 36');
+        ThrowRangeError(SErrorBigIntInvalidRadix, SSuggestBigIntInvalidRadix);
     end;
   end;
 
@@ -222,8 +221,8 @@ function TGocciaBigIntValue.BigIntValueOf(const AArgs: TGocciaArgumentsCollectio
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaBigIntValue) then
-    ThrowTypeError('BigInt.prototype.valueOf requires a BigInt value',
-      SSuggestBigIntNoImplicitConversion);
+    ThrowTypeError(Format(SErrorBigIntRequiresBigIntValue, ['BigInt.prototype.valueOf']),
+      SSuggestBigIntRequiresBigIntValue);
   Result := AThisValue;
 end;
 
@@ -232,8 +231,8 @@ function TGocciaBigIntValue.BigIntToLocaleString(const AArgs: TGocciaArgumentsCo
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaBigIntValue) then
-    ThrowTypeError('BigInt.prototype.toLocaleString requires a BigInt value',
-      SSuggestBigIntNoImplicitConversion);
+    ThrowTypeError(Format(SErrorBigIntRequiresBigIntValue, ['BigInt.prototype.toLocaleString']),
+      SSuggestBigIntRequiresBigIntValue);
   Result := TGocciaStringLiteralValue.Create(
     TGocciaBigIntValue(AThisValue).FValue.ToString);
 end;

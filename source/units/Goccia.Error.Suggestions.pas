@@ -158,6 +158,9 @@ resourcestring
   SSuggestSymbolNoImplicitConversion = 'use String(symbol) or symbol.toString() for explicit conversion';
   SSuggestBigIntNoImplicitConversion = 'use BigInt() or Number() for explicit conversion between BigInt and Number';
   SSuggestBigIntNoMixedArithmetic = 'BigInt values cannot be mixed with other types in arithmetic — convert explicitly';
+  SSuggestBigIntRequiresBigIntValue = 'this method can only be called on a BigInt value or BigInt object';
+  SSuggestBigIntInvalidRadix = 'provide a radix value between 2 and 36';
+  SSuggestBigIntInvalidIndex = 'bits must be a non-negative integer';
   SSuggestDecoratorFunction = 'decorators must be expressions that evaluate to a function';
   SSuggestDisposable = 'the value must have a [Symbol.dispose] method to be used with ''using''';
   SSuggestNotFunctionType = 'the value is not callable — only functions can be invoked';

@@ -190,7 +190,7 @@ begin
     IntegerIndex := 0
   else if Num.IsInfinite then
   begin
-    ThrowRangeError('Invalid index');
+    ThrowRangeError(SErrorBigIntInvalidIndex, SSuggestBigIntInvalidIndex);
     Exit(0);
   end
   else
@@ -198,7 +198,7 @@ begin
 
   if (IntegerIndex < 0) or (IntegerIndex > 9007199254740991.0) or
      (IntegerIndex > High(Integer)) then
-    ThrowRangeError('Invalid index');
+    ThrowRangeError(SErrorBigIntInvalidIndex, SSuggestBigIntInvalidIndex);
 
   Result := Trunc(IntegerIndex);
 end;

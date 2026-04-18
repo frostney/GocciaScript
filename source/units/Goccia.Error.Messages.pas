@@ -25,6 +25,9 @@ resourcestring
   SErrorBigIntUnsignedRightShift = 'Cannot use unsigned right shift with BigInt';
   SErrorBigIntInvalidConversion = 'Cannot convert %s to a BigInt';
   SErrorBigIntNotInteger = 'The number %s cannot be converted to a BigInt because it is not an integer';
+  SErrorBigIntRequiresBigIntValue = '%s requires a BigInt value';
+  SErrorBigIntInvalidRadix = 'toString() radix must be between 2 and 36';
+  SErrorBigIntInvalidIndex = 'Invalid index';
 
   // Type errors — property access
   SErrorCannotReadPropertyOf = 'Cannot read property ''%s'' of %s';

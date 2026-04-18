@@ -925,13 +925,17 @@ end;
 
 function VMSubtractValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
 var
+  PrimLeft, PrimRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
-    Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.Subtract(TGocciaBigIntValue(ARight).Value)));
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
 
-  if not VMToNumericPair(ALeft, ARight, LeftNum, RightNum) then
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
+    Exit(TGocciaBigIntValue.Create(
+      TGocciaBigIntValue(PrimLeft).Value.Subtract(TGocciaBigIntValue(PrimRight).Value)));
+
+  if not VMToNumericPair(PrimLeft, PrimRight, LeftNum, RightNum) then
     Exit(TGocciaNumberLiteralValue.NaNValue);
 
   if LeftNum.IsInfinite or RightNum.IsInfinite then
@@ -952,15 +956,19 @@ end;
 
 function VMMultiplyValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
 var
+  PrimLeft, PrimRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
   LeftZero, RightZero: Boolean;
   SameSign: Boolean;
 begin
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
-    Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.Multiply(TGocciaBigIntValue(ARight).Value)));
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
 
-  if not VMToNumericPair(ALeft, ARight, LeftNum, RightNum) then
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
+    Exit(TGocciaBigIntValue.Create(
+      TGocciaBigIntValue(PrimLeft).Value.Multiply(TGocciaBigIntValue(PrimRight).Value)));
+
+  if not VMToNumericPair(PrimLeft, PrimRight, LeftNum, RightNum) then
     Exit(TGocciaNumberLiteralValue.NaNValue);
 
   if LeftNum.IsInfinite or RightNum.IsInfinite then
@@ -982,18 +990,22 @@ end;
 
 function VMDivideValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
 var
+  PrimLeft, PrimRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
   SameSign: Boolean;
 begin
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
   begin
-    if TGocciaBigIntValue(ARight).Value.IsZero then
+    if TGocciaBigIntValue(PrimRight).Value.IsZero then
       ThrowRangeError(SErrorBigIntDivisionByZero);
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.Divide(TGocciaBigIntValue(ARight).Value)));
+      TGocciaBigIntValue(PrimLeft).Value.Divide(TGocciaBigIntValue(PrimRight).Value)));
   end;
 
-  if not VMToNumericPair(ALeft, ARight, LeftNum, RightNum) then
+  if not VMToNumericPair(PrimLeft, PrimRight, LeftNum, RightNum) then
     Exit(TGocciaNumberLiteralValue.NaNValue);
 
   if LeftNum.IsInfinite then
@@ -1034,17 +1046,21 @@ end;
 
 function VMModuloValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
 var
+  PrimLeft, PrimRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
   begin
-    if TGocciaBigIntValue(ARight).Value.IsZero then
+    if TGocciaBigIntValue(PrimRight).Value.IsZero then
       ThrowRangeError(SErrorBigIntDivisionByZero);
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.Modulo(TGocciaBigIntValue(ARight).Value)));
+      TGocciaBigIntValue(PrimLeft).Value.Modulo(TGocciaBigIntValue(PrimRight).Value)));
   end;
 
-  if not VMToNumericPair(ALeft, ARight, LeftNum, RightNum) then
+  if not VMToNumericPair(PrimLeft, PrimRight, LeftNum, RightNum) then
     Exit(TGocciaNumberLiteralValue.NaNValue);
 
   if LeftNum.IsInfinite then
@@ -1062,17 +1078,21 @@ end;
 
 function VMPowerValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
 var
+  PrimLeft, PrimRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
   begin
-    if TGocciaBigIntValue(ARight).Value.IsNegative then
+    if TGocciaBigIntValue(PrimRight).Value.IsNegative then
       ThrowRangeError(SErrorBigIntNegativeExponent);
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.Power(TGocciaBigIntValue(ARight).Value)));
+      TGocciaBigIntValue(PrimLeft).Value.Power(TGocciaBigIntValue(PrimRight).Value)));
   end;
 
-  if not VMToNumericPair(ALeft, ARight, LeftNum, RightNum) then
+  if not VMToNumericPair(PrimLeft, PrimRight, LeftNum, RightNum) then
   begin
     if VMIsActualZero(RightNum) then
       Exit(TGocciaNumberLiteralValue.OneValue);
