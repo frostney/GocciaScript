@@ -2135,8 +2135,37 @@ var
   Line, Column: Integer;
   Operator: TGocciaTokenType;
   Pattern: TGocciaDestructuringPattern;
+  Parameters: TGocciaParameterArray;
+  ArrowBody: TGocciaASTNode;
+  ArrowFn: TGocciaArrowFunctionExpression;
 begin
   Left := Conditional;
+
+  // Single-parameter unparenthesized arrow: ident => body
+  if (Left is TGocciaIdentifierExpression) and Check(gttArrow) then
+  begin
+    Line := TGocciaIdentifierExpression(Left).Line;
+    Column := TGocciaIdentifierExpression(Left).Column;
+    SetLength(Parameters, 1);
+    Parameters[0].Name := TGocciaIdentifierExpression(Left).Name;
+    Parameters[0].IsPattern := False;
+    Parameters[0].IsRest := False;
+    Parameters[0].IsOptional := False;
+    Advance; // consume =>
+    Inc(FFunctionDepth);
+    try
+      if Match(gttLeftBrace) then
+        ArrowBody := BlockStatement
+      else
+        ArrowBody := Expression;
+    finally
+      Dec(FFunctionDepth);
+    end;
+    ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, Line, Column);
+    Result := ArrowFn;
+    Exit;
+  end;
+
   if Match([gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign, gttNullishCoalescingAssign,
              gttLogicalAndAssign, gttLogicalOrAssign,
              gttBitwiseAndAssign, gttBitwiseOrAssign, gttBitwiseXorAssign, gttLeftShiftAssign, gttRightShiftAssign, gttUnsignedRightShiftAssign]) then

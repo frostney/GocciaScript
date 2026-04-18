@@ -62,6 +62,40 @@ describe("arrow functions", () => {
     expect(counter()).toBe(3);
   });
 
+  test("unparenthesized single parameter", () => {
+    const double = x => x * 2;
+    expect(double(5)).toBe(10);
+
+    // As callback argument
+    expect([1, 2, 3].map(n => n + 10)).toEqual([11, 12, 13]);
+
+    // In new expression arguments
+    const p = new Promise(resolve => resolve(42));
+    expect(p instanceof Promise).toBe(true);
+
+    // Nested unparenthesized
+    const add = a => b => a + b;
+    expect(add(3)(4)).toBe(7);
+
+    // With block body
+    const greet = name => { return `hi ${name}` };
+    expect(greet("world")).toBe("hi world");
+  });
+
+  test("async unparenthesized single parameter", async () => {
+    // Standalone
+    const doubleAsync = async x => x * 2;
+    expect(await doubleAsync(5)).toBe(10);
+
+    // In new expression arguments
+    const p = new Promise(async resolve => resolve(99));
+    expect(await p).toBe(99);
+
+    // As callback
+    const results = await Promise.all([1, 2, 3].map(async n => n * 10));
+    expect(results).toEqual([10, 20, 30]);
+  });
+
   test("support object and array destructuring parameters", () => {
     const getX = ({ x }) => x;
     const first = ([a]) => a;

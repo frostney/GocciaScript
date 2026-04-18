@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -46,6 +47,10 @@ type
     function CallOneArg(const AArg0, AThisValue: TGocciaValue): TGocciaValue; virtual;
     function CallTwoArgs(const AArg0, AArg1, AThisValue: TGocciaValue): TGocciaValue; virtual;
     function CallThreeArgs(const AArg0, AArg1, AArg2, AThisValue: TGocciaValue): TGocciaValue; virtual;
+
+    // name/length as own properties per ECMAScript spec
+    function HasOwnProperty(const AName: string): Boolean; override;
+    function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
 
     // VMT-based type discrimination
     function IsCallable: Boolean; override;
@@ -152,6 +157,26 @@ end;
 function TGocciaFunctionBase.GetFunctionName: string;
 begin
   Result := '';
+end;
+
+function TGocciaFunctionBase.HasOwnProperty(const AName: string): Boolean;
+begin
+  if (AName = PROP_LENGTH) or (AName = PROP_NAME) then
+    Result := True
+  else
+    Result := inherited HasOwnProperty(AName);
+end;
+
+function TGocciaFunctionBase.GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
+begin
+  if AName = PROP_LENGTH then
+    Result := TGocciaPropertyDescriptorData.Create(
+      TGocciaNumberLiteralValue.Create(GetFunctionLength), [pfConfigurable])
+  else if AName = PROP_NAME then
+    Result := TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create(GetFunctionName), [pfConfigurable])
+  else
+    Result := inherited GetOwnPropertyDescriptor(AName);
 end;
 
 function TGocciaFunctionBase.IsCallable: Boolean;

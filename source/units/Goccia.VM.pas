@@ -3591,6 +3591,7 @@ var
   PrevCovLine, CovLine: UInt32;
   ProfileEntryTimestamp: Int64;
   DynImportPromise: TGocciaPromiseValue;
+  SpreadArray: TGocciaArrayValue;
 begin
   Template := nil;
   ProfileEntryTimestamp := 0;
@@ -5089,24 +5090,54 @@ begin
 
       OP_CONSTRUCT:
       begin
-        if (FRegisters[B].Kind = grkObject) and
-           (FRegisters[B].ObjectValue is TGocciaVMClassValue) then
+        // C high bit clear: normal — C = arg count, args in B+1..B+C
+        // C high bit set:   spread — (C and $7F) = register holding args array
+        if (C and $80) = 0 then
         begin
-          SetLength(RegisterArgs, C);
-          for I := 0 to C - 1 do
-            RegisterArgs[I] := FRegisters[B + 1 + I];
-          FRegisters[A] := TGocciaVMClassValue(FRegisters[B].ObjectValue)
-            .InstantiateRegisters(RegisterArgs);
+          if (FRegisters[B].Kind = grkObject) and
+             (FRegisters[B].ObjectValue is TGocciaVMClassValue) then
+          begin
+            SetLength(RegisterArgs, C);
+            for I := 0 to C - 1 do
+              RegisterArgs[I] := FRegisters[B + 1 + I];
+            FRegisters[A] := TGocciaVMClassValue(FRegisters[B].ObjectValue)
+              .InstantiateRegisters(RegisterArgs);
+          end
+          else
+          begin
+            CallArgs := AcquireArguments(C);
+            try
+              for I := 0 to C - 1 do
+                CallArgs.Add(GetRegister(B + 1 + I));
+              SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
+            finally
+              ReleaseArguments(CallArgs);
+            end;
+          end;
         end
         else
         begin
-          CallArgs := AcquireArguments(C);
-          try
-            for I := 0 to C - 1 do
-              CallArgs.Add(GetRegister(B + 1 + I));
-            SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
-          finally
-            ReleaseArguments(CallArgs);
+          // Spread path: args array register = C and $7F
+          SpreadArray := TGocciaArrayValue(FRegisters[C and $7F].ObjectValue);
+          if (FRegisters[B].Kind = grkObject) and
+             (FRegisters[B].ObjectValue is TGocciaVMClassValue) then
+          begin
+            SetLength(RegisterArgs, SpreadArray.Elements.Count);
+            for I := 0 to SpreadArray.Elements.Count - 1 do
+              RegisterArgs[I] := VMValueToRegisterFast(SpreadArray.GetElement(I));
+            FRegisters[A] := TGocciaVMClassValue(FRegisters[B].ObjectValue)
+              .InstantiateRegisters(RegisterArgs);
+          end
+          else
+          begin
+            CallArgs := AcquireArguments(SpreadArray.Elements.Count);
+            try
+              for I := 0 to SpreadArray.Elements.Count - 1 do
+                CallArgs.Add(SpreadArray.GetElement(I));
+              SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
+            finally
+              ReleaseArguments(CallArgs);
+            end;
           end;
         end;
       end;

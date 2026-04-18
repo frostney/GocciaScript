@@ -1,12 +1,11 @@
 // test262 testTypedArray.js -- GocciaScript-compatible reimplementation
 // Provides TypedArray constructor lists and iteration helpers.
 // Omits BigInt typed arrays (GocciaScript does not support BigInt).
-// Omits Float16Array (not supported).
-// Omits resizable ArrayBuffer factories (not supported).
 
 const floatArrayConstructors = [
   Float64Array,
   Float32Array,
+  Float16Array,
 ];
 
 const nonClampedIntArrayConstructors = [
@@ -163,7 +162,9 @@ const isFloatTypedArrayConstructor = (arg) => {
 };
 
 const floatTypedArrayConstructorPrecision = (FA) => {
-  if (FA === Float32Array) {
+  if (FA === Float16Array) {
+    return "half";
+  } else if (FA === Float32Array) {
     return "single";
   } else if (FA === Float64Array) {
     return "double";

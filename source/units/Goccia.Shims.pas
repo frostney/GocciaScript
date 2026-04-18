@@ -54,7 +54,7 @@ uses
   Goccia.Token;
 
 const
-  DEFAULT_SHIMS: array[0..4] of TGocciaShimDefinition = (
+  DEFAULT_SHIMS: array[0..6] of TGocciaShimDefinition = (
     ( // WHATWG HTML spec §8.3 — legacy btoa(data) via Uint8Array.toBase64
       Name: 'btoa';
       FileName: '<shim:btoa>';
@@ -129,6 +129,20 @@ const
       Name: 'parseFloat';
       FileName: '<shim:parseFloat>';
       Source: 'export const parseFloat = Number.parseFloat;'
+    ),
+    ( // ES2027 §19.2.2 — legacy isNaN (coerces argument to number)
+      Name: 'isNaN';
+      FileName: '<shim:isNaN>';
+      Source:
+        'export const isNaN = (x) =>' +
+        ' Number.isNaN(Number(x));'
+    ),
+    ( // ES2027 §19.2.3 — legacy isFinite (coerces argument to number)
+      Name: 'isFinite';
+      FileName: '<shim:isFinite>';
+      Source:
+        'export const isFinite = (x) =>' +
+        ' Number.isFinite(Number(x));'
     ),
     ( // Legacy Date constructor via Temporal
       Name: 'Date';

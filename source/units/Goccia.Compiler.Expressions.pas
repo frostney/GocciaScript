@@ -1017,30 +1017,36 @@ begin
   Result := False;
 end;
 
-procedure CompileSpreadArgsArray(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaCallExpression; const AArrayReg: UInt8);
+procedure CompileSpreadArgsArrayFromList(const ACtx: TGocciaCompilationContext;
+  const AArgs: TObjectList<TGocciaExpression>; const AArrayReg: UInt8);
 var
   I: Integer;
   ElemReg: UInt8;
 begin
   EmitInstruction(ACtx, EncodeABC(OP_NEW_ARRAY, AArrayReg, 0, 0));
-  for I := 0 to AExpr.Arguments.Count - 1 do
+  for I := 0 to AArgs.Count - 1 do
   begin
     ElemReg := ACtx.Scope.AllocateRegister;
-    if AExpr.Arguments[I] is TGocciaSpreadExpression then
+    if AArgs[I] is TGocciaSpreadExpression then
     begin
       ACtx.CompileExpression(
-        TGocciaSpreadExpression(AExpr.Arguments[I]).Argument, ElemReg);
+        TGocciaSpreadExpression(AArgs[I]).Argument, ElemReg);
       EmitInstruction(ACtx, EncodeABC(OP_COLLECTION_OP, AArrayReg,
         COLLECTION_OP_SPREAD_ITERABLE_INTO_ARRAY, ElemReg));
     end
     else
     begin
-      ACtx.CompileExpression(AExpr.Arguments[I], ElemReg);
+      ACtx.CompileExpression(AArgs[I], ElemReg);
       EmitInstruction(ACtx, EncodeABC(OP_ARRAY_PUSH, AArrayReg, ElemReg, 0));
     end;
     ACtx.Scope.FreeRegister;
   end;
+end;
+
+procedure CompileSpreadArgsArray(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaCallExpression; const AArrayReg: UInt8);
+begin
+  CompileSpreadArgsArrayFromList(ACtx, AExpr.Arguments, AArrayReg);
 end;
 
 procedure CompileCall(const ACtx: TGocciaCompilationContext;
@@ -1748,26 +1754,45 @@ begin
     ACtx.Scope.FreeRegister; // ObjReg
 end;
 
+function NewExprHasSpread(const AExpr: TGocciaNewExpression): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to AExpr.Arguments.Count - 1 do
+    if AExpr.Arguments[I] is TGocciaSpreadExpression then
+      Exit(True);
+  Result := False;
+end;
+
 procedure CompileNewExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaNewExpression; const ADest: UInt8);
 var
-  CtorReg: UInt8;
+  CtorReg, ArgsReg: UInt8;
   ArgCount, I: Integer;
 begin
   CtorReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AExpr.Callee, CtorReg);
 
-  ArgCount := AExpr.Arguments.Count;
-  if ArgCount > High(UInt8) then
-    raise Exception.Create('Compiler error: too many constructor arguments (>255)');
-  for I := 0 to ArgCount - 1 do
-    ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
+  if NewExprHasSpread(AExpr) then
+  begin
+    ArgsReg := ACtx.Scope.AllocateRegister;
+    CompileSpreadArgsArrayFromList(ACtx, AExpr.Arguments, ArgsReg);
+    EmitInstruction(ACtx, EncodeABC(OP_CONSTRUCT, ADest, CtorReg, ArgsReg or $80));
+    ACtx.Scope.FreeRegister; // ArgsReg
+  end
+  else
+  begin
+    ArgCount := AExpr.Arguments.Count;
+    if ArgCount > High(UInt8) then
+      raise Exception.Create('Compiler error: too many constructor arguments (>255)');
+    for I := 0 to ArgCount - 1 do
+      ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
+    EmitInstruction(ACtx, EncodeABC(OP_CONSTRUCT, ADest, CtorReg, UInt8(ArgCount)));
+    for I := 0 to ArgCount - 1 do
+      ACtx.Scope.FreeRegister;
+  end;
 
-  EmitInstruction(ACtx, EncodeABC(OP_CONSTRUCT, ADest, CtorReg, UInt8(ArgCount)));
-
-  for I := 0 to ArgCount - 1 do
-    ACtx.Scope.FreeRegister;
-  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister; // CtorReg
 end;
 
 procedure CompileComputedPropertyAssignment(const ACtx: TGocciaCompilationContext;
