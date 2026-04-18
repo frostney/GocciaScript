@@ -159,7 +159,7 @@ const
         '      this.#ms = Temporal.Now.instant().epochMilliseconds;'#10 +
         '    } else if (args.length === 1) {'#10 +
         '      const v = args[0];'#10 +
-        '      this.#ms = typeof v === "number" ? v : Temporal.Instant.from(String(v)).epochMilliseconds;'#10 +
+        '      this.#ms = typeof v === "number" ? Math.trunc(v) : Temporal.Instant.from(String(v)).epochMilliseconds;'#10 +
         '    } else {'#10 +
         '      const y: number = args[0] >= 0 && args[0] <= 99 ? 1900 + args[0] : args[0];'#10 +
         '      const dt = new Temporal.PlainDateTime('#10 +
@@ -169,31 +169,33 @@ const
         '      this.#ms = dt.toZonedDateTime(Temporal.Now.timeZoneId()).epochMilliseconds;'#10 +
         '    }'#10 +
         '  }'#10 +
-        '  #local() { return new Temporal.ZonedDateTime(BigInt(this.#ms) * 1000000n, Temporal.Now.timeZoneId()); }'#10 +
-        '  #utc() { return new Temporal.ZonedDateTime(BigInt(this.#ms) * 1000000n, "UTC"); }'#10 +
+        '  #valid() { return Number.isFinite(this.#ms); }'#10 +
+        '  #local() { return this.#valid() ? new Temporal.ZonedDateTime(BigInt(this.#ms) * 1000000n, Temporal.Now.timeZoneId()) : null; }'#10 +
+        '  #utc() { return this.#valid() ? new Temporal.ZonedDateTime(BigInt(this.#ms) * 1000000n, "UTC") : null; }'#10 +
         '  getTime(): number { return this.#ms; }'#10 +
         '  valueOf(): number { return this.#ms; }'#10 +
-        '  getFullYear(): number { return this.#local().year; }'#10 +
-        '  getMonth(): number { return this.#local().month - 1; }'#10 +
-        '  getDate(): number { return this.#local().day; }'#10 +
-        '  getDay(): number { return this.#local().dayOfWeek % 7; }'#10 +
-        '  getHours(): number { return this.#local().hour; }'#10 +
-        '  getMinutes(): number { return this.#local().minute; }'#10 +
-        '  getSeconds(): number { return this.#local().second; }'#10 +
-        '  getMilliseconds(): number { return this.#local().millisecond; }'#10 +
-        '  getUTCFullYear(): number { return this.#utc().year; }'#10 +
-        '  getUTCMonth(): number { return this.#utc().month - 1; }'#10 +
-        '  getUTCDate(): number { return this.#utc().day; }'#10 +
-        '  getUTCDay(): number { return this.#utc().dayOfWeek % 7; }'#10 +
-        '  getUTCHours(): number { return this.#utc().hour; }'#10 +
-        '  getUTCMinutes(): number { return this.#utc().minute; }'#10 +
-        '  getUTCSeconds(): number { return this.#utc().second; }'#10 +
-        '  getUTCMilliseconds(): number { return this.#utc().millisecond; }'#10 +
-        '  getTimezoneOffset(): number { return -(this.#local().offsetNanoseconds / 60000000000); }'#10 +
-        '  toISOString(): string { return Temporal.Instant.fromEpochMilliseconds(this.#ms).toString(); }'#10 +
+        '  getFullYear(): number { const z = this.#local(); return z ? z.year : NaN; }'#10 +
+        '  getMonth(): number { const z = this.#local(); return z ? z.month - 1 : NaN; }'#10 +
+        '  getDate(): number { const z = this.#local(); return z ? z.day : NaN; }'#10 +
+        '  getDay(): number { const z = this.#local(); return z ? z.dayOfWeek % 7 : NaN; }'#10 +
+        '  getHours(): number { const z = this.#local(); return z ? z.hour : NaN; }'#10 +
+        '  getMinutes(): number { const z = this.#local(); return z ? z.minute : NaN; }'#10 +
+        '  getSeconds(): number { const z = this.#local(); return z ? z.second : NaN; }'#10 +
+        '  getMilliseconds(): number { const z = this.#local(); return z ? z.millisecond : NaN; }'#10 +
+        '  getUTCFullYear(): number { const z = this.#utc(); return z ? z.year : NaN; }'#10 +
+        '  getUTCMonth(): number { const z = this.#utc(); return z ? z.month - 1 : NaN; }'#10 +
+        '  getUTCDate(): number { const z = this.#utc(); return z ? z.day : NaN; }'#10 +
+        '  getUTCDay(): number { const z = this.#utc(); return z ? z.dayOfWeek % 7 : NaN; }'#10 +
+        '  getUTCHours(): number { const z = this.#utc(); return z ? z.hour : NaN; }'#10 +
+        '  getUTCMinutes(): number { const z = this.#utc(); return z ? z.minute : NaN; }'#10 +
+        '  getUTCSeconds(): number { const z = this.#utc(); return z ? z.second : NaN; }'#10 +
+        '  getUTCMilliseconds(): number { const z = this.#utc(); return z ? z.millisecond : NaN; }'#10 +
+        '  getTimezoneOffset(): number { const z = this.#local(); return z ? -(z.offsetNanoseconds / 60000000000) : NaN; }'#10 +
+        '  toISOString(): string { if (!this.#valid()) return "Invalid Date"; return Temporal.Instant.fromEpochMilliseconds(this.#ms).toString(); }'#10 +
         '  toJSON(): string { return this.toISOString(); }'#10 +
         '  toString(): string {'#10 +
         '    const z = this.#local();'#10 +
+        '    if (!z) return "Invalid Date";'#10 +
         '    const pad = (n: number): string => n < 10 ? "0" + String(n) : String(n);'#10 +
         '    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];'#10 +
         '    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];'#10 +
