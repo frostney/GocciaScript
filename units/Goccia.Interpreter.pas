@@ -35,6 +35,8 @@ type
     FModuleLoader: TGocciaModuleLoader;
     FOwnsModuleLoader: Boolean;
 
+    procedure EvaluateModuleBody(const AProgram: TGocciaProgram;
+      const AContext: TGocciaEvaluationContext);
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
     function GetContentProvider: TGocciaModuleContentProvider;
     function GetGlobalModules: TOrderedStringMap<TGocciaModule>;
@@ -93,6 +95,7 @@ begin
     FOwnsModuleLoader := True;
   end;
   FModuleLoader.BindRuntime(FGlobalScope, ThrowError);
+  FModuleLoader.EvaluateModuleBody := EvaluateModuleBody;
   FGlobalScope.LoadModule := LoadModule;
 end;
 
@@ -172,6 +175,15 @@ begin
     raise Exception.Create(
       'TGocciaInterpreter resolver is owned by the module loader. ' +
       'Create the interpreter with a configured TGocciaModuleLoader instead.');
+end;
+
+procedure TGocciaInterpreter.EvaluateModuleBody(
+  const AProgram: TGocciaProgram; const AContext: TGocciaEvaluationContext);
+var
+  I: Integer;
+begin
+  for I := 0 to AProgram.Body.Count - 1 do
+    EvaluateStatement(AProgram.Body[I], AContext);
 end;
 
 procedure TGocciaInterpreter.ThrowError(const AMessage: string; const ALine, AColumn: Integer);

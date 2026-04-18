@@ -222,11 +222,16 @@ function TGocciaCLIApplication.CreateEngine(const AFileName: string;
   const ASource: TStringList): TGocciaEngine;
 begin
   Result := TGocciaEngine.Create(AFileName, ASource, GlobalBuiltins);
-  if Assigned(FEngineOptions) then
-  begin
-    Result.ASIEnabled := FEngineOptions.ASI.Present;
-    ConfigureModuleResolver(Result.Resolver, AFileName,
-      FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
+  try
+    if Assigned(FEngineOptions) then
+    begin
+      Result.ASIEnabled := FEngineOptions.ASI.Present;
+      ConfigureModuleResolver(Result.Resolver, AFileName,
+        FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
+    end;
+  except
+    Result.Free;
+    raise;
   end;
 end;
 
