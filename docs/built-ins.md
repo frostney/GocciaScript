@@ -152,7 +152,7 @@ Implements the [ECMAScript Number](https://developer.mozilla.org/en-US/docs/Web/
 
 Implements [ECMAScript BigInt](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt) (ES2020). See [MDN BigInt reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt) for the full API.
 
-**Not implemented:** `BigInt.asIntN`, `BigInt.asUintN`, `BigInt64Array`, `BigUint64Array`.
+**Not implemented:** `BigInt64Array`, `BigUint64Array`.
 
 ### String (`Goccia.Builtins.GlobalString.pas`)
 

@@ -176,6 +176,33 @@ begin
   Result := nil;
 end;
 
+// ES2026 §6.2.4.2 ToIndex — coerce bits parameter for asIntN/asUintN
+function BigIntToIndex(const AValue: TGocciaValue): Integer;
+var
+  Num: TGocciaNumberLiteralValue;
+  IntegerIndex: Double;
+begin
+  if (AValue = nil) or (AValue is TGocciaUndefinedLiteralValue) then
+    Exit(0);
+
+  Num := AValue.ToNumberLiteral;
+  if Num.IsNaN then
+    IntegerIndex := 0
+  else if Num.IsInfinite then
+  begin
+    ThrowRangeError('Invalid index');
+    Exit(0);
+  end
+  else
+    IntegerIndex := Trunc(Num.Value);
+
+  if (IntegerIndex < 0) or (IntegerIndex > 9007199254740991.0) or
+     (IntegerIndex > High(Integer)) then
+    ThrowRangeError('Invalid index');
+
+  Result := Trunc(IntegerIndex);
+end;
+
 // ES2026 §21.2.2.1 BigInt.asIntN(bits, bigint)
 function TGocciaGlobalBigInt.BigIntAsIntN(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
@@ -185,7 +212,7 @@ var
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'BigInt.asIntN', ThrowError);
 
-  Bits := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+  Bits := BigIntToIndex(AArgs.GetElement(0));
 
   BigIntArg := AArgs.GetElement(1);
   if not (BigIntArg is TGocciaBigIntValue) then
@@ -205,7 +232,7 @@ var
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'BigInt.asUintN', ThrowError);
 
-  Bits := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+  Bits := BigIntToIndex(AArgs.GetElement(0));
 
   BigIntArg := AArgs.GetElement(1);
   if not (BigIntArg is TGocciaBigIntValue) then

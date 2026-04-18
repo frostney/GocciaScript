@@ -28,6 +28,7 @@ uses
 
   Goccia.Values.ArrayValue,
   Goccia.Values.BigIntValue,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
   Goccia.Values.ObjectValue,
@@ -537,33 +538,54 @@ begin
   end;
 end;
 
-// ES2026 §7.2.14 — cross-type BigInt/Number comparison
+// ES2026 §7.2.14 — cross-type BigInt/Number comparison (mathematical-value)
 function CompareBigIntAndNumber(const ABigInt: TGocciaBigIntValue;
   const ANumber: TGocciaNumberLiteralValue; const ABigIntIsLeft: Boolean): Integer;
 var
-  D: Double;
+  NumVal: Double;
+  FloorVal: Double;
+  NumAsBigInt: TBigInteger;
 begin
   // NaN is always unordered
   if ANumber.IsNaN then
     Exit(2); // unordered
   if ANumber.IsInfinity then
-  begin
-    Result := -1; // BigInt < +Infinity
-    Exit;
-  end;
+    Exit(-1); // BigInt < +Infinity
   if ANumber.IsNegativeInfinity then
+    Exit(1); // BigInt > -Infinity
+
+  NumVal := ANumber.Value;
+
+  // If the Number has a fractional part, compare BigInt against floor
+  if Frac(NumVal) <> 0 then
   begin
-    Result := 1; // BigInt > -Infinity
+    FloorVal := System.Int(NumVal); // truncate toward zero
+    if NumVal > 0 then
+    begin
+      // e.g. 1.5: BigInt > 1 means BigInt >= 2 means BigInt > 1.5
+      NumAsBigInt := TBigInteger.FromDouble(FloorVal);
+      Result := ABigInt.Value.Compare(NumAsBigInt);
+      if Result <= 0 then
+        Result := -1 // BigInt <= floor(NumVal), so BigInt < NumVal
+      else
+        Result := 1; // BigInt > floor(NumVal), so BigInt > NumVal
+    end
+    else
+    begin
+      // e.g. -1.5: floor is -2, ceil is -1
+      NumAsBigInt := TBigInteger.FromDouble(FloorVal); // -1 for -1.5 (Int truncates toward zero)
+      Result := ABigInt.Value.Compare(NumAsBigInt);
+      if Result >= 0 then
+        Result := 1 // BigInt >= ceil(NumVal), so BigInt > NumVal
+      else
+        Result := -1; // BigInt < ceil(NumVal), so BigInt < NumVal
+    end;
     Exit;
   end;
-  // Compare via Double (may lose precision for very large BigInts, but matches spec behavior)
-  D := ABigInt.Value.ToDouble;
-  if D > ANumber.Value then
-    Result := 1
-  else if D < ANumber.Value then
-    Result := -1
-  else
-    Result := 0;
+
+  // Number is an exact integer — convert to BigInt for precise comparison
+  NumAsBigInt := TBigInteger.FromDouble(NumVal);
+  Result := ABigInt.Value.Compare(NumAsBigInt);
 end;
 
 function GreaterThan(const ALeft, ARight: TGocciaValue): Boolean;
@@ -631,20 +653,15 @@ begin
     Exit;
   end;
 
-  // NaN guard: BigInt is never NaN, but cross-type BigInt/Number must check the Number operand
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
-    { both BigInt, no NaN possible }
-  else if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaNumberLiteralValue) then
+  // NaN guard: cross-type BigInt/Number must check the Number operand
+  if (ALeft is TGocciaBigIntValue) or (ARight is TGocciaBigIntValue) then
   begin
-    if TGocciaNumberLiteralValue(ARight).IsNaN then
+    if (ARight is TGocciaNumberLiteralValue) and TGocciaNumberLiteralValue(ARight).IsNaN then
     begin
       Result := False;
       Exit;
     end;
-  end
-  else if (ALeft is TGocciaNumberLiteralValue) and (ARight is TGocciaBigIntValue) then
-  begin
-    if TGocciaNumberLiteralValue(ALeft).IsNaN then
+    if (ALeft is TGocciaNumberLiteralValue) and TGocciaNumberLiteralValue(ALeft).IsNaN then
     begin
       Result := False;
       Exit;
@@ -723,20 +740,15 @@ begin
     Exit;
   end;
 
-  // NaN guard: BigInt is never NaN, but cross-type BigInt/Number must check the Number operand
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
-    { both BigInt, no NaN possible }
-  else if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaNumberLiteralValue) then
+  // NaN guard: cross-type BigInt/Number must check the Number operand
+  if (ALeft is TGocciaBigIntValue) or (ARight is TGocciaBigIntValue) then
   begin
-    if TGocciaNumberLiteralValue(ARight).IsNaN then
+    if (ARight is TGocciaNumberLiteralValue) and TGocciaNumberLiteralValue(ARight).IsNaN then
     begin
       Result := False;
       Exit;
     end;
-  end
-  else if (ALeft is TGocciaNumberLiteralValue) and (ARight is TGocciaBigIntValue) then
-  begin
-    if TGocciaNumberLiteralValue(ALeft).IsNaN then
+    if (ALeft is TGocciaNumberLiteralValue) and TGocciaNumberLiteralValue(ALeft).IsNaN then
     begin
       Result := False;
       Exit;

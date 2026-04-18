@@ -41,3 +41,24 @@ test("cross-type comparisons BigInt vs Number", () => {
   expect(1 < 2n).toBe(true);
   expect(2 > 1n).toBe(true);
 });
+
+test("cross-type comparisons with NaN", () => {
+  expect(1n < NaN).toBe(false);
+  expect(1n > NaN).toBe(false);
+  expect(1n <= NaN).toBe(false);
+  expect(1n >= NaN).toBe(false);
+});
+
+test("cross-type comparisons with fractional numbers", () => {
+  expect(1n < 1.5).toBe(true);
+  expect(2n > 1.5).toBe(true);
+  expect(1n > 0.5).toBe(true);
+  expect(0n < 0.5).toBe(true);
+  expect(-1n > -1.5).toBe(true);
+  expect(-2n < -1.5).toBe(true);
+});
+
+test("cross-type comparisons beyond 2^53 precision", () => {
+  expect(9007199254740993n > 9007199254740992).toBe(true);
+  expect(9007199254740993n === 9007199254740992).toBe(false);
+});
