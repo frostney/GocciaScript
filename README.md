@@ -76,8 +76,8 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 ### Run a Script
 
 ```bash
-./build.pas loader && ./build/ScriptLoader example.js
-printf "const x = 2 + 2; x;" | ./build/ScriptLoader
+./build.pas loader && ./build/GocciaScriptLoader example.js
+printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader
 ```
 
 Script files may start with a Unix shebang line like `#!/usr/bin/env goccia`; GocciaScript ignores that first line during lexing.
@@ -88,30 +88,30 @@ GocciaScript includes a bytecode execution backend. The public bytecode artifact
 
 ```bash
 # Compile and execute via bytecode
-./build/ScriptLoader example.js --mode=bytecode
-printf "const x = 2 + 2; x;" | ./build/ScriptLoader --mode=bytecode
+./build/GocciaScriptLoader example.js --mode=bytecode
+printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader --mode=bytecode
 
 # Compile to .gbc bytecode file (no execution) — use GocciaBundler
 ./build/GocciaBundler example.js
 ./build/GocciaBundler example.js --output=out.gbc
 
 # Load and execute a pre-compiled .gbc file
-./build/ScriptLoader example.gbc
+./build/GocciaScriptLoader example.gbc
 
 # Emit structured JSON for programmatic consumers
-printf "console.log('hi'); 2 + 2;" | ./build/ScriptLoader --output=json
+printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=json
 
 # Inject globals from the CLI
-printf "x + y;" | ./build/ScriptLoader --global x=10 --global y=20
-printf "name;" | ./build/ScriptLoader --globals=context.json --output=json
-printf "name;" | ./build/ScriptLoader --globals=context.json5 --output=json
-printf "name;" | ./build/ScriptLoader --globals=context.toml --output=json
-printf "name;" | ./build/ScriptLoader --globals=context.yaml --output=json
+printf "x + y;" | ./build/GocciaScriptLoader --global x=10 --global y=20
+printf "name;" | ./build/GocciaScriptLoader --globals=context.json --output=json
+printf "name;" | ./build/GocciaScriptLoader --globals=context.json5 --output=json
+printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
+printf "name;" | ./build/GocciaScriptLoader --globals=context.yaml --output=json
 # `--global name=value` parses inline values as JSON only; `--globals=file` accepts JSON, JSON5, TOML, or YAML by file extension.
 # Injected globals can override earlier injected values, but not built-in globals like console
 
 # Abort long-running scripts
-printf "const f = () => f(); f();" | ./build/ScriptLoader --timeout=100
+printf "const f = () => f(); f();" | ./build/GocciaScriptLoader --timeout=100
 ```
 
 See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode backend architecture.
@@ -119,7 +119,7 @@ See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode backend architec
 ### Start the REPL
 
 ```bash
-./build.pas repl && ./build/REPL
+./build.pas repl && ./build/GocciaREPL
 ```
 
 ### Run Tests
@@ -128,13 +128,13 @@ GocciaScript has 3400+ JavaScript unit tests covering language features, built-i
 
 ```bash
 # Run all tests (GocciaScript TestRunner)
-./build.pas testrunner && ./build/TestRunner tests
+./build.pas testrunner && ./build/GocciaTestRunner tests
 
 # Run a specific test
-./build.pas testrunner && ./build/TestRunner tests/language/expressions/addition/basic-addition.js
+./build.pas testrunner && ./build/GocciaTestRunner tests/language/expressions/addition/basic-addition.js
 
 # Run tests with 4 parallel workers
-./build.pas testrunner && ./build/TestRunner tests --jobs=4
+./build.pas testrunner && ./build/GocciaTestRunner tests --jobs=4
 
 # Run tests in standard JavaScript (Vitest) for cross-compatibility
 npx vitest run
@@ -144,20 +144,20 @@ npx vitest run
 
 ```bash
 # Run all benchmarks
-./build.pas benchmarkrunner && ./build/BenchmarkRunner benchmarks
+./build.pas benchmarkrunner && ./build/GocciaBenchmarkRunner benchmarks
 
 # Run a specific benchmark
-./build/BenchmarkRunner benchmarks/fibonacci.js
+./build/GocciaBenchmarkRunner benchmarks/fibonacci.js
 
 # Run a benchmark from stdin
-printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/BenchmarkRunner
+printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner
 
 # Run benchmarks sequentially (single worker)
-./build/BenchmarkRunner benchmarks --jobs=1
+./build/GocciaBenchmarkRunner benchmarks --jobs=1
 
 # Export as JSON or CSV
-./build/BenchmarkRunner benchmarks --format=json --output=results.json
-./build/BenchmarkRunner benchmarks --format=csv --output=results.csv
+./build/GocciaBenchmarkRunner benchmarks --format=json --output=results.json
+./build/GocciaBenchmarkRunner benchmarks --format=csv --output=results.csv
 ```
 
 The benchmark runner auto-calibrates iterations per benchmark, reports ops/sec with variance (CV%) and engine-level timing breakdown (lex/parse/execute). Output formats: `console` (default), `text`, `csv`, `json`. Calibration and measurement parameters are configurable via [environment variables](docs/benchmarks.md#configuring-benchmark-parameters).

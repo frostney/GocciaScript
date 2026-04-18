@@ -29,9 +29,9 @@ mkdir -p "$artifact_dir"
 
 shopt -s nullglob
 
-entrypoints=(./*.dpr)
+entrypoints=(./source/app/*.dpr)
 if [ "${#entrypoints[@]}" -eq 0 ]; then
-  echo "::error::No top-level .dpr entrypoints found"
+  echo "::error::No .dpr entrypoints found in source/app/"
   exit 1
 fi
 
@@ -55,7 +55,7 @@ done
 if [ -n "$include_tests" ]; then
   copied_test=0
 
-  for test_bin in "$build_dir"/Goccia.*.Test "$build_dir"/Goccia.*.Test.exe; do
+  for test_bin in "$build_dir"/*.Test "$build_dir"/*.Test.exe; do
     if [ -f "$test_bin" ]; then
       cp "$test_bin" "$artifact_dir/"
       copied_test=1

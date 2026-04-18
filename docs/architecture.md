@@ -65,7 +65,7 @@ The CLI tools share a two-level application class hierarchy and a declarative op
 - `TGocciaApplication` (`Goccia.Application.pas`) — embeddable base for any GocciaScript host. Manages GC lifecycle (`Initialize`/`Shutdown`) and unified error handling (`HandleError` virtual). No CLI dependency.
 - `TGocciaCLIApplication` (`Goccia.CLI.Application.pas`) — extends `TGocciaApplication` with CLI concerns: argument parsing, help generation, option registration, and coverage/profiler singleton lifecycle. Tools override `Configure` (register options) and `ExecuteWithPaths` (business logic).
 
-**Option class hierarchy** (`Goccia.CLI.Options.pas`):
+**Option class hierarchy** (`CLI.Options.pas`):
 
 - `TGocciaOptionBase` → `TGocciaFlagOption`, `TGocciaStringOption`, `TGocciaIntegerOption`, `TGocciaRepeatableOption`, `TGocciaEnumOption<T>`
 - The parser calls `Option.Apply(Value)` via virtual dispatch — no pointer arithmetic
@@ -86,10 +86,10 @@ The CLI tools share a two-level application class hierarchy and a declarative op
 
 | Tool | Base Class | Overrides |
 |------|-----------|-----------|
-| REPL | `TGocciaApplication` | `Execute` (interactive loop) |
-| ScriptLoader | `TGocciaCLIApplication` | `Configure`, `Validate`, `ExecuteWithPaths`, `HandleError`, `AfterExecute` |
-| TestRunner | `TGocciaCLIApplication` | `Configure`, `ExecuteWithPaths`, `GlobalBuiltins` |
-| BenchmarkRunner | `TGocciaCLIApplication` | `Configure`, `ExecuteWithPaths`, `GlobalBuiltins` |
+| GocciaREPL | `TGocciaApplication` | `Execute` (interactive loop) |
+| GocciaScriptLoader | `TGocciaCLIApplication` | `Configure`, `Validate`, `ExecuteWithPaths`, `HandleError`, `AfterExecute` |
+| GocciaTestRunner | `TGocciaCLIApplication` | `Configure`, `ExecuteWithPaths`, `GlobalBuiltins` |
+| GocciaBenchmarkRunner | `TGocciaCLIApplication` | `Configure`, `ExecuteWithPaths`, `GlobalBuiltins` |
 | GocciaBundler | `TGocciaCLIApplication` | `Configure`, `Validate`, `ExecuteWithPaths` |
 
 ## Executor Architecture

@@ -48,7 +48,7 @@ When working with the GC, follow these rules:
 - **Use `CollectIfNeeded(AProtect)`** when holding a `TGCManagedObject` on the stack. The no-arg `CollectIfNeeded` is only safe when all live values are already rooted.
 - **Scopes** register/unregister with the GC in their constructor/destructor. Active call scopes are tracked via `PushActiveRoot`/`PopActiveRoot`.
 - **VM register rooting** only traverses object-bearing register slots.
-- Automatic collection is disabled during bytecode execution; TestRunner and BenchmarkRunner call `Collect` after each file.
+- Automatic collection is disabled during bytecode execution; GocciaTestRunner and GocciaBenchmarkRunner call `Collect` after each file.
 
 ## Design Rationale
 
@@ -71,7 +71,7 @@ When working with the GC, follow these rules:
 - **O(1) `UnregisterObject`** — Each managed object stores its index in the managed objects list (`GCIndex`). Unregistration nils the slot at the known index instead of performing an O(n) linear scan. The sweep phase compacts nil slots during its existing pass.
 - **Adaptive threshold** — After each collection, the threshold scales to `max(DEFAULT_GC_THRESHOLD, surviving_count)`, so large heaps collect proportionally less often, amortizing collection cost to O(1) per allocation.
 - **`Recycle` virtual method** — Sweep calls `Obj.Recycle` instead of `Obj.Free`. The default calls `Free`, but subclasses can override to return objects to a pool.
-- **Measurable impact** — Both the BenchmarkRunner and TestRunner call `Collect` after each file to reclaim memory between script executions.
+- **Measurable impact** — Both the GocciaBenchmarkRunner and GocciaTestRunner call `Collect` after each file to reclaim memory between script executions.
 
 ## AST Literal Ownership
 

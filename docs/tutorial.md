@@ -36,7 +36,7 @@ cd GocciaScript
 ./build.pas loader
 ```
 
-This produces `build/ScriptLoader`, the command you'll use to run every script in this tutorial.
+This produces `build/GocciaScriptLoader`, the command you'll use to run every script in this tutorial.
 
 ## Hello, World
 
@@ -50,7 +50,7 @@ console.log(message);
 Run it:
 
 ```bash
-./build/ScriptLoader hello.js
+./build/GocciaScriptLoader hello.js
 ```
 
 You should see:
@@ -232,7 +232,7 @@ console.log(multiply(4, 5));  // 20
 Run the entry point:
 
 ```bash
-./build/ScriptLoader app.js
+./build/GocciaScriptLoader app.js
 ```
 
 You can also rename imports with `as`:

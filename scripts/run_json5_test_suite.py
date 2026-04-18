@@ -18,7 +18,7 @@ DEFAULT_TIMEOUT_SECONDS = 5
 HARNESS_SOURCE_PATH = Path("scripts/GocciaJSON5Check.dpr")
 CASE_EXTRACTOR_PATH = Path("scripts/extract_json5_cases.js")
 STRINGIFY_SUITE_PATH = Path("tests/built-ins/JSON5/stringify.js")
-TEST_RUNNER_SOURCE_PATH = Path("TestRunner.dpr")
+TEST_RUNNER_SOURCE_PATH = Path("source/app/GocciaTestRunner.dpr")
 SUBPROCESS_ENCODING = "utf-8"
 
 
@@ -84,8 +84,6 @@ def compile_harness(repo_root: Path, build_dir: Path) -> Path:
     [
       "fpc",
       "@config.cfg",
-      "-Fuunits",
-      "-Fu.",
       f"-FU{build_dir}",
       f"-FE{build_dir}",
       str(harness_source),
@@ -105,8 +103,6 @@ def compile_test_runner(repo_root: Path, build_dir: Path) -> Path:
     [
       "fpc",
       "@config.cfg",
-      "-Fuunits",
-      "-Fu.",
       f"-FU{build_dir}",
       f"-FE{build_dir}",
       str(runner_source),
@@ -114,7 +110,7 @@ def compile_test_runner(repo_root: Path, build_dir: Path) -> Path:
     cwd=repo_root,
   )
 
-  runner_name = "TestRunner.exe" if sys.platform.startswith("win") else "TestRunner"
+  runner_name = "GocciaTestRunner.exe" if sys.platform.startswith("win") else "GocciaTestRunner"
   return build_dir / runner_name
 
 
@@ -389,7 +385,7 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument(
     "--test-runner",
     type=Path,
-    help="Optional prebuilt TestRunner binary. If omitted, the script compiles TestRunner.dpr.",
+    help="Optional prebuilt GocciaTestRunner binary. If omitted, the script compiles source/app/GocciaTestRunner.dpr.",
   )
   parser.add_argument(
     "--node",

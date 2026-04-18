@@ -4,16 +4,17 @@
 *.rsj
 
 # Generated files
-units/Goccia.Version.Generated.inc
+source/units/Goccia.Version.Generated.inc
 
 # Build files
+build/compiled/
 build/*.exe
 build/GocciaJSON5Check
 build/main
-build/REPL
-build/ScriptLoader
-build/TestRunner
-build/BenchmarkRunner
+build/GocciaREPL
+build/GocciaScriptLoader
+build/GocciaTestRunner
+build/GocciaBenchmarkRunner
 build/GocciaBundler
 build/*.Test
 build/ppas.sh

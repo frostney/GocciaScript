@@ -25,8 +25,8 @@ TGocciaGlobalBuiltin = (
 );
 ```
 
-The `TestRunner` adds `ggTestAssertions` to inject the test framework.
-The `BenchmarkRunner` adds `ggBenchmark` to inject the benchmark framework.
+The `GocciaTestRunner` adds `ggTestAssertions` to inject the test framework.
+The `GocciaBenchmarkRunner` adds `ggBenchmark` to inject the benchmark framework.
 FFI (`ggFFI`) is available but must be explicitly enabled.
 
 ## Adding a New Built-in
@@ -669,7 +669,7 @@ Foreign Function Interface for calling native shared libraries. Only available w
 
 **Supported FFI types:** `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`, `pointer`, `cstring`, `bool`, `void` (return only). `i64`/`u64` are not available on i386. Max 8 arguments per function. Pointer arguments accept `FFIPointer`, `ArrayBuffer`, `SharedArrayBuffer`, `TypedArray`, or `null`.
 
-### Test Assertions (`Goccia.Builtins.TestAssertions.pas`)
+### Test Assertions (`Goccia.Builtins.TestingLibrary.pas`)
 
 Only available when `ggTestAssertions` is enabled.
 
@@ -725,7 +725,7 @@ All matchers support `.not` negation: `expect(value).not.toBe(wrong)`.
 
 ### Benchmark (`Goccia.Builtins.Benchmark.pas`)
 
-Only available when `ggBenchmark` is enabled (used by the BenchmarkRunner). See [benchmarks.md](benchmarks.md) for usage, output formats, and CI integration.
+Only available when `ggBenchmark` is enabled (used by the GocciaBenchmarkRunner). See [benchmarks.md](benchmarks.md) for usage, output formats, and CI integration.
 
 **Benchmark structure:**
 
@@ -744,7 +744,7 @@ suite("group name", () => {
 |----------|-------------|
 | `suite(name, fn)` | Group benchmarks. Executes `fn` immediately to register `bench` entries. |
 | `bench(name, fn)` | Register a benchmark function. Called repeatedly during calibration and measurement. |
-| `runBenchmarks()` | Execute all registered benchmarks and return results. Injected automatically by BenchmarkRunner. |
+| `runBenchmarks()` | Execute all registered benchmarks and return results. Injected automatically by GocciaBenchmarkRunner. |
 
 **Result object** (returned by `runBenchmarks()`):
 

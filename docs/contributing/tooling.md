@@ -23,7 +23,7 @@ Install Lefthook as described in [Workflow — Local setup](workflow.md#local-se
 ./format.pas
 
 # Format specific files
-./format.pas units/Goccia.Engine.pas
+./format.pas source/units/Goccia.Engine.pas
 
 # Check only (exit 1 if changes needed)
 ./format.pas --check

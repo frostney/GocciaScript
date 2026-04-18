@@ -653,9 +653,9 @@ GocciaScript requires explicit semicolons by default, preventing this class of b
 
 ```bash
 # Enable ASI via CLI
-./build/ScriptLoader example.js --asi
-./build/TestRunner tests/ --asi
-./build/REPL --asi
+./build/GocciaScriptLoader example.js --asi
+./build/GocciaTestRunner tests/ --asi
+./build/GocciaREPL --asi
 ```
 
 ```pascal

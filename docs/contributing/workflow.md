@@ -6,7 +6,7 @@
 
 - **Local setup** — Install Lefthook for pre-commit formatting, then `lefthook install`
 - **Branch workflow** — Branch from `main`, implement with [critical rules](../../CONTRIBUTING.md#critical-rules) and [code style](code-style.md), add tests, update docs, commit
-- **Verification** — `./build.pas testrunner && ./build/TestRunner tests` before every push
+- **Verification** — `./build.pas testrunner && ./build/GocciaTestRunner tests` before every push
 
 ## Local setup
 
@@ -52,7 +52,7 @@ Every change should follow this sequence:
 1. **Create a branch** from `main` with a descriptive name (for example `feature/string-prototype-repeat`, `fix/nan-comparison`).
 2. **Implement** on that branch, following [Critical rules](../../CONTRIBUTING.md#critical-rules) and [Code style](code-style.md).
 3. **Annotate spec references** — For ECMAScript behavior, add `// ESYYYY` spec comments as described in [ECMAScript spec annotations](code-style.md#ecmascript-spec-annotations).
-4. **Add or update tests** — JavaScript tests under `tests/` are primary; Pascal units under `units/*.Test.pas` when you touch AST, evaluator, or value types. See [testing.md](../testing.md) and [Critical rules](../../CONTRIBUTING.md#critical-rules).
+4. **Add or update tests** — JavaScript tests under `tests/` are primary; Pascal units under `source/units/*.Test.pas` when you touch AST, evaluator, or value types. See [testing.md](../testing.md) and [Critical rules](../../CONTRIBUTING.md#critical-rules).
 5. **Update documentation** that your change affects (`README.md`, `docs/*`, and CONTRIBUTING.md when workflow, rules, or style change). Edit **AGENTS.md** only when **agent-specific** guidance changes—not to duplicate CONTRIBUTING. If the change introduces a new **architectural or design decision** (not just a feature addition), add an entry to [decision-log.md](../decision-log.md) following the template there.
 6. **Commit** with a clear message. Do not commit directly to `main`.
 
@@ -69,7 +69,7 @@ git commit -m "Short imperative description of the change"
 ## Verify changes
 
 ```bash
-./build.pas testrunner && ./build/TestRunner tests
+./build.pas testrunner && ./build/GocciaTestRunner tests
 ```
 
 For interpreter/VM internals, also run native Pascal tests as described under [Testing](../testing.md).
