@@ -176,6 +176,18 @@ const
   PROP_PROXY                     = 'proxy';
   PROP_REVOKER_INTERNAL          = '__revoker';
 
+  // Fetch API properties
+  PROP_STATUS              = 'status';
+  PROP_STATUS_TEXT          = 'statusText';
+  PROP_OK                  = 'ok';
+  PROP_HEADERS             = 'headers';
+  PROP_BODY_USED           = 'bodyUsed';
+  PROP_REDIRECTED          = 'redirected';
+  PROP_TEXT                = 'text';
+  PROP_JSON                = 'json';
+  PROP_ARRAY_BUFFER_METHOD = 'arrayBuffer';
+  PROP_METHOD              = 'method';
+
 implementation
 
 end.

@@ -46,6 +46,9 @@ const
   CONSTRUCTOR_ASYNC_DISPOSABLE_STACK = 'AsyncDisposableStack';
   CONSTRUCTOR_SUPPRESSED_ERROR       = 'SuppressedError';
 
+  CONSTRUCTOR_HEADERS  = 'Headers';
+  CONSTRUCTOR_RESPONSE = 'Response';
+
 implementation
 
 end.
