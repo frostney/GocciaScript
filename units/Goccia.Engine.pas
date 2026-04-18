@@ -187,6 +187,10 @@ type
     constructor Create(const AFileName: string; const ASourceLines: TStringList;
       const AGlobals: TGocciaGlobalBuiltins;
       const AExecutor: TGocciaExecutor); overload;
+    constructor Create(const AFileName: string; const ASourceLines: TStringList;
+      const AGlobals: TGocciaGlobalBuiltins;
+      const AModuleLoader: TGocciaModuleLoader;
+      const AExecutor: TGocciaExecutor); overload;
     destructor Destroy; override;
 
     function Execute: TGocciaScriptResult;
@@ -534,6 +538,16 @@ begin
   FOwnsExecutor := False;
   Initialize(AFileName, ASourceLines, AGlobals,
     TGocciaModuleLoader.Create(AFileName), True);
+end;
+
+constructor TGocciaEngine.Create(const AFileName: string;
+  const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins;
+  const AModuleLoader: TGocciaModuleLoader;
+  const AExecutor: TGocciaExecutor);
+begin
+  FExecutor := AExecutor;
+  FOwnsExecutor := False;
+  Initialize(AFileName, ASourceLines, AGlobals, AModuleLoader, False);
 end;
 
 procedure TGocciaEngine.ExecuteShims;

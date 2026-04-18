@@ -119,10 +119,10 @@ begin
             try
               Eng := TGocciaEngine.Create(REPL_FILE_NAME, Source, [],
                 BcExecutor);
-              Eng.ASIEnabled := EngineOpts.ASI.Present;
-              ConfigureModuleResolver(Eng.Resolver, REPL_FILE_NAME,
-                EngineOpts.ImportMap.ValueOr(''), EngineOpts.Aliases.Values);
               try
+                Eng.ASIEnabled := EngineOpts.ASI.Present;
+                ConfigureModuleResolver(Eng.Resolver, REPL_FILE_NAME,
+                  EngineOpts.ImportMap.ValueOr(''), EngineOpts.Aliases.Values);
                 while True do
               begin
                 ReadResult := Editor.ReadLine('> ', Line);
