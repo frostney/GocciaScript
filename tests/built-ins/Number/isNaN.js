@@ -30,5 +30,7 @@ describe("Number.isNaN", () => {
   test("has correct name and length", () => {
     expect(Number.isNaN.name).toBe("isNaN");
     expect(Number.isNaN.length).toBe(1);
+    expect(Object.getOwnPropertyDescriptor(Number.isNaN, "name")).not.toBe(undefined);
+    expect(Object.getOwnPropertyDescriptor(Number.isNaN, "length")).not.toBe(undefined);
   });
 });

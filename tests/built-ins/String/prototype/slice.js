@@ -46,5 +46,7 @@ describe("String.prototype.slice", () => {
   test("has correct name and length", () => {
     expect(String.prototype.slice.name).toBe("slice");
     expect(String.prototype.slice.length).toBe(2);
+    expect(Object.getOwnPropertyDescriptor(String.prototype.slice, "name")).not.toBe(undefined);
+    expect(Object.getOwnPropertyDescriptor(String.prototype.slice, "length")).not.toBe(undefined);
   });
 });

@@ -90,4 +90,7 @@ test("Object.assign with null or undefined source skips them", () => {
 test("Object.assign has correct name and length", () => {
   expect(Object.assign.name).toBe("assign");
   expect(Object.assign.length).toBe(2);
+  const desc = Object.getOwnPropertyDescriptor(Object.assign, "name");
+  expect(desc.configurable).toBe(true);
+  expect(desc.enumerable).toBe(false);
 });
