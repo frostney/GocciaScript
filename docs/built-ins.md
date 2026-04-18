@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-- **Unconditional registration** — Standard built-ins (Console, Math, Object, Array, String, Number, RegExp, JSON, JSON5, JSONL, TOML, YAML, Symbol, Set, Map, Promise, Performance, Temporal, ArrayBuffer, SharedArrayBuffer, TypedArrays, Proxy, Reflect, Iterator, TextEncoder, TextDecoder, URL, URLSearchParams, DisposableStack, AsyncDisposableStack) are always registered
+- **Unconditional registration** — Standard built-ins (Console, Math, Object, Array, String, Number, RegExp, JSON, JSON5, JSONL, TOML, YAML, CSV, TSV, Symbol, Set, Map, Promise, Performance, Temporal, ArrayBuffer, SharedArrayBuffer, TypedArrays, Proxy, Reflect, Iterator, TextEncoder, TextDecoder, URL, URLSearchParams, DisposableStack, AsyncDisposableStack) are always registered
 - **Flag-gated extras** — Only `ggTestAssertions`, `ggBenchmark`, and `ggFFI` use flag-gating for opt-in registration
 - **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
 - **Always-present globals** — `globalThis` and `Goccia` namespace are registered after all built-ins
@@ -13,7 +13,7 @@ GocciaScript provides a set of built-in global objects that mirror JavaScript's 
 
 ## Registration System
 
-Standard built-ins (Console, Math, Object, Array, Number, JSON, JSON5, JSONL, TOML, YAML, Symbol, Set, Map, Promise, Performance, Temporal, ArrayBuffer, Proxy, Reflect) are always registered unconditionally by the engine. There is no flag-gating for these — they are available in every execution context.
+Standard built-ins (Console, Math, Object, Array, Number, JSON, JSON5, JSONL, TOML, YAML, CSV, TSV, Symbol, Set, Map, Promise, Performance, Temporal, ArrayBuffer, Proxy, Reflect) are always registered unconditionally by the engine. There is no flag-gating for these — they are available in every execution context.
 
 Only three built-ins use flag-gated registration via the `TGocciaGlobalBuiltins` enum:
 
