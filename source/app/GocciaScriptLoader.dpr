@@ -784,7 +784,7 @@ end;
 var
   RunResult: Integer;
 begin
-  RunResult := TGocciaApplication.RunApplication(TScriptLoaderApp, 'ScriptLoader');
+  RunResult := TGocciaApplication.RunApplication(TScriptLoaderApp, 'GocciaScriptLoader');
   if RunResult <> 0 then
     ExitCode := RunResult;
 end.

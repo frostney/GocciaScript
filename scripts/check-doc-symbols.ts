@@ -30,8 +30,25 @@ import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
-const UNITS_DIR = join(ROOT, "units");
+const SOURCE_DIRS = [
+  join(ROOT, "source", "units"),
+  join(ROOT, "source", "shared"),
+  join(ROOT, "source", "app"),
+];
 const VERBOSE = process.argv.includes("--verbose");
+
+const listPasFiles = (): { name: string; path: string }[] => {
+  const results: { name: string; path: string }[] = [];
+  for (const dir of SOURCE_DIRS) {
+    if (!existsSync(dir)) continue;
+    for (const file of readdirSync(dir)) {
+      if (file.endsWith(".pas") || file.endsWith(".dpr")) {
+        results.push({ name: file, path: join(dir, file) });
+      }
+    }
+  }
+  return results;
+};
 
 // Note: docs/spikes/ excluded — spike docs are snapshots per CONTRIBUTING.md
 // and may reference historical type names that no longer exist.
@@ -60,11 +77,9 @@ const SKIP_FILES = new Set([
 
 const collectUnitNames = (): Set<string> => {
   const units = new Set<string>();
-  for (const file of readdirSync(UNITS_DIR)) {
-    if (file.endsWith(".pas")) {
-      units.add(file);
-      units.add(file.replace(/\.pas$/, ""));
-    }
+  for (const { name } of listPasFiles()) {
+    units.add(name);
+    units.add(name.replace(/\.(?:pas|dpr)$/, ""));
   }
   return units;
 };
@@ -80,9 +95,8 @@ const collectTGocciaTypes = (): Set<string> => {
    * identifier the codebase actually defines or uses as a type.
    */
   const types = new Set<string>();
-  for (const file of readdirSync(UNITS_DIR)) {
-    if (!file.endsWith(".pas")) continue;
-    const content = readFileSync(join(UNITS_DIR, file), "utf-8");
+  for (const { path } of listPasFiles()) {
+    const content = readFileSync(path, "utf-8");
 
     // Broad scan: any TGoccia-prefixed word boundary match
     const matches = content.matchAll(/\b(TGoccia\w+)\b/g);
@@ -112,9 +126,8 @@ const collectMembers = (): Map<string, Set<string>> => {
     members.get(className)!.add(memberName);
   };
 
-  for (const file of readdirSync(UNITS_DIR)) {
-    if (!file.endsWith(".pas")) continue;
-    const content = readFileSync(join(UNITS_DIR, file), "utf-8");
+  for (const { path } of listPasFiles()) {
+    const content = readFileSync(path, "utf-8");
 
     // Method implementations and class function/procedure references: TGocciaXxx.MemberName
     const dotMatches = content.matchAll(/\b(TGoccia\w+)\.(\w+)\b/g);
@@ -157,10 +170,9 @@ const collectUnitFunctions = (): Map<string, Set<string>> => {
    * and class method implementations within each unit.
    */
   const unitFns = new Map<string, Set<string>>();
-  for (const file of readdirSync(UNITS_DIR)) {
-    if (!file.endsWith(".pas")) continue;
-    const unitName = file.replace(/\.pas$/, "");
-    const content = readFileSync(join(UNITS_DIR, file), "utf-8");
+  for (const { name, path } of listPasFiles()) {
+    const unitName = name.replace(/\.(?:pas|dpr)$/, "");
+    const content = readFileSync(path, "utf-8");
     const fns = new Set<string>();
 
     // Free functions/procedures

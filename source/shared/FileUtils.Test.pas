@@ -217,7 +217,7 @@ begin
   Files := FindAllFiles(FTempDir, '.pas');
   try
     Expect<Integer>(Files.Count).ToBe(1);
-    Expect<Boolean>(Pos('file.pas', Files[0]) > 0).ToBe(True);
+    Expect<string>(ExtractFileName(Files[0])).ToBe('file.pas');
   finally
     Files.Free;
   end;

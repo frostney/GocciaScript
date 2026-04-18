@@ -1007,7 +1007,7 @@ end;
 var
   RunResult: Integer;
 begin
-  RunResult := TGocciaApplication.RunApplication(TTestRunnerApp, 'TestRunner');
+  RunResult := TGocciaApplication.RunApplication(TTestRunnerApp, 'GocciaTestRunner');
   if RunResult <> 0 then
     ExitCode := RunResult;
 end.

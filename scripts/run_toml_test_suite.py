@@ -63,8 +63,6 @@ def compile_harness(repo_root: Path, build_dir: Path) -> Path:
     [
       "fpc",
       "@config.cfg",
-      "-Fuunits",
-      "-Fu.",
       f"-FU{build_dir}",
       f"-FE{build_dir}",
       str(harness_source),

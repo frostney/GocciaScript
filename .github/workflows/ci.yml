@@ -822,7 +822,7 @@ jobs:
           grep -q '"path":' sl-cov.json
           rm sl-cov.json
 
-          printf 'const x = 5;\nx;\n' | ./build/GocciaScriptLoader --coverage-output=sl-cov2.lcov --coverage-format=lcov
+          printf 'const x = 5;\nx;\n' | ./build/GocciaScriptLoader --coverage --coverage-output=sl-cov2.lcov --coverage-format=lcov
           grep -q '^DA:' sl-cov2.lcov
           rm sl-cov2.lcov
 

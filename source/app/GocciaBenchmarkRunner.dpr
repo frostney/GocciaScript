@@ -863,5 +863,5 @@ begin
 end;
 
 begin
-  ExitCode := TGocciaApplication.RunApplication(TBenchmarkRunnerApp, 'BenchmarkRunner');
+  ExitCode := TGocciaApplication.RunApplication(TBenchmarkRunnerApp, 'GocciaBenchmarkRunner');
 end.

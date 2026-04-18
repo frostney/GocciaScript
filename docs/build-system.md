@@ -303,7 +303,7 @@ GocciaScript/
 │       ├── *.pas         # All engine unit source files
 │       └── *.Test.pas    # Pascal unit test programs
 └── build/             # All output (gitignored)
-    ├── lib/           # Intermediate files
+    ├── compiled/      # Intermediate files
     │   ├── *.o        # Object files
     │   └── *.ppu      # Compiled unit files
     └── (binaries)     # Executable output

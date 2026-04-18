@@ -22,7 +22,7 @@ uses
   SysUtils,
   Classes,
 
-  GarbageCollector.Generic,
+  Goccia.GarbageCollector,
 
   Goccia.Values.Primitives,
   Goccia.Values.ArrayValue,

@@ -21,7 +21,7 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
 ## Quick checks
 
 ```bash
-./build.pas testrunner && ./build/GocciaTestRunner tests       # after substantive changes
+./build.pas testrunner && ./build/GocciaTestRunner tests --asi  # after substantive changes
 ./build.pas bundler && ./build/GocciaBundler example.js  # build and run the bundler
 ./format.pas --check # before push / PR
 ```
@@ -68,7 +68,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaREPL --mode=bytecode --timing # Bytecode REPL with per-line timing
 ./build/GocciaREPL --import-map=imports.json # Start the REPL with an explicit import map
 ./build/GocciaREPL --asi # Start the REPL with automatic semicolon insertion
-./build/GocciaTestRunner tests/ # Run all JavaScript tests
+./build/GocciaTestRunner tests/ --asi # Run all JavaScript tests
 ./build/GocciaTestRunner tests --import-map=imports.json # Run tests with an explicit import map
 ./build/GocciaTestRunner tests/language/expressions/ # Run a test category
 ./build/GocciaTestRunner tests --no-progress --exit-on-first-failure # CI mode
@@ -107,7 +107,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaBundler --output=out.gbc # Compile 
 ./build.pas loader && ./build/GocciaScriptLoader ./example.js
 
 # Compile and run all tests
-./build.pas testrunner && ./build/GocciaTestRunner tests
+./build.pas testrunner && ./build/GocciaTestRunner tests --asi
 
 # Compile and run a specific test
 ./build.pas testrunner && ./build/GocciaTestRunner tests/language/expressions/addition/basic-addition.js

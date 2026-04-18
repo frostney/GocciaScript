@@ -297,5 +297,5 @@ begin
 end;
 
 begin
-  ExitCode := TGocciaApplication.RunApplication(TREPLApp, 'REPL');
+  ExitCode := TGocciaApplication.RunApplication(TREPLApp, 'GocciaREPL');
 end.

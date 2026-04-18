@@ -378,12 +378,13 @@ procedure THashMapTests.TestGetValueRaisesOnMissingKey;
 var
   Map: THashMap<Integer, Integer>;
   Raised: Boolean;
+  Dummy: Integer;
 begin
   Map := THashMap<Integer, Integer>.Create;
   try
     Raised := False;
     try
-      Map[999];
+      Dummy := Map[999];
     except
       on E: Exception do
         Raised := True;
