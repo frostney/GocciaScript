@@ -2141,8 +2141,9 @@ var
 begin
   Left := Conditional;
 
-  // Single-parameter unparenthesized arrow: ident => body
-  if (Left is TGocciaIdentifierExpression) and Check(gttArrow) then
+  // Single-parameter unparenthesized arrow: ident [no LineTerminator here] => body
+  if (Left is TGocciaIdentifierExpression) and Check(gttArrow)
+    and (Previous.Line = Peek.Line) then
   begin
     Line := TGocciaIdentifierExpression(Left).Line;
     Column := TGocciaIdentifierExpression(Left).Column;

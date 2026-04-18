@@ -17,3 +17,8 @@ test("Math.min", () => {
   expect(Math.min(Infinity, -Infinity)).toBe(-Infinity);
   expect(Math.min(-Infinity, Infinity)).toBe(-Infinity);
 });
+
+test("Math.min has correct name and length", () => {
+  expect(Math.min.name).toBe("min");
+  expect(Math.min.length).toBe(2);
+});

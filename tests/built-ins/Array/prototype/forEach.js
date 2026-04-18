@@ -66,3 +66,8 @@ test("forEach callback count matches array length", () => {
   });
   expect(count).toBe(5);
 });
+
+test("forEach has correct name and length", () => {
+  expect(Array.prototype.forEach.name).toBe("forEach");
+  expect(Array.prototype.forEach.length).toBe(1);
+});

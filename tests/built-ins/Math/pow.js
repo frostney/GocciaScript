@@ -9,3 +9,8 @@ test("Math.pow", () => {
   expect(Math.pow(10, 0)).toBe(1);
   expect(Math.pow(4, 0.5)).toBe(2);
 });
+
+test("Math.pow has correct name and length", () => {
+  expect(Math.pow.name).toBe("pow");
+  expect(Math.pow.length).toBe(2);
+});

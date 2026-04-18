@@ -111,3 +111,8 @@ test("reduce passes correct arguments to callback", () => {
   expect(calls[2].val).toBe(3);
   expect(calls[2].idx).toBe(2);
 });
+
+test("reduce has correct name and length", () => {
+  expect(Array.prototype.reduce.name).toBe("reduce");
+  expect(Array.prototype.reduce.length).toBe(1);
+});

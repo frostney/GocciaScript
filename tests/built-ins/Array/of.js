@@ -45,4 +45,9 @@ describe("Array.of", () => {
     expect(arr[0]).toBe(undefined);
     expect(arr[1]).toBe(undefined);
   });
+
+  test("has correct name and length", () => {
+    expect(Array.of.name).toBe("of");
+    expect(Array.of.length).toBe(0);
+  });
 });

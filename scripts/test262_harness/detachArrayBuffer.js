@@ -4,7 +4,7 @@
 const $262 = {
   detachArrayBuffer: (buffer) => {
     if (!(buffer instanceof ArrayBuffer) && !(buffer instanceof SharedArrayBuffer)) {
-      throw new TypeError("$262.detachArrayBuffer requires an ArrayBuffer");
+      throw new TypeError("$262.detachArrayBuffer requires an ArrayBuffer or SharedArrayBuffer");
     }
     // transfer() detaches the source buffer as a side-effect
     buffer.transfer(0);

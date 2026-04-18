@@ -87,8 +87,8 @@ describe("arrow functions", () => {
     const doubleAsync = async x => x * 2;
     expect(await doubleAsync(5)).toBe(10);
 
-    // In new expression arguments
-    const p = new Promise(async resolve => resolve(99));
+    // In new expression arguments (sync executor, not async anti-pattern)
+    const p = new Promise(resolve => resolve(99));
     expect(await p).toBe(99);
 
     // As callback

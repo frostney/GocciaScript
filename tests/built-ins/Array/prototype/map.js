@@ -88,3 +88,11 @@ test("map does not mutate the original array", () => {
   arr.map((x) => x * 10);
   expect(arr).toEqual([1, 2, 3]);
 });
+
+test("map has correct name and length", () => {
+  expect(Array.prototype.map.name).toBe("map");
+  expect(Array.prototype.map.length).toBe(1);
+  const desc = Object.getOwnPropertyDescriptor(Array.prototype.map, "name");
+  expect(desc.configurable).toBe(true);
+  expect(desc.enumerable).toBe(false);
+});

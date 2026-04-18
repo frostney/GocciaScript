@@ -26,4 +26,9 @@ describe("Number.isNaN", () => {
     expect(Number.isNaN(true)).toBe(false);
     expect(Number.isNaN(null)).toBe(false);
   });
+
+  test("has correct name and length", () => {
+    expect(Number.isNaN.name).toBe("isNaN");
+    expect(Number.isNaN.length).toBe(1);
+  });
 });

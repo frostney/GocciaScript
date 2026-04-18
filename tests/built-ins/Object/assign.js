@@ -86,3 +86,8 @@ test("Object.assign with null or undefined source skips them", () => {
   expect(result.a).toBe(1);
   expect(result.b).toBe(2);
 });
+
+test("Object.assign has correct name and length", () => {
+  expect(Object.assign.name).toBe("assign");
+  expect(Object.assign.length).toBe(2);
+});

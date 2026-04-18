@@ -19,3 +19,8 @@ test("Math.max", () => {
   expect(Math.max(-Infinity, 1, 2)).toBe(2);
   expect(Math.max(Infinity, -Infinity)).toBe(Infinity);
 });
+
+test("Math.max has correct name and length", () => {
+  expect(Math.max.name).toBe("max");
+  expect(Math.max.length).toBe(2);
+});
