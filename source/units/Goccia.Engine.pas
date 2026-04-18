@@ -586,7 +586,10 @@ begin
 
   FPreprocessors := DefaultPreprocessors;
   FCompatibility := DefaultCompatibility;
-  FStrictTypes := False;
+  if Assigned(FExecutor) then
+    FStrictTypes := FExecutor.DefaultStrictTypes
+  else
+    FStrictTypes := False;
   FShims := TStringList.Create;
 
   FInterpreter := TGocciaInterpreter.Create(AFileName, ASourceLines,
