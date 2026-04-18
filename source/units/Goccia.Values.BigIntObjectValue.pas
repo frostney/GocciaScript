@@ -33,9 +33,14 @@ type
 implementation
 
 uses
+  SysUtils,
+
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Values.BigIntValue,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor;
 
@@ -112,21 +117,40 @@ begin
   else if AThisValue is TGocciaBigIntValue then
     Result := AThisValue
   else
-    Result := AThisValue;
+    ThrowTypeError(Format(SErrorBigIntRequiresBigIntValue, ['BigInt.prototype.valueOf']),
+      SSuggestBigIntRequiresBigIntValue);
 end;
 
 function TGocciaBigIntObjectValue.BigIntObjectToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Prim: TGocciaValue;
+  Prim: TGocciaBigIntValue;
+  Radix: Integer;
+  RadixValue: TGocciaValue;
 begin
   if AThisValue is TGocciaBigIntObjectValue then
-    Prim := TGocciaBigIntObjectValue(AThisValue).Primitive
+    Prim := TGocciaBigIntValue(TGocciaBigIntObjectValue(AThisValue).Primitive)
   else if AThisValue is TGocciaBigIntValue then
-    Prim := AThisValue
+    Prim := TGocciaBigIntValue(AThisValue)
   else
-    Prim := AThisValue;
+  begin
+    ThrowTypeError(Format(SErrorBigIntRequiresBigIntValue, ['BigInt.prototype.toString']),
+      SSuggestBigIntRequiresBigIntValue);
+    Exit;
+  end;
 
-  Result := Prim.ToStringLiteral;
+  Radix := 10;
+  if AArgs.Length > 0 then
+  begin
+    RadixValue := AArgs.GetElement(0);
+    if not (RadixValue is TGocciaUndefinedLiteralValue) then
+    begin
+      Radix := Trunc(RadixValue.ToNumberLiteral.Value);
+      if (Radix < 2) or (Radix > 36) then
+        ThrowRangeError(SErrorBigIntInvalidRadix, SSuggestBigIntInvalidRadix);
+    end;
+  end;
+
+  Result := TGocciaStringLiteralValue.Create(Prim.Value.ToRadixString(Radix));
 end;
 
 procedure TGocciaBigIntObjectValue.MarkReferences;
