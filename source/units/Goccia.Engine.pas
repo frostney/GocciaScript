@@ -12,6 +12,7 @@ uses
   Goccia.Builtins.Base,
   Goccia.Builtins.Benchmark,
   Goccia.Builtins.Console,
+  Goccia.Builtins.CSV,
   Goccia.Builtins.DisposableStack,
   Goccia.Builtins.GlobalArray,
   Goccia.Builtins.GlobalArrayBuffer,
@@ -40,6 +41,7 @@ uses
   Goccia.Builtins.Temporal,
   Goccia.Builtins.TestingLibrary,
   Goccia.Builtins.TOML,
+  Goccia.Builtins.TSV,
   Goccia.Builtins.YAML,
   Goccia.Evaluator.Context,
   Goccia.Executor,
@@ -133,10 +135,12 @@ type
     FBuiltinRegExp: TGocciaGlobalRegExp;
     FBuiltinGlobalString: TGocciaGlobalString;
     FBuiltinGlobals: TGocciaGlobals;
+    FBuiltinCSV: TGocciaCSVBuiltin;
     FBuiltinJSON: TGocciaJSONBuiltin;
     FBuiltinJSON5: TGocciaJSON5Builtin;
     FBuiltinTOML: TGocciaTOMLBuiltin;
     FBuiltinJSONL: TGocciaJSONLBuiltin;
+    FBuiltinTSV: TGocciaTSVBuiltin;
     FBuiltinYAML: TGocciaYAMLBuiltin;
     FBuiltinSymbol: TGocciaGlobalSymbol;
     FBuiltinSet: TGocciaGlobalSet;
@@ -233,10 +237,12 @@ type
     property BuiltinGlobalArray: TGocciaGlobalArray read FBuiltinGlobalArray;
     property BuiltinGlobalNumber: TGocciaGlobalNumber read FBuiltinGlobalNumber;
     property BuiltinGlobals: TGocciaGlobals read FBuiltinGlobals;
+    property BuiltinCSV: TGocciaCSVBuiltin read FBuiltinCSV;
     property BuiltinJSON: TGocciaJSONBuiltin read FBuiltinJSON;
     property BuiltinJSON5: TGocciaJSON5Builtin read FBuiltinJSON5;
     property BuiltinTOML: TGocciaTOMLBuiltin read FBuiltinTOML;
     property BuiltinJSONL: TGocciaJSONLBuiltin read FBuiltinJSONL;
+    property BuiltinTSV: TGocciaTSVBuiltin read FBuiltinTSV;
     property BuiltinYAML: TGocciaYAMLBuiltin read FBuiltinYAML;
     property BuiltinSymbol: TGocciaGlobalSymbol read FBuiltinSymbol;
     property BuiltinSet: TGocciaGlobalSet read FBuiltinSet;
@@ -590,7 +596,10 @@ begin
 
   FPreprocessors := DefaultPreprocessors;
   FCompatibility := DefaultCompatibility;
-  FStrictTypes := False;
+  if Assigned(FExecutor) then
+    FStrictTypes := FExecutor.DefaultStrictTypes
+  else
+    FStrictTypes := False;
   FShims := TStringList.Create;
 
   FInterpreter := TGocciaInterpreter.Create(AFileName, ASourceLines,
@@ -628,10 +637,12 @@ begin
     FBuiltinRegExp.Free;
   FBuiltinGlobalString.Free;
   FBuiltinGlobals.Free;
+    FBuiltinCSV.Free;
   FBuiltinJSON.Free;
   FBuiltinJSON5.Free;
   FBuiltinTOML.Free;
     FBuiltinJSONL.Free;
+    FBuiltinTSV.Free;
     FBuiltinYAML.Free;
     FBuiltinSymbol.Free;
     FBuiltinSet.Free;
@@ -684,10 +695,12 @@ begin
   FBuiltinGlobalObject := TGocciaGlobalObject.Create(CONSTRUCTOR_OBJECT, Scope, ThrowError);
   FBuiltinGlobalArray := TGocciaGlobalArray.Create(CONSTRUCTOR_ARRAY, Scope, ThrowError);
   FBuiltinGlobalNumber := TGocciaGlobalNumber.Create(CONSTRUCTOR_NUMBER, Scope, ThrowError);
+  FBuiltinCSV := TGocciaCSVBuiltin.Create('CSV', Scope, ThrowError);
   FBuiltinJSON := TGocciaJSONBuiltin.Create('JSON', Scope, ThrowError);
   FBuiltinJSON5 := TGocciaJSON5Builtin.Create('JSON5', Scope, ThrowError);
   FBuiltinJSONL := TGocciaJSONLBuiltin.Create('JSONL', Scope, ThrowError);
   FBuiltinTOML := TGocciaTOMLBuiltin.Create('TOML', Scope, ThrowError);
+  FBuiltinTSV := TGocciaTSVBuiltin.Create('TSV', Scope, ThrowError);
   FBuiltinYAML := TGocciaYAMLBuiltin.Create('YAML', Scope, ThrowError);
   FBuiltinSymbol := TGocciaGlobalSymbol.Create(CONSTRUCTOR_SYMBOL, Scope, ThrowError);
   FBuiltinSet := TGocciaGlobalSet.Create(CONSTRUCTOR_SET, Scope, ThrowError);

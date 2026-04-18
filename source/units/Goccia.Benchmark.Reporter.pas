@@ -50,7 +50,7 @@ type
 
     function GetFileResult(AIndex: Integer): TBenchmarkFileResult;
     function FormatOpsPerSec(const AOps: Double): string;
-    function EscapeCSV(const S: string): string;
+    function EscapeCSVField(const S: string): string;
     function EscapeJSON(const S: string): string;
   public
     constructor Create;
@@ -76,7 +76,9 @@ implementation
 uses
   SysUtils,
 
-  TimingUtils;
+  TimingUtils,
+
+  Goccia.CSV;
 
 function ParseReportFormat(const S: string): TBenchmarkReportFormat;
 var
@@ -142,12 +144,9 @@ begin
   end;
 end;
 
-function TBenchmarkReporter.EscapeCSV(const S: string): string;
+function TBenchmarkReporter.EscapeCSVField(const S: string): string;
 begin
-  if (Pos(',', S) > 0) or (Pos('"', S) > 0) or (Pos(#10, S) > 0) then
-    Result := '"' + StringReplace(S, '"', '""', [rfReplaceAll]) + '"'
-  else
-    Result := S;
+  Result := TGocciaCSVStringifier.EscapeField(S, ',');
 end;
 
 function TBenchmarkReporter.EscapeJSON(const S: string): string;
@@ -320,12 +319,12 @@ begin
 
       if Entry.Error <> '' then
         FOutput.Add(SysUtils.Format('%s,%s,%s,,,,,,,,,%s',
-          [EscapeCSV(FFiles[F].FileName), EscapeCSV(Entry.Suite),
-           EscapeCSV(Entry.Name), EscapeCSV(Entry.Error)]))
+          [EscapeCSVField(FFiles[F].FileName), EscapeCSVField(Entry.Suite),
+           EscapeCSVField(Entry.Name), EscapeCSVField(Entry.Error)]))
       else
         FOutput.Add(SysUtils.Format('%s,%s,%s,%.6f,%.4f,%.6f,%d,%.6f,%.6f,%.6f,%.6f,',
-          [EscapeCSV(FFiles[F].FileName), EscapeCSV(Entry.Suite),
-           EscapeCSV(Entry.Name), Entry.OpsPerSec, Entry.VariancePercentage,
+          [EscapeCSVField(FFiles[F].FileName), EscapeCSVField(Entry.Suite),
+           EscapeCSVField(Entry.Name), Entry.OpsPerSec, Entry.VariancePercentage,
            Entry.MeanMs, Entry.Iterations, Entry.SetupMs, Entry.TeardownMs,
            Entry.MinOpsPerSec, Entry.MaxOpsPerSec]));
     end;

@@ -63,6 +63,7 @@ type
     FInlineGlobals: TGocciaRepeatableOption;
     FLastPaths: TStringList;
 
+    function IsJsonOutput: Boolean;
     function ParseSource(const ASource: TStringList; const AFileName: string;
       const APreprocessors: TGocciaPreprocessors; const ASuppressWarnings: Boolean;
       out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
@@ -120,6 +121,11 @@ begin
     'Inject globals from a JSON/JSON5/TOML/YAML file or a module with named exports');
   FInlineGlobals := AddRepeatable('global',
     'Inject a single global; value is parsed as JSON or kept as a string');
+end;
+
+function TScriptLoaderApp.IsJsonOutput: Boolean;
+begin
+  Result := FOutputPath.Present and (FOutputPath.Value = 'json');
 end;
 
 { TScriptLoaderApp - Validate }
@@ -234,7 +240,7 @@ begin
   ASourceMap.FileName := ExtractFileName(AFileName);
   ASourceMap.SetSourcePath(0, ExtractFileName(AFileName));
   ASourceMap.SaveToFile(MapOutputPath);
-  if not (FOutputPath.Present and (FOutputPath.Value = 'json')) then
+  if not IsJsonOutput then
     WriteLn(SysUtils.Format('  Source map written to %s', [MapOutputPath]));
 end;
 
@@ -245,7 +251,7 @@ begin
     Exit;
 
   AConsole.Enabled := (not FSilent.Present) and (not GIsWorkerThread);
-  if (FOutputPath.Present and (FOutputPath.Value = 'json')) and not FSilent.Present then
+  if IsJsonOutput and not FSilent.Present then
     AConsole.OutputLines := AOutputLines
   else
     AConsole.OutputLines := nil;
@@ -322,7 +328,7 @@ begin
   Engine := CreateEngine(AFileName, ASource);
   try
     Engine.SuppressWarnings := GIsWorkerThread or
-      (FOutputPath.Present and (FOutputPath.Value = 'json'));
+      IsJsonOutput;
     ConfigureConsole(Engine.BuiltinConsole, AOutputLines);
     ApplyDataGlobalsToEngine(Engine);
     StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
@@ -371,7 +377,7 @@ begin
       ApplyDataGlobalsToEngine(Engine);
 
       ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultPreprocessors,
-        (FOutputPath.Present and (FOutputPath.Value = 'json')), Result.Timing.LexTimeNanoseconds,
+        IsJsonOutput, Result.Timing.LexTimeNanoseconds,
         Result.Timing.ParseTimeNanoseconds, SourceMap);
       try
         WriteSourceMapIfEnabled(SourceMap, AFileName);
@@ -506,7 +512,7 @@ begin
   Report.ResultValue := nil;
 
   OutputLines := nil;
-  if (FOutputPath.Present and (FOutputPath.Value = 'json')) then
+  if IsJsonOutput then
     OutputLines := TStringList.Create;
   try
     StartTime := GetNanoseconds;
@@ -521,7 +527,7 @@ begin
           emBytecode:    Report := ExecuteBytecodeFromSource(ASource, AFileName, OutputLines);
         end;
 
-      if (FOutputPath.Present and (FOutputPath.Value = 'json')) then
+      if IsJsonOutput then
         PrintJSONSuccess(Report, OutputLines)
       else
         PrintHumanReadableResult(AFileName, Report, Extension);
@@ -539,7 +545,7 @@ begin
             Report.Timing.CompileTimeNanoseconds;
         if not GIsWorkerThread then
         begin
-          if (FOutputPath.Present and (FOutputPath.Value = 'json')) then
+          if IsJsonOutput then
             PrintJSONError(E, Report, OutputLines, AFileName)
           else if E is TGocciaError then
             WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
@@ -641,7 +647,7 @@ begin
 
   if DirectoryExists(APath) then
   begin
-    if (FOutputPath.Present and (FOutputPath.Value = 'json')) then
+    if IsJsonOutput then
       raise Exception.Create('--output=json does not support directory input.');
 
     Files := FindAllFiles(APath, ScriptExtensions);
@@ -677,7 +683,7 @@ var
 begin
   FLastPaths := APaths;
 
-  if (FOutputPath.Present and (FOutputPath.Value = 'json')) and (APaths.Count > 1) then
+  if IsJsonOutput and (APaths.Count > 1) then
     raise TGocciaParseError.Create('--output=json supports a single input path.');
 
   if FSourceMap.Present and (FSourceMap.ValueOr('') = '') and
@@ -707,7 +713,7 @@ end;
 
 procedure TScriptLoaderApp.HandleError(const AException: Exception);
 begin
-  if (FOutputPath.Present and (FOutputPath.Value = 'json')) then
+  if IsJsonOutput then
     WriteLn(BuildErrorJSON('', ExceptionToScriptLoaderErrorInfo(AException),
       Default(TScriptLoaderTiming)))
   else
@@ -725,7 +731,7 @@ begin
       CoverageOptions.OutputPath.Present) and
      Assigned(TGocciaCoverageTracker.Instance) then
   begin
-    if not (FOutputPath.Present and (FOutputPath.Value = 'json')) then
+    if not IsJsonOutput then
     begin
       PrintCoverageSummary(TGocciaCoverageTracker.Instance);
       if Assigned(FLastPaths) and (FLastPaths.Count = 1) and
@@ -756,7 +762,7 @@ begin
   if (ProfileOpcodes or ProfileFunctions) and
      Assigned(TGocciaProfiler.Instance) then
   begin
-    if not (FOutputPath.Present and (FOutputPath.Value = 'json')) then
+    if not IsJsonOutput then
     begin
       if ProfileOpcodes then
       begin
