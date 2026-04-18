@@ -832,6 +832,7 @@ var
   ReportCount, I: Integer;
   Mode: TGocciaExecutionMode;
   ShowProgress: Boolean;
+  HasStructuredStdout, HasReadableStdout: Boolean;
 begin
   ShowProgress := not FNoProgress.Present;
 
@@ -857,6 +858,25 @@ begin
     end;
     if FOutputFile.Present then
       Reports[ReportCount - 1].OutputFile := FOutputFile.Value;
+  end;
+
+  // Reject when both structured (JSON/CSV) and human-readable (console/text)
+  // formats would write to stdout — the mixed output corrupts structured data.
+  HasStructuredStdout := False;
+  HasReadableStdout := False;
+  for I := 0 to Length(Reports) - 1 do
+    if Reports[I].OutputFile = '' then
+    begin
+      if Reports[I].Format in [brfJSON, brfCSV] then
+        HasStructuredStdout := True
+      else
+        HasReadableStdout := True;
+    end;
+  if HasStructuredStdout and HasReadableStdout then
+  begin
+    WriteLn(StdErr, 'Error: Cannot write structured and human-readable formats both to stdout. Provide an --output file for one of them.');
+    ExitCode := 1;
+    Exit;
   end;
 
   // Suppress progress when structured output (JSON/CSV) goes to stdout so
