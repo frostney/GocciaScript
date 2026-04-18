@@ -7,7 +7,7 @@ const isTemporal = typeof Temporal !== "undefined";
 
 describe.runIf(isTemporal)("Temporal.ZonedDateTime.prototype.toPlainTime", () => {
   test("toPlainTime", () => {
-    const epochNs = 1710510330000 * 1000000;
+    const epochNs = 1710510330000n * 1000000n;
     const zdt = new Temporal.ZonedDateTime(epochNs, "UTC");
     const t = zdt.toPlainTime();
     expect(t.hour).toBe(13);

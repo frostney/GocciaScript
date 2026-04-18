@@ -8,7 +8,7 @@ const isTemporal = typeof Temporal !== "undefined";
 describe.runIf(isTemporal)("Temporal.ZonedDateTime constructor", () => {
   test("constructor from epoch nanoseconds", () => {
     // 2024-03-15T13:45:30Z = epoch ms 1710510330000
-    const epochNs = 1710510330000 * 1000000;
+    const epochNs = 1710510330000n * 1000000n;
     const zdt = new Temporal.ZonedDateTime(epochNs, "UTC");
     expect(zdt.timeZoneId).toBe("UTC");
     expect(zdt.year).toBe(2024);
@@ -20,27 +20,32 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime constructor", () => {
   });
 
   test("calendarId is iso8601", () => {
-    const zdt = new Temporal.ZonedDateTime(0, "UTC");
+    const zdt = new Temporal.ZonedDateTime(0n, "UTC");
     expect(zdt.calendarId).toBe("iso8601");
   });
 
   test("epochMilliseconds", () => {
-    const zdt = new Temporal.ZonedDateTime(1710510330000000000, "UTC");
+    const zdt = new Temporal.ZonedDateTime(1710510330000000000n, "UTC");
     expect(zdt.epochMilliseconds).toBe(1710510330000);
   });
 
-  test("epochNanoseconds", () => {
-    const zdt = new Temporal.ZonedDateTime(1710510330000000000, "UTC");
-    expect(zdt.epochNanoseconds).toBe(1710510330000000000);
+  test("epochNanoseconds returns BigInt", () => {
+    const zdt = new Temporal.ZonedDateTime(1710510330000000000n, "UTC");
+    expect(zdt.epochNanoseconds).toBe(1710510330000000000n);
+    expect(typeof zdt.epochNanoseconds).toBe("bigint");
   });
 
   test("offset for UTC", () => {
-    const zdt = new Temporal.ZonedDateTime(0, "UTC");
+    const zdt = new Temporal.ZonedDateTime(0n, "UTC");
     expect(zdt.offset).toBe("+00:00");
   });
 
   test("offsetNanoseconds for UTC", () => {
-    const zdt = new Temporal.ZonedDateTime(0, "UTC");
+    const zdt = new Temporal.ZonedDateTime(0n, "UTC");
     expect(zdt.offsetNanoseconds).toBe(0);
+  });
+
+  test("requires BigInt for epochNanoseconds", () => {
+    expect(() => new Temporal.ZonedDateTime(0, "UTC")).toThrow(TypeError);
   });
 });

@@ -18,7 +18,6 @@ type
     FSubMillisecondNanoseconds: Integer;
 
     procedure InitializePrototype;
-    function TotalNanoseconds: Double;
   public
     constructor Create(const AEpochMilliseconds: Int64; const ASubMillisecondNanoseconds: Integer); overload;
 
@@ -46,10 +45,13 @@ implementation
 uses
   SysUtils,
 
+  BigInteger,
+
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
+  Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.TemporalDuration;
@@ -163,15 +165,6 @@ begin
   Result := 'Temporal.Instant';
 end;
 
-function TGocciaTemporalInstantValue.TotalNanoseconds: Double;
-var
-  MsFloat: Double;
-begin
-  // Safe Int64 → Double conversion (FPC 3.2.2 AArch64 bug: Int64 * Double gives wrong results)
-  MsFloat := FEpochMilliseconds;
-  Result := MsFloat * 1000000.0 + FSubMillisecondNanoseconds;
-end;
-
 { Getters }
 
 function TGocciaTemporalInstantValue.GetEpochMilliseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -182,9 +175,13 @@ end;
 function TGocciaTemporalInstantValue.GetEpochNanoseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Inst: TGocciaTemporalInstantValue;
+  BigNs: TBigInteger;
 begin
   Inst := AsInstant(AThisValue, 'get Instant.epochNanoseconds');
-  Result := TGocciaNumberLiteralValue.Create(Inst.TotalNanoseconds);
+  BigNs := TBigInteger.FromInt64(Inst.FEpochMilliseconds)
+    .Multiply(TBigInteger.FromInt64(1000000))
+    .Add(TBigInteger.FromInt64(Inst.FSubMillisecondNanoseconds));
+  Result := TGocciaBigIntValue.Create(BigNs);
 end;
 
 { Methods }
@@ -281,7 +278,7 @@ var
   Inst, Other: TGocciaTemporalInstantValue;
   DiffMs: Int64;
   DiffSubMs: Integer;
-  DiffNs: Int64;
+  RemMs: Int64;
 begin
   Inst := AsInstant(AThisValue, 'Instant.prototype.until');
   Other := CoerceInstant(AArgs.GetElement(0), 'Instant.prototype.until');
@@ -289,16 +286,27 @@ begin
   DiffMs := Other.FEpochMilliseconds - Inst.FEpochMilliseconds;
   DiffSubMs := Other.FSubMillisecondNanoseconds - Inst.FSubMillisecondNanoseconds;
 
-  // Convert to total nanoseconds
-  DiffNs := DiffMs * 1000000 + DiffSubMs;
+  // Normalize so DiffMs and DiffSubMs share the same sign
+  if (DiffMs > 0) and (DiffSubMs < 0) then
+  begin
+    Dec(DiffMs);
+    Inc(DiffSubMs, 1000000);
+  end
+  else if (DiffMs < 0) and (DiffSubMs > 0) then
+  begin
+    Inc(DiffMs);
+    Dec(DiffSubMs, 1000000);
+  end;
 
+  // Decompose ms into hours/minutes/seconds/ms without collapsing to total ns
+  RemMs := DiffMs;
   Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0,
-    DiffNs div Int64(3600000000000),
-    (DiffNs div Int64(60000000000)) mod 60,
-    (DiffNs div Int64(1000000000)) mod 60,
-    (DiffNs div 1000000) mod 1000,
-    (DiffNs div 1000) mod 1000,
-    DiffNs mod 1000);
+    RemMs div 3600000,
+    (RemMs mod 3600000) div 60000,
+    ((RemMs mod 3600000) mod 60000) div 1000,
+    ((RemMs mod 3600000) mod 60000) mod 1000,
+    DiffSubMs div 1000,
+    DiffSubMs mod 1000);
 end;
 
 function TGocciaTemporalInstantValue.InstantSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -306,7 +314,7 @@ var
   Inst, Other: TGocciaTemporalInstantValue;
   DiffMs: Int64;
   DiffSubMs: Integer;
-  DiffNs: Int64;
+  RemMs: Int64;
 begin
   Inst := AsInstant(AThisValue, 'Instant.prototype.since');
   Other := CoerceInstant(AArgs.GetElement(0), 'Instant.prototype.since');
@@ -314,15 +322,26 @@ begin
   DiffMs := Inst.FEpochMilliseconds - Other.FEpochMilliseconds;
   DiffSubMs := Inst.FSubMillisecondNanoseconds - Other.FSubMillisecondNanoseconds;
 
-  DiffNs := DiffMs * 1000000 + DiffSubMs;
+  // Normalize so DiffMs and DiffSubMs share the same sign
+  if (DiffMs > 0) and (DiffSubMs < 0) then
+  begin
+    Dec(DiffMs);
+    Inc(DiffSubMs, 1000000);
+  end
+  else if (DiffMs < 0) and (DiffSubMs > 0) then
+  begin
+    Inc(DiffMs);
+    Dec(DiffSubMs, 1000000);
+  end;
 
+  RemMs := DiffMs;
   Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0,
-    DiffNs div Int64(3600000000000),
-    (DiffNs div Int64(60000000000)) mod 60,
-    (DiffNs div Int64(1000000000)) mod 60,
-    (DiffNs div 1000000) mod 1000,
-    (DiffNs div 1000) mod 1000,
-    DiffNs mod 1000);
+    RemMs div 3600000,
+    (RemMs mod 3600000) div 60000,
+    ((RemMs mod 3600000) mod 60000) div 1000,
+    ((RemMs mod 3600000) mod 60000) mod 1000,
+    DiffSubMs div 1000,
+    DiffSubMs mod 1000);
 end;
 
 function TGocciaTemporalInstantValue.InstantRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -331,11 +350,12 @@ var
   UnitStr: string;
   Arg: TGocciaValue;
   OptionsObj: TGocciaObjectValue;
-  TotalNs, Divisor, Rounded, NewMs: Int64;
+  NewMs: Int64;
   NewSubMs: Integer;
   SmallestUnit: TTemporalUnit;
   Mode: TTemporalRoundingMode;
   Increment: Integer;
+  BigTotal, BigDivisor, BigRounded, BigMillion: TBigInteger;
 begin
   Inst := AsInstant(AThisValue, 'Instant.prototype.round');
   Arg := AArgs.GetElement(0);
@@ -364,17 +384,16 @@ begin
     SmallestUnit := tuNanosecond;
   end;
 
-  TotalNs := Inst.FEpochMilliseconds * 1000000 + Inst.FSubMillisecondNanoseconds;
-  Divisor := UnitToNanoseconds(SmallestUnit) * Increment;
-  Rounded := RoundWithMode(TotalNs, Divisor, Mode);
+  // Use TBigInteger to avoid Int64 overflow on epochMs * 1000000
+  BigMillion := TBigInteger.FromInt64(1000000);
+  BigTotal := TBigInteger.FromInt64(Inst.FEpochMilliseconds)
+    .Multiply(BigMillion)
+    .Add(TBigInteger.FromInt64(Inst.FSubMillisecondNanoseconds));
+  BigDivisor := TBigInteger.FromInt64(UnitToNanoseconds(SmallestUnit) * Increment);
+  BigRounded := RoundBigIntWithMode(BigTotal, BigDivisor, Mode);
 
-  NewMs := Rounded div 1000000;
-  NewSubMs := Integer(Rounded mod 1000000);
-  if NewSubMs < 0 then
-  begin
-    Dec(NewMs);
-    Inc(NewSubMs, 1000000);
-  end;
+  NewMs := BigRounded.Divide(BigMillion).ToInt64;
+  NewSubMs := Integer(BigRounded.Modulo(BigMillion).ToInt64);
 
   Result := TGocciaTemporalInstantValue.Create(NewMs, NewSubMs);
 end;

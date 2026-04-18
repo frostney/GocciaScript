@@ -82,11 +82,14 @@ implementation
 uses
   SysUtils,
 
+  BigInteger,
+
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Temporal.Options,
   Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
+  Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.TemporalDuration,
@@ -616,12 +619,13 @@ end;
 function TGocciaTemporalZonedDateTimeValue.GetEpochNanoseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Zdt: TGocciaTemporalZonedDateTimeValue;
-  MsFloat: Double;
+  BigNs: TBigInteger;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'get ZonedDateTime.epochNanoseconds');
-  // Safe Int64 → Double conversion (FPC 3.2.2 AArch64 bug: Int64 * Double gives wrong results)
-  MsFloat := Zdt.FEpochMilliseconds;
-  Result := TGocciaNumberLiteralValue.Create(MsFloat * 1000000.0 + Zdt.FSubMillisecondNanoseconds);
+  BigNs := TBigInteger.FromInt64(Zdt.FEpochMilliseconds)
+    .Multiply(TBigInteger.FromInt64(1000000))
+    .Add(TBigInteger.FromInt64(Zdt.FSubMillisecondNanoseconds));
+  Result := TGocciaBigIntValue.Create(BigNs);
 end;
 
 { Methods }
@@ -839,7 +843,6 @@ var
   Zdt, Other: TGocciaTemporalZonedDateTimeValue;
   DiffMs: Int64;
   DiffSubMs: Integer;
-  DiffNs: Int64;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.until');
   Other := CoerceZonedDateTime(AArgs.GetElement(0), 'ZonedDateTime.prototype.until');
@@ -847,16 +850,26 @@ begin
   DiffMs := Other.FEpochMilliseconds - Zdt.FEpochMilliseconds;
   DiffSubMs := Other.FSubMillisecondNanoseconds - Zdt.FSubMillisecondNanoseconds;
 
-  // Convert to total nanoseconds
-  DiffNs := DiffMs * SUB_MS_NANOSECOND_LIMIT + DiffSubMs;
+  // Normalize so DiffMs and DiffSubMs share the same sign
+  if (DiffMs > 0) and (DiffSubMs < 0) then
+  begin
+    Dec(DiffMs);
+    Inc(DiffSubMs, SUB_MS_NANOSECOND_LIMIT);
+  end
+  else if (DiffMs < 0) and (DiffSubMs > 0) then
+  begin
+    Inc(DiffMs);
+    Dec(DiffSubMs, SUB_MS_NANOSECOND_LIMIT);
+  end;
 
+  // Decompose ms into hours/minutes/seconds/ms without collapsing to total ns
   Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0,
-    DiffNs div NANOSECONDS_PER_HOUR,
-    (DiffNs div NANOSECONDS_PER_MINUTE) mod 60,
-    (DiffNs div NANOSECONDS_PER_SECOND) mod 60,
-    (DiffNs div NANOSECONDS_PER_MILLISECOND) mod 1000,
-    (DiffNs div NANOSECONDS_PER_MICROSECOND) mod 1000,
-    DiffNs mod 1000);
+    DiffMs div MILLISECONDS_PER_HOUR,
+    (DiffMs mod MILLISECONDS_PER_HOUR) div MILLISECONDS_PER_MINUTE,
+    ((DiffMs mod MILLISECONDS_PER_HOUR) mod MILLISECONDS_PER_MINUTE) div MILLISECONDS_PER_SECOND,
+    ((DiffMs mod MILLISECONDS_PER_HOUR) mod MILLISECONDS_PER_MINUTE) mod MILLISECONDS_PER_SECOND,
+    DiffSubMs div 1000,
+    DiffSubMs mod 1000);
 end;
 
 // TC39 Temporal §6.3.29 Temporal.ZonedDateTime.prototype.since(other [, options])
@@ -865,7 +878,6 @@ var
   Zdt, Other: TGocciaTemporalZonedDateTimeValue;
   DiffMs: Int64;
   DiffSubMs: Integer;
-  DiffNs: Int64;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.since');
   Other := CoerceZonedDateTime(AArgs.GetElement(0), 'ZonedDateTime.prototype.since');
@@ -873,15 +885,25 @@ begin
   DiffMs := Zdt.FEpochMilliseconds - Other.FEpochMilliseconds;
   DiffSubMs := Zdt.FSubMillisecondNanoseconds - Other.FSubMillisecondNanoseconds;
 
-  DiffNs := DiffMs * SUB_MS_NANOSECOND_LIMIT + DiffSubMs;
+  // Normalize so DiffMs and DiffSubMs share the same sign
+  if (DiffMs > 0) and (DiffSubMs < 0) then
+  begin
+    Dec(DiffMs);
+    Inc(DiffSubMs, SUB_MS_NANOSECOND_LIMIT);
+  end
+  else if (DiffMs < 0) and (DiffSubMs > 0) then
+  begin
+    Inc(DiffMs);
+    Dec(DiffSubMs, SUB_MS_NANOSECOND_LIMIT);
+  end;
 
   Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0,
-    DiffNs div NANOSECONDS_PER_HOUR,
-    (DiffNs div NANOSECONDS_PER_MINUTE) mod 60,
-    (DiffNs div NANOSECONDS_PER_SECOND) mod 60,
-    (DiffNs div NANOSECONDS_PER_MILLISECOND) mod 1000,
-    (DiffNs div NANOSECONDS_PER_MICROSECOND) mod 1000,
-    DiffNs mod 1000);
+    DiffMs div MILLISECONDS_PER_HOUR,
+    (DiffMs mod MILLISECONDS_PER_HOUR) div MILLISECONDS_PER_MINUTE,
+    ((DiffMs mod MILLISECONDS_PER_HOUR) mod MILLISECONDS_PER_MINUTE) div MILLISECONDS_PER_SECOND,
+    ((DiffMs mod MILLISECONDS_PER_HOUR) mod MILLISECONDS_PER_MINUTE) mod MILLISECONDS_PER_SECOND,
+    DiffSubMs div 1000,
+    DiffSubMs mod 1000);
 end;
 
 // TC39 Temporal §6.3.30 Temporal.ZonedDateTime.prototype.round(roundTo)

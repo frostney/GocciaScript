@@ -21,8 +21,9 @@ describe.runIf(isTemporal)("Temporal.Instant.fromEpochMilliseconds", () => {
     expect(instant.epochMilliseconds).toBe(-86400000);
   });
 
-  test("epochNanoseconds getter", () => {
+  test("epochNanoseconds getter returns BigInt", () => {
     const instant = Temporal.Instant.fromEpochMilliseconds(5000);
-    expect(instant.epochNanoseconds).toBe(5000000000);
+    expect(instant.epochNanoseconds).toBe(5000000000n);
+    expect(typeof instant.epochNanoseconds).toBe("bigint");
   });
 });

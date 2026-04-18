@@ -291,7 +291,7 @@ const TemporalHelpers = {
   },
 
   checkToTemporalInstantFastPath(func) {
-    func(new Temporal.Instant(0));
+    func(new Temporal.Instant(0n));
   },
 
   checkStringOptionWrongType(propertyName, value, checkFunc, assertFunc) {

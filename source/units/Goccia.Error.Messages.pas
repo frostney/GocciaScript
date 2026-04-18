@@ -131,6 +131,7 @@ resourcestring
 
   // Temporal API errors — Instant
   SErrorTemporalInstantRequiresEpoch = 'Temporal.Instant requires epochNanoseconds argument';
+  SErrorTemporalInstantRequiresBigInt = 'Temporal.Instant epochNanoseconds must be a BigInt';
   SErrorInvalidISOInstant = 'Invalid ISO instant string';
   SErrorTemporalInstantFromArg = 'Temporal.Instant.from requires a string or Instant';
   SErrorTemporalInstantFromEpochMillis = 'Temporal.Instant.fromEpochMilliseconds requires an argument';
@@ -177,6 +178,7 @@ resourcestring
 
   // Temporal API errors — ZonedDateTime
   SErrorTemporalZonedDateTimeArgs = 'Temporal.ZonedDateTime requires epochNanoseconds and timeZone arguments';
+  SErrorTemporalZonedDateTimeRequiresBigInt = 'Temporal.ZonedDateTime epochNanoseconds must be a BigInt';
   SErrorTemporalZonedDateTimeFromArg = 'Temporal.ZonedDateTime.from requires a string or ZonedDateTime';
   SErrorTemporalZonedDateTimeCompareArg = 'Temporal.ZonedDateTime.compare requires ZonedDateTime or string arguments';
   SErrorInvalidISOZonedDateTime = 'Invalid ISO zoned date-time string';

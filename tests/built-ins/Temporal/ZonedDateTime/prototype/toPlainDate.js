@@ -7,7 +7,7 @@ const isTemporal = typeof Temporal !== "undefined";
 
 describe.runIf(isTemporal)("Temporal.ZonedDateTime.prototype.toPlainDate", () => {
   test("toPlainDate", () => {
-    const epochNs = 1710510330000 * 1000000;
+    const epochNs = 1710510330000n * 1000000n;
     const zdt = new Temporal.ZonedDateTime(epochNs, "UTC");
     const d = zdt.toPlainDate();
     expect(d.year).toBe(2024);

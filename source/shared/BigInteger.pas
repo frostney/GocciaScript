@@ -375,6 +375,11 @@ begin
   if AValue = 0 then
     Exit(Zero);
 
+  // All exact IEEE 754 integers fit in Int64 — use direct conversion to avoid
+  // FPC 3.2.2 AArch64 floating-point precision bugs with FMod/LIMB_BASE arithmetic
+  if (AValue >= -9007199254740992.0) and (AValue <= 9007199254740992.0) then
+    Exit(FromInt64(Trunc(AValue)));
+
   Result.FNegative := AValue < 0;
   V := Abs(AValue);
   Result.FLimbs := nil;

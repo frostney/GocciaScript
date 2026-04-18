@@ -7,7 +7,7 @@ const isTemporal = typeof Temporal !== "undefined";
 
 describe.runIf(isTemporal)("Temporal.ZonedDateTime.prototype.withPlainDate/withPlainTime invalid strings", () => {
   test("withPlainDate throws RangeError for non-date string", () => {
-    const epochNs = 1710510330000 * 1000000;
+    const epochNs = 1710510330000n * 1000000n;
     const zdt = new Temporal.ZonedDateTime(epochNs, "UTC");
     expect(() => {
       zdt.withPlainDate("not-a-date");
@@ -15,7 +15,7 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime.prototype.withPlainDate/withP
   });
 
   test("withPlainTime throws RangeError for non-time string", () => {
-    const epochNs = 1710510330000 * 1000000;
+    const epochNs = 1710510330000n * 1000000n;
     const zdt = new Temporal.ZonedDateTime(epochNs, "UTC");
     expect(() => {
       zdt.withPlainTime("not-a-time");

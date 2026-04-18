@@ -87,6 +87,7 @@ uses
   DateUtils,
   SysUtils,
 
+  BigInteger,
   TimingUtils,
 
   Goccia.Constants.PropertyNames,
@@ -96,6 +97,7 @@ uses
   Goccia.Temporal.Options,
   Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
+  Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -315,18 +317,23 @@ end;
 
 function TGocciaTemporalBuiltin.InstantConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  EpochNs, MsFloat: Double;
+  Arg: TGocciaValue;
+  BigNs, BigMs, BigSubMs: TBigInteger;
   Ms: Int64;
   SubMs: Integer;
 begin
   if AArgs.Length < 1 then
     ThrowTypeError(SErrorTemporalInstantRequiresEpoch, SSuggestTemporalFromArg);
 
-  EpochNs := AArgs.GetElement(0).ToNumberLiteral.Value;
-  Ms := Trunc(EpochNs / 1000000);
-  // Safe Int64 → Double conversion (FPC 3.2.2 AArch64 bug: Int64 * Double gives wrong results)
-  MsFloat := Ms;
-  SubMs := Trunc(EpochNs - MsFloat * 1000000.0);
+  Arg := AArgs.GetElement(0);
+  if not (Arg is TGocciaBigIntValue) then
+    ThrowTypeError(SErrorTemporalInstantRequiresBigInt, SSuggestTemporalBigIntArg);
+
+  BigNs := TGocciaBigIntValue(Arg).Value;
+  BigMs := BigNs.Divide(TBigInteger.FromInt64(1000000));
+  BigSubMs := BigNs.Modulo(TBigInteger.FromInt64(1000000));
+  Ms := BigMs.ToInt64;
+  SubMs := Integer(BigSubMs.ToInt64);
 
   Result := TGocciaTemporalInstantValue.Create(Ms, SubMs);
 end;
@@ -374,17 +381,24 @@ end;
 
 function TGocciaTemporalBuiltin.InstantFromEpochNanoseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  EpochNs, MsFloat: Double;
+  Arg: TGocciaValue;
+  BigNs, BigMs, BigSubMs: TBigInteger;
   Ms: Int64;
   SubMs: Integer;
 begin
   if AArgs.Length < 1 then
     ThrowTypeError(SErrorTemporalInstantFromEpochNanos, SSuggestTemporalFromArg);
-  EpochNs := AArgs.GetElement(0).ToNumberLiteral.Value;
-  Ms := Trunc(EpochNs / 1000000);
-  // Safe Int64 → Double conversion (FPC 3.2.2 AArch64 bug: Int64 * Double gives wrong results)
-  MsFloat := Ms;
-  SubMs := Trunc(EpochNs - MsFloat * 1000000.0);
+
+  Arg := AArgs.GetElement(0);
+  if not (Arg is TGocciaBigIntValue) then
+    ThrowTypeError(SErrorTemporalInstantRequiresBigInt, SSuggestTemporalBigIntArg);
+
+  BigNs := TGocciaBigIntValue(Arg).Value;
+  BigMs := BigNs.Divide(TBigInteger.FromInt64(1000000));
+  BigSubMs := BigNs.Modulo(TBigInteger.FromInt64(1000000));
+  Ms := BigMs.ToInt64;
+  SubMs := Integer(BigSubMs.ToInt64);
+
   Result := TGocciaTemporalInstantValue.Create(Ms, SubMs);
 end;
 
@@ -1134,7 +1148,8 @@ end;
 function TGocciaTemporalBuiltin.ZonedDateTimeConstructorFn(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  EpochNs, MsFloat: Double;
+  Arg: TGocciaValue;
+  BigNs, BigMs, BigSubMs: TBigInteger;
   Ms: Int64;
   SubMs: Integer;
   TZ: string;
@@ -1142,11 +1157,15 @@ begin
   if AArgs.Length < 2 then
     ThrowTypeError(SErrorTemporalZonedDateTimeArgs, SSuggestTemporalTimezone);
 
-  EpochNs := AArgs.GetElement(0).ToNumberLiteral.Value;
-  Ms := Trunc(EpochNs / 1000000);
-  // Safe Int64 → Double conversion (FPC 3.2.2 AArch64 bug: Int64 * Double gives wrong results)
-  MsFloat := Ms;
-  SubMs := Trunc(EpochNs - MsFloat * 1000000.0);
+  Arg := AArgs.GetElement(0);
+  if not (Arg is TGocciaBigIntValue) then
+    ThrowTypeError(SErrorTemporalZonedDateTimeRequiresBigInt, SSuggestTemporalBigIntArg);
+
+  BigNs := TGocciaBigIntValue(Arg).Value;
+  BigMs := BigNs.Divide(TBigInteger.FromInt64(1000000));
+  BigSubMs := BigNs.Modulo(TBigInteger.FromInt64(1000000));
+  Ms := BigMs.ToInt64;
+  SubMs := Integer(BigSubMs.ToInt64);
   TZ := AArgs.GetElement(1).ToStringLiteral.Value;
 
   Result := TGocciaTemporalZonedDateTimeValue.Create(Ms, SubMs, TZ);
