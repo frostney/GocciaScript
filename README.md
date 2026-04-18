@@ -14,7 +14,7 @@ See [Language](docs/language.md) for the complete specification of supported fea
 
 ### Built-in Objects
 
-`console`, `Math`, `JSON`, `JSON5`, `TOML`, `YAML`, `Object`, `Array`, `Number`, `String`, `RegExp`, `Symbol`, `Set`, `Map`, `Promise`, `Temporal`, `Iterator`, `Proxy`, `Reflect`, `ArrayBuffer`, `SharedArrayBuffer`, TypedArrays (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`) with ArrayBuffer and SharedArrayBuffer backing, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`, `DOMException`).
+`console`, `Math`, `JSON`, `JSON5`, `TOML`, `YAML`, `Object`, `Array`, `Number`, `String`, `RegExp`, `Symbol`, `Set`, `Map`, `Promise`, `Temporal`, `Iterator`, `Proxy`, `Reflect`, `ArrayBuffer`, `SharedArrayBuffer`, TypedArrays (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`) with ArrayBuffer and SharedArrayBuffer backing, `fetch`, `Headers`, `Response` ([WHATWG Fetch](https://fetch.spec.whatwg.org/) — GET/HEAD only), `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`, `DOMException`).
 
 See [Built-in Objects](docs/built-ins.md) for the complete API reference.
 

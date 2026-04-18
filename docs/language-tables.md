@@ -83,6 +83,7 @@ APIs from WHATWG and W3C specifications — not part of ECMA-262, but widely exp
 | `TextEncoder` | [WHATWG Encoding §8.3](https://encoding.spec.whatwg.org/#textencoder) | Supported |
 | `TextDecoder` | [WHATWG Encoding §8.2](https://encoding.spec.whatwg.org/#textdecoder) | Supported |
 | `performance.now`, `timeOrigin` | [High Resolution Time](https://w3c.github.io/hr-time/#dom-performance-now) | Supported |
+| `fetch`, `Headers`, `Response` | [WHATWG Fetch](https://fetch.spec.whatwg.org/) | Supported (GET/HEAD only) |
 
 ## TC39 Proposals
 

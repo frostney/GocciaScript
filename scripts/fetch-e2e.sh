@@ -3,7 +3,7 @@
 # End-to-end CLI tests for fetch().
 # Spins up a local HTTP server, makes real requests, validates responses.
 #
-# Usage: bash tests/cli/fetch-e2e.sh
+# Usage: bash scripts/fetch-e2e.sh
 # Requires: ./build/GocciaScriptLoader, python3
 
 set -euo pipefail
@@ -12,84 +12,17 @@ LOADER="./build/GocciaScriptLoader"
 PASS=0
 FAIL=0
 TMPFILE="/tmp/goccia-fetch-e2e-$$.js"
-SERVER_SCRIPT="/tmp/goccia-fetch-server-$$.py"
 PORT_FILE="/tmp/goccia-fetch-port-$$.txt"
 
 cleanup() {
   [ -f /tmp/goccia-fetch-server.pid ] && kill "$(cat /tmp/goccia-fetch-server.pid)" 2>/dev/null || true
-  rm -f "$TMPFILE" "$SERVER_SCRIPT" "$PORT_FILE" /tmp/goccia-fetch-server.pid
+  rm -f "$TMPFILE" "$PORT_FILE" /tmp/goccia-fetch-server.pid
 }
 trap cleanup EXIT
 
-# --- Write and start local HTTP test server ---
+# --- Start test server ---
 
-cat > "$SERVER_SCRIPT" << 'PYEOF'
-import http.server, json, sys, os
-
-class Handler(http.server.BaseHTTPRequestHandler):
-    def log_message(self, fmt, *args):
-        pass
-
-    def do_GET(self):
-        if self.path == "/json":
-            body = json.dumps({"url": self.path, "method": "GET"}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        elif self.path.startswith("/echo-headers"):
-            headers_dict = {k: v for k, v in self.headers.items()}
-            body = json.dumps({"headers": headers_dict}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        elif self.path == "/redirect":
-            self.send_response(302)
-            self.send_header("Location", "/json")
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-        elif self.path == "/status/404":
-            self.send_response(404)
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-        elif self.path == "/status/500":
-            self.send_response(500)
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-        elif self.path == "/text":
-            body = b"hello world"
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        else:
-            body = b"ok"
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-    def do_HEAD(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
-        self.send_header("Content-Length", "5")
-        self.end_headers()
-
-server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
-port = server.server_address[1]
-with open(sys.argv[1], "w") as f:
-    f.write(str(port))
-with open("/tmp/goccia-fetch-server.pid", "w") as f:
-    f.write(str(os.getpid()))
-server.serve_forever()
-PYEOF
-
-python3 "$SERVER_SCRIPT" "$PORT_FILE" &
+python3 scripts/fetch_test_server.py "$PORT_FILE" &
 sleep 0.5
 PORT="$(cat "$PORT_FILE")"
 BASE="http://127.0.0.1:${PORT}"

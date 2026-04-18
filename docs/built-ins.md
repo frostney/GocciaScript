@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-- **Unconditional registration** — Standard built-ins (Console, Math, Object, Array, String, Number, RegExp, JSON, JSON5, JSONL, TOML, YAML, Symbol, Set, Map, Promise, Performance, Temporal, ArrayBuffer, SharedArrayBuffer, TypedArrays, Proxy, Reflect, Iterator, TextEncoder, TextDecoder, URL, URLSearchParams, DisposableStack, AsyncDisposableStack) are always registered
+- **Unconditional registration** — Standard built-ins (Console, Math, Object, Array, String, Number, RegExp, JSON, JSON5, JSONL, TOML, YAML, Symbol, Set, Map, Promise, Performance, Temporal, ArrayBuffer, SharedArrayBuffer, TypedArrays, Proxy, Reflect, Iterator, TextEncoder, TextDecoder, URL, URLSearchParams, fetch, Headers, Response, DisposableStack, AsyncDisposableStack) are always registered
 - **Flag-gated extras** — Only `ggTestAssertions`, `ggBenchmark`, and `ggFFI` use flag-gating for opt-in registration
 - **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
 - **Always-present globals** — `globalThis` and `Goccia` namespace are registered after all built-ins
@@ -13,7 +13,7 @@ GocciaScript provides a set of built-in global objects that mirror JavaScript's 
 
 ## Registration System
 
-Standard built-ins (Console, Math, Object, Array, Number, JSON, JSON5, JSONL, TOML, YAML, Symbol, Set, Map, Promise, Performance, Temporal, ArrayBuffer, Proxy, Reflect) are always registered unconditionally by the engine. There is no flag-gating for these — they are available in every execution context.
+Standard built-ins (Console, Math, Object, Array, Number, JSON, JSON5, JSONL, TOML, YAML, Symbol, Set, Map, Promise, Performance, Temporal, ArrayBuffer, Proxy, Reflect, fetch, Headers, Response) are always registered unconditionally by the engine. There is no flag-gating for these — they are available in every execution context.
 
 Only three built-ins use flag-gated registration via the `TGocciaGlobalBuiltins` enum:
 
@@ -785,6 +785,56 @@ Implements the [WHATWG URL Standard](https://developer.mozilla.org/en-US/docs/We
 Implements the [WHATWG URLSearchParams](https://developer.mozilla.org/en-US/docs/Web/API/URLSearchParams). See [MDN URLSearchParams reference](https://developer.mozilla.org/en-US/docs/Web/API/URLSearchParams) for the full API.
 
 **GocciaScript differences:** None -- full standard compliance.
+
+### fetch (`Goccia.Builtins.GlobalFetch.pas`)
+
+Implements a subset of the [WHATWG Fetch Standard](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API). Only `GET` and `HEAD` methods are supported; other methods throw `TypeError`.
+
+| Function / Property | Description |
+|---------------------|-------------|
+| `fetch(url, options?)` | Perform an HTTP request, returns `Promise<Response>` |
+
+The `options` object supports `method` (`"GET"` or `"HEAD"`) and `headers` (plain object or `Headers` instance). Redirects (301/302/303/307/308) are followed automatically up to 20 hops. HTTPS requires OpenSSL libraries at runtime.
+
+**GocciaScript differences:** Only `GET` and `HEAD` methods. No `Request` object, `AbortSignal`, streaming body, or CORS. Requests are synchronous internally; the returned Promise is already settled.
+
+### Headers (`Goccia.Values.HeadersValue.pas`)
+
+Implements the [WHATWG Fetch Headers](https://developer.mozilla.org/en-US/docs/Web/API/Headers) interface.
+
+| Method / Property | Description |
+|-------------------|-------------|
+| `new Headers()` | Create empty headers |
+| `new Headers(object)` | Create from plain object or another `Headers` |
+| `headers.get(name)` | Get header value (case-insensitive), or `null` |
+| `headers.has(name)` | Check if header exists (case-insensitive) |
+| `headers.forEach(callback)` | Iterate entries as `callback(value, name, headers)` |
+| `headers.entries()` | Iterator of `[name, value]` pairs |
+| `headers.keys()` | Iterator of header names |
+| `headers.values()` | Iterator of header values |
+| `headers[Symbol.iterator]()` | Same as `entries()` |
+
+**GocciaScript differences:** Read-only on Response headers. No `append`, `set`, or `delete` mutations.
+
+### Response (`Goccia.Values.ResponseValue.pas`)
+
+Implements the [WHATWG Fetch Response](https://developer.mozilla.org/en-US/docs/Web/API/Response) interface.
+
+| Method / Property | Description |
+|-------------------|-------------|
+| `response.status` | HTTP status code (e.g. `200`) |
+| `response.statusText` | HTTP status text (e.g. `"OK"`) |
+| `response.ok` | `true` if status is 200–299 |
+| `response.url` | Final URL after redirects |
+| `response.headers` | `Headers` object |
+| `response.type` | Always `"basic"` |
+| `response.redirected` | `true` if any redirect was followed |
+| `response.bodyUsed` | `true` after a body method is called |
+| `response.text()` | Returns `Promise<string>` (UTF-8 decoded body) |
+| `response.json()` | Returns `Promise<any>` (parsed JSON body) |
+| `response.arrayBuffer()` | Returns `Promise<ArrayBuffer>` (raw bytes) |
+
+**GocciaScript differences:** No `Response.body` (ReadableStream), `blob()`, `formData()`, or `clone()`. Body is fully buffered. Each body method can only be called once.
 
 ### DisposableStack / AsyncDisposableStack (`Goccia.Builtins.DisposableStack.pas`)
 
