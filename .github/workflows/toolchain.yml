@@ -10,7 +10,7 @@ on:
 env:
   FPC_VERSION: "3.2.2"
   BINUTILS_VERSION: "2.44"
-  CACHE_VERSION: "v30"
+  CACHE_VERSION: "v31"
 
 jobs:
   build:
@@ -109,6 +109,8 @@ jobs:
           # source-based lookup is needed for units like Base64 and RegExpr.
           cp -R "$GITHUB_WORKSPACE/fpc-source/packages/fcl-base" "$PREFIX/share/fpcsrc/packages/"
           cp -R "$GITHUB_WORKSPACE/fpc-source/packages/regexpr" "$PREFIX/share/fpcsrc/packages/"
+          cp -R "$GITHUB_WORKSPACE/fpc-source/packages/fcl-net" "$PREFIX/share/fpcsrc/packages/"
+          cp -R "$GITHUB_WORKSPACE/fpc-source/packages/openssl" "$PREFIX/share/fpcsrc/packages/"
 
       - name: Compile soft-float units for native RTL
         if: steps.cache-check.outputs.cache-hit != 'true'

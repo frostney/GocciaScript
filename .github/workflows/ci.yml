@@ -127,6 +127,8 @@ jobs:
           FCL_DIR="$PREFIX/lib/fpc/${FPC_VERSION}/units/${TARGET}/fcl-process"
           FCL_BASE_SRC="$PREFIX/share/fpcsrc/packages/fcl-base/src"
           REGEXPR_SRC="$PREFIX/share/fpcsrc/packages/regexpr/src"
+          FCL_NET_SRC="$PREFIX/share/fpcsrc/packages/fcl-net/src"
+          OPENSSL_SRC="$PREFIX/share/fpcsrc/packages/openssl/src"
 
           # Verify RTL units exist
           echo "RTL units: $(ls "$RTL_DIR"/*.ppu 2>/dev/null | wc -l) .ppu files"
@@ -135,8 +137,12 @@ jobs:
           echo "fcl-process units: $(ls "$FCL_DIR"/*.ppu 2>/dev/null | wc -l) .ppu files"
           echo "fcl-base source path: $FCL_BASE_SRC"
           echo "regexpr source path: $REGEXPR_SRC"
+          echo "fcl-net source path: $FCL_NET_SRC"
+          echo "openssl source path: $OPENSSL_SRC"
           test -d "$FCL_BASE_SRC"
           test -d "$REGEXPR_SRC"
+          test -d "$FCL_NET_SRC"
+          test -d "$OPENSSL_SRC"
 
           # Build program entrypoints
           shopt -s nullglob
@@ -154,7 +160,7 @@ jobs:
             "$CROSS_FPC" -T"${OS}" -O4 -dPRODUCTION -Xs -CX -XX -B \
               -Fu./source/units -Fu./source/shared -Fu./source/app -Fu./souffle \
               -Fi./source/units -Fi./source/shared -Fi./souffle \
-              -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$REGEXPR_SRC" \
+              -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$REGEXPR_SRC" -Fu"$FCL_NET_SRC" -Fu"$OPENSSL_SRC" \
               -FU"build/compiled" -FE"build" \
               $EXTRA_FLAGS \
               -dFPC_SOFT_FPUX80 \
@@ -170,7 +176,7 @@ jobs:
             "$CROSS_FPC" -T"${OS}" -O4 -dPRODUCTION -Xs -CX -XX -B \
               -Fu./source/units -Fu./source/shared -Fu./source/app -Fu./souffle \
               -Fi./source/units -Fi./source/shared -Fi./souffle \
-              -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$REGEXPR_SRC" \
+              -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$REGEXPR_SRC" -Fu"$FCL_NET_SRC" -Fu"$OPENSSL_SRC" \
               -FU"build/compiled" -FE"build" \
               $EXTRA_FLAGS \
               -dFPC_SOFT_FPUX80 \
@@ -183,7 +189,7 @@ jobs:
           "$CROSS_FPC" -T"${OS}" -O4 -dPRODUCTION -Xs -CX -XX -B \
             -Fu./source/units -Fu./source/shared -Fu./source/app -Fu./souffle \
             -Fi./source/units -Fi./source/shared -Fi./souffle \
-            -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$REGEXPR_SRC" \
+            -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$REGEXPR_SRC" -Fu"$FCL_NET_SRC" -Fu"$OPENSSL_SRC" \
             -FU"build/compiled" -FE"build" \
             $EXTRA_FLAGS \
             -dFPC_SOFT_FPUX80 \
@@ -195,7 +201,7 @@ jobs:
           "$CROSS_FPC" -T"${OS}" -O4 -dPRODUCTION -Xs -CX -XX -B \
             -Fu./source/units -Fu./source/shared -Fu./source/app -Fu./souffle \
             -Fi./source/units -Fi./source/shared -Fi./souffle \
-            -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$REGEXPR_SRC" \
+            -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$REGEXPR_SRC" -Fu"$FCL_NET_SRC" -Fu"$OPENSSL_SRC" \
             -FU"build/compiled" -FE"build" \
             $EXTRA_FLAGS \
             -dFPC_SOFT_FPUX80 \
