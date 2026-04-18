@@ -1400,6 +1400,15 @@ begin
       else
         Advance;
     end;
+  end
+  else if Peek = '.' then
+  begin
+    // ES2026 §12.9.3: trailing dot with no fractional digits is a valid
+    // DecimalLiteral (e.g. `10.`).  This enables `10..toString(16)` by
+    // tokenising `10.` as a numeric literal, leaving the second dot for
+    // the property-access tokeniser.
+    HasDecimalOrExponent := True;
+    Advance;
   end;
 
   if CharInSet(Peek, ['e', 'E']) then
@@ -1669,14 +1678,11 @@ begin
     '~':
       AddToken(gttBitwiseNot);
     '.':
-      if Match('.') then
+      if (Peek = '.') and (PeekNext = '.') then
       begin
-        if Match('.') then
-          AddToken(gttSpread)
-        else
-          raise TGocciaLexerError.Create('Invalid token ..',
-            FLine, FStartColumn, FFileName, GetSourceLines,
-            SSuggestInvalidDoubleDot);
+        Advance; // consume second dot
+        Advance; // consume third dot
+        AddToken(gttSpread);
       end
       else
         AddToken(gttDot);
