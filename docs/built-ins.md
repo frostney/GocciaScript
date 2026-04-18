@@ -157,13 +157,15 @@ Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time wh
 
 | Method | Description |
 |--------|-------------|
-| `TSV.parse(text, options?, reviver?)` | Parse IANA TSV text into an array of objects (headers mode) or array of arrays |
+| `TSV.parse(text, options?)` | Parse IANA TSV text into an array of objects (headers mode) or array of arrays |
 | `TSV.parseChunk(text, options?, start?, end?)` | Parse as many complete TSV rows as possible and return `{ values, read, done, error }` |
 | `TSV.stringify(data, options?, replacer?)` | Convert an array of objects or arrays to TSV text |
 
 **Options:** `{ headers: true, skipEmptyLines: false }`. No `delimiter` option — TSV always uses tab.
 
-TSV uses IANA `text/tab-separated-values` semantics, which differ fundamentally from CSV: instead of RFC 4180 double-quote escaping, TSV uses **backslash escaping** (`\t` for tab, `\n` for newline, `\r` for carriage return, `\\` for literal backslash). Unrecognized escape sequences preserve the backslash. The reviver, replacer, `parseChunk`, and edge case handling match CSV.
+**Replacer:** The optional replacer callback `(key, value)` is called for each cell during `TSV.stringify`, enabling value transformation before serialization.
+
+TSV uses IANA `text/tab-separated-values` semantics, which differ fundamentally from CSV: instead of RFC 4180 double-quote escaping, TSV uses **backslash escaping** (`\t` for tab, `\n` for newline, `\r` for carriage return, `\\` for literal backslash). Unrecognized escape sequences preserve the backslash. The `parseChunk` and edge case handling match CSV.
 
 ### TOML (`Goccia.Builtins.TOML.pas`)
 

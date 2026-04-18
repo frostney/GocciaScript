@@ -47,7 +47,8 @@ uses
   Classes;
 
 const
-  UTF8_BOM_CHAR_1 = #$FEFF;
+  UTF8_BOM = #$EF#$BB#$BF;
+  UTF8_BOM_LEN = 3;
 
 class function TGocciaTSVParser.ClampOffset(const AValue,
   ALimit: Integer): Integer;
@@ -61,7 +62,8 @@ end;
 
 class function TGocciaTSVParser.HasUTF8BOM(const AText: string): Boolean;
 begin
-  Result := (Length(AText) >= 1) and (AText[1] = UTF8_BOM_CHAR_1);
+  Result := (Length(AText) >= UTF8_BOM_LEN) and
+    (Copy(AText, 1, UTF8_BOM_LEN) = UTF8_BOM);
 end;
 
 class function TGocciaTSVParser.UnescapeField(const AField: string): string;
@@ -160,7 +162,7 @@ begin
     Copy(AText, FieldStart, APos - FieldStart));
   Inc(FieldCount);
   SetLength(AFields, FieldCount);
-  AConsumed := True;
+  AConsumed := False;
   Result := True;
 end;
 
@@ -194,7 +196,7 @@ begin
   Pos := 1;
   EndIndex := Length(AText);
   if HasUTF8BOM(AText) then
-    Inc(Pos);
+    Inc(Pos, UTF8_BOM_LEN);
 
   if AHeaders then
   begin
@@ -260,7 +262,7 @@ begin
 
   EffectiveStart := ClampOffset(AStart, Length(AText));
   if (EffectiveStart = 0) and HasUTF8BOM(AText) then
-    Inc(EffectiveStart);
+    Inc(EffectiveStart, UTF8_BOM_LEN);
 
   Result.Read := EffectiveStart;
   if EffectiveStart >= EffectiveEnd then
@@ -269,9 +271,15 @@ begin
   Pos := EffectiveStart + 1;
   ResumeOffset := EffectiveStart;
 
-  if AHeaders then
+  if AHeaders and (AStart = 0) then
   begin
     if not ParseTSVRow(AText, Pos, EffectiveEnd, HeaderFields, Consumed) then
+    begin
+      Result.Read := ResumeOffset;
+      Result.Done := False;
+      Exit;
+    end;
+    if not Consumed then
     begin
       Result.Read := ResumeOffset;
       Result.Done := False;
@@ -283,6 +291,12 @@ begin
   while Pos <= EffectiveEnd do
   begin
     if not ParseTSVRow(AText, Pos, EffectiveEnd, Fields, Consumed) then
+    begin
+      Result.Read := ResumeOffset;
+      Result.Done := False;
+      Exit;
+    end;
+    if not Consumed then
     begin
       Result.Read := ResumeOffset;
       Result.Done := False;

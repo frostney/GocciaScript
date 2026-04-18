@@ -193,6 +193,7 @@ function TGocciaTSVBuiltin.TSVParseChunk(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
+  BaseIndex: Integer;
   ChunkResult: TGocciaTSVChunkParseResult;
   EndOffset: Integer;
   Headers: Boolean;
@@ -209,15 +210,28 @@ begin
 
   Text := AArgs.GetElement(0).ToStringLiteral.Value;
   TextLength := Length(Text);
-  ReadOptions(AArgs, 1, Headers, SkipEmptyLines);
+
+  if (AArgs.Length > 1) and
+    (AArgs.GetElement(1) is TGocciaObjectValue) then
+  begin
+    ReadOptions(AArgs, 1, Headers, SkipEmptyLines);
+    BaseIndex := 2;
+  end
+  else
+  begin
+    Headers := True;
+    SkipEmptyLines := False;
+    BaseIndex := 1;
+  end;
 
   StartOffset := 0;
   EndOffset := TextLength;
 
-  if AArgs.Length >= 3 then
-    StartOffset := Trunc(AArgs.GetElement(2).ToNumberLiteral.Value);
-  if AArgs.Length >= 4 then
-    EndOffset := Trunc(AArgs.GetElement(3).ToNumberLiteral.Value);
+  if AArgs.Length > BaseIndex then
+    StartOffset := Trunc(AArgs.GetElement(BaseIndex).ToNumberLiteral.Value);
+  if AArgs.Length > BaseIndex + 1 then
+    EndOffset := Trunc(
+      AArgs.GetElement(BaseIndex + 1).ToNumberLiteral.Value);
 
   try
     ChunkResult := FParser.ParseChunk(Text, Headers, SkipEmptyLines,

@@ -61,7 +61,8 @@ uses
   Classes;
 
 const
-  UTF8_BOM_CHAR_1 = #$FEFF;
+  UTF8_BOM = #$EF#$BB#$BF;
+  UTF8_BOM_LEN = 3;
 
 class function TGocciaCSVParser.ClampOffset(const AValue,
   ALimit: Integer): Integer;
@@ -75,14 +76,15 @@ end;
 
 class function TGocciaCSVParser.HasUTF8BOM(const AText: string): Boolean;
 begin
-  Result := (Length(AText) >= 1) and (AText[1] = UTF8_BOM_CHAR_1);
+  Result := (Length(AText) >= UTF8_BOM_LEN) and
+    (Copy(AText, 1, UTF8_BOM_LEN) = UTF8_BOM);
 end;
 
 class function TGocciaCSVParser.SkipBOM(const AText: string;
   const AStart: Integer): Integer;
 begin
   if (AStart = 0) and HasUTF8BOM(AText) then
-    Result := 1
+    Result := UTF8_BOM_LEN
   else
     Result := AStart;
 end;
@@ -209,13 +211,11 @@ begin
 end;
 
 function IsEmptyRow(const AFields: TArray<TGocciaCSVFieldInfo>): Boolean;
-var
-  I: Integer;
 begin
-  for I := 0 to Length(AFields) - 1 do
-    if AFields[I].Value <> '' then
-      Exit(False);
-  Result := (Length(AFields) <= 1);
+  Result :=
+    (Length(AFields) = 1) and
+    (AFields[0].Value = '') and
+    not AFields[0].Quoted;
 end;
 
 function TGocciaCSVParser.Parse(const AText: string;
@@ -239,15 +239,19 @@ begin
   Pos := 1;
   EndIndex := Length(AText);
   if HasUTF8BOM(AText) then
-    Inc(Pos);
+    Inc(Pos, UTF8_BOM_LEN);
 
   RowNumber := 0;
 
   if AHeaders then
   begin
-    if not ParseRow(AText, ADelimiter, Pos, EndIndex, HeaderFields, Consumed) then
-      raise EGocciaCSVParseError.Create('Unterminated quoted field in header row');
-    Inc(RowNumber);
+    repeat
+      if not ParseRow(AText, ADelimiter, Pos, EndIndex, HeaderFields,
+        Consumed) then
+        raise EGocciaCSVParseError.Create(
+          'Unterminated quoted field in header row');
+      Inc(RowNumber);
+    until not (ASkipEmptyLines and IsEmptyRow(HeaderFields));
   end;
 
   while Pos <= EndIndex do
@@ -307,7 +311,7 @@ begin
   Pos := 1;
   EndIndex := Length(AText);
   if HasUTF8BOM(AText) then
-    Inc(Pos);
+    Inc(Pos, UTF8_BOM_LEN);
 
   RowNumber := 0;
   while Pos <= EndIndex do
@@ -367,13 +371,14 @@ begin
   ResumeOffset := EffectiveStart;
   RowNumber := 0;
 
-  if AHeaders then
+  if AHeaders and (AStart = 0) then
   begin
     if not ParseRow(AText, ADelimiter, Pos, EffectiveEnd, HeaderFields,
       Consumed) then
     begin
       Result.Read := ResumeOffset;
       Result.Done := False;
+      Result.ErrorMessage := 'Unterminated quoted field in header row';
       Exit;
     end;
     ResumeOffset := Pos - 1;
@@ -386,6 +391,8 @@ begin
     begin
       Result.Read := ResumeOffset;
       Result.Done := False;
+      Result.ErrorMessage := Format('Unterminated quoted field at row %d',
+        [RowNumber + 1]);
       Exit;
     end;
 
