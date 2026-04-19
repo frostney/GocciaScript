@@ -73,7 +73,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaScriptLoader example.js --unsafe-ffi # Execute with FFI enabled
 ./build/GocciaScriptLoader example.js --log=console.log # Write console output to a log file (tee to stdout + file)
 ./build/GocciaScriptLoader example.js --stack-size=5000 # Execute with custom call stack depth limit
-./build/GocciaScriptLoader example.js --stack-size=0 # Execute with no call stack depth limit
+./build/GocciaScriptLoader example.js --stack-size=0 --mode=bytecode # Execute with no call stack depth limit (bytecode trampoline)
 ./build/GocciaREPL # Start interactive REPL (interpreted)
 ./build/GocciaREPL --mode=bytecode # Start the REPL via bytecode VM
 ./build/GocciaREPL --mode=bytecode --timing # Bytecode REPL with per-line timing

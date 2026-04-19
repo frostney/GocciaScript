@@ -502,8 +502,9 @@ end;
 
 procedure TGocciaCLIApplication.InitializeSingletons;
 begin
+  SetMaxStackDepth(DEFAULT_MAX_STACK_DEPTH);
   if Assigned(FEngineOptions) then
-    SetMaxStackDepth(FEngineOptions.StackSize.ValueOr(DEFAULT_MAX_STACK_DEPTH));
+    SetMaxStackDepth(Max(0, FEngineOptions.StackSize.ValueOr(DEFAULT_MAX_STACK_DEPTH)));
   if Assigned(FCoverageOptions) then
     InitializeCoverageIfEnabled(FCoverageOptions);
   if Assigned(FProfilerOptions) then

@@ -17,12 +17,15 @@ test("mutual recursion throws RangeError", () => {
 
 test("error message matches V8 convention", () => {
   const recurse = () => recurse();
+  let caught;
   try {
     recurse();
   } catch (e) {
-    expect(e instanceof RangeError).toBe(true);
-    expect(e.message).toBe("Maximum call stack size exceeded");
+    caught = e;
   }
+  expect(caught).toBeDefined();
+  expect(caught instanceof RangeError).toBe(true);
+  expect(caught.message).toBe("Maximum call stack size exceeded");
 });
 
 test("recursion within limit succeeds", () => {
@@ -84,10 +87,13 @@ test("try-catch works across trampolined frames", () => {
 
 test("error has stack trace", () => {
   const deep = () => deep();
+  let caught;
   try {
     deep();
   } catch (e) {
-    expect(e.stack).toBeDefined();
-    expect(e.stack.includes("deep")).toBe(true);
+    caught = e;
   }
+  expect(caught).toBeDefined();
+  expect(caught.stack).toBeDefined();
+  expect(caught.stack.includes("deep")).toBe(true);
 });

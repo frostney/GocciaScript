@@ -3842,12 +3842,12 @@ var
   I: Integer;
 begin
   AProfileTimestamp := 0;
+  CheckStackDepth(FFrameDepth + 1);
   AcquireRegisters(Max(AClosure.Template.MaxRegisters, 1));
   AcquireLocalCells(Max(AClosure.Template.MaxRegisters, 1));
   FArgCount := AArgCount;
   FCurrentClosure := AClosure;
   Inc(FFrameDepth);
-  CheckStackDepth(FFrameDepth);
   if Assigned(TGocciaCallStack.Instance) then
     TGocciaCallStack.Instance.Push(
       AClosure.Template.Name,
@@ -4558,7 +4558,7 @@ begin
         if (FRegisters[B].Kind = grkObject) and
            (FRegisters[B].ObjectValue is TGocciaBytecodeFunctionValue) then
         begin
-          PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
+          PushFrame(B, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
           SetupNewFrame(
             TGocciaBytecodeFunctionValue(FRegisters[B].ObjectValue).FClosure,
             FRegisters[A], TGocciaRegisterArray(nil), 0,
