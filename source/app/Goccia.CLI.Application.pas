@@ -103,7 +103,7 @@ function ExtractObjectEntries(
 var
   Keys: TArray<string>;
   I, J, Count: Integer;
-  Key: string;
+  Key, ElementValue: string;
   Value: TGocciaValue;
   Arr: TGocciaArrayValue;
 begin
@@ -151,14 +151,21 @@ begin
       Arr := TGocciaArrayValue(Value);
       for J := 0 to Arr.GetLength - 1 do
       begin
+        Value := Arr.GetElement(J);
+        if Value is TGocciaStringLiteralValue then
+          ElementValue := TGocciaStringLiteralValue(Value).Value
+        else if Value is TGocciaNumberLiteralValue then
+          ElementValue := TGocciaNumberLiteralValue(Value)
+            .ToStringLiteral.Value
+        else if Value is TGocciaBooleanLiteralValue then
+          ElementValue := BoolToStr(
+            TGocciaBooleanLiteralValue(Value).Value, 'true', 'false')
+        else
+          Continue;
         if Count >= Length(Result) then
           SetLength(Result, Length(Result) * 2 + 1);
         Result[Count].Key := Key;
-        if Arr.GetElement(J) is TGocciaStringLiteralValue then
-          Result[Count].Value := TGocciaStringLiteralValue(
-            Arr.GetElement(J)).Value
-        else
-          Result[Count].Value := Arr.GetElement(J).ToStringLiteral.Value;
+        Result[Count].Value := ElementValue;
         Inc(Count);
       end;
     end;
