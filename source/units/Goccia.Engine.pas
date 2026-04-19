@@ -1354,7 +1354,7 @@ var
   GC: TGarbageCollector;
 begin
   GC := TGarbageCollector.Instance;
-  if Assigned(GC) and GC.Enabled then
+  if Assigned(GC) then
     GC.Collect;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;

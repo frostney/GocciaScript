@@ -136,6 +136,13 @@ jobs:
           grep -q '"b":' branch-cov.json
           rm branch-cov.json
 
+      - name: Check --log CLI flag
+        run: |
+          printf 'console.log("hello"); console.warn("careful");' | ./build/GocciaScriptLoader --asi --log=log-test.txt
+          grep -q '\[log\] hello' log-test.txt
+          grep -q '\[warn\]' log-test.txt
+          rm log-test.txt
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v5
