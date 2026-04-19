@@ -482,8 +482,12 @@ begin
   YM := AsPlainYearMonth(AThisValue, 'PlainYearMonth.prototype.toString');
   OptionsObj := nil;
   Arg := AArgs.GetElement(0);
-  if Assigned(Arg) and (Arg is TGocciaObjectValue) then
+  if Assigned(Arg) and not (Arg is TGocciaUndefinedLiteralValue) then
+  begin
+    if not (Arg is TGocciaObjectValue) then
+      ThrowTypeError('options must be an object or undefined', SSuggestTemporalFromArg);
     OptionsObj := TGocciaObjectValue(Arg);
+  end;
   CalDisp := GetCalendarDisplay(OptionsObj);
   // When calendar annotation is present, include reference day for round-tripping
   if (CalDisp = tcdAlways) or (CalDisp = tcdCritical) then

@@ -528,8 +528,12 @@ begin
   D := AsPlainDate(AThisValue, 'PlainDate.prototype.toString');
   OptionsObj := nil;
   Arg := AArgs.GetElement(0);
-  if Assigned(Arg) and (Arg is TGocciaObjectValue) then
+  if Assigned(Arg) and not (Arg is TGocciaUndefinedLiteralValue) then
+  begin
+    if not (Arg is TGocciaObjectValue) then
+      ThrowTypeError('options must be an object or undefined', SSuggestTemporalFromArg);
     OptionsObj := TGocciaObjectValue(Arg);
+  end;
   CalDisp := GetCalendarDisplay(OptionsObj);
   Result := TGocciaStringLiteralValue.Create(
     FormatDateString(D.FYear, D.FMonth, D.FDay) + FormatCalendarAnnotation(CalDisp));

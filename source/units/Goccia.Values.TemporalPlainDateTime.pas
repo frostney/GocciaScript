@@ -748,8 +748,12 @@ begin
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.toString');
   OptionsObj := nil;
   Arg := AArgs.GetElement(0);
-  if Assigned(Arg) and (Arg is TGocciaObjectValue) then
+  if Assigned(Arg) and not (Arg is TGocciaUndefinedLiteralValue) then
+  begin
+    if not (Arg is TGocciaObjectValue) then
+      ThrowTypeError('options must be an object or undefined', SSuggestTemporalFromArg);
     OptionsObj := TGocciaObjectValue(Arg);
+  end;
   ResolveTemporalToStringOptions(OptionsObj, FracDigits, Mode);
   CalDisp := GetCalendarDisplay(OptionsObj);
   H := D.FHour; Mi := D.FMinute; S := D.FSecond;

@@ -451,6 +451,10 @@ begin
       if IsCritical then
         AnnotContent := Copy(AnnotContent, 2, Length(AnnotContent) - 1);
 
+      // Reject empty annotations
+      if Length(AnnotContent) = 0 then
+        Exit;
+
       // Check for key=value format
       KeyEnd := System.Pos('=', AnnotContent);
       if KeyEnd > 0 then
@@ -949,6 +953,9 @@ begin
       // Strip critical flag prefix '!'
       if (Length(AnnotContent) > 0) and (AnnotContent[1] = '!') then
         AnnotContent := Copy(AnnotContent, 2, Length(AnnotContent) - 1);
+      // Reject empty annotations
+      if Length(AnnotContent) = 0 then
+        Exit;
       // Calendar annotations start with 'u-ca='
       if (Length(AnnotContent) > 5) and (Copy(AnnotContent, 1, 5) = 'u-ca=') then
         // Calendar annotation - ignore (we only support iso8601)
