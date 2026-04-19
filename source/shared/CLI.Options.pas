@@ -140,7 +140,7 @@ type
     FImportMap: TGocciaStringOption;
     FAliases: TGocciaRepeatableOption;
     FTimeout: TGocciaIntegerOption;
-    FMaxMemory: TGocciaIntegerOption;
+    FMaxMemory: TGocciaInt64Option;
     FMaxInstructions: TGocciaInt64Option;
     FUnsafeFFI: TGocciaFlagOption;
   public
@@ -154,7 +154,7 @@ type
     property ImportMap: TGocciaStringOption read FImportMap;
     property Aliases: TGocciaRepeatableOption read FAliases;
     property Timeout: TGocciaIntegerOption read FTimeout;
-    property MaxMemory: TGocciaIntegerOption read FMaxMemory;
+    property MaxMemory: TGocciaInt64Option read FMaxMemory;
     property MaxInstructions: TGocciaInt64Option read FMaxInstructions;
     property UnsafeFFI: TGocciaFlagOption read FUnsafeFFI;
   end;
@@ -511,7 +511,7 @@ begin
     'Import alias (e.g. @/=./src/)', 'Engine');
   FTimeout := TGocciaIntegerOption.Create('timeout',
     'Per-file timeout in milliseconds', 'Engine');
-  FMaxMemory := TGocciaIntegerOption.Create('max-memory',
+  FMaxMemory := TGocciaInt64Option.Create('max-memory',
     'GC heap byte limit (RangeError on exceed)', 'Engine');
   FMaxInstructions := TGocciaInt64Option.Create('max-instructions',
     'Maximum execution steps before aborting', 'Engine');

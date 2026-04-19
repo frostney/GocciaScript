@@ -1367,7 +1367,14 @@ var
 begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) then
-    Result := TGocciaNumberLiteralValue.Create(GC.MaxBytes)
+  begin
+    GC.MemoryLimitFiring := True;
+    try
+      Result := TGocciaNumberLiteralValue.Create(GC.MaxBytes);
+    finally
+      GC.MemoryLimitFiring := False;
+    end;
+  end
   else
     Result := TGocciaNumberLiteralValue.ZeroValue;
 end;
@@ -1380,7 +1387,14 @@ var
 begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) then
-    Result := TGocciaNumberLiteralValue.Create(GC.BytesAllocated)
+  begin
+    GC.MemoryLimitFiring := True;
+    try
+      Result := TGocciaNumberLiteralValue.Create(GC.BytesAllocated);
+    finally
+      GC.MemoryLimitFiring := False;
+    end;
+  end
   else
     Result := TGocciaNumberLiteralValue.ZeroValue;
 end;
