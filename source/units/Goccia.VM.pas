@@ -3781,6 +3781,7 @@ procedure TGocciaVM.PushFrame(const AResultRegister, AFrameIP: Integer;
   const ATemplate: TGocciaFunctionTemplate;
   const APrevCovLine: UInt32; const AProfileTimestamp: Int64);
 begin
+  CheckStackDepth(FFrameDepth + 1);
   if FFrameStackCount >= Length(FFrameStack) then
     SetLength(FFrameStack, FFrameStackCount * 2 + 8);
   FFrameStack[FFrameStackCount].Template := ATemplate;
@@ -3842,7 +3843,6 @@ var
   I: Integer;
 begin
   AProfileTimestamp := 0;
-  CheckStackDepth(FFrameDepth + 1);
   AcquireRegisters(Max(AClosure.Template.MaxRegisters, 1));
   AcquireLocalCells(Max(AClosure.Template.MaxRegisters, 1));
   FArgCount := AArgCount;
@@ -5945,7 +5945,7 @@ begin
         TeardownCurrentFrame(Template, ProfileEntryTimestamp,
           FFrameStack[FFrameStackCount - 1].HandlerCount);
         ResultReg := PopFrame(Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-        FRegisters[ResultReg] := ReturnValue;
+        SetRegisterRaw(ResultReg, ReturnValue);
         Continue;
       end;
         else

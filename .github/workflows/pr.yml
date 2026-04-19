@@ -86,7 +86,7 @@ jobs:
         run: ./fixtures/ffi/build.sh
 
       - name: Run all JavaScript tests
-        run: ./build/GocciaTestRunner tests ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --asi --unsafe-ffi --silent --no-progress --output=test-results-${{ matrix.mode }}.json
+        run: ./build/GocciaTestRunner tests ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --unsafe-ffi --silent --no-progress --output=test-results-${{ matrix.mode }}.json
 
       - name: Check GocciaTestRunner CLI behaviour
         run: |
@@ -469,13 +469,11 @@ jobs:
           printf '%s\n' "$stack_output" | grep -q 'RangeError'
           printf '%s\n' "$stack_output" | grep -q 'Maximum call stack size exceeded'
 
-          # Custom --stack-size limits depth
-          set +e
+          # Custom --stack-size limits depth (exit 0 because try/catch handles it)
           custom_output="$(printf 'let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};\n' | ./build/GocciaScriptLoader --stack-size=100 2>&1)"
-          set -e
           printf '%s\n' "$custom_output" | grep -q '100'
 
-          # --stack-size=0 allows deep recursion (trampoline in bytecode mode)
+          # --stack-size=0 allows deep recursion (trampoline in bytecode mode, exit 0)
           deep_output="$(printf 'let n=0; const f=()=>{if(++n<20000)f()}; f(); console.log(n);\n' | ./build/GocciaScriptLoader --mode=bytecode --stack-size=0 2>&1)"
           printf '%s\n' "$deep_output" | grep -q '20000'
 
