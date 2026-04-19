@@ -18,7 +18,7 @@ type
   { Callback that parses file content into flat key-value entries.
     Keys are option long names (e.g. 'mode', 'timeout').
     Values are their string representations (e.g. 'bytecode', '5000').
-    Boolean true produces 'true'; false is omitted.
+    Boolean true produces 'true'; false produces 'false'.
     Arrays produce multiple entries with the same key. }
   TConfigParseFunc = function(const AContent: string): TConfigEntryArray;
 
@@ -162,8 +162,8 @@ end;
 
 procedure TConfigJSONParser.OnBoolean(const AValue: Boolean);
 begin
-  if (FDepth = 1) and AValue then
-    AddEntry('true');
+  if FDepth = 1 then
+    AddEntry(BoolToStr(AValue, 'true', 'false'));
   if FInTopArray and (FDepth = 2) then
     AddEntry(BoolToStr(AValue, 'true', 'false'));
 end;
@@ -356,7 +356,7 @@ begin
   { Resolve the base path relative to this config file's directory. }
   ExtendsPath := OwnEntries[ExtendsIndex].Value;
   BaseDir := ExtractFilePath(ExpandFileName(APath));
-  if not IsPathDelimiter(ExtendsPath, 1) then
+  if (ExtractFileDrive(ExtendsPath) = '') and not IsPathDelimiter(ExtendsPath, 1) then
     ExtendsPath := BaseDir + ExtendsPath;
   ExtendsPath := ExpandFileName(ExtendsPath);
 

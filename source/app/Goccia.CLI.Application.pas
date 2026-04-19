@@ -136,14 +136,14 @@ begin
     end
     else if Value is TGocciaBooleanLiteralValue then
     begin
+      if Count >= Length(Result) then
+        SetLength(Result, Length(Result) * 2 + 1);
+      Result[Count].Key := Key;
       if TGocciaBooleanLiteralValue(Value).Value then
-      begin
-        if Count >= Length(Result) then
-          SetLength(Result, Length(Result) * 2 + 1);
-        Result[Count].Key := Key;
-        Result[Count].Value := 'true';
-        Inc(Count);
-      end;
+        Result[Count].Value := 'true'
+      else
+        Result[Count].Value := 'false';
+      Inc(Count);
     end
     else if Value is TGocciaArrayValue then
     begin
@@ -176,8 +176,15 @@ begin
   Parser := TGocciaJSON5Parser.Create;
   try
     Parsed := Parser.Parse(AContent);
-    if Parsed is TGocciaObjectValue then
-      Result := ExtractObjectEntries(TGocciaObjectValue(Parsed));
+    if Assigned(TGarbageCollector.Instance) and Assigned(Parsed) then
+      TGarbageCollector.Instance.AddTempRoot(Parsed);
+    try
+      if Parsed is TGocciaObjectValue then
+        Result := ExtractObjectEntries(TGocciaObjectValue(Parsed));
+    finally
+      if Assigned(TGarbageCollector.Instance) and Assigned(Parsed) then
+        TGarbageCollector.Instance.RemoveTempRoot(Parsed);
+    end;
   finally
     Parser.Free;
   end;
@@ -192,8 +199,15 @@ begin
   Parser := TGocciaTOMLParser.Create;
   try
     Parsed := Parser.Parse(AContent);
-    if Assigned(Parsed) then
-      Result := ExtractObjectEntries(Parsed);
+    if Assigned(TGarbageCollector.Instance) and Assigned(Parsed) then
+      TGarbageCollector.Instance.AddTempRoot(Parsed);
+    try
+      if Assigned(Parsed) then
+        Result := ExtractObjectEntries(Parsed);
+    finally
+      if Assigned(TGarbageCollector.Instance) and Assigned(Parsed) then
+        TGarbageCollector.Instance.RemoveTempRoot(Parsed);
+    end;
   finally
     Parser.Free;
   end;

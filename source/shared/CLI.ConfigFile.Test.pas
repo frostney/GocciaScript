@@ -42,7 +42,7 @@ type
     procedure TestApplyConfigFileUnregisteredExtensionRaises;
 
     { CLI override }
-    procedure TestCLIOverridesConfigValue;
+    procedure TestOptionCanBeModifiedAfterConfigApply;
     procedure TestApplySkipsAlreadyPresentOption;
 
     { extends }
@@ -86,7 +86,7 @@ begin
   Test('ApplyConfigFile loads a JSON file', TestApplyConfigFileJSON);
   Test('ApplyConfigFile raises for unregistered extension', TestApplyConfigFileUnregisteredExtensionRaises);
 
-  Test('CLI argument overrides config file value', TestCLIOverridesConfigValue);
+  Test('Option can be modified after config apply', TestOptionCanBeModifiedAfterConfigApply);
   Test('ApplyConfigEntries skips already-present options', TestApplySkipsAlreadyPresentOption);
 
   Test('extends loads base config entries', TestExtendsLoadsBaseConfig);
@@ -570,7 +570,7 @@ end;
 
 { ── CLI override test ──────────────────────────────────────── }
 
-procedure TConfigFileTests.TestCLIOverridesConfigValue;
+procedure TConfigFileTests.TestOptionCanBeModifiedAfterConfigApply;
 var
   Dir, Path: string;
   Mode: TGocciaStringOption;

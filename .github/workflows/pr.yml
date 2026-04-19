@@ -807,13 +807,38 @@ jobs:
           printf '%s\n' "$output" | grep -q '(bytecode)'
           printf '%s\n' "$output" | grep -q 'Result: 10'
 
+      - name: Check goccia.json5 config file loading
+        run: |
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          printf '{asi: true, mode: "bytecode"}\n' > "$cfg_dir/goccia.json5"
+          printf 'const x = 10\nx\n' > "$cfg_dir/test.js"
+
+          output="$(./build/GocciaScriptLoader "$cfg_dir/test.js" 2>&1)"
+          printf '%s\n' "$output" | grep -q '(bytecode)'
+          printf '%s\n' "$output" | grep -q 'Result: 10'
+
+      - name: Check config file priority (JSON5 > JSON)
+        run: |
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          printf '{"mode": "interpreted", "asi": true}\n' > "$cfg_dir/goccia.json"
+          printf '{asi: true, mode: "bytecode"}\n' > "$cfg_dir/goccia.json5"
+          printf 'const x = 1\nx\n' > "$cfg_dir/test.js"
+
+          output="$(./build/GocciaScriptLoader "$cfg_dir/test.js" 2>&1)"
+          printf '%s\n' "$output" | grep -q '(bytecode)'
+
       - name: Check config file priority (TOML > JSON5 > JSON)
         run: |
           cfg_dir="$(mktemp -d)"
           trap 'rm -rf "$cfg_dir"' EXIT
 
-          # Both TOML and JSON present — TOML should win
+          # All three present — TOML should win
           printf '{"mode": "interpreted", "asi": true}\n' > "$cfg_dir/goccia.json"
+          printf '{asi: true, mode: "interpreted"}\n' > "$cfg_dir/goccia.json5"
           printf 'asi = true\nmode = "bytecode"\n' > "$cfg_dir/goccia.toml"
           printf 'const x = 1\nx\n' > "$cfg_dir/test.js"
 
