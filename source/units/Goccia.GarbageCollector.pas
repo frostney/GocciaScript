@@ -144,18 +144,15 @@ implementation
 function libc_sysconf(Name: Integer): Int64; cdecl; external 'c' name 'sysconf';
 {$ENDIF}
 
-{$IFDEF MSWINDOWS}
+{$IF DEFINED(MSWINDOWS) OR DEFINED(GC_DEBUG) OR DEFINED(GC_TIMING)}
 uses
-  Windows
-  {$IF DEFINED(GC_DEBUG)}, SysUtils{$ENDIF}
-  {$IFDEF GC_TIMING}, TimingUtils{$ENDIF};
-{$ELSE}
-  {$IF DEFINED(GC_DEBUG) OR DEFINED(GC_TIMING)}
-uses
-  SysUtils
-  {$IFDEF GC_TIMING},
-  TimingUtils{$ENDIF};
+  {$IFDEF MSWINDOWS}
+  Windows,
   {$ENDIF}
+  {$IFDEF GC_TIMING}
+  TimingUtils,
+  {$ENDIF}
+  SysUtils;
 {$ENDIF}
 
 { Returns the total physical memory in bytes, or 0 if detection fails. }
