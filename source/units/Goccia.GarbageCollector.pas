@@ -140,15 +140,17 @@ function DetectDefaultMaxBytes: Int64;
 
 implementation
 
-{$IF DEFINED(MSWINDOWS) OR DEFINED(GC_DEBUG) OR DEFINED(GC_TIMING)}
+{$IFDEF MSWINDOWS}
 uses
-  {$IFDEF MSWINDOWS}
-  Windows,
+  SysUtils,
+  Windows;
+{$ELSE}
+  {$IF DEFINED(GC_DEBUG) OR DEFINED(GC_TIMING)}
+uses
+  SysUtils
+  {$IFDEF GC_TIMING},
+  TimingUtils{$ENDIF};
   {$ENDIF}
-  {$IFDEF GC_TIMING}
-  TimingUtils,
-  {$ENDIF}
-  SysUtils;
 {$ENDIF}
 
 {$IFDEF UNIX}
