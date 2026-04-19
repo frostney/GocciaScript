@@ -876,6 +876,8 @@ var
 begin
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.withCalendar');
   Arg := AArgs.GetElement(0);
+  if (Arg = nil) or (Arg is TGocciaUndefinedLiteralValue) then
+    ThrowTypeError('PlainDateTime.prototype.withCalendar requires a calendar argument', SSuggestTemporalFromArg);
   CalId := Arg.ToStringLiteral.Value;
   if CalId <> 'iso8601' then
     ThrowRangeError('Unknown calendar: ' + CalId, SSuggestTemporalFromArg);

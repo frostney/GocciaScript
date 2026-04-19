@@ -485,8 +485,13 @@ begin
   if Assigned(Arg) and (Arg is TGocciaObjectValue) then
     OptionsObj := TGocciaObjectValue(Arg);
   CalDisp := GetCalendarDisplay(OptionsObj);
-  Result := TGocciaStringLiteralValue.Create(
-    FormatYearMonthString(YM.FYear, YM.FMonth) + FormatCalendarAnnotation(CalDisp));
+  // When calendar annotation is present, include reference day for round-tripping
+  if (CalDisp = tcdAlways) or (CalDisp = tcdCritical) then
+    Result := TGocciaStringLiteralValue.Create(
+      FormatDateString(YM.FYear, YM.FMonth, YM.FReferenceDay) + FormatCalendarAnnotation(CalDisp))
+  else
+    Result := TGocciaStringLiteralValue.Create(
+      FormatYearMonthString(YM.FYear, YM.FMonth));
 end;
 
 // TC39 Temporal §10.3.18 Temporal.PlainYearMonth.prototype.toJSON()

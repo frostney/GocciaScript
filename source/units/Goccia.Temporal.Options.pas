@@ -576,7 +576,7 @@ begin
     if not GetTemporalUnitFromString(SmallestStr, SmallestUnit) then
       ThrowRangeError(Format(SErrorInvalidSmallestUnit, [SmallestStr]), SSuggestTemporalValidUnits);
 
-    // smallestUnit and fractionalSecondDigits are mutually exclusive
+    // smallestUnit takes precedence over fractionalSecondDigits
     case SmallestUnit of
       tuMinute:       AFractionalDigits := -2; // special: truncate seconds entirely
       tuSecond:       AFractionalDigits := 0;

@@ -953,7 +953,9 @@ begin
       if (Length(AnnotContent) > 5) and (Copy(AnnotContent, 1, 5) = 'u-ca=') then
         // Calendar annotation - ignore (we only support iso8601)
       else if ATimeZone = '' then
-        ATimeZone := AnnotContent;
+        ATimeZone := AnnotContent
+      else
+        Exit; // Multiple timezone annotations - reject
       Rest := Copy(Rest, 1, BracketStart - 1);
     end
     else
@@ -1110,19 +1112,8 @@ begin
     Result := False;
     Exit;
   end;
-  if TryParseISODateTimeWithOffset(AStr, ADate, ATime, AOffsetSeconds, TimeZone) then
-  begin
-    Result := True;
-    Exit;
-  end;
-  // Fall back to basic datetime parsing (assume UTC)
-  if TryParseISODateTime(AStr, ADate, ATime) then
-  begin
-    AOffsetSeconds := 0;
-    Result := True;
-    Exit;
-  end;
-  Result := False;
+  // Instant requires an explicit UTC offset (Z or ±HH:MM) — no fallback
+  Result := TryParseISODateTimeWithOffset(AStr, ADate, ATime, AOffsetSeconds, TimeZone);
 end;
 
 function CoerceToISOYearMonth(const AStr: string; out AYear, AMonth: Integer): Boolean;
