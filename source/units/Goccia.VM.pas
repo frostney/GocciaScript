@@ -3877,6 +3877,7 @@ begin
     while Running and (Frame.IP < Template.CodeCount) do
     begin
       try
+        CheckInstructionLimit;
         Instruction := Template.GetInstructionUnchecked(Frame.IP);
         Inc(Frame.IP);
         IncrementInstructionCounter;
@@ -3988,10 +3989,7 @@ begin
         JumpOffset := DecodeAx(Instruction);
         Inc(Frame.IP, JumpOffset);
         if JumpOffset < 0 then
-        begin
           CheckExecutionTimeout;
-          CheckInstructionLimit;
-        end;
       end;
 
       OP_JUMP_IF_TRUE:
@@ -4005,10 +4003,7 @@ begin
           JumpOffset := DecodesBx(Instruction);
           Inc(Frame.IP, JumpOffset);
           if JumpOffset < 0 then
-          begin
             CheckExecutionTimeout;
-            CheckInstructionLimit;
-          end;
         end
         else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
@@ -4027,10 +4022,7 @@ begin
           JumpOffset := DecodesBx(Instruction);
           Inc(Frame.IP, JumpOffset);
           if JumpOffset < 0 then
-          begin
             CheckExecutionTimeout;
-            CheckInstructionLimit;
-          end;
         end
         else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
@@ -5044,7 +5036,6 @@ begin
       OP_CALL:
       begin
         CheckExecutionTimeout;
-        CheckInstructionLimit;
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaBoundFunctionValue) then
         begin
@@ -5142,7 +5133,6 @@ begin
       OP_CALL_METHOD:
       begin
         CheckExecutionTimeout;
-        CheckInstructionLimit;
         if (C and 1) = 0 then
         begin
           if (FRegisters[A - 1].Kind = grkObject) and

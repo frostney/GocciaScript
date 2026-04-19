@@ -98,7 +98,6 @@ begin
     while I < FQueue.Count do
     begin
       CheckExecutionTimeout;
-      IncrementInstructionCounter;
       CheckInstructionLimit;
       Task := FQueue[I];
       Inc(I);

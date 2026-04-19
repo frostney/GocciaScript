@@ -35,7 +35,8 @@ end;
 
 procedure IncrementInstructionCounter; inline;
 begin
-  Inc(GInstructionCount);
+  if GMaxInstructions > 0 then
+    Inc(GInstructionCount);
 end;
 
 procedure CheckInstructionLimit; inline;

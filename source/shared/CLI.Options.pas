@@ -472,7 +472,7 @@ begin
   FTimeout := TGocciaIntegerOption.Create('timeout',
     'Per-file timeout in milliseconds', 'Engine');
   FMaxInstructions := TGocciaIntegerOption.Create('max-instructions',
-    'Maximum bytecode instructions before aborting', 'Engine');
+    'Maximum execution steps before aborting', 'Engine');
   FUnsafeFFI := TGocciaFlagOption.Create('unsafe-ffi',
     'Enable the FFI global (foreign function interface)', 'Engine');
 end;
