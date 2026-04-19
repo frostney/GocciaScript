@@ -140,6 +140,10 @@ function DetectDefaultMaxBytes: Int64;
 
 implementation
 
+{$IFDEF MSWINDOWS}
+uses
+  Windows;
+{$ENDIF}
 {$IF DEFINED(GC_DEBUG) OR DEFINED(GC_TIMING)}
 uses
   SysUtils
@@ -149,25 +153,6 @@ uses
 
 {$IFDEF UNIX}
 function libc_sysconf(Name: Integer): Int64; cdecl; external 'c' name 'sysconf';
-{$ENDIF}
-
-{$IFDEF MSWINDOWS}
-type
-  DWORDLONG = QWord;
-  TMemoryStatusEx = record
-    dwLength: LongWord;
-    dwMemoryLoad: LongWord;
-    ullTotalPhys: DWORDLONG;
-    ullAvailPhys: DWORDLONG;
-    ullTotalPageFile: DWORDLONG;
-    ullAvailPageFile: DWORDLONG;
-    ullTotalVirtual: DWORDLONG;
-    ullAvailVirtual: DWORDLONG;
-    ullAvailExtendedVirtual: DWORDLONG;
-  end;
-
-function GlobalMemoryStatusEx(var ALpBuffer: TMemoryStatusEx): LongBool;
-  stdcall; external 'kernel32.dll' name 'GlobalMemoryStatusEx';
 {$ENDIF}
 
 { Returns the total physical memory in bytes, or 0 if detection fails. }
