@@ -278,7 +278,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download build
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: gocciascript-${{ matrix.target }}
           path: build/
@@ -402,7 +402,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download build
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: gocciascript-${{ matrix.target }}
           path: build/
@@ -483,7 +483,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download build
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: gocciascript-${{ matrix.target }}
           path: build/
@@ -608,7 +608,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download build
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: gocciascript-${{ matrix.target }}
           path: build/
@@ -673,7 +673,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download build
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: gocciascript-${{ matrix.target }}
           path: build/
@@ -1078,7 +1078,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download build
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: gocciascript-${{ matrix.target }}
           path: build/
@@ -1124,7 +1124,7 @@ jobs:
 
       - name: Download all build artifacts
         if: steps.check.outputs.skip != 'true'
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: artifacts/
 
@@ -1199,7 +1199,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download all build artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: artifacts/
 
