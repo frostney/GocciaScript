@@ -72,6 +72,7 @@ implementation
 uses
   Math,
 
+  CLI.ConfigFile,
   CLI.Parser,
 
   Goccia.Builtins.Console,
@@ -79,9 +80,136 @@ uses
   Goccia.CLI.Help,
   Goccia.Coverage,
   Goccia.GarbageCollector,
+  Goccia.JSON,
+  Goccia.JSON5,
   Goccia.Modules.Configuration,
   Goccia.Profiler,
-  Goccia.Timeout;
+  Goccia.Timeout,
+  Goccia.TOML,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
+
+const
+  CONFIG_BASE_NAME = 'goccia';
+  CONFIG_EXTENSIONS: array[0..2] of string = ('.toml', '.json5', '.json');
+
+{ ── Config file bridge parsers ─────────────────────────────── }
+
+{ Extract top-level key-value pairs from a TGocciaObjectValue. }
+function ExtractObjectEntries(
+  const AObject: TGocciaObjectValue): TConfigEntryArray;
+var
+  Keys: TArray<string>;
+  I, J, Count: Integer;
+  Key: string;
+  Value: TGocciaValue;
+  Arr: TGocciaArrayValue;
+begin
+  Keys := AObject.GetOwnPropertyKeys;
+  SetLength(Result, Length(Keys) * 2);
+  Count := 0;
+
+  for I := 0 to High(Keys) do
+  begin
+    Key := Keys[I];
+    Value := AObject.GetProperty(Key);
+    if not Assigned(Value) then
+      Continue;
+
+    if Value is TGocciaStringLiteralValue then
+    begin
+      if Count >= Length(Result) then
+        SetLength(Result, Length(Result) * 2 + 1);
+      Result[Count].Key := Key;
+      Result[Count].Value := TGocciaStringLiteralValue(Value).Value;
+      Inc(Count);
+    end
+    else if Value is TGocciaNumberLiteralValue then
+    begin
+      if Count >= Length(Result) then
+        SetLength(Result, Length(Result) * 2 + 1);
+      Result[Count].Key := Key;
+      Result[Count].Value := TGocciaNumberLiteralValue(Value)
+        .ToStringLiteral.Value;
+      Inc(Count);
+    end
+    else if Value is TGocciaBooleanLiteralValue then
+    begin
+      if TGocciaBooleanLiteralValue(Value).Value then
+      begin
+        if Count >= Length(Result) then
+          SetLength(Result, Length(Result) * 2 + 1);
+        Result[Count].Key := Key;
+        Result[Count].Value := 'true';
+        Inc(Count);
+      end;
+    end
+    else if Value is TGocciaArrayValue then
+    begin
+      Arr := TGocciaArrayValue(Value);
+      for J := 0 to Arr.GetLength - 1 do
+      begin
+        if Count >= Length(Result) then
+          SetLength(Result, Length(Result) * 2 + 1);
+        Result[Count].Key := Key;
+        if Arr.GetElement(J) is TGocciaStringLiteralValue then
+          Result[Count].Value := TGocciaStringLiteralValue(
+            Arr.GetElement(J)).Value
+        else
+          Result[Count].Value := Arr.GetElement(J).ToStringLiteral.Value;
+        Inc(Count);
+      end;
+    end;
+    { Objects and other types are silently skipped. }
+  end;
+
+  SetLength(Result, Count);
+end;
+
+function ParseJSON5Config(const AContent: string): TConfigEntryArray;
+var
+  Parser: TGocciaJSON5Parser;
+  Parsed: TGocciaValue;
+begin
+  SetLength(Result, 0);
+  Parser := TGocciaJSON5Parser.Create;
+  try
+    Parsed := Parser.Parse(AContent);
+    if Parsed is TGocciaObjectValue then
+      Result := ExtractObjectEntries(TGocciaObjectValue(Parsed));
+  finally
+    Parser.Free;
+  end;
+end;
+
+function ParseTOMLConfig(const AContent: string): TConfigEntryArray;
+var
+  Parser: TGocciaTOMLParser;
+  Parsed: TGocciaObjectValue;
+begin
+  SetLength(Result, 0);
+  Parser := TGocciaTOMLParser.Create;
+  try
+    Parsed := Parser.Parse(AContent);
+    if Assigned(Parsed) then
+      Result := ExtractObjectEntries(Parsed);
+  finally
+    Parser.Free;
+  end;
+end;
+
+var
+  GConfigParsersRegistered: Boolean = False;
+
+procedure EnsureConfigParsersRegistered;
+begin
+  if GConfigParsersRegistered then
+    Exit;
+  RegisterConfigParser('.json5', @ParseJSON5Config);
+  RegisterConfigParser('.toml', @ParseTOMLConfig);
+  GConfigParsersRegistered := True;
+end;
 
 { FPC 3.2.2 GetCPUCount uses wrong _SC_NPROCESSORS_ONLN constants on
   macOS (expects Linux 84, actual macOS value is 58) and may also fail
@@ -365,10 +493,25 @@ begin
     ShutdownCoverageIfEnabled(FCoverageOptions);
 end;
 
+function ResolveConfigStartDirectory(const APaths: TStringList): string;
+var
+  FirstPath: string;
+begin
+  if APaths.Count > 0 then
+  begin
+    FirstPath := ExpandFileName(APaths[0]);
+    if DirectoryExists(FirstPath) then
+      Exit(FirstPath);
+    if FileExists(FirstPath) or (ExtractFilePath(FirstPath) <> '') then
+      Exit(ExtractFilePath(FirstPath));
+  end;
+  Result := GetCurrentDir;
+end;
+
 procedure TGocciaCLIApplication.Execute;
 var
   Paths: TStringList;
-  HelpText: string;
+  HelpText, ConfigPath, ConfigStartDir: string;
 begin
   Configure;
 
@@ -386,6 +529,7 @@ begin
   FAllOptions[High(FAllOptions) - 1] := FJobs;
   FAllOptions[High(FAllOptions)] := FLog;
 
+  { Parse CLI first so we know the entry file path. }
   Paths := ParseCommandLine(FAllOptions);
   try
     if FHelp.Present then
@@ -394,6 +538,15 @@ begin
       Write(HelpText);
       Exit;
     end;
+
+    { Discover config file starting from the entry file's directory.
+      Apply as defaults — options already set by CLI are skipped. }
+    EnsureConfigParsersRegistered;
+    ConfigStartDir := ResolveConfigStartDirectory(Paths);
+    ConfigPath := DiscoverConfigFile(ConfigStartDir,
+      [CONFIG_BASE_NAME], CONFIG_EXTENSIONS);
+    if ConfigPath <> '' then
+      ApplyConfigFile(ConfigPath, FAllOptions);
 
     Validate;
 

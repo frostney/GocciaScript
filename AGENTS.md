@@ -131,15 +131,26 @@ printf "const x = 2 + 2; x;" | ./build/GocciaBundler --output=out.gbc # Compile 
 ./format.pas
 ```
 
-### Direct FPC compilation
+### Configuration file
 
-```bash
-fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- source/app/GocciaREPL.dpr
-fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- source/app/GocciaScriptLoader.dpr
-fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- source/app/GocciaTestRunner.dpr
-fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- source/app/GocciaBenchmarkRunner.dpr
-fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- source/app/GocciaBundler.dpr
+All CLI options can be set via `goccia.json` (or `.json5` / `.toml`) discovered from the entry file's directory upward. Priority: TOML > JSON5 > JSON. CLI arguments override config values. Config files support `"extends"` to inherit from a base config.
+
+```json
+// goccia.json
+{ "asi": true, "mode": "bytecode", "timeout": 5000 }
 ```
+
+```json
+// tests/language/asi/goccia.json — enables ASI for this subtree
+{ "asi": true }
+```
+
+```json
+// subdirectory config inheriting from parent
+{ "extends": "../../goccia.json", "mode": "bytecode" }
+```
+
+See [Configuration File](docs/build-system.md#configuration-file-gocciajson) for full reference.
 
 ## Where to go next
 

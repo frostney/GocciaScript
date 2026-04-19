@@ -145,7 +145,8 @@ begin
   try
     ImportMapObject := TGocciaObjectValue(ParsedValue);
     ImportsValue := ImportMapObject.GetProperty(IMPORTS_PROPERTY_NAME);
-    if not Assigned(ImportsValue) then
+    if (not Assigned(ImportsValue)) or
+       (ImportsValue is TGocciaUndefinedLiteralValue) then
       Exit;
     if not (ImportsValue is TGocciaObjectValue) then
       raise Exception.Create('Import map "imports" field must be a JSON object.');

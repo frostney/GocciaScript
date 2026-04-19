@@ -775,6 +775,172 @@ jobs:
           grep -q '"name": "sum"' benchmark-stdin-bytecode.json
           grep -q '"totalBenchmarks": 1' benchmark-stdin-bytecode.json
 
+      # ── Config file loading (goccia.json / .json5 / .toml) ──
+
+      - name: Check goccia.json config file loading
+        run: |
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          # goccia.json enables ASI and bytecode mode
+          printf '{"asi": true, "mode": "bytecode"}\n' > "$cfg_dir/goccia.json"
+          printf 'const x = 2 + 2\nx\n' > "$cfg_dir/test.js"
+
+          # Config discovered from entry file's directory (not cwd)
+          output="$(./build/GocciaScriptLoader "$cfg_dir/test.js" 2>&1)"
+          printf '%s\n' "$output" | grep -q '(bytecode)'
+          printf '%s\n' "$output" | grep -q 'Result: 4'
+
+          # CLI --mode=interpreted overrides config file
+          override_output="$(./build/GocciaScriptLoader "$cfg_dir/test.js" --mode=interpreted 2>&1)"
+          printf '%s\n' "$override_output" | grep -q '(interpreted)'
+
+      - name: Check goccia.toml config file loading
+        run: |
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          printf 'asi = true\nmode = "bytecode"\n' > "$cfg_dir/goccia.toml"
+          printf 'const x = 10\nx\n' > "$cfg_dir/test.js"
+
+          output="$(./build/GocciaScriptLoader "$cfg_dir/test.js" 2>&1)"
+          printf '%s\n' "$output" | grep -q '(bytecode)'
+          printf '%s\n' "$output" | grep -q 'Result: 10'
+
+      - name: Check config file priority (TOML > JSON5 > JSON)
+        run: |
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          # Both TOML and JSON present — TOML should win
+          printf '{"mode": "interpreted", "asi": true}\n' > "$cfg_dir/goccia.json"
+          printf 'asi = true\nmode = "bytecode"\n' > "$cfg_dir/goccia.toml"
+          printf 'const x = 1\nx\n' > "$cfg_dir/test.js"
+
+          output="$(./build/GocciaScriptLoader "$cfg_dir/test.js" 2>&1)"
+          printf '%s\n' "$output" | grep -q '(bytecode)'
+
+      - name: Check config file discovered from entry file directory
+        run: |
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          mkdir -p "$cfg_dir/src"
+          printf '{"asi": true, "mode": "bytecode"}\n' > "$cfg_dir/goccia.json"
+          printf 'const x = 7\nx\n' > "$cfg_dir/src/test.js"
+
+          # Run from repo root — config is still found via entry file path
+          output="$(./build/GocciaScriptLoader "$cfg_dir/src/test.js" 2>&1)"
+          printf '%s\n' "$output" | grep -q '(bytecode)'
+          printf '%s\n' "$output" | grep -q 'Result: 7'
+
+      - name: Check config file with timeout option
+        run: |
+          PYTHON_BIN="$(command -v python3 || command -v python)"
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          printf '{"timeout": 50}\n' > "$cfg_dir/goccia.json"
+          printf '%s\n' 'const iterable = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 1 }) }) }; for (const x of iterable) { }' > "$cfg_dir/test.js"
+
+          set +e
+          timeout_output="$("$PYTHON_BIN" - "$cfg_dir" <<'PY'
+          import subprocess, sys
+          cfg_dir = sys.argv[1]
+          try:
+              result = subprocess.run(
+                  ['./build/GocciaScriptLoader', cfg_dir + '/test.js', '--output=json'],
+                  text=True, capture_output=True, timeout=10, check=False,
+              )
+          except subprocess.TimeoutExpired:
+              sys.exit(124)
+          sys.stdout.write(result.stdout)
+          sys.exit(result.returncode)
+          PY
+          )"
+          timeout_status=$?
+          set -e
+          test "$timeout_status" -eq 1
+          printf '%s\n' "$timeout_output" | grep -q '"ok":false'
+          printf '%s\n' "$timeout_output" | grep -q 'TimeoutError'
+
+      - name: Check config file without imports field
+        run: |
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          # Config file with only CLI options (no imports) should not error
+          printf '{"asi": true}\n' > "$cfg_dir/goccia.json"
+          printf 'const x = 42\nx\n' > "$cfg_dir/test.js"
+
+          output="$(./build/GocciaScriptLoader "$cfg_dir/test.js" 2>&1)"
+          printf '%s\n' "$output" | grep -q 'Result: 42'
+
+      - name: Check config file with imports coexists with CLI options
+        run: |
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          mkdir -p "$cfg_dir/lib"
+          printf 'export const value = 99;\n' > "$cfg_dir/lib/utils.js"
+          printf '{"asi": true, "imports": {"utils": "./lib/utils.js"}}\n' > "$cfg_dir/goccia.json"
+          printf 'import { value } from "utils"\nvalue\n' > "$cfg_dir/test.js"
+
+          output="$(cd "$cfg_dir" && "$OLDPWD/build/GocciaScriptLoader" test.js 2>&1)"
+          printf '%s\n' "$output" | grep -q 'Result: 99'
+
+      - name: Check config file extends
+        run: |
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          # Base config with ASI
+          printf '{"asi": true}\n' > "$cfg_dir/base.json"
+
+          # Child config extends base, adds bytecode mode
+          printf '{"extends": "base.json", "mode": "bytecode"}\n' > "$cfg_dir/goccia.json"
+          printf 'const x = 5\nx\n' > "$cfg_dir/test.js"
+
+          output="$(./build/GocciaScriptLoader "$cfg_dir/test.js" 2>&1)"
+          printf '%s\n' "$output" | grep -q '(bytecode)'
+          printf '%s\n' "$output" | grep -q 'Result: 5'
+
+      - name: Check config file extends from subdirectory
+        run: |
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          mkdir -p "$cfg_dir/tests/asi"
+
+          # Root config with ASI
+          printf '{"asi": true}\n' > "$cfg_dir/goccia.json"
+
+          # Subdirectory config extends root
+          printf '{"extends": "../../goccia.json", "mode": "bytecode"}\n' > "$cfg_dir/tests/asi/goccia.json"
+          printf 'const x = 99\nx\n' > "$cfg_dir/tests/asi/test.js"
+
+          output="$(./build/GocciaScriptLoader "$cfg_dir/tests/asi/test.js" 2>&1)"
+          printf '%s\n' "$output" | grep -q '(bytecode)'
+          printf '%s\n' "$output" | grep -q 'Result: 99'
+
+      - name: Check TestRunner respects config file
+        run: |
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          printf '{"asi": true, "mode": "bytecode"}\n' > "$cfg_dir/goccia.json"
+          cat > "$cfg_dir/test.js" << 'EOF'
+          describe("config", () => {
+            test("works", () => {
+              expect(2 + 2).toBe(4)
+            })
+          })
+          EOF
+
+          output="$(cd "$cfg_dir" && "$OLDPWD/build/GocciaTestRunner" test.js --no-progress --output=results.json 2>&1)"
+          grep -q '"mode": "bytecode"' "$cfg_dir/results.json"
+          grep -q '"passed": 1' "$cfg_dir/results.json"
+
   benchmark-comment:
     needs: benchmark
     runs-on: ubuntu-latest
