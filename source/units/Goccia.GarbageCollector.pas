@@ -153,9 +153,9 @@ function libc_sysconf(Name: Integer): Int64; cdecl; external 'c' name 'sysconf';
 // Windows: GlobalMemoryStatusEx with MEMORYSTATUSEX is declared inline
 // because the standard FPC 3.2.2 Windows unit only provides the older
 // GlobalMemoryStatus/TMemoryStatus API. Microsoft documents that
-// GlobalMemoryStatus can return incorrect values on systems with more
-// than 4 GB of RAM, so we use GlobalMemoryStatusEx which has 64-bit
-// fields (DWORDLONG) that report correctly on all systems.
+// GlobalMemoryStatus caps dwTotalPhys at 2 GB on x86 systems with
+// 2-4 GB of RAM. We use GlobalMemoryStatusEx which has 64-bit fields
+// (DWORDLONG) that report correctly on all systems.
 {$IFDEF MSWINDOWS}
 type
   DWORDLONG = QWord;
