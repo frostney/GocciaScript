@@ -601,7 +601,7 @@ end;
 
 ## Execution Limits
 
-Two mechanisms prevent runaway scripts: wall-clock timeouts and instruction limits. Both use thread-local storage and are safe with `--jobs` parallelism — each worker thread gets its own independent counter.
+Two mechanisms prevent runaway scripts: wall-clock timeouts and instruction limits. Both use thread-local storage and are safe with parallel workers — each thread gets its own independent counter.
 
 ### Timeout
 
@@ -621,8 +621,6 @@ end;
 
 Raises `TGocciaTimeoutError` when the deadline is exceeded. A value of zero disables the timeout.
 
-CLI: `--timeout=<ms>` (default: 0 for ScriptLoader/BenchmarkRunner, 10 000 ms for TestRunner).
-
 ### Instruction Limit
 
 `StartInstructionLimit` caps the number of execution steps. In bytecode mode the counter increments on every dispatched instruction (exact). In interpreter mode it increments at function-call and loop-iteration checkpoints (approximate).
@@ -641,7 +639,7 @@ end;
 
 Raises `TGocciaInstructionLimitError` when the limit is reached. A value of zero (the default) disables the counter entirely — no threadvar access, no comparisons, zero overhead.
 
-CLI: `--max-instructions=<N>` (default: 0, unlimited).
+The CLI tools expose both limits as flags; see [Build System — Run Commands](build-system.md) for usage.
 
 ## FPU Exception Mask
 
