@@ -63,6 +63,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaScriptLoader example.js --profile=all --profile-output=profile.json # Profile with JSON export
 ./build/GocciaScriptLoader example.js --profile=functions --profile-format=flamegraph --profile-output=flamegraph.txt # Flame graph export
 ./build/GocciaScriptLoader example.jsx --source-map --mode=bytecode # Write .map source map alongside execution
+./build/GocciaScriptLoader example.js --max-instructions=1000000 --mode=bytecode # Abort after 1M bytecode instructions
 ./build/GocciaREPL # Start interactive REPL (interpreted)
 ./build/GocciaREPL --mode=bytecode # Start the REPL via bytecode VM
 ./build/GocciaREPL --mode=bytecode --timing # Bytecode REPL with per-line timing

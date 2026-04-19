@@ -166,6 +166,7 @@ uses
 
   Goccia.Constants,
   Goccia.Constants.TypeNames,
+  Goccia.InstructionLimit,
   Goccia.Profiler,
   Goccia.TextFiles,
   Goccia.Threading,
@@ -181,6 +182,7 @@ begin
   if GProfilingAllocations and Assigned(TGocciaProfiler.Instance) then
     TGocciaProfiler.Instance.RecordAllocation;
   CheckExecutionTimeout;
+  CheckInstructionLimit;
 end;
 
 function TGocciaValue.RuntimeCopy: TGocciaValue;

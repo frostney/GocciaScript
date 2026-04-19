@@ -213,6 +213,7 @@ uses
   Goccia.Evaluator.Decorators,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
+  Goccia.InstructionLimit,
   Goccia.Profiler,
   Goccia.Timeout,
   Goccia.Values.BigIntValue,
@@ -1692,6 +1693,7 @@ var
   end;
 begin
   CheckExecutionTimeout;
+  CheckInstructionLimit;
   BoxedArgs := nil;
   try
     NativeInstance := nil;
@@ -2343,6 +2345,7 @@ begin
   begin
     repeat
       CheckExecutionTimeout;
+      CheckInstructionLimit;
       NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
       if not DoneFlag then
         Result.Elements.Add(NextResult);
@@ -2354,6 +2357,7 @@ begin
   begin
     repeat
       CheckExecutionTimeout;
+      CheckInstructionLimit;
       NextMethod := IteratorValue.GetProperty(PROP_NEXT);
       if not Assigned(NextMethod) or
          (NextMethod is TGocciaUndefinedLiteralValue) or
@@ -3714,6 +3718,7 @@ function TGocciaVM.ExecuteClosureRegisters(const AClosure: TGocciaBytecodeClosur
   const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray): TGocciaRegister;
 begin
   CheckExecutionTimeout;
+  CheckInstructionLimit;
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue, AArguments,
     Length(AArguments), RegisterUndefined, RegisterUndefined, RegisterUndefined,
     False);
@@ -3874,6 +3879,7 @@ begin
       try
         Instruction := Template.GetInstructionUnchecked(Frame.IP);
         Inc(Frame.IP);
+        IncrementInstructionCounter;
 
         if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and
            Assigned(Template.DebugInfo) then
@@ -3982,7 +3988,10 @@ begin
         JumpOffset := DecodeAx(Instruction);
         Inc(Frame.IP, JumpOffset);
         if JumpOffset < 0 then
+        begin
           CheckExecutionTimeout;
+          CheckInstructionLimit;
+        end;
       end;
 
       OP_JUMP_IF_TRUE:
@@ -3996,7 +4005,10 @@ begin
           JumpOffset := DecodesBx(Instruction);
           Inc(Frame.IP, JumpOffset);
           if JumpOffset < 0 then
+          begin
             CheckExecutionTimeout;
+            CheckInstructionLimit;
+          end;
         end
         else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
@@ -4015,7 +4027,10 @@ begin
           JumpOffset := DecodesBx(Instruction);
           Inc(Frame.IP, JumpOffset);
           if JumpOffset < 0 then
+          begin
             CheckExecutionTimeout;
+            CheckInstructionLimit;
+          end;
         end
         else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
@@ -5029,6 +5044,7 @@ begin
       OP_CALL:
       begin
         CheckExecutionTimeout;
+        CheckInstructionLimit;
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaBoundFunctionValue) then
         begin
@@ -5126,6 +5142,7 @@ begin
       OP_CALL_METHOD:
       begin
         CheckExecutionTimeout;
+        CheckInstructionLimit;
         if (C and 1) = 0 then
         begin
           if (FRegisters[A - 1].Kind = grkObject) and

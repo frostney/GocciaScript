@@ -128,6 +128,7 @@ type
     FImportMap: TGocciaStringOption;
     FAliases: TGocciaRepeatableOption;
     FTimeout: TGocciaIntegerOption;
+    FMaxInstructions: TGocciaIntegerOption;
   public
     constructor Create;
     destructor Destroy; override;
@@ -139,6 +140,7 @@ type
     property ImportMap: TGocciaStringOption read FImportMap;
     property Aliases: TGocciaRepeatableOption read FAliases;
     property Timeout: TGocciaIntegerOption read FTimeout;
+    property MaxInstructions: TGocciaIntegerOption read FMaxInstructions;
   end;
 
   TGocciaCoverageFormat = (cfLcov, cfJson);
@@ -467,6 +469,8 @@ begin
     'Import alias (e.g. @/=./src/)', 'Engine');
   FTimeout := TGocciaIntegerOption.Create('timeout',
     'Per-file timeout in milliseconds', 'Engine');
+  FMaxInstructions := TGocciaIntegerOption.Create('max-instructions',
+    'Maximum bytecode instructions before aborting', 'Engine');
 end;
 
 destructor TGocciaEngineOptions.Destroy;
@@ -476,17 +480,19 @@ begin
   FImportMap.Free;
   FAliases.Free;
   FTimeout.Free;
+  FMaxInstructions.Free;
   inherited Destroy;
 end;
 
 function TGocciaEngineOptions.Options: TGocciaOptionArray;
 begin
-  SetLength(Result, 5);
+  SetLength(Result, 6);
   Result[0] := FMode;
   Result[1] := FASI;
   Result[2] := FImportMap;
   Result[3] := FAliases;
   Result[4] := FTimeout;
+  Result[5] := FMaxInstructions;
 end;
 
 { TGocciaCoverageOptions }

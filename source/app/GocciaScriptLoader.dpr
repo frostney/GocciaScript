@@ -26,6 +26,7 @@ uses
   Goccia.Error.Detail,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
+  Goccia.InstructionLimit,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
@@ -332,11 +333,13 @@ begin
     ConfigureConsole(Engine.BuiltinConsole, AOutputLines);
     ApplyDataGlobalsToEngine(Engine);
     StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+    StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
     try
       ApplyModuleGlobalsToEngine(Engine);
       ScriptResult := Engine.Execute;
     finally
       ClearExecutionTimeout;
+      ClearInstructionLimit;
       SourceMap := Engine.TakeLastSourceMap;
       try
         if Assigned(SourceMap) and Assigned(ASource) then
@@ -397,12 +400,14 @@ begin
       end;
 
       StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+      StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
       try
         try
           ApplyModuleGlobalsToEngine(Engine);
           Result.ResultValue := TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
         finally
           ClearExecutionTimeout;
+          ClearInstructionLimit;
         end;
         ExecEnd := GetNanoseconds;
         Result.Timing.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
@@ -437,11 +442,13 @@ begin
         ConfigureConsole(Engine.BuiltinConsole, AOutputLines);
         ApplyDataGlobalsToEngine(Engine);
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+        StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
         try
           ApplyModuleGlobalsToEngine(Engine);
           Result.ResultValue := TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
         finally
           ClearExecutionTimeout;
+          ClearInstructionLimit;
         end;
         ExecEnd := GetNanoseconds;
         Result.Timing.LexTimeNanoseconds := 0;

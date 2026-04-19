@@ -25,6 +25,7 @@ uses
   Goccia.Error.Detail,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
+  Goccia.InstructionLimit,
   Goccia.JSON.Utils,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
@@ -310,10 +311,12 @@ begin
         end;
 
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS));
+        StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
         try
           EngineResult := Engine.Execute;
         finally
           ClearExecutionTimeout;
+          ClearInstructionLimit;
         end;
       finally
         SilentCon.Free;
@@ -459,11 +462,13 @@ begin
             end;
 
             StartExecutionTimeout(EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS));
+            StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
             try
               try
                 ResultValue := TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
               finally
                 ClearExecutionTimeout;
+                ClearInstructionLimit;
               end;
               ExecEnd := GetNanoseconds;
 

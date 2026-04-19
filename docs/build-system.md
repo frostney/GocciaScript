@@ -123,6 +123,9 @@ printf 'import { add } from "@/math"; add(1, 2);' | ./build/GocciaScriptLoader
 # Abort long-running scripts
 printf "const f = () => f(); f();" | ./build/GocciaScriptLoader --timeout=100
 
+# Abort after a fixed number of bytecode instructions
+printf "const f = () => f(); f();" | ./build/GocciaScriptLoader --max-instructions=1000000 --mode=bytecode
+
 # Write .map source map alongside execution
 ./build/GocciaScriptLoader example.jsx --source-map --mode=bytecode
 
