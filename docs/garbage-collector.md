@@ -86,7 +86,7 @@ From JavaScript, `Goccia.gc.bytesAllocated` and `Goccia.gc.maxBytes` are read-on
 
 ## JavaScript API
 
-`Goccia.gc()` triggers an unconditional mark-and-sweep collection. It always runs regardless of the `GC.Enabled` flag, so scripts can reclaim memory even when automatic collection is disabled (e.g. on worker threads). It is safe to call repeatedly and returns `undefined`.
+`Goccia.gc()` triggers a full mark-and-sweep collection. It bypasses the automatic collection threshold but respects `GC.Enabled`: on worker threads (where `Enabled` is `False` because shared immutable objects are not thread-safe for concurrent marking) the call is a no-op. It is safe to call repeatedly and returns `undefined`.
 
 | Property | Type | Description |
 |----------|------|-------------|

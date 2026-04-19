@@ -1354,7 +1354,12 @@ var
   GC: TGarbageCollector;
 begin
   GC := TGarbageCollector.Instance;
-  if Assigned(GC) then
+  // Collect is unconditional with respect to the allocation threshold, but
+  // must respect Enabled: worker threads set Enabled := False because shared
+  // immutable objects (singletons, prototypes) have a single FGCMark field
+  // that is not thread-safe.  Running a mark-sweep on a worker would race
+  // on that field and crash.
+  if Assigned(GC) and GC.Enabled then
     GC.Collect;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -1364,15 +1369,17 @@ function TGocciaEngine.GocciaGCMaxBytesGetter(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   GC: TGarbageCollector;
+  WasFiring: Boolean;
 begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) then
   begin
+    WasFiring := GC.MemoryLimitFiring;
     GC.MemoryLimitFiring := True;
     try
       Result := TGocciaNumberLiteralValue.Create(GC.MaxBytes);
     finally
-      GC.MemoryLimitFiring := False;
+      GC.MemoryLimitFiring := WasFiring;
     end;
   end
   else
@@ -1384,15 +1391,17 @@ function TGocciaEngine.GocciaGCBytesAllocatedGetter(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   GC: TGarbageCollector;
+  WasFiring: Boolean;
 begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) then
   begin
+    WasFiring := GC.MemoryLimitFiring;
     GC.MemoryLimitFiring := True;
     try
       Result := TGocciaNumberLiteralValue.Create(GC.BytesAllocated);
     finally
-      GC.MemoryLimitFiring := False;
+      GC.MemoryLimitFiring := WasFiring;
     end;
   end
   else
