@@ -66,6 +66,18 @@ type
     property Value: Integer read FValue;
   end;
 
+  TGocciaInt64Option = class(TGocciaOptionBase)
+  private
+    FValue: Int64;
+  public
+    procedure Apply(const AValue: string); override;
+    function FormatForHelp: string; override;
+
+    function ValueOr(const ADefault: Int64): Int64;
+
+    property Value: Int64 read FValue;
+  end;
+
   TGocciaRepeatableOption = class(TGocciaOptionBase)
   private
     FValues: TStringList;
@@ -128,7 +140,7 @@ type
     FImportMap: TGocciaStringOption;
     FAliases: TGocciaRepeatableOption;
     FTimeout: TGocciaIntegerOption;
-    FMaxInstructions: TGocciaIntegerOption;
+    FMaxInstructions: TGocciaInt64Option;
     FUnsafeFFI: TGocciaFlagOption;
   public
     constructor Create;
@@ -141,7 +153,7 @@ type
     property ImportMap: TGocciaStringOption read FImportMap;
     property Aliases: TGocciaRepeatableOption read FAliases;
     property Timeout: TGocciaIntegerOption read FTimeout;
-    property MaxInstructions: TGocciaIntegerOption read FMaxInstructions;
+    property MaxInstructions: TGocciaInt64Option read FMaxInstructions;
     property UnsafeFFI: TGocciaFlagOption read FUnsafeFFI;
   end;
 
@@ -277,6 +289,32 @@ begin
 end;
 
 function TGocciaIntegerOption.ValueOr(const ADefault: Integer): Integer;
+begin
+  if FPresent then
+    Result := FValue
+  else
+    Result := ADefault;
+end;
+
+{ TGocciaInt64Option }
+
+procedure TGocciaInt64Option.Apply(const AValue: string);
+var
+  Parsed: Int64;
+begin
+  if not TryStrToInt64(AValue, Parsed) then
+    raise TGocciaParseError.CreateFmt('Invalid integer value for --%s: %s',
+      [LongName, AValue]);
+  FValue := Parsed;
+  FPresent := True;
+end;
+
+function TGocciaInt64Option.FormatForHelp: string;
+begin
+  Result := '--' + LongName + '=<N>';
+end;
+
+function TGocciaInt64Option.ValueOr(const ADefault: Int64): Int64;
 begin
   if FPresent then
     Result := FValue
@@ -471,7 +509,7 @@ begin
     'Import alias (e.g. @/=./src/)', 'Engine');
   FTimeout := TGocciaIntegerOption.Create('timeout',
     'Per-file timeout in milliseconds', 'Engine');
-  FMaxInstructions := TGocciaIntegerOption.Create('max-instructions',
+  FMaxInstructions := TGocciaInt64Option.Create('max-instructions',
     'Maximum execution steps before aborting', 'Engine');
   FUnsafeFFI := TGocciaFlagOption.Create('unsafe-ffi',
     'Enable the FFI global (foreign function interface)', 'Engine');
