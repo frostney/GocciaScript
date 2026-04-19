@@ -90,7 +90,7 @@ From JavaScript, `Goccia.gc.bytesAllocated` and `Goccia.gc.maxBytes` are read-on
 |----------|-----|-------|
 | macOS/Darwin | `sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE)` | Declared as `external 'c'` inline |
 | Linux | `sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE)` | Same API, different constant values |
-| Windows | `GlobalMemoryStatus` from the standard FPC `Windows` unit | `TMemoryStatus.dwTotalPhys` is `SIZE_T` (4 bytes on win32, 8 bytes on win64), so it reports correctly on both architectures. `GlobalMemoryStatusEx` / `TMemoryStatusEx` are **not** in the standard FPC 3.2.2 `Windows` unit — they live in `JwaWinBase` (JEDI), which is not part of the standard RTL. |
+| Windows | `GlobalMemoryStatus` from the standard FPC `Windows` unit | `TMemoryStatus.dwTotalPhys` is `SIZE_T` (4 bytes on win32, 8 bytes on win64), so it reports correctly on both architectures. |
 
 ### Scaling constants
 
