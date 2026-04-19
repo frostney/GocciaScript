@@ -1184,6 +1184,10 @@ jobs:
             pkg_dir="${archive_name}"
             bash ./.github/scripts/stage-build-artifacts.sh "$artifact_dir" "$pkg_dir"
 
+            cp -r tests/ "$pkg_dir/tests/"
+            cp -r benchmarks/ "$pkg_dir/benchmarks/"
+            cp -r examples/ "$pkg_dir/examples/"
+
             if [[ "$target" == *win* ]]; then
               zip -r "${archive_name}.zip" "$pkg_dir/"
             else
