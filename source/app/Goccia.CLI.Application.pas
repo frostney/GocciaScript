@@ -79,6 +79,7 @@ uses
   Goccia.CLI.EngineSetup,
   Goccia.CLI.Help,
   Goccia.Coverage,
+  Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.JSON,
   Goccia.JSON5,
@@ -92,7 +93,7 @@ uses
 
 const
   CONFIG_BASE_NAME = 'goccia';
-  CONFIG_EXTENSIONS: array[0..2] of string = ('.toml', '.json5', '.json');
+  CONFIG_EXTENSIONS: array[0..2] of string = (EXT_TOML, EXT_JSON5, EXT_JSON);
 
 { ── Config file bridge parsers ─────────────────────────────── }
 
@@ -220,8 +221,8 @@ procedure EnsureConfigParsersRegistered;
 begin
   if GConfigParsersRegistered then
     Exit;
-  RegisterConfigParser('.json5', @ParseJSON5Config);
-  RegisterConfigParser('.toml', @ParseTOMLConfig);
+  RegisterConfigParser(EXT_JSON5, @ParseJSON5Config);
+  RegisterConfigParser(EXT_TOML, @ParseTOMLConfig);
   GConfigParsersRegistered := True;
 end;
 
