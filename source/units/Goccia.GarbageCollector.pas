@@ -140,25 +140,41 @@ function DetectDefaultMaxBytes: Int64;
 
 implementation
 
-{$IF DEFINED(MSWINDOWS) OR DEFINED(GC_DEBUG) OR DEFINED(GC_TIMING)}
+{$IF DEFINED(GC_DEBUG) OR DEFINED(GC_TIMING)}
 uses
-  {$IFDEF MSWINDOWS}Windows{$ENDIF}
-  {$IF DEFINED(MSWINDOWS) AND (DEFINED(GC_DEBUG) OR DEFINED(GC_TIMING))},{$ENDIF}
-  {$IF DEFINED(GC_DEBUG) OR DEFINED(GC_TIMING)}
   SysUtils
-  {$IFDEF GC_TIMING}, TimingUtils{$ENDIF}
-  {$ENDIF};
+  {$IFDEF GC_TIMING}, TimingUtils{$ENDIF};
 {$ENDIF}
 
 {$IFDEF UNIX}
 function libc_sysconf(Name: Integer): Int64; cdecl; external 'c' name 'sysconf';
 {$ENDIF}
 
-// Returns the total physical memory in bytes, or 0 if detection fails.
-// Windows: uses GlobalMemoryStatus from the standard Windows unit.
-// TMemoryStatus.dwTotalPhys is SIZE_T (4 bytes on win32, 8 bytes on win64),
-// so it reports correctly on both architectures. GlobalMemoryStatusEx is not
-// needed — it lives in JwaWinBase (JEDI), not the standard FPC Windows unit.
+// Windows: GlobalMemoryStatusEx with MEMORYSTATUSEX is declared inline
+// because the standard FPC 3.2.2 Windows unit only provides the older
+// GlobalMemoryStatus/TMemoryStatus API. Microsoft documents that
+// GlobalMemoryStatus can return incorrect values on systems with more
+// than 4 GB of RAM, so we use GlobalMemoryStatusEx which has 64-bit
+// fields (DWORDLONG) that report correctly on all systems.
+{$IFDEF MSWINDOWS}
+type
+  DWORDLONG = QWord;
+  TMemoryStatusEx = record
+    dwLength: LongWord;
+    dwMemoryLoad: LongWord;
+    ullTotalPhys: DWORDLONG;
+    ullAvailPhys: DWORDLONG;
+    ullTotalPageFile: DWORDLONG;
+    ullAvailPageFile: DWORDLONG;
+    ullTotalVirtual: DWORDLONG;
+    ullAvailVirtual: DWORDLONG;
+    ullAvailExtendedVirtual: DWORDLONG;
+  end;
+
+function GlobalMemoryStatusEx(var ALpBuffer: TMemoryStatusEx): LongBool;
+  stdcall; external 'kernel32.dll' name 'GlobalMemoryStatusEx';
+{$ENDIF}
+
 function GetPhysicalMemoryBytes: Int64;
 {$IFDEF UNIX}
 const
@@ -174,7 +190,7 @@ var
 {$ENDIF}
 {$IFDEF MSWINDOWS}
 var
-  MemStatus: TMemoryStatus;
+  MemStatus: TMemoryStatusEx;
 {$ENDIF}
 begin
   {$IFDEF UNIX}
@@ -188,8 +204,10 @@ begin
   {$IFDEF MSWINDOWS}
   FillChar(MemStatus, SizeOf(MemStatus), 0);
   MemStatus.dwLength := SizeOf(MemStatus);
-  GlobalMemoryStatus(MemStatus);
-  Result := Int64(MemStatus.dwTotalPhys);
+  if GlobalMemoryStatusEx(MemStatus) then
+    Result := Int64(MemStatus.ullTotalPhys)
+  else
+    Result := 0;
   {$ENDIF}
 end;
 
