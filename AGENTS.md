@@ -16,7 +16,7 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
 - **Read [CONTRIBUTING.md](CONTRIBUTING.md)** before substantive edits—especially [Critical rules](CONTRIBUTING.md#critical-rules) and [Code style](docs/contributing/code-style.md).
 - **Before creating or restructuring units**, you **must** complete these steps before writing any code:
   1. Read [Source Directory Layout](docs/contributing/code-style.md#source-directory-layout-and-namespacing) — determine whether the unit belongs in `source/shared/` or `source/units/` and why.
-  2. Read [Testing philosophy](docs/testing.md#philosophy) — understand what to test (public API only) and what not to test (private helpers, implementation details).
+  2. Read [Test Principles](docs/testing.md#test-principles) — understand what to test (public API only) and what not to test (private helpers, implementation details).
   3. State the public API of the new unit and which directory it belongs in. Do not proceed until this is confirmed.
   4. Keep implementation details private; test only public APIs.
 - **Run verification yourself** when the environment allows (tests, format check); do not only tell the human what to run unless execution is impossible.
