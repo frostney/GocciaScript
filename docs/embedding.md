@@ -326,9 +326,9 @@ The `TGocciaGlobalBuiltins` set controls three special-purpose built-ins that ar
 |------|----------|-------|
 | `ggTestAssertions` | `describe`, `test`, `expect` | Testing framework (GocciaTestRunner adds this) |
 | `ggBenchmark` | `suite`, `bench` | Benchmark framework (GocciaBenchmarkRunner adds this) |
-| `ggFFI` | `FFI.open`, `FFILibrary`, `FFIPointer` | Foreign Function Interface for native shared libraries; enabled via `--unsafe-ffi` CLI flag |
+| `ggFFI` | `FFI.open`, `FFILibrary`, `FFIPointer` | Foreign Function Interface for native shared libraries |
 
-All CLI tools (ScriptLoader, REPL, TestRunner, BenchmarkRunner, Bundler) accept `--unsafe-ffi` to enable the FFI global. Without this flag, the `FFI` object is not available.
+When embedding, pass `ggFFI` in the `TGocciaGlobalBuiltins` set during engine creation to enable the FFI global. CLI tools (ScriptLoader, REPL, TestRunner, BenchmarkRunner, Bundler) expose this as the `--unsafe-ffi` flag.
 
 To add the test framework for a custom test runner:
 
