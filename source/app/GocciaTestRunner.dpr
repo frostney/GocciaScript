@@ -756,6 +756,8 @@ begin
   try
     Pool.CancelOnError := FExitOnFirst.Present;
     Pool.EnableCoverage := CoverageOptions.Enabled.Present;
+    if Assigned(TGarbageCollector.Instance) then
+      Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
     // Watchdog = 2x the per-file timeout × ceiling(files/workers) + grace.
     // This gives workers enough time to hit their per-file timeout before
     // the watchdog fires, while still preventing indefinite hangs.
