@@ -3928,13 +3928,12 @@ begin
       SetRegister(Handler.CatchRegister, AErrorValue);
       Exit;
     end;
-    if FFrameStackCount > AInitialFrameStackCount then
-      TargetHandlerCount := FFrameStack[FFrameStackCount - 1].HandlerCount
-    else
-      TargetHandlerCount := ASavedHandlerCount;
-    TeardownCurrentFrame(ATemplate, AProfileTimestamp, TargetHandlerCount);
+    // Outermost frame: let the finally block handle teardown
     if FFrameStackCount <= AInitialFrameStackCount then
       raise EGocciaBytecodeThrow.Create(AErrorValue);
+    // Intermediate trampoline frame: tear down and pop to parent
+    TeardownCurrentFrame(ATemplate, AProfileTimestamp,
+      FFrameStack[FFrameStackCount - 1].HandlerCount);
     PopFrame(AFrame, ATemplate, APrevCovLine, AProfileTimestamp);
   end;
 end;
@@ -5939,13 +5938,12 @@ begin
       OP_RETURN:
       begin
         ReturnValue := FRegisters[A];
-        if FFrameStackCount > InitialFrameStackCount then
-          TargetHandlerCount := FFrameStack[FFrameStackCount - 1].HandlerCount
-        else
-          TargetHandlerCount := SavedHandlerCount;
-        TeardownCurrentFrame(Template, ProfileEntryTimestamp, TargetHandlerCount);
+        // Outermost frame: let the finally block handle teardown
         if FFrameStackCount <= InitialFrameStackCount then
           Exit(ReturnValue);
+        // Intermediate trampoline frame: tear down and pop to parent
+        TeardownCurrentFrame(Template, ProfileEntryTimestamp,
+          FFrameStack[FFrameStackCount - 1].HandlerCount);
         ResultReg := PopFrame(Frame, Template, PrevCovLine, ProfileEntryTimestamp);
         FRegisters[ResultReg] := ReturnValue;
         Continue;
