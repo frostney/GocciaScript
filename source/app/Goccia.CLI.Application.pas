@@ -20,6 +20,10 @@ type
   private
     FHelp: TGocciaFlagOption;
     FJobs: TGocciaIntegerOption;
+    FLog: TGocciaStringOption;
+    FLogFileHandle: TextFile;
+    FLogLock: TRTLCriticalSection;
+    FLogFileOpen: Boolean;
     FEngineOptions: TGocciaEngineOptions;
     FCoverageOptions: TGocciaCoverageOptions;
     FProfilerOptions: TGocciaProfilerOptions;
@@ -28,6 +32,9 @@ type
     procedure BuildAllOptions;
     procedure InitializeSingletons;
     procedure ShutdownSingletons;
+    procedure HandleConsoleLog(const AMethod, ALine: string);
+    procedure OpenLogFile;
+    procedure CloseLogFile;
   protected
     procedure Configure; virtual; abstract;
     function UsageLine: string; virtual; abstract;
@@ -67,6 +74,7 @@ uses
 
   CLI.Parser,
 
+  Goccia.Builtins.Console,
   Goccia.CLI.EngineSetup,
   Goccia.CLI.Help,
   Goccia.Coverage,
@@ -119,16 +127,20 @@ begin
   FProfilerOptions := nil;
   FHelp := nil;
   FJobs := nil;
+  FLog := nil;
+  FLogFileOpen := False;
 end;
 
 destructor TGocciaCLIApplication.Destroy;
 begin
+  CloseLogFile;
   FOwnedOptions.Free;
   FEngineOptions.Free;
   FCoverageOptions.Free;
   FProfilerOptions.Free;
   FHelp.Free;
   FJobs.Free;
+  FLog.Free;
   inherited Destroy;
 end;
 
@@ -239,6 +251,8 @@ begin
       ConfigureModuleResolver(Result.Resolver, AFileName,
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
     end;
+    if FLogFileOpen then
+      Result.BuiltinConsole.LogCallback := HandleConsoleLog;
   except
     Result.Free;
     raise;
@@ -257,9 +271,48 @@ begin
       ConfigureModuleResolver(Result.Resolver, AFileName,
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
     end;
+    if FLogFileOpen then
+      Result.BuiltinConsole.LogCallback := HandleConsoleLog;
   except
     Result.Free;
     raise;
+  end;
+end;
+
+procedure TGocciaCLIApplication.HandleConsoleLog(const AMethod, ALine: string);
+begin
+  EnterCriticalSection(FLogLock);
+  try
+    WriteLn(FLogFileHandle, '[' + AMethod + '] ' + ALine);
+  finally
+    LeaveCriticalSection(FLogLock);
+  end;
+end;
+
+procedure TGocciaCLIApplication.OpenLogFile;
+begin
+  if FLogFileOpen then
+    Exit;
+  InitCriticalSection(FLogLock);
+  try
+    AssignFile(FLogFileHandle, FLog.Value);
+    Rewrite(FLogFileHandle);
+    FLogFileOpen := True;
+  except
+    DoneCriticalSection(FLogLock);
+    raise;
+  end;
+end;
+
+procedure TGocciaCLIApplication.CloseLogFile;
+begin
+  if not FLogFileOpen then
+    Exit;
+  try
+    CloseFile(FLogFileHandle);
+  finally
+    FLogFileOpen := False;
+    DoneCriticalSection(FLogLock);
   end;
 end;
 
@@ -312,12 +365,14 @@ begin
 
   FJobs := TGocciaIntegerOption.Create('jobs', 'Number of parallel worker threads');
   FJobs.ShortName := 'j';
-  // FJobs is freed in the destructor; add it to FAllOptions manually below
+
+  FLog := TGocciaStringOption.Create('log', 'Write console output to a log file');
 
   BuildAllOptions;
-  // Append --jobs after BuildAllOptions so it appears in help
-  SetLength(FAllOptions, Length(FAllOptions) + 1);
-  FAllOptions[High(FAllOptions)] := FJobs;
+  // Append --jobs and --log after BuildAllOptions so they appear in help
+  SetLength(FAllOptions, Length(FAllOptions) + 2);
+  FAllOptions[High(FAllOptions) - 1] := FJobs;
+  FAllOptions[High(FAllOptions)] := FLog;
 
   Paths := ParseCommandLine(FAllOptions);
   try
@@ -330,12 +385,16 @@ begin
 
     Validate;
 
+    if FLog.Present then
+      OpenLogFile;
+
     InitializeSingletons;
     try
       ExecuteWithPaths(Paths);
       AfterExecute;
     finally
       ShutdownSingletons;
+      CloseLogFile;
     end;
   finally
     Paths.Free;
