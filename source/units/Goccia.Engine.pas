@@ -297,6 +297,7 @@ uses
   Goccia.Scope.Redeclaration,
   Goccia.Shims,
   Goccia.Spec,
+  Goccia.Threading,
   Goccia.Token,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
@@ -1354,12 +1355,10 @@ var
   GC: TGarbageCollector;
 begin
   GC := TGarbageCollector.Instance;
-  // Collect is unconditional with respect to the allocation threshold, but
-  // must respect Enabled: worker threads set Enabled := False because shared
-  // immutable objects (singletons, prototypes) have a single FGCMark field
-  // that is not thread-safe.  Running a mark-sweep on a worker would race
-  // on that field and crash.
-  if Assigned(GC) and GC.Enabled then
+  // Skip on worker threads: shared immutable objects (singletons, prototypes)
+  // have a single FGCMark field that is not thread-safe — running mark-sweep
+  // on a worker would race on that field and crash.
+  if Assigned(GC) and (not GIsWorkerThread) then
     GC.Collect;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
