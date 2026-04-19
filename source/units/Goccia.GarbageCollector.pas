@@ -140,6 +140,10 @@ function DetectDefaultMaxBytes: Int64;
 
 implementation
 
+{$IFDEF MSWINDOWS}
+uses
+  Windows;
+{$ENDIF}
 {$IF DEFINED(GC_DEBUG) OR DEFINED(GC_TIMING)}
 uses
   SysUtils
@@ -151,29 +155,11 @@ uses
 function libc_sysconf(Name: Integer): Int64; cdecl; external 'c' name 'sysconf';
 {$ENDIF}
 
-// Direct kernel32 declarations — the cross-compilation toolchain's RTL
-// does not include the Windows unit, so we declare what we need inline
-// (same approach as the libc_sysconf external above).
-{$IFDEF MSWINDOWS}
-type
-  DWORDLONG = QWord;
-  TMemoryStatusEx = record
-    dwLength: LongWord;
-    dwMemoryLoad: LongWord;
-    ullTotalPhys: DWORDLONG;
-    ullAvailPhys: DWORDLONG;
-    ullTotalPageFile: DWORDLONG;
-    ullAvailPageFile: DWORDLONG;
-    ullTotalVirtual: DWORDLONG;
-    ullAvailVirtual: DWORDLONG;
-    ullAvailExtendedVirtual: DWORDLONG;
-  end;
-
-function GlobalMemoryStatusEx(var ALpBuffer: TMemoryStatusEx): LongBool;
-  stdcall; external 'kernel32.dll' name 'GlobalMemoryStatusEx';
-{$ENDIF}
-
-{ Returns the total physical memory in bytes, or 0 if detection fails. }
+// Returns the total physical memory in bytes, or 0 if detection fails.
+// Windows: uses GlobalMemoryStatus from the standard Windows unit.
+// TMemoryStatus.dwTotalPhys is SIZE_T (4 bytes on win32, 8 bytes on win64),
+// so it reports correctly on both architectures. GlobalMemoryStatusEx is not
+// needed — it lives in JwaWinBase (JEDI), not the standard FPC Windows unit.
 function GetPhysicalMemoryBytes: Int64;
 {$IFDEF UNIX}
 const
@@ -189,7 +175,7 @@ var
 {$ENDIF}
 {$IFDEF MSWINDOWS}
 var
-  MemStatus: TMemoryStatusEx;
+  MemStatus: TMemoryStatus;
 {$ENDIF}
 begin
   {$IFDEF UNIX}
@@ -203,10 +189,8 @@ begin
   {$IFDEF MSWINDOWS}
   FillChar(MemStatus, SizeOf(MemStatus), 0);
   MemStatus.dwLength := SizeOf(MemStatus);
-  if GlobalMemoryStatusEx(MemStatus) then
-    Result := Int64(MemStatus.ullTotalPhys)
-  else
-    Result := 0;
+  GlobalMemoryStatus(MemStatus);
+  Result := Int64(MemStatus.dwTotalPhys);
   {$ENDIF}
 end;
 
