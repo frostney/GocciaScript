@@ -72,6 +72,7 @@ uses
   Classes,
   SysUtils,
 
+  FileUtils,
   JSONParser;
 
 { ── Parser registry ────────────────────────────────────────── }
@@ -295,16 +296,8 @@ end;
 { ── Load and parse a config file ───────────────────────────── }
 
 function ReadFileContent(const APath: string): string;
-var
-  Stream: TStringList;
 begin
-  Stream := TStringList.Create;
-  try
-    Stream.LoadFromFile(APath);
-    Result := Stream.Text;
-  finally
-    Stream.Free;
-  end;
+  Result := string(ReadUTF8FileText(APath));
 end;
 
 function ResolveParser(const AExtension: string): TConfigParseFunc;
