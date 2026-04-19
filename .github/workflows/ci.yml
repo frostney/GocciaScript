@@ -1096,6 +1096,9 @@ jobs:
   nightly:
     needs: [test, toml-compliance, json5-compliance, benchmark, cli]
     if: github.ref == 'refs/heads/main'
+    concurrency:
+      group: nightly-release
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -1166,6 +1169,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           COMMIT="$(git rev-parse --short HEAD)"
+          TARGET_SHA="$(git rev-parse HEAD)"
           DATE="$(date -u +'%Y-%m-%d')"
 
           gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
@@ -1179,7 +1183,7 @@ jobs:
           EOF
           )" \
             --prerelease \
-            --target main \
+            --target "$TARGET_SHA" \
             gocciascript-nightly-*.tar.gz gocciascript-nightly-*.zip
 
   release:
