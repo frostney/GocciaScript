@@ -5,7 +5,7 @@
 ## Executive Summary
 
 - **Quick start** — `TGocciaEngine.RunScript('code')` for one-shot execution; `TGocciaEngine.Create(...)` for long-lived engines
-- **Sandboxing** — Control available built-ins via `TGocciaGlobalBuiltins` flags; inject custom globals via `DefineLexicalBinding`
+- **Sandboxing** — Control available built-ins via `TGocciaGlobalBuiltins` flags; inject custom globals via `DefineLexicalBinding`; enforce execution limits via timeout or instruction cap
 - **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, and global modules
 - **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
 
@@ -598,6 +598,50 @@ end;
 | `TGocciaTypeError` | Type-specific runtime error |
 | `TGocciaReferenceError` | Undefined variable access |
 | `TGocciaThrowValue` | JavaScript `throw` — wraps any thrown value including `RangeError` |
+
+## Execution Limits
+
+Two mechanisms prevent runaway scripts: wall-clock timeouts and instruction limits. Both use thread-local storage and are safe with `--jobs` parallelism — each worker thread gets its own independent counter.
+
+### Timeout
+
+`StartExecutionTimeout` arms a wall-clock deadline. `ClearExecutionTimeout` disarms it. The check is sampled (every 1024th call site) to minimize overhead.
+
+```pascal
+uses
+  Goccia.Timeout;
+
+StartExecutionTimeout(5000); // 5 000 ms
+try
+  Engine.Execute;
+finally
+  ClearExecutionTimeout;
+end;
+```
+
+Raises `TGocciaTimeoutError` when the deadline is exceeded. A value of zero disables the timeout.
+
+CLI: `--timeout=<ms>` (default: 0 for ScriptLoader/BenchmarkRunner, 10 000 ms for TestRunner).
+
+### Instruction Limit
+
+`StartInstructionLimit` caps the number of execution steps. In bytecode mode the counter increments on every dispatched instruction (exact). In interpreter mode it increments at function-call and loop-iteration checkpoints (approximate).
+
+```pascal
+uses
+  Goccia.InstructionLimit;
+
+StartInstructionLimit(1000000); // 1 000 000 steps
+try
+  Engine.Execute;
+finally
+  ClearInstructionLimit;
+end;
+```
+
+Raises `TGocciaInstructionLimitError` when the limit is reached. A value of zero (the default) disables the counter entirely — no threadvar access, no comparisons, zero overhead.
+
+CLI: `--max-instructions=<N>` (default: 0, unlimited).
 
 ## FPU Exception Mask
 

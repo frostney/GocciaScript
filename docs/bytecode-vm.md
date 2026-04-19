@@ -128,14 +128,7 @@ The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Cov
 
 ## Instruction Limit
 
-The `--max-instructions` flag caps the number of bytecode instructions a script may execute before aborting with a `TGocciaInstructionLimitError`. This is useful for sandboxing untrusted scripts or detecting infinite loops without relying on wall-clock timeouts.
-
-- `--max-instructions=1000000` — abort after 1 000 000 dispatched instructions
-- `--max-instructions=0` or omitted — no limit (default)
-
-The counter lives in `Goccia.InstructionLimit.pas` using thread-local storage (same pattern as `Goccia.Timeout.pas`). It increments on every instruction fetch in the dispatch loop and is checked at the top of each dispatch iteration. A limit of zero (the default) disables the counter entirely — no threadvar access, no comparisons, zero overhead.
-
-In interpreter mode the counter increments at function-call and loop-iteration checkpoints rather than per-AST-node, so the count is an approximation. In bytecode mode it is exact.
+The `--max-instructions` flag caps execution steps before aborting. In the bytecode VM the counter increments on every dispatched instruction (exact); the check runs at the top of each dispatch iteration with zero overhead when disabled. See [Embedding — Execution Limits](embedding.md#execution-limits) for the full API, interpreter-mode behavior, and CLI defaults.
 
 ## Binary Format
 
