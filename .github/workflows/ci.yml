@@ -853,6 +853,36 @@ jobs:
           print('--max-memory=10485760 override — OK')
           "
 
+      - name: Check GocciaScriptLoader --stack-size CLI
+        run: |
+          # Infinite recursion hits default limit (RangeError, exit 1)
+          set +e
+          stack_output="$(printf 'const f = () => f(); f();\n' | ./build/GocciaScriptLoader --asi --output=json 2>&1)"
+          stack_status=$?
+          set -e
+          test "$stack_status" -eq 1
+          printf '%s\n' "$stack_output" | grep -q '"ok":false'
+          printf '%s\n' "$stack_output" | grep -q 'RangeError'
+          printf '%s\n' "$stack_output" | grep -q 'Maximum call stack size exceeded'
+
+          # Custom --stack-size limits depth
+          set +e
+          custom_output="$(printf 'let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};\n' | ./build/GocciaScriptLoader --asi --stack-size=100 2>&1)"
+          set -e
+          printf '%s\n' "$custom_output" | grep -q '100'
+
+          # --stack-size=0 allows deep recursion (trampoline in bytecode mode)
+          deep_output="$(printf 'let n=0; const f=()=>{if(++n<20000)f()}; f(); console.log(n);\n' | ./build/GocciaScriptLoader --asi --mode=bytecode --stack-size=0 2>&1)"
+          printf '%s\n' "$deep_output" | grep -q '20000'
+
+          # Bytecode mode also enforces the limit
+          set +e
+          bc_output="$(printf 'const f = () => f(); f();\n' | ./build/GocciaScriptLoader --asi --mode=bytecode --output=json 2>&1)"
+          bc_status=$?
+          set -e
+          test "$bc_status" -eq 1
+          printf '%s\n' "$bc_output" | grep -q 'RangeError'
+
       - name: Check GocciaScriptLoader coverage CLI
         run: |
           cov_output="$(printf 'const x = 5;\nx;\n' | ./build/GocciaScriptLoader --coverage 2>&1)"

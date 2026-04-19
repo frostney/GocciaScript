@@ -126,6 +126,10 @@ printf "const f = () => f(); f();" | ./build/GocciaScriptLoader --timeout=100
 # Abort after a fixed number of bytecode instructions
 printf "const f = () => f(); f();" | ./build/GocciaScriptLoader --max-instructions=1000000 --mode=bytecode
 
+# Set call stack depth limit (default 3500; 0 = unlimited)
+./build/GocciaScriptLoader example.js --stack-size=5000
+./build/GocciaScriptLoader example.js --stack-size=0
+
 # Write .map source map alongside execution
 ./build/GocciaScriptLoader example.jsx --source-map --mode=bytecode
 
@@ -158,6 +162,7 @@ The first file found is loaded. CLI arguments override any values set in the con
   "asi": true,
   "timeout": 5000,
   "max-memory": 10485760,
+  "stack-size": 3500,
   "imports": {
     "@/": "./src/"
   }
@@ -190,6 +195,7 @@ asi = true
 mode = "bytecode"
 timeout = 5000
 max-memory = 10485760
+stack-size = 3500
 ```
 
 **CLI vs. embedding** — Config file discovery is automatic for all CLI applications (`GocciaScriptLoader`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, `GocciaBundler`) because they inherit from `TGocciaCLIApplication`. When embedding the engine directly, config file loading is not automatic. Use the shared `CLI.ConfigFile` unit to get the same behavior.

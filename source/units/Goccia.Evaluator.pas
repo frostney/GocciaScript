@@ -109,6 +109,7 @@ uses
   Goccia.Lexer,
   Goccia.MicrotaskQueue,
   Goccia.Parser,
+  Goccia.StackLimit,
   Goccia.Timeout,
   Goccia.Token,
   Goccia.Values.ArrayValue,
@@ -617,8 +618,11 @@ begin
       CalleeName := '';
 
     if Assigned(TGocciaCallStack.Instance) then
+    begin
       TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
         ACallExpression.Line, ACallExpression.Column);
+      CheckStackDepth(TGocciaCallStack.Instance.Count);
+    end;
     try
       if Callee is TGocciaProxyValue then
         Result := TGocciaProxyValue(Callee).ApplyTrap(Arguments, ThisValue)

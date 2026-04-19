@@ -436,6 +436,7 @@ resourcestring
   SErrorPrivateFieldNotAccessible = 'Private field %s is not accessible';
   SErrorCannotUseInOperator = 'Cannot use ''in'' operator to search for ''%s'' in %s';
   SErrorCannotDestructureNotObject = 'Cannot destructure %s as it is not an object';
+  SErrorMaxCallStackExceeded = 'Maximum call stack size exceeded';
 
   // Uint8Array encoding errors
   SErrorRequiresUint8Array = '%s requires that |this| be a Uint8Array';
