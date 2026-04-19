@@ -211,6 +211,60 @@ begin
   {$ENDIF}
 end;
 
+// Linux cgroup memory limit detection for container-aware defaults.
+// Inside a container the host physical RAM is visible via sysconf, which
+// overstates the memory actually available to the process.  Check cgroup
+// v2 and v1 limits first and fall back to physical RAM when no valid
+// cgroup limit is found.
+{$IFDEF LINUX}
+const
+  CGROUP_V2_MEMORY_MAX = '/sys/fs/cgroup/memory.max';
+  CGROUP_V1_MEMORY_LIMIT = '/sys/fs/cgroup/memory/memory.limit_in_bytes';
+  CGROUP_UNLIMITED = 'max';
+
+function TryReadCgroupMemoryLimit(const APath: string;
+  out ALimit: Int64): Boolean;
+var
+  F: TextFile;
+  Line: string;
+  Code: Integer;
+  Err: Integer;
+begin
+  Result := False;
+  ALimit := 0;
+  {$I-}
+  AssignFile(F, APath);
+  Reset(F);
+  if IOResult <> 0 then
+    Exit;
+  ReadLn(F, Line);
+  Err := IOResult;
+  CloseFile(F);
+  Err := Err or IOResult;
+  {$I+}
+  if Err <> 0 then
+    Exit;
+  if (Line = '') or (Line = CGROUP_UNLIMITED) then
+    Exit;
+  Val(Line, ALimit, Code);
+  if (Code <> 0) or (ALimit <= 0) then
+  begin
+    ALimit := 0;
+    Exit;
+  end;
+  Result := True;
+end;
+
+function GetCgroupMemoryLimitBytes: Int64;
+begin
+  if TryReadCgroupMemoryLimit(CGROUP_V2_MEMORY_MAX, Result) then
+    Exit;
+  if TryReadCgroupMemoryLimit(CGROUP_V1_MEMORY_LIMIT, Result) then
+    Exit;
+  Result := 0;
+end;
+{$ENDIF}
+
 function DetectDefaultMaxBytes: Int64;
 var
   PhysMem, Cap: Int64;
@@ -220,7 +274,13 @@ begin
   {$ELSE}
   Cap := MAX_BYTES_CAP_32BIT;
   {$ENDIF}
+  {$IFDEF LINUX}
+  PhysMem := GetCgroupMemoryLimitBytes;
+  if PhysMem <= 0 then
+    PhysMem := GetPhysicalMemoryBytes;
+  {$ELSE}
   PhysMem := GetPhysicalMemoryBytes;
+  {$ENDIF}
   if PhysMem > 0 then
   begin
     Result := PhysMem div 2;
