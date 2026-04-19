@@ -43,6 +43,7 @@ type
     function AddInteger(const AName, AHelp: string): TGocciaIntegerOption;
     function AddRepeatable(const AName, AHelp: string): TGocciaRepeatableOption;
     function Add(const AOption: TGocciaOptionBase): TGocciaOptionBase;
+    function EffectiveBuiltins: TGocciaGlobalBuiltins;
     function CreateEngine(const AFileName: string;
       const ASource: TStringList): TGocciaEngine; overload;
     function CreateEngine(const AFileName: string;
@@ -220,10 +221,17 @@ begin
   Result := AOption;
 end;
 
+function TGocciaCLIApplication.EffectiveBuiltins: TGocciaGlobalBuiltins;
+begin
+  Result := GlobalBuiltins;
+  if Assigned(FEngineOptions) and FEngineOptions.UnsafeFFI.Present then
+    Include(Result, ggFFI);
+end;
+
 function TGocciaCLIApplication.CreateEngine(const AFileName: string;
   const ASource: TStringList): TGocciaEngine;
 begin
-  Result := TGocciaEngine.Create(AFileName, ASource, GlobalBuiltins);
+  Result := TGocciaEngine.Create(AFileName, ASource, EffectiveBuiltins);
   try
     if Assigned(FEngineOptions) then
     begin
@@ -240,7 +248,7 @@ end;
 function TGocciaCLIApplication.CreateEngine(const AFileName: string;
   const ASource: TStringList; const AExecutor: TGocciaExecutor): TGocciaEngine;
 begin
-  Result := TGocciaEngine.Create(AFileName, ASource, GlobalBuiltins,
+  Result := TGocciaEngine.Create(AFileName, ASource, EffectiveBuiltins,
     AExecutor);
   try
     if Assigned(FEngineOptions) then

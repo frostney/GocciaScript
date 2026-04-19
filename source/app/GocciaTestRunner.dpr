@@ -260,7 +260,7 @@ end;
 
 function TTestRunnerApp.GlobalBuiltins: TGocciaGlobalBuiltins;
 begin
-  Result := [ggTestAssertions, ggFFI];
+  Result := [ggTestAssertions];
 end;
 
 function TTestRunnerApp.RunGocciaScriptInterpreted(const AFileName: string): TTestFileResult;
@@ -762,7 +762,7 @@ begin
 
   // Force all shared prototypes to be initialised on the main thread
   // before any worker thread starts, avoiding class-var race conditions.
-  EnsureSharedPrototypesInitialized(GlobalBuiltins);
+  EnsureSharedPrototypesInitialized(EffectiveBuiltins);
 
   WallClockStart := GetNanoseconds;
 

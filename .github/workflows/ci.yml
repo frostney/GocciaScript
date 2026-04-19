@@ -308,10 +308,10 @@ jobs:
         run: gcc -shared -o fixtures/ffi/libfixture.dll fixtures/ffi/fixture.c
 
       - name: Run all JavaScript tests (interpreted)
-        run: ./build/GocciaTestRunner tests --asi --silent --no-progress --output=test-results-interpreted.json
+        run: ./build/GocciaTestRunner tests --asi --unsafe-ffi --silent --no-progress --output=test-results-interpreted.json
 
       - name: Run all JavaScript tests (bytecode)
-        run: ./build/GocciaTestRunner tests --asi --mode=bytecode --silent --no-progress --output=test-results-bytecode.json
+        run: ./build/GocciaTestRunner tests --asi --unsafe-ffi --mode=bytecode --silent --no-progress --output=test-results-bytecode.json
 
       - name: Check GocciaTestRunner CLI behaviour
         run: |
@@ -686,6 +686,18 @@ jobs:
 
       - name: Run example scripts
         run: ./build/GocciaScriptLoader examples
+
+      # ── --unsafe-ffi gating ──
+
+      - name: Check --unsafe-ffi gating
+        run: |
+          # FFI is unavailable without --unsafe-ffi
+          ffi_off="$(printf 'typeof FFI;\n' | ./build/GocciaScriptLoader --output=json)"
+          printf '%s\n' "$ffi_off" | grep -q '"value":"undefined"'
+
+          # FFI is available with --unsafe-ffi
+          ffi_on="$(printf 'typeof FFI;\n' | ./build/GocciaScriptLoader --unsafe-ffi --output=json)"
+          printf '%s\n' "$ffi_on" | grep -q '"value":"object"'
 
       # ── GocciaScriptLoader CLI ──
 
