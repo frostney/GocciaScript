@@ -70,6 +70,7 @@ type
     function DurationToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DurationValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DurationTotal(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DurationToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
@@ -85,6 +86,7 @@ uses
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SymbolValue,
   Goccia.Values.TemporalPlainDate,
   Goccia.Values.TemporalZonedDateTime;
 
@@ -213,6 +215,11 @@ begin
       Members.AddMethod(DurationToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(DurationToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(DurationValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DurationToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddSymbolDataProperty(
+        TGocciaSymbolValue.WellKnownToStringTag,
+        TGocciaStringLiteralValue.Create('Temporal.Duration'),
+        [pfConfigurable]);
       FPrototypeMembers := Members.ToDefinitions;
     finally
       Members.Free;
@@ -939,7 +946,6 @@ end;
 function ParseRelativeTo(const AValue: TGocciaValue; const AMethod: string): TTemporalDateRecord;
 var
   DateRec: TTemporalDateRecord;
-  TimeRec: TTemporalTimeRecord;
   PlainDate: TGocciaTemporalPlainDateValue;
 begin
   if AValue is TGocciaTemporalPlainDateValue then
@@ -953,15 +959,9 @@ begin
     Result := ZonedDateTimeToDateRecord(TGocciaTemporalZonedDateTimeValue(AValue))
   else if AValue is TGocciaStringLiteralValue then
   begin
-    if not TryParseISODate(TGocciaStringLiteralValue(AValue).Value, DateRec) then
-    begin
-      if TryParseISODateTime(TGocciaStringLiteralValue(AValue).Value, DateRec, TimeRec) then
-        Result := DateRec
-      else
-        ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]), SSuggestTemporalRelativeTo);
-    end
-    else
-      Result := DateRec;
+    if not CoerceToISODate(TGocciaStringLiteralValue(AValue).Value, DateRec) then
+      ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]), SSuggestTemporalRelativeTo);
+    Result := DateRec;
   end
   else if AValue is TGocciaObjectValue then
   begin
@@ -1228,6 +1228,11 @@ function TGocciaTemporalDurationValue.DurationValueOf(const AArgs: TGocciaArgume
 begin
   ThrowTypeError(Format(SErrorTemporalValueOf, ['Duration', 'toString or compare']), SSuggestTemporalNoValueOf);
   Result := nil;
+end;
+
+function TGocciaTemporalDurationValue.DurationToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := DurationToString(AArgs, AThisValue);
 end;
 
 end.

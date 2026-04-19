@@ -396,9 +396,17 @@ end;
 {$ENDIF}
 
 function IsValidTimeZone(const ATimeZone: string): Boolean;
+var
+  Dummy: Integer;
 {$IFDEF UNIX}
 begin
   if ATimeZone = UTC_TIMEZONE_ID then
+  begin
+    Result := True;
+    Exit;
+  end;
+  // Accept offset strings like +05:30 as valid timezone IDs
+  if ParseOffsetString(ATimeZone, Dummy) then
   begin
     Result := True;
     Exit;
@@ -412,7 +420,7 @@ begin
 end;
 {$ELSE}
 begin
-  Result := ATimeZone = UTC_TIMEZONE_ID;
+  Result := (ATimeZone = UTC_TIMEZONE_ID) or ParseOffsetString(ATimeZone, Dummy);
 end;
 {$ENDIF}
 
@@ -420,10 +428,18 @@ function GetUtcOffsetSeconds(const ATimeZone: string; const AEpochSeconds: Int64
 var
   Data: TTimeZoneData;
   Index: Integer;
+  OffsetSecs: Integer;
 begin
   if ATimeZone = UTC_TIMEZONE_ID then
   begin
     Result := 0;
+    Exit;
+  end;
+
+  // Handle offset-based timezone IDs (e.g. +05:30, -08:00)
+  if ParseOffsetString(ATimeZone, OffsetSecs) then
+  begin
+    Result := OffsetSecs;
     Exit;
   end;
 

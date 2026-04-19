@@ -69,6 +69,18 @@ function TryParseISODateTimeWithOffset(const AStr: string; out ADate: TTemporalD
 function FormatYearMonthString(const AYear, AMonth: Integer): string;
 function FormatMonthDayString(const AMonth, ADay: Integer): string;
 
+function StripAnnotations(const AStr: string): string;
+function StripOffsetAndAnnotations(const AStr: string): string;
+
+{ Unified Temporal string coercion — use these from CoerceXxx functions }
+function CoerceToISODate(const AStr: string; out ADate: TTemporalDateRecord): Boolean;
+function CoerceToISOTime(const AStr: string; out ATime: TTemporalTimeRecord): Boolean;
+function CoerceToISODateTime(const AStr: string; out ADate: TTemporalDateRecord; out ATime: TTemporalTimeRecord): Boolean;
+function CoerceToISOInstant(const AStr: string; out ADate: TTemporalDateRecord;
+  out ATime: TTemporalTimeRecord; out AOffsetSeconds: Integer): Boolean;
+function CoerceToISOYearMonth(const AStr: string; out AYear, AMonth: Integer): Boolean;
+function CoerceToISOMonthDay(const AStr: string; out AMonth, ADay: Integer): Boolean;
+
 function CompareIntegers(const A, B: Integer): Integer; inline;
 function CompareDates(const AYear1, AMonth1, ADay1, AYear2, AMonth2, ADay2: Integer): Integer;
 function CompareTimes(const AHour1, AMinute1, ASecond1, AMs1, AUs1, ANs1,
@@ -385,34 +397,148 @@ begin
   Result := ADigitCount > 0;
 end;
 
+function IsValidAnnotationKey(const AKey: string): Boolean;
+var
+  I: Integer;
+  C: Char;
+  InSegment: Boolean;
+begin
+  Result := False;
+  if Length(AKey) = 0 then Exit;
+  // First char must be lowercase letter
+  if (AKey[1] < 'a') or (AKey[1] > 'z') then Exit;
+  InSegment := True;
+  for I := 2 to Length(AKey) do
+  begin
+    C := AKey[I];
+    if C = '-' then
+    begin
+      if not InSegment then Exit; // double dash
+      InSegment := False;
+    end
+    else if ((C >= 'a') and (C <= 'z')) or ((C >= '0') and (C <= '9')) then
+      InSegment := True
+    else
+      Exit; // invalid char
+  end;
+  if not InSegment then Exit; // trailing dash
+  Result := True;
+end;
+
+function StripAnnotations(const AStr: string): string;
+var
+  I: Integer;
+  AnnotContent: string;
+  IsCritical: Boolean;
+  KeyEnd: Integer;
+  Key: string;
+  CalendarSeen, TimeZoneSeen: Boolean;
+begin
+  Result := AStr;
+  CalendarSeen := False;
+  TimeZoneSeen := False;
+
+  // Remove all trailing [...] annotations, validating them
+  while (Length(Result) > 0) and (Result[Length(Result)] = ']') do
+  begin
+    I := Length(Result) - 1;
+    while (I > 0) and (Result[I] <> '[') do
+      Dec(I);
+    if I > 0 then
+    begin
+      AnnotContent := Copy(Result, I + 1, Length(Result) - I - 1);
+      IsCritical := (Length(AnnotContent) > 0) and (AnnotContent[1] = '!');
+      if IsCritical then
+        AnnotContent := Copy(AnnotContent, 2, Length(AnnotContent) - 1);
+
+      // Check for key=value format
+      KeyEnd := System.Pos('=', AnnotContent);
+      if KeyEnd > 0 then
+      begin
+        Key := Copy(AnnotContent, 1, KeyEnd - 1);
+        // Validate key format (must be lowercase alphanumeric with dashes)
+        if not IsValidAnnotationKey(Key) then
+          Exit; // Invalid key - return unchanged so parser rejects
+
+        if Key = 'u-ca' then
+        begin
+          // Calendar annotation
+          if CalendarSeen then
+            Exit; // Multiple calendar annotations - reject
+          CalendarSeen := True;
+        end
+        else if IsCritical then
+          Exit; // Unknown critical annotation - reject
+        // Non-critical unknown key=value - strip silently
+      end
+      else
+      begin
+        // No key=value format: this is a timezone annotation
+        if TimeZoneSeen then
+          Exit; // Multiple timezone annotations - reject
+        TimeZoneSeen := True;
+      end;
+
+      Result := Copy(Result, 1, I - 1);
+    end
+    else
+      Break;
+  end;
+end;
+
+function StripOffsetAndAnnotations(const AStr: string): string;
+var
+  I: Integer;
+begin
+  Result := StripAnnotations(AStr);
+  // Remove trailing UTC offset (+HH:MM, -HH:MM, +HHMM, -HHMM, +HH, -HH, Z)
+  if (Length(Result) > 0) and ((Result[Length(Result)] = 'Z') or (Result[Length(Result)] = 'z')) then
+  begin
+    Result := Copy(Result, 1, Length(Result) - 1);
+    Exit;
+  end;
+  // Look for +/- offset at end
+  I := Length(Result);
+  while (I > 0) and (Result[I] >= '0') and (Result[I] <= '9') do
+    Dec(I);
+  if (I > 0) and (Result[I] = ':') then
+    Dec(I);
+  while (I > 0) and (Result[I] >= '0') and (Result[I] <= '9') do
+    Dec(I);
+  if (I > 0) and ((Result[I] = '+') or (Result[I] = '-')) then
+    Result := Copy(Result, 1, I - 1);
+end;
+
 function TryParseISODate(const AStr: string; out ADate: TTemporalDateRecord): Boolean;
 var
   Pos, Sign: Integer;
   Year, Month, Day: Integer;
   C: Char;
+  S: string;
 begin
   Result := False;
+  S := StripAnnotations(AStr);
   Pos := 1;
   Sign := 1;
 
   // Check for sign prefix
-  if Pos <= Length(AStr) then
+  if Pos <= Length(S) then
   begin
-    C := AStr[Pos];
+    C := S[Pos];
     if C = '+' then
     begin
       Inc(Pos);
-      if not TryParseDigits(AStr, Pos, 6, Year) then Exit;
+      if not TryParseDigits(S, Pos, 6, Year) then Exit;
     end
     else if C = '-' then
     begin
       Inc(Pos);
       Sign := -1;
-      if not TryParseDigits(AStr, Pos, 6, Year) then Exit;
+      if not TryParseDigits(S, Pos, 6, Year) then Exit;
     end
     else
     begin
-      if not TryParseDigits(AStr, Pos, 4, Year) then Exit;
+      if not TryParseDigits(S, Pos, 4, Year) then Exit;
     end;
   end
   else
@@ -421,19 +547,19 @@ begin
   Year := Year * Sign;
 
   // Expect '-'
-  if (Pos > Length(AStr)) or (AStr[Pos] <> '-') then Exit;
+  if (Pos > Length(S)) or (S[Pos] <> '-') then Exit;
   Inc(Pos);
 
-  if not TryParseDigits(AStr, Pos, 2, Month) then Exit;
+  if not TryParseDigits(S, Pos, 2, Month) then Exit;
 
   // Expect '-'
-  if (Pos > Length(AStr)) or (AStr[Pos] <> '-') then Exit;
+  if (Pos > Length(S)) or (S[Pos] <> '-') then Exit;
   Inc(Pos);
 
-  if not TryParseDigits(AStr, Pos, 2, Day) then Exit;
+  if not TryParseDigits(S, Pos, 2, Day) then Exit;
 
   // Must be at end of string (for pure date parsing)
-  if Pos <= Length(AStr) then Exit;
+  if Pos <= Length(S) then Exit;
 
   if not IsValidDate(Year, Month, Day) then Exit;
 
@@ -495,6 +621,10 @@ begin
     end;
   end;
 
+  // Clamp leap second (60) to 59
+  if Second = 60 then
+    Second := 59;
+
   if not IsValidTime(Hour, Minute, Second, ATime.Millisecond, ATime.Microsecond, ATime.Nanosecond) then Exit;
 
   ATime.Hour := Hour;
@@ -506,7 +636,7 @@ end;
 function TryParseISODateTime(const AStr: string; out ADate: TTemporalDateRecord; out ATime: TTemporalTimeRecord): Boolean;
 var
   TPos: Integer;
-  DatePart, TimePart: string;
+  DatePart, TimePart, S: string;
 begin
   Result := False;
   ATime.Hour := 0;
@@ -516,23 +646,24 @@ begin
   ATime.Microsecond := 0;
   ATime.Nanosecond := 0;
 
-  TPos := System.Pos('T', AStr);
+  S := AStr;
+
+  TPos := System.Pos('T', S);
   if TPos = 0 then
-    TPos := System.Pos('t', AStr);
+    TPos := System.Pos('t', S);
 
   if TPos = 0 then
   begin
-    // Try as date only
-    Result := TryParseISODate(AStr, ADate);
+    // Try as date only (StripAnnotations handled inside TryParseISODate)
+    Result := TryParseISODate(S, ADate);
     Exit;
   end;
 
-  DatePart := Copy(AStr, 1, TPos - 1);
-  TimePart := Copy(AStr, TPos + 1, Length(AStr) - TPos);
+  DatePart := Copy(S, 1, TPos - 1);
+  TimePart := Copy(S, TPos + 1, Length(S) - TPos);
 
-  // Strip trailing timezone info (Z or +/-HH:MM) from time part
-  if (Length(TimePart) > 0) and (TimePart[Length(TimePart)] = 'Z') then
-    TimePart := Copy(TimePart, 1, Length(TimePart) - 1);
+  // Strip offset and annotations from time part before parsing
+  TimePart := StripOffsetAndAnnotations(TimePart);
 
   if not TryParseISODate(DatePart, ADate) then Exit;
   if Length(TimePart) > 0 then
@@ -703,40 +834,42 @@ function TryParseISOYearMonth(const AStr: string; out AYear, AMonth: Integer): B
 var
   Pos, Sign: Integer;
   C: Char;
+  S: string;
 begin
   Result := False;
   AYear := 0;
   AMonth := 0;
+  S := StripAnnotations(AStr);
   Pos := 1;
   Sign := 1;
 
-  if Pos > Length(AStr) then Exit;
+  if Pos > Length(S) then Exit;
 
-  C := AStr[Pos];
+  C := S[Pos];
   if C = '+' then
   begin
     Inc(Pos);
-    if not TryParseDigits(AStr, Pos, 6, AYear) then Exit;
+    if not TryParseDigits(S, Pos, 6, AYear) then Exit;
   end
   else if C = '-' then
   begin
     Inc(Pos);
     Sign := -1;
-    if not TryParseDigits(AStr, Pos, 6, AYear) then Exit;
+    if not TryParseDigits(S, Pos, 6, AYear) then Exit;
   end
   else
   begin
-    if not TryParseDigits(AStr, Pos, 4, AYear) then Exit;
+    if not TryParseDigits(S, Pos, 4, AYear) then Exit;
   end;
 
   AYear := AYear * Sign;
 
-  if (Pos > Length(AStr)) or (AStr[Pos] <> '-') then Exit;
+  if (Pos > Length(S)) or (S[Pos] <> '-') then Exit;
   Inc(Pos);
 
-  if not TryParseDigits(AStr, Pos, 2, AMonth) then Exit;
+  if not TryParseDigits(S, Pos, 2, AMonth) then Exit;
 
-  if Pos <= Length(AStr) then Exit;
+  if Pos <= Length(S) then Exit;
 
   if (AMonth < 1) or (AMonth > 12) then Exit;
 
@@ -746,20 +879,26 @@ end;
 function TryParseISOMonthDay(const AStr: string; out AMonth, ADay: Integer): Boolean;
 var
   Pos: Integer;
+  S: string;
 begin
   Result := False;
   AMonth := 0;
   ADay := 0;
+  S := StripAnnotations(AStr);
   Pos := 1;
 
-  if not TryParseDigits(AStr, Pos, 2, AMonth) then Exit;
+  // Skip optional leading '--' (ISO 8601 month-day format)
+  if (Length(S) >= 2) and (S[1] = '-') and (S[2] = '-') then
+    Pos := 3;
 
-  if (Pos > Length(AStr)) or (AStr[Pos] <> '-') then Exit;
+  if not TryParseDigits(S, Pos, 2, AMonth) then Exit;
+
+  if (Pos > Length(S)) or (S[Pos] <> '-') then Exit;
   Inc(Pos);
 
-  if not TryParseDigits(AStr, Pos, 2, ADay) then Exit;
+  if not TryParseDigits(S, Pos, 2, ADay) then Exit;
 
-  if Pos <= Length(AStr) then Exit;
+  if Pos <= Length(S) then Exit;
 
   if (AMonth < 1) or (AMonth > 12) then Exit;
   // Validate day against month in a leap year (1972) to allow Feb 29
@@ -772,10 +911,8 @@ function TryParseISODateTimeWithOffset(const AStr: string; out ADate: TTemporalD
   out ATime: TTemporalTimeRecord; out AOffsetSeconds: Integer; out ATimeZone: string): Boolean;
 var
   TPos, BracketStart, BracketEnd, I: Integer;
-  DatePart, Rest, TimePart, OffsetPart: string;
+  DatePart, Rest, TimePart, OffsetPart, AnnotContent: string;
   OffsetSign, OffsetH, OffsetM: Integer;
-  FracVal: Int64;
-  FracDigits: Integer;
   ParsePos: Integer;
 begin
   Result := False;
@@ -798,22 +935,34 @@ begin
 
   if not TryParseISODate(DatePart, ADate) then Exit;
 
-  // Extract timezone annotation [timezone] from end
-  BracketStart := System.Pos('[', Rest);
-  if BracketStart > 0 then
+  // Extract all [...] annotations from end, in reverse order
+  // The first non-calendar annotation is the timezone; calendar annotations start with u-ca=
+  while (Length(Rest) > 0) and (Rest[Length(Rest)] = ']') do
   begin
-    BracketEnd := System.Pos(']', Rest);
-    if BracketEnd > BracketStart then
+    BracketEnd := Length(Rest);
+    BracketStart := BracketEnd - 1;
+    while (BracketStart > 0) and (Rest[BracketStart] <> '[') do
+      Dec(BracketStart);
+    if BracketStart > 0 then
     begin
-      ATimeZone := Copy(Rest, BracketStart + 1, BracketEnd - BracketStart - 1);
+      AnnotContent := Copy(Rest, BracketStart + 1, BracketEnd - BracketStart - 1);
+      // Strip critical flag prefix '!'
+      if (Length(AnnotContent) > 0) and (AnnotContent[1] = '!') then
+        AnnotContent := Copy(AnnotContent, 2, Length(AnnotContent) - 1);
+      // Calendar annotations start with 'u-ca='
+      if (Length(AnnotContent) > 5) and (Copy(AnnotContent, 1, 5) = 'u-ca=') then
+        // Calendar annotation - ignore (we only support iso8601)
+      else if ATimeZone = '' then
+        ATimeZone := AnnotContent;
       Rest := Copy(Rest, 1, BracketStart - 1);
-    end;
+    end
+    else
+      Break;
   end;
 
   // Find offset: look for Z, +, or - after time digits
-  // Time is at least HH:MM (5 chars)
   OffsetPart := '';
-  if (Length(Rest) > 0) and (Rest[Length(Rest)] = 'Z') then
+  if (Length(Rest) > 0) and ((Rest[Length(Rest)] = 'Z') or (Rest[Length(Rest)] = 'z')) then
   begin
     AOffsetSeconds := 0;
     Rest := Copy(Rest, 1, Length(Rest) - 1);
@@ -850,10 +999,12 @@ begin
       begin
         if not TryParseDigits(OffsetPart, ParsePos, 2, OffsetM) then Exit;
       end;
-      // Validate ranges and ensure no trailing characters
+      // Validate ranges
       if (OffsetH > 23) or (OffsetM > 59) then Exit;
-      if ParsePos <= Length(OffsetPart) then Exit;
       AOffsetSeconds := OffsetSign * (OffsetH * 3600 + OffsetM * 60);
+      // Set timezone to offset if no annotation timezone
+      if ATimeZone = '' then
+        ATimeZone := OffsetPart;
     end;
   end;
 
@@ -865,6 +1016,157 @@ begin
   end;
 
   Result := True;
+end;
+
+{ --------------------------------------------------------------------------- }
+{ Unified Temporal string coercion functions                                   }
+{ --------------------------------------------------------------------------- }
+
+function CoerceToISODate(const AStr: string; out ADate: TTemporalDateRecord): Boolean;
+var
+  TimeRec: TTemporalTimeRecord;
+  S: string;
+begin
+  // Validate annotations once up front — if invalid, reject immediately
+  S := StripAnnotations(AStr);
+  if (Length(AStr) > 0) and (AStr[Length(AStr)] = ']') and (S = AStr) then
+  begin
+    Result := False;
+    Exit;
+  end;
+  // Try date-only
+  if TryParseISODate(S, ADate) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  // Try full datetime
+  if TryParseISODateTime(AStr, ADate, TimeRec) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  Result := False;
+end;
+
+function CoerceToISOTime(const AStr: string; out ATime: TTemporalTimeRecord): Boolean;
+var
+  S: string;
+  TPos: Integer;
+begin
+  // Strip offset and annotations
+  S := StripOffsetAndAnnotations(AStr);
+  // Try time-only
+  if TryParseISOTime(S, ATime) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  // If string has T separator, extract and parse the time part only
+  // (but do NOT accept date-only strings — no implicit midnight)
+  TPos := System.Pos('T', S);
+  if TPos = 0 then
+    TPos := System.Pos('t', S);
+  if TPos > 0 then
+  begin
+    S := Copy(S, TPos + 1, Length(S) - TPos);
+    if (Length(S) > 0) and TryParseISOTime(S, ATime) then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+  Result := False;
+end;
+
+function CoerceToISODateTime(const AStr: string; out ADate: TTemporalDateRecord; out ATime: TTemporalTimeRecord): Boolean;
+var
+  S: string;
+begin
+  // Validate annotations up front
+  S := StripAnnotations(AStr);
+  if (Length(AStr) > 0) and (AStr[Length(AStr)] = ']') and (S = AStr) then
+  begin
+    Result := False;
+    Exit;
+  end;
+  if TryParseISODateTime(AStr, ADate, ATime) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  Result := False;
+end;
+
+function CoerceToISOInstant(const AStr: string; out ADate: TTemporalDateRecord;
+  out ATime: TTemporalTimeRecord; out AOffsetSeconds: Integer): Boolean;
+var
+  TimeZone, S: string;
+begin
+  // Validate annotations up front
+  S := StripAnnotations(AStr);
+  if (Length(AStr) > 0) and (AStr[Length(AStr)] = ']') and (S = AStr) then
+  begin
+    Result := False;
+    Exit;
+  end;
+  if TryParseISODateTimeWithOffset(AStr, ADate, ATime, AOffsetSeconds, TimeZone) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  // Fall back to basic datetime parsing (assume UTC)
+  if TryParseISODateTime(AStr, ADate, ATime) then
+  begin
+    AOffsetSeconds := 0;
+    Result := True;
+    Exit;
+  end;
+  Result := False;
+end;
+
+function CoerceToISOYearMonth(const AStr: string; out AYear, AMonth: Integer): Boolean;
+var
+  DateRec: TTemporalDateRecord;
+  TimeRec: TTemporalTimeRecord;
+begin
+  // Try short form YYYY-MM (with annotation stripping)
+  if TryParseISOYearMonth(AStr, AYear, AMonth) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  // Try full date or datetime, extract year+month
+  if TryParseISODate(AStr, DateRec) or TryParseISODateTime(AStr, DateRec, TimeRec) then
+  begin
+    AYear := DateRec.Year;
+    AMonth := DateRec.Month;
+    Result := True;
+    Exit;
+  end;
+  Result := False;
+end;
+
+function CoerceToISOMonthDay(const AStr: string; out AMonth, ADay: Integer): Boolean;
+var
+  DateRec: TTemporalDateRecord;
+  TimeRec: TTemporalTimeRecord;
+begin
+  // Try short form MM-DD or --MM-DD (with annotation stripping)
+  if TryParseISOMonthDay(AStr, AMonth, ADay) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  // Try full date or datetime, extract month+day
+  if TryParseISODate(AStr, DateRec) or TryParseISODateTime(AStr, DateRec, TimeRec) then
+  begin
+    AMonth := DateRec.Month;
+    ADay := DateRec.Day;
+    Result := True;
+    Exit;
+  end;
+  Result := False;
 end;
 
 end.

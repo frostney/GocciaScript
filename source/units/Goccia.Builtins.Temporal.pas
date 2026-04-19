@@ -153,11 +153,16 @@ var
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(DurationConstructorFn, 'Duration', 0);
   TGocciaTemporalDurationValue.ExposePrototype(ConstructorMethod);
-  ConstructorMethod.AssignProperty('from',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationFrom, 'from', 1));
-  ConstructorMethod.AssignProperty('compare',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationCompare, 'compare', 2));
-  FTemporalNamespace.AssignProperty('Duration', ConstructorMethod);
+  ConstructorMethod.DefineProperty('from',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationFrom, 'from', 1),
+      [pfConfigurable, pfWritable]));
+  ConstructorMethod.DefineProperty('compare',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationCompare, 'compare', 2),
+      [pfConfigurable, pfWritable]));
+  FTemporalNamespace.DefineProperty('Duration',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaTemporalBuiltin.DurationConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -257,6 +262,18 @@ var
   var
     DurRec: TTemporalDurationRecord;
     Obj: TGocciaObjectValue;
+
+    function GetFieldOr(const AName: string; const ADefault: Int64): Int64;
+    var
+      V: TGocciaValue;
+    begin
+      V := Obj.GetProperty(AName);
+      if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
+        Result := ADefault
+      else
+        Result := Trunc(V.ToNumberLiteral.Value);
+    end;
+
   begin
     if AArg is TGocciaTemporalDurationValue then
       Result := TGocciaTemporalDurationValue(AArg)
@@ -268,6 +285,15 @@ var
         DurRec.Years, DurRec.Months, DurRec.Weeks, DurRec.Days,
         DurRec.Hours, DurRec.Minutes, DurRec.Seconds,
         DurRec.Milliseconds, DurRec.Microseconds, DurRec.Nanoseconds);
+    end
+    else if AArg is TGocciaObjectValue then
+    begin
+      Obj := TGocciaObjectValue(AArg);
+      Result := TGocciaTemporalDurationValue.Create(
+        GetFieldOr('years', 0), GetFieldOr('months', 0), GetFieldOr('weeks', 0),
+        GetFieldOr('days', 0), GetFieldOr('hours', 0), GetFieldOr('minutes', 0),
+        GetFieldOr('seconds', 0), GetFieldOr('milliseconds', 0),
+        GetFieldOr('microseconds', 0), GetFieldOr('nanoseconds', 0));
     end
     else
     begin
@@ -304,15 +330,24 @@ var
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(InstantConstructorFn, 'Instant', 1);
   TGocciaTemporalInstantValue.ExposePrototype(ConstructorMethod);
-  ConstructorMethod.AssignProperty('from',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(InstantFrom, 'from', 1));
-  ConstructorMethod.AssignProperty('fromEpochMilliseconds',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(InstantFromEpochMilliseconds, 'fromEpochMilliseconds', 1));
-  ConstructorMethod.AssignProperty('fromEpochNanoseconds',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(InstantFromEpochNanoseconds, 'fromEpochNanoseconds', 1));
-  ConstructorMethod.AssignProperty('compare',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(InstantCompare, 'compare', 2));
-  FTemporalNamespace.AssignProperty('Instant', ConstructorMethod);
+  ConstructorMethod.DefineProperty('from',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(InstantFrom, 'from', 1),
+      [pfConfigurable, pfWritable]));
+  ConstructorMethod.DefineProperty('fromEpochMilliseconds',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(InstantFromEpochMilliseconds, 'fromEpochMilliseconds', 1),
+      [pfConfigurable, pfWritable]));
+  ConstructorMethod.DefineProperty('fromEpochNanoseconds',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(InstantFromEpochNanoseconds, 'fromEpochNanoseconds', 1),
+      [pfConfigurable, pfWritable]));
+  ConstructorMethod.DefineProperty('compare',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(InstantCompare, 'compare', 2),
+      [pfConfigurable, pfWritable]));
+  FTemporalNamespace.DefineProperty('Instant',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaTemporalBuiltin.InstantConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -344,6 +379,7 @@ var
   Inst: TGocciaTemporalInstantValue;
   DateRec: TTemporalDateRecord;
   TimeRec: TTemporalTimeRecord;
+  OffsetSeconds: Integer;
   EpochMs: Int64;
   SubMs: Integer;
 begin
@@ -356,11 +392,12 @@ begin
   end
   else if Arg is TGocciaStringLiteralValue then
   begin
-    if not TryParseISODateTime(TGocciaStringLiteralValue(Arg).Value, DateRec, TimeRec) then
+    if not CoerceToISOInstant(TGocciaStringLiteralValue(Arg).Value, DateRec, TimeRec, OffsetSeconds) then
       ThrowRangeError(SErrorInvalidISOInstant, SSuggestTemporalISOFormat);
     EpochMs := DateToEpochDays(DateRec.Year, DateRec.Month, DateRec.Day) * Int64(86400000) +
                Int64(TimeRec.Hour) * 3600000 + Int64(TimeRec.Minute) * 60000 +
                Int64(TimeRec.Second) * 1000 + TimeRec.Millisecond;
+    EpochMs := EpochMs - Int64(OffsetSeconds) * 1000;
     SubMs := TimeRec.Microsecond * 1000 + TimeRec.Nanosecond;
     Result := TGocciaTemporalInstantValue.Create(EpochMs, SubMs);
   end
@@ -410,6 +447,7 @@ var
   var
     DateRec: TTemporalDateRecord;
     TimeRec: TTemporalTimeRecord;
+    OffsetSeconds: Integer;
     EpochMs: Int64;
     SubMs: Integer;
   begin
@@ -417,11 +455,12 @@ var
       Result := TGocciaTemporalInstantValue(AArg)
     else if AArg is TGocciaStringLiteralValue then
     begin
-      if not TryParseISODateTime(TGocciaStringLiteralValue(AArg).Value, DateRec, TimeRec) then
+      if not CoerceToISOInstant(TGocciaStringLiteralValue(AArg).Value, DateRec, TimeRec, OffsetSeconds) then
         ThrowRangeError(SErrorInvalidISOInstant, SSuggestTemporalISOFormat);
       EpochMs := DateToEpochDays(DateRec.Year, DateRec.Month, DateRec.Day) * Int64(86400000) +
                  Int64(TimeRec.Hour) * 3600000 + Int64(TimeRec.Minute) * 60000 +
                  Int64(TimeRec.Second) * 1000 + TimeRec.Millisecond;
+      EpochMs := EpochMs - Int64(OffsetSeconds) * 1000;
       SubMs := TimeRec.Microsecond * 1000 + TimeRec.Nanosecond;
       Result := TGocciaTemporalInstantValue.Create(EpochMs, SubMs);
     end
@@ -456,11 +495,16 @@ var
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(PlainDateConstructorFn, 'PlainDate', 3);
   TGocciaTemporalPlainDateValue.ExposePrototype(ConstructorMethod);
-  ConstructorMethod.AssignProperty('from',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainDateFrom, 'from', 1));
-  ConstructorMethod.AssignProperty('compare',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainDateCompare, 'compare', 2));
-  FTemporalNamespace.AssignProperty('PlainDate', ConstructorMethod);
+  ConstructorMethod.DefineProperty('from',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainDateFrom, 'from', 1),
+      [pfConfigurable, pfWritable]));
+  ConstructorMethod.DefineProperty('compare',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainDateCompare, 'compare', 2),
+      [pfConfigurable, pfWritable]));
+  FTemporalNamespace.DefineProperty('PlainDate',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaTemporalBuiltin.PlainDateConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -479,7 +523,6 @@ var
   Arg, OptionsArg, V: TGocciaValue;
   D: TGocciaTemporalPlainDateValue;
   DateRec: TTemporalDateRecord;
-  TimeRec: TTemporalTimeRecord;
   Obj: TGocciaObjectValue;
   Y, Mo, Dy, MaxDay: Integer;
   Overflow: TTemporalOverflow;
@@ -502,12 +545,9 @@ begin
   end
   else if Arg is TGocciaStringLiteralValue then
   begin
-    if TryParseISODate(TGocciaStringLiteralValue(Arg).Value, DateRec) then
-      Result := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day)
-    else if TryParseISODateTime(TGocciaStringLiteralValue(Arg).Value, DateRec, TimeRec) then
-      Result := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day)
-    else
+    if not CoerceToISODate(TGocciaStringLiteralValue(Arg).Value, DateRec) then
       ThrowRangeError(SErrorInvalidISODate, SSuggestTemporalISOFormat);
+    Result := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day);
   end
   else if Arg is TGocciaObjectValue then
   begin
@@ -564,21 +604,39 @@ var
   function CoerceDate(const AArg: TGocciaValue): TGocciaTemporalPlainDateValue;
   var
     DateRec: TTemporalDateRecord;
-    TimeRec: TTemporalTimeRecord;
+    Obj: TGocciaObjectValue;
+    VY, VM, VD: TGocciaValue;
   begin
     if AArg is TGocciaTemporalPlainDateValue then
       Result := TGocciaTemporalPlainDateValue(AArg)
     else if AArg is TGocciaStringLiteralValue then
     begin
-      if TryParseISODate(TGocciaStringLiteralValue(AArg).Value, DateRec) then
-        Result := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day)
-      else if TryParseISODateTime(TGocciaStringLiteralValue(AArg).Value, DateRec, TimeRec) then
-        Result := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day)
-      else
+      if not CoerceToISODate(TGocciaStringLiteralValue(AArg).Value, DateRec) then
       begin
         ThrowRangeError(SErrorInvalidISODate, SSuggestTemporalISOFormat);
         Result := nil;
-      end;
+      end
+      else
+        Result := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day);
+    end
+    else if AArg is TGocciaObjectValue then
+    begin
+      Obj := TGocciaObjectValue(AArg);
+      VY := Obj.GetProperty(PROP_YEAR);
+      VM := Obj.GetProperty(PROP_MONTH);
+      VD := Obj.GetProperty(PROP_DAY);
+      if (VY = nil) or (VY is TGocciaUndefinedLiteralValue) or
+         (VM = nil) or (VM is TGocciaUndefinedLiteralValue) or
+         (VD = nil) or (VD is TGocciaUndefinedLiteralValue) then
+      begin
+        ThrowTypeError(SErrorTemporalPlainDateCompareArg, SSuggestTemporalCompareArg);
+        Result := nil;
+      end
+      else
+        Result := TGocciaTemporalPlainDateValue.Create(
+          Trunc(VY.ToNumberLiteral.Value),
+          Trunc(VM.ToNumberLiteral.Value),
+          Trunc(VD.ToNumberLiteral.Value));
     end
     else
     begin
@@ -603,11 +661,16 @@ var
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(PlainTimeConstructorFn, 'PlainTime', 0);
   TGocciaTemporalPlainTimeValue.ExposePrototype(ConstructorMethod);
-  ConstructorMethod.AssignProperty('from',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainTimeFrom, 'from', 1));
-  ConstructorMethod.AssignProperty('compare',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainTimeCompare, 'compare', 2));
-  FTemporalNamespace.AssignProperty('PlainTime', ConstructorMethod);
+  ConstructorMethod.DefineProperty('from',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainTimeFrom, 'from', 1),
+      [pfConfigurable, pfWritable]));
+  ConstructorMethod.DefineProperty('compare',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainTimeCompare, 'compare', 2),
+      [pfConfigurable, pfWritable]));
+  FTemporalNamespace.DefineProperty('PlainTime',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaTemporalBuiltin.PlainTimeConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -653,7 +716,7 @@ begin
   end
   else if Arg is TGocciaStringLiteralValue then
   begin
-    if not TryParseISOTime(TGocciaStringLiteralValue(Arg).Value, TimeRec) then
+    if not CoerceToISOTime(TGocciaStringLiteralValue(Arg).Value, TimeRec) then
       ThrowRangeError(SErrorInvalidISOTime, SSuggestTemporalISOFormat);
     Result := TGocciaTemporalPlainTimeValue.Create(
       TimeRec.Hour, TimeRec.Minute, TimeRec.Second,
@@ -691,12 +754,15 @@ var
   function CoerceTime(const AArg: TGocciaValue): TGocciaTemporalPlainTimeValue;
   var
     TimeRec: TTemporalTimeRecord;
+    Obj: TGocciaObjectValue;
+    V: TGocciaValue;
+    H, Mi, S, Ms, Us, Ns: Integer;
   begin
     if AArg is TGocciaTemporalPlainTimeValue then
       Result := TGocciaTemporalPlainTimeValue(AArg)
     else if AArg is TGocciaStringLiteralValue then
     begin
-      if not TryParseISOTime(TGocciaStringLiteralValue(AArg).Value, TimeRec) then
+      if not CoerceToISOTime(TGocciaStringLiteralValue(AArg).Value, TimeRec) then
       begin
         ThrowRangeError(SErrorInvalidISOTime, SSuggestTemporalISOFormat);
         Result := nil;
@@ -705,6 +771,24 @@ var
         Result := TGocciaTemporalPlainTimeValue.Create(
           TimeRec.Hour, TimeRec.Minute, TimeRec.Second,
           TimeRec.Millisecond, TimeRec.Microsecond, TimeRec.Nanosecond);
+    end
+    else if AArg is TGocciaObjectValue then
+    begin
+      Obj := TGocciaObjectValue(AArg);
+      H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
+      V := Obj.GetProperty(PROP_HOUR);
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then H := Trunc(V.ToNumberLiteral.Value);
+      V := Obj.GetProperty(PROP_MINUTE);
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mi := Trunc(V.ToNumberLiteral.Value);
+      V := Obj.GetProperty(PROP_SECOND);
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then S := Trunc(V.ToNumberLiteral.Value);
+      V := Obj.GetProperty(PROP_MILLISECOND);
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ms := Trunc(V.ToNumberLiteral.Value);
+      V := Obj.GetProperty(PROP_MICROSECOND);
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Us := Trunc(V.ToNumberLiteral.Value);
+      V := Obj.GetProperty(PROP_NANOSECOND);
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ns := Trunc(V.ToNumberLiteral.Value);
+      Result := TGocciaTemporalPlainTimeValue.Create(H, Mi, S, Ms, Us, Ns);
     end
     else
     begin
@@ -730,11 +814,16 @@ var
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(PlainDateTimeConstructorFn, 'PlainDateTime', 3);
   TGocciaTemporalPlainDateTimeValue.ExposePrototype(ConstructorMethod);
-  ConstructorMethod.AssignProperty('from',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainDateTimeFrom, 'from', 1));
-  ConstructorMethod.AssignProperty('compare',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainDateTimeCompare, 'compare', 2));
-  FTemporalNamespace.AssignProperty('PlainDateTime', ConstructorMethod);
+  ConstructorMethod.DefineProperty('from',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainDateTimeFrom, 'from', 1),
+      [pfConfigurable, pfWritable]));
+  ConstructorMethod.DefineProperty('compare',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainDateTimeCompare, 'compare', 2),
+      [pfConfigurable, pfWritable]));
+  FTemporalNamespace.DefineProperty('PlainDateTime',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaTemporalBuiltin.PlainDateTimeConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -785,7 +874,7 @@ begin
   end
   else if Arg is TGocciaStringLiteralValue then
   begin
-    if not TryParseISODateTime(TGocciaStringLiteralValue(Arg).Value, DateRec, TimeRec) then
+    if not CoerceToISODateTime(TGocciaStringLiteralValue(Arg).Value, DateRec, TimeRec) then
       ThrowRangeError(SErrorInvalidISODateTime, SSuggestTemporalISOFormat);
     Result := TGocciaTemporalPlainDateTimeValue.Create(
       DateRec.Year, DateRec.Month, DateRec.Day,
@@ -823,12 +912,15 @@ var
   var
     DateRec: TTemporalDateRecord;
     TimeRec: TTemporalTimeRecord;
+    Obj: TGocciaObjectValue;
+    V: TGocciaValue;
+    Y, Mo, D, H, Mi, S, Ms, Us, Ns: Integer;
   begin
     if AArg is TGocciaTemporalPlainDateTimeValue then
       Result := TGocciaTemporalPlainDateTimeValue(AArg)
     else if AArg is TGocciaStringLiteralValue then
     begin
-      if not TryParseISODateTime(TGocciaStringLiteralValue(AArg).Value, DateRec, TimeRec) then
+      if not CoerceToISODateTime(TGocciaStringLiteralValue(AArg).Value, DateRec, TimeRec) then
       begin
         ThrowRangeError(SErrorInvalidISODateTime, SSuggestTemporalISOFormat);
         Result := nil;
@@ -838,6 +930,42 @@ var
           DateRec.Year, DateRec.Month, DateRec.Day,
           TimeRec.Hour, TimeRec.Minute, TimeRec.Second,
           TimeRec.Millisecond, TimeRec.Microsecond, TimeRec.Nanosecond);
+    end
+    else if AArg is TGocciaObjectValue then
+    begin
+      Obj := TGocciaObjectValue(AArg);
+      V := Obj.GetProperty(PROP_YEAR);
+      if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
+      begin
+        ThrowTypeError(SErrorTemporalPlainDateTimeCompareArg, SSuggestTemporalCompareArg);
+        Result := nil;
+        Exit;
+      end;
+      Y := Trunc(V.ToNumberLiteral.Value);
+      V := Obj.GetProperty(PROP_MONTH);
+      if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
+      begin
+        ThrowTypeError(SErrorTemporalPlainDateTimeCompareArg, SSuggestTemporalCompareArg);
+        Result := nil;
+        Exit;
+      end;
+      Mo := Trunc(V.ToNumberLiteral.Value);
+      V := Obj.GetProperty(PROP_DAY);
+      if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
+      begin
+        ThrowTypeError(SErrorTemporalPlainDateTimeCompareArg, SSuggestTemporalCompareArg);
+        Result := nil;
+        Exit;
+      end;
+      D := Trunc(V.ToNumberLiteral.Value);
+      H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
+      V := Obj.GetProperty(PROP_HOUR); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then H := Trunc(V.ToNumberLiteral.Value);
+      V := Obj.GetProperty(PROP_MINUTE); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Mi := Trunc(V.ToNumberLiteral.Value);
+      V := Obj.GetProperty(PROP_SECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then S := Trunc(V.ToNumberLiteral.Value);
+      V := Obj.GetProperty(PROP_MILLISECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ms := Trunc(V.ToNumberLiteral.Value);
+      V := Obj.GetProperty(PROP_MICROSECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Us := Trunc(V.ToNumberLiteral.Value);
+      V := Obj.GetProperty(PROP_NANOSECOND); if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then Ns := Trunc(V.ToNumberLiteral.Value);
+      Result := TGocciaTemporalPlainDateTimeValue.Create(Y, Mo, D, H, Mi, S, Ms, Us, Ns);
     end
     else
     begin
@@ -866,11 +994,16 @@ var
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(PlainYearMonthConstructorFn, 'PlainYearMonth', 2);
   TGocciaTemporalPlainYearMonthValue.ExposePrototype(ConstructorMethod);
-  ConstructorMethod.AssignProperty('from',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainYearMonthFrom, 'from', 1));
-  ConstructorMethod.AssignProperty('compare',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainYearMonthCompare, 'compare', 2));
-  FTemporalNamespace.AssignProperty('PlainYearMonth', ConstructorMethod);
+  ConstructorMethod.DefineProperty('from',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainYearMonthFrom, 'from', 1),
+      [pfConfigurable, pfWritable]));
+  ConstructorMethod.DefineProperty('compare',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainYearMonthCompare, 'compare', 2),
+      [pfConfigurable, pfWritable]));
+  FTemporalNamespace.DefineProperty('PlainYearMonth',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaTemporalBuiltin.PlainYearMonthConstructorFn(const AArgs: TGocciaArgumentsCollection;
@@ -909,7 +1042,7 @@ begin
   end
   else if Arg is TGocciaStringLiteralValue then
   begin
-    if not TryParseISOYearMonth(TGocciaStringLiteralValue(Arg).Value, Y, M) then
+    if not CoerceToISOYearMonth(TGocciaStringLiteralValue(Arg).Value, Y, M) then
       ThrowRangeError(SErrorInvalidISOYearMonth, SSuggestTemporalISOFormat);
     Result := TGocciaTemporalPlainYearMonthValue.Create(Y, M);
   end
@@ -968,7 +1101,7 @@ var
       Result := TGocciaTemporalPlainYearMonthValue(AArg)
     else if AArg is TGocciaStringLiteralValue then
     begin
-      if not TryParseISOYearMonth(TGocciaStringLiteralValue(AArg).Value, Y, M) then
+      if not CoerceToISOYearMonth(TGocciaStringLiteralValue(AArg).Value, Y, M) then
       begin
         ThrowRangeError(SErrorInvalidISOYearMonth, SSuggestTemporalISOFormat);
         Result := nil;
@@ -1007,11 +1140,16 @@ var
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(PlainMonthDayConstructorFn, 'PlainMonthDay', 2);
   TGocciaTemporalPlainMonthDayValue.ExposePrototype(ConstructorMethod);
-  ConstructorMethod.AssignProperty('from',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainMonthDayFrom, 'from', 1));
-  ConstructorMethod.AssignProperty('compare',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainMonthDayCompare, 'compare', 2));
-  FTemporalNamespace.AssignProperty('PlainMonthDay', ConstructorMethod);
+  ConstructorMethod.DefineProperty('from',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainMonthDayFrom, 'from', 1),
+      [pfConfigurable, pfWritable]));
+  ConstructorMethod.DefineProperty('compare',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainMonthDayCompare, 'compare', 2),
+      [pfConfigurable, pfWritable]));
+  FTemporalNamespace.DefineProperty('PlainMonthDay',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaTemporalBuiltin.PlainMonthDayConstructorFn(const AArgs: TGocciaArgumentsCollection;
@@ -1043,7 +1181,7 @@ begin
   end
   else if Arg is TGocciaStringLiteralValue then
   begin
-    if not TryParseISOMonthDay(TGocciaStringLiteralValue(Arg).Value, M, D) then
+    if not CoerceToISOMonthDay(TGocciaStringLiteralValue(Arg).Value, M, D) then
       ThrowRangeError(SErrorInvalidISOMonthDay, SSuggestTemporalISOFormat);
     Result := TGocciaTemporalPlainMonthDayValue.Create(M, D);
   end
@@ -1098,7 +1236,7 @@ var
       Result := TGocciaTemporalPlainMonthDayValue(AArg)
     else if AArg is TGocciaStringLiteralValue then
     begin
-      if not TryParseISOMonthDay(TGocciaStringLiteralValue(AArg).Value, M, D) then
+      if not CoerceToISOMonthDay(TGocciaStringLiteralValue(AArg).Value, M, D) then
       begin
         ThrowRangeError(SErrorInvalidISOMonthDay, SSuggestTemporalISOFormat);
         Result := nil;
@@ -1137,11 +1275,16 @@ var
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(ZonedDateTimeConstructorFn, 'ZonedDateTime', 2);
   TGocciaTemporalZonedDateTimeValue.ExposePrototype(ConstructorMethod);
-  ConstructorMethod.AssignProperty('from',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(ZonedDateTimeFrom, 'from', 1));
-  ConstructorMethod.AssignProperty('compare',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(ZonedDateTimeCompare, 'compare', 2));
-  FTemporalNamespace.AssignProperty('ZonedDateTime', ConstructorMethod);
+  ConstructorMethod.DefineProperty('from',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(ZonedDateTimeFrom, 'from', 1),
+      [pfConfigurable, pfWritable]));
+  ConstructorMethod.DefineProperty('compare',
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(ZonedDateTimeCompare, 'compare', 2),
+      [pfConfigurable, pfWritable]));
+  FTemporalNamespace.DefineProperty('ZonedDateTime',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 // TC39 Temporal §6.1.1 new Temporal.ZonedDateTime(epochNanoseconds, timeZone)
@@ -1286,7 +1429,8 @@ begin
   NowObj.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NowPlainDateTimeISO, 'plainDateTimeISO', 0));
   NowObj.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NowTimeZoneId, 'timeZoneId', 0));
   NowObj.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NowZonedDateTimeISO, 'zonedDateTimeISO', 0));
-  FTemporalNamespace.AssignProperty('Now', NowObj);
+  FTemporalNamespace.DefineProperty('Now',
+    TGocciaPropertyDescriptorData.Create(NowObj, [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaTemporalBuiltin.NowInstant(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

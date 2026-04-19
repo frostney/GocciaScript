@@ -19,7 +19,8 @@ type
     rmHalfCeil,
     rmHalfFloor,
     rmHalfTrunc,
-    rmHalfEven
+    rmHalfEven,
+    rmExpand
   );
 
   TTemporalOverflow = (toConstrain, toReject);
@@ -65,6 +66,22 @@ function RoundBigIntWithMode(const AValue: TBigInteger; const ADivisor: TBigInte
 function FormatTimeWithPrecision(const AHour, AMinute, ASecond, AMillisecond,
   AMicrosecond, ANanosecond: Integer; const AFractionalDigits: Integer): string;
 
+type
+  TTemporalCalendarDisplay = (tcdAuto, tcdAlways, tcdNever, tcdCritical);
+
+{ Shared toString options — call from any Temporal toString method }
+procedure ResolveTemporalToStringOptions(
+  const AOptions: TGocciaObjectValue;
+  out AFractionalDigits: Integer;
+  out ARoundingMode: TTemporalRoundingMode);
+function GetCalendarDisplay(const AOptions: TGocciaObjectValue): TTemporalCalendarDisplay;
+procedure RoundTimeForToString(
+  var AHour, AMinute, ASecond, AMs, AUs, ANs: Integer;
+  var AExtraDays: Integer;
+  const AFractionalDigits: Integer;
+  const ARoundingMode: TTemporalRoundingMode);
+function FormatCalendarAnnotation(const ACalendarDisplay: TTemporalCalendarDisplay): string;
+
 implementation
 
 uses
@@ -103,6 +120,7 @@ begin
   else if AStr = 'halfFloor' then AMode := rmHalfFloor
   else if AStr = 'halfTrunc' then AMode := rmHalfTrunc
   else if AStr = 'halfEven' then AMode := rmHalfEven
+  else if AStr = 'expand' then AMode := rmExpand
   else Result := False;
 end;
 
@@ -366,6 +384,14 @@ begin
       else
         Result := Quotient * ADivisor;
     end;
+    rmExpand:
+    begin
+      // Always round away from zero
+      if AValue > 0 then
+        Result := (Quotient + 1) * ADivisor
+      else
+        Result := (Quotient - 1) * ADivisor;
+    end;
   else
     Result := Quotient * ADivisor;
   end;
@@ -487,6 +513,14 @@ begin
       else
         Result := Quotient.Multiply(ADivisor);
     end;
+    rmExpand:
+    begin
+      // Always round away from zero
+      if AValue.IsPositive then
+        Result := Quotient.Add(TBigInteger.One).Multiply(ADivisor)
+      else
+        Result := Quotient.Subtract(TBigInteger.One).Multiply(ADivisor);
+    end;
   else
     Result := Quotient.Multiply(ADivisor);
   end;
@@ -515,6 +549,132 @@ begin
   begin
     Frac := Format('%.3d%.3d%.3d', [AMillisecond, AMicrosecond, ANanosecond]);
     Result := Result + '.' + Copy(Frac, 1, AFractionalDigits);
+  end;
+end;
+
+{ --------------------------------------------------------------------------- }
+{ Shared toString options                                                      }
+{ --------------------------------------------------------------------------- }
+
+procedure ResolveTemporalToStringOptions(
+  const AOptions: TGocciaObjectValue;
+  out AFractionalDigits: Integer;
+  out ARoundingMode: TTemporalRoundingMode);
+var
+  SmallestUnit: TTemporalUnit;
+  SmallestStr: string;
+begin
+  AFractionalDigits := -1; // auto
+  ARoundingMode := rmTrunc;
+
+  if AOptions = nil then Exit;
+
+  // Check smallestUnit first — overrides fractionalSecondDigits
+  SmallestStr := GetOptionString(AOptions, 'smallestUnit', '');
+  if SmallestStr <> '' then
+  begin
+    if not GetTemporalUnitFromString(SmallestStr, SmallestUnit) then
+      ThrowRangeError(Format(SErrorInvalidSmallestUnit, [SmallestStr]), SSuggestTemporalValidUnits);
+
+    // smallestUnit and fractionalSecondDigits are mutually exclusive
+    case SmallestUnit of
+      tuMinute:       AFractionalDigits := -2; // special: truncate seconds entirely
+      tuSecond:       AFractionalDigits := 0;
+      tuMillisecond:  AFractionalDigits := 3;
+      tuMicrosecond:  AFractionalDigits := 6;
+      tuNanosecond:   AFractionalDigits := 9;
+    else
+      ThrowRangeError(Format(SErrorInvalidSmallestUnit, [SmallestStr]), SSuggestTemporalValidUnits);
+    end;
+  end
+  else
+    AFractionalDigits := GetFractionalSecondDigits(AOptions);
+
+  ARoundingMode := GetRoundingMode(AOptions, rmTrunc);
+end;
+
+function GetCalendarDisplay(const AOptions: TGocciaObjectValue): TTemporalCalendarDisplay;
+var
+  S: string;
+begin
+  Result := tcdAuto;
+  if AOptions = nil then Exit;
+  S := GetOptionString(AOptions, 'calendarName', 'auto');
+  if S = 'auto' then
+    Result := tcdAuto
+  else if S = 'always' then
+    Result := tcdAlways
+  else if S = 'never' then
+    Result := tcdNever
+  else if S = 'critical' then
+    Result := tcdCritical
+  else
+    ThrowRangeError('Invalid calendarName option: ' + S, SSuggestTemporalRoundArg);
+end;
+
+procedure RoundTimeForToString(
+  var AHour, AMinute, ASecond, AMs, AUs, ANs: Integer;
+  var AExtraDays: Integer;
+  const AFractionalDigits: Integer;
+  const ARoundingMode: TTemporalRoundingMode);
+var
+  TotalNs, Divisor, Rounded: Int64;
+  ExDays: Int64;
+  BalancedTime: TTemporalTimeRecord;
+begin
+  AExtraDays := 0;
+
+  // No rounding needed for auto or nanosecond precision
+  if (AFractionalDigits < 0) and (AFractionalDigits <> -2) then Exit;
+  if AFractionalDigits = 9 then Exit;
+
+  // Convert time to total nanoseconds
+  TotalNs := Int64(AHour) * NANOSECONDS_PER_HOUR +
+             Int64(AMinute) * NANOSECONDS_PER_MINUTE +
+             Int64(ASecond) * NANOSECONDS_PER_SECOND +
+             Int64(AMs) * NANOSECONDS_PER_MILLISECOND +
+             Int64(AUs) * NANOSECONDS_PER_MICROSECOND +
+             Int64(ANs);
+
+  // Determine divisor based on precision
+  if AFractionalDigits = -2 then
+    Divisor := NANOSECONDS_PER_MINUTE  // smallestUnit: 'minute'
+  else if AFractionalDigits = 0 then
+    Divisor := NANOSECONDS_PER_SECOND
+  else if AFractionalDigits <= 3 then
+    Divisor := NANOSECONDS_PER_MILLISECOND
+  else if AFractionalDigits <= 6 then
+    Divisor := NANOSECONDS_PER_MICROSECOND
+  else
+    Divisor := 1;
+
+  Rounded := RoundWithMode(TotalNs, Divisor, ARoundingMode);
+
+  // Balance back into time fields
+  BalancedTime := BalanceTime(Rounded div NANOSECONDS_PER_HOUR,
+    (Rounded mod NANOSECONDS_PER_HOUR) div NANOSECONDS_PER_MINUTE,
+    (Rounded mod NANOSECONDS_PER_MINUTE) div NANOSECONDS_PER_SECOND,
+    Integer((Rounded mod NANOSECONDS_PER_SECOND) div NANOSECONDS_PER_MILLISECOND),
+    Integer((Rounded mod NANOSECONDS_PER_MILLISECOND) div NANOSECONDS_PER_MICROSECOND),
+    Integer(Rounded mod NANOSECONDS_PER_MICROSECOND),
+    ExDays);
+
+  AHour := BalancedTime.Hour;
+  AMinute := BalancedTime.Minute;
+  ASecond := BalancedTime.Second;
+  AMs := BalancedTime.Millisecond;
+  AUs := BalancedTime.Microsecond;
+  ANs := BalancedTime.Nanosecond;
+  AExtraDays := Integer(ExDays);
+end;
+
+function FormatCalendarAnnotation(const ACalendarDisplay: TTemporalCalendarDisplay): string;
+begin
+  case ACalendarDisplay of
+    tcdAlways:   Result := '[u-ca=iso8601]';
+    tcdCritical: Result := '[!u-ca=iso8601]';
+  else
+    Result := ''; // auto and never: omit for iso8601
   end;
 end;
 

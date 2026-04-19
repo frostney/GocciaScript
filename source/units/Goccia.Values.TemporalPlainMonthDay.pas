@@ -28,6 +28,7 @@ type
     function MonthDayToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MonthDayValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MonthDayToPlainDate(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MonthDayToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure InitializePrototype;
   public
@@ -50,9 +51,11 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SymbolValue,
   Goccia.Values.TemporalPlainDate;
 
 threadvar
@@ -71,8 +74,6 @@ end;
 
 function CoercePlainMonthDay(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainMonthDayValue;
 var
-  S: string;
-  DashPos: Integer;
   MonthPart, DayPart: Integer;
   Obj: TGocciaObjectValue;
   V, VMonthCode, VDay: TGocciaValue;
@@ -85,13 +86,7 @@ begin
       TGocciaTemporalPlainMonthDayValue(AValue).FReferenceYear)
   else if AValue is TGocciaStringLiteralValue then
   begin
-    S := TGocciaStringLiteralValue(AValue).Value;
-    DashPos := Pos('-', S);
-    if (DashPos < 2) or (DashPos >= Length(S)) then
-      ThrowRangeError(Format(SErrorInvalidMonthDayStringFor, [AMethod]), SSuggestTemporalISOFormat);
-    if not TryStrToInt(Copy(S, 1, DashPos - 1), MonthPart) then
-      ThrowRangeError(Format(SErrorInvalidMonthDayStringFor, [AMethod]), SSuggestTemporalISOFormat);
-    if not TryStrToInt(Copy(S, DashPos + 1, Length(S) - DashPos), DayPart) then
+    if not CoerceToISOMonthDay(TGocciaStringLiteralValue(AValue).Value, MonthPart, DayPart) then
       ThrowRangeError(Format(SErrorInvalidMonthDayStringFor, [AMethod]), SSuggestTemporalISOFormat);
     Result := TGocciaTemporalPlainMonthDayValue.Create(MonthPart, DayPart);
   end
@@ -175,6 +170,11 @@ begin
       Members.AddMethod(MonthDayToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(MonthDayValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(MonthDayToPlainDate, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(MonthDayToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddSymbolDataProperty(
+        TGocciaSymbolValue.WellKnownToStringTag,
+        TGocciaStringLiteralValue.Create('Temporal.PlainMonthDay'),
+        [pfConfigurable]);
       FPrototypeMembers := Members.ToDefinitions;
     finally
       Members.Free;
@@ -292,9 +292,18 @@ end;
 function TGocciaTemporalPlainMonthDayValue.MonthDayToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   MD: TGocciaTemporalPlainMonthDayValue;
+  Arg: TGocciaValue;
+  OptionsObj: TGocciaObjectValue;
+  CalDisp: TTemporalCalendarDisplay;
 begin
   MD := AsPlainMonthDay(AThisValue, 'PlainMonthDay.prototype.toString');
-  Result := TGocciaStringLiteralValue.Create(PadTwo(MD.FMonth) + '-' + PadTwo(MD.FDay));
+  OptionsObj := nil;
+  Arg := AArgs.GetElement(0);
+  if Assigned(Arg) and (Arg is TGocciaObjectValue) then
+    OptionsObj := TGocciaObjectValue(Arg);
+  CalDisp := GetCalendarDisplay(OptionsObj);
+  Result := TGocciaStringLiteralValue.Create(
+    PadTwo(MD.FMonth) + '-' + PadTwo(MD.FDay) + FormatCalendarAnnotation(CalDisp));
 end;
 
 // TC39 Temporal §11.3.9 Temporal.PlainMonthDay.prototype.toJSON()
@@ -333,6 +342,11 @@ begin
 
   YearValue := Trunc(V.ToNumberLiteral.Value);
   Result := TGocciaTemporalPlainDateValue.Create(YearValue, MD.FMonth, MD.FDay);
+end;
+
+function TGocciaTemporalPlainMonthDayValue.MonthDayToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := MonthDayToString(AArgs, AThisValue);
 end;
 
 end.
