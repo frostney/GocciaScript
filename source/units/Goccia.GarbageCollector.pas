@@ -140,10 +140,6 @@ function DetectDefaultMaxBytes: Int64;
 
 implementation
 
-{$IFDEF UNIX}
-function libc_sysconf(Name: Integer): Int64; cdecl; external 'c' name 'sysconf';
-{$ENDIF}
-
 {$IF DEFINED(MSWINDOWS) OR DEFINED(GC_DEBUG) OR DEFINED(GC_TIMING)}
 uses
   {$IFDEF MSWINDOWS}
@@ -153,6 +149,10 @@ uses
   TimingUtils,
   {$ENDIF}
   SysUtils;
+{$ENDIF}
+
+{$IFDEF UNIX}
+function libc_sysconf(Name: Integer): Int64; cdecl; external 'c' name 'sysconf';
 {$ENDIF}
 
 { Returns the total physical memory in bytes, or 0 if detection fails. }
