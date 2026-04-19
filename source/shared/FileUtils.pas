@@ -11,6 +11,10 @@ uses
 function FindAllFiles(const ADirectory: string; const AFileExtension: string): TStringList; overload;
 function FindAllFiles(const ADirectory: string; const AFileExtensions: array of string): TStringList; overload;
 
+{ Read an entire file as raw bytes and tag the result as UTF-8.
+  No BOM stripping or newline normalization is performed. }
+function ReadUTF8FileText(const APath: string): UTF8String;
+
 implementation
 
 function MatchesExtension(const AName: string; const AExtensions: array of string): Boolean;
@@ -63,6 +67,24 @@ end;
 function FindAllFiles(const ADirectory: string; const AFileExtension: string): TStringList;
 begin
   Result := FindAllFiles(ADirectory, [AFileExtension]);
+end;
+
+function ReadUTF8FileText(const APath: string): UTF8String;
+var
+  SourceText: RawByteString;
+  Stream: TFileStream;
+begin
+  Stream := TFileStream.Create(APath, fmOpenRead or fmShareDenyWrite);
+  try
+    SetLength(SourceText, Stream.Size);
+    if Length(SourceText) > 0 then
+      Stream.ReadBuffer(Pointer(SourceText)^, Length(SourceText));
+  finally
+    Stream.Free;
+  end;
+
+  SetCodePage(SourceText, CP_UTF8, False);
+  Result := UTF8String(SourceText);
 end;
 
 end.

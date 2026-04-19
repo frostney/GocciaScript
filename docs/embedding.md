@@ -162,7 +162,9 @@ Scripts can then import using the alias:
 import { formatDate } from "@/utils/dates";
 ```
 
-`TGocciaModuleResolver` also exposes `LoadImportMap(path)` and `DiscoverProjectConfig(startDirectory)` helpers for browser-style import map JSON and `goccia.json` project configuration files. The shared CLI frontends (`GocciaScriptLoader`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, and `GocciaREPL`) all use the same `Goccia.Modules.Configuration.ConfigureModuleResolver(...)` helper on top of this resolver surface.
+`TGocciaModuleResolver` also exposes `LoadImportMap(path)` and `DiscoverProjectConfig(startDirectory)` helpers for browser-style import map JSON and `goccia.json` project configuration files. The shared CLI frontends (`GocciaScriptLoader`, `GocciaTestRunner`, and `GocciaBenchmarkRunner`) all use `Goccia.Modules.Configuration.ConfigureModuleResolver(...)` on top of this resolver surface.
+
+**Config file discovery is automatic for CLI apps** — `TGocciaCLIApplication` discovers `goccia.toml` / `goccia.json5` / `goccia.json` (priority order: TOML > JSON5 > JSON) from the entry file's directory upward and applies option defaults before execution. When embedding the engine directly, this does not happen automatically. To replicate it, use the general-purpose `CLI.ConfigFile` unit (`DiscoverConfigFile`, `ApplyConfigFile`). Note that `ApplyConfigFile` only handles `.json` by default — to support `.json5` and `.toml`, register their parsers first via `RegisterConfigParser` (see `Goccia.CLI.Application.pas` for the pattern). For import-map resolution only, use `TGocciaModuleResolver.DiscoverProjectConfig` and `LoadImportMap`. See [Configuration File](build-system.md#configuration-file-gocciajson) for the full reference.
 
 ### Custom Resolver
 

@@ -116,8 +116,8 @@ printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
 ./build/GocciaBenchmarkRunner benchmarks --import-map=imports.json
 ./build/GocciaREPL --import-map=imports.json
 
-# When --import-map is omitted, the CLI walks up from the entry file (or cwd for stdin/GocciaREPL)
-# and uses the first goccia.json it finds.
+# When --import-map is omitted, the CLI walks up from the entry file directory
+# and uses the first goccia.json (or .json5 / .toml) it finds.
 printf 'import { add } from "@/math"; add(1, 2);' | ./build/GocciaScriptLoader
 
 # Abort long-running scripts
@@ -140,6 +140,86 @@ printf "const f = () => f(); f();" | ./build/GocciaScriptLoader --max-instructio
 # Run benchmarks via bytecode VM
 ./build/GocciaBenchmarkRunner benchmarks --mode=bytecode
 printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner - --mode=bytecode
+```
+
+### Configuration File (`goccia.json`)
+
+All CLI options can also be set via a project configuration file. The CLI discovers the file by walking up from the **entry file's directory** and checking for (in priority order):
+
+1. `goccia.toml`
+2. `goccia.json5`
+3. `goccia.json`
+
+The first file found is loaded. CLI arguments override any values set in the config file.
+
+```json
+{
+  "mode": "bytecode",
+  "asi": true,
+  "timeout": 5000,
+  "max-memory": 10485760,
+  "imports": {
+    "@/": "./src/"
+  }
+}
+```
+
+Config keys mirror CLI flag names (e.g. `--mode` → `"mode"`, `--max-memory` → `"max-memory"`). Boolean flags use `true`/`false`. Array values (like `alias`) use JSON arrays. The `imports` object is handled by the module resolver and coexists with CLI option keys.
+
+**`extends`** — A config file can inherit from a base config using the `extends` key. The path is resolved relative to the config file's directory. Child values override parent values:
+
+```json
+{
+  "extends": "../goccia.json",
+  "mode": "bytecode"
+}
+```
+
+This is useful for test subdirectories that need specific flags. For example, `tests/language/asi/goccia.json` can enable ASI for all tests in that folder:
+
+```json
+{
+  "asi": true
+}
+```
+
+TOML equivalent (`goccia.toml`):
+
+```toml
+asi = true
+mode = "bytecode"
+timeout = 5000
+max-memory = 10485760
+```
+
+**CLI vs. embedding** — Config file discovery is automatic for all CLI applications (`GocciaScriptLoader`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, `GocciaBundler`) because they inherit from `TGocciaCLIApplication`. When embedding the engine directly, config file loading is not automatic. Use the shared `CLI.ConfigFile` unit to get the same behavior.
+
+**Note:** `ApplyConfigFile` only handles `.json` out of the box. To support `.json5` and `.toml` config files, you must register their parsers first — the same way `TGocciaCLIApplication.Execute` does via `EnsureConfigParsersRegistered`. See `Goccia.CLI.Application.pas` for the registration pattern using `RegisterConfigParser`.
+
+```pascal
+uses CLI.ConfigFile, CLI.Options;
+
+// Register parsers for JSON5 and TOML (required before discovery)
+RegisterConfigParser('.json5', @ParseJSON5Config);
+RegisterConfigParser('.toml', @ParseTOMLConfig);
+
+// Discover a config file from a starting directory
+ConfigPath := DiscoverConfigFile(EntryDir,
+  ['goccia'], ['.toml', '.json5', '.json']);
+
+// Parse it (with extends resolution) and apply to your options
+if ConfigPath <> '' then
+  ApplyConfigFile(ConfigPath, YourOptions);
+```
+
+For import-map resolution only (without CLI option loading), use the module resolver API directly:
+
+```pascal
+uses Goccia.Modules.Resolver;
+
+ConfigPath := TGocciaModuleResolver.DiscoverProjectConfig(EntryDir);
+if ConfigPath <> '' then
+  Resolver.LoadImportMap(ConfigPath);
 ```
 
 ### GocciaBundler (Standalone Bytecode Compiler)

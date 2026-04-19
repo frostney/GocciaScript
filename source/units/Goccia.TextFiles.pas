@@ -21,6 +21,7 @@ implementation
 uses
   SysUtils,
 
+  FileUtils,
   StringBuffer;
 
 function RetagUTF8Text(const ABytes: RawByteString): string;
@@ -126,21 +127,8 @@ begin
 end;
 
 function ReadUTF8FileText(const APath: string): UTF8String;
-var
-  SourceText: RawByteString;
-  Stream: TFileStream;
 begin
-  Stream := TFileStream.Create(APath, fmOpenRead or fmShareDenyWrite);
-  try
-    SetLength(SourceText, Stream.Size);
-    if Length(SourceText) > 0 then
-      Stream.ReadBuffer(Pointer(SourceText)^, Length(SourceText));
-  finally
-    Stream.Free;
-  end;
-
-  SetCodePage(SourceText, CP_UTF8, False);
-  Result := UTF8String(SourceText);
+  Result := FileUtils.ReadUTF8FileText(APath);
 end;
 
 function ReadUTF8FileLines(const APath: string): TStringList;

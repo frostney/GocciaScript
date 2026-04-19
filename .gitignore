@@ -19,6 +19,8 @@ build/GocciaBundler
 build/*.Test
 build/ppas.sh
 build/ppas.bat
+build/link*.res
+build/linkfiles*.res
 
 # Mac OS files
 .DS_Store
