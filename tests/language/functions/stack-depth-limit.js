@@ -58,7 +58,7 @@ test("mutual recursion with return values", () => {
   expect(isEven(99)).toBe(false);
 });
 
-test("exception propagates through trampolined frames", () => {
+test("exception propagates through nested calls", () => {
   const inner = () => { throw new Error("boom"); };
   const middle = () => inner();
   const outer = () => middle();
@@ -70,7 +70,7 @@ test("exception propagates through trampolined frames", () => {
   }
 });
 
-test("try-catch works across trampolined frames", () => {
+test("try-catch works across nested calls", () => {
   const thrower = (n) => {
     if (n === 0) throw new RangeError("done");
     return thrower(n - 1);
