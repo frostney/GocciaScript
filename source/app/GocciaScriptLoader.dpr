@@ -624,7 +624,7 @@ var
   Pool: TGocciaThreadPool;
   I: Integer;
 begin
-  EnsureSharedPrototypesInitialized(GlobalBuiltins);
+  EnsureSharedPrototypesInitialized(EffectiveBuiltins);
 
   Pool := TGocciaThreadPool.Create(AJobCount);
   try

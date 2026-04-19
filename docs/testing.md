@@ -378,7 +378,7 @@ Pascal unit tests (`*.Test.pas`) exist as a tertiary layer for behavior that can
 The `GocciaTestRunner` program:
 
 1. Scans the provided path for `.js`, `.jsx`, `.ts`, `.tsx`, and `.mjs` files.
-2. For each file, creates a fresh `TGocciaEngine` with `[ggTestAssertions, ggFFI]`.
+2. For each file, creates a fresh `TGocciaEngine` with `[ggTestAssertions]` (plus `ggFFI` when `--unsafe-ffi` is passed).
 3. Loads the source and appends a `runTests()` call.
 4. Executes the script — `describe`/`test` blocks register themselves during execution. Nested `describe` blocks are supported; suite names are composed with ` > ` separators (e.g., `"Outer > Inner"`). Skip state is inherited by nested describes.
 5. `runTests()` executes all registered tests and collects results.

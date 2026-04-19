@@ -129,6 +129,7 @@ type
     FAliases: TGocciaRepeatableOption;
     FTimeout: TGocciaIntegerOption;
     FMaxInstructions: TGocciaIntegerOption;
+    FUnsafeFFI: TGocciaFlagOption;
   public
     constructor Create;
     destructor Destroy; override;
@@ -141,6 +142,7 @@ type
     property Aliases: TGocciaRepeatableOption read FAliases;
     property Timeout: TGocciaIntegerOption read FTimeout;
     property MaxInstructions: TGocciaIntegerOption read FMaxInstructions;
+    property UnsafeFFI: TGocciaFlagOption read FUnsafeFFI;
   end;
 
   TGocciaCoverageFormat = (cfLcov, cfJson);
@@ -471,6 +473,8 @@ begin
     'Per-file timeout in milliseconds', 'Engine');
   FMaxInstructions := TGocciaIntegerOption.Create('max-instructions',
     'Maximum bytecode instructions before aborting', 'Engine');
+  FUnsafeFFI := TGocciaFlagOption.Create('unsafe-ffi',
+    'Enable the FFI global (foreign function interface)', 'Engine');
 end;
 
 destructor TGocciaEngineOptions.Destroy;
@@ -481,18 +485,20 @@ begin
   FAliases.Free;
   FTimeout.Free;
   FMaxInstructions.Free;
+  FUnsafeFFI.Free;
   inherited Destroy;
 end;
 
 function TGocciaEngineOptions.Options: TGocciaOptionArray;
 begin
-  SetLength(Result, 6);
+  SetLength(Result, 7);
   Result[0] := FMode;
   Result[1] := FASI;
   Result[2] := FImportMap;
   Result[3] := FAliases;
   Result[4] := FTimeout;
   Result[5] := FMaxInstructions;
+  Result[6] := FUnsafeFFI;
 end;
 
 { TGocciaCoverageOptions }

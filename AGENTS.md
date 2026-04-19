@@ -21,7 +21,7 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
 ## Quick checks
 
 ```bash
-./build.pas testrunner && ./build/GocciaTestRunner tests --asi  # after substantive changes
+./build.pas testrunner && ./build/GocciaTestRunner tests --asi --unsafe-ffi  # after substantive changes
 ./build.pas bundler && ./build/GocciaBundler example.js  # build and run the bundler
 ./format.pas --check # before push / PR
 ```
@@ -64,11 +64,13 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaScriptLoader example.js --profile=functions --profile-format=flamegraph --profile-output=flamegraph.txt # Flame graph export
 ./build/GocciaScriptLoader example.jsx --source-map --mode=bytecode # Write .map source map alongside execution
 ./build/GocciaScriptLoader example.js --max-instructions=1000000 --mode=bytecode # Abort after 1M bytecode instructions
+./build/GocciaScriptLoader example.js --unsafe-ffi # Execute with FFI enabled
 ./build/GocciaREPL # Start interactive REPL (interpreted)
 ./build/GocciaREPL --mode=bytecode # Start the REPL via bytecode VM
 ./build/GocciaREPL --mode=bytecode --timing # Bytecode REPL with per-line timing
 ./build/GocciaREPL --import-map=imports.json # Start the REPL with an explicit import map
 ./build/GocciaREPL --asi # Start the REPL with automatic semicolon insertion
+./build/GocciaREPL --unsafe-ffi # Start the REPL with FFI enabled
 ./build/GocciaTestRunner tests/ --asi # Run all JavaScript tests
 ./build/GocciaTestRunner tests --import-map=imports.json # Run tests with an explicit import map
 ./build/GocciaTestRunner tests/language/expressions/ # Run a test category
@@ -82,6 +84,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaTestRunner tests --coverage --coverage-format=json --coverage-output=coverage.json # Coverage with JSON output
 ./build/GocciaTestRunner tests --jobs=4 # Run tests with 4 parallel workers
 ./build/GocciaTestRunner tests -j 1 # Force sequential execution (no threading)
+./build/GocciaTestRunner tests --asi --unsafe-ffi # Run all tests including FFI tests
 ./build/GocciaBenchmarkRunner benchmarks/ # Run all benchmarks
 ./build/GocciaBenchmarkRunner benchmarks --import-map=imports.json # Run benchmarks with an explicit import map
 ./build/GocciaBenchmarkRunner benchmarks/fibonacci.js # Run a specific benchmark
@@ -108,7 +111,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaBundler --output=out.gbc # Compile 
 ./build.pas loader && ./build/GocciaScriptLoader ./example.js
 
 # Compile and run all tests
-./build.pas testrunner && ./build/GocciaTestRunner tests --asi
+./build.pas testrunner && ./build/GocciaTestRunner tests --asi --unsafe-ffi
 
 # Compile and run a specific test
 ./build.pas testrunner && ./build/GocciaTestRunner tests/language/expressions/addition/basic-addition.js

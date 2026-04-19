@@ -27,7 +27,7 @@ TGocciaGlobalBuiltin = (
 
 The `GocciaTestRunner` adds `ggTestAssertions` to inject the test framework.
 The `GocciaBenchmarkRunner` adds `ggBenchmark` to inject the benchmark framework.
-FFI (`ggFFI`) is available but must be explicitly enabled.
+FFI (`ggFFI`) requires the `--unsafe-ffi` CLI flag to enable.
 
 ## Adding a New Built-in
 

@@ -762,7 +762,7 @@ begin
         SetLength(WorkerData[I].Entries, 0);
       end;
 
-      EnsureSharedPrototypesInitialized(GlobalBuiltins);
+      EnsureSharedPrototypesInitialized(EffectiveBuiltins);
 
       WallClockStart := GetNanoseconds;
 

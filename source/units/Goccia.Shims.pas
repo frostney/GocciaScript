@@ -152,14 +152,18 @@ const
         '  #ms;'#10 +
         '  static now(): number { return Temporal.Now.instant().epochMilliseconds; }'#10 +
         '  static parse(str: string): number {'#10 +
-        '    return Temporal.Instant.from(String(str)).epochMilliseconds;'#10 +
+        '    try { return Temporal.Instant.from(String(str)).epochMilliseconds; }'#10 +
+        '    catch (e) { return NaN; }'#10 +
         '  }'#10 +
         '  constructor(...args: any[]) {'#10 +
         '    if (args.length === 0) {'#10 +
         '      this.#ms = Temporal.Now.instant().epochMilliseconds;'#10 +
         '    } else if (args.length === 1) {'#10 +
         '      const v = args[0];'#10 +
-        '      this.#ms = typeof v === "number" ? v : Temporal.Instant.from(String(v)).epochMilliseconds;'#10 +
+        '      if (typeof v === "number") {'#10 +
+        '        const t = Math.trunc(v);'#10 +
+        '        this.#ms = Number.isFinite(t) && Math.abs(t) <= 8.64e15 ? t : NaN;'#10 +
+        '      } else { this.#ms = Date.parse(String(v)); }'#10 +
         '    } else {'#10 +
         '      const y: number = args[0] >= 0 && args[0] <= 99 ? 1900 + args[0] : args[0];'#10 +
         '      const dt = new Temporal.PlainDateTime('#10 +
@@ -169,31 +173,33 @@ const
         '      this.#ms = dt.toZonedDateTime(Temporal.Now.timeZoneId()).epochMilliseconds;'#10 +
         '    }'#10 +
         '  }'#10 +
-        '  #local() { return new Temporal.ZonedDateTime(this.#ms * 1000000, Temporal.Now.timeZoneId()); }'#10 +
-        '  #utc() { return new Temporal.ZonedDateTime(this.#ms * 1000000, "UTC"); }'#10 +
+        '  #valid() { return Number.isFinite(this.#ms); }'#10 +
+        '  #local() { return this.#valid() ? new Temporal.ZonedDateTime(BigInt(this.#ms) * 1000000n, Temporal.Now.timeZoneId()) : null; }'#10 +
+        '  #utc() { return this.#valid() ? new Temporal.ZonedDateTime(BigInt(this.#ms) * 1000000n, "UTC") : null; }'#10 +
         '  getTime(): number { return this.#ms; }'#10 +
         '  valueOf(): number { return this.#ms; }'#10 +
-        '  getFullYear(): number { return this.#local().year; }'#10 +
-        '  getMonth(): number { return this.#local().month - 1; }'#10 +
-        '  getDate(): number { return this.#local().day; }'#10 +
-        '  getDay(): number { return this.#local().dayOfWeek % 7; }'#10 +
-        '  getHours(): number { return this.#local().hour; }'#10 +
-        '  getMinutes(): number { return this.#local().minute; }'#10 +
-        '  getSeconds(): number { return this.#local().second; }'#10 +
-        '  getMilliseconds(): number { return this.#local().millisecond; }'#10 +
-        '  getUTCFullYear(): number { return this.#utc().year; }'#10 +
-        '  getUTCMonth(): number { return this.#utc().month - 1; }'#10 +
-        '  getUTCDate(): number { return this.#utc().day; }'#10 +
-        '  getUTCDay(): number { return this.#utc().dayOfWeek % 7; }'#10 +
-        '  getUTCHours(): number { return this.#utc().hour; }'#10 +
-        '  getUTCMinutes(): number { return this.#utc().minute; }'#10 +
-        '  getUTCSeconds(): number { return this.#utc().second; }'#10 +
-        '  getUTCMilliseconds(): number { return this.#utc().millisecond; }'#10 +
-        '  getTimezoneOffset(): number { return -(this.#local().offsetNanoseconds / 60000000000); }'#10 +
-        '  toISOString(): string { return Temporal.Instant.fromEpochMilliseconds(this.#ms).toString(); }'#10 +
-        '  toJSON(): string { return this.toISOString(); }'#10 +
+        '  getFullYear(): number { const z = this.#local(); return z ? z.year : NaN; }'#10 +
+        '  getMonth(): number { const z = this.#local(); return z ? z.month - 1 : NaN; }'#10 +
+        '  getDate(): number { const z = this.#local(); return z ? z.day : NaN; }'#10 +
+        '  getDay(): number { const z = this.#local(); return z ? z.dayOfWeek % 7 : NaN; }'#10 +
+        '  getHours(): number { const z = this.#local(); return z ? z.hour : NaN; }'#10 +
+        '  getMinutes(): number { const z = this.#local(); return z ? z.minute : NaN; }'#10 +
+        '  getSeconds(): number { const z = this.#local(); return z ? z.second : NaN; }'#10 +
+        '  getMilliseconds(): number { const z = this.#local(); return z ? z.millisecond : NaN; }'#10 +
+        '  getUTCFullYear(): number { const z = this.#utc(); return z ? z.year : NaN; }'#10 +
+        '  getUTCMonth(): number { const z = this.#utc(); return z ? z.month - 1 : NaN; }'#10 +
+        '  getUTCDate(): number { const z = this.#utc(); return z ? z.day : NaN; }'#10 +
+        '  getUTCDay(): number { const z = this.#utc(); return z ? z.dayOfWeek % 7 : NaN; }'#10 +
+        '  getUTCHours(): number { const z = this.#utc(); return z ? z.hour : NaN; }'#10 +
+        '  getUTCMinutes(): number { const z = this.#utc(); return z ? z.minute : NaN; }'#10 +
+        '  getUTCSeconds(): number { const z = this.#utc(); return z ? z.second : NaN; }'#10 +
+        '  getUTCMilliseconds(): number { const z = this.#utc(); return z ? z.millisecond : NaN; }'#10 +
+        '  getTimezoneOffset(): number { const z = this.#local(); return z ? -(z.offsetNanoseconds / 60000000000) : NaN; }'#10 +
+        '  toISOString(): string { if (!this.#valid()) throw new RangeError("Invalid time value"); return Temporal.Instant.fromEpochMilliseconds(this.#ms).toString(); }'#10 +
+        '  toJSON(): string | null { if (!this.#valid()) return null; return this.toISOString(); }'#10 +
         '  toString(): string {'#10 +
         '    const z = this.#local();'#10 +
+        '    if (!z) return "Invalid Date";'#10 +
         '    const pad = (n: number): string => n < 10 ? "0" + String(n) : String(n);'#10 +
         '    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];'#10 +
         '    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];'#10 +
@@ -207,12 +213,11 @@ const
       FileName: '<shim:hasOwnProperty>';
       Source:
         'export const hasOwnProperty = ((proto) => {'#10 +
-        '  class _H { hasOwnProperty(prop) { return Object.hasOwn(this, prop); } }'#10 +
-        '  const fn = new _H().hasOwnProperty;'#10 +
         '  Object.defineProperty(proto, "hasOwnProperty", {'#10 +
-        '    value: fn, writable: true, enumerable: false, configurable: true'#10 +
+        '    value(prop) { return Object.hasOwn(this, prop); },'#10 +
+        '    writable: true, enumerable: false, configurable: true'#10 +
         '  });'#10 +
-        '  return fn;'#10 +
+        '  return proto.hasOwnProperty;'#10 +
         '})(Object.getPrototypeOf({}));'
     )
   );

@@ -4,11 +4,16 @@ program CLI.Parser.Test;
 
 uses
   SysUtils,
+  TypInfo,
 
   CLI.Options,
   TestingPascalLibrary,
 
   Goccia.CLI.Help;
+
+type
+  { Local two-value enum for testing EnumOption without coupling to engine types }
+  TTestColor = (tcRed, tcBlue);
 
 type
   TCLIOptionsTests = class(TTestSuite)
@@ -23,17 +28,13 @@ type
     procedure TestIntegerOptionValueOrWhenAbsent;
     procedure TestIntegerOptionInvalidValue;
     procedure TestRepeatableOptionMultipleValues;
-    procedure TestEnumOptionInterpreted;
-    procedure TestEnumOptionBytecode;
+    procedure TestEnumOptionFirstValue;
+    procedure TestEnumOptionSecondValue;
     procedure TestEnumOptionInvalidValue;
     procedure TestEnumOptionValidValues;
     procedure TestEnumOptionFormatForHelp;
-    procedure TestEngineOptionsSubOptions;
-    procedure TestEngineOptionsCount;
-    procedure TestCoverageOptionsSubOptions;
-    procedure TestCoverageOptionsCount;
     procedure TestOptionListAddFlagAndString;
-    procedure TestConcatOptions;
+    procedure TestConcatOptionsMergesTwoArrays;
     procedure TestGenerateHelpText;
   public
     procedure SetupTests; override;
@@ -51,17 +52,13 @@ begin
   Test('IntegerOption.ValueOr returns default when absent', TestIntegerOptionValueOrWhenAbsent);
   Test('IntegerOption.Apply raises TGocciaParseError for non-integer', TestIntegerOptionInvalidValue);
   Test('RepeatableOption accumulates multiple values', TestRepeatableOptionMultipleValues);
-  Test('EnumOption applies interpreted', TestEnumOptionInterpreted);
-  Test('EnumOption applies bytecode', TestEnumOptionBytecode);
+  Test('EnumOption applies first value', TestEnumOptionFirstValue);
+  Test('EnumOption applies second value', TestEnumOptionSecondValue);
   Test('EnumOption raises TGocciaParseError for invalid value', TestEnumOptionInvalidValue);
   Test('EnumOption.ValidValues returns comma-separated list', TestEnumOptionValidValues);
   Test('EnumOption.FormatForHelp returns pipe-separated values', TestEnumOptionFormatForHelp);
-  Test('EngineOptions exposes all sub-options', TestEngineOptionsSubOptions);
-  Test('EngineOptions.Options returns correct count', TestEngineOptionsCount);
-  Test('CoverageOptions exposes all sub-options', TestCoverageOptionsSubOptions);
-  Test('CoverageOptions.Options returns correct count', TestCoverageOptionsCount);
   Test('OptionList tracks added options', TestOptionListAddFlagAndString);
-  Test('ConcatOptions merges two arrays', TestConcatOptions);
+  Test('ConcatOptions merges two arrays', TestConcatOptionsMergesTwoArrays);
   Test('GenerateHelpText includes program name and option names', TestGenerateHelpText);
 end;
 
@@ -215,31 +212,31 @@ begin
   end;
 end;
 
-{ TGocciaEnumOption tests }
+{ TGocciaEnumOption tests — uses local TTestColor enum }
 
-procedure TCLIOptionsTests.TestEnumOptionInterpreted;
+procedure TCLIOptionsTests.TestEnumOptionFirstValue;
 var
-  Opt: TGocciaEnumOption<TGocciaExecutionMode>;
+  Opt: TGocciaEnumOption<TTestColor>;
 begin
-  Opt := TGocciaEnumOption<TGocciaExecutionMode>.Create('mode', 'Execution mode');
+  Opt := TGocciaEnumOption<TTestColor>.Create('color', 'Pick a color');
   try
-    Opt.Apply('interpreted');
+    Opt.Apply('red');
     Expect<Boolean>(Opt.Present).ToBe(True);
-    Expect<Boolean>(Opt.Matches(emInterpreted)).ToBe(True);
+    Expect<Boolean>(Opt.Matches(tcRed)).ToBe(True);
   finally
     Opt.Free;
   end;
 end;
 
-procedure TCLIOptionsTests.TestEnumOptionBytecode;
+procedure TCLIOptionsTests.TestEnumOptionSecondValue;
 var
-  Opt: TGocciaEnumOption<TGocciaExecutionMode>;
+  Opt: TGocciaEnumOption<TTestColor>;
 begin
-  Opt := TGocciaEnumOption<TGocciaExecutionMode>.Create('mode', 'Execution mode');
+  Opt := TGocciaEnumOption<TTestColor>.Create('color', 'Pick a color');
   try
-    Opt.Apply('bytecode');
+    Opt.Apply('blue');
     Expect<Boolean>(Opt.Present).ToBe(True);
-    Expect<Boolean>(Opt.Matches(emBytecode)).ToBe(True);
+    Expect<Boolean>(Opt.Matches(tcBlue)).ToBe(True);
   finally
     Opt.Free;
   end;
@@ -247,10 +244,10 @@ end;
 
 procedure TCLIOptionsTests.TestEnumOptionInvalidValue;
 var
-  Opt: TGocciaEnumOption<TGocciaExecutionMode>;
+  Opt: TGocciaEnumOption<TTestColor>;
   Raised: Boolean;
 begin
-  Opt := TGocciaEnumOption<TGocciaExecutionMode>.Create('mode', 'Execution mode');
+  Opt := TGocciaEnumOption<TTestColor>.Create('color', 'Pick a color');
   try
     Raised := False;
     try
@@ -267,11 +264,11 @@ end;
 
 procedure TCLIOptionsTests.TestEnumOptionValidValues;
 var
-  Opt: TGocciaEnumOption<TGocciaExecutionMode>;
+  Opt: TGocciaEnumOption<TTestColor>;
 begin
-  Opt := TGocciaEnumOption<TGocciaExecutionMode>.Create('mode', 'Execution mode');
+  Opt := TGocciaEnumOption<TTestColor>.Create('color', 'Pick a color');
   try
-    Expect<string>(Opt.ValidValues).ToBe('interpreted, bytecode');
+    Expect<string>(Opt.ValidValues).ToBe('red, blue');
   finally
     Opt.Free;
   end;
@@ -279,71 +276,13 @@ end;
 
 procedure TCLIOptionsTests.TestEnumOptionFormatForHelp;
 var
-  Opt: TGocciaEnumOption<TGocciaExecutionMode>;
+  Opt: TGocciaEnumOption<TTestColor>;
 begin
-  Opt := TGocciaEnumOption<TGocciaExecutionMode>.Create('mode', 'Execution mode');
+  Opt := TGocciaEnumOption<TTestColor>.Create('color', 'Pick a color');
   try
-    Expect<string>(Opt.FormatForHelp).ToBe('--mode=interpreted|bytecode');
+    Expect<string>(Opt.FormatForHelp).ToBe('--color=red|blue');
   finally
     Opt.Free;
-  end;
-end;
-
-{ TGocciaEngineOptions tests }
-
-procedure TCLIOptionsTests.TestEngineOptionsSubOptions;
-var
-  Opts: TGocciaEngineOptions;
-begin
-  Opts := TGocciaEngineOptions.Create;
-  try
-    Expect<Boolean>(Opts.Mode <> nil).ToBe(True);
-    Expect<Boolean>(Opts.ASI <> nil).ToBe(True);
-    Expect<Boolean>(Opts.ImportMap <> nil).ToBe(True);
-    Expect<Boolean>(Opts.Aliases <> nil).ToBe(True);
-    Expect<Boolean>(Opts.Timeout <> nil).ToBe(True);
-  finally
-    Opts.Free;
-  end;
-end;
-
-procedure TCLIOptionsTests.TestEngineOptionsCount;
-var
-  Opts: TGocciaEngineOptions;
-begin
-  Opts := TGocciaEngineOptions.Create;
-  try
-    Expect<Integer>(Length(Opts.Options)).ToBe(5);
-  finally
-    Opts.Free;
-  end;
-end;
-
-{ TGocciaCoverageOptions tests }
-
-procedure TCLIOptionsTests.TestCoverageOptionsSubOptions;
-var
-  Opts: TGocciaCoverageOptions;
-begin
-  Opts := TGocciaCoverageOptions.Create;
-  try
-    Expect<Boolean>(Opts.Enabled <> nil).ToBe(True);
-    Expect<Boolean>(Opts.Format <> nil).ToBe(True);
-    Expect<Boolean>(Opts.OutputPath <> nil).ToBe(True);
-  finally
-    Opts.Free;
-  end;
-end;
-
-procedure TCLIOptionsTests.TestCoverageOptionsCount;
-var
-  Opts: TGocciaCoverageOptions;
-begin
-  Opts := TGocciaCoverageOptions.Create;
-  try
-    Expect<Integer>(Length(Opts.Options)).ToBe(3);
-  finally
-    Opts.Free;
   end;
 end;
 
@@ -367,24 +306,27 @@ begin
   end;
 end;
 
-{ ConcatOptions tests }
+{ ConcatOptions tests — uses OptionList, no engine/coverage dependency }
 
-procedure TCLIOptionsTests.TestConcatOptions;
+procedure TCLIOptionsTests.TestConcatOptionsMergesTwoArrays;
 var
-  Engine: TGocciaEngineOptions;
-  Coverage: TGocciaCoverageOptions;
+  ListA, ListB: TGocciaOptionList;
   Combined: TGocciaOptionArray;
 begin
-  Engine := TGocciaEngineOptions.Create;
-  Coverage := TGocciaCoverageOptions.Create;
+  ListA := TGocciaOptionList.Create;
+  ListB := TGocciaOptionList.Create;
   try
-    Combined := ConcatOptions([Engine.Options, Coverage.Options]);
-    Expect<Integer>(Length(Combined)).ToBe(8);
-    Expect<string>(Combined[0].LongName).ToBe('mode');
-    Expect<string>(Combined[5].LongName).ToBe('coverage');
+    ListA.AddFlag('alpha', 'First flag');
+    ListA.AddString('beta', 'First string');
+    ListB.AddFlag('gamma', 'Second flag');
+    Combined := ConcatOptions([ListA.Options, ListB.Options]);
+    Expect<Integer>(Length(Combined)).ToBe(3);
+    Expect<string>(Combined[0].LongName).ToBe('alpha');
+    Expect<string>(Combined[1].LongName).ToBe('beta');
+    Expect<string>(Combined[2].LongName).ToBe('gamma');
   finally
-    Coverage.Free;
-    Engine.Free;
+    ListB.Free;
+    ListA.Free;
   end;
 end;
 

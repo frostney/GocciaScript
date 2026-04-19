@@ -155,16 +155,16 @@ Represents an absolute point in time (epoch-based), independent of calendar or t
 
 | Constructor / Static | Description |
 |---------------------|-------------|
-| `new Temporal.Instant(epochNanoseconds)` | Create from epoch nanoseconds |
+| `new Temporal.Instant(epochNanoseconds)` | Create from epoch nanoseconds (BigInt) |
 | `Temporal.Instant.from(item)` | Create from string or Instant |
-| `Temporal.Instant.fromEpochMilliseconds(ms)` | Create from epoch milliseconds |
-| `Temporal.Instant.fromEpochNanoseconds(ns)` | Create from epoch nanoseconds |
+| `Temporal.Instant.fromEpochMilliseconds(ms)` | Create from epoch milliseconds (Number) |
+| `Temporal.Instant.fromEpochNanoseconds(ns)` | Create from epoch nanoseconds (BigInt) |
 | `Temporal.Instant.compare(one, two)` | Compare two instants (-1, 0, 1) |
 
 | Getter | Description |
 |--------|-------------|
-| `epochMilliseconds` | Milliseconds since Unix epoch |
-| `epochNanoseconds` | Nanoseconds since Unix epoch (as number) |
+| `epochMilliseconds` | Milliseconds since Unix epoch (Number) |
+| `epochNanoseconds` | Nanoseconds since Unix epoch (BigInt) |
 
 | Method | Description |
 |--------|-------------|
@@ -233,7 +233,7 @@ Represents an absolute date and time in a specific timezone. Combines an instant
 
 | Constructor / Static | Description |
 |---------------------|-------------|
-| `new Temporal.ZonedDateTime(epochNanoseconds, timeZone)` | Create from epoch nanoseconds and timezone ID |
+| `new Temporal.ZonedDateTime(epochNanoseconds, timeZone)` | Create from epoch nanoseconds (BigInt) and timezone ID |
 | `Temporal.ZonedDateTime.from(item)` | Create from ISO string with timezone annotation (e.g., `"2024-03-15T13:45:30+05:30[Asia/Kolkata]"`), ZonedDateTime, or object |
 | `Temporal.ZonedDateTime.compare(one, two)` | Compare two zoned date-times (-1, 0, 1) |
 
@@ -250,8 +250,8 @@ Represents an absolute date and time in a specific timezone. Combines an instant
 | `millisecond`, `microsecond`, `nanosecond` | Sub-second components |
 | `offset` | UTC offset string (e.g., `"+05:30"`) |
 | `offsetNanoseconds` | UTC offset in nanoseconds |
-| `epochMilliseconds` | Milliseconds since Unix epoch |
-| `epochNanoseconds` | Nanoseconds since Unix epoch (as number) |
+| `epochMilliseconds` | Milliseconds since Unix epoch (Number) |
+| `epochNanoseconds` | Nanoseconds since Unix epoch (BigInt) |
 
 | Method | Description |
 |--------|-------------|
