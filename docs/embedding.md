@@ -637,7 +637,7 @@ finally
 end;
 ```
 
-Raises `TGocciaInstructionLimitError` when the limit is reached. A value of zero (the default) disables the counter entirely — no threadvar access, no comparisons, zero overhead.
+Raises `TGocciaInstructionLimitError` when the limit is reached. A value of zero (the default) skips all counter increments and limit comparisons — only the guard read of `GMaxInstructions` remains on the hot path.
 
 The CLI tools expose both limits as flags; see [Build System — Run Commands](build-system.md) for usage.
 
