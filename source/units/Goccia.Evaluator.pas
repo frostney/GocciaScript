@@ -2029,8 +2029,11 @@ begin
       CalleeName := '';
 
     if Assigned(TGocciaCallStack.Instance) then
+    begin
       TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
         ANewExpression.Line, ANewExpression.Column);
+      CheckStackDepth(TGocciaCallStack.Instance.Count);
+    end;
     try
       if Callee is TGocciaProxyValue then
       begin
@@ -3388,8 +3391,11 @@ begin
       CalleeName := '';
 
     if Assigned(TGocciaCallStack.Instance) then
+    begin
       TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
         ATaggedTemplateExpression.Line, ATaggedTemplateExpression.Column);
+      CheckStackDepth(TGocciaCallStack.Instance.Count);
+    end;
     try
       if Callee is TGocciaProxyValue then
         Result := TGocciaProxyValue(Callee).ApplyTrap(Arguments, ThisValue)
