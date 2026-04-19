@@ -61,7 +61,9 @@ Implements the [WHATWG Console Standard](https://developer.mozilla.org/en-US/doc
 
 #### Output capture
 
-The console supports an `OutputCallback` hook for capturing output programmatically (see [Embedding — Console Output Capture](embedding.md#console-output-capture)). The CLI tools expose this via `--log=<file>`, which writes every console call to the specified file in `[method] line` format while preserving normal stdout output.
+The console supports an `OutputCallback` hook for capturing output programmatically (see [Embedding — Console Output Capture](embedding.md#console-output-capture)).
+
+Separately, the `TGocciaCLIApplication`-based frontends use `LogCallback` for `--log=<file>`, which writes every console call to the specified file in `[method] line` format while preserving normal stdout output.
 
 ### Math (`Goccia.Builtins.Math.pas`)
 

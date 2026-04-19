@@ -1,3 +1,4 @@
+<!-- doc-length-limit: 900 -->
 # Embedding the Engine
 
 *For FreePascal developers who want to embed the GocciaScript engine in their own applications.*
@@ -378,7 +379,7 @@ Engine.BuiltinConsole.LogCallback := MyHandler.OnLog;
 Engine.BuiltinConsole.Enabled := False;  // no stdout, but LogCallback still fires
 ```
 
-The CLI tools use `LogCallback` internally for `--log=<file>`, which captures console output to a log file in `[method] line` format. The TestRunner silences workers via `Enabled := False` (not by replacing JS methods), so `LogCallback` fires on every console call even in parallel mode. File writes are serialized with a critical section so `--log` is thread-safe even with `--jobs=N`.
+The `TGocciaCLIApplication`-based frontends (ScriptLoader, TestRunner, BenchmarkRunner, Bundler) use `LogCallback` internally for `--log=<file>`, which captures console output to a log file in `[method] line` format. The REPL creates `TGocciaEngine` directly and does not wire `LogCallback`, so `--log` is not available there. The TestRunner silences workers via `Enabled := False` (not by replacing JS methods), so `LogCallback` fires on every console call even in parallel mode. File writes are serialized with a critical section so `--log` is thread-safe even with `--jobs=N`.
 
 ## Built-in Registration
 

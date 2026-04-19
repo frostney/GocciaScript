@@ -294,18 +294,26 @@ begin
   if FLogFileOpen then
     Exit;
   InitCriticalSection(FLogLock);
-  AssignFile(FLogFileHandle, FLog.Value);
-  Rewrite(FLogFileHandle);
-  FLogFileOpen := True;
+  try
+    AssignFile(FLogFileHandle, FLog.Value);
+    Rewrite(FLogFileHandle);
+    FLogFileOpen := True;
+  except
+    DoneCriticalSection(FLogLock);
+    raise;
+  end;
 end;
 
 procedure TGocciaCLIApplication.CloseLogFile;
 begin
   if not FLogFileOpen then
     Exit;
-  CloseFile(FLogFileHandle);
-  DoneCriticalSection(FLogLock);
-  FLogFileOpen := False;
+  try
+    CloseFile(FLogFileHandle);
+  finally
+    FLogFileOpen := False;
+    DoneCriticalSection(FLogLock);
+  end;
 end;
 
 procedure TGocciaCLIApplication.Validate;
