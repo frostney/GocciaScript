@@ -412,6 +412,8 @@ begin
       SB.Append(': ');
       if Value is TGocciaObjectValue then
         SB.Append(TGocciaObjectValue(Value).ToDebugString)
+      else if Value is TGocciaSymbolValue then
+        SB.Append(TGocciaSymbolValue(Value).ToDisplayString.Value)
       else
         SB.Append(Value.ToStringLiteral.Value);
     end
@@ -915,7 +917,7 @@ begin
   if FSymbolDescriptors.TryGetValue(ASymbol, ExistingDescriptor) then
   begin
     if not ExistingDescriptor.Configurable then
-      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [ASymbol.ToStringLiteral.Value]), SSuggestCannotDeleteNonConfigurable);
+      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [ASymbol.ToDisplayString.Value]), SSuggestCannotDeleteNonConfigurable);
     ExistingDescriptor.Free;
   end
   else
