@@ -6,3 +6,6 @@ pre-commit:
       glob: "**/*.{pas,dpr}"
       run: ./format.pas {staged_files}
       stage_fixed: true
+    check-swimmies:
+      glob: "**/*.{pas,dpr}"
+      run: bun check-swimmies.ts {staged_files}
