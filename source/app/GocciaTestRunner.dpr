@@ -13,7 +13,6 @@ uses
 
   Goccia.Application,
   Goccia.AST.Node,
-  Goccia.Builtins.TestConsole,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
   CLI.Options,
@@ -269,7 +268,6 @@ var
   Source: TStringList;
   ScriptResult, FileResult: TGocciaObjectValue;
   Engine: TGocciaEngine;
-  SilentCon: TGocciaTestConsole;
   EngineResult: TGocciaScriptResult;
 begin
   ScriptResult := CreateDefaultScriptResult;
@@ -293,21 +291,12 @@ begin
       [BoolToStr(FExitOnFirst.Present, 'true', 'false')]));
 
     try
-      SilentCon := nil;
       Engine := CreateEngine(AFileName, Source);
       try
         if FSilent.Present or GIsWorkerThread then
         begin
-          SilentCon := TGocciaTestConsole.Create;
-          SilentCon.Silence(Engine.BuiltinConsole.BuiltinObject);
+          Engine.BuiltinConsole.Enabled := False;
           Engine.SuppressWarnings := True;
-          // Note: TGocciaTestAssertions.SuppressOutput is intentionally NOT
-          // set here.  Under -O4 on x86_64-darwin the inlined property
-          // access causes a hang — an FPC code-gen issue.  The Silence()
-          // call above already replaces the JS console methods with no-ops,
-          // which suppresses most test-framework output.  Any remaining
-          // Pascal-level WriteLn calls in the assertions builtin are
-          // guarded by GIsWorkerThread at each call site.
         end;
 
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS));
@@ -319,7 +308,6 @@ begin
           ClearInstructionLimit;
         end;
       finally
-        SilentCon.Free;
         Engine.Free;
       end;
       Result.Timing := EngineResult;
@@ -370,7 +358,6 @@ var
   Module: TGocciaBytecodeModule;
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
-  SilentCon: TGocciaTestConsole;
   ScriptResult: TGocciaObjectValue;
   ResultValue: TGocciaValue;
   OrigLine, OrigCol, I: Integer;
@@ -410,15 +397,12 @@ begin
       try
         Engine := CreateEngine(AFileName, Source, Executor);
         try
-          SilentCon := nil;
           if FSilent.Present or GIsWorkerThread then
           begin
-            SilentCon := TGocciaTestConsole.Create;
-            SilentCon.Silence(Engine.BuiltinConsole.BuiltinObject);
+            Engine.BuiltinConsole.Enabled := False;
             Engine.SuppressWarnings := True;
           end;
 
-          try
             LexStart := GetNanoseconds;
             Lexer := TGocciaLexer.Create(SourceText, AFileName);
             try
@@ -486,9 +470,6 @@ begin
             finally
               Module.Free;
             end;
-          finally
-            SilentCon.Free;
-          end;
         finally
           Engine.Free;
         end;

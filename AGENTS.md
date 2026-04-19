@@ -65,6 +65,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaScriptLoader example.jsx --source-map --mode=bytecode # Write .map source map alongside execution
 ./build/GocciaScriptLoader example.js --max-instructions=1000000 --mode=bytecode # Abort after 1M bytecode instructions
 ./build/GocciaScriptLoader example.js --unsafe-ffi # Execute with FFI enabled
+./build/GocciaScriptLoader example.js --log=console.log # Write console output to a log file (tee to stdout + file)
 ./build/GocciaREPL # Start interactive REPL (interpreted)
 ./build/GocciaREPL --mode=bytecode # Start the REPL via bytecode VM
 ./build/GocciaREPL --mode=bytecode --timing # Bytecode REPL with per-line timing
@@ -85,6 +86,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaTestRunner tests --jobs=4 # Run tests with 4 parallel workers
 ./build/GocciaTestRunner tests -j 1 # Force sequential execution (no threading)
 ./build/GocciaTestRunner tests --asi --unsafe-ffi # Run all tests including FFI tests
+./build/GocciaTestRunner tests --log=test-console.log # Capture console output to a log file
 ./build/GocciaBenchmarkRunner benchmarks/ # Run all benchmarks
 ./build/GocciaBenchmarkRunner benchmarks --import-map=imports.json # Run benchmarks with an explicit import map
 ./build/GocciaBenchmarkRunner benchmarks/fibonacci.js # Run a specific benchmark

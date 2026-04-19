@@ -314,6 +314,72 @@ console.log(version);  // "1.0.0"
 
 This provides the foundation for future built-in module packages that can be coupled to `TGocciaGlobalBuiltins` flags.
 
+## Console Output Capture
+
+By default, `console.log` and friends write directly to stdout. The `OutputCallback` property lets you intercept all console output programmatically:
+
+```pascal
+uses
+  Classes,
+
+  Goccia.Builtins.Console,
+  Goccia.Engine;
+
+type
+  TMyLogger = class
+    procedure OnConsoleOutput(const AMethod, ALine: string);
+  end;
+
+procedure TMyLogger.OnConsoleOutput(const AMethod, ALine: string);
+begin
+  // AMethod is 'log', 'warn', 'error', 'info', 'debug', 'dir',
+  //   'assert', 'count', 'timeEnd', 'timeLog', 'trace', 'table', 'group'
+  // ALine is the fully formatted output string
+  WriteLn('[', AMethod, '] ', ALine);
+end;
+
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  Logger: TMyLogger;
+begin
+  Logger := TMyLogger.Create;
+  Source := TStringList.Create;
+  Source.Text := 'console.log("hello"); console.warn("careful");';
+  Engine := TGocciaEngine.Create('app.js', Source, []);
+  try
+    Engine.BuiltinConsole.OutputCallback := Logger.OnConsoleOutput;
+    Engine.Execute;
+    // Output:
+    //   [log] hello
+    //   [warn] Warning: careful
+  finally
+    Engine.Free;
+    Source.Free;
+    Logger.Free;
+  end;
+end;
+```
+
+The callback type is:
+
+```pascal
+TGocciaConsoleOutputCallback = procedure(const AMethod, ALine: string) of object;
+```
+
+When `OutputCallback` is assigned, it takes priority over both `OutputLines` (the `TStrings` capture property) and the default `WriteLn` path. When not assigned, existing behavior is unchanged.
+
+### LogCallback (Independent Logging Channel)
+
+`LogCallback` fires on every console call regardless of the `Enabled` flag, independent of the primary output path. This makes it safe for worker threads where `Enabled` is `False` to suppress stdout:
+
+```pascal
+Engine.BuiltinConsole.LogCallback := MyHandler.OnLog;
+Engine.BuiltinConsole.Enabled := False;  // no stdout, but LogCallback still fires
+```
+
+The CLI tools use `LogCallback` internally for `--log=<file>`, which captures console output to a log file in `[method] line` format. The TestRunner silences workers via `Enabled := False` (not by replacing JS methods), so `LogCallback` fires on every console call even in parallel mode. File writes are serialized with a critical section so `--log` is thread-safe even with `--jobs=N`.
+
 ## Built-in Registration
 
 The standard built-ins (Console, Math, Object, Array, etc.) are documented in [Built-ins — Registration System](built-ins.md#registration-system). They are always registered unconditionally and are not flag-gated.

@@ -59,6 +59,10 @@ Implements the [WHATWG Console Standard](https://developer.mozilla.org/en-US/doc
 | `console.trace(...args)` | Print with "Trace:" prefix |
 | `console.table(data)` | Display data (formatted output) |
 
+#### Output capture
+
+The console supports an `OutputCallback` hook for capturing output programmatically (see [Embedding — Console Output Capture](embedding.md#console-output-capture)). The CLI tools expose this via `--log=<file>`, which writes every console call to the specified file in `[method] line` format while preserving normal stdout output.
+
 ### Math (`Goccia.Builtins.Math.pas`)
 
 Implements the [ECMAScript Math object](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Math). See [MDN Math reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Math) for the full API.
