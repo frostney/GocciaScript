@@ -823,6 +823,36 @@ jobs:
           printf '%s\n' "$error_output" | grep -q '"type":"TypeError"'
           printf '%s\n' "$error_output" | grep -q '"message":"boom"'
 
+      - name: Check GC memory ceiling scaling
+        run: |
+          PYTHON_BIN="$(command -v python3 || command -v python)"
+
+          # Default maxBytes must be positive and within platform caps
+          default_max="$(printf 'Goccia.gc.maxBytes;\n' | ./build/GocciaScriptLoader --output=json)"
+          "$PYTHON_BIN" -c "
+          import json, sys
+          d = json.loads('''$default_max''')
+          assert d['ok'], 'script failed'
+          v = d['value']
+          assert isinstance(v, (int, float)), f'maxBytes not a number: {v}'
+          assert v > 0, f'maxBytes must be positive: {v}'
+          MB = 1024 * 1024
+          GB = 1024 * MB
+          assert v >= 256 * MB, f'maxBytes too small: {v} < 256 MB'
+          assert v <= 8 * GB, f'maxBytes exceeds 8 GB cap: {v}'
+          print(f'default maxBytes: {v / MB:.0f} MB — OK')
+          "
+
+          # --max-memory overrides the default
+          override_max="$(printf 'Goccia.gc.maxBytes;\n' | ./build/GocciaScriptLoader --max-memory=10485760 --output=json)"
+          "$PYTHON_BIN" -c "
+          import json
+          d = json.loads('''$override_max''')
+          assert d['ok']
+          assert d['value'] == 10485760, f'--max-memory override failed: {d[\"value\"]}'
+          print('--max-memory=10485760 override — OK')
+          "
+
       - name: Check GocciaScriptLoader coverage CLI
         run: |
           cov_output="$(printf 'const x = 5;\nx;\n' | ./build/GocciaScriptLoader --coverage 2>&1)"
