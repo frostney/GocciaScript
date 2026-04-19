@@ -244,7 +244,7 @@ jobs:
           fi
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: gocciascript-${{ matrix.target }}
           retention-days: 1
@@ -278,7 +278,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download build
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: gocciascript-${{ matrix.target }}
           path: build/
@@ -402,7 +402,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download build
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: gocciascript-${{ matrix.target }}
           path: build/
@@ -449,7 +449,7 @@ jobs:
 
       - name: Upload TOML compliance report
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: toml-test-results-${{ matrix.target }}
           retention-days: 1
@@ -483,7 +483,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download build
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: gocciascript-${{ matrix.target }}
           path: build/
@@ -550,7 +550,7 @@ jobs:
 
       - name: Upload JSON5 compliance report
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: json5-test-results-${{ matrix.target }}
           retention-days: 1
@@ -608,7 +608,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download build
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: gocciascript-${{ matrix.target }}
           path: build/
@@ -673,7 +673,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download build
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: gocciascript-${{ matrix.target }}
           path: build/
@@ -1078,7 +1078,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download build
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: gocciascript-${{ matrix.target }}
           path: build/
@@ -1087,11 +1087,100 @@ jobs:
         run: bash ./.github/scripts/stage-build-artifacts.sh build release-artifacts
 
       - name: Upload release artifact bundle
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: gocciascript-release-${{ matrix.target }}
           if-no-files-found: ignore
           path: release-artifacts/*
+
+  nightly:
+    needs: [test, toml-compliance, json5-compliance, benchmark, cli]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check if nightly already published today
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TODAY="$(date -u +'%Y-%m-%d')"
+          PUBLISHED="$(gh release view nightly --json publishedAt --jq .publishedAt 2>/dev/null || echo "")"
+          if [ -n "$PUBLISHED" ] && echo "$PUBLISHED" | grep -q "^${TODAY}"; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Nightly already published today (${PUBLISHED}) — skipping."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download all build artifacts
+        if: steps.check.outputs.skip != 'true'
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts/
+
+      - name: Package nightly builds
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          declare -A DISPLAY_NAMES=(
+            ["aarch64-darwin"]="macos-arm64"
+            ["x86_64-darwin"]="macos-x64"
+            ["x86_64-linux"]="linux-x64"
+            ["aarch64-linux"]="linux-arm64"
+            ["x86_64-win64"]="windows-x64"
+            ["i386-win32"]="windows-x86"
+          )
+
+          targets=("aarch64-darwin" "x86_64-darwin" "x86_64-linux" "aarch64-linux" "x86_64-win64" "i386-win32")
+
+          for target in "${targets[@]}"; do
+            artifact_dir="artifacts/gocciascript-${target}"
+            if [ ! -d "$artifact_dir" ]; then
+              echo "Skipping $target (no artifact found)"
+              continue
+            fi
+
+            display="${DISPLAY_NAMES[$target]}"
+            archive_name="gocciascript-nightly-${display}"
+            pkg_dir="${archive_name}"
+            bash ./.github/scripts/stage-build-artifacts.sh "$artifact_dir" "$pkg_dir"
+
+            if [[ "$target" == *win* ]]; then
+              zip -r "${archive_name}.zip" "$pkg_dir/"
+            else
+              tar -czf "${archive_name}.tar.gz" "$pkg_dir/"
+            fi
+
+            rm -rf "$pkg_dir"
+          done
+
+      - name: Update nightly release
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          COMMIT="$(git rev-parse --short HEAD)"
+          DATE="$(date -u +'%Y-%m-%d')"
+
+          gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
+
+          gh release create nightly \
+            --title "Nightly Build (${DATE})" \
+            --notes "$(cat <<EOF
+          Automated nightly build from \`main\` at [\`${COMMIT}\`](https://github.com/${{ github.repository }}/commit/${COMMIT}).
+
+          Built on ${DATE}. This pre-release is replaced by each new nightly build.
+          EOF
+          )" \
+            --prerelease \
+            --target main \
+            gocciascript-nightly-*.tar.gz gocciascript-nightly-*.zip
 
   release:
     needs: [test, toml-compliance, json5-compliance, benchmark, cli]
@@ -1106,7 +1195,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download all build artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           path: artifacts/
 

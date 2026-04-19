@@ -32,7 +32,7 @@ jobs:
         run: bash ./.github/scripts/stage-build-artifacts.sh build pr-artifacts --include-tests
 
       - name: Upload build
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: build-pr
           retention-days: 1
@@ -74,7 +74,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download build
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: build-pr
           path: build/
@@ -138,7 +138,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: test-results-${{ matrix.mode }}
           retention-days: 1
@@ -175,7 +175,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download build
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: build-pr
           path: build/
@@ -196,7 +196,7 @@ jobs:
           grep -q '"jobCount":' benchmark-${{ matrix.mode }}.json
 
       - name: Upload results
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: benchmark-${{ matrix.mode }}
           retention-days: 1
@@ -214,7 +214,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download build
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: build-pr
           path: build/
@@ -749,12 +749,12 @@ jobs:
         shell: bash
     steps:
       - name: Download interpreted results
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: benchmark-interpreted
 
       - name: Download bytecode results
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: benchmark-bytecode
 
@@ -1023,25 +1023,25 @@ jobs:
         shell: bash
     steps:
       - name: Download test results (interpreted)
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         continue-on-error: true
         with:
           name: test-results-interpreted
 
       - name: Download test results (bytecode)
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         continue-on-error: true
         with:
           name: test-results-bytecode
 
       - name: Download benchmark results (interpreted)
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         continue-on-error: true
         with:
           name: benchmark-interpreted
 
       - name: Download benchmark results (bytecode)
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         continue-on-error: true
         with:
           name: benchmark-bytecode
