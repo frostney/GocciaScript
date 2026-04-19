@@ -102,6 +102,7 @@ type
     function SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GocciaGC(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GocciaGCMaxBytesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GocciaGCSuggestedMaxBytesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GocciaGCBytesAllocatedGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AInterpreter: TGocciaInterpreter; const AGlobals: TGocciaGlobalBuiltins;
@@ -609,6 +610,11 @@ begin
       TGocciaNativeFunctionValue.CreateWithoutPrototype(GocciaGCMaxBytesGetter, 'get maxBytes', 0),
       nil,
       []));
+  GCFunc.DefineProperty('suggestedMaxBytes',
+    TGocciaPropertyDescriptorAccessor.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(GocciaGCSuggestedMaxBytesGetter, 'get suggestedMaxBytes', 0),
+      nil,
+      []));
   GCFunc.DefineProperty('bytesAllocated',
     TGocciaPropertyDescriptorAccessor.Create(
       TGocciaNativeFunctionValue.CreateWithoutPrototype(GocciaGCBytesAllocatedGetter, 'get bytesAllocated', 0),
@@ -645,6 +651,19 @@ begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) then
     Result := TGocciaNumberLiteralValue.Create(GC.MaxBytes)
+  else
+    Result := TGocciaNumberLiteralValue.ZeroValue;
+end;
+
+function TGocciaRuntimeBootstrap.GocciaGCSuggestedMaxBytesGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    Result := TGocciaNumberLiteralValue.Create(GC.SuggestedMaxBytes)
   else
     Result := TGocciaNumberLiteralValue.ZeroValue;
 end;
