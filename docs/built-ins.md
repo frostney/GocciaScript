@@ -261,6 +261,7 @@ A `const` global providing engine metadata and Goccia-owned utility APIs:
 | `spec` | `object` | ES specification features implemented by GocciaScript, keyed by year (e.g., `"2015"`, `"2025"`). Each year maps to an array of `{ name, link }` entries. |
 | `proposal` | `object` | TC39 proposals implemented by GocciaScript, keyed by stage (e.g., `"stage-3"`, `"stage-1"`). Each stage maps to an array of `{ name, link }` entries. |
 | `shims` | `string[]` | Names of registered shims (currently empty, infrastructure for future shim support) |
+| `gc` | `function` | Trigger manual garbage collection. Returns `undefined`. Also exposes read-only `gc.bytesAllocated` (approximate GC heap size in bytes) and `gc.maxBytes` (active ceiling; defaults to half of physical memory capped at 8 GB on 64-bit or 700 MB on 32-bit, overridable via `--max-memory`). Allocations exceeding the ceiling throw a `RangeError`. |
 
 **`Goccia.build`**
 

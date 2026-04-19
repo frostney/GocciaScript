@@ -690,6 +690,9 @@ resourcestring
   SErrorSemverInvalidIncrement = 'invalid increment';
   SErrorJSON5StringifyError = 'JSON5.stringify error: %s';
 
+  // GC memory limit
+  SErrorMemoryLimitExceeded = 'Allocation failed: GC heap size exceeds the configured memory limit';
+
   // Fetch API
   SErrorFetchRequiresURL = 'fetch requires a URL argument';
   SErrorFetchUnsupportedMethod = 'fetch does not support method ''%s''; only GET and HEAD are allowed';

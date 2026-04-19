@@ -166,19 +166,40 @@ uses
 
   Goccia.Constants,
   Goccia.Constants.TypeNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.InstructionLimit,
   Goccia.Profiler,
   Goccia.TextFiles,
   Goccia.Threading,
-  Goccia.Timeout;
+  Goccia.Timeout,
+  Goccia.Values.ErrorHelper;
 
 { TGocciaValue }
 
 procedure TGocciaValue.AfterConstruction;
+var
+  GC: TGarbageCollector;
 begin
   inherited;
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.RegisterObject(Self);
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+  begin
+    GC.RegisterObject(Self);
+    if (GC.MaxBytes > 0) and (GC.BytesAllocated > GC.MaxBytes) and
+       not GC.MemoryLimitFiring then
+    begin
+      // Unregister before throwing: AfterConstruction exceptions trigger
+      // automatic destruction, so the GC must not hold a dangling pointer.
+      GC.UnregisterObject(Self);
+      GC.MemoryLimitFiring := True;
+      try
+        ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
+      finally
+        GC.MemoryLimitFiring := False;
+      end;
+    end;
+  end;
   if GProfilingAllocations and Assigned(TGocciaProfiler.Instance) then
     TGocciaProfiler.Instance.RecordAllocation;
   CheckExecutionTimeout;

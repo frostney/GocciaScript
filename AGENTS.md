@@ -63,6 +63,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaScriptLoader example.js --profile=all --profile-output=profile.json # Profile with JSON export
 ./build/GocciaScriptLoader example.js --profile=functions --profile-format=flamegraph --profile-output=flamegraph.txt # Flame graph export
 ./build/GocciaScriptLoader example.jsx --source-map --mode=bytecode # Write .map source map alongside execution
+./build/GocciaScriptLoader example.js --max-memory=10485760 # Execute with 10 MB GC heap limit (RangeError on exceed)
 ./build/GocciaScriptLoader example.js --max-instructions=1000000 --mode=bytecode # Abort after 1M bytecode instructions
 ./build/GocciaScriptLoader example.js --unsafe-ffi # Execute with FFI enabled
 ./build/GocciaScriptLoader example.js --log=console.log # Write console output to a log file (tee to stdout + file)

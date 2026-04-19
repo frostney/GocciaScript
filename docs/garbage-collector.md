@@ -73,6 +73,27 @@ When working with the GC, follow these rules:
 - **`Recycle` virtual method** — Sweep calls `Obj.Recycle` instead of `Obj.Free`. The default calls `Free`, but subclasses can override to return objects to a pool.
 - **Measurable impact** — Both the GocciaBenchmarkRunner and GocciaTestRunner call `Collect` after each file to reclaim memory between script executions.
 
+## Memory Ceiling
+
+The GC tracks approximate heap usage via `InstanceSize` per registered object. A byte ceiling is always active:
+
+- **Default:** half of physical memory, capped at 8 GB on 64-bit or 700 MB on 32-bit. Falls back to 512 MB when OS detection fails.
+- **Override:** `--max-memory=<bytes>` sets an explicit limit.
+
+Any allocation that pushes `BytesAllocated` above `MaxBytes` raises a JavaScript `RangeError`. The error is catchable with `try/catch`; after catching, the script can call `Goccia.gc()` to free unreachable objects and retry.
+
+From JavaScript, `Goccia.gc.bytesAllocated` and `Goccia.gc.maxBytes` are read-only getters. The ceiling can only be changed from the engine level (CLI flag or Pascal API: `TGarbageCollector.Instance.MaxBytes`).
+
+## JavaScript API
+
+`Goccia.gc()` triggers an unconditional mark-and-sweep collection. It is safe to call repeatedly and returns `undefined`.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Goccia.gc()` | `function` | Force a full garbage collection |
+| `Goccia.gc.bytesAllocated` | `number` | Approximate bytes currently tracked by the GC (read-only) |
+| `Goccia.gc.maxBytes` | `number` | Active byte ceiling (read-only; set via `--max-memory` or auto-detected from OS memory) |
+
 ## AST Literal Ownership
 
 The parser creates `TGocciaValue` instances (numbers, strings, booleans) and stores them inside `TGocciaLiteralExpression` AST nodes. These values are owned by the AST, not the GC. `TGocciaLiteralExpression.Create` calls `TGarbageCollector.Instance.UnregisterObject` to remove the value from GC tracking, and `TGocciaLiteralExpression.Destroy` frees the value (unless it is a singleton like `UndefinedValue`, `TrueValue`, or `FalseValue`).

@@ -423,6 +423,33 @@ jobs:
           printf '%s\n' "$error_output" | grep -q '"type":"TypeError"'
           printf '%s\n' "$error_output" | grep -q '"message":"boom"'
 
+      - name: Check GocciaScriptLoader --max-memory CLI
+        run: |
+          # Default ceiling is auto-detected from OS physical memory
+          default_output="$(printf 'Goccia.gc.maxBytes;\n' | ./build/GocciaScriptLoader --asi)"
+          printf '%s\n' "$default_output" | grep -Eq 'Result: [1-9][0-9]+'
+
+          # Explicit --max-memory overrides the default
+          explicit_output="$(printf 'Goccia.gc.maxBytes;\n' | ./build/GocciaScriptLoader --asi --max-memory=5000000)"
+          printf '%s\n' "$explicit_output" | grep -q 'Result: 5000000'
+
+          # Exceeding the limit triggers a RangeError (exit code 1)
+          set +e
+          oom_output="$(printf '%s\n' 'Array.from({length:5000},(_,i)=>({x:i}));' | ./build/GocciaScriptLoader --asi --max-memory=200000 2>&1)"
+          oom_status=$?
+          set -e
+          test "$oom_status" -eq 1
+          printf '%s\n' "$oom_output" | grep -q 'RangeError'
+          printf '%s\n' "$oom_output" | grep -q 'memory limit'
+
+          # maxBytes is read-only from JS
+          set +e
+          readonly_output="$(printf 'Goccia.gc.maxBytes = 999;\n' | ./build/GocciaScriptLoader --asi 2>&1)"
+          readonly_status=$?
+          set -e
+          test "$readonly_status" -eq 1
+          printf '%s\n' "$readonly_output" | grep -q 'TypeError'
+
       - name: Check GocciaScriptLoader coverage CLI
         run: |
           # --coverage prints summary

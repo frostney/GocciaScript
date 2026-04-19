@@ -341,6 +341,9 @@ resourcestring
   // Runtime errors — illegal constructor
   SSuggestIllegalConstructor = 'this constructor cannot be called directly';
 
+  // Runtime errors — GC memory limit
+  SSuggestMemoryLimitExceeded = 'call Goccia.gc() to free unreachable objects, or increase the limit with --max-memory';
+
   // Runtime errors — structuredClone
   SSuggestStructuredClone = 'only plain objects, arrays, primitives, and built-in types can be cloned';
 

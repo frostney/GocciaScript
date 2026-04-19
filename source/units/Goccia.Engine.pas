@@ -187,6 +187,8 @@ type
     function GetResolver: TGocciaModuleResolver;
     function SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GocciaGC(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GocciaGCMaxBytesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GocciaGCBytesAllocatedGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap = nil);
     procedure ThrowError(const AMessage: string; const ALine,
       AColumn: Integer);
@@ -1086,6 +1088,7 @@ var
   BuildObj: TGocciaObjectValue;
   BuiltInsArray: TGocciaArrayValue;
   ShimsArray: TGocciaArrayValue;
+  GCFunc: TGocciaNativeFunctionValue;
   Flag: TGocciaGlobalBuiltin;
   Name: string;
   I: Integer;
@@ -1124,8 +1127,18 @@ begin
     CreateProposalObject, [pfEnumerable]));
   GocciaObj.DefineProperty('shims', TGocciaPropertyDescriptorData.Create(
     ShimsArray, [pfEnumerable]));
-  GocciaObj.AssignProperty('gc',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GocciaGC, 'gc', 0));
+  GCFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(GocciaGC, 'gc', 0);
+  GCFunc.DefineProperty('maxBytes',
+    TGocciaPropertyDescriptorAccessor.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(GocciaGCMaxBytesGetter, 'get maxBytes', 0),
+      nil,
+      []));
+  GCFunc.DefineProperty('bytesAllocated',
+    TGocciaPropertyDescriptorAccessor.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(GocciaGCBytesAllocatedGetter, 'get bytesAllocated', 0),
+      nil,
+      []));
+  GocciaObj.AssignProperty('gc', GCFunc);
 
   FInterpreter.GlobalScope.DefineLexicalBinding('Goccia', GocciaObj, dtConst);
 end;
@@ -1344,6 +1357,32 @@ begin
   if Assigned(GC) and GC.Enabled then
     GC.Collect;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaEngine.GocciaGCMaxBytesGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    Result := TGocciaNumberLiteralValue.Create(GC.MaxBytes)
+  else
+    Result := TGocciaNumberLiteralValue.ZeroValue;
+end;
+
+function TGocciaEngine.GocciaGCBytesAllocatedGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    Result := TGocciaNumberLiteralValue.Create(GC.BytesAllocated)
+  else
+    Result := TGocciaNumberLiteralValue.ZeroValue;
 end;
 
 procedure TGocciaEngine.SetASIEnabled(const AValue: Boolean);
