@@ -128,7 +128,7 @@ The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Cov
 
 ## Instruction Limit
 
-The `--max-instructions` flag caps execution steps before aborting. In the bytecode VM the counter increments on every dispatched instruction (exact); the check runs at the top of each dispatch iteration. When disabled, only the guard read of the limit threadvar remains on the hot path. See [Embedding — Execution Limits](embedding.md#execution-limits) for the full API, interpreter-mode behavior, and CLI defaults.
+The dispatch loop supports an optional instruction counter (`Goccia.InstructionLimit.pas`). When armed, the counter increments on every dispatched instruction and the limit is checked at the top of each iteration. When disabled, only the guard read of the limit threadvar remains on the hot path. See [Embedding — Execution Limits](embedding.md#execution-limits) for the full API and interpreter-mode behavior.
 
 ## Binary Format
 
