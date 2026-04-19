@@ -126,6 +126,10 @@ The `--profile` flag on GocciaScriptLoader enables language-level profiling of t
 
 The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Coverage.pas`). Zero overhead when disabled. Opcode counting adds ~1% overhead; function timing adds ~3%.
 
+## Instruction Limit
+
+The dispatch loop supports an optional instruction counter (`Goccia.InstructionLimit.pas`). When armed, the counter increments on every dispatched instruction and the limit is checked at the top of each iteration. When disabled, only the guard read of the limit threadvar remains on the hot path. See [Embedding — Execution Limits](embedding.md#execution-limits) for the full API and interpreter-mode behavior.
+
 ## Binary Format
 
 - Magic: `GBC\0`

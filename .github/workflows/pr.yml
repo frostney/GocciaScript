@@ -347,6 +347,66 @@ jobs:
           printf '%s\n' "$timeout_output_bytecode" | grep -q '"message":"Execution timed out after 50ms"'
 
           set +e
+          inslimit_output="$("$PYTHON_BIN" - <<'PY'
+          import subprocess
+          import sys
+
+          script = 'const iterable = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 1 }) }) }; for (const x of iterable) { }' + '\n'
+          try:
+              result = subprocess.run(
+                  ['./build/GocciaScriptLoader', '--max-instructions=500', '--output=json'],
+                  input=script,
+                  text=True,
+                  capture_output=True,
+                  timeout=10,
+                  check=False,
+              )
+          except subprocess.TimeoutExpired:
+              sys.exit(124)
+
+          sys.stdout.write(result.stdout)
+          sys.stderr.write(result.stderr)
+          sys.exit(result.returncode)
+          PY
+          )"
+          inslimit_status=$?
+          set -e
+          test "$inslimit_status" -eq 1
+          printf '%s\n' "$inslimit_output" | grep -q '"ok":false'
+          printf '%s\n' "$inslimit_output" | grep -q '"type":"InstructionLimitError"'
+          printf '%s\n' "$inslimit_output" | grep -q '"message":"Execution exceeded instruction limit of 500"'
+
+          set +e
+          inslimit_output_bytecode="$("$PYTHON_BIN" - <<'PY'
+          import subprocess
+          import sys
+
+          script = 'const iterable = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 1 }) }) }; for (const x of iterable) { }' + '\n'
+          try:
+              result = subprocess.run(
+                  ['./build/GocciaScriptLoader', '-', '--mode=bytecode', '--max-instructions=500', '--output=json'],
+                  input=script,
+                  text=True,
+                  capture_output=True,
+                  timeout=10,
+                  check=False,
+              )
+          except subprocess.TimeoutExpired:
+              sys.exit(124)
+
+          sys.stdout.write(result.stdout)
+          sys.stderr.write(result.stderr)
+          sys.exit(result.returncode)
+          PY
+          )"
+          inslimit_status_bytecode=$?
+          set -e
+          test "$inslimit_status_bytecode" -eq 1
+          printf '%s\n' "$inslimit_output_bytecode" | grep -q '"ok":false'
+          printf '%s\n' "$inslimit_output_bytecode" | grep -q '"type":"InstructionLimitError"'
+          printf '%s\n' "$inslimit_output_bytecode" | grep -q '"message":"Execution exceeded instruction limit of 500"'
+
+          set +e
           globals_collision_output="$(printf '%s\n' 'console;' | ./build/GocciaScriptLoader --global console=1 --output=json)"
           globals_collision_status=$?
           set -e

@@ -104,6 +104,7 @@ uses
   Goccia.Evaluator.Decorators,
   Goccia.Evaluator.TypeOperations,
   Goccia.GarbageCollector,
+  Goccia.InstructionLimit,
   Goccia.Keywords.Reserved,
   Goccia.Lexer,
   Goccia.MicrotaskQueue,
@@ -513,6 +514,8 @@ var
   I: Integer;
 begin
   CheckExecutionTimeout;
+  IncrementInstructionCounter;
+  CheckInstructionLimit;
   // Handle super() calls specially
   if ACallExpression.Callee is TGocciaSuperExpression then
   begin
@@ -1181,6 +1184,8 @@ begin
     while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
     begin
       CheckExecutionTimeout;
+      IncrementInstructionCounter;
+      CheckInstructionLimit;
       CurrentValue := IterResult.GetProperty(PROP_VALUE);
 
       IterScope := AContext.Scope.CreateChild(skBlock);
@@ -1250,6 +1255,8 @@ begin
         while True do
         begin
           CheckExecutionTimeout;
+          IncrementInstructionCounter;
+          CheckInstructionLimit;
           NextResult := TGocciaFunctionBase(NextMethod).Call(EmptyArgs, IteratorObj);
           NextResult := AwaitValue(NextResult);
 
@@ -1302,6 +1309,8 @@ begin
       while not GenericNextResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
       begin
         CheckExecutionTimeout;
+        IncrementInstructionCounter;
+        CheckInstructionLimit;
         CurrentValue := GenericNextResult.GetProperty(PROP_VALUE);
         CurrentValue := AwaitValue(CurrentValue);
 
@@ -1728,6 +1737,8 @@ begin
     end;
     on E: TGocciaTimeoutError do
       raise;
+    on E: TGocciaInstructionLimitError do
+      raise;
     on E: Exception do
     begin
       if Assigned(ATryStatement.CatchBlock) then
@@ -1989,6 +2000,8 @@ var
   InitScope, SuperInitScope: TGocciaScope;
 begin
   CheckExecutionTimeout;
+  IncrementInstructionCounter;
+  CheckInstructionLimit;
   Callee := EvaluateExpression(ANewExpression.Callee, AContext);
 
   Arguments := TGocciaArgumentsCollection.Create;
@@ -3170,11 +3183,15 @@ var
   InitScope, SuperInitScope: TGocciaScope;
 begin
   CheckExecutionTimeout;
+  IncrementInstructionCounter;
+  CheckInstructionLimit;
   NativeInstance := nil;
   WalkClass := AClassValue;
   while Assigned(WalkClass) do
   begin
     CheckExecutionTimeout;
+    IncrementInstructionCounter;
+    CheckInstructionLimit;
     NativeInstance := WalkClass.CreateNativeInstance(AArguments);
     if Assigned(NativeInstance) then
       Break;
@@ -3211,6 +3228,8 @@ begin
         while Assigned(WalkClass) do
         begin
           CheckExecutionTimeout;
+          IncrementInstructionCounter;
+          CheckInstructionLimit;
           SuperInitContext := AContext;
           SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, WalkClass);
           SuperInitScope.ThisValue := Instance;
@@ -3287,6 +3306,8 @@ var
   CalleeName: string;
 begin
   CheckExecutionTimeout;
+  IncrementInstructionCounter;
+  CheckInstructionLimit;
 
   // ES2026 §13.3.11 step 1: Evaluate the tag expression
   if ATaggedTemplateExpression.Tag is TGocciaMemberExpression then

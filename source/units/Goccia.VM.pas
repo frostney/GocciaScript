@@ -213,6 +213,7 @@ uses
   Goccia.Evaluator.Decorators,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
+  Goccia.InstructionLimit,
   Goccia.Profiler,
   Goccia.Timeout,
   Goccia.Values.BigIntValue,
@@ -1692,6 +1693,7 @@ var
   end;
 begin
   CheckExecutionTimeout;
+  CheckInstructionLimit;
   BoxedArgs := nil;
   try
     NativeInstance := nil;
@@ -2343,6 +2345,7 @@ begin
   begin
     repeat
       CheckExecutionTimeout;
+      CheckInstructionLimit;
       NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
       if not DoneFlag then
         Result.Elements.Add(NextResult);
@@ -2354,6 +2357,7 @@ begin
   begin
     repeat
       CheckExecutionTimeout;
+      CheckInstructionLimit;
       NextMethod := IteratorValue.GetProperty(PROP_NEXT);
       if not Assigned(NextMethod) or
          (NextMethod is TGocciaUndefinedLiteralValue) or
@@ -3714,6 +3718,7 @@ function TGocciaVM.ExecuteClosureRegisters(const AClosure: TGocciaBytecodeClosur
   const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray): TGocciaRegister;
 begin
   CheckExecutionTimeout;
+  CheckInstructionLimit;
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue, AArguments,
     Length(AArguments), RegisterUndefined, RegisterUndefined, RegisterUndefined,
     False);
@@ -3872,8 +3877,10 @@ begin
     while Running and (Frame.IP < Template.CodeCount) do
     begin
       try
+        CheckInstructionLimit;
         Instruction := Template.GetInstructionUnchecked(Frame.IP);
         Inc(Frame.IP);
+        IncrementInstructionCounter;
 
         if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and
            Assigned(Template.DebugInfo) then

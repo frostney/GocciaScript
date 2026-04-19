@@ -24,6 +24,7 @@ uses
   Goccia.Error.Detail,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
+  Goccia.InstructionLimit,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
@@ -213,10 +214,12 @@ begin
           Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
 
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+        StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
         try
           EngineResult := Engine.Execute;
         finally
           ClearExecutionTimeout;
+          ClearInstructionLimit;
         end;
         FileResult.FileName := AFileName;
         FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
@@ -332,11 +335,13 @@ begin
             Engine.BuiltinBenchmark.OnBeforeMeasurement := Engine.ClearTransientCaches;
 
           StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+          StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
           try
             try
               ResultValue := TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
             finally
               ClearExecutionTimeout;
+              ClearInstructionLimit;
             end;
             ExecEnd := GetNanoseconds;
 
@@ -432,10 +437,12 @@ begin
         Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
 
       StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+      StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
       try
         EngineResult := Engine.Execute;
       finally
         ClearExecutionTimeout;
+        ClearInstructionLimit;
       end;
       FileResult.FileName := AFileName;
       FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
@@ -543,11 +550,13 @@ begin
           Engine.BuiltinBenchmark.OnBeforeMeasurement := Engine.ClearTransientCaches;
 
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+        StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
         try
           try
             ResultValue := TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
           finally
             ClearExecutionTimeout;
+            ClearInstructionLimit;
           end;
           ExecEnd := GetNanoseconds;
 

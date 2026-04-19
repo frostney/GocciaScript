@@ -43,6 +43,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.GarbageCollector,
+  Goccia.InstructionLimit,
   Goccia.Timeout,
   Goccia.Values.Error,
   Goccia.Values.FunctionBase,
@@ -97,6 +98,7 @@ begin
     while I < FQueue.Count do
     begin
       CheckExecutionTimeout;
+      CheckInstructionLimit;
       Task := FQueue[I];
       Inc(I);
 
