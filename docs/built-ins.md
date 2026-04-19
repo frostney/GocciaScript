@@ -574,7 +574,7 @@ See [Binary Data Built-ins](built-ins-binary-data.md) for the complete ArrayBuff
 
 ### FFI (`Goccia.Builtins.GlobalFFI.pas`)
 
-Foreign Function Interface for calling native shared libraries. Only available when `--unsafe-ffi` is passed on the command line (enables the `ggFFI` flag internally). Not registered by default.
+Foreign Function Interface for calling native shared libraries. Only available when `ggFFI` is enabled (not registered by default).
 
 **FFI global object:**
 
