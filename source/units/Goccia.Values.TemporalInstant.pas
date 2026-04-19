@@ -550,7 +550,7 @@ begin
     TZ := TGocciaStringLiteralValue(Arg).Value
   else
   begin
-    ThrowTypeError('Instant.prototype.toZonedDateTimeISO requires a string time zone', SSuggestTemporalTimezone);
+    ThrowTypeError('Instant.prototype.toZonedDateTimeISO requires a string time zone or ZonedDateTime', SSuggestTemporalTimezone);
     TZ := '';
   end;
   Result := TGocciaTemporalZonedDateTimeValue.Create(
