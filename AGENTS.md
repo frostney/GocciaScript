@@ -14,6 +14,11 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
 ## Expectations for assistants
 
 - **Read [CONTRIBUTING.md](CONTRIBUTING.md)** before substantive edits—especially [Critical rules](CONTRIBUTING.md#critical-rules) and [Code style](docs/contributing/code-style.md).
+- **Before creating or restructuring units**, you **must** complete these steps before writing any code:
+  1. Read [Source Directory Layout](docs/contributing/code-style.md#source-directory-layout-and-namespacing) — determine whether the unit belongs in `source/shared/` or `source/units/` and why.
+  2. Read [Test Principles](docs/testing.md#test-principles) — understand what to test (public API only) and what not to test (private helpers, implementation details).
+  3. State the public API of the new unit and which directory it belongs in. Do not proceed until this is confirmed.
+  4. Keep implementation details private; test only public APIs.
 - **Run verification yourself** when the environment allows (tests, format check); do not only tell the human what to run unless execution is impossible.
 - **Match the project's workflow**: branch from `main`, focused diffs, tests and docs updated per CONTRIBUTING.
 - **Do not paste large chunks of CONTRIBUTING into this file** when CONTRIBUTING changes—edit CONTRIBUTING instead, and keep AGENTS short.
@@ -63,6 +68,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaScriptLoader example.js --profile=all --profile-output=profile.json # Profile with JSON export
 ./build/GocciaScriptLoader example.js --profile=functions --profile-format=flamegraph --profile-output=flamegraph.txt # Flame graph export
 ./build/GocciaScriptLoader example.jsx --source-map --mode=bytecode # Write .map source map alongside execution
+./build/GocciaScriptLoader example.js --max-memory=10485760 # Execute with 10 MB GC heap limit (RangeError on exceed)
 ./build/GocciaScriptLoader example.js --max-instructions=1000000 --mode=bytecode # Abort after 1M bytecode instructions
 ./build/GocciaScriptLoader example.js --unsafe-ffi # Execute with FFI enabled
 ./build/GocciaScriptLoader example.js --log=console.log # Write console output to a log file (tee to stdout + file)

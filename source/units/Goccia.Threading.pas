@@ -80,6 +80,7 @@ type
     FCancelled: PBoolean;
     FCancelOnError: Boolean;
     FEnableCoverage: Boolean;
+    FMaxBytes: Int64;
     FCoverageTracker: TObject;  // TGocciaCoverageTracker, kept alive for merge
     FData: Pointer;
   protected
@@ -87,7 +88,8 @@ type
   public
     constructor Create(AQueue: TGocciaWorkQueue;
       AWorkerProc: TGocciaWorkerProc; ACancelled: PBoolean;
-      ACancelOnError: Boolean; AEnableCoverage: Boolean; AData: Pointer);
+      ACancelOnError: Boolean; AEnableCoverage: Boolean; AMaxBytes: Int64;
+      AData: Pointer);
     property Results: TGocciaWorkerResultArray read FResults;
     property ResultCount: Integer read FResultCount;
     property CoverageTracker: TObject read FCoverageTracker;
@@ -103,6 +105,7 @@ type
     FCancelled: Boolean;
     FCancelOnError: Boolean;
     FEnableCoverage: Boolean;
+    FMaxBytes: Int64;
   public
     constructor Create(AWorkerCount: Integer);
 
@@ -130,12 +133,17 @@ type
     { When True, each worker initialises a per-thread coverage tracker.
       After RunAll, use MergeCoverageInto to collect results. }
     property EnableCoverage: Boolean read FEnableCoverage write FEnableCoverage;
+    { GC memory ceiling propagated to each worker thread.
+      0 means workers use the auto-detected default. }
+    property MaxBytes: Int64 read FMaxBytes write FMaxBytes;
   end;
 
   { Initialise the thread-local runtime for the calling thread.
     Must be called at the start of each worker thread.
-    Set AEnableCoverage to initialise a per-thread coverage tracker. }
-  procedure InitThreadRuntime(AEnableCoverage: Boolean = False);
+    Set AEnableCoverage to initialise a per-thread coverage tracker.
+    AMaxBytes overrides the worker's GC memory ceiling (0 = use default). }
+  procedure InitThreadRuntime(AEnableCoverage: Boolean = False;
+    AMaxBytes: Int64 = 0);
 
   { Shut down the thread-local runtime for the calling thread.
     Must be called before the worker thread exits. }
@@ -161,7 +169,7 @@ uses
 
 { Thread runtime lifecycle }
 
-procedure InitThreadRuntime(AEnableCoverage: Boolean);
+procedure InitThreadRuntime(AEnableCoverage: Boolean; AMaxBytes: Int64);
 begin
   GIsWorkerThread := True;
   TGarbageCollector.Initialize;
@@ -172,6 +180,11 @@ begin
   // skipping collection is acceptable: all objects are freed in bulk when
   // the thread-local GC is destroyed.
   TGarbageCollector.Instance.Enabled := False;
+  // Propagate the memory ceiling from the main thread so that --max-memory
+  // is honoured on workers. Without this, workers use the auto-detected
+  // default and ignore the CLI override.
+  if AMaxBytes > 0 then
+    TGarbageCollector.Instance.MaxBytes := AMaxBytes;
   TGocciaCallStack.Initialize;
   TGocciaMicrotaskQueue.Initialize;
   PinPrimitiveSingletons;
@@ -235,7 +248,8 @@ end;
 
 constructor TGocciaFileWorker.Create(AQueue: TGocciaWorkQueue;
   AWorkerProc: TGocciaWorkerProc; ACancelled: PBoolean;
-  ACancelOnError: Boolean; AEnableCoverage: Boolean; AData: Pointer);
+  ACancelOnError: Boolean; AEnableCoverage: Boolean; AMaxBytes: Int64;
+  AData: Pointer);
 begin
   inherited Create(True); // Create suspended
   FreeOnTerminate := False;
@@ -244,6 +258,7 @@ begin
   FCancelled := ACancelled;
   FCancelOnError := ACancelOnError;
   FEnableCoverage := AEnableCoverage;
+  FMaxBytes := AMaxBytes;
   FCoverageTracker := nil;
   FData := AData;
   FResultCount := 0;
@@ -257,7 +272,7 @@ var
   ConsoleOut, ErrorMsg: string;
   Idx: Integer;
 begin
-  InitThreadRuntime(FEnableCoverage);
+  InitThreadRuntime(FEnableCoverage, FMaxBytes);
   try
     while FQueue.TryDequeue(Item) do
     begin
@@ -322,6 +337,7 @@ begin
   FCancelled := False;
   FCancelOnError := False;
   FEnableCoverage := False;
+  FMaxBytes := 0;
 end;
 
 procedure TGocciaThreadPool.RunAll(const AFiles: TStringList;
@@ -361,7 +377,7 @@ begin
     for I := 0 to FWorkerCount - 1 do
     begin
       FWorkers[I] := TGocciaFileWorker.Create(Queue, AWorkerProc,
-        @FCancelled, FCancelOnError, FEnableCoverage, AData);
+        @FCancelled, FCancelOnError, FEnableCoverage, FMaxBytes, AData);
       FWorkers[I].Start;
     end;
   finally

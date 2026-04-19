@@ -78,6 +78,7 @@ uses
   Goccia.CLI.EngineSetup,
   Goccia.CLI.Help,
   Goccia.Coverage,
+  Goccia.GarbageCollector,
   Goccia.Modules.Configuration,
   Goccia.Profiler,
   Goccia.Timeout;
@@ -240,6 +241,15 @@ begin
     Include(Result, ggFFI);
 end;
 
+procedure ApplyMaxMemory(const AEngineOptions: TGocciaEngineOptions);
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) and AEngineOptions.MaxMemory.Present then
+    GC.MaxBytes := AEngineOptions.MaxMemory.Value;
+end;
+
 function TGocciaCLIApplication.CreateEngine(const AFileName: string;
   const ASource: TStringList): TGocciaEngine;
 begin
@@ -250,6 +260,7 @@ begin
       Result.ASIEnabled := FEngineOptions.ASI.Present;
       ConfigureModuleResolver(Result.Resolver, AFileName,
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
+      ApplyMaxMemory(FEngineOptions);
     end;
     if FLogFileOpen then
       Result.BuiltinConsole.LogCallback := HandleConsoleLog;
@@ -270,6 +281,7 @@ begin
       Result.ASIEnabled := FEngineOptions.ASI.Present;
       ConfigureModuleResolver(Result.Resolver, AFileName,
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
+      ApplyMaxMemory(FEngineOptions);
     end;
     if FLogFileOpen then
       Result.BuiltinConsole.LogCallback := HandleConsoleLog;

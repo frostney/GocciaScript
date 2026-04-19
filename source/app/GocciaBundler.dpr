@@ -19,6 +19,7 @@ uses
   Goccia.Compiler,
   Goccia.Engine,
   Goccia.FileExtensions,
+  Goccia.GarbageCollector,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
@@ -309,6 +310,8 @@ begin
 
   Pool := TGocciaThreadPool.Create(AJobCount);
   try
+    if Assigned(TGarbageCollector.Instance) then
+      Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
     Pool.RunAll(AFiles, EmitWorkerProc);
 
     for I := 0 to AFiles.Count - 1 do

@@ -62,6 +62,7 @@ const SKIP_UNIT_PATTERNS = [
   /^Goccia\.inc$/,                   // include file
   /^Goccia\.build$/,                 // JSON config
   /^Goccia\.semver$/,                // JSON config
+  /^Goccia\.gc(?:\.\w+)*$/,          // JavaScript API (Goccia.gc, Goccia.gc.maxBytes, etc.)
 ];
 
 // Pattern for method-path references: `Goccia.Unit.Name.MethodName`

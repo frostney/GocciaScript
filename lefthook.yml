@@ -6,3 +6,21 @@ pre-commit:
       glob: "**/*.{pas,dpr}"
       run: ./format.pas {staged_files}
       stage_fixed: true
+    check-swimmies:
+      glob: "**/*.{pas,dpr}"
+      run: bun check-swimmies.ts {staged_files}
+    lint-markdown:
+      glob: "**/*.md"
+      run: npx markdownlint-cli2 {staged_files}
+    check-doc-links:
+      glob: "**/*.md"
+      run: npx tsx scripts/check-doc-links.ts
+    check-doc-symbols:
+      glob: "**/*.md"
+      run: npx tsx scripts/check-doc-symbols.ts
+    check-doc-duplication:
+      glob: "**/*.md"
+      run: npx tsx scripts/check-doc-duplication.ts
+    check-doc-length:
+      glob: "**/*.md"
+      run: npx tsx scripts/check-doc-length.ts

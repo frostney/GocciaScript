@@ -768,6 +768,8 @@ begin
 
       Pool := TGocciaThreadPool.Create(JobCount);
       try
+        if Assigned(TGarbageCollector.Instance) then
+          Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
         Pool.RunAll(Files, BenchmarkWorkerProc, @WorkerData[0]);
       finally
         Pool.Free;

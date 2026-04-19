@@ -747,6 +747,12 @@ uses
 TGarbageCollector.Instance.Collect;
 ```
 
+**Memory ceiling:** The GC auto-detects physical memory and defaults to half of RAM, capped at 8 GB on 64-bit or 700 MB on 32-bit (512 MB fallback when detection fails). Override with `MaxBytes` to impose a custom limit. Allocations exceeding it raise a JavaScript `RangeError`:
+
+```pascal
+TGarbageCollector.Instance.MaxBytes := 10 * 1024 * 1024; // 10 MB limit
+```
+
 **Temporary roots:** If your Pascal code holds references to `TGocciaValue` objects outside of any GocciaScript scope (e.g., in a Pascal list while the engine runs), protect them from collection:
 
 ```pascal

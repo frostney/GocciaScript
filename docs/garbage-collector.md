@@ -73,6 +73,61 @@ When working with the GC, follow these rules:
 - **`Recycle` virtual method** — Sweep calls `Obj.Recycle` instead of `Obj.Free`. The default calls `Free`, but subclasses can override to return objects to a pool.
 - **Measurable impact** — Both the GocciaBenchmarkRunner and GocciaTestRunner call `Collect` after each file to reclaim memory between script executions.
 
+## Memory Ceiling
+
+The GC tracks approximate heap usage via `InstanceSize` per registered object. A byte ceiling is always active:
+
+- **Default:** half of physical memory, capped at 8 GB on 64-bit or 700 MB on 32-bit. Falls back to 512 MB when OS detection fails.
+- **Override:** `--max-memory=<bytes>` sets an explicit limit.
+
+Any allocation that pushes `BytesAllocated` above `MaxBytes` raises a JavaScript `RangeError`. The error is catchable with `try/catch`; after catching, the script can call `Goccia.gc()` to free unreachable objects and retry.
+
+From JavaScript, `Goccia.gc.bytesAllocated` and `Goccia.gc.maxBytes` are read-only getters. The ceiling can only be changed from the engine level (CLI flag or Pascal API: `TGarbageCollector.Instance.MaxBytes`).
+
+### Physical memory detection
+
+| Platform | API | Notes |
+|----------|-----|-------|
+| macOS/Darwin | `sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE)` | Declared as `external 'c'` inline |
+| Linux | `sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE)` | Same API, different constant values |
+| Windows | `GlobalMemoryStatusEx` (kernel32.dll) | Declared inline because the standard FPC 3.2.2 `Windows` unit only provides the older `GlobalMemoryStatus`, which [Microsoft documents](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-globalmemorystatus) as capping `dwTotalPhys` at 2 GB on x86 systems with 2-4 GB of RAM. `GlobalMemoryStatusEx` uses 64-bit `DWORDLONG` fields (`ullTotalPhys`) that report correctly on all systems. |
+
+### Scaling constants
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `DEFAULT_MAX_BYTES` | 512 MB | Fallback when OS memory detection fails |
+| `MAX_BYTES_CAP_64BIT` | 8 GB | Upper bound on 64-bit targets |
+| `MAX_BYTES_CAP_32BIT` | 700 MB | Upper bound on 32-bit targets |
+
+The formula is `min(physicalMemory / 2, platformCap)`.
+
+### What `BytesAllocated` tracks
+
+`BytesAllocated` sums `InstanceSize` of each `TGCManagedObject` registered with the GC. This covers the Delphi/FPC object instance (vtable, fields, padding) but **not** backing storage allocated separately by the object (e.g., dynamic array buffers in `TGocciaArrayValue`, string heap allocations in `TGocciaStringLiteralValue`). The ceiling is therefore an approximate safety net, not a precise memory accounting system.
+
+### Threading model
+
+Each worker thread creates its own `TGarbageCollector` instance via `threadvar`. The `--max-memory` ceiling is propagated from the main thread's GC to each worker via `TGocciaThreadPool.MaxBytes` → `InitThreadRuntime(AMaxBytes)`.
+
+Key behavior on worker threads:
+
+- **GC collection is disabled** (`Enabled := False`) to avoid `FGCMark` races on shared immutable objects (primitive singletons, shared prototypes). Each worker runs files from a shared queue; all objects are freed in bulk when the thread-local GC is destroyed at worker shutdown.
+- **`BytesAllocated` still increments** on every allocation, even with collection disabled. Since no collection ever runs, the counter only grows across all files a worker processes.
+- **The memory ceiling check still fires.** The limit check in `TGocciaValue.AfterConstruction` does not depend on `GC.Enabled` — it checks `MaxBytes > 0` and `BytesAllocated > MaxBytes` regardless. This is the sole protection against unbounded memory growth on workers.
+- **No pre-allocation.** `MaxBytes` is a threshold, not a reservation. Memory is allocated on demand by the FPC heap manager; the GC only checks whether the running total exceeds the ceiling.
+- **Each worker gets the same ceiling as the main thread.** The limit is per-thread, not divided across workers. With N workers, the theoretical maximum total allocation is `N × MaxBytes`, though in practice worker allocations are far below the ceiling.
+
+## JavaScript API
+
+`Goccia.gc()` triggers a full mark-and-sweep collection, bypassing the automatic collection threshold. On worker threads the call is a no-op because shared immutable objects (singletons, prototypes) have a single `FGCMark` field that is not thread-safe for concurrent marking. It is safe to call repeatedly and returns `undefined`.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Goccia.gc()` | `function` | Force a full garbage collection |
+| `Goccia.gc.bytesAllocated` | `number` | Approximate bytes currently tracked by the GC (read-only) |
+| `Goccia.gc.maxBytes` | `number` | Active byte ceiling (read-only; set via `--max-memory` or auto-detected from OS memory) |
+
 ## AST Literal Ownership
 
 The parser creates `TGocciaValue` instances (numbers, strings, booleans) and stores them inside `TGocciaLiteralExpression` AST nodes. These values are owned by the AST, not the GC. `TGocciaLiteralExpression.Create` calls `TGarbageCollector.Instance.UnregisterObject` to remove the value from GC tracking, and `TGocciaLiteralExpression.Destroy` frees the value (unless it is a singleton like `UndefinedValue`, `TrueValue`, or `FalseValue`).

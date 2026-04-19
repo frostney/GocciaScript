@@ -1,0 +1,167 @@
+[
+  {
+    "glob": "source/{shared,units}/**/*.pas",
+    "newOnly": true,
+    "files": [
+      "docs/contributing/code-style.md",
+      "docs/testing.md"
+    ],
+    "message": "New unit: read the Source Directory Layout and Testing philosophy before proceeding."
+  },
+  {
+    "glob": [
+      "source/units/Goccia.GarbageCollector.pas",
+      "source/shared/MemoryDetection.pas",
+      "source/units/Goccia.Threading*.pas"
+    ],
+    "files": [
+      "docs/garbage-collector.md"
+    ]
+  },
+  {
+    "glob": [
+      "source/units/Goccia.Engine.pas",
+      "source/units/Goccia.Runtime.Bootstrap.pas"
+    ],
+    "files": [
+      "docs/embedding.md",
+      "docs/architecture.md"
+    ]
+  },
+  {
+    "glob": [
+      "source/units/Goccia.Engine.Backend.pas",
+      "source/units/Goccia.Executor.pas",
+      "source/app/*.pas",
+      "source/app/*.dpr"
+    ],
+    "files": [
+      "docs/architecture.md"
+    ]
+  },
+  {
+    "glob": [
+      "source/units/Goccia.Interpreter.pas",
+      "source/units/Goccia.Evaluator*.pas",
+      "source/units/Goccia.Scope*.pas",
+      "source/units/Goccia.Modules*.pas"
+    ],
+    "files": [
+      "docs/interpreter.md"
+    ]
+  },
+  {
+    "glob": [
+      "source/units/Goccia.Compiler*.pas",
+      "source/units/Goccia.Bytecode*.pas",
+      "source/units/Goccia.VM*.pas"
+    ],
+    "files": [
+      "docs/bytecode-vm.md"
+    ]
+  },
+  {
+    "glob": [
+      "source/units/Goccia.Values.*.pas",
+      "source/units/Goccia.ObjectModel*.pas"
+    ],
+    "files": [
+      "docs/value-system.md"
+    ]
+  },
+  {
+    "glob": "source/units/Goccia.Builtins.*.pas",
+    "files": [
+      "docs/built-ins.md",
+      "docs/adding-built-in-types.md"
+    ]
+  },
+  {
+    "glob": [
+      "source/units/Goccia.Builtins.Temporal.pas",
+      "source/units/Goccia.Values.Temporal*.pas",
+      "source/units/Goccia.Temporal.*.pas"
+    ],
+    "files": [
+      "docs/built-ins-temporal.md"
+    ]
+  },
+  {
+    "glob": [
+      "source/units/Goccia.Values.ArrayBufferValue.pas",
+      "source/units/Goccia.Values.TypedArrayValue.pas",
+      "source/units/Goccia.Values.TextEncoderValue.pas",
+      "source/units/Goccia.Values.TextDecoderValue.pas"
+    ],
+    "files": [
+      "docs/built-ins-binary-data.md"
+    ]
+  },
+  {
+    "glob": [
+      "source/units/Goccia.{JSON,JSON5,JSONL,TOML,YAML,CSV,TSV}.pas",
+      "source/units/Goccia.Builtins.{JSON,JSON5,JSONL,TOML,YAML,CSV,TSV}.pas"
+    ],
+    "files": [
+      "docs/built-ins-data-formats.md"
+    ]
+  },
+  {
+    "glob": [
+      "source/units/Goccia.Spec.pas",
+      "source/units/Goccia.Lexer.pas",
+      "source/units/Goccia.Parser.pas"
+    ],
+    "files": [
+      "docs/language.md"
+    ]
+  },
+  {
+    "glob": "source/units/Goccia.Spec.pas",
+    "files": [
+      "docs/language-tables.md"
+    ]
+  },
+  {
+    "glob": "source/units/Goccia.Error*.pas",
+    "files": [
+      "docs/errors.md"
+    ]
+  },
+  {
+    "glob": "source/units/Goccia.Profiler*.pas",
+    "files": [
+      "docs/profiling.md"
+    ]
+  },
+  {
+    "glob": [
+      "source/units/Goccia.Coverage*.pas",
+      "source/units/Goccia.Builtins.TestingLibrary*.pas"
+    ],
+    "files": [
+      "docs/testing.md"
+    ]
+  },
+  {
+    "glob": "source/units/Goccia.Builtins.TestingLibrary*.pas",
+    "files": [
+      "docs/testing-api.md"
+    ]
+  },
+  {
+    "glob": "source/units/Goccia.Builtins.Benchmark.pas",
+    "files": [
+      "docs/benchmarks.md"
+    ]
+  },
+  {
+    "glob": [
+      "build.pas",
+      "source/app/*.dpr"
+    ],
+    "files": [
+      "docs/build-system.md"
+    ]
+  }
+]

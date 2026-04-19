@@ -628,6 +628,8 @@ begin
 
   Pool := TGocciaThreadPool.Create(AJobCount);
   try
+    if Assigned(TGarbageCollector.Instance) then
+      Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
     Pool.RunAll(AFiles, ScriptWorkerProc);
 
     for I := 0 to AFiles.Count - 1 do

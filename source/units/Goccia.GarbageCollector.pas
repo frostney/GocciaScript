@@ -7,7 +7,8 @@ interface
 uses
   Generics.Collections,
 
-  HashMap;
+  HashMap,
+  MemoryDetection;
 
 type
   TGCManagedObject = class
@@ -43,6 +44,11 @@ type
     FCollecting: Boolean;
     FTotalCollected: Int64;
     FTotalCollections: Integer;
+
+    FBytesAllocated: Int64;
+    FMaxBytes: Int64;
+    FSuggestedMaxBytes: Int64;
+    FMemoryLimitFiring: Boolean;
 
     {$IFDEF GC_TIMING}
     FTotalMarkTimeNs: Int64;
@@ -111,6 +117,15 @@ type
     property TotalCollections: Integer read FTotalCollections;
     property ManagedObjectCount: Integer read GetManagedObjectCount;
 
+    // Byte-level memory tracking. BytesAllocated is the approximate
+    // number of bytes currently tracked by the GC (InstanceSize per
+    // registered object). Set MaxBytes to a positive value to impose
+    // a ceiling; allocations that exceed it raise a RangeError.
+    property BytesAllocated: Int64 read FBytesAllocated;
+    property MaxBytes: Int64 read FMaxBytes write FMaxBytes;
+    property SuggestedMaxBytes: Int64 read FSuggestedMaxBytes;
+    property MemoryLimitFiring: Boolean read FMemoryLimitFiring write FMemoryLimitFiring;
+
     // Current position in the managed objects list. Capture before a
     // measurement phase and pass to CollectYoung for efficient
     // between-round collections.
@@ -120,14 +135,39 @@ type
 const
   DEFAULT_GC_THRESHOLD = 10000;
 
+  DEFAULT_MAX_BYTES   = 512 * 1024 * 1024;         { 512 MB fallback }
+  MAX_BYTES_CAP_64BIT = Int64(8192) * 1024 * 1024;  { 8 GB cap for 64-bit }
+  MAX_BYTES_CAP_32BIT = 700 * 1024 * 1024;          { 700 MB cap for 32-bit }
+
+function DetectDefaultMaxBytes: Int64;
+
 implementation
 
 {$IF DEFINED(GC_DEBUG) OR DEFINED(GC_TIMING)}
 uses
   SysUtils
-  {$IFDEF GC_TIMING},
-  TimingUtils{$ENDIF};
+  {$IFDEF GC_TIMING}, TimingUtils{$ENDIF};
 {$ENDIF}
+
+function DetectDefaultMaxBytes: Int64;
+var
+  PhysMem, Cap: Int64;
+begin
+  {$IF SizeOf(Pointer) >= 8}
+  Cap := MAX_BYTES_CAP_64BIT;
+  {$ELSE}
+  Cap := MAX_BYTES_CAP_32BIT;
+  {$ENDIF}
+  PhysMem := GetAvailableMemoryBytes;
+  if PhysMem > 0 then
+  begin
+    Result := PhysMem div 2;
+    if Result > Cap then
+      Result := Cap;
+  end
+  else
+    Result := DEFAULT_MAX_BYTES;
+end;
 
 threadvar
   GCCurrentMark: Cardinal;
@@ -199,6 +239,10 @@ begin
   FCollecting := False;
   FTotalCollected := 0;
   FTotalCollections := 0;
+  FBytesAllocated := 0;
+  FSuggestedMaxBytes := DetectDefaultMaxBytes;
+  FMaxBytes := FSuggestedMaxBytes;
+  FMemoryLimitFiring := False;
   {$IFDEF GC_TIMING}
   FTotalMarkTimeNs := 0;
   FTotalSweepTimeNs := 0;
@@ -227,6 +271,7 @@ begin
   AObject.GCIndex := FManagedObjects.Count;
   FManagedObjects.Add(AObject);
   Inc(FAllocationsSinceLastGC);
+  Inc(FBytesAllocated, AObject.InstanceSize);
 end;
 
 procedure TGarbageCollector.UnregisterObject(
@@ -240,6 +285,7 @@ begin
   begin
     FManagedObjects[Idx] := nil;
     AObject.GCIndex := -1;
+    Dec(FBytesAllocated, AObject.InstanceSize);
   end;
 end;
 
@@ -338,6 +384,7 @@ begin
     end
     else
     begin
+      Dec(FBytesAllocated, Obj.InstanceSize);
       Obj.GCIndex := -1;
       Obj.Recycle;
       Inc(Collected);
@@ -471,6 +518,7 @@ begin
       end
       else
       begin
+        Dec(FBytesAllocated, Obj.InstanceSize);
         Obj.GCIndex := -1;
         Obj.Recycle;
         Inc(Collected);
