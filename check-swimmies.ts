@@ -11,7 +11,7 @@
 
 import { existsSync, readFileSync } from "fs";
 import { resolve, relative, join } from "path";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { Glob } from "bun";
 
 const ROOT = import.meta.dirname;
@@ -30,11 +30,11 @@ interface Rule {
   newOnly: boolean;
 }
 
-function isTrackedByGit(filePath: string): boolean {
+function existsInHead(filePath: string): boolean {
   try {
-    execSync(`git ls-files --error-unmatch "${filePath}"`, {
+    execFileSync("git", ["cat-file", "-e", `HEAD:${filePath}`], {
       cwd: ROOT,
-      stdio: "pipe",
+      stdio: "ignore",
     });
     return true;
   } catch {
@@ -83,7 +83,7 @@ function checkFiles(
 
     for (const rule of rules) {
       if (!matchesAnyGlob(rel, rule.globs)) continue;
-      if (rule.newOnly && isTrackedByGit(rel)) continue;
+      if (rule.newOnly && existsInHead(rel)) continue;
       hits.push({ file: rel, files: rule.files, message: rule.message });
     }
   }
