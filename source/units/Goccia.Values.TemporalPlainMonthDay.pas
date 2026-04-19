@@ -354,8 +354,15 @@ begin
 end;
 
 function TGocciaTemporalPlainMonthDayValue.MonthDayToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  EmptyArgs: TGocciaArgumentsCollection;
 begin
-  Result := MonthDayToString(AArgs, AThisValue);
+  EmptyArgs := TGocciaArgumentsCollection.Create([]);
+  try
+    Result := MonthDayToString(EmptyArgs, AThisValue);
+  finally
+    EmptyArgs.Free;
+  end;
 end;
 
 end.

@@ -1231,8 +1231,15 @@ begin
 end;
 
 function TGocciaTemporalDurationValue.DurationToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  EmptyArgs: TGocciaArgumentsCollection;
 begin
-  Result := DurationToString(AArgs, AThisValue);
+  EmptyArgs := TGocciaArgumentsCollection.Create([]);
+  try
+    Result := DurationToString(EmptyArgs, AThisValue);
+  finally
+    EmptyArgs.Free;
+  end;
 end;
 
 end.

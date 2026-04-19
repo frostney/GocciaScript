@@ -545,8 +545,15 @@ begin
 end;
 
 function TGocciaTemporalPlainTimeValue.PlainTimeToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  EmptyArgs: TGocciaArgumentsCollection;
 begin
-  Result := TimeToString(AArgs, AThisValue);
+  EmptyArgs := TGocciaArgumentsCollection.Create([]);
+  try
+    Result := TimeToString(EmptyArgs, AThisValue);
+  finally
+    EmptyArgs.Free;
+  end;
 end;
 
 end.

@@ -538,8 +538,15 @@ begin
 end;
 
 function TGocciaTemporalPlainYearMonthValue.YearMonthToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  EmptyArgs: TGocciaArgumentsCollection;
 begin
-  Result := YearMonthToString(AArgs, AThisValue);
+  EmptyArgs := TGocciaArgumentsCollection.Create([]);
+  try
+    Result := YearMonthToString(EmptyArgs, AThisValue);
+  finally
+    EmptyArgs.Free;
+  end;
 end;
 
 end.

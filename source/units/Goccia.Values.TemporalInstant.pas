@@ -523,8 +523,15 @@ begin
 end;
 
 function TGocciaTemporalInstantValue.InstantToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  EmptyArgs: TGocciaArgumentsCollection;
 begin
-  Result := InstantToString(AArgs, AThisValue);
+  EmptyArgs := TGocciaArgumentsCollection.Create([]);
+  try
+    Result := InstantToString(EmptyArgs, AThisValue);
+  finally
+    EmptyArgs.Free;
+  end;
 end;
 
 function TGocciaTemporalInstantValue.InstantToZonedDateTimeISO(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -537,7 +544,9 @@ begin
   if AArgs.Length < 1 then
     ThrowTypeError('Instant.prototype.toZonedDateTimeISO requires a time zone argument', SSuggestTemporalTimezone);
   Arg := AArgs.GetElement(0);
-  if Arg is TGocciaStringLiteralValue then
+  if Arg is TGocciaTemporalZonedDateTimeValue then
+    TZ := TGocciaTemporalZonedDateTimeValue(Arg).TimeZone
+  else if Arg is TGocciaStringLiteralValue then
     TZ := TGocciaStringLiteralValue(Arg).Value
   else
   begin
