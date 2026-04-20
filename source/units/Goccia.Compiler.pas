@@ -312,6 +312,7 @@ var
   TryStmt: TGocciaTryStatement;
   SwitchStmt: TGocciaSwitchStatement;
   VarDecl: TGocciaVariableDeclaration;
+  DestructDecl: TGocciaDestructuringDeclaration;
   I, J: Integer;
 begin
   if ANode is TGocciaVariableDeclaration then
@@ -320,6 +321,12 @@ begin
     if VarDecl.IsVar then
       for I := 0 to High(VarDecl.Variables) do
         AScope.DeclareVarLocal(VarDecl.Variables[I].Name);
+  end
+  else if ANode is TGocciaDestructuringDeclaration then
+  begin
+    DestructDecl := TGocciaDestructuringDeclaration(ANode);
+    if DestructDecl.IsVar then
+      CollectDestructuringVarBindings(DestructDecl.Pattern, AScope);
   end
   else if ANode is TGocciaBlockStatement then
   begin

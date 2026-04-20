@@ -15,3 +15,9 @@ test("var redeclaration with different values", () => {
   var a = "third";
   expect(a).toBe("third");
 });
+
+test("var redeclaration without initializer preserves value", () => {
+  var x = 42;
+  var x;
+  expect(x).toBe(42);
+});

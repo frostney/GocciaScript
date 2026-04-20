@@ -197,6 +197,8 @@ procedure TGocciaInterpreter.EvaluateModuleBody(
 var
   I: Integer;
 begin
+  if FVarEnabled then
+    HoistVarDeclarations(AProgram.Body, AContext.Scope);
   for I := 0 to AProgram.Body.Count - 1 do
     EvaluateStatement(AProgram.Body[I], AContext);
 end;

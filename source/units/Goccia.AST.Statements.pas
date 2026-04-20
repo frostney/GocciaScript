@@ -128,6 +128,7 @@ type
   TGocciaForOfStatement = class(TGocciaStatement)
   private
     FIsConst: Boolean;
+    FIsVar: Boolean;
     FBindingName: string;
     FBindingPattern: TGocciaDestructuringPattern;
     FIterable: TGocciaExpression;
@@ -138,6 +139,7 @@ type
       const ABody: TGocciaStatement; const ALine, AColumn: Integer);
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property IsConst: Boolean read FIsConst;
+    property IsVar: Boolean read FIsVar write FIsVar;
     property BindingName: string read FBindingName;
     property BindingPattern: TGocciaDestructuringPattern read FBindingPattern;
     property Iterable: TGocciaExpression read FIterable;
@@ -835,7 +837,12 @@ end;
         // var declarations: assign to the hoisted binding in function/module scope
         TargetScope := AContext.Scope.FindFunctionOrModuleScope;
         if TargetScope.ContainsOwnLexicalBinding(Variables[I].Name) then
-          TargetScope.ForceUpdateBinding(Variables[I].Name, Value)
+        begin
+          // Redeclaration without initializer (var x;) preserves existing value
+          if not (Value is TGocciaUndefinedLiteralValue) or
+             not (Variables[I].Initializer is TGocciaLiteralExpression) then
+            TargetScope.ForceUpdateBinding(Variables[I].Name, Value);
+        end
         else
           TargetScope.DefineLexicalBinding(Variables[I].Name, Value, dtLet);
       end

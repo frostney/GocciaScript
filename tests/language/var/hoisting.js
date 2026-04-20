@@ -23,9 +23,11 @@ test("hoisted var gets assigned at declaration site", () => {
   expect(result[1]).toBe(42);
 });
 
+// Module-scope hoisting: var is hoisted to file scope
+const beforeHoistedVar = hoistedVar;
+var hoistedVar = "assigned";
+
 test("var hoisted at module top level", () => {
-  const before = hoistedVar;
-  var hoistedVar = "assigned";
-  expect(before).toBeUndefined();
+  expect(beforeHoistedVar).toBeUndefined();
   expect(hoistedVar).toBe("assigned");
 });

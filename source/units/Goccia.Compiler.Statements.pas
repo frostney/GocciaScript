@@ -68,6 +68,9 @@ function ExpressionType(const AScope: TGocciaCompilerScope;
   const AExpr: TGocciaExpression): TGocciaLocalType;
 function CharToLocalType(const ACh: Char): TGocciaLocalType;
 
+procedure CollectDestructuringVarBindings(const APattern: TGocciaDestructuringPattern;
+  const AScope: TGocciaCompilerScope);
+
 function SavePendingFinally: TObject;
 procedure RestorePendingFinally(const ASaved: TObject);
 
@@ -474,9 +477,16 @@ begin
   begin
     Info := AStmt.Variables[I];
     if AStmt.IsVar then
-      Slot := ACtx.Scope.DeclareVarLocal(Info.Name)
+    begin
+      // Track whether this is a redeclaration (slot already exists)
+      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      Slot := ACtx.Scope.DeclareVarLocal(Info.Name);
+    end
     else
+    begin
+      LocalIdx := -1;
       Slot := ACtx.Scope.DeclareLocal(Info.Name, AStmt.IsConst);
+    end;
 
     IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
       (ACtx.Scope.Depth = 0);
@@ -542,7 +552,8 @@ begin
       end;
     end;
 
-    if Assigned(Info.Initializer) then
+    if Assigned(Info.Initializer) and
+       not (AStmt.IsVar and (not HasRealInitializer) and (ACtx.Scope.ResolveLocal(Info.Name) >= 0)) then
     begin
       FuncCount := ACtx.Template.FunctionCount;
       ACtx.CompileExpression(Info.Initializer, Slot);
@@ -565,7 +576,8 @@ begin
         end;
       end;
     end
-    else
+    else if not (AStmt.IsVar and (LocalIdx >= 0)) then
+      // Only emit OP_LOAD_UNDEFINED if not a var redeclaration (preserve prior value)
       EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, Slot, 0, 0));
 
     if IsTopLevelGlobalBacked then

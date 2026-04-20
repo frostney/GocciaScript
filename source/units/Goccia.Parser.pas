@@ -1237,7 +1237,8 @@ end;
 // Parse a template interpolation expression text into an AST expression node.
 // Note: Tokens are owned by the Lexer (FTokens with OwnsObjects=True) and freed
 // when the Lexer is destroyed — they must not be freed separately.
-function ParseInterpolationExpression(const AExprText, AFileName: string): TGocciaExpression;
+function ParseInterpolationExpression(const AExprText, AFileName: string;
+  const AASI: Boolean = False; const AVarEnabled: Boolean = False): TGocciaExpression;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -1256,6 +1257,8 @@ begin
     SourceLines.Text := AExprText;
     try
       Parser := TGocciaParser.Create(Tokens, AFileName, SourceLines);
+      Parser.AutomaticSemicolonInsertion := AASI;
+      Parser.VarDeclarationsEnabled := AVarEnabled;
       try
         ProgramNode := Parser.ParseUnchecked;
         try
@@ -1318,7 +1321,7 @@ begin
   Expressions := TObjectList<TGocciaExpression>.Create(True);
   for I := 0 to Length(ExprTexts) - 1 do
   begin
-    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName);
+    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName, FAutomaticSemicolonInsertion, FVarDeclarationsEnabled);
     if Assigned(ParsedExpr) then
       Expressions.Add(ParsedExpr);
   end;
@@ -1378,7 +1381,7 @@ begin
       AToken.Line, AToken.Column));
 
     // Parse and add the interpolation expression
-    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName);
+    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName, FAutomaticSemicolonInsertion, FVarDeclarationsEnabled);
     if Assigned(ParsedExpr) then
       Parts.Add(ParsedExpr);
   end;
@@ -2841,6 +2844,7 @@ var
   Line, Column: Integer;
   IsAwait: Boolean;
   IsConst: Boolean;
+  IsVar: Boolean;
   BindingName: string;
   BindingPattern: TGocciaDestructuringPattern;
   IterableExpr: TGocciaExpression;
@@ -2853,6 +2857,7 @@ begin
   // Try to parse for...of / for-await-of
   SavedCurrent := FCurrent;
   IsAwait := False;
+  IsVar := False;
   BindingPattern := nil;
 
   // for-await-of: 'await' appears between 'for' and '(' (async or top-level)
@@ -2870,6 +2875,7 @@ begin
     if Check(gttConst) or Check(gttLet) or (FVarDeclarationsEnabled and Check(gttVar)) then
     begin
       IsConst := Check(gttConst);
+      IsVar := FVarDeclarationsEnabled and Check(gttVar);
       Advance; // consume const/let/var
 
       // Check if this is a for...of: need binding + 'of'
@@ -2912,9 +2918,15 @@ begin
           BodyStmt := Statement;
 
         if IsAwait then
-          Result := TGocciaForAwaitOfStatement.Create(IsConst, BindingName, BindingPattern, IterableExpr, BodyStmt, Line, Column)
+        begin
+          Result := TGocciaForAwaitOfStatement.Create(IsConst, BindingName, BindingPattern, IterableExpr, BodyStmt, Line, Column);
+          TGocciaForAwaitOfStatement(Result).IsVar := IsVar;
+        end
         else
+        begin
           Result := TGocciaForOfStatement.Create(IsConst, BindingName, BindingPattern, IterableExpr, BodyStmt, Line, Column);
+          TGocciaForOfStatement(Result).IsVar := IsVar;
+        end;
         Exit;
       end;
     end;

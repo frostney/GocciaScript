@@ -150,6 +150,36 @@ end;
 // their names as undefined in the target scope (function/module scope).
 procedure CollectVarNamesFromNode(const ANode: TGocciaASTNode; const ANames: TStringList); forward;
 
+procedure CollectPatternNames(const APattern: TGocciaDestructuringPattern; const ANames: TStringList);
+var
+  ObjPat: TGocciaObjectDestructuringPattern;
+  ArrPat: TGocciaArrayDestructuringPattern;
+  I: Integer;
+begin
+  if APattern is TGocciaIdentifierDestructuringPattern then
+  begin
+    if ANames.IndexOf(TGocciaIdentifierDestructuringPattern(APattern).Name) = -1 then
+      ANames.Add(TGocciaIdentifierDestructuringPattern(APattern).Name);
+  end
+  else if APattern is TGocciaObjectDestructuringPattern then
+  begin
+    ObjPat := TGocciaObjectDestructuringPattern(APattern);
+    for I := 0 to ObjPat.Properties.Count - 1 do
+      CollectPatternNames(ObjPat.Properties[I].Pattern, ANames);
+  end
+  else if APattern is TGocciaArrayDestructuringPattern then
+  begin
+    ArrPat := TGocciaArrayDestructuringPattern(APattern);
+    for I := 0 to ArrPat.Elements.Count - 1 do
+      if Assigned(ArrPat.Elements[I]) then
+        CollectPatternNames(ArrPat.Elements[I], ANames);
+  end
+  else if APattern is TGocciaAssignmentDestructuringPattern then
+    CollectPatternNames(TGocciaAssignmentDestructuringPattern(APattern).Left, ANames)
+  else if APattern is TGocciaRestDestructuringPattern then
+    CollectPatternNames(TGocciaRestDestructuringPattern(APattern).Argument, ANames);
+end;
+
 procedure CollectVarNames(const AStatements: TObjectList<TGocciaStatement>; const ANames: TStringList);
 var
   I: Integer;
@@ -165,6 +195,7 @@ var
   ForOf: TGocciaForOfStatement;
   TryStmt: TGocciaTryStatement;
   SwitchStmt: TGocciaSwitchStatement;
+  DestructDecl: TGocciaDestructuringDeclaration;
   I, J: Integer;
 begin
   if ANode is TGocciaVariableDeclaration then
@@ -173,6 +204,12 @@ begin
       for I := 0 to Length(TGocciaVariableDeclaration(ANode).Variables) - 1 do
         if ANames.IndexOf(TGocciaVariableDeclaration(ANode).Variables[I].Name) = -1 then
           ANames.Add(TGocciaVariableDeclaration(ANode).Variables[I].Name);
+  end
+  else if ANode is TGocciaDestructuringDeclaration then
+  begin
+    DestructDecl := TGocciaDestructuringDeclaration(ANode);
+    if DestructDecl.IsVar then
+      CollectPatternNames(DestructDecl.Pattern, ANames);
   end
   else if ANode is TGocciaBlockStatement then
   begin
@@ -189,6 +226,7 @@ begin
   end
   else if ANode is TGocciaForOfStatement then
   begin
+    // Also covers TGocciaForAwaitOfStatement (subclass)
     ForOf := TGocciaForOfStatement(ANode);
     CollectVarNamesFromNode(ForOf.Body, ANames);
   end
@@ -1298,7 +1336,20 @@ begin
       IterContext := AContext;
       IterContext.Scope := IterScope;
 
-      if AForOfStatement.BindingPattern <> nil then
+      if AForOfStatement.IsVar then
+      begin
+        // var binding: define/update in function scope
+        if AForOfStatement.BindingPattern <> nil then
+        begin
+          IterContext.Scope := AContext.Scope.FindFunctionOrModuleScope;
+          AssignPattern(AForOfStatement.BindingPattern, CurrentValue, IterContext, True, dtLet);
+          IterContext.Scope := IterScope;
+        end
+        else
+          AContext.Scope.FindFunctionOrModuleScope.ForceUpdateBinding(
+            AForOfStatement.BindingName, CurrentValue);
+      end
+      else if AForOfStatement.BindingPattern <> nil then
         AssignPattern(AForOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
       else
         IterScope.DefineLexicalBinding(AForOfStatement.BindingName, CurrentValue, DeclarationType);
@@ -3822,10 +3873,10 @@ begin
   // Apply the destructuring pattern to declare variables
   if ADestructuringDeclaration.IsVar then
   begin
-    // var destructuring: define in function/module scope
+    // var destructuring: assign in function/module scope (bindings already hoisted)
     VarContext := AContext;
     VarContext.Scope := AContext.Scope.FindFunctionOrModuleScope;
-    AssignPattern(ADestructuringDeclaration.Pattern, Value, VarContext, True, dtLet);
+    AssignPattern(ADestructuringDeclaration.Pattern, Value, VarContext, False);
   end
   else if ADestructuringDeclaration.IsConst then
     AssignPattern(ADestructuringDeclaration.Pattern, Value, AContext, True, dtConst)
