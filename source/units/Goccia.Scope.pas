@@ -18,6 +18,7 @@ const
   dtLet = Goccia.Scope.BindingMap.dtLet;
   dtConst = Goccia.Scope.BindingMap.dtConst;
   dtParameter = Goccia.Scope.BindingMap.dtParameter;
+  dtVar = Goccia.Scope.BindingMap.dtVar;
 
 type
   TGocciaScopeKind = (skUnknown, skGlobal, skFunction, skBlock, skCustom, skClass, skModule);
@@ -25,6 +26,7 @@ type
   TGocciaScope = class(TGCManagedObject)
   private
     FLexicalBindings: TGocciaScopeBindingMap;
+    FVarBindings: TGocciaScopeBindingMap;
     FParent: TGocciaScope;
     FThisValue: TGocciaValue;
     FScopeKind: TGocciaScopeKind;
@@ -44,20 +46,28 @@ type
 
     // New Define/Assign pattern
     procedure DefineLexicalBinding(const AName: string; const AValue: TGocciaValue; const ADeclarationType: TGocciaDeclarationType; const ALine: Integer = 0; const AColumn: Integer = 0);
-    procedure AssignLexicalBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0); virtual;
+    procedure AssignBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0); virtual;
     procedure ForceUpdateBinding(const AName: string; const AValue: TGocciaValue);
+
+    // Var binding support (separate map on function/module/global scopes)
+    procedure DefineVariableBinding(const AName: string; const AValue: TGocciaValue;
+      const AHasInitializer: Boolean);
+    function ContainsOwnVarBinding(const AName: string): Boolean;
 
     // Helper methods for token-based declarations
     procedure DefineFromToken(const AName: string; const AValue: TGocciaValue; const ATokenType: TGocciaTokenType);
 
     // Core methods
-    function GetLexicalBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding;
+    function GetBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding;
     function GetValue(const AName: string): TGocciaValue; inline;
 
     function ResolveIdentifier(const AName: string): TGocciaValue; inline;
     function ContainsOwnLexicalBinding(const AName: string): Boolean; inline;
     function Contains(const AName: string): Boolean; inline;
     function GetOwnBindingNames: TGocciaStringArray; inline;
+
+    // Walk the parent chain to find the nearest function/module/global scope (for var hoisting)
+    function FindFunctionOrModuleScope: TGocciaScope;
 
     // Walk the parent chain to find the nearest owning class / superclass
     function FindOwningClass: TGocciaValue;
@@ -122,7 +132,7 @@ type
     FCatchParameter: string;  // Track the catch parameter name for proper shadowing
   public
     constructor Create(const AParent: TGocciaScope; const ACatchParameter: string);
-    procedure AssignLexicalBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0); override;
+    procedure AssignBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0); override;
   end;
 
   TGocciaScopeList = TObjectList<TGocciaScope>;
@@ -167,6 +177,8 @@ begin
 
   if Assigned(FLexicalBindings) then
     FLexicalBindings.Free;
+  if Assigned(FVarBindings) then
+    FVarBindings.Free;
 
   if Assigned(FThisValue) then
     FThisValue := nil;
@@ -194,6 +206,19 @@ end;
 function TGocciaScope.GetSuperClass: TGocciaValue;
 begin
   Result := nil;
+end;
+
+function TGocciaScope.FindFunctionOrModuleScope: TGocciaScope;
+begin
+  Result := Self;
+  while Assigned(Result) do
+  begin
+    if Result.ScopeKind in [skFunction, skGlobal, skModule] then
+      Exit;
+    Result := Result.FParent;
+  end;
+  // Fallback: return self if no function/module scope found
+  Result := Self;
 end;
 
 function TGocciaScope.FindOwningClass: TGocciaValue;
@@ -283,7 +308,42 @@ begin
   end;
 end;
 
-procedure TGocciaScope.AssignLexicalBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0);
+procedure TGocciaScope.DefineVariableBinding(const AName: string; const AValue: TGocciaValue;
+  const AHasInitializer: Boolean);
+var
+  TargetScope: TGocciaScope;
+  Binding: TLexicalBinding;
+begin
+  TargetScope := FindFunctionOrModuleScope;
+  // Lazily allocate the var bindings map
+  if not Assigned(TargetScope.FVarBindings) then
+    TargetScope.FVarBindings := TGocciaScopeBindingMap.Create;
+
+  if TargetScope.FVarBindings.TryGetValue(AName, Binding) then
+  begin
+    // Redeclaration: only update if there's a real initializer
+    if AHasInitializer then
+    begin
+      Binding.Value := AValue;
+      TargetScope.FVarBindings.AddOrSetValue(AName, Binding);
+    end;
+  end
+  else
+  begin
+    // First declaration: create the binding
+    Binding.Value := AValue;
+    Binding.DeclarationType := dtVar;
+    Binding.Initialized := True;
+    TargetScope.FVarBindings.AddOrSetValue(AName, Binding);
+  end;
+end;
+
+function TGocciaScope.ContainsOwnVarBinding(const AName: string): Boolean;
+begin
+  Result := Assigned(FVarBindings) and FVarBindings.ContainsKey(AName);
+end;
+
+procedure TGocciaScope.AssignBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0);
 var
   LexicalBinding: TLexicalBinding;
 begin
@@ -311,10 +371,18 @@ begin
     Exit;
   end;
 
+  // Check var bindings on this scope
+  if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, LexicalBinding) then
+  begin
+    LexicalBinding.Value := AValue;
+    FVarBindings.AddOrSetValue(AName, LexicalBinding);
+    Exit;
+  end;
+
   // Variable not found in current scope, try parent scope
   if Assigned(FParent) then
   begin
-    FParent.AssignLexicalBinding(AName, AValue, ALine, AColumn);
+    FParent.AssignBinding(AName, AValue, ALine, AColumn);
     Exit;
   end;
 
@@ -325,7 +393,7 @@ begin
     SSuggestDeclareBeforeUse);
 end;
 
-function TGocciaScope.GetLexicalBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding;
+function TGocciaScope.GetBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding;
 var
   LexicalBinding: TLexicalBinding;
 begin
@@ -338,8 +406,10 @@ begin
         SSuggestTemporalDeadZone);
     Result := LexicalBinding;
   end
+  else if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, LexicalBinding) then
+    Result := LexicalBinding
   else if Assigned(FParent) then
-    Result := FParent.GetLexicalBinding(AName, ALine, AColumn)
+    Result := FParent.GetBinding(AName, ALine, AColumn)
   else
     raise TGocciaReferenceError.Create(
       Format(SErrorUndefinedVariable, [AName]),
@@ -349,7 +419,7 @@ end;
 
 function TGocciaScope.GetValue(const AName: string): TGocciaValue;
 begin
-  Result := GetLexicalBinding(AName).Value;
+  Result := GetBinding(AName).Value;
 end;
 
 function TGocciaScope.ResolveIdentifier(const AName: string): TGocciaValue;
@@ -368,6 +438,7 @@ end;
 function TGocciaScope.Contains(const AName: string): Boolean; inline;
 begin
   Result := ContainsOwnLexicalBinding(AName) or
+    ContainsOwnVarBinding(AName) or
     (Assigned(FParent) and FParent.Contains(AName));
 end;
 
@@ -394,6 +465,11 @@ begin
   for Pair in FLexicalBindings do
     if Assigned(Pair.Value.Value) then
       Pair.Value.Value.MarkReferences;
+
+  if Assigned(FVarBindings) then
+    for Pair in FVarBindings do
+      if Assigned(Pair.Value.Value) then
+        Pair.Value.Value.MarkReferences;
 end;
 
 { TGocciaGlobalScope }
@@ -483,7 +559,7 @@ begin
   FCatchParameter := ACatchParameter;
 end;
 
-procedure TGocciaCatchScope.AssignLexicalBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0);
+procedure TGocciaCatchScope.AssignBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0);
 begin
   // Surgical fix for catch parameter scopes: assignments to non-parameter variables
   // should propagate to parent scope, but catch parameters should stay for proper shadowing
@@ -491,12 +567,12 @@ begin
   begin
     // This is a catch parameter scope and the variable isn't the catch parameter.
     // Delegate directly to parent to ensure assignment propagation
-    FParent.AssignLexicalBinding(AName, AValue, ALine, AColumn);
+    FParent.AssignBinding(AName, AValue, ALine, AColumn);
   end
   else
   begin
     // Either it's the catch parameter or it exists in current scope - use base behavior
-    inherited AssignLexicalBinding(AName, AValue, ALine, AColumn);
+    inherited AssignBinding(AName, AValue, ALine, AColumn);
   end;
 end;
 

@@ -46,6 +46,7 @@ const
 implementation
 
 uses
+  Generics.Collections,
   SysUtils,
 
   Goccia.Bytecode,
@@ -237,6 +238,8 @@ begin
       TGocciaUsingDeclaration(AStmt));
 end;
 
+procedure HoistVarLocals(const ANode: TGocciaASTNode; const AScope: TGocciaCompilerScope); forward;
+
 procedure TGocciaCompiler.DoCompileFunctionBody(const ABody: TGocciaASTNode);
 var
   Block: TGocciaBlockStatement;
@@ -251,6 +254,10 @@ begin
     if ABody is TGocciaBlockStatement then
     begin
       Block := TGocciaBlockStatement(ABody);
+
+      // Hoist var declarations to function scope
+      for I := 0 to Block.Nodes.Count - 1 do
+        HoistVarLocals(Block.Nodes[I], FCurrentScope);
 
       // Check if the body contains using declarations — if so, delegate
       // to CompileBlockStatement which handles the try/finally disposal.
@@ -297,6 +304,76 @@ begin
   end;
 end;
 
+procedure HoistVarLocals(const ANode: TGocciaASTNode; const AScope: TGocciaCompilerScope);
+var
+  Block: TGocciaBlockStatement;
+  IfStmt: TGocciaIfStatement;
+  ForOf: TGocciaForOfStatement;
+  TryStmt: TGocciaTryStatement;
+  SwitchStmt: TGocciaSwitchStatement;
+  VarDecl: TGocciaVariableDeclaration;
+  DestructDecl: TGocciaDestructuringDeclaration;
+  I, J: Integer;
+begin
+  if ANode is TGocciaVariableDeclaration then
+  begin
+    VarDecl := TGocciaVariableDeclaration(ANode);
+    if VarDecl.IsVar then
+      for I := 0 to High(VarDecl.Variables) do
+        AScope.DeclareVarLocal(VarDecl.Variables[I].Name);
+  end
+  else if ANode is TGocciaDestructuringDeclaration then
+  begin
+    DestructDecl := TGocciaDestructuringDeclaration(ANode);
+    if DestructDecl.IsVar then
+      CollectDestructuringVarBindings(DestructDecl.Pattern, AScope);
+  end
+  else if ANode is TGocciaBlockStatement then
+  begin
+    Block := TGocciaBlockStatement(ANode);
+    for I := 0 to Block.Nodes.Count - 1 do
+      HoistVarLocals(Block.Nodes[I], AScope);
+  end
+  else if ANode is TGocciaIfStatement then
+  begin
+    IfStmt := TGocciaIfStatement(ANode);
+    HoistVarLocals(IfStmt.Consequent, AScope);
+    if Assigned(IfStmt.Alternate) then
+      HoistVarLocals(IfStmt.Alternate, AScope);
+  end
+  else if ANode is TGocciaForOfStatement then
+  begin
+    ForOf := TGocciaForOfStatement(ANode);
+    HoistVarLocals(ForOf.Body, AScope);
+  end
+  else if ANode is TGocciaTryStatement then
+  begin
+    TryStmt := TGocciaTryStatement(ANode);
+    if Assigned(TryStmt.Block) then
+      HoistVarLocals(TryStmt.Block, AScope);
+    if Assigned(TryStmt.CatchBlock) then
+      HoistVarLocals(TryStmt.CatchBlock, AScope);
+    if Assigned(TryStmt.FinallyBlock) then
+      HoistVarLocals(TryStmt.FinallyBlock, AScope);
+  end
+  else if ANode is TGocciaSwitchStatement then
+  begin
+    SwitchStmt := TGocciaSwitchStatement(ANode);
+    for I := 0 to SwitchStmt.Cases.Count - 1 do
+      for J := 0 to SwitchStmt.Cases[I].Consequent.Count - 1 do
+        HoistVarLocals(SwitchStmt.Cases[I].Consequent[J], AScope);
+  end;
+end;
+
+procedure HoistVarLocalsFromStatements(const AStatements: TObjectList<TGocciaStatement>;
+  const AScope: TGocciaCompilerScope);
+var
+  I: Integer;
+begin
+  for I := 0 to AStatements.Count - 1 do
+    HoistVarLocals(AStatements[I], AScope);
+end;
+
 function TGocciaCompiler.Compile(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
@@ -312,6 +389,9 @@ begin
   FCurrentScope.DeclareLocal('__receiver', False);
 
   try
+    // Hoist var declarations to module scope
+    HoistVarLocalsFromStatements(AProgram.Body, FCurrentScope);
+
     if AProgram.Body.Count > 0 then
     begin
       for I := 0 to AProgram.Body.Count - 2 do

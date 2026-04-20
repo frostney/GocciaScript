@@ -6,9 +6,9 @@
 
 - **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules (named only)
 - **TC39 proposals** — Decorators, decorator metadata, types as comments, enums, `Math.clamp`
-- **Excluded by design** — `var`, `function` keyword, `==`/`!=`, `eval`, `arguments`, traditional loops, `with`, default imports/exports
-- **Graceful handling** — Parser-recognized excluded syntax (`var`, `function`, `==`, loops, `with`) parses successfully but executes as a no-op with a warning and suggestion
-- **Opt-in toggles** — ASI (`--asi` / `Engine.ASIEnabled := True`)
+- **Excluded by design** — `function` keyword, `==`/`!=`, `eval`, `arguments`, traditional loops, `with`, default imports/exports
+- **Graceful handling** — Parser-recognized excluded syntax (`function`, `==`, loops, `with`) parses successfully but executes as a no-op with a warning and suggestion
+- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`)
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
@@ -563,9 +563,7 @@ Reliable brand check for error objects: `Error.isError(value)`. See [ES2026 §20
 
 ### `var` Declarations
 
-**Excluded.** Use `let` or `const` instead.
-
-`var` has function-scoping and hoisting behavior that leads to subtle bugs:
+**Opt-in.** Excluded by default; use `let` or `const` instead. Available as a compatibility mode via `--compat-var`. `var` has function-scoping and hoisting behavior that leads to subtle bugs:
 
 ```javascript
 // In JavaScript, this prints "undefined" then "5"
@@ -576,6 +574,8 @@ console.log(x); // 5
 ```
 
 With `let`/`const`, accessing before declaration is a `ReferenceError` (Temporal Dead Zone), which catches bugs early.
+
+When enabled (CLI: `--compat-var`, engine API: `Engine.VarEnabled := True`, config: `{"compat-var": true}`), `var` declarations follow ES2026 §14.3.2 semantics: function-scoped (escapes blocks), hoisted to function top as `undefined`, redeclaration allowed, no TDZ, with destructuring and for-of support. Var bindings are stored in a separate binding map (`FVarBindings`) on function/module/global scopes, distinct from lexical bindings. See [interpreter.md § Scope Chain Design](interpreter.md#scope-chain-design).
 
 ### `function` Keyword
 

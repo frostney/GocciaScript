@@ -5652,7 +5652,7 @@ begin
         if Assigned(FGlobalScope) then
         begin
           if FGlobalScope.Contains(GlobalName) then
-            FGlobalScope.AssignLexicalBinding(GlobalName, RegisterToValue(FRegisters[A]))
+            FGlobalScope.AssignBinding(GlobalName, RegisterToValue(FRegisters[A]))
           else
             ThrowReferenceError(GlobalName + ' is not defined');
         end;

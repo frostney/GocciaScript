@@ -38,6 +38,7 @@ type
     FOutputPath: TGocciaStringOption;
     FSourceMap: TGocciaStringOption;
     FASI: TGocciaFlagOption;
+    FCompatVar: TGocciaFlagOption;
 
     function ParseSource(const ASource: TStringList; const AFileName: string;
       out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
@@ -73,6 +74,7 @@ end;
 procedure TBundlerApp.Configure;
 begin
   FASI := AddFlag('asi', 'Enable automatic semicolon insertion');
+  FCompatVar := AddFlag('compat-var', 'Enable var declarations (compatibility)');
   FOutputPath := AddString('output',
     'Output path (single file) or output directory (multiple files)');
   FSourceMap := AddString('source-map',
@@ -124,6 +126,7 @@ begin
 
       Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
       Parser.AutomaticSemicolonInsertion := FASI.Present;
+      Parser.VarDeclarationsEnabled := FCompatVar.Present;
       try
         Result := Parser.Parse;
         ParseEnd := GetNanoseconds;

@@ -144,6 +144,7 @@ type
     FMaxInstructions: TGocciaInt64Option;
     FUnsafeFFI: TGocciaFlagOption;
     FStackSize: TGocciaIntegerOption;
+    FCompatVar: TGocciaFlagOption;
   public
     constructor Create;
     destructor Destroy; override;
@@ -159,6 +160,7 @@ type
     property MaxInstructions: TGocciaInt64Option read FMaxInstructions;
     property UnsafeFFI: TGocciaFlagOption read FUnsafeFFI;
     property StackSize: TGocciaIntegerOption read FStackSize;
+    property CompatVar: TGocciaFlagOption read FCompatVar;
   end;
 
   TGocciaCoverageFormat = (cfLcov, cfJson);
@@ -521,6 +523,8 @@ begin
     'Enable the FFI global (foreign function interface)', 'Engine');
   FStackSize := TGocciaIntegerOption.Create('stack-size',
     'Maximum call stack depth (0 = no limit)', 'Engine');
+  FCompatVar := TGocciaFlagOption.Create('compat-var',
+    'Enable var declarations (compatibility)', 'Engine');
 end;
 
 destructor TGocciaEngineOptions.Destroy;
@@ -534,12 +538,13 @@ begin
   FMaxInstructions.Free;
   FUnsafeFFI.Free;
   FStackSize.Free;
+  FCompatVar.Free;
   inherited Destroy;
 end;
 
 function TGocciaEngineOptions.Options: TGocciaOptionArray;
 begin
-  SetLength(Result, 9);
+  SetLength(Result, 10);
   Result[0] := FMode;
   Result[1] := FASI;
   Result[2] := FImportMap;
@@ -549,6 +554,7 @@ begin
   Result[6] := FMaxInstructions;
   Result[7] := FUnsafeFFI;
   Result[8] := FStackSize;
+  Result[9] := FCompatVar;
 end;
 
 { TGocciaCoverageOptions }

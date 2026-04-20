@@ -13,7 +13,7 @@
 
 | Feature | Spec | Status |
 |---------|------|--------|
-| `var` | ES1 | Excluded — use `let`/`const` |
+| `var` | ES1 | Opt-in (`--compat-var`) — use `let`/`const` by default |
 | `function` keyword | ES1 | Excluded — use arrow functions or shorthand methods |
 | `==` / `!=` (loose equality) | ES1 | Excluded — use `===` / `!==` |
 | `eval()` | ES1 | Excluded |

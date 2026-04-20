@@ -221,6 +221,9 @@ begin
   if Assigned(Context.OnError) and not Assigned(ACallScope.OnError) then
     ACallScope.OnError := Context.OnError;
 
+  // Hoist var declarations to function scope
+  HoistVarDeclarations(FBodyStatements, ACallScope);
+
   // Expression-body fast path: expression bodies cannot contain return/break
   if FIsExpressionBody and (FBodyStatements.Count = 1) then
   begin
