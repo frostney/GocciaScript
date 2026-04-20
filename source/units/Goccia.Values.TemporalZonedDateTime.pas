@@ -1119,11 +1119,11 @@ var
   Mode: TTemporalRoundingMode;
   CalDisp: TTemporalCalendarDisplay;
   DateRec: TTemporalDateRecord;
+  RoundedEpochMs: Int64;
   TimeStr, S: string;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.toString');
   ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
-  OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone, Zdt.FEpochMilliseconds div MILLISECONDS_PER_SECOND);
 
   OptionsObj := nil;
   Arg := AArgs.GetElement(0);
@@ -1145,6 +1145,13 @@ begin
     DateRec.Month := LMonth;
     DateRec.Day := LDay;
   end;
+
+  // Recompute UTC offset after rounding — the rounded instant may have crossed
+  // a DST boundary, making the pre-rounding offset stale.
+  RoundedEpochMs := LocalToEpochMs(DateRec.Year, DateRec.Month, DateRec.Day,
+    LHour, LMinute, LSecond, LMs, Zdt.FTimeZone);
+  OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone, RoundedEpochMs div MILLISECONDS_PER_SECOND);
+
   if FracDigits = -2 then // smallestUnit: minute
     TimeStr := PadTwo(LHour) + ':' + PadTwo(LMinute)
   else
