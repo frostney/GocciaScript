@@ -1441,7 +1441,19 @@ begin
           IterContext := AContext;
           IterContext.Scope := IterScope;
 
-          if AForAwaitOfStatement.BindingPattern <> nil then
+          if AForAwaitOfStatement.IsVar then
+          begin
+            if AForAwaitOfStatement.BindingPattern <> nil then
+            begin
+              IterContext.Scope := AContext.Scope.FindFunctionOrModuleScope;
+              AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, False);
+              IterContext.Scope := IterScope;
+            end
+            else
+              AContext.Scope.FindFunctionOrModuleScope.ForceUpdateBinding(
+                AForAwaitOfStatement.BindingName, CurrentValue);
+          end
+          else if AForAwaitOfStatement.BindingPattern <> nil then
             AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
           else
             IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
@@ -1482,7 +1494,19 @@ begin
         IterContext := AContext;
         IterContext.Scope := IterScope;
 
-        if AForAwaitOfStatement.BindingPattern <> nil then
+        if AForAwaitOfStatement.IsVar then
+        begin
+          if AForAwaitOfStatement.BindingPattern <> nil then
+          begin
+            IterContext.Scope := AContext.Scope.FindFunctionOrModuleScope;
+            AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, False);
+            IterContext.Scope := IterScope;
+          end
+          else
+            AContext.Scope.FindFunctionOrModuleScope.ForceUpdateBinding(
+              AForAwaitOfStatement.BindingName, CurrentValue);
+        end
+        else if AForAwaitOfStatement.BindingPattern <> nil then
           AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
         else
           IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
