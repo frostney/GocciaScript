@@ -11,5 +11,17 @@ describe("TypedArray.prototype.keys", () => {
       const keys = [...ta.keys()];
       expect(keys).toEqual([]);
     });
+
+    test("iterator protocol", () => {
+      const ta = new TA([1, 2]);
+      const iter = ta.keys();
+      const first = iter.next();
+      expect(first.done).toBe(false);
+      expect(first.value).toBe(0);
+      const second = iter.next();
+      expect(second.done).toBe(false);
+      expect(second.value).toBe(1);
+      expect(iter.next().done).toBe(true);
+    });
   });
 });

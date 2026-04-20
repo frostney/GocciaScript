@@ -1,18 +1,4 @@
 describe("TypedArray.prototype.copyWithin", () => {
-  test("negative target", () => {
-    const ta = new Int32Array([1, 2, 3, 4, 5]);
-    ta.copyWithin(-2, 0, 2);
-    expect(ta[3]).toBe(1);
-    expect(ta[4]).toBe(2);
-  });
-
-  test("negative source", () => {
-    const ta = new Int32Array([1, 2, 3, 4, 5]);
-    ta.copyWithin(0, -2);
-    expect(ta[0]).toBe(4);
-    expect(ta[1]).toBe(5);
-  });
-
   describe.each([Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array])("%s", (TA) => {
     test("copies within the array", () => {
       const ta = new TA([1, 2, 3, 4, 5]);
@@ -33,6 +19,20 @@ describe("TypedArray.prototype.copyWithin", () => {
     test("returns the typed array", () => {
       const ta = new TA([1, 2, 3]);
       expect(ta.copyWithin(0, 1)).toBe(ta);
+    });
+
+    test("negative target", () => {
+      const ta = new TA([1, 2, 3, 4, 5]);
+      ta.copyWithin(-2, 0, 2);
+      expect(ta[3]).toBe(1);
+      expect(ta[4]).toBe(2);
+    });
+
+    test("negative source", () => {
+      const ta = new TA([1, 2, 3, 4, 5]);
+      ta.copyWithin(0, -2);
+      expect(ta[0]).toBe(4);
+      expect(ta[1]).toBe(5);
     });
   });
 

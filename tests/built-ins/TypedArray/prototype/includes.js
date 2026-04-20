@@ -4,12 +4,6 @@ describe("TypedArray.prototype.includes", () => {
     expect(ta.includes(NaN)).toBe(true);
   });
 
-  test("with negative fromIndex", () => {
-    const ta = new Int32Array([1, 2, 3]);
-    expect(ta.includes(1, -2)).toBe(false);
-    expect(ta.includes(2, -2)).toBe(true);
-  });
-
   test("0 vs -0 with Float64Array", () => {
     const ta = new Float64Array([0]);
     expect(ta.includes(-0)).toBe(true);
@@ -29,6 +23,17 @@ describe("TypedArray.prototype.includes", () => {
     test("with fromIndex", () => {
       const ta = new TA([1, 2, 3]);
       expect(ta.includes(1, 1)).toBe(false);
+    });
+
+    test("on empty returns false", () => {
+      const ta = new TA(0);
+      expect(ta.includes(1)).toBe(false);
+    });
+
+    test("with negative fromIndex", () => {
+      const ta = new TA([1, 2, 3]);
+      expect(ta.includes(1, -2)).toBe(false);
+      expect(ta.includes(2, -2)).toBe(true);
     });
   });
 

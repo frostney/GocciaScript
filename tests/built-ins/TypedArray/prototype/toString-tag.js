@@ -7,6 +7,7 @@ describe("TypedArray Symbol.toStringTag", () => {
     [Uint16Array, "[object Uint16Array]"],
     [Int32Array, "[object Int32Array]"],
     [Uint32Array, "[object Uint32Array]"],
+    [Float16Array, "[object Float16Array]"],
     [Float32Array, "[object Float32Array]"],
     [Float64Array, "[object Float64Array]"],
     [BigInt64Array, "[object BigInt64Array]"],

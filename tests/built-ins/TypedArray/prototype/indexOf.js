@@ -1,18 +1,4 @@
 describe("TypedArray.prototype.indexOf", () => {
-  test("throws on non-TypedArray receiver", () => {
-    expect(() => Int32Array.prototype.indexOf.call({}, 1)).toThrow(TypeError);
-  });
-
-  test("negative fromIndex", () => {
-    const ta = new Int32Array([1, 2, 3, 2, 1]);
-    expect(ta.indexOf(2, -3)).toBe(3);
-  });
-
-  test("fromIndex beyond length returns -1", () => {
-    const ta = new Int32Array([1, 2, 3]);
-    expect(ta.indexOf(1, 10)).toBe(-1);
-  });
-
   describe.each([Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array])("%s", (TA) => {
     test("finds element", () => {
       const ta = new TA([1, 2, 3, 2]);
@@ -32,6 +18,20 @@ describe("TypedArray.prototype.indexOf", () => {
     test("on empty returns -1", () => {
       expect(new TA(0).indexOf(1)).toBe(-1);
     });
+
+    test("negative fromIndex", () => {
+      const ta = new TA([1, 2, 3, 2, 1]);
+      expect(ta.indexOf(2, -3)).toBe(3);
+    });
+
+    test("fromIndex beyond length returns -1", () => {
+      const ta = new TA([1, 2, 3]);
+      expect(ta.indexOf(1, 10)).toBe(-1);
+    });
+  });
+
+  test("throws on non-TypedArray receiver", () => {
+    expect(() => Int32Array.prototype.indexOf.call({}, 1)).toThrow(TypeError);
   });
 
   test.each([BigInt64Array, BigUint64Array])("%s indexOf", (TA) => {

@@ -1,8 +1,4 @@
 describe("TypedArray.prototype.toSorted", () => {
-  test("empty array returns empty", () => {
-    expect(new Int32Array(0).toSorted().length).toBe(0);
-  });
-
   describe.each([Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array])("%s", (TA) => {
     test("returns sorted copy", () => {
       const ta = new TA([3, 1, 2]);
@@ -16,6 +12,8 @@ describe("TypedArray.prototype.toSorted", () => {
       const ta = new TA([3, 1, 2]);
       ta.toSorted();
       expect(ta[0]).toBe(3);
+      expect(ta[1]).toBe(1);
+      expect(ta[2]).toBe(2);
     });
 
     test("returns instance of same type", () => {
@@ -29,6 +27,11 @@ describe("TypedArray.prototype.toSorted", () => {
       expect(sorted[0]).toBe(3);
       expect(sorted[1]).toBe(2);
       expect(sorted[2]).toBe(1);
+    });
+
+    test("empty array returns empty", () => {
+      const ta = new TA(0);
+      expect(ta.toSorted().length).toBe(0);
     });
   });
 

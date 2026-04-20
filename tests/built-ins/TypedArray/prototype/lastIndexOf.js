@@ -1,9 +1,4 @@
 describe("TypedArray.prototype.lastIndexOf", () => {
-  test("negative fromIndex", () => {
-    const ta = new Int32Array([1, 2, 3, 2, 1]);
-    expect(ta.lastIndexOf(2, -2)).toBe(3);
-  });
-
   describe.each([Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array])("%s", (TA) => {
     test("finds last occurrence", () => {
       const ta = new TA([1, 2, 3, 2]);
@@ -18,6 +13,11 @@ describe("TypedArray.prototype.lastIndexOf", () => {
     test("fromIndex parameter", () => {
       const ta = new TA([1, 2, 3, 2]);
       expect(ta.lastIndexOf(2, 2)).toBe(1);
+    });
+
+    test("negative fromIndex", () => {
+      const ta = new TA([1, 2, 3, 2, 1]);
+      expect(ta.lastIndexOf(2, -2)).toBe(3);
     });
   });
 

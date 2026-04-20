@@ -1,17 +1,4 @@
 describe("TypedArray.prototype.forEach", () => {
-  test("without callback throws TypeError", () => {
-    const ta = new Int32Array([1, 2, 3]);
-    expect(() => ta.forEach()).toThrow(TypeError);
-  });
-
-  test("passes thisArg to callback", () => {
-    const ta = new Int32Array([1, 2, 3]);
-    const ctx = { sum: 0 };
-    const obj = { fn(x) { this.sum += x; } };
-    ta.forEach(obj.fn, ctx);
-    expect(ctx.sum).toBe(6);
-  });
-
   describe.each([Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array])("%s", (TA) => {
     test("visits every element", () => {
       const ta = new TA([1, 2, 3]);
@@ -27,6 +14,19 @@ describe("TypedArray.prototype.forEach", () => {
       const ta = new TA([1, 2, 3]);
       const result = ta.forEach(() => {});
       expect(result).toBeUndefined();
+    });
+
+    test("without callback throws TypeError", () => {
+      const ta = new TA([1, 2, 3]);
+      expect(() => ta.forEach()).toThrow(TypeError);
+    });
+
+    test("passes thisArg to callback", () => {
+      const ta = new TA([1, 2, 3]);
+      const ctx = { sum: 0 };
+      const obj = { fn(x) { this.sum += x; } };
+      ta.forEach(obj.fn, ctx);
+      expect(ctx.sum).toBe(6);
     });
   });
 

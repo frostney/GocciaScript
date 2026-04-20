@@ -26,7 +26,6 @@ describe("TypedArray.of", () => {
       const ta = TA.of();
       expect(ta.length).toBe(0);
     });
-
   });
 
   test.each([BigInt64Array, BigUint64Array])("%s.of creates from BigInt arguments", (TA) => {

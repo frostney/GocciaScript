@@ -1,15 +1,4 @@
 describe("TypedArray.prototype.toReversed", () => {
-  test("empty array returns empty", () => {
-    expect(new Int32Array(0).toReversed().length).toBe(0);
-  });
-
-  test("single element", () => {
-    const ta = new Int32Array([42]);
-    const rev = ta.toReversed();
-    expect(rev[0]).toBe(42);
-    expect(rev.length).toBe(1);
-  });
-
   describe.each([Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array])("%s", (TA) => {
     test("returns reversed copy", () => {
       const ta = new TA([1, 2, 3]);
@@ -23,11 +12,25 @@ describe("TypedArray.prototype.toReversed", () => {
       const ta = new TA([1, 2, 3]);
       ta.toReversed();
       expect(ta[0]).toBe(1);
+      expect(ta[1]).toBe(2);
+      expect(ta[2]).toBe(3);
     });
 
     test("returns instance of same type", () => {
       const ta = new TA([1, 2, 3]);
       expect(ta.toReversed()).toBeInstanceOf(TA);
+    });
+
+    test("empty array returns empty", () => {
+      const ta = new TA(0);
+      expect(ta.toReversed().length).toBe(0);
+    });
+
+    test("single element", () => {
+      const ta = new TA([5]);
+      const rev = ta.toReversed();
+      expect(rev[0]).toBe(5);
+      expect(rev.length).toBe(1);
     });
   });
 

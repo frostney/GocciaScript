@@ -11,12 +11,25 @@ describe("TypedArray.prototype.values", () => {
       const vals = [...ta.values()];
       expect(vals).toEqual([]);
     });
+
+    test("iterator protocol", () => {
+      const ta = new TA([1, 2]);
+      const iter = ta.values();
+      const first = iter.next();
+      expect(first.done).toBe(false);
+      expect(first.value).toBe(1);
+      const second = iter.next();
+      expect(second.done).toBe(false);
+      expect(second.value).toBe(2);
+      expect(iter.next().done).toBe(true);
+    });
   });
 
   test.each([BigInt64Array, BigUint64Array])("%s values iterator", (TA) => {
     const ta = new TA([10n, 20n]);
-    const vals = [...ta.values()];
-    expect(vals[0]).toBe(10n);
-    expect(vals[1]).toBe(20n);
+    const iter = ta.values();
+    expect(iter.next().value).toBe(10n);
+    expect(iter.next().value).toBe(20n);
+    expect(iter.next().done).toBe(true);
   });
 });

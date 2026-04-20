@@ -1,10 +1,4 @@
 describe("TypedArray.prototype.with", () => {
-  test("out of bounds throws RangeError", () => {
-    const ta = new Int32Array([1, 2, 3]);
-    expect(() => ta.with(3, 99)).toThrow(RangeError);
-    expect(() => ta.with(-4, 99)).toThrow(RangeError);
-  });
-
   test("without value uses undefined → NaN → 0 for integer types", () => {
     const ta = new Int32Array([1, 2, 3]);
     const result = ta.with(0);
@@ -45,6 +39,12 @@ describe("TypedArray.prototype.with", () => {
       const ta = new TA([1, 2, 3]);
       const result = ta.with(-1, 9);
       expect(result[2]).toBe(9);
+    });
+
+    test("out of bounds throws RangeError", () => {
+      const ta = new TA([1, 2, 3]);
+      expect(() => ta.with(3, 9)).toThrow(RangeError);
+      expect(() => ta.with(-4, 9)).toThrow(RangeError);
     });
   });
 

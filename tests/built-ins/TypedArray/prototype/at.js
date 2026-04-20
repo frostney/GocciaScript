@@ -1,9 +1,4 @@
 describe("TypedArray.prototype.at", () => {
-  test("on empty returns undefined", () => {
-    const ta = new Int32Array(0);
-    expect(ta.at(0)).toBeUndefined();
-  });
-
   describe.each([Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array])("%s", (TA) => {
     test("positive index", () => {
       const ta = new TA([1, 2, 3]);
@@ -21,6 +16,11 @@ describe("TypedArray.prototype.at", () => {
       const ta = new TA([1, 2, 3]);
       expect(ta.at(3)).toBeUndefined();
       expect(ta.at(-4)).toBeUndefined();
+    });
+
+    test("on empty returns undefined", () => {
+      const ta = new TA(0);
+      expect(ta.at(0)).toBeUndefined();
     });
   });
 
