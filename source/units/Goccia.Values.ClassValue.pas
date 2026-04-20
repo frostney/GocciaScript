@@ -1164,6 +1164,8 @@ var
 begin
   if AArguments.Length = 0 then
     Prim := TGocciaStringLiteralValue.Create('')
+  else if AArguments.GetElement(0) is TGocciaSymbolValue then
+    Prim := TGocciaSymbolValue(AArguments.GetElement(0)).ToDisplayString
   else
     Prim := AArguments.GetElement(0).ToStringLiteral;
   Result := Prim.Box;
