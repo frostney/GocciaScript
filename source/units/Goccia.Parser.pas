@@ -1851,6 +1851,7 @@ begin
     if IsGetter then
     begin
       Getters.Add(Key, ParseGetterExpression);
+      Getters[Key].SourceText := ExtractSourceRange(MemberStartLine, MemberStartColumn);
 
       // Track in source order
       Inc(SourceOrderCount);
@@ -1862,6 +1863,7 @@ begin
     else if IsSetter then
     begin
       Setters.Add(Key, ParseSetterExpression);
+      Setters[Key].SourceText := ExtractSourceRange(MemberStartLine, MemberStartColumn);
 
       // Track in source order
       Inc(SourceOrderCount);
@@ -3934,6 +3936,7 @@ begin
       else if IsGetter then
       begin
         Getter := ParseGetterExpression;
+        Getter.SourceText := ExtractSourceRange(MemberStartLine, MemberStartColumn);
 
         if (Length(MemberDecorators) > 0) or IsComputed then
         begin
@@ -3975,6 +3978,7 @@ begin
       else if IsSetter then
       begin
         Setter := ParseSetterExpression;
+        Setter.SourceText := ExtractSourceRange(MemberStartLine, MemberStartColumn);
 
         if (Length(MemberDecorators) > 0) or IsComputed then
         begin

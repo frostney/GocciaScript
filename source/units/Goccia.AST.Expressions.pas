@@ -454,10 +454,12 @@ type
   TGocciaGetterExpression = class(TGocciaExpression)
   private
     FBody: TGocciaASTNode;
+    FSourceText: string;
   public
     constructor Create(const ABody: TGocciaASTNode; const ALine, AColumn: Integer);
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Body: TGocciaASTNode read FBody;
+    property SourceText: string read FSourceText write FSourceText;
   end;
 
   // Setter method: set propertyName(value) { ... }
@@ -465,11 +467,13 @@ type
   private
     FParameter: string;
     FBody: TGocciaASTNode;
+    FSourceText: string;
   public
     constructor Create(const AParameter: string; const ABody: TGocciaASTNode; const ALine, AColumn: Integer);
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Parameter: string read FParameter;
     property Body: TGocciaASTNode read FBody;
+    property SourceText: string read FSourceText write FSourceText;
   end;
 
   // Destructuring pattern base class - complete definition

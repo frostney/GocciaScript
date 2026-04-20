@@ -1031,6 +1031,7 @@ begin
   Result := TGocciaFunctionValue.Create(EmptyParameters, Statements, AContext.Scope.CreateChild);
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AGetterExpression.Line;
+  TGocciaFunctionValue(Result).SourceText := AGetterExpression.SourceText;
 end;
 
 function EvaluateSetter(const ASetterExpression: TGocciaSetterExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -1049,6 +1050,7 @@ begin
   Result := TGocciaFunctionValue.Create(Parameters, Statements, AContext.Scope.CreateChild);
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := ASetterExpression.Line;
+  TGocciaFunctionValue(Result).SourceText := ASetterExpression.SourceText;
 end;
 
 // ES2026 §27.7.5.3 Await(value)

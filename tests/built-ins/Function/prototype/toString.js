@@ -81,4 +81,56 @@ describe("Function.prototype.toString", () => {
     expect(str.includes("double(x)")).toBe(true);
     expect(str.includes("return x * 2")).toBe(true);
   });
+
+  test("object getter returns source text", () => {
+    const obj = { get name() { return "hello"; } };
+    const desc = Object.getOwnPropertyDescriptor(obj, "name");
+    const str = desc.get.toString();
+    expect(str.includes("get")).toBe(true);
+    expect(str.includes("name()")).toBe(true);
+    expect(str.includes("return")).toBe(true);
+  });
+
+  test("object setter returns source text", () => {
+    const obj = { set value(v) { this._v = v; } };
+    const desc = Object.getOwnPropertyDescriptor(obj, "value");
+    const str = desc.set.toString();
+    expect(str.includes("set")).toBe(true);
+    expect(str.includes("value(v)")).toBe(true);
+    expect(str.includes("this._v = v")).toBe(true);
+  });
+
+  test("class getter returns source text", () => {
+    class Foo {
+      get bar() { return 42; }
+    }
+    const desc = Object.getOwnPropertyDescriptor(Foo.prototype, "bar");
+    const str = desc.get.toString();
+    expect(str.includes("get")).toBe(true);
+    expect(str.includes("bar()")).toBe(true);
+  });
+
+  test("class setter returns source text", () => {
+    class Foo {
+      set bar(v) { this._bar = v; }
+    }
+    const desc = Object.getOwnPropertyDescriptor(Foo.prototype, "bar");
+    const str = desc.set.toString();
+    expect(str.includes("set")).toBe(true);
+    expect(str.includes("bar(v)")).toBe(true);
+  });
+
+  test("async arrow function includes async prefix", () => {
+    const fn = async (x) => x + 1;
+    const str = fn.toString();
+    expect(str.includes("async")).toBe(true);
+    expect(str.includes("=>")).toBe(true);
+  });
+
+  test("async object method includes async prefix", () => {
+    const obj = { async fetch(url) { return url; } };
+    const str = obj.fetch.toString();
+    expect(str.includes("async")).toBe(true);
+    expect(str.includes("fetch(url)")).toBe(true);
+  });
 });
