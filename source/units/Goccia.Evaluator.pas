@@ -109,6 +109,7 @@ uses
   Goccia.Lexer,
   Goccia.MicrotaskQueue,
   Goccia.Parser,
+  Goccia.StackLimit,
   Goccia.Timeout,
   Goccia.Token,
   Goccia.Values.ArrayValue,
@@ -617,8 +618,11 @@ begin
       CalleeName := '';
 
     if Assigned(TGocciaCallStack.Instance) then
+    begin
       TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
         ACallExpression.Line, ACallExpression.Column);
+      CheckStackDepth(TGocciaCallStack.Instance.Count);
+    end;
     try
       if Callee is TGocciaProxyValue then
         Result := TGocciaProxyValue(Callee).ApplyTrap(Arguments, ThisValue)
@@ -1697,6 +1701,8 @@ begin
     Result := CreateErrorObject(SYNTAX_ERROR_NAME, E.Message)
   else if E is TGocciaRuntimeError then
     Result := CreateErrorObject(ERROR_NAME, E.Message)
+  else if E is EStackOverflow then
+    Result := CreateErrorObject(RANGE_ERROR_NAME, SErrorMaxCallStackExceeded)
   else
     Result := CreateErrorObject(ERROR_NAME, E.Message);
 end;
@@ -2025,8 +2031,11 @@ begin
       CalleeName := '';
 
     if Assigned(TGocciaCallStack.Instance) then
+    begin
       TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
         ANewExpression.Line, ANewExpression.Column);
+      CheckStackDepth(TGocciaCallStack.Instance.Count);
+    end;
     try
       if Callee is TGocciaProxyValue then
       begin
@@ -3390,8 +3399,11 @@ begin
       CalleeName := '';
 
     if Assigned(TGocciaCallStack.Instance) then
+    begin
       TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
         ATaggedTemplateExpression.Line, ATaggedTemplateExpression.Column);
+      CheckStackDepth(TGocciaCallStack.Instance.Count);
+    end;
     try
       if Callee is TGocciaProxyValue then
         Result := TGocciaProxyValue(Callee).ApplyTrap(Arguments, ThisValue)
