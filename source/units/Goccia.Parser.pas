@@ -294,10 +294,10 @@ var
   SourceLine: string;
 begin
   // End position is after the last consumed token (Previous).
-  // Use SourceLength (the original span in source) instead of Length(Lexeme),
-  // because tokens like gttTemplate and gttRegex carry transformed payloads.
+  // Use EndColumn directly from the token, which correctly handles multi-line
+  // tokens (templates, regex) where Previous.Line is the end line.
   EndLine := Previous.Line;
-  EndColumn := Previous.Column + Previous.SourceLength - 1;
+  EndColumn := Previous.EndColumn;
 
   if (AStartLine < 1) or (AStartLine > FSourceLines.Count) then
     Exit('');
