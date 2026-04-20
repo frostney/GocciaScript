@@ -8,11 +8,6 @@ describe("Function.prototype.constructor", () => {
     expect(Function.prototype.constructor).toBe(Function);
   });
 
-  test("function instance .constructor is Function", () => {
-    const foo = () => {};
-    expect(foo.constructor).toBe(Function);
-  });
-
   test("arrow function .constructor is Function", () => {
     const arrow = () => {};
     expect(arrow.constructor).toBe(Function);

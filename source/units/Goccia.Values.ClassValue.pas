@@ -911,7 +911,7 @@ begin
   FuncProto := TGocciaFunctionBase.GetSharedPrototype;
   if Assigned(FuncProto) then
   begin
-    Result := FuncProto.GetProperty(AName);
+    Result := FuncProto.GetPropertyWithContext(AName, Self);
     if not (Result is TGocciaUndefinedLiteralValue) then
       Exit;
   end;
