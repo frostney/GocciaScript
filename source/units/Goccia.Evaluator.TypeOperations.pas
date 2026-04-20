@@ -152,9 +152,16 @@ var
 begin
   // ECMAScript: right operand must be an object, not a primitive
   if ARight.IsPrimitive then
-    ThrowTypeError(Format(SErrorCannotUseInOperator,
-      [ALeft.ToStringLiteral.Value, ARight.ToStringLiteral.Value]),
-      SSuggestCheckNullBeforeAccess);
+  begin
+    if ALeft is TGocciaSymbolValue then
+      ThrowTypeError(Format(SErrorCannotUseInOperator,
+        [TGocciaSymbolValue(ALeft).ToDisplayString.Value, ARight.ToStringLiteral.Value]),
+        SSuggestCheckNullBeforeAccess)
+    else
+      ThrowTypeError(Format(SErrorCannotUseInOperator,
+        [ALeft.ToStringLiteral.Value, ARight.ToStringLiteral.Value]),
+        SSuggestCheckNullBeforeAccess);
+  end;
 
   if ALeft is TGocciaSymbolValue then
   begin

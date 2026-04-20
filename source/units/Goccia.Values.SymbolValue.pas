@@ -59,6 +59,7 @@ type
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
     function ToNumberLiteral: TGocciaNumberLiteralValue; override;
     function ToStringLiteral: TGocciaStringLiteralValue; override;
+    function ToDisplayString: TGocciaStringLiteralValue;
 
     property Description: string read FDescription;
     property Id: Integer read FId;
@@ -94,12 +95,13 @@ threadvar
   GNextSymbolId: Integer;
   GSymbolRegistry: THashMap<Integer, TGocciaSymbolValue>;
 
+// ES2026 §20.4.3.4 Symbol.prototype.toString()
 function TGocciaSymbolValue.SymbolToString(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaSymbolValue) then
     ThrowTypeError(SErrorSymbolProtoToStringRequiresSymbol, SSuggestSymbolThisType);
-  Result := AThisValue.ToStringLiteral;
+  Result := TGocciaSymbolValue(AThisValue).ToDisplayString;
 end;
 
 function TGocciaSymbolValue.GetDescription(const AArgs: TGocciaArgumentsCollection;
@@ -378,7 +380,15 @@ begin
   Result := nil;
 end;
 
+// ES2026 §7.1.17 ToString(argument) — Symbol throws TypeError on implicit coercion
 function TGocciaSymbolValue.ToStringLiteral: TGocciaStringLiteralValue;
+begin
+  ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
+  Result := nil;
+end;
+
+// ES2026 §20.4.3.4 Symbol.prototype.toString() — explicit display representation
+function TGocciaSymbolValue.ToDisplayString: TGocciaStringLiteralValue;
 begin
   if FDescription <> '' then
     Result := TGocciaStringLiteralValue.Create('Symbol(' + FDescription + ')')

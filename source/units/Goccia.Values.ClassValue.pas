@@ -1034,10 +1034,13 @@ end;
 function TGocciaClassValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   // String/Number/Boolean act as type conversion functions when called without new
+  // ES2026 §22.1.1.1 String(value) — Symbol returns SymbolDescriptiveString
   if FName = CONSTRUCTOR_STRING then
   begin
     if AArguments.Length = 0 then
       Result := TGocciaStringLiteralValue.Create('')
+    else if AArguments.GetElement(0) is TGocciaSymbolValue then
+      Result := TGocciaSymbolValue(AArguments.GetElement(0)).ToDisplayString
     else
       Result := AArguments.GetElement(0).ToStringLiteral;
   end
@@ -1161,6 +1164,8 @@ var
 begin
   if AArguments.Length = 0 then
     Prim := TGocciaStringLiteralValue.Create('')
+  else if AArguments.GetElement(0) is TGocciaSymbolValue then
+    Prim := TGocciaSymbolValue(AArguments.GetElement(0)).ToDisplayString
   else
     Prim := AArguments.GetElement(0).ToStringLiteral;
   Result := Prim.Box;

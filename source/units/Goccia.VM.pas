@@ -3635,8 +3635,14 @@ begin
      (AObject is TGocciaBooleanLiteralValue) or
      (AObject is TGocciaNumberLiteralValue) or
      (AObject is TGocciaStringLiteralValue) then
-    ThrowTypeError(Format(SErrorCannotUseInOperator, [AKey.ToStringLiteral.Value, AObject.ToStringLiteral.Value]),
-      SSuggestCheckNullBeforeAccess);
+  begin
+    if AKey is TGocciaSymbolValue then
+      ThrowTypeError(Format(SErrorCannotUseInOperator, [TGocciaSymbolValue(AKey).ToDisplayString.Value, AObject.ToStringLiteral.Value]),
+        SSuggestCheckNullBeforeAccess)
+    else
+      ThrowTypeError(Format(SErrorCannotUseInOperator, [AKey.ToStringLiteral.Value, AObject.ToStringLiteral.Value]),
+        SSuggestCheckNullBeforeAccess);
+  end;
 
   if (AKey is TGocciaSymbolValue) and (AObject is TGocciaObjectValue) then
   begin

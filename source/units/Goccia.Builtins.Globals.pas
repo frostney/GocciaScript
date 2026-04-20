@@ -643,7 +643,7 @@ begin
     Exit(AValue);
 
   if AValue is TGocciaSymbolValue then
-    ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [AValue.ToStringLiteral.Value]), SSuggestStructuredClone);
+    ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [TGocciaSymbolValue(AValue).ToDisplayString.Value]), SSuggestStructuredClone);
 
   if AValue.IsCallable then
     ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [AValue.ToStringLiteral.Value]), SSuggestStructuredClone);

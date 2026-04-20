@@ -33,4 +33,10 @@ describe("String constructor", () => {
     const s = new String("hello");
     expect(s instanceof String).toBe(true);
   });
+
+  test("new String(symbol) wraps display string (ES2026 §22.1.1.1)", () => {
+    const s = new String(Symbol("x"));
+    expect(typeof s).toBe("object");
+    expect(s.valueOf()).toBe("Symbol(x)");
+  });
 });
