@@ -33,4 +33,18 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime.prototype.toString", () => {
     const s = zdt.toString({ fractionalSecondDigits: 0, roundingMode: "halfExpand" });
     expect(s).toBe("2024-03-16T00:00:00+05:30[+05:30]");
   });
+
+  test("no-op rounding preserves original offset from epoch", () => {
+    // When no rounding occurs (auto precision), the offset must come from the
+    // original epoch, not from re-resolving local fields through LocalToEpochMs.
+    // This prevents fold-flip for ambiguous wall-clock times during DST fall-back.
+    const epochNs = 1710510330000n * 1000000n; // 2024-03-15T13:45:30Z
+    const zdt = new Temporal.ZonedDateTime(epochNs, "+05:30");
+    const auto = zdt.toString(); // auto precision — no rounding
+    expect(auto).toContain("+05:30");
+    expect(auto).toContain("[+05:30]");
+    const nano = zdt.toString({ fractionalSecondDigits: 9 }); // nanosecond — no rounding
+    expect(nano).toContain("+05:30");
+    expect(nano).toContain("[+05:30]");
+  });
 });

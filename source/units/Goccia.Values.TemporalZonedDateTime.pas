@@ -1112,6 +1112,7 @@ function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeToString(const AArgs: TG
 var
   Zdt: TGocciaTemporalZonedDateTimeValue;
   LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
+  SavedHour, SavedMinute, SavedSecond, SavedMs: Integer;
   OffsetSeconds: Integer;
   Arg: TGocciaValue;
   OptionsObj: TGocciaObjectValue;
@@ -1135,6 +1136,10 @@ begin
   end;
   ResolveTemporalToStringOptions(OptionsObj, FracDigits, Mode);
   CalDisp := GetCalendarDisplay(OptionsObj);
+  SavedHour := LHour;
+  SavedMinute := LMinute;
+  SavedSecond := LSecond;
+  SavedMs := LMs;
   ExtraDays := 0;
   RoundTimeForToString(LHour, LMinute, LSecond, LMs, LUs, LNs, ExtraDays, FracDigits, Mode);
   if ExtraDays <> 0 then
@@ -1146,11 +1151,18 @@ begin
     DateRec.Day := LDay;
   end;
 
-  // Recompute UTC offset after rounding — the rounded instant may have crossed
-  // a DST boundary, making the pre-rounding offset stale.
-  RoundedEpochMs := LocalToEpochMs(DateRec.Year, DateRec.Month, DateRec.Day,
-    LHour, LMinute, LSecond, LMs, Zdt.FTimeZone);
-  OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone, RoundedEpochMs div MILLISECONDS_PER_SECOND);
+  // Recompute UTC offset only when rounding actually changed the local time.
+  // Unconditional recomputation via LocalToEpochMs would lose fold information
+  // for ambiguous wall-clock times during DST fall-back (first-match disambiguation).
+  if (ExtraDays <> 0) or (LHour <> SavedHour) or (LMinute <> SavedMinute) or
+     (LSecond <> SavedSecond) or (LMs <> SavedMs) then
+  begin
+    RoundedEpochMs := LocalToEpochMs(DateRec.Year, DateRec.Month, DateRec.Day,
+      LHour, LMinute, LSecond, LMs, Zdt.FTimeZone);
+    OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone, RoundedEpochMs div MILLISECONDS_PER_SECOND);
+  end
+  else
+    OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone, Zdt.FEpochMilliseconds div MILLISECONDS_PER_SECOND);
 
   if FracDigits = -2 then // smallestUnit: minute
     TimeStr := PadTwo(LHour) + ':' + PadTwo(LMinute)
