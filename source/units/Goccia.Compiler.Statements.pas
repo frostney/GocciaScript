@@ -471,7 +471,7 @@ var
   Slot: UInt8;
   InferredTemplate: TGocciaFunctionTemplate;
   TypeHint, AnnotationType: TGocciaLocalType;
-  IsStrict, HasRealInitializer, IsTopLevelGlobalBacked: Boolean;
+  IsStrict, HasRealInitializer, IsTopLevelGlobalBacked, IsVarRedeclaration: Boolean;
 begin
   for I := 0 to High(AStmt.Variables) do
   begin
@@ -480,11 +480,13 @@ begin
     begin
       // Track whether this is a redeclaration (slot already exists)
       LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      IsVarRedeclaration := LocalIdx >= 0;
       Slot := ACtx.Scope.DeclareVarLocal(Info.Name);
     end
     else
     begin
       LocalIdx := -1;
+      IsVarRedeclaration := False;
       Slot := ACtx.Scope.DeclareLocal(Info.Name, AStmt.IsConst);
     end;
 
@@ -553,7 +555,7 @@ begin
     end;
 
     if Assigned(Info.Initializer) and
-       not (AStmt.IsVar and (not HasRealInitializer) and (ACtx.Scope.ResolveLocal(Info.Name) >= 0)) then
+       not (AStmt.IsVar and (not HasRealInitializer) and IsVarRedeclaration) then
     begin
       FuncCount := ACtx.Template.FunctionCount;
       ACtx.CompileExpression(Info.Initializer, Slot);
@@ -576,7 +578,7 @@ begin
         end;
       end;
     end
-    else if not (AStmt.IsVar and (LocalIdx >= 0)) then
+    else if not (AStmt.IsVar and IsVarRedeclaration) then
       // Only emit OP_LOAD_UNDEFINED if not a var redeclaration (preserve prior value)
       EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, Slot, 0, 0));
 

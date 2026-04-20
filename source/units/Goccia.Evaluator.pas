@@ -228,6 +228,13 @@ begin
   begin
     // Also covers TGocciaForAwaitOfStatement (subclass)
     ForOf := TGocciaForOfStatement(ANode);
+    if ForOf.IsVar then
+    begin
+      if Assigned(ForOf.BindingPattern) then
+        CollectPatternNames(ForOf.BindingPattern, ANames)
+      else if (ForOf.BindingName <> '') and (ANames.IndexOf(ForOf.BindingName) = -1) then
+        ANames.Add(ForOf.BindingName);
+    end;
     CollectVarNamesFromNode(ForOf.Body, ANames);
   end
   else if ANode is TGocciaTryStatement then
@@ -1342,7 +1349,7 @@ begin
         if AForOfStatement.BindingPattern <> nil then
         begin
           IterContext.Scope := AContext.Scope.FindFunctionOrModuleScope;
-          AssignPattern(AForOfStatement.BindingPattern, CurrentValue, IterContext, True, dtLet);
+          AssignPattern(AForOfStatement.BindingPattern, CurrentValue, IterContext, False);
           IterContext.Scope := IterScope;
         end
         else
