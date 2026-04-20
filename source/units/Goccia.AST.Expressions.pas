@@ -1194,7 +1194,7 @@ end;
 function TGocciaAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
   Result := Value.Evaluate(AContext);
-  AContext.Scope.AssignLexicalBinding(Name, Result);
+  AContext.Scope.AssignIdentifierBinding(Name, Result);
 end;
 
 function TGocciaPropertyAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -1238,7 +1238,7 @@ begin
       Exit(CurrentValue);
 
     Result := Value.Evaluate(AContext);
-    AContext.Scope.AssignLexicalBinding(Name, Result);
+    AContext.Scope.AssignIdentifierBinding(Name, Result);
     Exit;
   end;
 
@@ -1249,7 +1249,7 @@ begin
       Exit(CurrentValue);
 
     Result := Value.Evaluate(AContext);
-    AContext.Scope.AssignLexicalBinding(Name, Result);
+    AContext.Scope.AssignIdentifierBinding(Name, Result);
     Exit;
   end;
 
@@ -1260,14 +1260,14 @@ begin
       Exit(CurrentValue);
 
     Result := Value.Evaluate(AContext);
-    AContext.Scope.AssignLexicalBinding(Name, Result);
+    AContext.Scope.AssignIdentifierBinding(Name, Result);
     Exit;
   end;
 
   Result := CurrentValue;
   RhsValue := Value.Evaluate(AContext);
   Result := PerformCompoundOperation(Result, RhsValue, Operator);
-  AContext.Scope.AssignLexicalBinding(Name, Result);
+  AContext.Scope.AssignIdentifierBinding(Name, Result);
 end;
 
 // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression AssignmentOperator AssignmentExpression
@@ -1402,7 +1402,7 @@ begin
     OldValue := AContext.Scope.GetValue(PropName);
     OldValue := OldValue.ToNumberLiteral;
     NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
-    AContext.Scope.AssignLexicalBinding(PropName, NewValue);
+    AContext.Scope.AssignIdentifierBinding(PropName, NewValue);
     if IsPrefix then
       Result := NewValue
     else

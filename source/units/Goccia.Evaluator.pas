@@ -3916,7 +3916,7 @@ begin
   if AIsDeclaration then
     AContext.Scope.DefineLexicalBinding(APattern.Name, AValue, ADeclarationType)
   else
-    AContext.Scope.AssignLexicalBinding(APattern.Name, AValue);
+    AContext.Scope.AssignIdentifierBinding(APattern.Name, AValue);
 end;
 
 procedure AssignArrayPattern(const APattern: TGocciaArrayDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);

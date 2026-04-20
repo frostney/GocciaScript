@@ -46,7 +46,7 @@ type
 
     // New Define/Assign pattern
     procedure DefineLexicalBinding(const AName: string; const AValue: TGocciaValue; const ADeclarationType: TGocciaDeclarationType; const ALine: Integer = 0; const AColumn: Integer = 0);
-    procedure AssignLexicalBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0); virtual;
+    procedure AssignIdentifierBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0); virtual;
     procedure ForceUpdateBinding(const AName: string; const AValue: TGocciaValue);
 
     // Var binding support (separate map on function/module/global scopes)
@@ -58,7 +58,7 @@ type
     procedure DefineFromToken(const AName: string; const AValue: TGocciaValue; const ATokenType: TGocciaTokenType);
 
     // Core methods
-    function GetLexicalBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding;
+    function GetIdentifierBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding;
     function GetValue(const AName: string): TGocciaValue; inline;
 
     function ResolveIdentifier(const AName: string): TGocciaValue; inline;
@@ -132,7 +132,7 @@ type
     FCatchParameter: string;  // Track the catch parameter name for proper shadowing
   public
     constructor Create(const AParent: TGocciaScope; const ACatchParameter: string);
-    procedure AssignLexicalBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0); override;
+    procedure AssignIdentifierBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0); override;
   end;
 
   TGocciaScopeList = TObjectList<TGocciaScope>;
@@ -343,7 +343,7 @@ begin
   Result := Assigned(FVarBindings) and FVarBindings.ContainsKey(AName);
 end;
 
-procedure TGocciaScope.AssignLexicalBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0);
+procedure TGocciaScope.AssignIdentifierBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0);
 var
   LexicalBinding: TLexicalBinding;
 begin
@@ -382,7 +382,7 @@ begin
   // Variable not found in current scope, try parent scope
   if Assigned(FParent) then
   begin
-    FParent.AssignLexicalBinding(AName, AValue, ALine, AColumn);
+    FParent.AssignIdentifierBinding(AName, AValue, ALine, AColumn);
     Exit;
   end;
 
@@ -393,7 +393,7 @@ begin
     SSuggestDeclareBeforeUse);
 end;
 
-function TGocciaScope.GetLexicalBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding;
+function TGocciaScope.GetIdentifierBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding;
 var
   LexicalBinding: TLexicalBinding;
 begin
@@ -409,7 +409,7 @@ begin
   else if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, LexicalBinding) then
     Result := LexicalBinding
   else if Assigned(FParent) then
-    Result := FParent.GetLexicalBinding(AName, ALine, AColumn)
+    Result := FParent.GetIdentifierBinding(AName, ALine, AColumn)
   else
     raise TGocciaReferenceError.Create(
       Format(SErrorUndefinedVariable, [AName]),
@@ -419,7 +419,7 @@ end;
 
 function TGocciaScope.GetValue(const AName: string): TGocciaValue;
 begin
-  Result := GetLexicalBinding(AName).Value;
+  Result := GetIdentifierBinding(AName).Value;
 end;
 
 function TGocciaScope.ResolveIdentifier(const AName: string): TGocciaValue;
@@ -559,7 +559,7 @@ begin
   FCatchParameter := ACatchParameter;
 end;
 
-procedure TGocciaCatchScope.AssignLexicalBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0);
+procedure TGocciaCatchScope.AssignIdentifierBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0);
 begin
   // Surgical fix for catch parameter scopes: assignments to non-parameter variables
   // should propagate to parent scope, but catch parameters should stay for proper shadowing
@@ -567,12 +567,12 @@ begin
   begin
     // This is a catch parameter scope and the variable isn't the catch parameter.
     // Delegate directly to parent to ensure assignment propagation
-    FParent.AssignLexicalBinding(AName, AValue, ALine, AColumn);
+    FParent.AssignIdentifierBinding(AName, AValue, ALine, AColumn);
   end
   else
   begin
     // Either it's the catch parameter or it exists in current scope - use base behavior
-    inherited AssignLexicalBinding(AName, AValue, ALine, AColumn);
+    inherited AssignIdentifierBinding(AName, AValue, ALine, AColumn);
   end;
 end;
 
