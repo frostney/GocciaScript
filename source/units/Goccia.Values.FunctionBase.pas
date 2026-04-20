@@ -36,6 +36,7 @@ type
   public
     constructor Create;
     class procedure SetSharedPrototypeParent(const AParent: TGocciaObjectValue);
+    class function GetSharedPrototype: TGocciaFunctionSharedPrototype; static;
 
     // Override GetProperty to provide call, apply, bind methods and length/name
     function GetProperty(const AName: string): TGocciaValue; override;
@@ -280,6 +281,11 @@ begin
       TGarbageCollector.Instance.PinObject(FSharedPrototype);
   end;
   FSharedPrototype.Prototype := AParent;
+end;
+
+class function TGocciaFunctionBase.GetSharedPrototype: TGocciaFunctionSharedPrototype;
+begin
+  Result := FSharedPrototype;
 end;
 
 constructor TGocciaFunctionSharedPrototype.Create;
