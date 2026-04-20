@@ -1605,6 +1605,7 @@ begin
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<get ' + AName + '>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.SourceText := AGetter.SourceText;
   ChildTemplate.ParameterCount := 0;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -1654,6 +1655,7 @@ begin
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<set ' + AName + '>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.SourceText := ASetter.SourceText;
   ChildTemplate.ParameterCount := 1;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);

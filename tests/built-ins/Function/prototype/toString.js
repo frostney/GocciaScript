@@ -3,12 +3,6 @@ description: Function.prototype.toString
 features: [Function]
 ---*/
 
-// Getter/setter source text is not yet implemented in bytecode mode
-const accessorHasSourceText = (() => {
-  const o = { get x() { return 1; } };
-  return !Object.getOwnPropertyDescriptor(o, "x").get.toString().includes("[native code]");
-})();
-
 describe("Function.prototype.toString", () => {
   test("native function returns NativeFunction string", () => {
     const result = console.log.toString();
@@ -88,7 +82,7 @@ describe("Function.prototype.toString", () => {
     expect(str.includes("return x * 2")).toBe(true);
   });
 
-  test.skipIf(!accessorHasSourceText)("object getter returns source text", () => {
+  test("object getter returns source text", () => {
     const obj = { get name() { return "hello"; } };
     const desc = Object.getOwnPropertyDescriptor(obj, "name");
     const str = desc.get.toString();
@@ -97,7 +91,7 @@ describe("Function.prototype.toString", () => {
     expect(str.includes("return")).toBe(true);
   });
 
-  test.skipIf(!accessorHasSourceText)("object setter returns source text", () => {
+  test("object setter returns source text", () => {
     const obj = { set value(v) { this._v = v; } };
     const desc = Object.getOwnPropertyDescriptor(obj, "value");
     const str = desc.set.toString();
@@ -106,7 +100,7 @@ describe("Function.prototype.toString", () => {
     expect(str.includes("this._v = v")).toBe(true);
   });
 
-  test.skipIf(!accessorHasSourceText)("class getter returns source text", () => {
+  test("class getter returns source text", () => {
     class Foo {
       get bar() { return 42; }
     }
@@ -117,7 +111,7 @@ describe("Function.prototype.toString", () => {
     expect(str.includes("return 42")).toBe(true);
   });
 
-  test.skipIf(!accessorHasSourceText)("class setter returns source text", () => {
+  test("class setter returns source text", () => {
     class Foo {
       set bar(v) { this._bar = v; }
     }
