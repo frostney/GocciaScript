@@ -271,6 +271,7 @@ A `const` global providing engine metadata and Goccia-owned utility APIs:
 |----------|------|-------------|
 | `os` | `string` | Operating system: `"darwin"`, `"linux"`, `"windows"`, `"freebsd"`, `"netbsd"`, `"openbsd"`, `"android"`, `"aix"`, `"solaris"`, or `"unknown"` |
 | `arch` | `string` | Processor architecture: `"x86_64"`, `"aarch64"`, `"x86"`, `"arm"`, `"powerpc64"`, `"powerpc"`, or `"unknown"` |
+| `date` | `string` | Build date in `YYYY-MM-DD` format (e.g., `"2026-04-20"`) |
 
 **`Goccia.semver`**
 
