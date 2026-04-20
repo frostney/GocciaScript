@@ -30,4 +30,10 @@ describe("TypedArray.prototype.reduce", () => {
     const ta = new Int32Array([1, 2, 3]);
     expect(() => ta.reduce()).toThrow(TypeError);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s reduce", (TA) => {
+    const ta = new TA([1n, 2n, 3n]);
+    const sum = ta.reduce((acc, x) => acc + x, 0n);
+    expect(sum).toBe(6n);
+  });
 });

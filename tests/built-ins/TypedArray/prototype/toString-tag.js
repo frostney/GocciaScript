@@ -9,6 +9,8 @@ describe("TypedArray Symbol.toStringTag", () => {
     [Uint32Array, "[object Uint32Array]"],
     [Float32Array, "[object Float32Array]"],
     [Float64Array, "[object Float64Array]"],
+    [BigInt64Array, "[object BigInt64Array]"],
+    [BigUint64Array, "[object BigUint64Array]"],
   ];
   constructors.forEach((pair) => {
     const Ctor = pair[0];
@@ -32,4 +34,5 @@ describe("TypedArray Symbol.toStringTag", () => {
       expect(desc.get.call({})).toBe(undefined);
     });
   });
+
 });

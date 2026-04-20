@@ -37,4 +37,13 @@ describe("TypedArray.prototype.filter", () => {
     expect(filtered[1]).toBe(4);
     expect(filtered[2]).toBe(5);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s filter", (TA) => {
+    const ta = new TA([1n, 2n, 3n, 4n]);
+    const filtered = ta.filter(x => x > 2n);
+    expect(filtered).toBeInstanceOf(TA);
+    expect(filtered.length).toBe(2);
+    expect(filtered[0]).toBe(3n);
+    expect(filtered[1]).toBe(4n);
+  });
 });

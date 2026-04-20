@@ -267,6 +267,7 @@ resourcestring
   SSuggestTypedArraySetSource = 'pass an Array or TypedArray as the source';
   SSuggestTypedArrayLength = 'the length or offset is outside the valid range for this buffer';
   SSuggestTypedArrayAlignment = 'the byte offset must be aligned to the element size of the TypedArray';
+  SSuggestBigIntTypedArrayValue = 'BigInt64Array and BigUint64Array only accept BigInt values — use BigInt(n) to convert';
 
   // Runtime errors — URL
   SSuggestURLThisType = 'URL prototype methods must be called on a URL object';

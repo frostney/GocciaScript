@@ -34,4 +34,10 @@ describe("TypedArray.prototype.includes", () => {
     const ta = new Float64Array([0]);
     expect(ta.includes(-0)).toBe(true);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s includes", (TA) => {
+    const ta = new TA([1n, 2n, 3n]);
+    expect(ta.includes(2n)).toBe(true);
+    expect(ta.includes(4n)).toBe(false);
+  });
 });

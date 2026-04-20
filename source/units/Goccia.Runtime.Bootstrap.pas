@@ -16,6 +16,7 @@ uses
   Goccia.Builtins.DisposableStack,
   Goccia.Builtins.GlobalArray,
   Goccia.Builtins.GlobalArrayBuffer,
+  Goccia.Builtins.GlobalBigInt,
   Goccia.Builtins.GlobalFFI,
   Goccia.Builtins.GlobalMap,
   Goccia.Builtins.GlobalNumber,
@@ -65,6 +66,7 @@ type
     FBuiltinGlobalObject: TGocciaGlobalObject;
     FBuiltinGlobalArray: TGocciaGlobalArray;
     FBuiltinGlobalNumber: TGocciaGlobalNumber;
+    FBuiltinGlobalBigInt: TGocciaGlobalBigInt;
     FBuiltinRegExp: TGocciaGlobalRegExp;
     FBuiltinGlobalString: TGocciaGlobalString;
     FBuiltinGlobals: TGocciaGlobals;
@@ -228,6 +230,7 @@ begin
   FBuiltinGlobalObject.Free;
   FBuiltinGlobalArray.Free;
   FBuiltinGlobalNumber.Free;
+  FBuiltinGlobalBigInt.Free;
   FBuiltinRegExp.Free;
   FBuiltinGlobalString.Free;
   FBuiltinGlobals.Free;
@@ -276,6 +279,7 @@ begin
   FBuiltinGlobalObject := TGocciaGlobalObject.Create(CONSTRUCTOR_OBJECT, Scope, FThrowError);
   FBuiltinGlobalArray := TGocciaGlobalArray.Create(CONSTRUCTOR_ARRAY, Scope, FThrowError);
   FBuiltinGlobalNumber := TGocciaGlobalNumber.Create(CONSTRUCTOR_NUMBER, Scope, FThrowError);
+  FBuiltinGlobalBigInt := TGocciaGlobalBigInt.Create(CONSTRUCTOR_BIGINT, Scope, FThrowError);
   FBuiltinCSV := TGocciaCSVBuiltin.Create('CSV', Scope, FThrowError);
   FBuiltinJSON := TGocciaJSONBuiltin.Create('JSON', Scope, FThrowError);
   FBuiltinJSON5 := TGocciaJSON5Builtin.Create('JSON5', Scope, FThrowError);
@@ -442,6 +446,8 @@ begin
     RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT16_ARRAY, takFloat16, ObjectConstructor);
     RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT32_ARRAY, takFloat32, ObjectConstructor);
     RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT64_ARRAY, takFloat64, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_BIGINT64_ARRAY, takBigInt64, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_BIGUINT64_ARRAY, takBigUint64, ObjectConstructor);
 
   TypeDef.ConstructorName := CONSTRUCTOR_STRING;
   TypeDef.Kind := gtdkPrimitiveWrapper;

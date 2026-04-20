@@ -26,4 +26,10 @@ describe("TypedArray.prototype.every", () => {
     const allEven = ta.every(obj.fn, ctx);
     expect(allEven).toBe(true);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s every", (TA) => {
+    const ta = new TA([2n, 4n, 6n]);
+    expect(ta.every(x => x % 2n === 0n)).toBe(true);
+    expect(ta.every(x => x > 3n)).toBe(false);
+  });
 });

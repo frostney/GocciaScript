@@ -19,4 +19,12 @@ describe("TypedArray.prototype.toSorted", () => {
   test("on empty returns empty", () => {
     expect(new Int32Array(0).toSorted().length).toBe(0);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s toSorted", (TA) => {
+    const ta = new TA([3n, 1n, 2n]);
+    const sorted = ta.toSorted();
+    expect(sorted[0]).toBe(1n);
+    expect(sorted[2]).toBe(3n);
+    expect(ta[0]).toBe(3n);
+  });
 });

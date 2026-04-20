@@ -24,4 +24,10 @@ describe("TypedArray.prototype.reduceRight", () => {
     const ta = new Int32Array([1, 2, 3]);
     expect(() => ta.reduceRight()).toThrow(TypeError);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s reduceRight", (TA) => {
+    const ta = new TA([1n, 2n, 3n]);
+    const result = ta.reduceRight((acc, x) => acc - x, 10n);
+    expect(result).toBe(4n);
+  });
 });

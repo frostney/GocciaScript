@@ -46,4 +46,19 @@ describe("TypedArray.prototype.fill", () => {
     expect(ta[3]).toBe(9);
     expect(ta[4]).toBe(5);
   });
+
+  describe.each([BigInt64Array, BigUint64Array])("%s", (TA) => {
+    test("fill with BigInt value", () => {
+      const ta = new TA(3);
+      ta.fill(7n);
+      expect(ta[0]).toBe(7n);
+      expect(ta[1]).toBe(7n);
+      expect(ta[2]).toBe(7n);
+    });
+
+    test("fill throws for non-BigInt", () => {
+      const ta = new TA(2);
+      expect(() => ta.fill(7)).toThrow(TypeError);
+    });
+  });
 });

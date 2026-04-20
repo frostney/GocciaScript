@@ -1,6 +1,5 @@
 // test262 testTypedArray.js -- GocciaScript-compatible reimplementation
 // Provides TypedArray constructor lists and iteration helpers.
-// Omits BigInt typed arrays (BigInt64Array/BigUint64Array are not implemented).
 
 const floatArrayConstructors = [
   Float64Array,
@@ -21,7 +20,9 @@ const intArrayConstructors = [...nonClampedIntArrayConstructors, Uint8ClampedArr
 
 const typedArrayConstructors = [...floatArrayConstructors, ...intArrayConstructors];
 
-const allTypedArrayConstructors = typedArrayConstructors;
+const bigIntArrayConstructors = [BigInt64Array, BigUint64Array];
+
+const allTypedArrayConstructors = [...typedArrayConstructors, ...bigIntArrayConstructors];
 
 const TypedArray = Object.getPrototypeOf(Int8Array);
 
@@ -120,7 +121,8 @@ const testWithTypedArrayConstructors = (f, constructors, includeArgFactories, ex
 };
 
 const testWithBigIntTypedArrayConstructors = (f, constructors, includeArgFactories, excludeArgFactories) => {
-  // BigInt64Array/BigUint64Array are not implemented; this is a no-op.
+  const ctors = constructors || bigIntArrayConstructors;
+  testWithAllTypedArrayConstructors(f, ctors, includeArgFactories, excludeArgFactories);
 };
 
 const nonAtomicsFriendlyTypedArrayConstructors = [...floatArrayConstructors, Uint8ClampedArray];
@@ -137,6 +139,8 @@ const testWithAtomicsFriendlyTypedArrayConstructors = (f) => {
     Uint32Array,
     Uint16Array,
     Uint8Array,
+    BigInt64Array,
+    BigUint64Array,
   ]);
 };
 

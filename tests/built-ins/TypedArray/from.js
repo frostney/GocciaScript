@@ -38,4 +38,28 @@ describe("TypedArray.from", () => {
   test("without arguments throws TypeError", () => {
     expect(() => Int32Array.from()).toThrow(TypeError);
   });
+
+  describe.each([BigInt64Array, BigUint64Array])("%s", (TA) => {
+    test(".from array of BigInts", () => {
+      const ta = TA.from([1n, 2n, 3n]);
+      expect(ta.length).toBe(3);
+      expect(ta[0]).toBe(1n);
+      expect(ta[2]).toBe(3n);
+    });
+
+    test(".from with mapFn", () => {
+      const ta = TA.from([1n, 2n, 3n], x => x * 10n);
+      expect(ta[0]).toBe(10n);
+      expect(ta[1]).toBe(20n);
+      expect(ta[2]).toBe(30n);
+    });
+
+    test(".from rejects non-BigInt values", () => {
+      expect(() => TA.from([1, 2, 3])).toThrow(TypeError);
+    });
+
+    test(".from rejects non-BigInt mapFn result", () => {
+      expect(() => TA.from([1n], () => 1)).toThrow(TypeError);
+    });
+  });
 });

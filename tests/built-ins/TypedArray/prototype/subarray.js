@@ -43,4 +43,16 @@ describe("TypedArray.prototype.subarray", () => {
     const sub = ta.subarray(10);
     expect(sub.length).toBe(0);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s subarray", (TA) => {
+    const buf = new ArrayBuffer(32);
+    const ta = new TA(buf);
+    ta[0] = 10n; ta[1] = 20n; ta[2] = 30n; ta[3] = 40n;
+    const sub = ta.subarray(1, 3);
+    expect(sub.length).toBe(2);
+    expect(sub[0]).toBe(20n);
+    expect(sub[1]).toBe(30n);
+    ta[1] = 99n;
+    expect(sub[0]).toBe(99n);
+  });
 });

@@ -21,4 +21,9 @@ describe("TypedArray.prototype.find", () => {
     const found = ta.find(obj.fn, ctx);
     expect(found).toBe(4);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s find", (TA) => {
+    const ta = new TA([1n, 2n, 3n]);
+    expect(ta.find(x => x > 1n)).toBe(2n);
+  });
 });

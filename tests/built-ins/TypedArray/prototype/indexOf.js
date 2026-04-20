@@ -31,4 +31,11 @@ describe("TypedArray.prototype.indexOf", () => {
     const ta = new Int32Array([1, 2, 3]);
     expect(ta.indexOf(1, 10)).toBe(-1);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s indexOf", (TA) => {
+    const ta = new TA([1n, 2n, 3n, 2n]);
+    expect(ta.indexOf(2n)).toBe(1);
+    expect(ta.indexOf(4n)).toBe(-1);
+    expect(ta.indexOf(2)).toBe(-1);
+  });
 });

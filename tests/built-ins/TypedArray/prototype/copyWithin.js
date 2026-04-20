@@ -35,4 +35,14 @@ describe("TypedArray.prototype.copyWithin", () => {
     expect(ta[0]).toBe(4);
     expect(ta[1]).toBe(5);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s copyWithin", (TA) => {
+    const ta = new TA([1n, 2n, 3n, 4n, 5n]);
+    ta.copyWithin(0, 3);
+    expect(ta[0]).toBe(4n);
+    expect(ta[1]).toBe(5n);
+    expect(ta[2]).toBe(3n);
+    expect(ta[3]).toBe(4n);
+    expect(ta[4]).toBe(5n);
+  });
 });

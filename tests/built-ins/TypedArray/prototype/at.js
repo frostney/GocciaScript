@@ -21,4 +21,10 @@ describe("TypedArray.prototype.at", () => {
     const ta = new Int32Array(0);
     expect(ta.at(0)).toBeUndefined();
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s returns BigInt values", (TA) => {
+    const ta = new TA([10n, 20n, 30n]);
+    expect(ta.at(0)).toBe(10n);
+    expect(ta.at(-1)).toBe(30n);
+  });
 });

@@ -230,4 +230,76 @@ describe("TypedArray constructors", () => {
       expect(ta.byteOffset).toBe(8);
     });
   });
+
+  describe("BigInt typed array constructors", () => {
+    test("BigInt64Array is defined", () => { expect(BigInt64Array).toBeDefined(); });
+    test("BigUint64Array is defined", () => { expect(BigUint64Array).toBeDefined(); });
+
+    test("new BigInt64Array(length)", () => {
+      const ta = new BigInt64Array(4);
+      expect(ta.length).toBe(4);
+      expect(ta.byteLength).toBe(32);
+      expect(ta[0]).toBe(0n);
+    });
+
+    test("new BigUint64Array(length)", () => {
+      const ta = new BigUint64Array(2);
+      expect(ta.length).toBe(2);
+      expect(ta.byteLength).toBe(16);
+      expect(ta[0]).toBe(0n);
+    });
+
+    test("BYTES_PER_ELEMENT is 8", () => {
+      expect(BigInt64Array.BYTES_PER_ELEMENT).toBe(8);
+      expect(BigUint64Array.BYTES_PER_ELEMENT).toBe(8);
+    });
+
+    test("new BigInt64Array(array)", () => {
+      const ta = new BigInt64Array([1n, 2n, 3n]);
+      expect(ta.length).toBe(3);
+      expect(ta[0]).toBe(1n);
+      expect(ta[1]).toBe(2n);
+      expect(ta[2]).toBe(3n);
+    });
+
+    test("new BigInt64Array(buffer)", () => {
+      const buf = new ArrayBuffer(16);
+      const ta = new BigInt64Array(buf);
+      expect(ta.length).toBe(2);
+      ta[0] = 100n;
+      ta[1] = 200n;
+      expect(ta[0]).toBe(100n);
+      expect(ta[1]).toBe(200n);
+    });
+
+    test("shares underlying buffer", () => {
+      const buf = new ArrayBuffer(16);
+      const a = new BigInt64Array(buf);
+      const b = new BigInt64Array(buf);
+      a[0] = 999n;
+      expect(b[0]).toBe(999n);
+    });
+
+    test("BigUint64Array handles values above 2^63", () => {
+      const ta = new BigUint64Array([18446744073709551615n, 9223372036854775808n]);
+      expect(ta[0]).toBe(18446744073709551615n);
+      expect(ta[1]).toBe(9223372036854775808n);
+    });
+
+    test("BigInt64Array handles negative values", () => {
+      const ta = new BigInt64Array([-1n, -9223372036854775808n]);
+      expect(ta[0]).toBe(-1n);
+      expect(ta[1]).toBe(-9223372036854775808n);
+    });
+
+    test("BigInt typed array constructor rejects Number array source", () => {
+      expect(() => new BigInt64Array([1, 2, 3])).toThrow(TypeError);
+    });
+
+    test("BigInt typed array set rejects Number typed array source", () => {
+      const bi = new BigInt64Array(3);
+      const i32 = new Int32Array([1, 2, 3]);
+      expect(() => bi.set(i32)).toThrow(TypeError);
+    });
+  });
 });
