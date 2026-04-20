@@ -29,4 +29,13 @@ describe("TypedArray.prototype.forEach", () => {
     ta.forEach(obj.fn, ctx);
     expect(ctx.sum).toBe(6);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s forEach", (TA) => {
+    const ta = new TA([1n, 2n, 3n]);
+    const collected = [];
+    ta.forEach(x => collected.push(x));
+    expect(collected[0]).toBe(1n);
+    expect(collected[1]).toBe(2n);
+    expect(collected[2]).toBe(3n);
+  });
 });

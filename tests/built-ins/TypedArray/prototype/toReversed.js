@@ -22,4 +22,12 @@ describe("TypedArray.prototype.toReversed", () => {
   test("on empty returns empty", () => {
     expect(new Int32Array(0).toReversed().length).toBe(0);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s toReversed", (TA) => {
+    const ta = new TA([1n, 2n, 3n]);
+    const rev = ta.toReversed();
+    expect(rev[0]).toBe(3n);
+    expect(rev[2]).toBe(1n);
+    expect(ta[0]).toBe(1n);
+  });
 });

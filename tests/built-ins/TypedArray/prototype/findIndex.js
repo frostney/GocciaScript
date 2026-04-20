@@ -21,4 +21,9 @@ describe("TypedArray.prototype.findIndex", () => {
     const idx = ta.findIndex(obj.fn, ctx);
     expect(idx).toBe(3);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s findIndex", (TA) => {
+    const ta = new TA([1n, 2n, 3n]);
+    expect(ta.findIndex(x => x > 1n)).toBe(1);
+  });
 });

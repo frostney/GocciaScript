@@ -23,4 +23,12 @@ describe("TypedArray.prototype.reverse", () => {
     ta.reverse();
     expect(ta[0]).toBe(42);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s reverse", (TA) => {
+    const ta = new TA([1n, 2n, 3n]);
+    ta.reverse();
+    expect(ta[0]).toBe(3n);
+    expect(ta[1]).toBe(2n);
+    expect(ta[2]).toBe(1n);
+  });
 });

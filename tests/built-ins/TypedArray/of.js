@@ -25,4 +25,12 @@ describe("TypedArray.of", () => {
     const ta = Int32Array.of();
     expect(ta.length).toBe(0);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s.of creates from BigInt arguments", (TA) => {
+    const ta = TA.of(1n, 2n, 3n);
+    expect(ta.length).toBe(3);
+    expect(ta[0]).toBe(1n);
+    expect(ta[1]).toBe(2n);
+    expect(ta[2]).toBe(3n);
+  });
 });

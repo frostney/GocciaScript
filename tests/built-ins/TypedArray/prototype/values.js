@@ -17,4 +17,11 @@ describe("TypedArray.prototype.values", () => {
     const result = iter.next();
     expect(result.done).toBe(true);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s values iterator", (TA) => {
+    const ta = new TA([10n, 20n]);
+    const vals = [...ta.values()];
+    expect(vals[0]).toBe(10n);
+    expect(vals[1]).toBe(20n);
+  });
 });

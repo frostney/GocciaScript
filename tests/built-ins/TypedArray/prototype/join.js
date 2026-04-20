@@ -24,4 +24,9 @@ describe("TypedArray.prototype.join", () => {
   test("Float64Array formats numbers", () => {
     expect(new Float64Array([1.5, 2.5]).join()).toBe("1.5,2.5");
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s join", (TA) => {
+    const ta = new TA([1n, 2n, 3n]);
+    expect(ta.join(",")).toBe("1,2,3");
+  });
 });

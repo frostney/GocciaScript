@@ -45,4 +45,18 @@ describe("TypedArray.prototype.with", () => {
     expect(result[1]).toBe(9.9);
     expect(result[2]).toBe(3.5);
   });
+
+  describe.each([BigInt64Array, BigUint64Array])("%s", (TA) => {
+    test("with", () => {
+      const ta = new TA([1n, 2n, 3n]);
+      const result = ta.with(1, 99n);
+      expect(result[1]).toBe(99n);
+      expect(ta[1]).toBe(2n);
+    });
+
+    test("with throws for non-BigInt", () => {
+      const ta = new TA([1n, 2n, 3n]);
+      expect(() => ta.with(1, 99)).toThrow(TypeError);
+    });
+  });
 });

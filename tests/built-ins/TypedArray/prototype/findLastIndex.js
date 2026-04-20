@@ -21,4 +21,9 @@ describe("TypedArray.prototype.findLastIndex", () => {
     const idx = ta.findLastIndex(obj.fn, ctx);
     expect(idx).toBe(3);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s findLastIndex", (TA) => {
+    const ta = new TA([1n, 2n, 3n]);
+    expect(ta.findLastIndex(x => x < 3n)).toBe(1);
+  });
 });

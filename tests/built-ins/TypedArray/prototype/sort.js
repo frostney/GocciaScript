@@ -69,4 +69,22 @@ describe("TypedArray.prototype.sort", () => {
     expect(ta[0]).toBe(1);
     expect(ta[4]).toBe(5);
   });
+
+  describe.each([BigInt64Array, BigUint64Array])("%s", (TA) => {
+    test("default sort", () => {
+      const ta = new TA([3n, 1n, 2n]);
+      ta.sort();
+      expect(ta[0]).toBe(1n);
+      expect(ta[1]).toBe(2n);
+      expect(ta[2]).toBe(3n);
+    });
+
+    test("sort with comparefn", () => {
+      const ta = new TA([3n, 1n, 2n]);
+      ta.sort((a, b) => (a > b ? -1 : a < b ? 1 : 0));
+      expect(ta[0]).toBe(3n);
+      expect(ta[1]).toBe(2n);
+      expect(ta[2]).toBe(1n);
+    });
+  });
 });

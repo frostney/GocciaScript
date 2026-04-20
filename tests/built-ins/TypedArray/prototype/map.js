@@ -28,4 +28,12 @@ describe("TypedArray.prototype.map", () => {
     expect(mapped[1]).toBe(6);
     expect(mapped[2]).toBe(9);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s map", (TA) => {
+    const ta = new TA([1n, 2n, 3n]);
+    const mapped = ta.map(x => x * 2n);
+    expect(mapped[0]).toBe(2n);
+    expect(mapped[1]).toBe(4n);
+    expect(mapped[2]).toBe(6n);
+  });
 });

@@ -16,4 +16,9 @@ describe("TypedArray.prototype.findLast", () => {
     const found = ta.findLast(obj.fn, ctx);
     expect(found).toBe(4);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s findLast", (TA) => {
+    const ta = new TA([1n, 2n, 3n]);
+    expect(ta.findLast(x => x < 3n)).toBe(2n);
+  });
 });

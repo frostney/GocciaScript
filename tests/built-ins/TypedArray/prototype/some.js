@@ -58,4 +58,10 @@ describe("TypedArray.prototype.some", () => {
     const hasTarget = ta.some(obj.fn, ctx);
     expect(hasTarget).toBe(true);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s some", (TA) => {
+    const ta = new TA([1n, 2n, 3n]);
+    expect(ta.some(x => x > 2n)).toBe(true);
+    expect(ta.some(x => x > 5n)).toBe(false);
+  });
 });

@@ -62,4 +62,12 @@ describe("TypedArray.prototype.slice", () => {
     expect(sliced[0]).toBe(3);
     expect(sliced[1]).toBe(4);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s slice", (TA) => {
+    const ta = new TA([1n, 2n, 3n, 4n]);
+    const sliced = ta.slice(1, 3);
+    expect(sliced.length).toBe(2);
+    expect(sliced[0]).toBe(2n);
+    expect(sliced[1]).toBe(3n);
+  });
 });

@@ -46,4 +46,13 @@ describe("TypedArray.prototype.set", () => {
     const ta = new Int32Array(3);
     expect(() => ta.set([1, 2], 2)).toThrow(RangeError);
   });
+
+  test.each([BigInt64Array, BigUint64Array])("%s set from BigInt typed array", (TA) => {
+    const src = new TA([10n, 20n]);
+    const dst = new TA(4);
+    dst.set(src, 1);
+    expect(dst[0]).toBe(0n);
+    expect(dst[1]).toBe(10n);
+    expect(dst[2]).toBe(20n);
+  });
 });

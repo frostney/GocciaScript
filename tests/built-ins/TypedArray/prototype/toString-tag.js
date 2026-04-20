@@ -32,4 +32,14 @@ describe("TypedArray Symbol.toStringTag", () => {
       expect(desc.get.call({})).toBe(undefined);
     });
   });
+
+  test("BigInt64Array toStringTag", () => {
+    const ta = new BigInt64Array(0);
+    expect(Object.prototype.toString.call(ta)).toBe("[object BigInt64Array]");
+  });
+
+  test("BigUint64Array toStringTag", () => {
+    const ta = new BigUint64Array(0);
+    expect(Object.prototype.toString.call(ta)).toBe("[object BigUint64Array]");
+  });
 });
