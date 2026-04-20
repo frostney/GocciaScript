@@ -880,6 +880,7 @@ var
   Getter: TGocciaFunctionBase;
   Args: TGocciaArgumentsCollection;
   Current: TGocciaClassValue;
+  FuncProto: TGocciaObjectValue;
 begin
   if AName = PROP_PROTOTYPE then
   begin
@@ -905,6 +906,15 @@ begin
 
     Current := Current.FSuperClass;
   until not Assigned(Current);
+
+  // Fall through to Function.prototype chain (classes are functions per ES spec)
+  FuncProto := TGocciaFunctionBase.GetSharedPrototype;
+  if Assigned(FuncProto) then
+  begin
+    Result := FuncProto.GetProperty(AName);
+    if not (Result is TGocciaUndefinedLiteralValue) then
+      Exit;
+  end;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
