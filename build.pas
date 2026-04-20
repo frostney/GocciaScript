@@ -17,7 +17,7 @@ var
   I: Integer;
   BuildTriggers: TStringList;
   BuildMode: TBuildMode = bmDev;
-  GVersion, GCommit: string;
+  GVersion, GCommit, GBuildDate: string;
 
 function ComputeVersion: string;
 var
@@ -49,7 +49,12 @@ begin
     Result := 'unknown';
 end;
 
-procedure GenerateVersionInclude(const AVersion, ACommit: string);
+function ComputeBuildDate: string;
+begin
+  Result := FormatDateTime('yyyy-mm-dd', Now);
+end;
+
+procedure GenerateVersionInclude(const AVersion, ACommit, ABuildDate: string);
 var
   F: TextFile;
 begin
@@ -60,14 +65,15 @@ begin
     WriteLn(F, 'const');
     WriteLn(F, '  BAKED_VERSION = ''', AVersion, ''';');
     WriteLn(F, '  BAKED_COMMIT = ''', ACommit, ''';');
+    WriteLn(F, '  BAKED_BUILD_DATE = ''', ABuildDate, ''';');
   finally
     CloseFile(F);
   end;
 end;
 
-procedure PrintVersion(const AVersion, ACommit: string);
+procedure PrintVersion(const AVersion, ACommit, ABuildDate: string);
 begin
-  WriteLn('Version: ', AVersion, ' (', ACommit, ')');
+  WriteLn('Version: ', AVersion, ' (', ACommit, ') built ', ABuildDate);
   WriteLn('');
 end;
 
@@ -449,8 +455,9 @@ begin
   WriteLn('');
   GVersion := ComputeVersion;
   GCommit := ComputeCommit;
-  GenerateVersionInclude(GVersion, GCommit);
-  PrintVersion(GVersion, GCommit);
+  GBuildDate := ComputeBuildDate;
+  GenerateVersionInclude(GVersion, GCommit, GBuildDate);
+  PrintVersion(GVersion, GCommit, GBuildDate);
   PrintSourceStats;
 
   if BuildTriggers.Count = 0 then
