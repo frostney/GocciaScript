@@ -35,4 +35,23 @@ describe("TypedArray Symbol.toStringTag", () => {
     });
   });
 
+  test.each([
+    [Int8Array, "Int8Array"],
+    [Uint8Array, "Uint8Array"],
+    [Uint8ClampedArray, "Uint8ClampedArray"],
+    [Int16Array, "Int16Array"],
+    [Uint16Array, "Uint16Array"],
+    [Int32Array, "Int32Array"],
+    [Uint32Array, "Uint32Array"],
+    [Float16Array, "Float16Array"],
+    [Float32Array, "Float32Array"],
+    [Float64Array, "Float64Array"],
+    [BigInt64Array, "BigInt64Array"],
+    [BigUint64Array, "BigUint64Array"],
+  ])("%s has correct @@toStringTag", (TA, expected) => {
+    const ta = new TA(0);
+    expect(Object.prototype.toString.call(ta)).toBe("[object " + expected + "]");
+    expect(ta[Symbol.toStringTag]).toBe(expected);
+  });
+
 });

@@ -38,6 +38,28 @@ describe("TypedArray.prototype.filter", () => {
     expect(filtered[2]).toBe(5);
   });
 
+  describe.each([Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array])("%s", (TA) => {
+    test("filters elements", () => {
+      const ta = new TA([1, 2, 3, 4, 5]);
+      const filtered = ta.filter(x => x % 2 === 0);
+      expect(filtered.length).toBe(2);
+      expect(filtered[0]).toBe(2);
+      expect(filtered[1]).toBe(4);
+    });
+
+    test("returns instance of same type", () => {
+      const ta = new TA([1, 2, 3]);
+      const filtered = ta.filter(x => x > 1);
+      expect(filtered).toBeInstanceOf(TA);
+    });
+
+    test("no match returns empty", () => {
+      const ta = new TA([1, 2, 3]);
+      const filtered = ta.filter(x => x > 10);
+      expect(filtered.length).toBe(0);
+    });
+  });
+
   test.each([BigInt64Array, BigUint64Array])("%s filter", (TA) => {
     const ta = new TA([1n, 2n, 3n, 4n]);
     const filtered = ta.filter(x => x > 2n);

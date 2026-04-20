@@ -70,6 +70,29 @@ describe("TypedArray.prototype.sort", () => {
     expect(ta[4]).toBe(5);
   });
 
+  describe.each([Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array])("%s", (TA) => {
+    test("sorts numerically by default", () => {
+      const ta = new TA([3, 1, 2]);
+      ta.sort();
+      expect(ta[0]).toBe(1);
+      expect(ta[1]).toBe(2);
+      expect(ta[2]).toBe(3);
+    });
+
+    test("sorts with comparator", () => {
+      const ta = new TA([1, 2, 3]);
+      ta.sort((a, b) => b - a);
+      expect(ta[0]).toBe(3);
+      expect(ta[1]).toBe(2);
+      expect(ta[2]).toBe(1);
+    });
+
+    test("returns the typed array", () => {
+      const ta = new TA([3, 1, 2]);
+      expect(ta.sort()).toBe(ta);
+    });
+  });
+
   describe.each([BigInt64Array, BigUint64Array])("%s", (TA) => {
     test("default sort", () => {
       const ta = new TA([3n, 1n, 2n]);

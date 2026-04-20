@@ -46,6 +46,33 @@ describe("TypedArray.prototype.with", () => {
     expect(result[2]).toBe(3.5);
   });
 
+  describe.each([Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array])("%s", (TA) => {
+    test("returns copy with replaced element", () => {
+      const ta = new TA([1, 2, 3]);
+      const result = ta.with(1, 9);
+      expect(result[0]).toBe(1);
+      expect(result[1]).toBe(9);
+      expect(result[2]).toBe(3);
+    });
+
+    test("does not modify original", () => {
+      const ta = new TA([1, 2, 3]);
+      ta.with(1, 9);
+      expect(ta[1]).toBe(2);
+    });
+
+    test("returns instance of same type", () => {
+      const ta = new TA([1, 2, 3]);
+      expect(ta.with(0, 5)).toBeInstanceOf(TA);
+    });
+
+    test("negative index", () => {
+      const ta = new TA([1, 2, 3]);
+      const result = ta.with(-1, 9);
+      expect(result[2]).toBe(9);
+    });
+  });
+
   describe.each([BigInt64Array, BigUint64Array])("%s", (TA) => {
     test("with", () => {
       const ta = new TA([1n, 2n, 3n]);

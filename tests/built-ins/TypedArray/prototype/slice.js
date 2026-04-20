@@ -63,6 +63,38 @@ describe("TypedArray.prototype.slice", () => {
     expect(sliced[1]).toBe(4);
   });
 
+  describe.each([Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array])("%s", (TA) => {
+    test("slice entire array", () => {
+      const ta = new TA([1, 2, 3]);
+      const sliced = ta.slice();
+      expect(sliced.length).toBe(3);
+      expect(sliced[0]).toBe(1);
+      expect(sliced[2]).toBe(3);
+    });
+
+    test("slice with start and end", () => {
+      const ta = new TA([1, 2, 3, 4]);
+      const sliced = ta.slice(1, 3);
+      expect(sliced.length).toBe(2);
+      expect(sliced[0]).toBe(2);
+      expect(sliced[1]).toBe(3);
+    });
+
+    test("returns instance of same type", () => {
+      const ta = new TA([1, 2, 3]);
+      const sliced = ta.slice();
+      expect(sliced).toBeInstanceOf(TA);
+    });
+
+    test("negative indices", () => {
+      const ta = new TA([1, 2, 3, 4]);
+      const sliced = ta.slice(-2);
+      expect(sliced.length).toBe(2);
+      expect(sliced[0]).toBe(3);
+      expect(sliced[1]).toBe(4);
+    });
+  });
+
   test.each([BigInt64Array, BigUint64Array])("%s slice", (TA) => {
     const ta = new TA([1n, 2n, 3n, 4n]);
     const sliced = ta.slice(1, 3);

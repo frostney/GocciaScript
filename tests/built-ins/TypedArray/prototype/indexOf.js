@@ -32,6 +32,27 @@ describe("TypedArray.prototype.indexOf", () => {
     expect(ta.indexOf(1, 10)).toBe(-1);
   });
 
+  describe.each([Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array])("%s", (TA) => {
+    test("finds element", () => {
+      const ta = new TA([1, 2, 3, 2]);
+      expect(ta.indexOf(2)).toBe(1);
+    });
+
+    test("returns -1 when not found", () => {
+      const ta = new TA([1, 2, 3]);
+      expect(ta.indexOf(99)).toBe(-1);
+    });
+
+    test("fromIndex parameter", () => {
+      const ta = new TA([1, 2, 3, 2]);
+      expect(ta.indexOf(2, 2)).toBe(3);
+    });
+
+    test("on empty returns -1", () => {
+      expect(new TA(0).indexOf(1)).toBe(-1);
+    });
+  });
+
   test.each([BigInt64Array, BigUint64Array])("%s indexOf", (TA) => {
     const ta = new TA([1n, 2n, 3n, 2n]);
     expect(ta.indexOf(2n)).toBe(1);

@@ -27,6 +27,23 @@ describe("TypedArray.prototype.every", () => {
     expect(allEven).toBe(true);
   });
 
+  describe.each([Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array])("%s", (TA) => {
+    test("returns true when all match", () => {
+      const ta = new TA([2, 4, 6]);
+      expect(ta.every(x => x % 2 === 0)).toBe(true);
+    });
+
+    test("returns false when one doesn't match", () => {
+      const ta = new TA([2, 3, 6]);
+      expect(ta.every(x => x % 2 === 0)).toBe(false);
+    });
+
+    test("on empty returns true", () => {
+      const ta = new TA(0);
+      expect(ta.every(x => x > 0)).toBe(true);
+    });
+  });
+
   test.each([BigInt64Array, BigUint64Array])("%s every", (TA) => {
     const ta = new TA([2n, 4n, 6n]);
     expect(ta.every(x => x % 2n === 0n)).toBe(true);

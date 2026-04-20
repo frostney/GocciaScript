@@ -47,6 +47,31 @@ describe("TypedArray.prototype.fill", () => {
     expect(ta[4]).toBe(5);
   });
 
+  describe.each([Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array])("%s", (TA) => {
+    test("fill entire array", () => {
+      const ta = new TA(3);
+      ta.fill(5);
+      expect(ta[0]).toBe(5);
+      expect(ta[1]).toBe(5);
+      expect(ta[2]).toBe(5);
+    });
+
+    test("fill with start and end", () => {
+      const ta = new TA(5);
+      ta.fill(7, 1, 4);
+      expect(ta[0]).toBe(0);
+      expect(ta[1]).toBe(7);
+      expect(ta[2]).toBe(7);
+      expect(ta[3]).toBe(7);
+      expect(ta[4]).toBe(0);
+    });
+
+    test("returns the typed array", () => {
+      const ta = new TA(2);
+      expect(ta.fill(1)).toBe(ta);
+    });
+  });
+
   describe.each([BigInt64Array, BigUint64Array])("%s", (TA) => {
     test("fill with BigInt value", () => {
       const ta = new TA(3);

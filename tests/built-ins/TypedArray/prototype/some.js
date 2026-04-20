@@ -59,6 +59,23 @@ describe("TypedArray.prototype.some", () => {
     expect(hasTarget).toBe(true);
   });
 
+  describe.each([Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array])("%s", (TA) => {
+    test("returns true when one matches", () => {
+      const ta = new TA([1, 2, 3]);
+      expect(ta.some(x => x === 2)).toBe(true);
+    });
+
+    test("returns false when none match", () => {
+      const ta = new TA([1, 3, 5]);
+      expect(ta.some(x => x === 2)).toBe(false);
+    });
+
+    test("on empty returns false", () => {
+      const ta = new TA(0);
+      expect(ta.some(x => x > 0)).toBe(false);
+    });
+  });
+
   test.each([BigInt64Array, BigUint64Array])("%s some", (TA) => {
     const ta = new TA([1n, 2n, 3n]);
     expect(ta.some(x => x > 2n)).toBe(true);

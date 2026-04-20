@@ -35,6 +35,23 @@ describe("TypedArray.prototype.includes", () => {
     expect(ta.includes(-0)).toBe(true);
   });
 
+  describe.each([Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array])("%s", (TA) => {
+    test("returns true when element exists", () => {
+      const ta = new TA([1, 2, 3]);
+      expect(ta.includes(2)).toBe(true);
+    });
+
+    test("returns false when not found", () => {
+      const ta = new TA([1, 2, 3]);
+      expect(ta.includes(99)).toBe(false);
+    });
+
+    test("with fromIndex", () => {
+      const ta = new TA([1, 2, 3]);
+      expect(ta.includes(1, 1)).toBe(false);
+    });
+  });
+
   test.each([BigInt64Array, BigUint64Array])("%s includes", (TA) => {
     const ta = new TA([1n, 2n, 3n]);
     expect(ta.includes(2n)).toBe(true);
