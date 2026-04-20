@@ -52,5 +52,7 @@ describe("TypedArray.prototype.subarray", () => {
     expect(sub.length).toBe(2);
     expect(sub[0]).toBe(20n);
     expect(sub[1]).toBe(30n);
+    ta[1] = 99n;
+    expect(sub[0]).toBe(99n);
   });
 });

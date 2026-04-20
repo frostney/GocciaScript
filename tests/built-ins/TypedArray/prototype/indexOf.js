@@ -36,5 +36,6 @@ describe("TypedArray.prototype.indexOf", () => {
     const ta = new TA([1n, 2n, 3n, 2n]);
     expect(ta.indexOf(2n)).toBe(1);
     expect(ta.indexOf(4n)).toBe(-1);
+    expect(ta.indexOf(2)).toBe(-1);
   });
 });

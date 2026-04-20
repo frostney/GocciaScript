@@ -9,6 +9,8 @@ describe("TypedArray Symbol.toStringTag", () => {
     [Uint32Array, "[object Uint32Array]"],
     [Float32Array, "[object Float32Array]"],
     [Float64Array, "[object Float64Array]"],
+    [BigInt64Array, "[object BigInt64Array]"],
+    [BigUint64Array, "[object BigUint64Array]"],
   ];
   constructors.forEach((pair) => {
     const Ctor = pair[0];
@@ -33,13 +35,4 @@ describe("TypedArray Symbol.toStringTag", () => {
     });
   });
 
-  test("BigInt64Array toStringTag", () => {
-    const ta = new BigInt64Array(0);
-    expect(Object.prototype.toString.call(ta)).toBe("[object BigInt64Array]");
-  });
-
-  test("BigUint64Array toStringTag", () => {
-    const ta = new BigUint64Array(0);
-    expect(Object.prototype.toString.call(ta)).toBe("[object BigUint64Array]");
-  });
 });

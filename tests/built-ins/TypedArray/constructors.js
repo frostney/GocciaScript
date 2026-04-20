@@ -279,5 +279,27 @@ describe("TypedArray constructors", () => {
       a[0] = 999n;
       expect(b[0]).toBe(999n);
     });
+
+    test("BigUint64Array handles values above 2^63", () => {
+      const ta = new BigUint64Array([18446744073709551615n, 9223372036854775808n]);
+      expect(ta[0]).toBe(18446744073709551615n);
+      expect(ta[1]).toBe(9223372036854775808n);
+    });
+
+    test("BigInt64Array handles negative values", () => {
+      const ta = new BigInt64Array([-1n, -9223372036854775808n]);
+      expect(ta[0]).toBe(-1n);
+      expect(ta[1]).toBe(-9223372036854775808n);
+    });
+
+    test("BigInt typed array constructor rejects Number array source", () => {
+      expect(() => new BigInt64Array([1, 2, 3])).toThrow(TypeError);
+    });
+
+    test("BigInt typed array set rejects Number typed array source", () => {
+      const bi = new BigInt64Array(3);
+      const i32 = new Int32Array([1, 2, 3]);
+      expect(() => bi.set(i32)).toThrow(TypeError);
+    });
   });
 });

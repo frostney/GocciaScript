@@ -41,5 +41,8 @@ describe("TypedArray.prototype.copyWithin", () => {
     ta.copyWithin(0, 3);
     expect(ta[0]).toBe(4n);
     expect(ta[1]).toBe(5n);
+    expect(ta[2]).toBe(3n);
+    expect(ta[3]).toBe(4n);
+    expect(ta[4]).toBe(5n);
   });
 });

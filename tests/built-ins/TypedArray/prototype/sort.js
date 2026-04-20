@@ -81,7 +81,11 @@ describe("TypedArray.prototype.sort", () => {
 
     test("sort with comparefn", () => {
       const ta = new TA([3n, 1n, 2n]);
-      ta.sort((a, b) => (a > b ? -1 : a < b ? 1 : 0));
+      ta.sort((a, b) => {
+        expect(typeof a).toBe("bigint");
+        expect(typeof b).toBe("bigint");
+        return a > b ? -1 : a < b ? 1 : 0;
+      });
       expect(ta[0]).toBe(3n);
       expect(ta[1]).toBe(2n);
       expect(ta[2]).toBe(1n);

@@ -53,5 +53,13 @@ describe("TypedArray.from", () => {
       expect(ta[1]).toBe(20n);
       expect(ta[2]).toBe(30n);
     });
+
+    test(".from rejects non-BigInt values", () => {
+      expect(() => TA.from([1, 2, 3])).toThrow(TypeError);
+    });
+
+    test(".from rejects non-BigInt mapFn result", () => {
+      expect(() => TA.from([1n], () => 1)).toThrow(TypeError);
+    });
   });
 });

@@ -24,6 +24,7 @@ describe("TypedArray.prototype.entries", () => {
     const entries = [...ta.entries()];
     expect(entries[0][0]).toBe(0);
     expect(entries[0][1]).toBe(10n);
+    expect(entries[1][0]).toBe(1);
     expect(entries[1][1]).toBe(20n);
   });
 });
