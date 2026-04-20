@@ -936,6 +936,7 @@ begin
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AExpr.IsAsync;
   ChildTemplate.IsArrow := True;
+  ChildTemplate.SourceText := AExpr.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
   ChildScope.DeclareLocal('__receiver', False);
@@ -1845,6 +1846,7 @@ begin
   ChildTemplate := TGocciaFunctionTemplate.Create('<method>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AExpr.IsAsync;
+  ChildTemplate.SourceText := AExpr.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
   ChildScope.DeclareLocal(KEYWORD_THIS, False);

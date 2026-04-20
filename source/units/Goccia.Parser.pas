@@ -88,6 +88,7 @@ type
     function ConsumeModuleExportName(const AMessage: string): TGocciaToken; overload;
     function ConsumeModuleExportName(const AMessage, ASuggestion: string): TGocciaToken; overload;
     function IsArrowFunction: Boolean;
+    function ExtractSourceRange(const AStartLine, AStartColumn: Integer): string;
     function ConvertNumberLiteral(const ALexeme: string): Double;
     function ConvertBigIntLiteral(const ALexeme: string): TGocciaValue;
     function ParseBinaryExpression(const ANextLevel: TParseFunction; const AOperators: array of TGocciaTokenType): TGocciaExpression;
@@ -284,6 +285,46 @@ begin
   FWarnings[FWarningCount - 1].Suggestion := ASuggestion;
   FWarnings[FWarningCount - 1].Line := ALine;
   FWarnings[FWarningCount - 1].Column := AColumn;
+end;
+
+function TGocciaParser.ExtractSourceRange(const AStartLine, AStartColumn: Integer): string;
+var
+  EndLine, EndColumn, I: Integer;
+  SB: TStringBuffer;
+  SourceLine: string;
+begin
+  // End position is after the last consumed token (Previous)
+  EndLine := Previous.Line;
+  EndColumn := Previous.Column + Length(Previous.Lexeme) - 1;
+
+  if (AStartLine < 1) or (AStartLine > FSourceLines.Count) then
+    Exit('');
+
+  if AStartLine = EndLine then
+  begin
+    SourceLine := FSourceLines[AStartLine - 1];
+    Result := Copy(SourceLine, AStartColumn, EndColumn - AStartColumn + 1);
+    Exit;
+  end;
+
+  SB := TStringBuffer.Create;
+  // First line from start column to end
+  SourceLine := FSourceLines[AStartLine - 1];
+  SB.Append(Copy(SourceLine, AStartColumn, Length(SourceLine) - AStartColumn + 1));
+  // Middle lines
+  for I := AStartLine to EndLine - 2 do
+  begin
+    SB.AppendChar(#10);
+    SB.Append(FSourceLines[I]);
+  end;
+  // Last line from start to end column
+  if EndLine >= 2 then
+  begin
+    SB.AppendChar(#10);
+    SourceLine := FSourceLines[EndLine - 1];
+    SB.Append(Copy(SourceLine, 1, EndColumn));
+  end;
+  Result := SB.ToString;
 end;
 
 procedure TGocciaParser.PushPrivateClassContext;
@@ -1822,10 +1863,12 @@ begin
     begin
       if IsAsync then Inc(FInAsyncFunction);
       try
-        Value := ParseObjectMethodBody(Peek.Line, Peek.Column);
+        Value := ParseObjectMethodBody(Previous.Line, Previous.Column);
       finally
         if IsAsync then Dec(FInAsyncFunction);
       end;
+      TGocciaMethodExpression(Value).SourceText := ExtractSourceRange(
+        TGocciaMethodExpression(Value).Line, TGocciaMethodExpression(Value).Column);
       if IsAsync then
         TGocciaMethodExpression(Value).IsAsync := True;
     end
@@ -2135,6 +2178,7 @@ begin
 
   ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, Body, Line, Column);
   ArrowFn.ReturnType := FnReturnType;
+  ArrowFn.SourceText := ExtractSourceRange(Line, Column);
   Result := ArrowFn;
 end;
 
@@ -2172,6 +2216,7 @@ begin
       Dec(FFunctionDepth);
     end;
     ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, Line, Column);
+    ArrowFn.SourceText := ExtractSourceRange(Line, Column);
     Result := ArrowFn;
     Exit;
   end;
@@ -3108,6 +3153,7 @@ begin
       Result := TGocciaClassMethod.Create(Name, Parameters, Body, AIsStatic, Line, Column);
       Result.GenericParams := MethodGenericParams;
       Result.ReturnType := MethodReturnType;
+      Result.SourceText := ExtractSourceRange(Line, Column);
     except
       Statements.Free;
       raise;
