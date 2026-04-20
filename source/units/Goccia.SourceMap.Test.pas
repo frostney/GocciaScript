@@ -35,6 +35,7 @@ type
     procedure TestToInlineComment;
     procedure TestMultipleSourceFiles;
     procedure TestSemicolonSeparatedLines;
+    procedure TestClonePreservesTranslation;
   public
     procedure SetupTests; override;
   end;
@@ -60,6 +61,7 @@ begin
   Test('ToInlineComment produces valid data URI', TestToInlineComment);
   Test('Multiple source files', TestMultipleSourceFiles);
   Test('Empty lines produce semicolons in mappings', TestSemicolonSeparatedLines);
+  Test('Clone preserves translation', TestClonePreservesTranslation);
 end;
 
 procedure TSourceMapTests.TestVersionIsThree;
@@ -451,6 +453,41 @@ begin
     Expect<Boolean>(Pos(';;', Mappings) > 0).ToBe(True);
   finally
     Map.Free;
+  end;
+end;
+
+procedure TSourceMapTests.TestClonePreservesTranslation;
+var
+  Original, Cloned: TGocciaSourceMap;
+  SrcLine, SrcCol: Integer;
+begin
+  Original := TGocciaSourceMap.Create('output.js');
+  try
+    Original.AddSource('input.jsx');
+    Original.SetSourceContent(0, 'original content');
+    Original.AddMapping(1, 0, 0, 0, 0);     // gen 1:0 -> source 0:0
+    Original.AddMapping(2, 5, 0, 10, 3);    // gen 2:5 -> source 10:3
+
+    Cloned := Original.Clone;
+  finally
+    Original.Free;
+  end;
+
+  // Verify the clone works independently after original is freed
+  try
+    Expect<Integer>(Cloned.Version).ToBe(3);
+    Expect<Integer>(Cloned.SegmentCount).ToBe(2);
+
+    // Translate first mapping: gen 1:0 -> source line 1 (1-based), col 0
+    Expect<Boolean>(Cloned.Translate(1, 0, SrcLine, SrcCol)).ToBe(True);
+    Expect<Integer>(SrcLine).ToBe(1);
+
+    // Translate second mapping: gen 2:5 -> source line 11 (1-based), col 3+(5-5)=3
+    Expect<Boolean>(Cloned.Translate(2, 5, SrcLine, SrcCol)).ToBe(True);
+    Expect<Integer>(SrcLine).ToBe(11);
+    Expect<Integer>(SrcCol).ToBe(3);
+  finally
+    Cloned.Free;
   end;
 end;
 

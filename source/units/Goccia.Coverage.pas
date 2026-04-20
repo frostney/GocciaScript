@@ -8,7 +8,9 @@ uses
   Classes,
   Generics.Collections,
 
-  OrderedStringMap;
+  OrderedStringMap,
+
+  Goccia.SourceMap;
 
 function CountExecutableLines(const ASourceLines: TStrings): Integer;
 procedure BuildExecutableLineFlags(const ASourceLines: TStrings;
@@ -54,9 +56,12 @@ type
 
   TGocciaCoverageFileMap = TOrderedStringMap<TGocciaFileCoverage>;
 
+  TGocciaSourceMapMap = TOrderedStringMap<TGocciaSourceMap>;
+
   TGocciaCoverageTracker = class
   private
     FFiles: TGocciaCoverageFileMap;
+    FSourceMaps: TGocciaSourceMapMap;
     FEnabled: Boolean;
     FLastHitFile: string;
     FLastHitLine: Integer;
@@ -71,12 +76,15 @@ type
 
     procedure RegisterSourceFile(const AFilePath: string;
       const AExecutableLines: Integer);
+    procedure RegisterSourceMap(const AFilePath: string;
+      const ASourceMap: TGocciaSourceMap);
     procedure RecordLineHit(const AFilePath: string;
       const ALine: Integer); inline;
     procedure RecordBranchHit(const AFilePath: string;
       const ALine, AColumn, ABranchIndex: Integer);
 
     function GetFileCoverage(const AFilePath: string): TGocciaFileCoverage;
+    function GetSourceMap(const AFilePath: string): TGocciaSourceMap;
 
     { Merge all coverage data from ASource into this tracker.
       Line hits and branch hits are summed. Files present in ASource
@@ -84,6 +92,7 @@ type
     procedure MergeFrom(const ASource: TGocciaCoverageTracker);
 
     property Files: TGocciaCoverageFileMap read FFiles;
+    property SourceMaps: TGocciaSourceMapMap read FSourceMaps;
     property Enabled: Boolean read FEnabled write FEnabled;
   end;
 
@@ -431,6 +440,7 @@ constructor TGocciaCoverageTracker.Create;
 begin
   inherited Create;
   FFiles := TGocciaCoverageFileMap.Create;
+  FSourceMaps := TGocciaSourceMapMap.Create;
   FEnabled := False;
 end;
 
@@ -438,13 +448,21 @@ destructor TGocciaCoverageTracker.Destroy;
 var
   IterState: Integer;
   Key: string;
-  Value: TGocciaFileCoverage;
+  FileCov: TGocciaFileCoverage;
+  SrcMap: TGocciaSourceMap;
 begin
+  if Assigned(FSourceMaps) then
+  begin
+    IterState := 0;
+    while FSourceMaps.GetNextEntry(IterState, Key, SrcMap) do
+      SrcMap.Free;
+    FSourceMaps.Free;
+  end;
   if Assigned(FFiles) then
   begin
     IterState := 0;
-    while FFiles.GetNextEntry(IterState, Key, Value) do
-      Value.Free;
+    while FFiles.GetNextEntry(IterState, Key, FileCov) do
+      FileCov.Free;
     FFiles.Free;
   end;
   inherited;
@@ -470,6 +488,26 @@ begin
     FileCov := TGocciaFileCoverage.Create(AFilePath, AExecutableLines);
     FFiles.Add(AFilePath, FileCov);
   end;
+end;
+
+procedure TGocciaCoverageTracker.RegisterSourceMap(const AFilePath: string;
+  const ASourceMap: TGocciaSourceMap);
+var
+  OldMap: TGocciaSourceMap;
+begin
+  if FSourceMaps.TryGetValue(AFilePath, OldMap) then
+  begin
+    OldMap.Free;
+    FSourceMaps.Remove(AFilePath);
+  end;
+  FSourceMaps.Add(AFilePath, ASourceMap);
+end;
+
+function TGocciaCoverageTracker.GetSourceMap(
+  const AFilePath: string): TGocciaSourceMap;
+begin
+  if not FSourceMaps.TryGetValue(AFilePath, Result) then
+    Result := nil;
 end;
 
 procedure TGocciaCoverageTracker.RecordLineHit(const AFilePath: string;
@@ -500,6 +538,7 @@ var
   Key: string;
   SrcFile, DstFile: TGocciaFileCoverage;
   Branch: TGocciaCoverageBranch;
+  SrcMap: TGocciaSourceMap;
 begin
   if (ASource = nil) or (ASource.Files = nil) then Exit;
 
@@ -525,6 +564,17 @@ begin
         DstFile.RecordBranchHit(Branch.Line, Branch.Column, Branch.BranchIndex)
       else
         DstFile.EnsureBranchExists(Branch.Line, Branch.Column, Branch.BranchIndex);
+    end;
+  end;
+
+  { Merge source maps — adopt from source if not already present. }
+  if Assigned(ASource.SourceMaps) then
+  begin
+    IterState := 0;
+    while ASource.SourceMaps.GetNextEntry(IterState, Key, SrcMap) do
+    begin
+      if not FSourceMaps.ContainsKey(Key) then
+        FSourceMaps.Add(Key, SrcMap.Clone);
     end;
   end;
 end;

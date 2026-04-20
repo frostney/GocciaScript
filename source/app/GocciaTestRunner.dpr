@@ -417,8 +417,13 @@ begin
 
                 if Assigned(TGocciaCoverageTracker.Instance) and
                    TGocciaCoverageTracker.Instance.Enabled then
+                begin
                   TGocciaCoverageTracker.Instance.RegisterSourceFile(
                     AFileName, CountExecutableLines(Lexer.SourceLines));
+                  if Assigned(SourceMap) then
+                    TGocciaCoverageTracker.Instance.RegisterSourceMap(
+                      AFileName, SourceMap.Clone);
+                end;
 
                 if (not FSilent.Present) and (not GIsWorkerThread) then
                   for I := 0 to Parser.WarningCount - 1 do

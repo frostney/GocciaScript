@@ -398,7 +398,7 @@ The PR workflow (`.github/workflows/pr.yml`) includes shell-level smoke tests th
 | GocciaTestRunner coverage | `--coverage` prints summary; `--coverage-format=lcov` and `--coverage-format=json` write valid output files; branch coverage includes `BRDA`/`BRF` entries |
 | GocciaScriptLoader JSON output | `--output=json` envelope includes `ok`, `value`, `output` fields |
 | GocciaScriptLoader error display | Syntax errors show source context, caret, and suggestions |
-| GocciaScriptLoader coverage | `--coverage` summary, lcov/json file output, bytecode mode coverage |
+| GocciaScriptLoader coverage | `--coverage` summary, lcov/json file output, bytecode mode coverage, JSX source map translation for branch positions |
 | GocciaScriptLoader source maps | `--source-map` writes valid source map JSON; rejects stdin without explicit path |
 | Numeric separator rejection | Trailing, leading, consecutive separators and invalid positions produce errors |
 | Timeout handling | `--timeout` produces `TimeoutError` in JSON output |
@@ -584,8 +584,14 @@ The GocciaTestRunner and GocciaScriptLoader support JavaScript source-level cove
 | lcov | `--coverage-format=lcov --coverage-output=<file>` | Standard lcov tracefile with `DA:` and `BRDA:` entries |
 | JSON | `--coverage-format=json --coverage-output=<file>` | Istanbul-compatible JSON for tooling integration |
 
+### JSX Source Map Integration
+
+When coverage is used with `.jsx`/`.tsx` files, the JSX transformer produces a source map that maps transformed (post-JSX) coordinates back to the original source. The coverage system integrates this source map so that lcov and JSON reports reference **original** JSX source positions, not transformed positions. This ensures downstream tools (Codecov, genhtml, Istanbul) display accurate line and branch locations.
+
+The source map is registered with `TGocciaCoverageTracker` during file registration and applied at report generation time — the recording hot path is unaffected.
+
 ### Architecture
 
 Coverage uses a runtime boolean check (`CoverageEnabled` on `TGocciaEvaluationContext` for the interpreter, `FCoverageEnabled` on `TGocciaVM` for bytecode). When `--coverage` is not passed, the boolean is `False` and branch prediction makes the check effectively free — no separate build is needed.
 
-Data is collected by the `TGocciaCoverageTracker` singleton (`Goccia.Coverage.pas`), which follows the same Initialize/Shutdown pattern as `TGarbageCollector` and `TGocciaCallStack`. Output formatting is in `Goccia.Coverage.Report.pas`.
+Data is collected by the `TGocciaCoverageTracker` singleton (`Goccia.Coverage.pas`), which follows the same Initialize/Shutdown pattern as `TGarbageCollector` and `TGocciaCallStack`. Output formatting is in `Goccia.Coverage.Report.pas`. When a JSX source map is available for a file, `BuildTranslatedLineHits` translates transformed line hits back to original coordinates, and branch positions are translated via `TGocciaSourceMap.Translate` during report emission.

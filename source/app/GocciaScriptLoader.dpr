@@ -387,8 +387,13 @@ begin
 
         if Assigned(TGocciaCoverageTracker.Instance) and
            TGocciaCoverageTracker.Instance.Enabled and Assigned(ASource) then
+        begin
           TGocciaCoverageTracker.Instance.RegisterSourceFile(
             AFileName, CountExecutableLines(ASource));
+          if Assigned(SourceMap) then
+            TGocciaCoverageTracker.Instance.RegisterSourceMap(
+              AFileName, SourceMap.Clone);
+        end;
 
         CompileStart := GetNanoseconds;
         Module := TGocciaBytecodeExecutor(Engine.Executor).CompileToModule(ProgramNode);

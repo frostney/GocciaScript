@@ -1219,8 +1219,13 @@ begin
 
           if Assigned(TGocciaCoverageTracker.Instance) and
              TGocciaCoverageTracker.Instance.Enabled then
+          begin
             TGocciaCoverageTracker.Instance.RegisterSourceFile(
               FSourcePath, CountExecutableLines(Lexer.SourceLines));
+            if Assigned(SourceMap) then
+              TGocciaCoverageTracker.Instance.RegisterSourceMap(
+                FSourcePath, SourceMap.Clone);
+          end;
 
           try
             CheckTopLevelRedeclarations(ProgramNode,
