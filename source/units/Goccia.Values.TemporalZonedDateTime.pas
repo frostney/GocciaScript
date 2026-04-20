@@ -1112,6 +1112,7 @@ function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeToString(const AArgs: TG
 var
   Zdt: TGocciaTemporalZonedDateTimeValue;
   LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
+  SavedHour, SavedMinute, SavedSecond, SavedMs: Integer;
   OffsetSeconds: Integer;
   Arg: TGocciaValue;
   OptionsObj: TGocciaObjectValue;
@@ -1119,11 +1120,11 @@ var
   Mode: TTemporalRoundingMode;
   CalDisp: TTemporalCalendarDisplay;
   DateRec: TTemporalDateRecord;
+  RoundedEpochMs: Int64;
   TimeStr, S: string;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.toString');
   ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
-  OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone, Zdt.FEpochMilliseconds div MILLISECONDS_PER_SECOND);
 
   OptionsObj := nil;
   Arg := AArgs.GetElement(0);
@@ -1135,6 +1136,10 @@ begin
   end;
   ResolveTemporalToStringOptions(OptionsObj, FracDigits, Mode);
   CalDisp := GetCalendarDisplay(OptionsObj);
+  SavedHour := LHour;
+  SavedMinute := LMinute;
+  SavedSecond := LSecond;
+  SavedMs := LMs;
   ExtraDays := 0;
   RoundTimeForToString(LHour, LMinute, LSecond, LMs, LUs, LNs, ExtraDays, FracDigits, Mode);
   if ExtraDays <> 0 then
@@ -1145,6 +1150,20 @@ begin
     DateRec.Month := LMonth;
     DateRec.Day := LDay;
   end;
+
+  // Recompute UTC offset only when rounding actually changed the local time.
+  // Unconditional recomputation via LocalToEpochMs would lose fold information
+  // for ambiguous wall-clock times during DST fall-back (first-match disambiguation).
+  if (ExtraDays <> 0) or (LHour <> SavedHour) or (LMinute <> SavedMinute) or
+     (LSecond <> SavedSecond) or (LMs <> SavedMs) then
+  begin
+    RoundedEpochMs := LocalToEpochMs(DateRec.Year, DateRec.Month, DateRec.Day,
+      LHour, LMinute, LSecond, LMs, Zdt.FTimeZone);
+    OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone, RoundedEpochMs div MILLISECONDS_PER_SECOND);
+  end
+  else
+    OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone, Zdt.FEpochMilliseconds div MILLISECONDS_PER_SECOND);
+
   if FracDigits = -2 then // smallestUnit: minute
     TimeStr := PadTwo(LHour) + ':' + PadTwo(LMinute)
   else
