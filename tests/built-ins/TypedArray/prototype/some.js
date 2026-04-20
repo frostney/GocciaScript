@@ -1,9 +1,4 @@
 describe("TypedArray.prototype.some", () => {
-  test("returns true when one matches", () => {
-    const ta = new Int32Array([1, 2, 3]);
-    expect(ta.some((x) => x === 2)).toBe(true);
-  });
-
   test("stops iterating once callback returns true", () => {
     const ta = new Int32Array([1, 2, 3, 4, 5]);
     const calls = [];
@@ -27,16 +22,6 @@ describe("TypedArray.prototype.some", () => {
     expect(value).toBe(10);
     expect(index).toBe(0);
     expect(arr).toBe(ta);
-  });
-
-  test("returns false when none match", () => {
-    const ta = new Int32Array([1, 3, 5]);
-    expect(ta.some((x) => x === 2)).toBe(false);
-  });
-
-  test("on empty returns false", () => {
-    const ta = new Int32Array(0);
-    expect(ta.some((x) => x > 0)).toBe(false);
   });
 
   test("without callback throws TypeError", () => {

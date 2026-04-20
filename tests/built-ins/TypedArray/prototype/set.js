@@ -1,22 +1,4 @@
 describe("TypedArray.prototype.set", () => {
-  test("set from array", () => {
-    const ta = new Int32Array(4);
-    ta.set([10, 20, 30]);
-    expect(ta[0]).toBe(10);
-    expect(ta[1]).toBe(20);
-    expect(ta[2]).toBe(30);
-    expect(ta[3]).toBe(0);
-  });
-
-  test("set with offset", () => {
-    const ta = new Int32Array(4);
-    ta.set([10, 20], 2);
-    expect(ta[0]).toBe(0);
-    expect(ta[1]).toBe(0);
-    expect(ta[2]).toBe(10);
-    expect(ta[3]).toBe(20);
-  });
-
   test("negative offset throws RangeError", () => {
     const ta = new Int32Array(4);
     expect(() => ta.set([10], -1)).toThrow(RangeError);

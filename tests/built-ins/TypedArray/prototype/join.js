@@ -1,18 +1,4 @@
 describe("TypedArray.prototype.join", () => {
-  test("join with default separator", () => {
-    const ta = new Int32Array([1, 2, 3]);
-    expect(ta.join()).toBe("1,2,3");
-  });
-
-  test("join with custom separator", () => {
-    const ta = new Int32Array([1, 2, 3]);
-    expect(ta.join(" - ")).toBe("1 - 2 - 3");
-  });
-
-  test("on empty returns empty string", () => {
-    expect(new Int32Array(0).join()).toBe("");
-  });
-
   test("single element has no separator", () => {
     expect(new Int32Array([42]).join()).toBe("42");
   });

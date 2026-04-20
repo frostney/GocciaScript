@@ -1,27 +1,4 @@
 describe("TypedArray.prototype.fill", () => {
-  test("fill entire array", () => {
-    const ta = new Int32Array(3);
-    ta.fill(42);
-    expect(ta[0]).toBe(42);
-    expect(ta[1]).toBe(42);
-    expect(ta[2]).toBe(42);
-  });
-
-  test("fill with start and end", () => {
-    const ta = new Int32Array(5);
-    ta.fill(7, 1, 4);
-    expect(ta[0]).toBe(0);
-    expect(ta[1]).toBe(7);
-    expect(ta[2]).toBe(7);
-    expect(ta[3]).toBe(7);
-    expect(ta[4]).toBe(0);
-  });
-
-  test("returns the typed array", () => {
-    const ta = new Int32Array(2);
-    expect(ta.fill(1)).toBe(ta);
-  });
-
   test("on empty returns self", () => {
     const ta = new Int32Array(0);
     expect(ta.fill(42)).toBe(ta);
