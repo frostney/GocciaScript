@@ -1,30 +1,43 @@
 describe("TypedArray.prototype.entries", () => {
-  test("iterates over [index, value] pairs", () => {
-    const ta = new Int32Array([10, 20, 30]);
-    const result = [];
-    for (const entry of ta.entries()) {
-      result.push(entry);
-    }
-    expect(result.length).toBe(3);
-    expect(result[0][0]).toBe(0);
-    expect(result[0][1]).toBe(10);
-    expect(result[2][0]).toBe(2);
-    expect(result[2][1]).toBe(30);
-  });
+  describe.each([Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array])("%s", (TA) => {
+    test("iterates over [index, value] pairs", () => {
+      const ta = new TA([1, 2, 3]);
+      const entries = [...ta.entries()];
+      expect(entries).toEqual([[0, 1], [1, 2], [2, 3]]);
+    });
 
-  test("on empty returns done immediately", () => {
-    const ta = new Int32Array(0);
-    const iter = ta.entries();
-    const result = iter.next();
-    expect(result.done).toBe(true);
+    test("empty array yields nothing", () => {
+      const ta = new TA(0);
+      const entries = [...ta.entries()];
+      expect(entries).toEqual([]);
+    });
+
+    test("iterator protocol", () => {
+      const ta = new TA([1, 2]);
+      const iter = ta.entries();
+      const first = iter.next();
+      expect(first.done).toBe(false);
+      expect(first.value).toEqual([0, 1]);
+      const second = iter.next();
+      expect(second.done).toBe(false);
+      expect(second.value).toEqual([1, 2]);
+      const third = iter.next();
+      expect(third.done).toBe(true);
+      expect(third.value).toBeUndefined();
+    });
   });
 
   test.each([BigInt64Array, BigUint64Array])("%s entries iterator", (TA) => {
     const ta = new TA([10n, 20n]);
-    const entries = [...ta.entries()];
-    expect(entries[0][0]).toBe(0);
-    expect(entries[0][1]).toBe(10n);
-    expect(entries[1][0]).toBe(1);
-    expect(entries[1][1]).toBe(20n);
+    const iter = ta.entries();
+    const first = iter.next();
+    expect(first.done).toBe(false);
+    expect(first.value[0]).toBe(0);
+    expect(first.value[1]).toBe(10n);
+    const second = iter.next();
+    expect(second.done).toBe(false);
+    expect(second.value[0]).toBe(1);
+    expect(second.value[1]).toBe(20n);
+    expect(iter.next().done).toBe(true);
   });
 });

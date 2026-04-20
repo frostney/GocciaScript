@@ -7,6 +7,7 @@ describe("TypedArray Symbol.toStringTag", () => {
     [Uint16Array, "[object Uint16Array]"],
     [Int32Array, "[object Int32Array]"],
     [Uint32Array, "[object Uint32Array]"],
+    [Float16Array, "[object Float16Array]"],
     [Float32Array, "[object Float32Array]"],
     [Float64Array, "[object Float64Array]"],
     [BigInt64Array, "[object BigInt64Array]"],
@@ -33,6 +34,25 @@ describe("TypedArray Symbol.toStringTag", () => {
       expect(typeof desc.get).toBe("function");
       expect(desc.get.call({})).toBe(undefined);
     });
+  });
+
+  test.each([
+    [Int8Array, "Int8Array"],
+    [Uint8Array, "Uint8Array"],
+    [Uint8ClampedArray, "Uint8ClampedArray"],
+    [Int16Array, "Int16Array"],
+    [Uint16Array, "Uint16Array"],
+    [Int32Array, "Int32Array"],
+    [Uint32Array, "Uint32Array"],
+    [Float16Array, "Float16Array"],
+    [Float32Array, "Float32Array"],
+    [Float64Array, "Float64Array"],
+    [BigInt64Array, "BigInt64Array"],
+    [BigUint64Array, "BigUint64Array"],
+  ])("%s has correct @@toStringTag", (TA, expected) => {
+    const ta = new TA(0);
+    expect(Object.prototype.toString.call(ta)).toBe("[object " + expected + "]");
+    expect(ta[Symbol.toStringTag]).toBe(expected);
   });
 
 });
