@@ -1345,13 +1345,11 @@ begin
 
       if AForOfStatement.IsVar then
       begin
-        // var binding: define/update in function scope
+        // var binding: assign in function scope (bindings already hoisted).
+        // Use IsDeclaration=False so AssignLexicalBinding walks the parent
+        // chain to find the hoisted binding without replacing the eval scope.
         if AForOfStatement.BindingPattern <> nil then
-        begin
-          IterContext.Scope := AContext.Scope.FindFunctionOrModuleScope;
-          AssignPattern(AForOfStatement.BindingPattern, CurrentValue, IterContext, False);
-          IterContext.Scope := IterScope;
-        end
+          AssignPattern(AForOfStatement.BindingPattern, CurrentValue, IterContext, False)
         else
           AContext.Scope.FindFunctionOrModuleScope.ForceUpdateBinding(
             AForOfStatement.BindingName, CurrentValue);
@@ -1444,11 +1442,7 @@ begin
           if AForAwaitOfStatement.IsVar then
           begin
             if AForAwaitOfStatement.BindingPattern <> nil then
-            begin
-              IterContext.Scope := AContext.Scope.FindFunctionOrModuleScope;
-              AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, False);
-              IterContext.Scope := IterScope;
-            end
+              AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, False)
             else
               AContext.Scope.FindFunctionOrModuleScope.ForceUpdateBinding(
                 AForAwaitOfStatement.BindingName, CurrentValue);
@@ -1497,11 +1491,7 @@ begin
         if AForAwaitOfStatement.IsVar then
         begin
           if AForAwaitOfStatement.BindingPattern <> nil then
-          begin
-            IterContext.Scope := AContext.Scope.FindFunctionOrModuleScope;
-            AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, False);
-            IterContext.Scope := IterScope;
-          end
+            AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, False)
           else
             AContext.Scope.FindFunctionOrModuleScope.ForceUpdateBinding(
               AForAwaitOfStatement.BindingName, CurrentValue);
@@ -3896,19 +3886,16 @@ end;
 function EvaluateDestructuringDeclaration(const ADestructuringDeclaration: TGocciaDestructuringDeclaration; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Value: TGocciaValue;
-  VarContext: TGocciaEvaluationContext;
 begin
   // Evaluate the initializer
   Value := EvaluateExpression(ADestructuringDeclaration.Initializer, AContext);
 
   // Apply the destructuring pattern to declare variables
   if ADestructuringDeclaration.IsVar then
-  begin
-    // var destructuring: assign in function/module scope (bindings already hoisted)
-    VarContext := AContext;
-    VarContext.Scope := AContext.Scope.FindFunctionOrModuleScope;
-    AssignPattern(ADestructuringDeclaration.Pattern, Value, VarContext, False);
-  end
+    // var destructuring: assign via parent-chain walk (bindings already hoisted
+    // to function scope). Keep current scope so computed keys/defaults resolve
+    // against the correct lexical environment.
+    AssignPattern(ADestructuringDeclaration.Pattern, Value, AContext, False)
   else if ADestructuringDeclaration.IsConst then
     AssignPattern(ADestructuringDeclaration.Pattern, Value, AContext, True, dtConst)
   else
