@@ -563,9 +563,7 @@ Reliable brand check for error objects: `Error.isError(value)`. See [ES2026 §20
 
 ### `var` Declarations
 
-**Excluded.** Use `let` or `const` instead.
-
-`var` has function-scoping and hoisting behavior that leads to subtle bugs:
+**Opt-in.** Excluded by default; use `let` or `const` instead. Available as a compatibility mode via `--compat-var`. `var` has function-scoping and hoisting behavior that leads to subtle bugs:
 
 ```javascript
 // In JavaScript, this prints "undefined" then "5"
@@ -576,6 +574,8 @@ console.log(x); // 5
 ```
 
 With `let`/`const`, accessing before declaration is a `ReferenceError` (Temporal Dead Zone), which catches bugs early.
+
+When enabled (CLI: `--compat-var`, engine API: `Engine.VarEnabled := True`, config: `{"compat-var": true}`), `var` declarations follow ES2026 §14.3.2 semantics: function-scoped (escapes blocks), hoisted to function top as `undefined`, redeclaration allowed, no TDZ, with destructuring and for-of support. Var bindings are stored in a separate binding map (`FVarBindings`) on function/module/global scopes, distinct from lexical bindings. See [interpreter.md § Scope Chain Design](interpreter.md#scope-chain-design).
 
 ### `function` Keyword
 

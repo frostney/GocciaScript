@@ -265,6 +265,7 @@ var
   I: Integer;
 begin
   Names := TStringList.Create;
+  Names.CaseSensitive := True;
   try
     CollectVarNames(AStatements, Names);
     for I := 0 to Names.Count - 1 do
@@ -280,6 +281,7 @@ var
   I: Integer;
 begin
   Names := TStringList.Create;
+  Names.CaseSensitive := True;
   try
     for I := 0 to ANodes.Count - 1 do
       CollectVarNamesFromNode(ANodes[I], Names);
@@ -3915,6 +3917,10 @@ begin
       TGocciaIdentifierDestructuringPattern(APattern).Name, AValue, True)
   else if APattern is TGocciaObjectDestructuringPattern then
   begin
+    if (AValue is TGocciaNullLiteralValue) or (AValue is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError(
+        Format(SErrorCannotDestructure, [AValue.ToStringLiteral.Value]),
+        SSuggestDestructureRequiresObject);
     ObjPat := TGocciaObjectDestructuringPattern(APattern);
     for I := 0 to ObjPat.Properties.Count - 1 do
     begin
@@ -3928,6 +3934,10 @@ begin
   end
   else if APattern is TGocciaArrayDestructuringPattern then
   begin
+    if (AValue is TGocciaNullLiteralValue) or (AValue is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError(
+        Format(SErrorCannotDestructure, [AValue.ToStringLiteral.Value]),
+        SSuggestDestructureRequiresIterable);
     ArrPat := TGocciaArrayDestructuringPattern(APattern);
     if AValue is TGocciaArrayValue then
     begin
@@ -3949,6 +3959,33 @@ begin
         begin
           if I < ArrayValue.Elements.Count then
             ElementValue := ArrayValue.Elements[I]
+          else
+            ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+          AssignVariablePattern(ArrPat.Elements[I], ElementValue, AContext);
+        end;
+      end;
+    end
+    else if AValue is TGocciaStringLiteralValue then
+    begin
+      for I := 0 to ArrPat.Elements.Count - 1 do
+      begin
+        if ArrPat.Elements[I] = nil then Continue;
+        if ArrPat.Elements[I] is TGocciaRestDestructuringPattern then
+        begin
+          RestElements := TGocciaArrayValue.Create;
+          for J := I to Length(TGocciaStringLiteralValue(AValue).Value) - 1 do
+            RestElements.Elements.Add(TGocciaStringLiteralValue.Create(
+              TGocciaStringLiteralValue(AValue).Value[J + 1]));
+          AssignVariablePattern(
+            TGocciaRestDestructuringPattern(ArrPat.Elements[I]).Argument,
+            RestElements, AContext);
+          Break;
+        end
+        else
+        begin
+          if I < Length(TGocciaStringLiteralValue(AValue).Value) then
+            ElementValue := TGocciaStringLiteralValue.Create(
+              TGocciaStringLiteralValue(AValue).Value[I + 1])
           else
             ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
           AssignVariablePattern(ArrPat.Elements[I], ElementValue, AContext);
