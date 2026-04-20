@@ -6,6 +6,7 @@ interface
 
 function GetVersion: string;
 function GetCommit: string;
+function GetBuildDate: string;
 
 implementation
 
@@ -19,6 +20,11 @@ end;
 function GetCommit: string;
 begin
   Result := BAKED_COMMIT;
+end;
+
+function GetBuildDate: string;
+begin
+  Result := BAKED_BUILD_DATE;
 end;
 
 end.

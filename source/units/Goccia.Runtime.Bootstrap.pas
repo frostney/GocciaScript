@@ -586,6 +586,8 @@ begin
     TGocciaStringLiteralValue.Create(GetBuildOS), [pfEnumerable]));
   BuildObj.DefineProperty('arch', TGocciaPropertyDescriptorData.Create(
     TGocciaStringLiteralValue.Create(GetBuildArch), [pfEnumerable]));
+  BuildObj.DefineProperty('date', TGocciaPropertyDescriptorData.Create(
+    TGocciaStringLiteralValue.Create(GetBuildDate), [pfEnumerable]));
 
   ShimsArray := TGocciaArrayValue.Create;
   if Assigned(FShims) then
