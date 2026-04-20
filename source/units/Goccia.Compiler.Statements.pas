@@ -2777,6 +2777,48 @@ begin
       TGocciaRestDestructuringPattern(APattern).Argument, AScope);
 end;
 
+procedure EmitGlobalDefinesForPattern(const ACtx: TGocciaCompilationContext;
+  const APattern: TGocciaDestructuringPattern; const AIsConst: Boolean);
+var
+  ObjPat: TGocciaObjectDestructuringPattern;
+  ArrPat: TGocciaArrayDestructuringPattern;
+  AssignPat: TGocciaAssignmentDestructuringPattern;
+  LocalIdx: Integer;
+  I: Integer;
+begin
+  if APattern is TGocciaIdentifierDestructuringPattern then
+  begin
+    LocalIdx := ACtx.Scope.ResolveLocal(TGocciaIdentifierDestructuringPattern(APattern).Name);
+    if LocalIdx >= 0 then
+    begin
+      ACtx.Scope.MarkGlobalBacked(LocalIdx);
+      EmitGlobalDefine(ACtx, ACtx.Scope.GetLocal(LocalIdx).Slot,
+        ACtx.Scope.GetLocal(LocalIdx).Name, AIsConst);
+    end;
+  end
+  else if APattern is TGocciaObjectDestructuringPattern then
+  begin
+    ObjPat := TGocciaObjectDestructuringPattern(APattern);
+    for I := 0 to ObjPat.Properties.Count - 1 do
+      EmitGlobalDefinesForPattern(ACtx, ObjPat.Properties[I].Pattern, AIsConst);
+  end
+  else if APattern is TGocciaArrayDestructuringPattern then
+  begin
+    ArrPat := TGocciaArrayDestructuringPattern(APattern);
+    for I := 0 to ArrPat.Elements.Count - 1 do
+      if Assigned(ArrPat.Elements[I]) then
+        EmitGlobalDefinesForPattern(ACtx, ArrPat.Elements[I], AIsConst);
+  end
+  else if APattern is TGocciaAssignmentDestructuringPattern then
+  begin
+    AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
+    EmitGlobalDefinesForPattern(ACtx, AssignPat.Left, AIsConst);
+  end
+  else if APattern is TGocciaRestDestructuringPattern then
+    EmitGlobalDefinesForPattern(ACtx,
+      TGocciaRestDestructuringPattern(APattern).Argument, AIsConst);
+end;
+
 procedure CompileDestructuringDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaDestructuringDeclaration);
 var
@@ -2794,7 +2836,7 @@ begin
   else
     CollectDestructuringBindings(AStmt.Pattern, ACtx.Scope, AStmt.IsConst);
 
-  if IsTopLevelGlobalBacked then
+  if IsTopLevelGlobalBacked and (not AStmt.IsVar) then
     for I := LocalCountBefore to ACtx.Scope.LocalCount - 1 do
       ACtx.Scope.MarkGlobalBacked(I);
 
@@ -2804,11 +2846,16 @@ begin
   ACtx.Scope.FreeRegister;
 
   if IsTopLevelGlobalBacked then
-    for I := LocalCountBefore to ACtx.Scope.LocalCount - 1 do
-    begin
-      Local := ACtx.Scope.GetLocal(I);
-      EmitGlobalDefine(ACtx, Local.Slot, Local.Name, AStmt.IsConst);
-    end;
+  begin
+    if AStmt.IsVar then
+      EmitGlobalDefinesForPattern(ACtx, AStmt.Pattern, False)
+    else
+      for I := LocalCountBefore to ACtx.Scope.LocalCount - 1 do
+      begin
+        Local := ACtx.Scope.GetLocal(I);
+        EmitGlobalDefine(ACtx, Local.Slot, Local.Name, AStmt.IsConst);
+      end;
+  end;
 end;
 
 procedure CompileEnumDeclaration(const ACtx: TGocciaCompilationContext;
