@@ -836,7 +836,7 @@ end;
       begin
         HasRealInit := not ((Variables[I].Initializer is TGocciaLiteralExpression) and
           (Value is TGocciaUndefinedLiteralValue));
-        AContext.Scope.DefineVarBinding(Variables[I].Name, Value, HasRealInit);
+        AContext.Scope.DefineVariableBinding(Variables[I].Name, Value, HasRealInit);
       end
       else if IsConst then
         AContext.Scope.DefineFromToken(Variables[I].Name, Value, gttConst)

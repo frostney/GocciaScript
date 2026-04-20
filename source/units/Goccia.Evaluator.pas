@@ -266,7 +266,7 @@ begin
   try
     CollectVarNames(AStatements, Names);
     for I := 0 to Names.Count - 1 do
-      AScope.DefineVarBinding(Names[I], TGocciaUndefinedLiteralValue.UndefinedValue, False);
+      AScope.DefineVariableBinding(Names[I], TGocciaUndefinedLiteralValue.UndefinedValue, False);
   finally
     Names.Free;
   end;
@@ -282,7 +282,7 @@ begin
     for I := 0 to ANodes.Count - 1 do
       CollectVarNamesFromNode(ANodes[I], Names);
     for I := 0 to Names.Count - 1 do
-      AScope.DefineVarBinding(Names[I], TGocciaUndefinedLiteralValue.UndefinedValue, False);
+      AScope.DefineVariableBinding(Names[I], TGocciaUndefinedLiteralValue.UndefinedValue, False);
   finally
     Names.Free;
   end;
@@ -1347,7 +1347,7 @@ begin
         if AForOfStatement.BindingPattern <> nil then
           AssignPattern(AForOfStatement.BindingPattern, CurrentValue, IterContext, False)
         else
-          AContext.Scope.DefineVarBinding(AForOfStatement.BindingName, CurrentValue, True);
+          AContext.Scope.DefineVariableBinding(AForOfStatement.BindingName, CurrentValue, True);
       end
       else if AForOfStatement.BindingPattern <> nil then
         AssignPattern(AForOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
@@ -1439,7 +1439,7 @@ begin
             if AForAwaitOfStatement.BindingPattern <> nil then
               AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, False)
             else
-              AContext.Scope.DefineVarBinding(AForAwaitOfStatement.BindingName, CurrentValue, True);
+              AContext.Scope.DefineVariableBinding(AForAwaitOfStatement.BindingName, CurrentValue, True);
           end
           else if AForAwaitOfStatement.BindingPattern <> nil then
             AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
@@ -1487,7 +1487,7 @@ begin
           if AForAwaitOfStatement.BindingPattern <> nil then
             AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, False)
           else
-            AContext.Scope.DefineVarBinding(AForAwaitOfStatement.BindingName, CurrentValue, True);
+            AContext.Scope.DefineVariableBinding(AForAwaitOfStatement.BindingName, CurrentValue, True);
         end
         else if AForAwaitOfStatement.BindingPattern <> nil then
           AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
@@ -3916,7 +3916,7 @@ begin
   if AIsDeclaration then
     AContext.Scope.DefineLexicalBinding(APattern.Name, AValue, ADeclarationType)
   else
-    AContext.Scope.AssignIdentifierBinding(APattern.Name, AValue);
+    AContext.Scope.AssignBinding(APattern.Name, AValue);
 end;
 
 procedure AssignArrayPattern(const APattern: TGocciaArrayDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
