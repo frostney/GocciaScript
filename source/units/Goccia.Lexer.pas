@@ -1101,7 +1101,7 @@ begin
       if Peek = #10 then
         Advance;
       Inc(FLine);
-      FColumn := 0;
+      FColumn := 1;
       // ES2026 §12.9.6: TV and TRV both normalize CR and CRLF to LF
       SB.AppendChar(#10);
       RawSB.AppendChar(#10);
@@ -1125,7 +1125,7 @@ begin
       end;
       Inc(FCurrent, UTF8_LINE_TERMINATOR_BYTE_LENGTH);
       Inc(FLine);
-      FColumn := 0;
+      FColumn := 1;
     end
     else if Peek = '\' then
     begin
