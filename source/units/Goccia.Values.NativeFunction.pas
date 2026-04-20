@@ -16,6 +16,7 @@ type
     FFunction: TGocciaNativeFunctionCallback;
     FName: string;
     FArity: Integer;
+    FNotConstructable: Boolean;
   protected
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
@@ -28,6 +29,7 @@ type
     property NativeFunction: TGocciaNativeFunctionCallback read FFunction;
     property Name: string read FName;
     property Arity: Integer read FArity;
+    property NotConstructable: Boolean read FNotConstructable write FNotConstructable;
   end;
 
 

@@ -549,10 +549,14 @@ begin
   Scope := FInterpreter.GlobalScope;
   GlobalThisObj := TGocciaObjectValue.Create;
 
+  // ES2026 §19.1: Global object properties have
+  // { [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: true }
   for Name in Scope.GetOwnBindingNames do
-    GlobalThisObj.AssignProperty(Name, Scope.GetValue(Name));
+    GlobalThisObj.DefineProperty(Name,
+      TGocciaPropertyDescriptorData.Create(Scope.GetValue(Name), [pfWritable, pfConfigurable]));
 
-  GlobalThisObj.AssignProperty('globalThis', GlobalThisObj);
+  GlobalThisObj.DefineProperty('globalThis',
+    TGocciaPropertyDescriptorData.Create(GlobalThisObj, [pfWritable, pfConfigurable]));
   Scope.DefineLexicalBinding('globalThis', GlobalThisObj, dtConst);
 end;
 

@@ -628,6 +628,8 @@ begin
   else
     Result := TGocciaNativeFunctionValue.Create(
       ADefinition.Callback, ADefinition.ExposedName, ADefinition.Arity);
+  if gmfNotConstructable in ADefinition.MemberFlags then
+    Result.NotConstructable := True;
 end;
 
 procedure ValidateMemberDefinition(const ADefinition: TGocciaMemberDefinition);

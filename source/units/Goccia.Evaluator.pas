@@ -2038,6 +2038,12 @@ begin
       end
       else if Callee is TGocciaNativeFunctionValue then
       begin
+        if TGocciaNativeFunctionValue(Callee).NotConstructable then
+          ThrowTypeError(
+            Format(SErrorNotConstructor,
+              [TGocciaNativeFunctionValue(Callee).Name]),
+            Format('''%s'' is not a constructor',
+              [TGocciaNativeFunctionValue(Callee).Name]));
         Result := TGocciaNativeFunctionValue(Callee).Call(Arguments,
           TGocciaHoleValue.HoleValue);
       end

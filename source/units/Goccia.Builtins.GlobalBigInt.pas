@@ -40,10 +40,14 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.ObjectModel.Types,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.HoleValue,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.SymbolValue,
+  Goccia.Values.ToPrimitive;
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
@@ -51,6 +55,7 @@ threadvar
 constructor TGocciaGlobalBigInt.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
   PrototypeInitializer: TGocciaBigIntValue;
+  Proto: TGocciaObjectValue;
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -59,13 +64,14 @@ begin
   PrototypeInitializer.InitializePrototype;
 
   // Create the BigInt function (callable, converts values to BigInt)
+  // BigInt implements [[Construct]] but rejects new target inside the body
   FBigIntFunction := TGocciaNativeFunctionValue.Create(BigIntConstructor, 'BigInt', 1);
 
   // Register static methods on the BigInt function
   with TGocciaMemberCollection.Create do
   try
-    AddMethod(BigIntAsIntN, 2, gmkStaticMethod);
-    AddMethod(BigIntAsUintN, 2, gmkStaticMethod);
+    AddMethod(BigIntAsIntN, 2, gmkStaticMethod, [gmfNotConstructable]);
+    AddMethod(BigIntAsUintN, 2, gmkStaticMethod, [gmfNotConstructable]);
     FStaticMembers := ToDefinitions;
   finally
     Free;
@@ -74,8 +80,21 @@ begin
   FStaticMembers[1].ExposedName := 'asUintN';
   RegisterMemberDefinitions(FBigIntFunction, FStaticMembers);
 
-  // Expose BigInt.prototype
-  FBigIntFunction.AssignProperty(PROP_PROTOTYPE, TGocciaBigIntValue.SharedPrototype);
+  // Set up BigInt.prototype
+  Proto := TGocciaObjectValue(TGocciaBigIntValue.SharedPrototype);
+
+  // ES2026 §21.2.3.1 BigInt.prototype.constructor
+  Proto.DefineProperty(PROP_CONSTRUCTOR,
+    TGocciaPropertyDescriptorData.Create(FBigIntFunction, [pfWritable, pfConfigurable]));
+
+  // ES2026 §21.2.3.5 BigInt.prototype[@@toStringTag]
+  Proto.DefineSymbolProperty(TGocciaSymbolValue.WellKnownToStringTag,
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create('BigInt'), [pfConfigurable]));
+
+  // Expose BigInt.prototype as non-writable, non-enumerable, non-configurable
+  FBigIntFunction.DefineProperty(PROP_PROTOTYPE,
+    TGocciaPropertyDescriptorData.Create(Proto, []));
 
   // Bind BigInt in scope
   AScope.DefineLexicalBinding(AName, FBigIntFunction, dtLet);
@@ -89,6 +108,11 @@ var
   NumVal: Double;
   StrVal: string;
 begin
+  // ES2026 §21.2.1.1 Step 1: If NewTarget is not undefined, throw TypeError
+  if AThisValue is TGocciaHoleValue then
+    ThrowTypeError('Cannot use ''new'' with BigInt',
+      'Use BigInt(value) without ''new'' to convert to BigInt');
+
   if AArgs.Length = 0 then
     ThrowTypeError(Format(SErrorBigIntInvalidConversion, ['undefined']),
       SSuggestBigIntNoImplicitConversion);
@@ -203,24 +227,79 @@ begin
   Result := Trunc(IntegerIndex);
 end;
 
+// ES2026 §7.1.13 ToBigInt(argument) — forward declaration
+function ToBigIntValue(const AValue: TGocciaValue): TGocciaBigIntValue; forward;
+
+// ES2026 §7.1.13 ToBigInt — apply ToPrimitive then convert primitive to BigInt
+function ToBigIntValue(const AValue: TGocciaValue): TGocciaBigIntValue;
+var
+  Prim: TGocciaValue;
+  StrVal: string;
+begin
+  // Step 1: If argument is an object, apply ToPrimitive(argument, number)
+  if (AValue is TGocciaObjectValue) and not (AValue is TGocciaBigIntValue) then
+  begin
+    Prim := ToPrimitive(AValue, tphNumber);
+    Exit(ToBigIntValue(Prim));
+  end;
+
+  if AValue is TGocciaBigIntValue then
+    Exit(TGocciaBigIntValue(AValue));
+
+  if AValue is TGocciaBooleanLiteralValue then
+  begin
+    if TGocciaBooleanLiteralValue(AValue).Value then
+      Result := TGocciaBigIntValue.BigIntOne
+    else
+      Result := TGocciaBigIntValue.BigIntZero;
+    Exit;
+  end;
+
+  if AValue is TGocciaStringLiteralValue then
+  begin
+    StrVal := Trim(TGocciaStringLiteralValue(AValue).Value);
+    if StrVal = '' then
+      Exit(TGocciaBigIntValue.BigIntZero);
+    try
+      if (Length(StrVal) >= 3) and (StrVal[1] = '0') then
+      begin
+        if (StrVal[2] = 'x') or (StrVal[2] = 'X') then
+          Exit(TGocciaBigIntValue.Create(
+            TBigInteger.FromHexString(Copy(StrVal, 3, Length(StrVal) - 2))))
+        else if (StrVal[2] = 'o') or (StrVal[2] = 'O') then
+          Exit(TGocciaBigIntValue.Create(
+            TBigInteger.FromOctalString(Copy(StrVal, 3, Length(StrVal) - 2))))
+        else if (StrVal[2] = 'b') or (StrVal[2] = 'B') then
+          Exit(TGocciaBigIntValue.Create(
+            TBigInteger.FromBinaryString(Copy(StrVal, 3, Length(StrVal) - 2))));
+      end;
+      Result := TGocciaBigIntValue.Create(TBigInteger.FromDecimalString(StrVal));
+    except
+      ThrowSyntaxError(Format(SErrorBigIntInvalidConversion, [
+        '''' + TGocciaStringLiteralValue(AValue).Value + '''']),
+        SSuggestBigIntNoImplicitConversion);
+      Result := nil;
+    end;
+    Exit;
+  end;
+
+  // Number, undefined, null, symbol, object — all throw TypeError
+  ThrowTypeError(Format(SErrorBigIntInvalidConversion, [AValue.TypeName]),
+    SSuggestBigIntNoImplicitConversion);
+  Result := nil;
+end;
+
 // ES2026 §21.2.2.1 BigInt.asIntN(bits, bigint)
 function TGocciaGlobalBigInt.BigIntAsIntN(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Bits: Integer;
-  BigIntArg: TGocciaValue;
+  BigIntVal: TGocciaBigIntValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'BigInt.asIntN', ThrowError);
-
   Bits := BigIntToIndex(AArgs.GetElement(0));
+  BigIntVal := ToBigIntValue(AArgs.GetElement(1));
 
-  BigIntArg := AArgs.GetElement(1);
-  if not (BigIntArg is TGocciaBigIntValue) then
-    ThrowTypeError(Format(SErrorBigIntInvalidConversion, [BigIntArg.TypeName]),
-      SSuggestBigIntNoImplicitConversion);
-
-  Result := TGocciaBigIntValue.Create(
-    TGocciaBigIntValue(BigIntArg).Value.AsIntN(Bits));
+  Result := TGocciaBigIntValue.Create(BigIntVal.Value.AsIntN(Bits));
 end;
 
 // ES2026 §21.2.2.2 BigInt.asUintN(bits, bigint)
@@ -228,19 +307,12 @@ function TGocciaGlobalBigInt.BigIntAsUintN(const AArgs: TGocciaArgumentsCollecti
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Bits: Integer;
-  BigIntArg: TGocciaValue;
+  BigIntVal: TGocciaBigIntValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'BigInt.asUintN', ThrowError);
-
   Bits := BigIntToIndex(AArgs.GetElement(0));
+  BigIntVal := ToBigIntValue(AArgs.GetElement(1));
 
-  BigIntArg := AArgs.GetElement(1);
-  if not (BigIntArg is TGocciaBigIntValue) then
-    ThrowTypeError(Format(SErrorBigIntInvalidConversion, [BigIntArg.TypeName]),
-      SSuggestBigIntNoImplicitConversion);
-
-  Result := TGocciaBigIntValue.Create(
-    TGocciaBigIntValue(BigIntArg).Value.AsUintN(Bits));
+  Result := TGocciaBigIntValue.Create(BigIntVal.Value.AsUintN(Bits));
 end;
 
 end.

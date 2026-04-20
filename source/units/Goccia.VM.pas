@@ -2565,6 +2565,12 @@ begin
 
   if AConstructor is TGocciaNativeFunctionValue then
   begin
+    if TGocciaNativeFunctionValue(AConstructor).NotConstructable then
+      ThrowTypeError(
+        Format(SErrorNotConstructor,
+          [TGocciaNativeFunctionValue(AConstructor).Name]),
+        Format('''%s'' is not a constructor',
+          [TGocciaNativeFunctionValue(AConstructor).Name]));
     ConstructorName := TGocciaNativeFunctionValue(AConstructor).Name;
     if Assigned(TGocciaCallStack.Instance) then
       TGocciaCallStack.Instance.Push(ConstructorName, '', 0, 0);
