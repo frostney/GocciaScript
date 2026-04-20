@@ -166,7 +166,7 @@ SUPPORTED_FEATURES: dict[str, bool] = {
 
     # Core language -- NOT supported
     "generators": False,
-    "BigInt": False,
+    "BigInt": True,
     "Proxy": True,
     "Reflect": True,
     "Reflect.construct": True,
@@ -284,8 +284,6 @@ _UNSUPPORTED_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
      re.compile(r"\byield\b")),
     ("labeled_statement",
      re.compile(r"^\s*\w+\s*:\s*(?:for|while|do|if|switch)\b", re.MULTILINE)),
-    ("bigint_literal",
-     re.compile(r"\b\d[\d_]*n\b")),
 ]
 
 

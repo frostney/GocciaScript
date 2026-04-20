@@ -38,6 +38,7 @@ type
     function TimeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TimeToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TimeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PlainTimeToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure InitializePrototype;
   public
@@ -65,6 +66,7 @@ uses
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SymbolValue,
   Goccia.Values.TemporalDuration;
 
 threadvar
@@ -89,7 +91,7 @@ begin
     Result := TGocciaTemporalPlainTimeValue(AValue)
   else if AValue is TGocciaStringLiteralValue then
   begin
-    if not TryParseISOTime(TGocciaStringLiteralValue(AValue).Value, TimeRec) then
+    if not CoerceToISOTime(TGocciaStringLiteralValue(AValue).Value, TimeRec) then
       ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['time', AMethod]), SSuggestTemporalISOFormat);
     Result := TGocciaTemporalPlainTimeValue.Create(
       TimeRec.Hour, TimeRec.Minute, TimeRec.Second,
@@ -174,6 +176,11 @@ begin
       Members.AddMethod(TimeToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(TimeToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(TimeValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(PlainTimeToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddSymbolDataProperty(
+        TGocciaSymbolValue.WellKnownToStringTag,
+        TGocciaStringLiteralValue.Create('Temporal.PlainTime'),
+        [pfConfigurable]);
       FPrototypeMembers := Members.ToDefinitions;
     finally
       Members.Free;
@@ -496,18 +503,30 @@ function TGocciaTemporalPlainTimeValue.TimeToString(const AArgs: TGocciaArgument
 var
   T: TGocciaTemporalPlainTimeValue;
   Arg: TGocciaValue;
-  FracDigits: Integer;
+  OptionsObj: TGocciaObjectValue;
+  FracDigits, ExtraDays: Integer;
+  Mode: TTemporalRoundingMode;
+  H, Mi, S, Ms, Us, Ns: Integer;
 begin
   T := AsPlainTime(AThisValue, 'PlainTime.prototype.toString');
+  OptionsObj := nil;
   Arg := AArgs.GetElement(0);
-  FracDigits := -1; // auto
-
-  if Assigned(Arg) and (Arg is TGocciaObjectValue) then
-    FracDigits := GetFractionalSecondDigits(TGocciaObjectValue(Arg));
-
-  Result := TGocciaStringLiteralValue.Create(
-    FormatTimeWithPrecision(T.FHour, T.FMinute, T.FSecond,
-      T.FMillisecond, T.FMicrosecond, T.FNanosecond, FracDigits));
+  if Assigned(Arg) and not (Arg is TGocciaUndefinedLiteralValue) then
+  begin
+    if not (Arg is TGocciaObjectValue) then
+      ThrowTypeError('options must be an object or undefined', SSuggestTemporalFromArg);
+    OptionsObj := TGocciaObjectValue(Arg);
+  end;
+  ResolveTemporalToStringOptions(OptionsObj, FracDigits, Mode);
+  H := T.FHour; Mi := T.FMinute; S := T.FSecond;
+  Ms := T.FMillisecond; Us := T.FMicrosecond; Ns := T.FNanosecond;
+  ExtraDays := 0;
+  RoundTimeForToString(H, Mi, S, Ms, Us, Ns, ExtraDays, FracDigits, Mode);
+  if FracDigits = -2 then // smallestUnit: minute
+    Result := TGocciaStringLiteralValue.Create(PadTwo(H) + ':' + PadTwo(Mi))
+  else
+    Result := TGocciaStringLiteralValue.Create(
+      FormatTimeWithPrecision(H, Mi, S, Ms, Us, Ns, FracDigits));
 end;
 
 function TGocciaTemporalPlainTimeValue.TimeToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -523,6 +542,18 @@ function TGocciaTemporalPlainTimeValue.TimeValueOf(const AArgs: TGocciaArguments
 begin
   ThrowTypeError(Format(SErrorTemporalValueOf, ['PlainTime', 'toString or compare']), SSuggestTemporalNoValueOf);
   Result := nil;
+end;
+
+function TGocciaTemporalPlainTimeValue.PlainTimeToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  EmptyArgs: TGocciaArgumentsCollection;
+begin
+  EmptyArgs := TGocciaArgumentsCollection.Create([]);
+  try
+    Result := TimeToString(EmptyArgs, AThisValue);
+  finally
+    EmptyArgs.Free;
+  end;
 end;
 
 end.

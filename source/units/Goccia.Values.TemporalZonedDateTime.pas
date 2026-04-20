@@ -65,6 +65,7 @@ type
     function ZonedDateTimeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ZonedDateTimeToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ZonedDateTimeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ZonedDateTimeToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AEpochMilliseconds: Int64; const ASubMillisecondNanoseconds: Integer;
       const ATimeZone: string); overload;
@@ -92,6 +93,7 @@ uses
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SymbolValue,
   Goccia.Values.TemporalDuration,
   Goccia.Values.TemporalInstant,
   Goccia.Values.TemporalPlainDate,
@@ -358,6 +360,11 @@ begin
       Members.AddMethod(ZonedDateTimeToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ZonedDateTimeToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ZonedDateTimeValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(ZonedDateTimeToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddSymbolDataProperty(
+        TGocciaSymbolValue.WellKnownToStringTag,
+        TGocciaStringLiteralValue.Create('Temporal.ZonedDateTime'),
+        [pfConfigurable]);
       FPrototypeMembers := Members.ToDefinitions;
     finally
       Members.Free;
@@ -691,7 +698,7 @@ begin
     PlainDate := TGocciaTemporalPlainDateValue(Arg)
   else if Arg is TGocciaStringLiteralValue then
   begin
-    if not TryParseISODate(TGocciaStringLiteralValue(Arg).Value, DateRec) then
+    if not CoerceToISODate(TGocciaStringLiteralValue(Arg).Value, DateRec) then
       ThrowRangeError(SErrorInvalidDateStringForZDT, SSuggestTemporalISOFormat);
     PlainDate := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day);
   end
@@ -736,7 +743,7 @@ begin
     end
     else if Arg is TGocciaStringLiteralValue then
     begin
-      if not TryParseISOTime(TGocciaStringLiteralValue(Arg).Value, TimeRec) then
+      if not CoerceToISOTime(TGocciaStringLiteralValue(Arg).Value, TimeRec) then
         ThrowRangeError(SErrorInvalidTimeStringForZDT, SSuggestTemporalISOFormat);
       NewHour := TimeRec.Hour; NewMinute := TimeRec.Minute; NewSecond := TimeRec.Second;
       NewMs := TimeRec.Millisecond; NewUs := TimeRec.Microsecond; NewNs := TimeRec.Nanosecond;
@@ -1106,24 +1113,65 @@ var
   Zdt: TGocciaTemporalZonedDateTimeValue;
   LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
   OffsetSeconds: Integer;
-  S: string;
+  Arg: TGocciaValue;
+  OptionsObj: TGocciaObjectValue;
+  FracDigits, ExtraDays: Integer;
+  Mode: TTemporalRoundingMode;
+  CalDisp: TTemporalCalendarDisplay;
+  DateRec: TTemporalDateRecord;
+  TimeStr, S: string;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.toString');
   ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
   OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone, Zdt.FEpochMilliseconds div MILLISECONDS_PER_SECOND);
 
-  S := FormatDateString(LYear, LMonth, LDay) + 'T' +
-       FormatTimeString(LHour, LMinute, LSecond, LMs, LUs, LNs) +
-       FormatOffsetString(OffsetSeconds) +
-       '[' + Zdt.FTimeZone + ']';
+  OptionsObj := nil;
+  Arg := AArgs.GetElement(0);
+  if Assigned(Arg) and not (Arg is TGocciaUndefinedLiteralValue) then
+  begin
+    if not (Arg is TGocciaObjectValue) then
+      ThrowTypeError('options must be an object or undefined', SSuggestTemporalFromArg);
+    OptionsObj := TGocciaObjectValue(Arg);
+  end;
+  ResolveTemporalToStringOptions(OptionsObj, FracDigits, Mode);
+  CalDisp := GetCalendarDisplay(OptionsObj);
+  ExtraDays := 0;
+  RoundTimeForToString(LHour, LMinute, LSecond, LMs, LUs, LNs, ExtraDays, FracDigits, Mode);
+  if ExtraDays <> 0 then
+    DateRec := AddDaysToDate(LYear, LMonth, LDay, ExtraDays)
+  else
+  begin
+    DateRec.Year := LYear;
+    DateRec.Month := LMonth;
+    DateRec.Day := LDay;
+  end;
+  if FracDigits = -2 then // smallestUnit: minute
+    TimeStr := PadTwo(LHour) + ':' + PadTwo(LMinute)
+  else
+    TimeStr := FormatTimeWithPrecision(LHour, LMinute, LSecond, LMs, LUs, LNs, FracDigits);
+
+  S := FormatDateString(DateRec.Year, DateRec.Month, DateRec.Day) + 'T' +
+       TimeStr + FormatOffsetString(OffsetSeconds) +
+       '[' + Zdt.FTimeZone + ']' + FormatCalendarAnnotation(CalDisp);
 
   Result := TGocciaStringLiteralValue.Create(S);
 end;
 
 // TC39 Temporal §6.3.38 Temporal.ZonedDateTime.prototype.toJSON()
 function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Zdt: TGocciaTemporalZonedDateTimeValue;
+  LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs: Integer;
+  OffsetSeconds: Integer;
 begin
-  Result := ZonedDateTimeToString(AArgs, AThisValue);
+  Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.toJSON');
+  ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
+  OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone, Zdt.FEpochMilliseconds div MILLISECONDS_PER_SECOND);
+  Result := TGocciaStringLiteralValue.Create(
+    FormatDateString(LYear, LMonth, LDay) + 'T' +
+    FormatTimeString(LHour, LMinute, LSecond, LMs, LUs, LNs) +
+    FormatOffsetString(OffsetSeconds) +
+    '[' + Zdt.FTimeZone + ']');
 end;
 
 // TC39 Temporal §6.3.40 Temporal.ZonedDateTime.prototype.valueOf()
@@ -1131,6 +1179,18 @@ function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeValueOf(const AArgs: TGo
 begin
   ThrowTypeError(Format(SErrorTemporalValueOf, ['ZonedDateTime', 'epochMilliseconds, epochNanoseconds, or compare']), SSuggestTemporalNoValueOf);
   Result := nil;
+end;
+
+function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  EmptyArgs: TGocciaArgumentsCollection;
+begin
+  EmptyArgs := TGocciaArgumentsCollection.Create([]);
+  try
+    Result := ZonedDateTimeToString(EmptyArgs, AThisValue);
+  finally
+    EmptyArgs.Free;
+  end;
 end;
 
 end.

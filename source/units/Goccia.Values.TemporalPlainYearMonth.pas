@@ -37,6 +37,7 @@ type
     function YearMonthToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function YearMonthValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function YearMonthToPlainDate(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function YearMonthToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure InitializePrototype;
   public
@@ -57,9 +58,11 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SymbolValue,
   Goccia.Values.TemporalDuration,
   Goccia.Values.TemporalPlainDate;
 
@@ -70,31 +73,6 @@ threadvar
 function FormatYearMonthString(const AYear, AMonth: Integer): string;
 begin
   Result := PadISOYear(AYear) + '-' + PadTwo(AMonth);
-end;
-
-function TryParseYearMonthDigits(const AStr: string; var APos: Integer; const ACount: Integer; out AValue: Integer): Boolean;
-var
-  I: Integer;
-  C: Char;
-begin
-  AValue := 0;
-  if APos + ACount - 1 > Length(AStr) then
-  begin
-    Result := False;
-    Exit;
-  end;
-  for I := 0 to ACount - 1 do
-  begin
-    C := AStr[APos + I];
-    if (C < '0') or (C > '9') then
-    begin
-      Result := False;
-      Exit;
-    end;
-    AValue := AValue * 10 + (Ord(C) - Ord('0'));
-  end;
-  Inc(APos, ACount);
-  Result := True;
 end;
 
 function AsPlainYearMonth(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainYearMonthValue;
@@ -108,49 +86,14 @@ function CoercePlainYearMonth(const AValue: TGocciaValue; const AMethod: string)
 var
   Obj: TGocciaObjectValue;
   V, VMonth: TGocciaValue;
-  S: string;
-  Pos, Year, Month, Sign: Integer;
+  Year, Month: Integer;
 begin
   if AValue is TGocciaTemporalPlainYearMonthValue then
     Result := TGocciaTemporalPlainYearMonthValue(AValue)
   else if AValue is TGocciaStringLiteralValue then
   begin
-    // Parse YYYY-MM format
-    S := TGocciaStringLiteralValue(AValue).Value;
-    Pos := 1;
-    Sign := 1;
-
-    if (Pos <= Length(S)) and (S[Pos] = '+') then
-    begin
-      Inc(Pos);
-      if not TryParseYearMonthDigits(S, Pos, 6, Year) then
-        ThrowRangeError(Format(SErrorInvalidYearMonthStringFor, [AMethod]), SSuggestTemporalISOFormat);
-    end
-    else if (Pos <= Length(S)) and (S[Pos] = '-') then
-    begin
-      Inc(Pos);
-      Sign := -1;
-      if not TryParseYearMonthDigits(S, Pos, 6, Year) then
-        ThrowRangeError(Format(SErrorInvalidYearMonthStringFor, [AMethod]), SSuggestTemporalISOFormat);
-    end
-    else
-    begin
-      if not TryParseYearMonthDigits(S, Pos, 4, Year) then
-        ThrowRangeError(Format(SErrorInvalidYearMonthStringFor, [AMethod]), SSuggestTemporalISOFormat);
-    end;
-
-    Year := Year * Sign;
-
-    if (Pos > Length(S)) or (S[Pos] <> '-') then
+    if not CoerceToISOYearMonth(TGocciaStringLiteralValue(AValue).Value, Year, Month) then
       ThrowRangeError(Format(SErrorInvalidYearMonthStringFor, [AMethod]), SSuggestTemporalISOFormat);
-    Inc(Pos);
-
-    if not TryParseYearMonthDigits(S, Pos, 2, Month) then
-      ThrowRangeError(Format(SErrorInvalidYearMonthStringFor, [AMethod]), SSuggestTemporalISOFormat);
-
-    if Pos <= Length(S) then
-      ThrowRangeError(Format(SErrorInvalidYearMonthStringFor, [AMethod]), SSuggestTemporalISOFormat);
-
     Result := TGocciaTemporalPlainYearMonthValue.Create(Year, Month);
   end
   else if AValue is TGocciaObjectValue then
@@ -224,6 +167,11 @@ begin
       Members.AddMethod(YearMonthToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(YearMonthValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(YearMonthToPlainDate, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(YearMonthToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddSymbolDataProperty(
+        TGocciaSymbolValue.WellKnownToStringTag,
+        TGocciaStringLiteralValue.Create('Temporal.PlainYearMonth'),
+        [pfConfigurable]);
       FPrototypeMembers := Members.ToDefinitions;
     finally
       Members.Free;
@@ -527,9 +475,27 @@ end;
 function TGocciaTemporalPlainYearMonthValue.YearMonthToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   YM: TGocciaTemporalPlainYearMonthValue;
+  Arg: TGocciaValue;
+  OptionsObj: TGocciaObjectValue;
+  CalDisp: TTemporalCalendarDisplay;
 begin
   YM := AsPlainYearMonth(AThisValue, 'PlainYearMonth.prototype.toString');
-  Result := TGocciaStringLiteralValue.Create(FormatYearMonthString(YM.FYear, YM.FMonth));
+  OptionsObj := nil;
+  Arg := AArgs.GetElement(0);
+  if Assigned(Arg) and not (Arg is TGocciaUndefinedLiteralValue) then
+  begin
+    if not (Arg is TGocciaObjectValue) then
+      ThrowTypeError('options must be an object or undefined', SSuggestTemporalFromArg);
+    OptionsObj := TGocciaObjectValue(Arg);
+  end;
+  CalDisp := GetCalendarDisplay(OptionsObj);
+  // When calendar annotation is present, include reference day for round-tripping
+  if (CalDisp = tcdAlways) or (CalDisp = tcdCritical) then
+    Result := TGocciaStringLiteralValue.Create(
+      FormatDateString(YM.FYear, YM.FMonth, YM.FReferenceDay) + FormatCalendarAnnotation(CalDisp))
+  else
+    Result := TGocciaStringLiteralValue.Create(
+      FormatYearMonthString(YM.FYear, YM.FMonth));
 end;
 
 // TC39 Temporal §10.3.18 Temporal.PlainYearMonth.prototype.toJSON()
@@ -569,6 +535,18 @@ begin
 
   Day := Trunc(V.ToNumberLiteral.Value);
   Result := TGocciaTemporalPlainDateValue.Create(YM.FYear, YM.FMonth, Day);
+end;
+
+function TGocciaTemporalPlainYearMonthValue.YearMonthToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  EmptyArgs: TGocciaArgumentsCollection;
+begin
+  EmptyArgs := TGocciaArgumentsCollection.Create([]);
+  try
+    Result := YearMonthToString(EmptyArgs, AThisValue);
+  finally
+    EmptyArgs.Free;
+  end;
 end;
 
 end.

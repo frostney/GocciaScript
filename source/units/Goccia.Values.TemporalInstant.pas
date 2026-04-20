@@ -36,8 +36,10 @@ type
     function InstantRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function InstantEquals(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function InstantToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function InstantToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function InstantToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function InstantValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function InstantToZonedDateTimeISO(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
@@ -54,7 +56,9 @@ uses
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.TemporalDuration;
+  Goccia.Values.SymbolValue,
+  Goccia.Values.TemporalDuration,
+  Goccia.Values.TemporalZonedDateTime;
 
 threadvar
   FShared: TGocciaSharedPrototype;
@@ -71,6 +75,7 @@ function CoerceInstant(const AValue: TGocciaValue; const AMethod: string): TGocc
 var
   DateRec: TTemporalDateRecord;
   TimeRec: TTemporalTimeRecord;
+  OffsetSeconds: Integer;
   EpochMs: Int64;
   SubMs: Integer;
 begin
@@ -78,12 +83,13 @@ begin
     Result := TGocciaTemporalInstantValue(AValue)
   else if AValue is TGocciaStringLiteralValue then
   begin
-    // Parse as ISO date-time and convert to epoch
-    if not TryParseISODateTime(TGocciaStringLiteralValue(AValue).Value, DateRec, TimeRec) then
+    if not CoerceToISOInstant(TGocciaStringLiteralValue(AValue).Value, DateRec, TimeRec, OffsetSeconds) then
       ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['instant', AMethod]), SSuggestTemporalISOFormat);
     EpochMs := DateToEpochDays(DateRec.Year, DateRec.Month, DateRec.Day) * Int64(86400000) +
                Int64(TimeRec.Hour) * 3600000 + Int64(TimeRec.Minute) * 60000 +
                Int64(TimeRec.Second) * 1000 + TimeRec.Millisecond;
+    // Adjust for UTC offset
+    EpochMs := EpochMs - Int64(OffsetSeconds) * 1000;
     SubMs := TimeRec.Microsecond * 1000 + TimeRec.Nanosecond;
     Result := TGocciaTemporalInstantValue.Create(EpochMs, SubMs);
   end
@@ -143,8 +149,14 @@ begin
       Members.AddMethod(InstantRound, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(InstantEquals, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(InstantToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(InstantToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(InstantToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(InstantValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(InstantToZonedDateTimeISO, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddSymbolDataProperty(
+        TGocciaSymbolValue.WellKnownToStringTag,
+        TGocciaStringLiteralValue.Create('Temporal.Instant'),
+        [pfConfigurable]);
       FPrototypeMembers := Members.ToDefinitions;
     finally
       Members.Free;
@@ -419,6 +431,10 @@ var
   EpochDays, RemainingMs: Int64;
   Hour, Minute, Second, Ms: Integer;
   Us, Ns: Integer;
+  Arg: TGocciaValue;
+  OptionsObj: TGocciaObjectValue;
+  FracDigits, ExtraDays: Integer;
+  Mode: TTemporalRoundingMode;
   S: string;
 begin
   Inst := AsInstant(AThisValue, 'Instant.prototype.toString');
@@ -442,21 +458,103 @@ begin
   Us := Inst.FSubMillisecondNanoseconds div 1000;
   Ns := Inst.FSubMillisecondNanoseconds mod 1000;
 
-  S := FormatDateString(DateRec.Year, DateRec.Month, DateRec.Day) + 'T' +
-       FormatTimeString(Hour, Minute, Second, Ms, Us, Ns) + 'Z';
+  OptionsObj := nil;
+  Arg := AArgs.GetElement(0);
+  if Assigned(Arg) and not (Arg is TGocciaUndefinedLiteralValue) then
+  begin
+    if not (Arg is TGocciaObjectValue) then
+      ThrowTypeError('options must be an object or undefined', SSuggestTemporalFromArg);
+    OptionsObj := TGocciaObjectValue(Arg);
+  end;
+  ResolveTemporalToStringOptions(OptionsObj, FracDigits, Mode);
+  ExtraDays := 0;
+  RoundTimeForToString(Hour, Minute, Second, Ms, Us, Ns, ExtraDays, FracDigits, Mode);
+  if ExtraDays <> 0 then
+    DateRec := AddDaysToDate(DateRec.Year, DateRec.Month, DateRec.Day, ExtraDays);
+
+  if FracDigits = -2 then // smallestUnit: minute
+    S := FormatDateString(DateRec.Year, DateRec.Month, DateRec.Day) + 'T' +
+         PadTwo(Hour) + ':' + PadTwo(Minute) + 'Z'
+  else
+    S := FormatDateString(DateRec.Year, DateRec.Month, DateRec.Day) + 'T' +
+         FormatTimeWithPrecision(Hour, Minute, Second, Ms, Us, Ns, FracDigits) + 'Z';
 
   Result := TGocciaStringLiteralValue.Create(S);
 end;
 
 function TGocciaTemporalInstantValue.InstantToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Inst: TGocciaTemporalInstantValue;
+  DateRec: TTemporalDateRecord;
+  EpochDays, RemainingMs: Int64;
+  Hour, Minute, Second, Ms: Integer;
+  Us, Ns: Integer;
 begin
-  Result := InstantToString(AArgs, AThisValue);
+  Inst := AsInstant(AThisValue, 'Instant.prototype.toJSON');
+
+  EpochDays := Inst.FEpochMilliseconds div Int64(86400000);
+  RemainingMs := Inst.FEpochMilliseconds mod Int64(86400000);
+  if RemainingMs < 0 then
+  begin
+    Dec(EpochDays);
+    Inc(RemainingMs, Int64(86400000));
+  end;
+
+  DateRec := EpochDaysToDate(EpochDays);
+  Hour := Integer(RemainingMs div 3600000);
+  RemainingMs := RemainingMs mod 3600000;
+  Minute := Integer(RemainingMs div 60000);
+  RemainingMs := RemainingMs mod 60000;
+  Second := Integer(RemainingMs div 1000);
+  Ms := Integer(RemainingMs mod 1000);
+
+  Us := Inst.FSubMillisecondNanoseconds div 1000;
+  Ns := Inst.FSubMillisecondNanoseconds mod 1000;
+
+  Result := TGocciaStringLiteralValue.Create(
+    FormatDateString(DateRec.Year, DateRec.Month, DateRec.Day) + 'T' +
+    FormatTimeString(Hour, Minute, Second, Ms, Us, Ns) + 'Z');
 end;
 
 function TGocciaTemporalInstantValue.InstantValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   ThrowTypeError(Format(SErrorTemporalValueOf, ['Instant', 'epochMilliseconds, epochNanoseconds, or compare']), SSuggestTemporalNoValueOf);
   Result := nil;
+end;
+
+function TGocciaTemporalInstantValue.InstantToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  EmptyArgs: TGocciaArgumentsCollection;
+begin
+  EmptyArgs := TGocciaArgumentsCollection.Create([]);
+  try
+    Result := InstantToString(EmptyArgs, AThisValue);
+  finally
+    EmptyArgs.Free;
+  end;
+end;
+
+function TGocciaTemporalInstantValue.InstantToZonedDateTimeISO(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Inst: TGocciaTemporalInstantValue;
+  Arg: TGocciaValue;
+  TZ: string;
+begin
+  Inst := AsInstant(AThisValue, 'Instant.prototype.toZonedDateTimeISO');
+  if AArgs.Length < 1 then
+    ThrowTypeError('Instant.prototype.toZonedDateTimeISO requires a time zone argument', SSuggestTemporalTimezone);
+  Arg := AArgs.GetElement(0);
+  if Arg is TGocciaTemporalZonedDateTimeValue then
+    TZ := TGocciaTemporalZonedDateTimeValue(Arg).TimeZone
+  else if Arg is TGocciaStringLiteralValue then
+    TZ := TGocciaStringLiteralValue(Arg).Value
+  else
+  begin
+    ThrowTypeError('Instant.prototype.toZonedDateTimeISO requires a string time zone or ZonedDateTime', SSuggestTemporalTimezone);
+    TZ := '';
+  end;
+  Result := TGocciaTemporalZonedDateTimeValue.Create(
+    Inst.FEpochMilliseconds, Inst.FSubMillisecondNanoseconds, TZ);
 end;
 
 end.
