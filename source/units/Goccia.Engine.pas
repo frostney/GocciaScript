@@ -82,7 +82,7 @@ type
   TGocciaPreprocessor = (ppJSX);
   TGocciaPreprocessors = set of TGocciaPreprocessor;
 
-  TGocciaCompatibility = (cfASI);
+  TGocciaCompatibility = (cfASI, cfVar);
   TGocciaCompatibilityFlags = set of TGocciaCompatibility;
 
   TGocciaScriptResult = record
@@ -168,7 +168,9 @@ type
     FLastTiming: TGocciaScriptResult;
     FLastSourceMap: TGocciaSourceMap;
     function GetASIEnabled: Boolean;
+    function GetVarEnabled: Boolean;
     procedure SetASIEnabled(const AValue: Boolean);
+    procedure SetVarEnabled(const AValue: Boolean);
     function GetContentProvider: TGocciaModuleContentProvider;
     function GetModuleResolver: TGocciaModuleResolver;
     procedure SetPreprocessors(const AValue: TGocciaPreprocessors);
@@ -234,6 +236,7 @@ type
     property ModuleResolver: TGocciaModuleResolver read GetModuleResolver;
     property ModuleLoader: TGocciaModuleLoader read FModuleLoader;
     property ASIEnabled: Boolean read GetASIEnabled write SetASIEnabled;
+    property VarEnabled: Boolean read GetVarEnabled write SetVarEnabled;
     property Preprocessors: TGocciaPreprocessors read FPreprocessors write SetPreprocessors;
     property Compatibility: TGocciaCompatibilityFlags read FCompatibility write SetCompatibility;
     property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
@@ -1217,6 +1220,7 @@ begin
 
         Parser := TGocciaParser.Create(Tokens, FSourcePath, Lexer.SourceLines);
         Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
+        Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
         try
           ProgramNode := Parser.Parse;
           PrintParserWarnings(Parser, SourceMap);
@@ -1455,6 +1459,20 @@ begin
   FInterpreter.ASIEnabled := AValue;
 end;
 
+function TGocciaEngine.GetVarEnabled: Boolean;
+begin
+  Result := cfVar in FCompatibility;
+end;
+
+procedure TGocciaEngine.SetVarEnabled(const AValue: Boolean);
+begin
+  if AValue then
+    Include(FCompatibility, cfVar)
+  else
+    Exclude(FCompatibility, cfVar);
+  FInterpreter.VarEnabled := AValue;
+end;
+
 procedure TGocciaEngine.SetPreprocessors(const AValue: TGocciaPreprocessors);
 begin
   FPreprocessors := AValue;
@@ -1465,6 +1483,7 @@ procedure TGocciaEngine.SetCompatibility(const AValue: TGocciaCompatibilityFlags
 begin
   FCompatibility := AValue;
   FInterpreter.ASIEnabled := cfASI in AValue;
+  FInterpreter.VarEnabled := cfVar in AValue;
 end;
 
 procedure TGocciaEngine.ThrowError(const AMessage: string; const ALine, AColumn: Integer);

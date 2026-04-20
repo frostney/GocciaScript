@@ -126,6 +126,7 @@ begin
                 BcExecutor);
               try
                 Eng.ASIEnabled := EngineOpts.ASI.Present;
+                Eng.VarEnabled := EngineOpts.CompatVar.Present;
                 ConfigureModuleResolver(Eng.Resolver, REPL_FILE_NAME,
                   EngineOpts.ImportMap.ValueOr(''), EngineOpts.Aliases.Values);
                 while True do
@@ -165,6 +166,7 @@ begin
                     Parser := TGocciaParser.Create(Tokens, REPL_FILE_NAME,
                       Lexer.SourceLines);
                     Parser.AutomaticSemicolonInsertion := EngineOpts.ASI.Present;
+                    Parser.VarDeclarationsEnabled := EngineOpts.CompatVar.Present;
                     try
                       ProgramNode := Parser.Parse;
                       ParseEnd := GetNanoseconds;
@@ -239,6 +241,7 @@ begin
           begin
             Eng := TGocciaEngine.Create(REPL_FILE_NAME, Source, Builtins);
             Eng.ASIEnabled := EngineOpts.ASI.Present;
+            Eng.VarEnabled := EngineOpts.CompatVar.Present;
             try
               ConfigureModuleResolver(Eng.Resolver, REPL_FILE_NAME,
                 EngineOpts.ImportMap.ValueOr(''), EngineOpts.Aliases.Values);

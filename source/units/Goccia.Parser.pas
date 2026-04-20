@@ -62,6 +62,7 @@ type
     FPrivateClassContexts: TObjectList<TGocciaPrivateClassContext>;
     FSkipPrivateNameValidation: Integer;
     FAutomaticSemicolonInsertion: Boolean;
+    FVarDeclarationsEnabled: Boolean;
 
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
     procedure PushPrivateClassContext;
@@ -191,6 +192,8 @@ type
     function GetWarning(const AIndex: Integer): TGocciaParserWarning; inline;
     property AutomaticSemicolonInsertion: Boolean
       read FAutomaticSemicolonInsertion write FAutomaticSemicolonInsertion;
+    property VarDeclarationsEnabled: Boolean
+      read FVarDeclarationsEnabled write FVarDeclarationsEnabled;
     property WarningCount: Integer read FWarningCount;
   end;
 
@@ -2760,17 +2763,76 @@ end;
 function TGocciaParser.VarStatement: TGocciaStatement;
 var
   Line, Column: Integer;
+  Name: string;
+  Initializer: TGocciaExpression;
+  Variables: TArray<TGocciaVariableInfo>;
+  VariableCount: Integer;
+  Pattern: TGocciaDestructuringPattern;
+  DestructuringType: string;
+  DestructuringDecl: TGocciaDestructuringDeclaration;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  AddWarning('''var'' declarations are not supported in GocciaScript',
-    'Use ''let'' or ''const'' instead',
-    Line, Column);
+  if not FVarDeclarationsEnabled then
+  begin
+    AddWarning('''var'' declarations are not supported in GocciaScript',
+      'Use ''let'' or ''const'' instead',
+      Line, Column);
+    SkipUntilSemicolon;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Exit;
+  end;
 
-  SkipUntilSemicolon;
+  VariableCount := 0;
 
-  Result := TGocciaEmptyStatement.Create(Line, Column);
+  // Check for destructuring pattern
+  if Check(gttLeftBracket) or Check(gttLeftBrace) then
+  begin
+    Pattern := ParsePattern;
+    DestructuringType := '';
+    if Check(gttColon) then
+    begin
+      Advance;
+      DestructuringType := CollectTypeAnnotation([gttAssign]);
+    end;
+    Consume(gttAssign, 'Destructuring declarations must have an initializer',
+      SSuggestDestructuringRequiresInitializer);
+    Initializer := Expression;
+    ConsumeSemicolonOrASI('Expected ";" after destructuring declaration',
+      SSuggestAddSemicolon);
+    DestructuringDecl := TGocciaDestructuringDeclaration.Create(Pattern, Initializer, False, Line, Column, True);
+    DestructuringDecl.TypeAnnotation := DestructuringType;
+    Result := DestructuringDecl;
+  end
+  else
+  begin
+    repeat
+      SetLength(Variables, VariableCount + 1);
+
+      Name := Consume(gttIdentifier, 'Expected variable name',
+        SSuggestProvideVariableName).Lexeme;
+      Variables[VariableCount].Name := Name;
+
+      if Check(gttColon) then
+      begin
+        Advance;
+        Variables[VariableCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
+      end;
+
+      if Match(gttAssign) then
+        Variables[VariableCount].Initializer := Expression
+      else
+        Variables[VariableCount].Initializer := TGocciaLiteralExpression.Create(
+          TGocciaUndefinedLiteralValue.UndefinedValue, Line, Column);
+
+      Inc(VariableCount);
+    until not Match(gttComma);
+
+    ConsumeSemicolonOrASI('Expected ";" after variable declaration',
+      SSuggestAddSemicolon);
+    Result := TGocciaVariableDeclaration.Create(Variables, False, Line, Column, True);
+  end;
 end;
 
 // ES2026 §14.7.5 ForIn/OfStatement
@@ -2804,11 +2866,11 @@ begin
   begin
     Advance; // consume '('
 
-    // Check for const/let binding
-    if Check(gttConst) or Check(gttLet) then
+    // Check for const/let/var binding
+    if Check(gttConst) or Check(gttLet) or (FVarDeclarationsEnabled and Check(gttVar)) then
     begin
       IsConst := Check(gttConst);
-      Advance; // consume const/let
+      Advance; // consume const/let/var
 
       // Check if this is a for...of: need binding + 'of'
       if Check(gttLeftBracket) or Check(gttLeftBrace) then

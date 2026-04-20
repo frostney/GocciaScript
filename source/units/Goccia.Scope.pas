@@ -59,6 +59,9 @@ type
     function Contains(const AName: string): Boolean; inline;
     function GetOwnBindingNames: TGocciaStringArray; inline;
 
+    // Walk the parent chain to find the nearest function/module/global scope (for var hoisting)
+    function FindFunctionOrModuleScope: TGocciaScope;
+
     // Walk the parent chain to find the nearest owning class / superclass
     function FindOwningClass: TGocciaValue;
     function FindSuperClass: TGocciaValue;
@@ -194,6 +197,19 @@ end;
 function TGocciaScope.GetSuperClass: TGocciaValue;
 begin
   Result := nil;
+end;
+
+function TGocciaScope.FindFunctionOrModuleScope: TGocciaScope;
+begin
+  Result := Self;
+  while Assigned(Result) do
+  begin
+    if Result.ScopeKind in [skFunction, skGlobal, skModule] then
+      Exit;
+    Result := Result.FParent;
+  end;
+  // Fallback: return self if no function/module scope found
+  Result := Self;
 end;
 
 function TGocciaScope.FindOwningClass: TGocciaValue;

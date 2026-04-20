@@ -35,12 +35,15 @@ type
   private
     FVariables: TArray<TGocciaVariableInfo>;
     FIsConst: Boolean;
+    FIsVar: Boolean;
   public
     constructor Create(const AVariables: TArray<TGocciaVariableInfo>;
-      const AIsConst: Boolean; const ALine, AColumn: Integer);
+      const AIsConst: Boolean; const ALine, AColumn: Integer;
+      const AIsVar: Boolean = False);
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Variables: TArray<TGocciaVariableInfo> read FVariables;
     property IsConst: Boolean read FIsConst;
+    property IsVar: Boolean read FIsVar;
   end;
 
   TGocciaDestructuringDeclaration = class(TGocciaStatement)
@@ -48,13 +51,15 @@ type
     FPattern: TGocciaDestructuringPattern;
     FInitializer: TGocciaExpression;
     FIsConst: Boolean;
+    FIsVar: Boolean;
     FTypeAnnotation: string;
   public
-    constructor Create(const APattern: TGocciaDestructuringPattern; const AInitializer: TGocciaExpression; const AIsConst: Boolean; const ALine, AColumn: Integer);
+    constructor Create(const APattern: TGocciaDestructuringPattern; const AInitializer: TGocciaExpression; const AIsConst: Boolean; const ALine, AColumn: Integer; const AIsVar: Boolean = False);
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Pattern: TGocciaDestructuringPattern read FPattern;
     property Initializer: TGocciaExpression read FInitializer;
     property IsConst: Boolean read FIsConst;
+    property IsVar: Boolean read FIsVar;
     property TypeAnnotation: string read FTypeAnnotation write FTypeAnnotation;
   end;
 
@@ -455,6 +460,7 @@ uses
   Goccia.Evaluator,
   Goccia.GarbageCollector,
   Goccia.Modules,
+  Goccia.Scope,
   Goccia.Scope.BindingMap,
   Goccia.Token,
   Goccia.Values.Error,
@@ -479,21 +485,24 @@ end;
   { TGocciaVariableDeclaration }
 
   constructor TGocciaVariableDeclaration.Create(const AVariables: TArray<TGocciaVariableInfo>;
-    const AIsConst: Boolean; const ALine, AColumn: Integer);
+    const AIsConst: Boolean; const ALine, AColumn: Integer;
+    const AIsVar: Boolean = False);
   begin
     inherited Create(ALine, AColumn);
     FVariables := AVariables;
     FIsConst := AIsConst;
+    FIsVar := AIsVar;
   end;
 
   { TGocciaDestructuringDeclaration }
 
-  constructor TGocciaDestructuringDeclaration.Create(const APattern: TGocciaDestructuringPattern; const AInitializer: TGocciaExpression; const AIsConst: Boolean; const ALine, AColumn: Integer);
+  constructor TGocciaDestructuringDeclaration.Create(const APattern: TGocciaDestructuringPattern; const AInitializer: TGocciaExpression; const AIsConst: Boolean; const ALine, AColumn: Integer; const AIsVar: Boolean = False);
   begin
     inherited Create(ALine, AColumn);
     FPattern := APattern;
     FInitializer := AInitializer;
     FIsConst := AIsConst;
+    FIsVar := AIsVar;
   end;
 
   { TGocciaBlockStatement }
@@ -813,6 +822,7 @@ end;
   var
     I: Integer;
     Value: TGocciaValue;
+    TargetScope: TGocciaScope;
   begin
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
     for I := 0 to Length(Variables) - 1 do
@@ -820,7 +830,16 @@ end;
       Value := Variables[I].Initializer.Evaluate(AContext);
       if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
         TGocciaFunctionValue(Value).Name := Variables[I].Name;
-      if IsConst then
+      if IsVar then
+      begin
+        // var declarations: assign to the hoisted binding in function/module scope
+        TargetScope := AContext.Scope.FindFunctionOrModuleScope;
+        if TargetScope.ContainsOwnLexicalBinding(Variables[I].Name) then
+          TargetScope.ForceUpdateBinding(Variables[I].Name, Value)
+        else
+          TargetScope.DefineLexicalBinding(Variables[I].Name, Value, dtLet);
+      end
+      else if IsConst then
         AContext.Scope.DefineFromToken(Variables[I].Name, Value, gttConst)
       else
         AContext.Scope.DefineFromToken(Variables[I].Name, Value, gttLet);

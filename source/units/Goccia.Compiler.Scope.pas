@@ -56,6 +56,7 @@ type
 
     function DeclareLocal(const AName: string;
       const AIsConst: Boolean): UInt8;
+    function DeclareVarLocal(const AName: string): UInt8;
     function ResolveLocal(const AName: string): Integer;
     function ResolveUpvalue(const AName: string): Integer;
     function AddUpvalue(const AIndex: UInt8;
@@ -129,6 +130,40 @@ begin
   FLocals[FLocalCount].Depth := FDepth;
   FLocals[FLocalCount].IsCaptured := False;
   FLocals[FLocalCount].IsConst := AIsConst;
+  FLocals[FLocalCount].IsGlobalBacked := False;
+  FLocals[FLocalCount].IsArrayTyped := False;
+  FLocals[FLocalCount].TypeHint := sltUntyped;
+  FLocals[FLocalCount].IsStrictlyTyped := False;
+  FLocals[FLocalCount].ReturnTypeHint := sltUntyped;
+  FLocals[FLocalCount].ParamTypeSignature := '';
+  FLocals[FLocalCount].TypeAnnotation := '';
+  FLocals[FLocalCount].ElementTypeAnnotation := '';
+  Result := FNextSlot;
+  Inc(FLocalCount);
+  Inc(FNextSlot);
+  if FNextSlot > FMaxSlot then
+    FMaxSlot := FNextSlot;
+end;
+
+function TGocciaCompilerScope.DeclareVarLocal(const AName: string): UInt8;
+var
+  I: Integer;
+begin
+  // Check if already declared (var redeclaration is allowed)
+  for I := 0 to FLocalCount - 1 do
+    if FLocals[I].Name = AName then
+      Exit(FLocals[I].Slot);
+
+  // Declare at depth 0 so EndScope never pops it
+  if FNextSlot >= High(UInt8) then
+    raise Exception.Create('Compiler error: local variable slot overflow (>255)');
+  if FLocalCount >= Length(FLocals) then
+    SetLength(FLocals, FLocalCount * 2 + 8);
+  FLocals[FLocalCount].Name := AName;
+  FLocals[FLocalCount].Slot := FNextSlot;
+  FLocals[FLocalCount].Depth := 0;
+  FLocals[FLocalCount].IsCaptured := False;
+  FLocals[FLocalCount].IsConst := False;
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].TypeHint := sltUntyped;

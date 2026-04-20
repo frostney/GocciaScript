@@ -473,7 +473,10 @@ begin
   for I := 0 to High(AStmt.Variables) do
   begin
     Info := AStmt.Variables[I];
-    Slot := ACtx.Scope.DeclareLocal(Info.Name, AStmt.IsConst);
+    if AStmt.IsVar then
+      Slot := ACtx.Scope.DeclareVarLocal(Info.Name)
+    else
+      Slot := ACtx.Scope.DeclareLocal(Info.Name, AStmt.IsConst);
 
     IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
       (ACtx.Scope.Depth = 0);
@@ -2723,6 +2726,39 @@ begin
   ACtx.Scope.PrivatePrefix := '';
 end;
 
+procedure CollectDestructuringVarBindings(const APattern: TGocciaDestructuringPattern;
+  const AScope: TGocciaCompilerScope);
+var
+  ObjPat: TGocciaObjectDestructuringPattern;
+  ArrPat: TGocciaArrayDestructuringPattern;
+  AssignPat: TGocciaAssignmentDestructuringPattern;
+  I: Integer;
+begin
+  if APattern is TGocciaIdentifierDestructuringPattern then
+    AScope.DeclareVarLocal(TGocciaIdentifierDestructuringPattern(APattern).Name)
+  else if APattern is TGocciaObjectDestructuringPattern then
+  begin
+    ObjPat := TGocciaObjectDestructuringPattern(APattern);
+    for I := 0 to ObjPat.Properties.Count - 1 do
+      CollectDestructuringVarBindings(ObjPat.Properties[I].Pattern, AScope);
+  end
+  else if APattern is TGocciaArrayDestructuringPattern then
+  begin
+    ArrPat := TGocciaArrayDestructuringPattern(APattern);
+    for I := 0 to ArrPat.Elements.Count - 1 do
+      if Assigned(ArrPat.Elements[I]) then
+        CollectDestructuringVarBindings(ArrPat.Elements[I], AScope);
+  end
+  else if APattern is TGocciaAssignmentDestructuringPattern then
+  begin
+    AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
+    CollectDestructuringVarBindings(AssignPat.Left, AScope);
+  end
+  else if APattern is TGocciaRestDestructuringPattern then
+    CollectDestructuringVarBindings(
+      TGocciaRestDestructuringPattern(APattern).Argument, AScope);
+end;
+
 procedure CompileDestructuringDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaDestructuringDeclaration);
 var
@@ -2735,7 +2771,10 @@ begin
     (ACtx.Scope.Depth = 0);
   LocalCountBefore := ACtx.Scope.LocalCount;
 
-  CollectDestructuringBindings(AStmt.Pattern, ACtx.Scope, AStmt.IsConst);
+  if AStmt.IsVar then
+    CollectDestructuringVarBindings(AStmt.Pattern, ACtx.Scope)
+  else
+    CollectDestructuringBindings(AStmt.Pattern, ACtx.Scope, AStmt.IsConst);
 
   if IsTopLevelGlobalBacked then
     for I := LocalCountBefore to ACtx.Scope.LocalCount - 1 do
