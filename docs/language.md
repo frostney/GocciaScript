@@ -6,9 +6,9 @@
 
 - **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules (named only)
 - **TC39 proposals** — Decorators, decorator metadata, types as comments, enums, `Math.clamp`
-- **Excluded by design** — `var`, `function` keyword, `==`/`!=`, `eval`, `arguments`, traditional loops, `with`, default imports/exports
-- **Graceful handling** — Parser-recognized excluded syntax (`var`, `function`, `==`, loops, `with`) parses successfully but executes as a no-op with a warning and suggestion
-- **Opt-in toggles** — ASI (`--asi` / `Engine.ASIEnabled := True`)
+- **Excluded by design** — `function` keyword, `==`/`!=`, `eval`, `arguments`, traditional loops, `with`, default imports/exports
+- **Graceful handling** — Parser-recognized excluded syntax (`function`, `==`, loops, `with`) parses successfully but executes as a no-op with a warning and suggestion
+- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`)
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).

@@ -35,6 +35,8 @@ const
   CONSTRUCTOR_FLOAT16_ARRAY        = 'Float16Array';
   CONSTRUCTOR_FLOAT32_ARRAY        = 'Float32Array';
   CONSTRUCTOR_FLOAT64_ARRAY        = 'Float64Array';
+  CONSTRUCTOR_BIGINT64_ARRAY       = 'BigInt64Array';
+  CONSTRUCTOR_BIGUINT64_ARRAY      = 'BigUint64Array';
 
   CONSTRUCTOR_FFI                  = 'FFI';
   CONSTRUCTOR_URL                  = 'URL';

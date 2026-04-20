@@ -307,4 +307,29 @@ describe("TypedArray element access", () => {
       expect(ta[3]).toBe(255);
     });
   });
+
+  describe("BigInt64Array element access", () => {
+    test("set and get BigInt values", () => {
+      const ta = new BigInt64Array(3);
+      ta[0] = 42n;
+      ta[1] = -1n;
+      ta[2] = 9007199254740993n;
+      expect(ta[0]).toBe(42n);
+      expect(ta[1]).toBe(-1n);
+      expect(ta[2]).toBe(9007199254740993n);
+    });
+
+    test("BigUint64Array stores unsigned values", () => {
+      const ta = new BigUint64Array(2);
+      ta[0] = 18446744073709551615n;
+      ta[1] = 0n;
+      expect(ta[0]).toBe(18446744073709551615n);
+      expect(ta[1]).toBe(0n);
+    });
+
+    test("throws TypeError when setting non-BigInt", () => {
+      const ta = new BigInt64Array(1);
+      expect(() => { ta[0] = 42; }).toThrow(TypeError);
+    });
+  });
 });

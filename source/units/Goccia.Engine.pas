@@ -972,6 +972,8 @@ begin
   RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT16_ARRAY, takFloat16, ObjectConstructor);
   RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT32_ARRAY, takFloat32, ObjectConstructor);
   RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT64_ARRAY, takFloat64, ObjectConstructor);
+  RegisterTypedArrayConstructor(CONSTRUCTOR_BIGINT64_ARRAY, takBigInt64, ObjectConstructor);
+  RegisterTypedArrayConstructor(CONSTRUCTOR_BIGUINT64_ARRAY, takBigUint64, ObjectConstructor);
 
   TypeDef.ConstructorName := CONSTRUCTOR_STRING;
   TypeDef.Kind := gtdkPrimitiveWrapper;
@@ -1011,6 +1013,7 @@ begin
 
   FunctionConstructor := TGocciaClassValue.Create('Function', nil);
   TGocciaFunctionBase.SetSharedPrototypeParent(FunctionConstructor.Prototype);
+  FunctionConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, FunctionConstructor);
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);
 
   PerformanceConstructor := TGocciaPerformance.CreateInterfaceObject;

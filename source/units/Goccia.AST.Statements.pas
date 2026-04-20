@@ -197,6 +197,7 @@ type
     FIsAsync: Boolean;
     FReturnType: string;
     FGenericParams: string;
+    FSourceText: string;
   public
     constructor Create(const AName: string; const AParameters: TGocciaParameterArray;
       const ABody: TGocciaASTNode; const AIsStatic: Boolean; const ALine, AColumn: Integer);
@@ -208,6 +209,7 @@ type
     property IsAsync: Boolean read FIsAsync write FIsAsync;
     property ReturnType: string read FReturnType write FReturnType;
     property GenericParams: string read FGenericParams write FGenericParams;
+    property SourceText: string read FSourceText write FSourceText;
   end;
 
   TGocciaClassMethodMap = TOrderedStringMap<TGocciaClassMethod>;

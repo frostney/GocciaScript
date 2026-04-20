@@ -88,6 +88,7 @@ type
     FIsArrow: Boolean;
     FTypeCheckPreambleSize: UInt8;
     FProfileIndex: Integer;
+    FSourceText: string;
     FStringConstantIndex: TOrderedStringMap<UInt16>;
     // Runtime-only cache for bckTemplateObject constants.  Indexed by the slot
     // number stored in the constant's IntValue field.  Not serialised to .gbc.
@@ -150,6 +151,7 @@ type
     property IsArrow: Boolean read FIsArrow write FIsArrow;
     property TypeCheckPreambleSize: UInt8 read FTypeCheckPreambleSize write FTypeCheckPreambleSize;
     property ProfileIndex: Integer read FProfileIndex write FProfileIndex;
+    property SourceText: string read FSourceText write FSourceText;
   end;
 
 implementation

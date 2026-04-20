@@ -1,26 +1,4 @@
 describe("TypedArray.prototype.with", () => {
-  test("returns new array with element replaced", () => {
-    const ta = new Int32Array([1, 2, 3]);
-    const result = ta.with(1, 99);
-    expect(result).not.toBe(ta);
-    expect(result[0]).toBe(1);
-    expect(result[1]).toBe(99);
-    expect(result[2]).toBe(3);
-    expect(ta[1]).toBe(2);
-  });
-
-  test("negative index", () => {
-    const ta = new Int32Array([1, 2, 3]);
-    const result = ta.with(-1, 99);
-    expect(result[2]).toBe(99);
-  });
-
-  test("out of bounds throws RangeError", () => {
-    const ta = new Int32Array([1, 2, 3]);
-    expect(() => ta.with(3, 99)).toThrow(RangeError);
-    expect(() => ta.with(-4, 99)).toThrow(RangeError);
-  });
-
   test("without value uses undefined → NaN → 0 for integer types", () => {
     const ta = new Int32Array([1, 2, 3]);
     const result = ta.with(0);
@@ -37,12 +15,50 @@ describe("TypedArray.prototype.with", () => {
     expect(result[2]).toBe(3.5);
   });
 
-  test("preserves type", () => {
-    const ta = new Float64Array([1.5, 2.5, 3.5]);
-    const result = ta.with(1, 9.9);
-    expect(result instanceof Float64Array).toBe(true);
-    expect(result[0]).toBe(1.5);
-    expect(result[1]).toBe(9.9);
-    expect(result[2]).toBe(3.5);
+  describe.each([Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array])("%s", (TA) => {
+    test("returns copy with replaced element", () => {
+      const ta = new TA([1, 2, 3]);
+      const result = ta.with(1, 9);
+      expect(result[0]).toBe(1);
+      expect(result[1]).toBe(9);
+      expect(result[2]).toBe(3);
+    });
+
+    test("does not modify original", () => {
+      const ta = new TA([1, 2, 3]);
+      ta.with(1, 9);
+      expect(ta[1]).toBe(2);
+    });
+
+    test("returns instance of same type", () => {
+      const ta = new TA([1, 2, 3]);
+      expect(ta.with(0, 5)).toBeInstanceOf(TA);
+    });
+
+    test("negative index", () => {
+      const ta = new TA([1, 2, 3]);
+      const result = ta.with(-1, 9);
+      expect(result[2]).toBe(9);
+    });
+
+    test("out of bounds throws RangeError", () => {
+      const ta = new TA([1, 2, 3]);
+      expect(() => ta.with(3, 9)).toThrow(RangeError);
+      expect(() => ta.with(-4, 9)).toThrow(RangeError);
+    });
+  });
+
+  describe.each([BigInt64Array, BigUint64Array])("%s", (TA) => {
+    test("with", () => {
+      const ta = new TA([1n, 2n, 3n]);
+      const result = ta.with(1, 99n);
+      expect(result[1]).toBe(99n);
+      expect(ta[1]).toBe(2n);
+    });
+
+    test("with throws for non-BigInt", () => {
+      const ta = new TA([1n, 2n, 3n]);
+      expect(() => ta.with(1, 99)).toThrow(TypeError);
+    });
   });
 });

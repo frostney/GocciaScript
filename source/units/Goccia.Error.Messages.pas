@@ -298,6 +298,8 @@ resourcestring
   SErrorTypedArrayStartOffsetMultiple = 'Start offset of %s should be a multiple of %d';
   SErrorTypedArrayStartOffsetBounds = 'Start offset is outside the bounds of the buffer';
   SErrorTypedArrayByteLengthMultiple = 'Byte length of %s should be a multiple of %d';
+  SErrorBigIntTypedArrayRequiresBigInt = 'Cannot convert a non-BigInt value to a BigInt; use BigInt() to wrap';
+  SErrorBigIntTypedArrayCannotMix = 'Cannot mix BigInt and non-BigInt typed arrays';
 
   // Proxy trap errors
   SErrorProxyRevoked = 'Cannot perform operation on a revoked proxy';

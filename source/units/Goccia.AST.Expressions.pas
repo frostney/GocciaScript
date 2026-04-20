@@ -348,6 +348,7 @@ type
     FBody: TGocciaASTNode;
     FReturnType: string;
     FIsAsync: Boolean;
+    FSourceText: string;
   public
     constructor Create(const AParameters: TGocciaParameterArray; const ABody: TGocciaASTNode;
       const ALine, AColumn: Integer);
@@ -356,6 +357,7 @@ type
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ReturnType: string read FReturnType write FReturnType;
     property IsAsync: Boolean read FIsAsync write FIsAsync;
+    property SourceText: string read FSourceText write FSourceText;
   end;
 
   TGocciaMethodExpression = class(TGocciaExpression)
@@ -363,6 +365,7 @@ type
     FParameters: TGocciaParameterArray;
     FBody: TGocciaASTNode;
     FIsAsync: Boolean;
+    FSourceText: string;
   public
     constructor Create(const AParameters: TGocciaParameterArray; const ABody: TGocciaASTNode;
       const ALine, AColumn: Integer);
@@ -370,6 +373,7 @@ type
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Body: TGocciaASTNode read FBody;
     property IsAsync: Boolean read FIsAsync write FIsAsync;
+    property SourceText: string read FSourceText write FSourceText;
   end;
 
   TGocciaAwaitExpression = class(TGocciaExpression)
@@ -450,10 +454,12 @@ type
   TGocciaGetterExpression = class(TGocciaExpression)
   private
     FBody: TGocciaASTNode;
+    FSourceText: string;
   public
     constructor Create(const ABody: TGocciaASTNode; const ALine, AColumn: Integer);
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Body: TGocciaASTNode read FBody;
+    property SourceText: string read FSourceText write FSourceText;
   end;
 
   // Setter method: set propertyName(value) { ... }
@@ -461,11 +467,13 @@ type
   private
     FParameter: string;
     FBody: TGocciaASTNode;
+    FSourceText: string;
   public
     constructor Create(const AParameter: string; const ABody: TGocciaASTNode; const ALine, AColumn: Integer);
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Parameter: string read FParameter;
     property Body: TGocciaASTNode read FBody;
+    property SourceText: string read FSourceText write FSourceText;
   end;
 
   // Destructuring pattern base class - complete definition

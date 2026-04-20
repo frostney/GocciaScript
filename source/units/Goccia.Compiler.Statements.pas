@@ -1539,6 +1539,7 @@ begin
     '<method ' + AMethodName + '>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AMethod.IsAsync;
+  ChildTemplate.SourceText := AMethod.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -1621,6 +1622,7 @@ begin
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<get ' + AName + '>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.SourceText := AGetter.SourceText;
   ChildTemplate.ParameterCount := 0;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -1670,6 +1672,7 @@ begin
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<set ' + AName + '>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.SourceText := ASetter.SourceText;
   ChildTemplate.ParameterCount := 1;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -1834,6 +1837,7 @@ begin
   ChildTemplate := TGocciaFunctionTemplate.Create('<method [computed]>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AMethod.IsAsync;
+  ChildTemplate.SourceText := AMethod.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
