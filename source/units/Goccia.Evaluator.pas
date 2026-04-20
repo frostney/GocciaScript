@@ -1031,6 +1031,7 @@ begin
   Result := TGocciaFunctionValue.Create(EmptyParameters, Statements, AContext.Scope.CreateChild);
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AGetterExpression.Line;
+  TGocciaFunctionValue(Result).SourceText := AGetterExpression.SourceText;
 end;
 
 function EvaluateSetter(const ASetterExpression: TGocciaSetterExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -1049,6 +1050,7 @@ begin
   Result := TGocciaFunctionValue.Create(Parameters, Statements, AContext.Scope.CreateChild);
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := ASetterExpression.Line;
+  TGocciaFunctionValue(Result).SourceText := ASetterExpression.SourceText;
 end;
 
 // ES2026 §27.7.5.3 Await(value)
@@ -1360,6 +1362,7 @@ begin
   TGocciaFunctionValue(Result).IsExpressionBody := not (AArrowFunctionExpression.Body is TGocciaBlockStatement);
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AArrowFunctionExpression.Line;
+  TGocciaFunctionValue(Result).SourceText := AArrowFunctionExpression.SourceText;
 end;
 
 function EvaluateMethodExpression(const AMethodExpression: TGocciaMethodExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -1380,6 +1383,7 @@ begin
     Result := TGocciaFunctionValue.Create(AMethodExpression.Parameters, Statements, AContext.Scope.CreateChild);
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AMethodExpression.Line;
+  TGocciaFunctionValue(Result).SourceText := AMethodExpression.SourceText;
 end;
 
 // TC39 Explicit Resource Management §3.6 DisposeResources — sync disposal
@@ -1804,6 +1808,7 @@ begin
     Result := TGocciaMethodValue.Create(AClassMethod.Parameters, Statements, AContext.Scope.CreateChild, AClassMethod.Name, ASuperClass);
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AClassMethod.Line;
+  TGocciaFunctionValue(Result).SourceText := AClassMethod.SourceText;
 end;
 
 function EvaluateClass(const AClassDeclaration: TGocciaClassDeclaration; const AContext: TGocciaEvaluationContext): TGocciaValue;
