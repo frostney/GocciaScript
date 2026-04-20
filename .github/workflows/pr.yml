@@ -515,6 +515,37 @@ jobs:
           bytecode_cov="$(printf 'const x = 5;\nx;\n' | ./build/GocciaScriptLoader --mode=bytecode --coverage 2>&1)"
           printf '%s\n' "$bytecode_cov" | grep -q 'Coverage Summary:'
 
+      - name: Check GocciaScriptLoader JSX coverage source map translation
+        run: |
+          # Create a JSX file with a branch
+          cat > /tmp/jsx-cov-test.jsx << 'JSXEOF'
+          const createElement = (t, p, ...c) => ({ t, p, c });
+          const Greet = (props) => {
+            const msg = props.name ? props.name : "world";
+            return <div>{msg}</div>;
+          };
+          Greet({ name: "hi" });
+          Greet({});
+          JSXEOF
+
+          # Interpreted mode: lcov output uses original JSX line numbers
+          ./build/GocciaScriptLoader /tmp/jsx-cov-test.jsx --coverage --coverage-format=lcov --coverage-output=/tmp/jsx-cov.lcov
+          grep -q '^SF:/tmp/jsx-cov-test.jsx' /tmp/jsx-cov.lcov
+          grep -q '^BRDA:' /tmp/jsx-cov.lcov
+          # Branch should reference line 3 (the ternary) — not a transformed line
+          grep -q '^BRDA:3,' /tmp/jsx-cov.lcov
+
+          # JSON output also uses original positions
+          ./build/GocciaScriptLoader /tmp/jsx-cov-test.jsx --coverage --coverage-format=json --coverage-output=/tmp/jsx-cov.json
+          grep -q '"branchMap"' /tmp/jsx-cov.json
+          grep -q '"line":3' /tmp/jsx-cov.json
+
+          # Bytecode mode: same translation
+          ./build/GocciaScriptLoader /tmp/jsx-cov-test.jsx --mode=bytecode --coverage --coverage-format=lcov --coverage-output=/tmp/jsx-cov-bc.lcov
+          grep -q '^BRDA:3,' /tmp/jsx-cov-bc.lcov
+
+          rm -f /tmp/jsx-cov-test.jsx /tmp/jsx-cov.lcov /tmp/jsx-cov.json /tmp/jsx-cov-bc.lcov
+
       - name: Check GocciaScriptLoader error display
         run: |
           set +e

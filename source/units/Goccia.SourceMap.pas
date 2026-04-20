@@ -59,6 +59,8 @@ type
     function Translate(const ALine, AColumn: Integer;
       out ASourceLine, ASourceColumn: Integer): Boolean;
 
+    function Clone: TGocciaSourceMap;
+
     function ToJSON: string;
     procedure SaveToFile(const APath: string);
     function ToInlineComment: string;
@@ -244,6 +246,26 @@ begin
   ASourceLine := FSegments[BestIndex].SourceLine + 1;
   ASourceColumn := FSegments[BestIndex].SourceColumn + (AColumn - FSegments[BestIndex].GeneratedColumn);
   Result := True;
+end;
+
+function TGocciaSourceMap.Clone: TGocciaSourceMap;
+var
+  I: Integer;
+begin
+  Result := TGocciaSourceMap.Create(FFile);
+  Result.FSourceRoot := FSourceRoot;
+  for I := 0 to FSources.Count - 1 do
+    Result.FSources.Add(FSources[I]);
+  for I := 0 to FSourcesContent.Count - 1 do
+    Result.FSourcesContent.Add(FSourcesContent[I]);
+  for I := 0 to FNames.Count - 1 do
+    Result.FNames.Add(FNames[I]);
+  Result.FSegmentCount := FSegmentCount;
+  Result.FSegmentCapacity := FSegmentCapacity;
+  SetLength(Result.FSegments, FSegmentCapacity);
+  if FSegmentCount > 0 then
+    Move(FSegments[0], Result.FSegments[0],
+      FSegmentCount * SizeOf(TGocciaSourceMapSegment));
 end;
 
 // TC39 Source Map Spec — Mappings encoding
