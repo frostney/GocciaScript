@@ -49,6 +49,7 @@ Public bytecode artifacts use the `.gbc` extension.
 - `undefined`, `null`, booleans, and hole values use shared singleton objects.
 - Sparse arrays use `TGocciaHoleValue.HoleValue`, not raw `nil`.
 - The VM is integrated with the shared garbage collector and shared call stack.
+- Call stack depth is tracked per frame (`FFrameDepth`) and enforced against a configurable limit (default 3 500 frames, `--stack-size=N`). Exceeding the limit throws a `RangeError: Maximum call stack size exceeded`. Pass `--stack-size=0` to disable the limit. Bytecode-to-bytecode calls use a trampoline (`FFrameStack`) so the Pascal call stack stays flat regardless of JS call depth.
 - Bytecode mode enables strict type enforcement through compiler-emitted checks and typed opcodes.
 
 ## Opcode Layout

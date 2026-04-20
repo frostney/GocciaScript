@@ -250,8 +250,10 @@ constructor TGocciaFileWorker.Create(AQueue: TGocciaWorkQueue;
   AWorkerProc: TGocciaWorkerProc; ACancelled: PBoolean;
   ACancelOnError: Boolean; AEnableCoverage: Boolean; AMaxBytes: Int64;
   AData: Pointer);
+const
+  WORKER_STACK_SIZE = 8 * 1024 * 1024; // 8 MB — match main thread
 begin
-  inherited Create(True); // Create suspended
+  inherited Create(True, WORKER_STACK_SIZE);
   FreeOnTerminate := False;
   FQueue := AQueue;
   FWorkerProc := AWorkerProc;

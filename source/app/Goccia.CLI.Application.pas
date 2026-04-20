@@ -85,6 +85,7 @@ uses
   Goccia.JSON5,
   Goccia.Modules.Configuration,
   Goccia.Profiler,
+  Goccia.StackLimit,
   Goccia.Timeout,
   Goccia.TOML,
   Goccia.Values.ArrayValue,
@@ -501,6 +502,9 @@ end;
 
 procedure TGocciaCLIApplication.InitializeSingletons;
 begin
+  SetMaxStackDepth(DEFAULT_MAX_STACK_DEPTH);
+  if Assigned(FEngineOptions) then
+    SetMaxStackDepth(Max(0, FEngineOptions.StackSize.ValueOr(DEFAULT_MAX_STACK_DEPTH)));
   if Assigned(FCoverageOptions) then
     InitializeCoverageIfEnabled(FCoverageOptions);
   if Assigned(FProfilerOptions) then

@@ -24,7 +24,7 @@ var
   Describe: string;
   DashPos: SizeInt;
 begin
-  if not RunCommand('git', ['describe', '--tags', '--always'], Describe) then
+  if not RunCommand('git', ['describe', '--tags', '--always', '--match', '[0-9]*'], Describe) then
     Describe := '';
   Describe := Trim(Describe);
 

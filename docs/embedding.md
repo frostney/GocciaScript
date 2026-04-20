@@ -708,7 +708,22 @@ end;
 
 Raises `TGocciaInstructionLimitError` when the limit is reached. A value of zero (the default) skips all counter increments and limit comparisons — only the guard read of `GMaxInstructions` remains on the hot path.
 
-The CLI tools expose both limits as flags; see [Build System — Run Commands](build-system.md) for usage.
+### Call Stack Depth Limit
+
+`SetMaxStackDepth` caps the number of nested function calls. Exceeding the limit throws a JavaScript `RangeError` with the message `"Maximum call stack size exceeded"` (matching V8 convention). The default is 3 500 frames. A value of zero disables the limit entirely.
+
+In bytecode mode the VM uses a trampoline: bytecode-to-bytecode calls are dispatched iteratively via an explicit frame stack, so the Pascal call stack stays flat regardless of JS call depth. The interpreter mode uses Pascal recursion and relies on the depth check to prevent overflow.
+
+```pascal
+uses
+  Goccia.StackLimit;
+
+SetMaxStackDepth(5000);   // custom limit
+// SetMaxStackDepth(0);   // no limit
+Engine.Execute;
+```
+
+The CLI tools expose all three limits as flags; see [Build System — Run Commands](build-system.md) for usage.
 
 ## FPU Exception Mask
 
