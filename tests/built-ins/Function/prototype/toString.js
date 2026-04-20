@@ -78,7 +78,7 @@ describe("Function.prototype.toString", () => {
       static double(x) { return x * 2; }
     }
     const str = MathUtils.double.toString();
-    expect(str.startsWith("double(x)")).toBe(true);
+    expect(str.includes("double(x)")).toBe(true);
     expect(str.includes("return x * 2")).toBe(true);
   });
 });

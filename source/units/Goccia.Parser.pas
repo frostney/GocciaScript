@@ -293,9 +293,11 @@ var
   SB: TStringBuffer;
   SourceLine: string;
 begin
-  // End position is after the last consumed token (Previous)
+  // End position is after the last consumed token (Previous).
+  // Use SourceLength (the original span in source) instead of Length(Lexeme),
+  // because tokens like gttTemplate and gttRegex carry transformed payloads.
   EndLine := Previous.Line;
-  EndColumn := Previous.Column + Length(Previous.Lexeme) - 1;
+  EndColumn := Previous.Column + Previous.SourceLength - 1;
 
   if (AStartLine < 1) or (AStartLine > FSourceLines.Count) then
     Exit('');
@@ -1441,6 +1443,7 @@ var
   ArrowFn: TGocciaArrowFunctionExpression;
   ArrowBody: TGocciaASTNode;
   SeparatorPos: Integer;
+  Line, Column: Integer;
 begin
   if Match(gttTrue) then
   begin
@@ -1595,6 +1598,9 @@ begin
           Dec(FInAsyncFunction);
         end;
         TGocciaArrowFunctionExpression(Expr).IsAsync := True;
+        // Override source text to include `async` prefix
+        TGocciaArrowFunctionExpression(Expr).SourceText :=
+          ExtractSourceRange(Token.Line, Token.Column);
         Result := Expr;
       end
       else
@@ -1606,6 +1612,8 @@ begin
     // async single-param arrow: async x => body
     else if (Name = KEYWORD_ASYNC) and Check(gttIdentifier) and CheckNext(gttArrow) then
     begin
+      Line := Token.Line;
+      Column := Token.Column;
       Token := Advance; // consume param identifier
       Name := Token.Lexeme;
       Consume(gttArrow, 'Expected "=>" in async arrow function',
@@ -1632,8 +1640,9 @@ begin
       Parameters[0].IsOptional := False;
       Parameters[0].TypeAnnotation := '';
 
-      ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, Token.Line, Token.Column);
+      ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, Line, Column);
       ArrowFn.IsAsync := True;
+      ArrowFn.SourceText := ExtractSourceRange(Line, Column);
       Result := ArrowFn;
     end
     else
@@ -1739,6 +1748,7 @@ var
   IsGetter, IsSetter: Boolean;
   IsAsync: Boolean;
   ComputedCount, SourceOrderCount: Integer;
+  MemberStartLine, MemberStartColumn: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -1761,6 +1771,8 @@ begin
     IsGetter := False;
     IsSetter := False;
     IsAsync := False;
+    MemberStartLine := Peek.Line;
+    MemberStartColumn := Peek.Column;
 
     // Check for async method syntax
     if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttLeftParen) then
@@ -1863,12 +1875,12 @@ begin
     begin
       if IsAsync then Inc(FInAsyncFunction);
       try
-        Value := ParseObjectMethodBody(Previous.Line, Previous.Column);
+        Value := ParseObjectMethodBody(MemberStartLine, MemberStartColumn);
       finally
         if IsAsync then Dec(FInAsyncFunction);
       end;
       TGocciaMethodExpression(Value).SourceText := ExtractSourceRange(
-        TGocciaMethodExpression(Value).Line, TGocciaMethodExpression(Value).Column);
+        MemberStartLine, MemberStartColumn);
       if IsAsync then
         TGocciaMethodExpression(Value).IsAsync := True;
     end
@@ -3625,6 +3637,7 @@ var
   FieldOrder: array of TGocciaFieldOrderEntry;
   IsAccessor: Boolean;
   IsAsync: Boolean;
+  MemberStartLine, MemberStartColumn: Integer;
   TypePair: TStringStringMap.TKeyValuePair;
 begin
   SetLength(Elements, 0);
@@ -3672,6 +3685,8 @@ begin
     begin
       MemberDecorators := ParseDecorators;
       IsAccessor := False;
+      MemberStartLine := Peek.Line;
+      MemberStartColumn := Peek.Column;
 
       IsStatic := Match(gttStatic);
 
@@ -4008,6 +4023,7 @@ begin
         end;
         Method.Name := MemberName;
         Method.IsAsync := IsAsync;
+        Method.SourceText := ExtractSourceRange(MemberStartLine, MemberStartColumn);
 
         if (Length(MemberDecorators) > 0) or IsComputed then
         begin

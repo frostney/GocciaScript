@@ -196,7 +196,8 @@ end;
 
 procedure TGocciaLexer.AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string);
 begin
-  FTokens.Add(TGocciaToken.Create(ATokenType, ALiteral, FLine, FStartColumn));
+  FTokens.Add(TGocciaToken.Create(ATokenType, ALiteral, FLine, FStartColumn,
+    FCurrent - FStart));
   UpdateRegexContext(ATokenType);
 end;
 
@@ -1733,7 +1734,7 @@ begin
       ScanToken;
   end;
 
-  FTokens.Add(TGocciaToken.Create(gttEOF, '', FLine, FColumn));
+  FTokens.Add(TGocciaToken.Create(gttEOF, '', FLine, FColumn, 0));
   Result := FTokens;
 end;
 
