@@ -104,8 +104,9 @@ jobs:
           mkdir -p "build"
 
           # Generate baked version constants
-          DESCRIBE="$(git describe --tags --always 2>/dev/null || echo "")"
+          DESCRIBE="$(git describe --tags --always --match '[0-9]*' 2>/dev/null || echo "")"
           GC_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
+          GC_BUILD_DATE="$(date -u +%Y-%m-%d)"
           if [ -z "$GC_COMMIT" ]; then GC_COMMIT="unknown"; fi
           if [ -z "$DESCRIBE" ] || ! echo "$DESCRIBE" | grep -q '\.'; then
             GC_VERSION="0.0.0-dev"
@@ -119,6 +120,7 @@ jobs:
             "const" \
             "  BAKED_VERSION = '$GC_VERSION';" \
             "  BAKED_COMMIT = '$GC_COMMIT';" \
+            "  BAKED_BUILD_DATE = '$GC_BUILD_DATE';" \
             > source/units/Goccia.Version.Generated.inc
 
           RTL_DIR="$PREFIX/lib/fpc/${FPC_VERSION}/units/${TARGET}/rtl"
