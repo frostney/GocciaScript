@@ -1,20 +1,15 @@
-// test262 isConstructor.js -- GocciaScript-compatible reimplementation
-// GocciaScript does not have Reflect.construct, so we approximate by
-// attempting `new f()` and catching any TypeError.
+// test262 isConstructor.js — uses Reflect.construct to test [[Construct]]
+// Matches the official test262 harness: uses newTarget parameter to avoid
+// actually invoking the target's constructor logic.
 
 const isConstructor = (f) => {
   if (typeof f !== "function") {
     return false;
   }
   try {
-    new f();
+    Reflect.construct(class {}, [], f);
     return true;
   } catch (e) {
-    // TypeError from non-constructor, other errors from constructor body
-    if (e instanceof TypeError && /is not a constructor/.test(e.message)) {
-      return false;
-    }
-    // If it threw something else, it IS a constructor (the body just errored)
-    return true;
+    return false;
   }
 };

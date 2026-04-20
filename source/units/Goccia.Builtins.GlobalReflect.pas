@@ -49,6 +49,8 @@ uses
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
+  Goccia.Values.HoleValue,
+  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
@@ -127,12 +129,25 @@ begin
 end;
 
 // ES2026 §28.1.2 Reflect.construct(target, argumentsList [, newTarget])
+// ES2026 §7.2.4 IsConstructor(argument) — check if a value can be used with new
+function IsConstructorValue(const AValue: TGocciaValue): Boolean;
+begin
+  if AValue is TGocciaClassValue then
+    Exit(True);
+  if (AValue is TGocciaNativeFunctionValue) and
+     not TGocciaNativeFunctionValue(AValue).NotConstructable then
+    Exit(True);
+  Result := False;
+end;
+
 function TGocciaGlobalReflect.ReflectConstruct(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Target: TGocciaValue;
   ArgsList: TGocciaValue;
   NewTarget: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
+  ProtoValue: TGocciaValue;
+  NewTargetClass: TGocciaClassValue;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Reflect.construct', ThrowError);
 
@@ -140,28 +155,48 @@ begin
   ArgsList := AArgs.GetElement(1);
 
   // Step 1: If IsConstructor(target) is false, throw a TypeError exception
-  if not (Target is TGocciaClassValue) then
+  if not IsConstructorValue(Target) then
     ThrowTypeError(SErrorReflectConstructTargetMustBeConstructor, SSuggestNotConstructorType);
 
   // Step 2: Let args be ? CreateListFromArrayLike(argumentsList)
   CallArgs := CreateListFromArrayLike(ArgsList, 'Reflect.construct');
   try
-    // Step 3: If IsConstructor(newTarget) is false, throw a TypeError exception
+    // Step 3: If newTarget provided, validate IsConstructor(newTarget)
     if AArgs.Length >= 3 then
     begin
       NewTarget := AArgs.GetElement(2);
-      if not (NewTarget is TGocciaClassValue) then
+      if not IsConstructorValue(NewTarget) then
         ThrowTypeError(SErrorReflectConstructNewTargetMustBeConstructor, SSuggestNotConstructorType);
     end
     else
       NewTarget := Target;
 
     // Step 4: Return ? Construct(target, args, newTarget)
-    // Pass newTarget so the instance prototype is set before the constructor runs
-    if NewTarget <> Target then
-      Result := TGocciaClassValue(Target).Instantiate(CallArgs, TGocciaClassValue(NewTarget))
+    if Target is TGocciaClassValue then
+    begin
+      if NewTarget is TGocciaClassValue then
+      begin
+        NewTargetClass := TGocciaClassValue(NewTarget);
+        if NewTargetClass <> TGocciaClassValue(Target) then
+          Result := TGocciaClassValue(Target).Instantiate(CallArgs, NewTargetClass)
+        else
+          Result := TGocciaClassValue(Target).Instantiate(CallArgs);
+      end
+      else
+      begin
+        // newTarget is a native function — get its .prototype for the instance
+        Result := TGocciaClassValue(Target).Instantiate(CallArgs);
+        ProtoValue := NewTarget.GetProperty(PROP_PROTOTYPE);
+        if ProtoValue is TGocciaObjectValue then
+          TGocciaObjectValue(Result).Prototype := TGocciaObjectValue(ProtoValue);
+      end;
+    end
     else
-      Result := TGocciaClassValue(Target).Instantiate(CallArgs);
+    begin
+      // Target is a native function constructor
+      Result := TGocciaNativeFunctionValue(Target).Call(CallArgs,
+        TGocciaHoleValue.HoleValue);
+    end;
   finally
     CallArgs.Free;
   end;

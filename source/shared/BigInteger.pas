@@ -365,6 +365,7 @@ class function TBigInteger.FromDouble(const AValue: Double): TBigInteger;
 var
   V: Double;
   Limb: Cardinal;
+  DecStr: string;
 begin
   if IsNaN(AValue) or IsInfinite(AValue) then
     raise Exception.Create('Cannot convert non-finite number to BigInt');
@@ -380,20 +381,11 @@ begin
   if (AValue >= -9007199254740992.0) and (AValue <= 9007199254740992.0) then
     Exit(FromInt64(Trunc(AValue)));
 
-  Result.FNegative := AValue < 0;
-  V := Abs(AValue);
-  Result.FLimbs := nil;
-
-  while V >= 1 do
-  begin
-    {$Q-}{$R-}
-    Limb := Cardinal(Trunc(FMod(V, LIMB_BASE)));
-    {$IFDEF PRODUCTION}{$Q-}{$R-}{$ELSE}{$Q+}{$R+}{$ENDIF}
-    SetLength(Result.FLimbs, Length(Result.FLimbs) + 1);
-    Result.FLimbs[High(Result.FLimbs)] := Limb;
-    V := Int(V / LIMB_BASE);
-  end;
-  Result.Normalize;
+  // For values above 2^53 (representable as aligned integers in IEEE 754),
+  // convert via decimal string to avoid FPC AArch64 FMod precision bugs.
+  // FormatFloat('0', v) renders the exact integer without scientific notation.
+  DecStr := FormatFloat('0', AValue);
+  Result := FromDecimalString(DecStr);
 end;
 
 class function TBigInteger.FromDecimalString(const AValue: string): TBigInteger;

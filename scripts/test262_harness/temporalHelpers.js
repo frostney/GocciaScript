@@ -1,8 +1,8 @@
 // test262 temporalHelpers.js -- GocciaScript-compatible reimplementation
 // Provides the TemporalHelpers object used by Temporal test262 tests.
 // Covers the most-used assertion methods; less-common helpers that require
-// unsupported features (BigInt literals, Object.defineProperty observers)
-// are stubbed as no-ops or simplified.
+// unsupported features (Object.defineProperty observers) are stubbed or
+// simplified.
 
 const ASCII_IDENTIFIER = /^[$_a-zA-Z][$_a-zA-Z0-9]*$/;
 
@@ -269,11 +269,191 @@ const TemporalHelpers = {
   },
 
   checkSubclassingIgnored(...args) {
-    // Simplified: subclassing checks require Reflect.construct (not supported)
+    this.checkSubclassConstructorNotObject(...args);
+    this.checkSubclassConstructorUndefined(...args);
+    this.checkSubclassConstructorThrows(...args);
+    this.checkSubclassConstructorNotCalled(...args);
+    this.checkSubclassSpeciesInvalidResult(...args);
+    this.checkSubclassSpeciesNotAConstructor(...args);
+    this.checkSubclassSpeciesNull(...args);
+    this.checkSubclassSpeciesUndefined(...args);
+    this.checkSubclassSpeciesThrows(...args);
+  },
+
+  checkSubclassConstructorNotObject(construct, constructArgs, method, methodArgs, resultAssertions) {
+    const check = (value, description) => {
+      const instance = new construct(...constructArgs);
+      instance.constructor = value;
+      const result = instance[method](...methodArgs);
+      assert.sameValue(Object.getPrototypeOf(result), construct.prototype, description);
+      resultAssertions(result);
+    };
+    check(null, "null");
+    check(true, "true");
+    check("test", "string");
+    check(Symbol(), "Symbol");
+    check(7, "number");
+    check(7n, "bigint");
+  },
+
+  checkSubclassConstructorUndefined(construct, constructArgs, method, methodArgs, resultAssertions) {
+    let called = 0;
+    class MySubclass extends construct {
+      constructor() { ++called; super(...constructArgs); }
+    }
+    const instance = new MySubclass();
+    assert.sameValue(called, 1);
+    MySubclass.prototype.constructor = undefined;
+    const result = instance[method](...methodArgs);
+    assert.sameValue(called, 1);
+    assert.sameValue(Object.getPrototypeOf(result), construct.prototype);
+    resultAssertions(result);
+  },
+
+  checkSubclassConstructorThrows(construct, constructArgs, method, methodArgs, resultAssertions) {
+    class CustomError {}
+    const instance = new construct(...constructArgs);
+    Object.defineProperty(instance, "constructor", {
+      get() { throw new CustomError(); }
+    });
+    const result = instance[method](...methodArgs);
+    assert.sameValue(Object.getPrototypeOf(result), construct.prototype);
+    resultAssertions(result);
+  },
+
+  checkSubclassConstructorNotCalled(construct, constructArgs, method, methodArgs, resultAssertions) {
+    let called = 0;
+    class MySubclass extends construct {
+      constructor() { ++called; super(...constructArgs); }
+    }
+    const instance = new MySubclass();
+    assert.sameValue(called, 1);
+    const result = instance[method](...methodArgs);
+    assert.sameValue(called, 1);
+    assert.sameValue(Object.getPrototypeOf(result), construct.prototype);
+    resultAssertions(result);
+  },
+
+  checkSubclassSpeciesInvalidResult(construct, constructArgs, method, methodArgs, resultAssertions) {
+    const check = (value, description) => {
+      const instance = new construct(...constructArgs);
+      instance.constructor = { [Symbol.species]: () => value };
+      const result = instance[method](...methodArgs);
+      assert.sameValue(Object.getPrototypeOf(result), construct.prototype, description);
+      resultAssertions(result);
+    };
+    check(undefined, "undefined");
+    check(null, "null");
+    check(true, "true");
+    check("test", "string");
+    check(Symbol(), "Symbol");
+    check(7, "number");
+    check(7n, "bigint");
+    check({}, "plain object");
+  },
+
+  checkSubclassSpeciesNotAConstructor(construct, constructArgs, method, methodArgs, resultAssertions) {
+    const check = (value, description) => {
+      const instance = new construct(...constructArgs);
+      instance.constructor = { [Symbol.species]: value };
+      const result = instance[method](...methodArgs);
+      assert.sameValue(Object.getPrototypeOf(result), construct.prototype, description);
+      resultAssertions(result);
+    };
+    check(true, "true");
+    check("test", "string");
+    check(Symbol(), "Symbol");
+    check(7, "number");
+    check(7n, "bigint");
+    check({}, "plain object");
+  },
+
+  checkSubclassSpeciesNull(construct, constructArgs, method, methodArgs, resultAssertions) {
+    let called = 0;
+    class MySubclass extends construct {
+      constructor() { ++called; super(...constructArgs); }
+    }
+    const instance = new MySubclass();
+    assert.sameValue(called, 1);
+    MySubclass.prototype.constructor = { [Symbol.species]: null };
+    const result = instance[method](...methodArgs);
+    assert.sameValue(called, 1);
+    assert.sameValue(Object.getPrototypeOf(result), construct.prototype);
+    resultAssertions(result);
+  },
+
+  checkSubclassSpeciesUndefined(construct, constructArgs, method, methodArgs, resultAssertions) {
+    let called = 0;
+    class MySubclass extends construct {
+      constructor() { ++called; super(...constructArgs); }
+    }
+    const instance = new MySubclass();
+    assert.sameValue(called, 1);
+    MySubclass.prototype.constructor = { [Symbol.species]: undefined };
+    const result = instance[method](...methodArgs);
+    assert.sameValue(called, 1);
+    assert.sameValue(Object.getPrototypeOf(result), construct.prototype);
+    resultAssertions(result);
+  },
+
+  checkSubclassSpeciesThrows(construct, constructArgs, method, methodArgs, resultAssertions) {
+    class CustomError {}
+    const instance = new construct(...constructArgs);
+    instance.constructor = {
+      get [Symbol.species]() { throw new CustomError(); },
+    };
+    const result = instance[method](...methodArgs);
+    assert.sameValue(Object.getPrototypeOf(result), construct.prototype);
   },
 
   checkSubclassingIgnoredStatic(...args) {
-    // Simplified: subclassing checks require Reflect.construct (not supported)
+    this.checkStaticInvalidReceiver(...args);
+    this.checkStaticReceiverNotCalled(...args);
+    this.checkThisValueNotCalled(...args);
+  },
+
+  checkStaticInvalidReceiver(construct, method, methodArgs, resultAssertions) {
+    const check = (value, description) => {
+      const result = construct[method].apply(value, methodArgs);
+      assert.sameValue(Object.getPrototypeOf(result), construct.prototype);
+      resultAssertions(result);
+    };
+    check(undefined, "undefined");
+    check(null, "null");
+    check(true, "true");
+    check("test", "string");
+    check(Symbol(), "symbol");
+    check(7, "number");
+    check(7n, "bigint");
+    check({}, "Non-callable object");
+  },
+
+  checkStaticReceiverNotCalled(construct, method, methodArgs, resultAssertions) {
+    const check = (value, description) => {
+      const receiver = () => value;
+      const result = construct[method].apply(receiver, methodArgs);
+      assert.sameValue(Object.getPrototypeOf(result), construct.prototype);
+      resultAssertions(result);
+    };
+    check(undefined, "undefined");
+    check(null, "null");
+    check(true, "true");
+    check("test", "string");
+    check(Symbol(), "symbol");
+    check(7, "number");
+    check(7n, "bigint");
+    check({}, "Non-callable object");
+  },
+
+  checkThisValueNotCalled(construct, method, methodArgs, resultAssertions) {
+    let called = false;
+    class MySubclass extends construct {
+      constructor(...args) { called = true; super(...args); }
+    }
+    const result = MySubclass[method](...methodArgs);
+    assert.sameValue(called, false);
+    assert.sameValue(Object.getPrototypeOf(result), construct.prototype);
+    resultAssertions(result);
   },
 
   checkPlainDateTimeConversionFastPath(func, message = "checkPlainDateTimeConversionFastPath") {

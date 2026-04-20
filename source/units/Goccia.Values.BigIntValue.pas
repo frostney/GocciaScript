@@ -114,9 +114,9 @@ begin
   begin
     Members := TGocciaMemberCollection.Create;
     try
-      Members.AddMethod(BigIntToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(BigIntValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(BigIntToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(BigIntToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+      Members.AddMethod(BigIntValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+      Members.AddMethod(BigIntToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
       FPrototypeMembers := Members.ToDefinitions;
     finally
       Members.Free;

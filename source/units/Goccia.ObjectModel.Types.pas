@@ -25,7 +25,8 @@ type
 
   TGocciaMemberFlag = (
     gmfNoFunctionPrototype,
-    gmfVariadic
+    gmfVariadic,
+    gmfNotConstructable
   );
   TGocciaMemberFlags = set of TGocciaMemberFlag;
 
