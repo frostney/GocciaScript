@@ -12,7 +12,7 @@ uses
 type
   TGocciaStringArray = array of string;
 
-  TGocciaDeclarationType = (dtLet, dtConst, dtParameter);
+  TGocciaDeclarationType = (dtLet, dtConst, dtParameter, dtVar);
 
   TLexicalBinding = record
   private
@@ -35,12 +35,12 @@ implementation
 
 function TLexicalBinding.IsWritable: Boolean;
 begin
-  Result := DeclarationType in [dtLet, dtParameter];
+  Result := DeclarationType in [dtLet, dtParameter, dtVar];
 end;
 
 function TLexicalBinding.CanAccess: Boolean;
 begin
-  Result := Initialized or (DeclarationType = dtParameter);
+  Result := Initialized or (DeclarationType in [dtParameter, dtVar]);
 end;
 
 end.

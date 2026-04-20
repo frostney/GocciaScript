@@ -18,6 +18,7 @@ const
   dtLet = Goccia.Scope.BindingMap.dtLet;
   dtConst = Goccia.Scope.BindingMap.dtConst;
   dtParameter = Goccia.Scope.BindingMap.dtParameter;
+  dtVar = Goccia.Scope.BindingMap.dtVar;
 
 type
   TGocciaScopeKind = (skUnknown, skGlobal, skFunction, skBlock, skCustom, skClass, skModule);
@@ -25,6 +26,7 @@ type
   TGocciaScope = class(TGCManagedObject)
   private
     FLexicalBindings: TGocciaScopeBindingMap;
+    FVarBindings: TGocciaScopeBindingMap;
     FParent: TGocciaScope;
     FThisValue: TGocciaValue;
     FScopeKind: TGocciaScopeKind;
@@ -46,6 +48,11 @@ type
     procedure DefineLexicalBinding(const AName: string; const AValue: TGocciaValue; const ADeclarationType: TGocciaDeclarationType; const ALine: Integer = 0; const AColumn: Integer = 0);
     procedure AssignLexicalBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0); virtual;
     procedure ForceUpdateBinding(const AName: string; const AValue: TGocciaValue);
+
+    // Var binding support (separate map on function/module/global scopes)
+    procedure DefineVarBinding(const AName: string; const AValue: TGocciaValue;
+      const AHasInitializer: Boolean);
+    function ContainsOwnVarBinding(const AName: string): Boolean;
 
     // Helper methods for token-based declarations
     procedure DefineFromToken(const AName: string; const AValue: TGocciaValue; const ATokenType: TGocciaTokenType);
@@ -170,6 +177,8 @@ begin
 
   if Assigned(FLexicalBindings) then
     FLexicalBindings.Free;
+  if Assigned(FVarBindings) then
+    FVarBindings.Free;
 
   if Assigned(FThisValue) then
     FThisValue := nil;
@@ -299,6 +308,41 @@ begin
   end;
 end;
 
+procedure TGocciaScope.DefineVarBinding(const AName: string; const AValue: TGocciaValue;
+  const AHasInitializer: Boolean);
+var
+  TargetScope: TGocciaScope;
+  Binding: TLexicalBinding;
+begin
+  TargetScope := FindFunctionOrModuleScope;
+  // Lazily allocate the var bindings map
+  if not Assigned(TargetScope.FVarBindings) then
+    TargetScope.FVarBindings := TGocciaScopeBindingMap.Create;
+
+  if TargetScope.FVarBindings.TryGetValue(AName, Binding) then
+  begin
+    // Redeclaration: only update if there's a real initializer
+    if AHasInitializer then
+    begin
+      Binding.Value := AValue;
+      TargetScope.FVarBindings.AddOrSetValue(AName, Binding);
+    end;
+  end
+  else
+  begin
+    // First declaration: create the binding
+    Binding.Value := AValue;
+    Binding.DeclarationType := dtVar;
+    Binding.Initialized := True;
+    TargetScope.FVarBindings.AddOrSetValue(AName, Binding);
+  end;
+end;
+
+function TGocciaScope.ContainsOwnVarBinding(const AName: string): Boolean;
+begin
+  Result := Assigned(FVarBindings) and FVarBindings.ContainsKey(AName);
+end;
+
 procedure TGocciaScope.AssignLexicalBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0);
 var
   LexicalBinding: TLexicalBinding;
@@ -324,6 +368,14 @@ begin
     LexicalBinding.Value := AValue;
     LexicalBinding.Initialized := True;
     FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
+    Exit;
+  end;
+
+  // Check var bindings on this scope
+  if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, LexicalBinding) then
+  begin
+    LexicalBinding.Value := AValue;
+    FVarBindings.AddOrSetValue(AName, LexicalBinding);
     Exit;
   end;
 
@@ -354,6 +406,8 @@ begin
         SSuggestTemporalDeadZone);
     Result := LexicalBinding;
   end
+  else if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, LexicalBinding) then
+    Result := LexicalBinding
   else if Assigned(FParent) then
     Result := FParent.GetLexicalBinding(AName, ALine, AColumn)
   else
@@ -384,6 +438,7 @@ end;
 function TGocciaScope.Contains(const AName: string): Boolean; inline;
 begin
   Result := ContainsOwnLexicalBinding(AName) or
+    ContainsOwnVarBinding(AName) or
     (Assigned(FParent) and FParent.Contains(AName));
 end;
 
@@ -410,6 +465,11 @@ begin
   for Pair in FLexicalBindings do
     if Assigned(Pair.Value.Value) then
       Pair.Value.Value.MarkReferences;
+
+  if Assigned(FVarBindings) then
+    for Pair in FVarBindings do
+      if Assigned(Pair.Value.Value) then
+        Pair.Value.Value.MarkReferences;
 end;
 
 { TGocciaGlobalScope }

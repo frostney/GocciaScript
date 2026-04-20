@@ -824,7 +824,7 @@ end;
   var
     I: Integer;
     Value: TGocciaValue;
-    TargetScope: TGocciaScope;
+    HasRealInit: Boolean;
   begin
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
     for I := 0 to Length(Variables) - 1 do
@@ -834,17 +834,9 @@ end;
         TGocciaFunctionValue(Value).Name := Variables[I].Name;
       if IsVar then
       begin
-        // var declarations: assign to the hoisted binding in function/module scope
-        TargetScope := AContext.Scope.FindFunctionOrModuleScope;
-        if TargetScope.ContainsOwnLexicalBinding(Variables[I].Name) then
-        begin
-          // Redeclaration without initializer (var x;) preserves existing value
-          if not (Value is TGocciaUndefinedLiteralValue) or
-             not (Variables[I].Initializer is TGocciaLiteralExpression) then
-            TargetScope.ForceUpdateBinding(Variables[I].Name, Value);
-        end
-        else
-          TargetScope.DefineLexicalBinding(Variables[I].Name, Value, dtLet);
+        HasRealInit := not ((Variables[I].Initializer is TGocciaLiteralExpression) and
+          (Value is TGocciaUndefinedLiteralValue));
+        AContext.Scope.DefineVarBinding(Variables[I].Name, Value, HasRealInit);
       end
       else if IsConst then
         AContext.Scope.DefineFromToken(Variables[I].Name, Value, gttConst)

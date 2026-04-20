@@ -266,8 +266,7 @@ begin
   try
     CollectVarNames(AStatements, Names);
     for I := 0 to Names.Count - 1 do
-      if not AScope.ContainsOwnLexicalBinding(Names[I]) then
-        AScope.DefineLexicalBinding(Names[I], TGocciaUndefinedLiteralValue.UndefinedValue, dtLet);
+      AScope.DefineVarBinding(Names[I], TGocciaUndefinedLiteralValue.UndefinedValue, False);
   finally
     Names.Free;
   end;
@@ -283,8 +282,7 @@ begin
     for I := 0 to ANodes.Count - 1 do
       CollectVarNamesFromNode(ANodes[I], Names);
     for I := 0 to Names.Count - 1 do
-      if not AScope.ContainsOwnLexicalBinding(Names[I]) then
-        AScope.DefineLexicalBinding(Names[I], TGocciaUndefinedLiteralValue.UndefinedValue, dtLet);
+      AScope.DefineVarBinding(Names[I], TGocciaUndefinedLiteralValue.UndefinedValue, False);
   finally
     Names.Free;
   end;
@@ -1345,14 +1343,11 @@ begin
 
       if AForOfStatement.IsVar then
       begin
-        // var binding: assign in function scope (bindings already hoisted).
-        // Use IsDeclaration=False so AssignLexicalBinding walks the parent
-        // chain to find the hoisted binding without replacing the eval scope.
+        // var binding: update the hoisted binding on function/module scope
         if AForOfStatement.BindingPattern <> nil then
           AssignPattern(AForOfStatement.BindingPattern, CurrentValue, IterContext, False)
         else
-          AContext.Scope.FindFunctionOrModuleScope.ForceUpdateBinding(
-            AForOfStatement.BindingName, CurrentValue);
+          AContext.Scope.DefineVarBinding(AForOfStatement.BindingName, CurrentValue, True);
       end
       else if AForOfStatement.BindingPattern <> nil then
         AssignPattern(AForOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
@@ -1444,8 +1439,7 @@ begin
             if AForAwaitOfStatement.BindingPattern <> nil then
               AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, False)
             else
-              AContext.Scope.FindFunctionOrModuleScope.ForceUpdateBinding(
-                AForAwaitOfStatement.BindingName, CurrentValue);
+              AContext.Scope.DefineVarBinding(AForAwaitOfStatement.BindingName, CurrentValue, True);
           end
           else if AForAwaitOfStatement.BindingPattern <> nil then
             AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
@@ -1493,8 +1487,7 @@ begin
           if AForAwaitOfStatement.BindingPattern <> nil then
             AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, False)
           else
-            AContext.Scope.FindFunctionOrModuleScope.ForceUpdateBinding(
-              AForAwaitOfStatement.BindingName, CurrentValue);
+            AContext.Scope.DefineVarBinding(AForAwaitOfStatement.BindingName, CurrentValue, True);
         end
         else if AForAwaitOfStatement.BindingPattern <> nil then
           AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
