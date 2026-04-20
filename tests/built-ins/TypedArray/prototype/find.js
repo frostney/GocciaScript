@@ -21,6 +21,13 @@ describe("TypedArray.prototype.find", () => {
       const obj = { fn(x) { return x === this.target; } };
       expect(ta.find(obj.fn, ctx)).toBe(4);
     });
+
+    test("stops iterating after first match", () => {
+      const ta = new TA([1, 2, 3, 4, 5]);
+      let count = 0;
+      ta.find(x => { count++; return x === 3; });
+      expect(count).toBe(3);
+    });
   });
 
   test.each([BigInt64Array, BigUint64Array])("%s find", (TA) => {

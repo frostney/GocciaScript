@@ -23,5 +23,9 @@ describe("TypedArray.prototype.keys", () => {
       expect(second.value).toBe(1);
       expect(iter.next().done).toBe(true);
     });
+
+    test("throws on non-TypedArray receiver", () => {
+      expect(() => TA.prototype.keys.call({})).toThrow(TypeError);
+    });
   });
 });

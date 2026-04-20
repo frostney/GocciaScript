@@ -32,6 +32,10 @@ describe("TypedArray.prototype.toReversed", () => {
       expect(rev[0]).toBe(5);
       expect(rev.length).toBe(1);
     });
+
+    test("throws on non-TypedArray receiver", () => {
+      expect(() => TA.prototype.toReversed.call({})).toThrow(TypeError);
+    });
   });
 
   test.each([BigInt64Array, BigUint64Array])("%s toReversed", (TA) => {
