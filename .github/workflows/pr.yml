@@ -227,6 +227,9 @@ jobs:
       - name: Check CLI flags across all apps
         run: bun run scripts/test-cli.ts
 
+      - name: Check parser error display and numeric separators
+        run: bun run scripts/test-cli-parser.ts
+
       - name: Check config file loading and per-file config
         run: bun run scripts/test-cli-config.ts
 
