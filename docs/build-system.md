@@ -122,8 +122,7 @@ printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
 ./build/GocciaREPL --max-memory=10485760     # 10 MB GC heap limit
 
 # When --import-map is omitted, the CLI walks up from the entry file directory
-# (or the current directory for the REPL) and uses the first goccia.json
-# (or .json5 / .toml) it finds.
+# and uses the first goccia.json (or .json5 / .toml) it finds.
 printf 'import { add } from "@/math"; add(1, 2);' | ./build/GocciaScriptLoader
 
 # Abort long-running scripts
@@ -154,7 +153,7 @@ printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./bu
 
 ### Configuration File (`goccia.json`)
 
-All CLI options can also be set via a project configuration file. The CLI discovers the file by walking up from the **entry file's directory** (or the current working directory for GocciaREPL) and checking for (in priority order):
+All CLI options can also be set via a project configuration file. The CLI discovers the file by walking up from the **entry file's directory** and checking for (in priority order):
 
 1. `goccia.toml`
 2. `goccia.json5`
