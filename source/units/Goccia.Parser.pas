@@ -62,6 +62,7 @@ type
     FPrivateClassContexts: TObjectList<TGocciaPrivateClassContext>;
     FSkipPrivateNameValidation: Integer;
     FAutomaticSemicolonInsertion: Boolean;
+    FVarDeclarationsEnabled: Boolean;
 
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
     procedure PushPrivateClassContext;
@@ -88,6 +89,7 @@ type
     function ConsumeModuleExportName(const AMessage: string): TGocciaToken; overload;
     function ConsumeModuleExportName(const AMessage, ASuggestion: string): TGocciaToken; overload;
     function IsArrowFunction: Boolean;
+    function ExtractSourceRange(const AStartLine, AStartColumn: Integer): string;
     function ConvertNumberLiteral(const ALexeme: string): Double;
     function ConvertBigIntLiteral(const ALexeme: string): TGocciaValue;
     function ParseBinaryExpression(const ANextLevel: TParseFunction; const AOperators: array of TGocciaTokenType): TGocciaExpression;
@@ -191,6 +193,8 @@ type
     function GetWarning(const AIndex: Integer): TGocciaParserWarning; inline;
     property AutomaticSemicolonInsertion: Boolean
       read FAutomaticSemicolonInsertion write FAutomaticSemicolonInsertion;
+    property VarDeclarationsEnabled: Boolean
+      read FVarDeclarationsEnabled write FVarDeclarationsEnabled;
     property WarningCount: Integer read FWarningCount;
   end;
 
@@ -284,6 +288,48 @@ begin
   FWarnings[FWarningCount - 1].Suggestion := ASuggestion;
   FWarnings[FWarningCount - 1].Line := ALine;
   FWarnings[FWarningCount - 1].Column := AColumn;
+end;
+
+function TGocciaParser.ExtractSourceRange(const AStartLine, AStartColumn: Integer): string;
+var
+  EndLine, EndColumn, I: Integer;
+  SB: TStringBuffer;
+  SourceLine: string;
+begin
+  // End position is after the last consumed token (Previous).
+  // Use EndColumn directly from the token, which correctly handles multi-line
+  // tokens (templates, regex) where Previous.Line is the end line.
+  EndLine := Previous.Line;
+  EndColumn := Previous.EndColumn;
+
+  if (AStartLine < 1) or (AStartLine > FSourceLines.Count) then
+    Exit('');
+
+  if AStartLine = EndLine then
+  begin
+    SourceLine := FSourceLines[AStartLine - 1];
+    Result := Copy(SourceLine, AStartColumn, EndColumn - AStartColumn + 1);
+    Exit;
+  end;
+
+  SB := TStringBuffer.Create;
+  // First line from start column to end
+  SourceLine := FSourceLines[AStartLine - 1];
+  SB.Append(Copy(SourceLine, AStartColumn, Length(SourceLine) - AStartColumn + 1));
+  // Middle lines
+  for I := AStartLine to EndLine - 2 do
+  begin
+    SB.AppendChar(#10);
+    SB.Append(FSourceLines[I]);
+  end;
+  // Last line from start to end column
+  if EndLine >= 2 then
+  begin
+    SB.AppendChar(#10);
+    SourceLine := FSourceLines[EndLine - 1];
+    SB.Append(Copy(SourceLine, 1, EndColumn));
+  end;
+  Result := SB.ToString;
 end;
 
 procedure TGocciaParser.PushPrivateClassContext;
@@ -1234,7 +1280,8 @@ end;
 // Parse a template interpolation expression text into an AST expression node.
 // Note: Tokens are owned by the Lexer (FTokens with OwnsObjects=True) and freed
 // when the Lexer is destroyed — they must not be freed separately.
-function ParseInterpolationExpression(const AExprText, AFileName: string): TGocciaExpression;
+function ParseInterpolationExpression(const AExprText, AFileName: string;
+  const AASI: Boolean = False; const AVarEnabled: Boolean = False): TGocciaExpression;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -1253,6 +1300,8 @@ begin
     SourceLines.Text := AExprText;
     try
       Parser := TGocciaParser.Create(Tokens, AFileName, SourceLines);
+      Parser.AutomaticSemicolonInsertion := AASI;
+      Parser.VarDeclarationsEnabled := AVarEnabled;
       try
         ProgramNode := Parser.ParseUnchecked;
         try
@@ -1315,7 +1364,7 @@ begin
   Expressions := TObjectList<TGocciaExpression>.Create(True);
   for I := 0 to Length(ExprTexts) - 1 do
   begin
-    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName);
+    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName, FAutomaticSemicolonInsertion, FVarDeclarationsEnabled);
     if Assigned(ParsedExpr) then
       Expressions.Add(ParsedExpr);
   end;
@@ -1375,7 +1424,7 @@ begin
       AToken.Line, AToken.Column));
 
     // Parse and add the interpolation expression
-    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName);
+    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName, FAutomaticSemicolonInsertion, FVarDeclarationsEnabled);
     if Assigned(ParsedExpr) then
       Parts.Add(ParsedExpr);
   end;
@@ -1400,6 +1449,7 @@ var
   ArrowFn: TGocciaArrowFunctionExpression;
   ArrowBody: TGocciaASTNode;
   SeparatorPos: Integer;
+  Line, Column: Integer;
 begin
   if Match(gttTrue) then
   begin
@@ -1554,6 +1604,9 @@ begin
           Dec(FInAsyncFunction);
         end;
         TGocciaArrowFunctionExpression(Expr).IsAsync := True;
+        // Override source text to include `async` prefix
+        TGocciaArrowFunctionExpression(Expr).SourceText :=
+          ExtractSourceRange(Token.Line, Token.Column);
         Result := Expr;
       end
       else
@@ -1565,6 +1618,8 @@ begin
     // async single-param arrow: async x => body
     else if (Name = KEYWORD_ASYNC) and Check(gttIdentifier) and CheckNext(gttArrow) then
     begin
+      Line := Token.Line;
+      Column := Token.Column;
       Token := Advance; // consume param identifier
       Name := Token.Lexeme;
       Consume(gttArrow, 'Expected "=>" in async arrow function',
@@ -1591,8 +1646,9 @@ begin
       Parameters[0].IsOptional := False;
       Parameters[0].TypeAnnotation := '';
 
-      ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, Token.Line, Token.Column);
+      ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, Line, Column);
       ArrowFn.IsAsync := True;
+      ArrowFn.SourceText := ExtractSourceRange(Line, Column);
       Result := ArrowFn;
     end
     else
@@ -1698,6 +1754,7 @@ var
   IsGetter, IsSetter: Boolean;
   IsAsync: Boolean;
   ComputedCount, SourceOrderCount: Integer;
+  MemberStartLine, MemberStartColumn: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -1720,6 +1777,8 @@ begin
     IsGetter := False;
     IsSetter := False;
     IsAsync := False;
+    MemberStartLine := Peek.Line;
+    MemberStartColumn := Peek.Column;
 
     // Check for async method syntax
     if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttLeftParen) then
@@ -1798,6 +1857,7 @@ begin
     if IsGetter then
     begin
       Getters.Add(Key, ParseGetterExpression);
+      Getters[Key].SourceText := ExtractSourceRange(MemberStartLine, MemberStartColumn);
 
       // Track in source order
       Inc(SourceOrderCount);
@@ -1809,6 +1869,7 @@ begin
     else if IsSetter then
     begin
       Setters.Add(Key, ParseSetterExpression);
+      Setters[Key].SourceText := ExtractSourceRange(MemberStartLine, MemberStartColumn);
 
       // Track in source order
       Inc(SourceOrderCount);
@@ -1822,10 +1883,12 @@ begin
     begin
       if IsAsync then Inc(FInAsyncFunction);
       try
-        Value := ParseObjectMethodBody(Peek.Line, Peek.Column);
+        Value := ParseObjectMethodBody(MemberStartLine, MemberStartColumn);
       finally
         if IsAsync then Dec(FInAsyncFunction);
       end;
+      TGocciaMethodExpression(Value).SourceText := ExtractSourceRange(
+        MemberStartLine, MemberStartColumn);
       if IsAsync then
         TGocciaMethodExpression(Value).IsAsync := True;
     end
@@ -2135,6 +2198,7 @@ begin
 
   ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, Body, Line, Column);
   ArrowFn.ReturnType := FnReturnType;
+  ArrowFn.SourceText := ExtractSourceRange(Line, Column);
   Result := ArrowFn;
 end;
 
@@ -2172,6 +2236,7 @@ begin
       Dec(FFunctionDepth);
     end;
     ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, Line, Column);
+    ArrowFn.SourceText := ExtractSourceRange(Line, Column);
     Result := ArrowFn;
     Exit;
   end;
@@ -2760,17 +2825,76 @@ end;
 function TGocciaParser.VarStatement: TGocciaStatement;
 var
   Line, Column: Integer;
+  Name: string;
+  Initializer: TGocciaExpression;
+  Variables: TArray<TGocciaVariableInfo>;
+  VariableCount: Integer;
+  Pattern: TGocciaDestructuringPattern;
+  DestructuringType: string;
+  DestructuringDecl: TGocciaDestructuringDeclaration;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  AddWarning('''var'' declarations are not supported in GocciaScript',
-    'Use ''let'' or ''const'' instead',
-    Line, Column);
+  if not FVarDeclarationsEnabled then
+  begin
+    AddWarning('''var'' declarations are not supported in GocciaScript',
+      'Use ''let'' or ''const'' instead',
+      Line, Column);
+    SkipUntilSemicolon;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Exit;
+  end;
 
-  SkipUntilSemicolon;
+  VariableCount := 0;
 
-  Result := TGocciaEmptyStatement.Create(Line, Column);
+  // Check for destructuring pattern
+  if Check(gttLeftBracket) or Check(gttLeftBrace) then
+  begin
+    Pattern := ParsePattern;
+    DestructuringType := '';
+    if Check(gttColon) then
+    begin
+      Advance;
+      DestructuringType := CollectTypeAnnotation([gttAssign]);
+    end;
+    Consume(gttAssign, 'Destructuring declarations must have an initializer',
+      SSuggestDestructuringRequiresInitializer);
+    Initializer := Expression;
+    ConsumeSemicolonOrASI('Expected ";" after destructuring declaration',
+      SSuggestAddSemicolon);
+    DestructuringDecl := TGocciaDestructuringDeclaration.Create(Pattern, Initializer, False, Line, Column, True);
+    DestructuringDecl.TypeAnnotation := DestructuringType;
+    Result := DestructuringDecl;
+  end
+  else
+  begin
+    repeat
+      SetLength(Variables, VariableCount + 1);
+
+      Name := Consume(gttIdentifier, 'Expected variable name',
+        SSuggestProvideVariableName).Lexeme;
+      Variables[VariableCount].Name := Name;
+
+      if Check(gttColon) then
+      begin
+        Advance;
+        Variables[VariableCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
+      end;
+
+      if Match(gttAssign) then
+        Variables[VariableCount].Initializer := Expression
+      else
+        Variables[VariableCount].Initializer := TGocciaLiteralExpression.Create(
+          TGocciaUndefinedLiteralValue.UndefinedValue, Line, Column);
+
+      Inc(VariableCount);
+    until not Match(gttComma);
+
+    ConsumeSemicolonOrASI('Expected ";" after variable declaration',
+      SSuggestAddSemicolon);
+    Result := TGocciaVariableDeclaration.Create(Variables, False, Line, Column, True);
+  end;
 end;
 
 // ES2026 §14.7.5 ForIn/OfStatement
@@ -2779,6 +2903,7 @@ var
   Line, Column: Integer;
   IsAwait: Boolean;
   IsConst: Boolean;
+  IsVar: Boolean;
   BindingName: string;
   BindingPattern: TGocciaDestructuringPattern;
   IterableExpr: TGocciaExpression;
@@ -2791,6 +2916,7 @@ begin
   // Try to parse for...of / for-await-of
   SavedCurrent := FCurrent;
   IsAwait := False;
+  IsVar := False;
   BindingPattern := nil;
 
   // for-await-of: 'await' appears between 'for' and '(' (async or top-level)
@@ -2804,11 +2930,12 @@ begin
   begin
     Advance; // consume '('
 
-    // Check for const/let binding
-    if Check(gttConst) or Check(gttLet) then
+    // Check for const/let/var binding
+    if Check(gttConst) or Check(gttLet) or (FVarDeclarationsEnabled and Check(gttVar)) then
     begin
       IsConst := Check(gttConst);
-      Advance; // consume const/let
+      IsVar := FVarDeclarationsEnabled and Check(gttVar);
+      Advance; // consume const/let/var
 
       // Check if this is a for...of: need binding + 'of'
       if Check(gttLeftBracket) or Check(gttLeftBrace) then
@@ -2850,9 +2977,15 @@ begin
           BodyStmt := Statement;
 
         if IsAwait then
-          Result := TGocciaForAwaitOfStatement.Create(IsConst, BindingName, BindingPattern, IterableExpr, BodyStmt, Line, Column)
+        begin
+          Result := TGocciaForAwaitOfStatement.Create(IsConst, BindingName, BindingPattern, IterableExpr, BodyStmt, Line, Column);
+          TGocciaForAwaitOfStatement(Result).IsVar := IsVar;
+        end
         else
+        begin
           Result := TGocciaForOfStatement.Create(IsConst, BindingName, BindingPattern, IterableExpr, BodyStmt, Line, Column);
+          TGocciaForOfStatement(Result).IsVar := IsVar;
+        end;
         Exit;
       end;
     end;
@@ -3108,6 +3241,7 @@ begin
       Result := TGocciaClassMethod.Create(Name, Parameters, Body, AIsStatic, Line, Column);
       Result.GenericParams := MethodGenericParams;
       Result.ReturnType := MethodReturnType;
+      Result.SourceText := ExtractSourceRange(Line, Column);
     except
       Statements.Free;
       raise;
@@ -3579,6 +3713,7 @@ var
   FieldOrder: array of TGocciaFieldOrderEntry;
   IsAccessor: Boolean;
   IsAsync: Boolean;
+  MemberStartLine, MemberStartColumn: Integer;
   TypePair: TStringStringMap.TKeyValuePair;
 begin
   SetLength(Elements, 0);
@@ -3626,6 +3761,8 @@ begin
     begin
       MemberDecorators := ParseDecorators;
       IsAccessor := False;
+      MemberStartLine := Peek.Line;
+      MemberStartColumn := Peek.Column;
 
       IsStatic := Match(gttStatic);
 
@@ -3873,6 +4010,7 @@ begin
       else if IsGetter then
       begin
         Getter := ParseGetterExpression;
+        Getter.SourceText := ExtractSourceRange(MemberStartLine, MemberStartColumn);
 
         if (Length(MemberDecorators) > 0) or IsComputed then
         begin
@@ -3914,6 +4052,7 @@ begin
       else if IsSetter then
       begin
         Setter := ParseSetterExpression;
+        Setter.SourceText := ExtractSourceRange(MemberStartLine, MemberStartColumn);
 
         if (Length(MemberDecorators) > 0) or IsComputed then
         begin
@@ -3962,6 +4101,7 @@ begin
         end;
         Method.Name := MemberName;
         Method.IsAsync := IsAsync;
+        Method.SourceText := ExtractSourceRange(MemberStartLine, MemberStartColumn);
 
         if (Length(MemberDecorators) > 0) or IsComputed then
         begin

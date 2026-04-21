@@ -68,6 +68,9 @@ function ExpressionType(const AScope: TGocciaCompilerScope;
   const AExpr: TGocciaExpression): TGocciaLocalType;
 function CharToLocalType(const ACh: Char): TGocciaLocalType;
 
+procedure CollectDestructuringVarBindings(const APattern: TGocciaDestructuringPattern;
+  const AScope: TGocciaCompilerScope);
+
 function SavePendingFinally: TObject;
 procedure RestorePendingFinally(const ASaved: TObject);
 
@@ -468,12 +471,24 @@ var
   Slot: UInt8;
   InferredTemplate: TGocciaFunctionTemplate;
   TypeHint, AnnotationType: TGocciaLocalType;
-  IsStrict, HasRealInitializer, IsTopLevelGlobalBacked: Boolean;
+  IsStrict, HasRealInitializer, IsTopLevelGlobalBacked, IsVarRedeclaration: Boolean;
 begin
   for I := 0 to High(AStmt.Variables) do
   begin
     Info := AStmt.Variables[I];
-    Slot := ACtx.Scope.DeclareLocal(Info.Name, AStmt.IsConst);
+    if AStmt.IsVar then
+    begin
+      // Track whether this is a redeclaration (slot already exists)
+      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      IsVarRedeclaration := LocalIdx >= 0;
+      Slot := ACtx.Scope.DeclareVarLocal(Info.Name);
+    end
+    else
+    begin
+      LocalIdx := -1;
+      IsVarRedeclaration := False;
+      Slot := ACtx.Scope.DeclareLocal(Info.Name, AStmt.IsConst);
+    end;
 
     IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
       (ACtx.Scope.Depth = 0);
@@ -539,7 +554,8 @@ begin
       end;
     end;
 
-    if Assigned(Info.Initializer) then
+    if Assigned(Info.Initializer) and
+       not (AStmt.IsVar and (not HasRealInitializer) and IsVarRedeclaration) then
     begin
       FuncCount := ACtx.Template.FunctionCount;
       ACtx.CompileExpression(Info.Initializer, Slot);
@@ -562,7 +578,8 @@ begin
         end;
       end;
     end
-    else
+    else if not (AStmt.IsVar and IsVarRedeclaration) then
+      // Only emit OP_LOAD_UNDEFINED if not a var redeclaration (preserve prior value)
       EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, Slot, 0, 0));
 
     if IsTopLevelGlobalBacked then
@@ -1522,6 +1539,7 @@ begin
     '<method ' + AMethodName + '>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AMethod.IsAsync;
+  ChildTemplate.SourceText := AMethod.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -1604,6 +1622,7 @@ begin
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<get ' + AName + '>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.SourceText := AGetter.SourceText;
   ChildTemplate.ParameterCount := 0;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -1653,6 +1672,7 @@ begin
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<set ' + AName + '>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.SourceText := ASetter.SourceText;
   ChildTemplate.ParameterCount := 1;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -1817,6 +1837,7 @@ begin
   ChildTemplate := TGocciaFunctionTemplate.Create('<method [computed]>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AMethod.IsAsync;
+  ChildTemplate.SourceText := AMethod.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -2723,6 +2744,81 @@ begin
   ACtx.Scope.PrivatePrefix := '';
 end;
 
+procedure CollectDestructuringVarBindings(const APattern: TGocciaDestructuringPattern;
+  const AScope: TGocciaCompilerScope);
+var
+  ObjPat: TGocciaObjectDestructuringPattern;
+  ArrPat: TGocciaArrayDestructuringPattern;
+  AssignPat: TGocciaAssignmentDestructuringPattern;
+  I: Integer;
+begin
+  if APattern is TGocciaIdentifierDestructuringPattern then
+    AScope.DeclareVarLocal(TGocciaIdentifierDestructuringPattern(APattern).Name)
+  else if APattern is TGocciaObjectDestructuringPattern then
+  begin
+    ObjPat := TGocciaObjectDestructuringPattern(APattern);
+    for I := 0 to ObjPat.Properties.Count - 1 do
+      CollectDestructuringVarBindings(ObjPat.Properties[I].Pattern, AScope);
+  end
+  else if APattern is TGocciaArrayDestructuringPattern then
+  begin
+    ArrPat := TGocciaArrayDestructuringPattern(APattern);
+    for I := 0 to ArrPat.Elements.Count - 1 do
+      if Assigned(ArrPat.Elements[I]) then
+        CollectDestructuringVarBindings(ArrPat.Elements[I], AScope);
+  end
+  else if APattern is TGocciaAssignmentDestructuringPattern then
+  begin
+    AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
+    CollectDestructuringVarBindings(AssignPat.Left, AScope);
+  end
+  else if APattern is TGocciaRestDestructuringPattern then
+    CollectDestructuringVarBindings(
+      TGocciaRestDestructuringPattern(APattern).Argument, AScope);
+end;
+
+procedure EmitGlobalDefinesForPattern(const ACtx: TGocciaCompilationContext;
+  const APattern: TGocciaDestructuringPattern; const AIsConst: Boolean);
+var
+  ObjPat: TGocciaObjectDestructuringPattern;
+  ArrPat: TGocciaArrayDestructuringPattern;
+  AssignPat: TGocciaAssignmentDestructuringPattern;
+  LocalIdx: Integer;
+  I: Integer;
+begin
+  if APattern is TGocciaIdentifierDestructuringPattern then
+  begin
+    LocalIdx := ACtx.Scope.ResolveLocal(TGocciaIdentifierDestructuringPattern(APattern).Name);
+    if LocalIdx >= 0 then
+    begin
+      ACtx.Scope.MarkGlobalBacked(LocalIdx);
+      EmitGlobalDefine(ACtx, ACtx.Scope.GetLocal(LocalIdx).Slot,
+        ACtx.Scope.GetLocal(LocalIdx).Name, AIsConst);
+    end;
+  end
+  else if APattern is TGocciaObjectDestructuringPattern then
+  begin
+    ObjPat := TGocciaObjectDestructuringPattern(APattern);
+    for I := 0 to ObjPat.Properties.Count - 1 do
+      EmitGlobalDefinesForPattern(ACtx, ObjPat.Properties[I].Pattern, AIsConst);
+  end
+  else if APattern is TGocciaArrayDestructuringPattern then
+  begin
+    ArrPat := TGocciaArrayDestructuringPattern(APattern);
+    for I := 0 to ArrPat.Elements.Count - 1 do
+      if Assigned(ArrPat.Elements[I]) then
+        EmitGlobalDefinesForPattern(ACtx, ArrPat.Elements[I], AIsConst);
+  end
+  else if APattern is TGocciaAssignmentDestructuringPattern then
+  begin
+    AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
+    EmitGlobalDefinesForPattern(ACtx, AssignPat.Left, AIsConst);
+  end
+  else if APattern is TGocciaRestDestructuringPattern then
+    EmitGlobalDefinesForPattern(ACtx,
+      TGocciaRestDestructuringPattern(APattern).Argument, AIsConst);
+end;
+
 procedure CompileDestructuringDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaDestructuringDeclaration);
 var
@@ -2735,9 +2831,12 @@ begin
     (ACtx.Scope.Depth = 0);
   LocalCountBefore := ACtx.Scope.LocalCount;
 
-  CollectDestructuringBindings(AStmt.Pattern, ACtx.Scope, AStmt.IsConst);
+  if AStmt.IsVar then
+    CollectDestructuringVarBindings(AStmt.Pattern, ACtx.Scope)
+  else
+    CollectDestructuringBindings(AStmt.Pattern, ACtx.Scope, AStmt.IsConst);
 
-  if IsTopLevelGlobalBacked then
+  if IsTopLevelGlobalBacked and (not AStmt.IsVar) then
     for I := LocalCountBefore to ACtx.Scope.LocalCount - 1 do
       ACtx.Scope.MarkGlobalBacked(I);
 
@@ -2747,11 +2846,16 @@ begin
   ACtx.Scope.FreeRegister;
 
   if IsTopLevelGlobalBacked then
-    for I := LocalCountBefore to ACtx.Scope.LocalCount - 1 do
-    begin
-      Local := ACtx.Scope.GetLocal(I);
-      EmitGlobalDefine(ACtx, Local.Slot, Local.Name, AStmt.IsConst);
-    end;
+  begin
+    if AStmt.IsVar then
+      EmitGlobalDefinesForPattern(ACtx, AStmt.Pattern, False)
+    else
+      for I := LocalCountBefore to ACtx.Scope.LocalCount - 1 do
+      begin
+        Local := ACtx.Scope.GetLocal(I);
+        EmitGlobalDefine(ACtx, Local.Slot, Local.Name, AStmt.IsConst);
+      end;
+  end;
 end;
 
 procedure CompileEnumDeclaration(const ACtx: TGocciaCompilationContext;

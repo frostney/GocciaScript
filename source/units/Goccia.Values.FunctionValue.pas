@@ -26,10 +26,12 @@ type
     FClosure: TGocciaScope;
     FSourceFilePath: string;
     FSourceLine: Integer;
+    FSourceText: string;
     FIsExpressionBody: Boolean;
     FIsSimpleParams: Boolean;
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
+    function GetSourceText: string; override;
     procedure BindThis(const ACallScope: TGocciaScope; const AThisValue: TGocciaValue); virtual;
     function CreateCallScope: TGocciaScope; virtual;
     function ExecuteBody(const ACallScope: TGocciaScope; const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -47,6 +49,7 @@ type
     property IsExpressionBody: Boolean read FIsExpressionBody write FIsExpressionBody;
     property SourceFilePath: string read FSourceFilePath write FSourceFilePath;
     property SourceLine: Integer read FSourceLine write FSourceLine;
+    property SourceText: string read FSourceText write FSourceText;
   end;
 
   TGocciaArrowFunctionValue = class(TGocciaFunctionValue)
@@ -218,6 +221,9 @@ begin
   if Assigned(Context.OnError) and not Assigned(ACallScope.OnError) then
     ACallScope.OnError := Context.OnError;
 
+  // Hoist var declarations to function scope
+  HoistVarDeclarations(FBodyStatements, ACallScope);
+
   // Expression-body fast path: expression bodies cannot contain return/break
   if FIsExpressionBody and (FBodyStatements.Count = 1) then
   begin
@@ -291,6 +297,11 @@ end;
 function TGocciaFunctionValue.GetFunctionName: string;
 begin
   Result := FName;
+end;
+
+function TGocciaFunctionValue.GetSourceText: string;
+begin
+  Result := FSourceText;
 end;
 
 { TGocciaArrowFunctionValue }

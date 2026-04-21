@@ -1047,6 +1047,9 @@ var
   CompareArgs: TGocciaArgumentsCollection;
   CompareResult: TGocciaValue;
   IsFloat: Boolean;
+  ZeroJ: Double;
+  ZeroJBits: Int64 absolute ZeroJ;
+  TmpZeroBits: Int64 absolute Tmp;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.sort');
   HasCompare := (AArgs.Length > 0) and AArgs.GetElement(0).IsCallable;
@@ -1164,6 +1167,17 @@ begin
           CompResult := 1
         else if TA.ReadElement(J) < Tmp then
           CompResult := -1
+        else if IsFloat and (Tmp = 0) then
+        begin
+          // Distinguish -0 from +0: spec requires -0 < +0
+          ZeroJ := TA.ReadElement(J);
+          if (ZeroJBits >= 0) and (TmpZeroBits < 0) then
+            CompResult := 1  // J is +0, Tmp is -0: +0 > -0
+          else if (ZeroJBits < 0) and (TmpZeroBits >= 0) then
+            CompResult := -1  // J is -0, Tmp is +0: -0 < +0
+          else
+            CompResult := 0;
+        end
         else
           CompResult := 0;
       end;

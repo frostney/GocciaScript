@@ -487,6 +487,7 @@ begin
 
   FunctionConstructor := TGocciaClassValue.Create('Function', nil);
   TGocciaFunctionBase.SetSharedPrototypeParent(FunctionConstructor.Prototype);
+  FunctionConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, FunctionConstructor);
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);
 
   PerformanceConstructor := TGocciaPerformance.CreateInterfaceObject;

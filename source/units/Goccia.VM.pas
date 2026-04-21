@@ -1193,6 +1193,7 @@ type
   protected
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
+    function GetSourceText: string; override;
   public
     constructor Create(const AVM: TGocciaVM; const AClosure: TGocciaBytecodeClosure);
     destructor Destroy; override;
@@ -1351,6 +1352,11 @@ end;
 function TGocciaBytecodeFunctionValue.GetFunctionName: string;
 begin
   Result := FClosure.Template.Name;
+end;
+
+function TGocciaBytecodeFunctionValue.GetSourceText: string;
+begin
+  Result := FClosure.Template.SourceText;
 end;
 
 function TGocciaVMSuperConstructorValue.GetFunctionName: string;
@@ -5646,7 +5652,7 @@ begin
         if Assigned(FGlobalScope) then
         begin
           if FGlobalScope.Contains(GlobalName) then
-            FGlobalScope.AssignLexicalBinding(GlobalName, RegisterToValue(FRegisters[A]))
+            FGlobalScope.AssignBinding(GlobalName, RegisterToValue(FRegisters[A]))
           else
             ThrowReferenceError(GlobalName + ' is not defined');
         end;

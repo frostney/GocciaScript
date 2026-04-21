@@ -23,6 +23,7 @@ type
     function FunctionCall(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FunctionApply(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FunctionBind(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function FunctionToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
   // Base class for all callable functions
@@ -31,9 +32,11 @@ type
     // Subclasses should override these to provide name/length
     function GetFunctionLength: Integer; virtual;
     function GetFunctionName: string; virtual;
+    function GetSourceText: string; virtual;
   public
     constructor Create;
     class procedure SetSharedPrototypeParent(const AParent: TGocciaObjectValue);
+    class function GetSharedPrototype: TGocciaFunctionSharedPrototype; static;
 
     // Override GetProperty to provide call, apply, bind methods and length/name
     function GetProperty(const AName: string): TGocciaValue; override;
@@ -159,6 +162,11 @@ begin
   Result := '';
 end;
 
+function TGocciaFunctionBase.GetSourceText: string;
+begin
+  Result := '';
+end;
+
 function TGocciaFunctionBase.HasOwnProperty(const AName: string): Boolean;
 begin
   if (AName = PROP_LENGTH) or (AName = PROP_NAME) then
@@ -275,9 +283,14 @@ begin
   FSharedPrototype.Prototype := AParent;
 end;
 
+class function TGocciaFunctionBase.GetSharedPrototype: TGocciaFunctionSharedPrototype;
+begin
+  Result := FSharedPrototype;
+end;
+
 constructor TGocciaFunctionSharedPrototype.Create;
 var
-  Members: array[0..2] of TGocciaMemberDefinition;
+  Members: array[0..3] of TGocciaMemberDefinition;
 begin
   inherited Create;
 
@@ -288,6 +301,7 @@ begin
     Members[0] := DefineNamedMethod('call', FunctionCall, 1);
     Members[1] := DefineNamedMethod('apply', FunctionApply, 2);
     Members[2] := DefineNamedMethod('bind', FunctionBind, 1);
+    Members[3] := DefineNamedMethod(PROP_TO_STRING, FunctionToString, 0);
     RegisterMemberDefinitions(Self, Members);
   except
     if FSharedPrototype = Self then
@@ -431,6 +445,34 @@ begin
     if Assigned(BoundArgs) then
       BoundArgs.Free;
   end;
+end;
+
+// ES2026 §20.2.3.5 Function.prototype.toString()
+function TGocciaFunctionSharedPrototype.FunctionToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  FuncName, SrcText: string;
+begin
+  if not AThisValue.IsCallable then
+    ThrowTypeError('Function.prototype.toString requires that ''this'' be a Function');
+
+  // User-defined functions: return preserved source text
+  if AThisValue is TGocciaFunctionBase then
+  begin
+    SrcText := TGocciaFunctionBase(AThisValue).GetSourceText;
+    if SrcText <> '' then
+    begin
+      Result := TGocciaStringLiteralValue.Create(SrcText);
+      Exit;
+    end;
+  end;
+
+  // Built-in functions and bound functions: NativeFunction string
+  if AThisValue is TGocciaFunctionBase then
+    FuncName := TGocciaFunctionBase(AThisValue).GetFunctionName
+  else
+    FuncName := '';
+
+  Result := TGocciaStringLiteralValue.Create('function ' + FuncName + '() { [native code] }');
 end;
 
 { TGocciaBoundFunctionValue }

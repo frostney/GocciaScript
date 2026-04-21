@@ -936,6 +936,7 @@ begin
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AExpr.IsAsync;
   ChildTemplate.IsArrow := True;
+  ChildTemplate.SourceText := AExpr.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
   ChildScope.DeclareLocal('__receiver', False);
@@ -1404,6 +1405,7 @@ begin
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<get ' + AKey + '>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.SourceText := AGetter.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildTemplate.ParameterCount := 0;
@@ -1453,6 +1455,7 @@ begin
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<set ' + AKey + '>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.SourceText := ASetter.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildScope.DeclareLocal(ASetter.Parameter, False);
@@ -1845,6 +1848,7 @@ begin
   ChildTemplate := TGocciaFunctionTemplate.Create('<method>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AExpr.IsAsync;
+  ChildTemplate.SourceText := AExpr.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
   ChildScope.DeclareLocal(KEYWORD_THIS, False);

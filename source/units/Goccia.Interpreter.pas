@@ -32,6 +32,7 @@ type
     FSourceLines: TStringList;
     FASIEnabled: Boolean;
     FJSXEnabled: Boolean;
+    FVarEnabled: Boolean;
     FModuleLoader: TGocciaModuleLoader;
     FOwnsModuleLoader: Boolean;
 
@@ -43,6 +44,7 @@ type
     function GetResolver: TGocciaModuleResolver;
     procedure SetASIEnabled(const AValue: Boolean);
     procedure SetJSXEnabled(const AValue: Boolean);
+    procedure SetVarEnabled(const AValue: Boolean);
     procedure SetResolver(const AValue: TGocciaModuleResolver);
   public
     function CreateEvaluationContext: TGocciaEvaluationContext;
@@ -54,6 +56,7 @@ type
     function LoadModule(const AModulePath, AImportingFilePath: string): TGocciaModule;
 
     property ASIEnabled: Boolean read FASIEnabled write SetASIEnabled;
+    property VarEnabled: Boolean read FVarEnabled write SetVarEnabled;
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
     property JSXEnabled: Boolean read FJSXEnabled write SetJSXEnabled;
     property ContentProvider: TGocciaModuleContentProvider read GetContentProvider;
@@ -132,6 +135,9 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   Context := CreateEvaluationContext;
 
+  if FVarEnabled then
+    HoistVarDeclarations(AProgram.Body, FGlobalScope);
+
   for I := 0 to AProgram.Body.Count - 1 do
   begin
     CF := EvaluateStatement(AProgram.Body[I], Context);
@@ -172,6 +178,12 @@ begin
   FModuleLoader.JSXEnabled := AValue;
 end;
 
+procedure TGocciaInterpreter.SetVarEnabled(const AValue: Boolean);
+begin
+  FVarEnabled := AValue;
+  FModuleLoader.VarEnabled := AValue;
+end;
+
 procedure TGocciaInterpreter.SetResolver(const AValue: TGocciaModuleResolver);
 begin
   if Assigned(AValue) and (AValue <> FModuleLoader.Resolver) then
@@ -185,6 +197,8 @@ procedure TGocciaInterpreter.EvaluateModuleBody(
 var
   I: Integer;
 begin
+  if FVarEnabled then
+    HoistVarDeclarations(AProgram.Body, AContext.Scope);
   for I := 0 to AProgram.Body.Count - 1 do
     EvaluateStatement(AProgram.Body[I], AContext);
 end;

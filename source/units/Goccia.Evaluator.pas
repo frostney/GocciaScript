@@ -79,6 +79,11 @@ function InstantiateClass(const AClassValue: TGocciaClassValue; const AArguments
 
 function IsObjectInstanceOfClass(const AObj: TGocciaObjectValue; const AClassValue: TGocciaClassValue): Boolean;
 
+procedure AssignVariablePattern(const APattern: TGocciaDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext);
+
+procedure HoistVarDeclarations(const AStatements: TObjectList<TGocciaStatement>; const AScope: TGocciaScope); overload;
+procedure HoistVarDeclarations(const ANodes: TObjectList<TGocciaASTNode>; const AScope: TGocciaScope); overload;
+
 implementation
 
 uses
@@ -141,6 +146,150 @@ begin
   Result := TObjectList<TGocciaASTNode>.Create(False);
   for I := 0 to ASource.Count - 1 do
     Result.Add(ASource[I]);
+end;
+
+// Var hoisting: scan statements recursively for var declarations and pre-define
+// their names as undefined in the target scope (function/module scope).
+procedure CollectVarNamesFromNode(const ANode: TGocciaASTNode; const ANames: TStringList); forward;
+
+procedure CollectPatternNames(const APattern: TGocciaDestructuringPattern; const ANames: TStringList);
+var
+  ObjPat: TGocciaObjectDestructuringPattern;
+  ArrPat: TGocciaArrayDestructuringPattern;
+  I: Integer;
+begin
+  if APattern is TGocciaIdentifierDestructuringPattern then
+  begin
+    if ANames.IndexOf(TGocciaIdentifierDestructuringPattern(APattern).Name) = -1 then
+      ANames.Add(TGocciaIdentifierDestructuringPattern(APattern).Name);
+  end
+  else if APattern is TGocciaObjectDestructuringPattern then
+  begin
+    ObjPat := TGocciaObjectDestructuringPattern(APattern);
+    for I := 0 to ObjPat.Properties.Count - 1 do
+      CollectPatternNames(ObjPat.Properties[I].Pattern, ANames);
+  end
+  else if APattern is TGocciaArrayDestructuringPattern then
+  begin
+    ArrPat := TGocciaArrayDestructuringPattern(APattern);
+    for I := 0 to ArrPat.Elements.Count - 1 do
+      if Assigned(ArrPat.Elements[I]) then
+        CollectPatternNames(ArrPat.Elements[I], ANames);
+  end
+  else if APattern is TGocciaAssignmentDestructuringPattern then
+    CollectPatternNames(TGocciaAssignmentDestructuringPattern(APattern).Left, ANames)
+  else if APattern is TGocciaRestDestructuringPattern then
+    CollectPatternNames(TGocciaRestDestructuringPattern(APattern).Argument, ANames);
+end;
+
+procedure CollectVarNames(const AStatements: TObjectList<TGocciaStatement>; const ANames: TStringList);
+var
+  I: Integer;
+begin
+  for I := 0 to AStatements.Count - 1 do
+    CollectVarNamesFromNode(AStatements[I], ANames);
+end;
+
+procedure CollectVarNamesFromNode(const ANode: TGocciaASTNode; const ANames: TStringList);
+var
+  Block: TGocciaBlockStatement;
+  IfStmt: TGocciaIfStatement;
+  ForOf: TGocciaForOfStatement;
+  TryStmt: TGocciaTryStatement;
+  SwitchStmt: TGocciaSwitchStatement;
+  DestructDecl: TGocciaDestructuringDeclaration;
+  I, J: Integer;
+begin
+  if ANode is TGocciaVariableDeclaration then
+  begin
+    if TGocciaVariableDeclaration(ANode).IsVar then
+      for I := 0 to Length(TGocciaVariableDeclaration(ANode).Variables) - 1 do
+        if ANames.IndexOf(TGocciaVariableDeclaration(ANode).Variables[I].Name) = -1 then
+          ANames.Add(TGocciaVariableDeclaration(ANode).Variables[I].Name);
+  end
+  else if ANode is TGocciaDestructuringDeclaration then
+  begin
+    DestructDecl := TGocciaDestructuringDeclaration(ANode);
+    if DestructDecl.IsVar then
+      CollectPatternNames(DestructDecl.Pattern, ANames);
+  end
+  else if ANode is TGocciaBlockStatement then
+  begin
+    Block := TGocciaBlockStatement(ANode);
+    for I := 0 to Block.Nodes.Count - 1 do
+      CollectVarNamesFromNode(Block.Nodes[I], ANames);
+  end
+  else if ANode is TGocciaIfStatement then
+  begin
+    IfStmt := TGocciaIfStatement(ANode);
+    CollectVarNamesFromNode(IfStmt.Consequent, ANames);
+    if Assigned(IfStmt.Alternate) then
+      CollectVarNamesFromNode(IfStmt.Alternate, ANames);
+  end
+  else if ANode is TGocciaForOfStatement then
+  begin
+    // Also covers TGocciaForAwaitOfStatement (subclass)
+    ForOf := TGocciaForOfStatement(ANode);
+    if ForOf.IsVar then
+    begin
+      if Assigned(ForOf.BindingPattern) then
+        CollectPatternNames(ForOf.BindingPattern, ANames)
+      else if (ForOf.BindingName <> '') and (ANames.IndexOf(ForOf.BindingName) = -1) then
+        ANames.Add(ForOf.BindingName);
+    end;
+    CollectVarNamesFromNode(ForOf.Body, ANames);
+  end
+  else if ANode is TGocciaTryStatement then
+  begin
+    TryStmt := TGocciaTryStatement(ANode);
+    if Assigned(TryStmt.Block) then
+      CollectVarNamesFromNode(TryStmt.Block, ANames);
+    if Assigned(TryStmt.CatchBlock) then
+      CollectVarNamesFromNode(TryStmt.CatchBlock, ANames);
+    if Assigned(TryStmt.FinallyBlock) then
+      CollectVarNamesFromNode(TryStmt.FinallyBlock, ANames);
+  end
+  else if ANode is TGocciaSwitchStatement then
+  begin
+    SwitchStmt := TGocciaSwitchStatement(ANode);
+    for I := 0 to SwitchStmt.Cases.Count - 1 do
+      for J := 0 to SwitchStmt.Cases[I].Consequent.Count - 1 do
+        CollectVarNamesFromNode(SwitchStmt.Cases[I].Consequent[J], ANames);
+  end;
+  // Do NOT recurse into function expressions — they create their own scope
+end;
+
+procedure HoistVarDeclarations(const AStatements: TObjectList<TGocciaStatement>; const AScope: TGocciaScope);
+var
+  Names: TStringList;
+  I: Integer;
+begin
+  Names := TStringList.Create;
+  Names.CaseSensitive := True;
+  try
+    CollectVarNames(AStatements, Names);
+    for I := 0 to Names.Count - 1 do
+      AScope.DefineVariableBinding(Names[I], TGocciaUndefinedLiteralValue.UndefinedValue, False);
+  finally
+    Names.Free;
+  end;
+end;
+
+procedure HoistVarDeclarations(const ANodes: TObjectList<TGocciaASTNode>; const AScope: TGocciaScope);
+var
+  Names: TStringList;
+  I: Integer;
+begin
+  Names := TStringList.Create;
+  Names.CaseSensitive := True;
+  try
+    for I := 0 to ANodes.Count - 1 do
+      CollectVarNamesFromNode(ANodes[I], Names);
+    for I := 0 to Names.Count - 1 do
+      AScope.DefineVariableBinding(Names[I], TGocciaUndefinedLiteralValue.UndefinedValue, False);
+  finally
+    Names.Free;
+  end;
 end;
 
 function EvaluateStatements(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -1031,6 +1180,7 @@ begin
   Result := TGocciaFunctionValue.Create(EmptyParameters, Statements, AContext.Scope.CreateChild);
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AGetterExpression.Line;
+  TGocciaFunctionValue(Result).SourceText := AGetterExpression.SourceText;
 end;
 
 function EvaluateSetter(const ASetterExpression: TGocciaSetterExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -1049,6 +1199,7 @@ begin
   Result := TGocciaFunctionValue.Create(Parameters, Statements, AContext.Scope.CreateChild);
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := ASetterExpression.Line;
+  TGocciaFunctionValue(Result).SourceText := ASetterExpression.SourceText;
 end;
 
 // ES2026 §27.7.5.3 Await(value)
@@ -1196,7 +1347,15 @@ begin
       IterContext := AContext;
       IterContext.Scope := IterScope;
 
-      if AForOfStatement.BindingPattern <> nil then
+      if AForOfStatement.IsVar then
+      begin
+        // var binding: define/update on function/module scope
+        if AForOfStatement.BindingPattern <> nil then
+          AssignVariablePattern(AForOfStatement.BindingPattern, CurrentValue, AContext)
+        else
+          AContext.Scope.DefineVariableBinding(AForOfStatement.BindingName, CurrentValue, True);
+      end
+      else if AForOfStatement.BindingPattern <> nil then
         AssignPattern(AForOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
       else
         IterScope.DefineLexicalBinding(AForOfStatement.BindingName, CurrentValue, DeclarationType);
@@ -1281,7 +1440,14 @@ begin
           IterContext := AContext;
           IterContext.Scope := IterScope;
 
-          if AForAwaitOfStatement.BindingPattern <> nil then
+          if AForAwaitOfStatement.IsVar then
+          begin
+            if AForAwaitOfStatement.BindingPattern <> nil then
+              AssignVariablePattern(AForAwaitOfStatement.BindingPattern, CurrentValue, AContext)
+            else
+              AContext.Scope.DefineVariableBinding(AForAwaitOfStatement.BindingName, CurrentValue, True);
+          end
+          else if AForAwaitOfStatement.BindingPattern <> nil then
             AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
           else
             IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
@@ -1322,7 +1488,14 @@ begin
         IterContext := AContext;
         IterContext.Scope := IterScope;
 
-        if AForAwaitOfStatement.BindingPattern <> nil then
+        if AForAwaitOfStatement.IsVar then
+        begin
+          if AForAwaitOfStatement.BindingPattern <> nil then
+            AssignVariablePattern(AForAwaitOfStatement.BindingPattern, CurrentValue, AContext)
+          else
+            AContext.Scope.DefineVariableBinding(AForAwaitOfStatement.BindingName, CurrentValue, True);
+        end
+        else if AForAwaitOfStatement.BindingPattern <> nil then
           AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
         else
           IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
@@ -1360,6 +1533,7 @@ begin
   TGocciaFunctionValue(Result).IsExpressionBody := not (AArrowFunctionExpression.Body is TGocciaBlockStatement);
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AArrowFunctionExpression.Line;
+  TGocciaFunctionValue(Result).SourceText := AArrowFunctionExpression.SourceText;
 end;
 
 function EvaluateMethodExpression(const AMethodExpression: TGocciaMethodExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -1380,6 +1554,7 @@ begin
     Result := TGocciaFunctionValue.Create(AMethodExpression.Parameters, Statements, AContext.Scope.CreateChild);
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AMethodExpression.Line;
+  TGocciaFunctionValue(Result).SourceText := AMethodExpression.SourceText;
 end;
 
 // TC39 Explicit Resource Management §3.6 DisposeResources — sync disposal
@@ -1804,6 +1979,7 @@ begin
     Result := TGocciaMethodValue.Create(AClassMethod.Parameters, Statements, AContext.Scope.CreateChild, AClassMethod.Name, ASuperClass);
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AClassMethod.Line;
+  TGocciaFunctionValue(Result).SourceText := AClassMethod.SourceText;
 end;
 
 function EvaluateClass(const AClassDeclaration: TGocciaClassDeclaration; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -3717,12 +3893,172 @@ begin
   Value := EvaluateExpression(ADestructuringDeclaration.Initializer, AContext);
 
   // Apply the destructuring pattern to declare variables
-  if ADestructuringDeclaration.IsConst then
+  if ADestructuringDeclaration.IsVar then
+    AssignVariablePattern(ADestructuringDeclaration.Pattern, Value, AContext)
+  else if ADestructuringDeclaration.IsConst then
     AssignPattern(ADestructuringDeclaration.Pattern, Value, AContext, True, dtConst)
   else
     AssignPattern(ADestructuringDeclaration.Pattern, Value, AContext, True, dtLet);
 
   Result := Value;
+end;
+
+// AssignVariablePattern: walk a destructuring pattern and call DefineVariableBinding
+// for each leaf identifier. Uses the same value-extraction logic as AssignPattern
+// but targets the var binding map on the function/module scope.
+procedure AssignVariablePattern(const APattern: TGocciaDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext);
+var
+  ObjPat: TGocciaObjectDestructuringPattern;
+  ArrPat: TGocciaArrayDestructuringPattern;
+  AssignPat: TGocciaAssignmentDestructuringPattern;
+  RestPat: TGocciaRestDestructuringPattern;
+  ArrayValue: TGocciaArrayValue;
+  Iterator: TGocciaIteratorValue;
+  IterResult: TGocciaObjectValue;
+  PropValue, ElementValue, DefaultValue: TGocciaValue;
+  RestElements: TGocciaArrayValue;
+  I, J: Integer;
+begin
+  if APattern is TGocciaIdentifierDestructuringPattern then
+    AContext.Scope.DefineVariableBinding(
+      TGocciaIdentifierDestructuringPattern(APattern).Name, AValue, True)
+  else if APattern is TGocciaObjectDestructuringPattern then
+  begin
+    if (AValue is TGocciaNullLiteralValue) or (AValue is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError(
+        Format(SErrorCannotDestructure, [AValue.ToStringLiteral.Value]),
+        SSuggestDestructureRequiresObject);
+    ObjPat := TGocciaObjectDestructuringPattern(APattern);
+    for I := 0 to ObjPat.Properties.Count - 1 do
+    begin
+      if ObjPat.Properties[I].Computed and Assigned(ObjPat.Properties[I].KeyExpression) then
+        PropValue := (AValue as TGocciaObjectValue).GetProperty(
+          EvaluateExpression(ObjPat.Properties[I].KeyExpression, AContext).ToStringLiteral.Value)
+      else
+        PropValue := (AValue as TGocciaObjectValue).GetProperty(ObjPat.Properties[I].Key);
+      AssignVariablePattern(ObjPat.Properties[I].Pattern, PropValue, AContext);
+    end;
+  end
+  else if APattern is TGocciaArrayDestructuringPattern then
+  begin
+    if (AValue is TGocciaNullLiteralValue) or (AValue is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError(
+        Format(SErrorCannotDestructure, [AValue.ToStringLiteral.Value]),
+        SSuggestDestructureRequiresIterable);
+    ArrPat := TGocciaArrayDestructuringPattern(APattern);
+    if AValue is TGocciaArrayValue then
+    begin
+      ArrayValue := TGocciaArrayValue(AValue);
+      for I := 0 to ArrPat.Elements.Count - 1 do
+      begin
+        if ArrPat.Elements[I] = nil then Continue;
+        if ArrPat.Elements[I] is TGocciaRestDestructuringPattern then
+        begin
+          RestElements := TGocciaArrayValue.Create;
+          for J := I to ArrayValue.Elements.Count - 1 do
+            RestElements.Elements.Add(ArrayValue.Elements[J]);
+          AssignVariablePattern(
+            TGocciaRestDestructuringPattern(ArrPat.Elements[I]).Argument,
+            RestElements, AContext);
+          Break;
+        end
+        else
+        begin
+          if I < ArrayValue.Elements.Count then
+            ElementValue := ArrayValue.Elements[I]
+          else
+            ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+          AssignVariablePattern(ArrPat.Elements[I], ElementValue, AContext);
+        end;
+      end;
+    end
+    else if AValue is TGocciaStringLiteralValue then
+    begin
+      for I := 0 to ArrPat.Elements.Count - 1 do
+      begin
+        if ArrPat.Elements[I] = nil then Continue;
+        if ArrPat.Elements[I] is TGocciaRestDestructuringPattern then
+        begin
+          RestElements := TGocciaArrayValue.Create;
+          for J := I to Length(TGocciaStringLiteralValue(AValue).Value) - 1 do
+            RestElements.Elements.Add(TGocciaStringLiteralValue.Create(
+              TGocciaStringLiteralValue(AValue).Value[J + 1]));
+          AssignVariablePattern(
+            TGocciaRestDestructuringPattern(ArrPat.Elements[I]).Argument,
+            RestElements, AContext);
+          Break;
+        end
+        else
+        begin
+          if I < Length(TGocciaStringLiteralValue(AValue).Value) then
+            ElementValue := TGocciaStringLiteralValue.Create(
+              TGocciaStringLiteralValue(AValue).Value[I + 1])
+          else
+            ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+          AssignVariablePattern(ArrPat.Elements[I], ElementValue, AContext);
+        end;
+      end;
+    end
+    else
+    begin
+      // Generic iterable fallback
+      Iterator := GetIteratorFromValue(AValue);
+      if not Assigned(Iterator) then
+        ThrowTypeError(
+          Format(SErrorNotIterable, [AValue.TypeName]),
+          SSuggestDestructureRequiresIterable);
+      TGarbageCollector.Instance.AddTempRoot(Iterator);
+      try
+        for I := 0 to ArrPat.Elements.Count - 1 do
+        begin
+          if ArrPat.Elements[I] = nil then
+          begin
+            Iterator.AdvanceNext;
+            Continue;
+          end;
+          if ArrPat.Elements[I] is TGocciaRestDestructuringPattern then
+          begin
+            RestElements := TGocciaArrayValue.Create;
+            IterResult := Iterator.AdvanceNext;
+            while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+            begin
+              RestElements.Elements.Add(IterResult.GetProperty(PROP_VALUE));
+              IterResult := Iterator.AdvanceNext;
+            end;
+            AssignVariablePattern(
+              TGocciaRestDestructuringPattern(ArrPat.Elements[I]).Argument,
+              RestElements, AContext);
+            Break;
+          end
+          else
+          begin
+            IterResult := Iterator.AdvanceNext;
+            if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+              ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
+            else
+              ElementValue := IterResult.GetProperty(PROP_VALUE);
+            AssignVariablePattern(ArrPat.Elements[I], ElementValue, AContext);
+          end;
+        end;
+      finally
+        TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+      end;
+    end;
+  end
+  else if APattern is TGocciaAssignmentDestructuringPattern then
+  begin
+    AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
+    if AValue is TGocciaUndefinedLiteralValue then
+      DefaultValue := EvaluateExpression(AssignPat.Right, AContext)
+    else
+      DefaultValue := AValue;
+    AssignVariablePattern(AssignPat.Left, DefaultValue, AContext);
+  end
+  else if APattern is TGocciaRestDestructuringPattern then
+  begin
+    RestPat := TGocciaRestDestructuringPattern(APattern);
+    AssignVariablePattern(RestPat.Argument, AValue, AContext);
+  end;
 end;
 
 procedure AssignPattern(const APattern: TGocciaDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
@@ -3744,7 +4080,7 @@ begin
   if AIsDeclaration then
     AContext.Scope.DefineLexicalBinding(APattern.Name, AValue, ADeclarationType)
   else
-    AContext.Scope.AssignLexicalBinding(APattern.Name, AValue);
+    AContext.Scope.AssignBinding(APattern.Name, AValue);
 end;
 
 procedure AssignArrayPattern(const APattern: TGocciaArrayDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);

@@ -409,6 +409,7 @@ begin
     if Assigned(FEngineOptions) then
     begin
       Result.ASIEnabled := FEngineOptions.ASI.Present;
+      Result.VarEnabled := FEngineOptions.CompatVar.Present;
       ConfigureModuleResolver(Result.Resolver, AFileName,
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
       ApplyMaxMemory(FEngineOptions);
@@ -430,6 +431,7 @@ begin
     if Assigned(FEngineOptions) then
     begin
       Result.ASIEnabled := FEngineOptions.ASI.Present;
+      Result.VarEnabled := FEngineOptions.CompatVar.Present;
       ConfigureModuleResolver(Result.Resolver, AFileName,
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
       ApplyMaxMemory(FEngineOptions);

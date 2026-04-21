@@ -42,24 +42,30 @@ type
     FLexeme: string;
     FLine: Integer;
     FColumn: Integer;
+    FSourceLength: Integer;
+    FEndColumn: Integer;
   public
     constructor Create(const AType: TGocciaTokenType; const ALexeme: string;
-      const ALine, AColumn: Integer);
+      const ALine, AColumn, ASourceLength, AEndColumn: Integer);
     property TokenType: TGocciaTokenType read FType;
     property Lexeme: string read FLexeme;
     property Line: Integer read FLine;
     property Column: Integer read FColumn;
+    property SourceLength: Integer read FSourceLength;
+    property EndColumn: Integer read FEndColumn;
   end;
 
 implementation
 
 constructor TGocciaToken.Create(const AType: TGocciaTokenType; const ALexeme: string;
-  const ALine, AColumn: Integer);
+  const ALine, AColumn, ASourceLength, AEndColumn: Integer);
 begin
   FType := AType;
   FLexeme := ALexeme;
   FLine := ALine;
   FColumn := AColumn;
+  FSourceLength := ASourceLength;
+  FEndColumn := AEndColumn;
 end;
 
 end.
