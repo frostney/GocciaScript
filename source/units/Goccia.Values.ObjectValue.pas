@@ -714,7 +714,7 @@ begin
     Current.Free;
   end
   else if not FExtensible then
-    ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]), SSuggestCannotDeleteNonConfigurable);
+    ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]), SSuggestObjectNotExtensible);
 
   FProperties.Add(AName, ADescriptor);
 end;
@@ -979,7 +979,7 @@ begin
     Current.Free;
   end
   else if not FExtensible then
-    ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [ASymbol.ToDisplayString.Value]), SSuggestCannotDeleteNonConfigurable)
+    ThrowTypeError(SErrorCannotAddSymbolNotExtensible, SSuggestObjectNotExtensible)
   else
     FSymbolInsertionOrder.Add(ASymbol);
 

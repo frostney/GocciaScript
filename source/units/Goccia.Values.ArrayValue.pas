@@ -1776,14 +1776,16 @@ end;
 function TGocciaArrayValue.TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 var
   Index, NewLen, I: Integer;
+  RawLen: Double;
 begin
   if AName = PROP_LENGTH then
   begin
     // §10.4.2.4 ArraySetLength(A, Desc)
     if ADescriptor is TGocciaPropertyDescriptorData then
     begin
-      NewLen := Trunc(TGocciaPropertyDescriptorData(ADescriptor).Value.ToNumberLiteral.Value);
-      if NewLen < 0 then
+      RawLen := TGocciaPropertyDescriptorData(ADescriptor).Value.ToNumberLiteral.Value;
+      NewLen := Trunc(RawLen);
+      if (RawLen <> NewLen) or (NewLen < 0) or (RawLen > 4294967295) then
       begin
         ADescriptor.Free;
         Exit(False);
