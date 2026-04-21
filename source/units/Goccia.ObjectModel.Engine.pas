@@ -110,7 +110,8 @@ begin
   else if Assigned(ATypeDefinition.PrototypeProvider) then
   begin
     AConstructor.ReplacePrototype(ATypeDefinition.PrototypeProvider());
-    AConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, AConstructor);
+    AConstructor.Prototype.DefineProperty(PROP_CONSTRUCTOR,
+      TGocciaPropertyDescriptorData.Create(AConstructor, [pfConfigurable, pfWritable]));
   end
   else
     raise EGocciaObjectModelError.CreateFmt(

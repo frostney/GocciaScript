@@ -32,3 +32,10 @@ test("Object.keys throws for null", () => {
 test("Object.keys throws for undefined", () => {
   expect(() => Object.keys(undefined)).toThrow(TypeError);
 });
+
+test("Object.keys property descriptor on Object", () => {
+  const desc = Object.getOwnPropertyDescriptor(Object, "keys");
+  expect(desc.writable).toBe(true);
+  expect(desc.enumerable).toBe(false);
+  expect(desc.configurable).toBe(true);
+});

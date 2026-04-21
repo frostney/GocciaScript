@@ -3,6 +3,33 @@ description: Basic class declaration and instantiation works correctly
 features: [class-declaration]
 ---*/
 
+test("class declaration has .name property", () => {
+  class Person {
+    constructor(name) {
+      this.name = name;
+    }
+  }
+  expect(Person.name).toBe("Person");
+
+  const desc = Object.getOwnPropertyDescriptor(Person, "name");
+  expect(desc.writable).toBe(false);
+  expect(desc.enumerable).toBe(false);
+  expect(desc.configurable).toBe(true);
+});
+
+test("named class expression .name uses the class name", () => {
+  const C = class MyClass {};
+  expect(C.name).toBe("MyClass");
+});
+
+test("anonymous class expression infers name from binding", () => {
+  const C = class {};
+  expect(C.name).toBe("C");
+
+  let D = class {};
+  expect(D.name).toBe("D");
+});
+
 test("simple class creation", () => {
   class Person {
     constructor(name) {

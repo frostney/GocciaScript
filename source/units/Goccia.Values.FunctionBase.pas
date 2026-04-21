@@ -108,6 +108,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Values.ArrayValue,
+  Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
 
@@ -310,6 +311,19 @@ begin
   end;
 end;
 
+// Dispatch a call to either a TGocciaFunctionBase or a TGocciaClassValue.
+function DispatchCall(const ACallee: TGocciaValue;
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if ACallee is TGocciaFunctionBase then
+    Result := TGocciaFunctionBase(ACallee).Call(AArgs, AThisValue)
+  else if ACallee is TGocciaClassValue then
+    Result := TGocciaClassValue(ACallee).Call(AArgs, AThisValue)
+  else
+    raise TGocciaError.Create('not callable', 0, 0, '', nil);
+end;
+
 function TGocciaFunctionSharedPrototype.FunctionCall(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NewThisValue: TGocciaValue;
@@ -327,17 +341,22 @@ begin
     NewThisValue := AArgs.GetElement(0)
   else
     NewThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-  case AArgs.Length of
-    0, 1:
-      Exit(TGocciaFunctionBase(AThisValue).CallNoArgs(NewThisValue));
-    2:
-      Exit(TGocciaFunctionBase(AThisValue).CallOneArg(AArgs.GetElement(1), NewThisValue));
-    3:
-      Exit(TGocciaFunctionBase(AThisValue).CallTwoArgs(AArgs.GetElement(1),
-        AArgs.GetElement(2), NewThisValue));
-    4:
-      Exit(TGocciaFunctionBase(AThisValue).CallThreeArgs(AArgs.GetElement(1),
-        AArgs.GetElement(2), AArgs.GetElement(3), NewThisValue));
+
+  // Fast path for TGocciaFunctionBase (most common case)
+  if AThisValue is TGocciaFunctionBase then
+  begin
+    case AArgs.Length of
+      0, 1:
+        Exit(TGocciaFunctionBase(AThisValue).CallNoArgs(NewThisValue));
+      2:
+        Exit(TGocciaFunctionBase(AThisValue).CallOneArg(AArgs.GetElement(1), NewThisValue));
+      3:
+        Exit(TGocciaFunctionBase(AThisValue).CallTwoArgs(AArgs.GetElement(1),
+          AArgs.GetElement(2), NewThisValue));
+      4:
+        Exit(TGocciaFunctionBase(AThisValue).CallThreeArgs(AArgs.GetElement(1),
+          AArgs.GetElement(2), AArgs.GetElement(3), NewThisValue));
+    end;
   end;
 
   CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(Max(0, AArgs.Length - 1));
@@ -345,7 +364,7 @@ begin
     for I := 1 to AArgs.Length - 1 do
       CallArgs.Add(AArgs.GetElement(I));
 
-    Result := TGocciaFunctionBase(AThisValue).Call(CallArgs, NewThisValue);
+    Result := DispatchCall(AThisValue, CallArgs, NewThisValue);
   finally
     CallArgs.Free;
   end;
@@ -371,15 +390,29 @@ begin
 
   // Step 2: If argArray is undefined or null, return F.[[Call]](thisArg, <<>>)
   if AArgs.Length <= 1 then
-    Exit(TGocciaFunctionBase(AThisValue).CallNoArgs(NewThisValue));
+  begin
+    CallArgs := TGocciaArgumentsCollection.Create;
+    try
+      Exit(DispatchCall(AThisValue, CallArgs, NewThisValue));
+    finally
+      CallArgs.Free;
+    end;
+  end;
 
   ArgArray := AArgs.GetElement(1);
   if (ArgArray is TGocciaUndefinedLiteralValue) or
      (ArgArray is TGocciaNullLiteralValue) then
-    Exit(TGocciaFunctionBase(AThisValue).CallNoArgs(NewThisValue));
+  begin
+    CallArgs := TGocciaArgumentsCollection.Create;
+    try
+      Exit(DispatchCall(AThisValue, CallArgs, NewThisValue));
+    finally
+      CallArgs.Free;
+    end;
+  end;
 
-  // Fast path: small arrays use specialized call methods
-  if ArgArray is TGocciaArrayValue then
+  // Fast path: small arrays use specialized call methods (FunctionBase only)
+  if (AThisValue is TGocciaFunctionBase) and (ArgArray is TGocciaArrayValue) then
   begin
     ArrVal := TGocciaArrayValue(ArgArray);
     case ArrVal.Elements.Count of
@@ -400,7 +433,7 @@ begin
   CallArgs := CreateListFromArrayLike(ArgArray, 'Function.prototype.apply');
   try
     // Step 4: Return ? Call(func, thisArg, argList)
-    Result := TGocciaFunctionBase(AThisValue).Call(CallArgs, NewThisValue);
+    Result := DispatchCall(AThisValue, CallArgs, NewThisValue);
   finally
     CallArgs.Free;
   end;
@@ -562,6 +595,8 @@ begin
     // Call the original function with the bound 'this' and combined arguments
     if FOriginalFunction is TGocciaFunctionBase then
       Result := TGocciaFunctionBase(FOriginalFunction).Call(CombinedArgs, FBoundThis)
+    else if FOriginalFunction is TGocciaClassValue then
+      Result := TGocciaClassValue(FOriginalFunction).Call(CombinedArgs, FBoundThis)
     else
       raise TGocciaError.Create('BoundFunction.Call: Original function is not callable', 0, 0, '', nil);
   finally
@@ -572,8 +607,12 @@ end;
 function TGocciaBoundFunctionValue.CallNoArgs(
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if not (FOriginalFunction is TGocciaFunctionBase) then
+  if (not (FOriginalFunction is TGocciaFunctionBase)) and
+     (not (FOriginalFunction is TGocciaClassValue)) then
     raise TGocciaError.Create('BoundFunction.Call: Original function is not callable', 0, 0, '', nil);
+
+  if FOriginalFunction is TGocciaClassValue then
+    Exit(Call(TGocciaArgumentsCollection.Create, AThisValue));
 
   case FBoundArgCount of
     0:
@@ -587,9 +626,23 @@ end;
 
 function TGocciaBoundFunctionValue.CallOneArg(const AArg0,
   AThisValue: TGocciaValue): TGocciaValue;
+var
+  Args: TGocciaArgumentsCollection;
 begin
-  if not (FOriginalFunction is TGocciaFunctionBase) then
+  if (not (FOriginalFunction is TGocciaFunctionBase)) and
+     (not (FOriginalFunction is TGocciaClassValue)) then
     raise TGocciaError.Create('BoundFunction.Call: Original function is not callable', 0, 0, '', nil);
+
+  if FOriginalFunction is TGocciaClassValue then
+  begin
+    Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
+    try
+      Args.Add(AArg0);
+      Exit(Call(Args, AThisValue));
+    finally
+      Args.Free;
+    end;
+  end;
 
   case FBoundArgCount of
     0:
@@ -603,9 +656,24 @@ end;
 
 function TGocciaBoundFunctionValue.CallTwoArgs(const AArg0, AArg1,
   AThisValue: TGocciaValue): TGocciaValue;
+var
+  Args: TGocciaArgumentsCollection;
 begin
-  if not (FOriginalFunction is TGocciaFunctionBase) then
+  if (not (FOriginalFunction is TGocciaFunctionBase)) and
+     (not (FOriginalFunction is TGocciaClassValue)) then
     raise TGocciaError.Create('BoundFunction.Call: Original function is not callable', 0, 0, '', nil);
+
+  if FOriginalFunction is TGocciaClassValue then
+  begin
+    Args := TGocciaArgumentsCollection.CreateWithCapacity(2);
+    try
+      Args.Add(AArg0);
+      Args.Add(AArg1);
+      Exit(Call(Args, AThisValue));
+    finally
+      Args.Free;
+    end;
+  end;
 
   case FBoundArgCount of
     0:

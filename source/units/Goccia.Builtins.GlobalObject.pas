@@ -334,7 +334,8 @@ end;
 function TGocciaGlobalObject.ObjectCreate(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NewObj: TGocciaObjectValue;
-  ProtoArg: TGocciaValue;
+  ProtoArg, PropsArg: TGocciaValue;
+  DefineArgs: TGocciaArgumentsCollection;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.create', ThrowError);
 
@@ -346,13 +347,29 @@ begin
 
   // Step 2: Let obj be OrdinaryObjectCreate(O)
   if ProtoArg is TGocciaObjectValue then
-    Result := TGocciaObjectValue.Create(TGocciaObjectValue(ProtoArg))
-  else if ProtoArg is TGocciaNullLiteralValue then
-    Result := TGocciaObjectValue.Create(nil)
+    NewObj := TGocciaObjectValue.Create(TGocciaObjectValue(ProtoArg))
   else
-    ThrowTypeError(SErrorObjectCreateCalledOnNonObject, SSuggestObjectArgType);
+    NewObj := TGocciaObjectValue.Create(nil);
+
   // Step 3: If Properties is not undefined, perform ObjectDefineProperties(obj, Properties)
+  if AArgs.Length >= 2 then
+  begin
+    PropsArg := AArgs.GetElement(1);
+    if not (PropsArg is TGocciaUndefinedLiteralValue) then
+    begin
+      DefineArgs := TGocciaArgumentsCollection.CreateWithCapacity(2);
+      try
+        DefineArgs.Add(NewObj);
+        DefineArgs.Add(PropsArg);
+        ObjectDefineProperties(DefineArgs, AThisValue);
+      finally
+        DefineArgs.Free;
+      end;
+    end;
+  end;
+
   // Step 4: Return obj
+  Result := NewObj;
 end;
 
 // ES2026 §20.1.2.9 Object.hasOwn(O, P)

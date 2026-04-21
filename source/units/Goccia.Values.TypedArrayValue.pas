@@ -67,6 +67,7 @@ type
     class function KindName(const AKind: TGocciaTypedArrayKind): string;
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
     class procedure SetSharedPrototypeParent(const AParent: TGocciaObjectValue);
+    class function GetSharedPrototypeObject: TGocciaObjectValue; static;
     class procedure SetUint8Prototype(const APrototype: TGocciaObjectValue);
 
     property BufferValue: TGocciaValue read FBufferValue;
@@ -615,7 +616,8 @@ begin
   if AConstructor is TGocciaClassValue then
   begin
     TGocciaClassValue(AConstructor).Prototype.Prototype := FShared.Prototype;
-    TGocciaClassValue(AConstructor).Prototype.AssignProperty(PROP_CONSTRUCTOR, AConstructor);
+    TGocciaClassValue(AConstructor).Prototype.DefineProperty(PROP_CONSTRUCTOR,
+      TGocciaPropertyDescriptorData.Create(AConstructor, [pfConfigurable, pfWritable]));
   end;
 end;
 
@@ -623,6 +625,14 @@ class procedure TGocciaTypedArrayValue.SetSharedPrototypeParent(const AParent: T
 begin
   if Assigned(FShared) and not Assigned(FShared.Prototype.Prototype) then
     FShared.Prototype.Prototype := AParent;
+end;
+
+class function TGocciaTypedArrayValue.GetSharedPrototypeObject: TGocciaObjectValue;
+begin
+  if Assigned(FShared) then
+    Result := FShared.Prototype
+  else
+    Result := nil;
 end;
 
 class procedure TGocciaTypedArrayValue.SetUint8Prototype(const APrototype: TGocciaObjectValue);

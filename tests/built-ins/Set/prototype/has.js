@@ -40,3 +40,10 @@ test("has on empty Set", () => {
   expect(set.has(1)).toBe(false);
   expect(set.has(undefined)).toBe(false);
 });
+
+test("has property descriptor on Set.prototype", () => {
+  const desc = Object.getOwnPropertyDescriptor(Set.prototype, "has");
+  expect(desc.writable).toBe(true);
+  expect(desc.enumerable).toBe(false);
+  expect(desc.configurable).toBe(true);
+});

@@ -163,6 +163,7 @@ type
     FBuiltinURLSearchParams: TGocciaGlobalURLSearchParams;
     FBuiltinFetch: TGocciaGlobalFetch;
     FBuiltinDisposableStack: TGocciaBuiltinDisposableStack;
+    FTypedArrayIntrinsic: TGocciaClassValue;
     FPreviousExceptionMask: TFPUExceptionMask;
     FSuppressWarnings: Boolean;
     FLastTiming: TGocciaScriptResult;
@@ -962,6 +963,11 @@ begin
   SharedArrayBufferConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
   FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_SHARED_ARRAY_BUFFER, SharedArrayBufferConstructor, dtConst);
 
+  // Create %TypedArray% intrinsic (not globally exposed per spec §23.2.1)
+  FTypedArrayIntrinsic := TGocciaClassValue.Create('TypedArray', nil);
+  FTypedArrayIntrinsic.SetProperty(PROP_NAME, TGocciaStringLiteralValue.Create('TypedArray'));
+  FTypedArrayIntrinsic.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(0));
+
   RegisterTypedArrayConstructor(CONSTRUCTOR_INT8_ARRAY, takInt8, ObjectConstructor);
   RegisterTypedArrayConstructor(CONSTRUCTOR_UINT8_ARRAY, takUint8, ObjectConstructor);
   RegisterTypedArrayConstructor(CONSTRUCTOR_UINT8_CLAMPED_ARRAY, takUint8Clamped, ObjectConstructor);
@@ -974,6 +980,10 @@ begin
   RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT64_ARRAY, takFloat64, ObjectConstructor);
   RegisterTypedArrayConstructor(CONSTRUCTOR_BIGINT64_ARRAY, takBigInt64, ObjectConstructor);
   RegisterTypedArrayConstructor(CONSTRUCTOR_BIGUINT64_ARRAY, takBigUint64, ObjectConstructor);
+
+  // Wire %TypedArray%.prototype to the shared prototype (which has all methods)
+  if Assigned(TGocciaTypedArrayValue.GetSharedPrototypeObject) then
+    FTypedArrayIntrinsic.ReplacePrototype(TGocciaTypedArrayValue.GetSharedPrototypeObject);
 
   TypeDef.ConstructorName := CONSTRUCTOR_STRING;
   TypeDef.Kind := gtdkPrimitiveWrapper;
@@ -1012,8 +1022,29 @@ begin
   BooleanConstructor := TGocciaBooleanClassValue(GenericConstructor);
 
   FunctionConstructor := TGocciaClassValue.Create('Function', nil);
-  TGocciaFunctionBase.SetSharedPrototypeParent(FunctionConstructor.Prototype);
-  FunctionConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, FunctionConstructor);
+  // Wire Function.prototype to be the shared function prototype (which has
+  // call/apply/bind/toString) so that Object.getPrototypeOf(fn) === Function.prototype.
+  // Chain: Function.prototype (= FSharedPrototype) → ObjectConstructor.Prototype
+  TGocciaFunctionBase.GetSharedPrototype.Prototype := ObjectConstructor.Prototype;
+  FunctionConstructor.ReplacePrototype(TGocciaFunctionBase.GetSharedPrototype);
+  FunctionConstructor.Prototype.DefineProperty(PROP_CONSTRUCTOR,
+    TGocciaPropertyDescriptorData.Create(FunctionConstructor, [pfConfigurable, pfWritable]));
+  // Set Function.prototype as the default [[Prototype]] for all class constructors
+  // (§15.7.3 step 7.a: classes without extends have [[Prototype]] = Function.prototype)
+  TGocciaClassValue.SetDefaultPrototype(FunctionConstructor.Prototype);
+  // Retroactively set [[Prototype]] on constructors created before FunctionConstructor
+  TGocciaClassValue.PatchDefaultPrototype(ObjectConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(GenericConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(ArrayConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(MapConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(SetConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(ArrayBufferConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(SharedArrayBufferConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(FTypedArrayIntrinsic);
+  TGocciaClassValue.PatchDefaultPrototype(StringConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(NumberConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(BooleanConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(FunctionConstructor);
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);
 
   PerformanceConstructor := TGocciaPerformance.CreateInterfaceObject;
@@ -1030,7 +1061,7 @@ var
   FromFn, OfFn: TGocciaTypedArrayStaticFrom;
   Encoding: TGocciaUint8ArrayEncoding;
 begin
-  TAConstructor := TGocciaTypedArrayClassValue.Create(AName, nil, AKind);
+  TAConstructor := TGocciaTypedArrayClassValue.Create(AName, FTypedArrayIntrinsic, AKind);
   TGocciaTypedArrayValue.ExposePrototype(TAConstructor);
   TGocciaTypedArrayValue.SetSharedPrototypeParent(AObjectConstructor.Prototype);
   BPE := TGocciaNumberLiteralValue.Create(TGocciaTypedArrayValue.BytesPerElement(AKind));

@@ -335,7 +335,8 @@ begin
     TGocciaClassValue(AConstructor).ReplacePrototype(FSharedArrayPrototype)
   else if AConstructor is TGocciaObjectValue then
     TGocciaObjectValue(AConstructor).AssignProperty(PROP_PROTOTYPE, FSharedArrayPrototype);
-  FSharedArrayPrototype.AssignProperty(PROP_CONSTRUCTOR, AConstructor);
+  FSharedArrayPrototype.DefineProperty(PROP_CONSTRUCTOR,
+    TGocciaPropertyDescriptorData.Create(AConstructor, [pfConfigurable, pfWritable]));
 end;
 
 destructor TGocciaArrayValue.Destroy;

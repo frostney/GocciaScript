@@ -44,4 +44,24 @@ describe("Object.getPrototypeOf", () => {
   test("throws for undefined", () => {
     expect(() => Object.getPrototypeOf(undefined)).toThrow(TypeError);
   });
+
+  test("returns Function.prototype for a class with no superclass", () => {
+    class A {}
+    const proto = Object.getPrototypeOf(A);
+    expect(proto).toBe(Function.prototype);
+  });
+
+  test("returns superclass for a class with extends", () => {
+    class A {}
+    class B extends A {}
+    expect(Object.getPrototypeOf(B)).toBe(A);
+  });
+
+  test("works on built-in constructors", () => {
+    // All typed array constructors share the same [[Prototype]] (%TypedArray%)
+    const taProto = Object.getPrototypeOf(Int8Array);
+    expect(Object.getPrototypeOf(Uint8Array)).toBe(taProto);
+    expect(Object.getPrototypeOf(Float64Array)).toBe(taProto);
+    expect(Object.getPrototypeOf(BigInt64Array)).toBe(taProto);
+  });
 });
