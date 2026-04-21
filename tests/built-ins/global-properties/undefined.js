@@ -41,6 +41,25 @@ describe("undefined as a global property", () => {
   });
 });
 
+describe("undefined property descriptor on globalThis", () => {
+  test("undefined is an own property of globalThis", () => {
+    const desc = Object.getOwnPropertyDescriptor(globalThis, "undefined");
+    expect(desc !== undefined).toBe(true);
+  });
+
+  test("undefined has correct property descriptor flags", () => {
+    const desc = Object.getOwnPropertyDescriptor(globalThis, "undefined");
+    expect(desc.writable).toBe(false);
+    expect(desc.enumerable).toBe(false);
+    expect(desc.configurable).toBe(false);
+  });
+
+  test("undefined descriptor value is undefined", () => {
+    const desc = Object.getOwnPropertyDescriptor(globalThis, "undefined");
+    expect(desc.value).toBeUndefined();
+  });
+});
+
 describe("undefined immutability", () => {
   test("global undefined cannot be reassigned", () => {
     expect(() => {

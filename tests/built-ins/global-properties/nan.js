@@ -40,6 +40,25 @@ describe("NaN as a global property", () => {
   });
 });
 
+describe("NaN property descriptor on globalThis", () => {
+  test("NaN is an own property of globalThis", () => {
+    const desc = Object.getOwnPropertyDescriptor(globalThis, "NaN");
+    expect(desc !== undefined).toBe(true);
+  });
+
+  test("NaN has correct property descriptor flags", () => {
+    const desc = Object.getOwnPropertyDescriptor(globalThis, "NaN");
+    expect(desc.writable).toBe(false);
+    expect(desc.enumerable).toBe(false);
+    expect(desc.configurable).toBe(false);
+  });
+
+  test("NaN descriptor value is NaN", () => {
+    const desc = Object.getOwnPropertyDescriptor(globalThis, "NaN");
+    expect(Number.isNaN(desc.value)).toBe(true);
+  });
+});
+
 describe("NaN immutability", () => {
   test("global NaN cannot be reassigned", () => {
     expect(() => {
