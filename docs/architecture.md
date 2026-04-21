@@ -86,7 +86,7 @@ The CLI tools share a two-level application class hierarchy and a declarative op
 
 | Tool | Base Class | Overrides |
 |------|-----------|-----------|
-| GocciaREPL | `TGocciaApplication` | `Execute` (interactive loop) |
+| GocciaREPL | `TGocciaCLIApplication` | `Configure`, `ExecuteWithPaths` |
 | GocciaScriptLoader | `TGocciaCLIApplication` | `Configure`, `Validate`, `ExecuteWithPaths`, `HandleError`, `AfterExecute` |
 | GocciaTestRunner | `TGocciaCLIApplication` | `Configure`, `ExecuteWithPaths`, `GlobalBuiltins` |
 | GocciaBenchmarkRunner | `TGocciaCLIApplication` | `Configure`, `ExecuteWithPaths`, `GlobalBuiltins` |
