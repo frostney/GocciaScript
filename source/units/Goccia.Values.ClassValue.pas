@@ -479,12 +479,12 @@ begin
   begin
     // Merge with existing setter
     ExistingSetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
-    FClassPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(AGetter, ExistingSetter, [pfEnumerable, pfConfigurable, pfWritable]));
+    FClassPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(AGetter, ExistingSetter, [pfConfigurable, pfWritable]));
   end
   else
   begin
     // No existing setter, create getter-only descriptor
-    FClassPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(AGetter, nil, [pfEnumerable, pfConfigurable, pfWritable]));
+    FClassPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(AGetter, nil, [pfConfigurable, pfWritable]));
   end;
 end;
 
@@ -502,12 +502,12 @@ begin
   begin
     // Merge with existing getter
     ExistingGetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
-    FClassPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(ExistingGetter, ASetter, [pfEnumerable, pfConfigurable, pfWritable]));
+    FClassPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(ExistingGetter, ASetter, [pfConfigurable, pfWritable]));
   end
   else
   begin
     // No existing getter, create setter-only descriptor
-    FClassPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(nil, ASetter, [pfEnumerable, pfConfigurable, pfWritable]));
+    FClassPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(nil, ASetter, [pfConfigurable, pfWritable]));
   end;
 end;
 

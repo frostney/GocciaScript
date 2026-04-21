@@ -692,6 +692,13 @@ begin
   // ECMAScript: bound function length = max(0, originalLength - boundArgs.length)
   if FOriginalFunction is TGocciaFunctionBase then
     OrigLength := TGocciaFunctionBase(FOriginalFunction).GetFunctionLength
+  else if FOriginalFunction is TGocciaClassValue then
+  begin
+    OrigLength := 0;
+    if TGocciaClassValue(FOriginalFunction).GetProperty(PROP_LENGTH) is TGocciaNumberLiteralValue then
+      OrigLength := Trunc(TGocciaNumberLiteralValue(
+        TGocciaClassValue(FOriginalFunction).GetProperty(PROP_LENGTH)).Value);
+  end
   else
     OrigLength := 0;
   Result := OrigLength - FBoundArgCount;
@@ -704,6 +711,8 @@ begin
   // ECMAScript: bound function name = "bound " + originalName
   if FOriginalFunction is TGocciaFunctionBase then
     Result := 'bound ' + TGocciaFunctionBase(FOriginalFunction).GetFunctionName
+  else if FOriginalFunction is TGocciaClassValue then
+    Result := 'bound ' + TGocciaClassValue(FOriginalFunction).Name
   else
     Result := 'bound ';
 end;

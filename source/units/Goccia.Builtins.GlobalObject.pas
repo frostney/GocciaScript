@@ -617,6 +617,8 @@ var
   Obj: TGocciaObjectValue;
   PropertiesDescriptor: TGocciaObjectValue;
   PropertyEntries: TArray<TPair<string, TGocciaValue>>;
+  SymbolKeys: TArray<TGocciaSymbolValue>;
+  SymbolDesc: TGocciaPropertyDescriptor;
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
 begin
@@ -634,7 +636,7 @@ begin
   // Step 2: Let keys be ? props.[[OwnPropertyKeys]]()
   PropertyEntries := PropertiesDescriptor.GetEnumerablePropertyEntries;
 
-  // Step 3: For each key, ToPropertyDescriptor and DefinePropertyOrThrow
+  // Step 3: For each string key, ToPropertyDescriptor and DefinePropertyOrThrow
   for I := 0 to High(PropertyEntries) do
   begin
     CallArgs := TGocciaArgumentsCollection.Create;
@@ -645,6 +647,19 @@ begin
       ObjectDefineProperty(CallArgs, AThisValue);
     finally
       CallArgs.Free;
+    end;
+  end;
+
+  // Step 3 (cont): Also process symbol-keyed descriptors per §20.1.2.3
+  SymbolKeys := PropertiesDescriptor.GetOwnSymbols;
+  for I := 0 to High(SymbolKeys) do
+  begin
+    SymbolDesc := PropertiesDescriptor.GetOwnSymbolPropertyDescriptor(SymbolKeys[I]);
+    if Assigned(SymbolDesc) and SymbolDesc.Enumerable then
+    begin
+      if SymbolDesc is TGocciaPropertyDescriptorData then
+        Obj.AssignSymbolProperty(SymbolKeys[I],
+          TGocciaPropertyDescriptorData(SymbolDesc).Value);
     end;
   end;
 

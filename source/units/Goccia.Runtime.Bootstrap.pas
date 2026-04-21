@@ -336,6 +336,7 @@ var
   PerformanceConstructor: TGocciaNativeFunctionValue;
   URLConstructor: TGocciaURLClassValue;
   URLSearchParamsConstructor: TGocciaURLSearchParamsClassValue;
+  TextEncoderConstructor, TextDecoderConstructor: TGocciaClassValue;
   TypeDef: TGocciaTypeDefinition;
 begin
   TGocciaObjectValue.InitializeSharedPrototype;
@@ -391,6 +392,7 @@ begin
   TypeDef.PrototypeParent := ObjectConstructor.Prototype;
   TypeDef.AddSpeciesGetter := False;
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  TextEncoderConstructor := GenericConstructor;
 
   TypeDef.ConstructorName := CONSTRUCTOR_TEXT_DECODER;
   TypeDef.Kind := gtdkNativeInstanceType;
@@ -401,6 +403,7 @@ begin
   TypeDef.PrototypeParent := ObjectConstructor.Prototype;
   TypeDef.AddSpeciesGetter := False;
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  TextDecoderConstructor := GenericConstructor;
 
   TypeDef.ConstructorName := CONSTRUCTOR_URL;
   TypeDef.Kind := gtdkCollectionLikeNativeType;
@@ -514,6 +517,10 @@ begin
   TGocciaClassValue.PatchDefaultPrototype(StringConstructor);
   TGocciaClassValue.PatchDefaultPrototype(NumberConstructor);
   TGocciaClassValue.PatchDefaultPrototype(BooleanConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(TextEncoderConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(TextDecoderConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(URLConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(URLSearchParamsConstructor);
   TGocciaClassValue.PatchDefaultPrototype(FunctionConstructor);
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);
 
