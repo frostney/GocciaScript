@@ -11,7 +11,6 @@ uses
 
   TimingUtils,
 
-  CLI.ConfigFile,
   Goccia.Application,
   Goccia.AST.Node,
   Goccia.Bytecode.Module,
@@ -113,26 +112,6 @@ type
     procedure WriteResultsJSON(const AResult: TAggregatedTestResult; const AFileName: string);
     procedure PrintTestResults(const AResult: TAggregatedTestResult);
   end;
-
-function IsVarEnabledForFile(const AFileName: string;
-  const AGloballyEnabled: Boolean): Boolean;
-var
-  ConfigPath: string;
-  Entries: TConfigEntryArray;
-  I: Integer;
-begin
-  if AGloballyEnabled then
-    Exit(True);
-  ConfigPath := DiscoverConfigFile(ExtractFilePath(ExpandFileName(AFileName)),
-    ['goccia'], ['.toml', '.json5', '.json']);
-  if ConfigPath = '' then
-    Exit(False);
-  Entries := ParseConfigFile(ConfigPath);
-  for I := 0 to High(Entries) do
-    if (Entries[I].Key = 'compat-var') and (Entries[I].Value = 'true') then
-      Exit(True);
-  Result := False;
-end;
 
 function MakeEmptyTestResult(const AScriptResult: TGocciaObjectValue): TTestFileResult;
 begin
@@ -314,8 +293,6 @@ begin
     try
       Engine := CreateEngine(AFileName, Source);
       try
-        Engine.VarEnabled := IsVarEnabledForFile(AFileName,
-          EngineOptions.CompatVar.Present);
         if FSilent.Present or GIsWorkerThread then
         begin
           Engine.BuiltinConsole.Enabled := False;
@@ -420,8 +397,6 @@ begin
       try
         Engine := CreateEngine(AFileName, Source, Executor);
         try
-          Engine.VarEnabled := IsVarEnabledForFile(AFileName,
-            EngineOptions.CompatVar.Present);
           if FSilent.Present or GIsWorkerThread then
           begin
             Engine.BuiltinConsole.Enabled := False;
@@ -435,7 +410,7 @@ begin
               LexEnd := GetNanoseconds;
 
               Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
-              Parser.AutomaticSemicolonInsertion := EngineOptions.ASI.Present;
+              Parser.AutomaticSemicolonInsertion := Engine.ASIEnabled;
               Parser.VarDeclarationsEnabled := Engine.VarEnabled;
               try
                 ProgramNode := Parser.Parse;

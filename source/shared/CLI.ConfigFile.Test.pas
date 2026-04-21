@@ -58,6 +58,11 @@ type
     procedure TestDiscoverWalksUpToParent;
     procedure TestDiscoverRespectsExtensionPriority;
     procedure TestDiscoverReturnsEmptyWhenNotFound;
+
+    { FindConfigEntry }
+    procedure TestFindConfigEntryReturnsMatch;
+    procedure TestFindConfigEntryReturnsFalseWhenMissing;
+    procedure TestFindConfigEntryFirstMatchWins;
   protected
     procedure BeforeAll; override;
     procedure AfterAll; override;
@@ -99,6 +104,10 @@ begin
   Test('DiscoverConfigFile walks up to parent', TestDiscoverWalksUpToParent);
   Test('DiscoverConfigFile respects extension priority', TestDiscoverRespectsExtensionPriority);
   Test('DiscoverConfigFile returns empty when not found', TestDiscoverReturnsEmptyWhenNotFound);
+
+  Test('FindConfigEntry returns matching value', TestFindConfigEntryReturnsMatch);
+  Test('FindConfigEntry returns false when key missing', TestFindConfigEntryReturnsFalseWhenMissing);
+  Test('FindConfigEntry first match wins for duplicate keys', TestFindConfigEntryFirstMatchWins);
 end;
 
 procedure TConfigFileTests.BeforeAll;
@@ -811,6 +820,50 @@ begin
   Found := DiscoverConfigFile(Dir, ['nonexistent'], ['.json']);
 
   Expect<string>(Found).ToBe('');
+end;
+
+{ ── FindConfigEntry tests ──────────────────────────────────── }
+
+procedure TConfigFileTests.TestFindConfigEntryReturnsMatch;
+var
+  Entries: TConfigEntryArray;
+  Value: string;
+begin
+  SetLength(Entries, 2);
+  Entries[0].Key := 'mode';
+  Entries[0].Value := 'bytecode';
+  Entries[1].Key := 'asi';
+  Entries[1].Value := 'true';
+
+  Expect<Boolean>(FindConfigEntry(Entries, 'asi', Value)).ToBe(True);
+  Expect<string>(Value).ToBe('true');
+end;
+
+procedure TConfigFileTests.TestFindConfigEntryReturnsFalseWhenMissing;
+var
+  Entries: TConfigEntryArray;
+  Value: string;
+begin
+  SetLength(Entries, 1);
+  Entries[0].Key := 'mode';
+  Entries[0].Value := 'bytecode';
+
+  Expect<Boolean>(FindConfigEntry(Entries, 'timeout', Value)).ToBe(False);
+end;
+
+procedure TConfigFileTests.TestFindConfigEntryFirstMatchWins;
+var
+  Entries: TConfigEntryArray;
+  Value: string;
+begin
+  SetLength(Entries, 2);
+  Entries[0].Key := 'alias';
+  Entries[0].Value := '@/=./src/';
+  Entries[1].Key := 'alias';
+  Entries[1].Value := 'utils=./lib/';
+
+  Expect<Boolean>(FindConfigEntry(Entries, 'alias', Value)).ToBe(True);
+  Expect<string>(Value).ToBe('@/=./src/');
 end;
 
 begin

@@ -14,6 +14,7 @@ uses
   Goccia.AST.Node,
   Goccia.Bytecode.Binary,
   Goccia.Bytecode.Module,
+  CLI.ConfigFile,
   Goccia.CLI.Application,
   CLI.Options,
   Goccia.Compiler,
@@ -37,10 +38,9 @@ type
   private
     FOutputPath: TGocciaStringOption;
     FSourceMap: TGocciaStringOption;
-    FASI: TGocciaFlagOption;
-    FCompatVar: TGocciaFlagOption;
 
     function ParseSource(const ASource: TStringList; const AFileName: string;
+      const AASIEnabled, AVarEnabled: Boolean;
       out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
       out ASourceMap: TGocciaSourceMap): TGocciaProgram;
     function CompileSource(const ASource: TStringList;
@@ -73,8 +73,7 @@ end;
 
 procedure TBundlerApp.Configure;
 begin
-  FASI := AddFlag('asi', 'Enable automatic semicolon insertion');
-  FCompatVar := AddFlag('compat-var', 'Enable var declarations (compatibility)');
+  AddEngineOptions;
   FOutputPath := AddString('output',
     'Output path (single file) or output directory (multiple files)');
   FSourceMap := AddString('source-map',
@@ -91,7 +90,7 @@ end;
 { TBundlerApp - Core logic }
 
 function TBundlerApp.ParseSource(const ASource: TStringList;
-  const AFileName: string;
+  const AFileName: string; const AASIEnabled, AVarEnabled: Boolean;
   out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
   out ASourceMap: TGocciaSourceMap): TGocciaProgram;
 var
@@ -125,8 +124,8 @@ begin
       ALexTimeNanoseconds := LexEnd - StartTime;
 
       Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
-      Parser.AutomaticSemicolonInsertion := FASI.Present;
-      Parser.VarDeclarationsEnabled := FCompatVar.Present;
+      Parser.AutomaticSemicolonInsertion := AASIEnabled;
+      Parser.VarDeclarationsEnabled := AVarEnabled;
       try
         Result := Parser.Parse;
         ParseEnd := GetNanoseconds;
@@ -194,9 +193,29 @@ var
   CompiledModule: TGocciaBytecodeModule;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
   SourceMap: TGocciaSourceMap;
+  FileConfig: TConfigEntryArray;
+  ConfigValue: string;
+  EffectiveASI, EffectiveVar: Boolean;
 begin
+  { Resolve ASI and compat-var: CLI flag > per-file config > default }
+  FileConfig := DiscoverFileConfig(AFileName);
+
+  if EngineOptions.ASI.Present then
+    EffectiveASI := True
+  else if FindConfigEntry(FileConfig, 'asi', ConfigValue) then
+    EffectiveASI := ConfigValue = 'true'
+  else
+    EffectiveASI := False;
+
+  if EngineOptions.CompatVar.Present then
+    EffectiveVar := True
+  else if FindConfigEntry(FileConfig, 'compat-var', ConfigValue) then
+    EffectiveVar := ConfigValue = 'true'
+  else
+    EffectiveVar := False;
+
   CompiledModule := nil;
-  ProgramNode := ParseSource(ASource, AFileName,
+  ProgramNode := ParseSource(ASource, AFileName, EffectiveASI, EffectiveVar,
     LexTimeNanoseconds, ParseTimeNanoseconds, SourceMap);
   try
     Compiler := TGocciaCompiler.Create(AFileName);
