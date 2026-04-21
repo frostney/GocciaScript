@@ -66,6 +66,25 @@ describe("Infinity as a global property", () => {
   });
 });
 
+describe("Infinity property descriptor on globalThis", () => {
+  test("Infinity is an own property of globalThis", () => {
+    const desc = Object.getOwnPropertyDescriptor(globalThis, "Infinity");
+    expect(desc !== undefined).toBe(true);
+  });
+
+  test("Infinity has correct property descriptor flags", () => {
+    const desc = Object.getOwnPropertyDescriptor(globalThis, "Infinity");
+    expect(desc.writable).toBe(false);
+    expect(desc.enumerable).toBe(false);
+    expect(desc.configurable).toBe(false);
+  });
+
+  test("Infinity descriptor value is Infinity", () => {
+    const desc = Object.getOwnPropertyDescriptor(globalThis, "Infinity");
+    expect(desc.value).toBe(Infinity);
+  });
+});
+
 describe("Infinity immutability", () => {
   test("global Infinity cannot be reassigned", () => {
     expect(() => {

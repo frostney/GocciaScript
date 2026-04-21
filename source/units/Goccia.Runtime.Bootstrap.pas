@@ -552,15 +552,24 @@ var
   GlobalThisObj: TGocciaObjectValue;
   Scope: TGocciaScope;
   Name: string;
+  Flags: TPropertyFlags;
 begin
   Scope := FInterpreter.GlobalScope;
   GlobalThisObj := TGocciaObjectValue.Create;
 
-  // ES2026 §19.1: Global object properties have
-  // { [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: true }
   for Name in Scope.GetOwnBindingNames do
+  begin
+    // ES2026 §19.1: Value properties (NaN, Infinity, undefined) are
+    // { [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: false }.
+    // All other global object properties are
+    // { [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: true }.
+    if (Name = 'NaN') or (Name = 'Infinity') or (Name = 'undefined') then
+      Flags := []
+    else
+      Flags := [pfWritable, pfConfigurable];
     GlobalThisObj.DefineProperty(Name,
-      TGocciaPropertyDescriptorData.Create(Scope.GetValue(Name), [pfWritable, pfConfigurable]));
+      TGocciaPropertyDescriptorData.Create(Scope.GetValue(Name), Flags));
+  end;
 
   GlobalThisObj.DefineProperty('globalThis',
     TGocciaPropertyDescriptorData.Create(GlobalThisObj, [pfWritable, pfConfigurable]));
