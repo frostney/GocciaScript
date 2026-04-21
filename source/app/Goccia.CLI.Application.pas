@@ -8,6 +8,7 @@ uses
   Classes,
   SysUtils,
 
+  CLI.ConfigFile,
   CLI.Options,
 
   Goccia.Application,
@@ -51,6 +52,11 @@ type
     function AddRepeatable(const AName, AHelp: string): TGocciaRepeatableOption;
     function Add(const AOption: TGocciaOptionBase): TGocciaOptionBase;
     function EffectiveBuiltins: TGocciaGlobalBuiltins;
+    { Discover the nearest goccia.json/json5/toml for a file and
+      return its parsed entries.  Returns an empty array when no
+      config is found.  Thread-safe: does not mutate shared state. }
+    function DiscoverFileConfig(
+      const AFileName: string): TConfigEntryArray;
     function CreateEngine(const AFileName: string;
       const ASource: TStringList): TGocciaEngine; overload;
     function CreateEngine(const AFileName: string;
@@ -72,7 +78,6 @@ implementation
 uses
   Math,
 
-  CLI.ConfigFile,
   CLI.Parser,
 
   Goccia.Builtins.Console,
@@ -401,18 +406,74 @@ begin
     GC.MaxBytes := AEngineOptions.MaxMemory.Value;
 end;
 
+function TGocciaCLIApplication.DiscoverFileConfig(
+  const AFileName: string): TConfigEntryArray;
+var
+  StartDir, ConfigPath: string;
+begin
+  SetLength(Result, 0);
+  if AFileName = '' then
+    Exit;
+  EnsureConfigParsersRegistered;
+  StartDir := ExtractFilePath(ExpandFileName(AFileName));
+  if StartDir = '' then
+    StartDir := GetCurrentDir;
+  ConfigPath := DiscoverConfigFile(StartDir,
+    [CONFIG_BASE_NAME], CONFIG_EXTENSIONS);
+  if ConfigPath <> '' then
+    Result := ParseConfigFile(ConfigPath);
+end;
+
+{ Apply per-file config entries to the engine.  CLI options
+  always win; file config overrides the global default. }
+procedure ApplyFileConfigToEngine(const AEngine: TGocciaEngine;
+  const AEngineOptions: TGocciaEngineOptions;
+  const AFileConfig: TConfigEntryArray);
+var
+  ValueStr: string;
+  MemoryLimit: Int64;
+  GC: TGarbageCollector;
+begin
+  if not Assigned(AEngineOptions) then
+    Exit;
+
+  { ASI: CLI flag > file config > default (false) }
+  if AEngineOptions.ASI.Present then
+    AEngine.ASIEnabled := True
+  else if FindConfigEntry(AFileConfig, 'asi', ValueStr) then
+    AEngine.ASIEnabled := ValueStr = 'true';
+
+  { compat-var: CLI flag > file config > default (false) }
+  if AEngineOptions.CompatVar.Present then
+    AEngine.VarEnabled := True
+  else if FindConfigEntry(AFileConfig, 'compat-var', ValueStr) then
+    AEngine.VarEnabled := ValueStr = 'true';
+
+  { max-memory: CLI > file config > unlimited }
+  if AEngineOptions.MaxMemory.Present then
+    ApplyMaxMemory(AEngineOptions)
+  else
+  begin
+    GC := TGarbageCollector.Instance;
+    if Assigned(GC) and FindConfigEntry(AFileConfig, 'max-memory', ValueStr) and
+       TryStrToInt64(ValueStr, MemoryLimit) then
+      GC.MaxBytes := MemoryLimit;
+  end;
+end;
+
 function TGocciaCLIApplication.CreateEngine(const AFileName: string;
   const ASource: TStringList): TGocciaEngine;
+var
+  FileConfig: TConfigEntryArray;
 begin
   Result := TGocciaEngine.Create(AFileName, ASource, EffectiveBuiltins);
   try
+    FileConfig := DiscoverFileConfig(AFileName);
     if Assigned(FEngineOptions) then
     begin
-      Result.ASIEnabled := FEngineOptions.ASI.Present;
-      Result.VarEnabled := FEngineOptions.CompatVar.Present;
       ConfigureModuleResolver(Result.Resolver, AFileName,
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
-      ApplyMaxMemory(FEngineOptions);
+      ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig);
     end;
     if FLogFileOpen then
       Result.BuiltinConsole.LogCallback := HandleConsoleLog;
@@ -424,17 +485,18 @@ end;
 
 function TGocciaCLIApplication.CreateEngine(const AFileName: string;
   const ASource: TStringList; const AExecutor: TGocciaExecutor): TGocciaEngine;
+var
+  FileConfig: TConfigEntryArray;
 begin
   Result := TGocciaEngine.Create(AFileName, ASource, EffectiveBuiltins,
     AExecutor);
   try
+    FileConfig := DiscoverFileConfig(AFileName);
     if Assigned(FEngineOptions) then
     begin
-      Result.ASIEnabled := FEngineOptions.ASI.Present;
-      Result.VarEnabled := FEngineOptions.CompatVar.Present;
       ConfigureModuleResolver(Result.Resolver, AFileName,
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
-      ApplyMaxMemory(FEngineOptions);
+      ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig);
     end;
     if FLogFileOpen then
       Result.BuiltinConsole.LogCallback := HandleConsoleLog;

@@ -1036,6 +1036,206 @@ jobs:
           grep -q '"mode": "bytecode"' "$cfg_dir/results.json"
           grep -q '"passed": 1' "$cfg_dir/results.json"
 
+      # ── Per-file config discovery (all CLI apps) ──
+
+      - name: Check per-file config with GocciaScriptLoader
+        run: |
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          # Subdirectory with ASI enabled
+          mkdir -p "$cfg_dir/asi"
+          printf '{"asi": true}\n' > "$cfg_dir/asi/goccia.json"
+          printf 'const x = 42\nx\n' > "$cfg_dir/asi/test.js"
+
+          # Subdirectory without any config — ASI should NOT be enabled
+          mkdir -p "$cfg_dir/strict"
+          printf 'const y = 99;\ny;\n' > "$cfg_dir/strict/test.js"
+
+          # ASI subdirectory file succeeds (missing semicolons OK)
+          output="$(./build/GocciaScriptLoader "$cfg_dir/asi/test.js" 2>&1)"
+          printf '%s\n' "$output" | grep -q 'Result: 42'
+
+          # Strict subdirectory file also succeeds (has semicolons)
+          output2="$(./build/GocciaScriptLoader "$cfg_dir/strict/test.js" 2>&1)"
+          printf '%s\n' "$output2" | grep -q 'Result: 99'
+
+          # Strict subdirectory rejects missing semicolons
+          printf 'const z = 1\nz\n' > "$cfg_dir/strict/bad.js"
+          set +e
+          ./build/GocciaScriptLoader "$cfg_dir/strict/bad.js" 2>&1 | grep -q 'SyntaxError'
+          bad_status=$?
+          set -e
+          test "$bad_status" -eq 0
+
+          # CLI --asi overrides even without file config
+          output3="$(./build/GocciaScriptLoader "$cfg_dir/strict/bad.js" --asi 2>&1)"
+          printf '%s\n' "$output3" | grep -q 'Result: 1'
+
+      - name: Check per-file config with GocciaScriptLoader (bytecode)
+        run: |
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          mkdir -p "$cfg_dir/asi"
+          printf '{"asi": true}\n' > "$cfg_dir/asi/goccia.json"
+          printf 'const x = 42\nx\n' > "$cfg_dir/asi/test.js"
+
+          output="$(./build/GocciaScriptLoader "$cfg_dir/asi/test.js" --mode=bytecode 2>&1)"
+          printf '%s\n' "$output" | grep -q 'Result: 42'
+
+      - name: Check per-file config with GocciaTestRunner
+        run: |
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          # Subdirectory with ASI + compat-var
+          mkdir -p "$cfg_dir/lenient"
+          printf '{"asi": true, "compat-var": true}\n' > "$cfg_dir/lenient/goccia.json"
+          cat > "$cfg_dir/lenient/test.js" << 'EOF'
+          var x = 1
+          describe("lenient", () => {
+            test("asi + var", () => {
+              expect(x).toBe(1)
+            })
+          })
+          EOF
+
+          # Subdirectory with strict defaults (no config)
+          mkdir -p "$cfg_dir/strict"
+          cat > "$cfg_dir/strict/test.js" << 'EOF'
+          describe("strict", () => {
+            test("works", () => {
+              expect(2 + 2).toBe(4);
+            });
+          });
+          EOF
+
+          # Run both files together — each gets its own config
+          output="$(./build/GocciaTestRunner "$cfg_dir/lenient" "$cfg_dir/strict" --no-progress 2>&1)"
+          printf '%s\n' "$output" | grep -q 'Passed: 2'
+          printf '%s\n' "$output" | grep -q 'Failed: 0'
+
+      - name: Check per-file config with GocciaTestRunner (bytecode)
+        run: |
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          mkdir -p "$cfg_dir/asi"
+          printf '{"asi": true}\n' > "$cfg_dir/asi/goccia.json"
+          cat > "$cfg_dir/asi/test.js" << 'EOF'
+          describe("asi-bc", () => {
+            test("works", () => {
+              expect(1 + 1).toBe(2)
+            })
+          })
+          EOF
+
+          output="$(./build/GocciaTestRunner "$cfg_dir/asi" --mode=bytecode --no-progress 2>&1)"
+          printf '%s\n' "$output" | grep -q 'Passed: 1'
+
+      - name: Check per-file config with GocciaBundler
+        run: |
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          # Subdirectory with ASI
+          mkdir -p "$cfg_dir/asi"
+          printf '{"asi": true}\n' > "$cfg_dir/asi/goccia.json"
+          printf 'const x = 42\nx\n' > "$cfg_dir/asi/test.js"
+
+          # Subdirectory without config
+          mkdir -p "$cfg_dir/strict"
+          printf 'const y = 99;\ny;\n' > "$cfg_dir/strict/test.js"
+
+          # ASI subdirectory compiles (missing semicolons OK)
+          ./build/GocciaBundler "$cfg_dir/asi/test.js"
+          test -f "$cfg_dir/asi/test.gbc"
+
+          # Strict subdirectory compiles (has semicolons)
+          ./build/GocciaBundler "$cfg_dir/strict/test.js"
+          test -f "$cfg_dir/strict/test.gbc"
+
+          # Strict subdirectory rejects missing semicolons
+          printf 'const z = 1\nz\n' > "$cfg_dir/strict/bad.js"
+          set +e
+          ./build/GocciaBundler "$cfg_dir/strict/bad.js" 2>&1
+          bad_status=$?
+          set -e
+          test "$bad_status" -eq 1
+
+          # CLI --asi overrides
+          ./build/GocciaBundler "$cfg_dir/strict/bad.js" --asi
+          test -f "$cfg_dir/strict/bad.gbc"
+
+      - name: Check per-file config with GocciaBundler directory mode
+        run: |
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          # Directory with ASI config containing multiple files
+          printf '{"asi": true}\n' > "$cfg_dir/goccia.json"
+          printf 'const a = 1\na\n' > "$cfg_dir/a.js"
+          printf 'const b = 2\nb\n' > "$cfg_dir/b.js"
+
+          ./build/GocciaBundler "$cfg_dir"
+          test -f "$cfg_dir/a.gbc"
+          test -f "$cfg_dir/b.gbc"
+
+      - name: Check per-file config CLI flag wins over file config
+        run: |
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          # Config enables ASI
+          printf '{"asi": true}\n' > "$cfg_dir/goccia.json"
+          printf 'const x = 1\nx\n' > "$cfg_dir/test.js"
+
+          # File config enables ASI — should succeed
+          output="$(./build/GocciaScriptLoader "$cfg_dir/test.js" 2>&1)"
+          printf '%s\n' "$output" | grep -q 'Result: 1'
+
+          # Verify the file actually needs ASI (without config it would fail)
+          mkdir -p "$cfg_dir/noconfig"
+          printf 'const x = 1\nx\n' > "$cfg_dir/noconfig/test.js"
+          set +e
+          ./build/GocciaScriptLoader "$cfg_dir/noconfig/test.js" 2>&1 | grep -q 'SyntaxError'
+          test $? -eq 0
+          set -e
+
+      - name: Check per-file compat-var config with all apps
+        run: |
+          cfg_dir="$(mktemp -d)"
+          trap 'rm -rf "$cfg_dir"' EXIT
+
+          printf '{"compat-var": true}\n' > "$cfg_dir/goccia.json"
+
+          # GocciaScriptLoader: var declaration accepted
+          printf 'var x = 10;\nx;\n' > "$cfg_dir/test.js"
+          output="$(./build/GocciaScriptLoader "$cfg_dir/test.js" 2>&1)"
+          printf '%s\n' "$output" | grep -q 'Result: 10'
+
+          # GocciaScriptLoader bytecode: var declaration accepted
+          output_bc="$(./build/GocciaScriptLoader "$cfg_dir/test.js" --mode=bytecode 2>&1)"
+          printf '%s\n' "$output_bc" | grep -q 'Result: 10'
+
+          # GocciaBundler: var declaration accepted
+          ./build/GocciaBundler "$cfg_dir/test.js"
+          test -f "$cfg_dir/test.gbc"
+          rm "$cfg_dir/test.gbc"
+
+          # GocciaTestRunner: var declaration accepted
+          cat > "$cfg_dir/test-runner.js" << 'EOF'
+          var y = 20;
+          describe("var", () => {
+            test("works", () => {
+              expect(y).toBe(20);
+            });
+          });
+          EOF
+          output_tr="$(./build/GocciaTestRunner "$cfg_dir/test-runner.js" --no-progress 2>&1)"
+          printf '%s\n' "$output_tr" | grep -q 'Passed: 1'
+
   benchmark-comment:
     needs: benchmark
     runs-on: ubuntu-latest

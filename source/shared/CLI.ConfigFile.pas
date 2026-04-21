@@ -66,6 +66,13 @@ function DiscoverConfigFile(const AStartDirectory: string;
   const ABaseNames: array of string;
   const AExtensions: array of string): string;
 
+{ Look up a key in a config entry array.  Returns True and sets
+  AValue if a matching entry exists, False otherwise.  When
+  multiple entries share the same key (e.g. repeatable options),
+  the first match wins. }
+function FindConfigEntry(const AEntries: TConfigEntryArray;
+  const AKey: string; out AValue: string): Boolean;
+
 implementation
 
 uses
@@ -439,6 +446,22 @@ begin
   end;
 
   Result := '';
+end;
+
+{ ── Entry lookup ───────────────────────────────────────────── }
+
+function FindConfigEntry(const AEntries: TConfigEntryArray;
+  const AKey: string; out AValue: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(AEntries) do
+    if AEntries[I].Key = AKey then
+    begin
+      AValue := AEntries[I].Value;
+      Exit(True);
+    end;
+  Result := False;
 end;
 
 initialization
