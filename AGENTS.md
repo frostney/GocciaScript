@@ -80,6 +80,9 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaREPL --import-map=imports.json # Start the REPL with an explicit import map
 ./build/GocciaREPL --asi # Start the REPL with automatic semicolon insertion
 ./build/GocciaREPL --unsafe-ffi # Start the REPL with FFI enabled
+./build/GocciaREPL --log=repl.log # Start the REPL with console log capture
+./build/GocciaREPL --stack-size=5000 # Start the REPL with custom call stack depth limit
+./build/GocciaREPL --max-memory=10485760 # Start the REPL with 10 MB GC heap limit
 ./build/GocciaTestRunner tests/ --asi # Run all JavaScript tests
 ./build/GocciaTestRunner tests --import-map=imports.json # Run tests with an explicit import map
 ./build/GocciaTestRunner tests/language/expressions/ # Run a test category

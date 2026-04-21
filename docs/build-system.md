@@ -116,8 +116,14 @@ printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
 ./build/GocciaBenchmarkRunner benchmarks --import-map=imports.json
 ./build/GocciaREPL --import-map=imports.json
 
+# REPL supports the same engine options as the script loader:
+./build/GocciaREPL --log=repl.log           # Console log capture
+./build/GocciaREPL --stack-size=5000         # Custom call stack depth limit
+./build/GocciaREPL --max-memory=10485760     # 10 MB GC heap limit
+
 # When --import-map is omitted, the CLI walks up from the entry file directory
-# and uses the first goccia.json (or .json5 / .toml) it finds.
+# (or the current directory for the REPL) and uses the first goccia.json
+# (or .json5 / .toml) it finds.
 printf 'import { add } from "@/math"; add(1, 2);' | ./build/GocciaScriptLoader
 
 # Abort long-running scripts
