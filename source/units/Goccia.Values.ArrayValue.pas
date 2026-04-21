@@ -1380,6 +1380,7 @@ var
   View: TArrayLikeView;
   Target, Start, EndIdx, Count, I: Integer;
   Temp: array of TGocciaValue;
+  Present: array of Boolean;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
@@ -1411,11 +1412,22 @@ begin
   end;
 
   // Steps 10-12: Copy elements (using temp buffer for overlap safety)
+  // Preserve sparsity per ES spec: delete destination when source is absent.
   SetLength(Temp, Count);
+  SetLength(Present, Count);
   for I := 0 to Count - 1 do
-    Temp[I] := View.Get(Start + I);
+  begin
+    Present[I] := View.HasIndex(Start + I);
+    if Present[I] then
+      Temp[I] := View.Get(Start + I);
+  end;
   for I := 0 to Count - 1 do
-    View.Put(Target + I, Temp[I]);
+  begin
+    if Present[I] then
+      View.Put(Target + I, Temp[I])
+    else
+      View.DeleteIndex(Target + I);
+  end;
 
   // Step 13: Return O
   Result := View.Obj;
@@ -1559,6 +1571,7 @@ function TGocciaArrayValue.ArrayReverse(const AArgs: TGocciaArgumentsCollection;
 var
   View: TArrayLikeView;
   I, J: Integer;
+  LowerExists, UpperExists: Boolean;
   Lower, Upper: TGocciaValue;
 begin
   // Step 1: Let O be ToObject(this value)
@@ -1569,11 +1582,30 @@ begin
   // Step 4: Repeat, while lower ≠ middle
   while I < J do
   begin
-    // Steps 4d-i: Swap elements at lower and upper
-    Lower := View.Get(I);
-    Upper := View.Get(J);
-    View.Put(I, Upper);
-    View.Put(J, Lower);
+    // ES2026 §23.1.3.23 steps 4a-i: preserve sparsity via HasProperty/Delete
+    LowerExists := View.HasIndex(I);
+    UpperExists := View.HasIndex(J);
+    if LowerExists then
+      Lower := View.Get(I);
+    if UpperExists then
+      Upper := View.Get(J);
+
+    if LowerExists and UpperExists then
+    begin
+      View.Put(I, Upper);
+      View.Put(J, Lower);
+    end
+    else if UpperExists then
+    begin
+      View.Put(I, Upper);
+      View.DeleteIndex(J);
+    end
+    else if LowerExists then
+    begin
+      View.Put(J, Lower);
+      View.DeleteIndex(I);
+    end;
+    // else: both absent — nothing to do
     Inc(I);
     Dec(J);
   end;
@@ -1948,9 +1980,13 @@ begin
   else
     Removed := TGocciaArrayValue.Create;
 
-  // Step 11: Collect removed elements
+  // Step 11: Collect removed elements (preserve sparsity per ES spec §23.1.3.32 step 11)
   for I := 0 to DeleteCount - 1 do
-    ArrayCreateDataProperty(Removed, I, View.Get(ActualStart + I));
+  begin
+    if View.HasIndex(ActualStart + I) then
+      ArrayCreateDataProperty(Removed, I, View.Get(ActualStart + I));
+    // else: absent → leave hole in Removed (sparse)
+  end;
 
   // Fast path: native array
   if Assigned(View.Arr) then
