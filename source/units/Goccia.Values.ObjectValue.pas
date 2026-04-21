@@ -113,6 +113,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Values.ErrorHelper,
@@ -642,51 +643,106 @@ begin
   Result := True;
 end;
 
+// ES2026 §10.1.6.3 ValidateAndApplyPropertyDescriptor
+// Returns True if the new descriptor is compatible with current.
+// Does NOT free or apply anything — pure validation.
+function ValidatePropertyDescriptor(
+  const ACurrent: TGocciaPropertyDescriptor;
+  const ANew: TGocciaPropertyDescriptor
+): Boolean;
+var
+  CurrentData: TGocciaPropertyDescriptorData;
+  CurrentAccessor: TGocciaPropertyDescriptorAccessor;
+  NewData: TGocciaPropertyDescriptorData;
+  NewAccessor: TGocciaPropertyDescriptorAccessor;
+begin
+  Result := True;
+  if ACurrent.Configurable then
+    Exit;
+
+  // §10.1.6.3 step 3a: Cannot make configurable
+  if ANew.Configurable then
+    Exit(False);
+
+  // 3b: Cannot change enumerable
+  if ACurrent.Enumerable <> ANew.Enumerable then
+    Exit(False);
+
+  // 3c: Cannot change descriptor kind (data ↔ accessor)
+  if (ACurrent is TGocciaPropertyDescriptorData) <> (ANew is TGocciaPropertyDescriptorData) then
+    Exit(False);
+
+  // 3d: Non-configurable accessor — cannot change get or set
+  if (ACurrent is TGocciaPropertyDescriptorAccessor) and
+     (ANew is TGocciaPropertyDescriptorAccessor) then
+  begin
+    CurrentAccessor := TGocciaPropertyDescriptorAccessor(ACurrent);
+    NewAccessor := TGocciaPropertyDescriptorAccessor(ANew);
+    if (CurrentAccessor.Getter <> NewAccessor.Getter) or
+       (CurrentAccessor.Setter <> NewAccessor.Setter) then
+      Exit(False);
+  end;
+
+  // 3e: Non-configurable data — validate writable/value changes
+  if (ACurrent is TGocciaPropertyDescriptorData) and
+     (ANew is TGocciaPropertyDescriptorData) then
+  begin
+    CurrentData := TGocciaPropertyDescriptorData(ACurrent);
+    NewData := TGocciaPropertyDescriptorData(ANew);
+    if not CurrentData.Writable then
+    begin
+      // 3e.i: Cannot make writable once non-writable
+      if NewData.Writable then
+        Exit(False);
+      // 3e.ii: Cannot change value
+      if not IsSameValue(CurrentData.Value, NewData.Value) then
+        Exit(False);
+    end;
+  end;
+end;
+
+// ES2026 §20.1.2.3.1 DefinePropertyOrThrow(O, P, desc)
+// Does NOT take ownership of ADescriptor on failure — caller must free.
 procedure TGocciaObjectValue.DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
 var
-  ExistingDescriptor: TGocciaPropertyDescriptor;
+  Current: TGocciaPropertyDescriptor;
 begin
-  if FProperties.TryGetValue(AName, ExistingDescriptor) then
+  if FProperties.TryGetValue(AName, Current) then
   begin
-    if not ExistingDescriptor.Configurable then
+    if not ValidatePropertyDescriptor(Current, ADescriptor) then
       ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]), SSuggestCannotDeleteNonConfigurable);
-    ExistingDescriptor.Free;
-  end;
+    Current.Free;
+  end
+  else if not FExtensible then
+    ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]), SSuggestCannotDeleteNonConfigurable);
 
   FProperties.Add(AName, ADescriptor);
 end;
 
 // ES2026 §10.1.6.1 OrdinaryDefineOwnProperty(O, P, Desc)
-// Boolean variant — returns false instead of throwing on non-configurable
-// conflicts or non-extensible objects.
+// Takes ownership of ADescriptor — frees it on failure.
 function TGocciaObjectValue.TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 var
-  ExistingDescriptor: TGocciaPropertyDescriptor;
+  Current: TGocciaPropertyDescriptor;
 begin
-  if FProperties.TryGetValue(AName, ExistingDescriptor) then
+  if not FProperties.TryGetValue(AName, Current) then
   begin
-    if not ExistingDescriptor.Configurable then
+    if not FExtensible then
     begin
-      // ES2026 §10.1.6.3 step 7.g: Non-configurable data descriptor —
-      // allow value update only when existing is writable and new is also data.
-      if (ExistingDescriptor is TGocciaPropertyDescriptorData) and
-         (ADescriptor is TGocciaPropertyDescriptorData) and
-         ExistingDescriptor.Writable then
-      begin
-        ExistingDescriptor.Free;
-        FProperties.Add(AName, ADescriptor);
-        Exit(True);
-      end;
       ADescriptor.Free;
       Exit(False);
     end;
-    ExistingDescriptor.Free;
-  end
-  else if not FExtensible then
+    FProperties.Add(AName, ADescriptor);
+    Exit(True);
+  end;
+
+  if not ValidatePropertyDescriptor(Current, ADescriptor) then
   begin
     ADescriptor.Free;
     Exit(False);
   end;
+
+  Current.Free;
   FProperties.Add(AName, ADescriptor);
   Result := True;
 end;
@@ -910,55 +966,51 @@ end;
 
 { Symbol property methods }
 
+// ES2026 §20.1.2.3.1 DefinePropertyOrThrow — symbol variant
+// Does NOT take ownership of ADescriptor on failure — caller must free.
 procedure TGocciaObjectValue.DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
 var
-  ExistingDescriptor: TGocciaPropertyDescriptor;
+  Current: TGocciaPropertyDescriptor;
 begin
-  if FSymbolDescriptors.TryGetValue(ASymbol, ExistingDescriptor) then
+  if FSymbolDescriptors.TryGetValue(ASymbol, Current) then
   begin
-    if not ExistingDescriptor.Configurable then
+    if not ValidatePropertyDescriptor(Current, ADescriptor) then
       ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [ASymbol.ToDisplayString.Value]), SSuggestCannotDeleteNonConfigurable);
-    ExistingDescriptor.Free;
+    Current.Free;
   end
+  else if not FExtensible then
+    ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [ASymbol.ToDisplayString.Value]), SSuggestCannotDeleteNonConfigurable)
   else
     FSymbolInsertionOrder.Add(ASymbol);
 
   FSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
 end;
 
-// ES2026 §10.1.6.1 OrdinaryDefineOwnProperty(O, P, Desc) — symbol variant
-// Boolean variant — returns false instead of throwing on non-configurable
-// conflicts or non-extensible objects.
+// ES2026 §10.1.6.1 OrdinaryDefineOwnProperty — symbol variant
+// Takes ownership of ADescriptor — frees it on failure.
 function TGocciaObjectValue.TryDefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 var
-  ExistingDescriptor: TGocciaPropertyDescriptor;
+  Current: TGocciaPropertyDescriptor;
 begin
-  if FSymbolDescriptors.TryGetValue(ASymbol, ExistingDescriptor) then
+  if not FSymbolDescriptors.TryGetValue(ASymbol, Current) then
   begin
-    if not ExistingDescriptor.Configurable then
+    if not FExtensible then
     begin
-      // ES2026 §10.1.6.3 step 7.g: Non-configurable data descriptor —
-      // allow value update only when existing is writable and new is also data.
-      if (ExistingDescriptor is TGocciaPropertyDescriptorData) and
-         (ADescriptor is TGocciaPropertyDescriptorData) and
-         ExistingDescriptor.Writable then
-      begin
-        ExistingDescriptor.Free;
-        FSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
-        Exit(True);
-      end;
       ADescriptor.Free;
       Exit(False);
     end;
-    ExistingDescriptor.Free;
-  end
-  else if not FExtensible then
+    FSymbolInsertionOrder.Add(ASymbol);
+    FSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
+    Exit(True);
+  end;
+
+  if not ValidatePropertyDescriptor(Current, ADescriptor) then
   begin
     ADescriptor.Free;
     Exit(False);
-  end
-  else
-    FSymbolInsertionOrder.Add(ASymbol);
+  end;
+
+  Current.Free;
   FSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
   Result := True;
 end;

@@ -48,6 +48,8 @@ type
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function HasOwnProperty(const AName: string): Boolean; override;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
+    procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); override;
+    function TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean; override;
     function Includes(const AValue: TGocciaValue; AFromIndex: Integer = 0): Boolean;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
@@ -1761,6 +1763,64 @@ begin
     Result := TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(FElements.Count), [pfWritable])
   else
     Result := inherited GetOwnPropertyDescriptor(AName);
+end;
+
+// ES2026 §10.4.2.1 ArrayDefineOwnProperty(A, P, Desc)
+procedure TGocciaArrayValue.DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
+begin
+  if not TryDefineProperty(AName, ADescriptor) then
+    ThrowError(SErrorCannotRedefineNonConfigurable, [AName], SSuggestCannotDeleteNonConfigurable);
+end;
+
+// ES2026 §10.4.2.1 ArrayDefineOwnProperty — boolean variant
+function TGocciaArrayValue.TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+var
+  Index, NewLen, I: Integer;
+begin
+  if AName = PROP_LENGTH then
+  begin
+    // §10.4.2.4 ArraySetLength(A, Desc)
+    if ADescriptor is TGocciaPropertyDescriptorData then
+    begin
+      NewLen := Trunc(TGocciaPropertyDescriptorData(ADescriptor).Value.ToNumberLiteral.Value);
+      if NewLen < 0 then
+      begin
+        ADescriptor.Free;
+        Exit(False);
+      end;
+      // Truncate elements
+      if NewLen < FElements.Count then
+        for I := FElements.Count - 1 downto NewLen do
+          FElements.Delete(I);
+      // Extend elements
+      while FElements.Count < NewLen do
+        FElements.Add(TGocciaHoleValue.HoleValue);
+    end;
+    ADescriptor.Free;
+    Result := True;
+    Exit;
+  end;
+
+  // Numeric index — update FElements directly
+  if TryStrToInt(AName, Index) and (Index >= 0) then
+  begin
+    if ADescriptor is TGocciaPropertyDescriptorData then
+    begin
+      // Extend array if needed
+      while FElements.Count <= Index do
+        FElements.Add(TGocciaHoleValue.HoleValue);
+      FElements[Index] := TGocciaPropertyDescriptorData(ADescriptor).Value;
+      ADescriptor.Free;
+      Result := True;
+    end
+    else
+      // Accessor descriptor on array index — store as regular property
+      Result := inherited TryDefineProperty(AName, ADescriptor);
+    Exit;
+  end;
+
+  // Non-index, non-length — delegate to inherited
+  Result := inherited TryDefineProperty(AName, ADescriptor);
 end;
 
 // ES2026 §23.1.3.29 Array.prototype.sort(comparefn)
