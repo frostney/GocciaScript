@@ -197,22 +197,23 @@ var
   ConfigValue: string;
   EffectiveASI, EffectiveVar: Boolean;
 begin
-  { Resolve ASI and compat-var: CLI flag > per-file config > default }
+  { Resolve ASI and compat-var:
+    CLI flag > per-file config > root config > default (false). }
   FileConfig := DiscoverFileConfig(AFileName);
 
-  if EngineOptions.ASI.Present then
+  if EngineOptions.ASI.FromCommandLine then
     EffectiveASI := True
   else if FindConfigEntry(FileConfig, 'asi', ConfigValue) then
     EffectiveASI := ConfigValue = 'true'
   else
-    EffectiveASI := False;
+    EffectiveASI := EngineOptions.ASI.Present;
 
-  if EngineOptions.CompatVar.Present then
+  if EngineOptions.CompatVar.FromCommandLine then
     EffectiveVar := True
   else if FindConfigEntry(FileConfig, 'compat-var', ConfigValue) then
     EffectiveVar := ConfigValue = 'true'
   else
-    EffectiveVar := False;
+    EffectiveVar := EngineOptions.CompatVar.Present;
 
   CompiledModule := nil;
   ProgramNode := ParseSource(ASource, AFileName, EffectiveASI, EffectiveVar,

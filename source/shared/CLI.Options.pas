@@ -20,6 +20,7 @@ type
     FHelpText: string;
     FGroup: string;
     FPresent: Boolean;
+    FFromCommandLine: Boolean;
   public
     constructor Create(const ALongName, AHelpText: string; const AGroup: string = '');
 
@@ -27,11 +28,17 @@ type
     function FormatForHelp: string; virtual; abstract;
     function ValidValues: string; virtual;
 
+    { Mark this option as having been set by the command line.
+      Called after ParseCommandLine so that per-file config can
+      distinguish CLI-set values from root-config-set values. }
+    procedure MarkFromCommandLine;
+
     property LongName: string read FLongName;
     property ShortName: string read FShortName write FShortName;
     property HelpText: string read FHelpText;
     property Group: string read FGroup;
     property Present: Boolean read FPresent;
+    property FromCommandLine: Boolean read FFromCommandLine;
   end;
 
   TGocciaOptionArray = array of TGocciaOptionBase;
@@ -236,6 +243,12 @@ begin
   FHelpText := AHelpText;
   FGroup := AGroup;
   FPresent := False;
+  FFromCommandLine := False;
+end;
+
+procedure TGocciaOptionBase.MarkFromCommandLine;
+begin
+  FFromCommandLine := True;
 end;
 
 function TGocciaOptionBase.ValidValues: string;
