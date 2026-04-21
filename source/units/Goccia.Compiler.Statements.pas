@@ -557,6 +557,11 @@ begin
     if Assigned(Info.Initializer) and
        not (AStmt.IsVar and (not HasRealInitializer) and IsVarRedeclaration) then
     begin
+      // ES §15.7.3: anonymous class expression infers name from binding
+      if (Info.Initializer is TGocciaClassExpression) and
+         (TGocciaClassExpression(Info.Initializer).ClassDefinition.Name = '') then
+        TGocciaClassExpression(Info.Initializer).ClassDefinition.FName := Info.Name;
+
       FuncCount := ACtx.Template.FunctionCount;
       ACtx.CompileExpression(Info.Initializer, Slot);
 
