@@ -14,8 +14,9 @@ const LOADER = `./build/GocciaScriptLoader${ext}`;
 
 console.log("Error display (SyntaxError with caret and suggestion)...");
 {
-  const res = await $`echo 'const x = 1\nconst y = x +' | ${LOADER} 2>&1`.nothrow();
+  const res = await $`printf '%s\n' 'const x = 1' 'const y = x +' | ${LOADER} 2>&1`.nothrow();
   const out = res.text();
+  if (res.exitCode === 0) throw new Error("Expected syntax error exit code");
   if (!out.includes("SyntaxError")) throw new Error(`Expected SyntaxError, got: ${out}`);
   if (!out.includes("^")) throw new Error(`Expected caret in error display, got: ${out}`);
   const lower = out.toLowerCase();
@@ -33,11 +34,12 @@ console.log("Error display (JSON error output)...");
     stdout: "pipe",
     stderr: "pipe",
   });
+  if (proc.exitCode !== 1) throw new Error(`Syntax error exit code should be 1, got ${proc.exitCode}`);
   const json = JSON.parse(proc.stdout.toString());
   if (json.ok !== false) throw new Error(`JSON error ok should be false`);
   if (json.error?.type !== "SyntaxError") throw new Error(`Expected SyntaxError, got ${json.error?.type}`);
-  if (json.error?.line === undefined) throw new Error(`JSON error should include line`);
-  if (json.error?.column === undefined) throw new Error(`JSON error should include column`);
+  if (typeof json.error?.line !== "number") throw new Error(`JSON error should include numeric line, got ${json.error?.line}`);
+  if (typeof json.error?.column !== "number") throw new Error(`JSON error should include numeric column, got ${json.error?.column}`);
 }
 
 // -- Error display (bytecode mode) ----------------------------------------------
@@ -49,9 +51,12 @@ console.log("Error display (bytecode SyntaxError)...");
     stdout: "pipe",
     stderr: "pipe",
   });
+  if (proc.exitCode !== 1) throw new Error(`Bytecode syntax error exit code should be 1, got ${proc.exitCode}`);
   const json = JSON.parse(proc.stdout.toString());
   if (json.ok !== false) throw new Error(`Bytecode JSON error ok should be false`);
   if (json.error?.type !== "SyntaxError") throw new Error(`Expected SyntaxError in bytecode, got ${json.error?.type}`);
+  if (typeof json.error?.line !== "number") throw new Error(`Bytecode JSON error should include numeric line, got ${json.error?.line}`);
+  if (typeof json.error?.column !== "number") throw new Error(`Bytecode JSON error should include numeric column, got ${json.error?.column}`);
 }
 
 console.log("\nAll test-cli-parser.ts tests passed.");

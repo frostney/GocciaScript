@@ -378,6 +378,7 @@ console.log("Per-file ASI config across all apps...");
         timeout: 60_000,
       },
     );
+    if (benchInterp.exitCode !== 0) throw new Error(`BenchmarkRunner interp ASI exited ${benchInterp.exitCode}: ${benchInterp.stderr.toString()}`);
     if (!benchInterp.stdout.toString().includes("asi")) throw new Error("BenchmarkRunner interp ASI should mention 'asi'");
 
     // BenchmarkRunner (bytecode)
@@ -390,6 +391,7 @@ console.log("Per-file ASI config across all apps...");
         timeout: 60_000,
       },
     );
+    if (benchBc.exitCode !== 0) throw new Error(`BenchmarkRunner bytecode ASI exited ${benchBc.exitCode}: ${benchBc.stderr.toString()}`);
     if (!benchBc.stdout.toString().includes("asi")) throw new Error("BenchmarkRunner bytecode ASI should mention 'asi'");
   } finally {
     clean(tmp);
@@ -457,6 +459,7 @@ console.log("Per-file compat-var config across all apps...");
         timeout: 60_000,
       },
     );
+    if (benchInterp.exitCode !== 0) throw new Error(`BenchmarkRunner interp compat-var exited ${benchInterp.exitCode}: ${benchInterp.stderr.toString()}`);
     if (!benchInterp.stdout.toString().includes("var")) throw new Error("BenchmarkRunner interp compat-var should mention 'var'");
 
     // BenchmarkRunner (bytecode)
@@ -469,6 +472,7 @@ console.log("Per-file compat-var config across all apps...");
         timeout: 60_000,
       },
     );
+    if (benchBc.exitCode !== 0) throw new Error(`BenchmarkRunner bytecode compat-var exited ${benchBc.exitCode}: ${benchBc.stderr.toString()}`);
     if (!benchBc.stdout.toString().includes("var")) throw new Error("BenchmarkRunner bytecode compat-var should mention 'var'");
   } finally {
     clean(tmp);

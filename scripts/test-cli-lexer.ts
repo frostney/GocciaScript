@@ -30,6 +30,9 @@ console.log("Numeric separator rejection...");
       stdout: "pipe",
       stderr: "pipe",
     });
+    if (proc.exitCode === 0) {
+      throw new Error(`Numeric separator "${literal}" (${desc}) should fail, but exited 0`);
+    }
     const json = JSON.parse(proc.stdout.toString());
     if (json.ok !== false || json.error?.type !== "SyntaxError") {
       throw new Error(`Numeric separator "${literal}" (${desc}) should be SyntaxError, got ok=${json.ok} type=${json.error?.type}`);
