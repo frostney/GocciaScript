@@ -154,7 +154,7 @@ printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./bu
 
 ### Configuration File (`goccia.json`)
 
-All CLI options can also be set via a project configuration file. The CLI discovers the file by walking up from the **entry file's directory** and checking for (in priority order):
+All CLI options can also be set via a project configuration file. The CLI discovers the file by walking up from the **entry file's directory** (or the current working directory for GocciaREPL) and checking for (in priority order):
 
 1. `goccia.toml`
 2. `goccia.json5`
@@ -204,7 +204,7 @@ max-memory = 10485760
 stack-size = 3500
 ```
 
-**CLI vs. embedding** — Config file discovery is automatic for all CLI applications (`GocciaScriptLoader`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, `GocciaBundler`) because they inherit from `TGocciaCLIApplication`. When embedding the engine directly, config file loading is not automatic. Use the shared `CLI.ConfigFile` unit to get the same behavior.
+**CLI vs. embedding** — Config file discovery is automatic for all CLI applications (`GocciaScriptLoader`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, `GocciaBundler`, `GocciaREPL`) because they inherit from `TGocciaCLIApplication`. When embedding the engine directly, config file loading is not automatic. Use the shared `CLI.ConfigFile` unit to get the same behavior.
 
 **Note:** `ApplyConfigFile` only handles `.json` out of the box. To support `.json5` and `.toml` config files, you must register their parsers first — the same way `TGocciaCLIApplication.Execute` does via `EnsureConfigParsersRegistered`. See `Goccia.CLI.Application.pas` for the registration pattern using `RegisterConfigParser`.
 
