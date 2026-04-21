@@ -102,11 +102,14 @@ type
 implementation
 
 uses
+  SysUtils,
+
   Goccia.Values.ArrayValue,
   Goccia.Values.HeadersValue,
   Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
   Goccia.Values.SetValue,
+  Goccia.Values.ToObject,
   Goccia.Values.URLSearchParamsValue;
 
 { TGocciaArrayIteratorValue }
@@ -119,11 +122,35 @@ begin
   FKind := AKind;
 end;
 
+function GetArrayIteratorLen(const ASource: TGocciaValue): Integer;
+begin
+  if ASource is TGocciaArrayValue then
+    Result := TGocciaArrayValue(ASource).Elements.Count
+  else
+    Result := LengthOfArrayLike(TGocciaObjectValue(ASource));
+end;
+
+function GetArrayIteratorElement(const ASource: TGocciaValue; const AIndex: Integer): TGocciaValue;
+begin
+  if ASource is TGocciaArrayValue then
+  begin
+    Result := TGocciaArrayValue(ASource).Elements[AIndex];
+    if Result = TGocciaHoleValue.HoleValue then
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end
+  else
+  begin
+    Result := TGocciaObjectValue(ASource).GetProperty(IntToStr(AIndex));
+    if not Assigned(Result) then
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+end;
+
 function TGocciaArrayIteratorValue.AdvanceNext: TGocciaObjectValue;
 var
-  Arr: TGocciaArrayValue;
   EntryArray: TGocciaArrayValue;
   Element: TGocciaValue;
+  Len: Integer;
 begin
   if FDone then
   begin
@@ -131,8 +158,8 @@ begin
     Exit;
   end;
 
-  Arr := TGocciaArrayValue(FSource);
-  if FIndex >= Arr.Elements.Count then
+  Len := GetArrayIteratorLen(FSource);
+  if FIndex >= Len then
   begin
     FDone := True;
     Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
@@ -142,9 +169,7 @@ begin
   case FKind of
     akValues:
     begin
-      Element := Arr.Elements[FIndex];
-      if Element = TGocciaHoleValue.HoleValue then
-        Element := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Element := GetArrayIteratorElement(FSource, FIndex);
       Result := CreateIteratorResult(Element, False);
     end;
     akKeys:
@@ -153,9 +178,7 @@ begin
     begin
       EntryArray := TGocciaArrayValue.Create;
       EntryArray.Elements.Add(TGocciaNumberLiteralValue.Create(FIndex));
-      Element := Arr.Elements[FIndex];
-      if Element = TGocciaHoleValue.HoleValue then
-        Element := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Element := GetArrayIteratorElement(FSource, FIndex);
       EntryArray.Elements.Add(Element);
       Result := CreateIteratorResult(EntryArray, False);
     end;
@@ -165,11 +188,12 @@ end;
 
 function TGocciaArrayIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
 var
-  Arr: TGocciaArrayValue;
   EntryArray: TGocciaArrayValue;
   Element: TGocciaValue;
+  Len: Integer;
 begin
-  if FDone or (FIndex >= TGocciaArrayValue(FSource).Elements.Count) then
+  Len := GetArrayIteratorLen(FSource);
+  if FDone or (FIndex >= Len) then
   begin
     FDone := True;
     ADone := True;
@@ -178,13 +202,10 @@ begin
   end;
 
   ADone := False;
-  Arr := TGocciaArrayValue(FSource);
   case FKind of
     akValues:
     begin
-      Element := Arr.Elements[FIndex];
-      if Element = TGocciaHoleValue.HoleValue then
-        Element := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Element := GetArrayIteratorElement(FSource, FIndex);
       Result := Element;
     end;
     akKeys:
@@ -193,9 +214,7 @@ begin
     begin
       EntryArray := TGocciaArrayValue.Create;
       EntryArray.Elements.Add(TGocciaNumberLiteralValue.Create(FIndex));
-      Element := Arr.Elements[FIndex];
-      if Element = TGocciaHoleValue.HoleValue then
-        Element := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Element := GetArrayIteratorElement(FSource, FIndex);
       EntryArray.Elements.Add(Element);
       Result := EntryArray;
     end;
