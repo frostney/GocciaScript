@@ -13,6 +13,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.AST.Expressions,
   Goccia.AST.Node,
+  Goccia.Scope,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -197,6 +198,21 @@ type
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
   end;
 
+  TGocciaFunctionConstructorClassValue = class(TGocciaClassValue)
+  private
+    FEnabled: Boolean;
+    FGlobalScope: TGocciaScope;
+    function BuildFunction(const AArguments: TGocciaArgumentsCollection): TGocciaFunctionValue;
+  public
+    constructor Create(const AName: string; const ASuperClass: TGocciaClassValue;
+      const AEnabled: Boolean; const AGlobalScope: TGocciaScope);
+    function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    procedure MarkReferences; override;
+
+    property Enabled: Boolean read FEnabled write FEnabled;
+  end;
+
   TGocciaInstanceValue = class(TGocciaObjectValue)
   private
     FClass: TGocciaClassValue;
@@ -225,8 +241,10 @@ type
 implementation
 
 uses
+  Generics.Collections,
   SysUtils,
 
+  Goccia.AST.Statements,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
@@ -235,6 +253,9 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Lexer,
+  Goccia.Parser,
+  Goccia.Token,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.AutoAccessor,
@@ -1205,6 +1226,123 @@ begin
   else
     Prim := AArguments.GetElement(0).ToBooleanLiteral;
   Result := Prim.Box;
+end;
+
+{ TGocciaFunctionConstructorClassValue }
+
+constructor TGocciaFunctionConstructorClassValue.Create(const AName: string;
+  const ASuperClass: TGocciaClassValue; const AEnabled: Boolean;
+  const AGlobalScope: TGocciaScope);
+begin
+  inherited Create(AName, ASuperClass);
+  FEnabled := AEnabled;
+  FGlobalScope := AGlobalScope;
+end;
+
+function TGocciaFunctionConstructorClassValue.BuildFunction(
+  const AArguments: TGocciaArgumentsCollection): TGocciaFunctionValue;
+var
+  ParamStr, BodyStr, Source: string;
+  I: Integer;
+  Lexer: TGocciaLexer;
+  Tokens: TObjectList<TGocciaToken>;
+  Parser: TGocciaParser;
+  ProgramNode: TGocciaProgram;
+  ArrowExpr: TGocciaArrowFunctionExpression;
+  Statements: TObjectList<TGocciaASTNode>;
+begin
+  if not FEnabled then
+    ThrowTypeError('Dynamic code generation is disabled. ' +
+      'Pass --unsafe-function-constructor to enable the Function constructor');
+
+  // ES2026 §20.2.1.1: collect parameters and body from arguments
+  if AArguments.Length = 0 then
+  begin
+    ParamStr := '';
+    BodyStr := '';
+  end
+  else if AArguments.Length = 1 then
+  begin
+    ParamStr := '';
+    BodyStr := AArguments.GetElement(0).ToStringLiteral.Value;
+  end
+  else
+  begin
+    ParamStr := AArguments.GetElement(0).ToStringLiteral.Value;
+    for I := 1 to AArguments.Length - 2 do
+      ParamStr := ParamStr + ', ' + AArguments.GetElement(I).ToStringLiteral.Value;
+    BodyStr := AArguments.GetElement(AArguments.Length - 1).ToStringLiteral.Value;
+  end;
+
+  // Synthesize arrow function source for the parser
+  Source := '(' + ParamStr + ') => {' + #10 + BodyStr + #10 + '}';
+
+  Lexer := TGocciaLexer.Create(Source, '<Function>');
+  try
+    Tokens := Lexer.ScanTokens;
+    Parser := TGocciaParser.Create(Tokens, '<Function>', Lexer.SourceLines);
+    try
+      ProgramNode := Parser.ParseUnchecked;
+      try
+        if (ProgramNode.Body.Count <> 1) or
+           not (ProgramNode.Body[0] is TGocciaExpressionStatement) or
+           not (TGocciaExpressionStatement(ProgramNode.Body[0]).Expression
+             is TGocciaArrowFunctionExpression) then
+          ThrowSyntaxError('Invalid function body');
+
+        ArrowExpr := TGocciaArrowFunctionExpression(
+          TGocciaExpressionStatement(ProgramNode.Body[0]).Expression);
+
+        // Extract body statements from the arrow function's block body
+        if ArrowExpr.Body is TGocciaBlockStatement then
+        begin
+          Statements := TObjectList<TGocciaASTNode>.Create(False);
+          for I := 0 to TGocciaBlockStatement(ArrowExpr.Body).Nodes.Count - 1 do
+            Statements.Add(TGocciaBlockStatement(ArrowExpr.Body).Nodes[I]);
+        end
+        else
+        begin
+          Statements := TObjectList<TGocciaASTNode>.Create(False);
+          Statements.Add(ArrowExpr.Body);
+        end;
+
+        // Create a regular function (not arrow) so it gets its own this binding.
+        // Closure is global scope per ES spec §20.2.1.1.1 step 30.
+        Result := TGocciaFunctionValue.Create(
+          ArrowExpr.Parameters, Statements, FGlobalScope, 'anonymous');
+        Result.SourceFilePath := '<Function>';
+      finally
+        ProgramNode.Free;
+      end;
+    finally
+      Parser.Free;
+    end;
+  finally
+    Lexer.Free;
+  end;
+end;
+
+function TGocciaFunctionConstructorClassValue.Call(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  // ES2026 §20.2.1.1: Function(...) is equivalent to new Function(...)
+  Result := BuildFunction(AArguments);
+end;
+
+function TGocciaFunctionConstructorClassValue.CreateNativeInstance(
+  const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+begin
+  // Return the function value directly; Instantiate will use it as the instance
+  Result := BuildFunction(AArguments);
+end;
+
+procedure TGocciaFunctionConstructorClassValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FGlobalScope) then
+    FGlobalScope.MarkReferences;
 end;
 
 { TGocciaInstanceValue }

@@ -163,6 +163,7 @@ type
     FBuiltinURLSearchParams: TGocciaGlobalURLSearchParams;
     FBuiltinFetch: TGocciaGlobalFetch;
     FBuiltinDisposableStack: TGocciaBuiltinDisposableStack;
+    FFunctionConstructor: TGocciaFunctionConstructorClassValue;
     FPreviousExceptionMask: TFPUExceptionMask;
     FSuppressWarnings: Boolean;
     FLastTiming: TGocciaScriptResult;
@@ -237,6 +238,7 @@ type
     property ModuleLoader: TGocciaModuleLoader read FModuleLoader;
     property ASIEnabled: Boolean read GetASIEnabled write SetASIEnabled;
     property VarEnabled: Boolean read GetVarEnabled write SetVarEnabled;
+    property FunctionConstructor: TGocciaFunctionConstructorClassValue read FFunctionConstructor;
     property Preprocessors: TGocciaPreprocessors read FPreprocessors write SetPreprocessors;
     property Compatibility: TGocciaCompatibilityFlags read FCompatibility write SetCompatibility;
     property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
@@ -1011,7 +1013,9 @@ begin
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   BooleanConstructor := TGocciaBooleanClassValue(GenericConstructor);
 
-  FunctionConstructor := TGocciaClassValue.Create('Function', nil);
+  FFunctionConstructor := TGocciaFunctionConstructorClassValue.Create('Function', nil,
+    False, FInterpreter.GlobalScope);
+  FunctionConstructor := FFunctionConstructor;
   TGocciaFunctionBase.SetSharedPrototypeParent(FunctionConstructor.Prototype);
   FunctionConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, FunctionConstructor);
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);

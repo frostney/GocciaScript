@@ -485,7 +485,8 @@ begin
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   BooleanConstructor := TGocciaBooleanClassValue(GenericConstructor);
 
-  FunctionConstructor := TGocciaClassValue.Create('Function', nil);
+  FunctionConstructor := TGocciaFunctionConstructorClassValue.Create('Function', nil,
+    False, FInterpreter.GlobalScope);
   TGocciaFunctionBase.SetSharedPrototypeParent(FunctionConstructor.Prototype);
   FunctionConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, FunctionConstructor);
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);

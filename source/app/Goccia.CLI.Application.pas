@@ -449,6 +449,12 @@ begin
   else if FindConfigEntry(AFileConfig, 'compat-var', ValueStr) then
     AEngine.VarEnabled := ValueStr = 'true';
 
+  { unsafe-function-constructor: CLI flag > file config > default (false) }
+  if AEngineOptions.UnsafeFunctionConstructor.Present then
+    AEngine.FunctionConstructor.Enabled := True
+  else if FindConfigEntry(AFileConfig, 'unsafe-function-constructor', ValueStr) then
+    AEngine.FunctionConstructor.Enabled := ValueStr = 'true';
+
   { max-memory: CLI > file config > unlimited }
   if AEngineOptions.MaxMemory.Present then
     ApplyMaxMemory(AEngineOptions)
