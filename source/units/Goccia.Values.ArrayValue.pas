@@ -943,20 +943,24 @@ end;
 // ES2026 §23.1.3.11.1 FlattenIntoArray(target, source, ..., depth)
 procedure TGocciaArrayValue.FlattenInto(const ATarget: TGocciaArrayValue; const ADepth: Integer);
 var
+  View: TArrayLikeView;
   I: Integer;
+  Element: TGocciaValue;
 begin
-  // Step 3: Repeat, while sourceIndex < sourceLen
-  for I := 0 to Elements.Count - 1 do
+  // Use View-based iteration for prototype-aware access
+  View.Init(Self);
+  for I := 0 to View.Len - 1 do
   begin
-    if IsArrayHole(Elements[I]) then
+    if not View.HasIndex(I) then
       Continue;
 
+    Element := View.Get(I);
     // Step 3c-v: If depth > 0 and IsConcatSpreadable(element), recurse
-    if (Elements[I] is TGocciaArrayValue) and (ADepth > 0) then
-      TGocciaArrayValue(Elements[I]).FlattenInto(ATarget, ADepth - 1)
+    if (Element is TGocciaArrayValue) and (ADepth > 0) then
+      TGocciaArrayValue(Element).FlattenInto(ATarget, ADepth - 1)
     else
       // Step 3c-v-2: Else, CreateDataPropertyOrThrow(target, targetIndex, element)
-      ATarget.Elements.Add(Elements[I]);
+      ATarget.Elements.Add(Element);
   end;
 end;
 
@@ -1952,46 +1956,7 @@ var
 begin
   View.Init(AThisValue);
 
-  // Fast path: native array — compact present elements, sort, restore holes at end
-  if Assigned(View.Arr) then
-  begin
-    // Collect present (non-hole) elements into a temp list
-    TempArr := TGocciaArrayValue.Create;
-    for I := 0 to View.Arr.Elements.Count - 1 do
-    begin
-      if not IsArrayHole(View.Arr.Elements[I]) then
-        TempArr.Elements.Add(View.Arr.Elements[I]);
-    end;
-
-    if TempArr.Elements.Count > 0 then
-    begin
-      if AArgs.Length > 0 then
-      begin
-        CustomSortFunction := AArgs.GetElement(0);
-        if not CustomSortFunction.IsCallable then
-          ThrowError(SErrorCustomSortMustBeFunction, [], SSuggestCallbackRequired);
-        CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
-        try
-          if TempArr.Elements.Count > 1 then
-            QuickSortElements(TempArr.Elements, TGocciaFunctionBase(CustomSortFunction), CallArgs, AThisValue, 0, TempArr.Elements.Count - 1);
-        finally
-          CallArgs.Free;
-        end;
-      end else if TempArr.Elements.Count > 1 then
-        TempArr.Elements.Sort(TComparer<TGocciaValue>.Construct(DefaultCompare));
-    end;
-
-    // Write sorted elements back, fill remaining with holes
-    for I := 0 to TempArr.Elements.Count - 1 do
-      View.Arr.Elements[I] := TempArr.Elements[I];
-    for I := TempArr.Elements.Count to View.Arr.Elements.Count - 1 do
-      View.Arr.Elements[I] := TGocciaHoleValue.HoleValue;
-
-    Result := View.Arr;
-    Exit;
-  end;
-
-  // Generic path: collect only present elements, sort, write back, delete trailing
+  // Collect only present elements via View for prototype-aware access
   TempArr := TGocciaArrayValue.Create;
   for I := 0 to View.Len - 1 do
   begin
@@ -2158,6 +2123,13 @@ begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
   ArgCount := AArgs.Length;
+
+  // ES2026 §23.1.3.37 step 4: skip shifting when no arguments provided
+  if ArgCount = 0 then
+  begin
+    Result := TGocciaNumberLiteralValue.Create(View.Len);
+    Exit;
+  end;
 
   // Shift existing elements up by argCount via View for prototype-aware semantics
   NewLen := View.Len + ArgCount;
