@@ -166,13 +166,15 @@ function TArrayLikeView.Get(const AIndex: Integer): TGocciaValue;
 begin
   if Assigned(Arr) then
   begin
-    if (AIndex >= 0) and (AIndex < Arr.Elements.Count) then
+    if (AIndex >= 0) and (AIndex < Arr.Elements.Count) and
+       (Arr.Elements[AIndex] <> TGocciaHoleValue.HoleValue) then
     begin
       Result := Arr.Elements[AIndex];
-      if Result = TGocciaHoleValue.HoleValue then
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    end
-    else
+      Exit;
+    end;
+    // Hole or out-of-range: fall back to Obj.GetProperty for prototype lookup
+    Result := Obj.GetProperty(IntToStr(AIndex));
+    if not Assigned(Result) then
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else
@@ -194,8 +196,17 @@ end;
 function TArrayLikeView.HasIndex(const AIndex: Integer): Boolean;
 begin
   if Assigned(Arr) then
-    Result := (AIndex >= 0) and (AIndex < Arr.Elements.Count) and
-              (Arr.Elements[AIndex] <> TGocciaHoleValue.HoleValue)
+  begin
+    // Fast check: own element present and not a hole
+    if (AIndex >= 0) and (AIndex < Arr.Elements.Count) and
+       (Arr.Elements[AIndex] <> TGocciaHoleValue.HoleValue) then
+    begin
+      Result := True;
+      Exit;
+    end;
+    // Hole or out-of-range: fall back to HasProperty for prototype lookup
+    Result := Obj.HasProperty(IntToStr(AIndex));
+  end
   else
     // ES spec uses [[HasProperty]] which traverses the prototype chain
     Result := Obj.HasProperty(IntToStr(AIndex));
@@ -1555,12 +1566,29 @@ begin
   Result := AValue is TGocciaArrayValue;
 end;
 
+// Spread a concat-spreadable value into the result array using array-like
+// iteration so that non-array spreadable objects (e.g., objects with
+// Symbol.isConcatSpreadable) are handled correctly.
+procedure SpreadIntoConcat(const ASource: TGocciaValue; const AResult: TGocciaArrayValue; var N: Integer);
+var
+  SrcView: TArrayLikeView;
+  J: Integer;
+begin
+  SrcView.Init(ASource);
+  for J := 0 to SrcView.Len - 1 do
+  begin
+    if SrcView.HasIndex(J) then
+      ArrayCreateDataProperty(AResult, N, SrcView.Get(J));
+    Inc(N);
+  end;
+end;
+
 // ES2026 §23.1.3.1 Array.prototype.concat(...arguments)
 function TGocciaArrayValue.ArrayConcat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   View: TArrayLikeView;
   ResultArray: TGocciaArrayValue;
-  I, J, N: Integer;
+  I, N: Integer;
   Arg: TGocciaValue;
 begin
   // Step 1: Let O be ToObject(this value)
@@ -1577,14 +1605,7 @@ begin
 
   // Step 4: Prepend O to items — check IsConcatSpreadable
   if IsConcatSpreadable(View.Obj) then
-  begin
-    for I := 0 to View.Len - 1 do
-    begin
-      if View.HasIndex(I) then
-        ArrayCreateDataProperty(ResultArray, N, View.Get(I));
-      Inc(N);
-    end;
-  end
+    SpreadIntoConcat(View.Obj, ResultArray, N)
   else
   begin
     ResultArray.Elements.Add(View.Obj);
@@ -1595,16 +1616,9 @@ begin
   for I := 0 to AArgs.Length - 1 do
   begin
     Arg := AArgs.GetElement(I);
-    // Step 5b: If IsConcatSpreadable(E) is true, spread elements
+    // Step 5b: If IsConcatSpreadable(E) is true, spread via array-like iteration
     if IsConcatSpreadable(Arg) then
-    begin
-      for J := 0 to TGocciaArrayValue(Arg).Elements.Count - 1 do
-      begin
-        if not IsArrayHole(TGocciaArrayValue(Arg).Elements[J]) then
-          ArrayCreateDataProperty(ResultArray, N, TGocciaArrayValue(Arg).Elements[J]);
-        Inc(N);
-      end;
-    end
+      SpreadIntoConcat(Arg, ResultArray, N)
     // Step 5c: Else, CreateDataPropertyOrThrow(A, ToString(n), E)
     else
     begin
@@ -1862,15 +1876,15 @@ begin
   // Check if property name is a numeric index
   if TryStrToInt(AName, Index) then
   begin
-    if (Index >= 0) and (Index < FElements.Count) then
+    if (Index >= 0) and (Index < FElements.Count) and
+       not IsArrayHole(FElements[Index]) then
     begin
-      if IsArrayHole(FElements[Index]) then
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue
-      else
-        Result := FElements[Index];
-    end
-    else
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Result := FElements[Index];
+      Exit;
+    end;
+    // Hole or out-of-range: fall through to prototype per ES [[Get]]
+    Result := inherited GetPropertyWithContext(AName, AThisContext);
+    Exit;
   end
   else
   begin
@@ -1941,22 +1955,41 @@ var
 begin
   View.Init(AThisValue);
 
-  // Fast path: native array — sort in place
+  // Fast path: native array — compact present elements, sort, restore holes at end
   if Assigned(View.Arr) then
   begin
-    if AArgs.Length > 0 then
+    // Collect present (non-hole) elements into a temp list
+    TempArr := TGocciaArrayValue.Create;
+    for I := 0 to View.Arr.Elements.Count - 1 do
     begin
-      CustomSortFunction := AArgs.GetElement(0);
-      if not CustomSortFunction.IsCallable then
-        ThrowError(SErrorCustomSortMustBeFunction, [], SSuggestCallbackRequired);
-      CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
-      try
-        QuickSortElements(View.Arr.Elements, TGocciaFunctionBase(CustomSortFunction), CallArgs, AThisValue, 0, View.Arr.Elements.Count - 1);
-      finally
-        CallArgs.Free;
-      end;
-    end else
-      View.Arr.Elements.Sort(TComparer<TGocciaValue>.Construct(DefaultCompare));
+      if not IsArrayHole(View.Arr.Elements[I]) then
+        TempArr.Elements.Add(View.Arr.Elements[I]);
+    end;
+
+    if TempArr.Elements.Count > 0 then
+    begin
+      if AArgs.Length > 0 then
+      begin
+        CustomSortFunction := AArgs.GetElement(0);
+        if not CustomSortFunction.IsCallable then
+          ThrowError(SErrorCustomSortMustBeFunction, [], SSuggestCallbackRequired);
+        CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
+        try
+          if TempArr.Elements.Count > 1 then
+            QuickSortElements(TempArr.Elements, TGocciaFunctionBase(CustomSortFunction), CallArgs, AThisValue, 0, TempArr.Elements.Count - 1);
+        finally
+          CallArgs.Free;
+        end;
+      end else if TempArr.Elements.Count > 1 then
+        TempArr.Elements.Sort(TComparer<TGocciaValue>.Construct(DefaultCompare));
+    end;
+
+    // Write sorted elements back, fill remaining with holes
+    for I := 0 to TempArr.Elements.Count - 1 do
+      View.Arr.Elements[I] := TempArr.Elements[I];
+    for I := TempArr.Elements.Count to View.Arr.Elements.Count - 1 do
+      View.Arr.Elements[I] := TGocciaHoleValue.HoleValue;
+
     Result := View.Arr;
     Exit;
   end;
