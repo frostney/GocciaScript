@@ -51,7 +51,7 @@ describe("Object.getPrototypeOf", () => {
     expect(proto).toBe(Function.prototype);
   });
 
-  test("returns superclass for a class with extends (interpreted)", () => {
+  test("returns superclass for a class with extends", () => {
     class A {}
     class B extends A {}
     // In interpreted mode, getPrototypeOf returns the class value identity.

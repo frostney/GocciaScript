@@ -312,6 +312,7 @@ begin
 end;
 
 // Dispatch a call to either a TGocciaFunctionBase or a TGocciaClassValue.
+// Note: callable proxies are handled at the evaluator/VM level, not here.
 function DispatchCall(const ACallee: TGocciaValue;
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;

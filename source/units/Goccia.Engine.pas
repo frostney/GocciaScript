@@ -843,6 +843,7 @@ var
   URLConstructor: TGocciaURLClassValue;
   URLSearchParamsConstructor: TGocciaURLSearchParamsClassValue;
   TextEncoderConstructor, TextDecoderConstructor: TGocciaClassValue;
+  HeadersConstructor, ResponseConstructor: TGocciaClassValue;
   TypeDef: TGocciaTypeDefinition;
 begin
   TGocciaObjectValue.InitializeSharedPrototype;
@@ -942,6 +943,7 @@ begin
   TypeDef.PrototypeParent := ObjectConstructor.Prototype;
   TypeDef.AddSpeciesGetter := False;
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  HeadersConstructor := GenericConstructor;
 
   TypeDef.ConstructorName := CONSTRUCTOR_RESPONSE;
   TypeDef.Kind := gtdkNativeInstanceType;
@@ -952,6 +954,7 @@ begin
   TypeDef.PrototypeParent := ObjectConstructor.Prototype;
   TypeDef.AddSpeciesGetter := False;
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  ResponseConstructor := GenericConstructor;
 
   ArrayBufferConstructor := TGocciaArrayBufferClassValue.Create(CONSTRUCTOR_ARRAY_BUFFER, nil);
   TGocciaArrayBufferValue.ExposePrototype(ArrayBufferConstructor);
@@ -1054,6 +1057,8 @@ begin
   TGocciaClassValue.PatchDefaultPrototype(TextDecoderConstructor);
   TGocciaClassValue.PatchDefaultPrototype(URLConstructor);
   TGocciaClassValue.PatchDefaultPrototype(URLSearchParamsConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(HeadersConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(ResponseConstructor);
   TGocciaClassValue.PatchDefaultPrototype(FunctionConstructor);
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);
 

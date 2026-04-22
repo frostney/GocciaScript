@@ -301,9 +301,9 @@ begin
 
   // ES §15.7.3 step 28: class constructors have a .name own property
   // { [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: true }
-  if FName <> '' then
-    DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(
-      TGocciaStringLiteralValue.Create(FName), [pfConfigurable]));
+  // Anonymous classes get name '' which is still a valid own property.
+  DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(
+    TGocciaStringLiteralValue.Create(FName), [pfConfigurable]));
 end;
 
 destructor TGocciaClassValue.Destroy;
