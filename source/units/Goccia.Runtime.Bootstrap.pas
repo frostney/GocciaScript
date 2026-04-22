@@ -443,8 +443,11 @@ begin
     // Create %TypedArray% intrinsic (not globally exposed per spec §23.2.1)
     FTypedArrayIntrinsic := TGocciaClassValue.Create('TypedArray', nil);
     // §23.2.2: %TypedArray%.name is "TypedArray", .length is 0
-    FTypedArrayIntrinsic.SetProperty(PROP_NAME, TGocciaStringLiteralValue.Create('TypedArray'));
-    FTypedArrayIntrinsic.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(0));
+    // §17: built-in name/length are {writable: false, enumerable: false, configurable: true}
+    FTypedArrayIntrinsic.DefineProperty(PROP_NAME,
+      TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create('TypedArray'), [pfConfigurable]));
+    FTypedArrayIntrinsic.DefineProperty(PROP_LENGTH,
+      TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(0), [pfConfigurable]));
 
     RegisterTypedArrayConstructor(CONSTRUCTOR_INT8_ARRAY, takInt8, ObjectConstructor);
     RegisterTypedArrayConstructor(CONSTRUCTOR_UINT8_ARRAY, takUint8, ObjectConstructor);

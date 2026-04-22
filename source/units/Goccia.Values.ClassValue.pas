@@ -680,7 +680,7 @@ begin
   SetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(SetterHelper.SetValue, 'set ' + AName, 1);
 
   FClassPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(
-    GetterFn, SetterFn, [pfEnumerable, pfConfigurable, pfWritable]));
+    GetterFn, SetterFn, [pfConfigurable, pfWritable]));
 end;
 
 procedure TGocciaClassValue.RunMethodInitializers(const AInstance: TGocciaValue);
