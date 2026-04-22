@@ -1066,10 +1066,11 @@ begin
             begin
               PropertyValue := EvaluateExpression(PropertyExpression, AContext);
               if (PropertyExpression is TGocciaMethodExpression)
-                or (PropertyExpression is TGocciaArrowFunctionExpression)
-                or ((PropertyExpression is TGocciaClassExpression)
-                  and (TGocciaClassExpression(PropertyExpression).ClassDefinition.FName = '')) then
-                PropertyValue.SetInferredName(PropertyName);
+                or (PropertyExpression is TGocciaArrowFunctionExpression) then
+                TGocciaFunctionValue(PropertyValue).SetInferredName(PropertyName)
+              else if (PropertyExpression is TGocciaClassExpression)
+                and (TGocciaClassExpression(PropertyExpression).ClassDefinition.FName = '') then
+                TGocciaClassValue(PropertyValue).SetInferredName(PropertyName);
               Obj.DefineProperty(PropertyName, TGocciaPropertyDescriptorData.Create(PropertyValue, [pfEnumerable, pfConfigurable, pfWritable]));
             end;
           end;

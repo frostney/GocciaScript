@@ -41,7 +41,7 @@ type
 
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
-    procedure SetInferredName(const AName: string); override;
+    procedure SetInferredName(const AName: string);
 
     property Parameters: TGocciaParameterArray read FParameters;
     property BodyStatements: TObjectList<TGocciaASTNode> read FBodyStatements;

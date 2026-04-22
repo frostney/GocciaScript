@@ -111,7 +111,7 @@ type
     function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
     function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue;
 
-    procedure SetInferredName(const AName: string); override;
+    procedure SetInferredName(const AName: string);
     property Name: string read FName;
     property SuperClass: TGocciaClassValue read FSuperClass write FSuperClass;
     property Prototype: TGocciaObjectValue read FPrototype;
