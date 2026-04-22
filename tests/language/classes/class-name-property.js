@@ -31,4 +31,8 @@ describe("class expression name", () => {
     let Baz = class {};
     expect(Baz.name).toBe("Baz");
   });
+
+  test("unbound anonymous class expression has empty name", () => {
+    expect((class {}).name).toBe("");
+  });
 });
