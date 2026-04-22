@@ -527,8 +527,8 @@ begin
           LexEnd := GetNanoseconds;
 
           Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
-          Parser.AutomaticSemicolonInsertion := EngineOptions.ASI.Present;
-          Parser.VarDeclarationsEnabled := EngineOptions.CompatVar.Present;
+          Parser.AutomaticSemicolonInsertion := Engine.ASIEnabled;
+          Parser.VarDeclarationsEnabled := Engine.VarEnabled;
           try
             ProgramNode := Parser.Parse;
             ParseEnd := GetNanoseconds;
