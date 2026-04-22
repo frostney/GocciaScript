@@ -69,6 +69,7 @@ type
     procedure TestResolveFlagOptionPerFileOverridesRoot;
     procedure TestResolveFlagOptionPerFileFalseOverridesRoot;
     procedure TestResolveFlagOptionFallsBackToRoot;
+    procedure TestResolveFlagOptionEmptyStringEnablesFlag;
   protected
     procedure BeforeAll; override;
     procedure AfterAll; override;
@@ -119,6 +120,7 @@ begin
   Test('ResolveFlagOption uses per-file config over root config', TestResolveFlagOptionPerFileOverridesRoot);
   Test('ResolveFlagOption per-file false overrides root true', TestResolveFlagOptionPerFileFalseOverridesRoot);
   Test('ResolveFlagOption falls back to root when no per-file config', TestResolveFlagOptionFallsBackToRoot);
+  Test('ResolveFlagOption treats empty string as enabled', TestResolveFlagOptionEmptyStringEnablesFlag);
 end;
 
 procedure TConfigFileTests.BeforeAll;
@@ -976,6 +978,24 @@ begin
 
     { No per-file config — should fall back to root (Present=True) }
     SetLength(FileConfig, 0);
+
+    Expect<Boolean>(ResolveFlagOption(Flag, FileConfig, 'asi')).ToBe(True);
+  finally
+    Flag.Free;
+  end;
+end;
+
+procedure TConfigFileTests.TestResolveFlagOptionEmptyStringEnablesFlag;
+var
+  Flag: TGocciaFlagOption;
+  FileConfig: TConfigEntryArray;
+begin
+  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  try
+    { Per-file config with empty string — matches ApplyConfigEntries behavior }
+    SetLength(FileConfig, 1);
+    FileConfig[0].Key := 'asi';
+    FileConfig[0].Value := '';
 
     Expect<Boolean>(ResolveFlagOption(Flag, FileConfig, 'asi')).ToBe(True);
   finally

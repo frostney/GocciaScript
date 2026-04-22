@@ -484,7 +484,7 @@ begin
   if AFlag.FromCommandLine then
     Result := True
   else if FindConfigEntry(AFileConfig, AConfigKey, ValueStr) then
-    Result := ValueStr = 'true'
+    Result := (ValueStr = 'true') or (ValueStr = '')
   else
     Result := AFlag.Present;
 end;
