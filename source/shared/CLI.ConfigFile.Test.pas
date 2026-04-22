@@ -70,6 +70,7 @@ type
     procedure TestResolveFlagOptionPerFileFalseOverridesRoot;
     procedure TestResolveFlagOptionFallsBackToRoot;
     procedure TestResolveFlagOptionEmptyStringEnablesFlag;
+    procedure TestResolveFlagOptionDefaultsFalse;
   protected
     procedure BeforeAll; override;
     procedure AfterAll; override;
@@ -121,6 +122,7 @@ begin
   Test('ResolveFlagOption per-file false overrides root true', TestResolveFlagOptionPerFileFalseOverridesRoot);
   Test('ResolveFlagOption falls back to root when no per-file config', TestResolveFlagOptionFallsBackToRoot);
   Test('ResolveFlagOption treats empty string as enabled', TestResolveFlagOptionEmptyStringEnablesFlag);
+  Test('ResolveFlagOption defaults to False when nothing is set', TestResolveFlagOptionDefaultsFalse);
 end;
 
 procedure TConfigFileTests.BeforeAll;
@@ -999,6 +1001,22 @@ begin
     FileConfig[0].Value := '';
 
     Expect<Boolean>(ResolveFlagOption(Flag, FileConfig, 'asi')).ToBe(True);
+  finally
+    Flag.Free;
+  end;
+end;
+
+procedure TConfigFileTests.TestResolveFlagOptionDefaultsFalse;
+var
+  Flag: TGocciaFlagOption;
+  FileConfig: TConfigEntryArray;
+begin
+  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  try
+    { No CLI, no root config, no per-file config — should default to False }
+    SetLength(FileConfig, 0);
+
+    Expect<Boolean>(ResolveFlagOption(Flag, FileConfig, 'asi')).ToBe(False);
   finally
     Flag.Free;
   end;
