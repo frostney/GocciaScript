@@ -110,7 +110,8 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.NativeFunction;
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ProxyValue;
 
 threadvar
   FSharedPrototype: TGocciaFunctionSharedPrototype;
@@ -311,8 +312,7 @@ begin
   end;
 end;
 
-// Dispatch a call to either a TGocciaFunctionBase or a TGocciaClassValue.
-// Note: callable proxies are handled at the evaluator/VM level, not here.
+// Dispatch a call to a TGocciaFunctionBase, TGocciaClassValue, or callable Proxy.
 function DispatchCall(const ACallee: TGocciaValue;
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
@@ -321,6 +321,8 @@ begin
     Result := TGocciaFunctionBase(ACallee).Call(AArgs, AThisValue)
   else if ACallee is TGocciaClassValue then
     Result := TGocciaClassValue(ACallee).Call(AArgs, AThisValue)
+  else if (ACallee is TGocciaProxyValue) and ACallee.IsCallable then
+    Result := TGocciaProxyValue(ACallee).ApplyTrap(AArgs, AThisValue)
   else
     raise TGocciaError.Create('not callable', 0, 0, '', nil);
 end;
@@ -598,6 +600,8 @@ begin
       Result := TGocciaFunctionBase(FOriginalFunction).Call(CombinedArgs, FBoundThis)
     else if FOriginalFunction is TGocciaClassValue then
       Result := TGocciaClassValue(FOriginalFunction).Call(CombinedArgs, FBoundThis)
+    else if (FOriginalFunction is TGocciaProxyValue) and FOriginalFunction.IsCallable then
+      Result := TGocciaProxyValue(FOriginalFunction).ApplyTrap(CombinedArgs, FBoundThis)
     else
       raise TGocciaError.Create('BoundFunction.Call: Original function is not callable', 0, 0, '', nil);
   finally
@@ -689,6 +693,7 @@ end;
 function TGocciaBoundFunctionValue.GetFunctionLength: Integer;
 var
   OrigLength: Integer;
+  LengthVal: TGocciaValue;
 begin
   // ECMAScript: bound function length = max(0, originalLength - boundArgs.length)
   if FOriginalFunction is TGocciaFunctionBase then
@@ -696,9 +701,9 @@ begin
   else if FOriginalFunction is TGocciaClassValue then
   begin
     OrigLength := 0;
-    if TGocciaClassValue(FOriginalFunction).GetProperty(PROP_LENGTH) is TGocciaNumberLiteralValue then
-      OrigLength := Trunc(TGocciaNumberLiteralValue(
-        TGocciaClassValue(FOriginalFunction).GetProperty(PROP_LENGTH)).Value);
+    LengthVal := TGocciaClassValue(FOriginalFunction).GetProperty(PROP_LENGTH);
+    if LengthVal is TGocciaNumberLiteralValue then
+      OrigLength := Trunc(TGocciaNumberLiteralValue(LengthVal).Value);
   end
   else
     OrigLength := 0;

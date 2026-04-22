@@ -104,6 +104,8 @@ type
     function EstimatedInstancePropertyCapacity: Integer;
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
+    function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
+    function HasOwnProperty(const AName: string): Boolean; override;
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; virtual;
 
     procedure ReplacePrototype(const APrototype: TGocciaObjectValue);
@@ -301,9 +303,14 @@ begin
 
   // ES §15.7.3 step 28: class constructors have a .name own property
   // { [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: true }
-  // Anonymous classes get name '' which is still a valid own property.
-  DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(
-    TGocciaStringLiteralValue.Create(FName), [pfConfigurable]));
+  // Named classes get non-writable .name; anonymous classes start writable
+  // so bytecode name inference can overwrite via SetProperty.
+  if (FName <> '') and (FName <> '<anonymous>') then
+    DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create(FName), [pfConfigurable]))
+  else
+    DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create(FName), [pfConfigurable, pfWritable]));
 end;
 
 destructor TGocciaClassValue.Destroy;
@@ -672,6 +679,7 @@ var
   GetterHelper: TGocciaAutoAccessorGetter;
   SetterHelper: TGocciaAutoAccessorSetter;
   GetterFn, SetterFn: TGocciaNativeFunctionValue;
+  Target: TGocciaObjectValue;
 begin
   GetterHelper := TGocciaAutoAccessorGetter.Create(ABackingName);
   SetterHelper := TGocciaAutoAccessorSetter.Create(ABackingName);
@@ -679,7 +687,12 @@ begin
   GetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(GetterHelper.Get, 'get ' + AName, 0);
   SetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(SetterHelper.SetValue, 'set ' + AName, 1);
 
-  FClassPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(
+  // Static auto-accessors go on the constructor; instance ones on the prototype
+  if AIsStatic then
+    Target := Self
+  else
+    Target := FClassPrototype;
+  Target.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(
     GetterFn, SetterFn, [pfConfigurable, pfWritable]));
 end;
 
@@ -973,9 +986,25 @@ begin
     Current := Current.FSuperClass;
   until not Assigned(Current);
 
-  // ES §17: static properties on constructors are non-enumerable
-  inherited DefineProperty(AName,
-    TGocciaPropertyDescriptorData.Create(AValue, [pfConfigurable, pfWritable]));
+  // Runtime property assignment (C.x = val) creates enumerable data properties
+  inherited SetProperty(AName, AValue);
+end;
+
+function TGocciaClassValue.GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
+begin
+  // .prototype is stored in FClassPrototype, not in FProperties
+  if AName = PROP_PROTOTYPE then
+    Result := TGocciaPropertyDescriptorData.Create(FClassPrototype, [])
+  else
+    Result := inherited GetOwnPropertyDescriptor(AName);
+end;
+
+function TGocciaClassValue.HasOwnProperty(const AName: string): Boolean;
+begin
+  if AName = PROP_PROTOTYPE then
+    Result := True
+  else
+    Result := inherited HasOwnProperty(AName);
 end;
 
 procedure TGocciaClassValue.DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);

@@ -64,9 +64,9 @@ begin
     if not Assigned(Descriptor) then
       Continue;
 
+    // Copy with original descriptor flags (built-in static methods are non-enumerable)
     if Descriptor is TGocciaPropertyDescriptorData then
-      AConstructor.SetProperty(Key,
-        TGocciaPropertyDescriptorData(Descriptor).Value)
+      TGocciaObjectValue(AConstructor).DefineProperty(Key, Descriptor)
     else
       raise EGocciaObjectModelError.CreateFmt(
         'Static source for %s contains unsupported accessor property "%s"',
