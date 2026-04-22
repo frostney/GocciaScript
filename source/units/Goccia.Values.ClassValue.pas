@@ -111,6 +111,7 @@ type
     function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
     function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue;
 
+    procedure SetInferredName(const AName: string); override;
     property Name: string read FName;
     property SuperClass: TGocciaClassValue read FSuperClass write FSuperClass;
     property Prototype: TGocciaObjectValue read FPrototype;
@@ -888,6 +889,15 @@ begin
     Exit;
   end;
 
+  if AName = PROP_NAME then
+  begin
+    if FName = '<anonymous>' then
+      Result := TGocciaStringLiteralValue.Create('')
+    else
+      Result := TGocciaStringLiteralValue.Create(FName);
+    Exit;
+  end;
+
   Current := Self;
   repeat
     if Current.FStaticMethods.TryGetValue(AName, Result) then
@@ -917,6 +927,12 @@ begin
   end;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+procedure TGocciaClassValue.SetInferredName(const AName: string);
+begin
+  if FName = '<anonymous>' then
+    FName := AName;
 end;
 
 procedure TGocciaClassValue.SetProperty(const AName: string; const AValue: TGocciaValue);

@@ -32,6 +32,7 @@ type
     function IsCallable: Boolean; virtual;
     function GetProperty(const AName: string): TGocciaValue; virtual;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); virtual;
+    procedure SetInferredName(const AName: string); virtual;
   end;
 
   TGocciaValueList = TObjectList<TGocciaValue>;
@@ -231,6 +232,11 @@ end;
 procedure TGocciaValue.SetProperty(const AName: string; const AValue: TGocciaValue);
 begin
   // No-op for primitives
+end;
+
+procedure TGocciaValue.SetInferredName(const AName: string);
+begin
+  // No-op by default; overridden by ClassValue for anonymous class name inference
 end;
 
 { Utility functions }
