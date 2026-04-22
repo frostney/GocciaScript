@@ -162,7 +162,7 @@ All CLI options can also be set via a project configuration file. The CLI discov
 The first file found is loaded and applied as the **root config**. When running multiple files (e.g. via `GocciaTestRunner` or `GocciaBundler`), a **per-file config** is also discovered from each file's directory. The full precedence is:
 
 1. **CLI arguments** (highest priority — always win)
-2. **Per-file config** (`goccia.json` nearest to the file being processed)
+2. **Per-file config** (`goccia.toml`, `goccia.json5`, or `goccia.json` nearest to the file being processed)
 3. **Root config** (discovered from the entry path at startup)
 4. **System default** (engine defaults)
 

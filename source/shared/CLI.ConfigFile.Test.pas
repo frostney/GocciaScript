@@ -911,7 +911,8 @@ var
 begin
   Flag := TGocciaFlagOption.Create('asi', 'ASI');
   try
-    { Simulate root config setting asi=false (Present but not FromCommandLine) }
+    { Root config sets asi='false' — ApplyConfigEntries skips Apply for
+      flag value 'false', so Present remains False. }
     SetLength(Options, 1);
     Options[0] := Flag;
     SetLength(RootEntries, 1);
