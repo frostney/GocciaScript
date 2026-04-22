@@ -1065,7 +1065,10 @@ begin
             if AObjectExpression.Properties.TryGetValue(PropertyName, PropertyExpression) then
             begin
               PropertyValue := EvaluateExpression(PropertyExpression, AContext);
-              if PropertyValue.IsCallable then
+              if (PropertyExpression is TGocciaMethodExpression)
+                or (PropertyExpression is TGocciaArrowFunctionExpression)
+                or ((PropertyExpression is TGocciaClassExpression)
+                  and (TGocciaClassExpression(PropertyExpression).ClassDefinition.FName = '')) then
                 PropertyValue.SetInferredName(PropertyName);
               Obj.DefineProperty(PropertyName, TGocciaPropertyDescriptorData.Create(PropertyValue, [pfEnumerable, pfConfigurable, pfWritable]));
             end;
