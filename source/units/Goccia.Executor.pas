@@ -28,6 +28,8 @@ type
       const AProgram: TGocciaProgram): TGocciaValue; virtual; abstract;
     procedure EvaluateModuleBody(const AProgram: TGocciaProgram;
       const AContext: TGocciaEvaluationContext); virtual; abstract;
+    function ExecuteDynamicFunction(
+      const AProgram: TGocciaProgram): TGocciaValue; virtual; abstract;
     procedure ClearTransientCaches; virtual;
     function DefaultStrictTypes: Boolean; virtual;
 

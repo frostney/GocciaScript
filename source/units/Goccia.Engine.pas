@@ -105,6 +105,8 @@ type
       const ASourcePath: string); override;
     function ExecuteProgram(
       const AProgram: TGocciaProgram): TGocciaValue; override;
+    function ExecuteDynamicFunction(
+      const AProgram: TGocciaProgram): TGocciaValue; override;
     procedure EvaluateModuleBody(const AProgram: TGocciaProgram;
       const AContext: TGocciaEvaluationContext); override;
   end;
@@ -196,6 +198,7 @@ type
     procedure PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap = nil);
     procedure ThrowError(const AMessage: string; const ALine,
       AColumn: Integer);
+    function CompileDynamicFunction(const ASource: string): TGocciaFunctionBase;
   public
     constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AResolver: TGocciaModuleResolver); overload;
@@ -308,6 +311,7 @@ uses
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.BooleanObjectValue,
+  Goccia.Values.FunctionValue,
   Goccia.Values.HeadersValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
@@ -351,6 +355,12 @@ begin
   Start := GetNanoseconds;
   Result := FInterpreter.Execute(AProgram);
   ExecuteTimeNanoseconds := GetNanoseconds - Start;
+end;
+
+function TGocciaInterpreterExecutor.ExecuteDynamicFunction(
+  const AProgram: TGocciaProgram): TGocciaValue;
+begin
+  Result := FInterpreter.Execute(AProgram);
 end;
 
 procedure TGocciaInterpreterExecutor.EvaluateModuleBody(
@@ -634,6 +644,9 @@ begin
     FOwnsExecutor := True;
   end;
   FExecutor.Initialize(FInterpreter.GlobalScope, FModuleLoader, AFileName);
+
+  if Assigned(FFunctionConstructor) then
+    FFunctionConstructor.CompileDynamicFunction := CompileDynamicFunction;
 end;
 
 destructor TGocciaEngine.Destroy;
@@ -1013,8 +1026,7 @@ begin
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   BooleanConstructor := TGocciaBooleanClassValue(GenericConstructor);
 
-  FFunctionConstructor := TGocciaFunctionConstructorClassValue.Create('Function', nil,
-    False, FInterpreter.GlobalScope);
+  FFunctionConstructor := TGocciaFunctionConstructorClassValue.Create('Function', nil);
   FunctionConstructor := FFunctionConstructor;
   TGocciaFunctionBase.SetSharedPrototypeParent(FunctionConstructor.Prototype);
   FunctionConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, FunctionConstructor);
@@ -1505,6 +1517,37 @@ end;
 procedure TGocciaEngine.ThrowError(const AMessage: string; const ALine, AColumn: Integer);
 begin
   raise TGocciaRuntimeError.Create(AMessage, ALine, AColumn, FSourcePath, FSourceLines);
+end;
+
+function TGocciaEngine.CompileDynamicFunction(const ASource: string): TGocciaFunctionBase;
+var
+  Lexer: TGocciaLexer;
+  Tokens: TObjectList<TGocciaToken>;
+  Parser: TGocciaParser;
+  ProgramNode: TGocciaProgram;
+  ResultValue: TGocciaValue;
+begin
+  Lexer := TGocciaLexer.Create(ASource, '<Function>');
+  try
+    Tokens := Lexer.ScanTokens;
+    Parser := TGocciaParser.Create(Tokens, '<Function>', Lexer.SourceLines);
+    try
+      ProgramNode := Parser.ParseUnchecked;
+      try
+        ResultValue := FExecutor.ExecuteDynamicFunction(ProgramNode);
+        Result := TGocciaFunctionBase(ResultValue);
+        // ES2026 §20.2.1.1.1: the function's name is 'anonymous'
+        if Result is TGocciaFunctionValue then
+          TGocciaFunctionValue(Result).Name := 'anonymous';
+      finally
+        ProgramNode.Free;
+      end;
+    finally
+      Parser.Free;
+    end;
+  finally
+    Lexer.Free;
+  end;
 end;
 
 end.
