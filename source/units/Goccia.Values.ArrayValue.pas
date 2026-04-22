@@ -997,25 +997,20 @@ begin
 
   // Step 5: Let A be ArraySpeciesCreate(O, 0)
   if Assigned(View.Arr) then
-  begin
-    ResultArray := ArraySpeciesCreate(View.Arr, 0);
-    // Step 6: FlattenIntoArray using native path
-    View.Arr.FlattenInto(ResultArray, Depth);
-  end
+    ResultArray := ArraySpeciesCreate(View.Arr, 0)
   else
-  begin
     ResultArray := TGocciaArrayValue.Create;
-    // Generic path: iterate array-like, flatten each element
-    for I := 0 to View.Len - 1 do
-    begin
-      if not View.HasIndex(I) then
-        Continue;
-      Element := View.Get(I);
-      if (Element is TGocciaArrayValue) and (Depth > 0) then
-        TGocciaArrayValue(Element).FlattenInto(ResultArray, Depth - 1)
-      else
-        ResultArray.Elements.Add(Element);
-    end;
+
+  // Step 6: FlattenIntoArray via View for prototype-aware semantics
+  for I := 0 to View.Len - 1 do
+  begin
+    if not View.HasIndex(I) then
+      Continue;
+    Element := View.Get(I);
+    if (Element is TGocciaArrayValue) and (Depth > 0) then
+      TGocciaArrayValue(Element).FlattenInto(ResultArray, Depth - 1)
+    else
+      ResultArray.Elements.Add(Element);
   end;
   // Step 7: Return A
   Result := ResultArray;
@@ -1024,7 +1019,7 @@ end;
 // ES2026 §23.1.3.10 Array.prototype.flatMap(mapperFunction [, thisArg])
 function TGocciaArrayValue.ArrayFlatMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  View: TArrayLikeView;
+  View, MappedView: TArrayLikeView;
   ResultArray: TGocciaArrayValue;
   Callback: TGocciaValue;
   TypedCallback: TGocciaFunctionBase;
@@ -1059,10 +1054,12 @@ begin
 
       if MappedValue is TGocciaArrayValue then
       begin
-        for J := 0 to TGocciaArrayValue(MappedValue).Elements.Count - 1 do
+        // Use View-based iteration for prototype-aware access
+        MappedView.Init(MappedValue);
+        for J := 0 to MappedView.Len - 1 do
         begin
-          if not IsArrayHole(TGocciaArrayValue(MappedValue).Elements[J]) then
-            ResultArray.Elements.Add(TGocciaArrayValue(MappedValue).Elements[J]);
+          if MappedView.HasIndex(J) then
+            ResultArray.Elements.Add(MappedView.Get(J));
         end;
       end
       else
@@ -1608,7 +1605,7 @@ begin
     SpreadIntoConcat(View.Obj, ResultArray, N)
   else
   begin
-    ResultArray.Elements.Add(View.Obj);
+    ArrayCreateDataProperty(ResultArray, N, View.Obj);
     Inc(N);
   end;
 
@@ -1622,7 +1619,7 @@ begin
     // Step 5c: Else, CreateDataPropertyOrThrow(A, ToString(n), E)
     else
     begin
-      ResultArray.Elements.Add(Arg);
+      ArrayCreateDataProperty(ResultArray, N, Arg);
       Inc(N);
     end;
   end;
@@ -2080,52 +2077,41 @@ begin
     // else: absent → leave hole in Removed (sparse)
   end;
 
-  // Fast path: native array
-  if Assigned(View.Arr) then
+  // Shift elements via View methods for prototype-aware semantics
+  NewLen := View.Len - DeleteCount + ItemCount;
+  if ItemCount < DeleteCount then
   begin
-    for I := 0 to DeleteCount - 1 do
-      View.Arr.Elements.Delete(ActualStart);
-    for I := 2 to AArgs.Length - 1 do
-      View.Arr.Elements.Insert(ActualStart + (I - 2), AArgs.GetElement(I));
-  end
-  else
-  begin
-    // Generic path: shift elements per ES spec
-    NewLen := View.Len - DeleteCount + ItemCount;
-    if ItemCount < DeleteCount then
+    // Shift elements left
+    for I := ActualStart to View.Len - DeleteCount - 1 do
     begin
-      // Shift elements left
-      for I := ActualStart to View.Len - DeleteCount - 1 do
-      begin
-        From := I + DeleteCount;
-        Target := I + ItemCount;
-        if View.HasIndex(From) then
-          View.Put(Target, View.Get(From))
-        else
-          View.DeleteIndex(Target);
-      end;
-      // Delete trailing properties
-      for I := NewLen to View.Len - 1 do
-        View.DeleteIndex(I);
-    end
-    else if ItemCount > DeleteCount then
-    begin
-      // Shift elements right
-      for I := View.Len - DeleteCount - 1 downto ActualStart do
-      begin
-        From := I + DeleteCount;
-        Target := I + ItemCount;
-        if View.HasIndex(From) then
-          View.Put(Target, View.Get(From))
-        else
-          View.DeleteIndex(Target);
-      end;
+      From := I + DeleteCount;
+      Target := I + ItemCount;
+      if View.HasIndex(From) then
+        View.Put(Target, View.Get(From))
+      else
+        View.DeleteIndex(Target);
     end;
-    // Insert new items
-    for I := 0 to ItemCount - 1 do
-      View.Put(ActualStart + I, AArgs.GetElement(I + 2));
-    View.SetLen(NewLen);
+    // Delete trailing properties
+    for I := NewLen to View.Len - 1 do
+      View.DeleteIndex(I);
+  end
+  else if ItemCount > DeleteCount then
+  begin
+    // Shift elements right
+    for I := View.Len - DeleteCount - 1 downto ActualStart do
+    begin
+      From := I + DeleteCount;
+      Target := I + ItemCount;
+      if View.HasIndex(From) then
+        View.Put(Target, View.Get(From))
+      else
+        View.DeleteIndex(Target);
+    end;
   end;
+  // Insert new items
+  for I := 0 to ItemCount - 1 do
+    View.Put(ActualStart + I, AArgs.GetElement(I + 2));
+  View.SetLen(NewLen);
 
   // Step 17: Return A
   Result := Removed;
@@ -2151,22 +2137,16 @@ begin
   // Step 4: Let first be Get(O, "0")
   Result := View.Get(0);
 
-  // Fast path: native array
-  if Assigned(View.Arr) then
-    View.Arr.Elements.Delete(0)
-  else
+  // Steps 5-7: shift elements down via View for prototype-aware semantics
+  for I := 1 to View.Len - 1 do
   begin
-    // Generic path: shift elements down per ES spec §23.1.3.25 steps 5-7
-    for I := 1 to View.Len - 1 do
-    begin
-      if View.HasIndex(I) then
-        View.Put(I - 1, View.Get(I))
-      else
-        View.DeleteIndex(I - 1);
-    end;
-    View.DeleteIndex(View.Len - 1);
-    View.SetLen(View.Len - 1);
+    if View.HasIndex(I) then
+      View.Put(I - 1, View.Get(I))
+    else
+      View.DeleteIndex(I - 1);
   end;
+  View.DeleteIndex(View.Len - 1);
+  View.SetLen(View.Len - 1);
 end;
 
 // ES2026 §23.1.3.37 Array.prototype.unshift(...items)
@@ -2179,18 +2159,8 @@ begin
   View.Init(AThisValue);
   ArgCount := AArgs.Length;
 
-  // Fast path: native array
-  if Assigned(View.Arr) then
-  begin
-    for I := ArgCount - 1 downto 0 do
-      View.Arr.Elements.Insert(0, AArgs.GetElement(I));
-    Result := TGocciaNumberLiteralValue.Create(View.Arr.Elements.Count);
-    Exit;
-  end;
-
-  // Generic path: shift existing elements up by argCount per ES spec
+  // Shift existing elements up by argCount via View for prototype-aware semantics
   NewLen := View.Len + ArgCount;
-  // Shift existing elements right
   for I := View.Len - 1 downto 0 do
   begin
     if View.HasIndex(I) then
