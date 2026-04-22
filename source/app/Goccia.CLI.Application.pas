@@ -431,20 +431,12 @@ begin
     Exit;
 
   { ASI: CLI flag > per-file config > root config > default (false) }
-  if AEngineOptions.ASI.FromCommandLine then
-    AEngine.ASIEnabled := True
-  else if FindConfigEntry(AFileConfig, 'asi', ValueStr) then
-    AEngine.ASIEnabled := ValueStr = 'true'
-  else
-    AEngine.ASIEnabled := AEngineOptions.ASI.Present;
+  AEngine.ASIEnabled := ResolveFlagOption(
+    AEngineOptions.ASI, AFileConfig, 'asi');
 
   { compat-var: CLI flag > per-file config > root config > default (false) }
-  if AEngineOptions.CompatVar.FromCommandLine then
-    AEngine.VarEnabled := True
-  else if FindConfigEntry(AFileConfig, 'compat-var', ValueStr) then
-    AEngine.VarEnabled := ValueStr = 'true'
-  else
-    AEngine.VarEnabled := AEngineOptions.CompatVar.Present;
+  AEngine.VarEnabled := ResolveFlagOption(
+    AEngineOptions.CompatVar, AFileConfig, 'compat-var');
 
   { max-memory: CLI > per-file config > root config > system default.
     Always set explicitly so a previous file's per-file override does
@@ -454,9 +446,13 @@ begin
   begin
     if AEngineOptions.MaxMemory.FromCommandLine then
       GC.MaxBytes := AEngineOptions.MaxMemory.Value
-    else if FindConfigEntry(AFileConfig, 'max-memory', ValueStr) and
-            TryStrToInt64(ValueStr, MemoryLimit) then
-      GC.MaxBytes := MemoryLimit
+    else if FindConfigEntry(AFileConfig, 'max-memory', ValueStr) then
+    begin
+      if not TryStrToInt64(ValueStr, MemoryLimit) then
+        raise Exception.CreateFmt(
+          'Invalid max-memory value in config: %s', [ValueStr]);
+      GC.MaxBytes := MemoryLimit;
+    end
     else if AEngineOptions.MaxMemory.Present then
       GC.MaxBytes := AEngineOptions.MaxMemory.Value
     else

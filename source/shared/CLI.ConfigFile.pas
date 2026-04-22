@@ -73,6 +73,15 @@ function DiscoverConfigFile(const AStartDirectory: string;
 function FindConfigEntry(const AEntries: TConfigEntryArray;
   const AKey: string; out AValue: string): Boolean;
 
+{ Resolve an effective boolean for a flag option using the
+  standard precedence: CLI flag > per-file config > root config >
+  default (False).  AFlag is the parsed option, AFileConfig the
+  per-file config entries, and AConfigKey the config key name
+  (e.g. 'asi', 'compat-var'). }
+function ResolveFlagOption(const AFlag: TGocciaFlagOption;
+  const AFileConfig: TConfigEntryArray;
+  const AConfigKey: string): Boolean;
+
 implementation
 
 uses
@@ -462,6 +471,22 @@ begin
       Exit(True);
     end;
   Result := False;
+end;
+
+{ ── Flag resolution ────────────────────────────────────────── }
+
+function ResolveFlagOption(const AFlag: TGocciaFlagOption;
+  const AFileConfig: TConfigEntryArray;
+  const AConfigKey: string): Boolean;
+var
+  ValueStr: string;
+begin
+  if AFlag.FromCommandLine then
+    Result := True
+  else if FindConfigEntry(AFileConfig, AConfigKey, ValueStr) then
+    Result := ValueStr = 'true'
+  else
+    Result := AFlag.Present;
 end;
 
 initialization

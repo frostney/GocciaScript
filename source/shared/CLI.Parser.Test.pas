@@ -6,6 +6,7 @@ uses
   SysUtils,
   TypInfo,
 
+  CLI.ConfigFile,
   CLI.Options,
   TestingPascalLibrary,
 
@@ -36,6 +37,9 @@ type
     procedure TestOptionListAddFlagAndString;
     procedure TestConcatOptionsMergesTwoArrays;
     procedure TestGenerateHelpText;
+    procedure TestFromCommandLineIsFalseInitially;
+    procedure TestMarkFromCommandLineSetsTrue;
+    procedure TestConfigAppliedOptionNotFromCommandLine;
   public
     procedure SetupTests; override;
   end;
@@ -60,6 +64,9 @@ begin
   Test('OptionList tracks added options', TestOptionListAddFlagAndString);
   Test('ConcatOptions merges two arrays', TestConcatOptionsMergesTwoArrays);
   Test('GenerateHelpText includes program name and option names', TestGenerateHelpText);
+  Test('FromCommandLine is False initially', TestFromCommandLineIsFalseInitially);
+  Test('MarkFromCommandLine sets FromCommandLine to True', TestMarkFromCommandLineSetsTrue);
+  Test('Config-applied option has Present but not FromCommandLine', TestConfigAppliedOptionNotFromCommandLine);
 end;
 
 { TGocciaFlagOption tests }
@@ -349,6 +356,58 @@ begin
     Expect<Boolean>(Pos('Output file path', HelpText) > 0).ToBe(True);
   finally
     List.Free;
+  end;
+end;
+
+{ FromCommandLine tests }
+
+procedure TCLIOptionsTests.TestFromCommandLineIsFalseInitially;
+var
+  Opt: TGocciaFlagOption;
+begin
+  Opt := TGocciaFlagOption.Create('asi', 'Enable ASI');
+  try
+    Expect<Boolean>(Opt.FromCommandLine).ToBe(False);
+  finally
+    Opt.Free;
+  end;
+end;
+
+procedure TCLIOptionsTests.TestMarkFromCommandLineSetsTrue;
+var
+  Opt: TGocciaFlagOption;
+begin
+  Opt := TGocciaFlagOption.Create('asi', 'Enable ASI');
+  try
+    Opt.Apply('');
+    Opt.MarkFromCommandLine;
+    Expect<Boolean>(Opt.Present).ToBe(True);
+    Expect<Boolean>(Opt.FromCommandLine).ToBe(True);
+  finally
+    Opt.Free;
+  end;
+end;
+
+procedure TCLIOptionsTests.TestConfigAppliedOptionNotFromCommandLine;
+var
+  Opt: TGocciaFlagOption;
+  Options: TGocciaOptionArray;
+  Entries: TConfigEntryArray;
+begin
+  Opt := TGocciaFlagOption.Create('asi', 'Enable ASI');
+  try
+    SetLength(Options, 1);
+    Options[0] := Opt;
+    SetLength(Entries, 1);
+    Entries[0].Key := 'asi';
+    Entries[0].Value := 'true';
+
+    ApplyConfigEntries(Entries, Options);
+
+    Expect<Boolean>(Opt.Present).ToBe(True);
+    Expect<Boolean>(Opt.FromCommandLine).ToBe(False);
+  finally
+    Opt.Free;
   end;
 end;
 
