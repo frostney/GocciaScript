@@ -2918,8 +2918,8 @@ begin
     Entries.Elements.Add(PairArr);
   end;
 
-  EnumObj.PreventExtensions;
   InitializeEnumSymbols(EnumObj);
+  EnumObj.PreventExtensions;
   Result := EnumObj;
 end;
 
