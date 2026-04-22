@@ -197,7 +197,8 @@ begin
     Result := (AIndex >= 0) and (AIndex < Arr.Elements.Count) and
               (Arr.Elements[AIndex] <> TGocciaHoleValue.HoleValue)
   else
-    Result := Obj.HasOwnProperty(IntToStr(AIndex));
+    // ES spec uses [[HasProperty]] which traverses the prototype chain
+    Result := Obj.HasProperty(IntToStr(AIndex));
 end;
 
 procedure TArrayLikeView.DeleteIndex(const AIndex: Integer);
@@ -675,11 +676,20 @@ begin
   end
   else
   begin
-    if View.Len = 0 then
+    // ES2026 §23.1.3.22 steps 6-8: scan for first present element
+    StartIndex := -1;
+    for I := 0 to View.Len - 1 do
+    begin
+      if View.HasIndex(I) then
+      begin
+        Accumulator := View.Get(I);
+        StartIndex := I + 1;
+        Break;
+      end;
+    end;
+    if StartIndex < 0 then
       ThrowTypeError(SErrorReduceEmptyArray,
         SSuggestReduceInitialValue);
-    Accumulator := View.Get(0);
-    StartIndex := 1;
   end;
 
   TypedCallback := nil;
@@ -1148,12 +1158,11 @@ begin
   N := 0;
   for I := StartIndex to EndIndex - 1 do
   begin
+    // Step 9b-c: only create property when source index is present (preserve holes)
     if View.HasIndex(I) then
-    begin
-      // Step 9c: CreateDataPropertyOrThrow(A, ToString(n), kValue)
       ArrayCreateDataProperty(ResultArray, N, View.Get(I));
-      Inc(N);
-    end;
+    // Step 9e: n increments unconditionally per ES spec
+    Inc(N);
   end;
 
   // Step 11: Return A
@@ -1525,12 +1534,33 @@ begin
   Result := TGocciaNumberLiteralValue.Create(-1);
 end;
 
+// ES2026 §7.2.15 IsConcatSpreadable(O)
+function IsConcatSpreadable(const AValue: TGocciaValue): Boolean;
+var
+  Spreadable: TGocciaValue;
+begin
+  if not (AValue is TGocciaObjectValue) then
+  begin
+    Result := False;
+    Exit;
+  end;
+  // Step 1: If Type(O) is Object, let spreadable be Get(O, @@isConcatSpreadable)
+  Spreadable := TGocciaObjectValue(AValue).GetSymbolProperty(TGocciaSymbolValue.WellKnownIsConcatSpreadable);
+  if Assigned(Spreadable) and not (Spreadable is TGocciaUndefinedLiteralValue) then
+  begin
+    Result := Spreadable.ToBooleanLiteral.Value;
+    Exit;
+  end;
+  // Step 2: Return IsArray(O)
+  Result := AValue is TGocciaArrayValue;
+end;
+
 // ES2026 §23.1.3.1 Array.prototype.concat(...arguments)
 function TGocciaArrayValue.ArrayConcat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   View: TArrayLikeView;
   ResultArray: TGocciaArrayValue;
-  I, J: Integer;
+  I, J, N: Integer;
   Arg: TGocciaValue;
 begin
   // Step 1: Let O be ToObject(this value)
@@ -1543,23 +1573,44 @@ begin
     ResultArray := TGocciaArrayValue.Create;
 
   // Step 3: Let n be 0
-  // Step 4: Prepend O to items (copy this receiver's elements first)
-  for I := 0 to View.Len - 1 do
-    ResultArray.Elements.Add(View.Get(I));
+  N := 0;
+
+  // Step 4: Prepend O to items — check IsConcatSpreadable
+  if IsConcatSpreadable(View.Obj) then
+  begin
+    for I := 0 to View.Len - 1 do
+    begin
+      if View.HasIndex(I) then
+        ArrayCreateDataProperty(ResultArray, N, View.Get(I));
+      Inc(N);
+    end;
+  end
+  else
+  begin
+    ResultArray.Elements.Add(View.Obj);
+    Inc(N);
+  end;
 
   // Step 5: For each element E of items
   for I := 0 to AArgs.Length - 1 do
   begin
     Arg := AArgs.GetElement(I);
     // Step 5b: If IsConcatSpreadable(E) is true, spread elements
-    if Arg is TGocciaArrayValue then
+    if IsConcatSpreadable(Arg) then
     begin
       for J := 0 to TGocciaArrayValue(Arg).Elements.Count - 1 do
-        ResultArray.Elements.Add(TGocciaArrayValue(Arg).Elements[J]);
+      begin
+        if not IsArrayHole(TGocciaArrayValue(Arg).Elements[J]) then
+          ArrayCreateDataProperty(ResultArray, N, TGocciaArrayValue(Arg).Elements[J]);
+        Inc(N);
+      end;
     end
     // Step 5c: Else, CreateDataPropertyOrThrow(A, ToString(n), E)
     else
+    begin
       ResultArray.Elements.Add(Arg);
+      Inc(N);
+    end;
   end;
 
   // Step 6: Return A
@@ -1910,10 +1961,13 @@ begin
     Exit;
   end;
 
-  // Generic path: copy into temp array, sort, write back
-  TempArr := TGocciaArrayValue.Create(nil, View.Len);
+  // Generic path: collect only present elements, sort, write back, delete trailing
+  TempArr := TGocciaArrayValue.Create;
   for I := 0 to View.Len - 1 do
-    TempArr.Elements.Add(View.Get(I));
+  begin
+    if View.HasIndex(I) then
+      TempArr.Elements.Add(View.Get(I));
+  end;
 
   if AArgs.Length > 0 then
   begin
@@ -1922,15 +1976,20 @@ begin
       ThrowError(SErrorCustomSortMustBeFunction, [], SSuggestCallbackRequired);
     CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
     try
-      QuickSortElements(TempArr.Elements, TGocciaFunctionBase(CustomSortFunction), CallArgs, AThisValue, 0, TempArr.Elements.Count - 1);
+      if TempArr.Elements.Count > 1 then
+        QuickSortElements(TempArr.Elements, TGocciaFunctionBase(CustomSortFunction), CallArgs, AThisValue, 0, TempArr.Elements.Count - 1);
     finally
       CallArgs.Free;
     end;
-  end else
+  end else if TempArr.Elements.Count > 1 then
     TempArr.Elements.Sort(TComparer<TGocciaValue>.Construct(DefaultCompare));
 
-  for I := 0 to View.Len - 1 do
+  // Write sorted elements back to front indices
+  for I := 0 to TempArr.Elements.Count - 1 do
     View.Put(I, TempArr.Elements[I]);
+  // Delete trailing indices (holes moved to end)
+  for I := TempArr.Elements.Count to View.Len - 1 do
+    View.DeleteIndex(I);
 
   Result := View.Obj;
 end;

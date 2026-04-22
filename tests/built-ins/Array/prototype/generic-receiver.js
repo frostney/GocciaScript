@@ -31,9 +31,18 @@ describe('Array.prototype generic receiver (array-like objects)', () => {
     expect(Array.isArray(result)).toBe(true);
   });
 
-  test('concat spreads array-like receiver', () => {
+  test('concat does not spread non-array receiver (IsConcatSpreadable)', () => {
+    // Plain objects are not concat-spreadable by default per ES spec
     const result = Array.prototype.concat.call(arrayLike, ['d']);
-    expect(result).toEqual(['a', 'b', 'c', 'd']);
+    expect(result.length).toBe(2);
+    expect(result[0]).toBe(arrayLike);
+    expect(result[1]).toBe('d');
+  });
+
+  test('concat spreads receiver with Symbol.isConcatSpreadable', () => {
+    const obj = { 0: 'a', 1: 'b', length: 2, [Symbol.isConcatSpreadable]: true };
+    const result = Array.prototype.concat.call(obj, ['c']);
+    expect(result).toEqual(['a', 'b', 'c']);
   });
 
   test('find works on array-like', () => {
