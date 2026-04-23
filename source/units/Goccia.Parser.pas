@@ -1807,7 +1807,7 @@ begin
         'Use a regular method instead',
         Peek.Line, Peek.Column);
       Advance; // skip *
-      // Skip method name
+      // Skip method name (identifiers, strings, numbers, or reserved words)
       if Check(gttLeftBracket) then
       begin
         Advance;
@@ -1815,8 +1815,12 @@ begin
         Consume(gttRightBracket, 'Expected "]" after computed property name',
           SSuggestCloseBracketComputedPropertyName);
       end
-      else if Check(gttIdentifier) or Check(gttString) or Check(gttNumber) then
-        Advance;
+      else if Match([gttIdentifier, gttString, gttNumber,
+                     gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
+                     gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
+                     gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
+                     gttTrue, gttFalse, gttNull, gttTypeof, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
+        { name consumed };
       CollectGenericParameters;
       if Check(gttLeftParen) then
         SkipBalancedParens;
@@ -3863,7 +3867,7 @@ begin
         // Skip optional # for private generator methods
         if Check(gttHash) then
           Advance;
-        // Skip method name
+        // Skip method name (identifiers, strings, numbers, or reserved words)
         if Check(gttLeftBracket) then
         begin
           Advance;
@@ -3871,8 +3875,12 @@ begin
           Consume(gttRightBracket, 'Expected "]" after computed property name',
             SSuggestCloseBracketComputedPropertyName);
         end
-        else if Check(gttIdentifier) or Check(gttString) or Check(gttNumber) then
-          Advance;
+        else if Match([gttIdentifier, gttString, gttNumber,
+                       gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
+                       gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
+                       gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
+                       gttTrue, gttFalse, gttNull, gttTypeof, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
+          { name consumed };
         CollectGenericParameters;
         if Check(gttLeftParen) then
           SkipBalancedParens;

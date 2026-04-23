@@ -153,6 +153,12 @@ describe.runIf(hasGoccia)("unsupported features are skipped", () => {
     expect(obj.b).toBe(2);
   });
 
+  test("generator method with reserved-word name is skipped", () => {
+    const obj = { *delete() { yield 1; }, x: 42 };
+    expect(obj.x).toBe(42);
+    expect(typeof obj.delete).toBe("undefined");
+  });
+
   test("code after function declaration continues correctly", () => {
     let x = 1;
     function ignored() { x = 99; }
