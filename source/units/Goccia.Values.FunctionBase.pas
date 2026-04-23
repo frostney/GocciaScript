@@ -612,11 +612,11 @@ end;
 function TGocciaBoundFunctionValue.CallNoArgs(
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if (not (FOriginalFunction is TGocciaFunctionBase)) and
-     (not (FOriginalFunction is TGocciaClassValue)) then
+  if not FOriginalFunction.IsCallable then
     raise TGocciaError.Create('BoundFunction.Call: Original function is not callable', 0, 0, '', nil);
 
-  if FOriginalFunction is TGocciaClassValue then
+  // Fast path for TGocciaFunctionBase targets only
+  if not (FOriginalFunction is TGocciaFunctionBase) then
     Exit(Call(TGocciaArgumentsCollection.Create, AThisValue));
 
   case FBoundArgCount of
@@ -634,11 +634,11 @@ function TGocciaBoundFunctionValue.CallOneArg(const AArg0,
 var
   Args: TGocciaArgumentsCollection;
 begin
-  if (not (FOriginalFunction is TGocciaFunctionBase)) and
-     (not (FOriginalFunction is TGocciaClassValue)) then
+  if not FOriginalFunction.IsCallable then
     raise TGocciaError.Create('BoundFunction.Call: Original function is not callable', 0, 0, '', nil);
 
-  if FOriginalFunction is TGocciaClassValue then
+  // Route non-TGocciaFunctionBase through generic Call path
+  if not (FOriginalFunction is TGocciaFunctionBase) then
   begin
     Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
     try
@@ -664,11 +664,11 @@ function TGocciaBoundFunctionValue.CallTwoArgs(const AArg0, AArg1,
 var
   Args: TGocciaArgumentsCollection;
 begin
-  if (not (FOriginalFunction is TGocciaFunctionBase)) and
-     (not (FOriginalFunction is TGocciaClassValue)) then
+  if not FOriginalFunction.IsCallable then
     raise TGocciaError.Create('BoundFunction.Call: Original function is not callable', 0, 0, '', nil);
 
-  if FOriginalFunction is TGocciaClassValue then
+  // Route non-TGocciaFunctionBase through generic Call path
+  if not (FOriginalFunction is TGocciaFunctionBase) then
   begin
     Args := TGocciaArgumentsCollection.CreateWithCapacity(2);
     try
