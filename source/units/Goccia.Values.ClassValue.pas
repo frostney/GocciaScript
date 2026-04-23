@@ -116,7 +116,6 @@ type
     function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
     function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue;
 
-    procedure SetInferredName(const AName: string);
     property Name: string read FName;
     property SuperClass: TGocciaClassValue read FSuperClass write FSuperClass;
     property Prototype: TGocciaObjectValue read FClassPrototype;
@@ -999,12 +998,6 @@ begin
   // Fall through to own properties (inherited from TGocciaObjectValue) and
   // then up the [[Prototype]] chain (Function.prototype → Object.prototype)
   Result := inherited GetProperty(AName);
-end;
-
-procedure TGocciaClassValue.SetInferredName(const AName: string);
-begin
-  if FName = '<anonymous>' then
-    FName := AName;
 end;
 
 procedure TGocciaClassValue.SetProperty(const AName: string; const AValue: TGocciaValue);
