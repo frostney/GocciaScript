@@ -567,19 +567,6 @@ begin
       else
         ACtx.CompileExpression(Info.Initializer, Slot);
 
-      // ES §15.7.3: anonymous class expression infers .name from binding.
-      // Emit a property write AFTER compilation so the AST Name stays '' and
-      // HasNameBinding remains false (no inner scope binding for anonymous classes).
-      if (Info.Initializer is TGocciaClassExpression) and
-         (TGocciaClassExpression(Info.Initializer).ClassDefinition.Name = '') then
-      begin
-        EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, Slot + 1,
-          ACtx.Template.AddConstantString(Info.Name)));
-        EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, Slot + 2,
-          ACtx.Template.AddConstantString(PROP_NAME)));
-        EmitInstruction(ACtx, EncodeABC(OP_ARRAY_SET, Slot, Slot + 2, Slot + 1));
-      end;
-
       if IsStrict and HasRealInitializer then
         if not TypesAreCompatible(InferLocalType(Info.Initializer), TypeHint) then
           EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, Slot,

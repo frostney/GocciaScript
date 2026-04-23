@@ -301,16 +301,8 @@ begin
   else if Assigned(TGocciaObjectValue.SharedObjectPrototype) then
     FClassPrototype.Prototype := TGocciaObjectValue.SharedObjectPrototype;
 
-  // ES §15.7.3 step 28: class constructors have a .name own property
-  // { [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: true }
-  // Named classes get non-writable .name; anonymous classes start writable
-  // so bytecode name inference can overwrite via SetProperty.
-  if (FName <> '') and (FName <> '<anonymous>') then
-    DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(
-      TGocciaStringLiteralValue.Create(FName), [pfConfigurable]))
-  else
-    DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(
-      TGocciaStringLiteralValue.Create(FName), [pfConfigurable, pfWritable]));
+  // .name is synthesized in GetOwnPropertyDescriptor (like .prototype)
+  // to allow static field overrides via SetProperty.
 end;
 
 destructor TGocciaClassValue.Destroy;
@@ -826,10 +818,10 @@ end;
 
 procedure TGocciaClassValue.SetInferredName(const AName: string);
 begin
-  FName := AName;
-  // Update the .name own property
-  DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(
-    TGocciaStringLiteralValue.Create(AName), [pfConfigurable]));
+  // Only infer name for anonymous classes — named classes keep their own name.
+  // FName update is sufficient; GetOwnPropertyDescriptor synthesizes the descriptor.
+  if (FName = '') or (FName = '<anonymous>') then
+    FName := AName;
 end;
 
 procedure TGocciaClassValue.SetFieldOrder(const AOrder: array of TGocciaClassFieldOrderEntry);
@@ -1022,22 +1014,47 @@ begin
     Current := Current.FSuperClass;
   until not Assigned(Current);
 
+  // .name override via static field or assignment: use DefineProperty to
+  // override the synthesized non-writable descriptor (which is configurable)
+  if AName = PROP_NAME then
+  begin
+    if AValue is TGocciaStringLiteralValue then
+      FName := TGocciaStringLiteralValue(AValue).Value;
+    inherited DefineProperty(AName,
+      TGocciaPropertyDescriptorData.Create(AValue, [pfConfigurable, pfWritable, pfEnumerable]));
+    Exit;
+  end;
+
   // Runtime property assignment (C.x = val) creates enumerable data properties
   inherited SetProperty(AName, AValue);
 end;
 
 function TGocciaClassValue.GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
 begin
-  // .prototype is stored in FClassPrototype, not in FProperties
   if AName = PROP_PROTOTYPE then
     Result := TGocciaPropertyDescriptorData.Create(FClassPrototype, [])
+  else if AName = PROP_NAME then
+  begin
+    // Check if .name was explicitly set (e.g. static name = 'Custom')
+    Result := inherited GetOwnPropertyDescriptor(AName);
+    if not Assigned(Result) then
+    begin
+      // Synthesize from FName: { writable: false, enumerable: false, configurable: true }
+      if (FName = '') or (FName = '<anonymous>') then
+        Result := TGocciaPropertyDescriptorData.Create(
+          TGocciaStringLiteralValue.Create(''), [pfConfigurable])
+      else
+        Result := TGocciaPropertyDescriptorData.Create(
+          TGocciaStringLiteralValue.Create(FName), [pfConfigurable]);
+    end;
+  end
   else
     Result := inherited GetOwnPropertyDescriptor(AName);
 end;
 
 function TGocciaClassValue.HasOwnProperty(const AName: string): Boolean;
 begin
-  if AName = PROP_PROTOTYPE then
+  if (AName = PROP_PROTOTYPE) or (AName = PROP_NAME) then
     Result := True
   else
     Result := inherited HasOwnProperty(AName);
