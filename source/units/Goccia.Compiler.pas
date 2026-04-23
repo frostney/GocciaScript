@@ -308,7 +308,17 @@ begin
           not TGocciaDestructuringDeclaration(ANode).IsVar then
     PredeclareDestructuringLocals(
       TGocciaDestructuringDeclaration(ANode).Pattern, AScope,
-      TGocciaDestructuringDeclaration(ANode).IsConst);
+      TGocciaDestructuringDeclaration(ANode).IsConst)
+  else if ANode is TGocciaClassDeclaration then
+  begin
+    if AScope.ResolveLocal(TGocciaClassDeclaration(ANode).ClassDefinition.Name) < 0 then
+      AScope.DeclareLocal(TGocciaClassDeclaration(ANode).ClassDefinition.Name, True);
+  end
+  else if ANode is TGocciaEnumDeclaration then
+  begin
+    if AScope.ResolveLocal(TGocciaEnumDeclaration(ANode).Name) < 0 then
+      AScope.DeclareLocal(TGocciaEnumDeclaration(ANode).Name, False);
+  end;
 end;
 
 // Returns the inner TGocciaVariableDeclaration if the node is a function

@@ -32,3 +32,19 @@ test("hoisted function captures destructured with default", () => {
   const { val = 55 } = {};
   expect(inner()).toBe(55);
 });
+
+test("hoisted function captures class declaration", () => {
+  function inner() { return new MyClass().value; }
+  class MyClass {
+    constructor() {
+      this.value = 42;
+    }
+  }
+  expect(inner()).toBe(42);
+});
+
+test("hoisted function captures enum declaration", () => {
+  function inner() { return Color.Red; }
+  enum Color { Red = 0, Green = 1, Blue = 2 }
+  expect(inner()).toBe(0);
+});

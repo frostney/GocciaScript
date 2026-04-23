@@ -596,6 +596,18 @@ begin
       // Only emit OP_LOAD_UNDEFINED if not a var redeclaration (preserve prior value)
       EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, Slot, 0, 0));
 
+    // When a local was pre-declared for upvalue resolution and subsequently
+    // captured by a hoisted function closure, the closure's OP_CLOSURE created
+    // a cell that copied the register's initial (undefined) value.  The
+    // initializer wrote directly to the register (e.g. OP_LOAD_INT) bypassing
+    // the cell.  Emit OP_SET_LOCAL to sync the cell with the register.
+    if not AStmt.IsVar then
+    begin
+      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+        EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
+    end;
+
     if IsTopLevelGlobalBacked then
       EmitGlobalDefine(ACtx, Slot, Info.Name, AStmt.IsConst);
   end;
@@ -2372,7 +2384,14 @@ begin
   PrivPrefix := NextClassPrivatePrefix;
   ACtx.Scope.PrivatePrefix := PrivPrefix;
 
-  ClassReg := ACtx.Scope.DeclareLocal(ClassDef.Name, True);
+  // Reuse pre-declared slot if it exists at the same scope depth
+  // (for function declaration upvalue resolution)
+  LocalIdx := ACtx.Scope.ResolveLocal(ClassDef.Name);
+  if (LocalIdx >= 0) and
+     (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) then
+    ClassReg := ACtx.Scope.GetLocal(LocalIdx).Slot
+  else
+    ClassReg := ACtx.Scope.DeclareLocal(ClassDef.Name, True);
   if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
   begin
     LocalIdx := ACtx.Scope.ResolveLocal(ClassDef.Name);
@@ -2538,6 +2557,12 @@ begin
     CompileDecoratorAndAccessorPass(ACtx, ClassReg, ClassDef, SuperReg)
   else
     CompileDecoratorAndAccessorPass(ACtx, ClassReg, ClassDef, -1);
+
+  // Sync cell if the class local was pre-declared and captured by a hoisted
+  // function (see CompileVariableDeclaration for the full explanation)
+  LocalIdx := ACtx.Scope.ResolveLocal(ClassDef.Name);
+  if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+    EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ClassReg, UInt16(ClassReg)));
 
   if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
     EmitGlobalDefine(ACtx, ClassReg, ClassDef.Name, True);
@@ -2885,7 +2910,14 @@ var
   ClosedCount, J: Integer;
   LocalIdx: Integer;
 begin
-  EnumSlot := ACtx.Scope.DeclareLocal(AStmt.Name, False);
+  // Reuse pre-declared slot if it exists at the same scope depth
+  // (for function declaration upvalue resolution)
+  LocalIdx := ACtx.Scope.ResolveLocal(AStmt.Name);
+  if (LocalIdx >= 0) and
+     (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) then
+    EnumSlot := ACtx.Scope.GetLocal(LocalIdx).Slot
+  else
+    EnumSlot := ACtx.Scope.DeclareLocal(AStmt.Name, False);
   if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
   begin
     LocalIdx := ACtx.Scope.ResolveLocal(AStmt.Name);
@@ -2919,6 +2951,12 @@ begin
   ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
   for J := 0 to ClosedCount - 1 do
     EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, ClosedLocals[J], 0));
+
+  // Sync cell if the enum local was pre-declared and captured by a hoisted
+  // function (see CompileVariableDeclaration for the full explanation)
+  LocalIdx := ACtx.Scope.ResolveLocal(AStmt.Name);
+  if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+    EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, EnumSlot, UInt16(EnumSlot)));
 
   if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
     EmitGlobalDefine(ACtx, EnumSlot, AStmt.Name, False);
