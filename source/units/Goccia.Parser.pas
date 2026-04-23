@@ -1800,6 +1800,43 @@ begin
       IsSetter := True;
     end;
 
+    // Generator method syntax: *methodName() { ... } or async *methodName() { ... }
+    if Check(gttStar) then
+    begin
+      AddWarning('Generator methods are not supported in GocciaScript',
+        'Use a regular method instead',
+        Peek.Line, Peek.Column);
+      Advance; // skip *
+      // Skip method name (identifiers, strings, numbers, or reserved words)
+      if Check(gttLeftBracket) then
+      begin
+        Advance;
+        Expression;
+        Consume(gttRightBracket, 'Expected "]" after computed property name',
+          SSuggestCloseBracketComputedPropertyName);
+      end
+      else if Match([gttIdentifier, gttString, gttNumber,
+                     gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
+                     gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
+                     gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
+                     gttTrue, gttFalse, gttNull, gttTypeof, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
+        { name consumed };
+      CollectGenericParameters;
+      if Check(gttLeftParen) then
+        SkipBalancedParens;
+      // Skip return type annotation
+      if Check(gttColon) then
+      begin
+        Advance;
+        CollectTypeAnnotation([gttLeftBrace]);
+      end;
+      if Check(gttLeftBrace) then
+        SkipBlock;
+      if not Match(gttComma) then
+        Break;
+      Continue;
+    end;
+
         // Handle spread syntax: ...obj
     if not IsGetter and not IsSetter and Match(gttSpread) then
     begin
@@ -3595,6 +3632,17 @@ begin
     Exit;
   end;
 
+  if Check(gttFunction) then
+  begin
+    AddWarning('''function'' declarations are not supported in GocciaScript',
+      'Use arrow functions instead: const name = (...) => { ... }',
+      Line, Column);
+    Advance;
+    SkipUnsupportedFunctionSignature;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Exit;
+  end;
+
   if Check(gttStar) then
   begin
     AddWarning('Wildcard re-exports (export * from ...) are not supported in GocciaScript',
@@ -3807,6 +3855,44 @@ begin
       begin
         Advance;
         IsAsync := True;
+      end;
+
+      // Generator method syntax: *methodName() { ... } or async *methodName() { ... }
+      if Check(gttStar) then
+      begin
+        AddWarning('Generator methods are not supported in GocciaScript',
+          'Use a regular method instead',
+          Peek.Line, Peek.Column);
+        Advance; // skip *
+        // Skip optional # for private generator methods
+        if Check(gttHash) then
+          Advance;
+        // Skip method name (identifiers, strings, numbers, or reserved words)
+        if Check(gttLeftBracket) then
+        begin
+          Advance;
+          Expression;
+          Consume(gttRightBracket, 'Expected "]" after computed property name',
+            SSuggestCloseBracketComputedPropertyName);
+        end
+        else if Match([gttIdentifier, gttString, gttNumber,
+                       gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
+                       gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
+                       gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
+                       gttTrue, gttFalse, gttNull, gttTypeof, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
+          { name consumed };
+        CollectGenericParameters;
+        if Check(gttLeftParen) then
+          SkipBalancedParens;
+        // Skip return type annotation
+        if Check(gttColon) then
+        begin
+          Advance;
+          CollectTypeAnnotation([gttLeftBrace]);
+        end;
+        if Check(gttLeftBrace) then
+          SkipBlock;
+        Continue;
       end;
 
       IsPrivate := Match(gttHash);
