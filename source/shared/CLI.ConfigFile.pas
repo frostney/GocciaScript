@@ -147,6 +147,7 @@ type
     FCurrentKey: string;
     FDepth: Integer;
     FInTopArray: Boolean;
+    FArrayHadElements: Boolean;
     procedure AddEntry(const AValue: string);
   protected
     procedure OnNull; override;
@@ -182,7 +183,10 @@ begin
   if FDepth = 1 then
     AddEntry(BoolToStr(AValue, 'true', 'false'));
   if FInTopArray and (FDepth = 2) then
+  begin
+    FArrayHadElements := True;
     AddEntry(BoolToStr(AValue, 'true', 'false'));
+  end;
 end;
 
 procedure TConfigJSONParser.OnString(const AValue: string);
@@ -190,7 +194,10 @@ begin
   if FDepth = 1 then
     AddEntry(AValue)
   else if FInTopArray and (FDepth = 2) then
+  begin
+    FArrayHadElements := True;
     AddEntry(AValue);
+  end;
 end;
 
 procedure TConfigJSONParser.OnInteger(const AValue: Int64);
@@ -198,7 +205,10 @@ begin
   if FDepth = 1 then
     AddEntry(IntToStr(AValue))
   else if FInTopArray and (FDepth = 2) then
+  begin
+    FArrayHadElements := True;
     AddEntry(IntToStr(AValue));
+  end;
 end;
 
 procedure TConfigJSONParser.OnFloat(const AValue: Double);
@@ -210,7 +220,10 @@ begin
   if FDepth = 1 then
     AddEntry(FloatToStr(AValue, FormatSettings))
   else if FInTopArray and (FDepth = 2) then
+  begin
+    FArrayHadElements := True;
     AddEntry(FloatToStr(AValue, FormatSettings));
+  end;
 end;
 
 procedure TConfigJSONParser.OnBeginObject;
@@ -233,13 +246,20 @@ procedure TConfigJSONParser.OnBeginArray;
 begin
   Inc(FDepth);
   if FDepth = 2 then
+  begin
     FInTopArray := True;
+    FArrayHadElements := False;
+  end;
 end;
 
 procedure TConfigJSONParser.OnEndArray;
 begin
   if FDepth = 2 then
+  begin
+    if not FArrayHadElements then
+      AddEntry('');
     FInTopArray := False;
+  end;
   Dec(FDepth);
 end;
 
@@ -248,6 +268,7 @@ begin
   FCount := 0;
   FDepth := 0;
   FInTopArray := False;
+  FArrayHadElements := False;
   FCurrentKey := '';
   SetLength(FEntries, 16);
 
@@ -296,13 +317,25 @@ begin
     if Option = nil then
       Continue;
 
-    { Skip options already set by a higher-priority source (CLI).
-      Repeatable options accumulate from config, but not when
-      the CLI already set them (CLI wins outright). }
+    { Skip options already set by a higher-priority source (CLI or
+      a child config's explicit empty array).  Repeatable options
+      normally accumulate from config, but not when the CLI set
+      them or when the child config explicitly set an empty array
+      (Present with zero values). }
     if Option.Present and
        (not (Option is TGocciaRepeatableOption) or
-        Option.FromCommandLine) then
+        Option.FromCommandLine or
+        (TGocciaRepeatableOption(Option).Values.Count = 0)) then
       Continue;
+
+    { Empty-array sentinel: mark the option as present so the
+      explicit empty override is visible, but do not add a value. }
+    if (Option is TGocciaRepeatableOption) and
+       (AEntries[I].Value = '') then
+    begin
+      Option.MarkPresent;
+      Continue;
+    end;
 
     if Option is TGocciaFlagOption then
     begin

@@ -646,6 +646,24 @@ console.log("CLI --allowed-host overrides config allowed-hosts...");
   }
 }
 
+console.log("Config allowed-hosts empty array overrides parent via extends...");
+{
+  const tmp = makeTmp();
+  try {
+    // Base config allows example.com
+    writeFileSync(join(tmp, "base.json"), '{"allowed-hosts": ["example.com"]}\n');
+    // Child config extends base but explicitly empties allowed-hosts
+    writeFileSync(join(tmp, "goccia.json"), '{"extends": "base.json", "allowed-hosts": []}\n');
+    writeFileSync(join(tmp, "test.js"), 'fetch("http://example.com");\n');
+
+    // Empty allowed-hosts in child should override parent — fetch blocked
+    const res = runCwd(LOADER, ["test.js"], tmp, { expectFail: true });
+    if (!res.combined.includes("allowed hosts")) throw new Error(`Empty allowed-hosts should block fetch, got: ${res.combined}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Config allowed-hosts TestRunner integration...");
 {
   const tmp = makeTmp();

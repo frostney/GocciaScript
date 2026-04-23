@@ -155,25 +155,34 @@ begin
     else if Value is TGocciaArrayValue then
     begin
       Arr := TGocciaArrayValue(Value);
-      for J := 0 to Arr.GetLength - 1 do
+      if Arr.GetLength = 0 then
       begin
-        Value := Arr.GetElement(J);
-        if Value is TGocciaStringLiteralValue then
-          ElementValue := TGocciaStringLiteralValue(Value).Value
-        else if Value is TGocciaNumberLiteralValue then
-          ElementValue := TGocciaNumberLiteralValue(Value)
-            .ToStringLiteral.Value
-        else if Value is TGocciaBooleanLiteralValue then
-          ElementValue := BoolToStr(
-            TGocciaBooleanLiteralValue(Value).Value, 'true', 'false')
-        else
-          Continue;
         if Count >= Length(Result) then
           SetLength(Result, Length(Result) * 2 + 1);
         Result[Count].Key := Key;
-        Result[Count].Value := ElementValue;
+        Result[Count].Value := '';
         Inc(Count);
-      end;
+      end
+      else
+        for J := 0 to Arr.GetLength - 1 do
+        begin
+          Value := Arr.GetElement(J);
+          if Value is TGocciaStringLiteralValue then
+            ElementValue := TGocciaStringLiteralValue(Value).Value
+          else if Value is TGocciaNumberLiteralValue then
+            ElementValue := TGocciaNumberLiteralValue(Value)
+              .ToStringLiteral.Value
+          else if Value is TGocciaBooleanLiteralValue then
+            ElementValue := BoolToStr(
+              TGocciaBooleanLiteralValue(Value).Value, 'true', 'false')
+          else
+            Continue;
+          if Count >= Length(Result) then
+            SetLength(Result, Length(Result) * 2 + 1);
+          Result[Count].Key := Key;
+          Result[Count].Value := ElementValue;
+          Inc(Count);
+        end;
     end;
     { Objects and other types are silently skipped. }
   end;
@@ -490,7 +499,14 @@ begin
       try
         for I := 0 to High(AFileConfig) do
           if AFileConfig[I].Key = 'allowed-hosts' then
+          begin
+            { Empty-value sentinel marks an explicit empty array.
+              In a merged extends chain child entries come first,
+              so a sentinel stops accumulation of base values. }
+            if AFileConfig[I].Value = '' then
+              Break;
             FileHosts.Add(AFileConfig[I].Value);
+          end;
         AEngine.SetAllowedFetchHosts(FileHosts);
       finally
         FileHosts.Free;

@@ -29,6 +29,12 @@ type
     function FormatForHelp: string; virtual; abstract;
     function ValidValues: string; virtual;
 
+    { Mark this option as present without applying a value.
+      Used by the config layer to record that a key existed in the
+      config file even when no concrete values were produced (e.g.
+      an empty array). }
+    procedure MarkPresent;
+
     { Mark this option as having been set by the command line.
       Called after ParseCommandLine so that per-file config can
       distinguish CLI-set values from root-config-set values. }
@@ -260,6 +266,11 @@ end;
 procedure TGocciaOptionBase.MarkFromCommandLine;
 begin
   FFromCommandLine := True;
+end;
+
+procedure TGocciaOptionBase.MarkPresent;
+begin
+  FPresent := True;
 end;
 
 function TGocciaOptionBase.ValidValues: string;
