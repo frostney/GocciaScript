@@ -31,4 +31,10 @@ describe('Array.prototype.lastIndexOf', () => {
   test('negative fromIndex beyond length returns -1', () => {
     expect([1, 2, 3].lastIndexOf(1, -100)).toBe(-1);
   });
+
+  test('generic receiver finds last element in array-like', () => {
+    const obj = { 0: 'x', 1: 'y', 2: 'x', length: 3 };
+    expect(Array.prototype.lastIndexOf.call(obj, 'x')).toBe(2);
+    expect(Array.prototype.lastIndexOf.call(obj, 'z')).toBe(-1);
+  });
 });

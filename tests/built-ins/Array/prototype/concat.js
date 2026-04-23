@@ -55,4 +55,26 @@ describe('Array.prototype.concat', () => {
     expect(result[0]).toBe(1);
     expect(result[1]).toEqual([2, 3]);
   });
+
+  test('does not spread non-array receiver (IsConcatSpreadable)', () => {
+    const arrayLike = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
+    const result = Array.prototype.concat.call(arrayLike, ['d']);
+    expect(result.length).toBe(2);
+    expect(result[0]).toBe(arrayLike);
+    expect(result[1]).toBe('d');
+  });
+
+  test('spreads receiver with Symbol.isConcatSpreadable', () => {
+    const obj = { 0: 'a', 1: 'b', length: 2, [Symbol.isConcatSpreadable]: true };
+    const result = Array.prototype.concat.call(obj, ['c']);
+    expect(result).toEqual(['a', 'b', 'c']);
+  });
+
+  test('preserves holes from sparse array', () => {
+    const result = [1, ,].concat([2]);
+    expect(result.length).toBe(3);
+    expect(0 in result).toBe(true);
+    expect(1 in result).toBe(false);
+    expect(result[2]).toBe(2);
+  });
 });

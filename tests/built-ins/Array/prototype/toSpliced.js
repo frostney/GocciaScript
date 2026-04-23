@@ -40,3 +40,9 @@ test("Array.prototype.toSpliced with empty array", () => {
   const arr = [];
   expect(arr.toSpliced(0, 0, 1)).toEqual([1]);
 });
+
+test("generic receiver creates spliced copy from array-like", () => {
+  const arrayLike = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
+  const result = Array.prototype.toSpliced.call(arrayLike, 1, 1, 'x');
+  expect(result).toEqual(['a', 'x', 'c']);
+});

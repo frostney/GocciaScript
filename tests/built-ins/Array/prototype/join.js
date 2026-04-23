@@ -44,3 +44,13 @@ test("join with single element (no separator)", () => {
 test("join converts elements to strings", () => {
   expect([true, false, 0].join(",")).toBe("true,false,0");
 });
+
+test("generic receiver joins array-like elements", () => {
+  const arrayLike = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
+  expect(Array.prototype.join.call(arrayLike, '-')).toBe('a-b-c');
+  expect(Array.prototype.join.call(arrayLike)).toBe('a,b,c');
+});
+
+test("primitive this joins as empty string", () => {
+  expect(Array.prototype.join.call(true, ',')).toBe('');
+});

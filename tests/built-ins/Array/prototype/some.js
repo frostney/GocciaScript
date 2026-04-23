@@ -58,3 +58,9 @@ test("some stops iteration on first true", () => {
 test("some with all elements failing", () => {
   expect([1, 2, 3].some((x) => x > 10)).toBe(false);
 });
+
+test("generic receiver checks elements in array-like", () => {
+  const arrayLike = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
+  expect(Array.prototype.some.call(arrayLike, x => x === 'b')).toBe(true);
+  expect(Array.prototype.some.call(arrayLike, x => x === 'z')).toBe(false);
+});

@@ -31,3 +31,11 @@ test("works with spread operator", () => {
   const arr = [1, 2, 3];
   expect([...arr.values()]).toEqual([1, 2, 3]);
 });
+
+test("generic receiver iterates array-like values", () => {
+  const obj = { 0: 'a', 1: 'b', length: 2 };
+  const iter = Array.prototype.values.call(obj);
+  expect(iter.next().value).toBe('a');
+  expect(iter.next().value).toBe('b');
+  expect(iter.next().done).toBe(true);
+});

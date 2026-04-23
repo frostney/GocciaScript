@@ -68,3 +68,22 @@ test("slice on empty array", () => {
   expect([].slice()).toEqual([]);
   expect([].slice(0, 5)).toEqual([]);
 });
+
+test("generic receiver extracts from array-like", () => {
+  const arrayLike = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
+  const result = Array.prototype.slice.call(arrayLike, 1, 3);
+  expect(result).toEqual(['b', 'c']);
+  expect(Array.isArray(result)).toBe(true);
+});
+
+test("primitive this returns empty array", () => {
+  expect(Array.prototype.slice.call(42)).toEqual([]);
+});
+
+test("slice preserves holes in sparse array", () => {
+  const result = [1, , 3].slice();
+  expect(result.length).toBe(3);
+  expect(0 in result).toBe(true);
+  expect(1 in result).toBe(false);
+  expect(2 in result).toBe(true);
+});

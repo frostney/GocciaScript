@@ -78,3 +78,13 @@ test("includes with boolean values", () => {
   expect([0].includes(false)).toBe(false);
   expect([1].includes(true)).toBe(false);
 });
+
+test("generic receiver searches array-like", () => {
+  const arrayLike = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
+  expect(Array.prototype.includes.call(arrayLike, 'a')).toBe(true);
+  expect(Array.prototype.includes.call(arrayLike, 'z')).toBe(false);
+});
+
+test("primitive this returns false", () => {
+  expect(Array.prototype.includes.call(false, false)).toBe(false);
+});

@@ -30,3 +30,9 @@ test("toReversed does not mutate the original array", () => {
 test("toReversed with single element", () => {
   expect([42].toReversed()).toEqual([42]);
 });
+
+test("generic receiver creates reversed copy from array-like", () => {
+  const arrayLike = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
+  const result = Array.prototype.toReversed.call(arrayLike);
+  expect(result).toEqual(['c', 'b', 'a']);
+});

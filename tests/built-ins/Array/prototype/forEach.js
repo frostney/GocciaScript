@@ -71,3 +71,18 @@ test("forEach has correct name and length", () => {
   expect(Array.prototype.forEach.name).toBe("forEach");
   expect(Array.prototype.forEach.length).toBe(1);
 });
+
+test("generic receiver iterates array-like", () => {
+  const arrayLike = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
+  const collected = [];
+  Array.prototype.forEach.call(arrayLike, x => collected.push(x));
+  expect(collected).toEqual(['a', 'b', 'c']);
+});
+
+test("null this throws TypeError", () => {
+  expect(() => Array.prototype.forEach.call(null, x => x)).toThrow();
+});
+
+test("undefined this throws TypeError even without callback", () => {
+  expect(() => Array.prototype.forEach.call(undefined)).toThrow();
+});
