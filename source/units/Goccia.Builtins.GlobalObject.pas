@@ -632,8 +632,18 @@ begin
     if Assigned(SymbolDesc) and SymbolDesc.Enumerable then
     begin
       if SymbolDesc is TGocciaPropertyDescriptorData then
-        Obj.AssignSymbolProperty(SymbolKeys[I],
-          TGocciaPropertyDescriptorData(SymbolDesc).Value);
+      begin
+        // Pass through ObjectDefineProperty for proper ToPropertyDescriptor handling
+        CallArgs := TGocciaArgumentsCollection.Create;
+        try
+          CallArgs.Add(Obj);
+          CallArgs.Add(SymbolKeys[I]);
+          CallArgs.Add(TGocciaPropertyDescriptorData(SymbolDesc).Value);
+          ObjectDefineProperty(CallArgs, AThisValue);
+        finally
+          CallArgs.Free;
+        end;
+      end;
     end;
   end;
 

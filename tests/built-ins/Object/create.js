@@ -69,3 +69,11 @@ test("Object.create ignores undefined Properties argument", () => {
   const obj = Object.create({}, undefined);
   expect(typeof obj).toBe("object");
 });
+
+test("Object.create with symbol-keyed property descriptor", () => {
+  const sym = Symbol("myProp");
+  const obj = Object.create(null, {
+    [sym]: { value: 42, enumerable: true, configurable: true }
+  });
+  expect(obj[sym]).toBe(42);
+});

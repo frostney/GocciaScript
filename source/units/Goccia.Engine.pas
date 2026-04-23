@@ -992,7 +992,12 @@ begin
 
   // Wire %TypedArray%.prototype to the shared prototype (which has all methods)
   if Assigned(TGocciaTypedArrayValue.GetSharedPrototypeObject) then
+  begin
     FTypedArrayIntrinsic.ReplacePrototype(TGocciaTypedArrayValue.GetSharedPrototypeObject);
+    // §23.2.3: %TypedArray%.prototype.constructor = %TypedArray%
+    TGocciaTypedArrayValue.GetSharedPrototypeObject.DefineProperty(PROP_CONSTRUCTOR,
+      TGocciaPropertyDescriptorData.Create(FTypedArrayIntrinsic, [pfConfigurable, pfWritable]));
+  end;
 
   TypeDef.ConstructorName := CONSTRUCTOR_STRING;
   TypeDef.Kind := gtdkPrimitiveWrapper;

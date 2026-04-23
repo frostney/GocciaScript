@@ -87,3 +87,26 @@ test("class reference preserves instanceof", () => {
   expect(obj instanceof ClassRef).toBe(true);
   expect(obj.x).toBe(42);
 });
+
+test("runtime property assignment on class is enumerable", () => {
+  class C {}
+  C.customProp = 42;
+  expect(C.customProp).toBe(42);
+  const desc = Object.getOwnPropertyDescriptor(C, "customProp");
+  expect(desc.enumerable).toBe(true);
+  expect(desc.writable).toBe(true);
+  expect(desc.configurable).toBe(true);
+});
+
+test("instance auto-accessor installs on prototype not constructor", () => {
+  class C {
+    accessor y = 20;
+  }
+  // The accessor is installed on C.prototype, not on C
+  const desc = Object.getOwnPropertyDescriptor(C.prototype, "y");
+  expect(typeof desc.get).toBe("function");
+  expect(typeof desc.set).toBe("function");
+  // C itself should NOT have y
+  const ctorDesc = Object.getOwnPropertyDescriptor(C, "y");
+  expect(ctorDesc).toBe(undefined);
+});
