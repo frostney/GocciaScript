@@ -36,3 +36,15 @@ describe("class expression name", () => {
     expect((class {}).name).toBe("");
   });
 });
+
+describe("static name override", () => {
+  test("static getter overrides default .name", () => {
+    class Foo { static get name() { return "Custom"; } }
+    expect(Foo.name).toBe("Custom");
+  });
+
+  test("static field overrides default .name", () => {
+    class Bar { static name = "Override"; }
+    expect(Bar.name).toBe("Override");
+  });
+});
