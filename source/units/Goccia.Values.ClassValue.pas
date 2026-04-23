@@ -1288,6 +1288,9 @@ begin
     ThrowTypeError('Dynamic code generation is disabled. ' +
       'Pass --unsafe-function-constructor to enable the Function constructor');
 
+  if not Assigned(FCompileDynamicFunction) then
+    ThrowTypeError('Function constructor is not available in this environment');
+
   // ES2026 §20.2.1.1: collect parameters and body from arguments
   if AArguments.Length = 0 then
   begin
