@@ -220,6 +220,7 @@ type
     function ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;
 
     procedure AddAlias(const APattern, AReplacement: string);
+    procedure SetAllowedFetchHosts(const AHosts: TStrings);
     procedure InjectGlobal(const AKey: string; const AValue: TGocciaValue);
     procedure RegisterGlobal(const AName: string; const AValue: TGocciaValue);
     procedure InjectGlobalsFromJSON(const AJsonString: string);
@@ -1257,6 +1258,26 @@ end;
 procedure TGocciaEngine.AddAlias(const APattern, AReplacement: string);
 begin
   Resolver.AddAlias(APattern, AReplacement);
+end;
+
+procedure TGocciaEngine.SetAllowedFetchHosts(const AHosts: TStrings);
+var
+  EmptyHosts: TStringList;
+begin
+  if not Assigned(FBuiltinFetch) then
+    Exit;
+
+  if Assigned(AHosts) then
+    FBuiltinFetch.SetAllowedHosts(AHosts)
+  else
+  begin
+    EmptyHosts := TStringList.Create;
+    try
+      FBuiltinFetch.SetAllowedHosts(EmptyHosts);
+    finally
+      EmptyHosts.Free;
+    end;
+  end;
 end;
 
 procedure TGocciaEngine.InjectGlobal(const AKey: string; const AValue: TGocciaValue);

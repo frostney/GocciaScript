@@ -699,6 +699,8 @@ resourcestring
   // Fetch API
   SErrorFetchRequiresURL = 'fetch requires a URL argument';
   SErrorFetchUnsupportedMethod = 'fetch does not support method ''%s''; only GET and HEAD are allowed';
+  SErrorFetchNoAllowedHosts = 'fetch requires allowed hosts to be configured';
+  SErrorFetchHostNotAllowed = 'fetch request to ''%s'' blocked: host is not in the allowed hosts list';
   SErrorHeadersNotHeaders = 'Headers method called on non-Headers object';
   SErrorHeadersForEachNotCallable = 'Headers.prototype.forEach: callback is not a function';
   SErrorResponseNotResponse = 'Response method called on non-Response object';
