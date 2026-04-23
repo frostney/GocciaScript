@@ -1531,6 +1531,8 @@ begin
   try
     Tokens := Lexer.ScanTokens;
     Parser := TGocciaParser.Create(Tokens, '<Function>', Lexer.SourceLines);
+    Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
+    Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
     try
       ProgramNode := Parser.ParseUnchecked;
       try
