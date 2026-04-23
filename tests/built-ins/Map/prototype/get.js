@@ -42,3 +42,10 @@ test("get on empty Map", () => {
   const map = new Map();
   expect(map.get("anything")).toBeUndefined();
 });
+
+test("get property descriptor on Map.prototype", () => {
+  const desc = Object.getOwnPropertyDescriptor(Map.prototype, "get");
+  expect(desc.writable).toBe(true);
+  expect(desc.enumerable).toBe(false);
+  expect(desc.configurable).toBe(true);
+});

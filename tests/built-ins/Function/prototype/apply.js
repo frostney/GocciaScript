@@ -95,4 +95,15 @@ describe("Function.prototype.apply", () => {
     const obj = { apply: Function.prototype.apply };
     expect(() => obj.apply(undefined, [])).toThrow(TypeError);
   });
+
+  test("has correct name and length", () => {
+    expect(Function.prototype.apply.name).toBe("apply");
+    expect(Function.prototype.apply.length).toBe(2);
+  });
+
+  test("works on class constructors as type conversion", () => {
+    expect(Number.apply(null, [42])).toBe(42);
+    expect(String.apply(null, [42])).toBe("42");
+    expect(Boolean.apply(null, [1])).toBe(true);
+  });
 });

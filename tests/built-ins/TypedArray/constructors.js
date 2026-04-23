@@ -302,4 +302,56 @@ describe("TypedArray constructors", () => {
       expect(() => bi.set(i32)).toThrow(TypeError);
     });
   });
+
+  describe("%TypedArray% intrinsic", () => {
+    test("all typed array constructors share the same [[Prototype]]", () => {
+      const TA = Object.getPrototypeOf(Int8Array);
+      expect(Object.getPrototypeOf(Uint8Array)).toBe(TA);
+      expect(Object.getPrototypeOf(Int16Array)).toBe(TA);
+      expect(Object.getPrototypeOf(Uint16Array)).toBe(TA);
+      expect(Object.getPrototypeOf(Int32Array)).toBe(TA);
+      expect(Object.getPrototypeOf(Uint32Array)).toBe(TA);
+      expect(Object.getPrototypeOf(Float32Array)).toBe(TA);
+      expect(Object.getPrototypeOf(Float64Array)).toBe(TA);
+      expect(Object.getPrototypeOf(Uint8ClampedArray)).toBe(TA);
+      expect(Object.getPrototypeOf(BigInt64Array)).toBe(TA);
+      expect(Object.getPrototypeOf(BigUint64Array)).toBe(TA);
+    });
+
+    test("%TypedArray%.name is 'TypedArray'", () => {
+      const TA = Object.getPrototypeOf(Int8Array);
+      expect(TA.name).toBe("TypedArray");
+    });
+
+    test("%TypedArray%.length is 0", () => {
+      const TA = Object.getPrototypeOf(Int8Array);
+      expect(TA.length).toBe(0);
+    });
+
+    test("%TypedArray% is not globally exposed", () => {
+      expect(typeof globalThis.TypedArray).toBe("undefined");
+    });
+
+    test("%TypedArray%.[[Prototype]] is Function.prototype", () => {
+      const TA = Object.getPrototypeOf(Int8Array);
+      expect(Object.getPrototypeOf(TA)).toBe(Function.prototype);
+    });
+
+    test("%TypedArray%.prototype has shared methods", () => {
+      const TA = Object.getPrototypeOf(Int8Array);
+      const proto = TA.prototype;
+      expect(typeof proto.map).toBe("function");
+      expect(typeof proto.filter).toBe("function");
+      expect(typeof proto.every).toBe("function");
+      expect(typeof proto.sort).toBe("function");
+      expect(typeof proto.slice).toBe("function");
+    });
+
+    test("%TypedArray%.prototype methods have correct name/length", () => {
+      const TA = Object.getPrototypeOf(Int8Array);
+      const map = TA.prototype.map;
+      expect(map.name).toBe("map");
+      expect(map.length).toBe(1);
+    });
+  });
 });

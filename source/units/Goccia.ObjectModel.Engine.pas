@@ -64,9 +64,13 @@ begin
     if not Assigned(Descriptor) then
       Continue;
 
+    // Clone the descriptor to avoid shared ownership between source and target.
+    // Use non-enumerable flags per ES §17 for built-in static methods.
     if Descriptor is TGocciaPropertyDescriptorData then
-      AConstructor.SetProperty(Key,
-        TGocciaPropertyDescriptorData(Descriptor).Value)
+      TGocciaObjectValue(AConstructor).DefineProperty(Key,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaPropertyDescriptorData(Descriptor).Value,
+          TGocciaPropertyDescriptorData(Descriptor).Flags))
     else
       raise EGocciaObjectModelError.CreateFmt(
         'Static source for %s contains unsupported accessor property "%s"',
@@ -110,7 +114,8 @@ begin
   else if Assigned(ATypeDefinition.PrototypeProvider) then
   begin
     AConstructor.ReplacePrototype(ATypeDefinition.PrototypeProvider());
-    AConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, AConstructor);
+    AConstructor.Prototype.DefineProperty(PROP_CONSTRUCTOR,
+      TGocciaPropertyDescriptorData.Create(AConstructor, [pfConfigurable, pfWritable]));
   end
   else
     raise EGocciaObjectModelError.CreateFmt(

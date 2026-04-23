@@ -89,3 +89,34 @@ test("AggregateError with empty errors", () => {
   expect(error.errors.length).toBe(0);
   expect(error.message).toBe("empty");
 });
+
+test("Error.prototype.name is non-enumerable", () => {
+  const desc = Object.getOwnPropertyDescriptor(Error.prototype, "name");
+  expect(desc.enumerable).toBe(false);
+  expect(desc.writable).toBe(true);
+  expect(desc.configurable).toBe(true);
+});
+
+test("Error.prototype.message is non-enumerable", () => {
+  const desc = Object.getOwnPropertyDescriptor(Error.prototype, "message");
+  expect(desc.enumerable).toBe(false);
+  expect(desc.writable).toBe(true);
+  expect(desc.configurable).toBe(true);
+});
+
+test("NativeError.prototype.name is non-enumerable", () => {
+  const types = [TypeError, RangeError, ReferenceError, SyntaxError, URIError];
+  types.forEach((ErrorType) => {
+    const desc = Object.getOwnPropertyDescriptor(ErrorType.prototype, "name");
+    expect(desc.enumerable).toBe(false);
+    expect(desc.writable).toBe(true);
+    expect(desc.configurable).toBe(true);
+  });
+});
+
+test("Error constructor .prototype is non-writable", () => {
+  const desc = Object.getOwnPropertyDescriptor(Error, "prototype");
+  expect(desc.writable).toBe(false);
+  expect(desc.enumerable).toBe(false);
+  expect(desc.configurable).toBe(false);
+});

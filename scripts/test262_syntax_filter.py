@@ -152,6 +152,8 @@ SUPPORTED_FEATURES: dict[str, bool] = {
     "Float32Array": True,
     "Float64Array": True,
     "Uint8ClampedArray": True,
+    "BigInt64Array": True,
+    "BigUint64Array": True,
     "hashbang": True,
     "String.raw": True,
     "template-literal": True,
@@ -248,8 +250,6 @@ SKIP_FLAGS: set[str] = {
 # conservative: it is better to skip a valid test than to run an invalid one.
 
 _UNSUPPORTED_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("var_declaration",
-     re.compile(r"\bvar\s+\w")),
     ("function_declaration",
      re.compile(r"\bfunction\s+\w+\s*\(")),
     ("function_expression",
@@ -439,6 +439,7 @@ AVAILABLE_INCLUDES: set[str] = {
     "deepEqual.js",
     "nans.js",
     "testTypedArray.js",
+    "testBigIntTypedArray.js",
     "temporalHelpers.js",
     "promiseHelper.js",
     "dateConstants.js",
@@ -470,6 +471,11 @@ SKIP_PATH_SEGMENTS: set[str] = {
     "eval-code",        # All eval-code tests use eval
     "generators",       # No generator support
     "for-in",           # No for-in support
+    "DataView",         # No DataView support
+    "WeakMap",          # No WeakMap support
+    "WeakSet",          # No WeakSet support
+    "WeakRef",          # No WeakRef support
+    "Atomics",          # No Atomics support
 }
 
 
