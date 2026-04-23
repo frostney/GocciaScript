@@ -116,6 +116,7 @@ type
     function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
     function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue;
 
+    procedure SetInferredName(const AName: string);
     property Name: string read FName;
     property SuperClass: TGocciaClassValue read FSuperClass write FSuperClass;
     property Prototype: TGocciaObjectValue read FClassPrototype;
@@ -940,8 +941,38 @@ begin
     Exit;
   end;
 
-  Current := Self;
-  repeat
+  if FStaticMethods.TryGetValue(AName, Result) then
+    Exit;
+
+  if FStaticGetters.TryGetValue(AName, Getter) then
+  begin
+    Args := TGocciaArgumentsCollection.CreateWithCapacity(0);
+    try
+      Result := Getter.Call(Args, Self);
+    finally
+      Args.Free;
+    end;
+    Exit;
+  end;
+
+  if FStaticSetters.ContainsKey(AName) then
+  begin
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  if AName = PROP_NAME then
+  begin
+    if FName = '<anonymous>' then
+      Result := TGocciaStringLiteralValue.Create('')
+    else
+      Result := TGocciaStringLiteralValue.Create(FName);
+    Exit;
+  end;
+
+  Current := FSuperClass;
+  while Assigned(Current) do
+  begin
     if Current.FStaticMethods.TryGetValue(AName, Result) then
       Exit;
 
@@ -956,12 +987,24 @@ begin
       Exit;
     end;
 
+    if Current.FStaticSetters.ContainsKey(AName) then
+    begin
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Exit;
+    end;
+
     Current := Current.FSuperClass;
-  until not Assigned(Current);
+  end;
 
   // Fall through to own properties (inherited from TGocciaObjectValue) and
   // then up the [[Prototype]] chain (Function.prototype → Object.prototype)
   Result := inherited GetProperty(AName);
+end;
+
+procedure TGocciaClassValue.SetInferredName(const AName: string);
+begin
+  if FName = '<anonymous>' then
+    FName := AName;
 end;
 
 procedure TGocciaClassValue.SetProperty(const AName: string; const AValue: TGocciaValue);

@@ -432,3 +432,271 @@ test("Object.defineProperty rejects non-callable getter and setter", () => {
   });
   expect(obj.setOnly).toBeUndefined();
 });
+
+// Non-configurable property redefinition — allowed cases (§10.1.6.3)
+
+test("non-configurable writable data: value change allowed", () => {
+  const obj = {};
+  Object.defineProperty(obj, "x", { value: 1, writable: true, configurable: false });
+  Object.defineProperty(obj, "x", { value: 2 });
+  expect(obj.x).toBe(2);
+});
+
+test("non-configurable writable data: writable false transition allowed", () => {
+  const obj = {};
+  Object.defineProperty(obj, "x", { value: 1, writable: true, configurable: false });
+  Object.defineProperty(obj, "x", { writable: false });
+  const desc = Object.getOwnPropertyDescriptor(obj, "x");
+  expect(desc.writable).toBe(false);
+  expect(desc.value).toBe(1);
+});
+
+test("non-configurable data: identical redefinition is no-op", () => {
+  const obj = {};
+  Object.defineProperty(obj, "x", {
+    value: 42,
+    writable: false,
+    enumerable: true,
+    configurable: false,
+  });
+  Object.defineProperty(obj, "x", {
+    value: 42,
+    writable: false,
+    enumerable: true,
+    configurable: false,
+  });
+  expect(obj.x).toBe(42);
+});
+
+test("non-configurable non-writable data: value change rejected", () => {
+  const obj = {};
+  Object.defineProperty(obj, "x", {
+    value: 1,
+    writable: false,
+    configurable: false,
+  });
+  expect(() => {
+    Object.defineProperty(obj, "x", { value: 2 });
+  }).toThrow(TypeError);
+  expect(obj.x).toBe(1);
+});
+
+test("non-configurable: writable false to true rejected", () => {
+  const obj = {};
+  Object.defineProperty(obj, "x", {
+    value: 1,
+    writable: false,
+    configurable: false,
+  });
+  expect(() => {
+    Object.defineProperty(obj, "x", { writable: true });
+  }).toThrow(TypeError);
+});
+
+test("non-configurable: data to accessor transition rejected", () => {
+  const obj = {};
+  Object.defineProperty(obj, "x", {
+    value: 1,
+    writable: true,
+    configurable: false,
+  });
+  expect(() => {
+    Object.defineProperty(obj, "x", {
+      get: () => 2,
+    });
+  }).toThrow(TypeError);
+});
+
+test("non-configurable accessor: getter change rejected", () => {
+  const getter1 = () => 1;
+  const getter2 = () => 2;
+  const obj = {};
+  Object.defineProperty(obj, "x", {
+    get: getter1,
+    configurable: false,
+  });
+  expect(() => {
+    Object.defineProperty(obj, "x", { get: getter2 });
+  }).toThrow(TypeError);
+});
+
+test("non-configurable accessor: setter change rejected", () => {
+  const setter1 = (v) => {};
+  const setter2 = (v) => {};
+  const obj = {};
+  Object.defineProperty(obj, "x", {
+    set: setter1,
+    configurable: false,
+  });
+  expect(() => {
+    Object.defineProperty(obj, "x", { set: setter2 });
+  }).toThrow(TypeError);
+});
+
+test("non-configurable accessor: identical redefinition is no-op", () => {
+  const getter = () => 42;
+  const setter = (v) => {};
+  const obj = {};
+  Object.defineProperty(obj, "x", {
+    get: getter,
+    set: setter,
+    enumerable: true,
+    configurable: false,
+  });
+  Object.defineProperty(obj, "x", {
+    get: getter,
+    set: setter,
+    enumerable: true,
+    configurable: false,
+  });
+  expect(obj.x).toBe(42);
+});
+
+// Data-to-accessor descriptor transitions (configurable)
+
+test("configurable: data to accessor transition allowed", () => {
+  const obj = {};
+  Object.defineProperty(obj, "x", {
+    value: 1,
+    configurable: true,
+  });
+  Object.defineProperty(obj, "x", {
+    get: () => 2,
+    configurable: true,
+  });
+  expect(obj.x).toBe(2);
+  const desc = Object.getOwnPropertyDescriptor(obj, "x");
+  expect(typeof desc.get).toBe("function");
+  expect(desc.value).toBeUndefined();
+});
+
+test("configurable: accessor to data transition allowed", () => {
+  const obj = {};
+  Object.defineProperty(obj, "x", {
+    get: () => 1,
+    configurable: true,
+  });
+  Object.defineProperty(obj, "x", {
+    value: 2,
+    writable: true,
+    configurable: true,
+  });
+  expect(obj.x).toBe(2);
+  const desc = Object.getOwnPropertyDescriptor(obj, "x");
+  expect(desc.writable).toBe(true);
+  expect(desc.get).toBeUndefined();
+});
+
+// Descriptor flag defaults — absent fields preserve existing values
+
+test("redefine preserves flags when only value changes", () => {
+  const obj = {};
+  Object.defineProperty(obj, "x", {
+    value: 1,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+  Object.defineProperty(obj, "x", { value: 2 });
+  const desc = Object.getOwnPropertyDescriptor(obj, "x");
+  expect(desc.value).toBe(2);
+  expect(desc.writable).toBe(true);
+  expect(desc.enumerable).toBe(true);
+  expect(desc.configurable).toBe(true);
+});
+
+test("redefine on non-configurable writable preserves flags", () => {
+  const obj = {};
+  Object.defineProperty(obj, "x", {
+    value: 1,
+    writable: true,
+    enumerable: true,
+    configurable: false,
+  });
+  Object.defineProperty(obj, "x", { value: 2 });
+  const desc = Object.getOwnPropertyDescriptor(obj, "x");
+  expect(desc.value).toBe(2);
+  expect(desc.writable).toBe(true);
+  expect(desc.enumerable).toBe(true);
+  expect(desc.configurable).toBe(false);
+});
+
+// Reflect.defineProperty boolean variant
+
+test("Reflect.defineProperty returns false for non-configurable violations", () => {
+  const obj = {};
+  Object.defineProperty(obj, "x", {
+    value: 1,
+    writable: false,
+    configurable: false,
+  });
+  expect(Reflect.defineProperty(obj, "x", { value: 2 })).toBe(false);
+  expect(obj.x).toBe(1);
+});
+
+test("Reflect.defineProperty returns true for allowed non-configurable updates", () => {
+  const obj = {};
+  Object.defineProperty(obj, "x", {
+    value: 1,
+    writable: true,
+    configurable: false,
+  });
+  expect(Reflect.defineProperty(obj, "x", { value: 2 })).toBe(true);
+  expect(obj.x).toBe(2);
+});
+
+// Array length + defineProperty interaction (§10.4.2)
+
+test("defineProperty on array length truncates array", () => {
+  const arr = [1, 2, 3, 4, 5];
+  Object.defineProperty(arr, "length", { value: 2 });
+  expect(arr.length).toBe(2);
+  expect(arr[0]).toBe(1);
+  expect(arr[1]).toBe(2);
+  expect(arr[2]).toBeUndefined();
+});
+
+test("defineProperty on array length extends array", () => {
+  const arr = [1, 2];
+  Object.defineProperty(arr, "length", { value: 5 });
+  expect(arr.length).toBe(5);
+  expect(arr[0]).toBe(1);
+  expect(arr[1]).toBe(2);
+  expect(arr[2]).toBeUndefined();
+});
+
+test("defineProperty on array length to 0 empties array", () => {
+  const arr = [1, 2, 3];
+  Object.defineProperty(arr, "length", { value: 0 });
+  expect(arr.length).toBe(0);
+  expect(arr[0]).toBeUndefined();
+});
+
+test("defineProperty on numeric index updates element", () => {
+  const arr = [1, 2, 3];
+  Object.defineProperty(arr, "0", { value: 99 });
+  expect(arr[0]).toBe(99);
+  expect(arr.length).toBe(3);
+});
+
+test("defineProperty on numeric index beyond length extends array", () => {
+  const arr = [1, 2];
+  Object.defineProperty(arr, "5", { value: 42 });
+  expect(arr[5]).toBe(42);
+  expect(arr.length).toBe(6);
+  expect(arr[2]).toBeUndefined();
+  expect(arr[3]).toBeUndefined();
+  expect(arr[4]).toBeUndefined();
+});
+
+test("defineProperty on array non-index property", () => {
+  const arr = [1, 2, 3];
+  Object.defineProperty(arr, "foo", {
+    value: "bar",
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+  expect(arr.foo).toBe("bar");
+  expect(arr.length).toBe(3);
+});

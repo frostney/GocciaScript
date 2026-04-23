@@ -835,7 +835,7 @@ end;
       Value := Variables[I].Initializer.Evaluate(AContext);
       if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
         TGocciaFunctionValue(Value).Name := Variables[I].Name
-      else if (Value is TGocciaClassValue) and (TGocciaClassValue(Value).Name = '<anonymous>') then
+      else if Value is TGocciaClassValue then
         TGocciaClassValue(Value).SetInferredName(Variables[I].Name);
       if IsVar then
       begin

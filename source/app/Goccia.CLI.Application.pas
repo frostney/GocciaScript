@@ -397,15 +397,6 @@ begin
     Include(Result, ggFFI);
 end;
 
-procedure ApplyMaxMemory(const AEngineOptions: TGocciaEngineOptions);
-var
-  GC: TGarbageCollector;
-begin
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) and AEngineOptions.MaxMemory.Present then
-    GC.MaxBytes := AEngineOptions.MaxMemory.Value;
-end;
-
 function TGocciaCLIApplication.DiscoverFileConfig(
   const AFileName: string): TConfigEntryArray;
 var
@@ -424,8 +415,10 @@ begin
     Result := ParseConfigFile(ConfigPath);
 end;
 
-{ Apply per-file config entries to the engine.  CLI options
-  always win; file config overrides the global default. }
+{ Apply per-file config entries to the engine.
+  Priority: CLI flag > per-file config > root config > default.
+  FromCommandLine distinguishes CLI-set options from root-config-set options
+  so that a per-file config can override a root-level config value. }
 procedure ApplyFileConfigToEngine(const AEngine: TGocciaEngine;
   const AEngineOptions: TGocciaEngineOptions;
   const AFileConfig: TConfigEntryArray);
@@ -437,27 +430,33 @@ begin
   if not Assigned(AEngineOptions) then
     Exit;
 
-  { ASI: CLI flag > file config > default (false) }
-  if AEngineOptions.ASI.Present then
-    AEngine.ASIEnabled := True
-  else if FindConfigEntry(AFileConfig, 'asi', ValueStr) then
-    AEngine.ASIEnabled := ValueStr = 'true';
+  { ASI: CLI flag > per-file config > root config > default (false) }
+  AEngine.ASIEnabled := ResolveFlagOption(
+    AEngineOptions.ASI, AFileConfig, 'asi');
 
-  { compat-var: CLI flag > file config > default (false) }
-  if AEngineOptions.CompatVar.Present then
-    AEngine.VarEnabled := True
-  else if FindConfigEntry(AFileConfig, 'compat-var', ValueStr) then
-    AEngine.VarEnabled := ValueStr = 'true';
+  { compat-var: CLI flag > per-file config > root config > default (false) }
+  AEngine.VarEnabled := ResolveFlagOption(
+    AEngineOptions.CompatVar, AFileConfig, 'compat-var');
 
-  { max-memory: CLI > file config > unlimited }
-  if AEngineOptions.MaxMemory.Present then
-    ApplyMaxMemory(AEngineOptions)
-  else
+  { max-memory: CLI > per-file config > root config > system default.
+    Always set explicitly so a previous file's per-file override does
+    not leak into subsequent files (GC.MaxBytes is process-global). }
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
   begin
-    GC := TGarbageCollector.Instance;
-    if Assigned(GC) and FindConfigEntry(AFileConfig, 'max-memory', ValueStr) and
-       TryStrToInt64(ValueStr, MemoryLimit) then
+    if AEngineOptions.MaxMemory.FromCommandLine then
+      GC.MaxBytes := AEngineOptions.MaxMemory.Value
+    else if FindConfigEntry(AFileConfig, 'max-memory', ValueStr) then
+    begin
+      if not TryStrToInt64(ValueStr, MemoryLimit) then
+        raise Exception.CreateFmt(
+          'Invalid max-memory value in config: %s', [ValueStr]);
       GC.MaxBytes := MemoryLimit;
+    end
+    else if AEngineOptions.MaxMemory.Present then
+      GC.MaxBytes := AEngineOptions.MaxMemory.Value
+    else
+      GC.MaxBytes := GC.SuggestedMaxBytes;
   end;
 end;
 
@@ -602,6 +601,7 @@ procedure TGocciaCLIApplication.Execute;
 var
   Paths: TStringList;
   HelpText, ConfigPath, ConfigStartDir: string;
+  I: Integer;
 begin
   Configure;
 
@@ -628,6 +628,13 @@ begin
       Write(HelpText);
       Exit;
     end;
+
+    { Snapshot CLI origin: any option Present at this point was set
+      by the command line.  ApplyConfigFile below may set additional
+      options, but those will not be marked FromCommandLine. }
+    for I := 0 to High(FAllOptions) do
+      if FAllOptions[I].Present then
+        FAllOptions[I].MarkFromCommandLine;
 
     { Discover config file starting from the entry file's directory.
       Apply as defaults — options already set by CLI are skipped. }

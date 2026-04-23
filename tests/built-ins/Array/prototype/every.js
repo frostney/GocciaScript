@@ -69,3 +69,9 @@ test("every returns true for empty array (vacuous truth)", () => {
 test("every with all elements failing", () => {
   expect([1, 2, 3].every((x) => x > 10)).toBe(false);
 });
+
+test("generic receiver checks all elements in array-like", () => {
+  const arrayLike = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
+  expect(Array.prototype.every.call(arrayLike, x => typeof x === 'string')).toBe(true);
+  expect(Array.prototype.every.call(arrayLike, x => x === 'a')).toBe(false);
+});

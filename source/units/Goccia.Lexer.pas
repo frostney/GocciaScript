@@ -1507,6 +1507,7 @@ begin
   FKeywords.Add(KEYWORD_TRY, gttTry);
   FKeywords.Add(KEYWORD_TYPEOF, gttTypeof);
   FKeywords.Add(KEYWORD_VAR, gttVar);
+  FKeywords.Add(KEYWORD_VOID, gttVoid);
   FKeywords.Add(KEYWORD_WHILE, gttWhile);
   FKeywords.Add(KEYWORD_WITH, gttWith);
 

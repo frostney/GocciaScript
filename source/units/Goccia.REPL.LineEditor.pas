@@ -288,6 +288,12 @@ begin
   {$IFDEF UNIX}
   Result := ReadLineRaw(APrompt, ALine);
   {$ELSE}
+  if System.Eof(Input) then
+  begin
+    Result := lrExit;
+    ALine := '';
+    Exit;
+  end;
   Result := lrLine;
   Write(APrompt);
   System.ReadLn(ALine);

@@ -512,6 +512,7 @@ begin
     gttPlus:       EmitInstruction(ACtx, EncodeABC(OP_TO_NUMBER, ADest, RegB, 0));
     gttTypeof:     EmitInstruction(ACtx, EncodeABC(OP_TYPEOF, ADest, RegB, 0));
     gttBitwiseNot: EmitInstruction(ACtx, EncodeABC(OP_BNOT, ADest, RegB, 0));
+    gttVoid:       EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
   else
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
   end;
@@ -1377,9 +1378,32 @@ procedure CompileObjectProperty(const ACtx: TGocciaCompilationContext;
 var
   ValReg: UInt8;
   KeyIdx: UInt16;
+  FuncCount: Integer;
+  InferredTemplate: TGocciaFunctionTemplate;
 begin
   ValReg := ACtx.Scope.AllocateRegister;
-  ACtx.CompileExpression(AValExpr, ValReg);
+  FuncCount := ACtx.Template.FunctionCount;
+
+  if (AValExpr is TGocciaClassExpression) and
+     (TGocciaClassExpression(AValExpr).ClassDefinition.Name = '') then
+    Goccia.Compiler.Statements.CompileClassExpression(ACtx,
+      TGocciaClassExpression(AValExpr).ClassDefinition, ValReg, AKey)
+  else
+    ACtx.CompileExpression(AValExpr, ValReg);
+
+  if (AValExpr is TGocciaArrowFunctionExpression) or
+     (AValExpr is TGocciaMethodExpression) then
+  begin
+    if ACtx.Template.FunctionCount > FuncCount then
+    begin
+      InferredTemplate := ACtx.Template.GetFunction(
+        ACtx.Template.FunctionCount - 1);
+      if (InferredTemplate.Name = '<arrow>') or
+         (InferredTemplate.Name = '<method>') then
+        InferredTemplate.Name := AKey;
+    end;
+  end;
+
   KeyIdx := ACtx.Template.AddConstantString(AKey);
   if KeyIdx > High(UInt8) then
     raise Exception.Create('Constant pool overflow: property name index exceeds 255');
@@ -1403,7 +1427,7 @@ begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
 
-  ChildTemplate := TGocciaFunctionTemplate.Create('<get ' + AKey + '>');
+  ChildTemplate := TGocciaFunctionTemplate.Create('get ' + AKey);
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.SourceText := AGetter.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
@@ -1453,7 +1477,7 @@ begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
 
-  ChildTemplate := TGocciaFunctionTemplate.Create('<set ' + AKey + '>');
+  ChildTemplate := TGocciaFunctionTemplate.Create('set ' + AKey);
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.SourceText := ASetter.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);

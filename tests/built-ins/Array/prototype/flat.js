@@ -57,3 +57,9 @@ test("flat on empty array", () => {
 test("flat on already flat array", () => {
   expect([1, 2, 3].flat()).toEqual([1, 2, 3]);
 });
+
+test("generic receiver flattens array-like with array elements", () => {
+  const obj = { 0: [1, 2], 1: [3], length: 2 };
+  const result = Array.prototype.flat.call(obj);
+  expect(result).toEqual([1, 2, 3]);
+});

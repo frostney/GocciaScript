@@ -317,6 +317,13 @@ begin
     Exit;
   end;
 
+  if AExpr.Operator = gttVoid then
+  begin
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
+    Result := True;
+    Exit;
+  end;
+
   if AExpr.Operator = gttTypeof then
   begin
     TypeStr := '';

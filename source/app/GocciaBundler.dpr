@@ -194,25 +194,14 @@ var
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
   SourceMap: TGocciaSourceMap;
   FileConfig: TConfigEntryArray;
-  ConfigValue: string;
   EffectiveASI, EffectiveVar: Boolean;
 begin
-  { Resolve ASI and compat-var: CLI flag > per-file config > default }
+  { Resolve ASI and compat-var:
+    CLI flag > per-file config > root config > default (false). }
   FileConfig := DiscoverFileConfig(AFileName);
-
-  if EngineOptions.ASI.Present then
-    EffectiveASI := True
-  else if FindConfigEntry(FileConfig, 'asi', ConfigValue) then
-    EffectiveASI := ConfigValue = 'true'
-  else
-    EffectiveASI := False;
-
-  if EngineOptions.CompatVar.Present then
-    EffectiveVar := True
-  else if FindConfigEntry(FileConfig, 'compat-var', ConfigValue) then
-    EffectiveVar := ConfigValue = 'true'
-  else
-    EffectiveVar := False;
+  EffectiveASI := ResolveFlagOption(EngineOptions.ASI, FileConfig, 'asi');
+  EffectiveVar := ResolveFlagOption(
+    EngineOptions.CompatVar, FileConfig, 'compat-var');
 
   CompiledModule := nil;
   ProgramNode := ParseSource(ASource, AFileName, EffectiveASI, EffectiveVar,

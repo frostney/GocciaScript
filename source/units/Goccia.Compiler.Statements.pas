@@ -58,7 +58,8 @@ procedure CompileUsingDeclaration(const ACtx: TGocciaCompilationContext;
 procedure CompileClassDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaClassDeclaration);
 procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
-  const AClassDef: TGocciaClassDefinition; const ADest: UInt8);
+  const AClassDef: TGocciaClassDefinition; const ADest: UInt8;
+  const AInferredName: string = '');
 
 function TypeAnnotationToLocalType(const AAnnotation: string): TGocciaLocalType;
 function IsArrayTypeAnnotation(const AAnnotation: string): Boolean;
@@ -558,7 +559,13 @@ begin
        not (AStmt.IsVar and (not HasRealInitializer) and IsVarRedeclaration) then
     begin
       FuncCount := ACtx.Template.FunctionCount;
-      ACtx.CompileExpression(Info.Initializer, Slot);
+
+      if (Info.Initializer is TGocciaClassExpression) and
+         (TGocciaClassExpression(Info.Initializer).ClassDefinition.Name = '') then
+        CompileClassExpression(ACtx,
+          TGocciaClassExpression(Info.Initializer).ClassDefinition, Slot, Info.Name)
+      else
+        ACtx.CompileExpression(Info.Initializer, Slot);
 
       // ES §15.7.3: anonymous class expression infers .name from binding.
       // Emit a property write AFTER compilation so the AST Name stays '' and
@@ -2545,7 +2552,8 @@ begin
 end;
 
 procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
-  const AClassDef: TGocciaClassDefinition; const ADest: UInt8);
+  const AClassDef: TGocciaClassDefinition; const ADest: UInt8;
+  const AInferredName: string = '');
 var
   ClassDef: TGocciaClassDefinition;
   SuperReg, ValReg: UInt8;
@@ -2570,6 +2578,8 @@ begin
 
   if HasNameBinding then
     NameIdx := ACtx.Template.AddConstantString(ClassDef.Name)
+  else if AInferredName <> '' then
+    NameIdx := ACtx.Template.AddConstantString(AInferredName)
   else
     NameIdx := ACtx.Template.AddConstantString('<anonymous>');
   EmitInstruction(ACtx, EncodeABx(OP_NEW_CLASS, ADest, NameIdx));
