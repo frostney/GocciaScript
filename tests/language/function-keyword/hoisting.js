@@ -19,8 +19,9 @@ test("multiple hoisted functions", () => {
   expect(sum).toBe(30);
 });
 
-test("function declaration overrides earlier var binding", () => {
+test("var initializer overwrites hoisted function (ES spec)", () => {
   var x = 1;
   function x() { return 2; }
-  expect(typeof x).toBe("function");
+  expect(typeof x).toBe("number");
+  expect(x).toBe(1);
 });

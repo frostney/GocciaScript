@@ -1656,7 +1656,7 @@ begin
       ArrowFn.SourceText := ExtractSourceRange(Line, Column);
       Result := ArrowFn;
     end
-    else if FFunctionDeclarationsEnabled and Check(gttFunction) then
+    else if (Name = KEYWORD_ASYNC) and FFunctionDeclarationsEnabled and Check(gttFunction) then
     begin
       Advance; // consume 'function'
       if Check(gttStar) then

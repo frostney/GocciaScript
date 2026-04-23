@@ -541,7 +541,7 @@ begin
   FCompatVar := TGocciaFlagOption.Create('compat-var',
     'Enable var declarations (compatibility)', 'Engine');
   FCompatFunction := TGocciaFlagOption.Create('compat-function',
-    'Enable function declarations (compatibility)', 'Engine');
+    'Enable function declarations and expressions (compatibility)', 'Engine');
 end;
 
 destructor TGocciaEngineOptions.Destroy;

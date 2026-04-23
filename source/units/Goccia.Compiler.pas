@@ -246,7 +246,7 @@ var
   I: Integer;
   Node: TGocciaASTNode;
   Reg: UInt8;
-  HasUsing: Boolean;
+  HasUsing, HasFunctionDecl: Boolean;
   SavedFinally: TObject;
 begin
   SavedFinally := Goccia.Compiler.Statements.SavePendingFinally;
@@ -259,11 +259,37 @@ begin
       for I := 0 to Block.Nodes.Count - 1 do
         HoistVarLocals(Block.Nodes[I], FCurrentScope);
 
-      // Hoist function declarations: compile initializers before other statements
+      // Check if there are function declarations to hoist
+      HasFunctionDecl := False;
       for I := 0 to Block.Nodes.Count - 1 do
         if (Block.Nodes[I] is TGocciaVariableDeclaration) and
            TGocciaVariableDeclaration(Block.Nodes[I]).IsFunctionDeclaration then
-          DoCompileStatement(TGocciaStatement(Block.Nodes[I]));
+        begin
+          HasFunctionDecl := True;
+          Break;
+        end;
+
+      if HasFunctionDecl then
+      begin
+        // Pre-declare lexical locals so function declarations can resolve
+        // upvalue captures for let/const variables declared later in the block
+        for I := 0 to Block.Nodes.Count - 1 do
+          if (Block.Nodes[I] is TGocciaVariableDeclaration) and
+             not TGocciaVariableDeclaration(Block.Nodes[I]).IsVar and
+             not TGocciaVariableDeclaration(Block.Nodes[I]).IsFunctionDeclaration then
+            for Reg := 0 to High(TGocciaVariableDeclaration(Block.Nodes[I]).Variables) do
+              if FCurrentScope.ResolveLocal(
+                   TGocciaVariableDeclaration(Block.Nodes[I]).Variables[Reg].Name) < 0 then
+                FCurrentScope.DeclareLocal(
+                  TGocciaVariableDeclaration(Block.Nodes[I]).Variables[Reg].Name,
+                  TGocciaVariableDeclaration(Block.Nodes[I]).IsConst);
+
+        // Hoist function declarations: compile initializers before other statements
+        for I := 0 to Block.Nodes.Count - 1 do
+          if (Block.Nodes[I] is TGocciaVariableDeclaration) and
+             TGocciaVariableDeclaration(Block.Nodes[I]).IsFunctionDeclaration then
+            DoCompileStatement(TGocciaStatement(Block.Nodes[I]));
+      end;
 
       // Check if the body contains using declarations — if so, delegate
       // to CompileBlockStatement which handles the try/finally disposal.
@@ -282,6 +308,10 @@ begin
         for I := 0 to Block.Nodes.Count - 1 do
         begin
           Node := Block.Nodes[I];
+          // Skip function declarations — already compiled during hoisting
+          if (Node is TGocciaVariableDeclaration) and
+             TGocciaVariableDeclaration(Node).IsFunctionDeclaration then
+            Continue;
           if Node is TGocciaStatement then
             DoCompileStatement(TGocciaStatement(Node))
           else if Node is TGocciaExpression then
@@ -383,10 +413,11 @@ end;
 function TGocciaCompiler.Compile(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
-  I: Integer;
+  I, J: Integer;
   LastStmt: TGocciaStatement;
   RetReg: UInt8;
   Ctx: TGocciaCompilationContext;
+  HasFunctionDecl: Boolean;
 begin
   FModule := TGocciaBytecodeModule.Create(GOCCIA_RUNTIME_TAG, FSourcePath);
   FCurrentTemplate := TGocciaFunctionTemplate.Create('<module>');
@@ -398,19 +429,58 @@ begin
     // Hoist var declarations to module scope
     HoistVarLocalsFromStatements(AProgram.Body, FCurrentScope);
 
-    // Hoist function declarations: compile initializers before other statements
+    // Check if there are function declarations to hoist
+    HasFunctionDecl := False;
     for I := 0 to AProgram.Body.Count - 1 do
       if (AProgram.Body[I] is TGocciaVariableDeclaration) and
          TGocciaVariableDeclaration(AProgram.Body[I]).IsFunctionDeclaration then
-        DoCompileStatement(AProgram.Body[I]);
+      begin
+        HasFunctionDecl := True;
+        Break;
+      end;
+
+    if HasFunctionDecl then
+    begin
+      // Pre-declare lexical locals so function declarations can resolve
+      // upvalue captures for let/const variables declared later in the body
+      for I := 0 to AProgram.Body.Count - 1 do
+        if (AProgram.Body[I] is TGocciaVariableDeclaration) and
+           not TGocciaVariableDeclaration(AProgram.Body[I]).IsVar and
+           not TGocciaVariableDeclaration(AProgram.Body[I]).IsFunctionDeclaration then
+          for J := 0 to High(TGocciaVariableDeclaration(AProgram.Body[I]).Variables) do
+            if FCurrentScope.ResolveLocal(
+                 TGocciaVariableDeclaration(AProgram.Body[I]).Variables[J].Name) < 0 then
+              FCurrentScope.DeclareLocal(
+                TGocciaVariableDeclaration(AProgram.Body[I]).Variables[J].Name,
+                TGocciaVariableDeclaration(AProgram.Body[I]).IsConst);
+
+      // Hoist function declarations: compile initializers before other statements
+      for I := 0 to AProgram.Body.Count - 1 do
+        if (AProgram.Body[I] is TGocciaVariableDeclaration) and
+           TGocciaVariableDeclaration(AProgram.Body[I]).IsFunctionDeclaration then
+          DoCompileStatement(AProgram.Body[I]);
+    end;
 
     if AProgram.Body.Count > 0 then
     begin
       for I := 0 to AProgram.Body.Count - 2 do
+      begin
+        // Skip function declarations — already compiled during hoisting
+        if (AProgram.Body[I] is TGocciaVariableDeclaration) and
+           TGocciaVariableDeclaration(AProgram.Body[I]).IsFunctionDeclaration then
+          Continue;
         DoCompileStatement(AProgram.Body[I]);
+      end;
 
       LastStmt := AProgram.Body[AProgram.Body.Count - 1];
-      if LastStmt is TGocciaExpressionStatement then
+      // Function declarations already compiled during hoisting — just emit return undefined
+      if (LastStmt is TGocciaVariableDeclaration) and
+         TGocciaVariableDeclaration(LastStmt).IsFunctionDeclaration then
+      begin
+        EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
+        EmitInstruction(BuildContext, EncodeABC(OP_RETURN, 0, 0, 0));
+      end
+      else if LastStmt is TGocciaExpressionStatement then
       begin
         RetReg := FCurrentScope.AllocateRegister;
         Ctx := BuildContext;

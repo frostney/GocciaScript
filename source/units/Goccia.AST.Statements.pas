@@ -832,6 +832,9 @@ end;
     HasRealInit: Boolean;
   begin
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+    // Function declarations are no-ops at runtime — already hoisted with their value
+    if IsFunctionDeclaration then
+      Exit;
     for I := 0 to Length(Variables) - 1 do
     begin
       Value := Variables[I].Initializer.Evaluate(AContext);

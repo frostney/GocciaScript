@@ -486,9 +486,16 @@ begin
     end
     else
     begin
-      LocalIdx := -1;
+      // Check if the local was pre-declared (for function declaration
+      // upvalue resolution) and reuse the existing slot, but only at the
+      // same scope depth to preserve block-scoping and shadowing
+      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      if (LocalIdx >= 0) and
+         (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) then
+        Slot := ACtx.Scope.GetLocal(LocalIdx).Slot
+      else
+        Slot := ACtx.Scope.DeclareLocal(Info.Name, AStmt.IsConst);
       IsVarRedeclaration := False;
-      Slot := ACtx.Scope.DeclareLocal(Info.Name, AStmt.IsConst);
     end;
 
     IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
