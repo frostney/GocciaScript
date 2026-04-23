@@ -85,6 +85,12 @@ begin
     ColonPos := Pos(':', Result);
     if ColonPos > 0 then
       Result := Copy(Result, 1, ColonPos - 1);
+  end
+  else if (Length(Result) > 0) and (Result[1] = '[') then
+  begin
+    ColonPos := Pos(']:', Result);
+    if ColonPos > 0 then
+      Result := Copy(Result, 1, ColonPos);
   end;
 end;
 

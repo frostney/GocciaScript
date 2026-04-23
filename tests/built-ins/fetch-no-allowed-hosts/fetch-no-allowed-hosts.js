@@ -9,11 +9,14 @@ describe("fetch without allowed hosts", () => {
   });
 
   test("error message mentions allowed hosts", () => {
+    let caught = false;
     try {
       fetch("http://example.com");
     } catch (e) {
+      caught = true;
       expect(e.message).toContain("allowed hosts");
     }
+    expect(caught).toBe(true);
   });
 
   test("throws TypeError for any URL when no hosts allowed", () => {

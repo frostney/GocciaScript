@@ -9,11 +9,14 @@ describe("fetch allowed hosts", () => {
   });
 
   test("error message mentions blocked host", () => {
+    let caught = false;
     try {
       fetch("http://blocked.example.com");
     } catch (e) {
+      caught = true;
       expect(e.message).toContain("blocked.example.com");
     }
+    expect(caught).toBe(true);
   });
 
   test("throws TypeError for HTTPS host not in allowed list", () => {
