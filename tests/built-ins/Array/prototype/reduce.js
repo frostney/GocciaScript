@@ -116,3 +116,22 @@ test("reduce has correct name and length", () => {
   expect(Array.prototype.reduce.name).toBe("reduce");
   expect(Array.prototype.reduce.length).toBe(1);
 });
+
+test("generic receiver accumulates over array-like", () => {
+  const arrayLike = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
+  const result = Array.prototype.reduce.call(arrayLike, (acc, x) => acc + x, '');
+  expect(result).toBe('abc');
+});
+
+test("null this throws TypeError before callback check", () => {
+  expect(() => Array.prototype.reduce.call(null)).toThrow(TypeError);
+});
+
+test("sparse array seeds from first present element", () => {
+  const result = [, , 1, 2].reduce((a, b) => a + b);
+  expect(result).toBe(3);
+});
+
+test("all-holes array with no initial value throws TypeError", () => {
+  expect(() => [, , ,].reduce((a, b) => a + b)).toThrow(TypeError);
+});

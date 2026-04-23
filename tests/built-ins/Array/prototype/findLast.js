@@ -36,4 +36,9 @@ describe("Array.prototype.findLast", () => {
     });
     expect(callCount).toBe(2);
   });
+
+  test("generic receiver finds last match in array-like", () => {
+    const obj = { 0: 'x', 1: 'y', 2: 'x', length: 3 };
+    expect(Array.prototype.findLast.call(obj, x => x === 'x')).toBe('x');
+  });
 });

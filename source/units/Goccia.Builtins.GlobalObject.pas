@@ -65,7 +65,8 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ProxyValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.Values.ToObject;
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
@@ -103,33 +104,6 @@ begin
     else
       Result.AssignProperty(PROP_SET, TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
-end;
-
-// ES2026 §7.1.18 ToObject(argument)
-function ToObject(const AValue: TGocciaValue): TGocciaObjectValue;
-var
-  Boxed: TGocciaObjectValue;
-begin
-  if (AValue is TGocciaUndefinedLiteralValue) or (AValue is TGocciaNullLiteralValue) then
-    ThrowTypeError(SErrorCannotConvertNullOrUndefined, SSuggestCheckNullBeforeAccess);
-
-  if AValue is TGocciaObjectValue then
-  begin
-    Result := TGocciaObjectValue(AValue);
-    Exit;
-  end;
-
-  // Box primitives (boolean, number, string, bigint)
-  Boxed := AValue.Box;
-  if Assigned(Boxed) then
-  begin
-    Result := Boxed;
-    Exit;
-  end;
-
-  // Symbol and other non-coercible types
-  ThrowTypeError(SErrorCannotConvertValueToObject, SSuggestObjectArgType);
-  Result := nil;
 end;
 
 constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);

@@ -31,4 +31,10 @@ describe("Array.prototype.with", () => {
     expect(() => [1, 2, 3].with(5, 99)).toThrow(RangeError);
     expect(() => [1, 2, 3].with(-4, 99)).toThrow(RangeError);
   });
+
+  test("generic receiver creates copy with replaced index from array-like", () => {
+    const arrayLike = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
+    const result = Array.prototype.with.call(arrayLike, 1, 'x');
+    expect(result).toEqual(['a', 'x', 'c']);
+  });
 });

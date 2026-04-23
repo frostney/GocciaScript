@@ -45,4 +45,24 @@ describe("Array.prototype.splice", () => {
     expect(removed).toEqual([]);
     expect(arr).toEqual([1, 2, 3]);
   });
+
+  test("generic receiver removes and inserts in array-like", () => {
+    const obj = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
+    const removed = Array.prototype.splice.call(obj, 1, 1, 'x', 'y');
+    expect(removed).toEqual(['b']);
+    expect(obj[0]).toBe('a');
+    expect(obj[1]).toBe('x');
+    expect(obj[2]).toBe('y');
+    expect(obj[3]).toBe('c');
+    expect(obj.length).toBe(4);
+  });
+
+  test("splice returns sparse removed array", () => {
+    const arr = [1, , 3];
+    const removed = arr.splice(0, 3);
+    expect(removed.length).toBe(3);
+    expect(0 in removed).toBe(true);
+    expect(1 in removed).toBe(false);
+    expect(2 in removed).toBe(true);
+  });
 });

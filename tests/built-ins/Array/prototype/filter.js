@@ -93,3 +93,9 @@ test("filter has correct name and length", () => {
   expect(Array.prototype.filter.name).toBe("filter");
   expect(Array.prototype.filter.length).toBe(1);
 });
+
+test("generic receiver filters array-like", () => {
+  const arrayLike = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
+  const result = Array.prototype.filter.call(arrayLike, x => x !== 'b');
+  expect(result).toEqual(['a', 'c']);
+});

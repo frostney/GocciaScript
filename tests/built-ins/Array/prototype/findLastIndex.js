@@ -24,4 +24,9 @@ describe("Array.prototype.findLastIndex", () => {
   test("empty array returns -1", () => {
     expect([].findLastIndex(() => true)).toBe(-1);
   });
+
+  test("generic receiver finds last index in array-like", () => {
+    const obj = { 0: 'x', 1: 'y', 2: 'x', length: 3 };
+    expect(Array.prototype.findLastIndex.call(obj, x => x === 'x')).toBe(2);
+  });
 });

@@ -41,3 +41,9 @@ test("toSorted returns a new array, not the original", () => {
 test("toSorted with single element", () => {
   expect([42].toSorted()).toEqual([42]);
 });
+
+test("generic receiver creates sorted copy from array-like", () => {
+  const obj = { 0: 'c', 1: 'a', 2: 'b', length: 3 };
+  const result = Array.prototype.toSorted.call(obj);
+  expect(result).toEqual(['a', 'b', 'c']);
+});

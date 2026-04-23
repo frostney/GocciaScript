@@ -32,4 +32,10 @@ describe("Array.prototype.at", () => {
     expect([].at(0)).toBe(undefined);
     expect([].at(-1)).toBe(undefined);
   });
+
+  test("generic receiver accesses array-like by index", () => {
+    const arrayLike = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
+    expect(Array.prototype.at.call(arrayLike, 0)).toBe('a');
+    expect(Array.prototype.at.call(arrayLike, -1)).toBe('c');
+  });
 });

@@ -100,3 +100,25 @@ test("map has correct name and length", () => {
   expect(lengthDesc.enumerable).toBe(false);
   expect(lengthDesc.writable).toBe(false);
 });
+
+test("generic receiver transforms array-like", () => {
+  const arrayLike = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
+  const result = Array.prototype.map.call(arrayLike, x => x.toUpperCase());
+  expect(result).toEqual(['A', 'B', 'C']);
+});
+
+test("non-string primitive (boolean) this returns empty array", () => {
+  expect(Array.prototype.map.call(true, x => x)).toEqual([]);
+});
+
+test("null this throws TypeError even without callback", () => {
+  expect(() => Array.prototype.map.call(null)).toThrow(TypeError);
+});
+
+test("map preserves trailing holes in sparse array", () => {
+  const arr = [1, 2, ,];
+  const result = arr.map(x => x);
+  expect(result.length).toBe(3);
+  expect(0 in result).toBe(true);
+  expect(2 in result).toBe(false);
+});

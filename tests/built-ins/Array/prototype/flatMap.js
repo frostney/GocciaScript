@@ -59,3 +59,9 @@ test("Array.flatMap on a sparse array", () => {
   ]);
   expect([1, 2, 3, 4].flatMap((x) => [, x * 2])).toEqual([2, 4, 6, 8]);
 });
+
+test("generic receiver maps and flattens array-like", () => {
+  const nums = { 0: 1, 1: 2, 2: 3, length: 3 };
+  const result = Array.prototype.flatMap.call(nums, x => [x, x * 2]);
+  expect(result).toEqual([1, 2, 2, 4, 3, 6]);
+});
