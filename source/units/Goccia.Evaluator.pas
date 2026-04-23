@@ -295,48 +295,41 @@ begin
   end;
 end;
 
-procedure HoistFunctionDeclarations(const AStatements: TObjectList<TGocciaStatement>; const AContext: TGocciaEvaluationContext);
+procedure HoistSingleFunctionDeclaration(const ANode: TGocciaASTNode; const AContext: TGocciaEvaluationContext);
 var
-  I: Integer;
   VarDecl: TGocciaVariableDeclaration;
   Value: TGocciaValue;
 begin
+  if ANode is TGocciaVariableDeclaration then
+    VarDecl := TGocciaVariableDeclaration(ANode)
+  else if ANode is TGocciaExportVariableDeclaration then
+    VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration
+  else
+    Exit;
+
+  if not VarDecl.IsFunctionDeclaration then
+    Exit;
+
+  Value := VarDecl.Variables[0].Initializer.Evaluate(AContext);
+  if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
+    TGocciaFunctionValue(Value).Name := VarDecl.Variables[0].Name;
+  AContext.Scope.DefineVariableBinding(VarDecl.Variables[0].Name, Value, True);
+end;
+
+procedure HoistFunctionDeclarations(const AStatements: TObjectList<TGocciaStatement>; const AContext: TGocciaEvaluationContext);
+var
+  I: Integer;
+begin
   for I := 0 to AStatements.Count - 1 do
-  begin
-    if AStatements[I] is TGocciaVariableDeclaration then
-    begin
-      VarDecl := TGocciaVariableDeclaration(AStatements[I]);
-      if VarDecl.IsFunctionDeclaration then
-      begin
-        Value := VarDecl.Variables[0].Initializer.Evaluate(AContext);
-        if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
-          TGocciaFunctionValue(Value).Name := VarDecl.Variables[0].Name;
-        AContext.Scope.DefineVariableBinding(VarDecl.Variables[0].Name, Value, True);
-      end;
-    end;
-  end;
+    HoistSingleFunctionDeclaration(AStatements[I], AContext);
 end;
 
 procedure HoistFunctionDeclarations(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext);
 var
   I: Integer;
-  VarDecl: TGocciaVariableDeclaration;
-  Value: TGocciaValue;
 begin
   for I := 0 to ANodes.Count - 1 do
-  begin
-    if ANodes[I] is TGocciaVariableDeclaration then
-    begin
-      VarDecl := TGocciaVariableDeclaration(ANodes[I]);
-      if VarDecl.IsFunctionDeclaration then
-      begin
-        Value := VarDecl.Variables[0].Initializer.Evaluate(AContext);
-        if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
-          TGocciaFunctionValue(Value).Name := VarDecl.Variables[0].Name;
-        AContext.Scope.DefineVariableBinding(VarDecl.Variables[0].Name, Value, True);
-      end;
-    end;
-  end;
+    HoistSingleFunctionDeclaration(ANodes[I], AContext);
 end;
 
 function EvaluateStatements(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;

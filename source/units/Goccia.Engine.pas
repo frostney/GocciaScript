@@ -376,6 +376,10 @@ procedure TGocciaInterpreterExecutor.EvaluateModuleBody(
 var
   I: Integer;
 begin
+  if FInterpreter.VarEnabled then
+    HoistVarDeclarations(AProgram.Body, AContext.Scope);
+  if FInterpreter.FunctionEnabled then
+    HoistFunctionDeclarations(AProgram.Body, AContext);
   for I := 0 to AProgram.Body.Count - 1 do
     EvaluateStatement(AProgram.Body[I], AContext);
 end;

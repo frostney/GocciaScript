@@ -240,6 +240,21 @@ end;
 
 procedure HoistVarLocals(const ANode: TGocciaASTNode; const AScope: TGocciaCompilerScope); forward;
 
+// Returns the inner TGocciaVariableDeclaration if the node is a function
+// declaration (either directly or wrapped in TGocciaExportVariableDeclaration),
+// or nil otherwise.
+function GetFunctionDecl(const ANode: TGocciaASTNode): TGocciaVariableDeclaration;
+begin
+  if ANode is TGocciaVariableDeclaration then
+    Result := TGocciaVariableDeclaration(ANode)
+  else if ANode is TGocciaExportVariableDeclaration then
+    Result := TGocciaExportVariableDeclaration(ANode).Declaration
+  else
+    Exit(nil);
+  if not Result.IsFunctionDeclaration then
+    Result := nil;
+end;
+
 procedure TGocciaCompiler.DoCompileFunctionBody(const ABody: TGocciaASTNode);
 var
   Block: TGocciaBlockStatement;
@@ -262,8 +277,7 @@ begin
       // Check if there are function declarations to hoist
       HasFunctionDecl := False;
       for I := 0 to Block.Nodes.Count - 1 do
-        if (Block.Nodes[I] is TGocciaVariableDeclaration) and
-           TGocciaVariableDeclaration(Block.Nodes[I]).IsFunctionDeclaration then
+        if GetFunctionDecl(Block.Nodes[I]) <> nil then
         begin
           HasFunctionDecl := True;
           Break;
@@ -286,8 +300,7 @@ begin
 
         // Hoist function declarations: compile initializers before other statements
         for I := 0 to Block.Nodes.Count - 1 do
-          if (Block.Nodes[I] is TGocciaVariableDeclaration) and
-             TGocciaVariableDeclaration(Block.Nodes[I]).IsFunctionDeclaration then
+          if GetFunctionDecl(Block.Nodes[I]) <> nil then
             DoCompileStatement(TGocciaStatement(Block.Nodes[I]));
       end;
 
@@ -309,8 +322,7 @@ begin
         begin
           Node := Block.Nodes[I];
           // Skip function declarations — already compiled during hoisting
-          if (Node is TGocciaVariableDeclaration) and
-             TGocciaVariableDeclaration(Node).IsFunctionDeclaration then
+          if GetFunctionDecl(Node) <> nil then
             Continue;
           if Node is TGocciaStatement then
             DoCompileStatement(TGocciaStatement(Node))
@@ -432,8 +444,7 @@ begin
     // Check if there are function declarations to hoist
     HasFunctionDecl := False;
     for I := 0 to AProgram.Body.Count - 1 do
-      if (AProgram.Body[I] is TGocciaVariableDeclaration) and
-         TGocciaVariableDeclaration(AProgram.Body[I]).IsFunctionDeclaration then
+      if GetFunctionDecl(AProgram.Body[I]) <> nil then
       begin
         HasFunctionDecl := True;
         Break;
@@ -456,8 +467,7 @@ begin
 
       // Hoist function declarations: compile initializers before other statements
       for I := 0 to AProgram.Body.Count - 1 do
-        if (AProgram.Body[I] is TGocciaVariableDeclaration) and
-           TGocciaVariableDeclaration(AProgram.Body[I]).IsFunctionDeclaration then
+        if GetFunctionDecl(AProgram.Body[I]) <> nil then
           DoCompileStatement(AProgram.Body[I]);
     end;
 
@@ -466,16 +476,14 @@ begin
       for I := 0 to AProgram.Body.Count - 2 do
       begin
         // Skip function declarations — already compiled during hoisting
-        if (AProgram.Body[I] is TGocciaVariableDeclaration) and
-           TGocciaVariableDeclaration(AProgram.Body[I]).IsFunctionDeclaration then
+        if GetFunctionDecl(AProgram.Body[I]) <> nil then
           Continue;
         DoCompileStatement(AProgram.Body[I]);
       end;
 
       LastStmt := AProgram.Body[AProgram.Body.Count - 1];
       // Function declarations already compiled during hoisting — just emit return undefined
-      if (LastStmt is TGocciaVariableDeclaration) and
-         TGocciaVariableDeclaration(LastStmt).IsFunctionDeclaration then
+      if GetFunctionDecl(LastStmt) <> nil then
       begin
         EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
         EmitInstruction(BuildContext, EncodeABC(OP_RETURN, 0, 0, 0));
