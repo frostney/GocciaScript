@@ -1063,7 +1063,16 @@ begin
             // Static property: {key: value}
             PropertyName := AObjectExpression.PropertySourceOrder[I].StaticKey;
             if AObjectExpression.Properties.TryGetValue(PropertyName, PropertyExpression) then
-              Obj.DefineProperty(PropertyName, TGocciaPropertyDescriptorData.Create(EvaluateExpression(PropertyExpression, AContext), [pfEnumerable, pfConfigurable, pfWritable]));
+            begin
+              PropertyValue := EvaluateExpression(PropertyExpression, AContext);
+              if (PropertyExpression is TGocciaMethodExpression)
+                or (PropertyExpression is TGocciaArrowFunctionExpression) then
+                TGocciaFunctionValue(PropertyValue).SetInferredName(PropertyName)
+              else if (PropertyExpression is TGocciaClassExpression)
+                and (TGocciaClassExpression(PropertyExpression).ClassDefinition.FName = '') then
+                TGocciaClassValue(PropertyValue).SetInferredName(PropertyName);
+              Obj.DefineProperty(PropertyName, TGocciaPropertyDescriptorData.Create(PropertyValue, [pfEnumerable, pfConfigurable, pfWritable]));
+            end;
           end;
 
         pstComputed:
@@ -1121,6 +1130,8 @@ begin
           begin
             // Getter: {get prop() {...}}
             GetterFunction := EvaluateGetter(AObjectExpression.Getters[AObjectExpression.PropertySourceOrder[I].StaticKey], AContext);
+            if GetterFunction is TGocciaFunctionValue then
+              TGocciaFunctionValue(GetterFunction).SetInferredName('get ' + AObjectExpression.PropertySourceOrder[I].StaticKey);
             // Check if there's already a setter for this property
             ExistingDescriptor := Obj.GetOwnPropertyDescriptor(AObjectExpression.PropertySourceOrder[I].StaticKey);
             if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
@@ -1141,6 +1152,8 @@ begin
           begin
             // Setter: {set prop(val) {...}}
             SetterFunction := EvaluateSetter(AObjectExpression.Setters[AObjectExpression.PropertySourceOrder[I].StaticKey], AContext);
+            if SetterFunction is TGocciaFunctionValue then
+              TGocciaFunctionValue(SetterFunction).SetInferredName('set ' + AObjectExpression.PropertySourceOrder[I].StaticKey);
             // Check if there's already a getter for this property
             ExistingDescriptor := Obj.GetOwnPropertyDescriptor(AObjectExpression.PropertySourceOrder[I].StaticKey);
             if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and

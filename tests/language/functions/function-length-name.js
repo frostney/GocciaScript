@@ -28,19 +28,35 @@ describe("Function.length", () => {
 });
 
 describe("Function.name", () => {
-  test("named function expression", () => {
+  test("variable-assigned arrow function infers name", () => {
     const add = (a, b) => a + b;
     expect(add.name).toBe("add");
   });
 
-  test("class methods have names", () => {
-    class Foo {
-      bar() {
-        return 1;
-      }
-    }
-    const foo = new Foo();
-    // Method name is accessible
-    expect(typeof Foo).toBe("function");
+  test("let-assigned arrow function infers name", () => {
+    let greet = () => "hello";
+    expect(greet.name).toBe("greet");
+  });
+
+  test("object shorthand method has name", () => {
+    const obj = { myMethod() { return 1; } };
+    expect(obj.myMethod.name).toBe("myMethod");
+  });
+
+  test("object arrow property infers name", () => {
+    const obj = { myArrow: () => 1 };
+    expect(obj.myArrow.name).toBe("myArrow");
+  });
+
+  test("object getter has prefixed name", () => {
+    const obj = { get myGetter() { return 1; } };
+    const desc = Object.getOwnPropertyDescriptor(obj, "myGetter");
+    expect(desc.get.name).toBe("get myGetter");
+  });
+
+  test("object setter has prefixed name", () => {
+    const obj = { set mySetter(v) {} };
+    const desc = Object.getOwnPropertyDescriptor(obj, "mySetter");
+    expect(desc.set.name).toBe("set mySetter");
   });
 });

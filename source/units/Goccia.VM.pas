@@ -1852,30 +1852,25 @@ var
   BytecodeGetter: TGocciaBytecodeFunctionValue;
   Args: TGocciaArgumentsCollection;
 begin
-  Current := Self;
-  repeat
-    Getter := Current.StaticPropertyGetter[AName];
-    if Assigned(Getter) then
+  Getter := StaticPropertyGetter[AName];
+  if Assigned(Getter) then
+  begin
+    if (Getter is TGocciaBytecodeFunctionValue) then
     begin
-      if (Getter is TGocciaBytecodeFunctionValue) then
-      begin
-        BytecodeGetter := TGocciaBytecodeFunctionValue(Getter);
-        if Assigned(BytecodeGetter.FClosure) and
-           Assigned(BytecodeGetter.FClosure.Template) and
-           (not BytecodeGetter.FClosure.Template.IsAsync) then
-          Exit(RegisterToValue(FVM.ExecuteClosureRegisters(
-            BytecodeGetter.FClosure, RegisterObject(Self), [])));
-      end;
-      Args := TGocciaArgumentsCollection.CreateWithCapacity(0);
-      try
-        Exit(Getter.Call(Args, Self));
-      finally
-        Args.Free;
-      end;
+      BytecodeGetter := TGocciaBytecodeFunctionValue(Getter);
+      if Assigned(BytecodeGetter.FClosure) and
+         Assigned(BytecodeGetter.FClosure.Template) and
+         (not BytecodeGetter.FClosure.Template.IsAsync) then
+        Exit(RegisterToValue(FVM.ExecuteClosureRegisters(
+          BytecodeGetter.FClosure, RegisterObject(Self), [])));
     end;
-
-    Current := Current.SuperClass;
-  until not Assigned(Current);
+    Args := TGocciaArgumentsCollection.CreateWithCapacity(0);
+    try
+      Exit(Getter.Call(Args, Self));
+    finally
+      Args.Free;
+    end;
+  end;
 
   Result := inherited GetProperty(AName);
 end;

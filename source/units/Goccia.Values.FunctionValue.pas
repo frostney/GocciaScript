@@ -41,6 +41,7 @@ type
 
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
+    procedure SetInferredName(const AName: string);
 
     property Parameters: TGocciaParameterArray read FParameters;
     property BodyStatements: TObjectList<TGocciaASTNode> read FBodyStatements;
@@ -302,6 +303,12 @@ end;
 function TGocciaFunctionValue.GetSourceText: string;
 begin
   Result := FSourceText;
+end;
+
+procedure TGocciaFunctionValue.SetInferredName(const AName: string);
+begin
+  if FName = '' then
+    FName := AName;
 end;
 
 { TGocciaArrowFunctionValue }
