@@ -16,3 +16,26 @@ test("named function expression as argument", () => {
   }, 0);
   expect(result).toBe(6);
 });
+
+test("named function expression self-reference (recursion)", () => {
+  const factorial = function fact(n) {
+    if (n <= 1) return 1;
+    return n * fact(n - 1);
+  };
+  expect(factorial(5)).toBe(120);
+});
+
+test("named function expression name not visible outside", () => {
+  const f = function myFunc() {
+    return 42;
+  };
+  expect(f()).toBe(42);
+  expect(typeof myFunc).toBe("undefined");
+});
+
+test("named function expression name is read-only inside", () => {
+  const f = function myFunc() {
+    myFunc = 99;
+  };
+  expect(() => f()).toThrow();
+});

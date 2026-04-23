@@ -1865,14 +1865,29 @@ var
   RestParamIndex: Integer;
   RestReg: Integer;
   I: Integer;
+  HasNameBinding: Boolean;
+  NameSlot: UInt8;
+  ClosedLocals: array[0..0] of UInt8;
+  ClosedCount: Integer;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
+
+  // ES2026 §15.2.5: Named function expressions bind the name in an inner
+  // block scope visible inside the body via upvalue capture
+  HasNameBinding := AExpr.Name <> '';
+  if HasNameBinding then
+  begin
+    OldScope.BeginScope;
+    NameSlot := OldScope.DeclareLocal(AExpr.Name, True);
+  end;
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<method>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AExpr.IsAsync;
   ChildTemplate.SourceText := AExpr.SourceText;
+  if HasNameBinding then
+    ChildTemplate.Name := AExpr.Name;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -1938,6 +1953,14 @@ begin
 
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, ADest, FuncIdx));
+
+  if HasNameBinding then
+  begin
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, NameSlot, ADest, 0));
+    OldScope.EndScope(ClosedLocals, ClosedCount);
+    for I := 0 to ClosedCount - 1 do
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+  end;
 end;
 
 procedure CompileCompoundAssignment(const ACtx: TGocciaCompilationContext;
