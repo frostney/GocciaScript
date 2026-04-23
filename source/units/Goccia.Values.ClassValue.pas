@@ -903,6 +903,12 @@ begin
     Exit;
   end;
 
+  if FStaticSetters.ContainsKey(AName) then
+  begin
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
   if AName = PROP_NAME then
   begin
     if FName = '<anonymous>' then
@@ -926,6 +932,12 @@ begin
       finally
         Args.Free;
       end;
+      Exit;
+    end;
+
+    if Current.FStaticSetters.ContainsKey(AName) then
+    begin
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
       Exit;
     end;
 

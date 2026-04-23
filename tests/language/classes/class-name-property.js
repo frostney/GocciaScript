@@ -61,4 +61,9 @@ describe("static name override", () => {
     expect(Child.name).toBe("Child");
     expect(Parent.name).toBe("ParentCustom");
   });
+
+  test("setter-only static name shadows built-in name with undefined", () => {
+    class Foo { static set name(v) {} }
+    expect(Foo.name).toBe(undefined);
+  });
 });
