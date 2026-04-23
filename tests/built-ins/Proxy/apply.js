@@ -60,4 +60,29 @@ describe("Proxy apply trap", () => {
     const proxy = new Proxy(() => {}, {});
     expect(typeof proxy).toBe("function");
   });
+
+  test("callable proxy works with Function.prototype.call", () => {
+    const target = (x) => x * 3;
+    const proxy = new Proxy(target, {
+      apply: (t, thisArg, args) => t(...args) + 1,
+    });
+    const result = Function.prototype.call.call(proxy, null, 5);
+    expect(result).toBe(16); // (5 * 3) + 1
+  });
+
+  test("callable proxy works with Function.prototype.apply", () => {
+    const target = (a, b) => a + b;
+    const proxy = new Proxy(target, {
+      apply: (t, thisArg, args) => t(...args) * 2,
+    });
+    const result = Function.prototype.apply.call(proxy, null, [3, 4]);
+    expect(result).toBe(14); // (3 + 4) * 2
+  });
+
+  test("callable proxy works with Function.prototype.bind", () => {
+    const target = (x) => x + 10;
+    const proxy = new Proxy(target, {});
+    const bound = Function.prototype.bind.call(proxy, null, 7);
+    expect(bound()).toBe(17);
+  });
 });

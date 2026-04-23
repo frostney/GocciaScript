@@ -323,7 +323,8 @@ begin
   FRegExpConstructor := TGocciaNativeFunctionValue.Create(RegExpConstructorFn,
     CONSTRUCTOR_REGEXP, 2);
   FRegExpConstructor.AssignProperty(PROP_PROTOTYPE, FRegExpPrototype);
-  FRegExpPrototype.AssignProperty(PROP_CONSTRUCTOR, FRegExpConstructor);
+  FRegExpPrototype.DefineProperty(PROP_CONSTRUCTOR,
+    TGocciaPropertyDescriptorData.Create(FRegExpConstructor, [pfConfigurable, pfWritable]));
 
   if Length(FStaticMembers) = 0 then
   begin

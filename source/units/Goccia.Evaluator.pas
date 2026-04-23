@@ -2427,7 +2427,9 @@ begin
     ClassName := '<anonymous>';
 
   ClassValue := TGocciaClassValue.Create(ClassName, SuperClass);
-  ClassValue.Prototype.AssignProperty(PROP_CONSTRUCTOR, ClassValue);
+  // ES §14.3.7: constructor property is non-enumerable
+  ClassValue.Prototype.DefineProperty(PROP_CONSTRUCTOR,
+    TGocciaPropertyDescriptorData.Create(ClassValue, [pfConfigurable, pfWritable]));
 
   for MethodPair in AClassDef.Methods do
   begin

@@ -30,14 +30,14 @@ type
     IsPrivate: Boolean;
   end;
 
-  TGocciaClassValue = class(TGocciaValue)
+  TGocciaClassValue = class(TGocciaObjectValue)
   private
     FName: string;
     FSuperClass: TGocciaClassValue;
     FMethods: TOrderedStringMap<TGocciaMethodValue>;
     FGetters: TOrderedStringMap<TGocciaFunctionBase>;
     FSetters: TOrderedStringMap<TGocciaFunctionBase>;
-    FPrototype: TGocciaObjectValue;
+    FClassPrototype: TGocciaObjectValue;
     FConstructorMethod: TGocciaMethodValue;
     FStaticMethods: TGocciaValueMap;
     FInstancePropertyDefs: TGocciaExpressionMap;
@@ -65,6 +65,8 @@ type
     function GetPrivatePropertyGetter(const AName: string): TGocciaFunctionBase;
     function GetPrivatePropertySetter(const AName: string): TGocciaFunctionBase;
   public
+    class procedure SetDefaultPrototype(const AProto: TGocciaObjectValue); static;
+    class procedure PatchDefaultPrototype(const AClassValue: TGocciaClassValue); static;
     constructor Create(const AName: string; const ASuperClass: TGocciaClassValue);
     destructor Destroy; override;
     function IsCallable: Boolean; override;
@@ -102,19 +104,21 @@ type
     function EstimatedInstancePropertyCapacity: Integer;
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
+    function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
+    function HasOwnProperty(const AName: string): Boolean; override;
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; virtual;
 
     procedure ReplacePrototype(const APrototype: TGocciaObjectValue);
+    procedure SetInferredName(const AName: string);
     procedure DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
     procedure AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
     function GetOwnStaticSymbolDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
     function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
     function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue;
 
-    procedure SetInferredName(const AName: string);
     property Name: string read FName;
     property SuperClass: TGocciaClassValue read FSuperClass write FSuperClass;
-    property Prototype: TGocciaObjectValue read FPrototype;
+    property Prototype: TGocciaObjectValue read FClassPrototype;
     property ConstructorMethod: TGocciaMethodValue read FConstructorMethod;
     property InstancePropertyDefs: TGocciaExpressionMap read FInstancePropertyDefs;
     property PrivateInstancePropertyDefs: TGocciaExpressionMap read FPrivateInstancePropertyDefs;
@@ -198,6 +202,24 @@ type
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
   end;
 
+  TGocciaCompileDynamicFunction = function(const AParamsSources: array of string;
+    const ABodySource: string): TGocciaFunctionBase of object;
+
+  TGocciaFunctionConstructorClassValue = class(TGocciaClassValue)
+  private
+    FEnabled: Boolean;
+    FCompileDynamicFunction: TGocciaCompileDynamicFunction;
+    function BuildFunction(const AArguments: TGocciaArgumentsCollection): TGocciaFunctionBase;
+  public
+    constructor Create(const AName: string; const ASuperClass: TGocciaClassValue);
+    function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+
+    property Enabled: Boolean read FEnabled write FEnabled;
+    property CompileDynamicFunction: TGocciaCompileDynamicFunction
+      read FCompileDynamicFunction write FCompileDynamicFunction;
+  end;
+
   TGocciaInstanceValue = class(TGocciaObjectValue)
   private
     FClass: TGocciaClassValue;
@@ -226,6 +248,7 @@ type
 implementation
 
 uses
+  Generics.Collections,
   SysUtils,
 
   Goccia.Constants.ConstructorNames,
@@ -252,10 +275,31 @@ uses
   Goccia.Values.URLSearchParamsValue,
   Goccia.Values.URLValue;
 
+threadvar
+  FDefaultPrototype: TGocciaObjectValue;
+
+class procedure TGocciaClassValue.SetDefaultPrototype(const AProto: TGocciaObjectValue);
+begin
+  FDefaultPrototype := AProto;
+end;
+
+class procedure TGocciaClassValue.PatchDefaultPrototype(const AClassValue: TGocciaClassValue);
+begin
+  if Assigned(AClassValue) and not Assigned(AClassValue.FPrototype) and
+     Assigned(FDefaultPrototype) then
+    AClassValue.FPrototype := FDefaultPrototype;
+end;
+
 constructor TGocciaClassValue.Create(const AName: string; const ASuperClass: TGocciaClassValue);
 begin
+  inherited Create;
   FName := AName;
   FSuperClass := ASuperClass;
+  // Set [[Prototype]]: superclass for derived, Function.prototype for base classes
+  if Assigned(FSuperClass) then
+    FPrototype := FSuperClass
+  else if Assigned(FDefaultPrototype) then
+    FPrototype := FDefaultPrototype;
   FMethods := TOrderedStringMap<TGocciaMethodValue>.Create;
   FGetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
   FSetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
@@ -269,12 +313,15 @@ begin
   FStaticGetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
   FStaticSetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
   FStaticSymbolDescriptors := TStaticSymbolDescriptorMap.Create;
-  FPrototype := TGocciaObjectValue.Create;
+  FClassPrototype := TGocciaObjectValue.Create;
   FConstructorMethod := nil;
   if Assigned(FSuperClass) then
-    FPrototype.Prototype := FSuperClass.Prototype
+    FClassPrototype.Prototype := FSuperClass.Prototype
   else if Assigned(TGocciaObjectValue.SharedObjectPrototype) then
-    FPrototype.Prototype := TGocciaObjectValue.SharedObjectPrototype;
+    FClassPrototype.Prototype := TGocciaObjectValue.SharedObjectPrototype;
+
+  // .name is synthesized in GetOwnPropertyDescriptor (like .prototype)
+  // to allow static field overrides via SetProperty.
 end;
 
 destructor TGocciaClassValue.Destroy;
@@ -292,7 +339,7 @@ begin
   FStaticGetters.Free;
   FStaticSetters.Free;
   FStaticSymbolDescriptors.Free;
-  // Don't free FPrototype - it's GC-managed
+  // Don't free FClassPrototype - it's GC-managed
   inherited;
 end;
 
@@ -311,8 +358,8 @@ begin
   if Assigned(FSuperClass) then
     FSuperClass.MarkReferences;
 
-  if Assigned(FPrototype) then
-    FPrototype.MarkReferences;
+  if Assigned(FClassPrototype) then
+    FClassPrototype.MarkReferences;
 
   if Assigned(FConstructorMethod) then
     FConstructorMethod.MarkReferences;
@@ -420,7 +467,9 @@ begin
   end;
 
   FMethods.AddOrSetValue(AName, AMethod);
-  FPrototype.AssignProperty(AName, AMethod);
+  // ES §14.3.7: class method definitions have enumerable: false
+  FClassPrototype.DefineProperty(AName,
+    TGocciaPropertyDescriptorData.Create(AMethod, [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaClassValue.GetMethod(const AName: string): TGocciaMethodValue;
@@ -442,18 +491,18 @@ begin
   FGetters.AddOrSetValue(AName, AGetter);
 
   // Check if there's already a setter for this property
-  ExistingDescriptor := FPrototype.GetOwnPropertyDescriptor(AName);
+  ExistingDescriptor := FClassPrototype.GetOwnPropertyDescriptor(AName);
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
      Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter) then
   begin
     // Merge with existing setter
     ExistingSetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
-    FPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(AGetter, ExistingSetter, [pfEnumerable, pfConfigurable, pfWritable]));
+    FClassPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(AGetter, ExistingSetter, [pfConfigurable, pfWritable]));
   end
   else
   begin
     // No existing setter, create getter-only descriptor
-    FPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(AGetter, nil, [pfEnumerable, pfConfigurable, pfWritable]));
+    FClassPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(AGetter, nil, [pfConfigurable, pfWritable]));
   end;
 end;
 
@@ -465,18 +514,18 @@ begin
   FSetters.AddOrSetValue(AName, ASetter);
 
   // Check if there's already a getter for this property
-  ExistingDescriptor := FPrototype.GetOwnPropertyDescriptor(AName);
+  ExistingDescriptor := FClassPrototype.GetOwnPropertyDescriptor(AName);
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
      Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
   begin
     // Merge with existing getter
     ExistingGetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
-    FPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(ExistingGetter, ASetter, [pfEnumerable, pfConfigurable, pfWritable]));
+    FClassPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(ExistingGetter, ASetter, [pfConfigurable, pfWritable]));
   end
   else
   begin
     // No existing getter, create setter-only descriptor
-    FPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(nil, ASetter, [pfEnumerable, pfConfigurable, pfWritable]));
+    FClassPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(nil, ASetter, [pfConfigurable, pfWritable]));
   end;
 end;
 
@@ -641,6 +690,7 @@ var
   GetterHelper: TGocciaAutoAccessorGetter;
   SetterHelper: TGocciaAutoAccessorSetter;
   GetterFn, SetterFn: TGocciaNativeFunctionValue;
+  Target: TGocciaObjectValue;
 begin
   GetterHelper := TGocciaAutoAccessorGetter.Create(ABackingName);
   SetterHelper := TGocciaAutoAccessorSetter.Create(ABackingName);
@@ -648,8 +698,13 @@ begin
   GetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(GetterHelper.Get, 'get ' + AName, 0);
   SetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(SetterHelper.SetValue, 'set ' + AName, 1);
 
-  FPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(
-    GetterFn, SetterFn, [pfEnumerable, pfConfigurable, pfWritable]));
+  // Static auto-accessors go on the constructor; instance ones on the prototype
+  if AIsStatic then
+    Target := Self
+  else
+    Target := FClassPrototype;
+  Target.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(
+    GetterFn, SetterFn, [pfConfigurable, pfWritable]));
 end;
 
 procedure TGocciaClassValue.RunMethodInitializers(const AInstance: TGocciaValue);
@@ -777,7 +832,15 @@ end;
 
 procedure TGocciaClassValue.ReplacePrototype(const APrototype: TGocciaObjectValue);
 begin
-  FPrototype := APrototype;
+  FClassPrototype := APrototype;
+end;
+
+procedure TGocciaClassValue.SetInferredName(const AName: string);
+begin
+  // Only infer name for anonymous classes — named classes keep their own name.
+  // FName update is sufficient; GetOwnPropertyDescriptor synthesizes the descriptor.
+  if (FName = '') or (FName = '<anonymous>') then
+    FName := AName;
 end;
 
 procedure TGocciaClassValue.SetFieldOrder(const AOrder: array of TGocciaClassFieldOrderEntry);
@@ -830,7 +893,7 @@ begin
   if Assigned(ANewTarget) then
     InstancePrototype := ANewTarget.Prototype
   else
-    InstancePrototype := FPrototype;
+    InstancePrototype := FClassPrototype;
 
   NativeInstance := nil;
   WalkClass := Self;
@@ -881,11 +944,10 @@ var
   Getter: TGocciaFunctionBase;
   Args: TGocciaArgumentsCollection;
   Current: TGocciaClassValue;
-  FuncProto: TGocciaObjectValue;
 begin
   if AName = PROP_PROTOTYPE then
   begin
-    Result := FPrototype;
+    Result := FClassPrototype;
     Exit;
   end;
 
@@ -944,22 +1006,9 @@ begin
     Current := Current.FSuperClass;
   end;
 
-  // Fall through to Function.prototype chain (classes are functions per ES spec)
-  FuncProto := TGocciaFunctionBase.GetSharedPrototype;
-  if Assigned(FuncProto) then
-  begin
-    Result := FuncProto.GetPropertyWithContext(AName, Self);
-    if not (Result is TGocciaUndefinedLiteralValue) then
-      Exit;
-  end;
-
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-end;
-
-procedure TGocciaClassValue.SetInferredName(const AName: string);
-begin
-  if FName = '<anonymous>' then
-    FName := AName;
+  // Fall through to own properties (inherited from TGocciaObjectValue) and
+  // then up the [[Prototype]] chain (Function.prototype → Object.prototype)
+  Result := inherited GetProperty(AName);
 end;
 
 procedure TGocciaClassValue.SetProperty(const AName: string; const AValue: TGocciaValue);
@@ -984,7 +1033,50 @@ begin
     Current := Current.FSuperClass;
   until not Assigned(Current);
 
-  FStaticMethods.AddOrSetValue(AName, AValue);
+  // .name override via static field or assignment: use DefineProperty to
+  // override the synthesized non-writable descriptor (which is configurable)
+  if AName = PROP_NAME then
+  begin
+    if AValue is TGocciaStringLiteralValue then
+      FName := TGocciaStringLiteralValue(AValue).Value;
+    inherited DefineProperty(AName,
+      TGocciaPropertyDescriptorData.Create(AValue, [pfConfigurable, pfWritable, pfEnumerable]));
+    Exit;
+  end;
+
+  // Runtime property assignment (C.x = val) creates enumerable data properties
+  inherited SetProperty(AName, AValue);
+end;
+
+function TGocciaClassValue.GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
+begin
+  if AName = PROP_PROTOTYPE then
+    Result := TGocciaPropertyDescriptorData.Create(FClassPrototype, [])
+  else if AName = PROP_NAME then
+  begin
+    // Check if .name was explicitly set (e.g. static name = 'Custom')
+    Result := inherited GetOwnPropertyDescriptor(AName);
+    if not Assigned(Result) then
+    begin
+      // Synthesize from FName: { writable: false, enumerable: false, configurable: true }
+      if (FName = '') or (FName = '<anonymous>') then
+        Result := TGocciaPropertyDescriptorData.Create(
+          TGocciaStringLiteralValue.Create(''), [pfConfigurable])
+      else
+        Result := TGocciaPropertyDescriptorData.Create(
+          TGocciaStringLiteralValue.Create(FName), [pfConfigurable]);
+    end;
+  end
+  else
+    Result := inherited GetOwnPropertyDescriptor(AName);
+end;
+
+function TGocciaClassValue.HasOwnProperty(const AName: string): Boolean;
+begin
+  if (AName = PROP_PROTOTYPE) or (AName = PROP_NAME) then
+    Result := True
+  else
+    Result := inherited HasOwnProperty(AName);
 end;
 
 procedure TGocciaClassValue.DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
@@ -1248,6 +1340,66 @@ begin
   else
     Prim := AArguments.GetElement(0).ToBooleanLiteral;
   Result := Prim.Box;
+end;
+
+{ TGocciaFunctionConstructorClassValue }
+
+constructor TGocciaFunctionConstructorClassValue.Create(const AName: string;
+  const ASuperClass: TGocciaClassValue);
+begin
+  inherited Create(AName, ASuperClass);
+  FEnabled := False;
+  FCompileDynamicFunction := nil;
+end;
+
+function TGocciaFunctionConstructorClassValue.BuildFunction(
+  const AArguments: TGocciaArgumentsCollection): TGocciaFunctionBase;
+var
+  ParamSources: array of string;
+  BodyStr: string;
+  I: Integer;
+begin
+  if not FEnabled then
+    ThrowTypeError('Dynamic code generation is disabled. ' +
+      'Pass --unsafe-function-constructor to enable the Function constructor');
+
+  if not Assigned(FCompileDynamicFunction) then
+    ThrowTypeError('Function constructor is not available in this environment');
+
+  // ES2026 §20.2.1.1: collect parameters and body from arguments
+  if AArguments.Length = 0 then
+  begin
+    SetLength(ParamSources, 0);
+    BodyStr := '';
+  end
+  else if AArguments.Length = 1 then
+  begin
+    SetLength(ParamSources, 0);
+    BodyStr := AArguments.GetElement(0).ToStringLiteral.Value;
+  end
+  else
+  begin
+    SetLength(ParamSources, AArguments.Length - 1);
+    for I := 0 to AArguments.Length - 2 do
+      ParamSources[I] := AArguments.GetElement(I).ToStringLiteral.Value;
+    BodyStr := AArguments.GetElement(AArguments.Length - 1).ToStringLiteral.Value;
+  end;
+
+  Result := FCompileDynamicFunction(ParamSources, BodyStr);
+end;
+
+function TGocciaFunctionConstructorClassValue.Call(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  // ES2026 §20.2.1.1: Function(...) is equivalent to new Function(...)
+  Result := BuildFunction(AArguments);
+end;
+
+function TGocciaFunctionConstructorClassValue.CreateNativeInstance(
+  const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+begin
+  Result := BuildFunction(AArguments);
 end;
 
 { TGocciaInstanceValue }

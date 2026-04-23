@@ -136,6 +136,7 @@ INCLUDE_MAP: dict[str, str] = {
     "deepEqual.js": "deepEqual.js",
     "nans.js": "nans.js",
     "testTypedArray.js": "testTypedArray.js",
+    "testBigIntTypedArray.js": "testTypedArray.js",
     "temporalHelpers.js": "temporalHelpers.js",
     "promiseHelper.js": "promiseHelper.js",
     "dateConstants.js": "dateConstants.js",
@@ -290,6 +291,7 @@ def run_negative_parse_test(
     timeout: int,
     asi: bool = False,
     mode: str = "interpreted",
+    compat_var: bool = False,
 ) -> tuple[bool, str, float]:
     """Run a negative parse-phase test via GocciaScriptLoader stdin."""
     start = time.monotonic()
@@ -298,6 +300,8 @@ def run_negative_parse_test(
         cmd.append("--asi")
     if mode != "interpreted":
         cmd.append(f"--mode={mode}")
+    if compat_var:
+        cmd.append("--compat-var")
     try:
         process = subprocess.run(
             cmd,
@@ -338,6 +342,7 @@ def evaluate_suite(
     harness_files: dict[str, str],
     asi: bool = False,
     mode: str = "interpreted",
+    compat_var: bool = False,
 ) -> dict:
     test_dir = suite_dir / "test"
     all_tests = discover_tests(suite_dir, categories, filter_glob)
@@ -485,6 +490,8 @@ def evaluate_suite(
                 runner_cmd.append("--asi")
             if mode != "interpreted":
                 runner_cmd.append(f"--mode={mode}")
+            if compat_var:
+                runner_cmd.append("--compat-var")
 
             try:
                 runner_timeout = max(timeout * len(batch_tests), 120) + 60
@@ -605,7 +612,7 @@ def evaluate_suite(
 
             passed, output, duration = run_negative_parse_test(
                 script_loader, body, expected_error, timeout, asi=asi,
-                mode=mode
+                mode=mode, compat_var=compat_var,
             )
 
             if output == "TIMEOUT":
@@ -723,6 +730,18 @@ def parse_args() -> argparse.Namespace:
         default="bytecode",
         help="Execution mode: interpreted or bytecode (default: bytecode).",
     )
+    parser.add_argument(
+        "--compat-var",
+        action="store_true",
+        default=True,
+        help="Enable var declarations via --compat-var (default: True, required for test262).",
+    )
+    parser.add_argument(
+        "--no-compat-var",
+        action="store_true",
+        default=False,
+        help="Disable var declaration compatibility.",
+    )
     return parser.parse_args()
 
 
@@ -732,6 +751,9 @@ def main() -> int:
     # --no-asi overrides the default-True --asi
     if args.no_asi:
         args.asi = False
+    # --no-compat-var overrides the default-True --compat-var
+    if args.no_compat_var:
+        args.compat_var = False
 
     suite_dir, temp_checkout = ensure_suite_checkout(args.suite_dir)
     test_runner = ensure_binary("GocciaTestRunner", args.test_runner, "testrunner")
@@ -751,6 +773,7 @@ def main() -> int:
     if args.max_tests:
         print(f"Max tests:     {args.max_tests}")
     print(f"ASI:           {'enabled' if args.asi else 'disabled'}")
+    print(f"Compat var:    {'enabled' if args.compat_var else 'disabled'}")
     print(f"Mode:          {args.mode}")
     print()
 
@@ -766,6 +789,7 @@ def main() -> int:
         harness_files=harness_files,
         asi=args.asi,
         mode=args.mode,
+        compat_var=args.compat_var,
     )
 
     if args.output is not None:

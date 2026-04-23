@@ -105,6 +105,8 @@ type
       const ASourcePath: string); override;
     function ExecuteProgram(
       const AProgram: TGocciaProgram): TGocciaValue; override;
+    function ExecuteDynamicFunction(
+      const AProgram: TGocciaProgram): TGocciaValue; override;
     procedure EvaluateModuleBody(const AProgram: TGocciaProgram;
       const AContext: TGocciaEvaluationContext); override;
   end;
@@ -163,6 +165,8 @@ type
     FBuiltinURLSearchParams: TGocciaGlobalURLSearchParams;
     FBuiltinFetch: TGocciaGlobalFetch;
     FBuiltinDisposableStack: TGocciaBuiltinDisposableStack;
+    FFunctionConstructor: TGocciaFunctionConstructorClassValue;
+    FTypedArrayIntrinsic: TGocciaClassValue;
     FPreviousExceptionMask: TFPUExceptionMask;
     FSuppressWarnings: Boolean;
     FLastTiming: TGocciaScriptResult;
@@ -197,6 +201,8 @@ type
     procedure PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap = nil);
     procedure ThrowError(const AMessage: string; const ALine,
       AColumn: Integer);
+    function CompileDynamicFunction(const AParamsSources: array of string;
+      const ABodySource: string): TGocciaFunctionBase;
   public
     constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AResolver: TGocciaModuleResolver); overload;
@@ -240,6 +246,7 @@ type
     property ASIEnabled: Boolean read GetASIEnabled write SetASIEnabled;
     property VarEnabled: Boolean read GetVarEnabled write SetVarEnabled;
     property FunctionEnabled: Boolean read GetFunctionEnabled write SetFunctionEnabled;
+    property FunctionConstructor: TGocciaFunctionConstructorClassValue read FFunctionConstructor;
     property Preprocessors: TGocciaPreprocessors read FPreprocessors write SetPreprocessors;
     property Compatibility: TGocciaCompatibilityFlags read FCompatibility write SetCompatibility;
     property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
@@ -289,6 +296,8 @@ uses
 
   TimingUtils,
 
+  Goccia.AST.Expressions,
+  Goccia.AST.Statements,
   Goccia.CallStack,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
@@ -309,6 +318,8 @@ uses
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.BooleanObjectValue,
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionValue,
   Goccia.Values.HeadersValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
@@ -352,6 +363,12 @@ begin
   Start := GetNanoseconds;
   Result := FInterpreter.Execute(AProgram);
   ExecuteTimeNanoseconds := GetNanoseconds - Start;
+end;
+
+function TGocciaInterpreterExecutor.ExecuteDynamicFunction(
+  const AProgram: TGocciaProgram): TGocciaValue;
+begin
+  Result := FInterpreter.Execute(AProgram);
 end;
 
 procedure TGocciaInterpreterExecutor.EvaluateModuleBody(
@@ -635,6 +652,9 @@ begin
     FOwnsExecutor := True;
   end;
   FExecutor.Initialize(FInterpreter.GlobalScope, FModuleLoader, AFileName);
+
+  if Assigned(FFunctionConstructor) then
+    FFunctionConstructor.CompileDynamicFunction := CompileDynamicFunction;
 end;
 
 destructor TGocciaEngine.Destroy;
@@ -844,6 +864,8 @@ var
   PerformanceConstructor: TGocciaNativeFunctionValue;
   URLConstructor: TGocciaURLClassValue;
   URLSearchParamsConstructor: TGocciaURLSearchParamsClassValue;
+  TextEncoderConstructor, TextDecoderConstructor: TGocciaClassValue;
+  HeadersConstructor, ResponseConstructor: TGocciaClassValue;
   TypeDef: TGocciaTypeDefinition;
 begin
   TGocciaObjectValue.InitializeSharedPrototype;
@@ -899,6 +921,7 @@ begin
   TypeDef.PrototypeParent := ObjectConstructor.Prototype;
   TypeDef.AddSpeciesGetter := False;
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  TextEncoderConstructor := GenericConstructor;
 
   TypeDef.ConstructorName := CONSTRUCTOR_TEXT_DECODER;
   TypeDef.Kind := gtdkNativeInstanceType;
@@ -909,6 +932,7 @@ begin
   TypeDef.PrototypeParent := ObjectConstructor.Prototype;
   TypeDef.AddSpeciesGetter := False;
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  TextDecoderConstructor := GenericConstructor;
 
   TypeDef.ConstructorName := CONSTRUCTOR_URL;
   TypeDef.Kind := gtdkCollectionLikeNativeType;
@@ -941,6 +965,7 @@ begin
   TypeDef.PrototypeParent := ObjectConstructor.Prototype;
   TypeDef.AddSpeciesGetter := False;
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  HeadersConstructor := GenericConstructor;
 
   TypeDef.ConstructorName := CONSTRUCTOR_RESPONSE;
   TypeDef.Kind := gtdkNativeInstanceType;
@@ -951,6 +976,7 @@ begin
   TypeDef.PrototypeParent := ObjectConstructor.Prototype;
   TypeDef.AddSpeciesGetter := False;
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  ResponseConstructor := GenericConstructor;
 
   ArrayBufferConstructor := TGocciaArrayBufferClassValue.Create(CONSTRUCTOR_ARRAY_BUFFER, nil);
   TGocciaArrayBufferValue.ExposePrototype(ArrayBufferConstructor);
@@ -965,6 +991,14 @@ begin
   SharedArrayBufferConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
   FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_SHARED_ARRAY_BUFFER, SharedArrayBufferConstructor, dtConst);
 
+  // Create %TypedArray% intrinsic (not globally exposed per spec §23.2.1)
+  FTypedArrayIntrinsic := TGocciaClassValue.Create('TypedArray', nil);
+  // §17: built-in name/length are {writable: false, enumerable: false, configurable: true}
+  FTypedArrayIntrinsic.DefineProperty(PROP_NAME,
+    TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create('TypedArray'), [pfConfigurable]));
+  FTypedArrayIntrinsic.DefineProperty(PROP_LENGTH,
+    TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(0), [pfConfigurable]));
+
   RegisterTypedArrayConstructor(CONSTRUCTOR_INT8_ARRAY, takInt8, ObjectConstructor);
   RegisterTypedArrayConstructor(CONSTRUCTOR_UINT8_ARRAY, takUint8, ObjectConstructor);
   RegisterTypedArrayConstructor(CONSTRUCTOR_UINT8_CLAMPED_ARRAY, takUint8Clamped, ObjectConstructor);
@@ -977,6 +1011,15 @@ begin
   RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT64_ARRAY, takFloat64, ObjectConstructor);
   RegisterTypedArrayConstructor(CONSTRUCTOR_BIGINT64_ARRAY, takBigInt64, ObjectConstructor);
   RegisterTypedArrayConstructor(CONSTRUCTOR_BIGUINT64_ARRAY, takBigUint64, ObjectConstructor);
+
+  // Wire %TypedArray%.prototype to the shared prototype (which has all methods)
+  if Assigned(TGocciaTypedArrayValue.GetSharedPrototypeObject) then
+  begin
+    FTypedArrayIntrinsic.ReplacePrototype(TGocciaTypedArrayValue.GetSharedPrototypeObject);
+    // §23.2.3: %TypedArray%.prototype.constructor = %TypedArray%
+    TGocciaTypedArrayValue.GetSharedPrototypeObject.DefineProperty(PROP_CONSTRUCTOR,
+      TGocciaPropertyDescriptorData.Create(FTypedArrayIntrinsic, [pfConfigurable, pfWritable]));
+  end;
 
   TypeDef.ConstructorName := CONSTRUCTOR_STRING;
   TypeDef.Kind := gtdkPrimitiveWrapper;
@@ -1014,9 +1057,37 @@ begin
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   BooleanConstructor := TGocciaBooleanClassValue(GenericConstructor);
 
-  FunctionConstructor := TGocciaClassValue.Create('Function', nil);
-  TGocciaFunctionBase.SetSharedPrototypeParent(FunctionConstructor.Prototype);
-  FunctionConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, FunctionConstructor);
+  FFunctionConstructor := TGocciaFunctionConstructorClassValue.Create('Function', nil);
+  FunctionConstructor := FFunctionConstructor;
+  // Wire Function.prototype to be the shared function prototype (which has
+  // call/apply/bind/toString) so that Object.getPrototypeOf(fn) === Function.prototype.
+  // Chain: Function.prototype (= FSharedPrototype) → ObjectConstructor.Prototype
+  TGocciaFunctionBase.GetSharedPrototype.Prototype := ObjectConstructor.Prototype;
+  FunctionConstructor.ReplacePrototype(TGocciaFunctionBase.GetSharedPrototype);
+  FunctionConstructor.Prototype.DefineProperty(PROP_CONSTRUCTOR,
+    TGocciaPropertyDescriptorData.Create(FunctionConstructor, [pfConfigurable, pfWritable]));
+  // Set Function.prototype as the default [[Prototype]] for all class constructors
+  // (§15.7.3 step 7.a: classes without extends have [[Prototype]] = Function.prototype)
+  TGocciaClassValue.SetDefaultPrototype(FunctionConstructor.Prototype);
+  // Retroactively set [[Prototype]] on constructors created before FunctionConstructor
+  TGocciaClassValue.PatchDefaultPrototype(ObjectConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(GenericConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(ArrayConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(MapConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(SetConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(ArrayBufferConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(SharedArrayBufferConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(FTypedArrayIntrinsic);
+  TGocciaClassValue.PatchDefaultPrototype(StringConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(NumberConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(BooleanConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(TextEncoderConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(TextDecoderConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(URLConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(URLSearchParamsConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(HeadersConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(ResponseConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(FunctionConstructor);
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);
 
   PerformanceConstructor := TGocciaPerformance.CreateInterfaceObject;
@@ -1033,7 +1104,7 @@ var
   FromFn, OfFn: TGocciaTypedArrayStaticFrom;
   Encoding: TGocciaUint8ArrayEncoding;
 begin
-  TAConstructor := TGocciaTypedArrayClassValue.Create(AName, nil, AKind);
+  TAConstructor := TGocciaTypedArrayClassValue.Create(AName, FTypedArrayIntrinsic, AKind);
   TGocciaTypedArrayValue.ExposePrototype(TAConstructor);
   TGocciaTypedArrayValue.SetSharedPrototypeParent(AObjectConstructor.Prototype);
   BPE := TGocciaNumberLiteralValue.Create(TGocciaTypedArrayValue.BytesPerElement(AKind));
@@ -1520,6 +1591,122 @@ end;
 procedure TGocciaEngine.ThrowError(const AMessage: string; const ALine, AColumn: Integer);
 begin
   raise TGocciaRuntimeError.Create(AMessage, ALine, AColumn, FSourcePath, FSourceLines);
+end;
+
+function TGocciaEngine.CompileDynamicFunction(
+  const AParamsSources: array of string;
+  const ABodySource: string): TGocciaFunctionBase;
+var
+  ParamStr, Source: string;
+  I: Integer;
+  Lexer: TGocciaLexer;
+  Tokens: TObjectList<TGocciaToken>;
+  Parser: TGocciaParser;
+  ProgramNode: TGocciaProgram;
+  ResultValue: TGocciaValue;
+begin
+  // ES2026 §20.2.1.1: parse as  function anonymous(P) { body }
+  // We use method shorthand so the function gets its own this binding.
+  // The member access extracts the function from the wrapper object.
+  //
+  // Params and body are parsed as separate, self-contained programs first.
+  // This prevents injection: a crafted body that tries to close the method
+  // wrapper will fail validation because it will have unmatched braces when
+  // parsed as a standalone function body.
+  ParamStr := '';
+  for I := 0 to High(AParamsSources) do
+  begin
+    if I > 0 then
+      ParamStr := ParamStr + ', ';
+    ParamStr := ParamStr + AParamsSources[I];
+  end;
+
+  // Validate params: must parse as a valid parameter list.
+  // If params contain tokens that escape the signature, this will throw.
+  if ParamStr <> '' then
+  begin
+    Source := '(' + ParamStr + ') => {}';
+    Lexer := TGocciaLexer.Create(Source, '<Function:params>');
+    try
+      Tokens := Lexer.ScanTokens;
+      Parser := TGocciaParser.Create(Tokens, '<Function:params>', Lexer.SourceLines);
+      Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
+      Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
+      try
+        ProgramNode := Parser.Parse;
+        try
+          if (ProgramNode.Body.Count <> 1) or
+             not (ProgramNode.Body[0] is TGocciaExpressionStatement) or
+             not (TGocciaExpressionStatement(ProgramNode.Body[0]).Expression
+               is TGocciaArrowFunctionExpression) then
+            ThrowSyntaxError('Invalid parameter list for Function constructor');
+        finally
+          ProgramNode.Free;
+        end;
+      finally
+        Parser.Free;
+      end;
+    finally
+      Lexer.Free;
+    end;
+  end;
+
+  // Validate body: must parse as a valid function body.
+  // An arrow wrapper ensures the body is enclosed in matching braces.
+  if ABodySource <> '' then
+  begin
+    Source := '() => {' + #10 + ABodySource + #10 + '}';
+    Lexer := TGocciaLexer.Create(Source, '<Function:body>');
+    try
+      Tokens := Lexer.ScanTokens;
+      Parser := TGocciaParser.Create(Tokens, '<Function:body>', Lexer.SourceLines);
+      Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
+      Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
+      try
+        ProgramNode := Parser.Parse;
+        try
+          if (ProgramNode.Body.Count <> 1) or
+             not (ProgramNode.Body[0] is TGocciaExpressionStatement) or
+             not (TGocciaExpressionStatement(ProgramNode.Body[0]).Expression
+               is TGocciaArrowFunctionExpression) then
+            ThrowSyntaxError('Invalid body for Function constructor');
+        finally
+          ProgramNode.Free;
+        end;
+      finally
+        Parser.Free;
+      end;
+    finally
+      Lexer.Free;
+    end;
+  end;
+
+  // Both pieces validated — safe to assemble the wrapper
+  Source := '({ anonymous(' + ParamStr + ') {' + #10 + ABodySource + #10 + '} }).anonymous';
+
+  Lexer := TGocciaLexer.Create(Source, '<Function>');
+  try
+    Tokens := Lexer.ScanTokens;
+    Parser := TGocciaParser.Create(Tokens, '<Function>', Lexer.SourceLines);
+    Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
+    Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
+    try
+      ProgramNode := Parser.ParseUnchecked;
+      try
+        ResultValue := FExecutor.ExecuteDynamicFunction(ProgramNode);
+        Result := TGocciaFunctionBase(ResultValue);
+        // ES2026 §20.2.1.1.1: the function's name is 'anonymous'
+        if Result is TGocciaFunctionValue then
+          TGocciaFunctionValue(Result).Name := 'anonymous';
+      finally
+        ProgramNode.Free;
+      end;
+    finally
+      Parser.Free;
+    end;
+  finally
+    Lexer.Free;
+  end;
 end;
 
 end.

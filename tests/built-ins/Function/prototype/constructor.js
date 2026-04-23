@@ -41,4 +41,16 @@ describe("Function.prototype.constructor", () => {
     const d = new Derived();
     expect(d.constructor).toBe(Derived);
   });
+
+  test("Function.prototype has call, apply, bind, toString", () => {
+    expect(typeof Function.prototype.call).toBe("function");
+    expect(typeof Function.prototype.apply).toBe("function");
+    expect(typeof Function.prototype.bind).toBe("function");
+    expect(typeof Function.prototype.toString).toBe("function");
+  });
+
+  test("Object.getPrototypeOf(fn) === Function.prototype", () => {
+    const fn = () => {};
+    expect(Object.getPrototypeOf(fn)).toBe(Function.prototype);
+  });
 });

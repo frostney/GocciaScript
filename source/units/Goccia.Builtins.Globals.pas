@@ -106,40 +106,40 @@ begin
   AScope.DefineLexicalBinding('Infinity', TGocciaNumberLiteralValue.InfinityValue, dtConst);
 
   FErrorProto := TGocciaObjectValue.Create;
-  FErrorProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(ERROR_NAME));
-  FErrorProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
+  FErrorProto.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(ERROR_NAME), [pfConfigurable, pfWritable]));
+  FErrorProto.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(''), [pfConfigurable, pfWritable]));
 
   FTypeErrorProto := TGocciaObjectValue.Create(FErrorProto);
-  FTypeErrorProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(TYPE_ERROR_NAME));
-  FTypeErrorProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
+  FTypeErrorProto.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(TYPE_ERROR_NAME), [pfConfigurable, pfWritable]));
+  FTypeErrorProto.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(''), [pfConfigurable, pfWritable]));
 
   FReferenceErrorProto := TGocciaObjectValue.Create(FErrorProto);
-  FReferenceErrorProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(REFERENCE_ERROR_NAME));
-  FReferenceErrorProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
+  FReferenceErrorProto.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(REFERENCE_ERROR_NAME), [pfConfigurable, pfWritable]));
+  FReferenceErrorProto.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(''), [pfConfigurable, pfWritable]));
 
   FRangeErrorProto := TGocciaObjectValue.Create(FErrorProto);
-  FRangeErrorProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(RANGE_ERROR_NAME));
-  FRangeErrorProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
+  FRangeErrorProto.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(RANGE_ERROR_NAME), [pfConfigurable, pfWritable]));
+  FRangeErrorProto.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(''), [pfConfigurable, pfWritable]));
 
   FSyntaxErrorProto := TGocciaObjectValue.Create(FErrorProto);
-  FSyntaxErrorProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(SYNTAX_ERROR_NAME));
-  FSyntaxErrorProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
+  FSyntaxErrorProto.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(SYNTAX_ERROR_NAME), [pfConfigurable, pfWritable]));
+  FSyntaxErrorProto.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(''), [pfConfigurable, pfWritable]));
 
   FURIErrorProto := TGocciaObjectValue.Create(FErrorProto);
-  FURIErrorProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(URI_ERROR_NAME));
-  FURIErrorProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
+  FURIErrorProto.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(URI_ERROR_NAME), [pfConfigurable, pfWritable]));
+  FURIErrorProto.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(''), [pfConfigurable, pfWritable]));
 
   FAggregateErrorProto := TGocciaObjectValue.Create(FErrorProto);
-  FAggregateErrorProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AGGREGATE_ERROR_NAME));
-  FAggregateErrorProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
+  FAggregateErrorProto.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(AGGREGATE_ERROR_NAME), [pfConfigurable, pfWritable]));
+  FAggregateErrorProto.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(''), [pfConfigurable, pfWritable]));
 
   FSuppressedErrorProto := TGocciaObjectValue.Create(FErrorProto);
-  FSuppressedErrorProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(SUPPRESSED_ERROR_NAME));
-  FSuppressedErrorProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
+  FSuppressedErrorProto.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(SUPPRESSED_ERROR_NAME), [pfConfigurable, pfWritable]));
+  FSuppressedErrorProto.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(''), [pfConfigurable, pfWritable]));
 
   FDOMExceptionProto := TGocciaObjectValue.Create(FErrorProto);
-  FDOMExceptionProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(ERROR_NAME));
-  FDOMExceptionProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
+  FDOMExceptionProto.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(ERROR_NAME), [pfConfigurable, pfWritable]));
+  FDOMExceptionProto.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(''), [pfConfigurable, pfWritable]));
   FDOMExceptionProto.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(0));
 
   GErrorProto := FErrorProto;
@@ -162,7 +162,7 @@ begin
   SuppressedErrorConstructorFunc := TGocciaNativeFunctionValue.Create(SuppressedErrorConstructor, SUPPRESSED_ERROR_NAME, 3);
   DOMExceptionConstructorFunc := TGocciaNativeFunctionValue.Create(DOMExceptionConstructor, DOM_EXCEPTION_NAME, 2);
 
-  ErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FErrorProto);
+  ErrorConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FErrorProto, []));
   with TGocciaMemberCollection.Create do
   try
     AddNamedMethod('isError', ErrorIsError, 1, gmkStaticMethod);
@@ -171,14 +171,14 @@ begin
     Free;
   end;
   RegisterMemberDefinitions(ErrorConstructorFunc, ErrorStaticMembers);
-  TypeErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FTypeErrorProto);
-  ReferenceErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FReferenceErrorProto);
-  RangeErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FRangeErrorProto);
-  SyntaxErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FSyntaxErrorProto);
-  URIErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FURIErrorProto);
-  AggregateErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FAggregateErrorProto);
-  SuppressedErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FSuppressedErrorProto);
-  DOMExceptionConstructorFunc.AssignProperty(PROP_PROTOTYPE, FDOMExceptionProto);
+  TypeErrorConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FTypeErrorProto, []));
+  ReferenceErrorConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FReferenceErrorProto, []));
+  RangeErrorConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FRangeErrorProto, []));
+  SyntaxErrorConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FSyntaxErrorProto, []));
+  URIErrorConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FURIErrorProto, []));
+  AggregateErrorConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FAggregateErrorProto, []));
+  SuppressedErrorConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FSuppressedErrorProto, []));
+  DOMExceptionConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FDOMExceptionProto, []));
 
   AScope.DefineLexicalBinding(ERROR_NAME, ErrorConstructorFunc, dtConst);
   AScope.DefineLexicalBinding(TYPE_ERROR_NAME, TypeErrorConstructorFunc, dtConst);
