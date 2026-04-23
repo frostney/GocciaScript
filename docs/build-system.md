@@ -173,13 +173,14 @@ The first file found is loaded and applied as the **root config**. When running 
   "timeout": 5000,
   "max-memory": 10485760,
   "stack-size": 3500,
+  "allowed-hosts": ["api.example.com", "cdn.example.com"],
   "imports": {
     "@/": "./src/"
   }
 }
 ```
 
-Config keys mirror CLI flag names (e.g. `--mode` → `"mode"`, `--max-memory` → `"max-memory"`). Boolean flags use `true`/`false`. Array values (like `alias`) use JSON arrays. The `imports` object is handled by the module resolver and coexists with CLI option keys.
+Config keys mirror CLI flag names (e.g. `--mode` → `"mode"`, `--max-memory` → `"max-memory"`). Boolean flags use `true`/`false`. Array values (like `alias` and `allowed-hosts`) use JSON arrays. The `imports` object is handled by the module resolver and coexists with CLI option keys.
 
 **`extends`** — A config file can inherit from a base config using the `extends` key. The path is resolved relative to the config file's directory. Child values override parent values:
 

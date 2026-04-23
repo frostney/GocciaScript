@@ -738,7 +738,19 @@ Implements a subset of the [WHATWG Fetch Standard](https://developer.mozilla.org
 
 The `options` object supports `method` (`"GET"` or `"HEAD"`) and `headers` (plain object or `Headers` instance). Redirects (301/302/303/307/308) are followed automatically up to 20 hops. HTTPS requires OpenSSL libraries at runtime.
 
-**GocciaScript differences:** Only `GET` and `HEAD` methods. No `Request` object, `AbortSignal`, streaming body, or CORS. Requests are synchronous internally; the returned Promise is already settled.
+**Allowed hosts** — `fetch` requires an explicit allowlist of hostnames. Without `--allowed-host` or an `"allowed-hosts"` entry in `goccia.json`, any call to `fetch` throws `TypeError`. Add one or more allowed hosts via CLI or config:
+
+```bash
+./build/GocciaScriptLoader example.js --allowed-host=api.example.com --allowed-host=cdn.example.com
+```
+
+```json
+{ "allowed-hosts": ["api.example.com", "cdn.example.com"] }
+```
+
+Host matching is case-insensitive and ignores port, path, and userinfo. Only the hostname portion of the URL is checked.
+
+**GocciaScript differences:** Only `GET` and `HEAD` methods. No `Request` object, `AbortSignal`, streaming body, or CORS. Requests are synchronous internally; the returned Promise is already settled. Requires `--allowed-host` configuration.
 
 ### Headers (`Goccia.Values.HeadersValue.pas`)
 

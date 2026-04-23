@@ -277,7 +277,9 @@ var
   I: Integer;
 begin
   for I := 0 to High(AOptions) do
-    if AOptions[I].LongName = AName then
+    if (AOptions[I].LongName = AName) or
+       ((AOptions[I].ConfigName <> '') and
+        (AOptions[I].ConfigName = AName)) then
       Exit(AOptions[I]);
   Result := nil;
 end;
@@ -295,8 +297,11 @@ begin
       Continue;
 
     { Skip options already set by a higher-priority source (CLI).
-      Repeatable options are the exception — they accumulate. }
-    if Option.Present and not (Option is TGocciaRepeatableOption) then
+      Repeatable options accumulate from config, but not when
+      the CLI already set them (CLI wins outright). }
+    if Option.Present and
+       (not (Option is TGocciaRepeatableOption) or
+        Option.FromCommandLine) then
       Continue;
 
     if Option is TGocciaFlagOption then

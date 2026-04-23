@@ -17,6 +17,7 @@ type
   private
     FLongName: string;
     FShortName: string;
+    FConfigName: string;
     FHelpText: string;
     FGroup: string;
     FPresent: Boolean;
@@ -35,6 +36,9 @@ type
 
     property LongName: string read FLongName;
     property ShortName: string read FShortName write FShortName;
+    { Alternate name used in config files when different from LongName.
+      When empty, config files use LongName as usual. }
+    property ConfigName: string read FConfigName write FConfigName;
     property HelpText: string read FHelpText;
     property Group: string read FGroup;
     property Present: Boolean read FPresent;
@@ -152,6 +156,7 @@ type
     FUnsafeFFI: TGocciaFlagOption;
     FStackSize: TGocciaIntegerOption;
     FCompatVar: TGocciaFlagOption;
+    FAllowedHosts: TGocciaRepeatableOption;
   public
     constructor Create;
     destructor Destroy; override;
@@ -168,6 +173,7 @@ type
     property UnsafeFFI: TGocciaFlagOption read FUnsafeFFI;
     property StackSize: TGocciaIntegerOption read FStackSize;
     property CompatVar: TGocciaFlagOption read FCompatVar;
+    property AllowedHosts: TGocciaRepeatableOption read FAllowedHosts;
   end;
 
   TGocciaCoverageFormat = (cfLcov, cfJson);
@@ -240,6 +246,7 @@ begin
   inherited Create;
   FLongName := ALongName;
   FShortName := '';
+  FConfigName := '';
   FHelpText := AHelpText;
   FGroup := AGroup;
   FPresent := False;
@@ -538,6 +545,9 @@ begin
     'Maximum call stack depth (0 = no limit)', 'Engine');
   FCompatVar := TGocciaFlagOption.Create('compat-var',
     'Enable var declarations (compatibility)', 'Engine');
+  FAllowedHosts := TGocciaRepeatableOption.Create('allowed-host',
+    'Hostname allowed for fetch requests (repeatable)', 'Engine');
+  FAllowedHosts.ConfigName := 'allowed-hosts';
 end;
 
 destructor TGocciaEngineOptions.Destroy;
@@ -552,12 +562,13 @@ begin
   FUnsafeFFI.Free;
   FStackSize.Free;
   FCompatVar.Free;
+  FAllowedHosts.Free;
   inherited Destroy;
 end;
 
 function TGocciaEngineOptions.Options: TGocciaOptionArray;
 begin
-  SetLength(Result, 10);
+  SetLength(Result, 11);
   Result[0] := FMode;
   Result[1] := FASI;
   Result[2] := FImportMap;
@@ -568,6 +579,7 @@ begin
   Result[7] := FUnsafeFFI;
   Result[8] := FStackSize;
   Result[9] := FCompatVar;
+  Result[10] := FAllowedHosts;
 end;
 
 { TGocciaCoverageOptions }

@@ -426,6 +426,9 @@ var
   ValueStr: string;
   MemoryLimit: Int64;
   GC: TGarbageCollector;
+  FileHosts: TStringList;
+  HasFileHosts: Boolean;
+  I: Integer;
 begin
   if not Assigned(AEngineOptions) then
     Exit;
@@ -457,6 +460,36 @@ begin
       GC.MaxBytes := AEngineOptions.MaxMemory.Value
     else
       GC.MaxBytes := GC.SuggestedMaxBytes;
+  end;
+
+  { allowed-host: CLI > per-file config > root config > empty (fetch blocked).
+    CLI wins outright; otherwise per-file config overrides root config. }
+  if AEngineOptions.AllowedHosts.FromCommandLine then
+    AEngine.SetAllowedFetchHosts(AEngineOptions.AllowedHosts.Values)
+  else
+  begin
+    HasFileHosts := False;
+    for I := 0 to High(AFileConfig) do
+      if AFileConfig[I].Key = 'allowed-hosts' then
+      begin
+        HasFileHosts := True;
+        Break;
+      end;
+
+    if HasFileHosts then
+    begin
+      FileHosts := TStringList.Create;
+      try
+        for I := 0 to High(AFileConfig) do
+          if AFileConfig[I].Key = 'allowed-hosts' then
+            FileHosts.Add(AFileConfig[I].Value);
+        AEngine.SetAllowedFetchHosts(FileHosts);
+      finally
+        FileHosts.Free;
+      end;
+    end
+    else if AEngineOptions.AllowedHosts.Present then
+      AEngine.SetAllowedFetchHosts(AEngineOptions.AllowedHosts.Values);
   end;
 end;
 
