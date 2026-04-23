@@ -292,6 +292,8 @@ uses
 
   TimingUtils,
 
+  Goccia.AST.Expressions,
+  Goccia.AST.Statements,
   Goccia.CallStack,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
@@ -1562,10 +1564,15 @@ begin
       Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
       try
         ProgramNode := Parser.Parse;
-        // Parse must consume exactly one expression statement (the arrow function)
-        if ProgramNode.Body.Count <> 1 then
-          ThrowSyntaxError('Invalid parameter list for Function constructor');
-        ProgramNode.Free;
+        try
+          if (ProgramNode.Body.Count <> 1) or
+             not (ProgramNode.Body[0] is TGocciaExpressionStatement) or
+             not (TGocciaExpressionStatement(ProgramNode.Body[0]).Expression
+               is TGocciaArrowFunctionExpression) then
+            ThrowSyntaxError('Invalid parameter list for Function constructor');
+        finally
+          ProgramNode.Free;
+        end;
       finally
         Parser.Free;
       end;
@@ -1587,9 +1594,15 @@ begin
       Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
       try
         ProgramNode := Parser.Parse;
-        if ProgramNode.Body.Count <> 1 then
-          ThrowSyntaxError('Invalid body for Function constructor');
-        ProgramNode.Free;
+        try
+          if (ProgramNode.Body.Count <> 1) or
+             not (ProgramNode.Body[0] is TGocciaExpressionStatement) or
+             not (TGocciaExpressionStatement(ProgramNode.Body[0]).Expression
+               is TGocciaArrowFunctionExpression) then
+            ThrowSyntaxError('Invalid body for Function constructor');
+        finally
+          ProgramNode.Free;
+        end;
       finally
         Parser.Free;
       end;
