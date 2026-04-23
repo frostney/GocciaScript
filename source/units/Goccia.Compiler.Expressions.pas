@@ -658,10 +658,19 @@ var
   ObjPat: TGocciaObjectDestructuringPattern;
   ArrPat: TGocciaArrayDestructuringPattern;
   AssignPat: TGocciaAssignmentDestructuringPattern;
-  I: Integer;
+  I, LocalIdx: Integer;
 begin
   if APattern is TGocciaIdentifierDestructuringPattern then
-    AScope.DeclareLocal(TGocciaIdentifierDestructuringPattern(APattern).Name, AIsConst)
+  begin
+    // Reuse a pre-declared local (from function hoisting upvalue resolution)
+    // if it exists at the same scope depth — mirrors CompileVariableDeclaration
+    LocalIdx := AScope.ResolveLocal(
+      TGocciaIdentifierDestructuringPattern(APattern).Name);
+    if (LocalIdx < 0) or
+       (AScope.GetLocal(LocalIdx).Depth <> AScope.Depth) then
+      AScope.DeclareLocal(
+        TGocciaIdentifierDestructuringPattern(APattern).Name, AIsConst);
+  end
   else if APattern is TGocciaObjectDestructuringPattern then
   begin
     ObjPat := TGocciaObjectDestructuringPattern(APattern);
