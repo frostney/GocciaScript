@@ -441,6 +441,10 @@ begin
   AEngine.VarEnabled := ResolveFlagOption(
     AEngineOptions.CompatVar, AFileConfig, 'compat-var');
 
+  { unsafe-function-constructor: CLI flag > per-file config > root config > default (false) }
+  AEngine.FunctionConstructor.Enabled := ResolveFlagOption(
+    AEngineOptions.UnsafeFunctionConstructor, AFileConfig, 'unsafe-function-constructor');
+
   { max-memory: CLI > per-file config > root config > system default.
     Always set explicitly so a previous file's per-file override does
     not leak into subsequent files (GC.MaxBytes is process-global). }

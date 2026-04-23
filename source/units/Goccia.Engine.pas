@@ -105,6 +105,8 @@ type
       const ASourcePath: string); override;
     function ExecuteProgram(
       const AProgram: TGocciaProgram): TGocciaValue; override;
+    function ExecuteDynamicFunction(
+      const AProgram: TGocciaProgram): TGocciaValue; override;
     procedure EvaluateModuleBody(const AProgram: TGocciaProgram;
       const AContext: TGocciaEvaluationContext); override;
   end;
@@ -163,6 +165,7 @@ type
     FBuiltinURLSearchParams: TGocciaGlobalURLSearchParams;
     FBuiltinFetch: TGocciaGlobalFetch;
     FBuiltinDisposableStack: TGocciaBuiltinDisposableStack;
+    FFunctionConstructor: TGocciaFunctionConstructorClassValue;
     FTypedArrayIntrinsic: TGocciaClassValue;
     FPreviousExceptionMask: TFPUExceptionMask;
     FSuppressWarnings: Boolean;
@@ -196,6 +199,8 @@ type
     procedure PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap = nil);
     procedure ThrowError(const AMessage: string; const ALine,
       AColumn: Integer);
+    function CompileDynamicFunction(const AParamsSources: array of string;
+      const ABodySource: string): TGocciaFunctionBase;
   public
     constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AResolver: TGocciaModuleResolver); overload;
@@ -239,6 +244,7 @@ type
     property ModuleLoader: TGocciaModuleLoader read FModuleLoader;
     property ASIEnabled: Boolean read GetASIEnabled write SetASIEnabled;
     property VarEnabled: Boolean read GetVarEnabled write SetVarEnabled;
+    property FunctionConstructor: TGocciaFunctionConstructorClassValue read FFunctionConstructor;
     property Preprocessors: TGocciaPreprocessors read FPreprocessors write SetPreprocessors;
     property Compatibility: TGocciaCompatibilityFlags read FCompatibility write SetCompatibility;
     property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
@@ -288,6 +294,8 @@ uses
 
   TimingUtils,
 
+  Goccia.AST.Expressions,
+  Goccia.AST.Statements,
   Goccia.CallStack,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
@@ -308,6 +316,8 @@ uses
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.BooleanObjectValue,
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionValue,
   Goccia.Values.HeadersValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
@@ -351,6 +361,12 @@ begin
   Start := GetNanoseconds;
   Result := FInterpreter.Execute(AProgram);
   ExecuteTimeNanoseconds := GetNanoseconds - Start;
+end;
+
+function TGocciaInterpreterExecutor.ExecuteDynamicFunction(
+  const AProgram: TGocciaProgram): TGocciaValue;
+begin
+  Result := FInterpreter.Execute(AProgram);
 end;
 
 procedure TGocciaInterpreterExecutor.EvaluateModuleBody(
@@ -634,6 +650,9 @@ begin
     FOwnsExecutor := True;
   end;
   FExecutor.Initialize(FInterpreter.GlobalScope, FModuleLoader, AFileName);
+
+  if Assigned(FFunctionConstructor) then
+    FFunctionConstructor.CompileDynamicFunction := CompileDynamicFunction;
 end;
 
 destructor TGocciaEngine.Destroy;
@@ -1036,7 +1055,8 @@ begin
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   BooleanConstructor := TGocciaBooleanClassValue(GenericConstructor);
 
-  FunctionConstructor := TGocciaClassValue.Create('Function', nil);
+  FFunctionConstructor := TGocciaFunctionConstructorClassValue.Create('Function', nil);
+  FunctionConstructor := FFunctionConstructor;
   // Wire Function.prototype to be the shared function prototype (which has
   // call/apply/bind/toString) so that Object.getPrototypeOf(fn) === Function.prototype.
   // Chain: Function.prototype (= FSharedPrototype) → ObjectConstructor.Prototype
@@ -1559,6 +1579,122 @@ end;
 procedure TGocciaEngine.ThrowError(const AMessage: string; const ALine, AColumn: Integer);
 begin
   raise TGocciaRuntimeError.Create(AMessage, ALine, AColumn, FSourcePath, FSourceLines);
+end;
+
+function TGocciaEngine.CompileDynamicFunction(
+  const AParamsSources: array of string;
+  const ABodySource: string): TGocciaFunctionBase;
+var
+  ParamStr, Source: string;
+  I: Integer;
+  Lexer: TGocciaLexer;
+  Tokens: TObjectList<TGocciaToken>;
+  Parser: TGocciaParser;
+  ProgramNode: TGocciaProgram;
+  ResultValue: TGocciaValue;
+begin
+  // ES2026 §20.2.1.1: parse as  function anonymous(P) { body }
+  // We use method shorthand so the function gets its own this binding.
+  // The member access extracts the function from the wrapper object.
+  //
+  // Params and body are parsed as separate, self-contained programs first.
+  // This prevents injection: a crafted body that tries to close the method
+  // wrapper will fail validation because it will have unmatched braces when
+  // parsed as a standalone function body.
+  ParamStr := '';
+  for I := 0 to High(AParamsSources) do
+  begin
+    if I > 0 then
+      ParamStr := ParamStr + ', ';
+    ParamStr := ParamStr + AParamsSources[I];
+  end;
+
+  // Validate params: must parse as a valid parameter list.
+  // If params contain tokens that escape the signature, this will throw.
+  if ParamStr <> '' then
+  begin
+    Source := '(' + ParamStr + ') => {}';
+    Lexer := TGocciaLexer.Create(Source, '<Function:params>');
+    try
+      Tokens := Lexer.ScanTokens;
+      Parser := TGocciaParser.Create(Tokens, '<Function:params>', Lexer.SourceLines);
+      Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
+      Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
+      try
+        ProgramNode := Parser.Parse;
+        try
+          if (ProgramNode.Body.Count <> 1) or
+             not (ProgramNode.Body[0] is TGocciaExpressionStatement) or
+             not (TGocciaExpressionStatement(ProgramNode.Body[0]).Expression
+               is TGocciaArrowFunctionExpression) then
+            ThrowSyntaxError('Invalid parameter list for Function constructor');
+        finally
+          ProgramNode.Free;
+        end;
+      finally
+        Parser.Free;
+      end;
+    finally
+      Lexer.Free;
+    end;
+  end;
+
+  // Validate body: must parse as a valid function body.
+  // An arrow wrapper ensures the body is enclosed in matching braces.
+  if ABodySource <> '' then
+  begin
+    Source := '() => {' + #10 + ABodySource + #10 + '}';
+    Lexer := TGocciaLexer.Create(Source, '<Function:body>');
+    try
+      Tokens := Lexer.ScanTokens;
+      Parser := TGocciaParser.Create(Tokens, '<Function:body>', Lexer.SourceLines);
+      Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
+      Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
+      try
+        ProgramNode := Parser.Parse;
+        try
+          if (ProgramNode.Body.Count <> 1) or
+             not (ProgramNode.Body[0] is TGocciaExpressionStatement) or
+             not (TGocciaExpressionStatement(ProgramNode.Body[0]).Expression
+               is TGocciaArrowFunctionExpression) then
+            ThrowSyntaxError('Invalid body for Function constructor');
+        finally
+          ProgramNode.Free;
+        end;
+      finally
+        Parser.Free;
+      end;
+    finally
+      Lexer.Free;
+    end;
+  end;
+
+  // Both pieces validated — safe to assemble the wrapper
+  Source := '({ anonymous(' + ParamStr + ') {' + #10 + ABodySource + #10 + '} }).anonymous';
+
+  Lexer := TGocciaLexer.Create(Source, '<Function>');
+  try
+    Tokens := Lexer.ScanTokens;
+    Parser := TGocciaParser.Create(Tokens, '<Function>', Lexer.SourceLines);
+    Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
+    Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
+    try
+      ProgramNode := Parser.ParseUnchecked;
+      try
+        ResultValue := FExecutor.ExecuteDynamicFunction(ProgramNode);
+        Result := TGocciaFunctionBase(ResultValue);
+        // ES2026 §20.2.1.1.1: the function's name is 'anonymous'
+        if Result is TGocciaFunctionValue then
+          TGocciaFunctionValue(Result).Name := 'anonymous';
+      finally
+        ProgramNode.Free;
+      end;
+    finally
+      Parser.Free;
+    end;
+  finally
+    Lexer.Free;
+  end;
 end;
 
 end.
