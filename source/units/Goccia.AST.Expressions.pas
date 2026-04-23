@@ -366,6 +366,7 @@ type
     FBody: TGocciaASTNode;
     FIsAsync: Boolean;
     FSourceText: string;
+    FName: string;
   public
     constructor Create(const AParameters: TGocciaParameterArray; const ABody: TGocciaASTNode;
       const ALine, AColumn: Integer);
@@ -374,6 +375,7 @@ type
     property Body: TGocciaASTNode read FBody;
     property IsAsync: Boolean read FIsAsync write FIsAsync;
     property SourceText: string read FSourceText write FSourceText;
+    property Name: string read FName write FName;
   end;
 
   TGocciaAwaitExpression = class(TGocciaExpression)

@@ -147,6 +147,7 @@ begin
                 Lexer.SourceLines);
               Parser.AutomaticSemicolonInsertion := Eng.ASIEnabled;
               Parser.VarDeclarationsEnabled := Eng.VarEnabled;
+              Parser.FunctionDeclarationsEnabled := Eng.FunctionEnabled;
               try
                 ProgramNode := Parser.Parse;
                 ParseEnd := GetNanoseconds;

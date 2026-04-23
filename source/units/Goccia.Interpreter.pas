@@ -33,6 +33,7 @@ type
     FASIEnabled: Boolean;
     FJSXEnabled: Boolean;
     FVarEnabled: Boolean;
+    FFunctionEnabled: Boolean;
     FModuleLoader: TGocciaModuleLoader;
     FOwnsModuleLoader: Boolean;
 
@@ -45,6 +46,7 @@ type
     procedure SetASIEnabled(const AValue: Boolean);
     procedure SetJSXEnabled(const AValue: Boolean);
     procedure SetVarEnabled(const AValue: Boolean);
+    procedure SetFunctionEnabled(const AValue: Boolean);
     procedure SetResolver(const AValue: TGocciaModuleResolver);
   public
     function CreateEvaluationContext: TGocciaEvaluationContext;
@@ -57,6 +59,7 @@ type
 
     property ASIEnabled: Boolean read FASIEnabled write SetASIEnabled;
     property VarEnabled: Boolean read FVarEnabled write SetVarEnabled;
+    property FunctionEnabled: Boolean read FFunctionEnabled write SetFunctionEnabled;
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
     property JSXEnabled: Boolean read FJSXEnabled write SetJSXEnabled;
     property ContentProvider: TGocciaModuleContentProvider read GetContentProvider;
@@ -137,6 +140,8 @@ begin
 
   if FVarEnabled then
     HoistVarDeclarations(AProgram.Body, FGlobalScope);
+  if FFunctionEnabled then
+    HoistFunctionDeclarations(AProgram.Body, Context);
 
   for I := 0 to AProgram.Body.Count - 1 do
   begin
@@ -184,6 +189,12 @@ begin
   FModuleLoader.VarEnabled := AValue;
 end;
 
+procedure TGocciaInterpreter.SetFunctionEnabled(const AValue: Boolean);
+begin
+  FFunctionEnabled := AValue;
+  FModuleLoader.FunctionEnabled := AValue;
+end;
+
 procedure TGocciaInterpreter.SetResolver(const AValue: TGocciaModuleResolver);
 begin
   if Assigned(AValue) and (AValue <> FModuleLoader.Resolver) then
@@ -199,6 +210,8 @@ var
 begin
   if FVarEnabled then
     HoistVarDeclarations(AProgram.Body, AContext.Scope);
+  if FFunctionEnabled then
+    HoistFunctionDeclarations(AProgram.Body, AContext);
   for I := 0 to AProgram.Body.Count - 1 do
     EvaluateStatement(AProgram.Body[I], AContext);
 end;

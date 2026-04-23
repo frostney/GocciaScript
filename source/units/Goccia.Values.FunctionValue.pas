@@ -225,6 +225,9 @@ begin
   // Hoist var declarations to function scope
   HoistVarDeclarations(FBodyStatements, ACallScope);
 
+  // Hoist function declarations (both name and value) to function scope
+  HoistFunctionDeclarations(FBodyStatements, Context);
+
   // Expression-body fast path: expression bodies cannot contain return/break
   if FIsExpressionBody and (FBodyStatements.Count = 1) then
   begin
