@@ -1636,6 +1636,7 @@ begin
       Parser := TGocciaParser.Create(Tokens, '<Function:params>', Lexer.SourceLines);
       Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
       Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
+      Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
       try
         ProgramNode := Parser.Parse;
         try
@@ -1666,6 +1667,7 @@ begin
       Parser := TGocciaParser.Create(Tokens, '<Function:body>', Lexer.SourceLines);
       Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
       Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
+      Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
       try
         ProgramNode := Parser.Parse;
         try
@@ -1694,6 +1696,7 @@ begin
     Parser := TGocciaParser.Create(Tokens, '<Function>', Lexer.SourceLines);
     Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
     Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
+    Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
     try
       ProgramNode := Parser.ParseUnchecked;
       try

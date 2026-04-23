@@ -599,7 +599,7 @@ GocciaScript provides two function definition styles that cover all use cases wi
 When enabled (CLI: `--compat-function`, engine API: `Engine.FunctionEnabled := True`, config: `{"compat-function": true}`), `function` declarations and expressions are fully supported. The `arguments` object remains excluded regardless of this flag.
 
 - **Function declarations** (`function name(params) { body }`) are desugared to var-scoped bindings backed by `TGocciaMethodExpression`, which produces call-site `this` binding (not lexical). Declarations are hoisted: both the name and the function value are available before the declaration is reached, matching ES2026 §15.2.6 semantics. Uses the same var binding infrastructure (`DefineVariableBinding`) as `--compat-var`.
-- **Function expressions** (`const f = function(params) { body }`) produce the same `TGocciaMethodExpression` node. Named function expressions consume the name but do not create a binding inside the function body.
+- **Function expressions** (`const f = function(params) { body }`) produce the same `TGocciaMethodExpression` node. Named function expressions (`const f = function g(params) { body }`) create a read-only self-binding of the name (`g`) visible only inside the function body for recursion, matching ES2026 §15.2.4 semantics.
 - **Async functions** (`async function name(params) { body }`) are supported in both declaration and expression forms.
 - **Generator functions** (`function*`) remain unsupported; they produce a warning and are skipped.
 

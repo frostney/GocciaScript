@@ -1700,6 +1700,7 @@ begin
             finally
               Dec(FInAsyncFunction);
             end;
+            TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
             TGocciaMethodExpression(Result).IsAsync := True;
             if Name <> '' then
               TGocciaMethodExpression(Result).Name := Name;
@@ -1766,6 +1767,7 @@ begin
       end;
       CollectGenericParameters;
       Result := ParseObjectMethodBody(Token.Line, Token.Column);
+      TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
       if Name <> '' then
         TGocciaMethodExpression(Result).Name := Name;
     end;
@@ -3270,6 +3272,7 @@ begin
   CollectGenericParameters;
 
   MethodExpr := ParseObjectMethodBody(Line, Column);
+  TGocciaMethodExpression(MethodExpr).SourceText := ExtractSourceRange(Line, Column);
 
   SetLength(Variables, 1);
   Variables[0].Name := NameToken.Lexeme;

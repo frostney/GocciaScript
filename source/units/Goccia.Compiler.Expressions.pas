@@ -716,6 +716,12 @@ begin
       DestSlot := ACtx.Scope.GetLocal(LocalIdx).Slot;
       if DestSlot <> ASrcReg then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, DestSlot, ASrcReg, 0));
+      // When a local was pre-declared for upvalue resolution and captured
+      // by a hoisted function closure, the cell holds the stale initial
+      // value.  OP_MOVE writes to the register but bypasses the cell.
+      // Emit OP_SET_LOCAL to sync the cell with the register.
+      if ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+        EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, DestSlot, UInt16(DestSlot)));
     end
     else
     begin

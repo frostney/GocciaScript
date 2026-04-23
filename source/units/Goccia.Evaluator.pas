@@ -311,9 +311,16 @@ begin
     Exit;
 
   Value := VarDecl.Variables[0].Initializer.Evaluate(AContext);
-  if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
-    TGocciaFunctionValue(Value).Name := VarDecl.Variables[0].Name;
-  AContext.Scope.DefineVariableBinding(VarDecl.Variables[0].Name, Value, True);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(Value);
+  try
+    if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
+      TGocciaFunctionValue(Value).Name := VarDecl.Variables[0].Name;
+    AContext.Scope.DefineVariableBinding(VarDecl.Variables[0].Name, Value, True);
+  finally
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(Value);
+  end;
 end;
 
 procedure HoistFunctionDeclarations(const AStatements: TObjectList<TGocciaStatement>; const AContext: TGocciaEvaluationContext);

@@ -318,6 +318,11 @@ begin
   begin
     if AScope.ResolveLocal(TGocciaEnumDeclaration(ANode).Name) < 0 then
       AScope.DeclareLocal(TGocciaEnumDeclaration(ANode).Name, False);
+  end
+  else if ANode is TGocciaExportEnumDeclaration then
+  begin
+    if AScope.ResolveLocal(TGocciaExportEnumDeclaration(ANode).Declaration.Name) < 0 then
+      AScope.DeclareLocal(TGocciaExportEnumDeclaration(ANode).Declaration.Name, False);
   end;
 end;
 
