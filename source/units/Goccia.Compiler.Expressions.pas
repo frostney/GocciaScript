@@ -1382,7 +1382,13 @@ var
 begin
   ValReg := ACtx.Scope.AllocateRegister;
   FuncCount := ACtx.Template.FunctionCount;
-  ACtx.CompileExpression(AValExpr, ValReg);
+
+  if (AValExpr is TGocciaClassExpression) and
+     (TGocciaClassExpression(AValExpr).ClassDefinition.Name = '') then
+    Goccia.Compiler.Statements.CompileClassExpression(ACtx,
+      TGocciaClassExpression(AValExpr).ClassDefinition, ValReg, AKey)
+  else
+    ACtx.CompileExpression(AValExpr, ValReg);
 
   if (AValExpr is TGocciaArrowFunctionExpression) or
      (AValExpr is TGocciaMethodExpression) then

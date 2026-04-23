@@ -889,8 +889,32 @@ begin
     Exit;
   end;
 
-  Current := Self;
-  repeat
+  if FStaticMethods.TryGetValue(AName, Result) then
+    Exit;
+
+  if FStaticGetters.TryGetValue(AName, Getter) then
+  begin
+    Args := TGocciaArgumentsCollection.CreateWithCapacity(0);
+    try
+      Result := Getter.Call(Args, Self);
+    finally
+      Args.Free;
+    end;
+    Exit;
+  end;
+
+  if AName = PROP_NAME then
+  begin
+    if FName = '<anonymous>' then
+      Result := TGocciaStringLiteralValue.Create('')
+    else
+      Result := TGocciaStringLiteralValue.Create(FName);
+    Exit;
+  end;
+
+  Current := FSuperClass;
+  while Assigned(Current) do
+  begin
     if Current.FStaticMethods.TryGetValue(AName, Result) then
       Exit;
 
@@ -906,15 +930,6 @@ begin
     end;
 
     Current := Current.FSuperClass;
-  until not Assigned(Current);
-
-  if AName = PROP_NAME then
-  begin
-    if FName = '<anonymous>' then
-      Result := TGocciaStringLiteralValue.Create('')
-    else
-      Result := TGocciaStringLiteralValue.Create(FName);
-    Exit;
   end;
 
   // Fall through to Function.prototype chain (classes are functions per ES spec)

@@ -37,6 +37,13 @@ describe("class expression name", () => {
   });
 });
 
+describe("class as object property", () => {
+  test("anonymous class expression infers name from property key", () => {
+    const obj = { MyClass: class {} };
+    expect(obj.MyClass.name).toBe("MyClass");
+  });
+});
+
 describe("static name override", () => {
   test("static getter overrides default .name", () => {
     class Foo { static get name() { return "Custom"; } }
@@ -46,5 +53,12 @@ describe("static name override", () => {
   test("static field overrides default .name", () => {
     class Bar { static name = "Override"; }
     expect(Bar.name).toBe("Override");
+  });
+
+  test("inherited static name getter does not shadow child built-in name", () => {
+    class Parent { static get name() { return "ParentCustom"; } }
+    class Child extends Parent {}
+    expect(Child.name).toBe("Child");
+    expect(Parent.name).toBe("ParentCustom");
   });
 });
