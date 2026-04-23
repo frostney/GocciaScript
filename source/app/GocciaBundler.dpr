@@ -40,7 +40,7 @@ type
     FSourceMap: TGocciaStringOption;
 
     function ParseSource(const ASource: TStringList; const AFileName: string;
-      const AASIEnabled, AVarEnabled: Boolean;
+      const AASIEnabled, AVarEnabled, AFunctionEnabled: Boolean;
       out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
       out ASourceMap: TGocciaSourceMap): TGocciaProgram;
     function CompileSource(const ASource: TStringList;
@@ -90,7 +90,7 @@ end;
 { TBundlerApp - Core logic }
 
 function TBundlerApp.ParseSource(const ASource: TStringList;
-  const AFileName: string; const AASIEnabled, AVarEnabled: Boolean;
+  const AFileName: string; const AASIEnabled, AVarEnabled, AFunctionEnabled: Boolean;
   out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
   out ASourceMap: TGocciaSourceMap): TGocciaProgram;
 var
@@ -126,6 +126,7 @@ begin
       Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
       Parser.AutomaticSemicolonInsertion := AASIEnabled;
       Parser.VarDeclarationsEnabled := AVarEnabled;
+      Parser.FunctionDeclarationsEnabled := AFunctionEnabled;
       try
         Result := Parser.Parse;
         ParseEnd := GetNanoseconds;
@@ -194,18 +195,20 @@ var
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
   SourceMap: TGocciaSourceMap;
   FileConfig: TConfigEntryArray;
-  EffectiveASI, EffectiveVar: Boolean;
+  EffectiveASI, EffectiveVar, EffectiveFunction: Boolean;
 begin
-  { Resolve ASI and compat-var:
+  { Resolve ASI, compat-var and compat-function:
     CLI flag > per-file config > root config > default (false). }
   FileConfig := DiscoverFileConfig(AFileName);
   EffectiveASI := ResolveFlagOption(EngineOptions.ASI, FileConfig, 'asi');
   EffectiveVar := ResolveFlagOption(
     EngineOptions.CompatVar, FileConfig, 'compat-var');
+  EffectiveFunction := ResolveFlagOption(
+    EngineOptions.CompatFunction, FileConfig, 'compat-function');
 
   CompiledModule := nil;
   ProgramNode := ParseSource(ASource, AFileName, EffectiveASI, EffectiveVar,
-    LexTimeNanoseconds, ParseTimeNanoseconds, SourceMap);
+    EffectiveFunction, LexTimeNanoseconds, ParseTimeNanoseconds, SourceMap);
   try
     Compiler := TGocciaCompiler.Create(AFileName);
     try

@@ -50,6 +50,12 @@ type
   private
     type
       TParseFunction = function: TGocciaExpression of object;
+      // Result of TryConsumeAsyncFunction: whether 'async function' was detected
+      TAsyncFunctionCheck = (
+        afcNotMatched,  // Not 'async function' (different line or no function token)
+        afcDisabled,    // Matched but disabled; warning issued and body skipped
+        afcReady        // 'function' consumed; caller should proceed with parsing
+      );
   private
     FTokens: TObjectList<TGocciaToken>;
     FCurrent: Integer;
@@ -63,6 +69,7 @@ type
     FSkipPrivateNameValidation: Integer;
     FAutomaticSemicolonInsertion: Boolean;
     FVarDeclarationsEnabled: Boolean;
+    FFunctionDeclarationsEnabled: Boolean;
 
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
     procedure PushPrivateClassContext;
@@ -126,6 +133,10 @@ type
     procedure SkipBalancedParens;
     procedure SkipStatementOrBlock;
     procedure SkipUnsupportedFunctionSignature;
+    // Centralized 'async function' check: enforces same-line constraint,
+    // handles disabled-mode fallback.  Call after consuming the 'async' token.
+    function TryConsumeAsyncFunction(
+      const AAsyncLine, AAsyncColumn: Integer): TAsyncFunctionCheck;
     function IsTypeOnlySpecifierModifier: Boolean;
     procedure SkipInterfaceDeclaration;
     function IsTypeDeclaration: Boolean;
@@ -195,6 +206,8 @@ type
       read FAutomaticSemicolonInsertion write FAutomaticSemicolonInsertion;
     property VarDeclarationsEnabled: Boolean
       read FVarDeclarationsEnabled write FVarDeclarationsEnabled;
+    property FunctionDeclarationsEnabled: Boolean
+      read FFunctionDeclarationsEnabled write FFunctionDeclarationsEnabled;
     property WarningCount: Integer read FWarningCount;
   end;
 
@@ -1281,7 +1294,8 @@ end;
 // Note: Tokens are owned by the Lexer (FTokens with OwnsObjects=True) and freed
 // when the Lexer is destroyed — they must not be freed separately.
 function ParseInterpolationExpression(const AExprText, AFileName: string;
-  const AASI: Boolean = False; const AVarEnabled: Boolean = False): TGocciaExpression;
+  const AASI: Boolean = False; const AVarEnabled: Boolean = False;
+  const AFunctionEnabled: Boolean = False): TGocciaExpression;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -1302,6 +1316,7 @@ begin
       Parser := TGocciaParser.Create(Tokens, AFileName, SourceLines);
       Parser.AutomaticSemicolonInsertion := AASI;
       Parser.VarDeclarationsEnabled := AVarEnabled;
+      Parser.FunctionDeclarationsEnabled := AFunctionEnabled;
       try
         ProgramNode := Parser.ParseUnchecked;
         try
@@ -1364,7 +1379,7 @@ begin
   Expressions := TObjectList<TGocciaExpression>.Create(True);
   for I := 0 to Length(ExprTexts) - 1 do
   begin
-    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName, FAutomaticSemicolonInsertion, FVarDeclarationsEnabled);
+    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName, FAutomaticSemicolonInsertion, FVarDeclarationsEnabled, FFunctionDeclarationsEnabled);
     if Assigned(ParsedExpr) then
       Expressions.Add(ParsedExpr);
   end;
@@ -1424,7 +1439,7 @@ begin
       AToken.Line, AToken.Column));
 
     // Parse and add the interpolation expression
-    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName, FAutomaticSemicolonInsertion, FVarDeclarationsEnabled);
+    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName, FAutomaticSemicolonInsertion, FVarDeclarationsEnabled, FFunctionDeclarationsEnabled);
     if Assigned(ParsedExpr) then
       Parts.Add(ParsedExpr);
   end;
@@ -1651,6 +1666,48 @@ begin
       ArrowFn.SourceText := ExtractSourceRange(Line, Column);
       Result := ArrowFn;
     end
+    else if Name = KEYWORD_ASYNC then
+    begin
+      case TryConsumeAsyncFunction(Token.Line, Token.Column) of
+        afcNotMatched:
+          Result := TGocciaIdentifierExpression.Create(Name, Token.Line, Token.Column);
+        afcDisabled:
+          Result := TGocciaLiteralExpression.Create(
+            TGocciaUndefinedLiteralValue.UndefinedValue, Token.Line, Token.Column);
+        afcReady:
+        begin
+          if Check(gttStar) then
+          begin
+            AddWarning('Generator function expressions are not supported in GocciaScript',
+              'Use a regular function instead',
+              Token.Line, Token.Column);
+            SkipUnsupportedFunctionSignature;
+            Result := TGocciaLiteralExpression.Create(
+              TGocciaUndefinedLiteralValue.UndefinedValue, Token.Line, Token.Column);
+          end
+          else
+          begin
+            Name := '';
+            if Check(gttIdentifier) then
+            begin
+              Name := Peek.Lexeme;
+              Advance;
+            end;
+            CollectGenericParameters;
+            Inc(FInAsyncFunction);
+            try
+              Result := ParseObjectMethodBody(Token.Line, Token.Column);
+            finally
+              Dec(FInAsyncFunction);
+            end;
+            TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
+            TGocciaMethodExpression(Result).IsAsync := True;
+            if Name <> '' then
+              TGocciaMethodExpression(Result).Name := Name;
+          end;
+        end;
+      end;
+    end
     else
       Result := TGocciaIdentifierExpression.Create(Name, Token.Line, Token.Column);
   end
@@ -1682,12 +1739,38 @@ begin
   else if Match(gttFunction) then
   begin
     Token := Previous;
-    AddWarning('''function'' expressions are not supported in GocciaScript',
-      'Use arrow functions instead: const name = (...) => { ... }',
-      Token.Line, Token.Column);
-    SkipUnsupportedFunctionSignature;
-    Result := TGocciaLiteralExpression.Create(
-      TGocciaUndefinedLiteralValue.UndefinedValue, Token.Line, Token.Column);
+    if not FFunctionDeclarationsEnabled then
+    begin
+      AddWarning('''function'' expressions are not supported in GocciaScript',
+        'Use arrow functions instead: const name = (...) => { ... }',
+        Token.Line, Token.Column);
+      SkipUnsupportedFunctionSignature;
+      Result := TGocciaLiteralExpression.Create(
+        TGocciaUndefinedLiteralValue.UndefinedValue, Token.Line, Token.Column);
+    end
+    else if Check(gttStar) then
+    begin
+      AddWarning('Generator function expressions are not supported in GocciaScript',
+        'Use a regular function instead',
+        Token.Line, Token.Column);
+      SkipUnsupportedFunctionSignature;
+      Result := TGocciaLiteralExpression.Create(
+        TGocciaUndefinedLiteralValue.UndefinedValue, Token.Line, Token.Column);
+    end
+    else
+    begin
+      Name := '';
+      if Check(gttIdentifier) then
+      begin
+        Name := Peek.Lexeme;
+        Advance;
+      end;
+      CollectGenericParameters;
+      Result := ParseObjectMethodBody(Token.Line, Token.Column);
+      TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
+      if Name <> '' then
+        TGocciaMethodExpression(Result).Name := Name;
+    end;
   end
   else if Match(gttLeftBracket) then
     Result := ArrayLiteral
@@ -2447,6 +2530,43 @@ begin
     Result := WithStatement
   else if Match(gttFunction) then
     Result := FunctionStatement
+  else if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ASYNC) and
+          (FCurrent + 1 < FTokens.Count) and
+          (FTokens[FCurrent + 1].TokenType = gttFunction) then
+  begin
+    Line := Peek.Line;
+    Column := Peek.Column;
+    Advance; // consume 'async'
+    case TryConsumeAsyncFunction(Line, Column) of
+      afcNotMatched:
+      begin
+        // async and function on different lines — back up and parse as expression
+        FCurrent := FCurrent - 1;
+        Result := ExpressionStatement;
+      end;
+      afcDisabled:
+        Result := TGocciaEmptyStatement.Create(Line, Column);
+      afcReady:
+      begin
+        Inc(FInAsyncFunction);
+        try
+          Result := FunctionStatement;
+        finally
+          Dec(FInAsyncFunction);
+        end;
+        if (Result is TGocciaVariableDeclaration) and
+           (Length(TGocciaVariableDeclaration(Result).Variables) = 1) and
+           (TGocciaVariableDeclaration(Result).Variables[0].Initializer is TGocciaMethodExpression) then
+        begin
+          TGocciaMethodExpression(TGocciaVariableDeclaration(Result).Variables[0].Initializer).IsAsync := True;
+          // Override SourceText to include 'async' prefix (FunctionStatement
+          // sets it from the 'function' token; Line/Column are the 'async' token)
+          TGocciaMethodExpression(TGocciaVariableDeclaration(Result).Variables[0].Initializer).SourceText :=
+            ExtractSourceRange(Line, Column);
+        end;
+      end;
+    end;
+  end
   else if Match(gttSwitch) then
     Result := SwitchStatement
   else if Match(gttBreak) then
@@ -2852,6 +2972,27 @@ begin
     Advance;
 end;
 
+function TGocciaParser.TryConsumeAsyncFunction(
+  const AAsyncLine, AAsyncColumn: Integer): TAsyncFunctionCheck;
+begin
+  // 'async' and 'function' must be on the same line (no line terminator)
+  if not Check(gttFunction) or (Peek.Line <> AAsyncLine) then
+    Exit(afcNotMatched);
+
+  Advance; // consume 'function'
+
+  if not FFunctionDeclarationsEnabled then
+  begin
+    AddWarning('''async function'' is not supported in GocciaScript',
+      'Use async arrow functions instead: const name = async (...) => { ... }',
+      AAsyncLine, AAsyncColumn);
+    SkipUnsupportedFunctionSignature;
+    Exit(afcDisabled);
+  end;
+
+  Result := afcReady;
+end;
+
 function TGocciaParser.IsTypeOnlySpecifierModifier: Boolean;
 begin
   Result := Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_TYPE) and
@@ -3102,17 +3243,50 @@ end;
 function TGocciaParser.FunctionStatement: TGocciaStatement;
 var
   Line, Column: Integer;
+  NameToken: TGocciaToken;
+  MethodExpr: TGocciaExpression;
+  Variables: TArray<TGocciaVariableInfo>;
+  VarDecl: TGocciaVariableDeclaration;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  AddWarning('''function'' declarations are not supported in GocciaScript',
-    'Use arrow functions instead: const name = (...) => { ... }',
-    Line, Column);
+  if not FFunctionDeclarationsEnabled then
+  begin
+    AddWarning('''function'' declarations are not supported in GocciaScript',
+      'Use arrow functions instead: const name = (...) => { ... }',
+      Line, Column);
+    SkipUnsupportedFunctionSignature;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Exit;
+  end;
 
-  SkipUnsupportedFunctionSignature;
+  // Generator: function* — not supported even with compat-function
+  if Check(gttStar) then
+  begin
+    AddWarning('Generator function declarations are not supported in GocciaScript',
+      'Use a regular function instead',
+      Line, Column);
+    SkipUnsupportedFunctionSignature;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Exit;
+  end;
 
-  Result := TGocciaEmptyStatement.Create(Line, Column);
+  NameToken := Consume(gttIdentifier, 'Expected function name',
+    'Provide a name for the function declaration');
+
+  CollectGenericParameters;
+
+  MethodExpr := ParseObjectMethodBody(Line, Column);
+  TGocciaMethodExpression(MethodExpr).SourceText := ExtractSourceRange(Line, Column);
+
+  SetLength(Variables, 1);
+  Variables[0].Name := NameToken.Lexeme;
+  Variables[0].Initializer := TGocciaExpression(MethodExpr);
+  Variables[0].TypeAnnotation := '';
+  VarDecl := TGocciaVariableDeclaration.Create(Variables, False, Line, Column, True);
+  VarDecl.IsFunctionDeclaration := True;
+  Result := VarDecl;
 end;
 
 function TGocciaParser.ReturnStatement: TGocciaStatement;
@@ -3556,6 +3730,7 @@ var
   NameToken: TGocciaToken;
   IsReExport: Boolean;
   IsTypeOnlyBinding: Boolean;
+  AsyncLine, AsyncColumn: Integer;
   I: Integer;
 
   function HasFromClauseAfterNamedExports: Boolean;
@@ -3632,14 +3807,76 @@ begin
     Exit;
   end;
 
+  // export async function name() { ... }
+  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ASYNC) and
+     (FCurrent + 1 < FTokens.Count) and
+     (FTokens[FCurrent + 1].TokenType = gttFunction) then
+  begin
+    Advance; // consume 'async'
+    AsyncLine := Previous.Line;
+    AsyncColumn := Previous.Column;
+    case TryConsumeAsyncFunction(AsyncLine, AsyncColumn) of
+      afcNotMatched:
+      begin
+        // async and function on different lines — back up and fall through
+        FCurrent := FCurrent - 1;
+      end;
+      afcDisabled:
+      begin
+        Result := TGocciaEmptyStatement.Create(Line, Column);
+        Exit;
+      end;
+      afcReady:
+      begin
+        Inc(FInAsyncFunction);
+        try
+          InnerDecl := FunctionStatement;
+        finally
+          Dec(FInAsyncFunction);
+        end;
+        if (InnerDecl is TGocciaVariableDeclaration) and
+           (Length(TGocciaVariableDeclaration(InnerDecl).Variables) = 1) and
+           (TGocciaVariableDeclaration(InnerDecl).Variables[0].Initializer is TGocciaMethodExpression) then
+        begin
+          TGocciaMethodExpression(TGocciaVariableDeclaration(InnerDecl).Variables[0].Initializer).IsAsync := True;
+          // Override SourceText to include 'async' prefix (FunctionStatement
+          // sets it from the 'function' token; AsyncLine/AsyncColumn are the 'async' token)
+          TGocciaMethodExpression(TGocciaVariableDeclaration(InnerDecl).Variables[0].Initializer).SourceText :=
+            ExtractSourceRange(AsyncLine, AsyncColumn);
+        end;
+        if InnerDecl is TGocciaVariableDeclaration then
+        begin
+          VarDecl := TGocciaVariableDeclaration(InnerDecl);
+          Result := TGocciaExportVariableDeclaration.Create(VarDecl, Line, Column);
+        end
+        else
+          Result := InnerDecl;
+        Exit;
+      end;
+    end;
+  end;
+
   if Check(gttFunction) then
   begin
-    AddWarning('''function'' declarations are not supported in GocciaScript',
-      'Use arrow functions instead: const name = (...) => { ... }',
-      Line, Column);
-    Advance;
-    SkipUnsupportedFunctionSignature;
-    Result := TGocciaEmptyStatement.Create(Line, Column);
+    if not FFunctionDeclarationsEnabled then
+    begin
+      AddWarning('''function'' declarations are not supported in GocciaScript',
+        'Use arrow functions instead: const name = (...) => { ... }',
+        Line, Column);
+      Advance;
+      SkipUnsupportedFunctionSignature;
+      Result := TGocciaEmptyStatement.Create(Line, Column);
+      Exit;
+    end;
+    Advance; // consume 'function'
+    InnerDecl := FunctionStatement;
+    if InnerDecl is TGocciaVariableDeclaration then
+    begin
+      VarDecl := TGocciaVariableDeclaration(InnerDecl);
+      Result := TGocciaExportVariableDeclaration.Create(VarDecl, Line, Column);
+    end
+    else
+      Result := InnerDecl;
     Exit;
   end;
 

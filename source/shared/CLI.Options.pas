@@ -157,6 +157,7 @@ type
     FUnsafeFunctionConstructor: TGocciaFlagOption;
     FStackSize: TGocciaIntegerOption;
     FCompatVar: TGocciaFlagOption;
+    FCompatFunction: TGocciaFlagOption;
     FAllowedHosts: TGocciaRepeatableOption;
   public
     constructor Create;
@@ -175,6 +176,7 @@ type
     property UnsafeFunctionConstructor: TGocciaFlagOption read FUnsafeFunctionConstructor;
     property StackSize: TGocciaIntegerOption read FStackSize;
     property CompatVar: TGocciaFlagOption read FCompatVar;
+    property CompatFunction: TGocciaFlagOption read FCompatFunction;
     property AllowedHosts: TGocciaRepeatableOption read FAllowedHosts;
   end;
 
@@ -549,6 +551,8 @@ begin
     'Maximum call stack depth (0 = no limit)', 'Engine');
   FCompatVar := TGocciaFlagOption.Create('compat-var',
     'Enable var declarations (compatibility)', 'Engine');
+  FCompatFunction := TGocciaFlagOption.Create('compat-function',
+    'Enable function declarations and expressions (compatibility)', 'Engine');
   FAllowedHosts := TGocciaRepeatableOption.Create('allowed-host',
     'Hostname allowed for fetch requests (repeatable)', 'Engine');
   FAllowedHosts.ConfigName := 'allowed-hosts';
@@ -567,13 +571,14 @@ begin
   FUnsafeFunctionConstructor.Free;
   FStackSize.Free;
   FCompatVar.Free;
+  FCompatFunction.Free;
   FAllowedHosts.Free;
   inherited Destroy;
 end;
 
 function TGocciaEngineOptions.Options: TGocciaOptionArray;
 begin
-  SetLength(Result, 12);
+  SetLength(Result, 13);
   Result[0] := FMode;
   Result[1] := FASI;
   Result[2] := FImportMap;
@@ -585,7 +590,8 @@ begin
   Result[8] := FUnsafeFunctionConstructor;
   Result[9] := FStackSize;
   Result[10] := FCompatVar;
-  Result[11] := FAllowedHosts;
+  Result[11] := FCompatFunction;
+  Result[12] := FAllowedHosts;
 end;
 
 { TGocciaCoverageOptions }

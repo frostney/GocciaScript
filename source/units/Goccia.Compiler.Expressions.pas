@@ -658,10 +658,19 @@ var
   ObjPat: TGocciaObjectDestructuringPattern;
   ArrPat: TGocciaArrayDestructuringPattern;
   AssignPat: TGocciaAssignmentDestructuringPattern;
-  I: Integer;
+  I, LocalIdx: Integer;
 begin
   if APattern is TGocciaIdentifierDestructuringPattern then
-    AScope.DeclareLocal(TGocciaIdentifierDestructuringPattern(APattern).Name, AIsConst)
+  begin
+    // Reuse a pre-declared local (from function hoisting upvalue resolution)
+    // if it exists at the same scope depth — mirrors CompileVariableDeclaration
+    LocalIdx := AScope.ResolveLocal(
+      TGocciaIdentifierDestructuringPattern(APattern).Name);
+    if (LocalIdx < 0) or
+       (AScope.GetLocal(LocalIdx).Depth <> AScope.Depth) then
+      AScope.DeclareLocal(
+        TGocciaIdentifierDestructuringPattern(APattern).Name, AIsConst);
+  end
   else if APattern is TGocciaObjectDestructuringPattern then
   begin
     ObjPat := TGocciaObjectDestructuringPattern(APattern);
@@ -707,6 +716,12 @@ begin
       DestSlot := ACtx.Scope.GetLocal(LocalIdx).Slot;
       if DestSlot <> ASrcReg then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, DestSlot, ASrcReg, 0));
+      // When a local was pre-declared for upvalue resolution and captured
+      // by a hoisted function closure, the cell holds the stale initial
+      // value.  OP_MOVE writes to the register but bypasses the cell.
+      // Emit OP_SET_LOCAL to sync the cell with the register.
+      if ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+        EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, DestSlot, UInt16(DestSlot)));
     end
     else
     begin
@@ -1865,14 +1880,29 @@ var
   RestParamIndex: Integer;
   RestReg: Integer;
   I: Integer;
+  HasNameBinding: Boolean;
+  NameSlot: UInt8;
+  ClosedLocals: array[0..0] of UInt8;
+  ClosedCount: Integer;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
+
+  // ES2026 §15.2.5: Named function expressions bind the name in an inner
+  // block scope visible inside the body via upvalue capture
+  HasNameBinding := AExpr.Name <> '';
+  if HasNameBinding then
+  begin
+    OldScope.BeginScope;
+    NameSlot := OldScope.DeclareLocal(AExpr.Name, True);
+  end;
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<method>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AExpr.IsAsync;
   ChildTemplate.SourceText := AExpr.SourceText;
+  if HasNameBinding then
+    ChildTemplate.Name := AExpr.Name;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -1938,6 +1968,14 @@ begin
 
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, ADest, FuncIdx));
+
+  if HasNameBinding then
+  begin
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, NameSlot, ADest, 0));
+    OldScope.EndScope(ClosedLocals, ClosedCount);
+    for I := 0 to ClosedCount - 1 do
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+  end;
 end;
 
 procedure CompileCompoundAssignment(const ACtx: TGocciaCompilationContext;

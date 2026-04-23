@@ -441,6 +441,10 @@ begin
   AEngine.VarEnabled := ResolveFlagOption(
     AEngineOptions.CompatVar, AFileConfig, 'compat-var');
 
+  { compat-function: CLI flag > per-file config > root config > default (false) }
+  AEngine.FunctionEnabled := ResolveFlagOption(
+    AEngineOptions.CompatFunction, AFileConfig, 'compat-function');
+
   { unsafe-function-constructor: CLI flag > per-file config > root config > default (false) }
   AEngine.FunctionConstructor.Enabled := ResolveFlagOption(
     AEngineOptions.UnsafeFunctionConstructor, AFileConfig, 'unsafe-function-constructor');

@@ -84,6 +84,9 @@ procedure AssignVariablePattern(const APattern: TGocciaDestructuringPattern; con
 procedure HoistVarDeclarations(const AStatements: TObjectList<TGocciaStatement>; const AScope: TGocciaScope); overload;
 procedure HoistVarDeclarations(const ANodes: TObjectList<TGocciaASTNode>; const AScope: TGocciaScope); overload;
 
+procedure HoistFunctionDeclarations(const AStatements: TObjectList<TGocciaStatement>; const AContext: TGocciaEvaluationContext); overload;
+procedure HoistFunctionDeclarations(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext); overload;
+
 implementation
 
 uses
@@ -290,6 +293,50 @@ begin
   finally
     Names.Free;
   end;
+end;
+
+procedure HoistSingleFunctionDeclaration(const ANode: TGocciaASTNode; const AContext: TGocciaEvaluationContext);
+var
+  VarDecl: TGocciaVariableDeclaration;
+  Value: TGocciaValue;
+begin
+  if ANode is TGocciaVariableDeclaration then
+    VarDecl := TGocciaVariableDeclaration(ANode)
+  else if ANode is TGocciaExportVariableDeclaration then
+    VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration
+  else
+    Exit;
+
+  if not VarDecl.IsFunctionDeclaration then
+    Exit;
+
+  Value := VarDecl.Variables[0].Initializer.Evaluate(AContext);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(Value);
+  try
+    if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
+      TGocciaFunctionValue(Value).Name := VarDecl.Variables[0].Name;
+    AContext.Scope.DefineVariableBinding(VarDecl.Variables[0].Name, Value, True);
+  finally
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(Value);
+  end;
+end;
+
+procedure HoistFunctionDeclarations(const AStatements: TObjectList<TGocciaStatement>; const AContext: TGocciaEvaluationContext);
+var
+  I: Integer;
+begin
+  for I := 0 to AStatements.Count - 1 do
+    HoistSingleFunctionDeclaration(AStatements[I], AContext);
+end;
+
+procedure HoistFunctionDeclarations(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext);
+var
+  I: Integer;
+begin
+  for I := 0 to ANodes.Count - 1 do
+    HoistSingleFunctionDeclaration(ANodes[I], AContext);
 end;
 
 function EvaluateStatements(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -1554,6 +1601,7 @@ end;
 function EvaluateMethodExpression(const AMethodExpression: TGocciaMethodExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Statements: TObjectList<TGocciaASTNode>;
+  ClosureScope: TGocciaScope;
 begin
   if AMethodExpression.Body is TGocciaBlockStatement then
     Statements := CopyStatementList(TGocciaBlockStatement(AMethodExpression.Body).Nodes)
@@ -1563,13 +1611,25 @@ begin
     Statements.Add(AMethodExpression.Body);
   end;
 
-  if AMethodExpression.IsAsync then
-    Result := TGocciaAsyncFunctionValue.Create(AMethodExpression.Parameters, Statements, AContext.Scope.CreateChild)
+  // ES2026 §15.2.5: Named function expressions get an intermediate scope
+  // with a read-only binding of the function name visible inside the body
+  if AMethodExpression.Name <> '' then
+    ClosureScope := AContext.Scope.CreateChild.CreateChild
   else
-    Result := TGocciaFunctionValue.Create(AMethodExpression.Parameters, Statements, AContext.Scope.CreateChild);
+    ClosureScope := AContext.Scope.CreateChild;
+
+  if AMethodExpression.IsAsync then
+    Result := TGocciaAsyncFunctionValue.Create(AMethodExpression.Parameters, Statements, ClosureScope)
+  else
+    Result := TGocciaFunctionValue.Create(AMethodExpression.Parameters, Statements, ClosureScope);
+  TGocciaFunctionValue(Result).Name := AMethodExpression.Name;
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AMethodExpression.Line;
   TGocciaFunctionValue(Result).SourceText := AMethodExpression.SourceText;
+
+  // Bind the function name in the intermediate scope (parent of the closure)
+  if AMethodExpression.Name <> '' then
+    ClosureScope.Parent.DefineLexicalBinding(AMethodExpression.Name, Result, dtConst);
 end;
 
 // TC39 Explicit Resource Management §3.6 DisposeResources — sync disposal

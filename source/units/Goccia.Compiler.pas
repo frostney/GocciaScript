@@ -240,13 +240,114 @@ end;
 
 procedure HoistVarLocals(const ANode: TGocciaASTNode; const AScope: TGocciaCompilerScope); forward;
 
+// Pre-declare all identifier bindings from a destructuring pattern so that
+// hoisted function declarations can resolve upvalue captures.
+procedure PredeclareDestructuringLocals(const APattern: TGocciaDestructuringPattern;
+  const AScope: TGocciaCompilerScope; const AIsConst: Boolean);
+var
+  ObjPat: TGocciaObjectDestructuringPattern;
+  ArrPat: TGocciaArrayDestructuringPattern;
+  I: Integer;
+begin
+  if APattern is TGocciaIdentifierDestructuringPattern then
+  begin
+    if AScope.ResolveLocal(TGocciaIdentifierDestructuringPattern(APattern).Name) < 0 then
+      AScope.DeclareLocal(TGocciaIdentifierDestructuringPattern(APattern).Name, AIsConst);
+  end
+  else if APattern is TGocciaObjectDestructuringPattern then
+  begin
+    ObjPat := TGocciaObjectDestructuringPattern(APattern);
+    for I := 0 to ObjPat.Properties.Count - 1 do
+      PredeclareDestructuringLocals(ObjPat.Properties[I].Pattern, AScope, AIsConst);
+  end
+  else if APattern is TGocciaArrayDestructuringPattern then
+  begin
+    ArrPat := TGocciaArrayDestructuringPattern(APattern);
+    for I := 0 to ArrPat.Elements.Count - 1 do
+      if Assigned(ArrPat.Elements[I]) then
+        PredeclareDestructuringLocals(ArrPat.Elements[I], AScope, AIsConst);
+  end
+  else if APattern is TGocciaAssignmentDestructuringPattern then
+    PredeclareDestructuringLocals(TGocciaAssignmentDestructuringPattern(APattern).Left, AScope, AIsConst)
+  else if APattern is TGocciaRestDestructuringPattern then
+    PredeclareDestructuringLocals(TGocciaRestDestructuringPattern(APattern).Argument, AScope, AIsConst);
+end;
+
+// Pre-declare all bindings from a TGocciaVariableDeclaration that are not
+// already resolved, so hoisted function declarations can capture them.
+procedure PredeclareVarDeclLocals(const AVarDecl: TGocciaVariableDeclaration;
+  const AScope: TGocciaCompilerScope);
+var
+  J: Integer;
+begin
+  for J := 0 to High(AVarDecl.Variables) do
+    if AScope.ResolveLocal(AVarDecl.Variables[J].Name) < 0 then
+      AScope.DeclareLocal(AVarDecl.Variables[J].Name, AVarDecl.IsConst);
+end;
+
+// Pre-declare lexical locals from any statement node that introduces bindings,
+// so that hoisted function declarations can resolve upvalue captures.
+procedure PredeclareLexicalLocals(const ANode: TGocciaASTNode;
+  const AScope: TGocciaCompilerScope);
+var
+  VarDecl: TGocciaVariableDeclaration;
+begin
+  if ANode is TGocciaVariableDeclaration then
+  begin
+    VarDecl := TGocciaVariableDeclaration(ANode);
+    if (not VarDecl.IsVar) and (not VarDecl.IsFunctionDeclaration) then
+      PredeclareVarDeclLocals(VarDecl, AScope);
+  end
+  else if ANode is TGocciaExportVariableDeclaration then
+  begin
+    VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration;
+    if (not VarDecl.IsVar) and (not VarDecl.IsFunctionDeclaration) then
+      PredeclareVarDeclLocals(VarDecl, AScope);
+  end
+  else if (ANode is TGocciaDestructuringDeclaration) and
+          not TGocciaDestructuringDeclaration(ANode).IsVar then
+    PredeclareDestructuringLocals(
+      TGocciaDestructuringDeclaration(ANode).Pattern, AScope,
+      TGocciaDestructuringDeclaration(ANode).IsConst)
+  else if ANode is TGocciaClassDeclaration then
+  begin
+    if AScope.ResolveLocal(TGocciaClassDeclaration(ANode).ClassDefinition.Name) < 0 then
+      AScope.DeclareLocal(TGocciaClassDeclaration(ANode).ClassDefinition.Name, True);
+  end
+  else if ANode is TGocciaEnumDeclaration then
+  begin
+    if AScope.ResolveLocal(TGocciaEnumDeclaration(ANode).Name) < 0 then
+      AScope.DeclareLocal(TGocciaEnumDeclaration(ANode).Name, False);
+  end
+  else if ANode is TGocciaExportEnumDeclaration then
+  begin
+    if AScope.ResolveLocal(TGocciaExportEnumDeclaration(ANode).Declaration.Name) < 0 then
+      AScope.DeclareLocal(TGocciaExportEnumDeclaration(ANode).Declaration.Name, False);
+  end;
+end;
+
+// Returns the inner TGocciaVariableDeclaration if the node is a function
+// declaration (either directly or wrapped in TGocciaExportVariableDeclaration),
+// or nil otherwise.
+function GetFunctionDecl(const ANode: TGocciaASTNode): TGocciaVariableDeclaration;
+begin
+  if ANode is TGocciaVariableDeclaration then
+    Result := TGocciaVariableDeclaration(ANode)
+  else if ANode is TGocciaExportVariableDeclaration then
+    Result := TGocciaExportVariableDeclaration(ANode).Declaration
+  else
+    Exit(nil);
+  if not Result.IsFunctionDeclaration then
+    Result := nil;
+end;
+
 procedure TGocciaCompiler.DoCompileFunctionBody(const ABody: TGocciaASTNode);
 var
   Block: TGocciaBlockStatement;
   I: Integer;
   Node: TGocciaASTNode;
   Reg: UInt8;
-  HasUsing: Boolean;
+  HasUsing, HasFunctionDecl: Boolean;
   SavedFinally: TObject;
 begin
   SavedFinally := Goccia.Compiler.Statements.SavePendingFinally;
@@ -258,6 +359,28 @@ begin
       // Hoist var declarations to function scope
       for I := 0 to Block.Nodes.Count - 1 do
         HoistVarLocals(Block.Nodes[I], FCurrentScope);
+
+      // Check if there are function declarations to hoist
+      HasFunctionDecl := False;
+      for I := 0 to Block.Nodes.Count - 1 do
+        if GetFunctionDecl(Block.Nodes[I]) <> nil then
+        begin
+          HasFunctionDecl := True;
+          Break;
+        end;
+
+      if HasFunctionDecl then
+      begin
+        // Pre-declare lexical locals so function declarations can resolve
+        // upvalue captures for let/const variables declared later in the block
+        for I := 0 to Block.Nodes.Count - 1 do
+          PredeclareLexicalLocals(Block.Nodes[I], FCurrentScope);
+
+        // Hoist function declarations: compile initializers before other statements
+        for I := 0 to Block.Nodes.Count - 1 do
+          if GetFunctionDecl(Block.Nodes[I]) <> nil then
+            DoCompileStatement(TGocciaStatement(Block.Nodes[I]));
+      end;
 
       // Check if the body contains using declarations — if so, delegate
       // to CompileBlockStatement which handles the try/finally disposal.
@@ -276,6 +399,9 @@ begin
         for I := 0 to Block.Nodes.Count - 1 do
         begin
           Node := Block.Nodes[I];
+          // Skip function declarations — already compiled during hoisting
+          if GetFunctionDecl(Node) <> nil then
+            Continue;
           if Node is TGocciaStatement then
             DoCompileStatement(TGocciaStatement(Node))
           else if Node is TGocciaExpression then
@@ -381,6 +507,7 @@ var
   LastStmt: TGocciaStatement;
   RetReg: UInt8;
   Ctx: TGocciaCompilationContext;
+  HasFunctionDecl: Boolean;
 begin
   FModule := TGocciaBytecodeModule.Create(GOCCIA_RUNTIME_TAG, FSourcePath);
   FCurrentTemplate := TGocciaFunctionTemplate.Create('<module>');
@@ -392,13 +519,46 @@ begin
     // Hoist var declarations to module scope
     HoistVarLocalsFromStatements(AProgram.Body, FCurrentScope);
 
+    // Check if there are function declarations to hoist
+    HasFunctionDecl := False;
+    for I := 0 to AProgram.Body.Count - 1 do
+      if GetFunctionDecl(AProgram.Body[I]) <> nil then
+      begin
+        HasFunctionDecl := True;
+        Break;
+      end;
+
+    if HasFunctionDecl then
+    begin
+      // Pre-declare lexical locals so function declarations can resolve
+      // upvalue captures for let/const variables declared later in the body
+      for I := 0 to AProgram.Body.Count - 1 do
+        PredeclareLexicalLocals(AProgram.Body[I], FCurrentScope);
+
+      // Hoist function declarations: compile initializers before other statements
+      for I := 0 to AProgram.Body.Count - 1 do
+        if GetFunctionDecl(AProgram.Body[I]) <> nil then
+          DoCompileStatement(AProgram.Body[I]);
+    end;
+
     if AProgram.Body.Count > 0 then
     begin
       for I := 0 to AProgram.Body.Count - 2 do
+      begin
+        // Skip function declarations — already compiled during hoisting
+        if GetFunctionDecl(AProgram.Body[I]) <> nil then
+          Continue;
         DoCompileStatement(AProgram.Body[I]);
+      end;
 
       LastStmt := AProgram.Body[AProgram.Body.Count - 1];
-      if LastStmt is TGocciaExpressionStatement then
+      // Function declarations already compiled during hoisting — just emit return undefined
+      if GetFunctionDecl(LastStmt) <> nil then
+      begin
+        EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
+        EmitInstruction(BuildContext, EncodeABC(OP_RETURN, 0, 0, 0));
+      end
+      else if LastStmt is TGocciaExpressionStatement then
       begin
         RetReg := FCurrentScope.AllocateRegister;
         Ctx := BuildContext;
