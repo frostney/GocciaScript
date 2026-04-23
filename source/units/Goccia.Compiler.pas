@@ -259,6 +259,12 @@ begin
       for I := 0 to Block.Nodes.Count - 1 do
         HoistVarLocals(Block.Nodes[I], FCurrentScope);
 
+      // Hoist function declarations: compile initializers before other statements
+      for I := 0 to Block.Nodes.Count - 1 do
+        if (Block.Nodes[I] is TGocciaVariableDeclaration) and
+           TGocciaVariableDeclaration(Block.Nodes[I]).IsFunctionDeclaration then
+          DoCompileStatement(TGocciaStatement(Block.Nodes[I]));
+
       // Check if the body contains using declarations — if so, delegate
       // to CompileBlockStatement which handles the try/finally disposal.
       HasUsing := False;
@@ -391,6 +397,12 @@ begin
   try
     // Hoist var declarations to module scope
     HoistVarLocalsFromStatements(AProgram.Body, FCurrentScope);
+
+    // Hoist function declarations: compile initializers before other statements
+    for I := 0 to AProgram.Body.Count - 1 do
+      if (AProgram.Body[I] is TGocciaVariableDeclaration) and
+         TGocciaVariableDeclaration(AProgram.Body[I]).IsFunctionDeclaration then
+        DoCompileStatement(AProgram.Body[I]);
 
     if AProgram.Body.Count > 0 then
     begin

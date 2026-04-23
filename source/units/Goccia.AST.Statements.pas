@@ -36,6 +36,7 @@ type
     FVariables: TArray<TGocciaVariableInfo>;
     FIsConst: Boolean;
     FIsVar: Boolean;
+    FIsFunctionDeclaration: Boolean;
   public
     constructor Create(const AVariables: TArray<TGocciaVariableInfo>;
       const AIsConst: Boolean; const ALine, AColumn: Integer;
@@ -44,6 +45,7 @@ type
     property Variables: TArray<TGocciaVariableInfo> read FVariables;
     property IsConst: Boolean read FIsConst;
     property IsVar: Boolean read FIsVar;
+    property IsFunctionDeclaration: Boolean read FIsFunctionDeclaration write FIsFunctionDeclaration;
   end;
 
   TGocciaDestructuringDeclaration = class(TGocciaStatement)

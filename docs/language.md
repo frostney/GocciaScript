@@ -6,9 +6,9 @@
 
 - **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules (named only)
 - **TC39 proposals** — Decorators, decorator metadata, types as comments, enums, `Math.clamp`
-- **Excluded by design** — `function` keyword, `==`/`!=`, `eval`, `arguments`, traditional loops, `with`, default imports/exports
-- **Graceful handling** — Parser-recognized excluded syntax (`function`, `==`, loops, `with`) parses successfully but executes as a no-op with a warning and suggestion
-- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`)
+- **Excluded by design** — `==`/`!=`, `eval`, `arguments`, traditional loops, `with`, default imports/exports
+- **Graceful handling** — Parser-recognized excluded syntax (`==`, loops, `with`) parses successfully but executes as a no-op with a warning and suggestion
+- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`)
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
@@ -31,7 +31,7 @@ const name = "Goccia";
 
 ### Functions
 
-- Arrow functions only (no `function` keyword).
+- Arrow functions by default (`function` keyword via `--compat-function`).
 - Default parameters (including in destructured parameters).
 - Rest parameters (`...args`).
 - Destructuring parameters (array and object patterns with defaults).
@@ -579,7 +579,9 @@ When enabled (CLI: `--compat-var`, engine API: `Engine.VarEnabled := True`, conf
 
 ### `function` Keyword
 
-**Excluded.** Use arrow functions or shorthand methods instead. The parser accepts `function` declarations and expressions but treats them as no-ops (the function body is not executed and the binding is not created), and emits a warning:
+**Opt-in.** Excluded by default; use arrow functions or shorthand methods instead. Available as a compatibility mode via `--compat-function`.
+
+When disabled (default), the parser accepts `function` declarations and expressions but treats them as no-ops (the function body is not executed and the binding is not created), and emits a warning:
 
 ```text
 Warning: 'function' declarations are not supported in GocciaScript
@@ -589,18 +591,17 @@ Warning: 'function' declarations are not supported in GocciaScript
 
 Function expressions in assignment position evaluate to `undefined`. Generator function declarations (`function*`) are also skipped.
 
-The `function` keyword creates several problems:
-
-- **`this` binding confusion** — Regular functions have their own `this` that changes based on how they're called.
-- **Hoisting** — Function declarations are hoisted, making code order misleading.
-- **`arguments` object** — Creates an implicit magic variable.
-
-GocciaScript provides two function definition styles that cover all use cases:
+GocciaScript provides two function definition styles that cover all use cases without the `function` keyword's pitfalls (`this` binding confusion, hoisting surprises, implicit `arguments`):
 
 - **Arrow functions** (`(x) => x + 1`) — Lexical `this`, no hoisting, no `arguments`. Use for standalone functions, callbacks, and closures.
 - **Shorthand methods** (`method() {}`) — Call-site `this`, like ECMAScript's regular functions. Use in object literals and class definitions where `this` binding is needed.
 
-This separation is clean and matches ECMAScript strict mode semantics exactly.
+When enabled (CLI: `--compat-function`, engine API: `Engine.FunctionEnabled := True`, config: `{"compat-function": true}`), `function` declarations and expressions are fully supported. The `arguments` object remains excluded regardless of this flag.
+
+- **Function declarations** (`function name(params) { body }`) are desugared to var-scoped bindings backed by `TGocciaMethodExpression`, which produces call-site `this` binding (not lexical). Declarations are hoisted: both the name and the function value are available before the declaration is reached, matching ES2026 §15.2.6 semantics. Uses the same var binding infrastructure (`DefineVariableBinding`) as `--compat-var`.
+- **Function expressions** (`const f = function(params) { body }`) produce the same `TGocciaMethodExpression` node. Named function expressions consume the name but do not create a binding inside the function body.
+- **Async functions** (`async function name(params) { body }`) are supported in both declaration and expression forms.
+- **Generator functions** (`function*`) remain unsupported; they produce a warning and are skipped.
 
 ### Loose Equality (`==` and `!=`)
 

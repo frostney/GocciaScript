@@ -438,6 +438,10 @@ begin
   AEngine.VarEnabled := ResolveFlagOption(
     AEngineOptions.CompatVar, AFileConfig, 'compat-var');
 
+  { compat-function: CLI flag > per-file config > root config > default (false) }
+  AEngine.FunctionEnabled := ResolveFlagOption(
+    AEngineOptions.CompatFunction, AFileConfig, 'compat-function');
+
   { max-memory: CLI > per-file config > root config > system default.
     Always set explicitly so a previous file's per-file override does
     not leak into subsequent files (GC.MaxBytes is process-global). }

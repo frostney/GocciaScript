@@ -25,6 +25,7 @@ type
   private
     FASIEnabled: Boolean;
     FVarEnabled: Boolean;
+    FFunctionEnabled: Boolean;
     FContentProvider: TGocciaModuleContentProvider;
     FEvaluateModuleBody: TGocciaModuleBodyEvaluator;
     FEntryFileName: string;
@@ -63,6 +64,7 @@ type
     property ASIEnabled: Boolean read FASIEnabled write FASIEnabled;
     property JSXEnabled: Boolean read FJSXEnabled write FJSXEnabled;
     property VarEnabled: Boolean read FVarEnabled write FVarEnabled;
+    property FunctionEnabled: Boolean read FFunctionEnabled write FFunctionEnabled;
     property Resolver: TGocciaModuleResolver read FResolver;
   end;
 
@@ -247,6 +249,7 @@ begin
             Lexer.SourceLines);
           Parser.AutomaticSemicolonInsertion := FASIEnabled;
           Parser.VarDeclarationsEnabled := FVarEnabled;
+          Parser.FunctionDeclarationsEnabled := FFunctionEnabled;
           try
             ProgramNode := Parser.Parse;
             try

@@ -84,6 +84,9 @@ procedure AssignVariablePattern(const APattern: TGocciaDestructuringPattern; con
 procedure HoistVarDeclarations(const AStatements: TObjectList<TGocciaStatement>; const AScope: TGocciaScope); overload;
 procedure HoistVarDeclarations(const ANodes: TObjectList<TGocciaASTNode>; const AScope: TGocciaScope); overload;
 
+procedure HoistFunctionDeclarations(const AStatements: TObjectList<TGocciaStatement>; const AContext: TGocciaEvaluationContext); overload;
+procedure HoistFunctionDeclarations(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext); overload;
+
 implementation
 
 uses
@@ -289,6 +292,50 @@ begin
       AScope.DefineVariableBinding(Names[I], TGocciaUndefinedLiteralValue.UndefinedValue, False);
   finally
     Names.Free;
+  end;
+end;
+
+procedure HoistFunctionDeclarations(const AStatements: TObjectList<TGocciaStatement>; const AContext: TGocciaEvaluationContext);
+var
+  I: Integer;
+  VarDecl: TGocciaVariableDeclaration;
+  Value: TGocciaValue;
+begin
+  for I := 0 to AStatements.Count - 1 do
+  begin
+    if AStatements[I] is TGocciaVariableDeclaration then
+    begin
+      VarDecl := TGocciaVariableDeclaration(AStatements[I]);
+      if VarDecl.IsFunctionDeclaration then
+      begin
+        Value := VarDecl.Variables[0].Initializer.Evaluate(AContext);
+        if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
+          TGocciaFunctionValue(Value).Name := VarDecl.Variables[0].Name;
+        AContext.Scope.DefineVariableBinding(VarDecl.Variables[0].Name, Value, True);
+      end;
+    end;
+  end;
+end;
+
+procedure HoistFunctionDeclarations(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext);
+var
+  I: Integer;
+  VarDecl: TGocciaVariableDeclaration;
+  Value: TGocciaValue;
+begin
+  for I := 0 to ANodes.Count - 1 do
+  begin
+    if ANodes[I] is TGocciaVariableDeclaration then
+    begin
+      VarDecl := TGocciaVariableDeclaration(ANodes[I]);
+      if VarDecl.IsFunctionDeclaration then
+      begin
+        Value := VarDecl.Variables[0].Initializer.Evaluate(AContext);
+        if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
+          TGocciaFunctionValue(Value).Name := VarDecl.Variables[0].Name;
+        AContext.Scope.DefineVariableBinding(VarDecl.Variables[0].Name, Value, True);
+      end;
+    end;
   end;
 end;
 
