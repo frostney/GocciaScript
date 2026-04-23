@@ -588,8 +588,8 @@ var
   CallArgs: TGocciaArrayCallbackArgs;
   I: Integer;
 begin
-  Callback := ValidateArrayMethodCall('map', AArgs, AThisValue, True);
   View.Init(AThisValue);
+  Callback := ValidateArrayMethodCall('map', AArgs, AThisValue, True);
   if Assigned(View.Arr) then
     ResultArray := ArraySpeciesCreate(View.Arr, View.Len)
   else
@@ -617,6 +617,10 @@ begin
     CallArgs.Free;
   end;
 
+  // Ensure result has correct length (preserve trailing holes)
+  while ResultArray.Elements.Count < View.Len do
+    ResultArray.Elements.Add(TGocciaHoleValue.HoleValue);
+
   Result := ResultArray;
 end;
 
@@ -631,8 +635,8 @@ var
   PredicateResult, Element: TGocciaValue;
   I: Integer;
 begin
-  Callback := ValidateArrayMethodCall('filter', AArgs, AThisValue, True);
   View.Init(AThisValue);
+  Callback := ValidateArrayMethodCall('filter', AArgs, AThisValue, True);
   if Assigned(View.Arr) then
     ResultArray := ArraySpeciesCreate(View.Arr, 0)
   else
@@ -677,8 +681,8 @@ var
   CallArgs: TGocciaReduceCallbackArgs;
   I, StartIndex: Integer;
 begin
-  Callback := ValidateArrayMethodCall('reduce', AArgs, AThisValue, True);
   View.Init(AThisValue);
+  Callback := ValidateArrayMethodCall('reduce', AArgs, AThisValue, True);
 
   if AArgs.Length >= 2 then
   begin
@@ -738,8 +742,8 @@ var
   CallArgs: TGocciaArrayCallbackArgs;
   I: Integer;
 begin
-  Callback := ValidateArrayMethodCall('forEach', AArgs, AThisValue, True);
   View.Init(AThisValue);
+  Callback := ValidateArrayMethodCall('forEach', AArgs, AThisValue, True);
 
   TypedCallback := nil;
   if Callback is TGocciaFunctionBase then
@@ -864,8 +868,8 @@ var
   I: Integer;
   SomeResult: TGocciaValue;
 begin
-  Callback := ValidateArrayMethodCall('some', AArgs, AThisValue, True);
   View.Init(AThisValue);
+  Callback := ValidateArrayMethodCall('some', AArgs, AThisValue, True);
 
   TypedCallback := nil;
   if Callback is TGocciaFunctionBase then
@@ -907,8 +911,8 @@ var
   I: Integer;
   EveryResult: TGocciaValue;
 begin
-  Callback := ValidateArrayMethodCall('every', AArgs, AThisValue, True);
   View.Init(AThisValue);
+  Callback := ValidateArrayMethodCall('every', AArgs, AThisValue, True);
 
   TypedCallback := nil;
   if Callback is TGocciaFunctionBase then
@@ -1031,8 +1035,8 @@ var
   I, J: Integer;
   MappedValue: TGocciaValue;
 begin
-  Callback := ValidateArrayMethodCall('flatMap', AArgs, AThisValue, True);
   View.Init(AThisValue);
+  Callback := ValidateArrayMethodCall('flatMap', AArgs, AThisValue, True);
   if Assigned(View.Arr) then
     ResultArray := ArraySpeciesCreate(View.Arr, 0)
   else
@@ -1177,6 +1181,10 @@ begin
     Inc(N);
   end;
 
+  // Ensure result has correct length (preserve trailing holes)
+  while ResultArray.Elements.Count < N do
+    ResultArray.Elements.Add(TGocciaHoleValue.HoleValue);
+
   // Step 11: Return A
   Result := ResultArray;
 end;
@@ -1191,8 +1199,8 @@ var
   I: Integer;
   Element, CallResult: TGocciaValue;
 begin
-  Callback := ValidateArrayMethodCall('find', AArgs, AThisValue, True);
   View.Init(AThisValue);
+  Callback := ValidateArrayMethodCall('find', AArgs, AThisValue, True);
 
   TypedCallback := nil;
   if Callback is TGocciaFunctionBase then
@@ -1233,8 +1241,8 @@ var
   I: Integer;
   Element, CallResult: TGocciaValue;
 begin
-  Callback := ValidateArrayMethodCall('findIndex', AArgs, AThisValue, True);
   View.Init(AThisValue);
+  Callback := ValidateArrayMethodCall('findIndex', AArgs, AThisValue, True);
 
   TypedCallback := nil;
   if Callback is TGocciaFunctionBase then
@@ -1275,8 +1283,8 @@ var
   I: Integer;
   Element, CallResult: TGocciaValue;
 begin
-  Callback := ValidateArrayMethodCall('findLast', AArgs, AThisValue, True);
   View.Init(AThisValue);
+  Callback := ValidateArrayMethodCall('findLast', AArgs, AThisValue, True);
 
   TypedCallback := nil;
   if Callback is TGocciaFunctionBase then
@@ -1317,8 +1325,8 @@ var
   I: Integer;
   Element, CallResult: TGocciaValue;
 begin
-  Callback := ValidateArrayMethodCall('findLastIndex', AArgs, AThisValue, True);
   View.Init(AThisValue);
+  Callback := ValidateArrayMethodCall('findLastIndex', AArgs, AThisValue, True);
 
   TypedCallback := nil;
   if Callback is TGocciaFunctionBase then
@@ -1582,6 +1590,9 @@ begin
       ArrayCreateDataProperty(AResult, N, SrcView.Get(J));
     Inc(N);
   end;
+  // Ensure result reflects trailing holes from this spread
+  while AResult.Elements.Count < N do
+    AResult.Elements.Add(TGocciaHoleValue.HoleValue);
 end;
 
 // ES2026 §23.1.3.1 Array.prototype.concat(...arguments)
@@ -2077,6 +2088,10 @@ begin
   for I := 0 to ItemCount - 1 do
     View.Put(ActualStart + I, AArgs.GetElement(I + 2));
   View.SetLen(NewLen);
+
+  // Ensure removed array has correct length (preserve trailing holes)
+  while Removed.Elements.Count < DeleteCount do
+    Removed.Elements.Add(TGocciaHoleValue.HoleValue);
 
   // Step 17: Return A
   Result := Removed;
