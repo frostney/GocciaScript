@@ -80,9 +80,9 @@ test("generic receiver iterates array-like", () => {
 });
 
 test("null this throws TypeError", () => {
-  expect(() => Array.prototype.forEach.call(null, x => x)).toThrow();
+  expect(() => Array.prototype.forEach.call(null, x => x)).toThrow(TypeError);
 });
 
 test("undefined this throws TypeError even without callback", () => {
-  expect(() => Array.prototype.forEach.call(undefined)).toThrow();
+  expect(() => Array.prototype.forEach.call(undefined)).toThrow(TypeError);
 });

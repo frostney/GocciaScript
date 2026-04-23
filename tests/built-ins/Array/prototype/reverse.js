@@ -41,6 +41,7 @@ describe('Array.prototype.reverse', () => {
   test('generic receiver reverses array-like in place', () => {
     const obj = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
     const result = Array.prototype.reverse.call(obj);
+    expect(result).toBe(obj);
     expect(result[0]).toBe('c');
     expect(result[1]).toBe('b');
     expect(result[2]).toBe('a');

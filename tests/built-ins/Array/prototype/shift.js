@@ -29,5 +29,6 @@ describe("Array.prototype.shift", () => {
     expect(obj[0]).toBe('b');
     expect(obj[1]).toBe('c');
     expect(obj.length).toBe(2);
+    expect(obj.hasOwnProperty('2')).toBe(false);
   });
 });

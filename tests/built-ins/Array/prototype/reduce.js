@@ -124,7 +124,7 @@ test("generic receiver accumulates over array-like", () => {
 });
 
 test("null this throws TypeError before callback check", () => {
-  expect(() => Array.prototype.reduce.call(null)).toThrow();
+  expect(() => Array.prototype.reduce.call(null)).toThrow(TypeError);
 });
 
 test("sparse array seeds from first present element", () => {
@@ -132,6 +132,6 @@ test("sparse array seeds from first present element", () => {
   expect(result).toBe(3);
 });
 
-test("all-holes array with no initial value throws", () => {
-  expect(() => [, , ,].reduce((a, b) => a + b)).toThrow();
+test("all-holes array with no initial value throws TypeError", () => {
+  expect(() => [, , ,].reduce((a, b) => a + b)).toThrow(TypeError);
 });

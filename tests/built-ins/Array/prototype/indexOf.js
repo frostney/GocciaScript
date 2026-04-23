@@ -59,7 +59,7 @@ describe('Array.prototype.indexOf', () => {
   });
 
   test('null or undefined this throws TypeError', () => {
-    expect(() => Array.prototype.indexOf.call(null, 1)).toThrow();
-    expect(() => Array.prototype.indexOf.call(undefined, 1)).toThrow();
+    expect(() => Array.prototype.indexOf.call(null, 1)).toThrow(TypeError);
+    expect(() => Array.prototype.indexOf.call(undefined, 1)).toThrow(TypeError);
   });
 });

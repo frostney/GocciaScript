@@ -107,12 +107,12 @@ test("generic receiver transforms array-like", () => {
   expect(result).toEqual(['A', 'B', 'C']);
 });
 
-test("primitive this returns empty array", () => {
+test("non-string primitive (boolean) this returns empty array", () => {
   expect(Array.prototype.map.call(true, x => x)).toEqual([]);
 });
 
 test("null this throws TypeError even without callback", () => {
-  expect(() => Array.prototype.map.call(null)).toThrow();
+  expect(() => Array.prototype.map.call(null)).toThrow(TypeError);
 });
 
 test("map preserves trailing holes in sparse array", () => {

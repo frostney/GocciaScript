@@ -35,4 +35,8 @@ test("generic receiver creates reversed copy from array-like", () => {
   const arrayLike = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
   const result = Array.prototype.toReversed.call(arrayLike);
   expect(result).toEqual(['c', 'b', 'a']);
+  expect(arrayLike[0]).toBe('a');
+  expect(arrayLike[1]).toBe('b');
+  expect(arrayLike[2]).toBe('c');
+  expect(arrayLike.length).toBe(3);
 });
