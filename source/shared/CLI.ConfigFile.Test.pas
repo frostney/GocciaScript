@@ -63,6 +63,14 @@ type
     procedure TestFindConfigEntryReturnsMatch;
     procedure TestFindConfigEntryReturnsFalseWhenMissing;
     procedure TestFindConfigEntryFirstMatchWins;
+
+    { ResolveFlagOption }
+    procedure TestResolveFlagOptionCLIWins;
+    procedure TestResolveFlagOptionPerFileOverridesRoot;
+    procedure TestResolveFlagOptionPerFileFalseOverridesRoot;
+    procedure TestResolveFlagOptionFallsBackToRoot;
+    procedure TestResolveFlagOptionEmptyStringEnablesFlag;
+    procedure TestResolveFlagOptionDefaultsFalse;
   protected
     procedure BeforeAll; override;
     procedure AfterAll; override;
@@ -108,6 +116,13 @@ begin
   Test('FindConfigEntry returns matching value', TestFindConfigEntryReturnsMatch);
   Test('FindConfigEntry returns false when key missing', TestFindConfigEntryReturnsFalseWhenMissing);
   Test('FindConfigEntry first match wins for duplicate keys', TestFindConfigEntryFirstMatchWins);
+
+  Test('ResolveFlagOption returns True when flag is from CLI', TestResolveFlagOptionCLIWins);
+  Test('ResolveFlagOption uses per-file config over root config', TestResolveFlagOptionPerFileOverridesRoot);
+  Test('ResolveFlagOption per-file false overrides root true', TestResolveFlagOptionPerFileFalseOverridesRoot);
+  Test('ResolveFlagOption falls back to root when no per-file config', TestResolveFlagOptionFallsBackToRoot);
+  Test('ResolveFlagOption treats empty string as enabled', TestResolveFlagOptionEmptyStringEnablesFlag);
+  Test('ResolveFlagOption defaults to False when nothing is set', TestResolveFlagOptionDefaultsFalse);
 end;
 
 procedure TConfigFileTests.BeforeAll;
@@ -864,6 +879,147 @@ begin
 
   Expect<Boolean>(FindConfigEntry(Entries, 'alias', Value)).ToBe(True);
   Expect<string>(Value).ToBe('@/=./src/');
+end;
+
+{ ── ResolveFlagOption tests ─────────────────────────────────── }
+
+procedure TConfigFileTests.TestResolveFlagOptionCLIWins;
+var
+  Flag: TGocciaFlagOption;
+  FileConfig: TConfigEntryArray;
+begin
+  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  try
+    Flag.Apply('');
+    Flag.MarkFromCommandLine;
+
+    { Per-file config says false, but CLI should win }
+    SetLength(FileConfig, 1);
+    FileConfig[0].Key := 'asi';
+    FileConfig[0].Value := 'false';
+
+    Expect<Boolean>(ResolveFlagOption(Flag, FileConfig, 'asi')).ToBe(True);
+  finally
+    Flag.Free;
+  end;
+end;
+
+procedure TConfigFileTests.TestResolveFlagOptionPerFileOverridesRoot;
+var
+  Flag: TGocciaFlagOption;
+  FileConfig: TConfigEntryArray;
+  Options: TGocciaOptionArray;
+  RootEntries: TConfigEntryArray;
+begin
+  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  try
+    { Root config sets asi='false' — ApplyConfigEntries skips Apply for
+      flag value 'false', so Present remains False. }
+    SetLength(Options, 1);
+    Options[0] := Flag;
+    SetLength(RootEntries, 1);
+    RootEntries[0].Key := 'asi';
+    RootEntries[0].Value := 'false';
+    ApplyConfigEntries(RootEntries, Options);
+
+    { Per-file config says true — should override root }
+    SetLength(FileConfig, 1);
+    FileConfig[0].Key := 'asi';
+    FileConfig[0].Value := 'true';
+
+    Expect<Boolean>(ResolveFlagOption(Flag, FileConfig, 'asi')).ToBe(True);
+  finally
+    Flag.Free;
+  end;
+end;
+
+procedure TConfigFileTests.TestResolveFlagOptionPerFileFalseOverridesRoot;
+var
+  Flag: TGocciaFlagOption;
+  FileConfig: TConfigEntryArray;
+  Options: TGocciaOptionArray;
+  RootEntries: TConfigEntryArray;
+begin
+  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  try
+    { Simulate root config setting asi=true (Present but not FromCommandLine) }
+    SetLength(Options, 1);
+    Options[0] := Flag;
+    SetLength(RootEntries, 1);
+    RootEntries[0].Key := 'asi';
+    RootEntries[0].Value := 'true';
+    ApplyConfigEntries(RootEntries, Options);
+    Expect<Boolean>(Flag.Present).ToBe(True);
+
+    { Per-file config says false — should override root }
+    SetLength(FileConfig, 1);
+    FileConfig[0].Key := 'asi';
+    FileConfig[0].Value := 'false';
+
+    Expect<Boolean>(ResolveFlagOption(Flag, FileConfig, 'asi')).ToBe(False);
+  finally
+    Flag.Free;
+  end;
+end;
+
+procedure TConfigFileTests.TestResolveFlagOptionFallsBackToRoot;
+var
+  Flag: TGocciaFlagOption;
+  FileConfig: TConfigEntryArray;
+  Options: TGocciaOptionArray;
+  RootEntries: TConfigEntryArray;
+begin
+  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  try
+    { Simulate root config setting asi=true }
+    SetLength(Options, 1);
+    Options[0] := Flag;
+    SetLength(RootEntries, 1);
+    RootEntries[0].Key := 'asi';
+    RootEntries[0].Value := 'true';
+    ApplyConfigEntries(RootEntries, Options);
+
+    { No per-file config — should fall back to root (Present=True) }
+    SetLength(FileConfig, 0);
+
+    Expect<Boolean>(ResolveFlagOption(Flag, FileConfig, 'asi')).ToBe(True);
+  finally
+    Flag.Free;
+  end;
+end;
+
+procedure TConfigFileTests.TestResolveFlagOptionEmptyStringEnablesFlag;
+var
+  Flag: TGocciaFlagOption;
+  FileConfig: TConfigEntryArray;
+begin
+  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  try
+    { Per-file config with empty string — matches ApplyConfigEntries behavior }
+    SetLength(FileConfig, 1);
+    FileConfig[0].Key := 'asi';
+    FileConfig[0].Value := '';
+
+    Expect<Boolean>(ResolveFlagOption(Flag, FileConfig, 'asi')).ToBe(True);
+  finally
+    Flag.Free;
+  end;
+end;
+
+procedure TConfigFileTests.TestResolveFlagOptionDefaultsFalse;
+var
+  Flag: TGocciaFlagOption;
+  FileConfig: TConfigEntryArray;
+begin
+  Flag := TGocciaFlagOption.Create('asi', 'ASI');
+  try
+    { No CLI, no root config, no per-file config — should default to False }
+    SetLength(FileConfig, 0);
+
+    Expect<Boolean>(ResolveFlagOption(Flag, FileConfig, 'asi')).ToBe(False);
+  finally
+    Flag.Free;
+  end;
 end;
 
 begin

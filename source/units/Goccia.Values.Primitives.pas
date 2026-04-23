@@ -233,6 +233,7 @@ begin
   // No-op for primitives
 end;
 
+
 { Utility functions }
 
 procedure PinPrimitiveSingletons;
