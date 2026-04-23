@@ -2557,7 +2557,13 @@ begin
         if (Result is TGocciaVariableDeclaration) and
            (Length(TGocciaVariableDeclaration(Result).Variables) = 1) and
            (TGocciaVariableDeclaration(Result).Variables[0].Initializer is TGocciaMethodExpression) then
+        begin
           TGocciaMethodExpression(TGocciaVariableDeclaration(Result).Variables[0].Initializer).IsAsync := True;
+          // Override SourceText to include 'async' prefix (FunctionStatement
+          // sets it from the 'function' token; Line/Column are the 'async' token)
+          TGocciaMethodExpression(TGocciaVariableDeclaration(Result).Variables[0].Initializer).SourceText :=
+            ExtractSourceRange(Line, Column);
+        end;
       end;
     end;
   end
@@ -3724,6 +3730,7 @@ var
   NameToken: TGocciaToken;
   IsReExport: Boolean;
   IsTypeOnlyBinding: Boolean;
+  AsyncLine, AsyncColumn: Integer;
   I: Integer;
 
   function HasFromClauseAfterNamedExports: Boolean;
@@ -3806,7 +3813,9 @@ begin
      (FTokens[FCurrent + 1].TokenType = gttFunction) then
   begin
     Advance; // consume 'async'
-    case TryConsumeAsyncFunction(Previous.Line, Previous.Column) of
+    AsyncLine := Previous.Line;
+    AsyncColumn := Previous.Column;
+    case TryConsumeAsyncFunction(AsyncLine, AsyncColumn) of
       afcNotMatched:
       begin
         // async and function on different lines — back up and fall through
@@ -3828,7 +3837,13 @@ begin
         if (InnerDecl is TGocciaVariableDeclaration) and
            (Length(TGocciaVariableDeclaration(InnerDecl).Variables) = 1) and
            (TGocciaVariableDeclaration(InnerDecl).Variables[0].Initializer is TGocciaMethodExpression) then
+        begin
           TGocciaMethodExpression(TGocciaVariableDeclaration(InnerDecl).Variables[0].Initializer).IsAsync := True;
+          // Override SourceText to include 'async' prefix (FunctionStatement
+          // sets it from the 'function' token; AsyncLine/AsyncColumn are the 'async' token)
+          TGocciaMethodExpression(TGocciaVariableDeclaration(InnerDecl).Variables[0].Initializer).SourceText :=
+            ExtractSourceRange(AsyncLine, AsyncColumn);
+        end;
         if InnerDecl is TGocciaVariableDeclaration then
         begin
           VarDecl := TGocciaVariableDeclaration(InnerDecl);
