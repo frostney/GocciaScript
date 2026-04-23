@@ -4400,17 +4400,6 @@ begin
               KeyToPropertyNameRegister(FRegisters[C])));
         end
         else if (FRegisters[B].Kind = grkObject) and
-                (FRegisters[B].ObjectValue is TGocciaObjectValue) then
-        begin
-          if (FRegisters[C].Kind = grkObject) and
-             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
-            SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetSymbolProperty(
-              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
-          else
-            SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetProperty(
-              KeyToPropertyNameRegister(FRegisters[C])));
-        end
-        else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaClassValue) then
         begin
           if (FRegisters[C].Kind = grkObject) and
@@ -4419,6 +4408,17 @@ begin
               TGocciaSymbolValue(FRegisters[C].ObjectValue)))
           else
             SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
+              KeyToPropertyNameRegister(FRegisters[C])));
+        end
+        else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaObjectValue) then
+        begin
+          if (FRegisters[C].Kind = grkObject) and
+             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
+            SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetSymbolProperty(
+              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
+          else
+            SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetProperty(
               KeyToPropertyNameRegister(FRegisters[C])));
         end
         else if (FRegisters[B].Kind = grkObject) and
@@ -4458,18 +4458,6 @@ begin
               RegisterToValue(FRegisters[C]));
         end
         else if (FRegisters[A].Kind = grkObject) and
-                (FRegisters[A].ObjectValue is TGocciaObjectValue) then
-        begin
-          if (FRegisters[B].Kind = grkObject) and
-             (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
-            TGocciaObjectValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
-              TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
-          else
-            TGocciaObjectValue(FRegisters[A].ObjectValue).SetProperty(
-              KeyToPropertyNameRegister(FRegisters[B]),
-              RegisterToValue(FRegisters[C]));
-        end
-        else if (FRegisters[A].Kind = grkObject) and
                 (FRegisters[A].ObjectValue is TGocciaClassValue) then
         begin
           if (FRegisters[B].Kind = grkObject) and
@@ -4478,6 +4466,18 @@ begin
               TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
           else
             TGocciaClassValue(FRegisters[A].ObjectValue).SetProperty(
+              KeyToPropertyNameRegister(FRegisters[B]),
+              RegisterToValue(FRegisters[C]));
+        end
+        else if (FRegisters[A].Kind = grkObject) and
+                (FRegisters[A].ObjectValue is TGocciaObjectValue) then
+        begin
+          if (FRegisters[B].Kind = grkObject) and
+             (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
+            TGocciaObjectValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
+              TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
+          else
+            TGocciaObjectValue(FRegisters[A].ObjectValue).SetProperty(
               KeyToPropertyNameRegister(FRegisters[B]),
               RegisterToValue(FRegisters[C]));
         end;
@@ -4506,8 +4506,9 @@ begin
       begin
         FRegisters[A] := RegisterObject(TGocciaVMClassValue.Create(Self,
           Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue, nil));
-        TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.AssignProperty(
-          PROP_CONSTRUCTOR, FRegisters[A].ObjectValue);
+        TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.DefineProperty(
+          PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(
+            FRegisters[A].ObjectValue, [pfConfigurable, pfWritable]));
       end;
 
       OP_CLASS_SET_SUPER:
@@ -4519,6 +4520,10 @@ begin
         begin
           TGocciaVMClassValue(FRegisters[A].ObjectValue).SuperClass :=
             TGocciaClassValue(FRegisters[B].ObjectValue);
+          // Set [[Prototype]] of derived class constructor to superclass
+          TGocciaObjectValue(FRegisters[A].ObjectValue).Prototype :=
+            TGocciaObjectValue(FRegisters[B].ObjectValue);
+          // Set .prototype chain: DerivedClass.prototype.[[Prototype]] = SuperClass.prototype
           TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.Prototype :=
             TGocciaClassValue(FRegisters[B].ObjectValue).Prototype;
         end;
@@ -4534,12 +4539,15 @@ begin
           begin
             TGocciaVMClassValue(FRegisters[A].ObjectValue).SetVMConstructor(
               RegisterToValue(FRegisters[C]));
-            TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.AssignProperty(
-              PROP_CONSTRUCTOR, FRegisters[A].ObjectValue);
+            TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.DefineProperty(
+              PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(
+                FRegisters[A].ObjectValue, [pfConfigurable, pfWritable]));
           end
           else
-            TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.AssignProperty(
-              GlobalName, RegisterToValue(FRegisters[C]));
+            // ES §14.3.7: class prototype methods are non-enumerable
+            TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.DefineProperty(
+              GlobalName, TGocciaPropertyDescriptorData.Create(
+                RegisterToValue(FRegisters[C]), [pfConfigurable, pfWritable]));
         end
         else if (FRegisters[A].Kind = grkObject) and Assigned(FRegisters[A].ObjectValue) then
           SetPropertyValue(FRegisters[A].ObjectValue, GlobalName, RegisterToValue(FRegisters[C]))
@@ -4748,18 +4756,6 @@ begin
               RegisterToValue(FRegisters[C]));
         end
         else if (FRegisters[A].Kind = grkObject) and
-                (FRegisters[A].ObjectValue is TGocciaObjectValue) then
-        begin
-          if (FRegisters[B].Kind = grkObject) and
-             (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
-            TGocciaObjectValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
-              TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
-          else
-            TGocciaObjectValue(FRegisters[A].ObjectValue).SetProperty(
-              KeyToPropertyNameRegister(FRegisters[B]),
-              RegisterToValue(FRegisters[C]));
-        end
-        else if (FRegisters[A].Kind = grkObject) and
                 (FRegisters[A].ObjectValue is TGocciaClassValue) then
         begin
           if (FRegisters[B].Kind = grkObject) and
@@ -4768,6 +4764,18 @@ begin
               TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
           else
             TGocciaClassValue(FRegisters[A].ObjectValue).SetProperty(
+              KeyToPropertyNameRegister(FRegisters[B]),
+              RegisterToValue(FRegisters[C]));
+        end
+        else if (FRegisters[A].Kind = grkObject) and
+                (FRegisters[A].ObjectValue is TGocciaObjectValue) then
+        begin
+          if (FRegisters[B].Kind = grkObject) and
+             (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
+            TGocciaObjectValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
+              TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
+          else
+            TGocciaObjectValue(FRegisters[A].ObjectValue).SetProperty(
               KeyToPropertyNameRegister(FRegisters[B]),
               RegisterToValue(FRegisters[C]));
         end;

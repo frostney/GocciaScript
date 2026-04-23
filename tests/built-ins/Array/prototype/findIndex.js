@@ -38,4 +38,10 @@ describe('Array.prototype.findIndex', () => {
   test('empty array returns -1', () => {
     expect([].findIndex(() => true)).toBe(-1);
   });
+
+  test('generic receiver finds index in array-like', () => {
+    const arrayLike = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
+    expect(Array.prototype.findIndex.call(arrayLike, x => x === 'b')).toBe(1);
+    expect(Array.prototype.findIndex.call(arrayLike, x => x === 'z')).toBe(-1);
+  });
 });

@@ -46,4 +46,20 @@ describe('Array.prototype.indexOf', () => {
   test('empty array returns -1', () => {
     expect([].indexOf(undefined)).toBe(-1);
   });
+
+  test('generic receiver finds element in array-like', () => {
+    const arrayLike = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
+    expect(Array.prototype.indexOf.call(arrayLike, 'b')).toBe(1);
+    expect(Array.prototype.indexOf.call(arrayLike, 'z')).toBe(-1);
+  });
+
+  test('primitive this returns -1', () => {
+    expect(Array.prototype.indexOf.call(true, 1)).toBe(-1);
+    expect(Array.prototype.indexOf.call(42, 4)).toBe(-1);
+  });
+
+  test('null or undefined this throws TypeError', () => {
+    expect(() => Array.prototype.indexOf.call(null, 1)).toThrow(TypeError);
+    expect(() => Array.prototype.indexOf.call(undefined, 1)).toThrow(TypeError);
+  });
 });

@@ -72,4 +72,10 @@ describe('Array.prototype.find', () => {
     const result = [1, NaN, 3].find((x) => Number.isNaN(x));
     expect(Number.isNaN(result)).toBe(true);
   });
+
+  test('generic receiver finds element in array-like', () => {
+    const arrayLike = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
+    const result = Array.prototype.find.call(arrayLike, x => x === 'b');
+    expect(result).toBe('b');
+  });
 });

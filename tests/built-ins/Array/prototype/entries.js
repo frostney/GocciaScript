@@ -25,3 +25,15 @@ test("works with spread and destructuring", () => {
 test("empty array entries", () => {
   expect([...[].entries()]).toEqual([]);
 });
+
+test("generic receiver iterates array-like as [index, value] pairs", () => {
+  const obj = { 0: 'a', 1: 'b', length: 2 };
+  const iter = Array.prototype.entries.call(obj);
+  const first = iter.next().value;
+  expect(first[0]).toBe(0);
+  expect(first[1]).toBe('a');
+  const second = iter.next().value;
+  expect(second[0]).toBe(1);
+  expect(second[1]).toBe('b');
+  expect(iter.next().done).toBe(true);
+});

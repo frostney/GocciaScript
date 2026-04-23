@@ -24,7 +24,8 @@ implementation
 uses
   Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
-  Goccia.Values.ClassValue;
+  Goccia.Values.ClassValue,
+  Goccia.Values.ObjectPropertyDescriptor;
 
 constructor TGocciaSharedPrototype.Create(const AMethodHost: TGocciaValue);
 begin
@@ -46,7 +47,8 @@ begin
     TGocciaClassValue(AConstructor).ReplacePrototype(FPrototype)
   else if AConstructor is TGocciaObjectValue then
     TGocciaObjectValue(AConstructor).AssignProperty(PROP_PROTOTYPE, FPrototype);
-  FPrototype.AssignProperty(PROP_CONSTRUCTOR, AConstructor);
+  FPrototype.DefineProperty(PROP_CONSTRUCTOR,
+    TGocciaPropertyDescriptorData.Create(AConstructor, [pfConfigurable, pfWritable]));
 end;
 
 end.

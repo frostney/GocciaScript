@@ -81,3 +81,10 @@ test("instance constructor is Map", () => {
   const m = new Map();
   expect(m.constructor).toBe(Map);
 });
+
+test("Map.prototype.constructor is non-enumerable", () => {
+  const desc = Object.getOwnPropertyDescriptor(Map.prototype, "constructor");
+  expect(desc.writable).toBe(true);
+  expect(desc.enumerable).toBe(false);
+  expect(desc.configurable).toBe(true);
+});

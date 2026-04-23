@@ -36,4 +36,12 @@ describe("Array.prototype.push", () => {
     arr.push(null, undefined);
     expect(arr).toEqual([null, undefined]);
   });
+
+  test("generic receiver appends to array-like", () => {
+    const obj = { 0: 'a', length: 1 };
+    const newLen = Array.prototype.push.call(obj, 'b');
+    expect(newLen).toBe(2);
+    expect(obj[1]).toBe('b');
+    expect(obj.length).toBe(2);
+  });
 });

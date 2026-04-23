@@ -82,3 +82,10 @@ test("instance constructor is Set", () => {
   const s = new Set();
   expect(s.constructor).toBe(Set);
 });
+
+test("Set.prototype.constructor is non-enumerable", () => {
+  const desc = Object.getOwnPropertyDescriptor(Set.prototype, "constructor");
+  expect(desc.writable).toBe(true);
+  expect(desc.enumerable).toBe(false);
+  expect(desc.configurable).toBe(true);
+});

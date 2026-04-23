@@ -100,6 +100,65 @@ describe.runIf(hasGoccia)("unsupported features are skipped", () => {
     expect(typeof gen).toBe("undefined");
   });
 
+  test("generator function expression evaluates to undefined", () => {
+    const fn = function*() { yield 1; };
+    expect(fn).toBe(undefined);
+  });
+
+  test("generator method in object is skipped", () => {
+    const obj = { *gen() { yield 1; }, x: 42 };
+    expect(obj.x).toBe(42);
+    expect(typeof obj.gen).toBe("undefined");
+  });
+
+  test("async generator method in object is skipped", () => {
+    const obj = { async *gen() { yield 1; }, x: 42 };
+    expect(obj.x).toBe(42);
+    expect(typeof obj.gen).toBe("undefined");
+  });
+
+  test("generator method in class is skipped", () => {
+    class Foo {
+      *gen() { yield 1; }
+      bar() { return 42; }
+    }
+    const f = new Foo();
+    expect(f.bar()).toBe(42);
+    expect(typeof f.gen).toBe("undefined");
+  });
+
+  test("async generator method in class is skipped", () => {
+    class Foo {
+      async *gen() { yield 1; }
+      bar() { return 42; }
+    }
+    const f = new Foo();
+    expect(f.bar()).toBe(42);
+    expect(typeof f.gen).toBe("undefined");
+  });
+
+  test("static generator method in class is skipped", () => {
+    class Foo {
+      static *gen() { yield 1; }
+      bar() { return 42; }
+    }
+    const f = new Foo();
+    expect(f.bar()).toBe(42);
+    expect(typeof Foo.gen).toBe("undefined");
+  });
+
+  test("generator method between other properties is skipped", () => {
+    const obj = { a: 1, *gen() { yield 1; }, b: 2 };
+    expect(obj.a).toBe(1);
+    expect(obj.b).toBe(2);
+  });
+
+  test("generator method with reserved-word name is skipped", () => {
+    const obj = { *delete() { yield 1; }, x: 42 };
+    expect(obj.x).toBe(42);
+    expect(typeof obj.delete).toBe("undefined");
+  });
+
   test("code after function declaration continues correctly", () => {
     let x = 1;
     function ignored() { x = 99; }

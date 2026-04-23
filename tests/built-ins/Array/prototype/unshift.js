@@ -38,4 +38,14 @@ describe("Array.prototype.unshift", () => {
     expect(arr.unshift()).toBe(3);
     expect(arr).toEqual([1, 2, 3]);
   });
+
+  test("generic receiver inserts at front of array-like", () => {
+    const obj = { 0: 'b', 1: 'c', length: 2 };
+    const newLen = Array.prototype.unshift.call(obj, 'a');
+    expect(newLen).toBe(3);
+    expect(obj[0]).toBe('a');
+    expect(obj[1]).toBe('b');
+    expect(obj[2]).toBe('c');
+    expect(obj.length).toBe(3);
+  });
 });

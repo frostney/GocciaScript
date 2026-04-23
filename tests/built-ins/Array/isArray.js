@@ -44,4 +44,11 @@ describe("Array.isArray", () => {
   test("returns false with no argument", () => {
     expect(Array.isArray()).toBe(false);
   });
+
+  test("property descriptor on Array constructor", () => {
+    const desc = Object.getOwnPropertyDescriptor(Array, "isArray");
+    expect(desc.writable).toBe(true);
+    expect(desc.enumerable).toBe(false);
+    expect(desc.configurable).toBe(true);
+  });
 });

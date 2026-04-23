@@ -32,4 +32,11 @@ describe("Array.prototype.pop", () => {
     expect(arr.length).toBe(0);
     expect(arr.pop()).toBe(undefined);
   });
+
+  test("generic receiver removes last from array-like", () => {
+    const obj = { 0: 'a', 1: 'b', length: 2 };
+    const removed = Array.prototype.pop.call(obj);
+    expect(removed).toBe('b');
+    expect(obj.length).toBe(1);
+  });
 });

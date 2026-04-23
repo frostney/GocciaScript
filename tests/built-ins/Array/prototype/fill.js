@@ -63,4 +63,12 @@ describe("Array.prototype.fill", () => {
     arr.fill(undefined);
     expect(arr).toEqual([undefined, undefined, undefined]);
   });
+
+  test("generic receiver fills array-like in place", () => {
+    const obj = { 0: 'a', 1: 'b', 2: 'c', length: 3 };
+    Array.prototype.fill.call(obj, 'x', 1, 3);
+    expect(obj[0]).toBe('a');
+    expect(obj[1]).toBe('x');
+    expect(obj[2]).toBe('x');
+  });
 });

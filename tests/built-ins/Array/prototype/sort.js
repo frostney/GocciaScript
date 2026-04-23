@@ -89,4 +89,13 @@ describe("Array.prototype.sort", () => {
     arr.sort();
     expect(arr).toEqual([1, 200, 40, 5, 700, 80, 9]);
   });
+
+  test("sort moves holes to end in sparse array", () => {
+    const arr = [3, , 1];
+    arr.sort();
+    expect(arr[0]).toBe(1);
+    expect(arr[1]).toBe(3);
+    expect(2 in arr).toBe(false);
+    expect(arr.length).toBe(3);
+  });
 });

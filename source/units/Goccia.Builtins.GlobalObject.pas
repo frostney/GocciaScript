@@ -65,7 +65,8 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ProxyValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.Values.ToObject;
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
@@ -103,33 +104,6 @@ begin
     else
       Result.AssignProperty(PROP_SET, TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
-end;
-
-// ES2026 §7.1.18 ToObject(argument)
-function ToObject(const AValue: TGocciaValue): TGocciaObjectValue;
-var
-  Boxed: TGocciaObjectValue;
-begin
-  if (AValue is TGocciaUndefinedLiteralValue) or (AValue is TGocciaNullLiteralValue) then
-    ThrowTypeError(SErrorCannotConvertNullOrUndefined, SSuggestCheckNullBeforeAccess);
-
-  if AValue is TGocciaObjectValue then
-  begin
-    Result := TGocciaObjectValue(AValue);
-    Exit;
-  end;
-
-  // Box primitives (boolean, number, string, bigint)
-  Boxed := AValue.Box;
-  if Assigned(Boxed) then
-  begin
-    Result := Boxed;
-    Exit;
-  end;
-
-  // Symbol and other non-coercible types
-  ThrowTypeError(SErrorCannotConvertValueToObject, SSuggestObjectArgType);
-  Result := nil;
 end;
 
 constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
@@ -334,7 +308,8 @@ end;
 function TGocciaGlobalObject.ObjectCreate(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NewObj: TGocciaObjectValue;
-  ProtoArg: TGocciaValue;
+  ProtoArg, PropsArg: TGocciaValue;
+  DefineArgs: TGocciaArgumentsCollection;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.create', ThrowError);
 
@@ -346,13 +321,29 @@ begin
 
   // Step 2: Let obj be OrdinaryObjectCreate(O)
   if ProtoArg is TGocciaObjectValue then
-    Result := TGocciaObjectValue.Create(TGocciaObjectValue(ProtoArg))
-  else if ProtoArg is TGocciaNullLiteralValue then
-    Result := TGocciaObjectValue.Create(nil)
+    NewObj := TGocciaObjectValue.Create(TGocciaObjectValue(ProtoArg))
   else
-    ThrowTypeError(SErrorObjectCreateCalledOnNonObject, SSuggestObjectArgType);
+    NewObj := TGocciaObjectValue.Create(nil);
+
   // Step 3: If Properties is not undefined, perform ObjectDefineProperties(obj, Properties)
+  if AArgs.Length >= 2 then
+  begin
+    PropsArg := AArgs.GetElement(1);
+    if not (PropsArg is TGocciaUndefinedLiteralValue) then
+    begin
+      DefineArgs := TGocciaArgumentsCollection.CreateWithCapacity(2);
+      try
+        DefineArgs.Add(NewObj);
+        DefineArgs.Add(PropsArg);
+        ObjectDefineProperties(DefineArgs, AThisValue);
+      finally
+        DefineArgs.Free;
+      end;
+    end;
+  end;
+
   // Step 4: Return obj
+  Result := NewObj;
 end;
 
 // ES2026 §20.1.2.9 Object.hasOwn(O, P)
@@ -600,6 +591,8 @@ var
   Obj: TGocciaObjectValue;
   PropertiesDescriptor: TGocciaObjectValue;
   PropertyEntries: TArray<TPair<string, TGocciaValue>>;
+  SymbolKeys: TArray<TGocciaSymbolValue>;
+  SymbolDesc: TGocciaPropertyDescriptor;
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
 begin
@@ -617,7 +610,7 @@ begin
   // Step 2: Let keys be ? props.[[OwnPropertyKeys]]()
   PropertyEntries := PropertiesDescriptor.GetEnumerablePropertyEntries;
 
-  // Step 3: For each key, ToPropertyDescriptor and DefinePropertyOrThrow
+  // Step 3: For each string key, ToPropertyDescriptor and DefinePropertyOrThrow
   for I := 0 to High(PropertyEntries) do
   begin
     CallArgs := TGocciaArgumentsCollection.Create;
@@ -628,6 +621,28 @@ begin
       ObjectDefineProperty(CallArgs, AThisValue);
     finally
       CallArgs.Free;
+    end;
+  end;
+
+  // Step 3 (cont): Also process symbol-keyed descriptors per §20.1.2.3
+  // Use Get(props, key) to obtain the descriptor value — handles both data
+  // properties and accessor properties (invoking the getter if present).
+  SymbolKeys := PropertiesDescriptor.GetOwnSymbols;
+  for I := 0 to High(SymbolKeys) do
+  begin
+    SymbolDesc := PropertiesDescriptor.GetOwnSymbolPropertyDescriptor(SymbolKeys[I]);
+    if Assigned(SymbolDesc) and SymbolDesc.Enumerable then
+    begin
+      CallArgs := TGocciaArgumentsCollection.Create;
+      try
+        CallArgs.Add(Obj);
+        CallArgs.Add(SymbolKeys[I]);
+        // Get(props, key): invoke getter for accessors, read value for data
+        CallArgs.Add(PropertiesDescriptor.GetSymbolProperty(SymbolKeys[I]));
+        ObjectDefineProperty(CallArgs, AThisValue);
+      finally
+        CallArgs.Free;
+      end;
     end;
   end;
 
