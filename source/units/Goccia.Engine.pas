@@ -198,7 +198,8 @@ type
     procedure PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap = nil);
     procedure ThrowError(const AMessage: string; const ALine,
       AColumn: Integer);
-    function CompileDynamicFunction(const ASource: string): TGocciaFunctionBase;
+    function CompileDynamicFunction(const AParamsSources: array of string;
+      const ABodySource: string): TGocciaFunctionBase;
   public
     constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AResolver: TGocciaModuleResolver); overload;
@@ -311,6 +312,7 @@ uses
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.BooleanObjectValue,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionValue,
   Goccia.Values.HeadersValue,
   Goccia.Values.MapValue,
@@ -1519,15 +1521,87 @@ begin
   raise TGocciaRuntimeError.Create(AMessage, ALine, AColumn, FSourcePath, FSourceLines);
 end;
 
-function TGocciaEngine.CompileDynamicFunction(const ASource: string): TGocciaFunctionBase;
+function TGocciaEngine.CompileDynamicFunction(
+  const AParamsSources: array of string;
+  const ABodySource: string): TGocciaFunctionBase;
 var
+  ParamStr, Source: string;
+  I: Integer;
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
   ResultValue: TGocciaValue;
 begin
-  Lexer := TGocciaLexer.Create(ASource, '<Function>');
+  // ES2026 §20.2.1.1: parse as  function anonymous(P) { body }
+  // We use method shorthand so the function gets its own this binding.
+  // The member access extracts the function from the wrapper object.
+  //
+  // Params and body are parsed as separate, self-contained programs first.
+  // This prevents injection: a crafted body that tries to close the method
+  // wrapper will fail validation because it will have unmatched braces when
+  // parsed as a standalone function body.
+  ParamStr := '';
+  for I := 0 to High(AParamsSources) do
+  begin
+    if I > 0 then
+      ParamStr := ParamStr + ', ';
+    ParamStr := ParamStr + AParamsSources[I];
+  end;
+
+  // Validate params: must parse as a valid parameter list.
+  // If params contain tokens that escape the signature, this will throw.
+  if ParamStr <> '' then
+  begin
+    Source := '(' + ParamStr + ') => {}';
+    Lexer := TGocciaLexer.Create(Source, '<Function:params>');
+    try
+      Tokens := Lexer.ScanTokens;
+      Parser := TGocciaParser.Create(Tokens, '<Function:params>', Lexer.SourceLines);
+      Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
+      Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
+      try
+        ProgramNode := Parser.Parse;
+        // Parse must consume exactly one expression statement (the arrow function)
+        if ProgramNode.Body.Count <> 1 then
+          ThrowSyntaxError('Invalid parameter list for Function constructor');
+        ProgramNode.Free;
+      finally
+        Parser.Free;
+      end;
+    finally
+      Lexer.Free;
+    end;
+  end;
+
+  // Validate body: must parse as a valid function body.
+  // An arrow wrapper ensures the body is enclosed in matching braces.
+  if ABodySource <> '' then
+  begin
+    Source := '() => {' + #10 + ABodySource + #10 + '}';
+    Lexer := TGocciaLexer.Create(Source, '<Function:body>');
+    try
+      Tokens := Lexer.ScanTokens;
+      Parser := TGocciaParser.Create(Tokens, '<Function:body>', Lexer.SourceLines);
+      Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
+      Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
+      try
+        ProgramNode := Parser.Parse;
+        if ProgramNode.Body.Count <> 1 then
+          ThrowSyntaxError('Invalid body for Function constructor');
+        ProgramNode.Free;
+      finally
+        Parser.Free;
+      end;
+    finally
+      Lexer.Free;
+    end;
+  end;
+
+  // Both pieces validated — safe to assemble the wrapper
+  Source := '({ anonymous(' + ParamStr + ') {' + #10 + ABodySource + #10 + '} }).anonymous';
+
+  Lexer := TGocciaLexer.Create(Source, '<Function>');
   try
     Tokens := Lexer.ScanTokens;
     Parser := TGocciaParser.Create(Tokens, '<Function>', Lexer.SourceLines);

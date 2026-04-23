@@ -198,7 +198,8 @@ type
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
   end;
 
-  TGocciaCompileDynamicFunction = function(const ASource: string): TGocciaFunctionBase of object;
+  TGocciaCompileDynamicFunction = function(const AParamsSources: array of string;
+    const ABodySource: string): TGocciaFunctionBase of object;
 
   TGocciaFunctionConstructorClassValue = class(TGocciaClassValue)
   private
@@ -1281,7 +1282,8 @@ end;
 function TGocciaFunctionConstructorClassValue.BuildFunction(
   const AArguments: TGocciaArgumentsCollection): TGocciaFunctionBase;
 var
-  ParamStr, BodyStr, Source: string;
+  ParamSources: array of string;
+  BodyStr: string;
   I: Integer;
 begin
   if not FEnabled then
@@ -1294,27 +1296,23 @@ begin
   // ES2026 §20.2.1.1: collect parameters and body from arguments
   if AArguments.Length = 0 then
   begin
-    ParamStr := '';
+    SetLength(ParamSources, 0);
     BodyStr := '';
   end
   else if AArguments.Length = 1 then
   begin
-    ParamStr := '';
+    SetLength(ParamSources, 0);
     BodyStr := AArguments.GetElement(0).ToStringLiteral.Value;
   end
   else
   begin
-    ParamStr := AArguments.GetElement(0).ToStringLiteral.Value;
-    for I := 1 to AArguments.Length - 2 do
-      ParamStr := ParamStr + ', ' + AArguments.GetElement(I).ToStringLiteral.Value;
+    SetLength(ParamSources, AArguments.Length - 1);
+    for I := 0 to AArguments.Length - 2 do
+      ParamSources[I] := AArguments.GetElement(I).ToStringLiteral.Value;
     BodyStr := AArguments.GetElement(AArguments.Length - 1).ToStringLiteral.Value;
   end;
 
-  // Use method shorthand so the function gets its own this binding.
-  // The member access extracts the function from the wrapper object.
-  Source := '({ anonymous(' + ParamStr + ') {' + #10 + BodyStr + #10 + '} }).anonymous';
-
-  Result := FCompileDynamicFunction(Source);
+  Result := FCompileDynamicFunction(ParamSources, BodyStr);
 end;
 
 function TGocciaFunctionConstructorClassValue.Call(
