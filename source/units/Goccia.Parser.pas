@@ -578,7 +578,7 @@ begin
     gttSuper, gttStatic, gttReturn, gttIf, gttElse, gttFor, gttWhile, gttDo,
     gttSwitch, gttCase, gttDefault, gttBreak, gttThrow, gttTry, gttCatch,
     gttFinally, gttImport, gttExport, gttFrom, gttAs, gttGet, gttSet,
-    gttVar, gttWith, gttFunction, gttTypeof, gttInstanceof, gttIn,
+    gttVar, gttWith, gttFunction, gttTypeof, gttVoid, gttInstanceof, gttIn,
     gttDelete:
       Exit(True);
   end;
@@ -748,7 +748,7 @@ begin
     Exit;
   end;
 
-  if Match([gttNot, gttMinus, gttPlus, gttTypeof, gttBitwiseNot, gttDelete]) then
+  if Match([gttNot, gttMinus, gttPlus, gttTypeof, gttVoid, gttBitwiseNot, gttDelete]) then
   begin
     Operator := Previous;
     Right := Unary;
@@ -866,7 +866,7 @@ begin
         else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
                        gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
                        gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
-                       gttTrue, gttFalse, gttNull, gttTypeof, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
+                       gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
           PropertyName := Previous.Lexeme  // Reserved words are allowed as property names
         else
           raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines,
@@ -1847,7 +1847,7 @@ begin
     else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
                    gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
                    gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
-                   gttTrue, gttFalse, gttNull, gttTypeof, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
+                   gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
       Key := Previous.Lexeme  // Reserved words are allowed as property names
     else
       raise TGocciaSyntaxError.Create('Expected property name', Peek.Line, Peek.Column, FFileName, FSourceLines,

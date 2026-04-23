@@ -644,6 +644,8 @@ begin
     end;
     gttTypeof:
       Result := EvaluateTypeof(Operand);
+    gttVoid:
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     gttBitwiseNot:
       Result := EvaluateBitwiseNot(Operand);
   else
