@@ -202,6 +202,24 @@ type
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
   end;
 
+  TGocciaCompileDynamicFunction = function(const AParamsSources: array of string;
+    const ABodySource: string): TGocciaFunctionBase of object;
+
+  TGocciaFunctionConstructorClassValue = class(TGocciaClassValue)
+  private
+    FEnabled: Boolean;
+    FCompileDynamicFunction: TGocciaCompileDynamicFunction;
+    function BuildFunction(const AArguments: TGocciaArgumentsCollection): TGocciaFunctionBase;
+  public
+    constructor Create(const AName: string; const ASuperClass: TGocciaClassValue);
+    function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+
+    property Enabled: Boolean read FEnabled write FEnabled;
+    property CompileDynamicFunction: TGocciaCompileDynamicFunction
+      read FCompileDynamicFunction write FCompileDynamicFunction;
+  end;
+
   TGocciaInstanceValue = class(TGocciaObjectValue)
   private
     FClass: TGocciaClassValue;
@@ -230,6 +248,7 @@ type
 implementation
 
 uses
+  Generics.Collections,
   SysUtils,
 
   Goccia.Constants.ConstructorNames,
@@ -1321,6 +1340,66 @@ begin
   else
     Prim := AArguments.GetElement(0).ToBooleanLiteral;
   Result := Prim.Box;
+end;
+
+{ TGocciaFunctionConstructorClassValue }
+
+constructor TGocciaFunctionConstructorClassValue.Create(const AName: string;
+  const ASuperClass: TGocciaClassValue);
+begin
+  inherited Create(AName, ASuperClass);
+  FEnabled := False;
+  FCompileDynamicFunction := nil;
+end;
+
+function TGocciaFunctionConstructorClassValue.BuildFunction(
+  const AArguments: TGocciaArgumentsCollection): TGocciaFunctionBase;
+var
+  ParamSources: array of string;
+  BodyStr: string;
+  I: Integer;
+begin
+  if not FEnabled then
+    ThrowTypeError('Dynamic code generation is disabled. ' +
+      'Pass --unsafe-function-constructor to enable the Function constructor');
+
+  if not Assigned(FCompileDynamicFunction) then
+    ThrowTypeError('Function constructor is not available in this environment');
+
+  // ES2026 §20.2.1.1: collect parameters and body from arguments
+  if AArguments.Length = 0 then
+  begin
+    SetLength(ParamSources, 0);
+    BodyStr := '';
+  end
+  else if AArguments.Length = 1 then
+  begin
+    SetLength(ParamSources, 0);
+    BodyStr := AArguments.GetElement(0).ToStringLiteral.Value;
+  end
+  else
+  begin
+    SetLength(ParamSources, AArguments.Length - 1);
+    for I := 0 to AArguments.Length - 2 do
+      ParamSources[I] := AArguments.GetElement(I).ToStringLiteral.Value;
+    BodyStr := AArguments.GetElement(AArguments.Length - 1).ToStringLiteral.Value;
+  end;
+
+  Result := FCompileDynamicFunction(ParamSources, BodyStr);
+end;
+
+function TGocciaFunctionConstructorClassValue.Call(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  // ES2026 §20.2.1.1: Function(...) is equivalent to new Function(...)
+  Result := BuildFunction(AArguments);
+end;
+
+function TGocciaFunctionConstructorClassValue.CreateNativeInstance(
+  const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+begin
+  Result := BuildFunction(AArguments);
 end;
 
 { TGocciaInstanceValue }

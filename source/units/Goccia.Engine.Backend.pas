@@ -34,6 +34,8 @@ type
       const AProgram: TGocciaProgram): TGocciaValue; override;
     procedure EvaluateModuleBody(const AProgram: TGocciaProgram;
       const AContext: TGocciaEvaluationContext); override;
+    function ExecuteDynamicFunction(
+      const AProgram: TGocciaProgram): TGocciaValue; override;
     procedure ClearTransientCaches; override;
     function DefaultStrictTypes: Boolean; override;
 
@@ -125,6 +127,20 @@ begin
   finally
     Module.Free;
   end;
+end;
+
+function TGocciaBytecodeExecutor.ExecuteDynamicFunction(
+  const AProgram: TGocciaProgram): TGocciaValue;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileToModule(AProgram);
+  // Patch method template name to 'anonymous' for Function constructor
+  if Module.TopLevel.FunctionCount > 0 then
+    Module.TopLevel.GetFunction(0).Name := 'anonymous';
+  // Retain the module: closures reference its function templates
+  FModuleModules.Add(Module);
+  Result := RunModule(Module);
 end;
 
 function TGocciaBytecodeExecutor.CompileToModule(

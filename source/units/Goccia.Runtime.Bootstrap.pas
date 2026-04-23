@@ -507,13 +507,12 @@ begin
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   BooleanConstructor := TGocciaBooleanClassValue(GenericConstructor);
 
-  FunctionConstructor := TGocciaClassValue.Create('Function', nil);
+  FunctionConstructor := TGocciaFunctionConstructorClassValue.Create('Function', nil);
   TGocciaFunctionBase.GetSharedPrototype.Prototype := ObjectConstructor.Prototype;
   FunctionConstructor.ReplacePrototype(TGocciaFunctionBase.GetSharedPrototype);
   FunctionConstructor.Prototype.DefineProperty(PROP_CONSTRUCTOR,
     TGocciaPropertyDescriptorData.Create(FunctionConstructor, [pfConfigurable, pfWritable]));
   TGocciaClassValue.SetDefaultPrototype(FunctionConstructor.Prototype);
-  // Retroactively set [[Prototype]] on constructors created before FunctionConstructor
   TGocciaClassValue.PatchDefaultPrototype(ObjectConstructor);
   TGocciaClassValue.PatchDefaultPrototype(GenericConstructor);
   TGocciaClassValue.PatchDefaultPrototype(ArrayConstructor);

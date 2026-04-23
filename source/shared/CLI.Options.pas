@@ -150,6 +150,7 @@ type
     FMaxMemory: TGocciaInt64Option;
     FMaxInstructions: TGocciaInt64Option;
     FUnsafeFFI: TGocciaFlagOption;
+    FUnsafeFunctionConstructor: TGocciaFlagOption;
     FStackSize: TGocciaIntegerOption;
     FCompatVar: TGocciaFlagOption;
   public
@@ -166,6 +167,7 @@ type
     property MaxMemory: TGocciaInt64Option read FMaxMemory;
     property MaxInstructions: TGocciaInt64Option read FMaxInstructions;
     property UnsafeFFI: TGocciaFlagOption read FUnsafeFFI;
+    property UnsafeFunctionConstructor: TGocciaFlagOption read FUnsafeFunctionConstructor;
     property StackSize: TGocciaIntegerOption read FStackSize;
     property CompatVar: TGocciaFlagOption read FCompatVar;
   end;
@@ -534,6 +536,8 @@ begin
     'Maximum execution steps before aborting', 'Engine');
   FUnsafeFFI := TGocciaFlagOption.Create('unsafe-ffi',
     'Enable the FFI global (foreign function interface)', 'Engine');
+  FUnsafeFunctionConstructor := TGocciaFlagOption.Create('unsafe-function-constructor',
+    'Enable the Function constructor (dynamic code generation)', 'Engine');
   FStackSize := TGocciaIntegerOption.Create('stack-size',
     'Maximum call stack depth (0 = no limit)', 'Engine');
   FCompatVar := TGocciaFlagOption.Create('compat-var',
@@ -550,6 +554,7 @@ begin
   FMaxMemory.Free;
   FMaxInstructions.Free;
   FUnsafeFFI.Free;
+  FUnsafeFunctionConstructor.Free;
   FStackSize.Free;
   FCompatVar.Free;
   inherited Destroy;
@@ -557,7 +562,7 @@ end;
 
 function TGocciaEngineOptions.Options: TGocciaOptionArray;
 begin
-  SetLength(Result, 10);
+  SetLength(Result, 11);
   Result[0] := FMode;
   Result[1] := FASI;
   Result[2] := FImportMap;
@@ -566,8 +571,9 @@ begin
   Result[5] := FMaxMemory;
   Result[6] := FMaxInstructions;
   Result[7] := FUnsafeFFI;
-  Result[8] := FStackSize;
-  Result[9] := FCompatVar;
+  Result[8] := FUnsafeFunctionConstructor;
+  Result[9] := FStackSize;
+  Result[10] := FCompatVar;
 end;
 
 { TGocciaCoverageOptions }
