@@ -625,24 +625,23 @@ begin
   end;
 
   // Step 3 (cont): Also process symbol-keyed descriptors per §20.1.2.3
+  // Use Get(props, key) to obtain the descriptor value — handles both data
+  // properties and accessor properties (invoking the getter if present).
   SymbolKeys := PropertiesDescriptor.GetOwnSymbols;
   for I := 0 to High(SymbolKeys) do
   begin
     SymbolDesc := PropertiesDescriptor.GetOwnSymbolPropertyDescriptor(SymbolKeys[I]);
     if Assigned(SymbolDesc) and SymbolDesc.Enumerable then
     begin
-      if SymbolDesc is TGocciaPropertyDescriptorData then
-      begin
-        // Pass through ObjectDefineProperty for proper ToPropertyDescriptor handling
-        CallArgs := TGocciaArgumentsCollection.Create;
-        try
-          CallArgs.Add(Obj);
-          CallArgs.Add(SymbolKeys[I]);
-          CallArgs.Add(TGocciaPropertyDescriptorData(SymbolDesc).Value);
-          ObjectDefineProperty(CallArgs, AThisValue);
-        finally
-          CallArgs.Free;
-        end;
+      CallArgs := TGocciaArgumentsCollection.Create;
+      try
+        CallArgs.Add(Obj);
+        CallArgs.Add(SymbolKeys[I]);
+        // Get(props, key): invoke getter for accessors, read value for data
+        CallArgs.Add(PropertiesDescriptor.GetSymbolProperty(SymbolKeys[I]));
+        ObjectDefineProperty(CallArgs, AThisValue);
+      finally
+        CallArgs.Free;
       end;
     end;
   end;
