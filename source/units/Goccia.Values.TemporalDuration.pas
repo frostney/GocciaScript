@@ -78,6 +78,7 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.NumericLimits,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -162,7 +163,7 @@ begin
     ThrowRangeError(SErrorDurationMixedSigns, SSuggestTemporalDurationSigns);
 
   // Validate: calendar unit magnitudes must be < 2^32
-  if (Abs(AYears) >= 4294967296) or (Abs(AMonths) >= 4294967296) or (Abs(AWeeks) >= 4294967296) then
+  if (Abs(AYears) >= UINT32_MODULUS) or (Abs(AMonths) >= UINT32_MODULUS) or (Abs(AWeeks) >= UINT32_MODULUS) then
     ThrowRangeError(SErrorDurationCalendarOutOfRange, SSuggestTemporalDurationRange);
 
   // Validate: normalized seconds must be < 2^53 (TC39 §7.5.22 step 6-7)

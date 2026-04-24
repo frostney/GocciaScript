@@ -37,6 +37,7 @@ uses
   BigInteger,
 
   Goccia.Arguments.Validator,
+  Goccia.Constants.NumericLimits,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -220,7 +221,7 @@ begin
   else
     IntegerIndex := Trunc(Num.Value);
 
-  if (IntegerIndex < 0) or (IntegerIndex > 9007199254740991.0) or
+  if (IntegerIndex < 0) or (IntegerIndex > MAX_SAFE_INTEGER_F) or
      (IntegerIndex > High(Integer)) then
     ThrowRangeError(SErrorBigIntInvalidIndex, SSuggestBigIntInvalidIndex);
 

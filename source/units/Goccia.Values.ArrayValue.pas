@@ -111,6 +111,7 @@ uses
   StringBuffer,
 
   Goccia.Arguments.Callbacks,
+  Goccia.Constants.NumericLimits,
   Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.Error.Messages,
@@ -159,9 +160,6 @@ type
     procedure CheckSafeIntegerLen(const ANewLen: Double);
   end;
 
-const
-  ARRAY_CREATE_LIMIT = 4294967295.0;       // 2^32 - 1
-  ARRAY_MAX_SAFE_LENGTH = 9007199254740991.0; // 2^53 - 1
 
 procedure TArrayLikeView.Init(const AThisValue: TGocciaValue);
 begin
@@ -181,19 +179,19 @@ end;
 
 procedure TArrayLikeView.CheckArrayCreateLen;
 begin
-  if RawLen > ARRAY_CREATE_LIMIT then
+  if RawLen > MAX_ARRAY_LENGTH_F then
     ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
 end;
 
 procedure TArrayLikeView.CheckArrayCreateLenValue(const ANewLen: Double);
 begin
-  if ANewLen > ARRAY_CREATE_LIMIT then
+  if ANewLen > MAX_ARRAY_LENGTH_F then
     ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
 end;
 
 procedure TArrayLikeView.CheckSafeIntegerLen(const ANewLen: Double);
 begin
-  if ANewLen > ARRAY_MAX_SAFE_LENGTH then
+  if ANewLen > MAX_SAFE_INTEGER_F then
     ThrowTypeError(
       'Array length exceeds maximum safe integer (2^53 - 1)',
       'use a smaller length');
@@ -503,7 +501,7 @@ begin
     if LenArg is TGocciaNumberLiteralValue then
     begin
       Len := TGocciaNumberLiteralValue(LenArg).Value;
-      if (Len <> Trunc(Len)) or (Len < 0) or (Len > 4294967295) then
+      if (Len <> Trunc(Len)) or (Len < 0) or (Len > MAX_ARRAY_LENGTH_F) then
         ThrowRangeError(SErrorInvalidArrayLength,
           SSuggestArrayLengthRange);
       for I := 0 to Trunc(Len) - 1 do
@@ -1630,15 +1628,15 @@ begin
   SrcView.Init(ASource);
   // ES2026 §23.1.3.1 step 5.c.iii.2: if n + len > 2^53 - 1, throw TypeError.
   EndN := N + SrcView.RawLen;
-  if EndN > ARRAY_MAX_SAFE_LENGTH then
+  if EndN > MAX_SAFE_INTEGER_F then
     ThrowTypeError(
       'Array length exceeds maximum safe integer (2^53 - 1)',
       'use a smaller length');
   // Pragmatic guard: this implementation tracks `n` as an Integer and cannot
-  // materialise more than ARRAY_CREATE_LIMIT (2^32 - 1) elements in a
-  // native array.  A source length that would carry `n` past that bound is
-  // rejected up-front rather than silently truncated mid-iteration.
-  if EndN > ARRAY_CREATE_LIMIT then
+  // materialise more than 2^32 - 1 elements in a native array.  A source
+  // length that would carry `n` past that bound is rejected up-front rather
+  // than silently truncated mid-iteration.
+  if EndN > MAX_ARRAY_LENGTH_F then
     ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
   for J := 0 to SrcView.Len - 1 do
   begin
@@ -2045,7 +2043,7 @@ begin
     begin
       RawLen := TGocciaPropertyDescriptorData(ADescriptor).Value.ToNumberLiteral.Value;
       NewLen := Trunc(RawLen);
-      if (RawLen <> NewLen) or (NewLen < 0) or (RawLen > 4294967295) then
+      if (RawLen <> NewLen) or (NewLen < 0) or (RawLen > MAX_ARRAY_LENGTH_F) then
       begin
         ADescriptor.Free;
         Exit(False);

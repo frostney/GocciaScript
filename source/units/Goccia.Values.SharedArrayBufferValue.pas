@@ -48,6 +48,7 @@ uses
   Math,
 
   Goccia.Constants.ConstructorNames,
+  Goccia.Constants.NumericLimits,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -153,7 +154,7 @@ begin
     IntegerIndex := Trunc(Num.Value);
 
   // Step 3: If integerIndex is not in [0, 2^53-1], throw RangeError
-  if (IntegerIndex < 0) or (IntegerIndex > 9007199254740991) then
+  if (IntegerIndex < 0) or (IntegerIndex > MAX_SAFE_INTEGER_F) then
     ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
 
   Len := Trunc(IntegerIndex);

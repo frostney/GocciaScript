@@ -27,6 +27,7 @@ implementation
 uses
   Math,
 
+  Goccia.Constants.NumericLimits,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -70,8 +71,6 @@ end;
 
 // Shared implementation that also returns the raw post-ToLength value.
 function LengthOfArrayLikeEx(const AObj: TGocciaObjectValue; out AOutRawLen: Double): Integer;
-const
-  MAX_SAFE_INTEGER = 9007199254740991.0; // 2^53 - 1
 var
   LengthProp: TGocciaValue;
   LengthValue: Double;
@@ -100,8 +99,8 @@ begin
   end;
 
   // Cap raw length at 2^53 - 1 per ToLength step 3.
-  if LengthValue > MAX_SAFE_INTEGER then
-    AOutRawLen := MAX_SAFE_INTEGER
+  if LengthValue > MAX_SAFE_INTEGER_F then
+    AOutRawLen := MAX_SAFE_INTEGER_F
   else
     AOutRawLen := Trunc(LengthValue);
 
