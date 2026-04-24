@@ -31,4 +31,66 @@ describe("ASI expression statements", () => {
     fn();
     expect(x).toBe(42);
   });
+
+  // ES2026 §13.4 restricted production: no LineTerminator between a
+  // LeftHandSideExpression and ++/--.  A newline before ++/-- rejects the
+  // postfix parse and ASI inserts a semicolon, so ++/-- binds as prefix
+  // to the following line.
+  test("newline before ++ inserts ASI and parses ++ as prefix", () => {
+    let x = 0
+    let y = 0
+    x
+    ++y
+    expect(x).toBe(0);
+    expect(y).toBe(1);
+  });
+
+  test("newline before -- inserts ASI and parses -- as prefix", () => {
+    let x = 1
+    let y = 1
+    x
+    --y
+    expect(x).toBe(1);
+    expect(y).toBe(0);
+  });
+
+  test("assignment followed by newline then ++ id does not attach to assignment", () => {
+    let a = 1, b = 2, c = 3
+    a = b
+    ++c
+    expect(a).toBe(b);
+    expect(c).toBe(4);
+  });
+
+  test("id on one line, ++ on next, ident on third — ASI + prefix", () => {
+    let x = 0, y = 0
+    x
+    ++
+    y
+    expect(x).toBe(0);
+    expect(y).toBe(1);
+  });
+
+  test("id on one line, -- on next, ident on third — ASI + prefix", () => {
+    let x = 0, y = 2
+    x
+    --
+    y
+    expect(x).toBe(0);
+    expect(y).toBe(1);
+  });
+
+  test("postfix ++ still works when on the same line", () => {
+    let x = 5
+    const result = x++
+    expect(result).toBe(5);
+    expect(x).toBe(6);
+  });
+
+  test("postfix -- still works when on the same line", () => {
+    let x = 5
+    const result = x--
+    expect(result).toBe(5);
+    expect(x).toBe(4);
+  });
 });
