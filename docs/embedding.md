@@ -733,14 +733,14 @@ Both `TGocciaEngine` and `TGocciaVM` mask all FPU exceptions on creation (via `S
 
 ## Microtask Queue (Promises)
 
-The engine initializes a singleton microtask queue (`TGocciaMicrotaskQueue`) alongside the GC. Promise `.then()` callbacks are enqueued as microtasks and **drained automatically** after each `Execute`, `ExecuteWithTiming`, or `ExecuteProgram` call. Fetch completions are also pumped before these calls return, then their Promise reactions drain through the same microtask queue. Embedders do not need to drain either queue manually.
+The engine initializes a singleton microtask queue (`TGocciaMicrotaskQueue`) alongside the GC. Promise `.then()` callbacks are enqueued as microtasks and **drained automatically** after each `Execute` or `ExecuteProgram` call. Fetch completions are also pumped before these calls return, then their Promise reactions drain through the same microtask queue. Embedders do not need to drain either queue manually.
 
 This means:
 
 - All synchronous code in the script runs to completion first.
 - All pending `.then()` callbacks fire after the script finishes.
 - Chained `.then()` handlers are processed in the same drain cycle.
-- Pending `fetch()` requests complete before `Execute` returns; the microtask queue is still only used for Promise reactions, not for network I/O.
+- On successful execution, pending `fetch()` requests complete before `Execute` returns; if execution throws, pending fetches are detached and late completions are discarded. The microtask queue is still only used for Promise reactions, not for network I/O.
 
 The execution ordering follows ECMAScript specification semantics — the script is one macrotask, and microtasks drain after it completes. Thenable adoption is deferred via a microtask per the spec's PromiseResolveThenableJob.
 

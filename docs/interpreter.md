@@ -169,7 +169,7 @@ For fetch-backed Promises, these integration points also pump fetch completions 
 
 **`queueMicrotask`:** The global `queueMicrotask(callback)` function enqueues a user-provided callback into the same microtask queue used by Promise reactions. This matches the [HTML spec](https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#microtask-queuing). If a `queueMicrotask` callback throws, the error is silently discarded and the queue keeps draining — remaining microtasks and Promise reactions still run. This matches the observable behavior in Node.js/browsers where uncaught microtask errors don't prevent other microtasks from executing.
 
-**Error safety:** Both `Execute` and `ExecuteProgram` wrap the drain in a `try..finally` that calls `ClearQueue` and discards pending fetch completions. If the interpreter throws, stale microtasks and fetch callbacks are discarded rather than leaking into subsequent executions. After a successful drain, both queues are already empty, so cleanup is a no-op.
+**Error safety:** Both `Execute` and `ExecuteProgram` wrap the drain in a `try..finally` that calls `ClearQueue` and discards pending fetch completions. If the interpreter throws, stale microtasks and fetch callbacks are discarded rather than leaking into subsequent executions; outstanding fetch workers are detached so cleanup does not wait on network I/O that can no longer affect the script. After a successful drain, both queues are already empty, so cleanup is a no-op.
 
 **GC safety:** During `DrainQueue`, each microtask's handler, value, and result promise are temp-rooted to prevent collection mid-callback.
 
