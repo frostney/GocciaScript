@@ -295,7 +295,7 @@ test("await async function result in expect", async () => {
 });
 ```
 
-Tests can also return a Promise from a non-async callback. The test framework automatically drains the microtask queue after each test callback and checks the returned Promise's state. If the Promise is rejected, the test fails with the rejection reason.
+Tests can also return a Promise from a non-async callback. The test framework automatically drains the microtask queue, pumps any pending fetch completions, and checks the returned Promise's state. If the Promise is rejected, the test fails with the rejection reason.
 
 ```javascript
 test("async value check", () => {
@@ -313,9 +313,9 @@ test("async error handling", () => {
 });
 ```
 
-Both patterns work because GocciaScript's `await` is a synchronous microtask drain --- the entire async function body executes within a single `.Call()`, so assertions run before the Promise settles. Place assertions inside `.then()` or `.catch()` handlers when using the Promise-return pattern.
+Both patterns work because GocciaScript's `await` is a synchronous drain --- the entire async function body executes within a single `.Call()`, and fetch-backed Promises are settled by pumping fetch completions while waiting. Place assertions inside `.then()` or `.catch()` handlers when using the Promise-return pattern.
 
-**Important:** If a test returns a Promise that is still pending after the microtask queue drains, the test **fails** with "Promise still pending after microtask drain". Since GocciaScript has no event loop, a pending Promise after drain will never settle --- this catches tests with missing assertions or broken async chains. This mirrors how Jest/Vitest fail tests with a timeout when the returned Promise never resolves.
+**Important:** If a test returns a Promise that is still pending after the microtask queue drains and all pending fetch completions have been pumped, the test **fails** with "Promise still pending after microtask drain". Since GocciaScript has no general event loop, a non-fetch pending Promise after drain will never settle --- this catches tests with missing assertions or broken async chains. This mirrors how Jest/Vitest fail tests with a timeout when the returned Promise never resolves.
 
 **Testing intentionally-pending Promises:** When testing behavior around forever-pending Promises (e.g., verifying that `reject()` after `resolve(pendingPromise)` is ignored), never return the pending Promise. Instead, use a separate settled Promise chain to verify state after microtasks drain:
 
