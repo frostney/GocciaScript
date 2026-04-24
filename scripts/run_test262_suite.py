@@ -40,7 +40,7 @@ from test262_syntax_filter import is_eligible  # noqa: E402
 
 SUITE_REPO_URL = "https://github.com/tc39/test262.git"
 SUITE_BRANCH = "main"
-DEFAULT_TIMEOUT_SECONDS = 5
+DEFAULT_TIMEOUT_SECONDS = 1
 DEFAULT_CATEGORIES = ("language", "built-ins")
 
 # Paths relative to this script
@@ -292,6 +292,8 @@ def run_negative_parse_test(
     asi: bool = False,
     mode: str = "interpreted",
     compat_var: bool = False,
+    compat_function: bool = False,
+    unsafe_function_constructor: bool = False,
 ) -> tuple[bool, str, float]:
     """Run a negative parse-phase test via GocciaScriptLoader stdin."""
     start = time.monotonic()
@@ -302,6 +304,10 @@ def run_negative_parse_test(
         cmd.append(f"--mode={mode}")
     if compat_var:
         cmd.append("--compat-var")
+    if compat_function:
+        cmd.append("--compat-function")
+    if unsafe_function_constructor:
+        cmd.append("--unsafe-function-constructor")
     try:
         process = subprocess.run(
             cmd,
@@ -343,6 +349,8 @@ def evaluate_suite(
     asi: bool = False,
     mode: str = "interpreted",
     compat_var: bool = False,
+    compat_function: bool = False,
+    unsafe_function_constructor: bool = False,
 ) -> dict:
     test_dir = suite_dir / "test"
     all_tests = discover_tests(suite_dir, categories, filter_glob)
@@ -388,6 +396,8 @@ def evaluate_suite(
             metadata.get("includes", []),
             metadata.get("negative"),
             test_id=test_id,
+            compat_function=compat_function,
+            unsafe_function_constructor=unsafe_function_constructor,
         )
 
         if not eligible:
@@ -434,169 +444,197 @@ def evaluate_suite(
     results: list[dict] = []
     start_time = time.monotonic()
 
-    # Phase 2: Positive + negative-runtime via TestRunner (batch)
+    # Phase 2: Positive + negative-runtime via TestRunner (chunked batches).
+    # The TestRunner doesn't scale to tens of thousands of test files in a
+    # single invocation, so we split into chunks and aggregate. Each chunk
+    # gets its own temp dir and JSON output.
     batch_tests = positive_tests + negative_runtime_tests
+    CHUNK_SIZE = 1000
     if batch_tests:
+        chunks = [
+            batch_tests[i : i + CHUNK_SIZE]
+            for i in range(0, len(batch_tests), CHUNK_SIZE)
+        ]
         print(
-            f"Generating {len(batch_tests)} wrapped test files for GocciaTestRunner ..."
+            f"Running GocciaTestRunner in {len(chunks)} chunks of up to "
+            f"{CHUNK_SIZE} tests ({len(batch_tests)} total) ..."
         )
 
-        with tempfile.TemporaryDirectory(prefix="test262-goccia.") as tmp:
-            temp_dir = Path(tmp)
-            file_to_test_id: dict[str, str] = {}
+        for chunk_idx, chunk in enumerate(chunks, start=1):
+            with tempfile.TemporaryDirectory(prefix="test262-goccia.") as tmp:
+                temp_dir = Path(tmp)
+                file_to_test_id: dict[str, str] = {}
 
-            for test_path, metadata, test_id in batch_tests:
-                source = test_path.read_text(encoding="utf-8")
-                body = strip_frontmatter(source)
-                description = metadata.get("description", test_id)
-                if isinstance(description, dict):
-                    description = str(description)
-                negative = metadata.get("negative")
-                includes = metadata.get("includes", [])
+                for test_path, metadata, test_id in chunk:
+                    source = test_path.read_text(encoding="utf-8")
+                    body = strip_frontmatter(source)
+                    description = metadata.get("description", test_id)
+                    if isinstance(description, dict):
+                        description = str(description)
+                    negative = metadata.get("negative")
+                    includes = metadata.get("includes", [])
 
-                flags = metadata.get("flags", [])
-                is_async = "async" in flags
-                if is_async and "doneprintHandle.js" not in includes:
-                    includes = [*includes, "doneprintHandle.js"]
-                harness_source = build_harness_source(includes, harness_files)
+                    flags = metadata.get("flags", [])
+                    is_async = "async" in flags
+                    if is_async and "doneprintHandle.js" not in includes:
+                        includes = [*includes, "doneprintHandle.js"]
+                    harness_source = build_harness_source(includes, harness_files)
 
-                if negative is not None and negative.get("phase") == "runtime":
-                    error_type = negative.get("type", "TypeError")
-                    wrapped = wrap_negative_runtime_test(
-                        harness_source, body, test_id, description, error_type
-                    )
-                else:
-                    wrapped = wrap_positive_test(
-                        harness_source, body, test_id, description,
-                        is_async=is_async,
-                    )
-
-                safe_name = test_id.replace("/", "__").replace("\\", "__")
-                out_path = temp_dir / safe_name
-                out_path.write_text(wrapped, encoding="utf-8")
-                file_to_test_id[safe_name] = test_id
-
-            print(f"Running GocciaTestRunner on {len(batch_tests)} tests ...")
-            json_output = temp_dir / "__results.json"
-
-            runner_cmd = [
-                str(test_runner),
-                str(temp_dir),
-                "--silent",
-                f"--output={json_output}",
-                f"--timeout={timeout * 1000}",
-            ]
-            if asi:
-                runner_cmd.append("--asi")
-            if mode != "interpreted":
-                runner_cmd.append(f"--mode={mode}")
-            if compat_var:
-                runner_cmd.append("--compat-var")
-
-            try:
-                runner_timeout = max(timeout * len(batch_tests), 120) + 60
-                # Stream stdout (progress) to terminal in real-time;
-                # capture stderr for error diagnostics
-                process = subprocess.run(
-                    runner_cmd,
-                    stderr=subprocess.PIPE,
-                    timeout=runner_timeout,
-                    check=False,
-                )
-                runner_output = (
-                    process.stderr.decode("utf-8", errors="replace")
-                ).strip()
-            except subprocess.TimeoutExpired:
-                runner_output = "GocciaTestRunner global timeout"
-                process = None
-
-            if json_output.is_file():
-                raw_json = json_output.read_bytes().decode("utf-8", errors="replace")
-                # Strip control characters that test262 tests may inject
-                clean_json = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw_json)
-                try:
-                    tr_results = json.loads(clean_json)
-                except json.JSONDecodeError as e:
-                    print(f"Warning: Failed to parse GocciaTestRunner JSON: {e}")
-                    summary["errors"] += len(batch_tests)
-                    for _, _, tid in batch_tests:
-                        results.append(
-                            {"id": tid, "status": "ERROR", "message": f"JSON parse error: {e}"}
+                    if negative is not None and negative.get("phase") == "runtime":
+                        error_type = negative.get("type", "TypeError")
+                        wrapped = wrap_negative_runtime_test(
+                            harness_source, body, test_id, description, error_type
                         )
-                    tr_results = None
-                if tr_results is not None:
+                    else:
+                        wrapped = wrap_positive_test(
+                            harness_source, body, test_id, description,
+                            is_async=is_async,
+                        )
+
+                    safe_name = test_id.replace("/", "__").replace("\\", "__")
+                    out_path = temp_dir / safe_name
+                    out_path.write_text(wrapped, encoding="utf-8")
+                    file_to_test_id[safe_name] = test_id
+
+                json_output = temp_dir / "__results.json"
+
+                runner_cmd = [
+                    str(test_runner),
+                    str(temp_dir),
+                    "--silent",
+                    f"--output={json_output}",
+                    f"--timeout={timeout * 1000}",
+                ]
+                if asi:
+                    runner_cmd.append("--asi")
+                if mode != "interpreted":
+                    runner_cmd.append(f"--mode={mode}")
+                if compat_var:
+                    runner_cmd.append("--compat-var")
+                if compat_function:
+                    runner_cmd.append("--compat-function")
+                if unsafe_function_constructor:
+                    runner_cmd.append("--unsafe-function-constructor")
+
+                try:
+                    runner_timeout = max(timeout * len(chunk), 120) + 60
+                    process = subprocess.run(
+                        runner_cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE,
+                        timeout=runner_timeout,
+                        check=False,
+                    )
+                    runner_output = (
+                        process.stderr.decode("utf-8", errors="replace")
+                    ).strip()
+                except subprocess.TimeoutExpired:
+                    runner_output = "GocciaTestRunner global timeout"
+                    process = None
+
+                chunk_label = (
+                    f"[chunk {chunk_idx}/{len(chunks)}, "
+                    f"{len(chunk)} tests]"
+                )
+
+                if json_output.is_file():
+                    raw_json = json_output.read_bytes().decode(
+                        "utf-8", errors="replace"
+                    )
+                    clean_json = re.sub(
+                        r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw_json
+                    )
+                    try:
+                        tr_results = json.loads(clean_json)
+                    except json.JSONDecodeError as e:
+                        print(
+                            f"  {chunk_label} JSON parse error: {e}"
+                        )
+                        summary["errors"] += len(chunk)
+                        for _, _, tid in chunk:
+                            results.append(
+                                {
+                                    "id": tid,
+                                    "status": "ERROR",
+                                    "message": f"JSON parse error: {e}",
+                                }
+                            )
+                        continue
+
                     tr_passed = int(tr_results.get("passed", 0))
                     tr_failed = int(tr_results.get("failed", 0))
-                    tr_skipped = int(tr_results.get("skipped", 0))
                     tr_failed_tests = tr_results.get("failedTests", [])
 
                     summary["passed"] += tr_passed
                     summary["failed"] += tr_failed
 
-                    # Build failed-test ID set from TestRunner output
                     failed_set: set[str] = set()
                     failed_messages: dict[str, str] = {}
                     for name in tr_failed_tests:
-                        # Case 1: 'Test "<desc>" in suite "test262: <test_id>"'
-                        m = re.search(
-                            r'in suite "test262:\s*(.+?)"', name
-                        )
+                        m = re.search(r'in suite "test262:\s*(.+?)"', name)
                         if m:
                             tid = m.group(1)
-                            # tid may be the safe filename; map back
                             real_id = file_to_test_id.get(tid, tid)
                             failed_set.add(real_id)
                             failed_messages[real_id] = name
                             continue
-                        # Case 2: "test262: <test_id> > <description>"
                         first_line = name.split("\n")[0]
                         m = re.match(r"test262:\s*(.+?)\s*>", first_line)
                         if m:
                             failed_set.add(m.group(1))
                             failed_messages[m.group(1)] = name
                             continue
-                        # Case 3: "<filepath>: <error>" (parse/load error)
-                        m2 = re.search(r"[/\\]([^/\\]+\.js)(?:\s*:\s*(.+))?$", first_line)
+                        m2 = re.search(
+                            r"[/\\]([^/\\]+\.js)(?:\s*:\s*(.+))?$", first_line
+                        )
                         if m2:
                             fname = m2.group(1)
-                            test_id_guess = file_to_test_id.get(fname, fname.replace("__", "/"))
+                            test_id_guess = file_to_test_id.get(
+                                fname, fname.replace("__", "/")
+                            )
                             failed_set.add(test_id_guess)
                             failed_messages[test_id_guess] = name
                         else:
                             failed_set.add(name)
                             failed_messages[name] = name
 
-                    for _, _, test_id in batch_tests:
+                    for _, _, test_id in chunk:
                         safe = test_id.replace("/", "__").replace("\\", "__")
                         if test_id in failed_set or safe in failed_set:
                             status = "FAIL"
-                            msg = failed_messages.get(test_id, failed_messages.get(safe, ""))
+                            msg = failed_messages.get(
+                                test_id, failed_messages.get(safe, "")
+                            )
                         else:
                             status = "PASS"
                             msg = ""
-                        results.append({"id": test_id, "status": status, "message": msg})
+                        results.append(
+                            {"id": test_id, "status": status, "message": msg}
+                        )
 
+                    elapsed = int(time.monotonic() - start_time)
+                    cumulative_pass = summary["passed"]
+                    cumulative_fail = summary["failed"]
                     print(
-                        f"  GocciaTestRunner: {tr_passed} passed, "
-                        f"{tr_failed} failed, {tr_skipped} skipped"
+                        f"  {chunk_label} "
+                        f"{tr_passed} pass, {tr_failed} fail "
+                        f"(cumulative: {cumulative_pass} pass, "
+                        f"{cumulative_fail} fail, {elapsed}s)"
                     )
-                    if verbose:
-                        for tid in sorted(failed_set)[:50]:
-                            print(f"    F {tid}")
-            else:
-                print("Warning: GocciaTestRunner produced no JSON output")
-                if runner_output:
-                    for line in runner_output.split("\n")[:10]:
-                        print(f"  {line}")
-                summary["errors"] += len(batch_tests)
-                for _, _, test_id in batch_tests:
-                    results.append(
-                        {
-                            "id": test_id,
-                            "status": "ERROR",
-                            "message": runner_output[:300],
-                        }
-                    )
+                else:
+                    print(f"  {chunk_label} TestRunner produced no JSON output")
+                    if runner_output:
+                        for line in runner_output.split("\n")[:3]:
+                            print(f"    {line[:200]}")
+                    summary["errors"] += len(chunk)
+                    for _, _, test_id in chunk:
+                        results.append(
+                            {
+                                "id": test_id,
+                                "status": "ERROR",
+                                "message": runner_output[:300],
+                            }
+                        )
 
     # Phase 3: Negative parse-phase tests via ScriptLoader
     if negative_parse_tests:
@@ -613,6 +651,8 @@ def evaluate_suite(
             passed, output, duration = run_negative_parse_test(
                 script_loader, body, expected_error, timeout, asi=asi,
                 mode=mode, compat_var=compat_var,
+                compat_function=compat_function,
+                unsafe_function_constructor=unsafe_function_constructor,
             )
 
             if output == "TIMEOUT":
@@ -742,6 +782,32 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Disable var declaration compatibility.",
     )
+    parser.add_argument(
+        "--compat-function",
+        action="store_true",
+        default=True,
+        help="Enable `function` keyword support via --compat-function "
+             "(default: True, required for test262).",
+    )
+    parser.add_argument(
+        "--no-compat-function",
+        action="store_true",
+        default=False,
+        help="Disable function declaration compatibility.",
+    )
+    parser.add_argument(
+        "--unsafe-function-constructor",
+        action="store_true",
+        default=True,
+        help="Enable the Function constructor via "
+             "--unsafe-function-constructor (default: True).",
+    )
+    parser.add_argument(
+        "--no-unsafe-function-constructor",
+        action="store_true",
+        default=False,
+        help="Disable the Function constructor.",
+    )
     return parser.parse_args()
 
 
@@ -754,6 +820,12 @@ def main() -> int:
     # --no-compat-var overrides the default-True --compat-var
     if args.no_compat_var:
         args.compat_var = False
+    # --no-compat-function overrides the default-True --compat-function
+    if args.no_compat_function:
+        args.compat_function = False
+    # --no-unsafe-function-constructor overrides the default-True flag
+    if args.no_unsafe_function_constructor:
+        args.unsafe_function_constructor = False
 
     suite_dir, temp_checkout = ensure_suite_checkout(args.suite_dir)
     test_runner = ensure_binary("GocciaTestRunner", args.test_runner, "testrunner")
@@ -774,6 +846,14 @@ def main() -> int:
         print(f"Max tests:     {args.max_tests}")
     print(f"ASI:           {'enabled' if args.asi else 'disabled'}")
     print(f"Compat var:    {'enabled' if args.compat_var else 'disabled'}")
+    print(
+        f"Compat func:   "
+        f"{'enabled' if args.compat_function else 'disabled'}"
+    )
+    print(
+        f"Function():    "
+        f"{'enabled' if args.unsafe_function_constructor else 'disabled'}"
+    )
     print(f"Mode:          {args.mode}")
     print()
 
@@ -790,6 +870,8 @@ def main() -> int:
         asi=args.asi,
         mode=args.mode,
         compat_var=args.compat_var,
+        compat_function=args.compat_function,
+        unsafe_function_constructor=args.unsafe_function_constructor,
     )
 
     if args.output is not None:

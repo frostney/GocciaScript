@@ -249,11 +249,8 @@ SKIP_FLAGS: set[str] = {
 # to detect unsupported GocciaScript syntax.  The patterns are deliberately
 # conservative: it is better to skip a valid test than to run an invalid one.
 
-_UNSUPPORTED_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("function_declaration",
-     re.compile(r"\bfunction\s+\w+\s*\(")),
-    ("function_expression",
-     re.compile(r"\bfunction\s*\(")),
+# Patterns that are always unsupported regardless of compatibility flags.
+_ALWAYS_UNSUPPORTED_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("function_star",
      re.compile(r"\bfunction\s*\*")),
     ("generator_method",
@@ -278,12 +275,33 @@ _UNSUPPORTED_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
      re.compile(r"\barguments\b")),
     ("with_statement",
      re.compile(r"\bwith\s*\(")),
-    ("new_function",
-     re.compile(r"\bnew\s+Function\s*\(")),
     ("yield_keyword",
      re.compile(r"\byield\b")),
     ("labeled_statement",
      re.compile(r"^\s*\w+\s*:\s*(?:for|while|do|if|switch)\b", re.MULTILINE)),
+    # Labeled `break <label>` / `continue <label>` — catches the reference
+    # site even when the labeled definition is on a plain block
+    # (e.g. `label: { ... break label; ... }`), which the
+    # `labeled_statement` pattern deliberately doesn't cover to avoid
+    # false-positives on multi-line object literals.
+    ("labeled_break",
+     re.compile(r"\bbreak\s+[A-Za-z_$][\w$]*")),
+    ("labeled_continue",
+     re.compile(r"\bcontinue\s+[A-Za-z_$][\w$]*")),
+]
+
+# Patterns gated by --compat-function (function declarations / expressions).
+_COMPAT_FUNCTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("function_declaration",
+     re.compile(r"\bfunction\s+\w+\s*\(")),
+    ("function_expression",
+     re.compile(r"\bfunction\s*\(")),
+]
+
+# Patterns gated by --unsafe-function-constructor (`new Function(...)`).
+_UNSAFE_FUNCTION_CONSTRUCTOR_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("new_function",
+     re.compile(r"\bnew\s+Function\s*\(")),
 ]
 
 
@@ -415,14 +433,26 @@ def check_flags(flags: list[str]) -> list[str]:
     return reasons
 
 
-def check_syntax(source: str) -> list[str]:
+def check_syntax(
+    source: str,
+    compat_function: bool = False,
+    unsafe_function_constructor: bool = False,
+) -> list[str]:
     """Scan source for unsupported GocciaScript syntax patterns.
 
-    Returns a list of skip reason strings, empty if eligible.
+    Returns a list of skip reason strings, empty if eligible. When
+    ``compat_function`` is enabled, ``function`` declarations and expressions
+    are accepted. When ``unsafe_function_constructor`` is enabled,
+    ``new Function(...)`` is accepted.
     """
     stripped = _strip_strings_and_comments(source)
+    patterns: list[tuple[str, re.Pattern[str]]] = list(_ALWAYS_UNSUPPORTED_PATTERNS)
+    if not compat_function:
+        patterns.extend(_COMPAT_FUNCTION_PATTERNS)
+    if not unsafe_function_constructor:
+        patterns.extend(_UNSAFE_FUNCTION_CONSTRUCTOR_PATTERNS)
     reasons: list[str] = []
-    for name, pattern in _UNSUPPORTED_PATTERNS:
+    for name, pattern in patterns:
         if pattern.search(stripped):
             reasons.append(f"unsupported_syntax:{name}")
     return reasons
@@ -496,6 +526,8 @@ def is_eligible(
     includes: list[str],
     negative: dict | None,
     test_id: str = "",
+    compat_function: bool = False,
+    unsafe_function_constructor: bool = False,
 ) -> tuple[bool, list[str]]:
     """Check whether a test262 test is eligible to run in GocciaScript.
 
@@ -520,6 +552,12 @@ def is_eligible(
     # Syntax check (only if not already skipped for other reasons,
     # to save time on large suites)
     if not reasons:
-        reasons.extend(check_syntax(source))
+        reasons.extend(
+            check_syntax(
+                source,
+                compat_function=compat_function,
+                unsafe_function_constructor=unsafe_function_constructor,
+            )
+        )
 
     return (len(reasons) == 0, reasons)
