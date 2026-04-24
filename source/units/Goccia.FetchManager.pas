@@ -47,6 +47,8 @@ uses
 const
   FETCH_WORKER_STACK_SIZE = 8 * 1024 * 1024;
   FETCH_POLL_INTERVAL_MS = 1;
+  MAX_FETCH_WORKERS = 16;
+  FETCH_WORKER_LIMIT_ERROR = 'fetch worker limit exceeded';
 
 type
   TGocciaFetchCompletion = class
@@ -56,6 +58,21 @@ type
     Response: THTTPResponse;
     ErrorMessage: string;
     constructor Create(const ARequestID: Integer);
+  end;
+
+  TGocciaFetchLimiter = class
+  private
+    FLock: TRTLCriticalSection;
+    FActiveWorkers: Integer;
+    FRefCount: Integer;
+  public
+    constructor Create;
+    destructor Destroy; override;
+
+    procedure AddRef;
+    procedure Release;
+    function TryAcquireWorker: Boolean;
+    procedure ReleaseWorker;
   end;
 
   TGocciaFetchState = class
@@ -85,6 +102,7 @@ type
   TGocciaFetchWorker = class(TThread)
   private
     FState: TGocciaFetchState;
+    FLimiter: TGocciaFetchLimiter;
     FRequestID: Integer;
     FURL: string;
     FMethod: string;
@@ -93,14 +111,15 @@ type
     procedure Execute; override;
   public
     constructor Create(const AState: TGocciaFetchState;
-      const ARequestID: Integer; const AURL, AMethod: string;
-      const AHeaders: THTTPHeaders);
+      const ALimiter: TGocciaFetchLimiter; const ARequestID: Integer;
+      const AURL, AMethod: string; const AHeaders: THTTPHeaders);
     destructor Destroy; override;
   end;
 
   TGocciaFetchManagerImpl = class(TGocciaFetchManager)
   private
     FState: TGocciaFetchState;
+    FLimiter: TGocciaFetchLimiter;
     FPending: TList<TGocciaPendingFetch>;
     FNextRequestID: Integer;
     function PopCompletion(out ACompletion: TGocciaFetchCompletion): Boolean;
@@ -130,6 +149,56 @@ begin
   RequestID := ARequestID;
   Success := False;
   ErrorMessage := '';
+end;
+
+{ TGocciaFetchLimiter }
+
+constructor TGocciaFetchLimiter.Create;
+begin
+  inherited Create;
+  InitCriticalSection(FLock);
+  FActiveWorkers := 0;
+  FRefCount := 1;
+end;
+
+destructor TGocciaFetchLimiter.Destroy;
+begin
+  DoneCriticalSection(FLock);
+  inherited;
+end;
+
+procedure TGocciaFetchLimiter.AddRef;
+begin
+  InterlockedIncrement(FRefCount);
+end;
+
+procedure TGocciaFetchLimiter.Release;
+begin
+  if InterlockedDecrement(FRefCount) = 0 then
+    Free;
+end;
+
+function TGocciaFetchLimiter.TryAcquireWorker: Boolean;
+begin
+  EnterCriticalSection(FLock);
+  try
+    Result := FActiveWorkers < MAX_FETCH_WORKERS;
+    if Result then
+      Inc(FActiveWorkers);
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+procedure TGocciaFetchLimiter.ReleaseWorker;
+begin
+  EnterCriticalSection(FLock);
+  try
+    if FActiveWorkers > 0 then
+      Dec(FActiveWorkers);
+  finally
+    LeaveCriticalSection(FLock);
+  end;
 end;
 
 { TGocciaFetchState }
@@ -220,22 +289,30 @@ end;
 { TGocciaFetchWorker }
 
 constructor TGocciaFetchWorker.Create(const AState: TGocciaFetchState;
-  const ARequestID: Integer; const AURL, AMethod: string;
-  const AHeaders: THTTPHeaders);
+  const ALimiter: TGocciaFetchLimiter; const ARequestID: Integer;
+  const AURL, AMethod: string; const AHeaders: THTTPHeaders);
 begin
   inherited Create(True, FETCH_WORKER_STACK_SIZE);
   FreeOnTerminate := True;
-  FState := AState;
-  FState.AddRef;
   FRequestID := ARequestID;
   FURL := AURL;
   FMethod := AMethod;
   FHeaders := AHeaders;
+  FState := AState;
+  FState.AddRef;
+  FLimiter := ALimiter;
+  FLimiter.AddRef;
 end;
 
 destructor TGocciaFetchWorker.Destroy;
 begin
-  FState.Release;
+  if Assigned(FLimiter) then
+  begin
+    FLimiter.ReleaseWorker;
+    FLimiter.Release;
+  end;
+  if Assigned(FState) then
+    FState.Release;
   inherited;
 end;
 
@@ -289,6 +366,7 @@ constructor TGocciaFetchManagerImpl.Create;
 begin
   inherited Create;
   FState := TGocciaFetchState.Create;
+  FLimiter := TGocciaFetchLimiter.Create;
   FPending := TList<TGocciaPendingFetch>.Create;
   FNextRequestID := 1;
 end;
@@ -298,6 +376,7 @@ begin
   DiscardPending;
   FState.Abandon;
   FState.Release;
+  FLimiter.Release;
   FPending.Free;
   inherited;
 end;
@@ -307,20 +386,35 @@ procedure TGocciaFetchManagerImpl.StartFetch(const AURL, AMethod: string;
 var
   Pending: TGocciaPendingFetch;
   Worker: TGocciaFetchWorker;
-  Added: Boolean;
+  Added, LimitAcquired, Rooted: Boolean;
 begin
   Worker := nil;
   Added := False;
+  LimitAcquired := False;
+  Rooted := False;
+
+  if not FLimiter.TryAcquireWorker then
+  begin
+    APromise.Reject(CreateErrorObject('TypeError', FETCH_WORKER_LIMIT_ERROR));
+    Exit;
+  end;
+  LimitAcquired := True;
+
   Pending.RequestID := FNextRequestID;
   Inc(FNextRequestID);
   Pending.Promise := APromise;
-  Worker := TGocciaFetchWorker.Create(FState, Pending.RequestID,
-    AURL, AMethod, AHeaders);
-
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.AddTempRoot(APromise);
 
   try
+    Worker := TGocciaFetchWorker.Create(FState, FLimiter,
+      Pending.RequestID, AURL, AMethod, AHeaders);
+    LimitAcquired := False;
+
+    if Assigned(TGarbageCollector.Instance) then
+    begin
+      TGarbageCollector.Instance.AddTempRoot(APromise);
+      Rooted := True;
+    end;
+
     FPending.Add(Pending);
     Added := True;
     Worker.Start;
@@ -328,9 +422,11 @@ begin
   except
     if Added then
       FPending.Delete(FPending.Count - 1);
-    if Assigned(TGarbageCollector.Instance) then
+    if Rooted and Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.RemoveTempRoot(APromise);
     Worker.Free;
+    if LimitAcquired then
+      FLimiter.ReleaseWorker;
     raise;
   end;
 end;
@@ -452,8 +548,11 @@ end;
 procedure TGocciaFetchManagerImpl.DiscardPending;
 var
   I: Integer;
+  HadPending: Boolean;
+  OldState: TGocciaFetchState;
   Pending: TGocciaPendingFetch;
 begin
+  HadPending := FPending.Count > 0;
   for I := 0 to FPending.Count - 1 do
   begin
     Pending := FPending[I];
@@ -461,7 +560,17 @@ begin
       TGarbageCollector.Instance.RemoveTempRoot(Pending.Promise);
   end;
   FPending.Clear;
-  FState.ClearCompletions;
+
+  if not HadPending then
+  begin
+    FState.ClearCompletions;
+    Exit;
+  end;
+
+  OldState := FState;
+  FState := TGocciaFetchState.Create;
+  OldState.Abandon;
+  OldState.Release;
 end;
 
 procedure DrainMicrotasksAndFetchCompletions;

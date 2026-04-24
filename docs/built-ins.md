@@ -750,7 +750,7 @@ The `options` object supports `method` (`"GET"` or `"HEAD"`) and `headers` (plai
 
 Host matching is case-insensitive and ignores port, path, and userinfo. Only the hostname portion of the URL is checked.
 
-**GocciaScript differences:** Only `GET` and `HEAD` methods. No `Request` object, `AbortSignal`, streaming body, or CORS. Requests run on fetch-specific background workers and settle their Promise on the owning runtime thread; `await fetch(...)` still synchronously waits by pumping fetch completions. Requires `--allowed-host` configuration.
+**GocciaScript differences:** Only `GET` and `HEAD` methods. No `Request` object, `AbortSignal`, streaming body, or CORS. Requests run on fetch-specific background workers and settle their Promise on the owning runtime thread; `await fetch(...)` still synchronously waits by pumping fetch completions. Each runtime caps active fetch workers at 16; additional calls reject their returned Promise with `TypeError` until a worker finishes. Requires `--allowed-host` configuration.
 
 ### Headers (`Goccia.Values.HeadersValue.pas`)
 
