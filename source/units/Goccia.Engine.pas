@@ -305,6 +305,7 @@ uses
   Goccia.Coverage,
   Goccia.Error,
   Goccia.Evaluator,
+  Goccia.FetchManager,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
   Goccia.JSX.Transformer,
@@ -629,6 +630,7 @@ begin
   TGarbageCollector.Initialize;
   TGocciaCallStack.Initialize;
   TGocciaMicrotaskQueue.Initialize;
+  TGocciaFetchManager.Initialize;
 
   FPreprocessors := DefaultPreprocessors;
   FCompatibility := DefaultCompatibility;
@@ -665,6 +667,8 @@ end;
 destructor TGocciaEngine.Destroy;
 begin
   try
+    TGocciaFetchManager.Shutdown;
+
     if Assigned(TGarbageCollector.Instance) and Assigned(FInterpreter) then
       TGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);
 
@@ -1353,8 +1357,7 @@ begin
             CheckTopLevelRedeclarations(ProgramNode,
               FInterpreter.GlobalScope, FSourcePath);
             FLastTiming.Result := FExecutor.ExecuteProgram(ProgramNode);
-            if Assigned(TGocciaMicrotaskQueue.Instance) then
-              TGocciaMicrotaskQueue.Instance.DrainQueue;
+            WaitForFetchIdle;
             ExecEnd := GetNanoseconds;
             FLastTiming.CompileTimeNanoseconds := FExecutor.CompileTimeNanoseconds;
             FLastTiming.ExecuteTimeNanoseconds := FExecutor.ExecuteTimeNanoseconds;
@@ -1362,6 +1365,7 @@ begin
           finally
             if Assigned(TGocciaMicrotaskQueue.Instance) then
               TGocciaMicrotaskQueue.Instance.ClearQueue;
+            DiscardFetchCompletions;
             ProgramNode.Free;
           end;
         finally
@@ -1399,11 +1403,11 @@ function TGocciaEngine.ExecuteProgram(const AProgram: TGocciaProgram): TGocciaVa
 begin
   try
     Result := FExecutor.ExecuteProgram(AProgram);
-    if Assigned(TGocciaMicrotaskQueue.Instance) then
-      TGocciaMicrotaskQueue.Instance.DrainQueue;
+    WaitForFetchIdle;
   finally
     if Assigned(TGocciaMicrotaskQueue.Instance) then
       TGocciaMicrotaskQueue.Instance.ClearQueue;
+    DiscardFetchCompletions;
   end;
 end;
 

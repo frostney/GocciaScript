@@ -79,6 +79,7 @@ uses
   Math,
   SysUtils,
 
+  Goccia.FetchManager,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Values.ArrayValue,
@@ -254,8 +255,7 @@ begin
       InvokeBenchmarkFunction(ABenchCase.RunFunction, ASetupResult, ARunArgs);
       Inc(I);
     end;
-    if Assigned(TGocciaMicrotaskQueue.Instance) then
-      TGocciaMicrotaskQueue.Instance.DrainQueue;
+    WaitForFetchIdle;
     ElapsedNanoseconds := GetNanoseconds - StartNanoseconds;
 
     if ElapsedNanoseconds >= TargetNanoseconds then
@@ -371,8 +371,7 @@ begin
       StartNanoseconds := GetNanoseconds;
       SetupResult := ABenchCase.SetupFunction.CallNoArgs(
         TGocciaUndefinedLiteralValue.UndefinedValue);
-      if Assigned(TGocciaMicrotaskQueue.Instance) then
-        TGocciaMicrotaskQueue.Instance.DrainQueue;
+      WaitForFetchIdle;
       Result.SetupMs := (GetNanoseconds - StartNanoseconds) / 1000000;
 
       if Assigned(SetupResult) and Assigned(GC) then
@@ -382,8 +381,7 @@ begin
     try
       for K := 1 to WARMUP_ITERATIONS do
         InvokeBenchmarkFunction(ABenchCase.RunFunction, SetupResult, RunArgs);
-      if Assigned(TGocciaMicrotaskQueue.Instance) then
-        TGocciaMicrotaskQueue.Instance.DrainQueue;
+      WaitForFetchIdle;
 
       Iterations := CalibrateIterations(ABenchCase, SetupResult, RunArgs);
 
@@ -416,8 +414,7 @@ begin
           InvokeBenchmarkFunction(ABenchCase.RunFunction, SetupResult, RunArgs);
           Inc(I);
         end;
-        if Assigned(TGocciaMicrotaskQueue.Instance) then
-          TGocciaMicrotaskQueue.Instance.DrainQueue;
+        WaitForFetchIdle;
         RoundNanoseconds := GetNanoseconds - StartNanoseconds;
 
         if RoundNanoseconds > 0 then
@@ -487,8 +484,7 @@ begin
       begin
         StartNanoseconds := GetNanoseconds;
         InvokeBenchmarkFunction(ABenchCase.TeardownFunction, SetupResult, RunArgs);
-        if Assigned(TGocciaMicrotaskQueue.Instance) then
-          TGocciaMicrotaskQueue.Instance.DrainQueue;
+        WaitForFetchIdle;
         Result.TeardownMs := (GetNanoseconds - StartNanoseconds) / 1000000;
       end;
     finally
@@ -559,6 +555,7 @@ begin
         begin
           if Assigned(TGocciaMicrotaskQueue.Instance) then
             TGocciaMicrotaskQueue.Instance.ClearQueue;
+          DiscardFetchCompletions;
 
           SingleResult := TGocciaObjectValue.Create;
           SingleResult.AssignProperty('name', TGocciaStringLiteralValue.Create(BenchCase.Name));

@@ -19,6 +19,7 @@ uses
   Goccia.Engine.Backend,
   Goccia.Error,
   Goccia.Error.Detail,
+  Goccia.FetchManager,
   Goccia.GarbageCollector,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
@@ -161,8 +162,7 @@ begin
                     if Assigned(ResultValue) then
                       TGarbageCollector.Instance.AddTempRoot(ResultValue);
                     try
-                      if Assigned(TGocciaMicrotaskQueue.Instance) then
-                        TGocciaMicrotaskQueue.Instance.DrainQueue;
+                      WaitForFetchIdle;
                       ExecEnd := GetNanoseconds;
 
                       if ResultValue <> nil then
@@ -174,6 +174,7 @@ begin
                   finally
                     if Assigned(TGocciaMicrotaskQueue.Instance) then
                       TGocciaMicrotaskQueue.Instance.ClearQueue;
+                    DiscardFetchCompletions;
                     LiveModules.Add(Module);
                   end;
                 finally

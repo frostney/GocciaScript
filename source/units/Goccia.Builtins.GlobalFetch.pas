@@ -44,12 +44,12 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.FetchManager,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HeadersValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue,
-  Goccia.Values.ResponseValue,
   Goccia.Values.URLValue;
 
 { Host extraction }
@@ -145,9 +145,6 @@ var
   URLArg, OptionsArg, MethodVal, HeadersVal: TGocciaValue;
   URLStr, Method: string;
   RequestHeaders: THTTPHeaders;
-  HTTPResp: THTTPResponse;
-  RespHeaders: TGocciaHeadersValue;
-  RespValue: TGocciaResponseValue;
   Promise: TGocciaPromiseValue;
   Obj: TGocciaObjectValue;
   PropNames: TArray<string>;
@@ -220,31 +217,11 @@ begin
   // Perform the request
   Promise := TGocciaPromiseValue.Create;
   try
-    if Method = 'HEAD' then
-      HTTPResp := HTTPHead(URLStr, RequestHeaders)
-    else
-      HTTPResp := HTTPGet(URLStr, RequestHeaders);
-
-    // Build Headers object from response
-    RespHeaders := TGocciaHeadersValue.Create;
-    RespHeaders.Immutable := True;
-    for I := 0 to High(HTTPResp.Headers) do
-      RespHeaders.AddHeader(HTTPResp.Headers[I].Name, HTTPResp.Headers[I].Value);
-
-    // Build Response object
-    RespValue := TGocciaResponseValue.Create;
-    RespValue.InitFromHTTP(
-      HTTPResp.StatusCode,
-      HTTPResp.StatusText,
-      HTTPResp.FinalURL,
-      RespHeaders,
-      HTTPResp.Body,
-      HTTPResp.Redirected);
-
-    Promise.Resolve(RespValue);
+    if not Assigned(TGocciaFetchManager.Instance) then
+      TGocciaFetchManager.Initialize;
+    TGocciaFetchManager.Instance.StartFetch(URLStr, Method, RequestHeaders,
+      Promise);
   except
-    on E: EHTTPError do
-      Promise.Reject(CreateErrorObject('TypeError', E.Message));
     on E: Exception do
       Promise.Reject(CreateErrorObject('TypeError', 'fetch failed: ' + E.Message));
   end;
