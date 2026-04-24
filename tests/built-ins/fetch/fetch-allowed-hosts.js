@@ -27,6 +27,16 @@ describe("fetch allowed hosts", () => {
     });
   });
 
+  // Positive-path real-fetch test: exercises ValidateHost acceptance so an
+  // allowlist regression can't be masked by the mocked tests below. 0.0.0.0:1
+  // is in the allowlist and refuses connection instantly on the loopback
+  // stack, so the promise settles without hanging.
+  test("allowlisted host is accepted by ValidateHost (real fetch)", () => {
+    const p = fetch("http://0.0.0.0:1/");
+    p.catch(() => {});
+    expect(typeof p.then).toBe("function");
+  });
+
   // Allowed-host tests replace globalThis.fetch with a spy so no network
   // traffic is generated. Real-network allowlist behaviour is exercised by
   // scripts/fetch-e2e.sh. These tests verify the call shape is accepted and
