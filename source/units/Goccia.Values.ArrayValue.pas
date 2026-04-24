@@ -140,6 +140,10 @@ type
   TArrayLikeView = record
     Obj: TGocciaObjectValue;
     Len: Integer;
+    // Raw post-ToLength length, capped at 2^53-1 but not truncated to MaxInt.
+    // Used by callers that need to detect lengths that exceed spec bounds
+    // (ArrayCreate: 2^32-1; safe-integer length: 2^53-1) before truncation.
+    RawLen: Double;
     Arr: TGocciaArrayValue; // non-nil only when Obj is a native array
     procedure Init(const AThisValue: TGocciaValue);
     function Get(const AIndex: Integer): TGocciaValue;
@@ -147,7 +151,17 @@ type
     function HasIndex(const AIndex: Integer): Boolean;
     procedure DeleteIndex(const AIndex: Integer);
     procedure SetLen(const ANewLen: Integer);
+    // Spec §10.4.2.2 ArrayCreate: RangeError if RawLen > 2^32 - 1
+    procedure CheckArrayCreateLen;
+    // RangeError if ANewLen > 2^32 - 1 (for ArrayCreate(newLen))
+    procedure CheckArrayCreateLenValue(const ANewLen: Double);
+    // TypeError if ANewLen > 2^53 - 1 (for length updates on generic objects)
+    procedure CheckSafeIntegerLen(const ANewLen: Double);
   end;
+
+const
+  ARRAY_CREATE_LIMIT = 4294967295.0;       // 2^32 - 1
+  ARRAY_MAX_SAFE_LENGTH = 9007199254740991.0; // 2^53 - 1
 
 procedure TArrayLikeView.Init(const AThisValue: TGocciaValue);
 begin
@@ -156,12 +170,33 @@ begin
   begin
     Arr := TGocciaArrayValue(Obj);
     Len := Arr.Elements.Count;
+    RawLen := Len;
   end
   else
   begin
     Arr := nil;
-    Len := LengthOfArrayLike(Obj);
+    Len := LengthOfArrayLikeEx(Obj, RawLen);
   end;
+end;
+
+procedure TArrayLikeView.CheckArrayCreateLen;
+begin
+  if RawLen > ARRAY_CREATE_LIMIT then
+    ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
+end;
+
+procedure TArrayLikeView.CheckArrayCreateLenValue(const ANewLen: Double);
+begin
+  if ANewLen > ARRAY_CREATE_LIMIT then
+    ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
+end;
+
+procedure TArrayLikeView.CheckSafeIntegerLen(const ANewLen: Double);
+begin
+  if ANewLen > ARRAY_MAX_SAFE_LENGTH then
+    ThrowTypeError(
+      'Array length exceeds maximum safe integer (2^53 - 1)',
+      'use a smaller length');
 end;
 
 function TArrayLikeView.Get(const AIndex: Integer): TGocciaValue;
@@ -1088,9 +1123,14 @@ function TGocciaArrayValue.ArrayPush(const AArgs: TGocciaArgumentsCollection; co
 var
   View: TArrayLikeView;
   NewLen, I: Integer;
+  RawNewLen: Double;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
+
+  // Step 4: If len + argCount > 2^53 - 1, throw TypeError
+  RawNewLen := View.RawLen + AArgs.Length;
+  View.CheckSafeIntegerLen(RawNewLen);
 
   // Fast path: native array
   if Assigned(View.Arr) then
@@ -1585,8 +1625,21 @@ procedure SpreadIntoConcat(const ASource: TGocciaValue; const AResult: TGocciaAr
 var
   SrcView: TArrayLikeView;
   J: Integer;
+  EndN: Double;
 begin
   SrcView.Init(ASource);
+  // ES2026 §23.1.3.1 step 5.c.iii.2: if n + len > 2^53 - 1, throw TypeError.
+  EndN := N + SrcView.RawLen;
+  if EndN > ARRAY_MAX_SAFE_LENGTH then
+    ThrowTypeError(
+      'Array length exceeds maximum safe integer (2^53 - 1)',
+      'use a smaller length');
+  // Pragmatic guard: this implementation tracks `n` as an Integer and cannot
+  // materialise more than ARRAY_CREATE_LIMIT (2^32 - 1) elements in a
+  // native array.  A source length that would carry `n` past that bound is
+  // rejected up-front rather than silently truncated mid-iteration.
+  if EndN > ARRAY_CREATE_LIMIT then
+    ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
   for J := 0 to SrcView.Len - 1 do
   begin
     if SrcView.HasIndex(J) then
@@ -1703,7 +1756,8 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
-  // Step 3: Let A be ArrayCreate(len)
+  // Step 3: Let A be ArrayCreate(len) — RangeError if len > 2^32-1
+  View.CheckArrayCreateLen;
   ResultArray := TGocciaArrayValue.Create;
 
   // Step 4: Let k be 0; repeat while k < len
@@ -1725,7 +1779,8 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
-  // Step 4: Let A be ArrayCreate(len)
+  // Step 4: Let A be ArrayCreate(len) — RangeError if len > 2^32-1
+  View.CheckArrayCreateLen;
   ResultArray := TGocciaArrayValue.Create;
 
   // Step 5: Copy elements from O into A
@@ -1758,8 +1813,9 @@ var
   View: TArrayLikeView;
   ResultArray: TGocciaArrayValue;
   StartIndex, DeleteCount: Integer;
-  I: Integer;
+  I, InsertCount: Integer;
   ActualStartIndex: Integer;
+  NewLen: Double;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
@@ -1777,6 +1833,16 @@ begin
     DeleteCount := 0
   else if ActualStartIndex + DeleteCount > View.Len then
     DeleteCount := View.Len - ActualStartIndex;
+
+  // Step 8: Let newLen be len + insertCount - actualSkipCount
+  //         If newLen > 2^53 - 1, throw TypeError
+  //         (ArrayCreate additionally throws RangeError if newLen > 2^32 - 1)
+  InsertCount := AArgs.Length - 2;
+  if InsertCount < 0 then
+    InsertCount := 0;
+  NewLen := View.RawLen + InsertCount - DeleteCount;
+  View.CheckSafeIntegerLen(NewLen);
+  View.CheckArrayCreateLenValue(NewLen);
 
   // Step 9: Let A be ArrayCreate(newLen)
   ResultArray := TGocciaArrayValue.Create;
@@ -2102,6 +2168,9 @@ begin
   if ItemCount < 0 then
     ItemCount := 0;
 
+  // Step 9a: If len + itemCount - actualDeleteCount > 2^53 - 1, throw TypeError
+  View.CheckSafeIntegerLen(View.RawLen + ItemCount - DeleteCount);
+
   // Step 10: Let A be ArraySpeciesCreate(O, actualDeleteCount)
   if Assigned(View.Arr) then
     Removed := ArraySpeciesCreate(View.Arr, DeleteCount)
@@ -2208,6 +2277,9 @@ begin
     Result := TGocciaNumberLiteralValue.Create(View.Len);
     Exit;
   end;
+
+  // Step 4.a: If len + argCount > 2^53 - 1, throw TypeError
+  View.CheckSafeIntegerLen(View.RawLen + ArgCount);
 
   // Shift existing elements up by argCount via View for prototype-aware semantics
   NewLen := View.Len + ArgCount;

@@ -16,6 +16,12 @@ function ToObject(const AValue: TGocciaValue): TGocciaObjectValue;
 // Returns ToLength(? Get(obj, "length")).
 function LengthOfArrayLike(const AObj: TGocciaObjectValue): Integer;
 
+// ES2026 §7.3.3 LengthOfArrayLike(obj), returning both the raw post-ToLength
+// value (capped at 2^53-1 but not truncated to Integer) and the Integer-clamped
+// length used by legacy callers.  Callers that need to enforce ArrayCreate
+// bounds (2^32-1) or safe-integer length bounds (2^53-1) must use AOutRawLen.
+function LengthOfArrayLikeEx(const AObj: TGocciaObjectValue; out AOutRawLen: Double): Integer;
+
 implementation
 
 uses
@@ -57,6 +63,16 @@ end;
 // ES2026 §7.3.3 LengthOfArrayLike(obj)
 function LengthOfArrayLike(const AObj: TGocciaObjectValue): Integer;
 var
+  RawLen: Double;
+begin
+  Result := LengthOfArrayLikeEx(AObj, RawLen);
+end;
+
+// Shared implementation that also returns the raw post-ToLength value.
+function LengthOfArrayLikeEx(const AObj: TGocciaObjectValue; out AOutRawLen: Double): Integer;
+const
+  MAX_SAFE_INTEGER = 9007199254740991.0; // 2^53 - 1
+var
   LengthProp: TGocciaValue;
   LengthValue: Double;
 begin
@@ -69,6 +85,7 @@ begin
      (LengthProp is TGocciaUndefinedLiteralValue) or
      (LengthProp is TGocciaNullLiteralValue) then
   begin
+    AOutRawLen := 0;
     Result := 0;
     Exit;
   end;
@@ -76,8 +93,19 @@ begin
   LengthValue := LengthProp.ToNumberLiteral.Value;
 
   if IsNan(LengthValue) or (LengthValue <= 0) then
-    Result := 0
-  else if LengthValue >= MaxInt then
+  begin
+    AOutRawLen := 0;
+    Result := 0;
+    Exit;
+  end;
+
+  // Cap raw length at 2^53 - 1 per ToLength step 3.
+  if LengthValue > MAX_SAFE_INTEGER then
+    AOutRawLen := MAX_SAFE_INTEGER
+  else
+    AOutRawLen := Trunc(LengthValue);
+
+  if LengthValue >= MaxInt then
     Result := MaxInt
   else
     Result := Trunc(LengthValue);
