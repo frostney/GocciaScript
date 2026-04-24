@@ -444,123 +444,116 @@ def evaluate_suite(
     results: list[dict] = []
     start_time = time.monotonic()
 
-    # Phase 2: Positive + negative-runtime via TestRunner (chunked batches).
-    # The TestRunner doesn't scale to tens of thousands of test files in a
-    # single invocation, so we split into chunks and aggregate. Each chunk
-    # gets its own temp dir and JSON output.
+    # Phase 2: Positive + negative-runtime via a single GocciaTestRunner
+    # invocation.  The runner's own thread pool handles the parallelism
+    # internally, and its per-worker-idle watchdog keeps a stuck test
+    # from holding up the whole batch, so splitting into chunks here
+    # would only add per-process startup overhead.
     batch_tests = positive_tests + negative_runtime_tests
-    CHUNK_SIZE = 1000
     if batch_tests:
-        chunks = [
-            batch_tests[i : i + CHUNK_SIZE]
-            for i in range(0, len(batch_tests), CHUNK_SIZE)
-        ]
-        print(
-            f"Running GocciaTestRunner in {len(chunks)} chunks of up to "
-            f"{CHUNK_SIZE} tests ({len(batch_tests)} total) ..."
-        )
+        with tempfile.TemporaryDirectory(prefix="test262-goccia.") as tmp:
+            temp_dir = Path(tmp)
+            file_to_test_id: dict[str, str] = {}
 
-        for chunk_idx, chunk in enumerate(chunks, start=1):
-            with tempfile.TemporaryDirectory(prefix="test262-goccia.") as tmp:
-                temp_dir = Path(tmp)
-                file_to_test_id: dict[str, str] = {}
+            print(
+                f"Generating {len(batch_tests)} wrapped test files "
+                f"for GocciaTestRunner ..."
+            )
+            for test_path, metadata, test_id in batch_tests:
+                source = test_path.read_text(encoding="utf-8")
+                body = strip_frontmatter(source)
+                description = metadata.get("description", test_id)
+                if isinstance(description, dict):
+                    description = str(description)
+                negative = metadata.get("negative")
+                includes = metadata.get("includes", [])
 
-                for test_path, metadata, test_id in chunk:
-                    source = test_path.read_text(encoding="utf-8")
-                    body = strip_frontmatter(source)
-                    description = metadata.get("description", test_id)
-                    if isinstance(description, dict):
-                        description = str(description)
-                    negative = metadata.get("negative")
-                    includes = metadata.get("includes", [])
+                flags = metadata.get("flags", [])
+                is_async = "async" in flags
+                if is_async and "doneprintHandle.js" not in includes:
+                    includes = [*includes, "doneprintHandle.js"]
+                harness_source = build_harness_source(includes, harness_files)
 
-                    flags = metadata.get("flags", [])
-                    is_async = "async" in flags
-                    if is_async and "doneprintHandle.js" not in includes:
-                        includes = [*includes, "doneprintHandle.js"]
-                    harness_source = build_harness_source(includes, harness_files)
-
-                    if negative is not None and negative.get("phase") == "runtime":
-                        error_type = negative.get("type", "TypeError")
-                        wrapped = wrap_negative_runtime_test(
-                            harness_source, body, test_id, description, error_type
-                        )
-                    else:
-                        wrapped = wrap_positive_test(
-                            harness_source, body, test_id, description,
-                            is_async=is_async,
-                        )
-
-                    safe_name = test_id.replace("/", "__").replace("\\", "__")
-                    out_path = temp_dir / safe_name
-                    out_path.write_text(wrapped, encoding="utf-8")
-                    file_to_test_id[safe_name] = test_id
-
-                json_output = temp_dir / "__results.json"
-
-                runner_cmd = [
-                    str(test_runner),
-                    str(temp_dir),
-                    "--silent",
-                    f"--output={json_output}",
-                    f"--timeout={timeout * 1000}",
-                ]
-                if asi:
-                    runner_cmd.append("--asi")
-                if mode != "interpreted":
-                    runner_cmd.append(f"--mode={mode}")
-                if compat_var:
-                    runner_cmd.append("--compat-var")
-                if compat_function:
-                    runner_cmd.append("--compat-function")
-                if unsafe_function_constructor:
-                    runner_cmd.append("--unsafe-function-constructor")
-
-                try:
-                    runner_timeout = max(timeout * len(chunk), 120) + 60
-                    process = subprocess.run(
-                        runner_cmd,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.PIPE,
-                        timeout=runner_timeout,
-                        check=False,
+                if negative is not None and negative.get("phase") == "runtime":
+                    error_type = negative.get("type", "TypeError")
+                    wrapped = wrap_negative_runtime_test(
+                        harness_source, body, test_id, description, error_type
                     )
-                    runner_output = (
-                        process.stderr.decode("utf-8", errors="replace")
-                    ).strip()
-                except subprocess.TimeoutExpired:
-                    runner_output = "GocciaTestRunner global timeout"
-                    process = None
+                else:
+                    wrapped = wrap_positive_test(
+                        harness_source, body, test_id, description,
+                        is_async=is_async,
+                    )
 
-                chunk_label = (
-                    f"[chunk {chunk_idx}/{len(chunks)}, "
-                    f"{len(chunk)} tests]"
+                safe_name = test_id.replace("/", "__").replace("\\", "__")
+                out_path = temp_dir / safe_name
+                out_path.write_text(wrapped, encoding="utf-8")
+                file_to_test_id[safe_name] = test_id
+
+            json_output = temp_dir / "__results.json"
+
+            runner_cmd = [
+                str(test_runner),
+                str(temp_dir),
+                "--silent",
+                f"--output={json_output}",
+                f"--timeout={timeout * 1000}",
+            ]
+            if asi:
+                runner_cmd.append("--asi")
+            if mode != "interpreted":
+                runner_cmd.append(f"--mode={mode}")
+            if compat_var:
+                runner_cmd.append("--compat-var")
+            if compat_function:
+                runner_cmd.append("--compat-function")
+            if unsafe_function_constructor:
+                runner_cmd.append("--unsafe-function-constructor")
+
+            print(f"Running GocciaTestRunner on {len(batch_tests)} tests ...")
+            try:
+                # SIGKILL backstop for the case where the runner itself
+                # deadlocks and its watchdog cannot fire.  Sized generously
+                # (serial worst case + grace) — under normal conditions the
+                # runner finishes well inside this bound.
+                runner_timeout = max(timeout * len(batch_tests), 120) + 60
+                process = subprocess.run(
+                    runner_cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    timeout=runner_timeout,
+                    check=False,
                 )
+                runner_output = (
+                    process.stderr.decode("utf-8", errors="replace")
+                ).strip()
+            except subprocess.TimeoutExpired:
+                runner_output = "GocciaTestRunner global timeout"
+                process = None
 
-                if json_output.is_file():
-                    raw_json = json_output.read_bytes().decode(
-                        "utf-8", errors="replace"
-                    )
-                    clean_json = re.sub(
-                        r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw_json
-                    )
-                    try:
-                        tr_results = json.loads(clean_json)
-                    except json.JSONDecodeError as e:
-                        print(
-                            f"  {chunk_label} JSON parse error: {e}"
+            if json_output.is_file():
+                raw_json = json_output.read_bytes().decode(
+                    "utf-8", errors="replace"
+                )
+                clean_json = re.sub(
+                    r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw_json
+                )
+                try:
+                    tr_results = json.loads(clean_json)
+                except json.JSONDecodeError as e:
+                    print(f"  JSON parse error: {e}")
+                    summary["errors"] += len(batch_tests)
+                    for _, _, tid in batch_tests:
+                        results.append(
+                            {
+                                "id": tid,
+                                "status": "ERROR",
+                                "message": f"JSON parse error: {e}",
+                            }
                         )
-                        summary["errors"] += len(chunk)
-                        for _, _, tid in chunk:
-                            results.append(
-                                {
-                                    "id": tid,
-                                    "status": "ERROR",
-                                    "message": f"JSON parse error: {e}",
-                                }
-                            )
-                        continue
+                    tr_results = None
 
+                if tr_results is not None:
                     tr_passed = int(tr_results.get("passed", 0))
                     tr_failed = int(tr_results.get("failed", 0))
                     tr_failed_tests = tr_results.get("failedTests", [])
@@ -598,7 +591,7 @@ def evaluate_suite(
                             failed_set.add(name)
                             failed_messages[name] = name
 
-                    for _, _, test_id in chunk:
+                    for _, _, test_id in batch_tests:
                         safe = test_id.replace("/", "__").replace("\\", "__")
                         if test_id in failed_set or safe in failed_set:
                             status = "FAIL"
@@ -613,28 +606,24 @@ def evaluate_suite(
                         )
 
                     elapsed = int(time.monotonic() - start_time)
-                    cumulative_pass = summary["passed"]
-                    cumulative_fail = summary["failed"]
                     print(
-                        f"  {chunk_label} "
-                        f"{tr_passed} pass, {tr_failed} fail "
-                        f"(cumulative: {cumulative_pass} pass, "
-                        f"{cumulative_fail} fail, {elapsed}s)"
+                        f"  {tr_passed} pass, {tr_failed} fail "
+                        f"({elapsed}s)"
                     )
-                else:
-                    print(f"  {chunk_label} TestRunner produced no JSON output")
-                    if runner_output:
-                        for line in runner_output.split("\n")[:3]:
-                            print(f"    {line[:200]}")
-                    summary["errors"] += len(chunk)
-                    for _, _, test_id in chunk:
-                        results.append(
-                            {
-                                "id": test_id,
-                                "status": "ERROR",
-                                "message": runner_output[:300],
-                            }
-                        )
+            else:
+                print("  TestRunner produced no JSON output")
+                if runner_output:
+                    for line in runner_output.split("\n")[:3]:
+                        print(f"    {line[:200]}")
+                summary["errors"] += len(batch_tests)
+                for _, _, test_id in batch_tests:
+                    results.append(
+                        {
+                            "id": test_id,
+                            "status": "ERROR",
+                            "message": runner_output[:300],
+                        }
+                    )
 
     # Phase 3: Negative parse-phase tests via ScriptLoader
     if negative_parse_tests:

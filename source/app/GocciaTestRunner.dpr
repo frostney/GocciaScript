@@ -765,15 +765,18 @@ begin
     Pool.EnableCoverage := CoverageOptions.Enabled.Present;
     if Assigned(TGarbageCollector.Instance) then
       Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
-    // Watchdog = 2x the per-file timeout × ceiling(files/workers) + grace.
-    // This gives workers enough time to hit their per-file timeout before
-    // the watchdog fires, while still preventing indefinite hangs.
+    // Per-worker-idle watchdog: the pool cancels if any single worker
+    // sits on one file longer than this window.  2× the per-file timeout
+    // gives the in-engine cooperative timeout slack to fire first; the
+    // +10 s grace covers thread-runtime initialisation on the first
+    // file.  Because the pool measures per-worker idleness, this bound
+    // does not depend on the file count — a huge batch is no looser
+    // than a small one.
     // When the effective timeout is 0 (user passed --timeout=0), disable
     // the watchdog entirely so the no-timeout contract is honoured.
     EffectiveTimeoutMs := EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS);
     if EffectiveTimeoutMs > 0 then
-      WatchdogMs := 2 * EffectiveTimeoutMs *
-        ((AFiles.Count + AJobCount - 1) div AJobCount) + 10000
+      WatchdogMs := 2 * EffectiveTimeoutMs + 10000
     else
       WatchdogMs := 0;
     Pool.RunAll(AFiles, TestWorkerProc, @WorkerData[0], WatchdogMs);

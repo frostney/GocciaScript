@@ -83,6 +83,13 @@ type
     FMaxBytes: Int64;
     FCoverageTracker: TObject;  // TGocciaCoverageTracker, kept alive for merge
     FData: Pointer;
+    // Timestamp (nanoseconds) of this worker's last progress event —
+    // updated on dequeue, before the worker callback, and after it
+    // returns.  Read by the pool's watchdog to detect a worker that is
+    // stuck on a single file.  Aligned 64-bit loads/stores are atomic on
+    // our target platforms; a slightly stale read only delays detection
+    // by one poll cycle, which is acceptable for a best-effort watchdog.
+    FLastActivityNs: Int64;
   protected
     procedure Execute; override;
   public
@@ -93,6 +100,7 @@ type
     property Results: TGocciaWorkerResultArray read FResults;
     property ResultCount: Integer read FResultCount;
     property CoverageTracker: TObject read FCoverageTracker;
+    property LastActivityNs: Int64 read FLastActivityNs;
   end;
 
   { Thread pool that dispatches files to workers via a shared queue.
@@ -112,8 +120,12 @@ type
     { Execute AFiles across worker threads. Blocks until all complete.
       AWorkerProc is called on each worker thread for each file.
       AData is an opaque pointer passed through to each worker call.
-      AWatchdogMs is the maximum total time (in milliseconds) to wait
-      for all workers to finish.  0 means no watchdog (wait forever). }
+      AWatchdogMs is the maximum time (in milliseconds) that any single
+      worker may go without making progress — i.e. the longest it can
+      sit on one file before the pool cancels remaining work.  0 means
+      no watchdog (wait forever).  Because the bound is per-worker and
+      per-file rather than total, it stays constant no matter how many
+      files are queued. }
     procedure RunAll(const AFiles: TStringList;
       AWorkerProc: TGocciaWorkerProc; AData: Pointer = nil;
       AWatchdogMs: Integer = 0);
@@ -264,6 +276,7 @@ begin
   FCoverageTracker := nil;
   FData := AData;
   FResultCount := 0;
+  FLastActivityNs := GetNanoseconds;
   // Pre-allocate generously; actual count tracked by FResultCount.
   SetLength(FResults, 0);
 end;
@@ -274,10 +287,15 @@ var
   ConsoleOut, ErrorMsg: string;
   Idx: Integer;
 begin
+  FLastActivityNs := GetNanoseconds;
   InitThreadRuntime(FEnableCoverage, FMaxBytes);
   try
     while FQueue.TryDequeue(Item) do
     begin
+      // Publish activity on every dequeue so the watchdog sees forward
+      // progress even when individual files run fast.
+      FLastActivityNs := GetNanoseconds;
+
       if FCancelled^ then
       begin
         Idx := FResultCount;
@@ -317,11 +335,19 @@ begin
         end;
       end;
 
+      // Publish activity on every completion so the watchdog has a
+      // fresh reading even while the worker drains the remainder of a
+      // long queue.
+      FLastActivityNs := GetNanoseconds;
+
       { Cancel remaining files across all workers on first error. }
       if FCancelOnError and (not FResults[Idx].Success) then
         FCancelled^ := True;
     end;
   finally
+    // Refresh the timestamp as we exit the work loop so the watchdog
+    // does not interpret a slow thread-runtime shutdown as a hang.
+    FLastActivityNs := GetNanoseconds;
     { Detach the coverage tracker before shutting down the runtime so
       the main thread can read it after the worker completes. }
     if FEnableCoverage then
@@ -348,8 +374,8 @@ var
   AllItems: TGocciaWorkItemArray;
   Queue: TGocciaWorkQueue;
   FileCount, I, J: Integer;
-  WatchdogStart: Int64;
-  AllFinished, LiveWorkersRemain: Boolean;
+  GraceStart, NowNs: Int64;
+  AllFinished, LiveWorkersRemain, AnyIdle: Boolean;
 begin
   FCancelled := False;
   LiveWorkersRemain := False;
@@ -385,32 +411,40 @@ begin
   finally
     if AWatchdogMs > 0 then
     begin
-      // Poll workers with a total watchdog timeout. If any worker hangs
-      // beyond the per-file timeout, this prevents the main thread from
-      // blocking indefinitely on WaitFor.
-      WatchdogStart := GetNanoseconds;
+      // Per-worker-idle watchdog: poll until every worker has finished,
+      // or until some individual worker has gone AWatchdogMs without
+      // publishing a progress timestamp.  Because we measure per-worker
+      // idleness, the bound is independent of queue depth — a huge batch
+      // does not loosen the watchdog the way a total-elapsed formula
+      // would.
       repeat
         AllFinished := True;
+        AnyIdle := False;
+        NowNs := GetNanoseconds;
         for I := 0 to FWorkerCount - 1 do
           if Assigned(FWorkers[I]) and not FWorkers[I].Finished then
           begin
             AllFinished := False;
-            Break;
+            if ((NowNs - FWorkers[I].LastActivityNs) div 1000000)
+                >= AWatchdogMs then
+            begin
+              AnyIdle := True;
+              Break;
+            end;
           end;
-        if not AllFinished then
+        if (not AllFinished) and (not AnyIdle) then
           Sleep(100);
-      until AllFinished or
-        (((GetNanoseconds - WatchdogStart) div 1000000) >= AWatchdogMs);
+      until AllFinished or AnyIdle;
 
       if not AllFinished then
       begin
-        WriteLn(StdErr, 'Warning: worker threads did not complete ',
-          'within watchdog timeout (', AWatchdogMs, 'ms). ',
+        WriteLn(StdErr, 'Warning: a worker thread made no progress ',
+          'within the watchdog timeout (', AWatchdogMs, 'ms per file). ',
           'Cancelling remaining work.');
         FCancelled := True;
         // Bounded grace period: poll for 5 seconds to let workers
         // notice the cancellation flag.
-        WatchdogStart := GetNanoseconds;
+        GraceStart := GetNanoseconds;
         repeat
           AllFinished := True;
           for I := 0 to FWorkerCount - 1 do
@@ -422,7 +456,7 @@ begin
           if not AllFinished then
             Sleep(100);
         until AllFinished or
-          (((GetNanoseconds - WatchdogStart) div 1000000) >= 5000);
+          (((GetNanoseconds - GraceStart) div 1000000) >= 5000);
         // Collect only the workers that actually finished.
         for I := 0 to FWorkerCount - 1 do
           if Assigned(FWorkers[I]) and FWorkers[I].Finished then
