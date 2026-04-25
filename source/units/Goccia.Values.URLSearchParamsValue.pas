@@ -107,6 +107,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Realm,
   Goccia.URL.Parser,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
@@ -118,20 +119,33 @@ uses
   Goccia.Values.SymbolValue,
   Goccia.Values.URLValue;
 
+var
+  GURLSearchParamsSharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetURLSearchParamsShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GURLSearchParamsSharedSlot))
+  else
+    Result := nil;
+end;
 
 { TGocciaURLSearchParamsValue }
 
 constructor TGocciaURLSearchParamsValue.Create(const AClass: TGocciaClassValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(AClass);
   FList := TGocciaURLSearchParamList.Create;
   FURLRef := nil;
   InitializePrototype;
-  if not Assigned(AClass) and Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetURLSearchParamsShared;
+  if not Assigned(AClass) and Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 destructor TGocciaURLSearchParamsValue.Destroy;
@@ -143,10 +157,13 @@ end;
 procedure TGocciaURLSearchParamsValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetURLSearchParamsShared) then Exit;
 
-  FShared := TGocciaSharedPrototype.Create(Self);
+  Shared := TGocciaSharedPrototype.Create(Self);
+  CurrentRealm.SetOwnedSlot(GURLSearchParamsSharedSlot, Shared);
   if Length(FPrototypeMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -190,15 +207,22 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaURLSearchParamsValue.ExposePrototype(
   const AConstructor: TGocciaValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
+  Shared := GetURLSearchParamsShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaURLSearchParamsValue.Create;
-  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+    Shared := GetURLSearchParamsShared;
+  end;
+  if Assigned(Shared) then
+    ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
 // ---------------------------------------------------------------------------
@@ -701,5 +725,8 @@ begin
   if Assigned(FURLRef) and (FURLRef is TGocciaURLValue) then
     TGocciaURLValue(FURLRef).MarkReferences;
 end;
+
+initialization
+  GURLSearchParamsSharedSlot := RegisterRealmOwnedSlot('URLSearchParams.shared');
 
 end.

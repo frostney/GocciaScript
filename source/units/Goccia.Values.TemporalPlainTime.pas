@@ -62,6 +62,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Realm,
   Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
@@ -69,9 +70,19 @@ uses
   Goccia.Values.SymbolValue,
   Goccia.Values.TemporalDuration;
 
+var
+  GTemporalPlainTimeSharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetTemporalPlainTimeShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTemporalPlainTimeSharedSlot))
+  else
+    Result := nil;
+end;
 
 function AsPlainTime(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainTimeValue;
 begin
@@ -135,6 +146,8 @@ end;
 { TGocciaTemporalPlainTimeValue }
 
 constructor TGocciaTemporalPlainTimeValue.Create(const AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Integer);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(nil);
   if not IsValidTime(AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond) then
@@ -146,16 +159,20 @@ begin
   FMicrosecond := AMicrosecond;
   FNanosecond := ANanosecond;
   InitializePrototype;
-  if Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetTemporalPlainTimeShared;
+  if Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 procedure TGocciaTemporalPlainTimeValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then Exit;
-  FShared := TGocciaSharedPrototype.Create(Self);
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetTemporalPlainTimeShared) then Exit;
+  Shared := TGocciaSharedPrototype.Create(Self);
+  CurrentRealm.SetOwnedSlot(GTemporalPlainTimeSharedSlot, Shared);
   if Length(FPrototypeMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -186,14 +203,20 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaTemporalPlainTimeValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
+  Shared := GetTemporalPlainTimeShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaTemporalPlainTimeValue.Create(0, 0, 0, 0, 0, 0);
-  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+    Shared := GetTemporalPlainTimeShared;
+  end;
+  ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
 function TGocciaTemporalPlainTimeValue.ToStringTag: string;
@@ -555,5 +578,8 @@ begin
     EmptyArgs.Free;
   end;
 end;
+
+initialization
+  GTemporalPlainTimeSharedSlot := RegisterRealmOwnedSlot('Temporal.PlainTime.shared');
 
 end.

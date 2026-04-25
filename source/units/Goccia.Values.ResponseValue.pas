@@ -83,19 +83,32 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.JSON,
+  Goccia.Realm,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue;
 
+var
+  GResponseSharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetResponseShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GResponseSharedSlot))
+  else
+    Result := nil;
+end;
 
 { TGocciaResponseValue }
 
 constructor TGocciaResponseValue.Create(const AClass: TGocciaClassValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(AClass);
   FStatus := 200;
@@ -106,8 +119,9 @@ begin
   FBodyUsed := False;
   FRedirected := False;
   InitializePrototype;
-  if not Assigned(AClass) and Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetResponseShared;
+  if not Assigned(AClass) and Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 procedure TGocciaResponseValue.InitFromHTTP(const AStatus: Integer;
@@ -126,10 +140,13 @@ end;
 procedure TGocciaResponseValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetResponseShared) then Exit;
 
-  FShared := TGocciaSharedPrototype.Create(Self);
+  Shared := TGocciaSharedPrototype.Create(Self);
+  CurrentRealm.SetOwnedSlot(GResponseSharedSlot, Shared);
   if Length(FPrototypeMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -165,14 +182,21 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaResponseValue.ExposePrototype(const AConstructor: TGocciaValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
+  Shared := GetResponseShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaResponseValue.Create;
-  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+    Shared := GetResponseShared;
+  end;
+  if Assigned(Shared) then
+    ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
 // ---------------------------------------------------------------------------
@@ -452,5 +476,8 @@ begin
   if Assigned(FHeaders) then
     FHeaders.MarkReferences;
 end;
+
+initialization
+  GResponseSharedSlot := RegisterRealmOwnedSlot('Response.shared');
 
 end.

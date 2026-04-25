@@ -141,6 +141,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Float16,
+  Goccia.Realm,
   Goccia.Values.ArrayValue,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
@@ -150,10 +151,20 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
+var
+  GTypedArraySharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
   FUint8Prototype: TGocciaObjectValue;
+
+function GetTypedArrayShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTypedArraySharedSlot))
+  else
+    Result := nil;
+end;
 
 class function TGocciaTypedArrayValue.BytesPerElement(const AKind: TGocciaTypedArrayKind): Integer;
 begin
@@ -484,6 +495,7 @@ constructor TGocciaTypedArrayValue.Create(const AKind: TGocciaTypedArrayKind; co
 var
   ByteLen: Integer;
   Buf: TGocciaArrayBufferValue;
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(nil);
   FKind := AKind;
@@ -494,16 +506,18 @@ begin
   FBufferValue := Buf;
   FBufferData := Buf.Data;
   InitializePrototype;
+  Shared := GetTypedArrayShared;
   if (AKind = takUint8) and Assigned(FUint8Prototype) then
     FPrototype := FUint8Prototype
-  else if Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  else if Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 constructor TGocciaTypedArrayValue.Create(const AKind: TGocciaTypedArrayKind;
   const ABuffer: TGocciaArrayBufferValue; const AByteOffset: Integer; const ALength: Integer);
 var
   BPE: Integer;
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(nil);
   FKind := AKind;
@@ -518,16 +532,18 @@ begin
     FLength := (System.Length(ABuffer.Data) - AByteOffset) div BPE;
 
   InitializePrototype;
+  Shared := GetTypedArrayShared;
   if (AKind = takUint8) and Assigned(FUint8Prototype) then
     FPrototype := FUint8Prototype
-  else if Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  else if Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 constructor TGocciaTypedArrayValue.Create(const AKind: TGocciaTypedArrayKind;
   const ASharedBuffer: TGocciaSharedArrayBufferValue; const AByteOffset: Integer; const ALength: Integer);
 var
   BPE: Integer;
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(nil);
   FKind := AKind;
@@ -542,10 +558,11 @@ begin
     FLength := (System.Length(ASharedBuffer.Data) - AByteOffset) div BPE;
 
   InitializePrototype;
+  Shared := GetTypedArrayShared;
   if (AKind = takUint8) and Assigned(FUint8Prototype) then
     FPrototype := FUint8Prototype
-  else if Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  else if Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 { Prototype initialization }
@@ -553,10 +570,13 @@ end;
 procedure TGocciaTypedArrayValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetTypedArrayShared) then Exit;
 
-  FShared := TGocciaSharedPrototype.Create(Self);
+  Shared := TGocciaSharedPrototype.Create(Self);
+  CurrentRealm.SetOwnedSlot(GTypedArraySharedSlot, Shared);
   if System.Length(FPrototypeMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -606,31 +626,43 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaTypedArrayValue.ExposePrototype(const AConstructor: TGocciaValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
+  Shared := GetTypedArrayShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaTypedArrayValue.Create(takUint8, 0);
+    Shared := GetTypedArrayShared;
+  end;
   if AConstructor is TGocciaClassValue then
   begin
-    TGocciaClassValue(AConstructor).Prototype.Prototype := FShared.Prototype;
+    TGocciaClassValue(AConstructor).Prototype.Prototype := Shared.Prototype;
     TGocciaClassValue(AConstructor).Prototype.DefineProperty(PROP_CONSTRUCTOR,
       TGocciaPropertyDescriptorData.Create(AConstructor, [pfConfigurable, pfWritable]));
   end;
 end;
 
 class procedure TGocciaTypedArrayValue.SetSharedPrototypeParent(const AParent: TGocciaObjectValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) and not Assigned(FShared.Prototype.Prototype) then
-    FShared.Prototype.Prototype := AParent;
+  Shared := GetTypedArrayShared;
+  if Assigned(Shared) and not Assigned(Shared.Prototype.Prototype) then
+    Shared.Prototype.Prototype := AParent;
 end;
 
 class function TGocciaTypedArrayValue.GetSharedPrototypeObject: TGocciaObjectValue;
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then
-    Result := FShared.Prototype
+  Shared := GetTypedArrayShared;
+  if Assigned(Shared) then
+    Result := Shared.Prototype
   else
     Result := nil;
 end;
@@ -2145,5 +2177,8 @@ begin
     NewTA.WriteValueToElement(I, AArgs.GetElement(I));
   Result := NewTA;
 end;
+
+initialization
+  GTypedArraySharedSlot := RegisterRealmOwnedSlot('TypedArray.shared');
 
 end.

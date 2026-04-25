@@ -52,13 +52,24 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Realm,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
+var
+  GSharedArrayBufferSharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetSharedArrayBufferShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GSharedArrayBufferSharedSlot))
+  else
+    Result := nil;
+end;
 
 function TGocciaSharedArrayBufferValue.GetByteLength: Integer;
 begin
@@ -66,32 +77,41 @@ begin
 end;
 
 constructor TGocciaSharedArrayBufferValue.Create(const AByteLength: Integer);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(nil);
   SetLength(FData, AByteLength);
   if AByteLength > 0 then
     FillChar(FData[0], AByteLength, 0);
   InitializePrototype;
-  if Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetSharedArrayBufferShared;
+  if Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 constructor TGocciaSharedArrayBufferValue.Create(const AClass: TGocciaClassValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(AClass);
   SetLength(FData, 0);
   InitializePrototype;
-  if not Assigned(AClass) and Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetSharedArrayBufferShared;
+  if not Assigned(AClass) and Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 procedure TGocciaSharedArrayBufferValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetSharedArrayBufferShared) then Exit;
 
-  FShared := TGocciaSharedPrototype.Create(Self);
+  Shared := TGocciaSharedPrototype.Create(Self);
+  CurrentRealm.SetOwnedSlot(GSharedArrayBufferSharedSlot, Shared);
   if Length(FPrototypeMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -108,14 +128,21 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaSharedArrayBufferValue.ExposePrototype(const AConstructor: TGocciaValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
+  Shared := GetSharedArrayBufferShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaSharedArrayBufferValue.Create(0);
-  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+    Shared := GetSharedArrayBufferShared;
+  end;
+  if Assigned(Shared) then
+    ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
 // ES2026 §25.2.3.1 SharedArrayBuffer(length [, options])
@@ -259,5 +286,8 @@ begin
 
   Result := NewBuf;
 end;
+
+initialization
+  GSharedArrayBufferSharedSlot := RegisterRealmOwnedSlot('SharedArrayBuffer.shared');
 
 end.

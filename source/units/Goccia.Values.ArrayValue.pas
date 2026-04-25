@@ -119,6 +119,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
+  Goccia.Realm,
   Goccia.Timeout,
   Goccia.Utils,
   Goccia.Utils.Arrays,
@@ -131,10 +132,26 @@ uses
   Goccia.Values.ToObject,
   Goccia.Values.ToPrimitive;
 
+// Per-realm slot for Array.prototype.  Threadvar method host and member
+// definitions cache below stay process-wide because they are immutable across
+// realms - the host is a sentinel TGocciaArrayValue used purely to bind
+// native method functions, and the member definitions describe those (pure
+// native) functions.  Resetting the realm rebuilds a fresh prototype object
+// and re-registers the same definitions on it.
+var
+  GArrayPrototypeSlot: TGocciaRealmSlotId;
+
 threadvar
-  FSharedArrayPrototype: TGocciaObjectValue;
   FPrototypeMethodHost: TGocciaArrayValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetSharedArrayPrototype: TGocciaObjectValue; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GArrayPrototypeSlot))
+  else
+    Result := nil;
+end;
 
 type
   // Uniform facade over native arrays and generic array-like objects.
@@ -608,23 +625,33 @@ end;
 
 constructor TGocciaArrayValue.Create(const AClass: TGocciaClassValue = nil;
   const AElementCapacity: Integer = 0);
+var
+  SharedPrototype: TGocciaObjectValue;
 begin
   inherited Create(AClass);
   FElements := TGocciaValueList.Create(False);
   if AElementCapacity > 0 then
     FElements.Capacity := AElementCapacity;
   InitializePrototype;
-  if not Assigned(AClass) and Assigned(FSharedArrayPrototype) then
-    FPrototype := FSharedArrayPrototype;
+  SharedPrototype := GetSharedArrayPrototype;
+  if not Assigned(AClass) and Assigned(SharedPrototype) then
+    FPrototype := SharedPrototype;
 end;
 
 procedure TGocciaArrayValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  SharedPrototype: TGocciaObjectValue;
 begin
-  if Assigned(FSharedArrayPrototype) then Exit;
+  // No realm yet - happens during very early bootstrap (e.g. PinSingletons
+  // creating BigInt singletons before SetCurrentRealm runs on the engine).
+  // Skip prototype init: the constructor will run again once the realm is
+  // installed and there's something to bind to.
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetSharedArrayPrototype) then Exit;
 
-  FSharedArrayPrototype := TGocciaObjectValue.Create;
+  SharedPrototype := TGocciaObjectValue.Create;
+  CurrentRealm.SetSlot(GArrayPrototypeSlot, SharedPrototype);
   FPrototypeMethodHost := Self;
   if Length(FPrototypeMembers) = 0 then
   begin
@@ -678,24 +705,30 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FSharedArrayPrototype, FPrototypeMembers);
+  RegisterMemberDefinitions(SharedPrototype, FPrototypeMembers);
 
+  // SharedPrototype is already pinned via the realm slot.  Pin the method
+  // host directly through the GC because it's a process-wide singleton
+  // (immutable across realms) - the realm doesn't track its lifetime.
   if Assigned(TGarbageCollector.Instance) then
-  begin
-    TGarbageCollector.Instance.PinObject(FSharedArrayPrototype);
     TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
-  end;
 end;
 
 class procedure TGocciaArrayValue.ExposePrototype(const AConstructor: TGocciaValue);
+var
+  SharedPrototype: TGocciaObjectValue;
 begin
-  if not Assigned(FSharedArrayPrototype) then
+  SharedPrototype := GetSharedArrayPrototype;
+  if not Assigned(SharedPrototype) then
+  begin
     TGocciaArrayValue.Create;
+    SharedPrototype := GetSharedArrayPrototype;
+  end;
   if AConstructor is TGocciaClassValue then
-    TGocciaClassValue(AConstructor).ReplacePrototype(FSharedArrayPrototype)
+    TGocciaClassValue(AConstructor).ReplacePrototype(SharedPrototype)
   else if AConstructor is TGocciaObjectValue then
-    TGocciaObjectValue(AConstructor).AssignProperty(PROP_PROTOTYPE, FSharedArrayPrototype);
-  FSharedArrayPrototype.DefineProperty(PROP_CONSTRUCTOR,
+    TGocciaObjectValue(AConstructor).AssignProperty(PROP_PROTOTYPE, SharedPrototype);
+  SharedPrototype.DefineProperty(PROP_CONSTRUCTOR,
     TGocciaPropertyDescriptorData.Create(AConstructor, [pfConfigurable, pfWritable]));
 end;
 
@@ -1521,9 +1554,15 @@ begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
 
-  // Step 4: If len + argCount > 2^53 - 1, throw TypeError
-  RawNewLen := View.RawLen + AArgs.Length;
-  View.CheckSafeIntegerLen(RawNewLen);
+  // Step 4: If len + argCount > 2^53 - 1, throw TypeError.
+  // Skip the safety check on a zero-arg call: nothing is being added,
+  // so a huge existing length can never overflow further and push()
+  // must just return the current length unchanged.
+  if AArgs.Length > 0 then
+  begin
+    RawNewLen := View.RawLen + AArgs.Length;
+    View.CheckSafeIntegerLen(RawNewLen);
+  end;
 
   // Fast path: native array
   if Assigned(View.Arr) then
@@ -1581,35 +1620,66 @@ function TGocciaArrayValue.ArraySlice(const AArgs: TGocciaArgumentsCollection; c
 var
   View: TArrayLikeView;
   ResultArray: TGocciaArrayValue;
-  StartIndex, EndIndex: Integer;
+  StartIndex, EndIndex, Needed: Integer;
   I, N: Integer;
+  RawStart, RawEnd, RawK, RawFinal, RawNeeded: Double;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
 
-  // Step 3: Let relativeStart be ToIntegerOrInfinity(start)
-  StartIndex := ToIntegerFromArgs(AArgs);
+  // Step 3: Let relativeStart be ToIntegerOrInfinity(start).  Compute in
+  // Double against RawLen for spec correctness on array-likes whose length
+  // exceeds MaxInt — using View.Len would silently truncate the default
+  // end on a length-2^32 receiver and let an oversized count slip past
+  // the ArrayCreate ceiling check below.
+  if AArgs.Length > 0 then
+    RawStart := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value)
+  else
+    RawStart := 0;
 
   // Step 4: If relativeStart < 0, let k be max(len + relativeStart, 0); else min(relativeStart, len)
-  StartIndex := NormalizeRelativeIndex(StartIndex, View.Len);
+  if RawStart < 0 then
+    RawK := Max(View.RawLen + RawStart, 0)
+  else
+    RawK := Min(RawStart, View.RawLen);
 
   // Step 5: If end is undefined, let relativeEnd be len; else ToIntegerOrInfinity(end)
-  EndIndex := ToIntegerFromArgs(AArgs, 1, View.Len);
+  if AArgs.Length > 1 then
+    RawEnd := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value)
+  else
+    RawEnd := View.RawLen;
 
   // Step 6: If relativeEnd < 0, let final be max(len + relativeEnd, 0); else min(relativeEnd, len)
-  EndIndex := NormalizeRelativeIndex(EndIndex, View.Len);
+  if RawEnd < 0 then
+    RawFinal := Max(View.RawLen + RawEnd, 0)
+  else
+    RawFinal := Min(RawEnd, View.RawLen);
 
   // Step 7: Let count be max(final - k, 0)
   // Step 8: Let A be ArraySpeciesCreate(O, count) — ArrayCreate throws
-  // RangeError if RawLen > 2^32 - 1.  Mirrors the guard in ArrayMap: a
-  // proxy-wrapped array can return a pathological length that bypasses
-  // the integer-truncated View.Len, so we must check RawLen explicitly
-  // before allocating the result array.
-  View.CheckArrayCreateLen;
-  if Assigned(View.Arr) then
-    ResultArray := ArraySpeciesCreate(View.Arr, Max(EndIndex - StartIndex, 0))
+  // RangeError only when *count* exceeds 2^32 - 1.  Validate the
+  // computed result length, not the source's RawLen — checking RawLen
+  // would spuriously reject a tiny slice taken from a huge array-like
+  // (e.g. slice(0, 2) on a {length: 2^32} receiver).
+  RawNeeded := Max(RawFinal - RawK, 0);
+  View.CheckArrayCreateLenValue(RawNeeded);
+
+  // After the check, RawNeeded ≤ MaxInt — safe to truncate for the loop.
+  Needed := Integer(Trunc(RawNeeded));
+  // RawK could exceed MaxInt only when RawLen > MaxInt and the slice starts
+  // near the end; clamp to View.Len so the dense Integer loop stays in bounds.
+  if RawK > View.Len then
+    StartIndex := View.Len
   else
-    ResultArray := TGocciaArrayValue.Create(nil, Max(EndIndex - StartIndex, 0));
+    StartIndex := Integer(Trunc(RawK));
+  EndIndex := StartIndex + Needed;
+  if EndIndex > View.Len then
+    EndIndex := View.Len;
+
+  if Assigned(View.Arr) then
+    ResultArray := ArraySpeciesCreate(View.Arr, Needed)
+  else
+    ResultArray := TGocciaArrayValue.Create(nil, Needed);
 
   // Step 9: Let n be 0; repeat while k < final
   N := 0;
@@ -2618,14 +2688,15 @@ begin
       // before assigning to NewLen (which is Integer-sized to match
       // FElements.Count).  Spec allows up to 2^32 - 1 but the engine
       // cannot index that many elements; reject anything above MaxInt
-      // and let the spec range check above MAX_ARRAY_LENGTH_F handle the
-      // rest.
+      // with the same RangeError so callers see spec-correct error type
+      // instead of the "cannot redefine" TypeError that Exit(False) would
+      // produce via DefineProperty.
       TruncLen := Trunc(RawLen);
-      if (RawLen <> TruncLen) or (TruncLen < 0)
-         or (RawLen > MAX_ARRAY_LENGTH_F) or (TruncLen > MaxInt) then
+      if (RawLen <> TruncLen) or (TruncLen < 0) or
+         (RawLen > MAX_ARRAY_LENGTH_F) or (TruncLen > MaxInt) then
       begin
         ADescriptor.Free;
-        Exit(False);
+        ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
       end;
       NewLen := Integer(TruncLen);
       // Truncate elements
@@ -2972,5 +3043,8 @@ begin
   // Step 1: Return the result of calling Array.prototype.values
   Result := TGocciaArrayIteratorValue.Create(ToObject(AThisValue), akValues);
 end;
+
+initialization
+  GArrayPrototypeSlot := RegisterRealmSlot('Array.prototype');
 
 end.

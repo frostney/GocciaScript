@@ -82,6 +82,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Realm,
   Goccia.Temporal.Options,
   Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
@@ -91,9 +92,19 @@ uses
   Goccia.Values.TemporalPlainDate,
   Goccia.Values.TemporalZonedDateTime;
 
+var
+  GTemporalDurationSharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetTemporalDurationShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTemporalDurationSharedSlot))
+  else
+    Result := nil;
+end;
 
 function AsDuration(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalDurationValue;
 begin
@@ -179,17 +190,20 @@ begin
     ThrowRangeError(SErrorDurationTimeOutOfRange, SSuggestTemporalDurationRange);
 
   InitializePrototype;
-  if Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  if Assigned(GetTemporalDurationShared) then
+    FPrototype := GetTemporalDurationShared.Prototype;
 end;
 
 procedure TGocciaTemporalDurationValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetTemporalDurationShared) then Exit;
 
-  FShared := TGocciaSharedPrototype.Create(Self);
+  Shared := TGocciaSharedPrototype.Create(Self);
+  CurrentRealm.SetOwnedSlot(GTemporalDurationSharedSlot, Shared);
   if Length(FPrototypeMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -226,14 +240,21 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaTemporalDurationValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
+  Shared := GetTemporalDurationShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+    Shared := GetTemporalDurationShared;
+  end;
+  if Assigned(Shared) then
+    ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
 function TGocciaTemporalDurationValue.ComputeSign: Integer;
@@ -1242,5 +1263,8 @@ begin
     EmptyArgs.Free;
   end;
 end;
+
+initialization
+  GTemporalDurationSharedSlot := RegisterRealmOwnedSlot('Temporal.Duration.shared');
 
 end.

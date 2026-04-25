@@ -57,6 +57,7 @@ uses
   Goccia.ObjectModel,
   Goccia.ObjectModel.Engine,
   Goccia.Parser,
+  Goccia.Realm,
   Goccia.Scope,
   Goccia.SourceMap,
   Goccia.TextFiles,
@@ -165,6 +166,7 @@ type
     FBuiltinURLSearchParams: TGocciaGlobalURLSearchParams;
     FBuiltinFetch: TGocciaGlobalFetch;
     FBuiltinDisposableStack: TGocciaBuiltinDisposableStack;
+    FRealm: TGocciaRealm;
     FFunctionConstructor: TGocciaFunctionConstructorClassValue;
     FTypedArrayIntrinsic: TGocciaClassValue;
     FPreviousExceptionMask: TFPUExceptionMask;
@@ -632,6 +634,13 @@ begin
   TGocciaMicrotaskQueue.Initialize;
   TGocciaFetchManager.Initialize;
 
+  // Per-realm intrinsic state (Array.prototype, ...) lives on FRealm.  Must
+  // be assigned before any value is constructed so lazy prototype init in
+  // value units finds a realm to write into.  The previous engine's realm
+  // (if any) was freed in Destroy, so its prototype state is gone.
+  FRealm := TGocciaRealm.Create;
+  SetCurrentRealm(FRealm);
+
   FPreprocessors := DefaultPreprocessors;
   FCompatibility := DefaultCompatibility;
   if Assigned(FExecutor) then
@@ -715,6 +724,19 @@ begin
     FInterpreter.Free;
     if FOwnsModuleLoader then
       FModuleLoader.Free;
+
+    // Drop the realm only after every built-in (and the interpreter, which
+    // holds the global scope) has been freed - those owners may still touch
+    // prototype objects during teardown.  Freeing the realm unpins the
+    // intrinsic prototype graph so the GC can collect it before the next
+    // engine on this worker thread starts up.
+    if Assigned(FRealm) then
+    begin
+      if CurrentRealm = FRealm then
+        SetCurrentRealm(nil);
+      FRealm.Free;
+      FRealm := nil;
+    end;
   finally
     SetExceptionMask(FPreviousExceptionMask);
   end;

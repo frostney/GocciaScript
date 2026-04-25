@@ -90,19 +90,34 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
+  Goccia.Realm,
   Goccia.Threading,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue;
 
+// Symbol.prototype lives in a per-realm slot so that JS-visible mutations
+// (e.g. Symbol.prototype.foo = 1) do not leak across engine recreation.
+// FMethodHost and FPrototypeMembers stay process-wide on each thread because
+// they are immutable build-time data (host singleton + member descriptors).
+var
+  GSymbolPrototypeSlot: TGocciaRealmSlotId;
+
 threadvar
-  FSharedPrototype: TGocciaValue;
   FMethodHost: TGocciaSymbolValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
 threadvar
   GNextSymbolId: Integer;
   GSymbolRegistry: THashMap<Integer, TGocciaSymbolValue>;
+
+function GetSharedSymbolPrototype: TGocciaObjectValue; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GSymbolPrototypeSlot))
+  else
+    Result := nil;
+end;
 
 // ES2026 §20.4.3.4 Symbol.prototype.toString()
 function TGocciaSymbolValue.SymbolToString(const AArgs: TGocciaArgumentsCollection;
@@ -147,10 +162,11 @@ var
   Members: TGocciaMemberCollection;
   Proto: TGocciaObjectValue;
 begin
-  if Assigned(FSharedPrototype) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetSharedSymbolPrototype) then Exit;
 
   Proto := TGocciaObjectValue.Create;
-  FSharedPrototype := Proto;
+  CurrentRealm.SetSlot(GSymbolPrototypeSlot, Proto);
   FMethodHost := Self;
 
   if Length(FPrototypeMembers) = 0 then
@@ -181,16 +197,15 @@ begin
 
   RegisterMemberDefinitions(Proto, FPrototypeMembers);
 
+  // Prototype is pinned by the realm slot.  Method host is a process-wide
+  // singleton kept alive across realms.
   if Assigned(TGarbageCollector.Instance) then
-  begin
-    TGarbageCollector.Instance.PinObject(FSharedPrototype);
     TGarbageCollector.Instance.PinObject(FMethodHost);
-  end;
 end;
 
 class function TGocciaSymbolValue.SharedPrototype: TGocciaValue;
 begin
-  Result := FSharedPrototype;
+  Result := GetSharedSymbolPrototype;
 end;
 
 class function TGocciaSymbolValue.WellKnownIterator: TGocciaSymbolValue;
@@ -421,10 +436,13 @@ begin
 end;
 
 function TGocciaSymbolValue.GetProperty(const AName: string): TGocciaValue;
+var
+  Proto: TGocciaObjectValue;
 begin
-  if Assigned(FSharedPrototype) then
+  Proto := GetSharedSymbolPrototype;
+  if Assigned(Proto) then
   begin
-    Result := TGocciaObjectValue(FSharedPrototype).GetPropertyWithContext(AName, Self);
+    Result := Proto.GetPropertyWithContext(AName, Self);
     if Assigned(Result) then
       Exit;
   end;
@@ -457,5 +475,8 @@ begin
   else
     Result := TGocciaStringLiteralValue.Create('Symbol()');
 end;
+
+initialization
+  GSymbolPrototypeSlot := RegisterRealmSlot('Symbol.prototype');
 
 end.

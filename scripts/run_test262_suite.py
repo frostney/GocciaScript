@@ -188,11 +188,10 @@ INCLUDE_MAP: dict[str, str] = {
 def build_harness_source(includes: list[str], harness_files: dict[str, str]) -> str:
     """Build the combined harness source for a test, given its ``includes:``.
 
-    ``prototypeIsolation.js`` is always appended so its beforeEach/afterEach
-    hooks run for every test262 file: Goccia worker threads share their
-    built-in prototypes across files in a batch, and without isolation a
-    test that mutates ``Array.prototype`` etc. leaks the mutation into the
-    next file.
+    Cross-file prototype isolation is provided by per-file engine recreation
+    in the test runner combined with the per-engine ``TGocciaRealm`` —
+    freeing the engine tears down the realm and unpins the per-realm
+    intrinsic prototypes, so mutations cannot leak into the next file.
     """
     parts: list[str] = [harness_files["assert.js"]]
     seen: set[str] = {"assert.js"}
@@ -202,11 +201,6 @@ def build_harness_source(includes: list[str], harness_files: dict[str, str]) -> 
         if mapped and mapped not in seen and mapped in harness_files:
             parts.append(harness_files[mapped])
             seen.add(mapped)
-
-    if "prototypeIsolation.js" in harness_files \
-            and "prototypeIsolation.js" not in seen:
-        parts.append(harness_files["prototypeIsolation.js"])
-        seen.add("prototypeIsolation.js")
 
     return "\n".join(parts)
 

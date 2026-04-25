@@ -74,6 +74,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Realm,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -82,20 +83,33 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
+var
+  GHeadersSharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetHeadersShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GHeadersSharedSlot))
+  else
+    Result := nil;
+end;
 
 { TGocciaHeadersValue }
 
 constructor TGocciaHeadersValue.Create(const AClass: TGocciaClassValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(AClass);
   FEntries := TList<TGocciaHeaderEntry>.Create;
   FImmutable := False;
   InitializePrototype;
-  if not Assigned(AClass) and Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetHeadersShared;
+  if not Assigned(AClass) and Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 destructor TGocciaHeadersValue.Destroy;
@@ -107,10 +121,13 @@ end;
 procedure TGocciaHeadersValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetHeadersShared) then Exit;
 
-  FShared := TGocciaSharedPrototype.Create(Self);
+  Shared := TGocciaSharedPrototype.Create(Self);
+  CurrentRealm.SetOwnedSlot(GHeadersSharedSlot, Shared);
   if Length(FPrototypeMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -136,14 +153,21 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaHeadersValue.ExposePrototype(const AConstructor: TGocciaValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
+  Shared := GetHeadersShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaHeadersValue.Create;
-  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+    Shared := GetHeadersShared;
+  end;
+  if Assigned(Shared) then
+    ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
 // ---------------------------------------------------------------------------
@@ -361,5 +385,8 @@ begin
   inherited;
   // FEntries contains only plain strings — no TGocciaValue references
 end;
+
+initialization
+  GHeadersSharedSlot := RegisterRealmOwnedSlot('Headers.shared');
 
 end.

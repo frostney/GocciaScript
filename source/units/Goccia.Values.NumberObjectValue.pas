@@ -47,13 +47,26 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Realm,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
 
+// Number.prototype lives in a per-realm slot.  Method host and member
+// definitions stay process-wide (immutable across realms).
+var
+  GNumberPrototypeSlot: TGocciaRealmSlotId;
+
 threadvar
-  FSharedNumberPrototype: TGocciaObjectValue;
   FPrototypeMethodHost: TGocciaNumberObjectValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetSharedNumberPrototype: TGocciaObjectValue; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GNumberPrototypeSlot))
+  else
+    Result := nil;
+end;
 
 function TGocciaNumberObjectValue.ExtractPrimitive(const AValue: TGocciaValue): TGocciaNumberLiteralValue;
 begin
@@ -66,12 +79,15 @@ begin
 end;
 
 constructor TGocciaNumberObjectValue.Create(const APrimitive: TGocciaNumberLiteralValue; const AClass: TGocciaClassValue = nil);
+var
+  SharedPrototype: TGocciaObjectValue;
 begin
   inherited Create(AClass);
   FPrimitive := APrimitive;
   InitializePrototype;
-  if not Assigned(AClass) and Assigned(FSharedNumberPrototype) then
-    FPrototype := FSharedNumberPrototype;
+  SharedPrototype := GetSharedNumberPrototype;
+  if not Assigned(AClass) and Assigned(SharedPrototype) then
+    FPrototype := SharedPrototype;
 end;
 
 function TGocciaNumberObjectValue.GetProperty(const AName: string): TGocciaValue;
@@ -85,17 +101,20 @@ begin
   if not (Result is TGocciaUndefinedLiteralValue) then
     Exit;
 
-  if Assigned(FSharedNumberPrototype) then
-    Result := FSharedNumberPrototype.GetPropertyWithContext(AName, AThisContext);
+  if Assigned(GetSharedNumberPrototype) then
+    Result := GetSharedNumberPrototype.GetPropertyWithContext(AName, AThisContext);
 end;
 
 procedure TGocciaNumberObjectValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  SharedPrototype: TGocciaObjectValue;
 begin
-  if Assigned(FSharedNumberPrototype) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetSharedNumberPrototype) then Exit;
 
-  FSharedNumberPrototype := TGocciaObjectValue.Create;
+  SharedPrototype := TGocciaObjectValue.Create;
+  CurrentRealm.SetSlot(GNumberPrototypeSlot, SharedPrototype);
   FPrototypeMethodHost := Self;
   if Length(FPrototypeMembers) = 0 then
   begin
@@ -111,20 +130,19 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FSharedNumberPrototype, FPrototypeMembers);
+  RegisterMemberDefinitions(SharedPrototype, FPrototypeMembers);
 
+  // SharedPrototype pinned via realm slot; method host pinned directly
+  // because it's a process-wide singleton.
   if Assigned(TGarbageCollector.Instance) then
-  begin
-    TGarbageCollector.Instance.PinObject(FSharedNumberPrototype);
     TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
-  end;
 end;
 
 class function TGocciaNumberObjectValue.GetSharedPrototype: TGocciaObjectValue;
 begin
-  if not Assigned(FSharedNumberPrototype) then
+  if not Assigned(GetSharedNumberPrototype) then
     TGocciaNumberObjectValue.Create(TGocciaNumberLiteralValue.ZeroValue);
-  Result := FSharedNumberPrototype;
+  Result := GetSharedNumberPrototype;
 end;
 
 procedure TGocciaNumberObjectValue.MarkReferences;
@@ -358,5 +376,8 @@ begin
 
   Result := TGocciaStringLiteralValue.Create(Sign + MantissaStr + 'e' + ExpSign + IntToStr(Exp));
 end;
+
+initialization
+  GNumberPrototypeSlot := RegisterRealmSlot('Number.prototype');
 
 end.

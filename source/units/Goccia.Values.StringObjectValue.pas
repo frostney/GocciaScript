@@ -90,6 +90,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Realm,
   Goccia.RegExp.Runtime,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
@@ -98,10 +99,22 @@ uses
   Goccia.Values.Iterator.RegExp,
   Goccia.Values.SymbolValue;
 
+// String.prototype lives in a per-realm slot.  Method host and member
+// definitions stay process-wide (immutable across realms).
+var
+  GStringPrototypeSlot: TGocciaRealmSlotId;
+
 threadvar
-  FSharedStringPrototype: TGocciaObjectValue;
   FPrototypeMethodHost: TGocciaStringObjectValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetSharedStringPrototype: TGocciaObjectValue; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GStringPrototypeSlot))
+  else
+    Result := nil;
+end;
 
 { TGocciaStringObjectValue }
 
@@ -263,12 +276,15 @@ begin
 end;
 
 constructor TGocciaStringObjectValue.Create(const APrimitive: TGocciaStringLiteralValue; const AClass: TGocciaClassValue = nil);
+var
+  SharedPrototype: TGocciaObjectValue;
 begin
   inherited Create(AClass);
   FPrimitive := APrimitive;
   InitializePrototype;
-  if not Assigned(AClass) and Assigned(FSharedStringPrototype) then
-    FPrototype := FSharedStringPrototype;
+  SharedPrototype := GetSharedStringPrototype;
+  if not Assigned(AClass) and Assigned(SharedPrototype) then
+    FPrototype := SharedPrototype;
 end;
 
 destructor TGocciaStringObjectValue.Destroy;
@@ -315,8 +331,8 @@ begin
   if not (Result is TGocciaUndefinedLiteralValue) then
     Exit;
 
-  if Assigned(FSharedStringPrototype) then
-    Result := FSharedStringPrototype.GetPropertyWithContext(AName, AThisContext);
+  if Assigned(GetSharedStringPrototype) then
+    Result := GetSharedStringPrototype.GetPropertyWithContext(AName, AThisContext);
 end;
 
 // ES2026 §10.4.3.6 StringExoticObject [[OwnPropertyKeys]]
@@ -449,10 +465,13 @@ end;
 procedure TGocciaStringObjectValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  SharedPrototype: TGocciaObjectValue;
 begin
-  if Assigned(FSharedStringPrototype) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetSharedStringPrototype) then Exit;
 
-  FSharedStringPrototype := TGocciaObjectValue.Create;
+  SharedPrototype := TGocciaObjectValue.Create;
+  CurrentRealm.SetSlot(GStringPrototypeSlot, SharedPrototype);
   FPrototypeMethodHost := Self;
   if Length(FPrototypeMembers) = 0 then
   begin
@@ -502,20 +521,19 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FSharedStringPrototype, FPrototypeMembers);
+  RegisterMemberDefinitions(SharedPrototype, FPrototypeMembers);
 
+  // SharedPrototype is pinned through the realm slot.  Pin the host directly
+  // since it's a process-wide singleton.
   if Assigned(TGarbageCollector.Instance) then
-  begin
-    TGarbageCollector.Instance.PinObject(FSharedStringPrototype);
     TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
-  end;
 end;
 
 class function TGocciaStringObjectValue.GetSharedPrototype: TGocciaObjectValue;
 begin
-  if not Assigned(FSharedStringPrototype) then
+  if not Assigned(GetSharedStringPrototype) then
     TGocciaStringObjectValue.Create(TGocciaStringLiteralValue.Create(''));
-  Result := FSharedStringPrototype;
+  Result := GetSharedStringPrototype;
 end;
 
 // ES2026 §22.1.3 String.prototype.length (accessor)
@@ -2031,5 +2049,8 @@ begin
   // Step 5: Return result
   Result := TGocciaStringLiteralValue.Create(ResultStr);
 end;
+
+initialization
+  GStringPrototypeSlot := RegisterRealmSlot('String.prototype');
 
 end.

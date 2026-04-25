@@ -55,15 +55,26 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Realm,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.TypedArrayValue;
 
+var
+  GTextDecoderSharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetTextDecoderShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTextDecoderSharedSlot))
+  else
+    Result := nil;
+end;
 
 const
   ENCODING_UTF8 = 'utf-8';
@@ -284,14 +295,17 @@ end;
 { TGocciaTextDecoderValue }
 
 constructor TGocciaTextDecoderValue.Create(const AClass: TGocciaClassValue = nil);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(AClass);
   FEncoding := ENCODING_UTF8;
   FFatal := False;
   FIgnoreBOM := False;
   InitializePrototype;
-  if not Assigned(AClass) and Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetTextDecoderShared;
+  if not Assigned(AClass) and Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 // WHATWG Encoding §8.1 new TextDecoder([label [, options]])
@@ -340,10 +354,13 @@ end;
 procedure TGocciaTextDecoderValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetTextDecoderShared) then Exit;
 
-  FShared := TGocciaSharedPrototype.Create(Self);
+  Shared := TGocciaSharedPrototype.Create(Self);
+  CurrentRealm.SetOwnedSlot(GTextDecoderSharedSlot, Shared);
   if Length(FPrototypeMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -358,14 +375,21 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaTextDecoderValue.ExposePrototype(const AConstructor: TGocciaValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
+  Shared := GetTextDecoderShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaTextDecoderValue.Create;
-  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+    Shared := GetTextDecoderShared;
+  end;
+  if Assigned(Shared) then
+    ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
 function TGocciaTextDecoderValue.ToStringTag: string;
@@ -492,5 +516,8 @@ begin
     Result := TGocciaStringLiteralValue.Create(
       DecodeUTF8WithReplacement(Data, Offset, DataLen));
 end;
+
+initialization
+  GTextDecoderSharedSlot := RegisterRealmOwnedSlot('TextDecoder.shared');
 
 end.

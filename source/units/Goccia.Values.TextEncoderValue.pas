@@ -44,14 +44,25 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Realm,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.TypedArrayValue;
 
+var
+  GTextEncoderSharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetTextEncoderShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTextEncoderSharedSlot))
+  else
+    Result := nil;
+end;
 
 const
   ENCODING_UTF8 = 'utf-8';
@@ -132,20 +143,26 @@ end;
 { TGocciaTextEncoderValue }
 
 constructor TGocciaTextEncoderValue.Create(const AClass: TGocciaClassValue = nil);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(AClass);
   InitializePrototype;
-  if not Assigned(AClass) and Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetTextEncoderShared;
+  if not Assigned(AClass) and Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 procedure TGocciaTextEncoderValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetTextEncoderShared) then Exit;
 
-  FShared := TGocciaSharedPrototype.Create(Self);
+  Shared := TGocciaSharedPrototype.Create(Self);
+  CurrentRealm.SetOwnedSlot(GTextEncoderSharedSlot, Shared);
   if Length(FPrototypeMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -160,14 +177,21 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaTextEncoderValue.ExposePrototype(const AConstructor: TGocciaValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
+  Shared := GetTextEncoderShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaTextEncoderValue.Create;
-  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+    Shared := GetTextEncoderShared;
+  end;
+  if Assigned(Shared) then
+    ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
 function TGocciaTextEncoderValue.ToStringTag: string;
@@ -286,5 +310,8 @@ begin
     TGarbageCollector.Instance.RemoveTempRoot(ResultObj);
   end;
 end;
+
+initialization
+  GTextEncoderSharedSlot := RegisterRealmOwnedSlot('TextEncoder.shared');
 
 end.

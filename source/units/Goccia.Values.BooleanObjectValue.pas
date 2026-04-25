@@ -34,29 +34,48 @@ implementation
 
 uses
   Goccia.GarbageCollector,
+  Goccia.Realm,
   Goccia.Values.NativeFunction;
 
+// Boolean.prototype lives in a per-realm slot.  Method host and member
+// definitions stay process-wide (immutable across realms).
+var
+  GBooleanPrototypeSlot: TGocciaRealmSlotId;
+
 threadvar
-  FSharedBooleanPrototype: TGocciaObjectValue;
   FPrototypeMethodHost: TGocciaBooleanObjectValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
+function GetSharedBooleanPrototype: TGocciaObjectValue; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GBooleanPrototypeSlot))
+  else
+    Result := nil;
+end;
+
 constructor TGocciaBooleanObjectValue.Create(const APrimitive: TGocciaBooleanLiteralValue; const AClass: TGocciaClassValue = nil);
+var
+  SharedPrototype: TGocciaObjectValue;
 begin
   inherited Create(AClass);
   FPrimitive := APrimitive;
   InitializePrototype;
-  if not Assigned(AClass) and Assigned(FSharedBooleanPrototype) then
-    FPrototype := FSharedBooleanPrototype;
+  SharedPrototype := GetSharedBooleanPrototype;
+  if not Assigned(AClass) and Assigned(SharedPrototype) then
+    FPrototype := SharedPrototype;
 end;
 
 procedure TGocciaBooleanObjectValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  SharedPrototype: TGocciaObjectValue;
 begin
-  if Assigned(FSharedBooleanPrototype) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetSharedBooleanPrototype) then Exit;
 
-  FSharedBooleanPrototype := TGocciaObjectValue.Create;
+  SharedPrototype := TGocciaObjectValue.Create;
+  CurrentRealm.SetSlot(GBooleanPrototypeSlot, SharedPrototype);
   FPrototypeMethodHost := Self;
   if Length(FPrototypeMembers) = 0 then
   begin
@@ -69,13 +88,12 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FSharedBooleanPrototype, FPrototypeMembers);
+  RegisterMemberDefinitions(SharedPrototype, FPrototypeMembers);
 
+  // SharedPrototype pinned via realm slot; method host pinned directly
+  // because it's a process-wide singleton.
   if Assigned(TGarbageCollector.Instance) then
-  begin
-    TGarbageCollector.Instance.PinObject(FSharedBooleanPrototype);
     TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
-  end;
 end;
 
 function TGocciaBooleanObjectValue.GetProperty(const AName: string): TGocciaValue;
@@ -89,15 +107,15 @@ begin
   if not (Result is TGocciaUndefinedLiteralValue) then
     Exit;
 
-  if Assigned(FSharedBooleanPrototype) then
-    Result := FSharedBooleanPrototype.GetPropertyWithContext(AName, AThisContext);
+  if Assigned(GetSharedBooleanPrototype) then
+    Result := GetSharedBooleanPrototype.GetPropertyWithContext(AName, AThisContext);
 end;
 
 class function TGocciaBooleanObjectValue.GetSharedPrototype: TGocciaObjectValue;
 begin
-  if not Assigned(FSharedBooleanPrototype) then
+  if not Assigned(GetSharedBooleanPrototype) then
     TGocciaBooleanObjectValue.Create(TGocciaBooleanLiteralValue.FalseValue);
-  Result := FSharedBooleanPrototype;
+  Result := GetSharedBooleanPrototype;
 end;
 
 function TGocciaBooleanObjectValue.BooleanValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -134,5 +152,8 @@ begin
   if Assigned(FPrimitive) then
     FPrimitive.MarkReferences;
 end;
+
+initialization
+  GBooleanPrototypeSlot := RegisterRealmSlot('Boolean.prototype');
 
 end.

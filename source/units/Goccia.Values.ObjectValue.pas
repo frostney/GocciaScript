@@ -116,13 +116,20 @@ uses
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
+  Goccia.Realm,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction;
 
+// Object.prototype lives in a per-realm slot.  See Goccia.Realm and the
+// matching pattern in Goccia.Values.ArrayValue for the rationale; the method
+// host and member definitions stay in process-wide threadvar caches because
+// they are immutable across realms.
+var
+  GObjectPrototypeSlot: TGocciaRealmSlotId;
+
 threadvar
-  FSharedObjectPrototype: TGocciaObjectValue;
   FPrototypeMethodHost: TGocciaObjectValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
@@ -138,12 +145,16 @@ end;
 
 class function TGocciaObjectValue.GetSharedObjectPrototype: TGocciaObjectValue;
 begin
-  Result := FSharedObjectPrototype;
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GObjectPrototypeSlot))
+  else
+    Result := nil;
 end;
 
 class procedure TGocciaObjectValue.SetSharedObjectPrototype(const AValue: TGocciaObjectValue);
 begin
-  FSharedObjectPrototype := AValue;
+  if Assigned(CurrentRealm) then
+    CurrentRealm.SetSlot(GObjectPrototypeSlot, AValue);
 end;
 
 constructor TGocciaObjectValue.Create(const APrototype: TGocciaObjectValue = nil;
@@ -313,11 +324,17 @@ end;
 class procedure TGocciaObjectValue.InitializeSharedPrototype;
 var
   Members: TGocciaMemberCollection;
+  SharedPrototype: TGocciaObjectValue;
 begin
-  if Assigned(FSharedObjectPrototype) then Exit;
+  // No realm yet - very early bootstrap path.  Subsequent constructor runs
+  // under an assigned realm will retry.
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetSharedObjectPrototype) then Exit;
 
-  FPrototypeMethodHost := TGocciaObjectValue.Create;
-  FSharedObjectPrototype := TGocciaObjectValue.Create;
+  if not Assigned(FPrototypeMethodHost) then
+    FPrototypeMethodHost := TGocciaObjectValue.Create;
+  SharedPrototype := TGocciaObjectValue.Create;
+  CurrentRealm.SetSlot(GObjectPrototypeSlot, SharedPrototype);
   if Length(FPrototypeMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -337,13 +354,12 @@ begin
     FPrototypeMembers[3].ExposedName := PROP_TO_LOCALE_STRING;
     FPrototypeMembers[4].ExposedName := PROP_VALUE_OF;
   end;
-  RegisterMemberDefinitions(FSharedObjectPrototype, FPrototypeMembers);
+  RegisterMemberDefinitions(SharedPrototype, FPrototypeMembers);
 
+  // SharedPrototype is pinned via the realm slot; the method host is a
+  // process-wide singleton (immutable across realms) that we pin directly.
   if Assigned(TGarbageCollector.Instance) then
-  begin
-    TGarbageCollector.Instance.PinObject(FSharedObjectPrototype);
     TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
-  end;
 end;
 
 destructor TGocciaObjectValue.Destroy;
@@ -1389,5 +1405,8 @@ procedure TGocciaObjectValue.PreventExtensions;
 begin
   FExtensible := False;
 end;
+
+initialization
+  GObjectPrototypeSlot := RegisterRealmSlot('Object.prototype');
 
 end.

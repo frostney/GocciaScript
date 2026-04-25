@@ -57,14 +57,25 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Realm,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
+var
+  GPerformanceSharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
   FPrototypeMethodHost: TGocciaPerformancePrototypeHost;
+
+function GetPerformanceShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GPerformanceSharedSlot))
+  else
+    Result := nil;
+end;
 
 function RequirePerformanceThis(const AThisValue: TGocciaValue): TGocciaPerformanceValue;
 begin
@@ -84,6 +95,7 @@ end;
 constructor TGocciaPerformanceValue.Create;
 var
   MonotonicBefore, MonotonicAfter: Int64;
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(nil);
 
@@ -93,7 +105,9 @@ begin
   FTimeOriginMonotonicNanoseconds := (MonotonicBefore + MonotonicAfter) div 2;
 
   TGocciaPerformance.InitializePrototype;
-  FPrototype := FShared.Prototype;
+  Shared := GetPerformanceShared;
+  if Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 { TGocciaPerformancePrototypeHost }
@@ -144,13 +158,16 @@ end;
 class procedure TGocciaPerformance.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetPerformanceShared) then
     Exit;
 
   FPrototypeMethodHost := TGocciaPerformancePrototypeHost.Create(nil);
-  FShared := TGocciaSharedPrototype.Create(FPrototypeMethodHost);
-  FShared.Prototype.Prototype := TGocciaObjectValue.SharedObjectPrototype;
+  Shared := TGocciaSharedPrototype.Create(FPrototypeMethodHost);
+  CurrentRealm.SetOwnedSlot(GPerformanceSharedSlot, Shared);
+  Shared.Prototype.Prototype := TGocciaObjectValue.SharedObjectPrototype;
 
   if Length(FPrototypeMembers) = 0 then
   begin
@@ -186,13 +203,17 @@ begin
     end;
   end;
 
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaPerformance.ExposePrototype(const AConstructor: TGocciaValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   InitializePrototype;
-  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+  Shared := GetPerformanceShared;
+  if Assigned(Shared) then
+    ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
 class function TGocciaPerformance.CreateInterfaceObject: TGocciaNativeFunctionValue;
@@ -219,5 +240,8 @@ begin
   FBuiltinObject := TGocciaPerformanceValue.Create;
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
 end;
+
+initialization
+  GPerformanceSharedSlot := RegisterRealmOwnedSlot('Performance.shared');
 
 end.

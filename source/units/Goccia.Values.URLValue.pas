@@ -134,6 +134,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Realm,
   Goccia.URL.Parser,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -141,13 +142,25 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
+var
+  GURLSharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetURLShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GURLSharedSlot))
+  else
+    Result := nil;
+end;
 
 { TGocciaURLValue }
 
 constructor TGocciaURLValue.Create(const AClass: TGocciaClassValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(AClass);
   FPort := URL_NULL_PORT;
@@ -157,8 +170,9 @@ begin
   FIsValid := False;
   FSearchParams := nil;
   InitializePrototype;
-  if not Assigned(AClass) and Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetURLShared;
+  if not Assigned(AClass) and Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 destructor TGocciaURLValue.Destroy;
@@ -169,10 +183,13 @@ end;
 procedure TGocciaURLValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetURLShared) then Exit;
 
-  FShared := TGocciaSharedPrototype.Create(Self);
+  Shared := TGocciaSharedPrototype.Create(Self);
+  CurrentRealm.SetOwnedSlot(GURLSharedSlot, Shared);
   if Length(FPrototypeMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -224,15 +241,22 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaURLValue.ExposePrototype(
   const AConstructor: TGocciaValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
+  Shared := GetURLShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaURLValue.Create;
-  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+    Shared := GetURLShared;
+  end;
+  if Assigned(Shared) then
+    ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
 // ---------------------------------------------------------------------------
@@ -862,5 +886,8 @@ begin
   if Assigned(FSearchParams) then
     FSearchParams.MarkReferences;
 end;
+
+initialization
+  GURLSharedSlot := RegisterRealmOwnedSlot('URL.shared');
 
 end.

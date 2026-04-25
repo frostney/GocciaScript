@@ -57,15 +57,30 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
+  Goccia.Realm,
   Goccia.Threading,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue;
 
+// BigInt.prototype (the JS-visible prototype, shared by primitive 1n and the
+// rare object wrapper) lives in a per-realm slot so JS-side mutations don't
+// leak across realms.  Method host and member definitions are immutable
+// process-wide.
+var
+  GBigIntPrimitivePrototypeSlot: TGocciaRealmSlotId;
+
 threadvar
-  FSharedPrototype: TGocciaValue;
   FMethodHost: TGocciaBigIntValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetSharedBigIntPrimitivePrototype: TGocciaObjectValue; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GBigIntPrimitivePrototypeSlot))
+  else
+    Result := nil;
+end;
 
 { TGocciaBigIntValue }
 
@@ -104,10 +119,11 @@ var
   Members: TGocciaMemberCollection;
   Proto: TGocciaObjectValue;
 begin
-  if Assigned(FSharedPrototype) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetSharedBigIntPrimitivePrototype) then Exit;
 
   Proto := TGocciaObjectValue.Create;
-  FSharedPrototype := Proto;
+  CurrentRealm.SetSlot(GBigIntPrimitivePrototypeSlot, Proto);
   FMethodHost := Self;
 
   if Length(FPrototypeMembers) = 0 then
@@ -128,16 +144,14 @@ begin
 
   RegisterMemberDefinitions(Proto, FPrototypeMembers);
 
+  // Proto is pinned via the realm slot; method host is process-wide.
   if Assigned(TGarbageCollector.Instance) then
-  begin
-    TGarbageCollector.Instance.PinObject(FSharedPrototype);
     TGarbageCollector.Instance.PinObject(FMethodHost);
-  end;
 end;
 
 class function TGocciaBigIntValue.SharedPrototype: TGocciaValue;
 begin
-  Result := FSharedPrototype;
+  Result := GetSharedBigIntPrimitivePrototype;
 end;
 
 function TGocciaBigIntValue.IsPrimitive: Boolean;
@@ -156,10 +170,13 @@ begin
 end;
 
 function TGocciaBigIntValue.GetProperty(const AName: string): TGocciaValue;
+var
+  Proto: TGocciaObjectValue;
 begin
-  if Assigned(FSharedPrototype) then
+  Proto := GetSharedBigIntPrimitivePrototype;
+  if Assigned(Proto) then
   begin
-    Result := TGocciaObjectValue(FSharedPrototype).GetPropertyWithContext(AName, Self);
+    Result := Proto.GetPropertyWithContext(AName, Self);
     if Assigned(Result) then
       Exit;
   end;
@@ -236,5 +253,8 @@ begin
   Result := TGocciaStringLiteralValue.Create(
     TGocciaBigIntValue(AThisValue).FValue.ToString);
 end;
+
+initialization
+  GBigIntPrimitivePrototypeSlot := RegisterRealmSlot('BigInt.prototype');
 
 end.
