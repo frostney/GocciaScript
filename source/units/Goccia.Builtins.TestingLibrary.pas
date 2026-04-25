@@ -2625,19 +2625,31 @@ begin
     PreviousSuite := FCurrentRegistrationSuite;
     FCurrentRegistrationSuite := ChildSuite;
     try
+      { Per-describe deadline. Bounds the time spent inside the user's
+        describe callback (the registration phase) only — once the child
+        tests start running each one needs an unobstructed tsTest scope,
+        otherwise the older tsDescribe deadline preempts the per-test
+        deadline whenever both are configured to the same value. Pushed
+        unconditionally so a 0 value is a no-op and the matching Pop
+        runs in the outer try-finally. }
+      PushTimeoutScope(tsDescribe, GTestRunnerDescribeTimeoutMs);
       try
-        if Assigned(ChildSuite.SuiteFunction) then
-          ChildSuite.SuiteFunction.Call(ChildSuite.SuiteArguments,
-            TGocciaUndefinedLiteralValue.UndefinedValue);
-      except
-        on E: Exception do
-        begin
-          if not FSuppressOutput then
-            WriteLn('Error in describe block "', ChildSuite.GetFullName,
-              '": ', E.Message);
-          AFailedTestDetails.Add('Describe "' + ChildSuite.GetFullName +
-            '": ' + E.Message);
+        try
+          if Assigned(ChildSuite.SuiteFunction) then
+            ChildSuite.SuiteFunction.Call(ChildSuite.SuiteArguments,
+              TGocciaUndefinedLiteralValue.UndefinedValue);
+        except
+          on E: Exception do
+          begin
+            if not FSuppressOutput then
+              WriteLn('Error in describe block "', ChildSuite.GetFullName,
+                '": ', E.Message);
+            AFailedTestDetails.Add('Describe "' + ChildSuite.GetFullName +
+              '": ' + E.Message);
+          end;
         end;
+      finally
+        PopTimeoutScope;
       end;
     finally
       FCurrentRegistrationSuite := PreviousSuite;
@@ -2789,13 +2801,11 @@ begin
   RunSuiteHooks := not IsSuiteSkipped(ASuite) and
     SuiteHasRunnableEntries(ASuite, AHasFocusedEntries);
 
-  { Per-describe deadline. Pushed unconditionally — a 0 value
-    contributes no deadline. Each recursive ExecuteSuite pushes its
-    own entry; the soonest-deadline cache means the outermost
-    describe still ultimately bounds the chain. The matching Pop
-    runs in the outer try-finally below. }
-  PushTimeoutScope(tsDescribe, GTestRunnerDescribeTimeoutMs);
-  try
+  { The per-describe deadline is no longer pushed here.  It now lives in
+    BuildNestedRegistrations around the describe callback so that nested
+    tsTest deadlines are not preempted by an older tsDescribe deadline
+    when --describe-timeout and --test-timeout are configured to the
+    same value. }
 
   if RunSuiteHooks and (ASuite.BeforeAllCallbacks.Length > 0) then
   begin
@@ -3048,10 +3058,6 @@ begin
       if AExitOnFirstFailure then
         AShouldStop := True;
     end;
-  end;
-
-  finally
-    PopTimeoutScope;
   end;
 end;
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -580,7 +581,14 @@ def evaluate_suite(
                             is_async=is_async,
                         )
 
-                    safe_name = tid.replace("/", "__").replace("\\", "__")
+                    # Hash the tid into a collision-free temp filename.  The
+                    # naive replace("/", "__") collapses both `foo/bar` and
+                    # `foo__bar` to the same name, which silently overwrites
+                    # one wrapper with another and then misattributes the
+                    # runner's per-file record to the wrong source test.
+                    safe_name = (
+                        hashlib.sha1(tid.encode("utf-8")).hexdigest() + ".js"
+                    )
                     (temp_dir / safe_name).write_text(
                         wrapped, encoding="utf-8"
                     )
@@ -701,7 +709,9 @@ def evaluate_suite(
                 next_pending: list[str] = []
                 attempt_stalls = 0
                 for tid in pending_ids:
-                    safe = tid.replace("/", "__").replace("\\", "__")
+                    safe = (
+                        hashlib.sha1(tid.encode("utf-8")).hexdigest() + ".js"
+                    )
                     fr = file_results_by_safe.get(safe)
                     if fr is None:
                         final_by_id[tid] = {
@@ -727,6 +737,15 @@ def evaluate_suite(
                     is_no_result = (
                         "Worker produced no result" in f_error
                     )
+                    # Cooperative per-test deadlines surface as failed-test
+                    # entries containing "TIMEOUT after Xms" rather than as
+                    # a worker-stall string.  Without recognising them here
+                    # they fall through to the FAIL branch, so the suite's
+                    # `timeouts` counter under-reports while `failed`
+                    # over-reports.
+                    is_test_timeout = any(
+                        "TIMEOUT after " in item for item in f_failed_tests
+                    )
 
                     if is_stalled:
                         known_stalled.add(tid)
@@ -741,6 +760,15 @@ def evaluate_suite(
 
                     if is_no_result:
                         next_pending.append(tid)
+                        continue
+
+                    if is_test_timeout:
+                        final_by_id[tid] = {
+                            "id": tid,
+                            "status": "TIMEOUT",
+                            "message": "; ".join(f_failed_tests) or f_error,
+                        }
+                        summary["timeouts"] += 1
                         continue
 
                     if f_failed > 0:

@@ -219,12 +219,25 @@ procedure TArrayLikeView.CheckArrayCreateLen;
 begin
   if RawLen > MAX_ARRAY_LENGTH_F then
     ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
+  // Materialised native arrays use TList<TGocciaValue>, whose Count is
+  // a 32-bit Integer.  A generic array-like with length in
+  // (MaxInt, 2^32 - 1] passes the spec ceiling but would silently
+  // truncate to View.Len once we materialise it, leaving callers like
+  // map / slice / toReversed / toSorted with a shortened result.
+  if RawLen > MaxInt then
+    ThrowRangeError(
+      'Array length exceeds engine maximum (MaxInt)',
+      'use a smaller length');
 end;
 
 procedure TArrayLikeView.CheckArrayCreateLenValue(const ANewLen: Double);
 begin
   if ANewLen > MAX_ARRAY_LENGTH_F then
     ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
+  if ANewLen > MaxInt then
+    ThrowRangeError(
+      'Array length exceeds engine maximum (MaxInt)',
+      'use a smaller length');
 end;
 
 procedure TArrayLikeView.CheckSafeIntegerLen(const ANewLen: Double);
@@ -339,10 +352,12 @@ end;
 function TArrayLikeView.NeedsSparsePath: Boolean;
 begin
   // Native arrays cap length at 2^32 - 1 and have a fast Elements array; the
-  // dense Integer loop is fine for them.  Generic array-likes whose declared
-  // length exceeds the ArrayCreate ceiling (2^32 - 1) cannot be iterated
-  // densely without saturating Integer and walking 2^31 phantom indices.
-  Result := (not Assigned(Arr)) and (RawLen > MAX_ARRAY_LENGTH_F);
+  // dense Integer loop is fine for them.  Generic array-likes need the
+  // sparse path as soon as RawLen exceeds MaxInt — Len is a 32-bit Integer,
+  // so the dense loop saturates at 2^31 - 1 and would silently skip every
+  // index beyond that.  Callers like filter / reduce / forEach / includes /
+  // some / every / indexOf / lastIndexOf / find* all rely on this gate.
+  Result := (not Assigned(Arr)) and (RawLen > MaxInt);
 end;
 
 function TArrayLikeView.Len64: Int64;
@@ -2169,12 +2184,19 @@ begin
     ThrowTypeError(
       'Array length exceeds maximum safe integer (2^53 - 1)',
       'use a smaller length');
-  // Pragmatic guard: this implementation tracks `n` as an Integer and cannot
-  // materialise more than 2^32 - 1 elements in a native array.  A source
-  // length that would carry `n` past that bound is rejected up-front rather
-  // than silently truncated mid-iteration.
+  // Pragmatic guards: this implementation tracks `n` as an Integer and
+  // cannot materialise more than 2^32 - 1 elements in a native array.  A
+  // source length that would carry `n` past that bound is rejected up-front
+  // rather than silently truncated mid-iteration.  The MaxInt guard catches
+  // the narrower window where EndN is still within the spec ceiling but
+  // already exceeds Integer range — the `Inc(N)` loop below would otherwise
+  // overflow N into negative territory.
   if EndN > MAX_ARRAY_LENGTH_F then
     ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
+  if EndN > MaxInt then
+    ThrowRangeError(
+      'Array length exceeds engine maximum (MaxInt)',
+      'use a smaller length');
   for J := 0 to SrcView.Len - 1 do
   begin
     if SrcView.HasIndex(J) then

@@ -609,6 +609,16 @@ begin
         WriteLn(StdErr, TGocciaError(E).GetDetailedMessage(IsColorTerminal))
       else
         WriteLn(StdErr, 'Fatal error: ', E.Message);
+      { Synthesize a one-failed-file TestResult so PrintTestResults still
+        emits JSON for the file and the sequential aggregator does not
+        drop the slot at its `if FileResult.TestResult = nil then
+        Continue` filter. Without this, fatal host-side failures (e.g. a
+        compile-time error before the test harness has a chance to
+        register anything) silently disappear from the aggregated
+        output. }
+      Result.TestResult := CreateDefaultScriptResult;
+      Result.TestResult.AssignProperty('failed',
+        TGocciaNumberLiteralValue.Create(1));
       Result.FileResults[0].ErrorMessage := E.Message;
       Result.FileResults[0].Failed := 1;
       Result.FileResults[0].TotalTests := 1;
@@ -823,6 +833,15 @@ function TTestRunnerApp.RunScriptsFromFilesParallel(
 var
   Pool: TGocciaThreadPool;
   WorkerData: array of TTestWorkerData;
+  { Synthesised results for orphaned slots.  We deliberately keep these in a
+    main-thread-only array instead of writing them into WorkerData, because
+    an abandoned worker that unsticks later in native code will resume
+    writing to its own WorkerData[AIndex] slot — assigning to managed types
+    (string, dynamic array of string) concurrently with the main thread's
+    aggregation reads is a refcount race we cannot tolerate. }
+  OrphanResults: array of TTestWorkerData;
+  IsOrphan: array of Boolean;
+  Source: ^TTestWorkerData;
   GC: TGarbageCollector;
   I, J: Integer;
   AllTestResults: TGocciaObjectValue;
@@ -899,6 +918,8 @@ begin
       their WorkerData is all zeros too.  Pool.Results[I].Success is
       True for those — the Success flag is the discriminator, and only
       Success=False slots get rewritten. }
+    SetLength(OrphanResults, AFiles.Count);
+    SetLength(IsOrphan, AFiles.Count);
     for I := 0 to AFiles.Count - 1 do
     begin
       if (I > High(Pool.Results)) or Pool.Results[I].Success then
@@ -908,6 +929,10 @@ begin
       begin
         if WorkerData[I].ErrorMessage = '' then
         begin
+          { Watchdog-cancelled slot: the worker for this file never ran (a
+            peer stalled), so WorkerData[I] is still the zero-initialised
+            default and no concurrent writer touches it any more.  Safe to
+            keep the synthesis in WorkerData. }
           WorkerData[I].ErrorMessage := Pool.Results[I].ErrorMessage;
           WorkerData[I].Failed := 1;
           WorkerData[I].TotalRunTests := 1;
@@ -921,14 +946,19 @@ begin
               (WorkerData[I].Failed = 0) and
               (WorkerData[I].TotalRunTests = 0) then
       begin
-        WorkerData[I].ErrorMessage :=
+        { Stuck-worker slot: the worker is still alive in native code and
+          may eventually unstick and resume writing to WorkerData[I]
+          itself.  Park the synthesis in OrphanResults[I] so we never
+          touch the managed fields the orphan owns. }
+        IsOrphan[I] := True;
+        OrphanResults[I].ErrorMessage :=
           'Worker produced no result (likely stalled in native code and ' +
           'was orphaned by the watchdog)';
-        WorkerData[I].Failed := 1;
-        WorkerData[I].TotalRunTests := 1;
-        SetLength(WorkerData[I].FailedTestNames, 1);
-        WorkerData[I].FailedTestNames[0] := AFiles[I] + ': ' +
-          WorkerData[I].ErrorMessage;
+        OrphanResults[I].Failed := 1;
+        OrphanResults[I].TotalRunTests := 1;
+        SetLength(OrphanResults[I].FailedTestNames, 1);
+        OrphanResults[I].FailedTestNames[0] := AFiles[I] + ': ' +
+          OrphanResults[I].ErrorMessage;
       end;
     end;
   finally
@@ -965,37 +995,45 @@ begin
     if not FNoProgress.Present then
       WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, AFiles.Count, AFiles[I]]));
 
-    if WorkerData[I].ErrorMessage <> '' then
-      WriteLn(StdErr, WorkerData[I].ErrorMessage);
+    { Source orphaned slots from OrphanResults so we never read the
+      WorkerData[I] managed fields that an unsticking worker might still
+      be writing to.  Every other slot reads from WorkerData as before. }
+    if (I < Length(IsOrphan)) and IsOrphan[I] then
+      Source := @OrphanResults[I]
+    else
+      Source := @WorkerData[I];
 
-    PassedCount := PassedCount + WorkerData[I].Passed;
-    FailedCount := FailedCount + WorkerData[I].Failed;
-    SkippedCount := SkippedCount + WorkerData[I].Skipped;
-    TotalRunCount := TotalRunCount + WorkerData[I].TotalRunTests;
-    TotalAssertions := TotalAssertions + WorkerData[I].Assertions;
+    if Source^.ErrorMessage <> '' then
+      WriteLn(StdErr, Source^.ErrorMessage);
 
-    Result.TotalLexNanoseconds := Result.TotalLexNanoseconds + WorkerData[I].LexNs;
-    Result.TotalParseNanoseconds := Result.TotalParseNanoseconds + WorkerData[I].ParseNs;
-    Result.TotalCompileNanoseconds := Result.TotalCompileNanoseconds + WorkerData[I].CompileNs;
-    Result.TotalExecNanoseconds := Result.TotalExecNanoseconds + WorkerData[I].ExecNs;
+    PassedCount := PassedCount + Source^.Passed;
+    FailedCount := FailedCount + Source^.Failed;
+    SkippedCount := SkippedCount + Source^.Skipped;
+    TotalRunCount := TotalRunCount + Source^.TotalRunTests;
+    TotalAssertions := TotalAssertions + Source^.Assertions;
 
-    for J := 0 to High(WorkerData[I].FailedTestNames) do
+    Result.TotalLexNanoseconds := Result.TotalLexNanoseconds + Source^.LexNs;
+    Result.TotalParseNanoseconds := Result.TotalParseNanoseconds + Source^.ParseNs;
+    Result.TotalCompileNanoseconds := Result.TotalCompileNanoseconds + Source^.CompileNs;
+    Result.TotalExecNanoseconds := Result.TotalExecNanoseconds + Source^.ExecNs;
+
+    for J := 0 to High(Source^.FailedTestNames) do
       AllFailedTests.Elements.Add(
-        TGocciaStringLiteralValue.Create(WorkerData[I].FailedTestNames[J]));
+        TGocciaStringLiteralValue.Create(Source^.FailedTestNames[J]));
 
     { Per-file record for the JSON output. Copying strings by value
       keeps the aggregated result self-contained once WorkerData goes
       out of scope. }
     Result.FileResults[I].FileName := AFiles[I];
-    Result.FileResults[I].Passed := WorkerData[I].Passed;
-    Result.FileResults[I].Failed := WorkerData[I].Failed;
-    Result.FileResults[I].Skipped := WorkerData[I].Skipped;
-    Result.FileResults[I].TotalTests := WorkerData[I].TotalRunTests;
-    Result.FileResults[I].ErrorMessage := WorkerData[I].ErrorMessage;
+    Result.FileResults[I].Passed := Source^.Passed;
+    Result.FileResults[I].Failed := Source^.Failed;
+    Result.FileResults[I].Skipped := Source^.Skipped;
+    Result.FileResults[I].TotalTests := Source^.TotalRunTests;
+    Result.FileResults[I].ErrorMessage := Source^.ErrorMessage;
     SetLength(Result.FileResults[I].FailedTests,
-      Length(WorkerData[I].FailedTestNames));
-    for J := 0 to High(WorkerData[I].FailedTestNames) do
-      Result.FileResults[I].FailedTests[J] := WorkerData[I].FailedTestNames[J];
+      Length(Source^.FailedTestNames));
+    for J := 0 to High(Source^.FailedTestNames) do
+      Result.FileResults[I].FailedTests[J] := Source^.FailedTestNames[J];
   end;
 
   AllTestResults.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(AFiles.Count * 1.0));
