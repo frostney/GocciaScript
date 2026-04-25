@@ -39,7 +39,7 @@ export const metadata: Metadata = {
     template: "%s · GocciaScript",
   },
   description:
-    "A strict subset of ECMAScript 2027+, implemented from scratch — with a sandbox-first runtime designed for AI agents and embedded apps.",
+    "A strict subset of ECMAScript 2027+, implemented from scratch — with a sandbox-first runtime designed for tinkerers, embedding and AI agents.",
   applicationName: "GocciaScript",
   keywords: [
     "GocciaScript",
@@ -67,7 +67,7 @@ export const metadata: Metadata = {
     siteName: "GocciaScript",
     title: "GocciaScript — A drop of JavaScript",
     description:
-      "A strict subset of ECMAScript 2027+, implemented from scratch — with a sandbox-first runtime designed for AI agents and embedded apps.",
+      "A strict subset of ECMAScript 2027+, implemented from scratch — with a sandbox-first runtime designed for tinkerers, embedding and AI agents.",
     url: SITE_URL,
     locale: "en_US",
   },
@@ -75,7 +75,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "GocciaScript — A drop of JavaScript",
     description:
-      "A strict subset of ECMAScript 2027+, implemented from scratch — with a sandbox-first runtime designed for AI agents and embedded apps.",
+      "A strict subset of ECMAScript 2027+, implemented from scratch — with a sandbox-first runtime designed for tinkerers, embedding and AI agents.",
   },
   robots: {
     index: true,

@@ -9,13 +9,13 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Sandbox · GocciaScript",
     description:
-      "A runtime designed for code you didn't write — for AI agents and embedded apps.",
+      "A runtime designed for code you didn't write — for tinkerers, embedding and AI agents.",
     url: "/sandbox",
   },
   twitter: {
     title: "Sandbox · GocciaScript",
     description:
-      "A runtime designed for code you didn't write — for AI agents and embedded apps.",
+      "A runtime designed for code you didn't write — for tinkerers, embedding and AI agents.",
   },
 };
 

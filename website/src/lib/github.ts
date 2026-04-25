@@ -23,10 +23,20 @@ export function isPreStable(release: ReleaseInfo | null | undefined): boolean {
   return Number(m[1]) === 0;
 }
 
+/** Format a star count the way GitHub's own button does:
+ *    < 1 000        → exact ("999")
+ *    1 000–999 999  → one decimal in `k`, drop trailing `.0` ("1k", "2.4k", "85.3k")
+ *    ≥ 1 000 000    → one decimal in `m`, drop trailing `.0` ("1m", "1.2m")
+ */
 export function formatStars(count: number): string {
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}m`;
-  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`;
-  return String(count);
+  if (count < 1_000) return String(count);
+  const [val, suffix] =
+    count >= 1_000_000 ? [count / 1_000_000, "m"] : [count / 1_000, "k"];
+  // toFixed(1) rounds (1099 → "1.1k", 1049 → "1.0k"); strip the trailing
+  // `.0` so we render "1k" instead of "1.0k" for clean integer values.
+  const fixed = val.toFixed(1);
+  const trimmed = fixed.endsWith(".0") ? fixed.slice(0, -2) : fixed;
+  return `${trimmed}${suffix}`;
 }
 
 export async function fetchLatestRelease(): Promise<ReleaseInfo | null> {

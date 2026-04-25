@@ -148,47 +148,49 @@ export function Install({ release }: { release: ReleaseInfo | null }) {
 
         <div className="install-meta">
           {release ? (
-            <a
-              href={release.htmlUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="install-version install-version-large"
-              title={release.name ?? release.tagName}
-            >
-              <span>Latest release</span>
-              <strong>{release.tagName}</strong>
+            <p className="install-latest">
+              Latest version{" "}
+              <a
+                href={release.htmlUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={release.name ?? release.tagName}
+              >
+                <strong>{release.tagName}</strong>
+              </a>
               {release.publishedAt && (
-                <span className="install-version-date">
+                <>
+                  {" "}
+                  released{" "}
                   {new Date(release.publishedAt).toLocaleDateString(undefined, {
                     year: "numeric",
-                    month: "short",
+                    month: "long",
                     day: "numeric",
                   })}
-                </span>
+                </>
               )}
-            </a>
+            </p>
           ) : (
-            <span className="install-version install-version-large">
-              <span>Latest release</span>
-              <strong>—</strong>
-            </span>
+            <p className="install-latest">Latest version —</p>
           )}
-          <a
-            href={GITHUB_RELEASES_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="install-link"
-          >
-            <BookIcon size={14} /> Release notes
-          </a>
-          <a
-            href={GITHUB_REPO_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="install-link"
-          >
-            <GithubIcon size={14} /> Source on GitHub
-          </a>
+          <div className="install-meta-links">
+            <a
+              href={GITHUB_RELEASES_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="install-link"
+            >
+              <BookIcon size={14} /> Release notes
+            </a>
+            <a
+              href={GITHUB_REPO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="install-link"
+            >
+              <GithubIcon size={14} /> Source on GitHub
+            </a>
+          </div>
         </div>
 
         <div className="install-methods">

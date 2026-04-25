@@ -127,7 +127,7 @@ export default async function OpenGraphImage() {
           }}
         >
           A strict subset of ECMAScript 2027+, sandboxed by default — built for
-          AI agents and embedded apps.
+          tinkerers, embedding and AI agents.
         </div>
       </div>
 

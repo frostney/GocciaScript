@@ -669,6 +669,11 @@ p {
   font-weight: 600;
 }
 .prestable-banner {
+  /* Width-matched with `.install-method p` (70ch) below so the
+     informational notice sits in the same prose column as the rest of
+     the install-page text — banner spanning to full container width
+     looked stranded between the narrow section head and the methods. */
+  max-width: 70ch;
   margin: 0.5rem 0 2rem;
   padding: 1rem 1.25rem;
   background: color-mix(in oklab, var(--amber) 12%, var(--paper-2));
@@ -697,33 +702,34 @@ p {
 /* /install page */
 .install-meta {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.85rem;
-  margin: 0.5rem 0 3rem;
-  align-items: center;
-}
-.install-version-large {
-  padding: 0.6rem 1rem;
-  font-size: 0.92rem;
+  flex-direction: column;
   gap: 0.6rem;
-  align-items: baseline;
+  margin: 0.5rem 0 3rem;
 }
-.install-version-large > span:first-child {
-  font-family: var(--mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--ink-3);
+.install-latest {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--ink-2);
 }
-.install-version-large strong {
+.install-latest a {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in oklab, var(--accent) 40%, transparent);
+  transition: border-color 0.15s;
+}
+.install-latest a:hover {
+  border-bottom-color: var(--accent);
+}
+.install-latest strong {
   font-family: var(--mono);
   font-weight: 700;
-  font-size: 1rem;
   color: var(--accent);
 }
-.install-version-date {
-  color: var(--ink-3);
-  font-size: 0.78rem;
+.install-meta-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  align-items: center;
 }
 .install-link {
   display: inline-flex;

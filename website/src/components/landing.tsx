@@ -754,8 +754,8 @@ export function Landing({ release }: { release?: ReleaseInfo | null }) {
               </h1>
               <p className="hero-lede">
                 A strict subset of ECMAScript 2027+, implemented from scratch —
-                with a sandbox-first runtime designed for AI agents and embedded
-                apps.
+                with a sandbox-first runtime designed for tinkerers, embedding
+                and AI agents.
               </p>
               <div className="hero-cta-row">
                 <Link
