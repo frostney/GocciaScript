@@ -257,6 +257,19 @@ export async function POST(req: Request) {
       );
     });
 
+    // The child can close stdin before we finish writing (early exit on
+    // parse error, OOM, killed by our timeout, etc.) — that surfaces as
+    // an EPIPE error on this stream. Without a listener Node treats it
+    // as unhandled and crashes the request worker. We silently drop the
+    // write: the runner's own `error` / `close` event will produce the
+    // response payload; partial stdin is part of the same failure mode.
+    child.stdin.on("error", (err: NodeJS.ErrnoException) => {
+      if (err && err.code !== "EPIPE") {
+        // Anything other than the expected pipe-closed case still
+        // surfaces via stderr / the close handler; log for the operator.
+        console.error("[/api/run] stdin error:", err);
+      }
+    });
     child.stdin.write(code);
     child.stdin.end();
   });

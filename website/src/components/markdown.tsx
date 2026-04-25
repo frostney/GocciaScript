@@ -61,6 +61,33 @@ const PATTERNS: { re: RegExp; build: (m: RegExpMatchArray) => InlineToken }[] =
     },
   ];
 
+/** Schemes we allow in fallback `<a href>` rendering. Anything else
+ *  (e.g. `javascript:`, `data:`, `vbscript:`) falls through to plain
+ *  text — defense in depth even though our docs corpus is trusted. */
+const SAFE_HREF_SCHEMES = new Set(["http", "https", "mailto", "tel"]);
+
+/** Return `href` if it's safe to use directly, otherwise `null`.
+ *  Safe forms: in-page anchor (`#…`), root-relative path (`/…`),
+ *  protocol-relative (`//…`), or one of the allowlisted schemes. */
+export function safeHref(href: string): string | null {
+  if (!href) return null;
+  if (href.startsWith("#") || href.startsWith("/")) return href;
+  const m = href.match(/^([a-z][a-z0-9+.-]*):/i);
+  if (!m) return href; // bare relative path or fragment-relative
+  return SAFE_HREF_SCHEMES.has(m[1].toLowerCase()) ? href : null;
+}
+
+/** True when `line` is a markdown horizontal rule (`---`, `------`, etc.). */
+function isHr(line: string): boolean {
+  return /^---+\s*$/.test(line);
+}
+
+/** True when `line` + `next` together form a markdown table head + delimiter
+ *  (a `|`-bearing header line followed by a `---`-bearing delimiter line). */
+function isTableStart(line: string, next: string): boolean {
+  return /\|/.test(line) && /\|/.test(next) && /-{3,}/.test(next);
+}
+
 function tokenizeInline(text: string): InlineToken[] {
   const out: InlineToken[] = [];
   let rest = text;
@@ -162,8 +189,16 @@ function renderInline(text: string): ReactNode[] {
             </Link>
           );
         }
+        // External / unknown link. Sanitize the scheme — `javascript:`
+        // and friends fall through to plain text rather than becoming a
+        // navigable element. Markdown body comes from our own docs, so
+        // this is defense in depth, not the primary defense.
+        const safe = safeHref(tok.href);
+        if (!safe) {
+          return <Fragment key={i}>{tok.text}</Fragment>;
+        }
         return (
-          <a key={i} href={tok.href} target="_blank" rel="noopener noreferrer">
+          <a key={i} href={safe} target="_blank" rel="noopener noreferrer">
             {tok.text}
           </a>
         );
@@ -174,7 +209,7 @@ function renderInline(text: string): ReactNode[] {
   });
 }
 
-type Block =
+export type Block =
   | { kind: "heading"; level: number; text: string }
   | { kind: "hr" }
   | { kind: "quote"; text: string }
@@ -183,7 +218,7 @@ type Block =
   | { kind: "code"; lang: string; code: string }
   | { kind: "p"; text: string };
 
-function parseMarkdown(source: string): Block[] {
+export function parseMarkdown(source: string): Block[] {
   const lines = source.replace(/\r\n/g, "\n").split("\n");
   const blocks: Block[] = [];
   let i = 0;
@@ -210,7 +245,7 @@ function parseMarkdown(source: string): Block[] {
       continue;
     }
 
-    if (/^---+\s*$/.test(line)) {
+    if (isHr(line)) {
       blocks.push({ kind: "hr" });
       i++;
       continue;
@@ -226,11 +261,7 @@ function parseMarkdown(source: string): Block[] {
       continue;
     }
 
-    if (
-      /\|/.test(line) &&
-      /\|/.test(lines[i + 1] || "") &&
-      /-{3,}/.test(lines[i + 1] || "")
-    ) {
+    if (isTableStart(line, lines[i + 1] || "")) {
       // Split table cells on `|`, but treat `\|` as a literal pipe.
       const PIPE_PLACEHOLDER = String.fromCharCode(1);
       const PIPE_RESTORE = new RegExp(PIPE_PLACEHOLDER, "g");
@@ -275,7 +306,14 @@ function parseMarkdown(source: string): Block[] {
     while (
       i < lines.length &&
       lines[i].trim() &&
-      !/^(#{1,4}\s|```|>\s?|[-*]\s)/.test(lines[i])
+      // Block-starting markers: heading, fence, blockquote, list item.
+      !/^(#{1,4}\s|```|>\s?|[-*]\s)/.test(lines[i]) &&
+      // A bare `---` line is a horizontal rule, not a paragraph
+      // continuation — without this guard, paragraphs swallow HRs.
+      !isHr(lines[i]) &&
+      // The header row of a `| col | col |` / `| --- | --- |` table is
+      // a paragraph-shaped line and would otherwise be slurped.
+      !isTableStart(lines[i], lines[i + 1] || "")
     ) {
       buf.push(lines[i]);
       i++;
