@@ -623,6 +623,7 @@ function TTestRunnerApp.RunScriptsFromFiles(const AFiles: TStringList): TAggrega
 var
   GC: TGarbageCollector;
   I, J: Integer;
+  ProcessedCount: Integer;
   AllTestResults: TGocciaObjectValue;
   AllFailedTests: TGocciaArrayValue;
   FileResult: TAggregatedTestResult;
@@ -659,13 +660,18 @@ begin
   Result.TotalParseNanoseconds := 0;
   Result.TotalCompileNanoseconds := 0;
   Result.TotalExecNanoseconds := 0;
+  // Preallocate to AFiles.Count and track the count actually populated;
+  // FExitOnFirst Break and the FileResult.TestResult = nil Continue both
+  // leave entries unwritten, and serialising those zero-filled slots
+  // produced bogus "results" rows in the JSON output.  Resize at the end
+  // to the true populated count so only real records are emitted.
   SetLength(Result.FileResults, AFiles.Count);
+  ProcessedCount := 0;
 
   for I := 0 to AFiles.Count - 1 do
   begin
     if not FNoProgress.Present then
       WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, AFiles.Count, AFiles[I]]));
-    Result.FileResults[I].FileName := AFiles[I];
     FileResult := RunScriptFromFile(AFiles[I]);
     if FileResult.TestResult = nil then
       Continue;
@@ -689,22 +695,24 @@ begin
 
     { Per-file record for the JSON output — same schema as the parallel
       path so consumers do not have to branch on job count. }
-    Result.FileResults[I].Passed :=
+    Result.FileResults[ProcessedCount].FileName := AFiles[I];
+    Result.FileResults[ProcessedCount].Passed :=
       FileResult.TestResult.GetProperty('passed').ToNumberLiteral.Value;
-    Result.FileResults[I].Failed :=
+    Result.FileResults[ProcessedCount].Failed :=
       FileResult.TestResult.GetProperty('failed').ToNumberLiteral.Value;
-    Result.FileResults[I].Skipped :=
+    Result.FileResults[ProcessedCount].Skipped :=
       FileResult.TestResult.GetProperty('skipped').ToNumberLiteral.Value;
-    Result.FileResults[I].TotalTests :=
+    Result.FileResults[ProcessedCount].TotalTests :=
       FileResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value;
     if FileFailedTests is TGocciaArrayValue then
     begin
-      SetLength(Result.FileResults[I].FailedTests,
+      SetLength(Result.FileResults[ProcessedCount].FailedTests,
         TGocciaArrayValue(FileFailedTests).Elements.Count);
       for J := 0 to TGocciaArrayValue(FileFailedTests).Elements.Count - 1 do
-        Result.FileResults[I].FailedTests[J] :=
+        Result.FileResults[ProcessedCount].FailedTests[J] :=
           TGocciaArrayValue(FileFailedTests).Elements[J].ToStringLiteral.Value;
     end;
+    Inc(ProcessedCount);
 
     if Assigned(GC) then
       GC.Collect;
@@ -712,6 +720,7 @@ begin
     if FExitOnFirst.Present and (FailedCount > 0) then
       Break;
   end;
+  SetLength(Result.FileResults, ProcessedCount);
 
   if Assigned(GC) then
   begin

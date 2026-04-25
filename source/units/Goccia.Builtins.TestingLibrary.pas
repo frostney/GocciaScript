@@ -3135,6 +3135,13 @@ begin
               TGarbageCollector.Instance.RemoveTempRoot(CallbackResult);
           end;
         except
+          { Timeout errors flag a describe/file/test deadline expiring;
+            they must propagate so the outer ExecuteSuite handler can
+            record the timeout and unwind cleanly.  Downgrading them to
+            an assertion failure stranded the deadline state and let
+            execution keep running past the limit. }
+          on E: TGocciaTimeoutError do
+            raise;
           on E: Exception do
             AssertionFailed('callback execution', 'Callback threw an exception: ' + E.Message);
         end;

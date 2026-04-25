@@ -284,10 +284,14 @@ _ALWAYS_UNSUPPORTED_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # (e.g. `label: { ... break label; ... }`), which the
     # `labeled_statement` pattern deliberately doesn't cover to avoid
     # false-positives on multi-line object literals.
+    # Whitespace class deliberately excludes line terminators (\r, \n,
+    # \u2028, \u2029): per ES2026 §13.9 / §13.10, no LineTerminator is
+    # allowed between `break`/`continue` and the label, otherwise ASI
+    # inserts a semicolon and the label is just the next statement.
     ("labeled_break",
-     re.compile(r"\bbreak\s+[A-Za-z_$][\w$]*")),
+     re.compile(r"\bbreak[ \t\v\f\u00A0\uFEFF]+[A-Za-z_$][\w$]*")),
     ("labeled_continue",
-     re.compile(r"\bcontinue\s+[A-Za-z_$][\w$]*")),
+     re.compile(r"\bcontinue[ \t\v\f\u00A0\uFEFF]+[A-Za-z_$][\w$]*")),
 ]
 
 # Patterns gated by --compat-function (function declarations / expressions).
@@ -298,10 +302,13 @@ _COMPAT_FUNCTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
      re.compile(r"\bfunction\s*\(")),
 ]
 
-# Patterns gated by --unsafe-function-constructor (`new Function(...)`).
+# Patterns gated by --unsafe-function-constructor.  Both `new Function(...)`
+# and the bare `Function(...)` call form construct a Function exotic via
+# the same dynamic-code path (per ES2026 §20.2.1.1 the call form delegates
+# to the construct form), so both must be filtered when this gate is off.
 _UNSAFE_FUNCTION_CONSTRUCTOR_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("new_function",
-     re.compile(r"\bnew\s+Function\s*\(")),
+     re.compile(r"\b(?:new\s+)?Function\s*\(")),
 ]
 
 

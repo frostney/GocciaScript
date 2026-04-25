@@ -233,6 +233,16 @@ begin
     ThrowTypeError(
       'Array length exceeds maximum safe integer (2^53 - 1)',
       'use a smaller length');
+  // Goccia's array-like generic path stores indices and length in 32-bit
+  // Integer.  Once a write index would exceed MaxInt the dense Put/SetLen
+  // operations would overflow into negative values, corrupting the receiver.
+  // Reject lengths outside Integer range here so the generic path never
+  // observes an unsafe value.  Native arrays go through the fast Arr branch
+  // and never reach this for the same operation.
+  if ANewLen > MaxInt then
+    ThrowRangeError(
+      'Array length exceeds engine maximum (MaxInt)',
+      'use a smaller length');
 end;
 
 function TArrayLikeView.Get(const AIndex: Integer): TGocciaValue;
@@ -672,7 +682,7 @@ procedure TGocciaArrayValue.InitializeNativeFromArguments(const AArguments: TGoc
 var
   LenArg: TGocciaValue;
   Len: Double;
-  I: Integer;
+  I, IntLen: Int64;
 begin
   if AArguments.Length = 0 then
     Exit;
@@ -686,7 +696,15 @@ begin
       if (Len <> Trunc(Len)) or (Len < 0) or (Len > MAX_ARRAY_LENGTH_F) then
         ThrowRangeError(SErrorInvalidArrayLength,
           SSuggestArrayLengthRange);
-      for I := 0 to Trunc(Len) - 1 do
+      // FElements is backed by an Integer-indexed list, so reject any
+      // length whose truncation would not fit in Integer before iterating.
+      // Spec allows up to 2^32 - 1 (MAX_ARRAY_LENGTH); the engine cannot
+      // address that many slots in a single native array.
+      IntLen := Trunc(Len);
+      if IntLen > MaxInt then
+        ThrowRangeError(SErrorInvalidArrayLength,
+          SSuggestArrayLengthRange);
+      for I := 0 to IntLen - 1 do
         FElements.Add(TGocciaHoleValue.HoleValue);
     end
     else
@@ -2553,6 +2571,7 @@ end;
 function TGocciaArrayValue.TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 var
   Index, NewLen, I: Integer;
+  TruncLen: Int64;
   RawLen: Double;
 begin
   if AName = PROP_LENGTH then
@@ -2561,12 +2580,20 @@ begin
     if ADescriptor is TGocciaPropertyDescriptorData then
     begin
       RawLen := TGocciaPropertyDescriptorData(ADescriptor).Value.ToNumberLiteral.Value;
-      NewLen := Trunc(RawLen);
-      if (RawLen <> NewLen) or (NewLen < 0) or (RawLen > MAX_ARRAY_LENGTH_F) then
+      // Trunc into Int64 first so we can detect lengths above MaxInt
+      // before assigning to NewLen (which is Integer-sized to match
+      // FElements.Count).  Spec allows up to 2^32 - 1 but the engine
+      // cannot index that many elements; reject anything above MaxInt
+      // and let the spec range check above MAX_ARRAY_LENGTH_F handle the
+      // rest.
+      TruncLen := Trunc(RawLen);
+      if (RawLen <> TruncLen) or (TruncLen < 0)
+         or (RawLen > MAX_ARRAY_LENGTH_F) or (TruncLen > MaxInt) then
       begin
         ADescriptor.Free;
         Exit(False);
       end;
+      NewLen := Integer(TruncLen);
       // Truncate elements
       if NewLen < FElements.Count then
         for I := FElements.Count - 1 downto NewLen do

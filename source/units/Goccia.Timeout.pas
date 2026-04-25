@@ -55,7 +55,9 @@ uses
 const
   TIMEOUT_CHECK_INTERVAL = 1024;
   TIMEOUT_ALWAYS_CHECK_THRESHOLD_MS = 16;
-  MAX_TIMEOUT_DEPTH = 16;
+  // Initial capacity reserved on first push; the stack grows on demand
+  // so deeply-nested describe blocks no longer hit a fixed ceiling.
+  TIMEOUT_INITIAL_CAPACITY = 16;
 
 type
   TTimeoutStackEntry = record
@@ -65,7 +67,7 @@ type
   end;
 
 threadvar
-  GTimeoutStack: array[0..MAX_TIMEOUT_DEPTH - 1] of TTimeoutStackEntry;
+  GTimeoutStack: array of TTimeoutStackEntry;
   GTimeoutDepth: Integer;
   GMinDeadlineNs: Int64;     // 0 means no scope on the stack has a deadline
   GMinDeadlineScope: TGocciaTimeoutScope;
@@ -105,9 +107,17 @@ end;
 
 procedure PushTimeoutScope(const AScope: TGocciaTimeoutScope;
   const ATimeoutMilliseconds: Integer);
+var
+  NewCapacity: Integer;
 begin
-  if GTimeoutDepth >= MAX_TIMEOUT_DEPTH then
-    raise Exception.Create('Timeout scope stack overflow');
+  if GTimeoutDepth >= Length(GTimeoutStack) then
+  begin
+    if Length(GTimeoutStack) = 0 then
+      NewCapacity := TIMEOUT_INITIAL_CAPACITY
+    else
+      NewCapacity := Length(GTimeoutStack) * 2;
+    SetLength(GTimeoutStack, NewCapacity);
+  end;
   GTimeoutStack[GTimeoutDepth].Scope := AScope;
   GTimeoutStack[GTimeoutDepth].DurationMs := ATimeoutMilliseconds;
   if ATimeoutMilliseconds > 0 then

@@ -611,6 +611,7 @@ def evaluate_suite(
                     runner_cmd.append(f"--jobs={jobs}")
 
                 runner_output = ""
+                process_returncode = -1
                 try:
                     process = subprocess.run(
                         runner_cmd,
@@ -618,10 +619,11 @@ def evaluate_suite(
                         stderr=subprocess.PIPE,
                         check=False,
                     )
+                    process_returncode = process.returncode
                     runner_output = (
                         process.stderr.decode("utf-8", errors="replace")
                     ).strip()
-                    if process.returncode != 0 and runner_output:
+                    if process_returncode != 0 and runner_output:
                         Path("/tmp/last_runner_stderr.txt").write_text(
                             runner_output
                         )
@@ -668,7 +670,7 @@ def evaluate_suite(
                 else:
                     print(
                         f"  Runner output file missing: {json_output} "
-                        f"(exit={process.returncode}, "
+                        f"(exit={process_returncode}, "
                         f"stderr_bytes={len(runner_output)})"
                     )
 
@@ -782,14 +784,17 @@ def evaluate_suite(
                     )
 
                 # Halt when a retry produces no progress — re-running the
-                # exact same set won't break the loop.
+                # exact same set won't break the loop.  Preserve the
+                # exact still-pending set (next_pending) so the post-loop
+                # cleanup records ERROR entries for them in final_by_id;
+                # zeroing pending_ids here would silently drop those IDs.
                 if (len(next_pending) == len(pending_ids)
                         and attempt_stalls == 0):
                     print(
                         f"  No progress on retry; "
                         f"{len(next_pending)} tests remain unprocessed"
                     )
-                    pending_ids = []
+                    pending_ids = next_pending
                     break
 
                 pending_ids = next_pending

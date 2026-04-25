@@ -168,7 +168,7 @@ begin
         SymbolToPrimitive,
         1,
         [pfConfigurable],
-        [gmfNotConstructable]);
+        [gmfNoFunctionPrototype, gmfNotConstructable]);
       Members.AddSymbolDataProperty(
         TGocciaSymbolValue.WellKnownToStringTag,
         TGocciaStringLiteralValue.Create('Symbol'),

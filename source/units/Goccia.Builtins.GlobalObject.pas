@@ -945,6 +945,9 @@ begin
   // proposed prototype's chain — if we reach Target, the new chain would be
   // cyclic.  Object.setPrototypeOf throws in this case (Reflect.setPrototypeOf
   // returns false; see Goccia.Builtins.GlobalReflect.ReflectSetPrototypeOf).
+  // Step 8.b.ii: if the next link doesn't use the ordinary [[GetPrototypeOf]]
+  // (e.g. it's a Proxy with a getPrototypeOf trap), stop the walk and let the
+  // assignment proceed — we cannot statically prove a cycle through an exotic.
   if ProtoArg is TGocciaObjectValue then
   begin
     Walker := TGocciaObjectValue(ProtoArg);
@@ -952,6 +955,8 @@ begin
     begin
       if Walker = Target then
         ThrowTypeError(SErrorSetPrototypeOfCyclic, SSuggestObjectArgType);
+      if Walker is TGocciaProxyValue then
+        Break;
       Walker := Walker.Prototype;
     end;
   end;

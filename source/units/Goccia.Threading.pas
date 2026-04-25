@@ -393,7 +393,7 @@ var
   AllItems: TGocciaWorkItemArray;
   Queue: TGocciaWorkQueue;
   FileCount, I, J, StalledIdx: Integer;
-  StalledCount, SnapshotCount: Integer;
+  StalledCount, SnapshotCount, SnapshotLast: Integer;
   NowNs: Int64;
   AllDone, AnyAbandoned: Boolean;
   StalledFiles: TGocciaWorkerResultArray;
@@ -551,14 +551,21 @@ begin
       // Snapshot the abandoned worker's results array by reference so
       // any subsequent SetLength on the worker side doesn't pull the
       // memory out from under us.  Skip the in-progress slot
-      // (ResultCount-1) because Success/ErrorMessage on that slot are
-      // not yet written by the worker.  All earlier slots were fully
-      // populated before the worker entered the call that stalled.
+      // (ResultCount-1) only when CurrentFileIndex >= 0, i.e. the
+      // worker is mid-file and Success/ErrorMessage on that slot are
+      // not yet written.  When CurrentFileIndex = -1 the worker is
+      // between files (or in ShutdownThreadRuntime) and the last slot
+      // is a fully-populated completed result — including it preserves
+      // the final result instead of dropping it.
       SnapshotResults := FWorkers[I].Results;
       SnapshotCount := FWorkers[I].ResultCount;
       if SnapshotCount > Length(SnapshotResults) then
         SnapshotCount := Length(SnapshotResults);
-      for J := 0 to SnapshotCount - 2 do
+      if FWorkers[I].CurrentFileIndex < 0 then
+        SnapshotLast := SnapshotCount - 1
+      else
+        SnapshotLast := SnapshotCount - 2;
+      for J := 0 to SnapshotLast do
       begin
         StalledIdx := SnapshotResults[J].Index;
         if (StalledIdx >= 0) and (StalledIdx < FileCount) then
