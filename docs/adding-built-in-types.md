@@ -13,6 +13,8 @@ This guide walks through every step needed to add a new built-in type to GocciaS
 
 ## Overview
 
+**Before you start:** built-in prototype objects are not module-level singletons. They live in a per-engine [realm](core-patterns.md#realm-ownership--slot-registration) (`Goccia.Realm.pas`) so that two engines on the same worker thread see independent intrinsics. Your value type registers a realm slot at unit `initialization` time and stores its shared prototype in that slot — never in a `threadvar`, class var, or static singleton, because cached pointers go stale across engine recreation. The slot pattern is shown in Step 1 below.
+
 Adding a built-in type like `Set`, `Map`, or `ArrayBuffer` requires changes across several files:
 
 | Step | File(s) | Purpose |
@@ -106,39 +108,55 @@ end;
 
 ### Key Patterns
 
-**Shared prototype singleton** -- All instances share a single prototype object. The `InitializePrototype` method is guarded by `if Assigned(FShared) then Exit` so it only runs once:
+**Shared prototype singleton (realm-owned)** -- All instances of one engine share a single prototype object that lives in the engine's realm. Register a realm-owned slot at unit `initialization` time and look up the shared prototype through it on every call. **Do not** store `FShared` in a class var or `threadvar` — cached pointers survive engine destruction and become dangling references on the next engine.
 
 ```pascal
-class var FPrototypeMembers: array of TGocciaMemberDefinition;
+var
+  GYourSharedSlot: TGocciaRealmOwnedSlotId;
+
+function GetYourShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GYourSharedSlot))
+  else
+    Result := nil;
+end;
 
 procedure TGocciaYourValue.InitializePrototype;
 var
+  Shared: TGocciaSharedPrototype;
   Members: TGocciaMemberCollection;
+  Definitions: array of TGocciaMemberDefinition;
 begin
-  if Assigned(FShared) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetYourShared) then Exit;
 
-  FShared := TGocciaSharedPrototype.Create(Self);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddNamedMethod('methodName', YourMethod, 1);
-      Members.AddSymbolMethod(
-        TGocciaSymbolValue.WellKnownIterator,
-        '[Symbol.iterator]', YourIteratorMethod, 0,
-        [pfConfigurable, pfWritable]);
-      Members.AddAccessor(
-        'propertyName', GetterMethod, nil, [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-      FPrototypeMembers[0].MemberFlags := [gmfNoFunctionPrototype];
-    finally
-      Members.Free;
-    end;
+  Shared := TGocciaSharedPrototype.Create(Self);
+
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod('methodName', YourMethod, 1);
+    Members.AddSymbolMethod(
+      TGocciaSymbolValue.WellKnownIterator,
+      '[Symbol.iterator]', YourIteratorMethod, 0,
+      [pfConfigurable, pfWritable]);
+    Members.AddAccessor(
+      'propertyName', GetterMethod, nil, [pfConfigurable]);
+    Definitions := Members.ToDefinitions;
+    Definitions[0].MemberFlags := [gmfNoFunctionPrototype];
+  finally
+    Members.Free;
   end;
 
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, Definitions);
+  CurrentRealm.SetOwnedSlot(GYourSharedSlot, Shared);
 end;
+
+initialization
+  GYourSharedSlot := RegisterRealmOwnedSlot('YourType.SharedPrototype');
 ```
+
+The `Goccia.Realm` unit owns `RegisterRealmOwnedSlot`, `CurrentRealm`, and the `TGocciaRealmOwnedSlotId` type — add it to your `uses` clause. For prototypes that are plain `TGocciaObjectValue` instances (no `TGocciaSharedPrototype` wrapper), use `RegisterRealmSlot` and `SetSlot`/`GetSlot` instead — see [Core patterns § Realm Ownership & Slot Registration](core-patterns.md#realm-ownership--slot-registration) for the raw-slot variant. `TGocciaSharedPrototype.Destroy` unpins both `FPrototype` and `FMethodHost`, so realm tear-down releases the prototype graph atomically.
 
 The preferred pattern is:
 
@@ -149,15 +167,21 @@ The preferred pattern is:
 
 This keeps the JS-visible surface in one place and avoids repeating `RegisterNativeMethod`, `DefineProperty`, and `CreateWithoutPrototype` boilerplate in every type.
 
-**ExposePrototype** -- Must NOT free the created instance (it becomes the pinned method host):
+**ExposePrototype** -- Must NOT free the created instance (it becomes the pinned method host). Look up the shared prototype through the realm rather than caching it:
 
 ```pascal
 class procedure TGocciaYourValue.ExposePrototype(
   const AConstructor: TGocciaValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
-    TGocciaYourValue.Create;  // Do NOT call .Free on this
-  FShared.ExposeOnConstructor(AConstructor);
+  Shared := GetYourShared;
+  if not Assigned(Shared) then
+  begin
+    TGocciaYourValue.Create;  // populates the realm slot, do NOT call .Free
+    Shared := GetYourShared;
+  end;
+  ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 ```
 
@@ -526,7 +550,7 @@ Add `YourType` to the built-in objects list.
 
 Use this checklist when adding a new built-in type:
 
-- [ ] Value type unit (`Goccia.Values.YourValue.pas`)
+- [ ] Value type unit (`Goccia.Values.YourValue.pas`) with realm slot registered in `initialization`
 - [ ] Built-in registration unit (`Goccia.Builtins.GlobalYour.pas`)
 - [ ] Class value subclass in `Goccia.Values.ClassValue.pas`
 - [ ] Engine: enum flag in `TGocciaGlobalBuiltin` (special-purpose built-ins only)
@@ -546,9 +570,10 @@ Use this checklist when adding a new built-in type:
 
 ## GC Considerations
 
-- **Shared prototype** is pinned automatically by `TGocciaSharedPrototype.Create` (calls `PinObject` on both the prototype object and the method host).
+- **Shared prototype** is pinned automatically by `TGocciaSharedPrototype.Create` and unpinned by `TGocciaSharedPrototype.Destroy`. Registering the helper in a realm-owned slot ties its lifetime to the engine's realm, so tear-down releases everything atomically.
+- **Realm slots** pin the values they hold. `RegisterRealmSlot` (for `TGCManagedObject` prototypes) pins on `SetSlot` and unpins at realm tear-down; `RegisterRealmOwnedSlot` (for plain-`TObject` helpers) calls `.Free` at tear-down before pin release.
 - **`MarkReferences`** must mark all `TGocciaValue` fields reachable from the instance. If you only hold non-value data (e.g., `TBytes`), calling `inherited` is sufficient.
-- **`ExposePrototype`** creates a sentinel instance that becomes the method host. Do NOT free this instance -- it is pinned by the GC.
+- **`ExposePrototype`** creates a sentinel instance that becomes the method host. Do NOT free this instance -- it is pinned by the GC and owned by the realm.
 - **Temp roots**: If you hold `TGocciaValue` references in Pascal variables during a long operation (not in any scope), protect them with `AddTempRoot`/`RemoveTempRoot`.
 - **Non-owning lists**: Use `TObjectList<T>.Create(False)` for lists that store GC-managed values.
 
@@ -556,7 +581,8 @@ Use this checklist when adding a new built-in type:
 
 1. **Freeing the ExposePrototype sentinel** -- Causes access violations when prototype methods are called.
 2. **Using `Self` in prototype callbacks** -- `Self` is the method host singleton, not the instance. Always use `AThisValue`.
-3. **`IsInfinity` vs `IsInfinite`** -- `IsInfinity` checks only positive infinity. Use `IsInfinite` to check both positive and negative.
-4. **Circular interface dependencies** -- If your value type and `ClassValue` need each other, put the value type in `ClassValue`'s *implementation* uses clause (not interface).
-5. **Stale build artifacts** -- After adding new units, run `./build.pas clean loader` to avoid FPC internal errors from stale `.ppu` files.
-6. **Use property accessors for special numbers** -- `TGocciaNumberLiteralValue` stores a single `Double` in `FValue` using standard IEEE 754 bit patterns. Use the `IsNaN`, `IsInfinity`, and `IsNegativeZero` property accessors rather than raw `FValue` comparisons when you need to distinguish special values. For negative zero specifically, `IsNegativeZero` uses an endian-neutral sign-bit check. See `Goccia.Values.TypedArrayValue.WriteNumberLiteral` and `Goccia.Evaluator.Arithmetic.pas` for the canonical patterns.
+3. **Caching realm-scoped objects in `threadvar`s or class vars** -- The cached pointer survives engine destruction and becomes a dangling reference on the next engine. Always read the shared prototype through `CurrentRealm.GetSlot`/`GetOwnedSlot`. See [Core patterns § Realm Ownership & Slot Registration](core-patterns.md#realm-ownership--slot-registration) for the stale-cache antipattern.
+4. **`IsInfinity` vs `IsInfinite`** -- `IsInfinity` checks only positive infinity. Use `IsInfinite` to check both positive and negative.
+5. **Circular interface dependencies** -- If your value type and `ClassValue` need each other, put the value type in `ClassValue`'s *implementation* uses clause (not interface).
+6. **Stale build artifacts** -- After adding new units, run `./build.pas clean loader` to avoid FPC internal errors from stale `.ppu` files.
+7. **Use property accessors for special numbers** -- `TGocciaNumberLiteralValue` stores a single `Double` in `FValue` using standard IEEE 754 bit patterns. Use the `IsNaN`, `IsInfinity`, and `IsNegativeZero` property accessors rather than raw `FValue` comparisons when you need to distinguish special values. For negative zero specifically, `IsNegativeZero` uses an endian-neutral sign-bit check. See `Goccia.Values.TypedArrayValue.WriteNumberLiteral` and `Goccia.Evaluator.Arithmetic.pas` for the canonical patterns.

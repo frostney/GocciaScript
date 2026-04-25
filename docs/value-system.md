@@ -7,7 +7,7 @@
 - **`TGocciaValue` hierarchy** — All runtime values inherit from `TGocciaValue`; primitives, objects, arrays, functions, classes, iterators, and typed arrays each have dedicated subclasses
 - **Virtual property access** — `GetProperty`/`SetProperty` are virtual methods on the base class, eliminating type checks at call sites
 - **GC integration** — Every value auto-registers via `AfterConstruction`; subclasses override `MarkReferences` to mark owned references
-- **Shared prototype singletons** — String, Number, Array, Set, Map, Symbol, Function, and TypedArray types share a single class-level prototype instance, pinned by the GC
+- **Shared prototype singletons** — String, Number, Array, Set, Map, Symbol, Function, and TypedArray types share a single prototype instance per engine; the prototype lives in a [realm slot](core-patterns.md#realm-ownership--slot-registration) and is unpinned when the engine is freed
 
 The value system is the foundation of GocciaScript's runtime. Every piece of data — numbers, strings, objects, functions — is represented as a `TGocciaValue` or one of its subclasses.
 
@@ -240,7 +240,7 @@ TGocciaStringLiteralValue = class(TGocciaValue)
 end;
 ```
 
-String values implement property access for methods like `.length`, `.charAt()`, `.includes()`, etc. through the string prototype system. When strings are boxed into `TGocciaStringObjectValue` (e.g., via `new String()` or implicit boxing), all instances share a single class-level string prototype singleton — methods are registered once and reused across all string object instances. This shared prototype singleton pattern is used consistently across the codebase: `TGocciaStringObjectValue`, `TGocciaNumberObjectValue`, `TGocciaArrayValue`, `TGocciaSetValue`, `TGocciaMapValue`, `TGocciaSymbolValue`, `TGocciaFunctionBase`, `TGocciaArrayBufferValue`, `TGocciaSharedArrayBufferValue`, and `TGocciaTypedArrayValue` all follow it. `TGocciaSharedPrototype.Create` automatically pins both the prototype object and the method host with the GC — no manual `PinObject` call is needed after construction.
+String values implement property access for methods like `.length`, `.charAt()`, `.includes()`, etc. through the string prototype system. When strings are boxed into `TGocciaStringObjectValue` (e.g., via `new String()` or implicit boxing), all instances share a single per-engine string prototype singleton — methods are registered once and reused across all string object instances of that engine. This shared prototype singleton pattern is used consistently across the codebase: `TGocciaStringObjectValue`, `TGocciaNumberObjectValue`, `TGocciaArrayValue`, `TGocciaSetValue`, `TGocciaMapValue`, `TGocciaSymbolValue`, `TGocciaFunctionBase`, `TGocciaArrayBufferValue`, `TGocciaSharedArrayBufferValue`, and `TGocciaTypedArrayValue` all follow it. The prototype is stored in a per-engine [realm slot](core-patterns.md#realm-ownership--slot-registration) so that mutations on one engine's `String.prototype` do not leak into the next engine on the same worker thread. `TGocciaSharedPrototype.Create` pins both the prototype object and the method host with the GC, and `TGocciaSharedPrototype.Destroy` unpins them — realm tear-down releases the prototype graph atomically.
 
 ### Symbols
 

@@ -141,6 +141,89 @@ end;
 
 Prototype **methods** take `(AArgs, AThisValue)`; use **`AThisValue`** for the real instance — **`Self`** is the method host singleton. For chaining (`Set.add`, `Map.set`), return **`AThisValue`**, not `Self`.
 
+### Realm Ownership & Slot Registration
+
+Built-in prototypes are not module-level singletons; they live in a per-engine **realm** (`Goccia.Realm.pas`, `TGocciaRealm`). Each `TGocciaEngine` constructs its own realm and frees it in `Destroy`, which unpins every prototype the realm owns. The next engine on the same worker thread starts from pristine intrinsics — userland mutations of `Array.prototype`, including non-configurable property additions, do not leak across engine boundaries.
+
+Two slot kinds are registered at unit `initialization` time:
+
+| API | Stores | Lifecycle |
+|-----|--------|-----------|
+| `RegisterRealmSlot('Name')` → `TGocciaRealmSlotId` | A `TGCManagedObject` (typically a prototype object) | `SetSlot` pins via the GC; realm tear-down unpins everything ever stored in this slot. |
+| `RegisterRealmOwnedSlot('Name')` → `TGocciaRealmOwnedSlotId` | A plain `TObject` helper (e.g. `TGocciaSharedPrototype`) | Realm calls `.Free` at tear-down, before the pinned-slot release pass, so the helper's destructor can still unpin the GC objects it owns. |
+
+#### Raw-slot pattern (a single `TGocciaObjectValue` prototype)
+
+This is what `TGocciaIteratorValue` does — see `Goccia.Values.IteratorValue.pas`:
+
+```pascal
+var
+  GIteratorPrototypeSlot: TGocciaRealmSlotId;
+
+function GetSharedIteratorPrototype: TGocciaObjectValue; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GIteratorPrototypeSlot))
+  else
+    Result := nil;
+end;
+
+procedure TGocciaIteratorValue.InitializePrototype;
+var
+  SharedPrototype: TGocciaObjectValue;
+begin
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(CurrentRealm.GetSlot(GIteratorPrototypeSlot)) then Exit;
+
+  SharedPrototype := TGocciaObjectValue.Create;
+  // ... register methods on SharedPrototype ...
+  CurrentRealm.SetSlot(GIteratorPrototypeSlot, SharedPrototype);
+end;
+
+initialization
+  GIteratorPrototypeSlot := RegisterRealmSlot('Iterator.prototype');
+```
+
+Read live every time — never cache the prototype pointer in a Pascal variable that outlives a single call site, because the cached pointer becomes a dangling reference the moment the engine that owns it is freed.
+
+#### Owned-slot pattern (a `TGocciaSharedPrototype` helper)
+
+This is what `Goccia.Values.MapValue.pas` and the other ~22 `TGocciaSharedPrototype` users do:
+
+```pascal
+var
+  GMapSharedSlot: TGocciaRealmOwnedSlotId;
+
+function GetMapShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GMapSharedSlot))
+  else
+    Result := nil;
+end;
+
+procedure TGocciaMapValue.InitializePrototype;
+var
+  Shared: TGocciaSharedPrototype;
+begin
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetMapShared) then Exit;
+
+  Shared := TGocciaSharedPrototype.Create(Self);
+  // ... register methods on Shared.Prototype ...
+  CurrentRealm.SetOwnedSlot(GMapSharedSlot, Shared);
+end;
+
+initialization
+  GMapSharedSlot := RegisterRealmOwnedSlot('Map.SharedPrototype');
+```
+
+`TGocciaSharedPrototype.Destroy` unpins both `FPrototype` and `FMethodHost`, so realm tear-down freeing the helper releases everything atomically — even before the next GC pass runs.
+
+#### Stale-cache antipattern (do not do this)
+
+`TGocciaClassValue` previously cached `Function.prototype` in a `threadvar FDefaultPrototype` and reused it on every `new`-able class. After engine recreation that threadvar still pointed at the dead `Function.prototype` from the previous realm, so `Object.getPrototypeOf(NewConstructor) === Function.prototype` started returning `false` on the first construct of every fresh engine. The fix was to read the prototype live each call via `TGocciaFunctionBase.GetSharedPrototype`. **Do not cache realm-scoped objects in `threadvar`s, class vars, or static singletons.** If you need a prototype, look it up through the realm every time.
+
 ## Terminology
 
 The codebase uses specific terminology consistently:

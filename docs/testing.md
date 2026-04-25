@@ -328,7 +328,7 @@ See [Test Framework API](testing-api.md) for the complete test authoring referen
 
 1. **JavaScript tests are the source of truth** — The JavaScript test suite is the primary mechanism for verifying correctness and ECMAScript compatibility. If a behavior isn't covered by a JavaScript test, it isn't guaranteed.
 
-2. **Isolation** — Each test file is independent. No shared state between files. The GocciaTestRunner executes each file in a fresh engine instance.
+2. **Isolation** — Each test file is independent. No shared state between files. The GocciaTestRunner executes each file in a fresh `TGocciaEngine`, and each engine owns its own [realm](core-patterns.md#realm-ownership--slot-registration). Engine tear-down between files unpins the per-engine intrinsic prototypes (`Array.prototype`, `Object.prototype`, every error and Temporal prototype, …), so userland mutations in one file — including non-configurable property additions — cannot leak into the next file even when the same worker thread runs both.
 
 3. **Grouped by feature** — Tests are organized by the feature they validate, mirroring the structure of the language specification. Prototype methods live in `prototype/` subfolders; static methods live in the built-in's root folder.
 
