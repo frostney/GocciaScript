@@ -92,7 +92,10 @@ async function readBodyWithCap(
     }
     chunks.push(value);
   }
-  return Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf8");
+  // `Buffer.concat` accepts `Uint8Array[]` directly (Buffer extends
+  // Uint8Array), so we don't need to wrap each chunk in `Buffer.from(c)`
+  // — that would copy every chunk before the final concat copy.
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 type RunnerJson = {
