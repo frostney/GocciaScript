@@ -47,3 +47,8 @@ test("generic receiver creates sorted copy from array-like", () => {
   const result = Array.prototype.toSorted.call(obj);
   expect(result).toEqual(['a', 'b', 'c']);
 });
+
+test("toSorted throws RangeError when length exceeds 2**32 - 1", () => {
+  const obj = { length: 2 ** 32 };
+  expect(() => Array.prototype.toSorted.call(obj)).toThrow(RangeError);
+});

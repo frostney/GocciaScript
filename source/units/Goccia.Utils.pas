@@ -12,6 +12,15 @@ uses
 // Returns Trunc(ToNumber(AArgs[AIndex])) or ADefault if index out of range.
 function ToIntegerFromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer = 0; const ADefault: Integer = 0): Integer; inline;
 
+// 64-bit variant of ToIntegerFromArgs.  Used by Array prototype methods that
+// must reach indices above MaxInt when the receiver is a generic array-like
+// with a length up to 2^53 - 1 (e.g. test262
+// length-near-integer-limit fixtures).  Saturates at ±MAX_SAFE_INTEGER and
+// treats NaN as 0, matching ToIntegerOrInfinity's behaviour for the inputs
+// these methods accept (no Infinity propagation needed — callers clamp by
+// length anyway).
+function ToInteger64FromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer = 0; const ADefault: Int64 = 0): Int64; inline;
+
 // ES2026 §7.1.7 ToUint32(argument)
 function ToUint32Value(const AValue: TGocciaValue): Cardinal; inline;
 
@@ -30,6 +39,7 @@ uses
   Math,
   SysUtils,
 
+  Goccia.Constants.NumericLimits,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase;
@@ -40,6 +50,24 @@ begin
     Result := Trunc(AArgs.GetElement(AIndex).ToNumberLiteral.Value)
   else
     Result := ADefault;
+end;
+
+function ToInteger64FromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer; const ADefault: Int64): Int64;
+var
+  Number: Double;
+begin
+  if AArgs.Length <= AIndex then
+    Exit(ADefault);
+
+  Number := AArgs.GetElement(AIndex).ToNumberLiteral.Value;
+  if IsNan(Number) then
+    Result := 0
+  else if Number >= MAX_SAFE_INTEGER_F then
+    Result := MAX_SAFE_INTEGER
+  else if Number <= -MAX_SAFE_INTEGER_F then
+    Result := -MAX_SAFE_INTEGER
+  else
+    Result := Trunc(Number);
 end;
 
 function ToUint32Value(const AValue: TGocciaValue): Cardinal;

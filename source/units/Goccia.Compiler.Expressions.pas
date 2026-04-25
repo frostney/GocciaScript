@@ -2568,7 +2568,13 @@ begin
     Exit;
   end;
 
-  EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
+  // ES2026 §13.2.1.1 / §9.4.3 ResolveThisBinding: when no enclosing
+  // function or class establishes a `this` binding, fall back to the
+  // surrounding environment's GetThisBinding.  For Scripts that yields
+  // the realm's global object; for Modules it yields undefined.  The
+  // OP_GET_THIS_BINDING handler reads FGlobalScope.ThisValue, which the
+  // runtime sets up correctly for both kinds.
+  EmitInstruction(ACtx, EncodeABC(OP_GET_THIS_BINDING, ADest, 0, 0));
 end;
 
 procedure CompileSuperAccess(const ACtx: TGocciaCompilationContext;

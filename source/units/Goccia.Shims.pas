@@ -259,6 +259,9 @@ begin
       try
         ModuleScope := AInterpreter.GlobalScope.CreateChild(skModule,
           'Shim:' + AShim.Name);
+        // ES2026 §16.2.1.6.4 InitializeEnvironment: a Module
+        // Environment Record's [[ThisValue]] is undefined.
+        ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
         Context := AInterpreter.CreateEvaluationContext;
         Context.Scope := ModuleScope;
         for I := 0 to ProgramNode.Body.Count - 1 do

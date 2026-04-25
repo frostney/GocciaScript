@@ -65,4 +65,9 @@ describe("Array.prototype.splice", () => {
     expect(1 in removed).toBe(false);
     expect(2 in removed).toBe(true);
   });
+
+  test("throws TypeError when new length would exceed Number.MAX_SAFE_INTEGER", () => {
+    const obj = { length: Number.MAX_SAFE_INTEGER };
+    expect(() => Array.prototype.splice.call(obj, 0, 0, 1)).toThrow(TypeError);
+  });
 });

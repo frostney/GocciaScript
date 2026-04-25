@@ -13,6 +13,7 @@ uses
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
   Goccia.ObjectModel,
+  Goccia.ObjectModel.Types,
   Goccia.Scope,
   Goccia.Values.NativeFunction,
   Goccia.Values.Primitives,
@@ -46,6 +47,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue;
 
 threadvar
@@ -67,13 +69,16 @@ begin
   FIteratorSymbol := TGocciaSymbolValue.WellKnownIterator;
 
   // Create the Symbol function (callable, creates new symbols)
+  // ES2026 §20.4.1.1: Symbol throws TypeError if invoked with new
   FSymbolFunction := TGocciaNativeFunctionValue.Create(SymbolConstructor, 'Symbol', 0);
+  FSymbolFunction.NotConstructable := True;
 
   // Register static methods on the Symbol function
+  // Static built-in methods are not constructors per ES2026
   with TGocciaMemberCollection.Create do
   try
-    AddMethod(SymbolFor, 1, gmkStaticMethod);
-    AddMethod(SymbolKeyFor, 1, gmkStaticMethod);
+    AddMethod(SymbolFor, 1, gmkStaticMethod, [gmfNotConstructable]);
+    AddMethod(SymbolKeyFor, 1, gmkStaticMethod, [gmfNotConstructable]);
     FStaticMembers := ToDefinitions;
   finally
     Free;
@@ -96,9 +101,15 @@ begin
   FSymbolFunction.RegisterConstant(SYMBOL_METADATA, TGocciaSymbolValue.WellKnownMetadata);
   FSymbolFunction.RegisterConstant(SYMBOL_DISPOSE, TGocciaSymbolValue.WellKnownDispose);
   FSymbolFunction.RegisterConstant(SYMBOL_ASYNC_DISPOSE, TGocciaSymbolValue.WellKnownAsyncDispose);
+  FSymbolFunction.RegisterConstant(SYMBOL_UNSCOPABLES, TGocciaSymbolValue.WellKnownUnscopables);
 
   // Expose Symbol.prototype (ECMAScript compatible)
   FSymbolFunction.AssignProperty(PROP_PROTOTYPE, TGocciaSymbolValue.SharedPrototype);
+
+  // ES2026 §20.4.3.1 Symbol.prototype.constructor = Symbol
+  TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype).DefineProperty(
+    PROP_CONSTRUCTOR,
+    TGocciaPropertyDescriptorData.Create(FSymbolFunction, [pfConfigurable, pfWritable]));
 
   // Bind Symbol in scope
   AScope.DefineLexicalBinding(AName, FSymbolFunction, dtLet);
@@ -118,15 +129,25 @@ end;
 function TGocciaGlobalSymbol.SymbolConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Description: string;
+  HasDescription: Boolean;
+  Arg: TGocciaValue;
 begin
-  { Steps 2-3: If description present, let descString = ToString(description) }
+  { Step 2: If description is undefined, let descString be undefined.
+    Step 3: Else, let descString be ? ToString(description). }
+  HasDescription := False;
+  Description := '';
   if AArgs.Length > 0 then
-    Description := AArgs.GetElement(0).ToStringLiteral.Value
-  else
-    Description := '';
+  begin
+    Arg := AArgs.GetElement(0);
+    if not (Arg is TGocciaUndefinedLiteralValue) then
+    begin
+      Description := Arg.ToStringLiteral.Value;
+      HasDescription := True;
+    end;
+  end;
 
   { Step 4: Return a new unique Symbol with [[Description]] descString }
-  Result := TGocciaSymbolValue.Create(Description);
+  Result := TGocciaSymbolValue.Create(Description, HasDescription);
 end;
 
 { Symbol.for ( key ) — §20.4.2.2

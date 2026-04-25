@@ -261,6 +261,9 @@ begin
               try
                 ModuleScope := FGlobalScope.CreateChild(skModule,
                   'Module:' + ResolvedPath);
+                // ES2026 §16.2.1.6.4 InitializeEnvironment: a Module
+                // Environment Record's [[ThisValue]] is undefined.
+                ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
                 Context.Scope := ModuleScope;
                 Context.OnError := FOnError;
                 Context.LoadModule := LoadModule;

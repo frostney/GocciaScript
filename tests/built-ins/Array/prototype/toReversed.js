@@ -40,3 +40,13 @@ test("generic receiver creates reversed copy from array-like", () => {
   expect(arrayLike[2]).toBe('c');
   expect(arrayLike.length).toBe(3);
 });
+
+test("toReversed throws RangeError when length exceeds 2**32 - 1", () => {
+  const obj = { length: 2 ** 32 };
+  expect(() => Array.prototype.toReversed.call(obj)).toThrow(RangeError);
+});
+
+test("toReversed throws RangeError on Number.MAX_SAFE_INTEGER length", () => {
+  const obj = { length: Number.MAX_SAFE_INTEGER };
+  expect(() => Array.prototype.toReversed.call(obj)).toThrow(RangeError);
+});

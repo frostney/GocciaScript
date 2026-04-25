@@ -37,6 +37,7 @@ begin
     OP_POP_HANDLER:                    Result := 'OP_POP_HANDLER';
     OP_THROW:                          Result := 'OP_THROW';
     OP_RETURN:                         Result := 'OP_RETURN';
+    OP_GET_THIS_BINDING:               Result := 'OP_GET_THIS_BINDING';
     OP_LOAD_UNDEFINED:                 Result := 'OP_LOAD_UNDEFINED';
     OP_ARRAY_POP:                      Result := 'OP_ARRAY_POP';
     OP_NEW_ARRAY:                      Result := 'OP_NEW_ARRAY';

@@ -87,3 +87,19 @@ test("slice preserves holes in sparse array", () => {
   expect(1 in result).toBe(false);
   expect(2 in result).toBe(true);
 });
+
+test("slice throws RangeError when proxied length exceeds 2**32 - 1", () => {
+  const target = [];
+  const proxy = new Proxy(target, {
+    get(t, key) {
+      if (key === 'length') return 2 ** 32;
+      return Reflect.get(t, key);
+    },
+  });
+  expect(() => Array.prototype.slice.call(proxy, 0)).toThrow(RangeError);
+});
+
+test("slice throws RangeError on array-like with length > 2**32 - 1", () => {
+  const obj = { length: 2 ** 32 };
+  expect(() => Array.prototype.slice.call(obj, 0)).toThrow(RangeError);
+});

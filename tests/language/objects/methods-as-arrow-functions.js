@@ -29,17 +29,22 @@ test("arrow functions as object properties work without this", () => {
 });
 
 test("arrow functions inherit this from lexical scope, not call-site", () => {
-  // Arrow functions defined at module level have no lexical 'this'
+  // Arrow functions defined at script top-level inherit `this` from the
+  // global script environment, whose [[ThisValue]] is the global object
+  // (ES2026 §9.1.2.5 / §9.4.3 / §13.2.1.1).
   const obj = {
     value: 42,
-    arrow: () => typeof this,
+    arrow: () => this,
+    arrowType: () => typeof this,
     shorthand() {
       return this.value;
     },
   };
 
-  // Arrow function does NOT get 'this' bound to the object
-  expect(obj.arrow()).toBe("undefined");
+  // Arrow function does NOT get 'this' bound to the object — it inherits
+  // the surrounding script-level `this` (globalThis).
+  expect(obj.arrow()).toBe(globalThis);
+  expect(obj.arrowType()).toBe("object");
 
   // Shorthand method DOES get 'this' bound to the object
   expect(obj.shorthand()).toBe(42);

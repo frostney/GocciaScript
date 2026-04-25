@@ -48,4 +48,9 @@ describe("Array.prototype.unshift", () => {
     expect(obj[2]).toBe('c');
     expect(obj.length).toBe(3);
   });
+
+  test("throws TypeError when new length would exceed Number.MAX_SAFE_INTEGER", () => {
+    const obj = { length: Number.MAX_SAFE_INTEGER };
+    expect(() => Array.prototype.unshift.call(obj, 1)).toThrow(TypeError);
+  });
 });

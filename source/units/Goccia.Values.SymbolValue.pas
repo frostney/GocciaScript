@@ -27,12 +27,15 @@ type
     FWellKnownMetadata: TGocciaSymbolValue;
     FWellKnownDispose: TGocciaSymbolValue;
     FWellKnownAsyncDispose: TGocciaSymbolValue;
+    FWellKnownUnscopables: TGocciaSymbolValue;
   private
     FDescription: string;
+    FHasDescription: Boolean;
     FId: Integer;
 
   public
-    constructor Create(const ADescription: string = '');
+    constructor Create(const ADescription: string = ''); overload;
+    constructor Create(const ADescription: string; const AHasDescription: Boolean); overload;
     procedure InitializePrototype;
 
     class function SharedPrototype: TGocciaValue;
@@ -51,6 +54,7 @@ type
     class function WellKnownMetadata: TGocciaSymbolValue;
     class function WellKnownDispose: TGocciaSymbolValue;
     class function WellKnownAsyncDispose: TGocciaSymbolValue;
+    class function WellKnownUnscopables: TGocciaSymbolValue;
 
     function TypeName: string; override;
     function TypeOf: string; override;
@@ -62,11 +66,16 @@ type
     function ToDisplayString: TGocciaStringLiteralValue;
 
     property Description: string read FDescription;
+    property HasDescription: Boolean read FHasDescription;
     property Id: Integer read FId;
   published
     function GetDescription(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function SymbolToString(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function SymbolValueOf(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function SymbolToPrimitive(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
@@ -104,12 +113,30 @@ begin
   Result := TGocciaSymbolValue(AThisValue).ToDisplayString;
 end;
 
+// ES2026 §20.4.3.5 Symbol.prototype.valueOf()
+function TGocciaSymbolValue.SymbolValueOf(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaSymbolValue) then
+    ThrowTypeError(SErrorSymbolProtoValueOfRequiresSymbol, SSuggestSymbolThisType);
+  Result := AThisValue;
+end;
+
+// ES2026 §20.4.3.6 Symbol.prototype [ @@toPrimitive ] ( hint )
+function TGocciaSymbolValue.SymbolToPrimitive(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaSymbolValue) then
+    ThrowTypeError(SErrorSymbolProtoToPrimitiveRequiresSymbol, SSuggestSymbolThisType);
+  Result := AThisValue;
+end;
+
 function TGocciaSymbolValue.GetDescription(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaSymbolValue) then
     ThrowTypeError(SErrorSymbolProtoDescriptionRequiresSymbol, SSuggestSymbolThisType);
-  if TGocciaSymbolValue(AThisValue).FDescription <> '' then
+  if TGocciaSymbolValue(AThisValue).FHasDescription then
     Result := TGocciaStringLiteralValue.Create(TGocciaSymbolValue(AThisValue).FDescription)
   else
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -131,12 +158,25 @@ begin
     Members := TGocciaMemberCollection.Create;
     try
       Members.AddAccessor(PROP_DESCRIPTION, GetDescription, nil, [pfConfigurable]);
-      Members.AddMethod(SymbolToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod(PROP_TO_STRING, SymbolToString, 0,
+        gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+      Members.AddNamedMethod(PROP_VALUE_OF, SymbolValueOf, 0,
+        gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+      Members.AddSymbolMethod(
+        TGocciaSymbolValue.WellKnownToPrimitive,
+        '[Symbol.toPrimitive]',
+        SymbolToPrimitive,
+        1,
+        [pfConfigurable],
+        [gmfNotConstructable]);
+      Members.AddSymbolDataProperty(
+        TGocciaSymbolValue.WellKnownToStringTag,
+        TGocciaStringLiteralValue.Create('Symbol'),
+        [pfConfigurable]);
       FPrototypeMembers := Members.ToDefinitions;
     finally
       Members.Free;
     end;
-    FPrototypeMembers[1].ExposedName := PROP_TO_STRING;
   end;
 
   RegisterMemberDefinitions(Proto, FPrototypeMembers);
@@ -337,10 +377,32 @@ begin
   Result := FWellKnownAsyncDispose;
 end;
 
+// ES2026 §20.4.2.18 Symbol.unscopables
+class function TGocciaSymbolValue.WellKnownUnscopables: TGocciaSymbolValue;
+begin
+  if not Assigned(FWellKnownUnscopables) then
+  begin
+    Assert(not GIsWorkerThread, 'WellKnownUnscopables: must be initialised on main thread');
+    FWellKnownUnscopables := TGocciaSymbolValue.Create('Symbol.unscopables');
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FWellKnownUnscopables);
+  end;
+  Result := FWellKnownUnscopables;
+end;
+
 constructor TGocciaSymbolValue.Create(const ADescription: string);
+begin
+  // Backwards-compatible default: a non-empty string is a real description,
+  // an empty string keeps the legacy "no description" sentinel meaning.
+  Create(ADescription, ADescription <> '');
+end;
+
+constructor TGocciaSymbolValue.Create(const ADescription: string;
+  const AHasDescription: Boolean);
 begin
   inherited Create;
   FDescription := ADescription;
+  FHasDescription := AHasDescription;
   FId := GNextSymbolId;
   Inc(GNextSymbolId);
   if not Assigned(GSymbolRegistry) then
@@ -390,7 +452,7 @@ end;
 // ES2026 §20.4.3.4 Symbol.prototype.toString() — explicit display representation
 function TGocciaSymbolValue.ToDisplayString: TGocciaStringLiteralValue;
 begin
-  if FDescription <> '' then
+  if FHasDescription then
     Result := TGocciaStringLiteralValue.Create('Symbol(' + FDescription + ')')
   else
     Result := TGocciaStringLiteralValue.Create('Symbol()');

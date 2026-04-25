@@ -47,6 +47,7 @@ type
     OP_POP_HANDLER   = 18,
     OP_THROW         = 19,
     OP_RETURN        = 20,
+    OP_GET_THIS_BINDING = 21,
     OP_LOAD_UNDEFINED = 22,
     OP_ARRAY_POP     = 23,
     OP_NEW_ARRAY     = 24,

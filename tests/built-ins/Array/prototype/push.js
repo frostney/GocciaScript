@@ -44,4 +44,14 @@ describe("Array.prototype.push", () => {
     expect(obj[1]).toBe('b');
     expect(obj.length).toBe(2);
   });
+
+  test("throws TypeError when new length would exceed Number.MAX_SAFE_INTEGER", () => {
+    const obj = { length: Number.MAX_SAFE_INTEGER };
+    expect(() => Array.prototype.push.call(obj, 1)).toThrow(TypeError);
+  });
+
+  test("throws TypeError when starting length is already past MAX_SAFE_INTEGER and pushing one element", () => {
+    const obj = { length: Number.MAX_SAFE_INTEGER + 1 };
+    expect(() => Array.prototype.push.call(obj, 1)).toThrow(TypeError);
+  });
 });

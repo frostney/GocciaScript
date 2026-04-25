@@ -46,3 +46,13 @@ test("generic receiver creates spliced copy from array-like", () => {
   const result = Array.prototype.toSpliced.call(arrayLike, 1, 1, 'x');
   expect(result).toEqual(['a', 'x', 'c']);
 });
+
+test("toSpliced throws TypeError when newLen would exceed Number.MAX_SAFE_INTEGER", () => {
+  const obj = { length: Number.MAX_SAFE_INTEGER };
+  expect(() => Array.prototype.toSpliced.call(obj, 0, 0, 1)).toThrow(TypeError);
+});
+
+test("toSpliced throws RangeError when newLen exceeds 2**32 - 1", () => {
+  const obj = { length: 2 ** 32 };
+  expect(() => Array.prototype.toSpliced.call(obj, 0, 0)).toThrow(RangeError);
+});

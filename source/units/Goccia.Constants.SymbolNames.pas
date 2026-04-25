@@ -20,6 +20,7 @@ const
   SYMBOL_METADATA             = 'metadata';
   SYMBOL_DISPOSE              = 'dispose';
   SYMBOL_ASYNC_DISPOSE        = 'asyncDispose';
+  SYMBOL_UNSCOPABLES           = 'unscopables';
 
 implementation
 

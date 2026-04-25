@@ -77,4 +77,12 @@ describe('Array.prototype.concat', () => {
     expect(1 in result).toBe(false);
     expect(result[2]).toBe(2);
   });
+
+  test('throws TypeError when spreading a value would push n past Number.MAX_SAFE_INTEGER', () => {
+    const spreadable = {
+      length: Number.MAX_SAFE_INTEGER,
+      [Symbol.isConcatSpreadable]: true,
+    };
+    expect(() => [1].concat(spreadable)).toThrow(TypeError);
+  });
 });

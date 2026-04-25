@@ -4049,6 +4049,20 @@ begin
       OP_LOAD_UNDEFINED:
         FRegisters[A] := RegisterUndefined;
 
+      OP_GET_THIS_BINDING:
+        // ES2026 §9.4.3 ResolveThisBinding falls through to GetThisBinding
+        // on the surrounding environment record.  At Script top level the
+        // global env's [[GlobalThisValue]] is the global object; at Module
+        // top level the module env's binding resolves to undefined.  The
+        // active FGlobalScope already encodes that distinction (the
+        // module loader rewires FGlobalScope to the module scope while
+        // executing module bodies), so reading ThisValue here is correct
+        // for both kinds without needing a compile-time flag.
+        if Assigned(FGlobalScope) then
+          FRegisters[A] := VMValueToRegisterFast(FGlobalScope.ThisValue)
+        else
+          FRegisters[A] := RegisterUndefined;
+
       OP_LOAD_TRUE:
         FRegisters[A] := RegisterBoolean(True);
 
@@ -4435,6 +4449,20 @@ begin
               TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value[KeyIndex + 1]))
           else
             FRegisters[A] := RegisterUndefined;
+        end
+        else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
+        begin
+          if (FRegisters[C].Kind = grkObject) and
+             (FRegisters[C].ObjectValue is TGocciaSymbolValue) and
+             Assigned(TGocciaSymbolValue.SharedPrototype) then
+            SetRegister(A, TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype)
+              .GetSymbolPropertyWithReceiver(
+                TGocciaSymbolValue(FRegisters[C].ObjectValue),
+                FRegisters[B].ObjectValue))
+          else
+            SetRegister(A, FRegisters[B].ObjectValue.GetProperty(
+              KeyToPropertyNameRegister(FRegisters[C])));
         end
         else
           FRegisters[A] := RegisterUndefined;
