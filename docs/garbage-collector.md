@@ -7,7 +7,7 @@
 - **Mark-and-sweep** — Two-phase tracing GC (`Goccia.GarbageCollector.pas`) shared by both execution backends
 - **Auto-registration** — Every `TGocciaValue` registers with the GC via `AfterConstruction`; subclasses override `MarkReferences` to mark owned references
 - **Generation-counter marking** — O(1) mark-clear via `AdvanceMark` instead of O(n) flag reset per collection
-- **Pinned singletons** — `undefined`, `null`, `true`, `false`, `NaN`, `Infinity`, and shared prototype objects are pinned during engine startup
+- **Pinned singletons** — `undefined`, `null`, `true`, `false`, `NaN`, `Infinity` are pinned once at engine startup; built-in prototypes are pinned per-engine via [realm slots](core-patterns.md#realm-ownership--slot-registration) and released atomically when the realm is destroyed
 - **Adaptive threshold** — Collection frequency scales with surviving object count to amortize cost on large heaps
 
 ## Value Integration
@@ -43,7 +43,7 @@ end;
 When working with the GC, follow these rules:
 
 - **Override `MarkReferences`** in every value type that holds `TGocciaValue` references. Call `inherited` first, then mark each owned reference.
-- **Pin singletons** — `UndefinedValue`, `TrueValue`, `NaNValue`, etc. are pinned via `PinObject` during engine initialization (consolidated in `PinPrimitiveSingletons`). Shared prototype singletons are pinned automatically by `TGocciaSharedPrototype.Create`.
+- **Pin singletons** — `UndefinedValue`, `TrueValue`, `NaNValue`, etc. are pinned via `PinObject` during engine initialization (consolidated in `PinPrimitiveSingletons`). Built-in prototype singletons are stored per-engine in realm slots (see next bullet); the realm pins them on `SetSlot` and releases them on `Destroy`, so contributors do not need to call `PinObject` from `InitializePrototype` themselves.
 - **Realm-owned pinning** — Built-in prototypes are stored in per-engine [realm slots](core-patterns.md#realm-ownership--slot-registration). `TGocciaRealm.SetSlot` pins the stored object via `PinObject`; the realm tracks every pin it took and releases all of them in `Destroy` via `UnpinObject`. Owned-slot helpers (`TGocciaSharedPrototype` instances) are `Free`d before the pin-release pass, so their destructors can still call `UnpinObject` on objects they own. This means engine tear-down releases the entire intrinsic prototype graph atomically — embedders should not pin or unpin built-in prototypes manually.
 - **Protect stack-held values** — Values held only by Pascal code (not in any GocciaScript scope) must be protected with `AddTempRoot`/`RemoveTempRoot`.
 - **Use `CollectIfNeeded(AProtect)`** when holding a `TGCManagedObject` on the stack. The no-arg `CollectIfNeeded` is only safe when all live values are already rooted.
@@ -56,7 +56,7 @@ When working with the GC, follow these rules:
 ### Why Not Manual Memory Management?
 
 - **Aliased references** — A value assigned to multiple variables, captured in a closure, and stored in an array has no single owner. Determining when to free it requires tracking all references.
-- **Shared prototype singletons** — String, Number, Array, Set, Map, Function, and Symbol prototype objects are class-level singletons shared across all instances of their type. Each type's `InitializePrototype` creates the singleton once (guarded by `if Assigned`) and pins it with `TGarbageCollector.Instance.PinObject`. Manual lifetime tracking of these shared singletons would be fragile.
+- **Shared prototype singletons** — String, Number, Array, Set, Map, Function, Symbol, and other built-in prototype objects are per-engine singletons stored in [realm slots](core-patterns.md#realm-ownership--slot-registration) and shared across all instances of their type within the same engine. Each type's `InitializePrototype` creates the singleton once (guarded by checking the realm slot) and stores it via `TGocciaRealm.SetSlot` / `SetOwnedSlot`, which pins it with the GC. Manual lifetime tracking would be fragile; the realm releases all of its pins atomically in `Destroy`.
 - **Closure captures** — Arrow functions capture their enclosing scope, creating non-obvious reference chains between scopes and values.
 
 ### Why Not Reference Counting?

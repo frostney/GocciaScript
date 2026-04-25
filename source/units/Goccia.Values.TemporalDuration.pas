@@ -173,8 +173,13 @@ begin
   if HasPositive and HasNegative then
     ThrowRangeError(SErrorDurationMixedSigns, SSuggestTemporalDurationSigns);
 
-  // Validate: calendar unit magnitudes must be < 2^32
-  if (Abs(AYears) >= UINT32_MODULUS) or (Abs(AMonths) >= UINT32_MODULUS) or (Abs(AWeeks) >= UINT32_MODULUS) then
+  // Validate: calendar unit magnitudes must be < 2^32.
+  // Use signed bounds rather than `Abs(X) >= UINT32_MODULUS`: in FPC,
+  // `Abs(Low(Int64))` overflows (the result wraps back to Low(Int64)), so a
+  // worst-case input would slip past the magnitude check.
+  if (AYears <= -Int64(UINT32_MODULUS)) or (AYears >= UINT32_MODULUS) or
+     (AMonths <= -Int64(UINT32_MODULUS)) or (AMonths >= UINT32_MODULUS) or
+     (AWeeks <= -Int64(UINT32_MODULUS)) or (AWeeks >= UINT32_MODULUS) then
     ThrowRangeError(SErrorDurationCalendarOutOfRange, SSuggestTemporalDurationRange);
 
   // Validate: normalized seconds must be < 2^53 (TC39 §7.5.22 step 6-7)

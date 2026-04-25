@@ -639,7 +639,9 @@ begin
     TGocciaTypedArrayValue.Create(takUint8, 0);
     Shared := GetTypedArrayShared;
   end;
-  if AConstructor is TGocciaClassValue then
+  // InitializePrototype exits early when CurrentRealm is nil, so the lazy
+  // Create() can leave Shared still nil — guard before deref.
+  if Assigned(Shared) and (AConstructor is TGocciaClassValue) then
   begin
     TGocciaClassValue(AConstructor).Prototype.Prototype := Shared.Prototype;
     TGocciaClassValue(AConstructor).Prototype.DefineProperty(PROP_CONSTRUCTOR,

@@ -53,10 +53,10 @@ uses
 
 var
   GFFIPointerSharedSlot: TGocciaRealmOwnedSlotId;
+  GFFINullPointerSlot: TGocciaRealmSlotId;
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-  FNullPointer: TGocciaFFIPointerValue;
 
 function GetFFIPointerShared: TGocciaSharedPrototype; inline;
 begin
@@ -110,19 +110,36 @@ begin
 end;
 
 class function TGocciaFFIPointerValue.NullPointer: TGocciaFFIPointerValue;
+var
+  Cached: TGCManagedObject;
 begin
-  if not Assigned(FNullPointer) then
+  if not Assigned(CurrentRealm) then
   begin
-    FNullPointer := TGocciaFFIPointerValue.Create(nil);
-    TGarbageCollector.Instance.PinObject(FNullPointer);
+    Result := nil;
+    Exit;
   end;
-  Result := FNullPointer;
+  Cached := CurrentRealm.GetSlot(GFFINullPointerSlot);
+  if Assigned(Cached) then
+  begin
+    Result := TGocciaFFIPointerValue(Cached);
+    Exit;
+  end;
+  Result := TGocciaFFIPointerValue.Create(nil);
+  CurrentRealm.SetSlot(GFFINullPointerSlot, Result);
 end;
 
 class procedure TGocciaFFIPointerValue.ExposePrototype(const ATarget: TGocciaObjectValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(GetFFIPointerShared) then
+  Shared := GetFFIPointerShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaFFIPointerValue.Create(nil);
+    Shared := GetFFIPointerShared;
+  end;
+  if Assigned(Shared) then
+    ExposeSharedPrototypeOnConstructor(Shared, ATarget);
 end;
 
 function TGocciaFFIPointerValue.GetProperty(const AName: string): TGocciaValue;
@@ -178,5 +195,6 @@ end;
 
 initialization
   GFFIPointerSharedSlot := RegisterRealmOwnedSlot('FFIPointer.shared');
+  GFFINullPointerSlot := RegisterRealmSlot('FFIPointer.nullPointer');
 
 end.

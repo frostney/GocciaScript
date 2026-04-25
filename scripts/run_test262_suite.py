@@ -614,6 +614,7 @@ def evaluate_suite(
 
                 runner_output = ""
                 process_returncode = -1
+                debug_dir = Path(tempfile.gettempdir())
                 try:
                     process = subprocess.run(
                         runner_cmd,
@@ -626,9 +627,12 @@ def evaluate_suite(
                         process.stderr.decode("utf-8", errors="replace")
                     ).strip()
                     if process_returncode != 0 and runner_output:
-                        Path("/tmp/last_runner_stderr.txt").write_text(
-                            runner_output
-                        )
+                        try:
+                            (debug_dir / "last_runner_stderr.txt").write_text(
+                                runner_output
+                            )
+                        except OSError:
+                            pass
                 except Exception as e:  # noqa: BLE001
                     runner_output = f"Runner invocation failed: {e}"
 
@@ -665,9 +669,12 @@ def evaluate_suite(
                                 f"  JSON parse error at {e.pos} of "
                                 f"{len(clean_json)}: {e.msg}"
                             )
-                            Path(
-                                "/tmp/last_runner_json.txt"
-                            ).write_text(clean_json)
+                            try:
+                                (debug_dir / "last_runner_json.txt").write_text(
+                                    clean_json
+                                )
+                            except OSError:
+                                pass
                             tr_results = None
                 else:
                     print(
@@ -708,12 +715,13 @@ def evaluate_suite(
                     )
                     fr = file_results_by_safe.get(safe)
                     if fr is None:
-                        final_by_id[tid] = {
-                            "id": tid,
-                            "status": "ERROR",
-                            "message": "Runner produced no per-file record",
-                        }
-                        summary["errors"] += 1
+                        # Missing per-file record is functionally identical to
+                        # the "Worker produced no result" stall: the runner did
+                        # not surface an outcome for this file on this attempt.
+                        # Requeue so the retry loop can hand it to a fresh
+                        # pool; the post-loop tail at L826-835 finalises any
+                        # IDs still missing after attempts are exhausted.
+                        next_pending.append(tid)
                         continue
 
                     f_error = fr.get("error", "") or ""

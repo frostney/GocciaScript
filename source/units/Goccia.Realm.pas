@@ -187,9 +187,19 @@ begin
 end;
 
 procedure TGocciaRealm.RememberPin(const AObject: TGCManagedObject);
+var
+  I: Integer;
 begin
   if not Assigned(AObject) then
     Exit;
+  // PinObject is set-based, so the same object pinned twice still occupies a
+  // single set entry — but FPinned is append-only.  Dedupe defensively so
+  // Destroy issues exactly one UnpinObject per pinned object: harmless under
+  // current usage (Remove on a missing key is a no-op), but keeps the count
+  // honest if a future caller lands a refcounted pin model.
+  for I := 0 to FPinnedCount - 1 do
+    if FPinned[I] = AObject then
+      Exit;
   if FPinnedCount = Length(FPinned) then
   begin
     if Length(FPinned) = 0 then

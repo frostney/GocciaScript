@@ -216,7 +216,10 @@ begin
     TGocciaTemporalPlainTimeValue.Create(0, 0, 0, 0, 0, 0);
     Shared := GetTemporalPlainTimeShared;
   end;
-  ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
+  // InitializePrototype exits early when CurrentRealm is nil, so the lazy
+  // Create() can leave Shared still nil — guard before deref.
+  if Assigned(Shared) then
+    ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
 function TGocciaTemporalPlainTimeValue.ToStringTag: string;
