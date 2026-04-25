@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import path from "node:path";
+import path, { basename } from "node:path";
 import { NextResponse } from "next/server";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 
@@ -184,8 +184,15 @@ export async function POST(req: Request) {
       env: childEnv as NodeJS.ProcessEnv,
     });
 
-    let stdoutBuf = "";
-    let stderrBuf = "";
+    // Accumulate raw bytes per stream — counting `string.length` would
+    // count UTF-16 code units, not bytes, so multibyte UTF-8 output
+    // (emoji, non-Latin scripts) could blow past `MAX_OUTPUT_BYTES`
+    // before we noticed. We keep the chunks as `Buffer`s, slice on
+    // byte boundaries when we hit the limit, and decode once at the end.
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
     let truncated = false;
 
     const killTimer = setTimeout(() => {
@@ -194,38 +201,56 @@ export async function POST(req: Request) {
     }, TIMEOUT_MS + 1_500);
 
     child.stdout.on("data", (chunk: Buffer) => {
-      const next = stdoutBuf + chunk.toString("utf8");
-      if (next.length > MAX_OUTPUT_BYTES) {
-        stdoutBuf = next.slice(0, MAX_OUTPUT_BYTES);
+      if (stdoutBytes + chunk.length > MAX_OUTPUT_BYTES) {
+        const remaining = MAX_OUTPUT_BYTES - stdoutBytes;
+        if (remaining > 0) {
+          stdoutChunks.push(chunk.subarray(0, remaining));
+          stdoutBytes += remaining;
+        }
         truncated = true;
         child.kill("SIGKILL");
       } else {
-        stdoutBuf = next;
+        stdoutChunks.push(chunk);
+        stdoutBytes += chunk.length;
       }
     });
 
     child.stderr.on("data", (chunk: Buffer) => {
-      stderrBuf += chunk.toString("utf8");
-      if (stderrBuf.length > MAX_OUTPUT_BYTES) {
-        stderrBuf = stderrBuf.slice(0, MAX_OUTPUT_BYTES);
+      if (stderrBytes + chunk.length > MAX_OUTPUT_BYTES) {
+        const remaining = MAX_OUTPUT_BYTES - stderrBytes;
+        if (remaining > 0) {
+          stderrChunks.push(chunk.subarray(0, remaining));
+          stderrBytes += remaining;
+        }
+      } else {
+        stderrChunks.push(chunk);
+        stderrBytes += chunk.length;
       }
     });
 
     child.on("error", (err) => {
       clearTimeout(killTimer);
+      // Don't leak the absolute server path back to the client — only
+      // the basename is useful for "is the binary missing?" diagnostics.
+      // The full path stays in server-side logs for the operator.
+      console.error(
+        `[/api/run] spawn failed for binary: ${binary} — ${err.message}`,
+      );
       finish(
         transportError(
           {
             message: `spawn failed: ${err.message}`,
             code: "SPAWN_FAILED",
           },
-          { status: 500, extra: { binary } },
+          { status: 500, extra: { binary: basename(binary) } },
         ),
       );
     });
 
     child.on("close", (exitCode, signal) => {
       clearTimeout(killTimer);
+      const stdoutBuf = Buffer.concat(stdoutChunks).toString("utf8");
+      const stderrBuf = Buffer.concat(stderrChunks).toString("utf8");
       let parsed: RunnerJson | null = null;
       try {
         parsed = JSON.parse(stdoutBuf) as RunnerJson;

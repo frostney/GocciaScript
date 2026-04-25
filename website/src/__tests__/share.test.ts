@@ -1,6 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import { decodeShare, encodeShare, type SharePayload } from "@/lib/share";
 
+/** Encode an arbitrary value as base64url-wrapped JSON, matching what
+ *  `encodeShare` produces. Used by tests that need to inject malformed
+ *  or wrong-typed payloads — `encodeShare` itself is type-safe and
+ *  can't produce them. */
+function encodeJsonBase64Url(value: unknown): string {
+  const json = typeof value === "string" ? value : JSON.stringify(value);
+  const bytes = new TextEncoder().encode(json);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 describe("share encoding", () => {
   test("round-trips a complete payload", () => {
     const payload: SharePayload = {
@@ -35,36 +47,18 @@ describe("share encoding", () => {
   });
 
   test("rejects payload without a string `code` field", () => {
-    // Encode a payload that's missing `code` entirely.
-    const bytes = new TextEncoder().encode(
-      JSON.stringify({ mode: "bytecode" }),
-    );
-    let bin = "";
-    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-    const malformed = btoa(bin)
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/, "");
-    expect(decodeShare(malformed)).toBeNull();
+    expect(decodeShare(encodeJsonBase64Url({ mode: "bytecode" }))).toBeNull();
   });
 
   test("drops non-string `mode` and `version`, non-boolean `asi`", () => {
-    // Hand-encode a payload with the wrong types for the optional fields.
-    const malformed = JSON.stringify({
-      code: "ok;",
-      mode: 42,
-      asi: "yes",
-      version: { tag: "v1.0.0" },
-    });
-    const bytes = new TextEncoder().encode(malformed);
-    let bin = "";
-    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-    const encoded = btoa(bin)
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/, "");
-
-    const decoded = decodeShare(encoded);
+    const decoded = decodeShare(
+      encodeJsonBase64Url({
+        code: "ok;",
+        mode: 42,
+        asi: "yes",
+        version: { tag: "v1.0.0" },
+      }),
+    );
     expect(decoded).toEqual({
       code: "ok;",
       mode: undefined,

@@ -263,7 +263,10 @@ export function parseMarkdown(source: string): Block[] {
 
     if (isTableStart(line, lines[i + 1] || "")) {
       // Split table cells on `|`, but treat `\|` as a literal pipe.
-      const PIPE_PLACEHOLDER = String.fromCharCode(1);
+      // Uses a long, unlikely sentinel rather than a single control char
+      // so collisions with arbitrary input remain effectively impossible
+      // even for content that happens to use control characters.
+      const PIPE_PLACEHOLDER = "__GOCCIA_MD_ESCAPED_PIPE__";
       const PIPE_RESTORE = new RegExp(PIPE_PLACEHOLDER, "g");
       const splitRow = (raw: string) =>
         raw

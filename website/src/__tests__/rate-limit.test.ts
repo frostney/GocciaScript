@@ -17,6 +17,17 @@ afterEach(() => {
 let keyCounter = 0;
 const uniqueKey = (prefix: string) => `${prefix}:${++keyCounter}`;
 
+/** Drain a bucket until it returns `ok: false`, but never loop more than
+ *  `result.limit + slack` times — an unbounded `while (last.ok)` would
+ *  hang forever if a regression broke the counter. */
+const SAFETY_SLACK = 16;
+function drainBucket(key: string): ReturnType<typeof rateLimit> {
+  let last = rateLimit(key);
+  const cap = (last.limit ?? 1000) + SAFETY_SLACK;
+  for (let i = 0; i < cap && last.ok; i++) last = rateLimit(key);
+  return last;
+}
+
 describe("rateLimit — token-bucket window", () => {
   test("first request fills the first slot of a fresh window", () => {
     Date.now = () => 1_000;
@@ -42,8 +53,7 @@ describe("rateLimit — token-bucket window", () => {
   test("once the bucket is exhausted, `ok` is false and `remaining` clamps at 0", () => {
     Date.now = () => 3_000;
     const key = uniqueKey("exhaust");
-    let last = rateLimit(key);
-    while (last.ok) last = rateLimit(key);
+    const last = drainBucket(key);
     expect(last.ok).toBe(false);
     expect(last.remaining).toBe(0);
     // Further calls in the same window stay denied.
@@ -61,9 +71,10 @@ describe("rateLimit — token-bucket window", () => {
     const limit = first.limit;
     const reset = first.resetAt;
 
-    // Burn the rest of this window's budget.
-    for (let i = 1; i < limit; i++) rateLimit(key);
-    expect(rateLimit(key).ok).toBe(false);
+    // Burn the rest of this window's budget — bounded by `limit + slack`
+    // via `drainBucket` so we can't hang on a counter regression.
+    const drained = drainBucket(key);
+    expect(drained.ok).toBe(false);
 
     // Step the clock past the window boundary — the bucket resets.
     now = reset + 1;
@@ -78,9 +89,7 @@ describe("rateLimit — token-bucket window", () => {
     const a = uniqueKey("isoA");
     const b = uniqueKey("isoB");
 
-    let last = rateLimit(a);
-    while (last.ok) last = rateLimit(a);
-    expect(last.ok).toBe(false);
+    expect(drainBucket(a).ok).toBe(false);
 
     // `b`'s first hit is unaffected by `a` exhausting itself.
     const fresh = rateLimit(b);
