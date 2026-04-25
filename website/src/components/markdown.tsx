@@ -6,6 +6,7 @@ import { slugify } from "@/components/anchor-heading";
 import {
   HighlightedCode,
   HighlightedGeneric,
+  HighlightedJson,
 } from "@/components/highlighted-code";
 import { MermaidBlock } from "@/components/mermaid-block";
 import { DOC_HREF_MAP } from "@/lib/docs-data";
@@ -32,7 +33,7 @@ function renderHighlighted(code: string, lang: string): ReactNode {
     return <HighlightedGeneric code={code} language="crystal" />;
   }
   if (l === "json") {
-    return <HighlightedGeneric code={code} language="json" />;
+    return <HighlightedJson code={code} />;
   }
   return code;
 }

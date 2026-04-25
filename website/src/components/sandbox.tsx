@@ -385,10 +385,13 @@ return { summary, count: summary.length };`);
         <div className="sb-demo mt-12">
           <div className="sb-demo-head">
             <div>
-              <h4>Try the sandbox</h4>
+              <h4>Sandbox preview</h4>
               <p className="m-0 text-ink-3 text-[0.88rem]">
-                Edit the script, change the injected globals, execute — and see
-                what the host gets back.
+                A static visualisation of what the host gets back — capability
+                errors (<code>fetch</code>, <code>eval</code>,{" "}
+                <code>process</code>, runaway loops) react to your edits, but
+                the success-path JSON is illustrative. To execute real code, use
+                the <a href="/playground">Playground</a>.
               </p>
             </div>
             <div className="flex gap-2">
