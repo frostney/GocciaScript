@@ -115,7 +115,7 @@ type
     function ParseSetterExpression: TGocciaSetterExpression;
 
     // Object method body parsing: (params) { stmts } -> method expression
-    function ParseObjectMethodBody(const ALine, AColumn: Integer): TGocciaExpression;
+    function ParseObjectMethodBody(const ALine, AColumn: Integer; const AIsAsync: Boolean = False): TGocciaExpression;
 
     // Destructuring pattern parsing
     function ParsePattern: TGocciaDestructuringPattern;
@@ -159,7 +159,7 @@ type
     function Primary: TGocciaExpression;
     function ArrayLiteral: TGocciaExpression;
     function ObjectLiteral: TGocciaExpression;
-    function ArrowFunction: TGocciaExpression;
+    function ArrowFunction(const AIsAsync: Boolean = False): TGocciaExpression;
     function Assignment: TGocciaExpression;
     function ClassExpression: TGocciaExpression;
 
@@ -176,11 +176,11 @@ type
     function WhileStatement: TGocciaStatement;
     function DoWhileStatement: TGocciaStatement;
     function WithStatement: TGocciaStatement;
-    function FunctionStatement: TGocciaStatement;
+    function FunctionStatement(const AIsAsync: Boolean = False): TGocciaStatement;
     function ReturnStatement: TGocciaStatement;
     function ThrowStatement: TGocciaStatement;
     function TryStatement: TGocciaStatement;
-    function ClassMethod(const AIsStatic: Boolean = False): TGocciaClassMethod;
+    function ClassMethod(const AIsStatic: Boolean = False; const AIsAsync: Boolean = False): TGocciaClassMethod;
     function ClassDeclaration: TGocciaStatement;
     function DecoratedClassDeclaration(const ADecorators: TGocciaDecoratorList): TGocciaStatement;
     function ParseDecorators: TGocciaDecoratorList;
@@ -1618,12 +1618,7 @@ begin
       Advance; // consume '('
       if IsArrowFunction() then
       begin
-        Inc(FInAsyncFunction);
-        try
-          Expr := ArrowFunction;
-        finally
-          Dec(FInAsyncFunction);
-        end;
+        Expr := ArrowFunction(True);
         TGocciaArrowFunctionExpression(Expr).IsAsync := True;
         // Override source text to include `async` prefix
         TGocciaArrowFunctionExpression(Expr).SourceText :=
@@ -1700,12 +1695,7 @@ begin
               Advance;
             end;
             CollectGenericParameters;
-            Inc(FInAsyncFunction);
-            try
-              Result := ParseObjectMethodBody(Token.Line, Token.Column);
-            finally
-              Dec(FInAsyncFunction);
-            end;
+            Result := ParseObjectMethodBody(Token.Line, Token.Column, True);
             TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
             TGocciaMethodExpression(Result).IsAsync := True;
             if Name <> '' then
@@ -2007,12 +1997,7 @@ begin
     // Check for method shorthand syntax: methodName() { ... } or [expr]() { ... }
     else if Check(gttLeftParen) then
     begin
-      if IsAsync then Inc(FInAsyncFunction);
-      try
-        Value := ParseObjectMethodBody(MemberStartLine, MemberStartColumn);
-      finally
-        if IsAsync then Dec(FInAsyncFunction);
-      end;
+      Value := ParseObjectMethodBody(MemberStartLine, MemberStartColumn, IsAsync);
       TGocciaMethodExpression(Value).SourceText := ExtractSourceRange(
         MemberStartLine, MemberStartColumn);
       if IsAsync then
@@ -2242,7 +2227,7 @@ begin
   end;
 end;
 
-function TGocciaParser.ParseObjectMethodBody(const ALine, AColumn: Integer): TGocciaExpression;
+function TGocciaParser.ParseObjectMethodBody(const ALine, AColumn: Integer; const AIsAsync: Boolean): TGocciaExpression;
 var
   Parameters: TGocciaParameterArray;
   Body: TGocciaASTNode;
@@ -2251,43 +2236,49 @@ var
 begin
   Consume(gttLeftParen, 'Expected "(" after method name',
     SSuggestOpenParenMethodParameterList);
-  Parameters := ParseParameterList;
-  Consume(gttRightParen, 'Expected ")" after parameters',
-    SSuggestCloseParenParameterList);
-
-  if Check(gttColon) then
-  begin
-    Advance;
-    CollectTypeAnnotation([gttLeftBrace]);
-  end;
-
-  Consume(gttLeftBrace, 'Expected "{" before method body',
-    SSuggestOpenBraceMethodBody);
 
   Inc(FFunctionDepth);
   try
-    Statements := TObjectList<TGocciaASTNode>.Create(True);
-    try
-      while not Check(gttRightBrace) and not IsAtEnd do
-      begin
-        Stmt := Statement;
-        Statements.Add(Stmt);
-      end;
+    Parameters := ParseParameterList;
+    Consume(gttRightParen, 'Expected ")" after parameters',
+      SSuggestCloseParenParameterList);
 
-      Consume(gttRightBrace, 'Expected "}" after method body',
-        SSuggestCloseBlock);
-      Body := TGocciaBlockStatement.Create(Statements, ALine, AColumn);
-      Result := TGocciaMethodExpression.Create(Parameters, Body, ALine, AColumn);
-    except
-      Statements.Free;
-      raise;
+    if Check(gttColon) then
+    begin
+      Advance;
+      CollectTypeAnnotation([gttLeftBrace]);
+    end;
+
+    Consume(gttLeftBrace, 'Expected "{" before method body',
+      SSuggestOpenBraceMethodBody);
+
+    if AIsAsync then Inc(FInAsyncFunction);
+    try
+      Statements := TObjectList<TGocciaASTNode>.Create(True);
+      try
+        while not Check(gttRightBrace) and not IsAtEnd do
+        begin
+          Stmt := Statement;
+          Statements.Add(Stmt);
+        end;
+
+        Consume(gttRightBrace, 'Expected "}" after method body',
+          SSuggestCloseBlock);
+        Body := TGocciaBlockStatement.Create(Statements, ALine, AColumn);
+        Result := TGocciaMethodExpression.Create(Parameters, Body, ALine, AColumn);
+      except
+        Statements.Free;
+        raise;
+      end;
+    finally
+      if AIsAsync then Dec(FInAsyncFunction);
     end;
   finally
     Dec(FFunctionDepth);
   end;
 end;
 
-function TGocciaParser.ArrowFunction: TGocciaExpression;
+function TGocciaParser.ArrowFunction(const AIsAsync: Boolean): TGocciaExpression;
 var
   Parameters: TGocciaParameterArray;
   Body: TGocciaASTNode;
@@ -2298,26 +2289,31 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  Parameters := ParseParameterList;
-  Consume(gttRightParen, 'Expected ")" after parameters',
-    SSuggestCloseParenParameterList);
-
-  FnReturnType := '';
-  if Check(gttColon) then
-  begin
-    Advance;
-    FnReturnType := CollectTypeAnnotation([gttArrow]);
-  end;
-
-  Consume(gttArrow, 'Expected "=>" in arrow function',
-    SSuggestArrowFunctionSyntax);
-
   Inc(FFunctionDepth);
   try
-    if Match(gttLeftBrace) then
-      Body := BlockStatement
-    else
-      Body := Expression;
+    Parameters := ParseParameterList;
+    Consume(gttRightParen, 'Expected ")" after parameters',
+      SSuggestCloseParenParameterList);
+
+    FnReturnType := '';
+    if Check(gttColon) then
+    begin
+      Advance;
+      FnReturnType := CollectTypeAnnotation([gttArrow]);
+    end;
+
+    Consume(gttArrow, 'Expected "=>" in arrow function',
+      SSuggestArrowFunctionSyntax);
+
+    if AIsAsync then Inc(FInAsyncFunction);
+    try
+      if Match(gttLeftBrace) then
+        Body := BlockStatement
+      else
+        Body := Expression;
+    finally
+      if AIsAsync then Dec(FInAsyncFunction);
+    end;
   finally
     Dec(FFunctionDepth);
   end;
@@ -2554,12 +2550,7 @@ begin
         Result := TGocciaEmptyStatement.Create(Line, Column);
       afcReady:
       begin
-        Inc(FInAsyncFunction);
-        try
-          Result := FunctionStatement;
-        finally
-          Dec(FInAsyncFunction);
-        end;
+        Result := FunctionStatement(True);
         if (Result is TGocciaVariableDeclaration) and
            (Length(TGocciaVariableDeclaration(Result).Variables) = 1) and
            (TGocciaVariableDeclaration(Result).Variables[0].Initializer is TGocciaMethodExpression) then
@@ -3246,7 +3237,7 @@ begin
   Result := TGocciaEmptyStatement.Create(Line, Column);
 end;
 
-function TGocciaParser.FunctionStatement: TGocciaStatement;
+function TGocciaParser.FunctionStatement(const AIsAsync: Boolean): TGocciaStatement;
 var
   Line, Column: Integer;
   NameToken: TGocciaToken;
@@ -3283,7 +3274,7 @@ begin
 
   CollectGenericParameters;
 
-  MethodExpr := ParseObjectMethodBody(Line, Column);
+  MethodExpr := ParseObjectMethodBody(Line, Column, AIsAsync);
   TGocciaMethodExpression(MethodExpr).SourceText := ExtractSourceRange(Line, Column);
 
   SetLength(Variables, 1);
@@ -3400,7 +3391,7 @@ begin
   Result := TryStmt;
 end;
 
-function TGocciaParser.ClassMethod(const AIsStatic: Boolean = False): TGocciaClassMethod;
+function TGocciaParser.ClassMethod(const AIsStatic: Boolean; const AIsAsync: Boolean): TGocciaClassMethod;
 var
   Parameters: TGocciaParameterArray;
   Body: TGocciaASTNode;
@@ -3417,51 +3408,57 @@ begin
 
   Consume(gttLeftParen, 'Expected "(" after method name',
     SSuggestOpenParenMethodParameterList);
-  Parameters := ParseParameterList;
-  Consume(gttRightParen, 'Expected ")" after parameters',
-    SSuggestCloseParenParameterList);
-
-  MethodReturnType := '';
-  if Check(gttColon) then
-  begin
-    Advance;
-    MethodReturnType := CollectTypeAnnotation([gttLeftBrace]);
-  end;
-
-  Consume(gttLeftBrace, 'Expected "{" before method body',
-    SSuggestOpenBraceMethodBody);
 
   Inc(FFunctionDepth);
   try
-    Statements := TObjectList<TGocciaASTNode>.Create(True);
-    try
-      while not Check(gttRightBrace) and not IsAtEnd do
-      begin
-        Stmt := Statement;
-        if Stmt is TGocciaExpressionStatement then
-        begin
-          if not Check(gttSemicolon) then
-            Statements.Add(Stmt)
-          else
-          begin
-            Advance;
-            Statements.Add(Stmt);
-          end;
-        end
-        else
-          Statements.Add(Stmt);
-      end;
+    Parameters := ParseParameterList;
+    Consume(gttRightParen, 'Expected ")" after parameters',
+      SSuggestCloseParenParameterList);
 
-      Consume(gttRightBrace, 'Expected "}" after method body',
-        SSuggestCloseBlock);
-      Body := TGocciaBlockStatement.Create(Statements, Line, Column);
-      Result := TGocciaClassMethod.Create(Name, Parameters, Body, AIsStatic, Line, Column);
-      Result.GenericParams := MethodGenericParams;
-      Result.ReturnType := MethodReturnType;
-      Result.SourceText := ExtractSourceRange(Line, Column);
-    except
-      Statements.Free;
-      raise;
+    MethodReturnType := '';
+    if Check(gttColon) then
+    begin
+      Advance;
+      MethodReturnType := CollectTypeAnnotation([gttLeftBrace]);
+    end;
+
+    Consume(gttLeftBrace, 'Expected "{" before method body',
+      SSuggestOpenBraceMethodBody);
+
+    if AIsAsync then Inc(FInAsyncFunction);
+    try
+      Statements := TObjectList<TGocciaASTNode>.Create(True);
+      try
+        while not Check(gttRightBrace) and not IsAtEnd do
+        begin
+          Stmt := Statement;
+          if Stmt is TGocciaExpressionStatement then
+          begin
+            if not Check(gttSemicolon) then
+              Statements.Add(Stmt)
+            else
+            begin
+              Advance;
+              Statements.Add(Stmt);
+            end;
+          end
+          else
+            Statements.Add(Stmt);
+        end;
+
+        Consume(gttRightBrace, 'Expected "}" after method body',
+          SSuggestCloseBlock);
+        Body := TGocciaBlockStatement.Create(Statements, Line, Column);
+        Result := TGocciaClassMethod.Create(Name, Parameters, Body, AIsStatic, Line, Column);
+        Result.GenericParams := MethodGenericParams;
+        Result.ReturnType := MethodReturnType;
+        Result.SourceText := ExtractSourceRange(Line, Column);
+      except
+        Statements.Free;
+        raise;
+      end;
+    finally
+      if AIsAsync then Dec(FInAsyncFunction);
     end;
   finally
     Dec(FFunctionDepth);
@@ -3834,12 +3831,7 @@ begin
       end;
       afcReady:
       begin
-        Inc(FInAsyncFunction);
-        try
-          InnerDecl := FunctionStatement;
-        finally
-          Dec(FInAsyncFunction);
-        end;
+        InnerDecl := FunctionStatement(True);
         if (InnerDecl is TGocciaVariableDeclaration) and
            (Length(TGocciaVariableDeclaration(InnerDecl).Variables) = 1) and
            (TGocciaVariableDeclaration(InnerDecl).Variables[0].Initializer is TGocciaMethodExpression) then
@@ -4422,12 +4414,7 @@ begin
       end
       else if Check(gttLeftParen) or Check(gttLess) then
       begin
-        if IsAsync then Inc(FInAsyncFunction);
-        try
-          Method := ClassMethod(IsStatic);
-        finally
-          if IsAsync then Dec(FInAsyncFunction);
-        end;
+        Method := ClassMethod(IsStatic, IsAsync);
         Method.Name := MemberName;
         Method.IsAsync := IsAsync;
         Method.SourceText := ExtractSourceRange(MemberStartLine, MemberStartColumn);

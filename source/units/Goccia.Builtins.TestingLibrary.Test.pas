@@ -22,6 +22,7 @@ uses
   Goccia.Values.FunctionValue,
   Goccia.Values.MockFunction,
   Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
   Goccia.Values.PromiseValue,
@@ -305,6 +306,7 @@ type
     procedure TestSpyOnTracksCalls;
     procedure TestSpyOnMockImplementationOverrides;
     procedure TestSpyOnMockRestoreRestoresOriginal;
+    procedure TestSpyOnMockRestoreAllowsReSpy;
     procedure TestSpyOnMockReturnValueOverrides;
 
     { mock matchers - toHaveBeenCalled }
@@ -2933,6 +2935,7 @@ begin
   Test('spyOn tracks calls', TestSpyOnTracksCalls);
   Test('spyOn mockImplementation overrides original', TestSpyOnMockImplementationOverrides);
   Test('spyOn mockRestore restores the original method', TestSpyOnMockRestoreRestoresOriginal);
+  Test('spyOn mockRestore allows spying again', TestSpyOnMockRestoreAllowsReSpy);
   Test('spyOn mockReturnValue overrides original', TestSpyOnMockReturnValueOverrides);
 
   { mock matchers - toHaveBeenCalled }
@@ -3468,6 +3471,48 @@ begin
   end;
 
   // Verify original is restored
+  PropValue := Obj.GetProperty('method');
+  Expect<Boolean>(PropValue = OrigFn).ToBe(True);
+end;
+
+procedure TTestMockAndSpyAPIs.TestSpyOnMockRestoreAllowsReSpy;
+var
+  Obj: TGocciaObjectValue;
+  OrigFn: TGocciaNativeFunctionValue;
+  FirstSpy: TGocciaMockFunctionValue;
+  SecondSpy: TGocciaMockFunctionValue;
+  EmptyArgs: TGocciaArgumentsCollection;
+  Descriptor: TGocciaPropertyDescriptor;
+  PropValue: TGocciaValue;
+begin
+  OrigFn := TGocciaNativeFunctionValue.Create(CallbackReturnOriginal, 'orig', 0);
+  Obj := TGocciaObjectValue.Create;
+  Obj.AssignProperty('method', OrigFn);
+  FirstSpy := CreateSpyViaGlobal(Obj, 'method');
+
+  EmptyArgs := TGocciaArgumentsCollection.Create;
+  try
+    FirstSpy.DoMockRestore(EmptyArgs, nil);
+  finally
+    EmptyArgs.Free;
+  end;
+
+  Descriptor := Obj.GetOwnPropertyDescriptor('method');
+  Expect<Boolean>(Assigned(Descriptor)).ToBe(True);
+  Expect<Boolean>(Descriptor.Configurable).ToBe(True);
+  Expect<Boolean>(Descriptor.Writable).ToBe(True);
+
+  SecondSpy := CreateSpyViaGlobal(Obj, 'method');
+  PropValue := Obj.GetProperty('method');
+  Expect<Boolean>(PropValue = SecondSpy).ToBe(True);
+
+  EmptyArgs := TGocciaArgumentsCollection.Create;
+  try
+    SecondSpy.DoMockRestore(EmptyArgs, nil);
+  finally
+    EmptyArgs.Free;
+  end;
+
   PropValue := Obj.GetProperty('method');
   Expect<Boolean>(PropValue = OrigFn).ToBe(True);
 end;

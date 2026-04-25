@@ -573,4 +573,118 @@ console.log("CLI flag overrides file config...");
   }
 }
 
+// -- Config allowed-hosts ---------------------------------------------------------
+
+console.log("Config allowed-hosts blocks unlisted host...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "goccia.json"), '{"allowed-hosts": ["example.com"]}\n');
+    writeFileSync(join(tmp, "test.js"), 'fetch("http://blocked.test");\n');
+
+    const res = runCwd(LOADER, ["test.js"], tmp, { expectFail: true });
+    if (!res.combined.includes("blocked.test")) throw new Error(`Error should mention blocked host, got: ${res.combined}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Config allowed-hosts allows listed host...");
+{
+  const tmp = makeTmp();
+  try {
+    // 0.0.0.0:1 is unreachable, so the promise rejects with a network error
+    // rather than a host-not-allowed TypeError.
+    writeFileSync(join(tmp, "goccia.json"), '{"allowed-hosts": ["0.0.0.0"]}\n');
+    writeFileSync(
+      join(tmp, "test.js"),
+      'const p = fetch("http://0.0.0.0:1/"); p.catch(() => {}); typeof p.then;\n',
+    );
+
+    const out = runCwd(LOADER, ["test.js"], tmp);
+    if (!out.combined.includes("function")) throw new Error(`Allowed host should return promise, got: ${out.combined}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Config allowed-hosts per-file overrides root...");
+{
+  const tmp = makeTmp();
+  try {
+    // Root config allows example.com
+    writeFileSync(join(tmp, "goccia.json"), '{"allowed-hosts": ["example.com"]}\n');
+    // Subdirectory config allows only other.com
+    const subDir = join(tmp, "sub");
+    mkdirSync(subDir);
+    writeFileSync(join(subDir, "goccia.json"), '{"allowed-hosts": ["other.com"]}\n');
+    writeFileSync(join(subDir, "test.js"), 'fetch("http://example.com");\n');
+
+    // example.com is NOT in the subdirectory config, so it should be blocked
+    const res = runCwd(LOADER, [join(subDir, "test.js")], tmp, { expectFail: true });
+    if (!res.combined.includes("example.com")) throw new Error(`Per-file config should override root, got: ${res.combined}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("CLI --allowed-host overrides config allowed-hosts...");
+{
+  const tmp = makeTmp();
+  try {
+    // Config allows example.com
+    writeFileSync(join(tmp, "goccia.json"), '{"allowed-hosts": ["example.com"]}\n');
+    // Script fetches example.com — allowed by config, but NOT by CLI list
+    writeFileSync(join(tmp, "test.js"), 'fetch("http://example.com");\n');
+
+    // CLI specifies only other.test — CLI wins outright, so example.com
+    // from config should be blocked.
+    const res = runCwd(LOADER, ["test.js", "--allowed-host=other.test"], tmp, { expectFail: true });
+    if (!res.combined.includes("example.com")) throw new Error(`CLI override should block config-only host, got: ${res.combined}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Config allowed-hosts empty array overrides parent via extends...");
+{
+  const tmp = makeTmp();
+  try {
+    // Base config allows example.com
+    writeFileSync(join(tmp, "base.json"), '{"allowed-hosts": ["example.com"]}\n');
+    // Child config extends base but explicitly empties allowed-hosts
+    writeFileSync(join(tmp, "goccia.json"), '{"extends": "base.json", "allowed-hosts": []}\n');
+    writeFileSync(join(tmp, "test.js"), 'fetch("http://example.com");\n');
+
+    // Empty allowed-hosts in child should override parent — fetch blocked
+    const res = runCwd(LOADER, ["test.js"], tmp, { expectFail: true });
+    if (!res.combined.includes("allowed hosts")) throw new Error(`Empty allowed-hosts should block fetch, got: ${res.combined}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Config allowed-hosts TestRunner integration...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "goccia.json"), '{"allowed-hosts": ["example.com"]}\n');
+    writeFileSync(
+      join(tmp, "test.js"),
+      [
+        'describe("allowed-hosts", () => {',
+        '  test("blocks unlisted host", () => {',
+        '    expect(() => fetch("http://blocked.test")).toThrow(TypeError);',
+        "  });",
+        "});",
+      ].join("\n") + "\n",
+    );
+
+    const out = runCwd(TESTRUNNER, ["test.js", "--no-progress"], tmp);
+    if (!out.combined.includes("Passed: 1")) throw new Error(`TestRunner should pass with allowed-hosts config, got: ${out.combined}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("\nAll test-cli-config.ts tests passed.");

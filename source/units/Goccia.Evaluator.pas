@@ -111,6 +111,7 @@ uses
   Goccia.Evaluator.Comparison,
   Goccia.Evaluator.Decorators,
   Goccia.Evaluator.TypeOperations,
+  Goccia.FetchManager,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.Keywords.Reserved,
@@ -1317,8 +1318,7 @@ begin
     begin
       // ES2026 §27.7.5.3 step 2: Await wraps the value in Promise.resolve(),
       // introducing a microtask boundary even for non-thenable objects
-      if Assigned(TGocciaMicrotaskQueue.Instance) then
-        TGocciaMicrotaskQueue.Instance.DrainQueue;
+      DrainMicrotasksAndFetchCompletions;
       Result := AValue;
       Exit;
     end;
@@ -1327,8 +1327,7 @@ begin
   begin
     // ES2026 §27.7.5.3 step 2: Await wraps the value in Promise.resolve(),
     // introducing a microtask boundary even for primitive values
-    if Assigned(TGocciaMicrotaskQueue.Instance) then
-      TGocciaMicrotaskQueue.Instance.DrainQueue;
+    DrainMicrotasksAndFetchCompletions;
     Result := AValue;
     Exit;
   end;
@@ -1338,8 +1337,7 @@ begin
     begin
       // ES2026 §27.7.5.3 step 3-4: Even already-settled promises introduce
       // a microtask boundary (the continuation is a PromiseReactionJob)
-      if Assigned(TGocciaMicrotaskQueue.Instance) then
-        TGocciaMicrotaskQueue.Instance.DrainQueue;
+      DrainMicrotasksAndFetchCompletions;
       if Promise.State = gpsFulfilled then
         Result := Promise.PromiseResult
       else
@@ -1347,8 +1345,7 @@ begin
       Exit;
     end;
 
-    if Assigned(TGocciaMicrotaskQueue.Instance) then
-      TGocciaMicrotaskQueue.Instance.DrainQueue;
+    WaitForFetchPromise(Promise);
 
     if Promise.State = gpsFulfilled then
       Result := Promise.PromiseResult

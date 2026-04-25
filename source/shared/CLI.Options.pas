@@ -17,6 +17,7 @@ type
   private
     FLongName: string;
     FShortName: string;
+    FConfigName: string;
     FHelpText: string;
     FGroup: string;
     FPresent: Boolean;
@@ -28,6 +29,12 @@ type
     function FormatForHelp: string; virtual; abstract;
     function ValidValues: string; virtual;
 
+    { Mark this option as present without applying a value.
+      Used by the config layer to record that a key existed in the
+      config file even when no concrete values were produced (e.g.
+      an empty array). }
+    procedure MarkPresent;
+
     { Mark this option as having been set by the command line.
       Called after ParseCommandLine so that per-file config can
       distinguish CLI-set values from root-config-set values. }
@@ -35,6 +42,9 @@ type
 
     property LongName: string read FLongName;
     property ShortName: string read FShortName write FShortName;
+    { Alternate name used in config files when different from LongName.
+      When empty, config files use LongName as usual. }
+    property ConfigName: string read FConfigName write FConfigName;
     property HelpText: string read FHelpText;
     property Group: string read FGroup;
     property Present: Boolean read FPresent;
@@ -154,6 +164,7 @@ type
     FStackSize: TGocciaIntegerOption;
     FCompatVar: TGocciaFlagOption;
     FCompatFunction: TGocciaFlagOption;
+    FAllowedHosts: TGocciaRepeatableOption;
   public
     constructor Create;
     destructor Destroy; override;
@@ -172,6 +183,7 @@ type
     property StackSize: TGocciaIntegerOption read FStackSize;
     property CompatVar: TGocciaFlagOption read FCompatVar;
     property CompatFunction: TGocciaFlagOption read FCompatFunction;
+    property AllowedHosts: TGocciaRepeatableOption read FAllowedHosts;
   end;
 
   TGocciaCoverageFormat = (cfLcov, cfJson);
@@ -244,6 +256,7 @@ begin
   inherited Create;
   FLongName := ALongName;
   FShortName := '';
+  FConfigName := '';
   FHelpText := AHelpText;
   FGroup := AGroup;
   FPresent := False;
@@ -253,6 +266,11 @@ end;
 procedure TGocciaOptionBase.MarkFromCommandLine;
 begin
   FFromCommandLine := True;
+end;
+
+procedure TGocciaOptionBase.MarkPresent;
+begin
+  FPresent := True;
 end;
 
 function TGocciaOptionBase.ValidValues: string;
@@ -546,6 +564,9 @@ begin
     'Enable var declarations (compatibility)', 'Engine');
   FCompatFunction := TGocciaFlagOption.Create('compat-function',
     'Enable function declarations and expressions (compatibility)', 'Engine');
+  FAllowedHosts := TGocciaRepeatableOption.Create('allowed-host',
+    'Hostname allowed for fetch requests (repeatable)', 'Engine');
+  FAllowedHosts.ConfigName := 'allowed-hosts';
 end;
 
 destructor TGocciaEngineOptions.Destroy;
@@ -562,12 +583,13 @@ begin
   FStackSize.Free;
   FCompatVar.Free;
   FCompatFunction.Free;
+  FAllowedHosts.Free;
   inherited Destroy;
 end;
 
 function TGocciaEngineOptions.Options: TGocciaOptionArray;
 begin
-  SetLength(Result, 12);
+  SetLength(Result, 13);
   Result[0] := FMode;
   Result[1] := FASI;
   Result[2] := FImportMap;
@@ -580,6 +602,7 @@ begin
   Result[9] := FStackSize;
   Result[10] := FCompatVar;
   Result[11] := FCompatFunction;
+  Result[12] := FAllowedHosts;
 end;
 
 { TGocciaCoverageOptions }

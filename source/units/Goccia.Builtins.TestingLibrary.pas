@@ -289,6 +289,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Evaluator,
   Goccia.Evaluator.Comparison,
+  Goccia.FetchManager,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.RegExp.Runtime,
@@ -2268,9 +2269,6 @@ begin
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.AddTempRoot(FActualValue);
   try
-    if Assigned(TGocciaMicrotaskQueue.Instance) then
-      TGocciaMicrotaskQueue.Instance.DrainQueue;
-
     if not (FActualValue is TGocciaPromiseValue) then
     begin
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('resolves',
@@ -2280,6 +2278,7 @@ begin
     end;
 
     Promise := TGocciaPromiseValue(FActualValue);
+    WaitForFetchPromise(Promise);
 
     if Promise.State = gpsFulfilled then
       Result := TGocciaExpectationValue.Create(Promise.PromiseResult, FTestAssertions, FIsNegated)
@@ -2308,9 +2307,6 @@ begin
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.AddTempRoot(FActualValue);
   try
-    if Assigned(TGocciaMicrotaskQueue.Instance) then
-      TGocciaMicrotaskQueue.Instance.DrainQueue;
-
     if not (FActualValue is TGocciaPromiseValue) then
     begin
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('rejects',
@@ -2320,6 +2316,7 @@ begin
     end;
 
     Promise := TGocciaPromiseValue(FActualValue);
+    WaitForFetchPromise(Promise);
 
     if Promise.State = gpsRejected then
       Result := TGocciaExpectationValue.Create(Promise.PromiseResult, FTestAssertions, FIsNegated)
@@ -2898,11 +2895,9 @@ begin
               if Assigned(TestResult) then
                 AddTempRootIfNeeded(TestResult);
               try
-                if Assigned(TGocciaMicrotaskQueue.Instance) then
-                  TGocciaMicrotaskQueue.Instance.DrainQueue;
-
                 if TestResult is TGocciaPromiseValue then
                 begin
+                  WaitForFetchPromise(TGocciaPromiseValue(TestResult));
                   if TGocciaPromiseValue(TestResult).State = gpsRejected then
                   begin
                     RejectionReason := TGocciaPromiseValue(TestResult).
@@ -2931,7 +2926,9 @@ begin
                         '": Promise still pending after microtask drain');
                     FailureRecorded := True;
                   end;
-                end;
+                end
+                else
+                  DrainMicrotasksAndFetchCompletions;
               finally
                 if Assigned(TestResult) then
                   RemoveTempRootIfNeeded(TestResult);
@@ -2947,6 +2944,7 @@ begin
                 begin
                   if Assigned(TGocciaMicrotaskQueue.Instance) then
                     TGocciaMicrotaskQueue.Instance.ClearQueue;
+                  DiscardFetchCompletions;
                   AssertionFailed('test execution',
                     Format('Test exceeded per-test timeout of %dms',
                       [E.DurationMs]));
@@ -2966,6 +2964,7 @@ begin
               begin
                 if Assigned(TGocciaMicrotaskQueue.Instance) then
                   TGocciaMicrotaskQueue.Instance.ClearQueue;
+                DiscardFetchCompletions;
                 if E is TGocciaError then
                 begin
                   ExceptionDetail := TGocciaError(E).GetDetailedMessage;
@@ -3120,17 +3119,17 @@ begin
           if Assigned(TGarbageCollector.Instance) then
             TGarbageCollector.Instance.AddTempRoot(CallbackResult);
           try
-            if Assigned(TGocciaMicrotaskQueue.Instance) then
-              TGocciaMicrotaskQueue.Instance.DrainQueue;
-
             if CallbackResult is TGocciaPromiseValue then
             begin
               Promise := TGocciaPromiseValue(CallbackResult);
+              WaitForFetchPromise(Promise);
               if Promise.State = gpsRejected then
                 AssertionFailed('callback execution', 'Async callback rejected: ' + Promise.PromiseResult.ToStringLiteral.Value)
               else if Promise.State = gpsPending then
                 AssertionFailed('callback execution', 'Async callback Promise still pending after microtask drain');
-            end;
+            end
+            else
+              DrainMicrotasksAndFetchCompletions;
           finally
             if Assigned(TGarbageCollector.Instance) then
               TGarbageCollector.Instance.RemoveTempRoot(CallbackResult);

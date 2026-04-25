@@ -518,4 +518,30 @@ console.log("REPL: bytecode evaluation...");
   if (!out.includes("4")) throw new Error(`Bytecode 2+2 should produce 4, got: ${out}`);
 }
 
+// ============================================================================
+// --allowed-host flag
+// ============================================================================
+
+console.log("Loader: --allowed-host blocks unlisted host...");
+{
+  const res = await $`echo 'fetch("http://blocked.test");' | ${LOADER} --allowed-host=example.com 2>&1`.nothrow();
+  if (res.exitCode === 0) throw new Error("Fetch to unlisted host should fail");
+  if (!res.text().includes("blocked.test")) throw new Error(`Error should mention blocked host, got: ${res.text()}`);
+}
+
+console.log("Loader: no --allowed-host blocks all fetch...");
+{
+  const res = await $`echo 'fetch("http://example.com");' | ${LOADER} 2>&1`.nothrow();
+  if (res.exitCode === 0) throw new Error("Fetch without --allowed-host should fail");
+  if (!res.text().includes("allowed hosts")) throw new Error(`Error should mention allowed hosts, got: ${res.text()}`);
+}
+
+console.log("Loader: --allowed-host multiple hosts...");
+{
+  // Both hosts in the list; blocked.test is not
+  const res = await $`echo 'fetch("http://blocked.test");' | ${LOADER} --allowed-host=example.com --allowed-host=other.com 2>&1`.nothrow();
+  if (res.exitCode === 0) throw new Error("Fetch to unlisted host should fail with multiple --allowed-host");
+  if (!res.text().includes("blocked.test")) throw new Error(`Error should mention blocked host, got: ${res.text()}`);
+}
+
 console.log("\nAll test-cli-apps.ts tests passed.");

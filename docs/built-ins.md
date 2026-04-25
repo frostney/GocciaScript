@@ -25,9 +25,7 @@ TGocciaGlobalBuiltin = (
 );
 ```
 
-The `GocciaTestRunner` adds `ggTestAssertions` to inject the test framework.
-The `GocciaBenchmarkRunner` adds `ggBenchmark` to inject the benchmark framework.
-FFI (`ggFFI`) requires the `--unsafe-ffi` CLI flag to enable.
+The `GocciaTestRunner` adds `ggTestAssertions`, the `GocciaBenchmarkRunner` adds `ggBenchmark`, and FFI (`ggFFI`) requires the `--unsafe-ffi` CLI flag.
 
 ## Adding a New Built-in
 
@@ -59,9 +57,7 @@ Implements the [WHATWG Console Standard](https://developer.mozilla.org/en-US/doc
 | `console.trace(...args)` | Print with "Trace:" prefix |
 | `console.table(data)` | Display data (formatted output) |
 
-#### Output capture
-
-The console supports an `OutputCallback` hook for capturing output programmatically (see [Embedding — Console Output Capture](embedding.md#console-output-capture)).
+**Output capture:** The console supports an `OutputCallback` hook for capturing output programmatically (see [Embedding — Console Output Capture](embedding.md#console-output-capture)).
 
 Separately, the `TGocciaCLIApplication`-based frontends use `LogCallback` for `--log=<file>`, which writes every console call to the specified file in `[method] line` format while preserving normal stdout output.
 
@@ -738,7 +734,25 @@ Implements a subset of the [WHATWG Fetch Standard](https://developer.mozilla.org
 
 The `options` object supports `method` (`"GET"` or `"HEAD"`) and `headers` (plain object or `Headers` instance). Redirects (301/302/303/307/308) are followed automatically up to 20 hops. HTTPS requires OpenSSL libraries at runtime.
 
-**GocciaScript differences:** Only `GET` and `HEAD` methods. No `Request` object, `AbortSignal`, streaming body, or CORS. Requests are synchronous internally; the returned Promise is already settled.
+**Allowed hosts** — `fetch` requires an explicit allowlist of hostnames. Without `--allowed-host` or an `"allowed-hosts"` entry in `goccia.json`, any call to `fetch` throws `TypeError`. Add one or more allowed hosts via CLI or config:
+
+```bash
+./build/GocciaScriptLoader example.js --allowed-host=api.example.com --allowed-host=cdn.example.com
+```
+
+```json
+{ "allowed-hosts": ["api.example.com", "cdn.example.com"] }
+```
+
+Host matching is case-insensitive and ignores port, path, and userinfo. Only the hostname portion of the URL is checked.
+
+**GocciaScript differences:** GocciaScript implements a focused subset of `fetch`:
+
+- **HTTP methods:** only `GET` and `HEAD` are supported.
+- **Absent features:** no `Request` object, `AbortSignal`, streaming body, or CORS.
+- **Runtime behavior:** requests run on fetch-specific background workers and settle their Promise on the owning runtime thread. `await fetch(...)` still synchronously waits by pumping fetch completions.
+- **Concurrency cap:** each runtime caps active fetch workers at 16; additional calls reject their returned Promise with `TypeError` until a worker finishes.
+- **Configuration:** requires `--allowed-host` or an `"allowed-hosts"` entry in `goccia.json`.
 
 ### Headers (`Goccia.Values.HeadersValue.pas`)
 

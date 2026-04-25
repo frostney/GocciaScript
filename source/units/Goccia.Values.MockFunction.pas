@@ -98,6 +98,22 @@ const
   RESULT_TYPE_RETURN = 'return';
   RESULT_TYPE_THROW = 'throw';
 
+function ClonePropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
+begin
+  if not Assigned(ADescriptor) then
+    Exit(nil);
+
+  if ADescriptor is TGocciaPropertyDescriptorData then
+    Exit(TGocciaPropertyDescriptorData.Create(
+      TGocciaPropertyDescriptorData(ADescriptor).Value,
+      ADescriptor.Flags));
+
+  Result := TGocciaPropertyDescriptorAccessor.Create(
+    TGocciaPropertyDescriptorAccessor(ADescriptor).Getter,
+    TGocciaPropertyDescriptorAccessor(ADescriptor).Setter,
+    ADescriptor.Flags);
+end;
+
 { TGocciaMockFunctionValue }
 
 constructor TGocciaMockFunctionValue.Create(const AImplementation: TGocciaValue);
@@ -115,6 +131,7 @@ begin
   FDefaultReturnValue := nil;
   FSpyTarget := nil;
   FSpyOriginalValue := nil;
+  FSpyOriginalDescriptor := nil;
   FMockObject := nil;
 
   SetupMethods;
@@ -134,7 +151,8 @@ begin
   FSpyOriginalValue := OriginalValue;
 
   // Capture whether this is an own property and its descriptor for proper restore
-  FSpyOriginalDescriptor := ATarget.GetOwnPropertyDescriptor(AMethodName);
+  FSpyOriginalDescriptor := ClonePropertyDescriptor(
+    ATarget.GetOwnPropertyDescriptor(AMethodName));
   FSpyWasOwnProperty := Assigned(FSpyOriginalDescriptor);
 
   // Spy passes through to original by default
@@ -152,6 +170,7 @@ begin
   FResults.Free;
   FContexts.Free;
   FOnceQueue.Free;
+  FSpyOriginalDescriptor.Free;
   inherited;
 end;
 
@@ -405,6 +424,9 @@ begin
   if Assigned(FSpyOriginalValue) then
     FSpyOriginalValue.MarkReferences;
 
+  if Assigned(FSpyOriginalDescriptor) then
+    FSpyOriginalDescriptor.MarkValues;
+
   if Assigned(FMockObject) then
     FMockObject.MarkReferences;
 end;
@@ -514,8 +536,7 @@ begin
     if FSpyWasOwnProperty and Assigned(FSpyOriginalDescriptor) then
       // Restore the original own-property descriptor (preserves accessor/flags)
       FSpyTarget.DefineProperty(FSpyMethodName,
-        TGocciaPropertyDescriptorData.Create(FSpyOriginalValue,
-          FSpyOriginalDescriptor.Flags))
+        ClonePropertyDescriptor(FSpyOriginalDescriptor))
     else
       // Property was inherited — remove the shadowing own property
       FSpyTarget.DeleteProperty(FSpyMethodName);

@@ -220,6 +220,7 @@ type
     function ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;
 
     procedure AddAlias(const APattern, AReplacement: string);
+    procedure SetAllowedFetchHosts(const AHosts: TStrings);
     procedure InjectGlobal(const AKey: string; const AValue: TGocciaValue);
     procedure RegisterGlobal(const AName: string; const AValue: TGocciaValue);
     procedure InjectGlobalsFromJSON(const AJsonString: string);
@@ -304,6 +305,7 @@ uses
   Goccia.Coverage,
   Goccia.Error,
   Goccia.Evaluator,
+  Goccia.FetchManager,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
   Goccia.JSX.Transformer,
@@ -628,6 +630,7 @@ begin
   TGarbageCollector.Initialize;
   TGocciaCallStack.Initialize;
   TGocciaMicrotaskQueue.Initialize;
+  TGocciaFetchManager.Initialize;
 
   FPreprocessors := DefaultPreprocessors;
   FCompatibility := DefaultCompatibility;
@@ -664,6 +667,8 @@ end;
 destructor TGocciaEngine.Destroy;
 begin
   try
+    TGocciaFetchManager.Shutdown;
+
     if Assigned(TGarbageCollector.Instance) and Assigned(FInterpreter) then
       TGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);
 
@@ -1268,6 +1273,26 @@ begin
   Resolver.AddAlias(APattern, AReplacement);
 end;
 
+procedure TGocciaEngine.SetAllowedFetchHosts(const AHosts: TStrings);
+var
+  EmptyHosts: TStringList;
+begin
+  if not Assigned(FBuiltinFetch) then
+    Exit;
+
+  if Assigned(AHosts) then
+    FBuiltinFetch.SetAllowedHosts(AHosts)
+  else
+  begin
+    EmptyHosts := TStringList.Create;
+    try
+      FBuiltinFetch.SetAllowedHosts(EmptyHosts);
+    finally
+      EmptyHosts.Free;
+    end;
+  end;
+end;
+
 procedure TGocciaEngine.InjectGlobal(const AKey: string; const AValue: TGocciaValue);
 begin
   RegisterGlobal(AKey, AValue);
@@ -1341,8 +1366,7 @@ begin
             CheckTopLevelRedeclarations(ProgramNode,
               FInterpreter.GlobalScope, FSourcePath);
             FLastTiming.Result := FExecutor.ExecuteProgram(ProgramNode);
-            if Assigned(TGocciaMicrotaskQueue.Instance) then
-              TGocciaMicrotaskQueue.Instance.DrainQueue;
+            WaitForFetchIdle;
             ExecEnd := GetNanoseconds;
             FLastTiming.CompileTimeNanoseconds := FExecutor.CompileTimeNanoseconds;
             FLastTiming.ExecuteTimeNanoseconds := FExecutor.ExecuteTimeNanoseconds;
@@ -1350,6 +1374,7 @@ begin
           finally
             if Assigned(TGocciaMicrotaskQueue.Instance) then
               TGocciaMicrotaskQueue.Instance.ClearQueue;
+            DiscardFetchCompletions;
             ProgramNode.Free;
           end;
         finally
@@ -1387,11 +1412,11 @@ function TGocciaEngine.ExecuteProgram(const AProgram: TGocciaProgram): TGocciaVa
 begin
   try
     Result := FExecutor.ExecuteProgram(AProgram);
-    if Assigned(TGocciaMicrotaskQueue.Instance) then
-      TGocciaMicrotaskQueue.Instance.DrainQueue;
+    WaitForFetchIdle;
   finally
     if Assigned(TGocciaMicrotaskQueue.Instance) then
       TGocciaMicrotaskQueue.Instance.ClearQueue;
+    DiscardFetchCompletions;
   end;
 end;
 

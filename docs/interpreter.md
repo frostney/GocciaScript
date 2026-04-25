@@ -144,6 +144,8 @@ GocciaScript implements ECMAScript Promises with a synchronous microtask queue (
 
 **The solution:** A singleton FIFO queue. When a Promise settles or `.then()` is called on an already-settled Promise, the reaction is enqueued rather than executed immediately. The engine drains the queue after `Interpreter.Execute` completes.
 
+Fetch uses a separate fetch-specific completion pump: blocking HTTP work runs off-thread, the owning runtime thread settles the fetch Promise when a response or error is ready, and the resulting Promise reactions still run through this same microtask queue. The microtask queue itself is not used as an I/O queue.
+
 **Why drain after script execution (not during)?**
 
 In the ECMAScript specification, the entire script is one macrotask. Microtasks drain after the current macrotask completes, not interleaved with synchronous code. This means:
@@ -163,9 +165,11 @@ This follows the ECMAScript specification's microtask ordering semantics. Thenab
 | Test framework | After each test callback |
 | Benchmark runner | After warmup, calibration batches, and each measurement round |
 
+For fetch-backed Promises, these integration points also pump fetch completions before treating a pending Promise as permanently unsettled.
+
 **`queueMicrotask`:** The global `queueMicrotask(callback)` function enqueues a user-provided callback into the same microtask queue used by Promise reactions. This matches the [HTML spec](https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#microtask-queuing). If a `queueMicrotask` callback throws, the error is silently discarded and the queue keeps draining — remaining microtasks and Promise reactions still run. This matches the observable behavior in Node.js/browsers where uncaught microtask errors don't prevent other microtasks from executing.
 
-**Error safety:** Both `Execute` and `ExecuteProgram` wrap the drain in a `try..finally` that calls `ClearQueue`. If the interpreter throws, stale microtasks are discarded rather than leaking into subsequent executions. After a successful `DrainQueue` the queue is already empty, so `ClearQueue` is a no-op.
+**Error safety:** Both `Execute` and `ExecuteProgram` wrap the drain in a `try..finally` that calls `ClearQueue` and discards pending fetch completions. If the interpreter throws, stale microtasks and fetch callbacks are discarded rather than leaking into subsequent executions; outstanding fetch workers are detached so cleanup does not wait on network I/O that can no longer affect the script. After a successful drain, both queues are already empty, so cleanup is a no-op.
 
 **GC safety:** During `DrainQueue`, each microtask's handler, value, and result promise are temp-rooted to prevent collection mid-callback.
 

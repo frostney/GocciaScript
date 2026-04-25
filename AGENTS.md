@@ -71,6 +71,8 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaScriptLoader example.js --max-memory=10485760 # Execute with 10 MB GC heap limit (RangeError on exceed)
 ./build/GocciaScriptLoader example.js --max-instructions=1000000 --mode=bytecode # Abort after 1M bytecode instructions
 ./build/GocciaScriptLoader example.js --unsafe-ffi # Execute with FFI enabled
+./build/GocciaScriptLoader example.js --allowed-host=api.example.com # Execute with fetch restricted to a single host
+./build/GocciaScriptLoader example.js --allowed-host=api.example.com --allowed-host=cdn.example.com # Execute with fetch restricted to multiple hosts
 ./build/GocciaScriptLoader example.js --log=console.log # Write console output to a log file (tee to stdout + file)
 ./build/GocciaScriptLoader example.js --stack-size=5000 # Execute with custom call stack depth limit
 ./build/GocciaScriptLoader example.js --stack-size=0 --mode=bytecode # Execute with no call stack depth limit (bytecode trampoline)
@@ -142,7 +144,7 @@ All CLI options can be set via `goccia.json` (or `.json5` / `.toml`) discovered 
 
 ```json
 // goccia.json
-{ "asi": true, "mode": "bytecode", "timeout": 5000 }
+{ "asi": true, "mode": "bytecode", "timeout": 5000, "allowed-hosts": ["api.example.com"] }
 ```
 
 ```json

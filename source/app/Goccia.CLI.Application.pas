@@ -155,25 +155,34 @@ begin
     else if Value is TGocciaArrayValue then
     begin
       Arr := TGocciaArrayValue(Value);
-      for J := 0 to Arr.GetLength - 1 do
+      if Arr.GetLength = 0 then
       begin
-        Value := Arr.GetElement(J);
-        if Value is TGocciaStringLiteralValue then
-          ElementValue := TGocciaStringLiteralValue(Value).Value
-        else if Value is TGocciaNumberLiteralValue then
-          ElementValue := TGocciaNumberLiteralValue(Value)
-            .ToStringLiteral.Value
-        else if Value is TGocciaBooleanLiteralValue then
-          ElementValue := BoolToStr(
-            TGocciaBooleanLiteralValue(Value).Value, 'true', 'false')
-        else
-          Continue;
         if Count >= Length(Result) then
           SetLength(Result, Length(Result) * 2 + 1);
         Result[Count].Key := Key;
-        Result[Count].Value := ElementValue;
+        Result[Count].Value := '';
         Inc(Count);
-      end;
+      end
+      else
+        for J := 0 to Arr.GetLength - 1 do
+        begin
+          Value := Arr.GetElement(J);
+          if Value is TGocciaStringLiteralValue then
+            ElementValue := TGocciaStringLiteralValue(Value).Value
+          else if Value is TGocciaNumberLiteralValue then
+            ElementValue := TGocciaNumberLiteralValue(Value)
+              .ToStringLiteral.Value
+          else if Value is TGocciaBooleanLiteralValue then
+            ElementValue := BoolToStr(
+              TGocciaBooleanLiteralValue(Value).Value, 'true', 'false')
+          else
+            Continue;
+          if Count >= Length(Result) then
+            SetLength(Result, Length(Result) * 2 + 1);
+          Result[Count].Key := Key;
+          Result[Count].Value := ElementValue;
+          Inc(Count);
+        end;
     end;
     { Objects and other types are silently skipped. }
   end;
@@ -426,6 +435,9 @@ var
   ValueStr: string;
   MemoryLimit: Int64;
   GC: TGarbageCollector;
+  FileHosts: TStringList;
+  HasFileHosts: Boolean;
+  I: Integer;
 begin
   if not Assigned(AEngineOptions) then
     Exit;
@@ -465,6 +477,43 @@ begin
       GC.MaxBytes := AEngineOptions.MaxMemory.Value
     else
       GC.MaxBytes := GC.SuggestedMaxBytes;
+  end;
+
+  { allowed-host: CLI > per-file config > root config > empty (fetch blocked).
+    CLI wins outright; otherwise per-file config overrides root config. }
+  if AEngineOptions.AllowedHosts.FromCommandLine then
+    AEngine.SetAllowedFetchHosts(AEngineOptions.AllowedHosts.Values)
+  else
+  begin
+    HasFileHosts := False;
+    for I := 0 to High(AFileConfig) do
+      if AFileConfig[I].Key = 'allowed-hosts' then
+      begin
+        HasFileHosts := True;
+        Break;
+      end;
+
+    if HasFileHosts then
+    begin
+      FileHosts := TStringList.Create;
+      try
+        for I := 0 to High(AFileConfig) do
+          if AFileConfig[I].Key = 'allowed-hosts' then
+          begin
+            { Empty-value sentinel marks an explicit empty array.
+              In a merged extends chain child entries come first,
+              so a sentinel stops accumulation of base values. }
+            if AFileConfig[I].Value = '' then
+              Break;
+            FileHosts.Add(AFileConfig[I].Value);
+          end;
+        AEngine.SetAllowedFetchHosts(FileHosts);
+      finally
+        FileHosts.Free;
+      end;
+    end
+    else if AEngineOptions.AllowedHosts.Present then
+      AEngine.SetAllowedFetchHosts(AEngineOptions.AllowedHosts.Values);
   end;
 end;
 

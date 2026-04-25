@@ -362,6 +362,7 @@ resourcestring
 
   // Fetch API
   SSuggestFetchUsage = 'use fetch(url) or fetch(url, { method: "GET" })';
+  SSuggestFetchAllowedHosts = 'add --allowed-host=<hostname> or set "allowed-hosts" in goccia.json';
   SSuggestHeadersThisType = 'Headers prototype methods must be called on a Headers object';
   SSuggestResponseThisType = 'Response prototype methods must be called on a Response object';
 
