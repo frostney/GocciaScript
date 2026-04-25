@@ -90,6 +90,12 @@ type
     // our target platforms; a slightly stale read only delays detection
     // by one poll cycle, which is acceptable for a best-effort watchdog.
     FLastActivityNs: Int64;
+    // Index of the file the worker is currently processing, or -1 when
+    // idle (between dequeue calls).  Naturally-aligned Integer loads are
+    // atomic on aarch64/x86_64 — a torn read is impossible.  The watchdog
+    // reads this on a stalled worker so it can name the file the worker
+    // got stuck on, instead of just reporting "some worker".
+    FCurrentFileIndex: Integer;
   protected
     procedure Execute; override;
   public
@@ -101,6 +107,7 @@ type
     property ResultCount: Integer read FResultCount;
     property CoverageTracker: TObject read FCoverageTracker;
     property LastActivityNs: Int64 read FLastActivityNs;
+    property CurrentFileIndex: Integer read FCurrentFileIndex;
   end;
 
   { Thread pool that dispatches files to workers via a shared queue.
@@ -110,6 +117,13 @@ type
     FWorkerCount: Integer;
     FResults: TGocciaWorkerResultArray;
     FWorkers: array of TGocciaFileWorker;
+    // Parallel to FWorkers — True when the pool's watchdog gave up on
+    // a stalled worker and let the rest of the queue continue without
+    // it.  Abandoned workers are leaked (never Free'd or WaitFor'd) so
+    // the OS reclaims their memory and any held mutexes on process
+    // exit; the alternative of TerminateThread is unsafe across FPC
+    // platforms and would corrupt the shared GC's bookkeeping anyway.
+    FAbandoned: array of Boolean;
     FCancelled: Boolean;
     FCancelOnError: Boolean;
     FEnableCoverage: Boolean;
@@ -277,6 +291,7 @@ begin
   FData := AData;
   FResultCount := 0;
   FLastActivityNs := GetNanoseconds;
+  FCurrentFileIndex := -1;
   // Pre-allocate generously; actual count tracked by FResultCount.
   SetLength(FResults, 0);
 end;
@@ -292,8 +307,10 @@ begin
   try
     while FQueue.TryDequeue(Item) do
     begin
-      // Publish activity on every dequeue so the watchdog sees forward
-      // progress even when individual files run fast.
+      // Publish activity and the current file index on every dequeue so
+      // the watchdog sees forward progress (and can name the stalled
+      // file) even when individual files run fast.
+      FCurrentFileIndex := Item.Index;
       FLastActivityNs := GetNanoseconds;
 
       if FCancelled^ then
@@ -337,7 +354,9 @@ begin
 
       // Publish activity on every completion so the watchdog has a
       // fresh reading even while the worker drains the remainder of a
-      // long queue.
+      // long queue.  Mark the worker idle (no current file) so a
+      // between-files snapshot does not falsely accuse a fast worker.
+      FCurrentFileIndex := -1;
       FLastActivityNs := GetNanoseconds;
 
       { Cancel remaining files across all workers on first error. }
@@ -373,16 +392,21 @@ procedure TGocciaThreadPool.RunAll(const AFiles: TStringList;
 var
   AllItems: TGocciaWorkItemArray;
   Queue: TGocciaWorkQueue;
-  FileCount, I, J: Integer;
-  GraceStart, NowNs: Int64;
-  AllFinished, LiveWorkersRemain, AnyIdle: Boolean;
+  FileCount, I, J, StalledIdx: Integer;
+  StalledCount, SnapshotCount: Integer;
+  NowNs: Int64;
+  AllDone, AnyAbandoned: Boolean;
+  StalledFiles: TGocciaWorkerResultArray;
+  SnapshotResults: TGocciaWorkerResultArray;
 begin
   FCancelled := False;
-  LiveWorkersRemain := False;
+  AnyAbandoned := False;
   FileCount := AFiles.Count;
   if FileCount = 0 then
   begin
     SetLength(FResults, 0);
+    SetLength(FWorkers, 0);
+    SetLength(FAbandoned, 0);
     Exit;
   end;
 
@@ -399,8 +423,12 @@ begin
     // Create and start workers. Track how many started so we can
     // wait/free only those if a later Create/Start raises.
     SetLength(FWorkers, FWorkerCount);
+    SetLength(FAbandoned, FWorkerCount);
     for I := 0 to FWorkerCount - 1 do
+    begin
       FWorkers[I] := nil;
+      FAbandoned[I] := False;
+    end;
 
     for I := 0 to FWorkerCount - 1 do
     begin
@@ -409,80 +437,95 @@ begin
       FWorkers[I].Start;
     end;
   finally
+    StalledCount := 0;
+    SetLength(StalledFiles, 0);
+
     if AWatchdogMs > 0 then
     begin
-      // Per-worker-idle watchdog: poll until every worker has finished,
-      // or until some individual worker has gone AWatchdogMs without
-      // publishing a progress timestamp.  Because we measure per-worker
-      // idleness, the bound is independent of queue depth — a huge batch
-      // does not loosen the watchdog the way a total-elapsed formula
-      // would.
+      // Per-worker-idle watchdog: poll until every worker is either
+      // finished or has been abandoned.  When a worker goes
+      // AWatchdogMs without publishing a progress timestamp we mark
+      // only that worker as abandoned and record its current file as
+      // a TIMEOUT result.  The other workers keep draining the queue,
+      // so a single bad test no longer aborts the entire run.  Because
+      // the bound is per-worker and per-file rather than total, a
+      // huge batch does not loosen the watchdog the way a
+      // total-elapsed formula would.
       repeat
-        AllFinished := True;
-        AnyIdle := False;
         NowNs := GetNanoseconds;
+        // First pass: mark any newly stalled worker as abandoned.
         for I := 0 to FWorkerCount - 1 do
-          if Assigned(FWorkers[I]) and not FWorkers[I].Finished then
-          begin
-            AllFinished := False;
+          if Assigned(FWorkers[I]) and (not FAbandoned[I])
+              and (not FWorkers[I].Finished) then
             if ((NowNs - FWorkers[I].LastActivityNs) div 1000000)
                 >= AWatchdogMs then
             begin
-              AnyIdle := True;
-              Break;
+              J := FWorkers[I].CurrentFileIndex;
+              SetLength(StalledFiles, StalledCount + 1);
+              StalledFiles[StalledCount].Data := nil;
+              StalledFiles[StalledCount].Success := False;
+              StalledFiles[StalledCount].ConsoleOutput := '';
+              if (J >= 0) and (J < FileCount) then
+              begin
+                StalledFiles[StalledCount].Index := J;
+                StalledFiles[StalledCount].FileName := AFiles[J];
+                StalledFiles[StalledCount].ErrorMessage := Format(
+                  'TIMEOUT (worker stalled in native code, no progress for %dms)',
+                  [AWatchdogMs]);
+                WriteLn(StdErr, 'Warning: worker #', I,
+                  ' stalled in native code on file: ', AFiles[J],
+                  ' (no progress for ', AWatchdogMs,
+                  'ms). Abandoning worker; remaining files continue.');
+              end
+              else
+              begin
+                // No current file index — record a sentinel slot at
+                // index 0 so we still surface the abandonment in
+                // logs, but don't overwrite a real result.
+                StalledFiles[StalledCount].Index := -1;
+                StalledFiles[StalledCount].FileName := '<unknown>';
+                StalledFiles[StalledCount].ErrorMessage := Format(
+                  'TIMEOUT (worker stalled, no current file index, no progress for %dms)',
+                  [AWatchdogMs]);
+                WriteLn(StdErr, 'Warning: worker #', I,
+                  ' stalled with no current file index (no progress for ',
+                  AWatchdogMs, 'ms). Abandoning worker.');
+              end;
+              Inc(StalledCount);
+              FAbandoned[I] := True;
+              AnyAbandoned := True;
             end;
+
+        // Second pass: are all workers done (finished or abandoned)?
+        AllDone := True;
+        for I := 0 to FWorkerCount - 1 do
+          if Assigned(FWorkers[I]) and (not FAbandoned[I])
+              and (not FWorkers[I].Finished) then
+          begin
+            AllDone := False;
+            Break;
           end;
-        if (not AllFinished) and (not AnyIdle) then
+        if not AllDone then
           Sleep(100);
-      until AllFinished or AnyIdle;
+      until AllDone;
+    end;
 
-      if not AllFinished then
-      begin
-        WriteLn(StdErr, 'Warning: a worker thread made no progress ',
-          'within the watchdog timeout (', AWatchdogMs, 'ms per file). ',
-          'Cancelling remaining work.');
-        FCancelled := True;
-        // Bounded grace period: poll for 5 seconds to let workers
-        // notice the cancellation flag.
-        GraceStart := GetNanoseconds;
-        repeat
-          AllFinished := True;
-          for I := 0 to FWorkerCount - 1 do
-            if Assigned(FWorkers[I]) and not FWorkers[I].Finished then
-            begin
-              AllFinished := False;
-              Break;
-            end;
-          if not AllFinished then
-            Sleep(100);
-        until AllFinished or
-          (((GetNanoseconds - GraceStart) div 1000000) >= 5000);
-        // Collect only the workers that actually finished.
-        for I := 0 to FWorkerCount - 1 do
-          if Assigned(FWorkers[I]) and FWorkers[I].Finished then
-            FWorkers[I].WaitFor;
-        LiveWorkersRemain := not AllFinished;
-        if LiveWorkersRemain then
-          WriteLn(StdErr, 'Warning: some workers did not finish ',
-            'within grace period. Leaking queue and workers to ',
-            'avoid use-after-free; they will be reclaimed on ',
-            'process exit.');
-      end
-      else
-        for I := 0 to FWorkerCount - 1 do
-          if Assigned(FWorkers[I]) then
-            FWorkers[I].WaitFor;
-    end
-    else
-      // No watchdog — wait indefinitely (original behaviour).
-      for I := 0 to FWorkerCount - 1 do
-        if Assigned(FWorkers[I]) then
-          FWorkers[I].WaitFor;
+    // Wait on the workers we still own.  Abandoned workers are
+    // leaked: they may still be stuck inside native code that holds
+    // shared resources, so WaitFor would block forever and Free is
+    // a use-after-free.  The OS reclaims them on process exit.
+    for I := 0 to FWorkerCount - 1 do
+      if Assigned(FWorkers[I]) and not FAbandoned[I] then
+        FWorkers[I].WaitFor;
 
-    // Only free the queue when all workers have exited. Live workers
-    // still hold a reference to it via FQueue, so freeing would be
-    // a use-after-free.
-    if not LiveWorkersRemain then
+    if AnyAbandoned then
+      WriteLn(StdErr, 'Warning: ', StalledCount,
+        ' worker(s) abandoned. Leaking their queue/state; ',
+        'they will be reclaimed on process exit.');
+
+    // Only free the queue when no abandoned workers remain — they
+    // still hold a reference to it via FQueue.
+    if not AnyAbandoned then
       Queue.Free;
   end;
 
@@ -501,10 +544,30 @@ begin
 
   for I := 0 to FWorkerCount - 1 do
   begin
-    // Skip workers that are still running — accessing their state
-    // would be a data race.
     if not Assigned(FWorkers[I]) then Continue;
-    if LiveWorkersRemain and (not FWorkers[I].Finished) then Continue;
+
+    if FAbandoned[I] then
+    begin
+      // Snapshot the abandoned worker's results array by reference so
+      // any subsequent SetLength on the worker side doesn't pull the
+      // memory out from under us.  Skip the in-progress slot
+      // (ResultCount-1) because Success/ErrorMessage on that slot are
+      // not yet written by the worker.  All earlier slots were fully
+      // populated before the worker entered the call that stalled.
+      SnapshotResults := FWorkers[I].Results;
+      SnapshotCount := FWorkers[I].ResultCount;
+      if SnapshotCount > Length(SnapshotResults) then
+        SnapshotCount := Length(SnapshotResults);
+      for J := 0 to SnapshotCount - 2 do
+      begin
+        StalledIdx := SnapshotResults[J].Index;
+        if (StalledIdx >= 0) and (StalledIdx < FileCount) then
+          FResults[StalledIdx] := SnapshotResults[J];
+      end;
+      // Don't Free or merge coverage from abandoned workers — the
+      // thread is still alive in native code.
+      Continue;
+    end;
 
     // Check for unhandled exceptions in the worker thread
     if Assigned(FWorkers[I].FatalException) then
@@ -522,6 +585,15 @@ begin
       FWorkers[I] := nil;
     end;
   end;
+
+  // Apply stalled-file overrides last so the watchdog's TIMEOUT
+  // message wins over any stale empty entry left by initialisation.
+  for I := 0 to StalledCount - 1 do
+  begin
+    StalledIdx := StalledFiles[I].Index;
+    if (StalledIdx >= 0) and (StalledIdx < FileCount) then
+      FResults[StalledIdx] := StalledFiles[I];
+  end;
 end;
 
 procedure TGocciaThreadPool.Cancel;
@@ -537,6 +609,11 @@ begin
   if not FEnableCoverage then Exit;
   for I := 0 to High(FWorkers) do
   begin
+    // Abandoned workers are still alive in native code — leave them
+    // alone.  Their CoverageTracker is also unset (the assignment
+    // happens in the worker's finally block, which abandoned workers
+    // never reach).
+    if (I < Length(FAbandoned)) and FAbandoned[I] then Continue;
     if Assigned(FWorkers[I]) and Assigned(FWorkers[I].CoverageTracker) then
     begin
       WorkerTracker := TGocciaCoverageTracker(FWorkers[I].CoverageTracker);

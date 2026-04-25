@@ -118,6 +118,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
+  Goccia.Timeout,
   Goccia.Utils,
   Goccia.Utils.Arrays,
   Goccia.Values.ClassHelper,
@@ -199,6 +200,11 @@ end;
 
 function TArrayLikeView.Get(const AIndex: Integer): TGocciaValue;
 begin
+  // Per-iteration cooperative timeout poll for the same reason as
+  // HasIndex: toReversed/toSorted/flat/slice and friends call Get
+  // without HasIndex, so the timeout has to be reachable from here too.
+  CheckExecutionTimeout;
+
   if Assigned(Arr) then
   begin
     if (AIndex >= 0) and (AIndex < Arr.Elements.Count) and
@@ -230,6 +236,16 @@ end;
 
 function TArrayLikeView.HasIndex(const AIndex: Integer): Boolean;
 begin
+  // Poll the cooperative execution timeout from the per-iteration chokepoint
+  // used by every native array iterator (indexOf, lastIndexOf, forEach, map,
+  // filter, reduce, find, etc.). Pathological array-likes with length close
+  // to 2^32 would otherwise loop inside native code for hundreds of seconds
+  // without ever yielding to the timeout — long enough for the test-runner
+  // watchdog to fire and silently drop every remaining file in the batch.
+  // CheckExecutionTimeout is essentially free (1023/1024 calls are a single
+  // masked increment), so taking it once per element is negligible overhead.
+  CheckExecutionTimeout;
+
   if Assigned(Arr) then
   begin
     // Fast check: own element present and not a hole
@@ -626,6 +642,13 @@ var
 begin
   View.Init(AThisValue);
   Callback := ValidateArrayMethodCall('map', AArgs, AThisValue, True);
+  // Step 5: Let A be ArraySpeciesCreate(O, len) — ArrayCreate throws
+  // RangeError if len > 2^32 - 1.  Doing this *before* allocating the
+  // capacity-hinted TGocciaArrayValue matters: len is clamped to MaxInt
+  // downstream, so without this guard a pathological array-like (e.g.
+  // length: 2^32) would spin trying to allocate billions of slots and
+  // iterate them, well past any cooperative timeout.
+  View.CheckArrayCreateLen;
   if Assigned(View.Arr) then
     ResultArray := ArraySpeciesCreate(View.Arr, View.Len)
   else

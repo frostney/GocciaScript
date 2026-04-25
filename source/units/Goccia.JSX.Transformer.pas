@@ -42,6 +42,7 @@ type
     FLastTokenKind: TLastTokenKind;
     FHasJSX: Boolean;
     FFileName: string;
+    FJSXDepth: Integer;
 
     function Peek: Char; inline;
     function PeekAt(const AOffset: Integer): Char; inline;
@@ -58,6 +59,7 @@ type
     procedure CopyChar;
     procedure CopyString(const AQuote: Char);
     procedure CopyTemplate;
+    procedure CopyRegexLiteral;
     procedure CopyLineComment;
     procedure CopyBlockComment;
     function CopyIdentifierOrKeyword: string;
@@ -94,6 +96,15 @@ implementation
 uses
   Goccia.FileExtensions;
 
+const
+  // Defence-in-depth bound on JSX nesting recursion. Real JSX rarely nests
+  // beyond a few dozen levels; this fires when the transformer's open-tag
+  // detection runs away on non-JSX input (e.g. regex content the transformer
+  // has misclassified). Without this, a runaway descent silently consumes the
+  // worker thread's stack until FPC_STACKCHECK traps and the testrunner
+  // watchdog has to orphan the worker.
+  MAX_JSX_DEPTH = 256;
+
 procedure WarnIfJSXExtensionMismatch(const AFilePath: string);
 begin
   if not IsJSXNativeExtension(ExtractFileExt(AFilePath)) then
@@ -118,6 +129,7 @@ begin
     Transformer.FFragmentName := AFragmentName;
     Transformer.FLastTokenKind := ltkNone;
     Transformer.FHasJSX := False;
+    Transformer.FJSXDepth := 0;
     Transformer.FOutput := TStringBuffer.Create(Length(ASource));
     Transformer.FSourceMap := TGocciaSourceMap.Create('');
     Transformer.FSourceMap.AddSource('');
@@ -294,6 +306,60 @@ begin
     else
       CopyChar;
   end;
+  FLastTokenKind := ltkExpressionEnd;
+end;
+
+procedure TGocciaJSXTransformer.CopyRegexLiteral;
+var
+  InClass: Boolean;
+begin
+  // Caller has determined CurrentChar = '/' and we are at an expression-start
+  // position, so this is a regex literal (not division and not a comment —
+  // line/block comment leads have already been filtered upstream).
+  // Copy the regex body verbatim, honouring `\` escapes and `[...]` character
+  // classes (where `/` does not terminate). Then copy any trailing flag
+  // identifier characters (gimsuy and friends).
+  CopyChar; // opening '/'
+  InClass := False;
+  while not IsAtEnd do
+  begin
+    case CurrentChar of
+      '\':
+      begin
+        CopyChar;
+        if not IsAtEnd then
+          CopyChar;
+      end;
+      '[':
+      begin
+        InClass := True;
+        CopyChar;
+      end;
+      ']':
+      begin
+        InClass := False;
+        CopyChar;
+      end;
+      '/':
+      begin
+        if InClass then
+          CopyChar
+        else
+        begin
+          CopyChar;
+          Break;
+        end;
+      end;
+      #10, #13:
+        // Unterminated regex — bail to avoid scanning into the next line.
+        Break;
+    else
+      CopyChar;
+    end;
+  end;
+  // Trailing flag identifier characters.
+  while not IsAtEnd and IsIdentifierPart(CurrentChar) do
+    CopyChar;
   FLastTokenKind := ltkExpressionEnd;
 end;
 
@@ -575,89 +641,99 @@ var
   HadAttributes: Boolean;
   TagIsLowercase: Boolean;
 begin
-  FHasJSX := True;
-  StartLine := FLine;
-  StartColumn := FColumn;
+  Inc(FJSXDepth);
+  try
+    if FJSXDepth > MAX_JSX_DEPTH then
+      raise Exception.CreateFmt(
+        'JSX nesting depth exceeded %d at line %d, column %d (likely runaway scan on non-JSX input)',
+        [MAX_JSX_DEPTH, FLine, FColumn]);
 
-  AdvanceInput;
+    FHasJSX := True;
+    StartLine := FLine;
+    StartColumn := FColumn;
 
-  if CurrentChar = '>' then
-  begin
-    IsFragment := True;
-    TagName := '';
     AdvanceInput;
-  end
-  else
-  begin
-    IsFragment := False;
-    TagName := ReadJSXTagName;
-  end;
 
-  EmitMapped(FFactoryName + '(', StartLine, StartColumn);
+    if CurrentChar = '>' then
+    begin
+      IsFragment := True;
+      TagName := '';
+      AdvanceInput;
+    end
+    else
+    begin
+      IsFragment := False;
+      TagName := ReadJSXTagName;
+    end;
 
-  if IsFragment then
-  begin
-    Emit(FFragmentName);
-    Emit(', null');
-    EmitJSXChildren('');
-    Emit(')');
-    FLastTokenKind := ltkExpressionEnd;
-    Exit;
-  end;
+    EmitMapped(FFactoryName + '(', StartLine, StartColumn);
 
-  TagIsLowercase := (Length(TagName) > 0) and (TagName[1] in ['a'..'z']);
-  if TagIsLowercase then
-    Emit('"' + TagName + '"')
-  else
-    Emit(TagName);
+    if IsFragment then
+    begin
+      Emit(FFragmentName);
+      Emit(', null');
+      EmitJSXChildren('');
+      Emit(')');
+      FLastTokenKind := ltkExpressionEnd;
+      Exit;
+    end;
 
-  SkipWhitespace;
+    TagIsLowercase := (Length(TagName) > 0) and (TagName[1] in ['a'..'z']);
+    if TagIsLowercase then
+      Emit('"' + TagName + '"')
+    else
+      Emit(TagName);
 
-  IsSelfClosing := False;
-  if not IsAtEnd and (CurrentChar = '/') and (PeekAt(1) = '>') then
-  begin
-    IsSelfClosing := True;
-    AdvanceInput;
-    AdvanceInput;
-    Emit(', null)');
-    FLastTokenKind := ltkExpressionEnd;
-    Exit;
-  end;
+    SkipWhitespace;
 
-  if not IsAtEnd and (CurrentChar = '>') then
-  begin
-    AdvanceInput;
-    Emit(', null');
-    EmitJSXChildren(TagName);
-    Emit(')');
-    FLastTokenKind := ltkExpressionEnd;
-    Exit;
-  end;
+    IsSelfClosing := False;
+    if not IsAtEnd and (CurrentChar = '/') and (PeekAt(1) = '>') then
+    begin
+      IsSelfClosing := True;
+      AdvanceInput;
+      AdvanceInput;
+      Emit(', null)');
+      FLastTokenKind := ltkExpressionEnd;
+      Exit;
+    end;
 
-  Emit(', ');
-  EmitJSXAttributes(HadAttributes);
+    if not IsAtEnd and (CurrentChar = '>') then
+    begin
+      AdvanceInput;
+      Emit(', null');
+      EmitJSXChildren(TagName);
+      Emit(')');
+      FLastTokenKind := ltkExpressionEnd;
+      Exit;
+    end;
 
-  SkipWhitespace;
-  if not IsAtEnd and (CurrentChar = '/') and (PeekAt(1) = '>') then
-  begin
-    AdvanceInput;
-    AdvanceInput;
-    if not HadAttributes then
-      Emit('null');
-    Emit(')');
-    FLastTokenKind := ltkExpressionEnd;
-    Exit;
-  end;
+    Emit(', ');
+    EmitJSXAttributes(HadAttributes);
 
-  if not IsAtEnd and (CurrentChar = '>') then
-  begin
-    AdvanceInput;
-    if not HadAttributes then
-      Emit('null');
-    EmitJSXChildren(TagName);
-    Emit(')');
-    FLastTokenKind := ltkExpressionEnd;
-    Exit;
+    SkipWhitespace;
+    if not IsAtEnd and (CurrentChar = '/') and (PeekAt(1) = '>') then
+    begin
+      AdvanceInput;
+      AdvanceInput;
+      if not HadAttributes then
+        Emit('null');
+      Emit(')');
+      FLastTokenKind := ltkExpressionEnd;
+      Exit;
+    end;
+
+    if not IsAtEnd and (CurrentChar = '>') then
+    begin
+      AdvanceInput;
+      if not HadAttributes then
+        Emit('null');
+      EmitJSXChildren(TagName);
+      Emit(')');
+      FLastTokenKind := ltkExpressionEnd;
+      Exit;
+    end;
+  finally
+    Dec(FJSXDepth);
   end;
 end;
 
@@ -1035,6 +1111,26 @@ begin
           FLastTokenKind := ltkOperator;
         end;
       end;
+      '/':
+      begin
+        // Inside a JSX `{...}` expression, '/' may begin a regex literal —
+        // exactly the same false-positive trigger as in TransformSource.
+        // Without this case, '<name>' inside a regex body would be picked up
+        // by the '<' arm above and recurse on non-JSX content.
+        if FLastTokenKind in [ltkNone, ltkOperator] then
+          CopyRegexLiteral
+        else
+        begin
+          EmitChar(CurrentChar);
+          AdvanceInput;
+          if not IsAtEnd and (CurrentChar = '=') then
+          begin
+            EmitChar(CurrentChar);
+            AdvanceInput;
+          end;
+          FLastTokenKind := ltkOperator;
+        end;
+      end;
       ')', ']':
       begin
         EmitChar(CurrentChar);
@@ -1250,6 +1346,18 @@ begin
     if (C = '/') and (PeekAt(1) = '*') then
     begin
       CopyBlockComment;
+      Continue;
+    end;
+
+    // Regex literal: '/' at an expression-start position. Without this branch,
+    // the transformer would fall into CopyOperator on a single '/' and then
+    // happily scan the regex body as JS source — which means '<name>' inside
+    // a regex (named groups, character classes, etc.) gets mistaken for a
+    // JSX opening tag, sending TransformJSXElement / EmitJSXChildren into a
+    // runaway recursive descent.
+    if (C = '/') and IsJSXContext then
+    begin
+      CopyRegexLiteral;
       Continue;
     end;
 

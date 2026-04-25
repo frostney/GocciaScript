@@ -54,6 +54,39 @@ HARNESS_DIR = SCRIPT_DIR / "test262_harness"
 # ---------------------------------------------------------------------------
 
 
+def _recover_per_file_records(raw_json: str) -> list[dict] | None:
+    """Salvage per-file records from a runner JSON whose top-level
+    structure is broken.
+
+    Each per-file record is emitted by the runner on its own line in
+    the form ``{"file": "...", ..., "failedTests": [...]}`` (possibly
+    followed by a trailing comma).  When the surrounding "failedTests"
+    array gets corrupted (a known runner bug under heavy stall load),
+    we cannot ``json.loads`` the whole document but the per-file
+    objects are still well-formed and parseable individually.
+
+    Returns the recovered list, or None if nothing usable was found.
+    """
+    records: list[dict] = []
+    # Each line is either an entry like
+    #     {"file": "...", "passed": 0, ...},
+    # or
+    #     {"file": "...", "passed": 0, ...}
+    # Match a JSON object on a single line that starts with {"file":.
+    line_re = re.compile(r'^\s*(\{"file":\s*".*?\})(,?)\s*$')
+    for line in raw_json.splitlines():
+        m = line_re.match(line)
+        if not m:
+            continue
+        try:
+            obj = json.loads(m.group(1))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and "file" in obj:
+            records.append(obj)
+    return records or None
+
+
 def run(
     command: list[str], cwd: Path | None = None
 ) -> subprocess.CompletedProcess[str]:
@@ -351,6 +384,7 @@ def evaluate_suite(
     compat_var: bool = False,
     compat_function: bool = False,
     unsafe_function_constructor: bool = False,
+    jobs: int | None = None,
 ) -> dict:
     test_dir = suite_dir / "test"
     all_tests = discover_tests(suite_dir, categories, filter_glob)
@@ -444,186 +478,327 @@ def evaluate_suite(
     results: list[dict] = []
     start_time = time.monotonic()
 
-    # Phase 2: Positive + negative-runtime via a single GocciaTestRunner
-    # invocation.  The runner's own thread pool handles the parallelism
-    # internally, and its per-worker-idle watchdog keeps a stuck test
-    # from holding up the whole batch, so splitting into chunks here
-    # would only add per-process startup overhead.
+    # Phase 2: Positive + negative-runtime tests via GocciaTestRunner.
+    # Single batch invocation. Three layers of bounding, finest first:
+    #
+    #   1. --test-timeout  (cooperative, in-engine) — fires per test.
+    #      A slow test is marked TIMEOUT and the worker keeps draining
+    #      the queue. This is the *first call* for runaway JS.
+    #   2. --describe-timeout (cooperative) — bounds the wrapping
+    #      describe(); for test262's "1 describe + 1 test" wrappers
+    #      this rarely fires but stays armed defensively.
+    #   3. --timeout (cooperative, per-file) — final cooperative bound;
+    #      aborts the file if all three layers fail to fire on the test
+    #      (only possible if the VM is stuck not polling).
+    #
+    # The runner's per-worker-idle watchdog is the last-resort safety
+    # net for stalls in native Pascal code that no cooperative deadline
+    # can reach.  Per-file ground-truth records emitted by the runner
+    # are consumed below so we never have to guess pass/fail from
+    # aggregate counts.
     batch_tests = positive_tests + negative_runtime_tests
     if batch_tests:
-        with tempfile.TemporaryDirectory(prefix="test262-goccia.") as tmp:
-            temp_dir = Path(tmp)
-            file_to_test_id: dict[str, str] = {}
+        print(
+            f"Running {len(batch_tests)} tests via GocciaTestRunner ..."
+        )
 
-            print(
-                f"Generating {len(batch_tests)} wrapped test files "
-                f"for GocciaTestRunner ..."
-            )
-            for test_path, metadata, test_id in batch_tests:
-                source = test_path.read_text(encoding="utf-8")
-                body = strip_frontmatter(source)
-                description = metadata.get("description", test_id)
-                if isinstance(description, dict):
-                    description = str(description)
-                negative = metadata.get("negative")
-                includes = metadata.get("includes", [])
+        # Map test_id -> (test_path, metadata) so retries can re-render the
+        # file without rebuilding the eligibility scan.
+        test_ids_in_order = [tid for _, _, tid in batch_tests]
+        test_meta_by_id = {tid: (tp, md) for tp, md, tid in batch_tests}
 
-                flags = metadata.get("flags", [])
-                is_async = "async" in flags
-                if is_async and "doneprintHandle.js" not in includes:
-                    includes = [*includes, "doneprintHandle.js"]
-                harness_source = build_harness_source(includes, harness_files)
+        # Final classification per test_id; tests not yet in this map still
+        # need to be (re-)run.
+        final_by_id: dict[str, dict] = {}
 
-                if negative is not None and negative.get("phase") == "runtime":
-                    error_type = negative.get("type", "TypeError")
-                    wrapped = wrap_negative_runtime_test(
-                        harness_source, body, test_id, description, error_type
+        # Tests we've already seen stall in native code — we exclude them
+        # from retries so a single bad test cannot orphan the same worker
+        # again on the next attempt.
+        known_stalled: set[str] = set()
+
+        pending_ids = list(test_ids_in_order)
+
+        # Per-worker stalls bounded by jobs count; each retry reduces the
+        # queue by one stall worth of files.  10 retries is a generous
+        # ceiling for engines whose stall rate is less than ~1% — we break
+        # earlier on no-progress.
+        max_retries = 10
+        attempt = 0
+
+        while pending_ids and attempt < max_retries:
+            attempt += 1
+            if attempt > 1:
+                print(
+                    f"  Retry {attempt - 1}: re-running "
+                    f"{len(pending_ids)} unfinished tests "
+                    f"(skipping {len(known_stalled)} known stalls) ..."
+                )
+
+            with tempfile.TemporaryDirectory(prefix="test262-goccia.") as tmp:
+                temp_dir = Path(tmp)
+
+                for tid in pending_ids:
+                    test_path, metadata = test_meta_by_id[tid]
+                    source = test_path.read_text(encoding="utf-8")
+                    body = strip_frontmatter(source)
+                    description = metadata.get("description", tid)
+                    if isinstance(description, dict):
+                        description = str(description)
+                    negative = metadata.get("negative")
+                    includes = metadata.get("includes", [])
+
+                    flags = metadata.get("flags", [])
+                    is_async = "async" in flags
+                    if is_async and "doneprintHandle.js" not in includes:
+                        includes = [*includes, "doneprintHandle.js"]
+                    harness_source = build_harness_source(
+                        includes, harness_files
                     )
-                else:
-                    wrapped = wrap_positive_test(
-                        harness_source, body, test_id, description,
-                        is_async=is_async,
+
+                    if (negative is not None
+                            and negative.get("phase") == "runtime"):
+                        error_type = negative.get("type", "TypeError")
+                        wrapped = wrap_negative_runtime_test(
+                            harness_source, body, tid, description,
+                            error_type,
+                        )
+                    else:
+                        wrapped = wrap_positive_test(
+                            harness_source, body, tid, description,
+                            is_async=is_async,
+                        )
+
+                    safe_name = tid.replace("/", "__").replace("\\", "__")
+                    (temp_dir / safe_name).write_text(
+                        wrapped, encoding="utf-8"
                     )
 
-                safe_name = test_id.replace("/", "__").replace("\\", "__")
-                out_path = temp_dir / safe_name
-                out_path.write_text(wrapped, encoding="utf-8")
-                file_to_test_id[safe_name] = test_id
+                json_output = temp_dir / "__results.json"
 
-            json_output = temp_dir / "__results.json"
+                timeout_ms = timeout * 1000
+                runner_cmd = [
+                    str(test_runner),
+                    str(temp_dir),
+                    "--silent",
+                    f"--output={json_output}",
+                    f"--timeout={timeout_ms}",
+                    f"--test-timeout={timeout_ms}",
+                    f"--describe-timeout={timeout_ms}",
+                ]
+                if asi:
+                    runner_cmd.append("--asi")
+                if mode != "interpreted":
+                    runner_cmd.append(f"--mode={mode}")
+                if compat_var:
+                    runner_cmd.append("--compat-var")
+                if compat_function:
+                    runner_cmd.append("--compat-function")
+                if unsafe_function_constructor:
+                    runner_cmd.append("--unsafe-function-constructor")
+                if jobs is not None:
+                    runner_cmd.append(f"--jobs={jobs}")
 
-            runner_cmd = [
-                str(test_runner),
-                str(temp_dir),
-                "--silent",
-                f"--output={json_output}",
-                f"--timeout={timeout * 1000}",
-            ]
-            if asi:
-                runner_cmd.append("--asi")
-            if mode != "interpreted":
-                runner_cmd.append(f"--mode={mode}")
-            if compat_var:
-                runner_cmd.append("--compat-var")
-            if compat_function:
-                runner_cmd.append("--compat-function")
-            if unsafe_function_constructor:
-                runner_cmd.append("--unsafe-function-constructor")
-
-            print(f"Running GocciaTestRunner on {len(batch_tests)} tests ...")
-            try:
-                # SIGKILL backstop for the case where the runner itself
-                # deadlocks and its watchdog cannot fire.  Sized generously
-                # (serial worst case + grace) — under normal conditions the
-                # runner finishes well inside this bound.
-                runner_timeout = max(timeout * len(batch_tests), 120) + 60
-                process = subprocess.run(
-                    runner_cmd,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                    timeout=runner_timeout,
-                    check=False,
-                )
-                runner_output = (
-                    process.stderr.decode("utf-8", errors="replace")
-                ).strip()
-            except subprocess.TimeoutExpired:
-                runner_output = "GocciaTestRunner global timeout"
-                process = None
-
-            if json_output.is_file():
-                raw_json = json_output.read_bytes().decode(
-                    "utf-8", errors="replace"
-                )
-                clean_json = re.sub(
-                    r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw_json
-                )
+                runner_output = ""
                 try:
-                    tr_results = json.loads(clean_json)
-                except json.JSONDecodeError as e:
-                    print(f"  JSON parse error: {e}")
-                    summary["errors"] += len(batch_tests)
-                    for _, _, tid in batch_tests:
-                        results.append(
-                            {
-                                "id": tid,
-                                "status": "ERROR",
-                                "message": f"JSON parse error: {e}",
-                            }
+                    process = subprocess.run(
+                        runner_cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE,
+                        check=False,
+                    )
+                    runner_output = (
+                        process.stderr.decode("utf-8", errors="replace")
+                    ).strip()
+                    if process.returncode != 0 and runner_output:
+                        Path("/tmp/last_runner_stderr.txt").write_text(
+                            runner_output
                         )
-                    tr_results = None
+                except Exception as e:  # noqa: BLE001
+                    runner_output = f"Runner invocation failed: {e}"
 
-                if tr_results is not None:
-                    tr_passed = int(tr_results.get("passed", 0))
-                    tr_failed = int(tr_results.get("failed", 0))
-                    tr_failed_tests = tr_results.get("failedTests", [])
-
-                    summary["passed"] += tr_passed
-                    summary["failed"] += tr_failed
-
-                    failed_set: set[str] = set()
-                    failed_messages: dict[str, str] = {}
-                    for name in tr_failed_tests:
-                        m = re.search(r'in suite "test262:\s*(.+?)"', name)
-                        if m:
-                            tid = m.group(1)
-                            real_id = file_to_test_id.get(tid, tid)
-                            failed_set.add(real_id)
-                            failed_messages[real_id] = name
-                            continue
-                        first_line = name.split("\n")[0]
-                        m = re.match(r"test262:\s*(.+?)\s*>", first_line)
-                        if m:
-                            failed_set.add(m.group(1))
-                            failed_messages[m.group(1)] = name
-                            continue
-                        m2 = re.search(
-                            r"[/\\]([^/\\]+\.js)(?:\s*:\s*(.+))?$", first_line
-                        )
-                        if m2:
-                            fname = m2.group(1)
-                            test_id_guess = file_to_test_id.get(
-                                fname, fname.replace("__", "/")
+                tr_results: dict | None = None
+                if json_output.is_file():
+                    raw_json = json_output.read_bytes().decode(
+                        "utf-8", errors="replace"
+                    )
+                    clean_json = re.sub(
+                        r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw_json
+                    )
+                    try:
+                        tr_results = json.loads(clean_json)
+                    except json.JSONDecodeError as e:
+                        # The runner emits a top-level "failedTests"
+                        # array that can grow to tens of thousands of
+                        # entries when a stalled-worker run produces
+                        # many "Worker produced no result" placeholders.
+                        # That array is occasionally corrupted in the
+                        # serialised JSON (a separate runner-side bug),
+                        # but the per-file "results" array we actually
+                        # consume is well-formed.  Recover by parsing
+                        # each per-file record individually.
+                        recovered = _recover_per_file_records(clean_json)
+                        if recovered is not None:
+                            print(
+                                f"  JSON parse error at {e.pos}; "
+                                f"recovered {len(recovered)} per-file "
+                                f"records via regex fallback"
                             )
-                            failed_set.add(test_id_guess)
-                            failed_messages[test_id_guess] = name
+                            tr_results = {"results": recovered}
                         else:
-                            failed_set.add(name)
-                            failed_messages[name] = name
-
-                    for _, _, test_id in batch_tests:
-                        safe = test_id.replace("/", "__").replace("\\", "__")
-                        if test_id in failed_set or safe in failed_set:
-                            status = "FAIL"
-                            msg = failed_messages.get(
-                                test_id, failed_messages.get(safe, "")
+                            print(
+                                f"  JSON parse error at {e.pos} of "
+                                f"{len(clean_json)}: {e.msg}"
                             )
-                        else:
-                            status = "PASS"
-                            msg = ""
-                        results.append(
-                            {"id": test_id, "status": status, "message": msg}
-                        )
-
-                    elapsed = int(time.monotonic() - start_time)
+                            Path(
+                                "/tmp/last_runner_json.txt"
+                            ).write_text(clean_json)
+                            tr_results = None
+                else:
                     print(
-                        f"  {tr_passed} pass, {tr_failed} fail "
-                        f"({elapsed}s)"
+                        f"  Runner output file missing: {json_output} "
+                        f"(exit={process.returncode}, "
+                        f"stderr_bytes={len(runner_output)})"
                     )
-            else:
-                print("  TestRunner produced no JSON output")
-                if runner_output:
-                    for line in runner_output.split("\n")[:3]:
-                        print(f"    {line[:200]}")
-                summary["errors"] += len(batch_tests)
-                for _, _, test_id in batch_tests:
-                    results.append(
-                        {
-                            "id": test_id,
+
+                if tr_results is None:
+                    print("  TestRunner produced no usable JSON output")
+                    if runner_output:
+                        for line in runner_output.split("\n")[:10]:
+                            print(f"    {line[:200]}")
+                    for tid in pending_ids:
+                        final_by_id[tid] = {
+                            "id": tid,
                             "status": "ERROR",
-                            "message": runner_output[:300],
+                            "message": (runner_output[:300]
+                                        or "No runner output"),
                         }
+                        summary["errors"] += 1
+                    pending_ids = []
+                    break
+
+                # Ground truth: per-file records emitted by the runner.
+                file_results_by_safe: dict[str, dict] = {}
+                for fr in tr_results.get("results", []):
+                    fpath = fr.get("file", "")
+                    key = Path(fpath).name if fpath else ""
+                    if key:
+                        file_results_by_safe[key] = fr
+
+                next_pending: list[str] = []
+                attempt_stalls = 0
+                for tid in pending_ids:
+                    safe = tid.replace("/", "__").replace("\\", "__")
+                    fr = file_results_by_safe.get(safe)
+                    if fr is None:
+                        final_by_id[tid] = {
+                            "id": tid,
+                            "status": "ERROR",
+                            "message": "Runner produced no per-file record",
+                        }
+                        summary["errors"] += 1
+                        continue
+
+                    f_error = fr.get("error", "") or ""
+                    f_failed = int(fr.get("failed", 0))
+                    f_passed = int(fr.get("passed", 0))
+                    f_total = int(fr.get("totalTests", 0))
+                    f_failed_tests = fr.get("failedTests", []) or []
+
+                    # Distinguish the two stall categories from real
+                    # outcomes.  Stall = the watchdog actually abandoned
+                    # the worker on this file; queue-not-drained = a peer
+                    # stall left this file untouched, retry will likely
+                    # finish it on a fresh pool.
+                    is_stalled = "TIMEOUT (worker stalled" in f_error
+                    is_no_result = (
+                        "Worker produced no result" in f_error
                     )
+
+                    if is_stalled:
+                        known_stalled.add(tid)
+                        attempt_stalls += 1
+                        final_by_id[tid] = {
+                            "id": tid,
+                            "status": "TIMEOUT",
+                            "message": f_error,
+                        }
+                        summary["timeouts"] += 1
+                        continue
+
+                    if is_no_result:
+                        next_pending.append(tid)
+                        continue
+
+                    if f_failed > 0:
+                        final_by_id[tid] = {
+                            "id": tid,
+                            "status": "FAIL",
+                            "message": (
+                                "; ".join(f_failed_tests)
+                                or f_error
+                                or "Test failed"
+                            ),
+                        }
+                        summary["failed"] += 1
+                    elif f_passed > 0 and f_total > 0:
+                        final_by_id[tid] = {
+                            "id": tid,
+                            "status": "PASS",
+                            "message": "",
+                        }
+                        summary["passed"] += 1
+                    elif f_error:
+                        final_by_id[tid] = {
+                            "id": tid,
+                            "status": "ERROR",
+                            "message": f_error,
+                        }
+                        summary["errors"] += 1
+                    else:
+                        final_by_id[tid] = {
+                            "id": tid,
+                            "status": "ERROR",
+                            "message": "File ran but registered no tests",
+                        }
+                        summary["errors"] += 1
+
+                if attempt_stalls > 0:
+                    print(
+                        f"  Attempt {attempt}: "
+                        f"{attempt_stalls} new native-code stall(s); "
+                        f"{len(next_pending)} files still pending"
+                    )
+
+                # Halt when a retry produces no progress — re-running the
+                # exact same set won't break the loop.
+                if (len(next_pending) == len(pending_ids)
+                        and attempt_stalls == 0):
+                    print(
+                        f"  No progress on retry; "
+                        f"{len(next_pending)} tests remain unprocessed"
+                    )
+                    pending_ids = []
+                    break
+
+                pending_ids = next_pending
+
+        # Anything still pending after retries is a queue tail no fresh
+        # pool managed to drain.  Surface explicitly.
+        for tid in pending_ids:
+            final_by_id[tid] = {
+                "id": tid,
+                "status": "ERROR",
+                "message": (
+                    "Worker produced no result after "
+                    f"{attempt} attempts (queue never drained)"
+                ),
+            }
+            summary["errors"] += 1
+
+        # Append in the original submission order so downstream consumers
+        # see results in a stable order.
+        for tid in test_ids_in_order:
+            results.append(final_by_id[tid])
 
     # Phase 3: Negative parse-phase tests via ScriptLoader
     if negative_parse_tests:
@@ -797,6 +972,12 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Disable the Function constructor.",
     )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=None,
+        help="Parallel worker count forwarded to GocciaTestRunner --jobs.",
+    )
     return parser.parse_args()
 
 
@@ -861,6 +1042,7 @@ def main() -> int:
         compat_var=args.compat_var,
         compat_function=args.compat_function,
         unsafe_function_constructor=args.unsafe_function_constructor,
+        jobs=args.jobs,
     )
 
     if args.output is not None:
