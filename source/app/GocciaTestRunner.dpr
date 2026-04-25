@@ -1012,9 +1012,6 @@ procedure TTestRunnerApp.WriteResultsJSON(const AResult: TAggregatedTestResult; 
 var
   Lines: TStringList;
   TotalNanoseconds: Int64;
-  FailedTests: TGocciaValue;
-  FailedArray: TGocciaArrayValue;
-  I: Integer;
   IsBytecodeMode: Boolean;
 begin
   IsBytecodeMode := EngineOptions.Mode.Matches(emBytecode);
@@ -1042,25 +1039,17 @@ begin
     Lines.Add(Format('  "executeTimeNanoseconds": %d,', [AResult.TotalExecNanoseconds]));
     Lines.Add(Format('  "totalEngineNanoseconds": %d,', [TotalNanoseconds]));
 
-    FailedTests := AResult.TestResult.GetProperty('failedTests');
-    Lines.Add('  "failedTests": [');
-    if FailedTests is TGocciaArrayValue then
-    begin
-      FailedArray := TGocciaArrayValue(FailedTests);
-      for I := 0 to FailedArray.Elements.Count - 1 do
-      begin
-        if I < FailedArray.Elements.Count - 1 then
-          Lines.Add(Format('    "%s",', [EscapeJSONString(FailedArray.Elements[I].ToStringLiteral.Value)]))
-        else
-          Lines.Add(Format('    "%s"', [EscapeJSONString(FailedArray.Elements[I].ToStringLiteral.Value)]));
-      end;
-    end;
-    Lines.Add('  ],');
-
     { Per-file results. External harnesses (the test262 driver) use
       this to map each input file to an explicit pass/fail outcome
-      instead of guessing from the aggregated failedTests list. When
-      no files were run this is an empty array. }
+      with its own failedTests list — there is no top-level aggregate.
+      When no files were run this is an empty array.
+
+      A previous version emitted a redundant top-level "failedTests"
+      array reading from AResult.TestResult.GetProperty, but that read
+      raced with abandoned-worker writes during test262 runs and
+      occasionally produced torn AnsiString refcount reads, corrupting
+      the serialised JSON. The per-file records below carry the same
+      information and are written from main-thread-owned data only. }
     WriteFileResults(Lines, AResult);
 
     Lines.Add('}');

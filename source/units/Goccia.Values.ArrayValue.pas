@@ -1228,7 +1228,12 @@ begin
   EndIndex := NormalizeRelativeIndex(EndIndex, View.Len);
 
   // Step 7: Let count be max(final - k, 0)
-  // Step 8: Let A be ArraySpeciesCreate(O, count)
+  // Step 8: Let A be ArraySpeciesCreate(O, count) — ArrayCreate throws
+  // RangeError if RawLen > 2^32 - 1.  Mirrors the guard in ArrayMap: a
+  // proxy-wrapped array can return a pathological length that bypasses
+  // the integer-truncated View.Len, so we must check RawLen explicitly
+  // before allocating the result array.
+  View.CheckArrayCreateLen;
   if Assigned(View.Arr) then
     ResultArray := ArraySpeciesCreate(View.Arr, Max(EndIndex - StartIndex, 0))
   else
