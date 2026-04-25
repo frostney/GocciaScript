@@ -455,6 +455,7 @@ var
   Key: string;
   Idx: Int64;
   I: Integer;
+  KeyScanCounter: Integer;
 begin
   if AStartInclusive >= AEndExclusive then
   begin
@@ -463,6 +464,7 @@ begin
   end;
   Seen := TDictionary<Int64, Boolean>.Create;
   Found := TList<Int64>.Create;
+  KeyScanCounter := 0;
   try
     Current := AObj;
     while Assigned(Current) do
@@ -474,6 +476,13 @@ begin
       Keys := Current.GetOwnPropertyKeys;
       for Key in Keys do
       begin
+        // Per-layer poll above only fires once per prototype hop; a single
+        // layer with millions of own keys would otherwise iterate
+        // uninterrupted.  Mask-poll every 1024 keys keeps the cooperative
+        // timeout reachable without dominating throughput.
+        Inc(KeyScanCounter);
+        if (KeyScanCounter and 1023) = 0 then
+          CheckExecutionTimeout;
         if not TryParseArrayIndex(Key, Idx) then Continue;
         if (Idx < AStartInclusive) or (Idx >= AEndExclusive) then Continue;
         if Seen.ContainsKey(Idx) then Continue;
@@ -482,6 +491,9 @@ begin
       end;
       Current := Current.Prototype;
     end;
+    // Sorting a large Found can itself stall; poll once before handing off
+    // to TList.Sort so the caller's deadline is not bypassed by the sort.
+    CheckExecutionTimeout;
     Found.Sort(TComparer<Int64>.Construct(CompareInt64));
     SetLength(Result, Found.Count);
     for I := 0 to Found.Count - 1 do
