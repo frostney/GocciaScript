@@ -465,6 +465,24 @@ export function highlightGeneric(src: string, lang: string): Token[] {
       i = j;
       continue;
     }
+    // Pascal block-comment forms — gated to `pascal` so we don't swallow
+    // object literals in C-family code.
+    if (lang === "pascal" && ch === "{") {
+      let j = i + 1;
+      while (j < src.length && src[j] !== "}") j++;
+      j = Math.min(j + 1, src.length);
+      push("c", src.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (lang === "pascal" && ch === "(" && src[i + 1] === "*") {
+      let j = i + 2;
+      while (j < src.length - 1 && !(src[j] === "*" && src[j + 1] === ")")) j++;
+      j = Math.min(j + 2, src.length);
+      push("c", src.slice(i, j));
+      i = j;
+      continue;
+    }
     if (ch === '"' || ch === "'" || ch === "`") {
       const q = ch;
       let j = i + 1;

@@ -18,8 +18,12 @@ async function exists(p) {
   try {
     await fs.access(p);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    // Only "missing" should map to false. Permission / IO failures must
+    // propagate so the prebuild aborts loudly instead of silently skipping
+    // copies.
+    if (err && err.code === "ENOENT") return false;
+    throw err;
   }
 }
 
@@ -47,12 +51,14 @@ async function main() {
 
   const docCount = await copyMarkdownTree(docsSrc, docsDest);
 
-  if (await exists(readmeSrc)) {
+  const readmeCopied = await exists(readmeSrc);
+  if (readmeCopied) {
     await fs.copyFile(readmeSrc, path.join(docsDest, "readme.md"));
   }
 
+  const suffix = readmeCopied ? " + README" : "";
   console.log(
-    `[sync-docs] copied ${docCount} doc files + README from ${path.relative(websiteRoot, repoRoot)}/docs → content/docs`,
+    `[sync-docs] copied ${docCount} doc files${suffix} from ${path.relative(websiteRoot, repoRoot)}/docs → content/docs`,
   );
 }
 

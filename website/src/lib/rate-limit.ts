@@ -57,12 +57,26 @@ export function rateLimit(key: string): RateLimitResult {
 }
 
 export function clientIp(headers: Headers): string {
-  const fwd = headers.get("x-forwarded-for");
-  if (fwd) return fwd.split(",")[0]?.trim() || "unknown";
-  return (
-    headers.get("x-real-ip") ??
+  // Prefer headers that platforms inject themselves and that clients can't
+  // forge end-to-end (Cloudflare, Vercel, single-hop reverse proxies).
+  const trusted =
     headers.get("cf-connecting-ip") ??
-    headers.get("x-vercel-forwarded-for") ??
-    "unknown"
-  );
+    headers.get("x-real-ip") ??
+    headers.get("x-vercel-forwarded-for");
+  if (trusted) return trusted.trim() || "unknown";
+
+  // Last resort: `x-forwarded-for` is freely client-spoofable, so prefer the
+  // *right-most* segment — that's the address the closest trusted proxy
+  // appended, harder for the original client to control. Still imperfect
+  // when no proxy is in front of us, but better than reading the left-most
+  // (which is whatever the client said).
+  const fwd = headers.get("x-forwarded-for");
+  if (fwd) {
+    const parts = fwd
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (parts.length) return parts[parts.length - 1];
+  }
+  return "unknown";
 }

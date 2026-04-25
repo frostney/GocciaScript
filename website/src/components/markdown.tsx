@@ -361,7 +361,7 @@ export function Markdown({ source }: { source: string }) {
               </table>
             );
           case "code":
-            if (b.lang === "mermaid") {
+            if ((b.lang || "").trim().toLowerCase() === "mermaid") {
               return <MermaidBlock key={idx} code={b.code} />;
             }
             return (

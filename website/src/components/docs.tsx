@@ -71,7 +71,9 @@ export function Docs({
       </aside>
 
       <div>
-        {source ? (
+        {/* `null` is reserved for "file isn't synced". An empty string is a
+            real (if blank) doc and must still render via `Markdown`. */}
+        {source !== null ? (
           <Markdown source={source} />
         ) : (
           <div className="docs-main">

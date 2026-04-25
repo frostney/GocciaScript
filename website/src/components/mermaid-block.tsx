@@ -9,6 +9,14 @@ type State =
 
 let renderSeq = 0;
 
+/** Read the current document theme. Server-rendered or pre-mount → `light`. */
+function readTheme(): "light" | "dark" {
+  if (typeof document === "undefined") return "light";
+  return document.documentElement.dataset.theme === "espresso"
+    ? "dark"
+    : "light";
+}
+
 /**
  * Render a Mermaid diagram. Uses `mermaid.run()` against an off-screen DOM
  * node and captures the resulting SVG into state — avoids the
@@ -24,6 +32,23 @@ let renderSeq = 0;
  */
 export function MermaidBlock({ code }: { code: string }) {
   const [state, setState] = useState<State>({ kind: "loading" });
+  const [theme, setTheme] = useState<"light" | "dark">(() => readTheme());
+
+  // Re-render when the user toggles the site theme. We watch
+  // `data-theme` on `<html>` rather than depending on a context to keep the
+  // component decoupled from any provider.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const obs = new MutationObserver(() => {
+      const next = readTheme();
+      setTheme((prev) => (prev === next ? prev : next));
+    });
+    obs.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
+    return () => obs.disconnect();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -31,13 +56,14 @@ export function MermaidBlock({ code }: { code: string }) {
       try {
         const m = await import("mermaid");
         const mermaid = m.default;
-        const dark =
-          typeof document !== "undefined" &&
-          document.documentElement.dataset.theme === "espresso";
         mermaid.initialize({
           startOnLoad: false,
-          theme: dark ? "dark" : "neutral",
-          securityLevel: "loose",
+          theme: theme === "dark" ? "dark" : "neutral",
+          // `strict` disables click handlers and HTML interpolation in
+          // diagram source. Our diagrams come from our own docs, but XSS
+          // posture is "deny by default" — we don't need either feature, so
+          // there's no reason to grant them.
+          securityLevel: "strict",
           fontFamily: "ui-monospace, monospace",
         });
 
@@ -83,7 +109,7 @@ export function MermaidBlock({ code }: { code: string }) {
     return () => {
       cancelled = true;
     };
-  }, [code]);
+  }, [code, theme]);
 
   if (state.kind === "error") {
     return (

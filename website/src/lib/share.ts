@@ -5,6 +5,7 @@ export type SharePayload = {
   code: string;
   mode?: string;
   asi?: boolean;
+  version?: string;
 };
 
 function toBase64Url(bytes: Uint8Array): string {
@@ -34,8 +35,9 @@ export function decodeShare(s: string): SharePayload | null {
     if (typeof parsed.code !== "string") return null;
     return {
       code: parsed.code,
-      mode: parsed.mode,
+      mode: typeof parsed.mode === "string" ? parsed.mode : undefined,
       asi: typeof parsed.asi === "boolean" ? parsed.asi : undefined,
+      version: typeof parsed.version === "string" ? parsed.version : undefined,
     };
   } catch {
     return null;

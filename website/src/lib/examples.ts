@@ -8,7 +8,6 @@ export type Example = {
   label: string;
   desc: string;
   code: string;
-  output: OutputLine[];
 };
 
 export const EXAMPLES: Example[] = [
@@ -19,10 +18,6 @@ export const EXAMPLES: Example[] = [
     code: `// Write your GocciaScript here.
 
 `,
-    output: [
-      { kind: "meta", text: "› goccia run <stdin>" },
-      { kind: "meta", text: "— exit 0 · nothing to print" },
-    ],
   },
   {
     id: "types",
@@ -56,10 +51,6 @@ const cart: LineItem[] = [
 
 console.log("Items:", cart.length);
 console.log("Total:", format(subtotal(cart), "EUR"));`,
-    output: [
-      { kind: "log", text: "Items: 2" },
-      { kind: "log", text: "Total: €9.00" },
-    ],
   },
   {
     id: "enums",
@@ -92,12 +83,6 @@ console.log(OrderStatus.Brewing, "→", describe(OrderStatus.Brewing));
 console.log(OrderStatus[2], "→", describe(2));
 console.log("Paid with:", PaymentMethod.Card);
 console.log(Object.isFrozen(OrderStatus));`,
-    output: [
-      { kind: "log", text: "1 → in the portafilter" },
-      { kind: "log", text: "Ready → ready for pickup" },
-      { kind: "log", text: "Paid with: card" },
-      { kind: "log", text: "true" },
-    ],
   },
   {
     id: "coffee",
@@ -129,15 +114,6 @@ const total = shop.calculateTotal(order);
 console.log(\`Welcome to \${shop.name}!\`);
 console.log(\`Your order total: $\${total.toFixed(2)}\`);
 console.log("Menu:", shop.getMenu());`,
-    output: [
-      { kind: "log", text: "Welcome to Goccia Coffee!" },
-      { kind: "log", text: "Your order total: $6.50" },
-      {
-        kind: "log",
-        text: 'Menu: [ "Arabica blend", "Robusta blend", "Ethiopian blend" ]',
-      },
-      { kind: "meta", text: "— executed in 3.1ms via tree-walk interpreter" },
-    ],
   },
   {
     id: "coffee-typed",
@@ -184,10 +160,6 @@ const shop = new CoffeeShop();
 const total = shop.total(["Espresso", "Latte"], DrinkSize.Medium, "EUR");
 console.log(\`Welcome to \${shop.name}!\`);
 console.log(\`Your total: \${total}\`);`,
-    output: [
-      { kind: "log", text: "Welcome to Goccia Coffee!" },
-      { kind: "log", text: "Your total: €7.15" },
-    ],
   },
   {
     id: "fetch",
@@ -213,15 +185,6 @@ const results = await Promise.all([
   Promise.resolve("cortado"),
 ]);
 console.log("Brew queue:", results);`,
-    output: [
-      { kind: "log", text: "Today's dad joke:" },
-      {
-        kind: "log",
-        text: "Why don't scientists trust atoms? Because they make up everything.",
-      },
-      { kind: "log", text: 'Brew queue: [ "espresso", "latte", "cortado" ]' },
-      { kind: "meta", text: "— fetch is sandboxed to GET/HEAD only" },
-    ],
   },
   {
     id: "temporal",
@@ -244,18 +207,6 @@ console.log("Milestones:", milestones);
 const delivery = Temporal.PlainDate.from("2026-07-30");
 const span = kickoff.until(delivery, { largestUnit: "months" });
 console.log("Time to ship:", span.toString());`,
-    output: [
-      {
-        kind: "log",
-        text: "Now in Rome: 2026-04-24T11:19:00+02:00[Europe/Rome]",
-      },
-      { kind: "log", text: "Kickoff: 2026-05-01" },
-      {
-        kind: "log",
-        text: 'Milestones: [ "2026-05-31", "2026-06-30", "2026-07-30" ]',
-      },
-      { kind: "log", text: "Time to ship: P2M29D" },
-    ],
   },
   {
     id: "data",
@@ -280,16 +231,6 @@ console.log("Features:", Object.keys(config.features));
 const csv = "name,price\\nespresso,2.5\\nlatte,4.0";
 const rows = CSV.parse(csv, { header: true });
 console.log("Menu rows:", rows);`,
-    output: [
-      { kind: "log", text: "Package: goccia v2027.1.0" },
-      { kind: "log", text: "App name: GocciaScript" },
-      { kind: "log", text: "Host: gocciascript.dev" },
-      { kind: "log", text: 'Features: [ "sandbox", "temporal" ]' },
-      {
-        kind: "log",
-        text: 'Menu rows: [ { name: "espresso", price: "2.5" }, { name: "latte", price: "4.0" } ]',
-      },
-    ],
   },
   {
     id: "binary",
@@ -313,21 +254,6 @@ const enc = new TextEncoder();
 const bytes = enc.encode("Goccia ☕");
 console.log("bytes:", bytes);
 console.log("decoded:", new TextDecoder().decode(bytes));`,
-    output: [
-      {
-        kind: "log",
-        text: 'u32: [ "0xdeadbeef", "0xc0ffee42", "0x0", "0x0" ]',
-      },
-      {
-        kind: "log",
-        text: "u8 : [ 239, 190, 173, 222, 66, 238, 255, 192, 0, 0, 0, 0, 0, 0, 0, 0 ]",
-      },
-      {
-        kind: "log",
-        text: "bytes: Uint8Array(9) [ 71, 111, 99, 99, 105, 97, 32, 226, ... ]",
-      },
-      { kind: "log", text: "decoded: Goccia ☕" },
-    ],
   },
   {
     id: "decorators",
@@ -363,21 +289,6 @@ class Math2 {
 
 const m = new Math2();
 console.log("fib(6) =", m.fib(6));`,
-    output: [
-      { kind: "log", text: "→ fib(6)" },
-      { kind: "log", text: "→ fib(5)" },
-      { kind: "log", text: "→ fib(4)" },
-      { kind: "log", text: "→ fib(3)" },
-      { kind: "log", text: "→ fib(2)" },
-      { kind: "log", text: "→ fib(1)" },
-      { kind: "log", text: "← 1" },
-      { kind: "log", text: "← 1" },
-      { kind: "log", text: "← 2" },
-      { kind: "log", text: "← 3" },
-      { kind: "log", text: "← 5" },
-      { kind: "log", text: "← 8" },
-      { kind: "log", text: "fib(6) = 8" },
-    ],
   },
   {
     id: "fibfizz",
@@ -421,16 +332,6 @@ for (const n of new FibIterator()) {
   seq.push(n);
 }
 console.log("First 10 fib:", seq);`,
-    output: [
-      {
-        kind: "log",
-        text: "1 2 Fizz 4 Buzz Fizz 7 8 Fizz Buzz 11 Fizz 13 14 FizzBuzz",
-      },
-      {
-        kind: "log",
-        text: "First 10 fib: [ 0, 1, 1, 2, 3, 5, 8, 13, 21, 34 ]",
-      },
-    ],
   },
 ];
 

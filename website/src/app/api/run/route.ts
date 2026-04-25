@@ -38,6 +38,29 @@ type RunBody = {
   asi?: boolean;
 };
 
+/** All early-error responses (rate limit, bad body, oversize) follow this
+ *  same shape, so the client only ever has to read `error.message` /
+ *  `error.code`. The runner's own structured `error` (different schema —
+ *  `name`, `line`, `column`, `stack`, …) lives on the success-path body
+ *  alongside `output` / `value` / `timing` and is not affected. */
+type TransportError = {
+  message: string;
+  code:
+    | "RATE_LIMIT"
+    | "INVALID_JSON"
+    | "MISSING_CODE"
+    | "CODE_TOO_LARGE"
+    | "SPAWN_FAILED";
+};
+
+function transportError(
+  err: TransportError,
+  init?: ResponseInit & { extra?: Record<string, unknown> },
+): Response {
+  const { extra, ...rest } = init ?? {};
+  return NextResponse.json({ error: err, ...(extra ?? {}) }, rest);
+}
+
 type RunnerJson = {
   ok: boolean;
   value: unknown;
@@ -65,8 +88,8 @@ export async function POST(req: Request) {
   const rl = rateLimit(`run:${ip}`);
   if (!rl.ok) {
     const retryAfter = Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000));
-    return NextResponse.json(
-      { error: "rate limit exceeded", retryAfter },
+    return transportError(
+      { message: "rate limit exceeded", code: "RATE_LIMIT" },
       {
         status: 429,
         headers: {
@@ -75,6 +98,7 @@ export async function POST(req: Request) {
           "X-RateLimit-Remaining": "0",
           "X-RateLimit-Reset": String(Math.ceil(rl.resetAt / 1000)),
         },
+        extra: { retryAfter },
       },
     );
   }
@@ -83,16 +107,28 @@ export async function POST(req: Request) {
   try {
     body = (await req.json()) as RunBody;
   } catch {
-    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
+    return transportError(
+      { message: "invalid JSON body", code: "INVALID_JSON" },
+      { status: 400 },
+    );
   }
 
   const code = typeof body.code === "string" ? body.code : "";
   if (!code) {
-    return NextResponse.json({ error: "code is required" }, { status: 400 });
+    return transportError(
+      { message: "code is required", code: "MISSING_CODE" },
+      { status: 400 },
+    );
   }
-  if (code.length > MAX_CODE_BYTES) {
-    return NextResponse.json(
-      { error: `code exceeds ${MAX_CODE_BYTES} bytes` },
+  // UTF-16 code-unit count (`code.length`) under-counts for non-BMP source —
+  // measure the actual bytes that will hit the runner's stdin instead.
+  const codeBytes = Buffer.byteLength(code, "utf8");
+  if (codeBytes > MAX_CODE_BYTES) {
+    return transportError(
+      {
+        message: `code exceeds ${MAX_CODE_BYTES} bytes`,
+        code: "CODE_TOO_LARGE",
+      },
       { status: 413 },
     );
   }
@@ -121,9 +157,31 @@ export async function POST(req: Request) {
       resolve(res);
     };
 
+    // Build a minimal allowlisted env so we don't forward server secrets
+    // (DB URLs, API tokens, deploy-platform vars, …) into the sandboxed
+    // loader. Only the variables the binary itself needs are passed through.
+    // Typed as `NodeJS.ProcessEnv` (string | undefined values) so spawn's
+    // overload signatures resolve correctly.
+    const ALLOWED_ENV = [
+      "PATH",
+      "HOME",
+      "TMPDIR",
+      "LANG",
+      "LC_ALL",
+      "TZ",
+      // Next.js augments `ProcessEnv` to require `NODE_ENV`; passing it
+      // through is also harmless for the loader.
+      "NODE_ENV",
+    ];
+    const childEnv: Record<string, string | undefined> = { NO_COLOR: "1" };
+    for (const k of ALLOWED_ENV) {
+      const v = process.env[k];
+      if (typeof v === "string") childEnv[k] = v;
+    }
+
     const child = spawn(binary, args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, NO_COLOR: "1" },
+      env: childEnv as NodeJS.ProcessEnv,
     });
 
     let stdoutBuf = "";
@@ -156,12 +214,12 @@ export async function POST(req: Request) {
     child.on("error", (err) => {
       clearTimeout(killTimer);
       finish(
-        NextResponse.json(
+        transportError(
           {
-            error: `spawn failed: ${err.message}`,
-            binary,
+            message: `spawn failed: ${err.message}`,
+            code: "SPAWN_FAILED",
           },
-          { status: 500 },
+          { status: 500, extra: { binary } },
         ),
       );
     });

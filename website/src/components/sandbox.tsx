@@ -16,7 +16,8 @@ import {
   TerminalIcon,
 } from "@/components/icons";
 
-const TOOL_CALL_TASK = "Summarize this month's transactions and find outliers.";
+const TOOL_CALL_TASK =
+  "Summarize the latest transaction batch and find outliers.";
 
 type ToolStep = { tool: string; call: string; role: string };
 type ToolCost = {
@@ -41,22 +42,22 @@ const TOOL_CALL_FLOWS: { bash: ToolFlow; goccia: ToolFlow } = {
       { tool: "bash", call: "ls /tmp/agent/transactions/", role: "discover" },
       {
         tool: "bash",
-        call: "cat /tmp/agent/transactions/2026-04.json",
+        call: "cat /tmp/agent/transactions/transactions.current.json",
         role: "load",
       },
       {
         tool: "bash",
-        call: "jq '[.[].amount] | add' 2026-04.json",
+        call: "jq '[.[].amount] | add' transactions.current.json",
         role: "sum",
       },
       {
         tool: "bash",
-        call: "jq '[.[].amount] | add / length' 2026-04.json",
+        call: "jq '[.[].amount] | add / length' transactions.current.json",
         role: "average",
       },
       {
         tool: "bash",
-        call: "jq '[.[] | select(.amount > 280)]' 2026-04.json",
+        call: "jq '[.[] | select(.amount > 280)]' transactions.current.json",
         role: "outliers",
       },
     ],
@@ -206,7 +207,7 @@ const sandbox = new Goccia({ timeout: 500, memory: 64 << 20 });
 
 await generateText({
   model: openai("gpt-5"),
-  prompt: "Summarize this month's transactions and find outliers.",
+  prompt: "Summarize the latest transaction batch and find outliers.",
   tools: {
     run_code: tool({
       description: "Execute GocciaScript in a sandbox",

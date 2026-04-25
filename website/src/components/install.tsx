@@ -65,7 +65,13 @@ const METHODS: Method[] = [
   },
 ];
 
-function CopyableCommand({ command }: { command: string }) {
+function CopyableCommand({
+  command,
+  language = "shell",
+}: {
+  command: string;
+  language?: "shell" | "ts";
+}) {
   const [copyTick, setCopyTick] = useState(0);
   const copy = async () => {
     let ok = false;
@@ -102,7 +108,7 @@ function CopyableCommand({ command }: { command: string }) {
       </button>
       <pre className="install-block-pre">
         <code>
-          <HighlightedGeneric code={command} language="ts" />
+          <HighlightedGeneric code={command} language={language} />
         </code>
       </pre>
     </div>
@@ -190,7 +196,7 @@ export function Install({ release }: { release: ReleaseInfo | null }) {
             <section key={m.id} id={m.id} className="install-method">
               <AnchorH2 id={m.id}>{m.label}</AnchorH2>
               <p>{m.description}</p>
-              <CopyableCommand command={m.command} />
+              <CopyableCommand command={m.command} language={m.language} />
             </section>
           ))}
         </div>

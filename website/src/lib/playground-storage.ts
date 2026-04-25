@@ -8,7 +8,19 @@ function read(): CodeMap {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as unknown;
-    if (parsed && typeof parsed === "object") return parsed as CodeMap;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    // Build a fresh, prototype-less Record by copying only own string-valued
+    // entries. Defends against:
+    //   • arrays (length keys, etc.)
+    //   • objects with __proto__ / inherited properties
+    //   • non-string values stored under our key by stale clients
+    const map: CodeMap = Object.create(null);
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === "string") map[k] = v;
+    }
+    return map;
   } catch {}
   return {};
 }

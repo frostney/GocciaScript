@@ -204,34 +204,31 @@ export const DOC_PAGES: DocPage[] = [
 
 // Mapping used by markdown.tsx to resolve cross-doc links like
 // `docs/architecture.md` (or `CONTRIBUTING.md`) → /docs/<id>.
-export const DOC_HREF_MAP: Record<string, string> = {
-  language: "language",
-  "language-tables": "language-tables",
-  "built-ins": "built-ins",
-  "built-ins-temporal": "built-ins-temporal",
-  "built-ins-binary-data": "built-ins-binary-data",
-  "built-ins-data-formats": "built-ins-data-formats",
-  errors: "errors",
-  architecture: "architecture",
-  interpreter: "interpreter",
-  "bytecode-vm": "bytecode-vm",
-  "core-patterns": "core-patterns",
-  "value-system": "value-system",
-  "garbage-collector": "garbage-collector",
-  "decision-log": "decision-log",
-  "adding-built-in-types": "adding-built-in-types",
-  embedding: "embedding",
-  testing: "testing",
-  "testing-api": "testing-api",
-  benchmarks: "benchmarks",
-  "build-system": "build-system",
-  profiling: "profiling",
-  goals: "goals",
-  tutorial: "tutorial",
-  "contributing/workflow": "contributing-workflow",
-  "contributing/code-style": "contributing-code-style",
-  "contributing/tooling": "contributing-tooling",
+//
+// Generated from `DOC_PAGES` so a new doc only requires adding one entry.
+// The basename (the page's `file` minus extension) maps to its `id`, the
+// full slashed path also maps to the `id`, and a small set of legacy
+// alias keys (`CONTRIBUTING`, `AGENTS`, `LICENSE`) are merged in
+// explicitly so cross-links from synced repo-root files keep resolving.
+const LEGACY_ALIASES: Record<string, string> = {
   CONTRIBUTING: "contributing-workflow",
   AGENTS: "contributing-workflow",
   LICENSE: "contributing-workflow",
 };
+
+function buildDocHrefMap(): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const page of DOC_PAGES) {
+    const stripped = page.file.replace(/\.md$/i, "");
+    map[stripped] = page.id;
+    const lastSlash = stripped.lastIndexOf("/");
+    if (lastSlash >= 0) {
+      // Also accept the basename alone, so links like `tooling.md` from a
+      // sibling file resolve to the right page.
+      map[stripped.slice(lastSlash + 1)] = page.id;
+    }
+  }
+  return { ...map, ...LEGACY_ALIASES };
+}
+
+export const DOC_HREF_MAP: Record<string, string> = buildDocHrefMap();

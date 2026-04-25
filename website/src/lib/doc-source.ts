@@ -17,7 +17,18 @@ export async function readDocSource(id: string): Promise<string | null> {
   const full = path.join(DOCS_ROOT, page.file);
   try {
     return await fs.readFile(full, "utf8");
-  } catch {
-    return null;
+  } catch (err) {
+    // "Missing" is the documented stub-rendering case; anything else
+    // (permissions, disk error, …) is a real problem the operator should
+    // see, not silently mask as "not synced".
+    if (
+      err &&
+      typeof err === "object" &&
+      "code" in err &&
+      (err as { code?: string }).code === "ENOENT"
+    ) {
+      return null;
+    }
+    throw err;
   }
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { HighlightedCode } from "@/components/highlighted-code";
 import {
   CopyIcon,
@@ -34,6 +34,14 @@ type PlaygroundProps = {
 
 export function Playground({ stableTags = [] }: PlaygroundProps) {
   const params = useSearchParams();
+
+  // Stable per-render IDs so `<label htmlFor>` / `aria-labelledby` reliably
+  // associate the visible label with each control for screen readers.
+  const exampleId = useId();
+  const backendId = useId();
+  const asiId = useId();
+  const versionId = useId();
+  const editorId = useId();
 
   // Build the version dropdown from the live tag list, falling back to a
   // single `nightly` entry if the GitHub fetch returned nothing.
@@ -94,6 +102,9 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
           setBackend(payload.mode);
         }
         if (typeof payload.asi === "boolean") setAsi(payload.asi);
+        if (payload.version && versions.includes(payload.version)) {
+          setVersion(payload.version);
+        }
         hydratedRef.current = true;
         return;
       }
@@ -147,6 +158,12 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
         ]);
         return;
       }
+      // Two error shapes are possible:
+      //   • Transport errors (rate limit, bad body, oversize, spawn failed)
+      //     short-circuit with `error: { message, code }` and no other fields.
+      //   • Successful runner invocations attach the runner's own structured
+      //     error (different schema) inside the same `error` slot.
+      // Disambiguate by checking for runner-only fields.
       const data = (await res.json()) as {
         ok?: boolean;
         output?: string;
@@ -158,6 +175,7 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
           line?: number | null;
           column?: number | null;
           fileName?: string | null;
+          code?: string;
         } | null;
         timing?: { total_ms: number };
         exitCode?: number | null;
@@ -214,7 +232,10 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
   const share = useCallback(async () => {
     const url = new URL(window.location.href);
     url.search = "";
-    url.searchParams.set("share", encodeShare({ code, mode: backend, asi }));
+    url.searchParams.set(
+      "share",
+      encodeShare({ code, mode: backend, asi, version }),
+    );
     const link = url.toString();
     let ok = false;
     try {
@@ -224,7 +245,7 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
       }
     } catch {}
     if (ok) setShareTick((t) => t + 1);
-  }, [code, backend, asi]);
+  }, [code, backend, asi, version]);
 
   useEffect(() => {
     if (shareTick === 0) return;
@@ -262,8 +283,11 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
   return (
     <div className="pg-shell pg-full">
       <div className="pg-toolbar">
-        <span className="pg-toolbar-label">Example</span>
+        <label className="pg-toolbar-label" htmlFor={exampleId}>
+          Example
+        </label>
         <select
+          id={exampleId}
           className="pg-select min-w-[260px]"
           value={exId}
           onChange={(e) => setExId(e.target.value)}
@@ -275,8 +299,11 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
           ))}
         </select>
 
-        <span className="pg-toolbar-label ml-3">Backend</span>
+        <label className="pg-toolbar-label ml-3" htmlFor={backendId}>
+          Backend
+        </label>
         <select
+          id={backendId}
           className="pg-select min-w-[150px]"
           value={backend}
           onChange={(e) => setBackend(e.target.value as Backend)}
@@ -285,12 +312,16 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
           <option value="bytecode">bytecode VM</option>
         </select>
 
-        <span className="pg-toolbar-label ml-3">ASI</span>
+        <label className="pg-toolbar-label ml-3" htmlFor={asiId}>
+          ASI
+        </label>
         <label
           className="pg-asi-toggle"
+          htmlFor={asiId}
           title="Automatic semicolon insertion (--asi)"
         >
           <input
+            id={asiId}
             type="checkbox"
             checked={asi}
             onChange={(e) => setAsi(e.target.checked)}
@@ -298,8 +329,15 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
           <span>{asi ? "on" : "off"}</span>
         </label>
 
-        <span className="pg-toolbar-label ml-3">Version</span>
+        {/* Version selector is **display-only**: the API runs against the
+            single bundled `GocciaScriptLoader` binary regardless of choice.
+            The selection is reflected in the run banner and round-tripped in
+            share links so users can mark which release they tested against. */}
+        <label className="pg-toolbar-label ml-3" htmlFor={versionId}>
+          Version
+        </label>
         <select
+          id={versionId}
           className="pg-select min-w-[110px]"
           value={version}
           onChange={(e) => setVersion(e.target.value)}
@@ -359,6 +397,8 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
               </pre>
               <textarea
                 ref={taRef}
+                id={editorId}
+                aria-label={`GocciaScript editor — ${example.label}`}
                 spellCheck={false}
                 value={code}
                 onChange={(e) => {
