@@ -27,6 +27,10 @@ function resolveBinaryPath(): string {
 const TIMEOUT_MS = 5_000;
 const MAX_OUTPUT_BYTES = 256 * 1024;
 const MAX_CODE_BYTES = 64 * 1024;
+// Cap the entire JSON envelope (`{"code":"...","mode":"…","asi":…}`) so we
+// don't buffer arbitrarily large bodies before the per-field size check
+// fires. Allow ~1 KB of envelope/key/value overhead on top of the code limit.
+const MAX_BODY_BYTES = MAX_CODE_BYTES + 1_024;
 const MAX_MEMORY_BYTES = 32 * 1024 * 1024;
 const MAX_INSTRUCTIONS = 50_000_000;
 const STACK_SIZE = 2_000;
@@ -50,7 +54,8 @@ type TransportError = {
     | "INVALID_JSON"
     | "MISSING_CODE"
     | "CODE_TOO_LARGE"
-    | "SPAWN_FAILED";
+    | "SPAWN_FAILED"
+    | "ABORTED";
 };
 
 function transportError(
@@ -59,6 +64,35 @@ function transportError(
 ): Response {
   const { extra, ...rest } = init ?? {};
   return NextResponse.json({ error: err, ...(extra ?? {}) }, rest);
+}
+
+/** Read `req.body` as a UTF-8 string, rejecting once the cumulative byte
+ *  count exceeds `cap`. Used in place of `req.text()` / `req.json()` so
+ *  oversized payloads are short-circuited mid-stream rather than fully
+ *  buffered. Returns `null` on overflow. */
+async function readBodyWithCap(
+  req: Request,
+  cap: number,
+): Promise<string | null> {
+  if (!req.body) return "";
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > cap) {
+      // Drain the cancellation but stop accumulating.
+      try {
+        await reader.cancel();
+      } catch {}
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf8");
 }
 
 type RunnerJson = {
@@ -103,9 +137,37 @@ export async function POST(req: Request) {
     );
   }
 
+  // Reject oversized payloads BEFORE parsing — `req.json()` would buffer
+  // the entire body first, which is a DoS vector for arbitrarily large
+  // requests. When `Content-Length` is present we short-circuit on the
+  // header; otherwise we stream-read with the same cap.
+  const cl = req.headers.get("content-length");
+  if (cl !== null) {
+    const declared = Number(cl);
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+      return transportError(
+        {
+          message: `request body exceeds ${MAX_BODY_BYTES} bytes`,
+          code: "CODE_TOO_LARGE",
+        },
+        { status: 413 },
+      );
+    }
+  }
+  const rawBody = await readBodyWithCap(req, MAX_BODY_BYTES);
+  if (rawBody === null) {
+    return transportError(
+      {
+        message: `request body exceeds ${MAX_BODY_BYTES} bytes`,
+        code: "CODE_TOO_LARGE",
+      },
+      { status: 413 },
+    );
+  }
+
   let body: RunBody;
   try {
-    body = (await req.json()) as RunBody;
+    body = JSON.parse(rawBody) as RunBody;
   } catch {
     return transportError(
       { message: "invalid JSON body", code: "INVALID_JSON" },
@@ -151,9 +213,16 @@ export async function POST(req: Request) {
 
   return await new Promise<Response>((resolve) => {
     let resolved = false;
+    let abortHandler: (() => void) | null = null;
     const finish = (res: Response) => {
       if (resolved) return;
       resolved = true;
+      if (abortHandler) {
+        try {
+          req.signal.removeEventListener("abort", abortHandler);
+        } catch {}
+        abortHandler = null;
+      }
       resolve(res);
     };
 
@@ -183,6 +252,29 @@ export async function POST(req: Request) {
       stdio: ["pipe", "pipe", "pipe"],
       env: childEnv as NodeJS.ProcessEnv,
     });
+
+    // If the client disconnects mid-execution, kill the child immediately
+    // instead of letting it run until the watchdog timer fires. The
+    // listener is removed in `finish()` so we don't leak it across
+    // requests when the child finishes naturally first.
+    abortHandler = () => {
+      child.kill("SIGKILL");
+      finish(
+        transportError(
+          { message: "client disconnected", code: "ABORTED" },
+          // 499 = nginx-style "Client Closed Request"; not a registered
+          // status but widely understood and not consumed by the client
+          // (which already closed).
+          { status: 499 },
+        ),
+      );
+    };
+    if (req.signal.aborted) {
+      // Already aborted before we even spawned — fail fast.
+      abortHandler();
+      return;
+    }
+    req.signal.addEventListener("abort", abortHandler, { once: true });
 
     // Accumulate raw bytes per stream — counting `string.length` would
     // count UTF-16 code units, not bytes, so multibyte UTF-8 output

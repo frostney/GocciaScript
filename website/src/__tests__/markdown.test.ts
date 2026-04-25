@@ -34,6 +34,33 @@ describe("safeHref — link scheme allowlist", () => {
   test("rejects empty string", () => {
     expect(safeHref("")).toBeNull();
   });
+
+  test("rejects whitespace-prefixed dangerous schemes", () => {
+    // Browsers strip leading whitespace before navigating, so a naïve
+    // scheme check that doesn't trim would let `" javascript:..."` slip
+    // through and fire the dangerous scheme.
+    expect(safeHref(" javascript:alert(1)")).toBeNull();
+    expect(safeHref("\tjavascript:alert(1)")).toBeNull();
+    expect(safeHref("\njavascript:alert(1)")).toBeNull();
+  });
+
+  test("rejects schemes with embedded control characters", () => {
+    // Browsers also strip TAB / CR / LF *inside* URLs before resolving,
+    // so `j\tavascript:` would resolve to `javascript:` at navigation
+    // time. Reject anything containing C0 controls or DEL outright.
+    expect(safeHref("j\tavascript:alert(1)")).toBeNull();
+    expect(safeHref("java\nscript:alert(1)")).toBeNull();
+    expect(safeHref("javascript:alert(1)")).toBeNull();
+  });
+
+  test("trims whitespace around safe schemes", () => {
+    expect(safeHref("  https://example.com/x  ")).toBe("https://example.com/x");
+  });
+
+  test("rejects whitespace-only input", () => {
+    expect(safeHref("   ")).toBeNull();
+    expect(safeHref("\t\n")).toBeNull();
+  });
 });
 
 describe("parseMarkdown — block segmentation", () => {
@@ -104,5 +131,19 @@ describe("parseMarkdown — block segmentation", () => {
     const blocks = parseMarkdown(src);
     if (blocks[0]?.kind !== "table") throw new Error("expected table");
     expect(blocks[0].rows[0]).toEqual(["a | b", "c"]);
+  });
+
+  test("table header preserves intentional empty cells (column-count parity)", () => {
+    // `filter(Boolean)` on the header would drop the empty middle cell
+    // and desynchronize the header (2 cols) from the rows (3 cols). The
+    // outer-only filter keeps both at 3 columns.
+    const src = ["| a | | b |", "| --- | --- | --- |", "| 1 | 2 | 3 |"].join(
+      "\n",
+    );
+    const blocks = parseMarkdown(src);
+    if (blocks[0]?.kind !== "table") throw new Error("expected table");
+    expect(blocks[0].hdr).toEqual(["a", "", "b"]);
+    expect(blocks[0].rows[0]).toEqual(["1", "2", "3"]);
+    expect(blocks[0].hdr.length).toBe(blocks[0].rows[0].length);
   });
 });

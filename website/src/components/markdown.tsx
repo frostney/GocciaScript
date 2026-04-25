@@ -68,13 +68,29 @@ const SAFE_HREF_SCHEMES = new Set(["http", "https", "mailto", "tel"]);
 
 /** Return `href` if it's safe to use directly, otherwise `null`.
  *  Safe forms: in-page anchor (`#…`), root-relative path (`/…`),
- *  protocol-relative (`//…`), or one of the allowlisted schemes. */
+ *  protocol-relative (`//…`), or one of the allowlisted schemes.
+ *
+ *  Browsers strip TAB / CR / LF / leading whitespace from `href` values
+ *  before navigating, so a naïve scheme regex on the raw input would let
+ *  `" javascript:"` or `"j\tavascript:"` slip through and fire the
+ *  dangerous scheme. We reject anything containing control characters
+ *  outright, then trim and validate. */
 export function safeHref(href: string): string | null {
   if (!href) return null;
-  if (href.startsWith("#") || href.startsWith("/")) return href;
-  const m = href.match(/^([a-z][a-z0-9+.-]*):/i);
-  if (!m) return href; // bare relative path or fragment-relative
-  return SAFE_HREF_SCHEMES.has(m[1].toLowerCase()) ? href : null;
+  // C0 control range (0x00–0x1F) + DEL (0x7F). If browsers would silently
+  // strip these to reach a different scheme, treat the href as unsafe
+  // rather than try to mirror the stripping algorithm exactly.
+  for (let i = 0; i < href.length; i++) {
+    const code = href.charCodeAt(i);
+    // C0 controls (0x00-0x1F) plus DEL (0x7F).
+    if (code < 0x20 || code === 0x7f) return null;
+  }
+  const h = href.trim();
+  if (!h) return null;
+  if (h.startsWith("#") || h.startsWith("/")) return h;
+  const m = h.match(/^([a-z][a-z0-9+.-]*):/i);
+  if (!m) return h; // bare relative path or fragment-relative
+  return SAFE_HREF_SCHEMES.has(m[1].toLowerCase()) ? h : null;
 }
 
 /** True when `line` is a markdown horizontal rule (`---`, `------`, etc.). */
@@ -273,16 +289,20 @@ export function parseMarkdown(source: string): Block[] {
           .replace(/\\\|/g, PIPE_PLACEHOLDER)
           .split("|")
           .map((c) => c.trim().replace(PIPE_RESTORE, "|"));
-      const hdr = splitRow(line).filter(Boolean);
+      // Strip ONLY the leading/trailing empty cells produced by the
+      // outer `|` markers. Using `filter(Boolean)` for the header would
+      // also drop intentional empty cells (`| a | | b |`) and
+      // desynchronize column counts vs. the rows array.
+      const stripOuterEmpty = (cells: string[]) =>
+        cells.filter(
+          (c, idx, arr) =>
+            !(idx === 0 && c === "") && !(idx === arr.length - 1 && c === ""),
+        );
+      const hdr = stripOuterEmpty(splitRow(line));
       i += 2;
       const rows: string[][] = [];
       while (i < lines.length && /\|/.test(lines[i]) && lines[i].trim()) {
-        rows.push(
-          splitRow(lines[i]).filter(
-            (c, idx, arr) =>
-              !(idx === 0 && c === "") && !(idx === arr.length - 1 && c === ""),
-          ),
-        );
+        rows.push(stripOuterEmpty(splitRow(lines[i])));
         i++;
       }
       blocks.push({ kind: "table", hdr, rows });
@@ -329,6 +349,19 @@ export function parseMarkdown(source: string): Block[] {
 export function Markdown({ source }: { source: string }) {
   const blocks = useMemo(() => parseMarkdown(source), [source]);
 
+  // Counter shared across all headings in this document. Repeated heading
+  // text would otherwise produce duplicate `id` attributes — anchors then
+  // jump to the first occurrence only. Append `-2`, `-3`, … for each
+  // subsequent appearance so every heading id is unique and the anchor
+  // href matches the final id.
+  const seenSlugs = new Map<string, number>();
+  const uniqueSlug = (text: string): string => {
+    const base = slugify(text);
+    const count = (seenSlugs.get(base) ?? 0) + 1;
+    seenSlugs.set(base, count);
+    return count === 1 ? base : `${base}-${count}`;
+  };
+
   return (
     <div className="docs-main">
       {blocks.map((b, idx) => {
@@ -338,7 +371,7 @@ export function Markdown({ source }: { source: string }) {
             const inline = renderInline(b.text);
             // h1 is the document/page title; keep it plain (no anchor link).
             if (level === 1) return <h1 key={idx}>{inline}</h1>;
-            const slug = slugify(b.text);
+            const slug = uniqueSlug(b.text);
             const anchor = (
               <a
                 href={`#${slug}`}
