@@ -23,7 +23,12 @@ type Method = {
 /** The "Quick install" one-liners shown in the right-side hero card —
  *  not in the methods list, since they're the recommended path and
  *  belong above the fold. */
-const QUICK_INSTALLS: { id: string; label: string; command: string }[] = [
+const QUICK_INSTALLS: {
+  id: string;
+  label: string;
+  command: string;
+  hint?: string;
+}[] = [
   {
     id: "quick-unix",
     label: "macOS / Linux",
@@ -33,6 +38,12 @@ const QUICK_INSTALLS: { id: string; label: string; command: string }[] = [
     id: "quick-windows",
     label: "Windows · PowerShell",
     command: "irm https://gocciascript.dev/install.ps1 | iex",
+  },
+  {
+    id: "quick-npx",
+    label: "Run without installing",
+    command: "npx gocciascript script.js",
+    hint: "Bun: `bunx gocciascript` · pnpm: `pnpm dlx gocciascript`.",
   },
 ];
 
@@ -60,6 +71,24 @@ const METHODS: Method[] = [
       "If you prefer a package manager: add the bucket, then scoop install. Stays on the latest stable.",
     command:
       "scoop bucket add frostney https://github.com/frostney/scoop-bucket\nscoop install gocciascript",
+    language: "shell",
+  },
+  {
+    id: "npm",
+    label: "npm · Bun · pnpm",
+    description:
+      "Cross-platform install through the JavaScript package managers. The npm package downloads the right native binary for your OS/arch on install.",
+    command:
+      "# npm\nnpm install -g gocciascript\n\n# Bun\nbun install -g gocciascript\n\n# pnpm\npnpm add -g gocciascript",
+    language: "shell",
+  },
+  {
+    id: "npx",
+    label: "Run without installing — npx · bunx · pnpm dlx",
+    description:
+      "Use this for one-off scripts and CI tasks where you don't want a global install. The package is fetched into the manager's cache on first run; subsequent invocations are essentially free.",
+    command:
+      "# npx — included with Node.js\nnpx gocciascript script.js\n\n# bunx — bundled with Bun\nbunx gocciascript script.js\n\n# pnpm dlx\npnpm dlx gocciascript script.js",
     language: "shell",
   },
   {
@@ -226,6 +255,19 @@ export function Install({ release }: { release: ReleaseInfo | null }) {
               <div key={q.id} className="install-quick-row">
                 <div className="install-quick-label">{q.label}</div>
                 <CopyableCommand command={q.command} language="shell" />
+                {q.hint && (
+                  <p className="install-quick-hint">
+                    {q.hint
+                      .split(/(`[^`]+`)/)
+                      .map((part, i) =>
+                        part.startsWith("`") && part.endsWith("`") ? (
+                          <code key={i}>{part.slice(1, -1)}</code>
+                        ) : (
+                          <span key={i}>{part}</span>
+                        ),
+                      )}
+                  </p>
+                )}
               </div>
             ))}
           </aside>
