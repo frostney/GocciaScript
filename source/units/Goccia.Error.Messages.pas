@@ -663,6 +663,7 @@ resourcestring
   SErrorObjectGroupByRequiresCallback = 'Object.groupBy requires a callback function as second argument';
   SErrorSetPrototypeOfTrapReturnedFalse = 'setPrototypeOf trap returned false';
   SErrorSetPrototypeOfNonExtensible = 'Object.setPrototypeOf called on non-extensible object';
+  SErrorSetPrototypeOfCyclic = 'Cyclic __proto__ value';
 
   // Test assertion errors
   SErrorFunctionExpectsStringFirst = '%s expects first argument to be a string';
