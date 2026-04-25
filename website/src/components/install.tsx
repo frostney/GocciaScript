@@ -20,15 +20,23 @@ type Method = {
   language?: "shell" | "ts";
 };
 
-const METHODS: Method[] = [
+/** The "Quick install" one-liners shown in the right-side hero card —
+ *  not in the methods list, since they're the recommended path and
+ *  belong above the fold. */
+const QUICK_INSTALLS: { id: string; label: string; command: string }[] = [
   {
-    id: "curl",
-    label: "Quick install",
-    description:
-      "One-liner installer — downloads the right binary for your platform and drops it on your $PATH.",
+    id: "quick-unix",
+    label: "macOS / Linux",
     command: "curl -fsSL https://gocciascript.dev/install.sh | sh",
-    language: "shell",
   },
+  {
+    id: "quick-windows",
+    label: "Windows · PowerShell",
+    command: "irm https://gocciascript.dev/install.ps1 | iex",
+  },
+];
+
+const METHODS: Method[] = [
   {
     id: "homebrew",
     label: "Homebrew · macOS",
@@ -43,6 +51,15 @@ const METHODS: Method[] = [
     description: "Add the apt repo and install the .deb.",
     command:
       "curl -fsSL https://gocciascript.dev/repo/key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/gocciascript.gpg\necho 'deb [signed-by=/usr/share/keyrings/gocciascript.gpg] https://gocciascript.dev/repo stable main' | sudo tee /etc/apt/sources.list.d/gocciascript.list\nsudo apt update && sudo apt install gocciascript",
+    language: "shell",
+  },
+  {
+    id: "scoop",
+    label: "Windows · Scoop",
+    description:
+      "If you prefer a package manager: add the bucket, then scoop install. Stays on the latest stable.",
+    command:
+      "scoop bucket add frostney https://github.com/frostney/scoop-bucket\nscoop install gocciascript",
     language: "shell",
   },
   {
@@ -119,78 +136,99 @@ export function Install({ release }: { release: ReleaseInfo | null }) {
   return (
     <div className="pt-16 pb-24">
       <div className="container">
-        <div className="section-head">
-          <div className="section-kicker">Install</div>
-          <h1>Get GocciaScript on your machine.</h1>
-          <p>
-            Pick the install method that fits your platform. The runtime is a
-            single self-contained binary — no Node.js, no toolchain, no global
-            state.
-          </p>
-        </div>
+        <div className="install-hero">
+          <div className="install-hero-text">
+            <div className="section-head">
+              <div className="section-kicker">Install</div>
+              <h1>Get GocciaScript on your machine.</h1>
+              <p>
+                Pick the install method that fits your platform. The runtime is
+                a single self-contained binary — no Node.js, no toolchain, no
+                global state.
+              </p>
+            </div>
 
-        {isPreStable(release) && (
-          <div className="prestable-banner" role="note">
-            <strong>Pre-1.0 release.</strong> The public API is still being
-            shaped — anything documented can change between any two releases
-            until <code>1.0.0</code> ships. Pin a specific version in CI and
-            check the{" "}
-            <a
-              href={GITHUB_RELEASES_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              release notes
-            </a>{" "}
-            before upgrading.
-          </div>
-        )}
+            {isPreStable(release) && (
+              <div className="prestable-banner" role="note">
+                <strong>Pre-1.0 release.</strong> The public API is still being
+                shaped — anything documented can change between any two releases
+                until <code>1.0.0</code> ships. Pin a specific version in CI and
+                check the{" "}
+                <a
+                  href={GITHUB_RELEASES_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  release notes
+                </a>{" "}
+                before upgrading.
+              </div>
+            )}
 
-        <div className="install-meta">
-          {release ? (
-            <p className="install-latest">
-              Latest version{" "}
-              <a
-                href={release.htmlUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                title={release.name ?? release.tagName}
-              >
-                <strong>{release.tagName}</strong>
-              </a>
-              {release.publishedAt && (
-                <>
-                  {" "}
-                  released{" "}
-                  {new Date(release.publishedAt).toLocaleDateString(undefined, {
-                    year: "numeric",
-                    month: "long",
-                    day: "numeric",
-                  })}
-                </>
+            <div className="install-meta">
+              {release ? (
+                <p className="install-latest">
+                  Latest version{" "}
+                  <a
+                    href={release.htmlUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={release.name ?? release.tagName}
+                  >
+                    <strong>{release.tagName}</strong>
+                  </a>
+                  {release.publishedAt && (
+                    <>
+                      {" "}
+                      released{" "}
+                      {new Date(release.publishedAt).toLocaleDateString(
+                        undefined,
+                        {
+                          year: "numeric",
+                          month: "long",
+                          day: "numeric",
+                        },
+                      )}
+                    </>
+                  )}
+                </p>
+              ) : (
+                <p className="install-latest">Latest version —</p>
               )}
-            </p>
-          ) : (
-            <p className="install-latest">Latest version —</p>
-          )}
-          <div className="install-meta-links">
-            <a
-              href={GITHUB_RELEASES_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="install-link"
-            >
-              <BookIcon size={14} /> Release notes
-            </a>
-            <a
-              href={GITHUB_REPO_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="install-link"
-            >
-              <GithubIcon size={14} /> Source on GitHub
-            </a>
+              <div className="install-meta-links">
+                <a
+                  href={GITHUB_RELEASES_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="install-link"
+                >
+                  <BookIcon size={14} /> Release notes
+                </a>
+                <a
+                  href={GITHUB_REPO_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="install-link"
+                >
+                  <GithubIcon size={14} /> Source on GitHub
+                </a>
+              </div>
+            </div>
           </div>
+
+          <aside className="install-quick" aria-labelledby="install-quick-h">
+            <h3 id="install-quick-h">Quick install</h3>
+            <p>
+              One-liner installers — they detect your platform, fetch the right
+              binary, and drop it on your <code>$PATH</code>.
+            </p>
+            {QUICK_INSTALLS.map((q) => (
+              <div key={q.id} className="install-quick-row">
+                <div className="install-quick-label">{q.label}</div>
+                <CopyableCommand command={q.command} language="shell" />
+              </div>
+            ))}
+          </aside>
         </div>
 
         <div className="install-methods">
