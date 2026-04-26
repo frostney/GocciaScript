@@ -27,6 +27,7 @@ type
     procedure TestSequentialEnginesHaveIsolatedObjectPrototype;
     procedure TestSequentialEnginesHaveIsolatedStringPrototype;
     procedure TestSequentialEnginesHaveFreshURLSearchParamsPrototype;
+    procedure TestSequentialEnginesHaveFreshURLPrototype;
     procedure TestNestedEngineRestoresOuterRealmOnDestroy;
     procedure TestEachEngineGetsADistinctRealm;
   end;
@@ -45,6 +46,8 @@ begin
     TestSequentialEnginesHaveIsolatedStringPrototype);
   Test('URLSearchParams.prototype is fresh for each engine',
     TestSequentialEnginesHaveFreshURLSearchParamsPrototype);
+  Test('URL.prototype is fresh for each engine',
+    TestSequentialEnginesHaveFreshURLPrototype);
   Test('Destroying a nested engine restores the outer engine''s realm',
     TestNestedEngineRestoresOuterRealmOnDestroy);
   Test('Each engine owns a distinct realm instance',
@@ -147,6 +150,22 @@ begin
   Expect<Double>((ResultA.Result as TGocciaNumberLiteralValue).Value).ToBe(7);
 
   ResultB := RunInline('typeof URLSearchParams.prototype.__poisonUSP;');
+  Expect<string>((ResultB.Result as TGocciaStringLiteralValue).Value).ToBe(
+    'undefined');
+end;
+
+procedure TTestEngineRealm.TestSequentialEnginesHaveFreshURLPrototype;
+var
+  ResultA, ResultB: TGocciaScriptResult;
+begin
+  // URL.prototype is built lazily through TGocciaSharedPrototype and
+  // rebuilt per realm; mutations on engine A must not leak.
+  ResultA := RunInline(
+    'URL.prototype.__poisonURL = 7;' +
+    'URL.prototype.__poisonURL;');
+  Expect<Double>((ResultA.Result as TGocciaNumberLiteralValue).Value).ToBe(7);
+
+  ResultB := RunInline('typeof URL.prototype.__poisonURL;');
   Expect<string>((ResultB.Result as TGocciaStringLiteralValue).Value).ToBe(
     'undefined');
 end;
