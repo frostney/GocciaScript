@@ -526,10 +526,11 @@ def evaluate_suite(
         pending_ids = list(test_ids_in_order)
 
         # Per-worker stalls bounded by jobs count; each retry reduces the
-        # queue by one stall worth of files.  10 retries is a generous
-        # ceiling for engines whose stall rate is less than ~1% — we break
-        # earlier on no-progress.
-        max_retries = 10
+        # queue by one stall worth of files.  Scale the ceiling with the
+        # initial queue so large batches aren't capped at a fixed budget
+        # before the no-progress break trips; the no-progress check (below)
+        # still terminates promptly when a retry produces nothing new.
+        max_retries = max(10, len(pending_ids))
         attempt = 0
 
         while pending_ids and attempt < max_retries:

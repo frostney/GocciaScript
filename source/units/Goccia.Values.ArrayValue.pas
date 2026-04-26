@@ -1556,12 +1556,17 @@ begin
 
   // Step 4: If len + argCount > 2^53 - 1, throw TypeError.
   // Skip the safety check on a zero-arg call: nothing is being added,
-  // so a huge existing length can never overflow further and push()
-  // must just return the current length unchanged.
+  // so a huge existing length can never overflow further.
   if AArgs.Length = 0 then
   begin
-    // Use RawLen so we don't truncate generic receivers whose length
-    // exceeds MaxInt back down to View.Len.
+    // ES2026 step 6: Perform Set(O, "length", F(len), true).  For native
+    // arrays length is intrinsic so the Set is implicit; for generic
+    // receivers we still write so accessor/writability semantics fire.
+    // Use RawLen so we don't truncate receivers whose length exceeds
+    // MaxInt back down to View.Len.
+    if not Assigned(View.Arr) then
+      View.Obj.AssignProperty(PROP_LENGTH,
+        TGocciaNumberLiteralValue.Create(View.RawLen));
     Result := TGocciaNumberLiteralValue.Create(View.RawLen);
     Exit;
   end;
@@ -2942,9 +2947,15 @@ begin
   ArgCount := AArgs.Length;
 
   // ES2026 §23.1.3.37 step 4: skip shifting when no arguments provided.
-  // Use RawLen so generic receivers with length > MaxInt aren't truncated.
+  // Step 5 still requires Set(O, "length", F(len), true); for native arrays
+  // length is intrinsic, for generic receivers we write through Obj so
+  // accessor/writability semantics fire.  Use RawLen so receivers with
+  // length > MaxInt aren't truncated back to View.Len.
   if ArgCount = 0 then
   begin
+    if not Assigned(View.Arr) then
+      View.Obj.AssignProperty(PROP_LENGTH,
+        TGocciaNumberLiteralValue.Create(View.RawLen));
     Result := TGocciaNumberLiteralValue.Create(View.RawLen);
     Exit;
   end;

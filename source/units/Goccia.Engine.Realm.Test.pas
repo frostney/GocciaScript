@@ -191,24 +191,32 @@ var
   SourceA, SourceB: TStringList;
   RealmA, RealmB: TGocciaRealm;
 begin
+  // Keep both engines alive simultaneously while capturing their realms so the
+  // distinctness check compares two live pointers; once EngineA is freed its
+  // realm pointer becomes dangling and the FPC heap is free to reuse the
+  // address for EngineB's realm, which would intermittently fail RealmA <>
+  // RealmB.  The nested-engine path (TGocciaEngine stacks via FPrevRealm) lets
+  // us hold both at once.
   SourceA := TStringList.Create;
   SourceA.Text := '';
-  EngineA := TGocciaEngine.Create('<engine-a>', SourceA, []);
-  RealmA := CurrentRealm;
-  EngineA.Free;
-  SourceA.Free;
-
   SourceB := TStringList.Create;
   SourceB.Text := '';
-  EngineB := TGocciaEngine.Create('<engine-b>', SourceB, []);
+
+  EngineA := TGocciaEngine.Create('<engine-a>', SourceA, []);
   try
-    RealmB := CurrentRealm;
-    // The two engines must own different realm instances; the dangling
-    // RealmA pointer should not be reused.
-    Expect<Boolean>(RealmB <> RealmA).ToBe(True);
-    Expect<Boolean>(RealmB <> nil).ToBe(True);
+    RealmA := CurrentRealm;
+    EngineB := TGocciaEngine.Create('<engine-b>', SourceB, []);
+    try
+      RealmB := CurrentRealm;
+      Expect<Boolean>(RealmA <> nil).ToBe(True);
+      Expect<Boolean>(RealmB <> nil).ToBe(True);
+      Expect<Boolean>(RealmB <> RealmA).ToBe(True);
+    finally
+      EngineB.Free;
+    end;
   finally
-    EngineB.Free;
+    EngineA.Free;
+    SourceA.Free;
     SourceB.Free;
   end;
 end;

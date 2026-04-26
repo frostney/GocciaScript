@@ -234,9 +234,9 @@ begin
       URLHashGetter, URLHashSetter,
       [pfConfigurable, pfEnumerable]);
     // Methods
-    Members.AddNamedMethod('toString', URLToString, 0,
+    Members.AddNamedMethod(PROP_TO_STRING, URLToString, 0,
       gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-    Members.AddNamedMethod('toJSON', URLToJSON, 0,
+    Members.AddNamedMethod(PROP_TO_JSON, URLToJSON, 0,
       gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     FPrototypeMembers := Members.ToDefinitions;
   finally
