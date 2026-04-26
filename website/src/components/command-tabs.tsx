@@ -67,12 +67,18 @@ export function detectOs(ua: string): OsKey {
   return "macos";
 }
 
-export type ArchKey = "arm64" | "x86_64";
+/** Architecture identifiers — match the suffixes used in the GitHub
+ *  release archive names (`gocciascript-{version}-{os}-{arch}.{ext}`):
+ *    macos:   arm64 | x64
+ *    linux:   arm64 | x64
+ *    windows: x64   | x86
+ *  We use one union for simplicity; per-OS code clamps to the legal set. */
+export type ArchKey = "arm64" | "x64" | "x86";
 
 /** Best-guess CPU architecture from a navigator user-agent string and
  *  an optional `os` hint. Default-pick reflects current desktop sales:
  *  arm64 for Apple Silicon Macs (the default for new hardware since
- *  late 2020), x86_64 for everything else.
+ *  late 2020), x64 for everything else.
  *
  *  Note: Apple Silicon Safari/WebKit hides the architecture in the UA
  *  string (always reports "Intel Mac OS X" for fingerprinting reasons),
@@ -90,11 +96,15 @@ export function detectArch(ua: string, os: OsKey = detectOs(ua)): ArchKey {
     return "arm64";
   }
   if (s.includes("x86_64") || s.includes("x64") || s.includes("wow64")) {
-    return "x86_64";
+    return "x64";
+  }
+  // 32-bit Windows is rare today but real on long-lived machines.
+  if (os === "windows" && (s.includes("win32") || s.includes(";x86"))) {
+    return "x86";
   }
   // macOS: arm64 is the safer default for new Macs (Apple Silicon).
   if (os === "macos") return "arm64";
-  return "x86_64";
+  return "x64";
 }
 
 /** A copy-to-clipboard button + syntax-highlighted command pre. Routes

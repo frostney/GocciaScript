@@ -1,0 +1,7 @@
+# /etc/apt/sources.list.d/gocciascript.list
+#
+# Stable channel for GocciaScript. The `signed-by=` keyring path
+# matches what `setup.sh` (or the equivalent dearmor step in the
+# website's install instructions) writes the public key to.
+
+deb [signed-by=/usr/share/keyrings/gocciascript.gpg] https://gocciascript.dev/repo stable main

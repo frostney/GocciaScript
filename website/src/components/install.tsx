@@ -8,6 +8,7 @@ import {
   CommandTabs,
   detectArch,
   OS_TABS,
+  type OsKey,
   PM_TABS,
 } from "@/components/command-tabs";
 import { BookIcon, GithubIcon } from "@/components/icons";
@@ -31,68 +32,110 @@ const SYSTEM_PM_COMMANDS = {
     "scoop bucket add frostney https://github.com/frostney/scoop-bucket\nscoop install gocciascript",
 } as const;
 
-/** Pre-built binary download instructions per OS. Includes all three
- *  shipped executables (loader / test runner / REPL) so the user
- *  ends up with the full toolchain on $PATH, not just the script
- *  loader. The macOS / Linux variants render BOTH arm64 and x86_64
- *  blocks, with the detected arch active and the other commented out
- *  — flip by uncommenting the lines you want. */
-const RELEASES_BASE =
-  "https://github.com/frostney/GocciaScript/releases/latest/download";
-
+/** Pre-built binary download instructions per OS.
+ *
+ *  Releases ship a single archive per OS / arch with the full
+ *  toolchain inside (loader / test runner / REPL under `build/`):
+ *    gocciascript-{version}-macos-{arm64|x64}.zip
+ *    gocciascript-{version}-linux-{arm64|x64}.tar.gz
+ *    gocciascript-{version}-windows-{x64|x86}.zip
+ *
+ *  The macOS / Linux variants render BOTH arch blocks, with the
+ *  detected arch active and the other commented out so the user can
+ *  swap by toggling comment markers. Windows ships two archs; we
+ *  show the detected one and an x86 fallback for older machines. */
 const ARCH_LABELS = {
-  macos: { arm64: "Apple Silicon (arm64)", x86_64: "Intel (x86_64)" },
-  linux: { arm64: "ARM (aarch64)", x86_64: "x86_64" },
-} as const;
-const ARCH_SUFFIX = {
-  macos: { arm64: "darwin-arm64", x86_64: "darwin-x86_64" },
-  linux: { arm64: "linux-aarch64", x86_64: "linux-x86_64" },
+  macos: { arm64: "Apple Silicon (arm64)", x64: "Intel (x64)", x86: "" },
+  linux: { arm64: "ARM (arm64)", x64: "x64", x86: "" },
+  windows: { arm64: "", x64: "x64", x86: "32-bit (x86)" },
 } as const;
 
-/** Build the Unix prebuilt block for a given OS at a given arch. The
- *  active arch lines are uncommented; the alternate arch is shown
- *  fully commented underneath so the user can swap by toggling
- *  comments. */
+/** Strip the optional `v` prefix from a tag (`v0.6.1` → `0.6.1`).
+ *  Release artifact filenames don't include the prefix. */
+function stripV(tag: string): string {
+  return tag.replace(/^v/, "");
+}
+
+function archiveFilename(os: OsKey, arch: ArchKey, version: string): string {
+  const ext = os === "linux" ? "tar.gz" : "zip";
+  return `gocciascript-${version}-${os}-${arch}.${ext}`;
+}
+
+function archiveUrl(os: OsKey, arch: ArchKey, tag: string): string {
+  return `https://github.com/frostney/GocciaScript/releases/download/${tag}/${archiveFilename(os, arch, stripV(tag))}`;
+}
+
+/** Build a Unix prebuilt block for a given OS at a given arch. Active
+ *  arch lines are uncommented; alternate arch is shown fully commented
+ *  underneath. */
 function unixPrebuiltBlock(
   os: "macos" | "linux",
   active: ArchKey,
   commented: boolean,
+  tag: string,
 ): string {
-  const suffix = ARCH_SUFFIX[os][active];
+  const url = archiveUrl(os, active, tag);
+  const archive = archiveFilename(os, active, stripV(tag));
   const label = ARCH_LABELS[os][active];
   const c = commented ? "# " : "";
-  const tag = commented ? "uncomment to use instead" : "auto-detected";
+  const note = commented ? "uncomment to use instead" : "auto-detected";
+  const unpack =
+    os === "linux" ? `${c}tar xzf "${archive}"` : `${c}unzip -q "${archive}"`;
   return [
-    `# ${label} — ${tag}`,
-    `${c}for bin in GocciaScriptLoader GocciaTestRunner GocciaREPL; do`,
-    `${c}  curl -fsSL -o "$bin" "${RELEASES_BASE}/$bin-${suffix}"`,
-    `${c}  chmod +x "$bin"`,
-    `${c}done`,
-    `${c}sudo mv GocciaScriptLoader GocciaTestRunner GocciaREPL /usr/local/bin/`,
+    `# ${label} — ${note}`,
+    `${c}curl -fsSL -O "${url}"`,
+    unpack,
+    `${c}chmod +x build/GocciaScriptLoader build/GocciaTestRunner build/GocciaREPL`,
+    `${c}sudo mv build/GocciaScriptLoader build/GocciaTestRunner build/GocciaREPL /usr/local/bin/`,
   ].join("\n");
 }
 
-function buildPrebuiltCommands(arch: ArchKey) {
-  const otherArch: ArchKey = arch === "arm64" ? "x86_64" : "arm64";
+/** Build a Windows prebuilt block (PowerShell). Active arch lines are
+ *  uncommented; alternate arch is fully commented. */
+function windowsPrebuiltBlock(
+  active: ArchKey,
+  commented: boolean,
+  tag: string,
+): string {
+  const url = archiveUrl("windows", active, tag);
+  const archive = archiveFilename("windows", active, stripV(tag));
+  const label = ARCH_LABELS.windows[active];
+  const c = commented ? "# " : "";
+  const note = commented ? "uncomment to use instead" : "auto-detected";
+  return [
+    `# ${label} — ${note}`,
+    `${c}Invoke-WebRequest -Uri "${url}" -OutFile "${archive}"`,
+    `${c}Expand-Archive -Path "${archive}" -DestinationPath . -Force`,
+    `${c}New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\\bin" | Out-Null`,
+    `${c}Move-Item -Force build\\GocciaScriptLoader.exe, build\\GocciaTestRunner.exe, build\\GocciaREPL.exe "$env:USERPROFILE\\bin\\"`,
+  ].join("\n");
+}
+
+function buildPrebuiltCommands(arch: ArchKey, tag: string) {
+  // macOS / Linux: arm64 ↔ x64 swap. Windows: x64 ↔ x86 swap.
+  const macosOther: ArchKey = arch === "arm64" ? "x64" : "arm64";
+  const linuxOther: ArchKey = arch === "arm64" ? "x64" : "arm64";
+  const winActive: ArchKey = arch === "x86" ? "x86" : "x64";
+  const winOther: ArchKey = winActive === "x64" ? "x86" : "x64";
+  // macOS / Linux can't be x86 in our matrix — clamp to x64 if the
+  // detector returned x86 (it shouldn't, but keep the type happy).
+  const macosActive: ArchKey = arch === "x86" ? "x64" : arch;
+  const linuxActive: ArchKey = arch === "x86" ? "x64" : arch;
   return {
     macos: [
-      unixPrebuiltBlock("macos", arch, false),
+      unixPrebuiltBlock("macos", macosActive, false, tag),
       "",
-      unixPrebuiltBlock("macos", otherArch, true),
+      unixPrebuiltBlock("macos", macosOther, true, tag),
     ].join("\n"),
     linux: [
-      unixPrebuiltBlock("linux", arch, false),
+      unixPrebuiltBlock("linux", linuxActive, false, tag),
       "",
-      unixPrebuiltBlock("linux", otherArch, true),
+      unixPrebuiltBlock("linux", linuxOther, true, tag),
     ].join("\n"),
     windows: [
-      "# Save under a folder on your PATH (creates one if needed)",
-      '$dest = "$env:USERPROFILE\\bin"',
-      "New-Item -ItemType Directory -Force -Path $dest | Out-Null",
+      windowsPrebuiltBlock(winActive, false, tag),
       "",
-      'foreach ($exe in @("GocciaScriptLoader", "GocciaTestRunner", "GocciaREPL")) {',
-      `  Invoke-WebRequest -Uri "${RELEASES_BASE}/$exe-windows-x86_64.exe" -OutFile "$dest\\$exe.exe"`,
-      "}",
+      windowsPrebuiltBlock(winOther, true, tag),
     ].join("\n"),
   } as const;
 }
@@ -128,7 +171,10 @@ export function Install({
     if (typeof navigator === "undefined") return;
     setArch(detectArch(navigator.userAgent));
   }, []);
-  const prebuilt = buildPrebuiltCommands(arch);
+  // Use the resolved release tag if we have one, otherwise leave a
+  // visible placeholder so the user knows to substitute.
+  const tag = release?.tagName ?? "v0.0.0";
+  const prebuilt = buildPrebuiltCommands(arch, tag);
 
   return (
     <div className="pt-16 pb-24">
