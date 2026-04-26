@@ -36,18 +36,27 @@ const EXES = ["GocciaScriptLoader", "GocciaTestRunner", "GocciaREPL"];
 function platformAsset() {
   const p = process.platform;
   const a = process.arch;
+  // Match exactly the asset matrix `.github/workflows/ci.yml` publishes on
+  // each `nightly` release. Anything else is a real "no asset built for
+  // this host" — better to fail loudly with the OS/arch in the error than
+  // to coerce to `x64` and 404 from the GitHub release with a misleading
+  // message.
   if (p === "darwin") {
-    return { os: "macos", arch: a === "arm64" ? "arm64" : "x64", ext: "zip" };
+    if (a === "arm64" || a === "x64") {
+      return { os: "macos", arch: a, ext: "zip" };
+    }
+    throw new Error(`unsupported macOS arch: ${a}`);
   }
   if (p === "linux") {
-    return {
-      os: "linux",
-      arch: a === "arm64" ? "arm64" : "x64",
-      ext: "tar.gz",
-    };
+    if (a === "arm64" || a === "x64") {
+      return { os: "linux", arch: a, ext: "tar.gz" };
+    }
+    throw new Error(`unsupported Linux arch: ${a}`);
   }
   if (p === "win32") {
-    return { os: "windows", arch: a === "ia32" ? "x86" : "x64", ext: "zip" };
+    if (a === "ia32") return { os: "windows", arch: "x86", ext: "zip" };
+    if (a === "x64") return { os: "windows", arch: "x64", ext: "zip" };
+    throw new Error(`unsupported Windows arch: ${a}`);
   }
   throw new Error(`unsupported build host: ${p}/${a}`);
 }
@@ -97,6 +106,9 @@ async function main() {
 
     await mkdir(VENDOR_DIR, { recursive: true });
     const isWindows = os === "windows";
+    const loaderName = isWindows
+      ? "GocciaScriptLoader.exe"
+      : "GocciaScriptLoader";
     let copied = 0;
     for (const exe of EXES) {
       const fname = isWindows ? `${exe}.exe` : exe;
@@ -114,6 +126,15 @@ async function main() {
       await copyFile(src, dest);
       copied++;
     }
+    // The loader is the *only* binary `/api/run` actually invokes — the
+    // others are nice-to-haves for local CLI use. If it's missing the
+    // build looks fine but the playground 500s at runtime, so make this
+    // a hard fail at vendor time instead.
+    if (!existsSync(path.join(VENDOR_DIR, loaderName))) {
+      throw new Error(
+        `required binary missing after extraction: ${loaderName}`,
+      );
+    }
     console.log(`[fetch-nightly] vendored ${copied} binaries → ${VENDOR_DIR}`);
   } finally {
     await rm(work, { recursive: true, force: true });
@@ -124,7 +145,13 @@ main().catch((err) => {
   console.error("[fetch-nightly] failed:", err.message ?? err);
   // Don't fail the build over a vendor-fetch problem when we already
   // have a binary cached locally — only error out on first install.
-  if (existsSync(path.join(VENDOR_DIR, "GocciaScriptLoader"))) {
+  // Check both shapes (`GocciaScriptLoader` on POSIX, `.exe` on Windows)
+  // so the cached fallback works on any CI host that's previously been
+  // primed.
+  const cachedLoader =
+    existsSync(path.join(VENDOR_DIR, "GocciaScriptLoader")) ||
+    existsSync(path.join(VENDOR_DIR, "GocciaScriptLoader.exe"));
+  if (cachedLoader) {
     console.error(
       "[fetch-nightly] keeping previously vendored binaries; build continues",
     );

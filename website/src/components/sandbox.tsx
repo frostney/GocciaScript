@@ -425,6 +425,62 @@ const DEFAULT_GLOBALS = `{
 // a sandboxed-paste UI).
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
+// Reserved words that pass the identifier regex above but are still illegal
+// as `const` binding names. Covers the unconditionally reserved set plus the
+// strict-mode-only future-reserved words (we run user code in module scope,
+// which is implicitly strict). `await` is in here because GocciaScript
+// modules are top-level-async-aware and binding `await` is a SyntaxError in
+// module goal symbol. Keep this in sync with the engine's parser if either
+// side adds a keyword.
+const RESERVED_BINDING_WORDS = new Set([
+  "await",
+  "break",
+  "case",
+  "catch",
+  "class",
+  "const",
+  "continue",
+  "debugger",
+  "default",
+  "delete",
+  "do",
+  "else",
+  "enum",
+  "export",
+  "extends",
+  "false",
+  "finally",
+  "for",
+  "function",
+  "if",
+  "import",
+  "in",
+  "instanceof",
+  "let",
+  "new",
+  "null",
+  "return",
+  "super",
+  "switch",
+  "this",
+  "throw",
+  "true",
+  "try",
+  "typeof",
+  "var",
+  "void",
+  "while",
+  "with",
+  "yield",
+  "static",
+  "implements",
+  "interface",
+  "package",
+  "private",
+  "protected",
+  "public",
+]);
+
 /** Build the script that actually runs: each top-level globals key
  *  becomes a `const X = <JSON literal>;` declaration above the user's
  *  code. `JSON.stringify` of any JSON value is also a valid JS literal,
@@ -437,6 +493,11 @@ function buildScript(userCode: string, parsedGlobals: Record<string, unknown>) {
       if (!IDENTIFIER_RE.test(k)) {
         throw new Error(
           `globals key "${k}" is not a valid JavaScript identifier`,
+        );
+      }
+      if (RESERVED_BINDING_WORDS.has(k)) {
+        throw new Error(
+          `globals key "${k}" is a reserved word and can't be a const name`,
         );
       }
       return `const ${k} = ${JSON.stringify(v)};`;
@@ -533,13 +594,34 @@ export function Sandbox() {
         ]);
         return;
       }
-      const data = (await res.json()) as {
+      // `.json()` on a non-2xx body that isn't valid JSON (gateway HTML
+      // page, empty body) would throw and bounce us into the network-error
+      // path with a confusing message — fall back to an empty object so
+      // the response-status branch below renders the real story.
+      const data = (await res.json().catch(() => ({}))) as {
         ok?: boolean;
         output?: string;
         value?: unknown;
         error?: { message: string; line?: number | null } | null;
         timing?: { total_ms: number };
       };
+
+      // Non-2xx responses from `/api/run` always include a structured
+      // `error`-shape payload (see `transportError` in the route), so we
+      // surface that message rather than synthesising a fake `exit 0`.
+      if (!res.ok) {
+        const where = data.error?.line ? ` (line ${data.error.line})` : "";
+        setOutput([
+          banner,
+          {
+            kind: "err",
+            text: data.error
+              ? `${data.error.message}${where}`
+              : `Request failed: HTTP ${res.status} ${res.statusText}`,
+          },
+        ]);
+        return;
+      }
 
       const lines: SbLine[] = [
         banner,

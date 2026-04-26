@@ -9,7 +9,8 @@ publishing the repository.
 - `gocciascript.list` — the apt sources line users add to
   `/etc/apt/sources.list.d/gocciascript.list`. Pinned to the
   `signed-by=` keyring path produced by the user-side `dearmor` step.
-- `build-deb.sh` — packages the release archive's `build/` payload
+- `build-deb.sh` — packages binaries from the release archive root
+  (`gocciascript-<version>-linux-<arch>/{GocciaScriptLoader,GocciaTestRunner,GocciaREPL}`)
   into a Debian binary package (`.deb`) named
   `gocciascript_<version>_<arch>.deb`. Run once per arch per release.
 

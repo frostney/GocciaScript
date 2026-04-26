@@ -168,6 +168,11 @@ export function SiteShell({
                 ? "Switch to light mode"
                 : "Switch to dark mode"
             }
+            // The button is a stateful toggle (dark ⇄ light), so expose
+            // the pressed-ness explicitly. We treat "espresso" (dark) as
+            // the pressed/active state — matches the icon swap
+            // convention where a pressed toggle shows the *current* mode.
+            aria-pressed={theme === "espresso"}
             title={theme === "espresso" ? "Light mode" : "Dark mode"}
           >
             {theme === "espresso" ? (

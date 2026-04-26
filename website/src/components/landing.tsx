@@ -45,6 +45,11 @@ type OutputLine = { kind: "meta" | "out" | "err"; text: string };
 
 function HeroRunnableCard({ code }: { code: string }) {
   const [copyTick, setCopyTick] = useState(0);
+  // Bumped on each new execution so `<AnimatedOutput>` re-mounts and
+  // re-runs its line-stagger reveal cleanly. Kept separate from
+  // `copyTick` so the "copied" flash on the copy button doesn't replay
+  // the console output.
+  const [runTick, setRunTick] = useState(0);
   const [running, setRunning] = useState(false);
   const [output, setOutput] = useState<OutputLine[] | null>(null);
   const [src, setSrc] = useState(code);
@@ -90,6 +95,7 @@ function HeroRunnableCard({ code }: { code: string }) {
     // requests and race the output panel.
     if (running) return;
     setRunning(true);
+    setRunTick((t) => t + 1);
     const banner = "› GocciaScriptLoader coffee-shop.js";
     setOutput([{ kind: "meta", text: banner }]);
     try {
@@ -229,7 +235,7 @@ function HeroRunnableCard({ code }: { code: string }) {
       <div className="hero-output">
         {output ? (
           <AnimatedOutput
-            runKey={copyTick + (running ? 1 : 0) + output.length}
+            runKey={runTick}
             lines={output.map((l) => ({
               kind:
                 l.kind === "meta" ? "meta" : l.kind === "err" ? "err" : "out",
@@ -919,7 +925,7 @@ export function Landing({
             <div className="section-kicker">Compiler pipeline</div>
             <AnchorH2 id="compiler-pipeline">From source to result.</AnchorH2>
             <p>
-              One pipeline, four stages. Click a stage to jump into the matching
+              One pipeline, five stages. Click a stage to jump into the matching
               docs chapter — start with{" "}
               <Link href="/docs/architecture" className="link-button">
                 Architecture
