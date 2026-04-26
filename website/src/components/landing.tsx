@@ -1,7 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  Fragment,
+  type ReactNode,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { AnchorH2, AnchorH3 } from "@/components/anchor-heading";
 import { AnimatedOutput } from "@/components/animated-output";
 import {
@@ -491,6 +498,14 @@ console.log("total:", total);`;
   const [resultView, setResultView] = useState<"console" | "json">("console");
   const stage = stages[active];
 
+  // SSR-stable ids so the tab → panel association via `aria-controls` /
+  // `aria-labelledby` survives hydration. `useId` produces collision-free
+  // values even if this component were rendered multiple times on a page.
+  const tabConsoleId = useId();
+  const tabJsonId = useId();
+  const panelConsoleId = useId();
+  const panelJsonId = useId();
+
   // The Result step's console output uses `<AnimatedOutput>` for its
   // line-stagger reveal — same animation that drives the playground,
   // sandbox preview, and hero runnable card. No local timer state
@@ -604,7 +619,9 @@ console.log("total:", total);`;
                 <button
                   type="button"
                   role="tab"
+                  id={tabConsoleId}
                   aria-selected={resultView === "console"}
+                  aria-controls={panelConsoleId}
                   className="arch-artifact-tab"
                   data-active={resultView === "console"}
                   onClick={() => setResultView("console")}
@@ -614,7 +631,9 @@ console.log("total:", total);`;
                 <button
                   type="button"
                   role="tab"
+                  id={tabJsonId}
                   aria-selected={resultView === "json"}
+                  aria-controls={panelJsonId}
                   className="arch-artifact-tab"
                   data-active={resultView === "json"}
                   onClick={() => setResultView("json")}
@@ -622,22 +641,39 @@ console.log("total:", total);`;
                   JSON result
                 </button>
               </div>
+              {/* Each panel is wired up with `role="tabpanel"` +
+                  `aria-labelledby` so screen readers announce the
+                  controlling tab when focus enters the panel content. We
+                  unmount the inactive panel rather than hide it via CSS
+                  to keep the line-stagger animation `runKey` clean. */}
               {resultView === "console" ? (
-                <AnimatedOutput
-                  className="arch-anim-output"
-                  runKey={`console-${active}`}
-                  lines={CONSOLE_OUTPUT.split("\n").map((text) => ({
-                    kind: "out" as const,
-                    text,
-                  }))}
-                />
-              ) : (
-                <NumberedCode
-                  className="arch-detail-anim"
-                  lineCount={RESULT.split("\n").length}
+                <div
+                  role="tabpanel"
+                  id={panelConsoleId}
+                  aria-labelledby={tabConsoleId}
                 >
-                  <HighlightedGeneric code={RESULT} language="json" />
-                </NumberedCode>
+                  <AnimatedOutput
+                    className="arch-anim-output"
+                    runKey={`console-${active}`}
+                    lines={CONSOLE_OUTPUT.split("\n").map((text) => ({
+                      kind: "out" as const,
+                      text,
+                    }))}
+                  />
+                </div>
+              ) : (
+                <div
+                  role="tabpanel"
+                  id={panelJsonId}
+                  aria-labelledby={tabJsonId}
+                >
+                  <NumberedCode
+                    className="arch-detail-anim"
+                    lineCount={RESULT.split("\n").length}
+                  >
+                    <HighlightedGeneric code={RESULT} language="json" />
+                  </NumberedCode>
+                </div>
               )}
             </div>
           )}

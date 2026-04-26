@@ -3,7 +3,13 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   CloseIcon,
   GithubIcon,
@@ -66,7 +72,13 @@ export function SiteShell({
   const [indicatorReady, setIndicatorReady] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
-  useIsoLayoutEffect(() => {
+  // Reposition the active-tab indicator. Reads layout from the DOM so
+  // we follow whatever the browser actually painted — Flexbox gaps,
+  // font-loading shifts, sub-pixel rounding all resolve correctly.
+  // `useCallback([])` so the function identity is stable across renders
+  // and the ResizeObserver effect below doesn't re-run on every parent
+  // re-render.
+  const measureIndicator = useCallback(() => {
     const bar = tabBarRef.current;
     if (!bar) return;
     const activeEl = bar.querySelector<HTMLElement>(
@@ -81,28 +93,27 @@ export function SiteShell({
       width: r.width,
       height: r.height,
     });
-  }, [active]);
-
-  useEffect(() => {
-    const onResize = () => {
-      const bar = tabBarRef.current;
-      if (!bar) return;
-      const activeEl = bar.querySelector<HTMLElement>(
-        '.nav-link[data-active="true"]',
-      );
-      if (!activeEl) return;
-      const barRect = bar.getBoundingClientRect();
-      const r = activeEl.getBoundingClientRect();
-      setIndicator({
-        left: r.left - barRect.left,
-        top: r.top - barRect.top,
-        width: r.width,
-        height: r.height,
-      });
-    };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  // Re-measure on active-tab change. Layout effect (not regular effect)
+  // so the indicator's transform updates in the same frame as the tab
+  // becoming active — no flash of "indicator at old position".
+  useIsoLayoutEffect(() => {
+    measureIndicator();
+  }, [active, measureIndicator]);
+
+  // Re-measure whenever the nav bar's box changes — covers the obvious
+  // window resize, but also: font-loading shifts that change link
+  // widths, the GitHub stars badge populating after `fetchStars()`
+  // resolves, the mobile hamburger menu opening/closing, and any other
+  // layout reflow that wouldn't fire a `window.resize` event.
+  useEffect(() => {
+    const bar = tabBarRef.current;
+    if (!bar || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => measureIndicator());
+    ro.observe(bar);
+    return () => ro.disconnect();
+  }, [measureIndicator]);
 
   // Close mobile menu on route change.
   // biome-ignore lint/correctness/useExhaustiveDependencies: only path change
