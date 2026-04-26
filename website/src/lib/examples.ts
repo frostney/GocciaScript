@@ -1,0 +1,453 @@
+export type OutputLine = {
+  kind: "meta" | "log" | "err" | "out" | "result";
+  text: string;
+};
+
+export type Example = {
+  id: string;
+  label: string;
+  desc: string;
+  code: string;
+};
+
+export const EXAMPLES: Example[] = [
+  {
+    id: "blank",
+    label: "Blank — start from scratch",
+    desc: "An empty editor. Tab completes the suggested word.",
+    code: `// Write your GocciaScript here.
+
+`,
+  },
+  {
+    id: "types",
+    label: "Types-as-comments — TypeScript-style annotations",
+    desc: "TC39 types-as-comments: TypeScript-style annotations are parsed and stripped at runtime — no separate compilation step.",
+    code: `// Type annotations are allowed, but treated as comments at runtime.
+// Runs directly — no transpilation step.
+
+type Currency = "USD" | "EUR" | "GBP";
+
+interface LineItem {
+  sku: string;
+  qty: number;
+  unit: number;
+}
+
+const subtotal = (items: LineItem[]): number =>
+  items.reduce((t, it) => t + it.qty * it.unit, 0);
+
+const format = (amount: number, currency: Currency): string => {
+  const symbols: Record<Currency, string> = {
+    USD: "$", EUR: "€", GBP: "£",
+  };
+  return \`\${symbols[currency]}\${amount.toFixed(2)}\`;
+};
+
+const cart: LineItem[] = [
+  { sku: "ESP-01", qty: 2, unit: 2.5 },
+  { sku: "LAT-07", qty: 1, unit: 4.0 },
+];
+
+console.log("Items:", cart.length);
+console.log("Total:", format(subtotal(cart), "EUR"));`,
+  },
+  {
+    id: "enums",
+    label: "Enums — TC39 Stage-1 proposal",
+    desc: "Enum declarations compile to frozen objects with reverse-mapping. Enums are exhaustive in a switch.",
+    code: `// Enum declarations — TC39 Stage-1 proposal
+enum OrderStatus {
+  Pending = 0,
+  Brewing = 1,
+  Ready = 2,
+  Delivered = 3,
+}
+
+enum PaymentMethod {
+  Cash = "cash",
+  Card = "card",
+  Crypto = "crypto",
+}
+
+const describe = (status) => {
+  switch (status) {
+    case OrderStatus.Pending:   return "waiting on barista";
+    case OrderStatus.Brewing:   return "in the portafilter";
+    case OrderStatus.Ready:     return "ready for pickup";
+    case OrderStatus.Delivered: return "enjoy!";
+  }
+};
+
+console.log(OrderStatus.Brewing, "→", describe(OrderStatus.Brewing));
+console.log(OrderStatus[2], "→", describe(2));
+console.log("Paid with:", PaymentMethod.Card);
+console.log(Object.isFrozen(OrderStatus));`,
+  },
+  {
+    id: "coffee",
+    label: "CoffeeShop — private fields + class",
+    desc: "Classes with hash-prefixed private fields, getters, and array methods — from the README.",
+    code: `// CoffeeShop — class with private fields
+class CoffeeShop {
+  #name = "Goccia Coffee";
+  #beans = ["Arabica", "Robusta", "Ethiopian"];
+  #prices = { espresso: 2.5, latte: 4.0, cappuccino: 3.75 };
+
+  getMenu() {
+    return this.#beans.map((bean) => \`\${bean} blend\`);
+  }
+
+  calculateTotal(order) {
+    return order.reduce((total, item) => total + (this.#prices[item] ?? 0), 0);
+  }
+
+  get name() {
+    return this.#name;
+  }
+}
+
+const shop = new CoffeeShop();
+const order = ["espresso", "latte"];
+const total = shop.calculateTotal(order);
+
+console.log(\`Welcome to \${shop.name}!\`);
+console.log(\`Your order total: $\${total.toFixed(2)}\`);
+console.log("Menu:", shop.getMenu());`,
+  },
+  {
+    id: "coffee-typed",
+    label: "CoffeeShop · typed — types, enums, private fields",
+    desc: "The home-page example. Types-as-comments, enums, interfaces, private fields, getters, and mapped object types — all in one program.",
+    code: `// Types-as-comments, enums, private fields — all stock GocciaScript.
+type Currency = "USD" | "EUR" | "GBP";
+
+enum DrinkSize {
+  Small = "small",
+  Medium = "medium",
+  Large = "large",
+}
+
+interface MenuItem {
+  name: string;
+  basePrice: number;
+}
+
+class CoffeeShop {
+  #name: string = "Goccia Coffee";
+  #menu: MenuItem[] = [
+    { name: "Espresso",   basePrice: 2.5 },
+    { name: "Latte",      basePrice: 4.0 },
+    { name: "Cappuccino", basePrice: 3.75 },
+  ];
+
+  total(items: string[], size: DrinkSize, currency: Currency): string {
+    const multiplier =
+      size === DrinkSize.Large ? 1.3 :
+      size === DrinkSize.Medium ? 1.1 : 1.0;
+    const subtotal = items.reduce((sum, item) => {
+      const found = this.#menu.find((m) => m.name === item);
+      return sum + (found ? found.basePrice * multiplier : 0);
+    }, 0);
+    const symbols: Record<Currency, string> = { USD: "$", EUR: "€", GBP: "£" };
+    return \`\${symbols[currency]}\${subtotal.toFixed(2)}\`;
+  }
+
+  get name(): string { return this.#name; }
+}
+
+const shop = new CoffeeShop();
+const total = shop.total(["Espresso", "Latte"], DrinkSize.Medium, "EUR");
+console.log(\`Welcome to \${shop.name}!\`);
+console.log(\`Your total: \${total}\`);`,
+  },
+  {
+    id: "fetch",
+    label: "Async / await — fetch + Promise",
+    desc: "Top-level await, async arrow functions, and a sandboxed fetch (GET/HEAD only, explicit allow-listed hosts).",
+    code: `const fetchJoke = async () => {
+  const res = await fetch("https://icanhazdadjoke.com/", {
+    headers: { Accept: "application/json" },
+  });
+  const data = await res.json();
+  return data.joke;
+};
+
+// Top-level await (ES2022+)
+const joke = await fetchJoke();
+console.log("Today's dad joke:");
+console.log(joke);
+
+// Promise.all fans out
+const results = await Promise.all([
+  Promise.resolve("espresso"),
+  Promise.resolve("latte"),
+  Promise.resolve("cortado"),
+]);
+console.log("Brew queue:", results);`,
+  },
+  {
+    id: "temporal",
+    label: "Temporal — date math without Date",
+    desc: "Temporal API for unambiguous date/time arithmetic and calendar handling.",
+    code: `// Today's instant in Rome
+const now = Temporal.Now.zonedDateTimeISO("Europe/Rome");
+console.log("Now in Rome:", now.toString());
+
+// 90-day project schedule
+const kickoff = Temporal.PlainDate.from("2026-05-01");
+const milestones = [30, 60, 90].map((days) =>
+  kickoff.add({ days }).toString(),
+);
+
+console.log("Kickoff:", kickoff.toString());
+console.log("Milestones:", milestones);
+
+// Duration between two dates
+const delivery = Temporal.PlainDate.from("2026-07-30");
+const span = kickoff.until(delivery, { largestUnit: "months" });
+console.log("Time to ship:", span.toString());`,
+  },
+  {
+    id: "data",
+    label: "Structured data — JSON / TOML / YAML import",
+    desc: "Import .json, .toml, .yaml, .csv files directly as ES modules — or parse at runtime.",
+    code: `// Runtime parsing
+const tomlSource = \`
+[server]
+host = "gocciascript.dev"
+port = 8443
+
+[features]
+sandbox = true
+temporal = true
+\`;
+
+const config = TOML.parse(tomlSource);
+console.log("Host:", config.server.host);
+console.log("Features:", Object.keys(config.features));
+
+// CSV → array of rows
+const csv = "name,price\\nespresso,2.5\\nlatte,4.0";
+const rows = CSV.parse(csv, { header: true });
+console.log("Menu rows:", rows);`,
+  },
+  {
+    id: "binary",
+    label: "TypedArrays — binary data",
+    desc: "ArrayBuffer + TypedArrays for low-level binary work; all views share the same backing memory.",
+    code: `// 16 bytes of backing storage
+const buf = new ArrayBuffer(16);
+
+// Two views over the same buffer
+const u32 = new Uint32Array(buf);
+const u8  = new Uint8Array(buf);
+
+u32[0] = 0xdeadbeef;
+u32[1] = 0xc0ffee42;
+
+console.log("u32:", Array.from(u32).map((n) => "0x" + n.toString(16)));
+console.log("u8 :", Array.from(u8));
+
+// TextEncoder round-trip
+const enc = new TextEncoder();
+const bytes = enc.encode("Goccia ☕");
+console.log("bytes:", bytes);
+console.log("decoded:", new TextDecoder().decode(bytes));`,
+  },
+  {
+    id: "decorators",
+    label: "Decorators — class members",
+    desc: "Stage-3 decorators on class methods — in this case, a simple @memoize and @log.",
+    code: `const log = (value, context) => {
+  return function (...args) {
+    console.log(\`→ \${context.name}(\${args.join(", ")})\`);
+    const result = value.apply(this, args);
+    console.log(\`← \${result}\`);
+    return result;
+  };
+};
+
+const memoize = (value, context) => {
+  const cache = new Map();
+  return function (arg) {
+    if (cache.has(arg)) return cache.get(arg);
+    const result = value.call(this, arg);
+    cache.set(arg, result);
+    return result;
+  };
+};
+
+class Math2 {
+  @log
+  @memoize
+  fib(n) {
+    if (n < 2) return n;
+    return this.fib(n - 1) + this.fib(n - 2);
+  }
+}
+
+const m = new Math2();
+console.log("fib(6) =", m.fib(6));`,
+  },
+  {
+    id: "fibfizz",
+    label: "FizzBuzz + fibonacci",
+    desc: "Classic algorithms — no traditional for loops, just Array methods and for...of.",
+    code: `// FizzBuzz via map
+const fizzbuzz = (n) =>
+  Array.from({ length: n }, (_, i) => {
+    const k = i + 1;
+    if (k % 15 === 0) return "FizzBuzz";
+    if (k % 3 === 0) return "Fizz";
+    if (k % 5 === 0) return "Buzz";
+    return String(k);
+  });
+
+console.log(fizzbuzz(15).join(" "));
+
+// Fibonacci as a hand-rolled iterator (function declarations are excluded,
+// so no function*; instead implement the iterator protocol directly).
+class FibIterator {
+  constructor() {
+    this.a = 0;
+    this.b = 1;
+  }
+  next() {
+    const value = this.a;
+    const next = this.a + this.b;
+    this.a = this.b;
+    this.b = next;
+    return { value, done: false };
+  }
+  [Symbol.iterator]() {
+    return this;
+  }
+}
+
+const seq = [];
+let count = 0;
+for (const n of new FibIterator()) {
+  if (count++ >= 10) break;
+  seq.push(n);
+}
+console.log("First 10 fib:", seq);`,
+  },
+];
+
+export const AUTOCOMPLETE_TOKENS = [
+  "const",
+  "let",
+  "if",
+  "else",
+  "return",
+  "class",
+  "extends",
+  "new",
+  "this",
+  "super",
+  "import",
+  "export",
+  "from",
+  "as",
+  "async",
+  "await",
+  "for",
+  "of",
+  "while",
+  "switch",
+  "case",
+  "default",
+  "break",
+  "continue",
+  "try",
+  "catch",
+  "finally",
+  "throw",
+  "typeof",
+  "instanceof",
+  "yield",
+  "enum",
+  "type",
+  "interface",
+  "console",
+  "Math",
+  "JSON",
+  "JSON5",
+  "TOML",
+  "YAML",
+  "JSONL",
+  "CSV",
+  "TSV",
+  "Object",
+  "Array",
+  "Number",
+  "String",
+  "RegExp",
+  "Symbol",
+  "Set",
+  "Map",
+  "WeakMap",
+  "WeakSet",
+  "Promise",
+  "Temporal",
+  "Iterator",
+  "Proxy",
+  "Reflect",
+  "ArrayBuffer",
+  "SharedArrayBuffer",
+  "Uint8Array",
+  "Uint8ClampedArray",
+  "Int8Array",
+  "Int16Array",
+  "Uint16Array",
+  "Int32Array",
+  "Uint32Array",
+  "Float32Array",
+  "Float64Array",
+  "fetch",
+  "Headers",
+  "Response",
+  "URL",
+  "URLSearchParams",
+  "TextEncoder",
+  "TextDecoder",
+  "Error",
+  "TypeError",
+  "ReferenceError",
+  "RangeError",
+  "SyntaxError",
+  "DOMException",
+  "console.log",
+  "console.error",
+  "console.warn",
+  "console.info",
+  "console.debug",
+  "console.table",
+  "Math.PI",
+  "Math.E",
+  "Math.abs",
+  "Math.floor",
+  "Math.ceil",
+  "Math.round",
+  "Math.sqrt",
+  "Math.pow",
+  "Math.max",
+  "Math.min",
+  "Math.random",
+  "Temporal.Now",
+  "Temporal.PlainDate",
+  "Temporal.PlainDateTime",
+  "Temporal.PlainTime",
+  "Temporal.ZonedDateTime",
+  "Temporal.Duration",
+  "Temporal.Instant",
+  "JSON.parse",
+  "JSON.stringify",
+  "JSON5.parse",
+  "TOML.parse",
+  "YAML.parse",
+  "CSV.parse",
+  "TSV.parse",
+  "JSONL.parse",
+];

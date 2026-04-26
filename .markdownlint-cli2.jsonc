@@ -31,8 +31,13 @@
   },
   "ignores": [
     "node_modules",
+    "**/node_modules/**",
     "CHANGELOG.md",
-    ".agents/skills/**"
+    ".agents/skills/**",
+    "website/content/docs/**",
+    // Claude Code @-include shim files — single-line `@OTHER.md` directives
+    // that aren't real markdown.
+    "website/CLAUDE.md"
   ],
   "globs": [
     "**/*.md"

@@ -25,19 +25,29 @@ const ROOT = join(__dirname, "..");
 const VERBOSE = process.argv.includes("--verbose");
 const EXTENSIONS = new Set([".md", ".mdx"]);
 const IGNORE_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "vendor"]);
+// Build artifacts whose contents are synced from elsewhere and validated at
+// the source location. Path-prefix matched against repo-relative paths.
+const IGNORE_PATH_PREFIXES = ["website/content/docs/"];
 
 // -- File discovery -----------------------------------------------------------
 
 const findMarkdownFiles = (dir: string): string[] => {
   const results: string[] = [];
   const seen = new Set<string>();
+  const isIgnoredPath = (full: string): boolean => {
+    const rel = relative(ROOT, full).split("\\").join("/");
+    return IGNORE_PATH_PREFIXES.some((p) => rel === p.replace(/\/$/, "") || rel.startsWith(p));
+  };
   const walk = (d: string): void => {
     const entries = readdirSync(d, { withFileTypes: true });
     for (const entry of entries) {
       const full = join(d, entry.name);
       if (entry.isDirectory()) {
-        if (!IGNORE_DIRS.has(entry.name)) walk(full);
+        if (IGNORE_DIRS.has(entry.name)) continue;
+        if (isIgnoredPath(full)) continue;
+        walk(full);
       } else if (EXTENSIONS.has(entry.name.slice(entry.name.lastIndexOf(".")))) {
+        if (isIgnoredPath(full)) continue;
         const real = lstatSync(full).isSymbolicLink() ? realpathSync(full) : full;
         if (!seen.has(real)) {
           seen.add(real);
