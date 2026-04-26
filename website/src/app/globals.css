@@ -3097,6 +3097,51 @@ p {
   align-items: center;
   gap: 0.5rem;
   margin-bottom: 0.3rem;
+  flex-wrap: wrap;
+}
+.tcc-step-tokens {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--ink-3);
+  margin-left: auto;
+}
+
+/* "Show tool-call payload" switch row above the comparison grid. */
+.tcc-toggle {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem 1.25rem;
+  margin: 0 0 1.25rem;
+  padding: 0.65rem 0.85rem;
+  background: var(--paper-2);
+  border: 1px solid var(--rule-soft);
+  border-radius: 8px;
+}
+.tcc-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.88rem;
+  color: var(--ink);
+  cursor: pointer;
+  user-select: none;
+}
+.tcc-toggle-label input {
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.tcc-toggle-note {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+.tcc-toggle-note code {
+  font-family: var(--mono);
+  background: var(--paper);
+  border: 1px solid var(--rule-soft);
+  padding: 0.04em 0.32em;
+  border-radius: 4px;
+  font-size: 0.92em;
 }
 .tcc-tool {
   font-family: var(--mono);

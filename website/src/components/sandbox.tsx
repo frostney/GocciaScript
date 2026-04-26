@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { AnchorH2 } from "@/components/anchor-heading";
 import {
   HighlightedCode,
@@ -19,54 +19,68 @@ import {
 const TOOL_CALL_TASK =
   "Summarize the latest transaction batch and find outliers.";
 
-type ToolStep = { tool: string; call: string; role: string };
-type ToolCost = {
-  calls: number;
-  latency: string;
-  tokens: string;
-  context: string;
+/** When ready to surface the SDK integration snippet, flip to true.
+ *  Hidden until the runtime is mature enough to expose a stable
+ *  embedding API. */
+const SHOW_INTEGRATION = false;
+
+type ToolStep = {
+  tool: string;
+  /** Single argument value for the OpenAI-style tool call. The
+   *  `argName` key on the parent flow names what JSON property
+   *  it lives under (`command` for bash, `code` for run_code, …). */
+  call: string;
+  role: string;
+  /** Pre-computed tiktoken count for the OpenAI tool-call envelope:
+   *  `{"name":"<tool>","arguments":"<JSON-string of args>"}`.
+   *  Verified once with `gpt-tokenizer` on the cl100k_base encoder
+   *  (used by GPT-4 / GPT-4o); update if the call text changes. */
+  tokens: number;
 };
+
 type ToolFlow = {
   label: string;
-  title: string;
+  argName: "command" | "code";
   steps: ToolStep[];
-  cost: ToolCost;
   risks: string[];
 };
 
 const TOOL_CALL_FLOWS: { bash: ToolFlow; goccia: ToolFlow } = {
   bash: {
     label: "Bash + jq",
-    title: "5 tool calls · ~14kB context",
+    argName: "command",
     steps: [
-      { tool: "bash", call: "ls /tmp/agent/transactions/", role: "discover" },
+      {
+        tool: "bash",
+        call: "ls /tmp/agent/transactions/",
+        role: "discover",
+        tokens: 21,
+      },
       {
         tool: "bash",
         call: "cat /tmp/agent/transactions/transactions.current.json",
         role: "load",
+        tokens: 24,
       },
       {
         tool: "bash",
         call: "jq '[.[].amount] | add' transactions.current.json",
         role: "sum",
+        tokens: 25,
       },
       {
         tool: "bash",
         call: "jq '[.[].amount] | add / length' transactions.current.json",
         role: "average",
+        tokens: 27,
       },
       {
         tool: "bash",
         call: "jq '[.[] | select(.amount > 280)]' transactions.current.json",
         role: "outliers",
+        tokens: 29,
       },
     ],
-    cost: {
-      calls: 5,
-      latency: "~1.8s",
-      tokens: "~3,420 tok",
-      context: "~14kB",
-    },
     risks: [
       "values cross 5 process boundaries — possible to lose precision or quoting",
       "agent has to remember intermediate state across every call",
@@ -75,7 +89,7 @@ const TOOL_CALL_FLOWS: { bash: ToolFlow; goccia: ToolFlow } = {
   },
   goccia: {
     label: "GocciaScript (single call)",
-    title: "1 tool call · 1 sandbox · ~2kB context",
+    argName: "code",
     steps: [
       {
         tool: "run_code",
@@ -87,9 +101,9 @@ const stdev = Math.sqrt(
 const outliers = transactions.filter((t) => Math.abs(t.amount - avg) > 2 * stdev);
 ({ total, avg, outliers });`,
         role: "everything",
+        tokens: 118,
       },
     ],
-    cost: { calls: 1, latency: "~4ms", tokens: "~510 tok", context: "~2kB" },
     risks: [
       "all values stay in one sandbox — no serialization between steps",
       "host gets a single structured JSON result back",
@@ -97,9 +111,26 @@ const outliers = transactions.filter((t) => Math.abs(t.amount - avg) > 2 * stdev
   },
 };
 
+/** Build the canonical OpenAI tool-call envelope for one step:
+ *
+ *   {"name":"<tool>","arguments":"<JSON-string of args>"}
+ *
+ * The model pays tokens for the entire envelope, not just the inner
+ * command — that's what the toggle reveals. */
+function toolCallPayload(step: ToolStep, argName: ToolFlow["argName"]): string {
+  return JSON.stringify(
+    { name: step.tool, arguments: JSON.stringify({ [argName]: step.call }) },
+    null,
+    2,
+  );
+}
+
 function ToolCallComparison() {
   const ref = useRef<HTMLDivElement>(null);
   const [armed, setArmed] = useState(false);
+  const [showPayload, setShowPayload] = useState(false);
+  const payloadToggleId = useId();
+
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -120,79 +151,109 @@ function ToolCallComparison() {
   }, []);
 
   return (
-    <div className="tcc-grid" ref={ref} data-armed={armed}>
-      {(Object.entries(TOOL_CALL_FLOWS) as [string, ToolFlow][]).map(
-        ([key, flow]) => {
-          const isGoccia = key === "goccia";
-          return (
-            <div
-              key={key}
-              className={`tcc-flow${isGoccia ? " tcc-flow-goccia" : ""}`}
-            >
-              <div className="tcc-head">
-                <div>
-                  <div className="tcc-label">{flow.label}</div>
-                  <h4 className="tcc-title">{flow.title}</h4>
-                </div>
-                <div className="tcc-cost">
-                  <span>
-                    <strong>{flow.cost.calls}</strong> call
-                    {flow.cost.calls > 1 ? "s" : ""}
-                  </span>
-                  <span>{flow.cost.latency}</span>
-                  <span>{flow.cost.tokens}</span>
-                  <span className="tcc-cost-sub">{flow.cost.context}</span>
-                </div>
-              </div>
-              <ol className="tcc-steps">
-                {flow.steps.map((s, i) => (
-                  <li
-                    key={i}
-                    className="tcc-step"
-                    style={{ animationDelay: `${0.18 + i * 0.22}s` }}
-                  >
-                    <span className="tcc-step-num">{i + 1}</span>
-                    <div className="tcc-step-body">
-                      <div className="tcc-step-head">
-                        <span className="tcc-tool">{s.tool}</span>
-                        <span className="tcc-role">{s.role}</span>
-                      </div>
-                      <pre className="tcc-call">
-                        <code>
-                          {isGoccia ? (
-                            <HighlightedCode code={s.call} />
-                          ) : (
-                            s.call
-                          )}
-                        </code>
-                      </pre>
-                    </div>
-                  </li>
-                ))}
-              </ol>
-              <ul
-                className="tcc-risks"
-                style={{
-                  animationDelay: `${0.25 + flow.steps.length * 0.22}s`,
-                }}
+    <>
+      <div className="tcc-toggle">
+        <label htmlFor={payloadToggleId} className="tcc-toggle-label">
+          <input
+            id={payloadToggleId}
+            type="checkbox"
+            checked={showPayload}
+            onChange={(e) => setShowPayload(e.target.checked)}
+          />
+          <span>Show tool-call payload</span>
+        </label>
+        <span className="tcc-toggle-note">
+          Token counts via{" "}
+          <a
+            href="https://github.com/openai/tiktoken"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            tiktoken
+          </a>{" "}
+          on the <code>cl100k_base</code> encoder (GPT-4).
+        </span>
+      </div>
+      <div className="tcc-grid" ref={ref} data-armed={armed}>
+        {(Object.entries(TOOL_CALL_FLOWS) as [string, ToolFlow][]).map(
+          ([key, flow]) => {
+            const isGoccia = key === "goccia";
+            const totalTokens = flow.steps.reduce(
+              (s, step) => s + step.tokens,
+              0,
+            );
+            return (
+              <div
+                key={key}
+                className={`tcc-flow${isGoccia ? " tcc-flow-goccia" : ""}`}
               >
-                {flow.risks.map((r, i) => (
-                  <li
-                    key={i}
-                    className={isGoccia ? "tcc-risk-good" : "tcc-risk-bad"}
-                  >
-                    <span className="tcc-risk-mark">
-                      {isGoccia ? "✓" : "·"}
-                    </span>{" "}
-                    {r}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          );
-        },
-      )}
-    </div>
+                <div className="tcc-head">
+                  <div>
+                    <div className="tcc-label">{flow.label}</div>
+                    <h4 className="tcc-title">
+                      {flow.steps.length} tool call
+                      {flow.steps.length === 1 ? "" : "s"} · {totalTokens} tok
+                    </h4>
+                  </div>
+                </div>
+                <ol className="tcc-steps">
+                  {flow.steps.map((s, i) => (
+                    <li
+                      key={i}
+                      className="tcc-step"
+                      style={{ animationDelay: `${0.18 + i * 0.22}s` }}
+                    >
+                      <span className="tcc-step-num">{i + 1}</span>
+                      <div className="tcc-step-body">
+                        <div className="tcc-step-head">
+                          <span className="tcc-tool">{s.tool}</span>
+                          <span className="tcc-role">{s.role}</span>
+                          <span className="tcc-step-tokens">
+                            {s.tokens} tok
+                          </span>
+                        </div>
+                        <pre className="tcc-call">
+                          <code>
+                            {showPayload ? (
+                              <HighlightedGeneric
+                                code={toolCallPayload(s, flow.argName)}
+                                language="json"
+                              />
+                            ) : isGoccia ? (
+                              <HighlightedCode code={s.call} />
+                            ) : (
+                              s.call
+                            )}
+                          </code>
+                        </pre>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+                <ul
+                  className="tcc-risks"
+                  style={{
+                    animationDelay: `${0.25 + flow.steps.length * 0.22}s`,
+                  }}
+                >
+                  {flow.risks.map((r, i) => (
+                    <li
+                      key={i}
+                      className={isGoccia ? "tcc-risk-good" : "tcc-risk-bad"}
+                    >
+                      <span className="tcc-risk-mark">
+                        {isGoccia ? "✓" : "·"}
+                      </span>{" "}
+                      {r}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          },
+        )}
+      </div>
+    </>
   );
 }
 
@@ -217,17 +278,19 @@ await generateText({
   },
 });`;
 
-export function Sandbox() {
-  const [code, setCode] = useState(`// Untrusted script from an AI agent.
+/** Default sandbox script — ends with an expression statement so the
+ *  runner returns it as `value`. (The runner doesn't allow `return`
+ *  at top level since the source is treated as a module.) */
+const DEFAULT_CODE = `// Untrusted script from an AI agent.
 // The sandbox has no fetch, fs, env, or eval — by default.
 const summary = users
   .filter((u) => u.active)
   .map((u) => ({ id: u.id, name: u.name.toUpperCase() }));
 
 console.log("Found", summary.length, "active users");
-return { summary, count: summary.length };`);
+({ summary, count: summary.length });`;
 
-  const [globalsText, setGlobalsText] = useState(`{
+const DEFAULT_GLOBALS = `{
   "users": [
     { "id": 1, "name": "Alice",   "active": true  },
     { "id": 2, "name": "Bob",     "active": false },
@@ -236,80 +299,137 @@ return { summary, count: summary.length };`);
     { "id": 5, "name": "Eve",     "active": true  },
     { "id": 6, "name": "Frank",   "active": true  }
   ]
-}`);
+}`;
 
+/** Build the script that actually runs: each top-level globals key
+ *  becomes a `const X = <JSON literal>;` declaration above the user's
+ *  code. `JSON.stringify` of any JSON value is also a valid JS literal,
+ *  so this round-trips cleanly without ad-hoc escaping. */
+function buildScript(userCode: string, parsedGlobals: Record<string, unknown>) {
+  const prelude = Object.entries(parsedGlobals)
+    .map(([k, v]) => `const ${k} = ${JSON.stringify(v)};`)
+    .join("\n");
+  if (!prelude) return userCode;
+  return `// ─── injected globals ───\n${prelude}\n\n// ─── user script ───\n${userCode}`;
+}
+
+export function Sandbox() {
+  const [code, setCode] = useState(DEFAULT_CODE);
+  const [globalsText, setGlobalsText] = useState(DEFAULT_GLOBALS);
   const [output, setOutput] = useState<SbLine[]>([]);
+  const [running, setRunning] = useState(false);
 
-  const simulate = useCallback(() => {
-    const lines: SbLine[] = [
-      {
-        kind: "meta",
-        text: "› goccia run --timeout=500 --memory=64MB --globals=context.json",
-      },
-      { kind: "meta", text: "   caps: — none —" },
-    ];
-    let globalsOk = true;
+  const execute = useCallback(async () => {
+    // Validate globals JSON up-front so a typo there doesn't cost us a
+    // round-trip to the runner.
+    let parsedGlobals: Record<string, unknown>;
     try {
-      JSON.parse(globalsText);
-    } catch {
-      globalsOk = false;
+      const raw = JSON.parse(globalsText);
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        throw new Error("globals must be a JSON object");
+      }
+      parsedGlobals = raw as Record<string, unknown>;
+    } catch (err) {
+      setOutput([
+        {
+          kind: "meta",
+          text: "› goccia run --timeout=500 --memory=64MB --globals=context.json",
+        },
+        {
+          kind: "err",
+          text: `SyntaxError: ${err instanceof Error ? err.message : String(err)}`,
+        },
+        {
+          kind: "meta",
+          text: "  fix the JSON in `context.json` and re-run.",
+        },
+      ]);
+      return;
     }
-    if (!globalsOk) {
-      lines.push({
-        kind: "err",
-        text: "SyntaxError: failed to parse context.json",
+
+    const fullCode = buildScript(code, parsedGlobals);
+    const banner: SbLine = {
+      kind: "meta",
+      text: "› goccia run --timeout=500 --memory=64MB --globals=context.json",
+    };
+    setRunning(true);
+    setOutput([banner, { kind: "meta", text: "  caps: — none —" }]);
+
+    try {
+      const res = await fetch("/api/run", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: fullCode, mode: "tree-walk", asi: true }),
       });
-    } else if (/\bfetch\s*\(/.test(code)) {
-      lines.push({ kind: "err", text: "ReferenceError: fetch is not defined" });
-      lines.push({
-        kind: "meta",
-        text: "  the 'fetch' capability is disabled for this sandbox",
-      });
-    } else if (/\beval\s*\(/.test(code)) {
-      lines.push({
-        kind: "err",
-        text: "SyntaxError: eval is not allowed in GocciaScript",
-      });
-    } else if (/require\s*\(/.test(code)) {
-      lines.push({
-        kind: "err",
-        text: "ReferenceError: require is not defined — use ES module imports",
-      });
-    } else if (/process\./.test(code)) {
-      lines.push({
-        kind: "err",
-        text: "ReferenceError: process is not defined",
-      });
-    } else if (
-      /while\s*\(\s*true/.test(code) ||
-      /for\s*\(\s*;\s*;/.test(code)
-    ) {
-      lines.push({
-        kind: "err",
-        text: "Aborted: script exceeded 500ms timeout",
-      });
-    } else {
-      lines.push({ kind: "out", text: "{" });
-      lines.push({ kind: "out", text: '  "summary": [' });
-      lines.push({ kind: "out", text: '    { "id": 1, "name": "ALICE" },' });
-      lines.push({ kind: "out", text: '    { "id": 3, "name": "CHARLIE" },' });
-      lines.push({ kind: "out", text: '    { "id": 4, "name": "DIANA" },' });
-      lines.push({ kind: "out", text: '    { "id": 5, "name": "EVE" },' });
-      lines.push({ kind: "out", text: '    { "id": 6, "name": "FRANK" }' });
-      lines.push({ kind: "out", text: "  ]," });
-      lines.push({ kind: "out", text: '  "count": 5' });
-      lines.push({ kind: "out", text: "}" });
-      lines.push({
-        kind: "meta",
-        text: "— exit 0 · 4.2ms · heap 0.3MB / 64MB",
-      });
+      if (res.status === 429) {
+        const retry = res.headers.get("Retry-After") ?? "60";
+        setOutput([
+          banner,
+          {
+            kind: "err",
+            text: `Rate limit exceeded — try again in ${retry}s.`,
+          },
+        ]);
+        return;
+      }
+      const data = (await res.json()) as {
+        ok?: boolean;
+        output?: string;
+        value?: unknown;
+        error?: { message: string; line?: number | null } | null;
+        timing?: { total_ms: number };
+      };
+
+      const lines: SbLine[] = [
+        banner,
+        { kind: "meta", text: "  caps: — none —" },
+      ];
+      if (data.error) {
+        const where = data.error.line ? ` (line ${data.error.line})` : "";
+        lines.push({
+          kind: "err",
+          text: `${data.error.message}${where}`,
+        });
+      } else {
+        if (data.output) {
+          for (const line of data.output.replace(/\n$/, "").split("\n")) {
+            lines.push({ kind: "out", text: line });
+          }
+        }
+        if (data.value !== null && data.value !== undefined) {
+          // Pretty-print the structured value the host receives — that's
+          // the headline output of the demo.
+          const pretty = JSON.stringify(data.value, null, 2);
+          for (const line of pretty.split("\n")) {
+            lines.push({ kind: "out", text: line });
+          }
+        }
+        const totalMs = data.timing?.total_ms;
+        lines.push({
+          kind: "meta",
+          text:
+            totalMs !== undefined
+              ? `— exit 0 · ${totalMs.toFixed(2)}ms`
+              : "— exit 0",
+        });
+      }
+      setOutput(lines);
+    } catch (err) {
+      setOutput([
+        banner,
+        {
+          kind: "err",
+          text: `network error: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      ]);
+    } finally {
+      setRunning(false);
     }
-    setOutput(lines);
   }, [code, globalsText]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: run once on mount
   useEffect(() => {
-    simulate();
+    execute();
   }, []);
 
   const vercelLineCount = VERCEL_EXAMPLE.split("\n").length;
@@ -387,16 +507,21 @@ return { summary, count: summary.length };`);
             <div>
               <h4>Sandbox preview</h4>
               <p className="m-0 text-ink-3 text-[0.88rem]">
-                A static visualisation of what the host gets back — capability
-                errors (<code>fetch</code>, <code>eval</code>,{" "}
-                <code>process</code>, runaway loops) react to your edits, but
-                the success-path JSON is illustrative. To execute real code, use
-                the <a href="/playground">Playground</a>.
+                Edit the script or the injected globals and hit{" "}
+                <strong>Execute</strong> — the code runs through the real{" "}
+                <code>GocciaScriptLoader</code> binary on the server, with the
+                same caps and limits the agent integration would see (no fetch,
+                no fs, 500 ms timeout, 64 MB heap).
               </p>
             </div>
             <div className="flex gap-2">
-              <button type="button" className="pg-run" onClick={simulate}>
-                <RunIcon size={14} /> Execute
+              <button
+                type="button"
+                className="pg-run"
+                onClick={execute}
+                disabled={running}
+              >
+                <RunIcon size={14} /> {running ? "Running…" : "Execute"}
               </button>
             </div>
           </div>
@@ -451,31 +576,38 @@ return { summary, count: summary.length };`);
           </div>
         </div>
 
-        <div className="mt-12">
-          <div className="section-head">
-            <div className="section-kicker">Integration</div>
-            <AnchorH2 id="integration">Drop it into your agent stack.</AnchorH2>
-            <p>
-              GocciaScript is a Vercel AI SDK tool away — register it once and
-              let your agent run code in a sandbox you control.
-            </p>
-          </div>
-
-          <div className="code-card">
-            <div className="code-card-head">
-              <TerminalIcon size={14} />
-              <span>agent.ts · Vercel AI SDK</span>
-              <span className="ml-auto text-[0.7rem] text-ink-3">
-                {vercelLineCount} lines
-              </span>
+        {/* Integration is hidden until the embedding API stabilises and the
+            `@goccia/runtime` package is published. The snippet stays so
+            unhiding is a one-flag flip. */}
+        {SHOW_INTEGRATION && (
+          <div className="mt-12">
+            <div className="section-head">
+              <div className="section-kicker">Integration</div>
+              <AnchorH2 id="integration">
+                Drop it into your agent stack.
+              </AnchorH2>
+              <p>
+                GocciaScript is a Vercel AI SDK tool away — register it once and
+                let your agent run code in a sandbox you control.
+              </p>
             </div>
-            <pre className="code-card-body">
-              <code>
-                <HighlightedGeneric code={VERCEL_EXAMPLE} language="ts" />
-              </code>
-            </pre>
+
+            <div className="code-card">
+              <div className="code-card-head">
+                <TerminalIcon size={14} />
+                <span>agent.ts · Vercel AI SDK</span>
+                <span className="ml-auto text-[0.7rem] text-ink-3">
+                  {vercelLineCount} lines
+                </span>
+              </div>
+              <pre className="code-card-body">
+                <code>
+                  <HighlightedGeneric code={VERCEL_EXAMPLE} language="ts" />
+                </code>
+              </pre>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
