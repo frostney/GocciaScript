@@ -161,21 +161,22 @@ begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetTextEncoderShared) then Exit;
 
+  // Rebuild member definitions per realm: callbacks bind to Self (the
+  // bootstrap instance pinned by Shared), and TGocciaSharedPrototype.Destroy
+  // unpins Self on realm tear-down.  Caching across realms would leave stale
+  // method pointers referencing a freed instance.
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GTextEncoderSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddAccessor(PROP_ENCODING, EncodingGetter, nil, [pfConfigurable]);
-      Members.AddNamedMethod(PROP_ENCODE, Encode, 1, gmkPrototypeMethod,
-        [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod(PROP_ENCODE_INTO, EncodeInto, 2, gmkPrototypeMethod,
-        [gmfNoFunctionPrototype]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddAccessor(PROP_ENCODING, EncodingGetter, nil, [pfConfigurable]);
+    Members.AddNamedMethod(PROP_ENCODE, Encode, 1, gmkPrototypeMethod,
+      [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_ENCODE_INTO, EncodeInto, 2, gmkPrototypeMethod,
+      [gmfNoFunctionPrototype]);
+    FPrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
   RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;

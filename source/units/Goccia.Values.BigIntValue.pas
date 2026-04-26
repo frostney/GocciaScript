@@ -124,10 +124,17 @@ begin
 
   Proto := TGocciaObjectValue.Create;
   CurrentRealm.SetSlot(GBigIntPrimitivePrototypeSlot, Proto);
-  FMethodHost := Self;
 
   if Length(FPrototypeMembers) = 0 then
   begin
+    // First realm to initialize wins: pin Self as the singleton method host
+    // for the lifetime of the process.  Method callbacks captured into
+    // FPrototypeMembers bind to this host, so subsequent realms must reuse it
+    // (otherwise the cached callbacks would reference a freed instance).
+    FMethodHost := Self;
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FMethodHost);
+
     Members := TGocciaMemberCollection.Create;
     try
       Members.AddMethod(BigIntToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
@@ -143,10 +150,6 @@ begin
   end;
 
   RegisterMemberDefinitions(Proto, FPrototypeMembers);
-
-  // Proto is pinned via the realm slot; method host is process-wide.
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.PinObject(FMethodHost);
 end;
 
 class function TGocciaBigIntValue.SharedPrototype: TGocciaValue;

@@ -66,7 +66,6 @@ var
   GPerformanceSharedSlot: TGocciaRealmOwnedSlotId;
 
 threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
   FPrototypeMethodHost: TGocciaPerformancePrototypeHost;
 
 function GetPerformanceShared: TGocciaSharedPrototype; inline;
@@ -159,51 +158,53 @@ class procedure TGocciaPerformance.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetPerformanceShared) then
     Exit;
 
+  // Rebuild member definitions per realm: callbacks bind to FPrototypeMethodHost
+  // which is recreated for each realm, and TGocciaSharedPrototype.Destroy unpins
+  // the host on realm tear-down.  A cached, thread-global FPrototypeMembers from
+  // a previous realm would reference a freed host instance.
   FPrototypeMethodHost := TGocciaPerformancePrototypeHost.Create(nil);
   Shared := TGocciaSharedPrototype.Create(FPrototypeMethodHost);
   CurrentRealm.SetOwnedSlot(GPerformanceSharedSlot, Shared);
   Shared.Prototype.Prototype := TGocciaObjectValue.SharedObjectPrototype;
 
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddDataProperty(
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddDataProperty(
+      PROP_NOW,
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        FPrototypeMethodHost.PerformanceNow,
         PROP_NOW,
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          FPrototypeMethodHost.PerformanceNow,
-          PROP_NOW,
-          0),
-        [pfEnumerable, pfConfigurable, pfWritable]);
-      Members.AddDataProperty(
+        0),
+      [pfEnumerable, pfConfigurable, pfWritable]);
+    Members.AddDataProperty(
+      PROP_TO_JSON,
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        FPrototypeMethodHost.PerformanceToJSON,
         PROP_TO_JSON,
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          FPrototypeMethodHost.PerformanceToJSON,
-          PROP_TO_JSON,
-          0),
-        [pfEnumerable, pfConfigurable, pfWritable]);
-      Members.AddAccessor(
-        PROP_TIME_ORIGIN,
-        FPrototypeMethodHost.PerformanceTimeOriginGetter,
-        nil,
-        [pfEnumerable, pfConfigurable],
-        gmkPrototypeGetter);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create('Performance'),
-        [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+        0),
+      [pfEnumerable, pfConfigurable, pfWritable]);
+    Members.AddAccessor(
+      PROP_TIME_ORIGIN,
+      FPrototypeMethodHost.PerformanceTimeOriginGetter,
+      nil,
+      [pfEnumerable, pfConfigurable],
+      gmkPrototypeGetter);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create('Performance'),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
 
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaPerformance.ExposePrototype(const AConstructor: TGocciaValue);

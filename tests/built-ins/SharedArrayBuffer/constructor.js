@@ -56,6 +56,20 @@ describe("SharedArrayBuffer constructor error cases", () => {
   test("throws RangeError for -Infinity", () => {
     expect(() => new SharedArrayBuffer(-Infinity)).toThrow(RangeError);
   });
+
+  test("throws RangeError when length is 2^31 (one past High(Integer))", () => {
+    expect(() => new SharedArrayBuffer(2147483648)).toThrow(RangeError);
+  });
+
+  test("throws RangeError for length far above High(Integer)", () => {
+    expect(() => new SharedArrayBuffer(4294967296)).toThrow(RangeError);
+  });
+
+  test("throws RangeError for length above MAX_SAFE_INTEGER", () => {
+    expect(() => new SharedArrayBuffer(Number.MAX_SAFE_INTEGER + 1)).toThrow(
+      RangeError,
+    );
+  });
 });
 
 describe("SharedArrayBuffer constructor ToIndex coercion (ES2026 §6.2.4.2)", () => {

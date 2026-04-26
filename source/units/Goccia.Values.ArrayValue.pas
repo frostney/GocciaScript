@@ -1558,11 +1558,16 @@ begin
   // Skip the safety check on a zero-arg call: nothing is being added,
   // so a huge existing length can never overflow further and push()
   // must just return the current length unchanged.
-  if AArgs.Length > 0 then
+  if AArgs.Length = 0 then
   begin
-    RawNewLen := View.RawLen + AArgs.Length;
-    View.CheckSafeIntegerLen(RawNewLen);
+    // Use RawLen so we don't truncate generic receivers whose length
+    // exceeds MaxInt back down to View.Len.
+    Result := TGocciaNumberLiteralValue.Create(View.RawLen);
+    Exit;
   end;
+
+  RawNewLen := View.RawLen + AArgs.Length;
+  View.CheckSafeIntegerLen(RawNewLen);
 
   // Fast path: native array
   if Assigned(View.Arr) then
@@ -1632,8 +1637,18 @@ begin
   // exceeds MaxInt — using View.Len would silently truncate the default
   // end on a length-2^32 receiver and let an oversized count slip past
   // the ArrayCreate ceiling check below.
+  // ES2026 §7.1.5 ToIntegerOrInfinity: NaN → 0; ±Infinity propagates to
+  // the Min/Max clamps below.  Trunc on non-finite values under a masked
+  // FPU returns Low(Int64), which would corrupt the start/final clamping
+  // (e.g. slice(+Infinity) would yield k = 0 instead of len).
   if AArgs.Length > 0 then
-    RawStart := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value)
+  begin
+    RawStart := AArgs.GetElement(0).ToNumberLiteral.Value;
+    if IsNaN(RawStart) then
+      RawStart := 0
+    else if not IsInfinite(RawStart) then
+      RawStart := Trunc(RawStart);
+  end
   else
     RawStart := 0;
 
@@ -1645,7 +1660,13 @@ begin
 
   // Step 5: If end is undefined, let relativeEnd be len; else ToIntegerOrInfinity(end)
   if AArgs.Length > 1 then
-    RawEnd := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value)
+  begin
+    RawEnd := AArgs.GetElement(1).ToNumberLiteral.Value;
+    if IsNaN(RawEnd) then
+      RawEnd := 0
+    else if not IsInfinite(RawEnd) then
+      RawEnd := Trunc(RawEnd);
+  end
   else
     RawEnd := View.RawLen;
 
@@ -2920,10 +2941,11 @@ begin
   View.Init(AThisValue);
   ArgCount := AArgs.Length;
 
-  // ES2026 §23.1.3.37 step 4: skip shifting when no arguments provided
+  // ES2026 §23.1.3.37 step 4: skip shifting when no arguments provided.
+  // Use RawLen so generic receivers with length > MaxInt aren't truncated.
   if ArgCount = 0 then
   begin
-    Result := TGocciaNumberLiteralValue.Create(View.Len);
+    Result := TGocciaNumberLiteralValue.Create(View.RawLen);
     Exit;
   end;
 

@@ -7,7 +7,9 @@ uses
   Classes,
   SysUtils,
 
+  Goccia.GarbageCollector,
   Goccia.Threading,
+  Goccia.Values.Primitives,
   TestingPascalLibrary,
 
   Goccia.TestSetup;
@@ -384,12 +386,19 @@ begin
 end;
 
 begin
+  // Worker threads call InitThreadRuntime → PinPrimitiveSingletons, which
+  // in turn touches UndefinedValue/NullValue/... — those getters assert
+  // the singleton was created on the main thread.  Pre-initialise here so
+  // worker threads only encounter already-built singletons.
+  TGarbageCollector.Initialize;
+  PinPrimitiveSingletons;
   InitCriticalSection(GWorkerLock);
   try
     TestRunnerProgram.AddSuite(TTestThreading.Create('Threading'));
     TestRunnerProgram.Run;
   finally
     DoneCriticalSection(GWorkerLock);
+    TGarbageCollector.Shutdown;
   end;
 
   ExitCode := TestResultToExitCode;

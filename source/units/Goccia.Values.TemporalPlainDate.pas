@@ -178,10 +178,18 @@ var
 begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetTemporalPlainDateShared) then Exit;
+
+  // Rebuild member definitions per realm: callbacks bind to Self (the
+  // bootstrap instance pinned by Shared), and TGocciaSharedPrototype.Destroy
+  // unpins Self on realm tear-down.  Caching across realms would leave stale
+  // method pointers referencing a freed instance.
+  //
+  // Defer SetOwnedSlot until after RegisterMemberDefinitions completes — if
+  // member-collection construction or registration raises, the realm slot
+  // stays nil and Shared is freed by the except handler, avoiding a half-
+  // initialized prototype lingering in the slot.
   Shared := TGocciaSharedPrototype.Create(Self);
-  CurrentRealm.SetOwnedSlot(GTemporalPlainDateSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
+  try
     Members := TGocciaMemberCollection.Create;
     try
       Members.AddAccessor('calendarId', GetCalendarId, nil, [pfConfigurable]);
@@ -221,8 +229,12 @@ begin
     finally
       Members.Free;
     end;
+    RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+    CurrentRealm.SetOwnedSlot(GTemporalPlainDateSharedSlot, Shared);
+  except
+    Shared.Free;
+    raise;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaTemporalPlainDateValue.ExposePrototype(const AConstructor: TGocciaObjectValue);

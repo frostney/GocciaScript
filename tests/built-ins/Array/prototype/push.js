@@ -54,4 +54,11 @@ describe("Array.prototype.push", () => {
     const obj = { length: Number.MAX_SAFE_INTEGER + 1 };
     expect(() => Array.prototype.push.call(obj, 1)).toThrow(TypeError);
   });
+
+  test("with no args returns the receiver's full length even when > 2^31", () => {
+    const huge = { length: 4294967290 };
+    const result = Array.prototype.push.call(huge);
+    expect(result).toBe(4294967290);
+    expect(huge.length).toBe(4294967290);
+  });
 });

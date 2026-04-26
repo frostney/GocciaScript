@@ -167,6 +167,7 @@ type
     FBuiltinFetch: TGocciaGlobalFetch;
     FBuiltinDisposableStack: TGocciaBuiltinDisposableStack;
     FRealm: TGocciaRealm;
+    FPrevRealm: TGocciaRealm;
     FFunctionConstructor: TGocciaFunctionConstructorClassValue;
     FTypedArrayIntrinsic: TGocciaClassValue;
     FPreviousExceptionMask: TFPUExceptionMask;
@@ -638,6 +639,9 @@ begin
   // be assigned before any value is constructed so lazy prototype init in
   // value units finds a realm to write into.  The previous engine's realm
   // (if any) was freed in Destroy, so its prototype state is gone.
+  // Save any pre-existing CurrentRealm so a nested TGocciaEngine on the same
+  // thread can restore the outer realm on teardown rather than clobbering it.
+  FPrevRealm := CurrentRealm;
   FRealm := TGocciaRealm.Create;
   SetCurrentRealm(FRealm);
 
@@ -732,10 +736,15 @@ begin
     // engine on this worker thread starts up.
     if Assigned(FRealm) then
     begin
+      // Restore the realm that was current when this engine was constructed
+      // (typically nil; for nested engines, the outer engine's realm).  Only
+      // touch CurrentRealm if it still points at our realm — preserve any
+      // intentional reassignment by intervening code.
       if CurrentRealm = FRealm then
-        SetCurrentRealm(nil);
+        SetCurrentRealm(FPrevRealm);
       FRealm.Free;
       FRealm := nil;
+      FPrevRealm := nil;
     end;
   finally
     SetExceptionMask(FPreviousExceptionMask);

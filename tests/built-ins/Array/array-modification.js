@@ -66,12 +66,20 @@ test("setting length to a smaller value truncates the array", () => {
   const arr = [1, 2, 3];
   arr.length = 0;
   expect(arr.length).toBe(0);
+  expect(0 in arr).toBe(false);
+  expect(1 in arr).toBe(false);
+  expect(2 in arr).toBe(false);
 });
 
 test("setting length to a larger value extends the array with holes", () => {
   const arr = [];
   arr.length = 5;
   expect(arr.length).toBe(5);
+  expect(0 in arr).toBe(false);
+  expect(1 in arr).toBe(false);
+  expect(2 in arr).toBe(false);
+  expect(3 in arr).toBe(false);
+  expect(4 in arr).toBe(false);
 });
 
 test("setting length to 2**32 throws RangeError", () => {

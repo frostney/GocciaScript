@@ -53,4 +53,11 @@ describe("Array.prototype.unshift", () => {
     const obj = { length: Number.MAX_SAFE_INTEGER };
     expect(() => Array.prototype.unshift.call(obj, 1)).toThrow(TypeError);
   });
+
+  test("with no args returns the receiver's full length even when > 2^31", () => {
+    const huge = { length: 4294967290 };
+    const result = Array.prototype.unshift.call(huge);
+    expect(result).toBe(4294967290);
+    expect(huge.length).toBe(4294967290);
+  });
 });

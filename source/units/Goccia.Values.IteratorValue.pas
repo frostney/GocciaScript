@@ -182,9 +182,16 @@ begin
 
   SharedPrototype := TGocciaObjectValue.Create;
   CurrentRealm.SetSlot(GIteratorPrototypeSlot, SharedPrototype);
-  FPrototypeMethodHost := Self;
   if Length(FPrototypeMembers) = 0 then
   begin
+    // First realm to initialize wins: pin Self as the singleton method host
+    // for the lifetime of the process.  Method callbacks captured into
+    // FPrototypeMembers bind to this host, so subsequent realms must reuse it
+    // (otherwise the cached callbacks would reference a freed instance).
+    FPrototypeMethodHost := Self;
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
+
     Members := TGocciaMemberCollection.Create;
     try
       Members.AddNamedMethod('next', IteratorNext, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -208,11 +215,6 @@ begin
     end;
   end;
   RegisterMemberDefinitions(SharedPrototype, FPrototypeMembers);
-
-  // SharedPrototype pinned via realm slot; method host pinned directly
-  // because it's a process-wide singleton.
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
 end;
 
 class function TGocciaIteratorValue.CreateGlobalObject: TGocciaObjectValue;

@@ -150,6 +150,8 @@ begin
 end;
 
 constructor TGocciaTemporalPlainMonthDayValue.Create(const AMonth, ADay, AReferenceYear: Integer);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(nil);
   if not IsValidDate(AReferenceYear, AMonth, ADay) then
@@ -158,8 +160,9 @@ begin
   FDay := ADay;
   FReferenceYear := AReferenceYear;
   InitializePrototype;
-  if Assigned(GetTemporalPlainMonthDayShared) then
-    FPrototype := GetTemporalPlainMonthDayShared.Prototype;
+  Shared := GetTemporalPlainMonthDayShared;
+  if Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 procedure TGocciaTemporalPlainMonthDayValue.InitializePrototype;

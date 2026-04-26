@@ -575,56 +575,57 @@ begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetTypedArrayShared) then Exit;
 
+  // Rebuild member definitions per realm: callbacks bind to Self (the
+  // bootstrap instance pinned by Shared), and TGocciaSharedPrototype.Destroy
+  // unpins Self on realm tear-down.  Caching across realms would leave stale
+  // method pointers referencing a freed instance.
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GTypedArraySharedSlot, Shared);
-  if System.Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddMethod(TypedArrayAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayFill, 3, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayCopyWithin, 3, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArraySlice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArraySubarray, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArraySet, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayReverse, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArraySort, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayIndexOf, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayLastIndexOf, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayIncludes, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayFind, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayFindIndex, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayFindLast, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayFindLastIndex, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayEvery, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArraySome, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayForEach, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayMap, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayFilter, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayReduce, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayReduceRight, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayJoin, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayToReversed, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayToSorted, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayWith, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayValues, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayKeys, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(TypedArrayEntries, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddAccessor(PROP_BUFFER, TypedArrayBufferGetter, nil, [pfConfigurable]);
-      Members.AddAccessor(PROP_BYTE_LENGTH, TypedArrayByteLengthGetter, nil, [pfConfigurable]);
-      Members.AddAccessor(PROP_BYTE_OFFSET, TypedArrayByteOffsetGetter, nil, [pfConfigurable]);
-      Members.AddAccessor(PROP_LENGTH, TypedArrayLengthGetter, nil, [pfConfigurable]);
-      Members.AddSymbolMethod(
-        TGocciaSymbolValue.WellKnownIterator, '[Symbol.iterator]',
-        TypedArrayValues, 0, [pfConfigurable, pfWritable]);
-      Members.AddSymbolAccessor(
-        TGocciaSymbolValue.WellKnownToStringTag, '[Symbol.toStringTag]',
-        TypedArrayToStringTagGetter, nil, [pfConfigurable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddMethod(TypedArrayAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayFill, 3, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayCopyWithin, 3, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArraySlice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArraySubarray, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArraySet, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayReverse, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArraySort, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayIndexOf, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayLastIndexOf, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayIncludes, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayFind, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayFindIndex, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayFindLast, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayFindLastIndex, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayEvery, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArraySome, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayForEach, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayMap, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayFilter, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayReduce, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayReduceRight, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayJoin, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayToReversed, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayToSorted, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayWith, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayValues, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayKeys, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddMethod(TypedArrayEntries, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddAccessor(PROP_BUFFER, TypedArrayBufferGetter, nil, [pfConfigurable]);
+    Members.AddAccessor(PROP_BYTE_LENGTH, TypedArrayByteLengthGetter, nil, [pfConfigurable]);
+    Members.AddAccessor(PROP_BYTE_OFFSET, TypedArrayByteOffsetGetter, nil, [pfConfigurable]);
+    Members.AddAccessor(PROP_LENGTH, TypedArrayLengthGetter, nil, [pfConfigurable]);
+    Members.AddSymbolMethod(
+      TGocciaSymbolValue.WellKnownIterator, '[Symbol.iterator]',
+      TypedArrayValues, 0, [pfConfigurable, pfWritable]);
+    Members.AddSymbolAccessor(
+      TGocciaSymbolValue.WellKnownToStringTag, '[Symbol.toStringTag]',
+      TypedArrayToStringTagGetter, nil, [pfConfigurable]);
+    FPrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
   RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;

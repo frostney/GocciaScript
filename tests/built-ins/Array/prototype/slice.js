@@ -103,3 +103,51 @@ test("slice throws RangeError on array-like with length > 2**32 - 1", () => {
   const obj = { length: 2 ** 32 };
   expect(() => Array.prototype.slice.call(obj, 0)).toThrow(RangeError);
 });
+
+test("slice(NaN) treats start as 0", () => {
+  const arr = [1, 2, 3, 4, 5];
+  expect(arr.slice(NaN)).toEqual([1, 2, 3, 4, 5]);
+});
+
+test("slice(0, NaN) treats end as 0", () => {
+  const arr = [1, 2, 3, 4, 5];
+  expect(arr.slice(0, NaN)).toEqual([]);
+});
+
+test("slice(NaN, NaN) returns empty", () => {
+  const arr = [1, 2, 3, 4, 5];
+  expect(arr.slice(NaN, NaN)).toEqual([]);
+});
+
+test("slice(+Infinity) starts past the end and yields empty", () => {
+  const arr = [1, 2, 3, 4, 5];
+  expect(arr.slice(Infinity)).toEqual([]);
+});
+
+test("slice(-Infinity) clamps to 0", () => {
+  const arr = [1, 2, 3, 4, 5];
+  expect(arr.slice(-Infinity)).toEqual([1, 2, 3, 4, 5]);
+});
+
+test("slice(0, +Infinity) clamps end to len", () => {
+  const arr = [1, 2, 3, 4, 5];
+  expect(arr.slice(0, Infinity)).toEqual([1, 2, 3, 4, 5]);
+});
+
+test("slice(0, -Infinity) clamps end to 0", () => {
+  const arr = [1, 2, 3, 4, 5];
+  expect(arr.slice(0, -Infinity)).toEqual([]);
+});
+
+test("slice(-Infinity, +Infinity) returns full copy", () => {
+  const arr = [1, 2, 3, 4, 5];
+  const copy = arr.slice(-Infinity, Infinity);
+  expect(copy).toEqual([1, 2, 3, 4, 5]);
+  expect(copy).not.toBe(arr);
+});
+
+test("slice(NaN) on array-like with positive length is a no-op start", () => {
+  const arrayLike = { length: 3, 0: "a", 1: "b", 2: "c" };
+  const sliced = Array.prototype.slice.call(arrayLike, NaN);
+  expect(sliced).toEqual(["a", "b", "c"]);
+});

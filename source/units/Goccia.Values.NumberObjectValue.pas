@@ -96,13 +96,16 @@ begin
 end;
 
 function TGocciaNumberObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+var
+  SharedPrototype: TGocciaObjectValue;
 begin
   Result := inherited GetPropertyWithContext(AName, AThisContext);
   if not (Result is TGocciaUndefinedLiteralValue) then
     Exit;
 
-  if Assigned(GetSharedNumberPrototype) then
-    Result := GetSharedNumberPrototype.GetPropertyWithContext(AName, AThisContext);
+  SharedPrototype := GetSharedNumberPrototype;
+  if Assigned(SharedPrototype) then
+    Result := SharedPrototype.GetPropertyWithContext(AName, AThisContext);
 end;
 
 procedure TGocciaNumberObjectValue.InitializePrototype;
@@ -115,9 +118,9 @@ begin
 
   SharedPrototype := TGocciaObjectValue.Create;
   CurrentRealm.SetSlot(GNumberPrototypeSlot, SharedPrototype);
-  FPrototypeMethodHost := Self;
   if Length(FPrototypeMembers) = 0 then
   begin
+    FPrototypeMethodHost := Self;
     Members := TGocciaMemberCollection.Create;
     try
       Members.AddNamedMethod('toFixed', NumberToFixed, 1);
@@ -129,13 +132,12 @@ begin
     finally
       Members.Free;
     end;
+    // Method host is a process-wide singleton; pin it once so cached
+    // FPrototypeMembers callbacks remain valid across realms.
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
   end;
   RegisterMemberDefinitions(SharedPrototype, FPrototypeMembers);
-
-  // SharedPrototype pinned via realm slot; method host pinned directly
-  // because it's a process-wide singleton.
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
 end;
 
 class function TGocciaNumberObjectValue.GetSharedPrototype: TGocciaObjectValue;

@@ -188,58 +188,59 @@ begin
   if not Assigned(CurrentRealm) then Exit;
   if Assigned(GetURLShared) then Exit;
 
+  // Rebuild member definitions per realm: callbacks bind to Self (the
+  // bootstrap instance pinned by Shared), and TGocciaSharedPrototype.Destroy
+  // unpins Self on realm tear-down.  Caching across realms would leave stale
+  // method pointers referencing a freed instance.
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GURLSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      // Accessor properties (getter + setter pairs)
-      Members.AddAccessor(PROP_HREF,
-        URLHrefGetter, URLHrefSetter,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_ORIGIN,
-        URLOriginGetter, nil,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_PROTOCOL,
-        URLProtocolGetter, URLProtocolSetter,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_USERNAME,
-        URLUsernameGetter, URLUsernameSetter,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_PASSWORD,
-        URLPasswordGetter, URLPasswordSetter,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_HOST,
-        URLHostGetter, URLHostSetter,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_HOSTNAME,
-        URLHostnameGetter, URLHostnameSetter,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_PORT,
-        URLPortGetter, URLPortSetter,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_PATHNAME,
-        URLPathnameGetter, URLPathnameSetter,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_SEARCH,
-        URLSearchGetter, URLSearchSetter,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_SEARCH_PARAMS,
-        URLSearchParamsGetter, nil,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_HASH,
-        URLHashGetter, URLHashSetter,
-        [pfConfigurable, pfEnumerable]);
-      // Methods
-      Members.AddNamedMethod('toString', URLToString, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('toJSON', URLToJSON, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    // Accessor properties (getter + setter pairs)
+    Members.AddAccessor(PROP_HREF,
+      URLHrefGetter, URLHrefSetter,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_ORIGIN,
+      URLOriginGetter, nil,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_PROTOCOL,
+      URLProtocolGetter, URLProtocolSetter,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_USERNAME,
+      URLUsernameGetter, URLUsernameSetter,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_PASSWORD,
+      URLPasswordGetter, URLPasswordSetter,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_HOST,
+      URLHostGetter, URLHostSetter,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_HOSTNAME,
+      URLHostnameGetter, URLHostnameSetter,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_PORT,
+      URLPortGetter, URLPortSetter,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_PATHNAME,
+      URLPathnameGetter, URLPathnameSetter,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_SEARCH,
+      URLSearchGetter, URLSearchSetter,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_SEARCH_PARAMS,
+      URLSearchParamsGetter, nil,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_HASH,
+      URLHashGetter, URLHashSetter,
+      [pfConfigurable, pfEnumerable]);
+    // Methods
+    Members.AddNamedMethod('toString', URLToString, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('toJSON', URLToJSON, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    FPrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
   RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;

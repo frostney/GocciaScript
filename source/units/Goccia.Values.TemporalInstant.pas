@@ -114,6 +114,8 @@ end;
 { TGocciaTemporalInstantValue }
 
 constructor TGocciaTemporalInstantValue.Create(const AEpochMilliseconds: Int64; const ASubMillisecondNanoseconds: Integer);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(nil);
   FEpochMilliseconds := AEpochMilliseconds;
@@ -137,8 +139,9 @@ begin
   end;
 
   InitializePrototype;
-  if Assigned(GetTemporalInstantShared) then
-    FPrototype := GetTemporalInstantShared.Prototype;
+  Shared := GetTemporalInstantShared;
+  if Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 procedure TGocciaTemporalInstantValue.InitializePrototype;

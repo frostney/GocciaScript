@@ -122,9 +122,6 @@ uses
 var
   GURLSearchParamsSharedSlot: TGocciaRealmOwnedSlotId;
 
-threadvar
-  FPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
 function GetURLSearchParamsShared: TGocciaSharedPrototype; inline;
 begin
   if Assigned(CurrentRealm) then
@@ -164,50 +161,48 @@ begin
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GURLSearchParamsSharedSlot, Shared);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddNamedMethod(PROP_APPEND, URLSearchParamsAppend, 2,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod(PROP_DELETE, URLSearchParamsDelete, 1,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod(PROP_GET, URLSearchParamsGet, 1,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod(PROP_GET_ALL, URLSearchParamsGetAll, 1,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod(PROP_HAS, URLSearchParamsHas, 1,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod(PROP_SET, URLSearchParamsSet, 2,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod(PROP_SORT, URLSearchParamsSort, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod(PROP_TO_STRING, URLSearchParamsToString, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod(PROP_KEYS, URLSearchParamsKeys, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod(PROP_VALUES, URLSearchParamsValues, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod(PROP_ENTRIES, URLSearchParamsEntries, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod(PROP_FOR_EACH, URLSearchParamsForEach, 1,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      // WHATWG URLSearchParams: size is a non-enumerable prototype accessor
-      Members.AddAccessor(PROP_SIZE,
-        URLSearchParamsSizeGetter, nil,
-        [pfConfigurable]);
-      Members.AddSymbolMethod(
-        TGocciaSymbolValue.WellKnownIterator,
-        '[Symbol.iterator]',
-        URLSearchParamsSymbolIterator,
-        0,
-        [pfConfigurable, pfWritable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  // Member definitions reference Self via prototype-method callbacks; rebuild
+  // them per realm so cross-realm reuse never registers stale callbacks.
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod(PROP_APPEND, URLSearchParamsAppend, 2,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_DELETE, URLSearchParamsDelete, 1,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_GET, URLSearchParamsGet, 1,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_GET_ALL, URLSearchParamsGetAll, 1,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_HAS, URLSearchParamsHas, 1,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_SET, URLSearchParamsSet, 2,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_SORT, URLSearchParamsSort, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_TO_STRING, URLSearchParamsToString, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_KEYS, URLSearchParamsKeys, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_VALUES, URLSearchParamsValues, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_ENTRIES, URLSearchParamsEntries, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_FOR_EACH, URLSearchParamsForEach, 1,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    // WHATWG URLSearchParams: size is a non-enumerable prototype accessor
+    Members.AddAccessor(PROP_SIZE,
+      URLSearchParamsSizeGetter, nil,
+      [pfConfigurable]);
+    Members.AddSymbolMethod(
+      TGocciaSymbolValue.WellKnownIterator,
+      '[Symbol.iterator]',
+      URLSearchParamsSymbolIterator,
+      0,
+      [pfConfigurable, pfWritable]);
+    RegisterMemberDefinitions(Shared.Prototype, Members.ToDefinitions);
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaURLSearchParamsValue.ExposePrototype(

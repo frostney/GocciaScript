@@ -180,8 +180,12 @@ begin
   else
     IntegerIndex := Trunc(Num.Value);
 
-  // Step 3: If integerIndex is not in [0, 2^53-1], throw RangeError
-  if (IntegerIndex < 0) or (IntegerIndex > MAX_SAFE_INTEGER_F) then
+  // Step 3: If integerIndex is not in [0, 2^53-1], throw RangeError.  Also
+  // reject anything above High(Integer): FData is a 32-bit-indexed dynamic
+  // array, so values in (High(Integer), 2^53-1] would silently overflow on
+  // truncation.  Mirrors the extra check in TGocciaArrayBufferValue.ToIndex.
+  if (IntegerIndex < 0) or (IntegerIndex > MAX_SAFE_INTEGER_F) or
+     (IntegerIndex > High(Integer)) then
     ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
 
   Len := Trunc(IntegerIndex);
