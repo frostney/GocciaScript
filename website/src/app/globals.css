@@ -1092,6 +1092,14 @@ p {
   margin-bottom: 2.5rem;
   max-width: 60ch;
 }
+/* Brand-mark shape inside any section-head heading — `Goccia<em>Script</em>`
+   (italic + accent), mirroring the nav `.brand em` and OG image
+   treatment so the wordmark stays consistent across surfaces. */
+.section-head h1 em,
+.section-head h2 em {
+  font-style: italic;
+  color: var(--accent);
+}
 .section-kicker {
   font-family: var(--mono);
   font-size: 0.75rem;

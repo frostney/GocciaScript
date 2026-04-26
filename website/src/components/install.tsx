@@ -242,7 +242,9 @@ export function Install({ release }: { release: ReleaseInfo | null }) {
           <div className="install-hero-text">
             <div className="section-head">
               <div className="section-kicker">Install</div>
-              <h1>Get GocciaScript on your machine.</h1>
+              <h1>
+                Get Goccia<em>Script</em> on your machine.
+              </h1>
               <p>
                 Pick the install method that fits your platform. The runtime is
                 a single self-contained binary — no Node.js, no toolchain, no
