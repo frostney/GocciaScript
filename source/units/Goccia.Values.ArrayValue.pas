@@ -652,9 +652,18 @@ begin
 
   SharedPrototype := TGocciaObjectValue.Create;
   CurrentRealm.SetSlot(GArrayPrototypeSlot, SharedPrototype);
-  FPrototypeMethodHost := Self;
   if Length(FPrototypeMembers) = 0 then
   begin
+    // First realm to initialize on this thread wins: pin Self as the
+    // singleton method host for the process lifetime.  Method callbacks
+    // captured into FPrototypeMembers bind to this host, so subsequent
+    // realms must reuse it — re-assigning FPrototypeMethodHost on every
+    // realm switch would leak a fresh pinned TGocciaArrayValue per realm
+    // while the cached method definitions still reference the original.
+    FPrototypeMethodHost := Self;
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
+
     Members := TGocciaMemberCollection.Create;
     try
       Members.AddDataProperty(PROP_LENGTH, TGocciaNumberLiteralValue.ZeroValue, [pfWritable]);
@@ -706,12 +715,6 @@ begin
     end;
   end;
   RegisterMemberDefinitions(SharedPrototype, FPrototypeMembers);
-
-  // SharedPrototype is already pinned via the realm slot.  Pin the method
-  // host directly through the GC because it's a process-wide singleton
-  // (immutable across realms) - the realm doesn't track its lifetime.
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
 end;
 
 class procedure TGocciaArrayValue.ExposePrototype(const AConstructor: TGocciaValue);
