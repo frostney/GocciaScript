@@ -2,6 +2,10 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path, { basename } from "node:path";
 import { NextResponse } from "next/server";
+import {
+  captureServerEvent,
+  captureServerException,
+} from "@/lib/posthog-server";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -127,9 +131,44 @@ type RunnerJson = {
 
 export async function POST(req: Request) {
   const ip = clientIp(req.headers);
+  const distinctId = `ip:${ip}`;
+  try {
+    return await runHandler(req, ip, distinctId);
+  } catch (err) {
+    // Anything that escaped the inner branches lands here. Surface it
+    // to PostHog Error Tracking with enough context to debug, log to
+    // the function's stderr (`vercel logs`), and return a generic 500
+    // so the client gets a structured `transportError` shape rather
+    // than a raw stack trace.
+    console.error("[/api/run] unhandled exception:", err);
+    captureServerException(err, {
+      distinctId,
+      path: "/api/run",
+      extra: {
+        ua: req.headers.get("user-agent") ?? undefined,
+        method: req.method,
+      },
+    });
+    return transportError(
+      { message: "internal error", code: "SPAWN_FAILED" },
+      { status: 500 },
+    );
+  }
+}
+
+async function runHandler(
+  req: Request,
+  ip: string,
+  distinctId: string,
+): Promise<Response> {
   const rl = rateLimit(`run:${ip}`);
   if (!rl.ok) {
     const retryAfter = Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000));
+    captureServerEvent("api_run_rate_limited", {
+      distinctId,
+      path: "/api/run",
+      properties: { retryAfter, limit: rl.limit },
+    });
     return transportError(
       { message: "rate limit exceeded", code: "RATE_LIMIT" },
       {
@@ -153,6 +192,11 @@ export async function POST(req: Request) {
   if (cl !== null) {
     const declared = Number(cl);
     if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+      captureServerEvent("api_run_body_too_large", {
+        distinctId,
+        path: "/api/run",
+        properties: { declared, source: "content-length" },
+      });
       return transportError(
         {
           message: `request body exceeds ${MAX_BODY_BYTES} bytes`,
@@ -164,6 +208,11 @@ export async function POST(req: Request) {
   }
   const rawBody = await readBodyWithCap(req, MAX_BODY_BYTES);
   if (rawBody === null) {
+    captureServerEvent("api_run_body_too_large", {
+      distinctId,
+      path: "/api/run",
+      properties: { source: "stream" },
+    });
     return transportError(
       {
         message: `request body exceeds ${MAX_BODY_BYTES} bytes`,
@@ -177,6 +226,10 @@ export async function POST(req: Request) {
   try {
     body = JSON.parse(rawBody) as RunBody;
   } catch {
+    captureServerEvent("api_run_invalid_json", {
+      distinctId,
+      path: "/api/run",
+    });
     return transportError(
       { message: "invalid JSON body", code: "INVALID_JSON" },
       { status: 400 },
@@ -194,6 +247,11 @@ export async function POST(req: Request) {
   // measure the actual bytes that will hit the runner's stdin instead.
   const codeBytes = Buffer.byteLength(code, "utf8");
   if (codeBytes > MAX_CODE_BYTES) {
+    captureServerEvent("api_run_code_too_large", {
+      distinctId,
+      path: "/api/run",
+      properties: { codeBytes },
+    });
     return transportError(
       {
         message: `code exceeds ${MAX_CODE_BYTES} bytes`,
@@ -218,6 +276,7 @@ export async function POST(req: Request) {
   if (body.mode === "bytecode") args.push("--mode=bytecode");
 
   const binary = resolveBinaryPath();
+  const startedAt = Date.now();
 
   return await new Promise<Response>((resolve) => {
     let resolved = false;
@@ -267,6 +326,15 @@ export async function POST(req: Request) {
     // requests when the child finishes naturally first.
     abortHandler = () => {
       child.kill("SIGKILL");
+      captureServerEvent("api_run_aborted", {
+        distinctId,
+        path: "/api/run",
+        properties: {
+          elapsedMs: Date.now() - startedAt,
+          mode: body.mode === "bytecode" ? "bytecode" : "interpreted",
+          codeBytes,
+        },
+      });
       finish(
         transportError(
           { message: "client disconnected", code: "ABORTED" },
@@ -336,6 +404,29 @@ export async function POST(req: Request) {
       console.error(
         `[/api/run] spawn failed for binary: ${binary} — ${err.message}`,
       );
+      // Capture the full path (server-side only) so the operator can
+      // tell at a glance whether the resolution order picked vendor/
+      // vs. ../build/. Also surface as an exception so the entry shows
+      // up in PostHog Error Tracking, not just the events stream.
+      captureServerException(err, {
+        distinctId,
+        path: "/api/run",
+        extra: {
+          stage: "spawn",
+          binary,
+          binaryName: basename(binary),
+          mode: body.mode === "bytecode" ? "bytecode" : "interpreted",
+        },
+      });
+      captureServerEvent("api_run_spawn_failed", {
+        distinctId,
+        path: "/api/run",
+        properties: {
+          binaryName: basename(binary),
+          message: err.message,
+          mode: body.mode === "bytecode" ? "bytecode" : "interpreted",
+        },
+      });
       finish(
         transportError(
           {
@@ -357,6 +448,31 @@ export async function POST(req: Request) {
       } catch {
         // fall through to raw payload
       }
+      // One event per completed run keeps the dashboard honest about
+      // success rate, runner timing, and how often we truncate or
+      // SIGKILL on the watchdog. We deliberately don't include the
+      // user's source code or the runner's `value` — those can carry
+      // PII / arbitrary payloads. `parsed?.error?.name` is bounded
+      // (runner-emitted error class names) and useful for grouping.
+      captureServerEvent("api_run_completed", {
+        distinctId,
+        path: "/api/run",
+        properties: {
+          ok: parsed?.ok ?? false,
+          parsed: parsed !== null,
+          exitCode,
+          signal,
+          truncated,
+          mode: body.mode === "bytecode" ? "bytecode" : "interpreted",
+          asi,
+          codeBytes,
+          stdoutBytes,
+          stderrBytes,
+          elapsedMs: Date.now() - startedAt,
+          runnerTotalMs: parsed?.timing?.total_ms ?? null,
+          errorName: parsed?.error?.name ?? parsed?.error?.type ?? null,
+        },
+      });
       finish(
         NextResponse.json(
           {
