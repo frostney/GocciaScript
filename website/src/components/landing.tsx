@@ -29,6 +29,7 @@ import {
 import { LatestVersion } from "@/components/latest-version";
 import { NumberedCode } from "@/components/numbered-code";
 import { QuickInstall } from "@/components/quick-install";
+import type { OutputLine } from "@/lib/examples";
 import { formatError } from "@/lib/format-error";
 import { isPreStable, type ReleaseInfo } from "@/lib/github";
 import {
@@ -47,8 +48,6 @@ const FEATURE_ICONS: Record<
   leaf: LeafIcon,
   clock: ClockIcon,
 };
-
-type OutputLine = { kind: "meta" | "out" | "err"; text: string };
 
 function HeroRunnableCard({ code }: { code: string }) {
   const [copyTick, setCopyTick] = useState(0);
@@ -148,9 +147,21 @@ function HeroRunnableCard({ code }: { code: string }) {
       });
       setOutput(lines);
     } catch (err) {
+      // `err` from `fetch` / `res.json()` is *usually* an `Error`
+      // subclass (TypeError on network failure, AbortError on
+      // disconnect, SyntaxError on bad JSON), but the catch parameter
+      // is `unknown` and a misbehaving runtime can throw anything.
+      // Normalise rather than blind-cast so the worst case is a
+      // `String(err)` fallback rather than rendering `undefined`.
+      const message =
+        err instanceof Error
+          ? err.message
+          : typeof err === "string"
+            ? err
+            : String(err);
       setOutput([
         { kind: "meta", text: banner },
-        { kind: "err", text: `network error: ${(err as Error).message}` },
+        { kind: "err", text: `network error: ${message}` },
       ]);
     } finally {
       setRunning(false);
@@ -784,14 +795,19 @@ export function Landing({
                 <QuickInstall />
                 <div className="hero-install-meta">
                   <LatestVersion release={release ?? null} locale={locale} />
-                  <a
+                  {/* `/install` is an internal Next.js route — use
+                      `<Link>` for soft navigation + prefetch. We keep
+                      `target="_blank"` because the UX is "peek at the
+                      script in a new tab without losing the landing
+                      page state". */}
+                  <Link
                     href="/install"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="link-button text-[0.85rem] text-ink-3"
                   >
                     View install script
-                  </a>
+                  </Link>
                   <Link
                     href="/installation"
                     className="link-button text-[0.85rem] text-ink-3"
