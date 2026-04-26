@@ -3,14 +3,20 @@
 import Link from "next/link";
 import { type ComponentType, useEffect, useState } from "react";
 import { AnchorH2 } from "@/components/anchor-heading";
-import { HighlightedGeneric } from "@/components/highlighted-code";
 import {
+  HighlightedGeneric,
+  HighlightedShell,
+} from "@/components/highlighted-code";
+import {
+  AppleIcon,
   BookIcon,
   BunIcon,
   CopyIcon,
   GithubIcon,
+  LinuxIcon,
   NpmIcon,
   PnpmIcon,
+  WindowsIcon,
 } from "@/components/icons";
 import {
   GITHUB_RELEASES_URL,
@@ -33,14 +39,39 @@ type TabSpec = {
   Icon?: ComponentType<{ size?: number }>;
 };
 
-/** Operating-system tabs for the Quick install card. macOS and Linux
- *  both run the same `curl … | sh` one-liner but get separate tabs so
- *  users see their platform reflected explicitly. */
+type OsKey = "macos" | "linux" | "windows";
+
+/** Operating-system tabs for the platform-installer section. macOS and
+ *  Linux both run the same `curl … | sh` one-liner but get separate
+ *  tabs so users see their platform reflected explicitly. The active
+ *  tab is auto-detected from `navigator.userAgent` after hydration. */
 const OS_TABS: readonly TabSpec[] = [
-  { key: "macos", label: "macOS" },
-  { key: "linux", label: "Linux" },
-  { key: "windows", label: "Windows" },
+  { key: "macos", label: "macOS", Icon: AppleIcon },
+  { key: "linux", label: "Linux", Icon: LinuxIcon },
+  { key: "windows", label: "Windows", Icon: WindowsIcon },
 ];
+
+/** Best-guess `OsKey` from a navigator user-agent string. Falls back
+ *  to `"macos"` when the UA can't be classified — most likely on
+ *  embedded WebViews where the user is going to a desktop machine
+ *  next anyway. */
+function detectOs(ua: string): OsKey {
+  const s = ua.toLowerCase();
+  if (s.includes("windows")) return "windows";
+  if (s.includes("mac") || s.includes("iphone") || s.includes("ipad")) {
+    return "macos";
+  }
+  if (
+    s.includes("linux") ||
+    s.includes("android") ||
+    s.includes("x11") ||
+    s.includes("freebsd") ||
+    s.includes("openbsd")
+  ) {
+    return "linux";
+  }
+  return "macos";
+}
 
 /** Package-manager tabs for the npm / Bun / pnpm sections — brand
  *  icons in their official colors so the active selection is
@@ -108,24 +139,36 @@ function CommandTabs({
   tabs,
   commands,
   storageKey,
+  initialKey,
 }: {
   tabs: readonly TabSpec[];
   commands: Record<string, string>;
   /** When set, the active tab is persisted across visits and shared
    *  with other groups using the same key on this page. */
   storageKey?: string;
+  /** Optional client-side default applied after hydration when no
+   *  persisted selection exists. Used by the OS picker to honor the
+   *  user's actual platform on first visit. */
+  initialKey?: string;
 }) {
-  const initialKey = tabs[0]?.key ?? "";
-  const [active, setActive] = useState<string>(initialKey);
+  const [active, setActive] = useState<string>(tabs[0]?.key ?? "");
 
   useEffect(() => {
-    if (!storageKey || typeof window === "undefined") return;
+    if (typeof window === "undefined") return;
     const isKnown = (v: unknown): v is string =>
       typeof v === "string" && tabs.some((t) => t.key === v);
-    try {
-      const saved = window.localStorage.getItem(storageKey);
-      if (isKnown(saved)) setActive(saved);
-    } catch {}
+    let resolved = false;
+    if (storageKey) {
+      try {
+        const saved = window.localStorage.getItem(storageKey);
+        if (isKnown(saved)) {
+          setActive(saved);
+          resolved = true;
+        }
+      } catch {}
+    }
+    if (!resolved && isKnown(initialKey)) setActive(initialKey);
+    if (!storageKey) return;
     const onSync = (e: Event) => {
       const detail = (e as CustomEvent<{ key: string; value: string }>).detail;
       if (detail?.key !== storageKey) return;
@@ -134,7 +177,7 @@ function CommandTabs({
     window.addEventListener("cmd-tabs-sync", onSync as EventListener);
     return () =>
       window.removeEventListener("cmd-tabs-sync", onSync as EventListener);
-  }, [storageKey, tabs]);
+  }, [storageKey, tabs, initialKey]);
 
   const select = (key: string) => {
     setActive(key);
@@ -223,7 +266,11 @@ function CopyableCommand({
       </button>
       <pre className="install-block-pre">
         <code>
-          <HighlightedGeneric code={command} language={language} />
+          {language === "shell" ? (
+            <HighlightedShell code={command} />
+          ) : (
+            <HighlightedGeneric code={command} language={language} />
+          )}
         </code>
       </pre>
     </div>
@@ -231,6 +278,17 @@ function CopyableCommand({
 }
 
 export function Install({ release }: { release: ReleaseInfo | null }) {
+  // OS auto-detect — runs after hydration so the server-rendered HTML
+  // is the same for everyone (macOS as the static fallback) and the
+  // client overrides on first render. Persisted selection in
+  // `localStorage` still wins over the auto-detect via `CommandTabs`'s
+  // priority order.
+  const [detectedOs, setDetectedOs] = useState<OsKey>("macos");
+  useEffect(() => {
+    if (typeof navigator === "undefined") return;
+    setDetectedOs(detectOs(navigator.userAgent));
+  }, []);
+
   return (
     <div className="pt-16 pb-24">
       <div className="container">
@@ -247,7 +305,9 @@ export function Install({ release }: { release: ReleaseInfo | null }) {
                 global state.
               </p>
             </div>
+          </div>
 
+          <div className="install-hero-meta">
             {isPreStable(release) && (
               <div className="prestable-banner" role="note">
                 <strong>Pre-1.0 release.</strong> The public API is still being
@@ -315,26 +375,33 @@ export function Install({ release }: { release: ReleaseInfo | null }) {
               </div>
             </div>
           </div>
+        </div>
 
-          <aside className="install-quick" aria-labelledby="install-quick-h">
-            <h3 id="install-quick-h">Quick install</h3>
+        <div className="install-methods">
+          {/* Featured first method: tabbed OS installer with auto-
+              detection from `navigator.userAgent`. */}
+          <section
+            key="quick"
+            id="quick"
+            className="install-method install-method-featured"
+          >
+            <AnchorH2 id="quick">Quick install — one-liner</AnchorH2>
             <p>
-              One-liner installer — fetches the right binary for your platform
-              and drops it on your <code>$PATH</code>.
+              The fastest path: fetch the right binary for your platform and
+              drop it on your <code>$PATH</code>. We&apos;ve preselected your
+              detected OS — pick a different tab if needed.
             </p>
             <CommandTabs
               tabs={OS_TABS}
               storageKey="goccia.install.os"
+              initialKey={detectedOs}
               commands={{
                 macos: "curl -fsSL https://gocciascript.dev/install.sh | sh",
                 linux: "curl -fsSL https://gocciascript.dev/install.sh | sh",
                 windows: "irm https://gocciascript.dev/install.ps1 | iex",
               }}
             />
-          </aside>
-        </div>
-
-        <div className="install-methods">
+          </section>
           {METHODS.flatMap((m) => {
             const sections = [
               <section key={m.id} id={m.id} className="install-method">

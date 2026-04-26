@@ -582,3 +582,121 @@ export function highlightJson(src: string): Token[] {
   }
   return out;
 }
+
+/** Shell / Bash highlighter. Distinct from `highlightGeneric` because:
+ *   - Comment marker is `#` (at line start or after whitespace), not
+ *     `//` — and crucially we must NOT match `//` inside URLs as a
+ *     C-family line comment, which `highlightGeneric` did.
+ *   - Variable expansions `$VAR` and `${VAR}` get their own emphasis.
+ *   - Long/short flags (`--foo`, `-fsSL`) are highlighted as keywords.
+ *   - Bash control-flow keywords (`if`, `then`, `for`, …) are
+ *     classified, but URLs/paths/commands fall through as default. */
+const SHELL_KEYWORDS = new Set([
+  "if",
+  "then",
+  "else",
+  "elif",
+  "fi",
+  "case",
+  "esac",
+  "for",
+  "while",
+  "until",
+  "do",
+  "done",
+  "function",
+  "return",
+  "break",
+  "continue",
+  "exit",
+  "in",
+  "select",
+  "time",
+  "local",
+  "export",
+]);
+
+export function highlightShell(src: string): Token[] {
+  const out: Token[] = [];
+  let i = 0;
+  const push = (cls: string, text: string) => out.push({ cls, text });
+  while (i < src.length) {
+    const ch = src[i];
+    // `#` line comment — only when it begins a token (start of input
+    // or after whitespace), so URLs containing `#` fragments aren't
+    // truncated.
+    if (ch === "#" && (i === 0 || /\s/.test(src[i - 1]))) {
+      let j = i;
+      while (j < src.length && src[j] !== "\n") j++;
+      push("c", src.slice(i, j));
+      i = j;
+      continue;
+    }
+    // Strings — single, double, backtick. Backslash escapes one char.
+    if (ch === '"' || ch === "'" || ch === "`") {
+      const q = ch;
+      let j = i + 1;
+      while (j < src.length && src[j] !== q) {
+        if (src[j] === "\\") j += 2;
+        else j++;
+      }
+      j = Math.min(j + 1, src.length);
+      push("s", src.slice(i, j));
+      i = j;
+      continue;
+    }
+    // Variables: `$VAR`, `${...}`
+    if (ch === "$" && i + 1 < src.length) {
+      let j = i + 1;
+      if (src[j] === "{") {
+        while (j < src.length && src[j] !== "}") j++;
+        j = Math.min(j + 1, src.length);
+        push("n", src.slice(i, j));
+        i = j;
+        continue;
+      }
+      if (/[A-Za-z_]/.test(src[j])) {
+        while (j < src.length && /\w/.test(src[j])) j++;
+        push("n", src.slice(i, j));
+        i = j;
+        continue;
+      }
+      push("", "$");
+      i++;
+      continue;
+    }
+    // Long/short flags at token boundaries: `--foo`, `-fsSL`
+    if (
+      ch === "-" &&
+      (i === 0 || /\s/.test(src[i - 1])) &&
+      /[-A-Za-z]/.test(src[i + 1] || "")
+    ) {
+      let j = i;
+      while (j < src.length && /[-A-Za-z0-9_=]/.test(src[j])) j++;
+      push("k", src.slice(i, j));
+      i = j;
+      continue;
+    }
+    // Identifiers / paths / commands. Continuation includes `.`/`/`/`-`
+    // so URLs and paths come through as a single token rather than
+    // being shredded into per-character noise.
+    if (/[A-Za-z_]/.test(ch)) {
+      let j = i;
+      while (j < src.length && /[\w./-]/.test(src[j])) j++;
+      const word = src.slice(i, j);
+      push(SHELL_KEYWORDS.has(word) ? "k" : "", word);
+      i = j;
+      continue;
+    }
+    if (/[0-9]/.test(ch)) {
+      let j = i;
+      while (j < src.length && /[0-9.]/.test(src[j])) j++;
+      push("n", src.slice(i, j));
+      i = j;
+      continue;
+    }
+    push("", ch);
+    i++;
+  }
+  return out;
+}

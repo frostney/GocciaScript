@@ -2,6 +2,7 @@ import {
   highlightGeneric,
   highlightGoccia,
   highlightJson,
+  highlightShell,
 } from "@/lib/highlight";
 
 export function HighlightedCode({ code }: { code: string }) {
@@ -25,6 +26,23 @@ export function HighlightedGeneric({
   language: string;
 }) {
   const tokens = highlightGeneric(code, language);
+  return (
+    <>
+      {tokens.map((t, idx) => (
+        <span key={idx} className={t.cls ? `tk-${t.cls}` : undefined}>
+          {t.text}
+        </span>
+      ))}
+    </>
+  );
+}
+
+/** Shell / Bash highlighter. The generic highlighter would mistake the
+ *  `//` inside URLs (`https://…`) for a C-family line comment and
+ *  swallow the rest of the line — the dedicated shell tokenizer never
+ *  considers `//` a comment. */
+export function HighlightedShell({ code }: { code: string }) {
+  const tokens = highlightShell(code);
   return (
     <>
       {tokens.map((t, idx) => (

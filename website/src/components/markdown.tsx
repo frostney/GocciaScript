@@ -7,6 +7,7 @@ import {
   HighlightedCode,
   HighlightedGeneric,
   HighlightedJson,
+  HighlightedShell,
 } from "@/components/highlighted-code";
 import { MermaidBlock } from "@/components/mermaid-block";
 import { DOC_HREF_MAP } from "@/lib/docs-data";
@@ -34,6 +35,9 @@ function renderHighlighted(code: string, lang: string): ReactNode {
   }
   if (l === "json") {
     return <HighlightedJson code={code} />;
+  }
+  if (l === "shell" || l === "sh" || l === "bash" || l === "zsh") {
+    return <HighlightedShell code={code} />;
   }
   return code;
 }
