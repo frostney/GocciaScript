@@ -1738,6 +1738,102 @@ p {
   white-space: pre-wrap;
   background: var(--paper-2);
 }
+
+/* Shared "console output" panel reused across the playground,
+   sandbox preview, hero runnable card, and Compiler Pipeline. Lines
+   stagger in line-by-line; a caret tails the final line. The whole
+   panel restarts its animation when the parent bumps `runKey` (which
+   lifts to `key` here, forcing a remount). */
+.anim-output {
+  position: relative;
+}
+.anim-output-line {
+  padding: 0.12rem 0;
+  opacity: 0;
+  transform: translateY(2px);
+  animation: anim-output-line-in 0.18s ease-out forwards;
+}
+.anim-output-line.log-err {
+  color: var(--amber-2);
+}
+.anim-output-line.log-meta {
+  color: var(--ink-3);
+  font-style: italic;
+}
+.anim-output-line.log-result {
+  color: var(--forest);
+}
+[data-theme="espresso"] .anim-output-line.log-result {
+  color: var(--forest-light);
+}
+.anim-output-text {
+  white-space: pre-wrap;
+}
+.anim-output-caret {
+  display: inline-block;
+  width: 0.55ch;
+  height: 1.05em;
+  margin-left: 1px;
+  vertical-align: -0.18em;
+  background: var(--accent);
+  border-radius: 1px;
+  opacity: 0;
+  /* `forwards` on the show animation pins the caret visible after it
+     finishes the fade-in; the second animation runs forever with the
+     classic terminal blink cadence. */
+  animation:
+    anim-output-caret-show 0.1s linear forwards,
+    arch-caret-blink 0.85s steps(2, end) infinite;
+}
+@keyframes anim-output-line-in {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes anim-output-caret-show {
+  to {
+    opacity: 1;
+  }
+}
+
+/* Code block with a left-side line-number gutter. Used by the
+   Compiler Pipeline panels, EXCLUDED snippets, and any other static
+   code on the landing page so all rendered samples have one look. */
+.numbered-code {
+  display: flex;
+  background: var(--paper);
+  border: 1px solid var(--rule-soft);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.numbered-code-gutter {
+  margin: 0;
+  padding: 0.85rem 0.65rem 0.85rem 0.85rem;
+  background: var(--paper-2);
+  border-right: 1px solid var(--rule-soft);
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  text-align: right;
+  user-select: none;
+  white-space: pre;
+  min-width: 2ch;
+}
+.numbered-code-body {
+  margin: 0;
+  padding: 0.85rem 1rem;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+.numbered-code-body code {
+  white-space: pre;
+}
 .pg-log-line {
   padding: 0.12rem 0;
   border-bottom: 1px dashed transparent;
@@ -2154,7 +2250,12 @@ p {
 .hero-editor-inner {
   position: relative;
   min-height: 380px;
+  /* Hero gutter is 3ch wide + 0.6rem right padding; nudge the
+     highlighter and textarea inward so source text lines up
+     against the right edge of the line numbers. */
+  --hero-gutter-width: calc(3ch + 0.6rem);
 }
+.hero-gutter,
 .hero-hl,
 .hero-ta {
   margin: 0;
@@ -2171,9 +2272,24 @@ p {
   width: 100%;
   tab-size: 2;
 }
+.hero-gutter {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--hero-gutter-width);
+  padding: 1.1rem 0.6rem 1.1rem 0.85rem;
+  text-align: right;
+  color: var(--ink-3);
+  background: color-mix(in oklab, var(--paper-2) 55%, var(--paper));
+  border-right: 1px solid var(--rule-soft);
+  user-select: none;
+  pointer-events: none;
+  overflow: hidden;
+}
 .hero-hl {
   position: absolute;
   inset: 0;
+  padding-left: calc(var(--hero-gutter-width) + 0.5rem);
   pointer-events: none;
   color: var(--ink);
   overflow: hidden;
@@ -2181,6 +2297,7 @@ p {
 .hero-ta {
   display: block;
   position: relative;
+  padding-left: calc(var(--hero-gutter-width) + 0.5rem);
   background: transparent;
   color: transparent;
   caret-color: var(--ink);

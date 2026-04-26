@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 import { AnchorH2, AnchorH3 } from "@/components/anchor-heading";
+import { AnimatedOutput } from "@/components/animated-output";
 import {
   HighlightedCode,
   HighlightedGeneric,
@@ -19,6 +20,7 @@ import {
   ShieldIcon,
 } from "@/components/icons";
 import { LatestVersion } from "@/components/latest-version";
+import { NumberedCode } from "@/components/numbered-code";
 import { QuickInstall } from "@/components/quick-install";
 import { formatError } from "@/lib/format-error";
 import { isPreStable, type ReleaseInfo } from "@/lib/github";
@@ -194,6 +196,11 @@ function HeroRunnableCard({ code }: { code: string }) {
       </div>
       <div className="hero-editor">
         <div className="hero-editor-inner">
+          <pre className="hero-gutter" aria-hidden="true">
+            {Array.from({ length: src.split("\n").length }, (_, i) =>
+              String(i + 1),
+            ).join("\n")}
+          </pre>
           <pre className="hero-hl" ref={hlRef} aria-hidden="true">
             <code>
               <HighlightedCode code={`${src}\n`} />
@@ -216,20 +223,14 @@ function HeroRunnableCard({ code }: { code: string }) {
       </div>
       <div className="hero-output">
         {output ? (
-          output.map((l, i) => (
-            <div
-              key={i}
-              className={
-                l.kind === "meta"
-                  ? "text-ink-3 italic"
-                  : l.kind === "err"
-                    ? "text-amber-2 not-italic whitespace-pre"
-                    : "text-ink not-italic"
-              }
-            >
-              {l.text}
-            </div>
-          ))
+          <AnimatedOutput
+            runKey={copyTick + (running ? 1 : 0) + output.length}
+            lines={output.map((l) => ({
+              kind:
+                l.kind === "meta" ? "meta" : l.kind === "err" ? "err" : "out",
+              text: l.text,
+            }))}
+          />
         ) : (
           <div className="hero-output-empty">
             {running ? "› running…" : "› press Run to execute (or ⌘↩)"}
@@ -479,30 +480,12 @@ console.log("total:", total);`;
   const [resultView, setResultView] = useState<"console" | "json">("console");
   const stage = stages[active];
 
-  // Typewriter animation for the Result step's console output. Restarts
-  // whenever the user navigates into step 5 or toggles back to the
-  // Console tab — gives the otherwise-static "total: 7.5" line a sense
-  // of "execution just finished" that matches the section's narrative.
-  // The JSON view stays fully rendered (partial JSON would just look
-  // broken mid-type).
-  const [typedChars, setTypedChars] = useState(0);
-  useEffect(() => {
-    if (active !== 4 || resultView !== "console") {
-      setTypedChars(0);
-      return;
-    }
-    setTypedChars(0);
-    const total = CONSOLE_OUTPUT.length;
-    let i = 0;
-    let timer: ReturnType<typeof setTimeout>;
-    const tick = () => {
-      i += 1;
-      setTypedChars(i);
-      if (i < total) timer = setTimeout(tick, 35);
-    };
-    timer = setTimeout(tick, 220);
-    return () => clearTimeout(timer);
-  }, [active, resultView]);
+  // The Result step's console output uses `<AnimatedOutput>` for its
+  // line-stagger reveal — same animation that drives the playground,
+  // sandbox preview, and hero runnable card. No local timer state
+  // needed; the component restarts when its `runKey` changes (here:
+  // when the active stage flips back to step 5 or the resultView
+  // toggle returns to "console").
 
   return (
     <div className="arch">
@@ -546,11 +529,9 @@ console.log("total:", total);`;
           {active === 0 && (
             <div className="arch-artifact-box">
               <div className="arch-artifact-head">example.js</div>
-              <pre className="arch-code">
-                <code>
-                  <HighlightedCode code={SOURCE} />
-                </code>
-              </pre>
+              <NumberedCode lineCount={SOURCE.split("\n").length}>
+                <HighlightedCode code={SOURCE} />
+              </NumberedCode>
             </div>
           )}
 
@@ -631,25 +612,21 @@ console.log("total:", total);`;
                 </button>
               </div>
               {resultView === "console" ? (
-                <pre className="arch-code arch-console">
-                  <code>
-                    {CONSOLE_OUTPUT.slice(0, typedChars)}
-                    <span
-                      className={`arch-caret${
-                        typedChars >= CONSOLE_OUTPUT.length
-                          ? " arch-caret-blink"
-                          : ""
-                      }`}
-                      aria-hidden="true"
-                    />
-                  </code>
-                </pre>
+                <AnimatedOutput
+                  className="arch-anim-output"
+                  runKey={`console-${active}`}
+                  lines={CONSOLE_OUTPUT.split("\n").map((text) => ({
+                    kind: "out" as const,
+                    text,
+                  }))}
+                />
               ) : (
-                <pre key="json" className="arch-code arch-detail-anim">
-                  <code>
-                    <HighlightedGeneric code={RESULT} language="json" />
-                  </code>
-                </pre>
+                <NumberedCode
+                  className="arch-detail-anim"
+                  lineCount={RESULT.split("\n").length}
+                >
+                  <HighlightedGeneric code={RESULT} language="json" />
+                </NumberedCode>
               )}
             </div>
           )}

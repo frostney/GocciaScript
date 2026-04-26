@@ -2,6 +2,7 @@
 
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { AnimatedOutput } from "@/components/animated-output";
 import { HighlightedCode } from "@/components/highlighted-code";
 import {
   CopyIcon,
@@ -569,30 +570,19 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
             <span className="ml-auto text-[0.7rem]">{output.length} lines</span>
           </div>
           <div className="pg-output">
-            {output.length === 0 && (
-              <span className="text-ink-3 italic">
-                — no output yet. hit ⌘+Enter to run.
-              </span>
-            )}
-            {output.map((line, idx) => (
-              <div
-                key={idx}
-                className={`pg-log-line log-${
-                  line.kind === "meta"
-                    ? "meta"
-                    : line.kind === "err"
-                      ? "err"
-                      : line.kind === "result"
-                        ? "result"
-                        : "out"
-                }`}
-              >
-                <span className="pg-log-gutter">
-                  {line.kind === "meta" ? "" : line.kind === "err" ? "✗" : "›"}
+            <AnimatedOutput
+              // Run id derived from the output identity — bumping the
+              // banner / clearing for a new execution remounts the
+              // component and replays the line-stagger reveal.
+              runKey={output.length === 0 ? "empty" : (output[0]?.text ?? "x")}
+              lines={output}
+              showCaret={!running ? output.length > 0 : true}
+              emptyState={
+                <span className="text-ink-3 italic">
+                  — no output yet. hit ⌘+Enter to run.
                 </span>
-                {line.text}
-              </div>
-            ))}
+              }
+            />
           </div>
         </div>
       </div>

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { AnchorH2 } from "@/components/anchor-heading";
+import { AnimatedOutput } from "@/components/animated-output";
 import {
   HighlightedCode,
   HighlightedGeneric,
@@ -31,54 +32,113 @@ type ToolStep = {
    *  it lives under (`command` for bash, `code` for run_code, …). */
   call: string;
   role: string;
-  /** Pre-computed tiktoken count for the OpenAI tool-call envelope:
-   *  `{"name":"<tool>","arguments":"<JSON-string of args>"}`.
-   *  Verified once with `gpt-tokenizer` on the cl100k_base encoder
-   *  (used by GPT-4 / GPT-4o); update if the call text changes. */
-  tokens: number;
+  /** What the tool returns to the model after this step — added to
+   *  the conversation history before the next call, so it inflates
+   *  the next request's token cost. */
+  result: string;
 };
 
 type ToolFlow = {
   label: string;
   argName: "command" | "code";
+  toolDef: ToolDef;
   steps: ToolStep[];
   risks: string[];
+};
+
+type ToolDef = {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: {
+      type: "object";
+      properties: Record<string, unknown>;
+      required: string[];
+    };
+  };
+};
+
+const LLM_MODEL = "gpt-4";
+const SYSTEM_PROMPT =
+  "You are a financial-data analyst. The host has put a transactions array in your reach. Investigate it and return a structured summary plus any outliers.";
+const USER_TASK = "Summarize the latest transaction batch and find outliers.";
+
+const BASH_TOOL: ToolDef = {
+  type: "function",
+  function: {
+    name: "bash",
+    description: "Execute a shell command and return its stdout.",
+    parameters: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "The shell command to run." },
+      },
+      required: ["command"],
+    },
+  },
+};
+
+const RUN_CODE_TOOL: ToolDef = {
+  type: "function",
+  function: {
+    name: "run_code",
+    description:
+      "Run GocciaScript in a sandbox with the provided globals; returns the script's value plus stdout. The sandbox has no fetch, fs, env, or eval.",
+    parameters: {
+      type: "object",
+      properties: {
+        code: {
+          type: "string",
+          description: "GocciaScript source. Last expression is the result.",
+        },
+        globals: {
+          type: "object",
+          description: "Variables injected into the sandbox.",
+          additionalProperties: true,
+        },
+      },
+      required: ["code"],
+    },
+  },
 };
 
 const TOOL_CALL_FLOWS: { bash: ToolFlow; goccia: ToolFlow } = {
   bash: {
     label: "Bash + jq",
     argName: "command",
+    toolDef: BASH_TOOL,
     steps: [
       {
         tool: "bash",
         call: "ls /tmp/agent/transactions/",
         role: "discover",
-        tokens: 21,
+        result: "transactions.current.json\n",
       },
       {
         tool: "bash",
         call: "cat /tmp/agent/transactions/transactions.current.json",
         role: "load",
-        tokens: 24,
+        result:
+          '[{"id":1,"amount":42.5},{"id":2,"amount":-12},{"id":3,"amount":98.34},{"id":4,"amount":-7.5},{"id":5,"amount":312},{"id":6,"amount":18.4},{"id":7,"amount":-298.4},{"id":8,"amount":54.2}]\n',
       },
       {
         tool: "bash",
         call: "jq '[.[].amount] | add' transactions.current.json",
         role: "sum",
-        tokens: 25,
+        result: "207.54\n",
       },
       {
         tool: "bash",
         call: "jq '[.[].amount] | add / length' transactions.current.json",
         role: "average",
-        tokens: 27,
+        result: "25.94\n",
       },
       {
         tool: "bash",
         call: "jq '[.[] | select(.amount > 280)]' transactions.current.json",
         role: "outliers",
-        tokens: 29,
+        result: '[{"id":5,"amount":312},{"id":7,"amount":-298.4}]\n',
       },
     ],
     risks: [
@@ -90,6 +150,7 @@ const TOOL_CALL_FLOWS: { bash: ToolFlow; goccia: ToolFlow } = {
   goccia: {
     label: "GocciaScript (single call)",
     argName: "code",
+    toolDef: RUN_CODE_TOOL,
     steps: [
       {
         tool: "run_code",
@@ -101,7 +162,8 @@ const stdev = Math.sqrt(
 const outliers = transactions.filter((t) => Math.abs(t.amount - avg) > 2 * stdev);
 ({ total, avg, outliers });`,
         role: "everything",
-        tokens: 118,
+        result:
+          '{"value":{"total":207.54,"avg":25.94,"outliers":[{"id":5,"amount":312},{"id":7,"amount":-298.4}]},"stdout":""}',
       },
     ],
     risks: [
@@ -111,18 +173,55 @@ const outliers = transactions.filter((t) => Math.abs(t.amount - avg) > 2 * stdev
   },
 };
 
-/** Build the canonical OpenAI tool-call envelope for one step:
- *
- *   {"name":"<tool>","arguments":"<JSON-string of args>"}
- *
- * The model pays tokens for the entire envelope, not just the inner
- * command — that's what the toggle reveals. */
-function toolCallPayload(step: ToolStep, argName: ToolFlow["argName"]): string {
-  return JSON.stringify(
-    { name: step.tool, arguments: JSON.stringify({ [argName]: step.call }) },
-    null,
-    2,
-  );
+/** Pre-computed tiktoken counts for the FULL LLM request body at each
+ *  turn (system + user + tools + accumulated assistant calls + tool
+ *  results). Verified once with `gpt-tokenizer`'s `cl100k_base`
+ *  encoder via `scripts/compute-llm-call-tokens.mjs`; re-run that
+ *  script and paste new numbers if the system prompt, tool defs, step
+ *  calls, or tool-result texts change. We do NOT bundle the tokenizer
+ *  to the client (~53 MB unpacked). */
+const LLM_CALL_TOKENS = {
+  bash: [119, 183, 336, 404, 474],
+  goccia: [170],
+} as const;
+
+/** Build the full LLM request body the model sees at step `index` of
+ *  flow `flowKey`. Includes the system prompt, user task, tool
+ *  definitions, and all assistant tool calls + tool results from
+ *  prior steps. This is what the LLM is actually billed for on that
+ *  turn — the toggle reveals it for direct comparison. */
+function buildLlmRequest(
+  flowKey: keyof typeof TOOL_CALL_FLOWS,
+  index: number,
+): unknown {
+  const flow = TOOL_CALL_FLOWS[flowKey];
+  const messages: unknown[] = [
+    { role: "system", content: SYSTEM_PROMPT },
+    { role: "user", content: USER_TASK },
+  ];
+  for (let j = 0; j < index; j++) {
+    const prev = flow.steps[j];
+    messages.push({
+      role: "assistant",
+      content: null,
+      tool_calls: [
+        {
+          id: `call_${j + 1}`,
+          type: "function",
+          function: {
+            name: prev.tool,
+            arguments: JSON.stringify({ [flow.argName]: prev.call }),
+          },
+        },
+      ],
+    });
+    messages.push({
+      role: "tool",
+      tool_call_id: `call_${j + 1}`,
+      content: prev.result,
+    });
+  }
+  return { model: LLM_MODEL, messages, tools: [flow.toolDef] };
 }
 
 function ToolCallComparison() {
@@ -160,10 +259,12 @@ function ToolCallComparison() {
             checked={showPayload}
             onChange={(e) => setShowPayload(e.target.checked)}
           />
-          <span>Show tool-call payload</span>
+          <span>Show full LLM request body</span>
         </label>
         <span className="tcc-toggle-note">
-          Token counts via{" "}
+          Each step expands to the full request the model sees on that turn —
+          system prompt, tool definitions, prior assistant calls, and tool
+          results. Token counts via{" "}
           <a
             href="https://github.com/openai/tiktoken"
             target="_blank"
@@ -178,10 +279,9 @@ function ToolCallComparison() {
         {(Object.entries(TOOL_CALL_FLOWS) as [string, ToolFlow][]).map(
           ([key, flow]) => {
             const isGoccia = key === "goccia";
-            const totalTokens = flow.steps.reduce(
-              (s, step) => s + step.tokens,
-              0,
-            );
+            const flowKey = key as keyof typeof TOOL_CALL_FLOWS;
+            const stepTokens = LLM_CALL_TOKENS[flowKey];
+            const totalTokens = stepTokens.reduce((s, t) => s + t, 0);
             return (
               <div
                 key={key}
@@ -209,14 +309,18 @@ function ToolCallComparison() {
                           <span className="tcc-tool">{s.tool}</span>
                           <span className="tcc-role">{s.role}</span>
                           <span className="tcc-step-tokens">
-                            {s.tokens} tok
+                            {stepTokens[i]} tok
                           </span>
                         </div>
                         <pre className="tcc-call">
                           <code>
                             {showPayload ? (
                               <HighlightedGeneric
-                                code={toolCallPayload(s, flow.argName)}
+                                code={JSON.stringify(
+                                  buildLlmRequest(flowKey, i),
+                                  null,
+                                  2,
+                                )}
                                 language="json"
                               />
                             ) : isGoccia ? (
@@ -278,26 +382,23 @@ await generateText({
   },
 });`;
 
-/** Default sandbox script — ends with an expression statement so the
- *  runner returns it as `value`. (The runner doesn't allow `return`
- *  at top level since the source is treated as a module.) */
+/** Default sandbox script — keep the output to ~3 short lines so the
+ *  host-result panel doesn't dominate the page layout. The runner
+ *  doesn't accept top-level `return` (source treated as a module),
+ *  so we use `console.log` for the visible output. */
 const DEFAULT_CODE = `// Untrusted script from an AI agent.
 // The sandbox has no fetch, fs, env, or eval — by default.
-const summary = users
-  .filter((u) => u.active)
-  .map((u) => ({ id: u.id, name: u.name.toUpperCase() }));
-
-console.log("Found", summary.length, "active users");
-({ summary, count: summary.length });`;
+const active = users.filter((u) => u.active);
+const names = active.map((u) => u.name.toUpperCase()).join(", ");
+console.log("active count:", active.length);
+console.log("names:", names);
+console.log("first id:", active[0]?.id);`;
 
 const DEFAULT_GLOBALS = `{
   "users": [
     { "id": 1, "name": "Alice",   "active": true  },
     { "id": 2, "name": "Bob",     "active": false },
-    { "id": 3, "name": "Charlie", "active": true  },
-    { "id": 4, "name": "Diana",   "active": true  },
-    { "id": 5, "name": "Eve",     "active": true  },
-    { "id": 6, "name": "Frank",   "active": true  }
+    { "id": 3, "name": "Charlie", "active": true  }
   ]
 }`;
 
@@ -318,6 +419,9 @@ export function Sandbox() {
   const [globalsText, setGlobalsText] = useState(DEFAULT_GLOBALS);
   const [output, setOutput] = useState<SbLine[]>([]);
   const [running, setRunning] = useState(false);
+  // Bumped on each new execution so `<AnimatedOutput>` re-mounts and
+  // re-runs its line-stagger reveal cleanly.
+  const [runId, setRunId] = useState(0);
 
   const execute = useCallback(async () => {
     // Validate globals JSON up-front so a typo there doesn't cost us a
@@ -353,6 +457,7 @@ export function Sandbox() {
       text: "› goccia run --timeout=500 --memory=64MB --globals=context.json",
     };
     setRunning(true);
+    setRunId((r) => r + 1);
     setOutput([banner, { kind: "meta", text: "  caps: — none —" }]);
 
     try {
@@ -554,23 +659,18 @@ export function Sandbox() {
             <div className="sb-field">
               <div className="sb-field-label">host result</div>
               <div className="pg-output flex-1 rounded-t-none">
-                {output.map((l, i) => (
-                  <div
-                    key={i}
-                    className={`pg-log-line log-${
+                <AnimatedOutput
+                  runKey={runId}
+                  lines={output.map((l) => ({
+                    kind:
                       l.kind === "meta"
                         ? "meta"
                         : l.kind === "err"
                           ? "err"
-                          : "out"
-                    }`}
-                  >
-                    <span className="pg-log-gutter">
-                      {l.kind === "meta" ? "" : l.kind === "err" ? "✗" : "›"}
-                    </span>
-                    {l.text}
-                  </div>
-                ))}
+                          : "out",
+                    text: l.text,
+                  }))}
+                />
               </div>
             </div>
           </div>
