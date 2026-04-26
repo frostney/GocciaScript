@@ -2488,37 +2488,66 @@ function TGocciaArrayValue.ArrayToSpliced(const AArgs: TGocciaArgumentsCollectio
 var
   View: TArrayLikeView;
   ResultArray: TGocciaArrayValue;
-  StartIndex, DeleteCount: Integer;
-  I, InsertCount: Integer;
-  ActualStartIndex: Integer;
-  NewLen: Double;
+  ActualStartIndex, DeleteCount, InsertCount, I: Integer;
+  RawStart, RawSkipCount, RawActualStart, RawActualSkipCount, NewLen: Double;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
 
-  // Step 3: Let relativeStart be ToIntegerOrInfinity(start)
-  StartIndex := ToIntegerFromArgs(AArgs);
+  // Step 3: Let relativeStart be ToIntegerOrInfinity(start).  Computed in
+  // Double against RawLen so a negative or out-of-range start clamps to the
+  // spec length, not to the truncated View.Len, on receivers whose length
+  // exceeds MaxInt (matches ArraySlice).
+  if AArgs.Length > 0 then
+  begin
+    RawStart := AArgs.GetElement(0).ToNumberLiteral.Value;
+    if IsNaN(RawStart) then
+      RawStart := 0
+    else if not IsInfinite(RawStart) then
+      RawStart := Trunc(RawStart);
+  end
+  else
+    RawStart := 0;
 
   // Step 4: If relativeStart < 0, let actualStart be max(len + relativeStart, 0); else min(relativeStart, len)
-  ActualStartIndex := NormalizeRelativeIndex(StartIndex, View.Len);
+  if RawStart < 0 then
+    RawActualStart := Max(View.RawLen + RawStart, 0)
+  else
+    RawActualStart := Min(RawStart, View.RawLen);
 
   // Step 5: If skipCount is not present, let actualSkipCount be len - actualStart
-  // Step 6: Else let actualSkipCount be max(ToIntegerOrInfinity(skipCount), 0)
-  DeleteCount := ToIntegerFromArgs(AArgs, 1, View.Len - ActualStartIndex);
-  if DeleteCount < 0 then
-    DeleteCount := 0
-  else if ActualStartIndex + DeleteCount > View.Len then
-    DeleteCount := View.Len - ActualStartIndex;
+  // Step 6: Else let actualSkipCount be min(max(ToIntegerOrInfinity(skipCount), 0), len - actualStart)
+  if AArgs.Length > 1 then
+  begin
+    RawSkipCount := AArgs.GetElement(1).ToNumberLiteral.Value;
+    if IsNaN(RawSkipCount) then
+      RawSkipCount := 0
+    else if not IsInfinite(RawSkipCount) then
+      RawSkipCount := Trunc(RawSkipCount);
+    RawActualSkipCount := Min(Max(RawSkipCount, 0), View.RawLen - RawActualStart);
+  end
+  else
+    RawActualSkipCount := View.RawLen - RawActualStart;
 
   // Step 8: Let newLen be len + insertCount - actualSkipCount
   //         If newLen > 2^53 - 1, throw TypeError
-  //         (ArrayCreate additionally throws RangeError if newLen > 2^32 - 1)
+  //         (ArrayCreate additionally throws RangeError if newLen > 2^32 - 1
+  //          or > MaxInt — engine cannot address more than that.)
   InsertCount := AArgs.Length - 2;
   if InsertCount < 0 then
     InsertCount := 0;
-  NewLen := View.RawLen + InsertCount - DeleteCount;
+  NewLen := View.RawLen + InsertCount - RawActualSkipCount;
   View.CheckSafeIntegerLen(NewLen);
   View.CheckArrayCreateLenValue(NewLen);
+
+  // After the result-length check, the receiver's reachable window must fit
+  // in Integer too: we walk [0, actualStart) and [actualStart+skipCount, len)
+  // when copying the unaffected ranges.  If RawActualStart or the tail offset
+  // exceeded MaxInt, the receiver length would too — but RawLen ≤ NewLen +
+  // skipCount - insertCount, and NewLen passed CheckArrayCreateLenValue, so
+  // any survivor index is ≤ MaxInt.  Truncate after the bounds checks.
+  ActualStartIndex := Integer(Trunc(RawActualStart));
+  DeleteCount := Integer(Trunc(RawActualSkipCount));
 
   // Step 9: Let A be ArrayCreate(newLen)
   ResultArray := TGocciaArrayValue.Create;
@@ -2820,8 +2849,9 @@ function TGocciaArrayValue.ArraySplice(const AArgs: TGocciaArgumentsCollection; 
 var
   View: TArrayLikeView;
   Removed: TGocciaArrayValue;
-  StartIndex, DeleteCount, ActualStart, ItemCount, NewLen: Integer;
+  ActualStart, DeleteCount, ItemCount, NewLen: Integer;
   I, From, Target: Integer;
+  RawStart, RawDeleteCount, RawActualStart, RawActualDeleteCount, RawNewLen: Double;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
@@ -2837,25 +2867,49 @@ begin
     Exit;
   end;
 
-  // Step 3: Let relativeStart be ToIntegerOrInfinity(start)
-  StartIndex := ToIntegerFromArgs(AArgs);
+  // Step 3: Let relativeStart be ToIntegerOrInfinity(start).  Computed in
+  // Double against RawLen so out-of-range and negative starts clamp against
+  // the spec length, not the truncated View.Len, on receivers whose length
+  // exceeds MaxInt (matches ArraySlice / ArrayToSpliced).
+  RawStart := AArgs.GetElement(0).ToNumberLiteral.Value;
+  if IsNaN(RawStart) then
+    RawStart := 0
+  else if not IsInfinite(RawStart) then
+    RawStart := Trunc(RawStart);
 
   // Step 4: If relativeStart < 0, let actualStart be max(len + relativeStart, 0); else min(relativeStart, len)
-  ActualStart := NormalizeRelativeIndex(StartIndex, View.Len);
+  if RawStart < 0 then
+    RawActualStart := Max(View.RawLen + RawStart, 0)
+  else
+    RawActualStart := Min(RawStart, View.RawLen);
 
   // Steps 5-9: Determine actualDeleteCount
-  DeleteCount := ToIntegerFromArgs(AArgs, 1, View.Len - ActualStart);
-  if DeleteCount < 0 then
-    DeleteCount := 0
-  else if ActualStart + DeleteCount > View.Len then
-    DeleteCount := View.Len - ActualStart;
+  if AArgs.Length > 1 then
+  begin
+    RawDeleteCount := AArgs.GetElement(1).ToNumberLiteral.Value;
+    if IsNaN(RawDeleteCount) then
+      RawDeleteCount := 0
+    else if not IsInfinite(RawDeleteCount) then
+      RawDeleteCount := Trunc(RawDeleteCount);
+    RawActualDeleteCount := Min(Max(RawDeleteCount, 0), View.RawLen - RawActualStart);
+  end
+  else
+    RawActualDeleteCount := View.RawLen - RawActualStart;
 
   ItemCount := AArgs.Length - 2;
   if ItemCount < 0 then
     ItemCount := 0;
 
-  // Step 9a: If len + itemCount - actualDeleteCount > 2^53 - 1, throw TypeError
-  View.CheckSafeIntegerLen(View.RawLen + ItemCount - DeleteCount);
+  // Step 9a: If len + itemCount - actualDeleteCount > 2^53 - 1, throw TypeError.
+  // Also reject when the post-mutation length would exceed MaxInt — SetLen
+  // takes Integer, so we cannot address indices past it.
+  RawNewLen := View.RawLen + ItemCount - RawActualDeleteCount;
+  View.CheckSafeIntegerLen(RawNewLen);
+  View.CheckArrayCreateLenValue(RawNewLen);
+
+  // After the bounds checks, the surviving window fits in Integer.
+  ActualStart := Integer(Trunc(RawActualStart));
+  DeleteCount := Integer(Trunc(RawActualDeleteCount));
 
   // Step 10: Let A be ArraySpeciesCreate(O, actualDeleteCount)
   if Assigned(View.Arr) then
@@ -2871,8 +2925,11 @@ begin
     // else: absent → leave hole in Removed (sparse)
   end;
 
-  // Shift elements via View methods for prototype-aware semantics
-  NewLen := View.Len - DeleteCount + ItemCount;
+  // Shift elements via View methods for prototype-aware semantics.  Compute
+  // NewLen from the spec-relative RawNewLen so a receiver with RawLen >
+  // MaxInt (whose truncated View.Len lost the high bits) still produces the
+  // spec-mandated length when the post-mutation length fits MaxInt.
+  NewLen := Integer(Trunc(RawNewLen));
   if ItemCount < DeleteCount then
   begin
     // Shift elements left
