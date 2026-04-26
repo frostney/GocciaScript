@@ -711,7 +711,7 @@ begin
   end;
 
   // Step 2: Return ? TestIntegrityLevel(O, frozen)
-  if TGocciaObjectValue(AArgs.GetElement(0)).Frozen then
+  if TGocciaObjectValue(AArgs.GetElement(0)).TestIntegrityFrozen then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -834,7 +834,7 @@ begin
   end;
 
   // Step 2: Return ? TestIntegrityLevel(O, sealed)
-  if TGocciaObjectValue(AArgs.GetElement(0)).Sealed then
+  if TGocciaObjectValue(AArgs.GetElement(0)).TestIntegritySealed then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;

@@ -34,3 +34,20 @@ test("Object.isExtensible returns false for enum", () => {
 
   expect(Object.isExtensible(E)).toBe(false);
 });
+
+test("Object.isFrozen returns true for enum", () => {
+  enum OrderStatus {
+    Pending = 0,
+    Brewing = 1,
+    Ready = 2,
+    Delivered = 3,
+  }
+
+  expect(Object.isFrozen(OrderStatus)).toBe(true);
+});
+
+test("Object.isSealed returns true for enum", () => {
+  enum E { A = 1, B = 2 }
+
+  expect(Object.isSealed(E)).toBe(true);
+});

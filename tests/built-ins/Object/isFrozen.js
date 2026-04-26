@@ -45,4 +45,73 @@ describe("Object.isFrozen", () => {
     const frozen = Object.freeze(obj);
     expect(Object.isFrozen(frozen)).toBe(true);
   });
+
+  test("non-extensible object with non-writable non-configurable properties is structurally frozen", () => {
+    const obj = {};
+    Object.defineProperty(obj, "a", {
+      value: 1,
+      writable: false,
+      configurable: false,
+      enumerable: true,
+    });
+    Object.defineProperty(obj, "b", {
+      value: 2,
+      writable: false,
+      configurable: false,
+      enumerable: true,
+    });
+    Object.preventExtensions(obj);
+    expect(Object.isFrozen(obj)).toBe(true);
+  });
+
+  test("non-extensible object with writable property is not frozen", () => {
+    const obj = {};
+    Object.defineProperty(obj, "a", {
+      value: 1,
+      writable: true,
+      configurable: false,
+      enumerable: true,
+    });
+    Object.preventExtensions(obj);
+    expect(Object.isFrozen(obj)).toBe(false);
+  });
+
+  test("non-extensible object with configurable property is not frozen", () => {
+    const obj = {};
+    Object.defineProperty(obj, "a", {
+      value: 1,
+      writable: false,
+      configurable: true,
+      enumerable: true,
+    });
+    Object.preventExtensions(obj);
+    expect(Object.isFrozen(obj)).toBe(false);
+  });
+
+  test("empty non-extensible object is frozen", () => {
+    const obj = {};
+    Object.preventExtensions(obj);
+    expect(Object.isFrozen(obj)).toBe(true);
+  });
+
+  test("non-extensible object with accessor properties is frozen when non-configurable", () => {
+    const obj = {};
+    Object.defineProperty(obj, "x", {
+      get() { return 42; },
+      configurable: false,
+      enumerable: true,
+    });
+    Object.preventExtensions(obj);
+    expect(Object.isFrozen(obj)).toBe(true);
+  });
+
+  test("extensible object is never frozen", () => {
+    const obj = {};
+    Object.defineProperty(obj, "a", {
+      value: 1,
+      writable: false,
+      configurable: false,
+    });
+    expect(Object.isFrozen(obj)).toBe(false);
+  });
 });

@@ -85,6 +85,10 @@ type
     procedure Seal; virtual;
     procedure PreventExtensions; virtual;
 
+    // ES2026 §7.3.16 TestIntegrityLevel(O, level)
+    function TestIntegrityFrozen: Boolean; virtual;
+    function TestIntegritySealed: Boolean; virtual;
+
     procedure MarkReferences; override;
 
     property Properties: TGocciaPropertyMap read FProperties;
@@ -1404,6 +1408,64 @@ end;
 procedure TGocciaObjectValue.PreventExtensions;
 begin
   FExtensible := False;
+end;
+
+// ES2026 §7.3.16 TestIntegrityLevel(O, frozen)
+function TGocciaObjectValue.TestIntegrityFrozen: Boolean;
+var
+  Pair: TGocciaPropertyMap.TKeyValuePair;
+  SymPair: TSymbolDescriptorMap.TKeyValuePair;
+begin
+  // Step 3: If extensible is true, return false
+  if FExtensible then
+    Exit(False);
+
+  // Step 5: For each element key of keys
+  for Pair in FProperties do
+  begin
+    if Pair.Value.Configurable then
+      Exit(False);
+    if (Pair.Value is TGocciaPropertyDescriptorData) and Pair.Value.Writable then
+      Exit(False);
+  end;
+
+  for SymPair in FSymbolDescriptors do
+  begin
+    if SymPair.Value.Configurable then
+      Exit(False);
+    if (SymPair.Value is TGocciaPropertyDescriptorData) and SymPair.Value.Writable then
+      Exit(False);
+  end;
+
+  // Step 6: Return true
+  Result := True;
+end;
+
+// ES2026 §7.3.16 TestIntegrityLevel(O, sealed)
+function TGocciaObjectValue.TestIntegritySealed: Boolean;
+var
+  Pair: TGocciaPropertyMap.TKeyValuePair;
+  SymPair: TSymbolDescriptorMap.TKeyValuePair;
+begin
+  // Step 3: If extensible is true, return false
+  if FExtensible then
+    Exit(False);
+
+  // Step 5: For each element key of keys
+  for Pair in FProperties do
+  begin
+    if Pair.Value.Configurable then
+      Exit(False);
+  end;
+
+  for SymPair in FSymbolDescriptors do
+  begin
+    if SymPair.Value.Configurable then
+      Exit(False);
+  end;
+
+  // Step 6: Return true
+  Result := True;
 end;
 
 initialization
