@@ -1239,12 +1239,20 @@ begin
       Result := TGocciaBooleanLiteralValue.FalseValue;
       Exit;
     end;
+    Sparse := CollectSparseIndicesInRange(View.Obj, FromIndex64, Len64Val);
     if SearchValue is TGocciaUndefinedLiteralValue then
     begin
-      Result := TGocciaBooleanLiteralValue.TrueValue;
-      Exit;
+      // For undefined we need to distinguish two sub-cases: a hole in the
+      // window means Get(O, k) returns undefined for that k → true.  When
+      // every index in [fromIndex, len) has an own property (e.g. fromIndex
+      // narrows the window to a single materialised index) we still have
+      // to compare the actual values, since they may not be undefined.
+      if Int64(Length(Sparse)) < (Len64Val - FromIndex64) then
+      begin
+        Result := TGocciaBooleanLiteralValue.TrueValue;
+        Exit;
+      end;
     end;
-    Sparse := CollectSparseIndicesInRange(View.Obj, FromIndex64, Len64Val);
     for K in Sparse do
       if IsSameValueZero(View.Get64(K), SearchValue) then
       begin

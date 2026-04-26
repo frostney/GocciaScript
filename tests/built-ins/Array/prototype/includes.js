@@ -88,3 +88,33 @@ test("generic receiver searches array-like", () => {
 test("primitive this returns false", () => {
   expect(Array.prototype.includes.call(false, false)).toBe(false);
 });
+
+test("sparse-path includes(undefined) with fromIndex narrowing window to filled index returns false", () => {
+  // Use string keys for the indices: the test pinpoints the sparse-path
+  // window-narrowing case independently of any number-to-property-key
+  // formatting in the engine.
+  const huge = { length: 9007199254740991 };
+  huge["9007199254740990"] = 1;
+  const result = Array.prototype.includes.call(
+    huge, undefined, 9007199254740990
+  );
+  expect(result).toBe(false);
+});
+
+test("sparse-path includes(undefined) returns true when window contains a hole", () => {
+  const huge = { length: 9007199254740991 };
+  huge["9007199254740990"] = 1;
+  const result = Array.prototype.includes.call(
+    huge, undefined, 9007199254740989
+  );
+  expect(result).toBe(true);
+});
+
+test("sparse-path includes(undefined) returns true when an own value is undefined", () => {
+  const huge = { length: 9007199254740991 };
+  huge["9007199254740990"] = undefined;
+  const result = Array.prototype.includes.call(
+    huge, undefined, 9007199254740990
+  );
+  expect(result).toBe(true);
+});
