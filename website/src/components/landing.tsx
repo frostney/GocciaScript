@@ -789,7 +789,7 @@ export function Landing({ release }: { release?: ReleaseInfo | null }) {
         <div className="container">
           <div className="section-head">
             <div className="section-kicker">Design principles</div>
-            <AnchorH2 id="design-principles">
+            <AnchorH2 id="design-principles" className="hd-no-wrap">
               Modern JavaScript,{" "}
               <span className="wave-under">without the quirks.</span>
             </AnchorH2>

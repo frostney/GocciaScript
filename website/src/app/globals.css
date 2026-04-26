@@ -183,6 +183,22 @@ a:hover {
 html {
   scroll-padding-top: 6rem;
 }
+/* Opt-in modifier for headings that should stay on a single line — the
+   default `.section-head` max-width (60ch) is fine for prose, but a
+   short tagline like "Modern JavaScript, without the quirks." renders
+   wider than 60ch at the clamp(2rem, 4vw, 3.25rem) h2 font size and
+   wraps. Lift the cap, force one line, and allow wrap on narrow
+   viewports so it doesn't overflow on phones. */
+.anchor-heading.hd-no-wrap {
+  max-width: none;
+  white-space: nowrap;
+}
+@media (max-width: 700px) {
+  .anchor-heading.hd-no-wrap {
+    white-space: normal;
+  }
+}
+
 .anchor-heading {
   position: relative;
   scroll-margin-top: 6rem;
