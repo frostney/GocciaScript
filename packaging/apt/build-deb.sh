@@ -34,13 +34,26 @@ trap 'rm -rf "$WORK"' EXIT
 curl -fsSL -o "${WORK}/${ASSET}" "$URL"
 tar xzf "${WORK}/${ASSET}" -C "$WORK"
 
+# The release tarball is built by the `release` job in `.github/workflows/ci.yml`
+# with a single top-level directory matching the archive base name — the
+# binaries land at `<root>/GocciaScriptLoader`, not `<root>/build/...`.
+# (See `.github/scripts/stage-build-artifacts.sh`, which copies binaries
+# directly into the staging dir before `tar -czf` archives it.)
+ROOT="${WORK}/gocciascript-${VERSION}-linux-${GOCCIA_ARCH}"
+[ -d "$ROOT" ] || {
+  printf 'expected extracted root at %s\n' "$ROOT" >&2
+  printf 'archive contents:\n' >&2
+  ls -la "$WORK" >&2
+  exit 1
+}
+
 # Lay out the package tree.
 PKG="${WORK}/pkg"
 mkdir -p "${PKG}/DEBIAN" "${PKG}/usr/bin"
 
-cp "${WORK}/build/GocciaScriptLoader" "${PKG}/usr/bin/"
-cp "${WORK}/build/GocciaTestRunner" "${PKG}/usr/bin/"
-cp "${WORK}/build/GocciaREPL" "${PKG}/usr/bin/"
+cp "${ROOT}/GocciaScriptLoader" "${PKG}/usr/bin/"
+cp "${ROOT}/GocciaTestRunner" "${PKG}/usr/bin/"
+cp "${ROOT}/GocciaREPL" "${PKG}/usr/bin/"
 chmod 755 "${PKG}/usr/bin/Goccia"*
 
 cat > "${PKG}/DEBIAN/control" <<EOF

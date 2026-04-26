@@ -32,10 +32,23 @@ const jetbrainsMono = JetBrains_Mono({
   display: "swap",
 });
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://gocciascript.dev";
+const DEFAULT_SITE_URL = "https://gocciascript.dev";
+
+// Parse `NEXT_PUBLIC_SITE_URL` defensively — if someone misconfigures it on
+// Vercel (typo, missing scheme, leading whitespace), `new URL()` throws at
+// module-init time and the entire app fails to boot. Fall back to the
+// canonical origin so a bad env var degrades to "metadata points at the
+// wrong host" instead of "the site is down".
+const SITE_URL = (() => {
+  try {
+    return new URL(process.env.NEXT_PUBLIC_SITE_URL ?? DEFAULT_SITE_URL);
+  } catch {
+    return new URL(DEFAULT_SITE_URL);
+  }
+})();
 
 export const metadata: Metadata = {
-  metadataBase: new URL(SITE_URL),
+  metadataBase: SITE_URL,
   title: {
     default: "GocciaScript — A drop of JavaScript",
     template: "%s · GocciaScript",

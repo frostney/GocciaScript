@@ -417,13 +417,30 @@ const DEFAULT_GLOBALS = `{
   ]
 }`;
 
+// Reject globals keys that aren't valid identifiers up front — `const "user-id"
+// = …` and `const 123 = …` are both syntax errors that would otherwise blow up
+// the runner's parser before any of the user's actual script ran. Matching the
+// IdentifierStart / IdentifierPart subset we accept (ASCII only — Unicode
+// identifier characters are valid JS but a bigger surface for confusables in
+// a sandboxed-paste UI).
+const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
 /** Build the script that actually runs: each top-level globals key
  *  becomes a `const X = <JSON literal>;` declaration above the user's
  *  code. `JSON.stringify` of any JSON value is also a valid JS literal,
- *  so this round-trips cleanly without ad-hoc escaping. */
+ *  so this round-trips cleanly without ad-hoc escaping. Throws on any
+ *  globals key that wouldn't be a valid identifier — caller surfaces
+ *  the message in the sandbox console. */
 function buildScript(userCode: string, parsedGlobals: Record<string, unknown>) {
   const prelude = Object.entries(parsedGlobals)
-    .map(([k, v]) => `const ${k} = ${JSON.stringify(v)};`)
+    .map(([k, v]) => {
+      if (!IDENTIFIER_RE.test(k)) {
+        throw new Error(
+          `globals key "${k}" is not a valid JavaScript identifier`,
+        );
+      }
+      return `const ${k} = ${JSON.stringify(v)};`;
+    })
     .join("\n");
   if (!prelude) return userCode;
   return `// ─── injected globals ───\n${prelude}\n\n// ─── user script ───\n${userCode}`;
@@ -466,7 +483,25 @@ export function Sandbox() {
       return;
     }
 
-    const fullCode = buildScript(code, parsedGlobals);
+    let fullCode: string;
+    try {
+      fullCode = buildScript(code, parsedGlobals);
+    } catch (err) {
+      // `buildScript` throws on globals keys that aren't valid JS
+      // identifiers. Surface the message inline rather than 500ing the
+      // runner with a parse error.
+      setOutput([
+        {
+          kind: "meta",
+          text: "› goccia run --timeout=500 --memory=64MB --globals=context.json",
+        },
+        {
+          kind: "err",
+          text: `SyntaxError: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      ]);
+      return;
+    }
     const banner: SbLine = {
       kind: "meta",
       text: "› goccia run --timeout=500 --memory=64MB --globals=context.json",
@@ -479,7 +514,13 @@ export function Sandbox() {
       const res = await fetch("/api/run", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ code: fullCode, mode: "tree-walk", asi: true }),
+        // `mode: "interpreted"` matches the route's accepted values
+        // (`"interpreted" | "bytecode"`) — see `/api/run/route.ts`.
+        body: JSON.stringify({
+          code: fullCode,
+          mode: "interpreted",
+          asi: true,
+        }),
       });
       if (res.status === 429) {
         const retry = res.headers.get("Retry-After") ?? "60";

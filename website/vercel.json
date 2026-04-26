@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "buildCommand": "bun run build",
+  "installCommand": "bun install --frozen-lockfile",
+  "functions": {
+    "src/app/api/run/route.ts": {
+      "maxDuration": 15,
+      "memory": 1024
+    }
+  }
+}

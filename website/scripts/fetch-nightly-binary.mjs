@@ -22,7 +22,7 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -90,19 +90,28 @@ async function main() {
 
     await extract(archive, ext, work);
 
+    // Release archives are produced by `.github/scripts/stage-build-artifacts.sh`
+    // and contain a single top-level directory matching the archive base
+    // name — binaries sit directly inside it, not under a `build/` subdir.
+    const archiveRoot = path.join(work, `gocciascript-${TAG}-${os}-${arch}`);
+
     await mkdir(VENDOR_DIR, { recursive: true });
     const isWindows = os === "windows";
     let copied = 0;
     for (const exe of EXES) {
       const fname = isWindows ? `${exe}.exe` : exe;
-      const src = path.join(work, "build", fname);
+      const src = path.join(archiveRoot, fname);
       if (!existsSync(src)) {
         console.warn(`[fetch-nightly] ${fname} missing in archive — skipped`);
         continue;
       }
       const dest = path.join(VENDOR_DIR, fname);
       await rm(dest, { force: true });
-      await rename(src, dest);
+      // `rename()` fails with EXDEV when `tmpdir()` is on a different mount
+      // than the repo (common on CI workers and some Linux setups), so use
+      // `copyFile` for a reliable cross-device move. The cleanup `rm()` of
+      // `work` in the outer `finally` handles the source.
+      await copyFile(src, dest);
       copied++;
     }
     console.log(`[fetch-nightly] vendored ${copied} binaries → ${VENDOR_DIR}`);

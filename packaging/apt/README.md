@@ -69,10 +69,14 @@ practice (`signed-by=` instead of the deprecated `apt-key`).
 mkdir -p repo/pool/main/g/gocciascript
 mv gocciascript_0.6.1_*.deb repo/pool/main/g/gocciascript/
 
-# 5. Regenerate the index per arch (requires apt-utils).
+# 5. Regenerate the index per arch (requires apt-utils). The `--arch=$arch`
+#    filter is what scopes the output — without it both `binary-amd64` and
+#    `binary-arm64` end up with the same mixed package set, which makes
+#    `apt update` complain about the index not matching the requested arch.
 cd repo
 for arch in amd64 arm64; do
-  apt-ftparchive packages pool/main \
+  mkdir -p "dists/stable/main/binary-$arch"
+  apt-ftparchive --arch="$arch" packages pool/main \
     > dists/stable/main/binary-$arch/Packages
   gzip -kf dists/stable/main/binary-$arch/Packages
 done

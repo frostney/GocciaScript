@@ -59,7 +59,11 @@ export function SiteShell({
 
   const tabBarRef = useRef<HTMLElement>(null);
   const [indicator, setIndicator] = useState<IndicatorRect | null>(null);
-  const indicatorReadyRef = useRef(false);
+  // `data-ready` flips on once the *first* indicator transition lands so
+  // the CSS can opt the element into transitions only after the initial
+  // jump-to-position. Has to be state, not a ref — mutating a ref does
+  // not re-render, so the attribute would never make it onto the DOM.
+  const [indicatorReady, setIndicatorReady] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
   useIsoLayoutEffect(() => {
@@ -188,9 +192,9 @@ export function SiteShell({
                   height: indicator.height,
                 }}
                 onTransitionEnd={() => {
-                  indicatorReadyRef.current = true;
+                  if (!indicatorReady) setIndicatorReady(true);
                 }}
-                data-ready={indicatorReadyRef.current}
+                data-ready={indicatorReady}
               />
             )}
             {TABS.map((t) => (
@@ -199,6 +203,11 @@ export function SiteShell({
                 href={t.href}
                 className="nav-link"
                 data-active={active === t.id}
+                // `aria-current="page"` is the WAI-ARIA contract for "this
+                // is the page you're currently on" — screen readers announce
+                // it; `data-active` is purely a styling hook and is not
+                // exposed to assistive tech.
+                aria-current={active === t.id ? "page" : undefined}
               >
                 {t.label}
               </Link>

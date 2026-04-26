@@ -84,6 +84,11 @@ function HeroRunnableCard({ code }: { code: string }) {
   const copied = copyTick > 0;
 
   const run = async () => {
+    // The button is `disabled` while running, but the ⌘/Ctrl+Enter
+    // shortcut on the textarea bypasses that — guard re-entry directly
+    // so a fast double-press can't fire two overlapping `/api/run`
+    // requests and race the output panel.
+    if (running) return;
     setRunning(true);
     const banner = "› GocciaScriptLoader coffee-shop.js";
     setOutput([{ kind: "meta", text: banner }]);

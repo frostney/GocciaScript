@@ -13,13 +13,21 @@ the formula at `Formula/gocciascript.rb`.
 
 We **don't** maintain that file directly in the tap repo. The
 source-of-truth is `packaging/homebrew/gocciascript.rb` in this repo;
-release CI mirrors it into `frostney/homebrew-tap` on every tag push.
-Means there's exactly one place to edit and the tap repo is fully
-generated.
+the **intent** is that release CI mirrors it into `frostney/homebrew-tap`
+on every tag push so there's exactly one place to edit.
 
-## Per-release sync
+> **Status: not wired up yet.** The `release` job in `.github/workflows/ci.yml`
+> currently builds + uploads release archives and updates the changelog; it
+> does **not** run the version-bump / SHA-substitution / tap-mirror steps
+> below. The formula's `sha256` lines therefore still contain
+> `REPLACE_WITH_*` placeholders. Until the workflow is implemented, treat
+> the steps below as the **target operator runbook** — perform them by
+> hand on each tag push (or skip the tap entirely until automated).
 
-The release workflow does, after the binaries are uploaded:
+## Per-release sync (target flow)
+
+When the release workflow grows the tap-sync step, it should, after
+the binaries are uploaded:
 
 1. Bump `version` in `packaging/homebrew/gocciascript.rb` to the new tag.
 2. Compute SHA-256 for each of the four release archives and substitute
