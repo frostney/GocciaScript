@@ -269,9 +269,7 @@ export function Install({
               >
                 View install script
               </a>{" "}
-              before piping it into your shell. Want unreleased fixes? Swap{" "}
-              <code>/install</code> for <code>/install-nightly</code> to track
-              the rolling nightly channel.
+              before piping it into your shell.
             </p>
           </section>
 

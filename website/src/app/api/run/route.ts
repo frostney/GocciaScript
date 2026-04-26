@@ -7,16 +7,21 @@ import { clientIp, rateLimit } from "@/lib/rate-limit";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Resolution order:
-//   1. GOCCIA_BINARY env var (use in deploys / overrides)
-//   2. Bundled binary in vendor/ (Vercel deploy bundles it via outputFileTracingIncludes)
-//   3. Local dev: the freshly built binary at ../build/GocciaScriptLoader
+// Resolution order — first existing path wins:
+//   1. `GOCCIA_BINARY` env var (deploy / debug override)
+//   2. `../build/GocciaScriptLoader` — the locally built engine, so
+//      `bun run dev` always uses whatever the developer just compiled
+//      with `./build.pas loader`. Wins over `vendor/` so a stale
+//      vendored nightly never shadows fresh local work.
+//   3. `vendor/GocciaScriptLoader` — fetched at `prebuild` time by
+//      `scripts/fetch-nightly-binary.mjs`; this is the path the Vercel
+//      deploy hits because the engine source isn't on the build host.
 function resolveBinaryPath(): string {
   if (process.env.GOCCIA_BINARY) return process.env.GOCCIA_BINARY;
   const cwd = process.cwd();
   const candidates = [
-    path.join(cwd, "vendor", "GocciaScriptLoader"),
     path.join(cwd, "..", "build", "GocciaScriptLoader"),
+    path.join(cwd, "vendor", "GocciaScriptLoader"),
   ];
   for (const c of candidates) {
     if (existsSync(c)) return c;

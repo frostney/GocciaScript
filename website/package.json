@@ -5,7 +5,7 @@
   "scripts": {
     "sync-docs": "node scripts/sync-docs.mjs",
     "predev": "node scripts/sync-docs.mjs",
-    "prebuild": "node scripts/sync-docs.mjs",
+    "prebuild": "node scripts/sync-docs.mjs && node scripts/fetch-nightly-binary.mjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

@@ -20,6 +20,11 @@
 # docs synced from ../docs at build time (single source of truth lives there)
 /content/docs/
 
+# nightly binaries fetched at build time (single source of truth lives in
+# the GitHub release; `scripts/fetch-nightly-binary.mjs` populates this on
+# `prebuild`, never committed)
+/vendor/
+
 # production
 /build
 
