@@ -18,6 +18,7 @@ import {
   RunIcon,
   ShieldIcon,
 } from "@/components/icons";
+import { QuickInstall } from "@/components/quick-install";
 import { formatError } from "@/lib/format-error";
 import { isPreStable, type ReleaseInfo } from "@/lib/github";
 import {
@@ -36,64 +37,6 @@ const FEATURE_ICONS: Record<
   leaf: LeafIcon,
   clock: ClockIcon,
 };
-
-function CurlInstall({ release }: { release?: ReleaseInfo | null }) {
-  const [copyTick, setCopyTick] = useState(0);
-  const cmd = "curl -fsSL https://gocciascript.dev/install.sh | sh";
-  const copy = async () => {
-    let ok = false;
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(cmd);
-        ok = true;
-      }
-    } catch {
-      ok = false;
-    }
-    if (ok) setCopyTick((t) => t + 1);
-  };
-  useEffect(() => {
-    if (copyTick === 0) return;
-    const id = setTimeout(() => setCopyTick(0), 1500);
-    return () => clearTimeout(id);
-  }, [copyTick]);
-  const copied = copyTick > 0;
-  return (
-    <div className="flex flex-wrap items-center gap-[0.85rem]">
-      <button
-        type="button"
-        className="install-line min-w-0"
-        title="Click to copy"
-        onClick={copy}
-      >
-        <span className="dollar">$</span>
-        <span className="overflow-hidden text-ellipsis">{cmd}</span>
-        <span className="inline-flex text-ink-3">
-          <CopyIcon size={14} />
-        </span>
-        {copied && (
-          <span key={copyTick} className="copied-flash">
-            copied
-          </span>
-        )}
-      </button>
-      {release && (
-        <a
-          href={release.htmlUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="install-version"
-          title={release.name ?? release.tagName}
-        >
-          {release.tagName}
-        </a>
-      )}
-      <Link href="/install" className="link-button text-[0.85rem] text-ink-3">
-        Other install options →
-      </Link>
-    </div>
-  );
-}
 
 type OutputLine = { kind: "meta" | "out" | "err"; text: string };
 
@@ -768,8 +711,27 @@ export function Landing({ release }: { release?: ReleaseInfo | null }) {
                   <BookIcon size={16} /> Read the docs
                 </Link>
               </div>
-              <div className="mt-5">
-                <CurlInstall release={release} />
+              <div className="mt-5 hero-quick-install">
+                <QuickInstall />
+                <div className="hero-install-meta">
+                  {release && (
+                    <a
+                      href={release.htmlUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="install-version"
+                      title={release.name ?? release.tagName}
+                    >
+                      {release.tagName}
+                    </a>
+                  )}
+                  <Link
+                    href="/install"
+                    className="link-button text-[0.85rem] text-ink-3"
+                  >
+                    Other install options →
+                  </Link>
+                </div>
               </div>
               {isPreStable(release) && (
                 <p className="prestable-note mt-3">
