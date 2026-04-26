@@ -742,7 +742,8 @@ procedure TGocciaArrayValue.InitializeNativeFromArguments(const AArguments: TGoc
 var
   LenArg: TGocciaValue;
   Len: Double;
-  I, IntLen: Int64;
+  IntLen: Int64;
+  I: Integer;
 begin
   if AArguments.Length = 0 then
     Exit;
@@ -764,7 +765,9 @@ begin
       if IntLen > MaxInt then
         ThrowRangeError(SErrorInvalidArrayLength,
           SSuggestArrayLengthRange);
-      for I := 0 to IntLen - 1 do
+      // FPC rejects Int64 as a for-loop counter on 32-bit targets; IntLen
+      // is bounded by MaxInt above, so the Integer narrowing is safe.
+      for I := 0 to Integer(IntLen) - 1 do
         FElements.Add(TGocciaHoleValue.HoleValue);
     end
     else
