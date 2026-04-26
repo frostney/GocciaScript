@@ -18,6 +18,7 @@ import {
   RunIcon,
   ShieldIcon,
 } from "@/components/icons";
+import { LatestVersion } from "@/components/latest-version";
 import { QuickInstall } from "@/components/quick-install";
 import { formatError } from "@/lib/format-error";
 import { isPreStable, type ReleaseInfo } from "@/lib/github";
@@ -478,6 +479,31 @@ console.log("total:", total);`;
   const [resultView, setResultView] = useState<"console" | "json">("console");
   const stage = stages[active];
 
+  // Typewriter animation for the Result step's console output. Restarts
+  // whenever the user navigates into step 5 or toggles back to the
+  // Console tab — gives the otherwise-static "total: 7.5" line a sense
+  // of "execution just finished" that matches the section's narrative.
+  // The JSON view stays fully rendered (partial JSON would just look
+  // broken mid-type).
+  const [typedChars, setTypedChars] = useState(0);
+  useEffect(() => {
+    if (active !== 4 || resultView !== "console") {
+      setTypedChars(0);
+      return;
+    }
+    setTypedChars(0);
+    const total = CONSOLE_OUTPUT.length;
+    let i = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
+      i += 1;
+      setTypedChars(i);
+      if (i < total) timer = setTimeout(tick, 35);
+    };
+    timer = setTimeout(tick, 220);
+    return () => clearTimeout(timer);
+  }, [active, resultView]);
+
   return (
     <div className="arch">
       <div className="arch-row">
@@ -606,10 +632,20 @@ console.log("total:", total);`;
               </div>
               {resultView === "console" ? (
                 <pre className="arch-code arch-console">
-                  <code>{CONSOLE_OUTPUT}</code>
+                  <code>
+                    {CONSOLE_OUTPUT.slice(0, typedChars)}
+                    <span
+                      className={`arch-caret${
+                        typedChars >= CONSOLE_OUTPUT.length
+                          ? " arch-caret-blink"
+                          : ""
+                      }`}
+                      aria-hidden="true"
+                    />
+                  </code>
                 </pre>
               ) : (
-                <pre className="arch-code">
+                <pre key="json" className="arch-code arch-detail-anim">
                   <code>
                     <HighlightedGeneric code={RESULT} language="json" />
                   </code>
@@ -683,7 +719,16 @@ console.log(\`Your total: \${total}\`);`;
 
 const inlineCodeClass = "font-mono bg-paper-2 px-[0.3em] py-[0.05em] rounded";
 
-export function Landing({ release }: { release?: ReleaseInfo | null }) {
+export function Landing({
+  release,
+  locale,
+}: {
+  release?: ReleaseInfo | null;
+  /** BCP-47 locale tag from `Accept-Language` so the release-date in
+   *  the hero "Latest version" block formats the same on SSR and in
+   *  the browser. */
+  locale: string;
+}) {
   return (
     <>
       <section className="hero">
@@ -714,17 +759,7 @@ export function Landing({ release }: { release?: ReleaseInfo | null }) {
               <div className="mt-5 hero-quick-install">
                 <QuickInstall />
                 <div className="hero-install-meta">
-                  {release && (
-                    <a
-                      href={release.htmlUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="install-version"
-                      title={release.name ?? release.tagName}
-                    >
-                      {release.tagName}
-                    </a>
-                  )}
+                  <LatestVersion release={release ?? null} locale={locale} />
                   <Link
                     href="/install"
                     className="link-button text-[0.85rem] text-ink-3"
@@ -756,8 +791,8 @@ export function Landing({ release }: { release?: ReleaseInfo | null }) {
               <span className="wave-under">without the quirks.</span>
             </AnchorH2>
             <p>
-              What remains is a small, predictable language with a runtime built
-              for code you didn&apos;t write yourself.
+              What remains is a small, predictable language with a portable
+              runtime under 5MB.
             </p>
           </div>
           <div className="feature-grid">

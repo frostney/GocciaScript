@@ -67,6 +67,36 @@ export function detectOs(ua: string): OsKey {
   return "macos";
 }
 
+export type ArchKey = "arm64" | "x86_64";
+
+/** Best-guess CPU architecture from a navigator user-agent string and
+ *  an optional `os` hint. Default-pick reflects current desktop sales:
+ *  arm64 for Apple Silicon Macs (the default for new hardware since
+ *  late 2020), x86_64 for everything else.
+ *
+ *  Note: Apple Silicon Safari/WebKit hides the architecture in the UA
+ *  string (always reports "Intel Mac OS X" for fingerprinting reasons),
+ *  so without `navigator.userAgentData` we can only pick the most
+ *  likely default. The user can switch via the commented-out alternate
+ *  arch line in the rendered command. */
+export function detectArch(ua: string, os: OsKey = detectOs(ua)): ArchKey {
+  const s = ua.toLowerCase();
+  if (
+    s.includes("aarch64") ||
+    s.includes("arm64") ||
+    s.includes(" arm;") ||
+    s.includes(" arm)")
+  ) {
+    return "arm64";
+  }
+  if (s.includes("x86_64") || s.includes("x64") || s.includes("wow64")) {
+    return "x86_64";
+  }
+  // macOS: arm64 is the safer default for new Macs (Apple Silicon).
+  if (os === "macos") return "arm64";
+  return "x86_64";
+}
+
 /** A copy-to-clipboard button + syntax-highlighted command pre. Routes
  *  shell commands through the dedicated shell tokenizer so URLs aren't
  *  mistaken for `//`-style comments by the C-family generic highlighter. */

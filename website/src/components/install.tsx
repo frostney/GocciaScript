@@ -1,9 +1,17 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { AnchorH2 } from "@/components/anchor-heading";
-import { CommandTabs, OS_TABS, PM_TABS } from "@/components/command-tabs";
+import {
+  type ArchKey,
+  CommandTabs,
+  detectArch,
+  OS_TABS,
+  PM_TABS,
+} from "@/components/command-tabs";
 import { BookIcon, GithubIcon } from "@/components/icons";
+import { LatestVersion } from "@/components/latest-version";
 import { QuickInstall } from "@/components/quick-install";
 import {
   GITHUB_RELEASES_URL,
@@ -26,36 +34,68 @@ const SYSTEM_PM_COMMANDS = {
 /** Pre-built binary download instructions per OS. Includes all three
  *  shipped executables (loader / test runner / REPL) so the user
  *  ends up with the full toolchain on $PATH, not just the script
- *  loader. */
+ *  loader. The macOS / Linux variants render BOTH arm64 and x86_64
+ *  blocks, with the detected arch active and the other commented out
+ *  — flip by uncommenting the lines you want. */
 const RELEASES_BASE =
   "https://github.com/frostney/GocciaScript/releases/latest/download";
-const PREBUILT_COMMANDS = {
-  macos: [
-    "# Apple Silicon — replace `-arm64` with `-x86_64` for Intel Macs",
-    "for bin in GocciaScriptLoader GocciaTestRunner GocciaREPL; do",
-    `  curl -fsSL -o "$bin" "${RELEASES_BASE}/$bin-darwin-arm64"`,
-    '  chmod +x "$bin"',
-    "done",
-    "sudo mv GocciaScriptLoader GocciaTestRunner GocciaREPL /usr/local/bin/",
-  ].join("\n"),
-  linux: [
-    "# x86_64 — replace `-x86_64` with `-aarch64` for ARM",
-    "for bin in GocciaScriptLoader GocciaTestRunner GocciaREPL; do",
-    `  curl -fsSL -o "$bin" "${RELEASES_BASE}/$bin-linux-x86_64"`,
-    '  chmod +x "$bin"',
-    "done",
-    "sudo mv GocciaScriptLoader GocciaTestRunner GocciaREPL /usr/local/bin/",
-  ].join("\n"),
-  windows: [
-    "# Save under a folder on your PATH (creates one if needed)",
-    '$dest = "$env:USERPROFILE\\bin"',
-    "New-Item -ItemType Directory -Force -Path $dest | Out-Null",
-    "",
-    'foreach ($exe in @("GocciaScriptLoader", "GocciaTestRunner", "GocciaREPL")) {',
-    `  Invoke-WebRequest -Uri "${RELEASES_BASE}/$exe-windows-x86_64.exe" -OutFile "$dest\\$exe.exe"`,
-    "}",
-  ].join("\n"),
+
+const ARCH_LABELS = {
+  macos: { arm64: "Apple Silicon (arm64)", x86_64: "Intel (x86_64)" },
+  linux: { arm64: "ARM (aarch64)", x86_64: "x86_64" },
 } as const;
+const ARCH_SUFFIX = {
+  macos: { arm64: "darwin-arm64", x86_64: "darwin-x86_64" },
+  linux: { arm64: "linux-aarch64", x86_64: "linux-x86_64" },
+} as const;
+
+/** Build the Unix prebuilt block for a given OS at a given arch. The
+ *  active arch lines are uncommented; the alternate arch is shown
+ *  fully commented underneath so the user can swap by toggling
+ *  comments. */
+function unixPrebuiltBlock(
+  os: "macos" | "linux",
+  active: ArchKey,
+  commented: boolean,
+): string {
+  const suffix = ARCH_SUFFIX[os][active];
+  const label = ARCH_LABELS[os][active];
+  const c = commented ? "# " : "";
+  const tag = commented ? "uncomment to use instead" : "auto-detected";
+  return [
+    `# ${label} — ${tag}`,
+    `${c}for bin in GocciaScriptLoader GocciaTestRunner GocciaREPL; do`,
+    `${c}  curl -fsSL -o "$bin" "${RELEASES_BASE}/$bin-${suffix}"`,
+    `${c}  chmod +x "$bin"`,
+    `${c}done`,
+    `${c}sudo mv GocciaScriptLoader GocciaTestRunner GocciaREPL /usr/local/bin/`,
+  ].join("\n");
+}
+
+function buildPrebuiltCommands(arch: ArchKey) {
+  const otherArch: ArchKey = arch === "arm64" ? "x86_64" : "arm64";
+  return {
+    macos: [
+      unixPrebuiltBlock("macos", arch, false),
+      "",
+      unixPrebuiltBlock("macos", otherArch, true),
+    ].join("\n"),
+    linux: [
+      unixPrebuiltBlock("linux", arch, false),
+      "",
+      unixPrebuiltBlock("linux", otherArch, true),
+    ].join("\n"),
+    windows: [
+      "# Save under a folder on your PATH (creates one if needed)",
+      '$dest = "$env:USERPROFILE\\bin"',
+      "New-Item -ItemType Directory -Force -Path $dest | Out-Null",
+      "",
+      'foreach ($exe in @("GocciaScriptLoader", "GocciaTestRunner", "GocciaREPL")) {',
+      `  Invoke-WebRequest -Uri "${RELEASES_BASE}/$exe-windows-x86_64.exe" -OutFile "$dest\\$exe.exe"`,
+      "}",
+    ].join("\n"),
+  } as const;
+}
 
 /** Build-from-source commands per OS. Identical structure across
  *  platforms — the only difference is the executable name on Windows
@@ -78,6 +118,18 @@ export function Install({
    *  Used to format the release date so SSR matches the browser. */
   locale: string;
 }) {
+  // Arch auto-detect for the Pre-built binaries section. SSR renders
+  // the "arm64" default; the client useEffect overrides on first render
+  // based on the actual platform. We render BOTH archs in the command
+  // — only the comment markers shift — so the SSR/client transition
+  // is visually subtle.
+  const [arch, setArch] = useState<ArchKey>("arm64");
+  useEffect(() => {
+    if (typeof navigator === "undefined") return;
+    setArch(detectArch(navigator.userAgent));
+  }, []);
+  const prebuilt = buildPrebuiltCommands(arch);
+
   return (
     <div className="pt-16 pb-24">
       <div className="container">
@@ -115,41 +167,7 @@ export function Install({
             )}
 
             <div className="install-meta">
-              {release ? (
-                <p className="install-latest">
-                  Latest version{" "}
-                  <a
-                    href={release.htmlUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title={release.name ?? release.tagName}
-                  >
-                    <strong>{release.tagName}</strong>
-                  </a>
-                  {release.publishedAt && (
-                    <>
-                      {" "}
-                      released{" "}
-                      {/* Locale comes from `Accept-Language` server-side so
-                          SSR and the browser format the date identically.
-                          `timeZone: "UTC"` keeps the calendar date stable
-                          across timezones — release publish times come from
-                          GitHub in UTC. */}
-                      {new Date(release.publishedAt).toLocaleDateString(
-                        locale,
-                        {
-                          year: "numeric",
-                          month: "long",
-                          day: "numeric",
-                          timeZone: "UTC",
-                        },
-                      )}
-                    </>
-                  )}
-                </p>
-              ) : (
-                <p className="install-latest">Latest version —</p>
-              )}
+              <LatestVersion release={release} locale={locale} />
               <div className="install-meta-links">
                 <a
                   href={GITHUB_RELEASES_URL}
@@ -256,7 +274,7 @@ export function Install({
             <CommandTabs
               tabs={OS_TABS}
               storageKey="goccia.install.os"
-              commands={PREBUILT_COMMANDS}
+              commands={prebuilt}
             />
           </section>
 

@@ -2766,10 +2766,46 @@ p {
   border-radius: 2px 2px 0 0;
 }
 
-/* Console-style result body — no syntax highlighting, just plain text */
+/* Console-style result body — no syntax highlighting, just plain text.
+   The typewriter caret is solid while characters are still streaming
+   in (steady visual cue that something is happening) and switches to
+   a slow blink once the line is complete (matches a real terminal
+   prompt that's done printing). */
 .arch-console {
   white-space: pre-wrap;
   color: var(--ink);
+}
+.arch-caret {
+  display: inline-block;
+  width: 0.55ch;
+  height: 1.05em;
+  margin-left: 1px;
+  vertical-align: -0.18em;
+  background: var(--accent);
+  border-radius: 1px;
+  animation: arch-caret-pulse 1s ease-in-out infinite;
+}
+.arch-caret.arch-caret-blink {
+  animation: arch-caret-blink 0.85s steps(2, end) infinite;
+}
+@keyframes arch-caret-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes arch-caret-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
 }
 
 /* Mermaid diagram blocks */
