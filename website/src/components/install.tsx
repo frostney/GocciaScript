@@ -69,7 +69,15 @@ const SOURCE_COMMANDS = {
     "git clone https://github.com/frostney/GocciaScript\ncd GocciaScript\n./build.pas loader testrunner repl\n.\\build\\GocciaScriptLoader.exe --help",
 } as const;
 
-export function Install({ release }: { release: ReleaseInfo | null }) {
+export function Install({
+  release,
+  locale,
+}: {
+  release: ReleaseInfo | null;
+  /** BCP-47 locale tag resolved from `Accept-Language` server-side.
+   *  Used to format the release date so SSR matches the browser. */
+  locale: string;
+}) {
   return (
     <div className="pt-16 pb-24">
       <div className="container">
@@ -122,12 +130,13 @@ export function Install({ release }: { release: ReleaseInfo | null }) {
                     <>
                       {" "}
                       released{" "}
-                      {/* Pinned to en-US so SSR and client agree — passing
-                          `undefined` for locale picks up the system locale,
-                          which differs between server and browser and breaks
-                          hydration with a mismatched text node. */}
+                      {/* Locale comes from `Accept-Language` server-side so
+                          SSR and the browser format the date identically.
+                          `timeZone: "UTC"` keeps the calendar date stable
+                          across timezones — release publish times come from
+                          GitHub in UTC. */}
                       {new Date(release.publishedAt).toLocaleDateString(
-                        "en-US",
+                        locale,
                         {
                           year: "numeric",
                           month: "long",
