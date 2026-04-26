@@ -1,9 +1,13 @@
+import { Analytics as VercelAnalytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import type { Metadata } from "next";
 import {
   IBM_Plex_Sans,
   Instrument_Serif,
   JetBrains_Mono,
 } from "next/font/google";
+import { Suspense } from "react";
+import { Analytics as PostHogAnalytics } from "@/components/analytics";
 import { SiteShell } from "@/components/site-shell";
 import { fetchStars } from "@/lib/github";
 import "./globals.css";
@@ -104,6 +108,15 @@ export default async function RootLayout({
       </head>
       <body data-grain="true">
         <SiteShell stars={stars}>{children}</SiteShell>
+        {/* PostHog reads `useSearchParams()` for page-view URLs, which
+            Next requires inside `<Suspense>` for a stable SSR boundary.
+            The Vercel analytics components handle their own boundaries
+            internally so we don't need to wrap them. */}
+        <Suspense fallback={null}>
+          <PostHogAnalytics />
+        </Suspense>
+        <VercelAnalytics />
+        <SpeedInsights />
       </body>
     </html>
   );

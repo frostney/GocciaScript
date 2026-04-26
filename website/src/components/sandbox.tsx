@@ -173,16 +173,21 @@ const outliers = transactions.filter((t) => Math.abs(t.amount - avg) > 2 * stdev
   },
 };
 
-/** Pre-computed tiktoken counts for the FULL LLM request body at each
- *  turn (system + user + tools + accumulated assistant calls + tool
- *  results). Verified once with `gpt-tokenizer`'s `cl100k_base`
- *  encoder via `scripts/compute-llm-call-tokens.mjs`; re-run that
- *  script and paste new numbers if the system prompt, tool defs, step
- *  calls, or tool-result texts change. We do NOT bundle the tokenizer
- *  to the client (~53 MB unpacked). */
+/** Pre-computed tiktoken counts for each turn — split into the input
+ *  side (request body the model sees: system + user + tools +
+ *  accumulated assistant calls + tool results) and the output side
+ *  (the assistant message the model emits). Both are billed; the
+ *  output rate is typically 2-3× the input rate, so we surface them
+ *  separately in the UI.
+ *
+ *  Verified once with `gpt-tokenizer`'s `cl100k_base` encoder via
+ *  `scripts/compute-llm-call-tokens.mjs`; re-run that script and paste
+ *  new arrays if the system prompt, tool defs, step calls, or tool-
+ *  result texts change. The tokenizer is intentionally NOT a runtime
+ *  dependency (~53 MB unpacked). */
 const LLM_CALL_TOKENS = {
-  bash: [119, 183, 336, 404, 474],
-  goccia: [170],
+  bash: { in: [119, 183, 336, 404, 474], out: [45, 48, 49, 51, 53] },
+  goccia: { in: [170], out: [142] },
 } as const;
 
 /** Build the full LLM request body the model sees at step `index` of
@@ -281,7 +286,8 @@ function ToolCallComparison() {
             const isGoccia = key === "goccia";
             const flowKey = key as keyof typeof TOOL_CALL_FLOWS;
             const stepTokens = LLM_CALL_TOKENS[flowKey];
-            const totalTokens = stepTokens.reduce((s, t) => s + t, 0);
+            const totalIn = stepTokens.in.reduce((s, t) => s + t, 0);
+            const totalOut = stepTokens.out.reduce((s, t) => s + t, 0);
             return (
               <div
                 key={key}
@@ -292,7 +298,11 @@ function ToolCallComparison() {
                     <div className="tcc-label">{flow.label}</div>
                     <h4 className="tcc-title">
                       {flow.steps.length} tool call
-                      {flow.steps.length === 1 ? "" : "s"} · {totalTokens} tok
+                      {flow.steps.length === 1 ? "" : "s"} ·{" "}
+                      <span className="tcc-tokens-pair">
+                        <span className="tcc-tokens-in">↓ {totalIn} in</span>{" "}
+                        <span className="tcc-tokens-out">↑ {totalOut} out</span>
+                      </span>
                     </h4>
                   </div>
                 </div>
@@ -309,7 +319,12 @@ function ToolCallComparison() {
                           <span className="tcc-tool">{s.tool}</span>
                           <span className="tcc-role">{s.role}</span>
                           <span className="tcc-step-tokens">
-                            {stepTokens[i]} tok
+                            <span className="tcc-tokens-in">
+                              ↓ {stepTokens.in[i]}
+                            </span>{" "}
+                            <span className="tcc-tokens-out">
+                              ↑ {stepTokens.out[i]}
+                            </span>
                           </span>
                         </div>
                         <pre className="tcc-call">

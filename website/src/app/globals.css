@@ -3221,6 +3221,24 @@ p {
   font-size: 0.7rem;
   color: var(--ink-3);
   margin-left: auto;
+  display: inline-flex;
+  gap: 0.4rem;
+}
+.tcc-tokens-pair {
+  display: inline-flex;
+  gap: 0.4rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+/* Input tokens (prompt) — what the model RECEIVES. Down-arrow icon. */
+.tcc-tokens-in {
+  color: var(--ink-2);
+}
+/* Output tokens (completion) — what the model EMITS. Charged at a
+   higher rate by most APIs, so we tint with the accent so it pops
+   visually as the more expensive side. */
+.tcc-tokens-out {
+  color: var(--accent);
 }
 
 /* "Show tool-call payload" switch row above the comparison grid. */

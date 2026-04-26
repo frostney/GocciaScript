@@ -127,21 +127,71 @@ function gocciaRequest() {
 
 const tokens = (obj) => encode(JSON.stringify(obj)).length;
 
-const bashTokens = BASH_STEPS.map((_, i) => tokens(bashRequestAt(i)));
-const gocciaTokens = [tokens(gocciaRequest())];
+/** Output tokens per step = the assistant message the model emits for
+ *  that turn. Same shape we'd append to `messages` for the next call. */
+function bashOutputAt(stepIndex) {
+  return {
+    role: "assistant",
+    content: null,
+    tool_calls: [
+      {
+        id: `call_${stepIndex + 1}`,
+        type: "function",
+        function: {
+          name: "bash",
+          arguments: JSON.stringify({ command: BASH_STEPS[stepIndex].call }),
+        },
+      },
+    ],
+  };
+}
 
-console.log("== Bash + jq flow (5 round-trips) ==");
-bashTokens.forEach((t, i) => {
-  console.log(`  step ${i + 1}: ${t} input tokens`);
-});
-console.log(`  TOTAL: ${bashTokens.reduce((s, t) => s + t, 0)} input tokens`);
+const GOCCIA_CALL_BODY = `const total = transactions.reduce((s, t) => s + t.amount, 0);
+const avg = total / transactions.length;
+const stdev = Math.sqrt(
+  transactions.reduce((s, t) => s + (t.amount - avg) ** 2, 0) / transactions.length
+);
+const outliers = transactions.filter((t) => Math.abs(t.amount - avg) > 2 * stdev);
+({ total, avg, outliers });`;
 
-console.log("\n== GocciaScript flow (1 call) ==");
-console.log(`  step 1: ${gocciaTokens[0]} input tokens`);
-console.log(`  TOTAL: ${gocciaTokens[0]} input tokens`);
+const gocciaOutput = {
+  role: "assistant",
+  content: null,
+  tool_calls: [
+    {
+      id: "call_1",
+      type: "function",
+      function: {
+        name: "run_code",
+        arguments: JSON.stringify({ code: GOCCIA_CALL_BODY }),
+      },
+    },
+  ],
+};
+
+const bashIn = BASH_STEPS.map((_, i) => tokens(bashRequestAt(i)));
+const bashOut = BASH_STEPS.map((_, i) => tokens(bashOutputAt(i)));
+const gocciaIn = [tokens(gocciaRequest())];
+const gocciaOut = [tokens(gocciaOutput)];
+
+const fmt = (label, ins, outs) => {
+  console.log(`== ${label} ==`);
+  ins.forEach((tIn, i) => {
+    console.log(
+      `  step ${i + 1}:  in=${String(tIn).padStart(4)} tok   out=${String(outs[i]).padStart(3)} tok`,
+    );
+  });
+  const totIn = ins.reduce((s, t) => s + t, 0);
+  const totOut = outs.reduce((s, t) => s + t, 0);
+  console.log(
+    `  TOTAL:   in=${String(totIn).padStart(4)} tok   out=${String(totOut).padStart(3)} tok   sum=${totIn + totOut}`,
+  );
+};
+
+fmt("Bash + jq flow (5 round-trips)", bashIn, bashOut);
+console.log();
+fmt("GocciaScript flow (1 call)", gocciaIn, gocciaOut);
 
 console.log(
-  `\nFor sandbox.tsx LLM_CALL_TOKENS:\n  bash: [${bashTokens.join(
-    ", ",
-  )}],\n  goccia: [${gocciaTokens.join(", ")}],`,
+  `\nFor sandbox.tsx LLM_CALL_TOKENS:\n  bash:   { in: [${bashIn.join(", ")}], out: [${bashOut.join(", ")}] },\n  goccia: { in: [${gocciaIn.join(", ")}], out: [${gocciaOut.join(", ")}] },`,
 );
