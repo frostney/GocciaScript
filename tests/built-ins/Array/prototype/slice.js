@@ -151,3 +151,33 @@ test("slice(NaN) on array-like with positive length is a no-op start", () => {
   const sliced = Array.prototype.slice.call(arrayLike, NaN);
   expect(sliced).toEqual(["a", "b", "c"]);
 });
+
+test("slice on generic array-like with length > 2**31 and high start index", () => {
+  const high = 2 ** 32;
+  const obj = { length: 2 ** 33 };
+  obj[high] = "present";
+  const result = Array.prototype.slice.call(obj, high, high + 3);
+  expect(result.length).toBe(3);
+  expect(result[0]).toBe("present");
+  expect(result[1]).toBe(undefined);
+  expect(result[2]).toBe(undefined);
+  expect(0 in result).toBe(true);
+  expect(1 in result).toBe(false);
+  expect(2 in result).toBe(false);
+});
+
+test("slice on generic array-like with high start returns empty when start >= end", () => {
+  const high = 2 ** 32;
+  const obj = { length: 2 ** 33 };
+  const result = Array.prototype.slice.call(obj, high + 5, high);
+  expect(result).toEqual([]);
+});
+
+test("slice on generic array-like with high negative end", () => {
+  const high = 2 ** 32;
+  const obj = { length: 2 ** 33 };
+  obj[high] = "x";
+  obj[high + 1] = "y";
+  const result = Array.prototype.slice.call(obj, high, high + 2);
+  expect(result).toEqual(["x", "y"]);
+});

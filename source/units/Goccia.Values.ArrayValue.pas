@@ -1646,6 +1646,7 @@ var
   ResultArray: TGocciaArrayValue;
   StartIndex, EndIndex, Needed: Integer;
   I, N: Integer;
+  K: Int64;
   RawStart, RawEnd, RawK, RawFinal, RawNeeded: Double;
 begin
   // Step 1: Let O be ToObject(this value)
@@ -1710,15 +1711,6 @@ begin
 
   // After the check, RawNeeded ≤ MaxInt — safe to truncate for the loop.
   Needed := Integer(Trunc(RawNeeded));
-  // RawK could exceed MaxInt only when RawLen > MaxInt and the slice starts
-  // near the end; clamp to View.Len so the dense Integer loop stays in bounds.
-  if RawK > View.Len then
-    StartIndex := View.Len
-  else
-    StartIndex := Integer(Trunc(RawK));
-  EndIndex := StartIndex + Needed;
-  if EndIndex > View.Len then
-    EndIndex := View.Len;
 
   if Assigned(View.Arr) then
     ResultArray := ArraySpeciesCreate(View.Arr, Needed)
@@ -1727,13 +1719,32 @@ begin
 
   // Step 9: Let n be 0; repeat while k < final
   N := 0;
-  for I := StartIndex to EndIndex - 1 do
+  // RawK exceeds MaxInt only when RawLen > MaxInt and the slice starts past
+  // the dense Integer range; route through HasIndex64/Get64 so the window
+  // is not collapsed to empty by Integer clamping.
+  if RawK > MaxInt then
   begin
-    // Step 9b-c: only create property when source index is present (preserve holes)
-    if View.HasIndex(I) then
-      ArrayCreateDataProperty(ResultArray, N, View.Get(I));
-    // Step 9e: n increments unconditionally per ES spec
-    Inc(N);
+    K := Trunc(RawK);
+    while N < Needed do
+    begin
+      if View.HasIndex64(K) then
+        ArrayCreateDataProperty(ResultArray, N, View.Get64(K));
+      Inc(K);
+      Inc(N);
+    end;
+  end
+  else
+  begin
+    StartIndex := Integer(Trunc(RawK));
+    EndIndex := StartIndex + Needed;
+    if EndIndex > View.Len then
+      EndIndex := View.Len;
+    for I := StartIndex to EndIndex - 1 do
+    begin
+      if View.HasIndex(I) then
+        ArrayCreateDataProperty(ResultArray, N, View.Get(I));
+      Inc(N);
+    end;
   end;
 
   // Ensure result has correct length (preserve trailing holes)
