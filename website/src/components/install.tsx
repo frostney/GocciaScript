@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { type ComponentType, useEffect, useState } from "react";
 import { AnchorH2 } from "@/components/anchor-heading";
 import { HighlightedGeneric } from "@/components/highlighted-code";
 import {
@@ -27,32 +27,28 @@ type Method = {
   language?: "shell" | "ts";
 };
 
-/** The "Quick install" one-liners shown in the right-side hero card —
- *  not in the methods list, since they're the recommended path and
- *  belong above the fold. */
-const QUICK_INSTALLS: { id: string; label: string; command: string }[] = [
-  {
-    id: "quick-unix",
-    label: "macOS / Linux",
-    command: "curl -fsSL https://gocciascript.dev/install.sh | sh",
-  },
-  {
-    id: "quick-windows",
-    label: "Windows · PowerShell",
-    command: "irm https://gocciascript.dev/install.ps1 | iex",
-  },
+type TabSpec = {
+  key: string;
+  label: string;
+  Icon?: ComponentType<{ size?: number }>;
+};
+
+/** Operating-system tabs for the Quick install card. macOS and Linux
+ *  both run the same `curl … | sh` one-liner but get separate tabs so
+ *  users see their platform reflected explicitly. */
+const OS_TABS: readonly TabSpec[] = [
+  { key: "macos", label: "macOS" },
+  { key: "linux", label: "Linux" },
+  { key: "windows", label: "Windows" },
 ];
 
-type PackageManagerKey = "npm" | "bun" | "pnpm";
-type PackageManager = {
-  key: PackageManagerKey;
-  label: string;
-  icon: typeof NpmIcon;
-};
-const PACKAGE_MANAGERS: PackageManager[] = [
-  { key: "npm", label: "npm", icon: NpmIcon },
-  { key: "bun", label: "Bun", icon: BunIcon },
-  { key: "pnpm", label: "pnpm", icon: PnpmIcon },
+/** Package-manager tabs for the npm / Bun / pnpm sections — brand
+ *  icons in their official colors so the active selection is
+ *  recognizable at a glance. */
+const PM_TABS: readonly TabSpec[] = [
+  { key: "npm", label: "npm", Icon: NpmIcon },
+  { key: "bun", label: "Bun", Icon: BunIcon },
+  { key: "pnpm", label: "pnpm", Icon: PnpmIcon },
 ];
 
 const METHODS: Method[] = [
@@ -101,53 +97,53 @@ const METHODS: Method[] = [
   },
 ];
 
-/** Tabbed command picker for npm / Bun / pnpm — mirrors the docs-site
- *  pattern used by sli.dev, vite.dev, etc. Each tab is keyed by the
- *  PM's official brand mark in its brand color so the active selection
- *  is recognizable at a glance. */
-function PackageManagerTabs({
+/** Tabbed command picker — mirrors the docs-site pattern used by
+ *  sli.dev, vite.dev, etc. Used for both the OS picker (Quick install
+ *  card) and the package-manager picker (npm / Bun / pnpm sections).
+ *  Active selection persists in `localStorage` per `storageKey` and
+ *  synchronizes across sibling groups via a custom `cmd-tabs-sync`
+ *  event — picking "Bun" on the install section flips the run-without-
+ *  install section to Bun too. */
+function CommandTabs({
+  tabs,
   commands,
   storageKey,
 }: {
-  commands: Record<PackageManagerKey, string>;
-  /** Optional: if provided, the active tab is persisted across visits
-   *  and synchronized with sibling tab groups using the same key
-   *  (e.g. all "Install" tabs share their selection). */
+  tabs: readonly TabSpec[];
+  commands: Record<string, string>;
+  /** When set, the active tab is persisted across visits and shared
+   *  with other groups using the same key on this page. */
   storageKey?: string;
 }) {
-  const [active, setActive] = useState<PackageManagerKey>("npm");
+  const initialKey = tabs[0]?.key ?? "";
+  const [active, setActive] = useState<string>(initialKey);
 
-  // Hydrate the persisted selection on mount (and subscribe to other
-  // groups changing it via a `storage` event-like listener — we use
-  // a custom event on `window` since both tab groups live in the same
-  // document and `storage` fires only for cross-tab changes).
   useEffect(() => {
     if (!storageKey || typeof window === "undefined") return;
+    const isKnown = (v: unknown): v is string =>
+      typeof v === "string" && tabs.some((t) => t.key === v);
     try {
       const saved = window.localStorage.getItem(storageKey);
-      if (saved === "npm" || saved === "bun" || saved === "pnpm") {
-        setActive(saved);
-      }
+      if (isKnown(saved)) setActive(saved);
     } catch {}
     const onSync = (e: Event) => {
       const detail = (e as CustomEvent<{ key: string; value: string }>).detail;
       if (detail?.key !== storageKey) return;
-      const v = detail.value;
-      if (v === "npm" || v === "bun" || v === "pnpm") setActive(v);
+      if (isKnown(detail.value)) setActive(detail.value);
     };
-    window.addEventListener("pm-tabs-sync", onSync as EventListener);
+    window.addEventListener("cmd-tabs-sync", onSync as EventListener);
     return () =>
-      window.removeEventListener("pm-tabs-sync", onSync as EventListener);
-  }, [storageKey]);
+      window.removeEventListener("cmd-tabs-sync", onSync as EventListener);
+  }, [storageKey, tabs]);
 
-  const select = (key: PackageManagerKey) => {
+  const select = (key: string) => {
     setActive(key);
     if (storageKey && typeof window !== "undefined") {
       try {
         window.localStorage.setItem(storageKey, key);
       } catch {}
       window.dispatchEvent(
-        new CustomEvent("pm-tabs-sync", {
+        new CustomEvent("cmd-tabs-sync", {
           detail: { key: storageKey, value: key },
         }),
       );
@@ -155,30 +151,30 @@ function PackageManagerTabs({
   };
 
   return (
-    <div className="pkg-tabs-wrap">
-      <div className="pkg-tabs" role="tablist">
-        {PACKAGE_MANAGERS.map((pm) => {
-          const Icon = pm.icon;
-          const selected = active === pm.key;
+    <div className="cmd-tabs-wrap">
+      <div className="cmd-tabs" role="tablist">
+        {tabs.map((t) => {
+          const selected = active === t.key;
           return (
             <button
-              key={pm.key}
+              key={t.key}
               type="button"
               role="tab"
               aria-selected={selected}
               tabIndex={selected ? 0 : -1}
-              className={`pkg-tab pkg-tab-${pm.key}`}
+              className="cmd-tab"
+              data-key={t.key}
               data-active={selected}
-              onClick={() => select(pm.key)}
+              onClick={() => select(t.key)}
             >
-              <Icon size={16} />
-              <span>{pm.label}</span>
+              {t.Icon && <t.Icon size={16} />}
+              <span>{t.label}</span>
             </button>
           );
         })}
       </div>
       <div role="tabpanel">
-        <CopyableCommand command={commands[active]} language="shell" />
+        <CopyableCommand command={commands[active] ?? ""} language="shell" />
       </div>
     </div>
   );
@@ -323,15 +319,18 @@ export function Install({ release }: { release: ReleaseInfo | null }) {
           <aside className="install-quick" aria-labelledby="install-quick-h">
             <h3 id="install-quick-h">Quick install</h3>
             <p>
-              One-liner installers — they detect your platform, fetch the right
-              binary, and drop it on your <code>$PATH</code>.
+              One-liner installer — fetches the right binary for your platform
+              and drops it on your <code>$PATH</code>.
             </p>
-            {QUICK_INSTALLS.map((q) => (
-              <div key={q.id} className="install-quick-row">
-                <div className="install-quick-label">{q.label}</div>
-                <CopyableCommand command={q.command} language="shell" />
-              </div>
-            ))}
+            <CommandTabs
+              tabs={OS_TABS}
+              storageKey="goccia.install.os"
+              commands={{
+                macos: "curl -fsSL https://gocciascript.dev/install.sh | sh",
+                linux: "curl -fsSL https://gocciascript.dev/install.sh | sh",
+                windows: "irm https://gocciascript.dev/install.ps1 | iex",
+              }}
+            />
           </aside>
         </div>
 
@@ -347,24 +346,9 @@ export function Install({ release }: { release: ReleaseInfo | null }) {
             // Inject the JS-package-manager tabbed sections after the
             // OS package managers and before the pre-built-binaries
             // method, so all "managed install" paths sit together.
+            // Order: zero-cost run-without-install → global install.
             if (m.id === "scoop") {
               sections.push(
-                <section key="npm-install" id="npm" className="install-method">
-                  <AnchorH2 id="npm">JavaScript package managers</AnchorH2>
-                  <p>
-                    Cross-platform global install via npm, Bun, or pnpm. The npm
-                    package downloads the right native binary for your OS / arch
-                    on install — same pattern as esbuild and biome.
-                  </p>
-                  <PackageManagerTabs
-                    storageKey="goccia.install.pm"
-                    commands={{
-                      npm: "npm install -g gocciascript",
-                      bun: "bun install -g gocciascript",
-                      pnpm: "pnpm add -g gocciascript",
-                    }}
-                  />
-                </section>,
                 <section key="npm-run" id="npx" className="install-method">
                   <AnchorH2 id="npx">Run without installing</AnchorH2>
                   <p>
@@ -373,12 +357,30 @@ export function Install({ release }: { release: ReleaseInfo | null }) {
                     manager&apos;s cache on first run; subsequent invocations
                     are essentially free.
                   </p>
-                  <PackageManagerTabs
+                  <CommandTabs
+                    tabs={PM_TABS}
                     storageKey="goccia.install.pm"
                     commands={{
                       npm: "npx gocciascript script.js",
                       bun: "bunx gocciascript script.js",
                       pnpm: "pnpm dlx gocciascript script.js",
+                    }}
+                  />
+                </section>,
+                <section key="npm-install" id="npm" className="install-method">
+                  <AnchorH2 id="npm">JavaScript package managers</AnchorH2>
+                  <p>
+                    Cross-platform global install via npm, Bun, or pnpm. The npm
+                    package downloads the right native binary for your OS / arch
+                    on install — same pattern as esbuild and biome.
+                  </p>
+                  <CommandTabs
+                    tabs={PM_TABS}
+                    storageKey="goccia.install.pm"
+                    commands={{
+                      npm: "npm install -g gocciascript",
+                      bun: "bun install -g gocciascript",
+                      pnpm: "pnpm add -g gocciascript",
                     }}
                   />
                 </section>,

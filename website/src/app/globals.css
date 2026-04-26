@@ -778,14 +778,17 @@ p {
   color: var(--ink-3);
   margin-bottom: 0.4rem;
 }
-/* Package-manager tabs (npm / Bun / pnpm) — sli.dev / vite.dev style.
-   Each tab gets its brand color via `data-active` + `.pkg-tab-{key}`;
-   inactive tabs render in muted ink so the selection is unambiguous. */
-.pkg-tabs-wrap {
+/* Generic tabbed command picker — used for both the OS picker
+   (Quick install card) and the package-manager picker (npm / Bun /
+   pnpm sections). sli.dev / vite.dev style. Each tab gets its brand
+   color via `[data-active="true"][data-key="<k>"]` selectors so we
+   don't need a per-key class.  Inactive tabs render in muted ink so
+   the selection is unambiguous. */
+.cmd-tabs-wrap {
   display: flex;
   flex-direction: column;
 }
-.pkg-tabs {
+.cmd-tabs {
   display: flex;
   gap: 0.25rem;
   padding: 0.25rem;
@@ -794,8 +797,10 @@ p {
   border-bottom: none;
   border-radius: 12px 12px 0 0;
   width: fit-content;
+  max-width: 100%;
+  flex-wrap: wrap;
 }
-.pkg-tab {
+.cmd-tab {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
@@ -813,34 +818,54 @@ p {
     color 0.15s,
     border-color 0.15s;
 }
-.pkg-tab:hover {
+.cmd-tab:hover {
   color: var(--ink-2);
   background: color-mix(in oklab, var(--ink) 5%, transparent);
 }
-.pkg-tab[data-active="true"] {
+.cmd-tab[data-active="true"] {
   background: var(--paper);
   border-color: var(--rule-soft);
   color: var(--ink);
 }
-/* Brand color for the icon in the active tab. Inactive tabs keep the
-   muted text color so the icon visually dims with the label. */
-.pkg-tab[data-active="true"].pkg-tab-npm svg {
+/* Brand color for the icon in the active PM tab. Inactive tabs keep
+   the muted text color so the icon visually dims with the label. */
+.cmd-tab[data-active="true"][data-key="npm"] svg {
   color: #cb3837;
 }
-.pkg-tab[data-active="true"].pkg-tab-bun svg {
+.cmd-tab[data-active="true"][data-key="bun"] svg {
   color: #f7a8b8;
 }
-.pkg-tab[data-active="true"].pkg-tab-pnpm svg {
+.cmd-tab[data-active="true"][data-key="pnpm"] svg {
   color: #f9ad00;
 }
-.pkg-tab svg {
+.cmd-tab svg {
   flex-shrink: 0;
 }
 /* The CopyableCommand inside the panel sits flush against the tab bar
    above it — drop the top-left radius so they form one continuous
    surface, with the active tab visually "extruded" from the panel. */
-.pkg-tabs-wrap .install-block {
+.cmd-tabs-wrap .install-block {
   border-radius: 0 12px 12px 12px;
+}
+
+/* The Quick install card is narrow (clamp 320–440px), so the standard
+   0.85rem command font would cause a horizontal scrollbar even at
+   desktop widths. Tighten it specifically inside this context — the
+   commands here are short enough that a smaller font keeps them on
+   one visible line. */
+.install-quick .cmd-tabs-wrap .install-block-pre {
+  font-size: 0.72rem;
+  padding: 0.9rem 2.6rem 0.9rem 1rem;
+  line-height: 1.55;
+}
+.install-quick .cmd-tabs {
+  width: 100%;
+  justify-content: stretch;
+}
+.install-quick .cmd-tab {
+  flex: 1 1 0;
+  justify-content: center;
+  padding: 0.4rem 0.5rem;
 }
 
 .install-meta {
