@@ -79,4 +79,20 @@ describe("Array.prototype.splice", () => {
     expect(() => Array.prototype.splice.call(obj, 0, 2 ** 40 - 100))
       .toThrow(RangeError);
   });
+
+  test("shifts high-index source past MaxInt via sparse iteration", () => {
+    // Receiver length 2^31 puts the highest valid index at 2^31 - 1 (=
+    // MaxInt on 32-bit FPC builds).  splice(0, 1) shifts every index left
+    // by 1: the property at 2^31 - 1 must move to 2^31 - 2 and the original
+    // slot at 2^31 - 1 must be deleted as part of the trailing-range
+    // cleanup.  The dense Integer shift+delete loops saturate at View.Len =
+    // MaxInt - 1 and would silently leave both bugs in place; sparse
+    // iteration handles them via Get64 / DeleteProperty.
+    const obj = { length: 2 ** 31, [2 ** 31 - 1]: 'x' };
+    const removed = Array.prototype.splice.call(obj, 0, 1);
+    expect(removed.length).toBe(1);
+    expect(obj.length).toBe(2 ** 31 - 1);
+    expect(obj[2 ** 31 - 2]).toBe('x');
+    expect((2 ** 31 - 1) in obj).toBe(false);
+  });
 });
