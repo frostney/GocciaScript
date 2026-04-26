@@ -551,6 +551,16 @@ type
     property Name: string read FName;
   end;
 
+  // Member expression pattern: obj.prop, this.x, arr[i], obj[key]
+  TGocciaMemberExpressionDestructuringPattern = class(TGocciaDestructuringPattern)
+  private
+    FExpression: TGocciaMemberExpression;
+  public
+    constructor Create(const AExpression: TGocciaMemberExpression; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    property Expression: TGocciaMemberExpression read FExpression;
+  end;
+
   // Destructuring assignment expression
   TGocciaDestructuringAssignmentExpression = class(TGocciaExpression)
   private
@@ -1148,6 +1158,14 @@ begin
   FName := AName;
 end;
 
+{ TGocciaMemberExpressionDestructuringPattern }
+
+constructor TGocciaMemberExpressionDestructuringPattern.Create(const AExpression: TGocciaMemberExpression; const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FExpression := AExpression;
+end;
+
 { TGocciaDestructuringAssignmentExpression }
 
 constructor TGocciaDestructuringAssignmentExpression.Create(const ALeft: TGocciaDestructuringPattern; const ARight: TGocciaExpression; const ALine, AColumn: Integer);
@@ -1645,6 +1663,11 @@ begin
 end;
 
 function TGocciaIdentifierDestructuringPattern.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaMemberExpressionDestructuringPattern.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;

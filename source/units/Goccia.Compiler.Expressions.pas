@@ -691,7 +691,10 @@ begin
   end
   else if APattern is TGocciaRestDestructuringPattern then
     CollectDestructuringBindings(
-      TGocciaRestDestructuringPattern(APattern).Argument, AScope, AIsConst);
+      TGocciaRestDestructuringPattern(APattern).Argument, AScope, AIsConst)
+  else if APattern is TGocciaMemberExpressionDestructuringPattern then
+    // Member expression targets assign to existing objects — no bindings to declare
+    ;
 end;
 
 procedure EmitDestructuring(const ACtx: TGocciaCompilationContext;
@@ -826,6 +829,31 @@ begin
     ACtx.CompileExpression(AssignPat.Right, ASrcReg);
     PatchJumpTarget(ACtx, JumpIdx);
     EmitDestructuring(ACtx, AssignPat.Left, ASrcReg);
+  end
+  else if APattern is TGocciaMemberExpressionDestructuringPattern then
+  begin
+    DestSlot := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(
+      TGocciaMemberExpressionDestructuringPattern(APattern).Expression.ObjectExpr,
+      DestSlot);
+    if TGocciaMemberExpressionDestructuringPattern(APattern).Expression.Computed then
+    begin
+      IdxReg := ACtx.Scope.AllocateRegister;
+      ACtx.CompileExpression(
+        TGocciaMemberExpressionDestructuringPattern(APattern).Expression.PropertyExpression,
+        IdxReg);
+      EmitInstruction(ACtx, EncodeABC(OP_ARRAY_SET, DestSlot, IdxReg, ASrcReg));
+      ACtx.Scope.FreeRegister;
+    end
+    else
+    begin
+      PropIdx := ACtx.Template.AddConstantString(
+        TGocciaMemberExpressionDestructuringPattern(APattern).Expression.PropertyName);
+      if PropIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: property name index exceeds 255');
+      EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, DestSlot, UInt8(PropIdx), ASrcReg));
+    end;
+    ACtx.Scope.FreeRegister;
   end;
 end;
 

@@ -5093,6 +5093,37 @@ begin
 
     Result := TGocciaObjectDestructuringPattern.Create(Properties, AExpr.Line, AExpr.Column);
   end
+  else if AExpr is TGocciaMemberExpression then
+  begin
+    Result := TGocciaMemberExpressionDestructuringPattern.Create(
+      TGocciaMemberExpression(AExpr), AExpr.Line, AExpr.Column);
+  end
+  else if AExpr is TGocciaPropertyAssignmentExpression then
+  begin
+    // obj.prop = default  ->  member expression pattern with default value
+    Result := TGocciaAssignmentDestructuringPattern.Create(
+      TGocciaMemberExpressionDestructuringPattern.Create(
+        TGocciaMemberExpression.Create(
+          TGocciaPropertyAssignmentExpression(AExpr).ObjectExpr,
+          TGocciaPropertyAssignmentExpression(AExpr).PropertyName,
+          False, AExpr.Line, AExpr.Column),
+        AExpr.Line, AExpr.Column),
+      TGocciaPropertyAssignmentExpression(AExpr).Value,
+      AExpr.Line, AExpr.Column);
+  end
+  else if AExpr is TGocciaComputedPropertyAssignmentExpression then
+  begin
+    // obj[key] = default  ->  computed member expression pattern with default value
+    Result := TGocciaAssignmentDestructuringPattern.Create(
+      TGocciaMemberExpressionDestructuringPattern.Create(
+        TGocciaMemberExpression.Create(
+          TGocciaComputedPropertyAssignmentExpression(AExpr).ObjectExpr,
+          TGocciaComputedPropertyAssignmentExpression(AExpr).PropertyExpression,
+          AExpr.Line, AExpr.Column),
+        AExpr.Line, AExpr.Column),
+      TGocciaComputedPropertyAssignmentExpression(AExpr).Value,
+      AExpr.Line, AExpr.Column);
+  end
   else
     raise TGocciaSyntaxError.Create('Invalid destructuring target', AExpr.Line, AExpr.Column, FFileName, FSourceLines,
       SSuggestDestructuringInvalidTarget);

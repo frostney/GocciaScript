@@ -4145,10 +4145,33 @@ begin
   end;
 end;
 
+procedure AssignMemberExpressionPattern(const APattern: TGocciaMemberExpressionDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext);
+var
+  Obj, PropValue: TGocciaValue;
+  MemberExpr: TGocciaMemberExpression;
+begin
+  MemberExpr := APattern.Expression;
+  Obj := EvaluateExpression(MemberExpr.ObjectExpr, AContext);
+  if MemberExpr.Computed then
+  begin
+    PropValue := EvaluateExpression(MemberExpr.PropertyExpression, AContext);
+    if (PropValue is TGocciaSymbolValue) and (Obj is TGocciaObjectValue) then
+      TGocciaObjectValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropValue), AValue)
+    else if (PropValue is TGocciaSymbolValue) and (Obj is TGocciaClassValue) then
+      TGocciaClassValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropValue), AValue)
+    else
+      AssignProperty(Obj, PropValue.ToStringLiteral.Value, AValue, AContext.OnError, APattern.Line, APattern.Column);
+  end
+  else
+    AssignProperty(Obj, MemberExpr.PropertyName, AValue, AContext.OnError, APattern.Line, APattern.Column);
+end;
+
 procedure AssignPattern(const APattern: TGocciaDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
 begin
   if APattern is TGocciaIdentifierDestructuringPattern then
     AssignIdentifierPattern(TGocciaIdentifierDestructuringPattern(APattern), AValue, AContext, AIsDeclaration, ADeclarationType)
+  else if APattern is TGocciaMemberExpressionDestructuringPattern then
+    AssignMemberExpressionPattern(TGocciaMemberExpressionDestructuringPattern(APattern), AValue, AContext)
   else if APattern is TGocciaArrayDestructuringPattern then
     AssignArrayPattern(TGocciaArrayDestructuringPattern(APattern), AValue, AContext, AIsDeclaration, ADeclarationType)
   else if APattern is TGocciaObjectDestructuringPattern then
