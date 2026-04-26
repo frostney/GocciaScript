@@ -7,18 +7,18 @@ import { parseAcceptLanguage } from "@/lib/locale";
 export const metadata: Metadata = {
   title: "Install",
   description:
-    "Install GocciaScript — Homebrew, apt, prebuilt binaries, or build from source. Single self-contained runtime, no Node.js required.",
-  alternates: { canonical: "/install" },
+    "Install GocciaScript — one-line installer, prebuilt binaries, or build from source. Single self-contained runtime, no Node.js required.",
+  alternates: { canonical: "/installation" },
   openGraph: {
     title: "Install · GocciaScript",
     description:
-      "Install GocciaScript — Homebrew, apt, prebuilt binaries, or build from source.",
-    url: "/install",
+      "Install GocciaScript — one-line installer, prebuilt binaries, or build from source.",
+    url: "/installation",
   },
   twitter: {
     title: "Install · GocciaScript",
     description:
-      "Install GocciaScript — Homebrew, apt, prebuilt binaries, or build from source.",
+      "Install GocciaScript — one-line installer, prebuilt binaries, or build from source.",
   },
 };
 

@@ -29,7 +29,7 @@ type Tab = "home" | "install" | "docs" | "playground" | "sandbox";
 
 const TABS: { id: Tab; label: string; href: string }[] = [
   { id: "home", label: "Home", href: "/" },
-  { id: "install", label: "Install", href: "/install" },
+  { id: "install", label: "Install", href: "/installation" },
   { id: "docs", label: "Docs", href: "/docs" },
   { id: "playground", label: "Playground", href: "/playground" },
   { id: "sandbox", label: "Sandbox", href: "/sandbox" },
@@ -37,7 +37,7 @@ const TABS: { id: Tab; label: string; href: string }[] = [
 
 function activeTab(pathname: string): Tab {
   if (pathname === "/" || pathname === "") return "home";
-  if (pathname.startsWith("/install")) return "install";
+  if (pathname.startsWith("/installation")) return "install";
   if (pathname.startsWith("/docs")) return "docs";
   if (pathname.startsWith("/playground")) return "playground";
   if (pathname.startsWith("/sandbox")) return "sandbox";

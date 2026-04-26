@@ -5,7 +5,7 @@ const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://gocciascript.dev";
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const lastModified = new Date();
-  const top = ["/", "/install", "/docs", "/playground", "/sandbox"].map(
+  const top = ["/", "/installation", "/docs", "/playground", "/sandbox"].map(
     (path) => ({
       url: `${SITE_URL}${path}`,
       lastModified,

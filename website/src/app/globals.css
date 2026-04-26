@@ -916,6 +916,17 @@ p {
   margin-bottom: 0.85rem;
   max-width: 70ch;
 }
+/* Auxiliary line below a method (e.g. "View install script before
+   piping it into your shell"). Sits tighter against the command
+   panel above and uses muted ink so it doesn't compete with the
+   method's primary description. The compound selector beats the
+   `.install-method p` rule above on specificity without `!important`. */
+.install-method p.install-method-aux {
+  margin-top: 0.85rem;
+  margin-bottom: 0;
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
 .install-block {
   position: relative;
   background: var(--paper-2);

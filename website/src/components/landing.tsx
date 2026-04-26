@@ -760,8 +760,16 @@ export function Landing({
                 <QuickInstall />
                 <div className="hero-install-meta">
                   <LatestVersion release={release ?? null} locale={locale} />
-                  <Link
+                  <a
                     href="/install"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="link-button text-[0.85rem] text-ink-3"
+                  >
+                    View install script
+                  </a>
+                  <Link
+                    href="/installation"
                     className="link-button text-[0.85rem] text-ink-3"
                   >
                     Other install options →

@@ -30,8 +30,8 @@ export function QuickInstall() {
       storageKey="goccia.install.os"
       initialKey={detectedOs}
       commands={{
-        macos: "curl -fsSL https://gocciascript.dev/install.sh | sh",
-        linux: "curl -fsSL https://gocciascript.dev/install.sh | sh",
+        macos: "curl -fsSL https://gocciascript.dev/install | sh",
+        linux: "curl -fsSL https://gocciascript.dev/install | sh",
         windows: "irm https://gocciascript.dev/install.ps1 | iex",
       }}
     />
