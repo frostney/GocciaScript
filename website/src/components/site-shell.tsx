@@ -204,7 +204,12 @@ export function SiteShell({
                 aria-hidden="true"
                 style={{
                   transform: `translate(${indicator.left}px, ${indicator.top}px)`,
-                  width: indicator.height ? indicator.width : 0,
+                  // Both dimensions come from a single
+                  // `getBoundingClientRect()` and `IndicatorRect`
+                  // declares them as required `number`s, so each axis
+                  // can read its own field directly — no cross-axis
+                  // gating.
+                  width: indicator.width,
                   height: indicator.height,
                 }}
                 onTransitionEnd={() => {

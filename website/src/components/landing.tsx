@@ -865,18 +865,26 @@ export function Landing({
                 for the per-feature rationale.
               </p>
               <div className="excluded-row">
-                {EXCLUDED.map((x) => {
-                  const slug = x.name.replace(/[^A-Za-z0-9]+/g, "-");
+                {EXCLUDED.map((x, i) => {
+                  // Append the index because the alphanumeric-only slug
+                  // would otherwise collide on operator-only names —
+                  // `"=="` and `"!="` both reduce to `"-"`, which would
+                  // duplicate `id="ex-tip--"` and break the
+                  // `aria-describedby` link for whichever pair lost the
+                  // DOM lookup. The index keeps the id stable per row
+                  // without relying on the actual operator characters.
+                  const slug = `${x.name.replace(/[^A-Za-z0-9]+/g, "-")}-${i}`;
+                  const tooltipId = `ex-tip-${slug}`;
                   return (
                     <button
                       key={x.name}
                       type="button"
                       className="excluded-pill"
-                      aria-describedby={`ex-tip-${slug}`}
+                      aria-describedby={tooltipId}
                     >
                       {x.name}
                       <span
-                        id={`ex-tip-${slug}`}
+                        id={tooltipId}
                         role="tooltip"
                         className="bi-tooltip"
                       >
