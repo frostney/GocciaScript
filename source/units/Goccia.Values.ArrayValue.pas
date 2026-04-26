@@ -2540,12 +2540,18 @@ begin
   View.CheckSafeIntegerLen(NewLen);
   View.CheckArrayCreateLenValue(NewLen);
 
-  // After the result-length check, the receiver's reachable window must fit
-  // in Integer too: we walk [0, actualStart) and [actualStart+skipCount, len)
-  // when copying the unaffected ranges.  If RawActualStart or the tail offset
-  // exceeded MaxInt, the receiver length would too — but RawLen ≤ NewLen +
-  // skipCount - insertCount, and NewLen passed CheckArrayCreateLenValue, so
-  // any survivor index is ≤ MaxInt.  Truncate after the bounds checks.
+  // After the NewLen check we know any survivor index fits in Integer
+  // (RawActualStart ≤ RawLen - RawActualSkipCount ≤ NewLen + InsertCount
+  // ≤ MaxInt + InsertCount), but RawActualSkipCount itself can still exceed
+  // MaxInt — e.g. toSpliced(0, 2^40-100) on a {length: 2^40} receiver gives
+  // RawActualSkipCount ≈ 2^40 while NewLen = 100.  Truncating without the
+  // guard would wrap the Integer.  Refuse the operation: the engine has no
+  // sparse-iteration path for the [actualStart, actualStart+skipCount) read
+  // loop below.
+  if RawActualSkipCount > MaxInt then
+    ThrowRangeError(
+      'Array splice skip count exceeds engine maximum (MaxInt)',
+      'use a smaller skipCount');
   ActualStartIndex := Integer(Trunc(RawActualStart));
   DeleteCount := Integer(Trunc(RawActualSkipCount));
 
@@ -2907,7 +2913,15 @@ begin
   View.CheckSafeIntegerLen(RawNewLen);
   View.CheckArrayCreateLenValue(RawNewLen);
 
-  // After the bounds checks, the surviving window fits in Integer.
+  // RawActualStart is bounded by NewLen + DeleteCount - ItemCount ≤ MaxInt
+  // after CheckArrayCreateLenValue.  RawActualDeleteCount is not — e.g.
+  // splice(0, 2^40-100) on a {length: 2^40} receiver gives a 2^40 delete
+  // count with NewLen = 100.  Truncating without the guard would wrap.
+  // Refuse the operation: the in-place shift loop below is Integer-bounded.
+  if RawActualDeleteCount > MaxInt then
+    ThrowRangeError(
+      'Array splice delete count exceeds engine maximum (MaxInt)',
+      'use a smaller deleteCount');
   ActualStart := Integer(Trunc(RawActualStart));
   DeleteCount := Integer(Trunc(RawActualDeleteCount));
 

@@ -56,3 +56,12 @@ test("toSpliced throws RangeError when newLen exceeds 2**32 - 1", () => {
   const obj = { length: 2 ** 32 };
   expect(() => Array.prototype.toSpliced.call(obj, 0, 0)).toThrow(RangeError);
 });
+
+test("toSpliced throws RangeError when skipCount exceeds engine MaxInt on huge receiver", () => {
+  // toSpliced(0, 2^40 - 100) on a length-2^40 receiver: NewLen would fit
+  // in MaxInt (=100), but the skip count itself overflows the read-loop
+  // Integer counter.  Reject up-front rather than wrapping.
+  const obj = { length: 2 ** 40 };
+  expect(() => Array.prototype.toSpliced.call(obj, 0, 2 ** 40 - 100))
+    .toThrow(RangeError);
+});

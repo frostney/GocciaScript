@@ -70,4 +70,13 @@ describe("Array.prototype.splice", () => {
     const obj = { length: Number.MAX_SAFE_INTEGER };
     expect(() => Array.prototype.splice.call(obj, 0, 0, 1)).toThrow(TypeError);
   });
+
+  test("throws RangeError when deleteCount exceeds engine MaxInt on huge receiver", () => {
+    // splice(0, 2^40 - 100) on a length-2^40 receiver: NewLen would fit in
+    // MaxInt (=100), but the delete count itself overflows the in-place
+    // shift loop's Integer counter.  Reject up-front rather than wrapping.
+    const obj = { length: 2 ** 40 };
+    expect(() => Array.prototype.splice.call(obj, 0, 2 ** 40 - 100))
+      .toThrow(RangeError);
+  });
 });
