@@ -62,16 +62,28 @@ uses
   Math,
 
   Goccia.Constants.ConstructorNames,
+  Goccia.Constants.NumericLimits,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Realm,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
+var
+  GArrayBufferSharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetArrayBufferShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GArrayBufferSharedSlot))
+  else
+    Result := nil;
+end;
 
 function RequireArrayBuffer(const AThisValue: TGocciaValue; const AMethodName: string): TGocciaArrayBufferValue;
 begin
@@ -82,8 +94,6 @@ end;
 
 // ES2026 §6.2.4.2 ToIndex(value)
 function ToIndex(const AValue: TGocciaValue): Integer;
-const
-  MAX_ECMA_INDEX = 9007199254740991.0;
 var
   Num: TGocciaNumberLiteralValue;
   IntegerIndex: Double;
@@ -105,7 +115,7 @@ begin
   else
     IntegerIndex := Trunc(Num.Value);
 
-  if (IntegerIndex < 0) or (IntegerIndex > MAX_ECMA_INDEX) or
+  if (IntegerIndex < 0) or (IntegerIndex > MAX_SAFE_INTEGER_F) or
      (IntegerIndex > High(Integer)) then
     ThrowRangeError(SErrorInvalidArrayBufferLength, SSuggestArrayLengthRange);
 
@@ -121,6 +131,8 @@ begin
 end;
 
 constructor TGocciaArrayBufferValue.Create(const AByteLength: Integer);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(nil);
   FDetached := False;
@@ -129,11 +141,14 @@ begin
   if AByteLength > 0 then
     FillChar(FData[0], AByteLength, 0);
   InitializePrototype;
-  if Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetArrayBufferShared;
+  if Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 constructor TGocciaArrayBufferValue.Create(const AByteLength: Integer; const AMaxByteLength: Integer);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(nil);
   FDetached := False;
@@ -149,28 +164,35 @@ begin
   if AByteLength > 0 then
     FillChar(FData[0], AByteLength, 0);
   InitializePrototype;
-  if Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetArrayBufferShared;
+  if Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 constructor TGocciaArrayBufferValue.Create(const AClass: TGocciaClassValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(AClass);
   FDetached := False;
   FMaxByteLength := NO_MAX_BYTE_LENGTH;
   SetLength(FData, 0);
   InitializePrototype;
-  if not Assigned(AClass) and Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetArrayBufferShared;
+  if not Assigned(AClass) and Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 procedure TGocciaArrayBufferValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetArrayBufferShared) then Exit;
 
-  FShared := TGocciaSharedPrototype.Create(Self);
+  Shared := TGocciaSharedPrototype.Create(Self);
+  CurrentRealm.SetOwnedSlot(GArrayBufferSharedSlot, Shared);
   if Length(FPrototypeMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -192,14 +214,21 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaArrayBufferValue.ExposePrototype(const AConstructor: TGocciaValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
+  Shared := GetArrayBufferShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaArrayBufferValue.Create(0);
-  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+    Shared := GetArrayBufferShared;
+  end;
+  if Assigned(Shared) then
+    ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
 // ES2026 §25.1.4.1 ArrayBuffer(length [, options])
@@ -537,5 +566,8 @@ begin
 
   Result := NewBuf;
 end;
+
+initialization
+  GArrayBufferSharedSlot := RegisterRealmOwnedSlot('ArrayBuffer.shared');
 
 end.

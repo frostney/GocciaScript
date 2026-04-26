@@ -70,6 +70,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Realm,
   Goccia.Temporal.Options,
   Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
@@ -83,9 +84,19 @@ uses
   Goccia.Values.TemporalPlainYearMonth,
   Goccia.Values.TemporalZonedDateTime;
 
+var
+  GTemporalPlainDateSharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetTemporalPlainDateShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTemporalPlainDateSharedSlot))
+  else
+    Result := nil;
+end;
 
 function GetDurFieldOr(const AObj: TGocciaObjectValue; const AName: string; const ADefault: Int64): Int64;
 var
@@ -156,18 +167,29 @@ begin
   FMonth := AMonth;
   FDay := ADay;
   InitializePrototype;
-  if Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  if Assigned(GetTemporalPlainDateShared) then
+    FPrototype := GetTemporalPlainDateShared.Prototype;
 end;
 
 procedure TGocciaTemporalPlainDateValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then Exit;
-  FShared := TGocciaSharedPrototype.Create(Self);
-  if Length(FPrototypeMembers) = 0 then
-  begin
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetTemporalPlainDateShared) then Exit;
+
+  // Rebuild member definitions per realm: callbacks bind to Self (the
+  // bootstrap instance pinned by Shared), and TGocciaSharedPrototype.Destroy
+  // unpins Self on realm tear-down.  Caching across realms would leave stale
+  // method pointers referencing a freed instance.
+  //
+  // Defer SetOwnedSlot until after RegisterMemberDefinitions completes — if
+  // member-collection construction or registration raises, the realm slot
+  // stays nil and Shared is freed by the except handler, avoiding a half-
+  // initialized prototype lingering in the slot.
+  Shared := TGocciaSharedPrototype.Create(Self);
+  try
     Members := TGocciaMemberCollection.Create;
     try
       Members.AddAccessor('calendarId', GetCalendarId, nil, [pfConfigurable]);
@@ -207,15 +229,26 @@ begin
     finally
       Members.Free;
     end;
+    RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+    CurrentRealm.SetOwnedSlot(GTemporalPlainDateSharedSlot, Shared);
+  except
+    Shared.Free;
+    raise;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaTemporalPlainDateValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
+  Shared := GetTemporalPlainDateShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaTemporalPlainDateValue.Create(1970, 1, 1);
-  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+    Shared := GetTemporalPlainDateShared;
+  end;
+  if Assigned(Shared) then
+    ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
 function TGocciaTemporalPlainDateValue.ToStringTag: string;
@@ -680,5 +713,8 @@ begin
     ThrowRangeError('Unknown calendar: ' + CalId, SSuggestTemporalFromArg);
   Result := TGocciaTemporalPlainDateValue.Create(D.FYear, D.FMonth, D.FDay);
 end;
+
+initialization
+  GTemporalPlainDateSharedSlot := RegisterRealmOwnedSlot('Temporal.PlainDate.shared');
 
 end.

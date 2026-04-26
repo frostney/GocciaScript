@@ -44,6 +44,7 @@ Source -> JSX Transformer (optional) -> Lexer -> Parser -> Compiler -> Goccia By
 | Bytecode format | `Goccia.Bytecode*` | Opcodes, templates, modules, binary I/O, debug info |
 | Bytecode VM | `Goccia.VM*` | Register execution, closures, upvalues, handlers |
 | Shared runtime | `Goccia.Values.*`, `Goccia.Scope`, `Goccia.Runtime.Bootstrap` | Built-ins, objects, classes, arrays, promises, globals |
+| Realm | `Goccia.Realm` | Per-engine container for mutable intrinsic prototypes |
 | GC | `Goccia.GarbageCollector` | Mark-and-sweep garbage collection |
 
 For **tree-walk execution**, see [Interpreter](interpreter.md); for **bytecode execution**, see [Bytecode VM](bytecode-vm.md). For **recurring implementation patterns** and **terminology** (Define vs Assign, bindings, …), see [Core patterns](core-patterns.md).
@@ -108,6 +109,29 @@ TGocciaExecutor (abstract — Goccia.Executor.pas)
 The engine always creates a `TGocciaInterpreter` for bootstrapping (global scope creation, built-in registration, shim loading). The executor receives the bootstrapped global scope and module loader via `Initialize`, then handles all program and module body execution independently.
 
 Callers pass an executor to the engine constructor. When none is provided, the engine defaults to `TGocciaInterpreterExecutor`.
+
+## Realm Isolation
+
+`TGocciaRealm` (`Goccia.Realm.pas`) is the per-engine container for mutable intrinsic state — every built-in prototype object whose properties JS code can rewrite (`Array.prototype`, `Object.prototype`, `Map.prototype`, every error prototype, every Temporal prototype, and so on). Each `TGocciaEngine` constructs its own realm and frees it in its destructor; tear-down unpins every prototype the realm owns, so the next engine on the same worker thread starts from pristine intrinsics.
+
+```text
+TGocciaEngine
+  └── owns TGocciaRealm
+        ├── Slot[Array.prototype]    -> TGCManagedObject (pinned, unpinned at tear-down)
+        ├── Slot[Object.prototype]   -> TGCManagedObject
+        ├── ...
+        ├── OwnedSlot[Map.shared]    -> TGocciaSharedPrototype (Free-d at tear-down)
+        └── OwnedSlot[Set.shared]    -> TGocciaSharedPrototype
+```
+
+The realm exposes two slot kinds:
+
+- **`TGocciaRealmSlotId`** — for `TGCManagedObject` prototypes. `SetSlot` pins the object via the GC; tear-down unpins everything ever stored.
+- **`TGocciaRealmOwnedSlotId`** — for plain-`TObject` helpers like `TGocciaSharedPrototype`. The realm calls `Free` on the stored object at tear-down, before the pinned-slot release pass, so destructors that need to unpin owned GC objects still see a working GC.
+
+Value units register a slot id at unit `initialization` time via `RegisterRealmSlot` / `RegisterRealmOwnedSlot` (process-wide monotonic counters), and read/write through `CurrentRealm.GetSlot(SlotId)` / `.SetSlot(SlotId, Value)` at runtime. `CurrentRealm` is a `threadvar` — each worker thread sees the realm of whichever engine that thread last constructed.
+
+This replaces a previous `threadvar`-cache approach where intrinsic prototypes survived engine destruction and contaminated subsequent engines on the same thread, and a JS-level harness (`prototypeIsolation.js`) that tried to undo mutations from script (and could not reverse non-configurable property additions). See [Decision Log](decision-log.md) for the rationale, [Core patterns § Realm Ownership & Slot Registration](core-patterns.md#realm-ownership--slot-registration) for the registration recipe, and [Embedding § Engine Lifecycle & Realm Isolation](embedding.md#engine-lifecycle--realm-isolation) for embedder-facing implications.
 
 ## Duplication Boundaries (beneficial vs harmful)
 

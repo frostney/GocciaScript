@@ -534,6 +534,10 @@ begin
   PerformanceConstructor := TGocciaPerformance.CreateInterfaceObject;
   FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_PERFORMANCE, PerformanceConstructor, dtConst);
 
+  // ES2026 §20.4.3: Symbol.prototype's [[Prototype]] is %Object.prototype%
+  if Assigned(TGocciaSymbolValue.SharedPrototype) then
+    TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype).Prototype := ObjectConstructor.Prototype;
+
   RegisterGocciaScriptGlobal;
   RegisterGlobalThis;
 end;
@@ -615,6 +619,11 @@ begin
   GlobalThisObj.DefineProperty('globalThis',
     TGocciaPropertyDescriptorData.Create(GlobalThisObj, [pfWritable, pfConfigurable]));
   Scope.DefineLexicalBinding('globalThis', GlobalThisObj, dtConst);
+
+  // ES2026 §9.1.2.5 NewGlobalEnvironment: a global Environment Record's
+  // [[GlobalThisValue]] is the global object. Top-level `this` resolves
+  // here via §9.4.3 ResolveThisBinding -> GlobalEnvironmentRecord.GetThisBinding.
+  Scope.ThisValue := GlobalThisObj;
 end;
 
 procedure TGocciaRuntimeBootstrap.RegisterGocciaScriptGlobal;

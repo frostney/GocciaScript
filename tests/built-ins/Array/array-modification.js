@@ -61,3 +61,53 @@ test("delete values from array into sparse array", () => {
   expect(arr[1]).toBeUndefined();
   expect(arr[2]).toBe(3);
 });
+
+test("setting length to a smaller value truncates the array", () => {
+  const arr = [1, 2, 3];
+  arr.length = 0;
+  expect(arr.length).toBe(0);
+  expect(0 in arr).toBe(false);
+  expect(1 in arr).toBe(false);
+  expect(2 in arr).toBe(false);
+});
+
+test("setting length to a larger value extends the array with holes", () => {
+  const arr = [];
+  arr.length = 5;
+  expect(arr.length).toBe(5);
+  expect(0 in arr).toBe(false);
+  expect(1 in arr).toBe(false);
+  expect(2 in arr).toBe(false);
+  expect(3 in arr).toBe(false);
+  expect(4 in arr).toBe(false);
+});
+
+test("setting length to 2**32 throws RangeError", () => {
+  expect(() => {
+    [].length = 4294967296;
+  }).toThrow(RangeError);
+});
+
+test("setting length to 2**32 + 1 throws RangeError", () => {
+  expect(() => {
+    [].length = 4294967297;
+  }).toThrow(RangeError);
+});
+
+test("setting length to a negative value throws RangeError", () => {
+  expect(() => {
+    [].length = -1;
+  }).toThrow(RangeError);
+});
+
+test("setting length to a non-integer throws RangeError", () => {
+  expect(() => {
+    [].length = 1.5;
+  }).toThrow(RangeError);
+});
+
+test("setting length to NaN throws RangeError", () => {
+  expect(() => {
+    [].length = NaN;
+  }).toThrow(RangeError);
+});

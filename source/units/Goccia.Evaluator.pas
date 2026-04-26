@@ -989,6 +989,16 @@ begin
         Result := TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyValue));
         Exit;
       end
+      else if Obj is TGocciaSymbolValue then
+      begin
+        // Symbol primitive: look up symbol-keyed members on Symbol.prototype
+        if Assigned(TGocciaSymbolValue.SharedPrototype) then
+          Result := TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype)
+            .GetSymbolPropertyWithReceiver(TGocciaSymbolValue(PropertyValue), Obj)
+        else
+          Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+        Exit;
+      end
       else
       begin
         BoxedValue := Obj.Box;

@@ -46,3 +46,33 @@ test("generic receiver creates spliced copy from array-like", () => {
   const result = Array.prototype.toSpliced.call(arrayLike, 1, 1, 'x');
   expect(result).toEqual(['a', 'x', 'c']);
 });
+
+test("toSpliced throws TypeError when newLen would exceed Number.MAX_SAFE_INTEGER", () => {
+  const obj = { length: Number.MAX_SAFE_INTEGER };
+  expect(() => Array.prototype.toSpliced.call(obj, 0, 0, 1)).toThrow(TypeError);
+});
+
+test("toSpliced throws RangeError when newLen exceeds 2**32 - 1", () => {
+  const obj = { length: 2 ** 32 };
+  expect(() => Array.prototype.toSpliced.call(obj, 0, 0)).toThrow(RangeError);
+});
+
+test("toSpliced throws RangeError when skipCount exceeds engine MaxInt on huge receiver", () => {
+  // toSpliced(0, 2^40 - 100) on a length-2^40 receiver: NewLen would fit
+  // in MaxInt (=100), but the skip count itself overflows the read-loop
+  // Integer counter.  Reject up-front rather than wrapping.
+  const obj = { length: 2 ** 40 };
+  expect(() => Array.prototype.toSpliced.call(obj, 0, 2 ** 40 - 100))
+    .toThrow(RangeError);
+});
+
+test("toSpliced picks up high-index source past MaxInt via sparse iteration", () => {
+  // Receiver length 2^31 puts the highest valid index at 2^31 - 1 (= MaxInt
+  // on 32-bit FPC builds).  The dense Integer-indexed source loop saturates
+  // at View.Len = MaxInt - 1 and would silently drop the property at index
+  // 2^31 - 1; the sparse-iteration path enumerates it via Get64.
+  const obj = { length: 2 ** 31, [2 ** 31 - 1]: 'x' };
+  const result = Array.prototype.toSpliced.call(obj, 0, 2 ** 31 - 1);
+  expect(result.length).toBe(1);
+  expect(result[0]).toBe('x');
+});

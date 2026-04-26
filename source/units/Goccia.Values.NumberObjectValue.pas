@@ -47,13 +47,26 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Realm,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
 
+// Number.prototype lives in a per-realm slot.  Method host and member
+// definitions stay process-wide (immutable across realms).
+var
+  GNumberPrototypeSlot: TGocciaRealmSlotId;
+
 threadvar
-  FSharedNumberPrototype: TGocciaObjectValue;
   FPrototypeMethodHost: TGocciaNumberObjectValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetSharedNumberPrototype: TGocciaObjectValue; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GNumberPrototypeSlot))
+  else
+    Result := nil;
+end;
 
 function TGocciaNumberObjectValue.ExtractPrimitive(const AValue: TGocciaValue): TGocciaNumberLiteralValue;
 begin
@@ -66,12 +79,15 @@ begin
 end;
 
 constructor TGocciaNumberObjectValue.Create(const APrimitive: TGocciaNumberLiteralValue; const AClass: TGocciaClassValue = nil);
+var
+  SharedPrototype: TGocciaObjectValue;
 begin
   inherited Create(AClass);
   FPrimitive := APrimitive;
   InitializePrototype;
-  if not Assigned(AClass) and Assigned(FSharedNumberPrototype) then
-    FPrototype := FSharedNumberPrototype;
+  SharedPrototype := GetSharedNumberPrototype;
+  if not Assigned(AClass) and Assigned(SharedPrototype) then
+    FPrototype := SharedPrototype;
 end;
 
 function TGocciaNumberObjectValue.GetProperty(const AName: string): TGocciaValue;
@@ -80,25 +96,31 @@ begin
 end;
 
 function TGocciaNumberObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+var
+  SharedPrototype: TGocciaObjectValue;
 begin
   Result := inherited GetPropertyWithContext(AName, AThisContext);
   if not (Result is TGocciaUndefinedLiteralValue) then
     Exit;
 
-  if Assigned(FSharedNumberPrototype) then
-    Result := FSharedNumberPrototype.GetPropertyWithContext(AName, AThisContext);
+  SharedPrototype := GetSharedNumberPrototype;
+  if Assigned(SharedPrototype) then
+    Result := SharedPrototype.GetPropertyWithContext(AName, AThisContext);
 end;
 
 procedure TGocciaNumberObjectValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  SharedPrototype: TGocciaObjectValue;
 begin
-  if Assigned(FSharedNumberPrototype) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetSharedNumberPrototype) then Exit;
 
-  FSharedNumberPrototype := TGocciaObjectValue.Create;
-  FPrototypeMethodHost := Self;
+  SharedPrototype := TGocciaObjectValue.Create;
+  CurrentRealm.SetSlot(GNumberPrototypeSlot, SharedPrototype);
   if Length(FPrototypeMembers) = 0 then
   begin
+    FPrototypeMethodHost := Self;
     Members := TGocciaMemberCollection.Create;
     try
       Members.AddNamedMethod('toFixed', NumberToFixed, 1);
@@ -110,21 +132,19 @@ begin
     finally
       Members.Free;
     end;
+    // Method host is a process-wide singleton; pin it once so cached
+    // FPrototypeMembers callbacks remain valid across realms.
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
   end;
-  RegisterMemberDefinitions(FSharedNumberPrototype, FPrototypeMembers);
-
-  if Assigned(TGarbageCollector.Instance) then
-  begin
-    TGarbageCollector.Instance.PinObject(FSharedNumberPrototype);
-    TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
-  end;
+  RegisterMemberDefinitions(SharedPrototype, FPrototypeMembers);
 end;
 
 class function TGocciaNumberObjectValue.GetSharedPrototype: TGocciaObjectValue;
 begin
-  if not Assigned(FSharedNumberPrototype) then
+  if not Assigned(GetSharedNumberPrototype) then
     TGocciaNumberObjectValue.Create(TGocciaNumberLiteralValue.ZeroValue);
-  Result := FSharedNumberPrototype;
+  Result := GetSharedNumberPrototype;
 end;
 
 procedure TGocciaNumberObjectValue.MarkReferences;
@@ -358,5 +378,8 @@ begin
 
   Result := TGocciaStringLiteralValue.Create(Sign + MantissaStr + 'e' + ExpSign + IntToStr(Exp));
 end;
+
+initialization
+  GNumberPrototypeSlot := RegisterRealmSlot('Number.prototype');
 
 end.

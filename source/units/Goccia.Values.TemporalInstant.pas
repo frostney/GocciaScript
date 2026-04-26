@@ -51,6 +51,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Realm,
   Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
   Goccia.Values.BigIntValue,
@@ -60,9 +61,19 @@ uses
   Goccia.Values.TemporalDuration,
   Goccia.Values.TemporalZonedDateTime;
 
+var
+  GTemporalInstantSharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetTemporalInstantShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTemporalInstantSharedSlot))
+  else
+    Result := nil;
+end;
 
 function AsInstant(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalInstantValue;
 begin
@@ -103,6 +114,8 @@ end;
 { TGocciaTemporalInstantValue }
 
 constructor TGocciaTemporalInstantValue.Create(const AEpochMilliseconds: Int64; const ASubMillisecondNanoseconds: Integer);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(nil);
   FEpochMilliseconds := AEpochMilliseconds;
@@ -126,16 +139,20 @@ begin
   end;
 
   InitializePrototype;
-  if Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetTemporalInstantShared;
+  if Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 procedure TGocciaTemporalInstantValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then Exit;
-  FShared := TGocciaSharedPrototype.Create(Self);
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetTemporalInstantShared) then Exit;
+  Shared := TGocciaSharedPrototype.Create(Self);
+  CurrentRealm.SetOwnedSlot(GTemporalInstantSharedSlot, Shared);
   if Length(FPrototypeMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -162,14 +179,21 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaTemporalInstantValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
+  Shared := GetTemporalInstantShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaTemporalInstantValue.Create(0, 0);
-  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+    Shared := GetTemporalInstantShared;
+  end;
+  if Assigned(Shared) then
+    ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
 function TGocciaTemporalInstantValue.ToStringTag: string;
@@ -556,5 +580,8 @@ begin
   Result := TGocciaTemporalZonedDateTimeValue.Create(
     Inst.FEpochMilliseconds, Inst.FSubMillisecondNanoseconds, TZ);
 end;
+
+initialization
+  GTemporalInstantSharedSlot := RegisterRealmOwnedSlot('Temporal.Instant.shared');
 
 end.

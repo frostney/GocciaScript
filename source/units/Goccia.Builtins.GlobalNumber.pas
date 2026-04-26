@@ -33,6 +33,7 @@ uses
   SysUtils,
 
   Goccia.Arguments.Validator,
+  Goccia.Constants.NumericLimits,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor;
 
@@ -49,11 +50,11 @@ begin
   FBuiltinObject.DefineProperty('NaN', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.NaNValue, []));
   FBuiltinObject.DefineProperty('POSITIVE_INFINITY', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.InfinityValue, []));
   FBuiltinObject.DefineProperty('NEGATIVE_INFINITY', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.NegativeInfinityValue, []));
-  FBuiltinObject.DefineProperty('MAX_SAFE_INTEGER', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(9007199254740991.0), []));
-  FBuiltinObject.DefineProperty('MIN_SAFE_INTEGER', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(-9007199254740991.0), []));
-  FBuiltinObject.DefineProperty('MAX_VALUE', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(1.7976931348623157e+308), []));
-  FBuiltinObject.DefineProperty('MIN_VALUE', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(5e-324), []));
-  FBuiltinObject.DefineProperty('EPSILON', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(2.2204460492503131e-16), []));
+  FBuiltinObject.DefineProperty('MAX_SAFE_INTEGER', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(MAX_SAFE_INTEGER_F), []));
+  FBuiltinObject.DefineProperty('MIN_SAFE_INTEGER', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(MIN_SAFE_INTEGER_F), []));
+  FBuiltinObject.DefineProperty('MAX_VALUE', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(NUMBER_MAX_VALUE), []));
+  FBuiltinObject.DefineProperty('MIN_VALUE', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(NUMBER_MIN_VALUE), []));
+  FBuiltinObject.DefineProperty('EPSILON', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(NUMBER_EPSILON), []));
 
   Members := TGocciaMemberCollection.Create;
   try
@@ -410,7 +411,7 @@ begin
 
   // Step 2: If abs(ℝ(number)) > 2^53 − 1, return false
   // Step 3: Return true
-  if (Value = Trunc(Value)) and (Abs(Value) <= 9007199254740991) then
+  if (Value = Trunc(Value)) and (Abs(Value) <= MAX_SAFE_INTEGER_F) then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;

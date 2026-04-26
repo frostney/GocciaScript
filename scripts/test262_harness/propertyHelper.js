@@ -2,11 +2,7 @@
 // Provides verifyProperty and related helpers for checking property descriptors.
 
 const verifyProperty = (obj, name, desc, options) => {
-  // When test262 tests use `this` expecting the global object but the harness
-  // wraps them in an arrow function, `this` is undefined.  Fall back to
-  // globalThis so property-descriptor tests still work.
-  const target = obj ?? globalThis;
-  const actual = Object.getOwnPropertyDescriptor(target, name);
+  const actual = Object.getOwnPropertyDescriptor(obj, name);
 
   if (actual === undefined) {
     throw new Test262Error(
@@ -15,7 +11,7 @@ const verifyProperty = (obj, name, desc, options) => {
   }
 
   if ("value" in desc) {
-    if (!assert._isSameValue(actual.value, desc.value)) {
+    if (!Object.is(actual.value, desc.value)) {
       throw new Test262Error(
         "Expected " + String(name) + ".value to be " +
         String(desc.value) + " but got " + String(actual.value)
@@ -68,7 +64,7 @@ const verifyProperty = (obj, name, desc, options) => {
 };
 
 const verifyNotEnumerable = (obj, name) => {
-  const desc = Object.getOwnPropertyDescriptor(obj ?? globalThis, name);
+  const desc = Object.getOwnPropertyDescriptor(obj, name);
   if (desc === undefined) {
     throw new Test262Error(
       "Expected property '" + String(name) + "' to exist on object"
@@ -82,7 +78,7 @@ const verifyNotEnumerable = (obj, name) => {
 };
 
 const verifyEnumerable = (obj, name) => {
-  const desc = Object.getOwnPropertyDescriptor(obj ?? globalThis, name);
+  const desc = Object.getOwnPropertyDescriptor(obj, name);
   if (!desc || !desc.enumerable) {
     throw new Test262Error(
       "Expected " + String(name) + " to be enumerable"
@@ -91,7 +87,7 @@ const verifyEnumerable = (obj, name) => {
 };
 
 const verifyNotWritable = (obj, name) => {
-  const desc = Object.getOwnPropertyDescriptor(obj ?? globalThis, name);
+  const desc = Object.getOwnPropertyDescriptor(obj, name);
   if (desc === undefined) {
     throw new Test262Error(
       "Expected property '" + String(name) + "' to exist on object"
@@ -105,7 +101,7 @@ const verifyNotWritable = (obj, name) => {
 };
 
 const verifyWritable = (obj, name) => {
-  const desc = Object.getOwnPropertyDescriptor(obj ?? globalThis, name);
+  const desc = Object.getOwnPropertyDescriptor(obj, name);
   if (!desc || !desc.writable) {
     throw new Test262Error(
       "Expected " + String(name) + " to be writable"
@@ -114,7 +110,7 @@ const verifyWritable = (obj, name) => {
 };
 
 const verifyNotConfigurable = (obj, name) => {
-  const desc = Object.getOwnPropertyDescriptor(obj ?? globalThis, name);
+  const desc = Object.getOwnPropertyDescriptor(obj, name);
   if (desc === undefined) {
     throw new Test262Error(
       "Expected property '" + String(name) + "' to exist on object"
@@ -128,7 +124,7 @@ const verifyNotConfigurable = (obj, name) => {
 };
 
 const verifyConfigurable = (obj, name) => {
-  const desc = Object.getOwnPropertyDescriptor(obj ?? globalThis, name);
+  const desc = Object.getOwnPropertyDescriptor(obj, name);
   if (!desc || !desc.configurable) {
     throw new Test262Error(
       "Expected " + String(name) + " to be configurable"
@@ -137,16 +133,16 @@ const verifyConfigurable = (obj, name) => {
 };
 
 const isConfigurable = (obj, name) => {
-  const desc = Object.getOwnPropertyDescriptor(obj ?? globalThis, name);
+  const desc = Object.getOwnPropertyDescriptor(obj, name);
   return desc !== undefined && desc.configurable === true;
 };
 
 const isEnumerable = (obj, name) => {
-  const desc = Object.getOwnPropertyDescriptor(obj ?? globalThis, name);
+  const desc = Object.getOwnPropertyDescriptor(obj, name);
   return desc !== undefined && desc.enumerable === true;
 };
 
 const isWritable = (obj, name) => {
-  const desc = Object.getOwnPropertyDescriptor(obj ?? globalThis, name);
+  const desc = Object.getOwnPropertyDescriptor(obj, name);
   return desc !== undefined && desc.writable === true;
 };

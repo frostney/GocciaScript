@@ -107,30 +107,43 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
+  Goccia.Realm,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ProxyValue;
 
-threadvar
-  FSharedPrototype: TGocciaFunctionSharedPrototype;
+// Function.prototype lives in a per-realm slot.  JS-visible mutations
+// (Function.prototype.foo = ...) must not leak across engine recreation.
+var
+  GFunctionPrototypeSlot: TGocciaRealmSlotId;
+
+function GetSharedFunctionPrototype: TGocciaFunctionSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaFunctionSharedPrototype(CurrentRealm.GetSlot(GFunctionPrototypeSlot))
+  else
+    Result := nil;
+end;
 
 { TGocciaFunctionBase }
 
 constructor TGocciaFunctionBase.Create;
+var
+  Shared: TGocciaFunctionSharedPrototype;
 begin
   inherited Create;
 
-  if not Assigned(FSharedPrototype) then
+  Shared := GetSharedFunctionPrototype;
+  if not Assigned(Shared) and Assigned(CurrentRealm) then
   begin
-    FSharedPrototype := TGocciaFunctionSharedPrototype.Create;
-    // Pin the shared prototype so the GC never collects it
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.PinObject(FSharedPrototype);
+    // Constructor pins via realm slot internally - see SetSlot.
+    Shared := TGocciaFunctionSharedPrototype.Create;
   end;
 
-  Self.Prototype := FSharedPrototype;
+  if Assigned(Shared) then
+    Self.Prototype := Shared;
 end;
 
 function TGocciaFunctionBase.GetProperty(const AName: string): TGocciaValue;
@@ -275,19 +288,19 @@ end;
 
 class procedure TGocciaFunctionBase.SetSharedPrototypeParent(
   const AParent: TGocciaObjectValue);
+var
+  Shared: TGocciaFunctionSharedPrototype;
 begin
-  if not Assigned(FSharedPrototype) then
-  begin
-    FSharedPrototype := TGocciaFunctionSharedPrototype.Create;
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.PinObject(FSharedPrototype);
-  end;
-  FSharedPrototype.Prototype := AParent;
+  Shared := GetSharedFunctionPrototype;
+  if not Assigned(Shared) and Assigned(CurrentRealm) then
+    Shared := TGocciaFunctionSharedPrototype.Create;
+  if Assigned(Shared) then
+    Shared.Prototype := AParent;
 end;
 
 class function TGocciaFunctionBase.GetSharedPrototype: TGocciaFunctionSharedPrototype;
 begin
-  Result := FSharedPrototype;
+  Result := GetSharedFunctionPrototype;
 end;
 
 constructor TGocciaFunctionSharedPrototype.Create;
@@ -296,9 +309,13 @@ var
 begin
   inherited Create;
 
-  // Set the threadvar early to prevent infinite recursion when creating
-  // TGocciaNativeFunctionValue instances (which inherit from TGocciaFunctionBase)
-  FSharedPrototype := Self;
+  // Install into the realm slot before registering members - creating native
+  // function values for the prototype methods will recursively call
+  // TGocciaFunctionBase.Create, which expects to find the prototype already
+  // installed.  On exception we reset the slot to nil so a later Create can
+  // try again cleanly.
+  if Assigned(CurrentRealm) then
+    CurrentRealm.SetSlot(GFunctionPrototypeSlot, Self);
   try
     Members[0] := DefineNamedMethod('call', FunctionCall, 1);
     Members[1] := DefineNamedMethod('apply', FunctionApply, 2);
@@ -306,8 +323,8 @@ begin
     Members[3] := DefineNamedMethod(PROP_TO_STRING, FunctionToString, 0);
     RegisterMemberDefinitions(Self, Members);
   except
-    if FSharedPrototype = Self then
-      FSharedPrototype := nil;
+    if Assigned(CurrentRealm) and (CurrentRealm.GetSlot(GFunctionPrototypeSlot) = Self) then
+      CurrentRealm.SetSlot(GFunctionPrototypeSlot, nil);
     raise;
   end;
 end;
@@ -747,5 +764,8 @@ begin
       if Assigned(FBoundArgs[I]) then
         FBoundArgs[I].MarkReferences;
 end;
+
+initialization
+  GFunctionPrototypeSlot := RegisterRealmSlot('Function.prototype');
 
 end.

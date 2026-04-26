@@ -128,10 +128,10 @@ function CreateSuppressedErrorObject(const AError, ASuppressed: TGocciaValue;
 var
   ErrorObj: TGocciaObjectValue;
 begin
-  if Assigned(GSuppressedErrorProto) then
-    ErrorObj := TGocciaObjectValue.Create(GSuppressedErrorProto)
+  if Assigned(GetSuppressedErrorProto) then
+    ErrorObj := TGocciaObjectValue.Create(GetSuppressedErrorProto)
   else
-    ErrorObj := TGocciaObjectValue.Create(GErrorProto);
+    ErrorObj := TGocciaObjectValue.Create(GetErrorProto);
   ErrorObj.HasErrorData := True;
   ErrorObj.DefineProperty(PROP_NAME,
     TGocciaPropertyDescriptorData.Create(

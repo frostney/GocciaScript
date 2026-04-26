@@ -82,6 +82,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
+  Goccia.Realm,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -89,9 +90,19 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.VM.Exception;
 
+var
+  GPromiseSharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetPromiseShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GPromiseSharedSlot))
+  else
+    Result := nil;
+end;
 
 type
   TGocciaFinallyPassthrough = class(TGocciaObjectValue)
@@ -212,23 +223,29 @@ end;
 { TGocciaPromiseValue }
 
 constructor TGocciaPromiseValue.Create;
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(nil);
   FState := gpsPending;
   FResult := TGocciaUndefinedLiteralValue.UndefinedValue;
   FAlreadyResolved := False;
   InitializePrototype;
-  if Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetPromiseShared;
+  if Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 procedure TGocciaPromiseValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetPromiseShared) then Exit;
 
-  FShared := TGocciaSharedPrototype.Create(Self);
+  Shared := TGocciaSharedPrototype.Create(Self);
+  CurrentRealm.SetOwnedSlot(GPromiseSharedSlot, Shared);
   if Length(FPrototypeMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -241,14 +258,21 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaPromiseValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
+  Shared := GetPromiseShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaPromiseValue.Create;
-  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+    Shared := GetPromiseShared;
+  end;
+  if Assigned(Shared) then
+    ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
 destructor TGocciaPromiseValue.Destroy;
@@ -641,5 +665,8 @@ function TGocciaPromiseValue.ToStringTag: string;
 begin
   Result := 'Promise';
 end;
+
+initialization
+  GPromiseSharedSlot := RegisterRealmOwnedSlot('Promise.shared');
 
 end.

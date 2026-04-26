@@ -909,9 +909,15 @@ begin
       // For computed access, store the expression directly to be evaluated at runtime
       Result := TGocciaMemberExpression.Create(Result, Arg, Line, Column);
     end
-    else if Match([gttIncrement, gttDecrement]) then
+    else if (Peek.Line = Previous.Line)
+      and Match([gttIncrement, gttDecrement]) then
     begin
       // Postfix increment/decrement (x++, x--)
+      // ES2026 §13.4 restricted production: no LineTerminator between the
+      // LeftHandSideExpression and the ++/--.  If a newline precedes the
+      // operator, do not consume it here — it becomes a prefix operator on
+      // the next statement (with ASI inserting a semicolon, or with an
+      // explicit semicolon required otherwise).
       Line := Previous.Line;
       Column := Previous.Column;
 

@@ -15,6 +15,7 @@ type
     FMethodHost: TGocciaValue;
   public
     constructor Create(const AMethodHost: TGocciaValue);
+    destructor Destroy; override;
     procedure ExposeOnConstructor(const AConstructor: TGocciaValue);
     property Prototype: TGocciaObjectValue read FPrototype;
   end;
@@ -39,6 +40,22 @@ begin
     if Assigned(FMethodHost) then
       TGarbageCollector.Instance.PinObject(FMethodHost);
   end;
+end;
+
+destructor TGocciaSharedPrototype.Destroy;
+begin
+  // Unpin our GC-managed members so the GC can collect them.  This is the
+  // counterpart to the pinning done in Create.  The realm calls .Free on us
+  // when it's torn down (we live in a TGocciaRealm owned slot), so this is
+  // where the unpinning has to happen.
+  if Assigned(TGarbageCollector.Instance) then
+  begin
+    if Assigned(FPrototype) then
+      TGarbageCollector.Instance.UnpinObject(FPrototype);
+    if Assigned(FMethodHost) then
+      TGarbageCollector.Instance.UnpinObject(FMethodHost);
+  end;
+  inherited;
 end;
 
 procedure TGocciaSharedPrototype.ExposeOnConstructor(const AConstructor: TGocciaValue);

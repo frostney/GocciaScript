@@ -48,6 +48,7 @@ uses
   Goccia.FFI.Call,
   Goccia.FFI.Types,
   Goccia.GarbageCollector,
+  Goccia.Realm,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -58,9 +59,19 @@ uses
   Goccia.Values.SymbolValue,
   Goccia.Values.TypedArrayValue;
 
+var
+  GFFILibrarySharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetFFILibraryShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GFFILibrarySharedSlot))
+  else
+    Result := nil;
+end;
 
 const
   FFI_LIBRARY_TAG = 'FFILibrary';
@@ -456,12 +467,15 @@ end;
 // ==========================================================================
 
 constructor TGocciaFFILibraryValue.Create(const AHandle: TGocciaFFILibraryHandle);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create;
   FHandle := AHandle;
   InitializePrototype;
-  if Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetFFILibraryShared;
+  if Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 destructor TGocciaFFILibraryValue.Destroy;
@@ -473,10 +487,13 @@ end;
 procedure TGocciaFFILibraryValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetFFILibraryShared) then Exit;
 
-  FShared := TGocciaSharedPrototype.Create(Self);
+  Shared := TGocciaSharedPrototype.Create(Self);
+  CurrentRealm.SetOwnedSlot(GFFILibrarySharedSlot, Shared);
   if Length(FPrototypeMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -495,7 +512,7 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaFFILibraryValue.ExposePrototype(const ATarget: TGocciaObjectValue);
@@ -682,5 +699,8 @@ begin
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
+
+initialization
+  GFFILibrarySharedSlot := RegisterRealmOwnedSlot('FFILibrary.shared');
 
 end.

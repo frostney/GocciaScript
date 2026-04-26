@@ -73,3 +73,95 @@ test("symbol.toString with non-symbol receiver throws TypeError", () => {
   expect(() => fn.call(null)).toThrow(TypeError);
   expect(() => fn.call(undefined)).toThrow(TypeError);
 });
+
+test("symbol.valueOf returns the symbol", () => {
+  const s = Symbol("foo");
+  expect(s.valueOf()).toBe(s);
+  expect(Symbol.prototype.valueOf.call(s)).toBe(s);
+});
+
+test("Symbol.prototype.valueOf with non-symbol receiver throws TypeError", () => {
+  const fn = Symbol.prototype.valueOf;
+  expect(() => fn.call(42)).toThrow(TypeError);
+  expect(() => fn.call("hello")).toThrow(TypeError);
+  expect(() => fn.call({})).toThrow(TypeError);
+  expect(() => fn.call(null)).toThrow(TypeError);
+  expect(() => fn.call(undefined)).toThrow(TypeError);
+});
+
+test("Symbol.prototype[Symbol.toPrimitive] returns the symbol regardless of hint", () => {
+  const s = Symbol("foo");
+  expect(s[Symbol.toPrimitive]("string")).toBe(s);
+  expect(s[Symbol.toPrimitive]("number")).toBe(s);
+  expect(s[Symbol.toPrimitive]("default")).toBe(s);
+  expect(Symbol.prototype[Symbol.toPrimitive].call(s)).toBe(s);
+});
+
+test("Symbol.prototype[Symbol.toPrimitive] with non-symbol receiver throws TypeError", () => {
+  const fn = Symbol.prototype[Symbol.toPrimitive];
+  expect(() => fn.call(42, "string")).toThrow(TypeError);
+  expect(() => fn.call("hello", "string")).toThrow(TypeError);
+  expect(() => fn.call({}, "string")).toThrow(TypeError);
+  expect(() => fn.call(null, "string")).toThrow(TypeError);
+  expect(() => fn.call(undefined, "string")).toThrow(TypeError);
+});
+
+test("Symbol.prototype[Symbol.toStringTag] is 'Symbol'", () => {
+  expect(Symbol.prototype[Symbol.toStringTag]).toBe("Symbol");
+});
+
+test("Symbol.prototype.constructor is Symbol", () => {
+  expect(Symbol.prototype.constructor).toBe(Symbol);
+});
+
+test("symbol-keyed property lookup on Symbol primitive resolves via prototype", () => {
+  const s = Symbol("foo");
+  expect(typeof s[Symbol.toPrimitive]).toBe("function");
+  expect(s[Symbol.toPrimitive]).toBe(Symbol.prototype[Symbol.toPrimitive]);
+  expect(s[Symbol.toStringTag]).toBe("Symbol");
+});
+
+test("Symbol.toPrimitive[Symbol.toPrimitive]() returns the well-known symbol itself", () => {
+  expect(Symbol.toPrimitive[Symbol.toPrimitive]()).toBe(Symbol.toPrimitive);
+});
+
+test("Symbol.unscopables is a unique well-known symbol", () => {
+  expect(typeof Symbol.unscopables).toBe("symbol");
+  expect(Symbol.unscopables).not.toBe(Symbol.iterator);
+});
+
+test("new Symbol() throws TypeError", () => {
+  expect(() => new Symbol()).toThrow(TypeError);
+  expect(() => new Symbol("desc")).toThrow(TypeError);
+});
+
+test("Symbol() distinguishes undefined description from empty-string description", () => {
+  expect(Symbol().description).toBe(undefined);
+  expect(Symbol(undefined).description).toBe(undefined);
+  expect(Symbol("").description).toBe("");
+  expect(String(Symbol(""))).toBe("Symbol()");
+});
+
+test("Symbol.for and Symbol.keyFor are not constructable", () => {
+  // bracket notation because `for` is a reserved word
+  const symbolFor = Symbol["for"];
+  const symbolKeyFor = Symbol.keyFor;
+  expect(() => new symbolFor("k")).toThrow();
+  expect(() => new symbolKeyFor(Symbol("k"))).toThrow();
+});
+
+test("Symbol.prototype.toString and valueOf are not constructable", () => {
+  const toStr = Symbol.prototype.toString;
+  const valOf = Symbol.prototype.valueOf;
+  expect(() => new toStr()).toThrow();
+  expect(() => new valOf()).toThrow();
+});
+
+test("Symbol.prototype's [[Prototype]] is Object.prototype", () => {
+  expect(Object.getPrototypeOf(Symbol.prototype)).toBe(Object.prototype);
+});
+
+test("Object.getPrototypeOf(symbolPrimitive) returns Symbol.prototype", () => {
+  const s = Symbol("x");
+  expect(Object.getPrototypeOf(s)).toBe(Symbol.prototype);
+});

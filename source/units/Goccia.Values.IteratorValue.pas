@@ -59,6 +59,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Realm,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -71,11 +72,24 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
+// Iterator.prototype lives in a per-realm slot so engine teardown unpins
+// the prototype.  Method host and member definitions stay process-wide
+// (immutable across realms) — same pattern as Number.prototype.
+var
+  GIteratorPrototypeSlot: TGocciaRealmSlotId;
+
 threadvar
-  FSharedIteratorPrototype: TGocciaObjectValue;
   FPrototypeMethodHost: TGocciaIteratorValue;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
   FStaticMembers: TArray<TGocciaMemberDefinition>;
+
+function GetSharedIteratorPrototype: TGocciaObjectValue; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GIteratorPrototypeSlot))
+  else
+    Result := nil;
+end;
 
 procedure CloseIteratorPreservingError(const AIterator: TGocciaIteratorValue);
 begin
@@ -113,12 +127,15 @@ end;
 { TGocciaIteratorValue }
 
 constructor TGocciaIteratorValue.Create;
+var
+  SharedPrototype: TGocciaObjectValue;
 begin
   inherited Create(nil);
   FDone := False;
   InitializePrototype;
-  if Assigned(FSharedIteratorPrototype) then
-    FPrototype := FSharedIteratorPrototype;
+  SharedPrototype := GetSharedIteratorPrototype;
+  if Assigned(SharedPrototype) then
+    FPrototype := SharedPrototype;
 end;
 
 function TGocciaIteratorValue.AdvanceNext: TGocciaObjectValue;
@@ -151,20 +168,30 @@ end;
 
 class procedure TGocciaIteratorValue.EnsurePrototypeInitialized;
 begin
-  if Assigned(FSharedIteratorPrototype) then Exit;
+  if Assigned(GetSharedIteratorPrototype) then Exit;
   TGocciaIteratorValue.Create;
 end;
 
 procedure TGocciaIteratorValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  SharedPrototype: TGocciaObjectValue;
 begin
-  if Assigned(FSharedIteratorPrototype) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetSharedIteratorPrototype) then Exit;
 
-  FSharedIteratorPrototype := TGocciaObjectValue.Create;
-  FPrototypeMethodHost := Self;
+  SharedPrototype := TGocciaObjectValue.Create;
+  CurrentRealm.SetSlot(GIteratorPrototypeSlot, SharedPrototype);
   if Length(FPrototypeMembers) = 0 then
   begin
+    // First realm to initialize wins: pin Self as the singleton method host
+    // for the lifetime of the process.  Method callbacks captured into
+    // FPrototypeMembers bind to this host, so subsequent realms must reuse it
+    // (otherwise the cached callbacks would reference a freed instance).
+    FPrototypeMethodHost := Self;
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
+
     Members := TGocciaMemberCollection.Create;
     try
       Members.AddNamedMethod('next', IteratorNext, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -187,18 +214,13 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FSharedIteratorPrototype, FPrototypeMembers);
-
-  if Assigned(TGarbageCollector.Instance) then
-  begin
-    TGarbageCollector.Instance.PinObject(FSharedIteratorPrototype);
-    TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
-  end;
+  RegisterMemberDefinitions(SharedPrototype, FPrototypeMembers);
 end;
 
 class function TGocciaIteratorValue.CreateGlobalObject: TGocciaObjectValue;
 var
   Members: TGocciaMemberCollection;
+  SharedPrototype: TGocciaObjectValue;
 begin
   EnsurePrototypeInitialized;
 
@@ -217,7 +239,9 @@ begin
     end;
   end;
   RegisterMemberDefinitions(Result, FStaticMembers);
-  Result.AssignProperty(PROP_PROTOTYPE, FSharedIteratorPrototype);
+  SharedPrototype := GetSharedIteratorPrototype;
+  if Assigned(SharedPrototype) then
+    Result.AssignProperty(PROP_PROTOTYPE, SharedPrototype);
 end;
 
 { Protocol methods }
@@ -965,5 +989,8 @@ begin
       GC.RemoveTempRoot(Iterators[I]);
   end;
 end;
+
+initialization
+  GIteratorPrototypeSlot := RegisterRealmSlot('Iterator.prototype');
 
 end.

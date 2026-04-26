@@ -30,6 +30,7 @@ implementation
 uses
   Math,
 
+  Goccia.Constants.NumericLimits,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -63,8 +64,6 @@ end;
 
 // ES2026 §6.2.4.2 ToIndex(value) — local implementation for constructor path
 function ConstructorToIndex(const AValue: TGocciaValue): Integer;
-const
-  MAX_ECMA_INDEX = 9007199254740991.0;
 var
   Num: TGocciaNumberLiteralValue;
   IntegerIndex: Double;
@@ -86,7 +85,7 @@ begin
   else
     IntegerIndex := Trunc(Num.Value);
 
-  if (IntegerIndex < 0) or (IntegerIndex > MAX_ECMA_INDEX) or
+  if (IntegerIndex < 0) or (IntegerIndex > MAX_SAFE_INTEGER_F) or
      (IntegerIndex > High(Integer)) then
     ThrowRangeError(SErrorInvalidArrayBufferLength, SSuggestArrayLengthRange);
 

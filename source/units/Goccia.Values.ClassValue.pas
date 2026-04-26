@@ -275,19 +275,30 @@ uses
   Goccia.Values.URLSearchParamsValue,
   Goccia.Values.URLValue;
 
-threadvar
-  FDefaultPrototype: TGocciaObjectValue;
-
+// SetDefaultPrototype / PatchDefaultPrototype previously cached the
+// "default constructor [[Prototype]]" (Function.prototype) in a threadvar.
+// That cache held a stale reference across realm teardown: when the previous
+// engine was freed its realm unpinned Function.prototype, but the threadvar
+// still pointed at the dead object - so the next engine's PatchDefaultPrototype
+// calls would patch new constructors with the prior realm's prototype.
+// Now we read TGocciaFunctionBase.GetSharedPrototype directly each call,
+// which always returns the current realm's Function.prototype.
 class procedure TGocciaClassValue.SetDefaultPrototype(const AProto: TGocciaObjectValue);
 begin
-  FDefaultPrototype := AProto;
+  // Intentionally a no-op.  The current-realm lookup in PatchDefaultPrototype
+  // is the source of truth.  Kept for backwards compatibility with existing
+  // engine bootstrap call sites.
 end;
 
 class procedure TGocciaClassValue.PatchDefaultPrototype(const AClassValue: TGocciaClassValue);
+var
+  FunctionPrototype: TGocciaObjectValue;
 begin
-  if Assigned(AClassValue) and not Assigned(AClassValue.FPrototype) and
-     Assigned(FDefaultPrototype) then
-    AClassValue.FPrototype := FDefaultPrototype;
+  if not Assigned(AClassValue) then Exit;
+  if Assigned(AClassValue.FPrototype) then Exit;
+  FunctionPrototype := TGocciaFunctionBase.GetSharedPrototype;
+  if Assigned(FunctionPrototype) then
+    AClassValue.FPrototype := FunctionPrototype;
 end;
 
 constructor TGocciaClassValue.Create(const AName: string; const ASuperClass: TGocciaClassValue);
@@ -298,8 +309,8 @@ begin
   // Set [[Prototype]]: superclass for derived, Function.prototype for base classes
   if Assigned(FSuperClass) then
     FPrototype := FSuperClass
-  else if Assigned(FDefaultPrototype) then
-    FPrototype := FDefaultPrototype;
+  else if Assigned(TGocciaFunctionBase.GetSharedPrototype) then
+    FPrototype := TGocciaFunctionBase.GetSharedPrototype;
   FMethods := TOrderedStringMap<TGocciaMethodValue>.Create;
   FGetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
   FSetters := TOrderedStringMap<TGocciaFunctionBase>.Create;

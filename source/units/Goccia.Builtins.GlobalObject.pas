@@ -721,11 +721,24 @@ end;
 function TGocciaGlobalObject.ObjectGetPrototypeOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
+  Arg: TGocciaValue;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.getPrototypeOf', ThrowError);
 
   // Step 1: Let obj be ? ToObject(O)
-  Obj := ToObject(AArgs.GetElement(0));
+  // Symbol primitives: ToObject(Symbol) -> Symbol wrapper whose prototype is %Symbol.prototype%.
+  // Without a wrapper class we short-circuit to %Symbol.prototype% directly.
+  Arg := AArgs.GetElement(0);
+  if Arg is TGocciaSymbolValue then
+  begin
+    if Assigned(TGocciaSymbolValue.SharedPrototype) then
+      Result := TGocciaSymbolValue.SharedPrototype
+    else
+      Result := TGocciaNullLiteralValue.NullValue;
+    Exit;
+  end;
+
+  Obj := ToObject(Arg);
   if Assigned(TGarbageCollector.Instance) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
@@ -878,6 +891,8 @@ end;
 function TGocciaGlobalObject.ObjectSetPrototypeOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   ProtoArg: TGocciaValue;
+  Target: TGocciaObjectValue;
+  Walker: TGocciaObjectValue;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.setPrototypeOf', ThrowError);
 
@@ -898,27 +913,62 @@ begin
     Exit;
   end;
 
+  Target := TGocciaObjectValue(AArgs.GetElement(0));
+
   // Proxy intercept: delegate to setPrototypeOf trap
-  if AArgs.GetElement(0) is TGocciaProxyValue then
+  if Target is TGocciaProxyValue then
   begin
-    if not TGocciaProxyValue(AArgs.GetElement(0)).SetPrototypeTrap(ProtoArg) then
+    if not TGocciaProxyValue(Target).SetPrototypeTrap(ProtoArg) then
       ThrowTypeError(SErrorSetPrototypeOfTrapReturnedFalse, SSuggestObjectArgType);
-    Result := AArgs.GetElement(0);
+    Result := Target;
+    Exit;
+  end;
+
+  // ES2026 §10.1.2 OrdinarySetPrototypeOf step 2: SameValue short-circuit
+  if (ProtoArg is TGocciaNullLiteralValue) and (not Assigned(Target.Prototype)) then
+  begin
+    Result := Target;
+    Exit;
+  end;
+  if (ProtoArg is TGocciaObjectValue) and
+     (Target.Prototype = TGocciaObjectValue(ProtoArg)) then
+  begin
+    Result := Target;
     Exit;
   end;
 
   // Step 3: If Type(O) is not Object, return O (handled above via throw)
-  if not TGocciaObjectValue(AArgs.GetElement(0)).Extensible then
+  if not Target.Extensible then
     ThrowTypeError(SErrorSetPrototypeOfNonExtensible, SSuggestObjectNotExtensible);
+
+  // ES2026 §10.1.2 OrdinarySetPrototypeOf step 8: Cycle detection.  Walk the
+  // proposed prototype's chain — if we reach Target, the new chain would be
+  // cyclic.  Object.setPrototypeOf throws in this case (Reflect.setPrototypeOf
+  // returns false; see Goccia.Builtins.GlobalReflect.ReflectSetPrototypeOf).
+  // Step 8.b.ii: if the next link doesn't use the ordinary [[GetPrototypeOf]]
+  // (e.g. it's a Proxy with a getPrototypeOf trap), stop the walk and let the
+  // assignment proceed — we cannot statically prove a cycle through an exotic.
+  if ProtoArg is TGocciaObjectValue then
+  begin
+    Walker := TGocciaObjectValue(ProtoArg);
+    while Assigned(Walker) do
+    begin
+      if Walker = Target then
+        ThrowTypeError(SErrorSetPrototypeOfCyclic, SSuggestObjectArgType);
+      if Walker is TGocciaProxyValue then
+        Break;
+      Walker := Walker.Prototype;
+    end;
+  end;
 
   // Step 4: Let status be ? O.[[SetPrototypeOf]](proto)
   if ProtoArg is TGocciaNullLiteralValue then
-    TGocciaObjectValue(AArgs.GetElement(0)).Prototype := nil
+    Target.Prototype := nil
   else
-    TGocciaObjectValue(AArgs.GetElement(0)).Prototype := TGocciaObjectValue(ProtoArg);
+    Target.Prototype := TGocciaObjectValue(ProtoArg);
 
   // Step 5: Return O
-  Result := AArgs.GetElement(0);
+  Result := Target;
 end;
 
 // ES2026 §20.1.2.8 Object.groupBy(items, callbackfn)

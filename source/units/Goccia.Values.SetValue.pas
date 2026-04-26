@@ -63,6 +63,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
+  Goccia.Realm,
   Goccia.Utils,
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
@@ -70,26 +71,42 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
+var
+  GSetSharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
 
+function GetSetShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GSetSharedSlot))
+  else
+    Result := nil;
+end;
+
 constructor TGocciaSetValue.Create(const AClass: TGocciaClassValue = nil);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(AClass);
   FItems := TGocciaValueList.Create(False);
   InitializePrototype;
-  if not Assigned(AClass) and Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetSetShared;
+  if not Assigned(AClass) and Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 procedure TGocciaSetValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetSetShared) then Exit;
 
-  FShared := TGocciaSharedPrototype.Create(Self);
+  Shared := TGocciaSharedPrototype.Create(Self);
+  CurrentRealm.SetOwnedSlot(GSetSharedSlot, Shared);
   if Length(FPrototypeMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -120,14 +137,21 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaSetValue.ExposePrototype(const AConstructor: TGocciaValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
+  Shared := GetSetShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaSetValue.Create;
-  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+    Shared := GetSetShared;
+  end;
+  if Assigned(Shared) then
+    ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
 destructor TGocciaSetValue.Destroy;
@@ -553,5 +577,8 @@ begin
   // Step 6: Return true
   Result := TGocciaBooleanLiteralValue.TrueValue;
 end;
+
+initialization
+  GSetSharedSlot := RegisterRealmOwnedSlot('Set.shared');
 
 end.

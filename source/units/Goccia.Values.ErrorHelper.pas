@@ -55,23 +55,23 @@ uses
 function GetErrorPrototype(const AName: string): TGocciaObjectValue;
 begin
   if AName = TYPE_ERROR_NAME then
-    Result := GTypeErrorProto
+    Result := GetTypeErrorProto
   else if AName = RANGE_ERROR_NAME then
-    Result := GRangeErrorProto
+    Result := GetRangeErrorProto
   else if AName = REFERENCE_ERROR_NAME then
-    Result := GReferenceErrorProto
+    Result := GetReferenceErrorProto
   else if AName = SYNTAX_ERROR_NAME then
-    Result := GSyntaxErrorProto
+    Result := GetSyntaxErrorProto
   else if AName = URI_ERROR_NAME then
-    Result := GURIErrorProto
+    Result := GetURIErrorProto
   else if AName = AGGREGATE_ERROR_NAME then
-    Result := GAggregateErrorProto
+    Result := GetAggregateErrorProto
   else if AName = SUPPRESSED_ERROR_NAME then
-    Result := GSuppressedErrorProto
+    Result := GetSuppressedErrorProto
   else if AName = ERROR_NAME then
-    Result := GErrorProto
+    Result := GetErrorProto
   else
-    Result := GErrorProto;
+    Result := GetErrorProto;
 end;
 
 // ES2026 §10.4.4.4 [[ErrorData]]
@@ -148,8 +148,8 @@ begin
   ErrorObj := CreateErrorObject(DATA_CLONE_ERROR_NAME, AMessage);
   ErrorObj.HasErrorData := False;
   ErrorObj.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(25));
-  if Assigned(GDOMExceptionProto) then
-    ErrorObj.Prototype := GDOMExceptionProto;
+  if Assigned(GetDOMExceptionProto) then
+    ErrorObj.Prototype := GetDOMExceptionProto;
   raise TGocciaThrowValue.Create(ErrorObj);
 end;
 
@@ -160,8 +160,8 @@ begin
   ErrorObj := CreateErrorObject(DATA_CLONE_ERROR_NAME, AMessage);
   ErrorObj.HasErrorData := False;
   ErrorObj.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(25));
-  if Assigned(GDOMExceptionProto) then
-    ErrorObj.Prototype := GDOMExceptionProto;
+  if Assigned(GetDOMExceptionProto) then
+    ErrorObj.Prototype := GetDOMExceptionProto;
   raise TGocciaThrowValue.Create(ErrorObj, ASuggestion);
 end;
 
@@ -172,8 +172,8 @@ begin
   ErrorObj := CreateErrorObject(INVALID_CHARACTER_ERROR_NAME, AMessage);
   ErrorObj.HasErrorData := False;
   ErrorObj.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(5));
-  if Assigned(GDOMExceptionProto) then
-    ErrorObj.Prototype := GDOMExceptionProto;
+  if Assigned(GetDOMExceptionProto) then
+    ErrorObj.Prototype := GetDOMExceptionProto;
   raise TGocciaThrowValue.Create(ErrorObj);
 end;
 

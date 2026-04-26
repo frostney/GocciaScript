@@ -13,16 +13,19 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
-threadvar
-  GErrorProto: TGocciaObjectValue;
-  GTypeErrorProto: TGocciaObjectValue;
-  GReferenceErrorProto: TGocciaObjectValue;
-  GRangeErrorProto: TGocciaObjectValue;
-  GSyntaxErrorProto: TGocciaObjectValue;
-  GURIErrorProto: TGocciaObjectValue;
-  GAggregateErrorProto: TGocciaObjectValue;
-  GSuppressedErrorProto: TGocciaObjectValue;
-  GDOMExceptionProto: TGocciaObjectValue;
+// Per-realm Error.prototype lookups.  These replace the previous threadvars
+// `GErrorProto` / `GTypeErrorProto` / ... so that JS-side mutations on the
+// error prototypes don't survive engine teardown on a worker thread.  Each
+// returns nil when no realm is active.
+function GetErrorProto: TGocciaObjectValue;
+function GetTypeErrorProto: TGocciaObjectValue;
+function GetReferenceErrorProto: TGocciaObjectValue;
+function GetRangeErrorProto: TGocciaObjectValue;
+function GetSyntaxErrorProto: TGocciaObjectValue;
+function GetURIErrorProto: TGocciaObjectValue;
+function GetAggregateErrorProto: TGocciaObjectValue;
+function GetSuppressedErrorProto: TGocciaObjectValue;
+function GetDOMExceptionProto: TGocciaObjectValue;
 
 type
   TGocciaGlobals = class(TGocciaBuiltin)
@@ -74,6 +77,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
+  Goccia.Realm,
   Goccia.URI,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
@@ -85,6 +89,89 @@ uses
   Goccia.Values.SetValue,
   Goccia.Values.SharedArrayBufferValue,
   Goccia.Values.SymbolValue;
+
+var
+  GErrorProtoSlot: TGocciaRealmSlotId;
+  GTypeErrorProtoSlot: TGocciaRealmSlotId;
+  GReferenceErrorProtoSlot: TGocciaRealmSlotId;
+  GRangeErrorProtoSlot: TGocciaRealmSlotId;
+  GSyntaxErrorProtoSlot: TGocciaRealmSlotId;
+  GURIErrorProtoSlot: TGocciaRealmSlotId;
+  GAggregateErrorProtoSlot: TGocciaRealmSlotId;
+  GSuppressedErrorProtoSlot: TGocciaRealmSlotId;
+  GDOMExceptionProtoSlot: TGocciaRealmSlotId;
+
+function GetErrorProto: TGocciaObjectValue;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GErrorProtoSlot))
+  else
+    Result := nil;
+end;
+
+function GetTypeErrorProto: TGocciaObjectValue;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GTypeErrorProtoSlot))
+  else
+    Result := nil;
+end;
+
+function GetReferenceErrorProto: TGocciaObjectValue;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GReferenceErrorProtoSlot))
+  else
+    Result := nil;
+end;
+
+function GetRangeErrorProto: TGocciaObjectValue;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GRangeErrorProtoSlot))
+  else
+    Result := nil;
+end;
+
+function GetSyntaxErrorProto: TGocciaObjectValue;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GSyntaxErrorProtoSlot))
+  else
+    Result := nil;
+end;
+
+function GetURIErrorProto: TGocciaObjectValue;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GURIErrorProtoSlot))
+  else
+    Result := nil;
+end;
+
+function GetAggregateErrorProto: TGocciaObjectValue;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GAggregateErrorProtoSlot))
+  else
+    Result := nil;
+end;
+
+function GetSuppressedErrorProto: TGocciaObjectValue;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GSuppressedErrorProtoSlot))
+  else
+    Result := nil;
+end;
+
+function GetDOMExceptionProto: TGocciaObjectValue;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GDOMExceptionProtoSlot))
+  else
+    Result := nil;
+end;
 
 constructor TGocciaGlobals.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
@@ -142,15 +229,22 @@ begin
   FDOMExceptionProto.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(''), [pfConfigurable, pfWritable]));
   FDOMExceptionProto.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(0));
 
-  GErrorProto := FErrorProto;
-  GTypeErrorProto := FTypeErrorProto;
-  GReferenceErrorProto := FReferenceErrorProto;
-  GRangeErrorProto := FRangeErrorProto;
-  GSyntaxErrorProto := FSyntaxErrorProto;
-  GURIErrorProto := FURIErrorProto;
-  GAggregateErrorProto := FAggregateErrorProto;
-  GSuppressedErrorProto := FSuppressedErrorProto;
-  GDOMExceptionProto := FDOMExceptionProto;
+  // Publish the per-engine prototypes through the per-realm slot mechanism so
+  // ErrorHelper / DisposalTracker / other readers see exactly the prototypes
+  // owned by this engine.  When the engine is freed its realm is freed,
+  // unpinning these objects in lockstep.
+  if Assigned(CurrentRealm) then
+  begin
+    CurrentRealm.SetSlot(GErrorProtoSlot, FErrorProto);
+    CurrentRealm.SetSlot(GTypeErrorProtoSlot, FTypeErrorProto);
+    CurrentRealm.SetSlot(GReferenceErrorProtoSlot, FReferenceErrorProto);
+    CurrentRealm.SetSlot(GRangeErrorProtoSlot, FRangeErrorProto);
+    CurrentRealm.SetSlot(GSyntaxErrorProtoSlot, FSyntaxErrorProto);
+    CurrentRealm.SetSlot(GURIErrorProtoSlot, FURIErrorProto);
+    CurrentRealm.SetSlot(GAggregateErrorProtoSlot, FAggregateErrorProto);
+    CurrentRealm.SetSlot(GSuppressedErrorProtoSlot, FSuppressedErrorProto);
+    CurrentRealm.SetSlot(GDOMExceptionProtoSlot, FDOMExceptionProto);
+  end;
 
   ErrorConstructorFunc := TGocciaNativeFunctionValue.Create(ErrorConstructor, ERROR_NAME, 1);
   TypeErrorConstructorFunc := TGocciaNativeFunctionValue.Create(TypeErrorConstructor, TYPE_ERROR_NAME, 1);
@@ -757,5 +851,16 @@ begin
   // Step 3: Return ? Decode(componentString, reservedURIComponentSet)
   Result := TGocciaStringLiteralValue.Create(DecodeURIComponent(ComponentString));
 end;
+
+initialization
+  GErrorProtoSlot := RegisterRealmSlot('Error.prototype');
+  GTypeErrorProtoSlot := RegisterRealmSlot('TypeError.prototype');
+  GReferenceErrorProtoSlot := RegisterRealmSlot('ReferenceError.prototype');
+  GRangeErrorProtoSlot := RegisterRealmSlot('RangeError.prototype');
+  GSyntaxErrorProtoSlot := RegisterRealmSlot('SyntaxError.prototype');
+  GURIErrorProtoSlot := RegisterRealmSlot('URIError.prototype');
+  GAggregateErrorProtoSlot := RegisterRealmSlot('AggregateError.prototype');
+  GSuppressedErrorProtoSlot := RegisterRealmSlot('SuppressedError.prototype');
+  GDOMExceptionProtoSlot := RegisterRealmSlot('DOMException.prototype');
 
 end.

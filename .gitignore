@@ -36,3 +36,7 @@ tests-wasm/*.wasm
 fixtures/ffi/*.dylib
 fixtures/ffi/*.so
 fixtures/ffi/*.dll
+
+# Claude Code agent runtime state
+.claude/scheduled_tasks.lock
+.claude/worktrees/

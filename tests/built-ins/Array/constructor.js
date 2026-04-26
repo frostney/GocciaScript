@@ -54,6 +54,14 @@ describe("Array constructor", () => {
     expect(() => new Array(1.5)).toThrow(RangeError);
   });
 
+  test("new Array(2**32) throws RangeError", () => {
+    expect(() => new Array(4294967296)).toThrow(RangeError);
+  });
+
+  test("new Array(2**53) throws RangeError", () => {
+    expect(() => new Array(9007199254740992)).toThrow(RangeError);
+  });
+
   test("Array literal and Array constructor produce equivalent arrays", () => {
     const literal = [1, 2, 3];
     const constructed = new Array(1, 2, 3);

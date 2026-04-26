@@ -87,6 +87,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Realm,
   Goccia.Temporal.Options,
   Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
@@ -100,9 +101,19 @@ uses
   Goccia.Values.TemporalPlainDateTime,
   Goccia.Values.TemporalPlainTime;
 
+var
+  GTemporalZonedDateTimeSharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetTemporalZonedDateTimeShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTemporalZonedDateTimeSharedSlot))
+  else
+    Result := nil;
+end;
 
 const
   MILLISECONDS_PER_SECOND = 1000;
@@ -274,6 +285,8 @@ end;
 
 constructor TGocciaTemporalZonedDateTimeValue.Create(const AEpochMilliseconds: Int64;
   const ASubMillisecondNanoseconds: Integer; const ATimeZone: string);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(nil);
   if ATimeZone = '' then
@@ -302,16 +315,20 @@ begin
   end;
 
   InitializePrototype;
-  if Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetTemporalZonedDateTimeShared;
+  if Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 procedure TGocciaTemporalZonedDateTimeValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then Exit;
-  FShared := TGocciaSharedPrototype.Create(Self);
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetTemporalZonedDateTimeShared) then Exit;
+  Shared := TGocciaSharedPrototype.Create(Self);
+  CurrentRealm.SetOwnedSlot(GTemporalZonedDateTimeSharedSlot, Shared);
   if Length(FPrototypeMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -370,14 +387,20 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaTemporalZonedDateTimeValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
+  Shared := GetTemporalZonedDateTimeShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaTemporalZonedDateTimeValue.Create(0, 0, 'UTC');
-  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+    Shared := GetTemporalZonedDateTimeShared;
+  end;
+  ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
 function TGocciaTemporalZonedDateTimeValue.ToStringTag: string;
@@ -1211,5 +1234,8 @@ begin
     EmptyArgs.Free;
   end;
 end;
+
+initialization
+  GTemporalZonedDateTimeSharedSlot := RegisterRealmOwnedSlot('Temporal.ZonedDateTime.shared');
 
 end.

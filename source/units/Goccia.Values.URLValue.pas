@@ -134,6 +134,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Realm,
   Goccia.URL.Parser,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -141,13 +142,25 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
+var
+  GURLSharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetURLShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GURLSharedSlot))
+  else
+    Result := nil;
+end;
 
 { TGocciaURLValue }
 
 constructor TGocciaURLValue.Create(const AClass: TGocciaClassValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(AClass);
   FPort := URL_NULL_PORT;
@@ -157,8 +170,9 @@ begin
   FIsValid := False;
   FSearchParams := nil;
   InitializePrototype;
-  if not Assigned(AClass) and Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetURLShared;
+  if not Assigned(AClass) and Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 destructor TGocciaURLValue.Destroy;
@@ -169,70 +183,81 @@ end;
 procedure TGocciaURLValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then Exit;
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetURLShared) then Exit;
 
-  FShared := TGocciaSharedPrototype.Create(Self);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      // Accessor properties (getter + setter pairs)
-      Members.AddAccessor(PROP_HREF,
-        URLHrefGetter, URLHrefSetter,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_ORIGIN,
-        URLOriginGetter, nil,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_PROTOCOL,
-        URLProtocolGetter, URLProtocolSetter,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_USERNAME,
-        URLUsernameGetter, URLUsernameSetter,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_PASSWORD,
-        URLPasswordGetter, URLPasswordSetter,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_HOST,
-        URLHostGetter, URLHostSetter,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_HOSTNAME,
-        URLHostnameGetter, URLHostnameSetter,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_PORT,
-        URLPortGetter, URLPortSetter,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_PATHNAME,
-        URLPathnameGetter, URLPathnameSetter,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_SEARCH,
-        URLSearchGetter, URLSearchSetter,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_SEARCH_PARAMS,
-        URLSearchParamsGetter, nil,
-        [pfConfigurable, pfEnumerable]);
-      Members.AddAccessor(PROP_HASH,
-        URLHashGetter, URLHashSetter,
-        [pfConfigurable, pfEnumerable]);
-      // Methods
-      Members.AddNamedMethod('toString', URLToString, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('toJSON', URLToJSON, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  // Rebuild member definitions per realm: callbacks bind to Self (the
+  // bootstrap instance pinned by Shared), and TGocciaSharedPrototype.Destroy
+  // unpins Self on realm tear-down.  Caching across realms would leave stale
+  // method pointers referencing a freed instance.
+  Shared := TGocciaSharedPrototype.Create(Self);
+  CurrentRealm.SetOwnedSlot(GURLSharedSlot, Shared);
+  Members := TGocciaMemberCollection.Create;
+  try
+    // Accessor properties (getter + setter pairs)
+    Members.AddAccessor(PROP_HREF,
+      URLHrefGetter, URLHrefSetter,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_ORIGIN,
+      URLOriginGetter, nil,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_PROTOCOL,
+      URLProtocolGetter, URLProtocolSetter,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_USERNAME,
+      URLUsernameGetter, URLUsernameSetter,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_PASSWORD,
+      URLPasswordGetter, URLPasswordSetter,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_HOST,
+      URLHostGetter, URLHostSetter,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_HOSTNAME,
+      URLHostnameGetter, URLHostnameSetter,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_PORT,
+      URLPortGetter, URLPortSetter,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_PATHNAME,
+      URLPathnameGetter, URLPathnameSetter,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_SEARCH,
+      URLSearchGetter, URLSearchSetter,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_SEARCH_PARAMS,
+      URLSearchParamsGetter, nil,
+      [pfConfigurable, pfEnumerable]);
+    Members.AddAccessor(PROP_HASH,
+      URLHashGetter, URLHashSetter,
+      [pfConfigurable, pfEnumerable]);
+    // Methods
+    Members.AddNamedMethod(PROP_TO_STRING, URLToString, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod(PROP_TO_JSON, URLToJSON, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    FPrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaURLValue.ExposePrototype(
   const AConstructor: TGocciaValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
+  Shared := GetURLShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaURLValue.Create;
-  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+    Shared := GetURLShared;
+  end;
+  if Assigned(Shared) then
+    ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
 // ---------------------------------------------------------------------------
@@ -862,5 +887,8 @@ begin
   if Assigned(FSearchParams) then
     FSearchParams.MarkReferences;
 end;
+
+initialization
+  GURLSharedSlot := RegisterRealmOwnedSlot('URL.shared');
 
 end.

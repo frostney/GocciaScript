@@ -30,6 +30,7 @@ uses
   Goccia.Lexer,
   Goccia.Parser,
   Goccia.SourceMap,
+  Goccia.Builtins.TestingLibrary,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
   Goccia.Timeout,
@@ -78,6 +79,22 @@ type
     Timing: TGocciaScriptResult;
   end;
 
+  { Per-input-file outcome, serialised into the JSON output's "results"
+    array so that external harnesses (e.g. the test262 driver) can map
+    each input file to an explicit pass/fail result — rather than
+    guessing "not in failedTests => passed", which silently
+    mis-reports when a file registers zero tests or when the runner
+    otherwise loses a count. }
+  TTestFilePerResult = record
+    FileName: string;
+    Passed: Double;
+    Failed: Double;
+    Skipped: Double;
+    TotalTests: Double;
+    FailedTests: array of string;
+    ErrorMessage: string;
+  end;
+
   TAggregatedTestResult = record
     TestResult: TGocciaObjectValue;
     TotalLexNanoseconds: Int64;
@@ -85,6 +102,7 @@ type
     TotalCompileNanoseconds: Int64;
     TotalExecNanoseconds: Int64;
     JobCount: Integer;
+    FileResults: array of TTestFilePerResult;
   end;
 
   TTestRunnerApp = class(TGocciaCLIApplication)
@@ -94,6 +112,8 @@ type
     FExitOnFirst: TGocciaFlagOption;
     FSilent: TGocciaFlagOption;
     FOutputFile: TGocciaStringOption;
+    FTestTimeout: TGocciaIntegerOption;
+    FDescribeTimeout: TGocciaIntegerOption;
   protected
     procedure Configure; override;
     function UsageLine: string; override;
@@ -110,6 +130,7 @@ type
     procedure TestWorkerProc(const AFileName: string; const AIndex: Integer;
       out AConsoleOutput: string; out AErrorMessage: string; AData: Pointer);
     procedure WriteResultsJSON(const AResult: TAggregatedTestResult; const AFileName: string);
+    procedure WriteFileResults(ALines: TStringList; const AResult: TAggregatedTestResult);
     procedure PrintTestResults(const AResult: TAggregatedTestResult);
   end;
 
@@ -176,6 +197,10 @@ begin
   FExitOnFirst := AddFlag('exit-on-first-failure', 'Stop on first test failure');
   FSilent := AddFlag('silent', 'Suppress console output from test scripts');
   FOutputFile := AddString('output', 'Write test results as JSON to file');
+  FTestTimeout := AddInteger('test-timeout',
+    'Per-test timeout in ms (0 disables). Marks the test TIMEOUT and continues.');
+  FDescribeTimeout := AddInteger('describe-timeout',
+    'Per-describe timeout in ms (0 disables). Aborts the suite and continues.');
 end;
 
 procedure TTestRunnerApp.Validate;
@@ -200,6 +225,14 @@ begin
     ExitCode := 1;
     Exit;
   end;
+
+  { Publish per-test/per-describe deadlines to the testing library
+    before any workers spawn. These globals are read-only after this
+    point, so plain globals are safe across the worker pool. 0 means
+    "no deadline at that scope" — the engine-level tsFile deadline
+    still applies. }
+  GTestRunnerTestTimeoutMs := FTestTimeout.ValueOr(0);
+  GTestRunnerDescribeTimeoutMs := FDescribeTimeout.ValueOr(0);
 
   Files := TStringList.Create;
   try
@@ -527,6 +560,8 @@ end;
 function TTestRunnerApp.RunScriptFromFile(const AFileName: string): TAggregatedTestResult;
 var
   FileResult: TTestFileResult;
+  FileFailedTests: TGocciaValue;
+  J: Integer;
 begin
   Result.JobCount := 1;
   Result.TestResult := nil;
@@ -534,6 +569,12 @@ begin
   Result.TotalParseNanoseconds := 0;
   Result.TotalCompileNanoseconds := 0;
   Result.TotalExecNanoseconds := 0;
+  { A one-file invocation still needs a per-file record in the JSON
+    output so downstream harnesses (e.g. the test262 driver, which
+    funnels a lone filter match through here) can find the result
+    they're expecting. }
+  SetLength(Result.FileResults, 1);
+  Result.FileResults[0].FileName := AFileName;
   try
     FileResult := RunGocciaScript(AFileName);
     Result.TestResult := FileResult.TestResult;
@@ -541,6 +582,26 @@ begin
     Result.TotalParseNanoseconds := FileResult.Timing.ParseTimeNanoseconds;
     Result.TotalCompileNanoseconds := FileResult.Timing.CompileTimeNanoseconds;
     Result.TotalExecNanoseconds := FileResult.Timing.ExecuteTimeNanoseconds;
+    if Assigned(FileResult.TestResult) then
+    begin
+      Result.FileResults[0].Passed :=
+        FileResult.TestResult.GetProperty('passed').ToNumberLiteral.Value;
+      Result.FileResults[0].Failed :=
+        FileResult.TestResult.GetProperty('failed').ToNumberLiteral.Value;
+      Result.FileResults[0].Skipped :=
+        FileResult.TestResult.GetProperty('skipped').ToNumberLiteral.Value;
+      Result.FileResults[0].TotalTests :=
+        FileResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value;
+      FileFailedTests := FileResult.TestResult.GetProperty('failedTests');
+      if FileFailedTests is TGocciaArrayValue then
+      begin
+        SetLength(Result.FileResults[0].FailedTests,
+          TGocciaArrayValue(FileFailedTests).Elements.Count);
+        for J := 0 to TGocciaArrayValue(FileFailedTests).Elements.Count - 1 do
+          Result.FileResults[0].FailedTests[J] :=
+            TGocciaArrayValue(FileFailedTests).Elements[J].ToStringLiteral.Value;
+      end;
+    end;
   except
     on E: Exception do
     begin
@@ -548,6 +609,21 @@ begin
         WriteLn(StdErr, TGocciaError(E).GetDetailedMessage(IsColorTerminal))
       else
         WriteLn(StdErr, 'Fatal error: ', E.Message);
+      { Synthesize a one-failed-file TestResult so PrintTestResults still
+        emits JSON for the file and the sequential aggregator does not
+        drop the slot at its `if FileResult.TestResult = nil then
+        Continue` filter. Without this, fatal host-side failures (e.g. a
+        compile-time error before the test harness has a chance to
+        register anything) silently disappear from the aggregated
+        output. }
+      Result.TestResult := CreateDefaultScriptResult;
+      Result.TestResult.AssignProperty('failed',
+        TGocciaNumberLiteralValue.Create(1));
+      Result.FileResults[0].ErrorMessage := E.Message;
+      Result.FileResults[0].Failed := 1;
+      Result.FileResults[0].TotalTests := 1;
+      SetLength(Result.FileResults[0].FailedTests, 1);
+      Result.FileResults[0].FailedTests[0] := AFileName + ': ' + E.Message;
       ExitCode := 1;
     end;
   end;
@@ -557,6 +633,7 @@ function TTestRunnerApp.RunScriptsFromFiles(const AFiles: TStringList): TAggrega
 var
   GC: TGarbageCollector;
   I, J: Integer;
+  ProcessedCount: Integer;
   AllTestResults: TGocciaObjectValue;
   AllFailedTests: TGocciaArrayValue;
   FileResult: TAggregatedTestResult;
@@ -593,6 +670,13 @@ begin
   Result.TotalParseNanoseconds := 0;
   Result.TotalCompileNanoseconds := 0;
   Result.TotalExecNanoseconds := 0;
+  // Preallocate to AFiles.Count and track the count actually populated;
+  // FExitOnFirst Break and the FileResult.TestResult = nil Continue both
+  // leave entries unwritten, and serialising those zero-filled slots
+  // produced bogus "results" rows in the JSON output.  Resize at the end
+  // to the true populated count so only real records are emitted.
+  SetLength(Result.FileResults, AFiles.Count);
+  ProcessedCount := 0;
 
   for I := 0 to AFiles.Count - 1 do
   begin
@@ -619,12 +703,34 @@ begin
       for J := 0 to TGocciaArrayValue(FileFailedTests).Elements.Count - 1 do
         AllFailedTests.Elements.Add(TGocciaArrayValue(FileFailedTests).Elements[J]);
 
+    { Per-file record for the JSON output — same schema as the parallel
+      path so consumers do not have to branch on job count. }
+    Result.FileResults[ProcessedCount].FileName := AFiles[I];
+    Result.FileResults[ProcessedCount].Passed :=
+      FileResult.TestResult.GetProperty('passed').ToNumberLiteral.Value;
+    Result.FileResults[ProcessedCount].Failed :=
+      FileResult.TestResult.GetProperty('failed').ToNumberLiteral.Value;
+    Result.FileResults[ProcessedCount].Skipped :=
+      FileResult.TestResult.GetProperty('skipped').ToNumberLiteral.Value;
+    Result.FileResults[ProcessedCount].TotalTests :=
+      FileResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value;
+    if FileFailedTests is TGocciaArrayValue then
+    begin
+      SetLength(Result.FileResults[ProcessedCount].FailedTests,
+        TGocciaArrayValue(FileFailedTests).Elements.Count);
+      for J := 0 to TGocciaArrayValue(FileFailedTests).Elements.Count - 1 do
+        Result.FileResults[ProcessedCount].FailedTests[J] :=
+          TGocciaArrayValue(FileFailedTests).Elements[J].ToStringLiteral.Value;
+    end;
+    Inc(ProcessedCount);
+
     if Assigned(GC) then
       GC.Collect;
 
     if FExitOnFirst.Present and (FailedCount > 0) then
       Break;
   end;
+  SetLength(Result.FileResults, ProcessedCount);
 
   if Assigned(GC) then
   begin
@@ -727,6 +833,15 @@ function TTestRunnerApp.RunScriptsFromFilesParallel(
 var
   Pool: TGocciaThreadPool;
   WorkerData: array of TTestWorkerData;
+  { Synthesised results for orphaned slots.  We deliberately keep these in a
+    main-thread-only array instead of writing them into WorkerData, because
+    an abandoned worker that unsticks later in native code will resume
+    writing to its own WorkerData[AIndex] slot — assigning to managed types
+    (string, dynamic array of string) concurrently with the main thread's
+    aggregation reads is a refcount race we cannot tolerate. }
+  OrphanResults: array of TTestWorkerData;
+  IsOrphan: array of Boolean;
+  Source: ^TTestWorkerData;
   GC: TGarbageCollector;
   I, J: Integer;
   AllTestResults: TGocciaObjectValue;
@@ -765,20 +880,87 @@ begin
     Pool.EnableCoverage := CoverageOptions.Enabled.Present;
     if Assigned(TGarbageCollector.Instance) then
       Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
-    // Watchdog = 2x the per-file timeout × ceiling(files/workers) + grace.
-    // This gives workers enough time to hit their per-file timeout before
-    // the watchdog fires, while still preventing indefinite hangs.
+    // Per-worker-idle watchdog: the pool cancels if any single worker
+    // sits on one file longer than this window.  2× the per-file timeout
+    // gives the in-engine cooperative timeout slack to fire first; the
+    // +10 s grace covers thread-runtime initialisation on the first
+    // file.  Because the pool measures per-worker idleness, this bound
+    // does not depend on the file count — a huge batch is no looser
+    // than a small one.
     // When the effective timeout is 0 (user passed --timeout=0), disable
     // the watchdog entirely so the no-timeout contract is honoured.
     EffectiveTimeoutMs := EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS);
     if EffectiveTimeoutMs > 0 then
-      WatchdogMs := 2 * EffectiveTimeoutMs *
-        ((AFiles.Count + AJobCount - 1) div AJobCount) + 10000
+      WatchdogMs := 2 * EffectiveTimeoutMs + 10000
     else
       WatchdogMs := 0;
     Pool.RunAll(AFiles, TestWorkerProc, @WorkerData[0], WatchdogMs);
     if Pool.EnableCoverage and Assigned(TGocciaCoverageTracker.Instance) then
       Pool.MergeCoverageInto(TGocciaCoverageTracker.Instance);
+
+    { Cross-reference Pool.Results with WorkerData. Two silent-drop
+      failure modes have to be surfaced here:
+
+      1. Watchdog cancels mid-batch: the stuck worker does not return,
+         so other live workers keep draining the queue but mark each
+         dequeued file as 'Cancelled' in Pool.Results — without ever
+         invoking TestWorkerProc for it.  Pool.Results[I].Success is
+         False and ErrorMessage is 'Cancelled'.
+
+      2. Stuck worker's in-progress file: the thread pool skips live
+         (unfinished) workers when collecting results, so the file the
+         stuck worker was running on never makes it into Pool.Results
+         at all — its slot stays at the default zero-initialised state
+         (Success=False, ErrorMessage='').
+
+      Helper / import-only files (e.g. tests/language/modules/helpers/*)
+      legitimately run to completion without registering any tests, so
+      their WorkerData is all zeros too.  Pool.Results[I].Success is
+      True for those — the Success flag is the discriminator, and only
+      Success=False slots get rewritten. }
+    SetLength(OrphanResults, AFiles.Count);
+    SetLength(IsOrphan, AFiles.Count);
+    for I := 0 to AFiles.Count - 1 do
+    begin
+      if (I > High(Pool.Results)) or Pool.Results[I].Success then
+        Continue;
+
+      if Pool.Results[I].ErrorMessage <> '' then
+      begin
+        if WorkerData[I].ErrorMessage = '' then
+        begin
+          { Watchdog-cancelled slot: the worker for this file never ran (a
+            peer stalled), so WorkerData[I] is still the zero-initialised
+            default and no concurrent writer touches it any more.  Safe to
+            keep the synthesis in WorkerData. }
+          WorkerData[I].ErrorMessage := Pool.Results[I].ErrorMessage;
+          WorkerData[I].Failed := 1;
+          WorkerData[I].TotalRunTests := 1;
+          SetLength(WorkerData[I].FailedTestNames, 1);
+          WorkerData[I].FailedTestNames[0] := AFiles[I] + ': ' +
+            Pool.Results[I].ErrorMessage;
+        end;
+      end
+      else if (WorkerData[I].ErrorMessage = '') and
+              (WorkerData[I].Passed = 0) and
+              (WorkerData[I].Failed = 0) and
+              (WorkerData[I].TotalRunTests = 0) then
+      begin
+        { Stuck-worker slot: the worker is still alive in native code and
+          may eventually unstick and resume writing to WorkerData[I]
+          itself.  Park the synthesis in OrphanResults[I] so we never
+          touch the managed fields the orphan owns. }
+        IsOrphan[I] := True;
+        OrphanResults[I].ErrorMessage :=
+          'Worker produced no result (likely stalled in native code and ' +
+          'was orphaned by the watchdog)';
+        OrphanResults[I].Failed := 1;
+        OrphanResults[I].TotalRunTests := 1;
+        SetLength(OrphanResults[I].FailedTestNames, 1);
+        OrphanResults[I].FailedTestNames[0] := AFiles[I] + ': ' +
+          OrphanResults[I].ErrorMessage;
+      end;
+    end;
   finally
     Pool.Free;
   end;
@@ -806,29 +988,52 @@ begin
   Result.TotalParseNanoseconds := 0;
   Result.TotalCompileNanoseconds := 0;
   Result.TotalExecNanoseconds := 0;
+  SetLength(Result.FileResults, AFiles.Count);
 
   for I := 0 to AFiles.Count - 1 do
   begin
     if not FNoProgress.Present then
       WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, AFiles.Count, AFiles[I]]));
 
-    if WorkerData[I].ErrorMessage <> '' then
-      WriteLn(StdErr, WorkerData[I].ErrorMessage);
+    { Source orphaned slots from OrphanResults so we never read the
+      WorkerData[I] managed fields that an unsticking worker might still
+      be writing to.  Every other slot reads from WorkerData as before. }
+    if (I < Length(IsOrphan)) and IsOrphan[I] then
+      Source := @OrphanResults[I]
+    else
+      Source := @WorkerData[I];
 
-    PassedCount := PassedCount + WorkerData[I].Passed;
-    FailedCount := FailedCount + WorkerData[I].Failed;
-    SkippedCount := SkippedCount + WorkerData[I].Skipped;
-    TotalRunCount := TotalRunCount + WorkerData[I].TotalRunTests;
-    TotalAssertions := TotalAssertions + WorkerData[I].Assertions;
+    if Source^.ErrorMessage <> '' then
+      WriteLn(StdErr, Source^.ErrorMessage);
 
-    Result.TotalLexNanoseconds := Result.TotalLexNanoseconds + WorkerData[I].LexNs;
-    Result.TotalParseNanoseconds := Result.TotalParseNanoseconds + WorkerData[I].ParseNs;
-    Result.TotalCompileNanoseconds := Result.TotalCompileNanoseconds + WorkerData[I].CompileNs;
-    Result.TotalExecNanoseconds := Result.TotalExecNanoseconds + WorkerData[I].ExecNs;
+    PassedCount := PassedCount + Source^.Passed;
+    FailedCount := FailedCount + Source^.Failed;
+    SkippedCount := SkippedCount + Source^.Skipped;
+    TotalRunCount := TotalRunCount + Source^.TotalRunTests;
+    TotalAssertions := TotalAssertions + Source^.Assertions;
 
-    for J := 0 to High(WorkerData[I].FailedTestNames) do
+    Result.TotalLexNanoseconds := Result.TotalLexNanoseconds + Source^.LexNs;
+    Result.TotalParseNanoseconds := Result.TotalParseNanoseconds + Source^.ParseNs;
+    Result.TotalCompileNanoseconds := Result.TotalCompileNanoseconds + Source^.CompileNs;
+    Result.TotalExecNanoseconds := Result.TotalExecNanoseconds + Source^.ExecNs;
+
+    for J := 0 to High(Source^.FailedTestNames) do
       AllFailedTests.Elements.Add(
-        TGocciaStringLiteralValue.Create(WorkerData[I].FailedTestNames[J]));
+        TGocciaStringLiteralValue.Create(Source^.FailedTestNames[J]));
+
+    { Per-file record for the JSON output. Copying strings by value
+      keeps the aggregated result self-contained once WorkerData goes
+      out of scope. }
+    Result.FileResults[I].FileName := AFiles[I];
+    Result.FileResults[I].Passed := Source^.Passed;
+    Result.FileResults[I].Failed := Source^.Failed;
+    Result.FileResults[I].Skipped := Source^.Skipped;
+    Result.FileResults[I].TotalTests := Source^.TotalRunTests;
+    Result.FileResults[I].ErrorMessage := Source^.ErrorMessage;
+    SetLength(Result.FileResults[I].FailedTests,
+      Length(Source^.FailedTestNames));
+    for J := 0 to High(Source^.FailedTestNames) do
+      Result.FileResults[I].FailedTests[J] := Source^.FailedTestNames[J];
   end;
 
   AllTestResults.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(AFiles.Count * 1.0));
@@ -854,9 +1059,6 @@ procedure TTestRunnerApp.WriteResultsJSON(const AResult: TAggregatedTestResult; 
 var
   Lines: TStringList;
   TotalNanoseconds: Int64;
-  FailedTests: TGocciaValue;
-  FailedArray: TGocciaArrayValue;
-  I: Integer;
   IsBytecodeMode: Boolean;
 begin
   IsBytecodeMode := EngineOptions.Mode.Matches(emBytecode);
@@ -884,26 +1086,81 @@ begin
     Lines.Add(Format('  "executeTimeNanoseconds": %d,', [AResult.TotalExecNanoseconds]));
     Lines.Add(Format('  "totalEngineNanoseconds": %d,', [TotalNanoseconds]));
 
-    FailedTests := AResult.TestResult.GetProperty('failedTests');
-    Lines.Add('  "failedTests": [');
-    if FailedTests is TGocciaArrayValue then
-    begin
-      FailedArray := TGocciaArrayValue(FailedTests);
-      for I := 0 to FailedArray.Elements.Count - 1 do
-      begin
-        if I < FailedArray.Elements.Count - 1 then
-          Lines.Add(Format('    "%s",', [EscapeJSONString(FailedArray.Elements[I].ToStringLiteral.Value)]))
-        else
-          Lines.Add(Format('    "%s"', [EscapeJSONString(FailedArray.Elements[I].ToStringLiteral.Value)]));
-      end;
-    end;
-    Lines.Add('  ]');
+    { Per-file results. External harnesses (the test262 driver) use
+      this to map each input file to an explicit pass/fail outcome
+      with its own failedTests list — there is no top-level aggregate.
+      When no files were run this is an empty array.
+
+      A previous version emitted a redundant top-level "failedTests"
+      array reading from AResult.TestResult.GetProperty, but that read
+      raced with abandoned-worker writes during test262 runs and
+      occasionally produced torn AnsiString refcount reads, corrupting
+      the serialised JSON. The per-file records below carry the same
+      information and are written from main-thread-owned data only. }
+    WriteFileResults(Lines, AResult);
 
     Lines.Add('}');
     Lines.SaveToFile(AFileName);
   finally
     Lines.Free;
   end;
+end;
+
+procedure TTestRunnerApp.WriteFileResults(ALines: TStringList;
+  const AResult: TAggregatedTestResult);
+var
+  I, J, Count: Integer;
+  Fr: TTestFilePerResult;
+  Entry, FailedList: TStringBuilder;
+begin
+  ALines.Add('  "results": [');
+  Count := Length(AResult.FileResults);
+  if Count = 0 then
+  begin
+    ALines.Add('  ]');
+    Exit;
+  end;
+
+  Entry := TStringBuilder.Create;
+  FailedList := TStringBuilder.Create;
+  try
+    for I := 0 to Count - 1 do
+    begin
+      Fr := AResult.FileResults[I];
+      FailedList.Clear;
+      for J := 0 to High(Fr.FailedTests) do
+      begin
+        if J > 0 then FailedList.Append(',');
+        FailedList.Append('"');
+        FailedList.Append(EscapeJSONString(Fr.FailedTests[J]));
+        FailedList.Append('"');
+      end;
+
+      Entry.Clear;
+      Entry.Append('    {"file": "');
+      Entry.Append(EscapeJSONString(Fr.FileName));
+      Entry.Append('", "passed": ');
+      Entry.Append(Round(Fr.Passed));
+      Entry.Append(', "failed": ');
+      Entry.Append(Round(Fr.Failed));
+      Entry.Append(', "skipped": ');
+      Entry.Append(Round(Fr.Skipped));
+      Entry.Append(', "totalTests": ');
+      Entry.Append(Round(Fr.TotalTests));
+      Entry.Append(', "error": "');
+      Entry.Append(EscapeJSONString(Fr.ErrorMessage));
+      Entry.Append('", "failedTests": [');
+      Entry.Append(FailedList.ToString);
+      Entry.Append(']}');
+      if I < Count - 1 then
+        Entry.Append(',');
+      ALines.Add(Entry.ToString);
+    end;
+  finally
+    Entry.Free;
+    FailedList.Free;
+  end;
+  ALines.Add('  ]');
 end;
 
 procedure TTestRunnerApp.PrintTestResults(const AResult: TAggregatedTestResult);

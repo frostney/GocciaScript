@@ -579,6 +579,8 @@ resourcestring
   // Symbol prototype errors
   SErrorSymbolProtoToStringRequiresSymbol = 'Symbol.prototype.toString requires that ''this'' be a Symbol';
   SErrorSymbolProtoDescriptionRequiresSymbol = 'Symbol.prototype.description requires that ''this'' be a Symbol';
+  SErrorSymbolProtoValueOfRequiresSymbol = 'Symbol.prototype.valueOf requires that ''this'' be a Symbol';
+  SErrorSymbolProtoToPrimitiveRequiresSymbol = 'Symbol.prototype[@@toPrimitive] requires that ''this'' be a Symbol';
 
   // Iterator zip strict errors
   SErrorIteratorZipStrictLengthMismatch = 'Iterator.zip: iterables have different lengths in strict mode';
@@ -663,6 +665,7 @@ resourcestring
   SErrorObjectGroupByRequiresCallback = 'Object.groupBy requires a callback function as second argument';
   SErrorSetPrototypeOfTrapReturnedFalse = 'setPrototypeOf trap returned false';
   SErrorSetPrototypeOfNonExtensible = 'Object.setPrototypeOf called on non-extensible object';
+  SErrorSetPrototypeOfCyclic = 'Cyclic __proto__ value';
 
   // Test assertion errors
   SErrorFunctionExpectsStringFirst = '%s expects first argument to be a string';

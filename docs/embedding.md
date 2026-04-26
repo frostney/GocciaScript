@@ -119,6 +119,28 @@ end;
 
 `TimingUtils` provides three clock functions: `GetNanoseconds` and `GetMilliseconds` for monotonic duration timing (`clock_gettime(CLOCK_MONOTONIC)` on Unix/macOS, `QueryPerformanceCounter` on Windows), and `GetEpochNanoseconds` for wall-clock epoch time (`clock_gettime(CLOCK_REALTIME)` on Unix/macOS, `GetSystemTimeAsFileTime` on Windows).
 
+## Engine Lifecycle & Realm Isolation
+
+Every `TGocciaEngine` owns a `TGocciaRealm` (`Goccia.Realm.pas`) — a per-engine container for the mutable intrinsic prototype objects (`Array.prototype`, `Object.prototype`, `Map.prototype`, every error prototype, every Temporal prototype, and so on). The realm is created in the engine constructor and torn down in the engine destructor; tear-down unpins every prototype the realm owns so the GC can collect them before the next engine starts up.
+
+This is the **strongest** isolation boundary the engine provides. Two engines created back-to-back on the same thread see pristine intrinsics — userland mutations on one engine's `Array.prototype` cannot leak into the next engine's `Array.prototype`, even if the mutation added a non-configurable property that JS-level cleanup cannot reverse.
+
+### When this matters for embedders
+
+- **Test runners and conformance harnesses** — Per-file engine recreation is the cleanest way to give each test file fresh intrinsics. `GocciaTestRunner` does this automatically; if you build a custom runner, free the engine between files rather than reusing it.
+- **Sandboxes evaluating untrusted scripts** — Each script can mutate `Object.prototype`. Recreating the engine between scripts is the only reliable way to guarantee the next script starts from a clean slate.
+- **REPLs and long-lived sessions** — These intentionally **share** intrinsics across `Execute` calls (so users can mutate `Array.prototype` from one line and observe the change on the next). Reuse the same engine instance.
+
+### What you do not need to do
+
+- **Do not** call `SetCurrentRealm` directly. The engine sets `CurrentRealm` (a thread-local pointer) on construction and clears it on tear-down.
+- **Do not** pin or unpin prototype objects manually after engine startup. The realm pins everything stored in a slot via `SetSlot`, and unpins them all at tear-down.
+- **Do not** cache prototype object pointers in long-lived Pascal state. Those objects are realm-scoped — they become invalid the moment the engine that owns them is freed. If you need the current `Array.prototype`, look it up live (e.g. via `Engine.Interpreter.GlobalScope`).
+
+### Threading
+
+`CurrentRealm` is a `threadvar`. Each worker thread that constructs an engine gets its own realm pointer. The thread pool used by `GocciaTestRunner --jobs=N` relies on this: each worker creates and destroys engines on its own thread, and realm tear-down on one worker has no effect on intrinsics seen by the others.
+
 ## Module Resolution
 
 The engine uses a pluggable module resolver (`TGocciaModuleResolver`) that supports extensionless imports, import-map-style aliases, and index file resolution.

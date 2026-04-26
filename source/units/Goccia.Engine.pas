@@ -57,6 +57,7 @@ uses
   Goccia.ObjectModel,
   Goccia.ObjectModel.Engine,
   Goccia.Parser,
+  Goccia.Realm,
   Goccia.Scope,
   Goccia.SourceMap,
   Goccia.TextFiles,
@@ -165,6 +166,8 @@ type
     FBuiltinURLSearchParams: TGocciaGlobalURLSearchParams;
     FBuiltinFetch: TGocciaGlobalFetch;
     FBuiltinDisposableStack: TGocciaBuiltinDisposableStack;
+    FRealm: TGocciaRealm;
+    FPrevRealm: TGocciaRealm;
     FFunctionConstructor: TGocciaFunctionConstructorClassValue;
     FTypedArrayIntrinsic: TGocciaClassValue;
     FPreviousExceptionMask: TFPUExceptionMask;
@@ -632,6 +635,16 @@ begin
   TGocciaMicrotaskQueue.Initialize;
   TGocciaFetchManager.Initialize;
 
+  // Per-realm intrinsic state (Array.prototype, ...) lives on FRealm.  Must
+  // be assigned before any value is constructed so lazy prototype init in
+  // value units finds a realm to write into.  The previous engine's realm
+  // (if any) was freed in Destroy, so its prototype state is gone.
+  // Save any pre-existing CurrentRealm so a nested TGocciaEngine on the same
+  // thread can restore the outer realm on teardown rather than clobbering it.
+  FPrevRealm := CurrentRealm;
+  FRealm := TGocciaRealm.Create;
+  SetCurrentRealm(FRealm);
+
   FPreprocessors := DefaultPreprocessors;
   FCompatibility := DefaultCompatibility;
   if Assigned(FExecutor) then
@@ -715,6 +728,24 @@ begin
     FInterpreter.Free;
     if FOwnsModuleLoader then
       FModuleLoader.Free;
+
+    // Drop the realm only after every built-in (and the interpreter, which
+    // holds the global scope) has been freed - those owners may still touch
+    // prototype objects during teardown.  Freeing the realm unpins the
+    // intrinsic prototype graph so the GC can collect it before the next
+    // engine on this worker thread starts up.
+    if Assigned(FRealm) then
+    begin
+      // Restore the realm that was current when this engine was constructed
+      // (typically nil; for nested engines, the outer engine's realm).  Only
+      // touch CurrentRealm if it still points at our realm — preserve any
+      // intentional reassignment by intervening code.
+      if CurrentRealm = FRealm then
+        SetCurrentRealm(FPrevRealm);
+      FRealm.Free;
+      FRealm := nil;
+      FPrevRealm := nil;
+    end;
   finally
     SetExceptionMask(FPreviousExceptionMask);
   end;
@@ -1102,6 +1133,10 @@ begin
   PerformanceConstructor := TGocciaPerformance.CreateInterfaceObject;
   FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_PERFORMANCE, PerformanceConstructor, dtConst);
 
+  // ES2026 §20.4.3: Symbol.prototype's [[Prototype]] is %Object.prototype%
+  if Assigned(TGocciaSymbolValue.SharedPrototype) then
+    TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype).Prototype := ObjectConstructor.Prototype;
+
   RegisterGocciaScriptGlobal;
   RegisterGlobalThis;
 end;
@@ -1182,6 +1217,11 @@ begin
   GlobalThisObj.DefineProperty('globalThis',
     TGocciaPropertyDescriptorData.Create(GlobalThisObj, [pfWritable, pfConfigurable]));
   Scope.DefineLexicalBinding('globalThis', GlobalThisObj, dtConst);
+
+  // ES2026 §9.1.2.5 NewGlobalEnvironment: a global Environment Record's
+  // [[GlobalThisValue]] is the global object. Top-level `this` resolves
+  // here via §9.4.3 ResolveThisBinding -> GlobalEnvironmentRecord.GetThisBinding.
+  Scope.ThisValue := GlobalThisObj;
 end;
 
 procedure TGocciaEngine.RegisterGocciaScriptGlobal;

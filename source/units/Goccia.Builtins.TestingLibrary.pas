@@ -267,6 +267,14 @@ type
     procedure ResetCurrentTestState;
   end;
 
+var
+  { Per-test and per-describe deadlines, in milliseconds. Set once by
+    the test runner CLI before workers spawn (read-only after that, so
+    a plain global is safe). 0 = no deadline at that scope. The whole
+    file still has the engine's --timeout deadline (tsFile) on top. }
+  GTestRunnerTestTimeoutMs: Integer = 0;
+  GTestRunnerDescribeTimeoutMs: Integer = 0;
+
 implementation
 
 uses
@@ -285,6 +293,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.RegExp.Runtime,
+  Goccia.Timeout,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
@@ -2616,19 +2625,31 @@ begin
     PreviousSuite := FCurrentRegistrationSuite;
     FCurrentRegistrationSuite := ChildSuite;
     try
+      { Per-describe deadline. Bounds the time spent inside the user's
+        describe callback (the registration phase) only — once the child
+        tests start running each one needs an unobstructed tsTest scope,
+        otherwise the older tsDescribe deadline preempts the per-test
+        deadline whenever both are configured to the same value. Pushed
+        unconditionally so a 0 value is a no-op and the matching Pop
+        runs in the outer try-finally. }
+      PushTimeoutScope(tsDescribe, GTestRunnerDescribeTimeoutMs);
       try
-        if Assigned(ChildSuite.SuiteFunction) then
-          ChildSuite.SuiteFunction.Call(ChildSuite.SuiteArguments,
-            TGocciaUndefinedLiteralValue.UndefinedValue);
-      except
-        on E: Exception do
-        begin
-          if not FSuppressOutput then
-            WriteLn('Error in describe block "', ChildSuite.GetFullName,
-              '": ', E.Message);
-          AFailedTestDetails.Add('Describe "' + ChildSuite.GetFullName +
-            '": ' + E.Message);
+        try
+          if Assigned(ChildSuite.SuiteFunction) then
+            ChildSuite.SuiteFunction.Call(ChildSuite.SuiteArguments,
+              TGocciaUndefinedLiteralValue.UndefinedValue);
+        except
+          on E: Exception do
+          begin
+            if not FSuppressOutput then
+              WriteLn('Error in describe block "', ChildSuite.GetFullName,
+                '": ', E.Message);
+            AFailedTestDetails.Add('Describe "' + ChildSuite.GetFullName +
+              '": ' + E.Message);
+          end;
         end;
+      finally
+        PopTimeoutScope;
       end;
     finally
       FCurrentRegistrationSuite := PreviousSuite;
@@ -2780,6 +2801,12 @@ begin
   RunSuiteHooks := not IsSuiteSkipped(ASuite) and
     SuiteHasRunnableEntries(ASuite, AHasFocusedEntries);
 
+  { The per-describe deadline is no longer pushed here.  It now lives in
+    BuildNestedRegistrations around the describe callback so that nested
+    tsTest deadlines are not preempted by an older tsDescribe deadline
+    when --describe-timeout and --test-timeout are configured to the
+    same value. }
+
   if RunSuiteHooks and (ASuite.BeforeAllCallbacks.Length > 0) then
   begin
     FTestStats.CurrentSuiteName := EffectiveSuiteName;
@@ -2862,86 +2889,121 @@ begin
         FailureRecorded := False;
         TestResult := nil;
         try
+          { Per-test deadline. Push unconditionally — a 0 value
+            contributes no deadline, preserving the previous
+            behaviour when --test-timeout is not set. The matching
+            Pop runs in the finally directly below. }
+          PushTimeoutScope(tsTest, GTestRunnerTestTimeoutMs);
           try
-            if Assigned(TestCase.TestFunction) then
-              TestResult := TestCase.TestFunction.Call(TestCase.TestArguments,
-                TGocciaUndefinedLiteralValue.UndefinedValue)
-            else
-              TestResult := TGocciaUndefinedLiteralValue.UndefinedValue;
-
-            if Assigned(TestResult) then
-              AddTempRootIfNeeded(TestResult);
             try
-              if TestResult is TGocciaPromiseValue then
-              begin
-                WaitForFetchPromise(TGocciaPromiseValue(TestResult));
-                if TGocciaPromiseValue(TestResult).State = gpsRejected then
+              if Assigned(TestCase.TestFunction) then
+                TestResult := TestCase.TestFunction.Call(TestCase.TestArguments,
+                  TGocciaUndefinedLiteralValue.UndefinedValue)
+              else
+                TestResult := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+              if Assigned(TestResult) then
+                AddTempRootIfNeeded(TestResult);
+              try
+                if TestResult is TGocciaPromiseValue then
                 begin
-                  RejectionReason := TGocciaPromiseValue(TestResult).
-                    PromiseResult.ToStringLiteral.Value;
-                  AssertionFailed('async test', 'Returned Promise rejected: ' +
-                    RejectionReason);
+                  WaitForFetchPromise(TGocciaPromiseValue(TestResult));
+                  if TGocciaPromiseValue(TestResult).State = gpsRejected then
+                  begin
+                    RejectionReason := TGocciaPromiseValue(TestResult).
+                      PromiseResult.ToStringLiteral.Value;
+                    AssertionFailed('async test', 'Returned Promise rejected: ' +
+                      RejectionReason);
+                    if FTestStats.CurrentSuiteName <> '' then
+                      AFailedTestDetails.Add('Test "' + TestCase.Name +
+                        '" in suite "' + FTestStats.CurrentSuiteName +
+                        '": Promise rejected: ' + RejectionReason)
+                    else
+                      AFailedTestDetails.Add('Test "' + TestCase.Name +
+                        '": Promise rejected: ' + RejectionReason);
+                    FailureRecorded := True;
+                  end
+                  else if TGocciaPromiseValue(TestResult).State = gpsPending then
+                  begin
+                    AssertionFailed('async test',
+                      'Returned Promise still pending after microtask drain');
+                    if FTestStats.CurrentSuiteName <> '' then
+                      AFailedTestDetails.Add('Test "' + TestCase.Name +
+                        '" in suite "' + FTestStats.CurrentSuiteName +
+                        '": Promise still pending after microtask drain')
+                    else
+                      AFailedTestDetails.Add('Test "' + TestCase.Name +
+                        '": Promise still pending after microtask drain');
+                    FailureRecorded := True;
+                  end;
+                end
+                else
+                  DrainMicrotasksAndFetchCompletions;
+              finally
+                if Assigned(TestResult) then
+                  RemoveTempRootIfNeeded(TestResult);
+              end;
+            except
+              { Test-scope timeout: record TIMEOUT and let execution
+                continue with the next test. Other timeout scopes
+                (describe, file) propagate up. Listed first because
+                TGocciaTimeoutError descends from Exception. }
+              on E: TGocciaTimeoutError do
+              begin
+                if E.Scope = tsTest then
+                begin
+                  if Assigned(TGocciaMicrotaskQueue.Instance) then
+                    TGocciaMicrotaskQueue.Instance.ClearQueue;
+                  DiscardFetchCompletions;
+                  AssertionFailed('test execution',
+                    Format('Test exceeded per-test timeout of %dms',
+                      [E.DurationMs]));
                   if FTestStats.CurrentSuiteName <> '' then
                     AFailedTestDetails.Add('Test "' + TestCase.Name +
                       '" in suite "' + FTestStats.CurrentSuiteName +
-                      '": Promise rejected: ' + RejectionReason)
+                      '": TIMEOUT after ' + IntToStr(E.DurationMs) + 'ms')
                   else
                     AFailedTestDetails.Add('Test "' + TestCase.Name +
-                      '": Promise rejected: ' + RejectionReason);
+                      '": TIMEOUT after ' + IntToStr(E.DurationMs) + 'ms');
                   FailureRecorded := True;
                 end
-                else if TGocciaPromiseValue(TestResult).State = gpsPending then
-                begin
-                  AssertionFailed('async test',
-                    'Returned Promise still pending after microtask drain');
-                  if FTestStats.CurrentSuiteName <> '' then
-                    AFailedTestDetails.Add('Test "' + TestCase.Name +
-                      '" in suite "' + FTestStats.CurrentSuiteName +
-                      '": Promise still pending after microtask drain')
-                  else
-                    AFailedTestDetails.Add('Test "' + TestCase.Name +
-                      '": Promise still pending after microtask drain');
-                  FailureRecorded := True;
-                end;
-              end
-              else
-                DrainMicrotasksAndFetchCompletions;
-            finally
-              if Assigned(TestResult) then
-                RemoveTempRootIfNeeded(TestResult);
-            end;
-          except
-            on E: Exception do
-            begin
-              if Assigned(TGocciaMicrotaskQueue.Instance) then
-                TGocciaMicrotaskQueue.Instance.ClearQueue;
-              DiscardFetchCompletions;
-              if E is TGocciaError then
-              begin
-                ExceptionDetail := TGocciaError(E).GetDetailedMessage;
-                ExceptionSummary := E.Message;
-              end
-              else if E is TGocciaThrowValue then
-              begin
-                ExceptionDetail := FormatThrowValueDetail(
-                  TGocciaThrowValue(E).Value);
-                ExceptionSummary := ExceptionDetail;
-              end
-              else
-              begin
-                ExceptionDetail := E.Message;
-                ExceptionSummary := E.Message;
+                else
+                  raise;
               end;
-              AssertionFailed('test execution', ExceptionDetail);
-              if FTestStats.CurrentSuiteName <> '' then
-                AFailedTestDetails.Add('Test "' + TestCase.Name +
-                  '" in suite "' + FTestStats.CurrentSuiteName + '": ' +
-                  ExceptionSummary)
-              else
-                AFailedTestDetails.Add('Test "' + TestCase.Name + '": ' +
-                  ExceptionSummary);
-              FailureRecorded := True;
+              on E: Exception do
+              begin
+                if Assigned(TGocciaMicrotaskQueue.Instance) then
+                  TGocciaMicrotaskQueue.Instance.ClearQueue;
+                DiscardFetchCompletions;
+                if E is TGocciaError then
+                begin
+                  ExceptionDetail := TGocciaError(E).GetDetailedMessage;
+                  ExceptionSummary := E.Message;
+                end
+                else if E is TGocciaThrowValue then
+                begin
+                  ExceptionDetail := FormatThrowValueDetail(
+                    TGocciaThrowValue(E).Value);
+                  ExceptionSummary := ExceptionDetail;
+                end
+                else
+                begin
+                  ExceptionDetail := E.Message;
+                  ExceptionSummary := E.Message;
+                end;
+                AssertionFailed('test execution', ExceptionDetail);
+                if FTestStats.CurrentSuiteName <> '' then
+                  AFailedTestDetails.Add('Test "' + TestCase.Name +
+                    '" in suite "' + FTestStats.CurrentSuiteName + '": ' +
+                    ExceptionSummary)
+                else
+                  AFailedTestDetails.Add('Test "' + TestCase.Name + '": ' +
+                    ExceptionSummary);
+                FailureRecorded := True;
+              end;
             end;
+          finally
+            PopTimeoutScope;
           end;
         finally
           RunCallbacks(AfterCallbacks);
@@ -3079,6 +3141,13 @@ begin
               TGarbageCollector.Instance.RemoveTempRoot(CallbackResult);
           end;
         except
+          { Timeout errors flag a describe/file/test deadline expiring;
+            they must propagate so the outer ExecuteSuite handler can
+            record the timeout and unwind cleanly.  Downgrading them to
+            an assertion failure stranded the deadline state and let
+            execution keep running past the limit. }
+          on E: TGocciaTimeoutError do
+            raise;
           on E: Exception do
             AssertionFailed('callback execution', 'Callback threw an exception: ' + E.Message);
         end;

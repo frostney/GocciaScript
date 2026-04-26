@@ -51,6 +51,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Realm,
   Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
@@ -58,9 +59,19 @@ uses
   Goccia.Values.SymbolValue,
   Goccia.Values.TemporalPlainDate;
 
+var
+  GTemporalPlainMonthDaySharedSlot: TGocciaRealmOwnedSlotId;
+
 threadvar
-  FShared: TGocciaSharedPrototype;
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
+
+function GetTemporalPlainMonthDayShared: TGocciaSharedPrototype; inline;
+begin
+  if Assigned(CurrentRealm) then
+    Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GTemporalPlainMonthDaySharedSlot))
+  else
+    Result := nil;
+end;
 
 const
   DEFAULT_REFERENCE_YEAR = 1972;
@@ -139,6 +150,8 @@ begin
 end;
 
 constructor TGocciaTemporalPlainMonthDayValue.Create(const AMonth, ADay, AReferenceYear: Integer);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(nil);
   if not IsValidDate(AReferenceYear, AMonth, ADay) then
@@ -147,16 +160,20 @@ begin
   FDay := ADay;
   FReferenceYear := AReferenceYear;
   InitializePrototype;
-  if Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetTemporalPlainMonthDayShared;
+  if Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 procedure TGocciaTemporalPlainMonthDayValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
 begin
-  if Assigned(FShared) then Exit;
-  FShared := TGocciaSharedPrototype.Create(Self);
+  if not Assigned(CurrentRealm) then Exit;
+  if Assigned(GetTemporalPlainMonthDayShared) then Exit;
+  Shared := TGocciaSharedPrototype.Create(Self);
+  CurrentRealm.SetOwnedSlot(GTemporalPlainMonthDaySharedSlot, Shared);
   if Length(FPrototypeMembers) = 0 then
   begin
     Members := TGocciaMemberCollection.Create;
@@ -180,14 +197,21 @@ begin
       Members.Free;
     end;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaTemporalPlainMonthDayValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
+  Shared := GetTemporalPlainMonthDayShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaTemporalPlainMonthDayValue.Create(1, 1);
-  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+    Shared := GetTemporalPlainMonthDayShared;
+  end;
+  if Assigned(Shared) then
+    ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 
 function TGocciaTemporalPlainMonthDayValue.ToStringTag: string;
@@ -364,5 +388,8 @@ begin
     EmptyArgs.Free;
   end;
 end;
+
+initialization
+  GTemporalPlainMonthDaySharedSlot := RegisterRealmOwnedSlot('Temporal.PlainMonthDay.shared');
 
 end.
