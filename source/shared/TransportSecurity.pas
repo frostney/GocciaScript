@@ -338,9 +338,12 @@ type
 
   TSSLSetDefaultVerifyPaths = function(AContext: PSSL_CTX): cint; cdecl;
   TSSLSetHostName = function(ASSL: PSSL; AHost: PAnsiChar): cint; cdecl;
+  TSSLMethodGetter = function: Pointer; cdecl;
 
 const
   OPENSSL_VERSION_THREE = '.3';
+  SSL_CTRL_SET_MIN_PROTO_VERSION = 123;
+  TLS1_2_VERSION = $0303;
 
 procedure PreferOpenSSLVersionThree;
 var
@@ -411,13 +414,35 @@ begin
 
   SslCtxSetVerify(AContext, SSL_VERIFY_PEER, TSSLCTXVerifyCallback(nil));
 
+  HostName := AnsiString(AHost);
   SetHostName := TSSLSetHostName(GetProcedureAddress(SSLLibHandle,
     'SSL_set1_host'));
-  if Assigned(SetHostName) then
+  if not Assigned(SetHostName) then
+    raise ETransportSecurityError.Create('OpenSSL library does not provide SSL_set1_host; hostname verification unavailable');
+  if SetHostName(ASSL, PAnsiChar(HostName)) <> 1 then
+    raise ETransportSecurityError.Create('Failed to configure OpenSSL host verification');
+end;
+
+function CreateOpenSSLContext: PSSL_CTX;
+var
+  GetMethod: TSSLMethodGetter;
+begin
+  GetMethod := TSSLMethodGetter(GetProcedureAddress(SSLLibHandle,
+    'TLS_client_method'));
+  if not Assigned(GetMethod) then
+    GetMethod := TSSLMethodGetter(GetProcedureAddress(SSLLibHandle,
+      'TLS_method'));
+  if not Assigned(GetMethod) then
+    raise ETransportSecurityError.Create('OpenSSL library does not provide a version-flexible TLS client method');
+
+  Result := SslCtxNew(GetMethod());
+  if not Assigned(Result) then
+    raise ETransportSecurityError.Create('Failed to create OpenSSL context');
+
+  if SslCTXCtrl(Result, SSL_CTRL_SET_MIN_PROTO_VERSION, TLS1_2_VERSION, nil) <= 0 then
   begin
-    HostName := AnsiString(AHost);
-    if SetHostName(ASSL, PAnsiChar(HostName)) <> 1 then
-      raise ETransportSecurityError.Create('Failed to configure OpenSSL host verification');
+    SslCtxFree(Result);
+    raise ETransportSecurityError.Create('Failed to set minimum OpenSSL TLS version');
   end;
 end;
 
@@ -437,9 +462,7 @@ begin
   Data.Context := nil;
   Data.SSL := nil;
   try
-    Data.Context := SslCtxNew(SslMethodTLSV1_2);
-    if not Assigned(Data.Context) then
-      raise ETransportSecurityError.Create('Failed to create OpenSSL context');
+    Data.Context := CreateOpenSSLContext;
 
     Data.SSL := SslNew(Data.Context);
     if not Assigned(Data.SSL) then
@@ -694,15 +717,13 @@ begin
   AppendBytes(ATarget, ASource, ALength);
 end;
 
-function ReceiveIntoBuffer(const ASocket: TSocket; var ABuffer: TBytes): Boolean;
+function ReceiveIntoBuffer(const ASocket: TSocket; var ABuffer: TBytes): Integer;
 var
   Temporary: array[0..8191] of Byte;
-  Count: Integer;
 begin
-  Count := SocketReceive(ASocket, @Temporary[0], Length(Temporary));
-  Result := Count > 0;
-  if Result then
-    AppendBytes(ABuffer, @Temporary[0], Count);
+  Result := SocketReceive(ASocket, @Temporary[0], Length(Temporary));
+  if Result > 0 then
+    AppendBytes(ABuffer, @Temporary[0], Result);
 end;
 
 procedure SendSChannelToken(const ASocket: TSocket; const ABuffer: TSecBuffer);
@@ -726,6 +747,7 @@ var
   TargetName: WideString;
   InputDescPointer: PSecBufferDesc;
   ExistingContext: PCtxtHandle;
+  ReceiveCount: Integer;
 begin
   Data := TSChannelData.Create;
   FillChar(Data.Credential, SizeOf(Data.Credential), 0);
@@ -797,7 +819,10 @@ begin
 
       if Status = SEC_E_INCOMPLETE_MESSAGE then
       begin
-        if not ReceiveIntoBuffer(Data.Socket, Data.EncryptedInput) then
+        ReceiveCount := ReceiveIntoBuffer(Data.Socket, Data.EncryptedInput);
+        if ReceiveCount < 0 then
+          raise ETransportSecurityError.Create(TLS_READ_ERROR);
+        if ReceiveCount = 0 then
           raise ETransportSecurityError.Create(TLS_HANDSHAKE_ERROR);
         Continue;
       end;
@@ -806,8 +831,13 @@ begin
          (Status = SEC_I_INCOMPLETE_CREDENTIALS) then
       begin
         if Length(Data.EncryptedInput) = 0 then
-          if not ReceiveIntoBuffer(Data.Socket, Data.EncryptedInput) then
+        begin
+          ReceiveCount := ReceiveIntoBuffer(Data.Socket, Data.EncryptedInput);
+          if ReceiveCount < 0 then
+            raise ETransportSecurityError.Create(TLS_READ_ERROR);
+          if ReceiveCount = 0 then
             raise ETransportSecurityError.Create(TLS_HANDSHAKE_ERROR);
+        end;
         Continue;
       end;
 
@@ -871,6 +901,7 @@ var
   Status: SECURITY_STATUS;
   QualityOfProtection: LongWord;
   I: Integer;
+  ReceiveCount: Integer;
 begin
   Data := TSChannelData(AConnection.BackendData);
 
@@ -891,11 +922,16 @@ begin
   while True do
   begin
     if Length(Data.EncryptedInput) = 0 then
-      if not ReceiveIntoBuffer(Data.Socket, Data.EncryptedInput) then
+    begin
+      ReceiveCount := ReceiveIntoBuffer(Data.Socket, Data.EncryptedInput);
+      if ReceiveCount < 0 then
+        raise ETransportSecurityError.Create(TLS_READ_ERROR);
+      if ReceiveCount = 0 then
       begin
         Result := 0;
         Exit;
       end;
+    end;
 
     FillChar(Buffers, SizeOf(Buffers), 0);
     Buffers[0].BufferType := SECBUFFER_DATA;
@@ -913,7 +949,10 @@ begin
       @QualityOfProtection);
     if Status = SEC_E_INCOMPLETE_MESSAGE then
     begin
-      if not ReceiveIntoBuffer(Data.Socket, Data.EncryptedInput) then
+      ReceiveCount := ReceiveIntoBuffer(Data.Socket, Data.EncryptedInput);
+      if ReceiveCount < 0 then
+        raise ETransportSecurityError.Create(TLS_READ_ERROR);
+      if ReceiveCount = 0 then
       begin
         Result := 0;
         Exit;
