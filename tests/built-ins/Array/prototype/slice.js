@@ -181,3 +181,15 @@ test("slice on generic array-like with high negative end", () => {
   const result = Array.prototype.slice.call(obj, high, high + 2);
   expect(result).toEqual(["x", "y"]);
 });
+
+test("slice window crossing the 2**31 boundary on generic array-like", () => {
+  const boundary = 2 ** 31 - 1;
+  const obj = { length: 2 ** 33 };
+  obj[boundary] = "at-boundary";
+  obj[boundary + 1] = "past-boundary";
+  const result = Array.prototype.slice.call(obj, boundary, boundary + 3);
+  expect(result.length).toBe(3);
+  expect(result[0]).toBe("at-boundary");
+  expect(result[1]).toBe("past-boundary");
+  expect(2 in result).toBe(false);
+});

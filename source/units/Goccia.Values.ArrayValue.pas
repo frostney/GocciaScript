@@ -1719,10 +1719,10 @@ begin
 
   // Step 9: Let n be 0; repeat while k < final
   N := 0;
-  // RawK exceeds MaxInt only when RawLen > MaxInt and the slice starts past
-  // the dense Integer range; route through HasIndex64/Get64 so the window
-  // is not collapsed to empty by Integer clamping.
-  if RawK > MaxInt then
+  // Use 64-bit probing whenever the copy window can touch indices > MaxInt.
+  // Branching on RawFinal (not RawK) catches boundary-crossing windows
+  // where start <= MaxInt but start + count overflows the Integer range.
+  if RawFinal > MaxInt then
   begin
     K := Trunc(RawK);
     while N < Needed do
@@ -1736,7 +1736,7 @@ begin
   else
   begin
     StartIndex := Integer(Trunc(RawK));
-    EndIndex := StartIndex + Needed;
+    EndIndex := Integer(Trunc(RawFinal));
     if EndIndex > View.Len then
       EndIndex := View.Len;
     for I := StartIndex to EndIndex - 1 do
