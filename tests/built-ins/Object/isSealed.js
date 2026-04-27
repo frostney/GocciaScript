@@ -19,4 +19,44 @@ describe("Object.isSealed", () => {
     expect(Object.isSealed(42)).toBe(true);
     expect(Object.isSealed("hello")).toBe(true);
   });
+
+  test("non-extensible object with non-configurable properties is structurally sealed", () => {
+    const obj = {};
+    Object.defineProperty(obj, "a", {
+      value: 1,
+      writable: true,
+      configurable: false,
+      enumerable: true,
+    });
+    Object.preventExtensions(obj);
+    expect(Object.isSealed(obj)).toBe(true);
+  });
+
+  test("non-extensible object with configurable property is not sealed", () => {
+    const obj = {};
+    Object.defineProperty(obj, "a", {
+      value: 1,
+      writable: false,
+      configurable: true,
+      enumerable: true,
+    });
+    Object.preventExtensions(obj);
+    expect(Object.isSealed(obj)).toBe(false);
+  });
+
+  test("empty non-extensible object is sealed", () => {
+    const obj = {};
+    Object.preventExtensions(obj);
+    expect(Object.isSealed(obj)).toBe(true);
+  });
+
+  test("extensible object is never sealed", () => {
+    const obj = {};
+    Object.defineProperty(obj, "a", {
+      value: 1,
+      writable: false,
+      configurable: false,
+    });
+    expect(Object.isSealed(obj)).toBe(false);
+  });
 });
