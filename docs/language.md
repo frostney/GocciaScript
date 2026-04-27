@@ -1,3 +1,4 @@
+<!-- doc-length-limit: 850 -->
 # Language
 
 *GocciaScript's ECMAScript subset: what we implement, TC39 proposals, and what we exclude.*
@@ -427,6 +428,18 @@ class C {}
 C[Symbol.metadata].decorated; // true
 ```
 
+**Writing wrappers:** Wrapping decorators need call-site `this` to flow through. Arrow functions capture lexical `this`, so they are not suitable. The `function` keyword is not available by default. Use **object-method shorthand** — it produces a real function with call-site `this` binding:
+
+```javascript
+const wrap = (method, context) => ({
+  [context.name](...args) {
+    return method.apply(this, args); // this = call-site receiver
+  },
+})[context.name];
+```
+
+The computed key `[context.name]` preserves the wrapper's `.name` for stack traces.
+
 **Not supported:** Parameter decorators.
 
 ### Decorator Metadata (Stage 3)
@@ -585,7 +598,7 @@ When disabled (default), the parser accepts `function` declarations and expressi
 
 ```text
 Warning: 'function' declarations are not supported in GocciaScript
-  Suggestion: Use arrow functions instead: const name = (...) => { ... }
+  Suggestion: Use arrow functions: const name = (...) => { ... }; for this binding, use method shorthand: ({ name(...) {} }).name
   --> script.js:1:1
 ```
 
