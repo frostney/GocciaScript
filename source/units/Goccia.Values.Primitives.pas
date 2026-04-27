@@ -240,6 +240,7 @@ begin
   end;
 
   FS := DefaultFormatSettings;
+  FS.DecimalSeparator := '.';
 
   // Probe k=1 (single significant digit). Str(V:9) always outputs at
   // least 2 significant digits ("d.dE+ddd"), so we round the 2-digit
