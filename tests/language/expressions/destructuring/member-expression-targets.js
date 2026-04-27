@@ -134,3 +134,19 @@ test("member expression targets with default values", () => {
   expect(obj.a).toBe(1);
   expect(obj.b).toBe(20);
 });
+
+test("object member expression target with default values (static key)", () => {
+  const obj = {};
+  ({ a: obj.a = 10, b: obj.b = 20 } = { a: 1, b: undefined });
+  expect(obj.a).toBe(1);
+  expect(obj.b).toBe(20);
+});
+
+test("object member expression target with default values (computed key)", () => {
+  const obj = {};
+  const k1 = "x";
+  const k2 = "y";
+  ({ a: obj[k1] = 10, b: obj[k2] = 20 } = { a: 1, b: undefined });
+  expect(obj.x).toBe(1);
+  expect(obj.y).toBe(20);
+});
