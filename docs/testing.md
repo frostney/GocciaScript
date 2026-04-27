@@ -396,7 +396,7 @@ The PR workflow (`.github/workflows/pr.yml`) includes shell-level smoke tests th
 |------|----------------|
 | GocciaTestRunner JSON output | `--output` produces valid JSON with `mode`, `totalFiles` fields |
 | GocciaTestRunner coverage | `--coverage` prints summary; `--coverage-format=lcov` and `--coverage-format=json` write valid output files; branch coverage includes `BRDA`/`BRF` entries |
-| GocciaScriptLoader JSON output | `--output=json` envelope includes `ok`, `value`, `output` fields |
+| GocciaScriptLoader JSON output | `--output=json` envelope includes aggregate `ok`, `output`, `stdout`, `stderr`, `build`, `timing`, `memory`, `workers`, and per-input `files[]` entries with `fileName` and `result` |
 | GocciaScriptLoader error display | Syntax errors show source context, caret, and suggestions |
 | GocciaScriptLoader coverage | `--coverage` summary, lcov/json file output, bytecode mode coverage, JSX source map translation for branch positions |
 | GocciaScriptLoader source maps | `--source-map` writes valid source map JSON; rejects stdin without explicit path |

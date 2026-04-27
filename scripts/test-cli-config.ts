@@ -286,6 +286,15 @@ console.log("TestRunner respects config...");
     const results = readFileSync(resultsPath, "utf-8");
     if (!results.includes('"mode": "bytecode"')) throw new Error(`TestRunner results should show bytecode mode`);
     if (!results.includes('"passed": 1')) throw new Error(`TestRunner results should show 1 passed`);
+    const resultsJson = JSON.parse(results);
+    if (typeof resultsJson.build?.version !== "string") throw new Error("TestRunner JSON build.version should be present");
+    if (resultsJson.fileName !== undefined) throw new Error(`TestRunner JSON fileName should only be present per-file, got ${resultsJson.fileName}`);
+    if (!Array.isArray(resultsJson.output)) throw new Error("TestRunner JSON output should be an array");
+    if (resultsJson.error !== null) throw new Error("TestRunner JSON error should be null");
+    if (typeof resultsJson.timing?.total_ns !== "number") throw new Error("TestRunner JSON timing.total_ns should be present");
+    if (typeof resultsJson.files?.[0]?.timing?.total_ns !== "number") throw new Error("TestRunner JSON per-file timing.total_ns should be present");
+    if (typeof resultsJson.memory?.gc?.liveBytes !== "number") throw new Error("TestRunner JSON memory.gc.liveBytes should be present");
+    if (typeof resultsJson.workers?.used !== "number") throw new Error("TestRunner JSON workers.used should be present");
   } finally {
     clean(tmp);
   }

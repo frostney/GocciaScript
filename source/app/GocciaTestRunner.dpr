@@ -31,6 +31,7 @@ uses
   Goccia.Parser,
   Goccia.SourceMap,
   Goccia.Builtins.TestingLibrary,
+  Goccia.CLI.JSON.Reporter,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
   Goccia.Timeout,
@@ -91,6 +92,10 @@ type
     Failed: Double;
     Skipped: Double;
     TotalTests: Double;
+    LexTimeNanoseconds: Int64;
+    ParseTimeNanoseconds: Int64;
+    CompileTimeNanoseconds: Int64;
+    ExecuteTimeNanoseconds: Int64;
     FailedTests: array of string;
     ErrorMessage: string;
   end;
@@ -102,6 +107,7 @@ type
     TotalCompileNanoseconds: Int64;
     TotalExecNanoseconds: Int64;
     JobCount: Integer;
+    MemoryStats: TCLIJSONMemoryStats;
     FileResults: array of TTestFilePerResult;
   end;
 
@@ -130,7 +136,8 @@ type
     procedure TestWorkerProc(const AFileName: string; const AIndex: Integer;
       out AConsoleOutput: string; out AErrorMessage: string; AData: Pointer);
     procedure WriteResultsJSON(const AResult: TAggregatedTestResult; const AFileName: string);
-    procedure WriteFileResults(ALines: TStringList; const AResult: TAggregatedTestResult);
+    procedure WriteFileResults(ALines: TStringList; const AResult: TAggregatedTestResult;
+      const APropertyName: string; const ATrailingComma: Boolean);
     procedure PrintTestResults(const AResult: TAggregatedTestResult);
   end;
 
@@ -218,6 +225,8 @@ procedure TTestRunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
   Files: TStringList;
   I: Integer;
+  AggregatedResult: TAggregatedTestResult;
+  MemoryMeasurement: TCLIJSONMemoryMeasurement;
 begin
   if APaths.Count = 0 then
   begin
@@ -259,16 +268,20 @@ begin
         WriteLn(SysUtils.Format('Running %d files', [Files.Count]));
     end;
 
+    BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
     if Files.Count = 1 then
     begin
       if not FNoProgress.Present then
         WriteLn('[1/1] ', Files[0]);
-      PrintTestResults(RunScriptFromFile(Files[0]));
+      AggregatedResult := RunScriptFromFile(Files[0]);
     end
     else if GetJobCount(Files.Count) > 1 then
-      PrintTestResults(RunScriptsFromFilesParallel(Files, GetJobCount(Files.Count)))
+      AggregatedResult := RunScriptsFromFilesParallel(Files, GetJobCount(Files.Count))
     else
-      PrintTestResults(RunScriptsFromFiles(Files));
+      AggregatedResult := RunScriptsFromFiles(Files);
+    AggregatedResult.MemoryStats :=
+      FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
+    PrintTestResults(AggregatedResult);
 
     if (CoverageOptions.Enabled.Present or CoverageOptions.Format.Present or
         CoverageOptions.OutputPath.Present) and
@@ -582,6 +595,10 @@ begin
     Result.TotalParseNanoseconds := FileResult.Timing.ParseTimeNanoseconds;
     Result.TotalCompileNanoseconds := FileResult.Timing.CompileTimeNanoseconds;
     Result.TotalExecNanoseconds := FileResult.Timing.ExecuteTimeNanoseconds;
+    Result.FileResults[0].LexTimeNanoseconds := FileResult.Timing.LexTimeNanoseconds;
+    Result.FileResults[0].ParseTimeNanoseconds := FileResult.Timing.ParseTimeNanoseconds;
+    Result.FileResults[0].CompileTimeNanoseconds := FileResult.Timing.CompileTimeNanoseconds;
+    Result.FileResults[0].ExecuteTimeNanoseconds := FileResult.Timing.ExecuteTimeNanoseconds;
     if Assigned(FileResult.TestResult) then
     begin
       Result.FileResults[0].Passed :=
@@ -706,6 +723,14 @@ begin
     { Per-file record for the JSON output — same schema as the parallel
       path so consumers do not have to branch on job count. }
     Result.FileResults[ProcessedCount].FileName := AFiles[I];
+    Result.FileResults[ProcessedCount].LexTimeNanoseconds :=
+      FileResult.TotalLexNanoseconds;
+    Result.FileResults[ProcessedCount].ParseTimeNanoseconds :=
+      FileResult.TotalParseNanoseconds;
+    Result.FileResults[ProcessedCount].CompileTimeNanoseconds :=
+      FileResult.TotalCompileNanoseconds;
+    Result.FileResults[ProcessedCount].ExecuteTimeNanoseconds :=
+      FileResult.TotalExecNanoseconds;
     Result.FileResults[ProcessedCount].Passed :=
       FileResult.TestResult.GetProperty('passed').ToNumberLiteral.Value;
     Result.FileResults[ProcessedCount].Failed :=
@@ -1025,6 +1050,10 @@ begin
       keeps the aggregated result self-contained once WorkerData goes
       out of scope. }
     Result.FileResults[I].FileName := AFiles[I];
+    Result.FileResults[I].LexTimeNanoseconds := Source^.LexNs;
+    Result.FileResults[I].ParseTimeNanoseconds := Source^.ParseNs;
+    Result.FileResults[I].CompileTimeNanoseconds := Source^.CompileNs;
+    Result.FileResults[I].ExecuteTimeNanoseconds := Source^.ExecNs;
     Result.FileResults[I].Passed := Source^.Passed;
     Result.FileResults[I].Failed := Source^.Failed;
     Result.FileResults[I].Skipped := Source^.Skipped;
@@ -1060,16 +1089,30 @@ var
   Lines: TStringList;
   TotalNanoseconds: Int64;
   IsBytecodeMode: Boolean;
+  FailedCount: Integer;
+  Timing: TCLIJSONTiming;
 begin
   IsBytecodeMode := EngineOptions.Mode.Matches(emBytecode);
+  FailedCount := Round(AResult.TestResult.GetProperty('failed').ToNumberLiteral.Value);
   if IsBytecodeMode then
     TotalNanoseconds := AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds
   else
     TotalNanoseconds := AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds;
+  Timing.LexTimeNanoseconds := AResult.TotalLexNanoseconds;
+  Timing.ParseTimeNanoseconds := AResult.TotalParseNanoseconds;
+  Timing.CompileTimeNanoseconds := AResult.TotalCompileNanoseconds;
+  Timing.ExecuteTimeNanoseconds := AResult.TotalExecNanoseconds;
+  Timing.TotalTimeNanoseconds := TotalNanoseconds;
 
   Lines := TStringList.Create;
   try
     Lines.Add('{');
+    Lines.Add('  ' + BuildCLIBuildJSON + ',');
+    Lines.Add(Format('  "ok": %s,', [BoolToStr(FailedCount = 0, 'true', 'false')]));
+    Lines.Add('  "stdout": "",');
+    Lines.Add('  "stderr": "",');
+    Lines.Add('  ' + BuildCLIOutputJSON('') + ',');
+    Lines.Add('  "error": null,');
     Lines.Add(Format('  "mode": "%s",', [IfThen(IsBytecodeMode, 'bytecode', 'interpreted')]));
     Lines.Add(Format('  "jobCount": %d,', [AResult.JobCount]));
     Lines.Add(Format('  "totalFiles": %d,', [Round(AResult.TestResult.GetProperty('totalTests').ToNumberLiteral.Value)]));
@@ -1085,6 +1128,9 @@ begin
       Lines.Add(Format('  "compileTimeNanoseconds": %d,', [AResult.TotalCompileNanoseconds]));
     Lines.Add(Format('  "executeTimeNanoseconds": %d,', [AResult.TotalExecNanoseconds]));
     Lines.Add(Format('  "totalEngineNanoseconds": %d,', [TotalNanoseconds]));
+    Lines.Add('  ' + BuildCLITimingJSON(Timing) + ',');
+    Lines.Add('  ' + BuildCLIMemoryJSON(AResult.MemoryStats) + ',');
+    Lines.Add('  ' + BuildCLIWorkersJSON(AResult.JobCount, AResult.JobCount) + ',');
 
     { Per-file results. External harnesses (the test262 driver) use
       this to map each input file to an explicit pass/fail outcome
@@ -1097,7 +1143,8 @@ begin
       occasionally produced torn AnsiString refcount reads, corrupting
       the serialised JSON. The per-file records below carry the same
       information and are written from main-thread-owned data only. }
-    WriteFileResults(Lines, AResult);
+    WriteFileResults(Lines, AResult, 'files', True);
+    WriteFileResults(Lines, AResult, 'results', False);
 
     Lines.Add('}');
     Lines.SaveToFile(AFileName);
@@ -1107,17 +1154,22 @@ begin
 end;
 
 procedure TTestRunnerApp.WriteFileResults(ALines: TStringList;
-  const AResult: TAggregatedTestResult);
+  const AResult: TAggregatedTestResult; const APropertyName: string;
+  const ATrailingComma: Boolean);
 var
   I, J, Count: Integer;
   Fr: TTestFilePerResult;
   Entry, FailedList: TStringBuilder;
+  Timing: TCLIJSONTiming;
+  ErrorJSON: string;
 begin
-  ALines.Add('  "results": [');
+  ALines.Add(Format('  "%s": [', [EscapeJSONString(APropertyName)]));
   Count := Length(AResult.FileResults);
   if Count = 0 then
   begin
     ALines.Add('  ]');
+    if ATrailingComma then
+      ALines[ALines.Count - 1] := ALines[ALines.Count - 1] + ',';
     Exit;
   end;
 
@@ -1137,9 +1189,24 @@ begin
       end;
 
       Entry.Clear;
-      Entry.Append('    {"file": "');
-      Entry.Append(EscapeJSONString(Fr.FileName));
-      Entry.Append('", "passed": ');
+      Timing.LexTimeNanoseconds := Fr.LexTimeNanoseconds;
+      Timing.ParseTimeNanoseconds := Fr.ParseTimeNanoseconds;
+      Timing.CompileTimeNanoseconds := Fr.CompileTimeNanoseconds;
+      Timing.ExecuteTimeNanoseconds := Fr.ExecuteTimeNanoseconds;
+      Timing.TotalTimeNanoseconds := Fr.LexTimeNanoseconds +
+        Fr.ParseTimeNanoseconds + Fr.CompileTimeNanoseconds +
+        Fr.ExecuteTimeNanoseconds;
+      if Fr.ErrorMessage = '' then
+        ErrorJSON := 'null'
+      else
+        ErrorJSON := '{"message": "' + EscapeJSONString(Fr.ErrorMessage) + '"}';
+
+      Entry.Append('    {');
+      Entry.Append(BuildCLIFileBaseJSON(Fr.FileName,
+        (Fr.Failed = 0) and (Fr.ErrorMessage = ''), '', '', '', ErrorJSON,
+        Timing, '"memory":null'));
+      Entry.Append(', ');
+      Entry.Append('"passed": ');
       Entry.Append(Round(Fr.Passed));
       Entry.Append(', "failed": ');
       Entry.Append(Round(Fr.Failed));
@@ -1147,7 +1214,7 @@ begin
       Entry.Append(Round(Fr.Skipped));
       Entry.Append(', "totalTests": ');
       Entry.Append(Round(Fr.TotalTests));
-      Entry.Append(', "error": "');
+      Entry.Append(', "errorMessage": "');
       Entry.Append(EscapeJSONString(Fr.ErrorMessage));
       Entry.Append('", "failedTests": [');
       Entry.Append(FailedList.ToString);
@@ -1161,6 +1228,8 @@ begin
     FailedList.Free;
   end;
   ALines.Add('  ]');
+  if ATrailingComma then
+    ALines[ALines.Count - 1] := ALines[ALines.Count - 1] + ',';
 end;
 
 procedure TTestRunnerApp.PrintTestResults(const AResult: TAggregatedTestResult);
