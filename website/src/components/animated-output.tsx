@@ -10,7 +10,12 @@ export type AnimatedOutputLine = {
 };
 
 /** Duration of the command-line typewriter reveal (ms). Output lines
- *  stagger after this so the command finishes "typing" first. */
+ *  stagger after this so the command finishes "typing" first.
+ *
+ *  These values must stay in sync with the CSS in globals.css:
+ *  - TYPEWRITER_MS ↔ `typewriter-expand` duration and
+ *    `caret-typing-hide` delay (both `0.6s`)
+ *  - STAGGER_MS ↔ `animationDelay` on `.anim-output-line` (inline) */
 const TYPEWRITER_MS = 600;
 const STAGGER_MS = 60;
 

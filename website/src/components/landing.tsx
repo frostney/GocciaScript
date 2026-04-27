@@ -146,7 +146,7 @@ function HeroRunnableCard({ code }: { code: string }) {
           totalMs !== undefined ? ` · ${totalMs.toFixed(2)}ms` : ""
         }`,
       });
-      // Pad to 7 lines so the hero console keeps a fixed height.
+      // Pad to 5 lines so the hero console keeps a fixed height.
       while (lines.length < 5) {
         lines.push({ kind: "meta", text: "" });
       }
