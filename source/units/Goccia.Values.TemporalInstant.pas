@@ -376,6 +376,7 @@ begin
 
   OptionsObj := GetDiffOptions(AArgs, 1);
   LargestUnit := GetLargestUnit(OptionsObj, tuHour);
+  if LargestUnit = tuAuto then LargestUnit := tuHour;
   if not (LargestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
     ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.until', 'largestUnit']), SSuggestTemporalValidUnits);
 
@@ -410,6 +411,7 @@ begin
 
   OptionsObj := GetDiffOptions(AArgs, 1);
   LargestUnit := GetLargestUnit(OptionsObj, tuHour);
+  if LargestUnit = tuAuto then LargestUnit := tuHour;
   if not (LargestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
     ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.since', 'largestUnit']), SSuggestTemporalValidUnits);
 

@@ -456,6 +456,7 @@ begin
 
   OptionsObj := GetDiffOptions(AArgs, 1);
   LargestUnit := GetLargestUnit(OptionsObj, tuYear);
+  if LargestUnit = tuAuto then LargestUnit := tuYear;
   if not (LargestUnit in [tuYear, tuMonth]) then
     ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainYearMonth.prototype.until', 'largestUnit']), SSuggestTemporalValidUnits);
 
@@ -491,6 +492,7 @@ begin
 
   OptionsObj := GetDiffOptions(AArgs, 1);
   LargestUnit := GetLargestUnit(OptionsObj, tuYear);
+  if LargestUnit = tuAuto then LargestUnit := tuYear;
   if not (LargestUnit in [tuYear, tuMonth]) then
     ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainYearMonth.prototype.since', 'largestUnit']), SSuggestTemporalValidUnits);
 

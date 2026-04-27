@@ -27,7 +27,7 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.until", () => {
   test("until() with largestUnit minutes", () => {
     const i1 = Temporal.Instant.fromEpochMilliseconds(0);
     const i2 = Temporal.Instant.fromEpochMilliseconds(90061000);
-    expect(i2.until === undefined ? "missing" : i1.until(i2, { largestUnit: "minutes" }).toString()).toBe("PT1501M1S");
+    expect(i1.until(i2, { largestUnit: "minutes" }).toString()).toBe("PT1501M1S");
   });
 
   test("until() with largestUnit seconds", () => {

@@ -870,32 +870,10 @@ end;
 function ZonedDiffToUnits(const ADiffMs: Int64; const ADiffSubMs: Integer;
   const ALargestUnit: TTemporalUnit): TGocciaValue;
 var
-  TotalSec, TotalMin, TotalDays, RemMs: Int64;
+  TotalSec, TotalMin: Int64;
+  RemMs: Int64;
 begin
   case ALargestUnit of
-    tuDay:
-    begin
-      TotalDays := ADiffMs div MILLISECONDS_PER_DAY;
-      RemMs := ADiffMs mod MILLISECONDS_PER_DAY;
-      // Normalize remainder sign with days sign
-      if (TotalDays > 0) and (RemMs < 0) then
-      begin
-        Dec(TotalDays);
-        RemMs := RemMs + MILLISECONDS_PER_DAY;
-      end
-      else if (TotalDays < 0) and (RemMs > 0) then
-      begin
-        Inc(TotalDays);
-        RemMs := RemMs - MILLISECONDS_PER_DAY;
-      end;
-      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, TotalDays,
-        RemMs div MILLISECONDS_PER_HOUR,
-        (RemMs mod MILLISECONDS_PER_HOUR) div MILLISECONDS_PER_MINUTE,
-        ((RemMs mod MILLISECONDS_PER_HOUR) mod MILLISECONDS_PER_MINUTE) div MILLISECONDS_PER_SECOND,
-        ((RemMs mod MILLISECONDS_PER_HOUR) mod MILLISECONDS_PER_MINUTE) mod MILLISECONDS_PER_SECOND,
-        ADiffSubMs div 1000,
-        ADiffSubMs mod 1000);
-    end;
     tuHour:
       Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0,
         ADiffMs div MILLISECONDS_PER_HOUR,
@@ -960,10 +938,11 @@ begin
 
   OptionsObj := GetDiffOptions(AArgs, 1);
   LargestUnit := GetLargestUnit(OptionsObj, tuHour);
+  if LargestUnit = tuAuto then LargestUnit := tuHour;
 
-  if LargestUnit in [tuYear, tuMonth, tuWeek] then
+  if LargestUnit in [tuYear, tuMonth, tuWeek, tuDay] then
   begin
-    // Calendar-aware: use wall-clock components
+    // Calendar-aware: use wall-clock components (DST-correct for day counting)
     ComputeLocalComponents(Zdt, Y1, M1, D1, H1, Mi1, S1, Ms1, Us1, Ns1);
     ComputeLocalComponents(Other, Y2, M2, D2, H2, Mi2, S2, Ms2, Us2, Ns2);
 
@@ -1055,8 +1034,9 @@ begin
 
   OptionsObj := GetDiffOptions(AArgs, 1);
   LargestUnit := GetLargestUnit(OptionsObj, tuHour);
+  if LargestUnit = tuAuto then LargestUnit := tuHour;
 
-  if LargestUnit in [tuYear, tuMonth, tuWeek] then
+  if LargestUnit in [tuYear, tuMonth, tuWeek, tuDay] then
   begin
     // Calendar-aware: since = other.until(this) with same options
     ComputeLocalComponents(Other, Y1, M1, D1, H1, Mi1, S1, Ms1, Us1, Ns1);

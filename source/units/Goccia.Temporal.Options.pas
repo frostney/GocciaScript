@@ -787,8 +787,12 @@ var
 begin
   Result := nil;
   Arg := AArgs.GetElement(AIndex);
+  if (Arg = nil) or (Arg is TGocciaUndefinedLiteralValue) then
+    Exit;
   if Arg is TGocciaObjectValue then
-    Result := TGocciaObjectValue(Arg);
+    Result := TGocciaObjectValue(Arg)
+  else
+    ThrowTypeError('Options argument must be an object or undefined', '');
 end;
 
 end.
