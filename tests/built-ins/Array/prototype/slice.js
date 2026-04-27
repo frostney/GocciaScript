@@ -182,6 +182,17 @@ test("slice on generic array-like with large positive start and end", () => {
   expect(result).toEqual(["x", "y"]);
 });
 
+test("slice with negative indices on generic array-like with length > 2**31", () => {
+  const len = 2 ** 33;
+  const obj = { length: len };
+  obj[len - 3] = "a";
+  obj[len - 2] = "b";
+  const result = Array.prototype.slice.call(obj, -3, -1);
+  expect(result.length).toBe(2);
+  expect(result[0]).toBe("a");
+  expect(result[1]).toBe("b");
+});
+
 test("slice window crossing the 2**31 boundary on generic array-like", () => {
   const boundary = 2 ** 31 - 1;
   const obj = { length: 2 ** 33 };
