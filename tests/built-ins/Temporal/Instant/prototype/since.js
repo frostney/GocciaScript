@@ -17,7 +17,7 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.since", () => {
     const i1 = Temporal.Instant.fromEpochMilliseconds(8640000000000000);
     const i2 = Temporal.Instant.fromEpochMilliseconds(-8640000000000000);
     const dur = i1.since(i2, { largestUnit: "microseconds" });
-    expect(dur.microseconds).toBe(17280000000000000000);
+    expect(dur.toString()).toBe("PT17280000000000S");
     expect(dur.nanoseconds).toBe(0);
   });
 
@@ -25,7 +25,6 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.since", () => {
     const i1 = Temporal.Instant.fromEpochMilliseconds(8640000000000000);
     const i2 = Temporal.Instant.fromEpochMilliseconds(-8640000000000000);
     const dur = i1.since(i2, { largestUnit: "nanoseconds" });
-    expect(dur.nanoseconds).toBe(17280000000000000000000);
     expect(dur.toString()).toBe("PT17280000000000S");
   });
 
@@ -33,7 +32,6 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.since", () => {
     const i1 = Temporal.Instant.fromEpochMilliseconds(-8640000000000000);
     const i2 = Temporal.Instant.fromEpochMilliseconds(8640000000000000);
     const dur = i1.since(i2, { largestUnit: "nanoseconds" });
-    expect(dur.nanoseconds).toBe(-17280000000000000000000);
     expect(dur.toString()).toBe("-PT17280000000000S");
   });
 

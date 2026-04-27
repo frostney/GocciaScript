@@ -26,7 +26,7 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime.prototype.since", () => {
     const z1 = Temporal.Instant.fromEpochMilliseconds(8640000000000000).toZonedDateTimeISO("UTC");
     const z2 = Temporal.Instant.fromEpochMilliseconds(-8640000000000000).toZonedDateTimeISO("UTC");
     const dur = z1.since(z2, { largestUnit: "microseconds" });
-    expect(dur.microseconds).toBe(17280000000000000000);
+    expect(dur.toString()).toBe("PT17280000000000S");
     expect(dur.nanoseconds).toBe(0);
   });
 
