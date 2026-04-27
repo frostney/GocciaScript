@@ -867,73 +867,247 @@ begin
   end;
 end;
 
+function ZonedDiffToUnits(const ADiffMs: Int64; const ADiffSubMs: Integer;
+  const ALargestUnit: TTemporalUnit): TGocciaValue;
+var
+  TotalSec, TotalMin: Int64;
+  RemMs: Int64;
+begin
+  case ALargestUnit of
+    tuHour:
+      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0,
+        ADiffMs div MILLISECONDS_PER_HOUR,
+        (ADiffMs mod MILLISECONDS_PER_HOUR) div MILLISECONDS_PER_MINUTE,
+        ((ADiffMs mod MILLISECONDS_PER_HOUR) mod MILLISECONDS_PER_MINUTE) div MILLISECONDS_PER_SECOND,
+        ((ADiffMs mod MILLISECONDS_PER_HOUR) mod MILLISECONDS_PER_MINUTE) mod MILLISECONDS_PER_SECOND,
+        ADiffSubMs div 1000,
+        ADiffSubMs mod 1000);
+    tuMinute:
+    begin
+      TotalMin := ADiffMs div MILLISECONDS_PER_MINUTE;
+      RemMs := ADiffMs mod MILLISECONDS_PER_MINUTE;
+      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0,
+        TotalMin,
+        RemMs div MILLISECONDS_PER_SECOND,
+        RemMs mod MILLISECONDS_PER_SECOND,
+        ADiffSubMs div 1000,
+        ADiffSubMs mod 1000);
+    end;
+    tuSecond:
+    begin
+      TotalSec := ADiffMs div MILLISECONDS_PER_SECOND;
+      RemMs := ADiffMs mod MILLISECONDS_PER_SECOND;
+      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0,
+        TotalSec,
+        RemMs,
+        ADiffSubMs div 1000,
+        ADiffSubMs mod 1000);
+    end;
+    tuMillisecond:
+      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0,
+        ADiffMs,
+        ADiffSubMs div 1000,
+        ADiffSubMs mod 1000);
+    tuMicrosecond:
+      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0,
+        ADiffMs * 1000 + ADiffSubMs div 1000,
+        ADiffSubMs mod 1000);
+  else // tuNanosecond
+    Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0, 0,
+      ADiffMs * 1000000 + ADiffSubMs);
+  end;
+end;
+
 // TC39 Temporal §6.3.28 Temporal.ZonedDateTime.prototype.until(other [, options])
 function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Zdt, Other: TGocciaTemporalZonedDateTimeValue;
+  OptionsObj: TGocciaObjectValue;
+  LargestUnit: TTemporalUnit;
   DiffMs: Int64;
   DiffSubMs: Integer;
+  Y1, M1, D1, H1, Mi1, S1, Ms1, Us1, Ns1: Integer;
+  Y2, M2, D2, H2, Mi2, S2, Ms2, Us2, Ns2: Integer;
+  T1Ns, T2Ns, TimeDiffNs, TotalNs, Sgn, AbsTimeNs: Int64;
+  AdjDate: TTemporalDateRecord;
+  AdjY2, AdjM2, AdjD2: Integer;
+  Years, Months, Weeks, Days: Int64;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.until');
   Other := CoerceZonedDateTime(AArgs.GetElement(0), 'ZonedDateTime.prototype.until');
 
-  DiffMs := Other.FEpochMilliseconds - Zdt.FEpochMilliseconds;
-  DiffSubMs := Other.FSubMillisecondNanoseconds - Zdt.FSubMillisecondNanoseconds;
+  OptionsObj := GetDiffOptions(AArgs, 1);
+  LargestUnit := GetLargestUnit(OptionsObj, tuHour);
+  if LargestUnit = tuAuto then LargestUnit := tuHour;
 
-  // Normalize so DiffMs and DiffSubMs share the same sign
-  if (DiffMs > 0) and (DiffSubMs < 0) then
+  if LargestUnit in [tuYear, tuMonth, tuWeek, tuDay] then
   begin
-    Dec(DiffMs);
-    Inc(DiffSubMs, SUB_MS_NANOSECOND_LIMIT);
+    // Calendar-aware: use wall-clock components (DST-correct for day counting)
+    ComputeLocalComponents(Zdt, Y1, M1, D1, H1, Mi1, S1, Ms1, Us1, Ns1);
+    ComputeLocalComponents(Other, Y2, M2, D2, H2, Mi2, S2, Ms2, Us2, Ns2);
+
+    T1Ns := Int64(Ns1) + Int64(Us1) * 1000 + Int64(Ms1) * 1000000 +
+             Int64(S1) * Int64(1000000000) + Int64(Mi1) * Int64(60000000000) +
+             Int64(H1) * Int64(3600000000000);
+    T2Ns := Int64(Ns2) + Int64(Us2) * 1000 + Int64(Ms2) * 1000000 +
+             Int64(S2) * Int64(1000000000) + Int64(Mi2) * Int64(60000000000) +
+             Int64(H2) * Int64(3600000000000);
+    TimeDiffNs := T2Ns - T1Ns;
+
+    TotalNs := (DateToEpochDays(Y2, M2, D2) - DateToEpochDays(Y1, M1, D1)) *
+               Int64(86400000000000) + TimeDiffNs;
+
+    if TotalNs > 0 then
+      Sgn := 1
+    else if TotalNs < 0 then
+      Sgn := -1
+    else
+    begin
+      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+      Exit;
+    end;
+
+    AdjY2 := Y2; AdjM2 := M2; AdjD2 := D2;
+    if (Sgn > 0) and (TimeDiffNs < 0) then
+    begin
+      AdjDate := AddDaysToDate(AdjY2, AdjM2, AdjD2, -1);
+      AdjY2 := AdjDate.Year; AdjM2 := AdjDate.Month; AdjD2 := AdjDate.Day;
+      TimeDiffNs := TimeDiffNs + Int64(86400000000000);
+    end
+    else if (Sgn < 0) and (TimeDiffNs > 0) then
+    begin
+      AdjDate := AddDaysToDate(AdjY2, AdjM2, AdjD2, 1);
+      AdjY2 := AdjDate.Year; AdjM2 := AdjDate.Month; AdjD2 := AdjDate.Day;
+      TimeDiffNs := TimeDiffNs - Int64(86400000000000);
+    end;
+
+    CalendarDateUntil(Y1, M1, D1, AdjY2, AdjM2, AdjD2, LargestUnit,
+      Years, Months, Weeks, Days);
+
+    AbsTimeNs := Abs(TimeDiffNs);
+    Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days,
+      Sgn * (AbsTimeNs div Int64(3600000000000)),
+      Sgn * ((AbsTimeNs div Int64(60000000000)) mod 60),
+      Sgn * ((AbsTimeNs div Int64(1000000000)) mod 60),
+      Sgn * ((AbsTimeNs div 1000000) mod 1000),
+      Sgn * ((AbsTimeNs div 1000) mod 1000),
+      Sgn * (AbsTimeNs mod 1000));
   end
-  else if (DiffMs < 0) and (DiffSubMs > 0) then
+  else
   begin
-    Inc(DiffMs);
-    Dec(DiffSubMs, SUB_MS_NANOSECOND_LIMIT);
-  end;
+    // Sub-day or day: use epoch difference
+    DiffMs := Other.FEpochMilliseconds - Zdt.FEpochMilliseconds;
+    DiffSubMs := Other.FSubMillisecondNanoseconds - Zdt.FSubMillisecondNanoseconds;
 
-  // Decompose ms into hours/minutes/seconds/ms without collapsing to total ns
-  Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0,
-    DiffMs div MILLISECONDS_PER_HOUR,
-    (DiffMs mod MILLISECONDS_PER_HOUR) div MILLISECONDS_PER_MINUTE,
-    ((DiffMs mod MILLISECONDS_PER_HOUR) mod MILLISECONDS_PER_MINUTE) div MILLISECONDS_PER_SECOND,
-    ((DiffMs mod MILLISECONDS_PER_HOUR) mod MILLISECONDS_PER_MINUTE) mod MILLISECONDS_PER_SECOND,
-    DiffSubMs div 1000,
-    DiffSubMs mod 1000);
+    if (DiffMs > 0) and (DiffSubMs < 0) then
+    begin
+      Dec(DiffMs);
+      Inc(DiffSubMs, SUB_MS_NANOSECOND_LIMIT);
+    end
+    else if (DiffMs < 0) and (DiffSubMs > 0) then
+    begin
+      Inc(DiffMs);
+      Dec(DiffSubMs, SUB_MS_NANOSECOND_LIMIT);
+    end;
+
+    Result := ZonedDiffToUnits(DiffMs, DiffSubMs, LargestUnit);
+  end;
 end;
 
 // TC39 Temporal §6.3.29 Temporal.ZonedDateTime.prototype.since(other [, options])
 function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Zdt, Other: TGocciaTemporalZonedDateTimeValue;
+  OptionsObj: TGocciaObjectValue;
+  LargestUnit: TTemporalUnit;
   DiffMs: Int64;
   DiffSubMs: Integer;
+  Y1, M1, D1, H1, Mi1, S1, Ms1, Us1, Ns1: Integer;
+  Y2, M2, D2, H2, Mi2, S2, Ms2, Us2, Ns2: Integer;
+  T1Ns, T2Ns, TimeDiffNs, TotalNs, Sgn, AbsTimeNs: Int64;
+  AdjDate: TTemporalDateRecord;
+  AdjY1, AdjM1, AdjD1: Integer;
+  Years, Months, Weeks, Days: Int64;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.since');
   Other := CoerceZonedDateTime(AArgs.GetElement(0), 'ZonedDateTime.prototype.since');
 
-  DiffMs := Zdt.FEpochMilliseconds - Other.FEpochMilliseconds;
-  DiffSubMs := Zdt.FSubMillisecondNanoseconds - Other.FSubMillisecondNanoseconds;
+  OptionsObj := GetDiffOptions(AArgs, 1);
+  LargestUnit := GetLargestUnit(OptionsObj, tuHour);
+  if LargestUnit = tuAuto then LargestUnit := tuHour;
 
-  // Normalize so DiffMs and DiffSubMs share the same sign
-  if (DiffMs > 0) and (DiffSubMs < 0) then
+  if LargestUnit in [tuYear, tuMonth, tuWeek, tuDay] then
   begin
-    Dec(DiffMs);
-    Inc(DiffSubMs, SUB_MS_NANOSECOND_LIMIT);
+    // Calendar-aware: since = other.until(this) with same options
+    ComputeLocalComponents(Other, Y1, M1, D1, H1, Mi1, S1, Ms1, Us1, Ns1);
+    ComputeLocalComponents(Zdt, Y2, M2, D2, H2, Mi2, S2, Ms2, Us2, Ns2);
+
+    T1Ns := Int64(Ns1) + Int64(Us1) * 1000 + Int64(Ms1) * 1000000 +
+             Int64(S1) * Int64(1000000000) + Int64(Mi1) * Int64(60000000000) +
+             Int64(H1) * Int64(3600000000000);
+    T2Ns := Int64(Ns2) + Int64(Us2) * 1000 + Int64(Ms2) * 1000000 +
+             Int64(S2) * Int64(1000000000) + Int64(Mi2) * Int64(60000000000) +
+             Int64(H2) * Int64(3600000000000);
+    TimeDiffNs := T2Ns - T1Ns;
+
+    TotalNs := (DateToEpochDays(Y2, M2, D2) - DateToEpochDays(Y1, M1, D1)) *
+               Int64(86400000000000) + TimeDiffNs;
+
+    if TotalNs > 0 then
+      Sgn := 1
+    else if TotalNs < 0 then
+      Sgn := -1
+    else
+    begin
+      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+      Exit;
+    end;
+
+    AdjY1 := Y2; AdjM1 := M2; AdjD1 := D2;
+    if (Sgn > 0) and (TimeDiffNs < 0) then
+    begin
+      AdjDate := AddDaysToDate(AdjY1, AdjM1, AdjD1, -1);
+      AdjY1 := AdjDate.Year; AdjM1 := AdjDate.Month; AdjD1 := AdjDate.Day;
+      TimeDiffNs := TimeDiffNs + Int64(86400000000000);
+    end
+    else if (Sgn < 0) and (TimeDiffNs > 0) then
+    begin
+      AdjDate := AddDaysToDate(AdjY1, AdjM1, AdjD1, 1);
+      AdjY1 := AdjDate.Year; AdjM1 := AdjDate.Month; AdjD1 := AdjDate.Day;
+      TimeDiffNs := TimeDiffNs - Int64(86400000000000);
+    end;
+
+    CalendarDateUntil(Y1, M1, D1, AdjY1, AdjM1, AdjD1, LargestUnit,
+      Years, Months, Weeks, Days);
+
+    AbsTimeNs := Abs(TimeDiffNs);
+    Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days,
+      Sgn * (AbsTimeNs div Int64(3600000000000)),
+      Sgn * ((AbsTimeNs div Int64(60000000000)) mod 60),
+      Sgn * ((AbsTimeNs div Int64(1000000000)) mod 60),
+      Sgn * ((AbsTimeNs div 1000000) mod 1000),
+      Sgn * ((AbsTimeNs div 1000) mod 1000),
+      Sgn * (AbsTimeNs mod 1000));
   end
-  else if (DiffMs < 0) and (DiffSubMs > 0) then
+  else
   begin
-    Inc(DiffMs);
-    Dec(DiffSubMs, SUB_MS_NANOSECOND_LIMIT);
-  end;
+    // Sub-day or day: use epoch difference (this - other)
+    DiffMs := Zdt.FEpochMilliseconds - Other.FEpochMilliseconds;
+    DiffSubMs := Zdt.FSubMillisecondNanoseconds - Other.FSubMillisecondNanoseconds;
 
-  Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0,
-    DiffMs div MILLISECONDS_PER_HOUR,
-    (DiffMs mod MILLISECONDS_PER_HOUR) div MILLISECONDS_PER_MINUTE,
-    ((DiffMs mod MILLISECONDS_PER_HOUR) mod MILLISECONDS_PER_MINUTE) div MILLISECONDS_PER_SECOND,
-    ((DiffMs mod MILLISECONDS_PER_HOUR) mod MILLISECONDS_PER_MINUTE) mod MILLISECONDS_PER_SECOND,
-    DiffSubMs div 1000,
-    DiffSubMs mod 1000);
+    if (DiffMs > 0) and (DiffSubMs < 0) then
+    begin
+      Dec(DiffMs);
+      Inc(DiffSubMs, SUB_MS_NANOSECOND_LIMIT);
+    end
+    else if (DiffMs < 0) and (DiffSubMs > 0) then
+    begin
+      Inc(DiffMs);
+      Dec(DiffSubMs, SUB_MS_NANOSECOND_LIMIT);
+    end;
+
+    Result := ZonedDiffToUnits(DiffMs, DiffSubMs, LargestUnit);
+  end;
 end;
 
 // TC39 Temporal §6.3.30 Temporal.ZonedDateTime.prototype.round(roundTo)

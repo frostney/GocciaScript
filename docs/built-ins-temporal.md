@@ -86,7 +86,7 @@ Represents a calendar date without time or timezone.
 |--------|-------------|
 | `with(fields)` | Return new date with overridden fields |
 | `add(duration)` / `subtract(duration)` | Date arithmetic |
-| `until(other)` / `since(other)` | Difference as Duration |
+| `until(other [, options])` / `since(other [, options])` | Difference as Duration. Options: `{ largestUnit }` where `largestUnit` is `"year"`, `"month"`, `"week"`, or `"day"` (default `"day"`). |
 | `equals(other)` | Equality check |
 | `toPlainDateTime(time?)` | Combine with a time |
 | `toPlainYearMonth()` | Extract year and month as PlainYearMonth |
@@ -139,7 +139,7 @@ Represents a date and time without timezone. Combines PlainDate and PlainTime.
 | `with(fields)` | Return new date-time with overridden fields |
 | `withPlainTime(time?)` | Replace time component |
 | `add(duration)` / `subtract(duration)` | Date-time arithmetic |
-| `until(other)` / `since(other)` | Difference as Duration |
+| `until(other [, options])` / `since(other [, options])` | Difference as Duration. Options: `{ largestUnit }` — any unit from `"year"` to `"nanosecond"` (default `"day"`). |
 | `round(options)` | Round to nearest unit. Accepts a string (smallestUnit) or options object `{ smallestUnit, roundingMode, roundingIncrement }`. |
 | `equals(other)` | Equality check |
 | `toPlainDate()` / `toPlainTime()` | Extract date or time component |
@@ -169,7 +169,7 @@ Represents an absolute point in time (epoch-based), independent of calendar or t
 | Method | Description |
 |--------|-------------|
 | `add(duration)` / `subtract(duration)` | Time arithmetic (no calendar units) |
-| `until(other)` / `since(other)` | Difference as Duration |
+| `until(other [, options])` / `since(other [, options])` | Difference as Duration. Options: `{ largestUnit }` — `"hour"` through `"nanosecond"` (default `"hour"`). Calendar units not allowed. |
 | `round(options)` | Round to nearest unit. Accepts a string (smallestUnit) or options object `{ smallestUnit, roundingMode, roundingIncrement }`. |
 | `equals(other)` | Equality check |
 | `toString([options])` / `toJSON()` | ISO string with UTC (e.g., `"2024-03-15T13:45:30Z"`). `toString` accepts `{ fractionalSecondDigits }` (0-9 or `"auto"`). |
@@ -197,7 +197,7 @@ Represents a year and month without a day, time, or timezone.
 |--------|-------------|
 | `with(fields)` | Return new year-month with overridden fields |
 | `add(duration)` / `subtract(duration)` | Year-month arithmetic (years and months only) |
-| `until(other)` / `since(other)` | Difference as Duration (years and months) |
+| `until(other [, options])` / `since(other [, options])` | Difference as Duration. Options: `{ largestUnit }` — `"year"` (default) or `"month"`. |
 | `equals(other)` | Equality check |
 | `toPlainDate(item)` | Combine with a day (`{ day }`) to create a PlainDate |
 | `toString()` / `toJSON()` | ISO string (e.g., `"2024-03"`) |
@@ -260,7 +260,7 @@ Represents an absolute date and time in a specific timezone. Combines an instant
 | `withPlainTime(time?)` | Replace time component |
 | `withTimeZone(timeZone)` | Re-interpret the same instant in a different timezone |
 | `add(duration)` / `subtract(duration)` | Date-time arithmetic |
-| `until(other)` / `since(other)` | Difference as Duration |
+| `until(other [, options])` / `since(other [, options])` | Difference as Duration. Options: `{ largestUnit }` — any unit from `"year"` to `"nanosecond"` (default `"hour"`). |
 | `round(options)` | Round to nearest unit. Accepts a string (smallestUnit) or options object `{ smallestUnit, roundingMode, roundingIncrement }`. |
 | `equals(other)` | Equality check |
 | `startOfDay()` | Return ZonedDateTime at the start of the wall-clock day |

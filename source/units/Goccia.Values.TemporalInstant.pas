@@ -309,15 +309,76 @@ begin
   Result := TGocciaTemporalInstantValue.Create(NewMs, NewSubMs);
 end;
 
+function InstantDiffToUnits(const ADiffMs: Int64; const ADiffSubMs: Integer;
+  const ALargestUnit: TTemporalUnit): TGocciaValue;
+var
+  Ms, SubMs: Int64;
+  TotalSec, TotalMin: Int64;
+begin
+  Ms := ADiffMs;
+  SubMs := ADiffSubMs;
+
+  case ALargestUnit of
+    tuHour:
+      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0,
+        Ms div 3600000,
+        (Ms mod 3600000) div 60000,
+        ((Ms mod 3600000) mod 60000) div 1000,
+        ((Ms mod 3600000) mod 60000) mod 1000,
+        SubMs div 1000,
+        SubMs mod 1000);
+    tuMinute:
+    begin
+      TotalMin := Ms div 60000;
+      Ms := Ms mod 60000;
+      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0,
+        TotalMin,
+        Ms div 1000,
+        Ms mod 1000,
+        SubMs div 1000,
+        SubMs mod 1000);
+    end;
+    tuSecond:
+    begin
+      TotalSec := Ms div 1000;
+      Ms := Ms mod 1000;
+      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0,
+        TotalSec,
+        Ms,
+        SubMs div 1000,
+        SubMs mod 1000);
+    end;
+    tuMillisecond:
+      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0,
+        Ms,
+        SubMs div 1000,
+        SubMs mod 1000);
+    tuMicrosecond:
+      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0,
+        Ms * 1000 + SubMs div 1000,
+        SubMs mod 1000);
+  else // tuNanosecond
+    Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0, 0,
+      Ms * 1000000 + SubMs);
+  end;
+end;
+
 function TGocciaTemporalInstantValue.InstantUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Inst, Other: TGocciaTemporalInstantValue;
+  OptionsObj: TGocciaObjectValue;
+  LargestUnit: TTemporalUnit;
   DiffMs: Int64;
   DiffSubMs: Integer;
-  RemMs: Int64;
 begin
   Inst := AsInstant(AThisValue, 'Instant.prototype.until');
   Other := CoerceInstant(AArgs.GetElement(0), 'Instant.prototype.until');
+
+  OptionsObj := GetDiffOptions(AArgs, 1);
+  LargestUnit := GetLargestUnit(OptionsObj, tuHour);
+  if LargestUnit = tuAuto then LargestUnit := tuHour;
+  if not (LargestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
+    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.until', 'largestUnit']), SSuggestTemporalValidUnits);
 
   DiffMs := Other.FEpochMilliseconds - Inst.FEpochMilliseconds;
   DiffSubMs := Other.FSubMillisecondNanoseconds - Inst.FSubMillisecondNanoseconds;
@@ -334,26 +395,25 @@ begin
     Dec(DiffSubMs, 1000000);
   end;
 
-  // Decompose ms into hours/minutes/seconds/ms without collapsing to total ns
-  RemMs := DiffMs;
-  Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0,
-    RemMs div 3600000,
-    (RemMs mod 3600000) div 60000,
-    ((RemMs mod 3600000) mod 60000) div 1000,
-    ((RemMs mod 3600000) mod 60000) mod 1000,
-    DiffSubMs div 1000,
-    DiffSubMs mod 1000);
+  Result := InstantDiffToUnits(DiffMs, DiffSubMs, LargestUnit);
 end;
 
 function TGocciaTemporalInstantValue.InstantSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Inst, Other: TGocciaTemporalInstantValue;
+  OptionsObj: TGocciaObjectValue;
+  LargestUnit: TTemporalUnit;
   DiffMs: Int64;
   DiffSubMs: Integer;
-  RemMs: Int64;
 begin
   Inst := AsInstant(AThisValue, 'Instant.prototype.since');
   Other := CoerceInstant(AArgs.GetElement(0), 'Instant.prototype.since');
+
+  OptionsObj := GetDiffOptions(AArgs, 1);
+  LargestUnit := GetLargestUnit(OptionsObj, tuHour);
+  if LargestUnit = tuAuto then LargestUnit := tuHour;
+  if not (LargestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
+    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.since', 'largestUnit']), SSuggestTemporalValidUnits);
 
   DiffMs := Inst.FEpochMilliseconds - Other.FEpochMilliseconds;
   DiffSubMs := Inst.FSubMillisecondNanoseconds - Other.FSubMillisecondNanoseconds;
@@ -370,14 +430,7 @@ begin
     Dec(DiffSubMs, 1000000);
   end;
 
-  RemMs := DiffMs;
-  Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0,
-    RemMs div 3600000,
-    (RemMs mod 3600000) div 60000,
-    ((RemMs mod 3600000) mod 60000) div 1000,
-    ((RemMs mod 3600000) mod 60000) mod 1000,
-    DiffSubMs div 1000,
-    DiffSubMs mod 1000);
+  Result := InstantDiffToUnits(DiffMs, DiffSubMs, LargestUnit);
 end;
 
 function TGocciaTemporalInstantValue.InstantRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

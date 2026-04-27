@@ -513,29 +513,48 @@ end;
 function TGocciaTemporalPlainDateValue.DateUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D, Other: TGocciaTemporalPlainDateValue;
-  DiffDays: Int64;
+  OptionsObj: TGocciaObjectValue;
+  LargestUnit: TTemporalUnit;
+  Years, Months, Weeks, Days: Int64;
 begin
   D := AsPlainDate(AThisValue, 'PlainDate.prototype.until');
   Other := CoercePlainDate(AArgs.GetElement(0), 'PlainDate.prototype.until');
 
-  DiffDays := DateToEpochDays(Other.FYear, Other.FMonth, Other.FDay) -
-              DateToEpochDays(D.FYear, D.FMonth, D.FDay);
+  OptionsObj := GetDiffOptions(AArgs, 1);
+  LargestUnit := GetLargestUnit(OptionsObj, tuDay);
+  if LargestUnit = tuAuto then LargestUnit := tuDay;
+  if not (LargestUnit in [tuYear, tuMonth, tuWeek, tuDay]) then
+    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainDate.prototype.until', 'largestUnit']), SSuggestTemporalValidUnits);
 
-  Result := TGocciaTemporalDurationValue.Create(0, 0, 0, DiffDays, 0, 0, 0, 0, 0, 0);
+  CalendarDateUntil(D.FYear, D.FMonth, D.FDay,
+    Other.FYear, Other.FMonth, Other.FDay, LargestUnit,
+    Years, Months, Weeks, Days);
+
+  Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days, 0, 0, 0, 0, 0, 0);
 end;
 
 function TGocciaTemporalPlainDateValue.DateSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D, Other: TGocciaTemporalPlainDateValue;
-  DiffDays: Int64;
+  OptionsObj: TGocciaObjectValue;
+  LargestUnit: TTemporalUnit;
+  Years, Months, Weeks, Days: Int64;
 begin
   D := AsPlainDate(AThisValue, 'PlainDate.prototype.since');
   Other := CoercePlainDate(AArgs.GetElement(0), 'PlainDate.prototype.since');
 
-  DiffDays := DateToEpochDays(D.FYear, D.FMonth, D.FDay) -
-              DateToEpochDays(Other.FYear, Other.FMonth, Other.FDay);
+  OptionsObj := GetDiffOptions(AArgs, 1);
+  LargestUnit := GetLargestUnit(OptionsObj, tuDay);
+  if LargestUnit = tuAuto then LargestUnit := tuDay;
+  if not (LargestUnit in [tuYear, tuMonth, tuWeek, tuDay]) then
+    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainDate.prototype.since', 'largestUnit']), SSuggestTemporalValidUnits);
 
-  Result := TGocciaTemporalDurationValue.Create(0, 0, 0, DiffDays, 0, 0, 0, 0, 0, 0);
+  // since(other) = other.until(this): swap start/end
+  CalendarDateUntil(Other.FYear, Other.FMonth, Other.FDay,
+    D.FYear, D.FMonth, D.FDay, LargestUnit,
+    Years, Months, Weeks, Days);
+
+  Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days, 0, 0, 0, 0, 0, 0);
 end;
 
 function TGocciaTemporalPlainDateValue.DateEquals(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

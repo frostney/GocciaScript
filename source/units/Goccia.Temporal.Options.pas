@@ -7,6 +7,7 @@ interface
 uses
   BigInteger,
 
+  Goccia.Arguments.Collection,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -81,6 +82,19 @@ procedure RoundTimeForToString(
   const AFractionalDigits: Integer;
   const ARoundingMode: TTemporalRoundingMode);
 function FormatCalendarAnnotation(const ACalendarDisplay: TTemporalCalendarDisplay): string;
+
+{ Calendar-aware date differencing — implements CalendarDateUntil from TC39.
+  Computes the difference (Y2,M2,D2) - (Y1,M1,D1) broken into years, months,
+  weeks, and days based on ALargestUnit (tuYear, tuMonth, tuWeek, or tuDay). }
+procedure CalendarDateUntil(
+  const AY1, AM1, AD1, AY2, AM2, AD2: Integer;
+  const ALargestUnit: TTemporalUnit;
+  out AYears, AMonths, AWeeks, ADays: Int64);
+
+{ Extract diff options from an arguments collection at a given index.
+  Returns nil if the argument is undefined/missing. }
+function GetDiffOptions(const AArgs: TGocciaArgumentsCollection;
+  const AIndex: Integer): TGocciaObjectValue;
 
 implementation
 
@@ -676,6 +690,109 @@ begin
   else
     Result := ''; // auto and never: omit for iso8601
   end;
+end;
+
+{ --------------------------------------------------------------------------- }
+{ CalendarDateUntil                                                            }
+{ --------------------------------------------------------------------------- }
+
+procedure CalendarDateUntil(
+  const AY1, AM1, AD1, AY2, AM2, AD2: Integer;
+  const ALargestUnit: TTemporalUnit;
+  out AYears, AMonths, AWeeks, ADays: Int64);
+var
+  Sign: Integer;
+  FromY, FromM, FromD, ToY, ToM, ToD: Integer;
+  TotalMonths: Int64;
+  Mid: TTemporalDateRecord;
+  TotalDays: Int64;
+begin
+  AYears := 0;
+  AMonths := 0;
+  AWeeks := 0;
+  ADays := 0;
+
+  case ALargestUnit of
+    tuDay:
+    begin
+      ADays := DateToEpochDays(AY2, AM2, AD2) - DateToEpochDays(AY1, AM1, AD1);
+    end;
+
+    tuWeek:
+    begin
+      TotalDays := DateToEpochDays(AY2, AM2, AD2) - DateToEpochDays(AY1, AM1, AD1);
+      AWeeks := TotalDays div 7;
+      ADays := TotalDays mod 7;
+    end;
+
+    tuMonth, tuYear:
+    begin
+      Sign := CompareDates(AY2, AM2, AD2, AY1, AM1, AD1);
+      if Sign = 0 then Exit;
+
+      // Always work from earlier to later, sign-correct at end
+      if Sign > 0 then
+      begin
+        FromY := AY1; FromM := AM1; FromD := AD1;
+        ToY := AY2; ToM := AM2; ToD := AD2;
+      end
+      else
+      begin
+        FromY := AY2; FromM := AM2; FromD := AD2;
+        ToY := AY1; ToM := AM1; ToD := AD1;
+      end;
+
+      // Estimate total months from year/month components
+      TotalMonths := Int64(ToY - FromY) * 12 + Int64(ToM - FromM);
+
+      // Check if the estimate overshoots due to day clamping
+      Mid := AddMonthsToDate(FromY, FromM, FromD, TotalMonths);
+      if CompareDates(Mid.Year, Mid.Month, Mid.Day, ToY, ToM, ToD) > 0 then
+      begin
+        Dec(TotalMonths);
+        Mid := AddMonthsToDate(FromY, FromM, FromD, TotalMonths);
+      end;
+
+      // Remainder in days
+      ADays := DateToEpochDays(ToY, ToM, ToD) -
+               DateToEpochDays(Mid.Year, Mid.Month, Mid.Day);
+
+      if ALargestUnit = tuYear then
+      begin
+        AYears := TotalMonths div 12;
+        AMonths := TotalMonths mod 12;
+      end
+      else
+        AMonths := TotalMonths;
+
+      // Apply sign
+      if Sign < 0 then
+      begin
+        AYears := -AYears;
+        AMonths := -AMonths;
+        ADays := -ADays;
+      end;
+    end;
+  end;
+end;
+
+{ --------------------------------------------------------------------------- }
+{ GetDiffOptions                                                               }
+{ --------------------------------------------------------------------------- }
+
+function GetDiffOptions(const AArgs: TGocciaArgumentsCollection;
+  const AIndex: Integer): TGocciaObjectValue;
+var
+  Arg: TGocciaValue;
+begin
+  Result := nil;
+  Arg := AArgs.GetElement(AIndex);
+  if (Arg = nil) or (Arg is TGocciaUndefinedLiteralValue) then
+    Exit;
+  if Arg is TGocciaObjectValue then
+    Result := TGocciaObjectValue(Arg)
+  else
+    ThrowTypeError('Options argument must be an object or undefined', '');
 end;
 
 end.

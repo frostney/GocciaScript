@@ -6,10 +6,22 @@ features: [Temporal]
 const isTemporal = typeof Temporal !== "undefined";
 
 describe.runIf(isTemporal)("Temporal.Instant.prototype.since", () => {
-  test("since()", () => {
+  test("since() default returns hours", () => {
     const i1 = Temporal.Instant.fromEpochMilliseconds(3600000);
     const i2 = Temporal.Instant.fromEpochMilliseconds(0);
     const dur = i1.since(i2);
     expect(dur.hours).toBe(1);
+  });
+
+  test("since() with largestUnit minutes", () => {
+    const i1 = Temporal.Instant.fromEpochMilliseconds(90061000);
+    const i2 = Temporal.Instant.fromEpochMilliseconds(0);
+    expect(i1.since(i2, { largestUnit: "minutes" }).toString()).toBe("PT1501M1S");
+  });
+
+  test("since() with largestUnit seconds", () => {
+    const i1 = Temporal.Instant.fromEpochMilliseconds(90061000);
+    const i2 = Temporal.Instant.fromEpochMilliseconds(0);
+    expect(i1.since(i2, { largestUnit: "seconds" }).toString()).toBe("PT90061S");
   });
 });
