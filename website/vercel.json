@@ -3,6 +3,7 @@
   "framework": "nextjs",
   "buildCommand": "bun run build",
   "installCommand": "bun install --frozen-lockfile",
+  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- ./",
   "functions": {
     "src/app/api/run/route.ts": {
       "maxDuration": 15,
