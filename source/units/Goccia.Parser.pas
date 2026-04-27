@@ -192,6 +192,7 @@ type
     function UsingStatement: TGocciaStatement;
     function SwitchStatement: TGocciaStatement;
     function BreakStatement: TGocciaStatement;
+    function ContinueStatement: TGocciaStatement;
   public
     constructor Create(const ATokens: TObjectList<TGocciaToken>;
       const AFileName: string; const ASourceLines: TStringList);
@@ -589,7 +590,7 @@ begin
     gttTrue, gttFalse, gttNull,
     gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis,
     gttSuper, gttStatic, gttReturn, gttIf, gttElse, gttFor, gttWhile, gttDo,
-    gttSwitch, gttCase, gttDefault, gttBreak, gttThrow, gttTry, gttCatch,
+    gttSwitch, gttCase, gttDefault, gttBreak, gttContinue, gttThrow, gttTry, gttCatch,
     gttFinally, gttImport, gttExport, gttFrom, gttAs, gttGet, gttSet,
     gttVar, gttWith, gttFunction, gttTypeof, gttVoid, gttInstanceof, gttIn,
     gttDelete:
@@ -877,7 +878,7 @@ begin
         if Check(gttIdentifier) then
           PropertyName := Advance.Lexeme
         else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
-                       gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
+                       gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
                        gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
                        gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
           PropertyName := Previous.Lexeme  // Reserved words are allowed as property names
@@ -1896,7 +1897,7 @@ begin
       end
       else if Match([gttIdentifier, gttString, gttNumber,
                      gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
-                     gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
+                     gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
                      gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
                      gttTrue, gttFalse, gttNull, gttTypeof, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
         { name consumed };
@@ -1961,7 +1962,7 @@ begin
       Key := DoubleToESString(NumericValue);
     end
     else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
-                   gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
+                   gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
                    gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
                    gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
       Key := Previous.Lexeme  // Reserved words are allowed as property names
@@ -2568,6 +2569,8 @@ begin
     Result := SwitchStatement
   else if Match(gttBreak) then
     Result := BreakStatement
+  else if Match(gttContinue) then
+    Result := ContinueStatement
   else if Match(gttReturn) then
     Result := ReturnStatement
   else if Match(gttThrow) then
@@ -4112,7 +4115,7 @@ begin
         end
         else if Match([gttIdentifier, gttString, gttNumber,
                        gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
-                       gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
+                       gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
                        gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
                        gttTrue, gttFalse, gttNull, gttTypeof, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
           { name consumed };
@@ -5203,6 +5206,18 @@ begin
   ConsumeSemicolonOrASI('Expected ";" after break statement',
     SSuggestAddSemicolon);
   Result := TGocciaBreakStatement.Create(Line, Column);
+end;
+
+function TGocciaParser.ContinueStatement: TGocciaStatement;
+var
+  Line, Column: Integer;
+begin
+  Line := Previous.Line;
+  Column := Previous.Column;
+
+  ConsumeSemicolonOrASI('Expected ";" after continue statement',
+    SSuggestAddSemicolon);
+  Result := TGocciaContinueStatement.Create(Line, Column);
 end;
 
 procedure TGocciaParser.SkipDestructuringPattern;

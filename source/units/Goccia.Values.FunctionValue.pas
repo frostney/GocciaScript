@@ -264,6 +264,8 @@ begin
     end;
     if CF.Kind = cfkBreak then
       ThrowSyntaxError(SErrorIllegalBreakStatement, SSuggestExpressionExpected);
+    if CF.Kind = cfkContinue then
+      ThrowSyntaxError(SErrorIllegalContinueStatement, SSuggestExpressionExpected);
   end;
 end;
 

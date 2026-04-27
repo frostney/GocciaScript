@@ -7,6 +7,7 @@ interface
 const
   KEYWORD_BREAK      = 'break';
   KEYWORD_CASE       = 'case';
+  KEYWORD_CONTINUE   = 'continue';
   KEYWORD_CATCH      = 'catch';
   KEYWORD_CLASS      = 'class';
   KEYWORD_CONST      = 'const';
