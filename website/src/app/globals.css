@@ -2386,7 +2386,7 @@ p {
   min-height: 7.75rem;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
 }
 /* Arch pipeline console tab — compact padding inside the artifact box. */
 .arch-console {

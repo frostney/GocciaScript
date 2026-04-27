@@ -384,7 +384,7 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
       <div className="pg-panes pg-panes-full">
         <div className="pg-pane">
           <div className="pg-pane-head">
-            <TerminalIcon size={14} /> {example.id}.js
+            <TerminalIcon size={14} /> {example.id}.{example.ext ?? "js"}
             <span className="ml-auto text-[0.7rem]">{lineCount} lines</span>
           </div>
           <div className="pg-editor">

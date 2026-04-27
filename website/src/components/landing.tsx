@@ -103,7 +103,7 @@ function HeroRunnableCard({ code }: { code: string }) {
     if (running) return;
     setRunning(true);
     setRunTick((t) => t + 1);
-    const banner = "GocciaScriptLoader coffee-shop.js";
+    const banner = "GocciaScriptLoader coffee-typed.ts";
     setOutput([{ kind: "meta", text: banner }]);
     try {
       const res = await fetch("/api/run", {
@@ -201,7 +201,7 @@ function HeroRunnableCard({ code }: { code: string }) {
           <span />
           <span />
         </div>
-        <span className="flex-1">coffee-shop.js</span>
+        <span className="flex-1">coffee-typed.ts</span>
         {copied && (
           <span key={copyTick} className="copied-flash">
             copied
