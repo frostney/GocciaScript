@@ -173,6 +173,8 @@ The non-zero exit code ensures CI pipelines fail when benchmarks crash or produc
 | `benchmarks/iterators.js` | Iterator.from, user-defined iterables, lazy iterator helpers, built-in iterator chaining |
 | `benchmarks/for-of.js` | for...of with arrays, strings, Sets, Maps, destructuring, for-await-of |
 | `benchmarks/async-await.js` | Single/multiple awaits, await non-Promise, try/catch, Promise.all, nested async |
+| `benchmarks/generators.js` | Manual next, for...of, yield delegation, object/class generator methods |
+| `benchmarks/async-generators.js` | for-await-of over async generators and await inside async generator bodies |
 
 ## Sample Output
 

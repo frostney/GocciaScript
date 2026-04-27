@@ -365,6 +365,7 @@ type
     FParameters: TGocciaParameterArray;
     FBody: TGocciaASTNode;
     FIsAsync: Boolean;
+    FIsGenerator: Boolean;
     FSourceText: string;
     FName: string;
   public
@@ -374,8 +375,21 @@ type
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Body: TGocciaASTNode read FBody;
     property IsAsync: Boolean read FIsAsync write FIsAsync;
+    property IsGenerator: Boolean read FIsGenerator write FIsGenerator;
     property SourceText: string read FSourceText write FSourceText;
     property Name: string read FName write FName;
+  end;
+
+  TGocciaYieldExpression = class(TGocciaExpression)
+  private
+    FOperand: TGocciaExpression;
+    FIsDelegate: Boolean;
+  public
+    constructor Create(const AOperand: TGocciaExpression; const AIsDelegate: Boolean;
+      const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    property Operand: TGocciaExpression read FOperand;
+    property IsDelegate: Boolean read FIsDelegate;
   end;
 
   TGocciaAwaitExpression = class(TGocciaExpression)
@@ -1024,6 +1038,16 @@ begin
   FOperand := AOperand;
 end;
 
+{ TGocciaYieldExpression }
+
+constructor TGocciaYieldExpression.Create(const AOperand: TGocciaExpression;
+  const AIsDelegate: Boolean; const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FOperand := AOperand;
+  FIsDelegate := AIsDelegate;
+end;
+
 { TGocciaConditionalExpression }
 
 constructor TGocciaConditionalExpression.Create(const ACondition, AConsequent,
@@ -1517,6 +1541,11 @@ end;
 function TGocciaAwaitExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
   Result := EvaluateAwait(Self, AContext);
+end;
+
+function TGocciaYieldExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+begin
+  Result := EvaluateYield(Self, AContext);
 end;
 
 function TGocciaArrowFunctionExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;

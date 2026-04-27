@@ -64,6 +64,7 @@ type
     FWarnings: array of TGocciaParserWarning;
     FWarningCount: Integer;
     FInAsyncFunction: Integer;
+    FInGeneratorFunction: Integer;
     FFunctionDepth: Integer;
     FPrivateClassContexts: TObjectList<TGocciaPrivateClassContext>;
     FSkipPrivateNameValidation: Integer;
@@ -115,7 +116,7 @@ type
     function ParseSetterExpression: TGocciaSetterExpression;
 
     // Object method body parsing: (params) { stmts } -> method expression
-    function ParseObjectMethodBody(const ALine, AColumn: Integer; const AIsAsync: Boolean = False): TGocciaExpression;
+    function ParseObjectMethodBody(const ALine, AColumn: Integer; const AIsAsync: Boolean = False; const AIsGenerator: Boolean = False): TGocciaExpression;
 
     // Destructuring pattern parsing
     function ParsePattern: TGocciaDestructuringPattern;
@@ -176,11 +177,11 @@ type
     function WhileStatement: TGocciaStatement;
     function DoWhileStatement: TGocciaStatement;
     function WithStatement: TGocciaStatement;
-    function FunctionStatement(const AIsAsync: Boolean = False): TGocciaStatement;
+    function FunctionStatement(const AIsAsync: Boolean = False; const AIsGenerator: Boolean = False): TGocciaStatement;
     function ReturnStatement: TGocciaStatement;
     function ThrowStatement: TGocciaStatement;
     function TryStatement: TGocciaStatement;
-    function ClassMethod(const AIsStatic: Boolean = False; const AIsAsync: Boolean = False): TGocciaClassMethod;
+    function ClassMethod(const AIsStatic: Boolean = False; const AIsAsync: Boolean = False; const AIsGenerator: Boolean = False): TGocciaClassMethod;
     function ClassDeclaration: TGocciaStatement;
     function DecoratedClassDeclaration(const ADecorators: TGocciaDecoratorList): TGocciaStatement;
     function ParseDecorators: TGocciaDecoratorList;
@@ -759,6 +760,18 @@ begin
     Operator := Advance; // consume 'await'
     Right := Unary;
     Result := TGocciaAwaitExpression.Create(Right, Operator.Line, Operator.Column);
+    Exit;
+  end;
+
+  if (FInGeneratorFunction > 0) and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_YIELD) then
+  begin
+    Operator := Advance; // consume 'yield'
+    if Match(gttStar) then
+      Result := TGocciaYieldExpression.Create(Assignment, True, Operator.Line, Operator.Column)
+    else if CheckSemicolonOrASI or Check(gttRightBrace) or Check(gttRightParen) or Check(gttComma) then
+      Result := TGocciaYieldExpression.Create(nil, False, Operator.Line, Operator.Column)
+    else
+      Result := TGocciaYieldExpression.Create(Assignment, False, Operator.Line, Operator.Column);
     Exit;
   end;
 
@@ -1472,6 +1485,7 @@ var
   ArrowBody: TGocciaASTNode;
   SeparatorPos: Integer;
   Line, Column: Integer;
+  IsGenerator: Boolean;
 begin
   if Match(gttTrue) then
   begin
@@ -1678,30 +1692,25 @@ begin
             TGocciaUndefinedLiteralValue.UndefinedValue, Token.Line, Token.Column);
         afcReady:
         begin
+          IsGenerator := False;
           if Check(gttStar) then
           begin
-            AddWarning('Generator function expressions are not supported in GocciaScript',
-              'Use a regular function instead',
-              Token.Line, Token.Column);
-            SkipUnsupportedFunctionSignature;
-            Result := TGocciaLiteralExpression.Create(
-              TGocciaUndefinedLiteralValue.UndefinedValue, Token.Line, Token.Column);
-          end
-          else
-          begin
-            Name := '';
-            if Check(gttIdentifier) then
-            begin
-              Name := Peek.Lexeme;
-              Advance;
-            end;
-            CollectGenericParameters;
-            Result := ParseObjectMethodBody(Token.Line, Token.Column, True);
-            TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
-            TGocciaMethodExpression(Result).IsAsync := True;
-            if Name <> '' then
-              TGocciaMethodExpression(Result).Name := Name;
+            Advance;
+            IsGenerator := True;
           end;
+          Name := '';
+          if Check(gttIdentifier) then
+          begin
+            Name := Peek.Lexeme;
+            Advance;
+          end;
+          CollectGenericParameters;
+          Result := ParseObjectMethodBody(Token.Line, Token.Column, True, IsGenerator);
+          TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
+          TGocciaMethodExpression(Result).IsAsync := True;
+          TGocciaMethodExpression(Result).IsGenerator := IsGenerator;
+          if Name <> '' then
+            TGocciaMethodExpression(Result).Name := Name;
         end;
       end;
     end
@@ -1747,12 +1756,19 @@ begin
     end
     else if Check(gttStar) then
     begin
-      AddWarning('Generator function expressions are not supported in GocciaScript',
-        'Use a regular function instead',
-        Token.Line, Token.Column);
-      SkipUnsupportedFunctionSignature;
-      Result := TGocciaLiteralExpression.Create(
-        TGocciaUndefinedLiteralValue.UndefinedValue, Token.Line, Token.Column);
+      Advance;
+      Name := '';
+      if Check(gttIdentifier) then
+      begin
+        Name := Peek.Lexeme;
+        Advance;
+      end;
+      CollectGenericParameters;
+      Result := ParseObjectMethodBody(Token.Line, Token.Column, False, True);
+      TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
+      TGocciaMethodExpression(Result).IsGenerator := True;
+      if Name <> '' then
+        TGocciaMethodExpression(Result).Name := Name;
     end
     else
     begin
@@ -1833,6 +1849,7 @@ var
   IsComputed: Boolean;
   IsGetter, IsSetter: Boolean;
   IsAsync: Boolean;
+  IsGenerator: Boolean;
   ComputedCount, SourceOrderCount: Integer;
   MemberStartLine, MemberStartColumn: Integer;
 begin
@@ -1857,6 +1874,7 @@ begin
     IsGetter := False;
     IsSetter := False;
     IsAsync := False;
+    IsGenerator := False;
     MemberStartLine := Peek.Line;
     MemberStartColumn := Peek.Column;
 
@@ -1883,38 +1901,8 @@ begin
     // Generator method syntax: *methodName() { ... } or async *methodName() { ... }
     if Check(gttStar) then
     begin
-      AddWarning('Generator methods are not supported in GocciaScript',
-        'Use a regular method instead',
-        Peek.Line, Peek.Column);
-      Advance; // skip *
-      // Skip method name (identifiers, strings, numbers, or reserved words)
-      if Check(gttLeftBracket) then
-      begin
-        Advance;
-        Expression;
-        Consume(gttRightBracket, 'Expected "]" after computed property name',
-          SSuggestCloseBracketComputedPropertyName);
-      end
-      else if Match([gttIdentifier, gttString, gttNumber,
-                     gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
-                     gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
-                     gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
-                     gttTrue, gttFalse, gttNull, gttTypeof, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
-        { name consumed };
-      CollectGenericParameters;
-      if Check(gttLeftParen) then
-        SkipBalancedParens;
-      // Skip return type annotation
-      if Check(gttColon) then
-      begin
-        Advance;
-        CollectTypeAnnotation([gttLeftBrace]);
-      end;
-      if Check(gttLeftBrace) then
-        SkipBlock;
-      if not Match(gttComma) then
-        Break;
-      Continue;
+      Advance;
+      IsGenerator := True;
     end;
 
         // Handle spread syntax: ...obj
@@ -1998,11 +1986,12 @@ begin
     // Check for method shorthand syntax: methodName() { ... } or [expr]() { ... }
     else if Check(gttLeftParen) then
     begin
-      Value := ParseObjectMethodBody(MemberStartLine, MemberStartColumn, IsAsync);
+      Value := ParseObjectMethodBody(MemberStartLine, MemberStartColumn, IsAsync, IsGenerator);
       TGocciaMethodExpression(Value).SourceText := ExtractSourceRange(
         MemberStartLine, MemberStartColumn);
       if IsAsync then
         TGocciaMethodExpression(Value).IsAsync := True;
+      TGocciaMethodExpression(Value).IsGenerator := IsGenerator;
     end
     else
     begin
@@ -2228,7 +2217,7 @@ begin
   end;
 end;
 
-function TGocciaParser.ParseObjectMethodBody(const ALine, AColumn: Integer; const AIsAsync: Boolean): TGocciaExpression;
+function TGocciaParser.ParseObjectMethodBody(const ALine, AColumn: Integer; const AIsAsync: Boolean; const AIsGenerator: Boolean): TGocciaExpression;
 var
   Parameters: TGocciaParameterArray;
   Body: TGocciaASTNode;
@@ -2254,6 +2243,7 @@ begin
       SSuggestOpenBraceMethodBody);
 
     if AIsAsync then Inc(FInAsyncFunction);
+    if AIsGenerator then Inc(FInGeneratorFunction);
     try
       Statements := TObjectList<TGocciaASTNode>.Create(True);
       try
@@ -2267,11 +2257,14 @@ begin
           SSuggestCloseBlock);
         Body := TGocciaBlockStatement.Create(Statements, ALine, AColumn);
         Result := TGocciaMethodExpression.Create(Parameters, Body, ALine, AColumn);
+        TGocciaMethodExpression(Result).IsAsync := AIsAsync;
+        TGocciaMethodExpression(Result).IsGenerator := AIsGenerator;
       except
         Statements.Free;
         raise;
       end;
     finally
+      if AIsGenerator then Dec(FInGeneratorFunction);
       if AIsAsync then Dec(FInAsyncFunction);
     end;
   finally
@@ -2532,7 +2525,7 @@ begin
   else if Match(gttWith) then
     Result := WithStatement
   else if Match(gttFunction) then
-    Result := FunctionStatement
+    Result := FunctionStatement(False, Check(gttStar))
   else if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ASYNC) and
           (FCurrent + 1 < FTokens.Count) and
           (FTokens[FCurrent + 1].TokenType = gttFunction) then
@@ -2551,7 +2544,7 @@ begin
         Result := TGocciaEmptyStatement.Create(Line, Column);
       afcReady:
       begin
-        Result := FunctionStatement(True);
+        Result := FunctionStatement(True, Check(gttStar));
         if (Result is TGocciaVariableDeclaration) and
            (Length(TGocciaVariableDeclaration(Result).Variables) = 1) and
            (TGocciaVariableDeclaration(Result).Variables[0].Initializer is TGocciaMethodExpression) then
@@ -3240,7 +3233,7 @@ begin
   Result := TGocciaEmptyStatement.Create(Line, Column);
 end;
 
-function TGocciaParser.FunctionStatement(const AIsAsync: Boolean): TGocciaStatement;
+function TGocciaParser.FunctionStatement(const AIsAsync: Boolean; const AIsGenerator: Boolean): TGocciaStatement;
 var
   Line, Column: Integer;
   NameToken: TGocciaToken;
@@ -3261,24 +3254,17 @@ begin
     Exit;
   end;
 
-  // Generator: function* — not supported even with compat-function
-  if Check(gttStar) then
-  begin
-    AddWarning('Generator function declarations are not supported in GocciaScript',
-      'Use a regular function instead',
-      Line, Column);
-    SkipUnsupportedFunctionSignature;
-    Result := TGocciaEmptyStatement.Create(Line, Column);
-    Exit;
-  end;
+  if AIsGenerator then
+    Consume(gttStar, 'Expected "*" after "function" in generator declaration');
 
   NameToken := Consume(gttIdentifier, 'Expected function name',
     'Provide a name for the function declaration');
 
   CollectGenericParameters;
 
-  MethodExpr := ParseObjectMethodBody(Line, Column, AIsAsync);
+  MethodExpr := ParseObjectMethodBody(Line, Column, AIsAsync, AIsGenerator);
   TGocciaMethodExpression(MethodExpr).SourceText := ExtractSourceRange(Line, Column);
+  TGocciaMethodExpression(MethodExpr).IsGenerator := AIsGenerator;
 
   SetLength(Variables, 1);
   Variables[0].Name := NameToken.Lexeme;
@@ -3394,7 +3380,7 @@ begin
   Result := TryStmt;
 end;
 
-function TGocciaParser.ClassMethod(const AIsStatic: Boolean; const AIsAsync: Boolean): TGocciaClassMethod;
+function TGocciaParser.ClassMethod(const AIsStatic: Boolean; const AIsAsync: Boolean; const AIsGenerator: Boolean): TGocciaClassMethod;
 var
   Parameters: TGocciaParameterArray;
   Body: TGocciaASTNode;
@@ -3429,6 +3415,7 @@ begin
       SSuggestOpenBraceMethodBody);
 
     if AIsAsync then Inc(FInAsyncFunction);
+    if AIsGenerator then Inc(FInGeneratorFunction);
     try
       Statements := TObjectList<TGocciaASTNode>.Create(True);
       try
@@ -3453,6 +3440,8 @@ begin
           SSuggestCloseBlock);
         Body := TGocciaBlockStatement.Create(Statements, Line, Column);
         Result := TGocciaClassMethod.Create(Name, Parameters, Body, AIsStatic, Line, Column);
+        Result.IsAsync := AIsAsync;
+        Result.IsGenerator := AIsGenerator;
         Result.GenericParams := MethodGenericParams;
         Result.ReturnType := MethodReturnType;
         Result.SourceText := ExtractSourceRange(Line, Column);
@@ -3461,6 +3450,7 @@ begin
         raise;
       end;
     finally
+      if AIsGenerator then Dec(FInGeneratorFunction);
       if AIsAsync then Dec(FInAsyncFunction);
     end;
   finally
@@ -3834,7 +3824,7 @@ begin
       end;
       afcReady:
       begin
-        InnerDecl := FunctionStatement(True);
+        InnerDecl := FunctionStatement(True, Check(gttStar));
         if (InnerDecl is TGocciaVariableDeclaration) and
            (Length(TGocciaVariableDeclaration(InnerDecl).Variables) = 1) and
            (TGocciaVariableDeclaration(InnerDecl).Variables[0].Initializer is TGocciaMethodExpression) then
@@ -3870,7 +3860,7 @@ begin
       Exit;
     end;
     Advance; // consume 'function'
-    InnerDecl := FunctionStatement;
+    InnerDecl := FunctionStatement(False, Check(gttStar));
     if InnerDecl is TGocciaVariableDeclaration then
     begin
       VarDecl := TGocciaVariableDeclaration(InnerDecl);
@@ -3999,6 +3989,7 @@ var
   FieldOrder: array of TGocciaFieldOrderEntry;
   IsAccessor: Boolean;
   IsAsync: Boolean;
+  IsGenerator: Boolean;
   MemberStartLine, MemberStartColumn: Integer;
   TypePair: TStringStringMap.TKeyValuePair;
 begin
@@ -4089,6 +4080,7 @@ begin
       end;
 
       IsAsync := False;
+      IsGenerator := False;
       if not IsAccessor and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
       begin
         Advance;
@@ -4098,39 +4090,8 @@ begin
       // Generator method syntax: *methodName() { ... } or async *methodName() { ... }
       if Check(gttStar) then
       begin
-        AddWarning('Generator methods are not supported in GocciaScript',
-          'Use a regular method instead',
-          Peek.Line, Peek.Column);
-        Advance; // skip *
-        // Skip optional # for private generator methods
-        if Check(gttHash) then
-          Advance;
-        // Skip method name (identifiers, strings, numbers, or reserved words)
-        if Check(gttLeftBracket) then
-        begin
-          Advance;
-          Expression;
-          Consume(gttRightBracket, 'Expected "]" after computed property name',
-            SSuggestCloseBracketComputedPropertyName);
-        end
-        else if Match([gttIdentifier, gttString, gttNumber,
-                       gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
-                       gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
-                       gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
-                       gttTrue, gttFalse, gttNull, gttTypeof, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
-          { name consumed };
-        CollectGenericParameters;
-        if Check(gttLeftParen) then
-          SkipBalancedParens;
-        // Skip return type annotation
-        if Check(gttColon) then
-        begin
-          Advance;
-          CollectTypeAnnotation([gttLeftBrace]);
-        end;
-        if Check(gttLeftBrace) then
-          SkipBlock;
-        Continue;
+        Advance;
+        IsGenerator := True;
       end;
 
       IsPrivate := Match(gttHash);
@@ -4417,9 +4378,10 @@ begin
       end
       else if Check(gttLeftParen) or Check(gttLess) then
       begin
-        Method := ClassMethod(IsStatic, IsAsync);
+        Method := ClassMethod(IsStatic, IsAsync, IsGenerator);
         Method.Name := MemberName;
         Method.IsAsync := IsAsync;
+        Method.IsGenerator := IsGenerator;
         Method.SourceText := ExtractSourceRange(MemberStartLine, MemberStartColumn);
 
         if (Length(MemberDecorators) > 0) or IsComputed then
@@ -4434,6 +4396,7 @@ begin
           Elements[High(Elements)].Decorators := MemberDecorators;
           Elements[High(Elements)].MethodNode := Method;
           Elements[High(Elements)].IsAsync := IsAsync;
+          Elements[High(Elements)].IsGenerator := IsGenerator;
         end;
 
         if IsComputed then

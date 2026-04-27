@@ -41,6 +41,7 @@ const
   PROP_TAG_NAME     = 'tagName';
   PROP_NEXT         = 'next';
   PROP_RETURN       = 'return';
+  PROP_THROW        = 'throw';
   PROP_WRITABLE     = 'writable';
   PROP_ENUMERABLE   = 'enumerable';
   PROP_CONFIGURABLE = 'configurable';

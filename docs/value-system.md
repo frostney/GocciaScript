@@ -465,6 +465,19 @@ Async functions extend their sync counterparts and return Promises:
 
 **Call semantics:** `Call` creates a `TGocciaPromiseValue`, executes the body in a try/except, resolves on success, and rejects on `TGocciaThrowValue`. `this` binding is inherited from the superclass via virtual dispatch (`BindThis`).
 
+### Generator Values (`Goccia.Values.GeneratorValue.pas`)
+
+Generator functions and methods extend the normal function value hierarchy but return generator objects instead of executing immediately:
+
+| Type | Extends | Returns |
+|------|---------|---------|
+| `TGocciaGeneratorFunctionValue` | `TGocciaFunctionValue` | `TGocciaGeneratorObjectValue` |
+| `TGocciaAsyncGeneratorFunctionValue` | `TGocciaGeneratorFunctionValue` | `TGocciaAsyncGeneratorObjectValue` |
+| `TGocciaGeneratorMethodValue` | `TGocciaMethodValue` | `TGocciaGeneratorObjectValue` |
+| `TGocciaAsyncGeneratorMethodValue` | `TGocciaGeneratorMethodValue` | `TGocciaAsyncGeneratorObjectValue` |
+
+Generator objects hold a resumable `TGocciaGeneratorContinuation`. Sync generators expose `next`, `return`, `throw`, and `[Symbol.iterator]`; async generators expose the async iterator protocol and return Promises from `next`, `return`, and `throw`.
+
 ### `this` Binding
 
 `this` binding is determined by the runtime type via virtual dispatch on `BindThis`:
@@ -475,6 +488,7 @@ Async functions extend their sync counterparts and return Promises:
 | `TGocciaArrowFunctionValue` | Lexical (closure scope walk) | `TGocciaArrowFunctionExpression` (arrow syntax) |
 | `TGocciaMethodValue` | Call-site (inherited from base) | `TGocciaClassMethod` (class methods) |
 | `TGocciaAsyncFunctionValue` / `TGocciaAsyncArrowFunctionValue` / `TGocciaAsyncMethodValue` | Inherited from superclass via `BindThis` | `async` functions |
+| `TGocciaGeneratorFunctionValue` / `TGocciaGeneratorMethodValue` / async generator variants | Inherited from superclass via `BindThis` | generator functions and methods |
 
 Standalone calls to any function type receive `undefined` as `this` (strict mode, no implicit global).
 

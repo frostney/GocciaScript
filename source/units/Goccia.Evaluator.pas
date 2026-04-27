@@ -18,6 +18,7 @@ uses
   Goccia.Scope.BindingMap,
   Goccia.Values.ClassValue,
   Goccia.Values.HoleValue,
+  Goccia.Values.IteratorValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -61,7 +62,9 @@ function EvaluateTemplateWithInterpolation(const ATemplateWithInterpolationExpre
 function EvaluateTaggedTemplate(const ATaggedTemplateExpression: TGocciaTaggedTemplateExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateTemplateExpression(const AExpressionText: string; const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer): TGocciaValue;
 function EvaluateAwait(const AAwaitExpression: TGocciaAwaitExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateYield(const AYieldExpression: TGocciaYieldExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function AwaitValue(const AValue: TGocciaValue): TGocciaValue;
+function GetIteratorFromValue(const AValue: TGocciaValue): TGocciaIteratorValue;
 function EvaluateUsingDeclaration(const AUsingDeclaration: TGocciaUsingDeclaration; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateForOf(const AForOfStatement: TGocciaForOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateForAwaitOf(const AForAwaitOfStatement: TGocciaForAwaitOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -118,6 +121,7 @@ uses
   Goccia.Lexer,
   Goccia.MicrotaskQueue,
   Goccia.Parser,
+  Goccia.Runtime.GeneratorContinuation,
   Goccia.StackLimit,
   Goccia.Timeout,
   Goccia.Token,
@@ -130,9 +134,9 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
+  Goccia.Values.GeneratorValue,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.Generic,
-  Goccia.Values.IteratorValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -1365,6 +1369,11 @@ begin
   Result := AwaitValue(EvaluateExpression(AAwaitExpression.Operand, AContext));
 end;
 
+function EvaluateYield(const AYieldExpression: TGocciaYieldExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+begin
+  Result := EvaluateGeneratorYield(AYieldExpression, AContext);
+end;
+
 // ES2026 §14.7.5.6 ForIn/OfBodyEvaluation(lhs, stmt, iteratorRecord, iterationKind, lhsKind)
 function EvaluateForOf(const AForOfStatement: TGocciaForOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
@@ -1626,7 +1635,11 @@ begin
   else
     ClosureScope := AContext.Scope.CreateChild;
 
-  if AMethodExpression.IsAsync then
+  if AMethodExpression.IsGenerator and AMethodExpression.IsAsync then
+    Result := TGocciaAsyncGeneratorFunctionValue.Create(AMethodExpression.Parameters, Statements, ClosureScope)
+  else if AMethodExpression.IsGenerator then
+    Result := TGocciaGeneratorFunctionValue.Create(AMethodExpression.Parameters, Statements, ClosureScope)
+  else if AMethodExpression.IsAsync then
     Result := TGocciaAsyncFunctionValue.Create(AMethodExpression.Parameters, Statements, ClosureScope)
   else
     Result := TGocciaFunctionValue.Create(AMethodExpression.Parameters, Statements, ClosureScope);
@@ -1969,16 +1982,27 @@ function EvaluateTry(const ATryStatement: TGocciaTryStatement; const AContext: T
 var
   ThrownValue: TGocciaValue;
   HasUnhandledThrow: Boolean;
+  HasGeneratorReturn: Boolean;
+  GeneratorReturnValue: TGocciaValue;
   FinallyCF: TGocciaControlFlow;
 begin
   HasUnhandledThrow := False;
+  HasGeneratorReturn := False;
   ThrownValue := nil;
+  GeneratorReturnValue := nil;
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
   // Phase 1: Execute try block, capturing throws
   try
     Result := EvaluateStatements(ATryStatement.Block.Nodes, AContext);
   except
+    on E: EGocciaGeneratorYield do
+      raise;
+    on E: EGocciaGeneratorReturn do
+    begin
+      HasGeneratorReturn := True;
+      GeneratorReturnValue := E.Value;
+    end;
     on E: TGocciaThrowValue do
     begin
       if Assigned(ATryStatement.CatchBlock) then
@@ -2030,6 +2054,8 @@ begin
   begin
     if HasUnhandledThrow and Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.AddTempRoot(ThrownValue);
+    if HasGeneratorReturn and Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AddTempRoot(GeneratorReturnValue);
     try
       FinallyCF := EvaluateStatements(ATryStatement.FinallyBlock.Nodes, AContext);
       // Per JS semantics: finally's control flow overrides try/catch result AND pending throw
@@ -2042,8 +2068,13 @@ begin
     finally
       if HasUnhandledThrow and Assigned(TGarbageCollector.Instance) then
         TGarbageCollector.Instance.RemoveTempRoot(ThrownValue);
+      if HasGeneratorReturn and Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.RemoveTempRoot(GeneratorReturnValue);
     end;
   end;
+
+  if HasGeneratorReturn then
+    raise EGocciaGeneratorReturn.Create(GeneratorReturnValue);
 
   // Phase 3: Re-raise unhandled throw (if not overridden by finally)
   if HasUnhandledThrow then
@@ -2056,7 +2087,11 @@ var
 begin
   Statements := CopyStatementList(TGocciaBlockStatement(AClassMethod.Body).Nodes);
 
-  if AClassMethod.IsAsync then
+  if AClassMethod.IsGenerator and AClassMethod.IsAsync then
+    Result := TGocciaAsyncGeneratorMethodValue.Create(AClassMethod.Parameters, Statements, AContext.Scope.CreateChild, AClassMethod.Name, ASuperClass)
+  else if AClassMethod.IsGenerator then
+    Result := TGocciaGeneratorMethodValue.Create(AClassMethod.Parameters, Statements, AContext.Scope.CreateChild, AClassMethod.Name, ASuperClass)
+  else if AClassMethod.IsAsync then
     Result := TGocciaAsyncMethodValue.Create(AClassMethod.Parameters, Statements, AContext.Scope.CreateChild, AClassMethod.Name, ASuperClass)
   else
     Result := TGocciaMethodValue.Create(AClassMethod.Parameters, Statements, AContext.Scope.CreateChild, AClassMethod.Name, ASuperClass);
