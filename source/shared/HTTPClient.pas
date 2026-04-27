@@ -1,7 +1,7 @@
 unit HTTPClient;
 
 // Minimal HTTP/1.1 client built on raw BSD sockets.
-// Supports GET and HEAD over HTTP and HTTPS (via OpenSSL).
+// Supports GET and HEAD over HTTP and HTTPS.
 // Cross-platform: Unix (macOS, Linux) and Windows.
 // Designed for synchronous use today with a path to non-blocking I/O later.
 
@@ -45,7 +45,7 @@ uses
   {$IFDEF MSWINDOWS}
   WinSock2,
   {$ENDIF}
-  OpenSSL;
+  TransportSecurity;
 
 const
   MAX_REDIRECTS   = 20;
@@ -311,70 +311,11 @@ begin
 end;
 
 // ---------------------------------------------------------------------------
-// SSL wrapper
+// Send / Receive wrappers (unified TLS + plain)
 // ---------------------------------------------------------------------------
 
-type
-  TSSLConnection = record
-    Context: PSSL_CTX;
-    SSL: PSSL;
-    Active: Boolean;
-  end;
-
-function InitSSL(const ASock: TSocket; const AHost: string): TSSLConnection;
-begin
-  Result.Active := False;
-  Result.Context := nil;
-  Result.SSL := nil;
-
-  if not IsSSLloaded then
-  begin
-    if not InitSSLInterface then
-      raise EHTTPError.Create('HTTPS requires OpenSSL but it could not be loaded');
-  end;
-
-  Result.Context := SslCtxNew(SslMethodTLSV1_2);
-  if not Assigned(Result.Context) then
-    raise EHTTPError.Create('Failed to create SSL context');
-
-  Result.SSL := SslNew(Result.Context);
-  if not Assigned(Result.SSL) then
-  begin
-    SslCtxFree(Result.Context);
-    raise EHTTPError.Create('Failed to create SSL session');
-  end;
-
-  // Set SNI hostname via SSL_ctrl
-  SslCtrl(Result.SSL, SSL_CTRL_SET_TLSEXT_HOSTNAME,
-    TLSEXT_NAMETYPE_host_name, PAnsiChar(AnsiString(AHost)));
-
-  SslSetFd(Result.SSL, ASock);
-  if SslConnect(Result.SSL) <= 0 then
-  begin
-    SslFree(Result.SSL);
-    SslCtxFree(Result.Context);
-    raise EHTTPError.Create('SSL handshake failed');
-  end;
-
-  Result.Active := True;
-end;
-
-procedure FreeSSL(var AConn: TSSLConnection);
-begin
-  if AConn.Active then
-  begin
-    SslShutdown(AConn.SSL);
-    SslFree(AConn.SSL);
-    SslCtxFree(AConn.Context);
-    AConn.Active := False;
-  end;
-end;
-
-// ---------------------------------------------------------------------------
-// Send / Receive wrappers (unified SSL + plain)
-// ---------------------------------------------------------------------------
-
-procedure SendAll(const ASock: TSocket; const ASSL: TSSLConnection;
+procedure SendAll(const ASock: TSocket;
+  var ATransport: TTransportSecurityConnection;
   const AData: AnsiString);
 var
   Sent, Total, Len, N: Integer;
@@ -384,8 +325,8 @@ begin
   while Sent < Total do
   begin
     Len := Total - Sent;
-    if ASSL.Active then
-      N := SslWrite(ASSL.SSL, @AData[Sent + 1], Len)
+    if ATransport.Active then
+      N := TransportSecurityWrite(ATransport, @AData[Sent + 1], Len)
     else
       N := SocketSend(ASock, @AData[Sent + 1], Len);
     if N <= 0 then
@@ -394,11 +335,12 @@ begin
   end;
 end;
 
-function RecvBytes(const ASock: TSocket; const ASSL: TSSLConnection;
+function RecvBytes(const ASock: TSocket;
+  var ATransport: TTransportSecurityConnection;
   var ABuf: array of Byte; const ALen: Integer): Integer;
 begin
-  if ASSL.Active then
-    Result := SslRead(ASSL.SSL, @ABuf[0], ALen)
+  if ATransport.Active then
+    Result := TransportSecurityRead(ATransport, ABuf, ALen)
   else
     Result := SocketRecv(ASock, @ABuf[0], ALen);
 end;
@@ -431,7 +373,8 @@ begin
     end;
 end;
 
-function ReadResponse(const ASock: TSocket; const ASSL: TSSLConnection;
+function ReadResponse(const ASock: TSocket;
+  var ATransport: TTransportSecurityConnection;
   const AIsHead: Boolean): TRawHTTPResponse;
 var
   Buf: array[0..RECV_BUF_SIZE - 1] of Byte;
@@ -456,7 +399,7 @@ begin
   RawHeader := '';
   HeaderEnd := 0;
   repeat
-    N := RecvBytes(ASock, ASSL, Buf, RECV_BUF_SIZE);
+    N := RecvBytes(ASock, ATransport, Buf, RECV_BUF_SIZE);
     if N <= 0 then Break;
     RawHeader := RawHeader + Copy(PAnsiChar(@Buf[0]), 1, N);
     HeaderEnd := Pos(CRLF + CRLF, string(RawHeader));
@@ -555,7 +498,7 @@ begin
     begin
       while Pos(CRLF, string(ChunkBuf)) = 0 do
       begin
-        N := RecvBytes(ASock, ASSL, Buf, RECV_BUF_SIZE);
+        N := RecvBytes(ASock, ATransport, Buf, RECV_BUF_SIZE);
         if N <= 0 then begin Done := True; Break; end;
         ChunkBuf := ChunkBuf + Copy(PAnsiChar(@Buf[0]), 1, N);
       end;
@@ -574,7 +517,7 @@ begin
 
       while Length(ChunkBuf) < ChunkSize + 2 do
       begin
-        N := RecvBytes(ASock, ASSL, Buf, RECV_BUF_SIZE);
+        N := RecvBytes(ASock, ATransport, Buf, RECV_BUF_SIZE);
         if N <= 0 then begin Done := True; Break; end;
         ChunkBuf := ChunkBuf + Copy(PAnsiChar(@Buf[0]), 1, N);
       end;
@@ -612,7 +555,7 @@ begin
       // Read remaining
       while BodyLen < ContentLen do
       begin
-        N := RecvBytes(ASock, ASSL, Buf, RECV_BUF_SIZE);
+        N := RecvBytes(ASock, ATransport, Buf, RECV_BUF_SIZE);
         if N <= 0 then Break;
         Remaining := ContentLen - BodyLen;
         if N > Remaining then N := Remaining;
@@ -625,7 +568,7 @@ begin
       // Read until connection close
       Result.Body := Copy(BodyBytes);
       repeat
-        N := RecvBytes(ASock, ASSL, Buf, RECV_BUF_SIZE);
+        N := RecvBytes(ASock, ATransport, Buf, RECV_BUF_SIZE);
         if N <= 0 then Break;
         BodyLen := Length(Result.Body);
         SetLength(Result.Body, BodyLen + N);
@@ -645,7 +588,7 @@ function DoRequest(const AMethod, AURL: string;
 var
   Parsed: THTTPParsedURL;
   Sock: TSocket;
-  SSL: TSSLConnection;
+  Transport: TTransportSecurityConnection;
   Request: AnsiString;
   Raw: TRawHTTPResponse;
   I, Redirects: Integer;
@@ -663,11 +606,11 @@ begin
   while True do
   begin
     Parsed := ParseHTTPURL(CurrentURL);
-    SSL.Active := False;
+    FillChar(Transport, SizeOf(Transport), 0);
     Sock := ConnectSocket(Parsed.Host, Parsed.Port);
     try
       if Parsed.Scheme = 'https' then
-        SSL := InitSSL(Sock, Parsed.Host);
+        StartTransportSecurity(Transport, Sock, Parsed.Host);
 
       try
         // Build Host header value
@@ -699,10 +642,10 @@ begin
 
         Request := Request + AnsiString(CRLF);
 
-        SendAll(Sock, SSL, Request);
-        Raw := ReadResponse(Sock, SSL, IsHead);
+        SendAll(Sock, Transport, Request);
+        Raw := ReadResponse(Sock, Transport, IsHead);
       finally
-        FreeSSL(SSL);
+        CloseTransportSecurity(Transport);
       end;
     finally
       SocketClose(Sock);
