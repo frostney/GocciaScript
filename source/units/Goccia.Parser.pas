@@ -1958,7 +1958,7 @@ begin
     begin
       // Convert numeric literals to their decimal string representation
       NumericValue := ConvertNumberLiteral(Advance.Lexeme);
-      Key := FloatToStr(NumericValue);
+      Key := DoubleToESString(NumericValue);
     end
     else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
                    gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
@@ -4197,7 +4197,7 @@ begin
       end
       else if Check(gttNumber) then
       begin
-        MemberName := FloatToStr(ConvertNumberLiteral(Advance.Lexeme));
+        MemberName := DoubleToESString(ConvertNumberLiteral(Advance.Lexeme));
       end
       else if Check(gttString) then
       begin
