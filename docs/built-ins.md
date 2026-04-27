@@ -732,7 +732,7 @@ Implements a subset of the [WHATWG Fetch Standard](https://developer.mozilla.org
 |---------------------|-------------|
 | `fetch(url, options?)` | Perform an HTTP request, returns `Promise<Response>` |
 
-The `options` object supports `method` (`"GET"` or `"HEAD"`) and `headers` (plain object or `Headers` instance). Redirects (301/302/303/307/308) are followed automatically up to 20 hops. HTTPS requires OpenSSL libraries at runtime.
+The `options` object supports `method` (`"GET"` or `"HEAD"`) and `headers` (plain object or `Headers` instance). Redirects (301/302/303/307/308) are followed automatically up to 20 hops. HTTPS uses the platform TLS backend: SecureTransport on macOS, SChannel on Windows, and OpenSSL on Linux. macOS and Windows builds do not require OpenSSL libraries for HTTPS; Linux supports OpenSSL 3 runtime-only installs as well as compatible older OpenSSL library names.
 
 **Allowed hosts** — `fetch` requires an explicit allowlist of hostnames. Without `--allowed-host` or an `"allowed-hosts"` entry in `goccia.json`, any call to `fetch` throws `TypeError`. Add one or more allowed hosts via CLI or config:
 

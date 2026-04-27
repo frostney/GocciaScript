@@ -544,4 +544,19 @@ console.log("Loader: --allowed-host multiple hosts...");
   if (!res.text().includes("blocked.test")) throw new Error(`Error should mention blocked host, got: ${res.text()}`);
 }
 
+console.log("Loader: HTTPS fetch smoke with --allowed-host...");
+{
+  const proc = Bun.spawnSync([LOADER, "--output=json", "--asi", "--allowed-host=www.gstatic.com"], {
+    stdin: new TextEncoder().encode(
+      'const response = await fetch("https://www.gstatic.com/generate_204", { method: "HEAD" });\nresponse.status;\n',
+    ),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`HTTPS fetch should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+  const json = JSON.parse(proc.stdout.toString());
+  if (json.ok !== true) throw new Error(`HTTPS fetch JSON ok should be true, got ${json.ok}`);
+  if (json.value !== 204) throw new Error(`HTTPS fetch status should be 204, got ${json.value}`);
+}
+
 console.log("\nAll test-cli-apps.ts tests passed.");
