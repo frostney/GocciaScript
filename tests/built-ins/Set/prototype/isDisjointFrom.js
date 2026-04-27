@@ -34,10 +34,12 @@ describe("Set.prototype.isDisjointFrom", () => {
   });
 
   test("uses set-like keys when other size is smaller", () => {
+    let hasCalls = 0;
     const setLike = {
       size: 1,
       has(value) {
-        return value === 3 || value === 4;
+        hasCalls = hasCalls + 1;
+        throw new Error("isDisjointFrom should use keys() when other size is smaller");
       },
       keys() {
         return [3, 4].values();
@@ -45,6 +47,7 @@ describe("Set.prototype.isDisjointFrom", () => {
     };
     expect(new Set([1, 2]).isDisjointFrom(setLike)).toBe(true);
     expect(new Set([2, 3]).isDisjointFrom(setLike)).toBe(false);
+    expect(hasCalls).toBe(0);
   });
 
   test("throws TypeError when called on non-Set", () => {

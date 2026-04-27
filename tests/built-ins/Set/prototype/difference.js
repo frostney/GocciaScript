@@ -37,16 +37,19 @@ describe("Set.prototype.difference", () => {
   });
 
   test("uses set-like keys when other size is smaller", () => {
+    let hasCalls = 0;
     const setLike = {
       size: 1,
       has(value) {
-        return value === 2 || value === 4;
+        hasCalls = hasCalls + 1;
+        throw new Error("difference should use keys() when other size is smaller");
       },
       keys() {
         return [2, 4, 4].values();
       },
     };
     const result = new Set([1, 2, 3, 4]).difference(setLike);
+    expect(hasCalls).toBe(0);
     expect(result.size).toBe(2);
     expect(result.has(1)).toBe(true);
     expect(result.has(3)).toBe(true);

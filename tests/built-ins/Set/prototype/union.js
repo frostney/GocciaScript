@@ -100,4 +100,21 @@ describe("Set.prototype.union", () => {
       },
     })).toThrow(TypeError);
   });
+
+  test("throws TypeError when set-like keys iterator next returns non-object", () => {
+    const s = new Set([1, 2]);
+    expect(() => s.union({
+      size: 1,
+      has(value) {
+        return value === 1;
+      },
+      keys() {
+        return {
+          next() {
+            return 1;
+          },
+        };
+      },
+    })).toThrow(TypeError);
+  });
 });

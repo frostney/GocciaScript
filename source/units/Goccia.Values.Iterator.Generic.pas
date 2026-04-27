@@ -24,6 +24,8 @@ type
 implementation
 
 uses
+  SysUtils,
+
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -64,6 +66,9 @@ begin
   finally
     CallArgs.Free;
   end;
+
+  if not (NextResult is TGocciaObjectValue) then
+    ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.TypeName]), SSuggestIteratorResultObject);
 
   if NextResult is TGocciaObjectValue then
   begin
@@ -118,6 +123,9 @@ begin
   finally
     CallArgs.Free;
   end;
+
+  if not (NextResult is TGocciaObjectValue) then
+    ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.TypeName]), SSuggestIteratorResultObject);
 
   if NextResult is TGocciaObjectValue then
   begin
