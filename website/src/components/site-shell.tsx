@@ -270,16 +270,15 @@ export function SiteShell({
 
       <footer className="footer">
         <div className="container footer-inner">
-          <div>
+          <div className="footer-brand-row">
             <div className="footer-brand">
               <Image src="/logo.png" alt="" width={28} height={28} />
               <span>
                 Goccia<em className="text-accent italic">Script</em>
               </span>
             </div>
-            <small className="block mt-2 max-w-[42ch]">
-              A drop of JavaScript — a strict subset of ECMAScript 2027+,
-              sandboxed by default.
+            <small className="text-ink-3 text-[0.82rem]">
+              — A drop of JavaScript, sandboxed by default.
             </small>
           </div>
         </div>

@@ -68,6 +68,8 @@
   --display: var(--font-instrument-serif), "Instrument Serif", Georgia, serif;
   --body: var(--font-ibm-plex-sans), "IBM Plex Sans", system-ui, sans-serif;
 
+  --console-bg: #d5c89c;
+
   --shadow-sm: 0 1px 0 rgba(42, 36, 25, 0.06), 0 1px 2px rgba(42, 36, 25, 0.08);
   --shadow:
     0 2px 0 rgba(42, 36, 25, 0.05), 0 6px 20px -6px rgba(42, 36, 25, 0.18);
@@ -93,6 +95,8 @@
   --amber: #e6a25c;
   --amber-2: #f0b57a;
   --espresso: #d4a074;
+
+  --console-bg: #13100b;
 
   --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.5);
   --shadow: 0 2px 0 rgba(0, 0, 0, 0.3), 0 10px 24px -6px rgba(0, 0, 0, 0.6);
@@ -1727,17 +1731,23 @@ p {
   background: color-mix(in oklab, var(--accent) 30%, transparent);
 }
 
-.pg-output {
+/* Shared console output panel — zsh/spaceship-inspired terminal look.
+   Used by the playground, sandbox host-result pane, and hero runnable
+   card. The background is a step darker than the editor panels so the
+   output area reads as "console". */
+.console-panel {
   flex: 1;
-  padding: 1rem 1.1rem;
+  padding: 0.8rem 1.1rem;
   font-family: var(--mono);
   font-size: 0.85rem;
   line-height: 1.65;
   color: var(--ink);
   overflow: auto;
   white-space: pre-wrap;
-  background: var(--paper-2);
+  background: var(--console-bg);
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.06);
 }
+
 
 /* Shared "console output" panel reused across the playground,
    sandbox preview, hero runnable card, and Compiler Pipeline. Lines
@@ -1759,6 +1769,48 @@ p {
 .anim-output-line.log-meta {
   color: var(--ink-3);
   font-style: italic;
+}
+/* Command line — the first meta line with ➜ prompt. Uses a typewriter
+   reveal instead of the standard fade-in, so it must opt out of the
+   default animation and be visible immediately. */
+.anim-output-line.log-command {
+  color: var(--ink-3);
+  opacity: 1;
+  transform: none;
+  animation: none;
+}
+.anim-output-typed {
+  display: inline-block;
+  overflow: hidden;
+  white-space: nowrap;
+  vertical-align: bottom;
+  max-width: 0;
+  animation: typewriter-expand 0.6s steps(30, end) forwards;
+}
+@keyframes typewriter-expand {
+  to {
+    max-width: 100%;
+  }
+}
+/* Inline caret that follows the typewriter text, then hides once
+   the command finishes typing and the trailing caret takes over. */
+.anim-output-caret-typing {
+  opacity: 1;
+  animation:
+    arch-caret-blink 0.85s steps(2, end) infinite,
+    caret-typing-hide 0.01s 0.6s forwards;
+}
+@keyframes caret-typing-hide {
+  to {
+    opacity: 0;
+    width: 0;
+    margin: 0;
+  }
+}
+/* Idle caret in the empty state — just blinks, no fade-in. */
+.anim-output-caret-idle {
+  opacity: 1;
+  animation: arch-caret-blink 0.85s steps(2, end) infinite;
 }
 .anim-output-line.log-result {
   color: var(--forest);
@@ -1796,6 +1848,13 @@ p {
     opacity: 1;
   }
 }
+.anim-output-hint {
+  margin-left: 0.6ch;
+  color: var(--ink-3);
+  opacity: 0.38;
+  font-style: normal;
+  user-select: none;
+}
 
 /* Code block with a left-side line-number gutter. Used by the
    Compiler Pipeline panels, EXCLUDED snippets, and any other static
@@ -1809,8 +1868,8 @@ p {
 }
 .numbered-code-gutter {
   margin: 0;
-  padding: 0.85rem 0.65rem 0.85rem 0.85rem;
-  background: var(--paper-2);
+  padding: 0.85rem 0.5rem 0.85rem 0.7rem;
+  background: color-mix(in oklab, var(--paper-2) 70%, var(--paper-3));
   border-right: 1px solid var(--rule-soft);
   color: var(--ink-3);
   font-family: var(--mono);
@@ -1819,7 +1878,7 @@ p {
   text-align: right;
   user-select: none;
   white-space: pre;
-  min-width: 2ch;
+  min-width: 2.5ch;
 }
 .numbered-code-body {
   margin: 0;
@@ -2110,6 +2169,12 @@ p {
   width: 28px;
   height: 28px;
 }
+.footer-brand-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
 .footer small {
   color: var(--ink-3);
   font-size: 0.82rem;
@@ -2311,23 +2376,23 @@ p {
   background: color-mix(in oklab, var(--accent) 28%, transparent);
   color: transparent;
 }
-.hero-output {
+/* Hero console — sits inside the code-card, below the editor.
+   Inherits from .console-panel; overrides are hero-specific sizing. */
+.hero-console {
   border-top: 1px solid var(--rule-soft);
   padding: 0.65rem 1.25rem;
-  background: var(--paper-3);
-  font-family: var(--mono);
   font-size: 0.78rem;
-  line-height: 1.65;
   /* 5 lines × 1.65 line-height × 0.78rem ≈ 6.45rem of text + 1.3rem padding */
   min-height: 7.75rem;
   display: flex;
   flex-direction: column;
   justify-content: center;
 }
-.hero-output-empty {
-  color: var(--ink-3);
-  font-style: italic;
-  opacity: 0.7;
+/* Arch pipeline console tab — compact padding inside the artifact box. */
+.arch-console {
+  padding: 0.65rem 0.85rem;
+  font-size: 0.82rem;
+  border-radius: 0;
 }
 
 /* ---------- full-width playground ---------- */
@@ -2453,7 +2518,6 @@ p {
 
 /* ---------- HighlightedTextarea (transparent textarea over highlighted overlay) ---------- */
 .hta {
-  position: relative;
   background: var(--paper-2);
   border-radius: 0;
   flex: 1;
@@ -2497,6 +2561,27 @@ p {
 .hta-ta::selection {
   background: color-mix(in oklab, var(--accent) 28%, transparent);
   color: transparent;
+}
+.hta-gutter {
+  margin: 0;
+  padding: 0.85rem 0.5rem 0.85rem 0.7rem;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  text-align: right;
+  color: var(--ink-3);
+  user-select: none;
+  white-space: pre;
+  overflow: hidden;
+  min-width: 2.5ch;
+  border-right: 1px solid var(--rule-soft);
+  background: color-mix(in oklab, var(--paper-2) 70%, var(--paper-3));
+}
+.hta-editor {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
 }
 
 /* JSON tokens */
@@ -2681,7 +2766,7 @@ p {
   border: 1px solid var(--rule-soft);
   border-left: 3px solid var(--accent);
   background: color-mix(in oklab, var(--accent) 4%, var(--paper));
-  border-radius: 10px;
+  border-radius: 0;
   padding: 1.1rem 1.25rem;
   display: grid;
   gap: 0.5rem;
@@ -2744,7 +2829,7 @@ p {
 .arch-artifact-box {
   background: var(--paper);
   border: 1px solid var(--rule-soft);
-  border-radius: 10px;
+  border-radius: 0;
   overflow: hidden;
 }
 .arch-artifact-head {

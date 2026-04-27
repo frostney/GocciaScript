@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { AnchorH2 } from "@/components/anchor-heading";
 import { AnimatedOutput } from "@/components/animated-output";
+import { ConsolePanel } from "@/components/console-panel";
 import {
   HighlightedCode,
   HighlightedGeneric,
@@ -481,12 +482,18 @@ const RESERVED_BINDING_WORDS = new Set([
   "public",
 ]);
 
-/** Build the script that actually runs: each top-level globals key
- *  becomes a `const X = <JSON literal>;` declaration above the user's
- *  code. `JSON.stringify` of any JSON value is also a valid JS literal,
- *  so this round-trips cleanly without ad-hoc escaping. Throws on any
- *  globals key that wouldn't be a valid identifier — caller surfaces
- *  the message in the sandbox console. */
+/** System prompt prepended to every sandbox execution so the full
+ *  source (visible in tool-call logs) explains what GocciaScript is. */
+const GOCCIA_SYSTEM_PROMPT = `\
+// ─── system ───
+// GocciaScript is a strict ECMAScript subset, sandboxed by default.
+// No eval, no dynamic import, no fs, no env, no ambient globals.
+// No var, no function declarations, no loose equality (== / !=).
+// Only the injected globals below are available to the script.`;
+
+/** Build the script that actually runs: a system prompt header,
+ *  `const` declarations for each globals key, and the user's code.
+ *  Throws on globals keys that aren't valid JS identifiers. */
 function buildScript(userCode: string, parsedGlobals: Record<string, unknown>) {
   const prelude = Object.entries(parsedGlobals)
     .map(([k, v]) => {
@@ -503,8 +510,10 @@ function buildScript(userCode: string, parsedGlobals: Record<string, unknown>) {
       return `const ${k} = ${JSON.stringify(v)};`;
     })
     .join("\n");
-  if (!prelude) return userCode;
-  return `// ─── injected globals ───\n${prelude}\n\n// ─── user script ───\n${userCode}`;
+  const globalsBlock = prelude
+    ? `\n\n// ─── injected globals ───\n${prelude}`
+    : "";
+  return `${GOCCIA_SYSTEM_PROMPT}${globalsBlock}\n\n// ─── user script ───\n${userCode}`;
 }
 
 export function Sandbox() {
@@ -530,7 +539,7 @@ export function Sandbox() {
       setOutput([
         {
           kind: "meta",
-          text: "› goccia run --timeout=500 --memory=64MB --globals=context.json",
+          text: "GocciaScriptLoader --timeout=500 --globals=context.json",
         },
         {
           kind: "err",
@@ -554,7 +563,7 @@ export function Sandbox() {
       setOutput([
         {
           kind: "meta",
-          text: "› goccia run --timeout=500 --memory=64MB --globals=context.json",
+          text: "GocciaScriptLoader --timeout=500 --globals=context.json",
         },
         {
           kind: "err",
@@ -565,11 +574,11 @@ export function Sandbox() {
     }
     const banner: SbLine = {
       kind: "meta",
-      text: "› goccia run --timeout=500 --memory=64MB --globals=context.json",
+      text: "GocciaScriptLoader --timeout=500 --globals=context.json",
     };
     setRunning(true);
     setRunId((r) => r + 1);
-    setOutput([banner, { kind: "meta", text: "  caps: — none —" }]);
+    setOutput([banner]);
 
     try {
       const res = await fetch("/api/run", {
@@ -623,10 +632,7 @@ export function Sandbox() {
         return;
       }
 
-      const lines: SbLine[] = [
-        banner,
-        { kind: "meta", text: "  caps: — none —" },
-      ];
+      const lines: SbLine[] = [banner];
       if (data.error) {
         const where = data.error.line ? ` (line ${data.error.line})` : "";
         lines.push({
@@ -780,6 +786,7 @@ export function Sandbox() {
                 value={code}
                 onChange={setCode}
                 language="goccia"
+                lineNumbers
               />
             </div>
             <div className="sb-field">
@@ -792,11 +799,12 @@ export function Sandbox() {
                 value={globalsText}
                 onChange={setGlobalsText}
                 language="json"
+                lineNumbers
               />
             </div>
             <div className="sb-field">
               <div className="sb-field-label">host result</div>
-              <div className="pg-output flex-1 rounded-t-none">
+              <ConsolePanel className="flex-1 rounded-t-none">
                 <AnimatedOutput
                   runKey={runId}
                   lines={output.map((l) => ({
@@ -809,7 +817,7 @@ export function Sandbox() {
                     text: l.text,
                   }))}
                 />
-              </div>
+              </ConsolePanel>
             </div>
           </div>
         </div>
