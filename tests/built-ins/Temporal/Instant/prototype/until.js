@@ -49,4 +49,28 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.until", () => {
     const i2 = Temporal.Instant.fromEpochMilliseconds(0);
     expect(i1.until(i2, { largestUnit: "minutes" }).toString()).toBe("-PT1M30S");
   });
+
+  test("until() with smallestUnit seconds truncates milliseconds", () => {
+    const i1 = Temporal.Instant.fromEpochMilliseconds(0);
+    const i2 = Temporal.Instant.fromEpochMilliseconds(5500);
+    expect(i1.until(i2, { smallestUnit: "seconds" }).toString()).toBe("PT5S");
+  });
+
+  test("until() with smallestUnit seconds and roundingMode halfExpand", () => {
+    const i1 = Temporal.Instant.fromEpochMilliseconds(0);
+    const i2 = Temporal.Instant.fromEpochMilliseconds(5500);
+    expect(i1.until(i2, { smallestUnit: "seconds", roundingMode: "halfExpand" }).toString()).toBe("PT6S");
+  });
+
+  test("until() with smallestUnit minutes truncates seconds", () => {
+    const i1 = Temporal.Instant.fromEpochMilliseconds(0);
+    const i2 = Temporal.Instant.fromEpochMilliseconds(90500);
+    expect(i1.until(i2, { largestUnit: "minutes", smallestUnit: "minutes" }).toString()).toBe("PT1M");
+  });
+
+  test("until() with roundingIncrement 15 and smallestUnit minutes", () => {
+    const i1 = Temporal.Instant.fromEpochMilliseconds(0);
+    const i2 = Temporal.Instant.fromEpochMilliseconds(50 * 60000);
+    expect(i1.until(i2, { largestUnit: "hours", smallestUnit: "minutes", roundingIncrement: 15 }).toString()).toBe("PT45M");
+  });
 });

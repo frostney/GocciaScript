@@ -24,4 +24,10 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.since", () => {
     const i2 = Temporal.Instant.fromEpochMilliseconds(0);
     expect(i1.since(i2, { largestUnit: "seconds" }).toString()).toBe("PT90061S");
   });
+
+  test("since() with smallestUnit seconds and roundingMode halfExpand", () => {
+    const i1 = Temporal.Instant.fromEpochMilliseconds(5500);
+    const i2 = Temporal.Instant.fromEpochMilliseconds(0);
+    expect(i1.since(i2, { smallestUnit: "seconds", roundingMode: "halfExpand" }).toString()).toBe("PT6S");
+  });
 });

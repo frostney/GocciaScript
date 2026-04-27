@@ -68,4 +68,61 @@ describe.runIf(isTemporal)("Temporal.PlainDate.prototype.until", () => {
     const d2 = Temporal.PlainDate.from("2024-03-01");
     expect(d1.until(d2, { largestUnit: "months" }).toString()).toBe("P1M1D");
   });
+
+  test("until() with smallestUnit month truncates days", () => {
+    const d1 = Temporal.PlainDate.from("2020-01-01");
+    const d2 = Temporal.PlainDate.from("2020-04-15");
+    expect(d1.until(d2, { largestUnit: "years", smallestUnit: "month" }).toString()).toBe("P3M");
+  });
+
+  test("until() with smallestUnit month and roundingMode halfExpand", () => {
+    const d1 = Temporal.PlainDate.from("2020-01-01");
+    const d2 = Temporal.PlainDate.from("2020-04-20");
+    expect(d1.until(d2, { largestUnit: "years", smallestUnit: "month", roundingMode: "halfExpand" }).toString()).toBe("P4M");
+  });
+
+  test("until() with smallestUnit year truncates months", () => {
+    const d1 = Temporal.PlainDate.from("2020-01-01");
+    const d2 = Temporal.PlainDate.from("2023-08-15");
+    expect(d1.until(d2, { largestUnit: "years", smallestUnit: "year" }).toString()).toBe("P3Y");
+  });
+
+  test("until() with smallestUnit year and roundingMode halfExpand rounds up", () => {
+    const d1 = Temporal.PlainDate.from("2020-01-01");
+    const d2 = Temporal.PlainDate.from("2023-08-15");
+    expect(d1.until(d2, { largestUnit: "years", smallestUnit: "year", roundingMode: "halfExpand" }).toString()).toBe("P4Y");
+  });
+
+  test("until() with smallestUnit week truncates remaining days", () => {
+    const d1 = Temporal.PlainDate.from("2024-01-01");
+    const d2 = Temporal.PlainDate.from("2024-01-20");
+    expect(d1.until(d2, { largestUnit: "weeks", smallestUnit: "week" }).toString()).toBe("P2W");
+  });
+
+  test("until() with roundingIncrement 2 and smallestUnit month", () => {
+    const d1 = Temporal.PlainDate.from("2020-01-01");
+    const d2 = Temporal.PlainDate.from("2020-07-10");
+    expect(d1.until(d2, { largestUnit: "years", smallestUnit: "month", roundingIncrement: 2 }).toString()).toBe("P6M");
+  });
+
+  test("until() negative with smallestUnit month truncates", () => {
+    const d1 = Temporal.PlainDate.from("2020-04-15");
+    const d2 = Temporal.PlainDate.from("2020-01-01");
+    expect(d1.until(d2, { largestUnit: "years", smallestUnit: "month" }).toString()).toBe("-P3M");
+  });
+
+  test("until() negative with roundingIncrement 2 and halfExpand rounds away from zero", () => {
+    const d1 = Temporal.PlainDate.from("2020-04-15");
+    const d2 = Temporal.PlainDate.from("2020-01-01");
+    expect(d1.until(d2, { largestUnit: "years", smallestUnit: "month", roundingIncrement: 2, roundingMode: "halfExpand" }).toString()).toBe("-P4M");
+  });
+
+  test("until() smallestUnit week with largestUnit month does not leak days", () => {
+    const d1 = Temporal.PlainDate.from("2020-01-31");
+    const d2 = Temporal.PlainDate.from("2020-03-28");
+    const dur = d1.until(d2, { largestUnit: "month", smallestUnit: "week" });
+    expect(dur.days).toBe(0);
+    expect(dur.weeks).toBe(8);
+    expect(dur.months).toBe(0);
+  });
 });

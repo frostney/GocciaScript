@@ -55,4 +55,40 @@ describe.runIf(isTemporal)("Temporal.PlainDateTime.prototype.until", () => {
     const dt2 = new Temporal.PlainDateTime(2024, 1, 22, 12, 0);
     expect(dt1.until(dt2, { largestUnit: "weeks" }).toString()).toBe("P3WT12H");
   });
+
+  test("until() with smallestUnit hour truncates minutes", () => {
+    const dt1 = new Temporal.PlainDateTime(2024, 1, 1, 10, 0);
+    const dt2 = new Temporal.PlainDateTime(2024, 1, 1, 12, 45);
+    expect(dt1.until(dt2, { smallestUnit: "hour" }).toString()).toBe("PT2H");
+  });
+
+  test("until() with smallestUnit hour and roundingMode halfExpand", () => {
+    const dt1 = new Temporal.PlainDateTime(2024, 1, 1, 10, 0);
+    const dt2 = new Temporal.PlainDateTime(2024, 1, 1, 12, 45);
+    expect(dt1.until(dt2, { smallestUnit: "hour", roundingMode: "halfExpand" }).toString()).toBe("PT3H");
+  });
+
+  test("until() with smallestUnit minute truncates seconds", () => {
+    const dt1 = new Temporal.PlainDateTime(2024, 1, 1, 0, 0, 0);
+    const dt2 = new Temporal.PlainDateTime(2024, 1, 1, 0, 5, 45);
+    expect(dt1.until(dt2, { smallestUnit: "minute" }).toString()).toBe("PT5M");
+  });
+
+  test("until() with smallestUnit day truncates time", () => {
+    const dt1 = new Temporal.PlainDateTime(2024, 1, 1, 0, 0);
+    const dt2 = new Temporal.PlainDateTime(2024, 1, 3, 18, 0);
+    expect(dt1.until(dt2, { smallestUnit: "day" }).toString()).toBe("P2D");
+  });
+
+  test("until() with smallestUnit day and roundingMode ceil rounds up", () => {
+    const dt1 = new Temporal.PlainDateTime(2024, 1, 1, 0, 0);
+    const dt2 = new Temporal.PlainDateTime(2024, 1, 3, 1, 0);
+    expect(dt1.until(dt2, { smallestUnit: "day", roundingMode: "ceil" }).toString()).toBe("P3D");
+  });
+
+  test("until() with smallestUnit month and largestUnit year", () => {
+    const dt1 = new Temporal.PlainDateTime(2020, 1, 1, 0, 0);
+    const dt2 = new Temporal.PlainDateTime(2020, 4, 20, 12, 0);
+    expect(dt1.until(dt2, { largestUnit: "years", smallestUnit: "month", roundingMode: "halfExpand" }).toString()).toBe("P4M");
+  });
 });

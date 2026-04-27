@@ -38,4 +38,22 @@ describe.runIf(isTemporal)("Temporal.PlainYearMonth.prototype.until", () => {
     expect(dur.years).toBe(0);
     expect(dur.months).toBe(0);
   });
+
+  test("until() with smallestUnit year truncates months", () => {
+    const a = new Temporal.PlainYearMonth(2020, 1);
+    const b = new Temporal.PlainYearMonth(2023, 8);
+    expect(a.until(b, { largestUnit: "years", smallestUnit: "year" }).toString()).toBe("P3Y");
+  });
+
+  test("until() with smallestUnit year and roundingMode halfExpand rounds up", () => {
+    const a = new Temporal.PlainYearMonth(2020, 1);
+    const b = new Temporal.PlainYearMonth(2023, 8);
+    expect(a.until(b, { largestUnit: "years", smallestUnit: "year", roundingMode: "halfExpand" }).toString()).toBe("P4Y");
+  });
+
+  test("until() with roundingIncrement 3 and smallestUnit month", () => {
+    const a = new Temporal.PlainYearMonth(2020, 1);
+    const b = new Temporal.PlainYearMonth(2020, 8);
+    expect(a.until(b, { largestUnit: "months", smallestUnit: "month", roundingIncrement: 3 }).toString()).toBe("P6M");
+  });
 });
