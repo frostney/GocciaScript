@@ -10,6 +10,10 @@ import { $ } from "bun";
 const ext = process.platform === "win32" ? ".exe" : "";
 const LOADER = `./build/GocciaScriptLoader${ext}`;
 
+function normalizeLineEndings(output: string): string {
+  return output.replace(/\r\n/g, "\n");
+}
+
 function runLoaderJson(source: string, args: string[] = []) {
   const proc = Bun.spawnSync([LOADER, "--output=json", ...args], {
     stdin: new TextEncoder().encode(source),
@@ -85,7 +89,7 @@ console.log("Unsupported var recovery (ASI and compat-var flags)...");
   const blockCloseRes = runLoaderJson(sourceBeforeBlockClose);
   if (blockCloseRes.exitCode !== 0) throw new Error(`Unsupported var before } should not consume the block close`);
   if (blockCloseRes.json.ok !== true) throw new Error(`Unsupported var before } should succeed, got: ${JSON.stringify(blockCloseRes.json)}`);
-  if (blockCloseRes.json.output !== "after\n") throw new Error(`Expected output after unsupported var block recovery, got: ${blockCloseRes.json.output}`);
+  if (normalizeLineEndings(blockCloseRes.json.output) !== "after\n") throw new Error(`Expected output after unsupported var block recovery, got: ${blockCloseRes.json.output}`);
 
   const sourceBeforeDeclaration = [
     "var skipped = 1",
@@ -96,12 +100,12 @@ console.log("Unsupported var recovery (ASI and compat-var flags)...");
   const asiRes = runLoaderJson(sourceBeforeDeclaration, ["--asi"]);
   if (asiRes.exitCode !== 0) throw new Error(`Unsupported var with ASI should preserve the following declaration`);
   if (asiRes.json.ok !== true) throw new Error(`Unsupported var with ASI should succeed, got: ${JSON.stringify(asiRes.json)}`);
-  if (asiRes.json.output !== "2\n") throw new Error(`Expected ASI recovery output 2, got: ${asiRes.json.output}`);
+  if (normalizeLineEndings(asiRes.json.output) !== "2\n") throw new Error(`Expected ASI recovery output 2, got: ${asiRes.json.output}`);
 
   const compatVarAsiRes = runLoaderJson(sourceBeforeDeclaration, ["--asi", "--compat-var"]);
   if (compatVarAsiRes.exitCode !== 0) throw new Error(`compat-var with ASI should parse var without an explicit semicolon`);
   if (compatVarAsiRes.json.ok !== true) throw new Error(`compat-var with ASI should succeed, got: ${JSON.stringify(compatVarAsiRes.json)}`);
-  if (compatVarAsiRes.json.output !== "2\n") throw new Error(`Expected compat-var ASI output 2, got: ${compatVarAsiRes.json.output}`);
+  if (normalizeLineEndings(compatVarAsiRes.json.output) !== "2\n") throw new Error(`Expected compat-var ASI output 2, got: ${compatVarAsiRes.json.output}`);
 
   const compatVarNoAsiRes = runLoaderJson(sourceBeforeDeclaration, ["--compat-var"]);
   if (compatVarNoAsiRes.exitCode === 0) throw new Error(`compat-var without ASI should require a semicolon before the following declaration`);
