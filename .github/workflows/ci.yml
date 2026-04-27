@@ -96,8 +96,10 @@ jobs:
               EXTRA_FLAGS=""
               ;;
             darwin)
-              SDK_LIB="$(xcrun --show-sdk-path)/usr/lib"
-              EXTRA_FLAGS="-Fl${SDK_LIB}"
+              SDK_ROOT="$(xcrun --show-sdk-path)"
+              SDK_LIB="${SDK_ROOT}/usr/lib"
+              SDK_FRAMEWORKS="${SDK_ROOT}/System/Library/Frameworks"
+              EXTRA_FLAGS="-Fl${SDK_LIB} -k-F${SDK_FRAMEWORKS}"
               ;;
           esac
 
