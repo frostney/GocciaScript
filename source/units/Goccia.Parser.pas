@@ -4691,6 +4691,12 @@ begin
   Depth := 0;
   while not IsAtEnd do
   begin
+    if (Depth = 0) and Check(gttRightBrace) then
+      Exit;
+    if (Depth = 0) and FAutomaticSemicolonInsertion and
+      (Previous.Line < Peek.Line) then
+      Exit;
+
     case Peek.TokenType of
       gttLeftParen, gttLeftBracket, gttLeftBrace, gttLess: Inc(Depth);
       gttRightParen, gttRightBracket, gttRightBrace, gttGreater: Dec(Depth);

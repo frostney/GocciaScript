@@ -10,6 +10,18 @@ import { $ } from "bun";
 const ext = process.platform === "win32" ? ".exe" : "";
 const LOADER = `./build/GocciaScriptLoader${ext}`;
 
+function runLoaderJson(source: string, args: string[] = []) {
+  const proc = Bun.spawnSync([LOADER, "--output=json", ...args], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return {
+    exitCode: proc.exitCode,
+    json: JSON.parse(proc.stdout.toString()),
+  };
+}
+
 // -- Error display (SyntaxError with caret and suggestion) ----------------------
 
 console.log("Error display (SyntaxError with caret and suggestion)...");
@@ -57,6 +69,44 @@ console.log("Error display (bytecode SyntaxError)...");
   if (json.error?.type !== "SyntaxError") throw new Error(`Expected SyntaxError in bytecode, got ${json.error?.type}`);
   if (typeof json.error?.line !== "number") throw new Error(`Bytecode JSON error should include numeric line, got ${json.error?.line}`);
   if (typeof json.error?.column !== "number") throw new Error(`Bytecode JSON error should include numeric column, got ${json.error?.column}`);
+}
+
+// -- Unsupported var recovery (ASI and compat-var flags) ------------------------
+
+console.log("Unsupported var recovery (ASI and compat-var flags)...");
+{
+  const sourceBeforeBlockClose = [
+    "if (true) {",
+    "  var skipped = 1",
+    "}",
+    'console.log("after");',
+    "",
+  ].join("\n");
+  const blockCloseRes = runLoaderJson(sourceBeforeBlockClose);
+  if (blockCloseRes.exitCode !== 0) throw new Error(`Unsupported var before } should not consume the block close`);
+  if (blockCloseRes.json.ok !== true) throw new Error(`Unsupported var before } should succeed, got: ${JSON.stringify(blockCloseRes.json)}`);
+  if (blockCloseRes.json.output !== "after\n") throw new Error(`Expected output after unsupported var block recovery, got: ${blockCloseRes.json.output}`);
+
+  const sourceBeforeDeclaration = [
+    "var skipped = 1",
+    "const after = 2;",
+    "console.log(after);",
+    "",
+  ].join("\n");
+  const asiRes = runLoaderJson(sourceBeforeDeclaration, ["--asi"]);
+  if (asiRes.exitCode !== 0) throw new Error(`Unsupported var with ASI should preserve the following declaration`);
+  if (asiRes.json.ok !== true) throw new Error(`Unsupported var with ASI should succeed, got: ${JSON.stringify(asiRes.json)}`);
+  if (asiRes.json.output !== "2\n") throw new Error(`Expected ASI recovery output 2, got: ${asiRes.json.output}`);
+
+  const compatVarAsiRes = runLoaderJson(sourceBeforeDeclaration, ["--asi", "--compat-var"]);
+  if (compatVarAsiRes.exitCode !== 0) throw new Error(`compat-var with ASI should parse var without an explicit semicolon`);
+  if (compatVarAsiRes.json.ok !== true) throw new Error(`compat-var with ASI should succeed, got: ${JSON.stringify(compatVarAsiRes.json)}`);
+  if (compatVarAsiRes.json.output !== "2\n") throw new Error(`Expected compat-var ASI output 2, got: ${compatVarAsiRes.json.output}`);
+
+  const compatVarNoAsiRes = runLoaderJson(sourceBeforeDeclaration, ["--compat-var"]);
+  if (compatVarNoAsiRes.exitCode === 0) throw new Error(`compat-var without ASI should require a semicolon before the following declaration`);
+  if (compatVarNoAsiRes.json.ok !== false) throw new Error(`compat-var without ASI should fail, got: ${JSON.stringify(compatVarNoAsiRes.json)}`);
+  if (compatVarNoAsiRes.json.error?.type !== "SyntaxError") throw new Error(`Expected SyntaxError without ASI, got: ${compatVarNoAsiRes.json.error?.type}`);
 }
 
 console.log("\nAll test-cli-parser.ts tests passed.");
