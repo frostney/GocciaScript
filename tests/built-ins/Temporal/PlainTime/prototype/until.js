@@ -49,4 +49,10 @@ describe.runIf(isTemporal)("Temporal.PlainTime.prototype.until", () => {
     const t2 = new Temporal.PlainTime(10, 1, 30);
     expect(t1.until(t2, { largestUnit: "second" }).toString()).toBe("PT90S");
   });
+
+  test("until() throws RangeError when smallestUnit is larger than largestUnit", () => {
+    const t1 = new Temporal.PlainTime(10, 0, 0);
+    const t2 = new Temporal.PlainTime(12, 30, 0);
+    expect(() => t1.until(t2, { largestUnit: "second", smallestUnit: "hour" })).toThrow(RangeError);
+  });
 });
