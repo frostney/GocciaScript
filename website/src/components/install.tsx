@@ -193,7 +193,7 @@ export function Install({
         <div className="install-hero">
           <div className="install-hero-text">
             <div className="section-head">
-              <div className="section-kicker">Install</div>
+              <div className="section-kicker">Installation</div>
               <h1>
                 Get Goccia<em>Script</em> on your machine.
               </h1>

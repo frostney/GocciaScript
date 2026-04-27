@@ -35,7 +35,7 @@ type Tab = "home" | "install" | "docs" | "playground" | "sandbox";
 
 const TABS: { id: Tab; label: string; href: string }[] = [
   { id: "home", label: "Home", href: "/" },
-  { id: "install", label: "Install", href: "/installation" },
+  { id: "install", label: "Installation", href: "/installation" },
   { id: "docs", label: "Docs", href: "/docs" },
   { id: "playground", label: "Playground", href: "/playground" },
   { id: "sandbox", label: "Sandbox", href: "/sandbox" },

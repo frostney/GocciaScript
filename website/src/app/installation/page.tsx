@@ -5,7 +5,7 @@ import { fetchLatestRelease } from "@/lib/github";
 import { parseAcceptLanguage } from "@/lib/locale";
 
 export const metadata: Metadata = {
-  title: "Install",
+  title: "Installation",
   description:
     "Install GocciaScript — one-line installer, prebuilt binaries, or build from source. Single self-contained runtime, no Node.js required.",
   alternates: { canonical: "/installation" },

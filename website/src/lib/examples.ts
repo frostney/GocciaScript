@@ -8,6 +8,7 @@ export type Example = {
   label: string;
   desc: string;
   code: string;
+  ext?: string;
 };
 
 export const EXAMPLES: Example[] = [
@@ -21,6 +22,7 @@ export const EXAMPLES: Example[] = [
   },
   {
     id: "types",
+    ext: "ts",
     label: "Types-as-comments — TypeScript-style annotations",
     desc: "TC39 types-as-comments: TypeScript-style annotations are parsed and stripped at runtime — no separate compilation step.",
     code: `// Type annotations are allowed, but treated as comments at runtime.
@@ -54,6 +56,7 @@ console.log("Total:", format(subtotal(cart), "EUR"));`,
   },
   {
     id: "enums",
+    ext: "ts",
     label: "Enums — TC39 Stage-1 proposal",
     desc: "Enum declarations compile to frozen objects with reverse-mapping. Enums are exhaustive in a switch.",
     code: `// Enum declarations — TC39 Stage-1 proposal
@@ -117,6 +120,7 @@ console.log("Menu:", shop.getMenu());`,
   },
   {
     id: "coffee-typed",
+    ext: "ts",
     label: "CoffeeShop · typed — types, enums, private fields",
     desc: "The home-page example. Types-as-comments, enums, interfaces, private fields, getters, and mapped object types — all in one program.",
     code: `// Types-as-comments, enums, private fields — all stock GocciaScript.
