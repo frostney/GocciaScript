@@ -660,6 +660,7 @@ const
   ISC_REQ_REPLAY_DETECT = $00000004;
   ISC_REQ_CONFIDENTIALITY = $00000010;
   ISC_REQ_EXTENDED_ERROR = $00004000;
+  ISC_REQ_USE_SUPPLIED_CREDS = $00000080;
   ISC_REQ_ALLOCATE_MEMORY = $00000100;
   ISC_REQ_STREAM = $00008000;
   SCHANNEL_CRED_VERSION = 4;
@@ -732,6 +733,13 @@ begin
     SendSocketAll(ASocket, ABuffer.pvBuffer, ABuffer.cbBuffer);
 end;
 
+function SChannelRequestFlags: LongWord;
+begin
+  Result := ISC_REQ_SEQUENCE_DETECT or ISC_REQ_REPLAY_DETECT or
+    ISC_REQ_CONFIDENTIALITY or ISC_REQ_EXTENDED_ERROR or
+    ISC_REQ_USE_SUPPLIED_CREDS or ISC_REQ_ALLOCATE_MEMORY or ISC_REQ_STREAM;
+end;
+
 procedure StartSChannel(var AConnection: TTransportSecurityConnection;
   const AHost: string);
 var
@@ -800,11 +808,9 @@ begin
         ExistingContext := nil;
 
       Status := InitializeSecurityContextW(@Data.Credential, ExistingContext,
-        PWideChar(TargetName), ISC_REQ_SEQUENCE_DETECT or ISC_REQ_REPLAY_DETECT or
-        ISC_REQ_CONFIDENTIALITY or ISC_REQ_EXTENDED_ERROR or
-        ISC_REQ_ALLOCATE_MEMORY or ISC_REQ_STREAM, 0, SECURITY_NATIVE_DREP,
-        InputDescPointer, 0, @Data.Context, @OutputDesc, @ContextAttributes,
-        @Expiry);
+        PWideChar(TargetName), SChannelRequestFlags, 0,
+        SECURITY_NATIVE_DREP, InputDescPointer, 0, @Data.Context, @OutputDesc,
+        @ContextAttributes, @Expiry);
       Data.HasContext := True;
 
       SendSChannelToken(Data.Socket, OutputBuffer);
@@ -827,8 +833,10 @@ begin
         Continue;
       end;
 
-      if (Status = SEC_I_CONTINUE_NEEDED) or
-         (Status = SEC_I_INCOMPLETE_CREDENTIALS) then
+      if Status = SEC_I_INCOMPLETE_CREDENTIALS then
+        raise ETransportSecurityError.Create(TLS_HANDSHAKE_ERROR);
+
+      if Status = SEC_I_CONTINUE_NEEDED then
       begin
         if Length(Data.EncryptedInput) = 0 then
         begin
@@ -870,6 +878,13 @@ var
   ShutdownToken: LongWord;
   ShutdownBuffer: TSecBuffer;
   ShutdownDesc: TSecBufferDesc;
+  InputBuffer: TSecBuffer;
+  InputDesc: TSecBufferDesc;
+  OutputBuffer: TSecBuffer;
+  OutputDesc: TSecBufferDesc;
+  Status: SECURITY_STATUS;
+  ContextAttributes: LongWord;
+  Expiry: SECURITY_INTEGER;
 begin
   Data := TSChannelData(AConnection.BackendData);
   if Assigned(Data) then
@@ -884,6 +899,31 @@ begin
       ShutdownDesc.cBuffers := 1;
       ShutdownDesc.pBuffers := @ShutdownBuffer;
       ApplyControlToken(@Data.Context, @ShutdownDesc);
+
+      repeat
+        FillChar(InputBuffer, SizeOf(InputBuffer), 0);
+        InputBuffer.BufferType := SECBUFFER_EMPTY;
+        InputDesc.ulVersion := SECBUFFER_VERSION;
+        InputDesc.cBuffers := 1;
+        InputDesc.pBuffers := @InputBuffer;
+
+        FillChar(OutputBuffer, SizeOf(OutputBuffer), 0);
+        OutputBuffer.BufferType := SECBUFFER_TOKEN;
+        FillChar(OutputDesc, SizeOf(OutputDesc), 0);
+        OutputDesc.ulVersion := SECBUFFER_VERSION;
+        OutputDesc.cBuffers := 1;
+        OutputDesc.pBuffers := @OutputBuffer;
+
+        Status := InitializeSecurityContextW(@Data.Credential, @Data.Context,
+          nil, SChannelRequestFlags, 0, SECURITY_NATIVE_DREP, @InputDesc, 0,
+          @Data.Context, @OutputDesc, @ContextAttributes, @Expiry);
+
+        SendSChannelToken(Data.Socket, OutputBuffer);
+        if Assigned(OutputBuffer.pvBuffer) then
+          FreeContextBuffer(OutputBuffer.pvBuffer);
+      until (Status = SEC_E_OK) or (Status = SEC_I_CONTEXT_EXPIRED) or
+            (Status <> SEC_I_CONTINUE_NEEDED);
+
       DeleteSecurityContext(@Data.Context);
     end;
     FreeCredentialsHandle(@Data.Credential);
@@ -1096,6 +1136,12 @@ end;
 function TransportSecurityRead(var AConnection: TTransportSecurityConnection;
   var ABuffer: array of Byte; const ALength: Integer): Integer;
 begin
+  if ALength <= 0 then
+  begin
+    Result := 0;
+    Exit;
+  end;
+
   case AConnection.Backend of
     {$IFDEF DARWIN}
     TSB_SECURE_TRANSPORT:
@@ -1119,6 +1165,12 @@ end;
 function TransportSecurityWrite(var AConnection: TTransportSecurityConnection;
   const ABuffer: Pointer; const ALength: Integer): Integer;
 begin
+  if ALength <= 0 then
+  begin
+    Result := 0;
+    Exit;
+  end;
+
   case AConnection.Backend of
     {$IFDEF DARWIN}
     TSB_SECURE_TRANSPORT:
