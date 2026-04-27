@@ -158,6 +158,9 @@ type
 
   procedure PinPrimitiveSingletons;
 
+  // ES2026 §6.1.6.1.13 — Number::toString for finite, non-zero doubles.
+  function DoubleToESString(AValue: Double): string;
+
 implementation
 
 uses
@@ -174,6 +177,144 @@ uses
   Goccia.Threading,
   Goccia.Timeout,
   Goccia.Values.ErrorHelper;
+
+const
+  MAX_SAFE_INTEGER_VALUE = 9007199254740991.0;
+
+// ES2026 §6.1.6.1.13 Number::toString
+//
+// Finds the shortest decimal representation (unique n, k, s triple with
+// k minimal) and formats it according to the spec's fixed-point vs
+// scientific-notation thresholds (n <= 21 for fixed, n > -6 for leading
+// zeros, scientific otherwise).
+//
+// Uses Str(V:W) with increasing width to find the shortest round-tripping
+// representation, since FloatToStrF caps precision at 15 significant digits
+// for Double values.
+function DoubleToESString(AValue: Double): string;
+
+  procedure FormatES(const AMantissa: string; AK, AN: Integer; ANeg: Boolean;
+    out AResult: string);
+  begin
+    // Step 7: k <= n <= 21 — integer with trailing zeros
+    if (AK <= AN) and (AN <= 21) then
+      AResult := AMantissa + StringOfChar('0', AN - AK)
+    // Step 8: 0 < n <= 21 (and n < k) — decimal within digits
+    else if (0 < AN) and (AN <= 21) then
+      AResult := Copy(AMantissa, 1, AN) + '.' + Copy(AMantissa, AN + 1, AK - AN)
+    // Step 9: -6 < n <= 0 — leading zeros after "0."
+    else if (AN > -6) and (AN <= 0) then
+      AResult := '0.' + StringOfChar('0', -AN) + AMantissa
+    // Steps 10-11: scientific notation
+    else if AK = 1 then
+    begin
+      if AN - 1 > 0 then
+        AResult := AMantissa + 'e+' + IntToStr(AN - 1)
+      else
+        AResult := AMantissa + 'e-' + IntToStr(1 - AN);
+    end
+    else
+    begin
+      if AN - 1 > 0 then
+        AResult := AMantissa[1] + '.' + Copy(AMantissa, 2, AK - 1) + 'e+' + IntToStr(AN - 1)
+      else
+        AResult := AMantissa[1] + '.' + Copy(AMantissa, 2, AK - 1) + 'e-' + IntToStr(1 - AN);
+    end;
+
+    if ANeg then
+      AResult := '-' + AResult;
+  end;
+
+var
+  IsNeg: Boolean;
+  SciStr, Mantissa, TestStr: string;
+  Exp, N, K, I, W, EPos, D: Integer;
+  Parsed: Double;
+  FS: TFormatSettings;
+begin
+  if AValue = 0 then
+    Exit('0');
+
+  IsNeg := AValue < 0;
+  if IsNeg then
+    AValue := -AValue;
+
+  // Fast path: safe integers (all digits exact, n <= 16 <= 21)
+  if (Frac(AValue) = 0) and (AValue <= MAX_SAFE_INTEGER_VALUE) then
+  begin
+    Str(AValue:0:0, Result);
+    if IsNeg then
+      Result := '-' + Result;
+    Exit;
+  end;
+
+  FS := DefaultFormatSettings;
+
+  // Probe k=1 (single significant digit). Str(V:9) always outputs at
+  // least 2 significant digits ("d.dE+ddd"), so we round the 2-digit
+  // mantissa to 1 digit and check round-trip. This handles cases like
+  // Number.MIN_VALUE whose shortest representation is "5e-324".
+  Str(AValue:9, SciStr);
+  SciStr := Trim(SciStr);
+  EPos := Pos('E', SciStr);
+  Exp := StrToInt(Copy(SciStr, EPos + 1, Length(SciStr) - EPos));
+
+  D := Ord(SciStr[1]) - Ord('0');
+  if SciStr[3] >= '5' then
+    Inc(D);
+  if D >= 10 then
+  begin
+    D := 1;
+    Inc(Exp);
+  end;
+
+  TestStr := IntToStr(D) + 'E' + IntToStr(Exp);
+  if TryStrToFloat(TestStr, Parsed, FS) and (Parsed = AValue) then
+  begin
+    N := Exp + 1;
+    FormatES(IntToStr(D), 1, N, IsNeg, Result);
+    Exit;
+  end;
+
+  // General case: find the shortest round-tripping representation.
+  // Str(V:W) outputs scientific notation with (W - 7) significant digits
+  // (for 3-digit exponents) and correctly rounds at each precision level.
+  // W=9 gives the minimum (2 sig digits), W=24 gives the maximum (17).
+  for W := 9 to 24 do
+  begin
+    Str(AValue:W, SciStr);
+    SciStr := Trim(SciStr);
+
+    if TryStrToFloat(SciStr, Parsed, FS) and (Parsed = AValue) then
+    begin
+      EPos := Pos('E', SciStr);
+      Mantissa := Copy(SciStr, 1, EPos - 1);
+      Exp := StrToInt(Copy(SciStr, EPos + 1, Length(SciStr) - EPos));
+      N := Exp + 1;
+
+      // Remove decimal point from mantissa
+      I := Pos('.', Mantissa);
+      if I > 0 then
+        Delete(Mantissa, I, 1);
+
+      // Strip trailing zeros
+      I := Length(Mantissa);
+      while (I > 1) and (Mantissa[I] = '0') do
+        Dec(I);
+      SetLength(Mantissa, I);
+      K := Length(Mantissa);
+
+      FormatES(Mantissa, K, N, IsNeg, Result);
+      Exit;
+    end;
+  end;
+
+  // Fallback (unreachable for valid finite doubles — 17 sig digits always
+  // suffice). Use FloatToStr as a safety net.
+  Result := FloatToStr(AValue, FS);
+  if IsNeg then
+    Result := '-' + Result;
+end;
 
 { TGocciaValue }
 
@@ -580,7 +721,7 @@ begin
   else if IsNegativeZero then
     Result := TGocciaStringLiteralValue.Create('0')
   else
-    Result := TGocciaStringLiteralValue.Create(FloatToStr(FValue));
+    Result := TGocciaStringLiteralValue.Create(DoubleToESString(FValue));
 end;
 
 
