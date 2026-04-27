@@ -431,7 +431,7 @@ obj[sym]; // "value"
 
 Implements the [ECMAScript Set](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Set) including Set methods (`union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom`).
 
-A collection of unique values with insertion-order iteration.
+A collection of unique values with insertion-order iteration. Set operation methods accept either another `Set` or a set-like object with `size`, `has(value)`, and `keys()`.
 
 | Method/Property | Description |
 |--------|-------------|
