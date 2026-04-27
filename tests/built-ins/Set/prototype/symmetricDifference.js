@@ -20,6 +20,22 @@ describe("Set.prototype.symmetricDifference", () => {
     expect(a.symmetricDifference(b).size).toBe(0);
   });
 
+  test("accepts set-like object", () => {
+    const setLike = {
+      size: 3,
+      has(value) {
+        return value === 2 || value === 3 || value === 4;
+      },
+      keys() {
+        return [2, 3, 4, 4].values();
+      },
+    };
+    const result = new Set([1, 2, 3]).symmetricDifference(setLike);
+    expect(result.size).toBe(2);
+    expect(result.has(1)).toBe(true);
+    expect(result.has(4)).toBe(true);
+  });
+
   test("throws TypeError when called on non-Set", () => {
     const symDiff = Set.prototype.symmetricDifference;
     expect(() => symDiff.call(Set.prototype, new Set())).toThrow(TypeError);
@@ -27,7 +43,7 @@ describe("Set.prototype.symmetricDifference", () => {
     expect(() => symDiff.call(new Map(), new Set())).toThrow(TypeError);
   });
 
-  test("throws TypeError when argument is not a Set", () => {
+  test("throws TypeError when argument is not set-like", () => {
     const s = new Set([1, 2]);
     expect(() => s.symmetricDifference({})).toThrow(TypeError);
     expect(() => s.symmetricDifference([])).toThrow(TypeError);
