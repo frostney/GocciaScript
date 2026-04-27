@@ -61,10 +61,13 @@ implementation
 uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Utils,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
@@ -253,8 +256,10 @@ var
   S: TGocciaSetValue;
 begin
   // Step 1: Let S be the this value
+  // Steps 2-3: If S does not have a [[SetData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaSetValue) then
+    ThrowTypeError(SErrorSetHasNonSet, SSuggestSetThisType);
   S := TGocciaSetValue(AThisValue);
-  // Steps 2-3 (implicit): Require S has [[SetData]] internal slot
   // Step 4: For each element e of S.[[SetData]], do
   //   If e is not empty and SameValueZero(e, value) is true, return true
   if (AArgs.Length > 0) and S.ContainsValue(AArgs.GetElement(0)) then
@@ -270,8 +275,10 @@ var
   S: TGocciaSetValue;
 begin
   // Step 1: Let S be the this value
+  // Steps 2-3: If S does not have a [[SetData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaSetValue) then
+    ThrowTypeError(SErrorSetAddNonSet, SSuggestSetThisType);
   S := TGocciaSetValue(AThisValue);
-  // Steps 2-3 (implicit): Require S has [[SetData]] internal slot
   // Step 4: For each element e of S.[[SetData]], do
   //   If e is not empty and SameValueZero(e, value) is true, return S
   // Step 5: If value is -0, set value to +0
@@ -289,8 +296,10 @@ var
   I: Integer;
 begin
   // Step 1: Let S be the this value
+  // Steps 2-3: If S does not have a [[SetData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaSetValue) then
+    ThrowTypeError(SErrorSetDeleteNonSet, SSuggestSetThisType);
   S := TGocciaSetValue(AThisValue);
-  // Steps 2-3 (implicit): Require S has [[SetData]] internal slot
   // Step 5 (early): Default return false
   Result := TGocciaBooleanLiteralValue.FalseValue;
   if AArgs.Length > 0 then
@@ -316,7 +325,9 @@ end;
 function TGocciaSetValue.SetClear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   // Step 1: Let S be the this value
-  // Steps 2-3 (implicit): Require S has [[SetData]] internal slot
+  // Steps 2-3: If S does not have a [[SetData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaSetValue) then
+    ThrowTypeError(SErrorSetClearNonSet, SSuggestSetThisType);
   // Step 4: For each element e of S.[[SetData]], replace e with empty
   TGocciaSetValue(AThisValue).FItems.Clear;
   // Step 5: Return undefined
@@ -332,6 +343,9 @@ var
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
 begin
+  // Steps 1-3: If S does not have a [[SetData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaSetValue) then
+    ThrowTypeError(SErrorSetForEachNonSet, SSuggestSetThisType);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if AArgs.Length = 0 then Exit;
 
@@ -361,7 +375,10 @@ end;
 function TGocciaSetValue.SetValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   // Step 1: Let S be the this value
-  // Step 2: Return CreateSetIterator(S, value)
+  // Steps 2-3: If S does not have a [[SetData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaSetValue) then
+    ThrowTypeError(SErrorSetValuesNonSet, SSuggestSetThisType);
+  // Step 4: Return CreateSetIterator(S, value)
   Result := TGocciaSetIteratorValue.Create(AThisValue, skValues);
 end;
 
@@ -369,7 +386,10 @@ end;
 function TGocciaSetValue.SetKeys(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   // Step 1: This method is the same function as Set.prototype.values (per spec)
-  // Step 2: Return CreateSetIterator(S, value)
+  // Steps 2-3: If S does not have a [[SetData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaSetValue) then
+    ThrowTypeError(SErrorSetKeysNonSet, SSuggestSetThisType);
+  // Step 4: Return CreateSetIterator(S, value)
   Result := TGocciaSetIteratorValue.Create(AThisValue, skValues);
 end;
 
@@ -377,7 +397,10 @@ end;
 function TGocciaSetValue.SetEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   // Step 1: Let S be the this value
-  // Step 2: Return CreateSetIterator(S, key+value)
+  // Steps 2-3: If S does not have a [[SetData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaSetValue) then
+    ThrowTypeError(SErrorSetEntriesNonSet, SSuggestSetThisType);
+  // Step 4: Return CreateSetIterator(S, key+value)
   Result := TGocciaSetIteratorValue.Create(AThisValue, skEntries);
 end;
 
@@ -385,6 +408,9 @@ end;
 function TGocciaSetValue.SetSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   // Step 1: This method is the same function as Set.prototype.values (per spec)
+  // Steps 2-3: If S does not have a [[SetData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaSetValue) then
+    ThrowTypeError(SErrorSetIteratorNonSet, SSuggestSetThisType);
   Result := TGocciaSetIteratorValue.Create(AThisValue, skValues);
 end;
 
@@ -395,8 +421,10 @@ var
   I: Integer;
 begin
   // Step 1: Let O be the this value
+  // Steps 2-3: If O does not have a [[SetData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaSetValue) then
+    ThrowTypeError(SErrorSetUnionNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
-  // Steps 2-3 (implicit): Require O has [[SetData]] internal slot
   // Step 4: Let otherRec be GetSetRecord(other)
   OtherSet := TGocciaSetValue(AArgs.GetElement(0));
   // Step 5: Let resultSetData be a copy of O.[[SetData]]
@@ -423,8 +451,10 @@ var
   I: Integer;
 begin
   // Step 1: Let O be the this value
+  // Steps 2-3: If O does not have a [[SetData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaSetValue) then
+    ThrowTypeError(SErrorSetIntersectionNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
-  // Steps 2-3 (implicit): Require O has [[SetData]] internal slot
   // Step 4: Let otherRec be GetSetRecord(other)
   OtherSet := TGocciaSetValue(AArgs.GetElement(0));
   // Step 5: Let resultSetData be a new empty List
@@ -449,8 +479,10 @@ var
   I: Integer;
 begin
   // Step 1: Let O be the this value
+  // Steps 2-3: If O does not have a [[SetData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaSetValue) then
+    ThrowTypeError(SErrorSetDifferenceNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
-  // Steps 2-3 (implicit): Require O has [[SetData]] internal slot
   // Step 4: Let otherRec be GetSetRecord(other)
   OtherSet := TGocciaSetValue(AArgs.GetElement(0));
   // Step 5: Let resultSetData be a copy of O.[[SetData]]
@@ -475,8 +507,10 @@ var
   I: Integer;
 begin
   // Step 1: Let O be the this value
+  // Steps 2-3: If O does not have a [[SetData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaSetValue) then
+    ThrowTypeError(SErrorSetSymmetricDifferenceNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
-  // Steps 2-3 (implicit): Require O has [[SetData]] internal slot
   // Step 4: Let otherRec be GetSetRecord(other)
   OtherSet := TGocciaSetValue(AArgs.GetElement(0));
   // Step 5: Let resultSetData be a copy of O.[[SetData]]
@@ -507,8 +541,10 @@ var
   I: Integer;
 begin
   // Step 1: Let O be the this value
+  // Steps 2-3: If O does not have a [[SetData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaSetValue) then
+    ThrowTypeError(SErrorSetIsSubsetOfNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
-  // Steps 2-3 (implicit): Require O has [[SetData]] internal slot
   // Step 4: Let otherRec be GetSetRecord(other)
   OtherSet := TGocciaSetValue(AArgs.GetElement(0));
 
@@ -533,8 +569,10 @@ var
   I: Integer;
 begin
   // Step 1: Let O be the this value
+  // Steps 2-3: If O does not have a [[SetData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaSetValue) then
+    ThrowTypeError(SErrorSetIsSupersetOfNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
-  // Steps 2-3 (implicit): Require O has [[SetData]] internal slot
   // Step 4: Let otherRec be GetSetRecord(other)
   OtherSet := TGocciaSetValue(AArgs.GetElement(0));
 
@@ -560,8 +598,10 @@ var
   I: Integer;
 begin
   // Step 1: Let O be the this value
+  // Steps 2-3: If O does not have a [[SetData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaSetValue) then
+    ThrowTypeError(SErrorSetIsDisjointFromNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
-  // Steps 2-3 (implicit): Require O has [[SetData]] internal slot
   // Step 4: Let otherRec be GetSetRecord(other)
   OtherSet := TGocciaSetValue(AArgs.GetElement(0));
 

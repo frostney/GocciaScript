@@ -26,3 +26,10 @@ test("add after clear", () => {
   expect(set.has(4)).toBe(true);
   expect(set.has(1)).toBe(false);
 });
+
+test("throws TypeError when called on non-Set", () => {
+  const clear = Set.prototype.clear;
+  expect(() => clear.call(Set.prototype)).toThrow(TypeError);
+  expect(() => clear.call({})).toThrow(TypeError);
+  expect(() => clear.call(new Map())).toThrow(TypeError);
+});

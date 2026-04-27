@@ -42,3 +42,16 @@ test("spread on map produces entries", () => {
   const map = new Map([["a", 1], ["b", 2]]);
   expect([...map]).toEqual([["a", 1], ["b", 2]]);
 });
+
+test("entries throws TypeError when called on non-Map", () => {
+  const entries = Map.prototype.entries;
+  expect(() => entries.call(Map.prototype)).toThrow(TypeError);
+  expect(() => entries.call({})).toThrow(TypeError);
+  expect(() => entries.call(new Set())).toThrow(TypeError);
+});
+
+test("[Symbol.iterator] throws TypeError when called on non-Map", () => {
+  const iter = Map.prototype[Symbol.iterator];
+  expect(() => iter.call(Map.prototype)).toThrow(TypeError);
+  expect(() => iter.call({})).toThrow(TypeError);
+});

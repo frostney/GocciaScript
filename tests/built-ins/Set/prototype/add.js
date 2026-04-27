@@ -61,3 +61,10 @@ test("add object references", () => {
   set.add(obj1);
   expect(set.size).toBe(2);
 });
+
+test("throws TypeError when called on non-Set", () => {
+  const add = Set.prototype.add;
+  expect(() => add.call(Set.prototype, 1)).toThrow(TypeError);
+  expect(() => add.call({}, 1)).toThrow(TypeError);
+  expect(() => add.call(new Map(), 1)).toThrow(TypeError);
+});

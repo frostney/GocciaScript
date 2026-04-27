@@ -616,6 +616,38 @@ resourcestring
   // Number method errors
   SErrorToExponentialArgRange = 'toExponential() argument must be between 0 and 100';
 
+  // Set brand-check errors
+  SErrorSetHasNonSet = 'Set.prototype.has called on non-Set object';
+  SErrorSetAddNonSet = 'Set.prototype.add called on non-Set object';
+  SErrorSetDeleteNonSet = 'Set.prototype.delete called on non-Set object';
+  SErrorSetClearNonSet = 'Set.prototype.clear called on non-Set object';
+  SErrorSetForEachNonSet = 'Set.prototype.forEach called on non-Set object';
+  SErrorSetValuesNonSet = 'Set.prototype.values called on non-Set object';
+  SErrorSetKeysNonSet = 'Set.prototype.keys called on non-Set object';
+  SErrorSetEntriesNonSet = 'Set.prototype.entries called on non-Set object';
+  SErrorSetIteratorNonSet = 'Set.prototype[Symbol.iterator] called on non-Set object';
+  SErrorSetUnionNonSet = 'Set.prototype.union called on non-Set object';
+  SErrorSetIntersectionNonSet = 'Set.prototype.intersection called on non-Set object';
+  SErrorSetDifferenceNonSet = 'Set.prototype.difference called on non-Set object';
+  SErrorSetSymmetricDifferenceNonSet = 'Set.prototype.symmetricDifference called on non-Set object';
+  SErrorSetIsSubsetOfNonSet = 'Set.prototype.isSubsetOf called on non-Set object';
+  SErrorSetIsSupersetOfNonSet = 'Set.prototype.isSupersetOf called on non-Set object';
+  SErrorSetIsDisjointFromNonSet = 'Set.prototype.isDisjointFrom called on non-Set object';
+
+  // Map brand-check errors
+  SErrorMapGetNonMap = 'Map.prototype.get called on non-Map object';
+  SErrorMapSetNonMap = 'Map.prototype.set called on non-Map object';
+  SErrorMapHasNonMap = 'Map.prototype.has called on non-Map object';
+  SErrorMapDeleteNonMap = 'Map.prototype.delete called on non-Map object';
+  SErrorMapClearNonMap = 'Map.prototype.clear called on non-Map object';
+  SErrorMapForEachNonMap = 'Map.prototype.forEach called on non-Map object';
+  SErrorMapKeysNonMap = 'Map.prototype.keys called on non-Map object';
+  SErrorMapValuesNonMap = 'Map.prototype.values called on non-Map object';
+  SErrorMapEntriesNonMap = 'Map.prototype.entries called on non-Map object';
+  SErrorMapIteratorNonMap = 'Map.prototype[Symbol.iterator] called on non-Map object';
+  SErrorMapGetOrInsertNonMap = 'Map.prototype.getOrInsert called on non-Map object';
+  SErrorMapGetOrInsertComputedNonMap = 'Map.prototype.getOrInsertComputed called on non-Map object';
+
   // Map upsert errors
   SErrorMapGetOrInsertComputedNotCallable = 'Map.getOrInsertComputed: callbackfn is not a function';
 

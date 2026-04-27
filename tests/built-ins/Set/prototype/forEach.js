@@ -38,3 +38,10 @@ test("forEach visits each value exactly once", () => {
   });
   expect(count).toBe(3);
 });
+
+test("throws TypeError when called on non-Set", () => {
+  const forEach = Set.prototype.forEach;
+  expect(() => forEach.call(Set.prototype, () => {})).toThrow(TypeError);
+  expect(() => forEach.call({}, () => {})).toThrow(TypeError);
+  expect(() => forEach.call(new Map(), () => {})).toThrow(TypeError);
+});

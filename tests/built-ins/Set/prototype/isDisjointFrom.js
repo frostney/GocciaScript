@@ -18,4 +18,10 @@ describe("Set.prototype.isDisjointFrom", () => {
   test("empty set is disjoint from any set", () => {
     expect(new Set().isDisjointFrom(new Set([1, 2]))).toBe(true);
   });
+
+  test("throws TypeError when called on non-Set", () => {
+    const isDisjointFrom = Set.prototype.isDisjointFrom;
+    expect(() => isDisjointFrom.call(Set.prototype, new Set())).toThrow(TypeError);
+    expect(() => isDisjointFrom.call({}, new Set())).toThrow(TypeError);
+  });
 });

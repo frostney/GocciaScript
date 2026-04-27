@@ -26,4 +26,10 @@ describe("Set.prototype.union", () => {
     const result = new Set().union(new Set());
     expect(result.size).toBe(0);
   });
+
+  test("throws TypeError when called on non-Set", () => {
+    const union = Set.prototype.union;
+    expect(() => union.call(Set.prototype, new Set())).toThrow(TypeError);
+    expect(() => union.call({}, new Set())).toThrow(TypeError);
+  });
 });

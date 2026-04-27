@@ -41,3 +41,10 @@ test("forEach visits each entry exactly once", () => {
   });
   expect(count).toBe(3);
 });
+
+test("throws TypeError when called on non-Map", () => {
+  const forEach = Map.prototype.forEach;
+  expect(() => forEach.call(Map.prototype, () => {})).toThrow(TypeError);
+  expect(() => forEach.call({}, () => {})).toThrow(TypeError);
+  expect(() => forEach.call(new Set(), () => {})).toThrow(TypeError);
+});

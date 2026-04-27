@@ -37,3 +37,10 @@ test("has after delete", () => {
   map.delete("a");
   expect(map.has("a")).toBe(false);
 });
+
+test("throws TypeError when called on non-Map", () => {
+  const has = Map.prototype.has;
+  expect(() => has.call(Map.prototype, "key")).toThrow(TypeError);
+  expect(() => has.call({}, "key")).toThrow(TypeError);
+  expect(() => has.call(new Set(), "key")).toThrow(TypeError);
+});

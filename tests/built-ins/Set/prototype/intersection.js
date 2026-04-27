@@ -18,4 +18,10 @@ describe("Set.prototype.intersection", () => {
     const a = new Set([1, 2]);
     expect(a.intersection(new Set()).size).toBe(0);
   });
+
+  test("throws TypeError when called on non-Set", () => {
+    const intersection = Set.prototype.intersection;
+    expect(() => intersection.call(Set.prototype, new Set())).toThrow(TypeError);
+    expect(() => intersection.call({}, new Set())).toThrow(TypeError);
+  });
 });

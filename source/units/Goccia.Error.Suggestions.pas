@@ -327,7 +327,11 @@ resourcestring
   // Runtime errors — import.meta
   SSuggestImportMetaUsage = 'import.meta.resolve() requires a string specifier argument';
 
+  // Runtime errors — Set
+  SSuggestSetThisType = 'Set prototype methods must be called on a Set instance';
+
   // Runtime errors — Map
+  SSuggestMapThisType = 'Map prototype methods must be called on a Map instance';
   SSuggestMapCallbackRequired = 'pass a function as the callback argument';
 
   // Runtime errors — Number

@@ -15,4 +15,10 @@ describe("Set.prototype.isSupersetOf", () => {
     expect(new Set([1]).isSupersetOf(new Set())).toBe(true);
     expect(new Set().isSupersetOf(new Set())).toBe(true);
   });
+
+  test("throws TypeError when called on non-Set", () => {
+    const isSupersetOf = Set.prototype.isSupersetOf;
+    expect(() => isSupersetOf.call(Set.prototype, new Set())).toThrow(TypeError);
+    expect(() => isSupersetOf.call({}, new Set())).toThrow(TypeError);
+  });
 });

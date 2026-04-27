@@ -80,4 +80,10 @@ describe.runIf(hasGoccia)("Map.prototype.getOrInsert", () => {
     expect(map.get("b")).toBe(2);
     expect(map.get("c")).toBe(1);
   });
+
+  test("throws TypeError when called on non-Map", () => {
+    const getOrInsert = Map.prototype.getOrInsert;
+    expect(() => getOrInsert.call(Map.prototype, "k", "v")).toThrow(TypeError);
+    expect(() => getOrInsert.call({}, "k", "v")).toThrow(TypeError);
+  });
 });

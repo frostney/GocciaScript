@@ -35,3 +35,10 @@ test("delete on empty Map", () => {
   const map = new Map();
   expect(map.delete("a")).toBe(false);
 });
+
+test("throws TypeError when called on non-Map", () => {
+  const del = Map.prototype.delete;
+  expect(() => del.call(Map.prototype, "key")).toThrow(TypeError);
+  expect(() => del.call({}, "key")).toThrow(TypeError);
+  expect(() => del.call(new Set(), "key")).toThrow(TypeError);
+});
