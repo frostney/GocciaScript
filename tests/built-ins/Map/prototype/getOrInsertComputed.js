@@ -85,4 +85,10 @@ describe.runIf(hasGoccia)("Map.prototype.getOrInsertComputed", () => {
     expect(map.get("a").length).toBe(2);
     expect(map.get("b").length).toBe(1);
   });
+
+  test("throws TypeError when called on non-Map", () => {
+    const getOrInsertComputed = Map.prototype.getOrInsertComputed;
+    expect(() => getOrInsertComputed.call(Map.prototype, "k", () => "v")).toThrow(TypeError);
+    expect(() => getOrInsertComputed.call({}, "k", () => "v")).toThrow(TypeError);
+  });
 });

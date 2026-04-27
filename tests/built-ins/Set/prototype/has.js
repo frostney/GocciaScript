@@ -47,3 +47,10 @@ test("has property descriptor on Set.prototype", () => {
   expect(desc.enumerable).toBe(false);
   expect(desc.configurable).toBe(true);
 });
+
+test("throws TypeError when called on non-Set", () => {
+  const has = Set.prototype.has;
+  expect(() => has.call(Set.prototype, 1)).toThrow(TypeError);
+  expect(() => has.call({}, 1)).toThrow(TypeError);
+  expect(() => has.call(new Map(), 1)).toThrow(TypeError);
+});

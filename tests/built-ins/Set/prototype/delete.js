@@ -37,3 +37,10 @@ test("delete on empty Set", () => {
   const set = new Set();
   expect(set.delete(1)).toBe(false);
 });
+
+test("throws TypeError when called on non-Set", () => {
+  const del = Set.prototype.delete;
+  expect(() => del.call(Set.prototype, 1)).toThrow(TypeError);
+  expect(() => del.call({}, 1)).toThrow(TypeError);
+  expect(() => del.call(new Map(), 1)).toThrow(TypeError);
+});

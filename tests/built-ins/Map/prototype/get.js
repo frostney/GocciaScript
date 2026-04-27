@@ -49,3 +49,10 @@ test("get property descriptor on Map.prototype", () => {
   expect(desc.enumerable).toBe(false);
   expect(desc.configurable).toBe(true);
 });
+
+test("throws TypeError when called on non-Map", () => {
+  const get = Map.prototype.get;
+  expect(() => get.call(Map.prototype, "key")).toThrow(TypeError);
+  expect(() => get.call({}, "key")).toThrow(TypeError);
+  expect(() => get.call(new Set(), "key")).toThrow(TypeError);
+});

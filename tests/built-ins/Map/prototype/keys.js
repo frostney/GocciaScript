@@ -27,3 +27,10 @@ test("keys returns an iterator with next()", () => {
   expect(iter.next().value).toBe("c");
   expect(iter.next().done).toBe(true);
 });
+
+test("throws TypeError when called on non-Map", () => {
+  const keys = Map.prototype.keys;
+  expect(() => keys.call(Map.prototype)).toThrow(TypeError);
+  expect(() => keys.call({})).toThrow(TypeError);
+  expect(() => keys.call(new Set())).toThrow(TypeError);
+});

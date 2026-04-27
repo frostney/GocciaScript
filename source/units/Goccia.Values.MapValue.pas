@@ -277,8 +277,10 @@ var
   Index: Integer;
 begin
   // Step 1: Let M be the this value
+  // Steps 2-3: If M does not have a [[MapData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaMapValue) then
+    ThrowTypeError(SErrorMapGetNonMap, SSuggestMapThisType);
   M := TGocciaMapValue(AThisValue);
-  // Steps 2-3 (implicit): Require M has [[MapData]] internal slot
   if AArgs.Length > 0 then
   begin
     // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
@@ -301,8 +303,10 @@ var
   MapKey, MapValue: TGocciaValue;
 begin
   // Step 1: Let M be the this value
+  // Steps 2-3: If M does not have a [[MapData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaMapValue) then
+    ThrowTypeError(SErrorMapSetNonMap, SSuggestMapThisType);
   M := TGocciaMapValue(AThisValue);
-  // Steps 2-3 (implicit): Require M has [[MapData]] internal slot
   if AArgs.Length >= 2 then
   begin
     MapKey := AArgs.GetElement(0);
@@ -325,8 +329,10 @@ var
   M: TGocciaMapValue;
 begin
   // Step 1: Let M be the this value
+  // Steps 2-3: If M does not have a [[MapData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaMapValue) then
+    ThrowTypeError(SErrorMapHasNonMap, SSuggestMapThisType);
   M := TGocciaMapValue(AThisValue);
-  // Steps 2-3 (implicit): Require M has [[MapData]] internal slot
   // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
   //   If p.[[Key]] is not empty and SameValueZero(p.[[Key]], key) is true, return true
   if (AArgs.Length > 0) and (M.FindEntry(AArgs.GetElement(0)) >= 0) then
@@ -343,8 +349,10 @@ var
   Index: Integer;
 begin
   // Step 1: Let M be the this value
+  // Steps 2-3: If M does not have a [[MapData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaMapValue) then
+    ThrowTypeError(SErrorMapDeleteNonMap, SSuggestMapThisType);
   M := TGocciaMapValue(AThisValue);
-  // Steps 2-3 (implicit): Require M has [[MapData]] internal slot
   // Step 5 (early): Default return false
   Result := TGocciaBooleanLiteralValue.FalseValue;
   if AArgs.Length > 0 then
@@ -367,7 +375,9 @@ end;
 function TGocciaMapValue.MapClear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   // Step 1: Let M be the this value
-  // Steps 2-3 (implicit): Require M has [[MapData]] internal slot
+  // Steps 2-3: If M does not have a [[MapData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaMapValue) then
+    ThrowTypeError(SErrorMapClearNonMap, SSuggestMapThisType);
   // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
   //   Set p.[[Key]] to empty, set p.[[Value]] to empty
   TGocciaMapValue(AThisValue).FEntries.Clear;
@@ -379,41 +389,61 @@ end;
 function TGocciaMapValue.MapForEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   M: TGocciaMapValue;
-  Callback: TGocciaValue;
+  Callback, ThisArg: TGocciaValue;
   TypedCallback: TGocciaFunctionBase;
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
 begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  if AArgs.Length = 0 then Exit;
-
+  // Steps 1-3: If M does not have a [[MapData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaMapValue) then
+    ThrowTypeError(SErrorMapForEachNonMap, SSuggestMapThisType);
   M := TGocciaMapValue(AThisValue);
-  Callback := AArgs.GetElement(0);
-  if not Callback.IsCallable then Exit;
+
+  // Step 4: If IsCallable(callbackfn) is false, throw a TypeError
+  if AArgs.Length > 0 then
+    Callback := AArgs.GetElement(0)
+  else
+    Callback := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if not Callback.IsCallable then
+    ThrowTypeError(SErrorMapForEachNotCallable, SSuggestMapCallbackRequired);
+
+  // Step 5: Let thisArg be the second argument
+  if AArgs.Length > 1 then
+    ThisArg := AArgs.GetElement(1)
+  else
+    ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   TypedCallback := nil;
   if Callback is TGocciaFunctionBase then
     TypedCallback := TGocciaFunctionBase(Callback);
 
+  // Step 6: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
   for I := 0 to M.Entries.Count - 1 do
   begin
-    CallArgs := TGocciaArgumentsCollection.Create([M.Entries[I].Value, M.Entries[I].Key, AThisValue]);
+    // Step 6b: Call(callbackfn, thisArg, « p.[[Value]], p.[[Key]], M »)
+    CallArgs := TGocciaArgumentsCollection.Create([M.Entries[I].Value, M.Entries[I].Key, M]);
     try
       if Assigned(TypedCallback) then
-        TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
+        TypedCallback.Call(CallArgs, ThisArg)
       else
-        InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        InvokeCallable(Callback, CallArgs, ThisArg);
     finally
       CallArgs.Free;
     end;
   end;
+
+  // Step 7: Return undefined
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 // ES2026 §24.1.3.8 Map.prototype.keys()
 function TGocciaMapValue.MapKeys(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   // Step 1: Let M be the this value
-  // Step 2: Return CreateMapIterator(M, key)
+  // Steps 2-3: If M does not have a [[MapData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaMapValue) then
+    ThrowTypeError(SErrorMapKeysNonMap, SSuggestMapThisType);
+  // Step 4: Return CreateMapIterator(M, key)
   Result := TGocciaMapIteratorValue.Create(AThisValue, mkKeys);
 end;
 
@@ -421,7 +451,10 @@ end;
 function TGocciaMapValue.MapValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   // Step 1: Let M be the this value
-  // Step 2: Return CreateMapIterator(M, value)
+  // Steps 2-3: If M does not have a [[MapData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaMapValue) then
+    ThrowTypeError(SErrorMapValuesNonMap, SSuggestMapThisType);
+  // Step 4: Return CreateMapIterator(M, value)
   Result := TGocciaMapIteratorValue.Create(AThisValue, mkValues);
 end;
 
@@ -429,14 +462,21 @@ end;
 function TGocciaMapValue.MapEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   // Step 1: Let M be the this value
-  // Step 2: Return CreateMapIterator(M, key+value)
+  // Steps 2-3: If M does not have a [[MapData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaMapValue) then
+    ThrowTypeError(SErrorMapEntriesNonMap, SSuggestMapThisType);
+  // Step 4: Return CreateMapIterator(M, key+value)
   Result := TGocciaMapIteratorValue.Create(AThisValue, mkEntries);
 end;
 
 // ES2026 §24.1.3.12 Map.prototype[@@iterator]()
 function TGocciaMapValue.MapSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  // Step 1: Return the result of calling Map.prototype.entries()
+  // Step 1: Let M be the this value
+  // Steps 2-3: If M does not have a [[MapData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaMapValue) then
+    ThrowTypeError(SErrorMapIteratorNonMap, SSuggestMapThisType);
+  // Step 4: Return the result of calling Map.prototype.entries()
   Result := TGocciaMapIteratorValue.Create(AThisValue, mkEntries);
 end;
 
@@ -447,6 +487,9 @@ var
   MapKey, DefaultValue: TGocciaValue;
   Index: Integer;
 begin
+  // Steps 1-3: If M does not have a [[MapData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaMapValue) then
+    ThrowTypeError(SErrorMapGetOrInsertNonMap, SSuggestMapThisType);
   M := TGocciaMapValue(AThisValue);
   if AArgs.Length < 2 then
   begin
@@ -485,6 +528,9 @@ var
   CallArgs: TGocciaArgumentsCollection;
   Index: Integer;
 begin
+  // Steps 1-3: If M does not have a [[MapData]] internal slot, throw a TypeError
+  if not (AThisValue is TGocciaMapValue) then
+    ThrowTypeError(SErrorMapGetOrInsertComputedNonMap, SSuggestMapThisType);
   M := TGocciaMapValue(AThisValue);
   if AArgs.Length > 0 then
     MapKey := AArgs.GetElement(0)

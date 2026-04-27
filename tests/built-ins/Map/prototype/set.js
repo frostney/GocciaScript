@@ -41,3 +41,10 @@ test("set with NaN key", () => {
   expect(map.size).toBe(1);
   expect(map.get(NaN)).toBe("second");
 });
+
+test("throws TypeError when called on non-Map", () => {
+  const set = Map.prototype.set;
+  expect(() => set.call(Map.prototype, "k", "v")).toThrow(TypeError);
+  expect(() => set.call({}, "k", "v")).toThrow(TypeError);
+  expect(() => set.call(new Set(), "k", "v")).toThrow(TypeError);
+});

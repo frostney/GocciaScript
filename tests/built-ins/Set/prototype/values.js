@@ -67,3 +67,27 @@ test("Set.entries() iterator with next()", () => {
   expect(second[1]).toBe("b");
   expect(iter.next().done).toBe(true);
 });
+
+test("values throws TypeError when called on non-Set", () => {
+  const values = Set.prototype.values;
+  expect(() => values.call(Set.prototype)).toThrow(TypeError);
+  expect(() => values.call({})).toThrow(TypeError);
+});
+
+test("keys throws TypeError when called on non-Set", () => {
+  const keys = Set.prototype.keys;
+  expect(() => keys.call(Set.prototype)).toThrow(TypeError);
+  expect(() => keys.call({})).toThrow(TypeError);
+});
+
+test("entries throws TypeError when called on non-Set", () => {
+  const entries = Set.prototype.entries;
+  expect(() => entries.call(Set.prototype)).toThrow(TypeError);
+  expect(() => entries.call({})).toThrow(TypeError);
+});
+
+test("[Symbol.iterator] throws TypeError when called on non-Set", () => {
+  const iter = Set.prototype[Symbol.iterator];
+  expect(() => iter.call(Set.prototype)).toThrow(TypeError);
+  expect(() => iter.call({})).toThrow(TypeError);
+});

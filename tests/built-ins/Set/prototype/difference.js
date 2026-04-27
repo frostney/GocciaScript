@@ -19,4 +19,17 @@ describe("Set.prototype.difference", () => {
     const b = new Set([1, 2, 3]);
     expect(a.difference(b).size).toBe(0);
   });
+
+  test("throws TypeError when called on non-Set", () => {
+    const difference = Set.prototype.difference;
+    expect(() => difference.call(Set.prototype, new Set())).toThrow(TypeError);
+    expect(() => difference.call({}, new Set())).toThrow(TypeError);
+    expect(() => difference.call(new Map(), new Set())).toThrow(TypeError);
+  });
+
+  test("throws TypeError when argument is not a Set", () => {
+    const s = new Set([1, 2]);
+    expect(() => s.difference({})).toThrow(TypeError);
+    expect(() => s.difference([])).toThrow(TypeError);
+  });
 });

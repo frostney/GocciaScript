@@ -41,3 +41,31 @@ test("forEach visits each entry exactly once", () => {
   });
   expect(count).toBe(3);
 });
+
+test("throws TypeError when called on non-Map", () => {
+  const forEach = Map.prototype.forEach;
+  expect(() => forEach.call(Map.prototype, () => {})).toThrow(TypeError);
+  expect(() => forEach.call({}, () => {})).toThrow(TypeError);
+  expect(() => forEach.call(new Set(), () => {})).toThrow(TypeError);
+});
+
+test("throws TypeError when callback is not a function", () => {
+  const map = new Map([["a", 1]]);
+  expect(() => map.forEach("not a function")).toThrow(TypeError);
+  expect(() => map.forEach(42)).toThrow(TypeError);
+  expect(() => map.forEach(null)).toThrow(TypeError);
+});
+
+test("throws TypeError when no callback is provided", () => {
+  const map = new Map([["a", 1]]);
+  expect(() => map.forEach()).toThrow(TypeError);
+});
+
+test("forEach passes map as third callback argument", () => {
+  const map = new Map([["a", 1]]);
+  let receivedMap;
+  map.forEach((value, key, m) => {
+    receivedMap = m;
+  });
+  expect(receivedMap).toBe(map);
+});

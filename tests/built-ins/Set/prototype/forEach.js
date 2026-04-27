@@ -38,3 +38,31 @@ test("forEach visits each value exactly once", () => {
   });
   expect(count).toBe(3);
 });
+
+test("throws TypeError when called on non-Set", () => {
+  const forEach = Set.prototype.forEach;
+  expect(() => forEach.call(Set.prototype, () => {})).toThrow(TypeError);
+  expect(() => forEach.call({}, () => {})).toThrow(TypeError);
+  expect(() => forEach.call(new Map(), () => {})).toThrow(TypeError);
+});
+
+test("throws TypeError when callback is not a function", () => {
+  const set = new Set([1, 2]);
+  expect(() => set.forEach("not a function")).toThrow(TypeError);
+  expect(() => set.forEach(42)).toThrow(TypeError);
+  expect(() => set.forEach(null)).toThrow(TypeError);
+});
+
+test("throws TypeError when no callback is provided", () => {
+  const set = new Set([1, 2]);
+  expect(() => set.forEach()).toThrow(TypeError);
+});
+
+test("forEach passes set as third callback argument", () => {
+  const set = new Set([1]);
+  let receivedSet;
+  set.forEach((value, key, s) => {
+    receivedSet = s;
+  });
+  expect(receivedSet).toBe(set);
+});

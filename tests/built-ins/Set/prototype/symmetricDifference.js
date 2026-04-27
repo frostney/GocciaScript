@@ -19,4 +19,17 @@ describe("Set.prototype.symmetricDifference", () => {
     const b = new Set([1, 2]);
     expect(a.symmetricDifference(b).size).toBe(0);
   });
+
+  test("throws TypeError when called on non-Set", () => {
+    const symDiff = Set.prototype.symmetricDifference;
+    expect(() => symDiff.call(Set.prototype, new Set())).toThrow(TypeError);
+    expect(() => symDiff.call({}, new Set())).toThrow(TypeError);
+    expect(() => symDiff.call(new Map(), new Set())).toThrow(TypeError);
+  });
+
+  test("throws TypeError when argument is not a Set", () => {
+    const s = new Set([1, 2]);
+    expect(() => s.symmetricDifference({})).toThrow(TypeError);
+    expect(() => s.symmetricDifference([])).toThrow(TypeError);
+  });
 });
