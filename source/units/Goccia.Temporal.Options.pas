@@ -91,6 +91,21 @@ procedure CalendarDateUntil(
   const ALargestUnit: TTemporalUnit;
   out AYears, AMonths, AWeeks, ADays: Int64);
 
+{ Round a diff duration produced by until/since.  Implements the TC39
+  RoundRelativeDuration algorithm for calendar-unit rounding (year/month)
+  and simple nanosecond rounding for sub-month units.
+  AStartY/M/D is the "start" date of the diff (needed for year/month walking).
+  For types without a date component pass 0,0,0 and ensure smallestUnit is
+  sub-day. }
+procedure RoundDiffDuration(
+  var AYears, AMonths, AWeeks, ADays,
+      AHours, AMinutes, ASeconds,
+      AMilliseconds, AMicroseconds, ANanoseconds: Int64;
+  const AStartY, AStartM, AStartD: Integer;
+  const ALargestUnit, ASmallestUnit: TTemporalUnit;
+  const AMode: TTemporalRoundingMode;
+  const AIncrement: Integer);
+
 { Extract diff options from an arguments collection at a given index.
   Returns nil if the argument is undefined/missing. }
 function GetDiffOptions(const AArgs: TGocciaArgumentsCollection;
@@ -772,6 +787,363 @@ begin
         AMonths := -AMonths;
         ADays := -ADays;
       end;
+    end;
+  end;
+end;
+
+{ --------------------------------------------------------------------------- }
+{ RoundDiffDuration                                                            }
+{ --------------------------------------------------------------------------- }
+
+procedure RoundDiffDuration(
+  var AYears, AMonths, AWeeks, ADays,
+      AHours, AMinutes, ASeconds,
+      AMilliseconds, AMicroseconds, ANanoseconds: Int64;
+  const AStartY, AStartM, AStartD: Integer;
+  const ALargestUnit, ASmallestUnit: TTemporalUnit;
+  const AMode: TTemporalRoundingMode;
+  const AIncrement: Integer);
+var
+  TimeNs, TotalNs, Divisor: Int64;
+  RemNs: Int64;
+  Sign: Integer;
+  WholeUnits, ScaledValue, PeriodNs, RoundedValue: Int64;
+  WalkDate, NextDate, EndDate: TTemporalDateRecord;
+  StartEpoch, EndEpoch, WalkEpoch, NextEpoch: Int64;
+  ResultYears, ResultMonths, ResultDays: Int64;
+  ResultHours, ResultMinutes, ResultSeconds: Int64;
+  ResultMs, ResultUs, ResultNs: Int64;
+begin
+  // Nothing to do when smallestUnit equals the finest granularity and increment is 1
+  if (ASmallestUnit = tuNanosecond) and (AIncrement = 1) then Exit;
+
+  // Compute the overall sign of the duration
+  if AYears > 0 then Sign := 1
+  else if AYears < 0 then Sign := -1
+  else if AMonths > 0 then Sign := 1
+  else if AMonths < 0 then Sign := -1
+  else if AWeeks > 0 then Sign := 1
+  else if AWeeks < 0 then Sign := -1
+  else if ADays > 0 then Sign := 1
+  else if ADays < 0 then Sign := -1
+  else if AHours > 0 then Sign := 1
+  else if AHours < 0 then Sign := -1
+  else if AMinutes > 0 then Sign := 1
+  else if AMinutes < 0 then Sign := -1
+  else if ASeconds > 0 then Sign := 1
+  else if ASeconds < 0 then Sign := -1
+  else if AMilliseconds > 0 then Sign := 1
+  else if AMilliseconds < 0 then Sign := -1
+  else if AMicroseconds > 0 then Sign := 1
+  else if AMicroseconds < 0 then Sign := -1
+  else if ANanoseconds > 0 then Sign := 1
+  else if ANanoseconds < 0 then Sign := -1
+  else
+    Exit; // zero duration, nothing to round
+
+  // Collect sub-day time as nanoseconds
+  TimeNs := ANanoseconds +
+            AMicroseconds * NANOSECONDS_PER_MICROSECOND +
+            AMilliseconds * NANOSECONDS_PER_MILLISECOND +
+            ASeconds * NANOSECONDS_PER_SECOND +
+            AMinutes * NANOSECONDS_PER_MINUTE +
+            AHours * NANOSECONDS_PER_HOUR;
+
+  // --- Calendar-unit rounding (year / month) ---
+  if (ASmallestUnit = tuYear) or (ASmallestUnit = tuMonth) then
+  begin
+    // Resolve duration to concrete end date via calendar walking
+    EndDate.Year := AStartY; EndDate.Month := AStartM; EndDate.Day := AStartD;
+    if AYears <> 0 then
+      EndDate := AddMonthsToDate(EndDate.Year, EndDate.Month, EndDate.Day, AYears * 12);
+    if AMonths <> 0 then
+      EndDate := AddMonthsToDate(EndDate.Year, EndDate.Month, EndDate.Day, AMonths);
+    EndDate := AddDaysToDate(EndDate.Year, EndDate.Month, EndDate.Day,
+      AWeeks * 7 + ADays + TimeNs div NANOSECONDS_PER_DAY);
+    TimeNs := TimeNs mod NANOSECONDS_PER_DAY;
+
+    StartEpoch := DateToEpochDays(AStartY, AStartM, AStartD);
+    EndEpoch := DateToEpochDays(EndDate.Year, EndDate.Month, EndDate.Day);
+
+    if ASmallestUnit = tuYear then
+    begin
+      // Walk years from start
+      WholeUnits := 0;
+      if Sign > 0 then
+      begin
+        repeat
+          NextDate := AddMonthsToDate(AStartY, AStartM, AStartD, (WholeUnits + 1) * 12);
+          NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
+          if (NextEpoch > EndEpoch) or ((NextEpoch = EndEpoch) and (TimeNs <= 0)) then Break;
+          Inc(WholeUnits);
+        until False;
+      end
+      else
+      begin
+        repeat
+          NextDate := AddMonthsToDate(AStartY, AStartM, AStartD, (WholeUnits - 1) * 12);
+          NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
+          if (NextEpoch < EndEpoch) or ((NextEpoch = EndEpoch) and (TimeNs >= 0)) then Break;
+          Dec(WholeUnits);
+        until False;
+      end;
+
+      // Align WholeUnits to the nearest increment boundary toward zero,
+      // then use the fractional distance to decide whether rounding carries
+      // us to the next bucket (sign-aware).
+      if Sign > 0 then
+        ScaledValue := (WholeUnits div AIncrement) * AIncrement
+      else
+        ScaledValue := -(((-WholeUnits) div AIncrement) * AIncrement);
+
+      WalkDate := AddMonthsToDate(AStartY, AStartM, AStartD, ScaledValue * 12);
+      WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
+      NextDate := AddMonthsToDate(AStartY, AStartM, AStartD, (ScaledValue + Sign * AIncrement) * 12);
+      NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
+      PeriodNs := Abs(NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
+      RoundedValue := RoundWithMode(
+        Abs((EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs), PeriodNs, AMode);
+      if RoundedValue >= PeriodNs then
+        WholeUnits := ScaledValue + Sign * AIncrement
+      else
+        WholeUnits := ScaledValue;
+
+      AYears := WholeUnits; AMonths := 0; AWeeks := 0; ADays := 0;
+      AHours := 0; AMinutes := 0; ASeconds := 0;
+      AMilliseconds := 0; AMicroseconds := 0; ANanoseconds := 0;
+    end
+    else // tuMonth
+    begin
+      WholeUnits := 0;
+      if Sign > 0 then
+      begin
+        repeat
+          NextDate := AddMonthsToDate(AStartY, AStartM, AStartD, WholeUnits + 1);
+          NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
+          if (NextEpoch > EndEpoch) or ((NextEpoch = EndEpoch) and (TimeNs <= 0)) then Break;
+          Inc(WholeUnits);
+        until False;
+      end
+      else
+      begin
+        repeat
+          NextDate := AddMonthsToDate(AStartY, AStartM, AStartD, WholeUnits - 1);
+          NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
+          if (NextEpoch < EndEpoch) or ((NextEpoch = EndEpoch) and (TimeNs >= 0)) then Break;
+          Dec(WholeUnits);
+        until False;
+      end;
+
+      if Sign > 0 then
+        ScaledValue := (WholeUnits div AIncrement) * AIncrement
+      else
+        ScaledValue := -(((-WholeUnits) div AIncrement) * AIncrement);
+
+      WalkDate := AddMonthsToDate(AStartY, AStartM, AStartD, ScaledValue);
+      WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
+      NextDate := AddMonthsToDate(AStartY, AStartM, AStartD, ScaledValue + Sign * AIncrement);
+      NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
+      PeriodNs := Abs(NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
+      RoundedValue := RoundWithMode(
+        Abs((EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs), PeriodNs, AMode);
+      if RoundedValue >= PeriodNs then
+        WholeUnits := ScaledValue + Sign * AIncrement
+      else
+        WholeUnits := ScaledValue;
+
+      if Ord(ALargestUnit) <= Ord(tuYear) then
+      begin
+        AYears := WholeUnits div 12;
+        AMonths := WholeUnits mod 12;
+      end
+      else
+      begin
+        AYears := 0;
+        AMonths := WholeUnits;
+      end;
+      AWeeks := 0; ADays := 0;
+      AHours := 0; AMinutes := 0; ASeconds := 0;
+      AMilliseconds := 0; AMicroseconds := 0; ANanoseconds := 0;
+    end;
+    Exit;
+  end;
+
+  // --- Week / day / time-unit rounding ---
+  // Convert everything to total nanoseconds from the start date
+  if (ASmallestUnit = tuWeek) or (ASmallestUnit = tuDay) or
+     (Ord(ASmallestUnit) >= Ord(tuHour)) then
+  begin
+    // For calendar types that have year/month, resolve to epoch days first
+    if (AYears <> 0) or (AMonths <> 0) then
+    begin
+      EndDate.Year := AStartY; EndDate.Month := AStartM; EndDate.Day := AStartD;
+      if AYears <> 0 then
+        EndDate := AddMonthsToDate(EndDate.Year, EndDate.Month, EndDate.Day, AYears * 12);
+      if AMonths <> 0 then
+        EndDate := AddMonthsToDate(EndDate.Year, EndDate.Month, EndDate.Day, AMonths);
+      EndDate := AddDaysToDate(EndDate.Year, EndDate.Month, EndDate.Day, AWeeks * 7 + ADays);
+      StartEpoch := DateToEpochDays(AStartY, AStartM, AStartD);
+      EndEpoch := DateToEpochDays(EndDate.Year, EndDate.Month, EndDate.Day);
+      TotalNs := (EndEpoch - StartEpoch) * NANOSECONDS_PER_DAY + TimeNs;
+    end
+    else
+      TotalNs := (AWeeks * 7 + ADays) * NANOSECONDS_PER_DAY + TimeNs;
+
+    // Round
+    if ASmallestUnit = tuWeek then
+      Divisor := NANOSECONDS_PER_DAY * 7 * AIncrement
+    else
+      Divisor := UnitToNanoseconds(ASmallestUnit) * AIncrement;
+    TotalNs := RoundWithMode(TotalNs, Divisor, AMode);
+
+    // Rebalance into largestUnit fields
+    if (AYears <> 0) or (AMonths <> 0) or
+       (Ord(ALargestUnit) <= Ord(tuMonth)) then
+    begin
+      // Need calendar rebalance back to year/month/day
+      ResultDays := TotalNs div NANOSECONDS_PER_DAY;
+      RemNs := TotalNs mod NANOSECONDS_PER_DAY;
+
+      StartEpoch := DateToEpochDays(AStartY, AStartM, AStartD);
+      EndEpoch := StartEpoch + ResultDays;
+
+      if Ord(ALargestUnit) <= Ord(tuMonth) then
+      begin
+        if TotalNs > 0 then Sign := 1
+        else if TotalNs < 0 then Sign := -1
+        else Sign := 0;
+
+        WholeUnits := 0;
+        if Sign > 0 then
+        begin
+          repeat
+            NextDate := AddMonthsToDate(AStartY, AStartM, AStartD, WholeUnits + 1);
+            NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
+            if NextEpoch > EndEpoch then Break;
+            Inc(WholeUnits);
+          until False;
+        end
+        else if Sign < 0 then
+        begin
+          repeat
+            NextDate := AddMonthsToDate(AStartY, AStartM, AStartD, WholeUnits - 1);
+            NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
+            if NextEpoch < EndEpoch then Break;
+            Dec(WholeUnits);
+          until False;
+        end;
+
+        WalkDate := AddMonthsToDate(AStartY, AStartM, AStartD, WholeUnits);
+        WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
+        ResultDays := EndEpoch - WalkEpoch;
+
+        if Ord(ALargestUnit) <= Ord(tuYear) then
+        begin
+          ResultYears := WholeUnits div 12;
+          ResultMonths := WholeUnits mod 12;
+        end
+        else
+        begin
+          ResultYears := 0;
+          ResultMonths := WholeUnits;
+        end;
+      end
+      else
+      begin
+        ResultYears := 0;
+        ResultMonths := 0;
+      end;
+
+      // Decompose time
+      ResultHours := RemNs div NANOSECONDS_PER_HOUR;
+      RemNs := RemNs mod NANOSECONDS_PER_HOUR;
+      ResultMinutes := RemNs div NANOSECONDS_PER_MINUTE;
+      RemNs := RemNs mod NANOSECONDS_PER_MINUTE;
+      ResultSeconds := RemNs div NANOSECONDS_PER_SECOND;
+      RemNs := RemNs mod NANOSECONDS_PER_SECOND;
+      ResultMs := RemNs div NANOSECONDS_PER_MILLISECOND;
+      RemNs := RemNs mod NANOSECONDS_PER_MILLISECOND;
+      ResultUs := RemNs div NANOSECONDS_PER_MICROSECOND;
+      ResultNs := RemNs mod NANOSECONDS_PER_MICROSECOND;
+
+      AYears := ResultYears; AMonths := ResultMonths;
+      if Ord(ALargestUnit) <= Ord(tuWeek) then
+      begin
+        AWeeks := ResultDays div 7;
+        ADays := ResultDays mod 7;
+      end
+      else
+      begin
+        AWeeks := 0;
+        ADays := ResultDays;
+      end;
+      AHours := ResultHours; AMinutes := ResultMinutes;
+      ASeconds := ResultSeconds; AMilliseconds := ResultMs;
+      AMicroseconds := ResultUs; ANanoseconds := ResultNs;
+    end
+    else
+    begin
+      // Non-calendar breakdown
+      RemNs := TotalNs;
+      ResultDays := 0;
+      ResultHours := 0;
+      ResultMinutes := 0;
+      ResultSeconds := 0;
+      ResultMs := 0;
+      ResultUs := 0;
+      ResultNs := 0;
+
+      if Ord(ALargestUnit) <= Ord(tuWeek) then
+      begin
+        ResultDays := RemNs div NANOSECONDS_PER_DAY;
+        RemNs := RemNs mod NANOSECONDS_PER_DAY;
+      end
+      else if Ord(ALargestUnit) <= Ord(tuDay) then
+      begin
+        ResultDays := RemNs div NANOSECONDS_PER_DAY;
+        RemNs := RemNs mod NANOSECONDS_PER_DAY;
+      end;
+      if Ord(ALargestUnit) <= Ord(tuHour) then
+      begin
+        ResultHours := RemNs div NANOSECONDS_PER_HOUR;
+        RemNs := RemNs mod NANOSECONDS_PER_HOUR;
+      end;
+      if Ord(ALargestUnit) <= Ord(tuMinute) then
+      begin
+        ResultMinutes := RemNs div NANOSECONDS_PER_MINUTE;
+        RemNs := RemNs mod NANOSECONDS_PER_MINUTE;
+      end;
+      if Ord(ALargestUnit) <= Ord(tuSecond) then
+      begin
+        ResultSeconds := RemNs div NANOSECONDS_PER_SECOND;
+        RemNs := RemNs mod NANOSECONDS_PER_SECOND;
+      end;
+      if Ord(ALargestUnit) <= Ord(tuMillisecond) then
+      begin
+        ResultMs := RemNs div NANOSECONDS_PER_MILLISECOND;
+        RemNs := RemNs mod NANOSECONDS_PER_MILLISECOND;
+      end;
+      if Ord(ALargestUnit) <= Ord(tuMicrosecond) then
+      begin
+        ResultUs := RemNs div NANOSECONDS_PER_MICROSECOND;
+        RemNs := RemNs mod NANOSECONDS_PER_MICROSECOND;
+      end;
+      ResultNs := RemNs;
+
+      AYears := 0; AMonths := 0;
+      if Ord(ALargestUnit) <= Ord(tuWeek) then
+      begin
+        AWeeks := ResultDays div 7;
+        ADays := ResultDays mod 7;
+      end
+      else
+      begin
+        AWeeks := 0;
+        ADays := ResultDays;
+      end;
+      AHours := ResultHours; AMinutes := ResultMinutes;
+      ASeconds := ResultSeconds; AMilliseconds := ResultMs;
+      AMicroseconds := ResultUs; ANanoseconds := ResultNs;
     end;
   end;
 end;

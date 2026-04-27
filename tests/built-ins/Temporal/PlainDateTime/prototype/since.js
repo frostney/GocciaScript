@@ -25,4 +25,10 @@ describe.runIf(isTemporal)("Temporal.PlainDateTime.prototype.since", () => {
     const dt2 = new Temporal.PlainDateTime(2024, 1, 1, 0, 0);
     expect(dt1.since(dt2, { largestUnit: "hours" }).toString()).toBe("PT36H");
   });
+
+  test("since() with smallestUnit hour and roundingMode halfExpand", () => {
+    const dt1 = new Temporal.PlainDateTime(2024, 1, 1, 12, 45);
+    const dt2 = new Temporal.PlainDateTime(2024, 1, 1, 10, 0);
+    expect(dt1.since(dt2, { smallestUnit: "hour", roundingMode: "halfExpand" }).toString()).toBe("PT3H");
+  });
 });

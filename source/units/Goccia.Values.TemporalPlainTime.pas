@@ -425,39 +425,89 @@ end;
 function TGocciaTemporalPlainTimeValue.TimeUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   T, Other: TGocciaTemporalPlainTimeValue;
+  OptionsObj: TGocciaObjectValue;
+  LargestUnit, SmallestUnit: TTemporalUnit;
+  RMode: TTemporalRoundingMode;
+  RIncrement: Integer;
   DiffNs: Int64;
+  Y, Mo, W, D, H, Mi, S, Ms, Us, Ns: Int64;
 begin
   T := AsPlainTime(AThisValue, 'PlainTime.prototype.until');
   Other := CoercePlainTime(AArgs.GetElement(0), 'PlainTime.prototype.until');
 
+  OptionsObj := GetDiffOptions(AArgs, 1);
+  LargestUnit := GetLargestUnit(OptionsObj, tuHour);
+  if LargestUnit = tuAuto then LargestUnit := tuHour;
+  if not (LargestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
+    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainTime.prototype.until', 'largestUnit']), SSuggestTemporalValidUnits);
+
+  SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
+  if not (SmallestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
+    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainTime.prototype.until', 'smallestUnit']), SSuggestTemporalValidUnits);
+  if Ord(LargestUnit) > Ord(SmallestUnit) then
+    ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
+  RMode := GetRoundingMode(OptionsObj, rmTrunc);
+  RIncrement := GetRoundingIncrement(OptionsObj, 1);
+
   DiffNs := TimeToTotalNanoseconds(Other) - TimeToTotalNanoseconds(T);
 
-  Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0,
-    DiffNs div Int64(3600000000000),
-    (DiffNs div Int64(60000000000)) mod 60,
-    (DiffNs div Int64(1000000000)) mod 60,
-    (DiffNs div 1000000) mod 1000,
-    (DiffNs div 1000) mod 1000,
-    DiffNs mod 1000);
+  Y := 0; Mo := 0; W := 0; D := 0;
+  H := DiffNs div Int64(3600000000000);
+  Mi := (DiffNs div Int64(60000000000)) mod 60;
+  S := (DiffNs div Int64(1000000000)) mod 60;
+  Ms := (DiffNs div 1000000) mod 1000;
+  Us := (DiffNs div 1000) mod 1000;
+  Ns := DiffNs mod 1000;
+
+  if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+    RoundDiffDuration(Y, Mo, W, D, H, Mi, S, Ms, Us, Ns,
+      0, 0, 0, LargestUnit, SmallestUnit, RMode, RIncrement);
+
+  Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, H, Mi, S, Ms, Us, Ns);
 end;
 
 function TGocciaTemporalPlainTimeValue.TimeSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   T, Other: TGocciaTemporalPlainTimeValue;
+  OptionsObj: TGocciaObjectValue;
+  LargestUnit, SmallestUnit: TTemporalUnit;
+  RMode: TTemporalRoundingMode;
+  RIncrement: Integer;
   DiffNs: Int64;
+  Y, Mo, W, D, H, Mi, S, Ms, Us, Ns: Int64;
 begin
   T := AsPlainTime(AThisValue, 'PlainTime.prototype.since');
   Other := CoercePlainTime(AArgs.GetElement(0), 'PlainTime.prototype.since');
 
+  OptionsObj := GetDiffOptions(AArgs, 1);
+  LargestUnit := GetLargestUnit(OptionsObj, tuHour);
+  if LargestUnit = tuAuto then LargestUnit := tuHour;
+  if not (LargestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
+    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainTime.prototype.since', 'largestUnit']), SSuggestTemporalValidUnits);
+
+  SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
+  if not (SmallestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
+    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainTime.prototype.since', 'smallestUnit']), SSuggestTemporalValidUnits);
+  if Ord(LargestUnit) > Ord(SmallestUnit) then
+    ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
+  RMode := GetRoundingMode(OptionsObj, rmTrunc);
+  RIncrement := GetRoundingIncrement(OptionsObj, 1);
+
   DiffNs := TimeToTotalNanoseconds(T) - TimeToTotalNanoseconds(Other);
 
-  Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0,
-    DiffNs div Int64(3600000000000),
-    (DiffNs div Int64(60000000000)) mod 60,
-    (DiffNs div Int64(1000000000)) mod 60,
-    (DiffNs div 1000000) mod 1000,
-    (DiffNs div 1000) mod 1000,
-    DiffNs mod 1000);
+  Y := 0; Mo := 0; W := 0; D := 0;
+  H := DiffNs div Int64(3600000000000);
+  Mi := (DiffNs div Int64(60000000000)) mod 60;
+  S := (DiffNs div Int64(1000000000)) mod 60;
+  Ms := (DiffNs div 1000000) mod 1000;
+  Us := (DiffNs div 1000) mod 1000;
+  Ns := DiffNs mod 1000;
+
+  if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+    RoundDiffDuration(Y, Mo, W, D, H, Mi, S, Ms, Us, Ns,
+      0, 0, 0, LargestUnit, SmallestUnit, RMode, RIncrement);
+
+  Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, H, Mi, S, Ms, Us, Ns);
 end;
 
 function TGocciaTemporalPlainTimeValue.TimeRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

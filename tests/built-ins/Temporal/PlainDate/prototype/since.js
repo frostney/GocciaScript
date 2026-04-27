@@ -30,4 +30,10 @@ describe.runIf(isTemporal)("Temporal.PlainDate.prototype.since", () => {
     const d2 = Temporal.PlainDate.from("2020-01-15");
     expect(d1.since(d2, { largestUnit: "years" }).toString()).toBe("P6Y6M15D");
   });
+
+  test("since() with smallestUnit month rounds", () => {
+    const d1 = Temporal.PlainDate.from("2020-04-20");
+    const d2 = Temporal.PlainDate.from("2020-01-01");
+    expect(d1.since(d2, { largestUnit: "years", smallestUnit: "month", roundingMode: "halfExpand" }).toString()).toBe("P4M");
+  });
 });
