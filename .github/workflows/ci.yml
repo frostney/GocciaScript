@@ -711,7 +711,7 @@ jobs:
           $bytes = [System.IO.File]::ReadAllBytes($path)
           $text = [System.Text.Encoding]::Latin1.GetString($bytes)
           if ($text -match "libssl|libcrypto") {
-            Write-Error "GocciaScriptLoader.exe must not depend on OpenSSL DLLs for HTTPS on Windows"
+            throw "GocciaScriptLoader.exe must not depend on OpenSSL DLLs for HTTPS on Windows"
           }
 
   artifacts:
