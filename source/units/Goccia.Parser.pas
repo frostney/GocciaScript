@@ -1738,7 +1738,7 @@ begin
     if not FFunctionDeclarationsEnabled then
     begin
       AddWarning('''function'' expressions are not supported in GocciaScript',
-        'Use arrow functions instead: const name = (...) => { ... }',
+        'Use arrow functions: const f = (...) => { ... }; for wrappers needing call-site this, use method shorthand: ({ m(...) {} }).m',
         Token.Line, Token.Column);
       SkipUnsupportedFunctionSignature;
       Result := TGocciaLiteralExpression.Create(
@@ -2981,7 +2981,7 @@ begin
   if not FFunctionDeclarationsEnabled then
   begin
     AddWarning('''async function'' is not supported in GocciaScript',
-      'Use async arrow functions instead: const name = async (...) => { ... }',
+      'Use async arrow functions: const name = async (...) => { ... }; for this binding, use async method shorthand: ({ async m(...) {} }).m',
       AAsyncLine, AAsyncColumn);
     SkipUnsupportedFunctionSignature;
     Exit(afcDisabled);
@@ -3251,7 +3251,7 @@ begin
   if not FFunctionDeclarationsEnabled then
   begin
     AddWarning('''function'' declarations are not supported in GocciaScript',
-      'Use arrow functions instead: const name = (...) => { ... }',
+      'Use arrow functions: const name = (...) => { ... }; for this binding, use method shorthand: ({ name(...) {} }).name',
       Line, Column);
     SkipUnsupportedFunctionSignature;
     Result := TGocciaEmptyStatement.Create(Line, Column);
@@ -3859,7 +3859,7 @@ begin
     if not FFunctionDeclarationsEnabled then
     begin
       AddWarning('''function'' declarations are not supported in GocciaScript',
-        'Use arrow functions instead: const name = (...) => { ... }',
+        'Use arrow functions: const name = (...) => { ... }; for this binding, use method shorthand: ({ name(...) {} }).name',
         Line, Column);
       Advance;
       SkipUnsupportedFunctionSignature;
