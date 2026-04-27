@@ -39,7 +39,7 @@ describe("Set.prototype.intersection", () => {
     const setLike = {
       size: 1,
       has(value) {
-        return value === 2;
+        throw new Error("has should not be called");
       },
       keys() {
         return [2, 4, 4].values();

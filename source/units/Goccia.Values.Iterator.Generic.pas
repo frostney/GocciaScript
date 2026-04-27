@@ -70,30 +70,18 @@ begin
   if not (NextResult is TGocciaObjectValue) then
     ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.TypeName]), SSuggestIteratorResultObject);
 
-  if NextResult is TGocciaObjectValue then
-  begin
-    DoneVal := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
-    if Assigned(DoneVal) and DoneVal.ToBooleanLiteral.Value then
-    begin
-      FDone := True;
-      ValueVal := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
-      if not Assigned(ValueVal) then
-        ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Result := CreateIteratorResult(ValueVal, True);
-    end
-    else
-    begin
-      ValueVal := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
-      if not Assigned(ValueVal) then
-        ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Result := CreateIteratorResult(ValueVal, False);
-    end;
-  end
-  else
+  DoneVal := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
+  ValueVal := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
+  if not Assigned(ValueVal) then
+    ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  if Assigned(DoneVal) and DoneVal.ToBooleanLiteral.Value then
   begin
     FDone := True;
-    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
-  end;
+    Result := CreateIteratorResult(ValueVal, True);
+  end
+  else
+    Result := CreateIteratorResult(ValueVal, False);
 end;
 
 function TGocciaGenericIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
@@ -127,33 +115,19 @@ begin
   if not (NextResult is TGocciaObjectValue) then
     ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.TypeName]), SSuggestIteratorResultObject);
 
-  if NextResult is TGocciaObjectValue then
-  begin
-    DoneVal := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
-    if Assigned(DoneVal) and DoneVal.ToBooleanLiteral.Value then
-    begin
-      FDone := True;
-      ADone := True;
-      ValueVal := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
-      if not Assigned(ValueVal) then
-        ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Result := ValueVal;
-    end
-    else
-    begin
-      ADone := False;
-      ValueVal := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
-      if not Assigned(ValueVal) then
-        ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Result := ValueVal;
-    end;
-  end
-  else
+  DoneVal := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
+  ValueVal := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
+  if not Assigned(ValueVal) then
+    ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  if Assigned(DoneVal) and DoneVal.ToBooleanLiteral.Value then
   begin
     FDone := True;
     ADone := True;
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end;
+  end
+  else
+    ADone := False;
+  Result := ValueVal;
 end;
 
 procedure TGocciaGenericIteratorValue.Close;
