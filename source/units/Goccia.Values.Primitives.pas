@@ -158,7 +158,7 @@ type
 
   procedure PinPrimitiveSingletons;
 
-  // ES2026 §6.1.6.1.13 — Number::toString for finite, non-zero doubles.
+  // ES2026 §6.1.6.1.13 Number::toString(x)
   function DoubleToESString(AValue: Double): string;
 
 implementation
@@ -181,16 +181,7 @@ uses
 const
   MAX_SAFE_INTEGER_VALUE = 9007199254740991.0;
 
-// ES2026 §6.1.6.1.13 Number::toString
-//
-// Finds the shortest decimal representation (unique n, k, s triple with
-// k minimal) and formats it according to the spec's fixed-point vs
-// scientific-notation thresholds (n <= 21 for fixed, n > -6 for leading
-// zeros, scientific otherwise).
-//
-// Uses Str(V:W) with increasing width to find the shortest round-tripping
-// representation, since FloatToStrF caps precision at 15 significant digits
-// for Double values.
+// ES2026 §6.1.6.1.13 Number::toString(x)
 function DoubleToESString(AValue: Double): string;
 
   procedure FormatES(const AMantissa: string; AK, AN: Integer; ANeg: Boolean;
