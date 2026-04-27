@@ -11,6 +11,7 @@ import {
 } from "react";
 import { AnchorH2, AnchorH3 } from "@/components/anchor-heading";
 import { AnimatedOutput } from "@/components/animated-output";
+import { ConsolePanel } from "@/components/console-panel";
 import {
   HighlightedCode,
   HighlightedGeneric,
@@ -102,7 +103,7 @@ function HeroRunnableCard({ code }: { code: string }) {
     if (running) return;
     setRunning(true);
     setRunTick((t) => t + 1);
-    const banner = "› GocciaScriptLoader coffee-shop.js";
+    const banner = "GocciaScriptLoader coffee-shop.js";
     setOutput([{ kind: "meta", text: banner }]);
     try {
       const res = await fetch("/api/run", {
@@ -145,6 +146,10 @@ function HeroRunnableCard({ code }: { code: string }) {
           totalMs !== undefined ? ` · ${totalMs.toFixed(2)}ms` : ""
         }`,
       });
+      // Pad to 7 lines so the hero console keeps a fixed height.
+      while (lines.length < 5) {
+        lines.push({ kind: "meta", text: "" });
+      }
       setOutput(lines);
     } catch (err) {
       // `err` from `fetch` / `res.json()` is *usually* an `Error`
@@ -167,6 +172,13 @@ function HeroRunnableCard({ code }: { code: string }) {
       setRunning(false);
     }
   };
+
+  // Run automatically on mount so the hero card shows live output
+  // immediately — same UX as the sandbox preview.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: run once on mount
+  useEffect(() => {
+    run();
+  }, []);
 
   // Auto-size the textarea to its content so its internal scroll never
   // engages; the outer .hero-editor handles overflow. With no internal
@@ -250,22 +262,24 @@ function HeroRunnableCard({ code }: { code: string }) {
           />
         </div>
       </div>
-      <div className="hero-output">
-        {output ? (
-          <AnimatedOutput
-            runKey={runTick}
-            lines={output.map((l) => ({
-              kind:
-                l.kind === "meta" ? "meta" : l.kind === "err" ? "err" : "out",
-              text: l.text,
-            }))}
-          />
-        ) : (
-          <div className="hero-output-empty">
-            {running ? "› running…" : "› press Run to execute (or ⌘↩)"}
-          </div>
-        )}
-      </div>
+      <ConsolePanel className="hero-console">
+        <AnimatedOutput
+          runKey={runTick}
+          lines={
+            output
+              ? output.map((l) => ({
+                  kind:
+                    l.kind === "meta"
+                      ? "meta"
+                      : l.kind === "err"
+                        ? "err"
+                        : "out",
+                  text: l.text,
+                }))
+              : []
+          }
+        />
+      </ConsolePanel>
     </div>
   );
 }
@@ -452,7 +466,7 @@ console.log("total:", total);`;
     {
       id: "source",
       label: "Source",
-      small: ".js · .ts · .jsx · .tsx · .esm",
+      small: ".js · .ts · .jsx · .tsx · .mjs",
       overview:
         "Every supported extension is the same language — TS/TSX type annotations are parsed and discarded, and JSX is rewritten to function calls in a preprocessing pass before the lexer ever sees it. There is no separate type-checker.",
       docId: "language",
@@ -509,20 +523,10 @@ console.log("total:", total);`;
   const [resultView, setResultView] = useState<"console" | "json">("console");
   const stage = stages[active];
 
-  // SSR-stable ids so the tab → panel association via `aria-controls` /
-  // `aria-labelledby` survives hydration. `useId` produces collision-free
-  // values even if this component were rendered multiple times on a page.
   const tabConsoleId = useId();
   const tabJsonId = useId();
   const panelConsoleId = useId();
   const panelJsonId = useId();
-
-  // The Result step's console output uses `<AnimatedOutput>` for its
-  // line-stagger reveal — same animation that drives the playground,
-  // sandbox preview, and hero runnable card. No local timer state
-  // needed; the component restarts when its `runKey` changes (here:
-  // when the active stage flips back to step 5 or the resultView
-  // toggle returns to "console").
 
   return (
     <div className="arch">
@@ -652,25 +656,32 @@ console.log("total:", total);`;
                   JSON result
                 </button>
               </div>
-              {/* Each panel is wired up with `role="tabpanel"` +
-                  `aria-labelledby` so screen readers announce the
-                  controlling tab when focus enters the panel content. We
-                  unmount the inactive panel rather than hide it via CSS
-                  to keep the line-stagger animation `runKey` clean. */}
               {resultView === "console" ? (
                 <div
                   role="tabpanel"
                   id={panelConsoleId}
                   aria-labelledby={tabConsoleId}
                 >
-                  <AnimatedOutput
-                    className="arch-anim-output"
-                    runKey={`console-${active}`}
-                    lines={CONSOLE_OUTPUT.split("\n").map((text) => ({
-                      kind: "out" as const,
-                      text,
-                    }))}
-                  />
+                  <ConsolePanel className="arch-console">
+                    <AnimatedOutput
+                      runKey={`console-${active}`}
+                      showCaret={false}
+                      lines={[
+                        {
+                          kind: "meta" as const,
+                          text: "GocciaScriptLoader example.js",
+                        },
+                        ...CONSOLE_OUTPUT.split("\n").map((text) => ({
+                          kind: "out" as const,
+                          text,
+                        })),
+                        {
+                          kind: "meta" as const,
+                          text: "— exit 0 · 0.08ms",
+                        },
+                      ]}
+                    />
+                  </ConsolePanel>
                 </div>
               ) : (
                 <div

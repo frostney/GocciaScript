@@ -17,13 +17,11 @@ export function formatError(err: RunnerError, source: string): OutputLine[] {
     const lines = source.split("\n");
     const idx = err.line - 1;
     const lineText = lines[idx] ?? "";
-    const file = err.fileName ?? "<stdin>";
     const col = err.column && err.column > 0 ? err.column : 1;
 
-    out.push({
-      kind: "meta",
-      text: `${file}:${err.line}:${col}`,
-    });
+    if (err.fileName && err.fileName !== "<stdin>") {
+      out.push({ kind: "meta", text: `${err.fileName}:${err.line}:${col}` });
+    }
     const gutter = `${err.line} | `;
     out.push({ kind: "err", text: `${gutter}${lineText}` });
     out.push({

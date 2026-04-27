@@ -9,14 +9,19 @@ export type AnimatedOutputLine = {
   text: ReactNode;
 };
 
+/** Duration of the command-line typewriter reveal (ms). Output lines
+ *  stagger after this so the command finishes "typing" first. */
+const TYPEWRITER_MS = 600;
+const STAGGER_MS = 60;
+
 /** Console-style output panel with a synchronized line-by-line
  *  reveal animation: each line fades + slides in with a small
  *  stagger, and a blinking caret tails the final line.
  *
- *  The animation is driven entirely by CSS `animation-delay` so we
- *  don't need any state or timers — just remount on each new run by
- *  bumping the `runKey` prop, which lifts to a `key` on the wrapper
- *  and resets the animation cleanly.
+ *  The first meta line is treated as the "command" — it renders
+ *  with a ➜ prompt and a typewriter reveal so the caret appears
+ *  to type the command in real time. Subsequent lines fade in
+ *  after the typewriter finishes.
  *
  *  Used across the playground, sandbox preview, hero runnable card,
  *  and Compiler Pipeline result so the same "code just executed,
@@ -26,7 +31,6 @@ export function AnimatedOutput({
   runKey,
   className = "",
   showCaret = true,
-  emptyState,
 }: {
   lines: AnimatedOutputLine[];
   /** Bump this on each new run to restart the line-stagger animation. */
@@ -35,46 +39,94 @@ export function AnimatedOutput({
   /** When false, the trailing caret is hidden — useful for finalised
    *  output that's no longer "live". */
   showCaret?: boolean;
-  /** Rendered when `lines` is empty. */
-  emptyState?: ReactNode;
 }) {
   if (lines.length === 0) {
     return (
-      <div className={`anim-output ${className}`}>{emptyState ?? null}</div>
+      <div className={`anim-output ${className}`}>
+        <div className="anim-output-line log-command">
+          <span className="pg-log-gutter" aria-hidden="true">
+            ➜
+          </span>
+          <span className="anim-output-text">
+            <span
+              className="anim-output-caret anim-output-caret-idle"
+              aria-hidden="true"
+            />
+            <span className="anim-output-hint" aria-hidden="true">
+              press Run or ⌘+Enter
+            </span>
+          </span>
+        </div>
+      </div>
     );
   }
+
+  const hasCommand = lines[0]?.kind === "meta";
+
   return (
     <div key={runKey} className={`anim-output ${className}`}>
-      {lines.map((l, i) => (
-        <div
-          key={i}
-          className={`anim-output-line log-${
-            l.kind === "meta"
-              ? "meta"
-              : l.kind === "err"
-                ? "err"
-                : l.kind === "result"
-                  ? "result"
-                  : "out"
-          }`}
-          style={{ animationDelay: `${i * 60}ms` }}
-        >
-          <span className="pg-log-gutter" aria-hidden="true">
-            {l.kind === "meta"
-              ? ""
-              : l.kind === "err"
+      {lines.map((l, i) => {
+        const isCmd = i === 0 && hasCommand;
+
+        if (isCmd) {
+          const cmdOnly = lines.length === 1;
+          return (
+            <div key={i} className="anim-output-line log-command">
+              <span className="pg-log-gutter" aria-hidden="true">
+                ➜
+              </span>
+              <span className="anim-output-text">
+                <span className="anim-output-typed">{l.text}</span>
+                {cmdOnly && (
+                  <span
+                    className="anim-output-caret anim-output-caret-typing"
+                    aria-hidden="true"
+                  />
+                )}
+              </span>
+            </div>
+          );
+        }
+
+        const delay = hasCommand
+          ? TYPEWRITER_MS + (i - 1) * STAGGER_MS
+          : i * STAGGER_MS;
+        const kind =
+          l.kind === "meta"
+            ? "meta"
+            : l.kind === "err"
+              ? "err"
+              : l.kind === "result"
+                ? "result"
+                : "out";
+
+        return (
+          <div
+            key={i}
+            className={`anim-output-line log-${kind}`}
+            style={{ animationDelay: `${delay}ms` }}
+          >
+            <span className="pg-log-gutter" aria-hidden="true">
+              {l.kind === "err"
                 ? "✗"
                 : l.kind === "result"
                   ? "↳"
-                  : "›"}
-          </span>
-          <span className="anim-output-text">{l.text}</span>
-        </div>
-      ))}
+                  : ""}
+            </span>
+            <span className="anim-output-text">{l.text}</span>
+          </div>
+        );
+      })}
       {showCaret && (
         <span
           className="anim-output-caret"
-          style={{ animationDelay: `${lines.length * 60}ms` }}
+          style={{
+            animationDelay: `${
+              hasCommand
+                ? TYPEWRITER_MS + (lines.length - 1) * STAGGER_MS
+                : lines.length * STAGGER_MS
+            }ms`,
+          }}
           aria-hidden="true"
         />
       )}

@@ -3,6 +3,7 @@
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { AnimatedOutput } from "@/components/animated-output";
+import { ConsolePanel } from "@/components/console-panel";
 import { HighlightedCode } from "@/components/highlighted-code";
 import {
   CopyIcon,
@@ -137,7 +138,7 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
 
   const run = useCallback(async () => {
     setRunning(true);
-    const banner = `› GocciaScriptLoader --mode=${
+    const banner = `GocciaScriptLoader --mode=${
       backend === "bytecode" ? "bytecode" : "interpreted"
     }${asi ? " --asi" : ""} ${version}`;
     setOutput([{ kind: "meta", text: banner }]);
@@ -569,7 +570,7 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
             <SparkleIcon size={14} /> output
             <span className="ml-auto text-[0.7rem]">{output.length} lines</span>
           </div>
-          <div className="pg-output">
+          <ConsolePanel>
             <AnimatedOutput
               // Run id derived from the output identity — bumping the
               // banner / clearing for a new execution remounts the
@@ -577,13 +578,8 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
               runKey={output.length === 0 ? "empty" : (output[0]?.text ?? "x")}
               lines={output}
               showCaret={!running ? output.length > 0 : true}
-              emptyState={
-                <span className="text-ink-3 italic">
-                  — no output yet. hit ⌘+Enter to run.
-                </span>
-              }
             />
-          </div>
+          </ConsolePanel>
         </div>
       </div>
     </div>
