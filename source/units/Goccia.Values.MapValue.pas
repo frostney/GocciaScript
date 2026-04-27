@@ -389,7 +389,7 @@ end;
 function TGocciaMapValue.MapForEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   M: TGocciaMapValue;
-  Callback: TGocciaValue;
+  Callback, ThisArg: TGocciaValue;
   TypedCallback: TGocciaFunctionBase;
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
@@ -397,31 +397,43 @@ begin
   // Steps 1-3: If M does not have a [[MapData]] internal slot, throw a TypeError
   if not (AThisValue is TGocciaMapValue) then
     ThrowTypeError(SErrorMapForEachNonMap, SSuggestMapThisType);
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  if AArgs.Length = 0 then Exit;
-
   M := TGocciaMapValue(AThisValue);
-  Callback := AArgs.GetElement(0);
+
   // Step 4: If IsCallable(callbackfn) is false, throw a TypeError
+  if AArgs.Length > 0 then
+    Callback := AArgs.GetElement(0)
+  else
+    Callback := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not Callback.IsCallable then
     ThrowTypeError(SErrorMapForEachNotCallable, SSuggestMapCallbackRequired);
+
+  // Step 5: Let thisArg be the second argument
+  if AArgs.Length > 1 then
+    ThisArg := AArgs.GetElement(1)
+  else
+    ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   TypedCallback := nil;
   if Callback is TGocciaFunctionBase then
     TypedCallback := TGocciaFunctionBase(Callback);
 
+  // Step 6: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
   for I := 0 to M.Entries.Count - 1 do
   begin
-    CallArgs := TGocciaArgumentsCollection.Create([M.Entries[I].Value, M.Entries[I].Key, AThisValue]);
+    // Step 6b: Call(callbackfn, thisArg, « p.[[Value]], p.[[Key]], M »)
+    CallArgs := TGocciaArgumentsCollection.Create([M.Entries[I].Value, M.Entries[I].Key, M]);
     try
       if Assigned(TypedCallback) then
-        TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
+        TypedCallback.Call(CallArgs, ThisArg)
       else
-        InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        InvokeCallable(Callback, CallArgs, ThisArg);
     finally
       CallArgs.Free;
     end;
   end;
+
+  // Step 7: Return undefined
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 // ES2026 §24.1.3.8 Map.prototype.keys()

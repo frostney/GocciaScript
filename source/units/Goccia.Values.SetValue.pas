@@ -340,7 +340,7 @@ end;
 function TGocciaSetValue.SetForEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   S: TGocciaSetValue;
-  Callback: TGocciaValue;
+  Callback, ThisArg: TGocciaValue;
   TypedCallback: TGocciaFunctionBase;
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
@@ -348,31 +348,43 @@ begin
   // Steps 1-3: If S does not have a [[SetData]] internal slot, throw a TypeError
   if not (AThisValue is TGocciaSetValue) then
     ThrowTypeError(SErrorSetForEachNonSet, SSuggestSetThisType);
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  if AArgs.Length = 0 then Exit;
-
   S := TGocciaSetValue(AThisValue);
-  Callback := AArgs.GetElement(0);
+
   // Step 4: If IsCallable(callbackfn) is false, throw a TypeError
+  if AArgs.Length > 0 then
+    Callback := AArgs.GetElement(0)
+  else
+    Callback := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not Callback.IsCallable then
     ThrowTypeError(SErrorSetForEachNotCallable, SSuggestSetCallbackRequired);
+
+  // Step 5: Let thisArg be the second argument
+  if AArgs.Length > 1 then
+    ThisArg := AArgs.GetElement(1)
+  else
+    ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   TypedCallback := nil;
   if Callback is TGocciaFunctionBase then
     TypedCallback := TGocciaFunctionBase(Callback);
 
+  // Step 6: For each element e of S.[[SetData]], do
   for I := 0 to S.FItems.Count - 1 do
   begin
-    CallArgs := TGocciaArgumentsCollection.Create([S.FItems[I], S.FItems[I], AThisValue]);
+    // Step 6b: Call(callbackfn, thisArg, « e, e, S »)
+    CallArgs := TGocciaArgumentsCollection.Create([S.FItems[I], S.FItems[I], S]);
     try
       if Assigned(TypedCallback) then
-        TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
+        TypedCallback.Call(CallArgs, ThisArg)
       else
-        InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        InvokeCallable(Callback, CallArgs, ThisArg);
     finally
       CallArgs.Free;
     end;
   end;
+
+  // Step 7: Return undefined
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 // ES2026 §24.2.3.10 Set.prototype.values()
