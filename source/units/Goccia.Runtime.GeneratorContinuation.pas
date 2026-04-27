@@ -52,13 +52,18 @@ type
     FDelegateIterator: TGocciaIteratorValue;
     FDelegateAsyncIterator: TGocciaValue;
     FDelegateAsyncNext: TGocciaValue;
+    FExpressionValues: TDictionary<TObject, TGocciaValue>;
   public
     constructor Create(const ABodyStatements: TObjectList<TGocciaASTNode>;
       const ACallScope: TGocciaScope; const AContext: TGocciaEvaluationContext);
+    destructor Destroy; override;
     function Resume(const AKind: TGocciaGeneratorResumeKind;
       const AValue: TGocciaValue; out ADone: Boolean): TGocciaValue;
     function YieldValue(const AYieldExpression: TGocciaYieldExpression;
       const AContext: TGocciaEvaluationContext): TGocciaValue;
+    procedure SaveExpressionValue(const AExpression: TObject; const AValue: TGocciaValue);
+    function TakeExpressionValue(const AExpression: TObject; out AValue: TGocciaValue): Boolean;
+    procedure ClearExpressionValue(const AExpression: TObject);
     procedure MarkReferences;
     property Completed: Boolean read FCompleted;
   end;
@@ -106,6 +111,13 @@ begin
   FCompleted := False;
   FSuspendedYield := nil;
   FPendingValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  FExpressionValues := TDictionary<TObject, TGocciaValue>.Create;
+end;
+
+destructor TGocciaGeneratorContinuation.Destroy;
+begin
+  FExpressionValues.Free;
+  inherited;
 end;
 
 function TGocciaGeneratorContinuation.Resume(
@@ -209,6 +221,82 @@ begin
   begin
     FHasPendingValue := False;
     FSuspendedYield := nil;
+    if AYieldExpression.IsDelegate then
+    begin
+      if FPendingKind = grkThrow then
+      begin
+        if Assigned(FDelegateAsyncIterator) then
+          IteratorMethod := FDelegateAsyncIterator.GetProperty(PROP_THROW)
+        else if Assigned(FDelegateIterator) then
+          IteratorMethod := FDelegateIterator.GetProperty(PROP_THROW)
+        else
+          IteratorMethod := nil;
+        if not Assigned(IteratorMethod) or (IteratorMethod is TGocciaUndefinedLiteralValue) or
+           not IteratorMethod.IsCallable then
+          raise TGocciaThrowValue.Create(FPendingValue);
+        CallArgs := TGocciaArgumentsCollection.Create([FPendingValue]);
+        try
+          if Assigned(FDelegateAsyncIterator) then
+            IteratorResult := AwaitValue(TGocciaFunctionBase(IteratorMethod).Call(
+              CallArgs, FDelegateAsyncIterator)) as TGocciaObjectValue
+          else
+            IteratorResult := TGocciaFunctionBase(IteratorMethod).Call(
+              CallArgs, FDelegateIterator) as TGocciaObjectValue;
+        finally
+          CallArgs.Free;
+        end;
+        if IteratorResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+        begin
+          Result := IteratorResult.GetProperty(PROP_VALUE);
+          if not Assigned(Result) then
+            Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+          FDelegateIterator := nil;
+          FDelegateAsyncIterator := nil;
+          FDelegateAsyncNext := nil;
+          FDelegateExpression := nil;
+          Exit;
+        end;
+        YieldedValue := IteratorResult.GetProperty(PROP_VALUE);
+        if not Assigned(YieldedValue) then
+          YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        FSuspendedYield := AYieldExpression;
+        raise EGocciaGeneratorYield.Create(YieldedValue);
+      end;
+
+      if FPendingKind = grkReturn then
+      begin
+        if Assigned(FDelegateAsyncIterator) then
+          IteratorMethod := FDelegateAsyncIterator.GetProperty(PROP_RETURN)
+        else if Assigned(FDelegateIterator) then
+          IteratorMethod := FDelegateIterator.GetProperty(PROP_RETURN)
+        else
+          IteratorMethod := nil;
+        if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and
+           IteratorMethod.IsCallable then
+        begin
+          CallArgs := TGocciaArgumentsCollection.Create([FPendingValue]);
+          try
+            if Assigned(FDelegateAsyncIterator) then
+              IteratorResult := AwaitValue(TGocciaFunctionBase(IteratorMethod).Call(
+                CallArgs, FDelegateAsyncIterator)) as TGocciaObjectValue
+            else
+              IteratorResult := TGocciaFunctionBase(IteratorMethod).Call(
+                CallArgs, FDelegateIterator) as TGocciaObjectValue;
+          finally
+            CallArgs.Free;
+          end;
+          if not IteratorResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+          begin
+            YieldedValue := IteratorResult.GetProperty(PROP_VALUE);
+            if not Assigned(YieldedValue) then
+              YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+            FSuspendedYield := AYieldExpression;
+            raise EGocciaGeneratorYield.Create(YieldedValue);
+          end;
+        end;
+        raise EGocciaGeneratorReturn.Create(FPendingValue);
+      end;
+    end;
     if FPendingKind = grkThrow then
       raise TGocciaThrowValue.Create(FPendingValue);
     if FPendingKind = grkReturn then
@@ -319,7 +407,28 @@ begin
   raise EGocciaGeneratorYield.Create(YieldedValue);
 end;
 
+procedure TGocciaGeneratorContinuation.SaveExpressionValue(
+  const AExpression: TObject; const AValue: TGocciaValue);
+begin
+  FExpressionValues.AddOrSetValue(AExpression, AValue);
+end;
+
+function TGocciaGeneratorContinuation.TakeExpressionValue(
+  const AExpression: TObject; out AValue: TGocciaValue): Boolean;
+begin
+  Result := FExpressionValues.TryGetValue(AExpression, AValue);
+  if Result then
+    FExpressionValues.Remove(AExpression);
+end;
+
+procedure TGocciaGeneratorContinuation.ClearExpressionValue(const AExpression: TObject);
+begin
+  FExpressionValues.Remove(AExpression);
+end;
+
 procedure TGocciaGeneratorContinuation.MarkReferences;
+var
+  Value: TGocciaValue;
 begin
   if Assigned(FCallScope) then
     FCallScope.MarkReferences;
@@ -331,6 +440,9 @@ begin
     FDelegateAsyncIterator.MarkReferences;
   if Assigned(FDelegateAsyncNext) then
     FDelegateAsyncNext.MarkReferences;
+  for Value in FExpressionValues.Values do
+    if Assigned(Value) then
+      Value.MarkReferences;
 end;
 
 function CurrentGeneratorContinuation: TGocciaGeneratorContinuation;

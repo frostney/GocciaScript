@@ -5,7 +5,7 @@ unit Goccia.Bytecode;
 interface
 
 const
-  GOCCIA_FORMAT_VERSION = 14;
+  GOCCIA_FORMAT_VERSION = 15;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;

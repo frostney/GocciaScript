@@ -85,12 +85,14 @@ uses
   SysUtils,
 
   Goccia.AST.Statements,
+  Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.Error,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
@@ -102,6 +104,22 @@ begin
     Result := AArguments.GetElement(0)
   else
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function GeneratorExecutingError: TGocciaValue;
+begin
+  Result := CreateErrorObject(TYPE_ERROR_NAME, 'Generator is already executing');
+end;
+
+function RejectedTypeErrorPromise(const AMessage: string): TGocciaPromiseValue;
+begin
+  Result := TGocciaPromiseValue.Create;
+  try
+    Result.Reject(CreateErrorObject(TYPE_ERROR_NAME, AMessage));
+  except
+    Result.Free;
+    raise;
+  end;
 end;
 
 { TGocciaGeneratorObjectValue }
@@ -157,8 +175,21 @@ begin
 end;
 
 procedure TGocciaGeneratorObjectValue.Close;
+var
+  Done: Boolean;
 begin
-  FState := gsCompleted;
+  if FState = gsCompleted then
+    Exit;
+  if FState = gsExecuting then
+    raise TGocciaThrowValue.Create(GeneratorExecutingError);
+  FState := gsExecuting;
+  try
+    FContinuation.Resume(grkReturn, TGocciaUndefinedLiteralValue.UndefinedValue, Done);
+    FState := gsCompleted;
+  except
+    FState := gsCompleted;
+    raise;
+  end;
 end;
 
 procedure TGocciaGeneratorObjectValue.MarkReferences;
@@ -186,12 +217,19 @@ begin
   begin
     if FState = gsCompleted then
       Exit(CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True));
+    if FState = gsExecuting then
+      raise TGocciaThrowValue.Create(GeneratorExecutingError);
     FState := gsExecuting;
-    Value := FContinuation.Resume(grkNext, ArgumentOrUndefined(AArgs), Done);
-    if Done then
-      FState := gsCompleted
-    else
-      FState := gsSuspendedYield;
+    try
+      Value := FContinuation.Resume(grkNext, ArgumentOrUndefined(AArgs), Done);
+      if Done then
+        FState := gsCompleted
+      else
+        FState := gsSuspendedYield;
+    except
+      FState := gsCompleted;
+      raise;
+    end;
   end;
   Result := CreateIteratorResult(Value, Done);
 end;
@@ -210,11 +248,21 @@ begin
     begin
       if FState = gsCompleted then
         Exit(CreateIteratorResult(ArgumentOrUndefined(AArgs), True));
+      if FState = gsExecuting then
+        raise TGocciaThrowValue.Create(GeneratorExecutingError);
       FState := gsExecuting;
-      Value := FContinuation.Resume(grkReturn, ArgumentOrUndefined(AArgs), Done);
-      FState := gsCompleted;
+      try
+        Value := FContinuation.Resume(grkReturn, ArgumentOrUndefined(AArgs), Done);
+        if Done then
+          FState := gsCompleted
+        else
+          FState := gsSuspendedYield;
+      except
+        FState := gsCompleted;
+        raise;
+      end;
     end;
-    Result := CreateIteratorResult(Value, True);
+    Result := CreateIteratorResult(Value, Done);
   end;
 end;
 
@@ -226,10 +274,20 @@ var
 begin
   if not (AThisValue is TGocciaGeneratorObjectValue) then
     raise TGocciaThrowValue.Create(ArgumentOrUndefined(AArgs));
-  Value := TGocciaGeneratorObjectValue(AThisValue).FContinuation.Resume(
-    grkThrow, ArgumentOrUndefined(AArgs), Done);
-  if Done then
+  if TGocciaGeneratorObjectValue(AThisValue).FState = gsExecuting then
+    raise TGocciaThrowValue.Create(GeneratorExecutingError);
+  TGocciaGeneratorObjectValue(AThisValue).FState := gsExecuting;
+  try
+    Value := TGocciaGeneratorObjectValue(AThisValue).FContinuation.Resume(
+      grkThrow, ArgumentOrUndefined(AArgs), Done);
+    if Done then
+      TGocciaGeneratorObjectValue(AThisValue).FState := gsCompleted
+    else
+      TGocciaGeneratorObjectValue(AThisValue).FState := gsSuspendedYield;
+  except
     TGocciaGeneratorObjectValue(AThisValue).FState := gsCompleted;
+    raise;
+  end;
   Result := CreateIteratorResult(Value, Done);
 end;
 
@@ -270,6 +328,7 @@ function TGocciaAsyncGeneratorObjectValue.ResumeAsPromise(
 var
   Promise: TGocciaPromiseValue;
   Done: Boolean;
+  UnwrappedValue: TGocciaValue;
   Value: TGocciaValue;
 begin
   Promise := TGocciaPromiseValue.Create;
@@ -289,7 +348,8 @@ begin
         else
           FState := gsSuspendedYield;
       end;
-      Promise.Resolve(CreateIteratorResult(Value, Done));
+      UnwrappedValue := AwaitValue(Value);
+      Promise.Resolve(CreateIteratorResult(UnwrappedValue, Done));
     except
       on E: TGocciaThrowValue do
       begin
@@ -320,6 +380,8 @@ end;
 function TGocciaAsyncGeneratorObjectValue.AsyncGeneratorNext(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
+  if not (AThisValue is TGocciaAsyncGeneratorObjectValue) then
+    Exit(RejectedTypeErrorPromise('AsyncGenerator method called on incompatible receiver'));
   Result := TGocciaAsyncGeneratorObjectValue(AThisValue).ResumeAsPromise(
     grkNext, ArgumentOrUndefined(AArgs));
 end;
@@ -327,6 +389,8 @@ end;
 function TGocciaAsyncGeneratorObjectValue.AsyncGeneratorReturn(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
+  if not (AThisValue is TGocciaAsyncGeneratorObjectValue) then
+    Exit(RejectedTypeErrorPromise('AsyncGenerator method called on incompatible receiver'));
   Result := TGocciaAsyncGeneratorObjectValue(AThisValue).ResumeAsPromise(
     grkReturn, ArgumentOrUndefined(AArgs));
 end;
@@ -334,6 +398,8 @@ end;
 function TGocciaAsyncGeneratorObjectValue.AsyncGeneratorThrow(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
+  if not (AThisValue is TGocciaAsyncGeneratorObjectValue) then
+    Exit(RejectedTypeErrorPromise('AsyncGenerator method called on incompatible receiver'));
   Result := TGocciaAsyncGeneratorObjectValue(AThisValue).ResumeAsPromise(
     grkThrow, ArgumentOrUndefined(AArgs));
 end;

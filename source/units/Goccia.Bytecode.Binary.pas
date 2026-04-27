@@ -134,6 +134,7 @@ begin
   WriteUInt8(AProto.UpvalueCount);
   WriteBoolean(AProto.IsArrow);
   WriteBoolean(AProto.IsGenerator);
+  WriteBoolean(AProto.IsAsync);
 
   WriteUInt32(UInt32(AProto.CodeCount));
   for I := 0 to AProto.CodeCount - 1 do
@@ -345,6 +346,7 @@ begin
   UpvalueCount := ReadUInt8;
   Result.IsArrow := ReadBoolean;
   Result.IsGenerator := ReadBoolean;
+  Result.IsAsync := ReadBoolean;
 
   CodeCount := ReadUInt32;
   for I := 0 to CodeCount - 1 do

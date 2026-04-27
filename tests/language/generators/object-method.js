@@ -29,6 +29,7 @@ test("object generator method supports next value send-back", () => {
   const iter = obj.echo();
   expect(iter.next()).toEqual({ value: "ready", done: false });
   expect(iter.next(41)).toEqual({ value: 42, done: false });
+  expect(iter.next()).toEqual({ value: undefined, done: true });
 });
 
 test("object generator method supports yield delegation", () => {

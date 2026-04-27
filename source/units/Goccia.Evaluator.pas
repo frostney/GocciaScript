@@ -144,6 +144,7 @@ uses
   Goccia.Values.ProxyValue,
   Goccia.Values.SetValue,
   Goccia.Values.SymbolValue,
+  Goccia.Values.ToObject,
   Goccia.Values.ToPrimitive;
 
 // Helper: create a non-owning copy of a statement list (AST owns the nodes)
@@ -364,6 +365,7 @@ end;
 
 function GetIteratorFromValue(const AValue: TGocciaValue): TGocciaIteratorValue;
 var
+  IteratorHost: TGocciaObjectValue;
   IteratorMethod, IteratorObj, NextMethod: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   WasAlreadyRooted: Boolean;
@@ -375,40 +377,48 @@ begin
     Exit;
   end;
 
-  if AValue is TGocciaObjectValue then
+  IteratorHost := nil;
+  if not (AValue is TGocciaNullLiteralValue) and
+     not (AValue is TGocciaUndefinedLiteralValue) then
+    IteratorHost := ToObject(AValue);
+
+  if Assigned(IteratorHost) then
   begin
-    IteratorMethod := TGocciaObjectValue(AValue).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
-    if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
+    IteratorMethod := IteratorHost.GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+    if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) then
     begin
+      if not IteratorMethod.IsCallable then
+        ThrowTypeError(Format(SErrorNotFunction, [IteratorMethod.TypeName]),
+          SSuggestNotFunctionType);
       GC := TGarbageCollector.Instance;
-      WasAlreadyRooted := Assigned(GC) and GC.IsTempRoot(AValue);
+      WasAlreadyRooted := Assigned(GC) and GC.IsTempRoot(IteratorHost);
       if Assigned(GC) and not WasAlreadyRooted then
-        GC.AddTempRoot(AValue);
+        GC.AddTempRoot(IteratorHost);
       try
         CallArgs := TGocciaArgumentsCollection.Create;
         try
-          IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, AValue);
+          IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, IteratorHost);
         finally
           CallArgs.Free;
         end;
       finally
         if Assigned(GC) and not WasAlreadyRooted then
-          GC.RemoveTempRoot(AValue);
+          GC.RemoveTempRoot(IteratorHost);
       end;
       if IteratorObj is TGocciaIteratorValue then
       begin
         Result := TGocciaIteratorValue(IteratorObj);
         Exit;
       end;
-      if IteratorObj is TGocciaObjectValue then
-      begin
-        NextMethod := IteratorObj.GetProperty(PROP_NEXT);
-        if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
-        begin
-          Result := TGocciaGenericIteratorValue.Create(IteratorObj);
-          Exit;
-        end;
-      end;
+      if not (IteratorObj is TGocciaObjectValue) then
+        ThrowTypeError(Format(SErrorIteratorResultNotObject, [IteratorObj.ToStringLiteral.Value]),
+          SSuggestIteratorResultObject);
+      NextMethod := IteratorObj.GetProperty(PROP_NEXT);
+      if not Assigned(NextMethod) or (NextMethod is TGocciaUndefinedLiteralValue) or
+         not NextMethod.IsCallable then
+        ThrowTypeError('Iterator .next is not callable', SSuggestIteratorProtocol);
+      Result := TGocciaGenericIteratorValue.Create(IteratorObj);
+      Exit;
     end;
   end;
 
@@ -571,9 +581,24 @@ begin
     Exit;
   end;
 
-  // For all other operators, evaluate both operands
-  Left := EvaluateExpression(ABinaryExpression.Left, AContext);
-  Right := EvaluateExpression(ABinaryExpression.Right, AContext);
+  // For all other operators, evaluate both operands.  Generators can suspend
+  // while evaluating the right operand; keep the left value so resuming does
+  // not replay left-side side effects.
+  if not Assigned(CurrentGeneratorContinuation) or
+     not CurrentGeneratorContinuation.TakeExpressionValue(ABinaryExpression, Left) then
+    Left := EvaluateExpression(ABinaryExpression.Left, AContext);
+  try
+    Right := EvaluateExpression(ABinaryExpression.Right, AContext);
+    if Assigned(CurrentGeneratorContinuation) then
+      CurrentGeneratorContinuation.ClearExpressionValue(ABinaryExpression);
+  except
+    on E: EGocciaGeneratorYield do
+    begin
+      if Assigned(CurrentGeneratorContinuation) then
+        CurrentGeneratorContinuation.SaveExpressionValue(ABinaryExpression, Left);
+      raise;
+    end;
+  end;
 
   case ABinaryExpression.Operator of
     gttPlus:
@@ -2010,6 +2035,11 @@ begin
         try
           Result := ExecuteCatchBlock(ATryStatement, E.Value, AContext);
         except
+          on E2: EGocciaGeneratorReturn do
+          begin
+            HasGeneratorReturn := True;
+            GeneratorReturnValue := E2.Value;
+          end;
           on E2: TGocciaThrowValue do
           begin
             HasUnhandledThrow := True;
@@ -2034,6 +2064,11 @@ begin
         try
           Result := ExecuteCatchBlock(ATryStatement, PascalExceptionToErrorObject(E), AContext);
         except
+          on E2: EGocciaGeneratorReturn do
+          begin
+            HasGeneratorReturn := True;
+            GeneratorReturnValue := E2.Value;
+          end;
           on E2: TGocciaThrowValue do
           begin
             HasUnhandledThrow := True;

@@ -1252,6 +1252,7 @@ type
     constructor CreateRegisters(const AVM: TGocciaVM;
       const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaRegister;
       const AArguments: TGocciaRegisterArray);
+    destructor Destroy; override;
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function GeneratorNext(const AArgs: TGocciaArgumentsCollection;
@@ -1444,6 +1445,17 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
+function VMRejectedTypeErrorPromise(const AMessage: string): TGocciaPromiseValue;
+begin
+  Result := TGocciaPromiseValue.Create;
+  try
+    Result.Reject(CreateErrorObject(TYPE_ERROR_NAME, AMessage));
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
 constructor EGocciaBytecodeYield.Create(const AValue: TGocciaRegister;
   const AYieldIndex: Integer);
 begin
@@ -1466,7 +1478,7 @@ var
 begin
   inherited Create;
   FVM := AVM;
-  FClosure := AClosure;
+  FClosure := AClosure.Clone;
   FThisValue := VMValueToRegisterFast(AThisValue);
   if Assigned(AArguments) then
   begin
@@ -1487,6 +1499,12 @@ begin
     [pfConfigurable, pfWritable]));
 end;
 
+destructor TGocciaBytecodeGeneratorObjectValue.Destroy;
+begin
+  FClosure.Free;
+  inherited;
+end;
+
 constructor TGocciaBytecodeGeneratorObjectValue.CreateRegisters(const AVM: TGocciaVM;
   const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaRegister;
   const AArguments: TGocciaRegisterArray);
@@ -1495,7 +1513,7 @@ var
 begin
   inherited Create;
   FVM := AVM;
-  FClosure := AClosure;
+  FClosure := AClosure.Clone;
   FThisValue := AThisValue;
   SetLength(FArguments, Length(AArguments));
   for I := 0 to High(AArguments) do
@@ -1741,7 +1759,7 @@ begin
     Exit(CreateIteratorResult(VMArgumentOrUndefined(AArgs), True));
   Value := TGocciaBytecodeGeneratorObjectValue(AThisValue).ResumeRaw(
     bgrkReturn, VMArgumentOrUndefined(AArgs), Done);
-  Result := CreateIteratorResult(Value, True);
+  Result := CreateIteratorResult(Value, Done);
 end;
 
 function TGocciaBytecodeGeneratorObjectValue.GeneratorThrow(
@@ -1760,8 +1778,16 @@ end;
 procedure TGocciaBytecodeGeneratorObjectValue.MarkReferences;
 var
   I: Integer;
+  Upvalue: TGocciaBytecodeUpvalue;
 begin
   inherited;
+  if Assigned(FClosure) then
+    for I := 0 to FClosure.UpvalueCount - 1 do
+    begin
+      Upvalue := FClosure.GetUpvalue(I);
+      if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
+        MarkRegisterReferences(Upvalue.Cell.Value);
+    end;
   MarkRegisterReferences(FThisValue);
   for I := 0 to High(FArguments) do
     MarkRegisterReferences(FArguments[I]);
@@ -1833,13 +1859,15 @@ function TGocciaBytecodeAsyncGeneratorObjectValue.ResumeAsPromise(
 var
   Promise: TGocciaPromiseValue;
   Done: Boolean;
+  UnwrappedValue: TGocciaValue;
   Value: TGocciaValue;
 begin
   Promise := TGocciaPromiseValue.Create;
   try
     try
       Value := FInner.ResumeRaw(AKind, AValue, Done);
-      Promise.Resolve(CreateIteratorResult(Value, Done));
+      UnwrappedValue := AwaitValue(Value);
+      Promise.Resolve(CreateIteratorResult(UnwrappedValue, Done));
     except
       on E: EGocciaBytecodeThrow do
         Promise.Reject(E.ThrownValue);
@@ -1856,6 +1884,10 @@ end;
 function TGocciaBytecodeAsyncGeneratorObjectValue.AsyncGeneratorNext(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
+  if not (AThisValue is TGocciaBytecodeAsyncGeneratorObjectValue) then
+    Exit(VMRejectedTypeErrorPromise('AsyncGenerator method called on incompatible receiver'));
+  if not Assigned(TGocciaBytecodeAsyncGeneratorObjectValue(AThisValue).FInner) then
+    Exit(VMRejectedTypeErrorPromise('AsyncGenerator method called on incompatible receiver'));
   Result := TGocciaBytecodeAsyncGeneratorObjectValue(AThisValue).ResumeAsPromise(
     bgrkNext, VMArgumentOrUndefined(AArgs));
 end;
@@ -1863,6 +1895,10 @@ end;
 function TGocciaBytecodeAsyncGeneratorObjectValue.AsyncGeneratorReturn(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
+  if not (AThisValue is TGocciaBytecodeAsyncGeneratorObjectValue) then
+    Exit(VMRejectedTypeErrorPromise('AsyncGenerator method called on incompatible receiver'));
+  if not Assigned(TGocciaBytecodeAsyncGeneratorObjectValue(AThisValue).FInner) then
+    Exit(VMRejectedTypeErrorPromise('AsyncGenerator method called on incompatible receiver'));
   Result := TGocciaBytecodeAsyncGeneratorObjectValue(AThisValue).ResumeAsPromise(
     bgrkReturn, VMArgumentOrUndefined(AArgs));
 end;
@@ -1870,6 +1906,10 @@ end;
 function TGocciaBytecodeAsyncGeneratorObjectValue.AsyncGeneratorThrow(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
+  if not (AThisValue is TGocciaBytecodeAsyncGeneratorObjectValue) then
+    Exit(VMRejectedTypeErrorPromise('AsyncGenerator method called on incompatible receiver'));
+  if not Assigned(TGocciaBytecodeAsyncGeneratorObjectValue(AThisValue).FInner) then
+    Exit(VMRejectedTypeErrorPromise('AsyncGenerator method called on incompatible receiver'));
   Result := TGocciaBytecodeAsyncGeneratorObjectValue(AThisValue).ResumeAsPromise(
     bgrkThrow, VMArgumentOrUndefined(AArgs));
 end;

@@ -41,7 +41,13 @@ suite("generators", () => {
 
   bench("yield delegation", {
     setup: makeObjectGenerator,
-    run: (source) => Array.from(source.values()).length,
+    run: (source) => {
+      let count = 0;
+      for (const value of source.values()) {
+        count = count + 1;
+      }
+      return count;
+    },
   });
 
   bench("class generator method", {

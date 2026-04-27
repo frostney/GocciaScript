@@ -20,8 +20,10 @@ test("function* expression yields values", () => {
   const numbers = function* () {
     yield 4;
   };
+  const iter = numbers();
 
-  expect(numbers().next()).toEqual({ value: 4, done: false });
+  expect(iter.next()).toEqual({ value: 4, done: false });
+  expect(iter.next()).toEqual({ value: undefined, done: true });
 });
 
 test("named function* expression exposes its name internally", () => {
@@ -31,4 +33,3 @@ test("named function* expression exposes its name internally", () => {
 
   expect(make().next()).toEqual({ value: "named", done: false });
 });
-

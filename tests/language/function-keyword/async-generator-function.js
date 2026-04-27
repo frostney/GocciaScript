@@ -18,7 +18,8 @@ test("async function* expression yields values", async () => {
   const numbers = async function* () {
     yield 3;
   };
+  const iter = numbers();
 
-  expect(await numbers().next()).toEqual({ value: 3, done: false });
+  expect(await iter.next()).toEqual({ value: 3, done: false });
+  expect(await iter.next()).toEqual({ value: undefined, done: true });
 });
-
