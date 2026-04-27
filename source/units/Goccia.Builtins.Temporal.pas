@@ -94,6 +94,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Temporal.DurationMath,
   Goccia.Temporal.Options,
   Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
@@ -365,6 +366,8 @@ begin
     ThrowTypeError(SErrorTemporalInstantRequiresBigInt, SSuggestTemporalBigIntArg);
 
   BigNs := TGocciaBigIntValue(Arg).Value;
+  if not IsValidEpochNanoseconds(BigNs) then
+    ThrowRangeError(SErrorTemporalInstantOutOfRange, SSuggestTemporalInstantRange);
   BigMs := BigNs.Divide(TBigInteger.FromInt64(1000000));
   BigSubMs := BigNs.Modulo(TBigInteger.FromInt64(1000000));
   Ms := BigMs.ToInt64;
@@ -431,6 +434,8 @@ begin
     ThrowTypeError(SErrorTemporalInstantRequiresBigInt, SSuggestTemporalBigIntArg);
 
   BigNs := TGocciaBigIntValue(Arg).Value;
+  if not IsValidEpochNanoseconds(BigNs) then
+    ThrowRangeError(SErrorTemporalInstantOutOfRange, SSuggestTemporalInstantRange);
   BigMs := BigNs.Divide(TBigInteger.FromInt64(1000000));
   BigSubMs := BigNs.Modulo(TBigInteger.FromInt64(1000000));
   Ms := BigMs.ToInt64;
@@ -1305,6 +1310,8 @@ begin
     ThrowTypeError(SErrorTemporalZonedDateTimeRequiresBigInt, SSuggestTemporalBigIntArg);
 
   BigNs := TGocciaBigIntValue(Arg).Value;
+  if not IsValidEpochNanoseconds(BigNs) then
+    ThrowRangeError(SErrorTemporalInstantOutOfRange, SSuggestTemporalInstantRange);
   BigMs := BigNs.Divide(TBigInteger.FromInt64(1000000));
   BigSubMs := BigNs.Modulo(TBigInteger.FromInt64(1000000));
   Ms := BigMs.ToInt64;

@@ -132,6 +132,7 @@ resourcestring
   // Temporal API errors — Instant
   SErrorTemporalInstantRequiresEpoch = 'Temporal.Instant requires epochNanoseconds argument';
   SErrorTemporalInstantRequiresBigInt = 'Temporal.Instant epochNanoseconds must be a BigInt';
+  SErrorTemporalInstantOutOfRange = 'Temporal.Instant epochNanoseconds out of range';
   SErrorInvalidISOInstant = 'Invalid ISO instant string';
   SErrorTemporalInstantFromArg = 'Temporal.Instant.from requires a string or Instant';
   SErrorTemporalInstantFromEpochMillis = 'Temporal.Instant.fromEpochMilliseconds requires an argument';

@@ -11,4 +11,11 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.toString", () => {
     expect(new Temporal.Duration().toString()).toBe("PT0S");
     expect(new Temporal.Duration(0, 0, 0, 0, 0, 0, 0, 500).toString()).toBe("PT0.500S");
   });
+
+  test("toString() balances second-and-smaller fields", () => {
+    expect(new Temporal.Duration(0, 0, 0, 0, 0, 0, 0, 0, 0, 5000000000).toString()).toBe("PT5S");
+    expect(new Temporal.Duration(0, 0, 0, 0, 0, 0, 0, 500).toString()).toBe("PT0.500S");
+    expect(new Temporal.Duration(0, 0, 0, 0, 0, 0, 0, 0, 1).toString()).toBe("PT0.000001S");
+    expect(new Temporal.Duration(0, 0, 0, 0, 0, 0, 0, 0, 0, 1).toString()).toBe("PT0.000000001S");
+  });
 });
