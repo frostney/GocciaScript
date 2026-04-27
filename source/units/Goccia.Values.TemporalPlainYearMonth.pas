@@ -442,42 +442,72 @@ begin
   end;
 end;
 
-// TC39 Temporal §10.3.14 Temporal.PlainYearMonth.prototype.until(other)
+// TC39 Temporal §10.3.14 Temporal.PlainYearMonth.prototype.until(other [, options])
 function TGocciaTemporalPlainYearMonthValue.YearMonthUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   YM, Other: TGocciaTemporalPlainYearMonthValue;
+  OptionsObj: TGocciaObjectValue;
+  LargestUnit: TTemporalUnit;
   TotalMonths1, TotalMonths2, DiffMonths: Int64;
   DiffYears, RemMonths: Int64;
 begin
   YM := AsPlainYearMonth(AThisValue, 'PlainYearMonth.prototype.until');
   Other := CoercePlainYearMonth(AArgs.GetElement(0), 'PlainYearMonth.prototype.until');
 
+  OptionsObj := GetDiffOptions(AArgs, 1);
+  LargestUnit := GetLargestUnit(OptionsObj, tuYear);
+  if not (LargestUnit in [tuYear, tuMonth]) then
+    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainYearMonth.prototype.until', 'largestUnit']), SSuggestTemporalValidUnits);
+
   TotalMonths1 := Int64(YM.FYear) * 12 + Int64(YM.FMonth);
   TotalMonths2 := Int64(Other.FYear) * 12 + Int64(Other.FMonth);
   DiffMonths := TotalMonths2 - TotalMonths1;
 
-  DiffYears := DiffMonths div 12;
-  RemMonths := DiffMonths mod 12;
+  if LargestUnit = tuYear then
+  begin
+    DiffYears := DiffMonths div 12;
+    RemMonths := DiffMonths mod 12;
+  end
+  else
+  begin
+    DiffYears := 0;
+    RemMonths := DiffMonths;
+  end;
 
   Result := TGocciaTemporalDurationValue.Create(DiffYears, RemMonths, 0, 0, 0, 0, 0, 0, 0, 0);
 end;
 
-// TC39 Temporal §10.3.15 Temporal.PlainYearMonth.prototype.since(other)
+// TC39 Temporal §10.3.15 Temporal.PlainYearMonth.prototype.since(other [, options])
 function TGocciaTemporalPlainYearMonthValue.YearMonthSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   YM, Other: TGocciaTemporalPlainYearMonthValue;
+  OptionsObj: TGocciaObjectValue;
+  LargestUnit: TTemporalUnit;
   TotalMonths1, TotalMonths2, DiffMonths: Int64;
   DiffYears, RemMonths: Int64;
 begin
   YM := AsPlainYearMonth(AThisValue, 'PlainYearMonth.prototype.since');
   Other := CoercePlainYearMonth(AArgs.GetElement(0), 'PlainYearMonth.prototype.since');
 
+  OptionsObj := GetDiffOptions(AArgs, 1);
+  LargestUnit := GetLargestUnit(OptionsObj, tuYear);
+  if not (LargestUnit in [tuYear, tuMonth]) then
+    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainYearMonth.prototype.since', 'largestUnit']), SSuggestTemporalValidUnits);
+
   TotalMonths1 := Int64(YM.FYear) * 12 + Int64(YM.FMonth);
   TotalMonths2 := Int64(Other.FYear) * 12 + Int64(Other.FMonth);
   DiffMonths := TotalMonths1 - TotalMonths2;
 
-  DiffYears := DiffMonths div 12;
-  RemMonths := DiffMonths mod 12;
+  if LargestUnit = tuYear then
+  begin
+    DiffYears := DiffMonths div 12;
+    RemMonths := DiffMonths mod 12;
+  end
+  else
+  begin
+    DiffYears := 0;
+    RemMonths := DiffMonths;
+  end;
 
   Result := TGocciaTemporalDurationValue.Create(DiffYears, RemMonths, 0, 0, 0, 0, 0, 0, 0, 0);
 end;
