@@ -57,7 +57,7 @@ export function AnimatedOutput({
               className="anim-output-caret anim-output-caret-idle"
               aria-hidden="true"
             />
-            <span className="anim-output-hint" aria-hidden="true">
+            <span className="anim-output-hint" role="status">
               press Run or ⌘+Enter
             </span>
           </span>
