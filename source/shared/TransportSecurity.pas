@@ -492,18 +492,58 @@ function ReadOpenSSL(var AConnection: TTransportSecurityConnection;
   var ABuffer: array of Byte; const ALength: Integer): Integer;
 var
   Data: TOpenSSLData;
+  ErrorCode: Integer;
 begin
   Data := TOpenSSLData(AConnection.BackendData);
-  Result := SslRead(Data.SSL, @ABuffer[0], ALength);
+  repeat
+    Result := SslRead(Data.SSL, @ABuffer[0], ALength);
+    if Result > 0 then
+      Exit;
+
+    ErrorCode := SslGetError(Data.SSL, Result);
+    case ErrorCode of
+      SSL_ERROR_ZERO_RETURN:
+        begin
+          Result := 0;
+          Exit;
+        end;
+      SSL_ERROR_WANT_READ,
+      SSL_ERROR_WANT_WRITE:
+        Continue;
+    else
+      raise ETransportSecurityError.CreateFmt('%s: %d',
+        [TLS_READ_ERROR, ErrorCode]);
+    end;
+  until False;
 end;
 
 function WriteOpenSSL(var AConnection: TTransportSecurityConnection;
   const ABuffer: Pointer; const ALength: Integer): Integer;
 var
   Data: TOpenSSLData;
+  ErrorCode: Integer;
 begin
   Data := TOpenSSLData(AConnection.BackendData);
-  Result := SslWrite(Data.SSL, ABuffer, ALength);
+  repeat
+    Result := SslWrite(Data.SSL, ABuffer, ALength);
+    if Result > 0 then
+      Exit;
+
+    ErrorCode := SslGetError(Data.SSL, Result);
+    case ErrorCode of
+      SSL_ERROR_ZERO_RETURN:
+        begin
+          Result := 0;
+          Exit;
+        end;
+      SSL_ERROR_WANT_READ,
+      SSL_ERROR_WANT_WRITE:
+        Continue;
+    else
+      raise ETransportSecurityError.CreateFmt('%s: %d',
+        [TLS_WRITE_ERROR, ErrorCode]);
+    end;
+  until False;
 end;
 {$ENDIF}
 {$ENDIF}

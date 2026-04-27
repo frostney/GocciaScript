@@ -552,7 +552,9 @@ console.log("Loader: HTTPS fetch smoke with --allowed-host...");
     ),
     stdout: "pipe",
     stderr: "pipe",
+    timeout: 10_000,
   });
+  if (proc.exitedDueToTimeout) throw new Error("HTTPS fetch timed out after 10 seconds");
   if (proc.exitCode !== 0) throw new Error(`HTTPS fetch should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
   const json = JSON.parse(proc.stdout.toString());
   if (json.ok !== true) throw new Error(`HTTPS fetch JSON ok should be true, got ${json.ok}`);
