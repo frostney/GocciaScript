@@ -23,5 +23,12 @@ describe("Set.prototype.isDisjointFrom", () => {
     const isDisjointFrom = Set.prototype.isDisjointFrom;
     expect(() => isDisjointFrom.call(Set.prototype, new Set())).toThrow(TypeError);
     expect(() => isDisjointFrom.call({}, new Set())).toThrow(TypeError);
+    expect(() => isDisjointFrom.call(new Map(), new Set())).toThrow(TypeError);
+  });
+
+  test("throws TypeError when argument is not a Set", () => {
+    const s = new Set([1, 2]);
+    expect(() => s.isDisjointFrom({})).toThrow(TypeError);
+    expect(() => s.isDisjointFrom([])).toThrow(TypeError);
   });
 });

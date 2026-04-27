@@ -402,7 +402,9 @@ begin
 
   M := TGocciaMapValue(AThisValue);
   Callback := AArgs.GetElement(0);
-  if not Callback.IsCallable then Exit;
+  // Step 4: If IsCallable(callbackfn) is false, throw a TypeError
+  if not Callback.IsCallable then
+    ThrowTypeError(SErrorMapForEachNotCallable, SSuggestMapCallbackRequired);
 
   TypedCallback := nil;
   if Callback is TGocciaFunctionBase then

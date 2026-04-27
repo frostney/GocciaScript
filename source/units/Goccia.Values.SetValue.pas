@@ -59,6 +59,8 @@ type
 implementation
 
 uses
+  SysUtils,
+
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -351,7 +353,9 @@ begin
 
   S := TGocciaSetValue(AThisValue);
   Callback := AArgs.GetElement(0);
-  if not Callback.IsCallable then Exit;
+  // Step 4: If IsCallable(callbackfn) is false, throw a TypeError
+  if not Callback.IsCallable then
+    ThrowTypeError(SErrorSetForEachNotCallable, SSuggestSetCallbackRequired);
 
   TypedCallback := nil;
   if Callback is TGocciaFunctionBase then
@@ -426,6 +430,8 @@ begin
     ThrowTypeError(SErrorSetUnionNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
   // Step 4: Let otherRec be GetSetRecord(other)
+  if not (AArgs.GetElement(0) is TGocciaSetValue) then
+    ThrowTypeError(Format(SErrorSetOperationRequiresSet, ['union']), SSuggestSetOperationArgType);
   OtherSet := TGocciaSetValue(AArgs.GetElement(0));
   // Step 5: Let resultSetData be a copy of O.[[SetData]]
   ResultSet := TGocciaSetValue.Create;
@@ -456,6 +462,8 @@ begin
     ThrowTypeError(SErrorSetIntersectionNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
   // Step 4: Let otherRec be GetSetRecord(other)
+  if not (AArgs.GetElement(0) is TGocciaSetValue) then
+    ThrowTypeError(Format(SErrorSetOperationRequiresSet, ['intersection']), SSuggestSetOperationArgType);
   OtherSet := TGocciaSetValue(AArgs.GetElement(0));
   // Step 5: Let resultSetData be a new empty List
   ResultSet := TGocciaSetValue.Create;
@@ -484,6 +492,8 @@ begin
     ThrowTypeError(SErrorSetDifferenceNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
   // Step 4: Let otherRec be GetSetRecord(other)
+  if not (AArgs.GetElement(0) is TGocciaSetValue) then
+    ThrowTypeError(Format(SErrorSetOperationRequiresSet, ['difference']), SSuggestSetOperationArgType);
   OtherSet := TGocciaSetValue(AArgs.GetElement(0));
   // Step 5: Let resultSetData be a copy of O.[[SetData]]
   ResultSet := TGocciaSetValue.Create;
@@ -512,6 +522,8 @@ begin
     ThrowTypeError(SErrorSetSymmetricDifferenceNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
   // Step 4: Let otherRec be GetSetRecord(other)
+  if not (AArgs.GetElement(0) is TGocciaSetValue) then
+    ThrowTypeError(Format(SErrorSetOperationRequiresSet, ['symmetricDifference']), SSuggestSetOperationArgType);
   OtherSet := TGocciaSetValue(AArgs.GetElement(0));
   // Step 5: Let resultSetData be a copy of O.[[SetData]]
   ResultSet := TGocciaSetValue.Create;
@@ -546,6 +558,8 @@ begin
     ThrowTypeError(SErrorSetIsSubsetOfNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
   // Step 4: Let otherRec be GetSetRecord(other)
+  if not (AArgs.GetElement(0) is TGocciaSetValue) then
+    ThrowTypeError(Format(SErrorSetOperationRequiresSet, ['isSubsetOf']), SSuggestSetOperationArgType);
   OtherSet := TGocciaSetValue(AArgs.GetElement(0));
 
   // Step 5: If SetDataSize(O) > otherRec.[[Size]], return false (optimization)
@@ -574,6 +588,8 @@ begin
     ThrowTypeError(SErrorSetIsSupersetOfNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
   // Step 4: Let otherRec be GetSetRecord(other)
+  if not (AArgs.GetElement(0) is TGocciaSetValue) then
+    ThrowTypeError(Format(SErrorSetOperationRequiresSet, ['isSupersetOf']), SSuggestSetOperationArgType);
   OtherSet := TGocciaSetValue(AArgs.GetElement(0));
 
   // Step 5: If SetDataSize(O) < otherRec.[[Size]], return false (optimization)
@@ -603,6 +619,8 @@ begin
     ThrowTypeError(SErrorSetIsDisjointFromNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
   // Step 4: Let otherRec be GetSetRecord(other)
+  if not (AArgs.GetElement(0) is TGocciaSetValue) then
+    ThrowTypeError(Format(SErrorSetOperationRequiresSet, ['isDisjointFrom']), SSuggestSetOperationArgType);
   OtherSet := TGocciaSetValue(AArgs.GetElement(0));
 
   // Step 5: For each element e of O.[[SetData]], do

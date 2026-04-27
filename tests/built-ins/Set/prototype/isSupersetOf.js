@@ -20,5 +20,12 @@ describe("Set.prototype.isSupersetOf", () => {
     const isSupersetOf = Set.prototype.isSupersetOf;
     expect(() => isSupersetOf.call(Set.prototype, new Set())).toThrow(TypeError);
     expect(() => isSupersetOf.call({}, new Set())).toThrow(TypeError);
+    expect(() => isSupersetOf.call(new Map(), new Set())).toThrow(TypeError);
+  });
+
+  test("throws TypeError when argument is not a Set", () => {
+    const s = new Set([1, 2]);
+    expect(() => s.isSupersetOf({})).toThrow(TypeError);
+    expect(() => s.isSupersetOf([])).toThrow(TypeError);
   });
 });

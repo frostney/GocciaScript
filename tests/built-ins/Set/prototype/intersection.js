@@ -23,5 +23,12 @@ describe("Set.prototype.intersection", () => {
     const intersection = Set.prototype.intersection;
     expect(() => intersection.call(Set.prototype, new Set())).toThrow(TypeError);
     expect(() => intersection.call({}, new Set())).toThrow(TypeError);
+    expect(() => intersection.call(new Map(), new Set())).toThrow(TypeError);
+  });
+
+  test("throws TypeError when argument is not a Set", () => {
+    const s = new Set([1, 2]);
+    expect(() => s.intersection({})).toThrow(TypeError);
+    expect(() => s.intersection([])).toThrow(TypeError);
   });
 });

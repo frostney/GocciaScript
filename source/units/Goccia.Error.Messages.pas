@@ -648,6 +648,13 @@ resourcestring
   SErrorMapGetOrInsertNonMap = 'Map.prototype.getOrInsert called on non-Map object';
   SErrorMapGetOrInsertComputedNonMap = 'Map.prototype.getOrInsertComputed called on non-Map object';
 
+  // Set/Map forEach errors
+  SErrorSetForEachNotCallable = 'Set.prototype.forEach: callback is not a function';
+  SErrorMapForEachNotCallable = 'Map.prototype.forEach: callback is not a function';
+
+  // Set operation argument errors
+  SErrorSetOperationRequiresSet = 'Set.prototype.%s: argument must be a Set';
+
   // Map upsert errors
   SErrorMapGetOrInsertComputedNotCallable = 'Map.getOrInsertComputed: callbackfn is not a function';
 

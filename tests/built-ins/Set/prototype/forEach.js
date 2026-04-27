@@ -45,3 +45,10 @@ test("throws TypeError when called on non-Set", () => {
   expect(() => forEach.call({}, () => {})).toThrow(TypeError);
   expect(() => forEach.call(new Map(), () => {})).toThrow(TypeError);
 });
+
+test("throws TypeError when callback is not a function", () => {
+  const set = new Set([1, 2]);
+  expect(() => set.forEach("not a function")).toThrow(TypeError);
+  expect(() => set.forEach(42)).toThrow(TypeError);
+  expect(() => set.forEach(null)).toThrow(TypeError);
+});

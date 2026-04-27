@@ -26,5 +26,12 @@ describe("Set.prototype.isSubsetOf", () => {
     const isSubsetOf = Set.prototype.isSubsetOf;
     expect(() => isSubsetOf.call(Set.prototype, new Set())).toThrow(TypeError);
     expect(() => isSubsetOf.call({}, new Set())).toThrow(TypeError);
+    expect(() => isSubsetOf.call(new Map(), new Set())).toThrow(TypeError);
+  });
+
+  test("throws TypeError when argument is not a Set", () => {
+    const s = new Set([1, 2]);
+    expect(() => s.isSubsetOf({})).toThrow(TypeError);
+    expect(() => s.isSubsetOf([])).toThrow(TypeError);
   });
 });

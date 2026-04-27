@@ -329,6 +329,8 @@ resourcestring
 
   // Runtime errors — Set
   SSuggestSetThisType = 'Set prototype methods must be called on a Set instance';
+  SSuggestSetCallbackRequired = 'pass a function as the callback argument';
+  SSuggestSetOperationArgType = 'pass a Set instance as the argument';
 
   // Runtime errors — Map
   SSuggestMapThisType = 'Map prototype methods must be called on a Map instance';
