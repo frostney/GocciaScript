@@ -37,4 +37,16 @@ describe.runIf(isTemporal)("Temporal.PlainTime.prototype.until", () => {
     const t2 = new Temporal.PlainTime(0, 50, 0);
     expect(t1.until(t2, { smallestUnit: "minute", roundingIncrement: 15 }).toString()).toBe("PT45M");
   });
+
+  test("until() with largestUnit minute collapses hours into minutes", () => {
+    const t1 = new Temporal.PlainTime(10, 0, 0);
+    const t2 = new Temporal.PlainTime(12, 30, 0);
+    expect(t1.until(t2, { largestUnit: "minute" }).toString()).toBe("PT150M");
+  });
+
+  test("until() with largestUnit second collapses all into seconds", () => {
+    const t1 = new Temporal.PlainTime(10, 0, 0);
+    const t2 = new Temporal.PlainTime(10, 1, 30);
+    expect(t1.until(t2, { largestUnit: "second" }).toString()).toBe("PT90S");
+  });
 });

@@ -110,4 +110,19 @@ describe.runIf(isTemporal)("Temporal.PlainDate.prototype.until", () => {
     const d2 = Temporal.PlainDate.from("2020-01-01");
     expect(d1.until(d2, { largestUnit: "years", smallestUnit: "month" }).toString()).toBe("-P3M");
   });
+
+  test("until() negative with roundingIncrement 2 and halfExpand rounds away from zero", () => {
+    const d1 = Temporal.PlainDate.from("2020-04-15");
+    const d2 = Temporal.PlainDate.from("2020-01-01");
+    expect(d1.until(d2, { largestUnit: "years", smallestUnit: "month", roundingIncrement: 2, roundingMode: "halfExpand" }).toString()).toBe("-P4M");
+  });
+
+  test("until() smallestUnit week with largestUnit month does not leak days", () => {
+    const d1 = Temporal.PlainDate.from("2020-01-31");
+    const d2 = Temporal.PlainDate.from("2020-03-28");
+    const dur = d1.until(d2, { largestUnit: "month", smallestUnit: "week" });
+    expect(dur.days).toBe(0);
+    expect(dur.weeks).toBe(8);
+    expect(dur.months).toBe(0);
+  });
 });

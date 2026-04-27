@@ -451,13 +451,48 @@ begin
 
   DiffNs := TimeToTotalNanoseconds(Other) - TimeToTotalNanoseconds(T);
 
+  // Decompose DiffNs based on largestUnit
   Y := 0; Mo := 0; W := 0; D := 0;
-  H := DiffNs div Int64(3600000000000);
-  Mi := (DiffNs div Int64(60000000000)) mod 60;
-  S := (DiffNs div Int64(1000000000)) mod 60;
-  Ms := (DiffNs div 1000000) mod 1000;
-  Us := (DiffNs div 1000) mod 1000;
-  Ns := DiffNs mod 1000;
+  H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
+  case LargestUnit of
+    tuHour:
+    begin
+      H := DiffNs div Int64(3600000000000);
+      Mi := (DiffNs mod Int64(3600000000000)) div Int64(60000000000);
+      S := (DiffNs mod Int64(60000000000)) div Int64(1000000000);
+      Ms := (DiffNs mod Int64(1000000000)) div 1000000;
+      Us := (DiffNs mod 1000000) div 1000;
+      Ns := DiffNs mod 1000;
+    end;
+    tuMinute:
+    begin
+      Mi := DiffNs div Int64(60000000000);
+      S := (DiffNs mod Int64(60000000000)) div Int64(1000000000);
+      Ms := (DiffNs mod Int64(1000000000)) div 1000000;
+      Us := (DiffNs mod 1000000) div 1000;
+      Ns := DiffNs mod 1000;
+    end;
+    tuSecond:
+    begin
+      S := DiffNs div Int64(1000000000);
+      Ms := (DiffNs mod Int64(1000000000)) div 1000000;
+      Us := (DiffNs mod 1000000) div 1000;
+      Ns := DiffNs mod 1000;
+    end;
+    tuMillisecond:
+    begin
+      Ms := DiffNs div 1000000;
+      Us := (DiffNs mod 1000000) div 1000;
+      Ns := DiffNs mod 1000;
+    end;
+    tuMicrosecond:
+    begin
+      Us := DiffNs div 1000;
+      Ns := DiffNs mod 1000;
+    end;
+  else // tuNanosecond
+    Ns := DiffNs;
+  end;
 
   if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
     RoundDiffDuration(Y, Mo, W, D, H, Mi, S, Ms, Us, Ns,
@@ -495,13 +530,48 @@ begin
 
   DiffNs := TimeToTotalNanoseconds(T) - TimeToTotalNanoseconds(Other);
 
+  // Decompose DiffNs based on largestUnit
   Y := 0; Mo := 0; W := 0; D := 0;
-  H := DiffNs div Int64(3600000000000);
-  Mi := (DiffNs div Int64(60000000000)) mod 60;
-  S := (DiffNs div Int64(1000000000)) mod 60;
-  Ms := (DiffNs div 1000000) mod 1000;
-  Us := (DiffNs div 1000) mod 1000;
-  Ns := DiffNs mod 1000;
+  H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
+  case LargestUnit of
+    tuHour:
+    begin
+      H := DiffNs div Int64(3600000000000);
+      Mi := (DiffNs mod Int64(3600000000000)) div Int64(60000000000);
+      S := (DiffNs mod Int64(60000000000)) div Int64(1000000000);
+      Ms := (DiffNs mod Int64(1000000000)) div 1000000;
+      Us := (DiffNs mod 1000000) div 1000;
+      Ns := DiffNs mod 1000;
+    end;
+    tuMinute:
+    begin
+      Mi := DiffNs div Int64(60000000000);
+      S := (DiffNs mod Int64(60000000000)) div Int64(1000000000);
+      Ms := (DiffNs mod Int64(1000000000)) div 1000000;
+      Us := (DiffNs mod 1000000) div 1000;
+      Ns := DiffNs mod 1000;
+    end;
+    tuSecond:
+    begin
+      S := DiffNs div Int64(1000000000);
+      Ms := (DiffNs mod Int64(1000000000)) div 1000000;
+      Us := (DiffNs mod 1000000) div 1000;
+      Ns := DiffNs mod 1000;
+    end;
+    tuMillisecond:
+    begin
+      Ms := DiffNs div 1000000;
+      Us := (DiffNs mod 1000000) div 1000;
+      Ns := DiffNs mod 1000;
+    end;
+    tuMicrosecond:
+    begin
+      Us := DiffNs div 1000;
+      Ns := DiffNs mod 1000;
+    end;
+  else // tuNanosecond
+    Ns := DiffNs;
+  end;
 
   if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
     RoundDiffDuration(Y, Mo, W, D, H, Mi, S, Ms, Us, Ns,

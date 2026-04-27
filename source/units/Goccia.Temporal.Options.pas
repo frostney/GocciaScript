@@ -1037,6 +1037,33 @@ begin
         WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
         ResultDays := EndEpoch - WalkEpoch;
 
+        // When smallestUnit is "week", the day remainder must be divisible
+        // by 7.  Back off months until that holds (or fall to zero months).
+        if (ASmallestUnit = tuWeek) and (WholeUnits <> 0) and
+           (ResultDays mod 7 <> 0) then
+        begin
+          if Sign > 0 then
+          begin
+            while (WholeUnits > 0) and (ResultDays mod 7 <> 0) do
+            begin
+              Dec(WholeUnits);
+              WalkDate := AddMonthsToDate(AStartY, AStartM, AStartD, WholeUnits);
+              WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
+              ResultDays := EndEpoch - WalkEpoch;
+            end;
+          end
+          else
+          begin
+            while (WholeUnits < 0) and (ResultDays mod 7 <> 0) do
+            begin
+              Inc(WholeUnits);
+              WalkDate := AddMonthsToDate(AStartY, AStartM, AStartD, WholeUnits);
+              WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
+              ResultDays := EndEpoch - WalkEpoch;
+            end;
+          end;
+        end;
+
         if Ord(ALargestUnit) <= Ord(tuYear) then
         begin
           ResultYears := WholeUnits div 12;
