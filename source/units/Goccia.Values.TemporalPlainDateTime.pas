@@ -639,6 +639,7 @@ begin
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
   RMode := GetRoundingMode(OptionsObj, rmTrunc);
   RIncrement := GetRoundingIncrement(OptionsObj, 1);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
 
   T1Ns := Int64(D.FNanosecond) + Int64(D.FMicrosecond) * 1000 + Int64(D.FMillisecond) * 1000000 +
            Int64(D.FSecond) * Int64(1000000000) + Int64(D.FMinute) * Int64(60000000000) +

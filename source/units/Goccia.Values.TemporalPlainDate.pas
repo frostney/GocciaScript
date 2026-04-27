@@ -536,6 +536,7 @@ begin
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
   Mode := GetRoundingMode(OptionsObj, rmTrunc);
   Increment := GetRoundingIncrement(OptionsObj, 1);
+  ValidateRoundingIncrement(Increment, SmallestUnit, LargestUnit);
 
   CalendarDateUntil(D.FYear, D.FMonth, D.FDay,
     Other.FYear, Other.FMonth, Other.FDay, LargestUnit,

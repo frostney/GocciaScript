@@ -448,6 +448,7 @@ begin
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
   RMode := GetRoundingMode(OptionsObj, rmTrunc);
   RIncrement := GetRoundingIncrement(OptionsObj, 1);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
 
   // Decompose ADiffNs based on largestUnit
   Y := 0; Mo := 0; W := 0; D := 0;

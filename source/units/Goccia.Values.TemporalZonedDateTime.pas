@@ -950,6 +950,7 @@ begin
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
   RMode := GetRoundingMode(OptionsObj, rmTrunc);
   RIncrement := GetRoundingIncrement(OptionsObj, 1);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
 
   if LargestUnit in [tuYear, tuMonth, tuWeek, tuDay] then
   begin
@@ -1075,6 +1076,7 @@ begin
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
   RMode := GetRoundingMode(OptionsObj, rmTrunc);
   RIncrement := GetRoundingIncrement(OptionsObj, 1);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
 
   if LargestUnit in [tuYear, tuMonth, tuWeek, tuDay] then
   begin

@@ -61,6 +61,8 @@ function GetRoundingMode(const AOptions: TGocciaObjectValue; const ADefault: TTe
 function GetRoundingIncrement(const AOptions: TGocciaObjectValue; const ADefault: Integer): Integer;
 function GetOverflowOption(const AOptions: TGocciaObjectValue): TTemporalOverflow;
 function GetFractionalSecondDigits(const AOptions: TGocciaObjectValue): Integer;
+procedure ValidateRoundingIncrement(const AIncrement: Integer;
+  const ASmallestUnit, ALargestUnit: TTemporalUnit);
 function UnitToNanoseconds(const AUnit: TTemporalUnit): Int64;
 function RoundWithMode(const AValue: Int64; const ADivisor: Int64; const AMode: TTemporalRoundingMode): Int64;
 function RoundBigIntWithMode(const AValue: TBigInteger; const ADivisor: TBigInteger; const AMode: TTemporalRoundingMode): TBigInteger;
@@ -234,6 +236,33 @@ begin
   Result := GetOptionInteger(AOptions, 'roundingIncrement', ADefault);
   if Result < 1 then
     ThrowRangeError(SErrorRoundingIncrementMin, SSuggestTemporalRoundArg);
+end;
+
+procedure ValidateRoundingIncrement(const AIncrement: Integer;
+  const ASmallestUnit, ALargestUnit: TTemporalUnit);
+var
+  MaxVal: Integer;
+begin
+  // Per TC39 MaximumTemporalDurationRoundingIncrement: when smallestUnit
+  // equals largestUnit the unit is unbounded, so any increment >= 1 is valid.
+  // For sub-largest units the increment must evenly divide the unit maximum.
+  if AIncrement <= 1 then Exit;
+  if ASmallestUnit = ALargestUnit then Exit;
+
+  case ASmallestUnit of
+    tuHour:        MaxVal := 24;
+    tuMinute,
+    tuSecond:      MaxVal := 60;
+    tuMillisecond,
+    tuMicrosecond,
+    tuNanosecond:  MaxVal := 1000;
+  else
+    Exit; // year/month/week/day — no fixed maximum
+  end;
+
+  if MaxVal mod AIncrement <> 0 then
+    ThrowRangeError(Format(SErrorRoundingIncrementDivisor, [AIncrement, MaxVal]),
+      SSuggestTemporalRoundArg);
 end;
 
 function GetOverflowOption(const AOptions: TGocciaObjectValue): TTemporalOverflow;

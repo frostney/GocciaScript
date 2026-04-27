@@ -391,6 +391,7 @@ begin
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
   RMode := GetRoundingMode(OptionsObj, rmTrunc);
   RIncrement := GetRoundingIncrement(OptionsObj, 1);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
 
   DiffMs := Other.FEpochMilliseconds - Inst.FEpochMilliseconds;
   DiffSubMs := Other.FSubMillisecondNanoseconds - Inst.FSubMillisecondNanoseconds;
@@ -449,6 +450,7 @@ begin
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
   RMode := GetRoundingMode(OptionsObj, rmTrunc);
   RIncrement := GetRoundingIncrement(OptionsObj, 1);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
 
   DiffMs := Inst.FEpochMilliseconds - Other.FEpochMilliseconds;
   DiffSubMs := Inst.FSubMillisecondNanoseconds - Other.FSubMillisecondNanoseconds;

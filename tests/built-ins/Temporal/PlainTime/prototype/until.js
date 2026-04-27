@@ -55,4 +55,26 @@ describe.runIf(isTemporal)("Temporal.PlainTime.prototype.until", () => {
     const t2 = new Temporal.PlainTime(12, 30, 0);
     expect(() => t1.until(t2, { largestUnit: "second", smallestUnit: "hour" })).toThrow(RangeError);
   });
+
+  test("until() throws RangeError when roundingIncrement does not divide unit maximum", () => {
+    const t1 = new Temporal.PlainTime(10, 0, 0);
+    const t2 = new Temporal.PlainTime(12, 30, 0);
+    expect(() => t1.until(t2, { smallestUnit: "minute", roundingIncrement: 7 })).toThrow(RangeError);
+    expect(() => t1.until(t2, { smallestUnit: "second", roundingIncrement: 7 })).toThrow(RangeError);
+    expect(() => t1.until(t2, { smallestUnit: "millisecond", roundingIncrement: 3 })).toThrow(RangeError);
+  });
+
+  test("until() allows roundingIncrement that divides unit maximum", () => {
+    const t1 = new Temporal.PlainTime(10, 0, 0);
+    const t2 = new Temporal.PlainTime(10, 50, 0);
+    expect(t1.until(t2, { smallestUnit: "minute", roundingIncrement: 15 }).toString()).toBe("PT45M");
+    expect(t1.until(t2, { smallestUnit: "minute", roundingIncrement: 10 }).toString()).toBe("PT50M");
+  });
+
+  test("until() allows any roundingIncrement when smallestUnit equals largestUnit", () => {
+    const t1 = new Temporal.PlainTime(10, 0, 0);
+    const t2 = new Temporal.PlainTime(10, 50, 0);
+    const dur = t1.until(t2, { largestUnit: "minute", smallestUnit: "minute", roundingIncrement: 7 });
+    expect(dur.minutes).toBe(49);
+  });
 });

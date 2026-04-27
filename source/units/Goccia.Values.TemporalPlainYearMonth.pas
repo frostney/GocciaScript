@@ -470,6 +470,7 @@ begin
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
   RMode := GetRoundingMode(OptionsObj, rmTrunc);
   RIncrement := GetRoundingIncrement(OptionsObj, 1);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
 
   TotalMonths1 := Int64(YM.FYear) * 12 + Int64(YM.FMonth);
   TotalMonths2 := Int64(Other.FYear) * 12 + Int64(Other.FMonth);
@@ -525,6 +526,7 @@ begin
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
   RMode := GetRoundingMode(OptionsObj, rmTrunc);
   RIncrement := GetRoundingIncrement(OptionsObj, 1);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
 
   TotalMonths1 := Int64(YM.FYear) * 12 + Int64(YM.FMonth);
   TotalMonths2 := Int64(Other.FYear) * 12 + Int64(Other.FMonth);
