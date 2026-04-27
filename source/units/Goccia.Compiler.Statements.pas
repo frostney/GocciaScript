@@ -45,6 +45,7 @@ procedure CompileReExportDeclaration(const ACtx: TGocciaCompilationContext;
 procedure CompileSwitchStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaSwitchStatement);
 procedure CompileBreakStatement(const ACtx: TGocciaCompilationContext);
+procedure CompileContinueStatement(const ACtx: TGocciaCompilationContext);
 procedure CompileDestructuringDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaDestructuringDeclaration);
 procedure CompileEnumDeclaration(const ACtx: TGocciaCompilationContext;
@@ -109,8 +110,10 @@ type
 
 threadvar
   GBreakJumps: TList<Integer>;
+  GContinueJumps: TList<Integer>;
   GPendingFinally: TList<TPendingFinallyEntry>;
   GBreakFinallyBase: Integer;
+  GContinueFinallyBase: Integer;
 
 procedure CompileExpressionStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExpressionStatement);
@@ -1048,6 +1051,9 @@ var
   OldBreakJumps: TList<Integer>;
   OldBreakFinallyBase: Integer;
   BreakJumps: TList<Integer>;
+  OldContinueJumps: TList<Integer>;
+  OldContinueFinallyBase: Integer;
+  ContinueJumps: TList<Integer>;
   ElemAnnotation: string;
   ElemType: TGocciaLocalType;
 begin
@@ -1067,10 +1073,20 @@ begin
   OldBreakFinallyBase := GBreakFinallyBase;
   BreakJumps := TList<Integer>.Create;
   GBreakJumps := BreakJumps;
+  OldContinueJumps := GContinueJumps;
+  OldContinueFinallyBase := GContinueFinallyBase;
+  ContinueJumps := TList<Integer>.Create;
+  GContinueJumps := ContinueJumps;
   if Assigned(GPendingFinally) then
-    GBreakFinallyBase := GPendingFinally.Count
+  begin
+    GBreakFinallyBase := GPendingFinally.Count;
+    GContinueFinallyBase := GPendingFinally.Count;
+  end
   else
+  begin
     GBreakFinallyBase := 0;
+    GContinueFinallyBase := 0;
+  end;
   try
     LoopStart := CurrentCodePosition(ACtx);
 
@@ -1124,6 +1140,10 @@ begin
     for I := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
 
+    // Patch continue jumps to the increment + back-jump sequence
+    for I := 0 to ContinueJumps.Count - 1 do
+      PatchJumpTarget(ACtx, ContinueJumps[I]);
+
     EmitInstruction(ACtx, EncodeABC(OP_ADD_INT, IdxReg, IdxReg, OneReg));
     EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
 
@@ -1135,6 +1155,9 @@ begin
     BreakJumps.Free;
     GBreakJumps := OldBreakJumps;
     GBreakFinallyBase := OldBreakFinallyBase;
+    ContinueJumps.Free;
+    GContinueJumps := OldContinueJumps;
+    GContinueFinallyBase := OldContinueFinallyBase;
   end;
 
   ACtx.Scope.FreeRegister;
@@ -1156,6 +1179,9 @@ var
   OldBreakJumps: TList<Integer>;
   OldBreakFinallyBase: Integer;
   BreakJumps: TList<Integer>;
+  OldContinueJumps: TList<Integer>;
+  OldContinueFinallyBase: Integer;
+  ContinueJumps: TList<Integer>;
   ArrayLocalIdx: Integer;
 begin
   if IsConstArrayLocal(ACtx, AStmt.Iterable, ArrayLocalIdx) then
@@ -1175,10 +1201,20 @@ begin
   OldBreakFinallyBase := GBreakFinallyBase;
   BreakJumps := TList<Integer>.Create;
   GBreakJumps := BreakJumps;
+  OldContinueJumps := GContinueJumps;
+  OldContinueFinallyBase := GContinueFinallyBase;
+  ContinueJumps := TList<Integer>.Create;
+  GContinueJumps := ContinueJumps;
   if Assigned(GPendingFinally) then
-    GBreakFinallyBase := GPendingFinally.Count
+  begin
+    GBreakFinallyBase := GPendingFinally.Count;
+    GContinueFinallyBase := GPendingFinally.Count;
+  end
   else
+  begin
     GBreakFinallyBase := 0;
+    GContinueFinallyBase := 0;
+  end;
   try
     LoopStart := CurrentCodePosition(ACtx);
 
@@ -1204,6 +1240,10 @@ begin
     for I := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
 
+    // Patch continue jumps to the back-jump (iterator advances via ITER_NEXT)
+    for I := 0 to ContinueJumps.Count - 1 do
+      PatchJumpTarget(ACtx, ContinueJumps[I]);
+
     EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
 
     PatchJumpTarget(ACtx, ExitJump);
@@ -1214,6 +1254,9 @@ begin
     BreakJumps.Free;
     GBreakJumps := OldBreakJumps;
     GBreakFinallyBase := OldBreakFinallyBase;
+    ContinueJumps.Free;
+    GContinueJumps := OldContinueJumps;
+    GContinueFinallyBase := OldContinueFinallyBase;
   end;
 
   ACtx.Scope.FreeRegister;
@@ -1232,6 +1275,9 @@ var
   OldBreakJumps: TList<Integer>;
   OldBreakFinallyBase: Integer;
   BreakJumps: TList<Integer>;
+  OldContinueJumps: TList<Integer>;
+  OldContinueFinallyBase: Integer;
+  ContinueJumps: TList<Integer>;
 begin
   IterReg := ACtx.Scope.AllocateRegister;
   ValueReg := ACtx.Scope.AllocateRegister;
@@ -1244,10 +1290,20 @@ begin
   OldBreakFinallyBase := GBreakFinallyBase;
   BreakJumps := TList<Integer>.Create;
   GBreakJumps := BreakJumps;
+  OldContinueJumps := GContinueJumps;
+  OldContinueFinallyBase := GContinueFinallyBase;
+  ContinueJumps := TList<Integer>.Create;
+  GContinueJumps := ContinueJumps;
   if Assigned(GPendingFinally) then
-    GBreakFinallyBase := GPendingFinally.Count
+  begin
+    GBreakFinallyBase := GPendingFinally.Count;
+    GContinueFinallyBase := GPendingFinally.Count;
+  end
   else
+  begin
     GBreakFinallyBase := 0;
+    GContinueFinallyBase := 0;
+  end;
   try
     LoopStart := CurrentCodePosition(ACtx);
 
@@ -1274,6 +1330,10 @@ begin
     for I := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
 
+    // Patch continue jumps to the back-jump (iterator advances via ITER_NEXT)
+    for I := 0 to ContinueJumps.Count - 1 do
+      PatchJumpTarget(ACtx, ContinueJumps[I]);
+
     EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
 
     PatchJumpTarget(ACtx, ExitJump);
@@ -1284,6 +1344,9 @@ begin
     BreakJumps.Free;
     GBreakJumps := OldBreakJumps;
     GBreakFinallyBase := OldBreakFinallyBase;
+    ContinueJumps.Free;
+    GContinueJumps := OldContinueJumps;
+    GContinueFinallyBase := OldContinueFinallyBase;
   end;
 
   ACtx.Scope.FreeRegister;
@@ -1542,6 +1605,36 @@ begin
     end;
 
   GBreakJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
+end;
+
+procedure CompileContinueStatement(const ACtx: TGocciaCompilationContext);
+var
+  I: Integer;
+  Entry: TPendingFinallyEntry;
+  NullishJump: Integer;
+begin
+  if not Assigned(GContinueJumps) then
+    Exit;
+
+  if Assigned(GPendingFinally) and (GPendingFinally.Count > GContinueFinallyBase) then
+    for I := GPendingFinally.Count - 1 downto GContinueFinallyBase do
+    begin
+      Entry := GPendingFinally[I];
+      EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+      if Assigned(Entry.FinallyBlock) then
+        CompileBlockStatement(ACtx, Entry.FinallyBlock)
+      else if Length(Entry.UsingResources) > 0 then
+      begin
+        EmitDisposalSequence(ACtx, Entry.UsingResources,
+          Length(Entry.UsingResources), Entry.UsingErrorReg);
+        NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
+          Entry.UsingErrorReg);
+        EmitInstruction(ACtx, EncodeABC(OP_THROW, Entry.UsingErrorReg, 0, 0));
+        PatchJumpTarget(ACtx, NullishJump);
+      end;
+    end;
+
+  GContinueJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
 end;
 
 procedure CompileMethodBody(const ACtx: TGocciaCompilationContext;

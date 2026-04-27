@@ -621,6 +621,7 @@ resourcestring
 
   // Function body errors
   SErrorIllegalBreakStatement = 'Illegal break statement';
+  SErrorIllegalContinueStatement = 'Illegal continue statement';
 
   // Function.prototype errors
   SErrorFunctionApplyNonFunction = 'Function.prototype.apply called on non-function';

@@ -1477,6 +1477,7 @@ begin
   // Reserved keywords
   FKeywords.Add(KEYWORD_BREAK, gttBreak);
   FKeywords.Add(KEYWORD_CASE, gttCase);
+  FKeywords.Add(KEYWORD_CONTINUE, gttContinue);
   FKeywords.Add(KEYWORD_CATCH, gttCatch);
   FKeywords.Add(KEYWORD_CLASS, gttClass);
   FKeywords.Add(KEYWORD_CONST, gttConst);
