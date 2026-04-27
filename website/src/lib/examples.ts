@@ -8,7 +8,7 @@ export type Example = {
   label: string;
   desc: string;
   code: string;
-  ext?: string;
+  ext?: "js" | "ts" | "jsx" | "tsx";
 };
 
 export const EXAMPLES: Example[] = [

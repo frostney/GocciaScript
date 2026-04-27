@@ -10,13 +10,13 @@ export const metadata: Metadata = {
     "Install GocciaScript — one-line installer, prebuilt binaries, or build from source. Single self-contained runtime, no Node.js required.",
   alternates: { canonical: "/installation" },
   openGraph: {
-    title: "Install · GocciaScript",
+    title: "Installation · GocciaScript",
     description:
       "Install GocciaScript — one-line installer, prebuilt binaries, or build from source.",
     url: "/installation",
   },
   twitter: {
-    title: "Install · GocciaScript",
+    title: "Installation · GocciaScript",
     description:
       "Install GocciaScript — one-line installer, prebuilt binaries, or build from source.",
   },
