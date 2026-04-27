@@ -173,7 +173,7 @@ test("slice on generic array-like with high start returns empty when start >= en
   expect(result).toEqual([]);
 });
 
-test("slice on generic array-like with high negative end", () => {
+test("slice on generic array-like with large positive start and end", () => {
   const high = 2 ** 32;
   const obj = { length: 2 ** 33 };
   obj[high] = "x";
