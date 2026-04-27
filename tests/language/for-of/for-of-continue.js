@@ -119,4 +119,15 @@ describe("for...of continue", () => {
     }
     expect(result).toEqual([1, 3, 5]);
   });
+
+  test("closures capture correct iteration value across continue", () => {
+    const fns = [];
+    for (const x of [1, 2, 3, 4]) {
+      if (x % 2 === 0) continue;
+      fns.push(() => x);
+    }
+    expect(fns.length).toBe(2);
+    expect(fns[0]()).toBe(1);
+    expect(fns[1]()).toBe(3);
+  });
 });

@@ -1136,13 +1136,13 @@ begin
 
     ACtx.CompileStatement(AStmt.Body);
 
+    // Patch continue jumps before close-upvalue so closures see correct iteration values
+    for I := 0 to ContinueJumps.Count - 1 do
+      PatchJumpTarget(ACtx, ContinueJumps[I]);
+
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
-
-    // Patch continue jumps to the increment + back-jump sequence
-    for I := 0 to ContinueJumps.Count - 1 do
-      PatchJumpTarget(ACtx, ContinueJumps[I]);
 
     EmitInstruction(ACtx, EncodeABC(OP_ADD_INT, IdxReg, IdxReg, OneReg));
     EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
@@ -1236,13 +1236,13 @@ begin
 
     ACtx.CompileStatement(AStmt.Body);
 
+    // Patch continue jumps before close-upvalue so closures see correct iteration values
+    for I := 0 to ContinueJumps.Count - 1 do
+      PatchJumpTarget(ACtx, ContinueJumps[I]);
+
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
-
-    // Patch continue jumps to the back-jump (iterator advances via ITER_NEXT)
-    for I := 0 to ContinueJumps.Count - 1 do
-      PatchJumpTarget(ACtx, ContinueJumps[I]);
 
     EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
 
@@ -1326,13 +1326,13 @@ begin
 
     ACtx.CompileStatement(AStmt.Body);
 
+    // Patch continue jumps before close-upvalue so closures see correct iteration values
+    for I := 0 to ContinueJumps.Count - 1 do
+      PatchJumpTarget(ACtx, ContinueJumps[I]);
+
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
-
-    // Patch continue jumps to the back-jump (iterator advances via ITER_NEXT)
-    for I := 0 to ContinueJumps.Count - 1 do
-      PatchJumpTarget(ACtx, ContinueJumps[I]);
 
     EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
 
@@ -1609,7 +1609,8 @@ end;
 
 procedure CompileContinueStatement(const ACtx: TGocciaCompilationContext);
 var
-  I: Integer;
+  I, Count, Base: Integer;
+  Entries: array of TPendingFinallyEntry;
   Entry: TPendingFinallyEntry;
   NullishJump: Integer;
 begin
@@ -1617,9 +1618,20 @@ begin
     Exit;
 
   if Assigned(GPendingFinally) and (GPendingFinally.Count > GContinueFinallyBase) then
-    for I := GPendingFinally.Count - 1 downto GContinueFinallyBase do
+  begin
+    Count := GPendingFinally.Count;
+    Base := GContinueFinallyBase;
+    // Snapshot entries above the continue-finally base
+    SetLength(Entries, Count - Base);
+    for I := Base to Count - 1 do
+      Entries[I - Base] := GPendingFinally[I];
+    // Process from innermost to outermost, removing each before compiling
+    // its cleanup so nested abrupt completions do not see the same entry.
+    for I := Count - 1 downto Base do
     begin
-      Entry := GPendingFinally[I];
+      if GPendingFinally.Count > I then
+        GPendingFinally.Delete(I);
+      Entry := Entries[I - Base];
       EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
       if Assigned(Entry.FinallyBlock) then
         CompileBlockStatement(ACtx, Entry.FinallyBlock)
@@ -1633,6 +1645,10 @@ begin
         PatchJumpTarget(ACtx, NullishJump);
       end;
     end;
+    // Restore entries so normal-path compilation still sees them
+    for I := 0 to Length(Entries) - 1 do
+      GPendingFinally.Insert(Base + I, Entries[I]);
+  end;
 
   GContinueJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
 end;
