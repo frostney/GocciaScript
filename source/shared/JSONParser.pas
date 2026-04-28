@@ -635,9 +635,10 @@ end;
 
 function TAbstractJSONParser.ParseIdentifierName: string;
 var
+  Bytes: RawByteString;
   Sequence: UTF8String;
 begin
-  Result := '';
+  Bytes := '';
 
   if IsAtEnd then
     RaiseParseError('Unexpected end of JSON input');
@@ -645,16 +646,16 @@ begin
   if PeekChar = '\' then
   begin
     ReadChar;
-    Result := ParseIdentifierEscape(True);
+    Bytes := RawByteString(ParseIdentifierEscape(True));
   end
   else if IsASCIIIdentifierStartByte(PeekChar) then
-    Result := Result + ReadChar
+    Bytes := Bytes + ReadChar
   else
   begin
     Sequence := PeekUTF8Sequence;
     if not IsIdentifierStartText(Sequence) then
       RaiseParseError('Expected string key in object');
-    Result := Result + ReadUTF8Sequence;
+    Bytes := Bytes + RawByteString(ReadUTF8Sequence);
   end;
 
   while not IsAtEnd do
@@ -662,18 +663,20 @@ begin
     if PeekChar = '\' then
     begin
       ReadChar;
-      Result := Result + ParseIdentifierEscape(False);
+      Bytes := Bytes + RawByteString(ParseIdentifierEscape(False));
     end
     else if IsASCIIIdentifierContinueByte(PeekChar) then
-      Result := Result + ReadChar
+      Bytes := Bytes + ReadChar
     else
     begin
       Sequence := PeekUTF8Sequence;
       if not IsIdentifierContinueText(Sequence) then
         Break;
-      Result := Result + ReadUTF8Sequence;
+      Bytes := Bytes + RawByteString(ReadUTF8Sequence);
     end;
   end;
+
+  Result := TextSemantics.RetagUTF8Text(Bytes);
 end;
 
 function TAbstractJSONParser.ParseString: string;
@@ -696,16 +699,20 @@ end;
 
 function TAbstractJSONParser.ParseString(const AQuote: Char): string;
 var
+  Bytes: RawByteString;
   Ch: Char;
 begin
   ExpectChar(AQuote);
-  Result := '';
+  Bytes := '';
 
   while not IsAtEnd do
   begin
     Ch := ReadChar;
     if Ch = AQuote then
+    begin
+      Result := TextSemantics.RetagUTF8Text(Bytes);
       Exit;
+    end;
 
     if Ch = '\' then
     begin
@@ -718,36 +725,36 @@ begin
       Ch := ReadChar;
       case Ch of
         '"':
-          Result := Result + '"';
+          Bytes := Bytes + '"';
         '''':
           if Supports(jpcAllowExtendedStringEscapes) or (AQuote = '''') then
-            Result := Result + ''''
+            Bytes := Bytes + ''''
           else
             RaiseParseError('Invalid escape character: \' + Ch);
         '\':
-          Result := Result + '\';
+          Bytes := Bytes + '\';
         '/':
-          Result := Result + '/';
+          Bytes := Bytes + '/';
         'b':
-          Result := Result + #8;
+          Bytes := Bytes + #8;
         'f':
-          Result := Result + #12;
+          Bytes := Bytes + #12;
         'n':
-          Result := Result + #10;
+          Bytes := Bytes + #10;
         'r':
-          Result := Result + #13;
+          Bytes := Bytes + #13;
         't':
-          Result := Result + #9;
+          Bytes := Bytes + #9;
         'u':
-          Result := Result + ParseUnicodeEscape;
+          Bytes := Bytes + RawByteString(ParseUnicodeEscape);
         'v':
           if Supports(jpcAllowExtendedStringEscapes) then
-            Result := Result + #11
+            Bytes := Bytes + #11
           else
             RaiseParseError('Invalid escape character: \' + Ch);
         'x':
           if Supports(jpcAllowExtendedStringEscapes) then
-            Result := Result + ParseHexEscape(2)
+            Bytes := Bytes + RawByteString(ParseHexEscape(2))
           else
             RaiseParseError('Invalid escape character: \' + Ch);
         '0':
@@ -756,7 +763,7 @@ begin
             begin
               if not IsAtEnd and IsASCIIDigit(PeekChar) then
                 RaiseParseError('Invalid escape character: \' + PeekChar);
-              Result := Result + #0;
+              Bytes := Bytes + #0;
             end
             else
               RaiseParseError('Invalid escape character: \' + Ch);
@@ -768,7 +775,7 @@ begin
             RaiseParseError('Invalid escape character: \' + Ch);
       else
         if Supports(jpcAllowExtendedStringEscapes) then
-          Result := Result + Ch
+          Bytes := Bytes + Ch
         else
           RaiseParseError('Invalid escape character: \' + Ch);
       end;
@@ -778,7 +785,7 @@ begin
     else if Ord(Ch) < 32 then
       RaiseParseError('Unescaped control character in string')
     else
-      Result := Result + Ch;
+      Bytes := Bytes + Ch;
   end;
 
   RaiseParseError('Unterminated string');
