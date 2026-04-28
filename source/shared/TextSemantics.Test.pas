@@ -73,6 +73,10 @@ begin
   Expect<Boolean>(IsWellFormedUTF8(SURROGATE_CODE_POINT)).ToBe(False);
   Expect<string>(ToWellFormedUTF8('a' + OVERLONG_NULL + 'b')).ToBe(
     'a' + UTF8_REPLACEMENT_CHARACTER + UTF8_REPLACEMENT_CHARACTER + 'b');
+  Expect<string>(ToWellFormedUTF8(#$E2 + 'AB')).ToBe(
+    UTF8_REPLACEMENT_CHARACTER + 'AB');
+  Expect<string>(ToWellFormedUTF8(#$E2#$80 + 'A')).ToBe(
+    UTF8_REPLACEMENT_CHARACTER + 'A');
 end;
 
 procedure TTextSemanticsTests.TestReplacementPatternExpansion;

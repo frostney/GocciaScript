@@ -71,7 +71,7 @@ describe('String.prototype.replaceAll', () => {
     });
 
     expect(result).toBe('0a1b2');
-    expect(offsets.length).toBe(3);
+    expect(offsets).toEqual([0, 1, 2]);
   });
 
   test('replaceAll dispatches through Symbol.replace', () => {

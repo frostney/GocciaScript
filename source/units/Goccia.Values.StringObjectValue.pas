@@ -1863,8 +1863,7 @@ begin
   if not TryReadUTF8CodePoint(StringValue, Index + 1, CodePoint,
     ByteLength) then
   begin
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Exit;
+    CodePoint := Ord(StringValue[Index + 1]);
   end;
 
   Result := TGocciaNumberLiteralValue.Create(CodePoint);

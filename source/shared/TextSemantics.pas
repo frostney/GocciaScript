@@ -297,6 +297,7 @@ var
   ByteLength: Integer;
   CodePoint: Cardinal;
   Index: Integer;
+  InvalidLength: Integer;
 begin
   Buffer := TStringBuffer.Create(Length(AText));
   Index := 1;
@@ -310,11 +311,16 @@ begin
     else
     begin
       Buffer.Append(UTF8_REPLACEMENT_CHARACTER);
+      InvalidLength := 1;
       if ByteLength < 1 then
         ByteLength := 1;
-      if Index + ByteLength - 1 > Length(AText) then
-        ByteLength := Length(AText) - Index + 1;
-      Inc(Index, ByteLength);
+      while (InvalidLength < ByteLength) and
+        (Index + InvalidLength <= Length(AText)) and
+        IsContinuationByte(AText, Index + InvalidLength) do
+        Inc(InvalidLength);
+      if Index + InvalidLength - 1 > Length(AText) then
+        InvalidLength := Length(AText) - Index + 1;
+      Inc(Index, InvalidLength);
     end;
   end;
   Result := Buffer.ToString;

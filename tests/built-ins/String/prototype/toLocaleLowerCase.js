@@ -11,6 +11,12 @@ describe("String.prototype.toLocaleLowerCase", () => {
 
   test("coerces non-string receivers", () => {
     expect(String.prototype.toLocaleLowerCase.call(true)).toBe("true");
+    expect(() => String.prototype.toLocaleLowerCase.call(null)).toThrow(
+      TypeError
+    );
+    expect(() => String.prototype.toLocaleLowerCase.call(undefined)).toThrow(
+      TypeError
+    );
   });
 
   test("has function metadata", () => {
