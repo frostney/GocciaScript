@@ -102,6 +102,7 @@ begin
   FSymbolFunction.RegisterConstant(SYMBOL_DISPOSE, TGocciaSymbolValue.WellKnownDispose);
   FSymbolFunction.RegisterConstant(SYMBOL_ASYNC_DISPOSE, TGocciaSymbolValue.WellKnownAsyncDispose);
   FSymbolFunction.RegisterConstant(SYMBOL_UNSCOPABLES, TGocciaSymbolValue.WellKnownUnscopables);
+  FSymbolFunction.RegisterConstant(SYMBOL_CUSTOM_MATCHER, TGocciaSymbolValue.WellKnownCustomMatcher);
 
   // Expose Symbol.prototype (ECMAScript compatible)
   FSymbolFunction.AssignProperty(PROP_PROTOTYPE, TGocciaSymbolValue.SharedPrototype);

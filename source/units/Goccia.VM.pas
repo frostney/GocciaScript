@@ -234,6 +234,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
   Goccia.InstructionLimit,
+  Goccia.PatternMatching,
   Goccia.Profiler,
   Goccia.StackLimit,
   Goccia.Timeout,
@@ -3989,6 +3990,8 @@ var
   Template: TGocciaFunctionTemplate;
   ChildTemplate: TGocciaFunctionTemplate;
   LeftValue, RightValue: TGocciaValue;
+  CustomMatcherValue, MatchResultValue: TGocciaValue;
+  MatchHintObject: TGocciaObjectValue;
   RegisterArgs: TGocciaRegisterArray;
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   BoundFunction: TGocciaBoundFunctionValue;
@@ -5145,6 +5148,36 @@ begin
 
       OP_HAS_PROPERTY:
         SetRegister(A, HasPropertyValue(GetRegister(B), GetRegister(C)));
+
+      OP_MATCH_VALUE:
+      begin
+        LeftValue := GetRegister(B);
+        RightValue := GetRegister(C);
+        CustomMatcherValue := GetCustomMatcher(RightValue);
+        if Assigned(CustomMatcherValue) then
+        begin
+          if not CustomMatcherValue.IsCallable then
+            ThrowTypeError('Symbol.customMatcher must be callable');
+          CallArgs := AcquireArguments(2);
+          try
+            MatchHintObject := TGocciaObjectValue.Create;
+            MatchHintObject.AssignProperty(PROP_MATCH_TYPE,
+              TGocciaStringLiteralValue.Create('boolean'));
+            CallArgs.Add(LeftValue);
+            CallArgs.Add(MatchHintObject);
+            MatchResultValue := InvokeFunctionValue(CustomMatcherValue,
+              CallArgs, RightValue);
+            SetRegister(A, MatchResultValue.ToBooleanLiteral);
+          finally
+            ReleaseArguments(CallArgs);
+          end;
+        end
+        else if RightValue is TGocciaClassValue then
+          SetRegister(A, VMInstanceOfValue(LeftValue, RightValue))
+        else
+          SetRegister(A, TGocciaBooleanLiteralValue.Create(
+            MatchValueEquals(LeftValue, RightValue)));
+      end;
 
       OP_TO_NUMBER:
         case FRegisters[B].Kind of

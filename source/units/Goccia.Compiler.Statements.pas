@@ -86,6 +86,7 @@ uses
   Goccia.Bytecode,
   Goccia.Bytecode.Debug,
   Goccia.Compiler.Expressions,
+  Goccia.Compiler.PatternMatching,
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
   Goccia.Keywords.Reserved,
@@ -846,15 +847,27 @@ end;
 procedure CompileIfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaIfStatement);
 var
-  CondReg: UInt8;
+  CondReg, PatternSubjectReg: UInt8;
   ElseJump, EndJump: Integer;
+  HasPatternBindings: Boolean;
+  ClosedLocals: array[0..255] of UInt8;
+  ClosedCount, I: Integer;
 begin
   CondReg := ACtx.Scope.AllocateRegister;
-  ACtx.CompileExpression(AStmt.Condition, CondReg);
-  ACtx.Scope.FreeRegister;
+  HasPatternBindings := CompileConditionWithPatternBindings(ACtx,
+    AStmt.Condition, CondReg, PatternSubjectReg);
+  if not HasPatternBindings then
+    ACtx.CompileExpression(AStmt.Condition, CondReg);
 
   ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
   ACtx.CompileStatement(AStmt.Consequent);
+
+  if HasPatternBindings then
+  begin
+    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+    for I := 0 to ClosedCount - 1 do
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+  end;
 
   if Assigned(AStmt.Alternate) then
   begin
@@ -865,6 +878,8 @@ begin
   end
   else
     PatchJumpTarget(ACtx, ElseJump);
+
+  ACtx.Scope.FreeRegister;
 end;
 
 // Emit pending finally/disposal blocks before a return or abrupt exit.
@@ -947,8 +962,8 @@ end;
 procedure CompileTryStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaTryStatement);
 var
-  CatchReg: UInt8;
-  HandlerJump, EndJump: Integer;
+  CatchReg, PatternTestReg: UInt8;
+  HandlerJump, EndJump, PatternMismatchJump, CatchSuccessJump: Integer;
   HasCatch, HasFinally: Boolean;
   I: Integer;
   ClosedLocals: array[0..255] of UInt8;
@@ -959,6 +974,7 @@ begin
   HasFinally := Assigned(AStmt.FinallyBlock);
 
   CatchReg := ACtx.Scope.AllocateRegister;
+  PatternTestReg := 0;
   HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, CatchReg);
 
   if HasFinally then
@@ -988,11 +1004,23 @@ begin
     if HasFinally then
       GPendingFinally.Add(Entry);
 
+    PatternMismatchJump := -1;
+    if Assigned(AStmt.CatchPattern) then
+      PatternTestReg := ACtx.Scope.AllocateRegister;
+
     if AStmt.CatchParam <> '' then
     begin
       ACtx.Scope.BeginScope;
       ACtx.Scope.DeclareLocal(AStmt.CatchParam, False);
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ACtx.Scope.NextSlot - 1, CatchReg, 0));
+    end;
+
+    if Assigned(AStmt.CatchPattern) then
+    begin
+      DeclarePatternBindings(ACtx, AStmt.CatchPattern);
+      CompilePatternTest(ACtx, CatchReg, AStmt.CatchPattern, PatternTestReg);
+      PatternMismatchJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE,
+        PatternTestReg);
     end;
 
     CompileBlockStatement(ACtx, AStmt.CatchBlock);
@@ -1008,6 +1036,17 @@ begin
     begin
       GPendingFinally.Delete(GPendingFinally.Count - 1);
       CompileBlockStatement(ACtx, AStmt.FinallyBlock);
+    end;
+
+    if PatternMismatchJump >= 0 then
+    begin
+      CatchSuccessJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      PatchJumpTarget(ACtx, PatternMismatchJump);
+      if HasFinally then
+        CompileBlockStatement(ACtx, AStmt.FinallyBlock);
+      EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchReg, 0, 0));
+      PatchJumpTarget(ACtx, CatchSuccessJump);
+      ACtx.Scope.FreeRegister;
     end;
   end
   else
@@ -1044,7 +1083,7 @@ procedure CompileCountedForOf(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement; const AArrayLocalIdx: Integer);
 var
   ArrReg, LenReg, IdxReg, OneReg, CmpReg, ValueReg: UInt8;
-  LoopStart, ExitJump, I, BindLocalIdx: Integer;
+  LoopStart, ExitJump, MismatchJump, I, BindLocalIdx: Integer;
   Slot: UInt8;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
@@ -1089,6 +1128,7 @@ begin
   end;
   try
     LoopStart := CurrentCodePosition(ACtx);
+    MismatchJump := -1;
 
     EmitInstruction(ACtx, EncodeABC(OP_GTE_INT, CmpReg, IdxReg, LenReg));
     ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CmpReg);
@@ -1134,11 +1174,20 @@ begin
       end;
     end;
 
+    if Assigned(AStmt.MatchPattern) then
+    begin
+      DeclarePatternBindings(ACtx, AStmt.MatchPattern);
+      CompilePatternTest(ACtx, ValueReg, AStmt.MatchPattern, CmpReg);
+      MismatchJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CmpReg);
+    end;
+
     ACtx.CompileStatement(AStmt.Body);
 
     // Patch continue jumps before close-upvalue so closures see correct iteration values
     for I := 0 to ContinueJumps.Count - 1 do
       PatchJumpTarget(ACtx, ContinueJumps[I]);
+    if MismatchJump >= 0 then
+      PatchJumpTarget(ACtx, MismatchJump);
 
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
@@ -1172,7 +1221,7 @@ procedure CompileForOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement);
 var
   IterReg, ValueReg, DoneReg: UInt8;
-  LoopStart, ExitJump, I: Integer;
+  LoopStart, ExitJump, MismatchJump, I: Integer;
   Slot: UInt8;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
@@ -1217,6 +1266,7 @@ begin
   end;
   try
     LoopStart := CurrentCodePosition(ACtx);
+    MismatchJump := -1;
 
     EmitInstruction(ACtx, EncodeABC(OP_ITER_NEXT, ValueReg, DoneReg, IterReg));
     ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
@@ -1234,11 +1284,20 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ValueReg, 0));
     end;
 
+    if Assigned(AStmt.MatchPattern) then
+    begin
+      DeclarePatternBindings(ACtx, AStmt.MatchPattern);
+      CompilePatternTest(ACtx, ValueReg, AStmt.MatchPattern, DoneReg);
+      MismatchJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, DoneReg);
+    end;
+
     ACtx.CompileStatement(AStmt.Body);
 
     // Patch continue jumps before close-upvalue so closures see correct iteration values
     for I := 0 to ContinueJumps.Count - 1 do
       PatchJumpTarget(ACtx, ContinueJumps[I]);
+    if MismatchJump >= 0 then
+      PatchJumpTarget(ACtx, MismatchJump);
 
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
@@ -1268,7 +1327,7 @@ procedure CompileForAwaitOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForAwaitOfStatement);
 var
   IterReg, ValueReg, DoneReg: UInt8;
-  LoopStart, ExitJump, I: Integer;
+  LoopStart, ExitJump, MismatchJump, I: Integer;
   Slot: UInt8;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
@@ -1306,6 +1365,7 @@ begin
   end;
   try
     LoopStart := CurrentCodePosition(ACtx);
+    MismatchJump := -1;
 
     EmitInstruction(ACtx, EncodeABC(OP_ITER_NEXT, ValueReg, DoneReg, IterReg));
     ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
@@ -1324,11 +1384,20 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ValueReg, 0));
     end;
 
+    if Assigned(AStmt.MatchPattern) then
+    begin
+      DeclarePatternBindings(ACtx, AStmt.MatchPattern);
+      CompilePatternTest(ACtx, ValueReg, AStmt.MatchPattern, DoneReg);
+      MismatchJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, DoneReg);
+    end;
+
     ACtx.CompileStatement(AStmt.Body);
 
     // Patch continue jumps before close-upvalue so closures see correct iteration values
     for I := 0 to ContinueJumps.Count - 1 do
       PatchJumpTarget(ACtx, ContinueJumps[I]);
+    if MismatchJump >= 0 then
+      PatchJumpTarget(ACtx, MismatchJump);
 
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do

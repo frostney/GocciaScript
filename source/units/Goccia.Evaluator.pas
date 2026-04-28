@@ -110,6 +110,7 @@ uses
   Goccia.Evaluator.Bitwise,
   Goccia.Evaluator.Comparison,
   Goccia.Evaluator.Decorators,
+  Goccia.Evaluator.PatternMatching,
   Goccia.Evaluator.TypeOperations,
   Goccia.FetchManager,
   Goccia.GarbageCollector,
@@ -1376,6 +1377,7 @@ var
   IterScope: TGocciaScope;
   IterContext: TGocciaEvaluationContext;
   DeclarationType: TGocciaDeclarationType;
+  MatchContext: TGocciaEvaluationContext;
 begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
@@ -1429,6 +1431,17 @@ begin
       else
         IterScope.DefineLexicalBinding(AForOfStatement.BindingName, CurrentValue, DeclarationType);
 
+      if Assigned(AForOfStatement.MatchPattern) then
+      begin
+        if not TryEvaluateMatchPatternInContext(CurrentValue,
+           AForOfStatement.MatchPattern, IterContext, MatchContext) then
+        begin
+          IterResult := Iterator.AdvanceNext;
+          Continue;
+        end;
+        IterContext := MatchContext;
+      end;
+
       CF := EvaluateStatement(AForOfStatement.Body, IterContext);
       if CF.Kind = cfkBreak then Break;
       if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
@@ -1453,6 +1466,7 @@ var
   IterContext: TGocciaEvaluationContext;
   DeclarationType: TGocciaDeclarationType;
   EmptyArgs: TGocciaArgumentsCollection;
+  MatchContext: TGocciaEvaluationContext;
 begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
@@ -1522,6 +1536,14 @@ begin
           else
             IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
 
+          if Assigned(AForAwaitOfStatement.MatchPattern) then
+          begin
+            if not TryEvaluateMatchPatternInContext(CurrentValue,
+               AForAwaitOfStatement.MatchPattern, IterContext, MatchContext) then
+              Continue;
+            IterContext := MatchContext;
+          end;
+
           CF := EvaluateStatement(AForAwaitOfStatement.Body, IterContext);
           if CF.Kind = cfkBreak then Break;
           if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
@@ -1569,6 +1591,17 @@ begin
           AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
         else
           IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
+
+        if Assigned(AForAwaitOfStatement.MatchPattern) then
+        begin
+          if not TryEvaluateMatchPatternInContext(CurrentValue,
+             AForAwaitOfStatement.MatchPattern, IterContext, MatchContext) then
+          begin
+            GenericNextResult := Iterator.AdvanceNext;
+            Continue;
+          end;
+          IterContext := MatchContext;
+        end;
 
         CF := EvaluateStatement(AForAwaitOfStatement.Body, IterContext);
         if CF.Kind = cfkBreak then Break;
@@ -1908,9 +1941,17 @@ end;
 function EvaluateIf(const AIfStatement: TGocciaIfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
   ConditionResult: Boolean;
+  BodyContext: TGocciaEvaluationContext;
+  PatternHandled: Boolean;
 begin
-  ConditionResult := EvaluateExpression(AIfStatement.Condition, AContext)
-    .ToBooleanLiteral.Value;
+  ConditionResult := EvaluateConditionWithPatternBindings(AIfStatement.Condition,
+    AContext, BodyContext, PatternHandled);
+  if not PatternHandled then
+  begin
+    BodyContext := AContext;
+    ConditionResult := EvaluateExpression(AIfStatement.Condition, AContext)
+      .ToBooleanLiteral.Value;
+  end;
   if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
   begin
     if ConditionResult then
@@ -1921,7 +1962,14 @@ begin
         AContext.CurrentFilePath, AIfStatement.Line, AIfStatement.Column, 1);
   end;
   if ConditionResult then
-    Result := EvaluateStatement(AIfStatement.Consequent, AContext)
+  begin
+    try
+      Result := EvaluateStatement(AIfStatement.Consequent, BodyContext);
+    finally
+      if PatternHandled and (BodyContext.Scope <> AContext.Scope) then
+        BodyContext.Scope.Free;
+    end;
+  end
   else if Assigned(AIfStatement.Alternate) then
     Result := EvaluateStatement(AIfStatement.Alternate, AContext)
   else
@@ -1931,7 +1979,7 @@ end;
 function ExecuteCatchBlock(const ATryStatement: TGocciaTryStatement; const AErrorValue: TGocciaValue; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
   CatchScope: TGocciaScope;
-  CatchContext: TGocciaEvaluationContext;
+  CatchContext, MatchContext: TGocciaEvaluationContext;
 begin
   if ATryStatement.CatchParam <> '' then
   begin
@@ -1940,7 +1988,15 @@ begin
       CatchScope.DefineLexicalBinding(ATryStatement.CatchParam, AErrorValue, dtParameter);
       CatchContext := AContext;
       CatchContext.Scope := CatchScope;
-      Result := EvaluateStatements(ATryStatement.CatchBlock.Nodes, CatchContext);
+      if Assigned(ATryStatement.CatchPattern) then
+      begin
+        if not TryEvaluateMatchPatternInContext(AErrorValue,
+           ATryStatement.CatchPattern, CatchContext, MatchContext) then
+          raise TGocciaThrowValue.Create(AErrorValue);
+        Result := EvaluateStatements(ATryStatement.CatchBlock.Nodes, MatchContext);
+      end
+      else
+        Result := EvaluateStatements(ATryStatement.CatchBlock.Nodes, CatchContext);
     finally
       CatchScope.Free;
     end;

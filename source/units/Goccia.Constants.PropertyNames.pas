@@ -83,6 +83,7 @@ const
   PROP_UNICODE_SETS           = 'unicodeSets';
   PROP_HAS_INDICES            = 'hasIndices';
   PROP_TYPE                   = 'type';
+  PROP_MATCH_TYPE             = 'matchType';
   PROP_CALLS                  = 'calls';
   PROP_RESULTS                = 'results';
   PROP_INSTANCES              = 'instances';

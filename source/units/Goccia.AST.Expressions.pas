@@ -13,6 +13,7 @@ uses
 
   Goccia.AST.Node,
   Goccia.Evaluator.Context,
+  Goccia.Scope.BindingMap,
   Goccia.Token,
   Goccia.Values.Primitives;
 
@@ -20,6 +21,7 @@ type
   // Forward declarations
   TGocciaDestructuringPattern = class;
   TGocciaGetterExpression = class;
+  TGocciaMatchPattern = class;
   TGocciaSetterExpression = class;
 
   TGocciaParameter = record
@@ -35,6 +37,7 @@ type
 
   TGocciaExpressionMap = TOrderedStringMap<TGocciaExpression>;
   TGocciaGetterExpressionMap = TOrderedStringMap<TGocciaGetterExpression>;
+  TGocciaMatchPatternList = TObjectList<TGocciaMatchPattern>;
   TGocciaSetterExpressionMap = TOrderedStringMap<TGocciaSetterExpression>;
 
   TGocciaLiteralExpression = class(TGocciaExpression)
@@ -573,6 +576,186 @@ type
     property Right: TGocciaExpression read FRight;
   end;
 
+  TGocciaObjectMatchProperty = class
+  private
+    FKey: string;
+    FPattern: TGocciaMatchPattern;
+    FComputed: Boolean;
+    FKeyExpression: TGocciaExpression;
+  public
+    constructor Create(const AKey: string; const APattern: TGocciaMatchPattern;
+      const AComputed: Boolean = False; const AKeyExpression: TGocciaExpression = nil);
+    property Key: string read FKey;
+    property Pattern: TGocciaMatchPattern read FPattern;
+    property Computed: Boolean read FComputed;
+    property KeyExpression: TGocciaExpression read FKeyExpression;
+  end;
+
+  TGocciaObjectMatchPropertyList = TObjectList<TGocciaObjectMatchProperty>;
+
+  TGocciaMatchPattern = class(TGocciaASTNode)
+  end;
+
+  TGocciaWildcardMatchPattern = class(TGocciaMatchPattern)
+  end;
+
+  TGocciaValueMatchPattern = class(TGocciaMatchPattern)
+  private
+    FExpression: TGocciaExpression;
+    FUseSameValueZero: Boolean;
+  public
+    constructor Create(const AExpression: TGocciaExpression;
+      const AUseSameValueZero: Boolean; const ALine, AColumn: Integer);
+    property Expression: TGocciaExpression read FExpression;
+    property UseSameValueZero: Boolean read FUseSameValueZero;
+  end;
+
+  TGocciaBindingMatchPattern = class(TGocciaMatchPattern)
+  private
+    FName: string;
+    FDeclarationType: TGocciaDeclarationType;
+  public
+    constructor Create(const AName: string; const ADeclarationType: TGocciaDeclarationType;
+      const ALine, AColumn: Integer);
+    property Name: string read FName;
+    property DeclarationType: TGocciaDeclarationType read FDeclarationType;
+  end;
+
+  TGocciaArrayMatchPattern = class(TGocciaMatchPattern)
+  private
+    FElements: TGocciaMatchPatternList;
+    FRestPattern: TGocciaMatchPattern;
+    FHasRestWildcard: Boolean;
+  public
+    constructor Create(const AElements: TGocciaMatchPatternList;
+      const ARestPattern: TGocciaMatchPattern; const AHasRestWildcard: Boolean;
+      const ALine, AColumn: Integer);
+    property Elements: TGocciaMatchPatternList read FElements;
+    property RestPattern: TGocciaMatchPattern read FRestPattern;
+    property HasRestWildcard: Boolean read FHasRestWildcard;
+  end;
+
+  TGocciaObjectMatchPattern = class(TGocciaMatchPattern)
+  private
+    FProperties: TGocciaObjectMatchPropertyList;
+    FRestPattern: TGocciaMatchPattern;
+  public
+    constructor Create(const AProperties: TGocciaObjectMatchPropertyList;
+      const ARestPattern: TGocciaMatchPattern; const ALine, AColumn: Integer);
+    property Properties: TGocciaObjectMatchPropertyList read FProperties;
+    property RestPattern: TGocciaMatchPattern read FRestPattern;
+  end;
+
+  TGocciaRelationalMatchPattern = class(TGocciaMatchPattern)
+  private
+    FOperator: TGocciaTokenType;
+    FExpression: TGocciaExpression;
+  public
+    constructor Create(const AOperator: TGocciaTokenType; const AExpression: TGocciaExpression;
+      const ALine, AColumn: Integer);
+    property Operator: TGocciaTokenType read FOperator;
+    property Expression: TGocciaExpression read FExpression;
+  end;
+
+  TGocciaGuardMatchPattern = class(TGocciaMatchPattern)
+  private
+    FCondition: TGocciaExpression;
+  public
+    constructor Create(const ACondition: TGocciaExpression; const ALine, AColumn: Integer);
+    property Condition: TGocciaExpression read FCondition;
+  end;
+
+  TGocciaAsMatchPattern = class(TGocciaMatchPattern)
+  private
+    FPattern: TGocciaMatchPattern;
+    FName: string;
+    FDeclarationType: TGocciaDeclarationType;
+  public
+    constructor Create(const APattern: TGocciaMatchPattern; const AName: string;
+      const ADeclarationType: TGocciaDeclarationType; const ALine, AColumn: Integer);
+    property Pattern: TGocciaMatchPattern read FPattern;
+    property Name: string read FName;
+    property DeclarationType: TGocciaDeclarationType read FDeclarationType;
+  end;
+
+  TGocciaAndMatchPattern = class(TGocciaMatchPattern)
+  private
+    FPatterns: TGocciaMatchPatternList;
+  public
+    constructor Create(const APatterns: TGocciaMatchPatternList; const ALine, AColumn: Integer);
+    property Patterns: TGocciaMatchPatternList read FPatterns;
+  end;
+
+  TGocciaOrMatchPattern = class(TGocciaMatchPattern)
+  private
+    FPatterns: TGocciaMatchPatternList;
+  public
+    constructor Create(const APatterns: TGocciaMatchPatternList; const ALine, AColumn: Integer);
+    property Patterns: TGocciaMatchPatternList read FPatterns;
+  end;
+
+  TGocciaNotMatchPattern = class(TGocciaMatchPattern)
+  private
+    FPattern: TGocciaMatchPattern;
+  public
+    constructor Create(const APattern: TGocciaMatchPattern; const ALine, AColumn: Integer);
+    property Pattern: TGocciaMatchPattern read FPattern;
+  end;
+
+  TGocciaExtractorMatchPattern = class(TGocciaMatchPattern)
+  private
+    FMatcherExpression: TGocciaExpression;
+    FArguments: TGocciaMatchPatternList;
+    FRestPattern: TGocciaMatchPattern;
+    FHasRestWildcard: Boolean;
+  public
+    constructor Create(const AMatcherExpression: TGocciaExpression;
+      const AArguments: TGocciaMatchPatternList; const ARestPattern: TGocciaMatchPattern;
+      const AHasRestWildcard: Boolean; const ALine, AColumn: Integer);
+    property MatcherExpression: TGocciaExpression read FMatcherExpression;
+    property Arguments: TGocciaMatchPatternList read FArguments;
+    property RestPattern: TGocciaMatchPattern read FRestPattern;
+    property HasRestWildcard: Boolean read FHasRestWildcard;
+  end;
+
+  TGocciaMatchClause = class
+  private
+    FPattern: TGocciaMatchPattern;
+    FExpression: TGocciaExpression;
+  public
+    constructor Create(const APattern: TGocciaMatchPattern; const AExpression: TGocciaExpression);
+    property Pattern: TGocciaMatchPattern read FPattern;
+    property Expression: TGocciaExpression read FExpression;
+  end;
+
+  TGocciaMatchClauseList = TObjectList<TGocciaMatchClause>;
+
+  TGocciaIsExpression = class(TGocciaExpression)
+  private
+    FSubject: TGocciaExpression;
+    FPattern: TGocciaMatchPattern;
+  public
+    constructor Create(const ASubject: TGocciaExpression; const APattern: TGocciaMatchPattern;
+      const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    property Subject: TGocciaExpression read FSubject;
+    property Pattern: TGocciaMatchPattern read FPattern;
+  end;
+
+  TGocciaMatchExpression = class(TGocciaExpression)
+  private
+    FSubject: TGocciaExpression;
+    FClauses: TGocciaMatchClauseList;
+    FDefaultExpression: TGocciaExpression;
+  public
+    constructor Create(const ASubject: TGocciaExpression; const AClauses: TGocciaMatchClauseList;
+      const ADefaultExpression: TGocciaExpression; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    property Subject: TGocciaExpression read FSubject;
+    property Clauses: TGocciaMatchClauseList read FClauses;
+    property DefaultExpression: TGocciaExpression read FDefaultExpression;
+  end;
+
   TGocciaPrivateMemberExpression = class(TGocciaExpression)
   private
     FObject: TGocciaExpression;
@@ -625,6 +808,7 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.Arithmetic,
   Goccia.Evaluator.Assignment,
+  Goccia.Evaluator.PatternMatching,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
   Goccia.Modules,
@@ -1175,6 +1359,163 @@ begin
   FRight := ARight;
 end;
 
+{ TGocciaObjectMatchProperty }
+
+constructor TGocciaObjectMatchProperty.Create(const AKey: string;
+  const APattern: TGocciaMatchPattern; const AComputed: Boolean;
+  const AKeyExpression: TGocciaExpression);
+begin
+  FKey := AKey;
+  FPattern := APattern;
+  FComputed := AComputed;
+  FKeyExpression := AKeyExpression;
+end;
+
+{ TGocciaValueMatchPattern }
+
+constructor TGocciaValueMatchPattern.Create(const AExpression: TGocciaExpression;
+  const AUseSameValueZero: Boolean; const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FExpression := AExpression;
+  FUseSameValueZero := AUseSameValueZero;
+end;
+
+{ TGocciaBindingMatchPattern }
+
+constructor TGocciaBindingMatchPattern.Create(const AName: string;
+  const ADeclarationType: TGocciaDeclarationType; const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FName := AName;
+  FDeclarationType := ADeclarationType;
+end;
+
+{ TGocciaArrayMatchPattern }
+
+constructor TGocciaArrayMatchPattern.Create(const AElements: TGocciaMatchPatternList;
+  const ARestPattern: TGocciaMatchPattern; const AHasRestWildcard: Boolean;
+  const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FElements := AElements;
+  FRestPattern := ARestPattern;
+  FHasRestWildcard := AHasRestWildcard;
+end;
+
+{ TGocciaObjectMatchPattern }
+
+constructor TGocciaObjectMatchPattern.Create(const AProperties: TGocciaObjectMatchPropertyList;
+  const ARestPattern: TGocciaMatchPattern; const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FProperties := AProperties;
+  FRestPattern := ARestPattern;
+end;
+
+{ TGocciaRelationalMatchPattern }
+
+constructor TGocciaRelationalMatchPattern.Create(const AOperator: TGocciaTokenType;
+  const AExpression: TGocciaExpression; const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FOperator := AOperator;
+  FExpression := AExpression;
+end;
+
+{ TGocciaGuardMatchPattern }
+
+constructor TGocciaGuardMatchPattern.Create(const ACondition: TGocciaExpression;
+  const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FCondition := ACondition;
+end;
+
+{ TGocciaAsMatchPattern }
+
+constructor TGocciaAsMatchPattern.Create(const APattern: TGocciaMatchPattern;
+  const AName: string; const ADeclarationType: TGocciaDeclarationType;
+  const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FPattern := APattern;
+  FName := AName;
+  FDeclarationType := ADeclarationType;
+end;
+
+{ TGocciaAndMatchPattern }
+
+constructor TGocciaAndMatchPattern.Create(const APatterns: TGocciaMatchPatternList;
+  const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FPatterns := APatterns;
+end;
+
+{ TGocciaOrMatchPattern }
+
+constructor TGocciaOrMatchPattern.Create(const APatterns: TGocciaMatchPatternList;
+  const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FPatterns := APatterns;
+end;
+
+{ TGocciaNotMatchPattern }
+
+constructor TGocciaNotMatchPattern.Create(const APattern: TGocciaMatchPattern;
+  const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FPattern := APattern;
+end;
+
+{ TGocciaExtractorMatchPattern }
+
+constructor TGocciaExtractorMatchPattern.Create(
+  const AMatcherExpression: TGocciaExpression; const AArguments: TGocciaMatchPatternList;
+  const ARestPattern: TGocciaMatchPattern; const AHasRestWildcard: Boolean;
+  const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FMatcherExpression := AMatcherExpression;
+  FArguments := AArguments;
+  FRestPattern := ARestPattern;
+  FHasRestWildcard := AHasRestWildcard;
+end;
+
+{ TGocciaMatchClause }
+
+constructor TGocciaMatchClause.Create(const APattern: TGocciaMatchPattern;
+  const AExpression: TGocciaExpression);
+begin
+  FPattern := APattern;
+  FExpression := AExpression;
+end;
+
+{ TGocciaIsExpression }
+
+constructor TGocciaIsExpression.Create(const ASubject: TGocciaExpression;
+  const APattern: TGocciaMatchPattern; const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FSubject := ASubject;
+  FPattern := APattern;
+end;
+
+{ TGocciaMatchExpression }
+
+constructor TGocciaMatchExpression.Create(const ASubject: TGocciaExpression;
+  const AClauses: TGocciaMatchClauseList; const ADefaultExpression: TGocciaExpression;
+  const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FSubject := ASubject;
+  FClauses := AClauses;
+  FDefaultExpression := ADefaultExpression;
+end;
+
 { Evaluate overrides }
 
 function TGocciaLiteralExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -1675,6 +2016,16 @@ end;
 function TGocciaDestructuringAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
   Result := EvaluateDestructuringAssignment(Self, AContext);
+end;
+
+function TGocciaIsExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+begin
+  Result := EvaluateIsExpression(Self, AContext);
+end;
+
+function TGocciaMatchExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+begin
+  Result := EvaluateMatchExpression(Self, AContext);
 end;
 
 function TGocciaPrivateMemberExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;

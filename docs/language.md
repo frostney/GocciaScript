@@ -6,7 +6,7 @@
 ## Executive Summary
 
 - **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules (named only)
-- **TC39 proposals** — Decorators, decorator metadata, types as comments, enums, `Math.clamp`
+- **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
 - **Excluded by design** — `==`/`!=`, `eval`, `arguments`, traditional loops, `with`, default imports/exports
 - **Graceful handling** — Parser-recognized excluded syntax (`==`, loops, `with`) parses successfully but executes as a no-op with a warning and suggestion
 - **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`)
@@ -506,6 +506,43 @@ try { throw new Error("oops"); } catch (e: Error) { }
 - Namespaces (`namespace Foo { ... }`).
 - Parameter properties in constructors (`constructor(public x: number)`).
 - Angle-bracket type assertions (`<string>value`) — use `value as string` instead.
+
+### Pattern Matching (Stage 1)
+
+GocciaScript supports the Stage 1 [TC39 Pattern Matching](https://tc39.es/proposal-pattern-matching/) draft in interpreted and bytecode modes.
+
+```javascript
+const result = match (message) {
+  { type: "ok", value: const value }: value;
+  { type: "error", reason: const reason }: `failed: ${reason}`;
+  default: "unknown";
+};
+if (point is { x: const x, y: const y } and { kind: "cartesian" }) {
+  x + y;
+}
+```
+
+Supported pattern forms include wildcard (`_`), value patterns, `let`/`const` bindings, object and array/list patterns, rest wildcards, relational patterns (`<`, `<=`, `>`, `>=`), guards (`if (...)`), `as`, `and`, `or`, `not`, and `Symbol.customMatcher` value patterns.
+
+Bindings are transactional: failed matches do not mutate the surrounding scope, and successful bindings are visible only in the matched body or clause expression. `or` alternatives must bind the same names with the same declaration kinds, and `not` patterns cannot contain bindings.
+
+GocciaScript also implements proposal-note integrations:
+
+```javascript
+for (const item is { id: const id } of items) {
+  id;
+}
+for await (const item is { id: const id } of asyncItems) {
+  id;
+}
+try {
+  work();
+} catch (error is { code: const code }) {
+  code;
+}
+```
+
+The filtered `for...of` form currently requires an identifier subject before `is`; destructuring subjects before `is` are rejected. Pattern catches cannot be combined with catch type annotations.
 
 ### Enum Declarations (Stage 0)
 

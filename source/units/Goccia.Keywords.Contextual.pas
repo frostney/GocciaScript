@@ -25,6 +25,13 @@ const
   // Explicit Resource Management
   KEYWORD_USING        = 'using';
 
+  // TC39 Pattern Matching
+  KEYWORD_MATCH        = 'match';
+  KEYWORD_IS           = 'is';
+  KEYWORD_AND          = 'and';
+  KEYWORD_OR           = 'or';
+  KEYWORD_NOT          = 'not';
+
   // Types as Comments (parsed, ignored at runtime)
   KEYWORD_TYPE         = 'type';
   KEYWORD_INTERFACE    = 'interface';
