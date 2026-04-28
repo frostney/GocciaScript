@@ -63,6 +63,16 @@ type
     property Milliseconds: Int64 read GetMillisecondsInt64;
     property Microseconds: Int64 read GetMicrosecondsInt64;
     property Nanoseconds: Int64 read GetNanosecondsInt64;
+    property YearsBig: TBigInteger read FYearsBig;
+    property MonthsBig: TBigInteger read FMonthsBig;
+    property WeeksBig: TBigInteger read FWeeksBig;
+    property DaysBig: TBigInteger read FDaysBig;
+    property HoursBig: TBigInteger read FHoursBig;
+    property MinutesBig: TBigInteger read FMinutesBig;
+    property SecondsBig: TBigInteger read FSecondsBig;
+    property MillisecondsBig: TBigInteger read FMillisecondsBig;
+    property MicrosecondsBig: TBigInteger read FMicrosecondsBig;
+    property NanosecondsBig: TBigInteger read FNanosecondsBig;
   published
     function GetYears(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GetMonths(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -92,6 +102,7 @@ type
 implementation
 
 uses
+  Math,
   SysUtils,
 
   Goccia.Constants.NumericLimits,
@@ -131,10 +142,12 @@ begin
 end;
 
 function ParseRelativeTo(const AValue: TGocciaValue; const AMethod: string): TTemporalDateRecord; forward;
+function ValueToBigInteger(const AValue: TGocciaValue): TBigInteger; forward;
 
 function DurationFromObject(const AObj: TGocciaObjectValue): TGocciaTemporalDurationValue;
 
-  function GetFieldOr(const AObj: TGocciaObjectValue; const AName: string; const ADefault: Int64): Int64;
+  function GetFieldOr(const AObj: TGocciaObjectValue; const AName: string;
+    const ADefault: TBigInteger): TBigInteger;
   var
     V: TGocciaValue;
   begin
@@ -142,21 +155,21 @@ function DurationFromObject(const AObj: TGocciaObjectValue): TGocciaTemporalDura
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       Result := ADefault
     else
-      Result := Trunc(V.ToNumberLiteral.Value);
+      Result := ValueToBigInteger(V);
   end;
 
 begin
-  Result := TGocciaTemporalDurationValue.Create(
-    GetFieldOr(AObj, 'years', 0),
-    GetFieldOr(AObj, 'months', 0),
-    GetFieldOr(AObj, 'weeks', 0),
-    GetFieldOr(AObj, 'days', 0),
-    GetFieldOr(AObj, 'hours', 0),
-    GetFieldOr(AObj, 'minutes', 0),
-    GetFieldOr(AObj, 'seconds', 0),
-    GetFieldOr(AObj, 'milliseconds', 0),
-    GetFieldOr(AObj, 'microseconds', 0),
-    GetFieldOr(AObj, 'nanoseconds', 0)
+  Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(
+    GetFieldOr(AObj, 'years', TBigInteger.Zero),
+    GetFieldOr(AObj, 'months', TBigInteger.Zero),
+    GetFieldOr(AObj, 'weeks', TBigInteger.Zero),
+    GetFieldOr(AObj, 'days', TBigInteger.Zero),
+    GetFieldOr(AObj, 'hours', TBigInteger.Zero),
+    GetFieldOr(AObj, 'minutes', TBigInteger.Zero),
+    GetFieldOr(AObj, 'seconds', TBigInteger.Zero),
+    GetFieldOr(AObj, 'milliseconds', TBigInteger.Zero),
+    GetFieldOr(AObj, 'microseconds', TBigInteger.Zero),
+    GetFieldOr(AObj, 'nanoseconds', TBigInteger.Zero)
   );
 end;
 
@@ -183,6 +196,26 @@ end;
 function BigIntFieldToNumber(const AValue: TBigInteger): TGocciaNumberLiteralValue;
 begin
   Result := TGocciaNumberLiteralValue.Create(AValue.ToDouble);
+end;
+
+function NumberToBigInteger(const AValue: Double): TBigInteger;
+var
+  DecStr: string;
+begin
+  if IsNaN(AValue) or IsInfinite(AValue) then
+    raise Exception.Create('Cannot convert non-finite number to BigInt');
+  if Frac(AValue) <> 0 then
+    raise Exception.Create('Cannot convert non-integer to BigInt');
+  Str(AValue:0:0, DecStr);
+  Result := TBigInteger.FromDecimalString(DecStr);
+end;
+
+function ValueToBigInteger(const AValue: TGocciaValue): TBigInteger;
+begin
+  if AValue is TGocciaNumberLiteralValue then
+    Result := NumberToBigInteger(TGocciaNumberLiteralValue(AValue).Value)
+  else
+    Result := NumberToBigInteger(AValue.ToNumberLiteral.Value);
 end;
 
 function BigIntUnit(const AValue: Int64): TBigInteger; inline;
@@ -671,7 +704,7 @@ var
     if (Val = nil) or (Val is TGocciaUndefinedLiteralValue) then
       Result := ADefault
     else
-      Result := TBigInteger.FromDouble(Trunc(Val.ToNumberLiteral.Value));
+      Result := ValueToBigInteger(Val);
   end;
 
 begin
@@ -850,26 +883,23 @@ begin
           until False;
         end;
 
-        // Align to increment-boundary bucket. For negative durations the
-        // fractional position extends past WholeUnits in the negative
-        // direction, so use WholeUnits - 1 as alignment base.
-        if Sign < 0 then
-          ScaledValue := WholeUnits - 1
+        // Align to increment-boundary bucket toward zero, then use the
+        // sign-aware bucket span to decide whether rounding carries.
+        if Sign > 0 then
+          ScaledValue := (WholeUnits div Increment) * Increment
         else
-          ScaledValue := WholeUnits;
-        if (ScaledValue >= 0) or (ScaledValue mod Increment = 0) then
-          ScaledValue := (ScaledValue div Increment) * Increment
-        else
-          ScaledValue := ((ScaledValue div Increment) - 1) * Increment;
+          ScaledValue := -(((-WholeUnits) div Increment) * Increment);
 
         WalkDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, ScaledValue * 12);
         WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
-        NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, (ScaledValue + Increment) * 12);
+        NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day,
+          (ScaledValue + Sign * Increment) * 12);
         NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
-        PeriodNs := (NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
-        RoundedValue := RoundWithMode((EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs, PeriodNs, Mode);
+        PeriodNs := Abs(NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
+        RoundedValue := RoundWithMode(
+          Abs((EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs), PeriodNs, Mode);
         if RoundedValue >= PeriodNs then
-          WholeUnits := ScaledValue + Increment
+          WholeUnits := ScaledValue + Sign * Increment
         else
           WholeUnits := ScaledValue;
 
@@ -900,24 +930,21 @@ begin
           until False;
         end;
 
-        // Align to increment-boundary bucket (same sign-aware logic as years)
-        if Sign < 0 then
-          ScaledValue := WholeUnits - 1
+        if Sign > 0 then
+          ScaledValue := (WholeUnits div Increment) * Increment
         else
-          ScaledValue := WholeUnits;
-        if (ScaledValue >= 0) or (ScaledValue mod Increment = 0) then
-          ScaledValue := (ScaledValue div Increment) * Increment
-        else
-          ScaledValue := ((ScaledValue div Increment) - 1) * Increment;
+          ScaledValue := -(((-WholeUnits) div Increment) * Increment);
 
         WalkDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, ScaledValue);
         WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
-        NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, ScaledValue + Increment);
+        NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day,
+          ScaledValue + Sign * Increment);
         NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
-        PeriodNs := (NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
-        RoundedValue := RoundWithMode((EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs, PeriodNs, Mode);
+        PeriodNs := Abs(NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
+        RoundedValue := RoundWithMode(
+          Abs((EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs), PeriodNs, Mode);
         if RoundedValue >= PeriodNs then
-          WholeUnits := ScaledValue + Increment
+          WholeUnits := ScaledValue + Sign * Increment
         else
           WholeUnits := ScaledValue;
 

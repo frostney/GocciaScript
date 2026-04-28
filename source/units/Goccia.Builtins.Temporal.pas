@@ -225,9 +225,9 @@ begin
   if Arg is TGocciaTemporalDurationValue then
   begin
     D := TGocciaTemporalDurationValue(Arg);
-    Result := TGocciaTemporalDurationValue.Create(
-      D.Years, D.Months, D.Weeks, D.Days, D.Hours, D.Minutes,
-      D.Seconds, D.Milliseconds, D.Microseconds, D.Nanoseconds);
+    Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(
+      D.YearsBig, D.MonthsBig, D.WeeksBig, D.DaysBig, D.HoursBig, D.MinutesBig,
+      D.SecondsBig, D.MillisecondsBig, D.MicrosecondsBig, D.NanosecondsBig);
   end
   else if Arg is TGocciaStringLiteralValue then
   begin
@@ -257,7 +257,7 @@ end;
 function TGocciaTemporalBuiltin.DurationCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D1, D2: TGocciaTemporalDurationValue;
-  TotalNs1, TotalNs2: Double;
+  TotalNs1, TotalNs2: TBigInteger;
 
   function CoerceDuration(const AArg: TGocciaValue): TGocciaTemporalDurationValue;
   var
@@ -303,21 +303,27 @@ var
     end;
   end;
 
+  function DurationExactTotalNanoseconds(const ADuration: TGocciaTemporalDurationValue): TBigInteger;
+  begin
+    Result := TimeDurationFromComponents(ADuration.HoursBig, ADuration.MinutesBig,
+      ADuration.SecondsBig, ADuration.MillisecondsBig, ADuration.MicrosecondsBig,
+      ADuration.NanosecondsBig)
+      .Add(ADuration.DaysBig.Multiply(TBigInteger.FromInt64(NANOSECONDS_PER_DAY)))
+      .Add(ADuration.WeeksBig.Multiply(TBigInteger.FromInt64(7)).Multiply(
+        TBigInteger.FromInt64(NANOSECONDS_PER_DAY)));
+  end;
+
 begin
   D1 := CoerceDuration(AArgs.GetElement(0));
   D2 := CoerceDuration(AArgs.GetElement(1));
 
   // Compare using total nanoseconds (ignoring calendar units for simplicity)
-  TotalNs1 := D1.Nanoseconds + D1.Microseconds * 1000.0 + D1.Milliseconds * 1000000.0 +
-              D1.Seconds * 1e9 + D1.Minutes * 6e10 + D1.Hours * 3.6e12 +
-              D1.Days * 8.64e13 + D1.Weeks * 6.048e14;
-  TotalNs2 := D2.Nanoseconds + D2.Microseconds * 1000.0 + D2.Milliseconds * 1000000.0 +
-              D2.Seconds * 1e9 + D2.Minutes * 6e10 + D2.Hours * 3.6e12 +
-              D2.Days * 8.64e13 + D2.Weeks * 6.048e14;
+  TotalNs1 := DurationExactTotalNanoseconds(D1);
+  TotalNs2 := DurationExactTotalNanoseconds(D2);
 
-  if TotalNs1 < TotalNs2 then
+  if TotalNs1.Compare(TotalNs2) < 0 then
     Result := TGocciaNumberLiteralValue.Create(-1)
-  else if TotalNs1 > TotalNs2 then
+  else if TotalNs1.Compare(TotalNs2) > 0 then
     Result := TGocciaNumberLiteralValue.Create(1)
   else
     Result := TGocciaNumberLiteralValue.ZeroValue;
