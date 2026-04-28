@@ -682,7 +682,7 @@ suite("group name", () => {
 |----------|-------------|
 | `suite(name, fn)` | Group benchmarks. Executes `fn` immediately to register `bench` entries. |
 | `bench(name, fn)` | Register a benchmark function. Called repeatedly during calibration and measurement. |
-| `runBenchmarks()` | Execute all registered benchmarks and return results. Injected automatically by GocciaBenchmarkRunner. |
+| `runBenchmarks()` | Execute all registered benchmarks and return results. GocciaBenchmarkRunner calls this automatically after benchmark files register suites. |
 
 **Result object** (returned by `runBenchmarks()`):
 

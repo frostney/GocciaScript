@@ -450,7 +450,7 @@ begin
       Entry := FFiles[F].Entries[E];
       if Entry.Error <> '' then
         Exit(True);
-      if (Entry.OpsPerSec = 0) or (Entry.MeanMs = 0) then
+      if (Entry.OpsPerSec <= 0) or (Entry.MeanMs <= 0) or (Entry.Iterations <= 0) then
         Exit(True);
       Inc(ValidBenchmarkCount);
     end;

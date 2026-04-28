@@ -514,8 +514,10 @@ console.log("Loader: coverage --output=json not corrupted...");
       if (proc.exitCode !== 0) throw new Error(`Bytecode async generator benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
     }
     const asyncGeneratorBcJson = JSON.parse(readFileSync(asyncGeneratorBcOutPath, "utf-8"));
-    const asyncGeneratorBench = asyncGeneratorBcJson.files[0]?.benchmarks[0];
-    if (asyncGeneratorBench?.name !== "consume") throw new Error("Bytecode async generator JSON should contain consume benchmark");
+    const asyncGeneratorBench = (asyncGeneratorBcJson.files ?? [])
+      .flatMap((file: { benchmarks?: Array<Record<string, unknown>> }) => file.benchmarks ?? [])
+      .find((bench: Record<string, unknown>) => bench.name === "consume");
+    if (!asyncGeneratorBench) throw new Error('Bytecode async generator JSON should contain benchmark named "consume"');
     if (typeof asyncGeneratorBench.opsPerSec !== "number" || asyncGeneratorBench.opsPerSec <= 0) {
       throw new Error("Bytecode async generator benchmark should report positive opsPerSec");
     }

@@ -1455,6 +1455,17 @@ begin
   end;
 end;
 
+function VMGeneratorTypeError: TGocciaValue;
+begin
+  Result := CreateErrorObject(TYPE_ERROR_NAME,
+    'Generator method called on incompatible receiver');
+end;
+
+function VMGeneratorExecutingError: TGocciaValue;
+begin
+  Result := CreateErrorObject(TYPE_ERROR_NAME, 'Generator is already executing');
+end;
+
 constructor EGocciaBytecodeYield.Create(const AValue: TGocciaRegister;
   const AYieldIndex: Integer);
 begin
@@ -1657,8 +1668,13 @@ begin
     ADone := True;
     if AKind = bgrkThrow then
       raise TGocciaThrowValue.Create(AValue);
-    Exit(AValue);
+    if AKind = bgrkReturn then
+      Exit(AValue);
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
+
+  if FState = bgsExecuting then
+    raise TGocciaThrowValue.Create(VMGeneratorExecutingError);
 
   if (FResumeIndex = 0) and (AKind = bgrkReturn) then
   begin
@@ -1742,7 +1758,7 @@ var
   Value: TGocciaValue;
 begin
   if not (AThisValue is TGocciaBytecodeGeneratorObjectValue) then
-    Exit(CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True));
+    raise TGocciaThrowValue.Create(VMGeneratorTypeError);
   Value := TGocciaBytecodeGeneratorObjectValue(AThisValue).ResumeRaw(
     bgrkNext, VMArgumentOrUndefined(AArgs), Done);
   Result := CreateIteratorResult(Value, Done);
@@ -1755,7 +1771,7 @@ var
   Value: TGocciaValue;
 begin
   if not (AThisValue is TGocciaBytecodeGeneratorObjectValue) then
-    Exit(CreateIteratorResult(VMArgumentOrUndefined(AArgs), True));
+    raise TGocciaThrowValue.Create(VMGeneratorTypeError);
   Value := TGocciaBytecodeGeneratorObjectValue(AThisValue).ResumeRaw(
     bgrkReturn, VMArgumentOrUndefined(AArgs), Done);
   Result := CreateIteratorResult(Value, Done);
@@ -1768,7 +1784,7 @@ var
   Value: TGocciaValue;
 begin
   if not (AThisValue is TGocciaBytecodeGeneratorObjectValue) then
-    raise TGocciaThrowValue.Create(VMArgumentOrUndefined(AArgs));
+    raise TGocciaThrowValue.Create(VMGeneratorTypeError);
   Value := TGocciaBytecodeGeneratorObjectValue(AThisValue).ResumeRaw(
     bgrkThrow, VMArgumentOrUndefined(AArgs), Done);
   Result := CreateIteratorResult(Value, Done);

@@ -78,6 +78,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Evaluator,
   Goccia.Values.Error,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
@@ -233,7 +234,29 @@ begin
           IteratorMethod := nil;
         if not Assigned(IteratorMethod) or (IteratorMethod is TGocciaUndefinedLiteralValue) or
            not IteratorMethod.IsCallable then
-          raise TGocciaThrowValue.Create(FPendingValue);
+        begin
+          if Assigned(FDelegateAsyncIterator) then
+            IteratorMethod := FDelegateAsyncIterator.GetProperty(PROP_RETURN)
+          else if Assigned(FDelegateIterator) then
+            IteratorMethod := FDelegateIterator.GetProperty(PROP_RETURN)
+          else
+            IteratorMethod := nil;
+          if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and
+             IteratorMethod.IsCallable then
+          begin
+            CallArgs := TGocciaArgumentsCollection.Create;
+            try
+              if Assigned(FDelegateAsyncIterator) then
+                AwaitValue(TGocciaFunctionBase(IteratorMethod).Call(
+                  CallArgs, FDelegateAsyncIterator))
+              else
+                TGocciaFunctionBase(IteratorMethod).Call(CallArgs, FDelegateIterator);
+            finally
+              CallArgs.Free;
+            end;
+          end;
+          ThrowTypeError('Delegated iterator has no throw method');
+        end;
         CallArgs := TGocciaArgumentsCollection.Create([FPendingValue]);
         try
           if Assigned(FDelegateAsyncIterator) then

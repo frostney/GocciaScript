@@ -30,7 +30,9 @@ type
     SetupFunction: TGocciaFunctionBase;
     RunFunction: TGocciaFunctionBase;
     TeardownFunction: TGocciaFunctionBase;
-    RootsRegistered: Boolean;
+    OwnsRunRoot: Boolean;
+    OwnsSetupRoot: Boolean;
+    OwnsTeardownRoot: Boolean;
     constructor Create(const AName: string; const ARunFunction: TGocciaFunctionBase;
       const ASuiteName: string; const ASetupFunction: TGocciaFunctionBase = nil;
       const ATeardownFunction: TGocciaFunctionBase = nil);
@@ -166,7 +168,9 @@ begin
   SuiteName := ASuiteName;
   SetupFunction := ASetupFunction;
   TeardownFunction := ATeardownFunction;
-  RootsRegistered := False;
+  OwnsRunRoot := False;
+  OwnsSetupRoot := False;
+  OwnsTeardownRoot := False;
 end;
 
 { TGocciaBenchmark }
@@ -205,14 +209,15 @@ begin
   for I := 0 to FRegisteredBenchmarks.Count - 1 do
   begin
     BenchCase := FRegisteredBenchmarks[I];
-    if not BenchCase.RootsRegistered then
-      Continue;
-    GC.RemoveTempRoot(BenchCase.RunFunction);
-    if Assigned(BenchCase.SetupFunction) then
+    if BenchCase.OwnsRunRoot then
+      GC.RemoveTempRoot(BenchCase.RunFunction);
+    if BenchCase.OwnsSetupRoot then
       GC.RemoveTempRoot(BenchCase.SetupFunction);
-    if Assigned(BenchCase.TeardownFunction) then
+    if BenchCase.OwnsTeardownRoot then
       GC.RemoveTempRoot(BenchCase.TeardownFunction);
-    BenchCase.RootsRegistered := False;
+    BenchCase.OwnsRunRoot := False;
+    BenchCase.OwnsSetupRoot := False;
+    BenchCase.OwnsTeardownRoot := False;
   end;
 end;
 
@@ -277,12 +282,21 @@ begin
   BenchCase := TBenchmarkCase.Create(BenchName, RunFn, FCurrentSuiteName, SetupFn, TeardownFn);
   if Assigned(TGarbageCollector.Instance) then
   begin
-    TGarbageCollector.Instance.AddTempRoot(RunFn);
-    if Assigned(SetupFn) then
+    if not TGarbageCollector.Instance.IsTempRoot(RunFn) then
+    begin
+      TGarbageCollector.Instance.AddTempRoot(RunFn);
+      BenchCase.OwnsRunRoot := True;
+    end;
+    if Assigned(SetupFn) and not TGarbageCollector.Instance.IsTempRoot(SetupFn) then
+    begin
       TGarbageCollector.Instance.AddTempRoot(SetupFn);
-    if Assigned(TeardownFn) then
+      BenchCase.OwnsSetupRoot := True;
+    end;
+    if Assigned(TeardownFn) and not TGarbageCollector.Instance.IsTempRoot(TeardownFn) then
+    begin
       TGarbageCollector.Instance.AddTempRoot(TeardownFn);
-    BenchCase.RootsRegistered := True;
+      BenchCase.OwnsTeardownRoot := True;
+    end;
   end;
 
   FRegisteredBenchmarks.Add(BenchCase);

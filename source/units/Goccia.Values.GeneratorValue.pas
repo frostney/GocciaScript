@@ -111,6 +111,12 @@ begin
   Result := CreateErrorObject(TYPE_ERROR_NAME, 'Generator is already executing');
 end;
 
+function GeneratorIncompatibleReceiverError: TGocciaValue;
+begin
+  Result := CreateErrorObject(TYPE_ERROR_NAME,
+    'Generator method called on incompatible receiver');
+end;
+
 function RejectedTypeErrorPromise(const AMessage: string): TGocciaPromiseValue;
 begin
   Result := TGocciaPromiseValue.Create;
@@ -185,7 +191,10 @@ begin
   FState := gsExecuting;
   try
     FContinuation.Resume(grkReturn, TGocciaUndefinedLiteralValue.UndefinedValue, Done);
-    FState := gsCompleted;
+    if Done then
+      FState := gsCompleted
+    else
+      FState := gsSuspendedYield;
   except
     FState := gsCompleted;
     raise;
@@ -212,7 +221,7 @@ var
   Value: TGocciaValue;
 begin
   if not (AThisValue is TGocciaGeneratorObjectValue) then
-    Exit(CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True));
+    raise TGocciaThrowValue.Create(GeneratorIncompatibleReceiverError);
   with TGocciaGeneratorObjectValue(AThisValue) do
   begin
     if FState = gsCompleted then
@@ -241,7 +250,7 @@ var
   Value: TGocciaValue;
 begin
   if not (AThisValue is TGocciaGeneratorObjectValue) then
-    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True)
+    raise TGocciaThrowValue.Create(GeneratorIncompatibleReceiverError)
   else
   begin
     with TGocciaGeneratorObjectValue(AThisValue) do
@@ -273,7 +282,7 @@ var
   Value: TGocciaValue;
 begin
   if not (AThisValue is TGocciaGeneratorObjectValue) then
-    raise TGocciaThrowValue.Create(ArgumentOrUndefined(AArgs));
+    raise TGocciaThrowValue.Create(GeneratorIncompatibleReceiverError);
   if TGocciaGeneratorObjectValue(AThisValue).FState = gsExecuting then
     raise TGocciaThrowValue.Create(GeneratorExecutingError);
   TGocciaGeneratorObjectValue(AThisValue).FState := gsExecuting;
@@ -336,8 +345,25 @@ begin
     try
       if FState = gsCompleted then
       begin
-        Done := True;
-        Value := AValue;
+        case AKind of
+          grkNext:
+            begin
+              Promise.Resolve(CreateIteratorResult(
+                TGocciaUndefinedLiteralValue.UndefinedValue, True));
+              Exit(Promise);
+            end;
+          grkThrow:
+            begin
+              Promise.Reject(AValue);
+              Exit(Promise);
+            end;
+        else
+          begin
+            UnwrappedValue := AwaitValue(AValue);
+            Promise.Resolve(CreateIteratorResult(UnwrappedValue, True));
+            Exit(Promise);
+          end;
+        end;
       end
       else
       begin
