@@ -20,6 +20,14 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.round", () => {
     expect(rounded.hours).toBe(2);
   });
 
+  test("round BigInt-backed exact-time duration", () => {
+    const i1 = Temporal.Instant.fromEpochMilliseconds(-8640000000000000);
+    const i2 = Temporal.Instant.fromEpochMilliseconds(8640000000000000);
+    const d = i1.until(i2, { largestUnit: "microseconds" });
+    const rounded = d.round({ smallestUnit: "seconds" });
+    expect(rounded.toString()).toBe("PT17280000000000S");
+  });
+
   test("round floor", () => {
     const d = new Temporal.Duration(0, 0, 0, 0, 1, 59);
     const rounded = d.round({ smallestUnit: "hour", roundingMode: "floor" });

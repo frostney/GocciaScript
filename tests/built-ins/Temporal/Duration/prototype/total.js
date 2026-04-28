@@ -13,6 +13,14 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.total", () => {
     expect(d.total("seconds")).toBe(5400);
   });
 
+  test("total() with BigInt-backed exact-time duration", () => {
+    const i1 = Temporal.Instant.fromEpochMilliseconds(-8640000000000000);
+    const i2 = Temporal.Instant.fromEpochMilliseconds(8640000000000000);
+    const d = i1.until(i2, { largestUnit: "microseconds" });
+    expect(d.total("seconds")).toBe(17280000000000);
+    expect(d.total("hours")).toBe(4800000000);
+  });
+
   test("total() throws RangeError without relativeTo for year/month durations", () => {
     const withYears = new Temporal.Duration(1);
     expect(() => withYears.total("days")).toThrow(RangeError);

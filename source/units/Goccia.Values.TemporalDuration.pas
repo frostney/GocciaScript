@@ -185,6 +185,37 @@ begin
   Result := TGocciaNumberLiteralValue.Create(AValue.ToDouble);
 end;
 
+function BigIntUnit(const AValue: Int64): TBigInteger; inline;
+begin
+  Result := TBigInteger.FromInt64(AValue);
+end;
+
+function UnitToNanosecondsBig(const AUnit: TTemporalUnit): TBigInteger;
+begin
+  Result := BigIntUnit(UnitToNanoseconds(AUnit));
+end;
+
+function DurationSubDayNanosecondsBig(const D: TGocciaTemporalDurationValue): TBigInteger;
+begin
+  Result := TimeDurationFromComponents(D.FHoursBig, D.FMinutesBig, D.FSecondsBig,
+    D.FMillisecondsBig, D.FMicrosecondsBig, D.FNanosecondsBig);
+end;
+
+function DurationTotalNanosecondsBig(const D: TGocciaTemporalDurationValue): TBigInteger;
+begin
+  Result := DurationSubDayNanosecondsBig(D)
+    .Add(D.FDaysBig.Multiply(BigIntUnit(NANOSECONDS_PER_DAY)))
+    .Add(D.FWeeksBig.Multiply(BigIntUnit(7)).Multiply(BigIntUnit(NANOSECONDS_PER_DAY)));
+end;
+
+function RoundingDivisorBig(const ASmallestUnit: TTemporalUnit; const AIncrement: Integer): TBigInteger;
+begin
+  if ASmallestUnit = tuWeek then
+    Result := BigIntUnit(NANOSECONDS_PER_DAY).Multiply(BigIntUnit(7)).Multiply(BigIntUnit(AIncrement))
+  else
+    Result := UnitToNanosecondsBig(ASmallestUnit).Multiply(BigIntUnit(AIncrement));
+end;
+
 constructor TGocciaTemporalDurationValue.Create(const AYears, AMonths, AWeeks, ADays, AHours, AMinutes, ASeconds,
   AMilliseconds, AMicroseconds, ANanoseconds: Int64);
 begin
@@ -437,16 +468,10 @@ begin
     if not SubSecondsPart.IsZero then
     begin
       Fraction := Format('%.9d', [SubSecondsPart.ToInt64]);
-      if not FNanosecondsBig.IsZero then
-      begin
-        while (Length(Fraction) > 0) and (Fraction[Length(Fraction)] = '0') do
-          Delete(Fraction, Length(Fraction), 1);
-      end
-      else if not FMicrosecondsBig.IsZero then
-        Fraction := Copy(Fraction, 1, 6)
-      else
-        Fraction := Copy(Fraction, 1, 3);
-      TimePart := TimePart + '.' + Fraction;
+      while (Length(Fraction) > 0) and (Fraction[Length(Fraction)] = '0') do
+        Delete(Fraction, Length(Fraction), 1);
+      if Length(Fraction) > 0 then
+        TimePart := TimePart + '.' + Fraction;
     end;
     TimePart := TimePart + 'S';
   end;
@@ -683,7 +708,9 @@ var
   Increment: Integer;
   HasRelativeTo: Boolean;
   RelDate: TTemporalDateRecord;
-  TotalNs, Divisor: Int64;
+  TotalNsBig, DivisorBig, TimeNsBig, CarryDaysBig: TBigInteger;
+  ResultHoursBig, ResultMinutesBig, ResultSecondsBig: TBigInteger;
+  ResultMsBig, ResultUsBig, ResultNsBig: TBigInteger;
   RemNs, TimeNs: Int64;
   ResultYears, ResultMonths: Int64;
   ResultDays, ResultHours, ResultMinutes, ResultSeconds: Int64;
@@ -694,6 +721,7 @@ var
   WholeUnits, PeriodNs, ScaledValue, RoundedValue: Int64;
   CarryDays: Int64;
   Sign: Integer;
+  CalendarYears, CalendarMonths, CalendarWeeks, CalendarDays: Int64;
 begin
   D := AsDuration(AThisValue, 'Duration.prototype.round');
   Arg := AArgs.GetElement(0);
@@ -734,15 +762,15 @@ begin
     SmallestUnit := tuNanosecond;
   if LargestUnit = tuNone then
   begin
-    if D.Years <> 0 then LargestUnit := tuYear
-    else if D.Months <> 0 then LargestUnit := tuMonth
-    else if D.Weeks <> 0 then LargestUnit := tuWeek
-    else if D.Days <> 0 then LargestUnit := tuDay
-    else if D.Hours <> 0 then LargestUnit := tuHour
-    else if D.Minutes <> 0 then LargestUnit := tuMinute
-    else if D.Seconds <> 0 then LargestUnit := tuSecond
-    else if D.Milliseconds <> 0 then LargestUnit := tuMillisecond
-    else if D.Microseconds <> 0 then LargestUnit := tuMicrosecond
+    if not D.FYearsBig.IsZero then LargestUnit := tuYear
+    else if not D.FMonthsBig.IsZero then LargestUnit := tuMonth
+    else if not D.FWeeksBig.IsZero then LargestUnit := tuWeek
+    else if not D.FDaysBig.IsZero then LargestUnit := tuDay
+    else if not D.FHoursBig.IsZero then LargestUnit := tuHour
+    else if not D.FMinutesBig.IsZero then LargestUnit := tuMinute
+    else if not D.FSecondsBig.IsZero then LargestUnit := tuSecond
+    else if not D.FMillisecondsBig.IsZero then LargestUnit := tuMillisecond
+    else if not D.FMicrosecondsBig.IsZero then LargestUnit := tuMicrosecond
     else LargestUnit := SmallestUnit;
     if Ord(LargestUnit) > Ord(SmallestUnit) then
       LargestUnit := SmallestUnit;
@@ -752,7 +780,7 @@ begin
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
 
   // Determine if calendar-relative computation is needed
-  NeedCalendar := (D.Years <> 0) or (D.Months <> 0) or
+  NeedCalendar := (not D.FYearsBig.IsZero) or (not D.FMonthsBig.IsZero) or
     (Ord(SmallestUnit) <= Ord(tuMonth)) or (Ord(LargestUnit) <= Ord(tuMonth));
 
   if NeedCalendar and not HasRelativeTo then
@@ -772,24 +800,25 @@ begin
     // separate calendar steps so day-clamping is applied after each,
     // matching TC39 Temporal semantics (e.g. 2020-02-29 + P1Y1M clamps to
     // 2021-02-28 after +1Y, then advances to 2021-03-28).
+    CalendarYears := BigIntToCheckedInt64(D.FYearsBig, 'years');
+    CalendarMonths := BigIntToCheckedInt64(D.FMonthsBig, 'months');
+    CalendarWeeks := BigIntToCheckedInt64(D.FWeeksBig, 'weeks');
+    CalendarDays := BigIntToCheckedInt64(D.FDaysBig, 'days');
     IntermDate := RelDate;
-    if D.Years <> 0 then
+    if not D.FYearsBig.IsZero then
       IntermDate := AddMonthsToDate(IntermDate.Year, IntermDate.Month, IntermDate.Day,
-        D.Years * 12);
-    if D.Months <> 0 then
+        CalendarYears * 12);
+    if not D.FMonthsBig.IsZero then
       IntermDate := AddMonthsToDate(IntermDate.Year, IntermDate.Month, IntermDate.Day,
-        D.Months);
-    TimeNs := D.Nanoseconds +
-              D.Microseconds * NANOSECONDS_PER_MICROSECOND +
-              D.Milliseconds * NANOSECONDS_PER_MILLISECOND +
-              D.Seconds * NANOSECONDS_PER_SECOND +
-              D.Minutes * NANOSECONDS_PER_MINUTE +
-              D.Hours * NANOSECONDS_PER_HOUR;
-    CarryDays := TimeNs div NANOSECONDS_PER_DAY;
-    TimeNs := TimeNs mod NANOSECONDS_PER_DAY;
+        CalendarMonths);
+    TimeNsBig := DurationSubDayNanosecondsBig(D);
+    CarryDaysBig := TimeNsBig.Divide(BigIntUnit(NANOSECONDS_PER_DAY));
+    TimeNsBig := TimeNsBig.Modulo(BigIntUnit(NANOSECONDS_PER_DAY));
+    CarryDays := BigIntToCheckedInt64(CarryDaysBig, 'carry days');
+    TimeNs := BigIntToCheckedInt64(TimeNsBig, 'sub-day nanoseconds');
 
     EndDate := AddDaysToDate(IntermDate.Year, IntermDate.Month, IntermDate.Day,
-      D.Weeks * 7 + D.Days + CarryDays);
+      CalendarWeeks * 7 + CalendarDays + CarryDays);
     StartEpoch := DateToEpochDays(RelDate.Year, RelDate.Month, RelDate.Day);
     EndEpoch := DateToEpochDays(EndDate.Year, EndDate.Month, EndDate.Day);
 
@@ -909,22 +938,23 @@ begin
     end;
 
     // --- SmallestUnit is week, day, or time: convert to nanoseconds ---
-    TotalNs := (EndEpoch - StartEpoch) * NANOSECONDS_PER_DAY + TimeNs;
+    TotalNsBig := BigIntUnit(EndEpoch - StartEpoch)
+      .Multiply(BigIntUnit(NANOSECONDS_PER_DAY))
+      .Add(BigIntUnit(TimeNs));
 
     if SmallestUnit <> tuNanosecond then
     begin
-      if SmallestUnit = tuWeek then
-        Divisor := NANOSECONDS_PER_DAY * 7 * Increment
-      else
-        Divisor := UnitToNanoseconds(SmallestUnit) * Increment;
-      TotalNs := RoundWithMode(TotalNs, Divisor, Mode);
+      DivisorBig := RoundingDivisorBig(SmallestUnit, Increment);
+      TotalNsBig := RoundTimeDurationToIncrement(TotalNsBig, DivisorBig, Mode);
     end;
 
     // --- Rebalance to year/month if needed ---
     if Ord(LargestUnit) <= Ord(tuMonth) then
     begin
-      ResultDays := TotalNs div NANOSECONDS_PER_DAY;
-      RemNs := TotalNs mod NANOSECONDS_PER_DAY;
+      ResultDays := BigIntToCheckedInt64(
+        TotalNsBig.Divide(BigIntUnit(NANOSECONDS_PER_DAY)), 'days');
+      RemNs := BigIntToCheckedInt64(
+        TotalNsBig.Modulo(BigIntUnit(NANOSECONDS_PER_DAY)), 'sub-day nanoseconds');
 
       EndEpoch := StartEpoch + ResultDays;
       WholeUnits := 0;
@@ -986,74 +1016,27 @@ begin
   end
   else
   begin
-    // --- Non-calendar path (existing behavior) ---
-    TotalNs := D.Nanoseconds +
-               D.Microseconds * NANOSECONDS_PER_MICROSECOND +
-               D.Milliseconds * NANOSECONDS_PER_MILLISECOND +
-               D.Seconds * NANOSECONDS_PER_SECOND +
-               D.Minutes * NANOSECONDS_PER_MINUTE +
-               D.Hours * NANOSECONDS_PER_HOUR +
-               D.Days * NANOSECONDS_PER_DAY +
-               D.Weeks * 7 * NANOSECONDS_PER_DAY;
+    TotalNsBig := DurationTotalNanosecondsBig(D);
 
     if SmallestUnit <> tuNanosecond then
     begin
-      if SmallestUnit = tuWeek then
-        Divisor := NANOSECONDS_PER_DAY * 7 * Increment
-      else
-        Divisor := UnitToNanoseconds(SmallestUnit) * Increment;
-      TotalNs := RoundWithMode(TotalNs, Divisor, Mode);
+      DivisorBig := RoundingDivisorBig(SmallestUnit, Increment);
+      TotalNsBig := RoundTimeDurationToIncrement(TotalNsBig, DivisorBig, Mode);
     end;
   end;
 
-  // Break down from largestUnit (non-calendar output)
-  ResultDays := 0;
-  ResultHours := 0;
-  ResultMinutes := 0;
-  ResultSeconds := 0;
-  ResultMs := 0;
-  ResultUs := 0;
-  ResultNs := 0;
-  RemNs := TotalNs;
-
-  if Ord(LargestUnit) <= Ord(tuDay) then
-  begin
-    ResultDays := RemNs div NANOSECONDS_PER_DAY;
-    RemNs := RemNs mod NANOSECONDS_PER_DAY;
-  end;
-  if Ord(LargestUnit) <= Ord(tuHour) then
-  begin
-    ResultHours := RemNs div NANOSECONDS_PER_HOUR;
-    RemNs := RemNs mod NANOSECONDS_PER_HOUR;
-  end;
-  if Ord(LargestUnit) <= Ord(tuMinute) then
-  begin
-    ResultMinutes := RemNs div NANOSECONDS_PER_MINUTE;
-    RemNs := RemNs mod NANOSECONDS_PER_MINUTE;
-  end;
-  if Ord(LargestUnit) <= Ord(tuSecond) then
-  begin
-    ResultSeconds := RemNs div NANOSECONDS_PER_SECOND;
-    RemNs := RemNs mod NANOSECONDS_PER_SECOND;
-  end;
-  if Ord(LargestUnit) <= Ord(tuMillisecond) then
-  begin
-    ResultMs := RemNs div NANOSECONDS_PER_MILLISECOND;
-    RemNs := RemNs mod NANOSECONDS_PER_MILLISECOND;
-  end;
-  if Ord(LargestUnit) <= Ord(tuMicrosecond) then
-  begin
-    ResultUs := RemNs div NANOSECONDS_PER_MICROSECOND;
-    RemNs := RemNs mod NANOSECONDS_PER_MICROSECOND;
-  end;
-  ResultNs := RemNs;
+  BalanceTimeDurationToFields(TotalNsBig, LargestUnit, ResultHoursBig,
+    ResultMinutesBig, ResultSecondsBig, ResultMsBig, ResultUsBig, ResultNsBig,
+    ResultDays);
 
   if Ord(LargestUnit) <= Ord(tuWeek) then
-    Result := TGocciaTemporalDurationValue.Create(0, 0, ResultDays div 7, ResultDays mod 7,
-      ResultHours, ResultMinutes, ResultSeconds, ResultMs, ResultUs, ResultNs)
+    Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(TBigInteger.Zero, TBigInteger.Zero,
+      BigIntUnit(ResultDays div 7), BigIntUnit(ResultDays mod 7),
+      ResultHoursBig, ResultMinutesBig, ResultSecondsBig, ResultMsBig, ResultUsBig, ResultNsBig)
   else
-    Result := TGocciaTemporalDurationValue.Create(0, 0, 0, ResultDays,
-      ResultHours, ResultMinutes, ResultSeconds, ResultMs, ResultUs, ResultNs);
+    Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(TBigInteger.Zero, TBigInteger.Zero,
+      TBigInteger.Zero, BigIntUnit(ResultDays),
+      ResultHoursBig, ResultMinutesBig, ResultSecondsBig, ResultMsBig, ResultUsBig, ResultNsBig);
 end;
 
 function ZonedDateTimeToDateRecord(const AZdt: TGocciaTemporalZonedDateTimeValue): TTemporalDateRecord;
@@ -1178,22 +1161,6 @@ begin
             DateToEpochDays(ADate.Year, ADate.Month, ADate.Day);
 end;
 
-function SubDayNanoseconds(const D: TGocciaTemporalDurationValue): Double;
-var
-  Ns, V: Double;
-begin
-  // Accumulate via implicit Int64->Double assignment to avoid both FPC 3.2.2
-  // bugs: Bug A (Double(Int64) bit reinterpretation) and Bug B (Int64 * 1.0
-  // wrong results near +/-2^31 on AArch64). See docs/contributing/tooling.md.
-  Ns := D.Nanoseconds;
-  V := D.Microseconds; Ns := Ns + V * NANOSECONDS_PER_MICROSECOND;
-  V := D.Milliseconds; Ns := Ns + V * NANOSECONDS_PER_MILLISECOND;
-  V := D.Seconds;      Ns := Ns + V * NANOSECONDS_PER_SECOND;
-  V := D.Minutes;      Ns := Ns + V * NANOSECONDS_PER_MINUTE;
-  V := D.Hours;        Ns := Ns + V * NANOSECONDS_PER_HOUR;
-  Result := Ns;
-end;
-
 // Express the duration as a fractional month count relative to a reference date.
 // Walks forward from the reference date by the duration's calendar components,
 // then measures the result in calendar months plus a fractional remainder.
@@ -1204,17 +1171,26 @@ function ComputeTotalInUnits(const D: TGocciaTemporalDurationValue;
 var
   EndRec, CheckRec, SpanRec: TTemporalDateRecord;
   WholeUnits, CarryDays: Int64;
+  CalendarYears, CalendarMonths, CalendarWeeks, CalendarDays: Int64;
   TotalMonthsDiff: Int64;
   CheckEpoch, EndEpoch, SpanEpoch: Int64;
   RemainingDays, DaysInSpan: Int64;
-  TimeNs, RemainderNs, FracDays: Double;
+  RemainderNs, FracDays: Double;
+  TimeNsBig, CarryDaysBig, RemainderNsBig: TBigInteger;
 begin
   // Fold sub-day time overflow into whole days so the calendar walk is accurate
-  TimeNs := SubDayNanoseconds(D);
-  CarryDays := Trunc(TimeNs / NANOSECONDS_PER_DAY);
-  RemainderNs := TimeNs - CarryDays * NANOSECONDS_PER_DAY;
+  TimeNsBig := DurationSubDayNanosecondsBig(D);
+  CarryDaysBig := TimeNsBig.Divide(BigIntUnit(NANOSECONDS_PER_DAY));
+  RemainderNsBig := TimeNsBig.Modulo(BigIntUnit(NANOSECONDS_PER_DAY));
+  CarryDays := BigIntToCheckedInt64(CarryDaysBig, 'carry days');
+  RemainderNs := RemainderNsBig.ToDouble;
 
-  EndRec := DurationEndDate(ARelDate, D.Years, D.Months, D.Weeks, D.Days + CarryDays);
+  CalendarYears := BigIntToCheckedInt64(D.FYearsBig, 'years');
+  CalendarMonths := BigIntToCheckedInt64(D.FMonthsBig, 'months');
+  CalendarWeeks := BigIntToCheckedInt64(D.FWeeksBig, 'weeks');
+  CalendarDays := BigIntToCheckedInt64(D.FDaysBig, 'days');
+  EndRec := DurationEndDate(ARelDate, CalendarYears, CalendarMonths,
+    CalendarWeeks, CalendarDays + CarryDays);
   EndEpoch := DateToEpochDays(EndRec.Year, EndRec.Month, EndRec.Day);
 
   // Estimate whole units from the month difference
@@ -1288,7 +1264,7 @@ var
   HasRelativeTo: Boolean;
   RelDate: TTemporalDateRecord;
   ResolvedDays: Int64;
-  TotalNs, V: Double;
+  TotalNsBig: TBigInteger;
 begin
   D := AsDuration(AThisValue, 'Duration.prototype.total');
   Arg := AArgs.GetElement(0);
@@ -1336,30 +1312,32 @@ begin
   end;
 
   // Calendar source components (years/months) require relativeTo
-  if (D.Years <> 0) or (D.Months <> 0) then
+  if (not D.FYearsBig.IsZero) or (not D.FMonthsBig.IsZero) then
   begin
     if not HasRelativeTo then
       ThrowRangeError(SErrorDurationTotalRequiresRelativeTo, SSuggestTemporalRelativeTo);
 
     RelDate := ParseRelativeTo(RelToArg, 'Duration.prototype.total');
-    ResolvedDays := ResolveRelativeDays(RelDate, D.Years, D.Months, D.Weeks, D.Days);
+    ResolvedDays := ResolveRelativeDays(RelDate,
+      BigIntToCheckedInt64(D.FYearsBig, 'years'),
+      BigIntToCheckedInt64(D.FMonthsBig, 'months'),
+      BigIntToCheckedInt64(D.FWeeksBig, 'weeks'),
+      BigIntToCheckedInt64(D.FDaysBig, 'days'));
 
-    V := ResolvedDays;
-    TotalNs := SubDayNanoseconds(D) + V * NANOSECONDS_PER_DAY;
+    TotalNsBig := DurationSubDayNanosecondsBig(D)
+      .Add(BigIntUnit(ResolvedDays).Multiply(BigIntUnit(NANOSECONDS_PER_DAY)));
   end
   else
-  begin
-    TotalNs := SubDayNanoseconds(D);
-    V := D.Days;  TotalNs := TotalNs + V * NANOSECONDS_PER_DAY;
-    V := D.Weeks; TotalNs := TotalNs + V * 7 * NANOSECONDS_PER_DAY;
-  end;
+    TotalNsBig := DurationTotalNanosecondsBig(D);
 
   if TargetUnit = tuNanosecond then
-    Result := TGocciaNumberLiteralValue.Create(TotalNs)
+    Result := TGocciaNumberLiteralValue.Create(TotalNsBig.ToDouble)
   else if TargetUnit = tuWeek then
-    Result := TGocciaNumberLiteralValue.Create(TotalNs / (7 * NANOSECONDS_PER_DAY))
+    Result := TGocciaNumberLiteralValue.Create(
+      TotalNsBig.ToDouble / (7 * NANOSECONDS_PER_DAY))
   else
-    Result := TGocciaNumberLiteralValue.Create(TotalNs / UnitToNanoseconds(TargetUnit));
+    Result := TGocciaNumberLiteralValue.Create(
+      TotalNsBig.ToDouble / UnitToNanoseconds(TargetUnit));
 end;
 
 function TGocciaTemporalDurationValue.DurationToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
