@@ -220,6 +220,28 @@ console.log("Loader: JSON source-load failure stays per-file...");
   }
 }
 
+console.log("Loader: parallel human-readable output preserves console output...");
+{
+  const tmp = makeTmp();
+  try {
+    const first = join(tmp, "parallel-first.js");
+    const second = join(tmp, "parallel-second.js");
+    writeFileSync(first, "console.log('parallel first out'); 1;\n");
+    writeFileSync(second, "console.log('parallel second out'); 2;\n");
+
+    const proc = Bun.spawnSync([LOADER, "--jobs=2", first, second], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`Loader parallel output exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const stdout = proc.stdout.toString();
+    if (!stdout.includes("parallel first out")) throw new Error(`Loader parallel stdout should include first file output, got ${stdout}`);
+    if (!stdout.includes("parallel second out")) throw new Error(`Loader parallel stdout should include second file output, got ${stdout}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 // -- --global / --globals -------------------------------------------------------
 
 console.log("Loader: --global flag...");

@@ -373,16 +373,11 @@ begin
   if not Assigned(AConsole) then
     Exit;
 
-  if IsJsonOutput and not FSilent.Present and Assigned(ACapture) then
-  begin
-    AConsole.Enabled := True;
+  AConsole.Enabled := not FSilent.Present;
+  if IsJsonOutput and Assigned(ACapture) then
     AConsole.OutputCallback := ACapture.CaptureOutput
-  end
   else
-  begin
-    AConsole.Enabled := (not FSilent.Present) and (not GIsWorkerThread);
     AConsole.OutputCallback := nil;
-  end;
   AConsole.OutputLines := nil;
 end;
 
