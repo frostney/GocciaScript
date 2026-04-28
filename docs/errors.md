@@ -293,16 +293,67 @@ When running with `--output=json`, GocciaScript wraps every execution result in 
 ```json
 {
   "ok": true,
-  "value": 42,
-  "output": "hello\n",
+  "build": {
+    "version": "0.1.0-dev",
+    "date": "2026-04-27",
+    "commit": "abc1234",
+    "os": "darwin",
+    "arch": "aarch64"
+  },
+  "stdout": "hello\n",
+  "stderr": "",
+  "output": ["hello"],
   "error": null,
   "timing": {
-    "lex_ms": 0.5,
-    "parse_ms": 1.2,
-    "compile_ms": 0,
-    "exec_ms": 3.1,
-    "total_ms": 4.8
-  }
+    "lex_ns": 500000,
+    "parse_ns": 1200000,
+    "compile_ns": 0,
+    "exec_ns": 3100000,
+    "total_ns": 4800000
+  },
+  "memory": {
+    "gc": {
+      "liveBytes": 2048,
+      "startLiveBytes": 0,
+      "endLiveBytes": 2048,
+      "peakLiveBytes": 4096,
+      "deltaLiveBytes": 2048,
+      "allocatedDuringRunBytes": 4096,
+      "maxBytes": 536870912,
+      "startObjectCount": 0,
+      "endObjectCount": 24,
+      "collections": 0,
+      "collectedObjects": 0
+    },
+    "heap": {
+      "startAllocatedBytes": 16384,
+      "endAllocatedBytes": 32768,
+      "deltaAllocatedBytes": 16384,
+      "startFreeBytes": 8192,
+      "endFreeBytes": 4096,
+      "deltaFreeBytes": -4096
+    }
+  },
+  "workers": { "used": 1, "available": 1, "parallel": false },
+  "files": [
+    {
+      "fileName": "script.js",
+      "ok": true,
+      "stdout": "hello\n",
+      "stderr": "",
+      "output": ["hello"],
+      "error": null,
+      "result": 42,
+      "timing": {
+        "lex_ns": 500000,
+        "parse_ns": 1200000,
+        "compile_ns": 0,
+        "exec_ns": 3100000,
+        "total_ns": 4800000
+      },
+      "memory": { "gc": { "liveBytes": 2048 }, "heap": { "endAllocatedBytes": 32768 } }
+    }
+  ]
 }
 ```
 
@@ -311,8 +362,16 @@ When running with `--output=json`, GocciaScript wraps every execution result in 
 ```json
 {
   "ok": false,
-  "value": null,
-  "output": "",
+  "build": {
+    "version": "0.1.0-dev",
+    "date": "2026-04-27",
+    "commit": "abc1234",
+    "os": "darwin",
+    "arch": "aarch64"
+  },
+  "stdout": "",
+  "stderr": "",
+  "output": [],
   "error": {
     "type": "TypeError",
     "message": "Cannot read properties of null (reading 'x')",
@@ -321,27 +380,64 @@ When running with `--output=json`, GocciaScript wraps every execution result in 
     "fileName": "script.js"
   },
   "timing": {
-    "lex_ms": 0.5,
-    "parse_ms": 1.2,
-    "compile_ms": 0,
-    "exec_ms": 0.1,
-    "total_ms": 1.8
-  }
+    "lex_ns": 500000,
+    "parse_ns": 1200000,
+    "compile_ns": 0,
+    "exec_ns": 100000,
+    "total_ns": 1800000
+  },
+  "memory": { "gc": { "liveBytes": 2048 }, "heap": { "endAllocatedBytes": 32768 } },
+  "workers": { "used": 1, "available": 1, "parallel": false },
+  "files": [
+    {
+      "fileName": "script.js",
+      "ok": false,
+      "stdout": "",
+      "stderr": "",
+      "output": [],
+      "error": {
+        "type": "TypeError",
+        "message": "Cannot read properties of null (reading 'x')",
+        "line": 5,
+        "column": 10,
+        "fileName": "script.js"
+      },
+      "result": null,
+      "timing": {
+        "lex_ns": 500000,
+        "parse_ns": 1200000,
+        "compile_ns": 0,
+        "exec_ns": 100000,
+        "total_ns": 1800000
+      },
+      "memory": { "gc": { "liveBytes": 2048 }, "heap": { "endAllocatedBytes": 32768 } }
+    }
+  ]
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `ok` | `boolean` | `true` for success, `false` for error |
-| `value` | any | The script's completion value (success) or `null` (error) |
-| `output` | `string` | Captured `console.log` / `console.error` output |
-| `error` | `object \| null` | Error details (see below) or `null` on success |
+| `build` | `object` | Build identity, including `version`, `date`, `commit`, `os`, and `arch` |
+| `stdout` | `string` | Unformatted stdout-oriented console output; present even when empty |
+| `stderr` | `string` | Unformatted stderr-oriented console output; present even when empty |
+| `output` | `string[]` | Formatted console output split into lines |
+| `error` | `object \| null` | First failed file's error details, or `null` when the run succeeds |
 | `error.type` | `string` | Error type name (`"TypeError"`, `"SyntaxError"`, `"TimeoutError"`, etc.) |
 | `error.message` | `string` | Error message text |
 | `error.line` | `number \| null` | Source line number (1-based), or `null` if unavailable |
 | `error.column` | `number \| null` | Source column number (1-based), or `null` if unavailable |
 | `error.fileName` | `string \| null` | Source file path, or `null` if unavailable |
-| `timing` | `object` | Phase-level timing breakdown in milliseconds |
+| `timing` | `object` | Cumulative phase-level timings in nanoseconds (`*_ns`) |
+| `memory` | `object \| null` | GC and application heap measurements for the run |
+| `memory.gc.liveBytes` | `number` | GC-managed bytes live at the measurement endpoint. This is the report equivalent of `Goccia.gc.bytesAllocated` |
+| `memory.gc.allocatedDuringRunBytes` | `number` | Total GC-managed bytes allocated during the measured run, including allocations later collected |
+| `memory.gc.peakLiveBytes` | `number` | Highest live GC-managed byte count observed during the measurement |
+| `workers` | `object` | Worker logistics: used worker count, available worker count, and whether the run was parallel |
+| `files` | `object[]` | Per-input results. Single-file runs use the same structure with one element |
+| `files[].fileName` | `string` | Input file path or `<stdin>` |
+| `files[].result` | any | The script completion value for that input. Serializes as `null` for both errors and JavaScript `undefined`; use `files[].ok` and `files[].error` to distinguish those cases. |
 
 ### TimeoutError in JSON
 
@@ -350,8 +446,10 @@ When execution exceeds the `--timeout` limit, the JSON envelope reports a `Timeo
 ```json
 {
   "ok": false,
-  "value": null,
-  "output": "",
+  "build": { "version": "0.1.0-dev", "date": "2026-04-27", "commit": "abc1234", "os": "darwin", "arch": "aarch64" },
+  "stdout": "",
+  "stderr": "",
+  "output": [],
   "error": {
     "type": "TimeoutError",
     "message": "Execution timed out after 100ms",
@@ -359,7 +457,50 @@ When execution exceeds the `--timeout` limit, the JSON envelope reports a `Timeo
     "column": null,
     "fileName": null
   },
-  "timing": { "lex_ms": 0.1, "parse_ms": 0.2, "compile_ms": 0, "exec_ms": 100, "total_ms": 100.3 }
+  "timing": { "lex_ns": 100000, "parse_ns": 200000, "compile_ns": 0, "exec_ns": 100000000, "total_ns": 100300000 },
+  "memory": {
+    "gc": {
+      "liveBytes": 8192,
+      "startLiveBytes": 0,
+      "endLiveBytes": 8192,
+      "peakLiveBytes": 16384,
+      "deltaLiveBytes": 8192,
+      "allocatedDuringRunBytes": 16384,
+      "maxBytes": 536870912,
+      "startObjectCount": 0,
+      "endObjectCount": 80,
+      "collections": 0,
+      "collectedObjects": 0
+    },
+    "heap": {
+      "startAllocatedBytes": 16384,
+      "endAllocatedBytes": 32768,
+      "deltaAllocatedBytes": 16384,
+      "startFreeBytes": 8192,
+      "endFreeBytes": 4096,
+      "deltaFreeBytes": -4096
+    }
+  },
+  "workers": { "used": 1, "available": 1, "parallel": false },
+  "files": [
+    {
+      "fileName": "<stdin>",
+      "ok": false,
+      "stdout": "",
+      "stderr": "",
+      "output": [],
+      "error": {
+        "type": "TimeoutError",
+        "message": "Execution timed out after 100ms",
+        "line": null,
+        "column": null,
+        "fileName": null
+      },
+      "result": null,
+      "timing": { "lex_ns": 100000, "parse_ns": 200000, "compile_ns": 0, "exec_ns": 100000000, "total_ns": 100300000 },
+      "memory": { "gc": { "liveBytes": 8192 }, "heap": { "endAllocatedBytes": 32768 } }
+    }
+  ]
 }
 ```
 

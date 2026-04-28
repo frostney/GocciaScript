@@ -34,6 +34,19 @@ describe.runIf(hasJSONL)("JSONL.parse", () => {
     expect(records[1].b).toBe(2);
   });
 
+  test("decodes UTF-8 text from Uint8Array input", () => {
+    const bytes = new Uint8Array([
+      0x7b, 0x22, 0x6e, 0x61, 0x6d, 0x65, 0x22, 0x3a, 0x22, 0x4a, 0x6f,
+      0x73, 0xc3, 0xa9, 0x22, 0x2c, 0x22, 0x63, 0x69, 0x74, 0x79, 0x22,
+      0x3a, 0x22, 0x5a, 0xc3, 0xbc, 0x72, 0x69, 0x63, 0x68, 0x22, 0x7d,
+    ]);
+    const records = JSONL.parse(bytes);
+
+    expect(records.length).toBe(1);
+    expect(records[0].name).toBe("Jos\u00e9");
+    expect(records[0].city).toBe("Z\u00fcrich");
+  });
+
   test("throws a SyntaxError with the JSONL source line number", () => {
     let error = null;
 

@@ -2,6 +2,10 @@
 
 *JSON, JSON5, YAML, JSONL, CSV, TSV, and TOML API reference.*
 
+## File-backed data inputs
+
+Structured data imports (`.json`, `.json5`, `.jsonc`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, `.tsv`), text asset imports (`.txt`, `.md`), import maps, source maps, and CLI configuration files are loaded as raw bytes and tagged as UTF-8 before parsing. Parser-facing text stays on the shared UTF-8 text path so non-ASCII keys and values are preserved consistently across supported formats.
+
 ## JSON (`Goccia.Builtins.JSON.pas`)
 
 Implements the [ECMAScript JSON object](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON) including source text access and Raw JSON.
@@ -104,7 +108,7 @@ TSV uses IANA `text/tab-separated-values` semantics, which differ fundamentally 
 |--------|-------------|
 | `TOML.parse(text)` | Parse TOML 1.1.0 text into Goccia values |
 
-`TOML.parse` delegates to the standalone `TGocciaTOMLParser` utility in `Goccia.TOML`, mirroring the JSON and YAML split between parser utility and runtime surface. The current TOML surface supports strings (basic, literal, and multiline variants), integers, floats, booleans, arrays, inline tables, regular tables, arrays of tables, dotted keys, and TOML 1.1.0 date/time values. TOML multiline strings normalize recognized source newlines to LF (`\n`) regardless of the host platform, so the parsed value is stable across Linux, macOS, and Windows. File-backed TOML inputs are treated as UTF-8 text on every platform, and the raw file text stays `UTF8String` until the parser consumes it. That type choice is intentional: in this FreePascal configuration plain `string` is still `AnsiString`, while `UTF8String` is the explicit UTF-8-tagged ansistring we use to preserve non-ASCII keys and values across Windows and non-Windows targets.
+`TOML.parse` delegates to the standalone `TGocciaTOMLParser` utility in `Goccia.TOML`, mirroring the JSON and YAML split between parser utility and runtime surface. The current TOML surface supports strings (basic, literal, and multiline variants), integers, floats, booleans, arrays, inline tables, regular tables, arrays of tables, dotted keys, and TOML 1.1.0 date/time values. TOML multiline strings normalize recognized source newlines to LF (`\n`) regardless of the host platform, so the parsed value is stable across Linux, macOS, and Windows. File-backed data inputs are treated as UTF-8 text on every platform, and raw file text stays `UTF8String` until a parser consumes it or is explicitly retagged through the shared text helpers. That type choice is intentional: in this FreePascal configuration plain `string` is still `AnsiString`, while `UTF8String` is the explicit UTF-8-tagged ansistring we use to preserve non-ASCII keys and values across Windows and non-Windows targets.
 
 TOML date/time values currently map to validated string scalars rather than Temporal values. This keeps the runtime and module-import behavior stable for v1 while leaving room for future Temporal-aware interop.
 

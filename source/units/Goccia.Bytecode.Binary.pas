@@ -52,6 +52,8 @@ implementation
 uses
   SysUtils,
 
+  TextSemantics,
+
   Goccia.Bytecode,
   Goccia.Bytecode.Debug;
 
@@ -133,6 +135,8 @@ begin
   WriteUInt8(AProto.FormalParameterCount);
   WriteUInt8(AProto.UpvalueCount);
   WriteBoolean(AProto.IsArrow);
+  WriteBoolean(AProto.IsGenerator);
+  WriteBoolean(AProto.IsAsync);
 
   WriteUInt32(UInt32(AProto.CodeCount));
   for I := 0 to AProto.CodeCount - 1 do
@@ -307,7 +311,7 @@ begin
     Exit('');
   SetLength(UTF8Str, Len);
   FStream.ReadBuffer(UTF8Str[1], Len);
-  Result := string(UTF8Str);
+  Result := RetagUTF8Text(RawByteString(UTF8Str));
 end;
 
 function TGocciaBytecodeReader.ReadBoolean: Boolean;
@@ -343,6 +347,8 @@ begin
   Result.FormalParameterCount := ReadUInt8;
   UpvalueCount := ReadUInt8;
   Result.IsArrow := ReadBoolean;
+  Result.IsGenerator := ReadBoolean;
+  Result.IsAsync := ReadBoolean;
 
   CodeCount := ReadUInt32;
   for I := 0 to CodeCount - 1 do

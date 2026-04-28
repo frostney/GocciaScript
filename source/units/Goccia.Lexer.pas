@@ -88,11 +88,12 @@ type
 implementation
 
 uses
+  TextSemantics,
+
   Goccia.Error,
   Goccia.Error.Suggestions,
   Goccia.Keywords.Contextual,
-  Goccia.Keywords.Reserved,
-  Goccia.TextFiles;
+  Goccia.Keywords.Reserved;
 
 const
   // ES2026 §12.3 Line Terminators — UTF-8 byte components for LS (U+2028) and PS (U+2029)

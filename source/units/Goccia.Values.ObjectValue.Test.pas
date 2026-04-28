@@ -3,8 +3,6 @@ program Goccia.Values.ObjectValue.Test;
 {$I Goccia.inc}
 
 uses
-  StrUtils,
-
   TestingPascalLibrary,
 
   Goccia.TestSetup,
@@ -27,6 +25,10 @@ type
     procedure TestPrototypeChain;
   end;
 
+function ContainsFragment(const AText, AFragment: string): Boolean;
+begin
+  Result := Pos(AFragment, AText) > 0;
+end;
 
 function TTestObjectValue.SimpleObject: TGocciaObjectValue;
 var
@@ -63,13 +65,13 @@ begin
   ObjectValue := SimpleObject;
   DebugString := ObjectValue.ToDebugString;
 
-  Expect<Boolean>(ContainsText(DebugString, 'name: John')).ToBe(True);
-  Expect<Boolean>(ContainsText(DebugString, 'age: 30')).ToBe(True);
-  Expect<Boolean>(ContainsText(DebugString, 'isStudent: true')).ToBe(True);
-  Expect<Boolean>(ContainsText(DebugString, 'address: 123 Main St')).ToBe(True);
-  Expect<Boolean>(ContainsText(DebugString, 'city: Anytown')).ToBe(True);
-  Expect<Boolean>(ContainsText(DebugString, 'state: CA')).ToBe(True);
-  Expect<Boolean>(ContainsText(DebugString, 'zip: 12345')).ToBe(True);
+  Expect<Boolean>(ContainsFragment(DebugString, 'name: John')).ToBe(True);
+  Expect<Boolean>(ContainsFragment(DebugString, 'age: 30')).ToBe(True);
+  Expect<Boolean>(ContainsFragment(DebugString, 'isStudent: true')).ToBe(True);
+  Expect<Boolean>(ContainsFragment(DebugString, 'address: 123 Main St')).ToBe(True);
+  Expect<Boolean>(ContainsFragment(DebugString, 'city: Anytown')).ToBe(True);
+  Expect<Boolean>(ContainsFragment(DebugString, 'state: CA')).ToBe(True);
+  Expect<Boolean>(ContainsFragment(DebugString, 'zip: 12345')).ToBe(True);
   Expect<string>(ObjectValue.ToStringLiteral.Value).ToBe('[object Object]');
   Expect<Boolean>(ObjectValue.ToBooleanLiteral.Value).ToBe(True);
   Expect<Boolean>(ObjectValue.ToNumberLiteral.IsNaN).ToBe(True);

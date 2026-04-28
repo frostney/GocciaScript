@@ -1,4 +1,4 @@
-<!-- doc-length-limit: 850 -->
+<!-- doc-length-limit: 900 -->
 # Language
 
 *GocciaScript's ECMAScript subset: what we implement, TC39 proposals, and what we exclude.*
@@ -288,6 +288,31 @@ Standard escape sequences in string literals and template literals:
 ### Supported Iteration
 
 GocciaScript supports iteration via `for...of` and `for await...of`, which work with the iterator protocol.
+
+#### Generators
+
+Generator methods are supported as normal method shorthand:
+
+```javascript
+const source = {
+  *values() {
+    yield 1;
+    yield* [2, 3];
+  },
+};
+```
+
+Class generator methods use the same syntax:
+
+```javascript
+class Source {
+  *values() {
+    yield 1;
+  }
+}
+```
+
+The `function*` and `async function*` forms are compatibility syntax and require `--compat-function`, the same flag used for the `function` keyword. Async generator methods (`async *values() { ... }`) are supported by default and return async iterators whose `next()`, `return()`, and `throw()` methods return Promises. Async generators use GocciaScript's existing synchronous async/await drain model.
 
 #### `for...of`
 
@@ -651,7 +676,7 @@ When enabled (CLI: `--compat-function`, engine API: `Engine.FunctionEnabled := T
 - **Function declarations** (`function name(params) { body }`) are desugared to var-scoped bindings backed by `TGocciaMethodExpression`, which produces call-site `this` binding (not lexical). Declarations are hoisted: both the name and the function value are available before the declaration is reached, matching ES2026 §15.2.6 semantics. Uses the same var binding infrastructure (`DefineVariableBinding`) as `--compat-var`.
 - **Function expressions** (`const f = function(params) { body }`) produce the same `TGocciaMethodExpression` node. Named function expressions (`const f = function g(params) { body }`) create a read-only self-binding of the name (`g`) visible only inside the function body for recursion, matching ES2026 §15.2.4 semantics.
 - **Async functions** (`async function name(params) { body }`) are supported in both declaration and expression forms.
-- **Generator functions** (`function*`) remain unsupported; they produce a warning and are skipped.
+- **Generator functions** (`function*`, `async function*`) are supported when this flag is enabled. Generator method shorthand (`*method()`, `async *method()`) does not require the flag.
 
 ### Loose Equality (`==` and `!=`)
 
@@ -774,7 +799,7 @@ Labels exist primarily for `break`/`continue` targets in nested loops. Since Goc
 
 ### Generators and Iterators
 
-**Partially implemented.** Iterator protocol and Iterator Helpers are fully implemented. Generator functions (`function*`) are not supported.
+Generator method shorthand (`*method()` and `async *method()`) is supported by default. Generator function syntax (`function*` and `async function*`) is supported only when `--compat-function` is enabled. Iterator protocol and Iterator Helpers are also implemented.
 
 ### Deferred Built-ins
 

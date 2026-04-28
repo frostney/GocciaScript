@@ -32,14 +32,23 @@ type
     class function UnescapeField(const AField: string): string; static;
   public
     function Parse(const AText: string; const AHeaders: Boolean = True;
-      const ASkipEmptyLines: Boolean = False): TGocciaArrayValue;
+      const ASkipEmptyLines: Boolean = False): TGocciaArrayValue; overload;
+    function Parse(const AText: UTF8String; const AHeaders: Boolean = True;
+      const ASkipEmptyLines: Boolean = False): TGocciaArrayValue; overload;
     function ParseChunk(const AText: string; const AHeaders: Boolean;
       const ASkipEmptyLines: Boolean; const AStart: Integer = 0;
-      const AEnd: Integer = -1): TGocciaTSVChunkParseResult;
+      const AEnd: Integer = -1): TGocciaTSVChunkParseResult; overload;
+    function ParseChunk(const AText: UTF8String; const AHeaders: Boolean;
+      const ASkipEmptyLines: Boolean; const AStart: Integer = 0;
+      const AEnd: Integer = -1): TGocciaTSVChunkParseResult; overload;
     function ParseWithFieldInfo(const AText: string;
       const AHeaders: Boolean = True;
       const ASkipEmptyLines: Boolean = False):
-      TArray<TArray<TGocciaTSVFieldInfo>>;
+      TArray<TArray<TGocciaTSVFieldInfo>>; overload;
+    function ParseWithFieldInfo(const AText: UTF8String;
+      const AHeaders: Boolean = True;
+      const ASkipEmptyLines: Boolean = False):
+      TArray<TArray<TGocciaTSVFieldInfo>>; overload;
   end;
 
   TGocciaTSVStringifier = class
@@ -54,7 +63,8 @@ implementation
 uses
   Classes,
 
-  BOM;
+  BOM,
+  TextSemantics;
 
 class function TGocciaTSVParser.ClampOffset(const AValue,
   ALimit: Integer): Integer;
@@ -241,6 +251,14 @@ begin
   end;
 end;
 
+function TGocciaTSVParser.Parse(const AText: UTF8String;
+  const AHeaders: Boolean;
+  const ASkipEmptyLines: Boolean): TGocciaArrayValue;
+begin
+  Result := Parse(RetagUTF8Text(RawByteString(AText)), AHeaders,
+    ASkipEmptyLines);
+end;
+
 function TGocciaTSVParser.ParseWithFieldInfo(const AText: string;
   const AHeaders: Boolean;
   const ASkipEmptyLines: Boolean): TArray<TArray<TGocciaTSVFieldInfo>>;
@@ -284,6 +302,14 @@ begin
     Inc(Count);
   end;
   SetLength(Result, Count);
+end;
+
+function TGocciaTSVParser.ParseWithFieldInfo(const AText: UTF8String;
+  const AHeaders: Boolean;
+  const ASkipEmptyLines: Boolean): TArray<TArray<TGocciaTSVFieldInfo>>;
+begin
+  Result := ParseWithFieldInfo(RetagUTF8Text(RawByteString(AText)),
+    AHeaders, ASkipEmptyLines);
 end;
 
 function TGocciaTSVParser.ParseChunk(const AText: string;
@@ -385,6 +411,14 @@ begin
   end;
 
   Result.Read := EffectiveEnd;
+end;
+
+function TGocciaTSVParser.ParseChunk(const AText: UTF8String;
+  const AHeaders: Boolean; const ASkipEmptyLines: Boolean;
+  const AStart: Integer; const AEnd: Integer): TGocciaTSVChunkParseResult;
+begin
+  Result := ParseChunk(RetagUTF8Text(RawByteString(AText)), AHeaders,
+    ASkipEmptyLines, AStart, AEnd);
 end;
 
 class function TGocciaTSVStringifier.EscapeField(

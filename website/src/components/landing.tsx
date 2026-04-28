@@ -98,7 +98,7 @@ function HeroRunnableCard({ code }: { code: string }) {
   const run = async () => {
     // The button is `disabled` while running, but the ⌘/Ctrl+Enter
     // shortcut on the textarea bypasses that — guard re-entry directly
-    // so a fast double-press can't fire two overlapping `/api/run`
+    // so a fast double-press can't fire two overlapping `/api/execute`
     // requests and race the output panel.
     if (running) return;
     setRunning(true);
@@ -106,7 +106,7 @@ function HeroRunnableCard({ code }: { code: string }) {
     const banner = "GocciaScriptLoader coffee-typed.ts";
     setOutput([{ kind: "meta", text: banner }]);
     try {
-      const res = await fetch("/api/run", {
+      const res = await fetch("/api/execute", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ code: src }),

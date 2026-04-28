@@ -4,20 +4,6 @@ unit Goccia.Temporal.TimeZone;
 
 interface
 
-type
-  TTimeZoneTransition = record
-    TransitionEpochSeconds: Int64;
-    UtcOffsetSeconds: Integer;
-  end;
-
-  TTimeZoneTransitionArray = array of TTimeZoneTransition;
-
-  TTimeZoneData = record
-    TimeZoneId: string;
-    Transitions: TTimeZoneTransitionArray;
-    DefaultOffsetSeconds: Integer;
-  end;
-
 function GetSystemTimeZoneId: string;
 function IsValidTimeZone(const ATimeZone: string): Boolean;
 function GetUtcOffsetSeconds(const ATimeZone: string; const AEpochSeconds: Int64): Integer;
@@ -29,57 +15,398 @@ implementation
 
 uses
   SysUtils,
+  Goccia.Temporal.TimeZoneData,
+  TimeZoneInformationFile,
   {$IFDEF UNIX}
   BaseUnix,
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  DynLibs,
   {$ENDIF}
   Classes;
 
 const
-  TZIF_MAGIC = 'TZif';
-  TZIF_MAGIC_LENGTH = 4;
-  TZIF_HEADER_SIZE = 44;
-  TZIF_V1_TRANSITION_SIZE = 4;
-  TZIF_V2_TRANSITION_SIZE = 8;
-  TZIF_TYPE_INDEX_SIZE = 1;
-  TZIF_TTINFO_SIZE = 6;
-  TZIF_TTINFO_UTOFF_SIZE = 4;
   UTC_TIMEZONE_ID = 'UTC';
+  GOCCIA_TZDIR_ENV = 'GOCCIA_TZDIR';
+  UNIX_ZONEINFO_PATH = '/usr/share/zoneinfo';
+  MACOS_DEFAULT_ZONEINFO_PATH = '/usr/share/zoneinfo.default';
   {$IFDEF UNIX}
-  ZONEINFO_PATH = '/usr/share/zoneinfo/';
   LOCALTIME_PATH = '/etc/localtime';
   {$ENDIF}
   MINUTES_PER_HOUR = 60;
   SECONDS_PER_MINUTE = 60;
+  MILLISECONDS_PER_SECOND = 1000;
   MAX_SYMLINK_LENGTH = 1024;
+  {$IFDEF MSWINDOWS}
+  ICU_LIBRARY = 'icu.dll';
+  ICU_I18N_LIBRARY = 'icuin.dll';
+  ICU_SUCCESS = 0;
+  ICU_TIMEZONE_ID_CAPACITY = 128;
+  ICU_CAL_GREGORIAN = 1;
+  ICU_CAL_ZONE_OFFSET = 15;
+  ICU_CAL_DST_OFFSET = 16;
+  ICU_TZ_TRANSITION_NEXT = 0;
+  ICU_TRANSITION_WINDOW_START_SECONDS = -5364662400; // 1800-01-01T00:00:00Z
+  ICU_TRANSITION_WINDOW_END_SECONDS = 7258118400; // 2200-01-01T00:00:00Z
+  ICU_MAX_TRANSITION_COUNT = 4096;
+  {$ENDIF}
+
+{$IFDEF MSWINDOWS}
+type
+  TICUCalendar = Pointer;
+  TICUDate = Double;
+  TICUErrorCode = LongInt;
+  TICUCalendarOpen = function(const AZoneId: PWideChar; const AZoneIdLength: LongInt;
+    const ALocale: PAnsiChar; const ACalendarType: LongInt;
+    var AStatus: TICUErrorCode): TICUCalendar; cdecl;
+  TICUCalendarClose = procedure(const ACalendar: TICUCalendar); cdecl;
+  TICUCalendarSetMillis = procedure(const ACalendar: TICUCalendar;
+    const AMilliseconds: TICUDate; var AStatus: TICUErrorCode); cdecl;
+  TICUCalendarGet = function(const ACalendar: TICUCalendar; const AField: LongInt;
+    var AStatus: TICUErrorCode): LongInt; cdecl;
+  TICUCalendarGetTimeZoneTransitionDate = function(const ACalendar: TICUCalendar;
+    const ATransitionType: LongInt; var ATransition: TICUDate;
+    var AStatus: TICUErrorCode): ByteBool; cdecl;
+  TICUCalendarGetCanonicalTimeZoneID = function(const AId: PWideChar;
+    const AIdLength: LongInt; AResult: PWideChar; const AResultCapacity: LongInt;
+    var AIsSystemId: ByteBool; var AStatus: TICUErrorCode): LongInt; cdecl;
+  TICUCalendarGetDefaultTimeZone = function(AResult: PWideChar;
+    const AResultCapacity: LongInt; var AStatus: TICUErrorCode): LongInt; cdecl;
+
+  TWindowsICU = record
+    Handle: TLibHandle;
+    OpenCalendar: TICUCalendarOpen;
+    CloseCalendar: TICUCalendarClose;
+    SetMillis: TICUCalendarSetMillis;
+    GetField: TICUCalendarGet;
+    GetTimeZoneTransitionDate: TICUCalendarGetTimeZoneTransitionDate;
+    GetCanonicalTimeZoneID: TICUCalendarGetCanonicalTimeZoneID;
+    GetDefaultTimeZone: TICUCalendarGetDefaultTimeZone;
+  end;
+{$ENDIF}
 
 threadvar
-  CachedTimeZones: array of TTimeZoneData;
+  CachedTimeZones: array of TTimeZoneInformationData;
   CachedTimeZoneCount: Integer;
 
-function ReadBigEndianInt32(const ABuffer: array of Byte; const AOffset: Integer): Int32;
-begin
-  Result := Int32((Int32(ABuffer[AOffset]) shl 24) or
-                  (Int32(ABuffer[AOffset + 1]) shl 16) or
-                  (Int32(ABuffer[AOffset + 2]) shl 8) or
-                  Int32(ABuffer[AOffset + 3]));
-end;
-
-function ReadBigEndianUInt32(const ABuffer: array of Byte; const AOffset: Integer): UInt32;
-begin
-  Result := (UInt32(ABuffer[AOffset]) shl 24) or
-            (UInt32(ABuffer[AOffset + 1]) shl 16) or
-            (UInt32(ABuffer[AOffset + 2]) shl 8) or
-            UInt32(ABuffer[AOffset + 3]);
-end;
-
-function ReadBigEndianInt64(const ABuffer: array of Byte; const AOffset: Integer): Int64;
+{$IFDEF MSWINDOWS}
 var
-  High32, Low32: UInt32;
+  WindowsICU: TWindowsICU;
+  WindowsICULoadAttempted: Boolean;
+  WindowsICUAvailable: Boolean;
+  WindowsICUInitLock: TRTLCriticalSection;
+
+function ICUSucceeded(const AStatus: TICUErrorCode): Boolean;
 begin
-  High32 := ReadBigEndianUInt32(ABuffer, AOffset);
-  Low32 := ReadBigEndianUInt32(ABuffer, AOffset + 4);
-  Result := (Int64(High32) shl 32) or Int64(Low32);
+  Result := AStatus <= ICU_SUCCESS;
 end;
+
+function TryLoadWindowsICUFromLibrary(const ALibraryName: string;
+  out AICU: TWindowsICU): Boolean;
+var
+  Symbol: Pointer;
+
+  function FailLoad: Boolean;
+  begin
+    if AICU.Handle <> NilHandle then
+      UnloadLibrary(AICU.Handle);
+    FillChar(AICU, SizeOf(AICU), 0);
+    Result := False;
+  end;
+
+begin
+  Result := False;
+  FillChar(AICU, SizeOf(AICU), 0);
+
+  AICU.Handle := LoadLibrary(ALibraryName);
+  if AICU.Handle = NilHandle then
+    Exit;
+
+  Symbol := GetProcAddress(AICU.Handle, 'ucal_open');
+  if not Assigned(Symbol) then
+  begin
+    Result := FailLoad;
+    Exit;
+  end;
+  AICU.OpenCalendar := TICUCalendarOpen(Symbol);
+
+  Symbol := GetProcAddress(AICU.Handle, 'ucal_close');
+  if not Assigned(Symbol) then
+  begin
+    Result := FailLoad;
+    Exit;
+  end;
+  AICU.CloseCalendar := TICUCalendarClose(Symbol);
+
+  Symbol := GetProcAddress(AICU.Handle, 'ucal_setMillis');
+  if not Assigned(Symbol) then
+  begin
+    Result := FailLoad;
+    Exit;
+  end;
+  AICU.SetMillis := TICUCalendarSetMillis(Symbol);
+
+  Symbol := GetProcAddress(AICU.Handle, 'ucal_get');
+  if not Assigned(Symbol) then
+  begin
+    Result := FailLoad;
+    Exit;
+  end;
+  AICU.GetField := TICUCalendarGet(Symbol);
+
+  Symbol := GetProcAddress(AICU.Handle, 'ucal_getTimeZoneTransitionDate');
+  if not Assigned(Symbol) then
+  begin
+    Result := FailLoad;
+    Exit;
+  end;
+  AICU.GetTimeZoneTransitionDate := TICUCalendarGetTimeZoneTransitionDate(Symbol);
+
+  Symbol := GetProcAddress(AICU.Handle, 'ucal_getCanonicalTimeZoneID');
+  if not Assigned(Symbol) then
+  begin
+    Result := FailLoad;
+    Exit;
+  end;
+  AICU.GetCanonicalTimeZoneID := TICUCalendarGetCanonicalTimeZoneID(Symbol);
+
+  Symbol := GetProcAddress(AICU.Handle, 'ucal_getDefaultTimeZone');
+  if not Assigned(Symbol) then
+  begin
+    Result := FailLoad;
+    Exit;
+  end;
+  AICU.GetDefaultTimeZone := TICUCalendarGetDefaultTimeZone(Symbol);
+
+  Result := True;
+end;
+
+function TryGetWindowsICU(out AICU: TWindowsICU): Boolean;
+var
+  LoadedICU: TWindowsICU;
+begin
+  EnterCriticalSection(WindowsICUInitLock);
+  try
+    if not WindowsICULoadAttempted then
+    begin
+      WindowsICULoadAttempted := True;
+      WindowsICUAvailable := TryLoadWindowsICUFromLibrary(ICU_LIBRARY, LoadedICU);
+      if not WindowsICUAvailable then
+        WindowsICUAvailable := TryLoadWindowsICUFromLibrary(ICU_I18N_LIBRARY, LoadedICU);
+      if WindowsICUAvailable then
+        WindowsICU := LoadedICU;
+    end;
+
+    AICU := WindowsICU;
+    Result := WindowsICUAvailable;
+  finally
+    LeaveCriticalSection(WindowsICUInitLock);
+  end;
+end;
+
+function UnicodeBufferToString(const ABuffer: array of WideChar;
+  const ALength: Integer): string;
+var
+  Value: UnicodeString;
+begin
+  SetLength(Value, ALength);
+  if ALength > 0 then
+    Move(ABuffer[0], Value[1], ALength * SizeOf(WideChar));
+  Result := string(Value);
+end;
+
+function TryCanonicalizeWindowsICUTimeZone(const AICU: TWindowsICU;
+  const ATimeZone: string; out ACanonicalTimeZone: string): Boolean;
+var
+  InputId: UnicodeString;
+  Buffer: array[0..ICU_TIMEZONE_ID_CAPACITY - 1] of WideChar;
+  Status: TICUErrorCode;
+  IsSystemId: ByteBool;
+  ResultLength: LongInt;
+begin
+  Result := False;
+  ACanonicalTimeZone := '';
+  InputId := UnicodeString(ATimeZone);
+  FillChar(Buffer, SizeOf(Buffer), 0);
+  Status := ICU_SUCCESS;
+  IsSystemId := False;
+
+  ResultLength := AICU.GetCanonicalTimeZoneID(PWideChar(InputId), Length(InputId),
+    @Buffer[0], ICU_TIMEZONE_ID_CAPACITY, IsSystemId, Status);
+  if (not ICUSucceeded(Status)) or (not IsSystemId) or
+     (ResultLength <= 0) or (ResultLength >= ICU_TIMEZONE_ID_CAPACITY) then
+    Exit;
+
+  ACanonicalTimeZone := UnicodeBufferToString(Buffer, ResultLength);
+  Result := ACanonicalTimeZone <> 'Etc/Unknown';
+end;
+
+function TryOpenWindowsICUCalendar(const AICU: TWindowsICU;
+  const ATimeZone: string; out ACalendar: TICUCalendar): Boolean;
+var
+  ZoneId: UnicodeString;
+  Status: TICUErrorCode;
+begin
+  Result := False;
+  ACalendar := nil;
+  ZoneId := UnicodeString(ATimeZone);
+  Status := ICU_SUCCESS;
+  ACalendar := AICU.OpenCalendar(PWideChar(ZoneId), Length(ZoneId), nil,
+    ICU_CAL_GREGORIAN, Status);
+  Result := ICUSucceeded(Status) and Assigned(ACalendar);
+end;
+
+function EpochSecondsToICUMilliseconds(const AEpochSeconds: Int64): TICUDate;
+var
+  Seconds: TICUDate;
+begin
+  Seconds := AEpochSeconds;
+  Result := Seconds * MILLISECONDS_PER_SECOND;
+end;
+
+function ICUMillisecondsToEpochSeconds(const AMilliseconds: TICUDate): Int64;
+var
+  Milliseconds: Int64;
+begin
+  Milliseconds := Round(AMilliseconds);
+  Result := Milliseconds div MILLISECONDS_PER_SECOND;
+  if (Milliseconds < 0) and (Milliseconds mod MILLISECONDS_PER_SECOND <> 0) then
+    Dec(Result);
+end;
+
+function TryGetWindowsICUOffsetSeconds(const AICU: TWindowsICU;
+  const ACalendar: TICUCalendar; const AEpochSeconds: Int64;
+  out AOffsetSeconds: Integer): Boolean;
+var
+  Status: TICUErrorCode;
+  ZoneOffset, DstOffset: LongInt;
+begin
+  Result := False;
+  AOffsetSeconds := 0;
+
+  Status := ICU_SUCCESS;
+  AICU.SetMillis(ACalendar, EpochSecondsToICUMilliseconds(AEpochSeconds), Status);
+  if not ICUSucceeded(Status) then
+    Exit;
+
+  Status := ICU_SUCCESS;
+  ZoneOffset := AICU.GetField(ACalendar, ICU_CAL_ZONE_OFFSET, Status);
+  if not ICUSucceeded(Status) then
+    Exit;
+
+  Status := ICU_SUCCESS;
+  DstOffset := AICU.GetField(ACalendar, ICU_CAL_DST_OFFSET, Status);
+  if not ICUSucceeded(Status) then
+    Exit;
+
+  AOffsetSeconds := (ZoneOffset + DstOffset) div MILLISECONDS_PER_SECOND;
+  Result := True;
+end;
+
+procedure AppendWindowsICUTransition(var AData: TTimeZoneInformationData;
+  const ATransitionEpochSeconds: Int64; const AOffsetSeconds: Integer);
+var
+  TransitionIndex: Integer;
+begin
+  TransitionIndex := Length(AData.Transitions);
+  SetLength(AData.Transitions, TransitionIndex + 1);
+  AData.Transitions[TransitionIndex].TransitionEpochSeconds := ATransitionEpochSeconds;
+  AData.Transitions[TransitionIndex].UtcOffsetSeconds := AOffsetSeconds;
+end;
+
+function TryLoadTimeZoneDataFromWindowsICU(const ATimeZone: string;
+  out AData: TTimeZoneInformationData): Boolean;
+var
+  ICU: TWindowsICU;
+  Calendar: TICUCalendar;
+  CanonicalTimeZone: string;
+  CurrentEpochSeconds, TransitionEpochSeconds: Int64;
+  TransitionMilliseconds: TICUDate;
+  OffsetSeconds, TransitionCount: Integer;
+  Status: TICUErrorCode;
+begin
+  Result := False;
+
+  if not TryGetWindowsICU(ICU) then
+    Exit;
+
+  if not TryCanonicalizeWindowsICUTimeZone(ICU, ATimeZone, CanonicalTimeZone) then
+    Exit;
+
+  if not TryOpenWindowsICUCalendar(ICU, CanonicalTimeZone, Calendar) then
+    Exit;
+
+  try
+    AData.Identifier := ATimeZone;
+    SetLength(AData.Transitions, 0);
+
+    if not TryGetWindowsICUOffsetSeconds(ICU, Calendar,
+      ICU_TRANSITION_WINDOW_START_SECONDS, AData.DefaultOffsetSeconds) then
+      Exit;
+
+    CurrentEpochSeconds := ICU_TRANSITION_WINDOW_START_SECONDS;
+    TransitionCount := 0;
+    while (CurrentEpochSeconds < ICU_TRANSITION_WINDOW_END_SECONDS) and
+          (TransitionCount < ICU_MAX_TRANSITION_COUNT) do
+    begin
+      Status := ICU_SUCCESS;
+      ICU.SetMillis(Calendar, EpochSecondsToICUMilliseconds(CurrentEpochSeconds), Status);
+      if not ICUSucceeded(Status) then
+        Exit;
+
+      Status := ICU_SUCCESS;
+      TransitionMilliseconds := 0;
+      if not ICU.GetTimeZoneTransitionDate(Calendar, ICU_TZ_TRANSITION_NEXT,
+        TransitionMilliseconds, Status) then
+        Break;
+
+      if not ICUSucceeded(Status) then
+        Exit;
+
+      TransitionEpochSeconds := ICUMillisecondsToEpochSeconds(TransitionMilliseconds);
+      if (TransitionEpochSeconds <= CurrentEpochSeconds) or
+         (TransitionEpochSeconds > ICU_TRANSITION_WINDOW_END_SECONDS) then
+        Break;
+
+      if not TryGetWindowsICUOffsetSeconds(ICU, Calendar,
+        TransitionEpochSeconds + 1, OffsetSeconds) then
+        Exit;
+
+      AppendWindowsICUTransition(AData, TransitionEpochSeconds, OffsetSeconds);
+      CurrentEpochSeconds := TransitionEpochSeconds + 1;
+      Inc(TransitionCount);
+    end;
+
+    Result := True;
+  finally
+    ICU.CloseCalendar(Calendar);
+  end;
+end;
+
+function TryGetWindowsICUDefaultTimeZoneId(out ATimeZone: string): Boolean;
+var
+  ICU: TWindowsICU;
+  Buffer: array[0..ICU_TIMEZONE_ID_CAPACITY - 1] of WideChar;
+  Status: TICUErrorCode;
+  ResultLength: LongInt;
+begin
+  Result := False;
+  ATimeZone := '';
+
+  if not TryGetWindowsICU(ICU) then
+    Exit;
+
+  FillChar(Buffer, SizeOf(Buffer), 0);
+  Status := ICU_SUCCESS;
+  ResultLength := ICU.GetDefaultTimeZone(@Buffer[0], ICU_TIMEZONE_ID_CAPACITY, Status);
+  if (not ICUSucceeded(Status)) or (ResultLength <= 0) or
+     (ResultLength >= ICU_TIMEZONE_ID_CAPACITY) then
+    Exit;
+
+  ATimeZone := UnicodeBufferToString(Buffer, ResultLength);
+  Result := (ATimeZone <> '') and (ATimeZone <> 'Etc/Unknown');
+end;
+{$ENDIF}
 
 function FindCachedTimeZone(const ATimeZone: string): Integer;
 var
@@ -87,153 +414,13 @@ var
 begin
   for I := 0 to CachedTimeZoneCount - 1 do
   begin
-    if CachedTimeZones[I].TimeZoneId = ATimeZone then
+    if CachedTimeZones[I].Identifier = ATimeZone then
     begin
       Result := I;
       Exit;
     end;
   end;
   Result := -1;
-end;
-
-function ParseTZifData(const ATimeZone: string; const ABuffer: array of Byte;
-  const ASize: Integer; out AData: TTimeZoneData): Boolean;
-var
-  Offset: Integer;
-  Version: Char;
-  TimeCnt, TypeCnt, CharCnt, LeapCnt, IsStdCnt, IsUtCnt: Int32;
-  V1DataSize: Integer;
-  TransitionTimes: array of Int64;
-  TypeIndices: array of Byte;
-  UtOffsets: array of Int32;
-  I: Integer;
-  UseV2: Boolean;
-begin
-  Result := False;
-
-  // Validate minimum size for magic + header
-  if ASize < TZIF_MAGIC_LENGTH + TZIF_HEADER_SIZE then
-    Exit;
-
-  // Check magic bytes
-  if (ABuffer[0] <> Ord('T')) or (ABuffer[1] <> Ord('Z')) or
-     (ABuffer[2] <> Ord('i')) or (ABuffer[3] <> Ord('f')) then
-    Exit;
-
-  // Read version byte
-  Version := Char(ABuffer[4]);
-  UseV2 := (Version = '2') or (Version = '3');
-
-  // Read v1 header (starts at offset 20)
-  Offset := 20;
-  IsUtCnt := ReadBigEndianInt32(ABuffer, Offset); Inc(Offset, 4);
-  IsStdCnt := ReadBigEndianInt32(ABuffer, Offset); Inc(Offset, 4);
-  LeapCnt := ReadBigEndianInt32(ABuffer, Offset); Inc(Offset, 4);
-  TimeCnt := ReadBigEndianInt32(ABuffer, Offset); Inc(Offset, 4);
-  TypeCnt := ReadBigEndianInt32(ABuffer, Offset); Inc(Offset, 4);
-  CharCnt := ReadBigEndianInt32(ABuffer, Offset); Inc(Offset, 4);
-
-  // Calculate v1 data section size
-  V1DataSize := TimeCnt * TZIF_V1_TRANSITION_SIZE +   // transition times
-                TimeCnt * TZIF_TYPE_INDEX_SIZE +       // type indices
-                TypeCnt * TZIF_TTINFO_SIZE +           // ttinfo structs
-                CharCnt +                              // time zone abbreviations
-                LeapCnt * 8 +                          // leap second records
-                IsStdCnt +                             // standard/wall indicators
-                IsUtCnt;                               // UT/local indicators
-
-  if UseV2 then
-  begin
-    // Skip v1 data to reach v2 header
-    Offset := TZIF_HEADER_SIZE + V1DataSize;
-
-    // Validate we have enough data for v2 header
-    if Offset + TZIF_HEADER_SIZE > ASize then
-      Exit;
-
-    // Check v2 magic bytes
-    if (ABuffer[Offset] <> Ord('T')) or (ABuffer[Offset + 1] <> Ord('Z')) or
-       (ABuffer[Offset + 2] <> Ord('i')) or (ABuffer[Offset + 3] <> Ord('f')) then
-      Exit;
-
-    // Read v2 header
-    Offset := Offset + 20;
-    IsUtCnt := ReadBigEndianInt32(ABuffer, Offset); Inc(Offset, 4);
-    IsStdCnt := ReadBigEndianInt32(ABuffer, Offset); Inc(Offset, 4);
-    LeapCnt := ReadBigEndianInt32(ABuffer, Offset); Inc(Offset, 4);
-    TimeCnt := ReadBigEndianInt32(ABuffer, Offset); Inc(Offset, 4);
-    TypeCnt := ReadBigEndianInt32(ABuffer, Offset); Inc(Offset, 4);
-    CharCnt := ReadBigEndianInt32(ABuffer, Offset); Inc(Offset, 4);
-
-    // Validate we have enough data for v2 transitions
-    if Offset + TimeCnt * TZIF_V2_TRANSITION_SIZE + TimeCnt * TZIF_TYPE_INDEX_SIZE +
-       TypeCnt * TZIF_TTINFO_SIZE > ASize then
-      Exit;
-
-    // Read v2 transition times (8 bytes each)
-    SetLength(TransitionTimes, TimeCnt);
-    for I := 0 to TimeCnt - 1 do
-    begin
-      TransitionTimes[I] := ReadBigEndianInt64(ABuffer, Offset);
-      Inc(Offset, TZIF_V2_TRANSITION_SIZE);
-    end;
-  end
-  else
-  begin
-    // Use v1 data
-    Offset := TZIF_HEADER_SIZE;
-
-    // Validate we have enough data
-    if Offset + TimeCnt * TZIF_V1_TRANSITION_SIZE + TimeCnt * TZIF_TYPE_INDEX_SIZE +
-       TypeCnt * TZIF_TTINFO_SIZE > ASize then
-      Exit;
-
-    // Read v1 transition times (4 bytes each)
-    SetLength(TransitionTimes, TimeCnt);
-    for I := 0 to TimeCnt - 1 do
-    begin
-      TransitionTimes[I] := Int64(ReadBigEndianInt32(ABuffer, Offset));
-      Inc(Offset, TZIF_V1_TRANSITION_SIZE);
-    end;
-  end;
-
-  // Read type indices (1 byte each)
-  SetLength(TypeIndices, TimeCnt);
-  for I := 0 to TimeCnt - 1 do
-  begin
-    TypeIndices[I] := ABuffer[Offset];
-    Inc(Offset, TZIF_TYPE_INDEX_SIZE);
-  end;
-
-  // Read ttinfo records (6 bytes each: 4-byte utoff, 1-byte is_dst, 1-byte idx)
-  SetLength(UtOffsets, TypeCnt);
-  for I := 0 to TypeCnt - 1 do
-  begin
-    UtOffsets[I] := ReadBigEndianInt32(ABuffer, Offset);
-    Inc(Offset, TZIF_TTINFO_SIZE);
-  end;
-
-  // Build the result
-  AData.TimeZoneId := ATimeZone;
-
-  // Set default offset from the first non-DST ttinfo, or the first ttinfo
-  if TypeCnt > 0 then
-    AData.DefaultOffsetSeconds := UtOffsets[0]
-  else
-    AData.DefaultOffsetSeconds := 0;
-
-  // Build transitions array
-  SetLength(AData.Transitions, TimeCnt);
-  for I := 0 to TimeCnt - 1 do
-  begin
-    AData.Transitions[I].TransitionEpochSeconds := TransitionTimes[I];
-    if TypeIndices[I] < TypeCnt then
-      AData.Transitions[I].UtcOffsetSeconds := UtOffsets[TypeIndices[I]]
-    else
-      AData.Transitions[I].UtcOffsetSeconds := 0;
-  end;
-
-  Result := True;
 end;
 
 function IsValidTimeZoneName(const AName: string): Boolean;
@@ -244,6 +431,9 @@ begin
   if Length(AName) = 0 then Exit;
   // Reject absolute paths
   if AName[1] = '/' then Exit;
+  // Reject Windows path separators, drive paths, and alternate data streams.
+  if Pos('\', AName) > 0 then Exit;
+  if Pos(':', AName) > 0 then Exit;
   // Check each path segment for . and ..
   SegStart := 1;
   for I := 1 to Length(AName) + 1 do
@@ -260,19 +450,127 @@ begin
   Result := True;
 end;
 
-{$IFDEF UNIX}
-function LoadTimeZoneData(const ATimeZone: string; out AData: TTimeZoneData): Boolean;
+function TimeZoneNameToFilePath(const ATimeZone: string): string;
+begin
+  Result := StringReplace(ATimeZone, '/', PathDelim, [rfReplaceAll]);
+end;
+
+function TimeZonePathInDirectory(const ADirectory, ATimeZone: string): string;
+begin
+  Result := IncludeTrailingPathDelimiter(ExpandFileName(ADirectory)) +
+    TimeZoneNameToFilePath(ATimeZone);
+end;
+
+function TryLoadTimeZoneDataFromFile(const ATimeZone, AFilePath: string;
+  out AData: TTimeZoneInformationData): Boolean;
 var
-  FilePath: string;
   Stream: TFileStream;
-  Buffer: array of Byte;
+  Buffer: TBytes;
   FileSize: Int64;
+  BufferSize: Integer;
+begin
+  Result := False;
+
+  if not FileExists(AFilePath) then
+    Exit;
+
+  Stream := nil;
+  try
+    Stream := TFileStream.Create(AFilePath, fmOpenRead or fmShareDenyNone);
+    FileSize := Stream.Size;
+    if FileSize > High(Integer) then
+    begin
+      Stream.Free;
+      Exit;
+    end;
+
+    BufferSize := Integer(FileSize);
+    SetLength(Buffer, BufferSize);
+    if BufferSize > 0 then
+      Stream.ReadBuffer(Buffer[0], BufferSize);
+    Stream.Free;
+    Stream := nil;
+
+    Result := TryParseTimeZoneInformationFile(ATimeZone, Buffer, AData);
+  except
+    Stream.Free;
+  end;
+end;
+
+function TryLoadTimeZoneDataFromDirectory(const ADirectory, ATimeZone: string;
+  out AData: TTimeZoneInformationData): Boolean;
+begin
+  Result := False;
+  if ADirectory = '' then
+    Exit;
+
+  Result := TryLoadTimeZoneDataFromFile(ATimeZone,
+    TimeZonePathInDirectory(ADirectory, ATimeZone), AData);
+end;
+
+function TryLoadTimeZoneDataFromEmbeddedData(const ATimeZone: string;
+  out AData: TTimeZoneInformationData): Boolean;
+var
+  Buffer: TBytes;
+begin
+  Result := False;
+
+  if not TryGetEmbeddedTimeZoneFile(ATimeZone, Buffer) then
+    Exit;
+
+  Result := TryParseTimeZoneInformationFile(ATimeZone, Buffer, AData);
+end;
+
+function TryLoadTimeZoneDataFromKnownLocations(const ATimeZone: string;
+  out AData: TTimeZoneInformationData): Boolean;
+var
+  EnvDirectory: string;
+begin
+  Result := False;
+
+  EnvDirectory := GetEnvironmentVariable(GOCCIA_TZDIR_ENV);
+  if TryLoadTimeZoneDataFromDirectory(EnvDirectory, ATimeZone, AData) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  {$IFDEF UNIX}
+  if TryLoadTimeZoneDataFromDirectory(UNIX_ZONEINFO_PATH, ATimeZone, AData) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  if TryLoadTimeZoneDataFromDirectory(MACOS_DEFAULT_ZONEINFO_PATH, ATimeZone, AData) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  {$ENDIF}
+
+  {$IFDEF MSWINDOWS}
+  if TryLoadTimeZoneDataFromWindowsICU(ATimeZone, AData) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  {$ENDIF}
+
+  if TryLoadTimeZoneDataFromEmbeddedData(ATimeZone, AData) then
+  begin
+    Result := True;
+    Exit;
+  end;
+end;
+
+function LoadTimeZoneData(const ATimeZone: string; out AData: TTimeZoneInformationData): Boolean;
 begin
   Result := False;
 
   if ATimeZone = UTC_TIMEZONE_ID then
   begin
-    AData.TimeZoneId := UTC_TIMEZONE_ID;
+    AData.Identifier := UTC_TIMEZONE_ID;
     SetLength(AData.Transitions, 0);
     AData.DefaultOffsetSeconds := 0;
     Result := True;
@@ -282,46 +580,11 @@ begin
   if not IsValidTimeZoneName(ATimeZone) then
     Exit;
 
-  FilePath := ZONEINFO_PATH + ATimeZone;
-  if not FileExists(FilePath) then
-    Exit;
-
-  Stream := nil;
-  try
-    Stream := TFileStream.Create(FilePath, fmOpenRead or fmShareDenyNone);
-    FileSize := Stream.Size;
-    if FileSize < TZIF_MAGIC_LENGTH + TZIF_HEADER_SIZE then
-    begin
-      Stream.Free;
-      Exit;
-    end;
-
-    SetLength(Buffer, FileSize);
-    Stream.ReadBuffer(Buffer[0], FileSize);
-    Stream.Free;
-    Stream := nil;
-
-    Result := ParseTZifData(ATimeZone, Buffer, FileSize, AData);
-  except
-    Stream.Free;
-  end;
+  Result := TryLoadTimeZoneDataFromKnownLocations(ATimeZone, AData);
 end;
-{$ELSE}
-function LoadTimeZoneData(const ATimeZone: string; out AData: TTimeZoneData): Boolean;
-begin
-  // On Windows, only UTC is supported for now
-  Result := False;
-  if ATimeZone = UTC_TIMEZONE_ID then
-  begin
-    AData.TimeZoneId := UTC_TIMEZONE_ID;
-    SetLength(AData.Transitions, 0);
-    AData.DefaultOffsetSeconds := 0;
-    Result := True;
-  end;
-end;
-{$ENDIF}
 
-function GetOrLoadTimeZoneData(const ATimeZone: string; out AData: TTimeZoneData): Boolean;
+function GetOrLoadTimeZoneData(const ATimeZone: string;
+  out AData: TTimeZoneInformationData): Boolean;
 var
   Index: Integer;
 begin
@@ -344,7 +607,7 @@ begin
   Inc(CachedTimeZoneCount);
 end;
 
-function BinarySearchTransitions(const ATransitions: TTimeZoneTransitionArray;
+function BinarySearchTransitions(const ATransitions: TTimeZoneInformationTransitionArray;
   const ACount: Integer; const AEpochSeconds: Int64): Integer;
 var
   Low, High, Mid: Integer;
@@ -371,6 +634,8 @@ function GetSystemTimeZoneId: string;
 var
   LinkTarget: string;
   PrefixPos: Integer;
+  Prefix: string;
+  LocalTimeDirectory: string;
 begin
   // Read the symlink target of /etc/localtime
   SetLength(LinkTarget, MAX_SYMLINK_LENGTH);
@@ -378,14 +643,43 @@ begin
   if PrefixPos > 0 then
   begin
     SetLength(LinkTarget, PrefixPos);
-    // Strip the /usr/share/zoneinfo/ prefix
-    PrefixPos := Pos(ZONEINFO_PATH, LinkTarget);
-    if PrefixPos > 0 then
+    if (Length(LinkTarget) > 0) and (LinkTarget[1] <> PathDelim) then
     begin
-      Result := Copy(LinkTarget, PrefixPos + Length(ZONEINFO_PATH),
-        Length(LinkTarget) - PrefixPos - Length(ZONEINFO_PATH) + 1);
+      LocalTimeDirectory := IncludeTrailingPathDelimiter(ExtractFileDir(LOCALTIME_PATH));
+      LinkTarget := ExpandFileName(LocalTimeDirectory + LinkTarget);
+    end
+    else
+      LinkTarget := ExpandFileName(LinkTarget);
+
+    Prefix := IncludeTrailingPathDelimiter(UNIX_ZONEINFO_PATH);
+    PrefixPos := Pos(Prefix, LinkTarget);
+    if PrefixPos = 1 then
+    begin
+      Result := Copy(LinkTarget, Length(Prefix) + 1, Length(LinkTarget) -
+        Length(Prefix));
       Exit;
     end;
+
+    Prefix := IncludeTrailingPathDelimiter(MACOS_DEFAULT_ZONEINFO_PATH);
+    PrefixPos := Pos(Prefix, LinkTarget);
+    if PrefixPos = 1 then
+    begin
+      Result := Copy(LinkTarget, Length(Prefix) + 1, Length(LinkTarget) -
+        Length(Prefix));
+      Exit;
+    end;
+  end;
+  Result := UTC_TIMEZONE_ID;
+end;
+{$ELSE}
+{$IFDEF MSWINDOWS}
+var
+  TimeZone: string;
+begin
+  if TryGetWindowsICUDefaultTimeZoneId(TimeZone) then
+  begin
+    Result := TimeZone;
+    Exit;
   end;
   Result := UTC_TIMEZONE_ID;
 end;
@@ -394,11 +688,12 @@ begin
   Result := UTC_TIMEZONE_ID;
 end;
 {$ENDIF}
+{$ENDIF}
 
 function IsValidTimeZone(const ATimeZone: string): Boolean;
 var
+  Data: TTimeZoneInformationData;
   Dummy: Integer;
-{$IFDEF UNIX}
 begin
   if ATimeZone = UTC_TIMEZONE_ID then
   begin
@@ -416,17 +711,13 @@ begin
     Result := False;
     Exit;
   end;
-  Result := FileExists(ZONEINFO_PATH + ATimeZone);
+
+  Result := GetOrLoadTimeZoneData(ATimeZone, Data);
 end;
-{$ELSE}
-begin
-  Result := (ATimeZone = UTC_TIMEZONE_ID) or ParseOffsetString(ATimeZone, Dummy);
-end;
-{$ENDIF}
 
 function GetUtcOffsetSeconds(const ATimeZone: string; const AEpochSeconds: Int64): Integer;
 var
-  Data: TTimeZoneData;
+  Data: TTimeZoneInformationData;
   Index: Integer;
   OffsetSecs: Integer;
 begin
@@ -553,5 +844,15 @@ end;
 
 initialization
   CachedTimeZoneCount := 0;
+  {$IFDEF MSWINDOWS}
+  InitCriticalSection(WindowsICUInitLock);
+  {$ENDIF}
+
+finalization
+  {$IFDEF MSWINDOWS}
+  if WindowsICU.Handle <> NilHandle then
+    UnloadLibrary(WindowsICU.Handle);
+  DoneCriticalSection(WindowsICUInitLock);
+  {$ENDIF}
 
 end.

@@ -8,6 +8,7 @@ uses
   SysUtils,
 
   TestingPascalLibrary,
+  TextSemantics,
 
   Goccia.AST.Expressions,
   Goccia.AST.Node,
@@ -24,7 +25,6 @@ uses
   Goccia.Lexer,
   Goccia.Parser,
   Goccia.TestSetup,
-  Goccia.TextFiles,
   Goccia.Token,
   Goccia.Values.Primitives;
 

@@ -329,5 +329,3 @@ suite("Math.f16round", () => {
     },
   });
 });
-
-runBenchmarks();

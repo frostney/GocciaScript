@@ -1,0 +1,130 @@
+program TextSemantics.Test;
+
+{$I Shared.inc}
+
+uses
+  Classes,
+  SysUtils,
+
+  TestingPascalLibrary,
+  TextSemantics;
+
+type
+  TTextSemanticsTests = class(TTestSuite)
+  private
+    procedure TestTrimECMAScriptWhitespace;
+    procedure TestUnicodeCaseMapping;
+    procedure TestUTF8WellFormedChecks;
+    procedure TestReplacementPatternExpansion;
+    procedure TestTextLineHelpersPreserveUTF8;
+  public
+    procedure SetupTests; override;
+  end;
+
+procedure TTextSemanticsTests.SetupTests;
+begin
+  Test('TrimECMAScriptWhitespace removes Unicode whitespace',
+    TestTrimECMAScriptWhitespace);
+  Test('Unicode case mapping handles non-ASCII UTF-8',
+    TestUnicodeCaseMapping);
+  Test('UTF-8 well-formed helpers reject invalid sequences',
+    TestUTF8WellFormedChecks);
+  Test('Replacement pattern expansion follows GetSubstitution tokens',
+    TestReplacementPatternExpansion);
+  Test('Text line helpers preserve UTF-8 bytes',
+    TestTextLineHelpersPreserveUTF8);
+end;
+
+procedure TTextSemanticsTests.TestTrimECMAScriptWhitespace;
+const
+  NO_BREAK_SPACE = #$C2#$A0;
+  EN_QUAD = #$E2#$80#$80;
+  OGHAM_SPACE_MARK = #$E1#$9A#$80;
+  BYTE_ORDER_MARK = #$EF#$BB#$BF;
+var
+  Text: string;
+begin
+  Text := NO_BREAK_SPACE + EN_QUAD + 'hello' + OGHAM_SPACE_MARK +
+    BYTE_ORDER_MARK;
+  Expect<string>(TrimECMAScriptWhitespace(Text)).ToBe('hello');
+  Expect<string>(TrimECMAScriptWhitespaceStart(Text)).ToBe(
+    'hello' + OGHAM_SPACE_MARK + BYTE_ORDER_MARK);
+  Expect<string>(TrimECMAScriptWhitespaceEnd(Text)).ToBe(
+    NO_BREAK_SPACE + EN_QUAD + 'hello');
+end;
+
+procedure TTextSemanticsTests.TestUnicodeCaseMapping;
+const
+  UPPER_TEXT = #$C3#$89 + #$C3#$96 + #$CE#$A3;
+  LOWER_TEXT = #$C3#$A9 + #$C3#$B6 + #$CF#$83;
+begin
+  Expect<string>(UnicodeLowerCaseUTF8(UPPER_TEXT)).ToBe(LOWER_TEXT);
+  Expect<string>(UnicodeUpperCaseUTF8(LOWER_TEXT)).ToBe(UPPER_TEXT);
+end;
+
+procedure TTextSemanticsTests.TestUTF8WellFormedChecks;
+const
+  GRINNING_FACE = #$F0#$9F#$98#$80;
+  OVERLONG_NULL = #$C0#$80;
+  SURROGATE_CODE_POINT = #$ED#$A0#$80;
+begin
+  Expect<Boolean>(IsWellFormedUTF8('ok' + GRINNING_FACE)).ToBe(True);
+  Expect<Boolean>(IsWellFormedUTF8(OVERLONG_NULL)).ToBe(False);
+  Expect<Boolean>(IsWellFormedUTF8(SURROGATE_CODE_POINT)).ToBe(False);
+  Expect<string>(ToWellFormedUTF8('a' + OVERLONG_NULL + 'b')).ToBe(
+    'a' + UTF8_REPLACEMENT_CHARACTER + UTF8_REPLACEMENT_CHARACTER + 'b');
+  Expect<string>(ToWellFormedUTF8(#$E2 + 'AB')).ToBe(
+    UTF8_REPLACEMENT_CHARACTER + 'AB');
+  Expect<string>(ToWellFormedUTF8(#$E2#$80 + 'A')).ToBe(
+    UTF8_REPLACEMENT_CHARACTER + 'A');
+end;
+
+procedure TTextSemanticsTests.TestReplacementPatternExpansion;
+var
+  Captures: array[0..1] of TReplacementCapture;
+  NamedCaptures: array[0..0] of TReplacementNamedCapture;
+begin
+  Captures[0].Text := 'b';
+  Captures[0].Matched := True;
+  Captures[1].Text := '';
+  Captures[1].Matched := False;
+  NamedCaptures[0].Name := 'letter';
+  NamedCaptures[0].Text := 'b';
+  NamedCaptures[0].Matched := True;
+
+  Expect<string>(ExpandReplacementPattern('$$ $& $` $'' $1 $2 $3 $12',
+    'bc', 'abcde', 1, Captures, NamedCaptures)).ToBe(
+    '$ bc a de b  $3 b2');
+  Expect<string>(ExpandReplacementPattern('$<letter>:$<missing>:$<',
+    'bc', 'abcde', 1, Captures, NamedCaptures)).ToBe('b::$<');
+  Expect<string>(ExpandReplacementPattern('$<letter>', 'a', 'a', 0, [],
+    [])).ToBe('$<letter>');
+end;
+
+procedure TTextSemanticsTests.TestTextLineHelpersPreserveUTF8;
+const
+  UTF8_WORD_BYTES = 'na' + #$C3#$AF + 've';
+var
+  I: Integer;
+  Lines: TStringList;
+  Text: string;
+begin
+  Lines := CreateUTF8StringList('first' + #13#10 + UTF8_WORD_BYTES + #13);
+  try
+    Text := StringListToLFText(Lines);
+    Expect<Integer>(Length(Text)).ToBe(
+      Length('first' + #10 + UTF8_WORD_BYTES + #10));
+    for I := 1 to Length(Text) do
+      Expect<Integer>(Ord(Text[I])).ToBe(
+        Ord(('first' + #10 + UTF8_WORD_BYTES + #10)[I]));
+  finally
+    Lines.Free;
+  end;
+end;
+
+begin
+  TestRunnerProgram.AddSuite(TTextSemanticsTests.Create('TextSemantics'));
+  TestRunnerProgram.Run;
+
+  ExitCode := TestResultToExitCode;
+end.

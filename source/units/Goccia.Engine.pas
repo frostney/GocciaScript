@@ -60,7 +60,6 @@ uses
   Goccia.Realm,
   Goccia.Scope,
   Goccia.SourceMap,
-  Goccia.TextFiles,
   Goccia.TOML,
   Goccia.Values.BigIntValue,
   Goccia.Values.ClassValue,
@@ -298,6 +297,7 @@ uses
   SysUtils,
   TypInfo,
 
+  TextSemantics,
   TimingUtils,
 
   Goccia.AST.Expressions,
@@ -318,6 +318,7 @@ uses
   Goccia.Scope.Redeclaration,
   Goccia.Shims,
   Goccia.Spec,
+  Goccia.TextFiles,
   Goccia.Threading,
   Goccia.Token,
   Goccia.Values.ArrayBufferValue,

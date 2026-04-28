@@ -67,6 +67,8 @@ uses
   Math,
   SysUtils,
 
+  TextSemantics,
+
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -80,22 +82,6 @@ uses
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-function UTF8SequenceLengthFromLeadByte(const AChar: Char): Integer;
-var
-  ByteValue: Byte;
-begin
-  ByteValue := Ord(AChar);
-  if ByteValue < $80 then
-    Exit(1);
-  if (ByteValue and $E0) = $C0 then
-    Exit(2);
-  if (ByteValue and $F0) = $E0 then
-    Exit(3);
-  if (ByteValue and $F8) = $F0 then
-    Exit(4);
-  Result := 1;
-end;
 
 function UTF8CopyByCharacters(const AText: string;
   const AMaxChars: Integer): string;
@@ -111,7 +97,7 @@ begin
   CharacterCount := 0;
   while (ByteIndex <= Length(AText)) and (CharacterCount < AMaxChars) do
   begin
-    SequenceLength := UTF8SequenceLengthFromLeadByte(AText[ByteIndex]);
+    SequenceLength := TextSemantics.UTF8SequenceLengthFromLeadByte(AText[ByteIndex]);
     Inc(ByteIndex, SequenceLength);
     Inc(CharacterCount);
   end;

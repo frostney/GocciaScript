@@ -24,6 +24,8 @@ type
 implementation
 
 uses
+  FileUtils,
+
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.JSON,
@@ -64,9 +66,9 @@ end;
 function NormalizeImportMapPath(const APath, ABaseDirectory: string): string;
 begin
   if IsAbsoluteImportMapPath(APath) then
-    Result := ExpandFileName(APath)
+    Result := ExpandUTF8FileName(APath)
   else if IsRelativeImportMapPath(APath) then
-    Result := ExpandFileName(ABaseDirectory + APath)
+    Result := ExpandUTF8FileName(ABaseDirectory + APath)
   else
     Result := APath;
 
@@ -74,7 +76,7 @@ begin
     Result := IncludeTrailingPathDelimiter(Result);
 end;
 
-function ReadImportMapText(const APath: string): string;
+function ReadImportMapText(const APath: string): UTF8String;
 begin
   Result := ReadUTF8FileText(APath);
 end;
@@ -91,11 +93,11 @@ var
   CandidatePath, CurrentDirectory, ParentDirectory: string;
 begin
   if AStartDirectory <> '' then
-    CurrentDirectory := ExpandFileName(AStartDirectory)
+    CurrentDirectory := ExpandUTF8FileName(AStartDirectory)
   else
     CurrentDirectory := GetCurrentDir;
 
-  if not DirectoryExists(CurrentDirectory) then
+  if not UTF8DirectoryExists(CurrentDirectory) then
     CurrentDirectory := ExtractFilePath(CurrentDirectory);
 
   CurrentDirectory := ExcludeTrailingPathDelimiter(CurrentDirectory);
@@ -106,7 +108,7 @@ begin
   begin
     CandidatePath := IncludeTrailingPathDelimiter(CurrentDirectory) +
       PROJECT_CONFIG_FILE_NAME;
-    if FileExists(CandidatePath) then
+    if UTF8FileExists(CandidatePath) then
       Exit(CandidatePath);
 
     ParentDirectory := ExtractFileDir(CurrentDirectory);
@@ -126,8 +128,8 @@ var
   ParsedValue, ImportsValue, Value: TGocciaValue;
   ImportsObject, ImportMapObject: TGocciaObjectValue;
 begin
-  ImportMapPath := ExpandFileName(APath);
-  if not FileExists(ImportMapPath) then
+  ImportMapPath := ExpandUTF8FileName(APath);
+  if not UTF8FileExists(ImportMapPath) then
     raise Exception.Create('Import map not found: ' + ImportMapPath);
 
   Parser := TGocciaJSONParser.Create;

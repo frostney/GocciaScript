@@ -147,6 +147,7 @@ begin
     OP_DYNAMIC_IMPORT:                 Result := 'OP_DYNAMIC_IMPORT';
     OP_USING_INIT:                     Result := 'OP_USING_INIT';
     OP_USING_DISPOSE:                  Result := 'OP_USING_DISPOSE';
+    OP_YIELD:                          Result := 'OP_YIELD';
     OP_MATCH_VALUE:                    Result := 'OP_MATCH_VALUE';
   else
     Result := Format('OP_UNKNOWN_%d', [AOp]);

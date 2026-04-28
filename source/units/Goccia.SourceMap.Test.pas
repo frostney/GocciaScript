@@ -7,6 +7,7 @@ uses
   SysUtils,
 
   TestingPascalLibrary,
+  TextSemantics,
 
   Goccia.GarbageCollector,
   Goccia.SourceMap,
@@ -16,6 +17,7 @@ uses
 type
   TSourceMapTests = class(TTestSuite)
   private
+    procedure WriteRawFile(const APath: string; const ABytes: RawByteString);
     procedure TestVersionIsThree;
     procedure TestAddSource;
     procedure TestAddSourceDeduplicates;
@@ -31,6 +33,7 @@ type
     procedure TestToJSONSourcesContent;
     procedure TestToJSONNoContentWhenEmpty;
     procedure TestRoundTripThroughConsumer;
+    procedure TestCreateFromFilePreservesUTF8;
     procedure TestRoundTripWithNames;
     procedure TestToInlineComment;
     procedure TestMultipleSourceFiles;
@@ -57,11 +60,27 @@ begin
   Test('ToJSON includes sourcesContent when set', TestToJSONSourcesContent);
   Test('ToJSON omits sourcesContent when empty', TestToJSONNoContentWhenEmpty);
   Test('Round-trip through consumer preserves positions', TestRoundTripThroughConsumer);
+  Test('Consumer preserves UTF-8 source maps loaded from files',
+    TestCreateFromFilePreservesUTF8);
   Test('Round-trip preserves names', TestRoundTripWithNames);
   Test('ToInlineComment produces valid data URI', TestToInlineComment);
   Test('Multiple source files', TestMultipleSourceFiles);
   Test('Empty lines produce semicolons in mappings', TestSemicolonSeparatedLines);
   Test('Clone preserves translation', TestClonePreservesTranslation);
+end;
+
+procedure TSourceMapTests.WriteRawFile(const APath: string;
+  const ABytes: RawByteString);
+var
+  Stream: TFileStream;
+begin
+  Stream := TFileStream.Create(APath, fmCreate);
+  try
+    if Length(ABytes) > 0 then
+      Stream.WriteBuffer(Pointer(ABytes)^, Length(ABytes));
+  finally
+    Stream.Free;
+  end;
 end;
 
 procedure TSourceMapTests.TestVersionIsThree;
@@ -340,6 +359,37 @@ begin
     Expect<Integer>(SrcCol).ToBe(0);
   finally
     Consumer.Free;
+  end;
+end;
+
+procedure TSourceMapTests.TestCreateFromFilePreservesUTF8;
+const
+  SOURCE_BYTES = 'caf' + #$C3#$A9 + '.js';
+  NAME_BYTES = 'd' + #$C3#$A9 + 'j' + #$C3#$A0;
+  JSON_BYTES = '{"version":3,"file":"out.js","sources":["' +
+    SOURCE_BYTES + '"],"names":["' + NAME_BYTES + '"],"mappings":"AAAAA"}';
+var
+  Consumer: TGocciaSourceMapConsumer;
+  FilePath: string;
+  Name: string;
+  SourceFile: string;
+  SrcCol: Integer;
+  SrcLine: Integer;
+begin
+  FilePath := GetTempFileName(GetTempDir(False), 'gsm');
+  WriteRawFile(FilePath, JSON_BYTES);
+  try
+    Consumer := TGocciaSourceMapConsumer.CreateFromFile(FilePath);
+    try
+      Expect<Boolean>(Consumer.TranslateWithName(1, 0, SourceFile,
+        SrcLine, SrcCol, Name)).ToBe(True);
+      Expect<string>(SourceFile).ToBe(RetagUTF8Text(SOURCE_BYTES));
+      Expect<string>(Name).ToBe(RetagUTF8Text(NAME_BYTES));
+    finally
+      Consumer.Free;
+    end;
+  finally
+    DeleteFile(FilePath);
   end;
 end;
 

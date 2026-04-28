@@ -1743,6 +1743,7 @@ begin
     '<method ' + AMethodName + '>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AMethod.IsAsync;
+  ChildTemplate.IsGenerator := AMethod.IsGenerator;
   ChildTemplate.SourceText := AMethod.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
@@ -2041,6 +2042,7 @@ begin
   ChildTemplate := TGocciaFunctionTemplate.Create('<method [computed]>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AMethod.IsAsync;
+  ChildTemplate.IsGenerator := AMethod.IsGenerator;
   ChildTemplate.SourceText := AMethod.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 

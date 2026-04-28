@@ -63,6 +63,7 @@ implementation
 
 uses
   StringBuffer,
+  TextSemantics,
 
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
@@ -132,22 +133,6 @@ const
   JSON5_IDEOGRAPHIC_SPACE = #$E3#$80#$80;
   JSON5_BYTE_ORDER_MARK = #$EF#$BB#$BF;
 
-function UTF8SequenceLengthFromLeadByte(const AChar: Char): Integer;
-var
-  ByteValue: Byte;
-begin
-  ByteValue := Ord(AChar);
-  if ByteValue < $80 then
-    Exit(1);
-  if (ByteValue and $E0) = $C0 then
-    Exit(2);
-  if (ByteValue and $F0) = $E0 then
-    Exit(3);
-  if (ByteValue and $F8) = $F0 then
-    Exit(4);
-  Result := 0;
-end;
-
 function IsJSON5WhitespaceCodePoint(const ACodePoint: Cardinal): Boolean;
 begin
   case ACodePoint of
@@ -176,7 +161,7 @@ begin
   if (AIndex < 1) or (AIndex > Length(AText)) then
     Exit(False);
 
-  SequenceLength := UTF8SequenceLengthFromLeadByte(AText[AIndex]);
+  SequenceLength := TextSemantics.UTF8SequenceLengthFromLeadByte(AText[AIndex]);
   if AIndex + SequenceLength - 1 > Length(AText) then
     Exit(False);
 

@@ -128,10 +128,10 @@ uses
   Math,
 
   base64,
+  TextSemantics,
 
   Goccia.Constants.PropertyNames,
-  Goccia.Temporal.Utils,
-  Goccia.TextFiles;
+  Goccia.Temporal.Utils;
 
 type
   TGocciaYAMLTaggedValue = class(TGocciaValue)
@@ -1039,25 +1039,6 @@ begin
   Result := TryStrToFloat(Sanitized, AValue, YAMLFormatSettings);
 end;
 
-function CodePointToUTF8(const ACodePoint: Cardinal): string;
-begin
-  if ACodePoint <= $7F then
-    Result := Chr(ACodePoint)
-  else if ACodePoint <= $7FF then
-    Result := Chr($C0 or (ACodePoint shr 6)) + Chr($80 or (ACodePoint and $3F))
-  else if ACodePoint <= $FFFF then
-    Result := Chr($E0 or (ACodePoint shr 12)) +
-              Chr($80 or ((ACodePoint shr 6) and $3F)) +
-              Chr($80 or (ACodePoint and $3F))
-  else if ACodePoint <= $10FFFF then
-    Result := Chr($F0 or (ACodePoint shr 18)) +
-              Chr($80 or ((ACodePoint shr 12) and $3F)) +
-              Chr($80 or ((ACodePoint shr 6) and $3F)) +
-              Chr($80 or (ACodePoint and $3F))
-  else
-    raise EGocciaYAMLParseError.Create('Invalid Unicode code point in double-quoted scalar.');
-end;
-
 function IsHexDigitChar(const AChar: Char): Boolean;
 begin
   Result := AChar in ['0'..'9', 'a'..'f', 'A'..'F'];
@@ -1103,13 +1084,13 @@ begin
         #9:
           Result := Result + #9;
         'N':
-          Result := Result + CodePointToUTF8($85);
+          Result := Result + TextSemantics.CodePointToUTF8($85);
         '_':
-          Result := Result + CodePointToUTF8($A0);
+          Result := Result + TextSemantics.CodePointToUTF8($A0);
         'L':
-          Result := Result + CodePointToUTF8($2028);
+          Result := Result + TextSemantics.CodePointToUTF8($2028);
         'P':
-          Result := Result + CodePointToUTF8($2029);
+          Result := Result + TextSemantics.CodePointToUTF8($2029);
         'x', 'u', 'U':
           begin
             case AText[I] of
@@ -1130,7 +1111,9 @@ begin
             if not TryStrToQWord('$' + HexDigits, ParsedCodePoint) then
               raise EGocciaYAMLParseError.Create('Invalid Unicode escape in double-quoted scalar.');
             CodePoint := ParsedCodePoint;
-            Result := Result + CodePointToUTF8(CodePoint);
+            if CodePoint > $10FFFF then
+              raise EGocciaYAMLParseError.Create('Invalid Unicode code point in double-quoted scalar.');
+            Result := Result + TextSemantics.CodePointToUTF8(CodePoint);
             Inc(I, Length(HexDigits));
           end;
         #10, #13:

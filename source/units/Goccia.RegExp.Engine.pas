@@ -45,10 +45,10 @@ implementation
 
 uses
   Math,
-  StrUtils,
   SysUtils,
 
   RegExpr,
+  TextSemantics,
 
   Goccia.RegExp.Unicode;
 
@@ -433,30 +433,8 @@ end;
 // ES2026 §22.2.7.2 AdvanceStringIndex ( S, index, unicode )
 function AdvanceStringIndex(const AInput: string; const AIndex: Integer;
   const AUnicode: Boolean): Integer;
-var
-  LeadByte: Byte;
 begin
-  if AIndex >= Length(AInput) then
-  begin
-    Result := AIndex + 1;
-    Exit;
-  end;
-  if not AUnicode then
-  begin
-    Result := AIndex + 1;
-    Exit;
-  end;
-  LeadByte := Ord(AInput[AIndex + 1]);
-  if LeadByte < $80 then
-    Result := AIndex + 1
-  else if (LeadByte and $E0) = $C0 then
-    Result := Min(AIndex + 2, Length(AInput))
-  else if (LeadByte and $F0) = $E0 then
-    Result := Min(AIndex + 3, Length(AInput))
-  else if (LeadByte and $F8) = $F0 then
-    Result := Min(AIndex + 4, Length(AInput))
-  else
-    Result := AIndex + 1;
+  Result := AdvanceUTF8StringIndex(AInput, AIndex, AUnicode);
 end;
 
 function FindNamedGroupIndex(const ANamedGroups: TGocciaRegExpNamedGroups;

@@ -63,7 +63,6 @@ type
     class function IsIdentifierStartText(const AText: string): Boolean; static;
     class function TryDecodeIdentifierCodePoint(const AText: string;
       out ACodePoint: Cardinal): Boolean; static;
-    class function UTF8SequenceLengthFromLeadByte(const AChar: Char): Integer; static;
     function ConsumeComment: Boolean;
     function ConsumeSequence(const ASequence: string): Boolean;
     function ConsumeWhitespace: Boolean;
@@ -120,6 +119,9 @@ type
   end;
 
 implementation
+
+uses
+  TextSemantics;
 
 const
   JSON5_NO_BREAK_SPACE = #$C2#$A0;
@@ -196,76 +198,16 @@ end;
 class function TAbstractJSONParser.IsJSON5WhitespaceCodePoint(
   const ACodePoint: Cardinal): Boolean;
 begin
-  case ACodePoint of
-    $00A0,
-    $1680,
-    $2028,
-    $2029,
-    $202F,
-    $205F,
-    $3000,
-    $FEFF:
-      Exit(True);
-    $2000..$200A:
-      Exit(True);
-  end;
-  Result := False;
+  Result := IsECMAScriptWhitespaceCodePoint(ACodePoint);
 end;
 
 class function TAbstractJSONParser.TryDecodeIdentifierCodePoint(
   const AText: string; out ACodePoint: Cardinal): Boolean;
 var
-  Byte1, Byte2, Byte3, Byte4: Byte;
+  ByteLength: Integer;
 begin
-  Result := False;
-  ACodePoint := 0;
-  if AText = '' then
-    Exit;
-
-  case Length(AText) of
-    1:
-      begin
-        ACodePoint := Ord(AText[1]);
-        Exit(True);
-      end;
-    2:
-      begin
-        Byte1 := Ord(AText[1]);
-        Byte2 := Ord(AText[2]);
-        if ((Byte1 and $E0) <> $C0) or ((Byte2 and $C0) <> $80) then
-          Exit;
-        ACodePoint := Cardinal(Byte1 and $1F) shl 6 or Cardinal(Byte2 and $3F);
-        Exit(True);
-      end;
-    3:
-      begin
-        Byte1 := Ord(AText[1]);
-        Byte2 := Ord(AText[2]);
-        Byte3 := Ord(AText[3]);
-        if ((Byte1 and $F0) <> $E0) or ((Byte2 and $C0) <> $80) or
-          ((Byte3 and $C0) <> $80) then
-          Exit;
-        ACodePoint := Cardinal(Byte1 and $0F) shl 12 or
-          Cardinal(Byte2 and $3F) shl 6 or
-          Cardinal(Byte3 and $3F);
-        Exit(True);
-      end;
-    4:
-      begin
-        Byte1 := Ord(AText[1]);
-        Byte2 := Ord(AText[2]);
-        Byte3 := Ord(AText[3]);
-        Byte4 := Ord(AText[4]);
-        if ((Byte1 and $F8) <> $F0) or ((Byte2 and $C0) <> $80) or
-          ((Byte3 and $C0) <> $80) or ((Byte4 and $C0) <> $80) then
-          Exit;
-        ACodePoint := Cardinal(Byte1 and $07) shl 18 or
-          Cardinal(Byte2 and $3F) shl 12 or
-          Cardinal(Byte3 and $3F) shl 6 or
-          Cardinal(Byte4 and $3F);
-        Exit(True);
-      end;
-  end;
+  Result := TryReadUTF8CodePoint(AText, 1, ACodePoint, ByteLength) and
+    (ByteLength = Length(AText));
 end;
 
 class function TAbstractJSONParser.IsIdentifierStartText(
@@ -300,23 +242,6 @@ begin
   Result := not IsJSON5WhitespaceCodePoint(CodePoint);
 end;
 
-class function TAbstractJSONParser.UTF8SequenceLengthFromLeadByte(
-  const AChar: Char): Integer;
-var
-  ByteValue: Byte;
-begin
-  ByteValue := Ord(AChar);
-  if ByteValue < $80 then
-    Exit(1);
-  if (ByteValue and $E0) = $C0 then
-    Exit(2);
-  if (ByteValue and $F0) = $E0 then
-    Exit(3);
-  if (ByteValue and $F8) = $F0 then
-    Exit(4);
-  Result := 1;
-end;
-
 function TAbstractJSONParser.Supports(
   const ACapability: TJSONParserCapability): Boolean;
 begin
@@ -347,7 +272,7 @@ begin
   if IsAtEnd then
     Exit;
 
-  SequenceLength := UTF8SequenceLengthFromLeadByte(PeekChar);
+  SequenceLength := TextSemantics.UTF8SequenceLengthFromLeadByte(PeekChar);
   if (SequenceLength = 0) or (FPosition + SequenceLength - 1 > FLength) then
     Exit;
 
@@ -710,9 +635,10 @@ end;
 
 function TAbstractJSONParser.ParseIdentifierName: string;
 var
+  Bytes: RawByteString;
   Sequence: UTF8String;
 begin
-  Result := '';
+  Bytes := '';
 
   if IsAtEnd then
     RaiseParseError('Unexpected end of JSON input');
@@ -720,16 +646,16 @@ begin
   if PeekChar = '\' then
   begin
     ReadChar;
-    Result := ParseIdentifierEscape(True);
+    Bytes := RawByteString(ParseIdentifierEscape(True));
   end
   else if IsASCIIIdentifierStartByte(PeekChar) then
-    Result := Result + ReadChar
+    Bytes := Bytes + ReadChar
   else
   begin
     Sequence := PeekUTF8Sequence;
     if not IsIdentifierStartText(Sequence) then
       RaiseParseError('Expected string key in object');
-    Result := Result + ReadUTF8Sequence;
+    Bytes := Bytes + RawByteString(ReadUTF8Sequence);
   end;
 
   while not IsAtEnd do
@@ -737,18 +663,20 @@ begin
     if PeekChar = '\' then
     begin
       ReadChar;
-      Result := Result + ParseIdentifierEscape(False);
+      Bytes := Bytes + RawByteString(ParseIdentifierEscape(False));
     end
     else if IsASCIIIdentifierContinueByte(PeekChar) then
-      Result := Result + ReadChar
+      Bytes := Bytes + ReadChar
     else
     begin
       Sequence := PeekUTF8Sequence;
       if not IsIdentifierContinueText(Sequence) then
         Break;
-      Result := Result + ReadUTF8Sequence;
+      Bytes := Bytes + RawByteString(ReadUTF8Sequence);
     end;
   end;
+
+  Result := TextSemantics.RetagUTF8Text(Bytes);
 end;
 
 function TAbstractJSONParser.ParseString: string;
@@ -771,16 +699,20 @@ end;
 
 function TAbstractJSONParser.ParseString(const AQuote: Char): string;
 var
+  Bytes: RawByteString;
   Ch: Char;
 begin
   ExpectChar(AQuote);
-  Result := '';
+  Bytes := '';
 
   while not IsAtEnd do
   begin
     Ch := ReadChar;
     if Ch = AQuote then
+    begin
+      Result := TextSemantics.RetagUTF8Text(Bytes);
       Exit;
+    end;
 
     if Ch = '\' then
     begin
@@ -793,36 +725,36 @@ begin
       Ch := ReadChar;
       case Ch of
         '"':
-          Result := Result + '"';
+          Bytes := Bytes + '"';
         '''':
           if Supports(jpcAllowExtendedStringEscapes) or (AQuote = '''') then
-            Result := Result + ''''
+            Bytes := Bytes + ''''
           else
             RaiseParseError('Invalid escape character: \' + Ch);
         '\':
-          Result := Result + '\';
+          Bytes := Bytes + '\';
         '/':
-          Result := Result + '/';
+          Bytes := Bytes + '/';
         'b':
-          Result := Result + #8;
+          Bytes := Bytes + #8;
         'f':
-          Result := Result + #12;
+          Bytes := Bytes + #12;
         'n':
-          Result := Result + #10;
+          Bytes := Bytes + #10;
         'r':
-          Result := Result + #13;
+          Bytes := Bytes + #13;
         't':
-          Result := Result + #9;
+          Bytes := Bytes + #9;
         'u':
-          Result := Result + ParseUnicodeEscape;
+          Bytes := Bytes + RawByteString(ParseUnicodeEscape);
         'v':
           if Supports(jpcAllowExtendedStringEscapes) then
-            Result := Result + #11
+            Bytes := Bytes + #11
           else
             RaiseParseError('Invalid escape character: \' + Ch);
         'x':
           if Supports(jpcAllowExtendedStringEscapes) then
-            Result := Result + ParseHexEscape(2)
+            Bytes := Bytes + RawByteString(ParseHexEscape(2))
           else
             RaiseParseError('Invalid escape character: \' + Ch);
         '0':
@@ -831,7 +763,7 @@ begin
             begin
               if not IsAtEnd and IsASCIIDigit(PeekChar) then
                 RaiseParseError('Invalid escape character: \' + PeekChar);
-              Result := Result + #0;
+              Bytes := Bytes + #0;
             end
             else
               RaiseParseError('Invalid escape character: \' + Ch);
@@ -843,7 +775,7 @@ begin
             RaiseParseError('Invalid escape character: \' + Ch);
       else
         if Supports(jpcAllowExtendedStringEscapes) then
-          Result := Result + Ch
+          Bytes := Bytes + Ch
         else
           RaiseParseError('Invalid escape character: \' + Ch);
       end;
@@ -853,7 +785,7 @@ begin
     else if Ord(Ch) < 32 then
       RaiseParseError('Unescaped control character in string')
     else
-      Result := Result + Ch;
+      Bytes := Bytes + Ch;
   end;
 
   RaiseParseError('Unterminated string');
@@ -876,20 +808,7 @@ begin
     CodePoint := (CodePoint shl 4) or Cardinal(Value);
   end;
 
-  if CodePoint <= $7F then
-    Result := Chr(CodePoint)
-  else if CodePoint <= $7FF then
-    Result := Chr($C0 or (CodePoint shr 6)) +
-      Chr($80 or (CodePoint and $3F))
-  else if CodePoint <= $FFFF then
-    Result := Chr($E0 or (CodePoint shr 12)) +
-      Chr($80 or ((CodePoint shr 6) and $3F)) +
-      Chr($80 or (CodePoint and $3F))
-  else
-    Result := Chr($F0 or (CodePoint shr 18)) +
-      Chr($80 or ((CodePoint shr 12) and $3F)) +
-      Chr($80 or ((CodePoint shr 6) and $3F)) +
-      Chr($80 or (CodePoint and $3F));
+  Result := TextSemantics.CodePointToUTF8(CodePoint);
 end;
 
 function TAbstractJSONParser.ParseUnicodeEscape: string;
@@ -899,23 +818,6 @@ var
   HexStr: string;
   I: Integer;
   SavedPos: Integer;
-
-  function CodePointToUTF8(const ACP: Cardinal): string;
-  begin
-    if ACP <= $7F then
-      Result := Chr(ACP)
-    else if ACP <= $7FF then
-      Result := Chr($C0 or (ACP shr 6)) + Chr($80 or (ACP and $3F))
-    else if ACP <= $FFFF then
-      Result := Chr($E0 or (ACP shr 12)) +
-                Chr($80 or ((ACP shr 6) and $3F)) +
-                Chr($80 or (ACP and $3F))
-    else
-      Result := Chr($F0 or (ACP shr 18)) +
-                Chr($80 or ((ACP shr 12) and $3F)) +
-                Chr($80 or ((ACP shr 6) and $3F)) +
-                Chr($80 or (ACP and $3F));
-  end;
 
 begin
   HexStr := '';
@@ -966,7 +868,7 @@ begin
     end;
   end;
 
-  Result := CodePointToUTF8(CodePoint);
+  Result := TextSemantics.CodePointToUTF8(CodePoint);
 end;
 
 function TAbstractJSONParser.MatchSequence(const ASequence: string): Boolean;

@@ -16,7 +16,9 @@ procedure ConfigureModuleResolver(const AResolver: TGocciaModuleResolver;
 implementation
 
 uses
-  SysUtils;
+  SysUtils,
+
+  FileUtils;
 
 type
   TModuleAliasPair = record
@@ -43,11 +45,11 @@ begin
   if AFileName = '' then
     Exit(GetCurrentDir);
 
-  ExpandedFileName := ExpandFileName(AFileName);
-  if DirectoryExists(ExpandedFileName) then
+  ExpandedFileName := ExpandUTF8FileName(AFileName);
+  if UTF8DirectoryExists(ExpandedFileName) then
     Exit(ExpandedFileName);
 
-  if FileExists(ExpandedFileName) or (ExtractFilePath(AFileName) <> '') then
+  if UTF8FileExists(ExpandedFileName) or (ExtractFilePath(AFileName) <> '') then
     Exit(ExtractFilePath(ExpandedFileName));
 
   Result := GetCurrentDir;
@@ -65,7 +67,7 @@ begin
     Exit;
 
   if AExplicitImportMapPath <> '' then
-    ImportMapPath := ExpandFileName(AExplicitImportMapPath)
+    ImportMapPath := ExpandUTF8FileName(AExplicitImportMapPath)
   else
     ImportMapPath := TGocciaModuleResolver.DiscoverProjectConfig(
       ResolveEntryBaseDirectory(AEntryFileName));

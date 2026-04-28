@@ -35,6 +35,9 @@ type
 
 implementation
 
+uses
+  FileUtils;
+
 const
   ALIAS_SEGMENT_DELIMITER = '/';
   CURRENT_DIRECTORY_PREFIX = './';
@@ -91,13 +94,13 @@ begin
     Exit(AModulePath);
 
   if IsAbsolutePath(AModulePath) then
-    Result := ExpandFileName(AModulePath)
+    Result := ExpandUTF8FileName(AModulePath)
   else
   begin
     BaseDirectory := ExtractFilePath(AImportingFilePath);
     if BaseDirectory = '' then
       BaseDirectory := GetCurrentDir + PathDelim;
-    Result := ExpandFileName(BaseDirectory + AModulePath);
+    Result := ExpandUTF8FileName(BaseDirectory + AModulePath);
   end;
 
   Result := EnsureTrailingPathDelimiterIfNeeded(Result, IsPrefixAlias(AModulePath));
@@ -127,7 +130,7 @@ begin
   FAliases := TStringStringMap.Create;
   SetLength(FExtensions, 0);
   if ABaseDirectory <> '' then
-    FBaseDirectory := IncludeTrailingPathDelimiter(ExpandFileName(ABaseDirectory))
+    FBaseDirectory := IncludeTrailingPathDelimiter(ExpandUTF8FileName(ABaseDirectory))
   else
     FBaseDirectory := IncludeTrailingPathDelimiter(GetCurrentDir);
 end;
@@ -208,7 +211,7 @@ function TModuleResolver.TryResolveWithExtensions(const ABasePath: string; out A
 var
   I: Integer;
 begin
-  if FileExists(ABasePath) then
+  if UTF8FileExists(ABasePath) then
   begin
     AResolvedPath := ABasePath;
     Exit(True);
@@ -216,7 +219,7 @@ begin
 
   for I := 0 to High(FExtensions) do
   begin
-    if FileExists(ABasePath + FExtensions[I]) then
+    if UTF8FileExists(ABasePath + FExtensions[I]) then
     begin
       AResolvedPath := ABasePath + FExtensions[I];
       Exit(True);
@@ -225,7 +228,7 @@ begin
 
   for I := 0 to High(FExtensions) do
   begin
-    if FileExists(ABasePath + PathDelim + 'index' + FExtensions[I]) then
+    if UTF8FileExists(ABasePath + PathDelim + 'index' + FExtensions[I]) then
     begin
       AResolvedPath := ABasePath + PathDelim + 'index' + FExtensions[I];
       Exit(True);
@@ -243,15 +246,15 @@ begin
 
   if AliasApplied <> AModulePath then
   begin
-    if TryResolveWithExtensions(ExpandFileName(AliasApplied), Result) then
+    if TryResolveWithExtensions(ExpandUTF8FileName(AliasApplied), Result) then
       Exit;
     raise EModuleNotFound.CreateFmt(
-      'Module not found: "%s" (alias resolved to "%s")', [AModulePath, ExpandFileName(AliasApplied)]);
+      'Module not found: "%s" (alias resolved to "%s")', [AModulePath, ExpandUTF8FileName(AliasApplied)]);
   end;
 
   if IsAbsolutePath(AModulePath) then
   begin
-    if TryResolveWithExtensions(ExpandFileName(AModulePath), Result) then
+    if TryResolveWithExtensions(ExpandUTF8FileName(AModulePath), Result) then
       Exit;
     raise EModuleNotFound.CreateFmt(
       'Module not found: "%s"', [AModulePath]);
@@ -263,11 +266,11 @@ begin
     if BaseDirectory = '' then
       BaseDirectory := GetCurrentDir + PathDelim;
 
-    if TryResolveWithExtensions(ExpandFileName(BaseDirectory + AModulePath), Result) then
+    if TryResolveWithExtensions(ExpandUTF8FileName(BaseDirectory + AModulePath), Result) then
       Exit;
 
     raise EModuleNotFound.CreateFmt(
-      'Module not found: "%s" (resolved to "%s")', [AModulePath, ExpandFileName(BaseDirectory + AModulePath)]);
+      'Module not found: "%s" (resolved to "%s")', [AModulePath, ExpandUTF8FileName(BaseDirectory + AModulePath)]);
   end;
 
   raise EModuleNotFound.CreateFmt(

@@ -59,8 +59,11 @@ type
 implementation
 
 uses
+  TextSemantics,
+
   Goccia.JSON,
   Goccia.SourceMap.VLQ,
+  Goccia.TextFiles,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -84,15 +87,10 @@ end;
 
 constructor TGocciaSourceMapConsumer.CreateFromFile(const APath: string);
 var
-  Lines: TStringList;
+  SourceText: UTF8String;
 begin
-  Lines := TStringList.Create;
-  try
-    Lines.LoadFromFile(APath);
-    CreateFromJSON(Lines.Text);
-  finally
-    Lines.Free;
-  end;
+  SourceText := ReadUTF8FileText(APath);
+  CreateFromJSON(RetagUTF8Text(RawByteString(SourceText)));
 end;
 
 destructor TGocciaSourceMapConsumer.Destroy;

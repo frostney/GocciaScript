@@ -2,7 +2,7 @@ import "server-only";
 import { PostHog } from "posthog-node";
 
 /**
- * Server-side PostHog client. Used by the `/api/run` Route Handler
+ * Server-side PostHog client. Used by the API Route Handlers
  * (and any other server code that needs telemetry) to capture
  * uncaught exceptions and significant operational events that the
  * client-side SDK can't see.
@@ -53,7 +53,7 @@ export function captureServerException(
   err: unknown,
   context: {
     distinctId?: string;
-    /** Where the error originated — e.g. `"/api/run"`. Surfaced as
+    /** Where the error originated — e.g. `"/api/execute"`. Surfaced as
      *  the `path` property and used as the default distinct id when
      *  none is provided. */
     path: string;

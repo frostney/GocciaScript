@@ -57,7 +57,7 @@ console.log("--unsafe-ffi gating...");
     stderr: "pipe",
   });
   const json = JSON.parse(proc.stdout.toString());
-  if (json.value !== "undefined") throw new Error(`FFI without flag should be "undefined", got ${json.value}`);
+  if (json.files?.[0]?.result !== "undefined") throw new Error(`FFI without flag should be "undefined", got ${json.files?.[0]?.result}`);
 
   const procOn = Bun.spawnSync([LOADER, "--unsafe-ffi", "--output=json"], {
     stdin: new TextEncoder().encode("typeof FFI;\n"),
@@ -65,7 +65,7 @@ console.log("--unsafe-ffi gating...");
     stderr: "pipe",
   });
   const jsonOn = JSON.parse(procOn.stdout.toString());
-  if (jsonOn.value !== "object") throw new Error(`FFI with flag should be "object", got ${jsonOn.value}`);
+  if (jsonOn.files?.[0]?.result !== "object") throw new Error(`FFI with flag should be "object", got ${jsonOn.files?.[0]?.result}`);
 }
 
 // -- --asi (Loader + Bundler) ---------------------------------------------------
@@ -218,7 +218,7 @@ console.log("--max-memory (default positive)...");
     stderr: "pipe",
   });
   const json = JSON.parse(proc.stdout.toString());
-  if (typeof json.value !== "number" || json.value <= 0) throw new Error(`Default maxBytes should be positive, got ${json.value}`);
+  if (typeof json.files?.[0]?.result !== "number" || json.files[0].result <= 0) throw new Error(`Default maxBytes should be positive, got ${json.files?.[0]?.result}`);
 }
 
 console.log("--max-memory (override)...");
@@ -229,7 +229,7 @@ console.log("--max-memory (override)...");
     stderr: "pipe",
   });
   const json = JSON.parse(proc.stdout.toString());
-  if (json.value !== 5000000) throw new Error(`Override maxBytes should be 5000000, got ${json.value}`);
+  if (json.files?.[0]?.result !== 5000000) throw new Error(`Override maxBytes should be 5000000, got ${json.files?.[0]?.result}`);
 }
 
 console.log("--max-memory (OOM triggers RangeError)...");

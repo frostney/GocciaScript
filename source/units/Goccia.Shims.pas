@@ -65,8 +65,8 @@ const
         '      "Failed to execute ''btoa'': 1 argument required, but only 0 present."'#10 +
         '    );'#10 +
         '  const str: string = String(args[0]);'#10 +
-        '  const codePoints: number[] = Array.from({ length: str.length }, (_: undefined, i: number): number | undefined =>'#10 +
-        '    str.codePointAt(i)'#10 +
+        '  const codePoints: number[] = [...str].map((ch: string): number | undefined =>'#10 +
+        '    ch.codePointAt(0)'#10 +
         '  ).filter((cp: number | undefined): boolean => cp !== undefined);'#10 +
         '  codePoints.forEach((cp: number): void => {'#10 +
         '    if (cp > 0xff)'#10 +

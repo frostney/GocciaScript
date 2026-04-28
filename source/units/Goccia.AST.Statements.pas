@@ -203,6 +203,7 @@ type
     FBody: TGocciaASTNode;
     FIsStatic: Boolean;
     FIsAsync: Boolean;
+    FIsGenerator: Boolean;
     FReturnType: string;
     FGenericParams: string;
     FSourceText: string;
@@ -215,6 +216,7 @@ type
     property Body: TGocciaASTNode read FBody;
     property IsStatic: Boolean read FIsStatic;
     property IsAsync: Boolean read FIsAsync write FIsAsync;
+    property IsGenerator: Boolean read FIsGenerator write FIsGenerator;
     property ReturnType: string read FReturnType write FReturnType;
     property GenericParams: string read FGenericParams write FGenericParams;
     property SourceText: string read FSourceText write FSourceText;
@@ -252,6 +254,7 @@ type
     IsPrivate: Boolean;
     IsComputed: Boolean;
     IsAsync: Boolean;
+    IsGenerator: Boolean;
     ComputedKeyExpression: TGocciaExpression;
     Decorators: TGocciaDecoratorList;
     MethodNode: TGocciaClassMethod;

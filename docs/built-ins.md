@@ -158,7 +158,7 @@ Implements [ECMAScript BigInt](https://developer.mozilla.org/en-US/docs/Web/Java
 
 ### String (`Goccia.Builtins.GlobalString.pas`)
 
-Implements the [ECMAScript String](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String). **Not implemented:** `String.prototype.toLocaleLowerCase`, `String.prototype.toLocaleUpperCase`.
+Implements the [ECMAScript String](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String).
 
 String constructor available as `String()`.
 
@@ -172,7 +172,7 @@ String constructor available as `String()`.
 
 String prototype methods are implemented on string values:
 
-`charAt`, `charCodeAt`, `codePointAt`, `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith`, `slice`, `substring`, `toLowerCase`, `toUpperCase`, `trim`, `trimStart`, `trimEnd`, `repeat`, `replace`, `replaceAll`, `split`, `match`, `matchAll`, `search`, `padStart`, `padEnd`, `concat`, `at`, `localeCompare`, `normalize`, `isWellFormed`, `toWellFormed`, `[Symbol.iterator]`
+`charAt`, `charCodeAt`, `codePointAt`, `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith`, `slice`, `substring`, `toLowerCase`, `toUpperCase`, `toLocaleLowerCase`, `toLocaleUpperCase`, `trim`, `trimStart`, `trimEnd`, `repeat`, `replace`, `replaceAll`, `split`, `match`, `matchAll`, `search`, `padStart`, `padEnd`, `concat`, `at`, `localeCompare`, `normalize`, `isWellFormed`, `toWellFormed`, `[Symbol.iterator]`
 
 `replace`, `replaceAll`, `split`, `match`, `matchAll`, and `search` also honor custom objects implementing the corresponding `Symbol.replace`, `Symbol.split`, `Symbol.match`, `Symbol.matchAll`, or `Symbol.search` hooks.
 
@@ -227,7 +227,7 @@ RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pat
 - **Named capture groups** (`(?<name>...)`) are supported. Match results include a `groups` property (an object with `null` prototype) mapping group names to matched strings. Non-participating named groups are `undefined`. When no named groups exist, `groups` is `undefined`.
 - **Duplicate named capture groups:** the same group name may appear in different alternatives of a disjunction (`|`). For example, `/(?<year>\d{4})-\d{2}|\d{2}-(?<year>\d{4})/`. The `groups` property on the match result returns the value from whichever alternative participated; non-participating duplicates are `undefined`. Using the same name in the same alternative (where both groups could participate) is a `SyntaxError`.
 - **Named backreferences** (`\k<name>`) reference a previously captured named group within the same pattern. With duplicate named capture groups, `\k<name>` resolves to the group with that name in the same alternative branch.
-- Replacement strings in regex-backed `replace()` and `replaceAll()` support `$$`, `$&`, the pre-match token `$` followed by a backtick, `$'`, numeric captures such as `$1`, and **named group references** `$<name>`. An unmatched `$<name>` produces an empty string; `$<` without a closing `>` is literal.
+- Replacement strings in `replace()` and `replaceAll()` support `$$`, `$&`, the pre-match token `$` followed by a backtick, `$'`, numeric captures such as `$1`, and **named group references** `$<name>` for regex matches with named groups. An unmatched `$<name>` produces an empty string when named groups exist; `$<` without a closing `>` is literal.
 - When the replacer is a function and named groups are present, the `groups` object is passed as the last argument after `input`.
 - `String.prototype.match`, `matchAll`, `replace`, `replaceAll`, `search`, and `split` dispatch through the corresponding well-known symbol hooks, so custom protocol objects work as expected.
 - `matchAll()` returns a lazy iterator that advances matches on demand per the specification.
@@ -681,7 +681,7 @@ suite("group name", () => {
 |----------|-------------|
 | `suite(name, fn)` | Group benchmarks. Executes `fn` immediately to register `bench` entries. |
 | `bench(name, fn)` | Register a benchmark function. Called repeatedly during calibration and measurement. |
-| `runBenchmarks()` | Execute all registered benchmarks and return results. Injected automatically by GocciaBenchmarkRunner. |
+| `runBenchmarks()` | Execute all registered benchmarks and return results. GocciaBenchmarkRunner calls this automatically after benchmark files register suites. |
 
 **Result object** (returned by `runBenchmarks()`):
 
