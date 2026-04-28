@@ -1411,7 +1411,7 @@ var
   IterScope: TGocciaScope;
   IterContext: TGocciaEvaluationContext;
   DeclarationType: TGocciaDeclarationType;
-  MatchContext: TGocciaEvaluationContext;
+  MatchContext, MatchBaseContext: TGocciaEvaluationContext;
 begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
@@ -1467,6 +1467,7 @@ begin
 
       if Assigned(AForOfStatement.MatchPattern) then
       begin
+        MatchBaseContext := IterContext;
         if not TryEvaluateMatchPatternInContext(CurrentValue,
            AForOfStatement.MatchPattern, IterContext, MatchContext) then
         begin
@@ -1481,7 +1482,7 @@ begin
       finally
         if Assigned(AForOfStatement.MatchPattern) and
            (IterContext.Scope <> IterScope) then
-          IterContext.Scope.Free;
+          ReleaseMatchContext(IterContext, MatchBaseContext);
       end;
       if CF.Kind = cfkBreak then Break;
       if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
@@ -1506,7 +1507,7 @@ var
   IterContext: TGocciaEvaluationContext;
   DeclarationType: TGocciaDeclarationType;
   EmptyArgs: TGocciaArgumentsCollection;
-  MatchContext: TGocciaEvaluationContext;
+  MatchContext, MatchBaseContext: TGocciaEvaluationContext;
 begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
@@ -1578,6 +1579,7 @@ begin
 
           if Assigned(AForAwaitOfStatement.MatchPattern) then
           begin
+            MatchBaseContext := IterContext;
             if not TryEvaluateMatchPatternInContext(CurrentValue,
                AForAwaitOfStatement.MatchPattern, IterContext, MatchContext) then
               Continue;
@@ -1589,7 +1591,7 @@ begin
           finally
             if Assigned(AForAwaitOfStatement.MatchPattern) and
                (IterContext.Scope <> IterScope) then
-              IterContext.Scope.Free;
+              ReleaseMatchContext(IterContext, MatchBaseContext);
           end;
           if CF.Kind = cfkBreak then Break;
           if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
@@ -1640,6 +1642,7 @@ begin
 
         if Assigned(AForAwaitOfStatement.MatchPattern) then
         begin
+          MatchBaseContext := IterContext;
           if not TryEvaluateMatchPatternInContext(CurrentValue,
              AForAwaitOfStatement.MatchPattern, IterContext, MatchContext) then
           begin
@@ -1654,7 +1657,7 @@ begin
         finally
           if Assigned(AForAwaitOfStatement.MatchPattern) and
              (IterContext.Scope <> IterScope) then
-            IterContext.Scope.Free;
+            ReleaseMatchContext(IterContext, MatchBaseContext);
         end;
         if CF.Kind = cfkBreak then Break;
         if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
@@ -2022,8 +2025,8 @@ begin
     try
       Result := EvaluateStatement(AIfStatement.Consequent, BodyContext);
     finally
-      if PatternHandled and (BodyContext.Scope <> AContext.Scope) then
-        BodyContext.Scope.Free;
+      if PatternHandled then
+        ReleaseMatchContext(BodyContext, AContext);
     end;
   end
   else if Assigned(AIfStatement.Alternate) then
@@ -2052,8 +2055,7 @@ begin
         try
           Result := EvaluateStatements(ATryStatement.CatchBlock.Nodes, MatchContext);
         finally
-          if MatchContext.Scope <> CatchScope then
-            MatchContext.Scope.Free;
+          ReleaseMatchContext(MatchContext, CatchContext);
         end;
       end
       else

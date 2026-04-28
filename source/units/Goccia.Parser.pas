@@ -2141,6 +2141,7 @@ var
   KeyExpression: TGocciaExpression;
   Pattern: TGocciaMatchPattern;
   IsComputed: Boolean;
+  CanUseShorthand: Boolean;
   NumericValue: Double;
 begin
   Properties := TGocciaObjectMatchPropertyList.Create(True);
@@ -2155,6 +2156,7 @@ begin
     end;
 
     IsComputed := False;
+    CanUseShorthand := False;
     Key := '';
     KeyExpression := nil;
     if Match(gttLeftBracket) then
@@ -2172,7 +2174,10 @@ begin
       Key := DoubleToESString(NumericValue);
     end
     else if IsIdentifierNameToken(Peek.TokenType) then
+    begin
+      CanUseShorthand := Check(gttIdentifier);
       Key := Advance.Lexeme
+    end
     else
       raise TGocciaSyntaxError.Create('Expected property name in object pattern',
         Peek.Line, Peek.Column, FFileName, FSourceLines,
@@ -2184,6 +2189,10 @@ begin
       raise TGocciaSyntaxError.Create('Computed pattern properties require a value pattern',
         Peek.Line, Peek.Column, FFileName, FSourceLines,
         SSuggestComputedPropertyNeedsValue)
+    else if not CanUseShorthand then
+      raise TGocciaSyntaxError.Create('Object pattern shorthand requires an identifier property name',
+        Previous.Line, Previous.Column, FFileName, FSourceLines,
+        'Use a ":" value pattern for string, numeric, or keyword property names')
     else
       Pattern := TGocciaValueMatchPattern.Create(
         TGocciaIdentifierExpression.Create(Key, Previous.Line, Previous.Column),
@@ -3923,7 +3932,7 @@ var
   TryStmt: TGocciaTryStatement;
   CatchType: string;
   CatchPattern: TGocciaMatchPattern;
-  ScanIndex, ParenDepth: Integer;
+  ScanIndex, TypeDepth: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -3948,18 +3957,34 @@ begin
       if Check(gttColon) then
       begin
         ScanIndex := FCurrent + 1;
-        ParenDepth := 0;
+        TypeDepth := 0;
         while ScanIndex < FTokens.Count do
         begin
-          if FTokens[ScanIndex].TokenType = gttLeftParen then
-            Inc(ParenDepth)
-          else if FTokens[ScanIndex].TokenType = gttRightParen then
-          begin
-            if ParenDepth = 0 then
-              Break;
-            Dec(ParenDepth);
-          end
-          else if (ParenDepth = 0) and
+          case FTokens[ScanIndex].TokenType of
+            gttLeftParen, gttLeftBracket, gttLeftBrace, gttLess:
+              Inc(TypeDepth);
+            gttRightParen:
+              begin
+                if TypeDepth = 0 then
+                  Break;
+                Dec(TypeDepth);
+              end;
+            gttRightBracket, gttRightBrace, gttGreater:
+              if TypeDepth > 0 then
+                Dec(TypeDepth);
+            gttRightShift:
+              if TypeDepth > 1 then
+                Dec(TypeDepth, 2)
+              else
+                TypeDepth := 0;
+            gttUnsignedRightShift:
+              if TypeDepth > 2 then
+                Dec(TypeDepth, 3)
+              else
+                TypeDepth := 0;
+          end;
+
+          if (TypeDepth = 0) and
              (FTokens[ScanIndex].TokenType = gttIdentifier) and
              (FTokens[ScanIndex].Lexeme = KEYWORD_IS) then
             raise TGocciaSyntaxError.Create('Cannot combine catch type annotations with pattern matching',

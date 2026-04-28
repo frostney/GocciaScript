@@ -55,8 +55,13 @@ begin
      (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) then
     Slot := ACtx.Scope.GetLocal(LocalIdx).Slot
   else
+  begin
     Slot := ACtx.Scope.DeclareLocal(AName, AIsConst);
+    LocalIdx := ACtx.Scope.ResolveLocal(AName);
+  end;
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ASubjectReg, 0));
+  if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+    EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
 end;
 
 procedure DeclarePatternBindings(const ACtx: TGocciaCompilationContext;
@@ -465,6 +470,8 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[ClosedIndex], 0, 0));
       EndJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
       PatchJumpTarget(ACtx, FalseJump);
+      for ClosedIndex := 0 to ClosedCount - 1 do
+        EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[ClosedIndex], 0, 0));
     end;
 
     if Assigned(AExpr.DefaultExpression) then

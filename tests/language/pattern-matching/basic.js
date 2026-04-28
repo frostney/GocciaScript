@@ -120,6 +120,22 @@ describe("pattern matching expressions", () => {
     expect({} is Box).toBe(false);
   });
 
+  test("constructor value patterns do not identify builtins by shadowed names", () => {
+    class Array {}
+
+    expect([] is Array).toBe(false);
+  });
+
+  test("malformed iterators throw during array pattern matching", () => {
+    const malformed = {
+      [Symbol.iterator]() {
+        return 1;
+      }
+    };
+
+    expect(() => malformed is []).toThrow(TypeError);
+  });
+
   test("ordinary match calls remain valid without a clause block", () => {
     const match = (value) => value + 1;
     expect(match(2)).toBe(3);

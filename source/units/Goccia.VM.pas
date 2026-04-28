@@ -3258,11 +3258,11 @@ begin
       if not Assigned(NextMethod) or
          (NextMethod is TGocciaUndefinedLiteralValue) or
          not NextMethod.IsCallable then
-        Exit(False);
+        ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
       IteratorValue := IteratorObject;
     end
     else
-      Exit(False);
+      ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
   end
   else
     Exit(False);
@@ -3287,7 +3287,7 @@ begin
     if not Assigned(NextMethod) or
        (NextMethod is TGocciaUndefinedLiteralValue) or
        not NextMethod.IsCallable then
-      Exit(False);
+      ThrowTypeError('Iterator.next is not a function');
     CallArgs := AcquireArguments;
     try
       NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IteratorValue);

@@ -23,6 +23,8 @@ function TryEvaluateMatchPatternInContext(const ASubject: TGocciaValue;
 function EvaluateConditionWithPatternBindings(const ACondition: TGocciaExpression;
   const AContext: TGocciaEvaluationContext; out ABodyContext: TGocciaEvaluationContext;
   out AHandled: Boolean): Boolean;
+procedure ReleaseMatchContext(const AMatchContext,
+  AParentContext: TGocciaEvaluationContext);
 
 implementation
 
@@ -41,14 +43,18 @@ uses
   Goccia.Scope.BindingMap,
   Goccia.Token,
   Goccia.Values.ArrayValue,
+  Goccia.Values.BigIntObjectValue,
   Goccia.Values.BigIntValue,
+  Goccia.Values.BooleanObjectValue,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.Generic,
   Goccia.Values.IteratorValue,
+  Goccia.Values.NumberObjectValue,
   Goccia.Values.ObjectValue,
+  Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue;
 
 function BooleanValue(const AValue: Boolean): TGocciaBooleanLiteralValue; inline;
@@ -66,12 +72,31 @@ begin
   Result.Scope := AContext.Scope.CreateChild(skBlock, ALabel);
 end;
 
+procedure ReleaseMatchContext(const AMatchContext,
+  AParentContext: TGocciaEvaluationContext);
+var
+  CurrentScope, ParentScope, StopScope: TGocciaScope;
+begin
+  StopScope := AParentContext.Scope;
+  CurrentScope := AMatchContext.Scope;
+  while Assigned(CurrentScope) and (CurrentScope <> StopScope) do
+  begin
+    ParentScope := CurrentScope.Parent;
+    CurrentScope.Free;
+    CurrentScope := ParentScope;
+  end;
+end;
+
 procedure BindPatternName(const AContext: TGocciaEvaluationContext;
   const AName: string; const AValue: TGocciaValue;
   const ADeclarationType: TGocciaDeclarationType);
 begin
   AContext.Scope.DefineLexicalBinding(AName, AValue, ADeclarationType);
 end;
+
+function TryMatchPatternInternal(const ASubject: TGocciaValue;
+  const APattern: TGocciaMatchPattern; const AContext: TGocciaEvaluationContext;
+  out AMatchContext: TGocciaEvaluationContext): Boolean; forward;
 
 function GetIteratorFromPatternValue(const AValue: TGocciaValue): TGocciaIteratorValue;
 var
@@ -91,56 +116,116 @@ begin
   begin
     IteratorMethod := TGocciaObjectValue(AValue).GetSymbolProperty(
       TGocciaSymbolValue.WellKnownIterator);
-    if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue)
-       and IteratorMethod.IsCallable then
-    begin
-      CallArguments := TGocciaArgumentsCollection.Create;
-      try
-        IteratorObject := TGocciaFunctionBase(IteratorMethod).Call(
-          CallArguments, AValue);
-      finally
-        CallArguments.Free;
-      end;
+    if not Assigned(IteratorMethod) or (IteratorMethod is TGocciaUndefinedLiteralValue) then
+      Exit(nil);
+    if not IteratorMethod.IsCallable then
+      ThrowTypeError('Object [Symbol.iterator] must be callable');
 
-      if IteratorObject is TGocciaIteratorValue then
-        Exit(TGocciaIteratorValue(IteratorObject));
-
-      if IteratorObject is TGocciaObjectValue then
-      begin
-        NextMethod := IteratorObject.GetProperty(PROP_NEXT);
-        if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue)
-           and NextMethod.IsCallable then
-          Exit(TGocciaGenericIteratorValue.Create(IteratorObject));
-      end;
+    CallArguments := TGocciaArgumentsCollection.Create;
+    try
+      IteratorObject := TGocciaFunctionBase(IteratorMethod).Call(
+        CallArguments, AValue);
+    finally
+      CallArguments.Free;
     end;
+
+    if IteratorObject is TGocciaIteratorValue then
+      Exit(TGocciaIteratorValue(IteratorObject));
+
+    if IteratorObject is TGocciaObjectValue then
+    begin
+      NextMethod := IteratorObject.GetProperty(PROP_NEXT);
+      if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue)
+         and NextMethod.IsCallable then
+        Exit(TGocciaGenericIteratorValue.Create(IteratorObject));
+    end;
+
+    ThrowTypeError('[Symbol.iterator] did not return a valid iterator');
   end;
 
   Result := nil;
 end;
 
-function CollectIterableItems(const AValue: TGocciaValue;
-  const AItems: TGocciaValueList): Boolean;
+function TryMatchIteratorItems(const AIterator: TGocciaIteratorValue;
+  const AElements: TGocciaMatchPatternList; const ARestPattern: TGocciaMatchPattern;
+  const AHasRestWildcard: Boolean; const AContext: TGocciaEvaluationContext;
+  out AMatchContext: TGocciaEvaluationContext): Boolean;
 var
-  Iterator: TGocciaIteratorValue;
+  I: Integer;
   IterationResult: TGocciaObjectValue;
+  CurrentContext, NextContext: TGocciaEvaluationContext;
+  RestArray: TGocciaArrayValue;
 begin
-  Iterator := GetIteratorFromPatternValue(AValue);
-  if not Assigned(Iterator) then
-    Exit(False);
+  CurrentContext := AContext;
 
-  IterationResult := Iterator.AdvanceNext;
-  while not IterationResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+  for I := 0 to AElements.Count - 1 do
   begin
-    AItems.Add(IterationResult.GetProperty(PROP_VALUE));
-    IterationResult := Iterator.AdvanceNext;
+    IterationResult := AIterator.AdvanceNext;
+    if IterationResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+    begin
+      ReleaseMatchContext(CurrentContext, AContext);
+      Exit(False);
+    end;
+    if not Assigned(AElements[I]) then
+      Continue;
+    if not TryMatchPatternInternal(IterationResult.GetProperty(PROP_VALUE),
+       AElements[I], CurrentContext, NextContext) then
+    begin
+      ReleaseMatchContext(CurrentContext, AContext);
+      Exit(False);
+    end;
+    CurrentContext := NextContext;
   end;
 
+  if Assigned(ARestPattern) then
+  begin
+    RestArray := TGocciaArrayValue.Create;
+    IterationResult := AIterator.AdvanceNext;
+    while not IterationResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+    begin
+      RestArray.Elements.Add(IterationResult.GetProperty(PROP_VALUE));
+      IterationResult := AIterator.AdvanceNext;
+    end;
+    if not TryMatchPatternInternal(RestArray, ARestPattern,
+       CurrentContext, NextContext) then
+    begin
+      ReleaseMatchContext(CurrentContext, AContext);
+      Exit(False);
+    end;
+    CurrentContext := NextContext;
+  end
+  else if not AHasRestWildcard then
+  begin
+    IterationResult := AIterator.AdvanceNext;
+    if not IterationResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+    begin
+      ReleaseMatchContext(CurrentContext, AContext);
+      Exit(False);
+    end;
+  end;
+
+  AMatchContext := CurrentContext;
   Result := True;
+end;
+
+function BoxPrimitiveForMatch(const ASubject: TGocciaValue): TGocciaObjectValue;
+begin
+  if ASubject is TGocciaStringLiteralValue then
+    Exit(TGocciaStringObjectValue.Create(TGocciaStringLiteralValue(ASubject)));
+  if ASubject is TGocciaNumberLiteralValue then
+    Exit(TGocciaNumberObjectValue.Create(TGocciaNumberLiteralValue(ASubject)));
+  if ASubject is TGocciaBooleanLiteralValue then
+    Exit(TGocciaBooleanObjectValue.Create(TGocciaBooleanLiteralValue(ASubject)));
+  if ASubject is TGocciaBigIntValue then
+    Exit(TGocciaBigIntObjectValue.Create(TGocciaBigIntValue(ASubject)));
+  Result := nil;
 end;
 
 function HasMatchProperty(const ASubject, AKey: TGocciaValue): Boolean;
 var
   KeyName: string;
+  BoxedSubject: TGocciaObjectValue;
+  SymbolPrototype: TGocciaValue;
   PropertyValue: TGocciaValue;
 begin
   if (AKey is TGocciaSymbolValue) and (ASubject is TGocciaObjectValue) then
@@ -150,16 +235,37 @@ begin
   if ASubject is TGocciaObjectValue then
     Exit(TGocciaObjectValue(ASubject).HasProperty(KeyName));
 
+  BoxedSubject := BoxPrimitiveForMatch(ASubject);
+  if Assigned(BoxedSubject) then
+    Exit(BoxedSubject.HasProperty(KeyName));
+
+  if ASubject is TGocciaSymbolValue then
+  begin
+    SymbolPrototype := TGocciaSymbolValue.SharedPrototype;
+    if SymbolPrototype is TGocciaObjectValue then
+      Exit(TGocciaObjectValue(SymbolPrototype).HasProperty(KeyName));
+  end;
+
   PropertyValue := ASubject.GetProperty(KeyName);
   Result := Assigned(PropertyValue) and not (PropertyValue is TGocciaUndefinedLiteralValue);
 end;
 
 function GetMatchProperty(const ASubject, AKey: TGocciaValue): TGocciaValue;
+var
+  BoxedSubject: TGocciaObjectValue;
 begin
   if (AKey is TGocciaSymbolValue) and (ASubject is TGocciaObjectValue) then
     Result := TGocciaObjectValue(ASubject).GetSymbolProperty(TGocciaSymbolValue(AKey))
+  else if ASubject is TGocciaObjectValue then
+    Result := ASubject.GetProperty(AKey.ToStringLiteral.Value)
   else
-    Result := ASubject.GetProperty(AKey.ToStringLiteral.Value);
+  begin
+    BoxedSubject := BoxPrimitiveForMatch(ASubject);
+    if Assigned(BoxedSubject) then
+      Result := BoxedSubject.GetProperty(AKey.ToStringLiteral.Value)
+    else
+      Result := ASubject.GetProperty(AKey.ToStringLiteral.Value);
+  end;
   if not Assigned(Result) then
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -196,35 +302,25 @@ begin
 end;
 
 function BuiltinConstructorMatchesSubject(const AMatcher, ASubject: TGocciaValue): Boolean;
-var
-  ClassName: string;
 begin
   Result := False;
   if not (AMatcher is TGocciaClassValue) then
     Exit;
 
-  ClassName := TGocciaClassValue(AMatcher).Name;
-  if ClassName = CONSTRUCTOR_OBJECT then
+  if (TGocciaClassValue(AMatcher).Name = CONSTRUCTOR_OBJECT) and
+     (TGocciaClassValue(AMatcher).Prototype = TGocciaObjectValue.SharedObjectPrototype) then
     Result := ASubject is TGocciaObjectValue
-  else if ClassName = CONSTRUCTOR_ARRAY then
+  else if AMatcher is TGocciaArrayClassValue then
     Result := ASubject is TGocciaArrayValue
-  else if ClassName = CONSTRUCTOR_STRING then
+  else if AMatcher is TGocciaStringClassValue then
     Result := ASubject is TGocciaStringLiteralValue
-  else if ClassName = CONSTRUCTOR_NUMBER then
+  else if AMatcher is TGocciaNumberClassValue then
     Result := ASubject is TGocciaNumberLiteralValue
-  else if ClassName = CONSTRUCTOR_BOOLEAN then
+  else if AMatcher is TGocciaBooleanClassValue then
     Result := ASubject is TGocciaBooleanLiteralValue
-  else if ClassName = CONSTRUCTOR_BIGINT then
-    Result := ASubject is TGocciaBigIntValue
-  else if ClassName = CONSTRUCTOR_SYMBOL then
-    Result := ASubject is TGocciaSymbolValue
-  else if ClassName = CONSTRUCTOR_FUNCTION then
+  else if AMatcher is TGocciaFunctionConstructorClassValue then
     Result := ASubject.IsCallable;
 end;
-
-function TryMatchPatternInternal(const ASubject: TGocciaValue;
-  const APattern: TGocciaMatchPattern; const AContext: TGocciaEvaluationContext;
-  out AMatchContext: TGocciaEvaluationContext): Boolean; forward;
 
 function TryMatchValuePattern(const ASubject: TGocciaValue;
   const APattern: TGocciaValueMatchPattern; const AContext: TGocciaEvaluationContext): Boolean;
@@ -283,7 +379,10 @@ begin
     if not Assigned(AElements[I]) then
       Continue;
     if not TryMatchPatternInternal(AItems[I], AElements[I], CurrentContext, NextContext) then
+    begin
+      ReleaseMatchContext(CurrentContext, AContext);
       Exit(False);
+    end;
     CurrentContext := NextContext;
   end;
 
@@ -293,7 +392,10 @@ begin
     for I := AElements.Count to AItems.Count - 1 do
       RestArray.Elements.Add(AItems[I]);
     if not TryMatchPatternInternal(RestArray, ARestPattern, CurrentContext, NextContext) then
+    begin
+      ReleaseMatchContext(CurrentContext, AContext);
       Exit(False);
+    end;
     CurrentContext := NextContext;
   end;
 
@@ -305,17 +407,13 @@ function TryMatchArrayPattern(const ASubject: TGocciaValue;
   const APattern: TGocciaArrayMatchPattern; const AContext: TGocciaEvaluationContext;
   out AMatchContext: TGocciaEvaluationContext): Boolean;
 var
-  Items: TGocciaValueList;
+  Iterator: TGocciaIteratorValue;
 begin
-  Items := TGocciaValueList.Create(False);
-  try
-    if not CollectIterableItems(ASubject, Items) then
-      Exit(False);
-    Result := TryMatchArrayItems(Items, APattern.Elements, APattern.RestPattern,
-      APattern.HasRestWildcard, AContext, AMatchContext);
-  finally
-    Items.Free;
-  end;
+  Iterator := GetIteratorFromPatternValue(ASubject);
+  if not Assigned(Iterator) then
+    Exit(False);
+  Result := TryMatchIteratorItems(Iterator, APattern.Elements, APattern.RestPattern,
+    APattern.HasRestWildcard, AContext, AMatchContext);
 end;
 
 function TryMatchObjectPattern(const ASubject: TGocciaValue;
@@ -350,11 +448,17 @@ begin
         KeyValue := TGocciaStringLiteralValue.Create(Prop.Key);
 
       if not HasMatchProperty(ASubject, KeyValue) then
+      begin
+        ReleaseMatchContext(CurrentContext, AContext);
         Exit(False);
+      end;
 
       PropertyValue := GetMatchProperty(ASubject, KeyValue);
       if not TryMatchPatternInternal(PropertyValue, Prop.Pattern, CurrentContext, NextContext) then
+      begin
+        ReleaseMatchContext(CurrentContext, AContext);
         Exit(False);
+      end;
 
       if KeyValue is TGocciaSymbolValue then
         MatchedSymbols.Add(TGocciaSymbolValue(KeyValue))
@@ -382,7 +486,10 @@ begin
 
       if not TryMatchPatternInternal(Remainder, APattern.RestPattern,
         CurrentContext, NextContext) then
+      begin
+        ReleaseMatchContext(CurrentContext, AContext);
         Exit(False);
+      end;
       CurrentContext := NextContext;
     end;
 
@@ -400,6 +507,7 @@ function TryMatchExtractorPattern(const ASubject: TGocciaValue;
 var
   Matcher, CustomMatcher, Extracted: TGocciaValue;
   Items: TGocciaValueList;
+  Iterator: TGocciaIteratorValue;
 begin
   Matcher := EvaluateExpression(APattern.MatcherExpression, AContext);
   CustomMatcher := GetCustomMatcher(Matcher);
@@ -429,12 +537,11 @@ begin
   end
   else
   begin
-    Items := TGocciaValueList.Create(False);
-    if not CollectIterableItems(Extracted, Items) then
-    begin
-      Items.Free;
+    Iterator := GetIteratorFromPatternValue(Extracted);
+    if not Assigned(Iterator) then
       ThrowTypeError('Extractor pattern result must be true, false, or iterable');
-    end;
+    Exit(TryMatchIteratorItems(Iterator, APattern.Arguments, APattern.RestPattern,
+      APattern.HasRestWildcard, AContext, AMatchContext));
   end;
 
   try
@@ -515,7 +622,10 @@ begin
       if not TryMatchPatternInternal(ASubject,
          TGocciaAndMatchPattern(APattern).Patterns[I], CurrentContext,
          NextContext) then
+      begin
+        ReleaseMatchContext(CurrentContext, AContext);
         Exit(False);
+      end;
       CurrentContext := NextContext;
     end;
     AMatchContext := CurrentContext;
@@ -590,7 +700,7 @@ begin
   Result := BooleanValue(TryEvaluateMatchPattern(Subject, AExpression.Pattern,
     AContext, MatchContext));
   if TGocciaBooleanLiteralValue(Result).Value then
-    MatchContext.Scope.Free;
+    ReleaseMatchContext(MatchContext, AContext);
 end;
 
 function EvaluateMatchExpression(const AExpression: TGocciaMatchExpression;
@@ -610,7 +720,7 @@ begin
       try
         Exit(EvaluateExpression(AExpression.Clauses[I].Expression, MatchContext));
       finally
-        MatchContext.Scope.Free;
+        ReleaseMatchContext(MatchContext, AContext);
       end;
     end;
   end;
@@ -684,8 +794,8 @@ begin
       ABodyContext := RightContext
     else
     begin
-      if LeftHandled and (LeftContext.Scope <> AContext.Scope) then
-        LeftContext.Scope.Free;
+      if LeftHandled then
+        ReleaseMatchContext(LeftContext, AContext);
       ABodyContext := AContext;
     end;
     Result := RightResult;
