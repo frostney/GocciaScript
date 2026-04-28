@@ -736,6 +736,27 @@ console.log("TestRunner: JSON multi-file structure...");
       if (typeof file?.error?.message !== "string") throw new Error("Failing benchmark file should include shared error object");
     }
 
+    console.log("BenchmarkRunner: callback timeout is enforced...");
+    {
+      const timeoutSource = [
+        'suite("limit", () => {',
+        '  bench("loop", { run: () => { while (true) {} } });',
+        "});",
+        "",
+      ].join("\n");
+      const proc = Bun.spawnSync(
+        [resolve(BENCHRUNNER), "--no-progress", "--timeout=1"],
+        {
+          stdin: new TextEncoder().encode(timeoutSource),
+          stdout: "pipe",
+          stderr: "pipe",
+          env: benchEnv,
+          timeout: 10_000,
+        },
+      );
+      if (proc.exitCode === 0) throw new Error("Benchmark callback timeout should fail");
+    }
+
     console.log("BenchmarkRunner: stdin benchmark (interpreted)...");
     const stdinOutPath = join(tmp, "stdin-interp.json");
     {
@@ -860,6 +881,13 @@ console.log("TestRunner: JSON multi-file structure...");
         },
       );
       if (proc.exitCode === 0) throw new Error("Bytecode benchmark with no valid results should fail");
+    }
+    {
+      const json = JSON.parse(readFileSync(emptyBcOutPath, "utf-8"));
+      const file = json.files?.[0];
+      if (json.ok !== false) throw new Error(`No-valid benchmark run should mark top-level ok=false, got ${json.ok}`);
+      if (file?.ok !== false) throw new Error(`No-valid benchmark file should mark ok=false, got ${file?.ok}`);
+      if (typeof file?.error?.message !== "string") throw new Error("No-valid benchmark file should include shared error object");
     }
   } finally {
     clean(tmp);

@@ -240,18 +240,18 @@ begin
         StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
         try
           EngineResult := Engine.Execute;
+          FileResult.FileName := AFileName;
+          FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
+          FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
+          FileResult.CompileTimeNanoseconds := 0;
+          BenchStart := GetNanoseconds;
+          ScriptResult := RunRegisteredBenchmarks(Engine);
+          FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds +
+            (GetNanoseconds - BenchStart);
         finally
           ClearExecutionTimeout;
           ClearInstructionLimit;
         end;
-        FileResult.FileName := AFileName;
-        FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
-        FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
-        FileResult.CompileTimeNanoseconds := 0;
-        BenchStart := GetNanoseconds;
-        ScriptResult := RunRegisteredBenchmarks(Engine);
-        FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds +
-          (GetNanoseconds - BenchStart);
 
         GC := TGarbageCollector.Instance;
 
@@ -356,15 +356,11 @@ begin
           if Assigned(Engine.BuiltinBenchmark) then
             Engine.BuiltinBenchmark.OnBeforeMeasurement := Engine.ClearTransientCaches;
 
+          try
           StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
           StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
           try
-            try
-              TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
-            finally
-              ClearExecutionTimeout;
-              ClearInstructionLimit;
-            end;
+            TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
             ExecEnd := GetNanoseconds;
 
             FileResult.FileName := AFileName;
@@ -375,20 +371,24 @@ begin
             ScriptResult := RunRegisteredBenchmarks(Engine);
             FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd +
               (GetNanoseconds - BenchStart);
-
-            GC := TGarbageCollector.Instance;
-            if Assigned(ScriptResult) and Assigned(GC) then
-              GC.AddTempRoot(ScriptResult);
-
-            try
-              PopulateFileResult(FileResult, ScriptResult, AReporter);
-            finally
-              if Assigned(ScriptResult) and Assigned(GC) then
-                GC.RemoveTempRoot(ScriptResult);
-            end;
           finally
-            Module.Free;
+            ClearExecutionTimeout;
+            ClearInstructionLimit;
           end;
+
+          GC := TGarbageCollector.Instance;
+          if Assigned(ScriptResult) and Assigned(GC) then
+            GC.AddTempRoot(ScriptResult);
+
+          try
+            PopulateFileResult(FileResult, ScriptResult, AReporter);
+          finally
+            if Assigned(ScriptResult) and Assigned(GC) then
+              GC.RemoveTempRoot(ScriptResult);
+          end;
+        finally
+          Module.Free;
+        end;
         finally
           Engine.Free;
         end;
@@ -461,18 +461,18 @@ begin
       StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
       try
         EngineResult := Engine.Execute;
+        FileResult.FileName := AFileName;
+        FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
+        FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
+        FileResult.CompileTimeNanoseconds := 0;
+        BenchStart := GetNanoseconds;
+        ScriptResult := RunRegisteredBenchmarks(Engine);
+        FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds +
+          (GetNanoseconds - BenchStart);
       finally
         ClearExecutionTimeout;
         ClearInstructionLimit;
       end;
-      FileResult.FileName := AFileName;
-      FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
-      FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
-      FileResult.CompileTimeNanoseconds := 0;
-      BenchStart := GetNanoseconds;
-      ScriptResult := RunRegisteredBenchmarks(Engine);
-      FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds +
-        (GetNanoseconds - BenchStart);
 
       GC := TGarbageCollector.Instance;
 
@@ -569,15 +569,11 @@ begin
         if Assigned(Engine.BuiltinBenchmark) then
           Engine.BuiltinBenchmark.OnBeforeMeasurement := Engine.ClearTransientCaches;
 
+        try
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
         StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
         try
-          try
-            TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
-          finally
-            ClearExecutionTimeout;
-            ClearInstructionLimit;
-          end;
+          TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
           ExecEnd := GetNanoseconds;
 
           FileResult.FileName := AFileName;
@@ -588,20 +584,24 @@ begin
           ScriptResult := RunRegisteredBenchmarks(Engine);
           FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd +
             (GetNanoseconds - BenchStart);
-
-          GC := TGarbageCollector.Instance;
-          if Assigned(ScriptResult) and Assigned(GC) then
-            GC.AddTempRoot(ScriptResult);
-
-          try
-            PopulateFileResult(FileResult, ScriptResult, AReporter);
-          finally
-            if Assigned(ScriptResult) and Assigned(GC) then
-              GC.RemoveTempRoot(ScriptResult);
-          end;
         finally
-          Module.Free;
+          ClearExecutionTimeout;
+          ClearInstructionLimit;
         end;
+
+        GC := TGarbageCollector.Instance;
+        if Assigned(ScriptResult) and Assigned(GC) then
+          GC.AddTempRoot(ScriptResult);
+
+        try
+          PopulateFileResult(FileResult, ScriptResult, AReporter);
+        finally
+          if Assigned(ScriptResult) and Assigned(GC) then
+            GC.RemoveTempRoot(ScriptResult);
+        end;
+      finally
+        Module.Free;
+      end;
       finally
         Engine.Free;
       end;

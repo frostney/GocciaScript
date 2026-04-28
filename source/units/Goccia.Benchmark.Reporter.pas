@@ -91,6 +91,12 @@ begin
     not Math.IsInfinite(AValue);
 end;
 
+function IsValidBenchmarkEntry(const AEntry: TBenchmarkEntry): Boolean;
+begin
+  Result := (AEntry.Error = '') and IsPositiveFinite(AEntry.OpsPerSec) and
+    IsPositiveFinite(AEntry.MeanMs) and (AEntry.Iterations > 0);
+end;
+
 function ParseReportFormat(const S: string): TBenchmarkReportFormat;
 var
   Lower: string;
@@ -354,6 +360,7 @@ var
   ErrorInfo: TCLIJSONErrorInfo;
   JSONFormatSettings: TFormatSettings;
   FileOk: Boolean;
+  ValidFileBenchmarkCount: Integer;
   FilesJSON, FileJSON, BenchmarksJSON, BenchmarkJSON, ExtraJSON: string;
   FileErrorJSON, FileErrorMessage: string;
 begin
@@ -374,15 +381,19 @@ begin
       FFiles[F].ExecuteTimeNanoseconds;
 
     BenchmarksJSON := '';
-    FileOk := True;
+    ValidFileBenchmarkCount := 0;
+    FileOk := (FFiles[F].TotalBenchmarks > 0) and
+      (Length(FFiles[F].Entries) > 0);
     FileErrorMessage := '';
+    if not FileOk then
+      FileErrorMessage := 'Benchmark file produced no measurements';
     for E := 0 to Length(FFiles[F].Entries) - 1 do
     begin
       Entry := FFiles[F].Entries[E];
 
-      if FileOk and
-         ((Entry.Error <> '') or not IsPositiveFinite(Entry.OpsPerSec) or
-          not IsPositiveFinite(Entry.MeanMs) or (Entry.Iterations <= 0)) then
+      if IsValidBenchmarkEntry(Entry) then
+        Inc(ValidFileBenchmarkCount)
+      else if FileOk then
       begin
         FileOk := False;
         if Entry.Error <> '' then
@@ -414,6 +425,12 @@ begin
       if BenchmarksJSON <> '' then
         BenchmarksJSON := BenchmarksJSON + ',';
       BenchmarksJSON := BenchmarksJSON + BenchmarkJSON;
+    end;
+
+    if (ValidFileBenchmarkCount = 0) and FileOk then
+    begin
+      FileOk := False;
+      FileErrorMessage := 'Benchmark file produced no valid measurements';
     end;
 
     if FileOk then
@@ -515,10 +532,7 @@ begin
     for E := 0 to Length(FFiles[F].Entries) - 1 do
     begin
       Entry := FFiles[F].Entries[E];
-      if Entry.Error <> '' then
-        Exit(True);
-      if not IsPositiveFinite(Entry.OpsPerSec) or
-         not IsPositiveFinite(Entry.MeanMs) or (Entry.Iterations <= 0) then
+      if not IsValidBenchmarkEntry(Entry) then
         Exit(True);
       Inc(ValidBenchmarkCount);
     end;

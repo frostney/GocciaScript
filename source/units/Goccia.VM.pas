@@ -1628,8 +1628,9 @@ begin
         ThrowTypeError('Iterator.next is not a function');
       CallArgs := TGocciaArgumentsCollection.Create;
       try
-        NextResult := AwaitValue(TGocciaFunctionBase(NextMethod).Call(
-          CallArgs, IteratorValue));
+        NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IteratorValue);
+        if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
+          NextResult := AwaitValue(NextResult);
       finally
         CallArgs.Free;
       end;

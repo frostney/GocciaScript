@@ -92,6 +92,33 @@ test("object generator yield delegation rejects iterator protocol violations", (
   expect(() => obj.primitiveResult().next()).toThrow(TypeError);
 });
 
+test("object generator yield delegation does not await sync iterator results", () => {
+  let thenCalled = false;
+  const source = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return {
+            value: 5,
+            done: false,
+            then() {
+              thenCalled = true;
+            },
+          };
+        },
+      };
+    },
+  };
+  const obj = {
+    *numbers() {
+      yield* source;
+    },
+  };
+
+  expect(obj.numbers().next()).toEqual({ value: 5, done: false });
+  expect(thenCalled).toBe(false);
+});
+
 test("object generator method return closes through finally", () => {
   let closed = false;
   const obj = {
