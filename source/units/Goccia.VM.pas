@@ -1436,6 +1436,124 @@ end;
 threadvar
   GActiveBytecodeGenerator: TGocciaBytecodeGeneratorObjectValue;
 
+type
+  TGocciaVMAsyncFromSyncIteratorValue = class(TGocciaObjectValue)
+  private
+    FIteratorValue: TGocciaValue;
+    FNextMethod: TGocciaValue;
+    function PromiseResolve(const AValue: TGocciaValue): TGocciaValue;
+    function PromiseReject(const AValue: TGocciaValue): TGocciaValue;
+    function Next(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+  public
+    constructor Create(const AIteratorValue, ANextMethod: TGocciaValue);
+    procedure MarkReferences; override;
+  end;
+
+constructor TGocciaVMAsyncFromSyncIteratorValue.Create(
+  const AIteratorValue, ANextMethod: TGocciaValue);
+begin
+  inherited Create;
+  FIteratorValue := AIteratorValue;
+  FNextMethod := ANextMethod;
+  AssignProperty(PROP_NEXT, TGocciaNativeFunctionValue.Create(Next, PROP_NEXT, 1));
+end;
+
+function TGocciaVMAsyncFromSyncIteratorValue.PromiseResolve(
+  const AValue: TGocciaValue): TGocciaValue;
+var
+  IsRooted: Boolean;
+  Promise: TGocciaPromiseValue;
+begin
+  Promise := TGocciaPromiseValue.Create;
+  IsRooted := Assigned(TGarbageCollector.Instance);
+  if IsRooted then
+    TGarbageCollector.Instance.AddTempRoot(Promise);
+  try
+    Promise.Resolve(AValue);
+  except
+    if IsRooted then
+    begin
+      TGarbageCollector.Instance.RemoveTempRoot(Promise);
+      IsRooted := False;
+    end;
+    Promise.Free;
+    raise;
+  end;
+  if IsRooted then
+    TGarbageCollector.Instance.RemoveTempRoot(Promise);
+  Result := Promise;
+end;
+
+function TGocciaVMAsyncFromSyncIteratorValue.PromiseReject(
+  const AValue: TGocciaValue): TGocciaValue;
+var
+  IsRooted: Boolean;
+  Promise: TGocciaPromiseValue;
+begin
+  Promise := TGocciaPromiseValue.Create;
+  IsRooted := Assigned(TGarbageCollector.Instance);
+  if IsRooted then
+    TGarbageCollector.Instance.AddTempRoot(Promise);
+  try
+    Promise.Reject(AValue);
+  except
+    if IsRooted then
+    begin
+      TGarbageCollector.Instance.RemoveTempRoot(Promise);
+      IsRooted := False;
+    end;
+    Promise.Free;
+    raise;
+  end;
+  if IsRooted then
+    TGarbageCollector.Instance.RemoveTempRoot(Promise);
+  Result := Promise;
+end;
+
+function TGocciaVMAsyncFromSyncIteratorValue.Next(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  CallArgs: TGocciaArgumentsCollection;
+  Done: Boolean;
+  IteratorResult: TGocciaValue;
+begin
+  try
+    if FIteratorValue is TGocciaIteratorValue then
+    begin
+      IteratorResult := CreateIteratorResult(
+        TGocciaIteratorValue(FIteratorValue).DirectNext(Done), Done);
+      Exit(PromiseResolve(IteratorResult));
+    end;
+
+    CallArgs := TGocciaArgumentsCollection.Create;
+    try
+      IteratorResult := TGocciaFunctionBase(FNextMethod).Call(CallArgs, FIteratorValue);
+    finally
+      CallArgs.Free;
+    end;
+
+    if not (IteratorResult is TGocciaObjectValue) then
+      ThrowTypeError(Format(SErrorIteratorResultNotObject,
+        [IteratorResult.ToStringLiteral.Value]), SSuggestIteratorResultObject);
+    Result := PromiseResolve(IteratorResult);
+  except
+    on E: EGocciaBytecodeThrow do
+      Result := PromiseReject(E.ThrownValue);
+    on E: TGocciaThrowValue do
+      Result := PromiseReject(E.Value);
+  end;
+end;
+
+procedure TGocciaVMAsyncFromSyncIteratorValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FIteratorValue) then
+    FIteratorValue.MarkReferences;
+  if Assigned(FNextMethod) then
+    FNextMethod.MarkReferences;
+end;
+
 function VMArgumentOrUndefined(const AArgs: TGocciaArgumentsCollection): TGocciaValue;
 begin
   if Assigned(AArgs) and (AArgs.Length > 0) then
@@ -3192,8 +3310,16 @@ begin
       finally
         ReleaseArguments(CallArgs);
       end;
-      if Assigned(Result) then
-        Exit;
+      if not (Result is TGocciaObjectValue) then
+        ThrowTypeError(Format(SErrorIteratorResultNotObject,
+          [Result.ToStringLiteral.Value]), SSuggestIteratorResultObject);
+      NextMethod := Result.GetProperty(PROP_NEXT);
+      if not Assigned(NextMethod) or
+         (NextMethod is TGocciaUndefinedLiteralValue) or
+         not NextMethod.IsCallable then
+        ThrowTypeError(SErrorAsyncIteratorNextNotCallable,
+          SSuggestAsyncIteratorProtocol);
+      Exit;
     end
     else if Assigned(IteratorMethod) and
             not (IteratorMethod is TGocciaUndefinedLiteralValue) then
@@ -3201,13 +3327,30 @@ begin
   end;
 
   if AIterable is TGocciaIteratorValue then
+  begin
+    if ATryAsync then
+      Exit(TGocciaVMAsyncFromSyncIteratorValue.Create(AIterable,
+        AIterable.GetProperty(PROP_NEXT)));
     Exit(AIterable);
+  end;
 
   if AIterable is TGocciaArrayValue then
-    Exit(TGocciaArrayIteratorValue.Create(AIterable, akValues));
+  begin
+    Result := TGocciaArrayIteratorValue.Create(AIterable, akValues);
+    if ATryAsync then
+      Exit(TGocciaVMAsyncFromSyncIteratorValue.Create(Result,
+        Result.GetProperty(PROP_NEXT)));
+    Exit;
+  end;
 
   if AIterable is TGocciaStringLiteralValue then
-    Exit(TGocciaStringIteratorValue.Create(AIterable));
+  begin
+    Result := TGocciaStringIteratorValue.Create(AIterable);
+    if ATryAsync then
+      Exit(TGocciaVMAsyncFromSyncIteratorValue.Create(Result,
+        Result.GetProperty(PROP_NEXT)));
+    Exit;
+  end;
 
   if AIterable is TGocciaObjectValue then
   begin
@@ -3225,7 +3368,12 @@ begin
       end;
 
       if IteratorObject is TGocciaIteratorValue then
+      begin
+        if ATryAsync then
+          Exit(TGocciaVMAsyncFromSyncIteratorValue.Create(IteratorObject,
+            IteratorObject.GetProperty(PROP_NEXT)));
         Exit(IteratorObject);
+      end;
 
       if IteratorObject is TGocciaObjectValue then
       begin
@@ -3233,7 +3381,15 @@ begin
         if Assigned(NextMethod) and
            not (NextMethod is TGocciaUndefinedLiteralValue) and
            NextMethod.IsCallable then
+        begin
+          if ATryAsync then
+            Exit(TGocciaVMAsyncFromSyncIteratorValue.Create(IteratorObject,
+              NextMethod));
           Exit(IteratorObject);
+        end;
+        if ATryAsync then
+          ThrowTypeError(SErrorAsyncIteratorNextNotCallable,
+            SSuggestAsyncIteratorProtocol);
       end;
     end;
   end;
