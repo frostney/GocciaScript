@@ -55,13 +55,16 @@ Overflow and range checks are **enabled** — correctness is prioritized over ra
 
 ### Source Directory Layout and Namespacing
 
-Source files live in three directories under `source/`, each with different naming rules:
+Source files live in four directories under `source/`, each with different naming rules:
 
 | Directory | Purpose | Unit prefix | Include file | Example |
 |-----------|---------|-------------|-------------|---------|
 | `source/units/` | Engine internals — the GocciaScript runtime | `Goccia.*` | `{$I Goccia.inc}` | `Goccia.Values.Primitives.pas` |
 | `source/shared/` | Reusable infrastructure — not GocciaScript-specific | No prefix | `{$I Shared.inc}` | `HashMap.pas`, `StringBuffer.pas`, `CLI.Options.pas` |
+| `source/generated/` | Generated source and resources consumed by the runtime; do not edit by hand | No required prefix | Generator-defined | `Generated.TimeZoneData.pas`, `Generated.TimeZoneData.res` |
 | `source/app/` | CLI application entrypoints and app-level wiring | `Goccia.*` for units, `Goccia` prefix (no dot) for programs | `{$I Goccia.inc}` | `GocciaTestRunner.dpr`, `Goccia.CLI.Application.pas` |
+
+Generated units should contain generated data, generated resource links, and the minimum schema needed to describe that data. Hand-authored lookup, decoding, validation, and other behavior belongs in `source/units/` or `source/shared/`, depending on ownership.
 
 **When to use `Goccia.*`:** Any unit that depends on or extends the GocciaScript engine (runtime values, evaluator, compiler, modules, etc.).
 
