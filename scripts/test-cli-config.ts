@@ -300,6 +300,35 @@ console.log("TestRunner respects config...");
   }
 }
 
+console.log("TestRunner JSON load errors include per-file error...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "bad.js"), "const broken = ;\n");
+
+    for (const mode of ["interpreted", "bytecode"]) {
+      const resultsPath = join(tmp, `load-error-${mode}.json`);
+      const args = ["bad.js", "--no-progress", `--output=${resultsPath}`];
+      if (mode === "bytecode") args.push("--mode=bytecode");
+      runCwd(TESTRUNNER, args, tmp, { expectFail: true });
+
+      const resultsJson = JSON.parse(readFileSync(resultsPath, "utf-8"));
+      const file = resultsJson.files?.[0];
+      const result = resultsJson.results?.[0];
+      if (resultsJson.ok !== false) throw new Error(`TestRunner ${mode} load error should mark ok=false`);
+      if (file?.ok !== false) throw new Error(`TestRunner ${mode} load error file should mark ok=false`);
+      if (typeof file?.error?.message !== "string" || file.error.message.length === 0)
+        throw new Error(`TestRunner ${mode} load error should include files[].error.message`);
+      if (file.errorMessage !== file.error.message)
+        throw new Error(`TestRunner ${mode} errorMessage should match shared error message`);
+      if (typeof result?.error?.message !== "string" || result.error.message.length === 0)
+        throw new Error(`TestRunner ${mode} load error should include results[].error.message`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 // -- Per-file ASI config across all apps ----------------------------------------
 
 console.log("Per-file ASI config across all apps...");

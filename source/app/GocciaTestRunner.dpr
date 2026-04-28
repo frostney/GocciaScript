@@ -78,6 +78,7 @@ type
   TTestFileResult = record
     TestResult: TGocciaObjectValue;
     Timing: TGocciaScriptResult;
+    ErrorMessage: string;
   end;
 
   { Per-input-file outcome, serialised into the JSON output's "results"
@@ -141,7 +142,8 @@ type
     procedure PrintTestResults(const AResult: TAggregatedTestResult);
   end;
 
-function MakeEmptyTestResult(const AScriptResult: TGocciaObjectValue): TTestFileResult;
+function MakeEmptyTestResult(const AScriptResult: TGocciaObjectValue;
+  const AErrorMessage: string = ''): TTestFileResult;
 begin
   Result.TestResult := AScriptResult;
   Result.Timing.Result := nil;
@@ -151,6 +153,7 @@ begin
   Result.Timing.ExecuteTimeNanoseconds := 0;
   Result.Timing.TotalTimeNanoseconds := 0;
   Result.Timing.FileName := '';
+  Result.ErrorMessage := AErrorMessage;
 end;
 
 function CreateDefaultScriptResult: TGocciaObjectValue;
@@ -328,7 +331,7 @@ begin
         if not GIsWorkerThread then
           WriteLn('Error loading test file: ', E.Message);
         MarkLoadError(ScriptResult, AFileName, E.Message);
-        Result := MakeEmptyTestResult(ScriptResult);
+        Result := MakeEmptyTestResult(ScriptResult, E.Message);
         Exit;
       end;
     end;
@@ -357,6 +360,7 @@ begin
         Engine.Free;
       end;
       Result.Timing := EngineResult;
+      Result.ErrorMessage := '';
       FileResult := EngineResult.Result as TGocciaObjectValue;
       MergeFileResult(ScriptResult, FileResult);
       Result.TestResult := ScriptResult;
@@ -368,6 +372,8 @@ begin
           if not GIsWorkerThread then
             WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal));
           MarkLoadError(ScriptResult, AFileName, TGocciaError(E).GetDetailedMessage);
+          Result := MakeEmptyTestResult(ScriptResult,
+            TGocciaError(E).GetDetailedMessage);
         end
         else if E is TGocciaThrowValue then
         begin
@@ -375,14 +381,17 @@ begin
             WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal, TGocciaThrowValue(E).Suggestion));
           MarkLoadError(ScriptResult, AFileName,
             FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, False, TGocciaThrowValue(E).Suggestion));
+          Result := MakeEmptyTestResult(ScriptResult,
+            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source,
+              False, TGocciaThrowValue(E).Suggestion));
         end
         else
         begin
           if not GIsWorkerThread then
             WriteLn('Fatal error: ', E.Message);
           MarkLoadError(ScriptResult, AFileName, E.Message);
+          Result := MakeEmptyTestResult(ScriptResult, E.Message);
         end;
-        Result := MakeEmptyTestResult(ScriptResult);
       end;
     end;
   finally
@@ -421,7 +430,7 @@ begin
         if not GIsWorkerThread then
           WriteLn('Error loading test file: ', E.Message);
         MarkLoadError(ScriptResult, AFileName, E.Message);
-        Result := MakeEmptyTestResult(ScriptResult);
+        Result := MakeEmptyTestResult(ScriptResult, E.Message);
         Exit;
       end;
     end;
@@ -520,6 +529,7 @@ begin
               Result.Timing.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
               Result.Timing.TotalTimeNanoseconds := ExecEnd - LexStart;
               Result.Timing.FileName := AFileName;
+              Result.ErrorMessage := '';
             finally
               Module.Free;
             end;
@@ -537,6 +547,8 @@ begin
           if not GIsWorkerThread then
             WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal));
           MarkLoadError(ScriptResult, AFileName, TGocciaError(E).GetDetailedMessage);
+          Result := MakeEmptyTestResult(ScriptResult,
+            TGocciaError(E).GetDetailedMessage);
         end
         else if E is TGocciaThrowValue then
         begin
@@ -544,14 +556,17 @@ begin
             WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal, TGocciaThrowValue(E).Suggestion));
           MarkLoadError(ScriptResult, AFileName,
             FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, False, TGocciaThrowValue(E).Suggestion));
+          Result := MakeEmptyTestResult(ScriptResult,
+            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source,
+              False, TGocciaThrowValue(E).Suggestion));
         end
         else
         begin
           if not GIsWorkerThread then
             WriteLn('Fatal error: ', E.Message);
           MarkLoadError(ScriptResult, AFileName, E.Message);
+          Result := MakeEmptyTestResult(ScriptResult, E.Message);
         end;
-        Result := MakeEmptyTestResult(ScriptResult);
       end;
     end;
     finally
@@ -599,6 +614,7 @@ begin
     Result.FileResults[0].ParseTimeNanoseconds := FileResult.Timing.ParseTimeNanoseconds;
     Result.FileResults[0].CompileTimeNanoseconds := FileResult.Timing.CompileTimeNanoseconds;
     Result.FileResults[0].ExecuteTimeNanoseconds := FileResult.Timing.ExecuteTimeNanoseconds;
+    Result.FileResults[0].ErrorMessage := FileResult.ErrorMessage;
     if Assigned(FileResult.TestResult) then
     begin
       Result.FileResults[0].Passed :=
@@ -739,6 +755,9 @@ begin
       FileResult.TestResult.GetProperty('skipped').ToNumberLiteral.Value;
     Result.FileResults[ProcessedCount].TotalTests :=
       FileResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value;
+    if Length(FileResult.FileResults) > 0 then
+      Result.FileResults[ProcessedCount].ErrorMessage :=
+        FileResult.FileResults[0].ErrorMessage;
     if FileFailedTests is TGocciaArrayValue then
     begin
       SetLength(Result.FileResults[ProcessedCount].FailedTests,
@@ -809,6 +828,7 @@ begin
       WorkerResults^[AIndex].ParseNs := FileResult.Timing.ParseTimeNanoseconds;
       WorkerResults^[AIndex].CompileNs := FileResult.Timing.CompileTimeNanoseconds;
       WorkerResults^[AIndex].ExecNs := FileResult.Timing.ExecuteTimeNanoseconds;
+      WorkerResults^[AIndex].ErrorMessage := FileResult.ErrorMessage;
 
       FailedTests := TestResult.GetProperty('failedTests');
       if FailedTests is TGocciaArrayValue then

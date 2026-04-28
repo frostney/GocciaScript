@@ -1080,6 +1080,7 @@ procedure TScriptLoaderApp.ExecuteWithPaths(const APaths: TStringList);
 var
   I: Integer;
   Files: TStringList;
+  TempFiles: TStringList;
   Source: TStringList;
   JSONResult: TScriptLoaderJSONFileResult;
   JSONResults: array of TScriptLoaderJSONFileResult;
@@ -1128,7 +1129,14 @@ begin
           raise TGocciaParseError.Create(
             '--output=json supports stdin only as the sole input path.');
         if DirectoryExists(APaths[I]) then
-          Files.AddStrings(FindAllFiles(APaths[I], ScriptExtensions))
+        begin
+          TempFiles := FindAllFiles(APaths[I], ScriptExtensions);
+          try
+            Files.AddStrings(TempFiles);
+          finally
+            TempFiles.Free;
+          end;
+        end
         else if FileExists(APaths[I]) then
           Files.Add(APaths[I])
         else
