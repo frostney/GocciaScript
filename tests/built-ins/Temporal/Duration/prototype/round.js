@@ -20,6 +20,14 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.round", () => {
     expect(rounded.hours).toBe(2);
   });
 
+  test("round BigInt-backed exact-time duration", () => {
+    const i1 = Temporal.Instant.fromEpochMilliseconds(-8640000000000000);
+    const i2 = Temporal.Instant.fromEpochMilliseconds(8640000000000000);
+    const d = i1.until(i2, { largestUnit: "microseconds" });
+    const rounded = d.round({ smallestUnit: "seconds" });
+    expect(rounded.toString()).toBe("PT17280000000000S");
+  });
+
   test("round floor", () => {
     const d = new Temporal.Duration(0, 0, 0, 0, 1, 59);
     const rounded = d.round({ smallestUnit: "hour", roundingMode: "floor" });
@@ -157,20 +165,16 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.round", () => {
     expect(rounded.months).toBe(18);
   });
 
-  test("round with relativeTo as ZonedDateTime", () => {
+  test("round rejects relativeTo as ZonedDateTime", () => {
     const d = Temporal.Duration.from({ years: 1, months: 6 });
     const zdt = Temporal.ZonedDateTime.from("2024-01-01T00:00:00+00:00[UTC]");
-    const rounded = d.round({ smallestUnit: "months", relativeTo: zdt });
-    expect(rounded.years).toBe(1);
-    expect(rounded.months).toBe(6);
+    expect(() => d.round({ smallestUnit: "months", relativeTo: zdt })).toThrow(RangeError);
   });
 
-  test("round with relativeTo as ZonedDateTime to days", () => {
+  test("round rejects relativeTo as ZonedDateTime to days", () => {
     const d = Temporal.Duration.from({ years: 1, months: 1 });
     const zdt = Temporal.ZonedDateTime.from("2020-02-29T10:30:00+00:00[UTC]");
-    const rounded = d.round({ smallestUnit: "days", largestUnit: "days", relativeTo: zdt });
-    // 2020-02-29 + 1Y = 2021-02-28 (clamped), + 1M = 2021-03-28 = 393 days
-    expect(rounded.days).toBe(393);
+    expect(() => d.round({ smallestUnit: "days", largestUnit: "days", relativeTo: zdt })).toThrow(RangeError);
   });
 
   test("round with relativeTo as property bag", () => {

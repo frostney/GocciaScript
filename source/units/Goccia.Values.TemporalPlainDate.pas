@@ -395,6 +395,7 @@ var
   NewYear, NewMonth, NewDay: Integer;
   DateRec: TTemporalDateRecord;
 begin
+  try
   D := AsPlainDate(AThisValue, 'PlainDate.prototype.add');
   Arg := AArgs.GetElement(0);
 
@@ -450,6 +451,10 @@ begin
   DateRec := AddDaysToDate(NewYear, NewMonth, NewDay, Dur.Weeks * 7 + Dur.Days);
 
   Result := TGocciaTemporalPlainDateValue.Create(DateRec.Year, DateRec.Month, DateRec.Day);
+  except
+    on E: ETemporalDurationInt64Overflow do
+      ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
+  end;
 end;
 
 function TGocciaTemporalPlainDateValue.DateSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -462,6 +467,7 @@ var
   NegatedDur: TGocciaTemporalDurationValue;
   NewArgs: TGocciaArgumentsCollection;
 begin
+  try
   D := AsPlainDate(AThisValue, 'PlainDate.prototype.subtract');
   Arg := AArgs.GetElement(0);
 
@@ -507,6 +513,10 @@ begin
     end;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(NegatedDur);
+  end;
+  except
+    on E: ETemporalDurationInt64Overflow do
+      ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
   end;
 end;
 
