@@ -203,9 +203,11 @@ var
   DecStr: string;
 begin
   if IsNaN(AValue) or IsInfinite(AValue) then
-    raise Exception.Create('Cannot convert non-finite number to BigInt');
+    ThrowRangeError('Temporal.Duration field must be a finite integer',
+      SSuggestTemporalDurationRange);
   if Frac(AValue) <> 0 then
-    raise Exception.Create('Cannot convert non-integer to BigInt');
+    ThrowRangeError('Temporal.Duration field must be an integer',
+      SSuggestTemporalDurationRange);
   Str(AValue:0:0, DecStr);
   Result := TBigInteger.FromDecimalString(DecStr);
 end;
