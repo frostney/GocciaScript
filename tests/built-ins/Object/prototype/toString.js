@@ -75,6 +75,14 @@ describe("Object.prototype.toString", () => {
       expect(Object.prototype.toString.call(new Map())).toBe("[object Map]");
     });
 
+    test("WeakSet returns [object WeakSet]", () => {
+      expect(Object.prototype.toString.call(new WeakSet())).toBe("[object WeakSet]");
+    });
+
+    test("WeakMap returns [object WeakMap]", () => {
+      expect(Object.prototype.toString.call(new WeakMap())).toBe("[object WeakMap]");
+    });
+
     test("Promise returns [object Promise]", () => {
       expect(Object.prototype.toString.call(new Promise((r) => r()))).toBe("[object Promise]");
     });
@@ -228,6 +236,12 @@ describe("Object.prototype.toString", () => {
 
     test("Map with entries returns [object Map]", () => {
       expect(Object.prototype.toString.call(new Map([["a", 1]]))).toBe("[object Map]");
+    });
+
+    test("WeakMap and WeakSet with values return their built-in tags", () => {
+      const key = {};
+      expect(Object.prototype.toString.call(new WeakMap([[key, 1]]))).toBe("[object WeakMap]");
+      expect(Object.prototype.toString.call(new WeakSet([key]))).toBe("[object WeakSet]");
     });
   });
 });

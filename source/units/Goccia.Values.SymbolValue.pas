@@ -32,6 +32,7 @@ type
     FDescription: string;
     FHasDescription: Boolean;
     FId: Integer;
+    FRegistered: Boolean;
 
   public
     constructor Create(const ADescription: string = ''); overload;
@@ -68,6 +69,7 @@ type
     property Description: string read FDescription;
     property HasDescription: Boolean read FHasDescription;
     property Id: Integer read FId;
+    property Registered: Boolean read FRegistered write FRegistered;
   published
     function GetDescription(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -419,6 +421,7 @@ begin
   FDescription := ADescription;
   FHasDescription := AHasDescription;
   FId := GNextSymbolId;
+  FRegistered := False;
   Inc(GNextSymbolId);
   if not Assigned(GSymbolRegistry) then
     GSymbolRegistry := THashMap<Integer, TGocciaSymbolValue>.Create;

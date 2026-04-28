@@ -568,6 +568,8 @@ Precise summation of iterables using a compensated algorithm: `Math.sumPrecise(i
 
 Get existing value or insert a default/computed value: `map.getOrInsert(key, default)`, `map.getOrInsertComputed(key, callbackFn)`. See [ES2026 §24.1.3](https://tc39.es/ecma262/#sec-map.prototype.getorinsert).
 
+WeakMap also implements the ES2026 upsert methods: `weakMap.getOrInsert(key, default)` and `weakMap.getOrInsertComputed(key, callbackFn)`. WeakMap keys must be objects or non-registered symbols.
+
 ### Error.isError (ES2026)
 
 Reliable brand check for error objects: `Error.isError(value)`. See [ES2026 §20.5.3.2](https://tc39.es/ecma262/#sec-error.iserror).
@@ -743,7 +745,7 @@ Labels exist primarily for `break`/`continue` targets in nested loops. Since Goc
 
 The following standard ECMAScript built-ins are **not yet implemented** and may be added in future versions:
 
-- **WeakMap / WeakSet / WeakRef / FinalizationRegistry** — Weak reference collections and finalizers. These require tight GC integration. Deferred until demand warrants the complexity.
+- **WeakRef / FinalizationRegistry** — Weak references and finalizers. Deferred until demand warrants the additional cleanup scheduling complexity.
 
 ## Intentional Divergences from ECMAScript
 

@@ -166,6 +166,7 @@ The non-zero exit code ensures CI pipelines fail when benchmarks crash or produc
 | `benchmarks/classes.js` | Instantiation, method dispatch, inheritance, private fields, getters/setters, decorators (class, method, field, getter/setter, static, private, auto-accessor, metadata) |
 | `benchmarks/closures.js` | Closure capture, higher-order functions, call/apply/bind, recursion |
 | `benchmarks/collections.js` | Set add/has/delete/forEach, Map set/get/has/delete/forEach/keys/values |
+| `benchmarks/weak-collections.js` | WeakMap/WeakSet construction, mutation, lookup, non-registered symbol keys/values, upsert methods, and GC smoke cases |
 | `benchmarks/json.js` | JSON.parse, JSON.stringify, roundtrip with nested and mixed data |
 | `benchmarks/destructuring.js` | Array/object/parameter/callback destructuring, rest, defaults, nesting |
 | `benchmarks/promises.js` | Promise.resolve/reject, then chains, catch/finally, all/race/allSettled/any |

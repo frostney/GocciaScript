@@ -336,6 +336,11 @@ resourcestring
   SSuggestMapThisType = 'Map prototype methods must be called on a Map instance';
   SSuggestMapCallbackRequired = 'pass a function as the callback argument';
 
+  // Runtime errors — WeakMap / WeakSet
+  SSuggestWeakMapThisType = 'WeakMap prototype methods must be called on a WeakMap instance';
+  SSuggestWeakSetThisType = 'WeakSet prototype methods must be called on a WeakSet instance';
+  SSuggestWeakCollectionKey = 'use an object or a Symbol() value; registered symbols from Symbol.for() and primitive values cannot be held weakly';
+
   // Runtime errors — Number
   SSuggestNumberRange = 'the argument must be within the valid range';
 

@@ -71,6 +71,7 @@ uses
 
   HashMap,
 
+  Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -88,7 +89,9 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SetValue,
   Goccia.Values.SharedArrayBufferValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.Values.WeakMapValue,
+  Goccia.Values.WeakSetValue;
 
 var
   GErrorProtoSlot: TGocciaRealmSlotId;
@@ -755,6 +758,10 @@ begin
     Result := CloneMap(TGocciaMapValue(AValue), AMemory)
   else if AValue is TGocciaSetValue then
     Result := CloneSet(TGocciaSetValue(AValue), AMemory)
+  else if AValue is TGocciaWeakMapValue then
+    ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [CONSTRUCTOR_WEAK_MAP]), SSuggestStructuredClone)
+  else if AValue is TGocciaWeakSetValue then
+    ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [CONSTRUCTOR_WEAK_SET]), SSuggestStructuredClone)
   else if AValue is TGocciaObjectValue then
     Result := CloneObject(TGocciaObjectValue(AValue), AMemory)
   else

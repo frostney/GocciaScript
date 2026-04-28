@@ -34,6 +34,14 @@ describe.runIf(hasGoccia)("Goccia.spec", () => {
     });
   });
 
+  test("lists WeakMap and WeakSet support", () => {
+    const es2015 = Goccia.spec["2015"].map((feature) => feature.name);
+    const es2026 = Goccia.spec["2026"].map((feature) => feature.name);
+    expect(es2015.includes("WeakMap")).toBe(true);
+    expect(es2015.includes("WeakSet")).toBe(true);
+    expect(es2026.includes("WeakMap.prototype.getOrInsert / getOrInsertComputed")).toBe(true);
+  });
+
   test("spec is read-only", () => {
     const original = Goccia.spec;
     expect(() => { Goccia.spec = "overwritten"; }).toThrow(TypeError);

@@ -33,6 +33,8 @@ uses
   Goccia.Builtins.GlobalTextDecoder,
   Goccia.Builtins.GlobalTextEncoder,
   Goccia.Builtins.GlobalURL,
+  Goccia.Builtins.GlobalWeakMap,
+  Goccia.Builtins.GlobalWeakSet,
   Goccia.Builtins.JSON,
   Goccia.Builtins.JSON5,
   Goccia.Builtins.JSONL,
@@ -151,6 +153,8 @@ type
     FBuiltinSymbol: TGocciaGlobalSymbol;
     FBuiltinSet: TGocciaGlobalSet;
     FBuiltinMap: TGocciaGlobalMap;
+    FBuiltinWeakSet: TGocciaGlobalWeakSet;
+    FBuiltinWeakMap: TGocciaGlobalWeakMap;
     FBuiltinPerformance: TGocciaPerformance;
     FBuiltinPromise: TGocciaGlobalPromise;
     FBuiltinTestAssertions: TGocciaTestAssertions;
@@ -271,6 +275,8 @@ type
     property BuiltinSymbol: TGocciaGlobalSymbol read FBuiltinSymbol;
     property BuiltinSet: TGocciaGlobalSet read FBuiltinSet;
     property BuiltinMap: TGocciaGlobalMap read FBuiltinMap;
+    property BuiltinWeakSet: TGocciaGlobalWeakSet read FBuiltinWeakSet;
+    property BuiltinWeakMap: TGocciaGlobalWeakMap read FBuiltinWeakMap;
     property BuiltinPerformance: TGocciaPerformance read FBuiltinPerformance;
     property BuiltinPromise: TGocciaGlobalPromise read FBuiltinPromise;
     property BuiltinTestAssertions: TGocciaTestAssertions read FBuiltinTestAssertions;
@@ -341,6 +347,8 @@ uses
   Goccia.Values.Uint8ArrayEncoding,
   Goccia.Values.URLSearchParamsValue,
   Goccia.Values.URLValue,
+  Goccia.Values.WeakMapValue,
+  Goccia.Values.WeakSetValue,
   Goccia.Version;
 
 { TGocciaInterpreterExecutor }
@@ -704,6 +712,8 @@ begin
     FBuiltinSymbol.Free;
     FBuiltinSet.Free;
     FBuiltinMap.Free;
+    FBuiltinWeakSet.Free;
+    FBuiltinWeakMap.Free;
     FBuiltinPerformance.Free;
     FBuiltinPromise.Free;
     FBuiltinTestAssertions.Free;
@@ -784,6 +794,8 @@ begin
   FBuiltinSymbol := TGocciaGlobalSymbol.Create(CONSTRUCTOR_SYMBOL, Scope, ThrowError);
   FBuiltinSet := TGocciaGlobalSet.Create(CONSTRUCTOR_SET, Scope, ThrowError);
   FBuiltinMap := TGocciaGlobalMap.Create(CONSTRUCTOR_MAP, Scope, ThrowError);
+  FBuiltinWeakSet := TGocciaGlobalWeakSet.Create(CONSTRUCTOR_WEAK_SET, Scope, ThrowError);
+  FBuiltinWeakMap := TGocciaGlobalWeakMap.Create(CONSTRUCTOR_WEAK_MAP, Scope, ThrowError);
   FBuiltinPerformance := TGocciaPerformance.Create('performance', Scope, ThrowError);
   FBuiltinPromise := TGocciaGlobalPromise.Create(CONSTRUCTOR_PROMISE, Scope, ThrowError);
   FBuiltinTemporal := TGocciaTemporalBuiltin.Create('Temporal', Scope, ThrowError);
@@ -858,6 +870,16 @@ begin
   TGocciaSetValue.ExposePrototype(AConstructor);
 end;
 
+procedure ExposeWeakMapPrototype(const AConstructor: TGocciaValue);
+begin
+  TGocciaWeakMapValue.ExposePrototype(AConstructor);
+end;
+
+procedure ExposeWeakSetPrototype(const AConstructor: TGocciaValue);
+begin
+  TGocciaWeakSetValue.ExposePrototype(AConstructor);
+end;
+
 procedure ExposeTextEncoderPrototype(const AConstructor: TGocciaValue);
 begin
   TGocciaTextEncoderValue.ExposePrototype(AConstructor);
@@ -896,6 +918,8 @@ var
   ArrayConstructor: TGocciaArrayClassValue;
   MapConstructor: TGocciaMapClassValue;
   SetConstructor: TGocciaSetClassValue;
+  WeakMapConstructor: TGocciaWeakMapClassValue;
+  WeakSetConstructor: TGocciaWeakSetClassValue;
   ArrayBufferConstructor: TGocciaArrayBufferClassValue;
   SharedArrayBufferConstructor: TGocciaSharedArrayBufferClassValue;
   StringConstructor: TGocciaStringClassValue;
@@ -951,6 +975,28 @@ begin
   TypeDef.AddSpeciesGetter := True;
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   SetConstructor := TGocciaSetClassValue(GenericConstructor);
+
+  TypeDef.ConstructorName := CONSTRUCTOR_WEAK_MAP;
+  TypeDef.Kind := gtdkCollectionLikeNativeType;
+  TypeDef.ClassValueClass := TGocciaWeakMapClassValue;
+  TypeDef.ExposePrototype := @ExposeWeakMapPrototype;
+  TypeDef.PrototypeProvider := nil;
+  TypeDef.StaticSource := nil;
+  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+  TypeDef.AddSpeciesGetter := False;
+  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  WeakMapConstructor := TGocciaWeakMapClassValue(GenericConstructor);
+
+  TypeDef.ConstructorName := CONSTRUCTOR_WEAK_SET;
+  TypeDef.Kind := gtdkCollectionLikeNativeType;
+  TypeDef.ClassValueClass := TGocciaWeakSetClassValue;
+  TypeDef.ExposePrototype := @ExposeWeakSetPrototype;
+  TypeDef.PrototypeProvider := nil;
+  TypeDef.StaticSource := nil;
+  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+  TypeDef.AddSpeciesGetter := False;
+  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  WeakSetConstructor := TGocciaWeakSetClassValue(GenericConstructor);
 
   TypeDef.ConstructorName := CONSTRUCTOR_TEXT_ENCODER;
   TypeDef.Kind := gtdkNativeInstanceType;
@@ -1115,6 +1161,8 @@ begin
   TGocciaClassValue.PatchDefaultPrototype(ArrayConstructor);
   TGocciaClassValue.PatchDefaultPrototype(MapConstructor);
   TGocciaClassValue.PatchDefaultPrototype(SetConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(WeakMapConstructor);
+  TGocciaClassValue.PatchDefaultPrototype(WeakSetConstructor);
   TGocciaClassValue.PatchDefaultPrototype(ArrayBufferConstructor);
   TGocciaClassValue.PatchDefaultPrototype(SharedArrayBufferConstructor);
   TGocciaClassValue.PatchDefaultPrototype(FTypedArrayIntrinsic);

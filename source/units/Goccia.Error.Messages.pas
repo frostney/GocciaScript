@@ -649,6 +649,20 @@ resourcestring
   SErrorMapGetOrInsertNonMap = 'Map.prototype.getOrInsert called on non-Map object';
   SErrorMapGetOrInsertComputedNonMap = 'Map.prototype.getOrInsertComputed called on non-Map object';
 
+  // WeakMap/WeakSet brand-check and key validation errors
+  SErrorWeakMapGetNonWeakMap = 'WeakMap.prototype.get called on non-WeakMap object';
+  SErrorWeakMapSetNonWeakMap = 'WeakMap.prototype.set called on non-WeakMap object';
+  SErrorWeakMapHasNonWeakMap = 'WeakMap.prototype.has called on non-WeakMap object';
+  SErrorWeakMapDeleteNonWeakMap = 'WeakMap.prototype.delete called on non-WeakMap object';
+  SErrorWeakMapGetOrInsertNonWeakMap = 'WeakMap.prototype.getOrInsert called on non-WeakMap object';
+  SErrorWeakMapGetOrInsertComputedNonWeakMap = 'WeakMap.prototype.getOrInsertComputed called on non-WeakMap object';
+  SErrorWeakSetAddNonWeakSet = 'WeakSet.prototype.add called on non-WeakSet object';
+  SErrorWeakSetHasNonWeakSet = 'WeakSet.prototype.has called on non-WeakSet object';
+  SErrorWeakSetDeleteNonWeakSet = 'WeakSet.prototype.delete called on non-WeakSet object';
+  SErrorWeakCollectionInvalidKey = '%s: key must be an object or non-registered symbol';
+  SErrorWeakMapConstructorEntryNotObject = 'WeakMap constructor requires each entry to be an object';
+  SErrorWeakCollectionConstructorNotIterable = '%s constructor requires an iterable';
+
   // Set/Map forEach errors
   SErrorSetForEachNotCallable = 'Set.prototype.forEach: callback is not a function';
   SErrorMapForEachNotCallable = 'Map.prototype.forEach: callback is not a function';
@@ -663,6 +677,7 @@ resourcestring
 
   // Map upsert errors
   SErrorMapGetOrInsertComputedNotCallable = 'Map.getOrInsertComputed: callbackfn is not a function';
+  SErrorWeakMapGetOrInsertComputedNotCallable = 'WeakMap.getOrInsertComputed: callbackfn is not a function';
 
   // Function body errors
   SErrorIllegalBreakStatement = 'Illegal break statement';

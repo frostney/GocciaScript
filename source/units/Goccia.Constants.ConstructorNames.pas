@@ -15,6 +15,8 @@ const
   CONSTRUCTOR_BIGINT   = 'BigInt';
   CONSTRUCTOR_SET      = 'Set';
   CONSTRUCTOR_MAP      = 'Map';
+  CONSTRUCTOR_WEAK_SET = 'WeakSet';
+  CONSTRUCTOR_WEAK_MAP = 'WeakMap';
   CONSTRUCTOR_PROXY    = 'Proxy';
   CONSTRUCTOR_PERFORMANCE  = 'Performance';
   CONSTRUCTOR_PROMISE      = 'Promise';

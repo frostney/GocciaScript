@@ -7,7 +7,7 @@
 - **`TGocciaValue` hierarchy** — All runtime values inherit from `TGocciaValue`; primitives, objects, arrays, functions, classes, iterators, and typed arrays each have dedicated subclasses
 - **Virtual property access** — `GetProperty`/`SetProperty` are virtual methods on the base class, eliminating type checks at call sites
 - **GC integration** — Every value auto-registers via `AfterConstruction`; subclasses override `MarkReferences` to mark owned references
-- **Shared prototype singletons** — String, Number, Array, Set, Map, Symbol, Function, and TypedArray types share a single prototype instance per engine; the prototype lives in a [realm slot](core-patterns.md#realm-ownership--slot-registration) and is unpinned when the engine is freed
+- **Shared prototype singletons** — String, Number, Array, Set, Map, WeakSet, WeakMap, Symbol, Function, and TypedArray types share a single prototype instance per engine; the prototype lives in a [realm slot](core-patterns.md#realm-ownership--slot-registration) and is unpinned when the engine is freed
 
 The value system is the foundation of GocciaScript's runtime. Every piece of data — numbers, strings, objects, functions — is represented as a `TGocciaValue` or one of its subclasses.
 
@@ -33,6 +33,8 @@ classDiagram
     TGocciaObjectValue <|-- TGocciaMapValue
     TGocciaObjectValue <|-- TGocciaPromiseValue
     TGocciaObjectValue <|-- TGocciaInstanceValue
+    TGocciaInstanceValue <|-- TGocciaWeakSetValue
+    TGocciaInstanceValue <|-- TGocciaWeakMapValue
     TGocciaObjectValue <|-- TGocciaEnumValue
     TGocciaObjectValue <|-- TGocciaIteratorValue
     TGocciaIteratorValue <|-- TGocciaArrayIteratorValue
@@ -282,6 +284,8 @@ The implicit coercion checks are implemented at the operator level (in `Goccia.E
 
 **Shared prototype singleton:** Like strings and numbers, symbols use a per-engine shared prototype object stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). It is initialized via `InitializePrototype`; the realm pins it on `SetSlot` and releases it on `Destroy`. The `description` getter and `toString()` method are registered on this shared prototype, and `TGocciaSymbolValue.GetProperty` delegates to the prototype via `GetPropertyWithContext` so that accessor getters receive the correct symbol instance as `this`. `Symbol.prototype` is exposed on the Symbol constructor function, matching ECMAScript semantics. Symbol is an always-registered standard built-in (it is not part of `TGocciaGlobalBuiltins`, which only gates special-purpose opt-in built-ins like test assertions, benchmarking, and FFI); symbol type checks at the operator level use standard RTTI (`is TGocciaSymbolValue`) rather than VMT methods purely for implementation simplicity.
 
+**Weak eligibility:** `TGocciaSymbolValue.Registered` distinguishes symbols returned by `Symbol.for()` from local/well-known symbols. Non-registered symbols can be held weakly by WeakMap/WeakSet; registered symbols are pinned by the global symbol registry and rejected by `CanBeHeldWeakly`.
+
 Objects store symbol-keyed properties separately from string-keyed properties via `TGocciaObjectValue.FSymbolDescriptors`. The `in` operator handles symbol keys directly via `HasSymbolProperty`, without converting them to strings (see `Goccia.Evaluator.TypeOperations.pas`).
 
 ## Type Conversion
@@ -421,6 +425,16 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 - **Internal storage** — `FEntries: TList<TGocciaMapEntry>` where each entry is a `record` with `Key` and `Value` fields.
 - Maps follow the same implementation pattern as Sets (see [Sets](#sets) above): prototype-registered methods, dynamic `size` via `GetProperty`, and `ToArray` spreadability.
 - **Methods** — `get`, `set`, `has`, `delete`, `clear`, `forEach`, `keys`, `values`, `entries` — all registered on the shared prototype.
+
+## Weak Collections
+
+`TGocciaWeakMapValue` and `TGocciaWeakSetValue` extend `TGocciaInstanceValue` (`Goccia.Values.WeakMapValue.pas`, `Goccia.Values.WeakSetValue.pas`). They are class-backed native instances so subclassing and constructor semantics match other built-in native classes.
+
+- **Weak eligibility** — `Goccia.Values.WeakReferenceSupport.CanBeHeldWeakly` accepts objects and non-registered symbols. Primitives and `Symbol.for()` registry symbols are rejected by mutators and constructors.
+- **Internal storage** — WeakMap stores entries in `THashMap<TGocciaValue,TGocciaValue>`; WeakSet stores membership in `THashMap<TGocciaValue,Boolean>`. Allowed keys are object/symbol identity values, so pointer identity matches the required `SameValue` behavior for this domain.
+- **No enumeration surface** — WeakMap/WeakSet intentionally do not expose `size`, `clear`, `forEach`, iterators, `keys`, `values`, or `entries`.
+- **Shared prototype singleton** — Each weak collection has a per-engine shared prototype stored in a realm-owned slot. Prototype methods operate through `ThisValue`, matching the built-in method-host pattern.
+- **GC behavior** — WeakMap/WeakSet do not mark weak keys/values during normal `MarkReferences`. WeakMap's weak tracing hook marks a value only when its key is already live from outside the map, and sweeping removes entries whose keys remain unmarked. WeakSet sweeping removes unmarked members.
 
 ## Promises
 

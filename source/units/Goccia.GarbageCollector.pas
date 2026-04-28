@@ -20,6 +20,8 @@ type
   public
     class procedure AdvanceMark; static; inline;
     procedure MarkReferences; virtual;
+    function TraceWeakReferences: Boolean; virtual;
+    procedure SweepWeakReferences; virtual;
     // Called by the GC sweep instead of Free. Default calls Free.
     // Override to return the object to a pool instead of deallocating.
     procedure Recycle; virtual;
@@ -62,6 +64,8 @@ type
     function GetWatermark: Integer; inline;
   protected
     procedure MarkRoots; virtual;
+    procedure TraceWeakReferences;
+    procedure SweepWeakReferences;
     procedure SweepObjects;
   public
     class function Instance: TGarbageCollector; inline;
@@ -196,6 +200,15 @@ end;
 procedure TGCManagedObject.MarkReferences;
 begin
   FGCMark := GCCurrentMark;
+end;
+
+function TGCManagedObject.TraceWeakReferences: Boolean;
+begin
+  Result := False;
+end;
+
+procedure TGCManagedObject.SweepWeakReferences;
+begin
 end;
 
 procedure TGCManagedObject.Recycle;
@@ -362,6 +375,36 @@ begin
     FActiveRootStack[I].MarkReferences;
 end;
 
+procedure TGarbageCollector.TraceWeakReferences;
+var
+  Changed: Boolean;
+  I: Integer;
+  Obj: TGCManagedObject;
+begin
+  repeat
+    Changed := False;
+    for I := 0 to FManagedObjects.Count - 1 do
+    begin
+      Obj := FManagedObjects[I];
+      if Assigned(Obj) and Obj.GCMarked then
+        Changed := Obj.TraceWeakReferences or Changed;
+    end;
+  until not Changed;
+end;
+
+procedure TGarbageCollector.SweepWeakReferences;
+var
+  I: Integer;
+  Obj: TGCManagedObject;
+begin
+  for I := 0 to FManagedObjects.Count - 1 do
+  begin
+    Obj := FManagedObjects[I];
+    if Assigned(Obj) and Obj.GCMarked then
+      Obj.SweepWeakReferences;
+  end;
+end;
+
 procedure TGarbageCollector.SweepObjects;
 var
   I, WriteIdx: Integer;
@@ -414,6 +457,8 @@ begin
     StartNs := GetNanoseconds;
     {$ENDIF}
     MarkRoots;
+    TraceWeakReferences;
+    SweepWeakReferences;
     {$IFDEF GC_TIMING}
     AfterMarkNs := GetNanoseconds;
     {$ENDIF}
@@ -501,6 +546,8 @@ begin
     end;
 
     MarkRoots;
+    TraceWeakReferences;
+    SweepWeakReferences;
 
     Collected := 0;
     WriteIdx := EffectiveWatermark;

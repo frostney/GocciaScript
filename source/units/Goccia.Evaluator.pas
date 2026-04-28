@@ -130,8 +130,7 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
-  Goccia.Values.Iterator.Concrete,
-  Goccia.Values.Iterator.Generic,
+  Goccia.Values.IteratorSupport,
   Goccia.Values.IteratorValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
@@ -356,65 +355,6 @@ begin
       Result := EvaluateStatement(TGocciaStatement(ANodes[I]), AContext);
     if Result.Kind <> cfkNormal then Exit;
   end;
-end;
-
-function GetIteratorFromValue(const AValue: TGocciaValue): TGocciaIteratorValue;
-var
-  IteratorMethod, IteratorObj, NextMethod: TGocciaValue;
-  CallArgs: TGocciaArgumentsCollection;
-  WasAlreadyRooted: Boolean;
-  GC: TGarbageCollector;
-begin
-  if AValue is TGocciaIteratorValue then
-  begin
-    Result := TGocciaIteratorValue(AValue);
-    Exit;
-  end;
-
-  if AValue is TGocciaObjectValue then
-  begin
-    IteratorMethod := TGocciaObjectValue(AValue).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
-    if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
-    begin
-      GC := TGarbageCollector.Instance;
-      WasAlreadyRooted := Assigned(GC) and GC.IsTempRoot(AValue);
-      if Assigned(GC) and not WasAlreadyRooted then
-        GC.AddTempRoot(AValue);
-      try
-        CallArgs := TGocciaArgumentsCollection.Create;
-        try
-          IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, AValue);
-        finally
-          CallArgs.Free;
-        end;
-      finally
-        if Assigned(GC) and not WasAlreadyRooted then
-          GC.RemoveTempRoot(AValue);
-      end;
-      if IteratorObj is TGocciaIteratorValue then
-      begin
-        Result := TGocciaIteratorValue(IteratorObj);
-        Exit;
-      end;
-      if IteratorObj is TGocciaObjectValue then
-      begin
-        NextMethod := IteratorObj.GetProperty(PROP_NEXT);
-        if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
-        begin
-          Result := TGocciaGenericIteratorValue.Create(IteratorObj);
-          Exit;
-        end;
-      end;
-    end;
-  end;
-
-  if AValue is TGocciaStringLiteralValue then
-  begin
-    Result := TGocciaStringIteratorValue.Create(AValue);
-    Exit;
-  end;
-
-  Result := nil;
 end;
 
 procedure SpreadIterableInto(const ASpreadValue: TGocciaValue; const ATarget: TGocciaValueList);

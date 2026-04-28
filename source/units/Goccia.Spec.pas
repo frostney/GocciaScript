@@ -31,7 +31,7 @@ const
   // ---------------------------------------------------------------------------
   // ES2015
   // ---------------------------------------------------------------------------
-  ES2015_FEATURES: array[0..19] of TGocciaFeatureEntry = (
+  ES2015_FEATURES: array[0..21] of TGocciaFeatureEntry = (
     (Name: 'Let and Const';           Link: 'https://tc39.es/ecma262/#sec-let-and-const-declarations'),
     (Name: 'Arrow Functions';         Link: 'https://tc39.es/ecma262/#sec-arrow-function-definitions'),
     (Name: 'Classes';                 Link: 'https://tc39.es/ecma262/#sec-class-definitions'),
@@ -43,6 +43,8 @@ const
     (Name: 'Promise';                 Link: 'https://tc39.es/ecma262/#sec-promise-objects'),
     (Name: 'Map';                     Link: 'https://tc39.es/ecma262/#sec-map-objects'),
     (Name: 'Set';                     Link: 'https://tc39.es/ecma262/#sec-set-objects'),
+    (Name: 'WeakMap';                 Link: 'https://tc39.es/ecma262/#sec-weakmap-objects'),
+    (Name: 'WeakSet';                 Link: 'https://tc39.es/ecma262/#sec-weakset-objects'),
     (Name: 'Proxy';                   Link: 'https://tc39.es/ecma262/#sec-proxy-objects'),
     (Name: 'Reflect';                 Link: 'https://tc39.es/ecma262/#sec-reflect-object'),
     (Name: 'Default Parameters';      Link: 'https://tc39.es/ecma262/#sec-function-definitions'),
@@ -174,7 +176,7 @@ const
   // ---------------------------------------------------------------------------
   // ES2026
   // ---------------------------------------------------------------------------
-  ES2026_FEATURES: array[0..8] of TGocciaFeatureEntry = (
+  ES2026_FEATURES: array[0..9] of TGocciaFeatureEntry = (
     (Name: 'JSON.parse Source Text Access';         Link: 'https://tc39.es/ecma262/#sec-json.parse'),
     (Name: 'Explicit Resource Management';          Link: 'https://tc39.es/ecma262/#sec-using-declaration'),
     (Name: 'RegExp.escape';                         Link: 'https://tc39.es/ecma262/#sec-regexp.escape'),
@@ -183,6 +185,7 @@ const
     (Name: 'Array.fromAsync';                       Link: 'https://tc39.es/ecma262/#sec-array.fromasync'),
     (Name: 'Math.sumPrecise';                       Link: 'https://tc39.es/ecma262/#sec-math.sumprecise'),
     (Name: 'Map.prototype.getOrInsert / getOrInsertComputed'; Link: 'https://tc39.es/ecma262/#sec-map.prototype.getorinsert'),
+    (Name: 'WeakMap.prototype.getOrInsert / getOrInsertComputed'; Link: 'https://tc39.es/ecma262/#sec-weakmap.prototype.getorinsert'),
     (Name: 'Iterator.concat';                       Link: 'https://tc39.es/ecma262/#sec-iterator.concat')
   );
 
