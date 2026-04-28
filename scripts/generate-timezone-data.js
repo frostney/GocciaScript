@@ -352,7 +352,17 @@ function collectTimeZoneFiles(zoneInfoDir) {
       }
 
       if (directoryEntry.isSymbolicLink()) {
-        const targetStats = fs.statSync(absolutePath);
+        let targetStats;
+        try {
+          targetStats = fs.statSync(absolutePath);
+        } catch (error) {
+          if (error && error.code === "ENOENT") {
+            console.warn(`Warning: skipping broken timezone symlink ${absolutePath}: ${error}`);
+            continue;
+          }
+          throw error;
+        }
+
         if (!targetStats.isFile()) {
           continue;
         }
