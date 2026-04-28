@@ -58,6 +58,45 @@ describe("pattern matching expressions", () => {
     expect(sum).toBe(6);
   });
 
+  test("object rest patterns expose unmatched properties", () => {
+    const value = { a: 1, b: 2, c: 3 };
+    let result = 0;
+
+    if (value is { a: 1, ...const rest }) {
+      result = rest.b + rest.c;
+      if (rest.a !== undefined) {
+        result = -1;
+      }
+    }
+
+    expect(result).toBe(5);
+  });
+
+  test("array patterns consume generic iterables and bind rest tails", () => {
+    const iterable = {
+      [Symbol.iterator]() {
+        let value = 0;
+        return {
+          next() {
+            value = value + 1;
+            if (value > 3) {
+              return { done: true };
+            }
+            return { value, done: false };
+          }
+        };
+      }
+    };
+
+    let result = 0;
+    if (iterable is [1, ...const tail]) {
+      result = tail[0] + tail[1];
+    }
+
+    expect(result).toBe(5);
+    expect({} is []).toBe(false);
+  });
+
   test("as bindings and guards commit only after success", () => {
     const value = { x: 4 };
     let result = 0;
@@ -79,6 +118,11 @@ describe("pattern matching expressions", () => {
     expect(box is Box).toBe(true);
     expect(box is Other).toBe(false);
     expect({} is Box).toBe(false);
+  });
+
+  test("ordinary match calls remain valid without a clause block", () => {
+    const match = (value) => value + 1;
+    expect(match(2)).toBe(3);
   });
 
   test("match evaluates the subject once and uses first successful clause", () => {

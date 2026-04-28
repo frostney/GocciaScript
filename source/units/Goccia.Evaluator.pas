@@ -1442,7 +1442,13 @@ begin
         IterContext := MatchContext;
       end;
 
-      CF := EvaluateStatement(AForOfStatement.Body, IterContext);
+      try
+        CF := EvaluateStatement(AForOfStatement.Body, IterContext);
+      finally
+        if Assigned(AForOfStatement.MatchPattern) and
+           (IterContext.Scope <> IterScope) then
+          IterContext.Scope.Free;
+      end;
       if CF.Kind = cfkBreak then Break;
       if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
       // cfkContinue: skip remaining body, advance to next iteration
@@ -1544,7 +1550,13 @@ begin
             IterContext := MatchContext;
           end;
 
-          CF := EvaluateStatement(AForAwaitOfStatement.Body, IterContext);
+          try
+            CF := EvaluateStatement(AForAwaitOfStatement.Body, IterContext);
+          finally
+            if Assigned(AForAwaitOfStatement.MatchPattern) and
+               (IterContext.Scope <> IterScope) then
+              IterContext.Scope.Free;
+          end;
           if CF.Kind = cfkBreak then Break;
           if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
         end;
@@ -1603,7 +1615,13 @@ begin
           IterContext := MatchContext;
         end;
 
-        CF := EvaluateStatement(AForAwaitOfStatement.Body, IterContext);
+        try
+          CF := EvaluateStatement(AForAwaitOfStatement.Body, IterContext);
+        finally
+          if Assigned(AForAwaitOfStatement.MatchPattern) and
+             (IterContext.Scope <> IterScope) then
+            IterContext.Scope.Free;
+        end;
         if CF.Kind = cfkBreak then Break;
         if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
 
@@ -1993,7 +2011,12 @@ begin
         if not TryEvaluateMatchPatternInContext(AErrorValue,
            ATryStatement.CatchPattern, CatchContext, MatchContext) then
           raise TGocciaThrowValue.Create(AErrorValue);
-        Result := EvaluateStatements(ATryStatement.CatchBlock.Nodes, MatchContext);
+        try
+          Result := EvaluateStatements(ATryStatement.CatchBlock.Nodes, MatchContext);
+        finally
+          if MatchContext.Scope <> CatchScope then
+            MatchContext.Scope.Free;
+        end;
       end
       else
         Result := EvaluateStatements(ATryStatement.CatchBlock.Nodes, CatchContext);

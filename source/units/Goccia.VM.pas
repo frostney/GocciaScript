@@ -109,6 +109,8 @@ type
     function KeyToPropertyNameRegister(const AKey: TGocciaRegister): string;
     function IterableToArray(const AIterable: TGocciaValue;
       const ATryAsync: Boolean = False): TGocciaArrayValue;
+    function TryIterableToArray(const AIterable: TGocciaValue;
+      out AArray: TGocciaArrayValue): Boolean;
     procedure SpreadObjectIntoValue(const ATarget: TGocciaObjectValue;
       const ASource: TGocciaValue);
     function ObjectRestValue(const ASource: TGocciaValue;
@@ -2405,6 +2407,93 @@ begin
     until DoneFlag;
     Exit;
   end;
+end;
+
+function TGocciaVM.TryIterableToArray(const AIterable: TGocciaValue;
+  out AArray: TGocciaArrayValue): Boolean;
+var
+  IteratorValue, IteratorMethod, IteratorObject, NextMethod, NextResult,
+    DoneValue: TGocciaValue;
+  DoneFlag: Boolean;
+  CallArgs: TGocciaArgumentsCollection;
+begin
+  AArray := nil;
+
+  if AIterable is TGocciaIteratorValue then
+    IteratorValue := AIterable
+  else if AIterable is TGocciaArrayValue then
+    IteratorValue := TGocciaArrayIteratorValue.Create(AIterable, akValues)
+  else if AIterable is TGocciaStringLiteralValue then
+    IteratorValue := TGocciaStringIteratorValue.Create(AIterable)
+  else if AIterable is TGocciaObjectValue then
+  begin
+    IteratorMethod := TGocciaObjectValue(AIterable).GetSymbolProperty(
+      TGocciaSymbolValue.WellKnownIterator);
+    if not Assigned(IteratorMethod) or
+       (IteratorMethod is TGocciaUndefinedLiteralValue) or
+       not IteratorMethod.IsCallable then
+      Exit(False);
+
+    CallArgs := AcquireArguments;
+    try
+      IteratorObject := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, AIterable);
+    finally
+      ReleaseArguments(CallArgs);
+    end;
+
+    if IteratorObject is TGocciaIteratorValue then
+      IteratorValue := IteratorObject
+    else if IteratorObject is TGocciaObjectValue then
+    begin
+      NextMethod := IteratorObject.GetProperty(PROP_NEXT);
+      if not Assigned(NextMethod) or
+         (NextMethod is TGocciaUndefinedLiteralValue) or
+         not NextMethod.IsCallable then
+        Exit(False);
+      IteratorValue := IteratorObject;
+    end
+    else
+      Exit(False);
+  end
+  else
+    Exit(False);
+
+  AArray := TGocciaArrayValue.Create;
+  if IteratorValue is TGocciaIteratorValue then
+  begin
+    repeat
+      CheckExecutionTimeout;
+      CheckInstructionLimit;
+      NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
+      if not DoneFlag then
+        AArray.Elements.Add(NextResult);
+    until DoneFlag;
+    Exit(True);
+  end;
+
+  repeat
+    CheckExecutionTimeout;
+    CheckInstructionLimit;
+    NextMethod := IteratorValue.GetProperty(PROP_NEXT);
+    if not Assigned(NextMethod) or
+       (NextMethod is TGocciaUndefinedLiteralValue) or
+       not NextMethod.IsCallable then
+      Exit(False);
+    CallArgs := AcquireArguments;
+    try
+      NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IteratorValue);
+    finally
+      ReleaseArguments(CallArgs);
+    end;
+    if NextResult.IsPrimitive then
+      ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.ToStringLiteral.Value]),
+        SSuggestIteratorResultObject);
+    DoneValue := NextResult.GetProperty(PROP_DONE);
+    DoneFlag := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
+    if not DoneFlag then
+      AArray.Elements.Add(NextResult.GetProperty(PROP_VALUE));
+  until DoneFlag;
+  Result := True;
 end;
 
 procedure TGocciaVM.SpreadObjectIntoValue(const ATarget: TGocciaObjectValue;
@@ -5970,6 +6059,14 @@ begin
                 for I := 0 to TGocciaArrayValue(DoneValue).Elements.Count - 1 do
                   TGocciaArrayValue(FRegisters[A].ObjectValue).Elements.Add(
                     TGocciaArrayValue(DoneValue).GetElement(I));
+            end;
+
+          COLLECTION_OP_TRY_ITERABLE_TO_ARRAY:
+            begin
+              if TryIterableToArray(RegisterToValue(FRegisters[C]), SpreadArray) then
+                SetRegister(A, SpreadArray)
+              else
+                FRegisters[A] := RegisterUndefined;
             end;
 
         else

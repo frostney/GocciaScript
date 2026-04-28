@@ -326,41 +326,72 @@ var
   Prop: TGocciaObjectMatchProperty;
   KeyValue, PropertyValue: TGocciaValue;
   CurrentContext, NextContext: TGocciaEvaluationContext;
+  MatchedKeys: TStringList;
+  MatchedSymbols: TList<TGocciaSymbolValue>;
+  Remainder: TGocciaObjectValue;
+  Entry: TPair<string, TGocciaValue>;
+  SymbolEntry: TPair<TGocciaSymbolValue, TGocciaValue>;
 begin
   if (ASubject is TGocciaNullLiteralValue) or
      (ASubject is TGocciaUndefinedLiteralValue) then
     Exit(False);
 
+  MatchedKeys := TStringList.Create;
+  MatchedKeys.CaseSensitive := True;
+  MatchedSymbols := TList<TGocciaSymbolValue>.Create;
   CurrentContext := AContext;
-  for I := 0 to APattern.Properties.Count - 1 do
-  begin
-    Prop := APattern.Properties[I];
-    if Prop.Computed then
-      KeyValue := EvaluateExpression(Prop.KeyExpression, CurrentContext)
-    else
-      KeyValue := TGocciaStringLiteralValue.Create(Prop.Key);
+  try
+    for I := 0 to APattern.Properties.Count - 1 do
+    begin
+      Prop := APattern.Properties[I];
+      if Prop.Computed then
+        KeyValue := EvaluateExpression(Prop.KeyExpression, CurrentContext)
+      else
+        KeyValue := TGocciaStringLiteralValue.Create(Prop.Key);
 
-    if not HasMatchProperty(ASubject, KeyValue) then
-      Exit(False);
+      if not HasMatchProperty(ASubject, KeyValue) then
+        Exit(False);
 
-    PropertyValue := GetMatchProperty(ASubject, KeyValue);
-    if not TryMatchPatternInternal(PropertyValue, Prop.Pattern, CurrentContext, NextContext) then
-      Exit(False);
-    CurrentContext := NextContext;
+      PropertyValue := GetMatchProperty(ASubject, KeyValue);
+      if not TryMatchPatternInternal(PropertyValue, Prop.Pattern, CurrentContext, NextContext) then
+        Exit(False);
+
+      if KeyValue is TGocciaSymbolValue then
+        MatchedSymbols.Add(TGocciaSymbolValue(KeyValue))
+      else
+        MatchedKeys.Add(KeyValue.ToStringLiteral.Value);
+      CurrentContext := NextContext;
+    end;
+
+    if Assigned(APattern.RestPattern) then
+    begin
+      if not (ASubject is TGocciaObjectValue) then
+        Exit(False);
+
+      Remainder := TGocciaObjectValue.Create;
+      for Entry in TGocciaObjectValue(ASubject).GetEnumerablePropertyEntries do
+      begin
+        if MatchedKeys.IndexOf(Entry.Key) < 0 then
+          Remainder.AssignProperty(Entry.Key, Entry.Value);
+      end;
+      for SymbolEntry in TGocciaObjectValue(ASubject).GetEnumerableSymbolProperties do
+      begin
+        if not MatchedSymbols.Contains(SymbolEntry.Key) then
+          Remainder.AssignSymbolProperty(SymbolEntry.Key, SymbolEntry.Value);
+      end;
+
+      if not TryMatchPatternInternal(Remainder, APattern.RestPattern,
+        CurrentContext, NextContext) then
+        Exit(False);
+      CurrentContext := NextContext;
+    end;
+
+    AMatchContext := CurrentContext;
+    Result := True;
+  finally
+    MatchedSymbols.Free;
+    MatchedKeys.Free;
   end;
-
-  if Assigned(APattern.RestPattern) then
-  begin
-    if not (ASubject is TGocciaObjectValue) then
-      Exit(False);
-    if not TryMatchPatternInternal(TGocciaObjectValue.Create,
-      APattern.RestPattern, CurrentContext, NextContext) then
-      Exit(False);
-    CurrentContext := NextContext;
-  end;
-
-  AMatchContext := CurrentContext;
-  Result := True;
 end;
 
 function TryMatchExtractorPattern(const ASubject: TGocciaValue;

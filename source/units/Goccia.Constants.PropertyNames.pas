@@ -38,6 +38,7 @@ const
   PROP_READ         = 'read';
   PROP_VALUE        = 'value';
   PROP_VALUES       = 'values';
+  PROP_SLICE        = 'slice';
   PROP_TAG_NAME     = 'tagName';
   PROP_NEXT         = 'next';
   PROP_RETURN       = 'return';

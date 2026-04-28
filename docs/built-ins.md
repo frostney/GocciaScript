@@ -388,7 +388,7 @@ Iterators are consumed once — calling `next()` past the end returns `{value: u
 
 ### Symbol (`Goccia.Builtins.GlobalSymbol.pas`)
 
-Implements [ECMAScript Symbol](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol). Symbols are unique, immutable primitive values used as property keys. Also includes `Symbol.metadata` (TC39 decorator metadata), `Symbol.dispose`, `Symbol.asyncDispose` (TC39 explicit resource management), and `Symbol.customMatcher` (TC39 pattern matching) beyond the base standard.
+Implements [ECMAScript Symbol](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol). Symbols are unique, immutable primitive values used as property keys. Also includes `Symbol.metadata` (TC39 decorator metadata), `Symbol.dispose`, `Symbol.asyncDispose` (TC39 explicit resource management), and `Symbol.customMatcher` (Stage 1 TC39 pattern matching) beyond the base standard.
 
 | Method/Property | Description |
 |--------|-------------|
@@ -408,7 +408,7 @@ Implements [ECMAScript Symbol](https://developer.mozilla.org/en-US/docs/Web/Java
 | `Symbol.toStringTag` | Well-known symbol for Object.prototype.toString |
 | `Symbol.isConcatSpreadable` | Well-known symbol for Array.prototype.concat |
 | `Symbol.metadata` | Well-known symbol for decorator metadata (TC39 proposal-decorator-metadata) |
-| `Symbol.customMatcher` | Well-known symbol for pattern matching. Objects can define `[Symbol.customMatcher](subject, hint)` and return a truthy/falsy value for value-pattern matching. |
+| `Symbol.customMatcher` | Well-known symbol for Stage 1 pattern matching. Objects can define `[Symbol.customMatcher](subject, hint)` and return a truthy/falsy value for value-pattern matching. |
 | `symbol.toString()` | Returns `"Symbol(description)"` |
 | `symbol.description` | The description string, or `undefined` |
 

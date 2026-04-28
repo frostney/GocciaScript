@@ -138,6 +138,7 @@ type
     function ParseArrayMatchPattern(const ALine, AColumn: Integer): TGocciaArrayMatchPattern;
     function ParseObjectMatchPattern(const ALine, AColumn: Integer): TGocciaObjectMatchPattern;
     function ParsePatternValueExpression: TGocciaExpression;
+    function IsMatchExpressionAhead: Boolean;
     procedure CollectMatchPatternBindings(const APattern: TGocciaMatchPattern;
       const ANames: TStringList);
     procedure ValidateMatchPatternEarlyErrors(const APattern: TGocciaMatchPattern);
@@ -1655,7 +1656,7 @@ begin
       Result := TGocciaNewExpression.Create(Expr, Args, Token.Line, Token.Column);
     end;
   end
-  else if CheckContextualKeyword(KEYWORD_MATCH) and CheckNext(gttLeftParen) then
+  else if IsMatchExpressionAhead then
     Result := ParseMatchExpression
   else if Match(gttIdentifier) then
   begin
@@ -1851,6 +1852,10 @@ begin
   begin
     if Match(gttDefault) then
     begin
+      if Assigned(DefaultExpression) then
+        raise TGocciaSyntaxError.Create('Duplicate default match clause',
+          Previous.Line, Previous.Column, FFileName, FSourceLines,
+          'Keep only one default clause in this match expression');
       Consume(gttColon, 'Expected ":" after default match clause',
         SSuggestTernaryColon);
       DefaultExpression := Expression;
@@ -1875,6 +1880,40 @@ begin
     SSuggestCloseBlock);
   Result := TGocciaMatchExpression.Create(Subject, Clauses,
     DefaultExpression, MatchToken.Line, MatchToken.Column);
+end;
+
+function TGocciaParser.IsMatchExpressionAhead: Boolean;
+var
+  ScanIndex, Depth: Integer;
+begin
+  Result := False;
+  if not (CheckContextualKeyword(KEYWORD_MATCH) and CheckNext(gttLeftParen)) then
+    Exit;
+
+  ScanIndex := FCurrent + 1;
+  Depth := 0;
+  while ScanIndex < FTokens.Count do
+  begin
+    case FTokens[ScanIndex].TokenType of
+      gttLeftParen:
+        Inc(Depth);
+      gttRightParen:
+        begin
+          Dec(Depth);
+          if Depth = 0 then
+          begin
+            Result := (ScanIndex + 1 < FTokens.Count) and
+              (FTokens[ScanIndex + 1].TokenType = gttLeftBrace);
+            Exit;
+          end;
+          if Depth < 0 then
+            Exit;
+        end;
+      gttEOF:
+        Exit;
+    end;
+    Inc(ScanIndex);
+  end;
 end;
 
 function TGocciaParser.ParseMatchPattern: TGocciaMatchPattern;
@@ -2178,8 +2217,12 @@ begin
   begin
     if Match(gttDot) then
     begin
-      Token := ConsumeModuleExportName('Expected property name after "."',
-        SSuggestPropertyNameIdentifier);
+      if IsIdentifierNameToken(Peek.TokenType) then
+        Token := Advance
+      else
+        raise TGocciaSyntaxError.Create('Expected property name after "."',
+          Peek.Line, Peek.Column, FFileName, FSourceLines,
+          SSuggestPropertyNameIdentifier);
       PropertyName := Token.Lexeme;
       Result := TGocciaMemberExpression.Create(Result, PropertyName, False,
         Token.Line, Token.Column, False);
@@ -3914,7 +3957,7 @@ var
   TryStmt: TGocciaTryStatement;
   CatchType: string;
   CatchPattern: TGocciaMatchPattern;
-  ScanIndex: Integer;
+  ScanIndex, ParenDepth: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -3939,10 +3982,19 @@ begin
       if Check(gttColon) then
       begin
         ScanIndex := FCurrent + 1;
-        while (ScanIndex < FTokens.Count) and
-              (FTokens[ScanIndex].TokenType <> gttRightParen) do
+        ParenDepth := 0;
+        while ScanIndex < FTokens.Count do
         begin
-          if (FTokens[ScanIndex].TokenType = gttIdentifier) and
+          if FTokens[ScanIndex].TokenType = gttLeftParen then
+            Inc(ParenDepth)
+          else if FTokens[ScanIndex].TokenType = gttRightParen then
+          begin
+            if ParenDepth = 0 then
+              Break;
+            Dec(ParenDepth);
+          end
+          else if (ParenDepth = 0) and
+             (FTokens[ScanIndex].TokenType = gttIdentifier) and
              (FTokens[ScanIndex].Lexeme = KEYWORD_IS) then
             raise TGocciaSyntaxError.Create('Cannot combine catch type annotations with pattern matching',
               FTokens[ScanIndex].Line, FTokens[ScanIndex].Column,

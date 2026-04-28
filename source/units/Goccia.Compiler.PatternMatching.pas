@@ -127,10 +127,17 @@ var
   I, EndJump: Integer;
   FailJumps: TList<Integer>;
   Prop: TGocciaObjectMatchProperty;
-  KeyReg, ValueReg: UInt8;
+  KeyReg, ValueReg, ExclusionReg, RemainderReg, AdjacentReg: UInt8;
   KeyIdx: UInt16;
+  HasRest: Boolean;
 begin
   FailJumps := TList<Integer>.Create;
+  HasRest := Assigned(APattern.RestPattern);
+  if HasRest then
+  begin
+    ExclusionReg := ACtx.Scope.AllocateRegister;
+    EmitInstruction(ACtx, EncodeABC(OP_NEW_ARRAY, ExclusionReg, 0, 0));
+  end;
   try
     for I := 0 to APattern.Properties.Count - 1 do
     begin
@@ -156,12 +163,24 @@ begin
       end;
       CompilePatternTest(ACtx, ValueReg, Prop.Pattern, ADest);
       FailJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ADest));
+      if HasRest then
+        EmitInstruction(ACtx, EncodeABC(OP_ARRAY_PUSH, ExclusionReg, KeyReg, 0));
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
     end;
 
-    if Assigned(APattern.RestPattern) then
-      CompilePatternTest(ACtx, ASubjectReg, APattern.RestPattern, ADest)
+    if HasRest then
+    begin
+      RemainderReg := ACtx.Scope.AllocateRegister;
+      AdjacentReg := ACtx.Scope.AllocateRegister;
+      if ExclusionReg <> AdjacentReg then
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, AdjacentReg, ExclusionReg, 0));
+      EmitInstruction(ACtx, EncodeABC(OP_COLLECTION_OP, RemainderReg,
+        COLLECTION_OP_OBJECT_REST, ASubjectReg));
+      CompilePatternTest(ACtx, RemainderReg, APattern.RestPattern, ADest);
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+    end
     else
       EmitBoolean(ACtx, ADest, True);
     EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
@@ -171,6 +190,8 @@ begin
     EmitBoolean(ACtx, ADest, False);
     PatchJumpTarget(ACtx, EndJump);
   finally
+    if HasRest then
+      ACtx.Scope.FreeRegister;
     FailJumps.Free;
   end;
 end;
@@ -181,15 +202,23 @@ procedure CompileArrayPatternTest(const ACtx: TGocciaCompilationContext;
 var
   I, EndJump: Integer;
   FailJumps: TList<Integer>;
-  LenReg, ExpectedReg, IndexReg, ValueReg: UInt8;
+  ItemsReg, LenReg, ExpectedReg, IndexReg, ValueReg: UInt8;
+  TailThisReg, TailMethodReg, TailStartReg: UInt8;
+  SliceIdx: UInt16;
 begin
   FailJumps := TList<Integer>.Create;
+  ItemsReg := ACtx.Scope.AllocateRegister;
   LenReg := ACtx.Scope.AllocateRegister;
   ExpectedReg := ACtx.Scope.AllocateRegister;
   IndexReg := ACtx.Scope.AllocateRegister;
   ValueReg := ACtx.Scope.AllocateRegister;
   try
-    EmitInstruction(ACtx, EncodeABC(OP_GET_LENGTH, LenReg, ASubjectReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_COLLECTION_OP, ItemsReg,
+      COLLECTION_OP_TRY_ITERABLE_TO_ARRAY, ASubjectReg));
+    FailJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, ItemsReg,
+      GOCCIA_NULLISH_MATCH_UNDEFINED));
+
+    EmitInstruction(ACtx, EncodeABC(OP_GET_LENGTH, LenReg, ItemsReg, 0));
     EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, ExpectedReg,
       APattern.Elements.Count));
     if Assigned(APattern.RestPattern) or APattern.HasRestWildcard then
@@ -203,13 +232,30 @@ begin
       if not Assigned(APattern.Elements[I]) then
         Continue;
       EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, IndexReg, I));
-      EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, ValueReg, ASubjectReg, IndexReg));
+      EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, ValueReg, ItemsReg, IndexReg));
       CompilePatternTest(ACtx, ValueReg, APattern.Elements[I], ADest);
       FailJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ADest));
     end;
 
     if Assigned(APattern.RestPattern) then
-      CompilePatternTest(ACtx, ASubjectReg, APattern.RestPattern, ADest)
+    begin
+      TailThisReg := ACtx.Scope.AllocateRegister;
+      TailMethodReg := ACtx.Scope.AllocateRegister;
+      TailStartReg := ACtx.Scope.AllocateRegister;
+      SliceIdx := ACtx.Template.AddConstantString(PROP_SLICE);
+      if SliceIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: array pattern slice index exceeds 255');
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, TailThisReg, ItemsReg, 0));
+      EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, TailMethodReg,
+        ItemsReg, UInt8(SliceIdx)));
+      EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, TailStartReg,
+        APattern.Elements.Count));
+      EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, TailMethodReg, 1, 0));
+      CompilePatternTest(ACtx, TailMethodReg, APattern.RestPattern, ADest);
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+    end
     else
       EmitBoolean(ACtx, ADest, True);
     EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
@@ -219,6 +265,7 @@ begin
     EmitBoolean(ACtx, ADest, False);
     PatchJumpTarget(ACtx, EndJump);
   finally
+    ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
@@ -413,11 +460,11 @@ begin
       CompilePatternTest(ACtx, SubjectReg, AExpr.Clauses[I].Pattern, TestReg);
       FalseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, TestReg);
       ACtx.CompileExpression(AExpr.Clauses[I].Expression, ADest);
-      EndJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
-      PatchJumpTarget(ACtx, FalseJump);
       ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
       for ClosedIndex := 0 to ClosedCount - 1 do
         EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[ClosedIndex], 0, 0));
+      EndJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
+      PatchJumpTarget(ACtx, FalseJump);
     end;
 
     if Assigned(AExpr.DefaultExpression) then
