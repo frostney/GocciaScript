@@ -12,6 +12,18 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.subtract", () => {
     expect(result.epochMilliseconds).toBe(0);
   });
 
+  test("subtract() normalizes sub-millisecond borrow", () => {
+    const instant = Temporal.Instant.fromEpochNanoseconds(1n);
+    const result = instant.subtract(new Temporal.Duration(0, 0, 0, 0, 0, 0, 0, 0, 1));
+    expect(result.epochNanoseconds).toBe(-999n);
+  });
+
+  test("subtract() does not overflow 32-bit sub-millisecond accumulation", () => {
+    const instant = Temporal.Instant.fromEpochMilliseconds(0);
+    const result = instant.subtract(new Temporal.Duration(0, 0, 0, 0, 0, 0, 0, 0, 2147484));
+    expect(result.epochNanoseconds).toBe(-2147484000n);
+  });
+
   test("subtract() throws on weeks", () => {
     const instant = Temporal.Instant.fromEpochMilliseconds(0);
     expect(() => {

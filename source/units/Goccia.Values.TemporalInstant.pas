@@ -83,6 +83,23 @@ begin
   Result := TGocciaTemporalInstantValue(AValue);
 end;
 
+procedure NormalizeInstantSubMillisecondNanoseconds(var AEpochMilliseconds: Int64;
+  const ASubNanosecondsTotal: Int64; out ASubMillisecondNanoseconds: Integer);
+var
+  CarryMilliseconds, RemainderNanoseconds: Int64;
+begin
+  CarryMilliseconds := ASubNanosecondsTotal div NANOSECONDS_PER_MILLISECOND;
+  RemainderNanoseconds := ASubNanosecondsTotal mod NANOSECONDS_PER_MILLISECOND;
+  if RemainderNanoseconds < 0 then
+  begin
+    Dec(CarryMilliseconds);
+    Inc(RemainderNanoseconds, NANOSECONDS_PER_MILLISECOND);
+  end;
+
+  Inc(AEpochMilliseconds, CarryMilliseconds);
+  ASubMillisecondNanoseconds := Integer(RemainderNanoseconds);
+end;
+
 function CoerceInstant(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalInstantValue;
 var
   DateRec: TTemporalDateRecord;
@@ -231,6 +248,7 @@ var
   DurRec: TTemporalDurationRecord;
   NewMs: Int64;
   NewSubMs: Integer;
+  SubNsTotal: Int64;
 begin
   try
   Inst := AsInstant(AThisValue, 'Instant.prototype.add');
@@ -262,8 +280,10 @@ begin
            Dur.Minutes * 60000 +
            Dur.Seconds * 1000 +
            Dur.Milliseconds;
-  NewSubMs := Inst.FSubMillisecondNanoseconds +
-              Integer(Dur.Microseconds * 1000 + Dur.Nanoseconds);
+  SubNsTotal := Int64(Inst.FSubMillisecondNanoseconds) +
+                Dur.Microseconds * Int64(NANOSECONDS_PER_MICROSECOND) +
+                Dur.Nanoseconds;
+  NormalizeInstantSubMillisecondNanoseconds(NewMs, SubNsTotal, NewSubMs);
 
   Result := TGocciaTemporalInstantValue.Create(NewMs, NewSubMs);
   except
@@ -280,6 +300,7 @@ var
   DurRec: TTemporalDurationRecord;
   NewMs: Int64;
   NewSubMs: Integer;
+  SubNsTotal: Int64;
 begin
   try
   Inst := AsInstant(AThisValue, 'Instant.prototype.subtract');
@@ -310,8 +331,10 @@ begin
            Dur.Minutes * 60000 -
            Dur.Seconds * 1000 -
            Dur.Milliseconds;
-  NewSubMs := Inst.FSubMillisecondNanoseconds -
-              Integer(Dur.Microseconds * 1000 + Dur.Nanoseconds);
+  SubNsTotal := Int64(Inst.FSubMillisecondNanoseconds) -
+                Dur.Microseconds * Int64(NANOSECONDS_PER_MICROSECOND) -
+                Dur.Nanoseconds;
+  NormalizeInstantSubMillisecondNanoseconds(NewMs, SubNsTotal, NewSubMs);
 
   Result := TGocciaTemporalInstantValue.Create(NewMs, NewSubMs);
   except
