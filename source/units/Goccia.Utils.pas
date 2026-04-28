@@ -45,11 +45,26 @@ uses
   Goccia.Values.FunctionBase;
 
 function ToIntegerFromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer; const ADefault: Integer): Integer;
+var
+  NumberValue: TGocciaNumberLiteralValue;
 begin
   if AArgs.Length > AIndex then
-    Result := Trunc(AArgs.GetElement(AIndex).ToNumberLiteral.Value)
-  else
-    Result := ADefault;
+  begin
+    NumberValue := AArgs.GetElement(AIndex).ToNumberLiteral;
+    if NumberValue.IsNaN then
+      Exit(0);
+    if NumberValue.IsInfinity then
+      Exit(MaxInt);
+    if NumberValue.IsNegativeInfinity then
+      Exit(-MaxInt);
+    if NumberValue.Value >= MaxInt then
+      Exit(MaxInt);
+    if NumberValue.Value <= -MaxInt then
+      Exit(-MaxInt);
+    Result := Trunc(NumberValue.Value);
+    Exit;
+  end;
+  Result := ADefault;
 end;
 
 function ToInteger64FromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer; const ADefault: Int64): Int64;

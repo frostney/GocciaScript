@@ -7,6 +7,7 @@ uses
   SysUtils,
 
   TestingPascalLibrary,
+  TextSemantics,
 
   Goccia.Modules.Configuration,
   Goccia.Modules.Resolver,
@@ -19,9 +20,11 @@ type
 
     function CreateTempDirectory: string;
     procedure DeleteDirectoryTree(const APath: string);
+    procedure WriteRawFile(const APath: string; const ABytes: RawByteString);
     procedure WriteTextFile(const APath, AText: string);
 
     procedure TestConfigureModuleResolverLoadsExplicitImportMap;
+    procedure TestConfigureModuleResolverPreservesUTF8ImportMap;
     procedure TestConfigureModuleResolverDiscoversProjectConfig;
     procedure TestConfigureModuleResolverAppliesInlineAliasAfterImportMap;
     procedure TestConfigureModuleResolverPrefersExplicitImportMap;
@@ -36,6 +39,8 @@ procedure TModuleConfigurationTests.SetupTests;
 begin
   Test('ConfigureModuleResolver loads explicit import map',
     TestConfigureModuleResolverLoadsExplicitImportMap);
+  Test('ConfigureModuleResolver preserves UTF-8 import map entries',
+    TestConfigureModuleResolverPreservesUTF8ImportMap);
   Test('ConfigureModuleResolver discovers goccia.json from the entry path',
     TestConfigureModuleResolverDiscoversProjectConfig);
   Test('ConfigureModuleResolver applies inline aliases after the import map',
@@ -110,6 +115,21 @@ begin
   end;
 end;
 
+procedure TModuleConfigurationTests.WriteRawFile(const APath: string;
+  const ABytes: RawByteString);
+var
+  Stream: TFileStream;
+begin
+  ForceDirectories(ExtractFileDir(APath));
+  Stream := TFileStream.Create(APath, fmCreate);
+  try
+    if Length(ABytes) > 0 then
+      Stream.WriteBuffer(Pointer(ABytes)^, Length(ABytes));
+  finally
+    Stream.Free;
+  end;
+end;
+
 procedure TModuleConfigurationTests.TestConfigureModuleResolverLoadsExplicitImportMap;
 var
   EntryPath, ImportMapPath, ProjectDirectory, ResolvedPath: string;
@@ -145,6 +165,46 @@ begin
   Expect<string>(ResolvedPath).ToBe(IncludeTrailingPathDelimiter(
     ProjectDirectory) + 'vendor' + PathDelim + 'lodash' + PathDelim +
     'index.js');
+end;
+
+procedure TModuleConfigurationTests.TestConfigureModuleResolverPreservesUTF8ImportMap;
+const
+  SPECIFIER_BYTES = 'caf' + #$C3#$A9;
+  TARGET_FILE_BYTES = 'd' + #$C3#$A9 + 'j' + #$C3#$A0 + '.js';
+  IMPORT_MAP_BYTES = '{"imports":{"' + SPECIFIER_BYTES + '":"./src/' +
+    TARGET_FILE_BYTES + '"}}';
+var
+  EntryPath: string;
+  ExpectedPath: string;
+  ImportMapPath: string;
+  InlineAliases: TStringList;
+  ProjectDirectory: string;
+  ResolvedPath: string;
+  Resolver: TGocciaModuleResolver;
+begin
+  ProjectDirectory := CreateTempDirectory;
+  EntryPath := IncludeTrailingPathDelimiter(ProjectDirectory) + 'src' +
+    PathDelim + 'app.js';
+  ImportMapPath := IncludeTrailingPathDelimiter(ProjectDirectory) +
+    'imports.json';
+  ExpectedPath := IncludeTrailingPathDelimiter(ProjectDirectory) + 'src' +
+    PathDelim + RetagUTF8Text(TARGET_FILE_BYTES);
+
+  WriteTextFile(EntryPath, 'import { value } from "caf' + #$C3#$A9 + '";');
+  WriteTextFile(ExpectedPath, 'export const value = 1;');
+  WriteRawFile(ImportMapPath, IMPORT_MAP_BYTES);
+
+  InlineAliases := TStringList.Create;
+  Resolver := TGocciaModuleResolver.Create(ProjectDirectory);
+  try
+    ConfigureModuleResolver(Resolver, EntryPath, ImportMapPath, InlineAliases);
+    ResolvedPath := Resolver.Resolve(RetagUTF8Text(SPECIFIER_BYTES), EntryPath);
+  finally
+    InlineAliases.Free;
+    Resolver.Free;
+  end;
+
+  Expect<string>(ResolvedPath).ToBe(ExpectedPath);
 end;
 
 procedure TModuleConfigurationTests.TestConfigureModuleResolverDiscoversProjectConfig;

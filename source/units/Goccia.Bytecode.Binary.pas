@@ -52,6 +52,8 @@ implementation
 uses
   SysUtils,
 
+  TextSemantics,
+
   Goccia.Bytecode,
   Goccia.Bytecode.Debug;
 
@@ -307,7 +309,7 @@ begin
     Exit('');
   SetLength(UTF8Str, Len);
   FStream.ReadBuffer(UTF8Str[1], Len);
-  Result := string(UTF8Str);
+  Result := RetagUTF8Text(RawByteString(UTF8Str));
 end;
 
 function TGocciaBytecodeReader.ReadBoolean: Boolean;

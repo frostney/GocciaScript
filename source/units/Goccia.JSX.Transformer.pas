@@ -12,8 +12,7 @@ uses
 
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved,
-  Goccia.SourceMap,
-  Goccia.TextFiles;
+  Goccia.SourceMap;
 
 type
   TGocciaJSXTransformResult = record
@@ -94,6 +93,8 @@ type
 implementation
 
 uses
+  TextSemantics,
+
   Goccia.FileExtensions;
 
 const

@@ -43,6 +43,8 @@ type
 implementation
 
 uses
+  TextSemantics,
+
   Goccia.TextFiles;
 
 function TryGetFileLastModified(const APath: string;

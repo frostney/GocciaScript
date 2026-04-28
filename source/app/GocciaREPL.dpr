@@ -9,6 +9,7 @@ uses
   SysUtils,
 
   TimingUtils,
+  TextSemantics,
 
   Goccia.Application,
   Goccia.AST.Node,

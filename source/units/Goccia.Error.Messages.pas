@@ -395,6 +395,7 @@ resourcestring
   SErrorSymbolSearchNotCallable = '@@search is not callable';
   SErrorInvalidRepeatCount = 'Invalid count value: %s';
   SErrorInvalidNormalizationForm = 'The normalization form should be one of NFC, NFD, NFKC, NFKD';
+  SErrorStringPrototypeRequiresNonNullish = 'String.prototype method requires that ''this'' not be null or undefined';
   SErrorIsWellFormedRequiresNonNullish = 'String.prototype.isWellFormed requires that ''this'' not be null or undefined';
   SErrorToWellFormedRequiresNonNullish = 'String.prototype.toWellFormed requires that ''this'' not be null or undefined';
 

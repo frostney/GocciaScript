@@ -8,7 +8,6 @@ uses
   SysUtils,
 
   Goccia.JSON,
-  Goccia.TextFiles,
   Goccia.Values.ArrayValue,
   Goccia.Values.Primitives;
 
@@ -61,7 +60,8 @@ implementation
 uses
   StrUtils,
 
-  BOM;
+  BOM,
+  TextSemantics;
 
 constructor TGocciaJSONLParser.Create;
 begin
@@ -178,7 +178,7 @@ begin
 
   SetLength(RawBytes, ByteLength);
   Move(ABytes[AStart], RawBytes[1], ByteLength);
-  Result := string(UTF8String(RawBytes));
+  Result := RetagUTF8Text(RawBytes);
 end;
 
 function TGocciaJSONLParser.TryParseLine(const ALineText: string;

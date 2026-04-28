@@ -9,6 +9,7 @@ uses
 
   OrderedStringMap,
   TestingPascalLibrary,
+  TextSemantics,
 
   Goccia.AST.Node,
   Goccia.Bytecode.Module,
@@ -24,7 +25,6 @@ uses
   Goccia.Modules.Resolver,
   Goccia.Parser,
   Goccia.TestSetup,
-  Goccia.TextFiles,
   Goccia.Token,
   Goccia.TOML,
   Goccia.Values.ArrayValue,

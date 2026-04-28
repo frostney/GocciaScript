@@ -9,6 +9,7 @@ uses
   SysUtils,
 
   TimingUtils,
+  TextSemantics,
 
   Goccia.Application,
   Goccia.AST.Node,
@@ -929,7 +930,7 @@ begin
     Exit;
   end;
 
-  Source := ReadUTF8FileLines(AFileName);
+  Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
   try
     RunSource(Source, AFileName);
   finally
@@ -950,7 +951,7 @@ begin
 
   StartTime := GetNanoseconds;
   try
-    Source := ReadUTF8FileLines(AFileName);
+    Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
   except
     on E: Exception do
     begin

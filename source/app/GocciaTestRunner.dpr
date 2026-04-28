@@ -10,6 +10,7 @@ uses
   SysUtils,
 
   TimingUtils,
+  TextSemantics,
 
   Goccia.Application,
   Goccia.AST.Node,
@@ -324,7 +325,7 @@ begin
   Source := nil;
   try
     try
-      Source := ReadUTF8FileLines(AFileName);
+      Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
     except
       on E: EStreamError do
       begin
@@ -423,7 +424,7 @@ begin
   Source := nil;
   try
     try
-      Source := ReadUTF8FileLines(AFileName);
+      Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
     except
       on E: EStreamError do
       begin
