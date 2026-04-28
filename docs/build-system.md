@@ -298,6 +298,7 @@ Intermediate files (`.o`, `.ppu`) go to `build/compiled/` to keep the source tre
 
 ```text
 -Fu./source/units    # Engine unit search path
+-Fu./source/generated # Generated runtime data unit search path
 -Fu./source/shared   # Shared infrastructure unit search path
 -Fu./source/app      # CLI application unit search path
 -Fi./source/units    # Engine include file search path
@@ -396,6 +397,8 @@ GocciaScript/
 │   │   ├── FileUtils.pas     # File utilities
 │   │   ├── BaseMap.pas       # Base map type
 │   │   └── JSONParser.pas    # JSON parser
+│   ├── generated/        # Generated runtime data
+│   │   └── Generated.TimeZoneData.pas # Embedded IANA timezone data
 │   └── units/            # Goccia engine units
 │       ├── Goccia.inc    # Goccia compiler directives (includes Shared.inc)
 │       ├── Goccia.Bytecode*.pas # Bytecode definitions, templates, modules, binary I/O
@@ -408,6 +411,10 @@ GocciaScript/
     │   └── *.ppu      # Compiled unit files
     └── (binaries)     # Executable output
 ```
+
+### Generated Timezone Data
+
+`source/generated/Generated.TimeZoneData.pas` is produced by `scripts/generate-timezone-data.js`. By default, the generator downloads the latest IANA `tzdata-latest.tar.gz`, compiles it with `zic`, and embeds the resulting TZif files into a generated Pascal unit. Pass a local zoneinfo directory, a local `tzdata` tarball, or an explicit URL to generate from a different source.
 
 ## CI/CD
 

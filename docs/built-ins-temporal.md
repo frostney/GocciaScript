@@ -32,6 +32,16 @@ Temporal.PlainMonthDay  // Month and day (no year/time/timezone)
 Temporal.ZonedDateTime  // Date + time + timezone
 ```
 
+## Time Zone Data
+
+`Temporal.ZonedDateTime` loads IANA timezone data from TZif zoneinfo data. Lookup order is:
+
+1. `GOCCIA_TZDIR` when set
+2. embedded generated tzdata
+3. system zoneinfo directories (`/usr/share/zoneinfo`, `/usr/share/zoneinfo.default`)
+
+The embedded data is generated from the upstream IANA timezone data distribution, so named IANA zones and DST transitions work in single-binary builds on platforms without a system zoneinfo database, including Windows.
+
 ## Temporal.Duration
 
 Represents a length of time with 10 components (years through nanoseconds).
