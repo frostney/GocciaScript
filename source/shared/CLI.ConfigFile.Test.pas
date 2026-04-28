@@ -8,7 +8,8 @@ uses
 
   CLI.ConfigFile,
   CLI.Options,
-  TestingPascalLibrary;
+  TestingPascalLibrary,
+  TextSemantics;
 
 type
   TConfigFileTests = class(TTestSuite)
@@ -17,6 +18,7 @@ type
 
     function CreateTempDirectory: string;
     procedure DeleteDirectoryTree(const APath: string);
+    procedure WriteRawFile(const APath: string; const ABytes: RawByteString);
     procedure WriteTextFile(const APath, AText: string);
 
     { ParseJSONConfig (built-in) }
@@ -39,6 +41,7 @@ type
 
     { ApplyConfigFile }
     procedure TestApplyConfigFileJSON;
+    procedure TestApplyConfigFileJSONPreservesUTF8;
     procedure TestApplyConfigFileUnregisteredExtensionRaises;
 
     { CLI override }
@@ -97,6 +100,8 @@ begin
   Test('ApplyConfigEntries skips unknown keys', TestApplyUnknownKeySkipped);
 
   Test('ApplyConfigFile loads a JSON file', TestApplyConfigFileJSON);
+  Test('ApplyConfigFile preserves UTF-8 JSON file values',
+    TestApplyConfigFileJSONPreservesUTF8);
   Test('ApplyConfigFile raises for unregistered extension', TestApplyConfigFileUnregisteredExtensionRaises);
 
   Test('Option can be modified after config apply', TestOptionCanBeModifiedAfterConfigApply);
@@ -187,6 +192,21 @@ begin
     Lines.SaveToFile(APath);
   finally
     Lines.Free;
+  end;
+end;
+
+procedure TConfigFileTests.WriteRawFile(const APath: string;
+  const ABytes: RawByteString);
+var
+  Stream: TFileStream;
+begin
+  ForceDirectories(ExtractFileDir(APath));
+  Stream := TFileStream.Create(APath, fmCreate);
+  try
+    if Length(ABytes) > 0 then
+      Stream.WriteBuffer(Pointer(ABytes)^, Length(ABytes));
+  finally
+    Stream.Free;
   end;
 end;
 
@@ -559,6 +579,39 @@ begin
   finally
     ASI.Free;
     Timeout.Free;
+  end;
+end;
+
+procedure TConfigFileTests.TestApplyConfigFileJSONPreservesUTF8;
+const
+  JSON_BYTES = '{"mode":"Jos' + #$C3#$A9 + '","alias":["caf' + #$C3#$A9 +
+    '=./d' + #$C3#$A9 + 'j' + #$C3#$A0 + '.js"]}';
+var
+  Alias: TGocciaRepeatableOption;
+  Dir, Path: string;
+  Mode: TGocciaStringOption;
+  Options: TGocciaOptionArray;
+begin
+  Dir := CreateTempDirectory;
+  Path := IncludeTrailingPathDelimiter(Dir) + 'config.json';
+  WriteRawFile(Path, JSON_BYTES);
+
+  Alias := TGocciaRepeatableOption.Create('alias', 'Alias');
+  Mode := TGocciaStringOption.Create('mode', 'Mode');
+  try
+    SetLength(Options, 2);
+    Options[0] := Mode;
+    Options[1] := Alias;
+
+    ApplyConfigFile(Path, Options);
+
+    Expect<string>(Mode.Value).ToBe(RetagUTF8Text('Jos' + #$C3#$A9));
+    Expect<Integer>(Alias.Values.Count).ToBe(1);
+    Expect<string>(Alias.Values[0]).ToBe(RetagUTF8Text('caf' + #$C3#$A9 +
+      '=./d' + #$C3#$A9 + 'j' + #$C3#$A0 + '.js'));
+  finally
+    Alias.Free;
+    Mode.Free;
   end;
 end;
 

@@ -219,6 +219,7 @@ uses
 
   BigInteger,
   StringBuffer,
+  TextSemantics,
 
   Goccia.Error,
   Goccia.Error.Suggestions,
@@ -1111,27 +1112,6 @@ begin
   end;
 end;
 
-// Convert a Unicode code point to its UTF-8 string representation.
-// Returns empty string for code points above U+10FFFF.
-function CodePointToUTF8(const ACodePoint: Cardinal): string;
-begin
-  if ACodePoint <= $7F then
-    Result := Chr(ACodePoint)
-  else if ACodePoint <= $7FF then
-    Result := Chr($C0 or (ACodePoint shr 6)) + Chr($80 or (ACodePoint and $3F))
-  else if ACodePoint <= $FFFF then
-    Result := Chr($E0 or (ACodePoint shr 12)) +
-              Chr($80 or ((ACodePoint shr 6) and $3F)) +
-              Chr($80 or (ACodePoint and $3F))
-  else if ACodePoint <= $10FFFF then
-    Result := Chr($F0 or (ACodePoint shr 18)) +
-              Chr($80 or ((ACodePoint shr 12) and $3F)) +
-              Chr($80 or ((ACodePoint shr 6) and $3F)) +
-              Chr($80 or (ACodePoint and $3F))
-  else
-    Result := '';
-end;
-
 // TC39 Template Literal Revision — cook a Unicode escape from a raw segment.
 // AStr is the raw text, APos is the current position (after 'u' has been
 // consumed). On success, appends the resolved character(s) to ASB and advances
@@ -1207,7 +1187,7 @@ begin
   // Convert code point to UTF-8 via shared helper
   Result := CodePoint <= $10FFFF;
   if Result then
-    ASB.Append(CodePointToUTF8(CodePoint));
+    ASB.Append(TextSemantics.CodePointToUTF8(CodePoint));
 end;
 
 // TC39 Template Literal Revision — cook a hex escape from a raw segment.

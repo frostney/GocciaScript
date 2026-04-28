@@ -167,13 +167,14 @@ uses
   Math,
   SysUtils,
 
+  TextSemantics,
+
   Goccia.Constants,
   Goccia.Constants.TypeNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.InstructionLimit,
   Goccia.Profiler,
-  Goccia.TextFiles,
   Goccia.Threading,
   Goccia.Timeout,
   Goccia.Values.ErrorHelper;

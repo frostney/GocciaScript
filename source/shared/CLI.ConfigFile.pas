@@ -89,7 +89,8 @@ uses
   SysUtils,
 
   FileUtils,
-  JSONParser;
+  JSONParser,
+  TextSemantics;
 
 { ── Parser registry ────────────────────────────────────────── }
 
@@ -350,8 +351,11 @@ end;
 { ── Load and parse a config file ───────────────────────────── }
 
 function ReadFileContent(const APath: string): string;
+var
+  Content: UTF8String;
 begin
-  Result := string(ReadUTF8FileText(APath));
+  Content := ReadUTF8FileText(APath);
+  Result := RetagUTF8Text(RawByteString(Content));
 end;
 
 function ResolveParser(const AExtension: string): TConfigParseFunc;

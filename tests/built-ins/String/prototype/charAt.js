@@ -47,3 +47,13 @@ test("charAt with edge cases", () => {
 test("charAt throws TypeError for Symbol argument", () => {
   expect(() => "hello".charAt(Symbol())).toThrow(TypeError);
 });
+
+test("charAt coerces non-string receivers", () => {
+  expect(String.prototype.charAt.call(42, 0)).toBe("4");
+  expect(String.prototype.charAt.call(true, 0)).toBe("t");
+});
+
+test("charAt throws for nullish receivers", () => {
+  expect(() => String.prototype.charAt.call(null, 0)).toThrow(TypeError);
+  expect(() => String.prototype.charAt.call(undefined, 0)).toThrow(TypeError);
+});

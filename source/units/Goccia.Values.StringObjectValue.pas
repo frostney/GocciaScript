@@ -47,6 +47,8 @@ type
     function StringCharCodeAt(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StringToUpperCase(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StringToLowerCase(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function StringToLocaleUpperCase(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function StringToLocaleLowerCase(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StringSlice(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StringSubstring(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StringIndexOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -85,6 +87,8 @@ uses
   Math,
   StrUtils,
   SysUtils,
+
+  TextSemantics,
 
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -169,103 +173,78 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-function GetRegexReplacementGroup(const AMatchArray: TGocciaArrayValue;
-  const AGroupIndex: Integer): string;
+function RegexReplacementCapture(const AMatchArray: TGocciaArrayValue;
+  const AGroupIndex: Integer): TReplacementCapture;
 var
   GroupValue: TGocciaValue;
 begin
+  Result.Text := '';
+  Result.Matched := False;
+
   if (AGroupIndex < 0) or (AGroupIndex >= AMatchArray.Elements.Count) then
-    Exit('');
+    Exit;
 
   GroupValue := AMatchArray.Elements[AGroupIndex];
   if GroupValue is TGocciaUndefinedLiteralValue then
-    Exit('');
+    Exit;
 
-  Result := GroupValue.ToStringLiteral.Value;
+  Result.Text := GroupValue.ToStringLiteral.Value;
+  Result.Matched := True;
 end;
 
-function ExpandRegexReplacementString(const AReplaceValue: string;
-  const AMatchArray: TGocciaArrayValue; const AMatchIndex: Integer;
-  const AInput: string): string;
+function BuildReplacementCaptures(
+  const AMatchArray: TGocciaArrayValue): TArray<TReplacementCapture>;
 var
   I: Integer;
-  NextChar: Char;
-  GroupIndex: Integer;
-  GroupText: string;
-  MatchText: string;
 begin
-  Result := '';
-  MatchText := GetRegexReplacementGroup(AMatchArray, 0);
-  I := 1;
-  while I <= Length(AReplaceValue) do
+  SetLength(Result, Max(AMatchArray.Elements.Count - 1, 0));
+  for I := 0 to High(Result) do
+    Result[I] := RegexReplacementCapture(AMatchArray, I + 1);
+end;
+
+function BuildReplacementNamedCaptures(
+  const AMatchArray: TGocciaArrayValue): TArray<TReplacementNamedCapture>;
+var
+  GroupName: string;
+  GroupNames: TArray<string>;
+  GroupsValue: TGocciaValue;
+  I: Integer;
+  NamedValue: TGocciaValue;
+begin
+  GroupsValue := AMatchArray.GetProperty(PROP_GROUPS);
+  if not (GroupsValue is TGocciaObjectValue) then
   begin
-    if AReplaceValue[I] <> '$' then
+    SetLength(Result, 0);
+    Exit;
+  end;
+
+  GroupNames := TGocciaObjectValue(GroupsValue).GetEnumerablePropertyNames;
+  SetLength(Result, Length(GroupNames));
+  for I := 0 to High(GroupNames) do
+  begin
+    GroupName := GroupNames[I];
+    NamedValue := TGocciaObjectValue(GroupsValue).GetProperty(GroupName);
+    Result[I].Name := GroupName;
+    if NamedValue is TGocciaUndefinedLiteralValue then
     begin
-      Result := Result + AReplaceValue[I];
-      Inc(I);
-      Continue;
-    end;
-
-    if I = Length(AReplaceValue) then
-    begin
-      Result := Result + '$';
-      Break;
-    end;
-
-    NextChar := AReplaceValue[I + 1];
-    case NextChar of
-      '$':
-        begin
-          Result := Result + '$';
-          Inc(I, 2);
-        end;
-      '&':
-        begin
-          Result := Result + MatchText;
-          Inc(I, 2);
-        end;
-      '`':
-        begin
-          Result := Result + Copy(AInput, 1, AMatchIndex);
-          Inc(I, 2);
-        end;
-      '''':
-        begin
-          Result := Result + Copy(AInput, AMatchIndex + Length(MatchText) + 1,
-            MaxInt);
-          Inc(I, 2);
-        end;
-      '1'..'9':
-        begin
-          GroupIndex := Ord(NextChar) - Ord('0');
-          if (I + 2 <= Length(AReplaceValue)) and
-             CharInSet(AReplaceValue[I + 2], ['0'..'9']) and
-             ((GroupIndex * 10) +
-              (Ord(AReplaceValue[I + 2]) - Ord('0')) <=
-              AMatchArray.Elements.Count - 1) then
-          begin
-            GroupIndex := (GroupIndex * 10) +
-              (Ord(AReplaceValue[I + 2]) - Ord('0'));
-            Inc(I, 3);
-          end
-          else
-            Inc(I, 2);
-
-          GroupText := GetRegexReplacementGroup(AMatchArray, GroupIndex);
-          Result := Result + GroupText;
-        end;
+      Result[I].Text := '';
+      Result[I].Matched := False;
+    end
     else
-      begin
-        Result := Result + '$' + NextChar;
-        Inc(I, 2);
-      end;
+    begin
+      Result[I].Text := NamedValue.ToStringLiteral.Value;
+      Result[I].Matched := True;
     end;
   end;
 end;
 
 function TGocciaStringObjectValue.ExtractStringValue(const AValue: TGocciaValue): string;
 begin
-  if AValue is TGocciaStringLiteralValue then
+  if (AValue is TGocciaUndefinedLiteralValue) or
+     (AValue is TGocciaNullLiteralValue) then
+    ThrowTypeError(SErrorStringPrototypeRequiresNonNullish,
+      SSuggestCheckNullBeforeAccess)
+  else if AValue is TGocciaStringLiteralValue then
     Result := TGocciaStringLiteralValue(AValue).Value
   else if AValue is TGocciaStringObjectValue then
     Result := TGocciaStringObjectValue(AValue).Primitive.Value
@@ -482,6 +461,8 @@ begin
       Members.AddMethod(StringCharCodeAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(StringToUpperCase, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(StringToLowerCase, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('toLocaleUpperCase', StringToLocaleUpperCase, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('toLocaleLowerCase', StringToLocaleLowerCase, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(StringSlice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(StringSubstring, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(StringIndexOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -553,32 +534,13 @@ function TGocciaStringObjectValue.StringCharAt(const AArgs: TGocciaArgumentsColl
 var
   StringValue: string;
   Index: Integer;
-  TempNumberValue: TGocciaNumberLiteralValue;
-  Arg: TGocciaValue;
 begin
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
   StringValue := ExtractStringValue(AThisValue);
 
   // Step 3: Let position be ToIntegerOrInfinity(pos)
-  if AArgs.Length > 0 then
-  begin
-    Arg := AArgs.GetElement(0);
-    if (Arg is TGocciaUndefinedLiteralValue) or (Arg is TGocciaNullLiteralValue) then
-      Index := 0
-    else
-    begin
-      TempNumberValue := Arg.ToNumberLiteral;
-      if TempNumberValue.IsNaN then
-        Index := 0
-      else if TempNumberValue.IsInfinity or TempNumberValue.IsNegativeInfinity then
-        Index := MaxInt
-      else
-        Index := Trunc(TempNumberValue.Value);
-    end;
-  end
-  else
-    Index := 0;
+  Index := ToIntegerFromArgs(AArgs);
 
   // Step 4: If position < 0 or position >= len(S), return ""
   // Step 5: Return the String value of length 1 containing the code unit at index position
@@ -593,32 +555,13 @@ function TGocciaStringObjectValue.StringCharCodeAt(const AArgs: TGocciaArguments
 var
   StringValue: string;
   Index: Integer;
-  TempNumberValue: TGocciaNumberLiteralValue;
-  Arg: TGocciaValue;
 begin
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
   StringValue := ExtractStringValue(AThisValue);
 
   // Step 3: Let position be ToIntegerOrInfinity(pos)
-  if AArgs.Length > 0 then
-  begin
-    Arg := AArgs.GetElement(0);
-    if (Arg is TGocciaUndefinedLiteralValue) or (Arg is TGocciaNullLiteralValue) then
-      Index := 0
-    else
-    begin
-      TempNumberValue := Arg.ToNumberLiteral;
-      if TempNumberValue.IsNaN then
-        Index := 0
-      else if TempNumberValue.IsInfinity or TempNumberValue.IsNegativeInfinity then
-        Index := MaxInt
-      else
-        Index := Trunc(TempNumberValue.Value);
-    end;
-  end
-  else
-    Index := 0;
+  Index := ToIntegerFromArgs(AArgs);
 
   // Step 4: If position < 0 or position >= len(S), return NaN
   // Step 5: Return the numeric value of the code unit at index position
@@ -628,7 +571,7 @@ begin
     Result := TGocciaNumberLiteralValue.NaNValue;
 end;
 
-// ES2026 §22.1.3.28 String.prototype.toUpperCase()
+// ES2026 §22.1.3.30 String.prototype.toUpperCase()
 function TGocciaStringObjectValue.StringToUpperCase(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
@@ -640,10 +583,10 @@ begin
   // Step 3: Let cpList be StringToCodePoints(S)
   // Step 4: Let cuList be the result of toUppercase(cpList)
   // Step 5: Return CodePointsToString(cuList)
-  Result := TGocciaStringLiteralValue.Create(UpperCase(StringValue));
+  Result := TGocciaStringLiteralValue.Create(UnicodeUpperCaseUTF8(StringValue));
 end;
 
-// ES2026 §22.1.3.26 String.prototype.toLowerCase()
+// ES2026 §22.1.3.28 String.prototype.toLowerCase()
 function TGocciaStringObjectValue.StringToLowerCase(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
@@ -655,7 +598,19 @@ begin
   // Step 3: Let cpList be StringToCodePoints(S)
   // Step 4: Let cuList be the result of toLowercase(cpList)
   // Step 5: Return CodePointsToString(cuList)
-  Result := TGocciaStringLiteralValue.Create(LowerCase(StringValue));
+  Result := TGocciaStringLiteralValue.Create(UnicodeLowerCaseUTF8(StringValue));
+end;
+
+// ES2026 §22.1.3.27 String.prototype.toLocaleUpperCase([ reserved1 [ , reserved2 ]])
+function TGocciaStringObjectValue.StringToLocaleUpperCase(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := StringToUpperCase(AArgs, AThisValue);
+end;
+
+// ES2026 §22.1.3.26 String.prototype.toLocaleLowerCase([ reserved1 [ , reserved2 ]])
+function TGocciaStringObjectValue.StringToLocaleLowerCase(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := StringToLowerCase(AArgs, AThisValue);
 end;
 
 // ES2026 §22.1.3.22 String.prototype.slice(start, end)
@@ -797,13 +752,14 @@ begin
     SearchValue := 'undefined';
 
   // Step 4: Let numPos be ToNumber(position); if NaN let pos be +∞, else ToIntegerOrInfinity
-  if AArgs.Length > 1 then
-    StartPosition := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value)
+  if (AArgs.Length > 1) and
+     not (AArgs.GetElement(1).ToNumberLiteral.IsNaN) then
+    StartPosition := ToIntegerFromArgs(AArgs, 1, Length(StringValue))
   else
     StartPosition := Length(StringValue);
 
   // Step 5: Let start be min(max(pos, 0), len)
-  StartPosition := Min(StartPosition, Length(StringValue));
+  StartPosition := Min(Max(StartPosition, 0), Length(StringValue));
 
   if SearchValue = '' then
   begin
@@ -847,10 +803,7 @@ begin
     SearchValue := 'undefined';
 
   // Step 4: Let pos be ToIntegerOrInfinity(position)
-  if AArgs.Length > 1 then
-    StartPosition := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value)
-  else
-    StartPosition := 0;
+  StartPosition := ToIntegerFromArgs(AArgs, 1);
 
   // Step 5: Let start be min(max(pos, 0), len)
   StartPosition := Max(0, StartPosition);
@@ -897,10 +850,7 @@ begin
 
   // Step 4: Let searchLength be the length of searchStr
   // Step 5: Let start be min(max(ToIntegerOrInfinity(position), 0), len)
-  if AArgs.Length > 1 then
-    StartPosition := Max(0, Trunc(AArgs.GetElement(1).ToNumberLiteral.Value))
-  else
-    StartPosition := 0;
+  StartPosition := Max(0, ToIntegerFromArgs(AArgs, 1));
 
   // Step 6: If searchLength + start > len(S), return false
   // Step 7: If the code units of S starting at start match searchStr, return true; else false
@@ -931,10 +881,8 @@ begin
   // Step 4: Let searchLength be the length of searchStr
   // Step 5: If endPosition is undefined, let pos be len; else let pos be ToIntegerOrInfinity(endPosition)
   // Step 6: Let end be min(max(pos, 0), len)
-  if AArgs.Length > 1 then
-    EndPosition := Min(Max(0, Trunc(AArgs.GetElement(1).ToNumberLiteral.Value)), Length(StringValue))
-  else
-    EndPosition := Length(StringValue);
+  EndPosition := Min(Max(0, ToIntegerFromArgs(AArgs, 1,
+    Length(StringValue))), Length(StringValue));
 
   // Step 7: Let start be end - searchLength
   // Step 8: If start < 0, return false
@@ -947,7 +895,7 @@ begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
-// ES2026 §22.1.3.29 String.prototype.trim()
+// ES2026 §22.1.3.32 String.prototype.trim()
 function TGocciaStringObjectValue.StringTrim(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
@@ -957,10 +905,11 @@ begin
   StringValue := ExtractStringValue(AThisValue);
 
   // Step 3: Return TrimString(S, start+end)
-  Result := TGocciaStringLiteralValue.Create(Trim(StringValue));
+  Result := TGocciaStringLiteralValue.Create(
+    TrimECMAScriptWhitespace(StringValue));
 end;
 
-// ES2026 §22.1.3.30 String.prototype.trimStart()
+// ES2026 §22.1.3.34 String.prototype.trimStart()
 function TGocciaStringObjectValue.StringTrimStart(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
@@ -970,10 +919,11 @@ begin
   StringValue := ExtractStringValue(AThisValue);
 
   // Step 3: Return TrimString(S, start)
-  Result := TGocciaStringLiteralValue.Create(TrimLeft(StringValue));
+  Result := TGocciaStringLiteralValue.Create(
+    TrimECMAScriptWhitespaceStart(StringValue));
 end;
 
-// ES2026 §22.1.3.31 String.prototype.trimEnd()
+// ES2026 §22.1.3.33 String.prototype.trimEnd()
 function TGocciaStringObjectValue.StringTrimEnd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
@@ -983,7 +933,8 @@ begin
   StringValue := ExtractStringValue(AThisValue);
 
   // Step 3: Return TrimString(S, end)
-  Result := TGocciaStringLiteralValue.Create(TrimRight(StringValue));
+  Result := TGocciaStringLiteralValue.Create(
+    TrimECMAScriptWhitespaceEnd(StringValue));
 end;
 
 function BuildRegexReplacement(const AReplaceArg: TGocciaValue;
@@ -991,19 +942,32 @@ function BuildRegexReplacement(const AReplaceArg: TGocciaValue;
   const AInput: string): string;
 var
   CallArgs: TGocciaArgumentsCollection;
+  Captures: TArray<TReplacementCapture>;
   I: Integer;
+  MatchCapture: TReplacementCapture;
+  NamedCaptures: TArray<TReplacementNamedCapture>;
+  GroupsValue: TGocciaValue;
 begin
   if not AReplaceArg.IsCallable then
-    Exit(ExpandRegexReplacementString(AReplaceArg.ToStringLiteral.Value,
-      AMatchArray, AMatchIndex, AInput));
+  begin
+    Captures := BuildReplacementCaptures(AMatchArray);
+    NamedCaptures := BuildReplacementNamedCaptures(AMatchArray);
+    MatchCapture := RegexReplacementCapture(AMatchArray, 0);
+    Exit(ExpandReplacementPattern(AReplaceArg.ToStringLiteral.Value,
+      MatchCapture.Text, AInput, AMatchIndex,
+      Captures, NamedCaptures));
+  end;
 
   CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(
-    AMatchArray.Elements.Count + 2);
+    AMatchArray.Elements.Count + 3);
   try
     for I := 0 to AMatchArray.Elements.Count - 1 do
       CallArgs.Add(AMatchArray.Elements[I]);
     CallArgs.Add(TGocciaNumberLiteralValue.Create(AMatchIndex));
     CallArgs.Add(TGocciaStringLiteralValue.Create(AInput));
+    GroupsValue := AMatchArray.GetProperty(PROP_GROUPS);
+    if not (GroupsValue is TGocciaUndefinedLiteralValue) then
+      CallArgs.Add(GroupsValue);
     Result := InvokeCallable(AReplaceArg, CallArgs,
       TGocciaUndefinedLiteralValue.UndefinedValue).ToStringLiteral.Value;
   finally
@@ -1109,6 +1073,8 @@ begin
   if ReplaceArg.IsCallable then
   begin
     FoundPos := Pos(SearchValue, StringValue);
+    if SearchValue = '' then
+      FoundPos := 1;
     if FoundPos > 0 then
     begin
       CallArgs := TGocciaArgumentsCollection.Create([
@@ -1132,10 +1098,19 @@ begin
   else
   begin
     ReplaceValue := ReplaceArg.ToStringLiteral.Value;
+    FoundPos := Pos(SearchValue, StringValue);
     if SearchValue = '' then
-      Result := TGocciaStringLiteralValue.Create(ReplaceValue + StringValue)
+      Result := TGocciaStringLiteralValue.Create(
+        ExpandReplacementPattern(ReplaceValue, SearchValue, StringValue, 0,
+          [], []) + StringValue)
+    else if FoundPos > 0 then
+      Result := TGocciaStringLiteralValue.Create(
+        Copy(StringValue, 1, FoundPos - 1) +
+        ExpandReplacementPattern(ReplaceValue, SearchValue, StringValue,
+          FoundPos - 1, [], []) +
+        Copy(StringValue, FoundPos + Length(SearchValue), MaxInt))
     else
-      Result := TGocciaStringLiteralValue.Create(StringReplace(StringValue, SearchValue, ReplaceValue, []));
+      Result := TGocciaStringLiteralValue.Create(StringValue);
   end;
 end;
 
@@ -1147,7 +1122,7 @@ var
   ReplaceArg: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   CallResult: TGocciaValue;
-  SearchPos, Offset: Integer;
+  MatchStart, NextOffset, SearchPos, Offset: Integer;
   ReplaceMethod: TGocciaValue;
   RegexValue: TGocciaObjectValue;
   MatchArray: TGocciaObjectValue;
@@ -1227,13 +1202,36 @@ begin
   if ReplaceArg.IsCallable then
   begin
     ResultStr := '';
-    Offset := 1;
     if SearchValue = '' then
     begin
-      Result := TGocciaStringLiteralValue.Create(StringValue);
+      Offset := 0;
+      CallArgs := TGocciaArgumentsCollection.Create([
+        TGocciaStringLiteralValue.Create(''),
+        nil,
+        TGocciaStringLiteralValue.Create(StringValue)
+      ]);
+      try
+        while Offset <= Length(StringValue) do
+        begin
+          CallArgs.SetElement(1, TGocciaNumberLiteralValue.Create(Offset));
+          CallResult := InvokeCallable(ReplaceArg, CallArgs,
+            TGocciaUndefinedLiteralValue.UndefinedValue);
+          ResultStr := ResultStr + CallResult.ToStringLiteral.Value;
+          if Offset = Length(StringValue) then
+            Break;
+          NextOffset := AdvanceUTF8StringIndex(StringValue, Offset, True);
+          ResultStr := ResultStr + Copy(StringValue, Offset + 1,
+            NextOffset - Offset);
+          Offset := NextOffset;
+        end;
+      finally
+        CallArgs.Free;
+      end;
+      Result := TGocciaStringLiteralValue.Create(ResultStr);
       Exit;
     end;
 
+    Offset := 1;
     SearchPos := Pos(SearchValue, Copy(StringValue, Offset, Length(StringValue)));
     if SearchPos = 0 then
     begin
@@ -1267,7 +1265,48 @@ begin
   begin
     // Step 7 (non-callable): Let replaceStr be ToString(replaceValue), replace all occurrences
     ReplaceValue := ReplaceArg.ToStringLiteral.Value;
-    Result := TGocciaStringLiteralValue.Create(StringReplace(StringValue, SearchValue, ReplaceValue, [rfReplaceAll]));
+    ResultStr := '';
+    if SearchValue = '' then
+    begin
+      Offset := 0;
+      while Offset <= Length(StringValue) do
+      begin
+        ResultStr := ResultStr + ExpandReplacementPattern(ReplaceValue,
+          SearchValue, StringValue, Offset, [], []);
+        if Offset = Length(StringValue) then
+          Break;
+        NextOffset := AdvanceUTF8StringIndex(StringValue, Offset, True);
+        ResultStr := ResultStr + Copy(StringValue, Offset + 1,
+          NextOffset - Offset);
+        Offset := NextOffset;
+      end;
+      Result := TGocciaStringLiteralValue.Create(ResultStr);
+      Exit;
+    end;
+
+    Offset := 1;
+    SearchPos := Pos(SearchValue, Copy(StringValue, Offset, Length(StringValue)));
+    if SearchPos = 0 then
+    begin
+      Result := TGocciaStringLiteralValue.Create(StringValue);
+      Exit;
+    end;
+
+    while SearchPos > 0 do
+    begin
+      MatchStart := Offset + SearchPos - 2;
+      ResultStr := ResultStr + Copy(StringValue, Offset, SearchPos - 1);
+      ResultStr := ResultStr + ExpandReplacementPattern(ReplaceValue,
+        SearchValue, StringValue, MatchStart, [], []);
+      Offset := MatchStart + Length(SearchValue) + 1;
+      if Offset > Length(StringValue) then
+        Break;
+      SearchPos := Pos(SearchValue, Copy(StringValue, Offset,
+        Length(StringValue)));
+    end;
+    if Offset <= Length(StringValue) then
+      ResultStr := ResultStr + Copy(StringValue, Offset, Length(StringValue));
+    Result := TGocciaStringLiteralValue.Create(ResultStr);
   end;
 end;
 
@@ -1802,9 +1841,9 @@ end;
 function TGocciaStringObjectValue.StringCodePointAt(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
-  Index, ByteLen: Integer;
-  B: Byte;
+  ByteLength: Integer;
   CodePoint: Cardinal;
+  Index: Integer;
 begin
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
@@ -1821,40 +1860,8 @@ begin
   end;
 
   // Step 5: Let cp be CodePointAt(S, position) and return cp.[[CodePoint]]
-  B := Ord(StringValue[Index + 1]);
-  if B < $80 then
-    CodePoint := B
-  else if (B and $E0) = $C0 then
-  begin
-    ByteLen := 2;
-    if Index + ByteLen > Length(StringValue) then
-    begin
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
-    end;
-    CodePoint := (Cardinal(B and $1F) shl 6) or Cardinal(Ord(StringValue[Index + 2]) and $3F);
-  end
-  else if (B and $F0) = $E0 then
-  begin
-    ByteLen := 3;
-    if Index + ByteLen > Length(StringValue) then
-    begin
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
-    end;
-    CodePoint := (Cardinal(B and $0F) shl 12) or (Cardinal(Ord(StringValue[Index + 2]) and $3F) shl 6) or Cardinal(Ord(StringValue[Index + 3]) and $3F);
-  end
-  else if (B and $F8) = $F0 then
-  begin
-    ByteLen := 4;
-    if Index + ByteLen > Length(StringValue) then
-    begin
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
-    end;
-    CodePoint := (Cardinal(B and $07) shl 18) or (Cardinal(Ord(StringValue[Index + 2]) and $3F) shl 12) or (Cardinal(Ord(StringValue[Index + 3]) and $3F) shl 6) or Cardinal(Ord(StringValue[Index + 4]) and $3F);
-  end
-  else
+  if not TryReadUTF8CodePoint(StringValue, Index + 1, CodePoint,
+    ByteLength) then
   begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
@@ -1914,8 +1921,6 @@ end;
 function TGocciaStringObjectValue.StringIsWellFormed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
-  I: Integer;
-  B: Byte;
 begin
   // ES2026 §22.1.3.8 step 1: Let O be RequireObjectCoercible(this value)
   if (AThisValue is TGocciaUndefinedLiteralValue) or (AThisValue is TGocciaNullLiteralValue) then
@@ -1923,131 +1928,21 @@ begin
   // Step 2: Let S be ToString(O)
   StringValue := ExtractStringValue(AThisValue);
   // Step 3: Return IsStringWellFormedUnicode(S)
-  I := 1;
-  while I <= Length(StringValue) do
-  begin
-    B := Ord(StringValue[I]);
-    if B < $80 then
-      Inc(I)
-    else if (B and $E0) = $C0 then
-    begin
-      if (I + 1 > Length(StringValue)) or ((Ord(StringValue[I + 1]) and $C0) <> $80) then
-      begin
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-        Exit;
-      end;
-      Inc(I, 2);
-    end
-    else if (B and $F0) = $E0 then
-    begin
-      if (I + 2 > Length(StringValue)) or ((Ord(StringValue[I + 1]) and $C0) <> $80) or ((Ord(StringValue[I + 2]) and $C0) <> $80) then
-      begin
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-        Exit;
-      end;
-      // ES2026 §6.1.4: Surrogate code points (U+D800..U+DFFF) are not well-formed
-      if (B = $ED) and (Ord(StringValue[I + 1]) >= $A0) then
-      begin
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-        Exit;
-      end;
-      Inc(I, 3);
-    end
-    else if (B and $F8) = $F0 then
-    begin
-      if (I + 3 > Length(StringValue)) or ((Ord(StringValue[I + 1]) and $C0) <> $80) or ((Ord(StringValue[I + 2]) and $C0) <> $80) or ((Ord(StringValue[I + 3]) and $C0) <> $80) then
-      begin
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-        Exit;
-      end;
-      Inc(I, 4);
-    end
-    else
-    begin
-      Result := TGocciaBooleanLiteralValue.FalseValue;
-      Exit;
-    end;
-  end;
-  Result := TGocciaBooleanLiteralValue.TrueValue;
+  Result := TGocciaBooleanLiteralValue.Create(IsWellFormedUTF8(StringValue));
 end;
 
 // ES2026 §22.1.3.33 String.prototype.toWellFormed()
 function TGocciaStringObjectValue.StringToWellFormed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  StringValue, ResultStr: string;
-  I: Integer;
-  B: Byte;
+  StringValue: string;
 begin
   // ES2026 §22.1.3.33 step 1: Let O be RequireObjectCoercible(this value)
   if (AThisValue is TGocciaUndefinedLiteralValue) or (AThisValue is TGocciaNullLiteralValue) then
     ThrowTypeError(SErrorToWellFormedRequiresNonNullish, SSuggestCheckNullBeforeAccess);
   // Step 2: Let S be ToString(O)
   StringValue := ExtractStringValue(AThisValue);
-  // Step 3: Let result be ""
-  ResultStr := '';
-  // Step 4: For each code unit in S, if it is a lone surrogate replace with U+FFFD, else append
-  I := 1;
-  while I <= Length(StringValue) do
-  begin
-    B := Ord(StringValue[I]);
-    if B < $80 then
-    begin
-      ResultStr := ResultStr + StringValue[I];
-      Inc(I);
-    end
-    else if (B and $E0) = $C0 then
-    begin
-      if (I + 1 > Length(StringValue)) or ((Ord(StringValue[I + 1]) and $C0) <> $80) then
-      begin
-        ResultStr := ResultStr + #$EF#$BF#$BD;
-        Inc(I);
-      end
-      else
-      begin
-        ResultStr := ResultStr + Copy(StringValue, I, 2);
-        Inc(I, 2);
-      end;
-    end
-    else if (B and $F0) = $E0 then
-    begin
-      if (I + 2 > Length(StringValue)) or ((Ord(StringValue[I + 1]) and $C0) <> $80) or ((Ord(StringValue[I + 2]) and $C0) <> $80) then
-      begin
-        ResultStr := ResultStr + #$EF#$BF#$BD;
-        Inc(I);
-      end
-      else if (B = $ED) and (Ord(StringValue[I + 1]) >= $A0) then
-      begin
-        // ES2026 §6.1.4: Replace surrogate code points (U+D800..U+DFFF) with U+FFFD
-        ResultStr := ResultStr + #$EF#$BF#$BD;
-        Inc(I, 3);
-      end
-      else
-      begin
-        ResultStr := ResultStr + Copy(StringValue, I, 3);
-        Inc(I, 3);
-      end;
-    end
-    else if (B and $F8) = $F0 then
-    begin
-      if (I + 3 > Length(StringValue)) or ((Ord(StringValue[I + 1]) and $C0) <> $80) or ((Ord(StringValue[I + 2]) and $C0) <> $80) or ((Ord(StringValue[I + 3]) and $C0) <> $80) then
-      begin
-        ResultStr := ResultStr + #$EF#$BF#$BD;
-        Inc(I);
-      end
-      else
-      begin
-        ResultStr := ResultStr + Copy(StringValue, I, 4);
-        Inc(I, 4);
-      end;
-    end
-    else
-    begin
-      ResultStr := ResultStr + #$EF#$BF#$BD;
-      Inc(I);
-    end;
-  end;
-  // Step 5: Return result
-  Result := TGocciaStringLiteralValue.Create(ResultStr);
+  // Step 3-5: Replace ill-formed Unicode sequences with U+FFFD.
+  Result := TGocciaStringLiteralValue.Create(ToWellFormedUTF8(StringValue));
 end;
 
 initialization

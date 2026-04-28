@@ -74,7 +74,7 @@ begin
     Result := IncludeTrailingPathDelimiter(Result);
 end;
 
-function ReadImportMapText(const APath: string): string;
+function ReadImportMapText(const APath: string): UTF8String;
 begin
   Result := ReadUTF8FileText(APath);
 end;

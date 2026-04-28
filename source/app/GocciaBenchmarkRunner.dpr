@@ -9,6 +9,7 @@ uses
   SysUtils,
 
   TimingUtils,
+  TextSemantics,
 
   Goccia.Application,
   Goccia.AST.Node,
@@ -204,7 +205,7 @@ var
   ScriptResult: TGocciaObjectValue;
   FileResult: TBenchmarkFileResult;
 begin
-  Source := ReadUTF8FileLines(AFileName);
+  Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
   try
     Source.Add('runBenchmarks();');
 
@@ -288,7 +289,7 @@ var
   ScriptResult: TGocciaObjectValue;
   LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd: Int64;
 begin
-  Source := ReadUTF8FileLines(AFileName);
+  Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
   try
     Source.Add('runBenchmarks();');
 

@@ -28,3 +28,13 @@ test("charCodeAt with edge cases", () => {
 test("charCodeAt throws TypeError for Symbol argument", () => {
   expect(() => "hello".charCodeAt(Symbol())).toThrow(TypeError);
 });
+
+test("charCodeAt coerces non-string receivers", () => {
+  expect(String.prototype.charCodeAt.call(42, 0)).toBe(52);
+  expect(String.prototype.charCodeAt.call(true, 0)).toBe(116);
+});
+
+test("charCodeAt throws for nullish receivers", () => {
+  expect(() => String.prototype.charCodeAt.call(null, 0)).toThrow(TypeError);
+  expect(() => String.prototype.charCodeAt.call(undefined, 0)).toThrow(TypeError);
+});
