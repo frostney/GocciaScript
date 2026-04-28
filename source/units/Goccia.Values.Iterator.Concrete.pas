@@ -104,6 +104,8 @@ implementation
 uses
   SysUtils,
 
+  TextSemantics,
+
   Goccia.Values.ArrayValue,
   Goccia.Values.HeadersValue,
   Goccia.Values.HoleValue,
@@ -246,6 +248,7 @@ end;
 
 function TGocciaStringIteratorValue.AdvanceNext: TGocciaObjectValue;
 var
+  ByteLength: Integer;
   StrVal: string;
 begin
   if FDone then
@@ -261,12 +264,16 @@ begin
     Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
     Exit;
   end;
-  Result := CreateIteratorResult(TGocciaStringLiteralValue.Create(StrVal[FIndex + 1]), False);
-  Inc(FIndex);
+  ByteLength := TextSemantics.UTF8SequenceLengthAt(StrVal, FIndex + 1);
+  Result := CreateIteratorResult(
+    TGocciaStringLiteralValue.Create(Copy(StrVal, FIndex + 1, ByteLength)),
+    False);
+  Inc(FIndex, ByteLength);
 end;
 
 function TGocciaStringIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
 var
+  ByteLength: Integer;
   StrVal: string;
 begin
   if FDone then
@@ -285,8 +292,10 @@ begin
     Exit;
   end;
   ADone := False;
-  Result := TGocciaStringLiteralValue.Create(StrVal[FIndex + 1]);
-  Inc(FIndex);
+  ByteLength := TextSemantics.UTF8SequenceLengthAt(StrVal, FIndex + 1);
+  Result := TGocciaStringLiteralValue.Create(Copy(StrVal, FIndex + 1,
+    ByteLength));
+  Inc(FIndex, ByteLength);
 end;
 
 function TGocciaStringIteratorValue.ToStringTag: string;
