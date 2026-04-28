@@ -155,6 +155,20 @@ test("object generator method throw is catchable", () => {
   expect(iter.throw(7)).toEqual({ value: 7, done: false });
 });
 
+test("object generator method uncaught throw closes generator", () => {
+  const obj = {
+    *numbers() {
+      yield 1;
+      throw 7;
+    },
+  };
+
+  const iter = obj.numbers();
+  expect(iter.next()).toEqual({ value: 1, done: false });
+  expect(() => iter.next()).toThrow();
+  expect(iter.next()).toEqual({ value: undefined, done: true });
+});
+
 test("object generator method captures closure and binds rich params", () => {
   const outer = 3;
   const obj = {

@@ -1445,14 +1445,26 @@ begin
 end;
 
 function VMRejectedTypeErrorPromise(const AMessage: string): TGocciaPromiseValue;
+var
+  IsRooted: Boolean;
 begin
   Result := TGocciaPromiseValue.Create;
+  IsRooted := Assigned(TGarbageCollector.Instance);
+  if IsRooted then
+    TGarbageCollector.Instance.AddTempRoot(Result);
   try
     Result.Reject(CreateErrorObject(TYPE_ERROR_NAME, AMessage));
   except
+    if IsRooted then
+    begin
+      TGarbageCollector.Instance.RemoveTempRoot(Result);
+      IsRooted := False;
+    end;
     Result.Free;
     raise;
   end;
+  if IsRooted then
+    TGarbageCollector.Instance.RemoveTempRoot(Result);
 end;
 
 function VMGeneratorTypeError: TGocciaValue;
@@ -1732,7 +1744,11 @@ begin
           Result := FReturnValue;
         end
         else
+        begin
+          FState := bgsCompleted;
+          ADone := True;
           raise;
+        end;
       end;
     end;
   finally
@@ -1871,24 +1887,38 @@ function TGocciaBytecodeAsyncGeneratorObjectValue.ResumeAsPromise(
 var
   Promise: TGocciaPromiseValue;
   Done: Boolean;
+  IsRooted: Boolean;
   UnwrappedValue: TGocciaValue;
   Value: TGocciaValue;
 begin
   Promise := TGocciaPromiseValue.Create;
+  IsRooted := Assigned(TGarbageCollector.Instance);
+  if IsRooted then
+    TGarbageCollector.Instance.AddTempRoot(Promise);
   try
     try
-      Value := FInner.ResumeRaw(AKind, AValue, Done);
-      UnwrappedValue := AwaitValue(Value);
-      Promise.Resolve(CreateIteratorResult(UnwrappedValue, Done));
+      try
+        Value := FInner.ResumeRaw(AKind, AValue, Done);
+        UnwrappedValue := AwaitValue(Value);
+        Promise.Resolve(CreateIteratorResult(UnwrappedValue, Done));
+      except
+        on E: EGocciaBytecodeThrow do
+          Promise.Reject(E.ThrownValue);
+        on E: TGocciaThrowValue do
+          Promise.Reject(E.Value);
+      end;
     except
-      on E: EGocciaBytecodeThrow do
-        Promise.Reject(E.ThrownValue);
-      on E: TGocciaThrowValue do
-        Promise.Reject(E.Value);
+      if IsRooted then
+      begin
+        TGarbageCollector.Instance.RemoveTempRoot(Promise);
+        IsRooted := False;
+      end;
+      Promise.Free;
+      raise;
     end;
-  except
-    Promise.Free;
-    raise;
+  finally
+    if IsRooted then
+      TGarbageCollector.Instance.RemoveTempRoot(Promise);
   end;
   Result := Promise;
 end;
