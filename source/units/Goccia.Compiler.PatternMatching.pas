@@ -274,8 +274,10 @@ begin
           KeyReg));
         FailJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ADest));
         if KeyIdx > High(UInt8) then
-          raise Exception.Create('Constant pool overflow: pattern property index exceeds 255');
-        EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, ValueReg, ASubjectReg, UInt8(KeyIdx)));
+          EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, ValueReg, ASubjectReg, KeyReg))
+        else
+          EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, ValueReg,
+            ASubjectReg, UInt8(KeyIdx)));
       end;
       CompilePatternTest(ACtx, ValueReg, Prop.Pattern, ADest);
       FailJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ADest));
@@ -359,11 +361,16 @@ begin
       TailMethodReg := ACtx.Scope.AllocateRegister;
       TailStartReg := ACtx.Scope.AllocateRegister;
       SliceIdx := ACtx.Template.AddConstantString(PROP_SLICE);
-      if SliceIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow: array pattern slice index exceeds 255');
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, TailThisReg, ItemsReg, 0));
-      EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, TailMethodReg,
-        ItemsReg, UInt8(SliceIdx)));
+      if SliceIdx > High(UInt8) then
+      begin
+        EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, TailStartReg, SliceIdx));
+        EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, TailMethodReg,
+          ItemsReg, TailStartReg));
+      end
+      else
+        EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, TailMethodReg,
+          ItemsReg, UInt8(SliceIdx)));
       EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, TailStartReg,
         APattern.Elements.Count));
       EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, TailMethodReg, 1, 0));

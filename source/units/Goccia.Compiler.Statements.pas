@@ -1067,6 +1067,9 @@ begin
     begin
       CatchSuccessJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
       PatchJumpTarget(ACtx, PatternMismatchJump);
+      if AStmt.CatchParam <> '' then
+        for I := 0 to ClosedCount - 1 do
+          EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
       if HasFinally then
         CompileBlockStatement(ACtx, AStmt.FinallyBlock);
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchReg, 0, 0));

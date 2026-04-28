@@ -221,6 +221,21 @@ begin
   Result := nil;
 end;
 
+function HasSymbolPropertyInChain(const AObject: TGocciaObjectValue;
+  const ASymbol: TGocciaSymbolValue): Boolean;
+var
+  Current: TGocciaObjectValue;
+begin
+  Current := AObject;
+  while Assigned(Current) do
+  begin
+    if Current.HasSymbolProperty(ASymbol) then
+      Exit(True);
+    Current := Current.Prototype;
+  end;
+  Result := False;
+end;
+
 function HasMatchProperty(const ASubject, AKey: TGocciaValue): Boolean;
 var
   KeyName: string;
@@ -228,8 +243,26 @@ var
   SymbolPrototype: TGocciaValue;
   PropertyValue: TGocciaValue;
 begin
-  if (AKey is TGocciaSymbolValue) and (ASubject is TGocciaObjectValue) then
-    Exit(TGocciaObjectValue(ASubject).HasSymbolProperty(TGocciaSymbolValue(AKey)));
+  if AKey is TGocciaSymbolValue then
+  begin
+    if ASubject is TGocciaObjectValue then
+      Exit(HasSymbolPropertyInChain(TGocciaObjectValue(ASubject),
+        TGocciaSymbolValue(AKey)));
+
+    BoxedSubject := BoxPrimitiveForMatch(ASubject);
+    if Assigned(BoxedSubject) then
+      Exit(HasSymbolPropertyInChain(BoxedSubject, TGocciaSymbolValue(AKey)));
+
+    if ASubject is TGocciaSymbolValue then
+    begin
+      SymbolPrototype := TGocciaSymbolValue.SharedPrototype;
+      if SymbolPrototype is TGocciaObjectValue then
+        Exit(HasSymbolPropertyInChain(TGocciaObjectValue(SymbolPrototype),
+          TGocciaSymbolValue(AKey)));
+    end;
+
+    Exit(False);
+  end;
 
   KeyName := AKey.ToStringLiteral.Value;
   if ASubject is TGocciaObjectValue then
@@ -253,9 +286,30 @@ end;
 function GetMatchProperty(const ASubject, AKey: TGocciaValue): TGocciaValue;
 var
   BoxedSubject: TGocciaObjectValue;
+  SymbolPrototype: TGocciaValue;
 begin
-  if (AKey is TGocciaSymbolValue) and (ASubject is TGocciaObjectValue) then
-    Result := TGocciaObjectValue(ASubject).GetSymbolProperty(TGocciaSymbolValue(AKey))
+  if AKey is TGocciaSymbolValue then
+  begin
+    if ASubject is TGocciaObjectValue then
+      Result := TGocciaObjectValue(ASubject).GetSymbolProperty(TGocciaSymbolValue(AKey))
+    else
+    begin
+      BoxedSubject := BoxPrimitiveForMatch(ASubject);
+      if Assigned(BoxedSubject) then
+        Result := BoxedSubject.GetSymbolProperty(TGocciaSymbolValue(AKey))
+      else if ASubject is TGocciaSymbolValue then
+      begin
+        SymbolPrototype := TGocciaSymbolValue.SharedPrototype;
+        if SymbolPrototype is TGocciaObjectValue then
+          Result := TGocciaObjectValue(SymbolPrototype).GetSymbolProperty(
+            TGocciaSymbolValue(AKey))
+        else
+          Result := nil;
+      end
+      else
+        Result := nil;
+    end;
+  end
   else if ASubject is TGocciaObjectValue then
     Result := ASubject.GetProperty(AKey.ToStringLiteral.Value)
   else
@@ -301,14 +355,30 @@ begin
     Exit(IsObjectInstanceOfClass(TGocciaObjectValue(ASubject), TGocciaClassValue(AMatcher)));
 end;
 
-function BuiltinConstructorMatchesSubject(const AMatcher, ASubject: TGocciaValue): Boolean;
+function GetRootBindingValue(const AContext: TGocciaEvaluationContext;
+  const AName: string): TGocciaValue;
+var
+  RootScope: TGocciaScope;
+begin
+  Result := nil;
+  RootScope := AContext.Scope;
+  while Assigned(RootScope) and Assigned(RootScope.Parent) do
+    RootScope := RootScope.Parent;
+  if Assigned(RootScope) and RootScope.ContainsOwnLexicalBinding(AName) then
+    Result := RootScope.GetValue(AName);
+end;
+
+function BuiltinConstructorMatchesSubject(const AMatcher, ASubject: TGocciaValue;
+  const AContext: TGocciaEvaluationContext): Boolean;
+var
+  ObjectConstructor: TGocciaValue;
 begin
   Result := False;
   if not (AMatcher is TGocciaClassValue) then
     Exit;
 
-  if (TGocciaClassValue(AMatcher).Name = CONSTRUCTOR_OBJECT) and
-     (TGocciaClassValue(AMatcher).Prototype = TGocciaObjectValue.SharedObjectPrototype) then
+  ObjectConstructor := GetRootBindingValue(AContext, CONSTRUCTOR_OBJECT);
+  if Assigned(ObjectConstructor) and (AMatcher = ObjectConstructor) then
     Result := ASubject is TGocciaObjectValue
   else if AMatcher is TGocciaArrayClassValue then
     Result := ASubject is TGocciaArrayValue
@@ -338,7 +408,7 @@ begin
     Exit(MatcherResult.ToBooleanLiteral.Value);
   end;
 
-  if BuiltinConstructorMatchesSubject(Candidate, ASubject) then
+  if BuiltinConstructorMatchesSubject(Candidate, ASubject, AContext) then
     Exit(True);
 
   if ClassMatchesSubject(Candidate, ASubject) then
@@ -694,7 +764,13 @@ var
   ScratchContext: TGocciaEvaluationContext;
 begin
   ScratchContext := CreatePatternChildContext(AContext, 'PatternMatchScope');
-  Result := TryMatchPatternInternal(ASubject, APattern, ScratchContext, AMatchContext);
+  try
+    Result := TryMatchPatternInternal(ASubject, APattern, ScratchContext, AMatchContext);
+  except
+    ScratchContext.Scope.Free;
+    AMatchContext := AContext;
+    raise;
+  end;
   if not Result then
   begin
     ScratchContext.Scope.Free;

@@ -51,6 +51,10 @@ describe("pattern matching expressions", () => {
     expect(1 as number is 1).toBe(true);
   });
 
+  test("type assertions require a type before is", () => {
+    expect(() => new Function("const value = 1; return value as is 1;")).toThrow();
+  });
+
   test("array and object patterns match nested values", () => {
     const value = { point: [2, 4, 6] };
     let sum = 0;
@@ -76,6 +80,21 @@ describe("pattern matching expressions", () => {
     expect(result).toBe(5);
   });
 
+  test("object rest patterns exclude matched symbol properties", () => {
+    const key = Symbol("key");
+    const value = { [key]: 1, other: 2 };
+    let result = 0;
+
+    if (value is { [key]: const matched, ...const rest }) {
+      result = matched + rest.other;
+      if (rest[key] !== undefined) {
+        result = -1;
+      }
+    }
+
+    expect(result).toBe(3);
+  });
+
   test("object rest patterns box primitive subjects", () => {
     let result = "";
 
@@ -84,6 +103,13 @@ describe("pattern matching expressions", () => {
     }
 
     expect(result).toBe("ab");
+  });
+
+  test("object patterns match symbol properties on boxed primitive prototypes", () => {
+    const key = Symbol("boxed");
+    String.prototype[key] = 7;
+
+    expect("value" is { [key]: 7 }).toBe(true);
   });
 
   test("pattern binding names are case-sensitive", () => {
@@ -160,8 +186,11 @@ describe("pattern matching expressions", () => {
 
   test("constructor value patterns do not identify builtins by shadowed names", () => {
     class Array {}
+    class Object {}
 
     expect([] is Array).toBe(false);
+    expect({} is Object).toBe(false);
+    expect(new Object() is Object).toBe(true);
   });
 
   test("malformed iterators throw during array pattern matching", () => {
@@ -173,6 +202,27 @@ describe("pattern matching expressions", () => {
 
     expect(() => malformed is []).toThrow(TypeError);
     expect(() => ({ [Symbol.iterator]: 1 } is [])).toThrow(TypeError);
+    expect(() => ({ [Symbol.iterator]() { return {}; } } is [])).toThrow(TypeError);
+    expect(() => ({ [Symbol.iterator]() { return { next: 1 }; } } is [])).toThrow(TypeError);
+  });
+
+  test("array patterns treat missing iterator values as undefined", () => {
+    const iterable = {
+      [Symbol.iterator]() {
+        let count = 0;
+        return {
+          next() {
+            count = count + 1;
+            if (count > 1) {
+              return { done: true };
+            }
+            return { done: false };
+          }
+        };
+      }
+    };
+
+    expect(iterable is [undefined]).toBe(true);
   });
 
   test("ordinary match calls remain valid without a clause block", () => {

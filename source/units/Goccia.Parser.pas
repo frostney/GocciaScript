@@ -741,6 +741,7 @@ function TGocciaParser.Comparison: TGocciaExpression;
 var
   Op: TGocciaToken;
   Pattern: TGocciaMatchPattern;
+  TypeAnnotation: string;
 
   procedure ParseIsExpressions;
   begin
@@ -768,13 +769,18 @@ begin
     if Check(gttConst) then
       Advance
     else
-      CollectTypeAnnotation([gttSemicolon, gttComma, gttRightParen, gttRightBracket, gttRightBrace, gttColon, gttQuestion,
+    begin
+      TypeAnnotation := CollectTypeAnnotation([gttSemicolon, gttComma, gttRightParen, gttRightBracket, gttRightBrace, gttColon, gttQuestion,
         gttAnd, gttOr, gttNullishCoalescing,
         gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
         gttEqual, gttNotEqual,
         gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign, gttNullishCoalescingAssign,
         gttLogicalAndAssign, gttLogicalOrAssign,
         gttInstanceof, gttIn], KEYWORD_IS);
+      if TypeAnnotation = '' then
+        raise TGocciaSyntaxError.Create('Expected type annotation after "as"',
+          Peek.Line, Peek.Column, FFileName, FSourceLines);
+    end;
   end;
 
   ParseIsExpressions;

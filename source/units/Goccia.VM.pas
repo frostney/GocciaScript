@@ -295,6 +295,21 @@ begin
   end;
 end;
 
+function VMHasSymbolPropertyInChain(const AObject: TGocciaObjectValue;
+  const ASymbol: TGocciaSymbolValue): Boolean; inline;
+var
+  Current: TGocciaObjectValue;
+begin
+  Current := AObject;
+  while Assigned(Current) do
+  begin
+    if Current.HasSymbolProperty(ASymbol) then
+      Exit(True);
+    Current := Current.Prototype;
+  end;
+  Result := False;
+end;
+
 function VMGetOwnDataDescriptorValue(const AObject: TGocciaObjectValue;
   const AName: string; out AValue: TGocciaValue): Boolean; inline;
 var
@@ -828,7 +843,16 @@ begin
   Result := VMNumberValue(not Trunc(AOperand.ToNumberLiteral.Value));
 end;
 
-function VMInstanceOfValue(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+function VMGlobalObjectConstructor(const AScope: TGocciaScope): TGocciaValue; inline;
+begin
+  if Assigned(AScope) and AScope.ContainsOwnLexicalBinding(CONSTRUCTOR_OBJECT) then
+    Result := AScope.GetValue(CONSTRUCTOR_OBJECT)
+  else
+    Result := nil;
+end;
+
+function VMInstanceOfValue(const ALeft, ARight,
+  AObjectConstructor: TGocciaValue): TGocciaValue; inline;
 var
   ConstructorProto: TGocciaValue;
 begin
@@ -847,7 +871,7 @@ begin
 
   if ALeft is TGocciaInstanceValue then
   begin
-    if TGocciaClassValue(ARight).Name = CONSTRUCTOR_OBJECT then
+    if Assigned(AObjectConstructor) and (ARight = AObjectConstructor) then
       Exit(TGocciaBooleanLiteralValue.TrueValue);
     if TGocciaInstanceValue(ALeft).IsInstanceOf(TGocciaClassValue(ARight)) then
       Exit(TGocciaBooleanLiteralValue.TrueValue);
@@ -865,14 +889,13 @@ begin
   if (ALeft is TGocciaClassValue) and
      (TGocciaClassValue(ARight).Name = 'Function') then
     Exit(TGocciaBooleanLiteralValue.TrueValue);
-  if (ALeft is TGocciaArrayValue) and
-     (TGocciaClassValue(ARight).Name = CONSTRUCTOR_ARRAY) then
+  if (ALeft is TGocciaArrayValue) and (ARight is TGocciaArrayClassValue) then
     Exit(TGocciaBooleanLiteralValue.TrueValue);
-  if (ALeft is TGocciaArrayValue) and
-     (TGocciaClassValue(ARight).Name = CONSTRUCTOR_OBJECT) then
+  if (ALeft is TGocciaArrayValue) and Assigned(AObjectConstructor) and
+     (ARight = AObjectConstructor) then
     Exit(TGocciaBooleanLiteralValue.TrueValue);
-  if (ALeft is TGocciaObjectValue) and
-     (TGocciaClassValue(ARight).Name = CONSTRUCTOR_OBJECT) then
+  if (ALeft is TGocciaObjectValue) and Assigned(AObjectConstructor) and
+     (ARight = AObjectConstructor) then
     Exit(TGocciaBooleanLiteralValue.TrueValue);
   if (ALeft is TGocciaObjectValue) and
      VMIsObjectInstanceOfClass(TGocciaObjectValue(ALeft), TGocciaClassValue(ARight)) then
@@ -3223,13 +3246,14 @@ function TGocciaVM.TryIterableToArray(const AIterable: TGocciaValue;
   out AArray: TGocciaArrayValue): Boolean;
 var
   IteratorValue, IteratorMethod, IteratorObject, NextMethod, NextResult,
-    DoneValue: TGocciaValue;
+    DoneValue, Value: TGocciaValue;
   DoneFlag: Boolean;
-  ArrayRooted: Boolean;
+  ArrayRooted, IteratorRooted: Boolean;
   CallArgs: TGocciaArgumentsCollection;
 begin
   AArray := nil;
   ArrayRooted := False;
+  IteratorRooted := False;
 
   if AIterable is TGocciaIteratorValue then
     IteratorValue := AIterable
@@ -3275,6 +3299,9 @@ begin
   ArrayRooted := Assigned(TGarbageCollector.Instance);
   if ArrayRooted then
     TGarbageCollector.Instance.AddTempRoot(AArray);
+  IteratorRooted := Assigned(TGarbageCollector.Instance) and (IteratorValue <> AIterable);
+  if IteratorRooted then
+    TGarbageCollector.Instance.AddTempRoot(IteratorValue);
   try
     if IteratorValue is TGocciaIteratorValue then
     begin
@@ -3308,10 +3335,17 @@ begin
       DoneValue := NextResult.GetProperty(PROP_DONE);
       DoneFlag := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
       if not DoneFlag then
-        AArray.Elements.Add(NextResult.GetProperty(PROP_VALUE));
+      begin
+        Value := NextResult.GetProperty(PROP_VALUE);
+        if not Assigned(Value) then
+          Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+        AArray.Elements.Add(Value);
+      end;
     until DoneFlag;
     Result := True;
   finally
+    if IteratorRooted then
+      TGarbageCollector.Instance.RemoveTempRoot(IteratorValue);
     if ArrayRooted then
       TGarbageCollector.Instance.RemoveTempRoot(AArray);
   end;
@@ -3362,6 +3396,7 @@ function TGocciaVM.ObjectRestValue(const ASource: TGocciaValue;
 var
   SourceObject: TGocciaObjectValue;
   Entry: TPair<string, TGocciaValue>;
+  ExclusionKey: TGocciaValue;
   I, J: Integer;
   Excluded: Boolean;
 begin
@@ -3378,11 +3413,16 @@ begin
     Excluded := False;
     if Assigned(AExclusionKeys) then
       for J := 0 to AExclusionKeys.Elements.Count - 1 do
-        if AExclusionKeys.GetElement(J).ToStringLiteral.Value = Entry.Key then
+      begin
+        ExclusionKey := AExclusionKeys.GetElement(J);
+        if (ExclusionKey is TGocciaSymbolValue) then
+          Continue;
+        if ExclusionKey.ToStringLiteral.Value = Entry.Key then
         begin
           Excluded := True;
           Break;
         end;
+      end;
     if not Excluded then
       Result.SetProperty(Entry.Key, Entry.Value);
   end;
@@ -4702,13 +4742,15 @@ begin
   begin
     if AObject is TGocciaObjectValue then
     begin
-      if TGocciaObjectValue(AObject).HasSymbolProperty(TGocciaSymbolValue(AKey)) then
+      if VMHasSymbolPropertyInChain(TGocciaObjectValue(AObject),
+        TGocciaSymbolValue(AKey)) then
         Exit(TGocciaBooleanLiteralValue.TrueValue);
       Exit(TGocciaBooleanLiteralValue.FalseValue);
     end;
 
     Boxed := AObject.Box;
-    if Assigned(Boxed) and Boxed.HasSymbolProperty(TGocciaSymbolValue(AKey)) then
+    if Assigned(Boxed) and VMHasSymbolPropertyInChain(Boxed,
+      TGocciaSymbolValue(AKey)) then
       Exit(TGocciaBooleanLiteralValue.TrueValue);
     Exit(TGocciaBooleanLiteralValue.FalseValue);
   end;
@@ -4997,6 +5039,7 @@ var
   Template: TGocciaFunctionTemplate;
   ChildTemplate: TGocciaFunctionTemplate;
   LeftValue, RightValue: TGocciaValue;
+  ObjectConstructorValue: TGocciaValue;
   CustomMatcherValue, MatchResultValue: TGocciaValue;
   MatchHintObject: TGocciaObjectValue;
   RegisterArgs: TGocciaRegisterArray;
@@ -6151,7 +6194,11 @@ begin
         end;
 
       OP_IS_INSTANCE:
-        SetRegister(A, VMInstanceOfValue(GetRegister(B), GetRegister(C)));
+      begin
+        ObjectConstructorValue := VMGlobalObjectConstructor(FGlobalScope);
+        SetRegister(A, VMInstanceOfValue(GetRegister(B), GetRegister(C),
+          ObjectConstructorValue));
+      end;
 
       OP_HAS_PROPERTY:
         SetRegister(A, HasPropertyValue(GetRegister(B), GetRegister(C)));
@@ -6183,7 +6230,11 @@ begin
           end;
         end
         else if RightValue is TGocciaClassValue then
-          SetRegister(A, VMInstanceOfValue(LeftValue, RightValue))
+        begin
+          ObjectConstructorValue := VMGlobalObjectConstructor(FGlobalScope);
+          SetRegister(A, VMInstanceOfValue(LeftValue, RightValue,
+            ObjectConstructorValue));
+        end
         else
           SetRegister(A, TGocciaBooleanLiteralValue.Create(
             MatchValueEquals(LeftValue, RightValue)));
