@@ -260,7 +260,7 @@ Represents an absolute date and time in a specific timezone. Combines an instant
 | `withPlainTime(time?)` | Replace time component |
 | `withTimeZone(timeZone)` | Re-interpret the same instant in a different timezone |
 | `add(duration)` / `subtract(duration)` | Date-time arithmetic |
-| `until(other [, options])` / `since(other [, options])` | Difference as Duration. Options: `{ largestUnit, smallestUnit, roundingMode, roundingIncrement }`. Accepts any unit from `"year"` to `"nanosecond"` (defaults: largest `"hour"`, smallest `"nanosecond"`). Rounding via mode (`"trunc"` default) and increment (default 1). Calendar-aware for day-or-larger units using wall-clock components. |
+| `until(other [, options])` / `since(other [, options])` | Difference as Duration. Options: `{ largestUnit, smallestUnit, roundingMode, roundingIncrement }`. Accepts any unit from `"year"` to `"nanosecond"` (defaults: largest `"hour"`, smallest `"nanosecond"`). Rounding via mode (`"trunc"` default) and increment (default 1). Calendar-aware for day-or-larger units, including DST-aware rounding across variable-length local days. |
 | `round(options)` | Round to nearest unit. Accepts a string (smallestUnit) or options object `{ smallestUnit, roundingMode, roundingIncrement }`. |
 | `equals(other)` | Equality check |
 | `startOfDay()` | Return ZonedDateTime at the start of the wall-clock day |
