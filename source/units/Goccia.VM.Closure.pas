@@ -17,6 +17,7 @@ type
     constructor Create(const ATemplate: TGocciaFunctionTemplate;
       const AUpvalueCount: Integer = 0);
     destructor Destroy; override;
+    function Clone: TGocciaBytecodeClosure;
     procedure SetUpvalue(const AIndex: Integer; const AUpvalue: TGocciaBytecodeUpvalue);
     function GetUpvalue(const AIndex: Integer): TGocciaBytecodeUpvalue;
     function GetUpvalueCount: Integer;
@@ -38,6 +39,15 @@ destructor TGocciaBytecodeClosure.Destroy;
 begin
   SetLength(FUpvalues, 0);
   inherited;
+end;
+
+function TGocciaBytecodeClosure.Clone: TGocciaBytecodeClosure;
+var
+  I: Integer;
+begin
+  Result := TGocciaBytecodeClosure.Create(FTemplate, Length(FUpvalues));
+  for I := 0 to High(FUpvalues) do
+    Result.FUpvalues[I] := FUpvalues[I];
 end;
 
 procedure TGocciaBytecodeClosure.SetUpvalue(const AIndex: Integer;

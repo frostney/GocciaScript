@@ -89,13 +89,20 @@ Current instruction families:
 - object and array operations
 - class construction and member definition
 - calls, construction, iteration, globals, and string coercion
-- semantic-only imports/exports, dynamic import, import.meta, and await
+- semantic-only imports/exports, dynamic import, import.meta, await, and yield
 
 Some opcode families intentionally use flags or mode operands instead of one opcode per syntax form. For example:
 
 - accessor definition uses constant-key and dynamic-key instructions plus getter/setter and static/instance flags
 - collection helpers use a shared opcode (`OP_COLLECTION_OP`) for object spread, object rest, and iterable-to-array spread
 - validation uses a shared opcode for require-object and require-iterable checks
+- generator metadata is serialized and a single `OP_YIELD` drives generator suspension; `yield*` uses the same opcode with delegation bookkeeping rather than a second opcode
+
+Note: bytecode generator resumption is currently replay-based: suspended generators
+re-enter from function entry and skip previously observed yields. True VM
+continuation snapshots that restore instruction pointer, registers, local cells,
+handler state, and GC marking are tracked in
+[#434](https://github.com/frostney/GocciaScript/issues/434).
 
 Current opcode design rules:
 

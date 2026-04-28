@@ -180,6 +180,8 @@ begin
     DoCompileExpression(TGocciaAwaitExpression(AExpr).Operand, ADest);
     EmitInstruction(Ctx, EncodeABC(OP_AWAIT, ADest, ADest, 0));
   end
+  else if AExpr is TGocciaYieldExpression then
+    Goccia.Compiler.Expressions.CompileYield(Ctx, TGocciaYieldExpression(AExpr), ADest)
   else if AExpr is TGocciaHoleExpression then
     EmitInstruction(Ctx, EncodeABC(OP_LOAD_HOLE, ADest, 0, 0))
   else

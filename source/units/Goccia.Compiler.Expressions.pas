@@ -80,6 +80,8 @@ procedure CompileImportMeta(const ACtx: TGocciaCompilationContext;
   const ADest: UInt8);
 procedure CompileDynamicImport(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaImportCallExpression; const ADest: UInt8);
+procedure CompileYield(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaYieldExpression; const ADest: UInt8);
 
 procedure EmitDefaultParameters(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray);
@@ -117,6 +119,19 @@ var
 begin
   Prefix := AScope.ResolvePrivatePrefix;
   Result := '#' + Prefix + AName;
+end;
+
+procedure CompileYield(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaYieldExpression; const ADest: UInt8);
+begin
+  if Assigned(AExpr.Operand) then
+    ACtx.CompileExpression(AExpr.Operand, ADest)
+  else
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
+  if AExpr.IsDelegate then
+    EmitInstruction(ACtx, EncodeABC(OP_YIELD, ADest, ADest, 1))
+  else
+    EmitInstruction(ACtx, EncodeABC(OP_YIELD, ADest, ADest, 0));
 end;
 
 procedure CompileLiteral(const ACtx: TGocciaCompilationContext;
@@ -1928,6 +1943,7 @@ begin
   ChildTemplate := TGocciaFunctionTemplate.Create('<method>');
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AExpr.IsAsync;
+  ChildTemplate.IsGenerator := AExpr.IsGenerator;
   ChildTemplate.SourceText := AExpr.SourceText;
   if HasNameBinding then
     ChildTemplate.Name := AExpr.Name;

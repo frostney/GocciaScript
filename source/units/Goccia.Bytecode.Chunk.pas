@@ -85,6 +85,7 @@ type
     FLocalStrictFlags: array of Boolean;
     FLocalStrictCount: UInt8;
     FIsAsync: Boolean;
+    FIsGenerator: Boolean;
     FIsArrow: Boolean;
     FTypeCheckPreambleSize: UInt8;
     FProfileIndex: Integer;
@@ -148,6 +149,7 @@ type
     property LocalStrictCount: UInt8 read FLocalStrictCount;
 
     property IsAsync: Boolean read FIsAsync write FIsAsync;
+    property IsGenerator: Boolean read FIsGenerator write FIsGenerator;
     property IsArrow: Boolean read FIsArrow write FIsArrow;
     property TypeCheckPreambleSize: UInt8 read FTypeCheckPreambleSize write FTypeCheckPreambleSize;
     property ProfileIndex: Integer read FProfileIndex write FProfileIndex;

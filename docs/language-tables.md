@@ -34,7 +34,7 @@
 | `RegExp` (literals, flags `d`/`g`/`i`/`m`/`s`/`u`/`v`/`y`) | ES2015+ | Supported |
 | ES modules (`import` / `export`) | ES2015 | Supported (named only) |
 | Default exports / imports | ES2015 | Excluded — use named exports |
-| Generators (`function*`) | ES2015 | Not supported |
+| Generators (`function*`, `*method()`) | ES2015 | Supported — `function*` requires `--compat-function`; generator methods are default syntax |
 | Nullish coalescing (`??`) | ES2020 | Supported |
 | Optional chaining (`?.`) | ES2020 | Supported |
 | `BigInt` | ES2020 | Supported |

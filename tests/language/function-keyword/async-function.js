@@ -26,3 +26,11 @@ test("async function with await", async () => {
   }
   expect(await delayed()).toBe(20);
 });
+
+test("async function is not constructable", () => {
+  const make = async function() {
+    return 1;
+  };
+
+  expect(() => new make()).toThrow(TypeError);
+});

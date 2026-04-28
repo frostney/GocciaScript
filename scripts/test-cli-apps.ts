@@ -673,6 +673,18 @@ console.log("TestRunner: JSON multi-file structure...");
     }
     const fileBcJson = readFileSync(fileBcOut, "utf-8");
     if (!fileBcJson.includes('"file":')) throw new Error('Bytecode file JSON should contain "file":');
+    {
+      const parsed = JSON.parse(fileBcJson);
+      const valid = parsed.files
+        .flatMap((file: { benchmarks: Array<Record<string, unknown>> }) => file.benchmarks)
+        .filter((bench: Record<string, unknown>) =>
+          !("error" in bench) &&
+          typeof bench.opsPerSec === "number" && bench.opsPerSec > 0 &&
+          typeof bench.meanMs === "number" && bench.meanMs > 0 &&
+          typeof bench.iterations === "number" && bench.iterations > 0
+        );
+      if (valid.length === 0) throw new Error("Bytecode benchmark JSON should contain at least one valid result");
+    }
 
     console.log("BenchmarkRunner: file benchmark JSON output...");
     if (!fileJson.includes('"totalBenchmarks":')) throw new Error('JSON should contain totalBenchmarks');
@@ -714,7 +726,7 @@ console.log("TestRunner: JSON multi-file structure...");
         [resolve(BENCHRUNNER), failBench, "--no-progress", "--format=json", `--output=${failOut}`],
         { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
       );
-      if (proc.exitCode !== 0) throw new Error(`Failing benchmark JSON export exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+      if (proc.exitCode === 0) throw new Error("Failing benchmark JSON export should fail");
     }
     {
       const json = JSON.parse(readFileSync(failOut, "utf-8"));
@@ -722,6 +734,27 @@ console.log("TestRunner: JSON multi-file structure...");
       if (json.ok !== false) throw new Error(`Failing benchmark run should mark top-level ok=false, got ${json.ok}`);
       if (file?.ok !== false) throw new Error(`Failing benchmark file should mark ok=false, got ${file?.ok}`);
       if (typeof file?.error?.message !== "string") throw new Error("Failing benchmark file should include shared error object");
+    }
+
+    console.log("BenchmarkRunner: callback timeout is enforced...");
+    {
+      const timeoutSource = [
+        'suite("limit", () => {',
+        '  bench("loop", { run: () => { while (true) {} } });',
+        "});",
+        "",
+      ].join("\n");
+      const proc = Bun.spawnSync(
+        [resolve(BENCHRUNNER), "--no-progress", "--timeout=1"],
+        {
+          stdin: new TextEncoder().encode(timeoutSource),
+          stdout: "pipe",
+          stderr: "pipe",
+          env: benchEnv,
+          timeout: 10_000,
+        },
+      );
+      if (proc.exitCode === 0) throw new Error("Benchmark callback timeout should fail");
     }
 
     console.log("BenchmarkRunner: stdin benchmark (interpreted)...");
@@ -746,6 +779,35 @@ console.log("TestRunner: JSON multi-file structure...");
       if (json.totalBenchmarks !== 1) throw new Error(`Stdin JSON should contain totalBenchmarks: 1, got ${json.totalBenchmarks}`);
     }
 
+    console.log("BenchmarkRunner: registered callbacks survive repeated runs...");
+    const repeatedRunOutPath = join(tmp, "repeated-run.json");
+    {
+      const repeatedRunSource = [
+        'suite("twice", () => {',
+        '  bench("sum", { run: () => 1 + 1 });',
+        "});",
+        "runBenchmarks();",
+        "Goccia.gc();",
+        "",
+      ].join("\n");
+      const proc = Bun.spawnSync(
+        [resolve(BENCHRUNNER), "--no-progress", "--format=json", `--output=${repeatedRunOutPath}`],
+        {
+          stdin: new TextEncoder().encode(repeatedRunSource),
+          stdout: "pipe",
+          stderr: "pipe",
+          env: benchEnv,
+          timeout: 120_000,
+        },
+      );
+      if (proc.exitCode !== 0) throw new Error(`Repeated benchmark run exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+    }
+    {
+      const json = JSON.parse(readFileSync(repeatedRunOutPath, "utf-8"));
+      if (json.files?.[0]?.benchmarks?.[0]?.name !== "sum") throw new Error('Repeated benchmark JSON should contain benchmark name "sum"');
+      if (json.totalBenchmarks !== 1) throw new Error(`Repeated benchmark JSON should contain totalBenchmarks: 1, got ${json.totalBenchmarks}`);
+    }
+
     console.log("BenchmarkRunner: stdin benchmark (bytecode)...");
     const stdinBcOutPath = join(tmp, "stdin-bc.json");
     {
@@ -766,6 +828,66 @@ console.log("TestRunner: JSON multi-file structure...");
       const json = JSON.parse(stdinBcJson);
       if (json.files?.[0]?.benchmarks?.[0]?.name !== "sum") throw new Error('Bytecode stdin JSON should contain benchmark name "sum"');
       if (json.totalBenchmarks !== 1) throw new Error(`Bytecode stdin JSON should contain totalBenchmarks: 1, got ${json.totalBenchmarks}`);
+    }
+
+    console.log("BenchmarkRunner: async generator bytecode benchmark...");
+    const asyncGeneratorBcOutPath = join(tmp, "async-generator-bc.json");
+    {
+      const asyncGeneratorSource = [
+        'suite("async generator", () => {',
+        "  const source = { async *values() { yield 1; yield 2; } };",
+        '  bench("consume", {',
+        "    run: async () => {",
+        "      let sum = 0;",
+        "      for await (const value of source.values()) sum = sum + value;",
+        "      return sum;",
+        "    },",
+        "  });",
+        "});",
+        "",
+      ].join("\n");
+      const proc = Bun.spawnSync(
+        [resolve(BENCHRUNNER), "--no-progress", "--format=json", `--output=${asyncGeneratorBcOutPath}`, "--mode=bytecode"],
+        {
+          stdin: new TextEncoder().encode(asyncGeneratorSource),
+          stdout: "pipe",
+          stderr: "pipe",
+          env: benchEnv,
+          timeout: 120_000,
+        },
+      );
+      if (proc.exitCode !== 0) throw new Error(`Bytecode async generator benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+    }
+    const asyncGeneratorBcJson = JSON.parse(readFileSync(asyncGeneratorBcOutPath, "utf-8"));
+    const asyncGeneratorBench = (asyncGeneratorBcJson.files ?? [])
+      .flatMap((file: { benchmarks?: Array<Record<string, unknown>> }) => file.benchmarks ?? [])
+      .find((bench: Record<string, unknown>) => bench.name === "consume");
+    if (!asyncGeneratorBench) throw new Error('Bytecode async generator JSON should contain benchmark named "consume"');
+    if (typeof asyncGeneratorBench.opsPerSec !== "number" || asyncGeneratorBench.opsPerSec <= 0) {
+      throw new Error("Bytecode async generator benchmark should report positive opsPerSec");
+    }
+
+    console.log("BenchmarkRunner: no valid bytecode benchmarks fail...");
+    const emptyBcOutPath = join(tmp, "empty-bc.json");
+    {
+      const proc = Bun.spawnSync(
+        [resolve(BENCHRUNNER), "--no-progress", "--format=json", `--output=${emptyBcOutPath}`, "--mode=bytecode"],
+        {
+          stdin: new TextEncoder().encode("const value = 1;\n"),
+          stdout: "pipe",
+          stderr: "pipe",
+          env: benchEnv,
+          timeout: 120_000,
+        },
+      );
+      if (proc.exitCode === 0) throw new Error("Bytecode benchmark with no valid results should fail");
+    }
+    {
+      const json = JSON.parse(readFileSync(emptyBcOutPath, "utf-8"));
+      const file = json.files?.[0];
+      if (json.ok !== false) throw new Error(`No-valid benchmark run should mark top-level ok=false, got ${json.ok}`);
+      if (file?.ok !== false) throw new Error(`No-valid benchmark file should mark ok=false, got ${file?.ok}`);
+      if (typeof file?.error?.message !== "string") throw new Error("No-valid benchmark file should include shared error object");
     }
   } finally {
     clean(tmp);

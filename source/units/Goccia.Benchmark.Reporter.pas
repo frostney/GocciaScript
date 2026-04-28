@@ -78,11 +78,24 @@ function ParseReportFormat(const S: string): TBenchmarkReportFormat;
 implementation
 
 uses
+  Math,
   SysUtils,
 
   TimingUtils,
 
   Goccia.CSV;
+
+function IsPositiveFinite(const AValue: Double): Boolean;
+begin
+  Result := (AValue > 0) and not Math.IsNan(AValue) and
+    not Math.IsInfinite(AValue);
+end;
+
+function IsValidBenchmarkEntry(const AEntry: TBenchmarkEntry): Boolean;
+begin
+  Result := (AEntry.Error = '') and IsPositiveFinite(AEntry.OpsPerSec) and
+    IsPositiveFinite(AEntry.MeanMs) and (AEntry.Iterations > 0);
+end;
 
 function ParseReportFormat(const S: string): TBenchmarkReportFormat;
 var
@@ -347,6 +360,7 @@ var
   ErrorInfo: TCLIJSONErrorInfo;
   JSONFormatSettings: TFormatSettings;
   FileOk: Boolean;
+  ValidFileBenchmarkCount: Integer;
   FilesJSON, FileJSON, BenchmarksJSON, BenchmarkJSON, ExtraJSON: string;
   FileErrorJSON, FileErrorMessage: string;
 begin
@@ -367,14 +381,19 @@ begin
       FFiles[F].ExecuteTimeNanoseconds;
 
     BenchmarksJSON := '';
-    FileOk := True;
+    ValidFileBenchmarkCount := 0;
+    FileOk := (FFiles[F].TotalBenchmarks > 0) and
+      (Length(FFiles[F].Entries) > 0);
     FileErrorMessage := '';
+    if not FileOk then
+      FileErrorMessage := 'Benchmark file produced no measurements';
     for E := 0 to Length(FFiles[F].Entries) - 1 do
     begin
       Entry := FFiles[F].Entries[E];
 
-      if FileOk and
-         ((Entry.Error <> '') or (Entry.OpsPerSec = 0) or (Entry.MeanMs = 0)) then
+      if IsValidBenchmarkEntry(Entry) then
+        Inc(ValidFileBenchmarkCount)
+      else if FileOk then
       begin
         FileOk := False;
         if Entry.Error <> '' then
@@ -406,6 +425,12 @@ begin
       if BenchmarksJSON <> '' then
         BenchmarksJSON := BenchmarksJSON + ',';
       BenchmarksJSON := BenchmarksJSON + BenchmarkJSON;
+    end;
+
+    if (ValidFileBenchmarkCount = 0) and FileOk then
+    begin
+      FileOk := False;
+      FileErrorMessage := 'Benchmark file produced no valid measurements';
     end;
 
     if FileOk then
@@ -493,17 +518,27 @@ function TBenchmarkReporter.HasFailures: Boolean;
 var
   F, E: Integer;
   Entry: TBenchmarkEntry;
+  ValidBenchmarkCount: Integer;
 begin
+  if FFileCount = 0 then
+    Exit(True);
+
+  ValidBenchmarkCount := 0;
   for F := 0 to FFileCount - 1 do
+  begin
+    if Length(FFiles[F].Entries) = 0 then
+      Exit(True);
+
     for E := 0 to Length(FFiles[F].Entries) - 1 do
     begin
       Entry := FFiles[F].Entries[E];
-      if Entry.Error <> '' then
+      if not IsValidBenchmarkEntry(Entry) then
         Exit(True);
-      if (Entry.OpsPerSec = 0) or (Entry.MeanMs = 0) then
-        Exit(True);
+      Inc(ValidBenchmarkCount);
     end;
-  Result := False;
+  end;
+
+  Result := ValidBenchmarkCount = 0;
 end;
 
 end.

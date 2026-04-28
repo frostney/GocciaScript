@@ -124,10 +124,10 @@ The `GocciaBenchmarkRunner` program:
 1. Parses CLI arguments (`--format`, `--output`, and the benchmark path or stdin marker).
 2. Scans the provided path for `.js` files.
 3. For each file, creates a `TGocciaEngine` with `[ggBenchmark]`.
-4. Loads the source and appends a `runBenchmarks()` call.
-5. Executes the script — the engine measures lex, parse, and execute phases separately with nanosecond precision via `TimingUtils.GetNanoseconds`.
+4. Loads and executes the source so benchmark files register their suites and benchmarks without running measurements from inside the script body.
+5. Measures lex, parse, compile (bytecode mode), script execution, and benchmark execution phases separately with nanosecond precision via `TimingUtils.GetNanoseconds`.
 6. `suite()` calls execute immediately, registering `bench()` entries.
-7. `runBenchmarks()` runs each registered benchmark:
+7. After the script finishes, the runner invokes `runBenchmarks()` from Pascal to run each registered benchmark:
    - **Setup:** Calls the `setup` function once (timed), caches the return value.
    - **Warmup:** Configurable iterations to stabilize (default 5). The setup return value is passed to each call.
    - **Calibrate:** Scales batch size until it runs for at least the target calibration time (default 200ms). Uses nanosecond-resolution timing via `TimingUtils` (`clock_gettime(CLOCK_MONOTONIC)` on Unix/macOS, `QueryPerformanceCounter` on Windows).
@@ -152,7 +152,7 @@ The non-zero exit code ensures CI pipelines fail when benchmarks crash or produc
 |----------|-------------|
 | `suite(name, fn)` | Group benchmarks (like `describe` in tests). Executes `fn` immediately. |
 | `bench(name, { setup?, run, teardown? })` | Register a benchmark with optional setup/teardown. `run` is called many times during measurement; `setup` and `teardown` run once each and are independently timed. |
-| `runBenchmarks()` | Execute all registered benchmarks and return results. Injected automatically by GocciaBenchmarkRunner. |
+| `runBenchmarks()` | Execute all registered benchmarks and return results. GocciaBenchmarkRunner calls this automatically after the benchmark file finishes registering suites. |
 
 ## Available Benchmarks
 
@@ -173,6 +173,8 @@ The non-zero exit code ensures CI pipelines fail when benchmarks crash or produc
 | `benchmarks/iterators.js` | Iterator.from, user-defined iterables, lazy iterator helpers, built-in iterator chaining |
 | `benchmarks/for-of.js` | for...of with arrays, strings, Sets, Maps, destructuring, for-await-of |
 | `benchmarks/async-await.js` | Single/multiple awaits, await non-Promise, try/catch, Promise.all, nested async |
+| `benchmarks/generators.js` | Manual next, for...of, yield delegation, object/class generator methods |
+| `benchmarks/async-generators.js` | for-await-of over async generators and await inside async generator bodies |
 
 ## Sample Output
 
