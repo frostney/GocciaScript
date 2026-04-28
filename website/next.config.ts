@@ -2,7 +2,8 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
-    "/api/run": ["./vendor/**"],
+    "/api/execute": ["./vendor/**"],
+    "/api/test": ["./vendor/**"],
   },
 };
 

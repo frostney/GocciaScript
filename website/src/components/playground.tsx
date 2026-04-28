@@ -144,7 +144,7 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
     setOutput([{ kind: "meta", text: banner }]);
 
     try {
-      const res = await fetch("/api/run", {
+      const res = await fetch("/api/execute", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ code, mode: backend, asi }),

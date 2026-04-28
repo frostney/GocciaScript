@@ -581,11 +581,11 @@ export function Sandbox() {
     setOutput([banner]);
 
     try {
-      const res = await fetch("/api/run", {
+      const res = await fetch("/api/execute", {
         method: "POST",
         headers: { "content-type": "application/json" },
         // `mode: "interpreted"` matches the route's accepted values
-        // (`"interpreted" | "bytecode"`) — see `/api/run/route.ts`.
+        // (`"interpreted" | "bytecode"`) — see `/api/execute/route.ts`.
         body: JSON.stringify({
           code: fullCode,
           mode: "interpreted",
@@ -615,7 +615,7 @@ export function Sandbox() {
         timing?: { total_ms: number };
       };
 
-      // Non-2xx responses from `/api/run` always include a structured
+      // Non-2xx responses from `/api/execute` always include a structured
       // `error`-shape payload (see `transportError` in the route), so we
       // surface that message rather than synthesising a fake `exit 0`.
       if (!res.ok) {
