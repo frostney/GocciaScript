@@ -639,6 +639,31 @@ jobs:
           grep -q '"files": \[' benchmark-${{ matrix.mode }}-results.json
           grep -q '"totalBenchmarks":' benchmark-${{ matrix.mode }}-results.json
           grep -q '"jobCount":' benchmark-${{ matrix.mode }}-results.json
+          python3 - <<'PY'
+          import json
+          import sys
+
+          path = "benchmark-${{ matrix.mode }}-results.json"
+          with open(path, encoding="utf-8") as fh:
+            report = json.load(fh)
+
+          valid = 0
+          errors = []
+          for file_report in report.get("files", []):
+            for bench in file_report.get("benchmarks", []):
+              if "error" in bench:
+                errors.append(f"{file_report.get('file', '<unknown>')}::{bench.get('name', '<unknown>')}: {bench['error']}")
+              elif bench.get("opsPerSec", 0) > 0 and bench.get("meanMs", 0) > 0 and bench.get("iterations", 0) > 0:
+                valid += 1
+
+          if errors:
+            for error in errors:
+              print(f"::error::{error}")
+            sys.exit(1)
+          if report.get("totalBenchmarks", 0) <= 0 or valid <= 0:
+            print(f"::error::Benchmark report {path} contains no valid benchmark measurements")
+            sys.exit(1)
+          PY
 
       - name: Cache benchmark baseline
         if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux'

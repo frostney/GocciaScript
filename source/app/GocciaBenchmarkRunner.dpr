@@ -915,6 +915,10 @@ begin
   end;
 end;
 
+var
+  RunResult: Integer;
 begin
-  ExitCode := TGocciaApplication.RunApplication(TBenchmarkRunnerApp, 'GocciaBenchmarkRunner');
+  RunResult := TGocciaApplication.RunApplication(TBenchmarkRunnerApp, 'GocciaBenchmarkRunner');
+  if RunResult <> 0 then
+    ExitCode := RunResult;
 end.

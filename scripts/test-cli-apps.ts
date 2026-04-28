@@ -431,6 +431,18 @@ console.log("Loader: coverage --output=json not corrupted...");
     }
     const fileBcJson = readFileSync(fileBcOut, "utf-8");
     if (!fileBcJson.includes('"file":')) throw new Error('Bytecode file JSON should contain "file":');
+    {
+      const parsed = JSON.parse(fileBcJson);
+      const valid = parsed.files
+        .flatMap((file: { benchmarks: Array<Record<string, unknown>> }) => file.benchmarks)
+        .filter((bench: Record<string, unknown>) =>
+          !("error" in bench) &&
+          typeof bench.opsPerSec === "number" && bench.opsPerSec > 0 &&
+          typeof bench.meanMs === "number" && bench.meanMs > 0 &&
+          typeof bench.iterations === "number" && bench.iterations > 0
+        );
+      if (valid.length === 0) throw new Error("Bytecode benchmark JSON should contain at least one valid result");
+    }
 
     console.log("BenchmarkRunner: file benchmark JSON output...");
     if (!fileJson.includes('"totalBenchmarks":')) throw new Error('JSON should contain totalBenchmarks');
@@ -472,6 +484,22 @@ console.log("Loader: coverage --output=json not corrupted...");
     const stdinBcJson = readFileSync(stdinBcOutPath, "utf-8");
     if (!stdinBcJson.includes('"name": "sum"')) throw new Error('Bytecode stdin JSON should contain "name": "sum"');
     if (!stdinBcJson.includes('"totalBenchmarks": 1')) throw new Error('Bytecode stdin JSON should contain totalBenchmarks: 1');
+
+    console.log("BenchmarkRunner: no valid bytecode benchmarks fail...");
+    const emptyBcOutPath = join(tmp, "empty-bc.json");
+    {
+      const proc = Bun.spawnSync(
+        [resolve(BENCHRUNNER), "--no-progress", "--format=json", `--output=${emptyBcOutPath}`, "--mode=bytecode"],
+        {
+          stdin: new TextEncoder().encode("const value = 1;\n"),
+          stdout: "pipe",
+          stderr: "pipe",
+          env: benchEnv,
+          timeout: 120_000,
+        },
+      );
+      if (proc.exitCode === 0) throw new Error("Bytecode benchmark with no valid results should fail");
+    }
   } finally {
     clean(tmp);
   }

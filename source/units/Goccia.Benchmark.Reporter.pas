@@ -434,8 +434,17 @@ function TBenchmarkReporter.HasFailures: Boolean;
 var
   F, E: Integer;
   Entry: TBenchmarkEntry;
+  ValidBenchmarkCount: Integer;
 begin
+  if FFileCount = 0 then
+    Exit(True);
+
+  ValidBenchmarkCount := 0;
   for F := 0 to FFileCount - 1 do
+  begin
+    if (FFiles[F].TotalBenchmarks > 0) and (Length(FFiles[F].Entries) = 0) then
+      Exit(True);
+
     for E := 0 to Length(FFiles[F].Entries) - 1 do
     begin
       Entry := FFiles[F].Entries[E];
@@ -443,8 +452,11 @@ begin
         Exit(True);
       if (Entry.OpsPerSec = 0) or (Entry.MeanMs = 0) then
         Exit(True);
+      Inc(ValidBenchmarkCount);
     end;
-  Result := False;
+  end;
+
+  Result := ValidBenchmarkCount = 0;
 end;
 
 end.
