@@ -56,10 +56,17 @@ console.warn("deprecated");
 console.error("oops");`,
   },
   {
-    name: "Temporal",
-    snippet: `const d = Temporal.PlainDate
-  .from("2026-05-01")
-  .add({ days: 30 });`,
+    name: "SemVer",
+    snippet: `Goccia.semver.inc("1.2.3", "minor");
+Goccia.semver.satisfies("1.3.0", "^1.0.0");
+Goccia.semver.valid("v1.2.3");`,
+  },
+  {
+    name: "Import Maps",
+    snippet: `// goccia.json
+{ "imports": { "@app/": "./src/" } }
+
+import config from "@app/config.json";`,
   },
   {
     name: "test / expect",
@@ -143,7 +150,7 @@ export const FEATURES: { icon: FeatureIcon; title: string; body: string }[] = [
   {
     icon: "drop",
     title: "A subset, not a superset",
-    body: "Modern ECMAScript 2027+ — let/const, arrow functions, classes, modules, async/await — minus the redundant constructs.",
+    body: "Modern ECMAScript 2027+ — let/const, arrow functions, classes, modules, async/await.",
   },
   {
     icon: "shield",

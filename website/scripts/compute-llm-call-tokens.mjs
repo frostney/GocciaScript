@@ -1,62 +1,57 @@
 #!/usr/bin/env node
 /**
- * One-shot helper: compute the tiktoken count of the FULL LLM request
- * body at each tool-call turn for both flows shown in
- * `src/components/sandbox.tsx`. Re-run if the system prompt, tool
- * definitions, step calls, or tool-result texts change in that file;
- * paste the printed arrays back into `LLM_CALL_TOKENS`.
+ * One-shot helper: compute the GPT-5-family / o200k_base token count
+ * of the Responses API request body at each tool-call turn for both
+ * flows shown in `src/components/sandbox.tsx`. Re-run if the system
+ * prompt, tool definitions, step calls, or tool-result texts change
+ * in that file; paste the printed arrays back into `LLM_CALL_TOKENS`.
  *
- *   bun add -d gpt-tokenizer
  *   node scripts/compute-llm-call-tokens.mjs
- *   bun remove gpt-tokenizer
  *
- * The page can't ship `gpt-tokenizer` (~53 MB unpacked), so this stays
- * as a maintenance-only helper outside the dependency graph.
+ * `gpt-tokenizer` is a devDependency for this maintenance script only;
+ * it is not imported by the website runtime.
  */
 
-import { encode } from "gpt-tokenizer/model/gpt-4";
+import { encode } from "gpt-tokenizer/esm/model/gpt-5";
 
-const MODEL = "gpt-4";
+const MODEL = "gpt-5";
 const SYSTEM_PROMPT =
-  "You are a financial-data analyst. The host has put a transactions array in your reach. Investigate it and return a structured summary plus any outliers.";
+  "You are a financial-data analyst. Investigate the latest transaction batch and return a structured summary plus any outliers.";
+const GOCCIA_SYSTEM_PROMPT = `${SYSTEM_PROMPT}
+
+The host injects a global named transactions before running your GocciaScript code.
+transactions is Array<{ id: number, amount: number }>.
+
+GocciaScript is a strict ECMAScript subset. Do not use var, function declarations, loose equality (== / !=), eval, dynamic import, filesystem APIs, environment variables, or ambient host globals. Use const/let, arrow functions, strict equality, and the provided transactions global.`;
 const USER_TASK = "Summarize the latest transaction batch and find outliers.";
 
 const BASH_TOOL = {
   type: "function",
-  function: {
-    name: "bash",
-    description: "Execute a shell command and return its stdout.",
-    parameters: {
-      type: "object",
-      properties: {
-        command: { type: "string", description: "The shell command to run." },
-      },
-      required: ["command"],
+  name: "bash",
+  description: "Execute a shell command and return its stdout.",
+  parameters: {
+    type: "object",
+    properties: {
+      command: { type: "string", description: "The shell command to run." },
     },
+    required: ["command"],
   },
 };
 
 const RUN_CODE_TOOL = {
   type: "function",
-  function: {
-    name: "run_code",
-    description:
-      "Run GocciaScript in a sandbox with the provided globals; returns the script's value plus stdout. The sandbox has no fetch, fs, env, or eval.",
-    parameters: {
-      type: "object",
-      properties: {
-        code: {
-          type: "string",
-          description: "GocciaScript source. Last expression is the result.",
-        },
-        globals: {
-          type: "object",
-          description: "Variables injected into the sandbox.",
-          additionalProperties: true,
-        },
+  name: "run_code",
+  description:
+    "Run GocciaScript in a sandbox with the provided globals; returns the script's value plus stdout. The sandbox has no fetch, fs, env, or eval.",
+  parameters: {
+    type: "object",
+    properties: {
+      code: {
+        type: "string",
+        description: "GocciaScript source. Use console.log for output.",
       },
-      required: ["code"],
     },
+    required: ["code"],
   },
 };
 
@@ -72,77 +67,63 @@ const BASH_STEPS = [
       '[{"id":1,"amount":42.5},{"id":2,"amount":-12},{"id":3,"amount":98.34},{"id":4,"amount":-7.5},{"id":5,"amount":312},{"id":6,"amount":18.4},{"id":7,"amount":-298.4},{"id":8,"amount":54.2}]\n',
   },
   {
-    call: "jq '[.[].amount] | add' transactions.current.json",
+    call: "jq '[.[].amount] | add' /tmp/agent/transactions/transactions.current.json",
     result: "207.54\n",
   },
   {
-    call: "jq '[.[].amount] | add / length' transactions.current.json",
+    call: "jq '[.[].amount] | add / length' /tmp/agent/transactions/transactions.current.json",
     result: "25.94\n",
   },
   {
-    call: "jq '[.[] | select(.amount > 280)]' transactions.current.json",
+    call: "jq '[.[] | select((.amount | abs) > 280)]' /tmp/agent/transactions/transactions.current.json",
     result: '[{"id":5,"amount":312},{"id":7,"amount":-298.4}]\n',
   },
 ];
 
 function bashRequestAt(stepIndex) {
-  const messages = [
-    { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: USER_TASK },
-  ];
+  const input = [{ role: "user", content: USER_TASK }];
   for (let j = 0; j < stepIndex; j++) {
-    messages.push({
-      role: "assistant",
-      content: null,
-      tool_calls: [
-        {
-          id: `call_${j + 1}`,
-          type: "function",
-          function: {
-            name: "bash",
-            arguments: JSON.stringify({ command: BASH_STEPS[j].call }),
-          },
-        },
-      ],
+    input.push({
+      type: "function_call",
+      id: `fc_${j + 1}`,
+      call_id: `call_${j + 1}`,
+      name: "bash",
+      arguments: JSON.stringify({ command: BASH_STEPS[j].call }),
     });
-    messages.push({
-      role: "tool",
-      tool_call_id: `call_${j + 1}`,
-      content: BASH_STEPS[j].result,
+    input.push({
+      type: "function_call_output",
+      call_id: `call_${j + 1}`,
+      output: BASH_STEPS[j].result,
     });
   }
-  return { model: MODEL, messages, tools: [BASH_TOOL] };
+  return {
+    model: MODEL,
+    instructions: SYSTEM_PROMPT,
+    input,
+    tools: [BASH_TOOL],
+  };
 }
 
 function gocciaRequest() {
   return {
     model: MODEL,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: USER_TASK },
-    ],
+    instructions: GOCCIA_SYSTEM_PROMPT,
+    input: [{ role: "user", content: USER_TASK }],
     tools: [RUN_CODE_TOOL],
   };
 }
 
 const tokens = (obj) => encode(JSON.stringify(obj)).length;
 
-/** Output tokens per step = the assistant message the model emits for
- *  that turn. Same shape we'd append to `messages` for the next call. */
+/** Output tokens per step = the function_call item the model emits for
+ *  that turn. Same shape we'd append to Responses `input` for the next call. */
 function bashOutputAt(stepIndex) {
   return {
-    role: "assistant",
-    content: null,
-    tool_calls: [
-      {
-        id: `call_${stepIndex + 1}`,
-        type: "function",
-        function: {
-          name: "bash",
-          arguments: JSON.stringify({ command: BASH_STEPS[stepIndex].call }),
-        },
-      },
-    ],
+    type: "function_call",
+    id: `fc_${stepIndex + 1}`,
+    call_id: `call_${stepIndex + 1}`,
+    name: "bash",
+    arguments: JSON.stringify({ command: BASH_STEPS[stepIndex].call }),
   };
 }
 
@@ -155,18 +136,11 @@ const outliers = transactions.filter((t) => Math.abs(t.amount - avg) > 2 * stdev
 ({ total, avg, outliers });`;
 
 const gocciaOutput = {
-  role: "assistant",
-  content: null,
-  tool_calls: [
-    {
-      id: "call_1",
-      type: "function",
-      function: {
-        name: "run_code",
-        arguments: JSON.stringify({ code: GOCCIA_CALL_BODY }),
-      },
-    },
-  ],
+  type: "function_call",
+  id: "fc_1",
+  call_id: "call_1",
+  name: "run_code",
+  arguments: JSON.stringify({ code: GOCCIA_CALL_BODY }),
 };
 
 const bashIn = BASH_STEPS.map((_, i) => tokens(bashRequestAt(i)));

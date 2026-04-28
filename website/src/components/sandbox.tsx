@@ -7,6 +7,8 @@ import { ConsolePanel } from "@/components/console-panel";
 import {
   HighlightedCode,
   HighlightedGeneric,
+  HighlightedJson,
+  HighlightedShell,
 } from "@/components/highlighted-code";
 import { HighlightedTextarea } from "@/components/highlighted-textarea";
 import {
@@ -49,58 +51,53 @@ type ToolFlow = {
 
 type ToolDef = {
   type: "function";
-  function: {
-    name: string;
-    description: string;
-    parameters: {
-      type: "object";
-      properties: Record<string, unknown>;
-      required: string[];
-    };
+  name: string;
+  description: string;
+  parameters: {
+    type: "object";
+    properties: Record<string, unknown>;
+    required: string[];
   };
 };
 
-const LLM_MODEL = "gpt-4";
+const LLM_MODEL = "gpt-5";
 const SYSTEM_PROMPT =
-  "You are a financial-data analyst. The host has put a transactions array in your reach. Investigate it and return a structured summary plus any outliers.";
+  "You are a financial-data analyst. Investigate the latest transaction batch and return a structured summary plus any outliers.";
+const GOCCIA_TOOL_PROMPT = `${SYSTEM_PROMPT}
+
+The host injects a global named transactions before running your GocciaScript code.
+transactions is Array<{ id: number, amount: number }>.
+
+GocciaScript is a strict ECMAScript subset. Do not use var, function declarations, loose equality (== / !=), eval, dynamic import, filesystem APIs, environment variables, or ambient host globals. Use const/let, arrow functions, strict equality, and the provided transactions global.`;
 const USER_TASK = "Summarize the latest transaction batch and find outliers.";
 
 const BASH_TOOL: ToolDef = {
   type: "function",
-  function: {
-    name: "bash",
-    description: "Execute a shell command and return its stdout.",
-    parameters: {
-      type: "object",
-      properties: {
-        command: { type: "string", description: "The shell command to run." },
-      },
-      required: ["command"],
+  name: "bash",
+  description: "Execute a shell command and return its stdout.",
+  parameters: {
+    type: "object",
+    properties: {
+      command: { type: "string", description: "The shell command to run." },
     },
+    required: ["command"],
   },
 };
 
 const RUN_CODE_TOOL: ToolDef = {
   type: "function",
-  function: {
-    name: "run_code",
-    description:
-      "Run GocciaScript in a sandbox with the provided globals; returns the script's value plus stdout. The sandbox has no fetch, fs, env, or eval.",
-    parameters: {
-      type: "object",
-      properties: {
-        code: {
-          type: "string",
-          description: "GocciaScript source. Last expression is the result.",
-        },
-        globals: {
-          type: "object",
-          description: "Variables injected into the sandbox.",
-          additionalProperties: true,
-        },
+  name: "run_code",
+  description:
+    "Run GocciaScript in a sandbox with the provided globals; returns the script's value plus stdout. The sandbox has no fetch, fs, env, or eval.",
+  parameters: {
+    type: "object",
+    properties: {
+      code: {
+        type: "string",
+        description: "GocciaScript source. Use console.log for output.",
       },
-      required: ["code"],
     },
+    required: ["code"],
   },
 };
 
@@ -125,26 +122,25 @@ const TOOL_CALL_FLOWS: { bash: ToolFlow; goccia: ToolFlow } = {
       },
       {
         tool: "bash",
-        call: "jq '[.[].amount] | add' transactions.current.json",
+        call: "jq '[.[].amount] | add' /tmp/agent/transactions/transactions.current.json",
         role: "sum",
         result: "207.54\n",
       },
       {
         tool: "bash",
-        call: "jq '[.[].amount] | add / length' transactions.current.json",
+        call: "jq '[.[].amount] | add / length' /tmp/agent/transactions/transactions.current.json",
         role: "average",
         result: "25.94\n",
       },
       {
         tool: "bash",
-        call: "jq '[.[] | select(.amount > 280)]' transactions.current.json",
+        call: "jq '[.[] | select((.amount | abs) > 280)]' /tmp/agent/transactions/transactions.current.json",
         role: "outliers",
         result: '[{"id":5,"amount":312},{"id":7,"amount":-298.4}]\n',
       },
     ],
     risks: [
       "values cross 5 process boundaries — possible to lose precision or quoting",
-      "agent has to remember intermediate state across every call",
       "5 round-trips ≈ 5× the prompt overhead and 5× the chance of a misstep",
     ],
   },
@@ -174,60 +170,55 @@ const outliers = transactions.filter((t) => Math.abs(t.amount - avg) > 2 * stdev
   },
 };
 
-/** Pre-computed tiktoken counts for each turn — split into the input
- *  side (request body the model sees: system + user + tools +
- *  accumulated assistant calls + tool results) and the output side
- *  (the assistant message the model emits). Both are billed; the
+/** Pre-computed tokenizer counts for each turn — split into the input
+ *  side (Responses request body: instructions + user input + tools +
+ *  accumulated function calls + function-call outputs) and the output
+ *  side (the function_call item the model emits). Both are billed; the
  *  output rate is typically 2-3× the input rate, so we surface them
  *  separately in the UI.
  *
- *  Verified once with `gpt-tokenizer`'s `cl100k_base` encoder via
+ *  Verified once with `gpt-tokenizer`'s GPT-5 / o200k_base encoder via
  *  `scripts/compute-llm-call-tokens.mjs`; re-run that script and paste
  *  new arrays if the system prompt, tool defs, step calls, or tool-
  *  result texts change. The tokenizer is intentionally NOT a runtime
  *  dependency (~53 MB unpacked). */
 const LLM_CALL_TOKENS = {
-  bash: { in: [119, 183, 336, 404, 474], out: [45, 48, 49, 51, 53] },
-  goccia: { in: [170], out: [142] },
+  bash: { in: [108, 166, 313, 382, 453], out: [39, 42, 50, 52, 58] },
+  goccia: { in: [235], out: [138] },
 } as const;
 
-/** Build the full LLM request body the model sees at step `index` of
- *  flow `flowKey`. Includes the system prompt, user task, tool
- *  definitions, and all assistant tool calls + tool results from
- *  prior steps. This is what the LLM is actually billed for on that
- *  turn — the toggle reveals it for direct comparison. */
+/** Build the Responses API request body at step `index` of flow
+ *  `flowKey`. This uses manual context management: prior model
+ *  `function_call` output items and matching `function_call_output`
+ *  items are included in `input` before the next dependent call. */
 function buildLlmRequest(
   flowKey: keyof typeof TOOL_CALL_FLOWS,
   index: number,
 ): unknown {
   const flow = TOOL_CALL_FLOWS[flowKey];
-  const messages: unknown[] = [
-    { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: USER_TASK },
-  ];
+  const input: unknown[] = [{ role: "user", content: USER_TASK }];
   for (let j = 0; j < index; j++) {
     const prev = flow.steps[j];
-    messages.push({
-      role: "assistant",
-      content: null,
-      tool_calls: [
-        {
-          id: `call_${j + 1}`,
-          type: "function",
-          function: {
-            name: prev.tool,
-            arguments: JSON.stringify({ [flow.argName]: prev.call }),
-          },
-        },
-      ],
+    input.push({
+      type: "function_call",
+      id: `fc_${j + 1}`,
+      call_id: `call_${j + 1}`,
+      name: prev.tool,
+      arguments: JSON.stringify({ [flow.argName]: prev.call }),
     });
-    messages.push({
-      role: "tool",
-      tool_call_id: `call_${j + 1}`,
-      content: prev.result,
+    input.push({
+      type: "function_call_output",
+      call_id: `call_${j + 1}`,
+      output: prev.result,
     });
   }
-  return { model: LLM_MODEL, messages, tools: [flow.toolDef] };
+  return {
+    model: LLM_MODEL,
+    instructions:
+      flow.toolDef.name === "run_code" ? GOCCIA_TOOL_PROMPT : SYSTEM_PROMPT,
+    input,
+    tools: [flow.toolDef],
+  };
 }
 
 function ToolCallComparison() {
@@ -265,20 +256,20 @@ function ToolCallComparison() {
             checked={showPayload}
             onChange={(e) => setShowPayload(e.target.checked)}
           />
-          <span>Show full LLM request body</span>
+          <span>Show Responses API request body</span>
         </label>
         <span className="tcc-toggle-note">
-          Each step expands to the full request the model sees on that turn —
-          system prompt, tool definitions, prior assistant calls, and tool
-          results. Token counts via{" "}
+          Each step expands to the request body for that turn — instructions,
+          tool definitions, prior function calls, and function-call outputs.
+          Token counts via{" "}
           <a
-            href="https://github.com/openai/tiktoken"
+            href="https://github.com/niieani/gpt-tokenizer"
             target="_blank"
             rel="noopener noreferrer"
           >
-            tiktoken
+            gpt-tokenizer
           </a>{" "}
-          on the <code>cl100k_base</code> encoder (GPT-4).
+          on GPT-5-family <code>o200k_base</code> tokenization.
         </span>
       </div>
       <div className="tcc-grid" ref={ref} data-armed={armed}>
@@ -299,7 +290,7 @@ function ToolCallComparison() {
                     <div className="tcc-label">{flow.label}</div>
                     <h4 className="tcc-title">
                       {flow.steps.length} tool call
-                      {flow.steps.length === 1 ? "" : "s"} ·{" "}
+                      {flow.steps.length === 1 ? "" : "s"}{" "}
                       <span className="tcc-tokens-pair">
                         <span className="tcc-tokens-in">↓ {totalIn} in</span>{" "}
                         <span className="tcc-tokens-out">↑ {totalOut} out</span>
@@ -328,21 +319,23 @@ function ToolCallComparison() {
                             </span>
                           </span>
                         </div>
-                        <pre className="tcc-call">
+                        <pre
+                          className="tcc-call"
+                          data-payload={showPayload ? "true" : "false"}
+                        >
                           <code>
                             {showPayload ? (
-                              <HighlightedGeneric
+                              <HighlightedJson
                                 code={JSON.stringify(
                                   buildLlmRequest(flowKey, i),
                                   null,
                                   2,
                                 )}
-                                language="json"
                               />
                             ) : isGoccia ? (
                               <HighlightedCode code={s.call} />
                             ) : (
-                              s.call
+                              <HighlightedShell code={s.call} />
                             )}
                           </code>
                         </pre>
@@ -403,19 +396,25 @@ await generateText({
  *  doesn't accept top-level `return` (source treated as a module),
  *  so we use `console.log` for the visible output. */
 const DEFAULT_CODE = `// Untrusted script from an AI agent.
-// The sandbox has no fetch, fs, env, or eval — by default.
 const active = users.filter((u) => u.active);
-const names = active.map((u) => u.name.toUpperCase()).join(", ");
+const names = active
+  .map((u) => u.name.toUpperCase())
+  .join(", ");
 console.log("active count:", active.length);
 console.log("names:", names);
 console.log("first id:", active[0]?.id);`;
 
 const DEFAULT_GLOBALS = `{
-  "users": [
-    { "id": 1, "name": "Alice",   "active": true  },
-    { "id": 2, "name": "Bob",     "active": false },
-    { "id": 3, "name": "Charlie", "active": true  }
-  ]
+  "users": [{
+    "id": 1, "name": "Alice",
+    "active": true
+  }, {
+    "id": 2, "name": "Bob",
+    "active": false
+  }, {
+    "id": 3, "name": "Charlie",
+    "active": true
+  }]
 }`;
 
 // Reject globals keys that aren't valid identifiers up front — `const "user-id"
@@ -524,6 +523,9 @@ export function Sandbox() {
   // Bumped on each new execution so `<AnimatedOutput>` re-mounts and
   // re-runs its line-stagger reveal cleanly.
   const [runId, setRunId] = useState(0);
+  const [paneCols, setPaneCols] = useState<[number, number, number]>([
+    1.3, 0.9, 1,
+  ]);
 
   const execute = useCallback(async () => {
     // Validate globals JSON up-front so a typo there doesn't cost us a
@@ -676,6 +678,47 @@ export function Sandbox() {
     }
   }, [code, globalsText]);
 
+  const startPaneResize = useCallback(
+    (handleIndex: 0 | 1) => (event: React.PointerEvent<HTMLButtonElement>) => {
+      const container = event.currentTarget.closest(
+        ".sb-demo-body",
+      ) as HTMLElement | null;
+      if (!container) return;
+      const { left, width } = container.getBoundingClientRect();
+      const startColumns = paneCols;
+      const total = startColumns[0] + startColumns[1] + startColumns[2];
+
+      event.currentTarget.setPointerCapture(event.pointerId);
+      const move = (moveEvent: PointerEvent) => {
+        const x = Math.min(Math.max(moveEvent.clientX - left, 0), width);
+        if (handleIndex === 0) {
+          const combined = startColumns[0] + startColumns[1];
+          const nextFirst = Math.min(
+            Math.max((x / width) * total, 0.65),
+            combined - 0.65,
+          );
+          setPaneCols([nextFirst, combined - nextFirst, startColumns[2]]);
+          return;
+        }
+
+        const beforeThird = Math.min(Math.max((x / width) * total, 0), total);
+        const combined = startColumns[1] + startColumns[2];
+        const nextSecond = Math.min(
+          Math.max(beforeThird - startColumns[0], 0.65),
+          combined - 0.65,
+        );
+        setPaneCols([startColumns[0], nextSecond, combined - nextSecond]);
+      };
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up, { once: true });
+    },
+    [paneCols],
+  );
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: run once on mount
   useEffect(() => {
     execute();
@@ -693,13 +736,10 @@ export function Sandbox() {
             <span className="wave-under">code you didn&apos;t write</span>.
           </AnchorH2>
           <p>
-            GocciaScript was built to execute code produced by agents and
-            language models. There is no{" "}
-            <code className="font-mono bg-paper-2 px-[0.3em] py-[0.05em] rounded">
-              eval
-            </code>
-            , no synchronous filesystem access, no ambient globals — and every
-            capability the host exposes is opt-in.
+            GocciaScript is meant for running untrusted or user-provided code in
+            a host-controlled environment. Scripts receive only the data and
+            capabilities the host provides, run with explicit limits, and return
+            structured results that the host can inspect.
           </p>
         </div>
 
@@ -730,7 +770,7 @@ export function Sandbox() {
                 <SparkleIcon size={20} />
               </div>
               <h4>Structured result</h4>
-              <p>JSON value + stdout back to the host</p>
+              <p>JSON</p>
             </div>
           </div>
         </div>
@@ -745,7 +785,9 @@ export function Sandbox() {
               The same agent task —{" "}
               <em className="italic">&ldquo;{TOOL_CALL_TASK}&rdquo;</em> —
               solved with a typical tool stack and again with a single
-              GocciaScript call.
+              GocciaScript call. This comparison assumes each tool call depends
+              on data discovered or produced by the previous step, so the calls
+              cannot be parallelized without changing the task shape.
             </p>
           </div>
           <ToolCallComparison />
@@ -756,11 +798,9 @@ export function Sandbox() {
             <div>
               <h4>Sandbox preview</h4>
               <p className="m-0 text-ink-3 text-[0.88rem]">
-                Edit the script or the injected globals and hit{" "}
-                <strong>Execute</strong> — the code runs through the real{" "}
-                <code>GocciaScriptLoader</code> binary on the server, with the
-                same caps and limits the agent integration would see (no fetch,
-                no fs, 500 ms timeout, 64 MB heap).
+                Edit the script or globals and hit <strong>Execute</strong> —
+                the code runs in the same sandboxed runtime used by the server
+                preview and returns a structured host result.
               </p>
             </div>
             <div className="flex gap-2">
@@ -775,7 +815,16 @@ export function Sandbox() {
             </div>
           </div>
 
-          <div className="sb-demo-body sb-demo-body-3col">
+          <div
+            className="sb-demo-body sb-demo-body-3col"
+            style={
+              {
+                "--sb-col-1": `${paneCols[0]}fr`,
+                "--sb-col-2": `${paneCols[1]}fr`,
+                "--sb-col-3": `${paneCols[2]}fr`,
+              } as React.CSSProperties
+            }
+          >
             <div className="sb-field">
               <div className="sb-field-label">
                 sandboxed script{" "}
@@ -789,9 +838,15 @@ export function Sandbox() {
                 lineNumbers
               />
             </div>
+            <button
+              type="button"
+              className="sb-resizer"
+              aria-label="Resize script and globals panes"
+              onPointerDown={startPaneResize(0)}
+            />
             <div className="sb-field">
               <div className="sb-field-label">
-                injected globals{" "}
+                globals{" "}
                 <span className="text-ink-3 font-normal">· context.json</span>
               </div>
               <HighlightedTextarea
@@ -802,6 +857,12 @@ export function Sandbox() {
                 lineNumbers
               />
             </div>
+            <button
+              type="button"
+              className="sb-resizer"
+              aria-label="Resize globals and result panes"
+              onPointerDown={startPaneResize(1)}
+            />
             <div className="sb-field">
               <div className="sb-field-label">host result</div>
               <ConsolePanel className="flex-1 rounded-t-none">
