@@ -24,6 +24,13 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.subtract", () => {
     expect(result.epochNanoseconds).toBe(-2147484000n);
   });
 
+  test("subtract() accepts BigInt-backed microsecond durations", () => {
+    const min = Temporal.Instant.fromEpochMilliseconds(-8640000000000000);
+    const max = Temporal.Instant.fromEpochMilliseconds(8640000000000000);
+    const duration = min.until(max, { largestUnit: "microseconds" });
+    expect(max.subtract(duration).epochNanoseconds).toBe(min.epochNanoseconds);
+  });
+
   test("subtract() throws on weeks", () => {
     const instant = Temporal.Instant.fromEpochMilliseconds(0);
     expect(() => {
