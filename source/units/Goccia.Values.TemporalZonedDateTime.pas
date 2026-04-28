@@ -815,6 +815,7 @@ var
   NewEpochMs: Int64;
   NewSubMs: Integer;
 begin
+  try
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.add');
   Dur := CoerceDuration(AArgs.GetElement(0), 'ZonedDateTime.prototype.add');
 
@@ -844,6 +845,10 @@ begin
   NewSubMs := Balanced.Microsecond * 1000 + Balanced.Nanosecond;
 
   Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, NewSubMs, Zdt.FTimeZone);
+  except
+    on E: ETemporalDurationInt64Overflow do
+      ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
+  end;
 end;
 
 // TC39 Temporal §6.3.27 Temporal.ZonedDateTime.prototype.subtract(temporalDurationLike [, options])
@@ -853,6 +858,7 @@ var
   NegDur: TGocciaTemporalDurationValue;
   NewArgs: TGocciaArgumentsCollection;
 begin
+  try
   Dur := CoerceDuration(AArgs.GetElement(0), 'ZonedDateTime.prototype.subtract');
 
   NegDur := TGocciaTemporalDurationValue.Create(
@@ -865,6 +871,10 @@ begin
     Result := ZonedDateTimeAdd(NewArgs, AThisValue);
   finally
     NewArgs.Free;
+  end;
+  except
+    on E: ETemporalDurationInt64Overflow do
+      ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
   end;
 end;
 

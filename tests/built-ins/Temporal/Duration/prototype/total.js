@@ -143,18 +143,16 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.total", () => {
     expect(days).toBe(393);
   });
 
-  test("total() with relativeTo as ZonedDateTime", () => {
+  test("total() rejects relativeTo as ZonedDateTime", () => {
     const d = Temporal.Duration.from({ months: 6 });
     const zdt = Temporal.ZonedDateTime.from("2024-01-01T00:00:00+00:00[UTC]");
-    const days = d.total({ unit: "days", relativeTo: zdt });
-    // Jan(31) + Feb(29) + Mar(31) + Apr(30) + May(31) + Jun(30) = 182
-    expect(days).toBe(182);
+    expect(() => d.total({ unit: "days", relativeTo: zdt })).toThrow(RangeError);
   });
 
-  test("total() with relativeTo as ZonedDateTime converts to years", () => {
+  test("total() rejects relativeTo as ZonedDateTime for years", () => {
     const d = Temporal.Duration.from({ years: 2 });
     const zdt = Temporal.ZonedDateTime.from("2024-01-01T12:00:00+00:00[UTC]");
-    expect(d.total({ unit: "years", relativeTo: zdt })).toBe(2);
+    expect(() => d.total({ unit: "years", relativeTo: zdt })).toThrow(RangeError);
   });
 
   test("total() with relativeTo as property bag", () => {

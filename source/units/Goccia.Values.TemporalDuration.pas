@@ -5,6 +5,8 @@ unit Goccia.Values.TemporalDuration;
 interface
 
 uses
+  SysUtils,
+
   BigInteger,
 
   Goccia.Arguments.Collection,
@@ -14,6 +16,8 @@ uses
   Goccia.Values.Primitives;
 
 type
+  ETemporalDurationInt64Overflow = class(Exception);
+
   TGocciaTemporalDurationValue = class(TGocciaObjectValue)
   private
     FYearsBig: TBigInteger;
@@ -103,7 +107,6 @@ implementation
 
 uses
   Math,
-  SysUtils,
 
   Goccia.Constants.NumericLimits,
   Goccia.Constants.PropertyNames,
@@ -112,7 +115,6 @@ uses
   Goccia.Realm,
   Goccia.Temporal.DurationMath,
   Goccia.Temporal.Options,
-  Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -189,7 +191,7 @@ function BigIntToCheckedInt64(const AValue: TBigInteger; const AFieldName: strin
 begin
   if (AValue.Compare(TBigInteger.FromInt64(Low(Int64))) < 0) or
      (AValue.Compare(TBigInteger.FromInt64(High(Int64))) > 0) then
-    raise ERangeError.CreateFmt('Temporal.Duration.%s is outside Int64 range', [AFieldName]);
+    raise ETemporalDurationInt64Overflow.CreateFmt('Temporal.Duration.%s is outside Int64 range', [AFieldName]);
   Result := AValue.ToInt64;
 end;
 
@@ -758,6 +760,7 @@ var
   Sign: Integer;
   CalendarYears, CalendarMonths, CalendarWeeks, CalendarDays: Int64;
 begin
+  try
   D := AsDuration(AThisValue, 'Duration.prototype.round');
   Arg := AArgs.GetElement(0);
 
@@ -1066,20 +1069,10 @@ begin
     Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(TBigInteger.Zero, TBigInteger.Zero,
       TBigInteger.Zero, BigIntUnit(ResultDays),
       ResultHoursBig, ResultMinutesBig, ResultSecondsBig, ResultMsBig, ResultUsBig, ResultNsBig);
-end;
-
-function ZonedDateTimeToDateRecord(const AZdt: TGocciaTemporalZonedDateTimeValue): TTemporalDateRecord;
-var
-  OffsetSeconds: Integer;
-  LocalEpochMs, EpochDays, RemainingMs: Int64;
-begin
-  OffsetSeconds := GetUtcOffsetSeconds(AZdt.TimeZone, AZdt.EpochMilliseconds div 1000);
-  LocalEpochMs := AZdt.EpochMilliseconds + Int64(OffsetSeconds) * 1000;
-  EpochDays := LocalEpochMs div 86400000;
-  RemainingMs := LocalEpochMs mod 86400000;
-  if RemainingMs < 0 then
-    Dec(EpochDays);
-  Result := EpochDaysToDate(EpochDays);
+  except
+    on E: ETemporalDurationInt64Overflow do
+      ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
+  end;
 end;
 
 function TryParseDateFromPropertyBag(const AObj: TGocciaObjectValue;
@@ -1118,7 +1111,11 @@ begin
     Result.Day := PlainDate.Day;
   end
   else if AValue is TGocciaTemporalZonedDateTimeValue then
-    Result := ZonedDateTimeToDateRecord(TGocciaTemporalZonedDateTimeValue(AValue))
+  begin
+    // ZonedDateTime relativeTo needs timezone-aware DST handling. Reject it
+    // until Duration round/total can route through that aware path.
+    ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]), SSuggestTemporalRelativeTo);
+  end
   else if AValue is TGocciaStringLiteralValue then
   begin
     if not CoerceToISODate(TGocciaStringLiteralValue(AValue).Value, DateRec) then
@@ -1295,6 +1292,7 @@ var
   ResolvedDays: Int64;
   TotalNsBig: TBigInteger;
 begin
+  try
   D := AsDuration(AThisValue, 'Duration.prototype.total');
   Arg := AArgs.GetElement(0);
   HasRelativeTo := False;
@@ -1367,6 +1365,10 @@ begin
   else
     Result := TGocciaNumberLiteralValue.Create(
       TotalNsBig.ToDouble / UnitToNanoseconds(TargetUnit));
+  except
+    on E: ETemporalDurationInt64Overflow do
+      ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
+  end;
 end;
 
 function TGocciaTemporalDurationValue.DurationToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

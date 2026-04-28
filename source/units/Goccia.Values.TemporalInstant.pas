@@ -232,6 +232,7 @@ var
   NewMs: Int64;
   NewSubMs: Integer;
 begin
+  try
   Inst := AsInstant(AThisValue, 'Instant.prototype.add');
   Arg := AArgs.GetElement(0);
 
@@ -265,6 +266,10 @@ begin
               Integer(Dur.Microseconds * 1000 + Dur.Nanoseconds);
 
   Result := TGocciaTemporalInstantValue.Create(NewMs, NewSubMs);
+  except
+    on E: ETemporalDurationInt64Overflow do
+      ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
+  end;
 end;
 
 function TGocciaTemporalInstantValue.InstantSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -276,6 +281,7 @@ var
   NewMs: Int64;
   NewSubMs: Integer;
 begin
+  try
   Inst := AsInstant(AThisValue, 'Instant.prototype.subtract');
   Arg := AArgs.GetElement(0);
 
@@ -308,6 +314,10 @@ begin
               Integer(Dur.Microseconds * 1000 + Dur.Nanoseconds);
 
   Result := TGocciaTemporalInstantValue.Create(NewMs, NewSubMs);
+  except
+    on E: ETemporalDurationInt64Overflow do
+      ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
+  end;
 end;
 
 function InstantDiffToUnits(const ATimeDuration: TBigInteger;
