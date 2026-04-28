@@ -39,6 +39,34 @@ function assertValidSourceMap(path: string): void {
   if (typeof map.mappings !== "string" || map.mappings.length === 0) throw new Error("Source map should have non-empty mappings");
 }
 
+function assertCommonJsonReport(json: any, label: string, expectedFileCount: number): void {
+  if (json.fileName !== undefined) throw new Error(`${label} top-level fileName should be omitted`);
+  if (typeof json.build?.version !== "string") throw new Error(`${label} build.version should be present`);
+  if (typeof json.build?.date !== "string") throw new Error(`${label} build.date should be present`);
+  if (typeof json.stdout !== "string") throw new Error(`${label} stdout should always be present`);
+  if (typeof json.stderr !== "string") throw new Error(`${label} stderr should always be present`);
+  if (!Array.isArray(json.output)) throw new Error(`${label} output should be an array`);
+  if (!Array.isArray(json.files)) throw new Error(`${label} files should be an array`);
+  if (json.files.length !== expectedFileCount) throw new Error(`${label} files length should be ${expectedFileCount}, got ${json.files.length}`);
+  if (typeof json.timing?.total_ns !== "number") throw new Error(`${label} top-level timing.total_ns should be present`);
+  if ("total_ms" in json.timing) throw new Error(`${label} top-level timing should not include millisecond fields`);
+  if (typeof json.memory?.gc?.liveBytes !== "number") throw new Error(`${label} top-level memory.gc.liveBytes should be present`);
+  if (typeof json.memory?.heap?.endAllocatedBytes !== "number") throw new Error(`${label} top-level memory.heap.endAllocatedBytes should be present`);
+  if (typeof json.workers?.used !== "number") throw new Error(`${label} workers.used should be present`);
+  if (typeof json.workers?.available !== "number") throw new Error(`${label} workers.available should be present`);
+}
+
+function assertCommonJsonFile(file: any, label: string, fileName: string, ok = true): void {
+  if (file?.fileName !== fileName) throw new Error(`${label} fileName mismatch: ${file?.fileName}`);
+  if (file?.ok !== ok) throw new Error(`${label} ok should be ${ok}, got ${file?.ok}`);
+  if (typeof file?.stdout !== "string") throw new Error(`${label} stdout should always be present`);
+  if (typeof file?.stderr !== "string") throw new Error(`${label} stderr should always be present`);
+  if (!Array.isArray(file?.output)) throw new Error(`${label} output should be an array`);
+  if (typeof file?.timing?.total_ns !== "number") throw new Error(`${label} timing.total_ns should be present`);
+  if ("total_ms" in file.timing) throw new Error(`${label} timing should not include millisecond fields`);
+  if (ok && file.error !== null) throw new Error(`${label} error should be null`);
+}
+
 // ============================================================================
 // GocciaScriptLoader
 // ============================================================================
@@ -115,6 +143,44 @@ console.log("Loader: JSON stdout/stderr split...");
   if (!json.stderr?.includes("err")) throw new Error(`JSON stderr should contain "err", got ${json.stderr}`);
   if (!json.output?.includes("out") || !json.output?.includes("Error: err")) {
     throw new Error(`JSON output should include both streams, got ${json.output}`);
+  }
+}
+
+console.log("Loader: JSON multi-file structure...");
+{
+  const tmp = makeTmp();
+  try {
+    const first = join(tmp, "first.js");
+    const second = join(tmp, "second.js");
+    writeFileSync(first, "console.log('first out'); 11;\n");
+    writeFileSync(second, "console.error('second err'); 22;\n");
+
+    const proc = Bun.spawnSync([LOADER, "--output=json", "--jobs=2", first, second], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`Loader multi-file JSON exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+
+    const json = JSON.parse(proc.stdout.toString());
+    assertCommonJsonReport(json, "Loader multi-file JSON", 2);
+    if (json.ok !== true) throw new Error(`Loader multi-file top-level ok should be true, got ${json.ok}`);
+    if (json.error !== null) throw new Error("Loader multi-file top-level error should be null");
+    if (!json.stdout.includes("first out")) throw new Error(`Loader multi-file stdout should include first file output, got ${json.stdout}`);
+    if (!json.stderr.includes("second err")) throw new Error(`Loader multi-file stderr should include second file error output, got ${json.stderr}`);
+    if (!json.output.includes("first out") || !json.output.includes("Error: second err"))
+      throw new Error(`Loader multi-file output should include both streams, got ${json.output}`);
+    if (json.workers.used !== 2) throw new Error(`Loader multi-file workers.used should be 2, got ${json.workers.used}`);
+
+    assertCommonJsonFile(json.files[0], "Loader first file", first);
+    assertCommonJsonFile(json.files[1], "Loader second file", second);
+    if (json.files[0].result !== 11) throw new Error(`Loader first result should be 11, got ${json.files[0].result}`);
+    if (json.files[1].result !== 22) throw new Error(`Loader second result should be 22, got ${json.files[1].result}`);
+    if (!json.files[0].output.includes("first out")) throw new Error(`Loader first file output mismatch: ${json.files[0].output}`);
+    if (!json.files[1].stderr.includes("second err")) throw new Error(`Loader second file stderr mismatch: ${json.files[1].stderr}`);
+    if (json.files[0].memory !== null || json.files[1].memory !== null)
+      throw new Error("Loader multi-file per-file memory should be null when top-level memory is aggregated");
+  } finally {
+    clean(tmp);
   }
 }
 
@@ -308,6 +374,65 @@ console.log("Loader: coverage --output=json not corrupted...");
     const jsxJsonPath = join(tmp, "jsx-coverage.json");
     await $`${LOADER} --coverage --coverage-format=json --coverage-output=${jsxJsonPath} ${jsxPath}`.quiet();
     if (!readFileSync(jsxJsonPath, "utf-8").includes('"line":3')) throw new Error('JSX JSON should have "line":3');
+  } finally {
+    clean(tmp);
+  }
+}
+
+// ============================================================================
+// GocciaTestRunner
+// ============================================================================
+
+console.log("TestRunner: JSON multi-file structure...");
+{
+  const tmp = makeTmp();
+  try {
+    const first = join(tmp, "test-a.js");
+    const second = join(tmp, "test-b.js");
+    const resultsPath = join(tmp, "test-results.json");
+    writeFileSync(
+      first,
+      [
+        'describe("a", () => {',
+        '  test("passes a", () => { expect(1 + 1).toBe(2); });',
+        "});",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      second,
+      [
+        'describe("b", () => {',
+        '  test("passes b", () => { expect(2 + 2).toBe(4); });',
+        "});",
+        "",
+      ].join("\n"),
+    );
+
+    const proc = Bun.spawnSync([resolve(TESTRUNNER), first, second, "--no-progress", "--jobs=2", `--output=${resultsPath}`], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`TestRunner multi-file JSON exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+
+    const json = JSON.parse(readFileSync(resultsPath, "utf-8"));
+    assertCommonJsonReport(json, "TestRunner multi-file JSON", 2);
+    if (json.ok !== true) throw new Error(`TestRunner multi-file top-level ok should be true, got ${json.ok}`);
+    if (json.error !== null) throw new Error("TestRunner multi-file top-level error should be null");
+    if (json.totalFiles !== 2) throw new Error(`TestRunner multi-file totalFiles should be 2, got ${json.totalFiles}`);
+    if (json.totalTests !== 2) throw new Error(`TestRunner multi-file totalTests should be 2, got ${json.totalTests}`);
+    if (json.passed !== 2 || json.failed !== 0) throw new Error(`TestRunner multi-file pass/fail mismatch: ${json.passed}/${json.failed}`);
+    if (json.workers.used !== 2) throw new Error(`TestRunner multi-file workers.used should be 2, got ${json.workers.used}`);
+    if (!Array.isArray(json.results) || json.results.length !== 2) throw new Error("TestRunner multi-file results should mirror files with 2 entries");
+
+    assertCommonJsonFile(json.files[0], "TestRunner first file", first);
+    assertCommonJsonFile(json.files[1], "TestRunner second file", second);
+    if (json.files[0].passed !== 1 || json.files[0].failed !== 0) throw new Error(`TestRunner first file counts mismatch: ${JSON.stringify(json.files[0])}`);
+    if (json.files[1].passed !== 1 || json.files[1].failed !== 0) throw new Error(`TestRunner second file counts mismatch: ${JSON.stringify(json.files[1])}`);
+    if (json.files[0].memory !== null || json.files[1].memory !== null)
+      throw new Error("TestRunner multi-file per-file memory should be null when top-level memory is aggregated");
+    if (json.results[0].fileName !== json.files[0].fileName || json.results[1].fileName !== json.files[1].fileName)
+      throw new Error("TestRunner results[] should mirror files[] file names");
   } finally {
     clean(tmp);
   }
@@ -523,6 +648,34 @@ console.log("Loader: coverage --output=json not corrupted...");
 
     console.log("BenchmarkRunner: file benchmark JSON output...");
     if (!fileJson.includes('"totalBenchmarks":')) throw new Error('JSON should contain totalBenchmarks');
+
+    console.log("BenchmarkRunner: multi-file JSON structure...");
+    const benchA = join(tmp, "bench-a.js");
+    const benchB = join(tmp, "bench-b.js");
+    const multiBenchOut = join(tmp, "bench-multi.json");
+    writeFileSync(benchA, 'suite("a", () => { bench("one", { run: () => 1 + 1 }); });\n');
+    writeFileSync(benchB, 'suite("b", () => { bench("two", { run: () => 2 + 2 }); });\n');
+    {
+      const proc = Bun.spawnSync(
+        [resolve(BENCHRUNNER), benchA, benchB, "--no-progress", "--jobs=2", "--format=json", `--output=${multiBenchOut}`],
+        { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
+      );
+      if (proc.exitCode !== 0) throw new Error(`Multi-file benchmark JSON exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+    }
+    {
+      const json = JSON.parse(readFileSync(multiBenchOut, "utf-8"));
+      assertCommonJsonReport(json, "Benchmark multi-file JSON", 2);
+      if (json.ok !== true) throw new Error(`Benchmark multi-file top-level ok should be true, got ${json.ok}`);
+      if (json.error !== null) throw new Error("Benchmark multi-file top-level error should be null");
+      if (json.totalBenchmarks !== 2) throw new Error(`Benchmark multi-file totalBenchmarks should be 2, got ${json.totalBenchmarks}`);
+      if (json.workers.used !== 2) throw new Error(`Benchmark multi-file workers.used should be 2, got ${json.workers.used}`);
+      assertCommonJsonFile(json.files[0], "Benchmark first file", benchA);
+      assertCommonJsonFile(json.files[1], "Benchmark second file", benchB);
+      if (json.files[0].benchmarks?.[0]?.name !== "one") throw new Error(`Benchmark first file entry mismatch: ${JSON.stringify(json.files[0].benchmarks)}`);
+      if (json.files[1].benchmarks?.[0]?.name !== "two") throw new Error(`Benchmark second file entry mismatch: ${JSON.stringify(json.files[1].benchmarks)}`);
+      if (json.files[0].memory !== null || json.files[1].memory !== null)
+        throw new Error("Benchmark multi-file per-file memory should be null when top-level memory is aggregated");
+    }
 
     console.log("BenchmarkRunner: benchmark failure JSON output...");
     const failBench = join(tmp, "benchmark-fail.js");
