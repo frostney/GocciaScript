@@ -94,6 +94,7 @@ var
   WindowsICU: TWindowsICU;
   WindowsICULoadAttempted: Boolean;
   WindowsICUAvailable: Boolean;
+  WindowsICUInitLock: TRTLCriticalSection;
 
 function ICUSucceeded(const AStatus: TICUErrorCode): Boolean;
 begin
@@ -184,18 +185,23 @@ function TryGetWindowsICU(out AICU: TWindowsICU): Boolean;
 var
   LoadedICU: TWindowsICU;
 begin
-  if not WindowsICULoadAttempted then
-  begin
-    WindowsICULoadAttempted := True;
-    WindowsICUAvailable := TryLoadWindowsICUFromLibrary(ICU_LIBRARY, LoadedICU);
-    if not WindowsICUAvailable then
-      WindowsICUAvailable := TryLoadWindowsICUFromLibrary(ICU_I18N_LIBRARY, LoadedICU);
-    if WindowsICUAvailable then
-      WindowsICU := LoadedICU;
-  end;
+  EnterCriticalSection(WindowsICUInitLock);
+  try
+    if not WindowsICULoadAttempted then
+    begin
+      WindowsICULoadAttempted := True;
+      WindowsICUAvailable := TryLoadWindowsICUFromLibrary(ICU_LIBRARY, LoadedICU);
+      if not WindowsICUAvailable then
+        WindowsICUAvailable := TryLoadWindowsICUFromLibrary(ICU_I18N_LIBRARY, LoadedICU);
+      if WindowsICUAvailable then
+        WindowsICU := LoadedICU;
+    end;
 
-  AICU := WindowsICU;
-  Result := WindowsICUAvailable;
+    AICU := WindowsICU;
+    Result := WindowsICUAvailable;
+  finally
+    LeaveCriticalSection(WindowsICUInitLock);
+  end;
 end;
 
 function UnicodeBufferToString(const ABuffer: array of WideChar;
@@ -629,6 +635,7 @@ var
   LinkTarget: string;
   PrefixPos: Integer;
   Prefix: string;
+  LocalTimeDirectory: string;
 begin
   // Read the symlink target of /etc/localtime
   SetLength(LinkTarget, MAX_SYMLINK_LENGTH);
@@ -636,6 +643,13 @@ begin
   if PrefixPos > 0 then
   begin
     SetLength(LinkTarget, PrefixPos);
+    if (Length(LinkTarget) > 0) and (LinkTarget[1] <> PathDelim) then
+    begin
+      LocalTimeDirectory := IncludeTrailingPathDelimiter(ExtractFileDir(LOCALTIME_PATH));
+      LinkTarget := ExpandFileName(LocalTimeDirectory + LinkTarget);
+    end
+    else
+      LinkTarget := ExpandFileName(LinkTarget);
 
     Prefix := IncludeTrailingPathDelimiter(UNIX_ZONEINFO_PATH);
     PrefixPos := Pos(Prefix, LinkTarget);
@@ -830,11 +844,15 @@ end;
 
 initialization
   CachedTimeZoneCount := 0;
+  {$IFDEF MSWINDOWS}
+  InitCriticalSection(WindowsICUInitLock);
+  {$ENDIF}
 
 finalization
   {$IFDEF MSWINDOWS}
   if WindowsICU.Handle <> NilHandle then
     UnloadLibrary(WindowsICU.Handle);
+  DoneCriticalSection(WindowsICUInitLock);
   {$ENDIF}
 
 end.
