@@ -16,6 +16,7 @@ import {
   existsSync,
   rmSync,
   mkdirSync,
+  chmodSync,
 } from "fs";
 import { join, resolve } from "path";
 import { tmpdir } from "os";
@@ -114,6 +115,36 @@ console.log("Loader: JSON stdout/stderr split...");
   if (!json.stderr?.includes("err")) throw new Error(`JSON stderr should contain "err", got ${json.stderr}`);
   if (!json.output?.includes("out") || !json.output?.includes("Error: err")) {
     throw new Error(`JSON output should include both streams, got ${json.output}`);
+  }
+}
+
+console.log("Loader: JSON source-load failure stays per-file...");
+{
+  const tmp = makeTmp();
+  try {
+    const unreadable = join(tmp, "unreadable.js");
+    const valid = join(tmp, "valid.js");
+    writeFileSync(unreadable, "1;\n");
+    writeFileSync(valid, "2 + 2;\n");
+    if (process.platform !== "win32") {
+      chmodSync(unreadable, 0o000);
+      const proc = Bun.spawnSync([LOADER, "--output=json", "--jobs=1", unreadable, valid], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      chmodSync(unreadable, 0o600);
+      if (proc.exitCode === 0) throw new Error("Unreadable source file should fail the run");
+      const json = JSON.parse(proc.stdout.toString());
+      const unreadableFile = json.files?.[0];
+      const validFile = json.files?.[1];
+      if (json.ok !== false) throw new Error(`Unreadable source JSON run should fail, got ${json.ok}`);
+      if (unreadableFile?.ok !== false) throw new Error(`Unreadable source file should be marked failed, got ${unreadableFile?.ok}`);
+      if (unreadableFile?.fileName !== unreadable) throw new Error(`Unreadable source fileName mismatch: ${unreadableFile?.fileName}`);
+      if (typeof unreadableFile?.error?.message !== "string") throw new Error("Unreadable source file should include shared error object");
+      if (validFile?.ok !== true || validFile?.result !== 4) throw new Error("Valid file should still run after unreadable source file");
+    }
+  } finally {
+    clean(tmp);
   }
 }
 
@@ -492,6 +523,25 @@ console.log("Loader: coverage --output=json not corrupted...");
 
     console.log("BenchmarkRunner: file benchmark JSON output...");
     if (!fileJson.includes('"totalBenchmarks":')) throw new Error('JSON should contain totalBenchmarks');
+
+    console.log("BenchmarkRunner: benchmark failure JSON output...");
+    const failBench = join(tmp, "benchmark-fail.js");
+    const failOut = join(tmp, "benchmark-fail.json");
+    writeFileSync(failBench, 'suite("fail", () => { bench("boom", { run: () => { throw new Error("boom"); } }); });\n');
+    {
+      const proc = Bun.spawnSync(
+        [resolve(BENCHRUNNER), failBench, "--no-progress", "--format=json", `--output=${failOut}`],
+        { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
+      );
+      if (proc.exitCode !== 0) throw new Error(`Failing benchmark JSON export exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+    }
+    {
+      const json = JSON.parse(readFileSync(failOut, "utf-8"));
+      const file = json.files?.[0];
+      if (json.ok !== false) throw new Error(`Failing benchmark run should mark top-level ok=false, got ${json.ok}`);
+      if (file?.ok !== false) throw new Error(`Failing benchmark file should mark ok=false, got ${file?.ok}`);
+      if (typeof file?.error?.message !== "string") throw new Error("Failing benchmark file should include shared error object");
+    }
 
     console.log("BenchmarkRunner: stdin benchmark (interpreted)...");
     const stdinOutPath = join(tmp, "stdin-interp.json");

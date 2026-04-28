@@ -344,11 +344,17 @@ var
   TotalDurationNanoseconds: Int64;
   Timing: TCLIJSONTiming;
   FileTiming: TCLIJSONTiming;
+  ErrorInfo: TCLIJSONErrorInfo;
+  JSONFormatSettings: TFormatSettings;
+  FileOk: Boolean;
   FilesJSON, FileJSON, BenchmarksJSON, BenchmarkJSON, ExtraJSON: string;
+  FileErrorJSON, FileErrorMessage: string;
 begin
   TotalBenchmarks := 0;
   TotalDurationNanoseconds := 0;
   FilesJSON := '';
+  JSONFormatSettings := DefaultFormatSettings;
+  JSONFormatSettings.DecimalSeparator := '.';
 
   for F := 0 to FFileCount - 1 do
   begin
@@ -361,15 +367,31 @@ begin
       FFiles[F].ExecuteTimeNanoseconds;
 
     BenchmarksJSON := '';
+    FileOk := True;
+    FileErrorMessage := '';
     for E := 0 to Length(FFiles[F].Entries) - 1 do
     begin
       Entry := FFiles[F].Entries[E];
 
+      if FileOk and
+         ((Entry.Error <> '') or (Entry.OpsPerSec = 0) or (Entry.MeanMs = 0)) then
+      begin
+        FileOk := False;
+        if Entry.Error <> '' then
+          FileErrorMessage := Entry.Error
+        else
+          FileErrorMessage := SysUtils.Format(
+            'Benchmark "%s" produced no measurements',
+            [Entry.Name]);
+      end;
+
       if Entry.Error <> '' then
+      begin
         BenchmarkJSON := SysUtils.Format(
           '{"suite":"%s","name":"%s","error":"%s"}',
           [EscapeJSON(Entry.Suite), EscapeJSON(Entry.Name),
            EscapeJSON(Entry.Error)])
+      end
       else
         BenchmarkJSON := SysUtils.Format(
           '{"suite":"%s","name":"%s","opsPerSec":%.6f,' +
@@ -379,17 +401,28 @@ begin
           [EscapeJSON(Entry.Suite), EscapeJSON(Entry.Name), Entry.OpsPerSec,
            Entry.VariancePercentage, Entry.MeanMs, Entry.Iterations,
            Entry.SetupMs, Entry.TeardownMs, Entry.MinOpsPerSec,
-           Entry.MaxOpsPerSec]);
+           Entry.MaxOpsPerSec], JSONFormatSettings);
 
       if BenchmarksJSON <> '' then
         BenchmarksJSON := BenchmarksJSON + ',';
       BenchmarksJSON := BenchmarksJSON + BenchmarkJSON;
     end;
 
+    if FileOk then
+      FileErrorJSON := 'null'
+    else
+    begin
+      ErrorInfo := DefaultCLIJSONErrorInfo;
+      ErrorInfo.ErrorType := 'BenchmarkError';
+      ErrorInfo.Message := FileErrorMessage;
+      ErrorInfo.FileName := FFiles[F].FileName;
+      FileErrorJSON := BuildCLIErrorObjectJSON(ErrorInfo);
+    end;
+
     FileJSON :=
       '{' +
-        BuildCLIFileBaseJSON(FFiles[F].FileName, True, '', '', '', 'null',
-          FileTiming, '"memory":null') + ',' +
+        BuildCLIFileBaseJSON(FFiles[F].FileName, FileOk, '', '', '',
+          FileErrorJSON, FileTiming, '"memory":null') + ',' +
         SysUtils.Format('"lexTimeNanoseconds":%d,', [FFiles[F].LexTimeNanoseconds]) +
         SysUtils.Format('"parseTimeNanoseconds":%d,', [FFiles[F].ParseTimeNanoseconds]) +
         SysUtils.Format('"compileTimeNanoseconds":%d,', [FFiles[F].CompileTimeNanoseconds]) +

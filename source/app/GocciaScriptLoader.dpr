@@ -116,10 +116,11 @@ type
     procedure PrintHumanReadableResult(const AFileName: string;
       const AReport: TScriptExecutionReport; const AExtension: string);
     function RunSourceForJSON(const ASource: TStringList;
-      const AFileName: string): TScriptLoaderJSONFileResult;
+      const AFileName: string;
+      const AMeasureMemory: Boolean = True): TScriptLoaderJSONFileResult;
     procedure RunSource(const ASource: TStringList; const AFileName: string);
-    function RunScriptFromFileForJSON(
-      const AFileName: string): TScriptLoaderJSONFileResult;
+    function RunScriptFromFileForJSON(const AFileName: string;
+      const AMeasureMemory: Boolean = True): TScriptLoaderJSONFileResult;
     procedure RunJSONFiles(const AFiles: TStringList);
     procedure RunScriptFromFile(const AFileName: string);
     procedure RunScriptFromStdin;
@@ -774,7 +775,8 @@ begin
 end;
 
 function TScriptLoaderApp.RunSourceForJSON(const ASource: TStringList;
-  const AFileName: string): TScriptLoaderJSONFileResult;
+  const AFileName: string;
+  const AMeasureMemory: Boolean): TScriptLoaderJSONFileResult;
 var
   Extension: string;
   Report: TScriptExecutionReport;
@@ -799,7 +801,8 @@ begin
   Capture := TScriptLoaderConsoleCapture.Create;
   try
     StartTime := GetNanoseconds;
-    BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
+    if AMeasureMemory then
+      BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
     try
       Extension := LowerCase(ExtractFileExt(AFileName));
       if Extension = EXT_GBC then
@@ -810,7 +813,10 @@ begin
           emBytecode:    Report := ExecuteBytecodeFromSource(ASource, AFileName, Capture);
         end;
 
-      Report.MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
+      if AMeasureMemory then
+        Report.MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement)
+      else
+        Report.MemoryStats := DefaultCLIJSONMemoryStats;
       Result.StdoutText := CapturedStdoutText(Capture);
       Result.StderrText := CapturedStderrText(Capture);
       Result.OutputText := CapturedOutputText(Capture);
@@ -832,7 +838,10 @@ begin
             Report.Timing.LexTimeNanoseconds -
             Report.Timing.ParseTimeNanoseconds -
             Report.Timing.CompileTimeNanoseconds;
-        Report.MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
+        if AMeasureMemory then
+          Report.MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement)
+        else
+          Report.MemoryStats := DefaultCLIJSONMemoryStats;
         ErrorInfo := ExceptionToCLIJSONErrorInfo(E);
         if ErrorInfo.FileName = '' then
           ErrorInfo.FileName := AFileName;
@@ -871,17 +880,44 @@ begin
   end;
 end;
 
-function TScriptLoaderApp.RunScriptFromFileForJSON(
-  const AFileName: string): TScriptLoaderJSONFileResult;
+function TScriptLoaderApp.RunScriptFromFileForJSON(const AFileName: string;
+  const AMeasureMemory: Boolean): TScriptLoaderJSONFileResult;
 var
   Source: TStringList;
+  ErrorInfo: TCLIJSONErrorInfo;
+  Timing: TCLIJSONTiming;
+  StartTime: Int64;
 begin
   if LowerCase(ExtractFileExt(AFileName)) = EXT_GBC then
-    Exit(RunSourceForJSON(nil, AFileName));
+    Exit(RunSourceForJSON(nil, AFileName, AMeasureMemory));
 
-  Source := ReadUTF8FileLines(AFileName);
+  StartTime := GetNanoseconds;
   try
-    Result := RunSourceForJSON(Source, AFileName);
+    Source := ReadUTF8FileLines(AFileName);
+  except
+    on E: Exception do
+    begin
+      FillChar(Timing, SizeOf(Timing), 0);
+      Timing.TotalTimeNanoseconds := GetNanoseconds - StartTime;
+      Timing.ExecuteTimeNanoseconds := Timing.TotalTimeNanoseconds;
+      ErrorInfo := ExceptionToCLIJSONErrorInfo(E);
+      if ErrorInfo.FileName = '' then
+        ErrorInfo.FileName := AFileName;
+      Result.FileName := AFileName;
+      Result.JSON := BuildCLIScriptFileErrorJSON(AFileName, '', '', '',
+        ErrorInfo, Timing, DefaultCLIJSONMemoryStats);
+      Result.StdoutText := '';
+      Result.StderrText := '';
+      Result.OutputText := '';
+      Result.ErrorJSON := BuildCLIErrorObjectJSON(ErrorInfo);
+      Result.Timing := Timing;
+      Result.Ok := False;
+      ExitCode := 1;
+      Exit;
+    end;
+  end;
+  try
+    Result := RunSourceForJSON(Source, AFileName, AMeasureMemory);
   finally
     Source.Free;
   end;
@@ -917,7 +953,7 @@ begin
   else
     for I := 0 to AFiles.Count - 1 do
     begin
-      Results[I] := RunScriptFromFileForJSON(AFiles[I]);
+      Results[I] := RunScriptFromFileForJSON(AFiles[I], False);
       if not Results[I].Ok then
         ExitCode := 1;
     end;
@@ -951,7 +987,7 @@ begin
     if IsJsonOutput then
     begin
       JSONResults := PScriptLoaderJSONFileResultArray(AData);
-      JSONResults^[AIndex] := RunScriptFromFileForJSON(AFileName);
+      JSONResults^[AIndex] := RunScriptFromFileForJSON(AFileName, False);
       if not JSONResults^[AIndex].Ok then
         AErrorMessage := 'failed';
     end
@@ -1071,7 +1107,7 @@ begin
       Source := ReadSourceFromText(Input);
       try
         BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
-        JSONResult := RunSourceForJSON(Source, STDIN_FILE_NAME);
+        JSONResult := RunSourceForJSON(Source, STDIN_FILE_NAME, False);
         SetLength(JSONResults, 1);
         JSONResults[0] := JSONResult;
         if not JSONResult.Ok then

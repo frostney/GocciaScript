@@ -1161,6 +1161,7 @@ var
   Fr: TTestFilePerResult;
   Entry, FailedList: TStringBuilder;
   Timing: TCLIJSONTiming;
+  ErrorInfo: TCLIJSONErrorInfo;
   ErrorJSON: string;
 begin
   ALines.Add(Format('  "%s": [', [EscapeJSONString(APropertyName)]));
@@ -1199,7 +1200,11 @@ begin
       if Fr.ErrorMessage = '' then
         ErrorJSON := 'null'
       else
-        ErrorJSON := '{"message": "' + EscapeJSONString(Fr.ErrorMessage) + '"}';
+      begin
+        ErrorInfo := DefaultCLIJSONErrorInfo;
+        ErrorInfo.Message := Fr.ErrorMessage;
+        ErrorJSON := BuildCLIErrorObjectJSON(ErrorInfo);
+      end;
 
       Entry.Append('    {');
       Entry.Append(BuildCLIFileBaseJSON(Fr.FileName,
