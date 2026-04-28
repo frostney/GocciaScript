@@ -54,25 +54,6 @@ test("object async generator method delegates to sync iterable", async () => {
   expect(seen).toEqual([1, 2]);
 });
 
-test("object async generator method accepts async iterator object property", async () => {
-  const source = {
-    [Symbol.asyncIterator]: {
-      count: 0,
-      next() {
-        this.count = this.count + 1;
-        return Promise.resolve({ value: this.count, done: this.count > 2 });
-      },
-    },
-  };
-  const obj = {
-    async *numbers() {
-      yield* source;
-    },
-  };
-
-  await expect(obj.numbers().next()).resolves.toEqual({ value: 1, done: false });
-});
-
 test("object async generator yield delegation rejects non-callable async next", async () => {
   const source = {
     [Symbol.asyncIterator]() {

@@ -116,6 +116,21 @@ describe("for-await-of", () => {
     })()).rejects.toThrow(TypeError);
   });
 
+  test("non-callable async iterator property rejects with TypeError", async () => {
+    const source = {
+      [Symbol.asyncIterator]: {
+        next() {
+          return Promise.resolve({ value: 1, done: false });
+        },
+      },
+    };
+
+    await expect((async () => {
+      for await (const x of source) {
+      }
+    })()).rejects.toThrow(TypeError);
+  });
+
   test("rejected Promise values from sync iterables throw", async () => {
     const values = [Promise.resolve(1), Promise.reject("fail"), Promise.resolve(3)];
     const result = [];

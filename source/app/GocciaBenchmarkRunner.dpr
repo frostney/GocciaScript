@@ -194,6 +194,14 @@ type
     function GlobalBuiltins: TGocciaGlobalBuiltins; override;
   end;
 
+function IsBenchmarkHelperFile(const AFileName: string): Boolean;
+var
+  NormalizedPath: string;
+begin
+  NormalizedPath := StringReplace(AFileName, PathDelim, '/', [rfReplaceAll]);
+  Result := Pos('/helpers/', NormalizedPath) > 0;
+end;
+
 function RunRegisteredBenchmarks(const AEngine: TGocciaEngine): TGocciaObjectValue;
 var
   EmptyArgs: TGocciaArgumentsCollection;
@@ -735,6 +743,7 @@ procedure TBenchmarkRunnerApp.RunBenchmarks(const APaths: TStringList;
 var
   Files: TStringList;
   I, J, P, JobCount: Integer;
+  DiscoveredFiles: TStringList;
   Reporter: TBenchmarkReporter;
   Pool: TGocciaThreadPool;
   WorkerData: array of TBenchmarkFileResult;
@@ -747,7 +756,16 @@ begin
     for P := 0 to APaths.Count - 1 do
     begin
       if DirectoryExists(APaths[P]) then
-        Files.AddStrings(FindAllFiles(APaths[P], ScriptExtensions))
+      begin
+        DiscoveredFiles := FindAllFiles(APaths[P], ScriptExtensions);
+        try
+          for I := 0 to DiscoveredFiles.Count - 1 do
+            if not IsBenchmarkHelperFile(DiscoveredFiles[I]) then
+              Files.Add(DiscoveredFiles[I]);
+        finally
+          DiscoveredFiles.Free;
+        end;
+      end
       else if FileExists(APaths[P]) then
         Files.Add(APaths[P])
       else

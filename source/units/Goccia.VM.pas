@@ -3166,10 +3166,6 @@ begin
         Exit;
     end
     else if Assigned(IteratorMethod) and
-            not (IteratorMethod is TGocciaUndefinedLiteralValue) and
-            (IteratorMethod is TGocciaObjectValue) then
-      Exit(IteratorMethod)
-    else if Assigned(IteratorMethod) and
             not (IteratorMethod is TGocciaUndefinedLiteralValue) then
       ThrowTypeError('Async iterator method is not callable');
   end;
