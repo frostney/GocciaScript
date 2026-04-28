@@ -67,6 +67,10 @@ jobs:
           export PATH="$PREFIX/bin:$PWD/cross-binutils/bin:$PATH"
 
           echo "Target: ${{ matrix.target }}"
+          if [ ! -x "$PREFIX/bin/fpcres" ]; then
+            echo "::error::fpcres not found in restored FPC toolchain"
+            exit 1
+          fi
 
           CPU="${{ matrix.cpu }}"
           OS="${{ matrix.os }}"

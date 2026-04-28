@@ -10,7 +10,7 @@ on:
 env:
   FPC_VERSION: "3.2.2"
   BINUTILS_VERSION: "2.44"
-  CACHE_VERSION: "v32"
+  CACHE_VERSION: "v33"
 
 jobs:
   build:
@@ -101,6 +101,7 @@ jobs:
 
           # Copy native compiler and units
           cp "$(which instantfpc)" "$PREFIX/bin/"
+          cp "$(which fpcres)" "$PREFIX/bin/"
           cp "$BREW_FPC_LIB/ppca64" "$PREFIX/lib/fpc/${FPC_VERSION}/"
           cp -r "$BREW_FPC_LIB/units" "$PREFIX/lib/fpc/${FPC_VERSION}/"
 
