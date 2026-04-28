@@ -1,6 +1,6 @@
 /*---
 description: WeakSet integrates with Goccia.gc weak sweeping
-features: [WeakSet, Goccia]
+features: [WeakSet, Goccia, Symbol]
 ---*/
 
 const hasGoccia = typeof Goccia !== "undefined";
@@ -13,7 +13,7 @@ describe.runIf(hasGoccia)("WeakSet GC behavior", () => {
     expect(set.has(value)).toBe(true);
   });
 
-  test("sweeps unreachable entries without dropping live values", () => {
+  test("keeps live values after GC", () => {
     const liveValue = {};
     const set = new WeakSet();
     set.add(liveValue);
@@ -24,6 +24,41 @@ describe.runIf(hasGoccia)("WeakSet GC behavior", () => {
     })();
     Goccia.gc();
     expect(set.has(liveValue)).toBe(true);
-    expect(set.has({})).toBe(false);
+  });
+
+  test("constructor roots current add method across iterable user code", () => {
+    const original = WeakSet.prototype.add;
+    const value = {};
+    let calls = 0;
+
+    Object.defineProperty(WeakSet.prototype, "add", {
+      configurable: true,
+      get() {
+        return {
+          add(v) {
+            calls = calls + 1;
+            return original.call(this, v);
+          },
+        }.add;
+      },
+    });
+
+    try {
+      const iterable = {
+        [Symbol.iterator]() {
+          Goccia.gc();
+          return [value][Symbol.iterator]();
+        },
+      };
+      const set = new WeakSet(iterable);
+      expect(calls).toBe(1);
+      expect(set.has(value)).toBe(true);
+    } finally {
+      Object.defineProperty(WeakSet.prototype, "add", {
+        value: original,
+        writable: true,
+        configurable: true,
+      });
+    }
   });
 });

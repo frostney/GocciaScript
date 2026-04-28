@@ -182,7 +182,7 @@ var
   CallArgs: TGocciaArgumentsCollection;
   Done: Boolean;
   GC: TGarbageCollector;
-  WasSelfRooted, WasIteratorRooted: Boolean;
+  WasSelfRooted, WasAdderRooted, WasIteratorRooted: Boolean;
   WasNextRooted, WasKeyRooted, WasValueRooted: Boolean;
 
   function AddRootIfNeeded(const AValue: TGocciaValue): Boolean;
@@ -213,50 +213,55 @@ begin
     if not Assigned(Adder) or not Adder.IsCallable then
       ThrowTypeError(Format(SErrorValueNotFunction, [PROP_SET]), SSuggestWeakMapThisType);
 
-    Iterator := GetIteratorFromValue(InitArg);
-    if not Assigned(Iterator) then
-      ThrowTypeError(Format(SErrorWeakCollectionConstructorNotIterable, [CONSTRUCTOR_WEAK_MAP]), SSuggestNotIterable);
-
-    WasIteratorRooted := AddRootIfNeeded(Iterator);
+    WasAdderRooted := AddRootIfNeeded(Adder);
     try
-      try
-        NextValue := Iterator.DirectNext(Done);
-        while not Done do
-        begin
-          WasNextRooted := AddRootIfNeeded(NextValue);
-          try
-            if not (NextValue is TGocciaObjectValue) then
-              ThrowTypeError(SErrorWeakMapConstructorEntryNotObject, SSuggestIteratorProtocol);
+      Iterator := GetIteratorFromValue(InitArg);
+      if not Assigned(Iterator) then
+        ThrowTypeError(Format(SErrorWeakCollectionConstructorNotIterable, [CONSTRUCTOR_WEAK_MAP]), SSuggestNotIterable);
 
-            Key := TGocciaObjectValue(NextValue).GetProperty('0');
-            WasKeyRooted := AddRootIfNeeded(Key);
+      WasIteratorRooted := AddRootIfNeeded(Iterator);
+      try
+        try
+          NextValue := Iterator.DirectNext(Done);
+          while not Done do
+          begin
+            WasNextRooted := AddRootIfNeeded(NextValue);
             try
-              Value := TGocciaObjectValue(NextValue).GetProperty('1');
-              WasValueRooted := AddRootIfNeeded(Value);
+              if not (NextValue is TGocciaObjectValue) then
+                ThrowTypeError(SErrorWeakMapConstructorEntryNotObject, SSuggestIteratorProtocol);
+
+              Key := TGocciaObjectValue(NextValue).GetProperty('0');
+              WasKeyRooted := AddRootIfNeeded(Key);
               try
-                CallArgs := TGocciaArgumentsCollection.Create([Key, Value]);
+                Value := TGocciaObjectValue(NextValue).GetProperty('1');
+                WasValueRooted := AddRootIfNeeded(Value);
                 try
-                  InvokeCallable(Adder, CallArgs, Self);
+                  CallArgs := TGocciaArgumentsCollection.Create([Key, Value]);
+                  try
+                    InvokeCallable(Adder, CallArgs, Self);
+                  finally
+                    CallArgs.Free;
+                  end;
                 finally
-                  CallArgs.Free;
+                  RemoveRootIfNeeded(Value, WasValueRooted);
                 end;
               finally
-                RemoveRootIfNeeded(Value, WasValueRooted);
+                RemoveRootIfNeeded(Key, WasKeyRooted);
               end;
             finally
-              RemoveRootIfNeeded(Key, WasKeyRooted);
+              RemoveRootIfNeeded(NextValue, WasNextRooted);
             end;
-          finally
-            RemoveRootIfNeeded(NextValue, WasNextRooted);
+            NextValue := Iterator.DirectNext(Done);
           end;
-          NextValue := Iterator.DirectNext(Done);
+        except
+          CloseIteratorPreservingError(Iterator);
+          raise;
         end;
-      except
-        CloseIteratorPreservingError(Iterator);
-        raise;
+      finally
+        RemoveRootIfNeeded(Iterator, WasIteratorRooted);
       end;
     finally
-      RemoveRootIfNeeded(Iterator, WasIteratorRooted);
+      RemoveRootIfNeeded(Adder, WasAdderRooted);
     end;
   finally
     RemoveRootIfNeeded(Self, WasSelfRooted);

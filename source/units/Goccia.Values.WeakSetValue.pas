@@ -168,7 +168,7 @@ var
   CallArgs: TGocciaArgumentsCollection;
   Done: Boolean;
   GC: TGarbageCollector;
-  WasSelfRooted, WasIteratorRooted, WasNextRooted: Boolean;
+  WasSelfRooted, WasAdderRooted, WasIteratorRooted, WasNextRooted: Boolean;
 
   function AddRootIfNeeded(const AValue: TGocciaValue): Boolean;
   begin
@@ -198,35 +198,40 @@ begin
     if not Assigned(Adder) or not Adder.IsCallable then
       ThrowTypeError(Format(SErrorValueNotFunction, ['add']), SSuggestWeakSetThisType);
 
-    Iterator := GetIteratorFromValue(InitArg);
-    if not Assigned(Iterator) then
-      ThrowTypeError(Format(SErrorWeakCollectionConstructorNotIterable, [CONSTRUCTOR_WEAK_SET]), SSuggestNotIterable);
-
-    WasIteratorRooted := AddRootIfNeeded(Iterator);
+    WasAdderRooted := AddRootIfNeeded(Adder);
     try
+      Iterator := GetIteratorFromValue(InitArg);
+      if not Assigned(Iterator) then
+        ThrowTypeError(Format(SErrorWeakCollectionConstructorNotIterable, [CONSTRUCTOR_WEAK_SET]), SSuggestNotIterable);
+
+      WasIteratorRooted := AddRootIfNeeded(Iterator);
       try
-        NextValue := Iterator.DirectNext(Done);
-        while not Done do
-        begin
-          WasNextRooted := AddRootIfNeeded(NextValue);
-          try
-            CallArgs := TGocciaArgumentsCollection.Create([NextValue]);
-            try
-              InvokeCallable(Adder, CallArgs, Self);
-            finally
-              CallArgs.Free;
-            end;
-          finally
-            RemoveRootIfNeeded(NextValue, WasNextRooted);
-          end;
+        try
           NextValue := Iterator.DirectNext(Done);
+          while not Done do
+          begin
+            WasNextRooted := AddRootIfNeeded(NextValue);
+            try
+              CallArgs := TGocciaArgumentsCollection.Create([NextValue]);
+              try
+                InvokeCallable(Adder, CallArgs, Self);
+              finally
+                CallArgs.Free;
+              end;
+            finally
+              RemoveRootIfNeeded(NextValue, WasNextRooted);
+            end;
+            NextValue := Iterator.DirectNext(Done);
+          end;
+        except
+          CloseIteratorPreservingError(Iterator);
+          raise;
         end;
-      except
-        CloseIteratorPreservingError(Iterator);
-        raise;
+      finally
+        RemoveRootIfNeeded(Iterator, WasIteratorRooted);
       end;
     finally
-      RemoveRootIfNeeded(Iterator, WasIteratorRooted);
+      RemoveRootIfNeeded(Adder, WasAdderRooted);
     end;
   finally
     RemoveRootIfNeeded(Self, WasSelfRooted);

@@ -1,6 +1,6 @@
 /*---
 description: WeakMap integrates with Goccia.gc weak tracing
-features: [WeakMap, Goccia]
+features: [WeakMap, Goccia, Symbol]
 ---*/
 
 const hasGoccia = typeof Goccia !== "undefined";
@@ -16,7 +16,7 @@ describe.runIf(hasGoccia)("WeakMap GC behavior", () => {
     expect(map.get(key).marker).toBe(123);
   });
 
-  test("sweeps unreachable entries without dropping live keyed values", () => {
+  test("keeps live keyed values after GC", () => {
     const liveKey = {};
     const map = new WeakMap();
     map.set(liveKey, { marker: "live" });
@@ -27,6 +27,41 @@ describe.runIf(hasGoccia)("WeakMap GC behavior", () => {
     })();
     Goccia.gc();
     expect(map.get(liveKey).marker).toBe("live");
-    expect(map.has({})).toBe(false);
+  });
+
+  test("constructor roots current set method across iterable user code", () => {
+    const original = WeakMap.prototype.set;
+    const key = {};
+    let calls = 0;
+
+    Object.defineProperty(WeakMap.prototype, "set", {
+      configurable: true,
+      get() {
+        return {
+          set(k, v) {
+            calls = calls + 1;
+            return original.call(this, k, v);
+          },
+        }.set;
+      },
+    });
+
+    try {
+      const iterable = {
+        [Symbol.iterator]() {
+          Goccia.gc();
+          return [[key, "value"]][Symbol.iterator]();
+        },
+      };
+      const map = new WeakMap(iterable);
+      expect(calls).toBe(1);
+      expect(map.get(key)).toBe("value");
+    } finally {
+      Object.defineProperty(WeakMap.prototype, "set", {
+        value: original,
+        writable: true,
+        configurable: true,
+      });
+    }
   });
 });

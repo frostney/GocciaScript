@@ -18,6 +18,25 @@ test("WeakMap constructor rejects non-iterables", () => {
   expect(() => new WeakMap({})).toThrow(TypeError);
 });
 
+test("WeakMap constructor rejects invalid iterator protocols", () => {
+  expect(() => new WeakMap({ [Symbol.iterator]: 1 })).toThrow(TypeError);
+  expect(() => new WeakMap({
+    [Symbol.iterator]() {
+      return 1;
+    },
+  })).toThrow(TypeError);
+  expect(() => new WeakMap({
+    [Symbol.iterator]() {
+      return {};
+    },
+  })).toThrow(TypeError);
+  expect(() => new WeakMap({
+    [Symbol.iterator]() {
+      return { next: 1 };
+    },
+  })).toThrow(TypeError);
+});
+
 test("WeakMap constructor with object-key entries", () => {
   const a = {};
   const b = {};

@@ -14,9 +14,14 @@ procedure CloseIteratorPreservingError(const AIterator: TGocciaIteratorValue);
 implementation
 
 uses
+  SysUtils,
+
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.Generic,
@@ -27,9 +32,25 @@ function GetIteratorFromValue(const AValue: TGocciaValue): TGocciaIteratorValue;
 var
   IteratorMethod, IteratorObj, NextMethod: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
-  WasAlreadyRooted: Boolean;
+  WasSourceRooted, WasMethodRooted, WasIteratorRooted: Boolean;
   GC: TGarbageCollector;
+
+  function AddRootIfNeeded(const AValue: TGocciaValue): Boolean;
+  begin
+    Result := Assigned(GC) and Assigned(AValue) and not GC.IsTempRoot(AValue);
+    if Result then
+      GC.AddTempRoot(AValue);
+  end;
+
+  procedure RemoveRootIfNeeded(const AValue: TGocciaValue; const AWasAdded: Boolean);
+  begin
+    if AWasAdded then
+      GC.RemoveTempRoot(AValue);
+  end;
+
 begin
+  GC := TGarbageCollector.Instance;
+
   if AValue is TGocciaIteratorValue then
   begin
     Result := TGocciaIteratorValue(AValue);
@@ -39,12 +60,13 @@ begin
   if AValue is TGocciaObjectValue then
   begin
     IteratorMethod := TGocciaObjectValue(AValue).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
-    if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
+    if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) then
     begin
-      GC := TGarbageCollector.Instance;
-      WasAlreadyRooted := Assigned(GC) and GC.IsTempRoot(AValue);
-      if Assigned(GC) and not WasAlreadyRooted then
-        GC.AddTempRoot(AValue);
+      if not IteratorMethod.IsCallable then
+        ThrowTypeError(Format(SErrorValueNotFunction, ['[Symbol.iterator]']), SSuggestIteratorProtocol);
+
+      WasSourceRooted := AddRootIfNeeded(AValue);
+      WasMethodRooted := AddRootIfNeeded(IteratorMethod);
       try
         CallArgs := TGocciaArgumentsCollection.Create;
         try
@@ -53,29 +75,42 @@ begin
           CallArgs.Free;
         end;
       finally
-        if Assigned(GC) and not WasAlreadyRooted then
-          GC.RemoveTempRoot(AValue);
+        RemoveRootIfNeeded(IteratorMethod, WasMethodRooted);
+        RemoveRootIfNeeded(AValue, WasSourceRooted);
       end;
+
       if IteratorObj is TGocciaIteratorValue then
       begin
         Result := TGocciaIteratorValue(IteratorObj);
         Exit;
       end;
-      if IteratorObj is TGocciaObjectValue then
-      begin
-        NextMethod := IteratorObj.GetProperty(PROP_NEXT);
-        if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
-        begin
-          Result := TGocciaGenericIteratorValue.Create(IteratorObj);
-          Exit;
-        end;
+
+      if not (IteratorObj is TGocciaObjectValue) then
+        ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
+
+      WasIteratorRooted := AddRootIfNeeded(IteratorObj);
+      try
+        NextMethod := TGocciaObjectValue(IteratorObj).GetProperty(PROP_NEXT);
+        if not Assigned(NextMethod) or (NextMethod is TGocciaUndefinedLiteralValue) or
+           not NextMethod.IsCallable then
+          ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
+
+        Result := TGocciaGenericIteratorValue.Create(IteratorObj);
+      finally
+        RemoveRootIfNeeded(IteratorObj, WasIteratorRooted);
       end;
+      Exit;
     end;
   end;
 
   if AValue is TGocciaStringLiteralValue then
   begin
-    Result := TGocciaStringIteratorValue.Create(AValue);
+    WasSourceRooted := AddRootIfNeeded(AValue);
+    try
+      Result := TGocciaStringIteratorValue.Create(AValue);
+    finally
+      RemoveRootIfNeeded(AValue, WasSourceRooted);
+    end;
     Exit;
   end;
 

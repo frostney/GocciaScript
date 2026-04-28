@@ -18,6 +18,25 @@ test("WeakSet constructor rejects non-iterables", () => {
   expect(() => new WeakSet({})).toThrow(TypeError);
 });
 
+test("WeakSet constructor rejects invalid iterator protocols", () => {
+  expect(() => new WeakSet({ [Symbol.iterator]: 1 })).toThrow(TypeError);
+  expect(() => new WeakSet({
+    [Symbol.iterator]() {
+      return 1;
+    },
+  })).toThrow(TypeError);
+  expect(() => new WeakSet({
+    [Symbol.iterator]() {
+      return {};
+    },
+  })).toThrow(TypeError);
+  expect(() => new WeakSet({
+    [Symbol.iterator]() {
+      return { next: 1 };
+    },
+  })).toThrow(TypeError);
+});
+
 test("WeakSet constructor with object values", () => {
   const a = {};
   const b = {};
