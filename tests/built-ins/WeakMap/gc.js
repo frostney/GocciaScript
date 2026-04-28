@@ -64,4 +64,28 @@ describe.runIf(hasGoccia)("WeakMap GC behavior", () => {
       });
     }
   });
+
+  test("constructor roots iterable while reading current set method", () => {
+    const original = WeakMap.prototype.set;
+    const key = {};
+
+    Object.defineProperty(WeakMap.prototype, "set", {
+      configurable: true,
+      get() {
+        Goccia.gc();
+        return original;
+      },
+    });
+
+    try {
+      const map = new WeakMap((() => [[key, "value"]])());
+      expect(map.get(key)).toBe("value");
+    } finally {
+      Object.defineProperty(WeakMap.prototype, "set", {
+        value: original,
+        writable: true,
+        configurable: true,
+      });
+    }
+  });
 });

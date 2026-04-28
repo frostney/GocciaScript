@@ -168,7 +168,7 @@ var
   CallArgs: TGocciaArgumentsCollection;
   Done: Boolean;
   GC: TGarbageCollector;
-  WasSelfRooted, WasAdderRooted, WasIteratorRooted, WasNextRooted: Boolean;
+  WasSelfRooted, WasInitRooted, WasAdderRooted, WasIteratorRooted, WasNextRooted: Boolean;
 
   function AddRootIfNeeded(const AValue: TGocciaValue): Boolean;
   begin
@@ -193,6 +193,7 @@ begin
 
   GC := TGarbageCollector.Instance;
   WasSelfRooted := AddRootIfNeeded(Self);
+  WasInitRooted := AddRootIfNeeded(InitArg);
   try
     Adder := GetProperty('add');
     if not Assigned(Adder) or not Adder.IsCallable then
@@ -234,6 +235,7 @@ begin
       RemoveRootIfNeeded(Adder, WasAdderRooted);
     end;
   finally
+    RemoveRootIfNeeded(InitArg, WasInitRooted);
     RemoveRootIfNeeded(Self, WasSelfRooted);
   end;
 end;

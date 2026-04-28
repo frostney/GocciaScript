@@ -61,4 +61,28 @@ describe.runIf(hasGoccia)("WeakSet GC behavior", () => {
       });
     }
   });
+
+  test("constructor roots iterable while reading current add method", () => {
+    const original = WeakSet.prototype.add;
+    const value = {};
+
+    Object.defineProperty(WeakSet.prototype, "add", {
+      configurable: true,
+      get() {
+        Goccia.gc();
+        return original;
+      },
+    });
+
+    try {
+      const set = new WeakSet((() => [value])());
+      expect(set.has(value)).toBe(true);
+    } finally {
+      Object.defineProperty(WeakSet.prototype, "add", {
+        value: original,
+        writable: true,
+        configurable: true,
+      });
+    }
+  });
 });
