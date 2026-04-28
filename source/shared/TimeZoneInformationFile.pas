@@ -38,6 +38,7 @@ const
   TIMEZONE_INFORMATION_TYPE_INFORMATION_OFFSET_SIZE = 4;
   TIMEZONE_INFORMATION_HEADER_COUNT_OFFSET = 20;
   TIMEZONE_INFORMATION_LEAP_V1_RECORD_SIZE = 8;
+  TIMEZONE_INFORMATION_LEAP_V2_RECORD_SIZE = 12;
   TIMEZONE_INFORMATION_MAGIC_T = Ord('T');
   TIMEZONE_INFORMATION_MAGIC_Z = Ord('Z');
   TIMEZONE_INFORMATION_MAGIC_I = Ord('i');
@@ -68,12 +69,65 @@ begin
   Result := (Int64(High32) shl 32) or Int64(Low32);
 end;
 
+function HasBytesAvailable(const ABuffer: TBytes; const AOffset, ALength: Integer): Boolean;
+begin
+  Result := False;
+
+  if (AOffset < 0) or (ALength < 0) then
+    Exit;
+
+  if AOffset > Length(ABuffer) then
+    Exit;
+
+  Result := ALength <= Length(ABuffer) - AOffset;
+end;
+
 function HasTimeZoneInformationMagic(const ABuffer: TBytes; const AOffset: Integer): Boolean;
 begin
-  Result := (ABuffer[AOffset] = TIMEZONE_INFORMATION_MAGIC_T) and
+  Result := HasBytesAvailable(ABuffer, AOffset, TIMEZONE_INFORMATION_MAGIC_LENGTH) and
+            (ABuffer[AOffset] = TIMEZONE_INFORMATION_MAGIC_T) and
             (ABuffer[AOffset + 1] = TIMEZONE_INFORMATION_MAGIC_Z) and
             (ABuffer[AOffset + 2] = TIMEZONE_INFORMATION_MAGIC_I) and
             (ABuffer[AOffset + 3] = TIMEZONE_INFORMATION_MAGIC_F);
+end;
+
+function AreTimeZoneInformationCountsValid(const ATimeCount, ATypeCount, ACharacterCount,
+  ALeapCount, AIsStandardCount, AIsUtCount: Int32): Boolean;
+begin
+  Result := (ATimeCount >= 0) and
+            (ATypeCount >= 0) and
+            (ACharacterCount >= 0) and
+            (ALeapCount >= 0) and
+            (AIsStandardCount >= 0) and
+            (AIsUtCount >= 0);
+end;
+
+function TryComputeTimeZoneInformationDataSize(const ATimeCount, ATypeCount,
+  ACharacterCount, ALeapCount, AIsStandardCount, AIsUtCount: Int32;
+  const ATransitionSize, ALeapRecordSize: Integer; out ADataSize: Integer): Boolean;
+var
+  DataSize: Int64;
+begin
+  Result := False;
+  ADataSize := 0;
+
+  if not AreTimeZoneInformationCountsValid(ATimeCount, ATypeCount, ACharacterCount,
+    ALeapCount, AIsStandardCount, AIsUtCount) then
+    Exit;
+
+  DataSize := Int64(ATimeCount) * ATransitionSize +
+              Int64(ATimeCount) * TIMEZONE_INFORMATION_TYPE_INDEX_SIZE +
+              Int64(ATypeCount) * TIMEZONE_INFORMATION_TYPE_INFORMATION_SIZE +
+              Int64(ACharacterCount) +
+              Int64(ALeapCount) * ALeapRecordSize +
+              Int64(AIsStandardCount) +
+              Int64(AIsUtCount);
+
+  if (DataSize < 0) or (DataSize > High(Integer)) then
+    Exit;
+
+  ADataSize := Integer(DataSize);
+  Result := True;
 end;
 
 function TryParseTimeZoneInformationFile(const AIdentifier: string;
@@ -82,7 +136,7 @@ var
   Offset: Integer;
   Version: Char;
   TimeCount, TypeCount, CharacterCount, LeapCount, IsStandardCount, IsUtCount: Int32;
-  V1DataSize: Integer;
+  V1DataSize, DataBlockSize: Integer;
   TransitionTimes: array of Int64;
   TypeIndices: array of Byte;
   UtcOffsets: array of Int32;
@@ -91,7 +145,7 @@ var
 begin
   Result := False;
 
-  if Length(ABytes) < TIMEZONE_INFORMATION_MAGIC_LENGTH + TIMEZONE_INFORMATION_HEADER_SIZE then
+  if not HasBytesAvailable(ABytes, 0, TIMEZONE_INFORMATION_HEADER_SIZE) then
     Exit;
 
   if not HasTimeZoneInformationMagic(ABytes, 0) then
@@ -108,19 +162,19 @@ begin
   TypeCount := ReadBigEndianInt32(ABytes, Offset); Inc(Offset, TIMEZONE_INFORMATION_COUNT_SIZE);
   CharacterCount := ReadBigEndianInt32(ABytes, Offset); Inc(Offset, TIMEZONE_INFORMATION_COUNT_SIZE);
 
-  V1DataSize := TimeCount * TIMEZONE_INFORMATION_V1_TRANSITION_SIZE +
-                TimeCount * TIMEZONE_INFORMATION_TYPE_INDEX_SIZE +
-                TypeCount * TIMEZONE_INFORMATION_TYPE_INFORMATION_SIZE +
-                CharacterCount +
-                LeapCount * TIMEZONE_INFORMATION_LEAP_V1_RECORD_SIZE +
-                IsStandardCount +
-                IsUtCount;
+  if not TryComputeTimeZoneInformationDataSize(TimeCount, TypeCount, CharacterCount,
+    LeapCount, IsStandardCount, IsUtCount, TIMEZONE_INFORMATION_V1_TRANSITION_SIZE,
+    TIMEZONE_INFORMATION_LEAP_V1_RECORD_SIZE, V1DataSize) then
+    Exit;
+
+  if not HasBytesAvailable(ABytes, TIMEZONE_INFORMATION_HEADER_SIZE, V1DataSize) then
+    Exit;
 
   if UseV2 then
   begin
     Offset := TIMEZONE_INFORMATION_HEADER_SIZE + V1DataSize;
 
-    if Offset + TIMEZONE_INFORMATION_HEADER_SIZE > Length(ABytes) then
+    if not HasBytesAvailable(ABytes, Offset, TIMEZONE_INFORMATION_HEADER_SIZE) then
       Exit;
 
     if not HasTimeZoneInformationMagic(ABytes, Offset) then
@@ -134,9 +188,12 @@ begin
     TypeCount := ReadBigEndianInt32(ABytes, Offset); Inc(Offset, TIMEZONE_INFORMATION_COUNT_SIZE);
     CharacterCount := ReadBigEndianInt32(ABytes, Offset); Inc(Offset, TIMEZONE_INFORMATION_COUNT_SIZE);
 
-    if Offset + TimeCount * TIMEZONE_INFORMATION_V2_TRANSITION_SIZE +
-       TimeCount * TIMEZONE_INFORMATION_TYPE_INDEX_SIZE +
-       TypeCount * TIMEZONE_INFORMATION_TYPE_INFORMATION_SIZE > Length(ABytes) then
+    if not TryComputeTimeZoneInformationDataSize(TimeCount, TypeCount, CharacterCount,
+      LeapCount, IsStandardCount, IsUtCount, TIMEZONE_INFORMATION_V2_TRANSITION_SIZE,
+      TIMEZONE_INFORMATION_LEAP_V2_RECORD_SIZE, DataBlockSize) then
+      Exit;
+
+    if not HasBytesAvailable(ABytes, Offset, DataBlockSize) then
       Exit;
 
     SetLength(TransitionTimes, TimeCount);
@@ -150,9 +207,7 @@ begin
   begin
     Offset := TIMEZONE_INFORMATION_HEADER_SIZE;
 
-    if Offset + TimeCount * TIMEZONE_INFORMATION_V1_TRANSITION_SIZE +
-       TimeCount * TIMEZONE_INFORMATION_TYPE_INDEX_SIZE +
-       TypeCount * TIMEZONE_INFORMATION_TYPE_INFORMATION_SIZE > Length(ABytes) then
+    if not HasBytesAvailable(ABytes, Offset, V1DataSize) then
       Exit;
 
     SetLength(TransitionTimes, TimeCount);

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const fs = require("fs");
+const http = require("http");
 const https = require("https");
 const os = require("os");
 const path = require("path");
@@ -87,7 +88,14 @@ function isUrl(source) {
 function downloadFile(url, outputFile) {
   return new Promise((resolve, reject) => {
     function get(currentUrl) {
-      https
+      const protocol = new URL(currentUrl).protocol;
+      const client = protocol === "http:" ? http : protocol === "https:" ? https : null;
+      if (!client) {
+        reject(new Error(`Unsupported URL protocol ${protocol} while downloading ${currentUrl}`));
+        return;
+      }
+
+      client
         .get(currentUrl, (response) => {
           if (
             response.statusCode >= 300 &&
@@ -163,21 +171,26 @@ async function prepareZoneInfoSource(source) {
   const sourceDirectory = path.join(temporaryDirectory, "source");
   const zoneInfoDirectory = path.join(temporaryDirectory, "zoneinfo");
 
-  if (isUrl(source)) {
-    await downloadFile(source, tarballPath);
-  } else {
-    fs.copyFileSync(path.resolve(source), tarballPath);
+  try {
+    if (isUrl(source)) {
+      await downloadFile(source, tarballPath);
+    } else {
+      fs.copyFileSync(path.resolve(source), tarballPath);
+    }
+
+    extractTarball(tarballPath, sourceDirectory);
+    compileIanaSource(sourceDirectory, zoneInfoDirectory);
+
+    return {
+      zoneInfoDir: zoneInfoDirectory,
+      version: readVersion(sourceDirectory),
+      sourceDescription: source,
+      cleanup: () => fs.rmSync(temporaryDirectory, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+    throw error;
   }
-
-  extractTarball(tarballPath, sourceDirectory);
-  compileIanaSource(sourceDirectory, zoneInfoDirectory);
-
-  return {
-    zoneInfoDir: zoneInfoDirectory,
-    version: readVersion(sourceDirectory),
-    sourceDescription: source,
-    cleanup: () => fs.rmSync(temporaryDirectory, { recursive: true, force: true }),
-  };
 }
 
 function shouldSkipRelativePath(relativePath, directoryEntry) {
