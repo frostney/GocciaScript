@@ -37,10 +37,11 @@ Temporal.ZonedDateTime  // Date + time + timezone
 `Temporal.ZonedDateTime` loads IANA timezone data from TZif zoneinfo data. Lookup order is:
 
 1. `GOCCIA_TZDIR` when set
-2. embedded generated tzdata
-3. system zoneinfo directories (`/usr/share/zoneinfo`, `/usr/share/zoneinfo.default`)
+2. system zoneinfo directories on Unix-like platforms (`/usr/share/zoneinfo`, `/usr/share/zoneinfo.default`)
+3. Windows ICU on Windows 10 and newer
+4. embedded generated TZif resource data
 
-The embedded data is generated from the upstream IANA timezone data distribution, so named IANA zones and DST transitions work in single-binary builds on platforms without a system zoneinfo database, including Windows.
+The embedded data is generated from the upstream IANA timezone data distribution and linked as a FreePascal `.res` resource. This keeps named IANA zones and DST transitions available in single-binary builds even when neither system zoneinfo nor Windows ICU can provide the requested zone. Define `GOCCIA_TEMPORAL_NO_EMBEDDED_TZDATA` at compile time to omit the embedded fallback.
 
 ## Temporal.Duration
 

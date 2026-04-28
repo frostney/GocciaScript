@@ -14,3 +14,4 @@
 
 # Mark generated Pascal data so review tools can collapse it
 source/generated/** linguist-generated=true
+source/generated/*.res binary

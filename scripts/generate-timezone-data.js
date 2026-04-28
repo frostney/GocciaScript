@@ -30,9 +30,11 @@ const TIME_ZONE_SOURCE_FILES = [
 const SKIPPED_ROOT_DIRECTORIES = new Set(["posix", "right"]);
 const SKIPPED_FILES = new Set(["localtime", "posixrules"]);
 const TZIF_MAGIC = Buffer.from("TZif");
-const BYTES_PER_WORD = 8;
-const WORDS_PER_LINE = 4;
-const ENTRIES_PER_LINE = 1;
+const RESOURCE_NAME = "GOCCIA_TZDATA";
+const RESOURCE_MAGIC = Buffer.from("GOCCIATZ", "ascii");
+const RESOURCE_FORMAT_VERSION = 1;
+const RESOURCE_HEADER_SIZE = RESOURCE_MAGIC.length + 6 * 4;
+const RESOURCE_ENTRY_SIZE = 4 * 4;
 
 function usage() {
   console.error("Usage: node scripts/generate-timezone-data.js [zoneinfo-dir|tzdata.tar.gz|url] [output-file]");
@@ -48,10 +50,6 @@ function parseArguments() {
   const outputFile = process.argv[3] ? path.resolve(process.argv[3]) : DEFAULT_OUTPUT;
 
   return { source, outputFile };
-}
-
-function pascalString(value) {
-  return `'${value.replaceAll("'", "''")}'`;
 }
 
 function isTimeZoneInformationFile(buffer) {
@@ -279,59 +277,83 @@ function packEntries(entries) {
   };
 }
 
-function wordAt(buffer, offset) {
-  let word = 0n;
-  for (let index = 0; index < BYTES_PER_WORD; index += 1) {
-    const byte = offset + index < buffer.length ? buffer[offset + index] : 0;
-    word |= BigInt(byte) << BigInt(index * 8);
+function writeUInt32LE(buffer, value, offset) {
+  if (value < 0 || value > 0xffffffff) {
+    throw new Error(`Resource integer ${value} is outside UInt32 range`);
   }
-  return word;
+
+  buffer.writeUInt32LE(value, offset);
 }
 
-function formatWord(word) {
-  const signedLimit = 1n << 63n;
-  const wordLimit = 1n << 64n;
-  if (word >= signedLimit) {
-    return (word - wordLimit).toString();
+function buildResourceContainer(version, entries, blob) {
+  const versionBuffer = Buffer.from(version, "utf8");
+  const nameBuffers = entries.map((entry) => Buffer.from(entry.name, "utf8"));
+  const namesByteCount = nameBuffers.reduce((total, nameBuffer) => total + nameBuffer.length, 0);
+  const entryTableByteCount = entries.length * RESOURCE_ENTRY_SIZE;
+  const totalByteCount =
+    RESOURCE_HEADER_SIZE +
+    versionBuffer.length +
+    entryTableByteCount +
+    namesByteCount +
+    blob.length;
+
+  const resource = Buffer.alloc(totalByteCount);
+  let offset = 0;
+
+  RESOURCE_MAGIC.copy(resource, offset);
+  offset += RESOURCE_MAGIC.length;
+  writeUInt32LE(resource, RESOURCE_FORMAT_VERSION, offset); offset += 4;
+  writeUInt32LE(resource, versionBuffer.length, offset); offset += 4;
+  writeUInt32LE(resource, entries.length, offset); offset += 4;
+  writeUInt32LE(resource, namesByteCount, offset); offset += 4;
+  writeUInt32LE(resource, blob.length, offset); offset += 4;
+  writeUInt32LE(resource, 0, offset); offset += 4;
+
+  versionBuffer.copy(resource, offset);
+  offset += versionBuffer.length;
+
+  let nameOffset = 0;
+  const namesOffset = RESOURCE_HEADER_SIZE + versionBuffer.length + entryTableByteCount;
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    const nameBuffer = nameBuffers[index];
+    writeUInt32LE(resource, nameOffset, offset); offset += 4;
+    writeUInt32LE(resource, nameBuffer.length, offset); offset += 4;
+    writeUInt32LE(resource, entry.offset, offset); offset += 4;
+    writeUInt32LE(resource, entry.length, offset); offset += 4;
+    nameBuffer.copy(resource, namesOffset + nameOffset);
+    nameOffset += nameBuffer.length;
   }
 
-  return word.toString();
+  blob.copy(resource, namesOffset + namesByteCount);
+  return resource;
 }
 
-function formatWords(blob) {
-  const words = [];
-  for (let offset = 0; offset < blob.length; offset += BYTES_PER_WORD) {
-    words.push(formatWord(wordAt(blob, offset)));
-  }
-
-  if (words.length === 0) {
-    return "    0";
-  }
-
-  const lines = [];
-  for (let index = 0; index < words.length; index += WORDS_PER_LINE) {
-    lines.push(`    ${words.slice(index, index + WORDS_PER_LINE).join(", ")}`);
-  }
-  return lines.join(",\n");
+function resourceFileForOutput(outputFile) {
+  return outputFile.replace(/\.pas$/i, ".res");
 }
 
-function formatEntries(entries) {
-  const lines = [];
-  for (let index = 0; index < entries.length; index += ENTRIES_PER_LINE) {
-    const chunk = entries.slice(index, index + ENTRIES_PER_LINE);
-    lines.push(
-      `    ${chunk
-        .map((entry) => `(Name: ${pascalString(entry.name)}; Offset: ${entry.offset}; Length: ${entry.length})`)
-        .join(", ")}`,
+function generateResourceFile(resourceBytes, outputResourceFile) {
+  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "goccia-tzresource-"));
+  const resourceDataFile = path.join(temporaryDirectory, "timezone-data.bin");
+  const resourceScriptFile = path.join(temporaryDirectory, "timezone-data.rc");
+
+  try {
+    fs.writeFileSync(resourceDataFile, resourceBytes);
+    fs.writeFileSync(
+      resourceScriptFile,
+      `${RESOURCE_NAME} RCDATA "${resourceDataFile.replaceAll("\\", "\\\\")}"\n`,
+      "utf8",
     );
+    execFileSync("fpcres", ["-of", "res", resourceScriptFile, "-o", outputResourceFile], {
+      stdio: "inherit",
+    });
+  } finally {
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
   }
-  return lines.join(",\n");
 }
 
-function generatePascalUnit(sourceDescription, version, entries, blob) {
-  const wordCount = Math.max(1, Math.ceil(blob.length / BYTES_PER_WORD));
-  const entryCount = entries.length;
-
+function generatePascalUnit(sourceDescription, version, entryCount, blobByteCount) {
   return `unit Generated.TimeZoneData;
 
 {$I Goccia.inc}
@@ -339,29 +361,21 @@ function generatePascalUnit(sourceDescription, version, entries, blob) {
 // Generated by scripts/generate-timezone-data.js
 // Source: ${sourceDescription}
 // IANA tzdata version: ${version}
+// Resource: Generated.TimeZoneData.res
 
 interface
 
-type
-  TGeneratedTimeZoneDataEntry = record
-    Name: string;
-    Offset: Integer;
-    Length: Integer;
-  end;
-
 const
-  GeneratedTimeZoneDataVersion = ${pascalString(version)};
-  GeneratedTimeZoneDataWordSize = ${BYTES_PER_WORD};
+  GeneratedTimeZoneDataVersion = '${version.replaceAll("'", "''")}';
+  GeneratedTimeZoneDataResourceName = '${RESOURCE_NAME}';
   GeneratedTimeZoneDataEntryCount = ${entryCount};
-  GeneratedTimeZoneDataBlobByteCount = ${blob.length};
-  GeneratedTimeZoneDataWords: array[0..${wordCount - 1}] of Int64 = (
-${formatWords(blob)}
-  );
-  GeneratedTimeZoneDataEntries: array[0..${entryCount - 1}] of TGeneratedTimeZoneDataEntry = (
-${formatEntries(entries)}
-  );
+  GeneratedTimeZoneDataBlobByteCount = ${blobByteCount};
 
 implementation
+
+{$IFDEF GOCCIA_TEMPORAL_EMBEDDED_TZDATA}
+{$R Generated.TimeZoneData.res}
+{$ENDIF}
 
 end.
 `;
@@ -379,18 +393,25 @@ async function main() {
     }
 
     const { indexedEntries, blob } = packEntries(entries);
-    const pascal = generatePascalUnit(
-      preparedSource.sourceDescription,
+    const resource = buildResourceContainer(
       preparedSource.version,
       indexedEntries,
       blob,
     );
+    const pascal = generatePascalUnit(
+      preparedSource.sourceDescription,
+      preparedSource.version,
+      indexedEntries.length,
+      blob.length,
+    );
+    const outputResourceFile = resourceFileForOutput(outputFile);
 
     fs.mkdirSync(path.dirname(outputFile), { recursive: true });
     fs.writeFileSync(outputFile, pascal, "utf8");
+    generateResourceFile(resource, outputResourceFile);
 
     console.log(
-      `Generated ${path.relative(REPO_ROOT, outputFile)} with ${indexedEntries.length} zones, ${blob.length} bytes, tzdata ${preparedSource.version}`,
+      `Generated ${path.relative(REPO_ROOT, outputFile)} and ${path.relative(REPO_ROOT, outputResourceFile)} with ${indexedEntries.length} zones, ${blob.length} bytes, tzdata ${preparedSource.version}`,
     );
   } finally {
     preparedSource.cleanup();

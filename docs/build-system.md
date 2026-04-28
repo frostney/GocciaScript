@@ -398,7 +398,8 @@ GocciaScript/
 │   │   ├── BaseMap.pas       # Base map type
 │   │   └── JSONParser.pas    # JSON parser
 │   ├── generated/        # Generated runtime data
-│   │   └── Generated.TimeZoneData.pas # Embedded IANA timezone data
+│   │   ├── Generated.TimeZoneData.pas # Timezone resource metadata/link unit
+│   │   └── Generated.TimeZoneData.res # Embedded IANA TZif resource
 │   └── units/            # Goccia engine units
 │       ├── Goccia.inc    # Goccia compiler directives (includes Shared.inc)
 │       ├── Goccia.Bytecode*.pas # Bytecode definitions, templates, modules, binary I/O
@@ -414,7 +415,11 @@ GocciaScript/
 
 ### Generated Timezone Data
 
-`source/generated/Generated.TimeZoneData.pas` is produced by `scripts/generate-timezone-data.js`. By default, the generator downloads the latest IANA `tzdata-latest.tar.gz`, compiles it with `zic`, and embeds the resulting TZif files into a generated Pascal unit. Pass a local zoneinfo directory, a local `tzdata` tarball, or an explicit URL to generate from a different source.
+`source/generated/Generated.TimeZoneData.pas` and `source/generated/Generated.TimeZoneData.res` are produced by `scripts/generate-timezone-data.js`. By default, the generator downloads the latest IANA `tzdata-latest.tar.gz`, compiles it with `zic`, packs the resulting TZif files into a single resource payload, and emits a small Pascal unit that links the resource. Pass a local zoneinfo directory, a local `tzdata` tarball, or an explicit URL to generate from a different source.
+
+The generator requires `zic`, `tar`, and `fpcres`. `fpcres` writes the FreePascal resource consumed by `{$R Generated.TimeZoneData.res}`.
+
+Temporal embeds this generated timezone resource by default through `source/units/Goccia.inc`. Define `GOCCIA_TEMPORAL_NO_EMBEDDED_TZDATA` to build without the resource fallback.
 
 ## CI/CD
 
