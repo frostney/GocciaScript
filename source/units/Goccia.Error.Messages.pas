@@ -132,6 +132,7 @@ resourcestring
   // Temporal API errors — Instant
   SErrorTemporalInstantRequiresEpoch = 'Temporal.Instant requires epochNanoseconds argument';
   SErrorTemporalInstantRequiresBigInt = 'Temporal.Instant epochNanoseconds must be a BigInt';
+  SErrorTemporalInstantOutOfRange = 'Temporal.Instant epochNanoseconds out of range';
   SErrorInvalidISOInstant = 'Invalid ISO instant string';
   SErrorTemporalInstantFromArg = 'Temporal.Instant.from requires a string or Instant';
   SErrorTemporalInstantFromEpochMillis = 'Temporal.Instant.fromEpochMilliseconds requires an argument';
@@ -654,7 +655,12 @@ resourcestring
   SErrorMapForEachNotCallable = 'Map.prototype.forEach: callback is not a function';
 
   // Set operation argument errors
-  SErrorSetOperationRequiresSet = 'Set.prototype.%s: argument must be a Set';
+  SErrorSetOperationRequiresSetLike = 'Set.prototype.%s: argument must be a Set or set-like object';
+  SErrorSetLikeSizeMustBeNumber = 'Set.prototype.%s: set-like size must be a number';
+  SErrorSetLikeSizeNonNegative = 'Set.prototype.%s: set-like size must be non-negative';
+  SErrorSetLikeHasNotCallable = 'Set.prototype.%s: set-like has must be a function';
+  SErrorSetLikeKeysNotCallable = 'Set.prototype.%s: set-like keys must be a function';
+  SErrorSetLikeKeysIterator = 'Set.prototype.%s: set-like keys must return an iterator';
 
   // Map upsert errors
   SErrorMapGetOrInsertComputedNotCallable = 'Map.getOrInsertComputed: callbackfn is not a function';

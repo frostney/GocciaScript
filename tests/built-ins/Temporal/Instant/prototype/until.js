@@ -24,6 +24,28 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.until", () => {
     expect(dur.milliseconds).toBe(0);
   });
 
+  test("until at extreme range with largestUnit microseconds does not overflow", () => {
+    const i1 = Temporal.Instant.fromEpochMilliseconds(-8640000000000000);
+    const i2 = Temporal.Instant.fromEpochMilliseconds(8640000000000000);
+    const dur = i1.until(i2, { largestUnit: "microseconds" });
+    expect(dur.toString()).toBe("PT17280000000000S");
+    expect(dur.nanoseconds).toBe(0);
+  });
+
+  test("until at extreme range with largestUnit nanoseconds does not overflow", () => {
+    const i1 = Temporal.Instant.fromEpochMilliseconds(-8640000000000000);
+    const i2 = Temporal.Instant.fromEpochMilliseconds(8640000000000000);
+    const dur = i1.until(i2, { largestUnit: "nanoseconds" });
+    expect(dur.toString()).toBe("PT17280000000000S");
+  });
+
+  test("until negative at extreme range with largestUnit nanoseconds does not overflow", () => {
+    const i1 = Temporal.Instant.fromEpochMilliseconds(8640000000000000);
+    const i2 = Temporal.Instant.fromEpochMilliseconds(-8640000000000000);
+    const dur = i1.until(i2, { largestUnit: "nanoseconds" });
+    expect(dur.toString()).toBe("-PT17280000000000S");
+  });
+
   test("until() with largestUnit minutes", () => {
     const i1 = Temporal.Instant.fromEpochMilliseconds(0);
     const i2 = Temporal.Instant.fromEpochMilliseconds(90061000);
@@ -42,6 +64,14 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.until", () => {
     const dur = i1.until(i2, { largestUnit: "milliseconds" });
     expect(dur.milliseconds).toBe(5000);
     expect(dur.seconds).toBe(0);
+  });
+
+  test("until() with largestUnit nanoseconds formats balanced seconds", () => {
+    const i1 = Temporal.Instant.fromEpochMilliseconds(0);
+    const i2 = Temporal.Instant.fromEpochMilliseconds(5000);
+    const dur = i1.until(i2, { largestUnit: "nanoseconds" });
+    expect(dur.nanoseconds).toBe(5000000000);
+    expect(dur.toString()).toBe("PT5S");
   });
 
   test("until() negative with largestUnit minutes", () => {

@@ -74,6 +74,16 @@ describe("Iterator.from()", () => {
     expect(iter.next().done).toBe(true);
   });
 
+  test("wrapped iterator throws TypeError when next returns non-object", () => {
+    const iteratorLike = {
+      next() {
+        return 1;
+      }
+    };
+    const iter = Iterator.from(iteratorLike);
+    expect(() => iter.next()).toThrow(TypeError);
+  });
+
   test("wrapped iterator has helper methods", () => {
     const set = new Set([1, 2, 3, 4, 5]);
     const result = Iterator.from(set).filter((x) => x > 2).toArray();

@@ -88,6 +88,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Realm,
+  Goccia.Temporal.DurationMath,
   Goccia.Temporal.Options,
   Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
@@ -814,6 +815,7 @@ var
   NewEpochMs: Int64;
   NewSubMs: Integer;
 begin
+  try
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.add');
   Dur := CoerceDuration(AArgs.GetElement(0), 'ZonedDateTime.prototype.add');
 
@@ -843,6 +845,10 @@ begin
   NewSubMs := Balanced.Microsecond * 1000 + Balanced.Nanosecond;
 
   Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, NewSubMs, Zdt.FTimeZone);
+  except
+    on E: ETemporalDurationInt64Overflow do
+      ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
+  end;
 end;
 
 // TC39 Temporal §6.3.27 Temporal.ZonedDateTime.prototype.subtract(temporalDurationLike [, options])
@@ -852,6 +858,7 @@ var
   NegDur: TGocciaTemporalDurationValue;
   NewArgs: TGocciaArgumentsCollection;
 begin
+  try
   Dur := CoerceDuration(AArgs.GetElement(0), 'ZonedDateTime.prototype.subtract');
 
   NegDur := TGocciaTemporalDurationValue.Create(
@@ -865,57 +872,23 @@ begin
   finally
     NewArgs.Free;
   end;
+  except
+    on E: ETemporalDurationInt64Overflow do
+      ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
+  end;
 end;
 
-function ZonedDiffToUnits(const ADiffMs: Int64; const ADiffSubMs: Integer;
+function ZonedDiffToUnits(const ADiffNs: TBigInteger;
   const ALargestUnit: TTemporalUnit): TGocciaValue;
 var
-  TotalSec, TotalMin: Int64;
-  RemMs: Int64;
+  Hours, Minutes, Seconds, Milliseconds, Microseconds, Nanoseconds: TBigInteger;
+  Days: Int64;
 begin
-  case ALargestUnit of
-    tuHour:
-      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0,
-        ADiffMs div MILLISECONDS_PER_HOUR,
-        (ADiffMs mod MILLISECONDS_PER_HOUR) div MILLISECONDS_PER_MINUTE,
-        ((ADiffMs mod MILLISECONDS_PER_HOUR) mod MILLISECONDS_PER_MINUTE) div MILLISECONDS_PER_SECOND,
-        ((ADiffMs mod MILLISECONDS_PER_HOUR) mod MILLISECONDS_PER_MINUTE) mod MILLISECONDS_PER_SECOND,
-        ADiffSubMs div 1000,
-        ADiffSubMs mod 1000);
-    tuMinute:
-    begin
-      TotalMin := ADiffMs div MILLISECONDS_PER_MINUTE;
-      RemMs := ADiffMs mod MILLISECONDS_PER_MINUTE;
-      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0,
-        TotalMin,
-        RemMs div MILLISECONDS_PER_SECOND,
-        RemMs mod MILLISECONDS_PER_SECOND,
-        ADiffSubMs div 1000,
-        ADiffSubMs mod 1000);
-    end;
-    tuSecond:
-    begin
-      TotalSec := ADiffMs div MILLISECONDS_PER_SECOND;
-      RemMs := ADiffMs mod MILLISECONDS_PER_SECOND;
-      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0,
-        TotalSec,
-        RemMs,
-        ADiffSubMs div 1000,
-        ADiffSubMs mod 1000);
-    end;
-    tuMillisecond:
-      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0,
-        ADiffMs,
-        ADiffSubMs div 1000,
-        ADiffSubMs mod 1000);
-    tuMicrosecond:
-      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0,
-        ADiffMs * 1000 + ADiffSubMs div 1000,
-        ADiffSubMs mod 1000);
-  else // tuNanosecond
-    Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0, 0,
-      ADiffMs * 1000000 + ADiffSubMs);
-  end;
+  BalanceTimeDurationToFields(ADiffNs, ALargestUnit,
+    Hours, Minutes, Seconds, Milliseconds, Microseconds, Nanoseconds, Days);
+  Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(
+    TBigInteger.Zero, TBigInteger.Zero, TBigInteger.Zero, TBigInteger.FromInt64(Days),
+    Hours, Minutes, Seconds, Milliseconds, Microseconds, Nanoseconds);
 end;
 
 // TC39 Temporal §6.3.28 Temporal.ZonedDateTime.prototype.until(other [, options])
@@ -926,8 +899,7 @@ var
   LargestUnit, SmallestUnit: TTemporalUnit;
   RMode: TTemporalRoundingMode;
   RIncrement: Integer;
-  DiffMs: Int64;
-  DiffSubMs: Integer;
+  StartNs, EndNs, DiffNs, IncrementNs: TBigInteger;
   Y1, M1, D1, H1, Mi1, S1, Ms1, Us1, Ns1: Integer;
   Y2, M2, D2, H2, Mi2, S2, Ms2, Us2, Ns2: Integer;
   T1Ns, T2Ns, TimeDiffNs, TotalNs, Sgn, AbsTimeNs: Int64;
@@ -1014,33 +986,17 @@ begin
   end
   else
   begin
-    // Sub-day or day: use epoch difference
-    DiffMs := Other.FEpochMilliseconds - Zdt.FEpochMilliseconds;
-    DiffSubMs := Other.FSubMillisecondNanoseconds - Zdt.FSubMillisecondNanoseconds;
-
-    if (DiffMs > 0) and (DiffSubMs < 0) then
-    begin
-      Dec(DiffMs);
-      Inc(DiffSubMs, SUB_MS_NANOSECOND_LIMIT);
-    end
-    else if (DiffMs < 0) and (DiffSubMs > 0) then
-    begin
-      Inc(DiffMs);
-      Dec(DiffSubMs, SUB_MS_NANOSECOND_LIMIT);
-    end;
-
-    Result := ZonedDiffToUnits(DiffMs, DiffSubMs, LargestUnit);
-
+    // Sub-day: use exact epoch nanosecond difference.
+    StartNs := EpochNanosecondsFromParts(Zdt.FEpochMilliseconds, Zdt.FSubMillisecondNanoseconds);
+    EndNs := EpochNanosecondsFromParts(Other.FEpochMilliseconds, Other.FSubMillisecondNanoseconds);
+    DiffNs := TimeDurationFromEpochNanosecondsDifference(EndNs, StartNs);
     if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
     begin
-      Dur := TGocciaTemporalDurationValue(Result);
-      RY := Dur.Years; RMo := Dur.Months; RW := Dur.Weeks; RD := Dur.Days;
-      RH := Dur.Hours; RM := Dur.Minutes; RS := Dur.Seconds;
-      RMs := Dur.Milliseconds; RUs := Dur.Microseconds; RNs := Dur.Nanoseconds;
-      RoundDiffDuration(RY, RMo, RW, RD, RH, RM, RS, RMs, RUs, RNs,
-        0, 0, 0, LargestUnit, SmallestUnit, RMode, RIncrement);
-      Result := TGocciaTemporalDurationValue.Create(RY, RMo, RW, RD, RH, RM, RS, RMs, RUs, RNs);
+      IncrementNs := TBigInteger.FromInt64(UnitToNanoseconds(SmallestUnit))
+        .Multiply(TBigInteger.FromInt64(RIncrement));
+      DiffNs := RoundTimeDurationToIncrement(DiffNs, IncrementNs, RMode);
     end;
+    Result := ZonedDiffToUnits(DiffNs, LargestUnit);
   end;
 end;
 
@@ -1052,8 +1008,7 @@ var
   LargestUnit, SmallestUnit: TTemporalUnit;
   RMode: TTemporalRoundingMode;
   RIncrement: Integer;
-  DiffMs: Int64;
-  DiffSubMs: Integer;
+  StartNs, EndNs, DiffNs, IncrementNs: TBigInteger;
   Y1, M1, D1, H1, Mi1, S1, Ms1, Us1, Ns1: Integer;
   Y2, M2, D2, H2, Mi2, S2, Ms2, Us2, Ns2: Integer;
   T1Ns, T2Ns, TimeDiffNs, TotalNs, Sgn, AbsTimeNs: Int64;
@@ -1140,33 +1095,17 @@ begin
   end
   else
   begin
-    // Sub-day or day: use epoch difference (this - other)
-    DiffMs := Zdt.FEpochMilliseconds - Other.FEpochMilliseconds;
-    DiffSubMs := Zdt.FSubMillisecondNanoseconds - Other.FSubMillisecondNanoseconds;
-
-    if (DiffMs > 0) and (DiffSubMs < 0) then
-    begin
-      Dec(DiffMs);
-      Inc(DiffSubMs, SUB_MS_NANOSECOND_LIMIT);
-    end
-    else if (DiffMs < 0) and (DiffSubMs > 0) then
-    begin
-      Inc(DiffMs);
-      Dec(DiffSubMs, SUB_MS_NANOSECOND_LIMIT);
-    end;
-
-    Result := ZonedDiffToUnits(DiffMs, DiffSubMs, LargestUnit);
-
+    // Sub-day: use exact epoch nanosecond difference (this - other).
+    StartNs := EpochNanosecondsFromParts(Other.FEpochMilliseconds, Other.FSubMillisecondNanoseconds);
+    EndNs := EpochNanosecondsFromParts(Zdt.FEpochMilliseconds, Zdt.FSubMillisecondNanoseconds);
+    DiffNs := TimeDurationFromEpochNanosecondsDifference(EndNs, StartNs);
     if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
     begin
-      Dur := TGocciaTemporalDurationValue(Result);
-      RY := Dur.Years; RMo := Dur.Months; RW := Dur.Weeks; RD := Dur.Days;
-      RH := Dur.Hours; RM := Dur.Minutes; RS := Dur.Seconds;
-      RMs := Dur.Milliseconds; RUs := Dur.Microseconds; RNs := Dur.Nanoseconds;
-      RoundDiffDuration(RY, RMo, RW, RD, RH, RM, RS, RMs, RUs, RNs,
-        0, 0, 0, LargestUnit, SmallestUnit, RMode, RIncrement);
-      Result := TGocciaTemporalDurationValue.Create(RY, RMo, RW, RD, RH, RM, RS, RMs, RUs, RNs);
+      IncrementNs := TBigInteger.FromInt64(UnitToNanoseconds(SmallestUnit))
+        .Multiply(TBigInteger.FromInt64(RIncrement));
+      DiffNs := RoundTimeDurationToIncrement(DiffNs, IncrementNs, RMode);
     end;
+    Result := ZonedDiffToUnits(DiffNs, LargestUnit);
   end;
 end;
 

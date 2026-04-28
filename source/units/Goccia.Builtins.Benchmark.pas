@@ -640,7 +640,6 @@ begin
       if Assigned(ResultsArray) then
         TGarbageCollector.Instance.RemoveTempRoot(ResultsArray);
     end;
-    UnrootRegisteredBenchmarks;
   end;
 end;
 

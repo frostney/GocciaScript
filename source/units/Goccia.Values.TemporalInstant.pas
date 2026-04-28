@@ -52,6 +52,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Realm,
+  Goccia.Temporal.DurationMath,
   Goccia.Temporal.Options,
   Goccia.Temporal.Utils,
   Goccia.Values.BigIntValue,
@@ -80,6 +81,32 @@ begin
   if not (AValue is TGocciaTemporalInstantValue) then
     ThrowTypeError(AMethod + ' called on non-Instant', SSuggestTemporalThisType);
   Result := TGocciaTemporalInstantValue(AValue);
+end;
+
+procedure NormalizeInstantSubMillisecondNanoseconds(var AEpochMilliseconds: TBigInteger;
+  const ASubNanosecondsTotal: TBigInteger; out ASubMillisecondNanoseconds: Integer);
+var
+  CarryMilliseconds, RemainderNanoseconds, Million: TBigInteger;
+begin
+  Million := TBigInteger.FromInt64(NANOSECONDS_PER_MILLISECOND);
+  CarryMilliseconds := ASubNanosecondsTotal.Divide(Million);
+  RemainderNanoseconds := ASubNanosecondsTotal.Modulo(Million);
+  if RemainderNanoseconds.IsNegative then
+  begin
+    CarryMilliseconds := CarryMilliseconds.Subtract(TBigInteger.One);
+    RemainderNanoseconds := RemainderNanoseconds.Add(Million);
+  end;
+
+  AEpochMilliseconds := AEpochMilliseconds.Add(CarryMilliseconds);
+  ASubMillisecondNanoseconds := Integer(RemainderNanoseconds.ToInt64);
+end;
+
+function BigIntToInstantInt64(const AValue: TBigInteger; const AFieldName: string): Int64;
+begin
+  if (AValue.Compare(TBigInteger.FromInt64(Low(Int64))) < 0) or
+     (AValue.Compare(TBigInteger.FromInt64(High(Int64))) > 0) then
+    raise ETemporalDurationInt64Overflow.CreateFmt('Temporal.Instant.%s is outside Int64 range', [AFieldName]);
+  Result := AValue.ToInt64;
 end;
 
 function CoerceInstant(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalInstantValue;
@@ -230,7 +257,9 @@ var
   DurRec: TTemporalDurationRecord;
   NewMs: Int64;
   NewSubMs: Integer;
+  NewMsBig, SubNsTotal: TBigInteger;
 begin
+  try
   Inst := AsInstant(AThisValue, 'Instant.prototype.add');
   Arg := AArgs.GetElement(0);
 
@@ -251,19 +280,27 @@ begin
   end;
 
   // Instant only supports time-based duration
-  if (Dur.Years <> 0) or (Dur.Months <> 0) or (Dur.Weeks <> 0) then
+  if (not Dur.YearsBig.IsZero) or (not Dur.MonthsBig.IsZero) or
+     (not Dur.WeeksBig.IsZero) then
     ThrowRangeError(SErrorInstantAddNoCalendar, SSuggestTemporalDurationArg);
 
-  NewMs := Inst.FEpochMilliseconds +
-           Dur.Days * Int64(86400000) +
-           Dur.Hours * 3600000 +
-           Dur.Minutes * 60000 +
-           Dur.Seconds * 1000 +
-           Dur.Milliseconds;
-  NewSubMs := Inst.FSubMillisecondNanoseconds +
-              Integer(Dur.Microseconds * 1000 + Dur.Nanoseconds);
+  NewMsBig := TBigInteger.FromInt64(Inst.FEpochMilliseconds)
+    .Add(Dur.DaysBig.Multiply(TBigInteger.FromInt64(86400000)))
+    .Add(Dur.HoursBig.Multiply(TBigInteger.FromInt64(3600000)))
+    .Add(Dur.MinutesBig.Multiply(TBigInteger.FromInt64(60000)))
+    .Add(Dur.SecondsBig.Multiply(TBigInteger.FromInt64(1000)))
+    .Add(Dur.MillisecondsBig);
+  SubNsTotal := TBigInteger.FromInt64(Inst.FSubMillisecondNanoseconds)
+    .Add(Dur.MicrosecondsBig.Multiply(TBigInteger.FromInt64(NANOSECONDS_PER_MICROSECOND)))
+    .Add(Dur.NanosecondsBig);
+  NormalizeInstantSubMillisecondNanoseconds(NewMsBig, SubNsTotal, NewSubMs);
+  NewMs := BigIntToInstantInt64(NewMsBig, 'epochMilliseconds');
 
   Result := TGocciaTemporalInstantValue.Create(NewMs, NewSubMs);
+  except
+    on E: ETemporalDurationInt64Overflow do
+      ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
+  end;
 end;
 
 function TGocciaTemporalInstantValue.InstantSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -274,7 +311,9 @@ var
   DurRec: TTemporalDurationRecord;
   NewMs: Int64;
   NewSubMs: Integer;
+  NewMsBig, SubNsTotal: TBigInteger;
 begin
+  try
   Inst := AsInstant(AThisValue, 'Instant.prototype.subtract');
   Arg := AArgs.GetElement(0);
 
@@ -294,73 +333,40 @@ begin
     Dur := nil;
   end;
 
-  if (Dur.Years <> 0) or (Dur.Months <> 0) or (Dur.Weeks <> 0) then
+  if (not Dur.YearsBig.IsZero) or (not Dur.MonthsBig.IsZero) or
+     (not Dur.WeeksBig.IsZero) then
     ThrowRangeError(SErrorInstantSubtractNoCalendar, SSuggestTemporalDurationArg);
 
-  NewMs := Inst.FEpochMilliseconds -
-           Dur.Days * Int64(86400000) -
-           Dur.Hours * 3600000 -
-           Dur.Minutes * 60000 -
-           Dur.Seconds * 1000 -
-           Dur.Milliseconds;
-  NewSubMs := Inst.FSubMillisecondNanoseconds -
-              Integer(Dur.Microseconds * 1000 + Dur.Nanoseconds);
+  NewMsBig := TBigInteger.FromInt64(Inst.FEpochMilliseconds)
+    .Subtract(Dur.DaysBig.Multiply(TBigInteger.FromInt64(86400000)))
+    .Subtract(Dur.HoursBig.Multiply(TBigInteger.FromInt64(3600000)))
+    .Subtract(Dur.MinutesBig.Multiply(TBigInteger.FromInt64(60000)))
+    .Subtract(Dur.SecondsBig.Multiply(TBigInteger.FromInt64(1000)))
+    .Subtract(Dur.MillisecondsBig);
+  SubNsTotal := TBigInteger.FromInt64(Inst.FSubMillisecondNanoseconds)
+    .Subtract(Dur.MicrosecondsBig.Multiply(TBigInteger.FromInt64(NANOSECONDS_PER_MICROSECOND)))
+    .Subtract(Dur.NanosecondsBig);
+  NormalizeInstantSubMillisecondNanoseconds(NewMsBig, SubNsTotal, NewSubMs);
+  NewMs := BigIntToInstantInt64(NewMsBig, 'epochMilliseconds');
 
   Result := TGocciaTemporalInstantValue.Create(NewMs, NewSubMs);
+  except
+    on E: ETemporalDurationInt64Overflow do
+      ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
+  end;
 end;
 
-function InstantDiffToUnits(const ADiffMs: Int64; const ADiffSubMs: Integer;
+function InstantDiffToUnits(const ATimeDuration: TBigInteger;
   const ALargestUnit: TTemporalUnit): TGocciaValue;
 var
-  Ms, SubMs: Int64;
-  TotalSec, TotalMin: Int64;
+  Hours, Minutes, Seconds, Milliseconds, Microseconds, Nanoseconds: TBigInteger;
+  Days: Int64;
 begin
-  Ms := ADiffMs;
-  SubMs := ADiffSubMs;
-
-  case ALargestUnit of
-    tuHour:
-      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0,
-        Ms div 3600000,
-        (Ms mod 3600000) div 60000,
-        ((Ms mod 3600000) mod 60000) div 1000,
-        ((Ms mod 3600000) mod 60000) mod 1000,
-        SubMs div 1000,
-        SubMs mod 1000);
-    tuMinute:
-    begin
-      TotalMin := Ms div 60000;
-      Ms := Ms mod 60000;
-      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0,
-        TotalMin,
-        Ms div 1000,
-        Ms mod 1000,
-        SubMs div 1000,
-        SubMs mod 1000);
-    end;
-    tuSecond:
-    begin
-      TotalSec := Ms div 1000;
-      Ms := Ms mod 1000;
-      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0,
-        TotalSec,
-        Ms,
-        SubMs div 1000,
-        SubMs mod 1000);
-    end;
-    tuMillisecond:
-      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0,
-        Ms,
-        SubMs div 1000,
-        SubMs mod 1000);
-    tuMicrosecond:
-      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0,
-        Ms * 1000 + SubMs div 1000,
-        SubMs mod 1000);
-  else // tuNanosecond
-    Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0, 0,
-      Ms * 1000000 + SubMs);
-  end;
+  BalanceTimeDurationToFields(ATimeDuration, ALargestUnit,
+    Hours, Minutes, Seconds, Milliseconds, Microseconds, Nanoseconds, Days);
+  Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(
+    TBigInteger.Zero, TBigInteger.Zero, TBigInteger.Zero, TBigInteger.FromInt64(Days),
+    Hours, Minutes, Seconds, Milliseconds, Microseconds, Nanoseconds);
 end;
 
 function TGocciaTemporalInstantValue.InstantUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -370,10 +376,7 @@ var
   LargestUnit, SmallestUnit: TTemporalUnit;
   RMode: TTemporalRoundingMode;
   RIncrement: Integer;
-  DiffMs: Int64;
-  DiffSubMs: Integer;
-  Dur: TGocciaTemporalDurationValue;
-  Y, Mo, W, D, H, Mi, S, Ms, Us, Ns: Int64;
+  StartNs, EndNs, DiffNs, IncrementNs: TBigInteger;
 begin
   Inst := AsInstant(AThisValue, 'Instant.prototype.until');
   Other := CoerceInstant(AArgs.GetElement(0), 'Instant.prototype.until');
@@ -393,33 +396,16 @@ begin
   RIncrement := GetRoundingIncrement(OptionsObj, 1);
   ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
 
-  DiffMs := Other.FEpochMilliseconds - Inst.FEpochMilliseconds;
-  DiffSubMs := Other.FSubMillisecondNanoseconds - Inst.FSubMillisecondNanoseconds;
-
-  // Normalize so DiffMs and DiffSubMs share the same sign
-  if (DiffMs > 0) and (DiffSubMs < 0) then
-  begin
-    Dec(DiffMs);
-    Inc(DiffSubMs, 1000000);
-  end
-  else if (DiffMs < 0) and (DiffSubMs > 0) then
-  begin
-    Inc(DiffMs);
-    Dec(DiffSubMs, 1000000);
-  end;
-
-  Result := InstantDiffToUnits(DiffMs, DiffSubMs, LargestUnit);
-
+  StartNs := EpochNanosecondsFromParts(Inst.FEpochMilliseconds, Inst.FSubMillisecondNanoseconds);
+  EndNs := EpochNanosecondsFromParts(Other.FEpochMilliseconds, Other.FSubMillisecondNanoseconds);
+  DiffNs := TimeDurationFromEpochNanosecondsDifference(EndNs, StartNs);
   if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
   begin
-    Dur := TGocciaTemporalDurationValue(Result);
-    Y := Dur.Years; Mo := Dur.Months; W := Dur.Weeks; D := Dur.Days;
-    H := Dur.Hours; Mi := Dur.Minutes; S := Dur.Seconds;
-    Ms := Dur.Milliseconds; Us := Dur.Microseconds; Ns := Dur.Nanoseconds;
-    RoundDiffDuration(Y, Mo, W, D, H, Mi, S, Ms, Us, Ns,
-      0, 0, 0, LargestUnit, SmallestUnit, RMode, RIncrement);
-    Result := TGocciaTemporalDurationValue.Create(Y, Mo, W, D, H, Mi, S, Ms, Us, Ns);
+    IncrementNs := TBigInteger.FromInt64(UnitToNanoseconds(SmallestUnit))
+      .Multiply(TBigInteger.FromInt64(RIncrement));
+    DiffNs := RoundTimeDurationToIncrement(DiffNs, IncrementNs, RMode);
   end;
+  Result := InstantDiffToUnits(DiffNs, LargestUnit);
 end;
 
 function TGocciaTemporalInstantValue.InstantSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -429,10 +415,7 @@ var
   LargestUnit, SmallestUnit: TTemporalUnit;
   RMode: TTemporalRoundingMode;
   RIncrement: Integer;
-  DiffMs: Int64;
-  DiffSubMs: Integer;
-  Dur: TGocciaTemporalDurationValue;
-  Y, Mo, W, D, H, Mi, S, Ms, Us, Ns: Int64;
+  StartNs, EndNs, DiffNs, IncrementNs: TBigInteger;
 begin
   Inst := AsInstant(AThisValue, 'Instant.prototype.since');
   Other := CoerceInstant(AArgs.GetElement(0), 'Instant.prototype.since');
@@ -452,33 +435,16 @@ begin
   RIncrement := GetRoundingIncrement(OptionsObj, 1);
   ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
 
-  DiffMs := Inst.FEpochMilliseconds - Other.FEpochMilliseconds;
-  DiffSubMs := Inst.FSubMillisecondNanoseconds - Other.FSubMillisecondNanoseconds;
-
-  // Normalize so DiffMs and DiffSubMs share the same sign
-  if (DiffMs > 0) and (DiffSubMs < 0) then
-  begin
-    Dec(DiffMs);
-    Inc(DiffSubMs, 1000000);
-  end
-  else if (DiffMs < 0) and (DiffSubMs > 0) then
-  begin
-    Inc(DiffMs);
-    Dec(DiffSubMs, 1000000);
-  end;
-
-  Result := InstantDiffToUnits(DiffMs, DiffSubMs, LargestUnit);
-
+  StartNs := EpochNanosecondsFromParts(Other.FEpochMilliseconds, Other.FSubMillisecondNanoseconds);
+  EndNs := EpochNanosecondsFromParts(Inst.FEpochMilliseconds, Inst.FSubMillisecondNanoseconds);
+  DiffNs := TimeDurationFromEpochNanosecondsDifference(EndNs, StartNs);
   if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
   begin
-    Dur := TGocciaTemporalDurationValue(Result);
-    Y := Dur.Years; Mo := Dur.Months; W := Dur.Weeks; D := Dur.Days;
-    H := Dur.Hours; Mi := Dur.Minutes; S := Dur.Seconds;
-    Ms := Dur.Milliseconds; Us := Dur.Microseconds; Ns := Dur.Nanoseconds;
-    RoundDiffDuration(Y, Mo, W, D, H, Mi, S, Ms, Us, Ns,
-      0, 0, 0, LargestUnit, SmallestUnit, RMode, RIncrement);
-    Result := TGocciaTemporalDurationValue.Create(Y, Mo, W, D, H, Mi, S, Ms, Us, Ns);
+    IncrementNs := TBigInteger.FromInt64(UnitToNanoseconds(SmallestUnit))
+      .Multiply(TBigInteger.FromInt64(RIncrement));
+    DiffNs := RoundTimeDurationToIncrement(DiffNs, IncrementNs, RMode);
   end;
+  Result := InstantDiffToUnits(DiffNs, LargestUnit);
 end;
 
 function TGocciaTemporalInstantValue.InstantRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -526,7 +492,8 @@ begin
   BigTotal := TBigInteger.FromInt64(Inst.FEpochMilliseconds)
     .Multiply(BigMillion)
     .Add(TBigInteger.FromInt64(Inst.FSubMillisecondNanoseconds));
-  BigDivisor := TBigInteger.FromInt64(UnitToNanoseconds(SmallestUnit) * Increment);
+  BigDivisor := TBigInteger.FromInt64(UnitToNanoseconds(SmallestUnit))
+    .Multiply(TBigInteger.FromInt64(Increment));
   BigRounded := RoundBigIntWithMode(BigTotal, BigDivisor, Mode);
 
   NewMs := BigRounded.Divide(BigMillion).ToInt64;

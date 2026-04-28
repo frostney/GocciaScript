@@ -5,6 +5,10 @@ unit Goccia.Values.TemporalDuration;
 interface
 
 uses
+  SysUtils,
+
+  BigInteger,
+
   Goccia.Arguments.Collection,
   Goccia.ObjectModel,
   Goccia.SharedPrototype,
@@ -12,41 +16,67 @@ uses
   Goccia.Values.Primitives;
 
 type
+  ETemporalDurationInt64Overflow = class(Exception);
+
   TGocciaTemporalDurationValue = class(TGocciaObjectValue)
   private
-    FYears: Int64;
-    FMonths: Int64;
-    FWeeks: Int64;
-    FDays: Int64;
-    FHours: Int64;
-    FMinutes: Int64;
-    FSeconds: Int64;
-    FMilliseconds: Int64;
-    FMicroseconds: Int64;
-    FNanoseconds: Int64;
+    FYearsBig: TBigInteger;
+    FMonthsBig: TBigInteger;
+    FWeeksBig: TBigInteger;
+    FDaysBig: TBigInteger;
+    FHoursBig: TBigInteger;
+    FMinutesBig: TBigInteger;
+    FSecondsBig: TBigInteger;
+    FMillisecondsBig: TBigInteger;
+    FMicrosecondsBig: TBigInteger;
+    FNanosecondsBig: TBigInteger;
 
     procedure InitializePrototype;
+    procedure SetDurationFields(const AYears, AMonths, AWeeks, ADays, AHours, AMinutes, ASeconds,
+      AMilliseconds, AMicroseconds, ANanoseconds: TBigInteger);
 
+    function GetYearsInt64: Int64;
+    function GetMonthsInt64: Int64;
+    function GetWeeksInt64: Int64;
+    function GetDaysInt64: Int64;
+    function GetHoursInt64: Int64;
+    function GetMinutesInt64: Int64;
+    function GetSecondsInt64: Int64;
+    function GetMillisecondsInt64: Int64;
+    function GetMicrosecondsInt64: Int64;
+    function GetNanosecondsInt64: Int64;
     function ComputeSign: Integer;
     function IsBlank: Boolean;
     function ToISOString: string;
   public
     constructor Create(const AYears, AMonths, AWeeks, ADays, AHours, AMinutes, ASeconds,
       AMilliseconds, AMicroseconds, ANanoseconds: Int64); overload;
+    constructor CreateFromBigIntegers(const AYears, AMonths, AWeeks, ADays, AHours, AMinutes, ASeconds,
+      AMilliseconds, AMicroseconds, ANanoseconds: TBigInteger); overload;
 
     function ToStringTag: string; override;
     class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
 
-    property Years: Int64 read FYears;
-    property Months: Int64 read FMonths;
-    property Weeks: Int64 read FWeeks;
-    property Days: Int64 read FDays;
-    property Hours: Int64 read FHours;
-    property Minutes: Int64 read FMinutes;
-    property Seconds: Int64 read FSeconds;
-    property Milliseconds: Int64 read FMilliseconds;
-    property Microseconds: Int64 read FMicroseconds;
-    property Nanoseconds: Int64 read FNanoseconds;
+    property Years: Int64 read GetYearsInt64;
+    property Months: Int64 read GetMonthsInt64;
+    property Weeks: Int64 read GetWeeksInt64;
+    property Days: Int64 read GetDaysInt64;
+    property Hours: Int64 read GetHoursInt64;
+    property Minutes: Int64 read GetMinutesInt64;
+    property Seconds: Int64 read GetSecondsInt64;
+    property Milliseconds: Int64 read GetMillisecondsInt64;
+    property Microseconds: Int64 read GetMicrosecondsInt64;
+    property Nanoseconds: Int64 read GetNanosecondsInt64;
+    property YearsBig: TBigInteger read FYearsBig;
+    property MonthsBig: TBigInteger read FMonthsBig;
+    property WeeksBig: TBigInteger read FWeeksBig;
+    property DaysBig: TBigInteger read FDaysBig;
+    property HoursBig: TBigInteger read FHoursBig;
+    property MinutesBig: TBigInteger read FMinutesBig;
+    property SecondsBig: TBigInteger read FSecondsBig;
+    property MillisecondsBig: TBigInteger read FMillisecondsBig;
+    property MicrosecondsBig: TBigInteger read FMicrosecondsBig;
+    property NanosecondsBig: TBigInteger read FNanosecondsBig;
   published
     function GetYears(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GetMonths(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -76,15 +106,15 @@ type
 implementation
 
 uses
-  SysUtils,
+  Math,
 
   Goccia.Constants.NumericLimits,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Realm,
+  Goccia.Temporal.DurationMath,
   Goccia.Temporal.Options,
-  Goccia.Temporal.TimeZone,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -114,10 +144,12 @@ begin
 end;
 
 function ParseRelativeTo(const AValue: TGocciaValue; const AMethod: string): TTemporalDateRecord; forward;
+function ValueToBigInteger(const AValue: TGocciaValue): TBigInteger; forward;
 
 function DurationFromObject(const AObj: TGocciaObjectValue): TGocciaTemporalDurationValue;
 
-  function GetFieldOr(const AObj: TGocciaObjectValue; const AName: string; const ADefault: Int64): Int64;
+  function GetFieldOr(const AObj: TGocciaObjectValue; const AName: string;
+    const ADefault: TBigInteger): TBigInteger;
   var
     V: TGocciaValue;
   begin
@@ -125,78 +157,224 @@ function DurationFromObject(const AObj: TGocciaObjectValue): TGocciaTemporalDura
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       Result := ADefault
     else
-      Result := Trunc(V.ToNumberLiteral.Value);
+      Result := ValueToBigInteger(V);
   end;
 
 begin
-  Result := TGocciaTemporalDurationValue.Create(
-    GetFieldOr(AObj, 'years', 0),
-    GetFieldOr(AObj, 'months', 0),
-    GetFieldOr(AObj, 'weeks', 0),
-    GetFieldOr(AObj, 'days', 0),
-    GetFieldOr(AObj, 'hours', 0),
-    GetFieldOr(AObj, 'minutes', 0),
-    GetFieldOr(AObj, 'seconds', 0),
-    GetFieldOr(AObj, 'milliseconds', 0),
-    GetFieldOr(AObj, 'microseconds', 0),
-    GetFieldOr(AObj, 'nanoseconds', 0)
+  Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(
+    GetFieldOr(AObj, 'years', TBigInteger.Zero),
+    GetFieldOr(AObj, 'months', TBigInteger.Zero),
+    GetFieldOr(AObj, 'weeks', TBigInteger.Zero),
+    GetFieldOr(AObj, 'days', TBigInteger.Zero),
+    GetFieldOr(AObj, 'hours', TBigInteger.Zero),
+    GetFieldOr(AObj, 'minutes', TBigInteger.Zero),
+    GetFieldOr(AObj, 'seconds', TBigInteger.Zero),
+    GetFieldOr(AObj, 'milliseconds', TBigInteger.Zero),
+    GetFieldOr(AObj, 'microseconds', TBigInteger.Zero),
+    GetFieldOr(AObj, 'nanoseconds', TBigInteger.Zero)
   );
 end;
 
 { TGocciaTemporalDurationValue }
 
+function BigIntSign(const AValue: TBigInteger): Integer;
+begin
+  if AValue.IsPositive then
+    Result := 1
+  else if AValue.IsNegative then
+    Result := -1
+  else
+    Result := 0;
+end;
+
+function BigIntToCheckedInt64(const AValue: TBigInteger; const AFieldName: string): Int64;
+begin
+  if (AValue.Compare(TBigInteger.FromInt64(Low(Int64))) < 0) or
+     (AValue.Compare(TBigInteger.FromInt64(High(Int64))) > 0) then
+    raise ETemporalDurationInt64Overflow.CreateFmt('Temporal.Duration.%s is outside Int64 range', [AFieldName]);
+  Result := AValue.ToInt64;
+end;
+
+function BigIntFieldToNumber(const AValue: TBigInteger): TGocciaNumberLiteralValue;
+begin
+  Result := TGocciaNumberLiteralValue.Create(AValue.ToDouble);
+end;
+
+function NumberToBigInteger(const AValue: Double): TBigInteger;
+var
+  DecStr: string;
+begin
+  if IsNaN(AValue) or IsInfinite(AValue) then
+    ThrowRangeError('Temporal.Duration field must be a finite integer',
+      SSuggestTemporalDurationRange);
+  if Frac(AValue) <> 0 then
+    ThrowRangeError('Temporal.Duration field must be an integer',
+      SSuggestTemporalDurationRange);
+  Str(AValue:0:0, DecStr);
+  Result := TBigInteger.FromDecimalString(DecStr);
+end;
+
+function ValueToBigInteger(const AValue: TGocciaValue): TBigInteger;
+begin
+  if AValue is TGocciaNumberLiteralValue then
+    Result := NumberToBigInteger(TGocciaNumberLiteralValue(AValue).Value)
+  else
+    Result := NumberToBigInteger(AValue.ToNumberLiteral.Value);
+end;
+
+function BigIntUnit(const AValue: Int64): TBigInteger; inline;
+begin
+  Result := TBigInteger.FromInt64(AValue);
+end;
+
+function UnitToNanosecondsBig(const AUnit: TTemporalUnit): TBigInteger;
+begin
+  Result := BigIntUnit(UnitToNanoseconds(AUnit));
+end;
+
+function DurationSubDayNanosecondsBig(const D: TGocciaTemporalDurationValue): TBigInteger;
+begin
+  Result := TimeDurationFromComponents(D.FHoursBig, D.FMinutesBig, D.FSecondsBig,
+    D.FMillisecondsBig, D.FMicrosecondsBig, D.FNanosecondsBig);
+end;
+
+function DurationTotalNanosecondsBig(const D: TGocciaTemporalDurationValue): TBigInteger;
+begin
+  Result := DurationSubDayNanosecondsBig(D)
+    .Add(D.FDaysBig.Multiply(BigIntUnit(NANOSECONDS_PER_DAY)))
+    .Add(D.FWeeksBig.Multiply(BigIntUnit(7)).Multiply(BigIntUnit(NANOSECONDS_PER_DAY)));
+end;
+
+function RoundingDivisorBig(const ASmallestUnit: TTemporalUnit; const AIncrement: Integer): TBigInteger;
+begin
+  if ASmallestUnit = tuWeek then
+    Result := BigIntUnit(NANOSECONDS_PER_DAY).Multiply(BigIntUnit(7)).Multiply(BigIntUnit(AIncrement))
+  else
+    Result := UnitToNanosecondsBig(ASmallestUnit).Multiply(BigIntUnit(AIncrement));
+end;
+
 constructor TGocciaTemporalDurationValue.Create(const AYears, AMonths, AWeeks, ADays, AHours, AMinutes, ASeconds,
   AMilliseconds, AMicroseconds, ANanoseconds: Int64);
-var
-  HasPositive, HasNegative: Boolean;
-  NormalizedSeconds, V: Double;
 begin
   inherited Create(nil);
-  FYears := AYears;
-  FMonths := AMonths;
-  FWeeks := AWeeks;
-  FDays := ADays;
-  FHours := AHours;
-  FMinutes := AMinutes;
-  FSeconds := ASeconds;
-  FMilliseconds := AMilliseconds;
-  FMicroseconds := AMicroseconds;
-  FNanoseconds := ANanoseconds;
+  SetDurationFields(
+    TBigInteger.FromInt64(AYears),
+    TBigInteger.FromInt64(AMonths),
+    TBigInteger.FromInt64(AWeeks),
+    TBigInteger.FromInt64(ADays),
+    TBigInteger.FromInt64(AHours),
+    TBigInteger.FromInt64(AMinutes),
+    TBigInteger.FromInt64(ASeconds),
+    TBigInteger.FromInt64(AMilliseconds),
+    TBigInteger.FromInt64(AMicroseconds),
+    TBigInteger.FromInt64(ANanoseconds));
+end;
+
+constructor TGocciaTemporalDurationValue.CreateFromBigIntegers(const AYears, AMonths, AWeeks, ADays,
+  AHours, AMinutes, ASeconds, AMilliseconds, AMicroseconds, ANanoseconds: TBigInteger);
+begin
+  inherited Create(nil);
+  SetDurationFields(AYears, AMonths, AWeeks, ADays, AHours, AMinutes, ASeconds,
+    AMilliseconds, AMicroseconds, ANanoseconds);
+end;
+
+procedure TGocciaTemporalDurationValue.SetDurationFields(const AYears, AMonths, AWeeks, ADays,
+  AHours, AMinutes, ASeconds, AMilliseconds, AMicroseconds, ANanoseconds: TBigInteger);
+var
+  HasPositive, HasNegative: Boolean;
+  TimeDuration, NormalizedNanoseconds: TBigInteger;
+begin
+  FYearsBig := AYears;
+  FMonthsBig := AMonths;
+  FWeeksBig := AWeeks;
+  FDaysBig := ADays;
+  FHoursBig := AHours;
+  FMinutesBig := AMinutes;
+  FSecondsBig := ASeconds;
+  FMillisecondsBig := AMilliseconds;
+  FMicrosecondsBig := AMicroseconds;
+  FNanosecondsBig := ANanoseconds;
 
   // Validate: sign of non-zero components must be uniform
-  HasPositive := (AYears > 0) or (AMonths > 0) or (AWeeks > 0) or (ADays > 0) or
-                 (AHours > 0) or (AMinutes > 0) or (ASeconds > 0) or
-                 (AMilliseconds > 0) or (AMicroseconds > 0) or (ANanoseconds > 0);
-  HasNegative := (AYears < 0) or (AMonths < 0) or (AWeeks < 0) or (ADays < 0) or
-                 (AHours < 0) or (AMinutes < 0) or (ASeconds < 0) or
-                 (AMilliseconds < 0) or (AMicroseconds < 0) or (ANanoseconds < 0);
+  HasPositive := (BigIntSign(AYears) > 0) or (BigIntSign(AMonths) > 0) or
+                 (BigIntSign(AWeeks) > 0) or (BigIntSign(ADays) > 0) or
+                 (BigIntSign(AHours) > 0) or (BigIntSign(AMinutes) > 0) or
+                 (BigIntSign(ASeconds) > 0) or (BigIntSign(AMilliseconds) > 0) or
+                 (BigIntSign(AMicroseconds) > 0) or (BigIntSign(ANanoseconds) > 0);
+  HasNegative := (BigIntSign(AYears) < 0) or (BigIntSign(AMonths) < 0) or
+                 (BigIntSign(AWeeks) < 0) or (BigIntSign(ADays) < 0) or
+                 (BigIntSign(AHours) < 0) or (BigIntSign(AMinutes) < 0) or
+                 (BigIntSign(ASeconds) < 0) or (BigIntSign(AMilliseconds) < 0) or
+                 (BigIntSign(AMicroseconds) < 0) or (BigIntSign(ANanoseconds) < 0);
   if HasPositive and HasNegative then
     ThrowRangeError(SErrorDurationMixedSigns, SSuggestTemporalDurationSigns);
 
-  // Validate: calendar unit magnitudes must be < 2^32.
-  // Use signed bounds rather than `Abs(X) >= UINT32_MODULUS`: in FPC,
-  // `Abs(Low(Int64))` overflows (the result wraps back to Low(Int64)), so a
-  // worst-case input would slip past the magnitude check.
-  if (AYears <= -Int64(UINT32_MODULUS)) or (AYears >= UINT32_MODULUS) or
-     (AMonths <= -Int64(UINT32_MODULUS)) or (AMonths >= UINT32_MODULUS) or
-     (AWeeks <= -Int64(UINT32_MODULUS)) or (AWeeks >= UINT32_MODULUS) then
+  // TC39 Temporal §7.5.16 IsValidDuration step 3-5
+  if (AYears.AbsValue.Compare(TBigInteger.FromInt64(UINT32_MODULUS)) >= 0) or
+     (AMonths.AbsValue.Compare(TBigInteger.FromInt64(UINT32_MODULUS)) >= 0) or
+     (AWeeks.AbsValue.Compare(TBigInteger.FromInt64(UINT32_MODULUS)) >= 0) then
     ThrowRangeError(SErrorDurationCalendarOutOfRange, SSuggestTemporalDurationRange);
 
-  // Validate: normalized seconds must be < 2^53 (TC39 §7.5.22 step 6-7)
-  // Use implicit Int64->Double assignment to avoid FPC 3.2.2 cast bugs.
-  V := ADays;         NormalizedSeconds := V * 86400;
-  V := AHours;        NormalizedSeconds := NormalizedSeconds + V * 3600;
-  V := AMinutes;      NormalizedSeconds := NormalizedSeconds + V * 60;
-  V := ASeconds;      NormalizedSeconds := NormalizedSeconds + V;
-  V := AMilliseconds; NormalizedSeconds := NormalizedSeconds + V * 1e-3;
-  V := AMicroseconds; NormalizedSeconds := NormalizedSeconds + V * 1e-6;
-  V := ANanoseconds;  NormalizedSeconds := NormalizedSeconds + V * 1e-9;
-  if Abs(NormalizedSeconds) >= 9007199254740992.0 then
+  // TC39 Temporal §7.5.16 IsValidDuration step 6-8
+  TimeDuration := TimeDurationFromComponents(AHours, AMinutes, ASeconds,
+    AMilliseconds, AMicroseconds, ANanoseconds);
+  NormalizedNanoseconds := TimeDuration.Add(ADays.Multiply(TBigInteger.FromInt64(NANOSECONDS_PER_DAY)));
+  if not IsValidTimeDuration(NormalizedNanoseconds) then
     ThrowRangeError(SErrorDurationTimeOutOfRange, SSuggestTemporalDurationRange);
 
   InitializePrototype;
   if Assigned(GetTemporalDurationShared) then
     FPrototype := GetTemporalDurationShared.Prototype;
+end;
+
+function TGocciaTemporalDurationValue.GetYearsInt64: Int64;
+begin
+  Result := BigIntToCheckedInt64(FYearsBig, 'years');
+end;
+
+function TGocciaTemporalDurationValue.GetMonthsInt64: Int64;
+begin
+  Result := BigIntToCheckedInt64(FMonthsBig, 'months');
+end;
+
+function TGocciaTemporalDurationValue.GetWeeksInt64: Int64;
+begin
+  Result := BigIntToCheckedInt64(FWeeksBig, 'weeks');
+end;
+
+function TGocciaTemporalDurationValue.GetDaysInt64: Int64;
+begin
+  Result := BigIntToCheckedInt64(FDaysBig, 'days');
+end;
+
+function TGocciaTemporalDurationValue.GetHoursInt64: Int64;
+begin
+  Result := BigIntToCheckedInt64(FHoursBig, 'hours');
+end;
+
+function TGocciaTemporalDurationValue.GetMinutesInt64: Int64;
+begin
+  Result := BigIntToCheckedInt64(FMinutesBig, 'minutes');
+end;
+
+function TGocciaTemporalDurationValue.GetSecondsInt64: Int64;
+begin
+  Result := BigIntToCheckedInt64(FSecondsBig, 'seconds');
+end;
+
+function TGocciaTemporalDurationValue.GetMillisecondsInt64: Int64;
+begin
+  Result := BigIntToCheckedInt64(FMillisecondsBig, 'milliseconds');
+end;
+
+function TGocciaTemporalDurationValue.GetMicrosecondsInt64: Int64;
+begin
+  Result := BigIntToCheckedInt64(FMicrosecondsBig, 'microseconds');
+end;
+
+function TGocciaTemporalDurationValue.GetNanosecondsInt64: Int64;
+begin
+  Result := BigIntToCheckedInt64(FNanosecondsBig, 'nanoseconds');
 end;
 
 procedure TGocciaTemporalDurationValue.InitializePrototype;
@@ -264,13 +442,15 @@ end;
 
 function TGocciaTemporalDurationValue.ComputeSign: Integer;
 begin
-  if (FYears > 0) or (FMonths > 0) or (FWeeks > 0) or (FDays > 0) or
-     (FHours > 0) or (FMinutes > 0) or (FSeconds > 0) or
-     (FMilliseconds > 0) or (FMicroseconds > 0) or (FNanoseconds > 0) then
+  if (FYearsBig.IsPositive) or (FMonthsBig.IsPositive) or (FWeeksBig.IsPositive) or
+     (FDaysBig.IsPositive) or (FHoursBig.IsPositive) or (FMinutesBig.IsPositive) or
+     (FSecondsBig.IsPositive) or (FMillisecondsBig.IsPositive) or
+     (FMicrosecondsBig.IsPositive) or (FNanosecondsBig.IsPositive) then
     Result := 1
-  else if (FYears < 0) or (FMonths < 0) or (FWeeks < 0) or (FDays < 0) or
-          (FHours < 0) or (FMinutes < 0) or (FSeconds < 0) or
-          (FMilliseconds < 0) or (FMicroseconds < 0) or (FNanoseconds < 0) then
+  else if (FYearsBig.IsNegative) or (FMonthsBig.IsNegative) or (FWeeksBig.IsNegative) or
+          (FDaysBig.IsNegative) or (FHoursBig.IsNegative) or (FMinutesBig.IsNegative) or
+          (FSecondsBig.IsNegative) or (FMillisecondsBig.IsNegative) or
+          (FMicrosecondsBig.IsNegative) or (FNanosecondsBig.IsNegative) then
     Result := -1
   else
     Result := 0;
@@ -285,7 +465,9 @@ function TGocciaTemporalDurationValue.ToISOString: string;
 var
   DatePart, TimePart: string;
   ASign: Integer;
-  AbsY, AbsMo, AbsW, AbsD, AbsH, AbsMi, AbsS, AbsMs, AbsUs, AbsNs: Int64;
+  AbsY, AbsMo, AbsW, AbsD, AbsH, AbsMi: TBigInteger;
+  SecondsDuration, AbsSecondsDuration, SecondsPart, SubSecondsPart: TBigInteger;
+  Fraction: string;
 begin
   ASign := ComputeSign;
   if ASign = 0 then
@@ -294,39 +476,39 @@ begin
     Exit;
   end;
 
-  AbsY := Abs(FYears);
-  AbsMo := Abs(FMonths);
-  AbsW := Abs(FWeeks);
-  AbsD := Abs(FDays);
-  AbsH := Abs(FHours);
-  AbsMi := Abs(FMinutes);
-  AbsS := Abs(FSeconds);
-  AbsMs := Abs(FMilliseconds);
-  AbsUs := Abs(FMicroseconds);
-  AbsNs := Abs(FNanoseconds);
+  AbsY := FYearsBig.AbsValue;
+  AbsMo := FMonthsBig.AbsValue;
+  AbsW := FWeeksBig.AbsValue;
+  AbsD := FDaysBig.AbsValue;
+  AbsH := FHoursBig.AbsValue;
+  AbsMi := FMinutesBig.AbsValue;
 
   DatePart := '';
-  if AbsY > 0 then DatePart := DatePart + IntToStr(AbsY) + 'Y';
-  if AbsMo > 0 then DatePart := DatePart + IntToStr(AbsMo) + 'M';
-  if AbsW > 0 then DatePart := DatePart + IntToStr(AbsW) + 'W';
-  if AbsD > 0 then DatePart := DatePart + IntToStr(AbsD) + 'D';
+  if not AbsY.IsZero then DatePart := DatePart + AbsY.ToString + 'Y';
+  if not AbsMo.IsZero then DatePart := DatePart + AbsMo.ToString + 'M';
+  if not AbsW.IsZero then DatePart := DatePart + AbsW.ToString + 'W';
+  if not AbsD.IsZero then DatePart := DatePart + AbsD.ToString + 'D';
 
   TimePart := '';
-  if AbsH > 0 then TimePart := TimePart + IntToStr(AbsH) + 'H';
-  if AbsMi > 0 then TimePart := TimePart + IntToStr(AbsMi) + 'M';
+  if not AbsH.IsZero then TimePart := TimePart + AbsH.ToString + 'H';
+  if not AbsMi.IsZero then TimePart := TimePart + AbsMi.ToString + 'M';
 
-  if (AbsS > 0) or (AbsMs > 0) or (AbsUs > 0) or (AbsNs > 0) then
+  // TC39 Temporal §7.5.40 step 12: recombine second-and-smaller fields before formatting.
+  SecondsDuration := TimeDurationFromComponents(TBigInteger.Zero, TBigInteger.Zero,
+    FSecondsBig, FMillisecondsBig, FMicrosecondsBig, FNanosecondsBig);
+  if (not SecondsDuration.IsZero) or ((DatePart = '') and (TimePart = '')) then
   begin
-    TimePart := TimePart + IntToStr(AbsS);
-    if (AbsMs > 0) or (AbsUs > 0) or (AbsNs > 0) then
+    AbsSecondsDuration := SecondsDuration.AbsValue;
+    SecondsPart := AbsSecondsDuration.Divide(TBigInteger.FromInt64(NANOSECONDS_PER_SECOND));
+    SubSecondsPart := AbsSecondsDuration.Modulo(TBigInteger.FromInt64(NANOSECONDS_PER_SECOND));
+    TimePart := TimePart + SecondsPart.ToString;
+    if not SubSecondsPart.IsZero then
     begin
-      TimePart := TimePart + '.';
-      if AbsNs > 0 then
-        TimePart := TimePart + Format('%.3d%.3d%.3d', [AbsMs, AbsUs, AbsNs])
-      else if AbsUs > 0 then
-        TimePart := TimePart + Format('%.3d%.3d', [AbsMs, AbsUs])
-      else
-        TimePart := TimePart + Format('%.3d', [AbsMs]);
+      Fraction := Format('%.9d', [SubSecondsPart.ToInt64]);
+      while (Length(Fraction) > 0) and (Fraction[Length(Fraction)] = '0') do
+        Delete(Fraction, Length(Fraction), 1);
+      if Length(Fraction) > 0 then
+        TimePart := TimePart + '.' + Fraction;
     end;
     TimePart := TimePart + 'S';
   end;
@@ -348,52 +530,52 @@ end;
 
 function TGocciaTemporalDurationValue.GetYears(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsDuration(AThisValue, 'get Duration.years').FYears);
+  Result := BigIntFieldToNumber(AsDuration(AThisValue, 'get Duration.years').FYearsBig);
 end;
 
 function TGocciaTemporalDurationValue.GetMonths(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsDuration(AThisValue, 'get Duration.months').FMonths);
+  Result := BigIntFieldToNumber(AsDuration(AThisValue, 'get Duration.months').FMonthsBig);
 end;
 
 function TGocciaTemporalDurationValue.GetWeeks(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsDuration(AThisValue, 'get Duration.weeks').FWeeks);
+  Result := BigIntFieldToNumber(AsDuration(AThisValue, 'get Duration.weeks').FWeeksBig);
 end;
 
 function TGocciaTemporalDurationValue.GetDays(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsDuration(AThisValue, 'get Duration.days').FDays);
+  Result := BigIntFieldToNumber(AsDuration(AThisValue, 'get Duration.days').FDaysBig);
 end;
 
 function TGocciaTemporalDurationValue.GetHours(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsDuration(AThisValue, 'get Duration.hours').FHours);
+  Result := BigIntFieldToNumber(AsDuration(AThisValue, 'get Duration.hours').FHoursBig);
 end;
 
 function TGocciaTemporalDurationValue.GetMinutes(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsDuration(AThisValue, 'get Duration.minutes').FMinutes);
+  Result := BigIntFieldToNumber(AsDuration(AThisValue, 'get Duration.minutes').FMinutesBig);
 end;
 
 function TGocciaTemporalDurationValue.GetSeconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsDuration(AThisValue, 'get Duration.seconds').FSeconds);
+  Result := BigIntFieldToNumber(AsDuration(AThisValue, 'get Duration.seconds').FSecondsBig);
 end;
 
 function TGocciaTemporalDurationValue.GetMilliseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsDuration(AThisValue, 'get Duration.milliseconds').FMilliseconds);
+  Result := BigIntFieldToNumber(AsDuration(AThisValue, 'get Duration.milliseconds').FMillisecondsBig);
 end;
 
 function TGocciaTemporalDurationValue.GetMicroseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsDuration(AThisValue, 'get Duration.microseconds').FMicroseconds);
+  Result := BigIntFieldToNumber(AsDuration(AThisValue, 'get Duration.microseconds').FMicrosecondsBig);
 end;
 
 function TGocciaTemporalDurationValue.GetNanoseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsDuration(AThisValue, 'get Duration.nanoseconds').FNanoseconds);
+  Result := BigIntFieldToNumber(AsDuration(AThisValue, 'get Duration.nanoseconds').FNanosecondsBig);
 end;
 
 function TGocciaTemporalDurationValue.GetSign(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -416,10 +598,10 @@ var
   D: TGocciaTemporalDurationValue;
 begin
   D := AsDuration(AThisValue, 'Duration.prototype.negated');
-  Result := TGocciaTemporalDurationValue.Create(
-    -D.FYears, -D.FMonths, -D.FWeeks, -D.FDays,
-    -D.FHours, -D.FMinutes, -D.FSeconds,
-    -D.FMilliseconds, -D.FMicroseconds, -D.FNanoseconds);
+  Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(
+    D.FYearsBig.Negate, D.FMonthsBig.Negate, D.FWeeksBig.Negate, D.FDaysBig.Negate,
+    D.FHoursBig.Negate, D.FMinutesBig.Negate, D.FSecondsBig.Negate,
+    D.FMillisecondsBig.Negate, D.FMicrosecondsBig.Negate, D.FNanosecondsBig.Negate);
 end;
 
 function TGocciaTemporalDurationValue.DurationAbs(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -427,10 +609,10 @@ var
   D: TGocciaTemporalDurationValue;
 begin
   D := AsDuration(AThisValue, 'Duration.prototype.abs');
-  Result := TGocciaTemporalDurationValue.Create(
-    Abs(D.FYears), Abs(D.FMonths), Abs(D.FWeeks), Abs(D.FDays),
-    Abs(D.FHours), Abs(D.FMinutes), Abs(D.FSeconds),
-    Abs(D.FMilliseconds), Abs(D.FMicroseconds), Abs(D.FNanoseconds));
+  Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(
+    D.FYearsBig.AbsValue, D.FMonthsBig.AbsValue, D.FWeeksBig.AbsValue, D.FDaysBig.AbsValue,
+    D.FHoursBig.AbsValue, D.FMinutesBig.AbsValue, D.FSecondsBig.AbsValue,
+    D.FMillisecondsBig.AbsValue, D.FMicrosecondsBig.AbsValue, D.FNanosecondsBig.AbsValue);
 end;
 
 function TGocciaTemporalDurationValue.DurationAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -464,12 +646,12 @@ begin
     Other := nil;
   end;
 
-  Result := TGocciaTemporalDurationValue.Create(
-    D.FYears + Other.FYears, D.FMonths + Other.FMonths,
-    D.FWeeks + Other.FWeeks, D.FDays + Other.FDays,
-    D.FHours + Other.FHours, D.FMinutes + Other.FMinutes,
-    D.FSeconds + Other.FSeconds, D.FMilliseconds + Other.FMilliseconds,
-    D.FMicroseconds + Other.FMicroseconds, D.FNanoseconds + Other.FNanoseconds);
+  Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(
+    D.FYearsBig.Add(Other.FYearsBig), D.FMonthsBig.Add(Other.FMonthsBig),
+    D.FWeeksBig.Add(Other.FWeeksBig), D.FDaysBig.Add(Other.FDaysBig),
+    D.FHoursBig.Add(Other.FHoursBig), D.FMinutesBig.Add(Other.FMinutesBig),
+    D.FSecondsBig.Add(Other.FSecondsBig), D.FMillisecondsBig.Add(Other.FMillisecondsBig),
+    D.FMicrosecondsBig.Add(Other.FMicrosecondsBig), D.FNanosecondsBig.Add(Other.FNanosecondsBig));
 end;
 
 function TGocciaTemporalDurationValue.DurationSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -502,12 +684,12 @@ begin
     Other := nil;
   end;
 
-  Result := TGocciaTemporalDurationValue.Create(
-    D.FYears - Other.FYears, D.FMonths - Other.FMonths,
-    D.FWeeks - Other.FWeeks, D.FDays - Other.FDays,
-    D.FHours - Other.FHours, D.FMinutes - Other.FMinutes,
-    D.FSeconds - Other.FSeconds, D.FMilliseconds - Other.FMilliseconds,
-    D.FMicroseconds - Other.FMicroseconds, D.FNanoseconds - Other.FNanoseconds);
+  Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(
+    D.FYearsBig.Subtract(Other.FYearsBig), D.FMonthsBig.Subtract(Other.FMonthsBig),
+    D.FWeeksBig.Subtract(Other.FWeeksBig), D.FDaysBig.Subtract(Other.FDaysBig),
+    D.FHoursBig.Subtract(Other.FHoursBig), D.FMinutesBig.Subtract(Other.FMinutesBig),
+    D.FSecondsBig.Subtract(Other.FSecondsBig), D.FMillisecondsBig.Subtract(Other.FMillisecondsBig),
+    D.FMicrosecondsBig.Subtract(Other.FMicrosecondsBig), D.FNanosecondsBig.Subtract(Other.FNanosecondsBig));
 end;
 
 function TGocciaTemporalDurationValue.DurationWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -516,9 +698,9 @@ var
   Obj: TGocciaObjectValue;
   V: TGocciaValue;
   NewYears, NewMonths, NewWeeks, NewDays, NewHours, NewMinutes, NewSeconds,
-  NewMilliseconds, NewMicroseconds, NewNanoseconds: Int64;
+  NewMilliseconds, NewMicroseconds, NewNanoseconds: TBigInteger;
 
-  function GetFieldOr(const AName: string; const ADefault: Int64): Int64;
+  function GetFieldOr(const AName: string; const ADefault: TBigInteger): TBigInteger;
   var
     Val: TGocciaValue;
   begin
@@ -526,7 +708,7 @@ var
     if (Val = nil) or (Val is TGocciaUndefinedLiteralValue) then
       Result := ADefault
     else
-      Result := Trunc(Val.ToNumberLiteral.Value);
+      Result := ValueToBigInteger(Val);
   end;
 
 begin
@@ -536,17 +718,20 @@ begin
     ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['Duration']), SSuggestTemporalWithObject);
   Obj := TGocciaObjectValue(V);
 
-  Result := TGocciaTemporalDurationValue.Create(
-    GetFieldOr('years', D.FYears),
-    GetFieldOr('months', D.FMonths),
-    GetFieldOr('weeks', D.FWeeks),
-    GetFieldOr('days', D.FDays),
-    GetFieldOr('hours', D.FHours),
-    GetFieldOr('minutes', D.FMinutes),
-    GetFieldOr('seconds', D.FSeconds),
-    GetFieldOr('milliseconds', D.FMilliseconds),
-    GetFieldOr('microseconds', D.FMicroseconds),
-    GetFieldOr('nanoseconds', D.FNanoseconds));
+  NewYears := GetFieldOr('years', D.FYearsBig);
+  NewMonths := GetFieldOr('months', D.FMonthsBig);
+  NewWeeks := GetFieldOr('weeks', D.FWeeksBig);
+  NewDays := GetFieldOr('days', D.FDaysBig);
+  NewHours := GetFieldOr('hours', D.FHoursBig);
+  NewMinutes := GetFieldOr('minutes', D.FMinutesBig);
+  NewSeconds := GetFieldOr('seconds', D.FSecondsBig);
+  NewMilliseconds := GetFieldOr('milliseconds', D.FMillisecondsBig);
+  NewMicroseconds := GetFieldOr('microseconds', D.FMicrosecondsBig);
+  NewNanoseconds := GetFieldOr('nanoseconds', D.FNanosecondsBig);
+
+  Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(
+    NewYears, NewMonths, NewWeeks, NewDays, NewHours, NewMinutes, NewSeconds,
+    NewMilliseconds, NewMicroseconds, NewNanoseconds);
 end;
 
 // TC39 Temporal §7.3.21 Temporal.Duration.prototype.round(roundTo)
@@ -560,7 +745,9 @@ var
   Increment: Integer;
   HasRelativeTo: Boolean;
   RelDate: TTemporalDateRecord;
-  TotalNs, Divisor: Int64;
+  TotalNsBig, DivisorBig, TimeNsBig, CarryDaysBig: TBigInteger;
+  ResultHoursBig, ResultMinutesBig, ResultSecondsBig: TBigInteger;
+  ResultMsBig, ResultUsBig, ResultNsBig: TBigInteger;
   RemNs, TimeNs: Int64;
   ResultYears, ResultMonths: Int64;
   ResultDays, ResultHours, ResultMinutes, ResultSeconds: Int64;
@@ -571,7 +758,9 @@ var
   WholeUnits, PeriodNs, ScaledValue, RoundedValue: Int64;
   CarryDays: Int64;
   Sign: Integer;
+  CalendarYears, CalendarMonths, CalendarWeeks, CalendarDays: Int64;
 begin
+  try
   D := AsDuration(AThisValue, 'Duration.prototype.round');
   Arg := AArgs.GetElement(0);
 
@@ -611,15 +800,15 @@ begin
     SmallestUnit := tuNanosecond;
   if LargestUnit = tuNone then
   begin
-    if D.FYears <> 0 then LargestUnit := tuYear
-    else if D.FMonths <> 0 then LargestUnit := tuMonth
-    else if D.FWeeks <> 0 then LargestUnit := tuWeek
-    else if D.FDays <> 0 then LargestUnit := tuDay
-    else if D.FHours <> 0 then LargestUnit := tuHour
-    else if D.FMinutes <> 0 then LargestUnit := tuMinute
-    else if D.FSeconds <> 0 then LargestUnit := tuSecond
-    else if D.FMilliseconds <> 0 then LargestUnit := tuMillisecond
-    else if D.FMicroseconds <> 0 then LargestUnit := tuMicrosecond
+    if not D.FYearsBig.IsZero then LargestUnit := tuYear
+    else if not D.FMonthsBig.IsZero then LargestUnit := tuMonth
+    else if not D.FWeeksBig.IsZero then LargestUnit := tuWeek
+    else if not D.FDaysBig.IsZero then LargestUnit := tuDay
+    else if not D.FHoursBig.IsZero then LargestUnit := tuHour
+    else if not D.FMinutesBig.IsZero then LargestUnit := tuMinute
+    else if not D.FSecondsBig.IsZero then LargestUnit := tuSecond
+    else if not D.FMillisecondsBig.IsZero then LargestUnit := tuMillisecond
+    else if not D.FMicrosecondsBig.IsZero then LargestUnit := tuMicrosecond
     else LargestUnit := SmallestUnit;
     if Ord(LargestUnit) > Ord(SmallestUnit) then
       LargestUnit := SmallestUnit;
@@ -629,7 +818,7 @@ begin
     ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
 
   // Determine if calendar-relative computation is needed
-  NeedCalendar := (D.FYears <> 0) or (D.FMonths <> 0) or
+  NeedCalendar := (not D.FYearsBig.IsZero) or (not D.FMonthsBig.IsZero) or
     (Ord(SmallestUnit) <= Ord(tuMonth)) or (Ord(LargestUnit) <= Ord(tuMonth));
 
   if NeedCalendar and not HasRelativeTo then
@@ -649,24 +838,25 @@ begin
     // separate calendar steps so day-clamping is applied after each,
     // matching TC39 Temporal semantics (e.g. 2020-02-29 + P1Y1M clamps to
     // 2021-02-28 after +1Y, then advances to 2021-03-28).
+    CalendarYears := BigIntToCheckedInt64(D.FYearsBig, 'years');
+    CalendarMonths := BigIntToCheckedInt64(D.FMonthsBig, 'months');
+    CalendarWeeks := BigIntToCheckedInt64(D.FWeeksBig, 'weeks');
+    CalendarDays := BigIntToCheckedInt64(D.FDaysBig, 'days');
     IntermDate := RelDate;
-    if D.FYears <> 0 then
+    if not D.FYearsBig.IsZero then
       IntermDate := AddMonthsToDate(IntermDate.Year, IntermDate.Month, IntermDate.Day,
-        D.FYears * 12);
-    if D.FMonths <> 0 then
+        CalendarYears * 12);
+    if not D.FMonthsBig.IsZero then
       IntermDate := AddMonthsToDate(IntermDate.Year, IntermDate.Month, IntermDate.Day,
-        D.FMonths);
-    TimeNs := D.FNanoseconds +
-              D.FMicroseconds * NANOSECONDS_PER_MICROSECOND +
-              D.FMilliseconds * NANOSECONDS_PER_MILLISECOND +
-              D.FSeconds * NANOSECONDS_PER_SECOND +
-              D.FMinutes * NANOSECONDS_PER_MINUTE +
-              D.FHours * NANOSECONDS_PER_HOUR;
-    CarryDays := TimeNs div NANOSECONDS_PER_DAY;
-    TimeNs := TimeNs mod NANOSECONDS_PER_DAY;
+        CalendarMonths);
+    TimeNsBig := DurationSubDayNanosecondsBig(D);
+    CarryDaysBig := TimeNsBig.Divide(BigIntUnit(NANOSECONDS_PER_DAY));
+    TimeNsBig := TimeNsBig.Modulo(BigIntUnit(NANOSECONDS_PER_DAY));
+    CarryDays := BigIntToCheckedInt64(CarryDaysBig, 'carry days');
+    TimeNs := BigIntToCheckedInt64(TimeNsBig, 'sub-day nanoseconds');
 
     EndDate := AddDaysToDate(IntermDate.Year, IntermDate.Month, IntermDate.Day,
-      D.FWeeks * 7 + D.FDays + CarryDays);
+      CalendarWeeks * 7 + CalendarDays + CarryDays);
     StartEpoch := DateToEpochDays(RelDate.Year, RelDate.Month, RelDate.Day);
     EndEpoch := DateToEpochDays(EndDate.Year, EndDate.Month, EndDate.Day);
 
@@ -698,26 +888,23 @@ begin
           until False;
         end;
 
-        // Align to increment-boundary bucket. For negative durations the
-        // fractional position extends past WholeUnits in the negative
-        // direction, so use WholeUnits - 1 as alignment base.
-        if Sign < 0 then
-          ScaledValue := WholeUnits - 1
+        // Align to increment-boundary bucket toward zero, then use the
+        // sign-aware bucket span to decide whether rounding carries.
+        if Sign > 0 then
+          ScaledValue := (WholeUnits div Increment) * Increment
         else
-          ScaledValue := WholeUnits;
-        if (ScaledValue >= 0) or (ScaledValue mod Increment = 0) then
-          ScaledValue := (ScaledValue div Increment) * Increment
-        else
-          ScaledValue := ((ScaledValue div Increment) - 1) * Increment;
+          ScaledValue := -(((-WholeUnits) div Increment) * Increment);
 
         WalkDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, ScaledValue * 12);
         WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
-        NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, (ScaledValue + Increment) * 12);
+        NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day,
+          (ScaledValue + Sign * Increment) * 12);
         NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
-        PeriodNs := (NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
-        RoundedValue := RoundWithMode((EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs, PeriodNs, Mode);
+        PeriodNs := Abs(NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
+        RoundedValue := RoundWithMode(
+          Abs((EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs), PeriodNs, Mode);
         if RoundedValue >= PeriodNs then
-          WholeUnits := ScaledValue + Increment
+          WholeUnits := ScaledValue + Sign * Increment
         else
           WholeUnits := ScaledValue;
 
@@ -748,24 +935,21 @@ begin
           until False;
         end;
 
-        // Align to increment-boundary bucket (same sign-aware logic as years)
-        if Sign < 0 then
-          ScaledValue := WholeUnits - 1
+        if Sign > 0 then
+          ScaledValue := (WholeUnits div Increment) * Increment
         else
-          ScaledValue := WholeUnits;
-        if (ScaledValue >= 0) or (ScaledValue mod Increment = 0) then
-          ScaledValue := (ScaledValue div Increment) * Increment
-        else
-          ScaledValue := ((ScaledValue div Increment) - 1) * Increment;
+          ScaledValue := -(((-WholeUnits) div Increment) * Increment);
 
         WalkDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, ScaledValue);
         WalkEpoch := DateToEpochDays(WalkDate.Year, WalkDate.Month, WalkDate.Day);
-        NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day, ScaledValue + Increment);
+        NextDate := AddMonthsToDate(RelDate.Year, RelDate.Month, RelDate.Day,
+          ScaledValue + Sign * Increment);
         NextEpoch := DateToEpochDays(NextDate.Year, NextDate.Month, NextDate.Day);
-        PeriodNs := (NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
-        RoundedValue := RoundWithMode((EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs, PeriodNs, Mode);
+        PeriodNs := Abs(NextEpoch - WalkEpoch) * NANOSECONDS_PER_DAY;
+        RoundedValue := RoundWithMode(
+          Abs((EndEpoch - WalkEpoch) * NANOSECONDS_PER_DAY + TimeNs), PeriodNs, Mode);
         if RoundedValue >= PeriodNs then
-          WholeUnits := ScaledValue + Increment
+          WholeUnits := ScaledValue + Sign * Increment
         else
           WholeUnits := ScaledValue;
 
@@ -786,22 +970,23 @@ begin
     end;
 
     // --- SmallestUnit is week, day, or time: convert to nanoseconds ---
-    TotalNs := (EndEpoch - StartEpoch) * NANOSECONDS_PER_DAY + TimeNs;
+    TotalNsBig := BigIntUnit(EndEpoch - StartEpoch)
+      .Multiply(BigIntUnit(NANOSECONDS_PER_DAY))
+      .Add(BigIntUnit(TimeNs));
 
     if SmallestUnit <> tuNanosecond then
     begin
-      if SmallestUnit = tuWeek then
-        Divisor := NANOSECONDS_PER_DAY * 7 * Increment
-      else
-        Divisor := UnitToNanoseconds(SmallestUnit) * Increment;
-      TotalNs := RoundWithMode(TotalNs, Divisor, Mode);
+      DivisorBig := RoundingDivisorBig(SmallestUnit, Increment);
+      TotalNsBig := RoundTimeDurationToIncrement(TotalNsBig, DivisorBig, Mode);
     end;
 
     // --- Rebalance to year/month if needed ---
     if Ord(LargestUnit) <= Ord(tuMonth) then
     begin
-      ResultDays := TotalNs div NANOSECONDS_PER_DAY;
-      RemNs := TotalNs mod NANOSECONDS_PER_DAY;
+      ResultDays := BigIntToCheckedInt64(
+        TotalNsBig.Divide(BigIntUnit(NANOSECONDS_PER_DAY)), 'days');
+      RemNs := BigIntToCheckedInt64(
+        TotalNsBig.Modulo(BigIntUnit(NANOSECONDS_PER_DAY)), 'sub-day nanoseconds');
 
       EndEpoch := StartEpoch + ResultDays;
       WholeUnits := 0;
@@ -863,88 +1048,31 @@ begin
   end
   else
   begin
-    // --- Non-calendar path (existing behavior) ---
-    TotalNs := D.FNanoseconds +
-               D.FMicroseconds * NANOSECONDS_PER_MICROSECOND +
-               D.FMilliseconds * NANOSECONDS_PER_MILLISECOND +
-               D.FSeconds * NANOSECONDS_PER_SECOND +
-               D.FMinutes * NANOSECONDS_PER_MINUTE +
-               D.FHours * NANOSECONDS_PER_HOUR +
-               D.FDays * NANOSECONDS_PER_DAY +
-               D.FWeeks * 7 * NANOSECONDS_PER_DAY;
+    TotalNsBig := DurationTotalNanosecondsBig(D);
 
     if SmallestUnit <> tuNanosecond then
     begin
-      if SmallestUnit = tuWeek then
-        Divisor := NANOSECONDS_PER_DAY * 7 * Increment
-      else
-        Divisor := UnitToNanoseconds(SmallestUnit) * Increment;
-      TotalNs := RoundWithMode(TotalNs, Divisor, Mode);
+      DivisorBig := RoundingDivisorBig(SmallestUnit, Increment);
+      TotalNsBig := RoundTimeDurationToIncrement(TotalNsBig, DivisorBig, Mode);
     end;
   end;
 
-  // Break down from largestUnit (non-calendar output)
-  ResultDays := 0;
-  ResultHours := 0;
-  ResultMinutes := 0;
-  ResultSeconds := 0;
-  ResultMs := 0;
-  ResultUs := 0;
-  ResultNs := 0;
-  RemNs := TotalNs;
-
-  if Ord(LargestUnit) <= Ord(tuDay) then
-  begin
-    ResultDays := RemNs div NANOSECONDS_PER_DAY;
-    RemNs := RemNs mod NANOSECONDS_PER_DAY;
-  end;
-  if Ord(LargestUnit) <= Ord(tuHour) then
-  begin
-    ResultHours := RemNs div NANOSECONDS_PER_HOUR;
-    RemNs := RemNs mod NANOSECONDS_PER_HOUR;
-  end;
-  if Ord(LargestUnit) <= Ord(tuMinute) then
-  begin
-    ResultMinutes := RemNs div NANOSECONDS_PER_MINUTE;
-    RemNs := RemNs mod NANOSECONDS_PER_MINUTE;
-  end;
-  if Ord(LargestUnit) <= Ord(tuSecond) then
-  begin
-    ResultSeconds := RemNs div NANOSECONDS_PER_SECOND;
-    RemNs := RemNs mod NANOSECONDS_PER_SECOND;
-  end;
-  if Ord(LargestUnit) <= Ord(tuMillisecond) then
-  begin
-    ResultMs := RemNs div NANOSECONDS_PER_MILLISECOND;
-    RemNs := RemNs mod NANOSECONDS_PER_MILLISECOND;
-  end;
-  if Ord(LargestUnit) <= Ord(tuMicrosecond) then
-  begin
-    ResultUs := RemNs div NANOSECONDS_PER_MICROSECOND;
-    RemNs := RemNs mod NANOSECONDS_PER_MICROSECOND;
-  end;
-  ResultNs := RemNs;
+  BalanceTimeDurationToFields(TotalNsBig, LargestUnit, ResultHoursBig,
+    ResultMinutesBig, ResultSecondsBig, ResultMsBig, ResultUsBig, ResultNsBig,
+    ResultDays);
 
   if Ord(LargestUnit) <= Ord(tuWeek) then
-    Result := TGocciaTemporalDurationValue.Create(0, 0, ResultDays div 7, ResultDays mod 7,
-      ResultHours, ResultMinutes, ResultSeconds, ResultMs, ResultUs, ResultNs)
+    Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(TBigInteger.Zero, TBigInteger.Zero,
+      BigIntUnit(ResultDays div 7), BigIntUnit(ResultDays mod 7),
+      ResultHoursBig, ResultMinutesBig, ResultSecondsBig, ResultMsBig, ResultUsBig, ResultNsBig)
   else
-    Result := TGocciaTemporalDurationValue.Create(0, 0, 0, ResultDays,
-      ResultHours, ResultMinutes, ResultSeconds, ResultMs, ResultUs, ResultNs);
-end;
-
-function ZonedDateTimeToDateRecord(const AZdt: TGocciaTemporalZonedDateTimeValue): TTemporalDateRecord;
-var
-  OffsetSeconds: Integer;
-  LocalEpochMs, EpochDays, RemainingMs: Int64;
-begin
-  OffsetSeconds := GetUtcOffsetSeconds(AZdt.TimeZone, AZdt.EpochMilliseconds div 1000);
-  LocalEpochMs := AZdt.EpochMilliseconds + Int64(OffsetSeconds) * 1000;
-  EpochDays := LocalEpochMs div 86400000;
-  RemainingMs := LocalEpochMs mod 86400000;
-  if RemainingMs < 0 then
-    Dec(EpochDays);
-  Result := EpochDaysToDate(EpochDays);
+    Result := TGocciaTemporalDurationValue.CreateFromBigIntegers(TBigInteger.Zero, TBigInteger.Zero,
+      TBigInteger.Zero, BigIntUnit(ResultDays),
+      ResultHoursBig, ResultMinutesBig, ResultSecondsBig, ResultMsBig, ResultUsBig, ResultNsBig);
+  except
+    on E: ETemporalDurationInt64Overflow do
+      ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
+  end;
 end;
 
 function TryParseDateFromPropertyBag(const AObj: TGocciaObjectValue;
@@ -983,7 +1111,11 @@ begin
     Result.Day := PlainDate.Day;
   end
   else if AValue is TGocciaTemporalZonedDateTimeValue then
-    Result := ZonedDateTimeToDateRecord(TGocciaTemporalZonedDateTimeValue(AValue))
+  begin
+    // ZonedDateTime relativeTo needs timezone-aware DST handling. Reject it
+    // until Duration round/total can route through that aware path.
+    ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]), SSuggestTemporalRelativeTo);
+  end
   else if AValue is TGocciaStringLiteralValue then
   begin
     if not CoerceToISODate(TGocciaStringLiteralValue(AValue).Value, DateRec) then
@@ -1055,22 +1187,6 @@ begin
             DateToEpochDays(ADate.Year, ADate.Month, ADate.Day);
 end;
 
-function SubDayNanoseconds(const D: TGocciaTemporalDurationValue): Double;
-var
-  Ns, V: Double;
-begin
-  // Accumulate via implicit Int64->Double assignment to avoid both FPC 3.2.2
-  // bugs: Bug A (Double(Int64) bit reinterpretation) and Bug B (Int64 * 1.0
-  // wrong results near +/-2^31 on AArch64). See docs/contributing/tooling.md.
-  Ns := D.FNanoseconds;
-  V := D.FMicroseconds; Ns := Ns + V * NANOSECONDS_PER_MICROSECOND;
-  V := D.FMilliseconds; Ns := Ns + V * NANOSECONDS_PER_MILLISECOND;
-  V := D.FSeconds;      Ns := Ns + V * NANOSECONDS_PER_SECOND;
-  V := D.FMinutes;      Ns := Ns + V * NANOSECONDS_PER_MINUTE;
-  V := D.FHours;        Ns := Ns + V * NANOSECONDS_PER_HOUR;
-  Result := Ns;
-end;
-
 // Express the duration as a fractional month count relative to a reference date.
 // Walks forward from the reference date by the duration's calendar components,
 // then measures the result in calendar months plus a fractional remainder.
@@ -1081,17 +1197,26 @@ function ComputeTotalInUnits(const D: TGocciaTemporalDurationValue;
 var
   EndRec, CheckRec, SpanRec: TTemporalDateRecord;
   WholeUnits, CarryDays: Int64;
+  CalendarYears, CalendarMonths, CalendarWeeks, CalendarDays: Int64;
   TotalMonthsDiff: Int64;
   CheckEpoch, EndEpoch, SpanEpoch: Int64;
   RemainingDays, DaysInSpan: Int64;
-  TimeNs, RemainderNs, FracDays: Double;
+  RemainderNs, FracDays: Double;
+  TimeNsBig, CarryDaysBig, RemainderNsBig: TBigInteger;
 begin
   // Fold sub-day time overflow into whole days so the calendar walk is accurate
-  TimeNs := SubDayNanoseconds(D);
-  CarryDays := Trunc(TimeNs / NANOSECONDS_PER_DAY);
-  RemainderNs := TimeNs - CarryDays * NANOSECONDS_PER_DAY;
+  TimeNsBig := DurationSubDayNanosecondsBig(D);
+  CarryDaysBig := TimeNsBig.Divide(BigIntUnit(NANOSECONDS_PER_DAY));
+  RemainderNsBig := TimeNsBig.Modulo(BigIntUnit(NANOSECONDS_PER_DAY));
+  CarryDays := BigIntToCheckedInt64(CarryDaysBig, 'carry days');
+  RemainderNs := RemainderNsBig.ToDouble;
 
-  EndRec := DurationEndDate(ARelDate, D.FYears, D.FMonths, D.FWeeks, D.FDays + CarryDays);
+  CalendarYears := BigIntToCheckedInt64(D.FYearsBig, 'years');
+  CalendarMonths := BigIntToCheckedInt64(D.FMonthsBig, 'months');
+  CalendarWeeks := BigIntToCheckedInt64(D.FWeeksBig, 'weeks');
+  CalendarDays := BigIntToCheckedInt64(D.FDaysBig, 'days');
+  EndRec := DurationEndDate(ARelDate, CalendarYears, CalendarMonths,
+    CalendarWeeks, CalendarDays + CarryDays);
   EndEpoch := DateToEpochDays(EndRec.Year, EndRec.Month, EndRec.Day);
 
   // Estimate whole units from the month difference
@@ -1165,8 +1290,9 @@ var
   HasRelativeTo: Boolean;
   RelDate: TTemporalDateRecord;
   ResolvedDays: Int64;
-  TotalNs, V: Double;
+  TotalNsBig: TBigInteger;
 begin
+  try
   D := AsDuration(AThisValue, 'Duration.prototype.total');
   Arg := AArgs.GetElement(0);
   HasRelativeTo := False;
@@ -1213,30 +1339,36 @@ begin
   end;
 
   // Calendar source components (years/months) require relativeTo
-  if (D.FYears <> 0) or (D.FMonths <> 0) then
+  if (not D.FYearsBig.IsZero) or (not D.FMonthsBig.IsZero) then
   begin
     if not HasRelativeTo then
       ThrowRangeError(SErrorDurationTotalRequiresRelativeTo, SSuggestTemporalRelativeTo);
 
     RelDate := ParseRelativeTo(RelToArg, 'Duration.prototype.total');
-    ResolvedDays := ResolveRelativeDays(RelDate, D.FYears, D.FMonths, D.FWeeks, D.FDays);
+    ResolvedDays := ResolveRelativeDays(RelDate,
+      BigIntToCheckedInt64(D.FYearsBig, 'years'),
+      BigIntToCheckedInt64(D.FMonthsBig, 'months'),
+      BigIntToCheckedInt64(D.FWeeksBig, 'weeks'),
+      BigIntToCheckedInt64(D.FDaysBig, 'days'));
 
-    V := ResolvedDays;
-    TotalNs := SubDayNanoseconds(D) + V * NANOSECONDS_PER_DAY;
+    TotalNsBig := DurationSubDayNanosecondsBig(D)
+      .Add(BigIntUnit(ResolvedDays).Multiply(BigIntUnit(NANOSECONDS_PER_DAY)));
   end
   else
-  begin
-    TotalNs := SubDayNanoseconds(D);
-    V := D.FDays;  TotalNs := TotalNs + V * NANOSECONDS_PER_DAY;
-    V := D.FWeeks; TotalNs := TotalNs + V * 7 * NANOSECONDS_PER_DAY;
-  end;
+    TotalNsBig := DurationTotalNanosecondsBig(D);
 
   if TargetUnit = tuNanosecond then
-    Result := TGocciaNumberLiteralValue.Create(TotalNs)
+    Result := TGocciaNumberLiteralValue.Create(TotalNsBig.ToDouble)
   else if TargetUnit = tuWeek then
-    Result := TGocciaNumberLiteralValue.Create(TotalNs / (7 * NANOSECONDS_PER_DAY))
+    Result := TGocciaNumberLiteralValue.Create(
+      TotalNsBig.ToDouble / (7 * NANOSECONDS_PER_DAY))
   else
-    Result := TGocciaNumberLiteralValue.Create(TotalNs / UnitToNanoseconds(TargetUnit));
+    Result := TGocciaNumberLiteralValue.Create(
+      TotalNsBig.ToDouble / UnitToNanoseconds(TargetUnit));
+  except
+    on E: ETemporalDurationInt64Overflow do
+      ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
+  end;
 end;
 
 function TGocciaTemporalDurationValue.DurationToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

@@ -53,9 +53,11 @@ type
     FDelegateAsyncIterator: TGocciaValue;
     FDelegateAsyncNext: TGocciaValue;
     FExpressionValues: TDictionary<TObject, TGocciaValue>;
+    FIsAsyncGenerator: Boolean;
   public
     constructor Create(const ABodyStatements: TObjectList<TGocciaASTNode>;
-      const ACallScope: TGocciaScope; const AContext: TGocciaEvaluationContext);
+      const ACallScope: TGocciaScope; const AContext: TGocciaEvaluationContext;
+      const AIsAsyncGenerator: Boolean = False);
     destructor Destroy; override;
     function Resume(const AKind: TGocciaGeneratorResumeKind;
       const AValue: TGocciaValue; out ADone: Boolean): TGocciaValue;
@@ -100,7 +102,8 @@ end;
 
 constructor TGocciaGeneratorContinuation.Create(
   const ABodyStatements: TObjectList<TGocciaASTNode>;
-  const ACallScope: TGocciaScope; const AContext: TGocciaEvaluationContext);
+  const ACallScope: TGocciaScope; const AContext: TGocciaEvaluationContext;
+  const AIsAsyncGenerator: Boolean = False);
 begin
   inherited Create;
   FBodyStatements := ABodyStatements;
@@ -110,6 +113,7 @@ begin
   FStatementIndex := 0;
   FStarted := False;
   FCompleted := False;
+  FIsAsyncGenerator := AIsAsyncGenerator;
   FSuspendedYield := nil;
   FPendingValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   FExpressionValues := TDictionary<TObject, TGocciaValue>.Create;
@@ -216,6 +220,7 @@ var
   CallArgs: TGocciaArgumentsCollection;
   IteratorResult: TGocciaObjectValue;
   IteratorMethod: TGocciaValue;
+  RawIteratorResult: TGocciaValue;
   YieldedValue: TGocciaValue;
 begin
   if FHasPendingValue and (FSuspendedYield = AYieldExpression) then
@@ -342,7 +347,7 @@ begin
 
       FDelegateAsyncIterator := nil;
       FDelegateAsyncNext := nil;
-      if YieldedValue is TGocciaObjectValue then
+      if FIsAsyncGenerator and (YieldedValue is TGocciaObjectValue) then
       begin
         IteratorMethod := TGocciaObjectValue(YieldedValue).GetSymbolProperty(
           TGocciaSymbolValue.WellKnownAsyncIterator);
@@ -368,16 +373,19 @@ begin
     if Assigned(FDelegateAsyncIterator) then
     begin
       if not Assigned(FDelegateAsyncNext) or not FDelegateAsyncNext.IsCallable then
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue
+        ThrowTypeError('Async iterator next is not callable')
       else
       begin
         CallArgs := TGocciaArgumentsCollection.Create;
         try
-          IteratorResult := AwaitValue(TGocciaFunctionBase(FDelegateAsyncNext).Call(
-            CallArgs, FDelegateAsyncIterator)) as TGocciaObjectValue;
+          RawIteratorResult := AwaitValue(TGocciaFunctionBase(FDelegateAsyncNext).Call(
+            CallArgs, FDelegateAsyncIterator));
         finally
           CallArgs.Free;
         end;
+        if not (RawIteratorResult is TGocciaObjectValue) then
+          ThrowTypeError('Async iterator result is not an object');
+        IteratorResult := TGocciaObjectValue(RawIteratorResult);
 
         if IteratorResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
         begin

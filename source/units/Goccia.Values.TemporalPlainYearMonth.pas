@@ -333,6 +333,7 @@ var
   end;
 
 begin
+  try
   YM := AsPlainYearMonth(AThisValue, 'PlainYearMonth.prototype.add');
   Arg := AArgs.GetElement(0);
 
@@ -378,6 +379,10 @@ begin
   end;
 
   Result := TGocciaTemporalPlainYearMonthValue.Create(NewYear, NewMonth, YM.FReferenceDay);
+  except
+    on E: ETemporalDurationInt64Overflow do
+      ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
+  end;
 end;
 
 // TC39 Temporal §10.3.13 Temporal.PlainYearMonth.prototype.subtract(temporalDurationLike)
@@ -402,6 +407,7 @@ var
   end;
 
 begin
+  try
   Arg := AArgs.GetElement(0);
 
   if Arg is TGocciaTemporalDurationValue then
@@ -439,6 +445,10 @@ begin
     Result := YearMonthAdd(NewArgs, AThisValue);
   finally
     NewArgs.Free;
+  end;
+  except
+    on E: ETemporalDurationInt64Overflow do
+      ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
   end;
 end;
 

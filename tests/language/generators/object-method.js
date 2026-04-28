@@ -42,6 +42,56 @@ test("object generator method supports yield delegation", () => {
   expect([...obj.numbers()]).toEqual([1, 2, 3]);
 });
 
+test("object generator yield delegation uses the sync iterator", () => {
+  const source = {
+    [Symbol.asyncIterator]() {
+      return {
+        next() {
+          throw new Error("async iterator should not be used");
+        },
+      };
+    },
+    [Symbol.iterator]() {
+      return [1, 2][Symbol.iterator]();
+    },
+  };
+  const obj = {
+    *numbers() {
+      yield* source;
+    },
+  };
+
+  expect([...obj.numbers()]).toEqual([1, 2]);
+});
+
+test("object generator yield delegation rejects iterator protocol violations", () => {
+  const missingNext = {
+    [Symbol.iterator]() {
+      return {};
+    },
+  };
+  const primitiveResult = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return 1;
+        },
+      };
+    },
+  };
+  const obj = {
+    *missingNext() {
+      yield* missingNext;
+    },
+    *primitiveResult() {
+      yield* primitiveResult;
+    },
+  };
+
+  expect(() => obj.missingNext().next()).toThrow(TypeError);
+  expect(() => obj.primitiveResult().next()).toThrow(TypeError);
+});
+
 test("object generator method return closes through finally", () => {
   let closed = false;
   const obj = {

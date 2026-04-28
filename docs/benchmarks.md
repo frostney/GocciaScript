@@ -47,7 +47,7 @@ The GocciaBenchmarkRunner supports four output formats via the `--format` flag:
 | `console` (default) | Pretty-printed columnar output with suite headers, variance, setup/teardown times, and summary |
 | `text` | Compact one-line-per-benchmark format with optional `setup=Xms teardown=Xms` suffixes |
 | `csv` | Standard CSV with header row (`file,suite,name,ops_per_sec,variance_percentage,mean_ms,iterations,setup_ms,teardown_ms,error`) |
-| `json` | Structured JSON with `files[]` array containing nested `benchmarks[]`, including `opsPerSec`, `variancePercentage`, `minOpsPerSec`, `maxOpsPerSec`, `setupMs`, and `teardownMs` |
+| `json` | Structured JSON with the common CLI envelope (`build`, aggregate `output`, `timing`, `memory`, `workers`) and a `files[]` array containing each `fileName`, per-file timing, and nested `benchmarks[]`, including `opsPerSec`, `variancePercentage`, `minOpsPerSec`, `maxOpsPerSec`, `setupMs`, and `teardownMs` |
 
 Use `--output=<file>` to write results to a file instead of stdout.
 

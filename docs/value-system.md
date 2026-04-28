@@ -408,7 +408,8 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 
 - **Uniqueness** — Uses `IsSameValueZero` (same as `===` except `NaN === NaN` is true) to test for duplicates.
 - **Shared prototype singleton** — All set instances within an engine share a single per-engine prototype, stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). Methods are registered once during `InitializePrototype` and pinned automatically by `TGocciaRealm.SetSlot`. Each method operates through `ThisValue` to access instance data.
-- **Methods** — `add`, `has`, `delete`, `clear`, `forEach`, `values` — all registered on the shared prototype.
+- **Methods** — `add`, `has`, `delete`, `clear`, `forEach`, `values`, `keys`, `entries`, `union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom` — all registered on the shared prototype.
+- **Set-like operations** — Set operation methods accept either a `Set` or an object with `size`, `has(value)`, and `keys()` properties. Runtime validation follows the Set Record shape used by the ECMAScript algorithms.
 - **`size`** — Returned dynamically via `GetProperty` override.
 - **Spreadable** — `ToArray` converts to a `TGocciaArrayValue` for spread syntax support.
 

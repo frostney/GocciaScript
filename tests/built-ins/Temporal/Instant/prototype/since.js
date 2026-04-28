@@ -13,6 +13,28 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.since", () => {
     expect(dur.hours).toBe(1);
   });
 
+  test("since at extreme range with largestUnit microseconds does not overflow", () => {
+    const i1 = Temporal.Instant.fromEpochMilliseconds(8640000000000000);
+    const i2 = Temporal.Instant.fromEpochMilliseconds(-8640000000000000);
+    const dur = i1.since(i2, { largestUnit: "microseconds" });
+    expect(dur.toString()).toBe("PT17280000000000S");
+    expect(dur.nanoseconds).toBe(0);
+  });
+
+  test("since at extreme range with largestUnit nanoseconds does not overflow", () => {
+    const i1 = Temporal.Instant.fromEpochMilliseconds(8640000000000000);
+    const i2 = Temporal.Instant.fromEpochMilliseconds(-8640000000000000);
+    const dur = i1.since(i2, { largestUnit: "nanoseconds" });
+    expect(dur.toString()).toBe("PT17280000000000S");
+  });
+
+  test("since negative at extreme range with largestUnit nanoseconds does not overflow", () => {
+    const i1 = Temporal.Instant.fromEpochMilliseconds(-8640000000000000);
+    const i2 = Temporal.Instant.fromEpochMilliseconds(8640000000000000);
+    const dur = i1.since(i2, { largestUnit: "nanoseconds" });
+    expect(dur.toString()).toBe("-PT17280000000000S");
+  });
+
   test("since() with largestUnit minutes", () => {
     const i1 = Temporal.Instant.fromEpochMilliseconds(90061000);
     const i2 = Temporal.Instant.fromEpochMilliseconds(0);
@@ -29,5 +51,13 @@ describe.runIf(isTemporal)("Temporal.Instant.prototype.since", () => {
     const i1 = Temporal.Instant.fromEpochMilliseconds(5500);
     const i2 = Temporal.Instant.fromEpochMilliseconds(0);
     expect(i1.since(i2, { smallestUnit: "seconds", roundingMode: "halfExpand" }).toString()).toBe("PT6S");
+  });
+
+  test("since() with largestUnit nanoseconds formats balanced seconds", () => {
+    const i1 = Temporal.Instant.fromEpochMilliseconds(5000);
+    const i2 = Temporal.Instant.fromEpochMilliseconds(0);
+    const dur = i1.since(i2, { largestUnit: "nanoseconds" });
+    expect(dur.nanoseconds).toBe(5000000000);
+    expect(dur.toString()).toBe("PT5S");
   });
 });

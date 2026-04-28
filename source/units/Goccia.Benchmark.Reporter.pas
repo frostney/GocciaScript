@@ -5,7 +5,9 @@ unit Goccia.Benchmark.Reporter;
 interface
 
 uses
-  Classes;
+  Classes,
+
+  Goccia.CLI.JSON.Reporter;
 
 type
   TBenchmarkEntry = record
@@ -42,6 +44,7 @@ type
     FOutput: TStringList;
     FWallClockDurationNanoseconds: Int64;
     FJobCount: Integer;
+    FMemoryStats: TCLIJSONMemoryStats;
 
     procedure RenderConsole;
     procedure RenderText;
@@ -67,6 +70,7 @@ type
     property Files[AIndex: Integer]: TBenchmarkFileResult read GetFileResult;
     property WallClockDurationNanoseconds: Int64 read FWallClockDurationNanoseconds write FWallClockDurationNanoseconds;
     property JobCount: Integer read FJobCount write FJobCount;
+    property MemoryStats: TCLIJSONMemoryStats read FMemoryStats write FMemoryStats;
   end;
 
 function ParseReportFormat(const S: string): TBenchmarkReportFormat;
@@ -74,11 +78,18 @@ function ParseReportFormat(const S: string): TBenchmarkReportFormat;
 implementation
 
 uses
+  Math,
   SysUtils,
 
   TimingUtils,
 
   Goccia.CSV;
+
+function IsPositiveFinite(const AValue: Double): Boolean;
+begin
+  Result := (AValue > 0) and not Math.IsNan(AValue) and
+    not Math.IsInfinite(AValue);
+end;
 
 function ParseReportFormat(const S: string): TBenchmarkReportFormat;
 var
@@ -104,6 +115,7 @@ begin
   FFileCount := 0;
   FWallClockDurationNanoseconds := 0;
   FJobCount := 1;
+  FMemoryStats := DefaultCLIJSONMemoryStats;
   SetLength(FFiles, 0);
 end;
 
@@ -337,75 +349,130 @@ var
   Entry: TBenchmarkEntry;
   TotalBenchmarks: Integer;
   TotalDurationNanoseconds: Int64;
-  First: Boolean;
+  Timing: TCLIJSONTiming;
+  FileTiming: TCLIJSONTiming;
+  ErrorInfo: TCLIJSONErrorInfo;
+  JSONFormatSettings: TFormatSettings;
+  FileOk: Boolean;
+  FilesJSON, FileJSON, BenchmarksJSON, BenchmarkJSON, ExtraJSON: string;
+  FileErrorJSON, FileErrorMessage: string;
 begin
   TotalBenchmarks := 0;
   TotalDurationNanoseconds := 0;
-
-  FOutput.Add('{');
-  FOutput.Add('  "files": [');
+  FilesJSON := '';
+  JSONFormatSettings := DefaultFormatSettings;
+  JSONFormatSettings.DecimalSeparator := '.';
 
   for F := 0 to FFileCount - 1 do
   begin
-    FOutput.Add('    {');
-    FOutput.Add(SysUtils.Format('      "file": "%s",', [EscapeJSON(FFiles[F].FileName)]));
-    FOutput.Add(SysUtils.Format('      "lexTimeNanoseconds": %d,', [FFiles[F].LexTimeNanoseconds]));
-    FOutput.Add(SysUtils.Format('      "parseTimeNanoseconds": %d,', [FFiles[F].ParseTimeNanoseconds]));
-    if FFiles[F].CompileTimeNanoseconds > 0 then
-      FOutput.Add(SysUtils.Format('      "compileTimeNanoseconds": %d,', [FFiles[F].CompileTimeNanoseconds]));
-    FOutput.Add(SysUtils.Format('      "executeTimeNanoseconds": %d,', [FFiles[F].ExecuteTimeNanoseconds]));
-    FOutput.Add('      "benchmarks": [');
+    FileTiming.LexTimeNanoseconds := FFiles[F].LexTimeNanoseconds;
+    FileTiming.ParseTimeNanoseconds := FFiles[F].ParseTimeNanoseconds;
+    FileTiming.CompileTimeNanoseconds := FFiles[F].CompileTimeNanoseconds;
+    FileTiming.ExecuteTimeNanoseconds := FFiles[F].ExecuteTimeNanoseconds;
+    FileTiming.TotalTimeNanoseconds := FFiles[F].LexTimeNanoseconds +
+      FFiles[F].ParseTimeNanoseconds + FFiles[F].CompileTimeNanoseconds +
+      FFiles[F].ExecuteTimeNanoseconds;
 
-    First := True;
+    BenchmarksJSON := '';
+    FileOk := True;
+    FileErrorMessage := '';
     for E := 0 to Length(FFiles[F].Entries) - 1 do
     begin
       Entry := FFiles[F].Entries[E];
 
-      if not First then
-        FOutput[FOutput.Count - 1] := FOutput[FOutput.Count - 1] + ',';
-      First := False;
-
-      FOutput.Add('        {');
-      FOutput.Add(SysUtils.Format('          "suite": "%s",', [EscapeJSON(Entry.Suite)]));
-      FOutput.Add(SysUtils.Format('          "name": "%s",', [EscapeJSON(Entry.Name)]));
+      if FileOk and
+         ((Entry.Error <> '') or not IsPositiveFinite(Entry.OpsPerSec) or
+          not IsPositiveFinite(Entry.MeanMs) or (Entry.Iterations <= 0)) then
+      begin
+        FileOk := False;
+        if Entry.Error <> '' then
+          FileErrorMessage := Entry.Error
+        else
+          FileErrorMessage := SysUtils.Format(
+            'Benchmark "%s" produced no measurements',
+            [Entry.Name]);
+      end;
 
       if Entry.Error <> '' then
       begin
-        FOutput.Add(SysUtils.Format('          "error": "%s"', [EscapeJSON(Entry.Error)]));
+        BenchmarkJSON := SysUtils.Format(
+          '{"suite":"%s","name":"%s","error":"%s"}',
+          [EscapeJSON(Entry.Suite), EscapeJSON(Entry.Name),
+           EscapeJSON(Entry.Error)])
       end
       else
-      begin
-        FOutput.Add(SysUtils.Format('          "opsPerSec": %.6f,', [Entry.OpsPerSec]));
-        FOutput.Add(SysUtils.Format('          "variancePercentage": %.4f,', [Entry.VariancePercentage]));
-        FOutput.Add(SysUtils.Format('          "meanMs": %.6f,', [Entry.MeanMs]));
-        FOutput.Add(SysUtils.Format('          "iterations": %d,', [Entry.Iterations]));
-        FOutput.Add(SysUtils.Format('          "setupMs": %.6f,', [Entry.SetupMs]));
-        FOutput.Add(SysUtils.Format('          "teardownMs": %.6f,', [Entry.TeardownMs]));
-        FOutput.Add(SysUtils.Format('          "minOpsPerSec": %.6f,', [Entry.MinOpsPerSec]));
-        FOutput.Add(SysUtils.Format('          "maxOpsPerSec": %.6f', [Entry.MaxOpsPerSec]));
-      end;
+        BenchmarkJSON := SysUtils.Format(
+          '{"suite":"%s","name":"%s","opsPerSec":%.6f,' +
+          '"variancePercentage":%.4f,"meanMs":%.6f,"iterations":%d,' +
+          '"setupMs":%.6f,"teardownMs":%.6f,"minOpsPerSec":%.6f,' +
+          '"maxOpsPerSec":%.6f}',
+          [EscapeJSON(Entry.Suite), EscapeJSON(Entry.Name), Entry.OpsPerSec,
+           Entry.VariancePercentage, Entry.MeanMs, Entry.Iterations,
+           Entry.SetupMs, Entry.TeardownMs, Entry.MinOpsPerSec,
+           Entry.MaxOpsPerSec], JSONFormatSettings);
 
-      FOutput.Add('        }');
+      if BenchmarksJSON <> '' then
+        BenchmarksJSON := BenchmarksJSON + ',';
+      BenchmarksJSON := BenchmarksJSON + BenchmarkJSON;
     end;
 
-    FOutput.Add('      ]');
-    FOutput.Add('    }');
+    if FileOk then
+      FileErrorJSON := 'null'
+    else
+    begin
+      ErrorInfo := DefaultCLIJSONErrorInfo;
+      ErrorInfo.ErrorType := 'BenchmarkError';
+      ErrorInfo.Message := FileErrorMessage;
+      ErrorInfo.FileName := FFiles[F].FileName;
+      FileErrorJSON := BuildCLIErrorObjectJSON(ErrorInfo);
+    end;
+
+    FileJSON :=
+      '{' +
+        BuildCLIFileBaseJSON(FFiles[F].FileName, FileOk, '', '', '',
+          FileErrorJSON, FileTiming, '"memory":null') + ',' +
+        SysUtils.Format('"lexTimeNanoseconds":%d,', [FFiles[F].LexTimeNanoseconds]) +
+        SysUtils.Format('"parseTimeNanoseconds":%d,', [FFiles[F].ParseTimeNanoseconds]) +
+        SysUtils.Format('"compileTimeNanoseconds":%d,', [FFiles[F].CompileTimeNanoseconds]) +
+        SysUtils.Format('"executeTimeNanoseconds":%d,', [FFiles[F].ExecuteTimeNanoseconds]) +
+        '"benchmarks":[' + BenchmarksJSON + ']' +
+      '}';
+    if FilesJSON <> '' then
+      FilesJSON := FilesJSON + ',';
+    FilesJSON := FilesJSON + FileJSON;
 
     TotalBenchmarks := TotalBenchmarks + FFiles[F].TotalBenchmarks;
     TotalDurationNanoseconds := TotalDurationNanoseconds + FFiles[F].DurationNanoseconds;
-
-    if F < FFileCount - 1 then
-      FOutput[FOutput.Count - 1] := FOutput[FOutput.Count - 1] + ',';
   end;
 
   if FWallClockDurationNanoseconds > 0 then
     TotalDurationNanoseconds := FWallClockDurationNanoseconds;
 
-  FOutput.Add('  ],');
-  FOutput.Add(SysUtils.Format('  "jobCount": %d,', [FJobCount]));
-  FOutput.Add(SysUtils.Format('  "totalBenchmarks": %d,', [TotalBenchmarks]));
-  FOutput.Add(SysUtils.Format('  "totalDurationNanoseconds": %d', [TotalDurationNanoseconds]));
-  FOutput.Add('}');
+  Timing.LexTimeNanoseconds := 0;
+  Timing.ParseTimeNanoseconds := 0;
+  Timing.CompileTimeNanoseconds := 0;
+  Timing.ExecuteTimeNanoseconds := 0;
+  for F := 0 to FFileCount - 1 do
+  begin
+    Timing.LexTimeNanoseconds := Timing.LexTimeNanoseconds +
+      FFiles[F].LexTimeNanoseconds;
+    Timing.ParseTimeNanoseconds := Timing.ParseTimeNanoseconds +
+      FFiles[F].ParseTimeNanoseconds;
+    Timing.CompileTimeNanoseconds := Timing.CompileTimeNanoseconds +
+      FFiles[F].CompileTimeNanoseconds;
+    Timing.ExecuteTimeNanoseconds := Timing.ExecuteTimeNanoseconds +
+      FFiles[F].ExecuteTimeNanoseconds;
+  end;
+  Timing.TotalTimeNanoseconds := Timing.LexTimeNanoseconds +
+    Timing.ParseTimeNanoseconds + Timing.CompileTimeNanoseconds +
+    Timing.ExecuteTimeNanoseconds;
+
+  ExtraJSON :=
+    SysUtils.Format('"jobCount":%d,', [FJobCount]) +
+    SysUtils.Format('"totalBenchmarks":%d,', [TotalBenchmarks]) +
+    SysUtils.Format('"totalDurationNanoseconds":%d', [TotalDurationNanoseconds]);
+  FOutput.Text := BuildCLIReportJSON(not HasFailures, '', '', '', 'null',
+    Timing, FMemoryStats, FJobCount, FJobCount, FilesJSON, ExtraJSON);
 end;
 
 procedure TBenchmarkReporter.WriteToStream(const AStream: TStream);
@@ -450,7 +517,8 @@ begin
       Entry := FFiles[F].Entries[E];
       if Entry.Error <> '' then
         Exit(True);
-      if (Entry.OpsPerSec <= 0) or (Entry.MeanMs <= 0) or (Entry.Iterations <= 0) then
+      if not IsPositiveFinite(Entry.OpsPerSec) or
+         not IsPositiveFinite(Entry.MeanMs) or (Entry.Iterations <= 0) then
         Exit(True);
       Inc(ValidBenchmarkCount);
     end;

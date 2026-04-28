@@ -56,7 +56,8 @@ type
   TGocciaGeneratorFunctionValue = class(TGocciaFunctionValue)
   protected
     function CreateContinuation(const AArguments: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaGeneratorContinuation;
+      const AThisValue: TGocciaValue;
+      const AIsAsyncGenerator: Boolean = False): TGocciaGeneratorContinuation;
   public
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
   end;
@@ -69,7 +70,8 @@ type
   TGocciaGeneratorMethodValue = class(TGocciaMethodValue)
   protected
     function CreateContinuation(const AArguments: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaGeneratorContinuation;
+      const AThisValue: TGocciaValue;
+      const AIsAsyncGenerator: Boolean = False): TGocciaGeneratorContinuation;
   public
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
   end;
@@ -162,12 +164,19 @@ var
 begin
   if FState = gsCompleted then
     Exit(CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True));
+  if FState = gsExecuting then
+    raise TGocciaThrowValue.Create(GeneratorExecutingError);
   FState := gsExecuting;
-  Value := FContinuation.Resume(grkNext, TGocciaUndefinedLiteralValue.UndefinedValue, Done);
-  if Done then
-    FState := gsCompleted
-  else
-    FState := gsSuspendedYield;
+  try
+    Value := FContinuation.Resume(grkNext, TGocciaUndefinedLiteralValue.UndefinedValue, Done);
+    if Done then
+      FState := gsCompleted
+    else
+      FState := gsSuspendedYield;
+  except
+    FState := gsCompleted;
+    raise;
+  end;
   Result := CreateIteratorResult(Value, Done);
 end;
 
@@ -440,7 +449,8 @@ end;
 
 function TGocciaGeneratorFunctionValue.CreateContinuation(
   const AArguments: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaGeneratorContinuation;
+  const AThisValue: TGocciaValue;
+  const AIsAsyncGenerator: Boolean = False): TGocciaGeneratorContinuation;
 var
   I, J: Integer;
   CallScope: TGocciaScope;
@@ -492,7 +502,8 @@ begin
 
   HoistVarDeclarations(FBodyStatements, CallScope);
   HoistFunctionDeclarations(FBodyStatements, Context);
-  Result := TGocciaGeneratorContinuation.Create(FBodyStatements, CallScope, Context);
+  Result := TGocciaGeneratorContinuation.Create(FBodyStatements, CallScope,
+    Context, AIsAsyncGenerator);
 end;
 
 function TGocciaGeneratorFunctionValue.Call(
@@ -504,14 +515,16 @@ end;
 function TGocciaAsyncGeneratorFunctionValue.Call(
   const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaAsyncGeneratorObjectValue.Create(CreateContinuation(AArguments, AThisValue));
+  Result := TGocciaAsyncGeneratorObjectValue.Create(
+    CreateContinuation(AArguments, AThisValue, True));
 end;
 
 { TGocciaGeneratorMethodValue }
 
 function TGocciaGeneratorMethodValue.CreateContinuation(
   const AArguments: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaGeneratorContinuation;
+  const AThisValue: TGocciaValue;
+  const AIsAsyncGenerator: Boolean = False): TGocciaGeneratorContinuation;
 var
   I, J: Integer;
   CallScope: TGocciaScope;
@@ -563,7 +576,8 @@ begin
 
   HoistVarDeclarations(FBodyStatements, CallScope);
   HoistFunctionDeclarations(FBodyStatements, Context);
-  Result := TGocciaGeneratorContinuation.Create(FBodyStatements, CallScope, Context);
+  Result := TGocciaGeneratorContinuation.Create(FBodyStatements, CallScope,
+    Context, AIsAsyncGenerator);
 end;
 
 function TGocciaGeneratorMethodValue.Call(
@@ -575,7 +589,8 @@ end;
 function TGocciaAsyncGeneratorMethodValue.Call(
   const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaAsyncGeneratorObjectValue.Create(CreateContinuation(AArguments, AThisValue));
+  Result := TGocciaAsyncGeneratorObjectValue.Create(
+    CreateContinuation(AArguments, AThisValue, True));
 end;
 
 end.

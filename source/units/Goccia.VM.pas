@@ -1606,7 +1606,8 @@ var
   YieldIndex: Integer;
   YieldedValue: TGocciaValue;
 begin
-  IteratorValue := FVM.GetIteratorValue(RegisterToValue(AIterable), True);
+  IteratorValue := FVM.GetIteratorValue(RegisterToValue(AIterable),
+    Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync);
   if not Assigned(IteratorValue) then
     Exit;
 
@@ -1624,7 +1625,7 @@ begin
     else
     begin
       if not Assigned(NextMethod) or not NextMethod.IsCallable then
-        Exit;
+        ThrowTypeError('Iterator.next is not a function');
       CallArgs := TGocciaArgumentsCollection.Create;
       try
         NextResult := AwaitValue(TGocciaFunctionBase(NextMethod).Call(
@@ -1633,7 +1634,8 @@ begin
         CallArgs.Free;
       end;
       if not (NextResult is TGocciaObjectValue) then
-        Exit;
+        ThrowTypeError(Format(SErrorIteratorResultNotObject,
+          [NextResult.ToStringLiteral.Value]), SSuggestIteratorResultObject);
       DoneValue := NextResult.GetProperty(PROP_DONE);
       Done := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
       YieldedValue := NextResult.GetProperty(PROP_VALUE);
@@ -3210,6 +3212,7 @@ end;
 function TGocciaVM.ConstructValue(const AConstructor: TGocciaValue;
   const AArguments: TGocciaArgumentsCollection): TGocciaValue;
 var
+  BytecodeFunction: TGocciaBytecodeFunctionValue;
   Context: TGocciaEvaluationContext;
   ConstructorName: string;
 begin
@@ -3257,9 +3260,13 @@ begin
 
   if AConstructor is TGocciaBytecodeFunctionValue then
   begin
-    if TGocciaBytecodeFunctionValue(AConstructor).FClosure.Template.IsArrow then
-      ThrowTypeError(Format(SErrorNotConstructor, [TGocciaBytecodeFunctionValue(AConstructor).GetProperty(PROP_NAME)
-        .ToStringLiteral.Value]),
+    BytecodeFunction := TGocciaBytecodeFunctionValue(AConstructor);
+    if Assigned(BytecodeFunction.FClosure) and
+       Assigned(BytecodeFunction.FClosure.Template) and
+       (BytecodeFunction.FClosure.Template.IsGenerator or
+        BytecodeFunction.FClosure.Template.IsArrow) then
+      ThrowTypeError(Format(SErrorNotConstructor,
+        [BytecodeFunction.GetProperty(PROP_NAME).ToStringLiteral.Value]),
         SSuggestNotConstructorType);
   end;
 

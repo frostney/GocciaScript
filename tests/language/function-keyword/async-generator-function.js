@@ -23,3 +23,11 @@ test("async function* expression yields values", async () => {
   expect(await iter.next()).toEqual({ value: 3, done: false });
   expect(await iter.next()).toEqual({ value: undefined, done: true });
 });
+
+test("async function* is not constructable", () => {
+  const make = async function* () {
+    yield 1;
+  };
+
+  expect(() => new make()).toThrow(TypeError);
+});

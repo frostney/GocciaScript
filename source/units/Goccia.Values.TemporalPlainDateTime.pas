@@ -494,6 +494,7 @@ var
   VF: TGocciaValue;
   Y, Mo, W, Da, H, Mi, S, Ms, Us, Ns: Int64;
 begin
+  try
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.add');
   Arg := AArgs.GetElement(0);
 
@@ -551,6 +552,10 @@ begin
     DateRec.Year, DateRec.Month, DateRec.Day,
     Balanced.Hour, Balanced.Minute, Balanced.Second,
     Balanced.Millisecond, Balanced.Microsecond, Balanced.Nanosecond);
+  except
+    on E: ETemporalDurationInt64Overflow do
+      ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
+  end;
 end;
 
 function TGocciaTemporalPlainDateTimeValue.DateTimeSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -564,6 +569,7 @@ var
   VF: TGocciaValue;
   Y, Mo, W, Da, H, Mi, S, Ms, Us, Ns: Int64;
 begin
+  try
   Arg := AArgs.GetElement(0);
 
   if Arg is TGocciaTemporalDurationValue then
@@ -609,6 +615,10 @@ begin
     Result := DateTimeAdd(NewArgs, AThisValue);
   finally
     NewArgs.Free;
+  end;
+  except
+    on E: ETemporalDurationInt64Overflow do
+      ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
   end;
 end;
 

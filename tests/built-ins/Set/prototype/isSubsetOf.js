@@ -22,6 +22,20 @@ describe("Set.prototype.isSubsetOf", () => {
     expect(a.isSubsetOf(b)).toBe(true);
   });
 
+  test("accepts set-like object", () => {
+    const setLike = {
+      size: 3,
+      has(value) {
+        return value === 1 || value === 2 || value === 3;
+      },
+      keys() {
+        return [1, 2, 3].values();
+      },
+    };
+    expect(new Set([1, 2]).isSubsetOf(setLike)).toBe(true);
+    expect(new Set([1, 4]).isSubsetOf(setLike)).toBe(false);
+  });
+
   test("throws TypeError when called on non-Set", () => {
     const isSubsetOf = Set.prototype.isSubsetOf;
     expect(() => isSubsetOf.call(Set.prototype, new Set())).toThrow(TypeError);
@@ -29,7 +43,7 @@ describe("Set.prototype.isSubsetOf", () => {
     expect(() => isSubsetOf.call(new Map(), new Set())).toThrow(TypeError);
   });
 
-  test("throws TypeError when argument is not a Set", () => {
+  test("throws TypeError when argument is not set-like", () => {
     const s = new Set([1, 2]);
     expect(() => s.isSubsetOf({})).toThrow(TypeError);
     expect(() => s.isSubsetOf([])).toThrow(TypeError);

@@ -33,3 +33,11 @@ test("named function* expression exposes its name internally", () => {
 
   expect(make().next()).toEqual({ value: "named", done: false });
 });
+
+test("function* is not constructable", () => {
+  const make = function* () {
+    yield 1;
+  };
+
+  expect(() => new make()).toThrow(TypeError);
+});

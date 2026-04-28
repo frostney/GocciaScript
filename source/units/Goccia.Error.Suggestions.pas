@@ -238,6 +238,7 @@ resourcestring
   SSuggestTemporalISOFormat = 'provide a valid ISO 8601 string (e.g., "2024-01-15", "2024-01-15T10:30:00")';
   SSuggestTemporalFromArg = 'pass a string in ISO 8601 format, an existing Temporal object, or a property bag';
   SSuggestTemporalBigIntArg = 'epochNanoseconds must be a BigInt (e.g., 0n or BigInt(1000000))';
+  SSuggestTemporalInstantRange = 'epochNanoseconds must be between -8640000000000000000000n and 8640000000000000000000n';
   SSuggestTemporalCompareArg = 'both arguments must be the same Temporal type or valid ISO strings';
   SSuggestTemporalWithObject = 'pass an object with the date/time fields to update (e.g., { year: 2025 })';
   SSuggestTemporalDurationArg = 'pass a Temporal.Duration, a duration string (e.g., "P1Y2M"), or a duration-like object';
@@ -330,7 +331,7 @@ resourcestring
   // Runtime errors — Set
   SSuggestSetThisType = 'Set prototype methods must be called on a Set instance';
   SSuggestSetCallbackRequired = 'pass a function as the callback argument';
-  SSuggestSetOperationArgType = 'pass a Set instance as the argument';
+  SSuggestSetOperationArgType = 'pass a Set instance or an object with size, has(), and keys()';
 
   // Runtime errors — Map
   SSuggestMapThisType = 'Map prototype methods must be called on a Map instance';
