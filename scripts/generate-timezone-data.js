@@ -36,6 +36,7 @@ const RESOURCE_FORMAT_VERSION = 1;
 const RESOURCE_HEADER_SIZE = RESOURCE_MAGIC.length + 6 * 4;
 const RESOURCE_ENTRY_SIZE = 4 * 4;
 const MAX_REDIRECTS = 5;
+const DOWNLOAD_TIMEOUT_MS = 30000;
 const PASCAL_UNIT_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function usage() {
@@ -127,13 +128,100 @@ function downloadFile(url, outputFile) {
         return;
       }
 
-      client
-        .get(currentUrl, (response) => {
+      let file = null;
+      let response = null;
+      let req = null;
+      let settled = false;
+
+      function cleanup() {
+        if (req) {
+          req.setTimeout(0);
+          req.removeListener("timeout", onTimeout);
+          req.removeListener("error", onRequestError);
+        }
+
+        if (response && response.socket) {
+          response.socket.setTimeout(0);
+          response.socket.removeListener("timeout", onTimeout);
+        }
+
+        if (response) {
+          response.removeListener("error", onResponseError);
+        }
+
+        if (file) {
+          file.removeListener("finish", onFileFinish);
+          file.removeListener("error", onFileError);
+        }
+      }
+
+      function abortRequest() {
+        req.once("error", () => {});
+        req.abort();
+      }
+
+      function fail(error) {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        cleanup();
+        if (file) {
+          file.destroy();
+        }
+        reject(error);
+      }
+
+      function onTimeout() {
+        abortRequest();
+        fail(new Error(`Timeout downloading ${currentUrl}`));
+      }
+
+      function onRequestError(error) {
+        fail(error);
+      }
+
+      function onResponseError(error) {
+        fail(error);
+      }
+
+      function onFileError(error) {
+        abortRequest();
+        fail(error);
+      }
+
+      function onFileFinish() {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        cleanup();
+        file.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          resolve();
+        });
+      }
+
+      req = client
+        .get(currentUrl, (downloadResponse) => {
+          response = downloadResponse;
+          response.on("error", onResponseError);
+          if (response.socket) {
+            response.socket.setTimeout(DOWNLOAD_TIMEOUT_MS, onTimeout);
+          }
+
           if (
             response.statusCode >= 300 &&
             response.statusCode < 400 &&
             response.headers.location
           ) {
+            cleanup();
             response.resume();
             if (redirectsLeft <= 0) {
               reject(new Error(`Too many redirects while downloading ${currentUrl}`));
@@ -144,17 +232,20 @@ function downloadFile(url, outputFile) {
           }
 
           if (response.statusCode !== 200) {
+            cleanup();
             response.resume();
             reject(new Error(`HTTP ${response.statusCode} while downloading ${currentUrl}`));
             return;
           }
 
-          const file = fs.createWriteStream(outputFile);
+          file = fs.createWriteStream(outputFile);
           response.pipe(file);
-          file.on("finish", () => file.close(resolve));
-          file.on("error", reject);
+          file.on("finish", onFileFinish);
+          file.on("error", onFileError);
         })
-        .on("error", reject);
+        .on("error", onRequestError);
+
+      req.setTimeout(DOWNLOAD_TIMEOUT_MS, onTimeout);
     }
 
     get(url, MAX_REDIRECTS);
