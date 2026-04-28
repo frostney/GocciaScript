@@ -843,16 +843,56 @@ begin
   Result := VMNumberValue(not Trunc(AOperand.ToNumberLiteral.Value));
 end;
 
-function VMGlobalObjectConstructor(const AScope: TGocciaScope): TGocciaValue; inline;
+function VMGlobalConstructor(const AScope: TGocciaScope;
+  const AName: string): TGocciaValue; inline;
+var
+  RootScope: TGocciaScope;
 begin
-  if Assigned(AScope) and AScope.ContainsOwnLexicalBinding(CONSTRUCTOR_OBJECT) then
-    Result := AScope.GetValue(CONSTRUCTOR_OBJECT)
+  RootScope := AScope;
+  while Assigned(RootScope) and Assigned(RootScope.Parent) do
+    RootScope := RootScope.Parent;
+
+  if Assigned(RootScope) and RootScope.ContainsOwnLexicalBinding(AName) then
+    Result := RootScope.GetValue(AName)
   else
     Result := nil;
 end;
 
+function VMGlobalObjectConstructor(const AScope: TGocciaScope): TGocciaValue; inline;
+begin
+  Result := VMGlobalConstructor(AScope, CONSTRUCTOR_OBJECT);
+end;
+
+function VMGlobalFunctionConstructor(const AScope: TGocciaScope): TGocciaValue; inline;
+begin
+  Result := VMGlobalConstructor(AScope, CONSTRUCTOR_FUNCTION);
+end;
+
+function VMBuiltinConstructorMatchValue(const AMatcher, ASubject: TGocciaValue;
+  const AScope: TGocciaScope; out AMatches: Boolean): Boolean; inline;
+var
+  BigIntConstructor, SymbolConstructor: TGocciaValue;
+begin
+  Result := False;
+  AMatches := False;
+
+  BigIntConstructor := VMGlobalConstructor(AScope, CONSTRUCTOR_BIGINT);
+  if Assigned(BigIntConstructor) and (AMatcher = BigIntConstructor) then
+  begin
+    AMatches := ASubject is TGocciaBigIntValue;
+    Exit(True);
+  end;
+
+  SymbolConstructor := VMGlobalConstructor(AScope, CONSTRUCTOR_SYMBOL);
+  if Assigned(SymbolConstructor) and (AMatcher = SymbolConstructor) then
+  begin
+    AMatches := ASubject is TGocciaSymbolValue;
+    Exit(True);
+  end;
+end;
+
 function VMInstanceOfValue(const ALeft, ARight,
-  AObjectConstructor: TGocciaValue): TGocciaValue; inline;
+  AObjectConstructor, AFunctionConstructor: TGocciaValue): TGocciaValue; inline;
 var
   ConstructorProto: TGocciaValue;
 begin
@@ -881,13 +921,13 @@ begin
   end;
 
   if (ALeft is TGocciaFunctionValue) and
-     (TGocciaClassValue(ARight).Name = 'Function') then
+     Assigned(AFunctionConstructor) and (ARight = AFunctionConstructor) then
     Exit(TGocciaBooleanLiteralValue.TrueValue);
   if (ALeft is TGocciaNativeFunctionValue) and
-     (TGocciaClassValue(ARight).Name = 'Function') then
+     Assigned(AFunctionConstructor) and (ARight = AFunctionConstructor) then
     Exit(TGocciaBooleanLiteralValue.TrueValue);
   if (ALeft is TGocciaClassValue) and
-     (TGocciaClassValue(ARight).Name = 'Function') then
+     Assigned(AFunctionConstructor) and (ARight = AFunctionConstructor) then
     Exit(TGocciaBooleanLiteralValue.TrueValue);
   if (ALeft is TGocciaArrayValue) and (ARight is TGocciaArrayClassValue) then
     Exit(TGocciaBooleanLiteralValue.TrueValue);
@@ -3396,8 +3436,9 @@ function TGocciaVM.ObjectRestValue(const ASource: TGocciaValue;
 var
   SourceObject: TGocciaObjectValue;
   Entry: TPair<string, TGocciaValue>;
+  SymbolEntry: TPair<TGocciaSymbolValue, TGocciaValue>;
   ExclusionKey: TGocciaValue;
-  I, J: Integer;
+  J: Integer;
   Excluded: Boolean;
 begin
   Result := TGocciaObjectValue.Create;
@@ -3427,20 +3468,19 @@ begin
       Result.SetProperty(Entry.Key, Entry.Value);
   end;
 
-  for I := 0 to Length(SourceObject.GetOwnSymbols) - 1 do
+  for SymbolEntry in SourceObject.GetEnumerableSymbolProperties do
   begin
     Excluded := False;
     if Assigned(AExclusionKeys) then
       for J := 0 to AExclusionKeys.Elements.Count - 1 do
         if (AExclusionKeys.GetElement(J) is TGocciaSymbolValue) and
-           (AExclusionKeys.GetElement(J) = SourceObject.GetOwnSymbols[I]) then
+           (AExclusionKeys.GetElement(J) = SymbolEntry.Key) then
         begin
           Excluded := True;
           Break;
         end;
     if not Excluded then
-      Result.AssignSymbolProperty(SourceObject.GetOwnSymbols[I],
-        SourceObject.GetSymbolProperty(SourceObject.GetOwnSymbols[I]));
+      Result.AssignSymbolProperty(SymbolEntry.Key, SymbolEntry.Value);
   end;
 end;
 
@@ -5039,9 +5079,10 @@ var
   Template: TGocciaFunctionTemplate;
   ChildTemplate: TGocciaFunctionTemplate;
   LeftValue, RightValue: TGocciaValue;
-  ObjectConstructorValue: TGocciaValue;
+  FunctionConstructorValue, ObjectConstructorValue: TGocciaValue;
   CustomMatcherValue, MatchResultValue: TGocciaValue;
   MatchHintObject: TGocciaObjectValue;
+  BuiltinConstructorMatch: Boolean;
   RegisterArgs: TGocciaRegisterArray;
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   BoundFunction: TGocciaBoundFunctionValue;
@@ -6196,8 +6237,9 @@ begin
       OP_IS_INSTANCE:
       begin
         ObjectConstructorValue := VMGlobalObjectConstructor(FGlobalScope);
+        FunctionConstructorValue := VMGlobalFunctionConstructor(FGlobalScope);
         SetRegister(A, VMInstanceOfValue(GetRegister(B), GetRegister(C),
-          ObjectConstructorValue));
+          ObjectConstructorValue, FunctionConstructorValue));
       end;
 
       OP_HAS_PROPERTY:
@@ -6232,9 +6274,13 @@ begin
         else if RightValue is TGocciaClassValue then
         begin
           ObjectConstructorValue := VMGlobalObjectConstructor(FGlobalScope);
+          FunctionConstructorValue := VMGlobalFunctionConstructor(FGlobalScope);
           SetRegister(A, VMInstanceOfValue(LeftValue, RightValue,
-            ObjectConstructorValue));
+            ObjectConstructorValue, FunctionConstructorValue));
         end
+        else if VMBuiltinConstructorMatchValue(RightValue, LeftValue,
+          FGlobalScope, BuiltinConstructorMatch) then
+          SetRegister(A, TGocciaBooleanLiteralValue.Create(BuiltinConstructorMatch))
         else
           SetRegister(A, TGocciaBooleanLiteralValue.Create(
             MatchValueEquals(LeftValue, RightValue)));

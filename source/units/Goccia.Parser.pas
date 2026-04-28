@@ -3966,7 +3966,6 @@ var
   TryStmt: TGocciaTryStatement;
   CatchType: string;
   CatchPattern: TGocciaMatchPattern;
-  ScanIndex, TypeDepth: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -3990,43 +3989,6 @@ begin
         SSuggestProvideCatchParameter).Lexeme;
       if Check(gttColon) then
       begin
-        ScanIndex := FCurrent + 1;
-        TypeDepth := 0;
-        while ScanIndex < FTokens.Count do
-        begin
-          case FTokens[ScanIndex].TokenType of
-            gttLeftParen, gttLeftBracket, gttLeftBrace, gttLess:
-              Inc(TypeDepth);
-            gttRightParen:
-              begin
-                if TypeDepth = 0 then
-                  Break;
-                Dec(TypeDepth);
-              end;
-            gttRightBracket, gttRightBrace, gttGreater:
-              if TypeDepth > 0 then
-                Dec(TypeDepth);
-            gttRightShift:
-              if TypeDepth > 1 then
-                Dec(TypeDepth, 2)
-              else
-                TypeDepth := 0;
-            gttUnsignedRightShift:
-              if TypeDepth > 2 then
-                Dec(TypeDepth, 3)
-              else
-                TypeDepth := 0;
-          end;
-
-          if (TypeDepth = 0) and
-             (FTokens[ScanIndex].TokenType = gttIdentifier) and
-             (FTokens[ScanIndex].Lexeme = KEYWORD_IS) then
-            raise TGocciaSyntaxError.Create('Cannot combine catch type annotations with pattern matching',
-              FTokens[ScanIndex].Line, FTokens[ScanIndex].Column,
-              FFileName, FSourceLines,
-              'Use either catch (error: Type) or catch (error is Pattern)');
-          Inc(ScanIndex);
-        end;
         Advance;
         CatchType := CollectTypeAnnotation([gttRightParen]);
       end;

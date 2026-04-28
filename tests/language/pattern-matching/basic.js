@@ -107,9 +107,30 @@ describe("pattern matching expressions", () => {
 
   test("object patterns match symbol properties on boxed primitive prototypes", () => {
     const key = Symbol("boxed");
-    String.prototype[key] = 7;
 
-    expect("value" is { [key]: 7 }).toBe(true);
+    try {
+      String.prototype[key] = 7;
+      expect("value" is { [key]: 7 }).toBe(true);
+    } finally {
+      Reflect.deleteProperty(String.prototype, key);
+    }
+  });
+
+  test("object rest patterns skip non-enumerable symbol properties", () => {
+    const hidden = Symbol("hidden");
+    const visible = Symbol("visible");
+    const value = { [visible]: 2 };
+    let result = 0;
+
+    Object.defineProperty(value, hidden, { value: 1, enumerable: false });
+    if (value is { ...const rest }) {
+      result = rest[visible];
+      if (rest[hidden] !== undefined) {
+        result = -1;
+      }
+    }
+
+    expect(result).toBe(2);
   });
 
   test("pattern binding names are case-sensitive", () => {
@@ -193,6 +214,17 @@ describe("pattern matching expressions", () => {
     expect(new Object() is Object).toBe(true);
   });
 
+  test("builtin BigInt and Symbol constructors match primitive values", () => {
+    const sym = Symbol("sample");
+
+    expect(0n is BigInt).toBe(true);
+    expect(1n is BigInt).toBe(true);
+    expect(0 is BigInt).toBe(false);
+    expect(1 is BigInt).toBe(false);
+    expect(sym is Symbol).toBe(true);
+    expect("sample" is Symbol).toBe(false);
+  });
+
   test("malformed iterators throw during array pattern matching", () => {
     const malformed = {
       [Symbol.iterator]() {
@@ -232,6 +264,7 @@ describe("pattern matching expressions", () => {
 
   test("match evaluates the subject once and uses first successful clause", () => {
     let count = 0;
+    let defaultRan = false;
     const next = () => {
       count = count + 1;
       return { type: "ok", value: 7 };
@@ -240,11 +273,12 @@ describe("pattern matching expressions", () => {
     const result = match (next()) {
       { type: "missing" }: 0;
       { type: "ok", value: const value }: value * 2;
-      default: -1;
+      default: (() => { defaultRan = true; return -1; })();
     };
 
     expect(result).toBe(14);
     expect(count).toBe(1);
+    expect(defaultRan).toBe(false);
     expect(() => value).toThrow(ReferenceError);
   });
 

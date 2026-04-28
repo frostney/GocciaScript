@@ -296,6 +296,7 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_COLLECTION_OP, RemainderReg,
         COLLECTION_OP_OBJECT_REST, ASubjectReg));
       CompilePatternTest(ACtx, RemainderReg, APattern.RestPattern, ADest);
+      FailJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ADest));
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
     end

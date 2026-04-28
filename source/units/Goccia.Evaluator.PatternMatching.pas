@@ -368,12 +368,36 @@ begin
     Result := RootScope.GetValue(AName);
 end;
 
+function TryPrimitiveBuiltinConstructorMatch(const AMatcher, ASubject: TGocciaValue;
+  const AContext: TGocciaEvaluationContext; out AMatches: Boolean): Boolean;
+var
+  BigIntConstructor, SymbolConstructor: TGocciaValue;
+begin
+  Result := False;
+  AMatches := False;
+
+  BigIntConstructor := GetRootBindingValue(AContext, CONSTRUCTOR_BIGINT);
+  if Assigned(BigIntConstructor) and (AMatcher = BigIntConstructor) then
+  begin
+    AMatches := ASubject is TGocciaBigIntValue;
+    Exit(True);
+  end;
+
+  SymbolConstructor := GetRootBindingValue(AContext, CONSTRUCTOR_SYMBOL);
+  if Assigned(SymbolConstructor) and (AMatcher = SymbolConstructor) then
+  begin
+    AMatches := ASubject is TGocciaSymbolValue;
+    Exit(True);
+  end;
+end;
+
 function BuiltinConstructorMatchesSubject(const AMatcher, ASubject: TGocciaValue;
   const AContext: TGocciaEvaluationContext): Boolean;
 var
   ObjectConstructor: TGocciaValue;
 begin
   Result := False;
+
   if not (AMatcher is TGocciaClassValue) then
     Exit;
 
@@ -396,6 +420,7 @@ function TryMatchValuePattern(const ASubject: TGocciaValue;
   const APattern: TGocciaValueMatchPattern; const AContext: TGocciaEvaluationContext): Boolean;
 var
   Candidate, CustomMatcher, MatcherResult: TGocciaValue;
+  PrimitiveBuiltinMatch: Boolean;
 begin
   Candidate := EvaluateExpression(APattern.Expression, AContext);
 
@@ -407,6 +432,10 @@ begin
     MatcherResult := CallMatcherFunction(CustomMatcher, Candidate, ASubject, 'boolean');
     Exit(MatcherResult.ToBooleanLiteral.Value);
   end;
+
+  if TryPrimitiveBuiltinConstructorMatch(Candidate, ASubject, AContext,
+    PrimitiveBuiltinMatch) then
+    Exit(PrimitiveBuiltinMatch);
 
   if BuiltinConstructorMatchesSubject(Candidate, ASubject, AContext) then
     Exit(True);
