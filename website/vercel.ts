@@ -36,7 +36,11 @@ export const config = {
   installCommand: "bun install --frozen-lockfile",
   ignoreCommand,
   functions: {
-    "src/app/api/run/route.ts": {
+    "src/app/api/execute/route.ts": {
+      maxDuration: 15,
+      memory: 1024,
+    },
+    "src/app/api/test/route.ts": {
       maxDuration: 15,
       memory: 1024,
     },
