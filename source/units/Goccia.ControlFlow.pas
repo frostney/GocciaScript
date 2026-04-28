@@ -8,7 +8,7 @@ uses
   Goccia.Values.Primitives;
 
 type
-  TGocciaControlFlowKind = (cfkNormal, cfkReturn, cfkBreak);
+  TGocciaControlFlowKind = (cfkNormal, cfkReturn, cfkBreak, cfkContinue);
 
   // Tagged-pointer representation: the control flow kind is encoded in the low
   // 2 bits of the value pointer. TGocciaValue instances are always 16-byte
@@ -24,6 +24,7 @@ type
     class function Normal(const AValue: TGocciaValue): TGocciaControlFlow; static; inline;
     class function Return(const AValue: TGocciaValue): TGocciaControlFlow; static; inline;
     class function Break: TGocciaControlFlow; static; inline;
+    class function Continue: TGocciaControlFlow; static; inline;
     property Kind: TGocciaControlFlowKind read GetKind;
     property Value: TGocciaValue read GetValue;
   end;
@@ -53,6 +54,11 @@ end;
 class function TGocciaControlFlow.Break: TGocciaControlFlow;
 begin
   Result.FBits := 2;
+end;
+
+class function TGocciaControlFlow.Continue: TGocciaControlFlow;
+begin
+  Result.FBits := 3;
 end;
 
 end.

@@ -367,9 +367,13 @@ function TGocciaTemporalInstantValue.InstantUntil(const AArgs: TGocciaArgumentsC
 var
   Inst, Other: TGocciaTemporalInstantValue;
   OptionsObj: TGocciaObjectValue;
-  LargestUnit: TTemporalUnit;
+  LargestUnit, SmallestUnit: TTemporalUnit;
+  RMode: TTemporalRoundingMode;
+  RIncrement: Integer;
   DiffMs: Int64;
   DiffSubMs: Integer;
+  Dur: TGocciaTemporalDurationValue;
+  Y, Mo, W, D, H, Mi, S, Ms, Us, Ns: Int64;
 begin
   Inst := AsInstant(AThisValue, 'Instant.prototype.until');
   Other := CoerceInstant(AArgs.GetElement(0), 'Instant.prototype.until');
@@ -379,6 +383,15 @@ begin
   if LargestUnit = tuAuto then LargestUnit := tuHour;
   if not (LargestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
     ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.until', 'largestUnit']), SSuggestTemporalValidUnits);
+
+  SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
+  if not (SmallestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
+    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.until', 'smallestUnit']), SSuggestTemporalValidUnits);
+  if Ord(LargestUnit) > Ord(SmallestUnit) then
+    ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
+  RMode := GetRoundingMode(OptionsObj, rmTrunc);
+  RIncrement := GetRoundingIncrement(OptionsObj, 1);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
 
   DiffMs := Other.FEpochMilliseconds - Inst.FEpochMilliseconds;
   DiffSubMs := Other.FSubMillisecondNanoseconds - Inst.FSubMillisecondNanoseconds;
@@ -396,15 +409,30 @@ begin
   end;
 
   Result := InstantDiffToUnits(DiffMs, DiffSubMs, LargestUnit);
+
+  if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+  begin
+    Dur := TGocciaTemporalDurationValue(Result);
+    Y := Dur.Years; Mo := Dur.Months; W := Dur.Weeks; D := Dur.Days;
+    H := Dur.Hours; Mi := Dur.Minutes; S := Dur.Seconds;
+    Ms := Dur.Milliseconds; Us := Dur.Microseconds; Ns := Dur.Nanoseconds;
+    RoundDiffDuration(Y, Mo, W, D, H, Mi, S, Ms, Us, Ns,
+      0, 0, 0, LargestUnit, SmallestUnit, RMode, RIncrement);
+    Result := TGocciaTemporalDurationValue.Create(Y, Mo, W, D, H, Mi, S, Ms, Us, Ns);
+  end;
 end;
 
 function TGocciaTemporalInstantValue.InstantSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Inst, Other: TGocciaTemporalInstantValue;
   OptionsObj: TGocciaObjectValue;
-  LargestUnit: TTemporalUnit;
+  LargestUnit, SmallestUnit: TTemporalUnit;
+  RMode: TTemporalRoundingMode;
+  RIncrement: Integer;
   DiffMs: Int64;
   DiffSubMs: Integer;
+  Dur: TGocciaTemporalDurationValue;
+  Y, Mo, W, D, H, Mi, S, Ms, Us, Ns: Int64;
 begin
   Inst := AsInstant(AThisValue, 'Instant.prototype.since');
   Other := CoerceInstant(AArgs.GetElement(0), 'Instant.prototype.since');
@@ -414,6 +442,15 @@ begin
   if LargestUnit = tuAuto then LargestUnit := tuHour;
   if not (LargestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
     ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.since', 'largestUnit']), SSuggestTemporalValidUnits);
+
+  SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
+  if not (SmallestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
+    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.since', 'smallestUnit']), SSuggestTemporalValidUnits);
+  if Ord(LargestUnit) > Ord(SmallestUnit) then
+    ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
+  RMode := GetRoundingMode(OptionsObj, rmTrunc);
+  RIncrement := GetRoundingIncrement(OptionsObj, 1);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
 
   DiffMs := Inst.FEpochMilliseconds - Other.FEpochMilliseconds;
   DiffSubMs := Inst.FSubMillisecondNanoseconds - Other.FSubMillisecondNanoseconds;
@@ -431,6 +468,17 @@ begin
   end;
 
   Result := InstantDiffToUnits(DiffMs, DiffSubMs, LargestUnit);
+
+  if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+  begin
+    Dur := TGocciaTemporalDurationValue(Result);
+    Y := Dur.Years; Mo := Dur.Months; W := Dur.Weeks; D := Dur.Days;
+    H := Dur.Hours; Mi := Dur.Minutes; S := Dur.Seconds;
+    Ms := Dur.Milliseconds; Us := Dur.Microseconds; Ns := Dur.Nanoseconds;
+    RoundDiffDuration(Y, Mo, W, D, H, Mi, S, Ms, Us, Ns,
+      0, 0, 0, LargestUnit, SmallestUnit, RMode, RIncrement);
+    Result := TGocciaTemporalDurationValue.Create(Y, Mo, W, D, H, Mi, S, Ms, Us, Ns);
+  end;
 end;
 
 function TGocciaTemporalInstantValue.InstantRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

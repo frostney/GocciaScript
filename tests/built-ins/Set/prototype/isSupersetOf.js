@@ -16,6 +16,20 @@ describe("Set.prototype.isSupersetOf", () => {
     expect(new Set().isSupersetOf(new Set())).toBe(true);
   });
 
+  test("accepts set-like object", () => {
+    const setLike = {
+      size: 2,
+      has(value) {
+        return value === 1 || value === 2;
+      },
+      keys() {
+        return [1, 2].values();
+      },
+    };
+    expect(new Set([1, 2, 3]).isSupersetOf(setLike)).toBe(true);
+    expect(new Set([1, 3]).isSupersetOf(setLike)).toBe(false);
+  });
+
   test("throws TypeError when called on non-Set", () => {
     const isSupersetOf = Set.prototype.isSupersetOf;
     expect(() => isSupersetOf.call(Set.prototype, new Set())).toThrow(TypeError);
@@ -23,7 +37,7 @@ describe("Set.prototype.isSupersetOf", () => {
     expect(() => isSupersetOf.call(new Map(), new Set())).toThrow(TypeError);
   });
 
-  test("throws TypeError when argument is not a Set", () => {
+  test("throws TypeError when argument is not set-like", () => {
     const s = new Set([1, 2]);
     expect(() => s.isSupersetOf({})).toThrow(TypeError);
     expect(() => s.isSupersetOf([])).toThrow(TypeError);

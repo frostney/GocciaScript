@@ -218,6 +218,8 @@ begin
     Goccia.Compiler.Statements.CompileSwitchStatement(Ctx, TGocciaSwitchStatement(AStmt))
   else if AStmt is TGocciaBreakStatement then
     Goccia.Compiler.Statements.CompileBreakStatement(Ctx)
+  else if AStmt is TGocciaContinueStatement then
+    Goccia.Compiler.Statements.CompileContinueStatement(Ctx)
   else if AStmt is TGocciaImportDeclaration then
     Goccia.Compiler.Statements.CompileImportDeclaration(Ctx, TGocciaImportDeclaration(AStmt))
   else if AStmt is TGocciaExportVariableDeclaration then

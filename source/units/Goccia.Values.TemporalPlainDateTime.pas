@@ -616,13 +616,16 @@ function TGocciaTemporalPlainDateTimeValue.DateTimeUntil(const AArgs: TGocciaArg
 var
   D, Other: TGocciaTemporalPlainDateTimeValue;
   OptionsObj: TGocciaObjectValue;
-  LargestUnit: TTemporalUnit;
+  LargestUnit, SmallestUnit: TTemporalUnit;
+  RMode: TTemporalRoundingMode;
+  RIncrement: Integer;
   T1Ns, T2Ns, TimeDiffNs: Int64;
   DayDelta, Sgn: Int64;
   AdjY2, AdjM2, AdjD2: Integer;
   AdjDate: TTemporalDateRecord;
   Years, Months, Weeks, Days: Int64;
   AbsTimeNs, AbsDays, TotalInUnit, RemNs: Int64;
+  RH, RM, RS, RMs, RUs, RNs: Int64;
 begin
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.until');
   Other := CoercePlainDateTime(AArgs.GetElement(0), 'PlainDateTime.prototype.until');
@@ -630,6 +633,13 @@ begin
   OptionsObj := GetDiffOptions(AArgs, 1);
   LargestUnit := GetLargestUnit(OptionsObj, tuDay);
   if LargestUnit = tuAuto then LargestUnit := tuDay;
+
+  SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
+  if Ord(LargestUnit) > Ord(SmallestUnit) then
+    ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
+  RMode := GetRoundingMode(OptionsObj, rmTrunc);
+  RIncrement := GetRoundingIncrement(OptionsObj, 1);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
 
   T1Ns := Int64(D.FNanosecond) + Int64(D.FMicrosecond) * 1000 + Int64(D.FMillisecond) * 1000000 +
            Int64(D.FSecond) * Int64(1000000000) + Int64(D.FMinute) * Int64(60000000000) +
@@ -681,13 +691,21 @@ begin
 
     // Decompose time nanoseconds (same sign as overall result)
     AbsTimeNs := Abs(TimeDiffNs);
+    RH := Sgn * (AbsTimeNs div Int64(3600000000000));
+    RM := Sgn * ((AbsTimeNs div Int64(60000000000)) mod 60);
+    RS := Sgn * ((AbsTimeNs div Int64(1000000000)) mod 60);
+    RMs := Sgn * ((AbsTimeNs div 1000000) mod 1000);
+    RUs := Sgn * ((AbsTimeNs div 1000) mod 1000);
+    RNs := Sgn * (AbsTimeNs mod 1000);
+
+    if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+      RoundDiffDuration(Years, Months, Weeks, Days,
+        RH, RM, RS, RMs, RUs, RNs,
+        D.FYear, D.FMonth, D.FDay,
+        LargestUnit, SmallestUnit, RMode, RIncrement);
+
     Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days,
-      Sgn * (AbsTimeNs div Int64(3600000000000)),
-      Sgn * ((AbsTimeNs div Int64(60000000000)) mod 60),
-      Sgn * ((AbsTimeNs div Int64(1000000000)) mod 60),
-      Sgn * ((AbsTimeNs div 1000000) mod 1000),
-      Sgn * ((AbsTimeNs div 1000) mod 1000),
-      Sgn * (AbsTimeNs mod 1000));
+      RH, RM, RS, RMs, RUs, RNs);
   end
   else
   begin
@@ -723,63 +741,72 @@ begin
 
     // Decompose by converting day delta using safe integer multiplication,
     // then adding the within-day time remainder.
+    Years := 0; Months := 0; Weeks := 0; Days := 0;
     case LargestUnit of
       tuHour:
         begin
           TotalInUnit := AbsDays * 24 + AbsTimeNs div Int64(3600000000000);
           RemNs := AbsTimeNs mod Int64(3600000000000);
-          Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0,
-            Sgn * TotalInUnit,
-            Sgn * (RemNs div Int64(60000000000)),
-            Sgn * ((RemNs div Int64(1000000000)) mod 60),
-            Sgn * ((RemNs div 1000000) mod 1000),
-            Sgn * ((RemNs div 1000) mod 1000),
-            Sgn * (RemNs mod 1000));
+          RH := Sgn * TotalInUnit;
+          RM := Sgn * (RemNs div Int64(60000000000));
+          RS := Sgn * ((RemNs div Int64(1000000000)) mod 60);
+          RMs := Sgn * ((RemNs div 1000000) mod 1000);
+          RUs := Sgn * ((RemNs div 1000) mod 1000);
+          RNs := Sgn * (RemNs mod 1000);
         end;
       tuMinute:
         begin
           TotalInUnit := AbsDays * 1440 + AbsTimeNs div Int64(60000000000);
           RemNs := AbsTimeNs mod Int64(60000000000);
-          Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0,
-            Sgn * TotalInUnit,
-            Sgn * (RemNs div Int64(1000000000)),
-            Sgn * ((RemNs div 1000000) mod 1000),
-            Sgn * ((RemNs div 1000) mod 1000),
-            Sgn * (RemNs mod 1000));
+          RH := 0;
+          RM := Sgn * TotalInUnit;
+          RS := Sgn * (RemNs div Int64(1000000000));
+          RMs := Sgn * ((RemNs div 1000000) mod 1000);
+          RUs := Sgn * ((RemNs div 1000) mod 1000);
+          RNs := Sgn * (RemNs mod 1000);
         end;
       tuSecond:
         begin
           TotalInUnit := AbsDays * 86400 + AbsTimeNs div Int64(1000000000);
           RemNs := AbsTimeNs mod Int64(1000000000);
-          Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0,
-            Sgn * TotalInUnit,
-            Sgn * (RemNs div 1000000),
-            Sgn * ((RemNs div 1000) mod 1000),
-            Sgn * (RemNs mod 1000));
+          RH := 0; RM := 0;
+          RS := Sgn * TotalInUnit;
+          RMs := Sgn * (RemNs div 1000000);
+          RUs := Sgn * ((RemNs div 1000) mod 1000);
+          RNs := Sgn * (RemNs mod 1000);
         end;
       tuMillisecond:
         begin
           TotalInUnit := AbsDays * 86400000 + AbsTimeNs div 1000000;
           RemNs := AbsTimeNs mod 1000000;
-          Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0,
-            Sgn * TotalInUnit,
-            Sgn * (RemNs div 1000),
-            Sgn * (RemNs mod 1000));
+          RH := 0; RM := 0; RS := 0;
+          RMs := Sgn * TotalInUnit;
+          RUs := Sgn * (RemNs div 1000);
+          RNs := Sgn * (RemNs mod 1000);
         end;
       tuMicrosecond:
         begin
           TotalInUnit := AbsDays * Int64(86400000000) + AbsTimeNs div 1000;
-          Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0,
-            Sgn * TotalInUnit,
-            Sgn * (AbsTimeNs mod 1000));
+          RH := 0; RM := 0; RS := 0; RMs := 0;
+          RUs := Sgn * TotalInUnit;
+          RNs := Sgn * (AbsTimeNs mod 1000);
         end;
     else // tuNanosecond
       begin
         TotalInUnit := AbsDays * Int64(86400000000000) + AbsTimeNs;
-        Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0, 0,
-          Sgn * TotalInUnit);
+        RH := 0; RM := 0; RS := 0; RMs := 0; RUs := 0;
+        RNs := Sgn * TotalInUnit;
       end;
     end;
+
+    if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+      RoundDiffDuration(Years, Months, Weeks, Days,
+        RH, RM, RS, RMs, RUs, RNs,
+        D.FYear, D.FMonth, D.FDay,
+        LargestUnit, SmallestUnit, RMode, RIncrement);
+
+    Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days,
+      RH, RM, RS, RMs, RUs, RNs);
   end;
 end;
 

@@ -13,4 +13,10 @@ describe.runIf(isTemporal)("Temporal.PlainTime.prototype.since", () => {
     expect(dur.hours).toBe(2);
     expect(dur.minutes).toBe(30);
   });
+
+  test("since() with largestUnit minute collapses hours", () => {
+    const t1 = new Temporal.PlainTime(12, 30, 0);
+    const t2 = new Temporal.PlainTime(10, 0, 0);
+    expect(t1.since(t2, { largestUnit: "minute" }).toString()).toBe("PT150M");
+  });
 });

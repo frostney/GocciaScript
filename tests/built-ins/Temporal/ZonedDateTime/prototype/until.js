@@ -37,4 +37,21 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime.prototype.until", () => {
     expect(dur.seconds).toBe(90);
     expect(dur.minutes).toBe(0);
   });
+
+  test("until() with smallestUnit minutes truncates seconds", () => {
+    const z1 = Temporal.Instant.fromEpochMilliseconds(0).toZonedDateTimeISO("UTC");
+    const z2 = Temporal.Instant.fromEpochMilliseconds(5400000 + 30000).toZonedDateTimeISO("UTC");
+    const dur = z1.until(z2, { largestUnit: "hours", smallestUnit: "minutes" });
+    expect(dur.hours).toBe(1);
+    expect(dur.minutes).toBe(30);
+    expect(dur.seconds).toBe(0);
+  });
+
+  test("until() with smallestUnit minutes and roundingMode ceil", () => {
+    const z1 = Temporal.Instant.fromEpochMilliseconds(0).toZonedDateTimeISO("UTC");
+    const z2 = Temporal.Instant.fromEpochMilliseconds(5400000 + 30000).toZonedDateTimeISO("UTC");
+    const dur = z1.until(z2, { largestUnit: "hours", smallestUnit: "minutes", roundingMode: "ceil" });
+    expect(dur.hours).toBe(1);
+    expect(dur.minutes).toBe(31);
+  });
 });

@@ -1432,6 +1432,7 @@ begin
       CF := EvaluateStatement(AForOfStatement.Body, IterContext);
       if CF.Kind = cfkBreak then Break;
       if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
+      // cfkContinue: skip remaining body, advance to next iteration
 
       IterResult := Iterator.AdvanceNext;
     end;
@@ -2222,7 +2223,7 @@ begin
       begin
         CF := EvaluateStatement(CaseClause.Consequent[J], AContext);
         if CF.Kind = cfkBreak then begin Done := True; Break; end;
-        if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
+        if CF.Kind in [cfkReturn, cfkContinue] then begin Result := CF; Exit; end;
         Result := CF;
       end;
       if Done then Break;
@@ -2242,7 +2243,7 @@ begin
       begin
         CF := EvaluateStatement(CaseClause.Consequent[J], AContext);
         if CF.Kind = cfkBreak then begin Done := True; Break; end;
-        if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
+        if CF.Kind in [cfkReturn, cfkContinue] then begin Result := CF; Exit; end;
         Result := CF;
       end;
       if Done then Break;

@@ -447,9 +447,12 @@ function TGocciaTemporalPlainYearMonthValue.YearMonthUntil(const AArgs: TGocciaA
 var
   YM, Other: TGocciaTemporalPlainYearMonthValue;
   OptionsObj: TGocciaObjectValue;
-  LargestUnit: TTemporalUnit;
+  LargestUnit, SmallestUnit: TTemporalUnit;
+  RMode: TTemporalRoundingMode;
+  RIncrement: Integer;
   TotalMonths1, TotalMonths2, DiffMonths: Int64;
   DiffYears, RemMonths: Int64;
+  W, D, H, Mi, S, Ms, Us, Ns: Int64;
 begin
   YM := AsPlainYearMonth(AThisValue, 'PlainYearMonth.prototype.until');
   Other := CoercePlainYearMonth(AArgs.GetElement(0), 'PlainYearMonth.prototype.until');
@@ -459,6 +462,15 @@ begin
   if LargestUnit = tuAuto then LargestUnit := tuYear;
   if not (LargestUnit in [tuYear, tuMonth]) then
     ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainYearMonth.prototype.until', 'largestUnit']), SSuggestTemporalValidUnits);
+
+  SmallestUnit := GetSmallestUnit(OptionsObj, tuMonth);
+  if not (SmallestUnit in [tuYear, tuMonth]) then
+    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainYearMonth.prototype.until', 'smallestUnit']), SSuggestTemporalValidUnits);
+  if Ord(LargestUnit) > Ord(SmallestUnit) then
+    ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
+  RMode := GetRoundingMode(OptionsObj, rmTrunc);
+  RIncrement := GetRoundingIncrement(OptionsObj, 1);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
 
   TotalMonths1 := Int64(YM.FYear) * 12 + Int64(YM.FMonth);
   TotalMonths2 := Int64(Other.FYear) * 12 + Int64(Other.FMonth);
@@ -475,6 +487,14 @@ begin
     RemMonths := DiffMonths;
   end;
 
+  if (SmallestUnit <> tuMonth) or (RIncrement <> 1) then
+  begin
+    W := 0; D := 0; H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
+    RoundDiffDuration(DiffYears, RemMonths, W, D, H, Mi, S, Ms, Us, Ns,
+      YM.FYear, YM.FMonth, 1,
+      LargestUnit, SmallestUnit, RMode, RIncrement);
+  end;
+
   Result := TGocciaTemporalDurationValue.Create(DiffYears, RemMonths, 0, 0, 0, 0, 0, 0, 0, 0);
 end;
 
@@ -483,9 +503,12 @@ function TGocciaTemporalPlainYearMonthValue.YearMonthSince(const AArgs: TGocciaA
 var
   YM, Other: TGocciaTemporalPlainYearMonthValue;
   OptionsObj: TGocciaObjectValue;
-  LargestUnit: TTemporalUnit;
+  LargestUnit, SmallestUnit: TTemporalUnit;
+  RMode: TTemporalRoundingMode;
+  RIncrement: Integer;
   TotalMonths1, TotalMonths2, DiffMonths: Int64;
   DiffYears, RemMonths: Int64;
+  W, D, H, Mi, S, Ms, Us, Ns: Int64;
 begin
   YM := AsPlainYearMonth(AThisValue, 'PlainYearMonth.prototype.since');
   Other := CoercePlainYearMonth(AArgs.GetElement(0), 'PlainYearMonth.prototype.since');
@@ -495,6 +518,15 @@ begin
   if LargestUnit = tuAuto then LargestUnit := tuYear;
   if not (LargestUnit in [tuYear, tuMonth]) then
     ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainYearMonth.prototype.since', 'largestUnit']), SSuggestTemporalValidUnits);
+
+  SmallestUnit := GetSmallestUnit(OptionsObj, tuMonth);
+  if not (SmallestUnit in [tuYear, tuMonth]) then
+    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainYearMonth.prototype.since', 'smallestUnit']), SSuggestTemporalValidUnits);
+  if Ord(LargestUnit) > Ord(SmallestUnit) then
+    ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
+  RMode := GetRoundingMode(OptionsObj, rmTrunc);
+  RIncrement := GetRoundingIncrement(OptionsObj, 1);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
 
   TotalMonths1 := Int64(YM.FYear) * 12 + Int64(YM.FMonth);
   TotalMonths2 := Int64(Other.FYear) * 12 + Int64(Other.FMonth);
@@ -509,6 +541,14 @@ begin
   begin
     DiffYears := 0;
     RemMonths := DiffMonths;
+  end;
+
+  if (SmallestUnit <> tuMonth) or (RIncrement <> 1) then
+  begin
+    W := 0; D := 0; H := 0; Mi := 0; S := 0; Ms := 0; Us := 0; Ns := 0;
+    RoundDiffDuration(DiffYears, RemMonths, W, D, H, Mi, S, Ms, Us, Ns,
+      Other.FYear, Other.FMonth, 1,
+      LargestUnit, SmallestUnit, RMode, RIncrement);
   end;
 
   Result := TGocciaTemporalDurationValue.Create(DiffYears, RemMonths, 0, 0, 0, 0, 0, 0, 0, 0);

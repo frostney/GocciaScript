@@ -923,7 +923,9 @@ function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeUntil(const AArgs: TGocc
 var
   Zdt, Other: TGocciaTemporalZonedDateTimeValue;
   OptionsObj: TGocciaObjectValue;
-  LargestUnit: TTemporalUnit;
+  LargestUnit, SmallestUnit: TTemporalUnit;
+  RMode: TTemporalRoundingMode;
+  RIncrement: Integer;
   DiffMs: Int64;
   DiffSubMs: Integer;
   Y1, M1, D1, H1, Mi1, S1, Ms1, Us1, Ns1: Integer;
@@ -932,6 +934,9 @@ var
   AdjDate: TTemporalDateRecord;
   AdjY2, AdjM2, AdjD2: Integer;
   Years, Months, Weeks, Days: Int64;
+  RH, RM, RS, RMs, RUs, RNs: Int64;
+  Dur: TGocciaTemporalDurationValue;
+  RY, RMo, RW, RD: Int64;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.until');
   Other := CoerceZonedDateTime(AArgs.GetElement(0), 'ZonedDateTime.prototype.until');
@@ -939,6 +944,13 @@ begin
   OptionsObj := GetDiffOptions(AArgs, 1);
   LargestUnit := GetLargestUnit(OptionsObj, tuHour);
   if LargestUnit = tuAuto then LargestUnit := tuHour;
+
+  SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
+  if Ord(LargestUnit) > Ord(SmallestUnit) then
+    ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
+  RMode := GetRoundingMode(OptionsObj, rmTrunc);
+  RIncrement := GetRoundingIncrement(OptionsObj, 1);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
 
   if LargestUnit in [tuYear, tuMonth, tuWeek, tuDay] then
   begin
@@ -985,13 +997,20 @@ begin
       Years, Months, Weeks, Days);
 
     AbsTimeNs := Abs(TimeDiffNs);
+    RH := Sgn * (AbsTimeNs div Int64(3600000000000));
+    RM := Sgn * ((AbsTimeNs div Int64(60000000000)) mod 60);
+    RS := Sgn * ((AbsTimeNs div Int64(1000000000)) mod 60);
+    RMs := Sgn * ((AbsTimeNs div 1000000) mod 1000);
+    RUs := Sgn * ((AbsTimeNs div 1000) mod 1000);
+    RNs := Sgn * (AbsTimeNs mod 1000);
+
+    if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+      RoundDiffDuration(Years, Months, Weeks, Days,
+        RH, RM, RS, RMs, RUs, RNs,
+        Y1, M1, D1, LargestUnit, SmallestUnit, RMode, RIncrement);
+
     Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days,
-      Sgn * (AbsTimeNs div Int64(3600000000000)),
-      Sgn * ((AbsTimeNs div Int64(60000000000)) mod 60),
-      Sgn * ((AbsTimeNs div Int64(1000000000)) mod 60),
-      Sgn * ((AbsTimeNs div 1000000) mod 1000),
-      Sgn * ((AbsTimeNs div 1000) mod 1000),
-      Sgn * (AbsTimeNs mod 1000));
+      RH, RM, RS, RMs, RUs, RNs);
   end
   else
   begin
@@ -1011,6 +1030,17 @@ begin
     end;
 
     Result := ZonedDiffToUnits(DiffMs, DiffSubMs, LargestUnit);
+
+    if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+    begin
+      Dur := TGocciaTemporalDurationValue(Result);
+      RY := Dur.Years; RMo := Dur.Months; RW := Dur.Weeks; RD := Dur.Days;
+      RH := Dur.Hours; RM := Dur.Minutes; RS := Dur.Seconds;
+      RMs := Dur.Milliseconds; RUs := Dur.Microseconds; RNs := Dur.Nanoseconds;
+      RoundDiffDuration(RY, RMo, RW, RD, RH, RM, RS, RMs, RUs, RNs,
+        0, 0, 0, LargestUnit, SmallestUnit, RMode, RIncrement);
+      Result := TGocciaTemporalDurationValue.Create(RY, RMo, RW, RD, RH, RM, RS, RMs, RUs, RNs);
+    end;
   end;
 end;
 
@@ -1019,7 +1049,9 @@ function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeSince(const AArgs: TGocc
 var
   Zdt, Other: TGocciaTemporalZonedDateTimeValue;
   OptionsObj: TGocciaObjectValue;
-  LargestUnit: TTemporalUnit;
+  LargestUnit, SmallestUnit: TTemporalUnit;
+  RMode: TTemporalRoundingMode;
+  RIncrement: Integer;
   DiffMs: Int64;
   DiffSubMs: Integer;
   Y1, M1, D1, H1, Mi1, S1, Ms1, Us1, Ns1: Integer;
@@ -1028,6 +1060,9 @@ var
   AdjDate: TTemporalDateRecord;
   AdjY1, AdjM1, AdjD1: Integer;
   Years, Months, Weeks, Days: Int64;
+  RH, RM, RS, RMs, RUs, RNs: Int64;
+  Dur: TGocciaTemporalDurationValue;
+  RY, RMo, RW, RD: Int64;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.since');
   Other := CoerceZonedDateTime(AArgs.GetElement(0), 'ZonedDateTime.prototype.since');
@@ -1035,6 +1070,13 @@ begin
   OptionsObj := GetDiffOptions(AArgs, 1);
   LargestUnit := GetLargestUnit(OptionsObj, tuHour);
   if LargestUnit = tuAuto then LargestUnit := tuHour;
+
+  SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
+  if Ord(LargestUnit) > Ord(SmallestUnit) then
+    ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
+  RMode := GetRoundingMode(OptionsObj, rmTrunc);
+  RIncrement := GetRoundingIncrement(OptionsObj, 1);
+  ValidateRoundingIncrement(RIncrement, SmallestUnit, LargestUnit);
 
   if LargestUnit in [tuYear, tuMonth, tuWeek, tuDay] then
   begin
@@ -1081,13 +1123,20 @@ begin
       Years, Months, Weeks, Days);
 
     AbsTimeNs := Abs(TimeDiffNs);
+    RH := Sgn * (AbsTimeNs div Int64(3600000000000));
+    RM := Sgn * ((AbsTimeNs div Int64(60000000000)) mod 60);
+    RS := Sgn * ((AbsTimeNs div Int64(1000000000)) mod 60);
+    RMs := Sgn * ((AbsTimeNs div 1000000) mod 1000);
+    RUs := Sgn * ((AbsTimeNs div 1000) mod 1000);
+    RNs := Sgn * (AbsTimeNs mod 1000);
+
+    if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+      RoundDiffDuration(Years, Months, Weeks, Days,
+        RH, RM, RS, RMs, RUs, RNs,
+        Y1, M1, D1, LargestUnit, SmallestUnit, RMode, RIncrement);
+
     Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days,
-      Sgn * (AbsTimeNs div Int64(3600000000000)),
-      Sgn * ((AbsTimeNs div Int64(60000000000)) mod 60),
-      Sgn * ((AbsTimeNs div Int64(1000000000)) mod 60),
-      Sgn * ((AbsTimeNs div 1000000) mod 1000),
-      Sgn * ((AbsTimeNs div 1000) mod 1000),
-      Sgn * (AbsTimeNs mod 1000));
+      RH, RM, RS, RMs, RUs, RNs);
   end
   else
   begin
@@ -1107,6 +1156,17 @@ begin
     end;
 
     Result := ZonedDiffToUnits(DiffMs, DiffSubMs, LargestUnit);
+
+    if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+    begin
+      Dur := TGocciaTemporalDurationValue(Result);
+      RY := Dur.Years; RMo := Dur.Months; RW := Dur.Weeks; RD := Dur.Days;
+      RH := Dur.Hours; RM := Dur.Minutes; RS := Dur.Seconds;
+      RMs := Dur.Milliseconds; RUs := Dur.Microseconds; RNs := Dur.Nanoseconds;
+      RoundDiffDuration(RY, RMo, RW, RD, RH, RM, RS, RMs, RUs, RNs,
+        0, 0, 0, LargestUnit, SmallestUnit, RMode, RIncrement);
+      Result := TGocciaTemporalDurationValue.Create(RY, RMo, RW, RD, RH, RM, RS, RMs, RUs, RNs);
+    end;
   end;
 end;
 

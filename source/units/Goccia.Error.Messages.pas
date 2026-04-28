@@ -266,6 +266,7 @@ resourcestring
   SErrorInvalidLargestUnit = 'Invalid largestUnit: %s';
   SErrorInvalidRoundingMode = 'Invalid roundingMode: %s';
   SErrorRoundingIncrementMin = 'roundingIncrement must be >= 1';
+  SErrorRoundingIncrementDivisor = 'roundingIncrement %d does not divide the maximum value %d for this unit';
   SErrorInvalidOverflow = 'Invalid overflow option: %s';
   SErrorInvalidFractionalDigits = 'Invalid fractionalSecondDigits: %s';
   SErrorFractionalDigitsRange = 'fractionalSecondDigits must be 0-9 or "auto"';
@@ -653,13 +654,19 @@ resourcestring
   SErrorMapForEachNotCallable = 'Map.prototype.forEach: callback is not a function';
 
   // Set operation argument errors
-  SErrorSetOperationRequiresSet = 'Set.prototype.%s: argument must be a Set';
+  SErrorSetOperationRequiresSetLike = 'Set.prototype.%s: argument must be a Set or set-like object';
+  SErrorSetLikeSizeMustBeNumber = 'Set.prototype.%s: set-like size must be a number';
+  SErrorSetLikeSizeNonNegative = 'Set.prototype.%s: set-like size must be non-negative';
+  SErrorSetLikeHasNotCallable = 'Set.prototype.%s: set-like has must be a function';
+  SErrorSetLikeKeysNotCallable = 'Set.prototype.%s: set-like keys must be a function';
+  SErrorSetLikeKeysIterator = 'Set.prototype.%s: set-like keys must return an iterator';
 
   // Map upsert errors
   SErrorMapGetOrInsertComputedNotCallable = 'Map.getOrInsertComputed: callbackfn is not a function';
 
   // Function body errors
   SErrorIllegalBreakStatement = 'Illegal break statement';
+  SErrorIllegalContinueStatement = 'Illegal continue statement';
 
   // Function.prototype errors
   SErrorFunctionApplyNonFunction = 'Function.prototype.apply called on non-function';

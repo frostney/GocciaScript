@@ -446,6 +446,12 @@ type
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
   end;
 
+  TGocciaContinueStatement = class(TGocciaStatement)
+  public
+    constructor Create(const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
+  end;
+
   TGocciaUsingDeclaration = class(TGocciaStatement)
   private
     FVariables: TArray<TGocciaVariableInfo>;
@@ -818,6 +824,13 @@ end;
     inherited Create(ALine, AColumn);
   end;
 
+  { TGocciaContinueStatement }
+
+  constructor TGocciaContinueStatement.Create(const ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+  end;
+
   { Execute / Evaluate overrides }
 
   function TGocciaExpressionStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -931,6 +944,11 @@ end;
   function TGocciaBreakStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
     Result := TGocciaControlFlow.Break;
+  end;
+
+  function TGocciaContinueStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Continue;
   end;
 
   function TGocciaClassDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
