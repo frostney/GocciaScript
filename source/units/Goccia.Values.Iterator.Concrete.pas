@@ -29,6 +29,7 @@ type
   private
     FSource: TGocciaValue;
     FIndex: Integer;
+    function TryReadAndAdvance(out AText: string): Boolean;
   public
     constructor Create(const ASource: TGocciaValue);
     function AdvanceNext: TGocciaObjectValue; override;
@@ -246,56 +247,58 @@ begin
   FIndex := 0;
 end;
 
-function TGocciaStringIteratorValue.AdvanceNext: TGocciaObjectValue;
+function TGocciaStringIteratorValue.TryReadAndAdvance(
+  out AText: string): Boolean;
 var
   ByteLength: Integer;
   StrVal: string;
 begin
+  Result := False;
+  AText := '';
   if FDone then
-  begin
-    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
     Exit;
-  end;
 
   StrVal := TGocciaStringLiteralValue(FSource).Value;
   if FIndex >= Length(StrVal) then
   begin
     FDone := True;
-    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
     Exit;
   end;
+
   ByteLength := TextSemantics.UTF8SequenceLengthAt(StrVal, FIndex + 1);
-  Result := CreateIteratorResult(
-    TGocciaStringLiteralValue.Create(Copy(StrVal, FIndex + 1, ByteLength)),
-    False);
+  AText := Copy(StrVal, FIndex + 1, ByteLength);
   Inc(FIndex, ByteLength);
+  Result := True;
+end;
+
+function TGocciaStringIteratorValue.AdvanceNext: TGocciaObjectValue;
+var
+  Text: string;
+begin
+  if TryReadAndAdvance(Text) then
+    Result := CreateIteratorResult(TGocciaStringLiteralValue.Create(Text),
+      False)
+  else
+  begin
+    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue,
+      True);
+  end;
 end;
 
 function TGocciaStringIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
 var
-  ByteLength: Integer;
-  StrVal: string;
+  Text: string;
 begin
-  if FDone then
+  if TryReadAndAdvance(Text) then
+  begin
+    ADone := False;
+    Result := TGocciaStringLiteralValue.Create(Text);
+  end
+  else
   begin
     ADone := True;
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Exit;
   end;
-
-  StrVal := TGocciaStringLiteralValue(FSource).Value;
-  if FIndex >= Length(StrVal) then
-  begin
-    FDone := True;
-    ADone := True;
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Exit;
-  end;
-  ADone := False;
-  ByteLength := TextSemantics.UTF8SequenceLengthAt(StrVal, FIndex + 1);
-  Result := TGocciaStringLiteralValue.Create(Copy(StrVal, FIndex + 1,
-    ByteLength));
-  Inc(FIndex, ByteLength);
 end;
 
 function TGocciaStringIteratorValue.ToStringTag: string;
