@@ -39,6 +39,40 @@ test("object async generator method delegates to async iterable", async () => {
   expect(seen).toEqual([1, 2]);
 });
 
+test("object async generator method delegates to sync iterable", async () => {
+  const obj = {
+    async *numbers() {
+      yield* [Promise.resolve(1), 2];
+    },
+  };
+  const seen = [];
+
+  for await (const value of obj.numbers()) {
+    seen.push(value);
+  }
+
+  expect(seen).toEqual([1, 2]);
+});
+
+test("object async generator method accepts async iterator object property", async () => {
+  const source = {
+    [Symbol.asyncIterator]: {
+      count: 0,
+      next() {
+        this.count = this.count + 1;
+        return Promise.resolve({ value: this.count, done: this.count > 2 });
+      },
+    },
+  };
+  const obj = {
+    async *numbers() {
+      yield* source;
+    },
+  };
+
+  await expect(obj.numbers().next()).resolves.toEqual({ value: 1, done: false });
+});
+
 test("object async generator yield delegation rejects non-callable async next", async () => {
   const source = {
     [Symbol.asyncIterator]() {
@@ -65,5 +99,9 @@ test("object async generator return and throw use promises", async () => {
   };
 
   await expect(obj.numbers().return(9)).resolves.toEqual({ value: 9, done: true });
+  await expect(obj.numbers().next()).resolves.toEqual({ value: 1, done: false });
+  const iter = obj.numbers();
+  await expect(iter.next()).resolves.toEqual({ value: 1, done: false });
+  await expect(iter.next(9)).resolves.toEqual({ value: undefined, done: true });
   await expect(obj.fails().next()).rejects.toBe(5);
 });

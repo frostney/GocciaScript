@@ -526,7 +526,7 @@ begin
   ValidBenchmarkCount := 0;
   for F := 0 to FFileCount - 1 do
   begin
-    if (FFiles[F].TotalBenchmarks > 0) and (Length(FFiles[F].Entries) = 0) then
+    if Length(FFiles[F].Entries) = 0 then
       Exit(True);
 
     for E := 0 to Length(FFiles[F].Entries) - 1 do

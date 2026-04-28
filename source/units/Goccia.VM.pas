@@ -3164,7 +3164,14 @@ begin
       end;
       if Assigned(Result) then
         Exit;
-    end;
+    end
+    else if Assigned(IteratorMethod) and
+            not (IteratorMethod is TGocciaUndefinedLiteralValue) and
+            (IteratorMethod is TGocciaObjectValue) then
+      Exit(IteratorMethod)
+    else if Assigned(IteratorMethod) and
+            not (IteratorMethod is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError('Async iterator method is not callable');
   end;
 
   if AIterable is TGocciaIteratorValue then
@@ -3265,6 +3272,7 @@ begin
     if Assigned(BytecodeFunction.FClosure) and
        Assigned(BytecodeFunction.FClosure.Template) and
        (BytecodeFunction.FClosure.Template.IsGenerator or
+        BytecodeFunction.FClosure.Template.IsAsync or
         BytecodeFunction.FClosure.Template.IsArrow) then
       ThrowTypeError(Format(SErrorNotConstructor,
         [BytecodeFunction.GetProperty(PROP_NAME).ToStringLiteral.Value]),

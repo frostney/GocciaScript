@@ -98,6 +98,12 @@ Some opcode families intentionally use flags or mode operands instead of one opc
 - validation uses a shared opcode for require-object and require-iterable checks
 - generator metadata is serialized and a single `OP_YIELD` drives generator suspension; `yield*` uses the same opcode with delegation bookkeeping rather than a second opcode
 
+Note: bytecode generator resumption is currently replay-based: suspended generators
+re-enter from function entry and skip previously observed yields. True VM
+continuation snapshots that restore instruction pointer, registers, local cells,
+handler state, and GC marking are tracked in
+[#434](https://github.com/frostney/GocciaScript/issues/434).
+
 Current opcode design rules:
 
 - add explicit Goccia opcodes for stable, hot, language-owned behaviour
