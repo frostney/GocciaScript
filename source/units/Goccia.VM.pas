@@ -1279,7 +1279,6 @@ type
     constructor CreateRegisters(const AVM: TGocciaVM;
       const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaRegister;
       const AArguments: TGocciaRegisterArray);
-    destructor Destroy; override;
     function AsyncGeneratorNext(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function AsyncGeneratorReturn(const AArgs: TGocciaArgumentsCollection;
@@ -1846,12 +1845,6 @@ begin
     TGocciaPropertyDescriptorData.Create(
       TGocciaNativeFunctionValue.Create(AsyncIteratorSelf, '[Symbol.asyncIterator]', 0),
       [pfConfigurable, pfWritable]));
-end;
-
-destructor TGocciaBytecodeAsyncGeneratorObjectValue.Destroy;
-begin
-  FInner.Free;
-  inherited;
 end;
 
 function TGocciaBytecodeAsyncGeneratorObjectValue.ResumeAsPromise(

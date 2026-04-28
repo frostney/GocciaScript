@@ -11,6 +11,7 @@ uses
   TimingUtils,
 
   Goccia.Application,
+  Goccia.Arguments.Collection,
   Goccia.AST.Node,
   Goccia.Benchmark.Reporter,
   Goccia.Builtins.Benchmark,
@@ -192,6 +193,28 @@ type
     function GlobalBuiltins: TGocciaGlobalBuiltins; override;
   end;
 
+function RunRegisteredBenchmarks(const AEngine: TGocciaEngine): TGocciaObjectValue;
+var
+  EmptyArgs: TGocciaArgumentsCollection;
+  Value: TGocciaValue;
+begin
+  if not Assigned(AEngine.BuiltinBenchmark) then
+    Exit(nil);
+
+  EmptyArgs := TGocciaArgumentsCollection.Create;
+  try
+    Value := AEngine.BuiltinBenchmark.RunBenchmarks(EmptyArgs,
+      TGocciaUndefinedLiteralValue.UndefinedValue);
+  finally
+    EmptyArgs.Free;
+  end;
+
+  if Value is TGocciaObjectValue then
+    Result := TGocciaObjectValue(Value)
+  else
+    Result := nil;
+end;
+
 procedure TBenchmarkRunnerApp.CollectBenchmarkFileInterpreted(
   const AFileName: string; const AReporter: TBenchmarkReporter;
   const AShowProgress: Boolean);
@@ -202,11 +225,10 @@ var
   EngineResult: TGocciaScriptResult;
   ScriptResult: TGocciaObjectValue;
   FileResult: TBenchmarkFileResult;
+  BenchStart: Int64;
 begin
   Source := ReadUTF8FileLines(AFileName);
   try
-    Source.Add('runBenchmarks();');
-
     try
       Engine := CreateEngine(AFileName, Source);
       try
@@ -225,12 +247,12 @@ begin
         FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
         FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
         FileResult.CompileTimeNanoseconds := 0;
-        FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds;
+        BenchStart := GetNanoseconds;
+        ScriptResult := RunRegisteredBenchmarks(Engine);
+        FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds +
+          (GetNanoseconds - BenchStart);
 
         GC := TGarbageCollector.Instance;
-        ScriptResult := nil;
-        if EngineResult.Result is TGocciaObjectValue then
-          ScriptResult := TGocciaObjectValue(EngineResult.Result);
 
         if Assigned(ScriptResult) and Assigned(GC) then
           GC.AddTempRoot(ScriptResult);
@@ -282,15 +304,12 @@ var
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   GC: TGarbageCollector;
-  ResultValue: TGocciaValue;
   FileResult: TBenchmarkFileResult;
   ScriptResult: TGocciaObjectValue;
-  LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd: Int64;
+  LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd, BenchStart: Int64;
 begin
   Source := ReadUTF8FileLines(AFileName);
   try
-    Source.Add('runBenchmarks();');
-
     SourceText := StringListToLFText(Source);
     if ppJSX in TGocciaEngine.DefaultPreprocessors then
     begin
@@ -340,7 +359,7 @@ begin
           StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
           try
             try
-              ResultValue := TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
+              TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
             finally
               ClearExecutionTimeout;
               ClearInstructionLimit;
@@ -351,20 +370,20 @@ begin
             FileResult.LexTimeNanoseconds := LexEnd - LexStart;
             FileResult.ParseTimeNanoseconds := ParseEnd - LexEnd;
             FileResult.CompileTimeNanoseconds := CompileEnd - ParseEnd;
-            FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
+            BenchStart := GetNanoseconds;
+            ScriptResult := RunRegisteredBenchmarks(Engine);
+            FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd +
+              (GetNanoseconds - BenchStart);
 
             GC := TGarbageCollector.Instance;
-            if Assigned(ResultValue) and Assigned(GC) then
-              GC.AddTempRoot(ResultValue);
+            if Assigned(ScriptResult) and Assigned(GC) then
+              GC.AddTempRoot(ScriptResult);
 
-            ScriptResult := nil;
-            if ResultValue is TGocciaObjectValue then
-              ScriptResult := TGocciaObjectValue(ResultValue);
             try
               PopulateFileResult(FileResult, ScriptResult, AReporter);
             finally
-              if Assigned(ResultValue) and Assigned(GC) then
-                GC.RemoveTempRoot(ResultValue);
+              if Assigned(ScriptResult) and Assigned(GC) then
+                GC.RemoveTempRoot(ScriptResult);
             end;
           finally
             Module.Free;
@@ -429,9 +448,8 @@ var
   EngineResult: TGocciaScriptResult;
   ScriptResult: TGocciaObjectValue;
   FileResult: TBenchmarkFileResult;
+  BenchStart: Int64;
 begin
-  ASource.Add('runBenchmarks();');
-
   try
     Engine := CreateEngine(AFileName, ASource);
     try
@@ -450,12 +468,12 @@ begin
       FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
       FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
       FileResult.CompileTimeNanoseconds := 0;
-      FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds;
+      BenchStart := GetNanoseconds;
+      ScriptResult := RunRegisteredBenchmarks(Engine);
+      FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds +
+        (GetNanoseconds - BenchStart);
 
       GC := TGarbageCollector.Instance;
-      ScriptResult := nil;
-      if EngineResult.Result is TGocciaObjectValue then
-        ScriptResult := TGocciaObjectValue(EngineResult.Result);
 
       if Assigned(ScriptResult) and Assigned(GC) then
         GC.AddTempRoot(ScriptResult);
@@ -501,13 +519,10 @@ var
   Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   GC: TGarbageCollector;
-  ResultValue: TGocciaValue;
   FileResult: TBenchmarkFileResult;
   ScriptResult: TGocciaObjectValue;
-  LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd: Int64;
+  LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd, BenchStart: Int64;
 begin
-  ASource.Add('runBenchmarks();');
-
   SourceText := StringListToLFText(ASource);
   if ppJSX in TGocciaEngine.DefaultPreprocessors then
   begin
@@ -557,7 +572,7 @@ begin
         StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
         try
           try
-            ResultValue := TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
+            TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
           finally
             ClearExecutionTimeout;
             ClearInstructionLimit;
@@ -568,20 +583,20 @@ begin
           FileResult.LexTimeNanoseconds := LexEnd - LexStart;
           FileResult.ParseTimeNanoseconds := ParseEnd - LexEnd;
           FileResult.CompileTimeNanoseconds := CompileEnd - ParseEnd;
-          FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
+          BenchStart := GetNanoseconds;
+          ScriptResult := RunRegisteredBenchmarks(Engine);
+          FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd +
+            (GetNanoseconds - BenchStart);
 
           GC := TGarbageCollector.Instance;
-          if Assigned(ResultValue) and Assigned(GC) then
-            GC.AddTempRoot(ResultValue);
+          if Assigned(ScriptResult) and Assigned(GC) then
+            GC.AddTempRoot(ScriptResult);
 
-          ScriptResult := nil;
-          if ResultValue is TGocciaObjectValue then
-            ScriptResult := TGocciaObjectValue(ResultValue);
           try
             PopulateFileResult(FileResult, ScriptResult, AReporter);
           finally
-            if Assigned(ResultValue) and Assigned(GC) then
-              GC.RemoveTempRoot(ResultValue);
+            if Assigned(ScriptResult) and Assigned(GC) then
+              GC.RemoveTempRoot(ScriptResult);
           end;
         finally
           Module.Free;

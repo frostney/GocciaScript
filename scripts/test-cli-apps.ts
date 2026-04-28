@@ -485,6 +485,41 @@ console.log("Loader: coverage --output=json not corrupted...");
     if (!stdinBcJson.includes('"name": "sum"')) throw new Error('Bytecode stdin JSON should contain "name": "sum"');
     if (!stdinBcJson.includes('"totalBenchmarks": 1')) throw new Error('Bytecode stdin JSON should contain totalBenchmarks: 1');
 
+    console.log("BenchmarkRunner: async generator bytecode benchmark...");
+    const asyncGeneratorBcOutPath = join(tmp, "async-generator-bc.json");
+    {
+      const asyncGeneratorSource = [
+        'suite("async generator", () => {',
+        "  const source = { async *values() { yield 1; yield 2; } };",
+        '  bench("consume", {',
+        "    run: async () => {",
+        "      let sum = 0;",
+        "      for await (const value of source.values()) sum = sum + value;",
+        "      return sum;",
+        "    },",
+        "  });",
+        "});",
+        "",
+      ].join("\n");
+      const proc = Bun.spawnSync(
+        [resolve(BENCHRUNNER), "--no-progress", "--format=json", `--output=${asyncGeneratorBcOutPath}`, "--mode=bytecode"],
+        {
+          stdin: new TextEncoder().encode(asyncGeneratorSource),
+          stdout: "pipe",
+          stderr: "pipe",
+          env: benchEnv,
+          timeout: 120_000,
+        },
+      );
+      if (proc.exitCode !== 0) throw new Error(`Bytecode async generator benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+    }
+    const asyncGeneratorBcJson = JSON.parse(readFileSync(asyncGeneratorBcOutPath, "utf-8"));
+    const asyncGeneratorBench = asyncGeneratorBcJson.files[0]?.benchmarks[0];
+    if (asyncGeneratorBench?.name !== "consume") throw new Error("Bytecode async generator JSON should contain consume benchmark");
+    if (typeof asyncGeneratorBench.opsPerSec !== "number" || asyncGeneratorBench.opsPerSec <= 0) {
+      throw new Error("Bytecode async generator benchmark should report positive opsPerSec");
+    }
+
     console.log("BenchmarkRunner: no valid bytecode benchmarks fail...");
     const emptyBcOutPath = join(tmp, "empty-bc.json");
     {
