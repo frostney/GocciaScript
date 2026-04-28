@@ -16,6 +16,7 @@ import {
   existsSync,
   rmSync,
   mkdirSync,
+  chmodSync,
 } from "fs";
 import { join, resolve } from "path";
 import { tmpdir } from "os";
@@ -38,6 +39,34 @@ function assertValidSourceMap(path: string): void {
   if (typeof map.mappings !== "string" || map.mappings.length === 0) throw new Error("Source map should have non-empty mappings");
 }
 
+function assertCommonJsonReport(json: any, label: string, expectedFileCount: number): void {
+  if (json.fileName !== undefined) throw new Error(`${label} top-level fileName should be omitted`);
+  if (typeof json.build?.version !== "string") throw new Error(`${label} build.version should be present`);
+  if (typeof json.build?.date !== "string") throw new Error(`${label} build.date should be present`);
+  if (typeof json.stdout !== "string") throw new Error(`${label} stdout should always be present`);
+  if (typeof json.stderr !== "string") throw new Error(`${label} stderr should always be present`);
+  if (!Array.isArray(json.output)) throw new Error(`${label} output should be an array`);
+  if (!Array.isArray(json.files)) throw new Error(`${label} files should be an array`);
+  if (json.files.length !== expectedFileCount) throw new Error(`${label} files length should be ${expectedFileCount}, got ${json.files.length}`);
+  if (typeof json.timing?.total_ns !== "number") throw new Error(`${label} top-level timing.total_ns should be present`);
+  if ("total_ms" in json.timing) throw new Error(`${label} top-level timing should not include millisecond fields`);
+  if (typeof json.memory?.gc?.liveBytes !== "number") throw new Error(`${label} top-level memory.gc.liveBytes should be present`);
+  if (typeof json.memory?.heap?.endAllocatedBytes !== "number") throw new Error(`${label} top-level memory.heap.endAllocatedBytes should be present`);
+  if (typeof json.workers?.used !== "number") throw new Error(`${label} workers.used should be present`);
+  if (typeof json.workers?.available !== "number") throw new Error(`${label} workers.available should be present`);
+}
+
+function assertCommonJsonFile(file: any, label: string, fileName: string, ok = true): void {
+  if (file?.fileName !== fileName) throw new Error(`${label} fileName mismatch: ${file?.fileName}`);
+  if (file?.ok !== ok) throw new Error(`${label} ok should be ${ok}, got ${file?.ok}`);
+  if (typeof file?.stdout !== "string") throw new Error(`${label} stdout should always be present`);
+  if (typeof file?.stderr !== "string") throw new Error(`${label} stderr should always be present`);
+  if (!Array.isArray(file?.output)) throw new Error(`${label} output should be an array`);
+  if (typeof file?.timing?.total_ns !== "number") throw new Error(`${label} timing.total_ns should be present`);
+  if ("total_ms" in file.timing) throw new Error(`${label} timing should not include millisecond fields`);
+  if (ok && file.error !== null) throw new Error(`${label} error should be null`);
+}
+
 // ============================================================================
 // GocciaScriptLoader
 // ============================================================================
@@ -52,9 +81,24 @@ console.log("Loader: JSON output (interpreted)...");
     stderr: "pipe",
   });
   const json = JSON.parse(proc.stdout.toString());
+  const file = json.files?.[0];
   if (json.ok !== true) throw new Error(`JSON ok should be true, got ${json.ok}`);
-  if (json.value !== 4) throw new Error(`JSON value should be 4, got ${json.value}`);
+  if (json.fileName !== undefined) throw new Error(`JSON fileName should only be present per-file, got ${json.fileName}`);
+  if (file?.result !== 4) throw new Error(`JSON file result should be 4, got ${file?.result}`);
+  if (file?.fileName !== "<stdin>") throw new Error(`JSON fileName should be <stdin>, got ${file?.fileName}`);
   if (!json.output?.includes("hi")) throw new Error(`JSON output should contain "hi"`);
+  if (!json.stdout?.includes("hi")) throw new Error(`JSON stdout should contain "hi"`);
+  if (typeof json.stderr !== "string") throw new Error("JSON stderr should always be present");
+  if (typeof json.build?.version !== "string") throw new Error("JSON build.version should be present");
+  if (typeof json.build?.date !== "string") throw new Error("JSON build.date should be present");
+  if (typeof json.memory?.gc?.liveBytes !== "number") throw new Error("JSON memory.gc.liveBytes should be present");
+  if (typeof json.memory?.gc?.allocatedDuringRunBytes !== "number") throw new Error("JSON memory.gc.allocatedDuringRunBytes should be present");
+  if (typeof json.memory?.heap?.endAllocatedBytes !== "number") throw new Error("JSON memory.heap.endAllocatedBytes should be present");
+  if (typeof json.workers?.used !== "number") throw new Error("JSON workers.used should be present");
+  if (typeof json.timing?.total_ns !== "number") throw new Error("JSON timing.total_ns should be present");
+  if ("total_ms" in json.timing) throw new Error("JSON timing should not include millisecond fields");
+  if (typeof file?.timing?.total_ns !== "number") throw new Error("JSON per-file timing.total_ns should be present");
+  if ("total_ms" in file.timing) throw new Error("JSON per-file timing should not include millisecond fields");
 }
 
 console.log("Loader: JSON output (bytecode)...");
@@ -65,9 +109,137 @@ console.log("Loader: JSON output (bytecode)...");
     stderr: "pipe",
   });
   const json = JSON.parse(proc.stdout.toString());
+  const file = json.files?.[0];
   if (json.ok !== true) throw new Error(`Bytecode JSON ok should be true, got ${json.ok}`);
-  if (json.value !== 4) throw new Error(`Bytecode JSON value should be 4, got ${json.value}`);
+  if (file?.result !== 4) throw new Error(`Bytecode JSON file result should be 4, got ${file?.result}`);
   if (!json.output?.includes("hi")) throw new Error(`Bytecode JSON output should contain "hi"`);
+  if (!json.stdout?.includes("hi")) throw new Error(`Bytecode JSON stdout should contain "hi"`);
+  if (typeof json.stderr !== "string") throw new Error("Bytecode JSON stderr should always be present");
+  if (typeof json.memory?.gc?.peakLiveBytes !== "number") throw new Error("Bytecode JSON memory.gc.peakLiveBytes should be present");
+}
+
+console.log("Loader: JSON undefined result...");
+{
+  const proc = Bun.spawnSync([LOADER, "--output=json"], {
+    stdin: new TextEncoder().encode("undefined;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const json = JSON.parse(proc.stdout.toString());
+  if (json.ok !== true) throw new Error(`JSON undefined run should succeed, got ${json.ok}`);
+  if (json.files?.[0]?.error !== null) throw new Error("JSON undefined result should not imply an error");
+  if (json.files?.[0]?.result !== null) throw new Error(`JSON undefined result should serialize as null, got ${json.files?.[0]?.result}`);
+}
+
+console.log("Loader: JSON stdout/stderr split...");
+{
+  const proc = Bun.spawnSync([LOADER, "--output=json"], {
+    stdin: new TextEncoder().encode("console.log('out'); console.error('err'); 1;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const json = JSON.parse(proc.stdout.toString());
+  if (!json.stdout?.includes("out")) throw new Error(`JSON stdout should contain "out", got ${json.stdout}`);
+  if (!json.stderr?.includes("err")) throw new Error(`JSON stderr should contain "err", got ${json.stderr}`);
+  if (!json.output?.includes("out") || !json.output?.includes("Error: err")) {
+    throw new Error(`JSON output should include both streams, got ${json.output}`);
+  }
+}
+
+console.log("Loader: JSON multi-file structure...");
+{
+  const tmp = makeTmp();
+  try {
+    const first = join(tmp, "first.js");
+    const second = join(tmp, "second.js");
+    writeFileSync(first, "console.log('first out'); 11;\n");
+    writeFileSync(second, "console.error('second err'); 22;\n");
+
+    const proc = Bun.spawnSync([LOADER, "--output=json", "--jobs=2", first, second], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`Loader multi-file JSON exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+
+    const json = JSON.parse(proc.stdout.toString());
+    assertCommonJsonReport(json, "Loader multi-file JSON", 2);
+    if (json.ok !== true) throw new Error(`Loader multi-file top-level ok should be true, got ${json.ok}`);
+    if (json.error !== null) throw new Error("Loader multi-file top-level error should be null");
+    if (!json.stdout.includes("first out")) throw new Error(`Loader multi-file stdout should include first file output, got ${json.stdout}`);
+    if (!json.stderr.includes("second err")) throw new Error(`Loader multi-file stderr should include second file error output, got ${json.stderr}`);
+    if (!json.output.includes("first out") || !json.output.includes("Error: second err"))
+      throw new Error(`Loader multi-file output should include both streams, got ${json.output}`);
+    if (json.workers.used !== 2) throw new Error(`Loader multi-file workers.used should be 2, got ${json.workers.used}`);
+
+    assertCommonJsonFile(json.files[0], "Loader first file", first);
+    assertCommonJsonFile(json.files[1], "Loader second file", second);
+    if (json.files[0].result !== 11) throw new Error(`Loader first result should be 11, got ${json.files[0].result}`);
+    if (json.files[1].result !== 22) throw new Error(`Loader second result should be 22, got ${json.files[1].result}`);
+    if (!json.files[0].output.includes("first out")) throw new Error(`Loader first file output mismatch: ${json.files[0].output}`);
+    if (!json.files[1].stderr.includes("second err")) throw new Error(`Loader second file stderr mismatch: ${json.files[1].stderr}`);
+    if (typeof json.files[0].memory?.gc?.liveBytes !== "number")
+      throw new Error("Loader first file worker memory should be present");
+    if (typeof json.files[1].memory?.gc?.liveBytes !== "number")
+      throw new Error("Loader second file worker memory should be present");
+    const allocatedDuringRun =
+      json.files[0].memory.gc.allocatedDuringRunBytes + json.files[1].memory.gc.allocatedDuringRunBytes;
+    if (json.memory.gc.allocatedDuringRunBytes !== allocatedDuringRun)
+      throw new Error("Loader top-level worker memory should aggregate per-file worker memory");
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Loader: JSON source-load failure stays per-file...");
+{
+  const tmp = makeTmp();
+  try {
+    const unreadable = join(tmp, "unreadable.js");
+    const valid = join(tmp, "valid.js");
+    writeFileSync(unreadable, "1;\n");
+    writeFileSync(valid, "2 + 2;\n");
+    if (process.platform !== "win32") {
+      chmodSync(unreadable, 0o000);
+      const proc = Bun.spawnSync([LOADER, "--output=json", "--jobs=1", unreadable, valid], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      chmodSync(unreadable, 0o600);
+      if (proc.exitCode === 0) throw new Error("Unreadable source file should fail the run");
+      const json = JSON.parse(proc.stdout.toString());
+      const unreadableFile = json.files?.[0];
+      const validFile = json.files?.[1];
+      if (json.ok !== false) throw new Error(`Unreadable source JSON run should fail, got ${json.ok}`);
+      if (unreadableFile?.ok !== false) throw new Error(`Unreadable source file should be marked failed, got ${unreadableFile?.ok}`);
+      if (unreadableFile?.fileName !== unreadable) throw new Error(`Unreadable source fileName mismatch: ${unreadableFile?.fileName}`);
+      if (typeof unreadableFile?.error?.message !== "string") throw new Error("Unreadable source file should include shared error object");
+      if (validFile?.ok !== true || validFile?.result !== 4) throw new Error("Valid file should still run after unreadable source file");
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Loader: parallel human-readable output preserves console output...");
+{
+  const tmp = makeTmp();
+  try {
+    const first = join(tmp, "parallel-first.js");
+    const second = join(tmp, "parallel-second.js");
+    writeFileSync(first, "console.log('parallel first out'); 1;\n");
+    writeFileSync(second, "console.log('parallel second out'); 2;\n");
+
+    const proc = Bun.spawnSync([LOADER, "--jobs=2", first, second], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`Loader parallel output exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const stdout = proc.stdout.toString();
+    if (!stdout.includes("parallel first out")) throw new Error(`Loader parallel stdout should include first file output, got ${stdout}`);
+    if (!stdout.includes("parallel second out")) throw new Error(`Loader parallel stdout should include second file output, got ${stdout}`);
+  } finally {
+    clean(tmp);
+  }
 }
 
 // -- --global / --globals -------------------------------------------------------
@@ -80,7 +252,7 @@ console.log("Loader: --global flag...");
     stderr: "pipe",
   });
   const json = JSON.parse(proc.stdout.toString());
-  if (json.value !== 30) throw new Error(`--global x+y should be 30, got ${json.value}`);
+  if (json.files?.[0]?.result !== 30) throw new Error(`--global x+y should be 30, got ${json.files?.[0]?.result}`);
 }
 
 console.log("Loader: --globals file...");
@@ -95,7 +267,7 @@ console.log("Loader: --globals file...");
       stderr: "pipe",
     });
     const json = JSON.parse(proc.stdout.toString());
-    if (json.value !== "goccia") throw new Error(`--globals should set name to "goccia", got ${json.value}`);
+    if (json.files?.[0]?.result !== "goccia") throw new Error(`--globals should set name to "goccia", got ${json.files?.[0]?.result}`);
   } finally {
     clean(tmp);
   }
@@ -113,7 +285,7 @@ console.log("Loader: --global overrides --globals file...");
       stderr: "pipe",
     });
     const json = JSON.parse(proc.stdout.toString());
-    if (json.value !== "override") throw new Error(`--global should override --globals, got ${json.value}`);
+    if (json.files?.[0]?.result !== "override") throw new Error(`--global should override --globals, got ${json.files?.[0]?.result}`);
   } finally {
     clean(tmp);
   }
@@ -131,7 +303,7 @@ console.log("Loader: --globals from JS module...");
       stderr: "pipe",
     });
     const json = JSON.parse(proc.stdout.toString());
-    if (json.value !== "module-value") throw new Error(`--globals JS module should set name, got ${json.value}`);
+    if (json.files?.[0]?.result !== "module-value") throw new Error(`--globals JS module should set name, got ${json.files?.[0]?.result}`);
   } finally {
     clean(tmp);
   }
@@ -230,6 +402,65 @@ console.log("Loader: coverage --output=json not corrupted...");
     const jsxJsonPath = join(tmp, "jsx-coverage.json");
     await $`${LOADER} --coverage --coverage-format=json --coverage-output=${jsxJsonPath} ${jsxPath}`.quiet();
     if (!readFileSync(jsxJsonPath, "utf-8").includes('"line":3')) throw new Error('JSX JSON should have "line":3');
+  } finally {
+    clean(tmp);
+  }
+}
+
+// ============================================================================
+// GocciaTestRunner
+// ============================================================================
+
+console.log("TestRunner: JSON multi-file structure...");
+{
+  const tmp = makeTmp();
+  try {
+    const first = join(tmp, "test-a.js");
+    const second = join(tmp, "test-b.js");
+    const resultsPath = join(tmp, "test-results.json");
+    writeFileSync(
+      first,
+      [
+        'describe("a", () => {',
+        '  test("passes a", () => { expect(1 + 1).toBe(2); });',
+        "});",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      second,
+      [
+        'describe("b", () => {',
+        '  test("passes b", () => { expect(2 + 2).toBe(4); });',
+        "});",
+        "",
+      ].join("\n"),
+    );
+
+    const proc = Bun.spawnSync([resolve(TESTRUNNER), first, second, "--no-progress", "--jobs=2", `--output=${resultsPath}`], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`TestRunner multi-file JSON exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+
+    const json = JSON.parse(readFileSync(resultsPath, "utf-8"));
+    assertCommonJsonReport(json, "TestRunner multi-file JSON", 2);
+    if (json.ok !== true) throw new Error(`TestRunner multi-file top-level ok should be true, got ${json.ok}`);
+    if (json.error !== null) throw new Error("TestRunner multi-file top-level error should be null");
+    if (json.totalFiles !== 2) throw new Error(`TestRunner multi-file totalFiles should be 2, got ${json.totalFiles}`);
+    if (json.totalTests !== 2) throw new Error(`TestRunner multi-file totalTests should be 2, got ${json.totalTests}`);
+    if (json.passed !== 2 || json.failed !== 0) throw new Error(`TestRunner multi-file pass/fail mismatch: ${json.passed}/${json.failed}`);
+    if (json.workers.used !== 2) throw new Error(`TestRunner multi-file workers.used should be 2, got ${json.workers.used}`);
+    if (!Array.isArray(json.results) || json.results.length !== 2) throw new Error("TestRunner multi-file results should mirror files with 2 entries");
+
+    assertCommonJsonFile(json.files[0], "TestRunner first file", first);
+    assertCommonJsonFile(json.files[1], "TestRunner second file", second);
+    if (json.files[0].passed !== 1 || json.files[0].failed !== 0) throw new Error(`TestRunner first file counts mismatch: ${JSON.stringify(json.files[0])}`);
+    if (json.files[1].passed !== 1 || json.files[1].failed !== 0) throw new Error(`TestRunner second file counts mismatch: ${JSON.stringify(json.files[1])}`);
+    if (json.files[0].memory !== null || json.files[1].memory !== null)
+      throw new Error("TestRunner multi-file per-file memory should be null when top-level memory is aggregated");
+    if (json.results[0].fileName !== json.files[0].fileName || json.results[1].fileName !== json.files[1].fileName)
+      throw new Error("TestRunner results[] should mirror files[] file names");
   } finally {
     clean(tmp);
   }
@@ -419,6 +650,17 @@ console.log("Loader: coverage --output=json not corrupted...");
     const fileJson = readFileSync(fileOut, "utf-8");
     if (!fileJson.includes('"file":')) throw new Error('File JSON should contain "file":');
     if (!fileJson.includes('"totalBenchmarks":')) throw new Error('File JSON should contain "totalBenchmarks":');
+    {
+      const json = JSON.parse(fileJson);
+      if (typeof json.build?.version !== "string") throw new Error("Benchmark JSON build.version should be present");
+      if (json.fileName !== undefined) throw new Error(`Benchmark JSON fileName should only be present per-file, got ${json.fileName}`);
+      if (json.files?.[0]?.fileName !== "benchmarks/fibonacci.js") throw new Error(`Benchmark JSON fileName mismatch: ${json.files?.[0]?.fileName}`);
+      if (!Array.isArray(json.output)) throw new Error("Benchmark JSON output should be an array");
+      if (json.error !== null) throw new Error("Benchmark JSON error should be null");
+      if (typeof json.timing?.total_ns !== "number") throw new Error("Benchmark JSON timing.total_ns should be present");
+      if (typeof json.memory?.heap?.endAllocatedBytes !== "number") throw new Error("Benchmark JSON memory.heap.endAllocatedBytes should be present");
+      if (typeof json.workers?.used !== "number") throw new Error("Benchmark JSON workers.used should be present");
+    }
 
     console.log("BenchmarkRunner: file benchmark (bytecode)...");
     const fileBcOut = join(tmp, "file-bc.json");
@@ -434,6 +676,53 @@ console.log("Loader: coverage --output=json not corrupted...");
 
     console.log("BenchmarkRunner: file benchmark JSON output...");
     if (!fileJson.includes('"totalBenchmarks":')) throw new Error('JSON should contain totalBenchmarks');
+
+    console.log("BenchmarkRunner: multi-file JSON structure...");
+    const benchA = join(tmp, "bench-a.js");
+    const benchB = join(tmp, "bench-b.js");
+    const multiBenchOut = join(tmp, "bench-multi.json");
+    writeFileSync(benchA, 'suite("a", () => { bench("one", { run: () => 1 + 1 }); });\n');
+    writeFileSync(benchB, 'suite("b", () => { bench("two", { run: () => 2 + 2 }); });\n');
+    {
+      const proc = Bun.spawnSync(
+        [resolve(BENCHRUNNER), benchA, benchB, "--no-progress", "--jobs=2", "--format=json", `--output=${multiBenchOut}`],
+        { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
+      );
+      if (proc.exitCode !== 0) throw new Error(`Multi-file benchmark JSON exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+    }
+    {
+      const json = JSON.parse(readFileSync(multiBenchOut, "utf-8"));
+      assertCommonJsonReport(json, "Benchmark multi-file JSON", 2);
+      if (json.ok !== true) throw new Error(`Benchmark multi-file top-level ok should be true, got ${json.ok}`);
+      if (json.error !== null) throw new Error("Benchmark multi-file top-level error should be null");
+      if (json.totalBenchmarks !== 2) throw new Error(`Benchmark multi-file totalBenchmarks should be 2, got ${json.totalBenchmarks}`);
+      if (json.workers.used !== 2) throw new Error(`Benchmark multi-file workers.used should be 2, got ${json.workers.used}`);
+      assertCommonJsonFile(json.files[0], "Benchmark first file", benchA);
+      assertCommonJsonFile(json.files[1], "Benchmark second file", benchB);
+      if (json.files[0].benchmarks?.[0]?.name !== "one") throw new Error(`Benchmark first file entry mismatch: ${JSON.stringify(json.files[0].benchmarks)}`);
+      if (json.files[1].benchmarks?.[0]?.name !== "two") throw new Error(`Benchmark second file entry mismatch: ${JSON.stringify(json.files[1].benchmarks)}`);
+      if (json.files[0].memory !== null || json.files[1].memory !== null)
+        throw new Error("Benchmark multi-file per-file memory should be null when top-level memory is aggregated");
+    }
+
+    console.log("BenchmarkRunner: benchmark failure JSON output...");
+    const failBench = join(tmp, "benchmark-fail.js");
+    const failOut = join(tmp, "benchmark-fail.json");
+    writeFileSync(failBench, 'suite("fail", () => { bench("boom", { run: () => { throw new Error("boom"); } }); });\n');
+    {
+      const proc = Bun.spawnSync(
+        [resolve(BENCHRUNNER), failBench, "--no-progress", "--format=json", `--output=${failOut}`],
+        { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
+      );
+      if (proc.exitCode !== 0) throw new Error(`Failing benchmark JSON export exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+    }
+    {
+      const json = JSON.parse(readFileSync(failOut, "utf-8"));
+      const file = json.files?.[0];
+      if (json.ok !== false) throw new Error(`Failing benchmark run should mark top-level ok=false, got ${json.ok}`);
+      if (file?.ok !== false) throw new Error(`Failing benchmark file should mark ok=false, got ${file?.ok}`);
+      if (typeof file?.error?.message !== "string") throw new Error("Failing benchmark file should include shared error object");
+    }
 
     console.log("BenchmarkRunner: stdin benchmark (interpreted)...");
     const stdinOutPath = join(tmp, "stdin-interp.json");
@@ -451,8 +740,11 @@ console.log("Loader: coverage --output=json not corrupted...");
       if (proc.exitCode !== 0) throw new Error(`Stdin benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
     }
     const stdinJson = readFileSync(stdinOutPath, "utf-8");
-    if (!stdinJson.includes('"name": "sum"')) throw new Error('Stdin JSON should contain "name": "sum"');
-    if (!stdinJson.includes('"totalBenchmarks": 1')) throw new Error('Stdin JSON should contain totalBenchmarks: 1');
+    {
+      const json = JSON.parse(stdinJson);
+      if (json.files?.[0]?.benchmarks?.[0]?.name !== "sum") throw new Error('Stdin JSON should contain benchmark name "sum"');
+      if (json.totalBenchmarks !== 1) throw new Error(`Stdin JSON should contain totalBenchmarks: 1, got ${json.totalBenchmarks}`);
+    }
 
     console.log("BenchmarkRunner: stdin benchmark (bytecode)...");
     const stdinBcOutPath = join(tmp, "stdin-bc.json");
@@ -470,8 +762,11 @@ console.log("Loader: coverage --output=json not corrupted...");
       if (proc.exitCode !== 0) throw new Error(`Bytecode stdin benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
     }
     const stdinBcJson = readFileSync(stdinBcOutPath, "utf-8");
-    if (!stdinBcJson.includes('"name": "sum"')) throw new Error('Bytecode stdin JSON should contain "name": "sum"');
-    if (!stdinBcJson.includes('"totalBenchmarks": 1')) throw new Error('Bytecode stdin JSON should contain totalBenchmarks: 1');
+    {
+      const json = JSON.parse(stdinBcJson);
+      if (json.files?.[0]?.benchmarks?.[0]?.name !== "sum") throw new Error('Bytecode stdin JSON should contain benchmark name "sum"');
+      if (json.totalBenchmarks !== 1) throw new Error(`Bytecode stdin JSON should contain totalBenchmarks: 1, got ${json.totalBenchmarks}`);
+    }
   } finally {
     clean(tmp);
   }
@@ -558,7 +853,7 @@ console.log("Loader: HTTPS fetch smoke with --allowed-host...");
   if (proc.exitCode !== 0) throw new Error(`HTTPS fetch should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
   const json = JSON.parse(proc.stdout.toString());
   if (json.ok !== true) throw new Error(`HTTPS fetch JSON ok should be true, got ${json.ok}`);
-  if (json.value !== 204) throw new Error(`HTTPS fetch status should be 204, got ${json.value}`);
+  if (json.files?.[0]?.result !== 204) throw new Error(`HTTPS fetch status should be 204, got ${json.files?.[0]?.result}`);
 }
 
 console.log("\nAll test-cli-apps.ts tests passed.");

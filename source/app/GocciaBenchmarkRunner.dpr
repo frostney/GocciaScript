@@ -29,6 +29,7 @@ uses
   Goccia.Lexer,
   Goccia.Parser,
   Goccia.ScriptLoader.Input,
+  Goccia.CLI.JSON.Reporter,
   Goccia.SourceMap,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
@@ -686,13 +687,16 @@ procedure TBenchmarkRunnerApp.RunBenchmarksFromStdin(
 var
   Source: TStringList;
   Reporter: TBenchmarkReporter;
+  MemoryMeasurement: TCLIJSONMemoryMeasurement;
   J: Integer;
 begin
   Source := ReadSourceFromText(Input);
   Reporter := TBenchmarkReporter.Create;
   try
+    BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
     CollectBenchmarkSource(Source, STDIN_FILE_NAME, Reporter,
       AMode, AShowProgress);
+    Reporter.MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
     for J := 0 to Length(AReports) - 1 do
     begin
       Reporter.Render(AReports[J].Format);
@@ -720,6 +724,7 @@ var
   Pool: TGocciaThreadPool;
   WorkerData: array of TBenchmarkFileResult;
   WallClockStart: Int64;
+  MemoryMeasurement: TCLIJSONMemoryMeasurement;
 begin
   Files := TStringList.Create;
   Reporter := TBenchmarkReporter.Create;
@@ -768,6 +773,7 @@ begin
 
       EnsureSharedPrototypesInitialized(EffectiveBuiltins);
 
+      BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
       WallClockStart := GetNanoseconds;
 
       Pool := TGocciaThreadPool.Create(JobCount);
@@ -781,6 +787,7 @@ begin
 
       Reporter.WallClockDurationNanoseconds := GetNanoseconds - WallClockStart;
       Reporter.JobCount := JobCount;
+      Reporter.MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
 
       { Collect results on the main thread in original file order. }
       for I := 0 to Files.Count - 1 do
@@ -794,6 +801,7 @@ begin
     else
     begin
       { Sequential path: run each file in order on the main thread. }
+      BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
       for I := 0 to Files.Count - 1 do
       begin
         if AShowProgress then
@@ -801,6 +809,7 @@ begin
             [I + 1, Files.Count, ExtractFileName(Files[I])]));
         CollectBenchmarkFile(Files[I], Reporter, AMode, AShowProgress);
       end;
+      Reporter.MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
     end;
 
     if AShowProgress and (Files.Count > 0) then
