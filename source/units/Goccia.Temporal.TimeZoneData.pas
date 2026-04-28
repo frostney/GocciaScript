@@ -33,6 +33,7 @@ const
     TIME_ZONE_DATA_HEADER_FIELD_COUNT * TIME_ZONE_DATA_HEADER_FIELD_SIZE;
   TIME_ZONE_DATA_ENTRY_SIZE = 16;
   TIME_ZONE_DATA_FORMAT_VERSION = 1;
+  TIME_ZONE_RCDATA_RESOURCE_TYPE = MAKEINTRESOURCE(10);
   TIME_ZONE_DATA_MAGIC: array[0..TIME_ZONE_DATA_MAGIC_LENGTH - 1] of Byte =
     (Ord('G'), Ord('O'), Ord('C'), Ord('C'), Ord('I'), Ord('A'), Ord('T'), Ord('Z'));
 
@@ -264,7 +265,8 @@ begin
   SetLength(ABuffer, 0);
   Stream := nil;
   try
-    Stream := TResourceStream.Create(HInstance, GeneratedTimeZoneDataResourceName, RT_RCDATA);
+    Stream := TResourceStream.Create(HInstance, GeneratedTimeZoneDataResourceName,
+      TIME_ZONE_RCDATA_RESOURCE_TYPE);
     if Stream.Size > High(Integer) then
     begin
       Stream.Free;
