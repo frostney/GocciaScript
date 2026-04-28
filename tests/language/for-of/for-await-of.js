@@ -62,6 +62,30 @@ describe("for-await-of", () => {
     });
   });
 
+  test("for-await-of awaits Promise values from custom sync iterator results", async () => {
+    const source = {
+      [Symbol.iterator]() {
+        let i = 0;
+        return {
+          next() {
+            i = i + 1;
+            if (i <= 3) {
+              return { value: Promise.resolve(i * 2), done: false };
+            }
+            return { value: Promise.resolve(99), done: true };
+          }
+        };
+      }
+    };
+
+    const result = [];
+    for await (const item of source) {
+      result.push(item);
+    }
+
+    expect(result).toEqual([2, 4, 6]);
+  });
+
   test("break in for-await-of", () => {
     const asyncIterable = {
       [Symbol.asyncIterator]() {

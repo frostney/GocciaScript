@@ -1515,13 +1515,17 @@ function TGocciaVMAsyncFromSyncIteratorValue.Next(
 var
   CallArgs: TGocciaArgumentsCollection;
   Done: Boolean;
+  DoneValue: TGocciaValue;
   IteratorResult: TGocciaValue;
+  UnwrappedValue: TGocciaValue;
+  Value: TGocciaValue;
 begin
   try
     if FIteratorValue is TGocciaIteratorValue then
     begin
-      IteratorResult := CreateIteratorResult(
-        TGocciaIteratorValue(FIteratorValue).DirectNext(Done), Done);
+      Value := TGocciaIteratorValue(FIteratorValue).DirectNext(Done);
+      UnwrappedValue := AwaitValue(Value);
+      IteratorResult := CreateIteratorResult(UnwrappedValue, Done);
       Exit(PromiseResolve(IteratorResult));
     end;
 
@@ -1535,7 +1539,14 @@ begin
     if not (IteratorResult is TGocciaObjectValue) then
       ThrowTypeError(Format(SErrorIteratorResultNotObject,
         [IteratorResult.ToStringLiteral.Value]), SSuggestIteratorResultObject);
-    Result := PromiseResolve(IteratorResult);
+
+    DoneValue := IteratorResult.GetProperty(PROP_DONE);
+    Done := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
+    Value := IteratorResult.GetProperty(PROP_VALUE);
+    if not Assigned(Value) then
+      Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+    UnwrappedValue := AwaitValue(Value);
+    Result := PromiseResolve(CreateIteratorResult(UnwrappedValue, Done));
   except
     on E: EGocciaBytecodeThrow do
       Result := PromiseReject(E.ThrownValue);
@@ -6421,21 +6432,7 @@ begin
       end;
 
       OP_GET_ITER:
-        if (FRegisters[B].Kind = grkObject) and Assigned(FRegisters[B].ObjectValue) then
-        begin
-          if FRegisters[B].ObjectValue is TGocciaIteratorValue then
-            FRegisters[A] := FRegisters[B]
-          else if FRegisters[B].ObjectValue is TGocciaArrayValue then
-            FRegisters[A] := RegisterObject(
-              TGocciaArrayIteratorValue.Create(FRegisters[B].ObjectValue, akValues))
-          else if FRegisters[B].ObjectValue is TGocciaStringLiteralValue then
-            FRegisters[A] := RegisterObject(
-              TGocciaStringIteratorValue.Create(FRegisters[B].ObjectValue))
-          else
-            SetRegister(A, GetIteratorValue(FRegisters[B].ObjectValue, C <> 0));
-        end
-        else
-          SetRegister(A, GetIteratorValue(GetRegister(B), C <> 0));
+        SetRegister(A, GetIteratorValue(GetRegister(B), C <> 0));
 
       OP_ITER_NEXT:
       begin
