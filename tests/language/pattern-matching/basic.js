@@ -117,6 +117,30 @@ describe("pattern matching expressions", () => {
     }
   });
 
+  test("object patterns consult proxy has traps", () => {
+    const key = Symbol("virtual");
+    const proxy = new Proxy({}, {
+      has(target, property) {
+        return property === "virtual" || property === key;
+      },
+      get(target, property) {
+        if (property === "virtual") {
+          return 7;
+        }
+        if (property === key) {
+          return 3;
+        }
+      }
+    });
+
+    let result = 0;
+    if (proxy is { virtual: 7, [key]: const value }) {
+      result = value;
+    }
+
+    expect(result).toBe(3);
+  });
+
   test("object rest patterns skip non-enumerable symbol properties", () => {
     const hidden = Symbol("hidden");
     const visible = Symbol("visible");
@@ -184,6 +208,25 @@ describe("pattern matching expressions", () => {
     expect([0, 2] is [0, ...[1]]).toBe(false);
   });
 
+  test("array patterns use the iterator protocol for arrays", () => {
+    const values = [1, 2];
+    values[Symbol.iterator] = () => {
+      let done = false;
+      return {
+        next() {
+          if (done) {
+            return { done: true };
+          }
+          done = true;
+          return { value: 9, done: false };
+        }
+      };
+    };
+
+    expect(values is [9]).toBe(true);
+    expect(values is [1, 2]).toBe(false);
+  });
+
   test("as bindings and guards commit only after success", () => {
     const value = { x: 4 };
     let result = 0;
@@ -214,6 +257,20 @@ describe("pattern matching expressions", () => {
     expect([] is Array).toBe(false);
     expect({} is Object).toBe(false);
     expect(new Object() is Object).toBe(true);
+  });
+
+  test("value patterns support private member chains", () => {
+    class Box {
+      #secret = 7;
+
+      matches(value) {
+        return value is this.#secret;
+      }
+    }
+
+    const box = new Box();
+    expect(box.matches(7)).toBe(true);
+    expect(box.matches(8)).toBe(false);
   });
 
   test("builtin BigInt and Symbol constructors match primitive values", () => {

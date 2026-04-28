@@ -315,8 +315,9 @@ begin
   end;
 end;
 
-procedure CompileArrayPatternTest(const ACtx: TGocciaCompilationContext;
-  const ASubjectReg: UInt8; const APattern: TGocciaArrayMatchPattern;
+procedure CompileArrayPatternItemsTest(const ACtx: TGocciaCompilationContext;
+  const ASubjectReg: UInt8; const AElements: TGocciaMatchPatternList;
+  const ARestPattern: TGocciaMatchPattern; const AHasRestWildcard: Boolean;
   const ADest: UInt8);
 var
   I, EndJump: Integer;
@@ -339,24 +340,24 @@ begin
 
     EmitInstruction(ACtx, EncodeABC(OP_GET_LENGTH, LenReg, ItemsReg, 0));
     EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, ExpectedReg,
-      APattern.Elements.Count));
-    if Assigned(APattern.RestPattern) or APattern.HasRestWildcard then
+      AElements.Count));
+    if Assigned(ARestPattern) or AHasRestWildcard then
       EmitInstruction(ACtx, EncodeABC(OP_GTE, ADest, LenReg, ExpectedReg))
     else
       EmitInstruction(ACtx, EncodeABC(OP_EQ, ADest, LenReg, ExpectedReg));
     FailJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ADest));
 
-    for I := 0 to APattern.Elements.Count - 1 do
+    for I := 0 to AElements.Count - 1 do
     begin
-      if not Assigned(APattern.Elements[I]) then
+      if not Assigned(AElements[I]) then
         Continue;
       EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, IndexReg, I));
       EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, ValueReg, ItemsReg, IndexReg));
-      CompilePatternTest(ACtx, ValueReg, APattern.Elements[I], ADest);
+      CompilePatternTest(ACtx, ValueReg, AElements[I], ADest);
       FailJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ADest));
     end;
 
-    if Assigned(APattern.RestPattern) then
+    if Assigned(ARestPattern) then
     begin
       TailThisReg := ACtx.Scope.AllocateRegister;
       TailMethodReg := ACtx.Scope.AllocateRegister;
@@ -373,9 +374,9 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, TailMethodReg,
           ItemsReg, UInt8(SliceIdx)));
       EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, TailStartReg,
-        APattern.Elements.Count));
+        AElements.Count));
       EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, TailMethodReg, 1, 0));
-      CompilePatternTest(ACtx, TailMethodReg, APattern.RestPattern, ADest);
+      CompilePatternTest(ACtx, TailMethodReg, ARestPattern, ADest);
       FailJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ADest));
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
@@ -396,6 +397,40 @@ begin
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
     FailJumps.Free;
+  end;
+end;
+
+procedure CompileArrayPatternTest(const ACtx: TGocciaCompilationContext;
+  const ASubjectReg: UInt8; const APattern: TGocciaArrayMatchPattern;
+  const ADest: UInt8);
+begin
+  CompileArrayPatternItemsTest(ACtx, ASubjectReg, APattern.Elements,
+    APattern.RestPattern, APattern.HasRestWildcard, ADest);
+end;
+
+procedure CompileExtractorPatternTest(const ACtx: TGocciaCompilationContext;
+  const ASubjectReg: UInt8; const APattern: TGocciaExtractorMatchPattern;
+  const ADest: UInt8);
+var
+  MatcherReg, ExtractedReg: UInt8;
+  FailJump, EndJump: Integer;
+begin
+  MatcherReg := ACtx.Scope.AllocateRegister;
+  ExtractedReg := ACtx.Scope.AllocateRegister;
+  try
+    ACtx.CompileExpression(APattern.MatcherExpression, MatcherReg);
+    EmitInstruction(ACtx, EncodeABC(OP_MATCH_EXTRACTOR, ExtractedReg,
+      ASubjectReg, MatcherReg));
+    FailJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ExtractedReg);
+    CompileArrayPatternItemsTest(ACtx, ExtractedReg, APattern.Arguments,
+      APattern.RestPattern, APattern.HasRestWildcard, ADest);
+    EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+    PatchJumpTarget(ACtx, FailJump);
+    EmitBoolean(ACtx, ADest, False);
+    PatchJumpTarget(ACtx, EndJump);
+  finally
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
   end;
 end;
 
@@ -541,6 +576,9 @@ begin
   else if APattern is TGocciaArrayMatchPattern then
     CompileArrayPatternTest(ACtx, ASubjectReg,
       TGocciaArrayMatchPattern(APattern), ADest)
+  else if APattern is TGocciaExtractorMatchPattern then
+    CompileExtractorPatternTest(ACtx, ASubjectReg,
+      TGocciaExtractorMatchPattern(APattern), ADest)
   else if APattern is TGocciaRelationalMatchPattern then
     CompileRelationalPatternTest(ACtx, ASubjectReg,
       TGocciaRelationalMatchPattern(APattern), ADest)

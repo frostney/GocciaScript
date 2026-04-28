@@ -150,6 +150,7 @@ begin
     OP_YIELD:                          Result := 'OP_YIELD';
     OP_MATCH_VALUE:                    Result := 'OP_MATCH_VALUE';
     OP_MATCH_HAS_PROPERTY:             Result := 'OP_MATCH_HAS_PROPERTY';
+    OP_MATCH_EXTRACTOR:                Result := 'OP_MATCH_EXTRACTOR';
   else
     Result := Format('OP_UNKNOWN_%d', [AOp]);
   end;

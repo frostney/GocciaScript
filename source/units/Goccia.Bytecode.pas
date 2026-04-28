@@ -5,7 +5,7 @@ unit Goccia.Bytecode;
 interface
 
 const
-  GOCCIA_FORMAT_VERSION = 17;
+  GOCCIA_FORMAT_VERSION = 18;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -160,7 +160,8 @@ type
     OP_USING_DISPOSE = 173,
     OP_YIELD         = 174,
     OP_MATCH_VALUE   = 175,
-    OP_MATCH_HAS_PROPERTY = 176
+    OP_MATCH_HAS_PROPERTY = 176,
+    OP_MATCH_EXTRACTOR = 177
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;

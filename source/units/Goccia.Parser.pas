@@ -2236,6 +2236,19 @@ begin
   begin
     if Match(gttDot) then
     begin
+      if Check(gttHash) then
+      begin
+        Token := Previous;
+        Advance;
+        Consume(gttIdentifier, 'Expected private field name after "#"',
+          SSuggestPrivateFieldMustFollow);
+        PropertyName := Previous.Lexeme;
+        RecordPrivateNameReference(PropertyName, Previous.Line, Previous.Column);
+        Result := TGocciaPrivateMemberExpression.Create(Result, PropertyName,
+          Token.Line, Token.Column);
+        Continue;
+      end;
+
       if IsIdentifierNameToken(Peek.TokenType) then
         Token := Advance
       else

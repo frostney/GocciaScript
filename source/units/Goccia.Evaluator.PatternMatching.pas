@@ -38,6 +38,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Evaluator,
   Goccia.Evaluator.Comparison,
+  Goccia.GarbageCollector,
   Goccia.PatternMatching,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
@@ -46,6 +47,7 @@ uses
   Goccia.Values.BigIntObjectValue,
   Goccia.Values.BigIntValue,
   Goccia.Values.BooleanObjectValue,
+  Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -54,6 +56,7 @@ uses
   Goccia.Values.IteratorValue,
   Goccia.Values.NumberObjectValue,
   Goccia.Values.ObjectValue,
+  Goccia.Values.ProxyValue,
   Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue;
 
@@ -101,20 +104,20 @@ function TryMatchPatternInternal(const ASubject: TGocciaValue;
 function GetIteratorFromPatternValue(const AValue: TGocciaValue): TGocciaIteratorValue;
 var
   IteratorMethod, IteratorObject, NextMethod: TGocciaValue;
+  IteratorSource: TGocciaObjectValue;
   CallArguments: TGocciaArgumentsCollection;
 begin
   if AValue is TGocciaIteratorValue then
     Exit(TGocciaIteratorValue(AValue));
 
-  if AValue is TGocciaArrayValue then
-    Exit(TGocciaArrayIteratorValue.Create(AValue, akValues));
-
-  if AValue is TGocciaStringLiteralValue then
-    Exit(TGocciaStringIteratorValue.Create(AValue));
-
   if AValue is TGocciaObjectValue then
+    IteratorSource := TGocciaObjectValue(AValue)
+  else
+    IteratorSource := AValue.Box;
+
+  if Assigned(IteratorSource) then
   begin
-    IteratorMethod := TGocciaObjectValue(AValue).GetSymbolProperty(
+    IteratorMethod := IteratorSource.GetSymbolProperty(
       TGocciaSymbolValue.WellKnownIterator);
     if not Assigned(IteratorMethod) or (IteratorMethod is TGocciaUndefinedLiteralValue) then
       Exit(nil);
@@ -155,6 +158,7 @@ var
   IterationResult: TGocciaObjectValue;
   CurrentContext, NextContext: TGocciaEvaluationContext;
   RestArray: TGocciaArrayValue;
+  RestArrayRooted: Boolean;
 begin
   CurrentContext := AContext;
 
@@ -180,19 +184,27 @@ begin
   if Assigned(ARestPattern) then
   begin
     RestArray := TGocciaArrayValue.Create;
-    IterationResult := AIterator.AdvanceNext;
-    while not IterationResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
-    begin
-      RestArray.Elements.Add(IterationResult.GetProperty(PROP_VALUE));
+    RestArrayRooted := Assigned(TGarbageCollector.Instance);
+    if RestArrayRooted then
+      TGarbageCollector.Instance.AddTempRoot(RestArray);
+    try
       IterationResult := AIterator.AdvanceNext;
+      while not IterationResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+      begin
+        RestArray.Elements.Add(IterationResult.GetProperty(PROP_VALUE));
+        IterationResult := AIterator.AdvanceNext;
+      end;
+      if not TryMatchPatternInternal(RestArray, ARestPattern,
+         CurrentContext, NextContext) then
+      begin
+        ReleaseMatchContext(CurrentContext, AContext);
+        Exit(False);
+      end;
+      CurrentContext := NextContext;
+    finally
+      if RestArrayRooted then
+        TGarbageCollector.Instance.RemoveTempRoot(RestArray);
     end;
-    if not TryMatchPatternInternal(RestArray, ARestPattern,
-       CurrentContext, NextContext) then
-    begin
-      ReleaseMatchContext(CurrentContext, AContext);
-      Exit(False);
-    end;
-    CurrentContext := NextContext;
   end
   else if not AHasRestWildcard then
   begin
@@ -246,8 +258,12 @@ begin
   if AKey is TGocciaSymbolValue then
   begin
     if ASubject is TGocciaObjectValue then
+    begin
+      if ASubject is TGocciaProxyValue then
+        Exit(TGocciaProxyValue(ASubject).HasSymbolTrap(TGocciaSymbolValue(AKey)));
       Exit(HasSymbolPropertyInChain(TGocciaObjectValue(ASubject),
         TGocciaSymbolValue(AKey)));
+    end;
 
     BoxedSubject := BoxPrimitiveForMatch(ASubject);
     if Assigned(BoxedSubject) then
@@ -265,6 +281,9 @@ begin
   end;
 
   KeyName := AKey.ToStringLiteral.Value;
+  if ASubject is TGocciaProxyValue then
+    Exit(TGocciaProxyValue(ASubject).HasTrap(KeyName));
+
   if ASubject is TGocciaObjectValue then
     Exit(TGocciaObjectValue(ASubject).HasProperty(KeyName));
 
@@ -728,12 +747,17 @@ begin
     CurrentContext := AContext;
     for I := 0 to TGocciaAndMatchPattern(APattern).Patterns.Count - 1 do
     begin
-      if not TryMatchPatternInternal(ASubject,
-         TGocciaAndMatchPattern(APattern).Patterns[I], CurrentContext,
-         NextContext) then
-      begin
+      try
+        if not TryMatchPatternInternal(ASubject,
+           TGocciaAndMatchPattern(APattern).Patterns[I], CurrentContext,
+           NextContext) then
+        begin
+          ReleaseMatchContext(CurrentContext, AContext);
+          Exit(False);
+        end;
+      except
         ReleaseMatchContext(CurrentContext, AContext);
-        Exit(False);
+        raise;
       end;
       CurrentContext := NextContext;
     end;
@@ -746,12 +770,17 @@ begin
     for I := 0 to TGocciaOrMatchPattern(APattern).Patterns.Count - 1 do
     begin
       BranchContext := CreatePatternChildContext(AContext, 'PatternOrBranch');
-      if TryMatchPatternInternal(ASubject,
-         TGocciaOrMatchPattern(APattern).Patterns[I], BranchContext,
-         NextContext) then
-      begin
-        AMatchContext := NextContext;
-        Exit(True);
+      try
+        if TryMatchPatternInternal(ASubject,
+           TGocciaOrMatchPattern(APattern).Patterns[I], BranchContext,
+           NextContext) then
+        begin
+          AMatchContext := NextContext;
+          Exit(True);
+        end;
+      except
+        ReleaseMatchContext(BranchContext, AContext);
+        raise;
       end;
       BranchContext.Scope.Free;
     end;
@@ -762,8 +791,13 @@ begin
   begin
     BranchContext := CreatePatternChildContext(AContext, 'PatternNotBranch');
     NextContext := BranchContext;
-    InnerMatched := TryMatchPatternInternal(ASubject,
-      TGocciaNotMatchPattern(APattern).Pattern, BranchContext, NextContext);
+    try
+      InnerMatched := TryMatchPatternInternal(ASubject,
+        TGocciaNotMatchPattern(APattern).Pattern, BranchContext, NextContext);
+    except
+      ReleaseMatchContext(NextContext, AContext);
+      raise;
+    end;
     if InnerMatched then
       ReleaseMatchContext(NextContext, AContext)
     else if Assigned(BranchContext.Scope) then

@@ -167,6 +167,7 @@ type
       const AValue: TGocciaValue);
     function HasPropertyValue(const AObject, AKey: TGocciaValue): TGocciaValue;
     function MatchHasPropertyValue(const AObject, AKey: TGocciaValue): TGocciaValue;
+    function MatchExtractorValue(const ASubject, AMatcher: TGocciaValue): TGocciaValue;
     function InvokeFunctionValue(const ACallee: TGocciaValue;
       const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -3287,6 +3288,7 @@ function TGocciaVM.TryIterableToArray(const AIterable: TGocciaValue;
 var
   IteratorValue, IteratorMethod, IteratorObject, NextMethod, NextResult,
     DoneValue, Value: TGocciaValue;
+  IteratorSource: TGocciaObjectValue;
   DoneFlag: Boolean;
   ArrayRooted, IteratorRooted: Boolean;
   CallArgs: TGocciaArgumentsCollection;
@@ -3297,13 +3299,17 @@ begin
 
   if AIterable is TGocciaIteratorValue then
     IteratorValue := AIterable
-  else if AIterable is TGocciaArrayValue then
-    IteratorValue := TGocciaArrayIteratorValue.Create(AIterable, akValues)
-  else if AIterable is TGocciaStringLiteralValue then
-    IteratorValue := TGocciaStringIteratorValue.Create(AIterable)
-  else if AIterable is TGocciaObjectValue then
+  else
   begin
-    IteratorMethod := TGocciaObjectValue(AIterable).GetSymbolProperty(
+    if AIterable is TGocciaObjectValue then
+      IteratorSource := TGocciaObjectValue(AIterable)
+    else
+      IteratorSource := AIterable.Box;
+
+    if not Assigned(IteratorSource) then
+      Exit(False);
+
+    IteratorMethod := IteratorSource.GetSymbolProperty(
       TGocciaSymbolValue.WellKnownIterator);
     if not Assigned(IteratorMethod) or
        (IteratorMethod is TGocciaUndefinedLiteralValue) then
@@ -3331,9 +3337,7 @@ begin
     end
     else
       ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
-  end
-  else
-    Exit(False);
+  end;
 
   AArray := TGocciaArrayValue.Create;
   ArrayRooted := Assigned(TGarbageCollector.Instance);
@@ -4782,6 +4786,12 @@ begin
   begin
     if AObject is TGocciaObjectValue then
     begin
+      if AObject is TGocciaProxyValue then
+      begin
+        if TGocciaProxyValue(AObject).HasSymbolTrap(TGocciaSymbolValue(AKey)) then
+          Exit(TGocciaBooleanLiteralValue.TrueValue);
+        Exit(TGocciaBooleanLiteralValue.FalseValue);
+      end;
       if VMHasSymbolPropertyInChain(TGocciaObjectValue(AObject),
         TGocciaSymbolValue(AKey)) then
         Exit(TGocciaBooleanLiteralValue.TrueValue);
@@ -4796,6 +4806,13 @@ begin
   end;
 
   KeyStr := KeyToPropertyName(AKey);
+  if AObject is TGocciaProxyValue then
+  begin
+    if TGocciaProxyValue(AObject).HasTrap(KeyStr) then
+      Exit(TGocciaBooleanLiteralValue.TrueValue);
+    Exit(TGocciaBooleanLiteralValue.FalseValue);
+  end;
+
   if AObject is TGocciaObjectValue then
   begin
     if TGocciaObjectValue(AObject).HasProperty(KeyStr) then
@@ -4815,6 +4832,58 @@ begin
   if Assigned(Prop) then
     Exit(TGocciaBooleanLiteralValue.TrueValue);
   Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
+function TGocciaVM.MatchExtractorValue(const ASubject,
+  AMatcher: TGocciaValue): TGocciaValue;
+var
+  CustomMatcher, Extracted: TGocciaValue;
+  MatchHintObject: TGocciaObjectValue;
+  ExtractedArray: TGocciaArrayValue;
+  CallArgs: TGocciaArgumentsCollection;
+  ObjectConstructorValue, FunctionConstructorValue: TGocciaValue;
+begin
+  CustomMatcher := GetCustomMatcher(AMatcher);
+  if not Assigned(CustomMatcher) then
+  begin
+    if AMatcher is TGocciaClassValue then
+    begin
+      ObjectConstructorValue := VMGlobalObjectConstructor(FGlobalScope);
+      FunctionConstructorValue := VMGlobalFunctionConstructor(FGlobalScope);
+      if VMInstanceOfValue(ASubject, AMatcher, ObjectConstructorValue,
+         FunctionConstructorValue).ToBooleanLiteral.Value then
+        Exit(TGocciaArrayValue.Create);
+      Exit(TGocciaBooleanLiteralValue.FalseValue);
+    end;
+
+    ThrowTypeError('Extractor pattern requires a custom matcher');
+  end;
+
+  if not CustomMatcher.IsCallable then
+    ThrowTypeError('Symbol.customMatcher must be callable');
+
+  CallArgs := AcquireArguments(2);
+  try
+    MatchHintObject := TGocciaObjectValue.Create;
+    MatchHintObject.AssignProperty(PROP_MATCH_TYPE,
+      TGocciaStringLiteralValue.Create('extractor'));
+    CallArgs.Add(ASubject);
+    CallArgs.Add(MatchHintObject);
+    Extracted := InvokeFunctionValue(CustomMatcher, CallArgs, AMatcher);
+  finally
+    ReleaseArguments(CallArgs);
+  end;
+
+  if Extracted is TGocciaBooleanLiteralValue then
+  begin
+    if not TGocciaBooleanLiteralValue(Extracted).Value then
+      Exit(TGocciaBooleanLiteralValue.FalseValue);
+    Exit(TGocciaArrayValue.Create);
+  end;
+
+  if not TryIterableToArray(Extracted, ExtractedArray) then
+    ThrowTypeError('Extractor pattern result must be true, false, or iterable');
+  Result := ExtractedArray;
 end;
 
 function TGocciaVM.InvokeFunctionValue(const ACallee: TGocciaValue;
@@ -6247,6 +6316,9 @@ begin
 
       OP_MATCH_HAS_PROPERTY:
         SetRegister(A, MatchHasPropertyValue(GetRegister(B), GetRegister(C)));
+
+      OP_MATCH_EXTRACTOR:
+        SetRegister(A, MatchExtractorValue(GetRegister(B), GetRegister(C)));
 
       OP_MATCH_VALUE:
       begin
