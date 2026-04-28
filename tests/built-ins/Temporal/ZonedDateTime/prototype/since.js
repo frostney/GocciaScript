@@ -37,4 +37,61 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime.prototype.since", () => {
     expect(dur.nanoseconds).toBe(5000000000);
     expect(dur.toString()).toBe("PT5S");
   });
+
+  test("since() rounds days using spring-forward day length", () => {
+    const start = Temporal.ZonedDateTime.from("2024-03-09T00:00:00-05:00[America/New_York]");
+    const beforeHalf = Temporal.ZonedDateTime.from("2024-03-10T12:00:00-04:00[America/New_York]");
+    const afterHalf = Temporal.ZonedDateTime.from("2024-03-10T12:30:00-04:00[America/New_York]");
+
+    const unrounded = beforeHalf.since(start, { largestUnit: "days" });
+    expect(unrounded.days).toBe(1);
+    expect(unrounded.hours).toBe(11);
+
+    const roundedBefore = beforeHalf.since(start, {
+      largestUnit: "days",
+      smallestUnit: "days",
+      roundingMode: "halfExpand",
+    });
+    const roundedAfter = afterHalf.since(start, {
+      largestUnit: "days",
+      smallestUnit: "days",
+      roundingMode: "halfExpand",
+    });
+
+    expect(roundedBefore.days).toBe(1);
+    expect(roundedAfter.days).toBe(2);
+
+    const roundedHours = afterHalf.since(start, {
+      largestUnit: "days",
+      smallestUnit: "hours",
+      roundingMode: "halfExpand",
+    });
+    expect(roundedHours.days).toBe(1);
+    expect(roundedHours.hours).toBe(12);
+  });
+
+  test("since() rounds days using fall-back day length", () => {
+    const start = Temporal.ZonedDateTime.from("2024-11-02T00:00:00-04:00[America/New_York]");
+    const afterHalf = Temporal.ZonedDateTime.from("2024-11-03T11:30:00-05:00[America/New_York]");
+
+    const unrounded = afterHalf.since(start, { largestUnit: "days" });
+    expect(unrounded.days).toBe(1);
+    expect(unrounded.hours).toBe(12);
+    expect(unrounded.minutes).toBe(30);
+
+    const rounded = afterHalf.since(start, {
+      largestUnit: "days",
+      smallestUnit: "days",
+      roundingMode: "halfExpand",
+    });
+    expect(rounded.days).toBe(2);
+
+    const roundedHours = afterHalf.since(start, {
+      largestUnit: "days",
+      smallestUnit: "hours",
+      roundingMode: "halfExpand",
+    });
+    expect(roundedHours.days).toBe(1);
+    expect(roundedHours.hours).toBe(13);
+  });
 });

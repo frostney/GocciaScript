@@ -67,6 +67,10 @@ jobs:
           export PATH="$PREFIX/bin:$PWD/cross-binutils/bin:$PATH"
 
           echo "Target: ${{ matrix.target }}"
+          if [ ! -x "$PREFIX/bin/fpcres" ]; then
+            echo "::error::fpcres not found in restored FPC toolchain"
+            exit 1
+          fi
 
           CPU="${{ matrix.cpu }}"
           OS="${{ matrix.os }}"
@@ -162,7 +166,7 @@ jobs:
             echo ""
             echo "=== Building ${name} for ${TARGET} ==="
             "$CROSS_FPC" -T"${OS}" -O4 -dPRODUCTION -Xs -CX -XX -B \
-              -Fu./source/units -Fu./source/shared -Fu./source/app -Fu./souffle \
+              -Fu./source/units -Fu./source/generated -Fu./source/shared -Fu./source/app -Fu./souffle \
               -Fi./source/units -Fi./source/shared -Fi./souffle \
               -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$REGEXPR_SRC" -Fu"$FCL_NET_SRC" -Fu"$OPENSSL_SRC" \
               -FU"build/compiled" -FE"build" \
@@ -178,7 +182,7 @@ jobs:
             echo ""
             echo "=== Building ${name} for ${TARGET} ==="
             "$CROSS_FPC" -T"${OS}" -O4 -dPRODUCTION -Xs -CX -XX -B \
-              -Fu./source/units -Fu./source/shared -Fu./source/app -Fu./souffle \
+              -Fu./source/units -Fu./source/generated -Fu./source/shared -Fu./source/app -Fu./souffle \
               -Fi./source/units -Fi./source/shared -Fi./souffle \
               -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$REGEXPR_SRC" -Fu"$FCL_NET_SRC" -Fu"$OPENSSL_SRC" \
               -FU"build/compiled" -FE"build" \
@@ -191,7 +195,7 @@ jobs:
           echo ""
           echo "=== Building GocciaTOMLCheck for ${TARGET} ==="
           "$CROSS_FPC" -T"${OS}" -O4 -dPRODUCTION -Xs -CX -XX -B \
-            -Fu./source/units -Fu./source/shared -Fu./source/app -Fu./souffle \
+            -Fu./source/units -Fu./source/generated -Fu./source/shared -Fu./source/app -Fu./souffle \
             -Fi./source/units -Fi./source/shared -Fi./souffle \
             -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$REGEXPR_SRC" -Fu"$FCL_NET_SRC" -Fu"$OPENSSL_SRC" \
             -FU"build/compiled" -FE"build" \
@@ -203,7 +207,7 @@ jobs:
           echo ""
           echo "=== Building GocciaJSON5Check for ${TARGET} ==="
           "$CROSS_FPC" -T"${OS}" -O4 -dPRODUCTION -Xs -CX -XX -B \
-            -Fu./source/units -Fu./source/shared -Fu./source/app -Fu./souffle \
+            -Fu./source/units -Fu./source/generated -Fu./source/shared -Fu./source/app -Fu./souffle \
             -Fi./source/units -Fi./source/shared -Fi./souffle \
             -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$REGEXPR_SRC" -Fu"$FCL_NET_SRC" -Fu"$OPENSSL_SRC" \
             -FU"build/compiled" -FE"build" \
