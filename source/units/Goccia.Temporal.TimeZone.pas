@@ -251,8 +251,11 @@ begin
 end;
 
 function EpochSecondsToICUMilliseconds(const AEpochSeconds: Int64): TICUDate;
+var
+  Seconds: TICUDate;
 begin
-  Result := TICUDate(AEpochSeconds) * MILLISECONDS_PER_SECOND;
+  Seconds := AEpochSeconds;
+  Result := Seconds * MILLISECONDS_PER_SECOND;
 end;
 
 function ICUMillisecondsToEpochSeconds(const AMilliseconds: TICUDate): Int64;
