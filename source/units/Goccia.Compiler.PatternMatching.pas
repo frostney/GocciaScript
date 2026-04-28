@@ -376,6 +376,7 @@ begin
         APattern.Elements.Count));
       EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, TailMethodReg, 1, 0));
       CompilePatternTest(ACtx, TailMethodReg, APattern.RestPattern, ADest);
+      FailJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ADest));
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;

@@ -93,6 +93,7 @@ describe("pattern matching expressions", () => {
     }
 
     expect(result).toBe(3);
+    expect({ a: 1, b: 2 } is { a: 1, ...{ b: 1 } }).toBe(false);
   });
 
   test("object rest patterns box primitive subjects", () => {
@@ -180,6 +181,7 @@ describe("pattern matching expressions", () => {
 
     expect(result).toBe(5);
     expect({} is []).toBe(false);
+    expect([0, 2] is [0, ...[1]]).toBe(false);
   });
 
   test("as bindings and guards commit only after success", () => {
