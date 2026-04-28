@@ -80,6 +80,7 @@ type
     OutputText: string;
     ErrorJSON: string;
     Timing: TCLIJSONTiming;
+    MemoryStats: TCLIJSONMemoryStats;
     Ok: Boolean;
   end;
 
@@ -445,6 +446,59 @@ begin
     ASource.TotalTimeNanoseconds;
 end;
 
+function MaxInt64Value(const ALeft, ARight: Int64): Int64;
+begin
+  if ALeft > ARight then
+    Result := ALeft
+  else
+    Result := ARight;
+end;
+
+function AggregateScriptLoaderMemoryStats(
+  const AResults: array of TScriptLoaderJSONFileResult): TCLIJSONMemoryStats;
+var
+  I: Integer;
+  Stats: TCLIJSONMemoryStats;
+begin
+  Result := DefaultCLIJSONMemoryStats;
+
+  for I := 0 to High(AResults) do
+  begin
+    Stats := AResults[I].MemoryStats;
+    if not Stats.Enabled then
+      Continue;
+
+    Result.Enabled := True;
+    Result.GCStartBytes := Result.GCStartBytes + Stats.GCStartBytes;
+    Result.GCEndBytes := Result.GCEndBytes + Stats.GCEndBytes;
+    Result.GCPeakBytes := Result.GCPeakBytes + Stats.GCPeakBytes;
+    Result.GCLiveBytes := Result.GCLiveBytes + Stats.GCLiveBytes;
+    Result.GCDeltaBytes := Result.GCDeltaBytes + Stats.GCDeltaBytes;
+    Result.GCAllocatedDuringRunBytes :=
+      Result.GCAllocatedDuringRunBytes + Stats.GCAllocatedDuringRunBytes;
+    Result.GCMaxBytes := MaxInt64Value(Result.GCMaxBytes, Stats.GCMaxBytes);
+    Result.GCStartObjectCount :=
+      Result.GCStartObjectCount + Stats.GCStartObjectCount;
+    Result.GCEndObjectCount :=
+      Result.GCEndObjectCount + Stats.GCEndObjectCount;
+    Result.GCCollections := Result.GCCollections + Stats.GCCollections;
+    Result.GCCollectedObjects :=
+      Result.GCCollectedObjects + Stats.GCCollectedObjects;
+    Result.HeapStartAllocatedBytes :=
+      Result.HeapStartAllocatedBytes + Stats.HeapStartAllocatedBytes;
+    Result.HeapEndAllocatedBytes :=
+      Result.HeapEndAllocatedBytes + Stats.HeapEndAllocatedBytes;
+    Result.HeapDeltaAllocatedBytes :=
+      Result.HeapDeltaAllocatedBytes + Stats.HeapDeltaAllocatedBytes;
+    Result.HeapStartFreeBytes :=
+      Result.HeapStartFreeBytes + Stats.HeapStartFreeBytes;
+    Result.HeapEndFreeBytes :=
+      Result.HeapEndFreeBytes + Stats.HeapEndFreeBytes;
+    Result.HeapDeltaFreeBytes :=
+      Result.HeapDeltaFreeBytes + Stats.HeapDeltaFreeBytes;
+  end;
+end;
+
 function BuildAggregateScriptLoaderJSON(const AResults: array of TScriptLoaderJSONFileResult;
   const AMemoryStats: TCLIJSONMemoryStats; const AWorkerCount,
   AAvailableWorkerCount: Integer): string;
@@ -802,6 +856,7 @@ begin
   Result.ErrorJSON := 'null';
   Result.Ok := False;
   FillChar(Result.Timing, SizeOf(Result.Timing), 0);
+  Result.MemoryStats := DefaultCLIJSONMemoryStats;
 
   Capture := TScriptLoaderConsoleCapture.Create;
   try
@@ -827,6 +882,7 @@ begin
       Result.OutputText := CapturedOutputText(Capture);
       Result.ErrorJSON := 'null';
       Result.Timing := Report.Timing;
+      Result.MemoryStats := Report.MemoryStats;
       Result.Ok := True;
       Result.JSON := BuildCLIScriptFileSuccessJSON(AFileName,
         Report.ResultValue, Result.OutputText, Result.StdoutText,
@@ -855,6 +911,7 @@ begin
         Result.OutputText := CapturedOutputText(Capture);
         Result.ErrorJSON := BuildCLIErrorObjectJSON(ErrorInfo);
         Result.Timing := Report.Timing;
+        Result.MemoryStats := Report.MemoryStats;
         Result.Ok := False;
         Result.JSON := BuildCLIScriptFileErrorJSON(AFileName,
           Result.OutputText, Result.StdoutText, Result.StderrText,
@@ -916,6 +973,7 @@ begin
       Result.OutputText := '';
       Result.ErrorJSON := BuildCLIErrorObjectJSON(ErrorInfo);
       Result.Timing := Timing;
+      Result.MemoryStats := DefaultCLIJSONMemoryStats;
       Result.Ok := False;
       ExitCode := 1;
       Exit;
@@ -932,11 +990,11 @@ procedure TScriptLoaderApp.RunJSONFiles(const AFiles: TStringList);
 var
   Results: array of TScriptLoaderJSONFileResult;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
+  MemoryStats: TCLIJSONMemoryStats;
   Pool: TGocciaThreadPool;
   I, JobCount: Integer;
 begin
   SetLength(Results, AFiles.Count);
-  BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
   JobCount := GetJobCount(AFiles.Count);
 
   if JobCount > 1 then
@@ -954,18 +1012,22 @@ begin
     for I := 0 to AFiles.Count - 1 do
       if not Results[I].Ok then
         ExitCode := 1;
+    MemoryStats := AggregateScriptLoaderMemoryStats(Results);
   end
   else
+  begin
+    BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
     for I := 0 to AFiles.Count - 1 do
     begin
       Results[I] := RunScriptFromFileForJSON(AFiles[I], False);
       if not Results[I].Ok then
         ExitCode := 1;
     end;
+    MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
+  end;
 
   WriteLn(BuildAggregateScriptLoaderJSON(Results,
-    FinishCLIJSONMemoryMeasurement(MemoryMeasurement), JobCount,
-    GetJobCount(AFiles.Count)));
+    MemoryStats, JobCount, GetJobCount(AFiles.Count)));
 end;
 
 procedure TScriptLoaderApp.RunScriptFromStdin;
@@ -985,6 +1047,9 @@ procedure TScriptLoaderApp.ScriptWorkerProc(const AFileName: string;
   out AErrorMessage: string; AData: Pointer);
 var
   JSONResults: PScriptLoaderJSONFileResultArray;
+  ErrorInfo: TCLIJSONErrorInfo;
+  Timing: TCLIJSONTiming;
+  MemoryStats: TCLIJSONMemoryStats;
 begin
   AConsoleOutput := '';
   AErrorMessage := '';
@@ -992,7 +1057,7 @@ begin
     if IsJsonOutput then
     begin
       JSONResults := PScriptLoaderJSONFileResultArray(AData);
-      JSONResults^[AIndex] := RunScriptFromFileForJSON(AFileName, False);
+      JSONResults^[AIndex] := RunScriptFromFileForJSON(AFileName, True);
       if not JSONResults^[AIndex].Ok then
         AErrorMessage := 'failed';
     end
@@ -1005,11 +1070,21 @@ begin
       if IsJsonOutput then
       begin
         JSONResults := PScriptLoaderJSONFileResultArray(AData);
+        ErrorInfo := ExceptionToCLIJSONErrorInfo(E);
+        if ErrorInfo.FileName = '' then
+          ErrorInfo.FileName := AFileName;
+        FillChar(Timing, SizeOf(Timing), 0);
+        MemoryStats := DefaultCLIJSONMemoryStats;
         JSONResults^[AIndex].FileName := AFileName;
+        JSONResults^[AIndex].StdoutText := '';
+        JSONResults^[AIndex].StderrText := '';
+        JSONResults^[AIndex].OutputText := '';
+        JSONResults^[AIndex].ErrorJSON := BuildCLIErrorObjectJSON(ErrorInfo);
+        JSONResults^[AIndex].Timing := Timing;
+        JSONResults^[AIndex].MemoryStats := MemoryStats;
         JSONResults^[AIndex].Ok := False;
         JSONResults^[AIndex].JSON := BuildCLIScriptFileErrorJSON(
-          AFileName, '', '', '', ExceptionToCLIJSONErrorInfo(E),
-          Default(TCLIJSONTiming), DefaultCLIJSONMemoryStats);
+          AFileName, '', '', '', ErrorInfo, Timing, MemoryStats);
       end;
       ExitCode := 1;
     end;

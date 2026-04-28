@@ -177,8 +177,14 @@ console.log("Loader: JSON multi-file structure...");
     if (json.files[1].result !== 22) throw new Error(`Loader second result should be 22, got ${json.files[1].result}`);
     if (!json.files[0].output.includes("first out")) throw new Error(`Loader first file output mismatch: ${json.files[0].output}`);
     if (!json.files[1].stderr.includes("second err")) throw new Error(`Loader second file stderr mismatch: ${json.files[1].stderr}`);
-    if (json.files[0].memory !== null || json.files[1].memory !== null)
-      throw new Error("Loader multi-file per-file memory should be null when top-level memory is aggregated");
+    if (typeof json.files[0].memory?.gc?.liveBytes !== "number")
+      throw new Error("Loader first file worker memory should be present");
+    if (typeof json.files[1].memory?.gc?.liveBytes !== "number")
+      throw new Error("Loader second file worker memory should be present");
+    const allocatedDuringRun =
+      json.files[0].memory.gc.allocatedDuringRunBytes + json.files[1].memory.gc.allocatedDuringRunBytes;
+    if (json.memory.gc.allocatedDuringRunBytes !== allocatedDuringRun)
+      throw new Error("Loader top-level worker memory should aggregate per-file worker memory");
   } finally {
     clean(tmp);
   }
