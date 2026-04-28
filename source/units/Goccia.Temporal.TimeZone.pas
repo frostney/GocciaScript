@@ -128,7 +128,7 @@ begin
     Result := FailLoad;
     Exit;
   end;
-  Pointer(AICU.OpenCalendar) := Symbol;
+  AICU.OpenCalendar := TICUCalendarOpen(Symbol);
 
   Symbol := GetProcAddress(AICU.Handle, 'ucal_close');
   if not Assigned(Symbol) then
@@ -136,7 +136,7 @@ begin
     Result := FailLoad;
     Exit;
   end;
-  Pointer(AICU.CloseCalendar) := Symbol;
+  AICU.CloseCalendar := TICUCalendarClose(Symbol);
 
   Symbol := GetProcAddress(AICU.Handle, 'ucal_setMillis');
   if not Assigned(Symbol) then
@@ -144,7 +144,7 @@ begin
     Result := FailLoad;
     Exit;
   end;
-  Pointer(AICU.SetMillis) := Symbol;
+  AICU.SetMillis := TICUCalendarSetMillis(Symbol);
 
   Symbol := GetProcAddress(AICU.Handle, 'ucal_get');
   if not Assigned(Symbol) then
@@ -152,7 +152,7 @@ begin
     Result := FailLoad;
     Exit;
   end;
-  Pointer(AICU.GetField) := Symbol;
+  AICU.GetField := TICUCalendarGet(Symbol);
 
   Symbol := GetProcAddress(AICU.Handle, 'ucal_getTimeZoneTransitionDate');
   if not Assigned(Symbol) then
@@ -160,7 +160,7 @@ begin
     Result := FailLoad;
     Exit;
   end;
-  Pointer(AICU.GetTimeZoneTransitionDate) := Symbol;
+  AICU.GetTimeZoneTransitionDate := TICUCalendarGetTimeZoneTransitionDate(Symbol);
 
   Symbol := GetProcAddress(AICU.Handle, 'ucal_getCanonicalTimeZoneID');
   if not Assigned(Symbol) then
@@ -168,7 +168,7 @@ begin
     Result := FailLoad;
     Exit;
   end;
-  Pointer(AICU.GetCanonicalTimeZoneID) := Symbol;
+  AICU.GetCanonicalTimeZoneID := TICUCalendarGetCanonicalTimeZoneID(Symbol);
 
   Symbol := GetProcAddress(AICU.Handle, 'ucal_getDefaultTimeZone');
   if not Assigned(Symbol) then
@@ -176,7 +176,7 @@ begin
     Result := FailLoad;
     Exit;
   end;
-  Pointer(AICU.GetDefaultTimeZone) := Symbol;
+  AICU.GetDefaultTimeZone := TICUCalendarGetDefaultTimeZone(Symbol);
 
   Result := True;
 end;
