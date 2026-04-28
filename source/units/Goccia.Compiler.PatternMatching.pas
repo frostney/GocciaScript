@@ -10,6 +10,9 @@ uses
   Goccia.Bytecode,
   Goccia.Compiler.Context;
 
+type
+  TGocciaJumpArray = array of Integer;
+
 procedure CompileIsExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIsExpression; const ADest: UInt8);
 procedure CompileMatchExpression(const ACtx: TGocciaCompilationContext;
@@ -21,7 +24,7 @@ procedure DeclarePatternBindings(const ACtx: TGocciaCompilationContext;
   const APattern: TGocciaMatchPattern);
 function CompileConditionWithPatternBindings(const ACtx: TGocciaCompilationContext;
   const ACondition: TGocciaExpression; const ADest: UInt8;
-  out ASubjectReg: UInt8): Boolean;
+  out ASubjectReg: UInt8; out AFailJumps: TGocciaJumpArray): Boolean;
 
 implementation
 
@@ -62,6 +65,112 @@ begin
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ASubjectReg, 0));
   if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
     EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
+end;
+
+procedure AddPatternBindingName(const ANames: TStringList; const AName: string);
+begin
+  if ANames.IndexOf(AName) < 0 then
+    ANames.Add(AName);
+end;
+
+procedure CollectPatternBindingNames(const APattern: TGocciaMatchPattern;
+  const ANames: TStringList);
+var
+  I: Integer;
+begin
+  if not Assigned(APattern) then
+    Exit;
+
+  if APattern is TGocciaBindingMatchPattern then
+    AddPatternBindingName(ANames, TGocciaBindingMatchPattern(APattern).Name)
+  else if APattern is TGocciaAsMatchPattern then
+  begin
+    CollectPatternBindingNames(TGocciaAsMatchPattern(APattern).Pattern, ANames);
+    AddPatternBindingName(ANames, TGocciaAsMatchPattern(APattern).Name);
+  end
+  else if APattern is TGocciaArrayMatchPattern then
+  begin
+    for I := 0 to TGocciaArrayMatchPattern(APattern).Elements.Count - 1 do
+      CollectPatternBindingNames(TGocciaArrayMatchPattern(APattern).Elements[I],
+        ANames);
+    CollectPatternBindingNames(TGocciaArrayMatchPattern(APattern).RestPattern,
+      ANames);
+  end
+  else if APattern is TGocciaObjectMatchPattern then
+  begin
+    for I := 0 to TGocciaObjectMatchPattern(APattern).Properties.Count - 1 do
+      CollectPatternBindingNames(
+        TGocciaObjectMatchPattern(APattern).Properties[I].Pattern, ANames);
+    CollectPatternBindingNames(TGocciaObjectMatchPattern(APattern).RestPattern,
+      ANames);
+  end
+  else if APattern is TGocciaExtractorMatchPattern then
+  begin
+    for I := 0 to TGocciaExtractorMatchPattern(APattern).Arguments.Count - 1 do
+      CollectPatternBindingNames(TGocciaExtractorMatchPattern(APattern).Arguments[I],
+        ANames);
+    CollectPatternBindingNames(TGocciaExtractorMatchPattern(APattern).RestPattern,
+      ANames);
+  end
+  else if APattern is TGocciaAndMatchPattern then
+  begin
+    for I := 0 to TGocciaAndMatchPattern(APattern).Patterns.Count - 1 do
+      CollectPatternBindingNames(TGocciaAndMatchPattern(APattern).Patterns[I],
+        ANames);
+  end
+  else if APattern is TGocciaOrMatchPattern then
+  begin
+    for I := 0 to TGocciaOrMatchPattern(APattern).Patterns.Count - 1 do
+      CollectPatternBindingNames(TGocciaOrMatchPattern(APattern).Patterns[I],
+        ANames);
+  end;
+end;
+
+procedure BeginTentativeBindings(const ACtx: TGocciaCompilationContext;
+  const ANames: TStringList; const ASnapshotRegs, ABindingSlots: TList<UInt8>;
+  const ACapturedSlots: TList<Boolean>);
+var
+  I, LocalIdx: Integer;
+  Slot, SnapshotReg: UInt8;
+begin
+  for I := 0 to ANames.Count - 1 do
+  begin
+    LocalIdx := ACtx.Scope.ResolveLocal(ANames[I]);
+    if LocalIdx < 0 then
+      Continue;
+
+    Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
+    SnapshotReg := ACtx.Scope.AllocateRegister;
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, SnapshotReg, Slot, 0));
+    ASnapshotRegs.Add(SnapshotReg);
+    ABindingSlots.Add(Slot);
+    ACapturedSlots.Add(ACtx.Scope.GetLocal(LocalIdx).IsCaptured);
+  end;
+end;
+
+procedure RestoreTentativeBindings(const ACtx: TGocciaCompilationContext;
+  const ASnapshotRegs, ABindingSlots: TList<UInt8>;
+  const ACapturedSlots: TList<Boolean>);
+var
+  I: Integer;
+begin
+  for I := 0 to ASnapshotRegs.Count - 1 do
+  begin
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ABindingSlots[I], ASnapshotRegs[I],
+      0));
+    if ACapturedSlots[I] then
+      EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ABindingSlots[I],
+        UInt16(ABindingSlots[I])));
+  end;
+end;
+
+procedure FreeTentativeBindings(const ACtx: TGocciaCompilationContext;
+  const ASnapshotRegs: TList<UInt8>);
+var
+  I: Integer;
+begin
+  for I := ASnapshotRegs.Count - 1 downto 0 do
+    ACtx.Scope.FreeRegister;
 end;
 
 procedure DeclarePatternBindings(const ACtx: TGocciaCompilationContext;
@@ -152,7 +261,8 @@ begin
       if Prop.Computed then
       begin
         ACtx.CompileExpression(Prop.KeyExpression, KeyReg);
-        EmitInstruction(ACtx, EncodeABC(OP_HAS_PROPERTY, ADest, ASubjectReg, KeyReg));
+        EmitInstruction(ACtx, EncodeABC(OP_MATCH_HAS_PROPERTY, ADest, ASubjectReg,
+          KeyReg));
         FailJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ADest));
         EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, ValueReg, ASubjectReg, KeyReg));
       end
@@ -160,7 +270,8 @@ begin
       begin
         KeyIdx := ACtx.Template.AddConstantString(Prop.Key);
         EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, KeyIdx));
-        EmitInstruction(ACtx, EncodeABC(OP_HAS_PROPERTY, ADest, ASubjectReg, KeyReg));
+        EmitInstruction(ACtx, EncodeABC(OP_MATCH_HAS_PROPERTY, ADest, ASubjectReg,
+          KeyReg));
         FailJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ADest));
         if KeyIdx > High(UInt8) then
           raise Exception.Create('Constant pool overflow: pattern property index exceeds 255');
@@ -334,13 +445,32 @@ procedure CompileOrPatternTest(const ACtx: TGocciaCompilationContext;
 var
   I, EndJump: Integer;
   SuccessJumps: TList<Integer>;
+  BindingNames: TStringList;
+  SnapshotRegs, BindingSlots: TList<UInt8>;
+  CapturedSlots: TList<Boolean>;
 begin
   SuccessJumps := TList<Integer>.Create;
+  BindingNames := TStringList.Create;
   try
+    BindingNames.CaseSensitive := True;
+    CollectPatternBindingNames(APattern, BindingNames);
     for I := 0 to APattern.Patterns.Count - 1 do
     begin
-      CompilePatternTest(ACtx, ASubjectReg, APattern.Patterns[I], ADest);
-      SuccessJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, ADest));
+      SnapshotRegs := TList<UInt8>.Create;
+      BindingSlots := TList<UInt8>.Create;
+      CapturedSlots := TList<Boolean>.Create;
+      try
+        BeginTentativeBindings(ACtx, BindingNames, SnapshotRegs, BindingSlots,
+          CapturedSlots);
+        CompilePatternTest(ACtx, ASubjectReg, APattern.Patterns[I], ADest);
+        SuccessJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, ADest));
+        RestoreTentativeBindings(ACtx, SnapshotRegs, BindingSlots, CapturedSlots);
+      finally
+        FreeTentativeBindings(ACtx, SnapshotRegs);
+        CapturedSlots.Free;
+        BindingSlots.Free;
+        SnapshotRegs.Free;
+      end;
     end;
     EmitBoolean(ACtx, ADest, False);
     EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
@@ -349,6 +479,7 @@ begin
     EmitBoolean(ACtx, ADest, True);
     PatchJumpTarget(ACtx, EndJump);
   finally
+    BindingNames.Free;
     SuccessJumps.Free;
   end;
 end;
@@ -405,7 +536,10 @@ begin
     CompileRelationalPatternTest(ACtx, ASubjectReg,
       TGocciaRelationalMatchPattern(APattern), ADest)
   else if APattern is TGocciaGuardMatchPattern then
-    ACtx.CompileExpression(TGocciaGuardMatchPattern(APattern).Condition, ADest)
+  begin
+    ACtx.CompileExpression(TGocciaGuardMatchPattern(APattern).Condition, ADest);
+    EmitInstruction(ACtx, EncodeABC(OP_TO_BOOL, ADest, ADest, 0));
+  end
   else if APattern is TGocciaAsMatchPattern then
     CompileAsPatternTest(ACtx, ASubjectReg, TGocciaAsMatchPattern(APattern),
       ADest)
@@ -502,7 +636,7 @@ end;
 
 function CompileConditionWithPatternBindings(const ACtx: TGocciaCompilationContext;
   const ACondition: TGocciaExpression; const ADest: UInt8;
-  out ASubjectReg: UInt8): Boolean;
+  out ASubjectReg: UInt8; out AFailJumps: TGocciaJumpArray): Boolean;
 var
   FailJumps: TList<Integer>;
   I: Integer;
@@ -529,7 +663,6 @@ var
   var
     BinaryExpr: TGocciaBinaryExpression;
     IsExpr: TGocciaIsExpression;
-    SubjectReg: UInt8;
   begin
     if AExpression is TGocciaBinaryExpression then
     begin
@@ -546,14 +679,9 @@ var
     if AExpression is TGocciaIsExpression then
     begin
       IsExpr := TGocciaIsExpression(AExpression);
-      SubjectReg := ACtx.Scope.AllocateRegister;
-      try
-        ACtx.CompileExpression(IsExpr.Subject, SubjectReg);
-        DeclarePatternBindings(ACtx, IsExpr.Pattern);
-        CompilePatternTest(ACtx, SubjectReg, IsExpr.Pattern, ADest);
-      finally
-        ACtx.Scope.FreeRegister;
-      end;
+      ACtx.CompileExpression(IsExpr.Subject, ASubjectReg);
+      DeclarePatternBindings(ACtx, IsExpr.Pattern);
+      CompilePatternTest(ACtx, ASubjectReg, IsExpr.Pattern, ADest);
     end
     else
       ACtx.CompileExpression(AExpression, ADest);
@@ -561,16 +689,19 @@ var
 begin
   Result := False;
   ASubjectReg := 0;
+  SetLength(AFailJumps, 0);
 
   if not ContainsSafePatternCondition(ACondition) then
     Exit;
 
+  ASubjectReg := ACtx.Scope.AllocateRegister;
   ACtx.Scope.BeginScope;
   FailJumps := TList<Integer>.Create;
   try
     CompileConditionPart(ACondition);
+    SetLength(AFailJumps, FailJumps.Count);
     for I := 0 to FailJumps.Count - 1 do
-      PatchJumpTarget(ACtx, FailJumps[I]);
+      AFailJumps[I] := FailJumps[I];
     Result := True;
   finally
     FailJumps.Free;

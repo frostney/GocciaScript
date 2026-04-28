@@ -47,6 +47,10 @@ describe("pattern matching expressions", () => {
     expect(hidden).toBe(true);
   });
 
+  test("type assertions stop before a following is pattern", () => {
+    expect(1 as number is 1).toBe(true);
+  });
+
   test("array and object patterns match nested values", () => {
     const value = { point: [2, 4, 6] };
     let sum = 0;
@@ -70,6 +74,40 @@ describe("pattern matching expressions", () => {
     }
 
     expect(result).toBe(5);
+  });
+
+  test("object rest patterns box primitive subjects", () => {
+    let result = "";
+
+    if ("ab" is { length: 2, ...const rest }) {
+      result = rest[0] + rest[1];
+    }
+
+    expect(result).toBe("ab");
+  });
+
+  test("pattern binding names are case-sensitive", () => {
+    const value = { foo: 1, Foo: 2 };
+    let result = 0;
+
+    if (value is { foo: const foo, Foo: const Foo }) {
+      result = foo + Foo;
+    }
+
+    expect(result).toBe(3);
+  });
+
+  test("or pattern alternatives restore failed tentative bindings", () => {
+    const chosen = "outer";
+    const value = { bad: "bad", kind: "second" };
+    let matched = false;
+
+    if (value is { bad: const chosen, kind: "first" } or (_ if (chosen === "bad") as const chosen)) {
+      matched = true;
+    }
+
+    expect(matched).toBe(false);
+    expect(chosen).toBe("outer");
   });
 
   test("array patterns consume generic iterables and bind rest tails", () => {
@@ -134,6 +172,7 @@ describe("pattern matching expressions", () => {
     };
 
     expect(() => malformed is []).toThrow(TypeError);
+    expect(() => ({ [Symbol.iterator]: 1 } is [])).toThrow(TypeError);
   });
 
   test("ordinary match calls remain valid without a clause block", () => {

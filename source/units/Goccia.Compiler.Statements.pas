@@ -850,36 +850,61 @@ var
   CondReg, PatternSubjectReg: UInt8;
   ElseJump, EndJump: Integer;
   HasPatternBindings: Boolean;
+  PatternFailJumps: TGocciaJumpArray;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount, I: Integer;
+
+  procedure PatchPatternFailureTarget;
+  var
+    J: Integer;
+  begin
+    if not HasPatternBindings then
+      Exit;
+
+    for J := 0 to High(PatternFailJumps) do
+      PatchJumpTarget(ACtx, PatternFailJumps[J]);
+    for J := 0 to ClosedCount - 1 do
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[J], 0, 0));
+  end;
 begin
   CondReg := ACtx.Scope.AllocateRegister;
-  HasPatternBindings := CompileConditionWithPatternBindings(ACtx,
-    AStmt.Condition, CondReg, PatternSubjectReg);
-  if not HasPatternBindings then
-    ACtx.CompileExpression(AStmt.Condition, CondReg);
+  HasPatternBindings := False;
+  PatternSubjectReg := 0;
+  SetLength(PatternFailJumps, 0);
+  try
+    HasPatternBindings := CompileConditionWithPatternBindings(ACtx,
+      AStmt.Condition, CondReg, PatternSubjectReg, PatternFailJumps);
+    if not HasPatternBindings then
+      ACtx.CompileExpression(AStmt.Condition, CondReg);
 
-  ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
-  ACtx.CompileStatement(AStmt.Consequent);
+    ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+    ACtx.CompileStatement(AStmt.Consequent);
 
-  if HasPatternBindings then
-  begin
-    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
-    for I := 0 to ClosedCount - 1 do
-      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+    if HasPatternBindings then
+    begin
+      ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+      for I := 0 to ClosedCount - 1 do
+        EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+    end;
+
+    if Assigned(AStmt.Alternate) then
+    begin
+      EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      PatchJumpTarget(ACtx, ElseJump);
+      PatchPatternFailureTarget;
+      ACtx.CompileStatement(AStmt.Alternate);
+      PatchJumpTarget(ACtx, EndJump);
+    end
+    else
+    begin
+      PatchJumpTarget(ACtx, ElseJump);
+      PatchPatternFailureTarget;
+    end;
+  finally
+    if HasPatternBindings then
+      ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
   end;
-
-  if Assigned(AStmt.Alternate) then
-  begin
-    EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-    PatchJumpTarget(ACtx, ElseJump);
-    ACtx.CompileStatement(AStmt.Alternate);
-    PatchJumpTarget(ACtx, EndJump);
-  end
-  else
-    PatchJumpTarget(ACtx, ElseJump);
-
-  ACtx.Scope.FreeRegister;
 end;
 
 // Emit pending finally/disposal blocks before a return or abrupt exit.

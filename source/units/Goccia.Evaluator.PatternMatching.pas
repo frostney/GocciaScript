@@ -247,7 +247,7 @@ begin
   end;
 
   PropertyValue := ASubject.GetProperty(KeyName);
-  Result := Assigned(PropertyValue) and not (PropertyValue is TGocciaUndefinedLiteralValue);
+  Result := Assigned(PropertyValue);
 end;
 
 function GetMatchProperty(const ASubject, AKey: TGocciaValue): TGocciaValue;
@@ -427,6 +427,7 @@ var
   MatchedKeys: TStringList;
   MatchedSymbols: TList<TGocciaSymbolValue>;
   Remainder: TGocciaObjectValue;
+  RestSubject: TGocciaObjectValue;
   Entry: TPair<string, TGocciaValue>;
   SymbolEntry: TPair<TGocciaSymbolValue, TGocciaValue>;
 begin
@@ -469,16 +470,24 @@ begin
 
     if Assigned(APattern.RestPattern) then
     begin
-      if not (ASubject is TGocciaObjectValue) then
+      if ASubject is TGocciaObjectValue then
+        RestSubject := TGocciaObjectValue(ASubject)
+      else
+        RestSubject := BoxPrimitiveForMatch(ASubject);
+
+      if not Assigned(RestSubject) then
+      begin
+        ReleaseMatchContext(CurrentContext, AContext);
         Exit(False);
+      end;
 
       Remainder := TGocciaObjectValue.Create;
-      for Entry in TGocciaObjectValue(ASubject).GetEnumerablePropertyEntries do
+      for Entry in RestSubject.GetEnumerablePropertyEntries do
       begin
         if MatchedKeys.IndexOf(Entry.Key) < 0 then
           Remainder.AssignProperty(Entry.Key, Entry.Value);
       end;
-      for SymbolEntry in TGocciaObjectValue(ASubject).GetEnumerableSymbolProperties do
+      for SymbolEntry in RestSubject.GetEnumerableSymbolProperties do
       begin
         if not MatchedSymbols.Contains(SymbolEntry.Key) then
           Remainder.AssignSymbolProperty(SymbolEntry.Key, SymbolEntry.Value);
@@ -574,6 +583,7 @@ function TryMatchPatternInternal(const ASubject: TGocciaValue;
 var
   CurrentContext, NextContext, BranchContext: TGocciaEvaluationContext;
   I: Integer;
+  InnerMatched: Boolean;
 begin
   AMatchContext := AContext;
 
@@ -652,12 +662,14 @@ begin
   if APattern is TGocciaNotMatchPattern then
   begin
     BranchContext := CreatePatternChildContext(AContext, 'PatternNotBranch');
-    try
-      Result := not TryMatchPatternInternal(ASubject,
-        TGocciaNotMatchPattern(APattern).Pattern, BranchContext, NextContext);
-    finally
+    NextContext := BranchContext;
+    InnerMatched := TryMatchPatternInternal(ASubject,
+      TGocciaNotMatchPattern(APattern).Pattern, BranchContext, NextContext);
+    if InnerMatched then
+      ReleaseMatchContext(NextContext, AContext)
+    else if Assigned(BranchContext.Scope) then
       BranchContext.Scope.Free;
-    end;
+    Result := not InnerMatched;
     Exit;
   end;
 

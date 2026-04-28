@@ -17,6 +17,10 @@ describe("pattern matching integrations", () => {
     expect(() => x).toThrow(ReferenceError);
   });
 
+  test("pattern-filtered for-of requires of after the pattern", () => {
+    expect(() => new Function("for (const item is _ items) {}")).toThrow();
+  });
+
   test("for-await-of filters awaited iterations", () => {
     const fn = async () => {
       const seen = [];
