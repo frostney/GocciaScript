@@ -166,6 +166,11 @@ describe("for-await-of", () => {
         return {};
       },
     };
+    const nextNotCallable = {
+      [Symbol.asyncIterator]() {
+        return { next: 1 };
+      },
+    };
 
     await expect((async () => {
       for await (const x of primitiveIterator) {
@@ -174,6 +179,11 @@ describe("for-await-of", () => {
 
     await expect((async () => {
       for await (const x of missingNext) {
+      }
+    })()).rejects.toThrow(TypeError);
+
+    await expect((async () => {
+      for await (const x of nextNotCallable) {
       }
     })()).rejects.toThrow(TypeError);
   });
