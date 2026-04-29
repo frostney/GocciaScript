@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  gocciaToolInputZodSchema,
   MAX_GOCCIA_CODE_BYTES,
   utf8ByteLength,
   validateGocciaToolInput,
@@ -45,5 +46,20 @@ describe("goccia tool schema validation", () => {
     expect(validateGocciaToolInput({ code: "1;", mode: "native" }).ok).toBe(
       false,
     );
+  });
+
+  test("exports the underlying Zod schema", () => {
+    const result = gocciaToolInputZodSchema.safeParse({ code: "1;" });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual({
+        code: "1;",
+        mode: "interpreted",
+        asi: true,
+        compatVar: false,
+        compatFunction: false,
+      });
+    }
   });
 });
