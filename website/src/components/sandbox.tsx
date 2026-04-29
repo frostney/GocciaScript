@@ -532,15 +532,15 @@ export function Sandbox() {
   const startPaneResize = useCallback(
     (handleIndex: 0 | 1) => (event: React.PointerEvent<HTMLElement>) => {
       event.preventDefault();
-      const container = event.currentTarget.closest(
-        ".sb-demo-body",
-      ) as HTMLElement | null;
+      const el = event.currentTarget;
+      const pointerId = event.pointerId;
+      const container = el.closest(".sb-demo-body") as HTMLElement | null;
       if (!container) return;
       const { left, width } = container.getBoundingClientRect();
       const startColumns = paneCols;
       const total = startColumns[0] + startColumns[1] + startColumns[2];
 
-      event.currentTarget.setPointerCapture(event.pointerId);
+      el.setPointerCapture(pointerId);
       const move = (moveEvent: PointerEvent) => {
         const x = Math.min(Math.max(moveEvent.clientX - left, 0), width);
         if (handleIndex === 0) {
@@ -565,12 +565,19 @@ export function Sandbox() {
           ),
         });
       };
-      const up = () => {
+      const cleanup = () => {
         window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointerup", cleanup);
+        window.removeEventListener("pointercancel", cleanup);
+        el.removeEventListener("lostpointercapture", cleanup);
+        if (el.hasPointerCapture(pointerId)) {
+          el.releasePointerCapture(pointerId);
+        }
       };
       window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", up, { once: true });
+      window.addEventListener("pointerup", cleanup, { once: true });
+      window.addEventListener("pointercancel", cleanup, { once: true });
+      el.addEventListener("lostpointercapture", cleanup, { once: true });
     },
     [paneCols, resizePanePair],
   );

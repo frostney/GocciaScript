@@ -2622,10 +2622,13 @@ a.info-term {
     touch-action: none;
     transition: background 0.12s;
   }
-  .sb-resizer:hover,
+  .sb-resizer:hover {
+    background: color-mix(in oklab, var(--accent) 22%, var(--paper-2));
+  }
   .sb-resizer:focus-visible {
     background: color-mix(in oklab, var(--accent) 22%, var(--paper-2));
-    outline: 0;
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 }
 
