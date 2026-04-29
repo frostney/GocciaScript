@@ -168,6 +168,27 @@ test("object async generator yield delegation awaits sync iterator return and th
   await expect(throwIter.throw(9)).resolves.toEqual({ value: "throw:9", done: false });
 });
 
+test("object async generator yield delegation awaits short-circuit sync iterator return value", async () => {
+  const source = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return { value: 1, done: false };
+        },
+      };
+    },
+  };
+  const obj = {
+    async *values() {
+      yield* source;
+    },
+  };
+
+  const iter = obj.values();
+  await expect(iter.next()).resolves.toEqual({ value: 1, done: false });
+  await expect(iter.return(Promise.resolve(9))).resolves.toEqual({ value: 9, done: true });
+});
+
 test("object async generator yield delegation closes sync wrapper after completion", async () => {
   const events = [];
   const source = {

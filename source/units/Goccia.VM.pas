@@ -1734,7 +1734,10 @@ begin
     Value := TGocciaUndefinedLiteralValue.UndefinedValue;
   try
     if not Assigned(FIteratorValue) then
-      Exit(PromiseResolve(CreateIteratorResult(Value, True)));
+    begin
+      UnwrappedValue := AwaitValue(Value);
+      Exit(PromiseResolve(CreateIteratorResult(UnwrappedValue, True)));
+    end;
 
     if FIteratorValue is TGocciaIteratorValue then
     begin
@@ -1756,7 +1759,8 @@ begin
        (ReturnMethod is TGocciaNullLiteralValue) then
     begin
       ClearIteratorState;
-      Exit(PromiseResolve(CreateIteratorResult(Value, True)));
+      UnwrappedValue := AwaitValue(Value);
+      Exit(PromiseResolve(CreateIteratorResult(UnwrappedValue, True)));
     end;
     if not ReturnMethod.IsCallable then
       ThrowTypeError('Iterator return is not callable');
@@ -2114,6 +2118,26 @@ var
     ThrowTypeError(AMessage, ASuggestion);
   end;
 
+  function AwaitDelegateResult(const AResult: TGocciaValue): TGocciaValue;
+  begin
+    Result := AResult;
+    if Assigned(FClosure) and Assigned(FClosure.Template) and
+       FClosure.Template.IsAsync then
+      Result := AwaitValue(Result);
+  end;
+
+  function CallDelegateMethod(const AMethod, AThisValue: TGocciaValue;
+    const AArgs: TGocciaArgumentsCollection): TGocciaValue;
+  begin
+    try
+      Result := AwaitDelegateResult(TGocciaFunctionBase(AMethod).Call(
+        AArgs, AThisValue));
+    except
+      ClearDelegateState;
+      raise;
+    end;
+  end;
+
   procedure CloseDelegateForMissingThrow;
   begin
     ReturnMethod := nil;
@@ -2130,11 +2154,8 @@ var
       end;
       CallArgs := TGocciaArgumentsCollection.Create;
       try
-        ReturnMethod := TGocciaFunctionBase(ReturnMethod).Call(
-          CallArgs, FDelegateIteratorValue);
-        if Assigned(FClosure) and Assigned(FClosure.Template) and
-           FClosure.Template.IsAsync then
-          ReturnMethod := AwaitValue(ReturnMethod);
+        ReturnMethod := CallDelegateMethod(ReturnMethod,
+          FDelegateIteratorValue, CallArgs);
       finally
         CallArgs.Free;
       end;
@@ -2148,178 +2169,180 @@ var
     ThrowTypeError('Iterator throw is not callable');
   end;
 begin
-  HadDelegateContinuation := FDelegateActive;
-  if not FDelegateActive then
-  begin
-    IteratorValue := FVM.GetIteratorValue(RegisterToValue(AIterable),
-      Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync);
-    if not Assigned(IteratorValue) then
-      Exit;
-
-    FDelegateIteratorValue := IteratorValue;
-    FDelegateIterator := nil;
-    FDelegateNextMethod := nil;
-    if IteratorValue is TGocciaIteratorValue then
-      FDelegateIterator := TGocciaIteratorValue(IteratorValue)
-    else if IteratorValue is TGocciaObjectValue then
-      FDelegateNextMethod := IteratorValue.GetProperty(PROP_NEXT);
-    FDelegateActive := True;
-  end;
-
-  if FResumeKind = bgrkReturn then
-  begin
-    NextResult := nil;
-    FReturnValue := nil;
-    if Assigned(FDelegateIterator) then
-      NextResult := FDelegateIterator.ReturnValue(RegisterToValue(FResumeValue))
-    else if Assigned(FDelegateIteratorValue) then
+  try
+    HadDelegateContinuation := FDelegateActive;
+    if not FDelegateActive then
     begin
-      NextResult := FDelegateIteratorValue.GetProperty(PROP_RETURN);
-      if Assigned(NextResult) and
-         not (NextResult is TGocciaUndefinedLiteralValue) and
-         not (NextResult is TGocciaNullLiteralValue) then
-      begin
-        if not NextResult.IsCallable then
-          ClearDelegateAndThrowTypeError('Iterator return is not callable');
-        CallArgs := TGocciaArgumentsCollection.Create([RegisterToValue(FResumeValue)]);
-        try
-          NextResult := TGocciaFunctionBase(NextResult).Call(
-            CallArgs, FDelegateIteratorValue);
-          if Assigned(FClosure) and Assigned(FClosure.Template) and
-             FClosure.Template.IsAsync then
-            NextResult := AwaitValue(NextResult);
-        finally
-          CallArgs.Free;
-        end;
-      end
-      else
-        NextResult := nil;
+      IteratorValue := FVM.GetIteratorValue(RegisterToValue(AIterable),
+        Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync);
+      if not Assigned(IteratorValue) then
+        Exit;
+
+      FDelegateIteratorValue := IteratorValue;
+      FDelegateIterator := nil;
+      FDelegateNextMethod := nil;
+      if IteratorValue is TGocciaIteratorValue then
+        FDelegateIterator := TGocciaIteratorValue(IteratorValue)
+      else if IteratorValue is TGocciaObjectValue then
+        FDelegateNextMethod := IteratorValue.GetProperty(PROP_NEXT);
+      FDelegateActive := True;
     end;
-    if Assigned(NextResult) then
+
+    if FResumeKind = bgrkReturn then
     begin
-      if not (NextResult is TGocciaObjectValue) then
-        ClearDelegateAndThrowTypeError('Iterator return result is not an object');
-      DoneValue := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
-      YieldedValue := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
-      if not Assigned(YieldedValue) then
-        YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-      if not Assigned(DoneValue) or not DoneValue.ToBooleanLiteral.Value then
+      NextResult := nil;
+      FReturnValue := nil;
+      if Assigned(FDelegateIterator) then
+        NextResult := FDelegateIterator.ReturnValue(RegisterToValue(FResumeValue))
+      else if Assigned(FDelegateIteratorValue) then
       begin
-        CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
-          AResumeRegister, AContinuationIP);
-        raise EGocciaBytecodeYield.Create(
-          VMValueToRegisterFast(YieldedValue), 0);
+        NextResult := FDelegateIteratorValue.GetProperty(PROP_RETURN);
+        if Assigned(NextResult) and
+           not (NextResult is TGocciaUndefinedLiteralValue) and
+           not (NextResult is TGocciaNullLiteralValue) then
+        begin
+          if not NextResult.IsCallable then
+            ClearDelegateAndThrowTypeError('Iterator return is not callable');
+          CallArgs := TGocciaArgumentsCollection.Create([RegisterToValue(FResumeValue)]);
+          try
+            NextResult := CallDelegateMethod(NextResult,
+              FDelegateIteratorValue, CallArgs);
+          finally
+            CallArgs.Free;
+          end;
+        end
+        else
+          NextResult := nil;
       end;
-      FReturnValue := YieldedValue;
-    end;
-    ClearDelegateState;
-    if not Assigned(FReturnValue) then
-      FReturnValue := RegisterToValue(FResumeValue);
-    if not Assigned(FReturnSentinel) then
-      FReturnSentinel := TGocciaObjectValue.Create;
-    raise EGocciaBytecodeThrow.Create(FReturnSentinel);
-  end;
-
-  if FResumeKind = bgrkThrow then
-  begin
-    NextResult := nil;
-    if Assigned(FDelegateIterator) then
-      NextResult := FDelegateIterator.ThrowValue(RegisterToValue(FResumeValue))
-    else if Assigned(FDelegateIteratorValue) then
-    begin
-      NextResult := FDelegateIteratorValue.GetProperty(PROP_THROW);
-      if Assigned(NextResult) and
-         not (NextResult is TGocciaUndefinedLiteralValue) and
-         not (NextResult is TGocciaNullLiteralValue) then
+      if Assigned(NextResult) then
       begin
-        if not NextResult.IsCallable then
-          CloseDelegateForMissingThrow;
-        CallArgs := TGocciaArgumentsCollection.Create([RegisterToValue(FResumeValue)]);
-        try
-          NextResult := TGocciaFunctionBase(NextResult).Call(
-            CallArgs, FDelegateIteratorValue);
-          if Assigned(FClosure) and Assigned(FClosure.Template) and
-             FClosure.Template.IsAsync then
-            NextResult := AwaitValue(NextResult);
-        finally
-          CallArgs.Free;
-        end;
-      end
-      else
-        CloseDelegateForMissingThrow;
-    end;
-    if Assigned(NextResult) then
-    begin
-      if not (NextResult is TGocciaObjectValue) then
-        ClearDelegateAndThrowTypeError('Iterator throw result is not an object');
-      DoneValue := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
-      if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
-      begin
+        if not (NextResult is TGocciaObjectValue) then
+          ClearDelegateAndThrowTypeError('Iterator return result is not an object');
+        DoneValue := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
         YieldedValue := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
         if not Assigned(YieldedValue) then
           YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        if not Assigned(DoneValue) or not DoneValue.ToBooleanLiteral.Value then
+        begin
+          CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
+            AResumeRegister, AContinuationIP);
+          raise EGocciaBytecodeYield.Create(
+            VMValueToRegisterFast(YieldedValue), 0);
+        end;
+        FReturnValue := YieldedValue;
+      end;
+      ClearDelegateState;
+      if not Assigned(FReturnValue) then
+        FReturnValue := RegisterToValue(FResumeValue);
+      if not Assigned(FReturnSentinel) then
+        FReturnSentinel := TGocciaObjectValue.Create;
+      raise EGocciaBytecodeThrow.Create(FReturnSentinel);
+    end;
+
+    if FResumeKind = bgrkThrow then
+    begin
+      NextResult := nil;
+      if Assigned(FDelegateIterator) then
+        NextResult := FDelegateIterator.ThrowValue(RegisterToValue(FResumeValue))
+      else if Assigned(FDelegateIteratorValue) then
+      begin
+        NextResult := FDelegateIteratorValue.GetProperty(PROP_THROW);
+        if Assigned(NextResult) and
+           not (NextResult is TGocciaUndefinedLiteralValue) and
+           not (NextResult is TGocciaNullLiteralValue) then
+        begin
+          if not NextResult.IsCallable then
+            CloseDelegateForMissingThrow;
+          CallArgs := TGocciaArgumentsCollection.Create([RegisterToValue(FResumeValue)]);
+          try
+            NextResult := CallDelegateMethod(NextResult,
+              FDelegateIteratorValue, CallArgs);
+          finally
+            CallArgs.Free;
+          end;
+        end
+        else
+          CloseDelegateForMissingThrow;
+      end;
+      if Assigned(NextResult) then
+      begin
+        if not (NextResult is TGocciaObjectValue) then
+          ClearDelegateAndThrowTypeError('Iterator throw result is not an object');
+        DoneValue := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
+        if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+        begin
+          YieldedValue := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
+          if not Assigned(YieldedValue) then
+            YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+          FVM.FRegisters[AResumeRegister] := VMValueToRegisterFast(YieldedValue);
+          ClearDelegateState;
+          Exit;
+        end;
+        YieldedValue := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
+        if not Assigned(YieldedValue) then
+          YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
+          AResumeRegister, AContinuationIP);
+        raise EGocciaBytecodeYield.Create(VMValueToRegisterFast(YieldedValue), 0);
+      end;
+      ClearDelegateState;
+      raise EGocciaBytecodeThrow.Create(RegisterToValue(FResumeValue));
+    end;
+
+    while True do
+    begin
+      if Assigned(FDelegateIterator) then
+      begin
+        if HadDelegateContinuation and (FResumeKind = bgrkNext) then
+          YieldedValue := FDelegateIterator.DirectNextValue(
+            RegisterToValue(FResumeValue), Done)
+        else
+          YieldedValue := FDelegateIterator.DirectNext(Done);
+      end
+      else
+      begin
+        if not Assigned(FDelegateNextMethod) or not FDelegateNextMethod.IsCallable then
+          ClearDelegateAndThrowTypeError('Iterator.next is not a function');
+        if HadDelegateContinuation and (FResumeKind = bgrkNext) then
+          CallArgs := TGocciaArgumentsCollection.Create([RegisterToValue(FResumeValue)])
+        else
+          CallArgs := TGocciaArgumentsCollection.Create;
+        try
+          NextResult := CallDelegateMethod(FDelegateNextMethod,
+            FDelegateIteratorValue, CallArgs);
+        finally
+          CallArgs.Free;
+        end;
+        if not (NextResult is TGocciaObjectValue) then
+          ClearDelegateAndThrowTypeErrorWithSuggestion(
+            Format(SErrorIteratorResultNotObject,
+            [NextResult.ToStringLiteral.Value]), SSuggestIteratorResultObject);
+        DoneValue := NextResult.GetProperty(PROP_DONE);
+        Done := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
+        YieldedValue := NextResult.GetProperty(PROP_VALUE);
+        if not Assigned(YieldedValue) then
+          YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      end;
+
+      if Done then
+      begin
         FVM.FRegisters[AResumeRegister] := VMValueToRegisterFast(YieldedValue);
         ClearDelegateState;
         Exit;
       end;
-      YieldedValue := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
-      if not Assigned(YieldedValue) then
-        YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+
       CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
         AResumeRegister, AContinuationIP);
       raise EGocciaBytecodeYield.Create(VMValueToRegisterFast(YieldedValue), 0);
     end;
-    ClearDelegateState;
-    raise EGocciaBytecodeThrow.Create(RegisterToValue(FResumeValue));
-  end;
-
-  while True do
-  begin
-    if Assigned(FDelegateIterator) then
-    begin
-      if HadDelegateContinuation and (FResumeKind = bgrkNext) then
-        YieldedValue := FDelegateIterator.DirectNextValue(
-          RegisterToValue(FResumeValue), Done)
-      else
-        YieldedValue := FDelegateIterator.DirectNext(Done);
-    end
+  except
+    on E: EGocciaBytecodeYield do
+      raise;
     else
     begin
-      if not Assigned(FDelegateNextMethod) or not FDelegateNextMethod.IsCallable then
-        ClearDelegateAndThrowTypeError('Iterator.next is not a function');
-      if HadDelegateContinuation and (FResumeKind = bgrkNext) then
-        CallArgs := TGocciaArgumentsCollection.Create([RegisterToValue(FResumeValue)])
-      else
-        CallArgs := TGocciaArgumentsCollection.Create;
-      try
-        NextResult := TGocciaFunctionBase(FDelegateNextMethod).Call(
-          CallArgs, FDelegateIteratorValue);
-        if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
-          NextResult := AwaitValue(NextResult);
-      finally
-        CallArgs.Free;
-      end;
-      if not (NextResult is TGocciaObjectValue) then
-        ClearDelegateAndThrowTypeErrorWithSuggestion(
-          Format(SErrorIteratorResultNotObject,
-          [NextResult.ToStringLiteral.Value]), SSuggestIteratorResultObject);
-      DoneValue := NextResult.GetProperty(PROP_DONE);
-      Done := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
-      YieldedValue := NextResult.GetProperty(PROP_VALUE);
-      if not Assigned(YieldedValue) then
-        YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    end;
-
-    if Done then
-    begin
-      FVM.FRegisters[AResumeRegister] := VMValueToRegisterFast(YieldedValue);
       ClearDelegateState;
-      Exit;
+      raise;
     end;
-
-    CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
-      AResumeRegister, AContinuationIP);
-    raise EGocciaBytecodeYield.Create(VMValueToRegisterFast(YieldedValue), 0);
   end;
 end;
 

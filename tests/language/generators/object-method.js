@@ -371,6 +371,86 @@ test("object generator yield delegation closes delegate when throw is missing", 
   expect(events).toEqual(["return"]);
 });
 
+test("object generator yield delegation closes after next throws", () => {
+  const events = [];
+  const source = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          events.push("bad-next");
+          throw "boom";
+        },
+      };
+    },
+  };
+  const obj = {
+    *values() {
+      yield* source;
+    },
+  };
+
+  const iter = obj.values();
+  expect(() => iter.next()).toThrow();
+  expect(iter.next()).toEqual({ value: undefined, done: true });
+  expect(events).toEqual(["bad-next"]);
+});
+
+test("object generator yield delegation closes after throw method throws", () => {
+  const events = [];
+  const source = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return { value: 1, done: false };
+        },
+        throw(value) {
+          events.push("throw:" + value);
+          throw "boom";
+        },
+      };
+    },
+  };
+  const obj = {
+    *values() {
+      yield* source;
+    },
+  };
+
+  const iter = obj.values();
+  expect(iter.next()).toEqual({ value: 1, done: false });
+  expect(() => iter.throw(9)).toThrow();
+  expect(iter.next()).toEqual({ value: undefined, done: true });
+  expect(events).toEqual(["throw:9"]);
+});
+
+test("object generator yield delegation closes after return method throws", () => {
+  const events = [];
+  const source = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return { value: 1, done: false };
+        },
+        return(value) {
+          events.push("return:" + value);
+          throw "boom";
+        },
+      };
+    },
+  };
+  const obj = {
+    *values() {
+      yield* source;
+    },
+  };
+
+  const iter = obj.values();
+  expect(iter.next()).toEqual({ value: 1, done: false });
+  expect(() => iter.return(9)).toThrow();
+  expect(iter.next()).toEqual({ value: undefined, done: true });
+  expect(events).toEqual(["return:9"]);
+});
+
 test("object generator method return closes through finally", () => {
   let closed = false;
   const obj = {
