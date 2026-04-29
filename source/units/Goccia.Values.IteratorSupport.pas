@@ -71,7 +71,9 @@ begin
     WasSourceRooted := AddRootIfNeeded(IteratorHost);
     try
       IteratorMethod := IteratorHost.GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
-      if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) then
+      if Assigned(IteratorMethod) and
+         not (IteratorMethod is TGocciaUndefinedLiteralValue) and
+         not (IteratorMethod is TGocciaNullLiteralValue) then
       begin
         if not IteratorMethod.IsCallable then
           ThrowTypeError(Format(SErrorValueNotFunction, ['[Symbol.iterator]']), SSuggestIteratorProtocol);

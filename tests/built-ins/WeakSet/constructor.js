@@ -18,6 +18,16 @@ test("WeakSet constructor rejects non-iterables", () => {
   expect(() => new WeakSet({})).toThrow(TypeError);
 });
 
+test("WeakSet constructor treats null @@iterator as absent", () => {
+  try {
+    new WeakSet({ [Symbol.iterator]: null });
+    throw new Error("expected constructor to throw");
+  } catch (error) {
+    expect(error instanceof TypeError).toBe(true);
+    expect(error.message).toBe("WeakSet constructor requires an iterable");
+  }
+});
+
 test("WeakSet constructor rejects invalid iterator protocols", () => {
   expect(() => new WeakSet({ [Symbol.iterator]: 1 })).toThrow(TypeError);
   expect(() => new WeakSet({

@@ -18,6 +18,16 @@ test("WeakMap constructor rejects non-iterables", () => {
   expect(() => new WeakMap({})).toThrow(TypeError);
 });
 
+test("WeakMap constructor treats null @@iterator as absent", () => {
+  try {
+    new WeakMap({ [Symbol.iterator]: null });
+    throw new Error("expected constructor to throw");
+  } catch (error) {
+    expect(error instanceof TypeError).toBe(true);
+    expect(error.message).toBe("WeakMap constructor requires an iterable");
+  }
+});
+
 test("WeakMap constructor rejects invalid iterator protocols", () => {
   expect(() => new WeakMap({ [Symbol.iterator]: 1 })).toThrow(TypeError);
   expect(() => new WeakMap({
