@@ -9,6 +9,7 @@ describe("robots.txt", () => {
     try {
       const response = GET();
 
+      expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toBe(
         "text/plain; charset=utf-8",
       );
@@ -21,6 +22,25 @@ describe("robots.txt", () => {
           "Sitemap: https://example.com/sitemap.xml",
           "",
         ].join("\n"),
+      );
+    } finally {
+      if (previousSiteUrl === undefined) {
+        delete process.env.NEXT_PUBLIC_SITE_URL;
+      } else {
+        process.env.NEXT_PUBLIC_SITE_URL = previousSiteUrl;
+      }
+    }
+  });
+
+  test("falls back to the canonical URL when the site URL is invalid", async () => {
+    const previousSiteUrl = process.env.NEXT_PUBLIC_SITE_URL;
+    process.env.NEXT_PUBLIC_SITE_URL = "gocciascript.dev";
+
+    try {
+      const response = GET();
+
+      expect(await response.text()).toContain(
+        "Sitemap: https://gocciascript.dev/sitemap.xml",
       );
     } finally {
       if (previousSiteUrl === undefined) {

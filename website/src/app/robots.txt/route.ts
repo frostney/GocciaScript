@@ -1,10 +1,13 @@
 const DEFAULT_SITE_URL = "https://gocciascript.dev";
 
 function getSiteUrl(): string {
-  return (process.env.NEXT_PUBLIC_SITE_URL ?? DEFAULT_SITE_URL).replace(
-    /\/+$/,
-    "",
-  );
+  const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? DEFAULT_SITE_URL).trim();
+
+  try {
+    return new URL(siteUrl || DEFAULT_SITE_URL).href.replace(/\/+$/, "");
+  } catch {
+    return DEFAULT_SITE_URL;
+  }
 }
 
 export function GET() {
