@@ -39,7 +39,11 @@ type
   public
     constructor Create;
     function AdvanceNext: TGocciaObjectValue; virtual;
+    function AdvanceNextValue(const AValue: TGocciaValue): TGocciaObjectValue; virtual;
     function DirectNext(out ADone: Boolean): TGocciaValue; virtual;
+    function DirectNextValue(const AValue: TGocciaValue; out ADone: Boolean): TGocciaValue; virtual;
+    function ReturnValue(const AValue: TGocciaValue): TGocciaObjectValue; virtual;
+    function ThrowValue(const AValue: TGocciaValue): TGocciaObjectValue; virtual;
     procedure Close; virtual;
     function ToStringTag: string; override;
 
@@ -144,6 +148,12 @@ begin
   Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
 end;
 
+function TGocciaIteratorValue.AdvanceNextValue(
+  const AValue: TGocciaValue): TGocciaObjectValue;
+begin
+  Result := AdvanceNext;
+end;
+
 function TGocciaIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
 var
   IterResult: TGocciaObjectValue;
@@ -154,6 +164,34 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue
   else
     Result := IterResult.GetProperty(PROP_VALUE);
+end;
+
+function TGocciaIteratorValue.DirectNextValue(
+  const AValue: TGocciaValue; out ADone: Boolean): TGocciaValue;
+var
+  IterResult: TGocciaObjectValue;
+begin
+  IterResult := AdvanceNextValue(AValue);
+  ADone := TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value;
+  if ADone then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue
+  else
+    Result := IterResult.GetProperty(PROP_VALUE);
+end;
+
+function TGocciaIteratorValue.ReturnValue(
+  const AValue: TGocciaValue): TGocciaObjectValue;
+begin
+  Close;
+  Result := CreateIteratorResult(AValue, True);
+end;
+
+function TGocciaIteratorValue.ThrowValue(
+  const AValue: TGocciaValue): TGocciaObjectValue;
+begin
+  Close;
+  ThrowTypeError('Delegated iterator has no throw method');
+  Result := nil;
 end;
 
 procedure TGocciaIteratorValue.Close;

@@ -847,7 +847,7 @@ end;
 
   function TGocciaExpressionStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   begin
-    Result := TGocciaControlFlow.Normal(Expression.Evaluate(AContext));
+    Result := TGocciaControlFlow.Normal(EvaluateExpression(Expression, AContext));
   end;
 
   function TGocciaVariableDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -862,7 +862,7 @@ end;
       Exit;
     for I := 0 to Length(Variables) - 1 do
     begin
-      Value := Variables[I].Initializer.Evaluate(AContext);
+      Value := EvaluateExpression(Variables[I].Initializer, AContext);
       if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
         TGocciaFunctionValue(Value).Name := Variables[I].Name
       else if Value is TGocciaClassValue then
@@ -926,7 +926,7 @@ end;
   begin
     if Assigned(Self.Value) then
     begin
-      ReturnValue := Self.Value.Evaluate(AContext);
+      ReturnValue := EvaluateExpression(Self.Value, AContext);
       if ReturnValue = nil then
         ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
     end
@@ -939,7 +939,7 @@ end;
   var
     ThrowValue: TGocciaValue;
   begin
-    ThrowValue := Self.Value.Evaluate(AContext);
+    ThrowValue := EvaluateExpression(Self.Value, AContext);
     raise TGocciaThrowValue.Create(ThrowValue);
   end;
 

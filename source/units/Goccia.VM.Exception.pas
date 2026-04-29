@@ -16,6 +16,8 @@ type
     FrameDepth: Integer;
   end;
 
+  TGocciaBytecodeHandlerEntryArray = array of TGocciaBytecodeHandlerEntry;
+
   TGocciaBytecodeHandlerStack = class
   private
     FEntries: array of TGocciaBytecodeHandlerEntry;
@@ -24,6 +26,9 @@ type
     procedure Push(const ACatchIP: Integer; const ACatchRegister: UInt8;
       const AFrameDepth: Integer);
     procedure Pop;
+    procedure CopyFrom(const AStartIndex: Integer;
+      out AEntries: TGocciaBytecodeHandlerEntryArray);
+    procedure RestoreFrom(const AEntries: TGocciaBytecodeHandlerEntryArray);
     function Peek: TGocciaBytecodeHandlerEntry;
     function IsEmpty: Boolean;
     property Count: Integer read FCount;
@@ -58,6 +63,38 @@ procedure TGocciaBytecodeHandlerStack.Pop;
 begin
   if FCount > 0 then
     Dec(FCount);
+end;
+
+procedure TGocciaBytecodeHandlerStack.CopyFrom(const AStartIndex: Integer;
+  out AEntries: TGocciaBytecodeHandlerEntryArray);
+var
+  I, StartIndex: Integer;
+begin
+  StartIndex := AStartIndex;
+  if StartIndex < 0 then
+    StartIndex := 0;
+  if StartIndex > FCount then
+    StartIndex := FCount;
+
+  SetLength(AEntries, FCount - StartIndex);
+  for I := 0 to High(AEntries) do
+    AEntries[I] := FEntries[StartIndex + I];
+end;
+
+procedure TGocciaBytecodeHandlerStack.RestoreFrom(
+  const AEntries: TGocciaBytecodeHandlerEntryArray);
+var
+  I: Integer;
+begin
+  if Length(AEntries) = 0 then
+    Exit;
+  if FCount + Length(AEntries) > Length(FEntries) then
+    SetLength(FEntries, (FCount + Length(AEntries)) * 2);
+  for I := 0 to High(AEntries) do
+  begin
+    FEntries[FCount] := AEntries[I];
+    Inc(FCount);
+  end;
 end;
 
 function TGocciaBytecodeHandlerStack.Peek: TGocciaBytecodeHandlerEntry;
