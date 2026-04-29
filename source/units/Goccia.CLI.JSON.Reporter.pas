@@ -258,8 +258,6 @@ begin
   Buffer.Append(IntToStr(AMemoryStats.GCAllocatedDuringRunBytes));
   Buffer.Append(',"limitBytes":');
   Buffer.Append(IntToStr(AMemoryStats.GCMaxBytes));
-  Buffer.Append(',"maxBytes":');
-  Buffer.Append(IntToStr(AMemoryStats.GCMaxBytes));
   Buffer.Append(',"startObjectCount":');
   Buffer.Append(IntToStr(AMemoryStats.GCStartObjectCount));
   Buffer.Append(',"endObjectCount":');

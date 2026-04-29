@@ -94,7 +94,7 @@ console.log("Loader: JSON output (interpreted)...");
   if (typeof json.memory?.gc?.liveBytes !== "number") throw new Error("JSON memory.gc.liveBytes should be present");
   if (typeof json.memory?.gc?.allocatedDuringRunBytes !== "number") throw new Error("JSON memory.gc.allocatedDuringRunBytes should be present");
   if (typeof json.memory?.gc?.limitBytes !== "number") throw new Error("JSON memory.gc.limitBytes should be present");
-  if (json.memory.gc.limitBytes !== json.memory.gc.maxBytes) throw new Error("JSON memory.gc.maxBytes should remain an alias for limitBytes");
+  if ("maxBytes" in json.memory.gc) throw new Error("JSON memory.gc.maxBytes should not be present; use limitBytes");
   if (typeof json.memory?.heap?.endAllocatedBytes !== "number") throw new Error("JSON memory.heap.endAllocatedBytes should be present");
   if (typeof json.workers?.used !== "number") throw new Error("JSON workers.used should be present");
   if (typeof json.timing?.total_ns !== "number") throw new Error("JSON timing.total_ns should be present");
@@ -663,7 +663,7 @@ console.log("TestRunner: JSON multi-file structure...");
       if (json.error !== null) throw new Error("Benchmark JSON error should be null");
       if (typeof json.timing?.total_ns !== "number") throw new Error("Benchmark JSON timing.total_ns should be present");
       if (typeof json.memory?.gc?.limitBytes !== "number") throw new Error("Benchmark JSON memory.gc.limitBytes should be present");
-      if (json.memory.gc.limitBytes !== json.memory.gc.maxBytes) throw new Error("Benchmark JSON memory.gc.maxBytes should remain an alias for limitBytes");
+      if ("maxBytes" in json.memory.gc) throw new Error("Benchmark JSON memory.gc.maxBytes should not be present; use limitBytes");
       if (typeof json.memory?.heap?.endAllocatedBytes !== "number") throw new Error("Benchmark JSON memory.heap.endAllocatedBytes should be present");
       if (typeof json.workers?.used !== "number") throw new Error("Benchmark JSON workers.used should be present");
     }
