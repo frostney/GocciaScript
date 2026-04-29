@@ -87,88 +87,90 @@ end;
 
 procedure TGocciaMicrotaskQueue.DrainQueue;
 var
-  I: Integer;
   Task: TGocciaMicrotask;
   Promise: TGocciaPromiseValue;
   HandlerResult: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
 begin
-  I := 0;
-  try
-    while I < FQueue.Count do
+  // Pop each task BEFORE running it so that recursive DrainQueue calls (e.g.
+  // when a handler awaits a settled promise, which calls
+  // DrainMicrotasksAndFetchCompletions during AwaitValue) only see remaining
+  // and newly-enqueued tasks rather than re-executing the in-flight one. The
+  // previous implementation kept tasks in the queue until a final Clear at
+  // the end, so any nested drain re-ran every already-processed task,
+  // producing infinite recursion when a microtask handler eventually re-
+  // entered the same path (observed as SIGSEGV from stack overflow with
+  // async-generator yields of rejected promises).
+  while FQueue.Count > 0 do
+  begin
+    CheckExecutionTimeout;
+    CheckInstructionLimit;
+    Task := FQueue[0];
+    FQueue.Delete(0);
+
+    Promise := TGocciaPromiseValue(Task.ResultPromise);
+
+    if Assigned(TGarbageCollector.Instance) then
     begin
-      CheckExecutionTimeout;
-      CheckInstructionLimit;
-      Task := FQueue[I];
-      Inc(I);
+      if Assigned(Task.Handler) then
+        TGarbageCollector.Instance.AddTempRoot(Task.Handler);
+      if Assigned(Task.Value) then
+        TGarbageCollector.Instance.AddTempRoot(Task.Value);
+      if Assigned(Promise) then
+        TGarbageCollector.Instance.AddTempRoot(Promise);
+    end;
 
-      Promise := TGocciaPromiseValue(Task.ResultPromise);
-
+    try
+      if Assigned(Task.Handler) and Task.Handler.IsCallable then
+      begin
+        CallArgs := TGocciaArgumentsCollection.Create([Task.Value]);
+        try
+          try
+            HandlerResult := TGocciaFunctionBase(Task.Handler).Call(
+              CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+            if Assigned(Promise) then
+              Promise.Resolve(HandlerResult);
+          except
+            on E: EGocciaBytecodeThrow do
+              if Assigned(Promise) then
+                Promise.Reject(E.ThrownValue);
+            on E: TGocciaThrowValue do
+              if Assigned(Promise) then
+                Promise.Reject(E.Value);
+              // TODO: Per HTML spec, queueMicrotask callback errors should be
+              // "reported" (Node.js: uncaughtException, browsers: global error
+              // event). Currently silently discarded because GocciaScript has no
+              // process-level error reporting. Add reporting when/if an error
+              // event mechanism is implemented.
+          end;
+        finally
+          CallArgs.Free;
+        end;
+      end
+      else
+      begin
+        if Assigned(Promise) then
+        begin
+          case Task.ReactionType of
+            prtFulfill: Promise.Resolve(Task.Value);
+            prtReject: Promise.Reject(Task.Value);
+            prtThenableResolve:
+              if Task.Value is TGocciaPromiseValue then
+                Promise.SubscribeTo(TGocciaPromiseValue(Task.Value));
+          end;
+        end;
+      end;
+    finally
       if Assigned(TGarbageCollector.Instance) then
       begin
         if Assigned(Task.Handler) then
-          TGarbageCollector.Instance.AddTempRoot(Task.Handler);
+          TGarbageCollector.Instance.RemoveTempRoot(Task.Handler);
         if Assigned(Task.Value) then
-          TGarbageCollector.Instance.AddTempRoot(Task.Value);
+          TGarbageCollector.Instance.RemoveTempRoot(Task.Value);
         if Assigned(Promise) then
-          TGarbageCollector.Instance.AddTempRoot(Promise);
-      end;
-
-      try
-        if Assigned(Task.Handler) and Task.Handler.IsCallable then
-        begin
-          CallArgs := TGocciaArgumentsCollection.Create([Task.Value]);
-          try
-            try
-              HandlerResult := TGocciaFunctionBase(Task.Handler).Call(
-                CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-              if Assigned(Promise) then
-                Promise.Resolve(HandlerResult);
-            except
-              on E: EGocciaBytecodeThrow do
-                if Assigned(Promise) then
-                  Promise.Reject(E.ThrownValue);
-              on E: TGocciaThrowValue do
-                if Assigned(Promise) then
-                  Promise.Reject(E.Value);
-                // TODO: Per HTML spec, queueMicrotask callback errors should be
-                // "reported" (Node.js: uncaughtException, browsers: global error
-                // event). Currently silently discarded because GocciaScript has no
-                // process-level error reporting. Add reporting when/if an error
-                // event mechanism is implemented.
-            end;
-          finally
-            CallArgs.Free;
-          end;
-        end
-        else
-        begin
-          if Assigned(Promise) then
-          begin
-            case Task.ReactionType of
-              prtFulfill: Promise.Resolve(Task.Value);
-              prtReject: Promise.Reject(Task.Value);
-              prtThenableResolve:
-                if Task.Value is TGocciaPromiseValue then
-                  Promise.SubscribeTo(TGocciaPromiseValue(Task.Value));
-            end;
-          end;
-        end;
-      finally
-        if Assigned(TGarbageCollector.Instance) then
-        begin
-          if Assigned(Task.Handler) then
-            TGarbageCollector.Instance.RemoveTempRoot(Task.Handler);
-          if Assigned(Task.Value) then
-            TGarbageCollector.Instance.RemoveTempRoot(Task.Value);
-          if Assigned(Promise) then
-            TGarbageCollector.Instance.RemoveTempRoot(Promise);
-        end;
+          TGarbageCollector.Instance.RemoveTempRoot(Promise);
       end;
     end;
-  finally
-    if I > 0 then
-      FQueue.Clear;
   end;
 end;
 
