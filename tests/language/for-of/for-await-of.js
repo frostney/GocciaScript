@@ -155,6 +155,36 @@ describe("for-await-of", () => {
     })()).rejects.toThrow(TypeError);
   });
 
+  test("non-callable async iterator property rejects before sync fallback", async () => {
+    const source = {
+      [Symbol.asyncIterator]: 1,
+      [Symbol.iterator]() {
+        return [1][Symbol.iterator]();
+      },
+    };
+
+    await expect((async () => {
+      for await (const x of source) {
+      }
+    })()).rejects.toThrow(TypeError);
+  });
+
+  test("null async iterator property falls back to sync iterator", async () => {
+    const source = {
+      [Symbol.asyncIterator]: null,
+      [Symbol.iterator]() {
+        return [1, 2][Symbol.iterator]();
+      },
+    };
+    const result = [];
+
+    for await (const x of source) {
+      result.push(x);
+    }
+
+    expect(result).toEqual([1, 2]);
+  });
+
   test("invalid async iterator result rejects with TypeError", async () => {
     const primitiveIterator = {
       [Symbol.asyncIterator]() {

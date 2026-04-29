@@ -57,6 +57,22 @@ test("object async generator method preserves for-await iterator across yielded 
   await expect(iter.next()).resolves.toEqual({ value: undefined, done: true });
 });
 
+test("object async generator method preserves for-await iterator across yielded loop head", async () => {
+  const obj = {
+    async *values() {
+      for await (const [value = yield "default"] of [[undefined], [2]]) {
+        yield value;
+      }
+    },
+  };
+
+  const iter = obj.values();
+  await expect(iter.next()).resolves.toEqual({ value: "default", done: false });
+  await expect(iter.next(1)).resolves.toEqual({ value: 1, done: false });
+  await expect(iter.next()).resolves.toEqual({ value: 2, done: false });
+  await expect(iter.next()).resolves.toEqual({ value: undefined, done: true });
+});
+
 test("object async generator method preserves async iterator across yielded for-await body", async () => {
   const source = {
     [Symbol.asyncIterator]() {
@@ -80,6 +96,35 @@ test("object async generator method preserves async iterator across yielded for-
   await expect(iter.next()).resolves.toEqual({ value: 1, done: false });
   await expect(iter.next()).resolves.toEqual({ value: 2, done: false });
   await expect(iter.next()).resolves.toEqual({ value: 3, done: false });
+  await expect(iter.next()).resolves.toEqual({ value: undefined, done: true });
+});
+
+test("object async generator method preserves async iterator across yielded for-await head", async () => {
+  const source = {
+    [Symbol.asyncIterator]() {
+      let index = 0;
+      return {
+        next() {
+          index = index + 1;
+          if (index === 1) return Promise.resolve({ value: [undefined], done: false });
+          if (index === 2) return Promise.resolve({ value: [2], done: false });
+          return Promise.resolve({ value: undefined, done: true });
+        },
+      };
+    },
+  };
+  const obj = {
+    async *values() {
+      for await (const [value = yield "default"] of source) {
+        yield value;
+      }
+    },
+  };
+
+  const iter = obj.values();
+  await expect(iter.next()).resolves.toEqual({ value: "default", done: false });
+  await expect(iter.next(1)).resolves.toEqual({ value: 1, done: false });
+  await expect(iter.next()).resolves.toEqual({ value: 2, done: false });
   await expect(iter.next()).resolves.toEqual({ value: undefined, done: true });
 });
 

@@ -1461,6 +1461,8 @@ begin
           Break;
         CurrentValue := IterResult.GetProperty(PROP_VALUE);
       end;
+      if Assigned(Continuation) then
+        Continuation.SaveLoopState(AForOfStatement, Iterator, CurrentValue);
 
       CheckExecutionTimeout;
       IncrementInstructionCounter;
@@ -1489,6 +1491,8 @@ begin
         if not TryEvaluateMatchPatternInContext(CurrentValue,
            AForOfStatement.MatchPattern, IterContext, MatchContext) then
         begin
+          if Assigned(Continuation) then
+            Continuation.ClearLoopState(AForOfStatement);
           IterResult := Iterator.AdvanceNext;
           Continue;
         end;
@@ -1502,12 +1506,7 @@ begin
             Continuation.ClearLoopState(AForOfStatement);
         except
           on E: EGocciaGeneratorYield do
-          begin
-            if Assigned(Continuation) then
-              Continuation.SaveLoopState(AForOfStatement, Iterator,
-                CurrentValue);
             raise;
-          end;
           else
           begin
             if Assigned(Continuation) then
@@ -1548,7 +1547,7 @@ end;
 // ES2026 §14.7.5.6 ForIn/OfBodyEvaluation — for-await-of variant
 function EvaluateForAwaitOf(const AForAwaitOfStatement: TGocciaForAwaitOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
-  IterableValue, IteratorMethod, IteratorObj, NextMethod, NextResult, DoneValue, CurrentValue: TGocciaValue;
+  IterableValue, IteratorMethod, IteratorMethodValue, IteratorObj, NextMethod, NextResult, DoneValue, CurrentValue: TGocciaValue;
   Iterator: TGocciaIteratorValue;
   GenericNextResult: TGocciaObjectValue;
   CF: TGocciaControlFlow;
@@ -1578,13 +1577,25 @@ begin
     DeclarationType := dtLet;
 
   IteratorMethod := nil;
+  IteratorMethodValue := nil;
   if HasSavedLoopState and Assigned(SavedNextMethod) then
   begin
     IteratorObj := SavedIteratorValue;
     NextMethod := SavedNextMethod;
   end
   else if IterableValue is TGocciaObjectValue then
-    IteratorMethod := TGocciaObjectValue(IterableValue).GetSymbolProperty(TGocciaSymbolValue.WellKnownAsyncIterator);
+  begin
+    IteratorMethodValue := TGocciaObjectValue(IterableValue).GetSymbolProperty(
+      TGocciaSymbolValue.WellKnownAsyncIterator);
+    if Assigned(IteratorMethodValue) and
+       not (IteratorMethodValue is TGocciaUndefinedLiteralValue) and
+       not (IteratorMethodValue is TGocciaNullLiteralValue) then
+    begin
+      if not IteratorMethodValue.IsCallable then
+        ThrowTypeError('Async iterator method is not callable');
+      IteratorMethod := IteratorMethodValue;
+    end;
+  end;
 
   if (HasSavedLoopState and Assigned(SavedNextMethod)) or
      (Assigned(IteratorMethod) and IteratorMethod.IsCallable) then
@@ -1639,6 +1650,9 @@ begin
             if not Assigned(CurrentValue) then
               CurrentValue := TGocciaUndefinedLiteralValue.UndefinedValue;
           end;
+          if Assigned(Continuation) then
+            Continuation.SaveLoopState(AForAwaitOfStatement, IteratorObj,
+              CurrentValue, NextMethod);
 
           IterScope := AContext.Scope.CreateChild(skBlock);
           IterContext := AContext;
@@ -1661,7 +1675,11 @@ begin
             MatchBaseContext := IterContext;
             if not TryEvaluateMatchPatternInContext(CurrentValue,
                AForAwaitOfStatement.MatchPattern, IterContext, MatchContext) then
+            begin
+              if Assigned(Continuation) then
+                Continuation.ClearLoopState(AForAwaitOfStatement);
               Continue;
+            end;
             IterContext := MatchContext;
           end;
 
@@ -1672,12 +1690,7 @@ begin
                 Continuation.ClearLoopState(AForAwaitOfStatement);
             except
               on E: EGocciaGeneratorYield do
-              begin
-                if Assigned(Continuation) then
-                  Continuation.SaveLoopState(AForAwaitOfStatement, IteratorObj,
-                    CurrentValue, NextMethod);
                 raise;
-              end;
               else
               begin
                 if Assigned(Continuation) then
@@ -1749,6 +1762,9 @@ begin
           CurrentValue := GenericNextResult.GetProperty(PROP_VALUE);
           CurrentValue := AwaitValue(CurrentValue);
         end;
+        if Assigned(Continuation) then
+          Continuation.SaveLoopState(AForAwaitOfStatement, Iterator,
+            CurrentValue);
 
         IterScope := AContext.Scope.CreateChild(skBlock);
         IterContext := AContext;
@@ -1772,6 +1788,8 @@ begin
           if not TryEvaluateMatchPatternInContext(CurrentValue,
              AForAwaitOfStatement.MatchPattern, IterContext, MatchContext) then
           begin
+            if Assigned(Continuation) then
+              Continuation.ClearLoopState(AForAwaitOfStatement);
             GenericNextResult := Iterator.AdvanceNext;
             Continue;
           end;
@@ -1785,12 +1803,7 @@ begin
               Continuation.ClearLoopState(AForAwaitOfStatement);
           except
             on E: EGocciaGeneratorYield do
-            begin
-              if Assigned(Continuation) then
-                Continuation.SaveLoopState(AForAwaitOfStatement, Iterator,
-                  CurrentValue);
               raise;
-            end;
             else
             begin
               if Assigned(Continuation) then
