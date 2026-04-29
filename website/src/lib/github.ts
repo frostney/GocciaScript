@@ -76,9 +76,14 @@ export async function fetchLatestRelease(): Promise<ReleaseInfo | null> {
   }
 }
 
-type Semver = { major: number; minor: number; patch: number; tag: string };
+export type Semver = {
+  major: number;
+  minor: number;
+  patch: number;
+  tag: string;
+};
 
-function parseSemverTag(t: string): Semver | null {
+export function parseSemverTag(t: string): Semver | null {
   const s = t.replace(/^v/, "");
   const m = s.match(/^(\d+)\.(\d+)\.(\d+)/);
   if (!m) return null;

@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { Playground } from "@/components/playground";
-import { fetchRecentStableTags, pickPrecedenceVersions } from "@/lib/github";
+import { listPlaygroundVersions } from "@/lib/vendor-manifest";
+import { getVendorManifest } from "@/lib/vendor-manifest-server";
 
 export const metadata: Metadata = {
   title: "Playground",
@@ -22,16 +23,18 @@ export const metadata: Metadata = {
 };
 
 export default async function PlaygroundPage() {
-  // Pull a wider window of recent stable tags so the precedence picker
-  // has enough history to find a major (`x.0.0`) and the previous minor
-  // cycle's `x.y.0`. The picker then reduces this down to up to three
-  // pins (patch / minor / major-with-fallback). The client appends
-  // `nightly` after these.
-  const recent = await fetchRecentStableTags(20);
-  const stableTags = pickPrecedenceVersions(recent);
+  // Versions vendored at build time by `scripts/fetch-binaries.ts`. The
+  // manifest is the source of truth: it lists what's actually executable
+  // server-side, in the order the dropdown should display them (newest
+  // stable first, `nightly` last).
+  const manifest = getVendorManifest();
+  const versions = listPlaygroundVersions(manifest);
   return (
     <Suspense>
-      <Playground stableTags={stableTags} />
+      <Playground
+        versions={versions}
+        defaultVersion={manifest.defaultVersion}
+      />
     </Suspense>
   );
 }
