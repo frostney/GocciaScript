@@ -112,11 +112,7 @@ export function AnimatedOutput({
             style={{ animationDelay: `${delay}ms` }}
           >
             <span className="pg-log-gutter" aria-hidden="true">
-              {l.kind === "err"
-                ? "✗"
-                : l.kind === "result"
-                  ? "↳"
-                  : ""}
+              {l.kind === "err" ? "✗" : l.kind === "result" ? "↳" : ""}
             </span>
             <span className="anim-output-text">{l.text}</span>
           </div>
