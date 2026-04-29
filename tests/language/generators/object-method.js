@@ -102,6 +102,20 @@ test("object generator method does not reuse completed loop body expressions", (
   expect(iter.next()).toEqual({ value: undefined, done: true });
 });
 
+test("object generator method preserves for-of iterator across yielded loop body", () => {
+  const obj = {
+    *values() {
+      for (const n of [1, 2, 3]) yield n;
+    },
+  };
+
+  const iter = obj.values();
+  expect(iter.next()).toEqual({ value: 1, done: false });
+  expect(iter.next()).toEqual({ value: 2, done: false });
+  expect(iter.next()).toEqual({ value: 3, done: false });
+  expect(iter.next()).toEqual({ value: undefined, done: true });
+});
+
 test("object generator method resumes binary expressions instead of returning the cached left operand", () => {
   const events = [];
   const obj = {
