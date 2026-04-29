@@ -1,10 +1,12 @@
 # Built-in Objects
 
+<!-- doc-length-limit: 900 -->
+
 *For contributors adding or modifying built-in objects, and for script authors looking up available APIs.*
 
 ## Executive Summary
 
-- **Unconditional registration** — Standard built-ins (Console, Math, Object, Array, String, Number, RegExp, JSON, JSON5, JSONL, TOML, YAML, CSV, TSV, Symbol, Set, Map, Promise, Performance, Temporal, ArrayBuffer, SharedArrayBuffer, TypedArrays, Proxy, Reflect, Iterator, TextEncoder, TextDecoder, URL, URLSearchParams, fetch, Headers, Response, DisposableStack, AsyncDisposableStack) are always registered
+- **Unconditional registration** — Standard built-ins (Console, Math, Object, Array, String, Number, RegExp, JSON, JSON5, JSONL, TOML, YAML, CSV, TSV, Symbol, Set, Map, WeakSet, WeakMap, Promise, Performance, Temporal, ArrayBuffer, SharedArrayBuffer, TypedArrays, Proxy, Reflect, Iterator, TextEncoder, TextDecoder, URL, URLSearchParams, fetch, Headers, Response, DisposableStack, AsyncDisposableStack) are always registered
 - **Flag-gated extras** — Only `ggTestAssertions`, `ggBenchmark`, and `ggFFI` use flag-gating for opt-in registration
 - **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
 - **Always-present globals** — `globalThis` and `Goccia` namespace are registered after all built-ins
@@ -13,7 +15,7 @@ GocciaScript provides a set of built-in global objects that mirror JavaScript's 
 
 ## Registration System
 
-Standard built-ins (Console, Math, Object, Array, Number, JSON, JSON5, JSONL, TOML, YAML, CSV, TSV, Symbol, Set, Map, Promise, Performance, Temporal, ArrayBuffer, Proxy, Reflect, fetch, Headers, Response) are always registered unconditionally by the engine. There is no flag-gating for these — they are available in every execution context.
+Standard built-ins (Console, Math, Object, Array, Number, JSON, JSON5, JSONL, TOML, YAML, CSV, TSV, Symbol, Set, Map, WeakSet, WeakMap, Promise, Performance, Temporal, ArrayBuffer, Proxy, Reflect, fetch, Headers, Response) are always registered unconditionally by the engine. There is no flag-gating for these — they are available in every execution context.
 
 Only three built-ins use flag-gated registration via the `TGocciaGlobalBuiltins` enum:
 
@@ -301,7 +303,7 @@ The constructor-backed objects mirror the `node-semver` public fields and core i
 | Function | Description |
 |----------|-------------|
 | `queueMicrotask(callback)` | Enqueue a callback to run as a microtask. Throws `TypeError` if the argument is not callable. |
-| `structuredClone(value)` | Deep-clone a value using the structured clone algorithm. Handles objects, arrays, `Map`, `Set`, and circular references. Throws `DOMException` with name `"DataCloneError"` (code 25) for non-cloneable types (functions, symbols). |
+| `structuredClone(value)` | Deep-clone a value using the structured clone algorithm. Handles objects, arrays, `Map`, `Set`, and circular references. Throws `DOMException` with name `"DataCloneError"` (code 25) for non-cloneable types (functions, symbols, `WeakMap`, `WeakSet`). |
 | `btoa(data)` | Encode a binary string (each character code ≤ U+00FF) to base64. Throws `DOMException` with name `"InvalidCharacterError"` (code 5) if any character code exceeds U+00FF. |
 | `atob(data)` | Decode a base64 string to a binary string. Uses WHATWG forgiving-base64-decode: strips ASCII whitespace, tolerates missing `=` padding. Throws `DOMException` with name `"InvalidCharacterError"` (code 5) for invalid base64 input. |
 | `encodeURI(uriString)` | Encode a complete URI, preserving reserved characters (`;/?:@&=+$,#`) and unreserved characters. Multi-byte characters are UTF-8 encoded. Throws `URIError` for lone surrogates. |
@@ -311,7 +313,7 @@ The constructor-backed objects mirror the `node-semver` public fields and core i
 
 `queueMicrotask` shares the same microtask queue used by Promise reactions. Callbacks run after the current synchronous code completes but before the engine returns control. If a callback throws, the error is silently discarded and remaining microtasks still execute.
 
-`structuredClone` creates a deep copy following the HTML spec's structured clone algorithm. Primitives are returned as-is. Objects, arrays, Maps, and Sets are recursively cloned. Circular references and shared references within the object graph are preserved (the same cloned object is reused). Non-serializable values (functions, symbols) throw a `DOMException` with `name: "DataCloneError"` and `code: 25`, matching browser and Node.js behavior. Accessor properties (getters/setters) are read via the getter and the resulting value is cloned as a data property on the clone.
+`structuredClone` creates a deep copy following the HTML spec's structured clone algorithm. Primitives are returned as-is. Objects, arrays, Maps, and Sets are recursively cloned. Circular references and shared references within the object graph are preserved (the same cloned object is reused). Non-serializable values (functions, symbols, WeakMaps, WeakSets) throw a `DOMException` with `name: "DataCloneError"` and `code: 25`, matching browser and Node.js behavior. Accessor properties (getters/setters) are read via the getter and the resulting value is cloned as a data property on the clone.
 
 `btoa` encodes a string to base64 following the WHATWG HTML spec §8.3. Each character in the input must have a code point ≤ U+00FF (Latin-1 range); characters outside this range throw a `DOMException` with name `"InvalidCharacterError"` and legacy code 5. The input is interpreted as a byte sequence where each code point maps 1:1 to a byte value.
 
@@ -455,6 +457,21 @@ A collection of unique values with insertion-order iteration. Set operation meth
 
 Sets are iterable: `[...mySet]` spreads the set's values into an array.
 
+### WeakSet (`Goccia.Builtins.GlobalWeakSet.pas`)
+
+Implements the [ECMAScript WeakSet](https://tc39.es/ecma262/#sec-weakset-objects).
+
+A weak collection of object and non-registered symbol values. Entries do not keep their values alive; they are removed by GC after the value becomes unreachable elsewhere.
+
+| Method/Property | Description |
+|--------|-------------|
+| `new WeakSet(iterable?)` | Create a new WeakSet, optionally from an iterable of weakly held values |
+| `weakSet.add(value)` | Add an object or non-registered symbol value (returns the WeakSet for chaining) |
+| `weakSet.has(value)` | Check if value exists; returns `false` for invalid weak values |
+| `weakSet.delete(value)` | Remove a value; returns `false` for invalid weak values |
+
+WeakSets intentionally do **not** expose `size`, `clear`, `forEach`, iteration, `keys`, `values`, or `entries`. Values must satisfy ECMAScript `CanBeHeldWeakly`: objects and non-registered symbols are accepted; primitives and `Symbol.for()` registry symbols throw from `add()` and construction.
+
 ### Map (`Goccia.Builtins.GlobalMap.pas`)
 
 Implements the [ECMAScript Map](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map) including `Map.prototype.getOrInsert`/`getOrInsertComputed`.
@@ -485,6 +502,24 @@ A collection of key-value pairs with insertion-order iteration. Any value (inclu
 | `Map.groupBy(iterable, callback)` | Group elements into a Map by callback return value |
 
 Maps are iterable: `[...myMap]` spreads the map into an array of `[key, value]` pairs.
+
+### WeakMap (`Goccia.Builtins.GlobalWeakMap.pas`)
+
+Implements the [ECMAScript WeakMap](https://tc39.es/ecma262/#sec-weakmap-objects) including ES2026 `WeakMap.prototype.getOrInsert` and `WeakMap.prototype.getOrInsertComputed`.
+
+A weak key-value collection where keys are objects or non-registered symbols. WeakMap entries do not keep keys alive. Values are traced only while their key is reachable from outside the WeakMap.
+
+| Method/Property | Description |
+|--------|-------------|
+| `new WeakMap(entries?)` | Create a new WeakMap, optionally from an iterable of `[key, value]` pairs |
+| `weakMap.get(key)` | Get value for key; returns `undefined` for invalid weak keys |
+| `weakMap.set(key, value)` | Set an object or non-registered symbol key (returns the WeakMap for chaining) |
+| `weakMap.has(key)` | Check if key exists; returns `false` for invalid weak keys |
+| `weakMap.delete(key)` | Remove a key; returns `false` for invalid weak keys |
+| `weakMap.getOrInsert(key, default)` | Return value for key if present; otherwise insert default and return it |
+| `weakMap.getOrInsertComputed(key, cb)` | Return value for key if present; otherwise call `cb(key)`, insert result, and return it |
+
+WeakMaps intentionally do **not** expose `size`, `clear`, `forEach`, iteration, `keys`, `values`, or `entries`. Keys must satisfy ECMAScript `CanBeHeldWeakly`: objects and non-registered symbols are accepted; primitives and `Symbol.for()` registry symbols throw from `set()`, upsert methods, and construction.
 
 ### Promise (`Goccia.Builtins.GlobalPromise.pas`, `Goccia.Values.PromiseValue.pas`)
 

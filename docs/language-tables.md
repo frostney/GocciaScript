@@ -31,6 +31,7 @@
 | `for...of` | ES2015 | Supported |
 | `Symbol` | ES2015 | Supported |
 | `Promise` | ES2015 | Supported |
+| `WeakMap`, `WeakSet` | ES2015 | Supported |
 | `RegExp` (literals, flags `d`/`g`/`i`/`m`/`s`/`u`/`v`/`y`) | ES2015+ | Supported |
 | ES modules (`import` / `export`) | ES2015 | Supported (named only) |
 | Default exports / imports | ES2015 | Excluded — use named exports |
@@ -63,6 +64,7 @@
 | `Array.fromAsync` | ES2026 | Supported |
 | `Math.sumPrecise` | ES2026 | Supported |
 | `Map.prototype.getOrInsert`, `getOrInsertComputed` | ES2026 | Supported |
+| `WeakMap.prototype.getOrInsert`, `getOrInsertComputed` | ES2026 | Supported |
 | `Iterator.concat` (Iterator Sequencing) | ES2026 | Supported |
 | Explicit Resource Management (`using`, `await using`) | ES2026 | Supported |
 | JSON.parse source text access (`JSON.rawJSON`, `JSON.isRawJSON`) | ES2026 | Supported |

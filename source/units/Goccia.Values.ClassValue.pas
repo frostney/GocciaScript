@@ -158,6 +158,14 @@ type
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
   end;
 
+  TGocciaWeakMapClassValue = class(TGocciaClassValue)
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+  end;
+
+  TGocciaWeakSetClassValue = class(TGocciaClassValue)
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+  end;
+
   TGocciaStringClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
   end;
@@ -273,7 +281,9 @@ uses
   Goccia.Values.TextDecoderValue,
   Goccia.Values.TextEncoderValue,
   Goccia.Values.URLSearchParamsValue,
-  Goccia.Values.URLValue;
+  Goccia.Values.URLValue,
+  Goccia.Values.WeakMapValue,
+  Goccia.Values.WeakSetValue;
 
 // SetDefaultPrototype / PatchDefaultPrototype previously cached the
 // "default constructor [[Prototype]]" (Function.prototype) in a threadvar.
@@ -1254,6 +1264,20 @@ end;
 function TGocciaSetClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
 begin
   Result := TGocciaSetValue.Create;
+end;
+
+{ TGocciaWeakMapClassValue }
+
+function TGocciaWeakMapClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+begin
+  Result := TGocciaWeakMapValue.Create;
+end;
+
+{ TGocciaWeakSetClassValue }
+
+function TGocciaWeakSetClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+begin
+  Result := TGocciaWeakSetValue.Create;
 end;
 
 { TGocciaArrayBufferClassValue }

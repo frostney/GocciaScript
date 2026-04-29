@@ -19,4 +19,3 @@ test("class generator method works without compat-function", () => {
   expect(iter.next()).toEqual({ value: 5, done: false });
   expect(iter.next()).toEqual({ value: 6, done: false });
 });
-

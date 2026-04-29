@@ -64,3 +64,29 @@ describe("Set cloning", () => {
     expect(obj.value).toBe(42);
   });
 });
+
+describe("Weak collection cloning", () => {
+  test("WeakMap is not cloneable", () => {
+    try {
+      structuredClone(new WeakMap());
+    } catch (e) {
+      expect(e instanceof DOMException).toBe(true);
+      expect(e.name).toBe("DataCloneError");
+      expect(e.code).toBe(25);
+      return;
+    }
+    expect(true).toBe(false);
+  });
+
+  test("WeakSet is not cloneable", () => {
+    try {
+      structuredClone(new WeakSet());
+    } catch (e) {
+      expect(e instanceof DOMException).toBe(true);
+      expect(e.name).toBe("DataCloneError");
+      expect(e.code).toBe(25);
+      return;
+    }
+    expect(true).toBe(false);
+  });
+});

@@ -19,4 +19,3 @@ test("class async generator method works without compat-function", async () => {
   expect(await iter.next()).toEqual({ value: 7, done: false });
   expect(await iter.next()).toEqual({ value: 8, done: false });
 });
-

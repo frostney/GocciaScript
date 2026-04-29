@@ -46,6 +46,7 @@ uses
   Goccia.Constants.SymbolNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue;
@@ -117,7 +118,12 @@ begin
 end;
 
 destructor TGocciaGlobalSymbol.Destroy;
+var
+  Pair: TOrderedStringMap<TGocciaSymbolValue>.TKeyValuePair;
 begin
+  if Assigned(TGarbageCollector.Instance) then
+    for Pair in FGlobalRegistry do
+      TGarbageCollector.Instance.UnpinObject(Pair.Value);
   FGlobalRegistry.Free;
   inherited;
 end;
@@ -178,6 +184,9 @@ begin
   begin
     { Steps 4-5: Create new symbol, append to GlobalSymbolRegistry }
     Symbol := TGocciaSymbolValue.Create(Key);
+    Symbol.Registered := True;
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(Symbol);
     FGlobalRegistry.Add(Key, Symbol);
     { Step 6: Return newSymbol }
     Result := Symbol;

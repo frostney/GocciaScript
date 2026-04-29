@@ -35,4 +35,3 @@ suite("async generators", () => {
     },
   });
 });
-

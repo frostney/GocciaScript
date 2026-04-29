@@ -64,7 +64,6 @@ function EvaluateTemplateExpression(const AExpressionText: string; const AContex
 function EvaluateAwait(const AAwaitExpression: TGocciaAwaitExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateYield(const AYieldExpression: TGocciaYieldExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function AwaitValue(const AValue: TGocciaValue): TGocciaValue;
-function GetIteratorFromValue(const AValue: TGocciaValue): TGocciaIteratorValue;
 function EvaluateUsingDeclaration(const AUsingDeclaration: TGocciaUsingDeclaration; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateForOf(const AForOfStatement: TGocciaForOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateForAwaitOf(const AForAwaitOfStatement: TGocciaForAwaitOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -136,8 +135,7 @@ uses
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
   Goccia.Values.GeneratorValue,
-  Goccia.Values.Iterator.Concrete,
-  Goccia.Values.Iterator.Generic,
+  Goccia.Values.IteratorSupport,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -145,7 +143,6 @@ uses
   Goccia.Values.ProxyValue,
   Goccia.Values.SetValue,
   Goccia.Values.SymbolValue,
-  Goccia.Values.ToObject,
   Goccia.Values.ToPrimitive;
 
 // Helper: create a non-owning copy of a statement list (AST owns the nodes)
@@ -362,74 +359,6 @@ begin
       Result := EvaluateStatement(TGocciaStatement(ANodes[I]), AContext);
     if Result.Kind <> cfkNormal then Exit;
   end;
-end;
-
-function GetIteratorFromValue(const AValue: TGocciaValue): TGocciaIteratorValue;
-var
-  IteratorHost: TGocciaObjectValue;
-  IteratorMethod, IteratorObj, NextMethod: TGocciaValue;
-  CallArgs: TGocciaArgumentsCollection;
-  WasAlreadyRooted: Boolean;
-  GC: TGarbageCollector;
-begin
-  if AValue is TGocciaIteratorValue then
-  begin
-    Result := TGocciaIteratorValue(AValue);
-    Exit;
-  end;
-
-  IteratorHost := nil;
-  if not (AValue is TGocciaNullLiteralValue) and
-     not (AValue is TGocciaUndefinedLiteralValue) then
-    IteratorHost := ToObject(AValue);
-
-  if Assigned(IteratorHost) then
-  begin
-    IteratorMethod := IteratorHost.GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
-    if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) then
-    begin
-      if not IteratorMethod.IsCallable then
-        ThrowTypeError(Format(SErrorNotFunction, [IteratorMethod.TypeName]),
-          SSuggestNotFunctionType);
-      GC := TGarbageCollector.Instance;
-      WasAlreadyRooted := Assigned(GC) and GC.IsTempRoot(IteratorHost);
-      if Assigned(GC) and not WasAlreadyRooted then
-        GC.AddTempRoot(IteratorHost);
-      try
-        CallArgs := TGocciaArgumentsCollection.Create;
-        try
-          IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, IteratorHost);
-        finally
-          CallArgs.Free;
-        end;
-      finally
-        if Assigned(GC) and not WasAlreadyRooted then
-          GC.RemoveTempRoot(IteratorHost);
-      end;
-      if IteratorObj is TGocciaIteratorValue then
-      begin
-        Result := TGocciaIteratorValue(IteratorObj);
-        Exit;
-      end;
-      if not (IteratorObj is TGocciaObjectValue) then
-        ThrowTypeError(Format(SErrorIteratorResultNotObject, [IteratorObj.ToStringLiteral.Value]),
-          SSuggestIteratorResultObject);
-      NextMethod := IteratorObj.GetProperty(PROP_NEXT);
-      if not Assigned(NextMethod) or (NextMethod is TGocciaUndefinedLiteralValue) or
-         not NextMethod.IsCallable then
-        ThrowTypeError('Iterator .next is not callable', SSuggestIteratorProtocol);
-      Result := TGocciaGenericIteratorValue.Create(IteratorObj);
-      Exit;
-    end;
-  end;
-
-  if AValue is TGocciaStringLiteralValue then
-  begin
-    Result := TGocciaStringIteratorValue.Create(AValue);
-    Exit;
-  end;
-
-  Result := nil;
 end;
 
 procedure SpreadIterableInto(const ASpreadValue: TGocciaValue; const ATarget: TGocciaValueList);

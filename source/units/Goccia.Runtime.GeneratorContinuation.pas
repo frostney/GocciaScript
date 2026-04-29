@@ -82,6 +82,7 @@ uses
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
+  Goccia.Values.IteratorSupport,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue,

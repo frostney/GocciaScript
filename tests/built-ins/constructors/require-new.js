@@ -10,6 +10,16 @@ describe("class constructors require 'new'", () => {
       expect(() => Set()).toThrow(TypeError);
     });
 
+    test("WeakMap() throws TypeError", () => {
+      // biome-ignore lint/correctness/noInvalidBuiltinInstantiation: intentional - testing that WeakMap() without new throws
+      expect(() => WeakMap()).toThrow(TypeError);
+    });
+
+    test("WeakSet() throws TypeError", () => {
+      // biome-ignore lint/correctness/noInvalidBuiltinInstantiation: intentional - testing that WeakSet() without new throws
+      expect(() => WeakSet()).toThrow(TypeError);
+    });
+
     test("ArrayBuffer() throws TypeError", () => {
       // biome-ignore lint/correctness/noInvalidBuiltinInstantiation: intentional - testing that ArrayBuffer() without new throws
       expect(() => ArrayBuffer(8)).toThrow(TypeError);
@@ -112,6 +122,16 @@ describe("class constructors require 'new'", () => {
     test("new Set()", () => {
       const s = new Set();
       expect(s instanceof Set).toBe(true);
+    });
+
+    test("new WeakMap()", () => {
+      const wm = new WeakMap();
+      expect(wm instanceof WeakMap).toBe(true);
+    });
+
+    test("new WeakSet()", () => {
+      const ws = new WeakSet();
+      expect(ws instanceof WeakSet).toBe(true);
     });
 
     test("new ArrayBuffer(4)", () => {
