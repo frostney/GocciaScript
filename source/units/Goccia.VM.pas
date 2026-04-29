@@ -1677,9 +1677,9 @@ begin
           AArgs.GetElement(0), Done)
       else
         Value := TGocciaIteratorValue(FIteratorValue).DirectNext(Done);
-      UnwrappedValue := AwaitValue(Value);
       if Done then
         ClearIteratorState;
+      UnwrappedValue := AwaitValue(Value);
       IteratorResult := CreateIteratorResult(UnwrappedValue, Done);
       Exit(PromiseResolve(IteratorResult));
     end;
@@ -1703,9 +1703,9 @@ begin
     Value := IteratorResult.GetProperty(PROP_VALUE);
     if not Assigned(Value) then
       Value := TGocciaUndefinedLiteralValue.UndefinedValue;
-    UnwrappedValue := AwaitValue(Value);
     if Done then
       ClearIteratorState;
+    UnwrappedValue := AwaitValue(Value);
     Result := PromiseResolve(CreateIteratorResult(UnwrappedValue, Done));
   except
     on E: EGocciaBytecodeThrow do
@@ -1742,9 +1742,9 @@ begin
       Value := IteratorResult.GetProperty(PROP_VALUE);
       if not Assigned(Value) then
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
-      UnwrappedValue := AwaitValue(Value);
       if Done then
         ClearIteratorState;
+      UnwrappedValue := AwaitValue(Value);
       Exit(PromiseResolve(CreateIteratorResult(UnwrappedValue, Done)));
     end;
 
@@ -1772,9 +1772,9 @@ begin
     Value := IteratorResult.GetProperty(PROP_VALUE);
     if not Assigned(Value) then
       Value := TGocciaUndefinedLiteralValue.UndefinedValue;
-    UnwrappedValue := AwaitValue(Value);
     if Done then
       ClearIteratorState;
+    UnwrappedValue := AwaitValue(Value);
     Result := PromiseResolve(CreateIteratorResult(UnwrappedValue, Done));
   except
     on E: EGocciaBytecodeThrow do
@@ -1814,9 +1814,9 @@ begin
       Value := IteratorResult.GetProperty(PROP_VALUE);
       if not Assigned(Value) then
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
-      UnwrappedValue := AwaitValue(Value);
       if Done then
         ClearIteratorState;
+      UnwrappedValue := AwaitValue(Value);
       Exit(PromiseResolve(CreateIteratorResult(UnwrappedValue, Done)));
     end;
 
@@ -1840,9 +1840,9 @@ begin
       Value := IteratorResult.GetProperty(PROP_VALUE);
       if not Assigned(Value) then
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
-      UnwrappedValue := AwaitValue(Value);
       if Done then
         ClearIteratorState;
+      UnwrappedValue := AwaitValue(Value);
       Exit(PromiseResolve(CreateIteratorResult(UnwrappedValue, Done)));
     end;
 
@@ -2007,17 +2007,30 @@ procedure TGocciaBytecodeGeneratorObjectValue.CaptureContinuation(
   const AContinuationIP: Integer);
 var
   I: Integer;
+  LiveLocalCellCount: Integer;
+  LiveRegisterCount: Integer;
 begin
   FHasContinuation := True;
   FContinuationIP := AContinuationIP;
   FContinuationPrevCovLine := APrevCovLine;
   FResumeRegister := AResumeRegister;
 
-  SetLength(FContinuationRegisters, FVM.FRegisterCount);
+  LiveLocalCellCount := FVM.FLocalCellCount;
+  while (LiveLocalCellCount > 0) and
+        not Assigned(FVM.FLocalCells[LiveLocalCellCount - 1]) do
+    Dec(LiveLocalCellCount);
+
+  LiveRegisterCount := FVM.FRegisterCount;
+  while (LiveRegisterCount > 0) and
+        (FVM.FRegisters[LiveRegisterCount - 1].Kind = grkUndefined) and
+        (LiveRegisterCount > LiveLocalCellCount) do
+    Dec(LiveRegisterCount);
+
+  SetLength(FContinuationRegisters, LiveRegisterCount);
   for I := 0 to High(FContinuationRegisters) do
     FContinuationRegisters[I] := FVM.FRegisters[I];
 
-  SetLength(FContinuationLocalCells, FVM.FLocalCellCount);
+  SetLength(FContinuationLocalCells, LiveLocalCellCount);
   for I := 0 to High(FContinuationLocalCells) do
     FContinuationLocalCells[I] := FVM.FLocalCells[I];
 
