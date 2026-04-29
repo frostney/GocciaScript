@@ -301,8 +301,15 @@ console.log("Loader: compact-json multi-file omits build, memory, stdout, stderr
       if ("stdout" in file) throw new Error(`compact-json multi-file files[${idx}] stdout should be omitted`);
       if ("stderr" in file) throw new Error(`compact-json multi-file files[${idx}] stderr should be omitted`);
     }
-    if (json.files[0].result !== 11) throw new Error(`compact-json multi-file first result should be 11, got ${json.files[0].result}`);
-    if (json.files[1].result !== 22) throw new Error(`compact-json multi-file second result should be 22, got ${json.files[1].result}`);
+    const byFileName = new Map<string, any>(
+      (json.files as any[]).map((f) => [f.fileName, f]),
+    );
+    const firstFile = byFileName.get(first);
+    const secondFile = byFileName.get(second);
+    if (!firstFile) throw new Error(`compact-json multi-file missing entry for ${first}`);
+    if (!secondFile) throw new Error(`compact-json multi-file missing entry for ${second}`);
+    if (firstFile.result !== 11) throw new Error(`compact-json multi-file ${first} result should be 11, got ${firstFile.result}`);
+    if (secondFile.result !== 22) throw new Error(`compact-json multi-file ${second} result should be 22, got ${secondFile.result}`);
     if (json.workers?.used !== 2) throw new Error(`compact-json multi-file workers.used should be 2, got ${json.workers?.used}`);
   } finally {
     clean(tmp);
