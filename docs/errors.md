@@ -459,17 +459,18 @@ When running with `--output=json`, GocciaScript wraps every execution result in 
   "files": [
     {
       "fileName": "script.js",
+      "file": "script.js",
       "ok": true,
       "output": ["hello", "Error: oops"],
       "error": null,
-      "result": 42,
       "timing": {
         "lex_ns": 500000,
         "parse_ns": 1200000,
         "compile_ns": 0,
         "exec_ns": 3100000,
         "total_ns": 4800000
-      }
+      },
+      "result": 42
     }
   ]
 }
