@@ -232,6 +232,20 @@ test("object async generator yield delegation rejects sync iterator failures asy
       };
     },
   };
+  const resultGetterSource = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return {
+            get value() {
+              return missingValue;
+            },
+            done: false,
+          };
+        },
+      };
+    },
+  };
   const obj = {
     async *nexting() {
       yield* nextSource;
@@ -244,6 +258,9 @@ test("object async generator yield delegation rejects sync iterator failures asy
     },
     async *rejectingValue() {
       yield* rejectedValueSource;
+    },
+    async *throwingFromResultGetter() {
+      yield* resultGetterSource;
     },
   };
 
@@ -258,6 +275,7 @@ test("object async generator yield delegation rejects sync iterator failures asy
   await expect(throwIter.throw(9)).rejects.toBe("throw boom");
 
   await expect(obj.rejectingValue().next()).rejects.toBe("value boom");
+  await expect(obj.throwingFromResultGetter().next()).rejects.toThrow(ReferenceError);
 });
 
 test("object async generator yield delegation closes sync wrapper after completion", async () => {

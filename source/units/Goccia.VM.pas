@@ -1714,6 +1714,14 @@ begin
       Result := PromiseReject(E.Value);
     on E: TGocciaTypeError do
       Result := PromiseReject(CreateErrorObject(TYPE_ERROR_NAME, E.Message));
+    on E: TGocciaReferenceError do
+      Result := PromiseReject(CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
+    on E: TGocciaSyntaxError do
+      Result := PromiseReject(CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+    on E: TGocciaRuntimeError do
+      Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
+    on E: Exception do
+      Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
   end;
 end;
 
@@ -1789,6 +1797,14 @@ begin
       Result := PromiseReject(E.Value);
     on E: TGocciaTypeError do
       Result := PromiseReject(CreateErrorObject(TYPE_ERROR_NAME, E.Message));
+    on E: TGocciaReferenceError do
+      Result := PromiseReject(CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
+    on E: TGocciaSyntaxError do
+      Result := PromiseReject(CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+    on E: TGocciaRuntimeError do
+      Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
+    on E: Exception do
+      Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
   end;
 end;
 
@@ -1877,6 +1893,14 @@ begin
       Result := PromiseReject(E.Value);
     on E: TGocciaTypeError do
       Result := PromiseReject(CreateErrorObject(TYPE_ERROR_NAME, E.Message));
+    on E: TGocciaReferenceError do
+      Result := PromiseReject(CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
+    on E: TGocciaSyntaxError do
+      Result := PromiseReject(CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+    on E: TGocciaRuntimeError do
+      Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
+    on E: Exception do
+      Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
   end;
 end;
 
