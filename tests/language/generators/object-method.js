@@ -59,6 +59,27 @@ test("object generator method does not replay call arguments before a yielded ar
   expect(events).toEqual(["left", "combine"]);
 });
 
+test("object generator method resumes binary expressions instead of returning the cached left operand", () => {
+  const events = [];
+  const obj = {
+    *values() {
+      const left = () => {
+        events.push("left");
+        return 10;
+      };
+
+      const result = left() + (yield "resume");
+      yield result;
+    },
+  };
+
+  const iter = obj.values();
+  expect(iter.next()).toEqual({ value: "resume", done: false });
+  expect(events).toEqual(["left"]);
+  expect(iter.next(5)).toEqual({ value: 15, done: false });
+  expect(events).toEqual(["left"]);
+});
+
 test("object generator method supports yield delegation", () => {
   const obj = {
     *numbers() {

@@ -66,6 +66,7 @@ type
     FDelegateIterator: TGocciaIteratorValue;
     FDelegateAsyncIterator: TGocciaValue;
     FDelegateAsyncNext: TGocciaValue;
+    FCompletedExpressionValues: TDictionary<TObject, TGocciaValue>;
     FExpressionValues: TDictionary<TObject, TGocciaValue>;
     FStatementIndexes: TDictionary<TObject, Integer>;
     FTryStates: TDictionary<TObject, TGocciaGeneratorTryState>;
@@ -79,6 +80,8 @@ type
       const AValue: TGocciaValue; out ADone: Boolean): TGocciaValue;
     function YieldValue(const AYieldExpression: TGocciaYieldExpression;
       const AContext: TGocciaEvaluationContext): TGocciaValue;
+    procedure SaveCompletedExpressionValue(const AExpression: TObject; const AValue: TGocciaValue);
+    function TakeCompletedExpressionValue(const AExpression: TObject; out AValue: TGocciaValue): Boolean;
     procedure SaveExpressionValue(const AExpression: TObject; const AValue: TGocciaValue);
     function TakeExpressionValue(const AExpression: TObject; out AValue: TGocciaValue): Boolean;
     procedure ClearExpressionValue(const AExpression: TObject);
@@ -265,6 +268,7 @@ begin
   FIsAsyncGenerator := AIsAsyncGenerator;
   FSuspendedYield := nil;
   FPendingValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  FCompletedExpressionValues := TDictionary<TObject, TGocciaValue>.Create;
   FExpressionValues := TDictionary<TObject, TGocciaValue>.Create;
   FStatementIndexes := TDictionary<TObject, Integer>.Create;
   FTryStates := TDictionary<TObject, TGocciaGeneratorTryState>.Create;
@@ -276,6 +280,7 @@ begin
   FTryStates.Free;
   FStatementIndexes.Free;
   FExpressionValues.Free;
+  FCompletedExpressionValues.Free;
   inherited;
 end;
 
@@ -681,6 +686,20 @@ begin
   raise EGocciaGeneratorYield.Create(YieldedValue);
 end;
 
+procedure TGocciaGeneratorContinuation.SaveCompletedExpressionValue(
+  const AExpression: TObject; const AValue: TGocciaValue);
+begin
+  FCompletedExpressionValues.AddOrSetValue(AExpression, AValue);
+end;
+
+function TGocciaGeneratorContinuation.TakeCompletedExpressionValue(
+  const AExpression: TObject; out AValue: TGocciaValue): Boolean;
+begin
+  Result := FCompletedExpressionValues.TryGetValue(AExpression, AValue);
+  if Result then
+    FCompletedExpressionValues.Remove(AExpression);
+end;
+
 procedure TGocciaGeneratorContinuation.SaveExpressionValue(
   const AExpression: TObject; const AValue: TGocciaValue);
 begin
@@ -698,11 +717,13 @@ end;
 procedure TGocciaGeneratorContinuation.ClearExpressionValue(const AExpression: TObject);
 begin
   FExpressionValues.Remove(AExpression);
+  FCompletedExpressionValues.Remove(AExpression);
 end;
 
 procedure TGocciaGeneratorContinuation.ClearExpressionValues;
 begin
   FExpressionValues.Clear;
+  FCompletedExpressionValues.Clear;
 end;
 
 function TGocciaGeneratorContinuation.GetStatementIndex(
@@ -780,6 +801,9 @@ begin
     FDelegateAsyncIterator.MarkReferences;
   if Assigned(FDelegateAsyncNext) then
     FDelegateAsyncNext.MarkReferences;
+  for Value in FCompletedExpressionValues.Values do
+    if Assigned(Value) then
+      Value.MarkReferences;
   for Value in FExpressionValues.Values do
     if Assigned(Value) then
       Value.MarkReferences;
