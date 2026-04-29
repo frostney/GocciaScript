@@ -5,7 +5,11 @@ import {
   MARKDOWN_CONTENT_TYPE,
   markdownResponseHeaders,
 } from "@/lib/markdown-negotiation";
-import { createSiteMarkdown, resolveMarkdownRoute } from "@/lib/site-markdown";
+import {
+  createSiteMarkdown,
+  resolveMarkdownRoute,
+  yamlScalar,
+} from "@/lib/site-markdown";
 
 describe("acceptsMarkdown", () => {
   test("requires an explicit text/markdown accept entry", () => {
@@ -78,6 +82,12 @@ describe("resolveMarkdownRoute", () => {
 });
 
 describe("createSiteMarkdown", () => {
+  test("serializes frontmatter scalars with YAML-safe quoting", () => {
+    expect(yamlScalar('Title: "quoted"\nnext')).toBe(
+      '"Title: \\"quoted\\"\\nnext"',
+    );
+  });
+
   test("returns markdown for the playground selected example", async () => {
     const markdown = await createSiteMarkdown(
       ["playground"],

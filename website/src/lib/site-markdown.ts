@@ -25,10 +25,17 @@ const EMPTY_EXAMPLE: Example = {
   code: "",
 };
 
+export function yamlScalar(value: string): string {
+  return JSON.stringify(value);
+}
+
 function frontmatter(title: string, description: string): string {
-  return ["---", `title: ${title}`, `description: ${description}`, "---"].join(
-    "\n",
-  );
+  return [
+    "---",
+    `title: ${yamlScalar(title)}`,
+    `description: ${yamlScalar(description)}`,
+    "---",
+  ].join("\n");
 }
 
 function fence(code: string, language = ""): string {
