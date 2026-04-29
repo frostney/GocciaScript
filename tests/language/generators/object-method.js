@@ -140,6 +140,56 @@ test("object generator yield delegation rejects iterator protocol violations", (
   expect(() => obj.primitiveResult().next()).toThrow(TypeError);
 });
 
+test("object generator yield delegation clears delegate after protocol error", () => {
+  const events = [];
+  const primitiveResult = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          events.push("bad-next");
+          return 1;
+        },
+      };
+    },
+  };
+  const missingNext = {
+    [Symbol.iterator]() {
+      return {};
+    },
+  };
+  const obj = {
+    *primitiveThenGood() {
+      try {
+        yield* primitiveResult;
+      } catch (error) {
+        events.push(error instanceof TypeError ? "caught-primitive" : "wrong");
+      }
+      yield* ["ok"];
+    },
+    *missingThenGood() {
+      try {
+        yield* missingNext;
+      } catch (error) {
+        events.push(error instanceof TypeError ? "caught-missing" : "wrong");
+      }
+      yield* ["done"];
+    },
+  };
+
+  const primitiveIter = obj.primitiveThenGood();
+  expect(primitiveIter.next()).toEqual({ value: "ok", done: false });
+  expect(primitiveIter.next()).toEqual({ value: undefined, done: true });
+
+  const missingIter = obj.missingThenGood();
+  expect(missingIter.next()).toEqual({ value: "done", done: false });
+  expect(missingIter.next()).toEqual({ value: undefined, done: true });
+  expect(events).toEqual([
+    "bad-next",
+    "caught-primitive",
+    "caught-missing",
+  ]);
+});
+
 test("object generator yield delegation does not await sync iterator results", () => {
   let thenCalled = false;
   const source = {

@@ -2086,6 +2086,19 @@ var
   YieldedValue: TGocciaValue;
   HadDelegateContinuation: Boolean;
 
+  procedure ClearDelegateAndThrowTypeError(const AMessage: string);
+  begin
+    ClearDelegateState;
+    ThrowTypeError(AMessage);
+  end;
+
+  procedure ClearDelegateAndThrowTypeErrorWithSuggestion(
+    const AMessage, ASuggestion: string);
+  begin
+    ClearDelegateState;
+    ThrowTypeError(AMessage, ASuggestion);
+  end;
+
   procedure CloseDelegateForMissingThrow;
   begin
     ReturnMethod := nil;
@@ -2152,7 +2165,7 @@ begin
          not (NextResult is TGocciaNullLiteralValue) then
       begin
         if not NextResult.IsCallable then
-          ThrowTypeError('Iterator return is not callable');
+          ClearDelegateAndThrowTypeError('Iterator return is not callable');
         CallArgs := TGocciaArgumentsCollection.Create([RegisterToValue(FResumeValue)]);
         try
           NextResult := TGocciaFunctionBase(NextResult).Call(
@@ -2170,7 +2183,7 @@ begin
     if Assigned(NextResult) then
     begin
       if not (NextResult is TGocciaObjectValue) then
-        ThrowTypeError('Iterator return result is not an object');
+        ClearDelegateAndThrowTypeError('Iterator return result is not an object');
       DoneValue := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
       YieldedValue := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
       if not Assigned(YieldedValue) then
@@ -2223,7 +2236,7 @@ begin
     if Assigned(NextResult) then
     begin
       if not (NextResult is TGocciaObjectValue) then
-        ThrowTypeError('Iterator throw result is not an object');
+        ClearDelegateAndThrowTypeError('Iterator throw result is not an object');
       DoneValue := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
       if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
       begin
@@ -2258,7 +2271,7 @@ begin
     else
     begin
       if not Assigned(FDelegateNextMethod) or not FDelegateNextMethod.IsCallable then
-        ThrowTypeError('Iterator.next is not a function');
+        ClearDelegateAndThrowTypeError('Iterator.next is not a function');
       if HadDelegateContinuation and (FResumeKind = bgrkNext) then
         CallArgs := TGocciaArgumentsCollection.Create([RegisterToValue(FResumeValue)])
       else
@@ -2272,7 +2285,8 @@ begin
         CallArgs.Free;
       end;
       if not (NextResult is TGocciaObjectValue) then
-        ThrowTypeError(Format(SErrorIteratorResultNotObject,
+        ClearDelegateAndThrowTypeErrorWithSuggestion(
+          Format(SErrorIteratorResultNotObject,
           [NextResult.ToStringLiteral.Value]), SSuggestIteratorResultObject);
       DoneValue := NextResult.GetProperty(PROP_DONE);
       Done := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
