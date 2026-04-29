@@ -556,6 +556,10 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
           body: JSON.stringify(payload.value),
         },
       );
+      // Server tags repeat-input responses with `X-Cache: HIT` so we can
+      // surface "(cached)" in the exit line. Anything else (MISS, missing,
+      // unexpected value) is treated as a fresh run.
+      const cached = res.headers.get("X-Cache") === "HIT";
       if (res.status === 429) {
         const retry = res.headers.get("Retry-After") ?? "60";
         setOutput([
@@ -680,7 +684,7 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
       const totalMs = data.timing?.total_ms;
       const tail = `— exit ${data.exitCode ?? "?"}${
         totalMs !== undefined ? ` · ${totalMs.toFixed(2)}ms` : ""
-      }`;
+      }${cached ? " · (cached)" : ""}`;
       lines.push({ kind: "meta", text: tail });
       setOutput(lines);
     } catch (err) {

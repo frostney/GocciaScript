@@ -16,6 +16,12 @@ import {
   captureServerException,
 } from "@/lib/posthog-server";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
+import {
+  isResponseCacheable,
+  responseCacheGet,
+  responseCacheKey,
+  responseCacheSet,
+} from "@/lib/response-cache";
 
 const TIMEOUT_MS = 5_000;
 const MAX_OUTPUT_BYTES = 256 * 1024;
@@ -620,6 +626,45 @@ async function runHandler(
   }
 
   const { asi, compatVar, compatFunction } = body;
+
+  // Same input -> same response within the cache TTL. A client mashing the
+  // "Run" button on the playground can short-circuit here without spawning
+  // a fresh runner subprocess. Rate limiting still ran above, so cache hits
+  // continue to count against the per-IP budget — the cache only avoids
+  // server CPU, not bandwidth abuse.
+  const mode: "interpreted" | "bytecode" =
+    body.mode === "bytecode" ? "bytecode" : "interpreted";
+  const cacheKey = responseCacheKey({
+    kind: config.kind,
+    code,
+    mode,
+    asi,
+    compatVar,
+    compatFunction,
+  });
+  const cached = responseCacheGet(cacheKey);
+  if (cached !== null) {
+    captureServerEvent(`${config.eventPrefix}_cache_hit`, {
+      distinctId,
+      path: config.path,
+      properties: runtimeTelemetryProperties(
+        body,
+        asi,
+        compatVar,
+        compatFunction,
+        codeBytes,
+      ),
+    });
+    return NextResponse.json(cached, {
+      headers: {
+        "X-Cache": "HIT",
+        "X-RateLimit-Limit": String(rl.limit),
+        "X-RateLimit-Remaining": String(rl.remaining),
+        "X-RateLimit-Reset": String(Math.ceil(rl.resetAt / 1000)),
+      },
+    });
+  }
+
   const invocation = await prepareInvocation(
     config,
     body,
@@ -824,26 +869,35 @@ async function runHandler(
         },
       });
 
+      const responseBody = buildResponseBody(
+        config,
+        invocation,
+        parsed,
+        stdoutText,
+        stderrText,
+        exitCode,
+        signal,
+        truncated,
+      );
+
+      // Cache only deterministic outcomes — truncated outputs are
+      // incomplete, and a non-null signal / null exitCode means the runner
+      // hit a resource limit (timeout, memory, instructions) rather than
+      // producing a stable answer. JS runtime errors with a normal exit
+      // are still cached: same source, same exception.
+      if (isResponseCacheable({ truncated, signal, exitCode })) {
+        responseCacheSet(cacheKey, responseBody);
+      }
+
       finish(
-        NextResponse.json(
-          buildResponseBody(
-            config,
-            invocation,
-            parsed,
-            stdoutText,
-            stderrText,
-            exitCode,
-            signal,
-            truncated,
-          ),
-          {
-            headers: {
-              "X-RateLimit-Limit": String(rl.limit),
-              "X-RateLimit-Remaining": String(rl.remaining),
-              "X-RateLimit-Reset": String(Math.ceil(rl.resetAt / 1000)),
-            },
+        NextResponse.json(responseBody, {
+          headers: {
+            "X-Cache": "MISS",
+            "X-RateLimit-Limit": String(rl.limit),
+            "X-RateLimit-Remaining": String(rl.remaining),
+            "X-RateLimit-Reset": String(Math.ceil(rl.resetAt / 1000)),
           },
-        ),
+        }),
       );
     });
 
