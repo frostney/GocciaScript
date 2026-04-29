@@ -14,7 +14,7 @@ See [Language](docs/language.md) for the complete specification of supported fea
 
 ### Built-in Objects
 
-`console`, `Math`, `JSON`, `JSON5`, `TOML`, `YAML`, `JSONL`, `CSV`, `TSV`, `Object`, `Array`, `Number`, `String`, `RegExp`, `Symbol`, `Set`, `Map`, `WeakSet`, `WeakMap`, `Promise`, `Temporal`, `Iterator`, `Proxy`, `Reflect`, `ArrayBuffer`, `SharedArrayBuffer`, TypedArrays (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`) with ArrayBuffer and SharedArrayBuffer backing, `fetch`, `Headers`, `Response` ([WHATWG Fetch](https://fetch.spec.whatwg.org/) — GET/HEAD only), `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`, `DOMException`).
+`console`, `Math`, `JSON`, `JSON5`, `TOML`, `YAML`, `JSONL`, `CSV`, `TSV`, `Object`, `Array`, `Number`, `String`, `RegExp`, `Symbol`, `Set`, `Map`, `WeakSet`, `WeakMap`, `Promise`, `Temporal`, `Iterator`, `Proxy`, `Reflect`, `ArrayBuffer`, `SharedArrayBuffer`, TypedArrays (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float16Array`, `Float32Array`, `Float64Array`, `BigInt64Array`, `BigUint64Array`) with ArrayBuffer and SharedArrayBuffer backing, `fetch`, `Headers`, `Response` ([WHATWG Fetch](https://fetch.spec.whatwg.org/) — GET/HEAD only), `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`, `DOMException`).
 
 See [Built-in Objects](docs/built-ins.md) for the complete API reference.
 
@@ -126,7 +126,7 @@ See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode backend architec
 
 ### Run Tests
 
-GocciaScript has 3400+ JavaScript unit tests covering language features, built-in objects, and edge cases.
+GocciaScript has 8000+ JavaScript unit tests covering language features, built-in objects, and edge cases.
 
 ```bash
 # Run all tests (GocciaScript TestRunner)
