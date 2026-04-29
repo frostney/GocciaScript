@@ -1,6 +1,6 @@
 import { readDocSource } from "@/lib/doc-source";
 import { DOC_PAGES, type DocPage } from "@/lib/docs-data";
-import { EXAMPLES } from "@/lib/examples";
+import { EXAMPLES, type Example } from "@/lib/examples";
 import {
   fetchLatestRelease,
   GITHUB_RELEASES_URL,
@@ -17,6 +17,13 @@ export type MarkdownRoute =
   | { kind: "installation" }
   | { kind: "playground" }
   | { kind: "sandbox" };
+
+const EMPTY_EXAMPLE: Example = {
+  id: "",
+  label: "",
+  desc: "",
+  code: "",
+};
 
 function frontmatter(title: string, description: string): string {
   return ["---", `title: ${title}`, `description: ${description}`, "---"].join(
@@ -48,6 +55,19 @@ function releaseSummary(release: ReleaseInfo | null): string {
 
 function docPageForId(id: string): DocPage | undefined {
   return DOC_PAGES.find((page) => page.id === id);
+}
+
+function pickExample(
+  preferredId: string | null | undefined,
+  fallbackId?: string,
+): Example {
+  if (EXAMPLES.length === 0) return EMPTY_EXAMPLE;
+  return (
+    EXAMPLES.find((example) => example.id === preferredId) ??
+    EXAMPLES.find((example) => example.id === fallbackId) ??
+    EXAMPLES[0] ??
+    EMPTY_EXAMPLE
+  );
 }
 
 export function resolveMarkdownRoute(
@@ -96,8 +116,7 @@ async function docsMarkdown(id: string): Promise<string | null> {
 
 async function homeMarkdown(): Promise<string> {
   const release = await fetchLatestRelease();
-  const heroExample =
-    EXAMPLES.find((example) => example.id === "coffee-typed") ?? EXAMPLES[0];
+  const heroExample = pickExample("coffee-typed");
 
   return [
     frontmatter(
@@ -211,10 +230,7 @@ async function installationMarkdown(): Promise<string> {
 
 function playgroundMarkdown(searchParams: URLSearchParams): string {
   const requested = searchParams.get("example");
-  const example =
-    EXAMPLES.find((item) => item.id === requested) ??
-    EXAMPLES.find((item) => item.id === "coffee-typed") ??
-    EXAMPLES[0];
+  const example = pickExample(requested, "coffee-typed");
 
   return [
     frontmatter(

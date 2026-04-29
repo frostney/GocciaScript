@@ -28,6 +28,12 @@ describe("acceptsMarkdown", () => {
   test("ignores text/markdown when q=0", () => {
     expect(acceptsMarkdown("text/markdown;q=0")).toBe(false);
   });
+
+  test("normalizes text/markdown quality values", () => {
+    expect(acceptsMarkdown("text/markdown;q=1.5")).toBe(true);
+    expect(acceptsMarkdown("text/markdown;q=-1")).toBe(false);
+    expect(acceptsMarkdown("text/markdown;q=abc")).toBe(false);
+  });
 });
 
 describe("markdown response headers", () => {

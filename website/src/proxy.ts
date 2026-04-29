@@ -13,8 +13,8 @@ const SKIPPED_PATHS = new Set([
 ]);
 
 function shouldSkipPath(pathname: string): boolean {
-  if (pathname.startsWith("/api/")) return true;
-  if (pathname.startsWith("/_next/")) return true;
+  if (pathname === "/api" || pathname.startsWith("/api/")) return true;
+  if (pathname === "/_next" || pathname.startsWith("/_next/")) return true;
   if (pathname.startsWith(`${MARKDOWN_ROUTE_PREFIX}/`)) return true;
   if (pathname === MARKDOWN_ROUTE_PREFIX) return true;
   if (SKIPPED_PATHS.has(pathname)) return true;
