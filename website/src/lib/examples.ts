@@ -156,8 +156,8 @@ for (const order is { total: const total } if (total > 10) of orders) {
   {
     id: "resources",
     label: "Resource management — using / await using",
-    desc: "TC39 explicit resource management: 'using' and 'await using' bindings auto-dispose at block exit, in reverse declaration order. DisposableStack collects an unknown number of resources.",
-    code: `// TC39 explicit resource management — automatic cleanup at block exit.
+    desc: "ES2026 explicit resource management: 'using' and 'await using' bindings auto-dispose at block exit, in reverse declaration order. DisposableStack collects an unknown number of resources.",
+    code: `// ES2026 explicit resource management — automatic cleanup at block exit.
 class Grinder {
   constructor(label) {
     this.label = label;
