@@ -531,6 +531,7 @@ export function Sandbox() {
 
   const startPaneResize = useCallback(
     (handleIndex: 0 | 1) => (event: React.PointerEvent<HTMLElement>) => {
+      event.preventDefault();
       const container = event.currentTarget.closest(
         ".sb-demo-body",
       ) as HTMLElement | null;
@@ -725,10 +726,13 @@ export function Sandbox() {
                 lineNumbers
               />
             </div>
-            <hr
+            {/* biome-ignore lint/a11y/useSemanticElements: this is an interactive splitter; button keeps pointer dragging reliable while ARIA exposes separator semantics. */}
+            <button
+              type="button"
               className="sb-resizer"
+              role="separator"
               tabIndex={0}
-              aria-orientation="horizontal"
+              aria-orientation="vertical"
               aria-label="Resize script and globals panes"
               aria-valuemin={Math.round(
                 (MIN_PANE_SIZE / (paneCols[0] + paneCols[1])) * 100,
@@ -757,10 +761,13 @@ export function Sandbox() {
                 lineNumbers
               />
             </div>
-            <hr
+            {/* biome-ignore lint/a11y/useSemanticElements: this is an interactive splitter; button keeps pointer dragging reliable while ARIA exposes separator semantics. */}
+            <button
+              type="button"
               className="sb-resizer"
+              role="separator"
               tabIndex={0}
-              aria-orientation="horizontal"
+              aria-orientation="vertical"
               aria-label="Resize globals and result panes"
               aria-valuemin={Math.round(
                 (MIN_PANE_SIZE / (paneCols[1] + paneCols[2])) * 100,

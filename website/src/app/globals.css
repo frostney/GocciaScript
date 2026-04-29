@@ -1113,6 +1113,12 @@ p {
   width: 100%;
   max-width: 60ch;
 }
+@media (min-width: 768px) {
+  .container > .section-head,
+  .container > .mt-12 > .section-head {
+    max-width: 80vw;
+  }
+}
 /* Brand-mark shape inside any section-head heading — `Goccia<em>Script</em>`
    (italic + accent), mirroring the nav `.brand em` and OG image
    treatment so the wordmark stays consistent across surfaces. */
@@ -2602,6 +2608,7 @@ a.info-term {
 }
 @media (min-width: 1100px) {
   .sb-resizer {
+    appearance: none;
     display: block;
     width: 7px;
     min-width: 7px;
