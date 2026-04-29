@@ -597,7 +597,7 @@ async function runHandler(
         code:
           payload.error.code === "CODE_TOO_LARGE"
             ? "CODE_TOO_LARGE"
-            : payload.error.message === "code is required"
+            : payload.error.code === "MISSING_CODE"
               ? "MISSING_CODE"
               : "INVALID_INPUT",
       },

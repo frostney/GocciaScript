@@ -7,7 +7,6 @@ import {
 export const API_CATALOG_PATH = "/.well-known/api-catalog";
 export const OAUTH_AUTHORIZATION_SERVER_PATH =
   "/.well-known/oauth-authorization-server";
-export const OPENID_CONFIGURATION_PATH = "/.well-known/openid-configuration";
 export const OAUTH_PROTECTED_RESOURCE_PATH =
   "/.well-known/oauth-protected-resource";
 export const JWKS_PATH = "/.well-known/jwks.json";
@@ -68,15 +67,7 @@ const API_SCOPES = ["goccia.execute", "goccia.test"] as const;
 export function buildOAuthAuthorizationServerMetadata(origin: string) {
   return {
     issuer: origin,
-    response_types_supported: [],
-    grant_types_supported: [],
     scopes_supported: API_SCOPES,
-  };
-}
-
-export function buildOpenIdConfiguration(origin: string) {
-  return {
-    ...buildOAuthAuthorizationServerMetadata(origin),
   };
 }
 

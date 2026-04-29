@@ -5,7 +5,6 @@ import { GET } from "@/app/.well-known/api-catalog/route";
 import { buildMcpServerCardResponse } from "@/app/.well-known/mcp/server-card.json/route";
 import { GET as getOAuthAuthorizationServer } from "@/app/.well-known/oauth-authorization-server/route";
 import { GET as getOAuthProtectedResource } from "@/app/.well-known/oauth-protected-resource/route";
-import { GET as getOpenIdConfiguration } from "@/app/.well-known/openid-configuration/route";
 import {
   AGENT_DISCOVERY_LINK_HEADER,
   AGENT_SKILLS_INDEX_PATH,
@@ -17,7 +16,6 @@ import {
   buildMcpServerCard,
   buildOAuthAuthorizationServerMetadata,
   buildOAuthProtectedResourceMetadata,
-  buildOpenIdConfiguration,
   GOCCIA_API_SKILL_PATH,
   MCP_SERVER_CARD_PATH,
   OAUTH_PROTECTED_RESOURCE_PATH,
@@ -86,19 +84,11 @@ describe("agent discovery", () => {
     );
 
     expect(metadata.issuer).toBe("https://example.test");
-    expect(metadata.grant_types_supported).toEqual([]);
-    expect(metadata.response_types_supported).toEqual([]);
+    expect("grant_types_supported" in metadata).toBe(false);
+    expect("response_types_supported" in metadata).toBe(false);
     expect("authorization_endpoint" in metadata).toBe(false);
     expect("token_endpoint" in metadata).toBe(false);
     expect("jwks_uri" in metadata).toBe(false);
-  });
-
-  test("openid configuration does not advertise unsigned id tokens", () => {
-    const metadata = buildOpenIdConfiguration("https://example.test");
-
-    expect(metadata.issuer).toBe("https://example.test");
-    expect("id_token_signing_alg_values_supported" in metadata).toBe(false);
-    expect("claims_supported" in metadata).toBe(false);
   });
 
   test("oauth protected resource metadata points agents at the issuer", () => {
@@ -133,6 +123,9 @@ describe("agent discovery", () => {
     expect(
       card.capabilities.tools[0].inputSchema.properties.code.maxBytes,
     ).toBe(8 * 1024);
+    expect(
+      card.capabilities.tools[0].inputSchema.properties.code.minLength,
+    ).toBe(1);
     expect(
       card.capabilities.tools[0].inputSchema.properties.code.description,
     ).toContain("UTF-8 byte length");
@@ -171,9 +164,6 @@ describe("agent discovery", () => {
     const oauth = await getOAuthAuthorizationServer(
       new Request(`${origin}/.well-known/oauth-authorization-server`),
     );
-    const openid = await getOpenIdConfiguration(
-      new Request(`${origin}/.well-known/openid-configuration`),
-    );
     const resource = await getOAuthProtectedResource(
       new Request(`${origin}/.well-known/oauth-protected-resource`),
     );
@@ -184,7 +174,6 @@ describe("agent discovery", () => {
     expect(await oauth.json()).toEqual(
       buildOAuthAuthorizationServerMetadata(origin),
     );
-    expect(await openid.json()).toEqual(buildOpenIdConfiguration(origin));
     expect(await resource.json()).toEqual(
       buildOAuthProtectedResourceMetadata(origin),
     );

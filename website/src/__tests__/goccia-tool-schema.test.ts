@@ -64,8 +64,21 @@ describe("goccia tool schema validation", () => {
     });
   });
 
-  test("rejects invalid required fields and enum values", () => {
-    expect(validateGocciaToolInput({}).ok).toBe(false);
+  test("rejects missing, empty, and invalid fields", () => {
+    expect(validateGocciaToolInput({})).toEqual({
+      ok: false,
+      error: {
+        code: "MISSING_CODE",
+        message: "Invalid input: expected string, received undefined",
+      },
+    });
+    expect(validateGocciaToolInput({ code: "" })).toEqual({
+      ok: false,
+      error: {
+        code: "MISSING_CODE",
+        message: "code is required",
+      },
+    });
     expect(validateGocciaToolInput({ code: "1;", mode: "native" }).ok).toBe(
       false,
     );

@@ -37,7 +37,7 @@ export type GocciaToolValidationResult =
   | {
       ok: false;
       error: {
-        code: "INVALID_INPUT" | "CODE_TOO_LARGE";
+        code: "INVALID_INPUT" | "MISSING_CODE" | "CODE_TOO_LARGE";
         message: string;
       };
     };
@@ -69,10 +69,17 @@ export function validateGocciaToolInput(
 
   const issue = result.error.issues[0];
   const message = issue?.message ?? "invalid tool input";
+  const inputRecord =
+    input && typeof input === "object" && !Array.isArray(input)
+      ? (input as Record<string, unknown>)
+      : null;
   const errorCode =
     issue?.path[0] === "code" && message.includes("exceeds")
       ? "CODE_TOO_LARGE"
-      : "INVALID_INPUT";
+      : issue?.path[0] === "code" &&
+          (inputRecord?.code === undefined || message === "code is required")
+        ? "MISSING_CODE"
+        : "INVALID_INPUT";
 
   return {
     ok: false,
@@ -90,6 +97,7 @@ export function gocciaRunInputSchema() {
     properties: {
       code: {
         type: "string",
+        minLength: 1,
         description:
           "GocciaScript source code to execute. The server enforces the byte limit declared by maxBytes using UTF-8 byte length.",
         maxBytes: MAX_GOCCIA_CODE_BYTES,
