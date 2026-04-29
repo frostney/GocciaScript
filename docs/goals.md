@@ -15,14 +15,14 @@ AI agents need to execute generated code in a constrained environment. GocciaScr
 
 - **No ambient authority** — Scripts cannot access the file system, network, or operating system unless the host explicitly grants it through the embedding API
 - **Sandboxed file system** *(not yet implemented)* — A virtual file system API that allows scripts to read and write files within a host-defined boundary, without access to the real file system
-- **Read-only network access** *(not yet implemented)* — A `fetch`-like API for HTTP GET requests, allowing scripts to retrieve data without the ability to send arbitrary requests or modify remote state
+- **Read-only network access** — A WHATWG `fetch` (GET/HEAD only) gated by an explicit host allowlist (`--allowed-host`); without an allowlist any call to `fetch` throws `TypeError`, so scripts cannot retrieve data or reach the network unless the host opts in
 - **Deterministic execution** — Same input produces the same output; no implicit global state leakage between executions
 - **Timeout enforcement** — The `--timeout` flag and embedding API allow hosts to kill runaway scripts
 - **Controlled built-in surface** — The host chooses which built-ins to expose via `TGocciaGlobalBuiltins` flags (see [Embedding](embedding.md))
 - **No eval** — `eval()` is excluded by design, preventing code injection from within scripts
-- **No function constructor** — The `function` keyword and `Function()` constructor are excluded, closing another dynamic code generation vector
+- **No dynamic code generation by default** — The `Function()` constructor is excluded unless the host opts in via `--unsafe-function-constructor`; the `function` keyword (declarations and expressions) is excluded by default and only re-enabled in compatibility mode via `--compat-function`
 
-The sandbox is a *reduced attack surface*, not a formally verified security boundary. The engine has not been audited by a third party. The sandboxing relies on the host not exposing dangerous APIs and on the absence of `eval`/`Function` preventing dynamic code generation.
+The sandbox is a *reduced attack surface*, not a formally verified security boundary. The engine has not been audited by a third party. The sandboxing relies on the host not exposing dangerous APIs, on `eval` being unconditionally absent, and on the host not opting in to `--unsafe-function-constructor` (which would re-enable dynamic code generation via `Function()`).
 
 ## Secondary: Embeddable Desktop Platform
 
@@ -36,7 +36,7 @@ Desktop applications built with FreePascal (Lazarus, command-line tools, game en
 ## What GocciaScript is Not
 
 - **Not a Node.js replacement** — No `require()`, no `node:` built-in modules, no event loop with I/O callbacks
-- **Not aiming for 100% ECMAScript conformance** — Features excluded by design (`var`, `function`, `==`, `eval`, traditional loops) will not be added. See [Language](language.md) for the full list.
+- **Not aiming for 100% ECMAScript conformance** — Features excluded by design (`==`, `eval`, traditional loops) will not be added. `var` and the `function` keyword are excluded by default but available as opt-in compatibility toggles (`--compat-var`, `--compat-function`). See [Language](language.md) for the full list.
 - **Not a formally verified sandbox** — The sandbox reduces attack surface but has not been independently audited
 - **Not performance-competitive with V8/SpiderMonkey** — GocciaScript prioritizes correctness, embeddability, and reduced attack surface over raw throughput
 
