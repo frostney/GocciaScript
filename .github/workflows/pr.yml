@@ -756,13 +756,15 @@ jobs:
             const fmt = (n) => Number(n).toLocaleString('en-US');
             const pct = (n, d) => (!d || d === 0) ? '0.0%' : ((n / d) * 100).toFixed(1) + '%';
             const signed = (n) => n > 0 ? '+' + fmt(n) : n < 0 ? fmt(n) : '±0';
-            // Δ in percentage points. Below ±0.05pp the deltas are below
-            // measurement granularity (a single test in a several-thousand
-            // sample); collapse them to ±0pp to keep the table calm.
+            // Δ in percentage points. Within ±0.05pp the deltas are at or
+            // below measurement granularity (a single test in a several-
+            // thousand sample); collapse them to ±0pp to keep the table calm.
+            // Inclusive cutoff so an exact ±0.05pp also collapses instead of
+            // rendering as ±0.1pp via toFixed(1).
             const signedPp = (rateNew, rateOld) => {
               if (rateOld == null) return '🆕';
               const dp = (rateNew - rateOld) * 100;
-              if (Math.abs(dp) < 0.05) return '±0pp';
+              if (Math.abs(dp) <= 0.05) return '±0pp';
               return (dp > 0 ? '+' : '') + dp.toFixed(1) + 'pp';
             };
 

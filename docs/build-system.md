@@ -433,10 +433,10 @@ build → test (JS + native)   → artifacts (main only)
       → json5-compliance     →
       → test262              →
       → benchmark            →
-      → examples             →
+      → cli                  →
 ```
 
-All matrix strategies use `fail-fast: false`, so one platform failing does not cancel other platforms. The post-build jobs (`test`, `toml-compliance`, `json5-compliance`, `test262`, `benchmark`, `examples`) are independent.
+All matrix strategies use `fail-fast: false`, so one platform failing does not cancel other platforms. The post-build jobs (`test`, `toml-compliance`, `json5-compliance`, `test262`, `benchmark`, `cli`) are independent.
 
 Runs on the full platform matrix:
 
@@ -458,11 +458,11 @@ Runs on the full platform matrix:
 
 **`benchmark`** (needs build) — Runs all benchmarks on all platforms. On main (ubuntu-latest x64), saves benchmark results as JSON to `actions/cache` for PR comparison.
 
-**`examples`** (needs build) — Runs all example scripts from the `examples/` folder on all platforms.
+**`cli`** (needs build) — Downloads pre-built binaries and runs CLI behavior smoke tests on all platforms via Bun: flags across all apps, lexer numeric-separator rejection, parser error display, config-file loading, and app-specific features. Windows runs additionally assert that the loader binary does not link OpenSSL DLLs (HTTPS must use the platform TLS stack statically).
 
-**`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + examples, main only) — Uploads production binaries after all checks pass, deriving the executable names from the `source/app/*.dpr` entrypoints.
+**`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + cli, main only) — Uploads production binaries after all checks pass, deriving the executable names from the `source/app/*.dpr` entrypoints.
 
-**`release`** (needs test + toml-compliance + json5-compliance + benchmark + examples, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the `source/app/*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), generates categorized release notes via [git-cliff](https://git-cliff.org/) (`cliff.toml`), and creates a GitHub release using `softprops/action-gh-release`.
+**`release`** (needs test + toml-compliance + json5-compliance + benchmark + cli, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the `source/app/*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), generates categorized release notes via [git-cliff](https://git-cliff.org/) (`cliff.toml`), and creates a GitHub release using `softprops/action-gh-release`.
 
 ### `pr.yml` — Pull requests
 
@@ -470,7 +470,7 @@ Runs on the full platform matrix:
 build → test (JS + native)
       → benchmark → PR comment (comparison)
       → test262   → PR comment (conformance)
-      → examples
+      → cli
 ```
 
 Runs on **ubuntu-latest x64 only** (single runner, no matrix).
@@ -483,9 +483,9 @@ Runs on **ubuntu-latest x64 only** (single runner, no matrix).
 
 **`test262`** (needs build, **non-blocking**) — Shallow-clones `tc39/test262@main`, runs `python3 scripts/run_test262_suite.py --suite-dir test262-suite --mode=bytecode --jobs=4 --output=test262-results.json`, and uploads the JSON report. Failing tests do not fail the job. The downstream `test262-comment` job (`if: always()`) restores the most recent `test262-baseline-` cache entry from main, computes a four-row metric table (Total / Eligible / Eligible passing / Total passing) and a top-three "Areas closest to 100%" table (≥ 25 attempted tests, below 100%, keyed by the first two test262 path components), and posts/updates a comment using marker `<!-- test262-results -->`. When a baseline is available, both tables include a Δ vs main column.
 
-**`examples`** (needs build) — Runs all example scripts from the `examples/` folder.
+**`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`).
 
-FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, benchmark, example, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, benchmark, test262, and example jobs do the same.
+FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, benchmark, test262, and cli jobs do the same.
 
 ## Changelog
 

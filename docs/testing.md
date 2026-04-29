@@ -513,7 +513,7 @@ build → test             → artifacts
       → json5-compliance →
       → test262          →
       → benchmark        →
-      → examples         →
+      → cli              →
 ```
 
 **`build`** — Installs FPC once per platform, compiles all binaries, uploads them as intermediate artifacts.
@@ -528,13 +528,13 @@ build → test             → artifacts
 
 **`benchmark`** (needs build, all platforms) — Downloads pre-built binaries, runs all benchmarks.
 
-**`examples`** (needs build, all platforms) — Runs the example scripts and GocciaScriptLoader CLI smoke tests.
+**`cli`** (needs build, all platforms) — Downloads pre-built binaries and runs CLI behavior smoke tests via Bun: `test-cli.ts` (flags across all apps), `test-cli-lexer.ts` (numeric-separator rejection), `test-cli-parser.ts` (error display), `test-cli-config.ts` (config-file loading and per-file inheritance), and `test-cli-apps.ts` (app-specific features). Windows runs additionally assert that the loader binary does not link against OpenSSL DLLs.
 
-**`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + examples, `main` only) — Uploads release binaries after all checks pass. `test262` is **not** a gating dependency — failing tests there cannot block a release.
+**`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + cli, `main` only) — Uploads release binaries after all checks pass. `test262` is **not** a gating dependency — failing tests there cannot block a release.
 
-**`release`** (needs test + toml-compliance + json5-compliance + benchmark + examples, tags only) — Packages and publishes release archives after the same gates pass.
+**`release`** (needs test + toml-compliance + json5-compliance + benchmark + cli, tags only) — Packages and publishes release archives after the same gates pass.
 
-The `test`, `benchmark`, `examples`, `toml-compliance`, `json5-compliance`, and `test262` jobs run in parallel after `build`. The TOML, JSON5, and test262 lanes all reuse the already-built binaries from the matrix build artifacts instead of installing FPC again, so platform-specific issues are caught on the same Linux, macOS, and Windows targets as the main test lanes (test262 runs on Linux only since conformance outcomes are platform-independent for this engine).
+The `test`, `benchmark`, `cli`, `toml-compliance`, `json5-compliance`, and `test262` jobs run in parallel after `build`. The TOML, JSON5, and test262 lanes all reuse the already-built binaries from the matrix build artifacts instead of installing FPC again, so platform-specific issues are caught on the same Linux, macOS, and Windows targets as the main test lanes (test262 runs on Linux only since conformance outcomes are platform-independent for this engine).
 
 ### PR Workflow (`.github/workflows/pr.yml`)
 
@@ -544,7 +544,7 @@ Runs on pull requests targeting `main`, on **ubuntu-latest x64 only**:
 build → test
       → benchmark → benchmark / timing comments
       → test262   → test262 comment
-      → examples
+      → cli
 ```
 
 The benchmark comparison comment includes a **Suite Timing** section showing test execution and benchmark duration for both modes. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the comparison format.
