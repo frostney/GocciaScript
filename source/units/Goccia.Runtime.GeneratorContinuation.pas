@@ -71,6 +71,7 @@ type
     FStatementIndexes: TDictionary<TObject, Integer>;
     FTryStates: TDictionary<TObject, TGocciaGeneratorTryState>;
     FIsAsyncGenerator: Boolean;
+    procedure ClearDelegateState;
   public
     constructor Create(const ABodyStatements: TObjectList<TGocciaASTNode>;
       const ACallScope: TGocciaScope; const AContext: TGocciaEvaluationContext;
@@ -105,8 +106,11 @@ function EvaluateGeneratorYield(const AYieldExpression: TGocciaYieldExpression;
 implementation
 
 uses
+  Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Error,
   Goccia.Evaluator,
+  Goccia.GarbageCollector,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -123,6 +127,7 @@ type
   TGocciaAsyncFromSyncIteratorValue = class(TGocciaObjectValue)
   private
     FIterator: TGocciaIteratorValue;
+    function PromiseReject(const AValue: TGocciaValue): TGocciaValue;
     function ResolveIteratorResult(const AResult: TGocciaObjectValue): TGocciaValue;
     function Next(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ReturnValue(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -160,18 +165,78 @@ begin
   AssignProperty(PROP_THROW, TGocciaNativeFunctionValue.Create(ThrowValue, PROP_THROW, 1));
 end;
 
-function TGocciaAsyncFromSyncIteratorValue.ResolveIteratorResult(
-  const AResult: TGocciaObjectValue): TGocciaValue;
+function TGocciaAsyncFromSyncIteratorValue.PromiseReject(
+  const AValue: TGocciaValue): TGocciaValue;
 var
+  IsRooted: Boolean;
   Promise: TGocciaPromiseValue;
 begin
   Promise := TGocciaPromiseValue.Create;
+  IsRooted := Assigned(TGarbageCollector.Instance);
+  if IsRooted then
+    TGarbageCollector.Instance.AddTempRoot(Promise);
   try
-    Promise.Resolve(AResult);
+    Promise.Reject(AValue);
   except
+    if IsRooted then
+    begin
+      TGarbageCollector.Instance.RemoveTempRoot(Promise);
+      IsRooted := False;
+    end;
     Promise.Free;
     raise;
   end;
+  if IsRooted then
+    TGarbageCollector.Instance.RemoveTempRoot(Promise);
+  Result := Promise;
+end;
+
+function TGocciaAsyncFromSyncIteratorValue.ResolveIteratorResult(
+  const AResult: TGocciaObjectValue): TGocciaValue;
+var
+  Done: Boolean;
+  DoneValue: TGocciaValue;
+  IsRooted: Boolean;
+  Promise: TGocciaPromiseValue;
+  UnwrappedValue: TGocciaValue;
+  Value: TGocciaValue;
+begin
+  Promise := TGocciaPromiseValue.Create;
+  IsRooted := Assigned(TGarbageCollector.Instance);
+  if IsRooted then
+    TGarbageCollector.Instance.AddTempRoot(Promise);
+  try
+    try
+      DoneValue := AResult.GetProperty(PROP_DONE);
+      Done := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
+      Value := AResult.GetProperty(PROP_VALUE);
+      if not Assigned(Value) then
+        Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+      UnwrappedValue := AwaitValue(Value);
+      Promise.Resolve(CreateIteratorResult(UnwrappedValue, Done));
+    except
+      on E: TGocciaThrowValue do
+        Promise.Reject(E.Value);
+      on E: TGocciaTypeError do
+        Promise.Reject(CreateErrorObject(TYPE_ERROR_NAME, E.Message));
+      on E: TGocciaReferenceError do
+        Promise.Reject(CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
+      on E: TGocciaSyntaxError do
+        Promise.Reject(CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+      on E: Exception do
+        Promise.Reject(CreateErrorObject(ERROR_NAME, E.Message));
+    end;
+  except
+    if IsRooted then
+    begin
+      TGarbageCollector.Instance.RemoveTempRoot(Promise);
+      IsRooted := False;
+    end;
+    Promise.Free;
+    raise;
+  end;
+  if IsRooted then
+    TGarbageCollector.Instance.RemoveTempRoot(Promise);
   Result := Promise;
 end;
 
@@ -179,21 +244,44 @@ function TGocciaAsyncFromSyncIteratorValue.Next(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Done: Boolean;
+  DoneValue: TGocciaValue;
+  IteratorResult: TGocciaObjectValue;
   Value: TGocciaValue;
 begin
-  if Assigned(FIterator) then
-  begin
-    if AArgs.Length > 0 then
+  try
+    if Assigned(FIterator) then
     begin
-      Value := FIterator.DirectNextValue(AArgs.GetElement(0), Done);
-      Result := ResolveIteratorResult(CreateIteratorResult(Value, Done));
+      if AArgs.Length > 0 then
+      begin
+        Value := FIterator.DirectNextValue(AArgs.GetElement(0), Done);
+        if Done then
+          FIterator := nil;
+        Result := ResolveIteratorResult(CreateIteratorResult(Value, Done));
+      end
+      else
+      begin
+        IteratorResult := FIterator.AdvanceNext;
+        DoneValue := IteratorResult.GetProperty(PROP_DONE);
+        if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+          FIterator := nil;
+        Result := ResolveIteratorResult(IteratorResult);
+      end;
     end
     else
-      Result := ResolveIteratorResult(FIterator.AdvanceNext);
-  end
-  else
-    Result := ResolveIteratorResult(CreateIteratorResult(
-      TGocciaUndefinedLiteralValue.UndefinedValue, True));
+      Result := ResolveIteratorResult(CreateIteratorResult(
+        TGocciaUndefinedLiteralValue.UndefinedValue, True));
+  except
+    on E: TGocciaThrowValue do
+      Result := PromiseReject(E.Value);
+    on E: TGocciaTypeError do
+      Result := PromiseReject(CreateErrorObject(TYPE_ERROR_NAME, E.Message));
+    on E: TGocciaReferenceError do
+      Result := PromiseReject(CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
+    on E: TGocciaSyntaxError do
+      Result := PromiseReject(CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+    on E: Exception do
+      Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
+  end;
 end;
 
 function TGocciaAsyncFromSyncIteratorValue.ReturnValue(
@@ -207,16 +295,29 @@ begin
     Value := AArgs.GetElement(0)
   else
     Value := TGocciaUndefinedLiteralValue.UndefinedValue;
-  if Assigned(FIterator) then
-  begin
-    IteratorResult := FIterator.ReturnValue(Value);
-    DoneValue := IteratorResult.GetProperty(PROP_DONE);
-    if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
-      FIterator := nil;
-    Result := ResolveIteratorResult(IteratorResult);
-    Exit;
+  try
+    if Assigned(FIterator) then
+    begin
+      IteratorResult := FIterator.ReturnValue(Value);
+      DoneValue := IteratorResult.GetProperty(PROP_DONE);
+      if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+        FIterator := nil;
+      Result := ResolveIteratorResult(IteratorResult);
+      Exit;
+    end;
+    Result := ResolveIteratorResult(CreateIteratorResult(Value, True));
+  except
+    on E: TGocciaThrowValue do
+      Result := PromiseReject(E.Value);
+    on E: TGocciaTypeError do
+      Result := PromiseReject(CreateErrorObject(TYPE_ERROR_NAME, E.Message));
+    on E: TGocciaReferenceError do
+      Result := PromiseReject(CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
+    on E: TGocciaSyntaxError do
+      Result := PromiseReject(CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+    on E: Exception do
+      Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
   end;
-  Result := ResolveIteratorResult(CreateIteratorResult(Value, True));
 end;
 
 function TGocciaAsyncFromSyncIteratorValue.ThrowValue(
@@ -230,16 +331,29 @@ begin
     Value := AArgs.GetElement(0)
   else
     Value := TGocciaUndefinedLiteralValue.UndefinedValue;
-  if Assigned(FIterator) then
-  begin
-    IteratorResult := FIterator.ThrowValue(Value);
-    DoneValue := IteratorResult.GetProperty(PROP_DONE);
-    if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
-      FIterator := nil;
-    Result := ResolveIteratorResult(IteratorResult);
-    Exit;
+  try
+    if Assigned(FIterator) then
+    begin
+      IteratorResult := FIterator.ThrowValue(Value);
+      DoneValue := IteratorResult.GetProperty(PROP_DONE);
+      if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+        FIterator := nil;
+      Result := ResolveIteratorResult(IteratorResult);
+      Exit;
+    end;
+    Result := PromiseReject(Value);
+  except
+    on E: TGocciaThrowValue do
+      Result := PromiseReject(E.Value);
+    on E: TGocciaTypeError do
+      Result := PromiseReject(CreateErrorObject(TYPE_ERROR_NAME, E.Message));
+    on E: TGocciaReferenceError do
+      Result := PromiseReject(CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
+    on E: TGocciaSyntaxError do
+      Result := PromiseReject(CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+    on E: Exception do
+      Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
   end;
-  raise TGocciaThrowValue.Create(Value);
 end;
 
 procedure TGocciaAsyncFromSyncIteratorValue.MarkReferences;
@@ -292,6 +406,14 @@ begin
   FExpressionValues.Free;
   FCompletedExpressionValues.Free;
   inherited;
+end;
+
+procedure TGocciaGeneratorContinuation.ClearDelegateState;
+begin
+  FDelegateIterator := nil;
+  FDelegateAsyncIterator := nil;
+  FDelegateAsyncNext := nil;
+  FDelegateExpression := nil;
 end;
 
 function TGocciaGeneratorContinuation.Resume(
@@ -351,6 +473,7 @@ begin
         if ControlFlow.Kind = cfkReturn then
         begin
           FCompleted := True;
+          ClearDelegateState;
           ClearExpressionValues;
           ClearStatementIndexes;
           ClearTryStates;
@@ -374,6 +497,7 @@ begin
         on E: EGocciaGeneratorReturn do
         begin
           FCompleted := True;
+          ClearDelegateState;
           ClearExpressionValues;
           ClearStatementIndexes;
           ClearTryStates;
@@ -388,6 +512,7 @@ begin
   end;
 
   FCompleted := True;
+  ClearDelegateState;
   ClearExpressionValues;
   ClearStatementIndexes;
   ClearTryStates;
@@ -407,7 +532,8 @@ var
   ReturnMethod: TGocciaValue;
   YieldedValue: TGocciaValue;
 begin
-  HasDelegateResumeValue := False;
+  try
+    HasDelegateResumeValue := False;
   if FHasPendingValue and (FSuspendedYield = AYieldExpression) then
   begin
     FHasPendingValue := False;
@@ -491,10 +617,7 @@ begin
           Result := IteratorResult.GetProperty(PROP_VALUE);
           if not Assigned(Result) then
             Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-          FDelegateIterator := nil;
-          FDelegateAsyncIterator := nil;
-          FDelegateAsyncNext := nil;
-          FDelegateExpression := nil;
+          ClearDelegateState;
           Exit;
         end;
         YieldedValue := IteratorResult.GetProperty(PROP_VALUE);
@@ -547,10 +670,7 @@ begin
         YieldedValue := IteratorResult.GetProperty(PROP_VALUE);
         if not Assigned(YieldedValue) then
           YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-        FDelegateIterator := nil;
-        FDelegateAsyncIterator := nil;
-        FDelegateAsyncNext := nil;
-        FDelegateExpression := nil;
+        ClearDelegateState;
         raise EGocciaGeneratorReturn.Create(YieldedValue);
       end;
       HasDelegateResumeValue := FPendingKind = grkNext;
@@ -575,8 +695,7 @@ begin
       else
         YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-      FDelegateAsyncIterator := nil;
-      FDelegateAsyncNext := nil;
+      ClearDelegateState;
       if FIsAsyncGenerator and (YieldedValue is TGocciaObjectValue) then
       begin
         IteratorMethod := TGocciaObjectValue(YieldedValue).GetSymbolProperty(
@@ -647,9 +766,7 @@ begin
           Result := IteratorResult.GetProperty(PROP_VALUE);
           if not Assigned(Result) then
             Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-          FDelegateAsyncIterator := nil;
-          FDelegateAsyncNext := nil;
-          FDelegateExpression := nil;
+          ClearDelegateState;
           Exit;
         end;
 
@@ -672,8 +789,7 @@ begin
         Result := IteratorResult.GetProperty(PROP_VALUE);
         if not Assigned(Result) then
           Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-        FDelegateIterator := nil;
-        FDelegateExpression := nil;
+        ClearDelegateState;
         Exit;
       end;
 
@@ -694,6 +810,16 @@ begin
     YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   FSuspendedYield := AYieldExpression;
   raise EGocciaGeneratorYield.Create(YieldedValue);
+  except
+    on E: EGocciaGeneratorYield do
+      raise;
+    else
+    begin
+      if AYieldExpression.IsDelegate then
+        ClearDelegateState;
+      raise;
+    end;
+  end;
 end;
 
 procedure TGocciaGeneratorContinuation.SaveCompletedExpressionValue(

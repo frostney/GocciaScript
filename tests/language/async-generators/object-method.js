@@ -189,6 +189,77 @@ test("object async generator yield delegation awaits short-circuit sync iterator
   await expect(iter.return(Promise.resolve(9))).resolves.toEqual({ value: 9, done: true });
 });
 
+test("object async generator yield delegation rejects sync iterator failures asynchronously", async () => {
+  const nextSource = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          throw "next boom";
+        },
+      };
+    },
+  };
+  const returnSource = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return { value: 1, done: false };
+        },
+        return() {
+          throw "return boom";
+        },
+      };
+    },
+  };
+  const throwSource = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return { value: 1, done: false };
+        },
+        throw() {
+          throw "throw boom";
+        },
+      };
+    },
+  };
+  const rejectedValueSource = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return { value: Promise.reject("value boom"), done: false };
+        },
+      };
+    },
+  };
+  const obj = {
+    async *nexting() {
+      yield* nextSource;
+    },
+    async *returning() {
+      yield* returnSource;
+    },
+    async *throwing() {
+      yield* throwSource;
+    },
+    async *rejectingValue() {
+      yield* rejectedValueSource;
+    },
+  };
+
+  await expect(obj.nexting().next()).rejects.toBe("next boom");
+
+  const returnIter = obj.returning();
+  await expect(returnIter.next()).resolves.toEqual({ value: 1, done: false });
+  await expect(returnIter.return(9)).rejects.toBe("return boom");
+
+  const throwIter = obj.throwing();
+  await expect(throwIter.next()).resolves.toEqual({ value: 1, done: false });
+  await expect(throwIter.throw(9)).rejects.toBe("throw boom");
+
+  await expect(obj.rejectingValue().next()).rejects.toBe("value boom");
+});
+
 test("object async generator yield delegation closes sync wrapper after completion", async () => {
   const events = [];
   const source = {
