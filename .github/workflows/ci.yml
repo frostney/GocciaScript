@@ -564,6 +564,66 @@ jobs:
           retention-days: 1
           path: json5-test-results-${{ matrix.target }}.json
 
+  test262:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download build
+        uses: actions/download-artifact@v8
+        with:
+          name: gocciascript-x86_64-linux
+          path: build/
+
+      - name: Make binaries executable
+        run: chmod +x build/*
+
+      - name: Checkout test262 suite
+        uses: actions/checkout@v5
+        with:
+          repository: tc39/test262
+          ref: main
+          path: test262-suite
+          fetch-depth: 1
+
+      - name: Run test262 conformance suite
+        continue-on-error: true
+        run: |
+          python3 scripts/run_test262_suite.py \
+            --suite-dir test262-suite \
+            --mode=bytecode \
+            --jobs=4 \
+            --output=test262-results.json
+
+      - name: Stage test262 baseline
+        if: github.ref == 'refs/heads/main'
+        run: |
+          if [ -f test262-results.json ]; then
+            cp test262-results.json test262-baseline.json
+          fi
+
+      - name: Cache test262 baseline
+        if: github.ref == 'refs/heads/main' && hashFiles('test262-baseline.json') != ''
+        uses: actions/cache/save@v5
+        with:
+          path: test262-baseline.json
+          key: test262-baseline-${{ github.sha }}
+
+      - name: Upload test262 results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test262-results
+          retention-days: 30
+          path: test262-results.json
+
   benchmark:
     needs: build
     strategy:
