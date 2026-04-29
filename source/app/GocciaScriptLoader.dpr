@@ -1203,7 +1203,7 @@ begin
       begin
         if IsStdinPath(APaths[I]) then
           raise TGocciaParseError.Create(
-            '--output=json supports stdin only as the sole input path.');
+            'stdin supports only as the sole input path.');
         if DirectoryExists(APaths[I]) then
         begin
           TempFiles := FindAllFiles(APaths[I], ScriptExtensions);
@@ -1227,13 +1227,25 @@ begin
 
   if APaths.Count = 0 then
     RunScriptFromStdin
+  else if (APaths.Count = 1) and IsStdinPath(APaths[0]) then
+    RunScriptFromStdin
   else
+  begin
+    { Reject mixing "-" with file paths so stdin cannot silently be
+      interleaved with on-disk files. Matches the rule enforced by
+      --output=json mode and by GocciaTestRunner / GocciaBenchmarkRunner. }
+    for I := 0 to APaths.Count - 1 do
+      if IsStdinPath(APaths[I]) then
+        raise TGocciaParseError.Create(
+          'stdin supports only as the sole input path.');
+
     for I := 0 to APaths.Count - 1 do
     begin
       if I > 0 then
         WriteLn;
       RunScripts(APaths[I]);
     end;
+  end;
 end;
 
 { TScriptLoaderApp - HandleError }

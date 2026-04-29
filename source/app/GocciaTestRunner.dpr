@@ -30,6 +30,7 @@ uses
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
+  Goccia.ScriptLoader.Input,
   Goccia.SourceMap,
   Goccia.Builtins.TestingLibrary,
   Goccia.CLI.JSON.Reporter,
@@ -129,10 +130,14 @@ type
     procedure ExecuteWithPaths(const APaths: TStringList); override;
     function GlobalBuiltins: TGocciaGlobalBuiltins; override;
   private
-    function RunGocciaScriptInterpreted(const AFileName: string): TTestFileResult;
-    function RunGocciaScriptBytecode(const AFileName: string): TTestFileResult;
-    function RunGocciaScript(const AFileName: string): TTestFileResult;
-    function RunScriptFromFile(const AFileName: string): TAggregatedTestResult;
+    function RunGocciaScriptInterpreted(const AFileName: string;
+      APreloadedSource: TStringList = nil): TTestFileResult;
+    function RunGocciaScriptBytecode(const AFileName: string;
+      APreloadedSource: TStringList = nil): TTestFileResult;
+    function RunGocciaScript(const AFileName: string;
+      APreloadedSource: TStringList = nil): TTestFileResult;
+    function RunScriptFromFile(const AFileName: string;
+      APreloadedSource: TStringList = nil): TAggregatedTestResult;
     function RunScriptsFromFiles(const AFiles: TStringList): TAggregatedTestResult;
     function RunScriptsFromFilesParallel(const AFiles: TStringList; const AJobCount: Integer): TAggregatedTestResult;
     procedure TestWorkerProc(const AFileName: string; const AIndex: Integer;
@@ -222,7 +227,7 @@ end;
 
 function TTestRunnerApp.UsageLine: string;
 begin
-  Result := '<path...> [options]';
+  Result := '[path...|-] [options]';
 end;
 
 procedure TTestRunnerApp.ExecuteWithPaths(const APaths: TStringList);
@@ -231,13 +236,27 @@ var
   I: Integer;
   AggregatedResult: TAggregatedTestResult;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
+  StdinSource: TStringList;
+  UseStdin: Boolean;
 begin
-  if APaths.Count = 0 then
-  begin
-    WriteLn(StdErr, 'Error: No paths specified. Run with --help for usage.');
-    ExitCode := 1;
-    Exit;
-  end;
+  { stdin support — match GocciaScriptLoader and GocciaBenchmarkRunner.
+    Source is read from stdin and tagged as <stdin> when either:
+      * no path arguments are supplied, OR
+      * the sole path argument is "-".
+    Mixing "-" with other paths is rejected so structured stdin input
+    cannot silently be interleaved with on-disk files. }
+  UseStdin := (APaths.Count = 0) or
+              ((APaths.Count = 1) and IsStdinPath(APaths[0]));
+
+  if (not UseStdin) and (APaths.Count > 1) then
+    for I := 0 to APaths.Count - 1 do
+      if IsStdinPath(APaths[I]) then
+      begin
+        WriteLn(StdErr,
+          'Error: stdin supports only as the sole input path.');
+        ExitCode := 1;
+        Exit;
+      end;
 
   { Publish per-test/per-describe deadlines to the testing library
     before any workers spawn. These globals are read-only after this
@@ -248,20 +267,27 @@ begin
   GTestRunnerDescribeTimeoutMs := FDescribeTimeout.ValueOr(0);
 
   Files := TStringList.Create;
+  StdinSource := nil;
   try
-    for I := 0 to APaths.Count - 1 do
+    if UseStdin then
     begin
-      if DirectoryExists(APaths[I]) then
-        Files.AddStrings(FindAllFiles(APaths[I], ScriptExtensions))
-      else if FileExists(APaths[I]) then
-        Files.Add(APaths[I])
-      else
+      StdinSource := ReadSourceFromText(Input);
+      Files.Add(STDIN_FILE_NAME);
+    end
+    else
+      for I := 0 to APaths.Count - 1 do
       begin
-        WriteLn(StdErr, 'Error: Path not found: ', APaths[I]);
-        ExitCode := 1;
-        Exit;
+        if DirectoryExists(APaths[I]) then
+          Files.AddStrings(FindAllFiles(APaths[I], ScriptExtensions))
+        else if FileExists(APaths[I]) then
+          Files.Add(APaths[I])
+        else
+        begin
+          WriteLn(StdErr, 'Error: Path not found: ', APaths[I]);
+          ExitCode := 1;
+          Exit;
+        end;
       end;
-    end;
 
     if not FNoProgress.Present then
     begin
@@ -277,7 +303,10 @@ begin
     begin
       if not FNoProgress.Present then
         WriteLn('[1/1] ', Files[0]);
-      AggregatedResult := RunScriptFromFile(Files[0]);
+      { Stdin is always a single source — the callee takes ownership of
+        StdinSource and frees it like a disk-loaded TStringList. }
+      AggregatedResult := RunScriptFromFile(Files[0], StdinSource);
+      StdinSource := nil;
     end
     else if GetJobCount(Files.Count) > 1 then
       AggregatedResult := RunScriptsFromFilesParallel(Files, GetJobCount(Files.Count))
@@ -305,6 +334,9 @@ begin
     end;
   finally
     Files.Free;
+    { StdinSource is normally consumed by RunScriptFromFile (which frees
+      it). Free here only if an early exit left it dangling. }
+    StdinSource.Free;
   end;
 end;
 
@@ -313,7 +345,8 @@ begin
   Result := [ggTestAssertions];
 end;
 
-function TTestRunnerApp.RunGocciaScriptInterpreted(const AFileName: string): TTestFileResult;
+function TTestRunnerApp.RunGocciaScriptInterpreted(const AFileName: string;
+  APreloadedSource: TStringList): TTestFileResult;
 var
   Source: TStringList;
   ScriptResult, FileResult: TGocciaObjectValue;
@@ -324,16 +357,21 @@ begin
 
   Source := nil;
   try
-    try
-      Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
-    except
-      on E: EStreamError do
-      begin
-        if not GIsWorkerThread then
-          WriteLn('Error loading test file: ', E.Message);
-        MarkLoadError(ScriptResult, AFileName, E.Message);
-        Result := MakeEmptyTestResult(ScriptResult, E.Message);
-        Exit;
+    if Assigned(APreloadedSource) then
+      Source := APreloadedSource
+    else
+    begin
+      try
+        Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+      except
+        on E: EStreamError do
+        begin
+          if not GIsWorkerThread then
+            WriteLn('Error loading test file: ', E.Message);
+          MarkLoadError(ScriptResult, AFileName, E.Message);
+          Result := MakeEmptyTestResult(ScriptResult, E.Message);
+          Exit;
+        end;
       end;
     end;
 
@@ -400,7 +438,8 @@ begin
   end;
 end;
 
-function TTestRunnerApp.RunGocciaScriptBytecode(const AFileName: string): TTestFileResult;
+function TTestRunnerApp.RunGocciaScriptBytecode(const AFileName: string;
+  APreloadedSource: TStringList): TTestFileResult;
 var
   Source: TStringList;
   SourceText: string;
@@ -423,16 +462,21 @@ begin
 
   Source := nil;
   try
-    try
-      Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
-    except
-      on E: EStreamError do
-      begin
-        if not GIsWorkerThread then
-          WriteLn('Error loading test file: ', E.Message);
-        MarkLoadError(ScriptResult, AFileName, E.Message);
-        Result := MakeEmptyTestResult(ScriptResult, E.Message);
-        Exit;
+    if Assigned(APreloadedSource) then
+      Source := APreloadedSource
+    else
+    begin
+      try
+        Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+      except
+        on E: EStreamError do
+        begin
+          if not GIsWorkerThread then
+            WriteLn('Error loading test file: ', E.Message);
+          MarkLoadError(ScriptResult, AFileName, E.Message);
+          Result := MakeEmptyTestResult(ScriptResult, E.Message);
+          Exit;
+        end;
       end;
     end;
 
@@ -578,15 +622,17 @@ begin
   end;
 end;
 
-function TTestRunnerApp.RunGocciaScript(const AFileName: string): TTestFileResult;
+function TTestRunnerApp.RunGocciaScript(const AFileName: string;
+  APreloadedSource: TStringList): TTestFileResult;
 begin
   case EngineOptions.Mode.ValueOr(emInterpreted) of
-    emInterpreted: Result := RunGocciaScriptInterpreted(AFileName);
-    emBytecode:    Result := RunGocciaScriptBytecode(AFileName);
+    emInterpreted: Result := RunGocciaScriptInterpreted(AFileName, APreloadedSource);
+    emBytecode:    Result := RunGocciaScriptBytecode(AFileName, APreloadedSource);
   end;
 end;
 
-function TTestRunnerApp.RunScriptFromFile(const AFileName: string): TAggregatedTestResult;
+function TTestRunnerApp.RunScriptFromFile(const AFileName: string;
+  APreloadedSource: TStringList): TAggregatedTestResult;
 var
   FileResult: TTestFileResult;
   FileFailedTests: TGocciaValue;
@@ -605,7 +651,7 @@ begin
   SetLength(Result.FileResults, 1);
   Result.FileResults[0].FileName := AFileName;
   try
-    FileResult := RunGocciaScript(AFileName);
+    FileResult := RunGocciaScript(AFileName, APreloadedSource);
     Result.TestResult := FileResult.TestResult;
     Result.TotalLexNanoseconds := FileResult.Timing.LexTimeNanoseconds;
     Result.TotalParseNanoseconds := FileResult.Timing.ParseTimeNanoseconds;
