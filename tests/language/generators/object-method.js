@@ -132,6 +132,34 @@ test("object generator method preserves for-of iterator across yielded loop head
   expect(iter.next()).toEqual({ value: undefined, done: true });
 });
 
+test("object generator method clears for-of iterator state when loop head throws", () => {
+  let first = true;
+  const obj = {
+    *values() {
+      for (const items of [[[undefined], ["stale"]], [["fresh"]]]) {
+        try {
+          for (const [value = (() => {
+            if (first) {
+              first = false;
+              throw "boom";
+            }
+            return "default";
+          })()] of items) {
+            yield value;
+          }
+        } catch (error) {
+          yield "caught";
+        }
+      }
+    },
+  };
+
+  const iter = obj.values();
+  expect(iter.next()).toEqual({ value: "caught", done: false });
+  expect(iter.next()).toEqual({ value: "fresh", done: false });
+  expect(iter.next()).toEqual({ value: undefined, done: true });
+});
+
 test("object generator method resumes binary expressions instead of returning the cached left operand", () => {
   const events = [];
   const obj = {

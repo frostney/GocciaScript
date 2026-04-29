@@ -128,6 +128,34 @@ test("object async generator method preserves async iterator across yielded for-
   await expect(iter.next()).resolves.toEqual({ value: undefined, done: true });
 });
 
+test("object async generator method clears for-await iterator state when sync loop head throws", async () => {
+  let first = true;
+  const obj = {
+    async *values() {
+      for await (const items of [[[undefined], ["stale"]], [["fresh"]]]) {
+        try {
+          for await (const [value = (() => {
+            if (first) {
+              first = false;
+              throw "boom";
+            }
+            return "default";
+          })()] of items) {
+            yield value;
+          }
+        } catch (error) {
+          yield "caught";
+        }
+      }
+    },
+  };
+
+  const iter = obj.values();
+  await expect(iter.next()).resolves.toEqual({ value: "caught", done: false });
+  await expect(iter.next()).resolves.toEqual({ value: "fresh", done: false });
+  await expect(iter.next()).resolves.toEqual({ value: undefined, done: true });
+});
+
 test("object async generator method delegates to async iterable", async () => {
   const source = {
     async *values() {
