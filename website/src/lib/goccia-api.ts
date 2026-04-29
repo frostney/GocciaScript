@@ -28,6 +28,8 @@ type GocciaRequestBody = {
   code: string;
   mode?: "interpreted" | "bytecode";
   asi?: boolean;
+  compatVar?: boolean;
+  compatFunction?: boolean;
 };
 
 type EndpointConfig = {
@@ -93,6 +95,22 @@ type Invocation = {
   publicFileName?: string;
   cleanup?: () => Promise<void>;
 };
+
+function runtimeTelemetryProperties(
+  body: GocciaRequestBody,
+  asi: boolean,
+  compatVar: boolean,
+  compatFunction: boolean,
+  codeBytes?: number,
+): Record<string, unknown> {
+  return {
+    mode: body.mode === "bytecode" ? "bytecode" : "interpreted",
+    asi,
+    compatVar,
+    compatFunction,
+    ...(codeBytes === undefined ? {} : { codeBytes }),
+  };
+}
 
 function transportError(
   err: TransportError,
@@ -166,7 +184,12 @@ function resolveBinaryPath(config: EndpointConfig): string {
   return candidates[candidates.length - 1];
 }
 
-function buildEngineArgs(body: GocciaRequestBody, asi: boolean): string[] {
+function buildEngineArgs(
+  body: GocciaRequestBody,
+  asi: boolean,
+  compatVar: boolean,
+  compatFunction: boolean,
+): string[] {
   const args = [
     `--timeout=${TIMEOUT_MS}`,
     `--max-memory=${MAX_MEMORY_BYTES}`,
@@ -175,6 +198,8 @@ function buildEngineArgs(body: GocciaRequestBody, asi: boolean): string[] {
     ...ALLOWED_HOSTS.flatMap((host) => ["--allowed-host", host]),
   ];
   if (asi) args.unshift("--asi");
+  if (compatVar) args.push("--compat-var");
+  if (compatFunction) args.push("--compat-function");
   if (body.mode === "bytecode") args.push("--mode=bytecode");
   return args;
 }
@@ -184,9 +209,11 @@ async function prepareInvocation(
   body: GocciaRequestBody,
   code: string,
   asi: boolean,
+  compatVar: boolean,
+  compatFunction: boolean,
 ): Promise<Invocation> {
   const binary = resolveBinaryPath(config);
-  const engineArgs = buildEngineArgs(body, asi);
+  const engineArgs = buildEngineArgs(body, asi, compatVar, compatFunction);
 
   if (config.kind === "execute") {
     return {
@@ -579,7 +606,16 @@ async function runHandler(
 
   // Default to ASI on: matches the project's standard test/run posture.
   const asi = body.asi !== false;
-  const invocation = await prepareInvocation(config, body, code, asi);
+  const compatVar = body.compatVar === true;
+  const compatFunction = body.compatFunction === true;
+  const invocation = await prepareInvocation(
+    config,
+    body,
+    code,
+    asi,
+    compatVar,
+    compatFunction,
+  );
   const startedAt = Date.now();
 
   return await new Promise<Response>((resolve) => {
@@ -635,8 +671,13 @@ async function runHandler(
         path: config.path,
         properties: {
           elapsedMs: Date.now() - startedAt,
-          mode: body.mode === "bytecode" ? "bytecode" : "interpreted",
-          codeBytes,
+          ...runtimeTelemetryProperties(
+            body,
+            asi,
+            compatVar,
+            compatFunction,
+            codeBytes,
+          ),
         },
       });
       finish(
@@ -706,7 +747,7 @@ async function runHandler(
           stage: "spawn",
           binary: invocation.binary,
           binaryName: basename(invocation.binary),
-          mode: body.mode === "bytecode" ? "bytecode" : "interpreted",
+          ...runtimeTelemetryProperties(body, asi, compatVar, compatFunction),
         },
       });
       captureServerEvent(`${config.eventPrefix}_spawn_failed`, {
@@ -715,7 +756,7 @@ async function runHandler(
         properties: {
           binaryName: basename(invocation.binary),
           message: err.message,
-          mode: body.mode === "bytecode" ? "bytecode" : "interpreted",
+          ...runtimeTelemetryProperties(body, asi, compatVar, compatFunction),
         },
       });
       await cleanup();
@@ -753,9 +794,13 @@ async function runHandler(
           exitCode,
           signal,
           truncated,
-          mode: body.mode === "bytecode" ? "bytecode" : "interpreted",
-          asi,
-          codeBytes,
+          ...runtimeTelemetryProperties(
+            body,
+            asi,
+            compatVar,
+            compatFunction,
+            codeBytes,
+          ),
           stdoutBytes,
           stderrBytes,
           elapsedMs: Date.now() - startedAt,
