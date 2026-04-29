@@ -14,7 +14,8 @@ uses
   Goccia.Application,
   Goccia.Engine,
   Goccia.Engine.Backend,
-  Goccia.Executor;
+  Goccia.Executor,
+  Goccia.ScriptLoader.SourceRegistry;
 
 type
   TGocciaCLIApplication = class(TGocciaApplication)
@@ -22,6 +23,7 @@ type
     FHelp: TGocciaFlagOption;
     FJobs: TGocciaIntegerOption;
     FLog: TGocciaStringOption;
+    FMultifile: TGocciaFlagOption;
     FLogFileHandle: TextFile;
     FLogLock: TRTLCriticalSection;
     FLogFileOpen: Boolean;
@@ -30,6 +32,7 @@ type
     FProfilerOptions: TGocciaProfilerOptions;
     FOwnedOptions: TGocciaOptionBaseList;
     FAllOptions: TGocciaOptionArray;
+    FSourceRegistry: TGocciaSourceRegistry;
     procedure BuildAllOptions;
     procedure InitializeSingletons;
     procedure ShutdownSingletons;
@@ -65,6 +68,31 @@ type
     { Returns the effective job count: --jobs value, or ProcessorCount,
       capped to AFileCount. Returns 1 when parallelism is not desired. }
     function GetJobCount(const AFileCount: Integer): Integer;
+    { True iff --multifile was passed (or set in goccia.json). }
+    function MultifileEnabled: Boolean;
+    { Single canonical source-loader.  All runners and workers should
+      load script source through this method instead of calling
+      CreateUTF8FileTextLines(ReadUTF8FileText(...)) directly.
+      Returns a caller-owned TStringList — registered virtual sections
+      return a fresh clone, unregistered names read from disk. }
+    function SourceRegistry: TGocciaSourceRegistry;
+    { When --multifile is set, walks AFiles, reads each script file,
+      splits on --- separators, and replaces the original entry with
+      its section names.  Sections are registered with SourceRegistry
+      under "<original>[partN].<ext>".  Files without separators and
+      .gbc files pass through unchanged.  Returns a NEW TStringList
+      that the caller owns; AFiles is not mutated. }
+    function ExpandMultifileFiles(
+      const AFiles: TStringList): TStringList;
+    { When --multifile is set and AStdinSource contains separators,
+      splits, registers each section under "<stdin>[partN]", and
+      returns the section name list.  Otherwise registers
+      AStdinSource under STDIN_FILE_NAME and returns a single-entry
+      list.  Either way the registry takes ownership of AStdinSource
+      (or a fresh derivative); the caller must not free it.
+      Caller owns the returned name list. }
+    function SplitStdinMultifile(
+      const AStdinSource: TStringList): TStringList;
     property EngineOptions: TGocciaEngineOptions read FEngineOptions;
     property CoverageOptions: TGocciaCoverageOptions read FCoverageOptions;
     property ProfilerOptions: TGocciaProfilerOptions read FProfilerOptions;
@@ -76,9 +104,11 @@ type
 implementation
 
 uses
+  Generics.Collections,
   Math,
 
   CLI.Parser,
+  TextSemantics,
 
   Goccia.Builtins.Console,
   Goccia.CLI.EngineSetup,
@@ -90,7 +120,9 @@ uses
   Goccia.JSON5,
   Goccia.Modules.Configuration,
   Goccia.Profiler,
+  Goccia.ScriptLoader.Input,
   Goccia.StackLimit,
+  Goccia.TextFiles,
   Goccia.Timeout,
   Goccia.TOML,
   Goccia.Values.ArrayValue,
@@ -294,6 +326,8 @@ begin
   FHelp := nil;
   FJobs := nil;
   FLog := nil;
+  FMultifile := nil;
+  FSourceRegistry := nil;
   FLogFileOpen := False;
 end;
 
@@ -307,6 +341,8 @@ begin
   FHelp.Free;
   FJobs.Free;
   FLog.Free;
+  FMultifile.Free;
+  FSourceRegistry.Free;
   inherited Destroy;
 end;
 
@@ -654,6 +690,137 @@ begin
   Result := GetCurrentDir;
 end;
 
+function TGocciaCLIApplication.MultifileEnabled: Boolean;
+begin
+  Result := Assigned(FMultifile) and FMultifile.Present;
+end;
+
+function TGocciaCLIApplication.SourceRegistry: TGocciaSourceRegistry;
+begin
+  if not Assigned(FSourceRegistry) then
+    FSourceRegistry := TGocciaSourceRegistry.Create;
+  Result := FSourceRegistry;
+end;
+
+function TGocciaCLIApplication.ExpandMultifileFiles(
+  const AFiles: TStringList): TStringList;
+var
+  I, PartIndex: Integer;
+  FileName, Extension, SectionName: string;
+  RawSource: UTF8String;
+  FullSource: TStringList;
+  Sections: TObjectList<TStringList>;
+  Section: TStringList;
+begin
+  Result := TStringList.Create;
+  try
+    if not MultifileEnabled then
+    begin
+      Result.AddStrings(AFiles);
+      Exit;
+    end;
+
+    for I := 0 to AFiles.Count - 1 do
+    begin
+      FileName := AFiles[I];
+      Extension := LowerCase(ExtractFileExt(FileName));
+
+      // .gbc files are bytecode; multifile splitting does not apply.
+      if Extension = EXT_GBC then
+      begin
+        Result.Add(FileName);
+        Continue;
+      end;
+
+      try
+        RawSource := ReadUTF8FileText(FileName);
+      except
+        // Fall through to the runner's own load-error handling.
+        Result.Add(FileName);
+        Continue;
+      end;
+
+      FullSource := CreateUTF8FileTextLines(RawSource);
+      Sections := nil;
+      try
+        Sections := SplitMultifileSource(FullSource);
+
+        if Sections.Count <= 1 then
+        begin
+          Result.Add(FileName);
+          Continue;
+        end;
+
+        // Always extract index 0 — extraction shifts remaining items down.
+        PartIndex := 0;
+        while Sections.Count > 0 do
+        begin
+          Section := Sections.ExtractIndex(0);
+          Inc(PartIndex);
+          SectionName := BuildMultifileSectionName(FileName, PartIndex);
+          SourceRegistry.Register(SectionName, Section);
+          Result.Add(SectionName);
+        end;
+      finally
+        Sections.Free;
+        FullSource.Free;
+      end;
+    end;
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+function TGocciaCLIApplication.SplitStdinMultifile(
+  const AStdinSource: TStringList): TStringList;
+var
+  Sections: TObjectList<TStringList>;
+  Section: TStringList;
+  SectionName: string;
+  PartIndex: Integer;
+begin
+  Result := TStringList.Create;
+  try
+    if not MultifileEnabled then
+    begin
+      SourceRegistry.Register(STDIN_FILE_NAME, AStdinSource);
+      Result.Add(STDIN_FILE_NAME);
+      Exit;
+    end;
+
+    Sections := SplitMultifileSource(AStdinSource);
+    try
+      if Sections.Count <= 1 then
+      begin
+        SourceRegistry.Register(STDIN_FILE_NAME, AStdinSource);
+        Result.Add(STDIN_FILE_NAME);
+        Exit;
+      end;
+
+      // Multiple sections: register each, free the original wrapper
+      // since its contents have been redistributed into sections.
+      // Always extract index 0 — extraction shifts remaining items down.
+      PartIndex := 0;
+      while Sections.Count > 0 do
+      begin
+        Section := Sections.ExtractIndex(0);
+        Inc(PartIndex);
+        SectionName := BuildMultifileSectionName(STDIN_FILE_NAME,
+          PartIndex);
+        SourceRegistry.Register(SectionName, Section);
+        Result.Add(SectionName);
+      end;
+      AStdinSource.Free;
+    finally
+      Sections.Free;
+    end;
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
 procedure TGocciaCLIApplication.Execute;
 var
   Paths: TStringList;
@@ -670,11 +837,17 @@ begin
 
   FLog := TGocciaStringOption.Create('log', 'Write console output to a log file');
 
+  FMultifile := TGocciaFlagOption.Create('multifile',
+    'Split each input (file or stdin) on "---" lines and run each ' +
+    'section as an independent file');
+
   BuildAllOptions;
-  // Append --jobs and --log after BuildAllOptions so they appear in help
-  SetLength(FAllOptions, Length(FAllOptions) + 2);
-  FAllOptions[High(FAllOptions) - 1] := FJobs;
-  FAllOptions[High(FAllOptions)] := FLog;
+  // Append --jobs, --log and --multifile after BuildAllOptions so they
+  // appear in help
+  SetLength(FAllOptions, Length(FAllOptions) + 3);
+  FAllOptions[High(FAllOptions) - 2] := FJobs;
+  FAllOptions[High(FAllOptions) - 1] := FLog;
+  FAllOptions[High(FAllOptions)] := FMultifile;
 
   { Parse CLI first so we know the entry file path. }
   Paths := ParseCommandLine(FAllOptions);

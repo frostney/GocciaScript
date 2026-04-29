@@ -237,7 +237,7 @@ var
   FileResult: TBenchmarkFileResult;
   BenchStart: Int64;
 begin
-  Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+  Source := SourceRegistry.Load(AFileName);
   try
     try
       Engine := CreateEngine(AFileName, Source);
@@ -318,7 +318,7 @@ var
   ScriptResult: TGocciaObjectValue;
   LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd, BenchStart: Int64;
 begin
-  Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+  Source := SourceRegistry.Load(AFileName);
   try
     SourceText := StringListToLFText(Source);
     if ppJSX in TGocciaEngine.DefaultPreprocessors then
@@ -709,17 +709,43 @@ procedure TBenchmarkRunnerApp.RunBenchmarksFromStdin(
   const AReports: array of TReportSpec;
   const AMode: TGocciaExecutionMode; const AShowProgress: Boolean);
 var
-  Source: TStringList;
+  Source, SectionSource, Names: TStringList;
   Reporter: TBenchmarkReporter;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
-  J: Integer;
+  I, J: Integer;
 begin
   Source := ReadSourceFromText(Input);
   Reporter := TBenchmarkReporter.Create;
   try
     BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
-    CollectBenchmarkSource(Source, STDIN_FILE_NAME, Reporter,
-      AMode, AShowProgress);
+    if MultifileEnabled then
+    begin
+      // Ownership of Source transfers to SplitStdinMultifile.
+      Names := SplitStdinMultifile(Source);
+      try
+        for I := 0 to Names.Count - 1 do
+        begin
+          SectionSource := SourceRegistry.Load(Names[I]);
+          try
+            CollectBenchmarkSource(SectionSource, Names[I], Reporter,
+              AMode, AShowProgress);
+          finally
+            SectionSource.Free;
+          end;
+        end;
+      finally
+        Names.Free;
+      end;
+    end
+    else
+    begin
+      try
+        CollectBenchmarkSource(Source, STDIN_FILE_NAME, Reporter,
+          AMode, AShowProgress);
+      finally
+        Source.Free;
+      end;
+    end;
     Reporter.MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
     for J := 0 to Length(AReports) - 1 do
     begin
@@ -734,7 +760,6 @@ begin
       ExitCode := 1;
   finally
     Reporter.Free;
-    Source.Free;
   end;
 end;
 
@@ -742,7 +767,7 @@ procedure TBenchmarkRunnerApp.RunBenchmarks(const APaths: TStringList;
   const AReports: array of TReportSpec;
   const AMode: TGocciaExecutionMode; const AShowProgress: Boolean);
 var
-  Files: TStringList;
+  Files, RawFiles: TStringList;
   I, J, P, JobCount: Integer;
   DiscoveredFiles: TStringList;
   Reporter: TBenchmarkReporter;
@@ -751,30 +776,36 @@ var
   WallClockStart: Int64;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
 begin
-  Files := TStringList.Create;
+  Files := nil;
   Reporter := TBenchmarkReporter.Create;
   try
-    for P := 0 to APaths.Count - 1 do
-    begin
-      if DirectoryExists(APaths[P]) then
+    RawFiles := TStringList.Create;
+    try
+      for P := 0 to APaths.Count - 1 do
       begin
-        DiscoveredFiles := FindAllFiles(APaths[P], ScriptExtensions);
-        try
-          for I := 0 to DiscoveredFiles.Count - 1 do
-            if not IsBenchmarkHelperFile(DiscoveredFiles[I]) then
-              Files.Add(DiscoveredFiles[I]);
-        finally
-          DiscoveredFiles.Free;
+        if DirectoryExists(APaths[P]) then
+        begin
+          DiscoveredFiles := FindAllFiles(APaths[P], ScriptExtensions);
+          try
+            for I := 0 to DiscoveredFiles.Count - 1 do
+              if not IsBenchmarkHelperFile(DiscoveredFiles[I]) then
+                RawFiles.Add(DiscoveredFiles[I]);
+          finally
+            DiscoveredFiles.Free;
+          end;
+        end
+        else if FileExists(APaths[P]) then
+          RawFiles.Add(APaths[P])
+        else
+        begin
+          WriteLn(StdErr, 'Error: Path not found: ', APaths[P]);
+          ExitCode := 1;
+          Exit;
         end;
-      end
-      else if FileExists(APaths[P]) then
-        Files.Add(APaths[P])
-      else
-      begin
-        WriteLn(StdErr, 'Error: Path not found: ', APaths[P]);
-        ExitCode := 1;
-        Exit;
       end;
+      Files := ExpandMultifileFiles(RawFiles);
+    finally
+      RawFiles.Free;
     end;
 
     JobCount := GetJobCount(Files.Count);

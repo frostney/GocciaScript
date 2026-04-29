@@ -76,6 +76,9 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaScriptLoader example.js --log=console.log # Write console output to a log file (tee to stdout + file)
 ./build/GocciaScriptLoader example.js --stack-size=5000 # Execute with custom call stack depth limit
 ./build/GocciaScriptLoader example.js --stack-size=0 --mode=bytecode # Execute with no call stack depth limit (bytecode trampoline)
+./build/GocciaScriptLoader example.js --multifile # Split file on '---' separators and run each section as its own input
+./build/GocciaScriptLoader example.js --multifile --jobs=4 # Multifile with parallel section dispatch
+printf '1;\n---\n2;\n' | ./build/GocciaScriptLoader --multifile # Split stdin on '---' (sections named <stdin>[part1], <stdin>[part2])
 ./build/GocciaREPL # Start interactive REPL (interpreted)
 ./build/GocciaREPL --mode=bytecode # Start the REPL via bytecode VM
 ./build/GocciaREPL --mode=bytecode --timing # Bytecode REPL with per-line timing
@@ -100,6 +103,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaTestRunner tests -j 1 # Force sequential execution (no threading)
 ./build/GocciaTestRunner tests --asi --unsafe-ffi # Run all tests including FFI tests
 ./build/GocciaTestRunner tests --log=test-console.log # Capture console output to a log file
+./build/GocciaTestRunner suites.js --multifile # Split a single test file on '---' and run each section as its own file
 ./build/GocciaBenchmarkRunner benchmarks/ # Run all benchmarks
 ./build/GocciaBenchmarkRunner benchmarks --import-map=imports.json # Run benchmarks with an explicit import map
 ./build/GocciaBenchmarkRunner benchmarks/fibonacci.js # Run a specific benchmark
@@ -109,6 +113,7 @@ printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./bu
 ./build/GocciaBenchmarkRunner benchmarks --no-progress # Suppress progress (CI)
 ./build/GocciaBenchmarkRunner benchmarks --mode=bytecode # Benchmarks via the Goccia bytecode VM
 ./build/GocciaBenchmarkRunner benchmarks --jobs=4 # Run benchmarks with 4 parallel workers
+./build/GocciaBenchmarkRunner suites.js --multifile # Split a single benchmark file on '---' and run each section as its own file
 ./build/GocciaBundler example.js # Compile to .gbc (no execution)
 ./build/GocciaBundler example.js --output=out.gbc # Custom output path
 ./build/GocciaBundler src/ # Compile all scripts in a directory
@@ -117,6 +122,7 @@ printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./bu
 printf "const x = 2 + 2; x;" | ./build/GocciaBundler --output=out.gbc # Compile stdin to .gbc
 ./build/GocciaBundler src/ --jobs=4 # Compile with 4 parallel workers
 ./build/GocciaBundler example.js --asi # Compile with automatic semicolon insertion
+./build/GocciaBundler example.js --multifile --output=dist/ # Split on '---' and emit one .gbc per section into dist/
 ```
 
 ### Compile and run (common workflows)

@@ -978,4 +978,261 @@ console.log("Loader: HTTPS fetch smoke with --allowed-host...");
   if (json.files?.[0]?.result !== 204) throw new Error(`HTTPS fetch status should be 204, got ${json.files?.[0]?.result}`);
 }
 
+// ============================================================================
+// --multifile (all runners)
+// ============================================================================
+
+console.log("Loader: --multifile splits a single file into N section results...");
+{
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "multifile-loader.js");
+    writeFileSync(
+      file,
+      'console.log("section A:", 1 + 1);\n' +
+      "---\n" +
+      'console.log("section B:", 2 + 2);\n' +
+      "---\n" +
+      'console.log("section C:", 3 + 3);\n',
+    );
+    const proc = Bun.spawnSync([LOADER, "--multifile", "--output=json", file], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`Loader --multifile should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const json = JSON.parse(proc.stdout.toString());
+    if (!Array.isArray(json.files) || json.files.length !== 3)
+      throw new Error(`Loader --multifile should produce 3 file entries, got ${json.files?.length}`);
+    for (let i = 0; i < 3; i++) {
+      const expected = `${file.replace(/\.js$/, "")}[part${i + 1}].js`;
+      if (json.files[i].fileName !== expected)
+        throw new Error(`Loader --multifile file ${i} fileName mismatch: expected ${expected}, got ${json.files[i].fileName}`);
+      if (json.files[i].ok !== true)
+        throw new Error(`Loader --multifile section ${i + 1} should succeed`);
+    }
+    if (!json.stdout.includes("section A: 2") || !json.stdout.includes("section C: 6"))
+      throw new Error(`Loader --multifile stdout missing section output: ${json.stdout}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Loader: --multifile on stdin produces <stdin>[partN] entries...");
+{
+  const proc = Bun.spawnSync([LOADER, "--multifile", "--output=json"], {
+    stdin: new TextEncoder().encode(
+      "console.log('a');\n---\nconsole.log('b');\n---\nconsole.log('c');\n",
+    ),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Loader --multifile stdin should exit 0, got ${proc.exitCode}`);
+  const json = JSON.parse(proc.stdout.toString());
+  if (json.files?.length !== 3) throw new Error(`Loader --multifile stdin should produce 3 entries, got ${json.files?.length}`);
+  for (let i = 0; i < 3; i++) {
+    const expected = `<stdin>[part${i + 1}]`;
+    if (json.files[i].fileName !== expected)
+      throw new Error(`Loader --multifile stdin file ${i} fileName mismatch: expected ${expected}, got ${json.files[i].fileName}`);
+  }
+}
+
+console.log("Loader: --multifile with no separator runs file as a single section...");
+{
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "no-sep.js");
+    writeFileSync(file, "console.log('only section');\n");
+    const proc = Bun.spawnSync([LOADER, "--multifile", "--output=json", file], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`Loader --multifile no-sep should exit 0, got ${proc.exitCode}`);
+    const json = JSON.parse(proc.stdout.toString());
+    if (json.files?.length !== 1) throw new Error(`Loader --multifile no-sep should produce 1 entry, got ${json.files?.length}`);
+    if (json.files[0].fileName !== file)
+      throw new Error(`Loader --multifile no-sep should keep original file name, got ${json.files[0].fileName}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Loader: --multifile drops leading/trailing separators...");
+{
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "edge.js");
+    writeFileSync(file, "---\nconsole.log('a');\n---\nconsole.log('b');\n---\n");
+    const proc = Bun.spawnSync([LOADER, "--multifile", "--output=json", file], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`Loader --multifile edge should exit 0, got ${proc.exitCode}`);
+    const json = JSON.parse(proc.stdout.toString());
+    if (json.files?.length !== 2) throw new Error(`Loader --multifile edge should produce 2 entries, got ${json.files?.length}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Loader: --multifile dispatches sections in parallel with --jobs...");
+{
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "parallel.js");
+    writeFileSync(file, "1;\n---\n2;\n---\n3;\n");
+    const proc = Bun.spawnSync([LOADER, "--multifile", "--jobs=3", file], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`Loader --multifile --jobs should exit 0, got ${proc.exitCode}`);
+    const out = proc.stdout.toString();
+    if (!/Running 3 files with 3 workers/.test(out))
+      throw new Error(`Loader --multifile --jobs should report 3-worker dispatch, got: ${out}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Loader: --source-map with --multifile is rejected...");
+{
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "sm.js");
+    const sm = join(tmp, "sm.map");
+    writeFileSync(file, "1;\n---\n2;\n");
+    const proc = Bun.spawnSync([LOADER, "--multifile", `--source-map=${sm}`, file], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode === 0) throw new Error("Loader --source-map with --multifile should fail");
+    const message = proc.stdout.toString() + proc.stderr.toString();
+    if (!message.includes("--multifile") || !message.includes("source-map"))
+      throw new Error(`Loader --source-map with --multifile error message should mention both flags, got: ${message}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("TestRunner: --multifile splits a single test file into N file results...");
+{
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "multifile-tests.js");
+    writeFileSync(
+      file,
+      'describe("section A", () => { test("a", () => { expect(1).toBe(1); }); });\n' +
+      "---\n" +
+      'describe("section B", () => { test("b", () => { expect(2).toBe(2); }); });\n' +
+      "---\n" +
+      'describe("section C", () => { test("c", () => { expect(3).toBe(3); }); });\n',
+    );
+    const out = join(tmp, "results.json");
+    const proc = Bun.spawnSync(
+      [TESTRUNNER, "--multifile", "--no-progress", "--no-results", `--output=${out}`, file],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0) throw new Error(`TestRunner --multifile should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const json = JSON.parse(readFileSync(out, "utf-8"));
+    if (json.totalFiles !== 3) throw new Error(`TestRunner --multifile totalFiles should be 3, got ${json.totalFiles}`);
+    if (json.totalTests !== 3) throw new Error(`TestRunner --multifile totalTests should be 3, got ${json.totalTests}`);
+    if (json.passed !== 3) throw new Error(`TestRunner --multifile passed should be 3, got ${json.passed}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Bundler: --multifile compiles each section as a separate .gbc...");
+{
+  const tmp = makeTmp();
+  const out = join(tmp, "out");
+  try {
+    mkdirSync(out, { recursive: true });
+    const file = join(tmp, "bundle.js");
+    writeFileSync(file, "const a = 1;\nconsole.log(a);\n---\nconsole.log(2 + 2);\n");
+    const proc = Bun.spawnSync([BUNDLER, "--multifile", `--output=${out}/`, file], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`Bundler --multifile should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const part1 = join(out, "bundle[part1].gbc");
+    const part2 = join(out, "bundle[part2].gbc");
+    if (!existsSync(part1)) throw new Error(`Bundler --multifile should emit ${part1}`);
+    if (!existsSync(part2)) throw new Error(`Bundler --multifile should emit ${part2}`);
+    // Each .gbc should run independently in the script loader.
+    const r1 = Bun.spawnSync([LOADER, part1], { stdout: "pipe" });
+    if (r1.exitCode !== 0 || !r1.stdout.toString().includes("1"))
+      throw new Error(`Bundler --multifile part1 .gbc should run successfully`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Bundler: --multifile rejects --output=<file>...");
+{
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "rejected.js");
+    writeFileSync(file, "1;\n---\n2;\n");
+    const single = join(tmp, "single.gbc");
+    const proc = Bun.spawnSync([BUNDLER, "--multifile", `--output=${single}`, file], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode === 0) throw new Error("Bundler --multifile with --output=<file> should fail");
+    const message = proc.stdout.toString() + proc.stderr.toString();
+    if (!message.includes("--multifile") || !message.includes("--output"))
+      throw new Error(`Bundler --multifile --output=<file> message should mention both flags, got: ${message}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("BenchmarkRunner: --multifile produces multiple file entries...");
+{
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "bench.js");
+    writeFileSync(
+      file,
+      'suite("A", () => { bench("a", { run: () => 1 + 1, iterations: 10, warmup: 0, repeats: 1 }); });\n' +
+      "---\n" +
+      'suite("B", () => { bench("b", { run: () => 2 + 2, iterations: 10, warmup: 0, repeats: 1 }); });\n',
+    );
+    const proc = Bun.spawnSync([BENCHRUNNER, "--multifile", "--no-progress", "--format=json", file], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`BenchmarkRunner --multifile should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const json = JSON.parse(proc.stdout.toString());
+    if (!Array.isArray(json.files) || json.files.length !== 2)
+      throw new Error(`BenchmarkRunner --multifile should produce 2 file entries, got ${json.files?.length}`);
+    if (!json.files.some((f: any) => f.fileName?.includes("[part1]")))
+      throw new Error(`BenchmarkRunner --multifile should have a [part1] entry`);
+    if (!json.files.some((f: any) => f.fileName?.includes("[part2]")))
+      throw new Error(`BenchmarkRunner --multifile should have a [part2] entry`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Loader: goccia.json multifile=true works without --multifile flag...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ multifile: true }));
+    const file = join(tmp, "config-driven.js");
+    writeFileSync(file, "1;\n---\n2;\n");
+    const proc = Bun.spawnSync([LOADER, "--output=json", file], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`Loader config-driven multifile should exit 0, got ${proc.exitCode}`);
+    const json = JSON.parse(proc.stdout.toString());
+    if (json.files?.length !== 2)
+      throw new Error(`Loader config-driven multifile should produce 2 entries, got ${json.files?.length}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("\nAll test-cli-apps.ts tests passed.");

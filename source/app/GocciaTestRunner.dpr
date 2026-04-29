@@ -227,7 +227,7 @@ end;
 
 procedure TTestRunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
-  Files: TStringList;
+  Files, RawFiles: TStringList;
   I: Integer;
   AggregatedResult: TAggregatedTestResult;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
@@ -249,18 +249,25 @@ begin
 
   Files := TStringList.Create;
   try
-    for I := 0 to APaths.Count - 1 do
-    begin
-      if DirectoryExists(APaths[I]) then
-        Files.AddStrings(FindAllFiles(APaths[I], ScriptExtensions))
-      else if FileExists(APaths[I]) then
-        Files.Add(APaths[I])
-      else
+    RawFiles := TStringList.Create;
+    try
+      for I := 0 to APaths.Count - 1 do
       begin
-        WriteLn(StdErr, 'Error: Path not found: ', APaths[I]);
-        ExitCode := 1;
-        Exit;
+        if DirectoryExists(APaths[I]) then
+          RawFiles.AddStrings(FindAllFiles(APaths[I], ScriptExtensions))
+        else if FileExists(APaths[I]) then
+          RawFiles.Add(APaths[I])
+        else
+        begin
+          WriteLn(StdErr, 'Error: Path not found: ', APaths[I]);
+          ExitCode := 1;
+          Exit;
+        end;
       end;
+      Files.Free;
+      Files := ExpandMultifileFiles(RawFiles);
+    finally
+      RawFiles.Free;
     end;
 
     if not FNoProgress.Present then
@@ -325,7 +332,7 @@ begin
   Source := nil;
   try
     try
-      Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+      Source := SourceRegistry.Load(AFileName);
     except
       on E: EStreamError do
       begin
@@ -424,7 +431,7 @@ begin
   Source := nil;
   try
     try
-      Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+      Source := SourceRegistry.Load(AFileName);
     except
       on E: EStreamError do
       begin
