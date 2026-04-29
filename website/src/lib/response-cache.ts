@@ -51,7 +51,12 @@ export function isResponseCacheEnabled(): boolean {
 /** Inputs that materially change the runner response. Anything that does
  *  NOT affect runner output (client IP, request headers, distinct id, etc.)
  *  must stay out of this set, or two semantically-equivalent requests would
- *  miss the cache. */
+ *  miss the cache.
+ *
+ *  `version` is the *resolved* manifest tag, not the raw `body.version` —
+ *  callers should pass the result of `resolveBinaryPath` so that an omitted
+ *  `version` (default-resolved) and an explicit `version` naming the same
+ *  tag share a cache entry. */
 export type ResponseCacheKeyInput = {
   kind: "execute" | "test";
   code: string;
@@ -59,6 +64,7 @@ export type ResponseCacheKeyInput = {
   asi: boolean;
   compatVar: boolean;
   compatFunction: boolean;
+  version: string;
 };
 
 export function responseCacheKey(input: ResponseCacheKeyInput): string {
@@ -74,6 +80,8 @@ export function responseCacheKey(input: ResponseCacheKeyInput): string {
   hash.update(input.asi ? "1" : "0");
   hash.update(input.compatVar ? "1" : "0");
   hash.update(input.compatFunction ? "1" : "0");
+  hash.update("\x00");
+  hash.update(input.version);
   hash.update("\x00");
   hash.update(input.code);
   // Prefix with kind so debuggers / log scrapers can tell execute and test

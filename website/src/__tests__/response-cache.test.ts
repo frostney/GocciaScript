@@ -34,6 +34,7 @@ const baseInput = (
   asi: true,
   compatVar: false,
   compatFunction: false,
+  version: "0.7.0",
   ...overrides,
 });
 
@@ -65,6 +66,17 @@ describe("responseCacheKey — stable hashing", () => {
     );
   });
 
+  test("differentiates keys when the engine version changes", () => {
+    // Same source against v0.7.0 and nightly may produce different output as
+    // the engine evolves; cache must isolate per resolved tag.
+    expect(responseCacheKey(baseInput({ version: "0.7.0" }))).not.toBe(
+      responseCacheKey(baseInput({ version: "nightly" })),
+    );
+    expect(responseCacheKey(baseInput({ version: "0.6.1" }))).not.toBe(
+      responseCacheKey(baseInput({ version: "0.7.0" })),
+    );
+  });
+
   test("differentiates keys when each boolean flag flips", () => {
     const baseline = responseCacheKey(baseInput());
     expect(baseline).not.toBe(responseCacheKey(baseInput({ asi: false })));
@@ -80,6 +92,15 @@ describe("responseCacheKey — stable hashing", () => {
     // boundary leak would surface as a collision here.
     const a = responseCacheKey(baseInput({ code: "a", asi: true }));
     const b = responseCacheKey(baseInput({ code: "atrue", asi: false }));
+    expect(a).not.toBe(b);
+  });
+
+  test("never collapses a version-string boundary into the code field", () => {
+    // Without separators, `version:"ab", code:"cd"` and `version:"abc",
+    // code:"d"` would both hash the bytes "abcd" at the version/code
+    // boundary. The \x00 between fields prevents that collision.
+    const a = responseCacheKey(baseInput({ version: "ab", code: "cd" }));
+    const b = responseCacheKey(baseInput({ version: "abc", code: "d" }));
     expect(a).not.toBe(b);
   });
 });

@@ -35,9 +35,32 @@ function pickExampleId(requested: string | null): string {
   return EXAMPLES[0].id;
 }
 
-/** Normalize a release tag (`0.6.1` or `v0.6.1`) to the displayed form `v0.6.1`. */
-function normalizeTag(tag: string): string {
+/** Normalize a release tag (`0.6.1` or `v0.6.1`) to the displayed form `v0.6.1`.
+ *  `nightly` and any non-semver tag pass through unchanged. */
+function displayVersion(tag: string): string {
+  if (tag === "nightly") return tag;
   return tag.startsWith("v") ? tag : `v${tag}`;
+}
+
+/** Strip the leading `v` so semver tags compare equal regardless of whether
+ *  the source used the prefix. `"nightly"` and other non-semver tags pass
+ *  through unchanged. */
+function canonicalVersion(tag: string): string {
+  return tag.startsWith("v") ? tag.slice(1) : tag;
+}
+
+/** Find the manifest tag that matches `wanted` ignoring `v`-prefix differences.
+ *  Used when restoring a share-link selection: old links encoded `v0.7.0`,
+ *  but the manifest now stores the raw form. */
+function matchVendoredVersion(
+  versions: string[],
+  wanted: string,
+): string | null {
+  const target = canonicalVersion(wanted);
+  for (const v of versions) {
+    if (canonicalVersion(v) === target) return v;
+  }
+  return null;
 }
 
 type SourceTestCase = {
@@ -376,12 +399,20 @@ function failedTestNames(data: {
 }
 
 type PlaygroundProps = {
-  /** Recent stable release tags from GitHub, newest first. The component
-   *  appends `nightly` after these. */
-  stableTags?: string[];
+  /** Engine release tags vendored at build time, sourced from
+   *  `vendor/manifest.json`. Order matches what the dropdown should
+   *  display: newest stable picks first, `nightly` last. */
+  versions?: string[];
+  /** Tag the API picks when the request omits `version` — used to
+   *  initialize the dropdown when no share-link or saved selection
+   *  is present. */
+  defaultVersion?: string;
 };
 
-export function Playground({ stableTags = [] }: PlaygroundProps) {
+export function Playground({
+  versions: vendoredVersions = [],
+  defaultVersion,
+}: PlaygroundProps) {
   const params = useSearchParams();
 
   // Stable per-render IDs so `<label htmlFor>` / `aria-labelledby` reliably
@@ -393,9 +424,12 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
   const versionId = useId();
   const editorId = useId();
 
-  // Build the version dropdown from the live tag list, falling back to a
-  // single `nightly` entry if the GitHub fetch returned nothing.
-  const versions: string[] = [...stableTags.map(normalizeTag), "nightly"];
+  // The dropdown shows whatever `vendor/manifest.json` advertised, in the
+  // server's order. Fall back to a single `nightly` entry when the manifest
+  // is empty (local dev with no `prebuild`); the API's dev fallback chain
+  // resolves it to `../build/<binary>`.
+  const versions: string[] =
+    vendoredVersions.length > 0 ? vendoredVersions : ["nightly"];
 
   const [exId, setExId] = useState(() =>
     pickExampleId(params?.get("example") ?? null),
@@ -406,7 +440,9 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
   const [output, setOutput] = useState<OutputLine[]>([]);
   const [running, setRunning] = useState(false);
   const [backend, setBackend] = useState<Backend>("interpreted");
-  const [version, setVersion] = useState<string>(versions[0]);
+  const [version, setVersion] = useState<string>(
+    () => defaultVersion ?? versions[0],
+  );
   const [asi, setAsi] = useState(true);
   const [compatVar, setCompatVar] = useState(false);
   const [compatFunction, setCompatFunction] = useState(false);
@@ -474,8 +510,9 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
         if (typeof payload.compatFunction === "boolean") {
           setCompatFunction(payload.compatFunction);
         }
-        if (payload.version && versions.includes(payload.version)) {
-          setVersion(payload.version);
+        if (payload.version) {
+          const matched = matchVendoredVersion(versions, payload.version);
+          if (matched) setVersion(matched);
         }
         hydratedRef.current = true;
         return;
@@ -539,6 +576,7 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
         asi,
         compatVar,
         compatFunction,
+        version,
       });
       if (!payload.ok) {
         setOutput([
@@ -1004,10 +1042,10 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
           </label>
         </fieldset>
 
-        {/* Version selector is **display-only**: the API runs against the
-            single bundled `GocciaScriptLoader` binary regardless of choice.
-            The selection is reflected in the run banner and round-tripped in
-            share links so users can mark which release they tested against. */}
+        {/* The dropdown enumerates whatever `vendor/manifest.json` advertised
+            at build time. The selection rides along to `/api/execute` and
+            `/api/test` so the server dispatches to the matching binary; the
+            display label adds a `v` prefix for semver tags only. */}
         <label className="pg-toolbar-label ml-3" htmlFor={versionId}>
           Version
         </label>
@@ -1019,7 +1057,11 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
         >
           {versions.map((v, i) => (
             <option key={v} value={v}>
-              {v === "nightly" ? "nightly" : i === 0 ? `${v} · latest` : v}
+              {v === "nightly"
+                ? "nightly"
+                : i === 0
+                  ? `${displayVersion(v)} · latest`
+                  : displayVersion(v)}
             </option>
           ))}
         </select>

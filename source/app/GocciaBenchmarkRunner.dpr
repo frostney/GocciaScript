@@ -949,12 +949,22 @@ begin
 
   if APaths.Count = 0 then
     RunBenchmarksFromStdin(Reports, Mode, ShowProgress)
+  else if (APaths.Count = 1) and IsStdinPath(APaths[0]) then
+    RunBenchmarksFromStdin(Reports, Mode, ShowProgress)
   else
   begin
-    if (APaths.Count = 1) and IsStdinPath(APaths[0]) then
-      RunBenchmarksFromStdin(Reports, Mode, ShowProgress)
-    else
-      RunBenchmarks(APaths, Reports, Mode, ShowProgress);
+    { Reject mixing "-" with file paths so stdin cannot silently be
+      interleaved with on-disk files. Matches the rule enforced by
+      GocciaScriptLoader and GocciaTestRunner. }
+    for I := 0 to APaths.Count - 1 do
+      if IsStdinPath(APaths[I]) then
+      begin
+        WriteLn(StdErr,
+          'Error: stdin supports only as the sole input path.');
+        ExitCode := 1;
+        Exit;
+      end;
+    RunBenchmarks(APaths, Reports, Mode, ShowProgress);
   end;
 end;
 
