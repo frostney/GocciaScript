@@ -20,6 +20,7 @@ import {
   type OutputLine,
 } from "@/lib/examples";
 import { formatError } from "@/lib/format-error";
+import { validateGocciaToolInput } from "@/lib/goccia-tool-schema";
 import { loadCode, saveCode } from "@/lib/playground-storage";
 import { decodeShare, encodeShare } from "@/lib/share";
 
@@ -532,18 +533,27 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
     setOutput([{ kind: "meta", text: runnerBanner }]);
 
     try {
+      const payload = validateGocciaToolInput({
+        code,
+        mode: backend,
+        asi,
+        compatVar,
+        compatFunction,
+      });
+      if (!payload.ok) {
+        setOutput([
+          { kind: "meta", text: runnerBanner },
+          { kind: "err", text: payload.error.message },
+        ]);
+        return;
+      }
+
       const res = await fetch(
         runner === "test" ? "/api/test" : "/api/execute",
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            code,
-            mode: backend,
-            asi,
-            compatVar,
-            compatFunction,
-          }),
+          body: JSON.stringify(payload.value),
         },
       );
       if (res.status === 429) {
