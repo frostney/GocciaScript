@@ -343,7 +343,6 @@ When running with `--output=json`, GocciaScript wraps every execution result in 
       "stderr": "",
       "output": ["hello"],
       "error": null,
-      "result": 42,
       "timing": {
         "lex_ns": 500000,
         "parse_ns": 1200000,
@@ -351,7 +350,8 @@ When running with `--output=json`, GocciaScript wraps every execution result in 
         "exec_ns": 3100000,
         "total_ns": 4800000
       },
-      "memory": { "gc": { "liveBytes": 2048 }, "heap": { "endAllocatedBytes": 32768 } }
+      "memory": { "gc": { "liveBytes": 2048 }, "heap": { "endAllocatedBytes": 32768 } },
+      "result": 42
     }
   ]
 }
@@ -402,7 +402,6 @@ When running with `--output=json`, GocciaScript wraps every execution result in 
         "column": 10,
         "fileName": "script.js"
       },
-      "result": null,
       "timing": {
         "lex_ns": 500000,
         "parse_ns": 1200000,
@@ -410,7 +409,8 @@ When running with `--output=json`, GocciaScript wraps every execution result in 
         "exec_ns": 100000,
         "total_ns": 1800000
       },
-      "memory": { "gc": { "liveBytes": 2048 }, "heap": { "endAllocatedBytes": 32768 } }
+      "memory": { "gc": { "liveBytes": 2048 }, "heap": { "endAllocatedBytes": 32768 } },
+      "result": null
     }
   ]
 }
@@ -532,9 +532,9 @@ When execution exceeds the `--timeout` limit, the JSON envelope reports a `Timeo
         "column": null,
         "fileName": null
       },
-      "result": null,
       "timing": { "lex_ns": 100000, "parse_ns": 200000, "compile_ns": 0, "exec_ns": 100000000, "total_ns": 100300000 },
-      "memory": { "gc": { "liveBytes": 8192 }, "heap": { "endAllocatedBytes": 32768 } }
+      "memory": { "gc": { "liveBytes": 8192 }, "heap": { "endAllocatedBytes": 32768 } },
+      "result": null
     }
   ]
 }
