@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   gocciaToolInputZodSchema,
   MAX_GOCCIA_CODE_BYTES,
+  MAX_GOCCIA_TOOL_REQUEST_BYTES,
   utf8ByteLength,
   validateGocciaToolInput,
 } from "@/lib/goccia-tool-schema";
@@ -37,6 +38,28 @@ describe("goccia tool schema validation", () => {
       error: {
         code: "CODE_TOO_LARGE",
         message: `code exceeds ${MAX_GOCCIA_CODE_BYTES} bytes`,
+      },
+    });
+  });
+
+  test("derives the JSON wire cap from worst-case escaped code", () => {
+    const escapedAtLimit = `{"code":"${"\\u0061".repeat(MAX_GOCCIA_CODE_BYTES)}","mode":"interpreted","asi":true,"compatVar":false,"compatFunction":false}`;
+    const escapedOverLimit = `{"code":"${"\\u0061".repeat(MAX_GOCCIA_CODE_BYTES + 1)}","mode":"interpreted","asi":true,"compatVar":false,"compatFunction":false}`;
+
+    expect(utf8ByteLength(escapedAtLimit)).toBeLessThanOrEqual(
+      MAX_GOCCIA_TOOL_REQUEST_BYTES,
+    );
+    expect(utf8ByteLength(escapedOverLimit)).toBeGreaterThan(
+      MAX_GOCCIA_TOOL_REQUEST_BYTES,
+    );
+    expect(validateGocciaToolInput(JSON.parse(escapedAtLimit))).toEqual({
+      ok: true,
+      value: {
+        code: "a".repeat(MAX_GOCCIA_CODE_BYTES),
+        mode: "interpreted",
+        asi: true,
+        compatVar: false,
+        compatFunction: false,
       },
     });
   });

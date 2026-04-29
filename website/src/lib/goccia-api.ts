@@ -6,7 +6,12 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path, { basename } from "node:path";
 import { NextResponse } from "next/server";
-import { MAX_GOCCIA_CODE_BYTES } from "@/lib/goccia-tool-schema";
+import {
+  type GocciaToolInput,
+  MAX_GOCCIA_CODE_BYTES,
+  MAX_GOCCIA_TOOL_REQUEST_BYTES,
+  validateGocciaToolInput,
+} from "@/lib/goccia-tool-schema";
 import {
   captureServerEvent,
   captureServerException,
@@ -15,11 +20,7 @@ import { clientIp, rateLimit } from "@/lib/rate-limit";
 
 const TIMEOUT_MS = 5_000;
 const MAX_OUTPUT_BYTES = 256 * 1024;
-// Cap the entire JSON envelope before parsing, but leave enough headroom for
-// valid JSON escaping (`\n`, `\uXXXX`, quotes, etc.) to expand the wire payload
-// beyond the parsed source bytes. The authoritative source limit remains the
-// UTF-8 byte check on `body.code` below.
-const MAX_BODY_BYTES = MAX_GOCCIA_CODE_BYTES + 64 * 1024;
+const MAX_BODY_BYTES = MAX_GOCCIA_TOOL_REQUEST_BYTES;
 const MAX_MEMORY_BYTES = 32 * 1024 * 1024;
 const MAX_INSTRUCTIONS = 50_000_000;
 const STACK_SIZE = 2_000;
@@ -66,6 +67,7 @@ type TransportError = {
   message: string;
   code:
     | "RATE_LIMIT"
+    | "INVALID_INPUT"
     | "INVALID_JSON"
     | "MISSING_CODE"
     | "CODE_TOO_LARGE"
@@ -565,9 +567,9 @@ async function runHandler(
     );
   }
 
-  let body: GocciaRequestBody;
+  let rawPayload: GocciaToolInput;
   try {
-    body = JSON.parse(rawBody) as GocciaRequestBody;
+    rawPayload = JSON.parse(rawBody) as GocciaToolInput;
   } catch {
     captureServerEvent(`${config.eventPrefix}_invalid_json`, {
       distinctId,
@@ -579,14 +581,32 @@ async function runHandler(
     );
   }
 
-  const code = typeof body.code === "string" ? body.code : "";
-  if (!code) {
+  const payload = validateGocciaToolInput(rawPayload);
+  if (!payload.ok) {
+    const status = payload.error.code === "CODE_TOO_LARGE" ? 413 : 400;
+    if (payload.error.code === "CODE_TOO_LARGE") {
+      captureServerEvent(`${config.eventPrefix}_code_too_large`, {
+        distinctId,
+        path: config.path,
+        properties: { source: "schema" },
+      });
+    }
     return transportError(
-      { message: "code is required", code: "MISSING_CODE" },
-      { status: 400 },
+      {
+        message: payload.error.message,
+        code:
+          payload.error.code === "CODE_TOO_LARGE"
+            ? "CODE_TOO_LARGE"
+            : payload.error.message === "code is required"
+              ? "MISSING_CODE"
+              : "INVALID_INPUT",
+      },
+      { status },
     );
   }
 
+  const body = payload.value;
+  const code = body.code;
   // UTF-16 code-unit count (`code.length`) under-counts for non-BMP source;
   // measure the actual bytes that will hit stdin or the temp test file.
   const codeBytes = Buffer.byteLength(code, "utf8");
@@ -605,10 +625,7 @@ async function runHandler(
     );
   }
 
-  // Default to ASI on: matches the project's standard test/run posture.
-  const asi = body.asi !== false;
-  const compatVar = body.compatVar === true;
-  const compatFunction = body.compatFunction === true;
+  const { asi, compatVar, compatFunction } = body;
   const invocation = await prepareInvocation(
     config,
     body,

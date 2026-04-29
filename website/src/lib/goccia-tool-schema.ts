@@ -1,6 +1,20 @@
 import { z } from "zod";
 
 export const MAX_GOCCIA_CODE_BYTES = 8 * 1024;
+const MAX_JSON_ESCAPE_BYTES_PER_CODE_BYTE = "\\uFFFF".length;
+const REQUEST_ENVELOPE_BYTES = new TextEncoder().encode(
+  JSON.stringify({
+    code: "",
+    mode: "interpreted",
+    asi: true,
+    compatVar: false,
+    compatFunction: false,
+  }),
+).byteLength;
+
+export const MAX_GOCCIA_TOOL_REQUEST_BYTES =
+  REQUEST_ENVELOPE_BYTES +
+  MAX_GOCCIA_CODE_BYTES * MAX_JSON_ESCAPE_BYTES_PER_CODE_BYTE;
 
 export type GocciaToolPayload = {
   code: string;
