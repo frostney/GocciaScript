@@ -26,10 +26,12 @@ uses
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.Generic,
   Goccia.Values.ObjectValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.Values.ToObject;
 
 function GetIteratorFromValue(const AValue: TGocciaValue): TGocciaIteratorValue;
 var
+  IteratorHost: TGocciaObjectValue;
   IteratorMethod, IteratorObj, NextMethod: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   WasSourceRooted, WasMethodRooted, WasIteratorRooted: Boolean;
@@ -57,49 +59,59 @@ begin
     Exit;
   end;
 
+  IteratorHost := nil;
   if AValue is TGocciaObjectValue then
+    IteratorHost := TGocciaObjectValue(AValue)
+  else if not (AValue is TGocciaNullLiteralValue) and
+          not (AValue is TGocciaUndefinedLiteralValue) then
+    IteratorHost := ToObject(AValue);
+
+  if Assigned(IteratorHost) then
   begin
-    IteratorMethod := TGocciaObjectValue(AValue).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
-    if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) then
-    begin
-      if not IteratorMethod.IsCallable then
-        ThrowTypeError(Format(SErrorValueNotFunction, ['[Symbol.iterator]']), SSuggestIteratorProtocol);
-
-      WasSourceRooted := AddRootIfNeeded(AValue);
-      WasMethodRooted := AddRootIfNeeded(IteratorMethod);
-      try
-        CallArgs := TGocciaArgumentsCollection.Create;
-        try
-          IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, AValue);
-        finally
-          CallArgs.Free;
-        end;
-      finally
-        RemoveRootIfNeeded(IteratorMethod, WasMethodRooted);
-        RemoveRootIfNeeded(AValue, WasSourceRooted);
-      end;
-
-      if IteratorObj is TGocciaIteratorValue then
+    WasSourceRooted := AddRootIfNeeded(IteratorHost);
+    try
+      IteratorMethod := IteratorHost.GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+      if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) then
       begin
-        Result := TGocciaIteratorValue(IteratorObj);
-        Exit;
-      end;
+        if not IteratorMethod.IsCallable then
+          ThrowTypeError(Format(SErrorValueNotFunction, ['[Symbol.iterator]']), SSuggestIteratorProtocol);
 
-      if not (IteratorObj is TGocciaObjectValue) then
-        ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
+        WasMethodRooted := AddRootIfNeeded(IteratorMethod);
+        try
+          CallArgs := TGocciaArgumentsCollection.Create;
+          try
+            IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, IteratorHost);
+          finally
+            CallArgs.Free;
+          end;
+        finally
+          RemoveRootIfNeeded(IteratorMethod, WasMethodRooted);
+        end;
 
-      WasIteratorRooted := AddRootIfNeeded(IteratorObj);
-      try
-        NextMethod := TGocciaObjectValue(IteratorObj).GetProperty(PROP_NEXT);
-        if not Assigned(NextMethod) or (NextMethod is TGocciaUndefinedLiteralValue) or
-           not NextMethod.IsCallable then
+        if IteratorObj is TGocciaIteratorValue then
+        begin
+          Result := TGocciaIteratorValue(IteratorObj);
+          Exit;
+        end;
+
+        if not (IteratorObj is TGocciaObjectValue) then
           ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
 
-        Result := TGocciaGenericIteratorValue.Create(IteratorObj);
-      finally
-        RemoveRootIfNeeded(IteratorObj, WasIteratorRooted);
+        WasIteratorRooted := AddRootIfNeeded(IteratorObj);
+        try
+          NextMethod := TGocciaObjectValue(IteratorObj).GetProperty(PROP_NEXT);
+          if not Assigned(NextMethod) or (NextMethod is TGocciaUndefinedLiteralValue) or
+             not NextMethod.IsCallable then
+            ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
+
+          Result := TGocciaGenericIteratorValue.Create(IteratorObj);
+        finally
+          RemoveRootIfNeeded(IteratorObj, WasIteratorRooted);
+        end;
+        Exit;
       end;
-      Exit;
+    finally
+      RemoveRootIfNeeded(IteratorHost, WasSourceRooted);
     end;
   end;
 

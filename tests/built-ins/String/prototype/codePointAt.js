@@ -18,4 +18,9 @@ describe("String.prototype.codePointAt", () => {
   test("returns undefined for empty string", () => {
     expect("".codePointAt(0)).toBe(undefined);
   });
+
+  test("falls back to raw byte values for invalid UTF-8 positions", () => {
+    expect("é".codePointAt(1)).toBe(0xa9);
+    expect("\uD800".codePointAt(0)).toBe(0xed);
+  });
 });

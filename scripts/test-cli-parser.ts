@@ -10,8 +10,12 @@ import { $ } from "bun";
 const ext = process.platform === "win32" ? ".exe" : "";
 const LOADER = `./build/GocciaScriptLoader${ext}`;
 
-function normalizeLineEndings(output: string): string {
-  return output.replace(/\r\n/g, "\n");
+function normalizeLineEndings(output: unknown): string {
+  if (Array.isArray(output)) {
+    const text = output.join("\n");
+    return text.length > 0 ? `${text}\n` : "";
+  }
+  return String(output).replace(/\r\n/g, "\n");
 }
 
 function runLoaderJson(source: string, args: string[] = []) {

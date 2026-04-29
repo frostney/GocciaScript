@@ -24,8 +24,10 @@ uses
   BaseMap,
   OrderedStringMap,
   StringBuffer,
+  TextSemantics,
 
-  Goccia.SourceMap;
+  Goccia.SourceMap,
+  Goccia.TextFiles;
 
 type
   TFileCovPair = TBaseMap<string, TGocciaFileCoverage>.TKeyValuePair;
@@ -131,9 +133,8 @@ begin
   if not Assigned(FileCov) then Exit;
   if not FileExists(AFilePath) then Exit;
 
-  SourceLines := TStringList.Create;
+  SourceLines := CreateUTF8FileTextLines(ReadUTF8FileText(AFilePath));
   try
-    SourceLines.LoadFromFile(AFilePath);
     if SourceLines.Count = 0 then Exit;
 
     // Build per-line executable flags using the shared scanner
@@ -198,11 +199,11 @@ begin
 
       // Load source to identify executable lines for zero-hit entries
       HasSource := False;
-      SourceLines := TStringList.Create;
+      SourceLines := nil;
       try
         if FileExists(FileCov.FileName) then
         begin
-          SourceLines.LoadFromFile(FileCov.FileName);
+          SourceLines := CreateUTF8FileTextLines(ReadUTF8FileText(FileCov.FileName));
           if SourceLines.Count > 0 then
           begin
             SetLength(ExecutableFlags, SourceLines.Count);
@@ -366,11 +367,11 @@ begin
 
     // Load source to identify executable lines for zero-hit entries
     HasSource := False;
-    SourceLines := TStringList.Create;
+    SourceLines := nil;
     try
       if FileExists(FileCov.FileName) then
       begin
-        SourceLines.LoadFromFile(FileCov.FileName);
+        SourceLines := CreateUTF8FileTextLines(ReadUTF8FileText(FileCov.FileName));
         if SourceLines.Count > 0 then
         begin
           SetLength(ExecutableFlags, SourceLines.Count);

@@ -41,6 +41,39 @@ describe('String.prototype.replaceAll', () => {
     expect('aba'.replaceAll(/a/g, '$$')).toBe('$b$');
   });
 
+  test('replaceAll expands named regex replacement tokens', () => {
+    const re = new RegExp('(?<year>\\d{4})-(?<month>\\d{2})-(?<day>\\d{2})', 'g');
+    expect('2026-04-07'.replaceAll(re, '$<day>/$<month>/$<year>')).toBe(
+      '07/04/2026'
+    );
+  });
+
+  test('replaceAll expands string replacement tokens', () => {
+    expect('aXbXc'.replaceAll('X', '$$')).toBe('a$b$c');
+    expect('aXbXc'.replaceAll('X', '$&')).toBe('aXbXc');
+    expect('aXbXc'.replaceAll('X', '$`')).toBe('aabaXbc');
+    expect('aXbXc'.replaceAll('X', "$'")).toBe('abXcbcc');
+    expect('aXbXc'.replaceAll('X', '$1')).toBe('a$1b$1c');
+  });
+
+  test('replaceAll handles empty string search values', () => {
+    expect('abc'.replaceAll('', '-')).toBe('-a-b-c-');
+    expect('é'.replaceAll('', '-')).toBe('-é-');
+  });
+
+  test('replaceAll calls function replacer for empty string search values', () => {
+    const offsets = [];
+    const result = 'ab'.replaceAll('', (match, offset, input) => {
+      offsets.push(offset);
+      expect(match).toBe('');
+      expect(input).toBe('ab');
+      return String(offset);
+    });
+
+    expect(result).toBe('0a1b2');
+    expect(offsets).toEqual([0, 1, 2]);
+  });
+
   test('replaceAll dispatches through Symbol.replace', () => {
     const searchValue = {
       [Symbol.replace](input, replacement) {

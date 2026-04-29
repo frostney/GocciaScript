@@ -71,6 +71,8 @@ type
 implementation
 
 uses
+  TextSemantics,
+
   Goccia.AST.Expressions,
   Goccia.AST.Statements,
   Goccia.Constants.PropertyNames,
@@ -84,7 +86,6 @@ uses
   Goccia.Lexer,
   Goccia.Parser,
   Goccia.SourceMap,
-  Goccia.TextFiles,
   Goccia.TOML,
   Goccia.TSV,
   Goccia.Values.ArrayValue,

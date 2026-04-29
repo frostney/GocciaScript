@@ -28,6 +28,7 @@ type
     FWellKnownDispose: TGocciaSymbolValue;
     FWellKnownAsyncDispose: TGocciaSymbolValue;
     FWellKnownUnscopables: TGocciaSymbolValue;
+    FWellKnownCustomMatcher: TGocciaSymbolValue;
   private
     FDescription: string;
     FHasDescription: Boolean;
@@ -56,6 +57,7 @@ type
     class function WellKnownDispose: TGocciaSymbolValue;
     class function WellKnownAsyncDispose: TGocciaSymbolValue;
     class function WellKnownUnscopables: TGocciaSymbolValue;
+    class function WellKnownCustomMatcher: TGocciaSymbolValue;
 
     function TypeName: string; override;
     function TypeOf: string; override;
@@ -405,6 +407,18 @@ begin
       TGarbageCollector.Instance.PinObject(FWellKnownUnscopables);
   end;
   Result := FWellKnownUnscopables;
+end;
+
+class function TGocciaSymbolValue.WellKnownCustomMatcher: TGocciaSymbolValue;
+begin
+  if not Assigned(FWellKnownCustomMatcher) then
+  begin
+    Assert(not GIsWorkerThread, 'WellKnownCustomMatcher: must be initialised on main thread');
+    FWellKnownCustomMatcher := TGocciaSymbolValue.Create('Symbol.customMatcher');
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FWellKnownCustomMatcher);
+  end;
+  Result := FWellKnownCustomMatcher;
 end;
 
 constructor TGocciaSymbolValue.Create(const ADescription: string);

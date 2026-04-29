@@ -18,6 +18,7 @@ uses
   Goccia.Scope.BindingMap,
   Goccia.Values.ClassValue,
   Goccia.Values.HoleValue,
+  Goccia.Values.IteratorValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -61,6 +62,7 @@ function EvaluateTemplateWithInterpolation(const ATemplateWithInterpolationExpre
 function EvaluateTaggedTemplate(const ATaggedTemplateExpression: TGocciaTaggedTemplateExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateTemplateExpression(const AExpressionText: string; const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer): TGocciaValue;
 function EvaluateAwait(const AAwaitExpression: TGocciaAwaitExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateYield(const AYieldExpression: TGocciaYieldExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function AwaitValue(const AValue: TGocciaValue): TGocciaValue;
 function EvaluateUsingDeclaration(const AUsingDeclaration: TGocciaUsingDeclaration; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateForOf(const AForOfStatement: TGocciaForOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -110,6 +112,7 @@ uses
   Goccia.Evaluator.Bitwise,
   Goccia.Evaluator.Comparison,
   Goccia.Evaluator.Decorators,
+  Goccia.Evaluator.PatternMatching,
   Goccia.Evaluator.TypeOperations,
   Goccia.FetchManager,
   Goccia.GarbageCollector,
@@ -118,6 +121,7 @@ uses
   Goccia.Lexer,
   Goccia.MicrotaskQueue,
   Goccia.Parser,
+  Goccia.Runtime.GeneratorContinuation,
   Goccia.StackLimit,
   Goccia.Timeout,
   Goccia.Token,
@@ -130,8 +134,8 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
+  Goccia.Values.GeneratorValue,
   Goccia.Values.IteratorSupport,
-  Goccia.Values.IteratorValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -507,9 +511,24 @@ begin
     Exit;
   end;
 
-  // For all other operators, evaluate both operands
-  Left := EvaluateExpression(ABinaryExpression.Left, AContext);
-  Right := EvaluateExpression(ABinaryExpression.Right, AContext);
+  // For all other operators, evaluate both operands.  Generators can suspend
+  // while evaluating the right operand; keep the left value so resuming does
+  // not replay left-side side effects.
+  if not Assigned(CurrentGeneratorContinuation) or
+     not CurrentGeneratorContinuation.TakeExpressionValue(ABinaryExpression, Left) then
+    Left := EvaluateExpression(ABinaryExpression.Left, AContext);
+  try
+    Right := EvaluateExpression(ABinaryExpression.Right, AContext);
+    if Assigned(CurrentGeneratorContinuation) then
+      CurrentGeneratorContinuation.ClearExpressionValue(ABinaryExpression);
+  except
+    on E: EGocciaGeneratorYield do
+    begin
+      if Assigned(CurrentGeneratorContinuation) then
+        CurrentGeneratorContinuation.SaveExpressionValue(ABinaryExpression, Left);
+      raise;
+    end;
+  end;
 
   case ABinaryExpression.Operator of
     gttPlus:
@@ -1305,6 +1324,11 @@ begin
   Result := AwaitValue(EvaluateExpression(AAwaitExpression.Operand, AContext));
 end;
 
+function EvaluateYield(const AYieldExpression: TGocciaYieldExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+begin
+  Result := EvaluateGeneratorYield(AYieldExpression, AContext);
+end;
+
 // ES2026 §14.7.5.6 ForIn/OfBodyEvaluation(lhs, stmt, iteratorRecord, iterationKind, lhsKind)
 function EvaluateForOf(const AForOfStatement: TGocciaForOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
@@ -1316,6 +1340,7 @@ var
   IterScope: TGocciaScope;
   IterContext: TGocciaEvaluationContext;
   DeclarationType: TGocciaDeclarationType;
+  MatchContext, MatchBaseContext: TGocciaEvaluationContext;
 begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
@@ -1369,7 +1394,25 @@ begin
       else
         IterScope.DefineLexicalBinding(AForOfStatement.BindingName, CurrentValue, DeclarationType);
 
-      CF := EvaluateStatement(AForOfStatement.Body, IterContext);
+      if Assigned(AForOfStatement.MatchPattern) then
+      begin
+        MatchBaseContext := IterContext;
+        if not TryEvaluateMatchPatternInContext(CurrentValue,
+           AForOfStatement.MatchPattern, IterContext, MatchContext) then
+        begin
+          IterResult := Iterator.AdvanceNext;
+          Continue;
+        end;
+        IterContext := MatchContext;
+      end;
+
+      try
+        CF := EvaluateStatement(AForOfStatement.Body, IterContext);
+      finally
+        if Assigned(AForOfStatement.MatchPattern) and
+           (IterContext.Scope <> IterScope) then
+          ReleaseMatchContext(IterContext, MatchBaseContext);
+      end;
       if CF.Kind = cfkBreak then Break;
       if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
       // cfkContinue: skip remaining body, advance to next iteration
@@ -1393,6 +1436,7 @@ var
   IterContext: TGocciaEvaluationContext;
   DeclarationType: TGocciaDeclarationType;
   EmptyArgs: TGocciaArgumentsCollection;
+  MatchContext, MatchBaseContext: TGocciaEvaluationContext;
 begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
@@ -1462,7 +1506,22 @@ begin
           else
             IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
 
-          CF := EvaluateStatement(AForAwaitOfStatement.Body, IterContext);
+          if Assigned(AForAwaitOfStatement.MatchPattern) then
+          begin
+            MatchBaseContext := IterContext;
+            if not TryEvaluateMatchPatternInContext(CurrentValue,
+               AForAwaitOfStatement.MatchPattern, IterContext, MatchContext) then
+              Continue;
+            IterContext := MatchContext;
+          end;
+
+          try
+            CF := EvaluateStatement(AForAwaitOfStatement.Body, IterContext);
+          finally
+            if Assigned(AForAwaitOfStatement.MatchPattern) and
+               (IterContext.Scope <> IterScope) then
+              ReleaseMatchContext(IterContext, MatchBaseContext);
+          end;
           if CF.Kind = cfkBreak then Break;
           if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
         end;
@@ -1510,7 +1569,25 @@ begin
         else
           IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
 
-        CF := EvaluateStatement(AForAwaitOfStatement.Body, IterContext);
+        if Assigned(AForAwaitOfStatement.MatchPattern) then
+        begin
+          MatchBaseContext := IterContext;
+          if not TryEvaluateMatchPatternInContext(CurrentValue,
+             AForAwaitOfStatement.MatchPattern, IterContext, MatchContext) then
+          begin
+            GenericNextResult := Iterator.AdvanceNext;
+            Continue;
+          end;
+          IterContext := MatchContext;
+        end;
+
+        try
+          CF := EvaluateStatement(AForAwaitOfStatement.Body, IterContext);
+        finally
+          if Assigned(AForAwaitOfStatement.MatchPattern) and
+             (IterContext.Scope <> IterScope) then
+            ReleaseMatchContext(IterContext, MatchBaseContext);
+        end;
         if CF.Kind = cfkBreak then Break;
         if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
 
@@ -1566,7 +1643,11 @@ begin
   else
     ClosureScope := AContext.Scope.CreateChild;
 
-  if AMethodExpression.IsAsync then
+  if AMethodExpression.IsGenerator and AMethodExpression.IsAsync then
+    Result := TGocciaAsyncGeneratorFunctionValue.Create(AMethodExpression.Parameters, Statements, ClosureScope)
+  else if AMethodExpression.IsGenerator then
+    Result := TGocciaGeneratorFunctionValue.Create(AMethodExpression.Parameters, Statements, ClosureScope)
+  else if AMethodExpression.IsAsync then
     Result := TGocciaAsyncFunctionValue.Create(AMethodExpression.Parameters, Statements, ClosureScope)
   else
     Result := TGocciaFunctionValue.Create(AMethodExpression.Parameters, Statements, ClosureScope);
@@ -1848,9 +1929,17 @@ end;
 function EvaluateIf(const AIfStatement: TGocciaIfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
   ConditionResult: Boolean;
+  BodyContext: TGocciaEvaluationContext;
+  PatternHandled: Boolean;
 begin
-  ConditionResult := EvaluateExpression(AIfStatement.Condition, AContext)
-    .ToBooleanLiteral.Value;
+  ConditionResult := EvaluateConditionWithPatternBindings(AIfStatement.Condition,
+    AContext, BodyContext, PatternHandled);
+  if not PatternHandled then
+  begin
+    BodyContext := AContext;
+    ConditionResult := EvaluateExpression(AIfStatement.Condition, AContext)
+      .ToBooleanLiteral.Value;
+  end;
   if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
   begin
     if ConditionResult then
@@ -1861,7 +1950,14 @@ begin
         AContext.CurrentFilePath, AIfStatement.Line, AIfStatement.Column, 1);
   end;
   if ConditionResult then
-    Result := EvaluateStatement(AIfStatement.Consequent, AContext)
+  begin
+    try
+      Result := EvaluateStatement(AIfStatement.Consequent, BodyContext);
+    finally
+      if PatternHandled then
+        ReleaseMatchContext(BodyContext, AContext);
+    end;
+  end
   else if Assigned(AIfStatement.Alternate) then
     Result := EvaluateStatement(AIfStatement.Alternate, AContext)
   else
@@ -1871,7 +1967,7 @@ end;
 function ExecuteCatchBlock(const ATryStatement: TGocciaTryStatement; const AErrorValue: TGocciaValue; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
   CatchScope: TGocciaScope;
-  CatchContext: TGocciaEvaluationContext;
+  CatchContext, MatchContext: TGocciaEvaluationContext;
 begin
   if ATryStatement.CatchParam <> '' then
   begin
@@ -1880,7 +1976,19 @@ begin
       CatchScope.DefineLexicalBinding(ATryStatement.CatchParam, AErrorValue, dtParameter);
       CatchContext := AContext;
       CatchContext.Scope := CatchScope;
-      Result := EvaluateStatements(ATryStatement.CatchBlock.Nodes, CatchContext);
+      if Assigned(ATryStatement.CatchPattern) then
+      begin
+        if not TryEvaluateMatchPatternInContext(AErrorValue,
+           ATryStatement.CatchPattern, CatchContext, MatchContext) then
+          raise TGocciaThrowValue.Create(AErrorValue);
+        try
+          Result := EvaluateStatements(ATryStatement.CatchBlock.Nodes, MatchContext);
+        finally
+          ReleaseMatchContext(MatchContext, CatchContext);
+        end;
+      end
+      else
+        Result := EvaluateStatements(ATryStatement.CatchBlock.Nodes, CatchContext);
     finally
       CatchScope.Free;
     end;
@@ -1909,16 +2017,27 @@ function EvaluateTry(const ATryStatement: TGocciaTryStatement; const AContext: T
 var
   ThrownValue: TGocciaValue;
   HasUnhandledThrow: Boolean;
+  HasGeneratorReturn: Boolean;
+  GeneratorReturnValue: TGocciaValue;
   FinallyCF: TGocciaControlFlow;
 begin
   HasUnhandledThrow := False;
+  HasGeneratorReturn := False;
   ThrownValue := nil;
+  GeneratorReturnValue := nil;
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
   // Phase 1: Execute try block, capturing throws
   try
     Result := EvaluateStatements(ATryStatement.Block.Nodes, AContext);
   except
+    on E: EGocciaGeneratorYield do
+      raise;
+    on E: EGocciaGeneratorReturn do
+    begin
+      HasGeneratorReturn := True;
+      GeneratorReturnValue := E.Value;
+    end;
     on E: TGocciaThrowValue do
     begin
       if Assigned(ATryStatement.CatchBlock) then
@@ -1926,6 +2045,11 @@ begin
         try
           Result := ExecuteCatchBlock(ATryStatement, E.Value, AContext);
         except
+          on E2: EGocciaGeneratorReturn do
+          begin
+            HasGeneratorReturn := True;
+            GeneratorReturnValue := E2.Value;
+          end;
           on E2: TGocciaThrowValue do
           begin
             HasUnhandledThrow := True;
@@ -1950,6 +2074,11 @@ begin
         try
           Result := ExecuteCatchBlock(ATryStatement, PascalExceptionToErrorObject(E), AContext);
         except
+          on E2: EGocciaGeneratorReturn do
+          begin
+            HasGeneratorReturn := True;
+            GeneratorReturnValue := E2.Value;
+          end;
           on E2: TGocciaThrowValue do
           begin
             HasUnhandledThrow := True;
@@ -1970,6 +2099,8 @@ begin
   begin
     if HasUnhandledThrow and Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.AddTempRoot(ThrownValue);
+    if HasGeneratorReturn and Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AddTempRoot(GeneratorReturnValue);
     try
       FinallyCF := EvaluateStatements(ATryStatement.FinallyBlock.Nodes, AContext);
       // Per JS semantics: finally's control flow overrides try/catch result AND pending throw
@@ -1982,8 +2113,13 @@ begin
     finally
       if HasUnhandledThrow and Assigned(TGarbageCollector.Instance) then
         TGarbageCollector.Instance.RemoveTempRoot(ThrownValue);
+      if HasGeneratorReturn and Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.RemoveTempRoot(GeneratorReturnValue);
     end;
   end;
+
+  if HasGeneratorReturn then
+    raise EGocciaGeneratorReturn.Create(GeneratorReturnValue);
 
   // Phase 3: Re-raise unhandled throw (if not overridden by finally)
   if HasUnhandledThrow then
@@ -1996,7 +2132,11 @@ var
 begin
   Statements := CopyStatementList(TGocciaBlockStatement(AClassMethod.Body).Nodes);
 
-  if AClassMethod.IsAsync then
+  if AClassMethod.IsGenerator and AClassMethod.IsAsync then
+    Result := TGocciaAsyncGeneratorMethodValue.Create(AClassMethod.Parameters, Statements, AContext.Scope.CreateChild, AClassMethod.Name, ASuperClass)
+  else if AClassMethod.IsGenerator then
+    Result := TGocciaGeneratorMethodValue.Create(AClassMethod.Parameters, Statements, AContext.Scope.CreateChild, AClassMethod.Name, ASuperClass)
+  else if AClassMethod.IsAsync then
     Result := TGocciaAsyncMethodValue.Create(AClassMethod.Parameters, Statements, AContext.Scope.CreateChild, AClassMethod.Name, ASuperClass)
   else
     Result := TGocciaMethodValue.Create(AClassMethod.Parameters, Statements, AContext.Scope.CreateChild, AClassMethod.Name, ASuperClass);

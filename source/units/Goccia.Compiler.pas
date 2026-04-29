@@ -52,6 +52,7 @@ uses
   Goccia.Bytecode,
   Goccia.Bytecode.Debug,
   Goccia.Compiler.Expressions,
+  Goccia.Compiler.PatternMatching,
   Goccia.Compiler.Statements;
 
 { TGocciaCompiler }
@@ -180,6 +181,15 @@ begin
     DoCompileExpression(TGocciaAwaitExpression(AExpr).Operand, ADest);
     EmitInstruction(Ctx, EncodeABC(OP_AWAIT, ADest, ADest, 0));
   end
+  else if AExpr is TGocciaYieldExpression then
+    Goccia.Compiler.Expressions.CompileYield(Ctx,
+      TGocciaYieldExpression(AExpr), ADest)
+  else if AExpr is TGocciaIsExpression then
+    Goccia.Compiler.PatternMatching.CompileIsExpression(Ctx,
+      TGocciaIsExpression(AExpr), ADest)
+  else if AExpr is TGocciaMatchExpression then
+    Goccia.Compiler.PatternMatching.CompileMatchExpression(Ctx,
+      TGocciaMatchExpression(AExpr), ADest)
   else if AExpr is TGocciaHoleExpression then
     EmitInstruction(Ctx, EncodeABC(OP_LOAD_HOLE, ADest, 0, 0))
   else

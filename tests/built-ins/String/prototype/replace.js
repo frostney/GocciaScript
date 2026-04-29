@@ -55,6 +55,23 @@ describe('String.prototype.replace', () => {
     expect('foo'.replace(/(f)/, '$12')).toBe('f2oo');
   });
 
+  test('replace expands string replacement tokens', () => {
+    expect('abc'.replace('b', '[$&]')).toBe('a[b]c');
+    expect('abc'.replace('b', '$$')).toBe('a$c');
+    expect('abc'.replace('b', '$`')).toBe('aac');
+    expect('abc'.replace('b', "$'")).toBe('acc');
+    expect('abc'.replace('b', '$1')).toBe('a$1c');
+  });
+
+  test('replace calls function replacer for empty string search values', () => {
+    expect('abc'.replace('', (match, offset, input) => {
+      expect(match).toBe('');
+      expect(offset).toBe(0);
+      expect(input).toBe('abc');
+      return '-';
+    })).toBe('-abc');
+  });
+
   test('replace preserves original text around zero-width global matches', () => {
     expect('ab'.replace(/(?:)/g, '-')).toBe('-a-b-');
   });

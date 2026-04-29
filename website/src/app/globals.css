@@ -527,7 +527,7 @@ p {
 
 /* ---------- hero ---------- */
 .hero {
-  padding: clamp(3rem, 8vw, 7rem) 0 clamp(2rem, 5vw, 4rem);
+  padding: 4rem 0 clamp(2rem, 5vw, 4rem);
   position: relative;
 }
 .hero-grid {
@@ -565,7 +565,7 @@ p {
 }
 
 .hero h1 {
-  margin-top: 1.25rem;
+  margin-top: 0;
   font-size: clamp(3rem, 7.5vw, 6rem);
   line-height: 0.98;
   letter-spacing: -0.025em;
@@ -1110,7 +1110,14 @@ p {
   flex-direction: column;
   gap: 0.75rem;
   margin-bottom: 2.5rem;
+  width: 100%;
   max-width: 60ch;
+}
+@media (min-width: 768px) {
+  .container > .section-head,
+  .container > .mt-12 > .section-head {
+    max-width: 80vw;
+  }
 }
 /* Brand-mark shape inside any section-head heading — `Goccia<em>Script</em>`
    (italic + accent), mirroring the nav `.brand em` and OG image
@@ -1131,6 +1138,74 @@ p {
   color: var(--ink-2);
   font-size: 1.05rem;
   margin: 0;
+}
+
+.info-term {
+  position: relative;
+  display: inline-block;
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 0.18em;
+  cursor: help;
+  outline: 0;
+}
+a.info-term {
+  cursor: pointer;
+}
+.info-term-button {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+}
+.info-term:hover,
+.info-term:focus-visible {
+  color: var(--accent-2);
+  text-decoration-style: solid;
+}
+.info-tooltip {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  display: block;
+  width: max-content;
+  max-width: min(360px, 82vw);
+  padding: 0.75rem 0.9rem;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  font-family: var(--body);
+  font-size: 0.86rem;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--ink);
+  text-align: left;
+  white-space: normal;
+  pointer-events: none;
+  opacity: 0;
+  transition:
+    opacity 0.15s,
+    transform 0.15s;
+  z-index: 10;
+}
+.info-tooltip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: var(--rule);
+}
+.info-term:hover .info-tooltip,
+.info-term:focus-visible .info-tooltip,
+.info-term:focus-within .info-tooltip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
 
 .feature-grid {
@@ -1180,6 +1255,12 @@ p {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
+}
+.compat-note {
+  margin: 1rem 0 0;
+  color: var(--ink-2);
+  font-size: 0.92rem;
+  line-height: 1.5;
 }
 .excluded-pill {
   font-family: var(--mono);
@@ -1467,7 +1548,6 @@ p {
   background: var(--paper-2);
   border: 1px solid var(--rule-soft);
   padding: 0.08em 0.35em;
-  border-radius: 5px;
   font-size: 0.85em;
   color: var(--espresso);
 }
@@ -1747,7 +1827,6 @@ p {
   background: var(--console-bg);
   box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.06);
 }
-
 
 /* Shared "console output" panel reused across the playground,
    sandbox preview, hero runnable card, and Compiler Pipeline. Lines
@@ -2044,16 +2123,19 @@ p {
   padding: 0.9rem 1.2rem;
   background: var(--paper-3);
   border-bottom: 1px solid var(--rule-soft);
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 1rem;
-  flex-wrap: wrap;
 }
 .sb-demo-head h4 {
   font-family: var(--display);
   font-size: 1.25rem;
   font-weight: 400;
+  margin-bottom: 0.25rem;
+}
+.sb-demo-head .pg-run {
+  margin-left: 0;
 }
 .sb-demo-body {
   display: grid;
@@ -2065,11 +2147,15 @@ p {
     grid-template-columns: 1fr 1fr;
   }
 }
-.sb-demo-body > div + div {
+.sb-demo-body > .sb-field + .sb-field,
+.sb-demo-body > .sb-field + .sb-resizer + .sb-field,
+.sb-demo-body > .sb-resizer + .sb-field {
   border-top: 1px solid var(--rule-soft);
 }
 @media (min-width: 900px) {
-  .sb-demo-body > div + div {
+  .sb-demo-body > .sb-field + .sb-field,
+  .sb-demo-body > .sb-field + .sb-resizer + .sb-field,
+  .sb-demo-body > .sb-resizer + .sb-field {
     border-top: 0;
     border-left: 1px solid var(--rule-soft);
   }
@@ -2077,6 +2163,7 @@ p {
 .sb-field {
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 .sb-field-label {
   padding: 0.5rem 0.9rem;
@@ -2290,6 +2377,8 @@ p {
   color: var(--paper);
   border-color: var(--accent);
   padding: 0.32rem 0.7rem;
+  justify-content: center;
+  min-width: 4.1rem;
 }
 .hero-action.primary:hover {
   filter: brightness(1.06);
@@ -2383,7 +2472,8 @@ p {
   padding: 0.65rem 1.25rem;
   font-size: 0.78rem;
   /* 5 lines × 1.65 line-height × 0.78rem ≈ 6.45rem of text + 1.3rem padding */
-  min-height: 7.75rem;
+  height: 7.75rem;
+  flex: 0 0 7.75rem;
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
@@ -2502,7 +2592,43 @@ p {
 }
 @media (min-width: 1100px) {
   .sb-demo-body.sb-demo-body-3col {
-    grid-template-columns: 1.3fr 0.9fr 1fr;
+    grid-template-columns:
+      minmax(16rem, var(--sb-col-1, 1.3fr)) 7px
+      minmax(14rem, var(--sb-col-2, 0.9fr)) 7px
+      minmax(16rem, var(--sb-col-3, 1fr));
+  }
+  .sb-demo-body.sb-demo-body-3col > .sb-field + .sb-field,
+  .sb-demo-body.sb-demo-body-3col > .sb-field + .sb-resizer + .sb-field,
+  .sb-demo-body.sb-demo-body-3col > .sb-resizer + .sb-field {
+    border-left: 0;
+  }
+}
+.sb-resizer {
+  display: none;
+}
+@media (min-width: 1100px) {
+  .sb-resizer {
+    appearance: none;
+    display: block;
+    width: 7px;
+    min-width: 7px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-left: 1px solid var(--rule-soft);
+    border-right: 1px solid var(--rule-soft);
+    background: color-mix(in oklab, var(--rule-soft) 35%, transparent);
+    cursor: col-resize;
+    touch-action: none;
+    transition: background 0.12s;
+  }
+  .sb-resizer:hover {
+    background: color-mix(in oklab, var(--accent) 22%, var(--paper-2));
+  }
+  .sb-resizer:focus-visible {
+    background: color-mix(in oklab, var(--accent) 22%, var(--paper-2));
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 }
 
@@ -2653,6 +2779,9 @@ p {
   color: var(--accent);
 }
 .tcc-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
   font-family: var(--display);
   font-size: 1.25rem;
   font-weight: 400;
@@ -2759,6 +2888,70 @@ p {
   align-items: center;
   color: var(--ink-3);
   min-width: 18px;
+}
+@media (max-width: 900px) {
+  .arch-card {
+    padding: 1rem;
+  }
+  .arch-row {
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+  .arch-node {
+    flex: none;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) minmax(8rem, auto);
+    align-items: center;
+    gap: 0.75rem;
+    min-height: 0;
+    padding: 0.75rem 0.85rem;
+  }
+  .arch-node:hover {
+    transform: none;
+  }
+  .arch-num {
+    position: static;
+    grid-column: 1;
+    grid-row: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.55rem;
+    height: 1.55rem;
+    border-radius: 999px;
+    background: var(--paper-2);
+  }
+  .arch-label {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+  }
+  .arch-small {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: end;
+    max-width: 12rem;
+    text-align: right;
+  }
+  .arch-arrow {
+    display: none;
+  }
+}
+@media (max-width: 560px) {
+  .arch-card {
+    padding: 0.75rem;
+  }
+  .arch-node {
+    grid-template-columns: auto minmax(0, 1fr) minmax(6.5rem, auto);
+    gap: 0.55rem;
+  }
+  .arch-label {
+    font-size: 1rem;
+  }
+  .arch-small {
+    max-width: 8.5rem;
+    font-size: 0.7rem;
+  }
 }
 
 /* Detail panel below the row */
@@ -3314,6 +3507,9 @@ p {
   gap: 0.4rem;
   font-family: var(--mono);
   font-size: 0.78rem;
+  margin-left: auto;
+  text-align: right;
+  white-space: nowrap;
 }
 /* Input tokens (prompt) — what the model RECEIVES. Down-arrow icon. */
 .tcc-tokens-in {
@@ -3396,6 +3592,21 @@ p {
   overflow-x: auto;
   white-space: pre-wrap;
   overflow-wrap: break-word;
+  transition:
+    max-height 0.24s ease,
+    opacity 0.18s ease,
+    background 0.18s ease;
+  max-height: 10rem;
+  opacity: 0.98;
+}
+.tcc-call[data-payload="true"] {
+  max-height: 28rem;
+  opacity: 1;
+  background: color-mix(in oklab, var(--paper-2) 78%, var(--paper));
+}
+.tcc-flow-goccia .tcc-call[data-payload="false"] {
+  max-height: none;
+  overflow-y: visible;
 }
 .tcc-risks {
   list-style: none;

@@ -242,5 +242,3 @@ suite("TypedArray iteration", () => {
     },
   });
 });
-
-runBenchmarks();

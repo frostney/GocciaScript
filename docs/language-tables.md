@@ -35,7 +35,7 @@
 | `RegExp` (literals, flags `d`/`g`/`i`/`m`/`s`/`u`/`v`/`y`) | ES2015+ | Supported |
 | ES modules (`import` / `export`) | ES2015 | Supported (named only) |
 | Default exports / imports | ES2015 | Excluded — use named exports |
-| Generators (`function*`) | ES2015 | Not supported |
+| Generators (`function*`, `*method()`) | ES2015 | Supported — `function*` requires `--compat-function`; generator methods are default syntax |
 | Nullish coalescing (`??`) | ES2020 | Supported |
 | Optional chaining (`?.`) | ES2020 | Supported |
 | `BigInt` | ES2020 | Supported |
@@ -96,6 +96,7 @@ APIs from WHATWG and W3C specifications — not part of ECMA-262, but widely exp
 | [Decorator Metadata](https://github.com/tc39/proposal-decorator-metadata) | 3 | Supported — `Symbol.metadata` for decorator-attached class metadata with inheritance |
 | [Joint Iteration](https://github.com/tc39/proposal-joint-iteration) | 3 | Supported — `Iterator.zip` and `Iterator.zipKeyed` |
 | [`Math.clamp`](https://github.com/tc39/proposal-math-clamp) | 2 | Supported |
+| [Pattern Matching](https://tc39.es/proposal-pattern-matching/) | 1 | Supported — `value is Pattern`, `match`, filtered `for...of` / `for await...of`, and pattern catches |
 | [Types as Comments](https://tc39.es/proposal-type-annotations/) | 1 | Supported — TypeScript-style annotations parsed, preserved on AST, enforced in bytecode mode |
 | [Enum Declarations](https://github.com/tc39/proposal-enum) | 0 | Supported — frozen, null-prototype enum objects with `Symbol.iterator` |
 

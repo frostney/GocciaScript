@@ -132,6 +132,7 @@ resourcestring
   // Temporal API errors — Instant
   SErrorTemporalInstantRequiresEpoch = 'Temporal.Instant requires epochNanoseconds argument';
   SErrorTemporalInstantRequiresBigInt = 'Temporal.Instant epochNanoseconds must be a BigInt';
+  SErrorTemporalInstantOutOfRange = 'Temporal.Instant epochNanoseconds out of range';
   SErrorInvalidISOInstant = 'Invalid ISO instant string';
   SErrorTemporalInstantFromArg = 'Temporal.Instant.from requires a string or Instant';
   SErrorTemporalInstantFromEpochMillis = 'Temporal.Instant.fromEpochMilliseconds requires an argument';
@@ -394,6 +395,7 @@ resourcestring
   SErrorSymbolSearchNotCallable = '@@search is not callable';
   SErrorInvalidRepeatCount = 'Invalid count value: %s';
   SErrorInvalidNormalizationForm = 'The normalization form should be one of NFC, NFD, NFKC, NFKD';
+  SErrorStringPrototypeRequiresNonNullish = 'String.prototype method requires that ''this'' not be null or undefined';
   SErrorIsWellFormedRequiresNonNullish = 'String.prototype.isWellFormed requires that ''this'' not be null or undefined';
   SErrorToWellFormedRequiresNonNullish = 'String.prototype.toWellFormed requires that ''this'' not be null or undefined';
 

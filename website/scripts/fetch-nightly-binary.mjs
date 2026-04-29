@@ -2,8 +2,8 @@
 /**
  * Fetch the latest `nightly` GocciaScript release archive for the
  * current build host's platform and place the executables under
- * `website/vendor/`. The `/api/run` Route Handler picks them up at
- * request time so the playground / sandbox preview can execute real
+ * `website/vendor/`. The API Route Handlers pick them up at request
+ * time so the playground / sandbox preview can execute real
  * GocciaScript on Vercel without a checked-in binary.
  *
  * Wired up from `package.json` as part of `prebuild` so it only runs
@@ -126,10 +126,10 @@ async function main() {
       await copyFile(src, dest);
       copied++;
     }
-    // The loader is the *only* binary `/api/run` actually invokes — the
-    // others are nice-to-haves for local CLI use. If it's missing the
-    // build looks fine but the playground 500s at runtime, so make this
-    // a hard fail at vendor time instead.
+    // `/api/execute` invokes the loader and `/api/test` invokes the test
+    // runner. The REPL is a nice-to-have for local CLI use. If the loader
+    // is missing the build looks fine but the playground 500s at runtime,
+    // so make this a hard fail at vendor time instead.
     if (!existsSync(path.join(VENDOR_DIR, loaderName))) {
       throw new Error(
         `required binary missing after extraction: ${loaderName}`,

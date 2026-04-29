@@ -98,7 +98,7 @@ function HeroRunnableCard({ code }: { code: string }) {
   const run = async () => {
     // The button is `disabled` while running, but the ⌘/Ctrl+Enter
     // shortcut on the textarea bypasses that — guard re-entry directly
-    // so a fast double-press can't fire two overlapping `/api/run`
+    // so a fast double-press can't fire two overlapping `/api/execute`
     // requests and race the output panel.
     if (running) return;
     setRunning(true);
@@ -106,7 +106,7 @@ function HeroRunnableCard({ code }: { code: string }) {
     const banner = "GocciaScriptLoader coffee-typed.ts";
     setOutput([{ kind: "meta", text: banner }]);
     try {
-      const res = await fetch("/api/run", {
+      const res = await fetch("/api/execute", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ code: src }),
@@ -787,9 +787,27 @@ export function Landing({
                 Java<span className="script">Script</span>.
               </h1>
               <p className="hero-lede">
-                A strict subset of ECMAScript 2027+, implemented from scratch —
-                with a sandbox-first runtime designed for tinkerers, embedding
-                and AI agents.
+                A strict subset of{" "}
+                <a
+                  href="https://tc39.es/ecma262/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="info-term"
+                  aria-describedby="ecmascript-tip"
+                >
+                  ECMAScript 2027+
+                  <span
+                    id="ecmascript-tip"
+                    role="tooltip"
+                    className="info-tooltip"
+                  >
+                    ECMAScript is the language specified by ECMA-262.
+                    GocciaScript implements a strict subset of that standard,
+                    plus selected TC39 proposals.
+                  </span>
+                </a>
+                , implemented from scratch — with a sandbox-first runtime
+                designed for tinkerers, embedding and AI agents.
               </p>
               <div className="hero-cta-row">
                 <Link
@@ -850,8 +868,24 @@ export function Landing({
               <span className="wave-under">without the quirks.</span>
             </AnchorH2>
             <p>
-              What remains is a small, predictable language with a portable
-              runtime under 5MB.
+              What remains is a small, predictable language with a{" "}
+              <button
+                type="button"
+                className="info-term info-term-button"
+                aria-describedby="portable-runtime-tip"
+              >
+                portable runtime under 5MB
+                <span
+                  id="portable-runtime-tip"
+                  role="tooltip"
+                  className="info-tooltip"
+                >
+                  The exact binary size depends on the target platform. The
+                  runtime binary does not explicitly require any external
+                  dependencies to be loaded.
+                </span>
+              </button>
+              .
             </p>
           </div>
           <div className="feature-grid">
@@ -880,12 +914,12 @@ export function Landing({
                 What&apos;s left out — and why
               </AnchorH3>
               <p className="text-ink-2 mb-4">
-                Some constructs are excluded because they&apos;re security risks{" "}
-                (<code className={inlineCodeClass}>eval</code>,{" "}
-                <code className={inlineCodeClass}>Function()</code>); some have
-                ambiguous semantics (<code className={inlineCodeClass}>==</code>
-                , <code className={inlineCodeClass}>var</code>); others have a
-                clearer alternative already in the language. See{" "}
+                Dynamic code construction and scope-changing syntax are left out
+                to keep execution predictable in embedded runtimes. Coercive or
+                legacy forms such as <code className={inlineCodeClass}>==</code>
+                , <code className={inlineCodeClass}>var</code>, and{" "}
+                <code className={inlineCodeClass}>arguments</code> have explicit
+                alternatives. See{" "}
                 <Link href="/docs/language" className="link-button">
                   Language
                 </Link>{" "}
@@ -923,6 +957,12 @@ export function Landing({
                   );
                 })}
               </div>
+              <p className="compat-note">
+                Compatibility mode can opt back into selected syntax such as{" "}
+                <code className={inlineCodeClass}>var</code>,{" "}
+                <code className={inlineCodeClass}>function</code>, and ASI via
+                CLI or config flags.
+              </p>
               <div className="mt-10">
                 <p className="text-ink-2 mb-0 text-[0.92rem]">
                   The runtime is also intentionally{" "}
@@ -936,7 +976,7 @@ export function Landing({
             <div>
               <div className="section-kicker mb-3">Runtime globals</div>
               <AnchorH3 id="runtime-globals" className="mb-3">
-                Beyond the language: a runtime standard library
+                Beyond the language: the runtime itself
               </AnchorH3>
               <p className="text-ink-2 mb-4">
                 Everything ECMAScript gives you, plus first-class
@@ -951,8 +991,7 @@ export function Landing({
                 <code className={inlineCodeClass}>.md</code>; runtime parsers
                 for each (markdown imports return the raw text); a
                 capability-gated <code className={inlineCodeClass}>fetch</code>{" "}
-                (GET/HEAD only, explicit allow-listed hosts); Temporal for
-                unambiguous date math; and a built-in{" "}
+                (GET/HEAD only, explicit allow-listed hosts); and a built-in{" "}
                 <Link href="/docs/testing" className="link-button">
                   test runner
                 </Link>{" "}
@@ -1004,7 +1043,7 @@ export function Landing({
               .
             </p>
           </div>
-          <div className="rounded-card border border-rule-soft bg-paper-2 p-8 shadow-paper-sm">
+          <div className="arch-card rounded-card border border-rule-soft bg-paper-2 p-8 shadow-paper-sm">
             <ArchDiagram />
           </div>
         </div>

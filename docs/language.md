@@ -1,4 +1,4 @@
-<!-- doc-length-limit: 850 -->
+<!-- doc-length-limit: 900 -->
 # Language
 
 *GocciaScript's ECMAScript subset: what we implement, TC39 proposals, and what we exclude.*
@@ -6,7 +6,7 @@
 ## Executive Summary
 
 - **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules (named only)
-- **TC39 proposals** — Decorators, decorator metadata, types as comments, enums, `Math.clamp`
+- **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
 - **Excluded by design** — `==`/`!=`, `eval`, `arguments`, traditional loops, `with`, default imports/exports
 - **Graceful handling** — Parser-recognized excluded syntax (`==`, loops, `with`) parses successfully but executes as a no-op with a warning and suggestion
 - **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`)
@@ -289,6 +289,31 @@ Standard escape sequences in string literals and template literals:
 
 GocciaScript supports iteration via `for...of` and `for await...of`, which work with the iterator protocol.
 
+#### Generators
+
+Generator methods are supported as normal method shorthand:
+
+```javascript
+const source = {
+  *values() {
+    yield 1;
+    yield* [2, 3];
+  },
+};
+```
+
+Class generator methods use the same syntax:
+
+```javascript
+class Source {
+  *values() {
+    yield 1;
+  }
+}
+```
+
+The `function*` and `async function*` forms are compatibility syntax and require `--compat-function`, the same flag used for the `function` keyword. Async generator methods (`async *values() { ... }`) are supported by default and return async iterators whose `next()`, `return()`, and `throw()` methods return Promises. Async generators use GocciaScript's existing synchronous async/await drain model.
+
 #### `for...of`
 
 Iterates over sync iterables using `[Symbol.iterator]`:
@@ -507,6 +532,43 @@ try { throw new Error("oops"); } catch (e: Error) { }
 - Parameter properties in constructors (`constructor(public x: number)`).
 - Angle-bracket type assertions (`<string>value`) — use `value as string` instead.
 
+### Pattern Matching (Stage 1)
+
+GocciaScript supports the Stage 1 [TC39 Pattern Matching](https://tc39.es/proposal-pattern-matching/) draft in interpreted and bytecode modes.
+
+```javascript
+const result = match (message) {
+  { type: "ok", value: const value }: value;
+  { type: "error", reason: const reason }: `failed: ${reason}`;
+  default: "unknown";
+};
+if (point is { x: const x, y: const y } and { kind: "cartesian" }) {
+  x + y;
+}
+```
+
+Supported pattern forms include wildcard (`_`), value patterns, `let`/`const` bindings, object and array/list patterns, rest wildcards, relational patterns (`<`, `<=`, `>`, `>=`), guards (`if (...)`), `as`, `and`, `or`, `not`, and `Symbol.customMatcher` value patterns.
+
+Bindings are transactional: failed matches do not mutate the surrounding scope, and successful bindings are visible only in the matched body or clause expression. `or` alternatives must bind the same names with the same declaration kinds, and `not` patterns cannot contain bindings.
+
+GocciaScript also implements proposal-note integrations:
+
+```javascript
+for (const item is { id: const id } of items) {
+  id;
+}
+for await (const item is { id: const id } of asyncItems) {
+  id;
+}
+try {
+  work();
+} catch (error is { code: const code }) {
+  code;
+}
+```
+
+The filtered `for...of` form currently requires an identifier subject before `is`; destructuring subjects before `is` are rejected. Pattern catches cannot be combined with catch type annotations.
+
 ### Enum Declarations (Stage 0)
 
 GocciaScript supports the [TC39 proposal-enum](https://github.com/tc39/proposal-enum) `enum` declaration. Enums create frozen, null-prototype objects with typed member values.
@@ -616,7 +678,7 @@ When enabled (CLI: `--compat-function`, engine API: `Engine.FunctionEnabled := T
 - **Function declarations** (`function name(params) { body }`) are desugared to var-scoped bindings backed by `TGocciaMethodExpression`, which produces call-site `this` binding (not lexical). Declarations are hoisted: both the name and the function value are available before the declaration is reached, matching ES2026 §15.2.6 semantics. Uses the same var binding infrastructure (`DefineVariableBinding`) as `--compat-var`.
 - **Function expressions** (`const f = function(params) { body }`) produce the same `TGocciaMethodExpression` node. Named function expressions (`const f = function g(params) { body }`) create a read-only self-binding of the name (`g`) visible only inside the function body for recursion, matching ES2026 §15.2.4 semantics.
 - **Async functions** (`async function name(params) { body }`) are supported in both declaration and expression forms.
-- **Generator functions** (`function*`) remain unsupported; they produce a warning and are skipped.
+- **Generator functions** (`function*`, `async function*`) are supported when this flag is enabled. Generator method shorthand (`*method()`, `async *method()`) does not require the flag.
 
 ### Loose Equality (`==` and `!=`)
 
@@ -739,7 +801,7 @@ Labels exist primarily for `break`/`continue` targets in nested loops. Since Goc
 
 ### Generators and Iterators
 
-**Partially implemented.** Iterator protocol and Iterator Helpers are fully implemented. Generator functions (`function*`) are not supported.
+Generator method shorthand (`*method()` and `async *method()`) is supported by default. Generator function syntax (`function*` and `async function*`) is supported only when `--compat-function` is enabled. Iterator protocol and Iterator Helpers are also implemented.
 
 ### Deferred Built-ins
 

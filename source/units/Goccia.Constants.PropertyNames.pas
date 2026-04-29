@@ -38,9 +38,11 @@ const
   PROP_READ         = 'read';
   PROP_VALUE        = 'value';
   PROP_VALUES       = 'values';
+  PROP_SLICE        = 'slice';
   PROP_TAG_NAME     = 'tagName';
   PROP_NEXT         = 'next';
   PROP_RETURN       = 'return';
+  PROP_THROW        = 'throw';
   PROP_WRITABLE     = 'writable';
   PROP_ENUMERABLE   = 'enumerable';
   PROP_CONFIGURABLE = 'configurable';
@@ -83,6 +85,7 @@ const
   PROP_UNICODE_SETS           = 'unicodeSets';
   PROP_HAS_INDICES            = 'hasIndices';
   PROP_TYPE                   = 'type';
+  PROP_MATCH_TYPE             = 'matchType';
   PROP_CALLS                  = 'calls';
   PROP_RESULTS                = 'results';
   PROP_INSTANCES              = 'instances';

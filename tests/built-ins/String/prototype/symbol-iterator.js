@@ -20,6 +20,11 @@ test("spread on string produces characters", () => {
   expect([..."hello"]).toEqual(["h", "e", "l", "l", "o"]);
 });
 
+test("spread on string preserves UTF-8 characters", () => {
+  expect([..."é中"]).toEqual(["é", "中"]);
+  expect([..."😀"]).toEqual(["😀"]);
+});
+
 test("destructuring a string", () => {
   const [a, b, c] = "xyz";
   expect(a).toBe("x");

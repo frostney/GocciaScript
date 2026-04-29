@@ -8,3 +8,11 @@ test("String.prototype.toUpperCase converts to uppercase", () => {
   expect("World".toUpperCase()).toBe("WORLD");
   expect("".toUpperCase()).toBe("");
 });
+
+test("String.prototype.toUpperCase maps Unicode characters", () => {
+  expect("éöσ".toUpperCase()).toBe("ÉÖΣ");
+});
+
+test("String.prototype.toUpperCase coerces non-string receivers", () => {
+  expect(String.prototype.toUpperCase.call(true)).toBe("TRUE");
+});

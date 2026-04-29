@@ -62,6 +62,30 @@ describe("for-await-of", () => {
     });
   });
 
+  test("for-await-of awaits Promise values from custom sync iterator results", async () => {
+    const source = {
+      [Symbol.iterator]() {
+        let i = 0;
+        return {
+          next() {
+            i = i + 1;
+            if (i <= 3) {
+              return { value: Promise.resolve(i * 2), done: false };
+            }
+            return { value: Promise.resolve(99), done: true };
+          }
+        };
+      }
+    };
+
+    const result = [];
+    for await (const item of source) {
+      result.push(item);
+    }
+
+    expect(result).toEqual([2, 4, 6]);
+  });
+
   test("break in for-await-of", () => {
     const asyncIterable = {
       [Symbol.asyncIterator]() {
@@ -112,6 +136,54 @@ describe("for-await-of", () => {
 
     await expect((async () => {
       for await (const x of true) {
+      }
+    })()).rejects.toThrow(TypeError);
+  });
+
+  test("non-callable async iterator property rejects with TypeError", async () => {
+    const source = {
+      [Symbol.asyncIterator]: {
+        next() {
+          return Promise.resolve({ value: 1, done: false });
+        },
+      },
+    };
+
+    await expect((async () => {
+      for await (const x of source) {
+      }
+    })()).rejects.toThrow(TypeError);
+  });
+
+  test("invalid async iterator result rejects with TypeError", async () => {
+    const primitiveIterator = {
+      [Symbol.asyncIterator]() {
+        return 1;
+      },
+    };
+    const missingNext = {
+      [Symbol.asyncIterator]() {
+        return {};
+      },
+    };
+    const nextNotCallable = {
+      [Symbol.asyncIterator]() {
+        return { next: 1 };
+      },
+    };
+
+    await expect((async () => {
+      for await (const x of primitiveIterator) {
+      }
+    })()).rejects.toThrow(TypeError);
+
+    await expect((async () => {
+      for await (const x of missingNext) {
+      }
+    })()).rejects.toThrow(TypeError);
+
+    await expect((async () => {
+      for await (const x of nextNotCallable) {
       }
     })()).rejects.toThrow(TypeError);
   });

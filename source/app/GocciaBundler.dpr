@@ -9,6 +9,7 @@ uses
   SysUtils,
 
   TimingUtils,
+  TextSemantics,
 
   Goccia.Application,
   Goccia.AST.Node,
@@ -272,7 +273,7 @@ begin
 
   OutputPath := ResolveOutputPath(AFileName);
 
-  Source := ReadUTF8FileLines(AFileName);
+  Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
   try
     EmitBytecode(Source, AFileName, OutputPath);
   finally

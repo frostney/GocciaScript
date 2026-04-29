@@ -32,6 +32,17 @@ Temporal.PlainMonthDay  // Month and day (no year/time/timezone)
 Temporal.ZonedDateTime  // Date + time + timezone
 ```
 
+## Time Zone Data
+
+`Temporal.ZonedDateTime` loads IANA timezone data from TZif zoneinfo data. Lookup order is:
+
+1. `GOCCIA_TZDIR` when set
+2. system zoneinfo directories on Unix-like platforms (`/usr/share/zoneinfo`, `/usr/share/zoneinfo.default`)
+3. Windows ICU on Windows 10 and newer
+4. embedded generated TZif resource data
+
+The embedded data is generated from the upstream IANA timezone data distribution and linked as a FreePascal `.res` resource. This keeps named IANA zones and DST transitions available in single-binary builds even when neither system zoneinfo nor Windows ICU can provide the requested zone. Define `GOCCIA_TEMPORAL_NO_EMBEDDED_TZDATA` at compile time to omit the embedded fallback.
+
 ## Temporal.Duration
 
 Represents a length of time with 10 components (years through nanoseconds).
@@ -260,7 +271,7 @@ Represents an absolute date and time in a specific timezone. Combines an instant
 | `withPlainTime(time?)` | Replace time component |
 | `withTimeZone(timeZone)` | Re-interpret the same instant in a different timezone |
 | `add(duration)` / `subtract(duration)` | Date-time arithmetic |
-| `until(other [, options])` / `since(other [, options])` | Difference as Duration. Options: `{ largestUnit, smallestUnit, roundingMode, roundingIncrement }`. Accepts any unit from `"year"` to `"nanosecond"` (defaults: largest `"hour"`, smallest `"nanosecond"`). Rounding via mode (`"trunc"` default) and increment (default 1). Calendar-aware for day-or-larger units using wall-clock components. |
+| `until(other [, options])` / `since(other [, options])` | Difference as Duration. Options: `{ largestUnit, smallestUnit, roundingMode, roundingIncrement }`. Accepts any unit from `"year"` to `"nanosecond"` (defaults: largest `"hour"`, smallest `"nanosecond"`). Rounding via mode (`"trunc"` default) and increment (default 1). Calendar-aware for day-or-larger units, including DST-aware rounding across variable-length local days. |
 | `round(options)` | Round to nearest unit. Accepts a string (smallestUnit) or options object `{ smallestUnit, roundingMode, roundingIncrement }`. |
 | `equals(other)` | Equality check |
 | `startOfDay()` | Return ZonedDateTime at the start of the wall-clock day |

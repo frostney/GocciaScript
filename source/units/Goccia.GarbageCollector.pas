@@ -48,6 +48,8 @@ type
     FTotalCollections: Integer;
 
     FBytesAllocated: Int64;
+    FPeakBytesAllocated: Int64;
+    FTotalBytesAllocated: Int64;
     FMaxBytes: Int64;
     FSuggestedMaxBytes: Int64;
     FMemoryLimitFiring: Boolean;
@@ -110,6 +112,7 @@ type
     // objects between the watermark capture and the CollectYoung call.
     // Safe for benchmark measurement where old objects are read-only.
     procedure CollectYoung(const AWatermark: Integer);
+    procedure ResetPeakBytesAllocated;
 
     {$IFDEF GC_TIMING}
     procedure PrintTimingSummary;
@@ -126,6 +129,8 @@ type
     // registered object). Set MaxBytes to a positive value to impose
     // a ceiling; allocations that exceed it raise a RangeError.
     property BytesAllocated: Int64 read FBytesAllocated;
+    property PeakBytesAllocated: Int64 read FPeakBytesAllocated;
+    property TotalBytesAllocated: Int64 read FTotalBytesAllocated;
     property MaxBytes: Int64 read FMaxBytes write FMaxBytes;
     property SuggestedMaxBytes: Int64 read FSuggestedMaxBytes;
     property MemoryLimitFiring: Boolean read FMemoryLimitFiring write FMemoryLimitFiring;
@@ -253,6 +258,8 @@ begin
   FTotalCollected := 0;
   FTotalCollections := 0;
   FBytesAllocated := 0;
+  FPeakBytesAllocated := 0;
+  FTotalBytesAllocated := 0;
   FSuggestedMaxBytes := DetectDefaultMaxBytes;
   FMaxBytes := FSuggestedMaxBytes;
   FMemoryLimitFiring := False;
@@ -285,6 +292,9 @@ begin
   FManagedObjects.Add(AObject);
   Inc(FAllocationsSinceLastGC);
   Inc(FBytesAllocated, AObject.InstanceSize);
+  Inc(FTotalBytesAllocated, AObject.InstanceSize);
+  if FBytesAllocated > FPeakBytesAllocated then
+    FPeakBytesAllocated := FBytesAllocated;
 end;
 
 procedure TGarbageCollector.UnregisterObject(
@@ -586,6 +596,11 @@ begin
   finally
     FCollecting := False;
   end;
+end;
+
+procedure TGarbageCollector.ResetPeakBytesAllocated;
+begin
+  FPeakBytesAllocated := FBytesAllocated;
 end;
 
 {$IFDEF GC_TIMING}

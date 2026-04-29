@@ -22,4 +22,11 @@ describe.runIf(isTemporal)("Temporal.Duration.from", () => {
     expect(d.minutes).toBe(30);
     expect(d.days).toBe(0);
   });
+
+  test("from() preserves BigInt-backed duration components", () => {
+    const i1 = Temporal.Instant.fromEpochMilliseconds(-8640000000000000);
+    const i2 = Temporal.Instant.fromEpochMilliseconds(8640000000000000);
+    const d = i1.until(i2, { largestUnit: "microseconds" });
+    expect(Temporal.Duration.from(d).toString()).toBe("PT17280000000000S");
+  });
 });
