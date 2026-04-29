@@ -58,6 +58,7 @@ function assertCommonJsonReport(json: any, label: string, expectedFileCount: num
 
 function assertCommonJsonFile(file: any, label: string, fileName: string, ok = true): void {
   if (file?.fileName !== fileName) throw new Error(`${label} fileName mismatch: ${file?.fileName}`);
+  if ("file" in file) throw new Error(`${label} per-file should not include duplicate "file" alias`);
   if (file?.ok !== ok) throw new Error(`${label} ok should be ${ok}, got ${file?.ok}`);
   if (typeof file?.stdout !== "string") throw new Error(`${label} stdout should always be present`);
   if (typeof file?.stderr !== "string") throw new Error(`${label} stderr should always be present`);
@@ -246,6 +247,7 @@ console.log("Loader: compact-json omits build, memory, stdout, stderr...");
   if ("memory" in file) throw new Error("compact-json per-file memory should be omitted");
   if ("stdout" in file) throw new Error("compact-json per-file stdout should be omitted");
   if ("stderr" in file) throw new Error("compact-json per-file stderr should be omitted");
+  if ("file" in file) throw new Error("compact-json per-file should not include duplicate \"file\" alias");
   if (file.fileName !== "<stdin>") throw new Error(`compact-json fileName should be <stdin>, got ${file.fileName}`);
   if (file.result !== 4) throw new Error(`compact-json file result should be 4, got ${file.result}`);
   if (typeof file.timing?.total_ns !== "number") throw new Error("compact-json per-file timing should be present");
@@ -272,6 +274,7 @@ console.log("Loader: compact-json error path omits build, memory, stdout, stderr
   if ("memory" in file) throw new Error("compact-json error per-file memory should be omitted");
   if ("stdout" in file) throw new Error("compact-json error per-file stdout should be omitted");
   if ("stderr" in file) throw new Error("compact-json error per-file stderr should be omitted");
+  if ("file" in file) throw new Error("compact-json error per-file should not include duplicate \"file\" alias");
   if (file.ok !== false) throw new Error(`compact-json error per-file ok should be false, got ${file.ok}`);
   if (file.result !== null) throw new Error(`compact-json error per-file result should be null, got ${file.result}`);
 }
@@ -300,6 +303,7 @@ console.log("Loader: compact-json multi-file omits build, memory, stdout, stderr
       if ("memory" in file) throw new Error(`compact-json multi-file files[${idx}] memory should be omitted`);
       if ("stdout" in file) throw new Error(`compact-json multi-file files[${idx}] stdout should be omitted`);
       if ("stderr" in file) throw new Error(`compact-json multi-file files[${idx}] stderr should be omitted`);
+      if ("file" in file) throw new Error(`compact-json multi-file files[${idx}] should not include duplicate "file" alias`);
     }
     const byFileName = new Map<string, any>(
       (json.files as any[]).map((f) => [f.fileName, f]),
@@ -744,7 +748,8 @@ console.log("TestRunner: JSON multi-file structure...");
       if (proc.exitCode !== 0) throw new Error(`File benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
     }
     const fileJson = readFileSync(fileOut, "utf-8");
-    if (!fileJson.includes('"file":')) throw new Error('File JSON should contain "file":');
+    if (!fileJson.includes('"fileName":')) throw new Error('File JSON should contain "fileName":');
+    if (fileJson.includes('"file":')) throw new Error('File JSON should not contain duplicate "file" alias');
     if (!fileJson.includes('"totalBenchmarks":')) throw new Error('File JSON should contain "totalBenchmarks":');
     {
       const json = JSON.parse(fileJson);
@@ -768,7 +773,8 @@ console.log("TestRunner: JSON multi-file structure...");
       if (proc.exitCode !== 0) throw new Error(`Bytecode file benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
     }
     const fileBcJson = readFileSync(fileBcOut, "utf-8");
-    if (!fileBcJson.includes('"file":')) throw new Error('Bytecode file JSON should contain "file":');
+    if (!fileBcJson.includes('"fileName":')) throw new Error('Bytecode file JSON should contain "fileName":');
+    if (fileBcJson.includes('"file":')) throw new Error('Bytecode file JSON should not contain duplicate "file" alias');
     {
       const parsed = JSON.parse(fileBcJson);
       const valid = parsed.files

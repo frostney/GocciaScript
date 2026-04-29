@@ -314,8 +314,6 @@ begin
     Length(AMemoryJSON));
   Buffer.Append('"fileName":');
   Buffer.Append(QuoteJSONString(AFileName));
-  Buffer.Append(',"file":');
-  Buffer.Append(QuoteJSONString(AFileName));
   Buffer.Append(',"ok":');
   Buffer.Append(BoolToStr(AOk, 'true', 'false'));
   if not ACompact then
