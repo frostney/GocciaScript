@@ -17,6 +17,8 @@ Chronological record of key architectural and implementation decisions, newest f
 
 ---
 
+**2026-04-29** · `parser` — Lexer hot paths favor direct scanning and measured tiny-method `inline` hints over abstraction in the numeric scanner. Comment skipping, block comments, regex literal slicing, and template line-terminator handling were simplified and benchmarked with `GocciaBenchmarkRunner` lex timing; the numeric separator helper was rejected because it shortened the code but regressed decimal and radix-heavy cases. [spikes/lexer-performance-simplification.md](spikes/lexer-performance-simplification.md).
+
 **2026-04-28** · `runtime` · [#440](https://github.com/frostney/GocciaScript/pull/440) — Temporal named time zones use layered providers in this order: `GOCCIA_TZDIR`, Unix TZif files, Windows ICU, then embedded TZif resource fallback. The embedded IANA payload is generated as `Generated.TimeZoneData.res` with a small linker unit instead of a large Pascal array, keeping portability while leaving lookup and parsing logic in hand-authored units. [Temporal Time Zone Data](built-ins-temporal.md#time-zone-data). [Generated Timezone Data](build-system.md#generated-timezone-data).
 
 **2026-04-27** · `runtime` — Generator and async generator support. Generator method shorthand (`*method()` and `async *method()`) is now part of the default method syntax, while `function*` and `async function*` remain behind `--compat-function` because they use the compatibility-gated `function` keyword. The interpreter uses resumable generator continuations and the bytecode format reserves a single `OP_YIELD` opcode; `yield*` is represented as delegation logic rather than a second opcode. [language.md § Generators](language.md#generators).
