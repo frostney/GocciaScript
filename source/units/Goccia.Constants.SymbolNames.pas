@@ -21,6 +21,7 @@ const
   SYMBOL_DISPOSE              = 'dispose';
   SYMBOL_ASYNC_DISPOSE        = 'asyncDispose';
   SYMBOL_UNSCOPABLES           = 'unscopables';
+  SYMBOL_CUSTOM_MATCHER        = 'customMatcher';
 
 implementation
 

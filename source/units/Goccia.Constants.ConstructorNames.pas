@@ -13,6 +13,7 @@ const
   CONSTRUCTOR_BOOLEAN  = 'Boolean';
   CONSTRUCTOR_SYMBOL   = 'Symbol';
   CONSTRUCTOR_BIGINT   = 'BigInt';
+  CONSTRUCTOR_FUNCTION = 'Function';
   CONSTRUCTOR_SET      = 'Set';
   CONSTRUCTOR_MAP      = 'Map';
   CONSTRUCTOR_PROXY    = 'Proxy';

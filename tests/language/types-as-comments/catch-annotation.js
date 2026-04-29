@@ -24,6 +24,20 @@ test("catch parameter with union type", () => {
   expect(msg).toBe("oops");
 });
 
+test("catch parameter type annotation allows nested is property names", () => {
+  let value = "";
+  try {
+    throw { is: "nested" };
+  } catch (e: { is: string }) {
+    value = e.is;
+  }
+  expect(value).toBe("nested");
+});
+
+test("catch parameter type annotation requires a type", () => {
+  expect(() => new Function("try { throw 1; } catch (e:) {}")).toThrow();
+});
+
 test("catch without type annotation still works", () => {
   let caught = false;
   try {

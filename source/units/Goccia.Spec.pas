@@ -231,8 +231,9 @@ const
   // ---------------------------------------------------------------------------
   // TC39 Stage 1
   // ---------------------------------------------------------------------------
-  STAGE1_PROPOSALS: array[0..0] of TGocciaFeatureEntry = (
-    (Name: 'Types as Comments'; Link: 'https://tc39.es/proposal-type-annotations/')
+  STAGE1_PROPOSALS: array[0..1] of TGocciaFeatureEntry = (
+    (Name: 'Types as Comments'; Link: 'https://tc39.es/proposal-type-annotations/'),
+    (Name: 'Pattern Matching'; Link: 'https://tc39.es/proposal-pattern-matching/')
   );
 
   // ---------------------------------------------------------------------------

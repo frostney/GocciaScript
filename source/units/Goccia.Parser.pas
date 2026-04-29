@@ -101,6 +101,8 @@ type
     function ConvertNumberLiteral(const ALexeme: string): Double;
     function ConvertBigIntLiteral(const ALexeme: string): TGocciaValue;
     function ParseBinaryExpression(const ANextLevel: TParseFunction; const AOperators: array of TGocciaTokenType): TGocciaExpression;
+    function CheckContextualKeyword(const AKeyword: string): Boolean;
+    function MatchContextualKeyword(const AKeyword: string): Boolean;
 
     // Expression parsing (private)
     function Conditional: TGocciaExpression;
@@ -126,8 +128,24 @@ type
     function ConvertToPattern(const AExpr: TGocciaExpression): TGocciaDestructuringPattern;
     procedure SkipDestructuringPattern;
     procedure SkipExpression;
+    // TC39 Pattern Matching
+    function ParseMatchExpression: TGocciaMatchExpression;
+    function ParseMatchPattern: TGocciaMatchPattern;
+    function ParseMatchPatternOr: TGocciaMatchPattern;
+    function ParseMatchPatternAnd: TGocciaMatchPattern;
+    function ParseMatchPatternUnary: TGocciaMatchPattern;
+    function ParseMatchPatternPostfix: TGocciaMatchPattern;
+    function ParseMatchPatternAtom: TGocciaMatchPattern;
+    function ParseArrayMatchPattern(const ALine, AColumn: Integer): TGocciaArrayMatchPattern;
+    function ParseObjectMatchPattern(const ALine, AColumn: Integer): TGocciaObjectMatchPattern;
+    function ParsePatternValueExpression: TGocciaExpression;
+    function IsMatchExpressionAhead: Boolean;
+    procedure CollectMatchPatternBindings(const APattern: TGocciaMatchPattern;
+      const ANames: TStringList);
+    procedure ValidateMatchPatternEarlyErrors(const APattern: TGocciaMatchPattern);
     // Type annotation helpers (Types as Comments)
-    function CollectTypeAnnotation(const ATerminators: array of TGocciaTokenType): string;
+    function CollectTypeAnnotation(const ATerminators: array of TGocciaTokenType;
+      const AContextualTerminator: string = ''): string;
     function CollectGenericParameters: string;
     procedure SkipUntilSemicolon;
     procedure SkipBlock;
@@ -227,6 +245,7 @@ uses
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved,
   Goccia.Lexer,
+  Goccia.Scope.BindingMap,
   Goccia.Values.BigIntValue;
 
 { TGocciaPrivateClassContext }
@@ -663,6 +682,20 @@ begin
   end;
 end;
 
+function TGocciaParser.CheckContextualKeyword(const AKeyword: string): Boolean;
+begin
+  Result := Check(gttIdentifier) and (Peek.Lexeme = AKeyword);
+  if (not Result) and (AKeyword = KEYWORD_AS) then
+    Result := Check(gttAs);
+end;
+
+function TGocciaParser.MatchContextualKeyword(const AKeyword: string): Boolean;
+begin
+  Result := CheckContextualKeyword(AKeyword);
+  if Result then
+    Advance;
+end;
+
 function TGocciaParser.LogicalOr: TGocciaExpression;
 begin
   Result := ParseBinaryExpression(NullishCoalescing, [gttOr]);
@@ -705,8 +738,30 @@ begin
 end;
 
 function TGocciaParser.Comparison: TGocciaExpression;
+var
+  Op: TGocciaToken;
+  Pattern: TGocciaMatchPattern;
+  TypeAnnotation: string;
+
+  procedure ParseIsExpressions;
+  begin
+    while MatchContextualKeyword(KEYWORD_IS) do
+    begin
+      Op := Previous;
+      Pattern := ParseMatchPattern;
+      Result := TGocciaIsExpression.Create(Result, Pattern, Op.Line, Op.Column);
+    end;
+  end;
 begin
-  Result := ParseBinaryExpression(Shift, [gttGreater, gttGreaterEqual, gttLess, gttLessEqual, gttInstanceof, gttIn]);
+  Result := Shift;
+  while Match([gttGreater, gttGreaterEqual, gttLess, gttLessEqual, gttInstanceof, gttIn]) do
+  begin
+    Op := Previous;
+    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType, Shift,
+      Op.Line, Op.Column);
+  end;
+
+  ParseIsExpressions;
 
   while Check(gttAs) do
   begin
@@ -714,14 +769,21 @@ begin
     if Check(gttConst) then
       Advance
     else
-      CollectTypeAnnotation([gttSemicolon, gttComma, gttRightParen, gttRightBracket, gttRightBrace, gttColon, gttQuestion,
+    begin
+      TypeAnnotation := CollectTypeAnnotation([gttSemicolon, gttComma, gttRightParen, gttRightBracket, gttRightBrace, gttColon, gttQuestion,
         gttAnd, gttOr, gttNullishCoalescing,
         gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
         gttEqual, gttNotEqual,
         gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign, gttNullishCoalescingAssign,
         gttLogicalAndAssign, gttLogicalOrAssign,
-        gttInstanceof, gttIn]);
+        gttInstanceof, gttIn], KEYWORD_IS);
+      if TypeAnnotation = '' then
+        raise TGocciaSyntaxError.Create('Expected type annotation after "as"',
+          Peek.Line, Peek.Column, FFileName, FSourceLines);
+    end;
   end;
+
+  ParseIsExpressions;
 end;
 
 function TGocciaParser.Addition: TGocciaExpression;
@@ -1602,6 +1664,8 @@ begin
       Result := TGocciaNewExpression.Create(Expr, Args, Token.Line, Token.Column);
     end;
   end
+  else if IsMatchExpressionAhead then
+    Result := ParseMatchExpression
   else if Match(gttIdentifier) then
   begin
     Token := Previous;
@@ -1773,6 +1837,599 @@ begin
     raise TGocciaSyntaxError.Create('Expected expression',
       Peek.Line, Peek.Column, FFileName, FSourceLines,
       SSuggestExpressionExpected);
+end;
+
+function TGocciaParser.ParseMatchExpression: TGocciaMatchExpression;
+var
+  MatchToken: TGocciaToken;
+  Subject: TGocciaExpression;
+  Clauses: TGocciaMatchClauseList;
+  Pattern: TGocciaMatchPattern;
+  ClauseExpression, DefaultExpression: TGocciaExpression;
+begin
+  MatchToken := Advance; // contextual "match"
+  Consume(gttLeftParen, 'Expected "(" after "match"',
+    SSuggestCloseParenExpression);
+  Subject := Expression;
+  Consume(gttRightParen, 'Expected ")" after match subject',
+    SSuggestCloseParenExpression);
+  Consume(gttLeftBrace, 'Expected "{" before match clauses',
+    SSuggestCloseBlock);
+
+  Clauses := TGocciaMatchClauseList.Create(True);
+  DefaultExpression := nil;
+  while not Check(gttRightBrace) and not IsAtEnd do
+  begin
+    if Match(gttDefault) then
+    begin
+      if Assigned(DefaultExpression) then
+        raise TGocciaSyntaxError.Create('Duplicate default match clause',
+          Previous.Line, Previous.Column, FFileName, FSourceLines,
+          'Keep only one default clause in this match expression');
+      Consume(gttColon, 'Expected ":" after default match clause',
+        SSuggestTernaryColon);
+      DefaultExpression := Expression;
+    end
+    else
+    begin
+      Pattern := ParseMatchPattern;
+      Consume(gttColon, 'Expected ":" after match pattern',
+        SSuggestTernaryColon);
+      ClauseExpression := Expression;
+      Clauses.Add(TGocciaMatchClause.Create(Pattern, ClauseExpression));
+    end;
+
+    if Check(gttSemicolon) or Check(gttComma) then
+      Advance
+    else if not Check(gttRightBrace) then
+      Consume(gttSemicolon, 'Expected ";" after match clause',
+        SSuggestAddSemicolon);
+  end;
+
+  Consume(gttRightBrace, 'Expected "}" after match clauses',
+    SSuggestCloseBlock);
+  Result := TGocciaMatchExpression.Create(Subject, Clauses,
+    DefaultExpression, MatchToken.Line, MatchToken.Column);
+end;
+
+function TGocciaParser.IsMatchExpressionAhead: Boolean;
+var
+  ScanIndex, Depth: Integer;
+begin
+  Result := False;
+  if not (CheckContextualKeyword(KEYWORD_MATCH) and CheckNext(gttLeftParen)) then
+    Exit;
+
+  ScanIndex := FCurrent + 1;
+  Depth := 0;
+  while ScanIndex < FTokens.Count do
+  begin
+    case FTokens[ScanIndex].TokenType of
+      gttLeftParen:
+        Inc(Depth);
+      gttRightParen:
+        begin
+          Dec(Depth);
+          if Depth = 0 then
+          begin
+            Result := (ScanIndex + 1 < FTokens.Count) and
+              (FTokens[ScanIndex + 1].TokenType = gttLeftBrace);
+            Exit;
+          end;
+          if Depth < 0 then
+            Exit;
+        end;
+      gttEOF:
+        Exit;
+    end;
+    Inc(ScanIndex);
+  end;
+end;
+
+function TGocciaParser.ParseMatchPattern: TGocciaMatchPattern;
+begin
+  Result := ParseMatchPatternOr;
+  ValidateMatchPatternEarlyErrors(Result);
+end;
+
+function TGocciaParser.ParseMatchPatternOr: TGocciaMatchPattern;
+var
+  Patterns: TGocciaMatchPatternList;
+  Line, Column: Integer;
+begin
+  Result := ParseMatchPatternAnd;
+  if not CheckContextualKeyword(KEYWORD_OR) then
+    Exit;
+
+  Line := Result.Line;
+  Column := Result.Column;
+  Patterns := TGocciaMatchPatternList.Create(True);
+  Patterns.Add(Result);
+  while MatchContextualKeyword(KEYWORD_OR) do
+    Patterns.Add(ParseMatchPatternAnd);
+  Result := TGocciaOrMatchPattern.Create(Patterns, Line, Column);
+end;
+
+function TGocciaParser.ParseMatchPatternAnd: TGocciaMatchPattern;
+var
+  Patterns: TGocciaMatchPatternList;
+  Line, Column: Integer;
+begin
+  Result := ParseMatchPatternUnary;
+  if not CheckContextualKeyword(KEYWORD_AND) then
+    Exit;
+
+  Line := Result.Line;
+  Column := Result.Column;
+  Patterns := TGocciaMatchPatternList.Create(True);
+  Patterns.Add(Result);
+  while MatchContextualKeyword(KEYWORD_AND) do
+    Patterns.Add(ParseMatchPatternUnary);
+  Result := TGocciaAndMatchPattern.Create(Patterns, Line, Column);
+end;
+
+function TGocciaParser.ParseMatchPatternUnary: TGocciaMatchPattern;
+var
+  Token: TGocciaToken;
+begin
+  if MatchContextualKeyword(KEYWORD_NOT) then
+  begin
+    Token := Previous;
+    Result := TGocciaNotMatchPattern.Create(ParseMatchPatternUnary,
+      Token.Line, Token.Column);
+  end
+  else
+    Result := ParseMatchPatternPostfix;
+end;
+
+function TGocciaParser.ParseMatchPatternPostfix: TGocciaMatchPattern;
+var
+  Token: TGocciaToken;
+  Name: string;
+  DeclarationType: TGocciaDeclarationType;
+  Guard: TGocciaMatchPattern;
+  Patterns: TGocciaMatchPatternList;
+begin
+  Result := ParseMatchPatternAtom;
+  while True do
+  begin
+    if MatchContextualKeyword(KEYWORD_AS) then
+    begin
+      Token := Previous;
+      DeclarationType := dtLet;
+      if Match(gttConst) then
+        DeclarationType := dtConst
+      else if Match(gttLet) then
+        DeclarationType := dtLet;
+      Name := Consume(gttIdentifier, 'Expected binding name after "as"',
+        SSuggestProvideVariableName).Lexeme;
+      Result := TGocciaAsMatchPattern.Create(Result, Name, DeclarationType,
+        Token.Line, Token.Column);
+    end
+    else if Match(gttIf) then
+    begin
+      Token := Previous;
+      Consume(gttLeftParen, 'Expected "(" after pattern guard',
+        SSuggestCloseParenExpression);
+      Guard := TGocciaGuardMatchPattern.Create(Expression, Token.Line, Token.Column);
+      Consume(gttRightParen, 'Expected ")" after pattern guard',
+        SSuggestCloseParenExpression);
+      Patterns := TGocciaMatchPatternList.Create(True);
+      Patterns.Add(Result);
+      Patterns.Add(Guard);
+      Result := TGocciaAndMatchPattern.Create(Patterns, Result.Line, Result.Column);
+    end
+    else
+      Break;
+  end;
+end;
+
+function TGocciaParser.ParseMatchPatternAtom: TGocciaMatchPattern;
+var
+  Token: TGocciaToken;
+  DeclarationType: TGocciaDeclarationType;
+  Name: string;
+  ExpressionNode: TGocciaExpression;
+  Arguments: TGocciaMatchPatternList;
+  RestPattern: TGocciaMatchPattern;
+  HasRestWildcard: Boolean;
+begin
+  if Match(gttLeftBracket) then
+    Exit(ParseArrayMatchPattern(Previous.Line, Previous.Column));
+
+  if Match(gttLeftBrace) then
+    Exit(ParseObjectMatchPattern(Previous.Line, Previous.Column));
+
+  if Match(gttLeftParen) then
+  begin
+    Result := ParseMatchPatternOr;
+    Consume(gttRightParen, 'Expected ")" after pattern',
+      SSuggestCloseParenExpression);
+    Exit;
+  end;
+
+  if Match(gttLess) or Match(gttLessEqual) or Match(gttGreater) or Match(gttGreaterEqual) then
+  begin
+    Token := Previous;
+    Exit(TGocciaRelationalMatchPattern.Create(Token.TokenType,
+      ParsePatternValueExpression, Token.Line, Token.Column));
+  end;
+
+  if Check(gttIdentifier) and (Peek.Lexeme = '_') then
+  begin
+    Token := Advance;
+    Exit(TGocciaWildcardMatchPattern.Create(Token.Line, Token.Column));
+  end;
+
+  if Match(gttConst) or Match(gttLet) then
+  begin
+    Token := Previous;
+    if Token.TokenType = gttConst then
+      DeclarationType := dtConst
+    else
+      DeclarationType := dtLet;
+    Name := Consume(gttIdentifier, 'Expected binding name in pattern',
+      SSuggestProvideVariableName).Lexeme;
+    Exit(TGocciaBindingMatchPattern.Create(Name, DeclarationType,
+      Token.Line, Token.Column));
+  end;
+
+  ExpressionNode := ParsePatternValueExpression;
+
+  if Match(gttLeftParen) then
+  begin
+    Arguments := TGocciaMatchPatternList.Create(True);
+    RestPattern := nil;
+    HasRestWildcard := False;
+    if not Check(gttRightParen) then
+    begin
+      repeat
+        if Match(gttSpread) then
+        begin
+          if Check(gttIdentifier) and (Peek.Lexeme = '_') then
+          begin
+            Advance;
+            HasRestWildcard := True;
+          end
+          else
+            RestPattern := ParseMatchPatternOr;
+          Break;
+        end
+        else
+          Arguments.Add(ParseMatchPatternOr);
+      until not Match(gttComma) or Check(gttRightParen);
+    end;
+    Consume(gttRightParen, 'Expected ")" after extractor pattern',
+      SSuggestCloseParenArguments);
+    Exit(TGocciaExtractorMatchPattern.Create(ExpressionNode, Arguments,
+      RestPattern, HasRestWildcard, ExpressionNode.Line, ExpressionNode.Column));
+  end;
+
+  Result := TGocciaValueMatchPattern.Create(ExpressionNode, False,
+    ExpressionNode.Line, ExpressionNode.Column);
+end;
+
+function TGocciaParser.ParseArrayMatchPattern(const ALine, AColumn: Integer): TGocciaArrayMatchPattern;
+var
+  Elements: TGocciaMatchPatternList;
+  RestPattern: TGocciaMatchPattern;
+  HasRestWildcard: Boolean;
+begin
+  Elements := TGocciaMatchPatternList.Create(True);
+  RestPattern := nil;
+  HasRestWildcard := False;
+
+  while not Check(gttRightBracket) and not IsAtEnd do
+  begin
+    if Check(gttComma) then
+      Elements.Add(nil)
+    else if Match(gttSpread) then
+    begin
+      if Check(gttIdentifier) and (Peek.Lexeme = '_') then
+      begin
+        Advance;
+        HasRestWildcard := True;
+      end
+      else
+        RestPattern := ParseMatchPatternOr;
+      Break;
+    end
+    else
+      Elements.Add(ParseMatchPatternOr);
+
+    if not Match(gttComma) then
+      Break;
+  end;
+
+  Consume(gttRightBracket, 'Expected "]" after array pattern',
+    SSuggestCloseBracketArray);
+  Result := TGocciaArrayMatchPattern.Create(Elements, RestPattern,
+    HasRestWildcard, ALine, AColumn);
+end;
+
+function TGocciaParser.ParseObjectMatchPattern(const ALine, AColumn: Integer): TGocciaObjectMatchPattern;
+var
+  Properties: TGocciaObjectMatchPropertyList;
+  RestPattern: TGocciaMatchPattern;
+  Key: string;
+  KeyExpression: TGocciaExpression;
+  Pattern: TGocciaMatchPattern;
+  IsComputed: Boolean;
+  CanUseShorthand: Boolean;
+  NumericValue: Double;
+begin
+  Properties := TGocciaObjectMatchPropertyList.Create(True);
+  RestPattern := nil;
+
+  while not Check(gttRightBrace) and not IsAtEnd do
+  begin
+    if Match(gttSpread) then
+    begin
+      RestPattern := ParseMatchPatternOr;
+      Break;
+    end;
+
+    IsComputed := False;
+    CanUseShorthand := False;
+    Key := '';
+    KeyExpression := nil;
+    if Match(gttLeftBracket) then
+    begin
+      IsComputed := True;
+      KeyExpression := Expression;
+      Consume(gttRightBracket, 'Expected "]" after computed pattern property',
+        SSuggestCloseBracketComputedPropertyName);
+    end
+    else if Check(gttString) then
+      Key := Advance.Lexeme
+    else if Check(gttNumber) then
+    begin
+      NumericValue := ConvertNumberLiteral(Advance.Lexeme);
+      Key := DoubleToESString(NumericValue);
+    end
+    else if IsIdentifierNameToken(Peek.TokenType) then
+    begin
+      CanUseShorthand := Check(gttIdentifier);
+      Key := Advance.Lexeme
+    end
+    else
+      raise TGocciaSyntaxError.Create('Expected property name in object pattern',
+        Peek.Line, Peek.Column, FFileName, FSourceLines,
+        SSuggestPropertyKeysFormat);
+
+    if Match(gttColon) then
+      Pattern := ParseMatchPatternOr
+    else if IsComputed then
+      raise TGocciaSyntaxError.Create('Computed pattern properties require a value pattern',
+        Peek.Line, Peek.Column, FFileName, FSourceLines,
+        SSuggestComputedPropertyNeedsValue)
+    else if not CanUseShorthand then
+      raise TGocciaSyntaxError.Create('Object pattern shorthand requires an identifier property name',
+        Previous.Line, Previous.Column, FFileName, FSourceLines,
+        'Use a ":" value pattern for string, numeric, or keyword property names')
+    else
+      Pattern := TGocciaValueMatchPattern.Create(
+        TGocciaIdentifierExpression.Create(Key, Previous.Line, Previous.Column),
+        False, Previous.Line, Previous.Column);
+
+    Properties.Add(TGocciaObjectMatchProperty.Create(Key, Pattern, IsComputed,
+      KeyExpression));
+
+    if not Match(gttComma) then
+      Break;
+  end;
+
+  Consume(gttRightBrace, 'Expected "}" after object pattern',
+    SSuggestCloseObject);
+  Result := TGocciaObjectMatchPattern.Create(Properties, RestPattern,
+    ALine, AColumn);
+end;
+
+function TGocciaParser.ParsePatternValueExpression: TGocciaExpression;
+var
+  Token: TGocciaToken;
+  PropertyName: string;
+  KeyExpression: TGocciaExpression;
+begin
+  Result := Primary;
+  while True do
+  begin
+    if Match(gttDot) then
+    begin
+      if Check(gttHash) then
+      begin
+        Token := Previous;
+        Advance;
+        Consume(gttIdentifier, 'Expected private field name after "#"',
+          SSuggestPrivateFieldMustFollow);
+        PropertyName := Previous.Lexeme;
+        RecordPrivateNameReference(PropertyName, Previous.Line, Previous.Column);
+        Result := TGocciaPrivateMemberExpression.Create(Result, PropertyName,
+          Token.Line, Token.Column);
+        Continue;
+      end;
+
+      if IsIdentifierNameToken(Peek.TokenType) then
+        Token := Advance
+      else
+        raise TGocciaSyntaxError.Create('Expected property name after "."',
+          Peek.Line, Peek.Column, FFileName, FSourceLines,
+          SSuggestPropertyNameIdentifier);
+      PropertyName := Token.Lexeme;
+      Result := TGocciaMemberExpression.Create(Result, PropertyName, False,
+        Token.Line, Token.Column, False);
+    end
+    else if Match(gttLeftBracket) then
+    begin
+      Token := Previous;
+      KeyExpression := Expression;
+      Consume(gttRightBracket, 'Expected "]" after computed member expression',
+        SSuggestCloseBracketComputedProperty);
+      Result := TGocciaMemberExpression.Create(Result, KeyExpression,
+        Token.Line, Token.Column);
+    end
+    else
+      Break;
+  end;
+end;
+
+procedure TGocciaParser.CollectMatchPatternBindings(
+  const APattern: TGocciaMatchPattern; const ANames: TStringList);
+var
+  I, ExistingIndex, CurrentIndex: Integer;
+  BindingPattern: TGocciaBindingMatchPattern;
+  AsPattern: TGocciaAsMatchPattern;
+  OrPattern: TGocciaOrMatchPattern;
+  First, Current: TStringList;
+  Name, KindValue: string;
+
+  function IndexOfBindingName(const AList: TStringList; const AName: string): Integer;
+  var
+    J: Integer;
+  begin
+    for J := 0 to AList.Count - 1 do
+      if AList.Names[J] = AName then
+        Exit(J);
+    Result := -1;
+  end;
+
+  procedure AddBinding(const AName: string; const AKind: TGocciaDeclarationType;
+    const ALine, AColumn: Integer);
+  begin
+    if IndexOfBindingName(ANames, AName) >= 0 then
+      raise TGocciaSyntaxError.Create('Duplicate binding in pattern',
+        ALine, AColumn, FFileName, FSourceLines,
+        'Use a distinct binding name in this pattern');
+    ANames.Add(AName + '=' + IntToStr(Ord(AKind)));
+  end;
+
+  procedure MergeBindings(const ASource: TStringList; const ALine, AColumn: Integer);
+  var
+    J: Integer;
+  begin
+    for J := 0 to ASource.Count - 1 do
+    begin
+      Name := ASource.Names[J];
+      if IndexOfBindingName(ANames, Name) >= 0 then
+        raise TGocciaSyntaxError.Create('Duplicate binding in pattern',
+          ALine, AColumn, FFileName, FSourceLines,
+          'Use a distinct binding name in this pattern');
+      ANames.Add(Name + '=' + ASource.ValueFromIndex[J]);
+    end;
+  end;
+
+begin
+  if not Assigned(APattern) then
+    Exit;
+
+  if APattern is TGocciaBindingMatchPattern then
+  begin
+    BindingPattern := TGocciaBindingMatchPattern(APattern);
+    AddBinding(BindingPattern.Name, BindingPattern.DeclarationType,
+      APattern.Line, APattern.Column);
+  end
+  else if APattern is TGocciaAsMatchPattern then
+  begin
+    AsPattern := TGocciaAsMatchPattern(APattern);
+    CollectMatchPatternBindings(AsPattern.Pattern, ANames);
+    AddBinding(AsPattern.Name, AsPattern.DeclarationType,
+      APattern.Line, APattern.Column);
+  end
+  else if APattern is TGocciaArrayMatchPattern then
+  begin
+    for I := 0 to TGocciaArrayMatchPattern(APattern).Elements.Count - 1 do
+      CollectMatchPatternBindings(TGocciaArrayMatchPattern(APattern).Elements[I], ANames);
+    CollectMatchPatternBindings(TGocciaArrayMatchPattern(APattern).RestPattern, ANames);
+  end
+  else if APattern is TGocciaObjectMatchPattern then
+  begin
+    for I := 0 to TGocciaObjectMatchPattern(APattern).Properties.Count - 1 do
+      CollectMatchPatternBindings(TGocciaObjectMatchPattern(APattern).Properties[I].Pattern, ANames);
+    CollectMatchPatternBindings(TGocciaObjectMatchPattern(APattern).RestPattern, ANames);
+  end
+  else if APattern is TGocciaExtractorMatchPattern then
+  begin
+    for I := 0 to TGocciaExtractorMatchPattern(APattern).Arguments.Count - 1 do
+      CollectMatchPatternBindings(TGocciaExtractorMatchPattern(APattern).Arguments[I], ANames);
+    CollectMatchPatternBindings(TGocciaExtractorMatchPattern(APattern).RestPattern, ANames);
+  end
+  else if APattern is TGocciaAndMatchPattern then
+  begin
+    for I := 0 to TGocciaAndMatchPattern(APattern).Patterns.Count - 1 do
+      CollectMatchPatternBindings(TGocciaAndMatchPattern(APattern).Patterns[I], ANames);
+  end
+  else if APattern is TGocciaOrMatchPattern then
+  begin
+    OrPattern := TGocciaOrMatchPattern(APattern);
+    First := TStringList.Create;
+    try
+      First.CaseSensitive := True;
+      First.NameValueSeparator := '=';
+      if OrPattern.Patterns.Count > 0 then
+        CollectMatchPatternBindings(OrPattern.Patterns[0], First);
+
+      for I := 1 to OrPattern.Patterns.Count - 1 do
+      begin
+        Current := TStringList.Create;
+        try
+          Current.CaseSensitive := True;
+          Current.NameValueSeparator := '=';
+          CollectMatchPatternBindings(OrPattern.Patterns[I], Current);
+          if Current.Count <> First.Count then
+            raise TGocciaSyntaxError.Create('"or" pattern alternatives must bind the same names',
+              APattern.Line, APattern.Column, FFileName, FSourceLines,
+              'Bind the same names with the same declaration kind in every alternative');
+          for ExistingIndex := 0 to First.Count - 1 do
+          begin
+            Name := First.Names[ExistingIndex];
+            KindValue := First.ValueFromIndex[ExistingIndex];
+            CurrentIndex := IndexOfBindingName(Current, Name);
+            if (CurrentIndex < 0) or
+               (Current.ValueFromIndex[CurrentIndex] <> KindValue) then
+              raise TGocciaSyntaxError.Create('"or" pattern alternatives must bind the same names',
+                APattern.Line, APattern.Column, FFileName, FSourceLines,
+                'Bind the same names with the same declaration kind in every alternative');
+          end;
+        finally
+          Current.Free;
+        end;
+      end;
+
+      MergeBindings(First, APattern.Line, APattern.Column);
+    finally
+      First.Free;
+    end;
+  end
+  else if APattern is TGocciaNotMatchPattern then
+  begin
+    First := TStringList.Create;
+    try
+      First.CaseSensitive := True;
+      First.NameValueSeparator := '=';
+      CollectMatchPatternBindings(TGocciaNotMatchPattern(APattern).Pattern, First);
+      if First.Count > 0 then
+        raise TGocciaSyntaxError.Create('"not" patterns cannot contain bindings',
+          APattern.Line, APattern.Column, FFileName, FSourceLines,
+          'Move bindings outside the "not" pattern');
+    finally
+      First.Free;
+    end;
+  end;
+end;
+
+procedure TGocciaParser.ValidateMatchPatternEarlyErrors(
+  const APattern: TGocciaMatchPattern);
+var
+  Names: TStringList;
+begin
+  Names := TStringList.Create;
+  try
+    Names.CaseSensitive := True;
+    Names.NameValueSeparator := '=';
+    CollectMatchPatternBindings(APattern, Names);
+  finally
+    Names.Free;
+  end;
 end;
 
 function TGocciaParser.ArrayLiteral: TGocciaExpression;
@@ -3057,6 +3714,7 @@ var
   IsVar: Boolean;
   BindingName: string;
   BindingPattern: TGocciaDestructuringPattern;
+  MatchPattern: TGocciaMatchPattern;
   IterableExpr: TGocciaExpression;
   BodyStmt: TGocciaStatement;
   SavedCurrent: Integer;
@@ -3069,6 +3727,7 @@ begin
   IsAwait := False;
   IsVar := False;
   BindingPattern := nil;
+  MatchPattern := nil;
 
   // for-await-of: 'await' appears between 'for' and '(' (async or top-level)
   if ((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) then
@@ -3110,8 +3769,21 @@ begin
         Exit;
       end;
 
+      if Assigned(BindingPattern) and CheckContextualKeyword(KEYWORD_IS) then
+        raise TGocciaSyntaxError.Create('Pattern-filtered for...of requires an identifier binding before "is"',
+          Peek.Line, Peek.Column, FFileName, FSourceLines,
+          'Use for (const item is Pattern of items), not a destructuring subject before "is"');
+
+      if (BindingName <> '') and MatchContextualKeyword(KEYWORD_IS) then
+        MatchPattern := ParseMatchPattern;
+
       // Check for 'of' keyword
-      if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_OF) then
+      if Assigned(MatchPattern) and not CheckContextualKeyword(KEYWORD_OF) then
+        raise TGocciaSyntaxError.Create('Expected "of" after pattern-filtered for loop pattern',
+          Peek.Line, Peek.Column, FFileName, FSourceLines,
+          'Use for (const item is Pattern of iterable)');
+
+      if CheckContextualKeyword(KEYWORD_OF) then
       begin
         Advance; // consume 'of'
 
@@ -3129,12 +3801,12 @@ begin
 
         if IsAwait then
         begin
-          Result := TGocciaForAwaitOfStatement.Create(IsConst, BindingName, BindingPattern, IterableExpr, BodyStmt, Line, Column);
+          Result := TGocciaForAwaitOfStatement.Create(IsConst, BindingName, BindingPattern, IterableExpr, BodyStmt, Line, Column, MatchPattern);
           TGocciaForAwaitOfStatement(Result).IsVar := IsVar;
         end
         else
         begin
-          Result := TGocciaForOfStatement.Create(IsConst, BindingName, BindingPattern, IterableExpr, BodyStmt, Line, Column);
+          Result := TGocciaForOfStatement.Create(IsConst, BindingName, BindingPattern, IterableExpr, BodyStmt, Line, Column, MatchPattern);
           TGocciaForOfStatement(Result).IsVar := IsVar;
         end;
         Exit;
@@ -3306,6 +3978,7 @@ var
   Line, Column: Integer;
   TryStmt: TGocciaTryStatement;
   CatchType: string;
+  CatchPattern: TGocciaMatchPattern;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -3317,6 +3990,7 @@ begin
   CatchBlock := nil;
   FinallyBlock := nil;
   CatchType := '';
+  CatchPattern := nil;
 
   if Match(gttCatch) then
   begin
@@ -3330,7 +4004,12 @@ begin
       begin
         Advance;
         CatchType := CollectTypeAnnotation([gttRightParen]);
+        if CatchType = '' then
+          raise TGocciaSyntaxError.Create('Expected type annotation after ":"',
+            Peek.Line, Peek.Column, FFileName, FSourceLines);
       end;
+      if (CatchType = '') and MatchContextualKeyword(KEYWORD_IS) then
+        CatchPattern := ParseMatchPattern;
       Consume(gttRightParen, 'Expected ")" after catch parameter',
         SSuggestCloseParenCatchClause);
     end
@@ -3355,7 +4034,7 @@ begin
       SSuggestMissingCatchOrFinally);
 
   TryStmt := TGocciaTryStatement.Create(Block, CatchParam, CatchBlock,
-    FinallyBlock, Line, Column);
+    FinallyBlock, Line, Column, CatchPattern);
   TryStmt.CatchParamType := CatchType;
   Result := TryStmt;
 end;
@@ -4541,7 +5220,9 @@ end;
 
 { Type annotation helpers (Types as Comments) }
 
-function TGocciaParser.CollectTypeAnnotation(const ATerminators: array of TGocciaTokenType): string;
+function TGocciaParser.CollectTypeAnnotation(
+  const ATerminators: array of TGocciaTokenType;
+  const AContextualTerminator: string): string;
 var
   Depth: Integer;
   I: Integer;
@@ -4557,6 +5238,11 @@ begin
 
     if Depth = 0 then
     begin
+      if (AContextualTerminator <> '') and
+         (TokenType = gttIdentifier) and
+         (Peek.Lexeme = AContextualTerminator) then
+        Exit;
+
       IsTerminator := False;
       for I := 0 to High(ATerminators) do
         if TokenType = ATerminators[I] then

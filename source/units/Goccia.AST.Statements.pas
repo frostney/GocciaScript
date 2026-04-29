@@ -133,17 +133,20 @@ type
     FIsVar: Boolean;
     FBindingName: string;
     FBindingPattern: TGocciaDestructuringPattern;
+    FMatchPattern: TGocciaMatchPattern;
     FIterable: TGocciaExpression;
     FBody: TGocciaStatement;
   public
     constructor Create(const AIsConst: Boolean; const ABindingName: string;
       const ABindingPattern: TGocciaDestructuringPattern; const AIterable: TGocciaExpression;
-      const ABody: TGocciaStatement; const ALine, AColumn: Integer);
+      const ABody: TGocciaStatement; const ALine, AColumn: Integer;
+      const AMatchPattern: TGocciaMatchPattern = nil);
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property IsConst: Boolean read FIsConst;
     property IsVar: Boolean read FIsVar write FIsVar;
     property BindingName: string read FBindingName;
     property BindingPattern: TGocciaDestructuringPattern read FBindingPattern;
+    property MatchPattern: TGocciaMatchPattern read FMatchPattern;
     property Iterable: TGocciaExpression read FIterable;
     property Body: TGocciaStatement read FBody;
   end;
@@ -178,15 +181,18 @@ type
     FCatchBlock: TGocciaBlockStatement;
     FFinallyBlock: TGocciaBlockStatement;
     FCatchParamType: string;
+    FCatchPattern: TGocciaMatchPattern;
   public
     constructor Create(const ABlock: TGocciaBlockStatement; const ACatchParam: string;
-      const ACatchBlock, AFinallyBlock: TGocciaBlockStatement; const ALine, AColumn: Integer);
+      const ACatchBlock, AFinallyBlock: TGocciaBlockStatement; const ALine, AColumn: Integer;
+      const ACatchPattern: TGocciaMatchPattern = nil);
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Block: TGocciaBlockStatement read FBlock;
     property CatchParam: string read FCatchParam;
     property CatchBlock: TGocciaBlockStatement read FCatchBlock;
     property FinallyBlock: TGocciaBlockStatement read FFinallyBlock;
     property CatchParamType: string read FCatchParamType write FCatchParamType;
+    property CatchPattern: TGocciaMatchPattern read FCatchPattern;
   end;
 
   // Is this not a statement?
@@ -620,15 +626,17 @@ end;
 
   constructor TGocciaForOfStatement.Create(const AIsConst: Boolean; const ABindingName: string;
     const ABindingPattern: TGocciaDestructuringPattern; const AIterable: TGocciaExpression;
-    const ABody: TGocciaStatement; const ALine, AColumn: Integer);
-  begin
-    inherited Create(ALine, AColumn);
-    FIsConst := AIsConst;
-    FBindingName := ABindingName;
-    FBindingPattern := ABindingPattern;
-    FIterable := AIterable;
-    FBody := ABody;
-  end;
+    const ABody: TGocciaStatement; const ALine, AColumn: Integer;
+    const AMatchPattern: TGocciaMatchPattern = nil);
+begin
+  inherited Create(ALine, AColumn);
+  FIsConst := AIsConst;
+  FBindingName := ABindingName;
+  FBindingPattern := ABindingPattern;
+  FMatchPattern := AMatchPattern;
+  FIterable := AIterable;
+  FBody := ABody;
+end;
 
   { TGocciaReturnStatement }
 
@@ -655,14 +663,15 @@ end;
 
   constructor TGocciaTryStatement.Create(const ABlock: TGocciaBlockStatement;
     const ACatchParam: string; const ACatchBlock, AFinallyBlock: TGocciaBlockStatement;
-    const ALine, AColumn: Integer);
-  begin
-    inherited Create(ALine, AColumn);
-    FBlock := ABlock;
-    FCatchParam := ACatchParam;
-    FCatchBlock := ACatchBlock;
-    FFinallyBlock := AFinallyBlock;
-  end;
+    const ALine, AColumn: Integer; const ACatchPattern: TGocciaMatchPattern = nil);
+begin
+  inherited Create(ALine, AColumn);
+  FBlock := ABlock;
+  FCatchParam := ACatchParam;
+  FCatchBlock := ACatchBlock;
+  FFinallyBlock := AFinallyBlock;
+  FCatchPattern := ACatchPattern;
+end;
 
   { TGocciaClassMethod }
 
