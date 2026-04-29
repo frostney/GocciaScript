@@ -4,28 +4,6 @@ All notable changes to GocciaScript are documented in this file.
 
 ## [0.7.0] - 2026-04-29
 
-### 🏗️ Internal
-
-- Update playground examples and controls (#447)
-
-### 🐛 Fixed
-
-- Fix generator continuation replay (#448)
-- Fix CSV and TSV header option examples (#452)
-
-### 📖 Other
-
-- Declare Content Signals in robots.txt (#449)
-
-### 🚀 Added
-
-- Add agent discovery Link headers (#450)
-- Enable markdown negotiation for agents (#451)
-- Implement WeakMap and WeakSet built-ins (#437)
-- Implement TC39 pattern matching (#438)
-
-## [nightly] - 2026-04-29
-
 ### ✨ Improved
 
 - Make fetch asynchronous with fetch manager (#396)
@@ -37,10 +15,25 @@ All notable changes to GocciaScript are documented in this file.
 - Improve REPL object previews with depth-aware formatting (#296)
 - Make import.meta tests account for Windows drive letters (#274)
 
+### 🌐 Website
+
+- Fix CSV and TSV header option examples (#452)
+- Add agent discovery Link headers (#450)
+- Declare Content Signals in robots.txt (#449)
+- Enable markdown negotiation for agents (#451)
+- Update playground examples and controls (#447)
+- Add website Browserslist config (#446)
+- Refine website landing and sandbox copy (#445)
+- Update website API execution endpoints (#444)
+- Fix Vercel ignore diff for shallow clones (#443)
+- Fix website labels, hero console alignment, and example file extensions (#423)
+- Unify website console output with shared ConsolePanel (#418)
+- Skip Vercel preview builds for non-website changes (#414)
+- Add Next.js 16 website (docs, playground, sandbox, install) (#407)
+
 ### 🏗️ Internal
 
 - Extract shared text semantics utilities (#439)
-- Update website API execution endpoints (#444)
 - Update copyright year in LICENSE file (#384)
 - Refactor engine around pluggable executors (#332)
 - Update ECMAScript edition references to 2027 (#323)
@@ -51,14 +44,13 @@ All notable changes to GocciaScript are documented in this file.
 
 ### 🐛 Fixed
 
-- Fix Vercel ignore diff for shallow clones (#443)
+- Fix generator continuation replay (#448)
 - Fix CI cross toolchain resource compiler (#442)
 - Fix ZonedDateTime DST-aware diff rounding (#435)
 - Fix Temporal BigInt duration overflow (#431)
 - Fix Windows parser CLI output assertions (#430)
 - Fix unsupported var recovery before block close (#427)
 - Fix for-of `continue` raising ReferenceError instead of skipping iteration (#425)
-- Fix website labels, hero console alignment, and example file extensions (#423)
 - Thread options through Temporal *.until / *.since methods (#417)
 - Fix Number toString scientific notation threshold and format (#415)
 - Fix decorator wrapper this-binding test gap and misdirecting warning (#416)
@@ -82,11 +74,8 @@ All notable changes to GocciaScript are documented in this file.
 
 ### 📖 Other
 
-- Refine website landing and sandbox copy (#445)
 - Embed IANA timezone data for Temporal (#440)
 - Unify CLI JSON reporting (#433)
-- Unify website console output with shared ConsolePanel (#418)
-- Skip Vercel preview builds for non-website changes (#414)
 - Strengthen test262 runner and ECMAScript edge-case coverage (#402)
 - Skip unsupported generator methods during parsing (#388)
 - Infer names for anonymous classes and object functions (#387)
@@ -114,7 +103,8 @@ All notable changes to GocciaScript are documented in this file.
 
 ### 🚀 Added
 
-- Add website Browserslist config (#446)
+- Implement WeakMap and WeakSet built-ins (#437)
+- Implement TC39 pattern matching (#438)
 - Add generator and async generator support (#432)
 - Add generated sources to CI FPC search path (#441)
 - Add native TLS transport backends (#428)
@@ -122,7 +112,6 @@ All notable changes to GocciaScript are documented in this file.
 - Implement smallestUnit, roundingMode, roundingIncrement for Temporal until/since (#424)
 - Add receiver brand checks to Set/Map prototype methods (#421)
 - Support destructuring into member expression targets (#413)
-- Add Next.js 16 website (docs, playground, sandbox, install) (#407)
 - Add fetch host allowlist support (#395)
 - Add fetch host allowlist support (#391)
 - Add opt-in `function` keyword support (`--compat-function`) (#390)
