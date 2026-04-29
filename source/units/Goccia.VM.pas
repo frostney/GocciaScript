@@ -2510,6 +2510,7 @@ begin
         MarkRegisterReferences(Upvalue.Cell.Value);
     end;
   MarkRegisterReferences(FThisValue);
+  MarkRegisterReferences(FResumeValue);
   for I := 0 to High(FArguments) do
     MarkRegisterReferences(FArguments[I]);
   for I := 0 to High(FContinuationRegisters) do
