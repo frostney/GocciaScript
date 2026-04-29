@@ -62,6 +62,8 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaScriptLoader example.js --coverage --coverage-format=lcov --coverage-output=coverage.lcov # Coverage with lcov output
 ./build/GocciaScriptLoader example.js --coverage --coverage-format=json --coverage-output=coverage.json # Coverage with JSON output
 ./build/GocciaScriptLoader example.js --asi # Execute with automatic semicolon insertion
+./build/GocciaScriptLoader example.js --output=json # Execute with structured JSON output
+./build/GocciaScriptLoader example.js --output=compact-json # Execute with structured JSON output, omitting build, memory, stdout, and stderr
 ./build/GocciaScriptLoader example.js --profile=opcodes # Opcode histogram, pair frequency, scalar hit rate (bytecode)
 ./build/GocciaScriptLoader example.js --profile=functions # Function self-time, allocations (bytecode)
 ./build/GocciaScriptLoader example.js --profile=all # All profiling data (bytecode)

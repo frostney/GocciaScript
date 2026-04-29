@@ -360,7 +360,7 @@ jobs:
                 for (const b of file.benchmarks) {
                   if (!b.error) m[`${b.suite} > ${b.name}`] = normalizeBenchmark(b);
                 }
-                map[file.file] = m;
+                map[file.fileName] = m;
               }
               return map;
             }
@@ -375,7 +375,7 @@ jobs:
             const fileBlocks = [];
 
             for (const file of interpData.files) {
-              const fileName = file.file;
+              const fileName = file.fileName;
               const iBase = interpBaseMap[fileName] || {};
               const bBase = bytecodeBaseMap[fileName] || {};
               const bCurrent = bytecodeCurrentMap[fileName] || {};

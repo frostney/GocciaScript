@@ -58,6 +58,7 @@ function assertCommonJsonReport(json: any, label: string, expectedFileCount: num
 
 function assertCommonJsonFile(file: any, label: string, fileName: string, ok = true): void {
   if (file?.fileName !== fileName) throw new Error(`${label} fileName mismatch: ${file?.fileName}`);
+  if ("file" in file) throw new Error(`${label} per-file should not include duplicate "file" alias`);
   if (file?.ok !== ok) throw new Error(`${label} ok should be ${ok}, got ${file?.ok}`);
   if (typeof file?.stdout !== "string") throw new Error(`${label} stdout should always be present`);
   if (typeof file?.stderr !== "string") throw new Error(`${label} stderr should always be present`);
@@ -215,6 +216,105 @@ console.log("Loader: JSON source-load failure stays per-file...");
       if (typeof unreadableFile?.error?.message !== "string") throw new Error("Unreadable source file should include shared error object");
       if (validFile?.ok !== true || validFile?.result !== 4) throw new Error("Valid file should still run after unreadable source file");
     }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Loader: compact-json omits build, memory, stdout, stderr...");
+{
+  const proc = Bun.spawnSync([LOADER, "--output=compact-json"], {
+    stdin: new TextEncoder().encode("console.log('hi'); console.error('warn'); 2 + 2;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`compact-json exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  const json = JSON.parse(proc.stdout.toString());
+  if ("build" in json) throw new Error("compact-json should omit top-level build");
+  if ("memory" in json) throw new Error("compact-json should omit top-level memory");
+  if ("stdout" in json) throw new Error("compact-json should omit top-level stdout");
+  if ("stderr" in json) throw new Error("compact-json should omit top-level stderr");
+  if (json.ok !== true) throw new Error(`compact-json ok should be true, got ${json.ok}`);
+  if (!Array.isArray(json.output)) throw new Error("compact-json output should be an array");
+  if (!json.output.includes("hi") || !json.output.includes("Error: warn")) {
+    throw new Error(`compact-json output should preserve normalized lines, got ${JSON.stringify(json.output)}`);
+  }
+  if (json.error !== null) throw new Error("compact-json error should be null");
+  if (typeof json.timing?.total_ns !== "number") throw new Error("compact-json timing should be present");
+  if (typeof json.workers?.used !== "number") throw new Error("compact-json workers should be present");
+  if (!Array.isArray(json.files) || json.files.length !== 1) throw new Error("compact-json files should have one entry");
+  const file = json.files[0];
+  if ("memory" in file) throw new Error("compact-json per-file memory should be omitted");
+  if ("stdout" in file) throw new Error("compact-json per-file stdout should be omitted");
+  if ("stderr" in file) throw new Error("compact-json per-file stderr should be omitted");
+  if ("file" in file) throw new Error("compact-json per-file should not include duplicate \"file\" alias");
+  if (file.fileName !== "<stdin>") throw new Error(`compact-json fileName should be <stdin>, got ${file.fileName}`);
+  if (file.result !== 4) throw new Error(`compact-json file result should be 4, got ${file.result}`);
+  if (typeof file.timing?.total_ns !== "number") throw new Error("compact-json per-file timing should be present");
+}
+
+console.log("Loader: compact-json error path omits build, memory, stdout, stderr...");
+{
+  const proc = Bun.spawnSync([LOADER, "--output=compact-json"], {
+    stdin: new TextEncoder().encode("throw new Error('boom');\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode === 0) throw new Error("compact-json error path should set non-zero exit code");
+  const json = JSON.parse(proc.stdout.toString());
+  if ("build" in json) throw new Error("compact-json error should omit top-level build");
+  if ("memory" in json) throw new Error("compact-json error should omit top-level memory");
+  if ("stdout" in json) throw new Error("compact-json error should omit top-level stdout");
+  if ("stderr" in json) throw new Error("compact-json error should omit top-level stderr");
+  if (json.ok !== false) throw new Error(`compact-json error ok should be false, got ${json.ok}`);
+  if (json.error?.type !== "Error") throw new Error(`compact-json error type should be Error, got ${json.error?.type}`);
+  if (json.error?.message !== "boom") throw new Error(`compact-json error message should be boom, got ${json.error?.message}`);
+  const file = json.files?.[0];
+  if (!file) throw new Error("compact-json error should still include per-file entry");
+  if ("memory" in file) throw new Error("compact-json error per-file memory should be omitted");
+  if ("stdout" in file) throw new Error("compact-json error per-file stdout should be omitted");
+  if ("stderr" in file) throw new Error("compact-json error per-file stderr should be omitted");
+  if ("file" in file) throw new Error("compact-json error per-file should not include duplicate \"file\" alias");
+  if (file.ok !== false) throw new Error(`compact-json error per-file ok should be false, got ${file.ok}`);
+  if (file.result !== null) throw new Error(`compact-json error per-file result should be null, got ${file.result}`);
+}
+
+console.log("Loader: compact-json multi-file omits build, memory, stdout, stderr...");
+{
+  const tmp = makeTmp();
+  try {
+    const first = join(tmp, "first.js");
+    const second = join(tmp, "second.js");
+    writeFileSync(first, "11;\n");
+    writeFileSync(second, "22;\n");
+
+    const proc = Bun.spawnSync([LOADER, "--output=compact-json", "--jobs=2", first, second], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`compact-json multi-file exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const json = JSON.parse(proc.stdout.toString());
+    if ("build" in json) throw new Error("compact-json multi-file should omit top-level build");
+    if ("memory" in json) throw new Error("compact-json multi-file should omit top-level memory");
+    if ("stdout" in json) throw new Error("compact-json multi-file should omit top-level stdout");
+    if ("stderr" in json) throw new Error("compact-json multi-file should omit top-level stderr");
+    if (!Array.isArray(json.files) || json.files.length !== 2) throw new Error("compact-json multi-file should have two entries");
+    for (const [idx, file] of (json.files as any[]).entries()) {
+      if ("memory" in file) throw new Error(`compact-json multi-file files[${idx}] memory should be omitted`);
+      if ("stdout" in file) throw new Error(`compact-json multi-file files[${idx}] stdout should be omitted`);
+      if ("stderr" in file) throw new Error(`compact-json multi-file files[${idx}] stderr should be omitted`);
+      if ("file" in file) throw new Error(`compact-json multi-file files[${idx}] should not include duplicate "file" alias`);
+    }
+    const byFileName = new Map<string, any>(
+      (json.files as any[]).map((f) => [f.fileName, f]),
+    );
+    const firstFile = byFileName.get(first);
+    const secondFile = byFileName.get(second);
+    if (!firstFile) throw new Error(`compact-json multi-file missing entry for ${first}`);
+    if (!secondFile) throw new Error(`compact-json multi-file missing entry for ${second}`);
+    if (firstFile.result !== 11) throw new Error(`compact-json multi-file ${first} result should be 11, got ${firstFile.result}`);
+    if (secondFile.result !== 22) throw new Error(`compact-json multi-file ${second} result should be 22, got ${secondFile.result}`);
+    if (json.workers?.used !== 2) throw new Error(`compact-json multi-file workers.used should be 2, got ${json.workers?.used}`);
   } finally {
     clean(tmp);
   }
@@ -648,7 +748,8 @@ console.log("TestRunner: JSON multi-file structure...");
       if (proc.exitCode !== 0) throw new Error(`File benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
     }
     const fileJson = readFileSync(fileOut, "utf-8");
-    if (!fileJson.includes('"file":')) throw new Error('File JSON should contain "file":');
+    if (!fileJson.includes('"fileName":')) throw new Error('File JSON should contain "fileName":');
+    if (fileJson.includes('"file":')) throw new Error('File JSON should not contain duplicate "file" alias');
     if (!fileJson.includes('"totalBenchmarks":')) throw new Error('File JSON should contain "totalBenchmarks":');
     {
       const json = JSON.parse(fileJson);
@@ -672,7 +773,8 @@ console.log("TestRunner: JSON multi-file structure...");
       if (proc.exitCode !== 0) throw new Error(`Bytecode file benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
     }
     const fileBcJson = readFileSync(fileBcOut, "utf-8");
-    if (!fileBcJson.includes('"file":')) throw new Error('Bytecode file JSON should contain "file":');
+    if (!fileBcJson.includes('"fileName":')) throw new Error('Bytecode file JSON should contain "fileName":');
+    if (fileBcJson.includes('"file":')) throw new Error('Bytecode file JSON should not contain duplicate "file" alias');
     {
       const parsed = JSON.parse(fileBcJson);
       const valid = parsed.files
