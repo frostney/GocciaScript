@@ -165,6 +165,114 @@ test("object generator yield delegation does not replay side effects before the 
   expect(events).toEqual(["before", "after"]);
 });
 
+test("object generator yield delegation forwards next values to delegated generators", () => {
+  const inner = {
+    *values() {
+      const value = yield 1;
+      yield value;
+    },
+  };
+  const outer = {
+    *values() {
+      yield* inner.values();
+    },
+  };
+
+  const iter = outer.values();
+  expect(iter.next()).toEqual({ value: 1, done: false });
+  expect(iter.next(42)).toEqual({ value: 42, done: false });
+});
+
+test("object generator yield delegation forwards return values and runs delegated finally", () => {
+  const events = [];
+  const inner = {
+    *values() {
+      try {
+        yield 1;
+      } finally {
+        events.push("finally");
+      }
+    },
+  };
+  const outer = {
+    *values() {
+      yield* inner.values();
+    },
+  };
+
+  const iter = outer.values();
+  expect(iter.next()).toEqual({ value: 1, done: false });
+  expect(iter.return(9)).toEqual({ value: 9, done: true });
+  expect(events).toEqual(["finally"]);
+});
+
+test("object generator yield delegation preserves delegated finally yields on return", () => {
+  const events = [];
+  const inner = {
+    *values() {
+      try {
+        yield 1;
+      } finally {
+        events.push("finally");
+        yield "cleanup";
+      }
+    },
+  };
+  const outer = {
+    *values() {
+      yield* inner.values();
+    },
+  };
+
+  const iter = outer.values();
+  expect(iter.next()).toEqual({ value: 1, done: false });
+  expect(iter.return(9)).toEqual({ value: "cleanup", done: false });
+  expect(events).toEqual(["finally"]);
+  expect(iter.next()).toEqual({ value: undefined, done: true });
+});
+
+test("object generator yield delegation rejects non-callable return and throw", () => {
+  const nonCallableReturn = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return { value: 1, done: false };
+        },
+        return: 1,
+      };
+    },
+  };
+  const nonCallableThrow = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return { value: 1, done: false };
+        },
+        throw: 1,
+        return() {
+          return { value: "closed", done: true };
+        },
+      };
+    },
+  };
+  const obj = {
+    *returning() {
+      yield* nonCallableReturn;
+    },
+    *throwing() {
+      yield* nonCallableThrow;
+    },
+  };
+
+  const returnIter = obj.returning();
+  expect(returnIter.next()).toEqual({ value: 1, done: false });
+  expect(() => returnIter.return(9)).toThrow(TypeError);
+
+  const throwIter = obj.throwing();
+  expect(throwIter.next()).toEqual({ value: 1, done: false });
+  expect(() => throwIter.throw(9)).toThrow(TypeError);
+});
+
 test("object generator method return closes through finally", () => {
   let closed = false;
   const obj = {
@@ -201,6 +309,48 @@ test("object generator method return does not replay side effects before a yield
   expect(iter.next()).toEqual({ value: 1, done: false });
   expect(iter.return(9)).toEqual({ value: 9, done: true });
   expect(events).toEqual(["before", "finally"]);
+});
+
+test("object generator method finally yield preserves pending return without replaying try", () => {
+  const events = [];
+  const obj = {
+    *values() {
+      try {
+        events.push("try");
+        return 7;
+      } finally {
+        events.push("finally");
+        yield "cleanup";
+      }
+    },
+  };
+
+  const iter = obj.values();
+  expect(iter.next()).toEqual({ value: "cleanup", done: false });
+  expect(events).toEqual(["try", "finally"]);
+  expect(iter.next()).toEqual({ value: 7, done: true });
+  expect(events).toEqual(["try", "finally"]);
+});
+
+test("object generator method finally yield preserves pending throw without replaying try", () => {
+  const events = [];
+  const obj = {
+    *values() {
+      try {
+        events.push("try");
+        throw 7;
+      } finally {
+        events.push("finally");
+        yield "cleanup";
+      }
+    },
+  };
+
+  const iter = obj.values();
+  expect(iter.next()).toEqual({ value: "cleanup", done: false });
+  expect(events).toEqual(["try", "finally"]);
+  expect(() => iter.next()).toThrow();
+  expect(events).toEqual(["try", "finally"]);
 });
 
 test("object generator method throw is catchable", () => {

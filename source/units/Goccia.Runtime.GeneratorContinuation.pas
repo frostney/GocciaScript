@@ -19,6 +19,20 @@ uses
 
 type
   TGocciaGeneratorResumeKind = (grkNext, grkReturn, grkThrow);
+  TGocciaGeneratorTryPhase = (gtpTry, gtpCatch, gtpFinally);
+
+  TGocciaGeneratorTryState = class
+  public
+    Phase: TGocciaGeneratorTryPhase;
+    ResultFlow: TGocciaControlFlow;
+    CatchValue: TGocciaValue;
+    ThrownValue: TGocciaValue;
+    GeneratorReturnValue: TGocciaValue;
+    HasUnhandledThrow: Boolean;
+    HasGeneratorReturn: Boolean;
+    constructor Create;
+    procedure MarkReferences;
+  end;
 
   EGocciaGeneratorYield = class(Exception)
   private
@@ -54,6 +68,7 @@ type
     FDelegateAsyncNext: TGocciaValue;
     FExpressionValues: TDictionary<TObject, TGocciaValue>;
     FStatementIndexes: TDictionary<TObject, Integer>;
+    FTryStates: TDictionary<TObject, TGocciaGeneratorTryState>;
     FIsAsyncGenerator: Boolean;
   public
     constructor Create(const ABodyStatements: TObjectList<TGocciaASTNode>;
@@ -72,6 +87,10 @@ type
     procedure SaveStatementIndex(const AStatements: TObject; const AIndex: Integer);
     procedure ClearStatementIndex(const AStatements: TObject);
     procedure ClearStatementIndexes;
+    function EnsureTryState(const ATryStatement: TObject): TGocciaGeneratorTryState;
+    function GetTryState(const ATryStatement: TObject): TGocciaGeneratorTryState;
+    procedure ClearTryState(const ATryStatement: TObject);
+    procedure ClearTryStates;
     procedure MarkReferences;
     property Completed: Boolean read FCompleted;
   end;
@@ -110,6 +129,25 @@ type
     procedure MarkReferences; override;
   end;
 
+constructor TGocciaGeneratorTryState.Create;
+begin
+  inherited Create;
+  Phase := gtpTry;
+  ResultFlow := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+end;
+
+procedure TGocciaGeneratorTryState.MarkReferences;
+begin
+  if Assigned(ResultFlow.Value) then
+    ResultFlow.Value.MarkReferences;
+  if Assigned(CatchValue) then
+    CatchValue.MarkReferences;
+  if Assigned(ThrownValue) then
+    ThrownValue.MarkReferences;
+  if Assigned(GeneratorReturnValue) then
+    GeneratorReturnValue.MarkReferences;
+end;
+
 constructor TGocciaAsyncFromSyncIteratorValue.Create(const AIterator: TGocciaIteratorValue);
 begin
   inherited Create;
@@ -136,9 +174,20 @@ end;
 
 function TGocciaAsyncFromSyncIteratorValue.Next(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Done: Boolean;
+  Value: TGocciaValue;
 begin
   if Assigned(FIterator) then
-    Result := ResolveIteratorResult(FIterator.AdvanceNext)
+  begin
+    if AArgs.Length > 0 then
+    begin
+      Value := FIterator.DirectNextValue(AArgs.GetElement(0), Done);
+      Result := ResolveIteratorResult(CreateIteratorResult(Value, Done));
+    end
+    else
+      Result := ResolveIteratorResult(FIterator.AdvanceNext);
+  end
   else
     Result := ResolveIteratorResult(CreateIteratorResult(
       TGocciaUndefinedLiteralValue.UndefinedValue, True));
@@ -149,15 +198,16 @@ function TGocciaAsyncFromSyncIteratorValue.ReturnValue(
 var
   Value: TGocciaValue;
 begin
-  if Assigned(FIterator) then
-  begin
-    FIterator.Close;
-    FIterator := nil;
-  end;
   if AArgs.Length > 0 then
     Value := AArgs.GetElement(0)
   else
     Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if Assigned(FIterator) then
+  begin
+    Result := ResolveIteratorResult(FIterator.ReturnValue(Value));
+    FIterator := nil;
+    Exit;
+  end;
   Result := ResolveIteratorResult(CreateIteratorResult(Value, True));
 end;
 
@@ -166,15 +216,16 @@ function TGocciaAsyncFromSyncIteratorValue.ThrowValue(
 var
   Value: TGocciaValue;
 begin
-  if Assigned(FIterator) then
-  begin
-    FIterator.Close;
-    FIterator := nil;
-  end;
   if AArgs.Length > 0 then
     Value := AArgs.GetElement(0)
   else
     Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if Assigned(FIterator) then
+  begin
+    Result := ResolveIteratorResult(FIterator.ThrowValue(Value));
+    FIterator := nil;
+    Exit;
+  end;
   raise TGocciaThrowValue.Create(Value);
 end;
 
@@ -216,10 +267,13 @@ begin
   FPendingValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   FExpressionValues := TDictionary<TObject, TGocciaValue>.Create;
   FStatementIndexes := TDictionary<TObject, Integer>.Create;
+  FTryStates := TDictionary<TObject, TGocciaGeneratorTryState>.Create;
 end;
 
 destructor TGocciaGeneratorContinuation.Destroy;
 begin
+  ClearTryStates;
+  FTryStates.Free;
   FStatementIndexes.Free;
   FExpressionValues.Free;
   inherited;
@@ -284,6 +338,7 @@ begin
           FCompleted := True;
           ClearExpressionValues;
           ClearStatementIndexes;
+          ClearTryStates;
           ADone := True;
           if Assigned(ControlFlow.Value) then
             Result := ControlFlow.Value
@@ -306,6 +361,7 @@ begin
           FCompleted := True;
           ClearExpressionValues;
           ClearStatementIndexes;
+          ClearTryStates;
           ADone := True;
           Result := E.Value;
           Exit;
@@ -319,6 +375,7 @@ begin
   FCompleted := True;
   ClearExpressionValues;
   ClearStatementIndexes;
+  ClearTryStates;
   ADone := True;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -328,11 +385,14 @@ function TGocciaGeneratorContinuation.YieldValue(
   const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   CallArgs: TGocciaArgumentsCollection;
+  HasDelegateResumeValue: Boolean;
   IteratorResult: TGocciaObjectValue;
   IteratorMethod: TGocciaValue;
   RawIteratorResult: TGocciaValue;
+  ReturnMethod: TGocciaValue;
   YieldedValue: TGocciaValue;
 begin
+  HasDelegateResumeValue := False;
   if FHasPendingValue and (FSuspendedYield = AYieldExpression) then
   begin
     FHasPendingValue := False;
@@ -341,50 +401,72 @@ begin
     begin
       if FPendingKind = grkThrow then
       begin
-        if Assigned(FDelegateAsyncIterator) then
+        if Assigned(FDelegateIterator) then
+          RawIteratorResult := FDelegateIterator.ThrowValue(FPendingValue)
+        else if Assigned(FDelegateAsyncIterator) then
+        begin
           IteratorMethod := FDelegateAsyncIterator.GetProperty(PROP_THROW)
-        else if Assigned(FDelegateIterator) then
-          IteratorMethod := FDelegateIterator.GetProperty(PROP_THROW)
+        end
         else
           IteratorMethod := nil;
-        if not Assigned(IteratorMethod) or (IteratorMethod is TGocciaUndefinedLiteralValue) or
-           not IteratorMethod.IsCallable then
+        if not Assigned(FDelegateIterator) then
         begin
-          if Assigned(FDelegateAsyncIterator) then
-            IteratorMethod := FDelegateAsyncIterator.GetProperty(PROP_RETURN)
-          else if Assigned(FDelegateIterator) then
-            IteratorMethod := FDelegateIterator.GetProperty(PROP_RETURN)
-          else
-            IteratorMethod := nil;
-          if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and
-             IteratorMethod.IsCallable then
+          if Assigned(IteratorMethod) and
+             not (IteratorMethod is TGocciaUndefinedLiteralValue) and
+             not (IteratorMethod is TGocciaNullLiteralValue) then
           begin
-            CallArgs := TGocciaArgumentsCollection.Create;
+            if not IteratorMethod.IsCallable then
+            begin
+              ReturnMethod := FDelegateAsyncIterator.GetProperty(PROP_RETURN);
+              if Assigned(ReturnMethod) and
+                 not (ReturnMethod is TGocciaUndefinedLiteralValue) and
+                 not (ReturnMethod is TGocciaNullLiteralValue) then
+              begin
+                if not ReturnMethod.IsCallable then
+                  ThrowTypeError('Iterator return is not callable');
+                CallArgs := TGocciaArgumentsCollection.Create;
+                try
+                  RawIteratorResult := AwaitValue(TGocciaFunctionBase(ReturnMethod).Call(
+                    CallArgs, FDelegateAsyncIterator));
+                finally
+                  CallArgs.Free;
+                end;
+                if not (RawIteratorResult is TGocciaObjectValue) then
+                  ThrowTypeError('Iterator return result is not an object');
+              end;
+              ThrowTypeError('Iterator throw is not callable');
+            end;
+            CallArgs := TGocciaArgumentsCollection.Create([FPendingValue]);
             try
-              if Assigned(FDelegateAsyncIterator) then
-                RawIteratorResult := AwaitValue(TGocciaFunctionBase(IteratorMethod).Call(
-                  CallArgs, FDelegateAsyncIterator))
-              else
-                RawIteratorResult := TGocciaFunctionBase(IteratorMethod).Call(
-                  CallArgs, FDelegateIterator);
+              RawIteratorResult := AwaitValue(TGocciaFunctionBase(IteratorMethod).Call(
+                CallArgs, FDelegateAsyncIterator));
             finally
               CallArgs.Free;
             end;
-            if not (RawIteratorResult is TGocciaObjectValue) then
-              ThrowTypeError('Iterator return result is not an object');
-          end;
-          ThrowTypeError('Delegated iterator has no throw method');
-        end;
-        CallArgs := TGocciaArgumentsCollection.Create([FPendingValue]);
-        try
-          if Assigned(FDelegateAsyncIterator) then
-            RawIteratorResult := AwaitValue(TGocciaFunctionBase(IteratorMethod).Call(
-              CallArgs, FDelegateAsyncIterator))
+          end
           else
-            RawIteratorResult := TGocciaFunctionBase(IteratorMethod).Call(
-              CallArgs, FDelegateIterator);
-        finally
-          CallArgs.Free;
+          begin
+            ReturnMethod := nil;
+            if Assigned(FDelegateAsyncIterator) then
+              ReturnMethod := FDelegateAsyncIterator.GetProperty(PROP_RETURN);
+            if Assigned(ReturnMethod) and
+               not (ReturnMethod is TGocciaUndefinedLiteralValue) and
+               not (ReturnMethod is TGocciaNullLiteralValue) then
+            begin
+              if not ReturnMethod.IsCallable then
+                ThrowTypeError('Iterator return is not callable');
+              CallArgs := TGocciaArgumentsCollection.Create;
+              try
+                RawIteratorResult := AwaitValue(TGocciaFunctionBase(ReturnMethod).Call(
+                  CallArgs, FDelegateAsyncIterator));
+              finally
+                CallArgs.Free;
+              end;
+              if not (RawIteratorResult is TGocciaObjectValue) then
+                ThrowTypeError('Iterator return result is not an object');
+            end;
+            ThrowTypeError('Delegated iterator has no throw method');
+          end;
         end;
         if not (RawIteratorResult is TGocciaObjectValue) then
           ThrowTypeError('Iterator throw result is not an object');
@@ -409,48 +491,54 @@ begin
 
       if FPendingKind = grkReturn then
       begin
-        if Assigned(FDelegateAsyncIterator) then
+        if Assigned(FDelegateIterator) then
+          RawIteratorResult := FDelegateIterator.ReturnValue(FPendingValue)
+        else if Assigned(FDelegateAsyncIterator) then
+        begin
           IteratorMethod := FDelegateAsyncIterator.GetProperty(PROP_RETURN)
-        else if Assigned(FDelegateIterator) then
-          IteratorMethod := FDelegateIterator.GetProperty(PROP_RETURN)
+        end
         else
           IteratorMethod := nil;
-        if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and
-           IteratorMethod.IsCallable then
+        if not Assigned(FDelegateIterator) then
         begin
-          CallArgs := TGocciaArgumentsCollection.Create([FPendingValue]);
-          try
-            if Assigned(FDelegateAsyncIterator) then
-              RawIteratorResult := AwaitValue(TGocciaFunctionBase(IteratorMethod).Call(
-                CallArgs, FDelegateAsyncIterator))
-            else
-              RawIteratorResult := TGocciaFunctionBase(IteratorMethod).Call(
-                CallArgs, FDelegateIterator);
-          finally
-            CallArgs.Free;
-          end;
-          if not (RawIteratorResult is TGocciaObjectValue) then
-            ThrowTypeError('Iterator return result is not an object');
-          IteratorResult := TGocciaObjectValue(RawIteratorResult);
-          if not IteratorResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+          if Assigned(IteratorMethod) and
+             not (IteratorMethod is TGocciaUndefinedLiteralValue) and
+             not (IteratorMethod is TGocciaNullLiteralValue) then
           begin
-            YieldedValue := IteratorResult.GetProperty(PROP_VALUE);
-            if not Assigned(YieldedValue) then
-              YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-            FSuspendedYield := AYieldExpression;
-            raise EGocciaGeneratorYield.Create(YieldedValue);
-          end;
+            if not IteratorMethod.IsCallable then
+              ThrowTypeError('Iterator return is not callable');
+            CallArgs := TGocciaArgumentsCollection.Create([FPendingValue]);
+            try
+              RawIteratorResult := AwaitValue(TGocciaFunctionBase(IteratorMethod).Call(
+                CallArgs, FDelegateAsyncIterator));
+            finally
+              CallArgs.Free;
+            end;
+          end
+          else
+            raise EGocciaGeneratorReturn.Create(FPendingValue);
+        end;
+        if not (RawIteratorResult is TGocciaObjectValue) then
+          ThrowTypeError('Iterator return result is not an object');
+        IteratorResult := TGocciaObjectValue(RawIteratorResult);
+        if not IteratorResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+        begin
           YieldedValue := IteratorResult.GetProperty(PROP_VALUE);
           if not Assigned(YieldedValue) then
             YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-          FDelegateIterator := nil;
-          FDelegateAsyncIterator := nil;
-          FDelegateAsyncNext := nil;
-          FDelegateExpression := nil;
-          raise EGocciaGeneratorReturn.Create(YieldedValue);
+          FSuspendedYield := AYieldExpression;
+          raise EGocciaGeneratorYield.Create(YieldedValue);
         end;
-        raise EGocciaGeneratorReturn.Create(FPendingValue);
+        YieldedValue := IteratorResult.GetProperty(PROP_VALUE);
+        if not Assigned(YieldedValue) then
+          YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        FDelegateIterator := nil;
+        FDelegateAsyncIterator := nil;
+        FDelegateAsyncNext := nil;
+        FDelegateExpression := nil;
+        raise EGocciaGeneratorReturn.Create(YieldedValue);
       end;
+      HasDelegateResumeValue := FPendingKind = grkNext;
     end;
     if FPendingKind = grkThrow then
       raise TGocciaThrowValue.Create(FPendingValue);
@@ -525,7 +613,10 @@ begin
         ThrowTypeError('Async iterator next is not callable')
       else
       begin
-        CallArgs := TGocciaArgumentsCollection.Create;
+        if HasDelegateResumeValue then
+          CallArgs := TGocciaArgumentsCollection.Create([FPendingValue])
+        else
+          CallArgs := TGocciaArgumentsCollection.Create;
         try
           RawIteratorResult := AwaitValue(TGocciaFunctionBase(FDelegateAsyncNext).Call(
             CallArgs, FDelegateAsyncIterator));
@@ -557,7 +648,10 @@ begin
 
     if Assigned(FDelegateIterator) then
     begin
-      IteratorResult := FDelegateIterator.AdvanceNext;
+      if HasDelegateResumeValue then
+        IteratorResult := FDelegateIterator.AdvanceNextValue(FPendingValue)
+      else
+        IteratorResult := FDelegateIterator.AdvanceNext;
       if IteratorResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
       begin
         Result := IteratorResult.GetProperty(PROP_VALUE);
@@ -635,8 +729,45 @@ begin
   FStatementIndexes.Clear;
 end;
 
+function TGocciaGeneratorContinuation.EnsureTryState(
+  const ATryStatement: TObject): TGocciaGeneratorTryState;
+begin
+  if not FTryStates.TryGetValue(ATryStatement, Result) then
+  begin
+    Result := TGocciaGeneratorTryState.Create;
+    FTryStates.Add(ATryStatement, Result);
+  end;
+end;
+
+function TGocciaGeneratorContinuation.GetTryState(
+  const ATryStatement: TObject): TGocciaGeneratorTryState;
+begin
+  if not FTryStates.TryGetValue(ATryStatement, Result) then
+    Result := nil;
+end;
+
+procedure TGocciaGeneratorContinuation.ClearTryState(
+  const ATryStatement: TObject);
+var
+  TryState: TGocciaGeneratorTryState;
+begin
+  if FTryStates.TryGetValue(ATryStatement, TryState) then
+    TryState.Free;
+  FTryStates.Remove(ATryStatement);
+end;
+
+procedure TGocciaGeneratorContinuation.ClearTryStates;
+var
+  TryState: TGocciaGeneratorTryState;
+begin
+  for TryState in FTryStates.Values do
+    TryState.Free;
+  FTryStates.Clear;
+end;
+
 procedure TGocciaGeneratorContinuation.MarkReferences;
 var
+  TryState: TGocciaGeneratorTryState;
   Value: TGocciaValue;
 begin
   if Assigned(FCallScope) then
@@ -652,6 +783,9 @@ begin
   for Value in FExpressionValues.Values do
     if Assigned(Value) then
       Value.MarkReferences;
+  for TryState in FTryStates.Values do
+    if Assigned(TryState) then
+      TryState.MarkReferences;
 end;
 
 function CurrentGeneratorContinuation: TGocciaGeneratorContinuation;

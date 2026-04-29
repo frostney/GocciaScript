@@ -376,6 +376,15 @@ begin
           Continuation.SaveStatementIndex(ANodes, I);
         raise;
       end;
+      else
+      begin
+        if Assigned(Continuation) then
+        begin
+          Continuation.ClearStatementIndex(ANodes);
+          Continuation.ClearExpressionValues;
+        end;
+        raise;
+      end;
     end;
     if Result.Kind <> cfkNormal then
     begin
@@ -2050,101 +2059,160 @@ end;
 
 function EvaluateTry(const ATryStatement: TGocciaTryStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
+  CatchValue: TGocciaValue;
+  Continuation: TGocciaGeneratorContinuation;
+  Phase: TGocciaGeneratorTryPhase;
+  TryState: TGocciaGeneratorTryState;
   ThrownValue: TGocciaValue;
   HasUnhandledThrow: Boolean;
   HasGeneratorReturn: Boolean;
   GeneratorReturnValue: TGocciaValue;
   FinallyCF: TGocciaControlFlow;
-begin
-  HasUnhandledThrow := False;
-  HasGeneratorReturn := False;
-  ThrownValue := nil;
-  GeneratorReturnValue := nil;
-  Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
-  // Phase 1: Execute try block, capturing throws
-  try
-    Result := EvaluateStatements(ATryStatement.Block.Nodes, AContext);
-  except
-    on E: EGocciaGeneratorYield do
-      raise;
-    on E: EGocciaGeneratorReturn do
-    begin
-      HasGeneratorReturn := True;
-      GeneratorReturnValue := E.Value;
-    end;
-    on E: TGocciaThrowValue do
-    begin
-      if Assigned(ATryStatement.CatchBlock) then
+  procedure SaveTryState(const APhase: TGocciaGeneratorTryPhase);
+  begin
+    if not Assigned(Continuation) then
+      Exit;
+    TryState := Continuation.EnsureTryState(ATryStatement);
+    TryState.Phase := APhase;
+    TryState.ResultFlow := Result;
+    TryState.CatchValue := CatchValue;
+    TryState.ThrownValue := ThrownValue;
+    TryState.GeneratorReturnValue := GeneratorReturnValue;
+    TryState.HasUnhandledThrow := HasUnhandledThrow;
+    TryState.HasGeneratorReturn := HasGeneratorReturn;
+  end;
+
+  procedure ClearTryState;
+  begin
+    if Assigned(Continuation) then
+      Continuation.ClearTryState(ATryStatement);
+  end;
+
+  procedure ExecuteCatchWithState(const AErrorValue: TGocciaValue);
+  begin
+    CatchValue := AErrorValue;
+    SaveTryState(gtpCatch);
+    try
+      Result := ExecuteCatchBlock(ATryStatement, AErrorValue, AContext);
+    except
+      on E: EGocciaGeneratorYield do
+        raise;
+      on E: EGocciaGeneratorReturn do
       begin
-        try
-          Result := ExecuteCatchBlock(ATryStatement, E.Value, AContext);
-        except
-          on E2: EGocciaGeneratorReturn do
-          begin
-            HasGeneratorReturn := True;
-            GeneratorReturnValue := E2.Value;
-          end;
-          on E2: TGocciaThrowValue do
-          begin
-            HasUnhandledThrow := True;
-            ThrownValue := E2.Value;
-          end;
-        end;
-      end
-      else
+        Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+        HasGeneratorReturn := True;
+        GeneratorReturnValue := E.Value;
+      end;
+      on E: TGocciaThrowValue do
       begin
+        Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
         HasUnhandledThrow := True;
         ThrownValue := E.Value;
       end;
     end;
-    on E: TGocciaTimeoutError do
-      raise;
-    on E: TGocciaInstructionLimitError do
-      raise;
-    on E: Exception do
-    begin
-      if Assigned(ATryStatement.CatchBlock) then
+    CatchValue := nil;
+  end;
+begin
+  Continuation := CurrentGeneratorContinuation;
+  TryState := nil;
+  if Assigned(Continuation) then
+    TryState := Continuation.GetTryState(ATryStatement);
+  if Assigned(TryState) then
+  begin
+    Phase := TryState.Phase;
+    Result := TryState.ResultFlow;
+    CatchValue := TryState.CatchValue;
+    ThrownValue := TryState.ThrownValue;
+    GeneratorReturnValue := TryState.GeneratorReturnValue;
+    HasUnhandledThrow := TryState.HasUnhandledThrow;
+    HasGeneratorReturn := TryState.HasGeneratorReturn;
+  end
+  else
+  begin
+    Phase := gtpTry;
+    CatchValue := nil;
+    HasUnhandledThrow := False;
+    HasGeneratorReturn := False;
+    ThrownValue := nil;
+    GeneratorReturnValue := nil;
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  // Phase 1: Execute try block, capturing throws
+  if Phase = gtpTry then
+  begin
+    try
+      Result := EvaluateStatements(ATryStatement.Block.Nodes, AContext);
+    except
+      on E: EGocciaGeneratorYield do
+        raise;
+      on E: EGocciaGeneratorReturn do
       begin
-        try
-          Result := ExecuteCatchBlock(ATryStatement, PascalExceptionToErrorObject(E), AContext);
-        except
-          on E2: EGocciaGeneratorReturn do
-          begin
-            HasGeneratorReturn := True;
-            GeneratorReturnValue := E2.Value;
-          end;
-          on E2: TGocciaThrowValue do
-          begin
-            HasUnhandledThrow := True;
-            ThrownValue := E2.Value;
-          end;
+        Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+        HasGeneratorReturn := True;
+        GeneratorReturnValue := E.Value;
+      end;
+      on E: TGocciaThrowValue do
+      begin
+        if Assigned(ATryStatement.CatchBlock) then
+          ExecuteCatchWithState(E.Value)
+        else
+        begin
+          Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+          HasUnhandledThrow := True;
+          ThrownValue := E.Value;
         end;
-      end
-      else
+      end;
+      on E: TGocciaTimeoutError do
+        raise;
+      on E: TGocciaInstructionLimitError do
+        raise;
+      on E: Exception do
       begin
-        HasUnhandledThrow := True;
-        ThrownValue := PascalExceptionToErrorObject(E);
+        if Assigned(ATryStatement.CatchBlock) then
+          ExecuteCatchWithState(PascalExceptionToErrorObject(E))
+        else
+        begin
+          Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+          HasUnhandledThrow := True;
+          ThrownValue := PascalExceptionToErrorObject(E);
+        end;
       end;
     end;
   end;
 
+  if Phase = gtpCatch then
+    ExecuteCatchWithState(CatchValue);
+
   // Phase 2: Execute finally block (always runs)
   if Assigned(ATryStatement.FinallyBlock) then
   begin
+    SaveTryState(gtpFinally);
     if HasUnhandledThrow and Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.AddTempRoot(ThrownValue);
     if HasGeneratorReturn and Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.AddTempRoot(GeneratorReturnValue);
     try
-      FinallyCF := EvaluateStatements(ATryStatement.FinallyBlock.Nodes, AContext);
-      // Per JS semantics: finally's control flow overrides try/catch result AND pending throw
-      if FinallyCF.Kind <> cfkNormal then
-      begin
-        Result := FinallyCF;
-        Exit;
+      try
+        FinallyCF := EvaluateStatements(ATryStatement.FinallyBlock.Nodes, AContext);
+        // Per JS semantics: finally's control flow overrides try/catch result AND pending throw
+        if FinallyCF.Kind <> cfkNormal then
+        begin
+          ClearTryState;
+          Result := FinallyCF;
+          Exit;
+        end;
+        // If finally throws (TGocciaThrowValue), it propagates naturally and overrides everything
+      except
+        on E: EGocciaGeneratorYield do
+          raise;
+        on E: Exception do
+        begin
+          ClearTryState;
+          raise;
+        end;
       end;
-      // If finally throws (TGocciaThrowValue), it propagates naturally and overrides everything
     finally
       if HasUnhandledThrow and Assigned(TGarbageCollector.Instance) then
         TGarbageCollector.Instance.RemoveTempRoot(ThrownValue);
@@ -2153,6 +2221,7 @@ begin
     end;
   end;
 
+  ClearTryState;
   if HasGeneratorReturn then
     raise EGocciaGeneratorReturn.Create(GeneratorReturnValue);
 

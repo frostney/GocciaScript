@@ -27,7 +27,11 @@ type
     constructor Create(const AContinuation: TGocciaGeneratorContinuation);
     destructor Destroy; override;
     function AdvanceNext: TGocciaObjectValue; override;
+    function AdvanceNextValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
+    function DirectNextValue(const AValue: TGocciaValue; out ADone: Boolean): TGocciaValue; override;
+    function ReturnValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
+    function ThrowValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
     procedure Close; override;
     procedure MarkReferences; override;
     function ToStringTag: string; override;
@@ -158,9 +162,15 @@ begin
 end;
 
 function TGocciaGeneratorObjectValue.AdvanceNext: TGocciaObjectValue;
+begin
+  Result := AdvanceNextValue(TGocciaUndefinedLiteralValue.UndefinedValue);
+end;
+
+function TGocciaGeneratorObjectValue.AdvanceNextValue(
+  const AValue: TGocciaValue): TGocciaObjectValue;
 var
   Done: Boolean;
-  Value: TGocciaValue;
+  ResultValue: TGocciaValue;
 begin
   if FState = gsCompleted then
     Exit(CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True));
@@ -168,7 +178,7 @@ begin
     raise TGocciaThrowValue.Create(GeneratorExecutingError);
   FState := gsExecuting;
   try
-    Value := FContinuation.Resume(grkNext, TGocciaUndefinedLiteralValue.UndefinedValue, Done);
+    ResultValue := FContinuation.Resume(grkNext, AValue, Done);
     if Done then
       FState := gsCompleted
     else
@@ -177,29 +187,37 @@ begin
     FState := gsCompleted;
     raise;
   end;
-  Result := CreateIteratorResult(Value, Done);
+  Result := CreateIteratorResult(ResultValue, Done);
 end;
 
 function TGocciaGeneratorObjectValue.DirectNext(out ADone: Boolean): TGocciaValue;
+begin
+  Result := DirectNextValue(TGocciaUndefinedLiteralValue.UndefinedValue, ADone);
+end;
+
+function TGocciaGeneratorObjectValue.DirectNextValue(
+  const AValue: TGocciaValue; out ADone: Boolean): TGocciaValue;
 var
   IteratorResult: TGocciaObjectValue;
 begin
-  IteratorResult := AdvanceNext;
+  IteratorResult := AdvanceNextValue(AValue);
   ADone := IteratorResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value;
   Result := IteratorResult.GetProperty(PROP_VALUE);
 end;
 
-procedure TGocciaGeneratorObjectValue.Close;
+function TGocciaGeneratorObjectValue.ReturnValue(
+  const AValue: TGocciaValue): TGocciaObjectValue;
 var
   Done: Boolean;
+  ResultValue: TGocciaValue;
 begin
   if FState = gsCompleted then
-    Exit;
+    Exit(CreateIteratorResult(AValue, True));
   if FState = gsExecuting then
     raise TGocciaThrowValue.Create(GeneratorExecutingError);
   FState := gsExecuting;
   try
-    FContinuation.Resume(grkReturn, TGocciaUndefinedLiteralValue.UndefinedValue, Done);
+    ResultValue := FContinuation.Resume(grkReturn, AValue, Done);
     if Done then
       FState := gsCompleted
     else
@@ -208,6 +226,36 @@ begin
     FState := gsCompleted;
     raise;
   end;
+  Result := CreateIteratorResult(ResultValue, Done);
+end;
+
+function TGocciaGeneratorObjectValue.ThrowValue(
+  const AValue: TGocciaValue): TGocciaObjectValue;
+var
+  Done: Boolean;
+  ResultValue: TGocciaValue;
+begin
+  if FState = gsExecuting then
+    raise TGocciaThrowValue.Create(GeneratorExecutingError);
+  FState := gsExecuting;
+  try
+    ResultValue := FContinuation.Resume(grkThrow, AValue, Done);
+    if Done then
+      FState := gsCompleted
+    else
+      FState := gsSuspendedYield;
+  except
+    FState := gsCompleted;
+    raise;
+  end;
+  Result := CreateIteratorResult(ResultValue, Done);
+end;
+
+procedure TGocciaGeneratorObjectValue.Close;
+begin
+  if FState = gsCompleted then
+    Exit;
+  ReturnValue(TGocciaUndefinedLiteralValue.UndefinedValue);
 end;
 
 procedure TGocciaGeneratorObjectValue.MarkReferences;
