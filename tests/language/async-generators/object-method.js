@@ -106,7 +106,7 @@ test("object async generator yield delegation keeps sync iterator alive across r
         yield 1;
       } finally {
         events.push("finally");
-        yield "cleanup";
+        yield Promise.resolve("cleanup");
         events.push("after");
       }
     },
@@ -123,6 +123,49 @@ test("object async generator yield delegation keeps sync iterator alive across r
   expect(events).toEqual(["finally"]);
   await expect(iter.next()).resolves.toEqual({ value: undefined, done: true });
   expect(events).toEqual(["finally", "after"]);
+});
+
+test("object async generator yield delegation awaits sync iterator return and throw values", async () => {
+  const returnSource = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return { value: 1, done: false };
+        },
+        return(value) {
+          return { value: Promise.resolve("return:" + value), done: true };
+        },
+      };
+    },
+  };
+  const throwSource = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return { value: 1, done: false };
+        },
+        throw(value) {
+          return { value: Promise.resolve("throw:" + value), done: false };
+        },
+      };
+    },
+  };
+  const obj = {
+    async *returning() {
+      yield* returnSource;
+    },
+    async *throwing() {
+      yield* throwSource;
+    },
+  };
+
+  const returnIter = obj.returning();
+  await expect(returnIter.next()).resolves.toEqual({ value: 1, done: false });
+  await expect(returnIter.return(9)).resolves.toEqual({ value: "return:9", done: true });
+
+  const throwIter = obj.throwing();
+  await expect(throwIter.next()).resolves.toEqual({ value: 1, done: false });
+  await expect(throwIter.throw(9)).resolves.toEqual({ value: "throw:9", done: false });
 });
 
 test("object async generator yield delegation rejects non-callable async next", async () => {

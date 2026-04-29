@@ -1710,9 +1710,11 @@ function TGocciaVMAsyncFromSyncIteratorValue.ReturnValue(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   CallArgs: TGocciaArgumentsCollection;
+  Done: Boolean;
   DoneValue: TGocciaValue;
   IteratorResult: TGocciaValue;
   ReturnMethod: TGocciaValue;
+  UnwrappedValue: TGocciaValue;
   Value: TGocciaValue;
 begin
   if Assigned(AArgs) and (AArgs.Length > 0) then
@@ -1727,9 +1729,14 @@ begin
     begin
       IteratorResult := TGocciaIteratorValue(FIteratorValue).ReturnValue(Value);
       DoneValue := IteratorResult.GetProperty(PROP_DONE);
-      if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+      Done := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
+      if Done then
         FIteratorValue := nil;
-      Exit(PromiseResolve(IteratorResult));
+      Value := IteratorResult.GetProperty(PROP_VALUE);
+      if not Assigned(Value) then
+        Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+      UnwrappedValue := AwaitValue(Value);
+      Exit(PromiseResolve(CreateIteratorResult(UnwrappedValue, Done)));
     end;
 
     ReturnMethod := FIteratorValue.GetProperty(PROP_RETURN);
@@ -1752,9 +1759,14 @@ begin
     if not (IteratorResult is TGocciaObjectValue) then
       ThrowTypeError('Iterator return result is not an object');
     DoneValue := IteratorResult.GetProperty(PROP_DONE);
-    if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+    Done := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
+    if Done then
       FIteratorValue := nil;
-    Result := PromiseResolve(IteratorResult);
+    Value := IteratorResult.GetProperty(PROP_VALUE);
+    if not Assigned(Value) then
+      Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+    UnwrappedValue := AwaitValue(Value);
+    Result := PromiseResolve(CreateIteratorResult(UnwrappedValue, Done));
   except
     on E: EGocciaBytecodeThrow do
       Result := PromiseReject(E.ThrownValue);
@@ -1769,10 +1781,12 @@ function TGocciaVMAsyncFromSyncIteratorValue.ThrowValue(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   CallArgs: TGocciaArgumentsCollection;
+  Done: Boolean;
   DoneValue: TGocciaValue;
   IteratorResult: TGocciaValue;
   ReturnMethod: TGocciaValue;
   ThrowMethod: TGocciaValue;
+  UnwrappedValue: TGocciaValue;
   Value: TGocciaValue;
 begin
   if Assigned(AArgs) and (AArgs.Length > 0) then
@@ -1787,9 +1801,14 @@ begin
     begin
       IteratorResult := TGocciaIteratorValue(FIteratorValue).ThrowValue(Value);
       DoneValue := IteratorResult.GetProperty(PROP_DONE);
-      if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+      Done := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
+      if Done then
         FIteratorValue := nil;
-      Exit(PromiseResolve(IteratorResult));
+      Value := IteratorResult.GetProperty(PROP_VALUE);
+      if not Assigned(Value) then
+        Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+      UnwrappedValue := AwaitValue(Value);
+      Exit(PromiseResolve(CreateIteratorResult(UnwrappedValue, Done)));
     end;
 
     ThrowMethod := FIteratorValue.GetProperty(PROP_THROW);
@@ -1808,9 +1827,14 @@ begin
       if not (IteratorResult is TGocciaObjectValue) then
         ThrowTypeError('Iterator throw result is not an object');
       DoneValue := IteratorResult.GetProperty(PROP_DONE);
-      if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+      Done := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
+      if Done then
         FIteratorValue := nil;
-      Exit(PromiseResolve(IteratorResult));
+      Value := IteratorResult.GetProperty(PROP_VALUE);
+      if not Assigned(Value) then
+        Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+      UnwrappedValue := AwaitValue(Value);
+      Exit(PromiseResolve(CreateIteratorResult(UnwrappedValue, Done)));
     end;
 
     ReturnMethod := FIteratorValue.GetProperty(PROP_RETURN);
