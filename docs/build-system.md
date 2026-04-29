@@ -496,8 +496,9 @@ Commits are categorized by their leading verb into groups:
 | `Replace`, `Optimize`, `Promote`, `Eliminate`, `Bypass`, `Inline` | ⚡ Performance |
 | `Remove` | 🗑️ Removed |
 | `Refactor`, `Extract`, `Update`, `Strip` | 🏗️ Internal |
+| Commits touching `website/` | 🌐 Website |
 
-This table shows common prefixes. See `cliff.toml` for the complete list of patterns, which includes additional verb-specific and phrase-specific matchers.
+This table shows common prefixes. See `cliff.toml` for the complete list of patterns, which includes additional verb-specific and phrase-specific matchers. Website commits are detected by changed path before prefix grouping so site changes stay separate from language/runtime changes. Release sections are generated only for semver-style tags such as `0.7.0` or `v0.7.0`; moving tags such as `nightly` are ignored.
 
 ### Generating the Changelog
 

@@ -32,6 +32,8 @@ const IGNORE_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "
 // Build artifacts whose contents are synced from elsewhere and validated at
 // the source location. Path-prefix matched against repo-relative paths.
 const IGNORE_PATH_PREFIXES = ["website/content/docs/"];
+// Generated history files are expected to grow past the human-doc line budget.
+const EXEMPT_FILES = new Set(["CHANGELOG.md"]);
 
 // Files that are inherently large by nature (API references, test catalogs)
 // get a higher limit.  The per-file override comment takes precedence.
@@ -88,10 +90,19 @@ const parseFileLimit = (content: string): number | null => {
 const main = (): void => {
   const files = findMarkdownFiles(ROOT);
   let failures = 0;
+  let exemptCount = 0;
   const results: { file: string; lines: number; limit: number }[] = [];
 
   for (const file of files) {
-    const rel = relative(ROOT, file);
+    const rel = relative(ROOT, file).split("\\").join("/");
+    if (EXEMPT_FILES.has(rel)) {
+      exemptCount++;
+      if (VERBOSE) {
+        console.log(`  SKIP  ${rel}: exempt from doc length limit`);
+      }
+      continue;
+    }
+
     const content = readFileSync(file, "utf-8");
     const lineCount = content.split("\n").length;
 
@@ -107,7 +118,10 @@ const main = (): void => {
     }
   }
 
-  console.log(`\nChecked ${files.length} files, default limit ${DEFAULT_LIMIT} lines.`);
+  const evaluatedCount = files.length - exemptCount;
+  console.log(
+    `\nDiscovered ${files.length} files; exempt ${exemptCount}; checked ${evaluatedCount}; default limit ${DEFAULT_LIMIT} lines.`,
+  );
 
   if (failures > 0) {
     console.log(`\n${failures} file(s) exceed their line limit.\n`);

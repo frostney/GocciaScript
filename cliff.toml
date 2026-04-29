@@ -16,7 +16,7 @@ body = """
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | striptags | trim }}
 {% for commit in commits %}
-  - {{ commit.message | split(pat="\n") | first | trim }}
+  - {{ commit.message | split(pat="\n") | first | trim | trim_start_matches(pat="Website: ") }}
 {%- endfor %}
 {% endfor %}\n
 """
@@ -28,9 +28,22 @@ conventional_commits = false
 filter_unconventional = false
 split_commits = false
 protect_breaking_commits = false
-tag_pattern = "[0-9]*"
+tag_pattern = "^v?[0-9]+\\.[0-9]+\\.[0-9]+$"
 sort_commits = "newest"
+commit_preprocessors = [
+  # Keep website release work distinct from language/runtime changes.
+  # git-cliff does not expose changed paths to commit_parsers, so prefix the
+  # commit message before parsing when a commit touches website/.
+  { pattern = "(?s).*", replace_command = '''
+sh -c 'msg=$(cat); if git diff-tree --no-commit-id --name-only -r "$COMMIT_SHA" | grep -q "^website/"; then printf "Website: %s" "$msg"; else printf "%s" "$msg"; fi'
+''' },
+]
 commit_parsers = [
+  { message = "^(Website: )?Merge branch", skip = true },
+  { message = "^(Website: )?Merge pull request", skip = true },
+
+  { message = "^Website: ", group = "🌐 Website" },
+
   { message = "^Add ", group = "🚀 Added" },
   { message = "^Implement ", group = "🚀 Added" },
   { message = "^Support ", group = "🚀 Added" },
@@ -100,9 +113,6 @@ commit_parsers = [
   { message = "^Benchmark tests regression", group = "🏗️ Internal" },
   { message = "^Benchmark runner exit codes", group = "🏗️ Internal" },
   { message = "^Environment specific test failure", group = "🏗️ Internal" },
-
-  { message = "^Merge branch", skip = true },
-  { message = "^Merge pull request", skip = true },
 
   { message = ".*", group = "📖 Other" },
 ]
