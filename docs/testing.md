@@ -543,7 +543,7 @@ build → test
       → examples
 ```
 
-The benchmark comparison comment includes a **Suite Timing** section showing test execution and benchmark duration for both modes. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the comparison format.
+The PR workflow also posts a **Suite Timing** comment with expandable test-runner and benchmark summaries. Each summary shows timing and top-level memory/heap metrics for interpreted and bytecode modes. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the benchmark comparison format.
 
 ## Coverage
 
