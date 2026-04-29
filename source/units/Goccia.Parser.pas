@@ -49,7 +49,6 @@ type
   TGocciaParser = class
   private
     type
-      TParseFunction = function: TGocciaExpression of object;
       // Result of TryConsumeAsyncFunction: whether 'async function' was detected
       TAsyncFunctionCheck = (
         afcNotMatched,  // Not 'async function' (different line or no function token)
@@ -100,7 +99,6 @@ type
     function ExtractSourceRange(const AStartLine, AStartColumn: Integer): string;
     function ConvertNumberLiteral(const ALexeme: string): Double;
     function ConvertBigIntLiteral(const ALexeme: string): TGocciaValue;
-    function ParseBinaryExpression(const ANextLevel: TParseFunction; const AOperators: array of TGocciaTokenType): TGocciaExpression;
     function CheckContextualKeyword(const AKeyword: string): Boolean;
     function MatchContextualKeyword(const AKeyword: string): Boolean;
 
@@ -494,16 +492,17 @@ end;
 
 function TGocciaParser.Advance: TGocciaToken;
 begin
-  if not IsAtEnd then
+  if FTokens[FCurrent].TokenType <> gttEOF then
     Inc(FCurrent);
   Result := Previous;
 end;
 
 function TGocciaParser.Check(const ATokenType: TGocciaTokenType): Boolean;
+var
+  CurrentType: TGocciaTokenType;
 begin
-  if IsAtEnd then
-    Exit(False);
-  Result := Peek.TokenType = ATokenType;
+  CurrentType := FTokens[FCurrent].TokenType;
+  Result := (CurrentType <> gttEOF) and (CurrentType = ATokenType);
 end;
 
 function TGocciaParser.CheckNext(const ATokenType: TGocciaTokenType): Boolean;
@@ -516,12 +515,17 @@ end;
 function TGocciaParser.Match(const ATokenTypes: array of TGocciaTokenType): Boolean;
 var
   TokenType: TGocciaTokenType;
+  CurrentType: TGocciaTokenType;
 begin
+  CurrentType := FTokens[FCurrent].TokenType;
+  if CurrentType = gttEOF then
+    Exit(False);
+
   for TokenType in ATokenTypes do
   begin
-    if Check(TokenType) then
+    if CurrentType = TokenType then
     begin
-      Advance;
+      Inc(FCurrent);
       Exit(True);
     end;
   end;
@@ -529,10 +533,13 @@ begin
 end;
 
 function TGocciaParser.Match(const ATokenType: TGocciaTokenType): Boolean;
+var
+  CurrentType: TGocciaTokenType;
 begin
-  if Check(ATokenType) then
+  CurrentType := FTokens[FCurrent].TokenType;
+  if (CurrentType <> gttEOF) and (CurrentType = ATokenType) then
   begin
-    Advance;
+    Inc(FCurrent);
     Exit(True);
   end;
   Result := False;
@@ -670,18 +677,6 @@ begin
   end;
 end;
 
-function TGocciaParser.ParseBinaryExpression(const ANextLevel: TParseFunction; const AOperators: array of TGocciaTokenType): TGocciaExpression;
-var
-  Op: TGocciaToken;
-begin
-  Result := ANextLevel();
-  while Match(AOperators) do
-  begin
-    Op := Previous;
-    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType, ANextLevel(), Op.Line, Op.Column);
-  end;
-end;
-
 function TGocciaParser.CheckContextualKeyword(const AKeyword: string): Boolean;
 begin
   Result := Check(gttIdentifier) and (Peek.Lexeme = AKeyword);
@@ -697,18 +692,42 @@ begin
 end;
 
 function TGocciaParser.LogicalOr: TGocciaExpression;
+var
+  Op: TGocciaToken;
 begin
-  Result := ParseBinaryExpression(NullishCoalescing, [gttOr]);
+  Result := NullishCoalescing;
+  while Peek.TokenType = gttOr do
+  begin
+    Op := Advance;
+    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
+      NullishCoalescing, Op.Line, Op.Column);
+  end;
 end;
 
 function TGocciaParser.NullishCoalescing: TGocciaExpression;
+var
+  Op: TGocciaToken;
 begin
-  Result := ParseBinaryExpression(LogicalAnd, [gttNullishCoalescing]);
+  Result := LogicalAnd;
+  while Peek.TokenType = gttNullishCoalescing do
+  begin
+    Op := Advance;
+    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
+      LogicalAnd, Op.Line, Op.Column);
+  end;
 end;
 
 function TGocciaParser.LogicalAnd: TGocciaExpression;
+var
+  Op: TGocciaToken;
 begin
-  Result := ParseBinaryExpression(BitwiseOr, [gttAnd]);
+  Result := BitwiseOr;
+  while Peek.TokenType = gttAnd do
+  begin
+    Op := Advance;
+    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
+      BitwiseOr, Op.Line, Op.Column);
+  end;
 end;
 
 function TGocciaParser.Equality: TGocciaExpression;
@@ -716,9 +735,9 @@ var
   Op: TGocciaToken;
 begin
   Result := Comparison;
-  while Match([gttEqual, gttNotEqual, gttLooseEqual, gttLooseNotEqual]) do
+  while Peek.TokenType in [gttEqual, gttNotEqual, gttLooseEqual, gttLooseNotEqual] do
   begin
-    Op := Previous;
+    Op := Advance;
     if Op.TokenType in [gttLooseEqual, gttLooseNotEqual] then
     begin
       if Op.TokenType = gttLooseEqual then
@@ -754,9 +773,9 @@ var
   end;
 begin
   Result := Shift;
-  while Match([gttGreater, gttGreaterEqual, gttLess, gttLessEqual, gttInstanceof, gttIn]) do
+  while Peek.TokenType in [gttGreater, gttGreaterEqual, gttLess, gttLessEqual, gttInstanceof, gttIn] do
   begin
-    Op := Previous;
+    Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType, Shift,
       Op.Line, Op.Column);
   end;
@@ -787,13 +806,29 @@ begin
 end;
 
 function TGocciaParser.Addition: TGocciaExpression;
+var
+  Op: TGocciaToken;
 begin
-  Result := ParseBinaryExpression(Multiplication, [gttPlus, gttMinus]);
+  Result := Multiplication;
+  while Peek.TokenType in [gttPlus, gttMinus] do
+  begin
+    Op := Advance;
+    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
+      Multiplication, Op.Line, Op.Column);
+  end;
 end;
 
 function TGocciaParser.Multiplication: TGocciaExpression;
+var
+  Op: TGocciaToken;
 begin
-  Result := ParseBinaryExpression(Exponentiation, [gttStar, gttSlash, gttPercent]);
+  Result := Exponentiation;
+  while Peek.TokenType in [gttStar, gttSlash, gttPercent] do
+  begin
+    Op := Advance;
+    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
+      Exponentiation, Op.Line, Op.Column);
+  end;
 end;
 
 function TGocciaParser.Exponentiation: TGocciaExpression;
@@ -838,30 +873,32 @@ begin
     Exit;
   end;
 
-  if Match([gttNot, gttMinus, gttPlus, gttTypeof, gttVoid, gttBitwiseNot, gttDelete]) then
-  begin
-    Operator := Previous;
-    Right := Unary;
-    Result := TGocciaUnaryExpression.Create(Operator.TokenType, Right,
-      Operator.Line, Operator.Column);
-  end
-  else if Match([gttIncrement, gttDecrement]) then
-  begin
-    // Prefix increment/decrement (++x, --x)
-    Operator := Previous;
-    Right := Unary;
+  case Peek.TokenType of
+    gttNot, gttMinus, gttPlus, gttTypeof, gttVoid, gttBitwiseNot, gttDelete:
+      begin
+        Operator := Advance;
+        Right := Unary;
+        Result := TGocciaUnaryExpression.Create(Operator.TokenType, Right,
+          Operator.Line, Operator.Column);
+      end;
+    gttIncrement, gttDecrement:
+      begin
+        // Prefix increment/decrement (++x, --x)
+        Operator := Advance;
+        Right := Unary;
 
-    // Only allow on identifiers and member expressions
-    if not ((Right is TGocciaIdentifierExpression) or (Right is TGocciaMemberExpression)) then
-      raise TGocciaSyntaxError.Create('Invalid target for increment/decrement',
-        Operator.Line, Operator.Column, FFileName, FSourceLines,
-        SSuggestValidIncrementTarget);
+        // Only allow on identifiers and member expressions
+        if not ((Right is TGocciaIdentifierExpression) or (Right is TGocciaMemberExpression)) then
+          raise TGocciaSyntaxError.Create('Invalid target for increment/decrement',
+            Operator.Line, Operator.Column, FFileName, FSourceLines,
+            SSuggestValidIncrementTarget);
 
-    Result := TGocciaIncrementExpression.Create(Right, Operator.TokenType, True,
-      Operator.Line, Operator.Column);
-  end
+        Result := TGocciaIncrementExpression.Create(Right, Operator.TokenType, True,
+          Operator.Line, Operator.Column);
+      end
   else
     Result := Call;
+  end;
 end;
 
 function TGocciaParser.Call: TGocciaExpression;
@@ -872,63 +909,21 @@ var
   Token: TGocciaToken;
   Line, Column: Integer;
   IsOptionalChain: Boolean;
+  CurrentType: TGocciaTokenType;
 begin
   Result := Primary;
 
   while True do
   begin
-    if Match(gttLeftParen) then
-    begin
-      Line := Previous.Line;
-      Column := Previous.Column;
-      Arguments := TObjectList<TGocciaExpression>.Create(True);
+    CurrentType := Peek.TokenType;
+    case CurrentType of
+      gttLeftParen:
+        begin
+          Token := Advance;
+          Line := Token.Line;
+          Column := Token.Column;
+          Arguments := TObjectList<TGocciaExpression>.Create(True);
 
-      if not Check(gttRightParen) then
-      begin
-        repeat
-          if Match(gttSpread) then
-            Arg := TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column)
-          else
-            Arg := Expression;
-          Arguments.Add(Arg);
-        until not Match(gttComma) or Check(gttRightParen);
-      end;
-
-      Consume(gttRightParen, 'Expected ")" after arguments',
-        SSuggestCloseParenArguments);
-      Result := TGocciaCallExpression.Create(Result, Arguments, Line, Column);
-    end
-    else if Match([gttDot, gttOptionalChaining]) then
-    begin
-      Line := Previous.Line;
-      Column := Previous.Column;
-      IsOptionalChain := (Previous.TokenType = gttOptionalChaining);
-
-      // Check if this is a private field access (this.#field)
-      if Check(gttHash) then
-      begin
-        Advance; // consume the #
-        Token := Consume(gttIdentifier, 'Expected private field name after "#"',
-          SSuggestPrivateFieldMustFollow);
-        PropertyName := Token.Lexeme;
-        RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
-        Result := TGocciaPrivateMemberExpression.Create(Result, PropertyName, Line, Column);
-      end
-      else if Check(gttLeftBracket) and IsOptionalChain then
-      begin
-        // Optional chaining with computed property: obj?.[expr]
-        Advance; // consume [
-        Arg := Expression;
-        Consume(gttRightBracket, 'Expected "]" after computed member expression',
-          SSuggestCloseBracketComputedProperty);
-        Result := TGocciaMemberExpression.Create(Result, Arg, Line, Column, True);
-      end
-      else if Check(gttLeftParen) and IsOptionalChain then
-      begin
-        // Optional chaining with call: func?.()
-        Advance; // consume (
-        Arguments := TObjectList<TGocciaExpression>.Create(True);
-        try
           if not Check(gttRightParen) then
           begin
             repeat
@@ -939,84 +934,137 @@ begin
               Arguments.Add(Arg);
             until not Match(gttComma) or Check(gttRightParen);
           end;
+
           Consume(gttRightParen, 'Expected ")" after arguments',
             SSuggestCloseParenArguments);
-          // Wrap call in optional chaining by wrapping the callee in an optional member
-          // For func?.(), we create a call on an optional member access
           Result := TGocciaCallExpression.Create(Result, Arguments, Line, Column);
-        except
-          Arguments.Free;
-          raise;
         end;
-      end
-      else
-      begin
-        if Check(gttIdentifier) then
-          PropertyName := Advance.Lexeme
-        else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
-                       gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
-                       gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
-                       gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
-          PropertyName := Previous.Lexeme  // Reserved words are allowed as property names
-        else
-          raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines,
-            SSuggestPropertyNameIdentifier);
+      gttDot, gttOptionalChaining:
+        begin
+          Token := Advance;
+          Line := Token.Line;
+          Column := Token.Column;
+          IsOptionalChain := CurrentType = gttOptionalChaining;
 
-        Result := TGocciaMemberExpression.Create(Result, PropertyName, False,
-          Line, Column, IsOptionalChain);
-      end;
-    end
-    else if Match(gttHash) then
-    begin
-      Line := Previous.Line;
-      Column := Previous.Column;
-      Token := Consume(gttIdentifier, 'Expected private field name after "#"',
-        SSuggestPrivateFieldMustFollow);
-      PropertyName := Token.Lexeme;
-      RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
-      Result := TGocciaPrivateMemberExpression.Create(Result, PropertyName, Line, Column);
-    end
-    else if Match(gttLeftBracket) then
-    begin
-      Line := Previous.Line;
-      Column := Previous.Column;
-      Arg := Expression;
-      Consume(gttRightBracket, 'Expected "]" after computed member expression',
-        SSuggestCloseBracketComputedProperty);
-      // For computed access, store the expression directly to be evaluated at runtime
-      Result := TGocciaMemberExpression.Create(Result, Arg, Line, Column);
-    end
-    else if (Peek.Line = Previous.Line)
-      and Match([gttIncrement, gttDecrement]) then
-    begin
-      // Postfix increment/decrement (x++, x--)
-      // ES2026 §13.4 restricted production: no LineTerminator between the
-      // LeftHandSideExpression and the ++/--.  If a newline precedes the
-      // operator, do not consume it here — it becomes a prefix operator on
-      // the next statement (with ASI inserting a semicolon, or with an
-      // explicit semicolon required otherwise).
-      Line := Previous.Line;
-      Column := Previous.Column;
+          // Check if this is a private field access (this.#field)
+          if Check(gttHash) then
+          begin
+            Advance; // consume the #
+            Token := Consume(gttIdentifier, 'Expected private field name after "#"',
+              SSuggestPrivateFieldMustFollow);
+            PropertyName := Token.Lexeme;
+            RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
+            Result := TGocciaPrivateMemberExpression.Create(Result, PropertyName, Line, Column);
+          end
+          else if Check(gttLeftBracket) and IsOptionalChain then
+          begin
+            // Optional chaining with computed property: obj?.[expr]
+            Advance; // consume [
+            Arg := Expression;
+            Consume(gttRightBracket, 'Expected "]" after computed member expression',
+              SSuggestCloseBracketComputedProperty);
+            Result := TGocciaMemberExpression.Create(Result, Arg, Line, Column, True);
+          end
+          else if Check(gttLeftParen) and IsOptionalChain then
+          begin
+            // Optional chaining with call: func?.()
+            Advance; // consume (
+            Arguments := TObjectList<TGocciaExpression>.Create(True);
+            try
+              if not Check(gttRightParen) then
+              begin
+                repeat
+                  if Match(gttSpread) then
+                    Arg := TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column)
+                  else
+                    Arg := Expression;
+                  Arguments.Add(Arg);
+                until not Match(gttComma) or Check(gttRightParen);
+              end;
+              Consume(gttRightParen, 'Expected ")" after arguments',
+                SSuggestCloseParenArguments);
+              // Wrap call in optional chaining by wrapping the callee in an optional member
+              // For func?.(), we create a call on an optional member access
+              Result := TGocciaCallExpression.Create(Result, Arguments, Line, Column);
+            except
+              Arguments.Free;
+              raise;
+            end;
+          end
+          else
+          begin
+            if Check(gttIdentifier) then
+              PropertyName := Advance.Lexeme
+            else if Peek.TokenType in [gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
+                                       gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
+                                       gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
+                                       gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith] then
+              PropertyName := Advance.Lexeme  // Reserved words are allowed as property names
+            else
+              raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines,
+                SSuggestPropertyNameIdentifier);
 
-      // Only allow on identifiers and member expressions
-      if not ((Result is TGocciaIdentifierExpression) or (Result is TGocciaMemberExpression)) then
-        raise TGocciaSyntaxError.Create('Invalid target for increment/decrement',
-          Line, Column, FFileName, FSourceLines,
-          SSuggestValidIncrementTarget);
+            Result := TGocciaMemberExpression.Create(Result, PropertyName, False,
+              Line, Column, IsOptionalChain);
+          end;
+        end;
+      gttHash:
+        begin
+          Token := Advance;
+          Line := Token.Line;
+          Column := Token.Column;
+          Token := Consume(gttIdentifier, 'Expected private field name after "#"',
+            SSuggestPrivateFieldMustFollow);
+          PropertyName := Token.Lexeme;
+          RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
+          Result := TGocciaPrivateMemberExpression.Create(Result, PropertyName, Line, Column);
+        end;
+      gttLeftBracket:
+        begin
+          Token := Advance;
+          Line := Token.Line;
+          Column := Token.Column;
+          Arg := Expression;
+          Consume(gttRightBracket, 'Expected "]" after computed member expression',
+            SSuggestCloseBracketComputedProperty);
+          // For computed access, store the expression directly to be evaluated at runtime
+          Result := TGocciaMemberExpression.Create(Result, Arg, Line, Column);
+        end;
+      gttIncrement, gttDecrement:
+        begin
+          if Peek.Line <> Previous.Line then
+            Break;
 
-      Result := TGocciaIncrementExpression.Create(Result, Previous.TokenType, False,
-        Line, Column);
-    end
-    // ES2026 §13.3.11 Tagged Templates: tag`...`
-    else if Check(gttTemplate) then
-    begin
-      Token := Advance;
-      Line := Token.Line;
-      Column := Token.Column;
-      Result := ParseTaggedTemplate(Result, Token, Line, Column);
-    end
+          // Postfix increment/decrement (x++, x--)
+          // ES2026 §13.4 restricted production: no LineTerminator between the
+          // LeftHandSideExpression and the ++/--.  If a newline precedes the
+          // operator, do not consume it here — it becomes a prefix operator on
+          // the next statement (with ASI inserting a semicolon, or with an
+          // explicit semicolon required otherwise).
+          Token := Advance;
+          Line := Token.Line;
+          Column := Token.Column;
+
+          // Only allow on identifiers and member expressions
+          if not ((Result is TGocciaIdentifierExpression) or (Result is TGocciaMemberExpression)) then
+            raise TGocciaSyntaxError.Create('Invalid target for increment/decrement',
+              Line, Column, FFileName, FSourceLines,
+              SSuggestValidIncrementTarget);
+
+          Result := TGocciaIncrementExpression.Create(Result, Token.TokenType, False,
+            Line, Column);
+        end;
+      gttTemplate:
+        begin
+          // ES2026 §13.3.11 Tagged Templates: tag`...`
+          Token := Advance;
+          Line := Token.Line;
+          Column := Token.Column;
+          Result := ParseTaggedTemplate(Result, Token, Line, Column);
+        end;
     else
       Break;
+    end;
   end;
 end;
 
@@ -1529,219 +1577,284 @@ var
   Line, Column: Integer;
   IsGenerator: Boolean;
 begin
-  if Match(gttTrue) then
-  begin
-    Token := Previous;
-    Result := TGocciaLiteralExpression.Create(
-      TGocciaBooleanLiteralValue.TrueValue, Token.Line, Token.Column);
-  end
-  else if Match(gttFalse) then
-  begin
-    Token := Previous;
-    Result := TGocciaLiteralExpression.Create(
-      TGocciaBooleanLiteralValue.FalseValue, Token.Line, Token.Column);
-  end
-  else if Match(gttNull) then
-  begin
-    Token := Previous;
-    Result := TGocciaLiteralExpression.Create(
-      TGocciaNullLiteralValue.NullValue, Token.Line, Token.Column);
-  end
-  else if Match(gttNumber) then
-  begin
-    Token := Previous;
-    Result := TGocciaLiteralExpression.Create(
-      TGocciaNumberLiteralValue.Create(ConvertNumberLiteral(Token.Lexeme)), Token.Line, Token.Column);
-  end
-  else if Match(gttBigInt) then
-  begin
-    Token := Previous;
-    Result := TGocciaLiteralExpression.Create(
-      ConvertBigIntLiteral(Token.Lexeme), Token.Line, Token.Column);
-  end
-  else if Match(gttString) then
-  begin
-    Token := Previous;
-    Result := TGocciaLiteralExpression.Create(
-      TGocciaStringLiteralValue.Create(Token.Lexeme), Token.Line, Token.Column);
-  end
-  else if Match(gttTemplate) then
-  begin
-    Token := Previous;
-    Result := ParseTemplateLiteral(Token);
-  end
-  else if Match(gttRegex) then
-  begin
-    Token := Previous;
-    SeparatorPos := Pos(REGEX_SEPARATOR, Token.Lexeme);
-    if SeparatorPos > 0 then
-      Result := TGocciaRegexLiteralExpression.Create(
-        Copy(Token.Lexeme, 1, SeparatorPos - 1),
-        Copy(Token.Lexeme, SeparatorPos + 1, MaxInt),
-        Token.Line, Token.Column)
-    else
-      Result := TGocciaRegexLiteralExpression.Create(Token.Lexeme, '', Token.Line, Token.Column);
-  end
-  else if Match(gttThis) then
-  begin
-    Token := Previous;
-    Result := TGocciaThisExpression.Create(Token.Line, Token.Column);
-  end
-  else if Match(gttSuper) then
-  begin
-    Token := Previous;
-    Result := TGocciaSuperExpression.Create(Token.Line, Token.Column);
-  end
-  else if Match(gttImport) then
-  begin
-    Token := Previous;
-    if Check(gttLeftParen) then
-    begin
-      // ES2026 §13.3.10 ImportCall — import(specifier)
-      Advance; // consume '('
-      Expr := Expression;
-      Consume(gttRightParen, 'Expected ")" after import() specifier',
-        SSuggestDynamicImportSyntax);
-      Result := TGocciaImportCallExpression.Create(Expr, Token.Line, Token.Column);
-    end
-    else
-    begin
-      // ES2026 §13.3.12 MetaProperty — import.meta
-      Consume(gttDot, 'Expected "." or "(" after "import" in expression context',
-        SSuggestDynamicImportSyntax);
-      if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_META) then
+  case Peek.TokenType of
+    gttTrue:
       begin
-        Advance;
-        Result := TGocciaImportMetaExpression.Create(Token.Line, Token.Column);
-      end
-      else
-        raise TGocciaSyntaxError.Create(
-          'The only valid meta property for import is "import.meta"',
-          Peek.Line, Peek.Column, FFileName, FSourceLines,
-          SSuggestImportMetaSyntax);
-    end;
-  end
-  else if Match(gttClass) then
-  begin
-    Token := Previous;
-    Result := ClassExpression;
-  end
-  else if Match(gttNew) then
-  begin
-    Token := Previous;
-    // Parse the callee: class name with optional member access (e.g. new a.B.C())
-    // but NOT call expressions — those belong to the outer Call loop.
-    Expr := Primary;
-    while Check(gttDot) do
-    begin
-      Advance;
-      if Check(gttIdentifier) then
-        Expr := TGocciaMemberExpression.Create(Expr, Advance.Lexeme, False, Previous.Line, Previous.Column, False)
-      else
-        raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines,
-          SSuggestPropertyNameIdentifier);
-    end;
-    // Parse constructor arguments if present
-    if Match(gttLeftParen) then
-    begin
-      Args := TObjectList<TGocciaExpression>.Create(True);
-      if not Check(gttRightParen) then
-      begin
-        repeat
-          if Match(gttSpread) then
-            Args.Add(TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column))
-          else
-            Args.Add(Expression);
-        until not Match(gttComma) or Check(gttRightParen);
+        Token := Advance;
+        Result := TGocciaLiteralExpression.Create(
+          TGocciaBooleanLiteralValue.TrueValue, Token.Line, Token.Column);
       end;
-      Consume(gttRightParen, 'Expected ")" after constructor arguments',
-        SSuggestCloseParenConstructorArguments);
-      Result := TGocciaNewExpression.Create(Expr, Args, Token.Line, Token.Column);
-    end
-    else
-    begin
-      Args := TObjectList<TGocciaExpression>.Create(True);
-      Result := TGocciaNewExpression.Create(Expr, Args, Token.Line, Token.Column);
-    end;
-  end
-  else if IsMatchExpressionAhead then
-    Result := ParseMatchExpression
-  else if Match(gttIdentifier) then
-  begin
-    Token := Previous;
-    Name := Token.Lexeme;
-
-    // async arrow function: async (params) => body
-    if (Name = KEYWORD_ASYNC) and Check(gttLeftParen) then
-    begin
-      Advance; // consume '('
-      if IsArrowFunction() then
+    gttFalse:
       begin
-        Expr := ArrowFunction(True);
-        TGocciaArrowFunctionExpression(Expr).IsAsync := True;
-        // Override source text to include `async` prefix
-        TGocciaArrowFunctionExpression(Expr).SourceText :=
-          ExtractSourceRange(Token.Line, Token.Column);
-        Result := Expr;
-      end
-      else
-      begin
-        FCurrent := FCurrent - 1; // back up past '('
-        Result := TGocciaIdentifierExpression.Create(Name, Token.Line, Token.Column);
+        Token := Advance;
+        Result := TGocciaLiteralExpression.Create(
+          TGocciaBooleanLiteralValue.FalseValue, Token.Line, Token.Column);
       end;
-    end
-    // async single-param arrow: async x => body
-    else if (Name = KEYWORD_ASYNC) and Check(gttIdentifier) and CheckNext(gttArrow) then
-    begin
-      Line := Token.Line;
-      Column := Token.Column;
-      Token := Advance; // consume param identifier
-      Name := Token.Lexeme;
-      Consume(gttArrow, 'Expected "=>" in async arrow function',
-        SSuggestArrowFunctionSyntax);
-
-      Inc(FInAsyncFunction);
-      Inc(FFunctionDepth);
-      try
-        if Match(gttLeftBrace) then
-          ArrowBody := BlockStatement
+    gttNull:
+      begin
+        Token := Advance;
+        Result := TGocciaLiteralExpression.Create(
+          TGocciaNullLiteralValue.NullValue, Token.Line, Token.Column);
+      end;
+    gttNumber:
+      begin
+        Token := Advance;
+        Result := TGocciaLiteralExpression.Create(
+          TGocciaNumberLiteralValue.Create(ConvertNumberLiteral(Token.Lexeme)), Token.Line, Token.Column);
+      end;
+    gttBigInt:
+      begin
+        Token := Advance;
+        Result := TGocciaLiteralExpression.Create(
+          ConvertBigIntLiteral(Token.Lexeme), Token.Line, Token.Column);
+      end;
+    gttString:
+      begin
+        Token := Advance;
+        Result := TGocciaLiteralExpression.Create(
+          TGocciaStringLiteralValue.Create(Token.Lexeme), Token.Line, Token.Column);
+      end;
+    gttTemplate:
+      begin
+        Token := Advance;
+        Result := ParseTemplateLiteral(Token);
+      end;
+    gttRegex:
+      begin
+        Token := Advance;
+        SeparatorPos := Pos(REGEX_SEPARATOR, Token.Lexeme);
+        if SeparatorPos > 0 then
+          Result := TGocciaRegexLiteralExpression.Create(
+            Copy(Token.Lexeme, 1, SeparatorPos - 1),
+            Copy(Token.Lexeme, SeparatorPos + 1, MaxInt),
+            Token.Line, Token.Column)
         else
-          ArrowBody := Expression;
-      finally
-        Dec(FFunctionDepth);
-        Dec(FInAsyncFunction);
+          Result := TGocciaRegexLiteralExpression.Create(Token.Lexeme, '', Token.Line, Token.Column);
       end;
-
-      SetLength(Parameters, 1);
-      Parameters[0].Name := Name;
-      Parameters[0].DefaultValue := nil;
-      Parameters[0].Pattern := nil;
-      Parameters[0].IsPattern := False;
-      Parameters[0].IsRest := False;
-      Parameters[0].IsOptional := False;
-      Parameters[0].TypeAnnotation := '';
-
-      ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, Line, Column);
-      ArrowFn.IsAsync := True;
-      ArrowFn.SourceText := ExtractSourceRange(Line, Column);
-      Result := ArrowFn;
-    end
-    else if Name = KEYWORD_ASYNC then
-    begin
-      case TryConsumeAsyncFunction(Token.Line, Token.Column) of
-        afcNotMatched:
-          Result := TGocciaIdentifierExpression.Create(Name, Token.Line, Token.Column);
-        afcDisabled:
-          Result := TGocciaLiteralExpression.Create(
-            TGocciaUndefinedLiteralValue.UndefinedValue, Token.Line, Token.Column);
-        afcReady:
+    gttThis:
+      begin
+        Token := Advance;
+        Result := TGocciaThisExpression.Create(Token.Line, Token.Column);
+      end;
+    gttSuper:
+      begin
+        Token := Advance;
+        Result := TGocciaSuperExpression.Create(Token.Line, Token.Column);
+      end;
+    gttImport:
+      begin
+        Token := Advance;
+        if Check(gttLeftParen) then
         begin
-          IsGenerator := False;
-          if Check(gttStar) then
+          // ES2026 §13.3.10 ImportCall — import(specifier)
+          Advance; // consume '('
+          Expr := Expression;
+          Consume(gttRightParen, 'Expected ")" after import() specifier',
+            SSuggestDynamicImportSyntax);
+          Result := TGocciaImportCallExpression.Create(Expr, Token.Line, Token.Column);
+        end
+        else
+        begin
+          // ES2026 §13.3.12 MetaProperty — import.meta
+          Consume(gttDot, 'Expected "." or "(" after "import" in expression context',
+            SSuggestDynamicImportSyntax);
+          if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_META) then
           begin
             Advance;
-            IsGenerator := True;
+            Result := TGocciaImportMetaExpression.Create(Token.Line, Token.Column);
+          end
+          else
+            raise TGocciaSyntaxError.Create(
+              'The only valid meta property for import is "import.meta"',
+              Peek.Line, Peek.Column, FFileName, FSourceLines,
+              SSuggestImportMetaSyntax);
+        end;
+      end;
+    gttClass:
+      begin
+        Advance;
+        Result := ClassExpression;
+      end;
+    gttNew:
+      begin
+        Token := Advance;
+        // Parse the callee: class name with optional member access (e.g. new a.B.C())
+        // but NOT call expressions — those belong to the outer Call loop.
+        Expr := Primary;
+        while Check(gttDot) do
+        begin
+          Advance;
+          if Check(gttIdentifier) then
+            Expr := TGocciaMemberExpression.Create(Expr, Advance.Lexeme, False, Previous.Line, Previous.Column, False)
+          else
+            raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines,
+              SSuggestPropertyNameIdentifier);
+        end;
+        // Parse constructor arguments if present
+        if Match(gttLeftParen) then
+        begin
+          Args := TObjectList<TGocciaExpression>.Create(True);
+          if not Check(gttRightParen) then
+          begin
+            repeat
+              if Match(gttSpread) then
+                Args.Add(TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column))
+              else
+                Args.Add(Expression);
+            until not Match(gttComma) or Check(gttRightParen);
           end;
+          Consume(gttRightParen, 'Expected ")" after constructor arguments',
+            SSuggestCloseParenConstructorArguments);
+          Result := TGocciaNewExpression.Create(Expr, Args, Token.Line, Token.Column);
+        end
+        else
+        begin
+          Args := TObjectList<TGocciaExpression>.Create(True);
+          Result := TGocciaNewExpression.Create(Expr, Args, Token.Line, Token.Column);
+        end;
+      end;
+    gttIdentifier:
+      begin
+        if IsMatchExpressionAhead then
+        begin
+          Result := ParseMatchExpression;
+          Exit;
+        end;
+
+        Token := Advance;
+        Name := Token.Lexeme;
+
+        // async arrow function: async (params) => body
+        if (Name = KEYWORD_ASYNC) and Check(gttLeftParen) then
+        begin
+          Advance; // consume '('
+          if IsArrowFunction() then
+          begin
+            Expr := ArrowFunction(True);
+            TGocciaArrowFunctionExpression(Expr).IsAsync := True;
+            // Override source text to include `async` prefix
+            TGocciaArrowFunctionExpression(Expr).SourceText :=
+              ExtractSourceRange(Token.Line, Token.Column);
+            Result := Expr;
+          end
+          else
+          begin
+            FCurrent := FCurrent - 1; // back up past '('
+            Result := TGocciaIdentifierExpression.Create(Name, Token.Line, Token.Column);
+          end;
+        end
+        // async single-param arrow: async x => body
+        else if (Name = KEYWORD_ASYNC) and Check(gttIdentifier) and CheckNext(gttArrow) then
+        begin
+          Line := Token.Line;
+          Column := Token.Column;
+          Token := Advance; // consume param identifier
+          Name := Token.Lexeme;
+          Consume(gttArrow, 'Expected "=>" in async arrow function',
+            SSuggestArrowFunctionSyntax);
+
+          Inc(FInAsyncFunction);
+          Inc(FFunctionDepth);
+          try
+            if Match(gttLeftBrace) then
+              ArrowBody := BlockStatement
+            else
+              ArrowBody := Expression;
+          finally
+            Dec(FFunctionDepth);
+            Dec(FInAsyncFunction);
+          end;
+
+          SetLength(Parameters, 1);
+          Parameters[0].Name := Name;
+          Parameters[0].DefaultValue := nil;
+          Parameters[0].Pattern := nil;
+          Parameters[0].IsPattern := False;
+          Parameters[0].IsRest := False;
+          Parameters[0].IsOptional := False;
+          Parameters[0].TypeAnnotation := '';
+
+          ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, Line, Column);
+          ArrowFn.IsAsync := True;
+          ArrowFn.SourceText := ExtractSourceRange(Line, Column);
+          Result := ArrowFn;
+        end
+        else if Name = KEYWORD_ASYNC then
+        begin
+          case TryConsumeAsyncFunction(Token.Line, Token.Column) of
+            afcNotMatched:
+              Result := TGocciaIdentifierExpression.Create(Name, Token.Line, Token.Column);
+            afcDisabled:
+              Result := TGocciaLiteralExpression.Create(
+                TGocciaUndefinedLiteralValue.UndefinedValue, Token.Line, Token.Column);
+            afcReady:
+            begin
+              IsGenerator := False;
+              if Check(gttStar) then
+              begin
+                Advance;
+                IsGenerator := True;
+              end;
+              Name := '';
+              if Check(gttIdentifier) then
+              begin
+                Name := Peek.Lexeme;
+                Advance;
+              end;
+              CollectGenericParameters;
+              Result := ParseObjectMethodBody(Token.Line, Token.Column, True, IsGenerator);
+              TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
+              TGocciaMethodExpression(Result).IsAsync := True;
+              TGocciaMethodExpression(Result).IsGenerator := IsGenerator;
+              if Name <> '' then
+                TGocciaMethodExpression(Result).Name := Name;
+            end;
+          end;
+        end
+        else
+          Result := TGocciaIdentifierExpression.Create(Name, Token.Line, Token.Column);
+      end;
+    gttHash:
+      begin
+        Advance;
+        Token := Consume(gttIdentifier, 'Expected private field name after "#"',
+          SSuggestPrivateFieldMustFollow);
+        Name := Token.Lexeme;
+        RecordPrivateNameReference(Name, Token.Line, Token.Column);
+        // Private field access is equivalent to this.#fieldName
+        Result := TGocciaPrivateMemberExpression.Create(
+          TGocciaThisExpression.Create(Token.Line, Token.Column),
+          Name, Token.Line, Token.Column);
+      end;
+    gttLeftParen:
+      begin
+        Advance;
+        // Check for arrow function by looking for pattern: () => or (id) => or (id, id) =>
+        if IsArrowFunction() then
+          Result := ArrowFunction
+        else
+        begin
+          Expr := Expression;
+          Consume(gttRightParen, 'Expected ")" after expression',
+            SSuggestCloseParenExpression);
+          Result := Expr;
+        end;
+      end;
+    gttFunction:
+      begin
+        Token := Advance;
+        if not FFunctionDeclarationsEnabled then
+        begin
+          AddWarning('''function'' expressions are not supported in GocciaScript',
+            'Use arrow functions: const f = (...) => { ... }; for wrappers needing call-site this, use method shorthand: ({ m(...) {} }).m',
+            Token.Line, Token.Column);
+          SkipUnsupportedFunctionSignature;
+          Result := TGocciaLiteralExpression.Create(
+            TGocciaUndefinedLiteralValue.UndefinedValue, Token.Line, Token.Column);
+        end
+        else if Check(gttStar) then
+        begin
+          Advance;
           Name := '';
           if Check(gttIdentifier) then
           begin
@@ -1749,94 +1862,42 @@ begin
             Advance;
           end;
           CollectGenericParameters;
-          Result := ParseObjectMethodBody(Token.Line, Token.Column, True, IsGenerator);
+          Result := ParseObjectMethodBody(Token.Line, Token.Column, False, True);
           TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
-          TGocciaMethodExpression(Result).IsAsync := True;
-          TGocciaMethodExpression(Result).IsGenerator := IsGenerator;
+          TGocciaMethodExpression(Result).IsGenerator := True;
+          if Name <> '' then
+            TGocciaMethodExpression(Result).Name := Name;
+        end
+        else
+        begin
+          Name := '';
+          if Check(gttIdentifier) then
+          begin
+            Name := Peek.Lexeme;
+            Advance;
+          end;
+          CollectGenericParameters;
+          Result := ParseObjectMethodBody(Token.Line, Token.Column);
+          TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
           if Name <> '' then
             TGocciaMethodExpression(Result).Name := Name;
         end;
       end;
-    end
-    else
-      Result := TGocciaIdentifierExpression.Create(Name, Token.Line, Token.Column);
-  end
-  else if Match(gttHash) then
-  begin
-    Token := Previous;
-    Token := Consume(gttIdentifier, 'Expected private field name after "#"',
-      SSuggestPrivateFieldMustFollow);
-    Name := Token.Lexeme;
-    RecordPrivateNameReference(Name, Token.Line, Token.Column);
-    // Private field access is equivalent to this.#fieldName
-    Result := TGocciaPrivateMemberExpression.Create(
-      TGocciaThisExpression.Create(Token.Line, Token.Column),
-      Name, Token.Line, Token.Column);
-  end
-  else if Match(gttLeftParen) then
-  begin
-    // Check for arrow function by looking for pattern: () => or (id) => or (id, id) =>
-    if IsArrowFunction() then
-      Result := ArrowFunction
-    else
-    begin
-      Expr := Expression;
-      Consume(gttRightParen, 'Expected ")" after expression',
-        SSuggestCloseParenExpression);
-      Result := Expr;
-    end;
-  end
-  else if Match(gttFunction) then
-  begin
-    Token := Previous;
-    if not FFunctionDeclarationsEnabled then
-    begin
-      AddWarning('''function'' expressions are not supported in GocciaScript',
-        'Use arrow functions: const f = (...) => { ... }; for wrappers needing call-site this, use method shorthand: ({ m(...) {} }).m',
-        Token.Line, Token.Column);
-      SkipUnsupportedFunctionSignature;
-      Result := TGocciaLiteralExpression.Create(
-        TGocciaUndefinedLiteralValue.UndefinedValue, Token.Line, Token.Column);
-    end
-    else if Check(gttStar) then
-    begin
-      Advance;
-      Name := '';
-      if Check(gttIdentifier) then
+    gttLeftBracket:
       begin
-        Name := Peek.Lexeme;
         Advance;
+        Result := ArrayLiteral;
       end;
-      CollectGenericParameters;
-      Result := ParseObjectMethodBody(Token.Line, Token.Column, False, True);
-      TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
-      TGocciaMethodExpression(Result).IsGenerator := True;
-      if Name <> '' then
-        TGocciaMethodExpression(Result).Name := Name;
-    end
-    else
-    begin
-      Name := '';
-      if Check(gttIdentifier) then
+    gttLeftBrace:
       begin
-        Name := Peek.Lexeme;
         Advance;
-      end;
-      CollectGenericParameters;
-      Result := ParseObjectMethodBody(Token.Line, Token.Column);
-      TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
-      if Name <> '' then
-        TGocciaMethodExpression(Result).Name := Name;
-    end;
-  end
-  else if Match(gttLeftBracket) then
-    Result := ArrayLiteral
-  else if Match(gttLeftBrace) then
-    Result := ObjectLiteral
+        Result := ObjectLiteral;
+      end
   else
     raise TGocciaSyntaxError.Create('Expected expression',
       Peek.Line, Peek.Column, FFileName, FSourceLines,
       SSuggestExpressionExpected);
+  end;
 end;
 
 function TGocciaParser.ParseMatchExpression: TGocciaMatchExpression;
@@ -2964,6 +3025,7 @@ var
   Parameters: TGocciaParameterArray;
   ArrowBody: TGocciaASTNode;
   ArrowFn: TGocciaArrowFunctionExpression;
+  OperatorToken: TGocciaToken;
 begin
   Left := Conditional;
 
@@ -2994,13 +3056,16 @@ begin
     Exit;
   end;
 
-  if Match([gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign, gttNullishCoalescingAssign,
-             gttLogicalAndAssign, gttLogicalOrAssign,
-             gttBitwiseAndAssign, gttBitwiseOrAssign, gttBitwiseXorAssign, gttLeftShiftAssign, gttRightShiftAssign, gttUnsignedRightShiftAssign]) then
+  if Peek.TokenType in [gttAssign, gttPlusAssign, gttMinusAssign,
+    gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign,
+    gttNullishCoalescingAssign, gttLogicalAndAssign, gttLogicalOrAssign,
+    gttBitwiseAndAssign, gttBitwiseOrAssign, gttBitwiseXorAssign,
+    gttLeftShiftAssign, gttRightShiftAssign, gttUnsignedRightShiftAssign] then
   begin
-    Operator := Previous.TokenType;
-    Line := Previous.Line;
-    Column := Previous.Column;
+    OperatorToken := Advance;
+    Operator := OperatorToken.TokenType;
+    Line := OperatorToken.Line;
+    Column := OperatorToken.Column;
     Right := Assignment;
 
     // Check for destructuring assignment
@@ -5376,23 +5441,55 @@ begin
 end;
 
 function TGocciaParser.BitwiseOr: TGocciaExpression;
+var
+  Op: TGocciaToken;
 begin
-  Result := ParseBinaryExpression(BitwiseXor, [gttBitwiseOr]);
+  Result := BitwiseXor;
+  while Peek.TokenType = gttBitwiseOr do
+  begin
+    Op := Advance;
+    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
+      BitwiseXor, Op.Line, Op.Column);
+  end;
 end;
 
 function TGocciaParser.BitwiseXor: TGocciaExpression;
+var
+  Op: TGocciaToken;
 begin
-  Result := ParseBinaryExpression(BitwiseAnd, [gttBitwiseXor]);
+  Result := BitwiseAnd;
+  while Peek.TokenType = gttBitwiseXor do
+  begin
+    Op := Advance;
+    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
+      BitwiseAnd, Op.Line, Op.Column);
+  end;
 end;
 
 function TGocciaParser.BitwiseAnd: TGocciaExpression;
+var
+  Op: TGocciaToken;
 begin
-  Result := ParseBinaryExpression(Equality, [gttBitwiseAnd]);
+  Result := Equality;
+  while Peek.TokenType = gttBitwiseAnd do
+  begin
+    Op := Advance;
+    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
+      Equality, Op.Line, Op.Column);
+  end;
 end;
 
 function TGocciaParser.Shift: TGocciaExpression;
+var
+  Op: TGocciaToken;
 begin
-  Result := ParseBinaryExpression(Addition, [gttLeftShift, gttRightShift, gttUnsignedRightShift]);
+  Result := Addition;
+  while Peek.TokenType in [gttLeftShift, gttRightShift, gttUnsignedRightShift] do
+  begin
+    Op := Advance;
+    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
+      Addition, Op.Line, Op.Column);
+  end;
 end;
 
 function TGocciaParser.ConvertNumberLiteral(const ALexeme: string): Double;
