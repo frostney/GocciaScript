@@ -100,6 +100,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaTestRunner tests -j 1 # Force sequential execution (no threading)
 ./build/GocciaTestRunner tests --asi --unsafe-ffi # Run all tests including FFI tests
 ./build/GocciaTestRunner tests --log=test-console.log # Capture console output to a log file
+printf 'test("two plus two", () => { expect(2 + 2).toBe(4); });\n' | ./build/GocciaTestRunner # Run a test source from stdin
 ./build/GocciaBenchmarkRunner benchmarks/ # Run all benchmarks
 ./build/GocciaBenchmarkRunner benchmarks --import-map=imports.json # Run benchmarks with an explicit import map
 ./build/GocciaBenchmarkRunner benchmarks/fibonacci.js # Run a specific benchmark
