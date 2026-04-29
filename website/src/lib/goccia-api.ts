@@ -7,7 +7,6 @@ import { tmpdir } from "node:os";
 import path, { basename } from "node:path";
 import { NextResponse } from "next/server";
 import {
-  type GocciaToolInput,
   MAX_GOCCIA_CODE_BYTES,
   MAX_GOCCIA_TOOL_REQUEST_BYTES,
   validateGocciaToolInput,
@@ -567,9 +566,9 @@ async function runHandler(
     );
   }
 
-  let rawPayload: GocciaToolInput;
+  let rawPayload: unknown;
   try {
-    rawPayload = JSON.parse(rawBody) as GocciaToolInput;
+    rawPayload = JSON.parse(rawBody);
   } catch {
     captureServerEvent(`${config.eventPrefix}_invalid_json`, {
       distinctId,

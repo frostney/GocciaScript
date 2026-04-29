@@ -24,14 +24,6 @@ export type GocciaToolPayload = {
   compatFunction: boolean;
 };
 
-export type GocciaToolInput = {
-  code?: unknown;
-  mode?: unknown;
-  asi?: unknown;
-  compatVar?: unknown;
-  compatFunction?: unknown;
-};
-
 export type GocciaToolValidationResult =
   | { ok: true; value: GocciaToolPayload }
   | {
@@ -62,7 +54,7 @@ export const gocciaToolInputZodSchema = z
   .strict();
 
 export function validateGocciaToolInput(
-  input: GocciaToolInput,
+  input: unknown,
 ): GocciaToolValidationResult {
   const result = gocciaToolInputZodSchema.safeParse(input);
   if (result.success) return { ok: true, value: result.data };

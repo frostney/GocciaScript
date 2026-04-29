@@ -65,6 +65,10 @@ describe("goccia tool schema validation", () => {
   });
 
   test("rejects missing, empty, and invalid fields", () => {
+    expect(validateGocciaToolInput(null)).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_INPUT" },
+    });
     expect(validateGocciaToolInput({})).toEqual({
       ok: false,
       error: {

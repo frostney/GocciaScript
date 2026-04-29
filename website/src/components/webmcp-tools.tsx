@@ -2,7 +2,6 @@
 
 import { useEffect } from "react";
 import {
-  type GocciaToolInput,
   gocciaRunInputSchema,
   validateGocciaToolInput,
 } from "@/lib/goccia-tool-schema";
@@ -12,7 +11,7 @@ type ModelContextTool = {
   title: string;
   description: string;
   inputSchema: ReturnType<typeof gocciaRunInputSchema>;
-  execute: (input: GocciaToolInput) => Promise<unknown>;
+  execute: (input: unknown) => Promise<unknown>;
   annotations?: {
     readOnlyHint?: boolean;
     untrustedContentHint?: boolean;
@@ -45,7 +44,7 @@ function modelContextError(action: string, err: unknown) {
 
 async function callGocciaApi(
   endpoint: "/api/execute" | "/api/test",
-  input: GocciaToolInput,
+  input: unknown,
 ) {
   const parsed = validateGocciaToolInput(input);
   if (!parsed.ok) {
