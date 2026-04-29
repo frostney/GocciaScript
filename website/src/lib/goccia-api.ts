@@ -593,12 +593,7 @@ async function runHandler(
     return transportError(
       {
         message: payload.error.message,
-        code:
-          payload.error.code === "CODE_TOO_LARGE"
-            ? "CODE_TOO_LARGE"
-            : payload.error.code === "MISSING_CODE"
-              ? "MISSING_CODE"
-              : "INVALID_INPUT",
+        code: payload.error.code,
       },
       { status },
     );
