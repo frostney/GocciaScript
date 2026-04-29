@@ -4004,6 +4004,9 @@ begin
       begin
         Advance;
         CatchType := CollectTypeAnnotation([gttRightParen]);
+        if CatchType = '' then
+          raise TGocciaSyntaxError.Create('Expected type annotation after ":"',
+            Peek.Line, Peek.Column, FFileName, FSourceLines);
       end;
       if (CatchType = '') and MatchContextualKeyword(KEYWORD_IS) then
         CatchPattern := ParseMatchPattern;

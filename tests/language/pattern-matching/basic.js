@@ -47,6 +47,22 @@ describe("pattern matching expressions", () => {
     expect(hidden).toBe(true);
   });
 
+  test("body bindings are cleaned up when required right conditions throw", () => {
+    const value = { x: 3 };
+    let caught = false;
+
+    try {
+      if (value is { x: const leaked } && (() => { throw new Error("boom"); })()) {
+        leaked;
+      }
+    } catch (error) {
+      caught = error.message === "boom";
+    }
+
+    expect(caught).toBe(true);
+    expect(() => leaked).toThrow(ReferenceError);
+  });
+
   test("type assertions stop before a following is pattern", () => {
     expect(1 as number is 1).toBe(true);
   });

@@ -159,65 +159,62 @@ var
   CurrentContext, NextContext: TGocciaEvaluationContext;
   RestArray: TGocciaArrayValue;
   RestArrayRooted: Boolean;
+  Success: Boolean;
 begin
   CurrentContext := AContext;
+  AMatchContext := AContext;
+  Success := False;
 
-  for I := 0 to AElements.Count - 1 do
-  begin
-    IterationResult := AIterator.AdvanceNext;
-    if IterationResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+  try
+    for I := 0 to AElements.Count - 1 do
     begin
-      ReleaseMatchContext(CurrentContext, AContext);
-      Exit(False);
-    end;
-    if not Assigned(AElements[I]) then
-      Continue;
-    if not TryMatchPatternInternal(IterationResult.GetProperty(PROP_VALUE),
-       AElements[I], CurrentContext, NextContext) then
-    begin
-      ReleaseMatchContext(CurrentContext, AContext);
-      Exit(False);
-    end;
-    CurrentContext := NextContext;
-  end;
-
-  if Assigned(ARestPattern) then
-  begin
-    RestArray := TGocciaArrayValue.Create;
-    RestArrayRooted := Assigned(TGarbageCollector.Instance);
-    if RestArrayRooted then
-      TGarbageCollector.Instance.AddTempRoot(RestArray);
-    try
       IterationResult := AIterator.AdvanceNext;
-      while not IterationResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
-      begin
-        RestArray.Elements.Add(IterationResult.GetProperty(PROP_VALUE));
-        IterationResult := AIterator.AdvanceNext;
-      end;
-      if not TryMatchPatternInternal(RestArray, ARestPattern,
-         CurrentContext, NextContext) then
-      begin
-        ReleaseMatchContext(CurrentContext, AContext);
+      if IterationResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
         Exit(False);
-      end;
+      if not Assigned(AElements[I]) then
+        Continue;
+      if not TryMatchPatternInternal(IterationResult.GetProperty(PROP_VALUE),
+         AElements[I], CurrentContext, NextContext) then
+        Exit(False);
       CurrentContext := NextContext;
-    finally
-      if RestArrayRooted then
-        TGarbageCollector.Instance.RemoveTempRoot(RestArray);
     end;
-  end
-  else if not AHasRestWildcard then
-  begin
-    IterationResult := AIterator.AdvanceNext;
-    if not IterationResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
-    begin
-      ReleaseMatchContext(CurrentContext, AContext);
-      Exit(False);
-    end;
-  end;
 
-  AMatchContext := CurrentContext;
-  Result := True;
+    if Assigned(ARestPattern) then
+    begin
+      RestArray := TGocciaArrayValue.Create;
+      RestArrayRooted := Assigned(TGarbageCollector.Instance);
+      if RestArrayRooted then
+        TGarbageCollector.Instance.AddTempRoot(RestArray);
+      try
+        IterationResult := AIterator.AdvanceNext;
+        while not IterationResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+        begin
+          RestArray.Elements.Add(IterationResult.GetProperty(PROP_VALUE));
+          IterationResult := AIterator.AdvanceNext;
+        end;
+        if not TryMatchPatternInternal(RestArray, ARestPattern,
+           CurrentContext, NextContext) then
+          Exit(False);
+        CurrentContext := NextContext;
+      finally
+        if RestArrayRooted then
+          TGarbageCollector.Instance.RemoveTempRoot(RestArray);
+      end;
+    end
+    else if not AHasRestWildcard then
+    begin
+      IterationResult := AIterator.AdvanceNext;
+      if not IterationResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+        Exit(False);
+    end;
+
+    AMatchContext := CurrentContext;
+    Success := True;
+    Result := True;
+  finally
+    if not Success then
+      ReleaseMatchContext(CurrentContext, AContext);
+  end;
 end;
 
 function BoxPrimitiveForMatch(const ASubject: TGocciaValue): TGocciaObjectValue;
@@ -483,6 +480,7 @@ var
   I: Integer;
   CurrentContext, NextContext: TGocciaEvaluationContext;
   RestArray: TGocciaArrayValue;
+  Success: Boolean;
 begin
   if not Assigned(ARestPattern) and not AHasRestWildcard and
      (AItems.Count <> AElements.Count) then
@@ -492,33 +490,38 @@ begin
     Exit(False);
 
   CurrentContext := AContext;
-  for I := 0 to AElements.Count - 1 do
-  begin
-    if not Assigned(AElements[I]) then
-      Continue;
-    if not TryMatchPatternInternal(AItems[I], AElements[I], CurrentContext, NextContext) then
-    begin
-      ReleaseMatchContext(CurrentContext, AContext);
-      Exit(False);
-    end;
-    CurrentContext := NextContext;
-  end;
+  AMatchContext := AContext;
+  Success := False;
 
-  if Assigned(ARestPattern) then
-  begin
-    RestArray := TGocciaArrayValue.Create;
-    for I := AElements.Count to AItems.Count - 1 do
-      RestArray.Elements.Add(AItems[I]);
-    if not TryMatchPatternInternal(RestArray, ARestPattern, CurrentContext, NextContext) then
+  try
+    for I := 0 to AElements.Count - 1 do
     begin
-      ReleaseMatchContext(CurrentContext, AContext);
-      Exit(False);
+      if not Assigned(AElements[I]) then
+        Continue;
+      if not TryMatchPatternInternal(AItems[I], AElements[I], CurrentContext,
+         NextContext) then
+        Exit(False);
+      CurrentContext := NextContext;
     end;
-    CurrentContext := NextContext;
-  end;
 
-  AMatchContext := CurrentContext;
-  Result := True;
+    if Assigned(ARestPattern) then
+    begin
+      RestArray := TGocciaArrayValue.Create;
+      for I := AElements.Count to AItems.Count - 1 do
+        RestArray.Elements.Add(AItems[I]);
+      if not TryMatchPatternInternal(RestArray, ARestPattern, CurrentContext,
+         NextContext) then
+        Exit(False);
+      CurrentContext := NextContext;
+    end;
+
+    AMatchContext := CurrentContext;
+    Success := True;
+    Result := True;
+  finally
+    if not Success then
+      ReleaseMatchContext(CurrentContext, AContext);
+  end;
 end;
 
 function TryMatchArrayPattern(const ASubject: TGocciaValue;
@@ -548,6 +551,7 @@ var
   RestSubject: TGocciaObjectValue;
   Entry: TPair<string, TGocciaValue>;
   SymbolEntry: TPair<TGocciaSymbolValue, TGocciaValue>;
+  Success: Boolean;
 begin
   if (ASubject is TGocciaNullLiteralValue) or
      (ASubject is TGocciaUndefinedLiteralValue) then
@@ -557,6 +561,8 @@ begin
   MatchedKeys.CaseSensitive := True;
   MatchedSymbols := TList<TGocciaSymbolValue>.Create;
   CurrentContext := AContext;
+  AMatchContext := AContext;
+  Success := False;
   try
     for I := 0 to APattern.Properties.Count - 1 do
     begin
@@ -567,17 +573,11 @@ begin
         KeyValue := TGocciaStringLiteralValue.Create(Prop.Key);
 
       if not HasMatchProperty(ASubject, KeyValue) then
-      begin
-        ReleaseMatchContext(CurrentContext, AContext);
         Exit(False);
-      end;
 
       PropertyValue := GetMatchProperty(ASubject, KeyValue);
       if not TryMatchPatternInternal(PropertyValue, Prop.Pattern, CurrentContext, NextContext) then
-      begin
-        ReleaseMatchContext(CurrentContext, AContext);
         Exit(False);
-      end;
 
       if KeyValue is TGocciaSymbolValue then
         MatchedSymbols.Add(TGocciaSymbolValue(KeyValue))
@@ -594,10 +594,7 @@ begin
         RestSubject := BoxPrimitiveForMatch(ASubject);
 
       if not Assigned(RestSubject) then
-      begin
-        ReleaseMatchContext(CurrentContext, AContext);
         Exit(False);
-      end;
 
       Remainder := TGocciaObjectValue.Create;
       for Entry in RestSubject.GetEnumerablePropertyEntries do
@@ -613,16 +610,16 @@ begin
 
       if not TryMatchPatternInternal(Remainder, APattern.RestPattern,
         CurrentContext, NextContext) then
-      begin
-        ReleaseMatchContext(CurrentContext, AContext);
         Exit(False);
-      end;
       CurrentContext := NextContext;
     end;
 
     AMatchContext := CurrentContext;
+    Success := True;
     Result := True;
   finally
+    if not Success then
+      ReleaseMatchContext(CurrentContext, AContext);
     MatchedSymbols.Free;
     MatchedKeys.Free;
   end;
@@ -932,13 +929,19 @@ begin
       Exit;
     end;
 
-    RightResult := EvaluateConditionWithPatternBindings(BinaryExpression.Right,
-      LeftContext, RightContext, RightHandled);
-    if not RightHandled then
-    begin
-      RightContext := LeftContext;
-      RightResult := EvaluateExpression(BinaryExpression.Right, LeftContext)
-        .ToBooleanLiteral.Value;
+    try
+      RightResult := EvaluateConditionWithPatternBindings(BinaryExpression.Right,
+        LeftContext, RightContext, RightHandled);
+      if not RightHandled then
+      begin
+        RightContext := LeftContext;
+        RightResult := EvaluateExpression(BinaryExpression.Right, LeftContext)
+          .ToBooleanLiteral.Value;
+      end;
+    except
+      if LeftHandled then
+        ReleaseMatchContext(LeftContext, AContext);
+      raise;
     end;
 
     if RightResult then

@@ -3477,12 +3477,15 @@ begin
     Excluded := False;
     if Assigned(AExclusionKeys) then
       for J := 0 to AExclusionKeys.Elements.Count - 1 do
-        if (AExclusionKeys.GetElement(J) is TGocciaSymbolValue) and
-           (AExclusionKeys.GetElement(J) = SymbolEntry.Key) then
+      begin
+        ExclusionKey := AExclusionKeys.GetElement(J);
+        if (ExclusionKey is TGocciaSymbolValue) and
+           (ExclusionKey = SymbolEntry.Key) then
         begin
           Excluded := True;
           Break;
         end;
+      end;
     if not Excluded then
       Result.AssignSymbolProperty(SymbolEntry.Key, SymbolEntry.Value);
   end;
