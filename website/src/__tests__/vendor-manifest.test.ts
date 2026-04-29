@@ -46,7 +46,7 @@ const LEGACY_061_FEATURES: VendorFeatureSet = {
 };
 
 const SAMPLE_MANIFEST: VendorManifest = {
-  defaultVersion: "nightly",
+  defaultVersion: "0.7.0",
   versions: [
     {
       tag: "0.7.0",

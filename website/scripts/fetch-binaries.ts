@@ -477,8 +477,14 @@ async function main(): Promise<void> {
   }
   versions.push(nightlyEntry);
 
+  // Default to the latest stable pick — that's `versions[0]` because stable
+  // entries are pushed newest-first before nightly is appended. Falling back
+  // to nightly only happens when no stable was vendored (early-stage repo
+  // with no releases yet).
+  const defaultVersion =
+    versions.find((v) => !v.isPrerelease)?.tag ?? NIGHTLY_TAG;
   const manifest: Manifest = {
-    defaultVersion: NIGHTLY_TAG,
+    defaultVersion,
     versions,
   };
   await writeFile(

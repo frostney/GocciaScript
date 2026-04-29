@@ -748,7 +748,9 @@ async function runHandler(
   const startedAt = Date.now();
 
   return await new Promise<Response>((resolve) => {
-    let resolved = false;
+    // Renamed from `resolved` to avoid shadowing the outer
+    // `const resolved = resolveBinaryPath(...)` from `runHandler`.
+    let responseSent = false;
     let cleaned = false;
     let abortHandler: (() => void) | null = null;
 
@@ -759,8 +761,8 @@ async function runHandler(
     };
 
     const finish = (res: Response) => {
-      if (resolved) return;
-      resolved = true;
+      if (responseSent) return;
+      responseSent = true;
       if (abortHandler) {
         try {
           req.signal.removeEventListener("abort", abortHandler);

@@ -30,8 +30,10 @@ export type VendorEntry = {
 };
 
 export type VendorManifest = {
-  /** The tag the API picks when the request omits `version`. Always
-   *  `"nightly"` in practice; expressed as a field for forward compat. */
+  /** The tag the API picks when the request omits `version`. Set by the
+   *  build script to the latest stable pick (`versions[0]` once stable
+   *  entries are sorted newest-first); falls back to `"nightly"` only when
+   *  no stable was vendored, e.g. an early-stage repo with no releases. */
   defaultVersion: string;
   /** Newest-first stable picks plus `nightly`. Order matches the
    *  order in which tags should appear in the playground dropdown. */
