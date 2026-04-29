@@ -874,7 +874,7 @@ export function Landing({
                 className="info-term info-term-button"
                 aria-describedby="portable-runtime-tip"
               >
-                portable runtime under 5MB
+                portable runtime under 6MB
                 <span
                   id="portable-runtime-tip"
                   role="tooltip"
