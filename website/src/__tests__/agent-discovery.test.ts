@@ -44,10 +44,11 @@ describe("agent discovery", () => {
       "application/linkset+json",
     );
     expect(response.headers.get("link")).toContain(
-      `<${API_CATALOG_PATH}>; rel="self"`,
+      `<https://example.test${API_CATALOG_PATH}>; rel="self"`,
     );
-    expect(body.linkset[0].item[0].href).toBe(
-      "https://example.test/api/execute",
+    const itemHrefs = body.linkset[0].item.map(
+      (item: { href: string }) => item.href,
     );
+    expect(itemHrefs).toContain("https://example.test/api/execute");
   });
 });

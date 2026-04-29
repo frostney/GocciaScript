@@ -4,11 +4,12 @@ export const dynamic = "force-dynamic";
 
 export function GET(req: Request) {
   const origin = new URL(req.url).origin;
+  const selfHref = new URL(API_CATALOG_PATH, origin).toString();
   return new Response(JSON.stringify(buildApiCatalog(origin), null, 2), {
     headers: {
       "Content-Type":
         'application/linkset+json; profile="https://www.rfc-editor.org/info/rfc9727"; charset=utf-8',
-      Link: `<${API_CATALOG_PATH}>; rel="self"; type="application/linkset+json"`,
+      Link: `<${selfHref}>; rel="self"; type="application/linkset+json"`,
     },
   });
 }
