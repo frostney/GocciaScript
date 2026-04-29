@@ -26,7 +26,7 @@ import {
   TOOL_CALL_TASK,
   type ToolFlow,
   type ToolFlowKey,
-} from "@/lib/tool-call-comparison.mjs";
+} from "@/lib/tool-call-comparison";
 
 /** When ready to surface the SDK integration snippet, flip to true.
  *  Hidden until the runtime is mature enough to expose a stable

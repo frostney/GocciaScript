@@ -1,3 +1,31 @@
+export type ToolStep = {
+  tool: string;
+  call: string;
+  role: string;
+  result: string;
+};
+
+export type ToolDef = {
+  type: "function";
+  name: string;
+  description: string;
+  parameters: {
+    type: "object";
+    properties: Record<string, unknown>;
+    required: string[];
+  };
+};
+
+export type ToolFlow = {
+  label: string;
+  argName: "command" | "code";
+  toolDef: ToolDef;
+  steps: ToolStep[];
+  risks: string[];
+};
+
+export type ToolFlowKey = "bash" | "goccia";
+
 export const TOOL_CALL_TASK =
   "Summarize the latest transaction batch and find outliers.";
 
@@ -13,7 +41,7 @@ transactions is Array<{ id: number, amount: number }>.
 GocciaScript is a strict ECMAScript subset. Do not use var, function declarations, loose equality (== / !=), eval, dynamic import, filesystem APIs, environment variables, or ambient host globals. Use const/let, arrow functions, strict equality, and the provided transactions global.`;
 export const USER_TASK = TOOL_CALL_TASK;
 
-export const BASH_TOOL = {
+export const BASH_TOOL: ToolDef = {
   type: "function",
   name: "bash",
   description: "Execute a shell command and return its stdout.",
@@ -26,7 +54,7 @@ export const BASH_TOOL = {
   },
 };
 
-export const RUN_CODE_TOOL = {
+export const RUN_CODE_TOOL: ToolDef = {
   type: "function",
   name: "run_code",
   description:
@@ -43,7 +71,7 @@ export const RUN_CODE_TOOL = {
   },
 };
 
-export const TOOL_CALL_FLOWS = {
+export const TOOL_CALL_FLOWS: Record<ToolFlowKey, ToolFlow> = {
   bash: {
     label: "Bash + jq",
     argName: "command",
@@ -112,16 +140,22 @@ const outliers = transactions.filter((t) => Math.abs(t.amount - avg) > 2 * stdev
   },
 };
 
-export const LLM_CALL_TOKENS = {
+export const LLM_CALL_TOKENS: Record<
+  ToolFlowKey,
+  { in: number[]; out: number[] }
+> = {
   bash: { in: [108, 166, 313, 382, 453], out: [39, 42, 50, 52, 58] },
   goccia: { in: [223], out: [138] },
 };
 
-export function getInstructions(flowKey) {
+export function getInstructions(flowKey: ToolFlowKey): string {
   return flowKey === "goccia" ? GOCCIA_TOOL_PROMPT : BASH_TOOL_PROMPT;
 }
 
-export function buildFunctionCallOutput(flowKey, index) {
+export function buildFunctionCallOutput(
+  flowKey: ToolFlowKey,
+  index: number,
+): unknown {
   const flow = TOOL_CALL_FLOWS[flowKey];
   const step = flow.steps[index];
   return {
@@ -133,9 +167,9 @@ export function buildFunctionCallOutput(flowKey, index) {
   };
 }
 
-export function buildLlmRequest(flowKey, index) {
+export function buildLlmRequest(flowKey: ToolFlowKey, index: number): unknown {
   const flow = TOOL_CALL_FLOWS[flowKey];
-  const input = [{ role: "user", content: USER_TASK }];
+  const input: unknown[] = [{ role: "user", content: USER_TASK }];
   for (let j = 0; j < index; j++) {
     const prev = flow.steps[j];
     input.push(buildFunctionCallOutput(flowKey, j));
