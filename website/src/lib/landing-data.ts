@@ -28,13 +28,13 @@ const list = JSONL.parse(text);
   {
     name: "CSV",
     snippet: `const rows = CSV.parse(text, {
-  header: true,
+  headers: true,
 });  // → [{ name, price }, …]`,
   },
   {
     name: "TSV",
     snippet: `const rows = TSV.parse(text, {
-  header: true,
+  headers: true,
 });  // tab-separated, same shape`,
   },
   {
