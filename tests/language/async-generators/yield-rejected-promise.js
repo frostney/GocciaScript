@@ -24,13 +24,16 @@ test("calling next() from a rejection handler does not recurse infinitely", asyn
   let firstRejection;
   let chainSettled = false;
   await new Promise((resolve, reject) => {
-    iter.next().catch((err) => {
-      firstRejection = err;
-      iter.next().then(
-        () => { chainSettled = true; resolve(); },
-        () => { chainSettled = true; resolve(); },
-      );
-    });
+    iter.next().then(
+      () => reject(new Error("first iter.next() unexpectedly fulfilled")),
+      (err) => {
+        firstRejection = err;
+        iter.next().then(
+          () => { chainSettled = true; resolve(); },
+          () => { chainSettled = true; resolve(); },
+        );
+      },
+    );
   });
 
   expect(firstRejection).toBe(0);

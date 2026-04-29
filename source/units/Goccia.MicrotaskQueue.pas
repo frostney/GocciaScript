@@ -22,6 +22,7 @@ type
   TGocciaMicrotaskQueue = class
   private
     FQueue: TList<TGocciaMicrotask>;
+    FHead: Integer;
   public
     class function Instance: TGocciaMicrotaskQueue;
     class procedure Initialize;
@@ -72,6 +73,7 @@ end;
 constructor TGocciaMicrotaskQueue.Create;
 begin
   FQueue := TList<TGocciaMicrotask>.Create;
+  FHead := 0;
 end;
 
 destructor TGocciaMicrotaskQueue.Destroy;
@@ -92,21 +94,27 @@ var
   HandlerResult: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
 begin
-  // Pop each task BEFORE running it so that recursive DrainQueue calls (e.g.
-  // when a handler awaits a settled promise, which calls
-  // DrainMicrotasksAndFetchCompletions during AwaitValue) only see remaining
-  // and newly-enqueued tasks rather than re-executing the in-flight one. The
-  // previous implementation kept tasks in the queue until a final Clear at
-  // the end, so any nested drain re-ran every already-processed task,
-  // producing infinite recursion when a microtask handler eventually re-
-  // entered the same path (observed as SIGSEGV from stack overflow with
+  // Advance the head index BEFORE running each task so that recursive
+  // DrainQueue calls (e.g. when a handler awaits a settled promise, which
+  // calls DrainMicrotasksAndFetchCompletions during AwaitValue) only see
+  // remaining and newly-enqueued tasks rather than re-executing the in-flight
+  // one. A previous implementation kept tasks in the queue until a final
+  // Clear at the end, so any nested drain re-ran every already-processed
+  // task, producing infinite recursion when a microtask handler eventually
+  // re-entered the same path (observed as SIGSEGV from stack overflow with
   // async-generator yields of rejected promises).
-  while FQueue.Count > 0 do
+  //
+  // Using a head index instead of TList.Delete(0) keeps each pop O(1);
+  // shifting the whole list per task would otherwise be O(n^2) for large
+  // microtask bursts (Promise-heavy fan-outs, await-loops in async iterators).
+  // Once FHead catches up to Count we compact by clearing the underlying list
+  // so the buffer does not grow unboundedly across drains.
+  while FHead < FQueue.Count do
   begin
     CheckExecutionTimeout;
     CheckInstructionLimit;
-    Task := FQueue[0];
-    FQueue.Delete(0);
+    Task := FQueue[FHead];
+    Inc(FHead);
 
     Promise := TGocciaPromiseValue(Task.ResultPromise);
 
@@ -172,6 +180,16 @@ begin
       end;
     end;
   end;
+
+  // Queue is logically empty (FHead caught up to Count). Compact the list so
+  // already-processed records do not retain Pascal-side references (e.g. via
+  // the underlying TList<TGocciaMicrotask> array) any longer than necessary
+  // and so FHead/Count cannot drift unbounded across many drains.
+  if FHead >= FQueue.Count then
+  begin
+    FQueue.Clear;
+    FHead := 0;
+  end;
 end;
 
 procedure TGocciaMicrotaskQueue.ClearQueue;
@@ -180,18 +198,19 @@ var
   Task: TGocciaMicrotask;
 begin
   if Assigned(TGarbageCollector.Instance) then
-    for I := 0 to FQueue.Count - 1 do
+    for I := FHead to FQueue.Count - 1 do
     begin
       Task := FQueue[I];
       if Assigned(Task.Handler) then
         TGarbageCollector.Instance.RemoveTempRoot(Task.Handler);
     end;
   FQueue.Clear;
+  FHead := 0;
 end;
 
 function TGocciaMicrotaskQueue.HasPending: Boolean;
 begin
-  Result := FQueue.Count > 0;
+  Result := FHead < FQueue.Count;
 end;
 
 end.
