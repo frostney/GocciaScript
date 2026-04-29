@@ -188,6 +188,25 @@ describe("for-await-of", () => {
     })()).rejects.toThrow(TypeError);
   });
 
+  test("invalid sync iterator result rejects with TypeError through async wrapper", async () => {
+    const primitiveResult = {
+      [Symbol.iterator]() {
+        return {
+          next() {
+            return Symbol("not-object");
+          },
+        };
+      },
+    };
+
+    const iterate = async () => {
+      for await (const x of primitiveResult) {
+      }
+    };
+
+    await expect(iterate()).rejects.toThrow(TypeError);
+  });
+
   test("rejected Promise values from sync iterables throw", async () => {
     const values = [Promise.resolve(1), Promise.reject("fail"), Promise.resolve(3)];
     const result = [];

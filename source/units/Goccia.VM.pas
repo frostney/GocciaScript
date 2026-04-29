@@ -1695,8 +1695,8 @@ begin
     end;
 
     if not (IteratorResult is TGocciaObjectValue) then
-      ThrowTypeError(Format(SErrorIteratorResultNotObject,
-        [IteratorResult.ToStringLiteral.Value]), SSuggestIteratorResultObject);
+      Exit(PromiseReject(CreateErrorObject(TYPE_ERROR_NAME,
+        Format(SErrorIteratorResultNotObject, [IteratorResult.TypeName]))));
 
     DoneValue := IteratorResult.GetProperty(PROP_DONE);
     Done := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
@@ -1712,6 +1712,8 @@ begin
       Result := PromiseReject(E.ThrownValue);
     on E: TGocciaThrowValue do
       Result := PromiseReject(E.Value);
+    on E: TGocciaTypeError do
+      Result := PromiseReject(CreateErrorObject(TYPE_ERROR_NAME, E.Message));
   end;
 end;
 
