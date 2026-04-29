@@ -256,6 +256,8 @@ begin
   Buffer.Append(IntToStr(AMemoryStats.GCDeltaBytes));
   Buffer.Append(',"allocatedDuringRunBytes":');
   Buffer.Append(IntToStr(AMemoryStats.GCAllocatedDuringRunBytes));
+  Buffer.Append(',"limitBytes":');
+  Buffer.Append(IntToStr(AMemoryStats.GCMaxBytes));
   Buffer.Append(',"maxBytes":');
   Buffer.Append(IntToStr(AMemoryStats.GCMaxBytes));
   Buffer.Append(',"startObjectCount":');
