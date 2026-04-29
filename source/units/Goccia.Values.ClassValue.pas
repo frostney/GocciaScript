@@ -102,6 +102,10 @@ type
     function Instantiate(const AArguments: TGocciaArgumentsCollection;
       const ANewTarget: TGocciaClassValue = nil): TGocciaValue; virtual;
     function EstimatedInstancePropertyCapacity: Integer;
+    // ECMAScript: number of expected constructor parameters before the first
+    // default/rest. Built-in classes default to 0; user classes derive from
+    // their constructor method's formal parameters.
+    function GetClassLength: Integer; virtual;
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
@@ -960,6 +964,27 @@ begin
   Result := Instance;
 end;
 
+function TGocciaClassValue.GetClassLength: Integer;
+var
+  I: Integer;
+  Params: TGocciaParameterArray;
+begin
+  // ECMAScript: a class's length is the number of formal parameters of its
+  // constructor before the first default/rest. Native classes without a JS
+  // constructor method (Map, Set, WeakMap, WeakSet, etc.) default to 0,
+  // which matches the spec for built-in collection constructors.
+  Result := 0;
+  if not Assigned(FConstructorMethod) then
+    Exit;
+  Params := FConstructorMethod.Parameters;
+  for I := 0 to Length(Params) - 1 do
+  begin
+    if Params[I].IsRest then Break;
+    if Assigned(Params[I].DefaultValue) then Break;
+    Inc(Result);
+  end;
+end;
+
 function TGocciaClassValue.GetProperty(const AName: string): TGocciaValue;
 var
   Getter: TGocciaFunctionBase;
@@ -998,6 +1023,12 @@ begin
       Result := TGocciaStringLiteralValue.Create('')
     else
       Result := TGocciaStringLiteralValue.Create(FName);
+    Exit;
+  end;
+
+  if AName = PROP_LENGTH then
+  begin
+    Result := TGocciaNumberLiteralValue.Create(GetClassLength);
     Exit;
   end;
 
@@ -1088,13 +1119,18 @@ begin
           TGocciaStringLiteralValue.Create(FName), [pfConfigurable]);
     end;
   end
+  else if AName = PROP_LENGTH then
+    // Synthesize a spec-compliant descriptor:
+    // { writable: false, enumerable: false, configurable: true }
+    Result := TGocciaPropertyDescriptorData.Create(
+      TGocciaNumberLiteralValue.Create(GetClassLength), [pfConfigurable])
   else
     Result := inherited GetOwnPropertyDescriptor(AName);
 end;
 
 function TGocciaClassValue.HasOwnProperty(const AName: string): Boolean;
 begin
-  if (AName = PROP_PROTOTYPE) or (AName = PROP_NAME) then
+  if (AName = PROP_PROTOTYPE) or (AName = PROP_NAME) or (AName = PROP_LENGTH) then
     Result := True
   else
     Result := inherited HasOwnProperty(AName);

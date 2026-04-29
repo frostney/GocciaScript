@@ -700,3 +700,32 @@ test("defineProperty on array non-index property", () => {
   expect(arr.foo).toBe("bar");
   expect(arr.length).toBe(3);
 });
+
+test("defineProperty installs accessor descriptor on array index", () => {
+  const arr = ["foo", "bar"];
+  let calls = 0;
+  Object.defineProperty(arr, "0", {
+    get: () => {
+      calls = calls + 1;
+      return "from-getter";
+    },
+    configurable: true,
+  });
+  expect(arr[0]).toBe("from-getter");
+  expect(calls).toBe(1);
+  expect(arr[1]).toBe("bar");
+  expect(arr.length).toBe(2);
+});
+
+test("defineProperty accessor on array index propagates getter throws", () => {
+  const arr = ["foo", "bar"];
+  Object.defineProperty(arr, "0", {
+    get: () => {
+      throw new Error("getter abrupt");
+    },
+    configurable: true,
+  });
+  expect(() => arr[0]).toThrow(Error);
+  // Other indices remain accessible.
+  expect(arr[1]).toBe("bar");
+});

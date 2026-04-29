@@ -143,3 +143,34 @@ test("WeakSet has no collection enumeration APIs", () => {
   expect(WeakSet.prototype.entries).toBe(undefined);
   expect(WeakSet.prototype[Symbol.iterator]).toBe(undefined);
 });
+
+test("WeakSet.length is 0 with spec descriptor", () => {
+  expect(WeakSet.length).toBe(0);
+  const descriptor = Object.getOwnPropertyDescriptor(WeakSet, "length");
+  expect(descriptor.value).toBe(0);
+  expect(descriptor.writable).toBe(false);
+  expect(descriptor.enumerable).toBe(false);
+  expect(descriptor.configurable).toBe(true);
+});
+
+test("WeakSet.prototype methods are not constructors", () => {
+  const isConstructor = (f) => {
+    try {
+      Reflect.construct(class {}, [], f);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  expect(isConstructor(WeakSet.prototype.add)).toBe(false);
+  expect(isConstructor(WeakSet.prototype.delete)).toBe(false);
+  expect(isConstructor(WeakSet.prototype.has)).toBe(false);
+});
+
+test("new on WeakSet.prototype methods throws TypeError", () => {
+  // Reserved-word property names (delete) must parse after `new` per spec
+  const ws = new WeakSet();
+  expect(() => new ws.delete()).toThrow(TypeError);
+  expect(() => new ws.has()).toThrow(TypeError);
+  expect(() => new ws.add()).toThrow(TypeError);
+});

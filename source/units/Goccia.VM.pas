@@ -1444,6 +1444,7 @@ type
   public
     constructor Create(const AVM: TGocciaVM; const AName: string;
       const ASuperClass: TGocciaClassValue);
+    function GetClassLength: Integer; override;
     function Instantiate(const AArguments: TGocciaArgumentsCollection;
       const ANewTarget: TGocciaClassValue = nil): TGocciaValue; override;
     function InstantiateRegisters(
@@ -1532,6 +1533,23 @@ begin
   inherited Create(AName, ASuperClass);
   FVM := AVM;
   FConstructorValue := nil;
+end;
+
+function TGocciaVMClassValue.GetClassLength: Integer;
+var
+  Bytecode: TGocciaBytecodeFunctionValue;
+begin
+  // VM-compiled classes hold their constructor as a bytecode function value
+  // rather than the interpreter's TGocciaMethodValue, so the inherited
+  // implementation (which only looks at FConstructorMethod) would always
+  // return 0. Bridge to the bytecode function's own length.
+  if FConstructorValue is TGocciaBytecodeFunctionValue then
+  begin
+    Bytecode := TGocciaBytecodeFunctionValue(FConstructorValue);
+    if Assigned(Bytecode.FClosure) and Assigned(Bytecode.FClosure.Template) then
+      Exit(Bytecode.FClosure.Template.FormalParameterCount);
+  end;
+  Result := inherited GetClassLength;
 end;
 
 constructor TGocciaVMSuperConstructorValue.Create(
@@ -6197,17 +6215,16 @@ begin
           else if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) then
           begin
             if (KeyIndex >= 0) and
-               (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) then
-            begin
-              if TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex] =
-                 TGocciaHoleValue.HoleValue then
-                FRegisters[A] := RegisterUndefined
-              else
-                FRegisters[A] := VMValueToRegisterFast(
-                  TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex]);
-            end
+               (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) and
+               (TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex] <>
+                TGocciaHoleValue.HoleValue) then
+              FRegisters[A] := VMValueToRegisterFast(
+                TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex])
             else
-              FRegisters[A] := RegisterUndefined;
+              // Hole, out-of-range, or accessor-shadowed slot: take the slow
+              // path so accessor descriptors and prototype lookups run.
+              SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
+                IntToStr(KeyIndex)));
           end
           else
             SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
@@ -6505,17 +6522,16 @@ begin
           else if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) then
           begin
             if (KeyIndex >= 0) and
-               (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) then
-            begin
-              if TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex] =
-                 TGocciaHoleValue.HoleValue then
-                FRegisters[A] := RegisterUndefined
-              else
-                FRegisters[A] := VMValueToRegisterFast(
-                  TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex]);
-            end
+               (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) and
+               (TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex] <>
+                TGocciaHoleValue.HoleValue) then
+              FRegisters[A] := VMValueToRegisterFast(
+                TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex])
             else
-              FRegisters[A] := RegisterUndefined;
+              // Hole, out-of-range, or accessor-shadowed slot: take the slow
+              // path so accessor descriptors and prototype lookups run.
+              SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
+                IntToStr(KeyIndex)));
           end
           else
             SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
