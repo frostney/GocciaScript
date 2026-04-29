@@ -342,7 +342,7 @@ console.log("Features:", Object.keys(config.features));
 
 // CSV → array of rows
 const csv = "name,price\\nespresso,2.5\\nlatte,4.0";
-const rows = CSV.parse(csv, { header: true });
+const rows = CSV.parse(csv, { headers: true });
 console.log("Menu rows:", rows);`,
   },
   {
