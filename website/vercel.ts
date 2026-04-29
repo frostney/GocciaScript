@@ -1,6 +1,11 @@
 const ignoreCommand = `
-base="\${VERCEL_GIT_PREVIOUS_SHA:-HEAD^}"
 target="\${VERCEL_GIT_COMMIT_SHA:-HEAD}"
+base="\${VERCEL_GIT_PREVIOUS_SHA:-HEAD^}"
+website_path="./"
+
+if [ -d "website" ] && [ -f "website/package.json" ]; then
+  website_path="website/"
+fi
 
 ensure_commit() {
   git cat-file -e "$1^{commit}" 2>/dev/null && return 0
@@ -27,7 +32,7 @@ if ! ensure_commit "$target"; then
   exit 1
 fi
 
-git diff --quiet "$base" "$target" -- ./
+git diff --quiet "$base" "$target" -- "$website_path"
 `.trim();
 
 export const config = {
