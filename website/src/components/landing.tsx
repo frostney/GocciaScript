@@ -111,6 +111,10 @@ function HeroRunnableCard({ code }: { code: string }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ code: src }),
       });
+      // Server tags repeat-input responses with `X-Cache: HIT` so we can
+      // surface "(cached)" in the exit line. Anything else (MISS, missing,
+      // unexpected value) is treated as a fresh run.
+      const cached = res.headers.get("X-Cache") === "HIT";
       const data = (await res.json()) as {
         ok?: boolean;
         output?: string;
@@ -144,7 +148,7 @@ function HeroRunnableCard({ code }: { code: string }) {
         kind: "meta",
         text: `— exit ${data.exitCode ?? "?"}${
           totalMs !== undefined ? ` · ${totalMs.toFixed(2)}ms` : ""
-        }`,
+        }${cached ? " · (cached)" : ""}`,
       });
       // Pad to 5 lines so the hero console keeps a fixed height.
       while (lines.length < 5) {
