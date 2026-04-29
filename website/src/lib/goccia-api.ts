@@ -6,6 +6,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path, { basename } from "node:path";
 import { NextResponse } from "next/server";
+import { MAX_GOCCIA_CODE_BYTES } from "@/lib/goccia-tool-schema";
 import {
   captureServerEvent,
   captureServerException,
@@ -14,7 +15,7 @@ import { clientIp, rateLimit } from "@/lib/rate-limit";
 
 const TIMEOUT_MS = 5_000;
 const MAX_OUTPUT_BYTES = 256 * 1024;
-const MAX_CODE_BYTES = 64 * 1024;
+const MAX_CODE_BYTES = MAX_GOCCIA_CODE_BYTES;
 // Cap the entire JSON envelope (`{"code":"...","mode":"...","asi":...}`) so
 // we don't buffer arbitrarily large bodies before the per-field size check
 // fires. Allow ~1 KB of envelope/key/value overhead on top of the code limit.
