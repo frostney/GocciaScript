@@ -229,6 +229,9 @@ const DEFAULT_GLOBALS = `{
   }]
 }`;
 
+const MIN_PANE_SIZE = 0.65;
+const KEYBOARD_RESIZE_STEP = 0.12;
+
 // Reject globals keys that aren't valid identifiers up front — `const "user-id"
 // = …` and `const 123 = …` are both syntax errors that would otherwise blow up
 // the runner's parser before any of the user's actual script ran. Matching the
@@ -338,6 +341,42 @@ export function Sandbox() {
   const [paneCols, setPaneCols] = useState<[number, number, number]>([
     1.3, 0.9, 1,
   ]);
+
+  const resizePanePair = useCallback(
+    (
+      handleIndex: 0 | 1,
+      mode:
+        | { kind: "set"; value: number }
+        | { kind: "step"; direction: -1 | 1 }
+        | { kind: "edge"; side: "start" | "end" },
+    ) => {
+      setPaneCols((current) => {
+        const next = [...current] as [number, number, number];
+        const leftIndex = handleIndex;
+        const rightIndex = handleIndex + 1;
+        const combined = current[leftIndex] + current[rightIndex];
+        let nextLeft = current[leftIndex];
+
+        if (mode.kind === "set") {
+          nextLeft = mode.value;
+        } else if (mode.kind === "step") {
+          nextLeft += mode.direction * KEYBOARD_RESIZE_STEP;
+        } else {
+          nextLeft =
+            mode.side === "start" ? MIN_PANE_SIZE : combined - MIN_PANE_SIZE;
+        }
+
+        nextLeft = Math.min(
+          Math.max(nextLeft, MIN_PANE_SIZE),
+          combined - MIN_PANE_SIZE,
+        );
+        next[leftIndex] = nextLeft;
+        next[rightIndex] = combined - nextLeft;
+        return next;
+      });
+    },
+    [],
+  );
 
   const execute = useCallback(async () => {
     // Validate globals JSON up-front so a typo there doesn't cost us a
@@ -491,7 +530,7 @@ export function Sandbox() {
   }, [code, globalsText]);
 
   const startPaneResize = useCallback(
-    (handleIndex: 0 | 1) => (event: React.PointerEvent<HTMLButtonElement>) => {
+    (handleIndex: 0 | 1) => (event: React.PointerEvent<HTMLElement>) => {
       const container = event.currentTarget.closest(
         ".sb-demo-body",
       ) as HTMLElement | null;
@@ -505,21 +544,25 @@ export function Sandbox() {
         const x = Math.min(Math.max(moveEvent.clientX - left, 0), width);
         if (handleIndex === 0) {
           const combined = startColumns[0] + startColumns[1];
-          const nextFirst = Math.min(
-            Math.max((x / width) * total, 0.65),
-            combined - 0.65,
-          );
-          setPaneCols([nextFirst, combined - nextFirst, startColumns[2]]);
+          resizePanePair(handleIndex, {
+            kind: "set",
+            value: Math.min(
+              Math.max((x / width) * total, MIN_PANE_SIZE),
+              combined - MIN_PANE_SIZE,
+            ),
+          });
           return;
         }
 
         const beforeThird = Math.min(Math.max((x / width) * total, 0), total);
         const combined = startColumns[1] + startColumns[2];
-        const nextSecond = Math.min(
-          Math.max(beforeThird - startColumns[0], 0.65),
-          combined - 0.65,
-        );
-        setPaneCols([startColumns[0], nextSecond, combined - nextSecond]);
+        resizePanePair(handleIndex, {
+          kind: "set",
+          value: Math.min(
+            Math.max(beforeThird - startColumns[0], MIN_PANE_SIZE),
+            combined - MIN_PANE_SIZE,
+          ),
+        });
       };
       const up = () => {
         window.removeEventListener("pointermove", move);
@@ -528,7 +571,39 @@ export function Sandbox() {
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up, { once: true });
     },
-    [paneCols],
+    [paneCols, resizePanePair],
+  );
+
+  const handlePaneResizeKeyDown = useCallback(
+    (handleIndex: 0 | 1) => (event: React.KeyboardEvent<HTMLElement>) => {
+      if (
+        event.key !== "ArrowLeft" &&
+        event.key !== "ArrowRight" &&
+        event.key !== "ArrowUp" &&
+        event.key !== "ArrowDown" &&
+        event.key !== "Home" &&
+        event.key !== "End"
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      if (event.key === "Home") {
+        resizePanePair(handleIndex, { kind: "edge", side: "start" });
+        return;
+      }
+      if (event.key === "End") {
+        resizePanePair(handleIndex, { kind: "edge", side: "end" });
+        return;
+      }
+
+      resizePanePair(handleIndex, {
+        kind: "step",
+        direction:
+          event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1,
+      });
+    },
+    [resizePanePair],
   );
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: run once on mount
@@ -650,11 +725,24 @@ export function Sandbox() {
                 lineNumbers
               />
             </div>
-            <button
-              type="button"
+            <hr
               className="sb-resizer"
+              tabIndex={0}
+              aria-orientation="horizontal"
               aria-label="Resize script and globals panes"
+              aria-valuemin={Math.round(
+                (MIN_PANE_SIZE / (paneCols[0] + paneCols[1])) * 100,
+              )}
+              aria-valuemax={Math.round(
+                ((paneCols[0] + paneCols[1] - MIN_PANE_SIZE) /
+                  (paneCols[0] + paneCols[1])) *
+                  100,
+              )}
+              aria-valuenow={Math.round(
+                (paneCols[0] / (paneCols[0] + paneCols[1])) * 100,
+              )}
               onPointerDown={startPaneResize(0)}
+              onKeyDown={handlePaneResizeKeyDown(0)}
             />
             <div className="sb-field">
               <div className="sb-field-label">
@@ -669,11 +757,24 @@ export function Sandbox() {
                 lineNumbers
               />
             </div>
-            <button
-              type="button"
+            <hr
               className="sb-resizer"
+              tabIndex={0}
+              aria-orientation="horizontal"
               aria-label="Resize globals and result panes"
+              aria-valuemin={Math.round(
+                (MIN_PANE_SIZE / (paneCols[1] + paneCols[2])) * 100,
+              )}
+              aria-valuemax={Math.round(
+                ((paneCols[1] + paneCols[2] - MIN_PANE_SIZE) /
+                  (paneCols[1] + paneCols[2])) *
+                  100,
+              )}
+              aria-valuenow={Math.round(
+                (paneCols[1] / (paneCols[1] + paneCols[2])) * 100,
+              )}
               onPointerDown={startPaneResize(1)}
+              onKeyDown={handlePaneResizeKeyDown(1)}
             />
             <div className="sb-field">
               <div className="sb-field-label">host result</div>
