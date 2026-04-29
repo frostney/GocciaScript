@@ -223,8 +223,11 @@ end;
 
 procedure TGocciaGenericIteratorValue.Close;
 begin
-  ReturnInternal(nil, False);
-  FDone := True;
+  try
+    ReturnInternal(nil, False);
+  finally
+    FDone := True;
+  end;
 end;
 
 procedure TGocciaGenericIteratorValue.MarkReferences;

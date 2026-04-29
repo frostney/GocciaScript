@@ -1578,6 +1578,8 @@ type
     function PromiseResolve(const AValue: TGocciaValue): TGocciaValue;
     function PromiseReject(const AValue: TGocciaValue): TGocciaValue;
     function Next(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ReturnValue(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ThrowValue(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AIteratorValue, ANextMethod: TGocciaValue);
     procedure MarkReferences; override;
@@ -1590,6 +1592,8 @@ begin
   FIteratorValue := AIteratorValue;
   FNextMethod := ANextMethod;
   AssignProperty(PROP_NEXT, TGocciaNativeFunctionValue.Create(Next, PROP_NEXT, 1));
+  AssignProperty(PROP_RETURN, TGocciaNativeFunctionValue.Create(ReturnValue, PROP_RETURN, 1));
+  AssignProperty(PROP_THROW, TGocciaNativeFunctionValue.Create(ThrowValue, PROP_THROW, 1));
 end;
 
 function TGocciaVMAsyncFromSyncIteratorValue.PromiseResolve(
@@ -1655,6 +1659,10 @@ var
   Value: TGocciaValue;
 begin
   try
+    if not Assigned(FIteratorValue) then
+      Exit(PromiseResolve(CreateIteratorResult(
+        TGocciaUndefinedLiteralValue.UndefinedValue, True)));
+
     if FIteratorValue is TGocciaIteratorValue then
     begin
       if AArgs.Length > 0 then
@@ -1686,6 +1694,8 @@ begin
     Value := IteratorResult.GetProperty(PROP_VALUE);
     if not Assigned(Value) then
       Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+    if Done then
+      FIteratorValue := nil;
     UnwrappedValue := AwaitValue(Value);
     Result := PromiseResolve(CreateIteratorResult(UnwrappedValue, Done));
   except
@@ -1693,6 +1703,141 @@ begin
       Result := PromiseReject(E.ThrownValue);
     on E: TGocciaThrowValue do
       Result := PromiseReject(E.Value);
+  end;
+end;
+
+function TGocciaVMAsyncFromSyncIteratorValue.ReturnValue(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  CallArgs: TGocciaArgumentsCollection;
+  DoneValue: TGocciaValue;
+  IteratorResult: TGocciaValue;
+  ReturnMethod: TGocciaValue;
+  Value: TGocciaValue;
+begin
+  if Assigned(AArgs) and (AArgs.Length > 0) then
+    Value := AArgs.GetElement(0)
+  else
+    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+  try
+    if not Assigned(FIteratorValue) then
+      Exit(PromiseResolve(CreateIteratorResult(Value, True)));
+
+    if FIteratorValue is TGocciaIteratorValue then
+    begin
+      IteratorResult := TGocciaIteratorValue(FIteratorValue).ReturnValue(Value);
+      DoneValue := IteratorResult.GetProperty(PROP_DONE);
+      if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+        FIteratorValue := nil;
+      Exit(PromiseResolve(IteratorResult));
+    end;
+
+    ReturnMethod := FIteratorValue.GetProperty(PROP_RETURN);
+    if not Assigned(ReturnMethod) or
+       (ReturnMethod is TGocciaUndefinedLiteralValue) or
+       (ReturnMethod is TGocciaNullLiteralValue) then
+    begin
+      FIteratorValue := nil;
+      Exit(PromiseResolve(CreateIteratorResult(Value, True)));
+    end;
+    if not ReturnMethod.IsCallable then
+      ThrowTypeError('Iterator return is not callable');
+
+    CallArgs := TGocciaArgumentsCollection.Create([Value]);
+    try
+      IteratorResult := TGocciaFunctionBase(ReturnMethod).Call(CallArgs, FIteratorValue);
+    finally
+      CallArgs.Free;
+    end;
+    if not (IteratorResult is TGocciaObjectValue) then
+      ThrowTypeError('Iterator return result is not an object');
+    DoneValue := IteratorResult.GetProperty(PROP_DONE);
+    if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+      FIteratorValue := nil;
+    Result := PromiseResolve(IteratorResult);
+  except
+    on E: EGocciaBytecodeThrow do
+      Result := PromiseReject(E.ThrownValue);
+    on E: TGocciaThrowValue do
+      Result := PromiseReject(E.Value);
+    on E: TGocciaTypeError do
+      Result := PromiseReject(CreateErrorObject(TYPE_ERROR_NAME, E.Message));
+  end;
+end;
+
+function TGocciaVMAsyncFromSyncIteratorValue.ThrowValue(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  CallArgs: TGocciaArgumentsCollection;
+  DoneValue: TGocciaValue;
+  IteratorResult: TGocciaValue;
+  ReturnMethod: TGocciaValue;
+  ThrowMethod: TGocciaValue;
+  Value: TGocciaValue;
+begin
+  if Assigned(AArgs) and (AArgs.Length > 0) then
+    Value := AArgs.GetElement(0)
+  else
+    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+  try
+    if not Assigned(FIteratorValue) then
+      raise TGocciaThrowValue.Create(Value);
+
+    if FIteratorValue is TGocciaIteratorValue then
+    begin
+      IteratorResult := TGocciaIteratorValue(FIteratorValue).ThrowValue(Value);
+      DoneValue := IteratorResult.GetProperty(PROP_DONE);
+      if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+        FIteratorValue := nil;
+      Exit(PromiseResolve(IteratorResult));
+    end;
+
+    ThrowMethod := FIteratorValue.GetProperty(PROP_THROW);
+    if Assigned(ThrowMethod) and
+       not (ThrowMethod is TGocciaUndefinedLiteralValue) and
+       not (ThrowMethod is TGocciaNullLiteralValue) then
+    begin
+      if not ThrowMethod.IsCallable then
+        ThrowTypeError('Iterator throw is not callable');
+      CallArgs := TGocciaArgumentsCollection.Create([Value]);
+      try
+        IteratorResult := TGocciaFunctionBase(ThrowMethod).Call(CallArgs, FIteratorValue);
+      finally
+        CallArgs.Free;
+      end;
+      if not (IteratorResult is TGocciaObjectValue) then
+        ThrowTypeError('Iterator throw result is not an object');
+      DoneValue := IteratorResult.GetProperty(PROP_DONE);
+      if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+        FIteratorValue := nil;
+      Exit(PromiseResolve(IteratorResult));
+    end;
+
+    ReturnMethod := FIteratorValue.GetProperty(PROP_RETURN);
+    if Assigned(ReturnMethod) and
+       not (ReturnMethod is TGocciaUndefinedLiteralValue) and
+       not (ReturnMethod is TGocciaNullLiteralValue) then
+    begin
+      if not ReturnMethod.IsCallable then
+        ThrowTypeError('Iterator return is not callable');
+      CallArgs := TGocciaArgumentsCollection.Create;
+      try
+        IteratorResult := TGocciaFunctionBase(ReturnMethod).Call(CallArgs, FIteratorValue);
+      finally
+        CallArgs.Free;
+      end;
+      if not (IteratorResult is TGocciaObjectValue) then
+        ThrowTypeError('Iterator return result is not an object');
+    end;
+    FIteratorValue := nil;
+    ThrowTypeError('Iterator throw is not callable');
+  except
+    on E: EGocciaBytecodeThrow do
+      Result := PromiseReject(E.ThrownValue);
+    on E: TGocciaThrowValue do
+      Result := PromiseReject(E.Value);
+    on E: TGocciaTypeError do
+      Result := PromiseReject(CreateErrorObject(TYPE_ERROR_NAME, E.Message));
   end;
 end;
 
@@ -1904,6 +2049,40 @@ var
   ReturnMethod: TGocciaValue;
   YieldedValue: TGocciaValue;
   HadDelegateContinuation: Boolean;
+
+  procedure CloseDelegateForMissingThrow;
+  begin
+    ReturnMethod := nil;
+    if Assigned(FDelegateIteratorValue) then
+      ReturnMethod := FDelegateIteratorValue.GetProperty(PROP_RETURN);
+    if Assigned(ReturnMethod) and
+       not (ReturnMethod is TGocciaUndefinedLiteralValue) and
+       not (ReturnMethod is TGocciaNullLiteralValue) then
+    begin
+      if not ReturnMethod.IsCallable then
+      begin
+        ClearDelegateState;
+        ThrowTypeError('Iterator return is not callable');
+      end;
+      CallArgs := TGocciaArgumentsCollection.Create;
+      try
+        ReturnMethod := TGocciaFunctionBase(ReturnMethod).Call(
+          CallArgs, FDelegateIteratorValue);
+        if Assigned(FClosure) and Assigned(FClosure.Template) and
+           FClosure.Template.IsAsync then
+          ReturnMethod := AwaitValue(ReturnMethod);
+      finally
+        CallArgs.Free;
+      end;
+      if not (ReturnMethod is TGocciaObjectValue) then
+      begin
+        ClearDelegateState;
+        ThrowTypeError('Iterator return result is not an object');
+      end;
+    end;
+    ClearDelegateState;
+    ThrowTypeError('Iterator throw is not callable');
+  end;
 begin
   HadDelegateContinuation := FDelegateActive;
   if not FDelegateActive then
@@ -1990,30 +2169,7 @@ begin
          not (NextResult is TGocciaNullLiteralValue) then
       begin
         if not NextResult.IsCallable then
-        begin
-          ReturnMethod := FDelegateIteratorValue.GetProperty(PROP_RETURN);
-          if Assigned(ReturnMethod) and
-             not (ReturnMethod is TGocciaUndefinedLiteralValue) and
-             not (ReturnMethod is TGocciaNullLiteralValue) then
-          begin
-            if not ReturnMethod.IsCallable then
-              ThrowTypeError('Iterator return is not callable');
-            CallArgs := TGocciaArgumentsCollection.Create;
-            try
-              ReturnMethod := TGocciaFunctionBase(ReturnMethod).Call(
-                CallArgs, FDelegateIteratorValue);
-              if Assigned(FClosure) and Assigned(FClosure.Template) and
-                 FClosure.Template.IsAsync then
-                ReturnMethod := AwaitValue(ReturnMethod);
-            finally
-              CallArgs.Free;
-            end;
-            if not (ReturnMethod is TGocciaObjectValue) then
-              ThrowTypeError('Iterator return result is not an object');
-          end;
-          ClearDelegateState;
-          ThrowTypeError('Iterator throw is not callable');
-        end;
+          CloseDelegateForMissingThrow;
         CallArgs := TGocciaArgumentsCollection.Create([RegisterToValue(FResumeValue)]);
         try
           NextResult := TGocciaFunctionBase(NextResult).Call(
@@ -2026,7 +2182,7 @@ begin
         end;
       end
       else
-        NextResult := nil;
+        CloseDelegateForMissingThrow;
     end;
     if Assigned(NextResult) then
     begin

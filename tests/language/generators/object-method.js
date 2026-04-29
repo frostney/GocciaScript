@@ -294,6 +294,33 @@ test("object generator yield delegation rejects non-callable return and throw", 
   expect(() => throwIter.throw(9)).toThrow(TypeError);
 });
 
+test("object generator yield delegation closes delegate when throw is missing", () => {
+  const events = [];
+  const source = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          return { value: 1, done: false };
+        },
+        return() {
+          events.push("return");
+          return { value: "closed", done: true };
+        },
+      };
+    },
+  };
+  const obj = {
+    *values() {
+      yield* source;
+    },
+  };
+
+  const iter = obj.values();
+  expect(iter.next()).toEqual({ value: 1, done: false });
+  expect(() => iter.throw(9)).toThrow(TypeError);
+  expect(events).toEqual(["return"]);
+});
+
 test("object generator method return closes through finally", () => {
   let closed = false;
   const obj = {

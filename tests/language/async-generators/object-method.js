@@ -98,6 +98,33 @@ test("object async generator method delegates to sync iterable", async () => {
   expect(seen).toEqual([1, 2]);
 });
 
+test("object async generator yield delegation keeps sync iterator alive across return cleanup yield", async () => {
+  const events = [];
+  const source = {
+    *values() {
+      try {
+        yield 1;
+      } finally {
+        events.push("finally");
+        yield "cleanup";
+        events.push("after");
+      }
+    },
+  };
+  const obj = {
+    async *values() {
+      yield* source.values();
+    },
+  };
+
+  const iter = obj.values();
+  await expect(iter.next()).resolves.toEqual({ value: 1, done: false });
+  await expect(iter.return(9)).resolves.toEqual({ value: "cleanup", done: false });
+  expect(events).toEqual(["finally"]);
+  await expect(iter.next()).resolves.toEqual({ value: undefined, done: true });
+  expect(events).toEqual(["finally", "after"]);
+});
+
 test("object async generator yield delegation rejects non-callable async next", async () => {
   const source = {
     [Symbol.asyncIterator]() {

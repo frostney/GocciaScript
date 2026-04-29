@@ -2110,6 +2110,16 @@ var
         HasUnhandledThrow := True;
         ThrownValue := E.Value;
       end;
+      on E: TGocciaTimeoutError do
+        raise;
+      on E: TGocciaInstructionLimitError do
+        raise;
+      on E: Exception do
+      begin
+        Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+        HasUnhandledThrow := True;
+        ThrownValue := PascalExceptionToErrorObject(E);
+      end;
     end;
     CatchValue := nil;
   end;

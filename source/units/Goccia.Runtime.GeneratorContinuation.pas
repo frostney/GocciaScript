@@ -199,6 +199,8 @@ end;
 function TGocciaAsyncFromSyncIteratorValue.ReturnValue(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
+  DoneValue: TGocciaValue;
+  IteratorResult: TGocciaObjectValue;
   Value: TGocciaValue;
 begin
   if AArgs.Length > 0 then
@@ -207,8 +209,11 @@ begin
     Value := TGocciaUndefinedLiteralValue.UndefinedValue;
   if Assigned(FIterator) then
   begin
-    Result := ResolveIteratorResult(FIterator.ReturnValue(Value));
-    FIterator := nil;
+    IteratorResult := FIterator.ReturnValue(Value);
+    DoneValue := IteratorResult.GetProperty(PROP_DONE);
+    if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+      FIterator := nil;
+    Result := ResolveIteratorResult(IteratorResult);
     Exit;
   end;
   Result := ResolveIteratorResult(CreateIteratorResult(Value, True));
@@ -217,6 +222,8 @@ end;
 function TGocciaAsyncFromSyncIteratorValue.ThrowValue(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
+  DoneValue: TGocciaValue;
+  IteratorResult: TGocciaObjectValue;
   Value: TGocciaValue;
 begin
   if AArgs.Length > 0 then
@@ -225,8 +232,11 @@ begin
     Value := TGocciaUndefinedLiteralValue.UndefinedValue;
   if Assigned(FIterator) then
   begin
-    Result := ResolveIteratorResult(FIterator.ThrowValue(Value));
-    FIterator := nil;
+    IteratorResult := FIterator.ThrowValue(Value);
+    DoneValue := IteratorResult.GetProperty(PROP_DONE);
+    if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+      FIterator := nil;
+    Result := ResolveIteratorResult(IteratorResult);
     Exit;
   end;
   raise TGocciaThrowValue.Create(Value);
