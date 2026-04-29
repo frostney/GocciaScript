@@ -15,12 +15,11 @@ import { clientIp, rateLimit } from "@/lib/rate-limit";
 
 const TIMEOUT_MS = 5_000;
 const MAX_OUTPUT_BYTES = 256 * 1024;
-const MAX_CODE_BYTES = MAX_GOCCIA_CODE_BYTES;
 // Cap the entire JSON envelope before parsing, but leave enough headroom for
 // valid JSON escaping (`\n`, `\uXXXX`, quotes, etc.) to expand the wire payload
 // beyond the parsed source bytes. The authoritative source limit remains the
 // UTF-8 byte check on `body.code` below.
-const MAX_BODY_BYTES = MAX_CODE_BYTES + 64 * 1024;
+const MAX_BODY_BYTES = MAX_GOCCIA_CODE_BYTES + 64 * 1024;
 const MAX_MEMORY_BYTES = 32 * 1024 * 1024;
 const MAX_INSTRUCTIONS = 50_000_000;
 const STACK_SIZE = 2_000;
@@ -591,7 +590,7 @@ async function runHandler(
   // UTF-16 code-unit count (`code.length`) under-counts for non-BMP source;
   // measure the actual bytes that will hit stdin or the temp test file.
   const codeBytes = Buffer.byteLength(code, "utf8");
-  if (codeBytes > MAX_CODE_BYTES) {
+  if (codeBytes > MAX_GOCCIA_CODE_BYTES) {
     captureServerEvent(`${config.eventPrefix}_code_too_large`, {
       distinctId,
       path: config.path,
@@ -599,7 +598,7 @@ async function runHandler(
     });
     return transportError(
       {
-        message: `code exceeds ${MAX_CODE_BYTES} bytes`,
+        message: `code exceeds ${MAX_GOCCIA_CODE_BYTES} bytes`,
         code: "CODE_TOO_LARGE",
       },
       { status: 413 },
