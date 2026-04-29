@@ -63,6 +63,20 @@ describe("pattern matching expressions", () => {
     expect(() => leaked).toThrow(ReferenceError);
   });
 
+  test("ordinary and condition operands evaluate once", () => {
+    let count = 0;
+    const bump = () => {
+      count = count + 1;
+      return true;
+    };
+
+    if (bump() && true) {
+      count = count + 1;
+    }
+
+    expect(count).toBe(2);
+  });
+
   test("type assertions stop before a following is pattern", () => {
     expect(1 as number is 1).toBe(true);
   });
@@ -289,9 +303,15 @@ describe("pattern matching expressions", () => {
     expect(box.matches(8)).toBe(false);
   });
 
-  test("builtin BigInt and Symbol constructors match primitive values", () => {
+  test("builtin primitive constructors match primitive values", () => {
     const sym = Symbol("sample");
 
+    expect("sample" is String).toBe(true);
+    expect(7 is Number).toBe(true);
+    expect(true is Boolean).toBe(true);
+    expect("sample" is Number).toBe(false);
+    expect(7 is String).toBe(false);
+    expect(false is String).toBe(false);
     expect(0n is BigInt).toBe(true);
     expect(1n is BigInt).toBe(true);
     expect(0 is BigInt).toBe(false);

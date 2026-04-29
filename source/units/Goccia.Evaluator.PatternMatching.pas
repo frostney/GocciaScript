@@ -384,13 +384,57 @@ begin
     Result := RootScope.GetValue(AName);
 end;
 
-function TryPrimitiveBuiltinConstructorMatch(const AMatcher, ASubject: TGocciaValue;
+function TryBuiltinConstructorMatch(const AMatcher, ASubject: TGocciaValue;
   const AContext: TGocciaEvaluationContext; out AMatches: Boolean): Boolean;
 var
-  BigIntConstructor, SymbolConstructor: TGocciaValue;
+  ObjectConstructor, ArrayConstructor, StringConstructor, NumberConstructor,
+    BooleanConstructor, FunctionConstructor, BigIntConstructor,
+    SymbolConstructor: TGocciaValue;
 begin
   Result := False;
   AMatches := False;
+
+  ObjectConstructor := GetRootBindingValue(AContext, CONSTRUCTOR_OBJECT);
+  if Assigned(ObjectConstructor) and (AMatcher = ObjectConstructor) then
+  begin
+    AMatches := ASubject is TGocciaObjectValue;
+    Exit(True);
+  end;
+
+  ArrayConstructor := GetRootBindingValue(AContext, CONSTRUCTOR_ARRAY);
+  if Assigned(ArrayConstructor) and (AMatcher = ArrayConstructor) then
+  begin
+    AMatches := ASubject is TGocciaArrayValue;
+    Exit(True);
+  end;
+
+  StringConstructor := GetRootBindingValue(AContext, CONSTRUCTOR_STRING);
+  if Assigned(StringConstructor) and (AMatcher = StringConstructor) then
+  begin
+    AMatches := ASubject is TGocciaStringLiteralValue;
+    Exit(True);
+  end;
+
+  NumberConstructor := GetRootBindingValue(AContext, CONSTRUCTOR_NUMBER);
+  if Assigned(NumberConstructor) and (AMatcher = NumberConstructor) then
+  begin
+    AMatches := ASubject is TGocciaNumberLiteralValue;
+    Exit(True);
+  end;
+
+  BooleanConstructor := GetRootBindingValue(AContext, CONSTRUCTOR_BOOLEAN);
+  if Assigned(BooleanConstructor) and (AMatcher = BooleanConstructor) then
+  begin
+    AMatches := ASubject is TGocciaBooleanLiteralValue;
+    Exit(True);
+  end;
+
+  FunctionConstructor := GetRootBindingValue(AContext, CONSTRUCTOR_FUNCTION);
+  if Assigned(FunctionConstructor) and (AMatcher = FunctionConstructor) then
+  begin
+    AMatches := ASubject.IsCallable;
+    Exit(True);
+  end;
 
   BigIntConstructor := GetRootBindingValue(AContext, CONSTRUCTOR_BIGINT);
   if Assigned(BigIntConstructor) and (AMatcher = BigIntConstructor) then
@@ -407,36 +451,11 @@ begin
   end;
 end;
 
-function BuiltinConstructorMatchesSubject(const AMatcher, ASubject: TGocciaValue;
-  const AContext: TGocciaEvaluationContext): Boolean;
-var
-  ObjectConstructor: TGocciaValue;
-begin
-  Result := False;
-
-  if not (AMatcher is TGocciaClassValue) then
-    Exit;
-
-  ObjectConstructor := GetRootBindingValue(AContext, CONSTRUCTOR_OBJECT);
-  if Assigned(ObjectConstructor) and (AMatcher = ObjectConstructor) then
-    Result := ASubject is TGocciaObjectValue
-  else if AMatcher is TGocciaArrayClassValue then
-    Result := ASubject is TGocciaArrayValue
-  else if AMatcher is TGocciaStringClassValue then
-    Result := ASubject is TGocciaStringLiteralValue
-  else if AMatcher is TGocciaNumberClassValue then
-    Result := ASubject is TGocciaNumberLiteralValue
-  else if AMatcher is TGocciaBooleanClassValue then
-    Result := ASubject is TGocciaBooleanLiteralValue
-  else if AMatcher is TGocciaFunctionConstructorClassValue then
-    Result := ASubject.IsCallable;
-end;
-
 function TryMatchValuePattern(const ASubject: TGocciaValue;
   const APattern: TGocciaValueMatchPattern; const AContext: TGocciaEvaluationContext): Boolean;
 var
   Candidate, CustomMatcher, MatcherResult: TGocciaValue;
-  PrimitiveBuiltinMatch: Boolean;
+  BuiltinConstructorMatch: Boolean;
 begin
   Candidate := EvaluateExpression(APattern.Expression, AContext);
 
@@ -449,12 +468,9 @@ begin
     Exit(MatcherResult.ToBooleanLiteral.Value);
   end;
 
-  if TryPrimitiveBuiltinConstructorMatch(Candidate, ASubject, AContext,
-    PrimitiveBuiltinMatch) then
-    Exit(PrimitiveBuiltinMatch);
-
-  if BuiltinConstructorMatchesSubject(Candidate, ASubject, AContext) then
-    Exit(True);
+  if TryBuiltinConstructorMatch(Candidate, ASubject, AContext,
+    BuiltinConstructorMatch) then
+    Exit(BuiltinConstructorMatch);
 
   if ClassMatchesSubject(Candidate, ASubject) then
     Exit(True);
@@ -910,17 +926,13 @@ begin
   begin
     BinaryExpression := TGocciaBinaryExpression(ACondition);
     if BinaryExpression.Operator <> gttAnd then
-      Exit(False);
+      Exit(EvaluateExpression(ACondition, AContext).ToBooleanLiteral.Value);
 
     AHandled := True;
     LeftResult := EvaluateConditionWithPatternBindings(BinaryExpression.Left,
       AContext, LeftContext, LeftHandled);
     if not LeftHandled then
-    begin
       LeftContext := AContext;
-      LeftResult := EvaluateExpression(BinaryExpression.Left, AContext)
-        .ToBooleanLiteral.Value;
-    end;
 
     if not LeftResult then
     begin
@@ -933,11 +945,7 @@ begin
       RightResult := EvaluateConditionWithPatternBindings(BinaryExpression.Right,
         LeftContext, RightContext, RightHandled);
       if not RightHandled then
-      begin
         RightContext := LeftContext;
-        RightResult := EvaluateExpression(BinaryExpression.Right, LeftContext)
-          .ToBooleanLiteral.Value;
-      end;
     except
       if LeftHandled then
         ReleaseMatchContext(LeftContext, AContext);

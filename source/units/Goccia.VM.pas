@@ -872,10 +872,54 @@ end;
 function VMBuiltinConstructorMatchValue(const AMatcher, ASubject: TGocciaValue;
   const AScope: TGocciaScope; out AMatches: Boolean): Boolean; inline;
 var
-  BigIntConstructor, SymbolConstructor: TGocciaValue;
+  ObjectConstructor, ArrayConstructor, StringConstructor, NumberConstructor,
+    BooleanConstructor, FunctionConstructor, BigIntConstructor,
+    SymbolConstructor: TGocciaValue;
 begin
   Result := False;
   AMatches := False;
+
+  ObjectConstructor := VMGlobalConstructor(AScope, CONSTRUCTOR_OBJECT);
+  if Assigned(ObjectConstructor) and (AMatcher = ObjectConstructor) then
+  begin
+    AMatches := ASubject is TGocciaObjectValue;
+    Exit(True);
+  end;
+
+  ArrayConstructor := VMGlobalConstructor(AScope, CONSTRUCTOR_ARRAY);
+  if Assigned(ArrayConstructor) and (AMatcher = ArrayConstructor) then
+  begin
+    AMatches := ASubject is TGocciaArrayValue;
+    Exit(True);
+  end;
+
+  StringConstructor := VMGlobalConstructor(AScope, CONSTRUCTOR_STRING);
+  if Assigned(StringConstructor) and (AMatcher = StringConstructor) then
+  begin
+    AMatches := ASubject is TGocciaStringLiteralValue;
+    Exit(True);
+  end;
+
+  NumberConstructor := VMGlobalConstructor(AScope, CONSTRUCTOR_NUMBER);
+  if Assigned(NumberConstructor) and (AMatcher = NumberConstructor) then
+  begin
+    AMatches := ASubject is TGocciaNumberLiteralValue;
+    Exit(True);
+  end;
+
+  BooleanConstructor := VMGlobalConstructor(AScope, CONSTRUCTOR_BOOLEAN);
+  if Assigned(BooleanConstructor) and (AMatcher = BooleanConstructor) then
+  begin
+    AMatches := ASubject is TGocciaBooleanLiteralValue;
+    Exit(True);
+  end;
+
+  FunctionConstructor := VMGlobalConstructor(AScope, CONSTRUCTOR_FUNCTION);
+  if Assigned(FunctionConstructor) and (AMatcher = FunctionConstructor) then
+  begin
+    AMatches := ASubject.IsCallable;
+    Exit(True);
+  end;
 
   BigIntConstructor := VMGlobalConstructor(AScope, CONSTRUCTOR_BIGINT);
   if Assigned(BigIntConstructor) and (AMatcher = BigIntConstructor) then
@@ -6350,8 +6394,12 @@ begin
         begin
           ObjectConstructorValue := VMGlobalObjectConstructor(FGlobalScope);
           FunctionConstructorValue := VMGlobalFunctionConstructor(FGlobalScope);
-          SetRegister(A, VMInstanceOfValue(LeftValue, RightValue,
-            ObjectConstructorValue, FunctionConstructorValue));
+          if VMBuiltinConstructorMatchValue(RightValue, LeftValue,
+            FGlobalScope, BuiltinConstructorMatch) then
+            SetRegister(A, TGocciaBooleanLiteralValue.Create(BuiltinConstructorMatch))
+          else
+            SetRegister(A, VMInstanceOfValue(LeftValue, RightValue,
+              ObjectConstructorValue, FunctionConstructorValue));
         end
         else if VMBuiltinConstructorMatchValue(RightValue, LeftValue,
           FGlobalScope, BuiltinConstructorMatch) then
