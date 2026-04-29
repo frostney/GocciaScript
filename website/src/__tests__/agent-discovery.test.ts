@@ -80,29 +80,25 @@ describe("agent discovery", () => {
     expect(itemHrefs).toContain("https://example.test/api/execute");
   });
 
-  test("oauth discovery metadata advertises issuer endpoints and grants", () => {
+  test("oauth discovery metadata does not advertise unimplemented grants", () => {
     const metadata = buildOAuthAuthorizationServerMetadata(
       "https://example.test",
     );
 
     expect(metadata.issuer).toBe("https://example.test");
-    expect(metadata.authorization_endpoint).toBe(
-      "https://example.test/oauth/authorize",
-    );
-    expect(metadata.token_endpoint).toBe("https://example.test/oauth/token");
-    expect(metadata.jwks_uri).toBe(
-      "https://example.test/.well-known/jwks.json",
-    );
-    expect(metadata.grant_types_supported).toContain("authorization_code");
-    expect(metadata.response_types_supported).toContain("code");
+    expect(metadata.grant_types_supported).toEqual([]);
+    expect(metadata.response_types_supported).toEqual([]);
+    expect("authorization_endpoint" in metadata).toBe(false);
+    expect("token_endpoint" in metadata).toBe(false);
+    expect("jwks_uri" in metadata).toBe(false);
   });
 
-  test("openid configuration includes oidc-specific metadata", () => {
+  test("openid configuration does not advertise unsigned id tokens", () => {
     const metadata = buildOpenIdConfiguration("https://example.test");
 
     expect(metadata.issuer).toBe("https://example.test");
-    expect(metadata.subject_types_supported).toContain("public");
-    expect(metadata.id_token_signing_alg_values_supported).toContain("RS256");
+    expect("id_token_signing_alg_values_supported" in metadata).toBe(false);
+    expect("claims_supported" in metadata).toBe(false);
   });
 
   test("oauth protected resource metadata points agents at the issuer", () => {
@@ -135,8 +131,11 @@ describe("agent discovery", () => {
       "goccia.test",
     ]);
     expect(
-      card.capabilities.tools[0].inputSchema.properties.code.maxLength,
+      card.capabilities.tools[0].inputSchema.properties.code.maxBytes,
     ).toBe(8 * 1024);
+    expect(
+      card.capabilities.tools[0].inputSchema.properties.code.description,
+    ).toContain("UTF-8 byte length");
     expect(
       card.capabilities.tools[0].inputSchema.properties.compatFunction
         .description,
@@ -219,5 +218,15 @@ describe("agent discovery", () => {
     );
     expect(body.serverInfo.name).toBe("GocciaScript");
     expect(body.serverInfo.version).toBe("0.6.1");
+  });
+
+  test("mcp server card route falls back to nightly without a release tag", async () => {
+    const response = buildMcpServerCardResponse(
+      new Request("https://example.test/.well-known/mcp/server-card.json"),
+      undefined,
+    );
+    const body = await response.json();
+
+    expect(body.serverInfo.version).toBe("nightly");
   });
 });

@@ -68,12 +68,8 @@ const API_SCOPES = ["goccia.execute", "goccia.test"] as const;
 export function buildOAuthAuthorizationServerMetadata(origin: string) {
   return {
     issuer: origin,
-    authorization_endpoint: absoluteUrl(origin, "/oauth/authorize"),
-    token_endpoint: absoluteUrl(origin, "/oauth/token"),
-    jwks_uri: absoluteUrl(origin, JWKS_PATH),
-    response_types_supported: ["code"],
-    grant_types_supported: ["authorization_code"],
-    token_endpoint_auth_methods_supported: ["none"],
+    response_types_supported: [],
+    grant_types_supported: [],
     scopes_supported: API_SCOPES,
   };
 }
@@ -81,9 +77,6 @@ export function buildOAuthAuthorizationServerMetadata(origin: string) {
 export function buildOpenIdConfiguration(origin: string) {
   return {
     ...buildOAuthAuthorizationServerMetadata(origin),
-    subject_types_supported: ["public"],
-    id_token_signing_alg_values_supported: ["RS256"],
-    claims_supported: ["sub", "iss", "aud", "exp", "iat"],
   };
 }
 

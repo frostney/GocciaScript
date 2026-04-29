@@ -7,8 +7,9 @@ export function gocciaRunInputSchema() {
     properties: {
       code: {
         type: "string",
-        description: "GocciaScript source code to execute.",
-        maxLength: MAX_GOCCIA_CODE_BYTES,
+        description:
+          "GocciaScript source code to execute. The server enforces the byte limit declared by maxBytes using UTF-8 byte length.",
+        maxBytes: MAX_GOCCIA_CODE_BYTES,
       },
       mode: {
         type: "string",

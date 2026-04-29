@@ -25,7 +25,13 @@ export function buildMcpServerCardResponse(
 }
 
 export async function GET(req: Request) {
-  const release = await fetchLatestRelease();
+  let tagName = "nightly";
+  try {
+    const release = await fetchLatestRelease();
+    tagName = release?.tagName ?? "nightly";
+  } catch {
+    tagName = "nightly";
+  }
 
-  return buildMcpServerCardResponse(req, release?.tagName);
+  return buildMcpServerCardResponse(req, tagName);
 }

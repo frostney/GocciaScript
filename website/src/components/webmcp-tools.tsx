@@ -34,13 +34,28 @@ type ModelContext = {
   clearContext?: () => void | Promise<void>;
 };
 
+type GocciaToolPayload = {
+  code: string;
+  mode: "interpreted" | "bytecode";
+  asi: boolean;
+  compatVar: boolean;
+  compatFunction: boolean;
+};
+
 declare global {
   interface Navigator {
     modelContext?: ModelContext;
   }
 }
 
-function normalizePayload(input: GocciaToolInput) {
+function modelContextError(action: string, err: unknown) {
+  console.warn(
+    `[WebMCP] ${action} failed:`,
+    err instanceof Error ? err.message : err,
+  );
+}
+
+function normalizePayload(input: GocciaToolInput): GocciaToolPayload {
   const code = typeof input.code === "string" ? input.code : "";
   if (!code) throw new Error("code is required");
 
@@ -57,18 +72,56 @@ async function callGocciaApi(
   endpoint: "/api/execute" | "/api/test",
   input: GocciaToolInput,
 ) {
-  const payload = normalizePayload(input);
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const body = await response.json().catch(() => null);
+  let payload: GocciaToolPayload;
+  try {
+    payload = normalizePayload(input);
+  } catch (err) {
+    return {
+      endpoint,
+      ok: false,
+      status: null,
+      error: {
+        code: "INVALID_INPUT",
+        message: err instanceof Error ? err.message : String(err),
+      },
+    };
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    return {
+      endpoint,
+      ok: false,
+      status: null,
+      payload,
+      error: {
+        code: "TRANSPORT_ERROR",
+        message: err instanceof Error ? err.message : String(err),
+      },
+    };
+  }
+
+  let body: unknown = null;
+  let parseError: string | null = null;
+  try {
+    body = await response.json();
+  } catch (err) {
+    parseError = err instanceof Error ? err.message : String(err);
+  }
 
   return {
     endpoint,
     ok: response.ok,
     status: response.status,
+    ...(parseError
+      ? { error: { code: "INVALID_RESPONSE_JSON", message: parseError } }
+      : {}),
     result: body,
   };
 }
@@ -111,12 +164,18 @@ export function WebMcpTools() {
 
     const tools = buildTools();
     if (modelContext.provideContext) {
-      void modelContext.provideContext({ tools });
+      void Promise.resolve(modelContext.provideContext({ tools })).catch(
+        (err) => modelContextError("provideContext", err),
+      );
       return () => {
         if (modelContext.clearContext) {
-          void modelContext.clearContext();
+          void Promise.resolve(modelContext.clearContext()).catch((err) =>
+            modelContextError("clearContext", err),
+          );
         } else {
-          void modelContext.provideContext?.({ tools: [] });
+          void Promise.resolve(
+            modelContext.provideContext?.({ tools: [] }),
+          ).catch((err) => modelContextError("provideContext cleanup", err));
         }
       };
     }
@@ -124,7 +183,14 @@ export function WebMcpTools() {
     if (!modelContext.registerTool) return;
     const controller = new AbortController();
     for (const tool of tools) {
-      void modelContext.registerTool(tool, { signal: controller.signal });
+      if (controller.signal.aborted) break;
+      void Promise.resolve(
+        modelContext.registerTool(tool, { signal: controller.signal }),
+      ).catch((err) => {
+        if (!controller.signal.aborted) {
+          modelContextError(`registerTool(${tool.name})`, err);
+        }
+      });
     }
     return () => controller.abort();
   }, []);

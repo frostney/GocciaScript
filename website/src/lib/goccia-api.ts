@@ -16,10 +16,11 @@ import { clientIp, rateLimit } from "@/lib/rate-limit";
 const TIMEOUT_MS = 5_000;
 const MAX_OUTPUT_BYTES = 256 * 1024;
 const MAX_CODE_BYTES = MAX_GOCCIA_CODE_BYTES;
-// Cap the entire JSON envelope (`{"code":"...","mode":"...","asi":...}`) so
-// we don't buffer arbitrarily large bodies before the per-field size check
-// fires. Allow ~1 KB of envelope/key/value overhead on top of the code limit.
-const MAX_BODY_BYTES = MAX_CODE_BYTES + 1_024;
+// Cap the entire JSON envelope before parsing, but leave enough headroom for
+// valid JSON escaping (`\n`, `\uXXXX`, quotes, etc.) to expand the wire payload
+// beyond the parsed source bytes. The authoritative source limit remains the
+// UTF-8 byte check on `body.code` below.
+const MAX_BODY_BYTES = MAX_CODE_BYTES + 64 * 1024;
 const MAX_MEMORY_BYTES = 32 * 1024 * 1024;
 const MAX_INSTRUCTIONS = 50_000_000;
 const STACK_SIZE = 2_000;
