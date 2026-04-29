@@ -128,7 +128,8 @@ type
   private
     FIterator: TGocciaIteratorValue;
     function PromiseReject(const AValue: TGocciaValue): TGocciaValue;
-    function ResolveIteratorResult(const AResult: TGocciaObjectValue): TGocciaValue;
+    function ResolveIteratorResult(const AResult: TGocciaObjectValue;
+      const ACloseOnRejection: Boolean): TGocciaValue;
     function Next(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ReturnValue(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ThrowValue(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -192,7 +193,7 @@ begin
 end;
 
 function TGocciaAsyncFromSyncIteratorValue.ResolveIteratorResult(
-  const AResult: TGocciaObjectValue): TGocciaValue;
+  const AResult: TGocciaObjectValue; const ACloseOnRejection: Boolean): TGocciaValue;
 var
   Done: Boolean;
   DoneValue: TGocciaValue;
@@ -212,7 +213,16 @@ begin
       Value := AResult.GetProperty(PROP_VALUE);
       if not Assigned(Value) then
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
-      UnwrappedValue := AwaitValue(Value);
+      try
+        UnwrappedValue := AwaitValue(Value);
+      except
+        if ACloseOnRejection and not Done then
+        begin
+          CloseIteratorPreservingError(FIterator);
+          FIterator := nil;
+        end;
+        raise;
+      end;
       Promise.Resolve(CreateIteratorResult(UnwrappedValue, Done));
     except
       on E: TGocciaThrowValue do
@@ -256,7 +266,7 @@ begin
         Value := FIterator.DirectNextValue(AArgs.GetElement(0), Done);
         if Done then
           FIterator := nil;
-        Result := ResolveIteratorResult(CreateIteratorResult(Value, Done));
+        Result := ResolveIteratorResult(CreateIteratorResult(Value, Done), True);
       end
       else
       begin
@@ -264,12 +274,12 @@ begin
         DoneValue := IteratorResult.GetProperty(PROP_DONE);
         if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
           FIterator := nil;
-        Result := ResolveIteratorResult(IteratorResult);
+        Result := ResolveIteratorResult(IteratorResult, True);
       end;
     end
     else
       Result := ResolveIteratorResult(CreateIteratorResult(
-        TGocciaUndefinedLiteralValue.UndefinedValue, True));
+        TGocciaUndefinedLiteralValue.UndefinedValue, True), True);
   except
     on E: TGocciaThrowValue do
       Result := PromiseReject(E.Value);
@@ -302,10 +312,10 @@ begin
       DoneValue := IteratorResult.GetProperty(PROP_DONE);
       if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
         FIterator := nil;
-      Result := ResolveIteratorResult(IteratorResult);
+      Result := ResolveIteratorResult(IteratorResult, False);
       Exit;
     end;
-    Result := ResolveIteratorResult(CreateIteratorResult(Value, True));
+    Result := ResolveIteratorResult(CreateIteratorResult(Value, True), False);
   except
     on E: TGocciaThrowValue do
       Result := PromiseReject(E.Value);
@@ -338,7 +348,7 @@ begin
       DoneValue := IteratorResult.GetProperty(PROP_DONE);
       if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
         FIterator := nil;
-      Result := ResolveIteratorResult(IteratorResult);
+      Result := ResolveIteratorResult(IteratorResult, True);
       Exit;
     end;
     Result := PromiseReject(Value);

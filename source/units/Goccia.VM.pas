@@ -1578,6 +1578,9 @@ type
     function PromiseResolve(const AValue: TGocciaValue): TGocciaValue;
     function PromiseReject(const AValue: TGocciaValue): TGocciaValue;
     procedure ClearIteratorState;
+    procedure CloseIteratorAfterRejectedValue;
+    function AwaitIteratorValue(const AValue: TGocciaValue;
+      const ADone, ACloseOnRejection: Boolean): TGocciaValue;
     function Next(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ReturnValue(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ThrowValue(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1601,6 +1604,51 @@ procedure TGocciaVMAsyncFromSyncIteratorValue.ClearIteratorState;
 begin
   FIteratorValue := nil;
   FNextMethod := nil;
+end;
+
+procedure TGocciaVMAsyncFromSyncIteratorValue.CloseIteratorAfterRejectedValue;
+var
+  CallArgs: TGocciaArgumentsCollection;
+  ReturnMethod: TGocciaValue;
+begin
+  if not Assigned(FIteratorValue) then
+    Exit;
+  try
+    if FIteratorValue is TGocciaIteratorValue then
+      TGocciaIteratorValue(FIteratorValue).Close
+    else if FIteratorValue is TGocciaObjectValue then
+    begin
+      ReturnMethod := FIteratorValue.GetProperty(PROP_RETURN);
+      if Assigned(ReturnMethod) and
+         not (ReturnMethod is TGocciaUndefinedLiteralValue) and
+         not (ReturnMethod is TGocciaNullLiteralValue) and
+         ReturnMethod.IsCallable then
+      begin
+        CallArgs := TGocciaArgumentsCollection.Create;
+        try
+          TGocciaFunctionBase(ReturnMethod).Call(CallArgs, FIteratorValue);
+        finally
+          CallArgs.Free;
+        end;
+      end;
+    end;
+  except
+    // AsyncFromSyncIteratorContinuation preserves the rejected value when
+    // closing after a rejected wrapped value also fails.
+  end;
+  ClearIteratorState;
+end;
+
+function TGocciaVMAsyncFromSyncIteratorValue.AwaitIteratorValue(
+  const AValue: TGocciaValue; const ADone, ACloseOnRejection: Boolean): TGocciaValue;
+begin
+  try
+    Result := AwaitValue(AValue);
+  except
+    if ACloseOnRejection and not ADone then
+      CloseIteratorAfterRejectedValue;
+    raise;
+  end;
 end;
 
 function TGocciaVMAsyncFromSyncIteratorValue.PromiseResolve(
@@ -1679,7 +1727,7 @@ begin
         Value := TGocciaIteratorValue(FIteratorValue).DirectNext(Done);
       if Done then
         ClearIteratorState;
-      UnwrappedValue := AwaitValue(Value);
+      UnwrappedValue := AwaitIteratorValue(Value, Done, True);
       IteratorResult := CreateIteratorResult(UnwrappedValue, Done);
       Exit(PromiseResolve(IteratorResult));
     end;
@@ -1705,7 +1753,7 @@ begin
       Value := TGocciaUndefinedLiteralValue.UndefinedValue;
     if Done then
       ClearIteratorState;
-    UnwrappedValue := AwaitValue(Value);
+    UnwrappedValue := AwaitIteratorValue(Value, Done, True);
     Result := PromiseResolve(CreateIteratorResult(UnwrappedValue, Done));
   except
     on E: EGocciaBytecodeThrow do
@@ -1743,7 +1791,7 @@ begin
   try
     if not Assigned(FIteratorValue) then
     begin
-      UnwrappedValue := AwaitValue(Value);
+      UnwrappedValue := AwaitIteratorValue(Value, True, False);
       Exit(PromiseResolve(CreateIteratorResult(UnwrappedValue, True)));
     end;
 
@@ -1757,7 +1805,7 @@ begin
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
       if Done then
         ClearIteratorState;
-      UnwrappedValue := AwaitValue(Value);
+      UnwrappedValue := AwaitIteratorValue(Value, Done, False);
       Exit(PromiseResolve(CreateIteratorResult(UnwrappedValue, Done)));
     end;
 
@@ -1767,7 +1815,7 @@ begin
        (ReturnMethod is TGocciaNullLiteralValue) then
     begin
       ClearIteratorState;
-      UnwrappedValue := AwaitValue(Value);
+      UnwrappedValue := AwaitIteratorValue(Value, True, False);
       Exit(PromiseResolve(CreateIteratorResult(UnwrappedValue, True)));
     end;
     if not ReturnMethod.IsCallable then
@@ -1788,7 +1836,7 @@ begin
       Value := TGocciaUndefinedLiteralValue.UndefinedValue;
     if Done then
       ClearIteratorState;
-    UnwrappedValue := AwaitValue(Value);
+    UnwrappedValue := AwaitIteratorValue(Value, Done, False);
     Result := PromiseResolve(CreateIteratorResult(UnwrappedValue, Done));
   except
     on E: EGocciaBytecodeThrow do
@@ -1838,7 +1886,7 @@ begin
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
       if Done then
         ClearIteratorState;
-      UnwrappedValue := AwaitValue(Value);
+      UnwrappedValue := AwaitIteratorValue(Value, Done, True);
       Exit(PromiseResolve(CreateIteratorResult(UnwrappedValue, Done)));
     end;
 
@@ -1864,7 +1912,7 @@ begin
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
       if Done then
         ClearIteratorState;
-      UnwrappedValue := AwaitValue(Value);
+      UnwrappedValue := AwaitIteratorValue(Value, Done, True);
       Exit(PromiseResolve(CreateIteratorResult(UnwrappedValue, Done)));
     end;
 

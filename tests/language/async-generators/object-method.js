@@ -223,11 +223,21 @@ test("object async generator yield delegation rejects sync iterator failures asy
       };
     },
   };
+  const rejectedValueEvents = [];
+  const resultGetterEvents = [];
+  const rejectedThrowValueEvents = [];
+  const rejectedReturnValueEvents = [];
+  const rejectedThenGetterEvents = [];
   const rejectedValueSource = {
     [Symbol.iterator]() {
       return {
         next() {
+          rejectedValueEvents.push("next");
           return { value: Promise.reject("value boom"), done: false };
+        },
+        return() {
+          rejectedValueEvents.push("return");
+          return { value: "closed", done: true };
         },
       };
     },
@@ -236,12 +246,71 @@ test("object async generator yield delegation rejects sync iterator failures asy
     [Symbol.iterator]() {
       return {
         next() {
+          resultGetterEvents.push("next");
           return {
             get value() {
               return missingValue;
             },
             done: false,
           };
+        },
+        return() {
+          resultGetterEvents.push("return");
+          return { value: "closed", done: true };
+        },
+      };
+    },
+  };
+  const rejectedThrowValueSource = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          rejectedThrowValueEvents.push("next");
+          return { value: 1, done: false };
+        },
+        throw(value) {
+          rejectedThrowValueEvents.push("throw:" + value);
+          return { value: Promise.reject("throw value boom"), done: false };
+        },
+        return() {
+          rejectedThrowValueEvents.push("return");
+          return { value: "closed", done: true };
+        },
+      };
+    },
+  };
+  const rejectedReturnValueSource = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          rejectedReturnValueEvents.push("next");
+          return { value: 1, done: false };
+        },
+        return(value) {
+          rejectedReturnValueEvents.push("return:" + value);
+          return { value: Promise.reject("return value boom"), done: false };
+        },
+      };
+    },
+  };
+  const rejectedThenGetterSource = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          rejectedThenGetterEvents.push("next");
+          return {
+            value: {
+              get then() {
+                rejectedThenGetterEvents.push("then");
+                throw "then getter boom";
+              },
+            },
+            done: false,
+          };
+        },
+        return() {
+          rejectedThenGetterEvents.push("return");
+          return { value: "closed", done: true };
         },
       };
     },
@@ -262,6 +331,15 @@ test("object async generator yield delegation rejects sync iterator failures asy
     async *throwingFromResultGetter() {
       yield* resultGetterSource;
     },
+    async *rejectingThrowValue() {
+      yield* rejectedThrowValueSource;
+    },
+    async *rejectingReturnValue() {
+      yield* rejectedReturnValueSource;
+    },
+    async *rejectingThenGetter() {
+      yield* rejectedThenGetterSource;
+    },
   };
 
   await expect(obj.nexting().next()).rejects.toBe("next boom");
@@ -274,8 +352,26 @@ test("object async generator yield delegation rejects sync iterator failures asy
   await expect(throwIter.next()).resolves.toEqual({ value: 1, done: false });
   await expect(throwIter.throw(9)).rejects.toBe("throw boom");
 
-  await expect(obj.rejectingValue().next()).rejects.toBe("value boom");
+  const rejectingValueIter = obj.rejectingValue();
+  await expect(rejectingValueIter.next()).rejects.toBe("value boom");
+  expect(rejectedValueEvents).toEqual(["next", "return"]);
+  await expect(rejectingValueIter.next()).resolves.toEqual({ value: undefined, done: true });
   await expect(obj.throwingFromResultGetter().next()).rejects.toThrow(ReferenceError);
+  expect(resultGetterEvents).toEqual(["next"]);
+
+  const rejectedThrowValueIter = obj.rejectingThrowValue();
+  await expect(rejectedThrowValueIter.next()).resolves.toEqual({ value: 1, done: false });
+  await expect(rejectedThrowValueIter.throw(9)).rejects.toBe("throw value boom");
+  expect(rejectedThrowValueEvents).toEqual(["next", "throw:9", "return"]);
+  await expect(rejectedThrowValueIter.next()).resolves.toEqual({ value: undefined, done: true });
+
+  const rejectedReturnValueIter = obj.rejectingReturnValue();
+  await expect(rejectedReturnValueIter.next()).resolves.toEqual({ value: 1, done: false });
+  await expect(rejectedReturnValueIter.return(9)).rejects.toBe("return value boom");
+  expect(rejectedReturnValueEvents).toEqual(["next", "return:9"]);
+
+  await expect(obj.rejectingThenGetter().next()).rejects.toBe("then getter boom");
+  expect(rejectedThenGetterEvents).toEqual(["next", "then", "return"]);
 });
 
 test("object async generator yield delegation closes sync wrapper after completion", async () => {
