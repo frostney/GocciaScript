@@ -463,12 +463,12 @@ function EvaluateExpression(const AExpression: TGocciaExpression; const AContext
 var
   Continuation: TGocciaGeneratorContinuation;
 begin
-  if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
-    TGocciaCoverageTracker.Instance.RecordLineHit(
-      AContext.CurrentFilePath, AExpression.Line);
   Continuation := CurrentGeneratorContinuation;
   if Assigned(Continuation) and Continuation.TakeCompletedExpressionValue(AExpression, Result) then
     Exit;
+  if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+    TGocciaCoverageTracker.Instance.RecordLineHit(
+      AContext.CurrentFilePath, AExpression.Line);
   Result := AExpression.Evaluate(AContext);
   if Assigned(Continuation) then
     Continuation.SaveCompletedExpressionValue(AExpression, Result);

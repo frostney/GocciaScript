@@ -2015,6 +2015,9 @@ begin
 
   AFrame.IP := FContinuationIP;
   APrevCovLine := FContinuationPrevCovLine;
+  SetLength(FContinuationRegisters, 0);
+  SetLength(FContinuationLocalCells, 0);
+  SetLength(FContinuationHandlers, 0);
 end;
 
 procedure TGocciaBytecodeGeneratorObjectValue.ClearDelegateState;
