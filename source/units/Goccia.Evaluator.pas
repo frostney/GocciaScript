@@ -346,19 +346,47 @@ end;
 function EvaluateStatements(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
   I: Integer;
+  Continuation: TGocciaGeneratorContinuation;
 begin
   if Assigned(AContext.OnError) and not Assigned(AContext.Scope.OnError) then
     AContext.Scope.OnError := AContext.OnError;
 
+  Continuation := CurrentGeneratorContinuation;
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
-  for I := 0 to ANodes.Count - 1 do
+  if Assigned(Continuation) then
+    I := Continuation.GetStatementIndex(ANodes)
+  else
+    I := 0;
+  while I < ANodes.Count do
   begin
-    if ANodes[I] is TGocciaExpression then
-      Result := TGocciaControlFlow.Normal(EvaluateExpression(TGocciaExpression(ANodes[I]), AContext))
-    else
-      Result := EvaluateStatement(TGocciaStatement(ANodes[I]), AContext);
-    if Result.Kind <> cfkNormal then Exit;
+    try
+      if ANodes[I] is TGocciaExpression then
+        Result := TGocciaControlFlow.Normal(EvaluateExpression(TGocciaExpression(ANodes[I]), AContext))
+      else
+        Result := EvaluateStatement(TGocciaStatement(ANodes[I]), AContext);
+      if Assigned(Continuation) then
+      begin
+        Continuation.SaveStatementIndex(ANodes, I + 1);
+        Continuation.ClearExpressionValues;
+      end;
+    except
+      on E: EGocciaGeneratorYield do
+      begin
+        if Assigned(Continuation) then
+          Continuation.SaveStatementIndex(ANodes, I);
+        raise;
+      end;
+    end;
+    if Result.Kind <> cfkNormal then
+    begin
+      if Assigned(Continuation) then
+        Continuation.ClearStatementIndex(ANodes);
+      Exit;
+    end;
+    Inc(I);
   end;
+  if Assigned(Continuation) then
+    Continuation.ClearStatementIndex(ANodes);
 end;
 
 procedure SpreadIterableInto(const ASpreadValue: TGocciaValue; const ATarget: TGocciaValueList);
@@ -423,11 +451,18 @@ begin
 end;
 
 function EvaluateExpression(const AExpression: TGocciaExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  Continuation: TGocciaGeneratorContinuation;
 begin
   if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
     TGocciaCoverageTracker.Instance.RecordLineHit(
       AContext.CurrentFilePath, AExpression.Line);
+  Continuation := CurrentGeneratorContinuation;
+  if Assigned(Continuation) and Continuation.TakeExpressionValue(AExpression, Result) then
+    Exit;
   Result := AExpression.Evaluate(AContext);
+  if Assigned(Continuation) then
+    Continuation.SaveExpressionValue(AExpression, Result);
 end;
 
 function EvaluateStatement(const AStatement: TGocciaStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;

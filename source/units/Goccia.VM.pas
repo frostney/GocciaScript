@@ -1347,17 +1347,29 @@ type
     FThisValue: TGocciaRegister;
     FArguments: TGocciaRegisterArray;
     FState: TGocciaBytecodeGeneratorState;
-    FResumeIndex: Integer;
-    FReplayYieldIndex: Integer;
     FResumeKind: TGocciaBytecodeGeneratorResumeKind;
     FResumeValue: TGocciaRegister;
+    FResumeRegister: UInt8;
     FReturnSentinel: TGocciaValue;
     FReturnValue: TGocciaValue;
-    FSentValues: TGocciaRegisterArray;
+    FHasContinuation: Boolean;
+    FContinuationIP: Integer;
+    FContinuationRegisters: TGocciaRegisterArray;
+    FContinuationLocalCells: TGocciaBytecodeCellArray;
+    FContinuationHandlers: TGocciaBytecodeHandlerEntryArray;
+    FContinuationPrevCovLine: UInt32;
+    FDelegateActive: Boolean;
+    FDelegateIteratorValue: TGocciaValue;
+    FDelegateIterator: TGocciaIteratorValue;
+    FDelegateNextMethod: TGocciaValue;
     function ResumeRaw(const AKind: TGocciaBytecodeGeneratorResumeKind;
       const AValue: TGocciaValue; out ADone: Boolean): TGocciaValue;
-    procedure StoreResumeValue(const AValue: TGocciaValue);
-    function ReplayYield(const AResumeRegister: UInt8): Boolean;
+    procedure CaptureContinuation(const AFrame: TGocciaVMCallFrame;
+      const AHandlerBaseCount: Integer; const APrevCovLine: UInt32;
+      const AResumeRegister: UInt8; const AContinuationIP: Integer);
+    function RestoreContinuation(var AFrame: TGocciaVMCallFrame;
+      const AHandlerBaseCount: Integer; out APrevCovLine: UInt32): Boolean;
+    procedure ClearDelegateState;
   public
     constructor Create(const AVM: TGocciaVM; const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaValue; const AArguments: TGocciaArgumentsCollection);
@@ -1373,9 +1385,14 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     function GeneratorThrow(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
-    procedure HandleYield(const AValue: TGocciaRegister; const AResumeRegister: UInt8);
+    procedure HandleYield(const AValue: TGocciaRegister;
+      const AResumeRegister: UInt8; const AFrame: TGocciaVMCallFrame;
+      const AHandlerBaseCount: Integer; const APrevCovLine: UInt32;
+      const AContinuationIP: Integer);
     procedure HandleYieldDelegate(const AIterable: TGocciaRegister;
-      const AResumeRegister: UInt8);
+      const AResumeRegister: UInt8; const AFrame: TGocciaVMCallFrame;
+      const AHandlerBaseCount: Integer; const APrevCovLine: UInt32;
+      const AContinuationIP: Integer);
     procedure MarkReferences; override;
     function ToStringTag: string; override;
   end;
@@ -1794,94 +1811,207 @@ begin
     [pfConfigurable, pfWritable]));
 end;
 
-procedure TGocciaBytecodeGeneratorObjectValue.StoreResumeValue(
-  const AValue: TGocciaValue);
+procedure TGocciaBytecodeGeneratorObjectValue.CaptureContinuation(
+  const AFrame: TGocciaVMCallFrame; const AHandlerBaseCount: Integer;
+  const APrevCovLine: UInt32; const AResumeRegister: UInt8;
+  const AContinuationIP: Integer);
+var
+  I: Integer;
 begin
-  if FResumeIndex <= 0 then
-    Exit;
-  if Length(FSentValues) < FResumeIndex then
-    SetLength(FSentValues, FResumeIndex);
-  FSentValues[FResumeIndex - 1] := VMValueToRegisterFast(AValue);
+  FHasContinuation := True;
+  FContinuationIP := AContinuationIP;
+  FContinuationPrevCovLine := APrevCovLine;
+  FResumeRegister := AResumeRegister;
+
+  SetLength(FContinuationRegisters, FVM.FRegisterCount);
+  for I := 0 to High(FContinuationRegisters) do
+    FContinuationRegisters[I] := FVM.FRegisters[I];
+
+  SetLength(FContinuationLocalCells, FVM.FLocalCellCount);
+  for I := 0 to High(FContinuationLocalCells) do
+    FContinuationLocalCells[I] := FVM.FLocalCells[I];
+
+  FVM.FHandlerStack.CopyFrom(AHandlerBaseCount, FContinuationHandlers);
 end;
 
-function TGocciaBytecodeGeneratorObjectValue.ReplayYield(
-  const AResumeRegister: UInt8): Boolean;
+function TGocciaBytecodeGeneratorObjectValue.RestoreContinuation(
+  var AFrame: TGocciaVMCallFrame; const AHandlerBaseCount: Integer;
+  out APrevCovLine: UInt32): Boolean;
+var
+  I: Integer;
 begin
-  Result := FReplayYieldIndex < FResumeIndex;
+  Result := FHasContinuation;
   if not Result then
     Exit;
 
-  if (FReplayYieldIndex = FResumeIndex - 1) and (FResumeKind = bgrkThrow) then
-  begin
-    Inc(FReplayYieldIndex);
-    raise EGocciaBytecodeThrow.Create(RegisterToValue(FResumeValue));
-  end;
+  FHasContinuation := False;
+  FVM.EnsureRegisterCapacity(Length(FContinuationRegisters));
+  for I := 0 to High(FContinuationRegisters) do
+    FVM.FRegisters[I] := FContinuationRegisters[I];
+  FVM.EnsureLocalCapacity(Length(FContinuationLocalCells));
+  for I := 0 to High(FContinuationLocalCells) do
+    FVM.FLocalCells[I] := FContinuationLocalCells[I];
 
-  if (FReplayYieldIndex = FResumeIndex - 1) and (FResumeKind = bgrkReturn) then
-  begin
-    Inc(FReplayYieldIndex);
-    FReturnValue := RegisterToValue(FResumeValue);
-    if not Assigned(FReturnSentinel) then
-      FReturnSentinel := TGocciaObjectValue.Create;
-    raise EGocciaBytecodeThrow.Create(FReturnSentinel);
-  end;
+  while FVM.FHandlerStack.Count > AHandlerBaseCount do
+    FVM.FHandlerStack.Pop;
+  FVM.FHandlerStack.RestoreFrom(FContinuationHandlers);
 
-  if (FReplayYieldIndex < Length(FSentValues)) then
-    FVM.FRegisters[AResumeRegister] := FSentValues[FReplayYieldIndex]
-  else
-    FVM.FRegisters[AResumeRegister] := RegisterUndefined;
-  Inc(FReplayYieldIndex);
+  AFrame.IP := FContinuationIP;
+  APrevCovLine := FContinuationPrevCovLine;
+end;
+
+procedure TGocciaBytecodeGeneratorObjectValue.ClearDelegateState;
+begin
+  FDelegateActive := False;
+  FDelegateIteratorValue := nil;
+  FDelegateIterator := nil;
+  FDelegateNextMethod := nil;
 end;
 
 procedure TGocciaBytecodeGeneratorObjectValue.HandleYield(
-  const AValue: TGocciaRegister; const AResumeRegister: UInt8);
-var
-  YieldIndex: Integer;
+  const AValue: TGocciaRegister; const AResumeRegister: UInt8;
+  const AFrame: TGocciaVMCallFrame; const AHandlerBaseCount: Integer;
+  const APrevCovLine: UInt32; const AContinuationIP: Integer);
 begin
-  if ReplayYield(AResumeRegister) then
-    Exit;
-
-  YieldIndex := FReplayYieldIndex;
-  Inc(FReplayYieldIndex);
-  raise EGocciaBytecodeYield.Create(AValue, YieldIndex);
+  ClearDelegateState;
+  CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
+    AResumeRegister, AContinuationIP);
+  raise EGocciaBytecodeYield.Create(AValue, 0);
 end;
 
 procedure TGocciaBytecodeGeneratorObjectValue.HandleYieldDelegate(
-  const AIterable: TGocciaRegister; const AResumeRegister: UInt8);
+  const AIterable: TGocciaRegister; const AResumeRegister: UInt8;
+  const AFrame: TGocciaVMCallFrame; const AHandlerBaseCount: Integer;
+  const APrevCovLine: UInt32; const AContinuationIP: Integer);
 var
   CallArgs: TGocciaArgumentsCollection;
   Done: Boolean;
   DoneValue: TGocciaValue;
   IteratorValue: TGocciaValue;
-  Iterator: TGocciaIteratorValue;
-  NextMethod: TGocciaValue;
   NextResult: TGocciaValue;
-  YieldIndex: Integer;
   YieldedValue: TGocciaValue;
+  HadDelegateContinuation: Boolean;
 begin
-  IteratorValue := FVM.GetIteratorValue(RegisterToValue(AIterable),
-    Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync);
-  if not Assigned(IteratorValue) then
-    Exit;
+  HadDelegateContinuation := FDelegateActive;
+  if not FDelegateActive then
+  begin
+    IteratorValue := FVM.GetIteratorValue(RegisterToValue(AIterable),
+      Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync);
+    if not Assigned(IteratorValue) then
+      Exit;
 
-  Iterator := nil;
-  NextMethod := nil;
-  if IteratorValue is TGocciaIteratorValue then
-    Iterator := TGocciaIteratorValue(IteratorValue)
-  else if IteratorValue is TGocciaObjectValue then
-    NextMethod := IteratorValue.GetProperty(PROP_NEXT);
+    FDelegateIteratorValue := IteratorValue;
+    FDelegateIterator := nil;
+    FDelegateNextMethod := nil;
+    if IteratorValue is TGocciaIteratorValue then
+      FDelegateIterator := TGocciaIteratorValue(IteratorValue)
+    else if IteratorValue is TGocciaObjectValue then
+      FDelegateNextMethod := IteratorValue.GetProperty(PROP_NEXT);
+    FDelegateActive := True;
+  end;
+
+  if FResumeKind = bgrkReturn then
+  begin
+    FReturnValue := nil;
+    if Assigned(FDelegateIterator) then
+      FDelegateIterator.Close
+    else if Assigned(FDelegateIteratorValue) then
+    begin
+      NextResult := FDelegateIteratorValue.GetProperty(PROP_RETURN);
+      if Assigned(NextResult) and not (NextResult is TGocciaUndefinedLiteralValue) and
+         NextResult.IsCallable then
+      begin
+        CallArgs := TGocciaArgumentsCollection.Create([RegisterToValue(FResumeValue)]);
+        try
+          NextResult := TGocciaFunctionBase(NextResult).Call(
+            CallArgs, FDelegateIteratorValue);
+          if Assigned(FClosure) and Assigned(FClosure.Template) and
+             FClosure.Template.IsAsync then
+            NextResult := AwaitValue(NextResult);
+        finally
+          CallArgs.Free;
+        end;
+        if not (NextResult is TGocciaObjectValue) then
+          ThrowTypeError('Iterator return result is not an object');
+        DoneValue := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
+        YieldedValue := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
+        if not Assigned(YieldedValue) then
+          YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        if not Assigned(DoneValue) or not DoneValue.ToBooleanLiteral.Value then
+        begin
+          CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
+            AResumeRegister, AContinuationIP);
+          raise EGocciaBytecodeYield.Create(
+            VMValueToRegisterFast(YieldedValue), 0);
+        end;
+        FReturnValue := YieldedValue;
+      end;
+    end;
+    ClearDelegateState;
+    if not Assigned(FReturnValue) then
+      FReturnValue := RegisterToValue(FResumeValue);
+    if not Assigned(FReturnSentinel) then
+      FReturnSentinel := TGocciaObjectValue.Create;
+    raise EGocciaBytecodeThrow.Create(FReturnSentinel);
+  end;
+
+  if FResumeKind = bgrkThrow then
+  begin
+    if Assigned(FDelegateIteratorValue) then
+    begin
+      NextResult := FDelegateIteratorValue.GetProperty(PROP_THROW);
+      if Assigned(NextResult) and not (NextResult is TGocciaUndefinedLiteralValue) and
+         NextResult.IsCallable then
+      begin
+        CallArgs := TGocciaArgumentsCollection.Create([RegisterToValue(FResumeValue)]);
+        try
+          NextResult := TGocciaFunctionBase(NextResult).Call(
+            CallArgs, FDelegateIteratorValue);
+          if Assigned(FClosure) and Assigned(FClosure.Template) and
+             FClosure.Template.IsAsync then
+            NextResult := AwaitValue(NextResult);
+        finally
+          CallArgs.Free;
+        end;
+        if not (NextResult is TGocciaObjectValue) then
+          ThrowTypeError('Iterator throw result is not an object');
+        DoneValue := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
+        if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+        begin
+          YieldedValue := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
+          if not Assigned(YieldedValue) then
+            YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+          FVM.FRegisters[AResumeRegister] := VMValueToRegisterFast(YieldedValue);
+          ClearDelegateState;
+          Exit;
+        end;
+        YieldedValue := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
+        if not Assigned(YieldedValue) then
+          YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
+          AResumeRegister, AContinuationIP);
+        raise EGocciaBytecodeYield.Create(VMValueToRegisterFast(YieldedValue), 0);
+      end;
+    end;
+    ClearDelegateState;
+    raise EGocciaBytecodeThrow.Create(RegisterToValue(FResumeValue));
+  end;
 
   while True do
   begin
-    if Assigned(Iterator) then
-      YieldedValue := Iterator.DirectNext(Done)
+    if Assigned(FDelegateIterator) then
+      YieldedValue := FDelegateIterator.DirectNext(Done)
     else
     begin
-      if not Assigned(NextMethod) or not NextMethod.IsCallable then
+      if not Assigned(FDelegateNextMethod) or not FDelegateNextMethod.IsCallable then
         ThrowTypeError('Iterator.next is not a function');
-      CallArgs := TGocciaArgumentsCollection.Create;
+      if HadDelegateContinuation and (FResumeKind = bgrkNext) then
+        CallArgs := TGocciaArgumentsCollection.Create([RegisterToValue(FResumeValue)])
+      else
+        CallArgs := TGocciaArgumentsCollection.Create;
       try
-        NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IteratorValue);
+        NextResult := TGocciaFunctionBase(FDelegateNextMethod).Call(
+          CallArgs, FDelegateIteratorValue);
         if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
           NextResult := AwaitValue(NextResult);
       finally
@@ -1900,15 +2030,13 @@ begin
     if Done then
     begin
       FVM.FRegisters[AResumeRegister] := VMValueToRegisterFast(YieldedValue);
+      ClearDelegateState;
       Exit;
     end;
 
-    if ReplayYield(AResumeRegister) then
-      Continue;
-
-    YieldIndex := FReplayYieldIndex;
-    Inc(FReplayYieldIndex);
-    raise EGocciaBytecodeYield.Create(VMValueToRegisterFast(YieldedValue), YieldIndex);
+    CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
+      AResumeRegister, AContinuationIP);
+    raise EGocciaBytecodeYield.Create(VMValueToRegisterFast(YieldedValue), 0);
   end;
 end;
 
@@ -1932,14 +2060,14 @@ begin
   if FState = bgsExecuting then
     raise TGocciaThrowValue.Create(VMGeneratorExecutingError);
 
-  if (FResumeIndex = 0) and (AKind = bgrkReturn) then
+  if (FState = bgsSuspendedStart) and (AKind = bgrkReturn) then
   begin
     FState := bgsCompleted;
     ADone := True;
     Exit(AValue);
   end;
 
-  if (FResumeIndex = 0) and (AKind = bgrkThrow) then
+  if (FState = bgsSuspendedStart) and (AKind = bgrkThrow) then
   begin
     FState := bgsCompleted;
     raise TGocciaThrowValue.Create(AValue);
@@ -1947,9 +2075,6 @@ begin
 
   FResumeKind := AKind;
   FResumeValue := VMValueToRegisterFast(AValue);
-  if AKind = bgrkNext then
-    StoreResumeValue(AValue);
-  FReplayYieldIndex := 0;
   FState := bgsExecuting;
 
   PreviousGenerator := GActiveBytecodeGenerator;
@@ -1958,14 +2083,12 @@ begin
     try
       ReturnRegister := FVM.ExecuteClosureRegisters(FClosure, FThisValue, FArguments);
       FState := bgsCompleted;
+      ClearDelegateState;
       ADone := True;
       Result := RegisterToValue(ReturnRegister);
     except
       on E: EGocciaBytecodeYield do
       begin
-        FResumeIndex := E.YieldIndex + 1;
-        if Length(FSentValues) < FResumeIndex then
-          SetLength(FSentValues, FResumeIndex);
         FState := bgsSuspendedYield;
         ADone := False;
         Result := RegisterToValue(E.Value);
@@ -1973,6 +2096,7 @@ begin
       on E: EGocciaBytecodeGeneratorReturn do
       begin
         FState := bgsCompleted;
+        ClearDelegateState;
         ADone := True;
         Result := E.Value;
       end;
@@ -1981,12 +2105,14 @@ begin
         if Assigned(FReturnSentinel) and (E.ThrownValue = FReturnSentinel) then
         begin
           FState := bgsCompleted;
+          ClearDelegateState;
           ADone := True;
           Result := FReturnValue;
         end
         else
         begin
           FState := bgsCompleted;
+          ClearDelegateState;
           ADone := True;
           raise;
         end;
@@ -2066,8 +2192,17 @@ begin
   MarkRegisterReferences(FThisValue);
   for I := 0 to High(FArguments) do
     MarkRegisterReferences(FArguments[I]);
-  for I := 0 to High(FSentValues) do
-    MarkRegisterReferences(FSentValues[I]);
+  for I := 0 to High(FContinuationRegisters) do
+    MarkRegisterReferences(FContinuationRegisters[I]);
+  for I := 0 to High(FContinuationLocalCells) do
+    if Assigned(FContinuationLocalCells[I]) then
+      MarkRegisterReferences(FContinuationLocalCells[I].Value);
+  if Assigned(FDelegateIteratorValue) then
+    FDelegateIteratorValue.MarkReferences;
+  if Assigned(FDelegateIterator) then
+    FDelegateIterator.MarkReferences;
+  if Assigned(FDelegateNextMethod) then
+    FDelegateNextMethod.MarkReferences;
   if Assigned(FReturnSentinel) then
     FReturnSentinel.MarkReferences;
   if Assigned(FReturnValue) then
@@ -5207,6 +5342,7 @@ var
   ProfileEntryTimestamp: Int64;
   DynImportPromise: TGocciaPromiseValue;
   SpreadArray: TGocciaArrayValue;
+  RestoredContinuation: Boolean;
 begin
   SavedRegisterBase := FRegisterBase;
   SavedRegisterCount := FRegisterCount;
@@ -5220,6 +5356,41 @@ begin
     SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
       AArg0, AArg1, AArg2, AUseFixedArgs,
       Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+    RestoredContinuation := Assigned(GActiveBytecodeGenerator) and
+      GActiveBytecodeGenerator.RestoreContinuation(
+        Frame, SavedHandlerCount, PrevCovLine);
+    if RestoredContinuation then
+    begin
+      if GActiveBytecodeGenerator.FDelegateActive then
+      begin
+        if GActiveBytecodeGenerator.FResumeKind = bgrkNext then
+          SetRegisterRaw(GActiveBytecodeGenerator.FResumeRegister,
+            GActiveBytecodeGenerator.FResumeValue);
+      end
+      else
+      begin
+        case GActiveBytecodeGenerator.FResumeKind of
+          bgrkNext:
+            SetRegisterRaw(GActiveBytecodeGenerator.FResumeRegister,
+              GActiveBytecodeGenerator.FResumeValue);
+          bgrkThrow:
+            HandleExceptionUnwind(
+              RegisterToValue(GActiveBytecodeGenerator.FResumeValue),
+              InitialFrameStackCount, SavedHandlerCount,
+              Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+          bgrkReturn:
+            begin
+              GActiveBytecodeGenerator.FReturnValue :=
+                RegisterToValue(GActiveBytecodeGenerator.FResumeValue);
+              if not Assigned(GActiveBytecodeGenerator.FReturnSentinel) then
+                GActiveBytecodeGenerator.FReturnSentinel := TGocciaObjectValue.Create;
+              HandleExceptionUnwind(GActiveBytecodeGenerator.FReturnSentinel,
+                InitialFrameStackCount, SavedHandlerCount,
+                Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+            end;
+        end;
+      end;
+    end;
     Running := True;
     while Running and (Frame.IP < Template.CodeCount) do
     begin
@@ -6910,9 +7081,13 @@ begin
         if Assigned(GActiveBytecodeGenerator) then
         begin
           if (C and 1) <> 0 then
-            GActiveBytecodeGenerator.HandleYieldDelegate(FRegisters[A], B)
+            GActiveBytecodeGenerator.HandleYieldDelegate(
+              FRegisters[A], B, Frame, SavedHandlerCount, PrevCovLine,
+              Frame.IP - 1)
           else
-            GActiveBytecodeGenerator.HandleYield(FRegisters[A], B);
+            GActiveBytecodeGenerator.HandleYield(
+              FRegisters[A], B, Frame, SavedHandlerCount, PrevCovLine,
+              Frame.IP);
         end
         else if A <> B then
           FRegisters[B] := FRegisters[A];

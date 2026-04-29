@@ -53,6 +53,7 @@ type
     FDelegateAsyncIterator: TGocciaValue;
     FDelegateAsyncNext: TGocciaValue;
     FExpressionValues: TDictionary<TObject, TGocciaValue>;
+    FStatementIndexes: TDictionary<TObject, Integer>;
     FIsAsyncGenerator: Boolean;
   public
     constructor Create(const ABodyStatements: TObjectList<TGocciaASTNode>;
@@ -66,6 +67,11 @@ type
     procedure SaveExpressionValue(const AExpression: TObject; const AValue: TGocciaValue);
     function TakeExpressionValue(const AExpression: TObject; out AValue: TGocciaValue): Boolean;
     procedure ClearExpressionValue(const AExpression: TObject);
+    procedure ClearExpressionValues;
+    function GetStatementIndex(const AStatements: TObject): Integer;
+    procedure SaveStatementIndex(const AStatements: TObject; const AIndex: Integer);
+    procedure ClearStatementIndex(const AStatements: TObject);
+    procedure ClearStatementIndexes;
     procedure MarkReferences;
     property Completed: Boolean read FCompleted;
   end;
@@ -209,10 +215,12 @@ begin
   FSuspendedYield := nil;
   FPendingValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   FExpressionValues := TDictionary<TObject, TGocciaValue>.Create;
+  FStatementIndexes := TDictionary<TObject, Integer>.Create;
 end;
 
 destructor TGocciaGeneratorContinuation.Destroy;
 begin
+  FStatementIndexes.Free;
   FExpressionValues.Free;
   inherited;
 end;
@@ -274,6 +282,8 @@ begin
         if ControlFlow.Kind = cfkReturn then
         begin
           FCompleted := True;
+          ClearExpressionValues;
+          ClearStatementIndexes;
           ADone := True;
           if Assigned(ControlFlow.Value) then
             Result := ControlFlow.Value
@@ -283,6 +293,7 @@ begin
         end;
 
         Inc(FStatementIndex);
+        ClearExpressionValues;
       except
         on E: EGocciaGeneratorYield do
         begin
@@ -293,6 +304,8 @@ begin
         on E: EGocciaGeneratorReturn do
         begin
           FCompleted := True;
+          ClearExpressionValues;
+          ClearStatementIndexes;
           ADone := True;
           Result := E.Value;
           Exit;
@@ -304,6 +317,8 @@ begin
   end;
 
   FCompleted := True;
+  ClearExpressionValues;
+  ClearStatementIndexes;
   ADone := True;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -589,6 +604,35 @@ end;
 procedure TGocciaGeneratorContinuation.ClearExpressionValue(const AExpression: TObject);
 begin
   FExpressionValues.Remove(AExpression);
+end;
+
+procedure TGocciaGeneratorContinuation.ClearExpressionValues;
+begin
+  FExpressionValues.Clear;
+end;
+
+function TGocciaGeneratorContinuation.GetStatementIndex(
+  const AStatements: TObject): Integer;
+begin
+  if not FStatementIndexes.TryGetValue(AStatements, Result) then
+    Result := 0;
+end;
+
+procedure TGocciaGeneratorContinuation.SaveStatementIndex(
+  const AStatements: TObject; const AIndex: Integer);
+begin
+  FStatementIndexes.AddOrSetValue(AStatements, AIndex);
+end;
+
+procedure TGocciaGeneratorContinuation.ClearStatementIndex(
+  const AStatements: TObject);
+begin
+  FStatementIndexes.Remove(AStatements);
+end;
+
+procedure TGocciaGeneratorContinuation.ClearStatementIndexes;
+begin
+  FStatementIndexes.Clear;
 end;
 
 procedure TGocciaGeneratorContinuation.MarkReferences;

@@ -18,6 +18,31 @@ test("object async generator method works without compat-function", async () => 
   expect(seen).toEqual([1, 2]);
 });
 
+test("object async generator method does not replay call arguments before a yielded argument", async () => {
+  const events = [];
+  const obj = {
+    async *values() {
+      const left = () => {
+        events.push("left");
+        return 10;
+      };
+      const combine = (a, b) => {
+        events.push("combine");
+        return a + b;
+      };
+
+      const result = combine(left(), yield "resume");
+      yield result;
+    },
+  };
+
+  const iter = obj.values();
+  await expect(iter.next()).resolves.toEqual({ value: "resume", done: false });
+  expect(events).toEqual(["left"]);
+  await expect(iter.next(5)).resolves.toEqual({ value: 15, done: false });
+  expect(events).toEqual(["left", "combine"]);
+});
+
 test("object async generator method delegates to async iterable", async () => {
   const source = {
     async *values() {
@@ -37,6 +62,25 @@ test("object async generator method delegates to async iterable", async () => {
   }
 
   expect(seen).toEqual([1, 2]);
+});
+
+test("object async generator yield delegation does not replay side effects before the delegation", async () => {
+  const events = [];
+  const obj = {
+    async *numbers() {
+      events.push("before");
+      yield* [1, 2];
+      events.push("after");
+    },
+  };
+
+  const iter = obj.numbers();
+  await expect(iter.next()).resolves.toEqual({ value: 1, done: false });
+  expect(events).toEqual(["before"]);
+  await expect(iter.next()).resolves.toEqual({ value: 2, done: false });
+  expect(events).toEqual(["before"]);
+  await expect(iter.next()).resolves.toEqual({ value: undefined, done: true });
+  expect(events).toEqual(["before", "after"]);
 });
 
 test("object async generator method delegates to sync iterable", async () => {
