@@ -156,6 +156,7 @@ function TryMatchIteratorItems(const AIterator: TGocciaIteratorValue;
 var
   I: Integer;
   IterationResult: TGocciaObjectValue;
+  IterationValue: TGocciaValue;
   CurrentContext, NextContext: TGocciaEvaluationContext;
   RestArray: TGocciaArrayValue;
   RestArrayRooted: Boolean;
@@ -173,8 +174,11 @@ begin
         Exit(False);
       if not Assigned(AElements[I]) then
         Continue;
-      if not TryMatchPatternInternal(IterationResult.GetProperty(PROP_VALUE),
-         AElements[I], CurrentContext, NextContext) then
+      IterationValue := IterationResult.GetProperty(PROP_VALUE);
+      if not Assigned(IterationValue) then
+        IterationValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      if not TryMatchPatternInternal(IterationValue, AElements[I],
+         CurrentContext, NextContext) then
         Exit(False);
       CurrentContext := NextContext;
     end;
@@ -189,7 +193,10 @@ begin
         IterationResult := AIterator.AdvanceNext;
         while not IterationResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
         begin
-          RestArray.Elements.Add(IterationResult.GetProperty(PROP_VALUE));
+          IterationValue := IterationResult.GetProperty(PROP_VALUE);
+          if not Assigned(IterationValue) then
+            IterationValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+          RestArray.Elements.Add(IterationValue);
           IterationResult := AIterator.AdvanceNext;
         end;
         if not TryMatchPatternInternal(RestArray, ARestPattern,
