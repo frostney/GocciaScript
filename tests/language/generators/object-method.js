@@ -59,6 +59,49 @@ test("object generator method does not replay call arguments before a yielded ar
   expect(events).toEqual(["left", "combine"]);
 });
 
+test("object generator method preserves completed siblings across multiple yields in one statement", () => {
+  const events = [];
+  const obj = {
+    *values() {
+      const left = () => {
+        events.push("left");
+        return 1;
+      };
+      const combine = (a, b, c) => {
+        events.push("combine");
+        return a + b + c;
+      };
+
+      const result = combine(left(), yield "a", yield "b");
+      yield result;
+    },
+  };
+
+  const iter = obj.values();
+  expect(iter.next()).toEqual({ value: "a", done: false });
+  expect(events).toEqual(["left"]);
+  expect(iter.next(2)).toEqual({ value: "b", done: false });
+  expect(events).toEqual(["left"]);
+  expect(iter.next(3)).toEqual({ value: 6, done: false });
+  expect(events).toEqual(["left", "combine"]);
+});
+
+test("object generator method does not reuse completed loop body expressions", () => {
+  const obj = {
+    *values() {
+      let total = 0;
+
+      for (const n of [1, 2, 3]) total = total + n;
+
+      yield total;
+    },
+  };
+
+  const iter = obj.values();
+  expect(iter.next()).toEqual({ value: 6, done: false });
+  expect(iter.next()).toEqual({ value: undefined, done: true });
+});
+
 test("object generator method resumes binary expressions instead of returning the cached left operand", () => {
   const events = [];
   const obj = {

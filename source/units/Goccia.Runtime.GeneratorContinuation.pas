@@ -843,6 +843,7 @@ function TGocciaGeneratorContinuation.TakeCompletedExpressionValue(
 begin
   Result := FCompletedExpressionValues.TryGetValue(AExpression, AValue);
   if Result then
+    // Consume replayed completed values; statement completion clears the rest.
     FCompletedExpressionValues.Remove(AExpression);
 end;
 

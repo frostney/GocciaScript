@@ -482,6 +482,27 @@ begin
   Result := AStatement.Execute(AContext);
 end;
 
+function EvaluateLoopBodyStatement(const AStatement: TGocciaStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+var
+  Continuation: TGocciaGeneratorContinuation;
+begin
+  Continuation := CurrentGeneratorContinuation;
+  try
+    Result := EvaluateStatement(AStatement, AContext);
+    if Assigned(Continuation) then
+      Continuation.ClearExpressionValues;
+  except
+    on E: EGocciaGeneratorYield do
+      raise;
+    else
+    begin
+      if Assigned(Continuation) then
+        Continuation.ClearExpressionValues;
+      raise;
+    end;
+  end;
+end;
+
 function EvaluateBinary(const ABinaryExpression: TGocciaBinaryExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Left, Right: TGocciaValue;
@@ -1451,7 +1472,7 @@ begin
       end;
 
       try
-        CF := EvaluateStatement(AForOfStatement.Body, IterContext);
+        CF := EvaluateLoopBodyStatement(AForOfStatement.Body, IterContext);
       finally
         if Assigned(AForOfStatement.MatchPattern) and
            (IterContext.Scope <> IterScope) then
@@ -1560,7 +1581,7 @@ begin
           end;
 
           try
-            CF := EvaluateStatement(AForAwaitOfStatement.Body, IterContext);
+            CF := EvaluateLoopBodyStatement(AForAwaitOfStatement.Body, IterContext);
           finally
             if Assigned(AForAwaitOfStatement.MatchPattern) and
                (IterContext.Scope <> IterScope) then
@@ -1626,7 +1647,7 @@ begin
         end;
 
         try
-          CF := EvaluateStatement(AForAwaitOfStatement.Body, IterContext);
+          CF := EvaluateLoopBodyStatement(AForAwaitOfStatement.Body, IterContext);
         finally
           if Assigned(AForAwaitOfStatement.MatchPattern) and
              (IterContext.Scope <> IterScope) then
