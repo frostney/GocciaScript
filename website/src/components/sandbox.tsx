@@ -19,207 +19,19 @@ import {
   SparkleIcon,
   TerminalIcon,
 } from "@/components/icons";
-
-const TOOL_CALL_TASK =
-  "Summarize the latest transaction batch and find outliers.";
+import {
+  buildLlmRequest,
+  LLM_CALL_TOKENS,
+  TOOL_CALL_FLOWS,
+  TOOL_CALL_TASK,
+  type ToolFlow,
+  type ToolFlowKey,
+} from "@/lib/tool-call-comparison.mjs";
 
 /** When ready to surface the SDK integration snippet, flip to true.
  *  Hidden until the runtime is mature enough to expose a stable
  *  embedding API. */
 const SHOW_INTEGRATION = false;
-
-type ToolStep = {
-  tool: string;
-  /** Single argument value for the OpenAI-style tool call. The
-   *  `argName` key on the parent flow names what JSON property
-   *  it lives under (`command` for bash, `code` for run_code, …). */
-  call: string;
-  role: string;
-  /** What the tool returns to the model after this step — added to
-   *  the conversation history before the next call, so it inflates
-   *  the next request's token cost. */
-  result: string;
-};
-
-type ToolFlow = {
-  label: string;
-  argName: "command" | "code";
-  toolDef: ToolDef;
-  steps: ToolStep[];
-  risks: string[];
-};
-
-type ToolDef = {
-  type: "function";
-  name: string;
-  description: string;
-  parameters: {
-    type: "object";
-    properties: Record<string, unknown>;
-    required: string[];
-  };
-};
-
-const LLM_MODEL = "gpt-5";
-const SYSTEM_PROMPT =
-  "You are a financial-data analyst. Investigate the latest transaction batch and return a structured summary plus any outliers.";
-const GOCCIA_TOOL_PROMPT = `${SYSTEM_PROMPT}
-
-The host injects a global named transactions before running your GocciaScript code.
-transactions is Array<{ id: number, amount: number }>.
-
-GocciaScript is a strict ECMAScript subset. Do not use var, function declarations, loose equality (== / !=), eval, dynamic import, filesystem APIs, environment variables, or ambient host globals. Use const/let, arrow functions, strict equality, and the provided transactions global.`;
-const USER_TASK = "Summarize the latest transaction batch and find outliers.";
-
-const BASH_TOOL: ToolDef = {
-  type: "function",
-  name: "bash",
-  description: "Execute a shell command and return its stdout.",
-  parameters: {
-    type: "object",
-    properties: {
-      command: { type: "string", description: "The shell command to run." },
-    },
-    required: ["command"],
-  },
-};
-
-const RUN_CODE_TOOL: ToolDef = {
-  type: "function",
-  name: "run_code",
-  description:
-    "Run GocciaScript in a sandbox with the provided globals; returns the script's value plus stdout. The sandbox has no fetch, fs, env, or eval.",
-  parameters: {
-    type: "object",
-    properties: {
-      code: {
-        type: "string",
-        description: "GocciaScript source. Use console.log for output.",
-      },
-    },
-    required: ["code"],
-  },
-};
-
-const TOOL_CALL_FLOWS: { bash: ToolFlow; goccia: ToolFlow } = {
-  bash: {
-    label: "Bash + jq",
-    argName: "command",
-    toolDef: BASH_TOOL,
-    steps: [
-      {
-        tool: "bash",
-        call: "ls /tmp/agent/transactions/",
-        role: "discover",
-        result: "transactions.current.json\n",
-      },
-      {
-        tool: "bash",
-        call: "cat /tmp/agent/transactions/transactions.current.json",
-        role: "load",
-        result:
-          '[{"id":1,"amount":42.5},{"id":2,"amount":-12},{"id":3,"amount":98.34},{"id":4,"amount":-7.5},{"id":5,"amount":312},{"id":6,"amount":18.4},{"id":7,"amount":-298.4},{"id":8,"amount":54.2}]\n',
-      },
-      {
-        tool: "bash",
-        call: "jq '[.[].amount] | add' /tmp/agent/transactions/transactions.current.json",
-        role: "sum",
-        result: "207.54\n",
-      },
-      {
-        tool: "bash",
-        call: "jq '[.[].amount] | add / length' /tmp/agent/transactions/transactions.current.json",
-        role: "average",
-        result: "25.94\n",
-      },
-      {
-        tool: "bash",
-        call: "jq '[.[] | select((.amount | abs) > 280)]' /tmp/agent/transactions/transactions.current.json",
-        role: "outliers",
-        result: '[{"id":5,"amount":312},{"id":7,"amount":-298.4}]\n',
-      },
-    ],
-    risks: [
-      "values cross 5 process boundaries — possible to lose precision or quoting",
-      "5 round-trips ≈ 5× the prompt overhead and 5× the chance of a misstep",
-    ],
-  },
-  goccia: {
-    label: "GocciaScript (single call)",
-    argName: "code",
-    toolDef: RUN_CODE_TOOL,
-    steps: [
-      {
-        tool: "run_code",
-        call: `const total = transactions.reduce((s, t) => s + t.amount, 0);
-const avg = total / transactions.length;
-const stdev = Math.sqrt(
-  transactions.reduce((s, t) => s + (t.amount - avg) ** 2, 0) / transactions.length
-);
-const outliers = transactions.filter((t) => Math.abs(t.amount - avg) > 2 * stdev);
-({ total, avg, outliers });`,
-        role: "everything",
-        result:
-          '{"value":{"total":207.54,"avg":25.94,"outliers":[{"id":5,"amount":312},{"id":7,"amount":-298.4}]},"stdout":""}',
-      },
-    ],
-    risks: [
-      "all values stay in one sandbox — no serialization between steps",
-      "host gets a single structured JSON result back",
-    ],
-  },
-};
-
-/** Pre-computed tokenizer counts for each turn — split into the input
- *  side (Responses request body: instructions + user input + tools +
- *  accumulated function calls + function-call outputs) and the output
- *  side (the function_call item the model emits). Both are billed; the
- *  output rate is typically 2-3× the input rate, so we surface them
- *  separately in the UI.
- *
- *  Verified once with `gpt-tokenizer`'s GPT-5 / o200k_base encoder via
- *  `scripts/compute-llm-call-tokens.mjs`; re-run that script and paste
- *  new arrays if the system prompt, tool defs, step calls, or tool-
- *  result texts change. The tokenizer is intentionally NOT a runtime
- *  dependency (~53 MB unpacked). */
-const LLM_CALL_TOKENS = {
-  bash: { in: [108, 166, 313, 382, 453], out: [39, 42, 50, 52, 58] },
-  goccia: { in: [235], out: [138] },
-} as const;
-
-/** Build the Responses API request body at step `index` of flow
- *  `flowKey`. This uses manual context management: prior model
- *  `function_call` output items and matching `function_call_output`
- *  items are included in `input` before the next dependent call. */
-function buildLlmRequest(
-  flowKey: keyof typeof TOOL_CALL_FLOWS,
-  index: number,
-): unknown {
-  const flow = TOOL_CALL_FLOWS[flowKey];
-  const input: unknown[] = [{ role: "user", content: USER_TASK }];
-  for (let j = 0; j < index; j++) {
-    const prev = flow.steps[j];
-    input.push({
-      type: "function_call",
-      id: `fc_${j + 1}`,
-      call_id: `call_${j + 1}`,
-      name: prev.tool,
-      arguments: JSON.stringify({ [flow.argName]: prev.call }),
-    });
-    input.push({
-      type: "function_call_output",
-      call_id: `call_${j + 1}`,
-      output: prev.result,
-    });
-  }
-  return {
-    model: LLM_MODEL,
-    instructions:
-      flow.toolDef.name === "run_code" ? GOCCIA_TOOL_PROMPT : SYSTEM_PROMPT,
-    input,
-    tools: [flow.toolDef],
-  };
-}
 
 function ToolCallComparison() {
   const ref = useRef<HTMLDivElement>(null);
@@ -276,7 +88,7 @@ function ToolCallComparison() {
         {(Object.entries(TOOL_CALL_FLOWS) as [string, ToolFlow][]).map(
           ([key, flow]) => {
             const isGoccia = key === "goccia";
-            const flowKey = key as keyof typeof TOOL_CALL_FLOWS;
+            const flowKey = key as ToolFlowKey;
             const stepTokens = LLM_CALL_TOKENS[flowKey];
             const totalIn = stepTokens.in.reduce((s, t) => s + t, 0);
             const totalOut = stepTokens.out.reduce((s, t) => s + t, 0);
