@@ -580,7 +580,7 @@ jobs:
               rows += row('GC Live', fmtBytes(interpreted?.memory?.gc?.liveBytes), fmtBytes(bytecode?.memory?.gc?.liveBytes));
               rows += row('GC Peak Live', fmtBytes(interpreted?.memory?.gc?.peakLiveBytes), fmtBytes(bytecode?.memory?.gc?.peakLiveBytes));
               rows += row('GC Allocated During Run', fmtBytes(interpreted?.memory?.gc?.allocatedDuringRunBytes), fmtBytes(bytecode?.memory?.gc?.allocatedDuringRunBytes));
-              rows += row('GC Max', fmtBytes(interpreted?.memory?.gc?.maxBytes), fmtBytes(bytecode?.memory?.gc?.maxBytes));
+              rows += row('GC Limit', fmtBytes(interpreted?.memory?.gc?.maxBytes), fmtBytes(bytecode?.memory?.gc?.maxBytes));
               rows += row('GC Collections', fmtCount(interpreted?.memory?.gc?.collections), fmtCount(bytecode?.memory?.gc?.collections));
               rows += row('GC Collected Objects', fmtCount(interpreted?.memory?.gc?.collectedObjects), fmtCount(bytecode?.memory?.gc?.collectedObjects));
               rows += row('Heap Start Allocated', fmtBytes(interpreted?.memory?.heap?.startAllocatedBytes), fmtBytes(bytecode?.memory?.heap?.startAllocatedBytes));

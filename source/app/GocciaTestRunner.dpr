@@ -70,6 +70,7 @@ type
     ParseNs: Int64;
     CompileNs: Int64;
     ExecNs: Int64;
+    MemoryStats: TCLIJSONMemoryStats;
     ErrorMessage: string;
   end;
 
@@ -231,6 +232,8 @@ var
   I: Integer;
   AggregatedResult: TAggregatedTestResult;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
+  MainMemoryStats: TCLIJSONMemoryStats;
+  IsParallelRun: Boolean;
 begin
   if APaths.Count = 0 then
   begin
@@ -273,18 +276,23 @@ begin
     end;
 
     BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
+    IsParallelRun := (Files.Count > 1) and (GetJobCount(Files.Count) > 1);
     if Files.Count = 1 then
     begin
       if not FNoProgress.Present then
         WriteLn('[1/1] ', Files[0]);
       AggregatedResult := RunScriptFromFile(Files[0]);
     end
-    else if GetJobCount(Files.Count) > 1 then
+    else if IsParallelRun then
       AggregatedResult := RunScriptsFromFilesParallel(Files, GetJobCount(Files.Count))
     else
       AggregatedResult := RunScriptsFromFiles(Files);
-    AggregatedResult.MemoryStats :=
-      FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
+    MainMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
+    if IsParallelRun then
+      AggregatedResult.MemoryStats := CombineCLIJSONMemoryStats(
+        MainMemoryStats, AggregatedResult.MemoryStats, True)
+    else
+      AggregatedResult.MemoryStats := MainMemoryStats;
     PrintTestResults(AggregatedResult);
 
     if (CoverageOptions.Enabled.Present or CoverageOptions.Format.Present or
@@ -807,12 +815,14 @@ var
   FailedTests: TGocciaValue;
   FailedArr: TGocciaArrayValue;
   WorkerResults: PTestWorkerDataArray;
+  MemoryMeasurement: TCLIJSONMemoryMeasurement;
   I: Integer;
 begin
   AConsoleOutput := '';
   AErrorMessage := '';
   WorkerResults := PTestWorkerDataArray(AData);
 
+  BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
   try
     FileResult := RunGocciaScript(AFileName);
     TestResult := FileResult.TestResult;
@@ -868,6 +878,8 @@ begin
       WorkerResults^[AIndex].FailedTestNames[0] := AFileName + ': ' + E.Message;
     end;
   end;
+  WorkerResults^[AIndex].MemoryStats :=
+    FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
 
   // No GC.Collect — worker GC is disabled to avoid FGCMark races on
   // shared objects. All thread-local objects are freed in bulk when
@@ -910,6 +922,7 @@ begin
     WorkerData[I].ParseNs := 0;
     WorkerData[I].CompileNs := 0;
     WorkerData[I].ExecNs := 0;
+    WorkerData[I].MemoryStats := DefaultCLIJSONMemoryStats;
     WorkerData[I].ErrorMessage := '';
     SetLength(WorkerData[I].FailedTestNames, 0);
   end;
@@ -1034,6 +1047,7 @@ begin
   Result.TotalParseNanoseconds := 0;
   Result.TotalCompileNanoseconds := 0;
   Result.TotalExecNanoseconds := 0;
+  Result.MemoryStats := DefaultCLIJSONMemoryStats;
   SetLength(Result.FileResults, AFiles.Count);
 
   for I := 0 to AFiles.Count - 1 do
@@ -1062,6 +1076,8 @@ begin
     Result.TotalParseNanoseconds := Result.TotalParseNanoseconds + Source^.ParseNs;
     Result.TotalCompileNanoseconds := Result.TotalCompileNanoseconds + Source^.CompileNs;
     Result.TotalExecNanoseconds := Result.TotalExecNanoseconds + Source^.ExecNs;
+    Result.MemoryStats := CombineCLIJSONMemoryStats(
+      Result.MemoryStats, Source^.MemoryStats, True);
 
     for J := 0 to High(Source^.FailedTestNames) do
       AllFailedTests.Elements.Add(

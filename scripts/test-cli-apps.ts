@@ -451,6 +451,8 @@ console.log("TestRunner: JSON multi-file structure...");
     if (json.totalTests !== 2) throw new Error(`TestRunner multi-file totalTests should be 2, got ${json.totalTests}`);
     if (json.passed !== 2 || json.failed !== 0) throw new Error(`TestRunner multi-file pass/fail mismatch: ${json.passed}/${json.failed}`);
     if (json.workers.used !== 2) throw new Error(`TestRunner multi-file workers.used should be 2, got ${json.workers.used}`);
+    if (json.memory.gc.allocatedDuringRunBytes <= 0)
+      throw new Error("TestRunner multi-file top-level memory should include worker GC allocations");
     if (!Array.isArray(json.results) || json.results.length !== 2) throw new Error("TestRunner multi-file results should mirror files with 2 entries");
 
     assertCommonJsonFile(json.files[0], "TestRunner first file", first);
@@ -709,6 +711,10 @@ console.log("TestRunner: JSON multi-file structure...");
       if (json.error !== null) throw new Error("Benchmark multi-file top-level error should be null");
       if (json.totalBenchmarks !== 2) throw new Error(`Benchmark multi-file totalBenchmarks should be 2, got ${json.totalBenchmarks}`);
       if (json.workers.used !== 2) throw new Error(`Benchmark multi-file workers.used should be 2, got ${json.workers.used}`);
+      if (json.memory.gc.allocatedDuringRunBytes <= 0)
+        throw new Error("Benchmark multi-file top-level memory should include worker GC allocations");
+      if (json.memory.gc.collections <= 0)
+        throw new Error("Benchmark multi-file top-level memory should include worker GC collections");
       assertCommonJsonFile(json.files[0], "Benchmark first file", benchA);
       assertCommonJsonFile(json.files[1], "Benchmark second file", benchB);
       if (json.files[0].benchmarks?.[0]?.name !== "one") throw new Error(`Benchmark first file entry mismatch: ${JSON.stringify(json.files[0].benchmarks)}`);
