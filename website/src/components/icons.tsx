@@ -164,6 +164,46 @@ export const MenuIcon = (p: IconProps) => (
   </Icon>
 );
 
+export const SidebarIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="4" y="4" width="16" height="16" rx="2" />
+    <path d="M9 4v16" />
+  </Icon>
+);
+
+export const PlusIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M12 5v14M5 12h14" />
+  </Icon>
+);
+
+export const FilePlusIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+    <path d="M14 3v5h5" />
+    <path d="M12 12v5M9.5 14.5h5" />
+  </Icon>
+);
+
+export const TestTubeIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M10 3 h 6" />
+    <path d="M12 3 v 6.5 l -5.1 7.8 a 2.5 2.5 0 0 0 2.1 3.9 h 6 a 2.5 2.5 0 0 0 2.1 -3.9 L12 9.5" />
+    <path d="M9.4 15 h 6.2" />
+    <path d="M10.4 18 h 4.2" />
+  </Icon>
+);
+
+export const FileTestIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M13 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z" />
+    <path d="M13 3v6h6" />
+    <path d="M8 6v4M6 8h4" />
+    <path d="M12.5 11v2.5l-2.3 3.5a1.3 1.3 0 0 0 1.1 2h3.4a1.3 1.3 0 0 0 1.1-2l-2.3-3.5V11" />
+    <path d="M11.5 16h3" />
+  </Icon>
+);
+
 export const CloseIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M18 6L6 18M6 6l12 12" />

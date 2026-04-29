@@ -18,7 +18,10 @@ describe("share encoding", () => {
     const payload: SharePayload = {
       code: "console.log('Hello, GocciaScript!');\n",
       mode: "bytecode",
+      runner: "test",
       asi: false,
+      compatVar: true,
+      compatFunction: true,
       version: "v0.6.1",
     };
     const encoded = encodeShare(payload);
@@ -50,19 +53,25 @@ describe("share encoding", () => {
     expect(decodeShare(encodeJsonBase64Url({ mode: "bytecode" }))).toBeNull();
   });
 
-  test("drops non-string `mode` and `version`, non-boolean `asi`", () => {
+  test("drops invalid optional fields", () => {
     const decoded = decodeShare(
       encodeJsonBase64Url({
         code: "ok;",
         mode: 42,
+        runner: "bench",
         asi: "yes",
+        compatVar: "yes",
+        compatFunction: 1,
         version: { tag: "v1.0.0" },
       }),
     );
     expect(decoded).toEqual({
       code: "ok;",
       mode: undefined,
+      runner: undefined,
       asi: undefined,
+      compatVar: undefined,
+      compatFunction: undefined,
       version: undefined,
     });
   });

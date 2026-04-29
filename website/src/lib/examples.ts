@@ -8,6 +8,7 @@ export type Example = {
   label: string;
   desc: string;
   code: string;
+  runner?: "execute" | "test";
   ext?: "js" | "ts" | "jsx" | "tsx";
 };
 
@@ -86,6 +87,114 @@ console.log(OrderStatus.Brewing, "→", describe(OrderStatus.Brewing));
 console.log(OrderStatus[2], "→", describe(2));
 console.log("Paid with:", PaymentMethod.Card);
 console.log(Object.isFrozen(OrderStatus));`,
+  },
+  {
+    id: "generator-style",
+    label: "Generators — method shorthand + yield",
+    desc: "Generator methods, yield, yield*, and iterator helpers.",
+    code: `// Generator method shorthand is default GocciaScript syntax.
+const sequences = {
+  *numbers(start, count, step = 1) {
+    yield* Array.from({ length: count }, (_, i) => start + i * step);
+  },
+
+  *playlist() {
+    yield "espresso";
+    yield* ["latte", "cortado"];
+  },
+};
+
+const evens = Iterator.from(sequences.numbers(2, 10, 2))
+  .map((n) => n * n)
+  .filter((n) => n % 3 !== 0)
+  .take(5)
+  .toArray();
+
+console.log("First filtered squares:", evens);
+const queue = [];
+for (const drink of sequences.playlist()) {
+  queue.push(drink);
+}
+console.log("Queue:", queue);
+
+let sum = 0;
+for (const n of sequences.numbers(1, 5)) {
+  sum += n;
+}
+console.log("Range sum:", sum);`,
+  },
+  {
+    id: "pattern-matching",
+    label: "Pattern matching — match / is",
+    desc: "TC39 proposal syntax for match clauses and is-pattern filters.",
+    code: `// TC39 pattern matching proposal syntax.
+const describe = (event) => match (event) {
+  { type: "order", items: [const drink, const qty] }:
+    \`order: \${qty} x \${drink}\`;
+  { type: "error", reason: const reason }:
+    \`error: \${reason}\`;
+  { type: const type }:
+    \`event: \${type}\`;
+  default:
+    "unknown event";
+};
+
+console.log(describe({ type: "order", items: ["espresso", 2] }));
+console.log(describe({ type: "error", reason: "beans unavailable" }));
+console.log(describe({ type: "tick" }));
+
+const orders = [
+  { total: 7,  customer: "Ada" },
+  { total: 14, customer: "Lin" },
+  { status: "draft" },
+];
+
+for (const order is { total: const total } if (total > 10) of orders) {
+  console.log("Large order:", order.customer, total);
+}`,
+  },
+  {
+    id: "test-runner",
+    label: "Test runner — describe / test / expect",
+    desc: "GocciaTestRunner globals for suites, assertions, and runner output.",
+    runner: "test",
+    code: `// Runs with GocciaTestRunner, so describe/test/expect are available.
+const menu = [
+  { name: "espresso", price: 2.5 },
+  { name: "latte", price: 4 },
+  { name: "cortado", price: 3.5 },
+];
+
+const totalFor = (names) =>
+  names
+    .map((name) => menu.find((item) => item.name === name)?.price ?? 0)
+    .reduce((sum, price) => sum + price, 0);
+
+describe("coffee order helpers", () => {
+  test("calculates an order total", () => {
+    expect(totalFor(["espresso", "latte"])).toBe(6.5);
+    expect(totalFor(["unknown"])).toBe(0);
+  });
+
+  test("filters orders with pattern matching", () => {
+    const orders = [
+      { customer: "Ada", total: 7 },
+      { customer: "Lin", total: 14 },
+      { status: "draft" },
+    ];
+    const large = [];
+
+    for (const order is { total: const total } if (total > 10) of orders) {
+      large.push(\`\${order.customer}:\${total}\`);
+    }
+
+    expect(large).toEqual(["Lin:14"]);
+  });
+
+  test("calculates a single item order", () => {
+    expect(totalFor(["espresso"])).toBe(2.5);
+  });
+});`,
   },
   {
     id: "coffee",
@@ -262,24 +371,28 @@ console.log("decoded:", new TextDecoder().decode(bytes));`,
   {
     id: "decorators",
     label: "Decorators — class members",
-    desc: "Stage-3 decorators on class methods — in this case, a simple @memoize and @log.",
+    desc: "Stage-3 decorators using object notation wrappers.",
     code: `const log = (value, context) => {
-  return function (...args) {
-    console.log(\`→ \${context.name}(\${args.join(", ")})\`);
-    const result = value.apply(this, args);
-    console.log(\`← \${result}\`);
-    return result;
-  };
+  return ({
+    [context.name](...args) {
+      console.log(\`→ \${context.name}(\${args.join(", ")})\`);
+      const result = value.apply(this, args);
+      console.log(\`← \${result}\`);
+      return result;
+    },
+  })[context.name];
 };
 
 const memoize = (value, context) => {
   const cache = new Map();
-  return function (arg) {
-    if (cache.has(arg)) return cache.get(arg);
-    const result = value.call(this, arg);
-    cache.set(arg, result);
-    return result;
-  };
+  return ({
+    [context.name](arg) {
+      if (cache.has(arg)) return cache.get(arg);
+      const result = value.call(this, arg);
+      cache.set(arg, result);
+      return result;
+    },
+  })[context.name];
 };
 
 class Math2 {
@@ -339,7 +452,7 @@ console.log("First 10 fib:", seq);`,
   },
 ];
 
-export const AUTOCOMPLETE_TOKENS = [
+const DEFAULT_TOKENS = [
   "const",
   "let",
   "if",
@@ -371,6 +484,12 @@ export const AUTOCOMPLETE_TOKENS = [
   "typeof",
   "instanceof",
   "yield",
+  "yield*",
+  "match",
+  "when",
+  "and",
+  "or",
+  "is",
   "enum",
   "type",
   "interface",
@@ -455,3 +574,41 @@ export const AUTOCOMPLETE_TOKENS = [
   "TSV.parse",
   "JSONL.parse",
 ];
+
+const TEST_TOKENS = [
+  "describe",
+  "describe.only",
+  "describe.skip",
+  "test",
+  "test.only",
+  "test.skip",
+  "it",
+  "it.only",
+  "it.skip",
+  "expect",
+  "toBe",
+  "toEqual",
+  "toThrow",
+];
+
+const COMPAT_TOKENS = {
+  var: ["var"],
+  function: ["function", "function*"],
+} as const;
+
+export function buildAutocompleteTokens({
+  runner,
+  compatVar,
+  compatFunction,
+}: {
+  runner: "execute" | "test";
+  compatVar: boolean;
+  compatFunction: boolean;
+}) {
+  return [
+    ...DEFAULT_TOKENS,
+    ...(runner === "test" ? TEST_TOKENS : []),
+    ...(compatVar ? COMPAT_TOKENS.var : []),
+    ...(compatFunction ? COMPAT_TOKENS.function : []),
+  ];
+}
