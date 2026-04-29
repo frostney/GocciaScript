@@ -96,6 +96,9 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader --mode=bytecode
 
 # Emit structured JSON for programmatic consumers
 printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=json
+# Emit a smaller JSON envelope without build, memory, stdout, or stderr.
+# Console output remains in the normalized `output` array; errors stay in `error`.
+printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=compact-json
 
 # Inject globals from the CLI
 printf "x + y;" | ./build/GocciaScriptLoader --global x=10 --global y=20

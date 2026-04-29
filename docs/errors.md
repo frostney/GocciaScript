@@ -7,7 +7,7 @@
 - **Error types** -- `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, plus `TimeoutError` for the `--timeout` flag
 - **Parser errors** -- Displayed with source context, a caret pointing to the exact column, and optional suggestion text (e.g., "Use 'let' or 'const' instead")
 - **Runtime errors** -- Carry `name`, `message`, `stack`, and optional `cause`; catchable with `try`/`catch`/`finally`
-- **JSON output** -- `--output=json` wraps every execution result in a structured envelope with `ok`, `error.type`, `error.message`, `error.line`, and `error.column`
+- **JSON output** -- `--output=json` wraps every execution result in a structured envelope with `ok`, `error.type`, `error.message`, `error.line`, and `error.column`. `--output=compact-json` produces the same envelope without the `build`, `memory`, `stdout`, or `stderr` fields, leaving only the normalized `output` array and structured `error` for console output
 - **`Error.cause`** -- All error constructors accept an options bag with a `cause` property for error chaining (ES2022+)
 
 ## Error Types
@@ -438,6 +438,42 @@ When running with `--output=json`, GocciaScript wraps every execution result in 
 | `files` | `object[]` | Per-input results. Single-file runs use the same structure with one element |
 | `files[].fileName` | `string` | Input file path or `<stdin>` |
 | `files[].result` | any | The script completion value for that input. Serializes as `null` for both errors and JavaScript `undefined`; use `files[].ok` and `files[].error` to distinguish those cases. |
+
+### Compact JSON Output
+
+`--output=compact-json` emits the same envelope as `--output=json` with the `build`, `memory`, `stdout`, and `stderr` fields omitted at both the top level and per-file. All console output is still available through the normalized `output` array (lines from `console.log`/`info`/`debug` and prefixed lines like `Error: ...` or `Warning: ...` from `console.error`/`warn`); script errors remain available through the structured `error` object. Use this format when you do not need build identity, memory measurements, or the raw stdout/stderr split — and want a smaller payload.
+
+```json
+{
+  "ok": true,
+  "output": ["hello", "Error: oops"],
+  "error": null,
+  "timing": {
+    "lex_ns": 500000,
+    "parse_ns": 1200000,
+    "compile_ns": 0,
+    "exec_ns": 3100000,
+    "total_ns": 4800000
+  },
+  "workers": { "used": 1, "available": 1, "parallel": false },
+  "files": [
+    {
+      "fileName": "script.js",
+      "ok": true,
+      "output": ["hello", "Error: oops"],
+      "error": null,
+      "result": 42,
+      "timing": {
+        "lex_ns": 500000,
+        "parse_ns": 1200000,
+        "compile_ns": 0,
+        "exec_ns": 3100000,
+        "total_ns": 4800000
+      }
+    }
+  ]
+}
+```
 
 ### TimeoutError in JSON
 

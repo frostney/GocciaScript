@@ -102,6 +102,10 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader --mode=bytecode
 printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=json
 # The JSON envelope includes build metadata, aggregate stdout/stderr,
 # formatted output lines, timing, memory, workers, and per-input files[].
+# Use --output=compact-json for a smaller envelope: build, memory, stdout, and
+# stderr are omitted; the normalized `output` array and structured `error`
+# are preserved.
+printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=compact-json
 
 # Inject globals from the CLI
 printf "x + y;" | ./build/GocciaScriptLoader --global x=10 --global y=20

@@ -220,6 +220,95 @@ console.log("Loader: JSON source-load failure stays per-file...");
   }
 }
 
+console.log("Loader: compact-json omits build, memory, stdout, stderr...");
+{
+  const proc = Bun.spawnSync([LOADER, "--output=compact-json"], {
+    stdin: new TextEncoder().encode("console.log('hi'); console.error('warn'); 2 + 2;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`compact-json exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  const json = JSON.parse(proc.stdout.toString());
+  if ("build" in json) throw new Error("compact-json should omit top-level build");
+  if ("memory" in json) throw new Error("compact-json should omit top-level memory");
+  if ("stdout" in json) throw new Error("compact-json should omit top-level stdout");
+  if ("stderr" in json) throw new Error("compact-json should omit top-level stderr");
+  if (json.ok !== true) throw new Error(`compact-json ok should be true, got ${json.ok}`);
+  if (!Array.isArray(json.output)) throw new Error("compact-json output should be an array");
+  if (!json.output.includes("hi") || !json.output.includes("Error: warn")) {
+    throw new Error(`compact-json output should preserve normalized lines, got ${JSON.stringify(json.output)}`);
+  }
+  if (json.error !== null) throw new Error("compact-json error should be null");
+  if (typeof json.timing?.total_ns !== "number") throw new Error("compact-json timing should be present");
+  if (typeof json.workers?.used !== "number") throw new Error("compact-json workers should be present");
+  if (!Array.isArray(json.files) || json.files.length !== 1) throw new Error("compact-json files should have one entry");
+  const file = json.files[0];
+  if ("memory" in file) throw new Error("compact-json per-file memory should be omitted");
+  if ("stdout" in file) throw new Error("compact-json per-file stdout should be omitted");
+  if ("stderr" in file) throw new Error("compact-json per-file stderr should be omitted");
+  if (file.fileName !== "<stdin>") throw new Error(`compact-json fileName should be <stdin>, got ${file.fileName}`);
+  if (file.result !== 4) throw new Error(`compact-json file result should be 4, got ${file.result}`);
+  if (typeof file.timing?.total_ns !== "number") throw new Error("compact-json per-file timing should be present");
+}
+
+console.log("Loader: compact-json error path omits build, memory, stdout, stderr...");
+{
+  const proc = Bun.spawnSync([LOADER, "--output=compact-json"], {
+    stdin: new TextEncoder().encode("throw new Error('boom');\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode === 0) throw new Error("compact-json error path should set non-zero exit code");
+  const json = JSON.parse(proc.stdout.toString());
+  if ("build" in json) throw new Error("compact-json error should omit top-level build");
+  if ("memory" in json) throw new Error("compact-json error should omit top-level memory");
+  if ("stdout" in json) throw new Error("compact-json error should omit top-level stdout");
+  if ("stderr" in json) throw new Error("compact-json error should omit top-level stderr");
+  if (json.ok !== false) throw new Error(`compact-json error ok should be false, got ${json.ok}`);
+  if (json.error?.type !== "Error") throw new Error(`compact-json error type should be Error, got ${json.error?.type}`);
+  if (json.error?.message !== "boom") throw new Error(`compact-json error message should be boom, got ${json.error?.message}`);
+  const file = json.files?.[0];
+  if (!file) throw new Error("compact-json error should still include per-file entry");
+  if ("memory" in file) throw new Error("compact-json error per-file memory should be omitted");
+  if ("stdout" in file) throw new Error("compact-json error per-file stdout should be omitted");
+  if ("stderr" in file) throw new Error("compact-json error per-file stderr should be omitted");
+  if (file.ok !== false) throw new Error(`compact-json error per-file ok should be false, got ${file.ok}`);
+  if (file.result !== null) throw new Error(`compact-json error per-file result should be null, got ${file.result}`);
+}
+
+console.log("Loader: compact-json multi-file omits build, memory, stdout, stderr...");
+{
+  const tmp = makeTmp();
+  try {
+    const first = join(tmp, "first.js");
+    const second = join(tmp, "second.js");
+    writeFileSync(first, "11;\n");
+    writeFileSync(second, "22;\n");
+
+    const proc = Bun.spawnSync([LOADER, "--output=compact-json", "--jobs=2", first, second], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`compact-json multi-file exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const json = JSON.parse(proc.stdout.toString());
+    if ("build" in json) throw new Error("compact-json multi-file should omit top-level build");
+    if ("memory" in json) throw new Error("compact-json multi-file should omit top-level memory");
+    if ("stdout" in json) throw new Error("compact-json multi-file should omit top-level stdout");
+    if ("stderr" in json) throw new Error("compact-json multi-file should omit top-level stderr");
+    if (!Array.isArray(json.files) || json.files.length !== 2) throw new Error("compact-json multi-file should have two entries");
+    for (const [idx, file] of (json.files as any[]).entries()) {
+      if ("memory" in file) throw new Error(`compact-json multi-file files[${idx}] memory should be omitted`);
+      if ("stdout" in file) throw new Error(`compact-json multi-file files[${idx}] stdout should be omitted`);
+      if ("stderr" in file) throw new Error(`compact-json multi-file files[${idx}] stderr should be omitted`);
+    }
+    if (json.files[0].result !== 11) throw new Error(`compact-json multi-file first result should be 11, got ${json.files[0].result}`);
+    if (json.files[1].result !== 22) throw new Error(`compact-json multi-file second result should be 22, got ${json.files[1].result}`);
+    if (json.workers?.used !== 2) throw new Error(`compact-json multi-file workers.used should be 2, got ${json.workers?.used}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Loader: parallel human-readable output preserves console output...");
 {
   const tmp = makeTmp();
