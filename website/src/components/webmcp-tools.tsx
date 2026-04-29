@@ -1,15 +1,11 @@
 "use client";
 
 import { useEffect } from "react";
-import { gocciaRunInputSchema } from "@/lib/goccia-tool-schema";
-
-type GocciaToolInput = {
-  code?: unknown;
-  mode?: unknown;
-  asi?: unknown;
-  compatVar?: unknown;
-  compatFunction?: unknown;
-};
+import {
+  type GocciaToolInput,
+  gocciaRunInputSchema,
+  validateGocciaToolInput,
+} from "@/lib/goccia-tool-schema";
 
 type ModelContextTool = {
   name: string;
@@ -34,14 +30,6 @@ type ModelContext = {
   clearContext?: () => void | Promise<void>;
 };
 
-type GocciaToolPayload = {
-  code: string;
-  mode: "interpreted" | "bytecode";
-  asi: boolean;
-  compatVar: boolean;
-  compatFunction: boolean;
-};
-
 declare global {
   interface Navigator {
     modelContext?: ModelContext;
@@ -55,37 +43,20 @@ function modelContextError(action: string, err: unknown) {
   );
 }
 
-function normalizePayload(input: GocciaToolInput): GocciaToolPayload {
-  const code = typeof input.code === "string" ? input.code : "";
-  if (!code) throw new Error("code is required");
-
-  return {
-    code,
-    mode: input.mode === "bytecode" ? "bytecode" : "interpreted",
-    asi: typeof input.asi === "boolean" ? input.asi : true,
-    compatVar: input.compatVar === true,
-    compatFunction: input.compatFunction === true,
-  };
-}
-
 async function callGocciaApi(
   endpoint: "/api/execute" | "/api/test",
   input: GocciaToolInput,
 ) {
-  let payload: GocciaToolPayload;
-  try {
-    payload = normalizePayload(input);
-  } catch (err) {
+  const parsed = validateGocciaToolInput(input);
+  if (!parsed.ok) {
     return {
       endpoint,
       ok: false,
       status: null,
-      error: {
-        code: "INVALID_INPUT",
-        message: err instanceof Error ? err.message : String(err),
-      },
+      error: parsed.error,
     };
   }
+  const payload = parsed.value;
 
   let response: Response;
   try {

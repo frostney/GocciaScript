@@ -1,5 +1,86 @@
 export const MAX_GOCCIA_CODE_BYTES = 8 * 1024;
 
+export type GocciaToolPayload = {
+  code: string;
+  mode: "interpreted" | "bytecode";
+  asi: boolean;
+  compatVar: boolean;
+  compatFunction: boolean;
+};
+
+export type GocciaToolInput = {
+  code?: unknown;
+  mode?: unknown;
+  asi?: unknown;
+  compatVar?: unknown;
+  compatFunction?: unknown;
+};
+
+export type GocciaToolValidationResult =
+  | { ok: true; value: GocciaToolPayload }
+  | {
+      ok: false;
+      error: {
+        code: "INVALID_INPUT" | "CODE_TOO_LARGE";
+        message: string;
+      };
+    };
+
+export function utf8ByteLength(value: string) {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+export function validateGocciaToolInput(
+  input: GocciaToolInput,
+): GocciaToolValidationResult {
+  const code = typeof input.code === "string" ? input.code : "";
+  if (!code) {
+    return {
+      ok: false,
+      error: {
+        code: "INVALID_INPUT",
+        message: "code is required",
+      },
+    };
+  }
+
+  const codeBytes = utf8ByteLength(code);
+  if (codeBytes > MAX_GOCCIA_CODE_BYTES) {
+    return {
+      ok: false,
+      error: {
+        code: "CODE_TOO_LARGE",
+        message: `code exceeds ${MAX_GOCCIA_CODE_BYTES} bytes`,
+      },
+    };
+  }
+
+  if (
+    input.mode !== undefined &&
+    input.mode !== "interpreted" &&
+    input.mode !== "bytecode"
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "INVALID_INPUT",
+        message: "mode must be interpreted or bytecode",
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      code,
+      mode: input.mode === "bytecode" ? "bytecode" : "interpreted",
+      asi: typeof input.asi === "boolean" ? input.asi : true,
+      compatVar: input.compatVar === true,
+      compatFunction: input.compatFunction === true,
+    },
+  };
+}
+
 export function gocciaRunInputSchema() {
   return {
     type: "object",
