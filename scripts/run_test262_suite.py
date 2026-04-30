@@ -681,7 +681,37 @@ def evaluate_suite(
                     #   can both forward it live to this script's stderr AND
                     #   capture it for fallback diagnostic display when the
                     #   runner exits without a parseable JSON report.
+                    # A hard timeout backs up the runner's cooperative
+                    # --timeout/--test-timeout: those are honoured by the
+                    # bytecode dispatch loop, but a worker thread stuck in
+                    # native Pascal code can ignore them.  Without this
+                    # ceiling, process.wait() blocks indefinitely and the
+                    # whole CI job hangs at the GH-hosted timeout-minutes
+                    # ceiling — exactly what we saw before chunked
+                    # execution.  Override via TEST262_RUNNER_TIMEOUT_S
+                    # (seconds); 0 disables the hard ceiling.
+                    runner_timeout_default = 600
+                    runner_timeout = int(os.environ.get(
+                        "TEST262_RUNNER_TIMEOUT_S",
+                        str(runner_timeout_default),
+                    ))
                     captured_stderr_chunks: list[str] = []
+                    process: subprocess.Popen | None = None
+                    stderr_thread: threading.Thread | None = None
+
+                    def _flush_runner_state() -> None:
+                        nonlocal runner_output
+                        runner_output = (
+                            "".join(captured_stderr_chunks).strip())
+                        if (process_returncode != 0
+                                and runner_output):
+                            try:
+                                (debug_dir
+                                 / "last_runner_stderr.txt"
+                                 ).write_text(runner_output)
+                            except OSError:
+                                pass
+
                     try:
                         process = subprocess.Popen(
                             runner_cmd,
@@ -694,6 +724,7 @@ def evaluate_suite(
                         )
 
                         def _drain_stderr() -> None:
+                            assert process is not None
                             assert process.stderr is not None
                             for line in process.stderr:
                                 sys.stderr.write(line)
@@ -704,20 +735,49 @@ def evaluate_suite(
                             target=_drain_stderr, daemon=True
                         )
                         stderr_thread.start()
-                        process.wait()
+                        try:
+                            wait_timeout = (
+                                runner_timeout
+                                if runner_timeout > 0 else None)
+                            process.wait(timeout=wait_timeout)
+                        except subprocess.TimeoutExpired:
+                            print(
+                                f"  Runner exceeded "
+                                f"TEST262_RUNNER_TIMEOUT_S="
+                                f"{runner_timeout}s; terminating"
+                            )
+                            try:
+                                process.terminate()
+                                process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                process.kill()
+                                process.wait()
                         stderr_thread.join(timeout=5)
 
                         process_returncode = process.returncode
-                        runner_output = "".join(captured_stderr_chunks).strip()
-                        if process_returncode != 0 and runner_output:
-                            try:
-                                (debug_dir / "last_runner_stderr.txt").write_text(
-                                    runner_output
-                                )
-                            except OSError:
-                                pass
+                        _flush_runner_state()
                     except Exception as e:  # noqa: BLE001
                         runner_output = f"Runner invocation failed: {e}"
+                        # Don't leave the runner orphaned on this script's
+                        # exit path: terminate it and drain stderr so
+                        # diagnostic state still lands in
+                        # last_runner_stderr.txt.
+                        if (process is not None
+                                and process.poll() is None):
+                            try:
+                                process.terminate()
+                                process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                process.kill()
+                                process.wait()
+                        if stderr_thread is not None:
+                            stderr_thread.join(timeout=5)
+                        if process is not None:
+                            process_returncode = (
+                                process.returncode
+                                if process.returncode is not None
+                                else -1)
+                        _flush_runner_state()
 
                     tr_results: dict | None = None
                     if json_output.is_file():

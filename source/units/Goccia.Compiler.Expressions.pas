@@ -818,9 +818,16 @@ begin
     // bound as operand C so the VM can stop calling next() once the
     // pattern is satisfied — otherwise an iterator whose next() always
     // returns done:false (e.g. test262's named-dflt-ary-init-iter-close
-    // pattern) allocates unboundedly during destructuring.  Bound 0
-    // signals unbounded; counts above 255 also fall back to unbounded
-    // since C is a UInt8 (such patterns are exceptional in practice).
+    // pattern) allocates unboundedly during destructuring.
+    //
+    // Operand C encoding (UInt8):
+    //   0..254   = exact bound (0 means "consume zero elements" — empty
+    //              array pattern `const [] = iter` per spec);
+    //   255      = unbounded (rest pattern present, or pattern length
+    //              exceeds what C can represent).
+    // The 255 sentinel separates "empty fixed pattern" from "unbounded";
+    // collapsing both to 0 would silently drain the iterator on
+    // `const [] = iter` instead of consuming nothing then closing.
     HasRest := False;
     for I := 0 to ArrPat.Elements.Count - 1 do
       if Assigned(ArrPat.Elements[I]) and
@@ -829,8 +836,8 @@ begin
         HasRest := True;
         Break;
       end;
-    if HasRest or (ArrPat.Elements.Count > 255) then
-      Limit := 0
+    if HasRest or (ArrPat.Elements.Count >= ITERABLE_LIMIT_UNBOUNDED) then
+      Limit := ITERABLE_LIMIT_UNBOUNDED
     else
       Limit := ArrPat.Elements.Count;
 

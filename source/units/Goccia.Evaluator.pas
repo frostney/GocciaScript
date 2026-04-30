@@ -4548,7 +4548,15 @@ begin
     end
     else
     begin
-      // Generic iterable fallback
+      // Generic iterable fallback.  Same IteratorClose contract as
+      // AssignArrayPattern (ES2024 §8.5.3 IteratorBindingInitialization
+      // step 4 / §7.4.10 IteratorClose):
+      //   - normal completion → CloseIterator (errors from iter.return()
+      //     propagate as the new completion);
+      //   - abrupt completion → CloseIteratorPreservingError (the
+      //     original abrupt completion wins).
+      // RestElements is also temp-rooted across AdvanceNext so a
+      // re-entrant GC can't reclaim it mid-drain.
       Iterator := GetIteratorFromValue(AValue);
       if not Assigned(Iterator) then
         ThrowTypeError(
@@ -4556,37 +4564,48 @@ begin
           SSuggestDestructureRequiresIterable);
       TGarbageCollector.Instance.AddTempRoot(Iterator);
       try
-        for I := 0 to ArrPat.Elements.Count - 1 do
-        begin
-          if ArrPat.Elements[I] = nil then
+        try
+          for I := 0 to ArrPat.Elements.Count - 1 do
           begin
-            Iterator.AdvanceNext;
-            Continue;
-          end;
-          if ArrPat.Elements[I] is TGocciaRestDestructuringPattern then
-          begin
-            RestElements := TGocciaArrayValue.Create;
-            IterResult := Iterator.AdvanceNext;
-            while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+            if ArrPat.Elements[I] = nil then
             begin
-              RestElements.Elements.Add(IterResult.GetProperty(PROP_VALUE));
-              IterResult := Iterator.AdvanceNext;
+              Iterator.AdvanceNext;
+              Continue;
             end;
-            AssignVariablePattern(
-              TGocciaRestDestructuringPattern(ArrPat.Elements[I]).Argument,
-              RestElements, AContext);
-            Break;
-          end
-          else
-          begin
-            IterResult := Iterator.AdvanceNext;
-            if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
-              ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
+            if ArrPat.Elements[I] is TGocciaRestDestructuringPattern then
+            begin
+              RestElements := TGocciaArrayValue.Create;
+              TGarbageCollector.Instance.AddTempRoot(RestElements);
+              try
+                IterResult := Iterator.AdvanceNext;
+                while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+                begin
+                  RestElements.Elements.Add(IterResult.GetProperty(PROP_VALUE));
+                  IterResult := Iterator.AdvanceNext;
+                end;
+                AssignVariablePattern(
+                  TGocciaRestDestructuringPattern(ArrPat.Elements[I]).Argument,
+                  RestElements, AContext);
+              finally
+                TGarbageCollector.Instance.RemoveTempRoot(RestElements);
+              end;
+              Break;
+            end
             else
-              ElementValue := IterResult.GetProperty(PROP_VALUE);
-            AssignVariablePattern(ArrPat.Elements[I], ElementValue, AContext);
+            begin
+              IterResult := Iterator.AdvanceNext;
+              if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+                ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
+              else
+                ElementValue := IterResult.GetProperty(PROP_VALUE);
+              AssignVariablePattern(ArrPat.Elements[I], ElementValue, AContext);
+            end;
           end;
+        except
+          CloseIteratorPreservingError(Iterator);
+          raise;
         end;
+        CloseIterator(Iterator);
       finally
         TGarbageCollector.Instance.RemoveTempRoot(Iterator);
       end;
@@ -4748,14 +4767,24 @@ begin
 
           if APattern.Elements[I] is TGocciaRestDestructuringPattern then
           begin
+            // Iterator.AdvanceNext re-enters the engine (calls user
+            // next()), which can trigger GC.  Temp-root RestElements
+            // for the duration of the drain so a re-entrant collection
+            // can't reclaim it.  The root is removed once AssignPattern
+            // has stored the array into a reachable binding.
             RestElements := TGocciaArrayValue.Create;
-            IterResult := Iterator.AdvanceNext;
-            while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
-            begin
-              RestElements.Elements.Add(IterResult.GetProperty(PROP_VALUE));
+            TGarbageCollector.Instance.AddTempRoot(RestElements);
+            try
               IterResult := Iterator.AdvanceNext;
+              while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+              begin
+                RestElements.Elements.Add(IterResult.GetProperty(PROP_VALUE));
+                IterResult := Iterator.AdvanceNext;
+              end;
+              AssignPattern(TGocciaRestDestructuringPattern(APattern.Elements[I]).Argument, RestElements, AContext, AIsDeclaration, ADeclarationType);
+            finally
+              TGarbageCollector.Instance.RemoveTempRoot(RestElements);
             end;
-            AssignPattern(TGocciaRestDestructuringPattern(APattern.Elements[I]).Argument, RestElements, AContext, AIsDeclaration, ADeclarationType);
             Break;
           end
           else

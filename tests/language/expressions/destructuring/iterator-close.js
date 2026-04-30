@@ -6,6 +6,30 @@ description: Array destructuring stops iterating after consuming the bound
 features: [destructuring, iterators]
 ---*/
 
+test("[] consumes zero elements and immediately closes the iterator", () => {
+  // ES2024 §8.5.3 IteratorBindingInitialization with an empty
+  // BindingElementList: no element is consumed, but IteratorClose
+  // (step 4) still runs.  Important for the bytecode VM, where the
+  // ITERABLE_LIMIT_UNBOUNDED sentinel separates "consume zero" from
+  // "drain entirely" — collapsing the two would silently iterate the
+  // (potentially infinite) iterator on `const [] = iter`.
+  let nextCalls = 0;
+  let returnCalls = 0;
+  const iter = {
+    [Symbol.iterator]() {
+      return {
+        next() { nextCalls++; return { value: nextCalls, done: false }; },
+        return() { returnCalls++; return { value: undefined, done: true }; }
+      };
+    }
+  };
+
+  const [] = iter;
+
+  expect(nextCalls).toBe(0);
+  expect(returnCalls).toBe(1);
+});
+
 test("[a, b] consumes exactly two elements then closes the iterator", () => {
   let nextCalls = 0;
   let returnCalls = 0;
@@ -194,19 +218,25 @@ test("errors thrown by iter.return() propagate to the caller (normal completion)
   // ES2024 §7.4.10 IteratorClose step 5: when destructuring completes
   // normally, errors from iter.return() become the new completion and
   // must propagate.  This test would have silently swallowed the throw
-  // before the IteratorClose semantics were corrected.
+  // before the IteratorClose semantics were corrected.  Asserts on the
+  // specific message so an unrelated TypeError can't satisfy the test.
   const iter = {
     [Symbol.iterator]() {
       return {
         next() { return { value: 1, done: false }; },
-        return() { throw new Error('return failed'); }
+        return() { throw new Error('iter.return boom'); }
       };
     }
   };
 
-  expect(() => {
+  let caught = null;
+  try {
     const [x] = iter;
-  }).toThrow(Error);
+  } catch (e) {
+    caught = e;
+  }
+  expect(caught).not.toBe(null);
+  expect(caught.message).toBe('iter.return boom');
 });
 
 test("iter.return() is invoked when destructuring throws (abrupt completion)", () => {

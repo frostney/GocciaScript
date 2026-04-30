@@ -20,6 +20,12 @@ const
   VALIDATE_OP_REQUIRE_OBJECT = 0;
   VALIDATE_OP_REQUIRE_ITERABLE = 1;
 
+  // Sentinel for the C operand of OP_VALIDATE_VALUE / VALIDATE_OP_REQUIRE_ITERABLE.
+  // 0..254 = exact element count to consume (0 = empty pattern, drain
+  //          nothing then close); 255 = unbounded (rest pattern present
+  //          or pattern length exceeds the encoding range).
+  ITERABLE_LIMIT_UNBOUNDED = 255;
+
   MIN_SBX: Int16 = -32768;
   MAX_SBX: Int16 = 32767;
 

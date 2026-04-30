@@ -110,9 +110,16 @@ type
       out AIndex: Integer): Boolean;
     function KeyToPropertyName(const AKey: TGocciaValue): string;
     function KeyToPropertyNameRegister(const AKey: TGocciaRegister): string;
+    // ALimit semantics:
+    //   ALimit < 0 → unbounded (drain until iterator returns done:true);
+    //   ALimit = 0 → consume zero elements (used for `const [] = iter`);
+    //   ALimit > 0 → consume exactly ALimit elements then close.
+    // Default is unbounded so existing spread / Iterator.from / rest
+    // call sites preserve their historical behaviour without explicit
+    // arguments.
     function IterableToArray(const AIterable: TGocciaValue;
       const ATryAsync: Boolean = False;
-      const ALimit: Integer = 0): TGocciaArrayValue;
+      const ALimit: Integer = -1): TGocciaArrayValue;
     function TryIterableToArray(const AIterable: TGocciaValue;
       out AArray: TGocciaArrayValue): Boolean;
     procedure SpreadObjectIntoValue(const ATarget: TGocciaObjectValue;
@@ -3849,15 +3856,17 @@ end;
 
 // IteratorClose for the raw-object form returned by GetIteratorValue
 // when the source supplies its own iterator (i.e. an object with next()
-// rather than a TGocciaIteratorValue).  This is the normal-completion
-// variant per ES2024 §7.4.10 step 5: errors from iter.return()
-// propagate to the caller as the new completion.  Use this on success
-// paths only.  Missing/undefined/null/non-callable return methods are
-// silently ignored per §7.4.10 step 3.b ("if return is undefined,
-// return the completion as-is").
+// rather than a TGocciaIteratorValue).  Normal-completion variant per
+// ES2024 §7.4.10 IteratorClose:
+//   - step 3.b: if `return` is missing/undefined/null, return the
+//     completion as-is (only these three values skip silently —
+//     non-callable returns are an error);
+//   - step 3.c: call return; errors propagate;
+//   - step 3.d: validate the result is an Object on normal completion;
+//     a primitive result is a TypeError.
 procedure CloseRawIterator(const AIteratorObject: TGocciaValue);
 var
-  ReturnMethod: TGocciaValue;
+  ReturnMethod, ReturnResult: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
 begin
   if not Assigned(AIteratorObject) then
@@ -3870,17 +3879,31 @@ begin
   if not (AIteratorObject is TGocciaObjectValue) then
     Exit;
   ReturnMethod := AIteratorObject.GetProperty(PROP_RETURN);
+  // §7.4.10 step 3.b: only missing/undefined/null skip.
   if not Assigned(ReturnMethod) or
      (ReturnMethod is TGocciaUndefinedLiteralValue) or
-     (ReturnMethod is TGocciaNullLiteralValue) or
-     not ReturnMethod.IsCallable then
+     (ReturnMethod is TGocciaNullLiteralValue) then
     Exit;
+  // §7.4.10 step 3.c (implicit): a present-but-non-callable `return`
+  // is a TypeError, not a silent no-op.
+  if not ReturnMethod.IsCallable then
+    ThrowTypeError(SErrorIteratorReturnMustBeCallable,
+      SSuggestIteratorProtocol);
   CallArgs := TGocciaArgumentsCollection.Create;
   try
-    TGocciaFunctionBase(ReturnMethod).Call(CallArgs, AIteratorObject);
+    ReturnResult := TGocciaFunctionBase(ReturnMethod).Call(
+      CallArgs, AIteratorObject);
   finally
     CallArgs.Free;
   end;
+  // §7.4.10 step 3.d: on normal completion, the IteratorResult must be
+  // an Object.  Primitive results (including undefined, numbers, etc.)
+  // are a TypeError.
+  if (ReturnResult is TGocciaUndefinedLiteralValue)
+      or (ReturnResult is TGocciaNullLiteralValue)
+      or ReturnResult.IsPrimitive then
+    ThrowTypeError(SErrorIteratorReturnObject,
+      SSuggestIteratorResultObject);
 end;
 
 function TGocciaVM.IterableToArray(const AIterable: TGocciaValue;
@@ -3892,75 +3915,118 @@ var
   NextResult: TGocciaValue;
   DoneValue: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
+  GC: TGarbageCollector;
+  ArrayRooted, IteratorRooted: Boolean;
 begin
   Result := TGocciaArrayValue.Create;
-  IteratorValue := GetIteratorValue(AIterable, ATryAsync);
-  if IteratorValue is TGocciaIteratorValue then
+  // The materialised array and any newly-synthesised iterator wrapper
+  // must outlive the consume/close re-entry into JS land: DirectNext
+  // calls user next(), AwaitValue may pump microtasks, CloseIterator /
+  // CloseRawIterator invoke user return().  Each of those can trigger a
+  // GC sweep, and if `Result` or a fresh `IteratorValue` aren't on the
+  // root set, they can be reclaimed mid-flight.  Mirrors the rooting
+  // already done in TryIterableToArray below.
+  GC := TGarbageCollector.Instance;
+  ArrayRooted := False;
+  IteratorRooted := False;
+  if Assigned(GC) then
   begin
-    // ES2024 §8.5.3 IteratorBindingInitialization: when an array binding
-    // pattern has no rest element, the iterator must be consumed for
-    // exactly N elements and then closed via IteratorClose (which calls
-    // iter.return() on the underlying generic iterator).  ALimit > 0
-    // signals that bounded path; ALimit = 0 keeps the historical
-    // unbounded behaviour for spread, rest, and Iterator.from().  Without
-    // this bound, an iterator that returns done:false indefinitely
-    // allocates unboundedly during destructuring (test262
-    // language/expressions/async-generator/dstr/named-dflt-ary-init-iter-close.js
-    // and a long tail of ary-init-iter-close variants).
-    repeat
-      CheckExecutionTimeout;
-      CheckInstructionLimit;
-      NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
-      if not DoneFlag then
-        Result.Elements.Add(NextResult);
-      if (ALimit > 0) and (Result.Elements.Count >= ALimit) then
-      begin
-        // ES2024 §7.4.10 step 5: normal-completion IteratorClose lets
-        // errors from iter.return() propagate.  Use CloseIterator (not
-        // PreservingError) so test262 tests like Iterator.from →
-        // Iterator.prototype.return-throws are reported correctly.
-        if not DoneFlag then
-          CloseIterator(TGocciaIteratorValue(IteratorValue));
-        Exit;
-      end;
-    until DoneFlag;
-    Exit;
+    GC.AddTempRoot(Result);
+    ArrayRooted := True;
   end;
-
-  if IteratorValue is TGocciaObjectValue then
+  IteratorValue := GetIteratorValue(AIterable, ATryAsync);
+  if Assigned(GC) and Assigned(IteratorValue)
+      and (IteratorValue <> AIterable)
+      and (IteratorValue is TGocciaObjectValue) then
   begin
-    repeat
-      CheckExecutionTimeout;
-      CheckInstructionLimit;
-      NextMethod := IteratorValue.GetProperty(PROP_NEXT);
-      if not Assigned(NextMethod) or
-         (NextMethod is TGocciaUndefinedLiteralValue) or
-         not NextMethod.IsCallable then
-        Break;
-      CallArgs := AcquireArguments;
-      try
-        NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IteratorValue);
-      finally
-        ReleaseArguments(CallArgs);
-      end;
-      NextResult := AwaitValue(NextResult);
-      if NextResult.IsPrimitive then
-        ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.ToStringLiteral.Value]),
-          SSuggestIteratorResultObject);
-      DoneValue := NextResult.GetProperty(PROP_DONE);
-      DoneFlag := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
-      if not DoneFlag then
-        Result.Elements.Add(NextResult.GetProperty(PROP_VALUE));
-      if (ALimit > 0) and (Result.Elements.Count >= ALimit) then
+    GC.AddTempRoot(IteratorValue);
+    IteratorRooted := True;
+  end;
+  try
+    if IteratorValue is TGocciaIteratorValue then
+    begin
+      // ES2024 §8.5.3 IteratorBindingInitialization: when an array
+      // binding pattern has no rest element, the iterator must be
+      // consumed for exactly N elements and then closed via
+      // IteratorClose.  Without this bound, an iterator that returns
+      // done:false indefinitely allocates unboundedly during
+      // destructuring (test262 ary-init-iter-close cluster).
+      //
+      // ALimit semantics: <0 unbounded, 0 consume zero, >0 exact.  The
+      // ALimit = 0 case must close the iterator before the first
+      // next() call (per the spec, step 4 fires after zero
+      // BindingElementList iterations for an empty pattern).
+      if ALimit = 0 then
       begin
-        // ES2024 §7.4.10 step 5 (normal completion): errors from
-        // iter.return() propagate as the new completion.
-        if not DoneFlag then
-          CloseRawIterator(IteratorValue);
+        CloseIterator(TGocciaIteratorValue(IteratorValue));
         Exit;
       end;
-    until DoneFlag;
-    Exit;
+      repeat
+        CheckExecutionTimeout;
+        CheckInstructionLimit;
+        NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
+        if not DoneFlag then
+          Result.Elements.Add(NextResult);
+        if (ALimit > 0) and (Result.Elements.Count >= ALimit) then
+        begin
+          // ES2024 §7.4.10 step 5: normal-completion IteratorClose lets
+          // errors from iter.return() propagate.  Use CloseIterator (not
+          // PreservingError) so test262 tests like Iterator.from →
+          // Iterator.prototype.return-throws are reported correctly.
+          if not DoneFlag then
+            CloseIterator(TGocciaIteratorValue(IteratorValue));
+          Exit;
+        end;
+      until DoneFlag;
+      Exit;
+    end;
+
+    if IteratorValue is TGocciaObjectValue then
+    begin
+      // Same ALimit = 0 short-circuit as above.
+      if ALimit = 0 then
+      begin
+        CloseRawIterator(IteratorValue);
+        Exit;
+      end;
+      repeat
+        CheckExecutionTimeout;
+        CheckInstructionLimit;
+        NextMethod := IteratorValue.GetProperty(PROP_NEXT);
+        if not Assigned(NextMethod) or
+           (NextMethod is TGocciaUndefinedLiteralValue) or
+           not NextMethod.IsCallable then
+          Break;
+        CallArgs := AcquireArguments;
+        try
+          NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IteratorValue);
+        finally
+          ReleaseArguments(CallArgs);
+        end;
+        NextResult := AwaitValue(NextResult);
+        if NextResult.IsPrimitive then
+          ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.ToStringLiteral.Value]),
+            SSuggestIteratorResultObject);
+        DoneValue := NextResult.GetProperty(PROP_DONE);
+        DoneFlag := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
+        if not DoneFlag then
+          Result.Elements.Add(NextResult.GetProperty(PROP_VALUE));
+        if (ALimit > 0) and (Result.Elements.Count >= ALimit) then
+        begin
+          // ES2024 §7.4.10 step 5 (normal completion): errors from
+          // iter.return() propagate as the new completion.
+          if not DoneFlag then
+            CloseRawIterator(IteratorValue);
+          Exit;
+        end;
+      until DoneFlag;
+      Exit;
+    end;
+  finally
+    if IteratorRooted then
+      GC.RemoveTempRoot(IteratorValue);
+    if ArrayRooted then
+      GC.RemoveTempRoot(Result);
   end;
 end;
 
@@ -7910,14 +7976,22 @@ begin
             end;
 
           VALIDATE_OP_REQUIRE_ITERABLE:
-            // Operand C carries the iteration bound emitted by the
-            // compiler for array destructuring: 0 = unbounded (rest
-            // pattern present, or the bound exceeds 255), N > 0 = consume
-            // exactly N elements then close the iterator.  See
-            // EmitDestructuring for the producer side and the comment in
-            // IterableToArray for the spec rationale.
-            SetRegister(A, IterableToArray(RegisterToValue(FRegisters[A]),
-              False, C));
+            // Operand C is the iteration bound emitted by the compiler
+            // for array destructuring (see ITERABLE_LIMIT_UNBOUNDED in
+            // Goccia.Bytecode):
+            //   0..254  = exact element count to consume; 0 means
+            //             "consume zero elements" for `const [] = iter`
+            //             then close;
+            //   255     = unbounded (rest pattern present or pattern
+            //             length exceeds the encoding range).
+            // IterableToArray's ALimit uses -1 = unbounded, 0+ = exact
+            // count, so translate the sentinel here.
+            if C = ITERABLE_LIMIT_UNBOUNDED then
+              SetRegister(A, IterableToArray(RegisterToValue(FRegisters[A]),
+                False, -1))
+            else
+              SetRegister(A, IterableToArray(RegisterToValue(FRegisters[A]),
+                False, C));
         else
           raise Exception.CreateFmt('Unsupported validation mode: %d', [B]);
         end;
