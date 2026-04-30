@@ -679,6 +679,15 @@ begin
       begin
         if Operand is TGocciaSymbolValue then
           ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
+        // ES2026 §13.5.5 UnaryMinus — operand goes through ToNumeric,
+        // which is ToPrimitive then a BigInt? branch.  Apply
+        // ToPrimitive here so boxed BigInts (Object(1n)) unbox to
+        // their primitive and take the BigInt::unaryMinus path
+        // instead of being silently coerced to NaN by the boxed
+        // object's ToNumberLiteral.
+        Operand := ToPrimitive(Operand);
+        if Operand is TGocciaSymbolValue then
+          ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
         // ES2026 §6.1.6.2.1 BigInt::unaryMinus
         if Operand is TGocciaBigIntValue then
         begin
@@ -707,6 +716,13 @@ begin
       end;
     gttPlus:
     begin
+      if Operand is TGocciaSymbolValue then
+        ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
+      // ES2026 §13.5.4 UnaryPlus — ToNumber (ToPrimitive then a
+      // BigInt? throw).  Apply ToPrimitive here so boxed BigInts
+      // surface the spec-mandated TypeError instead of silently
+      // producing a number from the boxed object's coercion path.
+      Operand := ToPrimitive(Operand);
       if Operand is TGocciaSymbolValue then
         ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
       // ES2026 §7.1.4: unary + on BigInt throws TypeError

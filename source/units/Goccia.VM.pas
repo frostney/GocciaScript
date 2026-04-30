@@ -266,6 +266,7 @@ uses
   Goccia.Values.FunctionValue,
   Goccia.Values.HoleValue,
   Goccia.Values.Iterator.Concrete,
+  Goccia.Values.Iterator.Generic,
   Goccia.Values.IteratorSupport,
   Goccia.Values.IteratorValue,
   Goccia.Values.NativeFunction,
@@ -762,70 +763,105 @@ end;
 // x86_64 (cvttsd2si "indefinite") but 0 on aarch64; that single-instruction
 // difference accounted for ~22 test262 failures on Linux x86_64 CI that
 // passed on macOS arm64 / Linux aarch64.
+//
+// Operands also go through ToPrimitive first (returns the value
+// unchanged for primitives — fast path is one virtual IsPrimitive
+// call) so boxed BigInts (e.g. `Object(1n)`) unbox to their primitive
+// BigInt and take the BigInt branch instead of being silently coerced
+// to Number 0/-1 via the boxed object's ToNumberLiteral path.  Per
+// ES2026 §13.15.3 / §6.1.6.2 the IsBigInt? check applies to the
+// post-ToPrimitive value.
 
 function VMBitwiseAndValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+var
+  PrimLeft, PrimRight: TGocciaValue;
 begin
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.BitwiseAnd(TGocciaBigIntValue(ARight).Value)));
-  VMCheckBigIntMixed(ALeft, ARight);
-  Result := VMNumberValue(ToInt32Value(ALeft) and ToInt32Value(ARight));
+      TGocciaBigIntValue(PrimLeft).Value.BitwiseAnd(TGocciaBigIntValue(PrimRight).Value)));
+  VMCheckBigIntMixed(PrimLeft, PrimRight);
+  Result := VMNumberValue(ToInt32Value(PrimLeft) and ToInt32Value(PrimRight));
 end;
 
 function VMBitwiseOrValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+var
+  PrimLeft, PrimRight: TGocciaValue;
 begin
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.BitwiseOr(TGocciaBigIntValue(ARight).Value)));
-  VMCheckBigIntMixed(ALeft, ARight);
-  Result := VMNumberValue(ToInt32Value(ALeft) or ToInt32Value(ARight));
+      TGocciaBigIntValue(PrimLeft).Value.BitwiseOr(TGocciaBigIntValue(PrimRight).Value)));
+  VMCheckBigIntMixed(PrimLeft, PrimRight);
+  Result := VMNumberValue(ToInt32Value(PrimLeft) or ToInt32Value(PrimRight));
 end;
 
 function VMBitwiseXorValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+var
+  PrimLeft, PrimRight: TGocciaValue;
 begin
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.BitwiseXor(TGocciaBigIntValue(ARight).Value)));
-  VMCheckBigIntMixed(ALeft, ARight);
-  Result := VMNumberValue(ToInt32Value(ALeft) xor ToInt32Value(ARight));
+      TGocciaBigIntValue(PrimLeft).Value.BitwiseXor(TGocciaBigIntValue(PrimRight).Value)));
+  VMCheckBigIntMixed(PrimLeft, PrimRight);
+  Result := VMNumberValue(ToInt32Value(PrimLeft) xor ToInt32Value(PrimRight));
 end;
 
 function VMLeftShiftValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+var
+  PrimLeft, PrimRight: TGocciaValue;
 begin
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.ShiftLeft(
-        TGocciaBigIntValue(ARight).Value.ToInt64)));
-  VMCheckBigIntMixed(ALeft, ARight);
+      TGocciaBigIntValue(PrimLeft).Value.ShiftLeft(
+        TGocciaBigIntValue(PrimRight).Value.ToInt64)));
+  VMCheckBigIntMixed(PrimLeft, PrimRight);
   Result := VMNumberValue(
-    ToInt32Value(ALeft) shl (ToUint32Value(ARight) and 31));
+    ToInt32Value(PrimLeft) shl (ToUint32Value(PrimRight) and 31));
 end;
 
 function VMRightShiftValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+var
+  PrimLeft, PrimRight: TGocciaValue;
 begin
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.ShiftRight(
-        TGocciaBigIntValue(ARight).Value.ToInt64)));
-  VMCheckBigIntMixed(ALeft, ARight);
+      TGocciaBigIntValue(PrimLeft).Value.ShiftRight(
+        TGocciaBigIntValue(PrimRight).Value.ToInt64)));
+  VMCheckBigIntMixed(PrimLeft, PrimRight);
   Result := VMNumberValue(SarLongint(
-    ToInt32Value(ALeft), ToUint32Value(ARight) and 31));
+    ToInt32Value(PrimLeft), ToUint32Value(PrimRight) and 31));
 end;
 
 // ES2026 §6.1.6.2.11 BigInt::unsignedRightShift — always throws
 function VMUnsignedRightShiftValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+var
+  PrimLeft, PrimRight: TGocciaValue;
 begin
-  if (ALeft is TGocciaBigIntValue) or (ARight is TGocciaBigIntValue) then
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+  if (PrimLeft is TGocciaBigIntValue) or (PrimRight is TGocciaBigIntValue) then
     ThrowTypeError(SErrorBigIntUnsignedRightShift, SSuggestBigIntNoMixedArithmetic);
   Result := VMNumberValue(
-    ToUint32Value(ALeft) shr (ToUint32Value(ARight) and 31));
+    ToUint32Value(PrimLeft) shr (ToUint32Value(PrimRight) and 31));
 end;
 
 function VMBitwiseNotValue(const AOperand: TGocciaValue): TGocciaValue; inline;
+var
+  PrimOperand: TGocciaValue;
 begin
-  if AOperand is TGocciaBigIntValue then
-    Exit(TGocciaBigIntValue.Create(TGocciaBigIntValue(AOperand).Value.BitwiseNot));
-  Result := VMNumberValue(not ToInt32Value(AOperand));
+  PrimOperand := ToPrimitive(AOperand);
+  if PrimOperand is TGocciaBigIntValue then
+    Exit(TGocciaBigIntValue.Create(TGocciaBigIntValue(PrimOperand).Value.BitwiseNot));
+  Result := VMNumberValue(not ToInt32Value(PrimOperand));
 end;
 
 function VMGlobalConstructor(const AScope: TGocciaScope;
@@ -4039,22 +4075,25 @@ begin
         CloseRawIterator(IteratorValue);
         Exit;
       end;
+      // ES2024 §7.4.2 GetIteratorDirect: NextMethod is captured ONCE
+      // at iteratorRecord creation, not re-resolved per IteratorStep.
+      // Hoisting the GetProperty + IsCallable validation out of the
+      // loop matches the spec semantic (post-acquisition mutations of
+      // `iterator.next` are ignored — §7.4.5 IteratorStep calls the
+      // captured iteratorRecord.[[NextMethod]]) and avoids a redundant
+      // hash lookup per iteration.  A missing/non-callable next is a
+      // TypeError, not silent termination — see the try/except arm
+      // below for the abrupt-completion close.
+      NextMethod := IteratorValue.GetProperty(PROP_NEXT);
+      if not Assigned(NextMethod) or
+         (NextMethod is TGocciaUndefinedLiteralValue) or
+         not NextMethod.IsCallable then
+        ThrowTypeError(SErrorIteratorNextMustBeCallable,
+          SSuggestIteratorProtocol);
       try
         repeat
           CheckExecutionTimeout;
           CheckInstructionLimit;
-          NextMethod := IteratorValue.GetProperty(PROP_NEXT);
-          // ES2024 §7.4.5 IteratorStep / §7.4.2 GetIteratorDirect:
-          // a missing/non-callable next is a TypeError, not silent
-          // termination.  A bare `Break` would stop iterating but
-          // leave the iterator open, neither raising nor closing —
-          // hiding the bug from callers.  Throw and let the
-          // try/except below close-with-preserved-error.
-          if not Assigned(NextMethod) or
-             (NextMethod is TGocciaUndefinedLiteralValue) or
-             not NextMethod.IsCallable then
-            ThrowTypeError(SErrorIteratorNextMustBeCallable,
-              SSuggestIteratorProtocol);
           CallArgs := AcquireArguments;
           try
             NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IteratorValue);
@@ -4129,6 +4168,10 @@ begin
   AArray := nil;
   ArrayRooted := False;
   IteratorRooted := False;
+  // NextMethod is only consumed by the OBJECT loop further down; the
+  // TGocciaIteratorValue path uses DirectNext and exits early.  Init
+  // here so FPC's uninitialized-local analysis is unambiguous.
+  NextMethod := nil;
 
   if AIterable is TGocciaIteratorValue then
     IteratorValue := AIterable
@@ -4192,14 +4235,15 @@ begin
       Exit(True);
     end;
 
+    // ES2024 §7.4.2 GetIteratorDirect captures NextMethod ONCE at
+    // iteratorRecord creation; §7.4.5 IteratorStep then calls that
+    // captured reference.  NextMethod was already resolved and
+    // validated at the acquisition site above (the `if IteratorObject
+    // is TGocciaObjectValue` arm), so the loop just reuses it instead
+    // of re-running GetProperty(PROP_NEXT) per iteration.
     repeat
       CheckExecutionTimeout;
       CheckInstructionLimit;
-      NextMethod := IteratorValue.GetProperty(PROP_NEXT);
-      if not Assigned(NextMethod) or
-         (NextMethod is TGocciaUndefinedLiteralValue) or
-         not NextMethod.IsCallable then
-        ThrowTypeError('Iterator.next is not a function');
       CallArgs := AcquireArguments;
       try
         NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IteratorValue);
@@ -4422,7 +4466,17 @@ begin
           if ATryAsync then
             Exit(TGocciaVMAsyncFromSyncIteratorValue.Create(IteratorObject,
               NextMethod));
-          Exit(IteratorObject);
+          // Wrap the raw iterator object in a TGocciaGenericIteratorValue
+          // so callers (OP_ITER_NEXT, IterableToArray, etc.) get a
+          // TGocciaIteratorValue with NextMethod captured ONCE per
+          // ES2024 §7.4.2 GetIteratorDirect.  Without this wrapping,
+          // OP_ITER_NEXT's raw-object branch re-resolves
+          // GetProperty(PROP_NEXT) per iteration and picks up
+          // post-acquisition mutations of `iterator.next` — divergent
+          // from spec and observable via the
+          // language/expressions/destructuring/iterator-next-capture
+          // regression tests.
+          Exit(TGocciaGenericIteratorValue.Create(IteratorObject));
         end;
         if ATryAsync then
           ThrowTypeError(SErrorAsyncIteratorNextNotCallable,
@@ -7002,7 +7056,12 @@ begin
           FRegisters[A] := VMNumberRegister(-RegisterToDouble(FRegisters[B]))
         else
         begin
-          LeftValue := GetRegisterFast(B);
+          // ES2026 §13.5.5 UnaryMinus invokes ToNumeric (= ToPrimitive
+          // then a BigInt? branch).  Apply ToPrimitive so boxed BigInts
+          // (Object(1n)) unbox to their primitive and take the
+          // BigInt::unaryMinus path; without it the box's
+          // ToNumberLiteral coerces to NaN and we lose the BigInt.
+          LeftValue := ToPrimitive(GetRegisterFast(B));
           if LeftValue is TGocciaBigIntValue then
             SetRegister(A, TGocciaBigIntValue.Create(
               TGocciaBigIntValue(LeftValue).Value.Negate))
