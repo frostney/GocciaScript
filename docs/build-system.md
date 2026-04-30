@@ -166,8 +166,23 @@ The first file found is loaded and applied as the **root config**. When running 
 
 1. **CLI arguments** (highest priority — always win)
 2. **Per-file config** (`goccia.toml`, `goccia.json5`, or `goccia.json` nearest to the file being processed)
-3. **Root config** (discovered from the entry path at startup)
+3. **Root config** (discovered from the entry path at startup, or supplied via `--config`)
 4. **System default** (engine defaults)
+
+**`--config=<path>`** — Override auto-discovery and load the root config from an explicit location. Available on every CLI tool.
+
+The path may be either a **file** (any registered extension — `.json`, `.json5`, `.toml`; the parser is selected by extension), or a **directory**, in which case the CLI looks for `goccia.toml` → `goccia.json5` → `goccia.json` in that directory only (same priority as auto-discovery). The directory form does **not** walk upward — that's the point of the explicit override.
+
+```bash
+# File form (use this exact file)
+./build/GocciaScriptLoader example.js --config=./configs/strict.toml
+./build/GocciaTestRunner tests --config=./configs/ci.json
+
+# Directory form (find goccia.{toml,json5,json} inside, no walk-up)
+./build/GocciaScriptLoader example.js --config=./configs/
+```
+
+Relative paths are resolved against the current working directory. A missing file or a directory with no recognised `goccia.*` is a hard error so a typo is not silently ignored. CLI arguments still take precedence over values from the file, and per-file configs continue to be discovered normally for individual files.
 
 ```json
 {
