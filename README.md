@@ -107,6 +107,11 @@ printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=json
 # are preserved.
 printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=compact-json
 
+# The same `compact-json` value is accepted by GocciaTestRunner (via --output)
+# and GocciaBenchmarkRunner (via --format) for the same envelope.
+./build/GocciaTestRunner tests --output=compact-json
+./build/GocciaBenchmarkRunner benchmarks --format=compact-json --output=out.json
+
 # Inject globals from the CLI
 printf "x + y;" | ./build/GocciaScriptLoader --global x=10 --global y=20
 printf "name;" | ./build/GocciaScriptLoader --globals=context.json --output=json

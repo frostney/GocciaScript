@@ -394,9 +394,10 @@ The PR workflow (`.github/workflows/pr.yml`) includes shell-level smoke tests th
 
 | Area | What is checked |
 |------|----------------|
-| GocciaTestRunner JSON output | `--output` produces valid JSON with `mode`, `totalFiles` fields |
+| GocciaTestRunner JSON output | `--output=<file>` writes valid JSON with `mode`, `totalFiles` fields to a file; `--output=json` emits the same envelope to stdout and suppresses the human-readable summary; `--output=compact-json` emits the same stdout envelope without `build`, `memory`, `stdout`, or `stderr` |
 | GocciaTestRunner coverage | `--coverage` prints summary; `--coverage-format=lcov` and `--coverage-format=json` write valid output files; branch coverage includes `BRDA`/`BRF` entries |
 | GocciaScriptLoader JSON output | `--output=json` envelope includes aggregate `ok`, `output`, `stdout`, `stderr`, `build`, `timing`, `memory`, `workers`, and per-input `files[]` entries with `fileName` and `result`; `--output=compact-json` emits the same envelope without `build`, `memory`, `stdout`, or `stderr` (the normalized `output` array and structured `error` are preserved) |
+| GocciaBenchmarkRunner JSON output | `--format=json` writes the same JSON envelope as the loader and test runner; `--format=compact-json` emits the same envelope without `build`, `memory`, `stdout`, or `stderr` at the top level or per-file |
 | GocciaScriptLoader error display | Syntax errors show source context, caret, and suggestions |
 | GocciaScriptLoader coverage | `--coverage` summary, lcov/json file output, bytecode mode coverage, JSX source map translation for branch positions |
 | GocciaScriptLoader source maps | `--source-map` writes valid source map JSON; rejects stdin without explicit path |

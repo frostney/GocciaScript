@@ -92,7 +92,9 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaTestRunner tests/language/expressions/ # Run a test category
 ./build/GocciaTestRunner tests --no-progress --exit-on-first-failure # CI mode
 ./build/GocciaTestRunner tests --silent # Suppress all console output
-./build/GocciaTestRunner tests --output=results.json # Write test results as JSON
+./build/GocciaTestRunner tests --output=results.json # Write test results as JSON to a file
+./build/GocciaTestRunner tests --output=json # Emit a structured JSON envelope to stdout
+./build/GocciaTestRunner tests --output=compact-json # Same envelope to stdout, omitting build, memory, stdout, and stderr
 ./build/GocciaTestRunner tests --mode=bytecode # Run tests via the Goccia bytecode VM
 ./build/GocciaTestRunner tests/language/asi --asi # Run ASI tests with automatic semicolon insertion
 ./build/GocciaTestRunner tests --coverage # Run tests with line and branch coverage
@@ -108,6 +110,7 @@ printf 'test("two plus two", () => { expect(2 + 2).toBe(4); });\n' | ./build/Goc
 ./build/GocciaBenchmarkRunner benchmarks/fibonacci.js # Run a specific benchmark
 printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner # Run benchmark source from stdin
 ./build/GocciaBenchmarkRunner benchmarks --format=json --output=out.json # Export as JSON
+./build/GocciaBenchmarkRunner benchmarks --format=compact-json --output=out.json # Export as JSON, omitting build, memory, stdout, and stderr
 ./build/GocciaBenchmarkRunner benchmarks --format=console --format=json --output=out.json # Console + JSON
 ./build/GocciaBenchmarkRunner benchmarks --no-progress # Suppress progress (CI)
 ./build/GocciaBenchmarkRunner benchmarks --mode=bytecode # Benchmarks via the Goccia bytecode VM
