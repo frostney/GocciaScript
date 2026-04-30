@@ -724,6 +724,8 @@ var
   DestSlot, IdxReg: UInt8;
   PropIdx: UInt16;
   JumpIdx, I: Integer;
+  HasRest: Boolean;
+  Limit: Integer;
 begin
   if APattern is TGocciaIdentifierDestructuringPattern then
   begin
@@ -808,9 +810,32 @@ begin
   end
   else if APattern is TGocciaArrayDestructuringPattern then
   begin
-    EmitInstruction(ACtx, EncodeABC(OP_VALIDATE_VALUE, ASrcReg,
-      VALIDATE_OP_REQUIRE_ITERABLE, 0));
     ArrPat := TGocciaArrayDestructuringPattern(APattern);
+    // Compute the iteration bound for OP_VALIDATE_VALUE.  Without a rest
+    // element the spec consumes exactly N elements then closes the
+    // iterator (ES2024 §8.5.3 IteratorBindingInitialization step 4).
+    // With a rest element, full iteration is required.  We pass that
+    // bound as operand C so the VM can stop calling next() once the
+    // pattern is satisfied — otherwise an iterator whose next() always
+    // returns done:false (e.g. test262's named-dflt-ary-init-iter-close
+    // pattern) allocates unboundedly during destructuring.  Bound 0
+    // signals unbounded; counts above 255 also fall back to unbounded
+    // since C is a UInt8 (such patterns are exceptional in practice).
+    HasRest := False;
+    for I := 0 to ArrPat.Elements.Count - 1 do
+      if Assigned(ArrPat.Elements[I]) and
+         (ArrPat.Elements[I] is TGocciaRestDestructuringPattern) then
+      begin
+        HasRest := True;
+        Break;
+      end;
+    if HasRest or (ArrPat.Elements.Count > 255) then
+      Limit := 0
+    else
+      Limit := ArrPat.Elements.Count;
+
+    EmitInstruction(ACtx, EncodeABC(OP_VALIDATE_VALUE, ASrcReg,
+      VALIDATE_OP_REQUIRE_ITERABLE, UInt8(Limit)));
     for I := 0 to ArrPat.Elements.Count - 1 do
     begin
       if not Assigned(ArrPat.Elements[I]) then
