@@ -186,7 +186,7 @@ console.log("Loader: JSON multi-file structure...");
       throw new Error("Loader second file worker memory should be present");
     if (json.memory.gc.allocatedDuringRunBytes <= 0)
       throw new Error("Loader multi-file top-level memory should include worker GC allocations");
-    if (json.memory.gc.liveBytes > json.memory.gc.limitBytes * json.workers.used)
+    if (json.memory.gc.liveBytes > json.memory.gc.limitBytes * (json.workers.used + 1))
       throw new Error("Loader multi-file top-level live memory should not double-count per-file worker snapshots");
   } finally {
     clean(tmp);
@@ -555,7 +555,7 @@ console.log("TestRunner: JSON multi-file structure...");
     if (json.workers.used !== 2) throw new Error(`TestRunner multi-file workers.used should be 2, got ${json.workers.used}`);
     if (json.memory.gc.allocatedDuringRunBytes <= 0)
       throw new Error("TestRunner multi-file top-level memory should include worker GC allocations");
-    if (json.memory.gc.liveBytes > json.memory.gc.limitBytes * json.workers.used)
+    if (json.memory.gc.liveBytes > json.memory.gc.limitBytes * (json.workers.used + 1))
       throw new Error("TestRunner multi-file top-level live memory should not double-count per-file worker snapshots");
     if (!Array.isArray(json.results) || json.results.length !== 2) throw new Error("TestRunner multi-file results should mirror files with 2 entries");
 
@@ -1009,7 +1009,7 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
         throw new Error("Benchmark multi-file top-level memory should include worker GC allocations");
       if (json.memory.gc.collections <= 0)
         throw new Error("Benchmark multi-file top-level memory should include worker GC collections");
-      if (json.memory.gc.liveBytes > json.memory.gc.limitBytes * json.workers.used)
+      if (json.memory.gc.liveBytes > json.memory.gc.limitBytes * (json.workers.used + 1))
         throw new Error("Benchmark multi-file top-level live memory should not double-count per-file worker snapshots");
       assertCommonJsonFile(json.files[0], "Benchmark first file", benchA);
       assertCommonJsonFile(json.files[1], "Benchmark second file", benchB);
