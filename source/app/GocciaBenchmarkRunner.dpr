@@ -30,6 +30,7 @@ uses
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
+  Goccia.Scope,
   Goccia.ScriptLoader.Input,
   Goccia.CLI.JSON.Reporter,
   Goccia.SourceMap,
@@ -164,6 +165,9 @@ type
     FNoProgress: TGocciaFlagOption;
     FFormats: TGocciaRepeatableOption;
     FOutputFile: TGocciaStringOption;
+    procedure RunBytecodeBenchmarkModule(const AEngine: TGocciaEngine;
+      const AExecutor: TGocciaBytecodeExecutor;
+      const AModule: TGocciaBytecodeModule; const AFileName: string);
     procedure CollectBenchmarkFileInterpreted(const AFileName: string;
       const AReporter: TBenchmarkReporter; const AShowProgress: Boolean);
     procedure CollectBenchmarkFileBytecode(const AFileName: string;
@@ -223,6 +227,26 @@ begin
     Result := TGocciaObjectValue(Value)
   else
     Result := nil;
+end;
+
+procedure TBenchmarkRunnerApp.RunBytecodeBenchmarkModule(
+  const AEngine: TGocciaEngine;
+  const AExecutor: TGocciaBytecodeExecutor;
+  const AModule: TGocciaBytecodeModule; const AFileName: string);
+var
+  ModuleScope: TGocciaScope;
+begin
+  if AEngine.SourceType = stModule then
+  begin
+    { Run with module semantics: fresh module scope, this = undefined.
+      Mirrors TGocciaModuleLoader.LoadModule for nested module loads. }
+    ModuleScope := AEngine.Interpreter.GlobalScope.CreateChild(skModule,
+      'Module:' + AFileName);
+    ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    AExecutor.RunModuleInScope(AModule, ModuleScope);
+  end
+  else
+    AExecutor.RunModule(AModule);
 end;
 
 procedure TBenchmarkRunnerApp.CollectBenchmarkFileInterpreted(
@@ -369,7 +393,8 @@ begin
           StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
           StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
           try
-            TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
+            RunBytecodeBenchmarkModule(Engine,
+              TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
             ExecEnd := GetNanoseconds;
 
             FileResult.FileName := AFileName;
@@ -582,7 +607,8 @@ begin
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
         StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
         try
-          TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
+          RunBytecodeBenchmarkModule(Engine,
+            TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
           ExecEnd := GetNanoseconds;
 
           FileResult.FileName := AFileName;
@@ -750,7 +776,10 @@ var
   WorkerData: array of TBenchmarkFileResult;
   WallClockStart: Int64;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
+  MainMemoryStats: TCLIJSONMemoryStats;
+  WorkerMemoryStats: TCLIJSONMemoryStats;
 begin
+  WorkerMemoryStats := DefaultCLIJSONMemoryStats;
   Files := TStringList.Create;
   Reporter := TBenchmarkReporter.Create;
   try
@@ -815,13 +844,16 @@ begin
         if Assigned(TGarbageCollector.Instance) then
           Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
         Pool.RunAll(Files, BenchmarkWorkerProc, @WorkerData[0]);
+        WorkerMemoryStats := Pool.MemoryStats;
       finally
         Pool.Free;
       end;
 
       Reporter.WallClockDurationNanoseconds := GetNanoseconds - WallClockStart;
       Reporter.JobCount := JobCount;
-      Reporter.MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
+      MainMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
+      Reporter.MemoryStats := CombineCLIJSONMemoryStats(
+        MainMemoryStats, WorkerMemoryStats, True);
 
       { Collect results on the main thread in original file order. }
       for I := 0 to Files.Count - 1 do
@@ -875,7 +907,9 @@ procedure TBenchmarkRunnerApp.Configure;
 begin
   AddEngineOptions;
   FNoProgress := AddFlag('no-progress', 'Suppress progress output');
-  FFormats := AddRepeatable('format', 'Output format (console, text, csv, json)');
+  FFormats := AddRepeatable('format',
+    'Output format (console, text, csv, json, compact-json). ' +
+    '"compact-json" emits the json envelope without build, memory, stdout, stderr.');
   FOutputFile := AddString('output', 'Output file path (attaches to last --format)');
 end;
 
@@ -925,7 +959,7 @@ begin
   for I := 0 to Length(Reports) - 1 do
     if Reports[I].OutputFile = '' then
     begin
-      if Reports[I].Format in [brfJSON, brfCSV] then
+      if Reports[I].Format in [brfJSON, brfCompactJSON, brfCSV] then
         HasStructuredStdout := True
       else
         HasReadableStdout := True;
@@ -941,7 +975,7 @@ begin
   // that human-readable status messages do not corrupt the output document.
   if ShowProgress then
     for I := 0 to Length(Reports) - 1 do
-      if (Reports[I].Format in [brfJSON, brfCSV]) and (Reports[I].OutputFile = '') then
+      if (Reports[I].Format in [brfJSON, brfCompactJSON, brfCSV]) and (Reports[I].OutputFile = '') then
       begin
         ShowProgress := False;
         Break;

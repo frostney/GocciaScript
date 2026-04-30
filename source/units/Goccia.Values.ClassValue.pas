@@ -102,6 +102,10 @@ type
     function Instantiate(const AArguments: TGocciaArgumentsCollection;
       const ANewTarget: TGocciaClassValue = nil): TGocciaValue; virtual;
     function EstimatedInstancePropertyCapacity: Integer;
+    // ECMAScript: number of expected constructor parameters before the first
+    // default/rest. Built-in classes default to 0; user classes derive from
+    // their constructor method's formal parameters.
+    function GetClassLength: Integer; virtual;
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
@@ -148,6 +152,8 @@ type
 
   TGocciaArrayClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    // ECMAScript 23.1.1.1: Array constructor length is 1.
+    function GetClassLength: Integer; override;
   end;
 
   TGocciaMapClassValue = class(TGocciaClassValue)
@@ -168,22 +174,32 @@ type
 
   TGocciaStringClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    // ECMAScript 22.1.1.1: String constructor length is 1.
+    function GetClassLength: Integer; override;
   end;
 
   TGocciaNumberClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    // ECMAScript 21.1.1.1: Number constructor length is 1.
+    function GetClassLength: Integer; override;
   end;
 
   TGocciaBooleanClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    // ECMAScript 20.3.1.1: Boolean constructor length is 1.
+    function GetClassLength: Integer; override;
   end;
 
   TGocciaArrayBufferClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    // ECMAScript 25.1.1.1: ArrayBuffer constructor length is 1.
+    function GetClassLength: Integer; override;
   end;
 
   TGocciaSharedArrayBufferClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    // ECMAScript 25.2.1.1: SharedArrayBuffer constructor length is 1.
+    function GetClassLength: Integer; override;
   end;
 
   TGocciaTextEncoderClassValue = class(TGocciaClassValue)
@@ -196,6 +212,8 @@ type
 
   TGocciaURLClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    // WHATWG URL: URL(url, base?) — required url means length 1.
+    function GetClassLength: Integer; override;
   end;
 
   TGocciaURLSearchParamsClassValue = class(TGocciaClassValue)
@@ -208,6 +226,8 @@ type
 
   TGocciaResponseClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    // Fetch spec: Response constructor reports length 1 in WPT/V8.
+    function GetClassLength: Integer; override;
   end;
 
   TGocciaCompileDynamicFunction = function(const AParamsSources: array of string;
@@ -222,6 +242,8 @@ type
     constructor Create(const AName: string; const ASuperClass: TGocciaClassValue);
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    // ECMAScript 20.2.2: Function constructor length is 1.
+    function GetClassLength: Integer; override;
 
     property Enabled: Boolean read FEnabled write FEnabled;
     property CompileDynamicFunction: TGocciaCompileDynamicFunction
@@ -960,6 +982,27 @@ begin
   Result := Instance;
 end;
 
+function TGocciaClassValue.GetClassLength: Integer;
+var
+  I: Integer;
+  Params: TGocciaParameterArray;
+begin
+  // ECMAScript: a class's length is the number of formal parameters of its
+  // constructor before the first default/rest. Native classes without a JS
+  // constructor method (Map, Set, WeakMap, WeakSet, etc.) default to 0,
+  // which matches the spec for built-in collection constructors.
+  Result := 0;
+  if not Assigned(FConstructorMethod) then
+    Exit;
+  Params := FConstructorMethod.Parameters;
+  for I := 0 to Length(Params) - 1 do
+  begin
+    if Params[I].IsRest then Break;
+    if Assigned(Params[I].DefaultValue) then Break;
+    Inc(Result);
+  end;
+end;
+
 function TGocciaClassValue.GetProperty(const AName: string): TGocciaValue;
 var
   Getter: TGocciaFunctionBase;
@@ -998,6 +1041,12 @@ begin
       Result := TGocciaStringLiteralValue.Create('')
     else
       Result := TGocciaStringLiteralValue.Create(FName);
+    Exit;
+  end;
+
+  if AName = PROP_LENGTH then
+  begin
+    Result := TGocciaNumberLiteralValue.Create(GetClassLength);
     Exit;
   end;
 
@@ -1088,13 +1137,23 @@ begin
           TGocciaStringLiteralValue.Create(FName), [pfConfigurable]);
     end;
   end
+  else if AName = PROP_LENGTH then
+  begin
+    // Honour explicit own-property redefinitions (length is configurable, so
+    // userland may override via Object.defineProperty); fall back to a
+    // synthesized descriptor only when no own descriptor exists.
+    Result := inherited GetOwnPropertyDescriptor(AName);
+    if not Assigned(Result) then
+      Result := TGocciaPropertyDescriptorData.Create(
+        TGocciaNumberLiteralValue.Create(GetClassLength), [pfConfigurable]);
+  end
   else
     Result := inherited GetOwnPropertyDescriptor(AName);
 end;
 
 function TGocciaClassValue.HasOwnProperty(const AName: string): Boolean;
 begin
-  if (AName = PROP_PROTOTYPE) or (AName = PROP_NAME) then
+  if (AName = PROP_PROTOTYPE) or (AName = PROP_NAME) or (AName = PROP_LENGTH) then
     Result := True
   else
     Result := inherited HasOwnProperty(AName);
@@ -1252,6 +1311,11 @@ begin
   Result := TGocciaArrayValue.Create;
 end;
 
+function TGocciaArrayClassValue.GetClassLength: Integer;
+begin
+  Result := 1;
+end;
+
 { TGocciaMapClassValue }
 
 function TGocciaMapClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
@@ -1287,11 +1351,21 @@ begin
   Result := TGocciaArrayBufferValue.Create(nil);
 end;
 
+function TGocciaArrayBufferClassValue.GetClassLength: Integer;
+begin
+  Result := 1;
+end;
+
 { TGocciaSharedArrayBufferClassValue }
 
 function TGocciaSharedArrayBufferClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
 begin
   Result := TGocciaSharedArrayBufferValue.Create(nil);
+end;
+
+function TGocciaSharedArrayBufferClassValue.GetClassLength: Integer;
+begin
+  Result := 1;
 end;
 
 { TGocciaTextEncoderClassValue }
@@ -1315,6 +1389,11 @@ begin
   Result := TGocciaURLValue.Create(nil);
 end;
 
+function TGocciaURLClassValue.GetClassLength: Integer;
+begin
+  Result := 1;
+end;
+
 { TGocciaURLSearchParamsClassValue }
 
 function TGocciaURLSearchParamsClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
@@ -1336,6 +1415,11 @@ begin
   Result := TGocciaResponseValue.Create;
 end;
 
+function TGocciaResponseClassValue.GetClassLength: Integer;
+begin
+  Result := 1;
+end;
+
 { TGocciaStringClassValue }
 
 function TGocciaStringClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
@@ -1351,6 +1435,11 @@ begin
   Result := Prim.Box;
 end;
 
+function TGocciaStringClassValue.GetClassLength: Integer;
+begin
+  Result := 1;
+end;
+
 { TGocciaNumberClassValue }
 
 function TGocciaNumberClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
@@ -1364,6 +1453,11 @@ begin
   Result := Prim.Box;
 end;
 
+function TGocciaNumberClassValue.GetClassLength: Integer;
+begin
+  Result := 1;
+end;
+
 { TGocciaBooleanClassValue }
 
 function TGocciaBooleanClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
@@ -1375,6 +1469,11 @@ begin
   else
     Prim := AArguments.GetElement(0).ToBooleanLiteral;
   Result := Prim.Box;
+end;
+
+function TGocciaBooleanClassValue.GetClassLength: Integer;
+begin
+  Result := 1;
 end;
 
 { TGocciaFunctionConstructorClassValue }
@@ -1435,6 +1534,11 @@ function TGocciaFunctionConstructorClassValue.CreateNativeInstance(
   const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
 begin
   Result := BuildFunction(AArguments);
+end;
+
+function TGocciaFunctionConstructorClassValue.GetClassLength: Integer;
+begin
+  Result := 1;
 end;
 
 { TGocciaInstanceValue }

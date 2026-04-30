@@ -149,10 +149,12 @@ type
   end;
 
   TGocciaExecutionMode = (emInterpreted, emBytecode);
+  TGocciaSourceType = (stScript, stModule);
 
   TGocciaEngineOptions = class
   private
     FMode: TGocciaEnumOption<TGocciaExecutionMode>;
+    FSourceType: TGocciaEnumOption<TGocciaSourceType>;
     FASI: TGocciaFlagOption;
     FImportMap: TGocciaStringOption;
     FAliases: TGocciaRepeatableOption;
@@ -173,6 +175,7 @@ type
     function Options: TGocciaOptionArray;
 
     property Mode: TGocciaEnumOption<TGocciaExecutionMode> read FMode;
+    property SourceType: TGocciaEnumOption<TGocciaSourceType> read FSourceType;
     property ASI: TGocciaFlagOption read FASI;
     property ImportMap: TGocciaStringOption read FImportMap;
     property Aliases: TGocciaRepeatableOption read FAliases;
@@ -544,6 +547,8 @@ begin
   inherited Create;
   FMode := TGocciaEnumOption<TGocciaExecutionMode>.Create('mode',
     'Execution mode', 'Engine');
+  FSourceType := TGocciaEnumOption<TGocciaSourceType>.Create('source-type',
+    'Source loading kind (default: script)', 'Engine');
   FASI := TGocciaFlagOption.Create('asi',
     'Enable automatic semicolon insertion', 'Engine');
   FImportMap := TGocciaStringOption.Create('import-map',
@@ -576,6 +581,7 @@ end;
 destructor TGocciaEngineOptions.Destroy;
 begin
   FMode.Free;
+  FSourceType.Free;
   FASI.Free;
   FImportMap.Free;
   FAliases.Free;
@@ -594,21 +600,22 @@ end;
 
 function TGocciaEngineOptions.Options: TGocciaOptionArray;
 begin
-  SetLength(Result, 14);
+  SetLength(Result, 15);
   Result[0] := FMode;
-  Result[1] := FASI;
-  Result[2] := FImportMap;
-  Result[3] := FAliases;
-  Result[4] := FTimeout;
-  Result[5] := FMaxMemory;
-  Result[6] := FMaxInstructions;
-  Result[7] := FUnsafeFFI;
-  Result[8] := FUnsafeFunctionConstructor;
-  Result[9] := FStackSize;
-  Result[10] := FCompatVar;
-  Result[11] := FCompatFunction;
-  Result[12] := FStrictTypes;
-  Result[13] := FAllowedHosts;
+  Result[1] := FSourceType;
+  Result[2] := FASI;
+  Result[3] := FImportMap;
+  Result[4] := FAliases;
+  Result[5] := FTimeout;
+  Result[6] := FMaxMemory;
+  Result[7] := FMaxInstructions;
+  Result[8] := FUnsafeFFI;
+  Result[9] := FUnsafeFunctionConstructor;
+  Result[10] := FStackSize;
+  Result[11] := FCompatVar;
+  Result[12] := FCompatFunction;
+  Result[13] := FStrictTypes;
+  Result[14] := FAllowedHosts;
 end;
 
 { TGocciaCoverageOptions }

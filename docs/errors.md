@@ -7,7 +7,7 @@
 - **Error types** -- `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, plus `TimeoutError` for the `--timeout` flag
 - **Parser errors** -- Displayed with source context, a caret pointing to the exact column, and optional suggestion text (e.g., "Use 'let' or 'const' instead")
 - **Runtime errors** -- Carry `name`, `message`, `stack`, and optional `cause`; catchable with `try`/`catch`/`finally`
-- **JSON output** -- `--output=json` wraps every execution result in a structured envelope with `ok`, `error.type`, `error.message`, `error.line`, and `error.column`. `--output=compact-json` produces the same envelope without the `build`, `memory`, `stdout`, or `stderr` fields, leaving only the normalized `output` array and structured `error` for console output
+- **JSON output** -- `--output=json` wraps every execution result in a structured envelope with `ok`, `error.type`, `error.message`, `error.line`, and `error.column`. `--output=compact-json` produces the same envelope without the `build`, `memory`, `stdout`, or `stderr` fields, leaving only the normalized `output` array and structured `error` for console output. The same `compact-json` value is recognised by `GocciaTestRunner` (via `--output`) and `GocciaBenchmarkRunner` (via `--format`).
 - **`Error.cause`** -- All error constructors accept an options bag with a `cause` property for error chaining (ES2022+)
 
 ## Error Types
@@ -288,6 +288,13 @@ err.message;    // "An error was suppressed"
 
 When running with `--output=json`, GocciaScript wraps every execution result in a structured JSON envelope. This is useful for programmatic consumers and embedding scenarios.
 
+The `memory` block has two different scopes:
+
+- `memory.gc` reports the GocciaScript GC's approximate managed-object accounting. It tracks `TGCManagedObject.InstanceSize`, not all memory held by strings, dynamic arrays, or the FreePascal runtime. `allocatedDuringRunBytes` is cumulative allocation churn during the measured run, so it can be much larger than `liveBytes`.
+- `memory.heap` reports coarse FreePascal process heap-manager counters from `GetHeapStatus`. These are allocator diagnostics, not JavaScript heap size. `deltaFreeBytes` may be negative when the process heap has less reusable free space at the end of the run.
+
+For parallel runs, the top-level `memory.gc` block combines one measurement per worker thread plus the main thread. It does not sum per-file live snapshots, because each worker can process many files with the same thread-local GC. Per-file `files[].memory` is only populated by hosts that can measure a file independently.
+
 ### Success
 
 ```json
@@ -319,7 +326,7 @@ When running with `--output=json`, GocciaScript wraps every execution result in 
       "peakLiveBytes": 4096,
       "deltaLiveBytes": 2048,
       "allocatedDuringRunBytes": 4096,
-      "maxBytes": 536870912,
+      "limitBytes": 536870912,
       "startObjectCount": 0,
       "endObjectCount": 24,
       "collections": 0,
@@ -434,6 +441,9 @@ When running with `--output=json`, GocciaScript wraps every execution result in 
 | `memory.gc.liveBytes` | `number` | GC-managed bytes live at the measurement endpoint. This is the report equivalent of `Goccia.gc.bytesAllocated` |
 | `memory.gc.allocatedDuringRunBytes` | `number` | Total GC-managed bytes allocated during the measured run, including allocations later collected |
 | `memory.gc.peakLiveBytes` | `number` | Highest live GC-managed byte count observed during the measurement |
+| `memory.gc.limitBytes` | `number` | Active GC byte ceiling from `--max-memory` or the auto-detected default |
+| `memory.heap.deltaAllocatedBytes` | `number` | Change in FreePascal heap-manager allocated bytes for the measured process/thread scope |
+| `memory.heap.deltaFreeBytes` | `number` | Change in FreePascal memory-manager free space. Negative values are valid and mean the process heap had less reusable free space at the end |
 | `workers` | `object` | Worker logistics: used worker count, available worker count, and whether the run was parallel |
 | `files` | `object[]` | Per-input results. Single-file runs use the same structure with one element |
 | `files[].fileName` | `string` | Input file path or `<stdin>` |
@@ -502,7 +512,7 @@ When execution exceeds the `--timeout` limit, the JSON envelope reports a `Timeo
       "peakLiveBytes": 16384,
       "deltaLiveBytes": 8192,
       "allocatedDuringRunBytes": 16384,
-      "maxBytes": 536870912,
+      "limitBytes": 536870912,
       "startObjectCount": 0,
       "endObjectCount": 80,
       "collections": 0,

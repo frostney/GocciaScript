@@ -55,6 +55,8 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
 ./build/GocciaScriptLoader example.js # Execute a script (interpreted)
 ./build/GocciaScriptLoader example.js --mode=bytecode # Execute via bytecode VM
 ./build/GocciaScriptLoader example.js --import-map=imports.json # Execute with an explicit import map
+./build/GocciaScriptLoader example.js --config=./configs/strict.toml # Load root config from an explicit file (skips auto-discovery)
+./build/GocciaScriptLoader example.js --config=./configs/ # Load root config from a directory (looks up goccia.{toml,json5,json}, no walk-up)
 ./build/GocciaScriptLoader example.js --alias @/=./src/ --alias config=./config/default.js # One-off import-map-style aliases
 ./build/GocciaScriptLoader out.gbc # Load and execute .gbc bytecode
 printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
@@ -63,6 +65,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaScriptLoader example.js --coverage --coverage-format=json --coverage-output=coverage.json # Coverage with JSON output
 ./build/GocciaScriptLoader example.js --asi # Execute with automatic semicolon insertion
 ./build/GocciaScriptLoader example.js --strict-types # Enforce type annotations at runtime (interpreter and bytecode)
+./build/GocciaScriptLoader example.js --source-type=module # Load entry as a module (top-level this is undefined; default is script)
 ./build/GocciaScriptLoader example.js --output=json # Execute with structured JSON output
 ./build/GocciaScriptLoader example.js --output=compact-json # Execute with structured JSON output, omitting build, memory, stdout, and stderr
 ./build/GocciaScriptLoader example.js --profile=opcodes # Opcode histogram, pair frequency, scalar hit rate (bytecode)
@@ -83,6 +86,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaREPL --mode=bytecode # Start the REPL via bytecode VM
 ./build/GocciaREPL --mode=bytecode --timing # Bytecode REPL with per-line timing
 ./build/GocciaREPL --import-map=imports.json # Start the REPL with an explicit import map
+./build/GocciaREPL --config=./configs/dev.json # Start the REPL with an explicit config path (skips auto-discovery)
 ./build/GocciaREPL --asi # Start the REPL with automatic semicolon insertion
 ./build/GocciaREPL --unsafe-ffi # Start the REPL with FFI enabled
 ./build/GocciaREPL --log=repl.log # Start the REPL with console log capture
@@ -90,10 +94,13 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaREPL --max-memory=10485760 # Start the REPL with 10 MB GC heap limit
 ./build/GocciaTestRunner tests/ --asi # Run all JavaScript tests
 ./build/GocciaTestRunner tests --import-map=imports.json # Run tests with an explicit import map
+./build/GocciaTestRunner tests --config=./configs/ci.json # Run tests with an explicit config path (skips auto-discovery)
 ./build/GocciaTestRunner tests/language/expressions/ # Run a test category
 ./build/GocciaTestRunner tests --no-progress --exit-on-first-failure # CI mode
 ./build/GocciaTestRunner tests --silent # Suppress all console output
-./build/GocciaTestRunner tests --output=results.json # Write test results as JSON
+./build/GocciaTestRunner tests --output=results.json # Write test results as JSON to a file
+./build/GocciaTestRunner tests --output=json # Emit a structured JSON envelope to stdout
+./build/GocciaTestRunner tests --output=compact-json # Same envelope to stdout, omitting build, memory, stdout, and stderr
 ./build/GocciaTestRunner tests --mode=bytecode # Run tests via the Goccia bytecode VM
 ./build/GocciaTestRunner tests/language/asi --asi # Run ASI tests with automatic semicolon insertion
 ./build/GocciaTestRunner tests --coverage # Run tests with line and branch coverage
@@ -106,9 +113,11 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 printf 'test("two plus two", () => { expect(2 + 2).toBe(4); });\n' | ./build/GocciaTestRunner # Run a test source from stdin
 ./build/GocciaBenchmarkRunner benchmarks/ # Run all benchmarks
 ./build/GocciaBenchmarkRunner benchmarks --import-map=imports.json # Run benchmarks with an explicit import map
+./build/GocciaBenchmarkRunner benchmarks --config=./configs/bench.toml # Run benchmarks with an explicit config path (skips auto-discovery)
 ./build/GocciaBenchmarkRunner benchmarks/fibonacci.js # Run a specific benchmark
 printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner # Run benchmark source from stdin
 ./build/GocciaBenchmarkRunner benchmarks --format=json --output=out.json # Export as JSON
+./build/GocciaBenchmarkRunner benchmarks --format=compact-json --output=out.json # Export as JSON, omitting build, memory, stdout, and stderr
 ./build/GocciaBenchmarkRunner benchmarks --format=console --format=json --output=out.json # Console + JSON
 ./build/GocciaBenchmarkRunner benchmarks --no-progress # Suppress progress (CI)
 ./build/GocciaBenchmarkRunner benchmarks --mode=bytecode # Benchmarks via the Goccia bytecode VM
@@ -121,6 +130,7 @@ printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./bu
 printf "const x = 2 + 2; x;" | ./build/GocciaBundler --output=out.gbc # Compile stdin to .gbc
 ./build/GocciaBundler src/ --jobs=4 # Compile with 4 parallel workers
 ./build/GocciaBundler example.js --asi # Compile with automatic semicolon insertion
+./build/GocciaBundler example.js --config=./configs/release.toml # Compile with an explicit config path (skips auto-discovery)
 ```
 
 ### Compile and run (common workflows)
@@ -144,7 +154,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaBundler --output=out.gbc # Compile 
 
 ### Configuration file
 
-All CLI options can be set via `goccia.json` (or `.json5` / `.toml`) discovered from the entry file's directory upward. Priority: TOML > JSON5 > JSON. CLI arguments override config values. Config files support `"extends"` to inherit from a base config.
+All CLI options can be set via `goccia.json` (or `.json5` / `.toml`) discovered from the entry file's directory upward. Priority: TOML > JSON5 > JSON. CLI arguments override config values. Config files support `"extends"` to inherit from a base config. Pass `--config=<path>` to skip auto-discovery — the path may be a config file or a directory (which is searched only for `goccia.{toml,json5,json}` without walking up).
 
 ```json
 // goccia.json

@@ -26,8 +26,11 @@ type
       const ASourcePath: string); virtual;
     function ExecuteProgram(
       const AProgram: TGocciaProgram): TGocciaValue; virtual; abstract;
-    procedure EvaluateModuleBody(const AProgram: TGocciaProgram;
-      const AContext: TGocciaEvaluationContext); virtual; abstract;
+    { Evaluate the module body in AContext and return the completion
+      value (last expression value, or undefined). }
+    function EvaluateModuleBody(const AProgram: TGocciaProgram;
+      const AContext: TGocciaEvaluationContext): TGocciaValue;
+      virtual; abstract;
     function ExecuteDynamicFunction(
       const AProgram: TGocciaProgram): TGocciaValue; virtual; abstract;
     procedure ClearTransientCaches; virtual;

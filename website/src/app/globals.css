@@ -1793,6 +1793,18 @@ a.info-term {
   opacity: 0.6;
   cursor: wait;
 }
+/* Keyboard-shortcut tail inside the Run / Execute button. Subdued so it
+   reads as a hint rather than a second label, monospaced so the symbols
+   line up. Matches the "plain monospace tail" pattern used in command
+   palettes (Linear, Raycast). */
+.pg-run-kbd {
+  font-family: var(--mono);
+  font-size: 0.78em;
+  font-weight: 500;
+  opacity: 0.7;
+  margin-left: 0.1rem;
+  letter-spacing: 0.02em;
+}
 .pg-share {
   padding: 0.45rem 0.85rem;
   border-radius: 7px;
@@ -2060,7 +2072,13 @@ a.info-term {
   line-height: 1.65;
   color: var(--ink);
   overflow: auto;
-  white-space: pre-wrap;
+  /* `pre` (not `pre-wrap`) so long output lines don't wrap — they
+     stay on one line and the panel scrolls horizontally instead.
+     Mirrors how a real terminal renders output and prevents the
+     "cut-off without a scrollbar" confusion when a line happens to
+     contain a long unbreakable token (a stringified blob, a path,
+     an error message). `overflow: auto` above surfaces the bar. */
+  white-space: pre;
   background: var(--console-bg);
   box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.06);
 }
@@ -2101,11 +2119,27 @@ a.info-term {
   white-space: nowrap;
   vertical-align: bottom;
   max-width: 0;
-  animation: typewriter-expand 0.6s steps(30, end) forwards;
+  /* `typewriter-expand` is the reveal animation. `typewriter-unclip`
+     chains in afterwards (0.6s delay matches the reveal's duration)
+     and snaps the constraints off so a command line longer than the
+     panel can extend past its right edge — the parent .console-panel's
+     overflow: auto then surfaces a horizontal scrollbar to access the
+     rest. Without this second animation, `overflow: hidden` and the
+     `max-width: 100%` cap stay applied forever (forwards fill mode)
+     and the long command gets silently clipped at the panel edge. */
+  animation:
+    typewriter-expand 0.6s steps(30, end) forwards,
+    typewriter-unclip 0.01s 0.6s forwards;
 }
 @keyframes typewriter-expand {
   to {
     max-width: 100%;
+  }
+}
+@keyframes typewriter-unclip {
+  to {
+    overflow: visible;
+    max-width: none;
   }
 }
 /* Inline caret that follows the typewriter text, then hides once
@@ -2135,7 +2169,10 @@ a.info-term {
   color: var(--forest-light);
 }
 .anim-output-text {
-  white-space: pre-wrap;
+  /* Match the parent `.console-panel`: don't wrap, so long output
+     lines extend past the panel width and trigger the panel's
+     horizontal scrollbar instead of wrapping silently. */
+  white-space: pre;
 }
 .anim-output-caret {
   display: inline-block;
@@ -2631,6 +2668,16 @@ a.info-term {
 .hero-action:disabled {
   opacity: 0.6;
   cursor: default;
+}
+/* Keyboard-shortcut tail inside the hero Run button. Smaller scale than
+   .pg-run-kbd because .hero-action is itself a smaller button — letter-
+   spacing kept tight to avoid overflowing the button's min-width. */
+.hero-action-kbd {
+  font-size: 0.85em;
+  font-weight: 500;
+  opacity: 0.75;
+  margin-left: 0.1rem;
+  letter-spacing: 0.02em;
 }
 
 /* hero card editor — always editable transparent textarea over highlighted overlay */
