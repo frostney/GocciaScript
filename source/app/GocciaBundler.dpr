@@ -284,6 +284,30 @@ begin
   end;
 end;
 
+{ Replace characters that are illegal in filenames on Windows (< > : " /
+  \ | * ?) and ASCII control characters with '_'.  Used when synthesizing
+  on-disk paths from multifile section names whose synthetic basename
+  contains the angle brackets of the stdin marker (e.g.
+  '<stdin>[part1]').  The section name itself stays intact for diagnostic
+  output; only the disk path is sanitized. }
+function SanitizeFileBaseName(const ABaseName: string): string;
+var
+  I: Integer;
+  C: Char;
+begin
+  SetLength(Result, Length(ABaseName));
+  for I := 1 to Length(ABaseName) do
+  begin
+    C := ABaseName[I];
+    if (C = '<') or (C = '>') or (C = ':') or (C = '"') or
+       (C = '/') or (C = '\') or (C = '|') or (C = '?') or (C = '*') or
+       (Ord(C) < 32) then
+      Result[I] := '_'
+    else
+      Result[I] := C;
+  end;
+end;
+
 procedure TBundlerApp.EmitFromStdin;
 var
   Source, SectionSource, Names: TStringList;
@@ -307,8 +331,12 @@ begin
     try
       for I := 0 to Names.Count - 1 do
       begin
+        // Sanitize the filename so '<stdin>[partN]' becomes a Windows-
+        // legal '_stdin_[partN].gbc' on disk.  The section name stays
+        // intact for EmitBytecode (used for diagnostics).
         OutputPath := IncludeTrailingPathDelimiter(FOutputPath.Value) +
-          ChangeFileExt(ExtractFileName(Names[I]), EXT_GBC);
+          ChangeFileExt(SanitizeFileBaseName(ExtractFileName(Names[I])),
+            EXT_GBC);
         SectionSource := SourceRegistry.Load(Names[I]);
         try
           EmitBytecode(SectionSource, Names[I], OutputPath);

@@ -255,7 +255,7 @@ end;
 
 procedure TTestRunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
-  Files, RawFiles, StdinNames, TempFiles: TStringList;
+  Files, RawFiles, StdinNames, TempFiles, CoverageSource: TStringList;
   I: Integer;
   AggregatedResult: TAggregatedTestResult;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
@@ -383,7 +383,24 @@ begin
       begin
         PrintCoverageSummary(TGocciaCoverageTracker.Instance);
         if Files.Count = 1 then
-          PrintCoverageDetail(TGocciaCoverageTracker.Instance, Files[0]);
+        begin
+          { Virtual filenames (multifile sections, stdin) are not on
+            disk; load their source from the registry so coverage detail
+            is printed with the actual section content rather than
+            silently skipped. }
+          if SourceRegistry.IsRegistered(Files[0]) then
+          begin
+            CoverageSource := SourceRegistry.Load(Files[0]);
+            try
+              PrintCoverageDetail(TGocciaCoverageTracker.Instance,
+                Files[0], CoverageSource);
+            finally
+              CoverageSource.Free;
+            end;
+          end
+          else
+            PrintCoverageDetail(TGocciaCoverageTracker.Instance, Files[0]);
+        end;
       end;
       if CoverageOptions.Format.Matches(cfLcov) and
          (CoverageOptions.OutputPath.ValueOr('') <> '') then

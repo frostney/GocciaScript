@@ -5,11 +5,20 @@ unit Goccia.Coverage.Report;
 interface
 
 uses
+  Classes,
+
   Goccia.Coverage;
 
 procedure PrintCoverageSummary(const ATracker: TGocciaCoverageTracker);
+{ When APreloadedSource is supplied, use it as the source instead of
+  reading AFilePath from disk.  Callers can pass the in-memory source
+  for virtual filenames (multifile sections, stdin) that have no
+  on-disk backing.  Caller retains ownership of APreloadedSource.
+  When nil, falls back to reading AFilePath from disk; if that file
+  does not exist, the function exits without printing detail. }
 procedure PrintCoverageDetail(const ATracker: TGocciaCoverageTracker;
-  const AFilePath: string);
+  const AFilePath: string;
+  const APreloadedSource: TStringList = nil);
 procedure WriteCoverageLcov(const ATracker: TGocciaCoverageTracker;
   const AOutputPath: string);
 procedure WriteCoverageJSON(const ATracker: TGocciaCoverageTracker;
@@ -18,7 +27,6 @@ procedure WriteCoverageJSON(const ATracker: TGocciaCoverageTracker;
 implementation
 
 uses
-  Classes,
   SysUtils,
 
   BaseMap,
@@ -121,19 +129,31 @@ end;
 { Line-by-Line Detail }
 
 procedure PrintCoverageDetail(const ATracker: TGocciaCoverageTracker;
-  const AFilePath: string);
+  const AFilePath: string;
+  const APreloadedSource: TStringList);
 var
   FileCov: TGocciaFileCoverage;
   SourceLines: TStringList;
+  OwnsSource: Boolean;
   ExecutableFlags: array of Boolean;
   I, HitCount, LineWidth: Integer;
   Gutter: string;
 begin
   FileCov := ATracker.GetFileCoverage(AFilePath);
   if not Assigned(FileCov) then Exit;
-  if not FileExists(AFilePath) then Exit;
 
-  SourceLines := CreateUTF8FileTextLines(ReadUTF8FileText(AFilePath));
+  if Assigned(APreloadedSource) then
+  begin
+    SourceLines := APreloadedSource;
+    OwnsSource := False;
+  end
+  else
+  begin
+    if not FileExists(AFilePath) then Exit;
+    SourceLines := CreateUTF8FileTextLines(ReadUTF8FileText(AFilePath));
+    OwnsSource := True;
+  end;
+
   try
     if SourceLines.Count = 0 then Exit;
 
@@ -163,7 +183,8 @@ begin
         [Gutter, LineWidth, I + 1, SourceLines[I]]));
     end;
   finally
-    SourceLines.Free;
+    if OwnsSource then
+      SourceLines.Free;
   end;
 end;
 

@@ -780,6 +780,11 @@ begin
           finally
             SectionSource.Free;
           end;
+          // Match the per-file GC pass in CollectBenchmarkFile* so
+          // GC-managed objects from one stdin section don't accumulate
+          // across the next one.
+          if Assigned(TGarbageCollector.Instance) then
+            TGarbageCollector.Instance.Collect;
         end;
       finally
         Names.Free;
