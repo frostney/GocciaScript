@@ -153,13 +153,16 @@ begin
   // Set up evaluation context — inherit OnError, LoadModule and the
   // strict-types flag from the closure scope so the body sees the
   // same enforcement setting as the surrounding lexical scope.
+  // EffectiveStrictTypes walks to the root scope so closures observe
+  // updates made by TGocciaEngine.SetStrictTypes after the closure's
+  // lexical scope was created.
   Context.Scope := FClosure;
   Context.OnError := FClosure.OnError;
   Context.LoadModule := FClosure.LoadModule;
   Context.CurrentFilePath := FSourceFilePath;
   Context.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
     and TGocciaCoverageTracker.Instance.Enabled;
-  Context.StrictTypes := FClosure.StrictTypes;
+  Context.StrictTypes := FClosure.EffectiveStrictTypes;
   Context.DisposalTracker := nil;
 
   // Record coverage hit on the declaration line (get/set/constructor/method)

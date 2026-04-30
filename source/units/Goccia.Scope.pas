@@ -81,6 +81,14 @@ type
     function FindOwningClass: TGocciaValue;
     function FindSuperClass: TGocciaValue;
 
+    { Read StrictTypes from the root (global) scope so that
+      TGocciaEngine.SetStrictTypes propagates uniformly to closures
+      whose lexical scope was created before the setter ran.  Each
+      scope's own FStrictTypes is still inherited from its parent at
+      creation, but it is only the root's value that the engine setter
+      keeps in sync. }
+    function EffectiveStrictTypes: Boolean;
+
     property Parent: TGocciaScope read FParent;
     property ThisValue: TGocciaValue read FThisValue write FThisValue;
     property ScopeKind: TGocciaScopeKind read FScopeKind;
@@ -89,7 +97,8 @@ type
     property LoadModule: TLoadModuleCallback read FLoadModule write FLoadModule;
     { Strict-types enforcement flag.  Inherited from parent at scope
       creation so nested closures observe the same setting as the
-      surrounding lexical scope. }
+      surrounding lexical scope.  For live engine state use
+      EffectiveStrictTypes, which always reads the root scope. }
     property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
   end;
 
@@ -233,6 +242,16 @@ begin
   end;
   // Fallback: return self if no function/module scope found
   Result := Self;
+end;
+
+function TGocciaScope.EffectiveStrictTypes: Boolean;
+var
+  Root: TGocciaScope;
+begin
+  Root := Self;
+  while Assigned(Root.FParent) do
+    Root := Root.FParent;
+  Result := Root.FStrictTypes;
 end;
 
 function TGocciaScope.FindOwningClass: TGocciaValue;

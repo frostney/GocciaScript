@@ -10,6 +10,7 @@ uses
 
   Goccia.Engine,
   Goccia.Engine.Backend,
+  Goccia.Scope,
   Goccia.TestSetup,
   Goccia.Values.Primitives;
 
@@ -21,6 +22,7 @@ type
     procedure TestBytecodeExecutorDefaultIsFalse;
     procedure TestSetterPropagatesToInterpreterScope;
     procedure TestSetterPropagatesToBytecodeExecutor;
+    procedure TestEffectiveStrictTypesReadsLiveRoot;
   public
     procedure SetupTests; override;
   end;
@@ -35,6 +37,8 @@ begin
     TestSetterPropagatesToInterpreterScope);
   Test('Setting Engine.StrictTypes propagates to bytecode executor',
     TestSetterPropagatesToBytecodeExecutor);
+  Test('EffectiveStrictTypes reads live root after setter (regression)',
+    TestEffectiveStrictTypesReadsLiveRoot);
 end;
 
 function TEngineStrictTypesTests.CreateEmptySource: TStringList;
@@ -114,6 +118,42 @@ begin
   finally
     Engine.Free;
     Executor.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TEngineStrictTypesTests.TestEffectiveStrictTypesReadsLiveRoot;
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  Child: TGocciaScope;
+begin
+  Source := CreateEmptySource;
+  Engine := TGocciaEngine.Create('<strict-test>', Source, []);
+  try
+    { Simulate a closure whose lexical scope was created before the
+      setter ran: a child of the global scope captures the
+      then-current StrictTypes (False) into its own FStrictTypes. }
+    Child := Engine.Interpreter.GlobalScope.CreateChild(skBlock,
+      'embedder-block');
+    Expect<Boolean>(Child.StrictTypes).ToBe(False);
+
+    { Flipping Engine.StrictTypes only updates the global scope's own
+      FStrictTypes; the child's snapshot stays stale. }
+    Engine.StrictTypes := True;
+    Expect<Boolean>(Child.StrictTypes).ToBe(False);
+
+    { EffectiveStrictTypes walks to the root, so closures
+      created before the setter still observe the live value -- this
+      is what TGocciaFunctionValue.ExecuteBody and its generator
+      counterparts read when seeding the call context. }
+    Expect<Boolean>(Child.EffectiveStrictTypes).ToBe(True);
+
+    { Flipping it back also flows through. }
+    Engine.StrictTypes := False;
+    Expect<Boolean>(Child.EffectiveStrictTypes).ToBe(False);
+  finally
+    Engine.Free;
     Source.Free;
   end;
 end;

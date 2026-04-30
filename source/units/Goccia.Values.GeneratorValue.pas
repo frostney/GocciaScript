@@ -513,7 +513,10 @@ begin
   Context.LoadModule := FClosure.LoadModule;
   Context.CurrentFilePath := FSourceFilePath;
   Context.CoverageEnabled := False;
-  Context.StrictTypes := FClosure.StrictTypes;
+  // EffectiveStrictTypes walks to the root scope so generator bodies
+  // observe TGocciaEngine.SetStrictTypes updates made after the
+  // generator's closure scope was created.
+  Context.StrictTypes := FClosure.EffectiveStrictTypes;
   Context.DisposalTracker := nil;
 
   for I := 0 to Length(FParameters) - 1 do
@@ -588,7 +591,8 @@ begin
   Context.LoadModule := FClosure.LoadModule;
   Context.CurrentFilePath := FSourceFilePath;
   Context.CoverageEnabled := False;
-  Context.StrictTypes := FClosure.StrictTypes;
+  // EffectiveStrictTypes — see CreateContinuation above.
+  Context.StrictTypes := FClosure.EffectiveStrictTypes;
   Context.DisposalTracker := nil;
 
   for I := 0 to Length(FParameters) - 1 do
