@@ -154,6 +154,61 @@ for (const order is { total: const total } if (total > 10) of orders) {
 }`,
   },
   {
+    id: "resources",
+    label: "Resource management — using / await using",
+    desc: "ES2026 explicit resource management: 'using' and 'await using' bindings auto-dispose at block exit, in reverse declaration order. DisposableStack collects an unknown number of resources.",
+    code: `// ES2026 explicit resource management — automatic cleanup at block exit.
+class Grinder {
+  constructor(label) {
+    this.label = label;
+    console.log(\`→ \${label}: warming up\`);
+  }
+  grind(beans) {
+    return \`\${beans} grounds\`;
+  }
+  [Symbol.dispose]() {
+    console.log(\`← \${this.label}: cleaned\`);
+  }
+}
+
+class SteamWand {
+  constructor() {
+    console.log("→ wand: pressurized");
+  }
+  steam(milk) {
+    return \`foamed \${milk}\`;
+  }
+  async [Symbol.asyncDispose]() {
+    await Promise.resolve();
+    console.log("← wand: purged");
+  }
+}
+
+// Resources declared with 'using' / 'await using' auto-dispose
+// when the surrounding { } block exits — in reverse declaration order.
+{
+  using grinder = new Grinder("grinder");
+  await using wand = new SteamWand();
+
+  const shot = grinder.grind("Arabica");
+  const foam = wand.steam("oat");
+  console.log(\`  ☕ \${shot} + \${foam}\`);
+  // Block exit:
+  //   1. await wand[Symbol.asyncDispose]()
+  //   2. grinder[Symbol.dispose]()
+}
+
+// DisposableStack collects resources opened in a loop.
+{
+  using stack = new DisposableStack();
+  for (const drink of ["espresso", "cortado"]) {
+    stack.use(new Grinder(\`mill: \${drink}\`));
+  }
+  // 'stack' is itself bound with 'using', so it disposes
+  // every enrolled resource (LIFO) when the block ends.
+}`,
+  },
+  {
     id: "test-runner",
     label: "Test runner — describe / test / expect",
     desc: "GocciaTestRunner globals for suites, assertions, and runner output.",
@@ -342,7 +397,7 @@ console.log("Features:", Object.keys(config.features));
 
 // CSV → array of rows
 const csv = "name,price\\nespresso,2.5\\nlatte,4.0";
-const rows = CSV.parse(csv, { header: true });
+const rows = CSV.parse(csv, { headers: true });
 console.log("Menu rows:", rows);`,
   },
   {

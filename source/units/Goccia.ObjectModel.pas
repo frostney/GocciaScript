@@ -37,6 +37,7 @@ const
   gmkDataProperty = Goccia.ObjectModel.Types.gmkDataProperty;
   gmfNoFunctionPrototype = Goccia.ObjectModel.Types.gmfNoFunctionPrototype;
   gmfVariadic = Goccia.ObjectModel.Types.gmfVariadic;
+  gmfNotConstructable = Goccia.ObjectModel.Types.gmfNotConstructable;
 
 type
   EGocciaObjectModelError = class(Exception);

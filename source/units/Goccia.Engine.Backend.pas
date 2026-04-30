@@ -32,8 +32,8 @@ type
       const ASourcePath: string); override;
     function ExecuteProgram(
       const AProgram: TGocciaProgram): TGocciaValue; override;
-    procedure EvaluateModuleBody(const AProgram: TGocciaProgram;
-      const AContext: TGocciaEvaluationContext); override;
+    function EvaluateModuleBody(const AProgram: TGocciaProgram;
+      const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     function ExecuteDynamicFunction(
       const AProgram: TGocciaProgram): TGocciaValue; override;
     procedure ClearTransientCaches; override;
@@ -42,6 +42,12 @@ type
     function CompileToModule(
       const AProgram: TGocciaProgram): TGocciaBytecodeModule;
     function RunModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
+    { Run AModule with FVM.GlobalScope temporarily replaced by AScope.
+      Used to execute the entry program with a fresh module scope when
+      --source-type=module is set; mirrors the swap that
+      EvaluateModuleBody does for nested module loads. }
+    function RunModuleInScope(const AModule: TGocciaBytecodeModule;
+      const AScope: TGocciaScope): TGocciaValue;
 
     property VM: TGocciaVM read FVM;
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
@@ -85,8 +91,9 @@ begin
   AModuleLoader.EvaluateModuleBody := EvaluateModuleBody;
 end;
 
-procedure TGocciaBytecodeExecutor.EvaluateModuleBody(
-  const AProgram: TGocciaProgram; const AContext: TGocciaEvaluationContext);
+function TGocciaBytecodeExecutor.EvaluateModuleBody(
+  const AProgram: TGocciaProgram;
+  const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Compiler: TGocciaCompiler;
   BytecodeModule: TGocciaBytecodeModule;
@@ -105,7 +112,7 @@ begin
   SavedGlobalScope := FVM.GlobalScope;
   FVM.GlobalScope := AContext.Scope;
   try
-    FVM.ExecuteModule(BytecodeModule);
+    Result := FVM.ExecuteModule(BytecodeModule);
   finally
     FVM.GlobalScope := SavedGlobalScope;
   end;
@@ -183,6 +190,21 @@ begin
   finally
     GProfilingAllocations := False;
     GC.Enabled := WasEnabled;
+  end;
+end;
+
+function TGocciaBytecodeExecutor.RunModuleInScope(
+  const AModule: TGocciaBytecodeModule;
+  const AScope: TGocciaScope): TGocciaValue;
+var
+  SavedGlobalScope: TGocciaScope;
+begin
+  SavedGlobalScope := FVM.GlobalScope;
+  FVM.GlobalScope := AScope;
+  try
+    Result := RunModule(AModule);
+  finally
+    FVM.GlobalScope := SavedGlobalScope;
   end;
 end;
 

@@ -155,6 +155,36 @@ describe("for-await-of", () => {
     })()).rejects.toThrow(TypeError);
   });
 
+  test("non-callable async iterator property rejects before sync fallback", async () => {
+    const source = {
+      [Symbol.asyncIterator]: 1,
+      [Symbol.iterator]() {
+        return [1][Symbol.iterator]();
+      },
+    };
+
+    await expect((async () => {
+      for await (const x of source) {
+      }
+    })()).rejects.toThrow(TypeError);
+  });
+
+  test("null async iterator property falls back to sync iterator", async () => {
+    const source = {
+      [Symbol.asyncIterator]: null,
+      [Symbol.iterator]() {
+        return [1, 2][Symbol.iterator]();
+      },
+    };
+    const result = [];
+
+    for await (const x of source) {
+      result.push(x);
+    }
+
+    expect(result).toEqual([1, 2]);
+  });
+
   test("invalid async iterator result rejects with TypeError", async () => {
     const primitiveIterator = {
       [Symbol.asyncIterator]() {
@@ -186,6 +216,25 @@ describe("for-await-of", () => {
       for await (const x of nextNotCallable) {
       }
     })()).rejects.toThrow(TypeError);
+  });
+
+  test("invalid sync iterator result rejects with TypeError through async wrapper", async () => {
+    const primitiveResult = {
+      [Symbol.iterator]() {
+        return {
+          next() {
+            return Symbol("not-object");
+          },
+        };
+      },
+    };
+
+    const iterate = async () => {
+      for await (const x of primitiveResult) {
+      }
+    };
+
+    await expect(iterate()).rejects.toThrow(TypeError);
   });
 
   test("rejected Promise values from sync iterables throw", async () => {

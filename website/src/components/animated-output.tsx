@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { useRunShortcut } from "@/components/command-tabs";
 
 /** Per-line entry rendered inside `<AnimatedOutput>`. Mirrors the
  *  shape the playground / sandbox / hero outputs already use. */
@@ -45,6 +46,7 @@ export function AnimatedOutput({
    *  output that's no longer "live". */
   showCaret?: boolean;
 }) {
+  const runShortcut = useRunShortcut();
   if (lines.length === 0) {
     return (
       <div className={`anim-output ${className}`}>
@@ -58,7 +60,7 @@ export function AnimatedOutput({
               aria-hidden="true"
             />
             <span className="anim-output-hint" role="status">
-              press Run or ⌘+Enter
+              press Run or {runShortcut.long}
             </span>
           </span>
         </div>

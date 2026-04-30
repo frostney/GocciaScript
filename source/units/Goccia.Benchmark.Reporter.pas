@@ -35,7 +35,8 @@ type
     DurationNanoseconds: Int64;
   end;
 
-  TBenchmarkReportFormat = (brfConsole, brfText, brfCSV, brfJSON);
+  TBenchmarkReportFormat = (brfConsole, brfText, brfCSV, brfJSON,
+    brfCompactJSON);
 
   TBenchmarkReporter = class
   private
@@ -45,6 +46,7 @@ type
     FWallClockDurationNanoseconds: Int64;
     FJobCount: Integer;
     FMemoryStats: TCLIJSONMemoryStats;
+    FRenderCompact: Boolean;
 
     procedure RenderConsole;
     procedure RenderText;
@@ -108,6 +110,8 @@ begin
     Result := brfCSV
   else if (Lower = 'json') then
     Result := brfJSON
+  else if (Lower = 'compact-json') then
+    Result := brfCompactJSON
   else
     Result := brfConsole;
 end;
@@ -122,6 +126,7 @@ begin
   FWallClockDurationNanoseconds := 0;
   FJobCount := 1;
   FMemoryStats := DefaultCLIJSONMemoryStats;
+  FRenderCompact := False;
   SetLength(FFiles, 0);
 end;
 
@@ -179,11 +184,13 @@ end;
 procedure TBenchmarkReporter.Render(const AFormat: TBenchmarkReportFormat);
 begin
   FOutput.Clear;
+  FRenderCompact := AFormat = brfCompactJSON;
   case AFormat of
-    brfConsole: RenderConsole;
-    brfText:    RenderText;
-    brfCSV:     RenderCSV;
-    brfJSON:    RenderJSON;
+    brfConsole:     RenderConsole;
+    brfText:        RenderText;
+    brfCSV:         RenderCSV;
+    brfJSON:        RenderJSON;
+    brfCompactJSON: RenderJSON;
   end;
 end;
 
@@ -447,7 +454,7 @@ begin
     FileJSON :=
       '{' +
         BuildCLIFileBaseJSON(FFiles[F].FileName, FileOk, '', '', '',
-          FileErrorJSON, FileTiming, '"memory":null') + ',' +
+          FileErrorJSON, FileTiming, '"memory":null', FRenderCompact) + ',' +
         SysUtils.Format('"lexTimeNanoseconds":%d,', [FFiles[F].LexTimeNanoseconds]) +
         SysUtils.Format('"parseTimeNanoseconds":%d,', [FFiles[F].ParseTimeNanoseconds]) +
         SysUtils.Format('"compileTimeNanoseconds":%d,', [FFiles[F].CompileTimeNanoseconds]) +
@@ -489,7 +496,8 @@ begin
     SysUtils.Format('"totalBenchmarks":%d,', [TotalBenchmarks]) +
     SysUtils.Format('"totalDurationNanoseconds":%d', [TotalDurationNanoseconds]);
   FOutput.Text := BuildCLIReportJSON(not HasFailures, '', '', '', 'null',
-    Timing, FMemoryStats, FJobCount, FJobCount, FilesJSON, ExtraJSON);
+    Timing, FMemoryStats, FJobCount, FJobCount, FilesJSON, ExtraJSON,
+    FRenderCompact);
 end;
 
 procedure TBenchmarkReporter.WriteToStream(const AStream: TStream);

@@ -7,18 +7,31 @@ import { tmpdir } from "node:os";
 import path, { basename } from "node:path";
 import { NextResponse } from "next/server";
 import {
+  MAX_GOCCIA_CODE_BYTES,
+  MAX_GOCCIA_TOOL_REQUEST_BYTES,
+  validateGocciaToolInput,
+} from "@/lib/goccia-tool-schema";
+import {
   captureServerEvent,
   captureServerException,
 } from "@/lib/posthog-server";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
+import {
+  isResponseCacheable,
+  responseCacheGet,
+  responseCacheKey,
+  responseCacheSet,
+} from "@/lib/response-cache";
+import {
+  findVersion,
+  isFlagSupported,
+  type VendorFeatureSet,
+} from "@/lib/vendor-manifest";
+import { getVendorManifest } from "@/lib/vendor-manifest-server";
 
 const TIMEOUT_MS = 5_000;
 const MAX_OUTPUT_BYTES = 256 * 1024;
-const MAX_CODE_BYTES = 64 * 1024;
-// Cap the entire JSON envelope (`{"code":"...","mode":"...","asi":...}`) so
-// we don't buffer arbitrarily large bodies before the per-field size check
-// fires. Allow ~1 KB of envelope/key/value overhead on top of the code limit.
-const MAX_BODY_BYTES = MAX_CODE_BYTES + 1_024;
+const MAX_BODY_BYTES = MAX_GOCCIA_TOOL_REQUEST_BYTES;
 const MAX_MEMORY_BYTES = 32 * 1024 * 1024;
 const MAX_INSTRUCTIONS = 50_000_000;
 const STACK_SIZE = 2_000;
@@ -30,6 +43,7 @@ type GocciaRequestBody = {
   asi?: boolean;
   compatVar?: boolean;
   compatFunction?: boolean;
+  version?: string;
 };
 
 type EndpointConfig = {
@@ -65,11 +79,13 @@ type TransportError = {
   message: string;
   code:
     | "RATE_LIMIT"
+    | "INVALID_INPUT"
     | "INVALID_JSON"
     | "MISSING_CODE"
     | "CODE_TOO_LARGE"
     | "SPAWN_FAILED"
-    | "ABORTED";
+    | "ABORTED"
+    | "UNKNOWN_VERSION";
 };
 
 type TimingJson = {
@@ -101,6 +117,7 @@ function runtimeTelemetryProperties(
   asi: boolean,
   compatVar: boolean,
   compatFunction: boolean,
+  resolvedVersion: string,
   codeBytes?: number,
 ): Record<string, unknown> {
   return {
@@ -108,6 +125,7 @@ function runtimeTelemetryProperties(
     asi,
     compatVar,
     compatFunction,
+    version: resolvedVersion,
     ...(codeBytes === undefined ? {} : { codeBytes }),
   };
 }
@@ -149,58 +167,130 @@ async function readBodyWithCap(
   return Buffer.concat(chunks).toString("utf8");
 }
 
+type ResolvedBinary =
+  | {
+      ok: true;
+      path: string;
+      resolvedVersion: string;
+      features: VendorFeatureSet | undefined;
+    }
+  | { ok: false; error: TransportError };
+
 // Resolution order, first existing path wins:
 //   1. endpoint-specific env var (deploy / debug override)
-//   2. `../build/<binary>` - the locally built engine, so `bun run dev`
-//      always uses whatever the developer just compiled with `./build.pas`
-//   3. `vendor/<binary>` - fetched at `prebuild` time for Vercel deploys
-function resolveBinaryPath(config: EndpointConfig): string {
+//   2. `vendor/<entry.binaries.*>` for the requested release tag — populated
+//      at `prebuild` time by `scripts/fetch-binaries.ts` and described in
+//      `vendor/manifest.json`. Per-version paths preserve archive-side
+//      filenames so pre-0.7.0's `ScriptLoader`/`TestRunner` and post-0.7.0's
+//      `GocciaScriptLoader`/`GocciaTestRunner` both resolve cleanly.
+//   3. dev-only fallback to `../build/<binary>` — the locally compiled engine
+//      `./build.pas` produced. Disabled in production so an unknown version
+//      can't silently fall through to the wrong binary on Vercel.
+function resolveBinaryPath(
+  config: EndpointConfig,
+  requestedVersion: string,
+): ResolvedBinary {
   const override = process.env[config.binaryEnvVar];
-  if (override) return override;
-
-  const localBinary =
-    config.kind === "execute"
-      ? path.join(
-          /* turbopackIgnore: true */ process.cwd(),
-          "..",
-          "build",
-          "GocciaScriptLoader",
-        )
-      : path.join(
-          /* turbopackIgnore: true */ process.cwd(),
-          "..",
-          "build",
-          "GocciaTestRunner",
-        );
-  const vendorBinary =
-    config.kind === "execute"
-      ? path.join(process.cwd(), "vendor", "GocciaScriptLoader")
-      : path.join(process.cwd(), "vendor", "GocciaTestRunner");
-
-  const candidates = [localBinary, vendorBinary];
-  for (const candidate of candidates) {
-    if (existsSync(/* turbopackIgnore: true */ candidate)) return candidate;
+  if (override) {
+    // Override path bypasses the manifest entirely — caller assumes the
+    // binary is current. Skipping feature filtering preserves the legacy
+    // "I know what I'm doing" debug semantics.
+    return {
+      ok: true,
+      path: override,
+      resolvedVersion: requestedVersion,
+      features: undefined,
+    };
   }
-  return candidates[candidates.length - 1];
+
+  const manifest = getVendorManifest();
+  const entry = findVersion(manifest, requestedVersion);
+  if (entry) {
+    const rel =
+      config.kind === "execute"
+        ? entry.binaries.loader
+        : entry.binaries.testRunner;
+    const abs = path.join(process.cwd(), "vendor", rel);
+    if (existsSync(/* turbopackIgnore: true */ abs)) {
+      return {
+        ok: true,
+        path: abs,
+        resolvedVersion: entry.tag,
+        features: entry.features,
+      };
+    }
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    const localName =
+      config.kind === "execute" ? "GocciaScriptLoader" : "GocciaTestRunner";
+    const localPath = path.join(
+      /* turbopackIgnore: true */ process.cwd(),
+      "..",
+      "build",
+      localName,
+    );
+    if (existsSync(/* turbopackIgnore: true */ localPath)) {
+      // Locally compiled engine: no probe, no filtering — the developer is
+      // running whatever they just built.
+      return {
+        ok: true,
+        path: localPath,
+        resolvedVersion: "local",
+        features: undefined,
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    error: {
+      message: `unknown version: ${requestedVersion}`,
+      code: "UNKNOWN_VERSION",
+    },
+  };
 }
 
+/** Build the per-request arg list. Sandbox/infrastructure flags are
+ *  filtered against the binary's probed `features` so older engines that
+ *  don't recognize them (`--max-memory`, `--allowed-host`, …) still execute
+ *  instead of erroring on first unknown-option.
+ *
+ *  User-toggled compat flags (`--compat-var`, `--compat-function`) are an
+ *  exception: when the user explicitly opted in, we want the engine's own
+ *  "Unknown option" error to surface so they know the toggle had no effect.
+ *  Silently dropping them would be misleading. */
 function buildEngineArgs(
   body: GocciaRequestBody,
   asi: boolean,
   compatVar: boolean,
   compatFunction: boolean,
+  features: VendorFeatureSet | undefined,
+  kind: "loader" | "testRunner",
 ): string[] {
-  const args = [
-    `--timeout=${TIMEOUT_MS}`,
-    `--max-memory=${MAX_MEMORY_BYTES}`,
-    `--max-instructions=${MAX_INSTRUCTIONS}`,
-    `--stack-size=${STACK_SIZE}`,
-    ...ALLOWED_HOSTS.flatMap((host) => ["--allowed-host", host]),
-  ];
-  if (asi) args.unshift("--asi");
+  const args: string[] = [];
+  const accept = (arg: string) => {
+    if (isFlagSupported(features, arg, kind)) args.push(arg);
+  };
+  accept(`--timeout=${TIMEOUT_MS}`);
+  accept(`--max-memory=${MAX_MEMORY_BYTES}`);
+  accept(`--max-instructions=${MAX_INSTRUCTIONS}`);
+  accept(`--stack-size=${STACK_SIZE}`);
+  if (isFlagSupported(features, "--allowed-host", kind)) {
+    for (const host of ALLOWED_HOSTS) {
+      args.push("--allowed-host", host);
+    }
+  }
+  if (asi && isFlagSupported(features, "--asi", kind)) {
+    args.unshift("--asi");
+  }
+  // Compat flags pass through unconditionally — the engine errors when it
+  // doesn't recognize them, and that's the desired UX (the user toggled it).
   if (compatVar) args.push("--compat-var");
   if (compatFunction) args.push("--compat-function");
-  if (body.mode === "bytecode") args.push("--mode=bytecode");
+  if (body.mode === "bytecode" && isFlagSupported(features, "--mode", kind)) {
+    args.push("--mode=bytecode");
+  }
   return args;
 }
 
@@ -211,16 +301,26 @@ async function prepareInvocation(
   asi: boolean,
   compatVar: boolean,
   compatFunction: boolean,
+  binary: string,
+  features: VendorFeatureSet | undefined,
 ): Promise<Invocation> {
-  const binary = resolveBinaryPath(config);
-  const engineArgs = buildEngineArgs(body, asi, compatVar, compatFunction);
+  const kind = config.kind === "execute" ? "loader" : "testRunner";
+  const engineArgs = buildEngineArgs(
+    body,
+    asi,
+    compatVar,
+    compatFunction,
+    features,
+    kind,
+  );
 
   if (config.kind === "execute") {
-    return {
-      binary,
-      args: ["--output=json", ...engineArgs],
-      stdin: code,
-    };
+    const args: string[] = [];
+    if (isFlagSupported(features, "--output", "loader")) {
+      args.push("--output=json");
+    }
+    args.push(...engineArgs);
+    return { binary, args, stdin: code };
   }
 
   const dir = await mkdtemp(
@@ -230,16 +330,28 @@ async function prepareInvocation(
   const resultFile = path.join(dir, "results.json");
   await writeFile(/* turbopackIgnore: true */ testFile, code, "utf8");
 
+  // Build the test-runner arg list defensively: each flag is gated against
+  // the binary's probed feature set. When `--output=<path>` isn't supported
+  // we fall back to parsing stdout (`readInvocationResult` already handles
+  // an absent `resultFile`).
+  const args: string[] = [testFile];
+  if (isFlagSupported(features, "--no-progress", "testRunner")) {
+    args.push("--no-progress");
+  }
+  if (isFlagSupported(features, "--no-results", "testRunner")) {
+    args.push("--no-results");
+  }
+  let resolvedResultFile: string | undefined;
+  if (isFlagSupported(features, "--output", "testRunner")) {
+    args.push(`--output=${resultFile}`);
+    resolvedResultFile = resultFile;
+  }
+  args.push(...engineArgs);
+
   return {
     binary,
-    args: [
-      testFile,
-      "--no-progress",
-      "--no-results",
-      `--output=${resultFile}`,
-      ...engineArgs,
-    ],
-    resultFile,
+    args,
+    resultFile: resolvedResultFile,
     privateDirectory: dir,
     privateFileName: testFile,
     publicFileName: "<inline-test.js>",
@@ -564,9 +676,9 @@ async function runHandler(
     );
   }
 
-  let body: GocciaRequestBody;
+  let rawPayload: unknown;
   try {
-    body = JSON.parse(rawBody) as GocciaRequestBody;
+    rawPayload = JSON.parse(rawBody);
   } catch {
     captureServerEvent(`${config.eventPrefix}_invalid_json`, {
       distinctId,
@@ -578,18 +690,31 @@ async function runHandler(
     );
   }
 
-  const code = typeof body.code === "string" ? body.code : "";
-  if (!code) {
+  const payload = validateGocciaToolInput(rawPayload);
+  if (!payload.ok) {
+    const status = payload.error.code === "CODE_TOO_LARGE" ? 413 : 400;
+    if (payload.error.code === "CODE_TOO_LARGE") {
+      captureServerEvent(`${config.eventPrefix}_code_too_large`, {
+        distinctId,
+        path: config.path,
+        properties: { source: "schema" },
+      });
+    }
     return transportError(
-      { message: "code is required", code: "MISSING_CODE" },
-      { status: 400 },
+      {
+        message: payload.error.message,
+        code: payload.error.code,
+      },
+      { status },
     );
   }
 
+  const body = payload.value;
+  const code = body.code;
   // UTF-16 code-unit count (`code.length`) under-counts for non-BMP source;
   // measure the actual bytes that will hit stdin or the temp test file.
   const codeBytes = Buffer.byteLength(code, "utf8");
-  if (codeBytes > MAX_CODE_BYTES) {
+  if (codeBytes > MAX_GOCCIA_CODE_BYTES) {
     captureServerEvent(`${config.eventPrefix}_code_too_large`, {
       distinctId,
       path: config.path,
@@ -597,17 +722,73 @@ async function runHandler(
     });
     return transportError(
       {
-        message: `code exceeds ${MAX_CODE_BYTES} bytes`,
+        message: `code exceeds ${MAX_GOCCIA_CODE_BYTES} bytes`,
         code: "CODE_TOO_LARGE",
       },
       { status: 413 },
     );
   }
 
-  // Default to ASI on: matches the project's standard test/run posture.
-  const asi = body.asi !== false;
-  const compatVar = body.compatVar === true;
-  const compatFunction = body.compatFunction === true;
+  const { asi, compatVar, compatFunction } = body;
+  const requestedVersion = body.version ?? getVendorManifest().defaultVersion;
+  const resolved = resolveBinaryPath(config, requestedVersion);
+  if (!resolved.ok) {
+    captureServerEvent(`${config.eventPrefix}_unknown_version`, {
+      distinctId,
+      path: config.path,
+      properties: { requestedVersion },
+    });
+    return transportError(resolved.error, { status: 400 });
+  }
+  const resolvedVersion = resolved.resolvedVersion;
+
+  // Same input -> same response within the cache TTL. A client mashing the
+  // "Run" button on the playground can short-circuit here without spawning
+  // a fresh runner subprocess. Rate limiting still ran above, so cache hits
+  // continue to count against the per-IP budget — the cache only avoids
+  // server CPU, not bandwidth abuse.
+  //
+  // The cache key uses `resolvedVersion`, not the request's `version`, so a
+  // request that omits `version` (defaulting to `manifest.defaultVersion`)
+  // and a request that names that same version explicitly share a single
+  // cache entry. Different versions get isolated entries — switching the
+  // dropdown to nightly or v0.6.1 always re-spawns until that version's
+  // cache fills.
+  const mode: "interpreted" | "bytecode" =
+    body.mode === "bytecode" ? "bytecode" : "interpreted";
+  const cacheKey = responseCacheKey({
+    kind: config.kind,
+    code,
+    mode,
+    asi,
+    compatVar,
+    compatFunction,
+    version: resolvedVersion,
+  });
+  const cached = responseCacheGet(cacheKey);
+  if (cached !== null) {
+    captureServerEvent(`${config.eventPrefix}_cache_hit`, {
+      distinctId,
+      path: config.path,
+      properties: runtimeTelemetryProperties(
+        body,
+        asi,
+        compatVar,
+        compatFunction,
+        resolvedVersion,
+        codeBytes,
+      ),
+    });
+    return NextResponse.json(cached, {
+      headers: {
+        "X-Cache": "HIT",
+        "X-RateLimit-Limit": String(rl.limit),
+        "X-RateLimit-Remaining": String(rl.remaining),
+        "X-RateLimit-Reset": String(Math.ceil(rl.resetAt / 1000)),
+      },
+    });
+  }
+
   const invocation = await prepareInvocation(
     config,
     body,
@@ -615,11 +796,15 @@ async function runHandler(
     asi,
     compatVar,
     compatFunction,
+    resolved.path,
+    resolved.features,
   );
   const startedAt = Date.now();
 
   return await new Promise<Response>((resolve) => {
-    let resolved = false;
+    // Renamed from `resolved` to avoid shadowing the outer
+    // `const resolved = resolveBinaryPath(...)` from `runHandler`.
+    let responseSent = false;
     let cleaned = false;
     let abortHandler: (() => void) | null = null;
 
@@ -630,8 +815,8 @@ async function runHandler(
     };
 
     const finish = (res: Response) => {
-      if (resolved) return;
-      resolved = true;
+      if (responseSent) return;
+      responseSent = true;
       if (abortHandler) {
         try {
           req.signal.removeEventListener("abort", abortHandler);
@@ -676,6 +861,7 @@ async function runHandler(
             asi,
             compatVar,
             compatFunction,
+            resolvedVersion,
             codeBytes,
           ),
         },
@@ -747,7 +933,13 @@ async function runHandler(
           stage: "spawn",
           binary: invocation.binary,
           binaryName: basename(invocation.binary),
-          ...runtimeTelemetryProperties(body, asi, compatVar, compatFunction),
+          ...runtimeTelemetryProperties(
+            body,
+            asi,
+            compatVar,
+            compatFunction,
+            resolvedVersion,
+          ),
         },
       });
       captureServerEvent(`${config.eventPrefix}_spawn_failed`, {
@@ -756,7 +948,13 @@ async function runHandler(
         properties: {
           binaryName: basename(invocation.binary),
           message: err.message,
-          ...runtimeTelemetryProperties(body, asi, compatVar, compatFunction),
+          ...runtimeTelemetryProperties(
+            body,
+            asi,
+            compatVar,
+            compatFunction,
+            resolvedVersion,
+          ),
         },
       });
       await cleanup();
@@ -799,6 +997,7 @@ async function runHandler(
             asi,
             compatVar,
             compatFunction,
+            resolvedVersion,
             codeBytes,
           ),
           stdoutBytes,
@@ -812,26 +1011,35 @@ async function runHandler(
         },
       });
 
+      const responseBody = buildResponseBody(
+        config,
+        invocation,
+        parsed,
+        stdoutText,
+        stderrText,
+        exitCode,
+        signal,
+        truncated,
+      );
+
+      // Cache only deterministic outcomes — truncated outputs are
+      // incomplete, and a non-null signal / null exitCode means the runner
+      // hit a resource limit (timeout, memory, instructions) rather than
+      // producing a stable answer. JS runtime errors with a normal exit
+      // are still cached: same source, same exception.
+      if (isResponseCacheable({ truncated, signal, exitCode })) {
+        responseCacheSet(cacheKey, responseBody);
+      }
+
       finish(
-        NextResponse.json(
-          buildResponseBody(
-            config,
-            invocation,
-            parsed,
-            stdoutText,
-            stderrText,
-            exitCode,
-            signal,
-            truncated,
-          ),
-          {
-            headers: {
-              "X-RateLimit-Limit": String(rl.limit),
-              "X-RateLimit-Remaining": String(rl.remaining),
-              "X-RateLimit-Reset": String(Math.ceil(rl.resetAt / 1000)),
-            },
+        NextResponse.json(responseBody, {
+          headers: {
+            "X-Cache": "MISS",
+            "X-RateLimit-Limit": String(rl.limit),
+            "X-RateLimit-Remaining": String(rl.remaining),
+            "X-RateLimit-Reset": String(Math.ceil(rl.resetAt / 1000)),
           },
-        ),
+        }),
       );
     });
 

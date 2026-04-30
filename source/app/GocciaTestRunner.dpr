@@ -30,6 +30,8 @@ uses
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
+  Goccia.Scope,
+  Goccia.ScriptLoader.Input,
   Goccia.SourceMap,
   Goccia.Builtins.TestingLibrary,
   Goccia.CLI.JSON.Reporter,
@@ -129,17 +131,29 @@ type
     procedure ExecuteWithPaths(const APaths: TStringList); override;
     function GlobalBuiltins: TGocciaGlobalBuiltins; override;
   private
-    function RunGocciaScriptInterpreted(const AFileName: string): TTestFileResult;
-    function RunGocciaScriptBytecode(const AFileName: string): TTestFileResult;
-    function RunGocciaScript(const AFileName: string): TTestFileResult;
-    function RunScriptFromFile(const AFileName: string): TAggregatedTestResult;
+    function IsJsonOutput: Boolean;
+    function IsCompactJsonOutput: Boolean;
+    function RunGocciaScriptInterpreted(const AFileName: string;
+      APreloadedSource: TStringList = nil): TTestFileResult;
+    function RunBytecodeTestModule(const AEngine: TGocciaEngine;
+      const AExecutor: TGocciaBytecodeExecutor;
+      const AModule: TGocciaBytecodeModule;
+      const AFileName: string): TGocciaValue;
+    function RunGocciaScriptBytecode(const AFileName: string;
+      APreloadedSource: TStringList = nil): TTestFileResult;
+    function RunGocciaScript(const AFileName: string;
+      APreloadedSource: TStringList = nil): TTestFileResult;
+    function RunScriptFromFile(const AFileName: string;
+      APreloadedSource: TStringList = nil): TAggregatedTestResult;
     function RunScriptsFromFiles(const AFiles: TStringList): TAggregatedTestResult;
     function RunScriptsFromFilesParallel(const AFiles: TStringList; const AJobCount: Integer): TAggregatedTestResult;
     procedure TestWorkerProc(const AFileName: string; const AIndex: Integer;
       out AConsoleOutput: string; out AErrorMessage: string; AData: Pointer);
-    procedure WriteResultsJSON(const AResult: TAggregatedTestResult; const AFileName: string);
+    procedure WriteResultsJSON(const AResult: TAggregatedTestResult;
+      const AFileName: string; const ACompact: Boolean);
     procedure WriteFileResults(ALines: TStringList; const AResult: TAggregatedTestResult;
-      const APropertyName: string; const ATrailingComma: Boolean);
+      const APropertyName: string; const ATrailingComma: Boolean;
+      const ACompact: Boolean);
     procedure PrintTestResults(const AResult: TAggregatedTestResult);
   end;
 
@@ -207,7 +221,10 @@ begin
   FNoResults := AddFlag('no-results', 'Suppress test results summary');
   FExitOnFirst := AddFlag('exit-on-first-failure', 'Stop on first test failure');
   FSilent := AddFlag('silent', 'Suppress console output from test scripts');
-  FOutputFile := AddString('output', 'Write test results as JSON to file');
+  FOutputFile := AddString('output',
+    '"json" emits a structured JSON envelope to stdout, "compact-json" '
+    + 'omits build, memory, stdout, stderr; any other value is treated as '
+    + 'a file path that receives the full JSON envelope.');
   FTestTimeout := AddInteger('test-timeout',
     'Per-test timeout in ms (0 disables). Marks the test TIMEOUT and continues.');
   FDescribeTimeout := AddInteger('describe-timeout',
@@ -220,9 +237,20 @@ begin
     CoverageOptions.Enabled.Apply('');
 end;
 
+function TTestRunnerApp.IsJsonOutput: Boolean;
+begin
+  Result := FOutputFile.Present and
+    ((FOutputFile.Value = 'json') or (FOutputFile.Value = 'compact-json'));
+end;
+
+function TTestRunnerApp.IsCompactJsonOutput: Boolean;
+begin
+  Result := FOutputFile.Present and (FOutputFile.Value = 'compact-json');
+end;
+
 function TTestRunnerApp.UsageLine: string;
 begin
-  Result := '<path...> [options]';
+  Result := '[path...|-] [options]';
 end;
 
 procedure TTestRunnerApp.ExecuteWithPaths(const APaths: TStringList);
@@ -233,13 +261,27 @@ var
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
   MainMemoryStats: TCLIJSONMemoryStats;
   IsParallelRun: Boolean;
+  StdinSource: TStringList;
+  UseStdin: Boolean;
 begin
-  if APaths.Count = 0 then
-  begin
-    WriteLn(StdErr, 'Error: No paths specified. Run with --help for usage.');
-    ExitCode := 1;
-    Exit;
-  end;
+  { stdin support — match GocciaScriptLoader and GocciaBenchmarkRunner.
+    Source is read from stdin and tagged as <stdin> when either:
+      * no path arguments are supplied, OR
+      * the sole path argument is "-".
+    Mixing "-" with other paths is rejected so structured stdin input
+    cannot silently be interleaved with on-disk files. }
+  UseStdin := (APaths.Count = 0) or
+              ((APaths.Count = 1) and IsStdinPath(APaths[0]));
+
+  if (not UseStdin) and (APaths.Count > 1) then
+    for I := 0 to APaths.Count - 1 do
+      if IsStdinPath(APaths[I]) then
+      begin
+        WriteLn(StdErr,
+          'Error: stdin supports only as the sole input path.');
+        ExitCode := 1;
+        Exit;
+      end;
 
   { Publish per-test/per-describe deadlines to the testing library
     before any workers spawn. These globals are read-only after this
@@ -250,22 +292,29 @@ begin
   GTestRunnerDescribeTimeoutMs := FDescribeTimeout.ValueOr(0);
 
   Files := TStringList.Create;
+  StdinSource := nil;
   try
-    for I := 0 to APaths.Count - 1 do
+    if UseStdin then
     begin
-      if DirectoryExists(APaths[I]) then
-        Files.AddStrings(FindAllFiles(APaths[I], ScriptExtensions))
-      else if FileExists(APaths[I]) then
-        Files.Add(APaths[I])
-      else
+      StdinSource := ReadSourceFromText(Input);
+      Files.Add(STDIN_FILE_NAME);
+    end
+    else
+      for I := 0 to APaths.Count - 1 do
       begin
-        WriteLn(StdErr, 'Error: Path not found: ', APaths[I]);
-        ExitCode := 1;
-        Exit;
+        if DirectoryExists(APaths[I]) then
+          Files.AddStrings(FindAllFiles(APaths[I], ScriptExtensions))
+        else if FileExists(APaths[I]) then
+          Files.Add(APaths[I])
+        else
+        begin
+          WriteLn(StdErr, 'Error: Path not found: ', APaths[I]);
+          ExitCode := 1;
+          Exit;
+        end;
       end;
-    end;
 
-    if not FNoProgress.Present then
+    if (not FNoProgress.Present) and (not IsJsonOutput) then
     begin
       if GetJobCount(Files.Count) > 1 then
         WriteLn(SysUtils.Format('Running %d files with %d workers',
@@ -278,9 +327,12 @@ begin
     IsParallelRun := (Files.Count > 1) and (GetJobCount(Files.Count) > 1);
     if Files.Count = 1 then
     begin
-      if not FNoProgress.Present then
+      if (not FNoProgress.Present) and (not IsJsonOutput) then
         WriteLn('[1/1] ', Files[0]);
-      AggregatedResult := RunScriptFromFile(Files[0]);
+      { Stdin is always a single source — the callee takes ownership of
+        StdinSource and frees it like a disk-loaded TStringList. }
+      AggregatedResult := RunScriptFromFile(Files[0], StdinSource);
+      StdinSource := nil;
     end
     else if IsParallelRun then
       AggregatedResult := RunScriptsFromFilesParallel(Files, GetJobCount(Files.Count))
@@ -298,9 +350,15 @@ begin
         CoverageOptions.OutputPath.Present) and
        Assigned(TGocciaCoverageTracker.Instance) then
     begin
-      PrintCoverageSummary(TGocciaCoverageTracker.Instance);
-      if Files.Count = 1 then
-        PrintCoverageDetail(TGocciaCoverageTracker.Instance, Files[0]);
+      { Coverage summary writes to stdout; suppress in JSON-to-stdout mode so
+        the JSON envelope remains the only stdout payload. The
+        --coverage-output=<file> machine-readable forms still fire below. }
+      if not IsJsonOutput then
+      begin
+        PrintCoverageSummary(TGocciaCoverageTracker.Instance);
+        if Files.Count = 1 then
+          PrintCoverageDetail(TGocciaCoverageTracker.Instance, Files[0]);
+      end;
       if CoverageOptions.Format.Matches(cfLcov) and
          (CoverageOptions.OutputPath.ValueOr('') <> '') then
         WriteCoverageLcov(TGocciaCoverageTracker.Instance,
@@ -312,6 +370,9 @@ begin
     end;
   finally
     Files.Free;
+    { StdinSource is normally consumed by RunScriptFromFile (which frees
+      it). Free here only if an early exit left it dangling. }
+    StdinSource.Free;
   end;
 end;
 
@@ -320,7 +381,8 @@ begin
   Result := [ggTestAssertions];
 end;
 
-function TTestRunnerApp.RunGocciaScriptInterpreted(const AFileName: string): TTestFileResult;
+function TTestRunnerApp.RunGocciaScriptInterpreted(const AFileName: string;
+  APreloadedSource: TStringList): TTestFileResult;
 var
   Source: TStringList;
   ScriptResult, FileResult: TGocciaObjectValue;
@@ -331,16 +393,21 @@ begin
 
   Source := nil;
   try
-    try
-      Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
-    except
-      on E: EStreamError do
-      begin
-        if not GIsWorkerThread then
-          WriteLn('Error loading test file: ', E.Message);
-        MarkLoadError(ScriptResult, AFileName, E.Message);
-        Result := MakeEmptyTestResult(ScriptResult, E.Message);
-        Exit;
+    if Assigned(APreloadedSource) then
+      Source := APreloadedSource
+    else
+    begin
+      try
+        Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+      except
+        on E: EStreamError do
+        begin
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
+            WriteLn('Error loading test file: ', E.Message);
+          MarkLoadError(ScriptResult, AFileName, E.Message);
+          Result := MakeEmptyTestResult(ScriptResult, E.Message);
+          Exit;
+        end;
       end;
     end;
 
@@ -350,7 +417,7 @@ begin
     try
       Engine := CreateEngine(AFileName, Source);
       try
-        if FSilent.Present or GIsWorkerThread then
+        if FSilent.Present or GIsWorkerThread or IsJsonOutput then
         begin
           Engine.BuiltinConsole.Enabled := False;
           Engine.SuppressWarnings := True;
@@ -377,7 +444,7 @@ begin
       begin
         if E is TGocciaError then
         begin
-          if not GIsWorkerThread then
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
             WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal));
           MarkLoadError(ScriptResult, AFileName, TGocciaError(E).GetDetailedMessage);
           Result := MakeEmptyTestResult(ScriptResult,
@@ -385,7 +452,7 @@ begin
         end
         else if E is TGocciaThrowValue then
         begin
-          if not GIsWorkerThread then
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
             WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal, TGocciaThrowValue(E).Suggestion));
           MarkLoadError(ScriptResult, AFileName,
             FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, False, TGocciaThrowValue(E).Suggestion));
@@ -395,7 +462,7 @@ begin
         end
         else
         begin
-          if not GIsWorkerThread then
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
             WriteLn('Fatal error: ', E.Message);
           MarkLoadError(ScriptResult, AFileName, E.Message);
           Result := MakeEmptyTestResult(ScriptResult, E.Message);
@@ -407,7 +474,28 @@ begin
   end;
 end;
 
-function TTestRunnerApp.RunGocciaScriptBytecode(const AFileName: string): TTestFileResult;
+function TTestRunnerApp.RunBytecodeTestModule(const AEngine: TGocciaEngine;
+  const AExecutor: TGocciaBytecodeExecutor;
+  const AModule: TGocciaBytecodeModule;
+  const AFileName: string): TGocciaValue;
+var
+  ModuleScope: TGocciaScope;
+begin
+  if AEngine.SourceType = stModule then
+  begin
+    { Run with module semantics: fresh module scope, this = undefined.
+      Mirrors TGocciaModuleLoader.LoadModule for nested module loads. }
+    ModuleScope := AEngine.Interpreter.GlobalScope.CreateChild(skModule,
+      'Module:' + AFileName);
+    ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := AExecutor.RunModuleInScope(AModule, ModuleScope);
+  end
+  else
+    Result := AExecutor.RunModule(AModule);
+end;
+
+function TTestRunnerApp.RunGocciaScriptBytecode(const AFileName: string;
+  APreloadedSource: TStringList): TTestFileResult;
 var
   Source: TStringList;
   SourceText: string;
@@ -430,16 +518,21 @@ begin
 
   Source := nil;
   try
-    try
-      Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
-    except
-      on E: EStreamError do
-      begin
-        if not GIsWorkerThread then
-          WriteLn('Error loading test file: ', E.Message);
-        MarkLoadError(ScriptResult, AFileName, E.Message);
-        Result := MakeEmptyTestResult(ScriptResult, E.Message);
-        Exit;
+    if Assigned(APreloadedSource) then
+      Source := APreloadedSource
+    else
+    begin
+      try
+        Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+      except
+        on E: EStreamError do
+        begin
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
+            WriteLn('Error loading test file: ', E.Message);
+          MarkLoadError(ScriptResult, AFileName, E.Message);
+          Result := MakeEmptyTestResult(ScriptResult, E.Message);
+          Exit;
+        end;
       end;
     end;
 
@@ -460,7 +553,7 @@ begin
       try
         Engine := CreateEngine(AFileName, Source, Executor);
         try
-          if FSilent.Present or GIsWorkerThread then
+          if FSilent.Present or GIsWorkerThread or IsJsonOutput then
           begin
             Engine.BuiltinConsole.Enabled := False;
             Engine.SuppressWarnings := True;
@@ -490,7 +583,7 @@ begin
                       AFileName, SourceMap.Clone);
                 end;
 
-                if (not FSilent.Present) and (not GIsWorkerThread) then
+                if (not FSilent.Present) and (not GIsWorkerThread) and (not IsJsonOutput) then
                   for I := 0 to Parser.WarningCount - 1 do
                   begin
                     Warning := Parser.GetWarning(I);
@@ -519,7 +612,8 @@ begin
             StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
             try
               try
-                ResultValue := TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
+                ResultValue := RunBytecodeTestModule(Engine,
+                  TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
               finally
                 ClearExecutionTimeout;
                 ClearInstructionLimit;
@@ -552,7 +646,7 @@ begin
       begin
         if E is TGocciaError then
         begin
-          if not GIsWorkerThread then
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
             WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal));
           MarkLoadError(ScriptResult, AFileName, TGocciaError(E).GetDetailedMessage);
           Result := MakeEmptyTestResult(ScriptResult,
@@ -560,7 +654,7 @@ begin
         end
         else if E is TGocciaThrowValue then
         begin
-          if not GIsWorkerThread then
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
             WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal, TGocciaThrowValue(E).Suggestion));
           MarkLoadError(ScriptResult, AFileName,
             FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, False, TGocciaThrowValue(E).Suggestion));
@@ -570,7 +664,7 @@ begin
         end
         else
         begin
-          if not GIsWorkerThread then
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
             WriteLn('Fatal error: ', E.Message);
           MarkLoadError(ScriptResult, AFileName, E.Message);
           Result := MakeEmptyTestResult(ScriptResult, E.Message);
@@ -585,15 +679,17 @@ begin
   end;
 end;
 
-function TTestRunnerApp.RunGocciaScript(const AFileName: string): TTestFileResult;
+function TTestRunnerApp.RunGocciaScript(const AFileName: string;
+  APreloadedSource: TStringList): TTestFileResult;
 begin
   case EngineOptions.Mode.ValueOr(emInterpreted) of
-    emInterpreted: Result := RunGocciaScriptInterpreted(AFileName);
-    emBytecode:    Result := RunGocciaScriptBytecode(AFileName);
+    emInterpreted: Result := RunGocciaScriptInterpreted(AFileName, APreloadedSource);
+    emBytecode:    Result := RunGocciaScriptBytecode(AFileName, APreloadedSource);
   end;
 end;
 
-function TTestRunnerApp.RunScriptFromFile(const AFileName: string): TAggregatedTestResult;
+function TTestRunnerApp.RunScriptFromFile(const AFileName: string;
+  APreloadedSource: TStringList): TAggregatedTestResult;
 var
   FileResult: TTestFileResult;
   FileFailedTests: TGocciaValue;
@@ -612,7 +708,7 @@ begin
   SetLength(Result.FileResults, 1);
   Result.FileResults[0].FileName := AFileName;
   try
-    FileResult := RunGocciaScript(AFileName);
+    FileResult := RunGocciaScript(AFileName, APreloadedSource);
     Result.TestResult := FileResult.TestResult;
     Result.TotalLexNanoseconds := FileResult.Timing.LexTimeNanoseconds;
     Result.TotalParseNanoseconds := FileResult.Timing.ParseTimeNanoseconds;
@@ -721,7 +817,7 @@ begin
 
   for I := 0 to AFiles.Count - 1 do
   begin
-    if not FNoProgress.Present then
+    if (not FNoProgress.Present) and (not IsJsonOutput) then
       WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, AFiles.Count, AFiles[I]]));
     FileResult := RunScriptFromFile(AFiles[I]);
     if FileResult.TestResult = nil then
@@ -1049,7 +1145,7 @@ begin
 
   for I := 0 to AFiles.Count - 1 do
   begin
-    if not FNoProgress.Present then
+    if (not FNoProgress.Present) and (not IsJsonOutput) then
       WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, AFiles.Count, AFiles[I]]));
 
     { Source orphaned slots from OrphanResults so we never read the
@@ -1116,12 +1212,13 @@ begin
   Result.TestResult := AllTestResults;
 end;
 
-procedure TTestRunnerApp.WriteResultsJSON(const AResult: TAggregatedTestResult; const AFileName: string);
+procedure TTestRunnerApp.WriteResultsJSON(const AResult: TAggregatedTestResult;
+  const AFileName: string; const ACompact: Boolean);
 var
   Lines: TStringList;
   TotalNanoseconds: Int64;
   IsBytecodeMode: Boolean;
-  FailedCount: Integer;
+  FailedCount, I: Integer;
   Timing: TCLIJSONTiming;
 begin
   IsBytecodeMode := EngineOptions.Mode.Matches(emBytecode);
@@ -1139,10 +1236,14 @@ begin
   Lines := TStringList.Create;
   try
     Lines.Add('{');
-    Lines.Add('  ' + BuildCLIBuildJSON + ',');
+    if not ACompact then
+      Lines.Add('  ' + BuildCLIBuildJSON + ',');
     Lines.Add(Format('  "ok": %s,', [BoolToStr(FailedCount = 0, 'true', 'false')]));
-    Lines.Add('  "stdout": "",');
-    Lines.Add('  "stderr": "",');
+    if not ACompact then
+    begin
+      Lines.Add('  "stdout": "",');
+      Lines.Add('  "stderr": "",');
+    end;
     Lines.Add('  ' + BuildCLIOutputJSON('') + ',');
     Lines.Add('  "error": null,');
     Lines.Add(Format('  "mode": "%s",', [IfThen(IsBytecodeMode, 'bytecode', 'interpreted')]));
@@ -1161,7 +1262,8 @@ begin
     Lines.Add(Format('  "executeTimeNanoseconds": %d,', [AResult.TotalExecNanoseconds]));
     Lines.Add(Format('  "totalEngineNanoseconds": %d,', [TotalNanoseconds]));
     Lines.Add('  ' + BuildCLITimingJSON(Timing) + ',');
-    Lines.Add('  ' + BuildCLIMemoryJSON(AResult.MemoryStats) + ',');
+    if not ACompact then
+      Lines.Add('  ' + BuildCLIMemoryJSON(AResult.MemoryStats) + ',');
     Lines.Add('  ' + BuildCLIWorkersJSON(AResult.JobCount, AResult.JobCount) + ',');
 
     { Per-file results. External harnesses (the test262 driver) use
@@ -1175,11 +1277,17 @@ begin
       occasionally produced torn AnsiString refcount reads, corrupting
       the serialised JSON. The per-file records below carry the same
       information and are written from main-thread-owned data only. }
-    WriteFileResults(Lines, AResult, 'files', True);
-    WriteFileResults(Lines, AResult, 'results', False);
+    WriteFileResults(Lines, AResult, 'files', True, ACompact);
+    WriteFileResults(Lines, AResult, 'results', False, ACompact);
 
     Lines.Add('}');
-    Lines.SaveToFile(AFileName);
+    if AFileName = '' then
+    begin
+      for I := 0 to Lines.Count - 1 do
+        WriteLn(Lines[I]);
+    end
+    else
+      Lines.SaveToFile(AFileName);
   finally
     Lines.Free;
   end;
@@ -1187,7 +1295,7 @@ end;
 
 procedure TTestRunnerApp.WriteFileResults(ALines: TStringList;
   const AResult: TAggregatedTestResult; const APropertyName: string;
-  const ATrailingComma: Boolean);
+  const ATrailingComma: Boolean; const ACompact: Boolean);
 var
   I, J, Count: Integer;
   Fr: TTestFilePerResult;
@@ -1241,7 +1349,7 @@ begin
       Entry.Append('    {');
       Entry.Append(BuildCLIFileBaseJSON(Fr.FileName,
         (Fr.Failed = 0) and (Fr.ErrorMessage = ''), '', '', '', ErrorJSON,
-        Timing, '"memory":null'));
+        Timing, '"memory":null', ACompact));
       Entry.Append(', ');
       Entry.Append('"passed": ');
       Entry.Append(Round(Fr.Passed));
@@ -1300,7 +1408,7 @@ begin
   IsBytecodeMode := EngineOptions.Mode.Matches(emBytecode);
   IsParallel := AResult.JobCount > 1;
 
-  if not FNoResults.Present then
+  if (not FNoResults.Present) and (not IsJsonOutput) then
   begin
     Writeln('Test Results Test Files: ', TestResult.GetProperty('totalTests').ToStringLiteral.Value);
     Writeln(Format('Test Results Run Tests: %s', [TotalRunTests]));
@@ -1357,9 +1465,14 @@ begin
     end;
   end;
 
-  CurrentOutputFile := FOutputFile.ValueOr('');
-  if CurrentOutputFile <> '' then
-    WriteResultsJSON(AResult, CurrentOutputFile);
+  if IsJsonOutput then
+    WriteResultsJSON(AResult, '', IsCompactJsonOutput)
+  else
+  begin
+    CurrentOutputFile := FOutputFile.ValueOr('');
+    if CurrentOutputFile <> '' then
+      WriteResultsJSON(AResult, CurrentOutputFile, False);
+  end;
 
   if StrToFloat(TotalFailed) > 0 then
     ExitCode := 1;

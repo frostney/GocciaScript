@@ -11,6 +11,7 @@ import {
 } from "react";
 import { AnchorH2, AnchorH3 } from "@/components/anchor-heading";
 import { AnimatedOutput } from "@/components/animated-output";
+import { useRunShortcut } from "@/components/command-tabs";
 import { ConsolePanel } from "@/components/console-panel";
 import {
   HighlightedCode,
@@ -62,6 +63,7 @@ function HeroRunnableCard({ code }: { code: string }) {
   const [src, setSrc] = useState(code);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const hlRef = useRef<HTMLPreElement>(null);
+  const runShortcut = useRunShortcut();
 
   const copy = async () => {
     let ok = false;
@@ -111,6 +113,10 @@ function HeroRunnableCard({ code }: { code: string }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ code: src }),
       });
+      // Server tags repeat-input responses with `X-Cache: HIT` so we can
+      // surface "(cached)" in the exit line. Anything else (MISS, missing,
+      // unexpected value) is treated as a fresh run.
+      const cached = res.headers.get("X-Cache") === "HIT";
       const data = (await res.json()) as {
         ok?: boolean;
         output?: string;
@@ -144,7 +150,7 @@ function HeroRunnableCard({ code }: { code: string }) {
         kind: "meta",
         text: `— exit ${data.exitCode ?? "?"}${
           totalMs !== undefined ? ` · ${totalMs.toFixed(2)}ms` : ""
-        }`,
+        }${cached ? " · (cached)" : ""}`,
       });
       // Pad to 5 lines so the hero console keeps a fixed height.
       while (lines.length < 5) {
@@ -229,10 +235,14 @@ function HeroRunnableCard({ code }: { code: string }) {
           className="hero-action primary"
           onClick={run}
           disabled={running}
-          title="Run"
+          title={`Run · ${runShortcut.long}`}
           aria-label="Run"
         >
-          <RunIcon size={11} /> <span>{running ? "…" : "Run"}</span>
+          <RunIcon size={11} />
+          <span>{running ? "…" : "Run"}</span>
+          <span className="hero-action-kbd" aria-hidden="true">
+            {runShortcut.short}
+          </span>
         </button>
       </div>
       <div className="hero-editor">
@@ -874,7 +884,7 @@ export function Landing({
                 className="info-term info-term-button"
                 aria-describedby="portable-runtime-tip"
               >
-                portable runtime under 5MB
+                portable runtime under 6MB
                 <span
                   id="portable-runtime-tip"
                   role="tooltip"

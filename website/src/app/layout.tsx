@@ -7,6 +7,7 @@ import {
 import { Suspense } from "react";
 import { Analytics } from "@/components/analytics";
 import { SiteShell } from "@/components/site-shell";
+import { WebMcpTools } from "@/components/webmcp-tools";
 import { fetchStars } from "@/lib/github";
 import "./globals.css";
 
@@ -126,6 +127,7 @@ export default async function RootLayout({
         <Suspense fallback={null}>
           <Analytics />
         </Suspense>
+        <WebMcpTools />
       </body>
     </html>
   );

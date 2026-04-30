@@ -70,33 +70,39 @@ function BuildCLIWorkersJSON(const AUsed, AAvailable: Integer): string;
 function BuildCLIErrorObjectJSON(const AErrorInfo: TCLIJSONErrorInfo): string;
 function BuildCLIFileBaseJSON(const AFileName: string; const AOk: Boolean;
   const AOutputText, AStdoutText, AStderrText, AErrorJSON: string;
-  const ATiming: TCLIJSONTiming; const AMemoryJSON: string): string;
+  const ATiming: TCLIJSONTiming; const AMemoryJSON: string;
+  const ACompact: Boolean = False): string;
 function BuildCLIReportJSON(const AOk: Boolean; const AOutputText,
   AStdoutText, AStderrText, AErrorJSON: string;
   const ATiming: TCLIJSONTiming;
   const AMemoryStats: TCLIJSONMemoryStats; const AWorkerCount,
   AAvailableWorkerCount: Integer; const AFilesJSON: string;
-  const AExtraPropertiesJSON: string = ''): string;
+  const AExtraPropertiesJSON: string = '';
+  const ACompact: Boolean = False): string;
 function SerializeScriptResult(const AValue: TGocciaValue): string;
 function ExceptionToCLIJSONErrorInfo(const E: Exception): TCLIJSONErrorInfo;
 function BuildCLIScriptFileSuccessJSON(const AFileName: string;
   const AValue: TGocciaValue; const AOutputText, AStdoutText,
   AStderrText: string; const ATiming: TCLIJSONTiming;
-  const AMemoryStats: TCLIJSONMemoryStats): string;
+  const AMemoryStats: TCLIJSONMemoryStats;
+  const ACompact: Boolean = False): string;
 function BuildCLIScriptFileErrorJSON(const AFileName, AOutputText,
   AStdoutText, AStderrText: string; const AErrorInfo: TCLIJSONErrorInfo;
   const ATiming: TCLIJSONTiming;
-  const AMemoryStats: TCLIJSONMemoryStats): string;
+  const AMemoryStats: TCLIJSONMemoryStats;
+  const ACompact: Boolean = False): string;
 function BuildCLIScriptSuccessJSON(const AFileName: string; const AValue: TGocciaValue;
   const AOutputText, AStdoutText, AStderrText: string;
   const ATiming: TCLIJSONTiming;
   const AMemoryStats: TCLIJSONMemoryStats;
-  const AWorkerCount, AAvailableWorkerCount: Integer): string;
+  const AWorkerCount, AAvailableWorkerCount: Integer;
+  const ACompact: Boolean = False): string;
 function BuildCLIScriptErrorJSON(const AFileName, AOutputText, AStdoutText,
   AStderrText: string; const AErrorInfo: TCLIJSONErrorInfo;
   const ATiming: TCLIJSONTiming;
   const AMemoryStats: TCLIJSONMemoryStats;
-  const AWorkerCount, AAvailableWorkerCount: Integer): string;
+  const AWorkerCount, AAvailableWorkerCount: Integer;
+  const ACompact: Boolean = False): string;
 
 implementation
 
@@ -300,7 +306,8 @@ end;
 
 function BuildCLIFileBaseJSON(const AFileName: string; const AOk: Boolean;
   const AOutputText, AStdoutText, AStderrText, AErrorJSON: string;
-  const ATiming: TCLIJSONTiming; const AMemoryJSON: string): string;
+  const ATiming: TCLIJSONTiming; const AMemoryJSON: string;
+  const ACompact: Boolean): string;
 var
   Buffer: TStringBuffer;
 begin
@@ -309,22 +316,26 @@ begin
     Length(AMemoryJSON));
   Buffer.Append('"fileName":');
   Buffer.Append(QuoteJSONString(AFileName));
-  Buffer.Append(',"file":');
-  Buffer.Append(QuoteJSONString(AFileName));
   Buffer.Append(',"ok":');
   Buffer.Append(BoolToStr(AOk, 'true', 'false'));
-  Buffer.Append(',"stdout":');
-  Buffer.Append(QuoteJSONString(AStdoutText));
-  Buffer.Append(',"stderr":');
-  Buffer.Append(QuoteJSONString(AStderrText));
+  if not ACompact then
+  begin
+    Buffer.Append(',"stdout":');
+    Buffer.Append(QuoteJSONString(AStdoutText));
+    Buffer.Append(',"stderr":');
+    Buffer.Append(QuoteJSONString(AStderrText));
+  end;
   Buffer.Append(',');
   Buffer.Append(BuildCLIOutputJSON(AOutputText));
   Buffer.Append(',"error":');
   Buffer.Append(AErrorJSON);
   Buffer.Append(',');
   Buffer.Append(BuildCLITimingJSON(ATiming));
-  Buffer.Append(',');
-  Buffer.Append(AMemoryJSON);
+  if not ACompact then
+  begin
+    Buffer.Append(',');
+    Buffer.Append(AMemoryJSON);
+  end;
   Result := Buffer.ToString;
 end;
 
@@ -333,7 +344,8 @@ function BuildCLIReportJSON(const AOk: Boolean; const AOutputText,
   const ATiming: TCLIJSONTiming;
   const AMemoryStats: TCLIJSONMemoryStats; const AWorkerCount,
   AAvailableWorkerCount: Integer; const AFilesJSON: string;
-  const AExtraPropertiesJSON: string): string;
+  const AExtraPropertiesJSON: string;
+  const ACompact: Boolean): string;
 var
   ExtraProperties: string;
   Buffer: TStringBuffer;
@@ -346,21 +358,31 @@ begin
     Length(AStderrText) + Length(AErrorJSON) + Length(AFilesJSON) +
     Length(ExtraProperties));
   Buffer.Append('{');
-  Buffer.Append(BuildCLIBuildJSON);
-  Buffer.Append(',"ok":');
+  if not ACompact then
+  begin
+    Buffer.Append(BuildCLIBuildJSON);
+    Buffer.Append(',');
+  end;
+  Buffer.Append('"ok":');
   Buffer.Append(BoolToStr(AOk, 'true', 'false'));
-  Buffer.Append(',"stdout":');
-  Buffer.Append(QuoteJSONString(AStdoutText));
-  Buffer.Append(',"stderr":');
-  Buffer.Append(QuoteJSONString(AStderrText));
+  if not ACompact then
+  begin
+    Buffer.Append(',"stdout":');
+    Buffer.Append(QuoteJSONString(AStdoutText));
+    Buffer.Append(',"stderr":');
+    Buffer.Append(QuoteJSONString(AStderrText));
+  end;
   Buffer.Append(',');
   Buffer.Append(BuildCLIOutputJSON(AOutputText));
   Buffer.Append(',"error":');
   Buffer.Append(AErrorJSON);
   Buffer.Append(',');
   Buffer.Append(BuildCLITimingJSON(ATiming));
-  Buffer.Append(',');
-  Buffer.Append(BuildCLIMemoryJSON(AMemoryStats));
+  if not ACompact then
+  begin
+    Buffer.Append(',');
+    Buffer.Append(BuildCLIMemoryJSON(AMemoryStats));
+  end;
   Buffer.Append(',');
   Buffer.Append(BuildCLIWorkersJSON(AWorkerCount, AAvailableWorkerCount));
   Buffer.Append(',');
@@ -572,36 +594,47 @@ function BuildCLIScriptSuccessJSON(const AFileName: string; const AValue: TGocci
   const AOutputText, AStdoutText, AStderrText: string;
   const ATiming: TCLIJSONTiming;
   const AMemoryStats: TCLIJSONMemoryStats;
-  const AWorkerCount, AAvailableWorkerCount: Integer): string;
+  const AWorkerCount, AAvailableWorkerCount: Integer;
+  const ACompact: Boolean): string;
 begin
   Result := BuildCLIReportJSON(True, AOutputText, AStdoutText, AStderrText,
     'null', ATiming, AMemoryStats, AWorkerCount, AAvailableWorkerCount,
     BuildCLIScriptFileSuccessJSON(AFileName, AValue, AOutputText,
-      AStdoutText, AStderrText, ATiming, AMemoryStats));
+      AStdoutText, AStderrText, ATiming, AMemoryStats, ACompact),
+    '', ACompact);
 end;
 
 function BuildCLIScriptErrorJSON(const AFileName, AOutputText, AStdoutText,
   AStderrText: string; const AErrorInfo: TCLIJSONErrorInfo;
   const ATiming: TCLIJSONTiming;
   const AMemoryStats: TCLIJSONMemoryStats;
-  const AWorkerCount, AAvailableWorkerCount: Integer): string;
+  const AWorkerCount, AAvailableWorkerCount: Integer;
+  const ACompact: Boolean): string;
 begin
   Result := BuildCLIReportJSON(False, AOutputText, AStdoutText, AStderrText,
     BuildCLIErrorObjectJSON(AErrorInfo), ATiming, AMemoryStats, AWorkerCount,
     AAvailableWorkerCount, BuildCLIScriptFileErrorJSON(AFileName,
       AOutputText, AStdoutText, AStderrText, AErrorInfo, ATiming,
-      AMemoryStats));
+      AMemoryStats, ACompact),
+    '', ACompact);
 end;
 
 function BuildCLIScriptFileSuccessJSON(const AFileName: string;
   const AValue: TGocciaValue; const AOutputText, AStdoutText,
   AStderrText: string; const ATiming: TCLIJSONTiming;
-  const AMemoryStats: TCLIJSONMemoryStats): string;
+  const AMemoryStats: TCLIJSONMemoryStats;
+  const ACompact: Boolean): string;
+var
+  MemoryJSON: string;
 begin
+  if ACompact then
+    MemoryJSON := ''
+  else
+    MemoryJSON := BuildCLIMemoryJSON(AMemoryStats);
   Result :=
     '{' +
       BuildCLIFileBaseJSON(AFileName, True, AOutputText, AStdoutText,
-        AStderrText, 'null', ATiming, BuildCLIMemoryJSON(AMemoryStats)) + ',' +
+        AStderrText, 'null', ATiming, MemoryJSON, ACompact) + ',' +
       '"result":' + SerializeScriptResult(AValue) +
     '}';
 end;
@@ -609,13 +642,20 @@ end;
 function BuildCLIScriptFileErrorJSON(const AFileName, AOutputText,
   AStdoutText, AStderrText: string; const AErrorInfo: TCLIJSONErrorInfo;
   const ATiming: TCLIJSONTiming;
-  const AMemoryStats: TCLIJSONMemoryStats): string;
+  const AMemoryStats: TCLIJSONMemoryStats;
+  const ACompact: Boolean): string;
+var
+  MemoryJSON: string;
 begin
+  if ACompact then
+    MemoryJSON := ''
+  else
+    MemoryJSON := BuildCLIMemoryJSON(AMemoryStats);
   Result :=
     '{' +
       BuildCLIFileBaseJSON(AFileName, False, AOutputText, AStdoutText,
         AStderrText, BuildCLIErrorObjectJSON(AErrorInfo), ATiming,
-        BuildCLIMemoryJSON(AMemoryStats)) + ',' +
+        MemoryJSON, ACompact) + ',' +
       '"result":null' +
     '}';
 end;
