@@ -9,6 +9,7 @@ import {
   CopyIcon,
   FilePlusIcon,
   FileTestIcon,
+  GithubIcon,
   RunIcon,
   SidebarIcon,
   SparkleIcon,
@@ -20,6 +21,7 @@ import {
   type OutputLine,
 } from "@/lib/examples";
 import { formatError } from "@/lib/format-error";
+import { GITHUB_REPO_URL } from "@/lib/github";
 import { validateGocciaToolInput } from "@/lib/goccia-tool-schema";
 import { loadCode, saveCode } from "@/lib/playground-storage";
 import { decodeShare, encodeShare } from "@/lib/share";
@@ -736,7 +738,7 @@ export function Playground({
     }
   }, [code, backend, version, runner, asi, compatVar, compatFunction]);
 
-  const share = useCallback(async () => {
+  const buildShareLink = useCallback(() => {
     const url = new URL(window.location.href);
     url.search = "";
     url.searchParams.set(
@@ -751,7 +753,11 @@ export function Playground({
         version,
       }),
     );
-    const link = url.toString();
+    return url.toString();
+  }, [code, backend, runner, asi, compatVar, compatFunction, version]);
+
+  const share = useCallback(async () => {
+    const link = buildShareLink();
     let ok = false;
     try {
       if (navigator.clipboard?.writeText) {
@@ -760,7 +766,47 @@ export function Playground({
       }
     } catch {}
     if (ok) setShareTick((t) => t + 1);
-  }, [code, backend, runner, asi, compatVar, compatFunction, version]);
+  }, [buildShareLink]);
+
+  const reportIssue = useCallback(() => {
+    const link = buildShareLink();
+    const onOff = (b: boolean) => (b ? "on" : "off");
+    const body = [
+      `[Open in playground](${link})`,
+      "",
+      "| Setting | Value |",
+      "|---|---|",
+      `| Backend | \`${backend}\` |`,
+      `| Runner | \`${runner}\` |`,
+      `| Version | \`${version}\` |`,
+      `| ASI | ${onOff(asi)} |`,
+      `| Compat \`var\` | ${onOff(compatVar)} |`,
+      `| Compat \`function\` | ${onOff(compatFunction)} |`,
+      "",
+      "---",
+      "",
+      "### What did you expect to happen?",
+      "",
+      "<!-- Describe the expected behavior -->",
+      "",
+      "### What actually happened?",
+      "",
+      "<!-- Describe the actual behavior, paste any error output -->",
+      "",
+    ].join("\n");
+    const issueUrl = new URL(`${GITHUB_REPO_URL}/issues/new`);
+    issueUrl.searchParams.set("title", "Playground report: ");
+    issueUrl.searchParams.set("body", body);
+    window.open(issueUrl.toString(), "_blank", "noopener,noreferrer");
+  }, [
+    buildShareLink,
+    backend,
+    runner,
+    version,
+    asi,
+    compatVar,
+    compatFunction,
+  ]);
 
   useEffect(() => {
     if (shareTick === 0) return;
@@ -1068,6 +1114,15 @@ export function Playground({
 
         <div className="ml-auto flex items-center gap-2">
           <span className="font-mono text-[0.72rem] text-ink-3">⌘ + Enter</span>
+          <button
+            type="button"
+            className="pg-share"
+            onClick={reportIssue}
+            title="Open a GitHub issue with a link to this playground"
+          >
+            <GithubIcon size={14} />
+            <span>Report issue</span>
+          </button>
           <button
             type="button"
             className="pg-share"
