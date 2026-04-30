@@ -745,3 +745,27 @@ test("defineProperty accessor on out-of-range array index extends length", () =>
   expect(arr[3]).toBeUndefined();
   expect(arr[4]).toBeUndefined();
 });
+
+test("defineProperty accessor on array rolls back when redefinition is rejected", () => {
+  // When the inherited call rejects an accessor redefinition (e.g., the
+  // existing descriptor is non-configurable), the array's backing storage
+  // must not be mutated — length and existing values must stay intact.
+  const arr = ["a", "b"];
+  Object.defineProperty(arr, "5", {
+    get: () => "first",
+    configurable: false,
+  });
+  expect(arr.length).toBe(6);
+  expect(arr[5]).toBe("first");
+
+  expect(() => {
+    Object.defineProperty(arr, "5", {
+      get: () => "second",
+      configurable: true,
+    });
+  }).toThrow();
+
+  // No partial state mutation: length unchanged, original getter still in place.
+  expect(arr.length).toBe(6);
+  expect(arr[5]).toBe("first");
+});

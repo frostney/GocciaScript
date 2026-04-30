@@ -68,6 +68,27 @@ describe("class length property", () => {
     expect(WeakSet.length).toBe(0);
   });
 
+  test("native single-arg constructors have length 1 per spec", () => {
+    // ECMAScript 23.1.1.1, 22.1.1.1, 21.1.1.1, 20.3.1.1, 25.1.1.1, 25.2.1.1
+    expect(Array.length).toBe(1);
+    expect(String.length).toBe(1);
+    expect(Number.length).toBe(1);
+    expect(Boolean.length).toBe(1);
+    expect(ArrayBuffer.length).toBe(1);
+    expect(SharedArrayBuffer.length).toBe(1);
+    // WHATWG: URL(url, base?) — required url means length 1.
+    expect(URL.length).toBe(1);
+    // Fetch: Response constructor reports 1 in WPT/V8.
+    expect(Response.length).toBe(1);
+  });
+
+  test("zero-arg constructors keep length 0", () => {
+    expect(TextEncoder.length).toBe(0);
+    expect(TextDecoder.length).toBe(0);
+    expect(URLSearchParams.length).toBe(0);
+    expect(Headers.length).toBe(0);
+  });
+
   test("explicit length redefinition is honored in own descriptor", () => {
     // length is configurable per spec, so userland can override it.
     class Foo {

@@ -2849,16 +2849,24 @@ begin
     else
     begin
       // Accessor descriptor on array index — store on the underlying object
-      // and clear the FElements slot so [[Get]]/[[GetOwnProperty]] fall
-      // through to the accessor. Otherwise the array's fast path would
-      // shadow the descriptor with the original element value. Extend the
-      // backing storage if the index is past the current length so the
-      // array's `length` reflects the new own property (ES2026 §10.4.2.1).
-      while FElements.Count <= Index do
-        FElements.Add(TGocciaHoleValue.HoleValue);
-      if not IsArrayHole(FElements[Index]) then
-        FElements[Index] := TGocciaHoleValue.HoleValue;
+      // first; only then mutate FElements. If the inherited call rejects the
+      // descriptor (e.g., redefining a non-configurable own property), we
+      // must not have already grown the backing array or cleared a slot.
       Result := inherited TryDefineProperty(AName, ADescriptor);
+      if Result then
+      begin
+        // Extend the backing storage if the index is past the current length
+        // so the array's `length` reflects the new own property
+        // (ES2026 §10.4.2.1, mirroring the data-descriptor branch above).
+        while FElements.Count <= Index do
+          FElements.Add(TGocciaHoleValue.HoleValue);
+        // Clear the dense slot so [[Get]]/[[GetOwnProperty]] fall through to
+        // the accessor stored on the underlying object — otherwise the
+        // array's fast path would shadow the descriptor with the original
+        // element value.
+        if not IsArrayHole(FElements[Index]) then
+          FElements[Index] := TGocciaHoleValue.HoleValue;
+      end;
     end;
     Exit;
   end;
