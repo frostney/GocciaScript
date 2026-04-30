@@ -203,6 +203,8 @@ end;
 procedure TGocciaInterpreter.SetStrictTypesEnabled(const AValue: Boolean);
 begin
   FStrictTypesEnabled := AValue;
+  if Assigned(FGlobalScope) then
+    FGlobalScope.StrictTypes := AValue;
   FModuleLoader.StrictTypesEnabled := AValue;
 end;
 

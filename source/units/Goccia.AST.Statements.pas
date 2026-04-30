@@ -908,7 +908,17 @@ end;
         AContext.Scope.DefineFromToken(Variables[I].Name, Value, gttLet);
 
       if TypeHint <> sltUntyped then
-        AContext.Scope.SetOwnBindingTypeHint(Variables[I].Name, TypeHint);
+      begin
+        // var bindings are hoisted to the nearest function/module/global scope
+        // by DefineVariableBinding; record the type hint on that scope so the
+        // hint sticks to the actual binding rather than silently no-oping when
+        // SetOwnBindingTypeHint cannot find the name on AContext.Scope.
+        if IsVar then
+          AContext.Scope.FindFunctionOrModuleScope.SetOwnBindingTypeHint(
+            Variables[I].Name, TypeHint)
+        else
+          AContext.Scope.SetOwnBindingTypeHint(Variables[I].Name, TypeHint);
+      end;
     end;
   end;
 

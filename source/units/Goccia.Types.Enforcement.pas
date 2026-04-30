@@ -48,24 +48,27 @@ uses
   Goccia.Values.ErrorHelper;
 
 function TypeAnnotationToLocalType(const AAnnotation: string): TGocciaLocalType;
+var
+  Ann: string;
 begin
   Result := sltUntyped;
-  if AAnnotation = '' then
+  Ann := Trim(AAnnotation);
+  if Ann = '' then
     Exit;
-  if Pos('|', AAnnotation) > 0 then
+  if Pos('|', Ann) > 0 then
     Exit;
-  if AAnnotation = NUMBER_TYPE_NAME then
+  if Ann = NUMBER_TYPE_NAME then
     Result := sltFloat
-  else if AAnnotation = STRING_TYPE_NAME then
+  else if Ann = STRING_TYPE_NAME then
     Result := sltString
-  else if AAnnotation = BOOLEAN_TYPE_NAME then
+  else if Ann = BOOLEAN_TYPE_NAME then
     Result := sltBoolean
-  else if (AAnnotation = OBJECT_TYPE_NAME) or (AAnnotation = 'Object')
-       or (AAnnotation = 'Function')
-       or (Pos('<', AAnnotation) > 0)
-       or (Pos('[', AAnnotation) > 0)
-       or (Pos('{', AAnnotation) > 0)
-       or (Pos('=>', AAnnotation) > 0) then
+  else if (Ann = OBJECT_TYPE_NAME) or (Ann = 'Object')
+       or (Ann = 'Function')
+       or (Pos('<', Ann) > 0)
+       or (Pos('[', Ann) > 0)
+       or (Pos('{', Ann) > 0)
+       or (Pos('=>', Ann) > 0) then
     Result := sltReference;
 end;
 

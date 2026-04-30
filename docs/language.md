@@ -39,7 +39,7 @@ const name = "Goccia";
 - `fn.call()`, `fn.apply()`, `fn.bind()` for explicit `this` binding.
 - `fn.length` — Number of formal parameters (before defaults/rest).
 - `fn.name` — Function name (inferred from variable declarations for anonymous functions).
-- Type annotations on parameters and return types (parsed and ignored at runtime — see [Types as Comments](#types-as-comments-stage-1) below).
+- Type annotations on parameters and return types (parsed and ignored by default; enforced when `--strict-types` is set — see [Types as Comments](#types-as-comments-stage-1) below).
 - `async`/`await` — Async functions return Promises; `await` suspends until the Promise settles (see [Async Functions](#async-functions) below).
 
 ```javascript

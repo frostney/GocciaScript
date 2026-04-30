@@ -203,6 +203,20 @@ begin
         else
           ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
+        // Strict-types enforcement on destructured parameters: enforce on the
+        // raw pre-destructured value, matching the bytecode side which checks
+        // __paramN before EmitDestructuringParameters.  Defaults and optionals
+        // skip enforcement (parity with the named-parameter loop below).
+        if Context.StrictTypes
+          and (FParameters[I].TypeAnnotation <> '')
+          and not FParameters[I].IsOptional
+          and not Assigned(FParameters[I].DefaultValue) then
+        begin
+          ParamTypeHint := TypeAnnotationToLocalType(FParameters[I].TypeAnnotation);
+          if ParamTypeHint <> sltUntyped then
+            EnforceStrictType(ReturnValue, ParamTypeHint);
+        end;
+
         Context.Scope := ACallScope;
         AssignPattern(FParameters[I].Pattern, ReturnValue, Context, True);
       end
