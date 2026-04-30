@@ -55,12 +55,20 @@ export function formatMemorySegments(
   if (heapAllocated !== undefined && heapAllocated > 0) {
     result += ` · ${formatBytes(heapAllocated)} heap allocated`;
   }
-  if (collections !== undefined && collections > 0) {
-    const freedText =
-      collectedObjects !== undefined
-        ? ` (${collectedObjects.toLocaleString()} freed)`
-        : "";
-    result += ` · ${collections} GC${collections === 1 ? "" : "s"}${freedText}`;
+  // GC count and freed-object count are always emitted together: showing
+  // one without the other is misleading. If either is missing (e.g. the
+  // normalize layer dropped a malformed field), skip the whole segment
+  // rather than rendering a half-truth. `collectedObjects === 0` is a
+  // valid value (a GC ran but freed nothing — all live objects still
+  // reachable), so only `collections` is gated on `> 0`.
+  if (
+    collections !== undefined &&
+    collectedObjects !== undefined &&
+    collections > 0
+  ) {
+    result += ` · ${collections} GC${
+      collections === 1 ? "" : "s"
+    } (${collectedObjects.toLocaleString()} freed)`;
   }
   return result;
 }
