@@ -2015,6 +2015,12 @@ a.info-term {
   border-right: 1px solid var(--rule-soft);
   background: var(--paper-3);
   min-width: 2.5rem;
+  /* Clip overflowing line numbers and become a scrollable element so the
+     `syncScroll` handler in `playground.tsx` can mirror the textarea's
+     `scrollTop` here. With the default `overflow: visible`, `scrollTop`
+     is read-only and the line numbers stay anchored at line 1 even when
+     the source has scrolled past it. */
+  overflow: hidden;
 }
 .pg-editor-body {
   flex: 1;
