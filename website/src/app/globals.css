@@ -2119,11 +2119,27 @@ a.info-term {
   white-space: nowrap;
   vertical-align: bottom;
   max-width: 0;
-  animation: typewriter-expand 0.6s steps(30, end) forwards;
+  /* `typewriter-expand` is the reveal animation. `typewriter-unclip`
+     chains in afterwards (0.6s delay matches the reveal's duration)
+     and snaps the constraints off so a command line longer than the
+     panel can extend past its right edge — the parent .console-panel's
+     overflow: auto then surfaces a horizontal scrollbar to access the
+     rest. Without this second animation, `overflow: hidden` and the
+     `max-width: 100%` cap stay applied forever (forwards fill mode)
+     and the long command gets silently clipped at the panel edge. */
+  animation:
+    typewriter-expand 0.6s steps(30, end) forwards,
+    typewriter-unclip 0.01s 0.6s forwards;
 }
 @keyframes typewriter-expand {
   to {
     max-width: 100%;
+  }
+}
+@keyframes typewriter-unclip {
+  to {
+    overflow: visible;
+    max-width: none;
   }
 }
 /* Inline caret that follows the typewriter text, then hides once
