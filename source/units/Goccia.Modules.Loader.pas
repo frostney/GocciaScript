@@ -15,11 +15,17 @@ uses
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Resolver,
-  Goccia.Scope;
+  Goccia.Scope,
+  Goccia.Values.Primitives;
 
 type
-  TGocciaModuleBodyEvaluator = procedure(const AProgram: TGocciaProgram;
-    const AContext: TGocciaEvaluationContext) of object;
+  { Evaluate the body of a module-form program in AContext.
+    Returns the last expression's completion value (or undefined for
+    declaration-only bodies).  Module imports discard the return; the
+    --source-type=module entry path uses it so the test runner can
+    read the runTests(...) results object. }
+  TGocciaModuleBodyEvaluator = function(const AProgram: TGocciaProgram;
+    const AContext: TGocciaEvaluationContext): TGocciaValue of object;
 
   TGocciaModuleLoader = class
   private
@@ -90,7 +96,6 @@ uses
   Goccia.TSV,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives,
   Goccia.YAML;
 
 const
