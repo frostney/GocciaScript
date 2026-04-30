@@ -183,6 +183,7 @@ The first file found is loaded and applied as the **root config**. When running 
 ```json
 {
   "mode": "bytecode",
+  "source-type": "module",
   "asi": true,
   "timeout": 5000,
   "max-memory": 10485760,

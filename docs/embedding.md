@@ -433,14 +433,18 @@ TGocciaEngine.RunScriptFromFile('tests/my-test.js', [ggTestAssertions]);
 |--------|------|---------|---------|
 | `Preprocessors` | `TGocciaPreprocessors` | `[ppJSX]` | Source transformations before parsing |
 | `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | Parser behavior toggles |
+| `SourceType` | `TGocciaSourceType` | `stScript` | Load entry as a Script (default) or Module |
 | `StrictTypes` | `Boolean` | `False` (interpreter), `True` (bytecode) | Type enforcement for annotated variables |
 
 ```pascal
 Engine := TGocciaEngine.Create('app.js', Source, []);
 Engine.Preprocessors := [];              // Disable JSX
 Engine.ASIEnabled := True;               // Enable ASI (convenience for cfASI)
+Engine.SourceType := stModule;           // Run entry as a Module (top-level this is undefined; import.meta resolves)
 Engine.StrictTypes := True;              // Enable strict type enforcement
 ```
+
+When `SourceType` is `stModule`, `Execute` runs the entry program in a fresh module scope (`skModule`) with `this = undefined`, mirroring the semantics imported modules already receive from the module loader (ES2026 §16.2.1.6.4). The CLI surface for this is `--source-type=script|module` and the matching `goccia.json` key `"source-type"`.
 
 ## Injecting Custom Globals
 
