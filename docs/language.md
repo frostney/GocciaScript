@@ -679,6 +679,7 @@ When enabled (CLI: `--compat-function`, engine API: `Engine.FunctionEnabled := T
 - **Function expressions** (`const f = function(params) { body }`) produce the same `TGocciaMethodExpression` node. Named function expressions (`const f = function g(params) { body }`) create a read-only self-binding of the name (`g`) visible only inside the function body for recursion, matching ES2026 §15.2.4 semantics.
 - **Async functions** (`async function name(params) { body }`) are supported in both declaration and expression forms.
 - **Generator functions** (`function*`, `async function*`) are supported when this flag is enabled. Generator method shorthand (`*method()`, `async *method()`) does not require the flag.
+- **`prototype` property** — Per ES2026 §10.2.5 MakeConstructor, function declarations and expressions, generator declarations and expressions, and async generator declarations and expressions all carry an own `prototype` data property whose value is a fresh ordinary object whose `constructor` data property back-references the function. Plain async functions, arrow functions, concise object/class methods, and getter/setter functions do not. The `prototype` descriptor is `{ writable: true, enumerable: false, configurable: false }` for ordinary functions and `{ writable: false, enumerable: false, configurable: false }` for generators and async generators; the `constructor` descriptor on the prototype is `{ writable: true, enumerable: false, configurable: true }`.
 
 ### Loose Equality (`==` and `!=`)
 

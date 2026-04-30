@@ -1939,6 +1939,8 @@ function EvaluateMethodExpression(const AMethodExpression: TGocciaMethodExpressi
 var
   Statements: TObjectList<TGocciaASTNode>;
   ClosureScope: TGocciaScope;
+  PrototypeObj: TGocciaObjectValue;
+  PrototypeFlags: TPropertyFlags;
 begin
   if AMethodExpression.Body is TGocciaBlockStatement then
     Statements := CopyStatementList(TGocciaBlockStatement(AMethodExpression.Body).Nodes)
@@ -1967,6 +1969,27 @@ begin
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AMethodExpression.Line;
   TGocciaFunctionValue(Result).SourceText := AMethodExpression.SourceText;
+
+  // ES2026 §10.2.5 MakeConstructor: function declarations / expressions and
+  // (async) generator declarations / expressions get their own `prototype`
+  // data property whose value is a fresh ordinary object whose `constructor`
+  // back-references the function.  Concise methods, arrow functions, getters,
+  // setters, and plain async functions do not.
+  if AMethodExpression.HasOwnPrototype then
+  begin
+    PrototypeObj := TGocciaObjectValue.Create;
+    // prototype.constructor: { writable, !enumerable, configurable }
+    PrototypeObj.DefineProperty(PROP_CONSTRUCTOR,
+      TGocciaPropertyDescriptorData.Create(Result, [pfWritable, pfConfigurable]));
+    // function.prototype: { writable for non-generators, !enumerable, !configurable }
+    // Generators use a non-writable prototype slot (ES2026 §27.3.3).
+    if AMethodExpression.IsGenerator then
+      PrototypeFlags := []
+    else
+      PrototypeFlags := [pfWritable];
+    TGocciaObjectValue(Result).DefineProperty(PROP_PROTOTYPE,
+      TGocciaPropertyDescriptorData.Create(PrototypeObj, PrototypeFlags));
+  end;
 
   // Bind the function name in the intermediate scope (parent of the closure)
   if AMethodExpression.Name <> '' then
