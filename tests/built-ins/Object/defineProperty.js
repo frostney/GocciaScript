@@ -758,12 +758,14 @@ test("defineProperty accessor on array rolls back when redefinition is rejected"
   expect(arr.length).toBe(6);
   expect(arr[5]).toBe("first");
 
+  // Per ES §10.1.6.3, redefining a non-configurable own property must throw
+  // TypeError specifically — assert the type, not just that something throws.
   expect(() => {
     Object.defineProperty(arr, "5", {
       get: () => "second",
       configurable: true,
     });
-  }).toThrow();
+  }).toThrow(TypeError);
 
   // No partial state mutation: length unchanged, original getter still in place.
   expect(arr.length).toBe(6);

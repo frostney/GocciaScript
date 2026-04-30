@@ -242,6 +242,8 @@ type
     constructor Create(const AName: string; const ASuperClass: TGocciaClassValue);
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    // ECMAScript 20.2.2: Function constructor length is 1.
+    function GetClassLength: Integer; override;
 
     property Enabled: Boolean read FEnabled write FEnabled;
     property CompileDynamicFunction: TGocciaCompileDynamicFunction
@@ -1532,6 +1534,11 @@ function TGocciaFunctionConstructorClassValue.CreateNativeInstance(
   const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
 begin
   Result := BuildFunction(AArguments);
+end;
+
+function TGocciaFunctionConstructorClassValue.GetClassLength: Integer;
+begin
+  Result := 1;
 end;
 
 { TGocciaInstanceValue }
