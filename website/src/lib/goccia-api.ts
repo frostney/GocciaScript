@@ -6,6 +6,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path, { basename } from "node:path";
 import { NextResponse } from "next/server";
+import type { MemoryJson } from "@/lib/format-memory";
 import {
   MAX_GOCCIA_CODE_BYTES,
   MAX_GOCCIA_TOOL_REQUEST_BYTES,
@@ -383,7 +384,7 @@ function outputToText(value: unknown): string {
 
 function numberField(
   record: Record<string, unknown>,
-  key: keyof TimingJson,
+  key: string,
 ): number | undefined {
   const value = record[key];
   return typeof value === "number" && Number.isFinite(value)
@@ -429,6 +430,43 @@ function normalizeTiming(value: unknown): TimingJson | null {
   }
 
   return Object.keys(timing).length > 0 ? timing : null;
+}
+
+function normalizeMemory(value: unknown): MemoryJson | null {
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const result: MemoryJson = {};
+
+  const gcRecord = asRecord(record.gc);
+  if (gcRecord) {
+    const gc: NonNullable<MemoryJson["gc"]> = {};
+    for (const key of [
+      "peakLiveBytes",
+      "allocatedDuringRunBytes",
+      "collections",
+      "collectedObjects",
+    ] as const) {
+      const field = numberField(gcRecord, key);
+      if (field !== undefined) gc[key] = field;
+    }
+    if (Object.keys(gc).length > 0) result.gc = gc;
+  }
+
+  // `heap` reports the FPC heap manager's net growth during the run — a
+  // broader picture than `gc.peakLiveBytes` (which counts only managed JS
+  // objects). Surfacing `deltaAllocatedBytes` lets the website show "memory
+  // the engine had to allocate to run your script" alongside peak GC heap.
+  const heapRecord = asRecord(record.heap);
+  if (heapRecord) {
+    const deltaAllocatedBytes = numberField(heapRecord, "deltaAllocatedBytes");
+    if (deltaAllocatedBytes !== undefined) {
+      result.heap = { deltaAllocatedBytes };
+    }
+  }
+
+  if (!result.gc && !result.heap) return null;
+  return result;
 }
 
 function firstFileResult(record: Record<string, unknown> | null): unknown {
@@ -518,12 +556,14 @@ function buildExecuteResponseBody(
 ): Record<string, unknown> {
   const record = asRecord(parsed);
   const timing = normalizeTiming(record?.timing);
+  const memory = normalizeMemory(record?.memory);
   return {
     ok: typeof record?.ok === "boolean" ? record.ok : false,
     value: record?.value ?? firstFileResult(record) ?? null,
     output: outputToText(record?.output),
     error: record?.error ?? null,
     timing,
+    memory,
     exitCode,
     signal,
     truncated,
@@ -546,6 +586,7 @@ function buildTestResponseBody(
       ok: false,
       error: null,
       timing: null,
+      memory: null,
       exitCode,
       signal,
       truncated,
@@ -560,6 +601,7 @@ function buildTestResponseBody(
     stdout: stdoutText || optionalString(record.stdout) || "",
     stderr: stderrText || optionalString(record.stderr),
     timing: normalizeTiming(record.timing),
+    memory: normalizeMemory(record.memory),
     exitCode,
     signal,
     truncated,

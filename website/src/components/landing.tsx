@@ -33,6 +33,7 @@ import { NumberedCode } from "@/components/numbered-code";
 import { QuickInstall } from "@/components/quick-install";
 import type { OutputLine } from "@/lib/examples";
 import { formatError } from "@/lib/format-error";
+import { formatMemorySegments, type MemoryJson } from "@/lib/format-memory";
 import { isPreStable, type ReleaseInfo } from "@/lib/github";
 import {
   BUILTINS,
@@ -129,6 +130,7 @@ function HeroRunnableCard({ code }: { code: string }) {
           fileName?: string | null;
         } | null;
         timing?: { total_ms: number };
+        memory?: MemoryJson | null;
         exitCode?: number | null;
       };
       const lines: OutputLine[] = [{ kind: "meta", text: banner }];
@@ -150,7 +152,7 @@ function HeroRunnableCard({ code }: { code: string }) {
         kind: "meta",
         text: `— exit ${data.exitCode ?? "?"}${
           totalMs !== undefined ? ` · ${totalMs.toFixed(2)}ms` : ""
-        }${cached ? " · (cached)" : ""}`,
+        }${formatMemorySegments(data.memory)}${cached ? " · (cached)" : ""}`,
       });
       // Pad to 5 lines so the hero console keeps a fixed height.
       while (lines.length < 5) {

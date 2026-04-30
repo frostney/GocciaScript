@@ -22,6 +22,7 @@ import {
   type OutputLine,
 } from "@/lib/examples";
 import { formatError } from "@/lib/format-error";
+import { formatMemorySegments, type MemoryJson } from "@/lib/format-memory";
 import { GITHUB_REPO_URL } from "@/lib/github";
 import { validateGocciaToolInput } from "@/lib/goccia-tool-schema";
 import { loadCode, saveCode } from "@/lib/playground-storage";
@@ -633,6 +634,7 @@ export function Playground({
           code?: string;
         } | null;
         timing?: { total_ms: number };
+        memory?: MemoryJson | null;
         exitCode?: number | null;
         truncated?: boolean;
         stderr?: string;
@@ -726,7 +728,7 @@ export function Playground({
       const totalMs = data.timing?.total_ms;
       const tail = `— exit ${data.exitCode ?? "?"}${
         totalMs !== undefined ? ` · ${totalMs.toFixed(2)}ms` : ""
-      }${cached ? " · (cached)" : ""}`;
+      }${formatMemorySegments(data.memory)}${cached ? " · (cached)" : ""}`;
       lines.push({ kind: "meta", text: tail });
       setOutput(lines);
     } catch (err) {
