@@ -233,10 +233,14 @@ function HeroRunnableCard({ code }: { code: string }) {
           className="hero-action primary"
           onClick={run}
           disabled={running}
-          title="Run"
+          title="Run · ⌘+Enter"
           aria-label="Run"
         >
-          <RunIcon size={11} /> <span>{running ? "…" : "Run"}</span>
+          <RunIcon size={11} />
+          <span>{running ? "…" : "Run"}</span>
+          <span className="hero-action-kbd" aria-hidden="true">
+            ⌘↵
+          </span>
         </button>
       </div>
       <div className="hero-editor">

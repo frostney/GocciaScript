@@ -1113,7 +1113,6 @@ export function Playground({
         </select>
 
         <div className="ml-auto flex items-center gap-2">
-          <span className="font-mono text-[0.72rem] text-ink-3">⌘ + Enter</span>
           <button
             type="button"
             className="pg-share"
@@ -1143,8 +1142,13 @@ export function Playground({
             className="pg-run"
             disabled={running}
             onClick={run}
+            title="Run · ⌘+Enter"
           >
-            <RunIcon size={14} /> {running ? "Running…" : "Run"}
+            <RunIcon size={14} />
+            <span>{running ? "Running…" : "Run"}</span>
+            <span className="pg-run-kbd" aria-hidden="true">
+              ⌘↵
+            </span>
           </button>
         </div>
       </div>

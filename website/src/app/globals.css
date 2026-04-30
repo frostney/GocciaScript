@@ -1793,6 +1793,18 @@ a.info-term {
   opacity: 0.6;
   cursor: wait;
 }
+/* Keyboard-shortcut tail inside the Run / Execute button. Subdued so it
+   reads as a hint rather than a second label, monospaced so the symbols
+   line up. Matches the "plain monospace tail" pattern used in command
+   palettes (Linear, Raycast). */
+.pg-run-kbd {
+  font-family: var(--mono);
+  font-size: 0.78em;
+  font-weight: 500;
+  opacity: 0.7;
+  margin-left: 0.1rem;
+  letter-spacing: 0.02em;
+}
 .pg-share {
   padding: 0.45rem 0.85rem;
   border-radius: 7px;
@@ -2631,6 +2643,16 @@ a.info-term {
 .hero-action:disabled {
   opacity: 0.6;
   cursor: default;
+}
+/* Keyboard-shortcut tail inside the hero Run button. Smaller scale than
+   .pg-run-kbd because .hero-action is itself a smaller button — letter-
+   spacing kept tight to avoid overflowing the button's min-width. */
+.hero-action-kbd {
+  font-size: 0.85em;
+  font-weight: 500;
+  opacity: 0.75;
+  margin-left: 0.1rem;
+  letter-spacing: 0.02em;
 }
 
 /* hero card editor — always editable transparent textarea over highlighted overlay */

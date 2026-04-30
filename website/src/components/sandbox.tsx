@@ -704,8 +704,13 @@ export function Sandbox() {
                 className="pg-run"
                 onClick={execute}
                 disabled={running}
+                title="Execute · ⌘+Enter"
               >
-                <RunIcon size={14} /> {running ? "Running…" : "Execute"}
+                <RunIcon size={14} />
+                <span>{running ? "Running…" : "Execute"}</span>
+                <span className="pg-run-kbd" aria-hidden="true">
+                  ⌘↵
+                </span>
               </button>
             </div>
           </div>
@@ -731,6 +736,7 @@ export function Sandbox() {
                 onChange={setCode}
                 language="goccia"
                 lineNumbers
+                onSubmit={execute}
               />
             </div>
             {/* biome-ignore lint/a11y/useSemanticElements: this is an interactive splitter; button keeps pointer dragging reliable while ARIA exposes separator semantics. */}
@@ -766,6 +772,7 @@ export function Sandbox() {
                 onChange={setGlobalsText}
                 language="json"
                 lineNumbers
+                onSubmit={execute}
               />
             </div>
             {/* biome-ignore lint/a11y/useSemanticElements: this is an interactive splitter; button keeps pointer dragging reliable while ARIA exposes separator semantics. */}
