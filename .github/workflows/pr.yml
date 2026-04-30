@@ -566,6 +566,8 @@ jobs:
               return `${bytes} B`;
             };
             const fmtCount = (value) => typeof value === 'number' ? value.toLocaleString('en-US') : '—';
+            const fmtNonNegativeBytes = (bytes) => typeof bytes === 'number' && bytes >= 0 ? fmtBytes(bytes) : '—';
+            const hasNonNegativeValue = (...values) => values.some((value) => typeof value === 'number' && value >= 0);
             const testSummary = (report) => {
               if (!report) return '—';
               const passed = typeof report.passed === 'number' ? `${fmtCount(report.passed)} passed` : '—';
@@ -586,6 +588,8 @@ jobs:
               rows += row('Heap Start Allocated', fmtBytes(interpreted?.memory?.heap?.startAllocatedBytes), fmtBytes(bytecode?.memory?.heap?.startAllocatedBytes));
               rows += row('Heap End Allocated', fmtBytes(interpreted?.memory?.heap?.endAllocatedBytes), fmtBytes(bytecode?.memory?.heap?.endAllocatedBytes));
               rows += row('Heap Delta Allocated', fmtBytes(interpreted?.memory?.heap?.deltaAllocatedBytes), fmtBytes(bytecode?.memory?.heap?.deltaAllocatedBytes));
+              if (hasNonNegativeValue(interpreted?.memory?.heap?.deltaFreeBytes, bytecode?.memory?.heap?.deltaFreeBytes))
+                rows += row('Heap Delta Free', fmtNonNegativeBytes(interpreted?.memory?.heap?.deltaFreeBytes), fmtNonNegativeBytes(bytecode?.memory?.heap?.deltaFreeBytes));
               return rows;
             };
 
@@ -660,6 +664,7 @@ jobs:
                 section += row('Engine Total (avg/worker)', iAvgEngine, bAvgEngine);
               }
               section += '\n### Memory\n\n';
+              section += '_GC rows aggregate the main thread plus all worker thread-local GCs. Test runner worker shutdown frees thread-local heaps in bulk; that shutdown reclamation is not counted as GC collections or collected objects._\n\n';
               section += memoryRows(testInterp, testBytecode);
               body += details(`Test Runner (interpreted: ${testSummary(testInterp)}; bytecode: ${testSummary(testBytecode)})`, section);
             }
@@ -680,6 +685,7 @@ jobs:
                 section += row('Workers', iBenchJobs, bBenchJobs);
               section += row('Duration', iBenchDur, bBenchDur);
               section += '\n### Memory\n\n';
+              section += '_GC rows aggregate the main thread plus all worker thread-local GCs. Benchmark runner performs explicit between-file collections, so collection and collected-object counts can be much higher than the test runner._\n\n';
               section += memoryRows(benchInterp, benchBytecode);
               body += details(`Benchmarks (interpreted: ${countSummary(iBenchCount)}; bytecode: ${countSummary(bBenchCount)})`, section);
             }
