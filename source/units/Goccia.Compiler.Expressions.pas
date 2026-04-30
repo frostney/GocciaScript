@@ -927,8 +927,6 @@ begin
   begin
     if AParameters[I].TypeAnnotation = '' then
       Continue;
-    if AParameters[I].IsRest then
-      Continue;
     if AParameters[I].IsOptional then
       Continue;
     if Assigned(AParameters[I].DefaultValue) then
@@ -943,6 +941,9 @@ begin
     LocalIdx := AScope.ResolveLocal(ParamName);
     if LocalIdx < 0 then
       Continue;
+    // Rest parameter: record the type hint so subsequent reassignments are
+    // guarded, but EmitParameterTypeChecks skips IsRest so no OP_CHECK_TYPE
+    // fires at function entry against the rest array itself.
     AScope.SetLocalTypeHint(LocalIdx, AnnotationType);
     AScope.SetLocalStrictlyTyped(LocalIdx, True);
     ATemplate.SetLocalType(AScope.GetLocal(LocalIdx).Slot, AnnotationType);

@@ -192,6 +192,20 @@ begin
           for J := I to AArguments.Length - 1 do
             TGocciaArrayValue(ReturnValue).Elements.Add(AArguments.GetElement(J));
         ACallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue, dtParameter);
+
+        // Strict-types: the rest parameter annotation describes the rest
+        // array's type (e.g. (...nums: number[])).  Record the type hint on
+        // the binding so subsequent reassignments to a non-matching value
+        // throw under --strict-types.  The rest array itself is whatever it
+        // is — skip initial enforcement, matching the bytecode side which
+        // skips IsRest in EmitParameterTypeChecks.
+        if Context.StrictTypes and (FParameters[I].TypeAnnotation <> '') then
+        begin
+          ParamTypeHint := TypeAnnotationToLocalType(FParameters[I].TypeAnnotation);
+          if ParamTypeHint <> sltUntyped then
+            ACallScope.SetOwnBindingTypeHint(FParameters[I].Name, ParamTypeHint);
+        end;
+
         Break;
       end
       else if FParameters[I].IsPattern then
