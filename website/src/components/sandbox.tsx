@@ -693,8 +693,8 @@ export function Sandbox() {
             <div>
               <h4>Sandbox preview</h4>
               <p className="m-0 text-ink-3 text-[0.88rem]">
-                Edit the script or globals and hit <strong>Execute</strong> —
-                the code runs in the same sandboxed runtime used by the server
+                Edit the script or globals and hit <strong>Run</strong> — the
+                code runs in the same sandboxed runtime used by the server
                 preview and returns a structured host result.
               </p>
             </div>
@@ -704,10 +704,10 @@ export function Sandbox() {
                 className="pg-run"
                 onClick={execute}
                 disabled={running}
-                title="Execute · ⌘+Enter"
+                title="Run · ⌘+Enter"
               >
                 <RunIcon size={14} />
-                <span>{running ? "Running…" : "Execute"}</span>
+                <span>{running ? "Running…" : "Run"}</span>
                 <span className="pg-run-kbd" aria-hidden="true">
                   ⌘↵
                 </span>
