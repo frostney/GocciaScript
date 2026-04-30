@@ -613,7 +613,9 @@ console.log("TestRunner: --output=json keeps stdout clean when test throws...");
       [resolve(TESTRUNNER), file, "--no-progress", "--output=json"],
       { stdout: "pipe", stderr: "pipe" },
     );
-    // ExitCode is 1 because the test failed; stdout must still be parseable.
+    // ExitCode must be non-zero because the test failed; stdout must still be parseable.
+    if (proc.exitCode === 0)
+      throw new Error(`TestRunner --output=json with throwing test should exit non-zero, got 0`);
     const stdout = proc.stdout.toString();
     if (stdout.includes("Error: boom") && !stdout.startsWith("{"))
       throw new Error(`TestRunner --output=json should not leak diagnostic before JSON, got: ${stdout.slice(0, 200)}`);
@@ -625,8 +627,9 @@ console.log("TestRunner: --output=json keeps stdout clean when test throws...");
     }
     if (json.ok !== false) throw new Error(`TestRunner --output=json with throwing test should mark ok=false, got ${json.ok}`);
     if (json.failed !== 1) throw new Error(`TestRunner --output=json with throwing test should mark failed=1, got ${json.failed}`);
-    if (json.files?.[0]?.errorMessage?.length === 0)
-      throw new Error("TestRunner --output=json with throwing test should populate per-file errorMessage");
+    const errorMessage = json.files?.[0]?.errorMessage;
+    if (typeof errorMessage !== "string" || errorMessage.length === 0)
+      throw new Error(`TestRunner --output=json with throwing test should populate per-file errorMessage with a non-empty string, got: ${JSON.stringify(errorMessage)}`);
   } finally {
     clean(tmp);
   }
