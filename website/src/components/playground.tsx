@@ -35,6 +35,15 @@ function pickExampleId(requested: string | null): string {
   return EXAMPLES[0].id;
 }
 
+/** Compact byte formatter for the run-output tail line (e.g. `124 KB`,
+ *  `2.3 MB`). Uses KiB/MiB internally but labels them KB/MB to match how
+ *  developer tools typically present memory. */
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+}
+
 /** Normalize a release tag (`0.6.1` or `v0.6.1`) to the displayed form `v0.6.1`.
  *  `nightly` and any non-semver tag pass through unchanged. */
 function displayVersion(tag: string): string {
@@ -629,6 +638,14 @@ export function Playground({
           code?: string;
         } | null;
         timing?: { total_ms: number };
+        memory?: {
+          gc?: {
+            peakLiveBytes?: number;
+            allocatedDuringRunBytes?: number;
+            collections?: number;
+            collectedObjects?: number;
+          };
+        } | null;
         exitCode?: number | null;
         truncated?: boolean;
         stderr?: string;
@@ -720,9 +737,26 @@ export function Playground({
         lines.push({ kind: "err", text: data.rawStdout.trimEnd() });
       }
       const totalMs = data.timing?.total_ms;
+      const peakBytes = data.memory?.gc?.peakLiveBytes;
+      const collections = data.memory?.gc?.collections;
+      const collectedObjects = data.memory?.gc?.collectedObjects;
+      // GC count and collected-object count are paired: showing one without
+      // the other is misleading, so they're always rendered together.
+      const gcSegment =
+        collections !== undefined && collections > 0
+          ? ` · ${collections} GC${collections === 1 ? "" : "s"}${
+              collectedObjects !== undefined
+                ? ` (${collectedObjects.toLocaleString()} freed)`
+                : ""
+            }`
+          : "";
+      const memorySegment =
+        peakBytes !== undefined && peakBytes > 0
+          ? ` · ${formatBytes(peakBytes)} peak`
+          : "";
       const tail = `— exit ${data.exitCode ?? "?"}${
         totalMs !== undefined ? ` · ${totalMs.toFixed(2)}ms` : ""
-      }${cached ? " · (cached)" : ""}`;
+      }${memorySegment}${gcSegment}${cached ? " · (cached)" : ""}`;
       lines.push({ kind: "meta", text: tail });
       setOutput(lines);
     } catch (err) {

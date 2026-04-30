@@ -101,6 +101,19 @@ type TimingJson = {
   total_ns?: number;
 };
 
+/** Subset of the runner's `memory` object surfaced to the client. The runner
+ *  emits a much richer payload (see Goccia.CLI.JSON.Reporter.pas), but the
+ *  playground tail line only needs peak heap, total allocations, GC count, and
+ *  collected-object count. `memory` itself can be `null` when stats are off. */
+type MemoryJson = {
+  gc?: {
+    peakLiveBytes?: number;
+    allocatedDuringRunBytes?: number;
+    collections?: number;
+    collectedObjects?: number;
+  };
+};
+
 type Invocation = {
   binary: string;
   args: string[];
@@ -383,7 +396,7 @@ function outputToText(value: unknown): string {
 
 function numberField(
   record: Record<string, unknown>,
-  key: keyof TimingJson,
+  key: string,
 ): number | undefined {
   const value = record[key];
   return typeof value === "number" && Number.isFinite(value)
@@ -429,6 +442,28 @@ function normalizeTiming(value: unknown): TimingJson | null {
   }
 
   return Object.keys(timing).length > 0 ? timing : null;
+}
+
+function normalizeMemory(value: unknown): MemoryJson | null {
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const gcRecord = asRecord(record.gc);
+  if (!gcRecord) return null;
+
+  const gc: NonNullable<MemoryJson["gc"]> = {};
+  for (const key of [
+    "peakLiveBytes",
+    "allocatedDuringRunBytes",
+    "collections",
+    "collectedObjects",
+  ] as const) {
+    const field = numberField(gcRecord, key);
+    if (field !== undefined) gc[key] = field;
+  }
+
+  if (Object.keys(gc).length === 0) return null;
+  return { gc };
 }
 
 function firstFileResult(record: Record<string, unknown> | null): unknown {
@@ -518,12 +553,14 @@ function buildExecuteResponseBody(
 ): Record<string, unknown> {
   const record = asRecord(parsed);
   const timing = normalizeTiming(record?.timing);
+  const memory = normalizeMemory(record?.memory);
   return {
     ok: typeof record?.ok === "boolean" ? record.ok : false,
     value: record?.value ?? firstFileResult(record) ?? null,
     output: outputToText(record?.output),
     error: record?.error ?? null,
     timing,
+    memory,
     exitCode,
     signal,
     truncated,
@@ -546,6 +583,7 @@ function buildTestResponseBody(
       ok: false,
       error: null,
       timing: null,
+      memory: null,
       exitCode,
       signal,
       truncated,
@@ -560,6 +598,7 @@ function buildTestResponseBody(
     stdout: stdoutText || optionalString(record.stdout) || "",
     stderr: stderrText || optionalString(record.stderr),
     timing: normalizeTiming(record.timing),
+    memory: normalizeMemory(record.memory),
     exitCode,
     signal,
     truncated,
