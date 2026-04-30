@@ -329,7 +329,9 @@ begin
   FLog := nil;
   FMultifile := nil;
   FConfig := nil;
-  FSourceRegistry := nil;
+  // Created eagerly on the main thread so worker threads that read
+  // through SourceRegistry.Load never race on first-access creation.
+  FSourceRegistry := TGocciaSourceRegistry.Create;
   FLogFileOpen := False;
 end;
 
@@ -754,8 +756,7 @@ end;
 
 function TGocciaCLIApplication.SourceRegistry: TGocciaSourceRegistry;
 begin
-  if not Assigned(FSourceRegistry) then
-    FSourceRegistry := TGocciaSourceRegistry.Create;
+  // Eagerly constructed in Create — guaranteed non-nil, no race.
   Result := FSourceRegistry;
 end;
 
@@ -800,9 +801,22 @@ begin
       FullSource := CreateUTF8FileTextLines(RawSource);
       Sections := nil;
       try
+        // Only treat as multifile when the input actually contains the
+        // separator.  Sections.Count <= 1 alone is wrong: a file with
+        // separators that trims down to a single non-empty section would
+        // incorrectly fall through to the pass-through branch.
+        if not ContainsMultifileSeparator(FullSource) then
+        begin
+          Result.Add(FileName);
+          Continue;
+        end;
+
         Sections := SplitMultifileSource(FullSource);
 
-        if Sections.Count <= 1 then
+        // Pure-separator inputs (no surviving sections) pass the original
+        // name through so the runner reports the source consistently —
+        // matches pre-fix behaviour for that edge case.
+        if Sections.Count = 0 then
         begin
           Result.Add(FileName);
           Continue;
@@ -846,17 +860,29 @@ begin
       Exit;
     end;
 
+    // Only treat as multifile when the input actually contains the
+    // separator.  See ExpandMultifileFiles for why "section count" is
+    // not a reliable proxy.
+    if not ContainsMultifileSeparator(AStdinSource) then
+    begin
+      SourceRegistry.Register(STDIN_FILE_NAME, AStdinSource);
+      Result.Add(STDIN_FILE_NAME);
+      Exit;
+    end;
+
     Sections := SplitMultifileSource(AStdinSource);
     try
-      if Sections.Count <= 1 then
+      if Sections.Count = 0 then
       begin
+        // Pure-separator stdin: register the (now empty-ish) source
+        // under the canonical stdin name to keep ownership clear.
         SourceRegistry.Register(STDIN_FILE_NAME, AStdinSource);
         Result.Add(STDIN_FILE_NAME);
         Exit;
       end;
 
-      // Multiple sections: register each, free the original wrapper
-      // since its contents have been redistributed into sections.
+      // Register each section, then free the original wrapper since
+      // its contents have been redistributed into sections.
       // Always extract index 0 — extraction shifts remaining items down.
       PartIndex := 0;
       while Sections.Count > 0 do

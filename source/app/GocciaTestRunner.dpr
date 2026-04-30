@@ -255,7 +255,7 @@ end;
 
 procedure TTestRunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
-  Files, RawFiles, StdinNames: TStringList;
+  Files, RawFiles, StdinNames, TempFiles: TStringList;
   I: Integer;
   AggregatedResult: TAggregatedTestResult;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
@@ -329,8 +329,12 @@ begin
             Exit;
           end;
         end;
+        // Build the expanded list before freeing the old Files: if
+        // ExpandMultifileFiles raises, Files still owns its (empty)
+        // TStringList and the outer finally won't double-free.
+        TempFiles := ExpandMultifileFiles(RawFiles);
         Files.Free;
-        Files := ExpandMultifileFiles(RawFiles);
+        Files := TempFiles;
       finally
         RawFiles.Free;
       end;

@@ -1522,6 +1522,11 @@ console.log("Bundler: --multifile rejects --output=<file>...");
 console.log("BenchmarkRunner: --multifile produces multiple file entries...");
 {
   const tmp = makeTmp();
+  const benchEnv = {
+    ...process.env,
+    GOCCIA_BENCH_CALIBRATION_MS: "50",
+    GOCCIA_BENCH_ROUNDS: "3",
+  } as Record<string, string>;
   try {
     const file = join(tmp, "bench.js");
     writeFileSync(
@@ -1533,6 +1538,8 @@ console.log("BenchmarkRunner: --multifile produces multiple file entries...");
     const proc = Bun.spawnSync([BENCHRUNNER, "--multifile", "--no-progress", "--format=json", file], {
       stdout: "pipe",
       stderr: "pipe",
+      env: benchEnv,
+      timeout: 120_000,
     });
     if (proc.exitCode !== 0) throw new Error(`BenchmarkRunner --multifile should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
     const json = JSON.parse(proc.stdout.toString());

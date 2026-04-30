@@ -464,9 +464,11 @@ begin
     raise TGocciaParseError.Create(
       '--source-map=<file> supports a single input file or stdin.');
 
-  if (FSourceMap.ValueOr('') <> '') and MultifileEnabled then
+  // Use Present rather than the value to catch the bare --source-map
+  // form too — see ScriptLoader for the rationale.
+  if FSourceMap.Present and MultifileEnabled then
     raise TGocciaParseError.Create(
-      '--source-map=<file> cannot be combined with --multifile (an input '
+      '--source-map cannot be combined with --multifile (an input '
       + 'may expand to multiple sections).');
 
   if APaths.Count = 0 then

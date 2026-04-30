@@ -261,8 +261,19 @@ var
   FileResult: TBenchmarkFileResult;
   BenchStart: Int64;
 begin
-  Source := SourceRegistry.Load(AFileName);
+  Source := nil;
   try
+    try
+      Source := SourceRegistry.Load(AFileName);
+    except
+      on E: Exception do
+      begin
+        if not GIsWorkerThread then
+          WriteLn(StdErr, 'Error loading benchmark file: ', E.Message);
+        MakeErrorFileResult(AFileName, E.Message, AReporter);
+        Exit;
+      end;
+    end;
     try
       Engine := CreateEngine(AFileName, Source);
       try
@@ -342,8 +353,19 @@ var
   ScriptResult: TGocciaObjectValue;
   LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd, BenchStart: Int64;
 begin
-  Source := SourceRegistry.Load(AFileName);
+  Source := nil;
   try
+    try
+      Source := SourceRegistry.Load(AFileName);
+    except
+      on E: Exception do
+      begin
+        if not GIsWorkerThread then
+          WriteLn(StdErr, 'Error loading benchmark file: ', E.Message);
+        MakeErrorFileResult(AFileName, E.Message, AReporter);
+        Exit;
+      end;
+    end;
     SourceText := StringListToLFText(Source);
     if ppJSX in TGocciaEngine.DefaultPreprocessors then
     begin

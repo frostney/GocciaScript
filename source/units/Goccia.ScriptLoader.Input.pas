@@ -24,6 +24,14 @@ function ReadSourceFromText(var AInput: Text): TStringList;
   MULTIFILE_SEPARATOR exactly). }
 function IsMultifileSeparator(const ALine: string): Boolean;
 
+{ True iff ASource contains at least one separator line.  Used to
+  distinguish "input had separators (treat as multifile)" from "input
+  had no separators (pass through as a single file)" — relying on the
+  number of surviving sections in SplitMultifileSource is wrong when
+  separators are present but every produced section trims to empty
+  except one. }
+function ContainsMultifileSeparator(const ASource: TStringList): Boolean;
+
 { Splits ASource into independent sections at separator lines.
   Returns a TObjectList<TStringList> with one TStringList per section.
   Sections that are entirely empty (leading separator, trailing
@@ -86,6 +94,16 @@ end;
 function IsMultifileSeparator(const ALine: string): Boolean;
 begin
   Result := Trim(ALine) = MULTIFILE_SEPARATOR;
+end;
+
+function ContainsMultifileSeparator(const ASource: TStringList): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to ASource.Count - 1 do
+    if IsMultifileSeparator(ASource[I]) then
+      Exit(True);
+  Result := False;
 end;
 
 function SplitMultifileSource(const ASource: TStringList): TObjectList<TStringList>;
