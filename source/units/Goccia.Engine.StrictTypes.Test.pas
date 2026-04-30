@@ -8,10 +8,12 @@ uses
 
   TestingPascalLibrary,
 
+  Goccia.Bytecode.Chunk,
   Goccia.Engine,
   Goccia.Engine.Backend,
   Goccia.Scope,
   Goccia.TestSetup,
+  Goccia.Values.Error,
   Goccia.Values.Primitives;
 
 type
@@ -23,6 +25,7 @@ type
     procedure TestSetterPropagatesToInterpreterScope;
     procedure TestSetterPropagatesToBytecodeExecutor;
     procedure TestEffectiveStrictTypesReadsLiveRoot;
+    procedure TestAssignBindingGatedOnLiveStrictTypes;
   public
     procedure SetupTests; override;
   end;
@@ -39,6 +42,8 @@ begin
     TestSetterPropagatesToBytecodeExecutor);
   Test('EffectiveStrictTypes reads live root after setter (regression)',
     TestEffectiveStrictTypesReadsLiveRoot);
+  Test('AssignBinding TypeHint enforcement is gated on live strict-types (regression)',
+    TestAssignBindingGatedOnLiveStrictTypes);
 end;
 
 function TEngineStrictTypesTests.CreateEmptySource: TStringList;
@@ -152,6 +157,69 @@ begin
     { Flipping it back also flows through. }
     Engine.StrictTypes := False;
     Expect<Boolean>(Child.EffectiveStrictTypes).ToBe(False);
+  finally
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TEngineStrictTypesTests.TestAssignBindingGatedOnLiveStrictTypes;
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  Scope: TGocciaScope;
+  Threw: Boolean;
+begin
+  Source := CreateEmptySource;
+  Engine := TGocciaEngine.Create('<strict-test>', Source, []);
+  try
+    Scope := Engine.Interpreter.GlobalScope;
+
+    { Set up a binding with a recorded sltFloat type hint while
+      strict-types is on. }
+    Engine.StrictTypes := True;
+    Scope.DefineLexicalBinding('x',
+      TGocciaNumberLiteralValue.Create(1), dtLet);
+    Scope.SetOwnBindingTypeHint('x', sltFloat);
+
+    { With strict-types live, assigning a string throws TypeError. }
+    Threw := False;
+    try
+      Scope.AssignBinding('x',
+        TGocciaStringLiteralValue.Create('hello'));
+    except
+      on TGocciaThrowValue do
+        Threw := True;
+    end;
+    Expect<Boolean>(Threw).ToBe(True);
+
+    { Now turn strict-types off.  The binding's recorded TypeHint
+      stays (it's a piece of binding metadata), but AssignBinding's
+      enforcement is gated on the live root flag, so reassignments
+      stop throwing -- this is what makes the embedder's runtime
+      toggle flow through the way function-entry checks already do. }
+    Engine.StrictTypes := False;
+    Threw := False;
+    try
+      Scope.AssignBinding('x',
+        TGocciaStringLiteralValue.Create('hello'));
+    except
+      on TGocciaThrowValue do
+        Threw := True;
+    end;
+    Expect<Boolean>(Threw).ToBe(False);
+
+    { Flip back on -- enforcement returns. }
+    Engine.StrictTypes := True;
+    Threw := False;
+    try
+      Scope.AssignBinding('x',
+        TGocciaBooleanLiteralValue.Create(True));
+    except
+      on TGocciaThrowValue do
+        Threw := True;
+    end;
+    Expect<Boolean>(Threw).ToBe(True);
   finally
     Engine.Free;
     Source.Free;

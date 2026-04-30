@@ -399,7 +399,16 @@ end;
 procedure TGocciaScope.AssignBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0);
 var
   LexicalBinding: TLexicalBinding;
+  StrictActive: Boolean;
 begin
+  // Type hints recorded on bindings persist for the lifetime of the
+  // binding; the live --strict-types flag (read from the root scope)
+  // gates whether they enforce.  This mirrors the function-entry
+  // behaviour: when the embedder turns strict-types off after bindings
+  // have been declared, those bindings stop enforcing rather than
+  // continuing to throw based on stale state.
+  StrictActive := EffectiveStrictTypes;
+
   // Try to find variable in current scope first
   if FLexicalBindings.TryGetValue(AName, LexicalBinding) then
   begin
@@ -418,8 +427,9 @@ begin
         SSuggestUseLetNotConst);
 
     // Strict-types enforcement: when this binding has a recorded type
-    // hint, throw a TypeError if the assigned value does not match.
-    if LexicalBinding.TypeHint <> sltUntyped then
+    // hint and the live strict-types flag is on, throw a TypeError if
+    // the assigned value does not match.
+    if StrictActive and (LexicalBinding.TypeHint <> sltUntyped) then
       EnforceStrictType(AValue, LexicalBinding.TypeHint);
 
     // Update the value and mark as initialized
@@ -432,7 +442,7 @@ begin
   // Check var bindings on this scope
   if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, LexicalBinding) then
   begin
-    if LexicalBinding.TypeHint <> sltUntyped then
+    if StrictActive and (LexicalBinding.TypeHint <> sltUntyped) then
       EnforceStrictType(AValue, LexicalBinding.TypeHint);
     LexicalBinding.Value := AValue;
     FVarBindings.AddOrSetValue(AName, LexicalBinding);

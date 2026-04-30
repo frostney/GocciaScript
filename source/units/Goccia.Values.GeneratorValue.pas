@@ -91,11 +91,13 @@ uses
   SysUtils,
 
   Goccia.AST.Statements,
+  Goccia.Bytecode.Chunk,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.GarbageCollector,
+  Goccia.Types.Enforcement,
   Goccia.Values.ArrayValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -504,6 +506,7 @@ var
   CallScope: TGocciaScope;
   Value: TGocciaValue;
   Context: TGocciaEvaluationContext;
+  ParamTypeHint: TGocciaLocalType;
 begin
   CallScope := CreateCallScope;
   BindThis(CallScope, AThisValue);
@@ -528,6 +531,18 @@ begin
         for J := I to AArguments.Length - 1 do
           TGocciaArrayValue(Value).Elements.Add(AArguments.GetElement(J));
       CallScope.DefineLexicalBinding(FParameters[I].Name, Value, dtParameter);
+
+      // Mirrors TGocciaFunctionValue.ExecuteBody's IsRest branch: record
+      // the type hint on the binding so subsequent reassignments are
+      // guarded under --strict-types; skip initial enforcement on the
+      // rest array itself.
+      if Context.StrictTypes and (FParameters[I].TypeAnnotation <> '') then
+      begin
+        ParamTypeHint := TypeAnnotationToLocalType(FParameters[I].TypeAnnotation);
+        if ParamTypeHint <> sltUntyped then
+          CallScope.SetOwnBindingTypeHint(FParameters[I].Name, ParamTypeHint);
+      end;
+
       Break;
     end
     else if FParameters[I].IsPattern then
@@ -538,6 +553,21 @@ begin
         Value := EvaluateExpression(FParameters[I].DefaultValue, Context)
       else
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+      // Mirrors TGocciaFunctionValue.ExecuteBody's IsPattern branch:
+      // enforce on the raw pre-destructured value (defaults and
+      // optionals skip enforcement, parity with the named-param loop
+      // below).
+      if Context.StrictTypes
+        and (FParameters[I].TypeAnnotation <> '')
+        and not FParameters[I].IsOptional
+        and not Assigned(FParameters[I].DefaultValue) then
+      begin
+        ParamTypeHint := TypeAnnotationToLocalType(FParameters[I].TypeAnnotation);
+        if ParamTypeHint <> sltUntyped then
+          EnforceStrictType(Value, ParamTypeHint);
+      end;
+
       AssignPattern(FParameters[I].Pattern, Value, Context, True, dtParameter);
     end
     else
@@ -549,6 +579,34 @@ begin
       else
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
       CallScope.DefineLexicalBinding(FParameters[I].Name, Value, dtParameter);
+    end;
+  end;
+
+  // Mirrors TGocciaFunctionValue.ExecuteBody's named-param post-binding
+  // loop: for non-rest, non-pattern, non-default, non-optional named
+  // params, enforce on the bound value and record the type hint so
+  // subsequent reassignments are guarded.  Skips the categories already
+  // handled inline above.
+  if Context.StrictTypes then
+  begin
+    for I := 0 to Length(FParameters) - 1 do
+    begin
+      if FParameters[I].TypeAnnotation = '' then
+        Continue;
+      if FParameters[I].IsRest then
+        Continue;
+      if FParameters[I].IsOptional then
+        Continue;
+      if Assigned(FParameters[I].DefaultValue) then
+        Continue;
+      if FParameters[I].IsPattern then
+        Continue;
+      ParamTypeHint := TypeAnnotationToLocalType(FParameters[I].TypeAnnotation);
+      if ParamTypeHint = sltUntyped then
+        Continue;
+      EnforceStrictType(CallScope.GetValue(FParameters[I].Name),
+        ParamTypeHint);
+      CallScope.SetOwnBindingTypeHint(FParameters[I].Name, ParamTypeHint);
     end;
   end;
 
@@ -582,6 +640,7 @@ var
   CallScope: TGocciaScope;
   Value: TGocciaValue;
   Context: TGocciaEvaluationContext;
+  ParamTypeHint: TGocciaLocalType;
 begin
   CallScope := CreateCallScope;
   BindThis(CallScope, AThisValue);
@@ -604,6 +663,16 @@ begin
         for J := I to AArguments.Length - 1 do
           TGocciaArrayValue(Value).Elements.Add(AArguments.GetElement(J));
       CallScope.DefineLexicalBinding(FParameters[I].Name, Value, dtParameter);
+
+      // Mirrors TGocciaFunctionValue.ExecuteBody's IsRest branch: see
+      // TGocciaGeneratorFunctionValue.CreateContinuation above.
+      if Context.StrictTypes and (FParameters[I].TypeAnnotation <> '') then
+      begin
+        ParamTypeHint := TypeAnnotationToLocalType(FParameters[I].TypeAnnotation);
+        if ParamTypeHint <> sltUntyped then
+          CallScope.SetOwnBindingTypeHint(FParameters[I].Name, ParamTypeHint);
+      end;
+
       Break;
     end
     else if FParameters[I].IsPattern then
@@ -614,6 +683,18 @@ begin
         Value := EvaluateExpression(FParameters[I].DefaultValue, Context)
       else
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+      // Mirrors TGocciaFunctionValue.ExecuteBody's IsPattern branch.
+      if Context.StrictTypes
+        and (FParameters[I].TypeAnnotation <> '')
+        and not FParameters[I].IsOptional
+        and not Assigned(FParameters[I].DefaultValue) then
+      begin
+        ParamTypeHint := TypeAnnotationToLocalType(FParameters[I].TypeAnnotation);
+        if ParamTypeHint <> sltUntyped then
+          EnforceStrictType(Value, ParamTypeHint);
+      end;
+
       AssignPattern(FParameters[I].Pattern, Value, Context, True, dtParameter);
     end
     else
@@ -625,6 +706,31 @@ begin
       else
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
       CallScope.DefineLexicalBinding(FParameters[I].Name, Value, dtParameter);
+    end;
+  end;
+
+  // Mirrors TGocciaFunctionValue.ExecuteBody's named-param post-binding
+  // loop -- see TGocciaGeneratorFunctionValue.CreateContinuation above.
+  if Context.StrictTypes then
+  begin
+    for I := 0 to Length(FParameters) - 1 do
+    begin
+      if FParameters[I].TypeAnnotation = '' then
+        Continue;
+      if FParameters[I].IsRest then
+        Continue;
+      if FParameters[I].IsOptional then
+        Continue;
+      if Assigned(FParameters[I].DefaultValue) then
+        Continue;
+      if FParameters[I].IsPattern then
+        Continue;
+      ParamTypeHint := TypeAnnotationToLocalType(FParameters[I].TypeAnnotation);
+      if ParamTypeHint = sltUntyped then
+        Continue;
+      EnforceStrictType(CallScope.GetValue(FParameters[I].Name),
+        ParamTypeHint);
+      CallScope.SetOwnBindingTypeHint(FParameters[I].Name, ParamTypeHint);
     end;
   end;
 
