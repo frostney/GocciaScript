@@ -99,6 +99,8 @@ type
     procedure SetRegister(const AIndex: Integer; const AValue: TGocciaValue); inline;
     procedure SetRegisterFast(const AIndex: Integer; const AValue: TGocciaValue); inline;
     procedure SetRegisterRaw(const AIndex: Integer; const AValue: TGocciaRegister); inline;
+    procedure InstallFunctionPrototype(const AFunction: TGocciaObjectValue;
+      const AIsGenerator: Boolean);
     function GetLocal(const AIndex: Integer): TGocciaValue; inline;
     function GetLocalFast(const AIndex: Integer): TGocciaValue; inline;
     procedure SetLocal(const AIndex: Integer; const AValue: TGocciaValue); inline;
@@ -3695,6 +3697,48 @@ begin
     FLocalCells[AIndex].Value := AValue;
 end;
 
+procedure TGocciaVM.InstallFunctionPrototype(
+  const AFunction: TGocciaObjectValue;
+  const AIsGenerator: Boolean);
+var
+  PrototypeObj: TGocciaObjectValue;
+  PrototypeFlags: TPropertyFlags;
+begin
+  // ES2026 §10.2.5 MakeConstructor — adds a `prototype` data property to a
+  // function whose value is a fresh ordinary object.  Shape differs by kind:
+  //   - Ordinary function (§15.2): prototype is { writable, !enumerable,
+  //     !configurable } with an own `constructor` pointing at the function.
+  //   - (Async) generator (§15.5 / §15.6): prototype is { !writable,
+  //     !enumerable, !configurable } with NO own `constructor` — per spec it
+  //     inherits `constructor` from %GeneratorFunction.prototype.prototype%
+  //     (which points at %GeneratorFunction.prototype%, not the specific
+  //     generator function), so an own back-reference would be wrong.
+  // The prototype object's [[Prototype]] is %Object.prototype% per ES2026
+  // §10.2.5.1 OrdinaryFunctionCreate.  (For generators it should be %Generator%,
+  // but GocciaScript does not yet expose that intrinsic; falling back to
+  // Object.prototype keeps the chain non-null and lets generic object methods
+  // like hasOwnProperty resolve.)
+  //
+  // Match the lazy-init guard used by OP_NEW_OBJECT — the bytecode VM can be
+  // exercised outside the normal engine bootstrap (e.g. Goccia.VM.Test.pas),
+  // so the realm slot may not be primed yet on the first OP_CLOSURE.
+  if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+    TGocciaObjectValue.InitializeSharedPrototype;
+  PrototypeObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  if AIsGenerator then
+  begin
+    PrototypeFlags := [];
+  end
+  else
+  begin
+    PrototypeFlags := [pfWritable];
+    PrototypeObj.DefineProperty(PROP_CONSTRUCTOR,
+      TGocciaPropertyDescriptorData.Create(AFunction, [pfWritable, pfConfigurable]));
+  end;
+  AFunction.DefineProperty(PROP_PROTOTYPE,
+    TGocciaPropertyDescriptorData.Create(PrototypeObj, PrototypeFlags));
+end;
+
 function TGocciaVM.GetLocal(const AIndex: Integer): TGocciaValue;
 begin
   if (AIndex >= 0) and (AIndex < FLocalCellCount) and Assigned(FLocalCells[AIndex]) then
@@ -7083,7 +7127,14 @@ begin
           else if Assigned(FCurrentClosure) then
             ChildClosure.SetUpvalue(I, FCurrentClosure.GetUpvalue(Desc.Index));
         end;
-        SetRegister(A, TGocciaBytecodeFunctionValue.Create(Self, ChildClosure));
+        BytecodeFunction := TGocciaBytecodeFunctionValue.Create(Self, ChildClosure);
+        // ES2026 §10.2.5 MakeConstructor: install own `prototype` data property
+        // for `function`/`function*` declarations and expressions (including
+        // async generators).  The prototype is a fresh ordinary object whose
+        // `constructor` data property back-references the function.
+        if ChildTemplate.HasOwnPrototype then
+          InstallFunctionPrototype(BytecodeFunction, ChildTemplate.IsGenerator);
+        SetRegister(A, BytecodeFunction);
       end;
 
       OP_CALL:
