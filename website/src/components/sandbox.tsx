@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { AnchorH2 } from "@/components/anchor-heading";
 import { AnimatedOutput } from "@/components/animated-output";
+import { useRunShortcut } from "@/components/command-tabs";
 import { ConsolePanel } from "@/components/console-panel";
 import {
   HighlightedCode,
@@ -346,6 +347,7 @@ export function Sandbox() {
   // Bumped on each new execution so `<AnimatedOutput>` re-mounts and
   // re-runs its line-stagger reveal cleanly.
   const [runId, setRunId] = useState(0);
+  const runShortcut = useRunShortcut();
   const [paneCols, setPaneCols] = useState<[number, number, number]>([
     1.3, 0.9, 1,
   ]);
@@ -720,12 +722,12 @@ export function Sandbox() {
                 className="pg-run"
                 onClick={execute}
                 disabled={running}
-                title="Run · ⌘+Enter"
+                title={`Run · ${runShortcut.long}`}
               >
                 <RunIcon size={14} />
                 <span>{running ? "Running…" : "Run"}</span>
                 <span className="pg-run-kbd" aria-hidden="true">
-                  ⌘↵
+                  {runShortcut.short}
                 </span>
               </button>
             </div>

@@ -3,6 +3,7 @@
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { AnimatedOutput } from "@/components/animated-output";
+import { useRunShortcut } from "@/components/command-tabs";
 import { ConsolePanel } from "@/components/console-panel";
 import { HighlightedCode } from "@/components/highlighted-code";
 import {
@@ -463,6 +464,7 @@ export function Playground({
   const hlRef = useRef<HTMLPreElement>(null);
   const runningRef = useRef(false);
   const hydratedRef = useRef(false);
+  const runShortcut = useRunShortcut();
   // Skip the example-restore effect's first fire so it doesn't clobber the
   // share/saved code that the mount effect just set.
   const initialMountRef = useRef(true);
@@ -1142,12 +1144,12 @@ export function Playground({
             className="pg-run"
             disabled={running}
             onClick={run}
-            title="Run · ⌘+Enter"
+            title={`Run · ${runShortcut.long}`}
           >
             <RunIcon size={14} />
             <span>{running ? "Running…" : "Run"}</span>
             <span className="pg-run-kbd" aria-hidden="true">
-              ⌘↵
+              {runShortcut.short}
             </span>
           </button>
         </div>
