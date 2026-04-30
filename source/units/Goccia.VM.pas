@@ -3914,6 +3914,7 @@ var
   NextMethod: TGocciaValue;
   NextResult: TGocciaValue;
   DoneValue: TGocciaValue;
+  Value: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   GC: TGarbageCollector;
   ArrayRooted, IteratorRooted: Boolean;
@@ -3929,20 +3930,27 @@ begin
   GC := TGarbageCollector.Instance;
   ArrayRooted := False;
   IteratorRooted := False;
+  IteratorValue := nil;
   if Assigned(GC) then
   begin
     GC.AddTempRoot(Result);
     ArrayRooted := True;
   end;
-  IteratorValue := GetIteratorValue(AIterable, ATryAsync);
-  if Assigned(GC) and Assigned(IteratorValue)
-      and (IteratorValue <> AIterable)
-      and (IteratorValue is TGocciaObjectValue) then
-  begin
-    GC.AddTempRoot(IteratorValue);
-    IteratorRooted := True;
-  end;
   try
+    // GetIteratorValue can throw (e.g. for a non-iterable source, or
+    // when [Symbol.iterator] returns a non-object).  Calling it inside
+    // the try/finally is what guarantees Result is unrooted on the
+    // throw path — otherwise it stays permanently temp-rooted and
+    // accumulates across calls.
+    IteratorValue := GetIteratorValue(AIterable, ATryAsync);
+    if Assigned(GC) and Assigned(IteratorValue)
+        and (IteratorValue <> AIterable)
+        and (IteratorValue is TGocciaObjectValue) then
+    begin
+      GC.AddTempRoot(IteratorValue);
+      IteratorRooted := True;
+    end;
+
     if IteratorValue is TGocciaIteratorValue then
     begin
       // ES2024 §8.5.3 IteratorBindingInitialization: when an array
@@ -4010,7 +4018,17 @@ begin
         DoneValue := NextResult.GetProperty(PROP_DONE);
         DoneFlag := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
         if not DoneFlag then
-          Result.Elements.Add(NextResult.GetProperty(PROP_VALUE));
+        begin
+          // Normalize missing IteratorResult.value to undefined, matching
+          // the well-defined behaviour in TryIterableToArray.  Without
+          // this, GetProperty(PROP_VALUE) returning nil would store nil
+          // in the array, causing later .Elements[I] reads to crash or
+          // misclassify a missing result as "absent" in destructuring.
+          Value := NextResult.GetProperty(PROP_VALUE);
+          if not Assigned(Value) then
+            Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+          Result.Elements.Add(Value);
+        end;
         if (ALimit > 0) and (Result.Elements.Count >= ALimit) then
         begin
           // ES2024 §7.4.10 step 5 (normal completion): errors from

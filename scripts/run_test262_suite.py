@@ -699,10 +699,23 @@ def evaluate_suite(
                     process: subprocess.Popen | None = None
                     stderr_thread: threading.Thread | None = None
 
-                    def _flush_runner_state() -> None:
+                    def _flush_runner_state(extra_message: str = "") -> None:
                         nonlocal runner_output
-                        runner_output = (
+                        # Merge any synthetic diagnostic message (timeout
+                        # notice, invocation failure) with whatever the
+                        # runner managed to write to stderr.  Without
+                        # this merge, a stderr-empty crash or a hard
+                        # timeout would leave runner_output blank, and
+                        # the chunk's tests would all be classified as
+                        # ERROR with the unhelpful "No runner output"
+                        # message instead of the actual root cause.
+                        stderr_output = (
                             "".join(captured_stderr_chunks).strip())
+                        runner_output = "\n".join(
+                            part for part in
+                            (extra_message.strip(), stderr_output)
+                            if part
+                        )
                         if (process_returncode != 0
                                 and runner_output):
                             try:
@@ -712,6 +725,7 @@ def evaluate_suite(
                             except OSError:
                                 pass
 
+                    timeout_msg = ""
                     try:
                         process = subprocess.Popen(
                             runner_cmd,
@@ -741,11 +755,12 @@ def evaluate_suite(
                                 if runner_timeout > 0 else None)
                             process.wait(timeout=wait_timeout)
                         except subprocess.TimeoutExpired:
-                            print(
-                                f"  Runner exceeded "
+                            timeout_msg = (
+                                f"Runner exceeded "
                                 f"TEST262_RUNNER_TIMEOUT_S="
                                 f"{runner_timeout}s; terminating"
                             )
+                            print(f"  {timeout_msg}")
                             try:
                                 process.terminate()
                                 process.wait(timeout=5)
@@ -755,9 +770,9 @@ def evaluate_suite(
                         stderr_thread.join(timeout=5)
 
                         process_returncode = process.returncode
-                        _flush_runner_state()
+                        _flush_runner_state(timeout_msg)
                     except Exception as e:  # noqa: BLE001
-                        runner_output = f"Runner invocation failed: {e}"
+                        invocation_msg = f"Runner invocation failed: {e}"
                         # Don't leave the runner orphaned on this script's
                         # exit path: terminate it and drain stderr so
                         # diagnostic state still lands in
@@ -777,7 +792,7 @@ def evaluate_suite(
                                 process.returncode
                                 if process.returncode is not None
                                 else -1)
-                        _flush_runner_state()
+                        _flush_runner_state(invocation_msg)
 
                     tr_results: dict | None = None
                     if json_output.is_file():

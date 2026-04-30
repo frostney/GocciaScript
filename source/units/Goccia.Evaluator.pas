@@ -4465,6 +4465,7 @@ var
   PropValue, ElementValue, DefaultValue: TGocciaValue;
   RestElements: TGocciaArrayValue;
   I, J: Integer;
+  Exhausted: Boolean;
 begin
   if APattern is TGocciaIdentifierDestructuringPattern then
     AContext.Scope.DefineVariableBinding(
@@ -4565,11 +4566,22 @@ begin
       TGarbageCollector.Instance.AddTempRoot(Iterator);
       try
         try
+          // Same exhaustion-tracking as AssignArrayPattern: once the
+          // iterator returns done:true, subsequent BindingElements take
+          // undefined (or an empty rest array) without re-invoking
+          // next() — see ES2024 §13.15.5.4 IteratorBindingInitialization
+          // for ArrayBindingPattern.
+          Exhausted := False;
           for I := 0 to ArrPat.Elements.Count - 1 do
           begin
             if ArrPat.Elements[I] = nil then
             begin
-              Iterator.AdvanceNext;
+              if not Exhausted then
+              begin
+                IterResult := Iterator.AdvanceNext;
+                if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+                  Exhausted := True;
+              end;
               Continue;
             end;
             if ArrPat.Elements[I] is TGocciaRestDestructuringPattern then
@@ -4577,11 +4589,15 @@ begin
               RestElements := TGocciaArrayValue.Create;
               TGarbageCollector.Instance.AddTempRoot(RestElements);
               try
-                IterResult := Iterator.AdvanceNext;
-                while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+                if not Exhausted then
                 begin
-                  RestElements.Elements.Add(IterResult.GetProperty(PROP_VALUE));
                   IterResult := Iterator.AdvanceNext;
+                  while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+                  begin
+                    RestElements.Elements.Add(IterResult.GetProperty(PROP_VALUE));
+                    IterResult := Iterator.AdvanceNext;
+                  end;
+                  Exhausted := True;
                 end;
                 AssignVariablePattern(
                   TGocciaRestDestructuringPattern(ArrPat.Elements[I]).Argument,
@@ -4593,11 +4609,19 @@ begin
             end
             else
             begin
-              IterResult := Iterator.AdvanceNext;
-              if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+              if Exhausted then
                 ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
               else
-                ElementValue := IterResult.GetProperty(PROP_VALUE);
+              begin
+                IterResult := Iterator.AdvanceNext;
+                if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+                begin
+                  Exhausted := True;
+                  ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+                end
+                else
+                  ElementValue := IterResult.GetProperty(PROP_VALUE);
+              end;
               AssignVariablePattern(ArrPat.Elements[I], ElementValue, AContext);
             end;
           end;
@@ -4681,6 +4705,7 @@ var
   ElementValue: TGocciaValue;
   RestElements: TGocciaArrayValue;
   J: Integer;
+  Exhausted: Boolean;
 begin
   if (AValue is TGocciaNullLiteralValue) or (AValue is TGocciaUndefinedLiteralValue) then
     ThrowTypeError(
@@ -4757,11 +4782,25 @@ begin
     TGarbageCollector.Instance.AddTempRoot(Iterator);
     try
       try
+        // Track iterator exhaustion so we don't keep calling next()
+        // past done:true.  Per ES2024 §13.15.5.4
+        // IteratorBindingInitialization for ArrayBindingPattern: once
+        // iteratorRecord.[[Done]] becomes true, subsequent
+        // BindingElements get undefined (or an empty rest array)
+        // without invoking the iterator again.  Calling AdvanceNext on
+        // an already-done iterator is observable when the user's next()
+        // has side effects.
+        Exhausted := False;
         for I := 0 to APattern.Elements.Count - 1 do
         begin
           if APattern.Elements[I] = nil then
           begin
-            Iterator.AdvanceNext;
+            if not Exhausted then
+            begin
+              IterResult := Iterator.AdvanceNext;
+              if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+                Exhausted := True;
+            end;
             Continue;
           end;
 
@@ -4775,11 +4814,15 @@ begin
             RestElements := TGocciaArrayValue.Create;
             TGarbageCollector.Instance.AddTempRoot(RestElements);
             try
-              IterResult := Iterator.AdvanceNext;
-              while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+              if not Exhausted then
               begin
-                RestElements.Elements.Add(IterResult.GetProperty(PROP_VALUE));
                 IterResult := Iterator.AdvanceNext;
+                while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+                begin
+                  RestElements.Elements.Add(IterResult.GetProperty(PROP_VALUE));
+                  IterResult := Iterator.AdvanceNext;
+                end;
+                Exhausted := True;
               end;
               AssignPattern(TGocciaRestDestructuringPattern(APattern.Elements[I]).Argument, RestElements, AContext, AIsDeclaration, ADeclarationType);
             finally
@@ -4789,11 +4832,19 @@ begin
           end
           else
           begin
-            IterResult := Iterator.AdvanceNext;
-            if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+            if Exhausted then
               ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
             else
-              ElementValue := IterResult.GetProperty(PROP_VALUE);
+            begin
+              IterResult := Iterator.AdvanceNext;
+              if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+              begin
+                Exhausted := True;
+                ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+              end
+              else
+                ElementValue := IterResult.GetProperty(PROP_VALUE);
+            end;
 
             AssignPattern(APattern.Elements[I], ElementValue, AContext, AIsDeclaration, ADeclarationType);
           end;

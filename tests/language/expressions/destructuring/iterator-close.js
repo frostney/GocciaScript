@@ -30,6 +30,65 @@ test("[] consumes zero elements and immediately closes the iterator", () => {
   expect(returnCalls).toBe(1);
 });
 
+test("once next() returns done:true, no further next() call is made", () => {
+  // ES2024 §13.15.5.4 IteratorBindingInitialization for ArrayBindingPattern:
+  // once iteratorRecord.[[Done]] becomes true, subsequent BindingElements
+  // get undefined (or an empty rest array) without invoking the iterator
+  // again.  Calling next() on a done iterator is observable when the
+  // user's next() has side effects.
+  let nextCalls = 0;
+  const iter = {
+    [Symbol.iterator]() {
+      let i = 0;
+      return {
+        next() {
+          nextCalls++;
+          i++;
+          if (i > 1) return { value: undefined, done: true };
+          return { value: 'first', done: false };
+        },
+        return() { return { value: undefined, done: true }; }
+      };
+    }
+  };
+
+  const [a, b, c, ...rest] = iter;
+
+  expect(a).toBe('first');
+  expect(b).toBe(undefined);
+  expect(c).toBe(undefined);
+  expect(rest.length).toBe(0);
+  // 1 call returns the value, 1 call returns done:true.  After that,
+  // b/c/rest must NOT trigger more next() calls.
+  expect(nextCalls).toBe(2);
+});
+
+test("elision after exhaustion does not advance the iterator", () => {
+  let nextCalls = 0;
+  const iter = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          nextCalls++;
+          if (nextCalls === 1) return { value: 'x', done: false };
+          return { value: undefined, done: true };
+        },
+        return() { return { value: undefined, done: true }; }
+      };
+    }
+  };
+
+  // [first, , , last] — even though slots 2 and 3 are elisions,
+  // Spec says we don't keep calling next() once exhausted.
+  const [first, , , last] = iter;
+
+  expect(first).toBe('x');
+  expect(last).toBe(undefined);
+  // 1st call yields 'x'; 2nd call (for the second slot) returns done:true.
+  // Slots 3 and 4 must NOT invoke next() again.
+  expect(nextCalls).toBe(2);
+});
+
 test("[a, b] consumes exactly two elements then closes the iterator", () => {
   let nextCalls = 0;
   let returnCalls = 0;
