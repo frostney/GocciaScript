@@ -3923,6 +3923,23 @@ begin
       SSuggestIteratorResultObject);
 end;
 
+// Abrupt-completion variant of CloseRawIterator: per ES2024 §7.4.10
+// step 5, when an iteration body completes abruptly the close must
+// not let iter.return()'s own errors replace the original exception.
+// Mirrors CloseIteratorPreservingError in Goccia.Values.IteratorSupport
+// for the TGocciaIteratorValue case.
+procedure CloseRawIteratorPreservingError(const AIteratorObject: TGocciaValue);
+begin
+  if not Assigned(AIteratorObject) then
+    Exit;
+  try
+    CloseRawIterator(AIteratorObject);
+  except
+    // Swallow: the original abrupt completion is the one that must
+    // surface to the caller.
+  end;
+end;
+
 function TGocciaVM.IterableToArray(const AIterable: TGocciaValue;
   const ATryAsync: Boolean; const ALimit: Integer): TGocciaArrayValue;
 var
@@ -3986,23 +4003,31 @@ begin
         CloseIterator(TGocciaIteratorValue(IteratorValue));
         Exit;
       end;
-      repeat
-        CheckExecutionTimeout;
-        CheckInstructionLimit;
-        NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
-        if not DoneFlag then
-          Result.Elements.Add(NextResult);
-        if (ALimit > 0) and (Result.Elements.Count >= ALimit) then
-        begin
-          // ES2024 §7.4.10 step 5: normal-completion IteratorClose lets
-          // errors from iter.return() propagate.  Use CloseIterator (not
-          // PreservingError) so test262 tests like Iterator.from →
-          // Iterator.prototype.return-throws are reported correctly.
+      try
+        repeat
+          CheckExecutionTimeout;
+          CheckInstructionLimit;
+          NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
           if not DoneFlag then
-            CloseIterator(TGocciaIteratorValue(IteratorValue));
-          Exit;
-        end;
-      until DoneFlag;
+            Result.Elements.Add(NextResult);
+          if (ALimit > 0) and (Result.Elements.Count >= ALimit) then
+          begin
+            // ES2024 §7.4.10 step 5: normal-completion IteratorClose lets
+            // errors from iter.return() propagate.  Use CloseIterator (not
+            // PreservingError) so test262 tests like Iterator.from →
+            // Iterator.prototype.return-throws are reported correctly.
+            if not DoneFlag then
+              CloseIterator(TGocciaIteratorValue(IteratorValue));
+            Exit;
+          end;
+        until DoneFlag;
+      except
+        // §7.4.10 step 5 abrupt-completion path: DirectNext (and any
+        // user code it calls) can throw.  Close the iterator, swallow
+        // any error from iter.return(), and re-raise the original.
+        CloseIteratorPreservingError(TGocciaIteratorValue(IteratorValue));
+        raise;
+      end;
       Exit;
     end;
 
@@ -4014,56 +4039,73 @@ begin
         CloseRawIterator(IteratorValue);
         Exit;
       end;
-      repeat
-        CheckExecutionTimeout;
-        CheckInstructionLimit;
-        NextMethod := IteratorValue.GetProperty(PROP_NEXT);
-        if not Assigned(NextMethod) or
-           (NextMethod is TGocciaUndefinedLiteralValue) or
-           not NextMethod.IsCallable then
-          Break;
-        CallArgs := AcquireArguments;
-        try
-          NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IteratorValue);
-        finally
-          ReleaseArguments(CallArgs);
-        end;
-        // Only async iterators yield a Promise from next().  For sync
-        // iteration (the default — destructuring, spread, for-of), the
-        // result is the IteratorResult object directly; calling
-        // AwaitValue on it would needlessly pump microtasks and open a
-        // re-entrancy window where time-of-check / time-of-use bugs can
-        // surface (e.g. user code mutating the result between unwrap and
-        // PROP_DONE / PROP_VALUE reads).  Mirror the spec's split between
-        // §7.4.7 IteratorStep (sync) and §7.4.13 AsyncIteratorStep.
-        if ATryAsync then
-          NextResult := AwaitValue(NextResult);
-        if NextResult.IsPrimitive then
-          ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.ToStringLiteral.Value]),
-            SSuggestIteratorResultObject);
-        DoneValue := NextResult.GetProperty(PROP_DONE);
-        DoneFlag := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
-        if not DoneFlag then
-        begin
-          // Normalize missing IteratorResult.value to undefined, matching
-          // the well-defined behaviour in TryIterableToArray.  Without
-          // this, GetProperty(PROP_VALUE) returning nil would store nil
-          // in the array, causing later .Elements[I] reads to crash or
-          // misclassify a missing result as "absent" in destructuring.
-          Value := NextResult.GetProperty(PROP_VALUE);
-          if not Assigned(Value) then
-            Value := TGocciaUndefinedLiteralValue.UndefinedValue;
-          Result.Elements.Add(Value);
-        end;
-        if (ALimit > 0) and (Result.Elements.Count >= ALimit) then
-        begin
-          // ES2024 §7.4.10 step 5 (normal completion): errors from
-          // iter.return() propagate as the new completion.
+      try
+        repeat
+          CheckExecutionTimeout;
+          CheckInstructionLimit;
+          NextMethod := IteratorValue.GetProperty(PROP_NEXT);
+          // ES2024 §7.4.5 IteratorStep / §7.4.2 GetIteratorDirect:
+          // a missing/non-callable next is a TypeError, not silent
+          // termination.  A bare `Break` would stop iterating but
+          // leave the iterator open, neither raising nor closing —
+          // hiding the bug from callers.  Throw and let the
+          // try/except below close-with-preserved-error.
+          if not Assigned(NextMethod) or
+             (NextMethod is TGocciaUndefinedLiteralValue) or
+             not NextMethod.IsCallable then
+            ThrowTypeError(SErrorIteratorNextMustBeCallable,
+              SSuggestIteratorProtocol);
+          CallArgs := AcquireArguments;
+          try
+            NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IteratorValue);
+          finally
+            ReleaseArguments(CallArgs);
+          end;
+          // Only async iterators yield a Promise from next().  For sync
+          // iteration (the default — destructuring, spread, for-of), the
+          // result is the IteratorResult object directly; calling
+          // AwaitValue on it would needlessly pump microtasks and open a
+          // re-entrancy window where time-of-check / time-of-use bugs can
+          // surface (e.g. user code mutating the result between unwrap and
+          // PROP_DONE / PROP_VALUE reads).  Mirror the spec's split between
+          // §7.4.7 IteratorStep (sync) and §7.4.13 AsyncIteratorStep.
+          if ATryAsync then
+            NextResult := AwaitValue(NextResult);
+          if NextResult.IsPrimitive then
+            ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.ToStringLiteral.Value]),
+              SSuggestIteratorResultObject);
+          DoneValue := NextResult.GetProperty(PROP_DONE);
+          DoneFlag := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
           if not DoneFlag then
-            CloseRawIterator(IteratorValue);
-          Exit;
-        end;
-      until DoneFlag;
+          begin
+            // Normalize missing IteratorResult.value to undefined, matching
+            // the well-defined behaviour in TryIterableToArray.  Without
+            // this, GetProperty(PROP_VALUE) returning nil would store nil
+            // in the array, causing later .Elements[I] reads to crash or
+            // misclassify a missing result as "absent" in destructuring.
+            Value := NextResult.GetProperty(PROP_VALUE);
+            if not Assigned(Value) then
+              Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+            Result.Elements.Add(Value);
+          end;
+          if (ALimit > 0) and (Result.Elements.Count >= ALimit) then
+          begin
+            // ES2024 §7.4.10 step 5 (normal completion): errors from
+            // iter.return() propagate as the new completion.
+            if not DoneFlag then
+              CloseRawIterator(IteratorValue);
+            Exit;
+          end;
+        until DoneFlag;
+      except
+        // §7.4.10 step 5 abrupt-completion path covering the
+        // SErrorIteratorNextMustBeCallable throw above, the
+        // SErrorIteratorResultNotObject throw, AwaitValue rejections,
+        // and any error raised by user-supplied next().  iter.return()
+        // is best-effort and must not replace the original error.
+        CloseRawIteratorPreservingError(IteratorValue);
+        raise;
+      end;
       Exit;
     end;
   finally

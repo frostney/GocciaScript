@@ -589,7 +589,12 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: tc39/test262
-          ref: main
+          # Pin to an immutable SHA so the cached `main` baseline and a PR
+          # run measure the same upstream test corpus.  `ref: main` would
+          # let new tests land mid-PR and surface as spurious deltas
+          # against the cached baseline.  Bump in lockstep with pr.yml
+          # when refreshing the suite.
+          ref: d0c1b4555b03dd404873fd6422a4b5da00136500
           path: test262-suite
           fetch-depth: 1
 

@@ -28,14 +28,14 @@ test("plain objects and functions coerce to 0 in bitwise &, |, ^", () => {
   // {} → ToNumber → NaN → ToInt32 → 0
   expect(({}) & ({})).toBe(0);
   expect(({}) | ({})).toBe(0);
-  expect(({}) ^ (function(){})).toBe(0);
+  expect(({}) ^ (() => {})).toBe(0);
 });
 
 test("~undefined and ~null are -1", () => {
   expect(~undefined).toBe(-1);
   expect(~null).toBe(-1);
   expect(~({})).toBe(-1);
-  expect(~(function(){})).toBe(-1);
+  expect(~(() => {})).toBe(-1);
 });
 
 test("shifts with non-numeric operands coerce to 0", () => {

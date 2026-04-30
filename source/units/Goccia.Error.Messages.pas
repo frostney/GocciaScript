@@ -594,6 +594,7 @@ resourcestring
 
   // Generic iterator errors
   SErrorIteratorReturnMustBeCallable = 'Iterator return property must be callable';
+  SErrorIteratorNextMustBeCallable = 'Iterator next property must be callable';
 
   // Iterator concat errors
   SErrorIteratorConcatMustReturnObject = 'Iterator.concat: [Symbol.iterator]() must return an object';
