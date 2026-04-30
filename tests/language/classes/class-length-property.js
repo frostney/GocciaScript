@@ -67,4 +67,14 @@ describe("class length property", () => {
     expect(WeakMap.length).toBe(0);
     expect(WeakSet.length).toBe(0);
   });
+
+  test("explicit length redefinition is honored in own descriptor", () => {
+    // length is configurable per spec, so userland can override it.
+    class Foo {
+      constructor(a, b) {}
+    }
+    Object.defineProperty(Foo, "length", { value: 99, configurable: true });
+    const descriptor = Object.getOwnPropertyDescriptor(Foo, "length");
+    expect(descriptor.value).toBe(99);
+  });
 });

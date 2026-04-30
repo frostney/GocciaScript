@@ -6538,6 +6538,22 @@ begin
               KeyToPropertyNameRegister(FRegisters[C])));
         end
         else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaClassValue) then
+        begin
+          // Classes must be matched before TGocciaObjectValue so that static
+          // symbol-keyed properties (FStaticSymbolDescriptors) and the
+          // superclass walk are reached. TGocciaClassValue.GetSymbolProperty
+          // is not virtual on the base, so a TGocciaObjectValue cast would
+          // bypass them. Mirrors OP_ARRAY_GET ordering.
+          if (FRegisters[C].Kind = grkObject) and
+             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
+            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
+              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
+          else
+            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
+              KeyToPropertyNameRegister(FRegisters[C])));
+        end
+        else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaObjectValue) then
         begin
           if (FRegisters[C].Kind = grkObject) and
@@ -6566,17 +6582,6 @@ begin
               TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value[KeyIndex + 1]))
           else
             SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
-        end
-        else if (FRegisters[B].Kind = grkObject) and
-                (FRegisters[B].ObjectValue is TGocciaClassValue) then
-        begin
-          if (FRegisters[C].Kind = grkObject) and
-             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
-            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
-              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
-          else
-            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
-              KeyToPropertyNameRegister(FRegisters[C])));
         end
         else
           FRegisters[A] := RegisterUndefined;

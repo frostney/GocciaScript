@@ -1120,10 +1120,15 @@ begin
     end;
   end
   else if AName = PROP_LENGTH then
-    // Synthesize a spec-compliant descriptor:
-    // { writable: false, enumerable: false, configurable: true }
-    Result := TGocciaPropertyDescriptorData.Create(
-      TGocciaNumberLiteralValue.Create(GetClassLength), [pfConfigurable])
+  begin
+    // Honour explicit own-property redefinitions (length is configurable, so
+    // userland may override via Object.defineProperty); fall back to a
+    // synthesized descriptor only when no own descriptor exists.
+    Result := inherited GetOwnPropertyDescriptor(AName);
+    if not Assigned(Result) then
+      Result := TGocciaPropertyDescriptorData.Create(
+        TGocciaNumberLiteralValue.Create(GetClassLength), [pfConfigurable]);
+  end
   else
     Result := inherited GetOwnPropertyDescriptor(AName);
 end;
