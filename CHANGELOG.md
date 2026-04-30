@@ -2,6 +2,30 @@
 
 All notable changes to GocciaScript are documented in this file.
 
+## [0.7.1] - 2026-04-29
+
+### 🌐 Website
+
+- Add version dispatch to playground engine (#467)
+- Use static Vercel ignore config (#462)
+- Refresh docs and website to match recent feature set (#460)
+- Add website agent discovery metadata (#453)
+- Scope Vercel builds to website changes (#455)
+
+### 🏗️ Internal
+
+- Update CHANGELOG.md for 0.7.0 (#457)
+
+### 🐛 Fixed
+
+- Fix microtask drain re-entrancy crashing async-generator yield rejection (#465)
+- Fix generator loop resume and async iterator lookup (#456)
+- Fix changelog website grouping (#459)
+
+### 📖 Other
+
+- Unify stdin handling across all three runners (#461)
+
 ## [0.7.0] - 2026-04-29
 
 ### ✨ Improved

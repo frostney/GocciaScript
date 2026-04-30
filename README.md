@@ -102,6 +102,15 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader --mode=bytecode
 printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=json
 # The JSON envelope includes build metadata, aggregate stdout/stderr,
 # formatted output lines, timing, memory, workers, and per-input files[].
+# Use --output=compact-json for a smaller envelope: build, memory, stdout, and
+# stderr are omitted; the normalized `output` array and structured `error`
+# are preserved.
+printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=compact-json
+
+# The same `compact-json` value is accepted by GocciaTestRunner (via --output)
+# and GocciaBenchmarkRunner (via --format) for the same envelope.
+./build/GocciaTestRunner tests --output=compact-json
+./build/GocciaBenchmarkRunner benchmarks --format=compact-json --output=out.json
 
 # Inject globals from the CLI
 printf "x + y;" | ./build/GocciaScriptLoader --global x=10 --global y=20
@@ -162,7 +171,7 @@ printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./bu
 ./build/GocciaBenchmarkRunner benchmarks --format=csv --output=results.csv
 ```
 
-The benchmark runner auto-calibrates iterations per benchmark, reports ops/sec with variance (CV%) and engine-level timing breakdown (lex/parse/execute). Output formats: `console` (default), `text`, `csv`, `json`. Calibration and measurement parameters are configurable via [environment variables](docs/benchmarks.md#configuring-benchmark-parameters).
+The benchmark runner auto-calibrates iterations per benchmark, reports ops/sec with variance (CV%) and engine-level timing breakdown (lex/parse/execute). Output formats: `console` (default), `text`, `csv`, `json`, `compact-json` (the same envelope as `json` without `build`, `memory`, `stdout`, or `stderr`). Calibration and measurement parameters are configurable via [environment variables](docs/benchmarks.md#configuring-benchmark-parameters).
 
 ## Quick Tour
 

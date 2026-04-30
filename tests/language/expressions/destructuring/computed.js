@@ -101,3 +101,18 @@ test("destructuring assignment with function parameters simulation", () => {
     preferences: { extra: "data" },
   });
 });
+
+test("destructuring with computed symbol key on class reaches static symbol-keyed members", () => {
+  const sym = Symbol("static-method");
+  class Foo {
+    static [sym]() {
+      return "static-method-result";
+    }
+  }
+  // OP_GET_INDEX must dispatch to TGocciaClassValue.GetSymbolProperty so the
+  // class's static symbol descriptor table is consulted; otherwise the
+  // generic object path returns undefined.
+  const { [sym]: m } = Foo;
+  expect(typeof m).toBe("function");
+  expect(m()).toBe("static-method-result");
+});

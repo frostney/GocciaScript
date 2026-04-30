@@ -146,3 +146,57 @@ const isWritable = (obj, name) => {
   const desc = Object.getOwnPropertyDescriptor(obj, name);
   return desc !== undefined && desc.writable === true;
 };
+
+// Verify a built-in callable property: matches the descriptor on `obj[name]`
+// and additionally checks `value.name` and `value.length` per the spec
+// defaults for built-in functions.
+const verifyCallableProperty = (obj, name, functionName, functionLength, desc) => {
+  const value = obj[name];
+  if (typeof value !== "function") {
+    throw new Test262Error(
+      "Expected obj['" + String(name) + "'] to be a function"
+    );
+  }
+
+  if (desc === undefined) {
+    desc = {
+      writable: true,
+      enumerable: false,
+      configurable: true,
+      value: value,
+    };
+  } else if (!Object.prototype.hasOwnProperty.call(desc, "value") &&
+             !Object.prototype.hasOwnProperty.call(desc, "get")) {
+    desc.value = value;
+  }
+
+  verifyProperty(obj, name, desc);
+
+  if (functionName === undefined) {
+    if (typeof name === "symbol") {
+      functionName = "[" + name.description + "]";
+    } else {
+      functionName = name;
+    }
+  }
+
+  verifyProperty(value, "name", {
+    value: functionName,
+    writable: false,
+    enumerable: false,
+    configurable: desc.configurable,
+  });
+
+  verifyProperty(value, "length", {
+    value: functionLength,
+    writable: false,
+    enumerable: false,
+    configurable: desc.configurable,
+  });
+};
+
+// Primordial variants — ECMAScript distinguishes primordial (built-in)
+// objects from non-primordial ones for verification, but the checks are
+// identical for our purposes. Match upstream propertyHelper.js.
+const verifyPrimordialProperty = verifyProperty;
+const verifyPrimordialCallableProperty = verifyCallableProperty;

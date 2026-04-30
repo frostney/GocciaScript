@@ -1637,6 +1637,12 @@ begin
       Advance;
       if Check(gttIdentifier) then
         Expr := TGocciaMemberExpression.Create(Expr, Advance.Lexeme, False, Previous.Line, Previous.Column, False)
+      else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
+                     gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
+                     gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
+                     gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
+        // Reserved words are valid property names after "." per ES spec
+        Expr := TGocciaMemberExpression.Create(Expr, Previous.Lexeme, False, Previous.Line, Previous.Column, False)
       else
         raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines,
           SSuggestPropertyNameIdentifier);

@@ -22,6 +22,7 @@ type
     FHelp: TGocciaFlagOption;
     FJobs: TGocciaIntegerOption;
     FLog: TGocciaStringOption;
+    FConfig: TGocciaStringOption;
     FLogFileHandle: TextFile;
     FLogLock: TRTLCriticalSection;
     FLogFileOpen: Boolean;
@@ -294,6 +295,7 @@ begin
   FHelp := nil;
   FJobs := nil;
   FLog := nil;
+  FConfig := nil;
   FLogFileOpen := False;
 end;
 
@@ -307,6 +309,7 @@ begin
   FHelp.Free;
   FJobs.Free;
   FLog.Free;
+  FConfig.Free;
   inherited Destroy;
 end;
 
@@ -654,6 +657,41 @@ begin
   Result := GetCurrentDir;
 end;
 
+{ Resolve an explicit --config value to a concrete file path.
+  Accepts either a path to a config file or to a directory containing
+  goccia.toml / goccia.json5 / goccia.json (priority order).  The
+  directory form checks only that directory and does not walk upward,
+  so the user gets exactly what they asked for and a typo errors out
+  rather than silently picking up a parent's config.  Raises when the
+  path does not exist or when a directory contains no recognised
+  config file. }
+function ResolveExplicitConfigPath(const AValue: string): string;
+var
+  Expanded, Candidate: string;
+  E: Integer;
+begin
+  Expanded := ExpandFileName(AValue);
+
+  if DirectoryExists(Expanded) then
+  begin
+    for E := 0 to High(CONFIG_EXTENSIONS) do
+    begin
+      Candidate := IncludeTrailingPathDelimiter(Expanded) +
+        CONFIG_BASE_NAME + CONFIG_EXTENSIONS[E];
+      if FileExists(Candidate) then
+        Exit(Candidate);
+    end;
+    raise Exception.CreateFmt(
+      'No %s.{toml,json5,json} found in config directory: %s',
+      [CONFIG_BASE_NAME, AValue]);
+  end;
+
+  if FileExists(Expanded) then
+    Exit(Expanded);
+
+  raise Exception.CreateFmt('Config path not found: %s', [AValue]);
+end;
+
 procedure TGocciaCLIApplication.Execute;
 var
   Paths: TStringList;
@@ -670,11 +708,15 @@ begin
 
   FLog := TGocciaStringOption.Create('log', 'Write console output to a log file');
 
+  FConfig := TGocciaStringOption.Create('config',
+    'Path to a config file or a directory containing one (skips auto-discovery)');
+
   BuildAllOptions;
-  // Append --jobs and --log after BuildAllOptions so they appear in help
-  SetLength(FAllOptions, Length(FAllOptions) + 2);
-  FAllOptions[High(FAllOptions) - 1] := FJobs;
-  FAllOptions[High(FAllOptions)] := FLog;
+  // Append --jobs, --log, and --config after BuildAllOptions so they appear in help
+  SetLength(FAllOptions, Length(FAllOptions) + 3);
+  FAllOptions[High(FAllOptions) - 2] := FJobs;
+  FAllOptions[High(FAllOptions) - 1] := FLog;
+  FAllOptions[High(FAllOptions)] := FConfig;
 
   { Parse CLI first so we know the entry file path. }
   Paths := ParseCommandLine(FAllOptions);
@@ -693,12 +735,25 @@ begin
       if FAllOptions[I].Present then
         FAllOptions[I].MarkFromCommandLine;
 
-    { Discover config file starting from the entry file's directory.
-      Apply as defaults — options already set by CLI are skipped. }
+    { Resolve the root config path.  When --config is given it takes
+      precedence over auto-discovery and a missing path is a hard
+      error so a typo is not silently ignored.  The value may point
+      to a config file directly or to a directory containing
+      goccia.toml / goccia.json5 / goccia.json (priority order); the
+      directory form does NOT walk upward.  Otherwise walk up from
+      the entry file's directory.  Either way, options already set by
+      CLI are skipped during application. }
     EnsureConfigParsersRegistered;
-    ConfigStartDir := ResolveConfigStartDirectory(Paths);
-    ConfigPath := DiscoverConfigFile(ConfigStartDir,
-      [CONFIG_BASE_NAME], CONFIG_EXTENSIONS);
+    if FConfig.Present then
+    begin
+      ConfigPath := ResolveExplicitConfigPath(FConfig.Value);
+    end
+    else
+    begin
+      ConfigStartDir := ResolveConfigStartDirectory(Paths);
+      ConfigPath := DiscoverConfigFile(ConfigStartDir,
+        [CONFIG_BASE_NAME], CONFIG_EXTENSIONS);
+    end;
     if ConfigPath <> '' then
       ApplyConfigFile(ConfigPath, FAllOptions);
 

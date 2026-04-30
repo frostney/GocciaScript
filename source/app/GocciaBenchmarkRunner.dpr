@@ -875,7 +875,9 @@ procedure TBenchmarkRunnerApp.Configure;
 begin
   AddEngineOptions;
   FNoProgress := AddFlag('no-progress', 'Suppress progress output');
-  FFormats := AddRepeatable('format', 'Output format (console, text, csv, json)');
+  FFormats := AddRepeatable('format',
+    'Output format (console, text, csv, json, compact-json). ' +
+    '"compact-json" emits the json envelope without build, memory, stdout, stderr.');
   FOutputFile := AddString('output', 'Output file path (attaches to last --format)');
 end;
 
@@ -925,7 +927,7 @@ begin
   for I := 0 to Length(Reports) - 1 do
     if Reports[I].OutputFile = '' then
     begin
-      if Reports[I].Format in [brfJSON, brfCSV] then
+      if Reports[I].Format in [brfJSON, brfCompactJSON, brfCSV] then
         HasStructuredStdout := True
       else
         HasReadableStdout := True;
@@ -941,7 +943,7 @@ begin
   // that human-readable status messages do not corrupt the output document.
   if ShowProgress then
     for I := 0 to Length(Reports) - 1 do
-      if (Reports[I].Format in [brfJSON, brfCSV]) and (Reports[I].OutputFile = '') then
+      if (Reports[I].Format in [brfJSON, brfCompactJSON, brfCSV]) and (Reports[I].OutputFile = '') then
       begin
         ShowProgress := False;
         Break;

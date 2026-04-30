@@ -783,7 +783,7 @@ def evaluate_suite(
                     # Ground truth: per-file records emitted by the runner.
                     file_results_by_safe: dict[str, dict] = {}
                     for fr in tr_results.get("results", []):
-                        fpath = fr.get("file", "")
+                        fpath = fr.get("fileName", "")
                         key = Path(fpath).name if fpath else ""
                         if key:
                             file_results_by_safe[key] = fr
