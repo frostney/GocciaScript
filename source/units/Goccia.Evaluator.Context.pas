@@ -16,6 +16,7 @@ type
     LoadModule: TLoadModuleCallback;
     CurrentFilePath: string;
     CoverageEnabled: Boolean;
+    StrictTypes: Boolean;
     DisposalTracker: TObject; // TGocciaDisposalTracker or nil
   end;
 

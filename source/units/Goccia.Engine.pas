@@ -187,6 +187,7 @@ type
     procedure SetASIEnabled(const AValue: Boolean);
     procedure SetVarEnabled(const AValue: Boolean);
     procedure SetFunctionEnabled(const AValue: Boolean);
+    procedure SetStrictTypes(const AValue: Boolean);
     function GetContentProvider: TGocciaModuleContentProvider;
     function GetModuleResolver: TGocciaModuleResolver;
     procedure SetPreprocessors(const AValue: TGocciaPreprocessors);
@@ -261,7 +262,7 @@ type
     property Preprocessors: TGocciaPreprocessors read FPreprocessors write SetPreprocessors;
     property Compatibility: TGocciaCompatibilityFlags read FCompatibility write SetCompatibility;
     property SourceType: TGocciaSourceType read FSourceType write FSourceType;
-    property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
+    property StrictTypes: Boolean read FStrictTypes write SetStrictTypes;
     property Shims: TStringList read FShims;
     property BuiltinConsole: TGocciaConsole read FBuiltinConsole;
     property BuiltinMath: TGocciaMath read FBuiltinMath;
@@ -318,6 +319,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.ControlFlow,
   Goccia.Coverage,
+  Goccia.Engine.Backend,
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.FetchManager,
@@ -670,10 +672,7 @@ begin
   FPreprocessors := DefaultPreprocessors;
   FCompatibility := DefaultCompatibility;
   FSourceType := DefaultSourceType;
-  if Assigned(FExecutor) then
-    FStrictTypes := FExecutor.DefaultStrictTypes
-  else
-    FStrictTypes := False;
+  FStrictTypes := False;
   FShims := TStringList.Create;
 
   FInterpreter := TGocciaInterpreter.Create(AFileName, ASourceLines,
@@ -1324,10 +1323,6 @@ begin
   GocciaObj.AssignProperty('version', TGocciaStringLiteralValue.Create(GetVersion));
   GocciaObj.AssignProperty('commit', TGocciaStringLiteralValue.Create(GetCommit));
   GocciaObj.AssignProperty('builtIns', BuiltInsArray);
-  if FStrictTypes then
-    GocciaObj.AssignProperty(PROP_STRICT_TYPES, TGocciaBooleanLiteralValue.TrueValue)
-  else
-    GocciaObj.AssignProperty(PROP_STRICT_TYPES, TGocciaBooleanLiteralValue.FalseValue);
   GocciaObj.AssignProperty(SEMVER_NAMESPACE_PROPERTY, CreateSemverNamespace);
   GocciaObj.AssignProperty('build', BuildObj);
   GocciaObj.DefineProperty('spec', TGocciaPropertyDescriptorData.Create(
@@ -1733,6 +1728,19 @@ begin
   else
     Exclude(FCompatibility, cfFunction);
   FInterpreter.FunctionEnabled := AValue;
+end;
+
+procedure TGocciaEngine.SetStrictTypes(const AValue: Boolean);
+begin
+  FStrictTypes := AValue;
+  if Assigned(FInterpreter) then
+  begin
+    FInterpreter.StrictTypesEnabled := AValue;
+    if Assigned(FInterpreter.GlobalScope) then
+      FInterpreter.GlobalScope.StrictTypes := AValue;
+  end;
+  if FExecutor is TGocciaBytecodeExecutor then
+    TGocciaBytecodeExecutor(FExecutor).StrictTypes := AValue;
 end;
 
 procedure TGocciaEngine.SetPreprocessors(const AValue: TGocciaPreprocessors);

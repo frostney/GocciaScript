@@ -32,6 +32,7 @@ type
     FASIEnabled: Boolean;
     FVarEnabled: Boolean;
     FFunctionEnabled: Boolean;
+    FStrictTypesEnabled: Boolean;
     FContentProvider: TGocciaModuleContentProvider;
     FEvaluateModuleBody: TGocciaModuleBodyEvaluator;
     FEntryFileName: string;
@@ -71,6 +72,8 @@ type
     property JSXEnabled: Boolean read FJSXEnabled write FJSXEnabled;
     property VarEnabled: Boolean read FVarEnabled write FVarEnabled;
     property FunctionEnabled: Boolean read FFunctionEnabled write FFunctionEnabled;
+    property StrictTypesEnabled: Boolean read FStrictTypesEnabled
+      write FStrictTypesEnabled;
     property Resolver: TGocciaModuleResolver read FResolver;
   end;
 
@@ -270,11 +273,13 @@ begin
                 // ES2026 §16.2.1.6.4 InitializeEnvironment: a Module
                 // Environment Record's [[ThisValue]] is undefined.
                 ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+                ModuleScope.StrictTypes := FStrictTypesEnabled;
                 Context.Scope := ModuleScope;
                 Context.OnError := FOnError;
                 Context.LoadModule := LoadModule;
                 Context.CurrentFilePath := ResolvedPath;
                 Context.CoverageEnabled := False;
+                Context.StrictTypes := FStrictTypesEnabled;
                 Context.DisposalTracker := nil;
 
                 FEvaluateModuleBody(ProgramNode, Context);

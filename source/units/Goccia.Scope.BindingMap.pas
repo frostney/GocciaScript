@@ -7,6 +7,7 @@ interface
 uses
   OrderedStringMap,
 
+  Goccia.Bytecode.Chunk,
   Goccia.Values.Primitives;
 
 type
@@ -22,6 +23,9 @@ type
     Value: TGocciaValue;
     DeclarationType: TGocciaDeclarationType;
     Initialized: Boolean;
+    { Strict-types annotation enforced on every assignment.  Default
+      sltUntyped means no enforcement (typical untyped binding). }
+    TypeHint: TGocciaLocalType;
 
     property Writable: Boolean read IsWritable;
     property IsAccessible: Boolean read CanAccess;

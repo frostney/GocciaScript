@@ -710,10 +710,6 @@ begin
   GocciaObj.AssignProperty('version', TGocciaStringLiteralValue.Create(GetVersion));
   GocciaObj.AssignProperty('commit', TGocciaStringLiteralValue.Create(GetCommit));
   GocciaObj.AssignProperty('builtIns', BuiltInsArray);
-  if FStrictTypes then
-    GocciaObj.AssignProperty(PROP_STRICT_TYPES, TGocciaBooleanLiteralValue.TrueValue)
-  else
-    GocciaObj.AssignProperty(PROP_STRICT_TYPES, TGocciaBooleanLiteralValue.FalseValue);
   GocciaObj.AssignProperty(SEMVER_NAMESPACE_PROPERTY, CreateSemverNamespace);
   GocciaObj.AssignProperty('build', BuildObj);
   GocciaObj.DefineProperty('spec', TGocciaPropertyDescriptorData.Create(
