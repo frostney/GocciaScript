@@ -4416,6 +4416,17 @@ begin
          not NextMethod.IsCallable then
         ThrowTypeError(SErrorAsyncIteratorNextNotCallable,
           SSuggestAsyncIteratorProtocol);
+      // Note: the captured NextMethod is not propagated downstream
+      // here.  TGocciaVMAsyncFromSyncIteratorValue is sync->async
+      // wrapping only — for a TRUE async iterator (whose next()
+      // already returns Promise<IteratorResult>) routing through
+      // that wrapper would call GetProperty(PROP_DONE) on the
+      // unresolved Promise and produce an infinite for-await-of
+      // loop.  Capture-once for the async branch would require a
+      // dedicated TGocciaGenericAsyncIteratorValue class; until
+      // that exists, downstream consumers (for-await-of dispatch)
+      // re-resolve PROP_NEXT per iteration.  The §7.4.2 validation
+      // above still ensures `next` is callable at acquisition time.
       Exit;
     end
     else if Assigned(IteratorMethod) and
@@ -4486,14 +4497,12 @@ begin
           // Wrap the raw iterator object in a TGocciaGenericIteratorValue
           // so callers (OP_ITER_NEXT, IterableToArray, etc.) get a
           // TGocciaIteratorValue with NextMethod captured ONCE per
-          // ES2024 §7.4.2 GetIteratorDirect.  Without this wrapping,
-          // OP_ITER_NEXT's raw-object branch re-resolves
-          // GetProperty(PROP_NEXT) per iteration and picks up
-          // post-acquisition mutations of `iterator.next` — divergent
-          // from spec and observable via the
-          // language/expressions/destructuring/iterator-next-capture
-          // regression tests.
-          Exit(TGocciaGenericIteratorValue.Create(IteratorObject));
+          // ES2024 §7.4.2 GetIteratorDirect.  Pass the already-
+          // resolved NextMethod via the two-arg constructor — the
+          // single-arg overload would re-run GetProperty(PROP_NEXT),
+          // re-opening the post-acquisition mutation window we just
+          // closed by validating above.
+          Exit(TGocciaGenericIteratorValue.Create(IteratorObject, NextMethod));
         end;
         // ES2024 §7.4.2 GetIteratorDirect step 2: a missing or
         // non-callable [[NextMethod]] is a TypeError specific to the

@@ -25,7 +25,14 @@ type
     function ReturnInternal(const AValue: TGocciaValue;
       const AHasValue: Boolean): TGocciaObjectValue;
   public
-    constructor Create(const AIteratorObject: TGocciaValue);
+    constructor Create(const AIteratorObject: TGocciaValue); overload;
+    // Overload for callers that have already resolved & validated
+    // `next` (e.g. GetIteratorValue / GetIteratorFromValue) — passes
+    // the captured callable straight in instead of forcing the
+    // constructor to re-run GetProperty(PROP_NEXT).  Keeps the
+    // capture-once contract end-to-end through the iterator
+    // acquisition pipeline.
+    constructor Create(const AIteratorObject, ANextMethod: TGocciaValue); overload;
     function AdvanceNext: TGocciaObjectValue; override;
     function AdvanceNextValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
@@ -67,6 +74,20 @@ begin
     FNextMethod := nil;
 end;
 
+constructor TGocciaGenericIteratorValue.Create(
+  const AIteratorObject, ANextMethod: TGocciaValue);
+begin
+  inherited Create;
+  FSource := AIteratorObject;
+  // ANextMethod was resolved + validated by the caller (typically
+  // GetIteratorValue at the iteratorRecord-creation site).  Trusting
+  // it directly avoids a redundant GetProperty(PROP_NEXT) and keeps
+  // the capture-once contract from the caller through to
+  // AdvanceNextInternal — no opportunity for an interleaved
+  // user-side mutation to swap `next` between validation and use.
+  FNextMethod := ANextMethod;
+end;
+
 function TGocciaGenericIteratorValue.AdvanceNextInternal(
   const AValue: TGocciaValue; const AHasValue: Boolean): TGocciaObjectValue;
 var
@@ -81,15 +102,15 @@ begin
 
   // ES2024 §7.4.2 GetIteratorDirect step 2 / §7.4.5 IteratorStep:
   // a missing/non-callable [[NextMethod]] is a TypeError, not silent
-  // termination.  Closing the iterator before raising matches the
-  // §7.4.10 IteratorClose semantics for abrupt completion.
+  // termination.  We deliberately do NOT mark the iterator FDone
+  // before raising — per §7.4.10 IteratorClose, an abrupt completion
+  // must run iter.return() best-effort, and ReturnInternal short-
+  // circuits when FDone is already true.  Setting FDone here would
+  // suppress the cleanup callback the consumer expects to fire.
   if not Assigned(FNextMethod) or
      (FNextMethod is TGocciaUndefinedLiteralValue) or
      not FNextMethod.IsCallable then
-  begin
-    FDone := True;
     ThrowTypeError(SErrorIteratorNextMustBeCallable, SSuggestIteratorProtocol);
-  end;
 
   if AHasValue then
     CallArgs := TGocciaArgumentsCollection.Create([AValue])

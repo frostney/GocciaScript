@@ -112,7 +112,8 @@ begin
              not NextMethod.IsCallable then
             ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
 
-          Result := TGocciaGenericIteratorValue.Create(IteratorObj);
+          // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
+          Result := TGocciaGenericIteratorValue.Create(IteratorObj, NextMethod);
         finally
           RemoveRootIfNeeded(IteratorObj, WasIteratorRooted);
         end;
