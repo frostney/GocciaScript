@@ -602,6 +602,88 @@ console.log("TestRunner: --output=json emits structured JSON envelope to stdout.
   }
 }
 
+console.log("TestRunner: --output=json keeps stdout clean when test throws...");
+{
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "test-throws.js");
+    writeFileSync(file, 'throw new Error("boom");\n');
+
+    const proc = Bun.spawnSync(
+      [resolve(TESTRUNNER), file, "--no-progress", "--output=json"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    // ExitCode is 1 because the test failed; stdout must still be parseable.
+    const stdout = proc.stdout.toString();
+    if (stdout.includes("Error: boom") && !stdout.startsWith("{"))
+      throw new Error(`TestRunner --output=json should not leak diagnostic before JSON, got: ${stdout.slice(0, 200)}`);
+    let json: any;
+    try {
+      json = JSON.parse(stdout);
+    } catch (e) {
+      throw new Error(`TestRunner --output=json with throwing test should produce parseable JSON, got: ${stdout.slice(0, 200)}`);
+    }
+    if (json.ok !== false) throw new Error(`TestRunner --output=json with throwing test should mark ok=false, got ${json.ok}`);
+    if (json.failed !== 1) throw new Error(`TestRunner --output=json with throwing test should mark failed=1, got ${json.failed}`);
+    if (json.files?.[0]?.errorMessage?.length === 0)
+      throw new Error("TestRunner --output=json with throwing test should populate per-file errorMessage");
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("TestRunner: --output=json keeps stdout clean when script logs to console...");
+{
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "test-with-log.js");
+    writeFileSync(
+      file,
+      [
+        'console.log("THIS WOULD LEAK");',
+        'console.error("THIS TOO");',
+        'test("ok", () => { expect(1).toBe(1); });',
+        "",
+      ].join("\n"),
+    );
+
+    const proc = Bun.spawnSync(
+      [resolve(TESTRUNNER), file, "--no-progress", "--output=json"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0) throw new Error(`TestRunner --output=json with console output exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const stdout = proc.stdout.toString();
+    if (stdout.includes("THIS WOULD LEAK") || stdout.includes("THIS TOO"))
+      throw new Error(`TestRunner --output=json should suppress test-script console output, got: ${stdout.slice(0, 200)}`);
+    const json = JSON.parse(stdout);
+    if (json.ok !== true) throw new Error(`TestRunner --output=json with console output ok should be true, got ${json.ok}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("TestRunner: --output=json keeps stdout clean when --coverage is enabled...");
+{
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "test-coverage.js");
+    writeFileSync(file, 'test("ok", () => { expect(1 + 1).toBe(2); });\n');
+
+    const proc = Bun.spawnSync(
+      [resolve(TESTRUNNER), file, "--no-progress", "--output=json", "--coverage"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0) throw new Error(`TestRunner --output=json --coverage exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const stdout = proc.stdout.toString();
+    if (stdout.includes("Coverage Summary"))
+      throw new Error(`TestRunner --output=json should suppress coverage summary on stdout, got: ${stdout.slice(0, 200)}`);
+    const json = JSON.parse(stdout);
+    if (json.ok !== true) throw new Error(`TestRunner --output=json --coverage ok should be true, got ${json.ok}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("TestRunner: --output=compact-json omits build, memory, stdout, stderr...");
 {
   const tmp = makeTmp();

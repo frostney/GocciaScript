@@ -338,9 +338,15 @@ begin
         CoverageOptions.OutputPath.Present) and
        Assigned(TGocciaCoverageTracker.Instance) then
     begin
-      PrintCoverageSummary(TGocciaCoverageTracker.Instance);
-      if Files.Count = 1 then
-        PrintCoverageDetail(TGocciaCoverageTracker.Instance, Files[0]);
+      { Coverage summary writes to stdout; suppress in JSON-to-stdout mode so
+        the JSON envelope remains the only stdout payload. The
+        --coverage-output=<file> machine-readable forms still fire below. }
+      if not IsJsonOutput then
+      begin
+        PrintCoverageSummary(TGocciaCoverageTracker.Instance);
+        if Files.Count = 1 then
+          PrintCoverageDetail(TGocciaCoverageTracker.Instance, Files[0]);
+      end;
       if CoverageOptions.Format.Matches(cfLcov) and
          (CoverageOptions.OutputPath.ValueOr('') <> '') then
         WriteCoverageLcov(TGocciaCoverageTracker.Instance,
@@ -384,7 +390,7 @@ begin
       except
         on E: EStreamError do
         begin
-          if not GIsWorkerThread then
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
             WriteLn('Error loading test file: ', E.Message);
           MarkLoadError(ScriptResult, AFileName, E.Message);
           Result := MakeEmptyTestResult(ScriptResult, E.Message);
@@ -399,7 +405,7 @@ begin
     try
       Engine := CreateEngine(AFileName, Source);
       try
-        if FSilent.Present or GIsWorkerThread then
+        if FSilent.Present or GIsWorkerThread or IsJsonOutput then
         begin
           Engine.BuiltinConsole.Enabled := False;
           Engine.SuppressWarnings := True;
@@ -426,7 +432,7 @@ begin
       begin
         if E is TGocciaError then
         begin
-          if not GIsWorkerThread then
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
             WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal));
           MarkLoadError(ScriptResult, AFileName, TGocciaError(E).GetDetailedMessage);
           Result := MakeEmptyTestResult(ScriptResult,
@@ -434,7 +440,7 @@ begin
         end
         else if E is TGocciaThrowValue then
         begin
-          if not GIsWorkerThread then
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
             WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal, TGocciaThrowValue(E).Suggestion));
           MarkLoadError(ScriptResult, AFileName,
             FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, False, TGocciaThrowValue(E).Suggestion));
@@ -444,7 +450,7 @@ begin
         end
         else
         begin
-          if not GIsWorkerThread then
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
             WriteLn('Fatal error: ', E.Message);
           MarkLoadError(ScriptResult, AFileName, E.Message);
           Result := MakeEmptyTestResult(ScriptResult, E.Message);
@@ -489,7 +495,7 @@ begin
       except
         on E: EStreamError do
         begin
-          if not GIsWorkerThread then
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
             WriteLn('Error loading test file: ', E.Message);
           MarkLoadError(ScriptResult, AFileName, E.Message);
           Result := MakeEmptyTestResult(ScriptResult, E.Message);
@@ -515,7 +521,7 @@ begin
       try
         Engine := CreateEngine(AFileName, Source, Executor);
         try
-          if FSilent.Present or GIsWorkerThread then
+          if FSilent.Present or GIsWorkerThread or IsJsonOutput then
           begin
             Engine.BuiltinConsole.Enabled := False;
             Engine.SuppressWarnings := True;
@@ -545,7 +551,7 @@ begin
                       AFileName, SourceMap.Clone);
                 end;
 
-                if (not FSilent.Present) and (not GIsWorkerThread) then
+                if (not FSilent.Present) and (not GIsWorkerThread) and (not IsJsonOutput) then
                   for I := 0 to Parser.WarningCount - 1 do
                   begin
                     Warning := Parser.GetWarning(I);
@@ -607,7 +613,7 @@ begin
       begin
         if E is TGocciaError then
         begin
-          if not GIsWorkerThread then
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
             WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal));
           MarkLoadError(ScriptResult, AFileName, TGocciaError(E).GetDetailedMessage);
           Result := MakeEmptyTestResult(ScriptResult,
@@ -615,7 +621,7 @@ begin
         end
         else if E is TGocciaThrowValue then
         begin
-          if not GIsWorkerThread then
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
             WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal, TGocciaThrowValue(E).Suggestion));
           MarkLoadError(ScriptResult, AFileName,
             FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, False, TGocciaThrowValue(E).Suggestion));
@@ -625,7 +631,7 @@ begin
         end
         else
         begin
-          if not GIsWorkerThread then
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
             WriteLn('Fatal error: ', E.Message);
           MarkLoadError(ScriptResult, AFileName, E.Message);
           Result := MakeEmptyTestResult(ScriptResult, E.Message);
