@@ -272,11 +272,20 @@ jobs:
         continue-on-error: true
         # python3 -u: unbuffered, so progress prints reach the live CI log
         # in real time even if the job is later killed by SIGTERM.
+        # --jobs=2 (not 4) deliberately: GH-hosted runners share the host
+        # CPU with neighbour VMs, and at --jobs=4 the runner's per-worker
+        # idle watchdog routinely fires false positives — orphaning a
+        # whole worker's queue and surfacing as ~330 spurious "Worker
+        # produced no result" entries (see analysis on this PR for the
+        # macOS-arm64 vs Linux-x86_64 gap that drove this change).  Two
+        # workers leaves enough CPU headroom that scheduler jitter
+        # doesn't trip the watchdog, while still halving wall time vs
+        # sequential execution.
         run: |
           python3 -u scripts/run_test262_suite.py \
             --suite-dir test262-suite \
             --mode=bytecode \
-            --jobs=4 \
+            --jobs=2 \
             --output=test262-results.json
 
       - name: Upload test262 results

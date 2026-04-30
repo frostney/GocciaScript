@@ -256,6 +256,7 @@ uses
   Goccia.StackLimit,
   Goccia.Timeout,
   Goccia.Types.Enforcement,
+  Goccia.Utils,
   Goccia.Values.BigIntValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.EnumValue,
@@ -754,14 +755,21 @@ begin
     ThrowTypeError(SErrorBigIntMixedTypes, SSuggestBigIntNoMixedArithmetic);
 end;
 
+// All Number-side bitwise helpers route operands through ToInt32Value /
+// ToUint32Value (Goccia.Utils) — the spec-compliant ToInt32 / ToUint32
+// implementations.  Using bare Trunc() yields divergent results across
+// architectures because FPC's Trunc(NaN) returns Int64.MinValue on
+// x86_64 (cvttsd2si "indefinite") but 0 on aarch64; that single-instruction
+// difference accounted for ~22 test262 failures on Linux x86_64 CI that
+// passed on macOS arm64 / Linux aarch64.
+
 function VMBitwiseAndValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
 begin
   if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
       TGocciaBigIntValue(ALeft).Value.BitwiseAnd(TGocciaBigIntValue(ARight).Value)));
   VMCheckBigIntMixed(ALeft, ARight);
-  Result := VMNumberValue(Trunc(ALeft.ToNumberLiteral.Value) and
-    Trunc(ARight.ToNumberLiteral.Value));
+  Result := VMNumberValue(ToInt32Value(ALeft) and ToInt32Value(ARight));
 end;
 
 function VMBitwiseOrValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
@@ -770,8 +778,7 @@ begin
     Exit(TGocciaBigIntValue.Create(
       TGocciaBigIntValue(ALeft).Value.BitwiseOr(TGocciaBigIntValue(ARight).Value)));
   VMCheckBigIntMixed(ALeft, ARight);
-  Result := VMNumberValue(Trunc(ALeft.ToNumberLiteral.Value) or
-    Trunc(ARight.ToNumberLiteral.Value));
+  Result := VMNumberValue(ToInt32Value(ALeft) or ToInt32Value(ARight));
 end;
 
 function VMBitwiseXorValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
@@ -780,8 +787,7 @@ begin
     Exit(TGocciaBigIntValue.Create(
       TGocciaBigIntValue(ALeft).Value.BitwiseXor(TGocciaBigIntValue(ARight).Value)));
   VMCheckBigIntMixed(ALeft, ARight);
-  Result := VMNumberValue(Trunc(ALeft.ToNumberLiteral.Value) xor
-    Trunc(ARight.ToNumberLiteral.Value));
+  Result := VMNumberValue(ToInt32Value(ALeft) xor ToInt32Value(ARight));
 end;
 
 function VMLeftShiftValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
@@ -791,8 +797,8 @@ begin
       TGocciaBigIntValue(ALeft).Value.ShiftLeft(
         TGocciaBigIntValue(ARight).Value.ToInt64)));
   VMCheckBigIntMixed(ALeft, ARight);
-  Result := VMNumberValue(Trunc(ALeft.ToNumberLiteral.Value) shl
-    (Trunc(ARight.ToNumberLiteral.Value) and 31));
+  Result := VMNumberValue(
+    ToInt32Value(ALeft) shl (ToUint32Value(ARight) and 31));
 end;
 
 function VMRightShiftValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
@@ -802,8 +808,8 @@ begin
       TGocciaBigIntValue(ALeft).Value.ShiftRight(
         TGocciaBigIntValue(ARight).Value.ToInt64)));
   VMCheckBigIntMixed(ALeft, ARight);
-  Result := VMNumberValue(SarLongint(Int32(Trunc(ALeft.ToNumberLiteral.Value)),
-    Trunc(ARight.ToNumberLiteral.Value) and 31));
+  Result := VMNumberValue(SarLongint(
+    ToInt32Value(ALeft), ToUint32Value(ARight) and 31));
 end;
 
 // ES2026 §6.1.6.2.11 BigInt::unsignedRightShift — always throws
@@ -811,15 +817,15 @@ function VMUnsignedRightShiftValues(const ALeft, ARight: TGocciaValue): TGocciaV
 begin
   if (ALeft is TGocciaBigIntValue) or (ARight is TGocciaBigIntValue) then
     ThrowTypeError(SErrorBigIntUnsignedRightShift, SSuggestBigIntNoMixedArithmetic);
-  Result := VMNumberValue(Cardinal(Trunc(ALeft.ToNumberLiteral.Value)) shr
-    (Trunc(ARight.ToNumberLiteral.Value) and 31));
+  Result := VMNumberValue(
+    ToUint32Value(ALeft) shr (ToUint32Value(ARight) and 31));
 end;
 
 function VMBitwiseNotValue(const AOperand: TGocciaValue): TGocciaValue; inline;
 begin
   if AOperand is TGocciaBigIntValue then
     Exit(TGocciaBigIntValue.Create(TGocciaBigIntValue(AOperand).Value.BitwiseNot));
-  Result := VMNumberValue(not Trunc(AOperand.ToNumberLiteral.Value));
+  Result := VMNumberValue(not ToInt32Value(AOperand));
 end;
 
 function VMGlobalConstructor(const AScope: TGocciaScope;
@@ -4022,7 +4028,16 @@ begin
         finally
           ReleaseArguments(CallArgs);
         end;
-        NextResult := AwaitValue(NextResult);
+        // Only async iterators yield a Promise from next().  For sync
+        // iteration (the default — destructuring, spread, for-of), the
+        // result is the IteratorResult object directly; calling
+        // AwaitValue on it would needlessly pump microtasks and open a
+        // re-entrancy window where time-of-check / time-of-use bugs can
+        // surface (e.g. user code mutating the result between unwrap and
+        // PROP_DONE / PROP_VALUE reads).  Mirror the spec's split between
+        // §7.4.7 IteratorStep (sync) and §7.4.13 AsyncIteratorStep.
+        if ATryAsync then
+          NextResult := AwaitValue(NextResult);
         if NextResult.IsPrimitive then
           ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.ToStringLiteral.Value]),
             SSuggestIteratorResultObject);

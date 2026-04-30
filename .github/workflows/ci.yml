@@ -597,11 +597,14 @@ jobs:
         continue-on-error: true
         # python3 -u: unbuffered, so progress prints reach the live CI log
         # in real time even if the job is later killed by SIGTERM.
+        # --jobs=2 (not 4): see pr.yml's identical step for rationale —
+        # higher concurrency tripped false-positive watchdog stalls on
+        # GH-hosted runners.
         run: |
           python3 -u scripts/run_test262_suite.py \
             --suite-dir test262-suite \
             --mode=bytecode \
-            --jobs=4 \
+            --jobs=2 \
             --output=test262-results.json
 
       - name: Stage test262 baseline
