@@ -160,10 +160,39 @@ printf "const f = () => f(); f();" | ./build/GocciaScriptLoader --max-instructio
 ./build/GocciaTestRunner tests --jobs=4
 ./build/GocciaBenchmarkRunner benchmarks --jobs=1
 
+# Split a single input file (or stdin) on `---` separator lines and dispatch
+# each section as an independent file across the worker pool
+./build/GocciaScriptLoader scenarios.js --multifile
+./build/GocciaTestRunner suites.js --multifile --jobs=4
+./build/GocciaBundler scenarios.js --multifile --output=dist/
+printf '1;\n---\n2;\n---\n3;\n' | ./build/GocciaScriptLoader --multifile
+
 # Run benchmarks via bytecode VM
 ./build/GocciaBenchmarkRunner benchmarks --mode=bytecode
 printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner - --mode=bytecode
 ```
+
+### `--multifile` (split a single input on `---` separators)
+
+When `--multifile` is set, each input — whether a file or stdin — is scanned for lines whose trimmed content equals exactly `---`. If any such separator is present, the input is split at those lines and each section is dispatched through the regular worker pool as if it were its own input file. Sections execute in fully isolated `TGocciaEngine` instances, so per-section state (intrinsic prototype mutations, top-level bindings) cannot leak across sections.
+
+**Section naming.** The `[partN]` suffix (1-indexed) is appended to the input name:
+
+- File `foo.js` with three sections produces `foo[part1].js`, `foo[part2].js`, `foo[part3].js`. The suffix is inserted *before* the extension so `ExtractFileExt`, `ChangeFileExt`, JSX/`.tsx` dispatch, and the bundler's `.gbc` output naming continue to work without any per-site changes.
+- Stdin with three sections produces `<stdin>[part1]`, `<stdin>[part2]`, `<stdin>[part3]`. The suffix is appended (no extension to insert before).
+- Section names appear as the `fileName` field in JSON output, in error messages, in coverage reports, and in source maps.
+
+**Separator semantics.** A line is a separator iff its trimmed content equals `---` exactly. `----`, `--- comment`, and `---abc` are not separators. Empty leading and trailing sections are dropped silently (a file that starts or ends with `---` does not produce empty sections), as are sections between consecutive separators. A file with no separator is treated as a single section, so `--multifile` is safe to enable globally via `goccia.json`.
+
+**Per-runner behaviour.**
+
+- `GocciaScriptLoader` runs each section in a fresh engine; results appear separately in human-readable output and as separate `files[]` entries in `--output=json`.
+- `GocciaTestRunner` runs each section as a separate test file; the aggregate counts (`totalFiles`, `totalTests`, etc.) include every section.
+- `GocciaBundler` emits one `.gbc` per section. `--output=<file>` is rejected with `--multifile` because the input may expand to multiple outputs; pass a directory instead.
+- `GocciaBenchmarkRunner` produces one file entry per section in the report.
+- `GocciaREPL` accepts `--multifile` for symmetry but ignores it (the REPL takes no file arguments).
+
+**Combining with other flags.** `--source-map=<file>` is rejected with `--multifile` for the same reason as the bundler's `--output=<file>` — a single source-map output cannot represent multiple section sources. All other flags compose normally, including `--jobs` for parallel section dispatch and `goccia.json` integration via `"multifile": true`.
 
 ### Configuration File (`goccia.json`)
 

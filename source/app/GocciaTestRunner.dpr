@@ -255,7 +255,7 @@ end;
 
 procedure TTestRunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
-  Files: TStringList;
+  Files, RawFiles, StdinNames, TempFiles, CoverageSource: TStringList;
   I: Integer;
   AggregatedResult: TAggregatedTestResult;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
@@ -297,22 +297,48 @@ begin
     if UseStdin then
     begin
       StdinSource := ReadSourceFromText(Input);
-      Files.Add(STDIN_FILE_NAME);
+      if MultifileEnabled then
+      begin
+        // Split stdin sections into the registry; ownership of
+        // StdinSource transfers to SplitStdinMultifile.
+        StdinNames := SplitStdinMultifile(StdinSource);
+        try
+          Files.AddStrings(StdinNames);
+        finally
+          StdinNames.Free;
+        end;
+        StdinSource := nil;
+      end
+      else
+        Files.Add(STDIN_FILE_NAME);
     end
     else
-      for I := 0 to APaths.Count - 1 do
-      begin
-        if DirectoryExists(APaths[I]) then
-          Files.AddStrings(FindAllFiles(APaths[I], ScriptExtensions))
-        else if FileExists(APaths[I]) then
-          Files.Add(APaths[I])
-        else
+    begin
+      RawFiles := TStringList.Create;
+      try
+        for I := 0 to APaths.Count - 1 do
         begin
-          WriteLn(StdErr, 'Error: Path not found: ', APaths[I]);
-          ExitCode := 1;
-          Exit;
+          if DirectoryExists(APaths[I]) then
+            RawFiles.AddStrings(FindAllFiles(APaths[I], ScriptExtensions))
+          else if FileExists(APaths[I]) then
+            RawFiles.Add(APaths[I])
+          else
+          begin
+            WriteLn(StdErr, 'Error: Path not found: ', APaths[I]);
+            ExitCode := 1;
+            Exit;
+          end;
         end;
+        // Build the expanded list before freeing the old Files: if
+        // ExpandMultifileFiles raises, Files still owns its (empty)
+        // TStringList and the outer finally won't double-free.
+        TempFiles := ExpandMultifileFiles(RawFiles);
+        Files.Free;
+        Files := TempFiles;
+      finally
+        RawFiles.Free;
       end;
+    end;
 
     if (not FNoProgress.Present) and (not IsJsonOutput) then
     begin
@@ -357,7 +383,24 @@ begin
       begin
         PrintCoverageSummary(TGocciaCoverageTracker.Instance);
         if Files.Count = 1 then
-          PrintCoverageDetail(TGocciaCoverageTracker.Instance, Files[0]);
+        begin
+          { Virtual filenames (multifile sections, stdin) are not on
+            disk; load their source from the registry so coverage detail
+            is printed with the actual section content rather than
+            silently skipped. }
+          if SourceRegistry.IsRegistered(Files[0]) then
+          begin
+            CoverageSource := SourceRegistry.Load(Files[0]);
+            try
+              PrintCoverageDetail(TGocciaCoverageTracker.Instance,
+                Files[0], CoverageSource);
+            finally
+              CoverageSource.Free;
+            end;
+          end
+          else
+            PrintCoverageDetail(TGocciaCoverageTracker.Instance, Files[0]);
+        end;
       end;
       if CoverageOptions.Format.Matches(cfLcov) and
          (CoverageOptions.OutputPath.ValueOr('') <> '') then
@@ -398,7 +441,7 @@ begin
     else
     begin
       try
-        Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+        Source := SourceRegistry.Load(AFileName);
       except
         on E: EStreamError do
         begin
@@ -523,7 +566,7 @@ begin
     else
     begin
       try
-        Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+        Source := SourceRegistry.Load(AFileName);
       except
         on E: EStreamError do
         begin
