@@ -335,6 +335,14 @@ export function Sandbox() {
   const [globalsText, setGlobalsText] = useState(DEFAULT_GLOBALS);
   const [output, setOutput] = useState<SbLine[]>([]);
   const [running, setRunning] = useState(false);
+  // Mirrors `running` for the synchronous re-entry guard inside
+  // `execute`. The Run button is `disabled` while running, but the
+  // ⌘/Ctrl+Enter shortcut on the editors bypasses that — without
+  // this ref a fast double-press could fire two overlapping
+  // `/api/execute` requests and race the output panel. State alone
+  // isn't enough because the closure captures a stale value across
+  // renders; a ref reads the latest value synchronously.
+  const runningRef = useRef(false);
   // Bumped on each new execution so `<AnimatedOutput>` re-mounts and
   // re-runs its line-stagger reveal cleanly.
   const [runId, setRunId] = useState(0);
@@ -379,6 +387,9 @@ export function Sandbox() {
   );
 
   const execute = useCallback(async () => {
+    // Bail if a previous run is still in flight — see `runningRef`
+    // above for why state alone isn't enough here.
+    if (runningRef.current) return;
     // Validate globals JSON up-front so a typo there doesn't cost us a
     // round-trip to the runner.
     let parsedGlobals: Record<string, unknown>;
@@ -429,6 +440,10 @@ export function Sandbox() {
       kind: "meta",
       text: "GocciaScriptLoader --timeout=500 --globals=context.json",
     };
+    // Set the re-entry flag *after* the synchronous validation guards
+    // above have committed to actually running — so a validation
+    // failure early-returns without leaving the flag stuck on.
+    runningRef.current = true;
     setRunning(true);
     setRunId((r) => r + 1);
     setOutput([banner]);
@@ -526,6 +541,7 @@ export function Sandbox() {
       ]);
     } finally {
       setRunning(false);
+      runningRef.current = false;
     }
   }, [code, globalsText]);
 
