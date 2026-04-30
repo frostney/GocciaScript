@@ -446,6 +446,8 @@ Engine.StrictTypes := True;              // Enable strict type enforcement
 
 When `SourceType` is `stModule`, `Execute` runs the entry program in a fresh module scope (`skModule`) with `this = undefined`, mirroring the semantics imported modules already receive from the module loader (ES2026 §16.2.1.6.4). The CLI surface for this is `--source-type=script|module` and the matching `goccia.json` key `"source-type"`.
 
+**Top-level binding persistence differs between the two modes.** In default `stScript` mode the engine reuses `Interpreter.GlobalScope` across every call to `Execute`, which is what makes the [long-lived engine pattern](#instance-usage-long-lived-engine) above work — `const x = 42` defined in one `Execute` is visible to the next. In `stModule` mode each `Execute` allocates a brand-new `skModule` child scope, so top-level `let`/`const`/`class` declarations live and die with that single call. If callers need cross-`Execute` persistence, keep `SourceType` at `stScript` (the default) or expose the desired symbols through the global scope (e.g. `Engine.RegisterGlobal(...)` or `Engine.Interpreter.GlobalScope.DefineLexicalBinding(...)`).
+
 ## Injecting Custom Globals
 
 You can inject Pascal functions and values into the script's global scope by working with the engine's interpreter scope directly.

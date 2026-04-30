@@ -426,12 +426,19 @@ end;
 
 { Resolve --source-type / config "source-type" into the engine's
   TGocciaSourceType enum.  Priority: CLI > per-file config > root
-  config > default (script). }
+  config > default (script).
+
+  CLI flag and root-config values are validated by TGocciaEnumOption.Apply
+  before they reach this function (invalid values raise TGocciaParseError
+  at parse/apply time).  Per-file config values come in as raw strings via
+  FindConfigEntry, so we validate here: 'module' and 'script' are accepted
+  case-insensitively, anything else emits a stderr warning and falls back
+  to stScript so a typo never silently flips into module mode. }
 function ResolveSourceTypeOption(
   const AOption: TGocciaEnumOption<CLI.Options.TGocciaSourceType>;
   const AFileConfig: TConfigEntryArray): Goccia.Engine.TGocciaSourceType;
 var
-  ValueStr: string;
+  ValueStr, NormalizedValue: string;
 begin
   if AOption.FromCommandLine then
   begin
@@ -442,8 +449,14 @@ begin
 
   if FindConfigEntry(AFileConfig, 'source-type', ValueStr) then
   begin
-    if LowerCase(ValueStr) = 'module' then
+    NormalizedValue := LowerCase(Trim(ValueStr));
+    if NormalizedValue = 'module' then
       Exit(Goccia.Engine.stModule);
+    if NormalizedValue = 'script' then
+      Exit(Goccia.Engine.stScript);
+    WriteLn(StdErr, Format(
+      'Warning: invalid per-file config value for "source-type": %s '
+      + '(valid: script, module). Falling back to script.', [ValueStr]));
     Exit(Goccia.Engine.stScript);
   end;
 
