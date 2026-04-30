@@ -167,7 +167,9 @@ SUPPORTED_FEATURES: dict[str, bool] = {
     "Error.isError": True,
 
     # Core language -- NOT supported
-    "generators": False,
+    "generators": True,
+    "async-generator": True,
+    "async-generators": True,
     "BigInt": True,
     "Proxy": True,
     "Reflect": True,
@@ -184,8 +186,8 @@ SUPPORTED_FEATURES: dict[str, bool] = {
     "Reflect.preventExtensions": True,
     "Reflect.set": True,
     "Reflect.setPrototypeOf": True,
-    "WeakMap": False,
-    "WeakSet": False,
+    "WeakMap": True,
+    "WeakSet": True,
     "WeakRef": False,
     "FinalizationRegistry": False,
     "dynamic-import": True,
@@ -223,7 +225,7 @@ SUPPORTED_FEATURES: dict[str, bool] = {
     "regexp-duplicate-named-groups": True,
     "regexp-modifiers": True,
     "error-cause": True,
-    "symbols-as-weakmap-keys": False,
+    "symbols-as-weakmap-keys": True,
     "disposition": True,
     "explicit-resource-management": True,
     "set-methods": True,
@@ -251,12 +253,6 @@ SKIP_FLAGS: set[str] = {
 
 # Patterns that are always unsupported regardless of compatibility flags.
 _ALWAYS_UNSUPPORTED_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("function_star",
-     re.compile(r"\bfunction\s*\*")),
-    ("generator_method",
-     re.compile(r"\*\s*\w+\s*\(")),
-    ("generator_method_bracket",
-     re.compile(r"\*\s*\[")),
     ("while_loop",
      re.compile(r"\bwhile\s*\(")),
     ("do_while_loop",
@@ -275,8 +271,6 @@ _ALWAYS_UNSUPPORTED_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
      re.compile(r"\barguments\b")),
     ("with_statement",
      re.compile(r"\bwith\s*\(")),
-    ("yield_keyword",
-     re.compile(r"\byield\b")),
     ("labeled_statement",
      re.compile(r"^\s*\w+\s*:\s*(?:for|while|do|if|switch)\b", re.MULTILINE)),
     # Labeled `break <label>` / `continue <label>` — catches the reference
@@ -506,11 +500,8 @@ def check_includes(includes: list[str]) -> list[str]:
 # that happen to appear inside ASI tests (var, function, etc.).
 SKIP_PATH_SEGMENTS: set[str] = {
     "eval-code",        # All eval-code tests use eval
-    "generators",       # No generator support
     "for-in",           # No for-in support
     "DataView",         # No DataView support
-    "WeakMap",          # No WeakMap support
-    "WeakSet",          # No WeakSet support
     "WeakRef",          # No WeakRef support
     "Atomics",          # No Atomics support
 }

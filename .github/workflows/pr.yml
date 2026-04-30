@@ -360,7 +360,7 @@ jobs:
                 for (const b of file.benchmarks) {
                   if (!b.error) m[`${b.suite} > ${b.name}`] = normalizeBenchmark(b);
                 }
-                map[file.file] = m;
+                map[file.fileName] = m;
               }
               return map;
             }
@@ -375,7 +375,7 @@ jobs:
             const fileBlocks = [];
 
             for (const file of interpData.files) {
-              const fileName = file.file;
+              const fileName = file.fileName;
               const iBase = interpBaseMap[fileName] || {};
               const bBase = bytecodeBaseMap[fileName] || {};
               const bCurrent = bytecodeCurrentMap[fileName] || {};
@@ -551,10 +551,46 @@ jobs:
             const fs = require('fs');
             const tryRead = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } };
             const fmtDur = (ns) => {
+              if (typeof ns !== 'number') return '—';
               const ms = ns / 1e6;
               if (ms >= 60000) return (ms / 60000).toFixed(2) + 'min';
               if (ms >= 1000) return (ms / 1000).toFixed(2) + 's';
               return ms.toFixed(1) + 'ms';
+            };
+            const fmtBytes = (bytes) => {
+              if (typeof bytes !== 'number') return '—';
+              const abs = Math.abs(bytes);
+              if (abs >= 1024 ** 3) return `${(bytes / (1024 ** 3)).toFixed(2)} GiB`;
+              if (abs >= 1024 ** 2) return `${(bytes / (1024 ** 2)).toFixed(2)} MiB`;
+              if (abs >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+              return `${bytes} B`;
+            };
+            const fmtCount = (value) => typeof value === 'number' ? value.toLocaleString('en-US') : '—';
+            const fmtNonNegativeBytes = (bytes) => typeof bytes === 'number' && bytes >= 0 ? fmtBytes(bytes) : '—';
+            const hasNonNegativeValue = (...values) => values.some((value) => typeof value === 'number' && value >= 0);
+            const testSummary = (report) => {
+              if (!report) return '—';
+              const passed = typeof report.passed === 'number' ? `${fmtCount(report.passed)} passed` : '—';
+              return report.failed > 0 ? `${passed}, ${fmtCount(report.failed)} failed` : passed;
+            };
+            const countSummary = (count) => typeof count === 'number' ? fmtCount(count) : '—';
+            const row = (metric, interpreted, bytecode) => `| ${metric} | ${interpreted} | ${bytecode} |\n`;
+            const details = (summary, content) => `<details>\n<summary>${summary}</summary>\n\n${content}\n</details>\n\n`;
+            const memoryRows = (interpreted, bytecode) => {
+              let rows = '| Metric | Interpreted | Bytecode |\n';
+              rows += '|--------|------------|----------|\n';
+              rows += row('GC Live', fmtBytes(interpreted?.memory?.gc?.liveBytes), fmtBytes(bytecode?.memory?.gc?.liveBytes));
+              rows += row('GC Peak Live', fmtBytes(interpreted?.memory?.gc?.peakLiveBytes), fmtBytes(bytecode?.memory?.gc?.peakLiveBytes));
+              rows += row('GC Allocated During Run', fmtBytes(interpreted?.memory?.gc?.allocatedDuringRunBytes), fmtBytes(bytecode?.memory?.gc?.allocatedDuringRunBytes));
+              rows += row('GC Limit', fmtBytes(interpreted?.memory?.gc?.limitBytes), fmtBytes(bytecode?.memory?.gc?.limitBytes));
+              rows += row('GC Collections', fmtCount(interpreted?.memory?.gc?.collections), fmtCount(bytecode?.memory?.gc?.collections));
+              rows += row('GC Collected Objects', fmtCount(interpreted?.memory?.gc?.collectedObjects), fmtCount(bytecode?.memory?.gc?.collectedObjects));
+              rows += row('Heap Start Allocated', fmtBytes(interpreted?.memory?.heap?.startAllocatedBytes), fmtBytes(bytecode?.memory?.heap?.startAllocatedBytes));
+              rows += row('Heap End Allocated', fmtBytes(interpreted?.memory?.heap?.endAllocatedBytes), fmtBytes(bytecode?.memory?.heap?.endAllocatedBytes));
+              rows += row('Heap Delta Allocated', fmtBytes(interpreted?.memory?.heap?.deltaAllocatedBytes), fmtBytes(bytecode?.memory?.heap?.deltaAllocatedBytes));
+              if (hasNonNegativeValue(interpreted?.memory?.heap?.deltaFreeBytes, bytecode?.memory?.heap?.deltaFreeBytes))
+                rows += row('Heap Delta Free', fmtNonNegativeBytes(interpreted?.memory?.heap?.deltaFreeBytes), fmtNonNegativeBytes(bytecode?.memory?.heap?.deltaFreeBytes));
+              return rows;
             };
 
             const testInterp = tryRead('test-results-interpreted.json');
@@ -568,8 +604,6 @@ jobs:
             }
 
             let body = '## Suite Timing\n\n';
-            body += '| Suite | Metric | Interpreted | Bytecode |\n';
-            body += '|-------|--------|------------|----------|\n';
 
             if (testInterp || testBytecode) {
               const iTests = testInterp ? testInterp.totalTests : '—';
@@ -596,20 +630,22 @@ jobs:
               const iEngine = testInterp ? fmtDur(testInterp.totalEngineNanoseconds) : '—';
               const bEngine = testBytecode ? fmtDur(testBytecode.totalEngineNanoseconds) : '—';
 
-              body += `| Tests | Total | ${iTests} | ${bTests} |\n`;
-              body += `| Tests | Passed | ${iPassed} | ${bPassed} |\n`;
+              let section = '| Metric | Interpreted | Bytecode |\n';
+              section += '|--------|------------|----------|\n';
+              section += row('Total', iTests, bTests);
+              section += row('Passed', iPassed, bPassed);
               if (iFailed > 0 || bFailed > 0)
-                body += `| Tests | Failed | ${iFailed > 0 ? `${iFailed} ❌` : '0'} | ${bFailed > 0 ? `${bFailed} ❌` : '0'} |\n`;
+                section += row('Failed', iFailed > 0 ? `${iFailed} ❌` : '0', bFailed > 0 ? `${bFailed} ❌` : '0');
               if (iSkipped > 0 || bSkipped > 0)
-                body += `| Tests | Skipped | ${iSkipped} | ${bSkipped} |\n`;
+                section += row('Skipped', iSkipped, bSkipped);
               if (isParallel)
-                body += `| Tests | Workers | ${iJobs} | ${bJobs} |\n`;
-              body += `| Tests | Test Duration | ${iDur} | ${bDur} |\n`;
-              body += `| Tests | Lex${timingLabel} | ${iLex} | ${bLex} |\n`;
-              body += `| Tests | Parse${timingLabel} | ${iParse} | ${bParse} |\n`;
-              body += `| Tests | Compile${timingLabel} | — | ${bCompile} |\n`;
-              body += `| Tests | Execute${timingLabel} | ${iExec} | ${bExec} |\n`;
-              body += `| Tests | Engine Total${timingLabel} | ${iEngine} | ${bEngine} |\n`;
+                section += row('Workers', iJobs, bJobs);
+              section += row('Test Duration', iDur, bDur);
+              section += row(`Lex${timingLabel}`, iLex, bLex);
+              section += row(`Parse${timingLabel}`, iParse, bParse);
+              section += row(`Compile${timingLabel}`, '—', bCompile);
+              section += row(`Execute${timingLabel}`, iExec, bExec);
+              section += row(`Engine Total${timingLabel}`, iEngine, bEngine);
               if (isParallel) {
                 const fmtAvg = (ns, jobs) => jobs > 1 ? fmtDur(ns / jobs) : '—';
                 const iAvgLex = testInterp && iJobs > 1 ? fmtAvg(testInterp.lexTimeNanoseconds, iJobs) : '—';
@@ -621,12 +657,16 @@ jobs:
                 const bAvgExec = testBytecode && bJobs > 1 ? fmtAvg(testBytecode.executeTimeNanoseconds, bJobs) : '—';
                 const iAvgEngine = testInterp && iJobs > 1 ? fmtAvg(testInterp.totalEngineNanoseconds, iJobs) : '—';
                 const bAvgEngine = testBytecode && bJobs > 1 ? fmtAvg(testBytecode.totalEngineNanoseconds, bJobs) : '—';
-                body += `| Tests | Lex (avg/worker) | ${iAvgLex} | ${bAvgLex} |\n`;
-                body += `| Tests | Parse (avg/worker) | ${iAvgParse} | ${bAvgParse} |\n`;
-                body += `| Tests | Compile (avg/worker) | — | ${bAvgCompile} |\n`;
-                body += `| Tests | Execute (avg/worker) | ${iAvgExec} | ${bAvgExec} |\n`;
-                body += `| Tests | Engine Total (avg/worker) | ${iAvgEngine} | ${bAvgEngine} |\n`;
+                section += row('Lex (avg/worker)', iAvgLex, bAvgLex);
+                section += row('Parse (avg/worker)', iAvgParse, bAvgParse);
+                section += row('Compile (avg/worker)', '—', bAvgCompile);
+                section += row('Execute (avg/worker)', iAvgExec, bAvgExec);
+                section += row('Engine Total (avg/worker)', iAvgEngine, bAvgEngine);
               }
+              section += '\n### Memory\n\n';
+              section += '_GC rows aggregate the main thread plus all worker thread-local GCs. Test runner worker shutdown frees thread-local heaps in bulk; that shutdown reclamation is not counted as GC collections or collected objects._\n\n';
+              section += memoryRows(testInterp, testBytecode);
+              body += details(`Test Runner (interpreted: ${testSummary(testInterp)}; bytecode: ${testSummary(testBytecode)})`, section);
             }
 
             if (benchInterp || benchBytecode) {
@@ -638,13 +678,19 @@ jobs:
               const bBenchJobs = benchBytecode ? (benchBytecode.jobCount || 1) : 1;
               const benchParallel = iBenchJobs > 1 || bBenchJobs > 1;
 
-              body += `| Benchmarks | Total | ${iBenchCount} | ${bBenchCount} |\n`;
+              let section = '| Metric | Interpreted | Bytecode |\n';
+              section += '|--------|------------|----------|\n';
+              section += row('Total', iBenchCount, bBenchCount);
               if (benchParallel)
-                body += `| Benchmarks | Workers | ${iBenchJobs} | ${bBenchJobs} |\n`;
-              body += `| Benchmarks | Duration | ${iBenchDur} | ${bBenchDur} |\n`;
+                section += row('Workers', iBenchJobs, bBenchJobs);
+              section += row('Duration', iBenchDur, bBenchDur);
+              section += '\n### Memory\n\n';
+              section += '_GC rows aggregate the main thread plus all worker thread-local GCs. Benchmark runner performs explicit between-file collections, so collection and collected-object counts can be much higher than the test runner._\n\n';
+              section += memoryRows(benchInterp, benchBytecode);
+              body += details(`Benchmarks (interpreted: ${countSummary(iBenchCount)}; bytecode: ${countSummary(bBenchCount)})`, section);
             }
 
-            body += '\n<sub>Measured on ubuntu-latest x64.</sub>';
+            body += '<sub>Measured on ubuntu-latest x64.</sub>';
 
             const marker = '<!-- suite-timing -->';
             body = marker + '\n' + body;

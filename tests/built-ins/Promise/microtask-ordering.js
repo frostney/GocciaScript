@@ -100,3 +100,37 @@ test("resolve(rejectedPromise) defers rejection by one tick", () => {
     expect(log).toEqual(["A", "catch:err"]);
   });
 });
+
+test("microtask handler that re-enters drain runs each task exactly once", () => {
+  // Regression: a previous DrainQueue implementation kept already-processed
+  // tasks in the queue until the outermost drain completed, so any handler
+  // that recursively triggered a drain (e.g. via await on a settled promise)
+  // re-ran every prior task and looped until the call stack overflowed.
+  const log = [];
+  const outer = Promise.resolve("a").then((v) => {
+    log.push("outer:" + v);
+    // Awaiting a settled promise inside the handler forces a recursive
+    // microtask drain. The inner drain must NOT see "outer" again.
+    return Promise.resolve("b").then((v2) => log.push("inner:" + v2));
+  });
+  return outer.then(() => {
+    expect(log).toEqual(["outer:a", "inner:b"]);
+  });
+});
+
+test("recursive drain does not re-run sibling microtasks", () => {
+  // Sibling microtasks queued before a handler must not fire a second time
+  // when the handler triggers a nested drain.
+  const log = [];
+  Promise.resolve("X").then((v) => log.push(v));
+  const triggering = Promise.resolve("Y").then((v) => {
+    log.push(v);
+    // Force a nested drain via an already-settled await chain
+    return Promise.resolve().then(() => log.push("Z"));
+  });
+  return triggering.then(() => {
+    // Each value appears exactly once, even though the Y handler re-entered
+    // the queue while X was still being processed in some implementations.
+    expect(log).toEqual(["X", "Y", "Z"]);
+  });
+});

@@ -13,7 +13,7 @@ test("number annotation accepts float", () => {
   expect(x).toBe(3.14);
 });
 
-describe.skipIf(!Goccia.strictTypes)("number coercion with enforcement", () => {
+describe("number coercion with enforcement", () => {
 
 test("number annotation accepts integer then float", () => {
   let x: number = 5;

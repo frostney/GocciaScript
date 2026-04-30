@@ -3,12 +3,14 @@
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { AnimatedOutput } from "@/components/animated-output";
+import { useRunShortcut } from "@/components/command-tabs";
 import { ConsolePanel } from "@/components/console-panel";
 import { HighlightedCode } from "@/components/highlighted-code";
 import {
   CopyIcon,
   FilePlusIcon,
   FileTestIcon,
+  GithubIcon,
   RunIcon,
   SidebarIcon,
   SparkleIcon,
@@ -20,6 +22,8 @@ import {
   type OutputLine,
 } from "@/lib/examples";
 import { formatError } from "@/lib/format-error";
+import { formatMemorySegments, type MemoryJson } from "@/lib/format-memory";
+import { GITHUB_REPO_URL } from "@/lib/github";
 import { validateGocciaToolInput } from "@/lib/goccia-tool-schema";
 import { loadCode, saveCode } from "@/lib/playground-storage";
 import { decodeShare, encodeShare } from "@/lib/share";
@@ -35,9 +39,32 @@ function pickExampleId(requested: string | null): string {
   return EXAMPLES[0].id;
 }
 
-/** Normalize a release tag (`0.6.1` or `v0.6.1`) to the displayed form `v0.6.1`. */
-function normalizeTag(tag: string): string {
+/** Normalize a release tag (`0.6.1` or `v0.6.1`) to the displayed form `v0.6.1`.
+ *  `nightly` and any non-semver tag pass through unchanged. */
+function displayVersion(tag: string): string {
+  if (tag === "nightly") return tag;
   return tag.startsWith("v") ? tag : `v${tag}`;
+}
+
+/** Strip the leading `v` so semver tags compare equal regardless of whether
+ *  the source used the prefix. `"nightly"` and other non-semver tags pass
+ *  through unchanged. */
+function canonicalVersion(tag: string): string {
+  return tag.startsWith("v") ? tag.slice(1) : tag;
+}
+
+/** Find the manifest tag that matches `wanted` ignoring `v`-prefix differences.
+ *  Used when restoring a share-link selection: old links encoded `v0.7.0`,
+ *  but the manifest now stores the raw form. */
+function matchVendoredVersion(
+  versions: string[],
+  wanted: string,
+): string | null {
+  const target = canonicalVersion(wanted);
+  for (const v of versions) {
+    if (canonicalVersion(v) === target) return v;
+  }
+  return null;
 }
 
 type SourceTestCase = {
@@ -376,12 +403,20 @@ function failedTestNames(data: {
 }
 
 type PlaygroundProps = {
-  /** Recent stable release tags from GitHub, newest first. The component
-   *  appends `nightly` after these. */
-  stableTags?: string[];
+  /** Engine release tags vendored at build time, sourced from
+   *  `vendor/manifest.json`. Order matches what the dropdown should
+   *  display: newest stable picks first, `nightly` last. */
+  versions?: string[];
+  /** Tag the API picks when the request omits `version` — used to
+   *  initialize the dropdown when no share-link or saved selection
+   *  is present. */
+  defaultVersion?: string;
 };
 
-export function Playground({ stableTags = [] }: PlaygroundProps) {
+export function Playground({
+  versions: vendoredVersions = [],
+  defaultVersion,
+}: PlaygroundProps) {
   const params = useSearchParams();
 
   // Stable per-render IDs so `<label htmlFor>` / `aria-labelledby` reliably
@@ -393,9 +428,12 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
   const versionId = useId();
   const editorId = useId();
 
-  // Build the version dropdown from the live tag list, falling back to a
-  // single `nightly` entry if the GitHub fetch returned nothing.
-  const versions: string[] = [...stableTags.map(normalizeTag), "nightly"];
+  // The dropdown shows whatever `vendor/manifest.json` advertised, in the
+  // server's order. Fall back to a single `nightly` entry when the manifest
+  // is empty (local dev with no `prebuild`); the API's dev fallback chain
+  // resolves it to `../build/<binary>`.
+  const versions: string[] =
+    vendoredVersions.length > 0 ? vendoredVersions : ["nightly"];
 
   const [exId, setExId] = useState(() =>
     pickExampleId(params?.get("example") ?? null),
@@ -406,7 +444,9 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
   const [output, setOutput] = useState<OutputLine[]>([]);
   const [running, setRunning] = useState(false);
   const [backend, setBackend] = useState<Backend>("interpreted");
-  const [version, setVersion] = useState<string>(versions[0]);
+  const [version, setVersion] = useState<string>(
+    () => defaultVersion ?? versions[0],
+  );
   const [asi, setAsi] = useState(true);
   const [compatVar, setCompatVar] = useState(false);
   const [compatFunction, setCompatFunction] = useState(false);
@@ -423,8 +463,10 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
   const [ghostDismissed, setGhostDismissed] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const hlRef = useRef<HTMLPreElement>(null);
+  const gutterRef = useRef<HTMLPreElement>(null);
   const runningRef = useRef(false);
   const hydratedRef = useRef(false);
+  const runShortcut = useRunShortcut();
   // Skip the example-restore effect's first fire so it doesn't clobber the
   // share/saved code that the mount effect just set.
   const initialMountRef = useRef(true);
@@ -474,8 +516,9 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
         if (typeof payload.compatFunction === "boolean") {
           setCompatFunction(payload.compatFunction);
         }
-        if (payload.version && versions.includes(payload.version)) {
-          setVersion(payload.version);
+        if (payload.version) {
+          const matched = matchVendoredVersion(versions, payload.version);
+          if (matched) setVersion(matched);
         }
         hydratedRef.current = true;
         return;
@@ -539,6 +582,7 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
         asi,
         compatVar,
         compatFunction,
+        version,
       });
       if (!payload.ok) {
         setOutput([
@@ -556,6 +600,10 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
           body: JSON.stringify(payload.value),
         },
       );
+      // Server tags repeat-input responses with `X-Cache: HIT` so we can
+      // surface "(cached)" in the exit line. Anything else (MISS, missing,
+      // unexpected value) is treated as a fresh run.
+      const cached = res.headers.get("X-Cache") === "HIT";
       if (res.status === 429) {
         const retry = res.headers.get("Retry-After") ?? "60";
         setOutput([
@@ -587,6 +635,7 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
           code?: string;
         } | null;
         timing?: { total_ms: number };
+        memory?: MemoryJson | null;
         exitCode?: number | null;
         truncated?: boolean;
         stderr?: string;
@@ -680,7 +729,7 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
       const totalMs = data.timing?.total_ms;
       const tail = `— exit ${data.exitCode ?? "?"}${
         totalMs !== undefined ? ` · ${totalMs.toFixed(2)}ms` : ""
-      }`;
+      }${formatMemorySegments(data.memory)}${cached ? " · (cached)" : ""}`;
       lines.push({ kind: "meta", text: tail });
       setOutput(lines);
     } catch (err) {
@@ -694,7 +743,7 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
     }
   }, [code, backend, version, runner, asi, compatVar, compatFunction]);
 
-  const share = useCallback(async () => {
+  const buildShareLink = useCallback(() => {
     const url = new URL(window.location.href);
     url.search = "";
     url.searchParams.set(
@@ -709,7 +758,11 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
         version,
       }),
     );
-    const link = url.toString();
+    return url.toString();
+  }, [code, backend, runner, asi, compatVar, compatFunction, version]);
+
+  const share = useCallback(async () => {
+    const link = buildShareLink();
     let ok = false;
     try {
       if (navigator.clipboard?.writeText) {
@@ -718,7 +771,47 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
       }
     } catch {}
     if (ok) setShareTick((t) => t + 1);
-  }, [code, backend, runner, asi, compatVar, compatFunction, version]);
+  }, [buildShareLink]);
+
+  const reportIssue = useCallback(() => {
+    const link = buildShareLink();
+    const onOff = (b: boolean) => (b ? "on" : "off");
+    const body = [
+      `[Open in playground](${link})`,
+      "",
+      "| Setting | Value |",
+      "|---|---|",
+      `| Backend | \`${backend}\` |`,
+      `| Runner | \`${runner}\` |`,
+      `| Version | \`${version}\` |`,
+      `| ASI | ${onOff(asi)} |`,
+      `| Compat \`var\` | ${onOff(compatVar)} |`,
+      `| Compat \`function\` | ${onOff(compatFunction)} |`,
+      "",
+      "---",
+      "",
+      "### What did you expect to happen?",
+      "",
+      "<!-- Describe the expected behavior -->",
+      "",
+      "### What actually happened?",
+      "",
+      "<!-- Describe the actual behavior, paste any error output -->",
+      "",
+    ].join("\n");
+    const issueUrl = new URL(`${GITHUB_REPO_URL}/issues/new`);
+    issueUrl.searchParams.set("title", "Playground report: ");
+    issueUrl.searchParams.set("body", body);
+    window.open(issueUrl.toString(), "_blank", "noopener,noreferrer");
+  }, [
+    buildShareLink,
+    backend,
+    runner,
+    version,
+    asi,
+    compatVar,
+    compatFunction,
+  ]);
 
   useEffect(() => {
     if (shareTick === 0) return;
@@ -726,10 +819,19 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
     return () => clearTimeout(id);
   }, [shareTick]);
 
+  // Mirror the textarea's scroll onto the highlight overlay AND the line-
+  // number gutter. Without the gutter sync, the line numbers stay frozen
+  // at line 1 while the user scrolls the source, so the visible gutter
+  // labels no longer match the code beside them and clicks "look like"
+  // they hit the wrong line. The gutter needs `overflow: hidden` for
+  // `scrollTop` to take effect — see `.pg-gutter` in `globals.css`.
   const syncScroll = () => {
     if (taRef.current && hlRef.current) {
       hlRef.current.scrollTop = taRef.current.scrollTop;
       hlRef.current.scrollLeft = taRef.current.scrollLeft;
+    }
+    if (taRef.current && gutterRef.current) {
+      gutterRef.current.scrollTop = taRef.current.scrollTop;
     }
   };
 
@@ -1000,10 +1102,10 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
           </label>
         </fieldset>
 
-        {/* Version selector is **display-only**: the API runs against the
-            single bundled `GocciaScriptLoader` binary regardless of choice.
-            The selection is reflected in the run banner and round-tripped in
-            share links so users can mark which release they tested against. */}
+        {/* The dropdown enumerates whatever `vendor/manifest.json` advertised
+            at build time. The selection rides along to `/api/execute` and
+            `/api/test` so the server dispatches to the matching binary; the
+            display label adds a `v` prefix for semver tags only. */}
         <label className="pg-toolbar-label ml-3" htmlFor={versionId}>
           Version
         </label>
@@ -1015,13 +1117,25 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
         >
           {versions.map((v, i) => (
             <option key={v} value={v}>
-              {v === "nightly" ? "nightly" : i === 0 ? `${v} · latest` : v}
+              {v === "nightly"
+                ? "nightly"
+                : i === 0
+                  ? `${displayVersion(v)} · latest`
+                  : displayVersion(v)}
             </option>
           ))}
         </select>
 
         <div className="ml-auto flex items-center gap-2">
-          <span className="font-mono text-[0.72rem] text-ink-3">⌘ + Enter</span>
+          <button
+            type="button"
+            className="pg-share"
+            onClick={reportIssue}
+            title="Open a GitHub issue with a link to this playground"
+          >
+            <GithubIcon size={14} />
+            <span>Report issue</span>
+          </button>
           <button
             type="button"
             className="pg-share"
@@ -1042,8 +1156,13 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
             className="pg-run"
             disabled={running}
             onClick={run}
+            title={`Run · ${runShortcut.long}`}
           >
-            <RunIcon size={14} /> {running ? "Running…" : "Run"}
+            <RunIcon size={14} />
+            <span>{running ? "Running…" : "Run"}</span>
+            <span className="pg-run-kbd" aria-hidden="true">
+              {runShortcut.short}
+            </span>
           </button>
         </div>
       </div>
@@ -1118,7 +1237,9 @@ export function Playground({ stableTags = [] }: PlaygroundProps) {
             </div>
             <p className="pg-example-desc">{example.desc}</p>
             <div className="pg-editor">
-              <pre className="pg-gutter">{gutter}</pre>
+              <pre className="pg-gutter" ref={gutterRef} aria-hidden="true">
+                {gutter}
+              </pre>
               <div className="pg-editor-body">
                 <pre className="pg-hl" ref={hlRef} aria-hidden="true">
                   <code>

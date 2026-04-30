@@ -394,9 +394,10 @@ The PR workflow (`.github/workflows/pr.yml`) includes shell-level smoke tests th
 
 | Area | What is checked |
 |------|----------------|
-| GocciaTestRunner JSON output | `--output` produces valid JSON with `mode`, `totalFiles` fields |
+| GocciaTestRunner JSON output | `--output=<file>` writes valid JSON with `mode`, `totalFiles` fields to a file; `--output=json` emits the same envelope to stdout and suppresses the human-readable summary; `--output=compact-json` emits the same stdout envelope without `build`, `memory`, `stdout`, or `stderr` |
 | GocciaTestRunner coverage | `--coverage` prints summary; `--coverage-format=lcov` and `--coverage-format=json` write valid output files; branch coverage includes `BRDA`/`BRF` entries |
-| GocciaScriptLoader JSON output | `--output=json` envelope includes aggregate `ok`, `output`, `stdout`, `stderr`, `build`, `timing`, `memory`, `workers`, and per-input `files[]` entries with `fileName` and `result` |
+| GocciaScriptLoader JSON output | `--output=json` envelope includes aggregate `ok`, `output`, `stdout`, `stderr`, `build`, `timing`, `memory`, `workers`, and per-input `files[]` entries with `fileName` and `result`; `--output=compact-json` emits the same envelope without `build`, `memory`, `stdout`, or `stderr` (the normalized `output` array and structured `error` are preserved) |
+| GocciaBenchmarkRunner JSON output | `--format=json` writes the same JSON envelope as the loader and test runner; `--format=compact-json` emits the same envelope without `build`, `memory`, `stdout`, or `stderr` at the top level or per-file |
 | GocciaScriptLoader error display | Syntax errors show source context, caret, and suggestions |
 | GocciaScriptLoader coverage | `--coverage` summary, lcov/json file output, bytecode mode coverage, JSX source map translation for branch positions |
 | GocciaScriptLoader source maps | `--source-map` writes valid source map JSON; rejects stdin without explicit path |
@@ -543,7 +544,7 @@ build → test
       → examples
 ```
 
-The benchmark comparison comment includes a **Suite Timing** section showing test execution and benchmark duration for both modes. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the comparison format.
+The PR workflow also posts a **Suite Timing** comment with expandable test-runner and benchmark summaries. Each summary shows timing, top-level GocciaScript GC metrics, and selected FreePascal heap allocation metrics for interpreted and bytecode modes. GC memory rows aggregate the main thread plus all worker thread-local GCs. The test runner does not count worker shutdown reclamation as GC collections, while the benchmark runner explicitly collects between benchmark files, so collection counts are expected to differ. The comment hides negative FreePascal heap free-space deltas because they are valid allocator diagnostics but are noisy in a PR summary. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the benchmark comparison format.
 
 ## Coverage
 

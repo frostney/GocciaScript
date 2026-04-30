@@ -99,6 +99,8 @@ type
     procedure SetRegister(const AIndex: Integer; const AValue: TGocciaValue); inline;
     procedure SetRegisterFast(const AIndex: Integer; const AValue: TGocciaValue); inline;
     procedure SetRegisterRaw(const AIndex: Integer; const AValue: TGocciaRegister); inline;
+    procedure InstallFunctionPrototype(const AFunction: TGocciaObjectValue;
+      const AIsGenerator: Boolean);
     function GetLocal(const AIndex: Integer): TGocciaValue; inline;
     function GetLocalFast(const AIndex: Integer): TGocciaValue; inline;
     procedure SetLocal(const AIndex: Integer; const AValue: TGocciaValue); inline;
@@ -245,6 +247,7 @@ uses
   Goccia.Profiler,
   Goccia.StackLimit,
   Goccia.Timeout,
+  Goccia.Types.Enforcement,
   Goccia.Values.BigIntValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.EnumValue,
@@ -436,46 +439,12 @@ end;
 
 
 // ES2026 Types-as-comments: runtime guard for OP_CHECK_TYPE (compiler emits Ord(TGocciaLocalType) in operand B).
+// Delegates to Goccia.Types.Enforcement.EnforceStrictType so the interpreter
+// and bytecode VM share a single enforcement implementation.
 procedure VMStrictTypeCheckRegisterValue(const AValue: TGocciaValue;
-  const AExpected: TGocciaLocalType);
+  const AExpected: TGocciaLocalType); inline;
 begin
-  case AExpected of
-    sltInteger:
-      begin
-        if not (AValue is TGocciaNumberLiteralValue) or
-           AValue.ToNumberLiteral.IsNaN or
-           AValue.ToNumberLiteral.IsInfinite or
-           (Frac(AValue.ToNumberLiteral.Value) <> 0.0) then
-          ThrowTypeError(Format(SErrorTypeNotAssignable, [AValue.TypeName, INTEGER_TYPE_NAME]),
-            SSuggestTypeEnforcement);
-      end;
-    sltFloat:
-      begin
-        if not (AValue is TGocciaNumberLiteralValue) then
-          ThrowTypeError(Format(SErrorTypeNotAssignable, [AValue.TypeName, NUMBER_TYPE_NAME]),
-            SSuggestTypeEnforcement);
-      end;
-    sltBoolean:
-      begin
-        if not (AValue is TGocciaBooleanLiteralValue) then
-          ThrowTypeError(Format(SErrorTypeNotAssignable, [AValue.TypeName, BOOLEAN_TYPE_NAME]),
-            SSuggestTypeEnforcement);
-      end;
-    sltString:
-      begin
-        if not (AValue is TGocciaStringLiteralValue) then
-          ThrowTypeError(Format(SErrorTypeNotAssignable, [AValue.TypeName, STRING_TYPE_NAME]),
-            SSuggestTypeEnforcement);
-      end;
-    sltReference:
-      begin
-        if AValue.IsPrimitive then
-          ThrowTypeError(Format(SErrorTypeNotAssignable, [AValue.TypeName, OBJECT_TYPE_NAME]),
-            SSuggestTypeEnforcement);
-      end;
-  else
-    // sltUntyped: no runtime check
-  end;
+  EnforceStrictType(AValue, AExpected);
 end;
 
 // Integer-only result: skips IsNaN/IsInfinite/Frac checks that VMNumberRegister
@@ -1444,6 +1413,7 @@ type
   public
     constructor Create(const AVM: TGocciaVM; const AName: string;
       const ASuperClass: TGocciaClassValue);
+    function GetClassLength: Integer; override;
     function Instantiate(const AArguments: TGocciaArgumentsCollection;
       const ANewTarget: TGocciaClassValue = nil): TGocciaValue; override;
     function InstantiateRegisters(
@@ -1532,6 +1502,23 @@ begin
   inherited Create(AName, ASuperClass);
   FVM := AVM;
   FConstructorValue := nil;
+end;
+
+function TGocciaVMClassValue.GetClassLength: Integer;
+var
+  Bytecode: TGocciaBytecodeFunctionValue;
+begin
+  // VM-compiled classes hold their constructor as a bytecode function value
+  // rather than the interpreter's TGocciaMethodValue, so the inherited
+  // implementation (which only looks at FConstructorMethod) would always
+  // return 0. Bridge to the bytecode function's own length.
+  if FConstructorValue is TGocciaBytecodeFunctionValue then
+  begin
+    Bytecode := TGocciaBytecodeFunctionValue(FConstructorValue);
+    if Assigned(Bytecode.FClosure) and Assigned(Bytecode.FClosure.Template) then
+      Exit(Bytecode.FClosure.Template.FormalParameterCount);
+  end;
+  Result := inherited GetClassLength;
 end;
 
 constructor TGocciaVMSuperConstructorValue.Create(
@@ -3677,6 +3664,48 @@ begin
     FLocalCells[AIndex].Value := AValue;
 end;
 
+procedure TGocciaVM.InstallFunctionPrototype(
+  const AFunction: TGocciaObjectValue;
+  const AIsGenerator: Boolean);
+var
+  PrototypeObj: TGocciaObjectValue;
+  PrototypeFlags: TPropertyFlags;
+begin
+  // ES2026 §10.2.5 MakeConstructor — adds a `prototype` data property to a
+  // function whose value is a fresh ordinary object.  Shape differs by kind:
+  //   - Ordinary function (§15.2): prototype is { writable, !enumerable,
+  //     !configurable } with an own `constructor` pointing at the function.
+  //   - (Async) generator (§15.5 / §15.6): prototype is { !writable,
+  //     !enumerable, !configurable } with NO own `constructor` — per spec it
+  //     inherits `constructor` from %GeneratorFunction.prototype.prototype%
+  //     (which points at %GeneratorFunction.prototype%, not the specific
+  //     generator function), so an own back-reference would be wrong.
+  // The prototype object's [[Prototype]] is %Object.prototype% per ES2026
+  // §10.2.5.1 OrdinaryFunctionCreate.  (For generators it should be %Generator%,
+  // but GocciaScript does not yet expose that intrinsic; falling back to
+  // Object.prototype keeps the chain non-null and lets generic object methods
+  // like hasOwnProperty resolve.)
+  //
+  // Match the lazy-init guard used by OP_NEW_OBJECT — the bytecode VM can be
+  // exercised outside the normal engine bootstrap (e.g. Goccia.VM.Test.pas),
+  // so the realm slot may not be primed yet on the first OP_CLOSURE.
+  if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+    TGocciaObjectValue.InitializeSharedPrototype;
+  PrototypeObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  if AIsGenerator then
+  begin
+    PrototypeFlags := [];
+  end
+  else
+  begin
+    PrototypeFlags := [pfWritable];
+    PrototypeObj.DefineProperty(PROP_CONSTRUCTOR,
+      TGocciaPropertyDescriptorData.Create(AFunction, [pfWritable, pfConfigurable]));
+  end;
+  AFunction.DefineProperty(PROP_PROTOTYPE,
+    TGocciaPropertyDescriptorData.Create(PrototypeObj, PrototypeFlags));
+end;
+
 function TGocciaVM.GetLocal(const AIndex: Integer): TGocciaValue;
 begin
   if (AIndex >= 0) and (AIndex < FLocalCellCount) and Assigned(FLocalCells[AIndex]) then
@@ -4122,7 +4151,8 @@ begin
       Exit;
     end
     else if Assigned(IteratorMethod) and
-            not (IteratorMethod is TGocciaUndefinedLiteralValue) then
+            not (IteratorMethod is TGocciaUndefinedLiteralValue) and
+            not (IteratorMethod is TGocciaNullLiteralValue) then
       ThrowTypeError('Async iterator method is not callable');
   end;
 
@@ -6196,17 +6226,16 @@ begin
           else if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) then
           begin
             if (KeyIndex >= 0) and
-               (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) then
-            begin
-              if TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex] =
-                 TGocciaHoleValue.HoleValue then
-                FRegisters[A] := RegisterUndefined
-              else
-                FRegisters[A] := VMValueToRegisterFast(
-                  TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex]);
-            end
+               (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) and
+               (TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex] <>
+                TGocciaHoleValue.HoleValue) then
+              FRegisters[A] := VMValueToRegisterFast(
+                TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex])
             else
-              FRegisters[A] := RegisterUndefined;
+              // Hole, out-of-range, or accessor-shadowed slot: take the slow
+              // path so accessor descriptors and prototype lookups run.
+              SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
+                IntToStr(KeyIndex)));
           end
           else
             SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
@@ -6504,20 +6533,35 @@ begin
           else if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) then
           begin
             if (KeyIndex >= 0) and
-               (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) then
-            begin
-              if TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex] =
-                 TGocciaHoleValue.HoleValue then
-                FRegisters[A] := RegisterUndefined
-              else
-                FRegisters[A] := VMValueToRegisterFast(
-                  TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex]);
-            end
+               (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) and
+               (TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex] <>
+                TGocciaHoleValue.HoleValue) then
+              FRegisters[A] := VMValueToRegisterFast(
+                TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex])
             else
-              FRegisters[A] := RegisterUndefined;
+              // Hole, out-of-range, or accessor-shadowed slot: take the slow
+              // path so accessor descriptors and prototype lookups run.
+              SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
+                IntToStr(KeyIndex)));
           end
           else
             SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
+              KeyToPropertyNameRegister(FRegisters[C])));
+        end
+        else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaClassValue) then
+        begin
+          // Classes must be matched before TGocciaObjectValue so that static
+          // symbol-keyed properties (FStaticSymbolDescriptors) and the
+          // superclass walk are reached. TGocciaClassValue.GetSymbolProperty
+          // is not virtual on the base, so a TGocciaObjectValue cast would
+          // bypass them. Mirrors OP_ARRAY_GET ordering.
+          if (FRegisters[C].Kind = grkObject) and
+             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
+            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
+              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
+          else
+            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
               KeyToPropertyNameRegister(FRegisters[C])));
         end
         else if (FRegisters[B].Kind = grkObject) and
@@ -6549,17 +6593,6 @@ begin
               TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value[KeyIndex + 1]))
           else
             SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
-        end
-        else if (FRegisters[B].Kind = grkObject) and
-                (FRegisters[B].ObjectValue is TGocciaClassValue) then
-        begin
-          if (FRegisters[C].Kind = grkObject) and
-             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
-            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
-              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
-          else
-            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
-              KeyToPropertyNameRegister(FRegisters[C])));
         end
         else
           FRegisters[A] := RegisterUndefined;
@@ -7061,7 +7094,14 @@ begin
           else if Assigned(FCurrentClosure) then
             ChildClosure.SetUpvalue(I, FCurrentClosure.GetUpvalue(Desc.Index));
         end;
-        SetRegister(A, TGocciaBytecodeFunctionValue.Create(Self, ChildClosure));
+        BytecodeFunction := TGocciaBytecodeFunctionValue.Create(Self, ChildClosure);
+        // ES2026 §10.2.5 MakeConstructor: install own `prototype` data property
+        // for `function`/`function*` declarations and expressions (including
+        // async generators).  The prototype is a fresh ordinary object whose
+        // `constructor` data property back-references the function.
+        if ChildTemplate.HasOwnPrototype then
+          InstallFunctionPrototype(BytecodeFunction, ChildTemplate.IsGenerator);
+        SetRegister(A, BytecodeFunction);
       end;
 
       OP_CALL:

@@ -1,6 +1,8 @@
-const ignoreCommand = `
-target="\${VERCEL_GIT_COMMIT_SHA:-HEAD}"
-base="\${VERCEL_GIT_PREVIOUS_SHA:-HEAD^}"
+#!/usr/bin/env bash
+set -u
+
+target="${VERCEL_GIT_COMMIT_SHA:-HEAD}"
+base="${VERCEL_GIT_PREVIOUS_SHA:-HEAD^}"
 website_path="./"
 
 if [ -d "website" ] && [ -f "website/package.json" ]; then
@@ -32,22 +34,10 @@ if ! ensure_commit "$target"; then
   exit 1
 fi
 
-git diff --quiet "$base" "$target" -- "$website_path"
-`.trim();
+if git diff --quiet "$base" "$target" -- "$website_path"; then
+  echo "No website changes detected; skipping build."
+  exit 0
+fi
 
-export const config = {
-  framework: "nextjs",
-  buildCommand: "bun run build",
-  installCommand: "bun install --frozen-lockfile",
-  ignoreCommand,
-  functions: {
-    "src/app/api/execute/route.ts": {
-      maxDuration: 15,
-      memory: 1024,
-    },
-    "src/app/api/test/route.ts": {
-      maxDuration: 15,
-      memory: 1024,
-    },
-  },
-} as const;
+echo "Website changes detected; building."
+exit 1

@@ -15,17 +15,24 @@ uses
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Resolver,
-  Goccia.Scope;
+  Goccia.Scope,
+  Goccia.Values.Primitives;
 
 type
-  TGocciaModuleBodyEvaluator = procedure(const AProgram: TGocciaProgram;
-    const AContext: TGocciaEvaluationContext) of object;
+  { Evaluate the body of a module-form program in AContext.
+    Returns the last expression's completion value (or undefined for
+    declaration-only bodies).  Module imports discard the return; the
+    --source-type=module entry path uses it so the test runner can
+    read the runTests(...) results object. }
+  TGocciaModuleBodyEvaluator = function(const AProgram: TGocciaProgram;
+    const AContext: TGocciaEvaluationContext): TGocciaValue of object;
 
   TGocciaModuleLoader = class
   private
     FASIEnabled: Boolean;
     FVarEnabled: Boolean;
     FFunctionEnabled: Boolean;
+    FStrictTypesEnabled: Boolean;
     FContentProvider: TGocciaModuleContentProvider;
     FEvaluateModuleBody: TGocciaModuleBodyEvaluator;
     FEntryFileName: string;
@@ -65,6 +72,8 @@ type
     property JSXEnabled: Boolean read FJSXEnabled write FJSXEnabled;
     property VarEnabled: Boolean read FVarEnabled write FVarEnabled;
     property FunctionEnabled: Boolean read FFunctionEnabled write FFunctionEnabled;
+    property StrictTypesEnabled: Boolean read FStrictTypesEnabled
+      write FStrictTypesEnabled;
     property Resolver: TGocciaModuleResolver read FResolver;
   end;
 
@@ -90,7 +99,6 @@ uses
   Goccia.TSV,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives,
   Goccia.YAML;
 
 const
@@ -265,11 +273,13 @@ begin
                 // ES2026 §16.2.1.6.4 InitializeEnvironment: a Module
                 // Environment Record's [[ThisValue]] is undefined.
                 ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+                ModuleScope.StrictTypes := FStrictTypesEnabled;
                 Context.Scope := ModuleScope;
                 Context.OnError := FOnError;
                 Context.LoadModule := LoadModule;
                 Context.CurrentFilePath := ResolvedPath;
                 Context.CoverageEnabled := False;
+                Context.StrictTypes := FStrictTypesEnabled;
                 Context.DisposalTracker := nil;
 
                 FEvaluateModuleBody(ProgramNode, Context);

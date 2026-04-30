@@ -60,7 +60,7 @@ def _recover_per_file_records(raw_json: str) -> list[dict] | None:
     structure is broken.
 
     Each per-file record is emitted by the runner on its own line in
-    the form ``{"file": "...", ..., "failedTests": [...]}`` (possibly
+    the form ``{"fileName": "...", ..., "failedTests": [...]}`` (possibly
     followed by a trailing comma).  When the surrounding "failedTests"
     array gets corrupted (a known runner bug under heavy stall load),
     we cannot ``json.loads`` the whole document but the per-file
@@ -70,11 +70,11 @@ def _recover_per_file_records(raw_json: str) -> list[dict] | None:
     """
     records: list[dict] = []
     # Each line is either an entry like
-    #     {"file": "...", "passed": 0, ...},
+    #     {"fileName": "...", "passed": 0, ...},
     # or
-    #     {"file": "...", "passed": 0, ...}
-    # Match a JSON object on a single line that starts with {"file":.
-    line_re = re.compile(r'^\s*(\{"file":\s*".*?\})(,?)\s*$')
+    #     {"fileName": "...", "passed": 0, ...}
+    # Match a JSON object on a single line that starts with {"fileName":.
+    line_re = re.compile(r'^\s*(\{"fileName":\s*".*?\})(,?)\s*$')
     for line in raw_json.splitlines():
         m = line_re.match(line)
         if not m:
@@ -83,7 +83,7 @@ def _recover_per_file_records(raw_json: str) -> list[dict] | None:
             obj = json.loads(m.group(1))
         except json.JSONDecodeError:
             continue
-        if isinstance(obj, dict) and "file" in obj:
+        if isinstance(obj, dict) and "fileName" in obj:
             records.append(obj)
     return records or None
 
@@ -703,7 +703,7 @@ def evaluate_suite(
                 # Ground truth: per-file records emitted by the runner.
                 file_results_by_safe: dict[str, dict] = {}
                 for fr in tr_results.get("results", []):
-                    fpath = fr.get("file", "")
+                    fpath = fr.get("fileName", "")
                     key = Path(fpath).name if fpath else ""
                     if key:
                         file_results_by_safe[key] = fr

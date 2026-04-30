@@ -20,7 +20,9 @@ interface
 
 uses
   Classes,
-  SyncObjs;
+  SyncObjs,
+
+  Goccia.CLI.JSON.Reporter;
 
 threadvar
   { True on worker threads spawned by TGocciaThreadPool.  Code that can
@@ -82,6 +84,7 @@ type
     FEnableCoverage: Boolean;
     FMaxBytes: Int64;
     FCoverageTracker: TObject;  // TGocciaCoverageTracker, kept alive for merge
+    FMemoryStats: TCLIJSONMemoryStats;
     FData: Pointer;
     // Timestamp (nanoseconds) of this worker's last progress event —
     // updated on dequeue, before the worker callback, and after it
@@ -106,6 +109,7 @@ type
     property Results: TGocciaWorkerResultArray read FResults;
     property ResultCount: Integer read FResultCount;
     property CoverageTracker: TObject read FCoverageTracker;
+    property MemoryStats: TCLIJSONMemoryStats read FMemoryStats;
     property LastActivityNs: Int64 read FLastActivityNs;
     property CurrentFileIndex: Integer read FCurrentFileIndex;
   end;
@@ -128,6 +132,7 @@ type
     FCancelOnError: Boolean;
     FEnableCoverage: Boolean;
     FMaxBytes: Int64;
+    FMemoryStats: TCLIJSONMemoryStats;
   public
     constructor Create(AWorkerCount: Integer);
 
@@ -152,6 +157,7 @@ type
     procedure MergeCoverageInto(ATarget: TObject);
 
     property Results: TGocciaWorkerResultArray read FResults;
+    property MemoryStats: TCLIJSONMemoryStats read FMemoryStats;
     property WorkerCount: Integer read FWorkerCount;
     property Cancelled: Boolean read FCancelled;
     { When True, the first worker error automatically cancels remaining files. }
@@ -288,6 +294,7 @@ begin
   FEnableCoverage := AEnableCoverage;
   FMaxBytes := AMaxBytes;
   FCoverageTracker := nil;
+  FMemoryStats := DefaultCLIJSONMemoryStats;
   FData := AData;
   FResultCount := 0;
   FLastActivityNs := GetNanoseconds;
@@ -300,10 +307,12 @@ procedure TGocciaFileWorker.Execute;
 var
   Item: TGocciaWorkItem;
   ConsoleOut, ErrorMsg: string;
+  MemoryMeasurement: TCLIJSONMemoryMeasurement;
   Idx: Integer;
 begin
   FLastActivityNs := GetNanoseconds;
   InitThreadRuntime(FEnableCoverage, FMaxBytes);
+  BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
   try
     while FQueue.TryDequeue(Item) do
     begin
@@ -367,6 +376,7 @@ begin
     // Refresh the timestamp as we exit the work loop so the watchdog
     // does not interpret a slow thread-runtime shutdown as a hang.
     FLastActivityNs := GetNanoseconds;
+    FMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
     { Detach the coverage tracker before shutting down the runtime so
       the main thread can read it after the worker completes. }
     if FEnableCoverage then
@@ -385,6 +395,7 @@ begin
   FCancelOnError := False;
   FEnableCoverage := False;
   FMaxBytes := 0;
+  FMemoryStats := DefaultCLIJSONMemoryStats;
 end;
 
 procedure TGocciaThreadPool.RunAll(const AFiles: TStringList;
@@ -400,6 +411,7 @@ var
   SnapshotResults: TGocciaWorkerResultArray;
 begin
   FCancelled := False;
+  FMemoryStats := DefaultCLIJSONMemoryStats;
   AnyAbandoned := False;
   FileCount := AFiles.Count;
   if FileCount = 0 then
@@ -583,6 +595,9 @@ begin
 
     for J := 0 to FWorkers[I].ResultCount - 1 do
       FResults[FWorkers[I].Results[J].Index] := FWorkers[I].Results[J];
+
+    FMemoryStats := CombineCLIJSONMemoryStats(
+      FMemoryStats, FWorkers[I].MemoryStats, True);
 
     { Don't free workers yet if coverage is enabled — MergeCoverageInto
       needs access to their coverage trackers. }

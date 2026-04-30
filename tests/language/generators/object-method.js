@@ -102,6 +102,64 @@ test("object generator method does not reuse completed loop body expressions", (
   expect(iter.next()).toEqual({ value: undefined, done: true });
 });
 
+test("object generator method preserves for-of iterator across yielded loop body", () => {
+  const obj = {
+    *values() {
+      for (const n of [1, 2, 3]) yield n;
+    },
+  };
+
+  const iter = obj.values();
+  expect(iter.next()).toEqual({ value: 1, done: false });
+  expect(iter.next()).toEqual({ value: 2, done: false });
+  expect(iter.next()).toEqual({ value: 3, done: false });
+  expect(iter.next()).toEqual({ value: undefined, done: true });
+});
+
+test("object generator method preserves for-of iterator across yielded loop head", () => {
+  const obj = {
+    *values() {
+      for (const [value = yield "default"] of [[undefined], [2]]) {
+        yield value;
+      }
+    },
+  };
+
+  const iter = obj.values();
+  expect(iter.next()).toEqual({ value: "default", done: false });
+  expect(iter.next(1)).toEqual({ value: 1, done: false });
+  expect(iter.next()).toEqual({ value: 2, done: false });
+  expect(iter.next()).toEqual({ value: undefined, done: true });
+});
+
+test("object generator method clears for-of iterator state when loop head throws", () => {
+  let first = true;
+  const obj = {
+    *values() {
+      for (const items of [[[undefined], ["stale"]], [["fresh"]]]) {
+        try {
+          for (const [value = (() => {
+            if (first) {
+              first = false;
+              throw "boom";
+            }
+            return "default";
+          })()] of items) {
+            yield value;
+          }
+        } catch (error) {
+          yield "caught";
+        }
+      }
+    },
+  };
+
+  const iter = obj.values();
+  expect(iter.next()).toEqual({ value: "caught", done: false });
+  expect(iter.next()).toEqual({ value: "fresh", done: false });
+  expect(iter.next()).toEqual({ value: undefined, done: true });
+});
+
 test("object generator method resumes binary expressions instead of returning the cached left operand", () => {
   const events = [];
   const obj = {

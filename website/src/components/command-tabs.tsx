@@ -75,6 +75,45 @@ export function detectOs(ua: string): OsKey {
  *  We use one union for simplicity; per-OS code clamps to the legal set. */
 export type ArchKey = "arm64" | "x64" | "x86";
 
+/** Platform-aware label set for the ⌘/Ctrl+Enter Run shortcut. The
+ *  same physical key combo is bound on every platform — the keydown
+ *  handlers all check `e.metaKey || e.ctrlKey` — but the symbol the
+ *  UI displays for it differs: macOS users expect `⌘`, everyone else
+ *  expects `Ctrl`. `short` is the compact form for inline use inside
+ *  buttons (matches the visual weight of `⌘↵`); `long` is the expanded
+ *  form for tooltips and prose. */
+export type RunShortcut = {
+  short: string;
+  long: string;
+};
+
+const RUN_SHORTCUT_MAC: RunShortcut = { short: "⌘↵", long: "⌘+Enter" };
+const RUN_SHORTCUT_NON_MAC: RunShortcut = {
+  short: "Ctrl+↵",
+  long: "Ctrl+Enter",
+};
+
+/** Returns the platform-appropriate Run-shortcut label.
+ *
+ *  Hydration-safe: SSR (and the first client paint) renders the
+ *  macOS form so the markup is deterministic, then a `useEffect`
+ *  re-detects on the client via `navigator.userAgent` — same shape
+ *  as `<QuickInstall>`'s OS auto-pick. Users on Linux/Windows see a
+ *  brief flash of `⌘` before it swaps to `Ctrl` on first paint;
+ *  acceptable trade-off for not blocking SSR on user-agent inspection. */
+export function useRunShortcut(): RunShortcut {
+  const [shortcut, setShortcut] = useState<RunShortcut>(RUN_SHORTCUT_MAC);
+  useEffect(() => {
+    if (typeof navigator === "undefined") return;
+    setShortcut(
+      detectOs(navigator.userAgent) === "macos"
+        ? RUN_SHORTCUT_MAC
+        : RUN_SHORTCUT_NON_MAC,
+    );
+  }, []);
+  return shortcut;
+}
+
 /** Best-guess CPU architecture from a navigator user-agent string and
  *  an optional `os` hint. Default-pick reflects current desktop sales:
  *  arm64 for Apple Silicon Macs (the default for new hardware since

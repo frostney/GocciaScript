@@ -658,7 +658,7 @@ jobs:
           for file_report in report.get("files", []):
             for bench in file_report.get("benchmarks", []):
               if "error" in bench:
-                errors.append(f"{file_report.get('file', '<unknown>')}::{bench.get('name', '<unknown>')}: {bench['error']}")
+                errors.append(f"{file_report.get('fileName', '<unknown>')}::{bench.get('name', '<unknown>')}: {bench['error']}")
               elif bench.get("opsPerSec", 0) > 0 and bench.get("meanMs", 0) > 0 and bench.get("iterations", 0) > 0:
                 valid += 1
 
