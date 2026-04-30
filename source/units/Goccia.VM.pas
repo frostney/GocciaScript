@@ -3700,6 +3700,12 @@ begin
   // but GocciaScript does not yet expose that intrinsic; falling back to
   // Object.prototype keeps the chain non-null and lets generic object methods
   // like hasOwnProperty resolve.)
+  //
+  // Match the lazy-init guard used by OP_NEW_OBJECT — the bytecode VM can be
+  // exercised outside the normal engine bootstrap (e.g. Goccia.VM.Test.pas),
+  // so the realm slot may not be primed yet on the first OP_CLOSURE.
+  if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+    TGocciaObjectValue.InitializeSharedPrototype;
   PrototypeObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   if AIsGenerator then
   begin
