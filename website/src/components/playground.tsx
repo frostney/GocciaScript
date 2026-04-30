@@ -462,6 +462,7 @@ export function Playground({
   const [ghostDismissed, setGhostDismissed] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const hlRef = useRef<HTMLPreElement>(null);
+  const gutterRef = useRef<HTMLPreElement>(null);
   const runningRef = useRef(false);
   const hydratedRef = useRef(false);
   const runShortcut = useRunShortcut();
@@ -816,10 +817,19 @@ export function Playground({
     return () => clearTimeout(id);
   }, [shareTick]);
 
+  // Mirror the textarea's scroll onto the highlight overlay AND the line-
+  // number gutter. Without the gutter sync, the line numbers stay frozen
+  // at line 1 while the user scrolls the source, so the visible gutter
+  // labels no longer match the code beside them and clicks "look like"
+  // they hit the wrong line. The gutter needs `overflow: hidden` for
+  // `scrollTop` to take effect — see `.pg-gutter` in `globals.css`.
   const syncScroll = () => {
     if (taRef.current && hlRef.current) {
       hlRef.current.scrollTop = taRef.current.scrollTop;
       hlRef.current.scrollLeft = taRef.current.scrollLeft;
+    }
+    if (taRef.current && gutterRef.current) {
+      gutterRef.current.scrollTop = taRef.current.scrollTop;
     }
   };
 
@@ -1225,7 +1235,9 @@ export function Playground({
             </div>
             <p className="pg-example-desc">{example.desc}</p>
             <div className="pg-editor">
-              <pre className="pg-gutter">{gutter}</pre>
+              <pre className="pg-gutter" ref={gutterRef} aria-hidden="true">
+                {gutter}
+              </pre>
               <div className="pg-editor-body">
                 <pre className="pg-hl" ref={hlRef} aria-hidden="true">
                   <code>
