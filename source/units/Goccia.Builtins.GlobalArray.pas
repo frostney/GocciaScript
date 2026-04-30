@@ -526,6 +526,17 @@ begin
           if Source is TGocciaObjectValue then
           begin
             IteratorMethod := TGocciaObjectValue(Source).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+            // Per ES2024 GetMethod: a present-but-non-callable
+            // @@iterator is a TypeError, not silent fall-through to
+            // the array-like path.  Falling through silently would
+            // mis-handle iterator-protocol violations as array-like
+            // sources and produce subtly wrong results.
+            if Assigned(IteratorMethod) and
+               not (IteratorMethod is TGocciaUndefinedLiteralValue) and
+               not (IteratorMethod is TGocciaNullLiteralValue) and
+               not IteratorMethod.IsCallable then
+              ThrowTypeError(Format(SErrorValueNotFunction, ['[Symbol.iterator]']),
+                SSuggestIteratorProtocol);
             if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
             begin
               // TC39 Array.fromAsync §2.1.1.1 step 4.a: GetIterator(asyncItems, sync)
@@ -541,12 +552,19 @@ begin
               else if IteratorObj is TGocciaObjectValue then
               begin
                 NextMethod := IteratorObj.GetProperty(PROP_NEXT);
-                if Assigned(NextMethod) and NextMethod.IsCallable then
+                if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
                   // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
                   Iterator := TGocciaGenericIteratorValue.Create(IteratorObj, NextMethod)
                 else
-                  Iterator := nil;
-              end;
+                  // Iterator's next is missing / non-callable: protocol
+                  // violation per §7.4.2 GetIteratorDirect step 2.
+                  ThrowTypeError(SErrorIteratorNextMustBeCallable,
+                    SSuggestIteratorProtocol);
+              end
+              else
+                // @@iterator returned a non-Object: protocol violation
+                // per §7.4.3 GetIterator step 4.
+                ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
             end;
           end
           else if Source is TGocciaStringLiteralValue then

@@ -661,6 +661,16 @@ begin
   if Value is TGocciaObjectValue then
   begin
     IteratorMethod := TGocciaObjectValue(Value).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+    // Per ES2024 GetMethod: a present-but-non-callable @@iterator is
+    // a TypeError.  Falling through to the iterator-like (`next` on
+    // Value) branch when @@iterator was malformed would mask the
+    // protocol violation.
+    if Assigned(IteratorMethod) and
+       not (IteratorMethod is TGocciaUndefinedLiteralValue) and
+       not (IteratorMethod is TGocciaNullLiteralValue) and
+       not IteratorMethod.IsCallable then
+      ThrowTypeError(Format(SErrorValueNotFunction, ['[Symbol.iterator]']),
+        SSuggestIteratorProtocol);
     if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
     begin
       CallArgs := TGocciaArgumentsCollection.Create;
@@ -674,18 +684,28 @@ begin
         Result := IteratorObj;
         Exit;
       end;
-      if (IteratorObj is TGocciaObjectValue) then
-      begin
-        NextMethod := IteratorObj.GetProperty(PROP_NEXT);
-        if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
-        begin
-          // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
-          Result := TGocciaGenericIteratorValue.Create(IteratorObj, NextMethod);
-          Exit;
-        end;
-      end;
+      // §7.4.3 GetIterator step 4 / TC39 Iterator Helpers
+      // GetIteratorFlattenable step 5: the value returned from
+      // [@@iterator]() must be an Object — anything else is a
+      // protocol violation, NOT a cue to fall back to iterator-like
+      // handling on the outer Value.
+      if not (IteratorObj is TGocciaObjectValue) then
+        ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
+      NextMethod := IteratorObj.GetProperty(PROP_NEXT);
+      if not Assigned(NextMethod) or
+         (NextMethod is TGocciaUndefinedLiteralValue) or
+         not NextMethod.IsCallable then
+        // §7.4.2 GetIteratorDirect step 2: missing/non-callable next.
+        ThrowTypeError(SErrorIteratorNextMustBeCallable,
+          SSuggestIteratorProtocol);
+      // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
+      Result := TGocciaGenericIteratorValue.Create(IteratorObj, NextMethod);
+      Exit;
     end;
 
+    // No @@iterator (undefined/null): TC39 Iterator Helpers
+    // GetIteratorFlattenable iterator-like fallback — try the value
+    // itself as a duck-typed iterator (must have a callable next).
     NextMethod := Value.GetProperty(PROP_NEXT);
     if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
     begin
