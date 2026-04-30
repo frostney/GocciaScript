@@ -6,6 +6,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path, { basename } from "node:path";
 import { NextResponse } from "next/server";
+import type { MemoryJson } from "@/lib/format-memory";
 import {
   MAX_GOCCIA_CODE_BYTES,
   MAX_GOCCIA_TOOL_REQUEST_BYTES,
@@ -99,19 +100,6 @@ type TimingJson = {
   compile_ns?: number;
   exec_ns?: number;
   total_ns?: number;
-};
-
-/** Subset of the runner's `memory` object surfaced to the client. The runner
- *  emits a much richer payload (see Goccia.CLI.JSON.Reporter.pas), but the
- *  playground tail line only needs peak heap, total allocations, GC count, and
- *  collected-object count. `memory` itself can be `null` when stats are off. */
-type MemoryJson = {
-  gc?: {
-    peakLiveBytes?: number;
-    allocatedDuringRunBytes?: number;
-    collections?: number;
-    collectedObjects?: number;
-  };
 };
 
 type Invocation = {
@@ -448,22 +436,37 @@ function normalizeMemory(value: unknown): MemoryJson | null {
   const record = asRecord(value);
   if (!record) return null;
 
-  const gcRecord = asRecord(record.gc);
-  if (!gcRecord) return null;
+  const result: MemoryJson = {};
 
-  const gc: NonNullable<MemoryJson["gc"]> = {};
-  for (const key of [
-    "peakLiveBytes",
-    "allocatedDuringRunBytes",
-    "collections",
-    "collectedObjects",
-  ] as const) {
-    const field = numberField(gcRecord, key);
-    if (field !== undefined) gc[key] = field;
+  const gcRecord = asRecord(record.gc);
+  if (gcRecord) {
+    const gc: NonNullable<MemoryJson["gc"]> = {};
+    for (const key of [
+      "peakLiveBytes",
+      "allocatedDuringRunBytes",
+      "collections",
+      "collectedObjects",
+    ] as const) {
+      const field = numberField(gcRecord, key);
+      if (field !== undefined) gc[key] = field;
+    }
+    if (Object.keys(gc).length > 0) result.gc = gc;
   }
 
-  if (Object.keys(gc).length === 0) return null;
-  return { gc };
+  // `heap` reports the FPC heap manager's net growth during the run — a
+  // broader picture than `gc.peakLiveBytes` (which counts only managed JS
+  // objects). Surfacing `deltaAllocatedBytes` lets the website show "memory
+  // the engine had to allocate to run your script" alongside peak GC heap.
+  const heapRecord = asRecord(record.heap);
+  if (heapRecord) {
+    const deltaAllocatedBytes = numberField(heapRecord, "deltaAllocatedBytes");
+    if (deltaAllocatedBytes !== undefined) {
+      result.heap = { deltaAllocatedBytes };
+    }
+  }
+
+  if (!result.gc && !result.heap) return null;
+  return result;
 }
 
 function firstFileResult(record: Record<string, unknown> | null): unknown {

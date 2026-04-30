@@ -19,6 +19,7 @@ import {
   SparkleIcon,
   TerminalIcon,
 } from "@/components/icons";
+import { formatMemorySegments, type MemoryJson } from "@/lib/format-memory";
 import {
   buildLlmRequest,
   LLM_CALL_TOKENS,
@@ -466,6 +467,7 @@ export function Sandbox() {
         value?: unknown;
         error?: { message: string; line?: number | null } | null;
         timing?: { total_ms: number };
+        memory?: MemoryJson | null;
       };
 
       // Non-2xx responses from `/api/execute` always include a structured
@@ -509,10 +511,9 @@ export function Sandbox() {
         const totalMs = data.timing?.total_ms;
         lines.push({
           kind: "meta",
-          text:
-            totalMs !== undefined
-              ? `— exit 0 · ${totalMs.toFixed(2)}ms`
-              : "— exit 0",
+          text: `— exit 0${
+            totalMs !== undefined ? ` · ${totalMs.toFixed(2)}ms` : ""
+          }${formatMemorySegments(data.memory)}`,
         });
       }
       setOutput(lines);
