@@ -66,6 +66,25 @@ test("hasOwnProperty('prototype') is true on function declarations", () => {
   expect(Object.prototype.hasOwnProperty.call(f, "prototype")).toBe(true);
 });
 
+// Per ES2026 §10.2.5.1 OrdinaryFunctionCreate, the prototype object's
+// [[Prototype]] is %Object.prototype%.  (The spec specifies %Generator% for
+// generators, but GocciaScript does not yet expose that intrinsic and falls
+// back to %Object.prototype%, which keeps the chain non-null.)
+test("function.prototype's [[Prototype]] is Object.prototype", () => {
+  function f() {}
+  expect(Object.getPrototypeOf(f.prototype)).toBe(Object.prototype);
+});
+
+test("generator function.prototype's [[Prototype]] is Object.prototype (GocciaScript fallback)", () => {
+  function* g() {}
+  expect(Object.getPrototypeOf(g.prototype)).toBe(Object.prototype);
+});
+
+test("async generator function.prototype's [[Prototype]] is Object.prototype (GocciaScript fallback)", () => {
+  async function* g() {}
+  expect(Object.getPrototypeOf(g.prototype)).toBe(Object.prototype);
+});
+
 test("methods added to prototype are visible to instances via [[Prototype]] chain (interpreter only — new on plain functions is not yet wired)", () => {
   // We can verify the prototype chain mechanically without invoking `new`:
   // Object.create(f.prototype) gives us an object whose [[Prototype]] is f.prototype.
@@ -94,6 +113,22 @@ test("generator function expression has own prototype property", () => {
   expect(typeof g.prototype).toBe("object");
 });
 
+// Per ES2026 §27.5.1.1, a generator's `prototype.constructor` is INHERITED from
+// %Generator% and points at %GeneratorFunction.prototype%, not the specific
+// generator function.  The own prototype object itself has no `constructor` and
+// must not back-reference the function.
+test("generator prototype has no own constructor and does not point back at the function", () => {
+  function* g() {}
+  expect(Object.prototype.hasOwnProperty.call(g.prototype, "constructor")).toBe(false);
+  expect(g.prototype.constructor).not.toBe(g);
+});
+
+test("generator function expression: prototype has no own constructor back-reference", () => {
+  const g = function* () {};
+  expect(Object.prototype.hasOwnProperty.call(g.prototype, "constructor")).toBe(false);
+  expect(g.prototype.constructor).not.toBe(g);
+});
+
 test("generator function prototype is non-writable, non-configurable", () => {
   function* g() {}
   const desc = Object.getOwnPropertyDescriptor(g, "prototype");
@@ -102,11 +137,13 @@ test("generator function prototype is non-writable, non-configurable", () => {
   expect(desc.configurable).toBe(false);
 });
 
-test("generator prototype assignment throws TypeError in strict mode", () => {
+test("generator prototype assignment throws TypeError and leaves the prototype unchanged", () => {
   function* g() {}
+  const original = g.prototype;
   expect(() => {
     g.prototype = {};
   }).toThrow(TypeError);
+  expect(g.prototype).toBe(original);
 });
 
 test("async function declaration does NOT have own prototype property", () => {
@@ -134,6 +171,21 @@ test("async generator expression has own prototype property", () => {
     yield 1;
   };
   expect(typeof g.prototype).toBe("object");
+});
+
+// Same MakeConstructor exclusion as generators: §15.6 async generators inherit
+// `constructor` from %AsyncGeneratorFunction.prototype.prototype% rather than
+// owning a back-reference to the specific function.
+test("async generator prototype has no own constructor and does not point back at the function", () => {
+  async function* g() {}
+  expect(Object.prototype.hasOwnProperty.call(g.prototype, "constructor")).toBe(false);
+  expect(g.prototype.constructor).not.toBe(g);
+});
+
+test("async generator expression: prototype has no own constructor back-reference", () => {
+  const g = async function* () {};
+  expect(Object.prototype.hasOwnProperty.call(g.prototype, "constructor")).toBe(false);
+  expect(g.prototype.constructor).not.toBe(g);
 });
 
 test("async generator declaration prototype descriptor matches generator (non-writable, non-configurable)", () => {

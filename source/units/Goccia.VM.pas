@@ -3687,19 +3687,30 @@ var
   PrototypeFlags: TPropertyFlags;
 begin
   // ES2026 §10.2.5 MakeConstructor — adds a `prototype` data property to a
-  // function whose value is a fresh ordinary object whose `[[Prototype]]` is
-  // %Object.prototype% and whose `constructor` data property points back at
-  // the function.
-  //   Function:    prototype is { writable, !enumerable, !configurable }
-  //   Generator:   prototype is { !writable, !enumerable, !configurable }
-  //                (ES2026 §27.3.3)
-  PrototypeObj := TGocciaObjectValue.Create;
-  PrototypeObj.DefineProperty(PROP_CONSTRUCTOR,
-    TGocciaPropertyDescriptorData.Create(AFunction, [pfWritable, pfConfigurable]));
+  // function whose value is a fresh ordinary object.  Shape differs by kind:
+  //   - Ordinary function (§15.2): prototype is { writable, !enumerable,
+  //     !configurable } with an own `constructor` pointing at the function.
+  //   - (Async) generator (§15.5 / §15.6): prototype is { !writable,
+  //     !enumerable, !configurable } with NO own `constructor` — per spec it
+  //     inherits `constructor` from %GeneratorFunction.prototype.prototype%
+  //     (which points at %GeneratorFunction.prototype%, not the specific
+  //     generator function), so an own back-reference would be wrong.
+  // The prototype object's [[Prototype]] is %Object.prototype% per ES2026
+  // §10.2.5.1 OrdinaryFunctionCreate.  (For generators it should be %Generator%,
+  // but GocciaScript does not yet expose that intrinsic; falling back to
+  // Object.prototype keeps the chain non-null and lets generic object methods
+  // like hasOwnProperty resolve.)
+  PrototypeObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   if AIsGenerator then
-    PrototypeFlags := []
+  begin
+    PrototypeFlags := [];
+  end
   else
+  begin
     PrototypeFlags := [pfWritable];
+    PrototypeObj.DefineProperty(PROP_CONSTRUCTOR,
+      TGocciaPropertyDescriptorData.Create(AFunction, [pfWritable, pfConfigurable]));
+  end;
   AFunction.DefineProperty(PROP_PROTOTYPE,
     TGocciaPropertyDescriptorData.Create(PrototypeObj, PrototypeFlags));
 end;

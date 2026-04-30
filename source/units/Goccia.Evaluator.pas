@@ -1972,21 +1972,37 @@ begin
 
   // ES2026 §10.2.5 MakeConstructor: function declarations / expressions and
   // (async) generator declarations / expressions get their own `prototype`
-  // data property whose value is a fresh ordinary object whose `constructor`
-  // back-references the function.  Concise methods, arrow functions, getters,
-  // setters, and plain async functions do not.
+  // data property.  Concise methods, arrow functions, getters, setters, and
+  // plain async functions do not.
+  //
+  // The shape differs by kind:
+  //   - Ordinary function (§15.2): prototype is { writable, !enumerable,
+  //     !configurable } and has an own `constructor` data property pointing
+  //     back at the function.
+  //   - (Async) generator (§15.5 / §15.6): prototype is { !writable,
+  //     !enumerable, !configurable } and has NO own `constructor`.  Per spec
+  //     it inherits `constructor` from %GeneratorFunction.prototype.prototype%
+  //     (which itself points at %GeneratorFunction.prototype%, not the
+  //     specific generator), so an own back-reference here would be wrong.
   if AMethodExpression.HasOwnPrototype then
   begin
-    PrototypeObj := TGocciaObjectValue.Create;
-    // prototype.constructor: { writable, !enumerable, configurable }
-    PrototypeObj.DefineProperty(PROP_CONSTRUCTOR,
-      TGocciaPropertyDescriptorData.Create(Result, [pfWritable, pfConfigurable]));
-    // function.prototype: { writable for non-generators, !enumerable, !configurable }
-    // Generators use a non-writable prototype slot (ES2026 §27.3.3).
+    // The prototype object's [[Prototype]] is %Object.prototype% per ES2026
+    // §10.2.5.1 OrdinaryFunctionCreate.  (For generators it should be
+    // %Generator%, but GocciaScript does not yet expose that intrinsic; falling
+    // back to Object.prototype keeps the chain non-null and lets generic object
+    // methods like hasOwnProperty resolve.)
+    PrototypeObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
     if AMethodExpression.IsGenerator then
-      PrototypeFlags := []
+    begin
+      PrototypeFlags := [];
+    end
     else
+    begin
       PrototypeFlags := [pfWritable];
+      // prototype.constructor: { writable, !enumerable, configurable }
+      PrototypeObj.DefineProperty(PROP_CONSTRUCTOR,
+        TGocciaPropertyDescriptorData.Create(Result, [pfWritable, pfConfigurable]));
+    end;
     TGocciaObjectValue(Result).DefineProperty(PROP_PROTOTYPE,
       TGocciaPropertyDescriptorData.Create(PrototypeObj, PrototypeFlags));
   end;
