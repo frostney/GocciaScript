@@ -700,3 +700,89 @@ test("defineProperty on array non-index property", () => {
   expect(arr.foo).toBe("bar");
   expect(arr.length).toBe(3);
 });
+
+test("defineProperty installs accessor descriptor on array index", () => {
+  const arr = ["foo", "bar"];
+  let calls = 0;
+  Object.defineProperty(arr, "0", {
+    get: () => {
+      calls = calls + 1;
+      return "from-getter";
+    },
+    configurable: true,
+  });
+  expect(arr[0]).toBe("from-getter");
+  expect(calls).toBe(1);
+  expect(arr[1]).toBe("bar");
+  expect(arr.length).toBe(2);
+});
+
+test("defineProperty accessor on array index propagates getter throws", () => {
+  const sentinel = new Error("getter abrupt");
+  const arr = ["foo", "bar"];
+  Object.defineProperty(arr, "0", {
+    get: () => {
+      throw sentinel;
+    },
+    configurable: true,
+  });
+  // Asserting on the exact thrown instance (and its message) verifies the
+  // getter's abrupt completion is propagated unchanged — `.toThrow(Error)`
+  // alone would also pass for any unrelated Error from elsewhere in the
+  // [[Get]] path.
+  let caught;
+  try {
+    arr[0];
+  } catch (e) {
+    caught = e;
+  }
+  expect(caught).toBe(sentinel);
+  expect(caught.message).toBe("getter abrupt");
+  // Other indices remain accessible.
+  expect(arr[1]).toBe("bar");
+});
+
+test("defineProperty accessor on out-of-range array index extends length", () => {
+  const arr = ["a", "b"];
+  expect(arr.length).toBe(2);
+  Object.defineProperty(arr, "5", {
+    get: () => "from-getter",
+    configurable: true,
+  });
+  // Per ES2026 §10.4.2.1, the array's length must reflect the new own property.
+  expect(arr.length).toBe(6);
+  expect(arr[5]).toBe("from-getter");
+  // Intermediate slots must be holes (no own property), not explicit
+  // undefined values. Use the `in` operator to enforce sparse semantics —
+  // a plain `arr[i] === undefined` check would also accept an own
+  // `{ value: undefined }` data property.
+  expect(2 in arr).toBe(false);
+  expect(3 in arr).toBe(false);
+  expect(4 in arr).toBe(false);
+});
+
+test("defineProperty accessor on array rolls back when redefinition is rejected", () => {
+  // When the inherited call rejects an accessor redefinition (e.g., the
+  // existing descriptor is non-configurable), the array's backing storage
+  // must not be mutated — length and existing values must stay intact.
+  const arr = ["a", "b"];
+  Object.defineProperty(arr, "5", {
+    get: () => "first",
+    configurable: false,
+  });
+  expect(arr.length).toBe(6);
+  expect(arr[5]).toBe("first");
+
+  // Per ES §10.1.6.3, redefining a non-configurable own property must throw
+  // TypeError specifically — assert the type, not just that something throws.
+  expect(() => {
+    Object.defineProperty(arr, "5", {
+      get: () => "second",
+      configurable: true,
+    });
+  }).toThrow(TypeError);
+
+  // No partial state mutation: length unchanged, original getter still in place.
+  expect(arr.length).toBe(6);
+  expect(arr[5]).toBe("first");
+});

@@ -4826,7 +4826,14 @@ begin
           PropValue := EvaluateExpression(Prop.KeyExpression, AContext);
           if PropValue is TGocciaSymbolValue then
           begin
-            PropValue := ObjectValue.GetSymbolProperty(TGocciaSymbolValue(PropValue));
+            // Class values store static symbol-keyed members in their own
+            // descriptor table; the TGocciaClassValue.GetSymbolProperty
+            // method is not virtual, so a TGocciaObjectValue receiver would
+            // miss them. Dispatch via the class entry point when applicable.
+            if ObjectValue is TGocciaClassValue then
+              PropValue := TGocciaClassValue(ObjectValue).GetSymbolProperty(TGocciaSymbolValue(PropValue))
+            else
+              PropValue := ObjectValue.GetSymbolProperty(TGocciaSymbolValue(PropValue));
             AssignPattern(Prop.Pattern, PropValue, AContext, AIsDeclaration, ADeclarationType);
             Continue;
           end;
