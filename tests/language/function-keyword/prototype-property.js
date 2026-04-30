@@ -136,6 +136,35 @@ test("async generator expression has own prototype property", () => {
   expect(typeof g.prototype).toBe("object");
 });
 
+test("async generator declaration prototype descriptor matches generator (non-writable, non-configurable)", () => {
+  async function* g() {}
+  const desc = Object.getOwnPropertyDescriptor(g, "prototype");
+  expect(typeof desc.value).toBe("object");
+  expect(desc.value).not.toBeNull();
+  expect(desc.writable).toBe(false);
+  expect(desc.enumerable).toBe(false);
+  expect(desc.configurable).toBe(false);
+});
+
+test("async generator expression prototype descriptor matches generator (non-writable, non-configurable)", () => {
+  const g = async function* () {};
+  const desc = Object.getOwnPropertyDescriptor(g, "prototype");
+  expect(typeof desc.value).toBe("object");
+  expect(desc.value).not.toBeNull();
+  expect(desc.writable).toBe(false);
+  expect(desc.enumerable).toBe(false);
+  expect(desc.configurable).toBe(false);
+});
+
+test("async generator prototype assignment throws TypeError in strict mode", () => {
+  async function* g() {}
+  const original = g.prototype;
+  expect(() => {
+    g.prototype = null;
+  }).toThrow(TypeError);
+  expect(g.prototype).toBe(original);
+});
+
 test("arrow function does NOT have own prototype property", () => {
   const f = () => 42;
   expect(f.prototype).toBeUndefined();
