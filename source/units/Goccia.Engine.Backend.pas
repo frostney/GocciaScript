@@ -22,6 +22,7 @@ type
   private
     FVM: TGocciaVM;
     FGlobalBackedTopLevel: Boolean;
+    FStrictTypes: Boolean;
     FModuleModules: TObjectList<TGocciaBytecodeModule>;
   public
     constructor Create;
@@ -32,20 +33,26 @@ type
       const ASourcePath: string); override;
     function ExecuteProgram(
       const AProgram: TGocciaProgram): TGocciaValue; override;
-    procedure EvaluateModuleBody(const AProgram: TGocciaProgram;
-      const AContext: TGocciaEvaluationContext); override;
+    function EvaluateModuleBody(const AProgram: TGocciaProgram;
+      const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     function ExecuteDynamicFunction(
       const AProgram: TGocciaProgram): TGocciaValue; override;
     procedure ClearTransientCaches; override;
-    function DefaultStrictTypes: Boolean; override;
 
     function CompileToModule(
       const AProgram: TGocciaProgram): TGocciaBytecodeModule;
     function RunModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
+    { Run AModule with FVM.GlobalScope temporarily replaced by AScope.
+      Used to execute the entry program with a fresh module scope when
+      --source-type=module is set; mirrors the swap that
+      EvaluateModuleBody does for nested module loads. }
+    function RunModuleInScope(const AModule: TGocciaBytecodeModule;
+      const AScope: TGocciaScope): TGocciaValue;
 
     property VM: TGocciaVM read FVM;
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
       write FGlobalBackedTopLevel;
+    property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
   end;
 
 implementation
@@ -85,8 +92,9 @@ begin
   AModuleLoader.EvaluateModuleBody := EvaluateModuleBody;
 end;
 
-procedure TGocciaBytecodeExecutor.EvaluateModuleBody(
-  const AProgram: TGocciaProgram; const AContext: TGocciaEvaluationContext);
+function TGocciaBytecodeExecutor.EvaluateModuleBody(
+  const AProgram: TGocciaProgram;
+  const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Compiler: TGocciaCompiler;
   BytecodeModule: TGocciaBytecodeModule;
@@ -95,6 +103,7 @@ begin
   Compiler := TGocciaCompiler.Create(AContext.CurrentFilePath);
   try
     Compiler.GlobalBackedTopLevel := True;
+    Compiler.StrictTypes := FStrictTypes;
     BytecodeModule := Compiler.Compile(AProgram);
   finally
     Compiler.Free;
@@ -105,7 +114,7 @@ begin
   SavedGlobalScope := FVM.GlobalScope;
   FVM.GlobalScope := AContext.Scope;
   try
-    FVM.ExecuteModule(BytecodeModule);
+    Result := FVM.ExecuteModule(BytecodeModule);
   finally
     FVM.GlobalScope := SavedGlobalScope;
   end;
@@ -154,6 +163,7 @@ begin
   Compiler := TGocciaCompiler.Create(FSourcePath);
   try
     Compiler.GlobalBackedTopLevel := FGlobalBackedTopLevel;
+    Compiler.StrictTypes := FStrictTypes;
     Result := Compiler.Compile(AProgram);
   finally
     Compiler.Free;
@@ -186,15 +196,25 @@ begin
   end;
 end;
 
+function TGocciaBytecodeExecutor.RunModuleInScope(
+  const AModule: TGocciaBytecodeModule;
+  const AScope: TGocciaScope): TGocciaValue;
+var
+  SavedGlobalScope: TGocciaScope;
+begin
+  SavedGlobalScope := FVM.GlobalScope;
+  FVM.GlobalScope := AScope;
+  try
+    Result := RunModule(AModule);
+  finally
+    FVM.GlobalScope := SavedGlobalScope;
+  end;
+end;
+
 procedure TGocciaBytecodeExecutor.ClearTransientCaches;
 begin
   // The Goccia VM executes directly on TGocciaValue and does not maintain
   // bridge-side transient caches that need per-measurement clearing.
-end;
-
-function TGocciaBytecodeExecutor.DefaultStrictTypes: Boolean;
-begin
-  Result := True;
 end;
 
 end.

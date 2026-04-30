@@ -109,6 +109,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Keywords.Reserved,
   Goccia.Token,
+  Goccia.Types.Enforcement,
   Goccia.Values.BigIntValue,
   Goccia.Values.Primitives;
 
@@ -726,6 +727,7 @@ var
   JumpIdx, I: Integer;
   HasRest: Boolean;
   Limit: Integer;
+  RestIndex: Integer;
 begin
   if APattern is TGocciaIdentifierDestructuringPattern then
   begin
@@ -829,11 +831,13 @@ begin
     // collapsing both to 0 would silently drain the iterator on
     // `const [] = iter` instead of consuming nothing then closing.
     HasRest := False;
+    RestIndex := -1;
     for I := 0 to ArrPat.Elements.Count - 1 do
       if Assigned(ArrPat.Elements[I]) and
          (ArrPat.Elements[I] is TGocciaRestDestructuringPattern) then
       begin
         HasRest := True;
+        RestIndex := I;
         Break;
       end;
     // Only HasRest collapses to the unbounded sentinel.  A fixed-size
@@ -845,7 +849,21 @@ begin
     // bindings at once), and a clear compile-time error is better than
     // a silent infinite-iteration trap.
     if HasRest then
-      Limit := ITERABLE_LIMIT_UNBOUNDED
+    begin
+      // OP_UNPACK encodes the rest start offset in a UInt8 operand
+      // (`EncodeABC(OP_UNPACK, DestSlot, ASrcReg, UInt8(I))` below), so
+      // rest patterns whose start exceeds 255 elements would be
+      // miscompiled — the truncated index points at the wrong slice
+      // start.  Reject those at compile time too, paralleling the
+      // fixed-pattern guard.  When the operand width is widened, this
+      // limit can be relaxed.
+      if RestIndex > High(UInt8) then
+        raise Exception.CreateFmt(
+          'Array destructuring rest pattern starts past the encodable '
+          + 'offset (%d; max %d)',
+          [RestIndex, High(UInt8)]);
+      Limit := ITERABLE_LIMIT_UNBOUNDED;
+    end
     else
     begin
       if ArrPat.Elements.Count >= ITERABLE_LIMIT_UNBOUNDED then
@@ -956,17 +974,22 @@ end;
 procedure ApplyParameterTypeAnnotations(
   const AScope: TGocciaCompilerScope;
   const ATemplate: TGocciaFunctionTemplate;
-  const AParameters: TGocciaParameterArray);
+  const AParameters: TGocciaParameterArray;
+  const AStrictTypes: Boolean);
 var
   I, LocalIdx: Integer;
   AnnotationType: TGocciaLocalType;
   ParamName: string;
 begin
+  { When strict-types enforcement is disabled, parameter annotations
+    are parsed but never bound to the local — no OP_CHECK_TYPE is
+    emitted later because EmitParameterTypeChecks gates on
+    Local.IsStrictlyTyped. }
+  if not AStrictTypes then
+    Exit;
   for I := 0 to High(AParameters) do
   begin
     if AParameters[I].TypeAnnotation = '' then
-      Continue;
-    if AParameters[I].IsRest then
       Continue;
     if AParameters[I].IsOptional then
       Continue;
@@ -982,6 +1005,9 @@ begin
     LocalIdx := AScope.ResolveLocal(ParamName);
     if LocalIdx < 0 then
       Continue;
+    // Rest parameter: record the type hint so subsequent reassignments are
+    // guarded, but EmitParameterTypeChecks skips IsRest so no OP_CHECK_TYPE
+    // fires at function entry against the rest array itself.
     AScope.SetLocalTypeHint(LocalIdx, AnnotationType);
     AScope.SetLocalStrictlyTyped(LocalIdx, True);
     ATemplate.SetLocalType(AScope.GetLocal(LocalIdx).Slot, AnnotationType);
@@ -1068,7 +1094,8 @@ begin
     if AExpr.Parameters[I].IsPattern and Assigned(AExpr.Parameters[I].Pattern) then
       CollectDestructuringBindings(AExpr.Parameters[I].Pattern, ChildScope);
 
-  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters);
+  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters,
+    ACtx.StrictTypes);
 
   if FormalCount < 0 then
     FormalCount := Length(AExpr.Parameters);
@@ -1991,6 +2018,7 @@ begin
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AExpr.IsAsync;
   ChildTemplate.IsGenerator := AExpr.IsGenerator;
+  ChildTemplate.HasOwnPrototype := AExpr.HasOwnPrototype;
   ChildTemplate.SourceText := AExpr.SourceText;
   if HasNameBinding then
     ChildTemplate.Name := AExpr.Name;
@@ -2019,7 +2047,8 @@ begin
     if AExpr.Parameters[I].IsPattern and Assigned(AExpr.Parameters[I].Pattern) then
       CollectDestructuringBindings(AExpr.Parameters[I].Pattern, ChildScope);
 
-  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters);
+  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters,
+    ACtx.StrictTypes);
 
   if FormalCount < 0 then
     FormalCount := Length(AExpr.Parameters);

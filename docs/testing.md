@@ -548,7 +548,7 @@ build → test
       → cli
 ```
 
-The benchmark comparison comment includes a **Suite Timing** section showing test execution and benchmark duration for both modes. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the comparison format.
+The PR workflow also posts a **Suite Timing** comment with expandable test-runner and benchmark summaries. Each summary shows timing, top-level GocciaScript GC metrics, and selected FreePascal heap allocation metrics for interpreted and bytecode modes. GC memory rows aggregate the main thread plus all worker thread-local GCs. The test runner does not count worker shutdown reclamation as GC collections, while the benchmark runner explicitly collects between benchmark files, so collection counts are expected to differ. The comment hides negative FreePascal heap free-space deltas because they are valid allocator diagnostics but are noisy in a PR summary. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the benchmark comparison format.
 
 The **test262 conformance comment** posts a non-blocking summary using the [`actions/github-script@v7`](https://github.com/actions/github-script) pattern, marker `<!-- test262-results -->`. It reports four headline metrics:
 

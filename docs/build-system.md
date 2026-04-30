@@ -198,7 +198,9 @@ Relative paths are resolved against the current working directory. A missing fil
 ```json
 {
   "mode": "bytecode",
+  "source-type": "module",
   "asi": true,
+  "strict-types": true,
   "timeout": 5000,
   "max-memory": 10485760,
   "stack-size": 3500,

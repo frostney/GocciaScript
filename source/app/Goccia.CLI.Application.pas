@@ -427,6 +427,52 @@ begin
     Result := ParseConfigFile(ConfigPath);
 end;
 
+{ Resolve --source-type / config "source-type" into the engine's
+  TGocciaSourceType enum.  Priority: CLI > per-file config > root
+  config > default (script).
+
+  CLI flag and root-config values are validated by TGocciaEnumOption.Apply
+  before they reach this function (invalid values raise TGocciaParseError
+  at parse/apply time).  Per-file config values come in as raw strings via
+  FindConfigEntry, so we validate here: 'module' and 'script' are accepted
+  case-insensitively, anything else emits a stderr warning and falls back
+  to stScript so a typo never silently flips into module mode. }
+function ResolveSourceTypeOption(
+  const AOption: TGocciaEnumOption<CLI.Options.TGocciaSourceType>;
+  const AFileConfig: TConfigEntryArray): Goccia.Engine.TGocciaSourceType;
+var
+  ValueStr, NormalizedValue: string;
+begin
+  if AOption.FromCommandLine then
+  begin
+    if AOption.Matches(CLI.Options.stModule) then
+      Exit(Goccia.Engine.stModule);
+    Exit(Goccia.Engine.stScript);
+  end;
+
+  if FindConfigEntry(AFileConfig, 'source-type', ValueStr) then
+  begin
+    NormalizedValue := LowerCase(Trim(ValueStr));
+    if NormalizedValue = 'module' then
+      Exit(Goccia.Engine.stModule);
+    if NormalizedValue = 'script' then
+      Exit(Goccia.Engine.stScript);
+    WriteLn(StdErr, Format(
+      'Warning: invalid per-file config value for "source-type": %s '
+      + '(valid: script, module). Falling back to script.', [ValueStr]));
+    Exit(Goccia.Engine.stScript);
+  end;
+
+  if AOption.Present then
+  begin
+    if AOption.Matches(CLI.Options.stModule) then
+      Exit(Goccia.Engine.stModule);
+    Exit(Goccia.Engine.stScript);
+  end;
+
+  Result := Goccia.Engine.stScript;
+end;
+
 { Apply per-file config entries to the engine.
   Priority: CLI flag > per-file config > root config > default.
   FromCommandLine distinguishes CLI-set options from root-config-set options
@@ -449,6 +495,10 @@ begin
   AEngine.ASIEnabled := ResolveFlagOption(
     AEngineOptions.ASI, AFileConfig, 'asi');
 
+  { source-type: CLI flag > per-file config > root config > default (script) }
+  AEngine.SourceType := ResolveSourceTypeOption(
+    AEngineOptions.SourceType, AFileConfig);
+
   { compat-var: CLI flag > per-file config > root config > default (false) }
   AEngine.VarEnabled := ResolveFlagOption(
     AEngineOptions.CompatVar, AFileConfig, 'compat-var');
@@ -456,6 +506,10 @@ begin
   { compat-function: CLI flag > per-file config > root config > default (false) }
   AEngine.FunctionEnabled := ResolveFlagOption(
     AEngineOptions.CompatFunction, AFileConfig, 'compat-function');
+
+  { strict-types: CLI flag > per-file config > root config > default (false) }
+  AEngine.StrictTypes := ResolveFlagOption(
+    AEngineOptions.StrictTypes, AFileConfig, 'strict-types');
 
   { unsafe-function-constructor: CLI flag > per-file config > root config > default (false) }
   AEngine.FunctionConstructor.Enabled := ResolveFlagOption(

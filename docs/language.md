@@ -9,7 +9,7 @@
 - **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
 - **Excluded by design** — `==`/`!=`, `eval`, `arguments`, traditional loops, `with`, default imports/exports
 - **Graceful handling** — Parser-recognized excluded syntax (`==`, loops, `with`) parses successfully but executes as a no-op with a warning and suggestion
-- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`)
+- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), runtime type enforcement (`--strict-types`)
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
@@ -39,7 +39,7 @@ const name = "Goccia";
 - `fn.call()`, `fn.apply()`, `fn.bind()` for explicit `this` binding.
 - `fn.length` — Number of formal parameters (before defaults/rest).
 - `fn.name` — Function name (inferred from variable declarations for anonymous functions).
-- Type annotations on parameters and return types (parsed and ignored at runtime — see [Types as Comments](#types-as-comments-stage-1) below).
+- Type annotations on parameters and return types (parsed and ignored by default; enforced when `--strict-types` is set — see [Types as Comments](#types-as-comments-stage-1) below).
 - `async`/`await` — Async functions return Promises; `await` suspends until the Promise settles (see [Async Functions](#async-functions) below).
 
 ```javascript
@@ -473,7 +473,9 @@ Decorator metadata works as described in [Decorators](#decorators-stage-3) — e
 
 ### Types as Comments (Stage 1)
 
-GocciaScript supports the [TC39 Types as Comments](https://tc39.es/proposal-type-annotations/) proposal. TypeScript-style type annotations are parsed but have **no runtime effect** — they are treated as comments by the evaluator. Raw type strings are preserved on AST nodes for potential future optimization.
+GocciaScript supports the [TC39 Types as Comments](https://tc39.es/proposal-type-annotations/) proposal. TypeScript-style type annotations are parsed without affecting runtime behaviour by default. Raw type strings are preserved on AST nodes for potential future optimization.
+
+**Opt-in runtime enforcement** — pass `--strict-types` (or set `"strict-types": true` in `goccia.json`) to enforce annotations at runtime in both interpreter and bytecode mode. Annotated variables, function parameters, and primitive-literal-inferred types are checked on initial value and on every assignment; incompatible values throw `TypeError`. Union (`string | number`), `any`, and `unknown` annotations remain unenforced. Without the flag, annotations are treated purely as comments.
 
 #### Supported Syntax
 
@@ -679,6 +681,7 @@ When enabled (CLI: `--compat-function`, engine API: `Engine.FunctionEnabled := T
 - **Function expressions** (`const f = function(params) { body }`) produce the same `TGocciaMethodExpression` node. Named function expressions (`const f = function g(params) { body }`) create a read-only self-binding of the name (`g`) visible only inside the function body for recursion, matching ES2026 §15.2.4 semantics.
 - **Async functions** (`async function name(params) { body }`) are supported in both declaration and expression forms.
 - **Generator functions** (`function*`, `async function*`) are supported when this flag is enabled. Generator method shorthand (`*method()`, `async *method()`) does not require the flag.
+- **`prototype` property** — Per ES2026 §10.2.5 MakeConstructor, function declarations and expressions, generator declarations and expressions, and async generator declarations and expressions all carry an own `prototype` data property whose value is a fresh ordinary object. Plain async functions, arrow functions, concise object/class methods, and getter/setter functions do not. The `prototype` descriptor is `{ writable: true, enumerable: false, configurable: false }` for ordinary functions and `{ writable: false, enumerable: false, configurable: false }` for generators and async generators (§15.5 / §15.6). For ordinary functions only, the prototype object additionally carries an own `constructor` data property — `{ writable: true, enumerable: false, configurable: true }` — back-referencing the function. Generator and async-generator prototypes do **not** receive an own `constructor`: per §27.5.1.1 / §27.7.1.1, `g.prototype.constructor` is meant to be inherited from `%GeneratorFunction.prototype.prototype%` (resolving to `%GeneratorFunction.prototype%`), not the specific generator function — so an own back-reference would be incorrect. GocciaScript does not yet expose `%Generator.prototype%` as a shared object, so reading `g.prototype.constructor` on a generator currently resolves through `Object.prototype` rather than the generator-specific intrinsic, but the absence of the own back-reference is preserved.
 
 ### Loose Equality (`==` and `!=`)
 

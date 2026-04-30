@@ -6,23 +6,26 @@ interface
 
 const
   // Bytecode format version.  Bumped whenever an opcode's operand
-  // encoding changes in a way that makes pre-bump .gbc files unsafe to
-  // execute under the new VM.
+  // encoding or runtime semantics change in a way that makes pre-bump
+  // .gbc files unsafe to execute under the new VM.  The binary loader
+  // rejects mismatched versions outright, so a producer/consumer
+  // version disagreement fails fast at load time rather than silently
+  // misinterpreting bytes.
   //
-  //   v18 -> v19: OP_VALIDATE_VALUE / VALIDATE_OP_REQUIRE_ITERABLE
-  //               operand C semantics changed.  Pre-v19, C = 0 meant
-  //               "unbounded".  v19 introduces ITERABLE_LIMIT_UNBOUNDED
-  //               (255) as the unbounded sentinel and treats C = 0 as
-  //               "consume exactly zero elements then close" (`const []
-  //               = iter`).  Loading a pre-v19 file in a v19 VM would
-  //               silently change `const [a, b] = iter` (encoded as
-  //               C = 0 in v18 because Count was 2 — wait that is
-  //               wrong).  More precisely, pre-v19 emitted C = 0 only
-  //               for unbounded cases (rest pattern or Count > 255);
-  //               loading those .gbc files in v19 would short-circuit-
-  //               close the iterator instead.  The loader rejects the
-  //               version mismatch outright.
-  GOCCIA_FORMAT_VERSION = 19;
+  //   v18 -> v19: main branch (#475) added own `prototype` to
+  //               --compat-function functions and generators, which
+  //               changed the runtime shape produced by OP_CLOSURE.
+  //   v19 -> v20: this branch's IteratorClose work changed
+  //               OP_VALIDATE_VALUE / VALIDATE_OP_REQUIRE_ITERABLE
+  //               operand C semantics.  Pre-v20, C = 0 meant
+  //               "unbounded".  v20 introduces ITERABLE_LIMIT_UNBOUNDED
+  //               (255) as the explicit unbounded sentinel and treats
+  //               C = 0 as "consume exactly zero elements then close"
+  //               (`const [] = iter`).  Loading a pre-v20 file in a
+  //               v20 VM would silently switch unbounded patterns to
+  //               short-circuit close, so the version bump prevents
+  //               that.
+  GOCCIA_FORMAT_VERSION = 20;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;

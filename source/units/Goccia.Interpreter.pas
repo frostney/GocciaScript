@@ -34,11 +34,12 @@ type
     FJSXEnabled: Boolean;
     FVarEnabled: Boolean;
     FFunctionEnabled: Boolean;
+    FStrictTypesEnabled: Boolean;
     FModuleLoader: TGocciaModuleLoader;
     FOwnsModuleLoader: Boolean;
 
-    procedure EvaluateModuleBody(const AProgram: TGocciaProgram;
-      const AContext: TGocciaEvaluationContext);
+    function EvaluateModuleBody(const AProgram: TGocciaProgram;
+      const AContext: TGocciaEvaluationContext): TGocciaValue;
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
     function GetContentProvider: TGocciaModuleContentProvider;
     function GetGlobalModules: TOrderedStringMap<TGocciaModule>;
@@ -47,6 +48,7 @@ type
     procedure SetJSXEnabled(const AValue: Boolean);
     procedure SetVarEnabled(const AValue: Boolean);
     procedure SetFunctionEnabled(const AValue: Boolean);
+    procedure SetStrictTypesEnabled(const AValue: Boolean);
     procedure SetResolver(const AValue: TGocciaModuleResolver);
   public
     function CreateEvaluationContext: TGocciaEvaluationContext;
@@ -60,6 +62,8 @@ type
     property ASIEnabled: Boolean read FASIEnabled write SetASIEnabled;
     property VarEnabled: Boolean read FVarEnabled write SetVarEnabled;
     property FunctionEnabled: Boolean read FFunctionEnabled write SetFunctionEnabled;
+    property StrictTypesEnabled: Boolean read FStrictTypesEnabled
+      write SetStrictTypesEnabled;
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
     property JSXEnabled: Boolean read FJSXEnabled write SetJSXEnabled;
     property ContentProvider: TGocciaModuleContentProvider read GetContentProvider;
@@ -127,6 +131,7 @@ begin
   Result.CurrentFilePath := FFileName;
   Result.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
     and TGocciaCoverageTracker.Instance.Enabled;
+  Result.StrictTypes := FStrictTypesEnabled;
 end;
 
 function TGocciaInterpreter.Execute(const AProgram: TGocciaProgram): TGocciaValue;
@@ -195,6 +200,14 @@ begin
   FModuleLoader.FunctionEnabled := AValue;
 end;
 
+procedure TGocciaInterpreter.SetStrictTypesEnabled(const AValue: Boolean);
+begin
+  FStrictTypesEnabled := AValue;
+  if Assigned(FGlobalScope) then
+    FGlobalScope.StrictTypes := AValue;
+  FModuleLoader.StrictTypesEnabled := AValue;
+end;
+
 procedure TGocciaInterpreter.SetResolver(const AValue: TGocciaModuleResolver);
 begin
   if Assigned(AValue) and (AValue <> FModuleLoader.Resolver) then
@@ -203,17 +216,24 @@ begin
       'Create the interpreter with a configured TGocciaModuleLoader instead.');
 end;
 
-procedure TGocciaInterpreter.EvaluateModuleBody(
-  const AProgram: TGocciaProgram; const AContext: TGocciaEvaluationContext);
+function TGocciaInterpreter.EvaluateModuleBody(
+  const AProgram: TGocciaProgram;
+  const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   I: Integer;
+  CF: TGocciaControlFlow;
 begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if FVarEnabled then
     HoistVarDeclarations(AProgram.Body, AContext.Scope);
   if FFunctionEnabled then
     HoistFunctionDeclarations(AProgram.Body, AContext);
   for I := 0 to AProgram.Body.Count - 1 do
-    EvaluateStatement(AProgram.Body[I], AContext);
+  begin
+    CF := EvaluateStatement(AProgram.Body[I], AContext);
+    Result := CF.Value;
+    if CF.Kind = cfkReturn then Exit;
+  end;
 end;
 
 procedure TGocciaInterpreter.ThrowError(const AMessage: string; const ALine, AColumn: Integer);
