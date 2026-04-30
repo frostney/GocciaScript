@@ -3849,10 +3849,13 @@ end;
 
 // IteratorClose for the raw-object form returned by GetIteratorValue
 // when the source supplies its own iterator (i.e. an object with next()
-// rather than a TGocciaIteratorValue).  Calls iter.return() if present
-// and swallows errors so the caller's normal completion wins.  See
-// ES2024 §7.4.10 IteratorClose.
-procedure CloseRawIteratorPreservingError(const AIteratorObject: TGocciaValue);
+// rather than a TGocciaIteratorValue).  This is the normal-completion
+// variant per ES2024 §7.4.10 step 5: errors from iter.return()
+// propagate to the caller as the new completion.  Use this on success
+// paths only.  Missing/undefined/null/non-callable return methods are
+// silently ignored per §7.4.10 step 3.b ("if return is undefined,
+// return the completion as-is").
+procedure CloseRawIterator(const AIteratorObject: TGocciaValue);
 var
   ReturnMethod: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
@@ -3861,27 +3864,22 @@ begin
     Exit;
   if AIteratorObject is TGocciaIteratorValue then
   begin
-    CloseIteratorPreservingError(TGocciaIteratorValue(AIteratorObject));
+    CloseIterator(TGocciaIteratorValue(AIteratorObject));
     Exit;
   end;
   if not (AIteratorObject is TGocciaObjectValue) then
     Exit;
+  ReturnMethod := AIteratorObject.GetProperty(PROP_RETURN);
+  if not Assigned(ReturnMethod) or
+     (ReturnMethod is TGocciaUndefinedLiteralValue) or
+     (ReturnMethod is TGocciaNullLiteralValue) or
+     not ReturnMethod.IsCallable then
+    Exit;
+  CallArgs := TGocciaArgumentsCollection.Create;
   try
-    ReturnMethod := AIteratorObject.GetProperty(PROP_RETURN);
-    if not Assigned(ReturnMethod) or
-       (ReturnMethod is TGocciaUndefinedLiteralValue) or
-       (ReturnMethod is TGocciaNullLiteralValue) or
-       not ReturnMethod.IsCallable then
-      Exit;
-    CallArgs := TGocciaArgumentsCollection.Create;
-    try
-      TGocciaFunctionBase(ReturnMethod).Call(CallArgs, AIteratorObject);
-    finally
-      CallArgs.Free;
-    end;
-  except
-    // Swallow: the original normal completion must not be lost to a
-    // failure in iter.return().
+    TGocciaFunctionBase(ReturnMethod).Call(CallArgs, AIteratorObject);
+  finally
+    CallArgs.Free;
   end;
 end;
 
@@ -3917,8 +3915,12 @@ begin
         Result.Elements.Add(NextResult);
       if (ALimit > 0) and (Result.Elements.Count >= ALimit) then
       begin
+        // ES2024 §7.4.10 step 5: normal-completion IteratorClose lets
+        // errors from iter.return() propagate.  Use CloseIterator (not
+        // PreservingError) so test262 tests like Iterator.from →
+        // Iterator.prototype.return-throws are reported correctly.
         if not DoneFlag then
-          CloseIteratorPreservingError(TGocciaIteratorValue(IteratorValue));
+          CloseIterator(TGocciaIteratorValue(IteratorValue));
         Exit;
       end;
     until DoneFlag;
@@ -3951,13 +3953,10 @@ begin
         Result.Elements.Add(NextResult.GetProperty(PROP_VALUE));
       if (ALimit > 0) and (Result.Elements.Count >= ALimit) then
       begin
-        // ES2024 §7.4.10 IteratorClose: when stopping a user-defined
-        // iterator early, invoke its return() method (if any).  Errors
-        // from return() are swallowed so the caller's normal completion
-        // wins; abrupt completions are handled by the existing
-        // throw/raise paths up the call chain.
+        // ES2024 §7.4.10 step 5 (normal completion): errors from
+        // iter.return() propagate as the new completion.
         if not DoneFlag then
-          CloseRawIteratorPreservingError(IteratorValue);
+          CloseRawIterator(IteratorValue);
         Exit;
       end;
     until DoneFlag;

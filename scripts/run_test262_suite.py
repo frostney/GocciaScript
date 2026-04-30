@@ -70,12 +70,14 @@ def _recover_per_file_records(raw_json: str) -> list[dict] | None:
     Returns the recovered list, or None if nothing usable was found.
     """
     records: list[dict] = []
-    # Each line is either an entry like
-    #     {"file": "...", "passed": 0, ...},
-    # or
-    #     {"file": "...", "passed": 0, ...}
-    # Match a JSON object on a single line that starts with {"file":.
-    line_re = re.compile(r'^\s*(\{"file":\s*".*?\})(,?)\s*$')
+    # Each line is a per-file record like:
+    #     {"fileName": "...", "passed": 0, ...},
+    # The runner historically used "file" as the key; PR #474 (compact-json
+    # output) renamed it to "fileName".  Match both so this fallback works
+    # regardless of which runner version produced the corrupted JSON.
+    line_re = re.compile(
+        r'^\s*(\{"(?:file|fileName)":\s*".*?\})(,?)\s*$'
+    )
     for line in raw_json.splitlines():
         m = line_re.match(line)
         if not m:
@@ -84,7 +86,7 @@ def _recover_per_file_records(raw_json: str) -> list[dict] | None:
             obj = json.loads(m.group(1))
         except json.JSONDecodeError:
             continue
-        if isinstance(obj, dict) and "file" in obj:
+        if isinstance(obj, dict) and ("file" in obj or "fileName" in obj):
             records.append(obj)
     return records or None
 
@@ -781,9 +783,14 @@ def evaluate_suite(
                         break
 
                     # Ground truth: per-file records emitted by the runner.
+                    # PR #474 renamed "file" to "fileName" in TestRunner's
+                    # JSON output; tolerate both so we don't silently drop
+                    # records produced by older runners or recovered via
+                    # _recover_per_file_records (whose regex still matches
+                    # the legacy "file" form).
                     file_results_by_safe: dict[str, dict] = {}
                     for fr in tr_results.get("results", []):
-                        fpath = fr.get("fileName", "")
+                        fpath = fr.get("fileName") or fr.get("file") or ""
                         key = Path(fpath).name if fpath else ""
                         if key:
                             file_results_by_safe[key] = fr

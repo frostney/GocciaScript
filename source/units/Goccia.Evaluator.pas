@@ -4774,19 +4774,23 @@ begin
         // completion during destructuring must still close the iterator
         // before propagating.  CloseIteratorPreservingError swallows any
         // error from iter.return() so the original abrupt completion
-        // wins.
+        // wins (IteratorClose §7.4.10 step 4: completion's [[Type]] is
+        // throw, return ? completion).
         CloseIteratorPreservingError(Iterator);
         raise;
       end;
-      // ES2024 §8.5.3 step 4: when iteratorRecord.[[Done]] is false,
-      // close the iterator after consuming the binding elements.  The
-      // rest-pattern branch already drained to done; Close on a
-      // done iterator is a no-op for TGocciaGenericIteratorValue.
-      // Without this call, destructuring an iterator that returns
-      // done:false indefinitely would never invoke iter.return(), and
-      // the bytecode VM's pre-conversion step (IterableToArray) would
-      // allocate unboundedly.
-      CloseIteratorPreservingError(Iterator);
+      // ES2024 §8.5.3 step 4 (normal completion): close the iterator
+      // after consuming the binding elements.  The rest-pattern branch
+      // already drained to done; Close on a done iterator is a no-op
+      // for TGocciaGenericIteratorValue.  CloseIterator (not
+      // PreservingError) is the §7.4.10 step 5 path: a normal
+      // destructuring completion lets iter.return() exceptions
+      // propagate to the caller as the new completion.  Without this
+      // call, destructuring an iterator that returns done:false
+      // indefinitely would never invoke iter.return(), and the bytecode
+      // VM's pre-conversion step (IterableToArray) would allocate
+      // unboundedly.
+      CloseIterator(Iterator);
     finally
       TGarbageCollector.Instance.RemoveTempRoot(Iterator);
     end;
