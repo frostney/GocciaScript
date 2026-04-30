@@ -30,6 +30,7 @@ uses
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
+  Goccia.Scope,
   Goccia.ScriptLoader.Input,
   Goccia.SourceMap,
   Goccia.Builtins.TestingLibrary,
@@ -134,6 +135,10 @@ type
     function IsCompactJsonOutput: Boolean;
     function RunGocciaScriptInterpreted(const AFileName: string;
       APreloadedSource: TStringList = nil): TTestFileResult;
+    function RunBytecodeTestModule(const AEngine: TGocciaEngine;
+      const AExecutor: TGocciaBytecodeExecutor;
+      const AModule: TGocciaBytecodeModule;
+      const AFileName: string): TGocciaValue;
     function RunGocciaScriptBytecode(const AFileName: string;
       APreloadedSource: TStringList = nil): TTestFileResult;
     function RunGocciaScript(const AFileName: string;
@@ -462,6 +467,26 @@ begin
   end;
 end;
 
+function TTestRunnerApp.RunBytecodeTestModule(const AEngine: TGocciaEngine;
+  const AExecutor: TGocciaBytecodeExecutor;
+  const AModule: TGocciaBytecodeModule;
+  const AFileName: string): TGocciaValue;
+var
+  ModuleScope: TGocciaScope;
+begin
+  if AEngine.SourceType = stModule then
+  begin
+    { Run with module semantics: fresh module scope, this = undefined.
+      Mirrors TGocciaModuleLoader.LoadModule for nested module loads. }
+    ModuleScope := AEngine.Interpreter.GlobalScope.CreateChild(skModule,
+      'Module:' + AFileName);
+    ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := AExecutor.RunModuleInScope(AModule, ModuleScope);
+  end
+  else
+    Result := AExecutor.RunModule(AModule);
+end;
+
 function TTestRunnerApp.RunGocciaScriptBytecode(const AFileName: string;
   APreloadedSource: TStringList): TTestFileResult;
 var
@@ -580,7 +605,8 @@ begin
             StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
             try
               try
-                ResultValue := TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
+                ResultValue := RunBytecodeTestModule(Engine,
+                  TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
               finally
                 ClearExecutionTimeout;
                 ClearInstructionLimit;

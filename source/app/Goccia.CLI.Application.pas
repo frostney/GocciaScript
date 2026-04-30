@@ -424,6 +424,39 @@ begin
     Result := ParseConfigFile(ConfigPath);
 end;
 
+{ Resolve --source-type / config "source-type" into the engine's
+  TGocciaSourceType enum.  Priority: CLI > per-file config > root
+  config > default (script). }
+function ResolveSourceTypeOption(
+  const AOption: TGocciaEnumOption<CLI.Options.TGocciaSourceType>;
+  const AFileConfig: TConfigEntryArray): Goccia.Engine.TGocciaSourceType;
+var
+  ValueStr: string;
+begin
+  if AOption.FromCommandLine then
+  begin
+    if AOption.Matches(CLI.Options.stModule) then
+      Exit(Goccia.Engine.stModule);
+    Exit(Goccia.Engine.stScript);
+  end;
+
+  if FindConfigEntry(AFileConfig, 'source-type', ValueStr) then
+  begin
+    if LowerCase(ValueStr) = 'module' then
+      Exit(Goccia.Engine.stModule);
+    Exit(Goccia.Engine.stScript);
+  end;
+
+  if AOption.Present then
+  begin
+    if AOption.Matches(CLI.Options.stModule) then
+      Exit(Goccia.Engine.stModule);
+    Exit(Goccia.Engine.stScript);
+  end;
+
+  Result := Goccia.Engine.stScript;
+end;
+
 { Apply per-file config entries to the engine.
   Priority: CLI flag > per-file config > root config > default.
   FromCommandLine distinguishes CLI-set options from root-config-set options
@@ -445,6 +478,10 @@ begin
   { ASI: CLI flag > per-file config > root config > default (false) }
   AEngine.ASIEnabled := ResolveFlagOption(
     AEngineOptions.ASI, AFileConfig, 'asi');
+
+  { source-type: CLI flag > per-file config > root config > default (script) }
+  AEngine.SourceType := ResolveSourceTypeOption(
+    AEngineOptions.SourceType, AFileConfig);
 
   { compat-var: CLI flag > per-file config > root config > default (false) }
   AEngine.VarEnabled := ResolveFlagOption(
