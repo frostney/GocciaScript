@@ -2072,7 +2072,13 @@ a.info-term {
   line-height: 1.65;
   color: var(--ink);
   overflow: auto;
-  white-space: pre-wrap;
+  /* `pre` (not `pre-wrap`) so long output lines don't wrap — they
+     stay on one line and the panel scrolls horizontally instead.
+     Mirrors how a real terminal renders output and prevents the
+     "cut-off without a scrollbar" confusion when a line happens to
+     contain a long unbreakable token (a stringified blob, a path,
+     an error message). `overflow: auto` above surfaces the bar. */
+  white-space: pre;
   background: var(--console-bg);
   box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.06);
 }
@@ -2147,7 +2153,10 @@ a.info-term {
   color: var(--forest-light);
 }
 .anim-output-text {
-  white-space: pre-wrap;
+  /* Match the parent `.console-panel`: don't wrap, so long output
+     lines extend past the panel width and trigger the panel's
+     horizontal scrollbar instead of wrapping silently. */
+  white-space: pre;
 }
 .anim-output-caret {
   display: inline-block;
