@@ -836,10 +836,25 @@ begin
         HasRest := True;
         Break;
       end;
-    if HasRest or (ArrPat.Elements.Count >= ITERABLE_LIMIT_UNBOUNDED) then
+    // Only HasRest collapses to the unbounded sentinel.  A fixed-size
+    // pattern with >= 255 elements would otherwise silently change
+    // semantics from "consume exactly N then close" to "drain the whole
+    // iterator", because the operand-C encoding can't represent N.
+    // Refuse to compile rather than miscompile — patterns this large are
+    // pathological in practice (no real codebase array-destructures 255
+    // bindings at once), and a clear compile-time error is better than
+    // a silent infinite-iteration trap.
+    if HasRest then
       Limit := ITERABLE_LIMIT_UNBOUNDED
     else
+    begin
+      if ArrPat.Elements.Count >= ITERABLE_LIMIT_UNBOUNDED then
+        raise Exception.CreateFmt(
+          'Array destructuring pattern is too large to encode exactly '
+          + '(%d elements; max %d without a rest element)',
+          [ArrPat.Elements.Count, ITERABLE_LIMIT_UNBOUNDED - 1]);
       Limit := ArrPat.Elements.Count;
+    end;
 
     EmitInstruction(ACtx, EncodeABC(OP_VALIDATE_VALUE, ASrcReg,
       VALIDATE_OP_REQUIRE_ITERABLE, UInt8(Limit)));

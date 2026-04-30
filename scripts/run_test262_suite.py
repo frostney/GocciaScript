@@ -613,8 +613,11 @@ def evaluate_suite(
                         # `foo__bar` to the same name, which silently overwrites
                         # one wrapper with another and then misattributes the
                         # runner's per-file record to the wrong source test.
+                        # SHA-256 (vs SHA-1) avoids any theoretical collision
+                        # concern even at suite sizes of millions of test_ids;
+                        # the longer hex string is harmless as a filename.
                         safe_name = (
-                            hashlib.sha1(tid.encode("utf-8")).hexdigest() + ".js"
+                            hashlib.sha256(tid.encode("utf-8")).hexdigest() + ".js"
                         )
                         (temp_dir / safe_name).write_text(
                             wrapped, encoding="utf-8"
@@ -873,8 +876,11 @@ def evaluate_suite(
                     next_pending: list[str] = []
                     attempt_stalls = 0
                     for tid in pending_ids:
+                        # Must mirror the SHA-256 computed when wrappers
+                        # were written above so we can match runner per-
+                        # file records back to the originating test_id.
                         safe = (
-                            hashlib.sha1(tid.encode("utf-8")).hexdigest() + ".js"
+                            hashlib.sha256(tid.encode("utf-8")).hexdigest() + ".js"
                         )
                         fr = file_results_by_safe.get(safe)
                         if fr is None:

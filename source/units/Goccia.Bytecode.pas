@@ -5,7 +5,24 @@ unit Goccia.Bytecode;
 interface
 
 const
-  GOCCIA_FORMAT_VERSION = 18;
+  // Bytecode format version.  Bumped whenever an opcode's operand
+  // encoding changes in a way that makes pre-bump .gbc files unsafe to
+  // execute under the new VM.
+  //
+  //   v18 -> v19: OP_VALIDATE_VALUE / VALIDATE_OP_REQUIRE_ITERABLE
+  //               operand C semantics changed.  Pre-v19, C = 0 meant
+  //               "unbounded".  v19 introduces ITERABLE_LIMIT_UNBOUNDED
+  //               (255) as the unbounded sentinel and treats C = 0 as
+  //               "consume exactly zero elements then close" (`const []
+  //               = iter`).  Loading a pre-v19 file in a v19 VM would
+  //               silently change `const [a, b] = iter` (encoded as
+  //               C = 0 in v18 because Count was 2 — wait that is
+  //               wrong).  More precisely, pre-v19 emitted C = 0 only
+  //               for unbounded cases (rest pattern or Count > 255);
+  //               loading those .gbc files in v19 would short-circuit-
+  //               close the iterator instead.  The loader rejects the
+  //               version mismatch outright.
+  GOCCIA_FORMAT_VERSION = 19;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
