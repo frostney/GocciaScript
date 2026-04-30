@@ -125,6 +125,10 @@ Key behavior on worker threads:
 - **No pre-allocation.** `MaxBytes` is a threshold, not a reservation. Memory is allocated on demand by the FPC heap manager; the GC only checks whether the running total exceeds the ceiling.
 - **Each worker gets the same ceiling as the main thread.** The limit is per-thread, not divided across workers. With N workers, the theoretical maximum total allocation is `N × MaxBytes`, though in practice worker allocations are far below the ceiling.
 
+CLI JSON reports aggregate worker GC memory once per worker thread. Live and peak values are summed across worker thread-local GC instances, while the limit is the per-worker ceiling. The report deliberately avoids summing per-file live snapshots, because a worker may process many files using the same GC instance.
+
+The separate `memory.heap` JSON object comes from FreePascal's `GetHeapStatus`, not from the GocciaScript GC. It describes allocator state for the process/thread scope being measured. Free-space deltas can be negative when the allocator has less reusable free space at the end of a run; this is not itself evidence of a GocciaScript GC leak.
+
 ## JavaScript API
 
 `Goccia.gc()` triggers a full mark-and-sweep collection, bypassing the automatic collection threshold. On worker threads the call is a no-op because shared immutable objects (singletons, prototypes) have a single `FGCMark` field that is not thread-safe for concurrent marking. It is safe to call repeatedly and returns `undefined`.

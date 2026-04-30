@@ -543,7 +543,7 @@ build → test
       → examples
 ```
 
-The PR workflow also posts a **Suite Timing** comment with expandable test-runner and benchmark summaries. Each summary shows timing and top-level memory/heap metrics for interpreted and bytecode modes. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the benchmark comparison format.
+The PR workflow also posts a **Suite Timing** comment with expandable test-runner and benchmark summaries. Each summary shows timing, top-level GocciaScript GC metrics, and selected FreePascal heap allocation metrics for interpreted and bytecode modes. The comment intentionally omits FreePascal heap free-space counters because negative free-space deltas are valid allocator diagnostics but are noisy in a PR summary. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the benchmark comparison format.
 
 ## Coverage
 

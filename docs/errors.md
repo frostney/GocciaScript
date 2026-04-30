@@ -288,6 +288,13 @@ err.message;    // "An error was suppressed"
 
 When running with `--output=json`, GocciaScript wraps every execution result in a structured JSON envelope. This is useful for programmatic consumers and embedding scenarios.
 
+The `memory` block has two different scopes:
+
+- `memory.gc` reports the GocciaScript GC's approximate managed-object accounting. It tracks `TGCManagedObject.InstanceSize`, not all memory held by strings, dynamic arrays, or the FreePascal runtime. `allocatedDuringRunBytes` is cumulative allocation churn during the measured run, so it can be much larger than `liveBytes`.
+- `memory.heap` reports coarse FreePascal process heap-manager counters from `GetHeapStatus`. These are allocator diagnostics, not JavaScript heap size. `deltaFreeBytes` may be negative when the process heap has less reusable free space at the end of the run.
+
+For parallel runs, the top-level `memory.gc` block combines one measurement per worker thread plus the main thread. It does not sum per-file live snapshots, because each worker can process many files with the same thread-local GC. Per-file `files[].memory` is only populated by hosts that can measure a file independently.
+
 ### Success
 
 ```json
@@ -435,6 +442,7 @@ When running with `--output=json`, GocciaScript wraps every execution result in 
 | `memory.gc.allocatedDuringRunBytes` | `number` | Total GC-managed bytes allocated during the measured run, including allocations later collected |
 | `memory.gc.peakLiveBytes` | `number` | Highest live GC-managed byte count observed during the measurement |
 | `memory.gc.limitBytes` | `number` | Active GC byte ceiling from `--max-memory` or the auto-detected default |
+| `memory.heap.deltaAllocatedBytes` | `number` | Change in FreePascal heap-manager allocated bytes for the measured process/thread scope |
 | `memory.heap.deltaFreeBytes` | `number` | Change in FreePascal memory-manager free space. Negative values are valid and mean the process heap had less reusable free space at the end |
 | `workers` | `object` | Worker logistics: used worker count, available worker count, and whether the run was parallel |
 | `files` | `object[]` | Per-input results. Single-file runs use the same structure with one element |
