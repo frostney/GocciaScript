@@ -140,7 +140,9 @@ begin
       NextMethod := IteratorObject.GetProperty(PROP_NEXT);
       if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue)
          and NextMethod.IsCallable then
-        Exit(TGocciaGenericIteratorValue.Create(IteratorObject));
+        // Pass the validated NextMethod through (capture-once per
+        // ES2024 §7.4.2 GetIteratorDirect).
+        Exit(TGocciaGenericIteratorValue.Create(IteratorObject, NextMethod));
     end;
 
     ThrowTypeError('[Symbol.iterator] did not return a valid iterator');

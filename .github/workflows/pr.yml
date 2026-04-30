@@ -239,6 +239,68 @@ jobs:
       - name: Check app-specific CLI features
         run: bun run scripts/test-cli-apps.ts
 
+  test262:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download build
+        uses: actions/download-artifact@v7
+        with:
+          name: build-pr
+          path: build/
+
+      - name: Make binaries executable
+        run: chmod +x build/*
+
+      - name: Checkout test262 suite
+        uses: actions/checkout@v5
+        with:
+          repository: tc39/test262
+          # Pin to an immutable SHA so the cached `main` baseline and a PR
+          # run measure the same upstream test corpus.  `ref: main` would
+          # let new tests land mid-PR and surface as spurious deltas
+          # against the cached baseline.  Bump in lockstep with ci.yml
+          # when refreshing the suite.
+          ref: d0c1b4555b03dd404873fd6422a4b5da00136500
+          path: test262-suite
+          fetch-depth: 1
+
+      - name: Run test262 conformance suite
+        continue-on-error: true
+        # python3 -u: unbuffered, so progress prints reach the live CI log
+        # in real time even if the job is later killed by SIGTERM.
+        # --jobs=2 (not 4) deliberately: GH-hosted runners share the host
+        # CPU with neighbour VMs, and at --jobs=4 the runner's per-worker
+        # idle watchdog routinely fires false positives — orphaning a
+        # whole worker's queue and surfacing as ~330 spurious "Worker
+        # produced no result" entries (see analysis on this PR for the
+        # macOS-arm64 vs Linux-x86_64 gap that drove this change).  Two
+        # workers leaves enough CPU headroom that scheduler jitter
+        # doesn't trip the watchdog, while still halving wall time vs
+        # sequential execution.
+        run: |
+          python3 -u scripts/run_test262_suite.py \
+            --suite-dir test262-suite \
+            --mode=bytecode \
+            --jobs=2 \
+            --output=test262-results.json
+
+      - name: Upload test262 results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test262-results
+          retention-days: 7
+          path: test262-results.json
+
   benchmark-comment:
     needs: benchmark
     runs-on: ubuntu-latest
@@ -693,6 +755,208 @@ jobs:
             body += '<sub>Measured on ubuntu-latest x64.</sub>';
 
             const marker = '<!-- suite-timing -->';
+            body = marker + '\n' + body;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+  test262-comment:
+    needs: test262
+    if: always()
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Download test262 results
+        uses: actions/download-artifact@v7
+        continue-on-error: true
+        with:
+          name: test262-results
+
+      - name: Restore test262 baseline
+        uses: actions/cache/restore@v5
+        with:
+          path: test262-baseline.json
+          key: test262-baseline-will-not-match
+          restore-keys: test262-baseline-
+
+      - name: Check baseline
+        run: |
+          if [ -f test262-baseline.json ]; then
+            echo "TEST262_BASELINE_EXISTS=true" >> "$GITHUB_ENV"
+          else
+            echo "TEST262_BASELINE_EXISTS=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Post test262 comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            const fmt = (n) => Number(n).toLocaleString('en-US');
+            const pct = (n, d) => (!d || d === 0) ? '0.0%' : ((n / d) * 100).toFixed(1) + '%';
+            const signed = (n) => n > 0 ? '+' + fmt(n) : n < 0 ? fmt(n) : '±0';
+            // Δ in percentage points. Within ±0.05pp the deltas are at or
+            // below measurement granularity (a single test in a several-
+            // thousand sample); collapse them to ±0pp to keep the table calm.
+            // Inclusive cutoff so an exact ±0.05pp also collapses instead of
+            // rendering as ±0.1pp via toFixed(1).
+            const signedPp = (rateNew, rateOld) => {
+              if (rateOld == null) return '🆕';
+              const dp = (rateNew - rateOld) * 100;
+              if (Math.abs(dp) <= 0.05) return '±0pp';
+              return (dp > 0 ? '+' : '') + dp.toFixed(1) + 'pp';
+            };
+
+            const marker = '<!-- test262-results -->';
+            let body = '## test262 Conformance\n\n';
+
+            let data = null;
+            try {
+              data = JSON.parse(fs.readFileSync('test262-results.json', 'utf8'));
+            } catch (e) {
+              console.log('Failed to read test262 results:', e.message);
+            }
+
+            let baseline = null;
+            if (process.env.TEST262_BASELINE_EXISTS === 'true') {
+              try {
+                baseline = JSON.parse(fs.readFileSync('test262-baseline.json', 'utf8'));
+              } catch (e) {
+                console.log('Failed to parse test262 baseline:', e.message);
+              }
+            }
+            const hasBaseline = !!(baseline && baseline.summary);
+
+            // Bucket helper — keyed by the first two path components of `id`,
+            // e.g. "built-ins/Array", "language/expressions". This is the
+            // natural test262 directory grain — top-level alone (built-ins
+            // vs language) is too coarse to be useful, three-level
+            // fragments per-feature directories too finely.
+            const bucketAreas = (results) => {
+              const areas = new Map();
+              for (const r of results || []) {
+                const id = r.id || '';
+                const parts = id.split('/');
+                if (parts.length < 2) continue;
+                const key = parts.slice(0, 2).join('/');
+                let bucket = areas.get(key);
+                if (!bucket) {
+                  bucket = { key, attempted: 0, passed: 0 };
+                  areas.set(key, bucket);
+                }
+                bucket.attempted++;
+                if (r.status === 'PASS') bucket.passed++;
+              }
+              return areas;
+            };
+
+            if (!data || !data.summary) {
+              body += '_test262 results were not produced for this run._\n\n';
+              body += '<sub>Non-blocking. The conformance job either timed out, crashed, or did not upload an artifact. See the workflow run for details.</sub>\n';
+            } else {
+              const s = data.summary;
+              const results = data.results || [];
+              const total = s.total_discovered || 0;
+              const eligible = s.total_eligible || 0;
+              const passed = s.passed || 0;
+
+              if (hasBaseline) {
+                const bs = baseline.summary;
+                const dTotal = total - (bs.total_discovered || 0);
+                const dEligible = eligible - (bs.total_eligible || 0);
+                const dPassed = passed - (bs.passed || 0);
+                const eRateNew = eligible ? passed / eligible : 0;
+                const eRateOld = bs.total_eligible
+                  ? (bs.passed || 0) / bs.total_eligible : 0;
+                const tRateNew = total ? passed / total : 0;
+                const tRateOld = bs.total_discovered
+                  ? (bs.passed || 0) / bs.total_discovered : 0;
+
+                body += '| Metric | Value | Δ vs main |\n';
+                body += '|--------|-------|-----------|\n';
+                body += `| Total tests | ${fmt(total)} | ${signed(dTotal)} |\n`;
+                body += `| Eligible tests | ${fmt(eligible)} (${pct(eligible, total)}) | ${signed(dEligible)} |\n`;
+                body += `| Eligible tests passing | ${fmt(passed)} (${pct(passed, eligible)}) | ${signed(dPassed)} (${signedPp(eRateNew, eRateOld)}) |\n`;
+                body += `| Total tests passing | ${fmt(passed)} (${pct(passed, total)}) | ${signed(dPassed)} (${signedPp(tRateNew, tRateOld)}) |\n`;
+              } else {
+                body += '| Metric | Value |\n';
+                body += '|--------|-------|\n';
+                body += `| Total tests | ${fmt(total)} |\n`;
+                body += `| Eligible tests | ${fmt(eligible)} (${pct(eligible, total)}) |\n`;
+                body += `| Eligible tests passing | ${fmt(passed)} (${pct(passed, eligible)}) |\n`;
+                body += `| Total tests passing | ${fmt(passed)} (${pct(passed, total)}) |\n`;
+              }
+              body += '\n';
+
+              const areas = bucketAreas(results);
+              const baselineAreas = hasBaseline
+                ? bucketAreas(baseline.results)
+                : new Map();
+
+              // Areas closest to 100%, excluding those already at 100%.
+              // Minimum 25 attempted tests so a 1/1 area can't dominate.
+              // Tie-break: larger sample first (more confidence), then alpha.
+              const MIN_SAMPLE = 25;
+              const ranked = Array.from(areas.values())
+                .filter(a => a.attempted >= MIN_SAMPLE && a.passed < a.attempted)
+                .map(a => ({ ...a, rate: a.passed / a.attempted }))
+                .sort((x, y) => y.rate - x.rate
+                  || y.attempted - x.attempted
+                  || x.key.localeCompare(y.key))
+                .slice(0, 3);
+
+              if (ranked.length > 0) {
+                body += '### Areas closest to 100%\n\n';
+                if (hasBaseline) {
+                  body += '| Area | Pass rate | Δ vs main | Passing |\n';
+                  body += '|------|-----------|-----------|---------|\n';
+                  for (const a of ranked) {
+                    const ba = baselineAreas.get(a.key);
+                    const baselineRate = ba && ba.attempted > 0
+                      ? ba.passed / ba.attempted : null;
+                    body += `| \`${a.key}\` | ${pct(a.passed, a.attempted)} | ${signedPp(a.rate, baselineRate)} | ${fmt(a.passed)} / ${fmt(a.attempted)} |\n`;
+                  }
+                } else {
+                  body += '| Area | Pass rate | Passing |\n';
+                  body += '|------|-----------|---------|\n';
+                  for (const a of ranked) {
+                    body += `| \`${a.key}\` | ${pct(a.passed, a.attempted)} | ${fmt(a.passed)} / ${fmt(a.attempted)} |\n`;
+                  }
+                }
+                body += '\n';
+              } else {
+                body += '_No areas yet meet the highlight criteria (≥ 25 attempted tests, below 100%)._\n\n';
+              }
+
+              const baselineNote = hasBaseline
+                ? ' Δ vs main compares against the most recent cached `main` baseline.'
+                : ' No `main` baseline cached yet — Δ columns will appear once a `main` run completes.';
+              body += `<sub>Non-blocking. Measured on ubuntu-latest x64, bytecode mode. Areas grouped by the first two test262 path components; minimum 25 attempted tests, areas already at 100% excluded.${baselineNote}</sub>\n`;
+            }
+
             body = marker + '\n' + body;
 
             const { data: comments } = await github.rest.issues.listComments({

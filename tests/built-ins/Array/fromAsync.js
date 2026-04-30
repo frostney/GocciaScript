@@ -263,4 +263,28 @@ describe("Array.fromAsync", () => {
       return value;
     })).rejects.toThrow(TypeError);
   });
+
+  // Sync-iterable fallback path: when no [Symbol.asyncIterator], the
+  // spec falls back to [Symbol.iterator].  Iterator-protocol
+  // violations on that path must surface as TypeError, not silent
+  // fall-through to the array-like branch — falling through would
+  // mis-handle a malformed iterable as if it were a plain array-like
+  // and produce subtly wrong results.
+  test("rejects when sync [Symbol.iterator] is non-callable", async () => {
+    const bad = { [Symbol.iterator]: 42, length: 0 };
+    await expect(Array.fromAsync(bad)).rejects.toThrow(TypeError);
+  });
+
+  test("rejects when sync [Symbol.iterator]() returns non-object", async () => {
+    const bad = { [Symbol.iterator]: () => 42, length: 0 };
+    await expect(Array.fromAsync(bad)).rejects.toThrow(TypeError);
+  });
+
+  test("rejects when sync iterator's next is non-callable", async () => {
+    const bad = {
+      [Symbol.iterator]: () => ({ next: 42 }),
+      length: 0
+    };
+    await expect(Array.fromAsync(bad)).rejects.toThrow(TypeError);
+  });
 });
