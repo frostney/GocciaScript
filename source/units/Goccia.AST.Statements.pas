@@ -12,6 +12,7 @@ uses
 
   Goccia.AST.Expressions,
   Goccia.AST.Node,
+  Goccia.Bytecode.Chunk,
   Goccia.ControlFlow,
   Goccia.Evaluator.Context,
   Goccia.Values.Primitives;
@@ -484,6 +485,7 @@ uses
   Goccia.Scope,
   Goccia.Scope.BindingMap,
   Goccia.Token,
+  Goccia.Types.Enforcement,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
   Goccia.Values.FunctionValue,
@@ -854,7 +856,8 @@ end;
   var
     I: Integer;
     Value: TGocciaValue;
-    HasRealInit: Boolean;
+    HasRealInit, HasRealStrictInit: Boolean;
+    AnnotationType, TypeHint: TGocciaLocalType;
   begin
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
     // Function declarations are no-ops at runtime — already hoisted with their value
@@ -867,6 +870,32 @@ end;
         TGocciaFunctionValue(Value).Name := Variables[I].Name
       else if Value is TGocciaClassValue then
         TGocciaClassValue(Value).SetInferredName(Variables[I].Name);
+
+      { Strict-types enforcement: when --strict-types is enabled, an
+        explicit type annotation (e.g. `let x: number = ...`) is
+        enforced on the initial value, and an inferred type from a
+        primitive-literal initializer locks the binding's type.  An
+        implicit-undefined initializer (parser-emitted for `let x;`)
+        records the type hint without enforcing on the placeholder
+        value, matching the bytecode compiler's behaviour. }
+      TypeHint := sltUntyped;
+      if AContext.StrictTypes then
+      begin
+        AnnotationType := TypeAnnotationToLocalType(Variables[I].TypeAnnotation);
+        HasRealStrictInit := Assigned(Variables[I].Initializer)
+          and not ((Variables[I].Initializer is TGocciaLiteralExpression)
+            and (TGocciaLiteralExpression(Variables[I].Initializer).Value
+              is TGocciaUndefinedLiteralValue));
+
+        if AnnotationType <> sltUntyped then
+          TypeHint := AnnotationType
+        else if (Variables[I].TypeAnnotation = '') and HasRealStrictInit then
+          TypeHint := InferLocalType(Variables[I].Initializer);
+
+        if (TypeHint <> sltUntyped) and HasRealStrictInit then
+          EnforceStrictType(Value, TypeHint);
+      end;
+
       if IsVar then
       begin
         HasRealInit := not ((Variables[I].Initializer is TGocciaLiteralExpression) and
@@ -877,6 +906,9 @@ end;
         AContext.Scope.DefineFromToken(Variables[I].Name, Value, gttConst)
       else
         AContext.Scope.DefineFromToken(Variables[I].Name, Value, gttLet);
+
+      if TypeHint <> sltUntyped then
+        AContext.Scope.SetOwnBindingTypeHint(Variables[I].Name, TypeHint);
     end;
   end;
 

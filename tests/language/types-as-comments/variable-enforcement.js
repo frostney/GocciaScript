@@ -3,7 +3,7 @@ description: Type annotations on variables enforce type constraints at runtime (
 features: [types-as-comments, strict-type-enforcement]
 ---*/
 
-describe.skipIf(!Goccia.strictTypes)("variable type enforcement", () => {
+describe("variable type enforcement", () => {
 
 test("number annotation rejects string assignment", () => {
   let x: number = 5;

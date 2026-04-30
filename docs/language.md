@@ -9,7 +9,7 @@
 - **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
 - **Excluded by design** — `==`/`!=`, `eval`, `arguments`, traditional loops, `with`, default imports/exports
 - **Graceful handling** — Parser-recognized excluded syntax (`==`, loops, `with`) parses successfully but executes as a no-op with a warning and suggestion
-- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`)
+- **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), runtime type enforcement (`--strict-types`)
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision. For quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
@@ -473,7 +473,9 @@ Decorator metadata works as described in [Decorators](#decorators-stage-3) — e
 
 ### Types as Comments (Stage 1)
 
-GocciaScript supports the [TC39 Types as Comments](https://tc39.es/proposal-type-annotations/) proposal. TypeScript-style type annotations are parsed but have **no runtime effect** — they are treated as comments by the evaluator. Raw type strings are preserved on AST nodes for potential future optimization.
+GocciaScript supports the [TC39 Types as Comments](https://tc39.es/proposal-type-annotations/) proposal. TypeScript-style type annotations are parsed without affecting runtime behaviour by default. Raw type strings are preserved on AST nodes for potential future optimization.
+
+**Opt-in runtime enforcement** — pass `--strict-types` (or set `"strict-types": true` in `goccia.json`) to enforce annotations at runtime in both interpreter and bytecode mode. Annotated variables, function parameters, and primitive-literal-inferred types are checked on initial value and on every assignment; incompatible values throw `TypeError`. Union (`string | number`), `any`, and `unknown` annotations remain unenforced. Without the flag, annotations are treated purely as comments.
 
 #### Supported Syntax
 

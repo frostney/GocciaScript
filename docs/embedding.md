@@ -433,13 +433,13 @@ TGocciaEngine.RunScriptFromFile('tests/my-test.js', [ggTestAssertions]);
 |--------|------|---------|---------|
 | `Preprocessors` | `TGocciaPreprocessors` | `[ppJSX]` | Source transformations before parsing |
 | `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | Parser behavior toggles |
-| `StrictTypes` | `Boolean` | `False` (interpreter), `True` (bytecode) | Type enforcement for annotated variables |
+| `StrictTypes` | `Boolean` | `False` | Runtime enforcement of type annotations (works in both interpreter and bytecode); setter propagates to the active executor and interpreter scope |
 
 ```pascal
 Engine := TGocciaEngine.Create('app.js', Source, []);
 Engine.Preprocessors := [];              // Disable JSX
 Engine.ASIEnabled := True;               // Enable ASI (convenience for cfASI)
-Engine.StrictTypes := True;              // Enable strict type enforcement
+Engine.StrictTypes := True;              // Enforce type annotations in both modes
 ```
 
 ## Injecting Custom Globals

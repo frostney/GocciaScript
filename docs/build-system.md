@@ -173,6 +173,7 @@ The first file found is loaded and applied as the **root config**. When running 
 {
   "mode": "bytecode",
   "asi": true,
+  "strict-types": true,
   "timeout": 5000,
   "max-memory": 10485760,
   "stack-size": 3500,

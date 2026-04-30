@@ -36,7 +36,7 @@ Desktop applications built with FreePascal (Lazarus, command-line tools, game en
 ## What GocciaScript is Not
 
 - **Not a Node.js replacement** — No `require()`, no `node:` built-in modules, no event loop with I/O callbacks
-- **Not aiming for 100% ECMAScript conformance** — Features excluded by design (`==`, `eval`, traditional loops) will not be added. `var` and the `function` keyword are excluded by default but available as opt-in compatibility toggles (`--compat-var`, `--compat-function`). See [Language](language.md) for the full list.
+- **Not aiming for 100% ECMAScript conformance** — Features excluded by design (`==`, `eval`, traditional loops) will not be added. `var` and the `function` keyword are excluded by default but available as opt-in compatibility toggles (`--compat-var`, `--compat-function`). Runtime enforcement of type annotations is also opt-in (`--strict-types`). See [Language](language.md) for the full list.
 - **Not a formally verified sandbox** — The sandbox reduces attack surface but has not been independently audited
 - **Not performance-competitive with V8/SpiderMonkey** — GocciaScript prioritizes correctness, embeddability, and reduced attack surface over raw throughput
 

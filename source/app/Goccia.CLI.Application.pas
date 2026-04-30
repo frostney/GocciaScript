@@ -454,6 +454,10 @@ begin
   AEngine.FunctionEnabled := ResolveFlagOption(
     AEngineOptions.CompatFunction, AFileConfig, 'compat-function');
 
+  { strict-types: CLI flag > per-file config > root config > default (false) }
+  AEngine.StrictTypes := ResolveFlagOption(
+    AEngineOptions.StrictTypes, AFileConfig, 'strict-types');
+
   { unsafe-function-constructor: CLI flag > per-file config > root config > default (false) }
   AEngine.FunctionConstructor.Enabled := ResolveFlagOption(
     AEngineOptions.UnsafeFunctionConstructor, AFileConfig, 'unsafe-function-constructor');

@@ -513,6 +513,7 @@ begin
   Context.LoadModule := FClosure.LoadModule;
   Context.CurrentFilePath := FSourceFilePath;
   Context.CoverageEnabled := False;
+  Context.StrictTypes := FClosure.StrictTypes;
   Context.DisposalTracker := nil;
 
   for I := 0 to Length(FParameters) - 1 do
@@ -587,6 +588,7 @@ begin
   Context.LoadModule := FClosure.LoadModule;
   Context.CurrentFilePath := FSourceFilePath;
   Context.CoverageEnabled := False;
+  Context.StrictTypes := FClosure.StrictTypes;
   Context.DisposalTracker := nil;
 
   for I := 0 to Length(FParameters) - 1 do

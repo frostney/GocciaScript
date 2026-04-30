@@ -22,6 +22,7 @@ type
   private
     FVM: TGocciaVM;
     FGlobalBackedTopLevel: Boolean;
+    FStrictTypes: Boolean;
     FModuleModules: TObjectList<TGocciaBytecodeModule>;
   public
     constructor Create;
@@ -37,7 +38,6 @@ type
     function ExecuteDynamicFunction(
       const AProgram: TGocciaProgram): TGocciaValue; override;
     procedure ClearTransientCaches; override;
-    function DefaultStrictTypes: Boolean; override;
 
     function CompileToModule(
       const AProgram: TGocciaProgram): TGocciaBytecodeModule;
@@ -46,6 +46,7 @@ type
     property VM: TGocciaVM read FVM;
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
       write FGlobalBackedTopLevel;
+    property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
   end;
 
 implementation
@@ -95,6 +96,7 @@ begin
   Compiler := TGocciaCompiler.Create(AContext.CurrentFilePath);
   try
     Compiler.GlobalBackedTopLevel := True;
+    Compiler.StrictTypes := FStrictTypes;
     BytecodeModule := Compiler.Compile(AProgram);
   finally
     Compiler.Free;
@@ -154,6 +156,7 @@ begin
   Compiler := TGocciaCompiler.Create(FSourcePath);
   try
     Compiler.GlobalBackedTopLevel := FGlobalBackedTopLevel;
+    Compiler.StrictTypes := FStrictTypes;
     Result := Compiler.Compile(AProgram);
   finally
     Compiler.Free;
@@ -190,11 +193,6 @@ procedure TGocciaBytecodeExecutor.ClearTransientCaches;
 begin
   // The Goccia VM executes directly on TGocciaValue and does not maintain
   // bridge-side transient caches that need per-measurement clearing.
-end;
-
-function TGocciaBytecodeExecutor.DefaultStrictTypes: Boolean;
-begin
-  Result := True;
 end;
 
 end.

@@ -97,7 +97,7 @@ APIs from WHATWG and W3C specifications — not part of ECMA-262, but widely exp
 | [Joint Iteration](https://github.com/tc39/proposal-joint-iteration) | 3 | Supported — `Iterator.zip` and `Iterator.zipKeyed` |
 | [`Math.clamp`](https://github.com/tc39/proposal-math-clamp) | 2 | Supported |
 | [Pattern Matching](https://tc39.es/proposal-pattern-matching/) | 1 | Supported — `value is Pattern`, `match`, filtered `for...of` / `for await...of`, and pattern catches |
-| [Types as Comments](https://tc39.es/proposal-type-annotations/) | 1 | Supported — TypeScript-style annotations parsed, preserved on AST, enforced in bytecode mode |
+| [Types as Comments](https://tc39.es/proposal-type-annotations/) | 1 | Supported — TypeScript-style annotations parsed, preserved on AST; runtime enforcement opt-in via `--strict-types` (works in both interpreter and bytecode) |
 | [Enum Declarations](https://github.com/tc39/proposal-enum) | 0 | Supported — frozen, null-prototype enum objects with `Symbol.iterator` |
 
 ## Runtime Extensions

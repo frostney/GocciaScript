@@ -34,6 +34,7 @@ type
     FJSXEnabled: Boolean;
     FVarEnabled: Boolean;
     FFunctionEnabled: Boolean;
+    FStrictTypesEnabled: Boolean;
     FModuleLoader: TGocciaModuleLoader;
     FOwnsModuleLoader: Boolean;
 
@@ -47,6 +48,7 @@ type
     procedure SetJSXEnabled(const AValue: Boolean);
     procedure SetVarEnabled(const AValue: Boolean);
     procedure SetFunctionEnabled(const AValue: Boolean);
+    procedure SetStrictTypesEnabled(const AValue: Boolean);
     procedure SetResolver(const AValue: TGocciaModuleResolver);
   public
     function CreateEvaluationContext: TGocciaEvaluationContext;
@@ -60,6 +62,8 @@ type
     property ASIEnabled: Boolean read FASIEnabled write SetASIEnabled;
     property VarEnabled: Boolean read FVarEnabled write SetVarEnabled;
     property FunctionEnabled: Boolean read FFunctionEnabled write SetFunctionEnabled;
+    property StrictTypesEnabled: Boolean read FStrictTypesEnabled
+      write SetStrictTypesEnabled;
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
     property JSXEnabled: Boolean read FJSXEnabled write SetJSXEnabled;
     property ContentProvider: TGocciaModuleContentProvider read GetContentProvider;
@@ -127,6 +131,7 @@ begin
   Result.CurrentFilePath := FFileName;
   Result.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
     and TGocciaCoverageTracker.Instance.Enabled;
+  Result.StrictTypes := FStrictTypesEnabled;
 end;
 
 function TGocciaInterpreter.Execute(const AProgram: TGocciaProgram): TGocciaValue;
@@ -193,6 +198,12 @@ procedure TGocciaInterpreter.SetFunctionEnabled(const AValue: Boolean);
 begin
   FFunctionEnabled := AValue;
   FModuleLoader.FunctionEnabled := AValue;
+end;
+
+procedure TGocciaInterpreter.SetStrictTypesEnabled(const AValue: Boolean);
+begin
+  FStrictTypesEnabled := AValue;
+  FModuleLoader.StrictTypesEnabled := AValue;
 end;
 
 procedure TGocciaInterpreter.SetResolver(const AValue: TGocciaModuleResolver);

@@ -196,9 +196,9 @@ var
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
   SourceMap: TGocciaSourceMap;
   FileConfig: TConfigEntryArray;
-  EffectiveASI, EffectiveVar, EffectiveFunction: Boolean;
+  EffectiveASI, EffectiveVar, EffectiveFunction, EffectiveStrictTypes: Boolean;
 begin
-  { Resolve ASI, compat-var and compat-function:
+  { Resolve ASI, compat-var, compat-function and strict-types:
     CLI flag > per-file config > root config > default (false). }
   FileConfig := DiscoverFileConfig(AFileName);
   EffectiveASI := ResolveFlagOption(EngineOptions.ASI, FileConfig, 'asi');
@@ -206,6 +206,8 @@ begin
     EngineOptions.CompatVar, FileConfig, 'compat-var');
   EffectiveFunction := ResolveFlagOption(
     EngineOptions.CompatFunction, FileConfig, 'compat-function');
+  EffectiveStrictTypes := ResolveFlagOption(
+    EngineOptions.StrictTypes, FileConfig, 'strict-types');
 
   CompiledModule := nil;
   ProgramNode := ParseSource(ASource, AFileName, EffectiveASI, EffectiveVar,
@@ -213,6 +215,7 @@ begin
   try
     Compiler := TGocciaCompiler.Create(AFileName);
     try
+      Compiler.StrictTypes := EffectiveStrictTypes;
       CompiledModule := Compiler.Compile(ProgramNode);
       WriteSourceMapIfEnabled(SourceMap, AFileName);
       Result := CompiledModule;

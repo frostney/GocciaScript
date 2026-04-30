@@ -109,6 +109,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Keywords.Reserved,
   Goccia.Token,
+  Goccia.Types.Enforcement,
   Goccia.Values.BigIntValue,
   Goccia.Values.Primitives;
 
@@ -909,12 +910,19 @@ end;
 procedure ApplyParameterTypeAnnotations(
   const AScope: TGocciaCompilerScope;
   const ATemplate: TGocciaFunctionTemplate;
-  const AParameters: TGocciaParameterArray);
+  const AParameters: TGocciaParameterArray;
+  const AStrictTypes: Boolean);
 var
   I, LocalIdx: Integer;
   AnnotationType: TGocciaLocalType;
   ParamName: string;
 begin
+  { When strict-types enforcement is disabled, parameter annotations
+    are parsed but never bound to the local — no OP_CHECK_TYPE is
+    emitted later because EmitParameterTypeChecks gates on
+    Local.IsStrictlyTyped. }
+  if not AStrictTypes then
+    Exit;
   for I := 0 to High(AParameters) do
   begin
     if AParameters[I].TypeAnnotation = '' then
@@ -1021,7 +1029,8 @@ begin
     if AExpr.Parameters[I].IsPattern and Assigned(AExpr.Parameters[I].Pattern) then
       CollectDestructuringBindings(AExpr.Parameters[I].Pattern, ChildScope);
 
-  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters);
+  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters,
+    ACtx.StrictTypes);
 
   if FormalCount < 0 then
     FormalCount := Length(AExpr.Parameters);
@@ -1972,7 +1981,8 @@ begin
     if AExpr.Parameters[I].IsPattern and Assigned(AExpr.Parameters[I].Pattern) then
       CollectDestructuringBindings(AExpr.Parameters[I].Pattern, ChildScope);
 
-  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters);
+  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters,
+    ACtx.StrictTypes);
 
   if FormalCount < 0 then
     FormalCount := Length(AExpr.Parameters);

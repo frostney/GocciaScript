@@ -7,6 +7,7 @@ interface
 uses
   Generics.Collections,
 
+  Goccia.Bytecode.Chunk,
   Goccia.Error.ThrowErrorCallback,
   Goccia.GarbageCollector,
   Goccia.Modules,
@@ -33,6 +34,7 @@ type
     FCustomLabel: string;
     FOnError: TGocciaThrowErrorCallback;
     FLoadModule: TLoadModuleCallback;
+    FStrictTypes: Boolean;
   protected
     function GetThisValue: TGocciaValue; virtual;
     function GetOwningClass: TGocciaValue; virtual;
@@ -53,6 +55,12 @@ type
     procedure DefineVariableBinding(const AName: string; const AValue: TGocciaValue;
       const AHasInitializer: Boolean);
     function ContainsOwnVarBinding(const AName: string): Boolean;
+
+    // Strict-types enforcement: record the declared TGocciaLocalType for a
+    // local binding so AssignBinding throws a TypeError on incompatible
+    // assignments.  Looks up the binding by name on this scope only.
+    procedure SetOwnBindingTypeHint(const AName: string;
+      const ATypeHint: TGocciaLocalType);
 
     // Helper methods for token-based declarations
     procedure DefineFromToken(const AName: string; const AValue: TGocciaValue; const ATokenType: TGocciaTokenType);
@@ -79,6 +87,10 @@ type
     property CustomLabel: string read FCustomLabel;
     property OnError: TGocciaThrowErrorCallback read FOnError write FOnError;
     property LoadModule: TLoadModuleCallback read FLoadModule write FLoadModule;
+    { Strict-types enforcement flag.  Inherited from parent at scope
+      creation so nested closures observe the same setting as the
+      surrounding lexical scope. }
+    property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
   end;
 
   // Root scope with no parent -- used by the interpreter/engine
@@ -148,7 +160,8 @@ uses
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Keywords.Reserved;
+  Goccia.Keywords.Reserved,
+  Goccia.Types.Enforcement;
 
 { TGocciaScope }
 
@@ -164,6 +177,7 @@ begin
   begin
     FOnError := AParent.FOnError;
     FLoadModule := AParent.FLoadModule;
+    FStrictTypes := AParent.FStrictTypes;
   end;
 
   if Assigned(TGarbageCollector.Instance) then
@@ -278,6 +292,7 @@ begin
   // - dtLet: no TDZ after declaration statement is processed
   // - dtParameter: parameters have no TDZ
   LexicalBinding.Initialized := True;
+  LexicalBinding.TypeHint := sltUntyped;
 
   FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
 end;
@@ -334,6 +349,7 @@ begin
     Binding.Value := AValue;
     Binding.DeclarationType := dtVar;
     Binding.Initialized := True;
+    Binding.TypeHint := sltUntyped;
     TargetScope.FVarBindings.AddOrSetValue(AName, Binding);
   end;
 end;
@@ -341,6 +357,24 @@ end;
 function TGocciaScope.ContainsOwnVarBinding(const AName: string): Boolean;
 begin
   Result := Assigned(FVarBindings) and FVarBindings.ContainsKey(AName);
+end;
+
+procedure TGocciaScope.SetOwnBindingTypeHint(const AName: string;
+  const ATypeHint: TGocciaLocalType);
+var
+  Binding: TLexicalBinding;
+begin
+  if FLexicalBindings.TryGetValue(AName, Binding) then
+  begin
+    Binding.TypeHint := ATypeHint;
+    FLexicalBindings.AddOrSetValue(AName, Binding);
+    Exit;
+  end;
+  if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, Binding) then
+  begin
+    Binding.TypeHint := ATypeHint;
+    FVarBindings.AddOrSetValue(AName, Binding);
+  end;
 end;
 
 procedure TGocciaScope.AssignBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0);
@@ -364,6 +398,11 @@ begin
         ALine, AColumn, '', nil,
         SSuggestUseLetNotConst);
 
+    // Strict-types enforcement: when this binding has a recorded type
+    // hint, throw a TypeError if the assigned value does not match.
+    if LexicalBinding.TypeHint <> sltUntyped then
+      EnforceStrictType(AValue, LexicalBinding.TypeHint);
+
     // Update the value and mark as initialized
     LexicalBinding.Value := AValue;
     LexicalBinding.Initialized := True;
@@ -374,6 +413,8 @@ begin
   // Check var bindings on this scope
   if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, LexicalBinding) then
   begin
+    if LexicalBinding.TypeHint <> sltUntyped then
+      EnforceStrictType(AValue, LexicalBinding.TypeHint);
     LexicalBinding.Value := AValue;
     FVarBindings.AddOrSetValue(AName, LexicalBinding);
     Exit;
