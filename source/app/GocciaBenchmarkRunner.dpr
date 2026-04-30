@@ -666,7 +666,6 @@ procedure TBenchmarkRunnerApp.BenchmarkWorkerProc(const AFileName: string;
 var
   WorkerReporter: TBenchmarkReporter;
   WorkerResults: PBenchmarkFileResultArray;
-  MemoryMeasurement: TCLIJSONMemoryMeasurement;
   Mode: TGocciaExecutionMode;
 begin
   AConsoleOutput := '';
@@ -680,7 +679,6 @@ begin
 
   WorkerReporter := TBenchmarkReporter.Create;
   try
-    BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
     try
       CollectBenchmarkFile(AFileName, WorkerReporter, Mode, False);
       if WorkerReporter.FileCount > 0 then
@@ -696,15 +694,12 @@ begin
         WorkerResults^[AIndex].ExecuteTimeNanoseconds := 0;
         WorkerResults^[AIndex].TotalBenchmarks := 0;
         WorkerResults^[AIndex].DurationNanoseconds := 0;
-        WorkerResults^[AIndex].MemoryStats := DefaultCLIJSONMemoryStats;
         SetLength(WorkerResults^[AIndex].Entries, 1);
         WorkerResults^[AIndex].Entries[0].Suite := '';
         WorkerResults^[AIndex].Entries[0].Name := '(fatal)';
         WorkerResults^[AIndex].Entries[0].Error := E.Message;
       end;
     end;
-    WorkerResults^[AIndex].MemoryStats :=
-      FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
   finally
     WorkerReporter.Free;
   end;
@@ -756,7 +751,9 @@ var
   WallClockStart: Int64;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
   MainMemoryStats: TCLIJSONMemoryStats;
+  WorkerMemoryStats: TCLIJSONMemoryStats;
 begin
+  WorkerMemoryStats := DefaultCLIJSONMemoryStats;
   Files := TStringList.Create;
   Reporter := TBenchmarkReporter.Create;
   try
@@ -808,7 +805,6 @@ begin
         WorkerData[I].ExecuteTimeNanoseconds := 0;
         WorkerData[I].TotalBenchmarks := 0;
         WorkerData[I].DurationNanoseconds := 0;
-        WorkerData[I].MemoryStats := DefaultCLIJSONMemoryStats;
         SetLength(WorkerData[I].Entries, 0);
       end;
 
@@ -822,6 +818,7 @@ begin
         if Assigned(TGarbageCollector.Instance) then
           Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
         Pool.RunAll(Files, BenchmarkWorkerProc, @WorkerData[0]);
+        WorkerMemoryStats := Pool.MemoryStats;
       finally
         Pool.Free;
       end;
@@ -829,10 +826,8 @@ begin
       Reporter.WallClockDurationNanoseconds := GetNanoseconds - WallClockStart;
       Reporter.JobCount := JobCount;
       MainMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
-      Reporter.MemoryStats := MainMemoryStats;
-      for I := 0 to Files.Count - 1 do
-        Reporter.MemoryStats := CombineCLIJSONMemoryStats(
-          Reporter.MemoryStats, WorkerData[I].MemoryStats, True);
+      Reporter.MemoryStats := CombineCLIJSONMemoryStats(
+        MainMemoryStats, WorkerMemoryStats, True);
 
       { Collect results on the main thread in original file order. }
       for I := 0 to Files.Count - 1 do

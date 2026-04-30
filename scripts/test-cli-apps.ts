@@ -183,10 +183,10 @@ console.log("Loader: JSON multi-file structure...");
       throw new Error("Loader first file worker memory should be present");
     if (typeof json.files[1].memory?.gc?.liveBytes !== "number")
       throw new Error("Loader second file worker memory should be present");
-    const allocatedDuringRun =
-      json.files[0].memory.gc.allocatedDuringRunBytes + json.files[1].memory.gc.allocatedDuringRunBytes;
-    if (json.memory.gc.allocatedDuringRunBytes !== allocatedDuringRun)
-      throw new Error("Loader top-level worker memory should aggregate per-file worker memory");
+    if (json.memory.gc.allocatedDuringRunBytes <= 0)
+      throw new Error("Loader multi-file top-level memory should include worker GC allocations");
+    if (json.memory.gc.liveBytes > json.memory.gc.limitBytes * json.workers.used)
+      throw new Error("Loader multi-file top-level live memory should not double-count per-file worker snapshots");
   } finally {
     clean(tmp);
   }
@@ -455,6 +455,8 @@ console.log("TestRunner: JSON multi-file structure...");
     if (json.workers.used !== 2) throw new Error(`TestRunner multi-file workers.used should be 2, got ${json.workers.used}`);
     if (json.memory.gc.allocatedDuringRunBytes <= 0)
       throw new Error("TestRunner multi-file top-level memory should include worker GC allocations");
+    if (json.memory.gc.liveBytes > json.memory.gc.limitBytes * json.workers.used)
+      throw new Error("TestRunner multi-file top-level live memory should not double-count per-file worker snapshots");
     if (!Array.isArray(json.results) || json.results.length !== 2) throw new Error("TestRunner multi-file results should mirror files with 2 entries");
 
     assertCommonJsonFile(json.files[0], "TestRunner first file", first);
@@ -719,6 +721,8 @@ console.log("TestRunner: JSON multi-file structure...");
         throw new Error("Benchmark multi-file top-level memory should include worker GC allocations");
       if (json.memory.gc.collections <= 0)
         throw new Error("Benchmark multi-file top-level memory should include worker GC collections");
+      if (json.memory.gc.liveBytes > json.memory.gc.limitBytes * json.workers.used)
+        throw new Error("Benchmark multi-file top-level live memory should not double-count per-file worker snapshots");
       assertCommonJsonFile(json.files[0], "Benchmark first file", benchA);
       assertCommonJsonFile(json.files[1], "Benchmark second file", benchB);
       if (json.files[0].benchmarks?.[0]?.name !== "one") throw new Error(`Benchmark first file entry mismatch: ${JSON.stringify(json.files[0].benchmarks)}`);

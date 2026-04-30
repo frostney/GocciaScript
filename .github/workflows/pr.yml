@@ -586,9 +586,6 @@ jobs:
               rows += row('Heap Start Allocated', fmtBytes(interpreted?.memory?.heap?.startAllocatedBytes), fmtBytes(bytecode?.memory?.heap?.startAllocatedBytes));
               rows += row('Heap End Allocated', fmtBytes(interpreted?.memory?.heap?.endAllocatedBytes), fmtBytes(bytecode?.memory?.heap?.endAllocatedBytes));
               rows += row('Heap Delta Allocated', fmtBytes(interpreted?.memory?.heap?.deltaAllocatedBytes), fmtBytes(bytecode?.memory?.heap?.deltaAllocatedBytes));
-              rows += row('Heap Start Free', fmtBytes(interpreted?.memory?.heap?.startFreeBytes), fmtBytes(bytecode?.memory?.heap?.startFreeBytes));
-              rows += row('Heap End Free', fmtBytes(interpreted?.memory?.heap?.endFreeBytes), fmtBytes(bytecode?.memory?.heap?.endFreeBytes));
-              rows += row('Heap Delta Free', fmtBytes(interpreted?.memory?.heap?.deltaFreeBytes), fmtBytes(bytecode?.memory?.heap?.deltaFreeBytes));
               return rows;
             };
 

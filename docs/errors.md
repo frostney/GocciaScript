@@ -434,6 +434,8 @@ When running with `--output=json`, GocciaScript wraps every execution result in 
 | `memory.gc.liveBytes` | `number` | GC-managed bytes live at the measurement endpoint. This is the report equivalent of `Goccia.gc.bytesAllocated` |
 | `memory.gc.allocatedDuringRunBytes` | `number` | Total GC-managed bytes allocated during the measured run, including allocations later collected |
 | `memory.gc.peakLiveBytes` | `number` | Highest live GC-managed byte count observed during the measurement |
+| `memory.gc.limitBytes` | `number` | Active GC byte ceiling from `--max-memory` or the auto-detected default |
+| `memory.heap.deltaFreeBytes` | `number` | Change in FreePascal memory-manager free space. Negative values are valid and mean the process heap had less reusable free space at the end |
 | `workers` | `object` | Worker logistics: used worker count, available worker count, and whether the run was parallel |
 | `files` | `object[]` | Per-input results. Single-file runs use the same structure with one element |
 | `files[].fileName` | `string` | Input file path or `<stdin>` |

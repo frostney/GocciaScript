@@ -54,7 +54,7 @@ When working with the GC, follow these rules:
 - **Weak containers must not mark keys during `MarkReferences`**. Put weak-value propagation in `TraceWeakReferences` and dead-entry pruning in `SweepWeakReferences`; otherwise WeakMap/WeakSet semantics collapse into strong Map/Set semantics.
 - **Scopes** register/unregister with the GC in their constructor/destructor. Active call scopes are tracked via `PushActiveRoot`/`PopActiveRoot`.
 - **VM register rooting** only traverses object-bearing register slots.
-- Automatic collection is disabled during bytecode execution; GocciaTestRunner and GocciaBenchmarkRunner call `Collect` after each file.
+- Automatic collection is disabled during bytecode execution. CLI hosts may still call `Collect` explicitly between files; the benchmark runner does this after each benchmark file, while parallel test workers reclaim their thread-local GC heap at worker shutdown.
 
 ## Design Rationale
 
@@ -119,8 +119,8 @@ Each worker thread creates its own `TGarbageCollector` instance via `threadvar`.
 
 Key behavior on worker threads:
 
-- **GC collection is disabled** (`Enabled := False`) to avoid `FGCMark` races on shared immutable objects (primitive singletons, shared prototypes). Each worker runs files from a shared queue; all objects are freed in bulk when the thread-local GC is destroyed at worker shutdown.
-- **`BytesAllocated` still increments** on every allocation, even with collection disabled. Since no collection ever runs, the counter only grows across all files a worker processes.
+- **Automatic GC collection is disabled** (`Enabled := False`) to avoid `FGCMark` races on shared immutable objects (primitive singletons, shared prototypes). Explicit host-side `Collect` calls can still run; `GocciaBenchmarkRunner` uses this after each benchmark file, while `GocciaTestRunner` avoids worker-side collection and lets worker shutdown reclaim the thread-local GC heap.
+- **`BytesAllocated` still increments** on every allocation, even with automatic collection disabled. Without explicit host collection, the counter grows across all files a worker processes.
 - **The memory ceiling check still fires.** The limit check in `TGocciaValue.AfterConstruction` does not depend on `GC.Enabled` — it checks `MaxBytes > 0` and `BytesAllocated > MaxBytes` regardless. This is the sole protection against unbounded memory growth on workers.
 - **No pre-allocation.** `MaxBytes` is a threshold, not a reservation. Memory is allocated on demand by the FPC heap manager; the GC only checks whether the running total exceeds the ceiling.
 - **Each worker gets the same ceiling as the main thread.** The limit is per-thread, not divided across workers. With N workers, the theoretical maximum total allocation is `N × MaxBytes`, though in practice worker allocations are far below the ceiling.

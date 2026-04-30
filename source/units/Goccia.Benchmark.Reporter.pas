@@ -33,7 +33,6 @@ type
     Entries: array of TBenchmarkEntry;
     TotalBenchmarks: Integer;
     DurationNanoseconds: Int64;
-    MemoryStats: TCLIJSONMemoryStats;
   end;
 
   TBenchmarkReportFormat = (brfConsole, brfText, brfCSV, brfJSON);

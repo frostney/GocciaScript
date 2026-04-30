@@ -70,7 +70,6 @@ type
     ParseNs: Int64;
     CompileNs: Int64;
     ExecNs: Int64;
-    MemoryStats: TCLIJSONMemoryStats;
     ErrorMessage: string;
   end;
 
@@ -815,14 +814,12 @@ var
   FailedTests: TGocciaValue;
   FailedArr: TGocciaArrayValue;
   WorkerResults: PTestWorkerDataArray;
-  MemoryMeasurement: TCLIJSONMemoryMeasurement;
   I: Integer;
 begin
   AConsoleOutput := '';
   AErrorMessage := '';
   WorkerResults := PTestWorkerDataArray(AData);
 
-  BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
   try
     FileResult := RunGocciaScript(AFileName);
     TestResult := FileResult.TestResult;
@@ -878,8 +875,6 @@ begin
       WorkerResults^[AIndex].FailedTestNames[0] := AFileName + ': ' + E.Message;
     end;
   end;
-  WorkerResults^[AIndex].MemoryStats :=
-    FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
 
   // No GC.Collect — worker GC is disabled to avoid FGCMark races on
   // shared objects. All thread-local objects are freed in bulk when
@@ -908,7 +903,9 @@ var
   WallClockStart, WallClockDuration: Int64;
   EffectiveTimeoutMs: Integer;
   WatchdogMs: Integer;
+  WorkerMemoryStats: TCLIJSONMemoryStats;
 begin
+  WorkerMemoryStats := DefaultCLIJSONMemoryStats;
   SetLength(WorkerData, AFiles.Count);
   for I := 0 to AFiles.Count - 1 do
   begin
@@ -922,7 +919,6 @@ begin
     WorkerData[I].ParseNs := 0;
     WorkerData[I].CompileNs := 0;
     WorkerData[I].ExecNs := 0;
-    WorkerData[I].MemoryStats := DefaultCLIJSONMemoryStats;
     WorkerData[I].ErrorMessage := '';
     SetLength(WorkerData[I].FailedTestNames, 0);
   end;
@@ -954,6 +950,7 @@ begin
     else
       WatchdogMs := 0;
     Pool.RunAll(AFiles, TestWorkerProc, @WorkerData[0], WatchdogMs);
+    WorkerMemoryStats := Pool.MemoryStats;
     if Pool.EnableCoverage and Assigned(TGocciaCoverageTracker.Instance) then
       Pool.MergeCoverageInto(TGocciaCoverageTracker.Instance);
 
@@ -1047,7 +1044,7 @@ begin
   Result.TotalParseNanoseconds := 0;
   Result.TotalCompileNanoseconds := 0;
   Result.TotalExecNanoseconds := 0;
-  Result.MemoryStats := DefaultCLIJSONMemoryStats;
+  Result.MemoryStats := WorkerMemoryStats;
   SetLength(Result.FileResults, AFiles.Count);
 
   for I := 0 to AFiles.Count - 1 do
@@ -1076,8 +1073,6 @@ begin
     Result.TotalParseNanoseconds := Result.TotalParseNanoseconds + Source^.ParseNs;
     Result.TotalCompileNanoseconds := Result.TotalCompileNanoseconds + Source^.CompileNs;
     Result.TotalExecNanoseconds := Result.TotalExecNanoseconds + Source^.ExecNs;
-    Result.MemoryStats := CombineCLIJSONMemoryStats(
-      Result.MemoryStats, Source^.MemoryStats, True);
 
     for J := 0 to High(Source^.FailedTestNames) do
       AllFailedTests.Elements.Add(
