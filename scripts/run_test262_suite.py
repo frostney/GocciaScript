@@ -30,6 +30,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -594,7 +595,13 @@ def evaluate_suite(
                 runner_cmd = [
                     str(test_runner),
                     str(temp_dir),
-                    "--silent",
+                    # Neither --silent nor --no-progress: forward the
+                    # runner's per-file progress lines (`[N/M] file.js`) live
+                    # to this script's stdout so CI logs see exactly which
+                    # test the runner is processing at any moment.  Without
+                    # this, a stall or external SIGTERM mid-run leaves CI
+                    # with zero diagnostic output and no way to identify
+                    # which test or phase is responsible.
                     f"--output={json_output}",
                     f"--timeout={timeout_ms}",
                     f"--test-timeout={timeout_ms}",
@@ -616,17 +623,41 @@ def evaluate_suite(
                 runner_output = ""
                 process_returncode = -1
                 debug_dir = Path(tempfile.gettempdir())
+                # Stream runner output:
+                # - stdout inherits this script's fd, so the runner writes
+                #   directly to our stdout (no Python intermediation).
+                # - stderr is piped and drained on a background thread so we
+                #   can both forward it live to this script's stderr AND
+                #   capture it for fallback diagnostic display when the
+                #   runner exits without a parseable JSON report.
+                captured_stderr_chunks: list[str] = []
                 try:
-                    process = subprocess.run(
+                    process = subprocess.Popen(
                         runner_cmd,
-                        stdout=subprocess.DEVNULL,
+                        stdout=None,
                         stderr=subprocess.PIPE,
-                        check=False,
+                        bufsize=1,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
                     )
+
+                    def _drain_stderr() -> None:
+                        assert process.stderr is not None
+                        for line in process.stderr:
+                            sys.stderr.write(line)
+                            sys.stderr.flush()
+                            captured_stderr_chunks.append(line)
+
+                    stderr_thread = threading.Thread(
+                        target=_drain_stderr, daemon=True
+                    )
+                    stderr_thread.start()
+                    process.wait()
+                    stderr_thread.join(timeout=5)
+
                     process_returncode = process.returncode
-                    runner_output = (
-                        process.stderr.decode("utf-8", errors="replace")
-                    ).strip()
+                    runner_output = "".join(captured_stderr_chunks).strip()
                     if process_returncode != 0 and runner_output:
                         try:
                             (debug_dir / "last_runner_stderr.txt").write_text(

@@ -567,7 +567,7 @@ jobs:
   test262:
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     defaults:
       run:
         shell: bash
@@ -595,8 +595,10 @@ jobs:
 
       - name: Run test262 conformance suite
         continue-on-error: true
+        # python3 -u: unbuffered, so progress prints reach the live CI log
+        # in real time even if the job is later killed by SIGTERM.
         run: |
-          python3 scripts/run_test262_suite.py \
+          python3 -u scripts/run_test262_suite.py \
             --suite-dir test262-suite \
             --mode=bytecode \
             --jobs=4 \
