@@ -718,14 +718,26 @@ test("defineProperty installs accessor descriptor on array index", () => {
 });
 
 test("defineProperty accessor on array index propagates getter throws", () => {
+  const sentinel = new Error("getter abrupt");
   const arr = ["foo", "bar"];
   Object.defineProperty(arr, "0", {
     get: () => {
-      throw new Error("getter abrupt");
+      throw sentinel;
     },
     configurable: true,
   });
-  expect(() => arr[0]).toThrow(Error);
+  // Asserting on the exact thrown instance (and its message) verifies the
+  // getter's abrupt completion is propagated unchanged — `.toThrow(Error)`
+  // alone would also pass for any unrelated Error from elsewhere in the
+  // [[Get]] path.
+  let caught;
+  try {
+    arr[0];
+  } catch (e) {
+    caught = e;
+  }
+  expect(caught).toBe(sentinel);
+  expect(caught.message).toBe("getter abrupt");
   // Other indices remain accessible.
   expect(arr[1]).toBe("bar");
 });
@@ -740,10 +752,13 @@ test("defineProperty accessor on out-of-range array index extends length", () =>
   // Per ES2026 §10.4.2.1, the array's length must reflect the new own property.
   expect(arr.length).toBe(6);
   expect(arr[5]).toBe("from-getter");
-  // Intermediate slots are holes — undefined on read.
-  expect(arr[2]).toBeUndefined();
-  expect(arr[3]).toBeUndefined();
-  expect(arr[4]).toBeUndefined();
+  // Intermediate slots must be holes (no own property), not explicit
+  // undefined values. Use the `in` operator to enforce sparse semantics —
+  // a plain `arr[i] === undefined` check would also accept an own
+  // `{ value: undefined }` data property.
+  expect(2 in arr).toBe(false);
+  expect(3 in arr).toBe(false);
+  expect(4 in arr).toBe(false);
 });
 
 test("defineProperty accessor on array rolls back when redefinition is rejected", () => {
