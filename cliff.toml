@@ -41,6 +41,8 @@ sh -c 'msg=$(cat); if git diff-tree --no-commit-id --name-only -r "$COMMIT_SHA" 
 commit_parsers = [
   { message = "^(Website: )?Merge branch", skip = true },
   { message = "^(Website: )?Merge pull request", skip = true },
+  # Skip the auto-generated changelog update PR itself so it never lists itself.
+  { message = "^(Website: )?Update CHANGELOG", skip = true },
 
   { message = "^Website: ", group = "🌐 Website" },
 
