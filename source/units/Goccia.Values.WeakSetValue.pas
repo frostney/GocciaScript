@@ -110,9 +110,10 @@ begin
   begin
     Members := TGocciaMemberCollection.Create;
     try
-      Members.AddNamedMethod('add', WeakSetAdd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('delete', WeakSetDelete, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('has', WeakSetHas, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      // Built-in prototype methods are not constructors per ES spec.
+      Members.AddNamedMethod('add', WeakSetAdd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+      Members.AddNamedMethod('delete', WeakSetDelete, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+      Members.AddNamedMethod('has', WeakSetHas, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
       Members.AddSymbolDataProperty(
         TGocciaSymbolValue.WellKnownToStringTag,
         TGocciaStringLiteralValue.Create(CONSTRUCTOR_WEAK_SET),

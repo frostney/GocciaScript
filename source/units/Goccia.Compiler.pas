@@ -22,6 +22,7 @@ type
     FSourcePath: string;
     FFormalParameterCounts: TFormalParameterCountMap;
     FGlobalBackedTopLevel: Boolean;
+    FStrictTypes: Boolean;
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
       const ADest: UInt8);
     procedure DoCompileStatement(const AStmt: TGocciaStatement);
@@ -38,6 +39,7 @@ type
       read FFormalParameterCounts;
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
       write FGlobalBackedTopLevel;
+    property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
   end;
 
 const
@@ -80,6 +82,7 @@ begin
   Result.SourcePath := FSourcePath;
   Result.FormalParameterCounts := FFormalParameterCounts;
   Result.GlobalBackedTopLevel := FGlobalBackedTopLevel;
+  Result.StrictTypes := FStrictTypes;
   Result.CompileExpression := DoCompileExpression;
   Result.CompileStatement := DoCompileStatement;
   Result.CompileFunctionBody := DoCompileFunctionBody;

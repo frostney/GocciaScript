@@ -62,10 +62,8 @@ procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
   const AClassDef: TGocciaClassDefinition; const ADest: UInt8;
   const AInferredName: string = '');
 
-function TypeAnnotationToLocalType(const AAnnotation: string): TGocciaLocalType;
 function IsArrayTypeAnnotation(const AAnnotation: string): Boolean;
 function StripArrayLayer(const AAnnotation: string): string;
-function InferLocalType(const AExpr: TGocciaExpression): TGocciaLocalType;
 function ExpressionType(const AScope: TGocciaCompilerScope;
   const AExpr: TGocciaExpression): TGocciaLocalType;
 function CharToLocalType(const ACh: Char): TGocciaLocalType;
@@ -91,6 +89,7 @@ uses
   Goccia.Constants.TypeNames,
   Goccia.Keywords.Reserved,
   Goccia.Token,
+  Goccia.Types.Enforcement,
   Goccia.Values.Primitives;
 
 type
@@ -124,59 +123,6 @@ begin
   Reg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AStmt.Expression, Reg);
   ACtx.Scope.FreeRegister;
-end;
-
-function InferLocalType(const AExpr: TGocciaExpression): TGocciaLocalType;
-var
-  Lit: TGocciaLiteralExpression;
-begin
-  Result := sltUntyped;
-  if AExpr is TGocciaLiteralExpression then
-  begin
-    Lit := TGocciaLiteralExpression(AExpr);
-    if Lit.Value is TGocciaNumberLiteralValue then
-      Result := sltFloat
-    else if Lit.Value is TGocciaBooleanLiteralValue then
-      Result := sltBoolean
-    else if Lit.Value is TGocciaStringLiteralValue then
-      Result := sltString;
-  end
-  else if AExpr is TGocciaTemplateLiteralExpression then
-    Result := sltString
-  else if AExpr is TGocciaTemplateWithInterpolationExpression then
-    Result := sltString
-  else if AExpr is TGocciaObjectExpression then
-    Result := sltReference
-  else if AExpr is TGocciaArrayExpression then
-    Result := sltReference
-  else if AExpr is TGocciaNewExpression then
-    Result := sltReference
-  else if AExpr is TGocciaArrowFunctionExpression then
-    Result := sltReference
-  else if AExpr is TGocciaMethodExpression then
-    Result := sltReference;
-end;
-
-function TypeAnnotationToLocalType(const AAnnotation: string): TGocciaLocalType;
-begin
-  Result := sltUntyped;
-  if AAnnotation = '' then
-    Exit;
-  if Pos('|', AAnnotation) > 0 then
-    Exit;
-  if AAnnotation = NUMBER_TYPE_NAME then
-    Result := sltFloat
-  else if AAnnotation = STRING_TYPE_NAME then
-    Result := sltString
-  else if AAnnotation = BOOLEAN_TYPE_NAME then
-    Result := sltBoolean
-  else if (AAnnotation = OBJECT_TYPE_NAME) or (AAnnotation = 'Object')
-       or (AAnnotation = 'Function')
-       or (Pos('<', AAnnotation) > 0)
-       or (Pos('[', AAnnotation) > 0)
-       or (Pos('{', AAnnotation) > 0)
-       or (Pos('=>', AAnnotation) > 0) then
-    Result := sltReference;
 end;
 
 function IsArrayTypeAnnotation(const AAnnotation: string): Boolean;
@@ -523,7 +469,9 @@ begin
     else
       TypeHint := sltUntyped;
 
-    IsStrict := TypeHint <> sltUntyped;
+    { Strict-types enforcement is opt-in via --strict-types / config.
+      When disabled, type annotations are parsed but not enforced. }
+    IsStrict := ACtx.StrictTypes and (TypeHint <> sltUntyped);
 
     if IsStrict then
     begin
@@ -1182,7 +1130,7 @@ begin
         if BindLocalIdx >= 0 then
         begin
           ElemType := TypeAnnotationToLocalType(ElemAnnotation);
-          if ElemType <> sltUntyped then
+          if ACtx.StrictTypes and (ElemType <> sltUntyped) then
           begin
             EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, Slot,
               UInt8(Ord(ElemType)), 0));

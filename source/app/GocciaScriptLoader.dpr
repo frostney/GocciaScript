@@ -33,6 +33,7 @@ uses
   Goccia.Parser,
   Goccia.Profiler,
   Goccia.Profiler.Report,
+  Goccia.Scope,
   Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
   Goccia.CLI.JSON.Reporter,
@@ -112,6 +113,10 @@ type
     procedure ApplyModuleGlobalsToEngine(const AEngine: TGocciaEngine);
     function ExecuteInterpreted(const ASource: TStringList; const AFileName: string;
       const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
+    function RunBytecodeModule(const AEngine: TGocciaEngine;
+      const AExecutor: TGocciaBytecodeExecutor;
+      const AModule: TGocciaBytecodeModule;
+      const AFileName: string): TGocciaValue;
     function ExecuteBytecodeFromSource(const ASource: TStringList; const AFileName: string;
       const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
     function ExecuteBytecodeFromFile(const AFileName: string;
@@ -452,59 +457,6 @@ begin
     ASource.TotalTimeNanoseconds;
 end;
 
-function MaxInt64Value(const ALeft, ARight: Int64): Int64;
-begin
-  if ALeft > ARight then
-    Result := ALeft
-  else
-    Result := ARight;
-end;
-
-function AggregateScriptLoaderMemoryStats(
-  const AResults: array of TScriptLoaderJSONFileResult): TCLIJSONMemoryStats;
-var
-  I: Integer;
-  Stats: TCLIJSONMemoryStats;
-begin
-  Result := DefaultCLIJSONMemoryStats;
-
-  for I := 0 to High(AResults) do
-  begin
-    Stats := AResults[I].MemoryStats;
-    if not Stats.Enabled then
-      Continue;
-
-    Result.Enabled := True;
-    Result.GCStartBytes := Result.GCStartBytes + Stats.GCStartBytes;
-    Result.GCEndBytes := Result.GCEndBytes + Stats.GCEndBytes;
-    Result.GCPeakBytes := Result.GCPeakBytes + Stats.GCPeakBytes;
-    Result.GCLiveBytes := Result.GCLiveBytes + Stats.GCLiveBytes;
-    Result.GCDeltaBytes := Result.GCDeltaBytes + Stats.GCDeltaBytes;
-    Result.GCAllocatedDuringRunBytes :=
-      Result.GCAllocatedDuringRunBytes + Stats.GCAllocatedDuringRunBytes;
-    Result.GCMaxBytes := MaxInt64Value(Result.GCMaxBytes, Stats.GCMaxBytes);
-    Result.GCStartObjectCount :=
-      Result.GCStartObjectCount + Stats.GCStartObjectCount;
-    Result.GCEndObjectCount :=
-      Result.GCEndObjectCount + Stats.GCEndObjectCount;
-    Result.GCCollections := Result.GCCollections + Stats.GCCollections;
-    Result.GCCollectedObjects :=
-      Result.GCCollectedObjects + Stats.GCCollectedObjects;
-    Result.HeapStartAllocatedBytes :=
-      Result.HeapStartAllocatedBytes + Stats.HeapStartAllocatedBytes;
-    Result.HeapEndAllocatedBytes :=
-      Result.HeapEndAllocatedBytes + Stats.HeapEndAllocatedBytes;
-    Result.HeapDeltaAllocatedBytes :=
-      Result.HeapDeltaAllocatedBytes + Stats.HeapDeltaAllocatedBytes;
-    Result.HeapStartFreeBytes :=
-      Result.HeapStartFreeBytes + Stats.HeapStartFreeBytes;
-    Result.HeapEndFreeBytes :=
-      Result.HeapEndFreeBytes + Stats.HeapEndFreeBytes;
-    Result.HeapDeltaFreeBytes :=
-      Result.HeapDeltaFreeBytes + Stats.HeapDeltaFreeBytes;
-  end;
-end;
-
 function BuildAggregateScriptLoaderJSON(const AResults: array of TScriptLoaderJSONFileResult;
   const AMemoryStats: TCLIJSONMemoryStats; const AWorkerCount,
   AAvailableWorkerCount: Integer; const ACompact: Boolean): string;
@@ -618,6 +570,26 @@ begin
   Result.Timing.TotalTimeNanoseconds := ScriptResult.TotalTimeNanoseconds;
 end;
 
+function TScriptLoaderApp.RunBytecodeModule(const AEngine: TGocciaEngine;
+  const AExecutor: TGocciaBytecodeExecutor;
+  const AModule: TGocciaBytecodeModule;
+  const AFileName: string): TGocciaValue;
+var
+  ModuleScope: TGocciaScope;
+begin
+  if AEngine.SourceType = stModule then
+  begin
+    { Run with module semantics: fresh module scope, this = undefined.
+      Mirrors TGocciaModuleLoader.LoadModule for nested module loads. }
+    ModuleScope := AEngine.Interpreter.GlobalScope.CreateChild(skModule,
+      'Module:' + AFileName);
+    ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := AExecutor.RunModuleInScope(AModule, ModuleScope);
+  end
+  else
+    Result := AExecutor.RunModule(AModule);
+end;
+
 function TScriptLoaderApp.ExecuteBytecodeFromSource(const ASource: TStringList;
   const AFileName: string; const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
 var
@@ -667,7 +639,8 @@ begin
       try
         try
           ApplyModuleGlobalsToEngine(Engine);
-          Result.ResultValue := TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
+          Result.ResultValue := RunBytecodeModule(Engine,
+            TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
         finally
           ClearExecutionTimeout;
           ClearInstructionLimit;
@@ -708,7 +681,8 @@ begin
         StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
         try
           ApplyModuleGlobalsToEngine(Engine);
-          Result.ResultValue := TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
+          Result.ResultValue := RunBytecodeModule(Engine,
+            TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
         finally
           ClearExecutionTimeout;
           ClearInstructionLimit;
@@ -999,28 +973,35 @@ var
   Results: array of TScriptLoaderJSONFileResult;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
   MemoryStats: TCLIJSONMemoryStats;
+  MainMemoryStats: TCLIJSONMemoryStats;
+  WorkerMemoryStats: TCLIJSONMemoryStats;
   Pool: TGocciaThreadPool;
   I, JobCount: Integer;
 begin
+  WorkerMemoryStats := DefaultCLIJSONMemoryStats;
   SetLength(Results, AFiles.Count);
   JobCount := GetJobCount(AFiles.Count);
 
   if JobCount > 1 then
   begin
     EnsureSharedPrototypesInitialized(EffectiveBuiltins);
+    BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
     Pool := TGocciaThreadPool.Create(JobCount);
     try
       if Assigned(TGarbageCollector.Instance) then
         Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
       Pool.RunAll(AFiles, ScriptWorkerProc, @Results[0]);
+      WorkerMemoryStats := Pool.MemoryStats;
     finally
       Pool.Free;
     end;
+    MainMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
 
     for I := 0 to AFiles.Count - 1 do
       if not Results[I].Ok then
         ExitCode := 1;
-    MemoryStats := AggregateScriptLoaderMemoryStats(Results);
+    MemoryStats := CombineCLIJSONMemoryStats(
+      MainMemoryStats, WorkerMemoryStats, True);
   end
   else
   begin

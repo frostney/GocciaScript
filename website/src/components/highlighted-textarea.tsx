@@ -11,6 +11,7 @@ export function HighlightedTextarea({
   language = "goccia",
   className = "",
   lineNumbers = false,
+  onSubmit,
 }: {
   value: string;
   onChange: (next: string) => void;
@@ -18,6 +19,10 @@ export function HighlightedTextarea({
   className?: string;
   /** Show a line-number gutter alongside the editor. */
   lineNumbers?: boolean;
+  /** Called when the user presses ⌘/Ctrl+Enter inside the editor. Lets a
+   *  caller wire the editor to its primary action (e.g. Execute / Run)
+   *  without having to attach a global key listener. */
+  onSubmit?: () => void;
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const hlRef = useRef<HTMLPreElement>(null);
@@ -86,6 +91,16 @@ export function HighlightedTextarea({
               requestAnimationFrame(() => {
                 target.selectionStart = target.selectionEnd = s + 2;
               });
+            } else if (
+              onSubmit &&
+              e.key === "Enter" &&
+              (e.metaKey || e.ctrlKey)
+            ) {
+              // ⌘/Ctrl+Enter fires the caller's primary action (e.g. Execute).
+              // preventDefault stops the newline from being inserted into the
+              // editor before submission.
+              e.preventDefault();
+              onSubmit();
             }
           }}
         />

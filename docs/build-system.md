@@ -100,6 +100,17 @@ printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=json
 # Console output remains in the normalized `output` array; errors stay in `error`.
 printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=compact-json
 
+# `compact-json` is recognised by every runner that emits JSON.
+# - GocciaTestRunner: pass it as the value of --output. `--output=json` and
+#   `--output=compact-json` emit JSON to stdout (suppressing the human-readable
+#   summary); any other --output value is treated as a file path that receives
+#   the full JSON envelope.
+./build/GocciaTestRunner tests --output=compact-json
+# - GocciaBenchmarkRunner: pass it as the value of --format alongside the
+#   existing console/text/csv/json options. `--output=<path>` still selects the
+#   destination file when provided.
+./build/GocciaBenchmarkRunner benchmarks --format=compact-json --output=out.json
+
 # Inject globals from the CLI
 printf "x + y;" | ./build/GocciaScriptLoader --global x=10 --global y=20
 printf "name;" | ./build/GocciaScriptLoader --globals=context.json --output=json
@@ -166,13 +177,30 @@ The first file found is loaded and applied as the **root config**. When running 
 
 1. **CLI arguments** (highest priority — always win)
 2. **Per-file config** (`goccia.toml`, `goccia.json5`, or `goccia.json` nearest to the file being processed)
-3. **Root config** (discovered from the entry path at startup)
+3. **Root config** (discovered from the entry path at startup, or supplied via `--config`)
 4. **System default** (engine defaults)
+
+**`--config=<path>`** — Override auto-discovery and load the root config from an explicit location. Available on every CLI tool.
+
+The path may be either a **file** (any registered extension — `.json`, `.json5`, `.toml`; the parser is selected by extension), or a **directory**, in which case the CLI looks for `goccia.toml` → `goccia.json5` → `goccia.json` in that directory only (same priority as auto-discovery). The directory form does **not** walk upward — that's the point of the explicit override.
+
+```bash
+# File form (use this exact file)
+./build/GocciaScriptLoader example.js --config=./configs/strict.toml
+./build/GocciaTestRunner tests --config=./configs/ci.json
+
+# Directory form (find goccia.{toml,json5,json} inside, no walk-up)
+./build/GocciaScriptLoader example.js --config=./configs/
+```
+
+Relative paths are resolved against the current working directory. A missing file or a directory with no recognised `goccia.*` is a hard error so a typo is not silently ignored. CLI arguments still take precedence over values from the file, and per-file configs continue to be discovered normally for individual files.
 
 ```json
 {
   "mode": "bytecode",
+  "source-type": "module",
   "asi": true,
+  "strict-types": true,
   "timeout": 5000,
   "max-memory": 10485760,
   "stack-size": 3500,

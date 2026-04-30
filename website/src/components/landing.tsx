@@ -11,6 +11,7 @@ import {
 } from "react";
 import { AnchorH2, AnchorH3 } from "@/components/anchor-heading";
 import { AnimatedOutput } from "@/components/animated-output";
+import { useRunShortcut } from "@/components/command-tabs";
 import { ConsolePanel } from "@/components/console-panel";
 import {
   HighlightedCode,
@@ -63,6 +64,7 @@ function HeroRunnableCard({ code }: { code: string }) {
   const [src, setSrc] = useState(code);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const hlRef = useRef<HTMLPreElement>(null);
+  const runShortcut = useRunShortcut();
 
   const copy = async () => {
     let ok = false;
@@ -235,10 +237,14 @@ function HeroRunnableCard({ code }: { code: string }) {
           className="hero-action primary"
           onClick={run}
           disabled={running}
-          title="Run"
+          title={`Run · ${runShortcut.long}`}
           aria-label="Run"
         >
-          <RunIcon size={11} /> <span>{running ? "…" : "Run"}</span>
+          <RunIcon size={11} />
+          <span>{running ? "…" : "Run"}</span>
+          <span className="hero-action-kbd" aria-hidden="true">
+            {runShortcut.short}
+          </span>
         </button>
       </div>
       <div className="hero-editor">

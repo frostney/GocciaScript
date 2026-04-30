@@ -7,6 +7,7 @@ interface
 uses
   Generics.Collections,
 
+  Goccia.Bytecode.Chunk,
   Goccia.Error.ThrowErrorCallback,
   Goccia.GarbageCollector,
   Goccia.Modules,
@@ -33,6 +34,7 @@ type
     FCustomLabel: string;
     FOnError: TGocciaThrowErrorCallback;
     FLoadModule: TLoadModuleCallback;
+    FStrictTypes: Boolean;
   protected
     function GetThisValue: TGocciaValue; virtual;
     function GetOwningClass: TGocciaValue; virtual;
@@ -54,6 +56,12 @@ type
       const AHasInitializer: Boolean);
     function ContainsOwnVarBinding(const AName: string): Boolean;
 
+    // Strict-types enforcement: record the declared TGocciaLocalType for a
+    // local binding so AssignBinding throws a TypeError on incompatible
+    // assignments.  Looks up the binding by name on this scope only.
+    procedure SetOwnBindingTypeHint(const AName: string;
+      const ATypeHint: TGocciaLocalType);
+
     // Helper methods for token-based declarations
     procedure DefineFromToken(const AName: string; const AValue: TGocciaValue; const ATokenType: TGocciaTokenType);
 
@@ -73,12 +81,25 @@ type
     function FindOwningClass: TGocciaValue;
     function FindSuperClass: TGocciaValue;
 
+    { Read StrictTypes from the root (global) scope so that
+      TGocciaEngine.SetStrictTypes propagates uniformly to closures
+      whose lexical scope was created before the setter ran.  Each
+      scope's own FStrictTypes is still inherited from its parent at
+      creation, but it is only the root's value that the engine setter
+      keeps in sync. }
+    function EffectiveStrictTypes: Boolean;
+
     property Parent: TGocciaScope read FParent;
     property ThisValue: TGocciaValue read FThisValue write FThisValue;
     property ScopeKind: TGocciaScopeKind read FScopeKind;
     property CustomLabel: string read FCustomLabel;
     property OnError: TGocciaThrowErrorCallback read FOnError write FOnError;
     property LoadModule: TLoadModuleCallback read FLoadModule write FLoadModule;
+    { Strict-types enforcement flag.  Inherited from parent at scope
+      creation so nested closures observe the same setting as the
+      surrounding lexical scope.  For live engine state use
+      EffectiveStrictTypes, which always reads the root scope. }
+    property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
   end;
 
   // Root scope with no parent -- used by the interpreter/engine
@@ -148,7 +169,8 @@ uses
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Keywords.Reserved;
+  Goccia.Keywords.Reserved,
+  Goccia.Types.Enforcement;
 
 { TGocciaScope }
 
@@ -164,6 +186,7 @@ begin
   begin
     FOnError := AParent.FOnError;
     FLoadModule := AParent.FLoadModule;
+    FStrictTypes := AParent.FStrictTypes;
   end;
 
   if Assigned(TGarbageCollector.Instance) then
@@ -219,6 +242,16 @@ begin
   end;
   // Fallback: return self if no function/module scope found
   Result := Self;
+end;
+
+function TGocciaScope.EffectiveStrictTypes: Boolean;
+var
+  Root: TGocciaScope;
+begin
+  Root := Self;
+  while Assigned(Root.FParent) do
+    Root := Root.FParent;
+  Result := Root.FStrictTypes;
 end;
 
 function TGocciaScope.FindOwningClass: TGocciaValue;
@@ -278,6 +311,7 @@ begin
   // - dtLet: no TDZ after declaration statement is processed
   // - dtParameter: parameters have no TDZ
   LexicalBinding.Initialized := True;
+  LexicalBinding.TypeHint := sltUntyped;
 
   FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
 end;
@@ -334,6 +368,7 @@ begin
     Binding.Value := AValue;
     Binding.DeclarationType := dtVar;
     Binding.Initialized := True;
+    Binding.TypeHint := sltUntyped;
     TargetScope.FVarBindings.AddOrSetValue(AName, Binding);
   end;
 end;
@@ -343,10 +378,37 @@ begin
   Result := Assigned(FVarBindings) and FVarBindings.ContainsKey(AName);
 end;
 
+procedure TGocciaScope.SetOwnBindingTypeHint(const AName: string;
+  const ATypeHint: TGocciaLocalType);
+var
+  Binding: TLexicalBinding;
+begin
+  if FLexicalBindings.TryGetValue(AName, Binding) then
+  begin
+    Binding.TypeHint := ATypeHint;
+    FLexicalBindings.AddOrSetValue(AName, Binding);
+    Exit;
+  end;
+  if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, Binding) then
+  begin
+    Binding.TypeHint := ATypeHint;
+    FVarBindings.AddOrSetValue(AName, Binding);
+  end;
+end;
+
 procedure TGocciaScope.AssignBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0);
 var
   LexicalBinding: TLexicalBinding;
+  StrictActive: Boolean;
 begin
+  // Type hints recorded on bindings persist for the lifetime of the
+  // binding; the live --strict-types flag (read from the root scope)
+  // gates whether they enforce.  This mirrors the function-entry
+  // behaviour: when the embedder turns strict-types off after bindings
+  // have been declared, those bindings stop enforcing rather than
+  // continuing to throw based on stale state.
+  StrictActive := EffectiveStrictTypes;
+
   // Try to find variable in current scope first
   if FLexicalBindings.TryGetValue(AName, LexicalBinding) then
   begin
@@ -364,6 +426,12 @@ begin
         ALine, AColumn, '', nil,
         SSuggestUseLetNotConst);
 
+    // Strict-types enforcement: when this binding has a recorded type
+    // hint and the live strict-types flag is on, throw a TypeError if
+    // the assigned value does not match.
+    if StrictActive and (LexicalBinding.TypeHint <> sltUntyped) then
+      EnforceStrictType(AValue, LexicalBinding.TypeHint);
+
     // Update the value and mark as initialized
     LexicalBinding.Value := AValue;
     LexicalBinding.Initialized := True;
@@ -374,6 +442,8 @@ begin
   // Check var bindings on this scope
   if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, LexicalBinding) then
   begin
+    if StrictActive and (LexicalBinding.TypeHint <> sltUntyped) then
+      EnforceStrictType(AValue, LexicalBinding.TypeHint);
     LexicalBinding.Value := AValue;
     FVarBindings.AddOrSetValue(AName, LexicalBinding);
     Exit;

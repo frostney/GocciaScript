@@ -369,6 +369,7 @@ type
     FBody: TGocciaASTNode;
     FIsAsync: Boolean;
     FIsGenerator: Boolean;
+    FHasOwnPrototype: Boolean;
     FSourceText: string;
     FName: string;
   public
@@ -379,6 +380,12 @@ type
     property Body: TGocciaASTNode read FBody;
     property IsAsync: Boolean read FIsAsync write FIsAsync;
     property IsGenerator: Boolean read FIsGenerator write FIsGenerator;
+    // True when this method node represents a `function`/`function*` declaration
+    // or expression (or async generator) that, per ES2026 §10.2.5 MakeConstructor,
+    // requires its own `prototype` data property pointing to a fresh object whose
+    // `constructor` back-references the function. False for concise methods,
+    // arrow functions, getters/setters, and plain async functions.
+    property HasOwnPrototype: Boolean read FHasOwnPrototype write FHasOwnPrototype;
     property SourceText: string read FSourceText write FSourceText;
     property Name: string read FName write FName;
   end;
@@ -1211,6 +1218,7 @@ begin
   inherited Create(ALine, AColumn);
   FParameters := AParameters;
   FBody := ABody;
+  FHasOwnPrototype := False;
 end;
 
 { TGocciaAwaitExpression }

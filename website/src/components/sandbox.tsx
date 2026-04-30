@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { AnchorH2 } from "@/components/anchor-heading";
 import { AnimatedOutput } from "@/components/animated-output";
+import { useRunShortcut } from "@/components/command-tabs";
 import { ConsolePanel } from "@/components/console-panel";
 import {
   HighlightedCode,
@@ -336,9 +337,18 @@ export function Sandbox() {
   const [globalsText, setGlobalsText] = useState(DEFAULT_GLOBALS);
   const [output, setOutput] = useState<SbLine[]>([]);
   const [running, setRunning] = useState(false);
+  // Mirrors `running` for the synchronous re-entry guard inside
+  // `execute`. The Run button is `disabled` while running, but the
+  // ⌘/Ctrl+Enter shortcut on the editors bypasses that — without
+  // this ref a fast double-press could fire two overlapping
+  // `/api/execute` requests and race the output panel. State alone
+  // isn't enough because the closure captures a stale value across
+  // renders; a ref reads the latest value synchronously.
+  const runningRef = useRef(false);
   // Bumped on each new execution so `<AnimatedOutput>` re-mounts and
   // re-runs its line-stagger reveal cleanly.
   const [runId, setRunId] = useState(0);
+  const runShortcut = useRunShortcut();
   const [paneCols, setPaneCols] = useState<[number, number, number]>([
     1.3, 0.9, 1,
   ]);
@@ -380,6 +390,9 @@ export function Sandbox() {
   );
 
   const execute = useCallback(async () => {
+    // Bail if a previous run is still in flight — see `runningRef`
+    // above for why state alone isn't enough here.
+    if (runningRef.current) return;
     // Validate globals JSON up-front so a typo there doesn't cost us a
     // round-trip to the runner.
     let parsedGlobals: Record<string, unknown>;
@@ -430,6 +443,10 @@ export function Sandbox() {
       kind: "meta",
       text: "GocciaScriptLoader --timeout=500 --globals=context.json",
     };
+    // Set the re-entry flag *after* the synchronous validation guards
+    // above have committed to actually running — so a validation
+    // failure early-returns without leaving the flag stuck on.
+    runningRef.current = true;
     setRunning(true);
     setRunId((r) => r + 1);
     setOutput([banner]);
@@ -527,6 +544,7 @@ export function Sandbox() {
       ]);
     } finally {
       setRunning(false);
+      runningRef.current = false;
     }
   }, [code, globalsText]);
 
@@ -694,8 +712,8 @@ export function Sandbox() {
             <div>
               <h4>Sandbox preview</h4>
               <p className="m-0 text-ink-3 text-[0.88rem]">
-                Edit the script or globals and hit <strong>Execute</strong> —
-                the code runs in the same sandboxed runtime used by the server
+                Edit the script or globals and hit <strong>Run</strong> — the
+                code runs in the same sandboxed runtime used by the server
                 preview and returns a structured host result.
               </p>
             </div>
@@ -705,8 +723,13 @@ export function Sandbox() {
                 className="pg-run"
                 onClick={execute}
                 disabled={running}
+                title={`Run · ${runShortcut.long}`}
               >
-                <RunIcon size={14} /> {running ? "Running…" : "Execute"}
+                <RunIcon size={14} />
+                <span>{running ? "Running…" : "Run"}</span>
+                <span className="pg-run-kbd" aria-hidden="true">
+                  {runShortcut.short}
+                </span>
               </button>
             </div>
           </div>
@@ -732,6 +755,7 @@ export function Sandbox() {
                 onChange={setCode}
                 language="goccia"
                 lineNumbers
+                onSubmit={execute}
               />
             </div>
             {/* biome-ignore lint/a11y/useSemanticElements: this is an interactive splitter; button keeps pointer dragging reliable while ARIA exposes separator semantics. */}
@@ -767,6 +791,7 @@ export function Sandbox() {
                 onChange={setGlobalsText}
                 language="json"
                 lineNumbers
+                onSubmit={execute}
               />
             </div>
             {/* biome-ignore lint/a11y/useSemanticElements: this is an interactive splitter; button keeps pointer dragging reliable while ARIA exposes separator semantics. */}

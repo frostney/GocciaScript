@@ -2787,10 +2787,64 @@ begin
 end;
 
 // ES2026 §10.4.2.1 ArrayDefineOwnProperty(A, P, Desc)
+// Mirrors the throwing variant of TGocciaObjectValue.DefineProperty: does NOT
+// take ownership of ADescriptor on failure — the caller (e.g., the
+// Object.defineProperty wrapper) catches the exception and frees the descriptor
+// itself. Routing through the boolean TryDefineProperty would cause a
+// double-free here because that variant frees on validation failure and the
+// outer caller would free again from its `except` clause.
 procedure TGocciaArrayValue.DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
+var
+  Index, NewLen, I: Integer;
+  TruncLen: Int64;
+  RawLen: Double;
 begin
-  if not TryDefineProperty(AName, ADescriptor) then
-    ThrowError(SErrorCannotRedefineNonConfigurable, [AName], SSuggestCannotDeleteNonConfigurable);
+  if AName = PROP_LENGTH then
+  begin
+    // §10.4.2.4 ArraySetLength(A, Desc)
+    if ADescriptor is TGocciaPropertyDescriptorData then
+    begin
+      RawLen := TGocciaPropertyDescriptorData(ADescriptor).Value.ToNumberLiteral.Value;
+      TruncLen := Trunc(RawLen);
+      if (RawLen <> TruncLen) or (TruncLen < 0) or
+         (RawLen > MAX_ARRAY_LENGTH_F) or (TruncLen > MaxInt) then
+        ThrowRangeError(SErrorInvalidArrayLength, SSuggestArrayLengthRange);
+      NewLen := Integer(TruncLen);
+      if NewLen < FElements.Count then
+        for I := FElements.Count - 1 downto NewLen do
+          FElements.Delete(I);
+      while FElements.Count < NewLen do
+        FElements.Add(TGocciaHoleValue.HoleValue);
+    end;
+    ADescriptor.Free;
+    Exit;
+  end;
+
+  if TryStrToInt(AName, Index) and (Index >= 0) then
+  begin
+    if ADescriptor is TGocciaPropertyDescriptorData then
+    begin
+      // Data descriptor on an array index: extract the value into FElements.
+      while FElements.Count <= Index do
+        FElements.Add(TGocciaHoleValue.HoleValue);
+      FElements[Index] := TGocciaPropertyDescriptorData(ADescriptor).Value;
+      ADescriptor.Free;
+    end
+    else
+    begin
+      // Accessor descriptor: delegate to the throwing inherited DefineProperty
+      // so ownership semantics match the spec wrapper. On exception, ADescriptor
+      // remains live and the outer caller's `except` frees it once.
+      inherited DefineProperty(AName, ADescriptor);
+      while FElements.Count <= Index do
+        FElements.Add(TGocciaHoleValue.HoleValue);
+      if not IsArrayHole(FElements[Index]) then
+        FElements[Index] := TGocciaHoleValue.HoleValue;
+    end;
+    Exit;
+  end;
+
+  inherited DefineProperty(AName, ADescriptor);
 end;
 
 // ES2026 §10.4.2.1 ArrayDefineOwnProperty — boolean variant
@@ -2847,8 +2901,27 @@ begin
       Result := True;
     end
     else
-      // Accessor descriptor on array index — store as regular property
+    begin
+      // Accessor descriptor on array index — store on the underlying object
+      // first; only then mutate FElements. If the inherited call rejects the
+      // descriptor (e.g., redefining a non-configurable own property), we
+      // must not have already grown the backing array or cleared a slot.
       Result := inherited TryDefineProperty(AName, ADescriptor);
+      if Result then
+      begin
+        // Extend the backing storage if the index is past the current length
+        // so the array's `length` reflects the new own property
+        // (ES2026 §10.4.2.1, mirroring the data-descriptor branch above).
+        while FElements.Count <= Index do
+          FElements.Add(TGocciaHoleValue.HoleValue);
+        // Clear the dense slot so [[Get]]/[[GetOwnProperty]] fall through to
+        // the accessor stored on the underlying object — otherwise the
+        // array's fast path would shadow the descriptor with the original
+        // element value.
+        if not IsArrayHole(FElements[Index]) then
+          FElements[Index] := TGocciaHoleValue.HoleValue;
+      end;
+    end;
     Exit;
   end;
 

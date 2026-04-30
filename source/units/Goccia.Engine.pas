@@ -87,6 +87,8 @@ type
   TGocciaCompatibility = (cfASI, cfVar, cfFunction);
   TGocciaCompatibilityFlags = set of TGocciaCompatibility;
 
+  TGocciaSourceType = (stScript, stModule);
+
   TGocciaScriptResult = record
     Result: TGocciaValue;
     LexTimeNanoseconds: Int64;
@@ -109,14 +111,15 @@ type
       const AProgram: TGocciaProgram): TGocciaValue; override;
     function ExecuteDynamicFunction(
       const AProgram: TGocciaProgram): TGocciaValue; override;
-    procedure EvaluateModuleBody(const AProgram: TGocciaProgram;
-      const AContext: TGocciaEvaluationContext); override;
+    function EvaluateModuleBody(const AProgram: TGocciaProgram;
+      const AContext: TGocciaEvaluationContext): TGocciaValue; override;
   end;
 
   TGocciaEngine = class
   public
     const DefaultPreprocessors: TGocciaPreprocessors = [ppJSX];
     const DefaultCompatibility: TGocciaCompatibilityFlags = [];
+    const DefaultSourceType: TGocciaSourceType = stScript;
   private
     FInterpreter: TGocciaInterpreter;
     FSourcePath: string;
@@ -125,6 +128,7 @@ type
     FInjectedGlobals: TStringList;
     FPreprocessors: TGocciaPreprocessors;
     FCompatibility: TGocciaCompatibilityFlags;
+    FSourceType: TGocciaSourceType;
     FStrictTypes: Boolean;
     FShims: TStringList;
     FExecutor: TGocciaExecutor;
@@ -183,6 +187,7 @@ type
     procedure SetASIEnabled(const AValue: Boolean);
     procedure SetVarEnabled(const AValue: Boolean);
     procedure SetFunctionEnabled(const AValue: Boolean);
+    procedure SetStrictTypes(const AValue: Boolean);
     function GetContentProvider: TGocciaModuleContentProvider;
     function GetModuleResolver: TGocciaModuleResolver;
     procedure SetPreprocessors(const AValue: TGocciaPreprocessors);
@@ -256,7 +261,8 @@ type
     property FunctionConstructor: TGocciaFunctionConstructorClassValue read FFunctionConstructor;
     property Preprocessors: TGocciaPreprocessors read FPreprocessors write SetPreprocessors;
     property Compatibility: TGocciaCompatibilityFlags read FCompatibility write SetCompatibility;
-    property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
+    property SourceType: TGocciaSourceType read FSourceType write FSourceType;
+    property StrictTypes: Boolean read FStrictTypes write SetStrictTypes;
     property Shims: TStringList read FShims;
     property BuiltinConsole: TGocciaConsole read FBuiltinConsole;
     property BuiltinMath: TGocciaMath read FBuiltinMath;
@@ -311,7 +317,9 @@ uses
   Goccia.CallStack,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.ControlFlow,
   Goccia.Coverage,
+  Goccia.Engine.Backend,
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.FetchManager,
@@ -385,17 +393,24 @@ begin
   Result := FInterpreter.Execute(AProgram);
 end;
 
-procedure TGocciaInterpreterExecutor.EvaluateModuleBody(
-  const AProgram: TGocciaProgram; const AContext: TGocciaEvaluationContext);
+function TGocciaInterpreterExecutor.EvaluateModuleBody(
+  const AProgram: TGocciaProgram;
+  const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   I: Integer;
+  CF: TGocciaControlFlow;
 begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if FInterpreter.VarEnabled then
     HoistVarDeclarations(AProgram.Body, AContext.Scope);
   if FInterpreter.FunctionEnabled then
     HoistFunctionDeclarations(AProgram.Body, AContext);
   for I := 0 to AProgram.Body.Count - 1 do
-    EvaluateStatement(AProgram.Body[I], AContext);
+  begin
+    CF := EvaluateStatement(AProgram.Body[I], AContext);
+    Result := CF.Value;
+    if CF.Kind = cfkReturn then Exit;
+  end;
 end;
 
 { TGocciaEngine }
@@ -656,10 +671,8 @@ begin
 
   FPreprocessors := DefaultPreprocessors;
   FCompatibility := DefaultCompatibility;
-  if Assigned(FExecutor) then
-    FStrictTypes := FExecutor.DefaultStrictTypes
-  else
-    FStrictTypes := False;
+  FSourceType := DefaultSourceType;
+  FStrictTypes := False;
   FShims := TStringList.Create;
 
   FInterpreter := TGocciaInterpreter.Create(AFileName, ASourceLines,
@@ -1310,10 +1323,6 @@ begin
   GocciaObj.AssignProperty('version', TGocciaStringLiteralValue.Create(GetVersion));
   GocciaObj.AssignProperty('commit', TGocciaStringLiteralValue.Create(GetCommit));
   GocciaObj.AssignProperty('builtIns', BuiltInsArray);
-  if FStrictTypes then
-    GocciaObj.AssignProperty(PROP_STRICT_TYPES, TGocciaBooleanLiteralValue.TrueValue)
-  else
-    GocciaObj.AssignProperty(PROP_STRICT_TYPES, TGocciaBooleanLiteralValue.FalseValue);
   GocciaObj.AssignProperty(SEMVER_NAMESPACE_PROPERTY, CreateSemverNamespace);
   GocciaObj.AssignProperty('build', BuildObj);
   GocciaObj.DefineProperty('spec', TGocciaPropertyDescriptorData.Create(
@@ -1389,11 +1398,13 @@ var
   Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
   Tokens: TObjectList<TGocciaToken>;
-  StartTime, LexEnd, ParseEnd, ExecEnd: Int64;
+  StartTime, LexEnd, ParseEnd, ExecStart, ExecEnd: Int64;
   SourceText: string;
   JSXResult: TGocciaJSXTransformResult;
   SourceMap: TGocciaSourceMap;
   OrigLine, OrigCol: Integer;
+  ModuleScope: TGocciaScope;
+  ModuleContext: TGocciaEvaluationContext;
 begin
   FillChar(FLastTiming, SizeOf(FLastTiming), 0);
   FLastTiming.FileName := FSourcePath;
@@ -1443,13 +1454,40 @@ begin
           end;
 
           try
-            CheckTopLevelRedeclarations(ProgramNode,
-              FInterpreter.GlobalScope, FSourcePath);
-            FLastTiming.Result := FExecutor.ExecuteProgram(ProgramNode);
-            WaitForFetchIdle;
-            ExecEnd := GetNanoseconds;
-            FLastTiming.CompileTimeNanoseconds := FExecutor.CompileTimeNanoseconds;
-            FLastTiming.ExecuteTimeNanoseconds := FExecutor.ExecuteTimeNanoseconds;
+            if FSourceType = stModule then
+            begin
+              // ES2026 §16.2.1.6.4: a Module Environment Record's
+              // [[ThisValue]] is undefined.  Run the entry program in a
+              // fresh module scope so import.meta resolves and top-level
+              // `this` is undefined, matching the semantics imported
+              // modules already receive via TGocciaModuleLoader.
+              ModuleScope := FInterpreter.GlobalScope.CreateChild(skModule,
+                'Module:' + FSourcePath);
+              ModuleScope.ThisValue :=
+                TGocciaUndefinedLiteralValue.UndefinedValue;
+              ModuleContext := FInterpreter.CreateEvaluationContext;
+              ModuleContext.Scope := ModuleScope;
+              ModuleContext.CurrentFilePath := FSourcePath;
+              ExecStart := GetNanoseconds;
+              FLastTiming.Result :=
+                FExecutor.EvaluateModuleBody(ProgramNode, ModuleContext);
+              WaitForFetchIdle;
+              ExecEnd := GetNanoseconds;
+              FLastTiming.CompileTimeNanoseconds := 0;
+              FLastTiming.ExecuteTimeNanoseconds := ExecEnd - ExecStart;
+            end
+            else
+            begin
+              CheckTopLevelRedeclarations(ProgramNode,
+                FInterpreter.GlobalScope, FSourcePath);
+              FLastTiming.Result := FExecutor.ExecuteProgram(ProgramNode);
+              WaitForFetchIdle;
+              ExecEnd := GetNanoseconds;
+              FLastTiming.CompileTimeNanoseconds :=
+                FExecutor.CompileTimeNanoseconds;
+              FLastTiming.ExecuteTimeNanoseconds :=
+                FExecutor.ExecuteTimeNanoseconds;
+            end;
             FLastTiming.TotalTimeNanoseconds := ExecEnd - StartTime;
           finally
             if Assigned(TGocciaMicrotaskQueue.Instance) then
@@ -1690,6 +1728,19 @@ begin
   else
     Exclude(FCompatibility, cfFunction);
   FInterpreter.FunctionEnabled := AValue;
+end;
+
+procedure TGocciaEngine.SetStrictTypes(const AValue: Boolean);
+begin
+  FStrictTypes := AValue;
+  if Assigned(FInterpreter) then
+  begin
+    FInterpreter.StrictTypesEnabled := AValue;
+    if Assigned(FInterpreter.GlobalScope) then
+      FInterpreter.GlobalScope.StrictTypes := AValue;
+  end;
+  if FExecutor is TGocciaBytecodeExecutor then
+    TGocciaBytecodeExecutor(FExecutor).StrictTypes := AValue;
 end;
 
 procedure TGocciaEngine.SetPreprocessors(const AValue: TGocciaPreprocessors);

@@ -78,6 +78,7 @@ uses
   SysUtils,
 
   Goccia.AST.Statements,
+  Goccia.Bytecode.Chunk,
   Goccia.ControlFlow,
   Goccia.Coverage,
   Goccia.Error.Messages,
@@ -85,6 +86,7 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.GarbageCollector,
+  Goccia.Types.Enforcement,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper;
 
@@ -146,14 +148,21 @@ var
   ReturnValue: TGocciaValue;
   CF: TGocciaControlFlow;
   Context: TGocciaEvaluationContext;
+  ParamTypeHint: TGocciaLocalType;
 begin
-  // Set up evaluation context — inherit OnError and LoadModule from the closure scope
+  // Set up evaluation context — inherit OnError, LoadModule and the
+  // strict-types flag from the closure scope so the body sees the
+  // same enforcement setting as the surrounding lexical scope.
+  // EffectiveStrictTypes walks to the root scope so closures observe
+  // updates made by TGocciaEngine.SetStrictTypes after the closure's
+  // lexical scope was created.
   Context.Scope := FClosure;
   Context.OnError := FClosure.OnError;
   Context.LoadModule := FClosure.LoadModule;
   Context.CurrentFilePath := FSourceFilePath;
   Context.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
     and TGocciaCoverageTracker.Instance.Enabled;
+  Context.StrictTypes := FClosure.EffectiveStrictTypes;
   Context.DisposalTracker := nil;
 
   // Record coverage hit on the declaration line (get/set/constructor/method)
@@ -186,6 +195,20 @@ begin
           for J := I to AArguments.Length - 1 do
             TGocciaArrayValue(ReturnValue).Elements.Add(AArguments.GetElement(J));
         ACallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue, dtParameter);
+
+        // Strict-types: the rest parameter annotation describes the rest
+        // array's type (e.g. (...nums: number[])).  Record the type hint on
+        // the binding so subsequent reassignments to a non-matching value
+        // throw under --strict-types.  The rest array itself is whatever it
+        // is — skip initial enforcement, matching the bytecode side which
+        // skips IsRest in EmitParameterTypeChecks.
+        if Context.StrictTypes and (FParameters[I].TypeAnnotation <> '') then
+        begin
+          ParamTypeHint := TypeAnnotationToLocalType(FParameters[I].TypeAnnotation);
+          if ParamTypeHint <> sltUntyped then
+            ACallScope.SetOwnBindingTypeHint(FParameters[I].Name, ParamTypeHint);
+        end;
+
         Break;
       end
       else if FParameters[I].IsPattern then
@@ -196,6 +219,20 @@ begin
           ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context)
         else
           ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+        // Strict-types enforcement on destructured parameters: enforce on the
+        // raw pre-destructured value, matching the bytecode side which checks
+        // __paramN before EmitDestructuringParameters.  Defaults and optionals
+        // skip enforcement (parity with the named-parameter loop below).
+        if Context.StrictTypes
+          and (FParameters[I].TypeAnnotation <> '')
+          and not FParameters[I].IsOptional
+          and not Assigned(FParameters[I].DefaultValue) then
+        begin
+          ParamTypeHint := TypeAnnotationToLocalType(FParameters[I].TypeAnnotation);
+          if ParamTypeHint <> sltUntyped then
+            EnforceStrictType(ReturnValue, ParamTypeHint);
+        end;
 
         Context.Scope := ACallScope;
         AssignPattern(FParameters[I].Pattern, ReturnValue, Context, True);
@@ -221,6 +258,34 @@ begin
   Context.Scope := ACallScope;
   if Assigned(Context.OnError) and not Assigned(ACallScope.OnError) then
     ACallScope.OnError := Context.OnError;
+
+  // Strict-types enforcement on parameters: when --strict-types is on,
+  // type-annotated parameters reject incompatible argument values, and
+  // the recorded TypeHint guards subsequent reassignments to the
+  // parameter binding inside the body.  Mirrors the bytecode side's
+  // ApplyParameterTypeAnnotations + EmitParameterTypeChecks.
+  if Context.StrictTypes then
+  begin
+    for I := 0 to Length(FParameters) - 1 do
+    begin
+      if FParameters[I].TypeAnnotation = '' then
+        Continue;
+      if FParameters[I].IsRest then
+        Continue;
+      if FParameters[I].IsOptional then
+        Continue;
+      if Assigned(FParameters[I].DefaultValue) then
+        Continue;
+      if FParameters[I].IsPattern then
+        Continue;
+      ParamTypeHint := TypeAnnotationToLocalType(FParameters[I].TypeAnnotation);
+      if ParamTypeHint = sltUntyped then
+        Continue;
+      EnforceStrictType(ACallScope.GetValue(FParameters[I].Name),
+        ParamTypeHint);
+      ACallScope.SetOwnBindingTypeHint(FParameters[I].Name, ParamTypeHint);
+    end;
+  end;
 
   // Hoist var declarations to function scope
   HoistVarDeclarations(FBodyStatements, ACallScope);
