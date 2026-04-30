@@ -56,6 +56,8 @@ type
 
 function DefaultCLIJSONErrorInfo: TCLIJSONErrorInfo;
 function DefaultCLIJSONMemoryStats: TCLIJSONMemoryStats;
+function CombineCLIJSONMemoryStats(const ABase, AAdditional: TCLIJSONMemoryStats;
+  const APreserveBaseHeap: Boolean): TCLIJSONMemoryStats;
 procedure BeginCLIJSONMemoryMeasurement(
   var AMeasurement: TCLIJSONMemoryMeasurement);
 function FinishCLIJSONMemoryMeasurement(
@@ -260,7 +262,7 @@ begin
   Buffer.Append(IntToStr(AMemoryStats.GCDeltaBytes));
   Buffer.Append(',"allocatedDuringRunBytes":');
   Buffer.Append(IntToStr(AMemoryStats.GCAllocatedDuringRunBytes));
-  Buffer.Append(',"maxBytes":');
+  Buffer.Append(',"limitBytes":');
   Buffer.Append(IntToStr(AMemoryStats.GCMaxBytes));
   Buffer.Append(',"startObjectCount":');
   Buffer.Append(IntToStr(AMemoryStats.GCStartObjectCount));
@@ -404,6 +406,48 @@ function DefaultCLIJSONMemoryStats: TCLIJSONMemoryStats;
 begin
   FillChar(Result, SizeOf(Result), 0);
   Result.Enabled := False;
+end;
+
+function CombineCLIJSONMemoryStats(const ABase,
+  AAdditional: TCLIJSONMemoryStats; const APreserveBaseHeap: Boolean): TCLIJSONMemoryStats;
+begin
+  Result := ABase;
+  if not AAdditional.Enabled then
+    Exit;
+
+  Result.Enabled := Result.Enabled or AAdditional.Enabled;
+  Result.GCStartBytes := Result.GCStartBytes + AAdditional.GCStartBytes;
+  Result.GCEndBytes := Result.GCEndBytes + AAdditional.GCEndBytes;
+  Result.GCPeakBytes := Result.GCPeakBytes + AAdditional.GCPeakBytes;
+  Result.GCLiveBytes := Result.GCLiveBytes + AAdditional.GCLiveBytes;
+  Result.GCDeltaBytes := Result.GCDeltaBytes + AAdditional.GCDeltaBytes;
+  Result.GCAllocatedDuringRunBytes := Result.GCAllocatedDuringRunBytes +
+    AAdditional.GCAllocatedDuringRunBytes;
+  if AAdditional.GCMaxBytes > Result.GCMaxBytes then
+    Result.GCMaxBytes := AAdditional.GCMaxBytes;
+  Result.GCStartObjectCount := Result.GCStartObjectCount +
+    AAdditional.GCStartObjectCount;
+  Result.GCEndObjectCount := Result.GCEndObjectCount +
+    AAdditional.GCEndObjectCount;
+  Result.GCCollections := Result.GCCollections + AAdditional.GCCollections;
+  Result.GCCollectedObjects := Result.GCCollectedObjects +
+    AAdditional.GCCollectedObjects;
+
+  if APreserveBaseHeap then
+    Exit;
+
+  Result.HeapStartAllocatedBytes := Result.HeapStartAllocatedBytes +
+    AAdditional.HeapStartAllocatedBytes;
+  Result.HeapEndAllocatedBytes := Result.HeapEndAllocatedBytes +
+    AAdditional.HeapEndAllocatedBytes;
+  Result.HeapDeltaAllocatedBytes := Result.HeapDeltaAllocatedBytes +
+    AAdditional.HeapDeltaAllocatedBytes;
+  Result.HeapStartFreeBytes := Result.HeapStartFreeBytes +
+    AAdditional.HeapStartFreeBytes;
+  Result.HeapEndFreeBytes := Result.HeapEndFreeBytes +
+    AAdditional.HeapEndFreeBytes;
+  Result.HeapDeltaFreeBytes := Result.HeapDeltaFreeBytes +
+    AAdditional.HeapDeltaFreeBytes;
 end;
 
 procedure BeginCLIJSONMemoryMeasurement(

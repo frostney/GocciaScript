@@ -94,6 +94,8 @@ console.log("Loader: JSON output (interpreted)...");
   if (typeof json.build?.date !== "string") throw new Error("JSON build.date should be present");
   if (typeof json.memory?.gc?.liveBytes !== "number") throw new Error("JSON memory.gc.liveBytes should be present");
   if (typeof json.memory?.gc?.allocatedDuringRunBytes !== "number") throw new Error("JSON memory.gc.allocatedDuringRunBytes should be present");
+  if (typeof json.memory?.gc?.limitBytes !== "number") throw new Error("JSON memory.gc.limitBytes should be present");
+  if ("maxBytes" in json.memory.gc) throw new Error("JSON memory.gc.maxBytes should not be present; use limitBytes");
   if (typeof json.memory?.heap?.endAllocatedBytes !== "number") throw new Error("JSON memory.heap.endAllocatedBytes should be present");
   if (typeof json.workers?.used !== "number") throw new Error("JSON workers.used should be present");
   if (typeof json.timing?.total_ns !== "number") throw new Error("JSON timing.total_ns should be present");
@@ -182,10 +184,10 @@ console.log("Loader: JSON multi-file structure...");
       throw new Error("Loader first file worker memory should be present");
     if (typeof json.files[1].memory?.gc?.liveBytes !== "number")
       throw new Error("Loader second file worker memory should be present");
-    const allocatedDuringRun =
-      json.files[0].memory.gc.allocatedDuringRunBytes + json.files[1].memory.gc.allocatedDuringRunBytes;
-    if (json.memory.gc.allocatedDuringRunBytes !== allocatedDuringRun)
-      throw new Error("Loader top-level worker memory should aggregate per-file worker memory");
+    if (json.memory.gc.allocatedDuringRunBytes <= 0)
+      throw new Error("Loader multi-file top-level memory should include worker GC allocations");
+    if (json.memory.gc.liveBytes > json.memory.gc.limitBytes * (json.workers.used + 1))
+      throw new Error("Loader multi-file top-level live memory should not double-count per-file worker snapshots");
   } finally {
     clean(tmp);
   }
@@ -551,6 +553,10 @@ console.log("TestRunner: JSON multi-file structure...");
     if (json.totalTests !== 2) throw new Error(`TestRunner multi-file totalTests should be 2, got ${json.totalTests}`);
     if (json.passed !== 2 || json.failed !== 0) throw new Error(`TestRunner multi-file pass/fail mismatch: ${json.passed}/${json.failed}`);
     if (json.workers.used !== 2) throw new Error(`TestRunner multi-file workers.used should be 2, got ${json.workers.used}`);
+    if (json.memory.gc.allocatedDuringRunBytes <= 0)
+      throw new Error("TestRunner multi-file top-level memory should include worker GC allocations");
+    if (json.memory.gc.liveBytes > json.memory.gc.limitBytes * (json.workers.used + 1))
+      throw new Error("TestRunner multi-file top-level live memory should not double-count per-file worker snapshots");
     if (!Array.isArray(json.results) || json.results.length !== 2) throw new Error("TestRunner multi-file results should mirror files with 2 entries");
 
     assertCommonJsonFile(json.files[0], "TestRunner first file", first);
@@ -945,6 +951,8 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
       if (!Array.isArray(json.output)) throw new Error("Benchmark JSON output should be an array");
       if (json.error !== null) throw new Error("Benchmark JSON error should be null");
       if (typeof json.timing?.total_ns !== "number") throw new Error("Benchmark JSON timing.total_ns should be present");
+      if (typeof json.memory?.gc?.limitBytes !== "number") throw new Error("Benchmark JSON memory.gc.limitBytes should be present");
+      if ("maxBytes" in json.memory.gc) throw new Error("Benchmark JSON memory.gc.maxBytes should not be present; use limitBytes");
       if (typeof json.memory?.heap?.endAllocatedBytes !== "number") throw new Error("Benchmark JSON memory.heap.endAllocatedBytes should be present");
       if (typeof json.workers?.used !== "number") throw new Error("Benchmark JSON workers.used should be present");
     }
@@ -997,6 +1005,12 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
       if (json.error !== null) throw new Error("Benchmark multi-file top-level error should be null");
       if (json.totalBenchmarks !== 2) throw new Error(`Benchmark multi-file totalBenchmarks should be 2, got ${json.totalBenchmarks}`);
       if (json.workers.used !== 2) throw new Error(`Benchmark multi-file workers.used should be 2, got ${json.workers.used}`);
+      if (json.memory.gc.allocatedDuringRunBytes <= 0)
+        throw new Error("Benchmark multi-file top-level memory should include worker GC allocations");
+      if (json.memory.gc.collections <= 0)
+        throw new Error("Benchmark multi-file top-level memory should include worker GC collections");
+      if (json.memory.gc.liveBytes > json.memory.gc.limitBytes * (json.workers.used + 1))
+        throw new Error("Benchmark multi-file top-level live memory should not double-count per-file worker snapshots");
       assertCommonJsonFile(json.files[0], "Benchmark first file", benchA);
       assertCommonJsonFile(json.files[1], "Benchmark second file", benchB);
       if (json.files[0].benchmarks?.[0]?.name !== "one") throw new Error(`Benchmark first file entry mismatch: ${JSON.stringify(json.files[0].benchmarks)}`);

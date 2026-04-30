@@ -776,7 +776,10 @@ var
   WorkerData: array of TBenchmarkFileResult;
   WallClockStart: Int64;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
+  MainMemoryStats: TCLIJSONMemoryStats;
+  WorkerMemoryStats: TCLIJSONMemoryStats;
 begin
+  WorkerMemoryStats := DefaultCLIJSONMemoryStats;
   Files := TStringList.Create;
   Reporter := TBenchmarkReporter.Create;
   try
@@ -841,13 +844,16 @@ begin
         if Assigned(TGarbageCollector.Instance) then
           Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
         Pool.RunAll(Files, BenchmarkWorkerProc, @WorkerData[0]);
+        WorkerMemoryStats := Pool.MemoryStats;
       finally
         Pool.Free;
       end;
 
       Reporter.WallClockDurationNanoseconds := GetNanoseconds - WallClockStart;
       Reporter.JobCount := JobCount;
-      Reporter.MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
+      MainMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
+      Reporter.MemoryStats := CombineCLIJSONMemoryStats(
+        MainMemoryStats, WorkerMemoryStats, True);
 
       { Collect results on the main thread in original file order. }
       for I := 0 to Files.Count - 1 do

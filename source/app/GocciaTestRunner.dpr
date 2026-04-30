@@ -259,6 +259,8 @@ var
   I: Integer;
   AggregatedResult: TAggregatedTestResult;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
+  MainMemoryStats: TCLIJSONMemoryStats;
+  IsParallelRun: Boolean;
   StdinSource: TStringList;
   UseStdin: Boolean;
 begin
@@ -322,6 +324,7 @@ begin
     end;
 
     BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
+    IsParallelRun := (Files.Count > 1) and (GetJobCount(Files.Count) > 1);
     if Files.Count = 1 then
     begin
       if (not FNoProgress.Present) and (not IsJsonOutput) then
@@ -331,12 +334,16 @@ begin
       AggregatedResult := RunScriptFromFile(Files[0], StdinSource);
       StdinSource := nil;
     end
-    else if GetJobCount(Files.Count) > 1 then
+    else if IsParallelRun then
       AggregatedResult := RunScriptsFromFilesParallel(Files, GetJobCount(Files.Count))
     else
       AggregatedResult := RunScriptsFromFiles(Files);
-    AggregatedResult.MemoryStats :=
-      FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
+    MainMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
+    if IsParallelRun then
+      AggregatedResult.MemoryStats := CombineCLIJSONMemoryStats(
+        MainMemoryStats, AggregatedResult.MemoryStats, True)
+    else
+      AggregatedResult.MemoryStats := MainMemoryStats;
     PrintTestResults(AggregatedResult);
 
     if (CoverageOptions.Enabled.Present or CoverageOptions.Format.Present or
@@ -992,7 +999,9 @@ var
   WallClockStart, WallClockDuration: Int64;
   EffectiveTimeoutMs: Integer;
   WatchdogMs: Integer;
+  WorkerMemoryStats: TCLIJSONMemoryStats;
 begin
+  WorkerMemoryStats := DefaultCLIJSONMemoryStats;
   SetLength(WorkerData, AFiles.Count);
   for I := 0 to AFiles.Count - 1 do
   begin
@@ -1037,6 +1046,7 @@ begin
     else
       WatchdogMs := 0;
     Pool.RunAll(AFiles, TestWorkerProc, @WorkerData[0], WatchdogMs);
+    WorkerMemoryStats := Pool.MemoryStats;
     if Pool.EnableCoverage and Assigned(TGocciaCoverageTracker.Instance) then
       Pool.MergeCoverageInto(TGocciaCoverageTracker.Instance);
 
@@ -1130,6 +1140,7 @@ begin
   Result.TotalParseNanoseconds := 0;
   Result.TotalCompileNanoseconds := 0;
   Result.TotalExecNanoseconds := 0;
+  Result.MemoryStats := WorkerMemoryStats;
   SetLength(Result.FileResults, AFiles.Count);
 
   for I := 0 to AFiles.Count - 1 do
