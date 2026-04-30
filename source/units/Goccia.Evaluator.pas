@@ -4649,7 +4649,19 @@ begin
                   IterResult := Iterator.AdvanceNext;
                   while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
                   begin
-                    RestElements.Elements.Add(IterResult.GetProperty(PROP_VALUE));
+                    // Per ES2024 §7.4.4 IteratorValue, a missing
+                    // IteratorResult.value is implicitly undefined.
+                    // Most iterator implementations normalize inside
+                    // AdvanceNext (TGocciaGenericIteratorValue does, as
+                    // do all native iterators that route through
+                    // CreateIteratorResult), but defensive normalization
+                    // here keeps RestElements free of nil entries even
+                    // when an iterator subclass forwards a raw
+                    // GetProperty result.
+                    ElementValue := IterResult.GetProperty(PROP_VALUE);
+                    if not Assigned(ElementValue) then
+                      ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+                    RestElements.Elements.Add(ElementValue);
                     IterResult := Iterator.AdvanceNext;
                   end;
                   Exhausted := True;
@@ -4675,7 +4687,13 @@ begin
                   ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
                 end
                 else
+                begin
                   ElementValue := IterResult.GetProperty(PROP_VALUE);
+                  // §7.4.4 IteratorValue normalization (see RestElement
+                  // branch above for the same reasoning).
+                  if not Assigned(ElementValue) then
+                    ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+                end;
               end;
               AssignVariablePattern(ArrPat.Elements[I], ElementValue, AContext);
             end;
@@ -4874,7 +4892,16 @@ begin
                 IterResult := Iterator.AdvanceNext;
                 while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
                 begin
-                  RestElements.Elements.Add(IterResult.GetProperty(PROP_VALUE));
+                  // §7.4.4 IteratorValue: missing value is undefined.
+                  // Defensive normalization mirroring AssignArrayPattern
+                  // — most AdvanceNext implementations already
+                  // normalize, but a subclass that forwards a raw
+                  // GetProperty result must not seed nil into
+                  // RestElements.
+                  ElementValue := IterResult.GetProperty(PROP_VALUE);
+                  if not Assigned(ElementValue) then
+                    ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+                  RestElements.Elements.Add(ElementValue);
                   IterResult := Iterator.AdvanceNext;
                 end;
                 Exhausted := True;
@@ -4898,7 +4925,12 @@ begin
                 ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
               end
               else
+              begin
                 ElementValue := IterResult.GetProperty(PROP_VALUE);
+                // §7.4.4 IteratorValue normalization.
+                if not Assigned(ElementValue) then
+                  ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+              end;
             end;
 
             AssignPattern(APattern.Elements[I], ElementValue, AContext, AIsDeclaration, ADeclarationType);

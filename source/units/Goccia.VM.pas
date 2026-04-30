@@ -4225,13 +4225,22 @@ begin
   try
     if IteratorValue is TGocciaIteratorValue then
     begin
-      repeat
-        CheckExecutionTimeout;
-        CheckInstructionLimit;
-        NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
-        if not DoneFlag then
-          AArray.Elements.Add(NextResult);
-      until DoneFlag;
+      try
+        repeat
+          CheckExecutionTimeout;
+          CheckInstructionLimit;
+          NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
+          if not DoneFlag then
+            AArray.Elements.Add(NextResult);
+        until DoneFlag;
+      except
+        // §7.4.10 step 5 abrupt-completion path: DirectNext can throw
+        // (user next() / wrapped iterator may execute arbitrary code).
+        // Close the iterator while preserving the original error per
+        // ES2024 IteratorClose semantics.
+        CloseIteratorPreservingError(TGocciaIteratorValue(IteratorValue));
+        raise;
+      end;
       Exit(True);
     end;
 
@@ -4241,28 +4250,36 @@ begin
     // validated at the acquisition site above (the `if IteratorObject
     // is TGocciaObjectValue` arm), so the loop just reuses it instead
     // of re-running GetProperty(PROP_NEXT) per iteration.
-    repeat
-      CheckExecutionTimeout;
-      CheckInstructionLimit;
-      CallArgs := AcquireArguments;
-      try
-        NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IteratorValue);
-      finally
-        ReleaseArguments(CallArgs);
-      end;
-      if NextResult.IsPrimitive then
-        ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.ToStringLiteral.Value]),
-          SSuggestIteratorResultObject);
-      DoneValue := NextResult.GetProperty(PROP_DONE);
-      DoneFlag := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
-      if not DoneFlag then
-      begin
-        Value := NextResult.GetProperty(PROP_VALUE);
-        if not Assigned(Value) then
-          Value := TGocciaUndefinedLiteralValue.UndefinedValue;
-        AArray.Elements.Add(Value);
-      end;
-    until DoneFlag;
+    try
+      repeat
+        CheckExecutionTimeout;
+        CheckInstructionLimit;
+        CallArgs := AcquireArguments;
+        try
+          NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IteratorValue);
+        finally
+          ReleaseArguments(CallArgs);
+        end;
+        if NextResult.IsPrimitive then
+          ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.ToStringLiteral.Value]),
+            SSuggestIteratorResultObject);
+        DoneValue := NextResult.GetProperty(PROP_DONE);
+        DoneFlag := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
+        if not DoneFlag then
+        begin
+          Value := NextResult.GetProperty(PROP_VALUE);
+          if not Assigned(Value) then
+            Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+          AArray.Elements.Add(Value);
+        end;
+      until DoneFlag;
+    except
+      // §7.4.10 step 5 abrupt-completion path: covers user next()
+      // throws and our SErrorIteratorResultNotObject TypeError.  Call
+      // iter.return() best-effort and surface the original exception.
+      CloseRawIteratorPreservingError(IteratorValue);
+      raise;
+    end;
     Result := True;
   finally
     if IteratorRooted then
@@ -4478,9 +4495,18 @@ begin
           // regression tests.
           Exit(TGocciaGenericIteratorValue.Create(IteratorObject));
         end;
+        // ES2024 §7.4.2 GetIteratorDirect step 2: a missing or
+        // non-callable [[NextMethod]] is a TypeError specific to the
+        // iterator protocol — the source IS an iterable (its
+        // [@@iterator] returned an object), but that object doesn't
+        // satisfy the iterator interface.  Falling through to
+        // SErrorNotIterable would mis-attribute the failure to the
+        // outer iterable; throw the protocol-specific message instead.
         if ATryAsync then
           ThrowTypeError(SErrorAsyncIteratorNextNotCallable,
             SSuggestAsyncIteratorProtocol);
+        ThrowTypeError(SErrorIteratorNextMustBeCallable,
+          SSuggestIteratorProtocol);
       end;
     end;
   end;
