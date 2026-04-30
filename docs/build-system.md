@@ -100,6 +100,17 @@ printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=json
 # Console output remains in the normalized `output` array; errors stay in `error`.
 printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=compact-json
 
+# `compact-json` is recognised by every runner that emits JSON.
+# - GocciaTestRunner: pass it as the value of --output. `--output=json` and
+#   `--output=compact-json` emit JSON to stdout (suppressing the human-readable
+#   summary); any other --output value is treated as a file path that receives
+#   the full JSON envelope.
+./build/GocciaTestRunner tests --output=compact-json
+# - GocciaBenchmarkRunner: pass it as the value of --format alongside the
+#   existing console/text/csv/json options. `--output=<path>` still selects the
+#   destination file when provided.
+./build/GocciaBenchmarkRunner benchmarks --format=compact-json --output=out.json
+
 # Inject globals from the CLI
 printf "x + y;" | ./build/GocciaScriptLoader --global x=10 --global y=20
 printf "name;" | ./build/GocciaScriptLoader --globals=context.json --output=json
