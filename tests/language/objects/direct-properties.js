@@ -25,6 +25,30 @@ test("object property addition", () => {
   expect(obj.newProp).toBe("added");
 });
 
+test("property assignment on null and undefined reports receiver", () => {
+  let nullError;
+  let undefinedError;
+  const nullTarget = null;
+  const undefinedTarget = undefined;
+
+  try {
+    nullTarget.missing = 1;
+  } catch (e) {
+    nullError = e;
+  }
+
+  try {
+    undefinedTarget.missing = 1;
+  } catch (e) {
+    undefinedError = e;
+  }
+
+  expect(nullError instanceof TypeError).toBe(true);
+  expect(nullError.message).toBe("Cannot set properties of null (setting 'missing')");
+  expect(undefinedError instanceof TypeError).toBe(true);
+  expect(undefinedError.message).toBe("Cannot set properties of undefined (setting 'missing')");
+});
+
 test("object property deletion", () => {
   const obj = {
     existing: "value",

@@ -102,6 +102,7 @@ begin
     OP_TO_BOOL:                        Result := 'OP_TO_BOOL';
     OP_DEFINE_ACCESSOR_CONST:          Result := 'OP_DEFINE_ACCESSOR_CONST';
     OP_DEFINE_ACCESSOR_DYNAMIC:        Result := 'OP_DEFINE_ACCESSOR_DYNAMIC';
+    OP_SUPER_GET:                      Result := 'OP_SUPER_GET';
     OP_COLLECTION_OP:                  Result := 'OP_COLLECTION_OP';
     OP_VALIDATE_VALUE:                 Result := 'OP_VALIDATE_VALUE';
     OP_THROW_TYPE_ERROR_CONST:         Result := 'OP_THROW_TYPE_ERROR_CONST';

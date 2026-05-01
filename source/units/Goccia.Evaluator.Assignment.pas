@@ -23,6 +23,8 @@ function PerformIncrement(const AOldValue: TGocciaValue; const AIsIncrement: Boo
 implementation
 
 uses
+  SysUtils,
+
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Evaluator.Arithmetic,
@@ -33,7 +35,13 @@ uses
 
 procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
 begin
-  if (AObj is TGocciaObjectValue) or (AObj is TGocciaClassValue) then
+  if AObj is TGocciaNullLiteralValue then
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [APropertyName]),
+      SSuggestCheckNullBeforeAccess)
+  else if AObj is TGocciaUndefinedLiteralValue then
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined, [APropertyName]),
+      SSuggestCheckNullBeforeAccess)
+  else if (AObj is TGocciaObjectValue) or (AObj is TGocciaClassValue) then
     AObj.SetProperty(APropertyName, AValue)
   else
     // AOnError is not invoked here — ThrowTypeError must be used because this is

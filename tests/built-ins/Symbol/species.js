@@ -43,6 +43,19 @@ describe("Symbol.species", () => {
     expect(regex.test("bb")).toBe(false);
   });
 
+  test("RegExp subclass explicit constructor reuses native super receiver", () => {
+    class MyRegExp extends RegExp {
+      constructor(pattern) {
+        super(pattern);
+        this.extra = "ok";
+      }
+    }
+
+    const regex = new MyRegExp("a+");
+    expect(regex.test("aa")).toBe(true);
+    expect(regex.extra).toBe("ok");
+  });
+
   test("RegExp subclass resolves native super methods", () => {
     class MyRegExp extends RegExp {
       getTestMethodType() {
@@ -68,13 +81,46 @@ describe("Symbol.species", () => {
     expect(MyRegExp.escapeType).toBe("function");
   });
 
+  test("RegExp subclass resolves computed native super methods", () => {
+    const instanceKey = "test";
+    const staticKey = "escape";
+    class MyRegExp extends RegExp {
+      getComputedTestMethodType() {
+        return typeof super[instanceKey];
+      }
+
+      matchesWithComputedSuper(value) {
+        return super[instanceKey](value);
+      }
+
+      static getComputedEscapeType() {
+        return typeof super[staticKey];
+      }
+
+      get computedTestMethodType() {
+        return typeof super[instanceKey];
+      }
+
+      static get computedEscapeType() {
+        return typeof super[staticKey];
+      }
+    }
+
+    const regex = new MyRegExp("a+");
+    expect(regex.getComputedTestMethodType()).toBe("function");
+    expect(regex.matchesWithComputedSuper("aa")).toBe(true);
+    expect(regex.computedTestMethodType).toBe("function");
+    expect(MyRegExp.getComputedEscapeType()).toBe("function");
+    expect(MyRegExp.computedEscapeType).toBe("function");
+  });
+
   test("Promise subclass inherits Symbol.species through constructor prototype chain", () => {
     class MyPromise extends Promise {}
     expect(MyPromise[Symbol.species]).toBe(MyPromise);
   });
 
   test("native constructor superclass prototype must be an object or null", () => {
-    const original = RegExp.prototype;
+    const originalDescriptor = Object.getOwnPropertyDescriptor(RegExp, "prototype");
     try {
       Object.defineProperty(RegExp, "prototype", { value: null, configurable: true });
       class NullPrototypeRegExp extends RegExp {}
@@ -83,7 +129,7 @@ describe("Symbol.species", () => {
       Object.defineProperty(RegExp, "prototype", { value: 1, configurable: true });
       expect(() => { class InvalidPrototypeRegExp extends RegExp {} }).toThrow(TypeError);
     } finally {
-      Object.defineProperty(RegExp, "prototype", { value: original, configurable: true });
+      Object.defineProperty(RegExp, "prototype", originalDescriptor);
     }
   });
 });

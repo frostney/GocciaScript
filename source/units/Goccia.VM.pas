@@ -160,6 +160,8 @@ type
     function FinishDecorators(const ACurrentValue: TGocciaValue): TGocciaValue;
     function GetSuperPropertyValue(const ASuperValue, AThisValue: TGocciaValue;
       const AName: string): TGocciaValue;
+    function GetSuperPropertyValueByKey(const ASuperValue, AThisValue,
+      AKey: TGocciaValue): TGocciaValue;
     function GetPropertyValue(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
     procedure SetPropertyValue(const AObject: TGocciaValue; const AKey: string;
       const AValue: TGocciaValue);
@@ -3019,6 +3021,10 @@ begin
      (not (FSuperClass is TGocciaClassValue)) and
      FSuperClass.IsCallable then
   begin
+    if (AThisValue is TGocciaObjectValue) and
+       not (AThisValue is TGocciaInstanceValue) then
+      Exit(AThisValue);
+
     if FSuperClass is TGocciaProxyValue then
       Exit(TGocciaProxyValue(FSuperClass).ConstructTrap(AArguments));
     if FSuperClass is TGocciaNativeFunctionValue then
@@ -5237,6 +5243,49 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
+function TGocciaVM.GetSuperPropertyValueByKey(const ASuperValue, AThisValue,
+  AKey: TGocciaValue): TGocciaValue;
+var
+  SuperClass: TGocciaClassValue;
+  SuperObject: TGocciaObjectValue;
+  SuperPrototype: TGocciaValue;
+begin
+  if not (AKey is TGocciaSymbolValue) then
+    Exit(GetSuperPropertyValue(ASuperValue, AThisValue,
+      KeyToPropertyName(AKey)));
+
+  if (ASuperValue is TGocciaObjectValue) and
+     (not (ASuperValue is TGocciaClassValue)) and
+     ASuperValue.IsCallable then
+  begin
+    SuperObject := TGocciaObjectValue(ASuperValue);
+    if AThisValue is TGocciaClassValue then
+      Exit(SuperObject.GetSymbolPropertyWithReceiver(
+        TGocciaSymbolValue(AKey), AThisValue));
+
+    SuperPrototype := SuperObject.GetProperty(PROP_PROTOTYPE);
+    if SuperPrototype is TGocciaObjectValue then
+      Exit(TGocciaObjectValue(SuperPrototype).GetSymbolPropertyWithReceiver(
+        TGocciaSymbolValue(AKey), AThisValue));
+
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  if not (ASuperValue is TGocciaClassValue) then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+
+  SuperClass := TGocciaClassValue(ASuperValue);
+  if AThisValue is TGocciaClassValue then
+    Exit(SuperClass.GetSymbolPropertyWithReceiver(
+      TGocciaSymbolValue(AKey), AThisValue));
+
+  if Assigned(SuperClass.Prototype) then
+    Exit(SuperClass.Prototype.GetSymbolPropertyWithReceiver(
+      TGocciaSymbolValue(AKey), AThisValue));
+
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
 function TGocciaVM.GetPropertyValue(const AObject: TGocciaValue;
   const AKey: string): TGocciaValue;
 var
@@ -6483,8 +6532,8 @@ begin
           TGocciaVMClassValue(FRegisters[A].ObjectValue).NativeSuperConstructor :=
             nil;
           // Set [[Prototype]] of derived class constructor to superclass
-          TGocciaObjectValue(FRegisters[A].ObjectValue).Prototype :=
-            TGocciaObjectValue(FRegisters[B].ObjectValue);
+          TGocciaVMClassValue(FRegisters[A].ObjectValue).SetConstructorPrototype(
+            TGocciaObjectValue(FRegisters[B].ObjectValue));
           // Set .prototype chain: DerivedClass.prototype.[[Prototype]] = SuperClass.prototype
           TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.Prototype :=
             TGocciaClassValue(FRegisters[B].ObjectValue).Prototype;
@@ -6497,10 +6546,8 @@ begin
         begin
           // Native constructor superclass: preserve static and prototype
           // inheritance links, and remember the constructor for instantiation.
-          TGocciaVMClassValue(FRegisters[A].ObjectValue).NativeSuperConstructor :=
-            TGocciaObjectValue(FRegisters[B].ObjectValue);
-          TGocciaObjectValue(FRegisters[A].ObjectValue).Prototype :=
-            TGocciaObjectValue(FRegisters[B].ObjectValue);
+          TGocciaVMClassValue(FRegisters[A].ObjectValue).LinkNativeSuperConstructor(
+            TGocciaObjectValue(FRegisters[B].ObjectValue));
           RightValue := FRegisters[B].ObjectValue.GetProperty(PROP_PROTOTYPE);
           if RightValue is TGocciaNullLiteralValue then
             TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.Prototype := nil
@@ -8025,6 +8072,13 @@ begin
         if A > 0 then
           SetRegister(A, GetSuperPropertyValue(GetRegister(A + 1),
             GetRegister(A - 1), Template.GetConstantUnchecked(C).StringValue))
+        else
+          SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
+
+      OP_SUPER_GET:
+        if A > 0 then
+          SetRegister(A, GetSuperPropertyValueByKey(GetRegister(A + 1),
+            GetRegister(A - 1), GetRegister(C)))
         else
           SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
 

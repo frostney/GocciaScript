@@ -114,6 +114,8 @@ type
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; virtual;
 
     procedure ReplacePrototype(const APrototype: TGocciaObjectValue);
+    procedure SetConstructorPrototype(const APrototype: TGocciaObjectValue);
+    procedure LinkNativeSuperConstructor(const ASuperConstructor: TGocciaObjectValue);
     procedure SetInferredName(const AName: string);
     procedure DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
     procedure AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
@@ -884,6 +886,19 @@ end;
 procedure TGocciaClassValue.ReplacePrototype(const APrototype: TGocciaObjectValue);
 begin
   FClassPrototype := APrototype;
+end;
+
+procedure TGocciaClassValue.SetConstructorPrototype(
+  const APrototype: TGocciaObjectValue);
+begin
+  FPrototype := APrototype;
+end;
+
+procedure TGocciaClassValue.LinkNativeSuperConstructor(
+  const ASuperConstructor: TGocciaObjectValue);
+begin
+  SetConstructorPrototype(ASuperConstructor);
+  FNativeSuperConstructor := ASuperConstructor;
 end;
 
 procedure TGocciaClassValue.SetInferredName(const AName: string);

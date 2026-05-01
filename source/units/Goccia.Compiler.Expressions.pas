@@ -1130,7 +1130,7 @@ procedure CompileCall(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCallExpression; const ADest: UInt8);
 var
   ArgCount, I: Integer;
-  BaseReg, ObjReg, ArgsReg, SuperReg: UInt8;
+  BaseReg, ObjReg, ArgsReg, SuperReg, KeyReg: UInt8;
   MemberExpr: TGocciaMemberExpression;
   PropIdx: UInt16;
   UseSpread: Boolean;
@@ -1223,12 +1223,26 @@ begin
       BaseReg := ACtx.Scope.AllocateRegister;
       SuperReg := ACtx.Scope.AllocateRegister;
       CompileSuperAccess(ACtx, SuperReg);
-      PropIdx := ACtx.Template.AddConstantString(MemberExpr.PropertyName);
-      if PropIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow');
+      if MemberExpr.Computed then
+      begin
+        KeyReg := ACtx.Scope.AllocateRegister;
+        ACtx.CompileExpression(MemberExpr.PropertyExpression, KeyReg);
+      end
+      else
+      begin
+        PropIdx := ACtx.Template.AddConstantString(MemberExpr.PropertyName);
+        if PropIdx > High(UInt8) then
+          raise Exception.Create('Constant pool overflow');
+      end;
       if SuperReg <> BaseReg + 1 then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, BaseReg + 1, SuperReg, 0));
-      EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET_CONST, BaseReg, 0, UInt8(PropIdx)));
+      if MemberExpr.Computed then
+      begin
+        EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET, BaseReg, 0, KeyReg));
+        ACtx.Scope.FreeRegister;
+      end
+      else
+        EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET_CONST, BaseReg, 0, UInt8(PropIdx)));
       ACtx.Scope.FreeRegister;
 
       if UseSpread then
@@ -1347,23 +1361,37 @@ end;
 procedure CompileMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaMemberExpression; const ADest: UInt8);
 var
-  ObjReg, IdxReg, BaseReg, SuperReg: UInt8;
+  ObjReg, IdxReg, BaseReg, SuperReg, KeyReg: UInt8;
   PropIdx: UInt16;
   NilJump, EndJump: Integer;
 begin
-  if (AExpr.ObjectExpr is TGocciaSuperExpression) and (not AExpr.Computed) then
+  if AExpr.ObjectExpr is TGocciaSuperExpression then
   begin
     ObjReg := ACtx.Scope.AllocateRegister;
     CompileThis(ACtx, ObjReg);
     BaseReg := ACtx.Scope.AllocateRegister;
     SuperReg := ACtx.Scope.AllocateRegister;
     CompileSuperAccess(ACtx, SuperReg);
-    PropIdx := ACtx.Template.AddConstantString(AExpr.PropertyName);
-    if PropIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow: property name index exceeds 255');
+    if AExpr.Computed then
+    begin
+      KeyReg := ACtx.Scope.AllocateRegister;
+      ACtx.CompileExpression(AExpr.PropertyExpression, KeyReg);
+    end
+    else
+    begin
+      PropIdx := ACtx.Template.AddConstantString(AExpr.PropertyName);
+      if PropIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: property name index exceeds 255');
+    end;
     if SuperReg <> BaseReg + 1 then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, BaseReg + 1, SuperReg, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET_CONST, BaseReg, 0, UInt8(PropIdx)));
+    if AExpr.Computed then
+    begin
+      EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET, BaseReg, 0, KeyReg));
+      ACtx.Scope.FreeRegister;
+    end
+    else
+      EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET_CONST, BaseReg, 0, UInt8(PropIdx)));
     if ADest <> BaseReg then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
     ACtx.Scope.FreeRegister;
