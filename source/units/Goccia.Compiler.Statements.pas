@@ -106,6 +106,8 @@ type
     // compiling a FinallyBlock when this array is populated.
     UsingResources: array of TUsingResourceEntry;
     UsingErrorReg: UInt8;
+    IsIteratorClose: Boolean;
+    IteratorReg: UInt8;
   end;
 
 threadvar
@@ -650,6 +652,27 @@ begin
   end;
 end;
 
+procedure EmitPendingEntryCleanup(const ACtx: TGocciaCompilationContext;
+  const AEntry: TPendingFinallyEntry; const ACloseIterator: Boolean);
+var
+  NullishJump: Integer;
+begin
+  EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+  if Assigned(AEntry.FinallyBlock) then
+    CompileBlockStatement(ACtx, AEntry.FinallyBlock)
+  else if Length(AEntry.UsingResources) > 0 then
+  begin
+    EmitDisposalSequence(ACtx, AEntry.UsingResources,
+      Length(AEntry.UsingResources), AEntry.UsingErrorReg);
+    NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
+      AEntry.UsingErrorReg);
+    EmitInstruction(ACtx, EncodeABC(OP_THROW, AEntry.UsingErrorReg, 0, 0));
+    PatchJumpTarget(ACtx, NullishJump);
+  end
+  else if AEntry.IsIteratorClose and ACloseIterator then
+    EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, AEntry.IteratorReg, 0, 0));
+end;
+
 procedure CompileBlockStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaBlockStatement);
 var
@@ -863,7 +886,6 @@ end;
 procedure EmitPendingCleanup(const ACtx: TGocciaCompilationContext);
 var
   Entry: TPendingFinallyEntry;
-  NullishJump: Integer;
   Entries: array of TPendingFinallyEntry;
   I, Count: Integer;
 begin
@@ -882,18 +904,7 @@ begin
     if GPendingFinally.Count > I then
       GPendingFinally.Delete(I);
     Entry := Entries[I];
-    EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
-    if Assigned(Entry.FinallyBlock) then
-      CompileBlockStatement(ACtx, Entry.FinallyBlock)
-    else if Length(Entry.UsingResources) > 0 then
-    begin
-      EmitDisposalSequence(ACtx, Entry.UsingResources,
-        Length(Entry.UsingResources), Entry.UsingErrorReg);
-      NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
-        Entry.UsingErrorReg);
-      EmitInstruction(ACtx, EncodeABC(OP_THROW, Entry.UsingErrorReg, 0, 0));
-      PatchJumpTarget(ACtx, NullishJump);
-    end;
+    EmitPendingEntryCleanup(ACtx, Entry, True);
   end;
   // Restore all entries for the normal-path compilation
   for I := 0 to Count - 1 do
@@ -1196,8 +1207,8 @@ end;
 procedure CompileForOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement);
 var
-  IterReg, ValueReg, DoneReg: UInt8;
-  LoopStart, ExitJump, MismatchJump, I: Integer;
+  IterReg, ValueReg, DoneReg, CloseErrorReg: UInt8;
+  LoopStart, ExitJump, MismatchJump, HandlerJump, I: Integer;
   Slot: UInt8;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
@@ -1208,6 +1219,7 @@ var
   OldContinueFinallyBase: Integer;
   ContinueJumps: TList<Integer>;
   ArrayLocalIdx: Integer;
+  PendingEntry: TPendingFinallyEntry;
 begin
   if IsConstArrayLocal(ACtx, AStmt.Iterable, ArrayLocalIdx) then
   begin
@@ -1218,6 +1230,7 @@ begin
   IterReg := ACtx.Scope.AllocateRegister;
   ValueReg := ACtx.Scope.AllocateRegister;
   DoneReg := ACtx.Scope.AllocateRegister;
+  CloseErrorReg := ACtx.Scope.AllocateRegister;
 
   ACtx.CompileExpression(AStmt.Iterable, IterReg);
   EmitInstruction(ACtx, EncodeABC(OP_GET_ITER, IterReg, IterReg, 0));
@@ -1246,6 +1259,13 @@ begin
 
     EmitInstruction(ACtx, EncodeABC(OP_ITER_NEXT, ValueReg, DoneReg, IterReg));
     ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
+    HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, CloseErrorReg);
+    if not Assigned(GPendingFinally) then
+      GPendingFinally := TList<TPendingFinallyEntry>.Create;
+    FillChar(PendingEntry, SizeOf(PendingEntry), 0);
+    PendingEntry.IsIteratorClose := True;
+    PendingEntry.IteratorReg := IterReg;
+    GPendingFinally.Add(PendingEntry);
 
     ACtx.Scope.BeginScope;
 
@@ -1269,17 +1289,24 @@ begin
 
     ACtx.CompileStatement(AStmt.Body);
 
+    GPendingFinally.Delete(GPendingFinally.Count - 1);
+    if MismatchJump >= 0 then
+      PatchJumpTarget(ACtx, MismatchJump);
+    EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+
     // Patch continue jumps before close-upvalue so closures see correct iteration values
     for I := 0 to ContinueJumps.Count - 1 do
       PatchJumpTarget(ACtx, ContinueJumps[I]);
-    if MismatchJump >= 0 then
-      PatchJumpTarget(ACtx, MismatchJump);
 
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
 
     EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+
+    PatchJumpTarget(ACtx, HandlerJump);
+    EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_THROW, CloseErrorReg, 0, 0));
 
     PatchJumpTarget(ACtx, ExitJump);
 
@@ -1294,6 +1321,7 @@ begin
     GContinueFinallyBase := OldContinueFinallyBase;
   end;
 
+  ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
@@ -1626,7 +1654,6 @@ procedure CompileBreakStatement(const ACtx: TGocciaCompilationContext);
 var
   I: Integer;
   Entry: TPendingFinallyEntry;
-  NullishJump: Integer;
 begin
   if not Assigned(GBreakJumps) then
     Exit;
@@ -1635,18 +1662,7 @@ begin
     for I := GPendingFinally.Count - 1 downto GBreakFinallyBase do
     begin
       Entry := GPendingFinally[I];
-      EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
-      if Assigned(Entry.FinallyBlock) then
-        CompileBlockStatement(ACtx, Entry.FinallyBlock)
-      else if Length(Entry.UsingResources) > 0 then
-      begin
-        EmitDisposalSequence(ACtx, Entry.UsingResources,
-          Length(Entry.UsingResources), Entry.UsingErrorReg);
-        NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
-          Entry.UsingErrorReg);
-        EmitInstruction(ACtx, EncodeABC(OP_THROW, Entry.UsingErrorReg, 0, 0));
-        PatchJumpTarget(ACtx, NullishJump);
-      end;
+      EmitPendingEntryCleanup(ACtx, Entry, True);
     end;
 
   GBreakJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
@@ -1657,7 +1673,6 @@ var
   I, Count, Base: Integer;
   Entries: array of TPendingFinallyEntry;
   Entry: TPendingFinallyEntry;
-  NullishJump: Integer;
 begin
   if not Assigned(GContinueJumps) then
     Exit;
@@ -1677,18 +1692,7 @@ begin
       if GPendingFinally.Count > I then
         GPendingFinally.Delete(I);
       Entry := Entries[I - Base];
-      EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
-      if Assigned(Entry.FinallyBlock) then
-        CompileBlockStatement(ACtx, Entry.FinallyBlock)
-      else if Length(Entry.UsingResources) > 0 then
-      begin
-        EmitDisposalSequence(ACtx, Entry.UsingResources,
-          Length(Entry.UsingResources), Entry.UsingErrorReg);
-        NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
-          Entry.UsingErrorReg);
-        EmitInstruction(ACtx, EncodeABC(OP_THROW, Entry.UsingErrorReg, 0, 0));
-        PatchJumpTarget(ACtx, NullishJump);
-      end;
+      EmitPendingEntryCleanup(ACtx, Entry, False);
     end;
     // Restore entries so normal-path compilation still sees them
     for I := 0 to Length(Entries) - 1 do

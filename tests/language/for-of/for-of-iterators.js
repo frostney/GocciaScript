@@ -167,6 +167,115 @@ describe("for...of with iterators", () => {
     expect(ids).toEqual([1, 2]);
   });
 
+  test("calls iterator return when the body throws", () => {
+    let returnCalled = 0;
+    let caughtMessage = "";
+    const iterable = {
+      [Symbol.iterator]() {
+        return {
+          next() {
+            return { value: 1, done: false };
+          },
+          return() {
+            returnCalled++;
+            throw new Error("return-threw");
+          }
+        };
+      }
+    };
+
+    try {
+      for (const value of iterable) {
+        throw new Error("body-threw");
+      }
+    } catch (error) {
+      caughtMessage = error.message;
+    }
+
+    expect(returnCalled).toBe(1);
+    expect(caughtMessage).toBe("body-threw");
+  });
+
+  test("calls iterator return when break exits early", () => {
+    let returnCalled = 0;
+    const iterable = {
+      [Symbol.iterator]() {
+        return {
+          next() {
+            return { value: 1, done: false };
+          },
+          return() {
+            returnCalled++;
+            return { done: true };
+          }
+        };
+      }
+    };
+
+    for (const value of iterable) {
+      break;
+    }
+
+    expect(returnCalled).toBe(1);
+  });
+
+  test("calls iterator return before returning from a function", () => {
+    let returnCalled = 0;
+    const iterable = {
+      [Symbol.iterator]() {
+        return {
+          next() {
+            return { value: 1, done: false };
+          },
+          return() {
+            returnCalled++;
+            return { done: true };
+          }
+        };
+      }
+    };
+
+    const result = (() => {
+      for (const value of iterable) {
+        return "done";
+      }
+      return "missed";
+    })();
+
+    expect(result).toBe("done");
+    expect(returnCalled).toBe(1);
+  });
+
+  test("does not call iterator return for continue", () => {
+    let returnCalled = 0;
+    const iterable = {
+      [Symbol.iterator]() {
+        let i = 0;
+        return {
+          next() {
+            i++;
+            return i <= 2 ? { value: i, done: false } : { done: true };
+          },
+          return() {
+            returnCalled++;
+            return { done: true };
+          }
+        };
+      }
+    };
+
+    const result = [];
+    for (const value of iterable) {
+      if (value === 1) {
+        continue;
+      }
+      result.push(value);
+    }
+
+    expect(result).toEqual([2]);
+    expect(returnCalled).toBe(0);
+  });
+
   test("null is not iterable", () => {
     expect(() => {
       for (const item of null) {
