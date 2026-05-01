@@ -137,6 +137,17 @@ type
     property Right: TGocciaExpression read FRight;
   end;
 
+  TGocciaSequenceExpression = class(TGocciaExpression)
+  private
+    FExpressions: TObjectList<TGocciaExpression>;
+  public
+    constructor Create(const AExpressions: TObjectList<TGocciaExpression>;
+      const ALine, AColumn: Integer);
+    destructor Destroy; override;
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    property Expressions: TObjectList<TGocciaExpression> read FExpressions;
+  end;
+
   TGocciaUnaryExpression = class(TGocciaExpression)
   private
     FOperator: TGocciaTokenType;
@@ -246,12 +257,15 @@ type
   private
     FCallee: TGocciaExpression;
     FArguments: TObjectList<TGocciaExpression>;
+    FOptional: Boolean;
   public
     constructor Create(const ACallee: TGocciaExpression;
-      const AArguments: TObjectList<TGocciaExpression>; const ALine, AColumn: Integer);
+      const AArguments: TObjectList<TGocciaExpression>; const ALine, AColumn: Integer;
+      const AOptional: Boolean = False);
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Callee: TGocciaExpression read FCallee;
     property Arguments: TObjectList<TGocciaExpression> read FArguments;
+    property Optional: Boolean read FOptional;
   end;
 
   TGocciaMemberExpression = class(TGocciaExpression)
@@ -968,6 +982,21 @@ begin
   FRight := ARight;
 end;
 
+{ TGocciaSequenceExpression }
+
+constructor TGocciaSequenceExpression.Create(const AExpressions: TObjectList<TGocciaExpression>;
+  const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FExpressions := AExpressions;
+end;
+
+destructor TGocciaSequenceExpression.Destroy;
+begin
+  FExpressions.Free;
+  inherited;
+end;
+
 { TGocciaUnaryExpression }
 
 constructor TGocciaUnaryExpression.Create(const AOperator: TGocciaTokenType;
@@ -1052,11 +1081,13 @@ end;
 { TGocciaCallExpression }
 
 constructor TGocciaCallExpression.Create(const ACallee: TGocciaExpression;
-  const AArguments: TObjectList<TGocciaExpression>; const ALine, AColumn: Integer);
+  const AArguments: TObjectList<TGocciaExpression>; const ALine, AColumn: Integer;
+  const AOptional: Boolean = False);
 begin
   inherited Create(ALine, AColumn);
   FCallee := ACallee;
   FArguments := AArguments;
+  FOptional := AOptional;
 end;
 
 { TGocciaMemberExpression }
@@ -1585,6 +1616,16 @@ end;
 function TGocciaBinaryExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
   Result := EvaluateBinary(Self, AContext);
+end;
+
+// ES2026 §13.16 Comma Operator (,)
+function TGocciaSequenceExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  I: Integer;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  for I := 0 to FExpressions.Count - 1 do
+    Result := EvaluateExpression(FExpressions[I], AContext);
 end;
 
 function TGocciaUnaryExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;

@@ -21,6 +21,21 @@ function ToIntegerFromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex
 // length anyway).
 function ToInteger64FromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer = 0; const ADefault: Int64 = 0): Int64; inline;
 
+// ES2026 §7.1.6 ToInt32(argument)
+//   1. Let number be ? ToNumber(argument).
+//   2. If number is NaN, +0, -0, +∞, or -∞, return +0.
+//   3. Let int be sign(number) × floor(abs(number)).
+//   4. Let int32bit be int modulo 2**32.
+//   5. If int32bit ≥ 2**31, return int32bit - 2**32; otherwise int32bit.
+//
+// Bitwise operators MUST route through this helper rather than calling
+// Trunc(...) directly: FPC's Trunc(NaN) returns Int64.MinValue on x86_64
+// (cvttsd2si "indefinite" sentinel) and 0 on aarch64.  Bare Trunc made
+// `(undefined & undefined)` evaluate to ~ -2^63 on Linux x86_64 CI while
+// passing 0 on macOS arm64 — see test262 language/expressions/bitwise-*
+// /S11.10.*_A3_T1.4.js for the regression cluster this fixes.
+function ToInt32Value(const AValue: TGocciaValue): Int32; inline;
+
 // ES2026 §7.1.7 ToUint32(argument)
 function ToUint32Value(const AValue: TGocciaValue): Cardinal; inline;
 
@@ -105,6 +120,22 @@ begin
     Exit(0);
 
   Result := Cardinal(Trunc(IntegerPart));
+end;
+
+function ToInt32Value(const AValue: TGocciaValue): Int32;
+const
+  INT32_MODULUS = QWord(High(Cardinal)) + 1;          // 2^32
+  INT32_HALF_MODULUS = QWord(High(Cardinal)) + 1 - QWord(2147483648); // 2^31, but we use the comparison directly below
+var
+  AsUint: Cardinal;
+begin
+  // Reuse ToUint32Value (already NaN/Infinity-safe) and reinterpret the
+  // resulting 32-bit pattern as a signed two's-complement Int32 — the
+  // last spec step of ToInt32 is exactly "if int32bit ≥ 2^31, subtract
+  // 2^32".  Casting Cardinal → Int32 in FPC performs that reinterpretation
+  // directly without any FP path that could trip Trunc(NaN).
+  AsUint := ToUint32Value(AValue);
+  Result := Int32(AsUint);
 end;
 
 function NormalizeRelativeIndex(const ARelative, ALength: Integer): Integer;

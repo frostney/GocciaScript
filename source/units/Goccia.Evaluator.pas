@@ -679,6 +679,15 @@ begin
       begin
         if Operand is TGocciaSymbolValue then
           ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
+        // ES2026 §13.5.5 UnaryMinus — operand goes through ToNumeric,
+        // which is ToPrimitive then a BigInt? branch.  Apply
+        // ToPrimitive here so boxed BigInts (Object(1n)) unbox to
+        // their primitive and take the BigInt::unaryMinus path
+        // instead of being silently coerced to NaN by the boxed
+        // object's ToNumberLiteral.
+        Operand := ToPrimitive(Operand);
+        if Operand is TGocciaSymbolValue then
+          ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
         // ES2026 §6.1.6.2.1 BigInt::unaryMinus
         if Operand is TGocciaBigIntValue then
         begin
@@ -707,6 +716,13 @@ begin
       end;
     gttPlus:
     begin
+      if Operand is TGocciaSymbolValue then
+        ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
+      // ES2026 §13.5.4 UnaryPlus — ToNumber (ToPrimitive then a
+      // BigInt? throw).  Apply ToPrimitive here so boxed BigInts
+      // surface the spec-mandated TypeError instead of silently
+      // producing a number from the boxed object's coercion path.
+      Operand := ToPrimitive(Operand);
       if Operand is TGocciaSymbolValue then
         ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
       // ES2026 §7.1.4: unary + on BigInt throws TypeError
@@ -845,6 +861,13 @@ begin
     // Regular function calls
     Callee := EvaluateExpression(ACallExpression.Callee, AContext);
     ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+
+  if ACallExpression.Optional and
+     ((Callee is TGocciaNullLiteralValue) or (Callee is TGocciaUndefinedLiteralValue)) then
+  begin
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
   end;
 
   Arguments := TGocciaArgumentsCollection.Create;
@@ -1501,6 +1524,7 @@ var
   SavedIteratorValue, SavedCurrentValue, SavedNextMethod: TGocciaValue;
   HasSavedLoopState: Boolean;
   HeadCompleted, HeadYielding: Boolean;
+  ShouldCloseIterator: Boolean;
 begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
@@ -1558,6 +1582,7 @@ begin
 
       HeadCompleted := False;
       HeadYielding := False;
+      ShouldCloseIterator := True;
       try
         try
           CheckExecutionTimeout;
@@ -1589,6 +1614,7 @@ begin
             begin
               if Assigned(Continuation) then
                 Continuation.ClearLoopState(AForOfStatement);
+              ShouldCloseIterator := False;
               IterResult := Iterator.AdvanceNext;
               Continue;
             end;
@@ -1602,7 +1628,11 @@ begin
             raise;
           end;
           on E: Exception do
+          begin
+            if ShouldCloseIterator then
+              Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
             raise;
+          end;
         end;
       finally
         if (not HeadCompleted) and (not HeadYielding) and
@@ -1625,6 +1655,7 @@ begin
           begin
             if Assigned(Continuation) then
               Continuation.ClearLoopState(AForOfStatement);
+            Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
             raise;
           end;
         end;
@@ -1637,12 +1668,14 @@ begin
       begin
         if Assigned(Continuation) then
           Continuation.ClearLoopState(AForOfStatement);
+        Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
         Break;
       end;
       if CF.Kind = cfkReturn then
       begin
         if Assigned(Continuation) then
           Continuation.ClearLoopState(AForOfStatement);
+        Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
         Result := CF;
         Exit;
       end;
@@ -2377,11 +2410,7 @@ begin
   ConditionResult := EvaluateConditionWithPatternBindings(AIfStatement.Condition,
     AContext, BodyContext, PatternHandled);
   if not PatternHandled then
-  begin
     BodyContext := AContext;
-    ConditionResult := EvaluateExpression(AIfStatement.Condition, AContext)
-      .ToBooleanLiteral.Value;
-  end;
   if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
   begin
     if ConditionResult then
@@ -4672,6 +4701,7 @@ var
   PropValue, ElementValue, DefaultValue: TGocciaValue;
   RestElements: TGocciaArrayValue;
   I, J: Integer;
+  Exhausted: Boolean;
 begin
   if APattern is TGocciaIdentifierDestructuringPattern then
     AContext.Scope.DefineVariableBinding(
@@ -4755,7 +4785,15 @@ begin
     end
     else
     begin
-      // Generic iterable fallback
+      // Generic iterable fallback.  Same IteratorClose contract as
+      // AssignArrayPattern (ES2024 §8.5.3 IteratorBindingInitialization
+      // step 4 / §7.4.10 IteratorClose):
+      //   - normal completion → CloseIterator (errors from iter.return()
+      //     propagate as the new completion);
+      //   - abrupt completion → CloseIteratorPreservingError (the
+      //     original abrupt completion wins).
+      // RestElements is also temp-rooted across AdvanceNext so a
+      // re-entrant GC can't reclaim it mid-drain.
       Iterator := GetIteratorFromValue(AValue);
       if not Assigned(Iterator) then
         ThrowTypeError(
@@ -4763,37 +4801,89 @@ begin
           SSuggestDestructureRequiresIterable);
       TGarbageCollector.Instance.AddTempRoot(Iterator);
       try
-        for I := 0 to ArrPat.Elements.Count - 1 do
-        begin
-          if ArrPat.Elements[I] = nil then
+        try
+          // Same exhaustion-tracking as AssignArrayPattern: once the
+          // iterator returns done:true, subsequent BindingElements take
+          // undefined (or an empty rest array) without re-invoking
+          // next() — see ES2024 §13.15.5.4 IteratorBindingInitialization
+          // for ArrayBindingPattern.
+          Exhausted := False;
+          for I := 0 to ArrPat.Elements.Count - 1 do
           begin
-            Iterator.AdvanceNext;
-            Continue;
-          end;
-          if ArrPat.Elements[I] is TGocciaRestDestructuringPattern then
-          begin
-            RestElements := TGocciaArrayValue.Create;
-            IterResult := Iterator.AdvanceNext;
-            while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+            if ArrPat.Elements[I] = nil then
             begin
-              RestElements.Elements.Add(IterResult.GetProperty(PROP_VALUE));
-              IterResult := Iterator.AdvanceNext;
+              if not Exhausted then
+              begin
+                IterResult := Iterator.AdvanceNext;
+                if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+                  Exhausted := True;
+              end;
+              Continue;
             end;
-            AssignVariablePattern(
-              TGocciaRestDestructuringPattern(ArrPat.Elements[I]).Argument,
-              RestElements, AContext);
-            Break;
-          end
-          else
-          begin
-            IterResult := Iterator.AdvanceNext;
-            if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
-              ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
+            if ArrPat.Elements[I] is TGocciaRestDestructuringPattern then
+            begin
+              RestElements := TGocciaArrayValue.Create;
+              TGarbageCollector.Instance.AddTempRoot(RestElements);
+              try
+                if not Exhausted then
+                begin
+                  IterResult := Iterator.AdvanceNext;
+                  while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+                  begin
+                    // Per ES2024 §7.4.4 IteratorValue, a missing
+                    // IteratorResult.value is implicitly undefined.
+                    // Most iterator implementations normalize inside
+                    // AdvanceNext (TGocciaGenericIteratorValue does, as
+                    // do all native iterators that route through
+                    // CreateIteratorResult), but defensive normalization
+                    // here keeps RestElements free of nil entries even
+                    // when an iterator subclass forwards a raw
+                    // GetProperty result.
+                    ElementValue := IterResult.GetProperty(PROP_VALUE);
+                    if not Assigned(ElementValue) then
+                      ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+                    RestElements.Elements.Add(ElementValue);
+                    IterResult := Iterator.AdvanceNext;
+                  end;
+                  Exhausted := True;
+                end;
+                AssignVariablePattern(
+                  TGocciaRestDestructuringPattern(ArrPat.Elements[I]).Argument,
+                  RestElements, AContext);
+              finally
+                TGarbageCollector.Instance.RemoveTempRoot(RestElements);
+              end;
+              Break;
+            end
             else
-              ElementValue := IterResult.GetProperty(PROP_VALUE);
-            AssignVariablePattern(ArrPat.Elements[I], ElementValue, AContext);
+            begin
+              if Exhausted then
+                ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
+              else
+              begin
+                IterResult := Iterator.AdvanceNext;
+                if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+                begin
+                  Exhausted := True;
+                  ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+                end
+                else
+                begin
+                  ElementValue := IterResult.GetProperty(PROP_VALUE);
+                  // §7.4.4 IteratorValue normalization (see RestElement
+                  // branch above for the same reasoning).
+                  if not Assigned(ElementValue) then
+                    ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+                end;
+              end;
+              AssignVariablePattern(ArrPat.Elements[I], ElementValue, AContext);
+            end;
           end;
+        except
+          CloseIteratorPreservingError(Iterator);
+          raise;
         end;
+        CloseIterator(Iterator);
       finally
         TGarbageCollector.Instance.RemoveTempRoot(Iterator);
       end;
@@ -4869,6 +4959,7 @@ var
   ElementValue: TGocciaValue;
   RestElements: TGocciaArrayValue;
   J: Integer;
+  Exhausted: Boolean;
 begin
   if (AValue is TGocciaNullLiteralValue) or (AValue is TGocciaUndefinedLiteralValue) then
     ThrowTypeError(
@@ -4944,37 +5035,110 @@ begin
 
     TGarbageCollector.Instance.AddTempRoot(Iterator);
     try
-      for I := 0 to APattern.Elements.Count - 1 do
-      begin
-        if APattern.Elements[I] = nil then
+      try
+        // Track iterator exhaustion so we don't keep calling next()
+        // past done:true.  Per ES2024 §13.15.5.4
+        // IteratorBindingInitialization for ArrayBindingPattern: once
+        // iteratorRecord.[[Done]] becomes true, subsequent
+        // BindingElements get undefined (or an empty rest array)
+        // without invoking the iterator again.  Calling AdvanceNext on
+        // an already-done iterator is observable when the user's next()
+        // has side effects.
+        Exhausted := False;
+        for I := 0 to APattern.Elements.Count - 1 do
         begin
-          Iterator.AdvanceNext;
-          Continue;
-        end;
-
-        if APattern.Elements[I] is TGocciaRestDestructuringPattern then
-        begin
-          RestElements := TGocciaArrayValue.Create;
-          IterResult := Iterator.AdvanceNext;
-          while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+          if APattern.Elements[I] = nil then
           begin
-            RestElements.Elements.Add(IterResult.GetProperty(PROP_VALUE));
-            IterResult := Iterator.AdvanceNext;
+            if not Exhausted then
+            begin
+              IterResult := Iterator.AdvanceNext;
+              if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+                Exhausted := True;
+            end;
+            Continue;
           end;
-          AssignPattern(TGocciaRestDestructuringPattern(APattern.Elements[I]).Argument, RestElements, AContext, AIsDeclaration, ADeclarationType);
-          Break;
-        end
-        else
-        begin
-          IterResult := Iterator.AdvanceNext;
-          if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
-            ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
-          else
-            ElementValue := IterResult.GetProperty(PROP_VALUE);
 
-          AssignPattern(APattern.Elements[I], ElementValue, AContext, AIsDeclaration, ADeclarationType);
+          if APattern.Elements[I] is TGocciaRestDestructuringPattern then
+          begin
+            // Iterator.AdvanceNext re-enters the engine (calls user
+            // next()), which can trigger GC.  Temp-root RestElements
+            // for the duration of the drain so a re-entrant collection
+            // can't reclaim it.  The root is removed once AssignPattern
+            // has stored the array into a reachable binding.
+            RestElements := TGocciaArrayValue.Create;
+            TGarbageCollector.Instance.AddTempRoot(RestElements);
+            try
+              if not Exhausted then
+              begin
+                IterResult := Iterator.AdvanceNext;
+                while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+                begin
+                  // §7.4.4 IteratorValue: missing value is undefined.
+                  // Defensive normalization mirroring AssignArrayPattern
+                  // — most AdvanceNext implementations already
+                  // normalize, but a subclass that forwards a raw
+                  // GetProperty result must not seed nil into
+                  // RestElements.
+                  ElementValue := IterResult.GetProperty(PROP_VALUE);
+                  if not Assigned(ElementValue) then
+                    ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+                  RestElements.Elements.Add(ElementValue);
+                  IterResult := Iterator.AdvanceNext;
+                end;
+                Exhausted := True;
+              end;
+              AssignPattern(TGocciaRestDestructuringPattern(APattern.Elements[I]).Argument, RestElements, AContext, AIsDeclaration, ADeclarationType);
+            finally
+              TGarbageCollector.Instance.RemoveTempRoot(RestElements);
+            end;
+            Break;
+          end
+          else
+          begin
+            if Exhausted then
+              ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
+            else
+            begin
+              IterResult := Iterator.AdvanceNext;
+              if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+              begin
+                Exhausted := True;
+                ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+              end
+              else
+              begin
+                ElementValue := IterResult.GetProperty(PROP_VALUE);
+                // §7.4.4 IteratorValue normalization.
+                if not Assigned(ElementValue) then
+                  ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+              end;
+            end;
+
+            AssignPattern(APattern.Elements[I], ElementValue, AContext, AIsDeclaration, ADeclarationType);
+          end;
         end;
+      except
+        // ES2024 §8.5.3 IteratorBindingInitialization: an abrupt
+        // completion during destructuring must still close the iterator
+        // before propagating.  CloseIteratorPreservingError swallows any
+        // error from iter.return() so the original abrupt completion
+        // wins (IteratorClose §7.4.10 step 4: completion's [[Type]] is
+        // throw, return ? completion).
+        CloseIteratorPreservingError(Iterator);
+        raise;
       end;
+      // ES2024 §8.5.3 step 4 (normal completion): close the iterator
+      // after consuming the binding elements.  The rest-pattern branch
+      // already drained to done; Close on a done iterator is a no-op
+      // for TGocciaGenericIteratorValue.  CloseIterator (not
+      // PreservingError) is the §7.4.10 step 5 path: a normal
+      // destructuring completion lets iter.return() exceptions
+      // propagate to the caller as the new completion.  Without this
+      // call, destructuring an iterator that returns done:false
+      // indefinitely would never invoke iter.return(), and the bytecode
+      // VM's pre-conversion step (IterableToArray) would allocate
+      // unboundedly.
+      CloseIterator(Iterator);
     finally
       TGarbageCollector.Instance.RemoveTempRoot(Iterator);
     end;

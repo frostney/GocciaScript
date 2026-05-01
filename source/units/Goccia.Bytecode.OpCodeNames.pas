@@ -80,6 +80,7 @@ begin
     OP_CONSTRUCT:                      Result := 'OP_CONSTRUCT';
     OP_GET_ITER:                       Result := 'OP_GET_ITER';
     OP_ITER_NEXT:                      Result := 'OP_ITER_NEXT';
+    OP_ITER_CLOSE:                     Result := 'OP_ITER_CLOSE';
     OP_TO_STRING:                      Result := 'OP_TO_STRING';
     OP_NEW_CLASS:                      Result := 'OP_NEW_CLASS';
     OP_CLASS_SET_SUPER:                Result := 'OP_CLASS_SET_SUPER';

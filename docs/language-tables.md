@@ -15,6 +15,7 @@
 |---------|------|--------|
 | `var` | ES1 | Opt-in (`--compat-var`) — use `let`/`const` by default |
 | `function` keyword | ES1 | Opt-in (`--compat-function`) — use arrow functions or shorthand methods by default |
+| Comma operator (`,`) | ES1 | Supported |
 | `==` / `!=` (loose equality) | ES1 | Excluded — use `===` / `!==` |
 | `eval()` | ES1 | Excluded |
 | `arguments` object | ES1 | Excluded — use rest parameters |

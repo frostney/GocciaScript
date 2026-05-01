@@ -113,6 +113,8 @@ begin
     Goccia.Compiler.Expressions.CompileIdentifier(Ctx, TGocciaIdentifierExpression(AExpr), ADest)
   else if AExpr is TGocciaBinaryExpression then
     Goccia.Compiler.Expressions.CompileBinary(Ctx, TGocciaBinaryExpression(AExpr), ADest)
+  else if AExpr is TGocciaSequenceExpression then
+    Goccia.Compiler.Expressions.CompileSequence(Ctx, TGocciaSequenceExpression(AExpr), ADest)
   else if AExpr is TGocciaUnaryExpression then
     Goccia.Compiler.Expressions.CompileUnary(Ctx, TGocciaUnaryExpression(AExpr), ADest)
   else if AExpr is TGocciaPropertyCompoundAssignmentExpression then
