@@ -114,6 +114,43 @@ describe("Symbol.species", () => {
     expect(MyRegExp.computedEscapeType).toBe("function");
   });
 
+  test("RegExp subclass instance super uses captured native prototype", () => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(RegExp, "prototype");
+    const computedKey = "test";
+
+    class MyRegExp extends RegExp {
+      matchesDirect(value) {
+        return super.test(value);
+      }
+
+      matchesComputed(value) {
+        return super[computedKey](value);
+      }
+
+      matchFirst(value) {
+        return super[Symbol.match](value)[0];
+      }
+    }
+
+    try {
+      Object.defineProperty(RegExp, "prototype", {
+        value: {
+          test() {
+            return false;
+          }
+        },
+        configurable: true
+      });
+
+      const regex = new MyRegExp("a+");
+      expect(regex.matchesDirect("aa")).toBe(true);
+      expect(regex.matchesComputed("aa")).toBe(true);
+      expect(regex.matchFirst("aa")).toBe("aa");
+    } finally {
+      Object.defineProperty(RegExp, "prototype", originalDescriptor);
+    }
+  });
+
   test("Promise subclass inherits Symbol.species through constructor prototype chain", () => {
     class MyPromise extends Promise {}
     expect(MyPromise[Symbol.species]).toBe(MyPromise);

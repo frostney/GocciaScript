@@ -2662,12 +2662,16 @@ var
 begin
   inherited;
   if Assigned(FClosure) then
+  begin
+    if Assigned(FClosure.HomeObject) then
+      FClosure.HomeObject.MarkReferences;
     for I := 0 to FClosure.UpvalueCount - 1 do
     begin
       Upvalue := FClosure.GetUpvalue(I);
       if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
         MarkRegisterReferences(Upvalue.Cell.Value);
     end;
+  end;
   MarkRegisterReferences(FThisValue);
   MarkRegisterReferences(FResumeValue);
   for I := 0 to High(FArguments) do
@@ -3530,6 +3534,9 @@ begin
   if not Assigned(FClosure) then
     Exit;
 
+  if Assigned(FClosure.HomeObject) then
+    FClosure.HomeObject.MarkReferences;
+
   for I := 0 to FClosure.UpvalueCount - 1 do
   begin
     Upvalue := FClosure.GetUpvalue(I);
@@ -3825,6 +3832,14 @@ begin
   end;
   AFunction.DefineProperty(PROP_PROTOTYPE,
     TGocciaPropertyDescriptorData.Create(PrototypeObj, PrototypeFlags));
+end;
+
+procedure SetBytecodeHomeObject(const AFunctionValue: TGocciaValue;
+  const AHomeObject: TGocciaObjectValue);
+begin
+  if (AFunctionValue is TGocciaBytecodeFunctionValue) and
+     Assigned(TGocciaBytecodeFunctionValue(AFunctionValue).FClosure) then
+    TGocciaBytecodeFunctionValue(AFunctionValue).FClosure.HomeObject := AHomeObject;
 end;
 
 function TGocciaVM.GetLocal(const AIndex: Integer): TGocciaValue;
@@ -4721,6 +4736,7 @@ begin
   else
     Exit;
 
+  SetBytecodeHomeObject(AGetter, TargetObject);
   ExistingDescriptor := TargetObject.GetOwnPropertyDescriptor(AName);
   ExistingSetter := nil;
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
@@ -4744,6 +4760,7 @@ begin
   else
     Exit;
 
+  SetBytecodeHomeObject(ASetter, TargetObject);
   ExistingDescriptor := TargetObject.GetOwnPropertyDescriptor(AName);
   ExistingGetter := nil;
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
@@ -4758,6 +4775,7 @@ procedure TGocciaVM.DefineStaticGetterProperty(const ATarget: TGocciaValue;
 begin
   if ATarget is TGocciaClassValue then
   begin
+    SetBytecodeHomeObject(AGetter, TGocciaObjectValue(ATarget));
     if (AName <> '') and (AName[1] = '#') then
       TGocciaClassValue(ATarget).AddPrivateGetter(
         Copy(AName, 2, MaxInt), TGocciaFunctionBase(AGetter))
@@ -4771,6 +4789,7 @@ procedure TGocciaVM.DefineStaticSetterProperty(const ATarget: TGocciaValue;
 begin
   if ATarget is TGocciaClassValue then
   begin
+    SetBytecodeHomeObject(ASetter, TGocciaObjectValue(ATarget));
     if (AName <> '') and (AName[1] = '#') then
       TGocciaClassValue(ATarget).AddPrivateSetter(
         Copy(AName, 2, MaxInt), TGocciaFunctionBase(ASetter))
@@ -4789,6 +4808,7 @@ begin
   begin
     if ATarget is TGocciaVMClassValue then
     begin
+      SetBytecodeHomeObject(AGetter, TGocciaVMClassValue(ATarget).Prototype);
       ExistingDescriptor := TGocciaVMClassValue(ATarget).Prototype
         .GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(AKey));
       ExistingSetter := nil;
@@ -4802,6 +4822,7 @@ begin
     end
     else if ATarget is TGocciaObjectValue then
     begin
+      SetBytecodeHomeObject(AGetter, TGocciaObjectValue(ATarget));
       ExistingDescriptor := TGocciaObjectValue(ATarget)
         .GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(AKey));
       ExistingSetter := nil;
@@ -4829,6 +4850,7 @@ begin
   begin
     if ATarget is TGocciaVMClassValue then
     begin
+      SetBytecodeHomeObject(ASetter, TGocciaVMClassValue(ATarget).Prototype);
       ExistingDescriptor := TGocciaVMClassValue(ATarget).Prototype
         .GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(AKey));
       ExistingGetter := nil;
@@ -4842,6 +4864,7 @@ begin
     end
     else if ATarget is TGocciaObjectValue then
     begin
+      SetBytecodeHomeObject(ASetter, TGocciaObjectValue(ATarget));
       ExistingDescriptor := TGocciaObjectValue(ATarget)
         .GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(AKey));
       ExistingGetter := nil;
@@ -4867,6 +4890,7 @@ var
 begin
   if (ATarget is TGocciaClassValue) and (AKey is TGocciaSymbolValue) then
   begin
+    SetBytecodeHomeObject(AGetter, TGocciaObjectValue(ATarget));
     ExistingDescriptor := TGocciaClassValue(ATarget)
       .GetOwnStaticSymbolDescriptor(TGocciaSymbolValue(AKey));
     ExistingSetter := nil;
@@ -4891,6 +4915,7 @@ var
 begin
   if (ATarget is TGocciaClassValue) and (AKey is TGocciaSymbolValue) then
   begin
+    SetBytecodeHomeObject(ASetter, TGocciaObjectValue(ATarget));
     ExistingDescriptor := TGocciaClassValue(ATarget)
       .GetOwnStaticSymbolDescriptor(TGocciaSymbolValue(AKey));
     ExistingGetter := nil;
@@ -5509,8 +5534,13 @@ function TGocciaVM.GetSuperPropertyValue(const ASuperValue, AThisValue: TGocciaV
 var
   SuperClass: TGocciaClassValue;
   SuperObject: TGocciaObjectValue;
+  HomeObject: TGocciaObjectValue;
   SuperPrototype: TGocciaValue;
 begin
+  HomeObject := nil;
+  if Assigned(FCurrentClosure) then
+    HomeObject := FCurrentClosure.HomeObject;
+
   if (ASuperValue is TGocciaObjectValue) and
      (not (ASuperValue is TGocciaClassValue)) and
      ASuperValue.IsCallable then
@@ -5521,6 +5551,15 @@ begin
 
     if AThisValue is TGocciaClassValue then
       Exit(SuperObject.GetPropertyWithContext(AName, AThisValue));
+
+    if Assigned(HomeObject) then
+    begin
+      SuperPrototype := HomeObject.Prototype;
+      if SuperPrototype is TGocciaObjectValue then
+        Exit(TGocciaObjectValue(SuperPrototype).GetPropertyWithContext(
+          AName, AThisValue));
+      Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+    end;
 
     SuperPrototype := SuperObject.GetProperty(PROP_PROTOTYPE);
     if SuperPrototype is TGocciaObjectValue then
@@ -5540,6 +5579,15 @@ begin
   if AThisValue is TGocciaClassValue then
     Exit(SuperClass.GetProperty(AName));
 
+  if Assigned(HomeObject) then
+  begin
+    SuperPrototype := HomeObject.Prototype;
+    if SuperPrototype is TGocciaObjectValue then
+      Exit(TGocciaObjectValue(SuperPrototype).GetPropertyWithContext(
+        AName, AThisValue));
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
   if Assigned(SuperClass.Prototype) then
     Exit(SuperClass.Prototype.GetPropertyWithContext(AName, AThisValue));
 
@@ -5551,11 +5599,16 @@ function TGocciaVM.GetSuperPropertyValueByKey(const ASuperValue, AThisValue,
 var
   SuperClass: TGocciaClassValue;
   SuperObject: TGocciaObjectValue;
+  HomeObject: TGocciaObjectValue;
   SuperPrototype: TGocciaValue;
 begin
   if not (AKey is TGocciaSymbolValue) then
     Exit(GetSuperPropertyValue(ASuperValue, AThisValue,
       KeyToPropertyName(AKey)));
+
+  HomeObject := nil;
+  if Assigned(FCurrentClosure) then
+    HomeObject := FCurrentClosure.HomeObject;
 
   if (ASuperValue is TGocciaObjectValue) and
      (not (ASuperValue is TGocciaClassValue)) and
@@ -5565,6 +5618,15 @@ begin
     if AThisValue is TGocciaClassValue then
       Exit(SuperObject.GetSymbolPropertyWithReceiver(
         TGocciaSymbolValue(AKey), AThisValue));
+
+    if Assigned(HomeObject) then
+    begin
+      SuperPrototype := HomeObject.Prototype;
+      if SuperPrototype is TGocciaObjectValue then
+        Exit(TGocciaObjectValue(SuperPrototype).GetSymbolPropertyWithReceiver(
+          TGocciaSymbolValue(AKey), AThisValue));
+      Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+    end;
 
     SuperPrototype := SuperObject.GetProperty(PROP_PROTOTYPE);
     if SuperPrototype is TGocciaObjectValue then
@@ -5581,6 +5643,15 @@ begin
   if AThisValue is TGocciaClassValue then
     Exit(SuperClass.GetSymbolPropertyWithReceiver(
       TGocciaSymbolValue(AKey), AThisValue));
+
+  if Assigned(HomeObject) then
+  begin
+    SuperPrototype := HomeObject.Prototype;
+    if SuperPrototype is TGocciaObjectValue then
+      Exit(TGocciaObjectValue(SuperPrototype).GetSymbolPropertyWithReceiver(
+        TGocciaSymbolValue(AKey), AThisValue));
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
 
   if Assigned(SuperClass.Prototype) then
     Exit(SuperClass.Prototype.GetSymbolPropertyWithReceiver(
@@ -6764,6 +6835,8 @@ begin
         else if (FRegisters[A].Kind = grkObject) and
                 (FRegisters[A].ObjectValue is TGocciaClassValue) then
         begin
+          SetBytecodeHomeObject(RegisterToValue(FRegisters[C]),
+            TGocciaObjectValue(FRegisters[A].ObjectValue));
           if (FRegisters[B].Kind = grkObject) and
              (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
             TGocciaClassValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
@@ -6870,6 +6943,8 @@ begin
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
         begin
+          SetBytecodeHomeObject(RegisterToValue(FRegisters[C]),
+            TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype);
           if GlobalName = PROP_CONSTRUCTOR then
           begin
             TGocciaVMClassValue(FRegisters[A].ObjectValue).SetVMConstructor(
@@ -6955,6 +7030,9 @@ begin
         begin
           GlobalName := Template.GetConstantUnchecked(B).StringValue;
           RightValue := RegisterToValue(FRegisters[C]);
+          if FRegisters[A].ObjectValue is TGocciaVMClassValue then
+            SetBytecodeHomeObject(RightValue,
+              TGocciaObjectValue(FRegisters[A].ObjectValue));
           if FRegisters[A].ObjectValue is TGocciaVMLiteralObjectValue then
           begin
             if not TGocciaVMLiteralObjectValue(FRegisters[A].ObjectValue)

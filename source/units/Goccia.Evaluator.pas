@@ -982,6 +982,29 @@ var
   SuperPrototype: TGocciaValue;
   BoxedValue: TGocciaObjectValue;
   ObjectEvaluated: Boolean;
+
+  function ResolveInstanceSuperPrototype: TGocciaValue;
+  var
+    OwningClassValue: TGocciaValue;
+    OwningClass: TGocciaClassValue;
+  begin
+    OwningClassValue := AContext.Scope.FindOwningClass;
+    if OwningClassValue is TGocciaClassValue then
+    begin
+      OwningClass := TGocciaClassValue(OwningClassValue);
+      if Assigned(OwningClass.Prototype) then
+        Exit(OwningClass.Prototype.Prototype);
+      Exit(nil);
+    end;
+
+    if Assigned(SuperClass) then
+      Exit(SuperClass.Prototype);
+
+    if Assigned(SuperObject) then
+      Exit(SuperObject.GetProperty(PROP_PROTOTYPE));
+
+    Result := nil;
+  end;
 begin
   ObjectEvaluated := False;
 
@@ -1042,10 +1065,7 @@ begin
         end
         else
         begin
-          if Assigned(SuperClass) then
-            SuperPrototype := SuperClass.Prototype
-          else
-            SuperPrototype := SuperObject.GetProperty(PROP_PROTOTYPE);
+          SuperPrototype := ResolveInstanceSuperPrototype;
 
           if SuperPrototype is TGocciaObjectValue then
             Result := TGocciaObjectValue(SuperPrototype).GetSymbolPropertyWithReceiver(
@@ -1083,7 +1103,7 @@ begin
       end
       else
       begin
-        SuperPrototype := SuperObject.GetProperty(PROP_PROTOTYPE);
+        SuperPrototype := ResolveInstanceSuperPrototype;
         if SuperPrototype is TGocciaObjectValue then
           Result := TGocciaObjectValue(SuperPrototype).GetPropertyWithContext(
             PropertyName, AContext.Scope.ThisValue)
