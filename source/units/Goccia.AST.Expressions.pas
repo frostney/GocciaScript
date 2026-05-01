@@ -1625,7 +1625,7 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   for I := 0 to FExpressions.Count - 1 do
-    Result := FExpressions[I].Evaluate(AContext);
+    Result := EvaluateExpression(FExpressions[I], AContext);
 end;
 
 function TGocciaUnaryExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
