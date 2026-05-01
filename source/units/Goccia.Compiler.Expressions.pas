@@ -1227,6 +1227,8 @@ procedure CompileCall(const ACtx: TGocciaCompilationContext;
 var
   ArgCount, I: Integer;
   BaseReg, ObjReg, ArgsReg, SuperReg, KeyReg: UInt8;
+  ThisLocalIdx: Integer;
+  ThisSlot: UInt8;
   MemberExpr: TGocciaMemberExpression;
   PropIdx: UInt16;
   UseSpread: Boolean;
@@ -1270,6 +1272,14 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
       for I := 0 to ArgCount - 1 do
         ACtx.Scope.FreeRegister;
+    end;
+
+    ThisLocalIdx := ACtx.Scope.ResolveLocal(KEYWORD_THIS);
+    if ThisLocalIdx >= 0 then
+    begin
+      ThisSlot := ACtx.Scope.GetLocal(ThisLocalIdx).Slot;
+      if ThisSlot <> BaseReg then
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ThisSlot, BaseReg, 0));
     end;
 
     if AExpr.Optional then

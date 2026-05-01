@@ -852,7 +852,10 @@ begin
       begin
         SuperResult := SuperClass.ConstructorMethod.Call(Arguments, AContext.Scope.ThisValue);
         if SuperResult is TGocciaObjectValue then
-          Result := SuperResult
+        begin
+          AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);
+          Result := AContext.Scope.ThisValue;
+        end
         else
           Result := AContext.Scope.ThisValue;
       end
@@ -866,8 +869,13 @@ begin
               not (AContext.Scope.ThisValue is TGocciaInstanceValue) then
         Result := AContext.Scope.ThisValue
       else if SuperClassValue is TGocciaObjectValue then
-        Result := InvokeConstructableWithReceiver(SuperClassValue, Arguments,
-          AContext.Scope.ThisValue)
+      begin
+        SuperResult := InvokeConstructableWithReceiver(SuperClassValue, Arguments,
+          AContext.Scope.ThisValue);
+        if SuperResult is TGocciaObjectValue then
+          AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);
+        Result := AContext.Scope.ThisValue;
+      end
       else
       begin
         ThrowTypeError(Format(SErrorValueNotFunction, [SuperClassValue.TypeName]),
@@ -4188,8 +4196,10 @@ function InstantiateClass(const AClassValue: TGocciaClassValue;
   const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Instance: TGocciaObjectValue;
+  RootedInstance: TGocciaObjectValue;
   WalkClass: TGocciaClassValue;
   NativeInstance: TGocciaObjectValue;
+  ConstructedValue: TGocciaValue;
   InitContext, SuperInitContext: TGocciaEvaluationContext;
   InitScope, SuperInitScope: TGocciaScope;
   function ConstructNativeSuperInstance(
@@ -4264,7 +4274,8 @@ begin
     Instance.Prototype := AClassValue.Prototype;
   end;
 
-  TGarbageCollector.Instance.AddTempRoot(Instance);
+  RootedInstance := Instance;
+  TGarbageCollector.Instance.AddTempRoot(RootedInstance);
   try
     InitContext := AContext;
     InitScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue);
@@ -4301,18 +4312,30 @@ begin
     AClassValue.RunDecoratorFieldInitializers(Instance);
 
     if Assigned(AClassValue.ConstructorMethod) then
-      AClassValue.ConstructorMethod.Call(AArguments, Instance)
+    begin
+      ConstructedValue := AClassValue.ConstructorMethod.Call(AArguments, Instance);
+      if ConstructedValue is TGocciaObjectValue then
+        Instance := TGocciaObjectValue(ConstructedValue);
+    end
     else if Assigned(AClassValue.SuperClass) and Assigned(AClassValue.SuperClass.ConstructorMethod) then
-      AClassValue.SuperClass.ConstructorMethod.Call(AArguments, Instance)
+    begin
+      ConstructedValue := AClassValue.SuperClass.ConstructorMethod.Call(AArguments, Instance);
+      if ConstructedValue is TGocciaObjectValue then
+        Instance := TGocciaObjectValue(ConstructedValue);
+    end
     else if Assigned(AClassValue.NativeSuperConstructor) and
             (AClassValue.NativeSuperConstructor is TGocciaFunctionBase) and
             not (AClassValue.NativeSuperConstructor is TGocciaNativeFunctionValue) then
-      InvokeConstructableWithReceiver(AClassValue.NativeSuperConstructor,
-        AArguments, Instance)
+    begin
+      ConstructedValue := InvokeConstructableWithReceiver(
+        AClassValue.NativeSuperConstructor, AArguments, Instance);
+      if ConstructedValue is TGocciaObjectValue then
+        Instance := TGocciaObjectValue(ConstructedValue);
+    end
     else if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then
       TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
   finally
-    TGarbageCollector.Instance.RemoveTempRoot(Instance);
+    TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
   end;
 
   Result := Instance;

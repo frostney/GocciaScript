@@ -77,7 +77,9 @@ test("super() returns receiver unless superclass returns object", () => {
   class ObjectDerived extends ObjectBase {
     constructor() {
       const value = super();
+      this.superReturnedThis = value === this;
       this.superReturnedObject = value.fromBase;
+      return this;
     }
   }
 
@@ -86,6 +88,8 @@ test("super() returns receiver unless superclass returns object", () => {
   expect(primitive.superReturnedThis).toBe(true);
 
   const object = new ObjectDerived();
+  expect(object.fromBase).toBe(true);
+  expect(object.superReturnedThis).toBe(true);
   expect(object.superReturnedObject).toBe(true);
 });
 

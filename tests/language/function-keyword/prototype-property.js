@@ -91,6 +91,35 @@ test("function superclass constructor runs once from explicit super", () => {
   expect(implicit.value).toBe("implicit");
 });
 
+test("function superclass returned object becomes the constructed receiver", () => {
+  let calls = 0;
+  function Base(value) {
+    calls += 1;
+    return { value, fromBase: true };
+  }
+
+  class ExplicitDerived extends Base {
+    constructor(value) {
+      const returned = super("explicit-" + value);
+      this.superReturnedThis = returned === this;
+      this.afterSuper = true;
+      return this;
+    }
+  }
+
+  const explicit = new ExplicitDerived("arg");
+  expect(explicit.value).toBe("explicit-arg");
+  expect(explicit.fromBase).toBe(true);
+  expect(explicit.superReturnedThis).toBe(true);
+  expect(explicit.afterSuper).toBe(true);
+
+  class ImplicitDerived extends Base {}
+  const implicit = new ImplicitDerived("implicit");
+  expect(implicit.value).toBe("implicit");
+  expect(implicit.fromBase).toBe(true);
+  expect(calls).toBe(2);
+});
+
 // Per ES2026 §10.2.5.1 OrdinaryFunctionCreate, the prototype object's
 // [[Prototype]] is %Object.prototype%.  (The spec specifies %Generator% for
 // generators, but GocciaScript does not yet expose that intrinsic and falls

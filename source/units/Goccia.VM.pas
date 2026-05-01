@@ -3266,10 +3266,12 @@ function TGocciaVMClassValue.Instantiate(
   const ANewTarget: TGocciaClassValue): TGocciaValue;
 var
   Instance: TGocciaObjectValue;
+  RootedInstance: TGocciaObjectValue;
   WalkClass: TGocciaClassValue;
   NativeInstance: TGocciaObjectValue;
   ConstructorToCall: TGocciaMethodValue;
   InstancePrototype: TGocciaObjectValue;
+  ConstructedValue: TGocciaValue;
 begin
   // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget)
   if Assigned(ANewTarget) then
@@ -3303,17 +3305,22 @@ begin
 
   if Assigned(FConstructorValue) then
   begin
-    TGarbageCollector.Instance.AddTempRoot(Instance);
+    RootedInstance := Instance;
+    TGarbageCollector.Instance.AddTempRoot(RootedInstance);
     try
       FVM.RunClassInitializers(Self, Instance);
-      FVM.InvokeFunctionValue(FConstructorValue, AArguments, Instance);
+      ConstructedValue := FVM.InvokeFunctionValue(
+        FConstructorValue, AArguments, Instance);
+      if ConstructedValue is TGocciaObjectValue then
+        Instance := TGocciaObjectValue(ConstructedValue);
     finally
-      TGarbageCollector.Instance.RemoveTempRoot(Instance);
+      TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
     end;
   end
   else
   begin
-    TGarbageCollector.Instance.AddTempRoot(Instance);
+    RootedInstance := Instance;
+    TGarbageCollector.Instance.AddTempRoot(RootedInstance);
     try
       FVM.RunClassInitializers(Self, Instance);
 
@@ -3323,9 +3330,11 @@ begin
       begin
         TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
           SuperClass, Instance);
-        TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
+        ConstructedValue := TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
           TGocciaVMClassValue(SuperClass).FConstructorValue,
           AArguments, Instance);
+        if ConstructedValue is TGocciaObjectValue then
+          Instance := TGocciaObjectValue(ConstructedValue);
       end
       else
       begin
@@ -3335,20 +3344,26 @@ begin
         if Assigned(ConstructorToCall) then
         begin
           FVM.RunClassInitializers(SuperClass, Instance);
-          ConstructorToCall.Call(AArguments, Instance);
+          ConstructedValue := ConstructorToCall.Call(AArguments, Instance);
+          if ConstructedValue is TGocciaObjectValue then
+            Instance := TGocciaObjectValue(ConstructedValue);
         end
         else if Assigned(SuperClass) then
           FVM.InvokeImplicitSuperInitialization(SuperClass, Instance, AArguments)
         else if Assigned(NativeSuperConstructor) and
                 (NativeSuperConstructor is TGocciaFunctionBase) and
                 not (NativeSuperConstructor is TGocciaNativeFunctionValue) then
-          InvokeConstructableWithReceiver(NativeSuperConstructor,
-            AArguments, Instance)
+        begin
+          ConstructedValue := InvokeConstructableWithReceiver(
+            NativeSuperConstructor, AArguments, Instance);
+          if ConstructedValue is TGocciaObjectValue then
+            Instance := TGocciaObjectValue(ConstructedValue);
+        end
         else if Instance is TGocciaInstanceValue then
           TGocciaInstanceValue(Instance).InitializeNativeFromArguments(AArguments);
       end;
     finally
-      TGarbageCollector.Instance.RemoveTempRoot(Instance);
+      TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
     end;
   end;
 
@@ -3359,12 +3374,15 @@ function TGocciaVMClassValue.InstantiateRegisters(
   const AArguments: TGocciaRegisterArray): TGocciaRegister;
 var
   Instance: TGocciaObjectValue;
+  RootedInstance: TGocciaObjectValue;
   WalkClass: TGocciaClassValue;
   NativeInstance: TGocciaObjectValue;
   ConstructorToCall: TGocciaMethodValue;
   BoxedArgs: TGocciaArgumentsCollection;
   BytecodeConstructor: TGocciaBytecodeFunctionValue;
   BytecodeSuperConstructor: TGocciaBytecodeFunctionValue;
+  ConstructedValue: TGocciaValue;
+  ReturnRegister: TGocciaRegister;
   procedure EnsureBoxedArgs;
   begin
     if not Assigned(BoxedArgs) then
@@ -3407,7 +3425,8 @@ begin
       Instance.Prototype := Prototype;
     end;
 
-    TGarbageCollector.Instance.AddTempRoot(Instance);
+    RootedInstance := Instance;
+    TGarbageCollector.Instance.AddTempRoot(RootedInstance);
     try
       if Assigned(FConstructorValue) then
       begin
@@ -3418,18 +3437,30 @@ begin
           if Assigned(BytecodeConstructor.FClosure) and
              Assigned(BytecodeConstructor.FClosure.Template) and
              (not BytecodeConstructor.FClosure.Template.IsAsync) then
-            FVM.ExecuteClosureRegisters(BytecodeConstructor.FClosure,
-              RegisterObject(Instance), AArguments)
+          begin
+            ReturnRegister := FVM.ExecuteClosureRegisters(
+              BytecodeConstructor.FClosure, RegisterObject(Instance),
+              AArguments);
+            if (ReturnRegister.Kind = grkObject) and
+               (ReturnRegister.ObjectValue is TGocciaObjectValue) then
+              Instance := TGocciaObjectValue(ReturnRegister.ObjectValue);
+          end
           else
           begin
             EnsureBoxedArgs;
-            FVM.InvokeFunctionValue(FConstructorValue, BoxedArgs, Instance);
+            ConstructedValue := FVM.InvokeFunctionValue(
+              FConstructorValue, BoxedArgs, Instance);
+            if ConstructedValue is TGocciaObjectValue then
+              Instance := TGocciaObjectValue(ConstructedValue);
           end;
         end
         else
         begin
           EnsureBoxedArgs;
-          FVM.InvokeFunctionValue(FConstructorValue, BoxedArgs, Instance);
+          ConstructedValue := FVM.InvokeFunctionValue(
+            FConstructorValue, BoxedArgs, Instance);
+          if ConstructedValue is TGocciaObjectValue then
+            Instance := TGocciaObjectValue(ConstructedValue);
         end;
       end
       else
@@ -3449,23 +3480,32 @@ begin
             if Assigned(BytecodeSuperConstructor.FClosure) and
                Assigned(BytecodeSuperConstructor.FClosure.Template) and
                (not BytecodeSuperConstructor.FClosure.Template.IsAsync) then
-              TGocciaVMClassValue(SuperClass).FVM.ExecuteClosureRegisters(
+            begin
+              ReturnRegister := TGocciaVMClassValue(SuperClass).FVM.ExecuteClosureRegisters(
                 BytecodeSuperConstructor.FClosure,
-                RegisterObject(Instance), AArguments)
+                RegisterObject(Instance), AArguments);
+              if (ReturnRegister.Kind = grkObject) and
+                 (ReturnRegister.ObjectValue is TGocciaObjectValue) then
+                Instance := TGocciaObjectValue(ReturnRegister.ObjectValue);
+            end
             else
             begin
               EnsureBoxedArgs;
-              TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
+              ConstructedValue := TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
                 TGocciaVMClassValue(SuperClass).FConstructorValue,
                 BoxedArgs, Instance);
+              if ConstructedValue is TGocciaObjectValue then
+                Instance := TGocciaObjectValue(ConstructedValue);
             end;
           end
           else
           begin
             EnsureBoxedArgs;
-            TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
+            ConstructedValue := TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
               TGocciaVMClassValue(SuperClass).FConstructorValue,
               BoxedArgs, Instance);
+            if ConstructedValue is TGocciaObjectValue then
+              Instance := TGocciaObjectValue(ConstructedValue);
           end;
         end
         else
@@ -3477,7 +3517,9 @@ begin
           begin
             EnsureBoxedArgs;
             FVM.RunClassInitializers(SuperClass, Instance);
-            ConstructorToCall.Call(BoxedArgs, Instance);
+            ConstructedValue := ConstructorToCall.Call(BoxedArgs, Instance);
+            if ConstructedValue is TGocciaObjectValue then
+              Instance := TGocciaObjectValue(ConstructedValue);
           end
           else if Assigned(SuperClass) then
             FVM.InvokeImplicitSuperInitializationRegisters(SuperClass, Instance, AArguments)
@@ -3486,8 +3528,10 @@ begin
                   not (NativeSuperConstructor is TGocciaNativeFunctionValue) then
           begin
             EnsureBoxedArgs;
-            InvokeConstructableWithReceiver(NativeSuperConstructor,
-              BoxedArgs, Instance);
+            ConstructedValue := InvokeConstructableWithReceiver(
+              NativeSuperConstructor, BoxedArgs, Instance);
+            if ConstructedValue is TGocciaObjectValue then
+              Instance := TGocciaObjectValue(ConstructedValue);
           end
           else
           begin
@@ -3498,7 +3542,7 @@ begin
         end;
       end;
     finally
-      TGarbageCollector.Instance.RemoveTempRoot(Instance);
+      TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
     end;
 
     Result := RegisterObject(Instance);
