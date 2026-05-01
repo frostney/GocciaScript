@@ -96,6 +96,7 @@ begin
 
       for I := 0 to EntryCount - 1 do
       begin
+        Entry := Default(TBenchmarkEntry);
         SingleResult := TGocciaObjectValue(ResultsArray.GetElement(I));
 
         Entry.Suite := SingleResult.GetProperty('suite').ToStringLiteral.Value;
@@ -145,6 +146,7 @@ procedure MakeErrorFileResult(const AFileName, AMessage: string;
 var
   FileResult: TBenchmarkFileResult;
 begin
+  FileResult := Default(TBenchmarkFileResult);
   FileResult.FileName := AFileName;
   FileResult.LexTimeNanoseconds := 0;
   FileResult.ParseTimeNanoseconds := 0;
