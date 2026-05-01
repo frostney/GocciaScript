@@ -832,6 +832,13 @@ begin
     ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 
+  if ACallExpression.Optional and
+     ((Callee is TGocciaNullLiteralValue) or (Callee is TGocciaUndefinedLiteralValue)) then
+  begin
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
   Arguments := TGocciaArgumentsCollection.Create;
   try
     for ArgumentExpr in ACallExpression.Arguments do

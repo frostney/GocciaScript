@@ -983,9 +983,7 @@ begin
               end;
               Consume(gttRightParen, 'Expected ")" after arguments',
                 SSuggestCloseParenArguments);
-              // Wrap call in optional chaining by wrapping the callee in an optional member
-              // For func?.(), we create a call on an optional member access
-              Result := TGocciaCallExpression.Create(Result, Arguments, Line, Column);
+              Result := TGocciaCallExpression.Create(Result, Arguments, Line, Column, True);
             except
               Arguments.Free;
               raise;
