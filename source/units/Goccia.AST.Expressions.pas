@@ -137,6 +137,17 @@ type
     property Right: TGocciaExpression read FRight;
   end;
 
+  TGocciaSequenceExpression = class(TGocciaExpression)
+  private
+    FExpressions: TObjectList<TGocciaExpression>;
+  public
+    constructor Create(const AExpressions: TObjectList<TGocciaExpression>;
+      const ALine, AColumn: Integer);
+    destructor Destroy; override;
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    property Expressions: TObjectList<TGocciaExpression> read FExpressions;
+  end;
+
   TGocciaUnaryExpression = class(TGocciaExpression)
   private
     FOperator: TGocciaTokenType;
@@ -971,6 +982,21 @@ begin
   FRight := ARight;
 end;
 
+{ TGocciaSequenceExpression }
+
+constructor TGocciaSequenceExpression.Create(const AExpressions: TObjectList<TGocciaExpression>;
+  const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FExpressions := AExpressions;
+end;
+
+destructor TGocciaSequenceExpression.Destroy;
+begin
+  FExpressions.Free;
+  inherited;
+end;
+
 { TGocciaUnaryExpression }
 
 constructor TGocciaUnaryExpression.Create(const AOperator: TGocciaTokenType;
@@ -1590,6 +1616,16 @@ end;
 function TGocciaBinaryExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
   Result := EvaluateBinary(Self, AContext);
+end;
+
+// ES2026 §13.16 Comma Operator (,)
+function TGocciaSequenceExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  I: Integer;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  for I := 0 to FExpressions.Count - 1 do
+    Result := EvaluateExpression(FExpressions[I], AContext);
 end;
 
 function TGocciaUnaryExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;

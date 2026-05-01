@@ -86,6 +86,22 @@ test("object generator method preserves completed siblings across multiple yield
   expect(events).toEqual(["left", "combine"]);
 });
 
+test("object generator method does not replay completed sequence operands", () => {
+  let count = 0;
+  const obj = {
+    *values() {
+      const result = (count = count + 1, yield "resume", count = count + 10);
+      yield result;
+    },
+  };
+
+  const iter = obj.values();
+  expect(iter.next()).toEqual({ value: "resume", done: false });
+  expect(count).toBe(1);
+  expect(iter.next()).toEqual({ value: 11, done: false });
+  expect(count).toBe(11);
+});
+
 test("object generator method does not reuse completed loop body expressions", () => {
   const obj = {
     *values() {

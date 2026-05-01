@@ -22,6 +22,8 @@ procedure CompileIdentifierAccess(const ACtx: TGocciaCompilationContext;
   const ASafe: Boolean);
 procedure CompileBinary(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaBinaryExpression; const ADest: UInt8);
+procedure CompileSequence(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaSequenceExpression; const ADest: UInt8);
 procedure CompileUnary(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaUnaryExpression; const ADest: UInt8);
 procedure CompileAssignment(const ACtx: TGocciaCompilationContext;
@@ -534,6 +536,36 @@ begin
   end;
 
   ACtx.Scope.FreeRegister;
+end;
+
+// ES2026 §13.16 Comma Operator (,)
+procedure CompileSequence(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaSequenceExpression; const ADest: UInt8);
+var
+  I: Integer;
+  TempReg: UInt8;
+begin
+  if AExpr.Expressions.Count = 0 then
+  begin
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
+    Exit;
+  end;
+
+  if AExpr.Expressions.Count = 1 then
+  begin
+    ACtx.CompileExpression(AExpr.Expressions[0], ADest);
+    Exit;
+  end;
+
+  TempReg := ACtx.Scope.AllocateRegister;
+  try
+    for I := 0 to AExpr.Expressions.Count - 2 do
+      ACtx.CompileExpression(AExpr.Expressions[I], TempReg);
+
+    ACtx.CompileExpression(AExpr.Expressions[AExpr.Expressions.Count - 1], ADest);
+  finally
+    ACtx.Scope.FreeRegister;
+  end;
 end;
 
 procedure CompileAssignment(const ACtx: TGocciaCompilationContext;
