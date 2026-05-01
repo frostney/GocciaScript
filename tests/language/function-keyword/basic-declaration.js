@@ -27,3 +27,40 @@ test("function declaration with multiple statements", () => {
   }
   expect(compute(5)).toBe(11);
 });
+
+test("block-scoped function declaration does not overwrite outer var binding", () => {
+  var f = () => "outer";
+  {
+    function f() {
+      return "inner";
+    }
+    expect(f()).toBe("inner");
+  }
+  expect(f()).toBe("outer");
+});
+
+test("catch block function declaration is hoisted within the catch block", () => {
+  let value;
+  try {
+    throw "caught";
+  } catch (error) {
+    value = f();
+    function f() {
+      return error;
+    }
+  }
+  expect(value).toBe("caught");
+});
+
+test("finally block function declaration is hoisted within the finally block", () => {
+  let value;
+  try {
+    value = "try";
+  } finally {
+    value = f();
+    function f() {
+      return "finally";
+    }
+  }
+  expect(value).toBe("finally");
+});

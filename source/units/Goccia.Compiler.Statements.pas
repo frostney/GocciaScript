@@ -391,19 +391,27 @@ begin
 end;
 
 { B field encodes the declaration mode for OP_DEFINE_GLOBAL_CONST:
+  0 = var declaration
   1 = let declaration (throws on re-declaration)
   2 = const declaration (throws on re-declaration, non-writable) }
 const
+  GLOBAL_DEFINE_VAR = 0;
   GLOBAL_DEFINE_LET = 1;
   GLOBAL_DEFINE_CONST = 2;
+  GLOBAL_DEFINE_VAR_DECL = 3;
 
 procedure EmitGlobalDefine(const ACtx: TGocciaCompilationContext;
-  const ASlot: UInt8; const AName: string; const AIsConst: Boolean);
+  const ASlot: UInt8; const AName: string; const AIsConst: Boolean;
+  const AIsVar: Boolean = False; const AHasInitializer: Boolean = True);
 var
   NameIdx: UInt16;
   DeclMode: UInt8;
 begin
-  if AIsConst then
+  if AIsVar and (not AHasInitializer) then
+    DeclMode := GLOBAL_DEFINE_VAR_DECL
+  else if AIsVar then
+    DeclMode := GLOBAL_DEFINE_VAR
+  else if AIsConst then
     DeclMode := GLOBAL_DEFINE_CONST
   else
     DeclMode := GLOBAL_DEFINE_LET;
@@ -422,12 +430,15 @@ var
   Slot: UInt8;
   InferredTemplate: TGocciaFunctionTemplate;
   TypeHint, AnnotationType: TGocciaLocalType;
-  IsStrict, HasRealInitializer, IsTopLevelGlobalBacked, IsVarRedeclaration: Boolean;
+  IsBlockScopedFunctionDeclaration, IsStrict, HasRealInitializer,
+  IsTopLevelGlobalBacked, IsVarRedeclaration: Boolean;
 begin
   for I := 0 to High(AStmt.Variables) do
   begin
     Info := AStmt.Variables[I];
-    if AStmt.IsVar then
+    IsBlockScopedFunctionDeclaration := AStmt.IsFunctionDeclaration and
+      (ACtx.Scope.Depth > 0);
+    if AStmt.IsVar and (not IsBlockScopedFunctionDeclaration) then
     begin
       // Track whether this is a redeclaration (slot already exists)
       LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
@@ -449,8 +460,10 @@ begin
     end;
 
     IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
-      (ACtx.Scope.Depth = 0);
-    if IsTopLevelGlobalBacked then
+      ((AStmt.IsVar and (not IsBlockScopedFunctionDeclaration)) or
+       ((not AStmt.IsVar) and (ACtx.Scope.Depth = 0)));
+    if IsTopLevelGlobalBacked and AStmt.IsVar and
+       (not IsBlockScopedFunctionDeclaration) then
     begin
       LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
       if LocalIdx >= 0 then
@@ -553,7 +566,7 @@ begin
     // a cell that copied the register's initial (undefined) value.  The
     // initializer wrote directly to the register (e.g. OP_LOAD_INT) bypassing
     // the cell.  Emit OP_SET_LOCAL to sync the cell with the register.
-    if not AStmt.IsVar then
+    if (not AStmt.IsVar) or IsBlockScopedFunctionDeclaration then
     begin
       LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
       if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
@@ -561,7 +574,8 @@ begin
     end;
 
     if IsTopLevelGlobalBacked then
-      EmitGlobalDefine(ACtx, Slot, Info.Name, AStmt.IsConst);
+      EmitGlobalDefine(ACtx, Slot, Info.Name, AStmt.IsConst, AStmt.IsVar,
+        HasRealInitializer);
   end;
 end;
 
@@ -650,6 +664,18 @@ begin
   end;
 end;
 
+function GetBlockFunctionDeclaration(const ANode: TGocciaASTNode): TGocciaVariableDeclaration;
+begin
+  if ANode is TGocciaVariableDeclaration then
+    Result := TGocciaVariableDeclaration(ANode)
+  else if ANode is TGocciaExportVariableDeclaration then
+    Result := TGocciaExportVariableDeclaration(ANode).Declaration
+  else
+    Exit(nil);
+  if not Result.IsFunctionDeclaration then
+    Result := nil;
+end;
+
 procedure CompileBlockStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaBlockStatement);
 var
@@ -664,7 +690,16 @@ var
   HandlerJump, EndJump, NullishJump: Integer;
   SavedResources: array of TUsingResourceEntry;
   PendingEntry: TPendingFinallyEntry;
+  HasFunctionDecl: Boolean;
 begin
+  HasFunctionDecl := False;
+  for I := 0 to AStmt.Nodes.Count - 1 do
+    if GetBlockFunctionDeclaration(AStmt.Nodes[I]) <> nil then
+    begin
+      HasFunctionDecl := True;
+      Break;
+    end;
+
   // Check if this block contains any using declarations
   HasUsing := False;
   for I := 0 to AStmt.Nodes.Count - 1 do
@@ -678,9 +713,15 @@ begin
   if not HasUsing then
   begin
     ACtx.Scope.BeginScope;
+    if HasFunctionDecl then
+      for I := 0 to AStmt.Nodes.Count - 1 do
+        if GetBlockFunctionDeclaration(AStmt.Nodes[I]) <> nil then
+          ACtx.CompileStatement(TGocciaStatement(AStmt.Nodes[I]));
     for I := 0 to AStmt.Nodes.Count - 1 do
     begin
       Node := AStmt.Nodes[I];
+      if GetBlockFunctionDeclaration(Node) <> nil then
+        Continue;
       if Node is TGocciaStatement then
         ACtx.CompileStatement(TGocciaStatement(Node))
       else if Node is TGocciaExpression then
@@ -698,6 +739,10 @@ begin
 
   // Slow path: block with using declarations — compile as try/finally
   ACtx.Scope.BeginScope;
+  if HasFunctionDecl then
+    for I := 0 to AStmt.Nodes.Count - 1 do
+      if GetBlockFunctionDeclaration(AStmt.Nodes[I]) <> nil then
+        ACtx.CompileStatement(TGocciaStatement(AStmt.Nodes[I]));
 
   // Remember the starting point of using resources for this block
   if not Assigned(GUsingResources) then
@@ -728,6 +773,8 @@ begin
   for I := 0 to AStmt.Nodes.Count - 1 do
   begin
     Node := AStmt.Nodes[I];
+    if GetBlockFunctionDeclaration(Node) <> nil then
+      Continue;
     if Node is TGocciaStatement then
       ACtx.CompileStatement(TGocciaStatement(Node))
     else if Node is TGocciaExpression then
@@ -2976,7 +3023,8 @@ begin
 end;
 
 procedure EmitGlobalDefinesForPattern(const ACtx: TGocciaCompilationContext;
-  const APattern: TGocciaDestructuringPattern; const AIsConst: Boolean);
+  const APattern: TGocciaDestructuringPattern; const AIsConst: Boolean;
+  const AIsVar: Boolean = False);
 var
   ObjPat: TGocciaObjectDestructuringPattern;
   ArrPat: TGocciaArrayDestructuringPattern;
@@ -2989,32 +3037,35 @@ begin
     LocalIdx := ACtx.Scope.ResolveLocal(TGocciaIdentifierDestructuringPattern(APattern).Name);
     if LocalIdx >= 0 then
     begin
-      ACtx.Scope.MarkGlobalBacked(LocalIdx);
+      if AIsVar then
+        ACtx.Scope.MarkGlobalBacked(LocalIdx);
       EmitGlobalDefine(ACtx, ACtx.Scope.GetLocal(LocalIdx).Slot,
-        ACtx.Scope.GetLocal(LocalIdx).Name, AIsConst);
+        ACtx.Scope.GetLocal(LocalIdx).Name, AIsConst, AIsVar);
     end;
   end
   else if APattern is TGocciaObjectDestructuringPattern then
   begin
     ObjPat := TGocciaObjectDestructuringPattern(APattern);
     for I := 0 to ObjPat.Properties.Count - 1 do
-      EmitGlobalDefinesForPattern(ACtx, ObjPat.Properties[I].Pattern, AIsConst);
+      EmitGlobalDefinesForPattern(ACtx, ObjPat.Properties[I].Pattern,
+        AIsConst, AIsVar);
   end
   else if APattern is TGocciaArrayDestructuringPattern then
   begin
     ArrPat := TGocciaArrayDestructuringPattern(APattern);
     for I := 0 to ArrPat.Elements.Count - 1 do
       if Assigned(ArrPat.Elements[I]) then
-        EmitGlobalDefinesForPattern(ACtx, ArrPat.Elements[I], AIsConst);
+        EmitGlobalDefinesForPattern(ACtx, ArrPat.Elements[I], AIsConst,
+          AIsVar);
   end
   else if APattern is TGocciaAssignmentDestructuringPattern then
   begin
     AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
-    EmitGlobalDefinesForPattern(ACtx, AssignPat.Left, AIsConst);
+    EmitGlobalDefinesForPattern(ACtx, AssignPat.Left, AIsConst, AIsVar);
   end
   else if APattern is TGocciaRestDestructuringPattern then
     EmitGlobalDefinesForPattern(ACtx,
-      TGocciaRestDestructuringPattern(APattern).Argument, AIsConst);
+      TGocciaRestDestructuringPattern(APattern).Argument, AIsConst, AIsVar);
 end;
 
 procedure CompileDestructuringDeclaration(const ACtx: TGocciaCompilationContext;
@@ -3026,17 +3077,13 @@ var
   Local: TGocciaCompilerLocal;
 begin
   IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
-    (ACtx.Scope.Depth = 0);
+    (AStmt.IsVar or (ACtx.Scope.Depth = 0));
   LocalCountBefore := ACtx.Scope.LocalCount;
 
   if AStmt.IsVar then
     CollectDestructuringVarBindings(AStmt.Pattern, ACtx.Scope)
   else
     CollectDestructuringBindings(AStmt.Pattern, ACtx.Scope, AStmt.IsConst);
-
-  if IsTopLevelGlobalBacked and (not AStmt.IsVar) then
-    for I := LocalCountBefore to ACtx.Scope.LocalCount - 1 do
-      ACtx.Scope.MarkGlobalBacked(I);
 
   SrcReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AStmt.Initializer, SrcReg);
@@ -3046,7 +3093,7 @@ begin
   if IsTopLevelGlobalBacked then
   begin
     if AStmt.IsVar then
-      EmitGlobalDefinesForPattern(ACtx, AStmt.Pattern, False)
+      EmitGlobalDefinesForPattern(ACtx, AStmt.Pattern, False, True)
     else
       for I := LocalCountBefore to ACtx.Scope.LocalCount - 1 do
       begin

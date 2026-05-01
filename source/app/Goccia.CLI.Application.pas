@@ -611,6 +611,9 @@ begin
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
       ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig);
     end;
+    if AExecutor is TGocciaBytecodeExecutor then
+      TGocciaBytecodeExecutor(AExecutor).GlobalBackedTopLevel :=
+        Result.SourceType = stScript;
     if FLogFileOpen then
       Result.BuiltinConsole.LogCallback := HandleConsoleLog;
   except

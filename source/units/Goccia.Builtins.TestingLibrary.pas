@@ -2369,6 +2369,12 @@ begin
   ConfigureTestFunction(TestFunction);
   AScope.DefineLexicalBinding('test', TestFunction, dtConst);
 
+  // Private aliases used by generated Test262 wrappers.  Some conformance
+  // tests intentionally declare globals named describe/test.
+  AScope.DefineLexicalBinding('__gocciaTest262Describe', DescribeFunction,
+    dtConst);
+  AScope.DefineLexicalBinding('__gocciaTest262Test', TestFunction, dtConst);
+
   ItFunction := TGocciaNativeFunctionValue.Create(It, 'it', 2);
   ConfigureTestFunction(ItFunction);
   AScope.DefineLexicalBinding('it', ItFunction, dtConst);

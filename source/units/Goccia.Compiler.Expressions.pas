@@ -248,6 +248,12 @@ begin
   UpvalIdx := ACtx.Scope.ResolveUpvalue(AExpr.Name);
   if UpvalIdx >= 0 then
   begin
+    if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
+    begin
+      NameIdx := ACtx.Template.AddConstantString(AExpr.Name);
+      EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest, NameIdx));
+      Exit;
+    end;
     EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, ADest, UInt16(UpvalIdx)));
     Exit;
   end;
@@ -591,6 +597,12 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_THROW_TYPE_ERROR_CONST, 0, 0, UInt8(MsgIdx)));
       Exit;
     end;
+    if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
+    begin
+      EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ADest,
+        ACtx.Template.AddConstantString(AExpr.Name)));
+      Exit;
+    end;
     if ACtx.Scope.GetUpvalue(UpvalIdx).IsStrictlyTyped then
       if not TypesAreCompatible(InferLocalType(AExpr.Value), ACtx.Scope.GetUpvalue(UpvalIdx).TypeHint) then
         EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, ADest,
@@ -746,7 +758,13 @@ begin
     begin
       LocalIdx := ACtx.Scope.ResolveUpvalue(IdentPat.Name);
       if LocalIdx >= 0 then
-        EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, ASrcReg, UInt16(LocalIdx)))
+      begin
+        if ACtx.Scope.GetUpvalue(LocalIdx).IsGlobalBacked then
+          EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ASrcReg,
+            ACtx.Template.AddConstantString(IdentPat.Name)))
+        else
+          EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, ASrcReg, UInt16(LocalIdx)));
+      end
       else
         EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ASrcReg,
           ACtx.Template.AddConstantString(IdentPat.Name)));
@@ -2106,7 +2124,11 @@ begin
     UpvalIdx := ACtx.Scope.ResolveUpvalue(AExpr.Name);
     if UpvalIdx >= 0 then
     begin
-      EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, ADest, UInt16(UpvalIdx)));
+      if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
+        EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest,
+          ACtx.Template.AddConstantString(AExpr.Name)))
+      else
+        EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, ADest, UInt16(UpvalIdx)));
       JumpIdx := EmitJumpInstruction(ACtx, Op, ADest);
       if ACtx.Scope.GetUpvalue(UpvalIdx).IsConst then
       begin
@@ -2124,7 +2146,11 @@ begin
              ACtx.Scope.GetUpvalue(UpvalIdx).TypeHint) then
           EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, ADest,
             UInt8(Ord(ACtx.Scope.GetUpvalue(UpvalIdx).TypeHint)), 0));
-        EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, ADest, UInt16(UpvalIdx)));
+        if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
+          EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ADest,
+            ACtx.Template.AddConstantString(AExpr.Name)))
+        else
+          EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, ADest, UInt16(UpvalIdx)));
       end;
       PatchJumpTarget(ACtx, JumpIdx);
       Exit;
@@ -2205,10 +2231,18 @@ begin
   begin
     RegVal := ACtx.Scope.AllocateRegister;
     RegResult := ACtx.Scope.AllocateRegister;
-    EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, RegResult, UInt16(UpvalIdx)));
+    if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
+      EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
+        ACtx.Template.AddConstantString(AExpr.Name)))
+    else
+      EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, RegResult, UInt16(UpvalIdx)));
     ACtx.CompileExpression(AExpr.Value, RegVal);
     EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, RegVal));
-    EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, RegResult, UInt16(UpvalIdx)));
+    if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
+      EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, RegResult,
+        ACtx.Template.AddConstantString(AExpr.Name)))
+    else
+      EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, RegResult, UInt16(UpvalIdx)));
     if ADest <> RegResult then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
     ACtx.Scope.FreeRegister;
@@ -2482,13 +2516,21 @@ begin
   begin
     RegResult := ACtx.Scope.AllocateRegister;
     RegOne := ACtx.Scope.AllocateRegister;
-    EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, RegResult, UInt16(UpvalIdx)));
+    if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
+      EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
+        ACtx.Template.AddConstantString(Ident.Name)))
+    else
+      EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, RegResult, UInt16(UpvalIdx)));
     EmitInstruction(ACtx, EncodeABC(OP_TO_NUMBER, RegResult, RegResult, 0));
     EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, RegOne, 1));
     if not AExpr.IsPrefix then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
     EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, RegOne));
-    EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, RegResult, UInt16(UpvalIdx)));
+    if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
+      EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, RegResult,
+        ACtx.Template.AddConstantString(Ident.Name)))
+    else
+      EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, RegResult, UInt16(UpvalIdx)));
     if AExpr.IsPrefix then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
     ACtx.Scope.FreeRegister;

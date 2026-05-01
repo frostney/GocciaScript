@@ -239,9 +239,20 @@ def wrap_positive_test(
     if is_async:
         return f"""{harness_source}
 
-describe("test262: {tid}", () => {{
-  test("{desc}", async () => {{
+let __gocciaTest262Failed = false;
+let __gocciaTest262Failure = undefined;
+try {{
 {body}
+}} catch (error) {{
+  __gocciaTest262Failed = true;
+  __gocciaTest262Failure = error;
+}}
+
+__gocciaTest262Describe("test262: {tid}", () => {{
+  __gocciaTest262Test("{desc}", async () => {{
+    if (__gocciaTest262Failed) {{
+      throw __gocciaTest262Failure;
+    }}
     await __donePromise;
   }});
 }});
@@ -249,9 +260,20 @@ describe("test262: {tid}", () => {{
 
     return f"""{harness_source}
 
-describe("test262: {tid}", () => {{
-  test("{desc}", () => {{
+let __gocciaTest262Failed = false;
+let __gocciaTest262Failure = undefined;
+try {{
 {body}
+}} catch (error) {{
+  __gocciaTest262Failed = true;
+  __gocciaTest262Failure = error;
+}}
+
+__gocciaTest262Describe("test262: {tid}", () => {{
+  __gocciaTest262Test("{desc}", () => {{
+    if (__gocciaTest262Failed) {{
+      throw __gocciaTest262Failure;
+    }}
   }});
 }});
 """
@@ -271,8 +293,8 @@ def wrap_negative_runtime_test(
 
     return f"""{harness_source}
 
-describe("test262: {tid}", () => {{
-  test("{desc}", () => {{
+__gocciaTest262Describe("test262: {tid}", () => {{
+  __gocciaTest262Test("{desc}", () => {{
     expect(() => {{
 {body}
     }}).toThrow({error_type});

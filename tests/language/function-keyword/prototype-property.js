@@ -85,17 +85,52 @@ test("async generator function.prototype's [[Prototype]] is Object.prototype (Go
   expect(Object.getPrototypeOf(g.prototype)).toBe(Object.prototype);
 });
 
-test("methods added to prototype are visible to instances via [[Prototype]] chain (interpreter only — new on plain functions is not yet wired)", () => {
-  // We can verify the prototype chain mechanically without invoking `new`:
-  // Object.create(f.prototype) gives us an object whose [[Prototype]] is f.prototype.
+test("methods added to prototype are visible to constructed instances", () => {
   function Animal() {}
   Animal.prototype.speak = function () {
     return "generic sound";
   };
 
-  const dog = Object.create(Animal.prototype);
+  const dog = new Animal();
   expect(dog.speak()).toBe("generic sound");
   expect(Object.getPrototypeOf(dog)).toBe(Animal.prototype);
+});
+
+test("constructor return primitives are ignored for ordinary functions", () => {
+  function Box(value) {
+    this.value = value;
+    return 42;
+  }
+
+  const box = new Box("ok");
+  expect(box.value).toBe("ok");
+  expect(Object.getPrototypeOf(box)).toBe(Box.prototype);
+});
+
+test("constructor return objects replace the default instance", () => {
+  const replacement = { value: "replacement" };
+  function Box() {
+    this.value = "ignored";
+    return replacement;
+  }
+
+  expect(new Box()).toBe(replacement);
+});
+
+test("bound ordinary functions remain constructable", () => {
+  function Pair(a, b) {
+    this.a = a;
+    this.b = b;
+    this.boundThisIgnored = this.ignored;
+  }
+
+  const BoundPair = Pair.bind({ ignored: true }, 1);
+  const pair = new BoundPair(2);
+
+  expect(pair.a).toBe(1);
+  expect(pair.b).toBe(2);
+  expect(pair.boundThisIgnored).toBeUndefined();
+  expect(Object.getPrototypeOf(pair)).toBe(Pair.prototype);
 });
 
 test("generator function declaration has own prototype property", () => {

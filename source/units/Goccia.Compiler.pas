@@ -18,6 +18,7 @@ type
   private
     FModule: TGocciaBytecodeModule;
     FCurrentTemplate: TGocciaFunctionTemplate;
+    FTopLevelTemplate: TGocciaFunctionTemplate;
     FCurrentScope: TGocciaCompilerScope;
     FSourcePath: string;
     FFormalParameterCounts: TFormalParameterCountMap;
@@ -66,6 +67,7 @@ begin
   FFormalParameterCounts := TFormalParameterCountMap.Create;
   FModule := nil;
   FCurrentTemplate := nil;
+  FTopLevelTemplate := nil;
   FCurrentScope := nil;
 end;
 
@@ -81,7 +83,8 @@ begin
   Result.Scope := FCurrentScope;
   Result.SourcePath := FSourcePath;
   Result.FormalParameterCounts := FFormalParameterCounts;
-  Result.GlobalBackedTopLevel := FGlobalBackedTopLevel;
+  Result.GlobalBackedTopLevel := FGlobalBackedTopLevel and
+    (FCurrentTemplate = FTopLevelTemplate);
   Result.StrictTypes := FStrictTypes;
   Result.CompileExpression := DoCompileExpression;
   Result.CompileStatement := DoCompileStatement;
@@ -526,6 +529,7 @@ var
 begin
   FModule := TGocciaBytecodeModule.Create(GOCCIA_RUNTIME_TAG, FSourcePath);
   FCurrentTemplate := TGocciaFunctionTemplate.Create('<module>');
+  FTopLevelTemplate := FCurrentTemplate;
   FCurrentTemplate.DebugInfo := TGocciaDebugInfo.Create(FSourcePath);
   FCurrentScope := TGocciaCompilerScope.Create(nil, 0);
   FCurrentScope.DeclareLocal('__receiver', False);
@@ -599,8 +603,10 @@ begin
     Result := FModule;
     FModule := nil;
     FCurrentTemplate := nil;
+    FTopLevelTemplate := nil;
   finally
     FreeAndNil(FCurrentScope);
+    FTopLevelTemplate := nil;
     if Assigned(FModule) then
     begin
       FreeAndNil(FCurrentTemplate);

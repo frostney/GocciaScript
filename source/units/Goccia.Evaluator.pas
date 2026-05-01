@@ -86,8 +86,8 @@ procedure AssignVariablePattern(const APattern: TGocciaDestructuringPattern; con
 procedure HoistVarDeclarations(const AStatements: TObjectList<TGocciaStatement>; const AScope: TGocciaScope); overload;
 procedure HoistVarDeclarations(const ANodes: TObjectList<TGocciaASTNode>; const AScope: TGocciaScope); overload;
 
-procedure HoistFunctionDeclarations(const AStatements: TObjectList<TGocciaStatement>; const AContext: TGocciaEvaluationContext); overload;
-procedure HoistFunctionDeclarations(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext); overload;
+procedure HoistFunctionDeclarations(const AStatements: TObjectList<TGocciaStatement>; const AContext: TGocciaEvaluationContext; const ABlockScoped: Boolean = False); overload;
+procedure HoistFunctionDeclarations(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext; const ABlockScoped: Boolean = False); overload;
 
 implementation
 
@@ -299,10 +299,12 @@ begin
   end;
 end;
 
-procedure HoistSingleFunctionDeclaration(const ANode: TGocciaASTNode; const AContext: TGocciaEvaluationContext);
+procedure HoistSingleFunctionDeclaration(const ANode: TGocciaASTNode;
+  const AContext: TGocciaEvaluationContext; const ABlockScoped: Boolean);
 var
   VarDecl: TGocciaVariableDeclaration;
   Value: TGocciaValue;
+  Name: string;
 begin
   if ANode is TGocciaVariableDeclaration then
     VarDecl := TGocciaVariableDeclaration(ANode)
@@ -314,33 +316,44 @@ begin
   if not VarDecl.IsFunctionDeclaration then
     Exit;
 
+  Name := VarDecl.Variables[0].Name;
   Value := VarDecl.Variables[0].Initializer.Evaluate(AContext);
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.AddTempRoot(Value);
   try
     if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
-      TGocciaFunctionValue(Value).Name := VarDecl.Variables[0].Name;
-    AContext.Scope.DefineVariableBinding(VarDecl.Variables[0].Name, Value, True);
+      TGocciaFunctionValue(Value).Name := Name;
+    if ABlockScoped then
+    begin
+      if AContext.Scope.ContainsOwnLexicalBinding(Name) then
+        AContext.Scope.ForceUpdateBinding(Name, Value)
+      else
+        AContext.Scope.DefineLexicalBinding(Name, Value, dtLet);
+    end
+    else
+      AContext.Scope.DefineVariableBinding(Name, Value, True);
   finally
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.RemoveTempRoot(Value);
   end;
 end;
 
-procedure HoistFunctionDeclarations(const AStatements: TObjectList<TGocciaStatement>; const AContext: TGocciaEvaluationContext);
+procedure HoistFunctionDeclarations(const AStatements: TObjectList<TGocciaStatement>;
+  const AContext: TGocciaEvaluationContext; const ABlockScoped: Boolean = False);
 var
   I: Integer;
 begin
   for I := 0 to AStatements.Count - 1 do
-    HoistSingleFunctionDeclaration(AStatements[I], AContext);
+    HoistSingleFunctionDeclaration(AStatements[I], AContext, ABlockScoped);
 end;
 
-procedure HoistFunctionDeclarations(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext);
+procedure HoistFunctionDeclarations(const ANodes: TObjectList<TGocciaASTNode>;
+  const AContext: TGocciaEvaluationContext; const ABlockScoped: Boolean = False);
 var
   I: Integer;
 begin
   for I := 0 to ANodes.Count - 1 do
-    HoistSingleFunctionDeclaration(ANodes[I], AContext);
+    HoistSingleFunctionDeclaration(ANodes[I], AContext, ABlockScoped);
 end;
 
 function EvaluateStatements(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -2148,6 +2161,8 @@ begin
     else
       BlockContext.Scope := AContext.Scope;
     try
+      HoistFunctionDeclarations(ABlockStatement.Nodes, BlockContext,
+        NeedsChildScope);
       Result := EvaluateStatements(ABlockStatement.Nodes, BlockContext);
       if (Result.Kind = cfkNormal) and (Result.Value = nil) then
         Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -2170,6 +2185,7 @@ begin
   GC := TGarbageCollector.Instance;
   try
     try
+      HoistFunctionDeclarations(ABlockStatement.Nodes, BlockContext, True);
       Result := EvaluateStatements(ABlockStatement.Nodes, BlockContext);
       if (Result.Kind = cfkNormal) and (Result.Value = nil) then
         Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -2333,19 +2349,19 @@ begin
            ATryStatement.CatchPattern, CatchContext, MatchContext) then
           raise TGocciaThrowValue.Create(AErrorValue);
         try
-          Result := EvaluateStatements(ATryStatement.CatchBlock.Nodes, MatchContext);
+          Result := EvaluateBlock(ATryStatement.CatchBlock, MatchContext);
         finally
           ReleaseMatchContext(MatchContext, CatchContext);
         end;
       end
       else
-        Result := EvaluateStatements(ATryStatement.CatchBlock.Nodes, CatchContext);
+        Result := EvaluateBlock(ATryStatement.CatchBlock, CatchContext);
     finally
       CatchScope.Free;
     end;
   end
   else
-    Result := EvaluateStatements(ATryStatement.CatchBlock.Nodes, AContext);
+    Result := EvaluateBlock(ATryStatement.CatchBlock, AContext);
 end;
 
 function PascalExceptionToErrorObject(const E: Exception): TGocciaValue;
@@ -2460,7 +2476,7 @@ begin
   if Phase = gtpTry then
   begin
     try
-      Result := EvaluateStatements(ATryStatement.Block.Nodes, AContext);
+      Result := EvaluateBlock(ATryStatement.Block, AContext);
     except
       on E: EGocciaGeneratorYield do
         raise;
@@ -2512,7 +2528,7 @@ begin
       TGarbageCollector.Instance.AddTempRoot(GeneratorReturnValue);
     try
       try
-        FinallyCF := EvaluateStatements(ATryStatement.FinallyBlock.Nodes, AContext);
+        FinallyCF := EvaluateBlock(ATryStatement.FinallyBlock, AContext);
         // Per JS semantics: finally's control flow overrides try/catch result AND pending throw
         if FinallyCF.Kind <> cfkNormal then
         begin
@@ -2752,6 +2768,86 @@ begin
   end;
 end;
 
+// ES2026 §10.2.2 [[Construct]] (argumentsList, newTarget)
+function ConstructOrdinaryFunction(const AConstructor: TGocciaFunctionBase;
+  const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+var
+  PrototypeValue, ReturnValue: TGocciaValue;
+  PrototypeObj, Instance: TGocciaObjectValue;
+begin
+  PrototypeValue := AConstructor.GetProperty(PROP_PROTOTYPE);
+  if PrototypeValue is TGocciaObjectValue then
+    PrototypeObj := TGocciaObjectValue(PrototypeValue)
+  else
+  begin
+    if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+      TGocciaObjectValue.InitializeSharedPrototype;
+    PrototypeObj := TGocciaObjectValue.SharedObjectPrototype;
+  end;
+
+  Instance := TGocciaObjectValue.Create(PrototypeObj);
+  TGarbageCollector.Instance.AddTempRoot(Instance);
+  try
+    ReturnValue := AConstructor.Call(AArguments, Instance);
+    if ReturnValue is TGocciaObjectValue then
+      Result := ReturnValue
+    else
+      Result := Instance;
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(Instance);
+  end;
+end;
+
+function ConstructBoundFunction(const AConstructor: TGocciaBoundFunctionValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const AContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  BoundArgs: TGocciaArgumentsCollection;
+  I: Integer;
+  Target: TGocciaValue;
+begin
+  Target := AConstructor.OriginalFunction;
+  BoundArgs := TGocciaArgumentsCollection.CreateWithCapacity(
+    AConstructor.BoundArgCount + AArguments.Length);
+  try
+    for I := 0 to AConstructor.BoundArgCount - 1 do
+      BoundArgs.Add(AConstructor.GetBoundArg(I));
+    for I := 0 to AArguments.Length - 1 do
+      BoundArgs.Add(AArguments.GetElement(I));
+
+    if Target is TGocciaBoundFunctionValue then
+      Result := ConstructBoundFunction(TGocciaBoundFunctionValue(Target),
+        BoundArgs, AContext)
+    else if Target is TGocciaProxyValue then
+      Result := TGocciaProxyValue(Target).ConstructTrap(BoundArgs)
+    else if Target is TGocciaClassValue then
+      Result := InstantiateClass(TGocciaClassValue(Target), BoundArgs, AContext)
+    else if Target is TGocciaNativeFunctionValue then
+    begin
+      if TGocciaNativeFunctionValue(Target).NotConstructable then
+        ThrowTypeError(
+          Format(SErrorNotConstructor,
+            [TGocciaNativeFunctionValue(Target).Name]),
+          Format('''%s'' is not a constructor',
+            [TGocciaNativeFunctionValue(Target).Name]));
+      Result := TGocciaNativeFunctionValue(Target).Call(BoundArgs,
+        TGocciaHoleValue.HoleValue);
+    end
+    else if (Target is TGocciaFunctionBase) and
+            not (Target is TGocciaGeneratorFunctionValue) and
+            TGocciaFunctionBase(Target).HasOwnProperty(PROP_PROTOTYPE) then
+      Result := ConstructOrdinaryFunction(TGocciaFunctionBase(Target),
+        BoundArgs)
+    else
+      ThrowTypeError(
+        Format(SErrorValueNotConstructor, [Target.TypeName]),
+        Format('values of type ''%s'' cannot be used with ''new''',
+          [Target.TypeName]));
+  finally
+    BoundArgs.Free;
+  end;
+end;
+
 function EvaluateNewExpression(const ANewExpression: TGocciaNewExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Callee: TGocciaValue;
@@ -2815,6 +2911,16 @@ begin
               [TGocciaNativeFunctionValue(Callee).Name]));
         Result := TGocciaNativeFunctionValue(Callee).Call(Arguments,
           TGocciaHoleValue.HoleValue);
+      end
+      else if Callee is TGocciaBoundFunctionValue then
+        Result := ConstructBoundFunction(TGocciaBoundFunctionValue(Callee),
+          Arguments, AContext)
+      else if (Callee is TGocciaFunctionBase) and
+              not (Callee is TGocciaGeneratorFunctionValue) and
+              TGocciaFunctionBase(Callee).HasOwnProperty(PROP_PROTOTYPE) then
+      begin
+        Result := ConstructOrdinaryFunction(TGocciaFunctionBase(Callee),
+          Arguments);
       end
       else
       begin

@@ -170,7 +170,8 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Keywords.Reserved,
-  Goccia.Types.Enforcement;
+  Goccia.Types.Enforcement,
+  Goccia.Values.ObjectValue;
 
 { TGocciaScope }
 
@@ -347,8 +348,20 @@ procedure TGocciaScope.DefineVariableBinding(const AName: string; const AValue: 
 var
   TargetScope: TGocciaScope;
   Binding: TLexicalBinding;
+  GlobalObject: TGocciaObjectValue;
 begin
   TargetScope := FindFunctionOrModuleScope;
+
+  if (TargetScope.FScopeKind = skGlobal) and
+     (TargetScope.FThisValue is TGocciaObjectValue) then
+  begin
+    GlobalObject := TGocciaObjectValue(TargetScope.FThisValue);
+    if (not AHasInitializer) and GlobalObject.HasProperty(AName) then
+      Exit;
+    GlobalObject.AssignProperty(AName, AValue);
+    Exit;
+  end;
+
   // Lazily allocate the var bindings map
   if not Assigned(TargetScope.FVarBindings) then
     TargetScope.FVarBindings := TGocciaScopeBindingMap.Create;
@@ -371,6 +384,7 @@ begin
     Binding.TypeHint := sltUntyped;
     TargetScope.FVarBindings.AddOrSetValue(AName, Binding);
   end;
+
 end;
 
 function TGocciaScope.ContainsOwnVarBinding(const AName: string): Boolean;
@@ -439,6 +453,13 @@ begin
     Exit;
   end;
 
+  if (FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue) and
+     TGocciaObjectValue(FThisValue).HasProperty(AName) then
+  begin
+    TGocciaObjectValue(FThisValue).AssignProperty(AName, AValue);
+    Exit;
+  end;
+
   // Check var bindings on this scope
   if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, LexicalBinding) then
   begin
@@ -456,7 +477,6 @@ begin
     Exit;
   end;
 
-  // Variable not found in any scope - strict mode always throws
   raise TGocciaReferenceError.Create(
     Format(SErrorUndefinedVariable, [AName]),
     ALine, AColumn, '', nil,
@@ -476,15 +496,26 @@ begin
         SSuggestTemporalDeadZone);
     Result := LexicalBinding;
   end
-  else if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, LexicalBinding) then
-    Result := LexicalBinding
-  else if Assigned(FParent) then
-    Result := FParent.GetBinding(AName, ALine, AColumn)
   else
+  begin
+    if (FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue) and
+       TGocciaObjectValue(FThisValue).HasProperty(AName) then
+    begin
+      Result.Value := TGocciaObjectValue(FThisValue).GetProperty(AName);
+      Result.DeclarationType := dtVar;
+      Result.Initialized := True;
+      Result.TypeHint := sltUntyped;
+      Exit;
+    end;
+    if Assigned(FVarBindings) and FVarBindings.TryGetValue(AName, LexicalBinding) then
+      Exit(LexicalBinding);
+    if Assigned(FParent) then
+      Exit(FParent.GetBinding(AName, ALine, AColumn));
     raise TGocciaReferenceError.Create(
       Format(SErrorUndefinedVariable, [AName]),
       ALine, AColumn, '', nil,
       SSuggestDeclareBeforeUse);
+  end;
 end;
 
 function TGocciaScope.GetValue(const AName: string): TGocciaValue;
@@ -509,6 +540,8 @@ function TGocciaScope.Contains(const AName: string): Boolean; inline;
 begin
   Result := ContainsOwnLexicalBinding(AName) or
     ContainsOwnVarBinding(AName) or
+    ((FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue) and
+     TGocciaObjectValue(FThisValue).HasProperty(AName)) or
     (Assigned(FParent) and FParent.Contains(AName));
 end;
 

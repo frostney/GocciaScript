@@ -255,6 +255,7 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
+  Goccia.Values.GeneratorValue,
   Goccia.Values.HoleValue,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.IteratorValue,
@@ -4233,8 +4234,13 @@ function TGocciaVM.ConstructValue(const AConstructor: TGocciaValue;
   const AArguments: TGocciaArgumentsCollection): TGocciaValue;
 var
   BytecodeFunction: TGocciaBytecodeFunctionValue;
+  BoundArgs: TGocciaArgumentsCollection;
+  BoundFunction: TGocciaBoundFunctionValue;
   Context: TGocciaEvaluationContext;
   ConstructorName: string;
+  I: Integer;
+  PrototypeValue, ReturnValue: TGocciaValue;
+  PrototypeObj, Instance: TGocciaObjectValue;
 begin
   // ES2026 §28.1.1 [[Construct]](argumentsList, newTarget)
   if AConstructor is TGocciaProxyValue then
@@ -4254,6 +4260,23 @@ begin
     FillChar(Context, SizeOf(Context), 0);
     Context.Scope := FGlobalScope;
     Result := InstantiateClass(TGocciaClassValue(AConstructor), AArguments, Context);
+    Exit;
+  end;
+
+  if AConstructor is TGocciaBoundFunctionValue then
+  begin
+    BoundFunction := TGocciaBoundFunctionValue(AConstructor);
+    BoundArgs := TGocciaArgumentsCollection.CreateWithCapacity(
+      BoundFunction.BoundArgCount + AArguments.Length);
+    try
+      for I := 0 to BoundFunction.BoundArgCount - 1 do
+        BoundArgs.Add(BoundFunction.GetBoundArg(I));
+      for I := 0 to AArguments.Length - 1 do
+        BoundArgs.Add(AArguments.GetElement(I));
+      Result := ConstructValue(BoundFunction.OriginalFunction, BoundArgs);
+    finally
+      BoundArgs.Free;
+    end;
     Exit;
   end;
 
@@ -4293,13 +4316,38 @@ begin
 
   if AConstructor is TGocciaFunctionBase then
   begin
+    if (AConstructor is TGocciaGeneratorFunctionValue) or
+       not TGocciaFunctionBase(AConstructor).HasOwnProperty(PROP_PROTOTYPE) then
+      ThrowTypeError(Format(SErrorValueNotConstructor,
+        [AConstructor.TypeName]), SSuggestNotConstructorType);
+
     ConstructorName := TGocciaFunctionBase(AConstructor).GetProperty(PROP_NAME)
       .ToStringLiteral.Value;
     if Assigned(TGocciaCallStack.Instance) then
       TGocciaCallStack.Instance.Push(ConstructorName, '', 0, 0);
     try
-      Result := TGocciaFunctionBase(AConstructor).Call(
-        AArguments, TGocciaUndefinedLiteralValue.UndefinedValue);
+      PrototypeValue := AConstructor.GetProperty(PROP_PROTOTYPE);
+      if PrototypeValue is TGocciaObjectValue then
+        PrototypeObj := TGocciaObjectValue(PrototypeValue)
+      else
+      begin
+        if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+          TGocciaObjectValue.InitializeSharedPrototype;
+        PrototypeObj := TGocciaObjectValue.SharedObjectPrototype;
+      end;
+
+      Instance := TGocciaObjectValue.Create(PrototypeObj);
+      TGarbageCollector.Instance.AddTempRoot(Instance);
+      try
+        ReturnValue := TGocciaFunctionBase(AConstructor).Call(AArguments,
+          Instance);
+        if ReturnValue is TGocciaObjectValue then
+          Result := ReturnValue
+        else
+          Result := Instance;
+      finally
+        TGarbageCollector.Instance.RemoveTempRoot(Instance);
+      end;
     finally
       if Assigned(TGocciaCallStack.Instance) then
         TGocciaCallStack.Instance.Pop;
@@ -4546,7 +4594,12 @@ procedure TGocciaVM.DefineGlobalBinding(const AName: string;
   const ADeclarationType: TGocciaDeclarationType);
 begin
   if Assigned(FGlobalScope) then
-    FGlobalScope.DefineLexicalBinding(AName, AValue, ADeclarationType);
+  begin
+    if ADeclarationType = dtVar then
+      FGlobalScope.DefineVariableBinding(AName, AValue, True)
+    else
+      FGlobalScope.DefineLexicalBinding(AName, AValue, ADeclarationType);
+  end;
 end;
 
 function TGocciaVM.FinalizeEnumValue(const AValue: TGocciaValue;
@@ -5227,6 +5280,7 @@ var
   Descriptor: TGocciaPropertyDescriptor;
   SetterArgs: TGocciaArgumentsCollection;
   PrivateName: string;
+  BoxedValue: TGocciaObjectValue;
 begin
   if AObject is TGocciaNullLiteralValue then
     ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [AKey]),
@@ -5282,6 +5336,31 @@ begin
       end;
     end;
     SetRawPrivateValue(AObject, AKey, AValue);
+    Exit;
+  end;
+
+  if AObject is TGocciaObjectValue then
+  begin
+    AObject.SetProperty(AKey, AValue);
+    Exit;
+  end;
+
+  if (AObject is TGocciaSymbolValue) and
+     (TGocciaSymbolValue.SharedPrototype is TGocciaObjectValue) then
+  begin
+    BoxedValue := TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype);
+    if not BoxedValue.AssignPropertyWithReceiver(AKey, AValue, AObject) then
+      ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
+        SSuggestCheckNullBeforeAccess);
+    Exit;
+  end;
+
+  BoxedValue := AObject.Box;
+  if Assigned(BoxedValue) then
+  begin
+    if not BoxedValue.AssignPropertyWithReceiver(AKey, AValue, AObject) then
+      ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
+        SSuggestCheckNullBeforeAccess);
     Exit;
   end;
 
@@ -7874,7 +7953,14 @@ begin
       OP_DEFINE_GLOBAL_CONST:
       begin
         GlobalName := Template.GetConstantUnchecked(C).StringValue;
-        if B = 2 then
+        if B = 0 then
+          DefineGlobalBinding(GlobalName, GetRegister(A), dtVar)
+        else if B = 3 then
+        begin
+          if Assigned(FGlobalScope) then
+            FGlobalScope.DefineVariableBinding(GlobalName, GetRegister(A), False);
+        end
+        else if B = 2 then
           DefineGlobalBinding(GlobalName, GetRegister(A), dtConst)
         else
           DefineGlobalBinding(GlobalName, GetRegister(A), dtLet);
