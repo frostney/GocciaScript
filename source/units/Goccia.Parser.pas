@@ -926,21 +926,25 @@ begin
           Line := Token.Line;
           Column := Token.Column;
           Arguments := TObjectList<TGocciaExpression>.Create(True);
+          try
+            if not Check(gttRightParen) then
+            begin
+              repeat
+                if Match(gttSpread) then
+                  Arg := TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column)
+                else
+                  Arg := Expression;
+                Arguments.Add(Arg);
+              until not Match(gttComma) or Check(gttRightParen);
+            end;
 
-          if not Check(gttRightParen) then
-          begin
-            repeat
-              if Match(gttSpread) then
-                Arg := TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column)
-              else
-                Arg := Expression;
-              Arguments.Add(Arg);
-            until not Match(gttComma) or Check(gttRightParen);
+            Consume(gttRightParen, 'Expected ")" after arguments',
+              SSuggestCloseParenArguments);
+            Result := TGocciaCallExpression.Create(Result, Arguments, Line, Column);
+          except
+            Arguments.Free;
+            raise;
           end;
-
-          Consume(gttRightParen, 'Expected ")" after arguments',
-            SSuggestCloseParenArguments);
-          Result := TGocciaCallExpression.Create(Result, Arguments, Line, Column);
         end;
       gttDot, gttOptionalChaining:
         begin
@@ -952,6 +956,9 @@ begin
           // Check if this is a private field access (this.#field)
           if Check(gttHash) then
           begin
+            if IsOptionalChain then
+              raise TGocciaSyntaxError.Create('Optional chaining with private fields is not supported',
+                Peek.Line, Peek.Column, FFileName, FSourceLines);
             Advance; // consume the #
             Token := Consume(gttIdentifier, 'Expected private field name after "#"',
               SSuggestPrivateFieldMustFollow);
