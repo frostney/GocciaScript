@@ -2309,11 +2309,7 @@ begin
   ConditionResult := EvaluateConditionWithPatternBindings(AIfStatement.Condition,
     AContext, BodyContext, PatternHandled);
   if not PatternHandled then
-  begin
     BodyContext := AContext;
-    ConditionResult := EvaluateExpression(AIfStatement.Condition, AContext)
-      .ToBooleanLiteral.Value;
-  end;
   if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
   begin
     if ConditionResult then
