@@ -1842,6 +1842,8 @@ begin
     raise Exception.Create('Constant pool overflow: getter name index exceeds 255');
   TargetReg := ACtx.Scope.AllocateRegister;
   AccessorReg := ACtx.Scope.AllocateRegister;
+  Assert(AccessorReg = TargetReg + 1,
+    'OP_DEFINE_ACCESSOR_* expects accessor register at target + 1');
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, TargetReg, ATargetReg, 0));
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, AccessorReg, FnReg, 0));
   EmitInstruction(ACtx, EncodeABC(AOpcode, TargetReg, AFlags, UInt8(NameIdx)));
@@ -1897,6 +1899,8 @@ begin
     raise Exception.Create('Constant pool overflow: setter name index exceeds 255');
   TargetReg := ACtx.Scope.AllocateRegister;
   AccessorReg := ACtx.Scope.AllocateRegister;
+  Assert(AccessorReg = TargetReg + 1,
+    'OP_DEFINE_ACCESSOR_* expects accessor register at target + 1');
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, TargetReg, ATargetReg, 0));
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, AccessorReg, FnReg, 0));
   EmitInstruction(ACtx, EncodeABC(AOpcode, TargetReg, AFlags, UInt8(NameIdx)));
@@ -1946,6 +1950,8 @@ begin
 
   TargetReg := ACtx.Scope.AllocateRegister;
   AccessorReg := ACtx.Scope.AllocateRegister;
+  Assert(AccessorReg = TargetReg + 1,
+    'OP_DEFINE_ACCESSOR_* expects accessor register at target + 1');
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, TargetReg, ATargetReg, 0));
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, AccessorReg, FnReg, 0));
   EmitInstruction(ACtx, EncodeABC(AOpcode, TargetReg, AFlags, AKeyReg));
@@ -1996,6 +2002,8 @@ begin
 
   TargetReg := ACtx.Scope.AllocateRegister;
   AccessorReg := ACtx.Scope.AllocateRegister;
+  Assert(AccessorReg = TargetReg + 1,
+    'OP_DEFINE_ACCESSOR_* expects accessor register at target + 1');
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, TargetReg, ATargetReg, 0));
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, AccessorReg, FnReg, 0));
   EmitInstruction(ACtx, EncodeABC(AOpcode, TargetReg, AFlags, AKeyReg));
