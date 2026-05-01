@@ -1433,6 +1433,7 @@ var
   SavedIteratorValue, SavedCurrentValue, SavedNextMethod: TGocciaValue;
   HasSavedLoopState: Boolean;
   HeadCompleted, HeadYielding: Boolean;
+  ShouldCloseIterator: Boolean;
 begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
@@ -1490,6 +1491,7 @@ begin
 
       HeadCompleted := False;
       HeadYielding := False;
+      ShouldCloseIterator := True;
       try
         try
           CheckExecutionTimeout;
@@ -1521,6 +1523,7 @@ begin
             begin
               if Assigned(Continuation) then
                 Continuation.ClearLoopState(AForOfStatement);
+              ShouldCloseIterator := False;
               IterResult := Iterator.AdvanceNext;
               Continue;
             end;
@@ -1534,7 +1537,11 @@ begin
             raise;
           end;
           on E: Exception do
+          begin
+            if ShouldCloseIterator then
+              Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
             raise;
+          end;
         end;
       finally
         if (not HeadCompleted) and (not HeadYielding) and
@@ -1557,6 +1564,7 @@ begin
           begin
             if Assigned(Continuation) then
               Continuation.ClearLoopState(AForOfStatement);
+            Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
             raise;
           end;
         end;
@@ -1569,12 +1577,14 @@ begin
       begin
         if Assigned(Continuation) then
           Continuation.ClearLoopState(AForOfStatement);
+        Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
         Break;
       end;
       if CF.Kind = cfkReturn then
       begin
         if Assigned(Continuation) then
           Continuation.ClearLoopState(AForOfStatement);
+        Goccia.Values.IteratorSupport.CloseIteratorPreservingError(Iterator);
         Result := CF;
         Exit;
       end;

@@ -7832,6 +7832,10 @@ begin
         end;
       end;
 
+      OP_ITER_CLOSE:
+        if FRegisters[A].Kind = grkObject then
+          CloseRawIteratorPreservingError(FRegisters[A].ObjectValue);
+
       OP_AWAIT:
         SetRegister(A, AwaitValue(GetRegister(B)));
 

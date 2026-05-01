@@ -15,7 +15,7 @@ const
   //   v18 -> v19: main branch (#475) added own `prototype` to
   //               --compat-function functions and generators, which
   //               changed the runtime shape produced by OP_CLOSURE.
-  //   v19 -> v20: this branch's IteratorClose work changed
+  //   v19 -> v20: iterator destructuring close work changed
   //               OP_VALIDATE_VALUE / VALIDATE_OP_REQUIRE_ITERABLE
   //               operand C semantics.  Pre-v20, C = 0 meant
   //               "unbounded".  v20 introduces ITERABLE_LIMIT_UNBOUNDED
@@ -25,7 +25,10 @@ const
   //               v20 VM would silently switch unbounded patterns to
   //               short-circuit close, so the version bump prevents
   //               that.
-  GOCCIA_FORMAT_VERSION = 20;
+  //   v20 -> v21: #482 added OP_ITER_CLOSE so bytecode for abrupt
+  //               for...of completion can close iterator records in
+  //               the VM.
+  GOCCIA_FORMAT_VERSION = 21;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -128,6 +131,7 @@ type
     OP_GET_ITER      = 62,
     OP_ITER_NEXT     = 63,
     OP_TO_STRING     = 64,
+    OP_ITER_CLOSE    = 65,
     OP_NEW_CLASS     = 66,
     OP_CLASS_SET_SUPER = 67,
     OP_CLASS_ADD_METHOD_CONST = 68,
