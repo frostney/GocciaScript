@@ -725,6 +725,9 @@ var
   DestSlot, IdxReg: UInt8;
   PropIdx: UInt16;
   JumpIdx, I: Integer;
+  HasRest: Boolean;
+  Limit: Integer;
+  RestIndex: Integer;
 begin
   if APattern is TGocciaIdentifierDestructuringPattern then
   begin
@@ -809,9 +812,70 @@ begin
   end
   else if APattern is TGocciaArrayDestructuringPattern then
   begin
-    EmitInstruction(ACtx, EncodeABC(OP_VALIDATE_VALUE, ASrcReg,
-      VALIDATE_OP_REQUIRE_ITERABLE, 0));
     ArrPat := TGocciaArrayDestructuringPattern(APattern);
+    // Compute the iteration bound for OP_VALIDATE_VALUE.  Without a rest
+    // element the spec consumes exactly N elements then closes the
+    // iterator (ES2024 §8.5.3 IteratorBindingInitialization step 4).
+    // With a rest element, full iteration is required.  We pass that
+    // bound as operand C so the VM can stop calling next() once the
+    // pattern is satisfied — otherwise an iterator whose next() always
+    // returns done:false (e.g. test262's named-dflt-ary-init-iter-close
+    // pattern) allocates unboundedly during destructuring.
+    //
+    // Operand C encoding (UInt8):
+    //   0..254   = exact bound (0 means "consume zero elements" — empty
+    //              array pattern `const [] = iter` per spec);
+    //   255      = unbounded (rest pattern present, or pattern length
+    //              exceeds what C can represent).
+    // The 255 sentinel separates "empty fixed pattern" from "unbounded";
+    // collapsing both to 0 would silently drain the iterator on
+    // `const [] = iter` instead of consuming nothing then closing.
+    HasRest := False;
+    RestIndex := -1;
+    for I := 0 to ArrPat.Elements.Count - 1 do
+      if Assigned(ArrPat.Elements[I]) and
+         (ArrPat.Elements[I] is TGocciaRestDestructuringPattern) then
+      begin
+        HasRest := True;
+        RestIndex := I;
+        Break;
+      end;
+    // Only HasRest collapses to the unbounded sentinel.  A fixed-size
+    // pattern with >= 255 elements would otherwise silently change
+    // semantics from "consume exactly N then close" to "drain the whole
+    // iterator", because the operand-C encoding can't represent N.
+    // Refuse to compile rather than miscompile — patterns this large are
+    // pathological in practice (no real codebase array-destructures 255
+    // bindings at once), and a clear compile-time error is better than
+    // a silent infinite-iteration trap.
+    if HasRest then
+    begin
+      // OP_UNPACK encodes the rest start offset in a UInt8 operand
+      // (`EncodeABC(OP_UNPACK, DestSlot, ASrcReg, UInt8(I))` below), so
+      // rest patterns whose start exceeds 255 elements would be
+      // miscompiled — the truncated index points at the wrong slice
+      // start.  Reject those at compile time too, paralleling the
+      // fixed-pattern guard.  When the operand width is widened, this
+      // limit can be relaxed.
+      if RestIndex > High(UInt8) then
+        raise Exception.CreateFmt(
+          'Array destructuring rest pattern starts past the encodable '
+          + 'offset (%d; max %d)',
+          [RestIndex, High(UInt8)]);
+      Limit := ITERABLE_LIMIT_UNBOUNDED;
+    end
+    else
+    begin
+      if ArrPat.Elements.Count >= ITERABLE_LIMIT_UNBOUNDED then
+        raise Exception.CreateFmt(
+          'Array destructuring pattern is too large to encode exactly '
+          + '(%d elements; max %d without a rest element)',
+          [ArrPat.Elements.Count, ITERABLE_LIMIT_UNBOUNDED - 1]);
+      Limit := ArrPat.Elements.Count;
+    end;
+
+    EmitInstruction(ACtx, EncodeABC(OP_VALIDATE_VALUE, ASrcReg,
+      VALIDATE_OP_REQUIRE_ITERABLE, UInt8(Limit)));
     for I := 0 to ArrPat.Elements.Count - 1 do
     begin
       if not Assigned(ArrPat.Elements[I]) then
@@ -1134,12 +1198,13 @@ var
   MemberExpr: TGocciaMemberExpression;
   PropIdx: UInt16;
   UseSpread: Boolean;
-  NilJump, EndJump: Integer;
+  NilJump, CallNilJump, EndJump: Integer;
 begin
   ArgCount := AExpr.Arguments.Count;
   if ArgCount > High(UInt8) then
     raise Exception.Create('Compiler error: too many arguments (>255)');
   UseSpread := HasSpreadArgument(AExpr);
+  CallNilJump := -1;
 
   if AExpr.Callee is TGocciaSuperExpression then
   begin
@@ -1156,6 +1221,9 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET_CONST, BaseReg, 0, UInt8(PropIdx)));
     ACtx.Scope.FreeRegister;
 
+    if AExpr.Optional then
+      CallNilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, BaseReg);
+
     if UseSpread then
     begin
       ArgsReg := ACtx.Scope.AllocateRegister;
@@ -1170,6 +1238,14 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
       for I := 0 to ArgCount - 1 do
         ACtx.Scope.FreeRegister;
+    end;
+
+    if AExpr.Optional then
+    begin
+      EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      PatchJumpTarget(ACtx, CallNilJump);
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
+      PatchJumpTarget(ACtx, EndJump);
     end;
 
     if ADest <> BaseReg then
@@ -1191,6 +1267,9 @@ begin
       raise Exception.Create('Constant pool overflow: private method name index exceeds 255');
     EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, BaseReg, ObjReg, UInt8(PropIdx)));
 
+    if AExpr.Optional then
+      CallNilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, BaseReg);
+
     if UseSpread then
     begin
       ArgsReg := ACtx.Scope.AllocateRegister;
@@ -1205,6 +1284,14 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
       for I := 0 to ArgCount - 1 do
         ACtx.Scope.FreeRegister;
+    end;
+
+    if AExpr.Optional then
+    begin
+      EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      PatchJumpTarget(ACtx, CallNilJump);
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
+      PatchJumpTarget(ACtx, EndJump);
     end;
 
     if ADest <> BaseReg then
@@ -1231,6 +1318,9 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET_CONST, BaseReg, 0, UInt8(PropIdx)));
       ACtx.Scope.FreeRegister;
 
+      if AExpr.Optional then
+        CallNilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, BaseReg);
+
       if UseSpread then
       begin
         ArgsReg := ACtx.Scope.AllocateRegister;
@@ -1245,6 +1335,14 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
         for I := 0 to ArgCount - 1 do
           ACtx.Scope.FreeRegister;
+      end;
+
+      if AExpr.Optional then
+      begin
+        EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+        PatchJumpTarget(ACtx, CallNilJump);
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
+        PatchJumpTarget(ACtx, EndJump);
       end;
 
       if ADest <> BaseReg then
@@ -1278,6 +1376,9 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, BaseReg, ObjReg, UInt8(PropIdx)));
       end;
 
+      if AExpr.Optional then
+        CallNilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, BaseReg);
+
       if UseSpread then
       begin
         ArgsReg := ACtx.Scope.AllocateRegister;
@@ -1294,10 +1395,13 @@ begin
           ACtx.Scope.FreeRegister;
       end;
 
-      if MemberExpr.Optional then
+      if MemberExpr.Optional or AExpr.Optional then
       begin
         EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-        PatchJumpTarget(ACtx, NilJump);
+        if MemberExpr.Optional then
+          PatchJumpTarget(ACtx, NilJump);
+        if AExpr.Optional then
+          PatchJumpTarget(ACtx, CallNilJump);
         EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
         PatchJumpTarget(ACtx, EndJump);
       end;
@@ -1319,6 +1423,9 @@ begin
 
     ACtx.CompileExpression(AExpr.Callee, BaseReg);
 
+    if AExpr.Optional then
+      CallNilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, BaseReg);
+
     if UseSpread then
     begin
       ArgsReg := ACtx.Scope.AllocateRegister;
@@ -1334,6 +1441,14 @@ begin
         CallTrustedFlag(ACtx, AExpr)));
       for I := 0 to ArgCount - 1 do
         ACtx.Scope.FreeRegister;
+    end;
+
+    if AExpr.Optional then
+    begin
+      EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      PatchJumpTarget(ACtx, CallNilJump);
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
+      PatchJumpTarget(ACtx, EndJump);
     end;
 
     if BaseReg <> ADest then

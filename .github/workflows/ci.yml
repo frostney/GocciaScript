@@ -564,6 +564,76 @@ jobs:
           retention-days: 1
           path: json5-test-results-${{ matrix.target }}.json
 
+  test262:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download build
+        uses: actions/download-artifact@v8
+        with:
+          name: gocciascript-x86_64-linux
+          path: build/
+
+      - name: Make binaries executable
+        run: chmod +x build/*
+
+      - name: Checkout test262 suite
+        uses: actions/checkout@v5
+        with:
+          repository: tc39/test262
+          # Pin to an immutable SHA so the cached `main` baseline and a PR
+          # run measure the same upstream test corpus.  `ref: main` would
+          # let new tests land mid-PR and surface as spurious deltas
+          # against the cached baseline.  Bump in lockstep with pr.yml
+          # when refreshing the suite.
+          ref: d0c1b4555b03dd404873fd6422a4b5da00136500
+          path: test262-suite
+          fetch-depth: 1
+
+      - name: Run test262 conformance suite
+        continue-on-error: true
+        # python3 -u: unbuffered, so progress prints reach the live CI log
+        # in real time even if the job is later killed by SIGTERM.
+        # --jobs=2 (not 4): see pr.yml's identical step for rationale —
+        # higher concurrency tripped false-positive watchdog stalls on
+        # GH-hosted runners.
+        run: |
+          python3 -u scripts/run_test262_suite.py \
+            --suite-dir test262-suite \
+            --mode=bytecode \
+            --jobs=2 \
+            --output=test262-results.json
+
+      - name: Stage test262 baseline
+        if: github.ref == 'refs/heads/main'
+        run: |
+          if [ -f test262-results.json ]; then
+            cp test262-results.json test262-baseline.json
+          fi
+
+      - name: Cache test262 baseline
+        if: github.ref == 'refs/heads/main' && hashFiles('test262-baseline.json') != ''
+        uses: actions/cache/save@v5
+        with:
+          path: test262-baseline.json
+          key: test262-baseline-${{ github.sha }}
+
+      - name: Upload test262 results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test262-results
+          retention-days: 30
+          path: test262-results.json
+
   benchmark:
     needs: build
     strategy:

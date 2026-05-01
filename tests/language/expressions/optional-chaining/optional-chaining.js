@@ -94,4 +94,67 @@ describe('Optional Chaining', () => {
 
     expect(obj?.getValue()).toBe(42);
   });
+
+  test('returns undefined for optional direct calls on nullish callees', () => {
+    const empty = null;
+    const missing = undefined;
+
+    expect(empty?.()).toBe(undefined);
+    expect(missing?.()).toBe(undefined);
+  });
+
+  test('does not evaluate arguments for optional direct calls on nullish callees', () => {
+    const fn = null;
+    let calls = 0;
+    const sideEffect = () => {
+      calls = calls + 1;
+      return 42;
+    };
+
+    expect(fn?.(sideEffect())).toBe(undefined);
+    expect(calls).toBe(0);
+  });
+
+  test('does not evaluate spread arguments after optional call short-circuit', () => {
+    const fn = null;
+    const obj = { maybe: undefined };
+    let calls = 0;
+    const args = () => {
+      calls = calls + 1;
+      return [42];
+    };
+
+    expect(fn?.(...args())).toBe(undefined);
+    expect(obj.maybe?.(...args())).toBe(undefined);
+    expect(calls).toBe(0);
+  });
+
+  test('calls optional direct calls when the callee is callable', () => {
+    const fn = (value) => value + 1;
+
+    expect(fn?.(41)).toBe(42);
+  });
+
+  test('does not evaluate arguments for optional method-value calls on nullish methods', () => {
+    const obj = { maybe: undefined };
+    let calls = 0;
+    const sideEffect = () => {
+      calls = calls + 1;
+      return 42;
+    };
+
+    expect(obj.maybe?.(sideEffect())).toBe(undefined);
+    expect(calls).toBe(0);
+  });
+
+  test('preserves call-site this for optional method-value calls', () => {
+    const obj = {
+      value: 42,
+      getValue() {
+        return this.value;
+      },
+    };
+
+    expect(obj.getValue?.()).toBe(42);
+  });
 });
