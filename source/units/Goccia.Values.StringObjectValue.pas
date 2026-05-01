@@ -581,7 +581,8 @@ begin
   end;
 
   Character := UTF16CodeUnitAt(StringValue, Index);
-  if TryReadUTF8CodePoint(Character, 1, CodePoint, ByteLength) then
+  if TryReadUTF8CodePointAllowSurrogates(Character, 1, CodePoint,
+    ByteLength) then
     Result := TGocciaNumberLiteralValue.Create(CodePoint)
   else if Character <> '' then
     Result := TGocciaNumberLiteralValue.Create(Ord(Character[1]))
@@ -643,7 +644,7 @@ begin
   StringValue := ExtractStringValue(AThisValue);
 
   // Step 3: Let len be the length of S
-  Len := Length(StringValue);
+  Len := UTF16CodeUnitLength(StringValue);
 
   // Step 4: Let intStart be ToIntegerOrInfinity(start)
   StartIndex := ToIntegerFromArgs(AArgs);
@@ -663,7 +664,8 @@ begin
 
   // Step 9: Return the substring of S from index from to index to
   if (StartIndex >= 0) and (StartIndex < Len) and (EndIndex > StartIndex) then
-    Result := TGocciaStringLiteralValue.Create(Copy(StringValue, StartIndex + 1, EndIndex - StartIndex))
+    Result := TGocciaStringLiteralValue.Create(
+      UTF16Substring(StringValue, StartIndex, EndIndex - StartIndex))
   else
     Result := TGocciaStringLiteralValue.Create('');
 end;
@@ -681,7 +683,7 @@ begin
   StringValue := ExtractStringValue(AThisValue);
 
   // Step 3: Let len be the length of S
-  Len := Length(StringValue);
+  Len := UTF16CodeUnitLength(StringValue);
 
   // Step 4: Let intStart be ToIntegerOrInfinity(start)
   StartIndex := ToIntegerFromArgs(AArgs);
@@ -704,7 +706,8 @@ begin
 
   // Step 9: Return the substring of S from index from to index to
   if EndIndex > StartIndex then
-    Result := TGocciaStringLiteralValue.Create(Copy(StringValue, StartIndex + 1, EndIndex - StartIndex))
+    Result := TGocciaStringLiteralValue.Create(
+      UTF16Substring(StringValue, StartIndex, EndIndex - StartIndex))
   else
     Result := TGocciaStringLiteralValue.Create('');
 end;
@@ -715,6 +718,7 @@ var
   StringValue, SearchValue: string;
   StartPosition: Integer;
   FoundIndex: Integer;
+  Len: Integer;
 begin
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
@@ -730,25 +734,18 @@ begin
   StartPosition := ToIntegerFromArgs(AArgs, 1);
 
   // Step 5: Let start be min(max(pos, 0), len)
-  StartPosition := Max(0, StartPosition);
+  Len := UTF16CodeUnitLength(StringValue);
+  StartPosition := Min(Max(0, StartPosition), Len);
 
   if SearchValue = '' then
   begin
-    Result := TGocciaNumberLiteralValue.Create(Min(StartPosition, Length(StringValue)));
+    Result := TGocciaNumberLiteralValue.Create(StartPosition);
     Exit;
   end;
 
   // Step 6-7: Search for first occurrence of searchStr in S at or after start; return index or -1
-  if StartPosition < Length(StringValue) then
-  begin
-    FoundIndex := Pos(SearchValue, Copy(StringValue, StartPosition + 1, Length(StringValue)));
-    if FoundIndex > 0 then
-      Result := TGocciaNumberLiteralValue.Create(FoundIndex + StartPosition - 1)
-    else
-      Result := TGocciaNumberLiteralValue.Create(-1);
-  end
-  else
-    Result := TGocciaNumberLiteralValue.Create(-1);
+  FoundIndex := UTF16IndexOf(StringValue, SearchValue, StartPosition);
+  Result := TGocciaNumberLiteralValue.Create(FoundIndex);
 end;
 
 // ES2026 §22.1.3.10 String.prototype.lastIndexOf(searchString [, position])
@@ -757,7 +754,7 @@ var
   StringValue, SearchValue: string;
   StartPosition: Integer;
   FoundIndex: Integer;
-  I: Integer;
+  Len: Integer;
 begin
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
@@ -772,12 +769,13 @@ begin
   // Step 4: Let numPos be ToNumber(position); if NaN let pos be +∞, else ToIntegerOrInfinity
   if (AArgs.Length > 1) and
      not (AArgs.GetElement(1).ToNumberLiteral.IsNaN) then
-    StartPosition := ToIntegerFromArgs(AArgs, 1, Length(StringValue))
+    StartPosition := ToIntegerFromArgs(AArgs, 1, UTF16CodeUnitLength(StringValue))
   else
-    StartPosition := Length(StringValue);
+    StartPosition := UTF16CodeUnitLength(StringValue);
 
   // Step 5: Let start be min(max(pos, 0), len)
-  StartPosition := Min(Max(StartPosition, 0), Length(StringValue));
+  Len := UTF16CodeUnitLength(StringValue);
+  StartPosition := Min(Max(StartPosition, 0), Len);
 
   if SearchValue = '' then
   begin
@@ -786,20 +784,7 @@ begin
   end;
 
   // Step 6-7: Search backwards for last occurrence of searchStr at or before start; return index or -1
-  FoundIndex := -1;
-  if StartPosition >= 0 then
-  begin
-    for I := Min(StartPosition, Length(StringValue) - Length(SearchValue)) downto 0 do
-    begin
-      if (I + Length(SearchValue) <= Length(StringValue)) and
-         (Copy(StringValue, I + 1, Length(SearchValue)) = SearchValue) then
-      begin
-        FoundIndex := I;
-        Break;
-      end;
-    end;
-  end;
-
+  FoundIndex := UTF16LastIndexOf(StringValue, SearchValue, StartPosition);
   Result := TGocciaNumberLiteralValue.Create(FoundIndex);
 end;
 
@@ -809,6 +794,7 @@ var
   StringValue, SearchValue: string;
   StartPosition: Integer;
   FoundIndex: Integer;
+  Len: Integer;
 begin
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
@@ -824,9 +810,10 @@ begin
   StartPosition := ToIntegerFromArgs(AArgs, 1);
 
   // Step 5: Let start be min(max(pos, 0), len)
-  StartPosition := Max(0, StartPosition);
+  Len := UTF16CodeUnitLength(StringValue);
+  StartPosition := Min(Max(0, StartPosition), Len);
 
-  if StartPosition >= Length(StringValue) then
+  if StartPosition >= Len then
   begin
     if SearchValue = '' then
       Result := TGocciaBooleanLiteralValue.TrueValue
@@ -843,8 +830,8 @@ begin
 
   // Step 6: Search for searchStr in S starting at start
   // Step 7: If found, return true; otherwise return false
-  FoundIndex := Pos(SearchValue, Copy(StringValue, StartPosition + 1, Length(StringValue)));
-  if FoundIndex > 0 then
+  FoundIndex := UTF16IndexOf(StringValue, SearchValue, StartPosition);
+  if FoundIndex >= 0 then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -855,6 +842,7 @@ function TGocciaStringObjectValue.StringStartsWith(const AArgs: TGocciaArguments
 var
   StringValue, SearchValue: string;
   StartPosition: Integer;
+  Len: Integer;
 begin
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
@@ -868,13 +856,14 @@ begin
 
   // Step 4: Let searchLength be the length of searchStr
   // Step 5: Let start be min(max(ToIntegerOrInfinity(position), 0), len)
-  StartPosition := Max(0, ToIntegerFromArgs(AArgs, 1));
+  Len := UTF16CodeUnitLength(StringValue);
+  StartPosition := Min(Max(0, ToIntegerFromArgs(AArgs, 1)), Len);
 
   // Step 6: If searchLength + start > len(S), return false
   // Step 7: If the code units of S starting at start match searchStr, return true; else false
-  if StartPosition + Length(SearchValue) > Length(StringValue) then
+  if StartPosition + UTF16CodeUnitLength(SearchValue) > Len then
     Result := TGocciaBooleanLiteralValue.FalseValue
-  else if Copy(StringValue, StartPosition + 1, Length(SearchValue)) = SearchValue then
+  else if UTF16IndexOf(StringValue, SearchValue, StartPosition) = StartPosition then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -885,6 +874,8 @@ function TGocciaStringObjectValue.StringEndsWith(const AArgs: TGocciaArgumentsCo
 var
   StringValue, SearchValue: string;
   EndPosition: Integer;
+  SearchLength: Integer;
+  StartPosition: Integer;
 begin
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
@@ -900,14 +891,16 @@ begin
   // Step 5: If endPosition is undefined, let pos be len; else let pos be ToIntegerOrInfinity(endPosition)
   // Step 6: Let end be min(max(pos, 0), len)
   EndPosition := Min(Max(0, ToIntegerFromArgs(AArgs, 1,
-    Length(StringValue))), Length(StringValue));
+    UTF16CodeUnitLength(StringValue))), UTF16CodeUnitLength(StringValue));
 
   // Step 7: Let start be end - searchLength
   // Step 8: If start < 0, return false
   // Step 9: If code units of S from start to end match searchStr, return true; else false
-  if EndPosition < Length(SearchValue) then
+  SearchLength := UTF16CodeUnitLength(SearchValue);
+  StartPosition := EndPosition - SearchLength;
+  if StartPosition < 0 then
     Result := TGocciaBooleanLiteralValue.FalseValue
-  else if Copy(StringValue, EndPosition - Length(SearchValue) + 1, Length(SearchValue)) = SearchValue then
+  else if UTF16IndexOf(StringValue, SearchValue, StartPosition) = StartPosition then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -1335,7 +1328,9 @@ var
   SeparatorArg: TGocciaValue;
   ResultArray: TGocciaArrayValue;
   I: Integer;
-  RemainingString: string;
+  PreviousSeparatorEnd: Integer;
+  SearchStart: Integer;
+  SeparatorLength: Integer;
   SeparatorPos: Integer;
   Segment: string;
   Limit: Cardinal;
@@ -1452,9 +1447,10 @@ begin
     // Step 6: If sep is "", split each character
     if Separator = '' then
     begin
-      for I := 1 to Length(StringValue) do
+      for I := 0 to UTF16CodeUnitLength(StringValue) - 1 do
       begin
-        ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(StringValue[I]));
+        ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(
+          UTF16CodeUnitAt(StringValue, I)));
         if HasLimit and (Cardinal(ResultArray.Elements.Count) >= Limit) then
           Break;
       end;
@@ -1463,28 +1459,34 @@ begin
     end;
 
     // Step 7: Split by occurrences of sep, respecting limit
-    if Pos(Separator, StringValue) = 0 then
+    if UTF16IndexOf(StringValue, Separator) = -1 then
       ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(StringValue))
     else
     begin
-      RemainingString := StringValue;
+      SeparatorLength := UTF16CodeUnitLength(Separator);
+      PreviousSeparatorEnd := 0;
+      SearchStart := 0;
       while True do
       begin
-        SeparatorPos := Pos(Separator, RemainingString);
-        if SeparatorPos = 0 then
+        SeparatorPos := UTF16IndexOf(StringValue, Separator, SearchStart);
+        if SeparatorPos = -1 then
         begin
-          ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(RemainingString));
+          ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(
+            UTF16Substring(StringValue, PreviousSeparatorEnd,
+            UTF16CodeUnitLength(StringValue) - PreviousSeparatorEnd)));
           Break;
         end
         else
         begin
-          Segment := Copy(RemainingString, 1, SeparatorPos - 1);
+          Segment := UTF16Substring(StringValue, PreviousSeparatorEnd,
+            SeparatorPos - PreviousSeparatorEnd);
           ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(Segment));
 
           if HasLimit and (Cardinal(ResultArray.Elements.Count) >= Limit) then
             Break;
 
-          RemainingString := Copy(RemainingString, SeparatorPos + Length(Separator), Length(RemainingString));
+          PreviousSeparatorEnd := SeparatorPos + SeparatorLength;
+          SearchStart := PreviousSeparatorEnd;
         end;
       end;
     end;
@@ -1697,7 +1699,7 @@ end;
 function TGocciaStringObjectValue.StringPadStart(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue, PadString, Padding: string;
-  TargetLength, PadNeeded: Integer;
+  StringLength, TargetLength, PadNeeded: Integer;
 begin
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
@@ -1707,7 +1709,8 @@ begin
   TargetLength := ToIntegerFromArgs(AArgs);
 
   // Step 4: If intMaxLength <= len(S), return S
-  if Length(StringValue) >= TargetLength then
+  StringLength := UTF16CodeUnitLength(StringValue);
+  if StringLength >= TargetLength then
   begin
     Result := TGocciaStringLiteralValue.Create(StringValue);
     Exit;
@@ -1728,11 +1731,11 @@ begin
   // Step 6: Let fillLen be intMaxLength - len(S)
   // Step 7: Let truncatedStringFiller be filler repeated and truncated to fillLen
   // Step 8: Return truncatedStringFiller + S
-  PadNeeded := TargetLength - Length(StringValue);
+  PadNeeded := TargetLength - StringLength;
   Padding := '';
-  while Length(Padding) < PadNeeded do
+  while UTF16CodeUnitLength(Padding) < PadNeeded do
     Padding := Padding + PadString;
-  Padding := Copy(Padding, 1, PadNeeded);
+  Padding := UTF16Substring(Padding, 0, PadNeeded);
 
   Result := TGocciaStringLiteralValue.Create(Padding + StringValue);
 end;
@@ -1741,7 +1744,7 @@ end;
 function TGocciaStringObjectValue.StringPadEnd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue, PadString, Padding: string;
-  TargetLength, PadNeeded: Integer;
+  StringLength, TargetLength, PadNeeded: Integer;
 begin
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
@@ -1751,7 +1754,8 @@ begin
   TargetLength := ToIntegerFromArgs(AArgs);
 
   // Step 4: If intMaxLength <= len(S), return S
-  if Length(StringValue) >= TargetLength then
+  StringLength := UTF16CodeUnitLength(StringValue);
+  if StringLength >= TargetLength then
   begin
     Result := TGocciaStringLiteralValue.Create(StringValue);
     Exit;
@@ -1772,11 +1776,11 @@ begin
   // Step 6: Let fillLen be intMaxLength - len(S)
   // Step 7: Let truncatedStringFiller be filler repeated and truncated to fillLen
   // Step 8: Return S + truncatedStringFiller
-  PadNeeded := TargetLength - Length(StringValue);
+  PadNeeded := TargetLength - StringLength;
   Padding := '';
-  while Length(Padding) < PadNeeded do
+  while UTF16CodeUnitLength(Padding) < PadNeeded do
     Padding := Padding + PadString;
-  Padding := Copy(Padding, 1, PadNeeded);
+  Padding := UTF16Substring(Padding, 0, PadNeeded);
 
   Result := TGocciaStringLiteralValue.Create(StringValue + Padding);
 end;

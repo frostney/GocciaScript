@@ -111,6 +111,7 @@ procedure TTextSemanticsTests.TestUTF16CodeUnitIndexing;
 const
   UTF8_LINE_SEPARATOR = #$E2#$80#$A8;
   UTF8_GRINNING_FACE = #$F0#$9F#$98#$80;
+  UTF8_HIGH_SURROGATE = #$ED#$A0#$80;
 var
   CodePoint: Cardinal;
 begin
@@ -125,6 +126,20 @@ begin
   Expect<Boolean>(TryUTF16CodePointValueAt(UTF8_GRINNING_FACE, 1, CodePoint))
     .ToBe(True);
   Expect<Integer>(CodePoint).ToBe($DE00);
+  Expect<Integer>(UTF16CodeUnitLength(UTF8_HIGH_SURROGATE)).ToBe(1);
+  Expect<string>(UTF16CodeUnitAt(UTF8_HIGH_SURROGATE, 0)).ToBe(
+    UTF8_HIGH_SURROGATE);
+  Expect<Boolean>(TryUTF16CodePointValueAt(UTF8_HIGH_SURROGATE, 0, CodePoint))
+    .ToBe(True);
+  Expect<Integer>(CodePoint).ToBe($D800);
+  Expect<string>(UTF16Substring('a' + UTF8_GRINNING_FACE + 'b', 1, 2)).ToBe(
+    UTF8_GRINNING_FACE);
+  Expect<string>(UTF16Substring('a' + UTF8_GRINNING_FACE + 'b', 1, 1)).ToBe(
+    #$ED#$A0#$BD);
+  Expect<Integer>(UTF16IndexOf('a' + UTF8_GRINNING_FACE + 'b',
+    UTF8_GRINNING_FACE)).ToBe(1);
+  Expect<Integer>(UTF16LastIndexOf(UTF8_GRINNING_FACE + 'a' +
+    UTF8_GRINNING_FACE, UTF8_GRINNING_FACE, 4)).ToBe(3);
 end;
 
 procedure TTextSemanticsTests.TestReplacementPatternExpansion;

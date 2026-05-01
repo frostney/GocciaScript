@@ -29,7 +29,7 @@ describe("String.prototype.codePointAt", () => {
     expect("😀".codePointAt(1)).toBe(0xde00);
   });
 
-  test("falls back to raw byte values for invalid UTF-8 positions", () => {
-    expect("\uD800".codePointAt(0)).toBe(0xed);
+  test("returns lone surrogate code unit values", () => {
+    expect("\uD800".codePointAt(0)).toBe(0xd800);
   });
 });
