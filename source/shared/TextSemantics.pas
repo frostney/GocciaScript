@@ -650,20 +650,61 @@ begin
   Result := Buffer.ToString;
 end;
 
-function UTF16CodeUnitsEqualAt(const AText: string; const AStart: Integer;
-  const ASearch: string): Boolean;
+type
+  TUTF16CodeUnitArray = array of Cardinal;
+
+function BuildUTF16CodeUnitArray(const AText: string): TUTF16CodeUnitArray;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  Count: Integer;
+  Index: Integer;
+  Supplementary: Cardinal;
+begin
+  SetLength(Result, Length(AText));
+  Count := 0;
+  Index := 1;
+  while Index <= Length(AText) do
+  begin
+    if TryReadUTF8CodePointAllowSurrogates(AText, Index, CodePoint,
+      ByteLength) then
+    begin
+      if CodePoint <= $FFFF then
+      begin
+        Result[Count] := CodePoint;
+        Inc(Count);
+      end
+      else
+      begin
+        Supplementary := CodePoint - $10000;
+        Result[Count] := $D800 + (Supplementary shr 10);
+        Result[Count + 1] := $DC00 + (Supplementary and $3FF);
+        Inc(Count, 2);
+      end;
+      Inc(Index, ByteLength);
+    end
+    else
+    begin
+      Result[Count] := Ord(AText[Index]);
+      Inc(Count);
+      Inc(Index);
+    end;
+  end;
+  SetLength(Result, Count);
+end;
+
+function UTF16CodeUnitsEqualAt(const ATextUnits,
+  ASearchUnits: TUTF16CodeUnitArray; const AStart: Integer): Boolean;
 var
   I: Integer;
-  SearchLength: Integer;
 begin
-  SearchLength := UTF16CodeUnitLength(ASearch);
-  if SearchLength = 0 then
+  if Length(ASearchUnits) = 0 then
     Exit(True);
-  if AStart + SearchLength > UTF16CodeUnitLength(AText) then
+  if AStart + Length(ASearchUnits) > Length(ATextUnits) then
     Exit(False);
 
-  for I := 0 to SearchLength - 1 do
-    if UTF16CodeUnitAt(AText, AStart + I) <> UTF16CodeUnitAt(ASearch, I) then
+  for I := 0 to Length(ASearchUnits) - 1 do
+    if ATextUnits[AStart + I] <> ASearchUnits[I] then
       Exit(False);
 
   Result := True;
@@ -673,12 +714,16 @@ function UTF16IndexOf(const AText, ASearch: string;
   const AStart: Integer): Integer;
 var
   I: Integer;
+  SearchUnits: TUTF16CodeUnitArray;
   SearchLength: Integer;
   StartIndex: Integer;
+  TextUnits: TUTF16CodeUnitArray;
   TextLength: Integer;
 begin
-  TextLength := UTF16CodeUnitLength(AText);
-  SearchLength := UTF16CodeUnitLength(ASearch);
+  TextUnits := BuildUTF16CodeUnitArray(AText);
+  SearchUnits := BuildUTF16CodeUnitArray(ASearch);
+  TextLength := Length(TextUnits);
+  SearchLength := Length(SearchUnits);
   StartIndex := Max(0, Min(AStart, TextLength));
 
   if SearchLength = 0 then
@@ -687,7 +732,7 @@ begin
     Exit(-1);
 
   for I := StartIndex to TextLength - SearchLength do
-    if UTF16CodeUnitsEqualAt(AText, I, ASearch) then
+    if UTF16CodeUnitsEqualAt(TextUnits, SearchUnits, I) then
       Exit(I);
 
   Result := -1;
@@ -697,12 +742,16 @@ function UTF16LastIndexOf(const AText, ASearch: string;
   const AStart: Integer): Integer;
 var
   I: Integer;
+  SearchUnits: TUTF16CodeUnitArray;
   SearchLength: Integer;
   StartIndex: Integer;
+  TextUnits: TUTF16CodeUnitArray;
   TextLength: Integer;
 begin
-  TextLength := UTF16CodeUnitLength(AText);
-  SearchLength := UTF16CodeUnitLength(ASearch);
+  TextUnits := BuildUTF16CodeUnitArray(AText);
+  SearchUnits := BuildUTF16CodeUnitArray(ASearch);
+  TextLength := Length(TextUnits);
+  SearchLength := Length(SearchUnits);
   StartIndex := Max(0, Min(AStart, TextLength));
 
   if SearchLength = 0 then
@@ -711,7 +760,7 @@ begin
     Exit(-1);
 
   for I := Min(StartIndex, TextLength - SearchLength) downto 0 do
-    if UTF16CodeUnitsEqualAt(AText, I, ASearch) then
+    if UTF16CodeUnitsEqualAt(TextUnits, SearchUnits, I) then
       Exit(I);
 
   Result := -1;
