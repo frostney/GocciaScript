@@ -6407,9 +6407,15 @@ begin
           TGocciaObjectValue(FRegisters[A].ObjectValue).Prototype :=
             TGocciaObjectValue(FRegisters[B].ObjectValue);
           RightValue := FRegisters[B].ObjectValue.GetProperty(PROP_PROTOTYPE);
-          if RightValue is TGocciaObjectValue then
+          if RightValue is TGocciaNullLiteralValue then
+            TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.Prototype := nil
+          else if RightValue is TGocciaObjectValue then
             TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.Prototype :=
-              TGocciaObjectValue(RightValue);
+              TGocciaObjectValue(RightValue)
+          else
+            ThrowTypeError(
+              'Superclass prototype must be an object or null',
+              'set the superclass prototype property to an object or null');
         end;
       end;
 

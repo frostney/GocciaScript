@@ -2943,8 +2943,14 @@ begin
   begin
     TGocciaObjectValue(ClassValue).Prototype := TGocciaObjectValue(SuperClassValue);
     SuperPrototype := SuperClassValue.GetProperty(PROP_PROTOTYPE);
-    if SuperPrototype is TGocciaObjectValue then
-      ClassValue.Prototype.Prototype := TGocciaObjectValue(SuperPrototype);
+    if SuperPrototype is TGocciaNullLiteralValue then
+      ClassValue.Prototype.Prototype := nil
+    else if SuperPrototype is TGocciaObjectValue then
+      ClassValue.Prototype.Prototype := TGocciaObjectValue(SuperPrototype)
+    else
+      ThrowTypeError(
+        'Superclass prototype must be an object or null',
+        'set the superclass prototype property to an object or null');
   end;
   // ES §14.3.7: constructor property is non-enumerable
   ClassValue.Prototype.DefineProperty(PROP_CONSTRUCTOR,

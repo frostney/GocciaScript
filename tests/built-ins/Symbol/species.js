@@ -35,4 +35,23 @@ describe("Symbol.species", () => {
     class MyRegExp extends RegExp {}
     expect(MyRegExp[Symbol.species]).toBe(MyRegExp);
   });
+
+  test("Promise subclass inherits Symbol.species through constructor prototype chain", () => {
+    class MyPromise extends Promise {}
+    expect(MyPromise[Symbol.species]).toBe(MyPromise);
+  });
+
+  test("native constructor superclass prototype must be an object or null", () => {
+    const original = RegExp.prototype;
+    try {
+      Object.defineProperty(RegExp, "prototype", { value: null, configurable: true });
+      class NullPrototypeRegExp extends RegExp {}
+      expect(Object.getPrototypeOf(NullPrototypeRegExp.prototype)).toBe(null);
+
+      Object.defineProperty(RegExp, "prototype", { value: 1, configurable: true });
+      expect(() => { class InvalidPrototypeRegExp extends RegExp {} }).toThrow(TypeError);
+    } finally {
+      Object.defineProperty(RegExp, "prototype", { value: original, configurable: true });
+    }
+  });
 });

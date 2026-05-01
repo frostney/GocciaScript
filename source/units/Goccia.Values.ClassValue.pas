@@ -1180,8 +1180,41 @@ begin
 end;
 
 function TGocciaClassValue.GetOwnSymbols: TArray<TGocciaSymbolValue>;
+var
+  Symbols, InheritedSymbols: TArray<TGocciaSymbolValue>;
+  Seen: THashMap<TGocciaSymbolValue, Boolean>;
+  Symbol: TGocciaSymbolValue;
+  Count: Integer;
 begin
-  Result := FStaticSymbolDescriptors.Keys;
+  Symbols := FStaticSymbolDescriptors.Keys;
+  InheritedSymbols := inherited GetOwnSymbols;
+  Seen := THashMap<TGocciaSymbolValue, Boolean>.Create;
+  try
+    SetLength(Result, Length(Symbols) + Length(InheritedSymbols));
+    Count := 0;
+
+    for Symbol in Symbols do
+    begin
+      if Seen.ContainsKey(Symbol) then
+        Continue;
+      Seen.Add(Symbol, True);
+      Result[Count] := Symbol;
+      Inc(Count);
+    end;
+
+    for Symbol in InheritedSymbols do
+    begin
+      if Seen.ContainsKey(Symbol) then
+        Continue;
+      Seen.Add(Symbol, True);
+      Result[Count] := Symbol;
+      Inc(Count);
+    end;
+
+    SetLength(Result, Count);
+  finally
+    Seen.Free;
+  end;
 end;
 
 procedure TGocciaClassValue.AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
