@@ -30,6 +30,7 @@ uses
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
+  Goccia.Scope,
   Goccia.ScriptLoader.Input,
   Goccia.CLI.JSON.Reporter,
   Goccia.SourceMap,
@@ -164,6 +165,9 @@ type
     FNoProgress: TGocciaFlagOption;
     FFormats: TGocciaRepeatableOption;
     FOutputFile: TGocciaStringOption;
+    procedure RunBytecodeBenchmarkModule(const AEngine: TGocciaEngine;
+      const AExecutor: TGocciaBytecodeExecutor;
+      const AModule: TGocciaBytecodeModule; const AFileName: string);
     procedure CollectBenchmarkFileInterpreted(const AFileName: string;
       const AReporter: TBenchmarkReporter; const AShowProgress: Boolean);
     procedure CollectBenchmarkFileBytecode(const AFileName: string;
@@ -225,6 +229,26 @@ begin
     Result := nil;
 end;
 
+procedure TBenchmarkRunnerApp.RunBytecodeBenchmarkModule(
+  const AEngine: TGocciaEngine;
+  const AExecutor: TGocciaBytecodeExecutor;
+  const AModule: TGocciaBytecodeModule; const AFileName: string);
+var
+  ModuleScope: TGocciaScope;
+begin
+  if AEngine.SourceType = stModule then
+  begin
+    { Run with module semantics: fresh module scope, this = undefined.
+      Mirrors TGocciaModuleLoader.LoadModule for nested module loads. }
+    ModuleScope := AEngine.Interpreter.GlobalScope.CreateChild(skModule,
+      'Module:' + AFileName);
+    ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    AExecutor.RunModuleInScope(AModule, ModuleScope);
+  end
+  else
+    AExecutor.RunModule(AModule);
+end;
+
 procedure TBenchmarkRunnerApp.CollectBenchmarkFileInterpreted(
   const AFileName: string; const AReporter: TBenchmarkReporter;
   const AShowProgress: Boolean);
@@ -237,8 +261,19 @@ var
   FileResult: TBenchmarkFileResult;
   BenchStart: Int64;
 begin
-  Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+  Source := nil;
   try
+    try
+      Source := SourceRegistry.Load(AFileName);
+    except
+      on E: Exception do
+      begin
+        if not GIsWorkerThread then
+          WriteLn(StdErr, 'Error loading benchmark file: ', E.Message);
+        MakeErrorFileResult(AFileName, E.Message, AReporter);
+        Exit;
+      end;
+    end;
     try
       Engine := CreateEngine(AFileName, Source);
       try
@@ -318,8 +353,19 @@ var
   ScriptResult: TGocciaObjectValue;
   LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd, BenchStart: Int64;
 begin
-  Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+  Source := nil;
   try
+    try
+      Source := SourceRegistry.Load(AFileName);
+    except
+      on E: Exception do
+      begin
+        if not GIsWorkerThread then
+          WriteLn(StdErr, 'Error loading benchmark file: ', E.Message);
+        MakeErrorFileResult(AFileName, E.Message, AReporter);
+        Exit;
+      end;
+    end;
     SourceText := StringListToLFText(Source);
     if ppJSX in TGocciaEngine.DefaultPreprocessors then
     begin
@@ -369,7 +415,8 @@ begin
           StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
           StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
           try
-            TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
+            RunBytecodeBenchmarkModule(Engine,
+              TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
             ExecEnd := GetNanoseconds;
 
             FileResult.FileName := AFileName;
@@ -582,7 +629,8 @@ begin
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
         StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
         try
-          TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
+          RunBytecodeBenchmarkModule(Engine,
+            TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
           ExecEnd := GetNanoseconds;
 
           FileResult.FileName := AFileName;
@@ -709,17 +757,48 @@ procedure TBenchmarkRunnerApp.RunBenchmarksFromStdin(
   const AReports: array of TReportSpec;
   const AMode: TGocciaExecutionMode; const AShowProgress: Boolean);
 var
-  Source: TStringList;
+  Source, SectionSource, Names: TStringList;
   Reporter: TBenchmarkReporter;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
-  J: Integer;
+  I, J: Integer;
 begin
   Source := ReadSourceFromText(Input);
   Reporter := TBenchmarkReporter.Create;
   try
     BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
-    CollectBenchmarkSource(Source, STDIN_FILE_NAME, Reporter,
-      AMode, AShowProgress);
+    if MultifileEnabled then
+    begin
+      // Ownership of Source transfers to SplitStdinMultifile.
+      Names := SplitStdinMultifile(Source);
+      try
+        for I := 0 to Names.Count - 1 do
+        begin
+          SectionSource := SourceRegistry.Load(Names[I]);
+          try
+            CollectBenchmarkSource(SectionSource, Names[I], Reporter,
+              AMode, AShowProgress);
+          finally
+            SectionSource.Free;
+          end;
+          // Match the per-file GC pass in CollectBenchmarkFile* so
+          // GC-managed objects from one stdin section don't accumulate
+          // across the next one.
+          if Assigned(TGarbageCollector.Instance) then
+            TGarbageCollector.Instance.Collect;
+        end;
+      finally
+        Names.Free;
+      end;
+    end
+    else
+    begin
+      try
+        CollectBenchmarkSource(Source, STDIN_FILE_NAME, Reporter,
+          AMode, AShowProgress);
+      finally
+        Source.Free;
+      end;
+    end;
     Reporter.MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
     for J := 0 to Length(AReports) - 1 do
     begin
@@ -734,7 +813,6 @@ begin
       ExitCode := 1;
   finally
     Reporter.Free;
-    Source.Free;
   end;
 end;
 
@@ -742,7 +820,7 @@ procedure TBenchmarkRunnerApp.RunBenchmarks(const APaths: TStringList;
   const AReports: array of TReportSpec;
   const AMode: TGocciaExecutionMode; const AShowProgress: Boolean);
 var
-  Files: TStringList;
+  Files, RawFiles: TStringList;
   I, J, P, JobCount: Integer;
   DiscoveredFiles: TStringList;
   Reporter: TBenchmarkReporter;
@@ -750,31 +828,40 @@ var
   WorkerData: array of TBenchmarkFileResult;
   WallClockStart: Int64;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
+  MainMemoryStats: TCLIJSONMemoryStats;
+  WorkerMemoryStats: TCLIJSONMemoryStats;
 begin
-  Files := TStringList.Create;
+  WorkerMemoryStats := DefaultCLIJSONMemoryStats;
+  Files := nil;
   Reporter := TBenchmarkReporter.Create;
   try
-    for P := 0 to APaths.Count - 1 do
-    begin
-      if DirectoryExists(APaths[P]) then
+    RawFiles := TStringList.Create;
+    try
+      for P := 0 to APaths.Count - 1 do
       begin
-        DiscoveredFiles := FindAllFiles(APaths[P], ScriptExtensions);
-        try
-          for I := 0 to DiscoveredFiles.Count - 1 do
-            if not IsBenchmarkHelperFile(DiscoveredFiles[I]) then
-              Files.Add(DiscoveredFiles[I]);
-        finally
-          DiscoveredFiles.Free;
+        if DirectoryExists(APaths[P]) then
+        begin
+          DiscoveredFiles := FindAllFiles(APaths[P], ScriptExtensions);
+          try
+            for I := 0 to DiscoveredFiles.Count - 1 do
+              if not IsBenchmarkHelperFile(DiscoveredFiles[I]) then
+                RawFiles.Add(DiscoveredFiles[I]);
+          finally
+            DiscoveredFiles.Free;
+          end;
+        end
+        else if FileExists(APaths[P]) then
+          RawFiles.Add(APaths[P])
+        else
+        begin
+          WriteLn(StdErr, 'Error: Path not found: ', APaths[P]);
+          ExitCode := 1;
+          Exit;
         end;
-      end
-      else if FileExists(APaths[P]) then
-        Files.Add(APaths[P])
-      else
-      begin
-        WriteLn(StdErr, 'Error: Path not found: ', APaths[P]);
-        ExitCode := 1;
-        Exit;
       end;
+      Files := ExpandMultifileFiles(RawFiles);
+    finally
+      RawFiles.Free;
     end;
 
     JobCount := GetJobCount(Files.Count);
@@ -815,13 +902,16 @@ begin
         if Assigned(TGarbageCollector.Instance) then
           Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
         Pool.RunAll(Files, BenchmarkWorkerProc, @WorkerData[0]);
+        WorkerMemoryStats := Pool.MemoryStats;
       finally
         Pool.Free;
       end;
 
       Reporter.WallClockDurationNanoseconds := GetNanoseconds - WallClockStart;
       Reporter.JobCount := JobCount;
-      Reporter.MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
+      MainMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
+      Reporter.MemoryStats := CombineCLIJSONMemoryStats(
+        MainMemoryStats, WorkerMemoryStats, True);
 
       { Collect results on the main thread in original file order. }
       for I := 0 to Files.Count - 1 do
@@ -875,7 +965,9 @@ procedure TBenchmarkRunnerApp.Configure;
 begin
   AddEngineOptions;
   FNoProgress := AddFlag('no-progress', 'Suppress progress output');
-  FFormats := AddRepeatable('format', 'Output format (console, text, csv, json)');
+  FFormats := AddRepeatable('format',
+    'Output format (console, text, csv, json, compact-json). ' +
+    '"compact-json" emits the json envelope without build, memory, stdout, stderr.');
   FOutputFile := AddString('output', 'Output file path (attaches to last --format)');
 end;
 
@@ -925,7 +1017,7 @@ begin
   for I := 0 to Length(Reports) - 1 do
     if Reports[I].OutputFile = '' then
     begin
-      if Reports[I].Format in [brfJSON, brfCSV] then
+      if Reports[I].Format in [brfJSON, brfCompactJSON, brfCSV] then
         HasStructuredStdout := True
       else
         HasReadableStdout := True;
@@ -941,7 +1033,7 @@ begin
   // that human-readable status messages do not corrupt the output document.
   if ShowProgress then
     for I := 0 to Length(Reports) - 1 do
-      if (Reports[I].Format in [brfJSON, brfCSV]) and (Reports[I].OutputFile = '') then
+      if (Reports[I].Format in [brfJSON, brfCompactJSON, brfCSV]) and (Reports[I].OutputFile = '') then
       begin
         ShowProgress := False;
         Break;
@@ -949,12 +1041,22 @@ begin
 
   if APaths.Count = 0 then
     RunBenchmarksFromStdin(Reports, Mode, ShowProgress)
+  else if (APaths.Count = 1) and IsStdinPath(APaths[0]) then
+    RunBenchmarksFromStdin(Reports, Mode, ShowProgress)
   else
   begin
-    if (APaths.Count = 1) and IsStdinPath(APaths[0]) then
-      RunBenchmarksFromStdin(Reports, Mode, ShowProgress)
-    else
-      RunBenchmarks(APaths, Reports, Mode, ShowProgress);
+    { Reject mixing "-" with file paths so stdin cannot silently be
+      interleaved with on-disk files. Matches the rule enforced by
+      GocciaScriptLoader and GocciaTestRunner. }
+    for I := 0 to APaths.Count - 1 do
+      if IsStdinPath(APaths[I]) then
+      begin
+        WriteLn(StdErr,
+          'Error: stdin supports only as the sole input path.');
+        ExitCode := 1;
+        Exit;
+      end;
+    RunBenchmarks(APaths, Reports, Mode, ShowProgress);
   end;
 end;
 

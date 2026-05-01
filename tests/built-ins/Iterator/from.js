@@ -116,4 +116,29 @@ describe("Iterator.from()", () => {
 
     expect(result).toEqual([30, 40, 50]);
   });
+
+  // Iterator-protocol violations on the @@iterator path must throw a
+  // TypeError, not silently fall back to iterator-like handling on
+  // the outer object — that masked the protocol violation and could
+  // cause Iterator.from to wrap something the spec rejects.
+  test("throws TypeError when [Symbol.iterator] is non-callable", () => {
+    const bad = { [Symbol.iterator]: 42, next: () => ({ done: true }) };
+    expect(() => Iterator.from(bad)).toThrow(TypeError);
+  });
+
+  test("throws TypeError when [Symbol.iterator]() returns non-object", () => {
+    const bad = {
+      [Symbol.iterator]: () => 42,
+      next: () => ({ done: true })
+    };
+    expect(() => Iterator.from(bad)).toThrow(TypeError);
+  });
+
+  test("throws TypeError when [Symbol.iterator]() result has non-callable next", () => {
+    const bad = {
+      [Symbol.iterator]: () => ({ next: 42 }),
+      next: () => ({ done: true }) // outer next is callable but must NOT be used
+    };
+    expect(() => Iterator.from(bad)).toThrow(TypeError);
+  });
 });

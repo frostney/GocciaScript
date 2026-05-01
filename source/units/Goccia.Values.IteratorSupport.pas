@@ -9,6 +9,12 @@ uses
   Goccia.Values.Primitives;
 
 function GetIteratorFromValue(const AValue: TGocciaValue): TGocciaIteratorValue;
+// CloseIterator is the normal-completion variant per ES2024 §7.4.10
+// IteratorClose: errors from iter.return() propagate to the caller.  Use
+// this on success paths.  CloseIteratorPreservingError below swallows
+// errors so an existing abrupt completion is not replaced — use that one
+// only on the abrupt-completion cleanup path.
+procedure CloseIterator(const AIterator: TGocciaIteratorValue);
 procedure CloseIteratorPreservingError(const AIterator: TGocciaIteratorValue);
 
 implementation
@@ -106,7 +112,8 @@ begin
              not NextMethod.IsCallable then
             ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
 
-          Result := TGocciaGenericIteratorValue.Create(IteratorObj);
+          // Capture-once per ES2024 §7.4.2 GetIteratorDirect.
+          Result := TGocciaGenericIteratorValue.Create(IteratorObj, NextMethod);
         finally
           RemoveRootIfNeeded(IteratorObj, WasIteratorRooted);
         end;
@@ -129,6 +136,13 @@ begin
   end;
 
   Result := nil;
+end;
+
+procedure CloseIterator(const AIterator: TGocciaIteratorValue);
+begin
+  if not Assigned(AIterator) then
+    Exit;
+  AIterator.Close;
 end;
 
 procedure CloseIteratorPreservingError(const AIterator: TGocciaIteratorValue);

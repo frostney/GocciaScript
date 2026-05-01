@@ -39,6 +39,53 @@ console.log("Stdin smoke (bytecode)...");
   if (!out.includes("Result: 4")) throw new Error(`Expected Result: 4, got: ${out}`);
 }
 
+// -- Stdin smoke (TestRunner) --------------------------------------------------
+
+console.log("Stdin smoke (TestRunner)...");
+{
+  const src = `test("two plus two", () => { expect(2 + 2).toBe(4); });\n`;
+
+  // No path arg -> stdin
+  const out = await $`echo ${src} | ${TESTRUNNER} --no-progress`.text();
+  if (!out.includes("Passed: 1")) throw new Error(`TestRunner stdin (no arg) expected Passed: 1, got: ${out}`);
+
+  // Sole "-" arg -> stdin
+  const outDash = await $`echo ${src} | ${TESTRUNNER} - --no-progress`.text();
+  if (!outDash.includes("Passed: 1")) throw new Error(`TestRunner stdin ("-" arg) expected Passed: 1, got: ${outDash}`);
+}
+
+// -- Stdin smoke (BenchmarkRunner) ---------------------------------------------
+
+console.log("Stdin smoke (BenchmarkRunner)...");
+{
+  const src = `suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n`;
+  const out = await $`echo ${src} | ${BENCHRUNNER} --no-progress 2>&1`.text();
+  if (!out.includes("sum")) throw new Error(`BenchmarkRunner stdin expected "sum" benchmark, got: ${out}`);
+
+  const outDash = await $`echo ${src} | ${BENCHRUNNER} - --no-progress 2>&1`.text();
+  if (!outDash.includes("sum")) throw new Error(`BenchmarkRunner stdin ("-" arg) expected "sum" benchmark, got: ${outDash}`);
+}
+
+// -- Stdin mixed-with-paths rejection (all three runners) ----------------------
+
+console.log("Stdin mixed-with-paths rejection (Loader, TestRunner, BenchmarkRunner)...");
+{
+  const tmp = mkdtempSync(join(tmpdir(), "goccia-stdin-mix-"));
+  try {
+    const f = join(tmp, "x.js");
+    writeFileSync(f, "1;\n");
+
+    for (const [bin, label] of [[LOADER, "Loader"], [TESTRUNNER, "TestRunner"], [BENCHRUNNER, "BenchmarkRunner"]] as const) {
+      const proc = await $`${bin} - ${f} 2>&1`.nothrow();
+      if (proc.exitCode === 0) throw new Error(`${label} should reject "-" mixed with file paths`);
+      if (!proc.text().includes("stdin supports only as the sole input path"))
+        throw new Error(`${label} mixed-path error missing unified message, got: ${proc.text()}`);
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 // -- --help (all 5 apps) -------------------------------------------------------
 
 console.log("--help (all 5 apps)...");

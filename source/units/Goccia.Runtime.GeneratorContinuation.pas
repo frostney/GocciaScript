@@ -34,6 +34,18 @@ type
     procedure MarkReferences;
   end;
 
+  TGocciaGeneratorLoopState = class
+  public
+    IteratorValue: TGocciaValue;
+    CurrentValue: TGocciaValue;
+    NextMethod: TGocciaValue;
+    constructor Create(const AIteratorValue, ACurrentValue,
+      ANextMethod: TGocciaValue);
+    procedure Assign(const AIteratorValue, ACurrentValue,
+      ANextMethod: TGocciaValue);
+    procedure MarkReferences;
+  end;
+
   EGocciaGeneratorYield = class(Exception)
   private
     FValue: TGocciaValue;
@@ -70,6 +82,7 @@ type
     FExpressionValues: TDictionary<TObject, TGocciaValue>;
     FStatementIndexes: TDictionary<TObject, Integer>;
     FTryStates: TDictionary<TObject, TGocciaGeneratorTryState>;
+    FLoopStates: TDictionary<TObject, TGocciaGeneratorLoopState>;
     FIsAsyncGenerator: Boolean;
     procedure ClearDelegateState;
   public
@@ -95,6 +108,13 @@ type
     function GetTryState(const ATryStatement: TObject): TGocciaGeneratorTryState;
     procedure ClearTryState(const ATryStatement: TObject);
     procedure ClearTryStates;
+    procedure SaveLoopState(const ALoopStatement: TObject;
+      const AIteratorValue, ACurrentValue: TGocciaValue;
+      const ANextMethod: TGocciaValue = nil);
+    function GetLoopState(const ALoopStatement: TObject;
+      out AIteratorValue, ACurrentValue, ANextMethod: TGocciaValue): Boolean;
+    procedure ClearLoopState(const ALoopStatement: TObject);
+    procedure ClearLoopStates;
     procedure MarkReferences;
     property Completed: Boolean read FCompleted;
   end;
@@ -155,6 +175,31 @@ begin
     ThrownValue.MarkReferences;
   if Assigned(GeneratorReturnValue) then
     GeneratorReturnValue.MarkReferences;
+end;
+
+constructor TGocciaGeneratorLoopState.Create(const AIteratorValue,
+  ACurrentValue, ANextMethod: TGocciaValue);
+begin
+  inherited Create;
+  Assign(AIteratorValue, ACurrentValue, ANextMethod);
+end;
+
+procedure TGocciaGeneratorLoopState.Assign(const AIteratorValue,
+  ACurrentValue, ANextMethod: TGocciaValue);
+begin
+  IteratorValue := AIteratorValue;
+  CurrentValue := ACurrentValue;
+  NextMethod := ANextMethod;
+end;
+
+procedure TGocciaGeneratorLoopState.MarkReferences;
+begin
+  if Assigned(IteratorValue) then
+    IteratorValue.MarkReferences;
+  if Assigned(CurrentValue) then
+    CurrentValue.MarkReferences;
+  if Assigned(NextMethod) then
+    NextMethod.MarkReferences;
 end;
 
 constructor TGocciaAsyncFromSyncIteratorValue.Create(const AIterator: TGocciaIteratorValue);
@@ -406,10 +451,13 @@ begin
   FExpressionValues := TDictionary<TObject, TGocciaValue>.Create;
   FStatementIndexes := TDictionary<TObject, Integer>.Create;
   FTryStates := TDictionary<TObject, TGocciaGeneratorTryState>.Create;
+  FLoopStates := TDictionary<TObject, TGocciaGeneratorLoopState>.Create;
 end;
 
 destructor TGocciaGeneratorContinuation.Destroy;
 begin
+  ClearLoopStates;
+  FLoopStates.Free;
   ClearTryStates;
   FTryStates.Free;
   FStatementIndexes.Free;
@@ -487,6 +535,7 @@ begin
           ClearExpressionValues;
           ClearStatementIndexes;
           ClearTryStates;
+          ClearLoopStates;
           ADone := True;
           if Assigned(ControlFlow.Value) then
             Result := ControlFlow.Value
@@ -511,6 +560,7 @@ begin
           ClearExpressionValues;
           ClearStatementIndexes;
           ClearTryStates;
+          ClearLoopStates;
           ADone := True;
           Result := E.Value;
           Exit;
@@ -526,6 +576,7 @@ begin
   ClearExpressionValues;
   ClearStatementIndexes;
   ClearTryStates;
+  ClearLoopStates;
   ADone := True;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -933,8 +984,63 @@ begin
   FTryStates.Clear;
 end;
 
+procedure TGocciaGeneratorContinuation.SaveLoopState(
+  const ALoopStatement: TObject; const AIteratorValue,
+  ACurrentValue: TGocciaValue; const ANextMethod: TGocciaValue);
+var
+  LoopState: TGocciaGeneratorLoopState;
+begin
+  if FLoopStates.TryGetValue(ALoopStatement, LoopState) then
+    LoopState.Assign(AIteratorValue, ACurrentValue, ANextMethod)
+  else
+    FLoopStates.Add(ALoopStatement,
+      TGocciaGeneratorLoopState.Create(AIteratorValue, ACurrentValue,
+        ANextMethod));
+end;
+
+function TGocciaGeneratorContinuation.GetLoopState(
+  const ALoopStatement: TObject; out AIteratorValue, ACurrentValue,
+  ANextMethod: TGocciaValue): Boolean;
+var
+  LoopState: TGocciaGeneratorLoopState;
+begin
+  Result := FLoopStates.TryGetValue(ALoopStatement, LoopState);
+  if Result then
+  begin
+    AIteratorValue := LoopState.IteratorValue;
+    ACurrentValue := LoopState.CurrentValue;
+    ANextMethod := LoopState.NextMethod;
+  end
+  else
+  begin
+    AIteratorValue := nil;
+    ACurrentValue := nil;
+    ANextMethod := nil;
+  end;
+end;
+
+procedure TGocciaGeneratorContinuation.ClearLoopState(
+  const ALoopStatement: TObject);
+var
+  LoopState: TGocciaGeneratorLoopState;
+begin
+  if FLoopStates.TryGetValue(ALoopStatement, LoopState) then
+    LoopState.Free;
+  FLoopStates.Remove(ALoopStatement);
+end;
+
+procedure TGocciaGeneratorContinuation.ClearLoopStates;
+var
+  LoopState: TGocciaGeneratorLoopState;
+begin
+  for LoopState in FLoopStates.Values do
+    LoopState.Free;
+  FLoopStates.Clear;
+end;
+
 procedure TGocciaGeneratorContinuation.MarkReferences;
 var
+  LoopState: TGocciaGeneratorLoopState;
   TryState: TGocciaGeneratorTryState;
   Value: TGocciaValue;
 begin
@@ -957,6 +1063,9 @@ begin
   for TryState in FTryStates.Values do
     if Assigned(TryState) then
       TryState.MarkReferences;
+  for LoopState in FLoopStates.Values do
+    if Assigned(LoopState) then
+      LoopState.MarkReferences;
 end;
 
 function CurrentGeneratorContinuation: TGocciaGeneratorContinuation;

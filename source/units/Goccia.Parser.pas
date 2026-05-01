@@ -1686,6 +1686,16 @@ begin
           Advance;
           if Check(gttIdentifier) then
             Expr := TGocciaMemberExpression.Create(Expr, Advance.Lexeme, False, Previous.Line, Previous.Column, False)
+          else if Peek.TokenType in [gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
+                                     gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak, gttContinue,
+                                     gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
+                                     gttTrue, gttFalse, gttNull, gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete, gttVar, gttWith] then
+          begin
+            Token := Advance;
+            // Reserved words are valid property names after "." per ES spec
+            Expr := TGocciaMemberExpression.Create(Expr, Token.Lexeme, False,
+              Token.Line, Token.Column, False);
+          end
           else
             raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines,
               SSuggestPropertyNameIdentifier);
@@ -1806,6 +1816,9 @@ begin
               TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
               TGocciaMethodExpression(Result).IsAsync := True;
               TGocciaMethodExpression(Result).IsGenerator := IsGenerator;
+              // ES2026 §15.6: AsyncGeneratorDeclaration / AsyncGeneratorExpression have
+              // their own `prototype` property.  Plain `async function` does not.
+              TGocciaMethodExpression(Result).HasOwnPrototype := IsGenerator;
               if Name <> '' then
                 TGocciaMethodExpression(Result).Name := Name;
             end;
@@ -1865,6 +1878,9 @@ begin
           Result := ParseObjectMethodBody(Token.Line, Token.Column, False, True);
           TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
           TGocciaMethodExpression(Result).IsGenerator := True;
+          // ES2026 §15.5: GeneratorDeclaration / GeneratorExpression have their own
+          // `prototype` data property (per OrdinaryFunctionCreate + MakeConstructor).
+          TGocciaMethodExpression(Result).HasOwnPrototype := True;
           if Name <> '' then
             TGocciaMethodExpression(Result).Name := Name;
         end
@@ -1879,6 +1895,10 @@ begin
           CollectGenericParameters;
           Result := ParseObjectMethodBody(Token.Line, Token.Column);
           TGocciaMethodExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
+          // ES2026 §15.2: FunctionDeclaration / FunctionExpression have their own
+          // `prototype` data property whose `[[Value]]` is a fresh ordinary object
+          // and whose `constructor` data property points back at the function.
+          TGocciaMethodExpression(Result).HasOwnPrototype := True;
           if Name <> '' then
             TGocciaMethodExpression(Result).Name := Name;
         end;
@@ -3981,7 +4001,13 @@ begin
 
   MethodExpr := ParseObjectMethodBody(Line, Column, AIsAsync, AIsGenerator);
   TGocciaMethodExpression(MethodExpr).SourceText := ExtractSourceRange(Line, Column);
+  TGocciaMethodExpression(MethodExpr).IsAsync := AIsAsync;
   TGocciaMethodExpression(MethodExpr).IsGenerator := AIsGenerator;
+  // ES2026 §15.2 / §15.5 / §15.6: FunctionDeclaration, GeneratorDeclaration, and
+  // AsyncGeneratorDeclaration get their own `prototype` data property
+  // (MakeConstructor).  Plain `async function` declarations do not.
+  TGocciaMethodExpression(MethodExpr).HasOwnPrototype :=
+    AIsGenerator or (not AIsAsync);
 
   SetLength(Variables, 1);
   Variables[0].Name := NameToken.Lexeme;

@@ -37,11 +37,12 @@ type
     function GetSourceLines: TStringList;
 
     function IsAtEnd: Boolean; inline;
-    function Advance: Char;
+    function Advance: Char; inline;
     function Peek: Char; inline;
     function PeekNext: Char; inline;
     function Match(const AExpected: Char): Boolean; inline;
-    function IsValidIdentifierChar(const C: Char): Boolean;
+    function IsValidIdentifierChar(const C: Char): Boolean; inline;
+    procedure AppendCurrent(var ASB, ARawSB: TStringBuffer); inline;
     procedure AddToken(const ATokenType: TGocciaTokenType); overload;
     procedure AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string); overload;
     procedure ScanToken;
@@ -75,9 +76,12 @@ type
     procedure SkipHashbang;
     procedure SkipComment;
     procedure SkipBlockComment;
+    procedure SkipUntilLineTerminator;
     function IsLineTerminator: Boolean; inline;
     function IsUnicodeLineTerminator: Boolean; inline;
-    procedure ConsumeUnicodeLineTerminator;
+    function ConsumeLineTerminator: Boolean; inline;
+    function AppendLineTerminator(var ASB, ARawSB: TStringBuffer): Boolean; inline;
+    procedure ConsumeUnicodeLineTerminator; inline;
   public
     constructor Create(const ASource, AFileName: string);
     destructor Destroy; override;
@@ -143,19 +147,19 @@ begin
   Result := FSourceLines;
 end;
 
-function TGocciaLexer.IsAtEnd: Boolean;
+function TGocciaLexer.IsAtEnd: Boolean; inline;
 begin
   Result := FCurrent > Length(FSource);
 end;
 
-function TGocciaLexer.Advance: Char;
+function TGocciaLexer.Advance: Char; inline;
 begin
   Result := FSource[FCurrent];
   Inc(FCurrent);
   Inc(FColumn);
 end;
 
-function TGocciaLexer.Peek: Char;
+function TGocciaLexer.Peek: Char; inline;
 begin
   if IsAtEnd then
     Result := #0
@@ -163,7 +167,7 @@ begin
     Result := FSource[FCurrent];
 end;
 
-function TGocciaLexer.PeekNext: Char;
+function TGocciaLexer.PeekNext: Char; inline;
 begin
   if FCurrent + 1 > Length(FSource) then
     Result := #0
@@ -190,6 +194,15 @@ begin
   Result := True;
 end;
 
+procedure TGocciaLexer.AppendCurrent(var ASB, ARawSB: TStringBuffer); inline;
+var
+  C: Char;
+begin
+  C := Advance;
+  ASB.AppendChar(C);
+  ARawSB.AppendChar(C);
+end;
+
 procedure TGocciaLexer.AddToken(const ATokenType: TGocciaTokenType);
 begin
   AddToken(ATokenType, Copy(FSource, FStart, FCurrent - FStart));
@@ -203,7 +216,7 @@ begin
 end;
 
 // ES2026 §12.3 LineTerminator :: <LF> | <CR> | <LS> | <PS>
-function TGocciaLexer.IsLineTerminator: Boolean;
+function TGocciaLexer.IsLineTerminator: Boolean; inline;
 begin
   if IsAtEnd then
     Exit(False);
@@ -216,7 +229,7 @@ begin
 end;
 
 // ES2026 §12.3 LS (U+2028) = UTF-8 E2 80 A8, PS (U+2029) = UTF-8 E2 80 A9
-function TGocciaLexer.IsUnicodeLineTerminator: Boolean;
+function TGocciaLexer.IsUnicodeLineTerminator: Boolean; inline;
 begin
   Result := (FSource[FCurrent] = UTF8_LINE_TERMINATOR_LEAD_BYTE) and
             (FCurrent + 2 <= Length(FSource)) and
@@ -225,11 +238,92 @@ begin
              (FSource[FCurrent + 2] = UTF8_PARAGRAPH_SEPARATOR_FINAL_BYTE));
 end;
 
-procedure TGocciaLexer.ConsumeUnicodeLineTerminator;
+procedure TGocciaLexer.ConsumeUnicodeLineTerminator; inline;
 begin
   Inc(FCurrent, UTF8_LINE_TERMINATOR_BYTE_LENGTH);
   Inc(FLine);
   FColumn := 1;
+end;
+
+function TGocciaLexer.ConsumeLineTerminator: Boolean; inline;
+begin
+  if IsAtEnd then
+    Exit(False);
+
+  case FSource[FCurrent] of
+    #13:
+      begin
+        Inc(FCurrent);
+        if (not IsAtEnd) and (FSource[FCurrent] = #10) then
+          Inc(FCurrent);
+        Inc(FLine);
+        FColumn := 1;
+        Result := True;
+      end;
+    #10:
+      begin
+        Inc(FCurrent);
+        Inc(FLine);
+        FColumn := 1;
+        Result := True;
+      end;
+    UTF8_LINE_TERMINATOR_LEAD_BYTE:
+      begin
+        Result := IsUnicodeLineTerminator;
+        if Result then
+          ConsumeUnicodeLineTerminator;
+      end;
+  else
+    Result := False;
+  end;
+end;
+
+function TGocciaLexer.AppendLineTerminator(var ASB, ARawSB: TStringBuffer): Boolean; inline;
+var
+  C: Char;
+  I: Integer;
+begin
+  if IsAtEnd then
+    Exit(False);
+
+  case FSource[FCurrent] of
+    #13:
+      begin
+        Inc(FCurrent);
+        if (not IsAtEnd) and (FSource[FCurrent] = #10) then
+          Inc(FCurrent);
+        Inc(FLine);
+        FColumn := 1;
+        ASB.AppendChar(#10);
+        ARawSB.AppendChar(#10);
+        Result := True;
+      end;
+    #10:
+      begin
+        Inc(FCurrent);
+        Inc(FLine);
+        FColumn := 1;
+        ASB.AppendChar(#10);
+        ARawSB.AppendChar(#10);
+        Result := True;
+      end;
+    UTF8_LINE_TERMINATOR_LEAD_BYTE:
+      begin
+        Result := IsUnicodeLineTerminator;
+        if Result then
+        begin
+          for I := 0 to UTF8_LINE_TERMINATOR_BYTE_LENGTH - 1 do
+          begin
+            C := FSource[FCurrent + I];
+            ASB.AppendChar(C);
+            ARawSB.AppendChar(C);
+          end;
+          ConsumeUnicodeLineTerminator;
+        end;
+      end;
+  else
+    Result := False;
+  end;
 end;
 
 procedure TGocciaLexer.SkipWhitespace;
@@ -240,25 +334,11 @@ begin
       ' ', #9:
         Advance;
       // ES2026 §12.3 LineTerminator — CR and CRLF
-      #13:
-        begin
-          Advance;
-          if (not IsAtEnd) and (Peek = #10) then
-            Advance;
-          Inc(FLine);
-          FColumn := 1;
-        end;
-      #10:
-        begin
-          Inc(FLine);
-          FColumn := 0;
-          Advance;
-        end;
+      #13, #10:
+        ConsumeLineTerminator;
       // ES2026 §12.3 Line Terminators — LS (U+2028) and PS (U+2029)
       UTF8_LINE_TERMINATOR_LEAD_BYTE:
-        if IsUnicodeLineTerminator then
-          ConsumeUnicodeLineTerminator
-        else
+        if not ConsumeLineTerminator then
           Break;
       '/':
         if PeekNext = '/' then
@@ -273,14 +353,28 @@ begin
   end;
 end;
 
+procedure TGocciaLexer.SkipUntilLineTerminator;
+var
+  C: Char;
+begin
+  while not IsAtEnd do
+  begin
+    C := FSource[FCurrent];
+    if (C = #10) or (C = #13) or
+       ((C = UTF8_LINE_TERMINATOR_LEAD_BYTE) and IsUnicodeLineTerminator) then
+      Break;
+    Inc(FCurrent);
+    Inc(FColumn);
+  end;
+end;
+
 // ES2026 §12.5 HashbangComment :: #! SingleLineCommentCharsₒₚₜ
 procedure TGocciaLexer.SkipHashbang;
 begin
   if (FCurrent <> 1) or (Length(FSource) < 2) or (Copy(FSource, 1, 2) <> '#!') then
     Exit;
 
-  while not IsAtEnd and not IsLineTerminator do
-    Advance;
+  SkipUntilLineTerminator;
 end;
 
 // ES2026 §12.4 SingleLineComment :: // SingleLineCommentCharsₒₚₜ
@@ -290,11 +384,12 @@ begin
   Advance;
   Advance;
 
-  while not IsAtEnd and not IsLineTerminator do
-    Advance;
+  SkipUntilLineTerminator;
 end;
 
 procedure TGocciaLexer.SkipBlockComment;
+var
+  C: Char;
 begin
   // Skip '/*'
   Advance;
@@ -302,35 +397,26 @@ begin
 
   while not IsAtEnd do
   begin
-    if Peek = '*' then
+    C := FSource[FCurrent];
+    if C = '*' then
     begin
-      Advance;
-      if Peek = '/' then
+      Inc(FCurrent);
+      Inc(FColumn);
+      if (not IsAtEnd) and (FSource[FCurrent] = '/') then
       begin
-        Advance; // Skip the closing '/'
+        Inc(FCurrent);
+        Inc(FColumn);
         Exit;
       end;
     end
-    // ES2026 §12.3 LineTerminator — CR and CRLF
-    else if Peek = #13 then
-    begin
-      Advance;
-      if (not IsAtEnd) and (Peek = #10) then
-        Advance;
-      Inc(FLine);
-      FColumn := 1;
-    end
-    else if Peek = #10 then
-    begin
-      Inc(FLine);
-      FColumn := 0;
-      Advance;
-    end
-    // ES2026 §12.3 Line Terminators — LS (U+2028) and PS (U+2029)
-    else if (Peek = UTF8_LINE_TERMINATOR_LEAD_BYTE) and IsUnicodeLineTerminator then
-      ConsumeUnicodeLineTerminator
+    else if (C = #13) or (C = #10) or
+            ((C = UTF8_LINE_TERMINATOR_LEAD_BYTE) and IsUnicodeLineTerminator) then
+      ConsumeLineTerminator
     else
-      Advance;
+    begin
+      Inc(FCurrent);
+      Inc(FColumn);
+    end;
   end;
 
   // If we reach here, we hit end of file without finding closing */
@@ -647,105 +733,45 @@ end;
 procedure TGocciaLexer.ScanNestedTemplateInExpression(var ASB, ARawSB: TStringBuffer);
 var
   C: Char;
-  J: Integer;
 begin
   while not IsAtEnd do
   begin
     C := Peek;
+    if ((C = #13) or (C = #10) or (C = UTF8_LINE_TERMINATOR_LEAD_BYTE)) and
+       AppendLineTerminator(ASB, ARawSB) then
+      Continue;
+
     case C of
       '`':
       begin
         // Closing backtick of nested template
-        Advance;
-        ASB.AppendChar(C);
-        ARawSB.AppendChar(C);
+        AppendCurrent(ASB, ARawSB);
         Exit;
       end;
       '\':
       begin
         // Escape sequence — consume \ and next char verbatim
-        Advance;
-        ASB.AppendChar(C);
-        ARawSB.AppendChar(C);
+        AppendCurrent(ASB, ARawSB);
         if not IsAtEnd then
-        begin
-          C := Advance;
-          ASB.AppendChar(C);
-          ARawSB.AppendChar(C);
-        end;
+          AppendCurrent(ASB, ARawSB);
       end;
       '$':
       begin
         if PeekNext = '{' then
         begin
           // Nested interpolation within nested template
-          Advance; // consume $
-          ASB.AppendChar('$');
-          ARawSB.AppendChar('$');
-          Advance; // consume {
-          ASB.AppendChar('{');
-          ARawSB.AppendChar('{');
+          AppendCurrent(ASB, ARawSB); // consume $
+          AppendCurrent(ASB, ARawSB); // consume {
           ScanInterpolationExpression(ASB, ARawSB);
           // ScanInterpolationExpression leaves the closing } unconsumed
           if not IsAtEnd then
-          begin
-            Advance; // consume }
-            ASB.AppendChar('}');
-            ARawSB.AppendChar('}');
-          end;
+            AppendCurrent(ASB, ARawSB); // consume }
         end
         else
-        begin
-          Advance;
-          ASB.AppendChar(C);
-          ARawSB.AppendChar(C);
-        end;
-      end;
-      #13:
-      begin
-        Advance;
-        if Peek = #10 then
-          Advance;
-        Inc(FLine);
-        FColumn := 1;
-        ASB.AppendChar(#10);
-        ARawSB.AppendChar(#10);
-      end;
-      #10:
-      begin
-        Inc(FLine);
-        FColumn := 0;
-        Advance;
-        ASB.AppendChar(C);
-        ARawSB.AppendChar(C);
-      end;
-      UTF8_LINE_TERMINATOR_LEAD_BYTE:
-      begin
-        if IsUnicodeLineTerminator then
-        begin
-          for J := 0 to UTF8_LINE_TERMINATOR_BYTE_LENGTH - 1 do
-          begin
-            C := FSource[FCurrent + J];
-            ASB.AppendChar(C);
-            ARawSB.AppendChar(C);
-          end;
-          Inc(FCurrent, UTF8_LINE_TERMINATOR_BYTE_LENGTH);
-          Inc(FLine);
-          FColumn := 1;
-        end
-        else
-        begin
-          Advance;
-          ASB.AppendChar(C);
-          ARawSB.AppendChar(C);
-        end;
+          AppendCurrent(ASB, ARawSB);
       end;
     else
-      begin
-        Advance;
-        ASB.AppendChar(C);
-        ARawSB.AppendChar(C);
-      end;
+      AppendCurrent(ASB, ARawSB);
     end;
   end;
 end;
@@ -767,216 +793,105 @@ end;
 //   - Line terminators (CR, CRLF, LF, LS, PS) with line/column tracking
 procedure TGocciaLexer.ScanInterpolationExpression(var ASB, ARawSB: TStringBuffer);
 var
-  BraceCount, J: Integer;
+  BraceCount: Integer;
   C, Quote: Char;
 begin
   BraceCount := 1;
   while (BraceCount > 0) and not IsAtEnd do
   begin
     C := Peek;
+    if ((C = #13) or (C = #10) or (C = UTF8_LINE_TERMINATOR_LEAD_BYTE)) and
+       AppendLineTerminator(ASB, ARawSB) then
+      Continue;
+
     case C of
       '{':
       begin
         Inc(BraceCount);
-        Advance;
-        ASB.AppendChar(C);
-        ARawSB.AppendChar(C);
+        AppendCurrent(ASB, ARawSB);
       end;
       '}':
       begin
         Dec(BraceCount);
         if BraceCount > 0 then
-        begin
-          Advance;
-          ASB.AppendChar(C);
-          ARawSB.AppendChar(C);
-        end;
+          AppendCurrent(ASB, ARawSB);
         // When BraceCount = 0, leave the closing } unconsumed for the caller
       end;
       '''', '"':
       begin
         // String literal — scan until matching unescaped quote
         Quote := C;
-        Advance;
-        ASB.AppendChar(C);
-        ARawSB.AppendChar(C);
+        AppendCurrent(ASB, ARawSB);
         while not IsAtEnd do
         begin
           C := Peek;
           if C = '\' then
           begin
             // Escape — consume \ and the next character verbatim
-            Advance;
-            ASB.AppendChar(C);
-            ARawSB.AppendChar(C);
+            AppendCurrent(ASB, ARawSB);
             if not IsAtEnd then
-            begin
-              C := Advance;
-              ASB.AppendChar(C);
-              ARawSB.AppendChar(C);
-            end;
+              AppendCurrent(ASB, ARawSB);
           end
           else if C = Quote then
           begin
-            Advance;
-            ASB.AppendChar(C);
-            ARawSB.AppendChar(C);
+            AppendCurrent(ASB, ARawSB);
             Break;
           end
+          else if ((C = #13) or (C = #10) or
+                   (C = UTF8_LINE_TERMINATOR_LEAD_BYTE)) and
+                  AppendLineTerminator(ASB, ARawSB) then
+            Continue
           else
-          begin
-            // Track line terminators inside strings
-            if C = #13 then
-            begin
-              Advance;
-              if Peek = #10 then
-                Advance;
-              Inc(FLine);
-              FColumn := 1;
-              ASB.AppendChar(#10);
-              ARawSB.AppendChar(#10);
-            end
-            else if C = #10 then
-            begin
-              Inc(FLine);
-              FColumn := 0;
-              Advance;
-              ASB.AppendChar(C);
-              ARawSB.AppendChar(C);
-            end
-            else
-            begin
-              Advance;
-              ASB.AppendChar(C);
-              ARawSB.AppendChar(C);
-            end;
-          end;
+            AppendCurrent(ASB, ARawSB);
         end;
       end;
       '`':
       begin
         // Nested template literal — delegate to mutual recursion
-        Advance;
-        ASB.AppendChar(C);
-        ARawSB.AppendChar(C);
+        AppendCurrent(ASB, ARawSB);
         ScanNestedTemplateInExpression(ASB, ARawSB);
       end;
       '/':
       begin
-        Advance;
-        ASB.AppendChar(C);
-        ARawSB.AppendChar(C);
+        AppendCurrent(ASB, ARawSB);
         if not IsAtEnd then
         begin
           if Peek = '/' then
           begin
             // Line comment — consume until line terminator (LF, CR, LS, PS)
-            C := Advance;
-            ASB.AppendChar(C);
-            ARawSB.AppendChar(C);
+            AppendCurrent(ASB, ARawSB);
             while not IsAtEnd and not IsLineTerminator do
-            begin
-              C := Advance;
-              ASB.AppendChar(C);
-              ARawSB.AppendChar(C);
-            end;
+              AppendCurrent(ASB, ARawSB);
           end
           else if Peek = '*' then
           begin
             // Block comment — consume until */
-            C := Advance; // consume *
-            ASB.AppendChar(C);
-            ARawSB.AppendChar(C);
+            AppendCurrent(ASB, ARawSB); // consume *
             while not IsAtEnd do
             begin
               C := Peek;
               if C = '*' then
               begin
-                Advance;
-                ASB.AppendChar(C);
-                ARawSB.AppendChar(C);
+                AppendCurrent(ASB, ARawSB);
                 if not IsAtEnd and (Peek = '/') then
                 begin
-                  C := Advance;
-                  ASB.AppendChar(C);
-                  ARawSB.AppendChar(C);
+                  AppendCurrent(ASB, ARawSB);
                   Break;
                 end;
               end
-              else if C = #13 then
-              begin
-                Advance;
-                if Peek = #10 then
-                  Advance;
-                Inc(FLine);
-                FColumn := 1;
-                ASB.AppendChar(#10);
-                ARawSB.AppendChar(#10);
-              end
-              else if C = #10 then
-              begin
-                Inc(FLine);
-                FColumn := 0;
-                Advance;
-                ASB.AppendChar(C);
-                ARawSB.AppendChar(C);
-              end
+              else if ((C = #13) or (C = #10) or
+                       (C = UTF8_LINE_TERMINATOR_LEAD_BYTE)) and
+                      AppendLineTerminator(ASB, ARawSB) then
+                Continue
               else
-              begin
-                Advance;
-                ASB.AppendChar(C);
-                ARawSB.AppendChar(C);
-              end;
+                AppendCurrent(ASB, ARawSB);
             end;
           end;
           // If neither // nor /*, the / was already appended — continue
         end;
       end;
-      #13:
-      begin
-        Advance;
-        if Peek = #10 then
-          Advance;
-        Inc(FLine);
-        FColumn := 1;
-        ASB.AppendChar(#10);
-        ARawSB.AppendChar(#10);
-      end;
-      #10:
-      begin
-        Inc(FLine);
-        FColumn := 0;
-        Advance;
-        ASB.AppendChar(C);
-        ARawSB.AppendChar(C);
-      end;
-      UTF8_LINE_TERMINATOR_LEAD_BYTE:
-      begin
-        if IsUnicodeLineTerminator then
-        begin
-          for J := 0 to UTF8_LINE_TERMINATOR_BYTE_LENGTH - 1 do
-          begin
-            C := FSource[FCurrent + J];
-            ASB.AppendChar(C);
-            ARawSB.AppendChar(C);
-          end;
-          Inc(FCurrent, UTF8_LINE_TERMINATOR_BYTE_LENGTH);
-          Inc(FLine);
-          FColumn := 1;
-        end
-        else
-        begin
-          Advance;
-          ASB.AppendChar(C);
-          ARawSB.AppendChar(C);
-        end;
-      end;
     else
-      begin
-        Advance;
-        ASB.AppendChar(C);
-        ARawSB.AppendChar(C);
-      end;
+      AppendCurrent(ASB, ARawSB);
     end;
   end;
 end;
@@ -1096,39 +1011,12 @@ begin
   SegmentValid := True;
   while (Peek <> '`') and not IsAtEnd do
   begin
-    if Peek = #13 then
-    begin
-      Advance;
-      if Peek = #10 then
-        Advance;
-      Inc(FLine);
-      FColumn := 1;
-      // ES2026 §12.9.6: TV and TRV both normalize CR and CRLF to LF
-      SB.AppendChar(#10);
-      RawSB.AppendChar(#10);
-    end
-    else if Peek = #10 then
-    begin
-      Inc(FLine);
-      FColumn := 0;
-      C := Advance;
-      SB.AppendChar(C);
-      RawSB.AppendChar(C);
-    end
-    // ES2026 §12.9.6: TV = TRV; TRV of LS/PS preserves the original code point
-    else if (Peek = UTF8_LINE_TERMINATOR_LEAD_BYTE) and IsUnicodeLineTerminator then
-    begin
-      for J := 0 to UTF8_LINE_TERMINATOR_BYTE_LENGTH - 1 do
-      begin
-        C := FSource[FCurrent + J];
-        SB.AppendChar(C);
-        RawSB.AppendChar(C);
-      end;
-      Inc(FCurrent, UTF8_LINE_TERMINATOR_BYTE_LENGTH);
-      Inc(FLine);
-      FColumn := 1;
-    end
-    else if Peek = '\' then
+    C := Peek;
+    // ES2026 §12.9.6: CR/CRLF normalize to LF; LS/PS preserve their bytes.
+    if ((C = #13) or (C = #10) or (C = UTF8_LINE_TERMINATOR_LEAD_BYTE)) and
+       AppendLineTerminator(SB, RawSB) then
+      Continue
+    else if C = '\' then
     begin
       Advance; // consume '\'
       if not IsAtEnd then
@@ -1164,7 +1052,7 @@ begin
         end;
       end;
     end
-    else if (Peek = '$') and (PeekNext = '{') then
+    else if (C = '$') and (PeekNext = '{') then
     begin
       // Interpolation expression boundary — detect and record with lexical
       // awareness so braces inside strings, comments, and nested templates
@@ -1206,15 +1094,18 @@ procedure TGocciaLexer.ScanRegexLiteral;
 const
   REGEX_SEPARATOR = #0;
 var
-  PatternBuffer: TStringBuffer;
+  PatternStart: Integer;
+  Pattern: string;
   FlagsStart: Integer;
   Flags: string;
   InCharacterClass: Boolean;
+  SawClosingDelimiter: Boolean;
   C: Char;
   I: Integer;
 begin
-  PatternBuffer := TStringBuffer.Create;
+  PatternStart := FCurrent;
   InCharacterClass := False;
+  SawClosingDelimiter := False;
 
   // ES2026 §12.9.5: RegularExpressionNonTerminator :: SourceCharacter but not LineTerminator
   while not IsAtEnd do
@@ -1228,12 +1119,11 @@ begin
 
     if C = '\' then
     begin
-      PatternBuffer.AppendChar(C);
       if IsAtEnd or IsLineTerminator then
         raise TGocciaLexerError.Create('Unterminated regular expression literal',
           FLine, FColumn, FFileName, GetSourceLines,
           SSuggestCloseRegex);
-      PatternBuffer.AppendChar(Advance);
+      Advance;
       Continue;
     end;
 
@@ -1242,15 +1132,18 @@ begin
     else if (C = ']') and InCharacterClass then
       InCharacterClass := False
     else if (C = '/') and not InCharacterClass then
+    begin
+      SawClosingDelimiter := True;
       Break;
-
-    PatternBuffer.AppendChar(C);
+    end;
   end;
 
-  if IsAtEnd and ((FCurrent = 1) or (FSource[FCurrent - 1] <> '/')) then
+  if not SawClosingDelimiter then
     raise TGocciaLexerError.Create('Unterminated regular expression literal',
       FLine, FColumn, FFileName, GetSourceLines,
       SSuggestCloseRegex);
+
+  Pattern := Copy(FSource, PatternStart, FCurrent - PatternStart - 1);
 
   FlagsStart := FCurrent;
   while CharInSet(Peek, ['a'..'z', 'A'..'Z']) do
@@ -1274,7 +1167,7 @@ begin
       FLine, FColumn, FFileName, GetSourceLines,
       SSuggestRegexSuffixFlags);
 
-  AddToken(gttRegex, PatternBuffer.ToString + REGEX_SEPARATOR + Flags);
+  AddToken(gttRegex, Pattern + REGEX_SEPARATOR + Flags);
 end;
 
 // ES2026 §12.9.3 NumericLiteral
@@ -1466,7 +1359,7 @@ begin
   end;
 end;
 
-function TGocciaLexer.IsValidIdentifierChar(const C: Char): Boolean;
+function TGocciaLexer.IsValidIdentifierChar(const C: Char): Boolean; inline;
 begin
   Result := CharInSet(C, ValidIdentifierChars) or (Ord(C) > 127);
 end;

@@ -109,6 +109,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Keywords.Reserved,
   Goccia.Token,
+  Goccia.Types.Enforcement,
   Goccia.Values.BigIntValue,
   Goccia.Values.Primitives;
 
@@ -724,6 +725,9 @@ var
   DestSlot, IdxReg: UInt8;
   PropIdx: UInt16;
   JumpIdx, I: Integer;
+  HasRest: Boolean;
+  Limit: Integer;
+  RestIndex: Integer;
 begin
   if APattern is TGocciaIdentifierDestructuringPattern then
   begin
@@ -808,9 +812,70 @@ begin
   end
   else if APattern is TGocciaArrayDestructuringPattern then
   begin
-    EmitInstruction(ACtx, EncodeABC(OP_VALIDATE_VALUE, ASrcReg,
-      VALIDATE_OP_REQUIRE_ITERABLE, 0));
     ArrPat := TGocciaArrayDestructuringPattern(APattern);
+    // Compute the iteration bound for OP_VALIDATE_VALUE.  Without a rest
+    // element the spec consumes exactly N elements then closes the
+    // iterator (ES2024 §8.5.3 IteratorBindingInitialization step 4).
+    // With a rest element, full iteration is required.  We pass that
+    // bound as operand C so the VM can stop calling next() once the
+    // pattern is satisfied — otherwise an iterator whose next() always
+    // returns done:false (e.g. test262's named-dflt-ary-init-iter-close
+    // pattern) allocates unboundedly during destructuring.
+    //
+    // Operand C encoding (UInt8):
+    //   0..254   = exact bound (0 means "consume zero elements" — empty
+    //              array pattern `const [] = iter` per spec);
+    //   255      = unbounded (rest pattern present, or pattern length
+    //              exceeds what C can represent).
+    // The 255 sentinel separates "empty fixed pattern" from "unbounded";
+    // collapsing both to 0 would silently drain the iterator on
+    // `const [] = iter` instead of consuming nothing then closing.
+    HasRest := False;
+    RestIndex := -1;
+    for I := 0 to ArrPat.Elements.Count - 1 do
+      if Assigned(ArrPat.Elements[I]) and
+         (ArrPat.Elements[I] is TGocciaRestDestructuringPattern) then
+      begin
+        HasRest := True;
+        RestIndex := I;
+        Break;
+      end;
+    // Only HasRest collapses to the unbounded sentinel.  A fixed-size
+    // pattern with >= 255 elements would otherwise silently change
+    // semantics from "consume exactly N then close" to "drain the whole
+    // iterator", because the operand-C encoding can't represent N.
+    // Refuse to compile rather than miscompile — patterns this large are
+    // pathological in practice (no real codebase array-destructures 255
+    // bindings at once), and a clear compile-time error is better than
+    // a silent infinite-iteration trap.
+    if HasRest then
+    begin
+      // OP_UNPACK encodes the rest start offset in a UInt8 operand
+      // (`EncodeABC(OP_UNPACK, DestSlot, ASrcReg, UInt8(I))` below), so
+      // rest patterns whose start exceeds 255 elements would be
+      // miscompiled — the truncated index points at the wrong slice
+      // start.  Reject those at compile time too, paralleling the
+      // fixed-pattern guard.  When the operand width is widened, this
+      // limit can be relaxed.
+      if RestIndex > High(UInt8) then
+        raise Exception.CreateFmt(
+          'Array destructuring rest pattern starts past the encodable '
+          + 'offset (%d; max %d)',
+          [RestIndex, High(UInt8)]);
+      Limit := ITERABLE_LIMIT_UNBOUNDED;
+    end
+    else
+    begin
+      if ArrPat.Elements.Count >= ITERABLE_LIMIT_UNBOUNDED then
+        raise Exception.CreateFmt(
+          'Array destructuring pattern is too large to encode exactly '
+          + '(%d elements; max %d without a rest element)',
+          [ArrPat.Elements.Count, ITERABLE_LIMIT_UNBOUNDED - 1]);
+      Limit := ArrPat.Elements.Count;
+    end;
+
+    EmitInstruction(ACtx, EncodeABC(OP_VALIDATE_VALUE, ASrcReg,
+      VALIDATE_OP_REQUIRE_ITERABLE, UInt8(Limit)));
     for I := 0 to ArrPat.Elements.Count - 1 do
     begin
       if not Assigned(ArrPat.Elements[I]) then
@@ -909,17 +974,22 @@ end;
 procedure ApplyParameterTypeAnnotations(
   const AScope: TGocciaCompilerScope;
   const ATemplate: TGocciaFunctionTemplate;
-  const AParameters: TGocciaParameterArray);
+  const AParameters: TGocciaParameterArray;
+  const AStrictTypes: Boolean);
 var
   I, LocalIdx: Integer;
   AnnotationType: TGocciaLocalType;
   ParamName: string;
 begin
+  { When strict-types enforcement is disabled, parameter annotations
+    are parsed but never bound to the local — no OP_CHECK_TYPE is
+    emitted later because EmitParameterTypeChecks gates on
+    Local.IsStrictlyTyped. }
+  if not AStrictTypes then
+    Exit;
   for I := 0 to High(AParameters) do
   begin
     if AParameters[I].TypeAnnotation = '' then
-      Continue;
-    if AParameters[I].IsRest then
       Continue;
     if AParameters[I].IsOptional then
       Continue;
@@ -935,6 +1005,9 @@ begin
     LocalIdx := AScope.ResolveLocal(ParamName);
     if LocalIdx < 0 then
       Continue;
+    // Rest parameter: record the type hint so subsequent reassignments are
+    // guarded, but EmitParameterTypeChecks skips IsRest so no OP_CHECK_TYPE
+    // fires at function entry against the rest array itself.
     AScope.SetLocalTypeHint(LocalIdx, AnnotationType);
     AScope.SetLocalStrictlyTyped(LocalIdx, True);
     ATemplate.SetLocalType(AScope.GetLocal(LocalIdx).Slot, AnnotationType);
@@ -1021,7 +1094,8 @@ begin
     if AExpr.Parameters[I].IsPattern and Assigned(AExpr.Parameters[I].Pattern) then
       CollectDestructuringBindings(AExpr.Parameters[I].Pattern, ChildScope);
 
-  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters);
+  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters,
+    ACtx.StrictTypes);
 
   if FormalCount < 0 then
     FormalCount := Length(AExpr.Parameters);
@@ -1944,6 +2018,7 @@ begin
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AExpr.IsAsync;
   ChildTemplate.IsGenerator := AExpr.IsGenerator;
+  ChildTemplate.HasOwnPrototype := AExpr.HasOwnPrototype;
   ChildTemplate.SourceText := AExpr.SourceText;
   if HasNameBinding then
     ChildTemplate.Name := AExpr.Name;
@@ -1972,7 +2047,8 @@ begin
     if AExpr.Parameters[I].IsPattern and Assigned(AExpr.Parameters[I].Pattern) then
       CollectDestructuringBindings(AExpr.Parameters[I].Pattern, ChildScope);
 
-  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters);
+  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters,
+    ACtx.StrictTypes);
 
   if FormalCount < 0 then
     FormalCount := Length(AExpr.Parameters);

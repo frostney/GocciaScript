@@ -679,6 +679,15 @@ begin
       begin
         if Operand is TGocciaSymbolValue then
           ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
+        // ES2026 §13.5.5 UnaryMinus — operand goes through ToNumeric,
+        // which is ToPrimitive then a BigInt? branch.  Apply
+        // ToPrimitive here so boxed BigInts (Object(1n)) unbox to
+        // their primitive and take the BigInt::unaryMinus path
+        // instead of being silently coerced to NaN by the boxed
+        // object's ToNumberLiteral.
+        Operand := ToPrimitive(Operand);
+        if Operand is TGocciaSymbolValue then
+          ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
         // ES2026 §6.1.6.2.1 BigInt::unaryMinus
         if Operand is TGocciaBigIntValue then
         begin
@@ -707,6 +716,13 @@ begin
       end;
     gttPlus:
     begin
+      if Operand is TGocciaSymbolValue then
+        ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
+      // ES2026 §13.5.4 UnaryPlus — ToNumber (ToPrimitive then a
+      // BigInt? throw).  Apply ToPrimitive here so boxed BigInts
+      // surface the spec-mandated TypeError instead of silently
+      // producing a number from the boxed object's coercion path.
+      Operand := ToPrimitive(Operand);
       if Operand is TGocciaSymbolValue then
         ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
       // ES2026 §7.1.4: unary + on BigInt throws TypeError
@@ -1406,24 +1422,37 @@ var
   IterContext: TGocciaEvaluationContext;
   DeclarationType: TGocciaDeclarationType;
   MatchContext, MatchBaseContext: TGocciaEvaluationContext;
+  Continuation: TGocciaGeneratorContinuation;
+  SavedIteratorValue, SavedCurrentValue, SavedNextMethod: TGocciaValue;
+  HasSavedLoopState: Boolean;
+  HeadCompleted, HeadYielding: Boolean;
 begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
-  IterableValue := EvaluateExpression(AForOfStatement.Iterable, AContext);
-  Iterator := GetIteratorFromValue(IterableValue);
-  if Iterator = nil then
+  Continuation := CurrentGeneratorContinuation;
+  HasSavedLoopState := Assigned(Continuation) and
+    Continuation.GetLoopState(AForOfStatement, SavedIteratorValue,
+      SavedCurrentValue, SavedNextMethod);
+  if HasSavedLoopState then
+    Iterator := TGocciaIteratorValue(SavedIteratorValue)
+  else
   begin
-    if AForOfStatement.Iterable is TGocciaIdentifierExpression then
-      ThrowTypeError(
-        Format(SErrorNotIterable,
-          [TGocciaIdentifierExpression(AForOfStatement.Iterable).Name]),
-        Format('''%s'' is of type ''%s'' which does not implement the iterator protocol',
-          [TGocciaIdentifierExpression(AForOfStatement.Iterable).Name,
-           IterableValue.TypeName]))
-    else
-      ThrowTypeError(
-        Format(SErrorNotIterable, [IterableValue.TypeName]),
-        SSuggestIteratorProtocol);
+    IterableValue := EvaluateExpression(AForOfStatement.Iterable, AContext);
+    Iterator := GetIteratorFromValue(IterableValue);
+    if Iterator = nil then
+    begin
+      if AForOfStatement.Iterable is TGocciaIdentifierExpression then
+        ThrowTypeError(
+          Format(SErrorNotIterable,
+            [TGocciaIdentifierExpression(AForOfStatement.Iterable).Name]),
+          Format('''%s'' is of type ''%s'' which does not implement the iterator protocol',
+            [TGocciaIdentifierExpression(AForOfStatement.Iterable).Name,
+             IterableValue.TypeName]))
+      else
+        ThrowTypeError(
+          Format(SErrorNotIterable, [IterableValue.TypeName]),
+          SSuggestIteratorProtocol);
+    end;
   end;
 
   if AForOfStatement.IsConst then
@@ -1434,56 +1463,120 @@ begin
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
-    IterResult := Iterator.AdvanceNext;
-    while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+    if not HasSavedLoopState then
+      IterResult := Iterator.AdvanceNext;
+    while True do
     begin
-      CheckExecutionTimeout;
-      IncrementInstructionCounter;
-      CheckInstructionLimit;
-      CurrentValue := IterResult.GetProperty(PROP_VALUE);
-
-      IterScope := AContext.Scope.CreateChild(skBlock);
-      IterContext := AContext;
-      IterContext.Scope := IterScope;
-
-      if AForOfStatement.IsVar then
+      if HasSavedLoopState then
       begin
-        // var binding: define/update on function/module scope
-        if AForOfStatement.BindingPattern <> nil then
-          AssignVariablePattern(AForOfStatement.BindingPattern, CurrentValue, AContext)
-        else
-          AContext.Scope.DefineVariableBinding(AForOfStatement.BindingName, CurrentValue, True);
+        CurrentValue := SavedCurrentValue;
+        HasSavedLoopState := False;
       end
-      else if AForOfStatement.BindingPattern <> nil then
-        AssignPattern(AForOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
       else
-        IterScope.DefineLexicalBinding(AForOfStatement.BindingName, CurrentValue, DeclarationType);
-
-      if Assigned(AForOfStatement.MatchPattern) then
       begin
-        MatchBaseContext := IterContext;
-        if not TryEvaluateMatchPatternInContext(CurrentValue,
-           AForOfStatement.MatchPattern, IterContext, MatchContext) then
-        begin
-          IterResult := Iterator.AdvanceNext;
-          Continue;
+        if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+          Break;
+        CurrentValue := IterResult.GetProperty(PROP_VALUE);
+      end;
+      if Assigned(Continuation) then
+        Continuation.SaveLoopState(AForOfStatement, Iterator, CurrentValue);
+
+      HeadCompleted := False;
+      HeadYielding := False;
+      try
+        try
+          CheckExecutionTimeout;
+          IncrementInstructionCounter;
+          CheckInstructionLimit;
+
+          IterScope := AContext.Scope.CreateChild(skBlock);
+          IterContext := AContext;
+          IterContext.Scope := IterScope;
+
+          if AForOfStatement.IsVar then
+          begin
+            // var binding: define/update on function/module scope
+            if AForOfStatement.BindingPattern <> nil then
+              AssignVariablePattern(AForOfStatement.BindingPattern, CurrentValue, AContext)
+            else
+              AContext.Scope.DefineVariableBinding(AForOfStatement.BindingName, CurrentValue, True);
+          end
+          else if AForOfStatement.BindingPattern <> nil then
+            AssignPattern(AForOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
+          else
+            IterScope.DefineLexicalBinding(AForOfStatement.BindingName, CurrentValue, DeclarationType);
+
+          if Assigned(AForOfStatement.MatchPattern) then
+          begin
+            MatchBaseContext := IterContext;
+            if not TryEvaluateMatchPatternInContext(CurrentValue,
+               AForOfStatement.MatchPattern, IterContext, MatchContext) then
+            begin
+              if Assigned(Continuation) then
+                Continuation.ClearLoopState(AForOfStatement);
+              IterResult := Iterator.AdvanceNext;
+              Continue;
+            end;
+            IterContext := MatchContext;
+          end;
+          HeadCompleted := True;
+        except
+          on E: EGocciaGeneratorYield do
+          begin
+            HeadYielding := True;
+            raise;
+          end;
+          on E: Exception do
+            raise;
         end;
-        IterContext := MatchContext;
+      finally
+        if (not HeadCompleted) and (not HeadYielding) and
+           Assigned(Continuation) then
+        begin
+          Continuation.ClearLoopState(AForOfStatement);
+          Continuation.ClearExpressionValues;
+        end;
       end;
 
       try
-        CF := EvaluateLoopBodyStatement(AForOfStatement.Body, IterContext);
+        try
+          CF := EvaluateLoopBodyStatement(AForOfStatement.Body, IterContext);
+          if Assigned(Continuation) then
+            Continuation.ClearLoopState(AForOfStatement);
+        except
+          on E: EGocciaGeneratorYield do
+            raise;
+          else
+          begin
+            if Assigned(Continuation) then
+              Continuation.ClearLoopState(AForOfStatement);
+            raise;
+          end;
+        end;
       finally
         if Assigned(AForOfStatement.MatchPattern) and
            (IterContext.Scope <> IterScope) then
           ReleaseMatchContext(IterContext, MatchBaseContext);
       end;
-      if CF.Kind = cfkBreak then Break;
-      if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
+      if CF.Kind = cfkBreak then
+      begin
+        if Assigned(Continuation) then
+          Continuation.ClearLoopState(AForOfStatement);
+        Break;
+      end;
+      if CF.Kind = cfkReturn then
+      begin
+        if Assigned(Continuation) then
+          Continuation.ClearLoopState(AForOfStatement);
+        Result := CF;
+        Exit;
+      end;
       // cfkContinue: skip remaining body, advance to next iteration
 
       IterResult := Iterator.AdvanceNext;
     end;
+    if Assigned(Continuation) then
+      Continuation.ClearLoopState(AForOfStatement);
   finally
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.RemoveTempRoot(Iterator);
@@ -1493,7 +1586,7 @@ end;
 // ES2026 §14.7.5.6 ForIn/OfBodyEvaluation — for-await-of variant
 function EvaluateForAwaitOf(const AForAwaitOfStatement: TGocciaForAwaitOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
-  IterableValue, IteratorMethod, IteratorObj, NextMethod, NextResult, DoneValue, CurrentValue: TGocciaValue;
+  IterableValue, IteratorMethod, IteratorMethodValue, IteratorObj, NextMethod, NextResult, DoneValue, CurrentValue: TGocciaValue;
   Iterator: TGocciaIteratorValue;
   GenericNextResult: TGocciaObjectValue;
   CF: TGocciaControlFlow;
@@ -1502,10 +1595,21 @@ var
   DeclarationType: TGocciaDeclarationType;
   EmptyArgs: TGocciaArgumentsCollection;
   MatchContext, MatchBaseContext: TGocciaEvaluationContext;
+  Continuation: TGocciaGeneratorContinuation;
+  SavedIteratorValue, SavedCurrentValue, SavedNextMethod: TGocciaValue;
+  HasSavedLoopState: Boolean;
+  HeadCompleted, HeadYielding: Boolean;
 begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
-  IterableValue := EvaluateExpression(AForAwaitOfStatement.Iterable, AContext);
+  Continuation := CurrentGeneratorContinuation;
+  HasSavedLoopState := Assigned(Continuation) and
+    Continuation.GetLoopState(AForAwaitOfStatement, SavedIteratorValue,
+      SavedCurrentValue, SavedNextMethod);
+  if not HasSavedLoopState then
+    IterableValue := EvaluateExpression(AForAwaitOfStatement.Iterable, AContext)
+  else
+    IterableValue := nil;
 
   if AForAwaitOfStatement.IsConst then
     DeclarationType := dtConst
@@ -1513,16 +1617,40 @@ begin
     DeclarationType := dtLet;
 
   IteratorMethod := nil;
-  if IterableValue is TGocciaObjectValue then
-    IteratorMethod := TGocciaObjectValue(IterableValue).GetSymbolProperty(TGocciaSymbolValue.WellKnownAsyncIterator);
-
-  if Assigned(IteratorMethod) and IteratorMethod.IsCallable then
+  IteratorMethodValue := nil;
+  if HasSavedLoopState and Assigned(SavedNextMethod) then
   begin
-    EmptyArgs := TGocciaArgumentsCollection.Create;
-    try
-      IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(EmptyArgs, IterableValue);
-    finally
-      EmptyArgs.Free;
+    IteratorObj := SavedIteratorValue;
+    NextMethod := SavedNextMethod;
+  end
+  else if IterableValue is TGocciaObjectValue then
+  begin
+    IteratorMethodValue := TGocciaObjectValue(IterableValue).GetSymbolProperty(
+      TGocciaSymbolValue.WellKnownAsyncIterator);
+    if Assigned(IteratorMethodValue) and
+       not (IteratorMethodValue is TGocciaUndefinedLiteralValue) and
+       not (IteratorMethodValue is TGocciaNullLiteralValue) then
+    begin
+      if not IteratorMethodValue.IsCallable then
+        ThrowTypeError('Async iterator method is not callable');
+      IteratorMethod := IteratorMethodValue;
+    end;
+  end;
+
+  if (HasSavedLoopState and Assigned(SavedNextMethod)) or
+     (Assigned(IteratorMethod) and IteratorMethod.IsCallable) then
+  begin
+    if not (HasSavedLoopState and Assigned(SavedNextMethod)) then
+    begin
+      EmptyArgs := TGocciaArgumentsCollection.Create;
+      try
+        IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(EmptyArgs, IterableValue);
+      finally
+        EmptyArgs.Free;
+      end;
+      if not (IteratorObj is TGocciaObjectValue) then
+        ThrowTypeError(SErrorAsyncIteratorNextNotCallable,
+          SSuggestAsyncIteratorProtocol);
     end;
 
     if Assigned(TGarbageCollector.Instance) then
@@ -1530,66 +1658,132 @@ begin
     try
       EmptyArgs := TGocciaArgumentsCollection.Create;
       try
-        NextMethod := IteratorObj.GetProperty(PROP_NEXT);
-        if not Assigned(NextMethod) or not NextMethod.IsCallable then
-          ThrowTypeError(SErrorAsyncIteratorNextNotCallable, SSuggestAsyncIteratorProtocol);
+        if not HasSavedLoopState then
+        begin
+          NextMethod := IteratorObj.GetProperty(PROP_NEXT);
+          if not Assigned(NextMethod) or not NextMethod.IsCallable then
+            ThrowTypeError(SErrorAsyncIteratorNextNotCallable, SSuggestAsyncIteratorProtocol);
+        end;
 
         while True do
         begin
           CheckExecutionTimeout;
           IncrementInstructionCounter;
           CheckInstructionLimit;
-          NextResult := TGocciaFunctionBase(NextMethod).Call(EmptyArgs, IteratorObj);
-          NextResult := AwaitValue(NextResult);
-
-          // ES2026 §7.4.2 step 5: If nextResult is not an Object, throw a TypeError
-          if NextResult.IsPrimitive then
-            ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.ToStringLiteral.Value]),
-              SSuggestIteratorResultObject);
-
-          DoneValue := NextResult.GetProperty(PROP_DONE);
-          if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
-            Break;
-
-          CurrentValue := NextResult.GetProperty(PROP_VALUE);
-          if not Assigned(CurrentValue) then
-            CurrentValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-
-          IterScope := AContext.Scope.CreateChild(skBlock);
-          IterContext := AContext;
-          IterContext.Scope := IterScope;
-
-          if AForAwaitOfStatement.IsVar then
+          if HasSavedLoopState then
           begin
-            if AForAwaitOfStatement.BindingPattern <> nil then
-              AssignVariablePattern(AForAwaitOfStatement.BindingPattern, CurrentValue, AContext)
-            else
-              AContext.Scope.DefineVariableBinding(AForAwaitOfStatement.BindingName, CurrentValue, True);
+            CurrentValue := SavedCurrentValue;
+            HasSavedLoopState := False;
           end
-          else if AForAwaitOfStatement.BindingPattern <> nil then
-            AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
           else
-            IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
-
-          if Assigned(AForAwaitOfStatement.MatchPattern) then
           begin
-            MatchBaseContext := IterContext;
-            if not TryEvaluateMatchPatternInContext(CurrentValue,
-               AForAwaitOfStatement.MatchPattern, IterContext, MatchContext) then
-              Continue;
-            IterContext := MatchContext;
+            NextResult := TGocciaFunctionBase(NextMethod).Call(EmptyArgs, IteratorObj);
+            NextResult := AwaitValue(NextResult);
+
+            // ES2026 §7.4.2 step 5: If nextResult is not an Object, throw a TypeError
+            if NextResult.IsPrimitive then
+              ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.ToStringLiteral.Value]),
+                SSuggestIteratorResultObject);
+
+            DoneValue := NextResult.GetProperty(PROP_DONE);
+            if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+              Break;
+
+            CurrentValue := NextResult.GetProperty(PROP_VALUE);
+            if not Assigned(CurrentValue) then
+              CurrentValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+          end;
+          if Assigned(Continuation) then
+            Continuation.SaveLoopState(AForAwaitOfStatement, IteratorObj,
+              CurrentValue, NextMethod);
+
+          HeadCompleted := False;
+          HeadYielding := False;
+          try
+            try
+              IterScope := AContext.Scope.CreateChild(skBlock);
+              IterContext := AContext;
+              IterContext.Scope := IterScope;
+
+              if AForAwaitOfStatement.IsVar then
+              begin
+                if AForAwaitOfStatement.BindingPattern <> nil then
+                  AssignVariablePattern(AForAwaitOfStatement.BindingPattern, CurrentValue, AContext)
+                else
+                  AContext.Scope.DefineVariableBinding(AForAwaitOfStatement.BindingName, CurrentValue, True);
+              end
+              else if AForAwaitOfStatement.BindingPattern <> nil then
+                AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
+              else
+                IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
+
+              if Assigned(AForAwaitOfStatement.MatchPattern) then
+              begin
+                MatchBaseContext := IterContext;
+                if not TryEvaluateMatchPatternInContext(CurrentValue,
+                   AForAwaitOfStatement.MatchPattern, IterContext, MatchContext) then
+                begin
+                  if Assigned(Continuation) then
+                    Continuation.ClearLoopState(AForAwaitOfStatement);
+                  Continue;
+                end;
+                IterContext := MatchContext;
+              end;
+              HeadCompleted := True;
+            except
+              on E: EGocciaGeneratorYield do
+              begin
+                HeadYielding := True;
+                raise;
+              end;
+              on E: Exception do
+                raise;
+            end;
+          finally
+            if (not HeadCompleted) and (not HeadYielding) and
+               Assigned(Continuation) then
+            begin
+              Continuation.ClearLoopState(AForAwaitOfStatement);
+              Continuation.ClearExpressionValues;
+            end;
           end;
 
           try
-            CF := EvaluateLoopBodyStatement(AForAwaitOfStatement.Body, IterContext);
+            try
+              CF := EvaluateLoopBodyStatement(AForAwaitOfStatement.Body, IterContext);
+              if Assigned(Continuation) then
+                Continuation.ClearLoopState(AForAwaitOfStatement);
+            except
+              on E: EGocciaGeneratorYield do
+                raise;
+              else
+              begin
+                if Assigned(Continuation) then
+                  Continuation.ClearLoopState(AForAwaitOfStatement);
+                raise;
+              end;
+            end;
           finally
             if Assigned(AForAwaitOfStatement.MatchPattern) and
                (IterContext.Scope <> IterScope) then
               ReleaseMatchContext(IterContext, MatchBaseContext);
           end;
-          if CF.Kind = cfkBreak then Break;
-          if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
+          if CF.Kind = cfkBreak then
+          begin
+            if Assigned(Continuation) then
+              Continuation.ClearLoopState(AForAwaitOfStatement);
+            Break;
+          end;
+          if CF.Kind = cfkReturn then
+          begin
+            if Assigned(Continuation) then
+              Continuation.ClearLoopState(AForAwaitOfStatement);
+            Result := CF;
+            Exit;
+          end;
         end;
+        if Assigned(Continuation) then
+          Continuation.ClearLoopState(AForAwaitOfStatement);
       finally
         EmptyArgs.Free;
       end;
@@ -1600,64 +1794,133 @@ begin
   end
   else
   begin
-    Iterator := GetIteratorFromValue(IterableValue);
-    if Iterator = nil then
-      ThrowTypeError(
-        Format(SErrorNotIterable, [IterableValue.TypeName]),
-        SSuggestIteratorProtocol);
+    if HasSavedLoopState then
+      Iterator := TGocciaIteratorValue(SavedIteratorValue)
+    else
+    begin
+      Iterator := GetIteratorFromValue(IterableValue);
+      if Iterator = nil then
+        ThrowTypeError(
+          Format(SErrorNotIterable, [IterableValue.TypeName]),
+          SSuggestIteratorProtocol);
+    end;
 
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.AddTempRoot(Iterator);
     try
-      GenericNextResult := Iterator.AdvanceNext;
-      while not GenericNextResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+      if not HasSavedLoopState then
+        GenericNextResult := Iterator.AdvanceNext;
+      while True do
       begin
         CheckExecutionTimeout;
         IncrementInstructionCounter;
         CheckInstructionLimit;
-        CurrentValue := GenericNextResult.GetProperty(PROP_VALUE);
-        CurrentValue := AwaitValue(CurrentValue);
-
-        IterScope := AContext.Scope.CreateChild(skBlock);
-        IterContext := AContext;
-        IterContext.Scope := IterScope;
-
-        if AForAwaitOfStatement.IsVar then
+        if HasSavedLoopState then
         begin
-          if AForAwaitOfStatement.BindingPattern <> nil then
-            AssignVariablePattern(AForAwaitOfStatement.BindingPattern, CurrentValue, AContext)
-          else
-            AContext.Scope.DefineVariableBinding(AForAwaitOfStatement.BindingName, CurrentValue, True);
+          CurrentValue := SavedCurrentValue;
+          HasSavedLoopState := False;
         end
-        else if AForAwaitOfStatement.BindingPattern <> nil then
-          AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
         else
-          IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
-
-        if Assigned(AForAwaitOfStatement.MatchPattern) then
         begin
-          MatchBaseContext := IterContext;
-          if not TryEvaluateMatchPatternInContext(CurrentValue,
-             AForAwaitOfStatement.MatchPattern, IterContext, MatchContext) then
-          begin
-            GenericNextResult := Iterator.AdvanceNext;
-            Continue;
+          if GenericNextResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+            Break;
+          CurrentValue := GenericNextResult.GetProperty(PROP_VALUE);
+          CurrentValue := AwaitValue(CurrentValue);
+        end;
+        if Assigned(Continuation) then
+          Continuation.SaveLoopState(AForAwaitOfStatement, Iterator,
+            CurrentValue);
+
+        HeadCompleted := False;
+        HeadYielding := False;
+        try
+          try
+            IterScope := AContext.Scope.CreateChild(skBlock);
+            IterContext := AContext;
+            IterContext.Scope := IterScope;
+
+            if AForAwaitOfStatement.IsVar then
+            begin
+              if AForAwaitOfStatement.BindingPattern <> nil then
+                AssignVariablePattern(AForAwaitOfStatement.BindingPattern, CurrentValue, AContext)
+              else
+                AContext.Scope.DefineVariableBinding(AForAwaitOfStatement.BindingName, CurrentValue, True);
+            end
+            else if AForAwaitOfStatement.BindingPattern <> nil then
+              AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
+            else
+              IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
+
+            if Assigned(AForAwaitOfStatement.MatchPattern) then
+            begin
+              MatchBaseContext := IterContext;
+              if not TryEvaluateMatchPatternInContext(CurrentValue,
+                 AForAwaitOfStatement.MatchPattern, IterContext, MatchContext) then
+              begin
+                if Assigned(Continuation) then
+                  Continuation.ClearLoopState(AForAwaitOfStatement);
+                GenericNextResult := Iterator.AdvanceNext;
+                Continue;
+              end;
+              IterContext := MatchContext;
+            end;
+            HeadCompleted := True;
+          except
+            on E: EGocciaGeneratorYield do
+            begin
+              HeadYielding := True;
+              raise;
+            end;
+            on E: Exception do
+              raise;
           end;
-          IterContext := MatchContext;
+        finally
+          if (not HeadCompleted) and (not HeadYielding) and
+             Assigned(Continuation) then
+          begin
+            Continuation.ClearLoopState(AForAwaitOfStatement);
+            Continuation.ClearExpressionValues;
+          end;
         end;
 
         try
-          CF := EvaluateLoopBodyStatement(AForAwaitOfStatement.Body, IterContext);
+          try
+            CF := EvaluateLoopBodyStatement(AForAwaitOfStatement.Body, IterContext);
+            if Assigned(Continuation) then
+              Continuation.ClearLoopState(AForAwaitOfStatement);
+          except
+            on E: EGocciaGeneratorYield do
+              raise;
+            else
+            begin
+              if Assigned(Continuation) then
+                Continuation.ClearLoopState(AForAwaitOfStatement);
+              raise;
+            end;
+          end;
         finally
           if Assigned(AForAwaitOfStatement.MatchPattern) and
              (IterContext.Scope <> IterScope) then
             ReleaseMatchContext(IterContext, MatchBaseContext);
         end;
-        if CF.Kind = cfkBreak then Break;
-        if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
+        if CF.Kind = cfkBreak then
+        begin
+          if Assigned(Continuation) then
+            Continuation.ClearLoopState(AForAwaitOfStatement);
+          Break;
+        end;
+        if CF.Kind = cfkReturn then
+        begin
+          if Assigned(Continuation) then
+            Continuation.ClearLoopState(AForAwaitOfStatement);
+          Result := CF;
+          Exit;
+        end;
 
         GenericNextResult := Iterator.AdvanceNext;
       end;
+      if Assigned(Continuation) then
+        Continuation.ClearLoopState(AForAwaitOfStatement);
     finally
       if Assigned(TGarbageCollector.Instance) then
         TGarbageCollector.Instance.RemoveTempRoot(Iterator);
@@ -1692,6 +1955,8 @@ function EvaluateMethodExpression(const AMethodExpression: TGocciaMethodExpressi
 var
   Statements: TObjectList<TGocciaASTNode>;
   ClosureScope: TGocciaScope;
+  PrototypeObj: TGocciaObjectValue;
+  PrototypeFlags: TPropertyFlags;
 begin
   if AMethodExpression.Body is TGocciaBlockStatement then
     Statements := CopyStatementList(TGocciaBlockStatement(AMethodExpression.Body).Nodes)
@@ -1720,6 +1985,43 @@ begin
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AMethodExpression.Line;
   TGocciaFunctionValue(Result).SourceText := AMethodExpression.SourceText;
+
+  // ES2026 §10.2.5 MakeConstructor: function declarations / expressions and
+  // (async) generator declarations / expressions get their own `prototype`
+  // data property.  Concise methods, arrow functions, getters, setters, and
+  // plain async functions do not.
+  //
+  // The shape differs by kind:
+  //   - Ordinary function (§15.2): prototype is { writable, !enumerable,
+  //     !configurable } and has an own `constructor` data property pointing
+  //     back at the function.
+  //   - (Async) generator (§15.5 / §15.6): prototype is { !writable,
+  //     !enumerable, !configurable } and has NO own `constructor`.  Per spec
+  //     it inherits `constructor` from %GeneratorFunction.prototype.prototype%
+  //     (which itself points at %GeneratorFunction.prototype%, not the
+  //     specific generator), so an own back-reference here would be wrong.
+  if AMethodExpression.HasOwnPrototype then
+  begin
+    // The prototype object's [[Prototype]] is %Object.prototype% per ES2026
+    // §10.2.5.1 OrdinaryFunctionCreate.  (For generators it should be
+    // %Generator%, but GocciaScript does not yet expose that intrinsic; falling
+    // back to Object.prototype keeps the chain non-null and lets generic object
+    // methods like hasOwnProperty resolve.)
+    PrototypeObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    if AMethodExpression.IsGenerator then
+    begin
+      PrototypeFlags := [];
+    end
+    else
+    begin
+      PrototypeFlags := [pfWritable];
+      // prototype.constructor: { writable, !enumerable, configurable }
+      PrototypeObj.DefineProperty(PROP_CONSTRUCTOR,
+        TGocciaPropertyDescriptorData.Create(Result, [pfWritable, pfConfigurable]));
+    end;
+    TGocciaObjectValue(Result).DefineProperty(PROP_PROTOTYPE,
+      TGocciaPropertyDescriptorData.Create(PrototypeObj, PrototypeFlags));
+  end;
 
   // Bind the function name in the intermediate scope (parent of the closure)
   if AMethodExpression.Name <> '' then
@@ -4218,6 +4520,7 @@ var
   PropValue, ElementValue, DefaultValue: TGocciaValue;
   RestElements: TGocciaArrayValue;
   I, J: Integer;
+  Exhausted: Boolean;
 begin
   if APattern is TGocciaIdentifierDestructuringPattern then
     AContext.Scope.DefineVariableBinding(
@@ -4301,7 +4604,15 @@ begin
     end
     else
     begin
-      // Generic iterable fallback
+      // Generic iterable fallback.  Same IteratorClose contract as
+      // AssignArrayPattern (ES2024 §8.5.3 IteratorBindingInitialization
+      // step 4 / §7.4.10 IteratorClose):
+      //   - normal completion → CloseIterator (errors from iter.return()
+      //     propagate as the new completion);
+      //   - abrupt completion → CloseIteratorPreservingError (the
+      //     original abrupt completion wins).
+      // RestElements is also temp-rooted across AdvanceNext so a
+      // re-entrant GC can't reclaim it mid-drain.
       Iterator := GetIteratorFromValue(AValue);
       if not Assigned(Iterator) then
         ThrowTypeError(
@@ -4309,37 +4620,89 @@ begin
           SSuggestDestructureRequiresIterable);
       TGarbageCollector.Instance.AddTempRoot(Iterator);
       try
-        for I := 0 to ArrPat.Elements.Count - 1 do
-        begin
-          if ArrPat.Elements[I] = nil then
+        try
+          // Same exhaustion-tracking as AssignArrayPattern: once the
+          // iterator returns done:true, subsequent BindingElements take
+          // undefined (or an empty rest array) without re-invoking
+          // next() — see ES2024 §13.15.5.4 IteratorBindingInitialization
+          // for ArrayBindingPattern.
+          Exhausted := False;
+          for I := 0 to ArrPat.Elements.Count - 1 do
           begin
-            Iterator.AdvanceNext;
-            Continue;
-          end;
-          if ArrPat.Elements[I] is TGocciaRestDestructuringPattern then
-          begin
-            RestElements := TGocciaArrayValue.Create;
-            IterResult := Iterator.AdvanceNext;
-            while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+            if ArrPat.Elements[I] = nil then
             begin
-              RestElements.Elements.Add(IterResult.GetProperty(PROP_VALUE));
-              IterResult := Iterator.AdvanceNext;
+              if not Exhausted then
+              begin
+                IterResult := Iterator.AdvanceNext;
+                if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+                  Exhausted := True;
+              end;
+              Continue;
             end;
-            AssignVariablePattern(
-              TGocciaRestDestructuringPattern(ArrPat.Elements[I]).Argument,
-              RestElements, AContext);
-            Break;
-          end
-          else
-          begin
-            IterResult := Iterator.AdvanceNext;
-            if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
-              ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
+            if ArrPat.Elements[I] is TGocciaRestDestructuringPattern then
+            begin
+              RestElements := TGocciaArrayValue.Create;
+              TGarbageCollector.Instance.AddTempRoot(RestElements);
+              try
+                if not Exhausted then
+                begin
+                  IterResult := Iterator.AdvanceNext;
+                  while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+                  begin
+                    // Per ES2024 §7.4.4 IteratorValue, a missing
+                    // IteratorResult.value is implicitly undefined.
+                    // Most iterator implementations normalize inside
+                    // AdvanceNext (TGocciaGenericIteratorValue does, as
+                    // do all native iterators that route through
+                    // CreateIteratorResult), but defensive normalization
+                    // here keeps RestElements free of nil entries even
+                    // when an iterator subclass forwards a raw
+                    // GetProperty result.
+                    ElementValue := IterResult.GetProperty(PROP_VALUE);
+                    if not Assigned(ElementValue) then
+                      ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+                    RestElements.Elements.Add(ElementValue);
+                    IterResult := Iterator.AdvanceNext;
+                  end;
+                  Exhausted := True;
+                end;
+                AssignVariablePattern(
+                  TGocciaRestDestructuringPattern(ArrPat.Elements[I]).Argument,
+                  RestElements, AContext);
+              finally
+                TGarbageCollector.Instance.RemoveTempRoot(RestElements);
+              end;
+              Break;
+            end
             else
-              ElementValue := IterResult.GetProperty(PROP_VALUE);
-            AssignVariablePattern(ArrPat.Elements[I], ElementValue, AContext);
+            begin
+              if Exhausted then
+                ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
+              else
+              begin
+                IterResult := Iterator.AdvanceNext;
+                if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+                begin
+                  Exhausted := True;
+                  ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+                end
+                else
+                begin
+                  ElementValue := IterResult.GetProperty(PROP_VALUE);
+                  // §7.4.4 IteratorValue normalization (see RestElement
+                  // branch above for the same reasoning).
+                  if not Assigned(ElementValue) then
+                    ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+                end;
+              end;
+              AssignVariablePattern(ArrPat.Elements[I], ElementValue, AContext);
+            end;
           end;
+        except
+          CloseIteratorPreservingError(Iterator);
+          raise;
         end;
+        CloseIterator(Iterator);
       finally
         TGarbageCollector.Instance.RemoveTempRoot(Iterator);
       end;
@@ -4415,6 +4778,7 @@ var
   ElementValue: TGocciaValue;
   RestElements: TGocciaArrayValue;
   J: Integer;
+  Exhausted: Boolean;
 begin
   if (AValue is TGocciaNullLiteralValue) or (AValue is TGocciaUndefinedLiteralValue) then
     ThrowTypeError(
@@ -4490,37 +4854,110 @@ begin
 
     TGarbageCollector.Instance.AddTempRoot(Iterator);
     try
-      for I := 0 to APattern.Elements.Count - 1 do
-      begin
-        if APattern.Elements[I] = nil then
+      try
+        // Track iterator exhaustion so we don't keep calling next()
+        // past done:true.  Per ES2024 §13.15.5.4
+        // IteratorBindingInitialization for ArrayBindingPattern: once
+        // iteratorRecord.[[Done]] becomes true, subsequent
+        // BindingElements get undefined (or an empty rest array)
+        // without invoking the iterator again.  Calling AdvanceNext on
+        // an already-done iterator is observable when the user's next()
+        // has side effects.
+        Exhausted := False;
+        for I := 0 to APattern.Elements.Count - 1 do
         begin
-          Iterator.AdvanceNext;
-          Continue;
-        end;
-
-        if APattern.Elements[I] is TGocciaRestDestructuringPattern then
-        begin
-          RestElements := TGocciaArrayValue.Create;
-          IterResult := Iterator.AdvanceNext;
-          while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+          if APattern.Elements[I] = nil then
           begin
-            RestElements.Elements.Add(IterResult.GetProperty(PROP_VALUE));
-            IterResult := Iterator.AdvanceNext;
+            if not Exhausted then
+            begin
+              IterResult := Iterator.AdvanceNext;
+              if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+                Exhausted := True;
+            end;
+            Continue;
           end;
-          AssignPattern(TGocciaRestDestructuringPattern(APattern.Elements[I]).Argument, RestElements, AContext, AIsDeclaration, ADeclarationType);
-          Break;
-        end
-        else
-        begin
-          IterResult := Iterator.AdvanceNext;
-          if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
-            ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
-          else
-            ElementValue := IterResult.GetProperty(PROP_VALUE);
 
-          AssignPattern(APattern.Elements[I], ElementValue, AContext, AIsDeclaration, ADeclarationType);
+          if APattern.Elements[I] is TGocciaRestDestructuringPattern then
+          begin
+            // Iterator.AdvanceNext re-enters the engine (calls user
+            // next()), which can trigger GC.  Temp-root RestElements
+            // for the duration of the drain so a re-entrant collection
+            // can't reclaim it.  The root is removed once AssignPattern
+            // has stored the array into a reachable binding.
+            RestElements := TGocciaArrayValue.Create;
+            TGarbageCollector.Instance.AddTempRoot(RestElements);
+            try
+              if not Exhausted then
+              begin
+                IterResult := Iterator.AdvanceNext;
+                while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+                begin
+                  // §7.4.4 IteratorValue: missing value is undefined.
+                  // Defensive normalization mirroring AssignArrayPattern
+                  // — most AdvanceNext implementations already
+                  // normalize, but a subclass that forwards a raw
+                  // GetProperty result must not seed nil into
+                  // RestElements.
+                  ElementValue := IterResult.GetProperty(PROP_VALUE);
+                  if not Assigned(ElementValue) then
+                    ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+                  RestElements.Elements.Add(ElementValue);
+                  IterResult := Iterator.AdvanceNext;
+                end;
+                Exhausted := True;
+              end;
+              AssignPattern(TGocciaRestDestructuringPattern(APattern.Elements[I]).Argument, RestElements, AContext, AIsDeclaration, ADeclarationType);
+            finally
+              TGarbageCollector.Instance.RemoveTempRoot(RestElements);
+            end;
+            Break;
+          end
+          else
+          begin
+            if Exhausted then
+              ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
+            else
+            begin
+              IterResult := Iterator.AdvanceNext;
+              if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
+              begin
+                Exhausted := True;
+                ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+              end
+              else
+              begin
+                ElementValue := IterResult.GetProperty(PROP_VALUE);
+                // §7.4.4 IteratorValue normalization.
+                if not Assigned(ElementValue) then
+                  ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+              end;
+            end;
+
+            AssignPattern(APattern.Elements[I], ElementValue, AContext, AIsDeclaration, ADeclarationType);
+          end;
         end;
+      except
+        // ES2024 §8.5.3 IteratorBindingInitialization: an abrupt
+        // completion during destructuring must still close the iterator
+        // before propagating.  CloseIteratorPreservingError swallows any
+        // error from iter.return() so the original abrupt completion
+        // wins (IteratorClose §7.4.10 step 4: completion's [[Type]] is
+        // throw, return ? completion).
+        CloseIteratorPreservingError(Iterator);
+        raise;
       end;
+      // ES2024 §8.5.3 step 4 (normal completion): close the iterator
+      // after consuming the binding elements.  The rest-pattern branch
+      // already drained to done; Close on a done iterator is a no-op
+      // for TGocciaGenericIteratorValue.  CloseIterator (not
+      // PreservingError) is the §7.4.10 step 5 path: a normal
+      // destructuring completion lets iter.return() exceptions
+      // propagate to the caller as the new completion.  Without this
+      // call, destructuring an iterator that returns done:false
+      // indefinitely would never invoke iter.return(), and the bytecode
+      // VM's pre-conversion step (IterableToArray) would allocate
+      // unboundedly.
+      CloseIterator(Iterator);
     finally
       TGarbageCollector.Instance.RemoveTempRoot(Iterator);
     end;
@@ -4579,7 +5016,14 @@ begin
           PropValue := EvaluateExpression(Prop.KeyExpression, AContext);
           if PropValue is TGocciaSymbolValue then
           begin
-            PropValue := ObjectValue.GetSymbolProperty(TGocciaSymbolValue(PropValue));
+            // Class values store static symbol-keyed members in their own
+            // descriptor table; the TGocciaClassValue.GetSymbolProperty
+            // method is not virtual, so a TGocciaObjectValue receiver would
+            // miss them. Dispatch via the class entry point when applicable.
+            if ObjectValue is TGocciaClassValue then
+              PropValue := TGocciaClassValue(ObjectValue).GetSymbolProperty(TGocciaSymbolValue(PropValue))
+            else
+              PropValue := ObjectValue.GetSymbolProperty(TGocciaSymbolValue(PropValue));
             AssignPattern(Prop.Pattern, PropValue, AContext, AIsDeclaration, ADeclarationType);
             Continue;
           end;

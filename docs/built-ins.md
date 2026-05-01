@@ -253,7 +253,6 @@ A `const` global providing engine metadata and Goccia-owned utility APIs:
 |----------|------|-------------|
 | `version` | `string` | Semver version from the latest git tag (e.g., `"0.2.0"`), or tag + `-dev` suffix if there are commits after the tag (e.g., `"0.2.0-dev"`) |
 | `commit` | `string` | Short git commit hash (e.g., `"a1b2c3d"`) |
-| `strictTypes` | `boolean` | Configurable at engine creation. Defaults to `false` for interpreter, `true` for bytecode. Controls type enforcement for annotated variables. |
 | `build` | `object` | Compile-time platform information (see below) |
 | `semver` | `object` | SemVer 2.0.0 API namespace (see below) |
 | `spec` | `object` | ES specification features implemented by GocciaScript, keyed by year (e.g., `"2015"`, `"2025"`). Each year maps to an array of `{ name, link }` entries. |

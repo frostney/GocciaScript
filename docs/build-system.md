@@ -96,6 +96,20 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader --mode=bytecode
 
 # Emit structured JSON for programmatic consumers
 printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=json
+# Emit a smaller JSON envelope without build, memory, stdout, or stderr.
+# Console output remains in the normalized `output` array; errors stay in `error`.
+printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=compact-json
+
+# `compact-json` is recognised by every runner that emits JSON.
+# - GocciaTestRunner: pass it as the value of --output. `--output=json` and
+#   `--output=compact-json` emit JSON to stdout (suppressing the human-readable
+#   summary); any other --output value is treated as a file path that receives
+#   the full JSON envelope.
+./build/GocciaTestRunner tests --output=compact-json
+# - GocciaBenchmarkRunner: pass it as the value of --format alongside the
+#   existing console/text/csv/json options. `--output=<path>` still selects the
+#   destination file when provided.
+./build/GocciaBenchmarkRunner benchmarks --format=compact-json --output=out.json
 
 # Inject globals from the CLI
 printf "x + y;" | ./build/GocciaScriptLoader --global x=10 --global y=20
@@ -146,10 +160,39 @@ printf "const f = () => f(); f();" | ./build/GocciaScriptLoader --max-instructio
 ./build/GocciaTestRunner tests --jobs=4
 ./build/GocciaBenchmarkRunner benchmarks --jobs=1
 
+# Split a single input file (or stdin) on `---` separator lines and dispatch
+# each section as an independent file across the worker pool
+./build/GocciaScriptLoader scenarios.js --multifile
+./build/GocciaTestRunner suites.js --multifile --jobs=4
+./build/GocciaBundler scenarios.js --multifile --output=dist/
+printf '1;\n---\n2;\n---\n3;\n' | ./build/GocciaScriptLoader --multifile
+
 # Run benchmarks via bytecode VM
 ./build/GocciaBenchmarkRunner benchmarks --mode=bytecode
 printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner - --mode=bytecode
 ```
+
+### `--multifile` (split a single input on `---` separators)
+
+When `--multifile` is set, each input — whether a file or stdin — is scanned for lines whose trimmed content equals exactly `---`. If any such separator is present, the input is split at those lines and each section is dispatched through the regular worker pool as if it were its own input file. Sections execute in fully isolated `TGocciaEngine` instances, so per-section state (intrinsic prototype mutations, top-level bindings) cannot leak across sections.
+
+**Section naming.** The `[partN]` suffix (1-indexed) is appended to the input name:
+
+- File `foo.js` with three sections produces `foo[part1].js`, `foo[part2].js`, `foo[part3].js`. The suffix is inserted *before* the extension so `ExtractFileExt`, `ChangeFileExt`, JSX/`.tsx` dispatch, and the bundler's `.gbc` output naming continue to work without any per-site changes.
+- Stdin with three sections produces `<stdin>[part1]`, `<stdin>[part2]`, `<stdin>[part3]`. The suffix is appended (no extension to insert before).
+- Section names appear as the `fileName` field in JSON output, in error messages, in coverage reports, and in source maps.
+
+**Separator semantics.** A line is a separator iff its trimmed content equals `---` exactly. `----`, `--- comment`, and `---abc` are not separators. Empty leading and trailing sections are dropped silently (a file that starts or ends with `---` does not produce empty sections), as are sections between consecutive separators. A file with no separator is treated as a single section, so `--multifile` is safe to enable globally via `goccia.json`.
+
+**Per-runner behaviour.**
+
+- `GocciaScriptLoader` runs each section in a fresh engine; results appear separately in human-readable output and as separate `files[]` entries in `--output=json`.
+- `GocciaTestRunner` runs each section as a separate test file; the aggregate counts (`totalFiles`, `totalTests`, etc.) include every section.
+- `GocciaBundler` emits one `.gbc` per section. `--output=<file>` is rejected with `--multifile` because the input may expand to multiple outputs; pass a directory instead.
+- `GocciaBenchmarkRunner` produces one file entry per section in the report.
+- `GocciaREPL` accepts `--multifile` for symmetry but ignores it (the REPL takes no file arguments).
+
+**Combining with other flags.** `--source-map=<file>` is rejected with `--multifile` for the same reason as the bundler's `--output=<file>` — a single source-map output cannot represent multiple section sources. All other flags compose normally, including `--jobs` for parallel section dispatch and `goccia.json` integration via `"multifile": true`.
 
 ### Configuration File (`goccia.json`)
 
@@ -163,13 +206,30 @@ The first file found is loaded and applied as the **root config**. When running 
 
 1. **CLI arguments** (highest priority — always win)
 2. **Per-file config** (`goccia.toml`, `goccia.json5`, or `goccia.json` nearest to the file being processed)
-3. **Root config** (discovered from the entry path at startup)
+3. **Root config** (discovered from the entry path at startup, or supplied via `--config`)
 4. **System default** (engine defaults)
+
+**`--config=<path>`** — Override auto-discovery and load the root config from an explicit location. Available on every CLI tool.
+
+The path may be either a **file** (any registered extension — `.json`, `.json5`, `.toml`; the parser is selected by extension), or a **directory**, in which case the CLI looks for `goccia.toml` → `goccia.json5` → `goccia.json` in that directory only (same priority as auto-discovery). The directory form does **not** walk upward — that's the point of the explicit override.
+
+```bash
+# File form (use this exact file)
+./build/GocciaScriptLoader example.js --config=./configs/strict.toml
+./build/GocciaTestRunner tests --config=./configs/ci.json
+
+# Directory form (find goccia.{toml,json5,json} inside, no walk-up)
+./build/GocciaScriptLoader example.js --config=./configs/
+```
+
+Relative paths are resolved against the current working directory. A missing file or a directory with no recognised `goccia.*` is a hard error so a typo is not silently ignored. CLI arguments still take precedence over values from the file, and per-file configs continue to be discovered normally for individual files.
 
 ```json
 {
   "mode": "bytecode",
+  "source-type": "module",
   "asi": true,
+  "strict-types": true,
   "timeout": 5000,
   "max-memory": 10485760,
   "stack-size": 3500,
@@ -430,11 +490,13 @@ GitHub Actions CI is split into two workflow files:
 ```text
 build → test (JS + native)   → artifacts (main only)
       → toml-compliance      →
+      → json5-compliance     →
+      → test262              →
       → benchmark            →
-      → examples             →
+      → cli                  →
 ```
 
-All matrix strategies use `fail-fast: false`, so one platform failing does not cancel other platforms. The post-build jobs (`test`, `toml-compliance`, `benchmark`, `examples`) are independent.
+All matrix strategies use `fail-fast: false`, so one platform failing does not cancel other platforms. The post-build jobs (`test`, `toml-compliance`, `json5-compliance`, `test262`, `benchmark`, `cli`) are independent.
 
 Runs on the full platform matrix:
 
@@ -452,20 +514,23 @@ Runs on the full platform matrix:
 
 **`json5-compliance`** — Downloads the prebuilt `GocciaJSON5Check` harness and `GocciaTestRunner` binary from each matrix build artifact, runs `python3 scripts/run_json5_test_suite.py --harness=... --test-runner=...` on every CI platform, validates both the parser and stringify summaries, and uploads the per-platform JSON report.
 
+**`test262`** (needs build, ubuntu-latest x64 only, **non-blocking**) — Downloads the `gocciascript-x86_64-linux` build, shallow-clones [`tc39/test262@main`](https://github.com/tc39/test262), runs `python3 scripts/run_test262_suite.py --suite-dir test262-suite --mode=bytecode --jobs=4 --output=test262-results.json`, and uploads the report as a 30-day workflow artifact. The run step uses `continue-on-error: true` because GocciaScript intentionally excludes parts of the language test262 covers — this lane is an indicator metric, not a regression gate. On main, the JSON is also stashed via `actions/cache/save` under `test262-baseline-<sha>` so the PR workflow can compute Δ vs main. See [docs/testing.md](testing.md#ci-integration) for the comment format.
+
 **`benchmark`** (needs build) — Runs all benchmarks on all platforms. On main (ubuntu-latest x64), saves benchmark results as JSON to `actions/cache` for PR comparison.
 
-**`examples`** (needs build) — Runs all example scripts from the `examples/` folder on all platforms.
+**`cli`** (needs build) — Downloads pre-built binaries and runs CLI behavior smoke tests on all platforms via Bun: flags across all apps, lexer numeric-separator rejection, parser error display, config-file loading, and app-specific features. Windows runs additionally assert that the loader binary does not link OpenSSL DLLs (HTTPS must use the platform TLS stack statically).
 
-**`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + examples, main only) — Uploads production binaries after all checks pass, deriving the executable names from the `source/app/*.dpr` entrypoints.
+**`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + cli, main only) — Uploads production binaries after all checks pass, deriving the executable names from the `source/app/*.dpr` entrypoints.
 
-**`release`** (needs test + toml-compliance + json5-compliance + benchmark + examples, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the `source/app/*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), generates categorized release notes via [git-cliff](https://git-cliff.org/) (`cliff.toml`), and creates a GitHub release using `softprops/action-gh-release`.
+**`release`** (needs test + toml-compliance + json5-compliance + benchmark + cli, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the `source/app/*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), generates categorized release notes via [git-cliff](https://git-cliff.org/) (`cliff.toml`), and creates a GitHub release using `softprops/action-gh-release`.
 
 ### `pr.yml` — Pull requests
 
 ```text
 build → test (JS + native)
       → benchmark → PR comment (comparison)
-      → examples
+      → test262   → PR comment (conformance)
+      → cli
 ```
 
 Runs on **ubuntu-latest x64 only** (single runner, no matrix).
@@ -476,9 +541,11 @@ Runs on **ubuntu-latest x64 only** (single runner, no matrix).
 
 **`benchmark`** (needs build) — Restores the cached benchmark baseline JSON from main, runs all benchmarks with JSON output, and posts a collapsible comparison comment on the PR grouped by file. Each file section shows the cached baseline and PR `opsPerSec` point estimates side by side, with each point estimate carrying its min/max ops/sec range in brackets. Classification uses range overlap: fully above the baseline range is an improvement, fully below is a regression, and overlapping ranges are treated as unchanged noise. Percentage deltas are still shown as secondary context, and files with significant changes are auto-expanded. If no baseline exists, shows results without comparison.
 
-**`examples`** (needs build) — Runs all example scripts from the `examples/` folder.
+**`test262`** (needs build, **non-blocking**) — Shallow-clones `tc39/test262@main`, runs `python3 scripts/run_test262_suite.py --suite-dir test262-suite --mode=bytecode --jobs=4 --output=test262-results.json`, and uploads the JSON report. Failing tests do not fail the job. The downstream `test262-comment` job (`if: always()`) restores the most recent `test262-baseline-` cache entry from main, computes a four-row metric table (Total / Eligible / Eligible passing / Total passing) and a top-three "Areas closest to 100%" table (≥ 25 attempted tests, below 100%, keyed by the first two test262 path components), and posts/updates a comment using marker `<!-- test262-results -->`. When a baseline is available, both tables include a Δ vs main column.
 
-FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, benchmark, example, and TOML conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, benchmark, and example jobs do the same.
+**`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`).
+
+FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, benchmark, test262, and cli jobs do the same.
 
 ## Changelog
 

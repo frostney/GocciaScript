@@ -725,4 +725,310 @@ console.log("Config allowed-hosts TestRunner integration...");
   }
 }
 
+// -- --config=<file> ------------------------------------------------------------
+//
+// The --config flag points at a specific config file and skips auto-discovery
+// entirely.  All three supported extensions must work because the parser is
+// chosen by extension.
+
+console.log("--config=<file> loads .json explicitly...");
+{
+  const tmp = makeTmp();
+  const cfgDir = makeTmp();
+  try {
+    // Script lives in tmp with no goccia.* anywhere on its parent chain.
+    writeFileSync(join(tmp, "test.js"), "const x = 11\nx\n");
+    // Config lives in a sibling directory; auto-discovery would never find it.
+    writeFileSync(join(cfgDir, "custom.json"), '{"asi": true, "mode": "bytecode"}\n');
+
+    const out = await $`${LOADER} ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.json")} 2>&1`.text();
+    if (!out.includes("(bytecode)")) throw new Error(`--config=.json should enable bytecode, got: ${out}`);
+    if (!out.includes("Result: 11")) throw new Error(`--config=.json should enable ASI (Result: 11), got: ${out}`);
+  } finally {
+    clean(tmp);
+    clean(cfgDir);
+  }
+}
+
+console.log("--config=<file> loads .toml explicitly...");
+{
+  const tmp = makeTmp();
+  const cfgDir = makeTmp();
+  try {
+    writeFileSync(join(tmp, "test.js"), "const x = 21\nx\n");
+    writeFileSync(join(cfgDir, "custom.toml"), 'asi = true\nmode = "bytecode"\n');
+
+    const out = await $`${LOADER} ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.toml")} 2>&1`.text();
+    if (!out.includes("(bytecode)")) throw new Error(`--config=.toml should enable bytecode, got: ${out}`);
+    if (!out.includes("Result: 21")) throw new Error(`--config=.toml should enable ASI (Result: 21), got: ${out}`);
+  } finally {
+    clean(tmp);
+    clean(cfgDir);
+  }
+}
+
+console.log("--config=<file> loads .json5 explicitly...");
+{
+  const tmp = makeTmp();
+  const cfgDir = makeTmp();
+  try {
+    writeFileSync(join(tmp, "test.js"), "const x = 31\nx\n");
+    writeFileSync(join(cfgDir, "custom.json5"), '{asi: true, mode: "bytecode"}\n');
+
+    const out = await $`${LOADER} ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.json5")} 2>&1`.text();
+    if (!out.includes("(bytecode)")) throw new Error(`--config=.json5 should enable bytecode, got: ${out}`);
+    if (!out.includes("Result: 31")) throw new Error(`--config=.json5 should enable ASI (Result: 31), got: ${out}`);
+  } finally {
+    clean(tmp);
+    clean(cfgDir);
+  }
+}
+
+console.log("--config=<file> with relative path resolves against cwd...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "test.js"), "const x = 41\nx\n");
+    writeFileSync(join(tmp, "custom.json"), '{"asi": true, "mode": "bytecode"}\n');
+
+    // Relative path; cwd is tmp.
+    const out = runCwd(LOADER, ["test.js", "--config=./custom.json"], tmp);
+    if (!out.combined.includes("(bytecode)")) throw new Error(`Relative --config should resolve, got: ${out.combined}`);
+    if (!out.combined.includes("Result: 41")) throw new Error(`Relative --config should enable ASI, got: ${out.combined}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- --config=<dir> -------------------------------------------------------------
+//
+// A directory path expands to goccia.{toml,json5,json} inside that directory,
+// preserving the same priority as auto-discovery.  The lookup must NOT walk
+// upward — that's the point of an explicit override.
+
+console.log("--config=<dir> finds goccia.json...");
+{
+  const tmp = makeTmp();
+  const cfgDir = makeTmp();
+  try {
+    writeFileSync(join(tmp, "test.js"), "const x = 51\nx\n");
+    writeFileSync(join(cfgDir, "goccia.json"), '{"asi": true, "mode": "bytecode"}\n');
+
+    const out = await $`${LOADER} ${join(tmp, "test.js")} --config=${cfgDir} 2>&1`.text();
+    if (!out.includes("(bytecode)")) throw new Error(`--config=<dir> with goccia.json should enable bytecode, got: ${out}`);
+    if (!out.includes("Result: 51")) throw new Error(`--config=<dir> should enable ASI, got: ${out}`);
+  } finally {
+    clean(tmp);
+    clean(cfgDir);
+  }
+}
+
+console.log("--config=<dir> respects priority TOML > JSON5 > JSON...");
+{
+  const tmp = makeTmp();
+  const cfgDir = makeTmp();
+  try {
+    writeFileSync(join(tmp, "test.js"), "const x = 61\nx\n");
+    // All three present; TOML must win (matches auto-discovery priority).
+    writeFileSync(join(cfgDir, "goccia.json"), '{"asi": true, "mode": "interpreted"}\n');
+    writeFileSync(join(cfgDir, "goccia.json5"), '{asi: true, mode: "interpreted"}\n');
+    writeFileSync(join(cfgDir, "goccia.toml"), 'asi = true\nmode = "bytecode"\n');
+
+    const out = await $`${LOADER} ${join(tmp, "test.js")} --config=${cfgDir} 2>&1`.text();
+    if (!out.includes("(bytecode)")) throw new Error(`--config=<dir> should pick TOML over JSON5/JSON, got: ${out}`);
+  } finally {
+    clean(tmp);
+    clean(cfgDir);
+  }
+}
+
+console.log("--config=<dir> with trailing slash works...");
+{
+  const tmp = makeTmp();
+  const cfgDir = makeTmp();
+  try {
+    writeFileSync(join(tmp, "test.js"), "const x = 71\nx\n");
+    writeFileSync(join(cfgDir, "goccia.toml"), 'asi = true\nmode = "bytecode"\n');
+
+    // Some shells/users will pass the directory with a trailing slash.
+    const out = await $`${LOADER} ${join(tmp, "test.js")} --config=${cfgDir + "/"} 2>&1`.text();
+    if (!out.includes("(bytecode)")) throw new Error(`--config=<dir>/ should still find config, got: ${out}`);
+  } finally {
+    clean(tmp);
+    clean(cfgDir);
+  }
+}
+
+console.log("--config=<dir> does not walk upward...");
+{
+  const tmp = makeTmp();
+  try {
+    // Place a config in tmp; pass an empty subdirectory as --config.
+    // Auto-discovery would walk up and find tmp/goccia.toml, but the
+    // explicit directory form must NOT — it should error out.
+    writeFileSync(join(tmp, "goccia.toml"), 'asi = true\nmode = "bytecode"\n');
+    const empty = join(tmp, "empty");
+    mkdirSync(empty);
+    writeFileSync(join(tmp, "test.js"), "const x = 81\nx\n");
+
+    const res = await $`${LOADER} ${join(tmp, "test.js")} --config=${empty} 2>&1`.nothrow();
+    if (res.exitCode === 0) throw new Error("--config=<empty-dir> should not silently walk up to parent");
+    if (!res.text().includes("No goccia.")) throw new Error(`Error should mention missing goccia.* file, got: ${res.text()}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- --config error handling ----------------------------------------------------
+
+console.log("--config=<missing path> is a hard error...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "test.js"), "const x = 91;\nx;\n");
+
+    const res = await $`${LOADER} ${join(tmp, "test.js")} --config=${join(tmp, "does-not-exist.json")} 2>&1`.nothrow();
+    if (res.exitCode === 0) throw new Error("--config pointing to nonexistent path should fail");
+    if (!res.text().includes("not found")) throw new Error(`Error should mention "not found", got: ${res.text()}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- --config skips auto-discovery ---------------------------------------------
+//
+// With --config given, the root-config walk-up MUST be skipped.  We prove
+// this by placing a hostile goccia.json near the entry file (which would
+// flip mode to interpreted) and showing that the explicit config wins.
+
+console.log("--config skips auto-discovery of nearby goccia.*...");
+{
+  const tmp = makeTmp();
+  const cfgDir = makeTmp();
+  try {
+    // Hostile config alongside the script; auto-discovery would pick this up.
+    writeFileSync(join(tmp, "goccia.json"), '{"asi": true, "mode": "interpreted"}\n');
+    writeFileSync(join(tmp, "test.js"), "const x = 101\nx\n");
+    // Explicit config selects bytecode.
+    writeFileSync(join(cfgDir, "good.toml"), 'asi = true\nmode = "bytecode"\n');
+
+    const out = await $`${LOADER} ${join(tmp, "test.js")} --config=${join(cfgDir, "good.toml")} 2>&1`.text();
+    if (!out.includes("(bytecode)")) throw new Error(`--config should skip nearby goccia.json, got: ${out}`);
+    if (!out.includes("Result: 101")) throw new Error(`--config should still apply ASI, got: ${out}`);
+  } finally {
+    clean(tmp);
+    clean(cfgDir);
+  }
+}
+
+// -- CLI args still beat --config -----------------------------------------------
+
+console.log("CLI flags override values from --config...");
+{
+  const tmp = makeTmp();
+  const cfgDir = makeTmp();
+  try {
+    writeFileSync(join(tmp, "test.js"), "const x = 111\nx\n");
+    // --config says interpreted...
+    writeFileSync(join(cfgDir, "custom.toml"), 'asi = true\nmode = "interpreted"\n');
+
+    // ...but a direct --mode=bytecode on the CLI must win.
+    const out = await $`${LOADER} ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.toml")} --mode=bytecode 2>&1`.text();
+    if (!out.includes("(bytecode)")) throw new Error(`CLI --mode should override --config value, got: ${out}`);
+    if (!out.includes("Result: 111")) throw new Error(`ASI from --config should still apply, got: ${out}`);
+  } finally {
+    clean(tmp);
+    clean(cfgDir);
+  }
+}
+
+// -- --config across the other CLI tools ---------------------------------------
+//
+// The flag lives in the shared base class, so smoke-test that each consumer
+// actually honors it.  The Loader is covered above; here we hit the rest.
+
+console.log("--config works on TestRunner...");
+{
+  const tmp = makeTmp();
+  const cfgDir = makeTmp();
+  try {
+    writeFileSync(join(cfgDir, "ci.toml"), 'asi = true\nmode = "bytecode"\n');
+    writeFileSync(
+      join(tmp, "test.js"),
+      [
+        'describe("config-flag", () => {',
+        '  test("works", () => {',
+        "    expect(2 + 2).toBe(4)",
+        "  })",
+        "})",
+      ].join("\n") + "\n",
+    );
+
+    const out = runCwd(TESTRUNNER, [join(tmp, "test.js"), "--no-progress", `--config=${join(cfgDir, "ci.toml")}`], tmp);
+    if (!out.combined.includes("Passed: 1")) throw new Error(`TestRunner --config should pass, got: ${out.combined}`);
+  } finally {
+    clean(tmp);
+    clean(cfgDir);
+  }
+}
+
+console.log("--config works on Bundler...");
+{
+  const tmp = makeTmp();
+  const cfgDir = makeTmp();
+  try {
+    // Bad-without-ASI source; --config supplies ASI so compile must succeed.
+    writeFileSync(join(tmp, "test.js"), "const x = 1\nx\n");
+    writeFileSync(join(cfgDir, "goccia.json"), '{"asi": true}\n');
+
+    // Sanity: without --config, compile rejects (no goccia.* near tmp).
+    const noCfg = await $`${BUNDLER} ${join(tmp, "test.js")} 2>&1`.nothrow();
+    if (noCfg.exitCode === 0) throw new Error("Bundler without ASI/--config should reject missing semicolons");
+
+    // With --config=<dir>, compile succeeds.
+    await $`${BUNDLER} ${join(tmp, "test.js")} --config=${cfgDir}`.quiet();
+    if (!existsSync(join(tmp, "test.gbc"))) throw new Error("Bundler --config=<dir> should compile");
+  } finally {
+    clean(tmp);
+    clean(cfgDir);
+  }
+}
+
+console.log("--config works on BenchmarkRunner...");
+{
+  const tmp = makeTmp();
+  const cfgDir = makeTmp();
+  try {
+    writeFileSync(join(cfgDir, "goccia.toml"), 'asi = true\n');
+    writeFileSync(
+      join(tmp, "bench.js"),
+      [
+        // No semicolons — proves --config-supplied ASI is in effect.
+        'suite("config-flag", () => {',
+        '  bench("sum", {',
+        "    run: () => 1 + 1",
+        "  })",
+        "})",
+      ].join("\n") + "\n",
+    );
+
+    const proc = Bun.spawnSync(
+      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--no-progress", `--config=${cfgDir}`],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
+        timeout: 60_000,
+      },
+    );
+    if (proc.exitCode !== 0)
+      throw new Error(`BenchmarkRunner --config exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (!proc.stdout.toString().includes("config-flag"))
+      throw new Error(`BenchmarkRunner --config output should mention 'config-flag', got: ${proc.stdout.toString()}`);
+  } finally {
+    clean(tmp);
+    clean(cfgDir);
+  }
+}
+
 console.log("\nAll test-cli-config.ts tests passed.");

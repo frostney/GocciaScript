@@ -115,12 +115,13 @@ begin
   begin
     Members := TGocciaMemberCollection.Create;
     try
-      Members.AddNamedMethod('delete', WeakMapDelete, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('get', WeakMapGet, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('getOrInsert', WeakMapGetOrInsert, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('getOrInsertComputed', WeakMapGetOrInsertComputed, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('has', WeakMapHas, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('set', WeakMapSet, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      // Built-in prototype methods are not constructors per ES spec.
+      Members.AddNamedMethod('delete', WeakMapDelete, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+      Members.AddNamedMethod('get', WeakMapGet, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+      Members.AddNamedMethod('getOrInsert', WeakMapGetOrInsert, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+      Members.AddNamedMethod('getOrInsertComputed', WeakMapGetOrInsertComputed, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+      Members.AddNamedMethod('has', WeakMapHas, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
+      Members.AddNamedMethod('set', WeakMapSet, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype, gmfNotConstructable]);
       Members.AddSymbolDataProperty(
         TGocciaSymbolValue.WellKnownToStringTag,
         TGocciaStringLiteralValue.Create(CONSTRUCTOR_WEAK_MAP),

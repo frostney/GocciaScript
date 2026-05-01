@@ -99,6 +99,8 @@ type
     procedure SetRegister(const AIndex: Integer; const AValue: TGocciaValue); inline;
     procedure SetRegisterFast(const AIndex: Integer; const AValue: TGocciaValue); inline;
     procedure SetRegisterRaw(const AIndex: Integer; const AValue: TGocciaRegister); inline;
+    procedure InstallFunctionPrototype(const AFunction: TGocciaObjectValue;
+      const AIsGenerator: Boolean);
     function GetLocal(const AIndex: Integer): TGocciaValue; inline;
     function GetLocalFast(const AIndex: Integer): TGocciaValue; inline;
     procedure SetLocal(const AIndex: Integer; const AValue: TGocciaValue); inline;
@@ -110,8 +112,16 @@ type
       out AIndex: Integer): Boolean;
     function KeyToPropertyName(const AKey: TGocciaValue): string;
     function KeyToPropertyNameRegister(const AKey: TGocciaRegister): string;
+    // ALimit semantics:
+    //   ALimit < 0 → unbounded (drain until iterator returns done:true);
+    //   ALimit = 0 → consume zero elements (used for `const [] = iter`);
+    //   ALimit > 0 → consume exactly ALimit elements then close.
+    // Default is unbounded so existing spread / Iterator.from / rest
+    // call sites preserve their historical behaviour without explicit
+    // arguments.
     function IterableToArray(const AIterable: TGocciaValue;
-      const ATryAsync: Boolean = False): TGocciaArrayValue;
+      const ATryAsync: Boolean = False;
+      const ALimit: Integer = -1): TGocciaArrayValue;
     function TryIterableToArray(const AIterable: TGocciaValue;
       out AArray: TGocciaArrayValue): Boolean;
     procedure SpreadObjectIntoValue(const ATarget: TGocciaObjectValue;
@@ -245,6 +255,8 @@ uses
   Goccia.Profiler,
   Goccia.StackLimit,
   Goccia.Timeout,
+  Goccia.Types.Enforcement,
+  Goccia.Utils,
   Goccia.Values.BigIntValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.EnumValue,
@@ -254,6 +266,8 @@ uses
   Goccia.Values.FunctionValue,
   Goccia.Values.HoleValue,
   Goccia.Values.Iterator.Concrete,
+  Goccia.Values.Iterator.Generic,
+  Goccia.Values.IteratorSupport,
   Goccia.Values.IteratorValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.PromiseValue,
@@ -436,46 +450,12 @@ end;
 
 
 // ES2026 Types-as-comments: runtime guard for OP_CHECK_TYPE (compiler emits Ord(TGocciaLocalType) in operand B).
+// Delegates to Goccia.Types.Enforcement.EnforceStrictType so the interpreter
+// and bytecode VM share a single enforcement implementation.
 procedure VMStrictTypeCheckRegisterValue(const AValue: TGocciaValue;
-  const AExpected: TGocciaLocalType);
+  const AExpected: TGocciaLocalType); inline;
 begin
-  case AExpected of
-    sltInteger:
-      begin
-        if not (AValue is TGocciaNumberLiteralValue) or
-           AValue.ToNumberLiteral.IsNaN or
-           AValue.ToNumberLiteral.IsInfinite or
-           (Frac(AValue.ToNumberLiteral.Value) <> 0.0) then
-          ThrowTypeError(Format(SErrorTypeNotAssignable, [AValue.TypeName, INTEGER_TYPE_NAME]),
-            SSuggestTypeEnforcement);
-      end;
-    sltFloat:
-      begin
-        if not (AValue is TGocciaNumberLiteralValue) then
-          ThrowTypeError(Format(SErrorTypeNotAssignable, [AValue.TypeName, NUMBER_TYPE_NAME]),
-            SSuggestTypeEnforcement);
-      end;
-    sltBoolean:
-      begin
-        if not (AValue is TGocciaBooleanLiteralValue) then
-          ThrowTypeError(Format(SErrorTypeNotAssignable, [AValue.TypeName, BOOLEAN_TYPE_NAME]),
-            SSuggestTypeEnforcement);
-      end;
-    sltString:
-      begin
-        if not (AValue is TGocciaStringLiteralValue) then
-          ThrowTypeError(Format(SErrorTypeNotAssignable, [AValue.TypeName, STRING_TYPE_NAME]),
-            SSuggestTypeEnforcement);
-      end;
-    sltReference:
-      begin
-        if AValue.IsPrimitive then
-          ThrowTypeError(Format(SErrorTypeNotAssignable, [AValue.TypeName, OBJECT_TYPE_NAME]),
-            SSuggestTypeEnforcement);
-      end;
-  else
-    // sltUntyped: no runtime check
-  end;
+  EnforceStrictType(AValue, AExpected);
 end;
 
 // Integer-only result: skips IsNaN/IsInfinite/Frac checks that VMNumberRegister
@@ -776,72 +756,112 @@ begin
     ThrowTypeError(SErrorBigIntMixedTypes, SSuggestBigIntNoMixedArithmetic);
 end;
 
+// All Number-side bitwise helpers route operands through ToInt32Value /
+// ToUint32Value (Goccia.Utils) — the spec-compliant ToInt32 / ToUint32
+// implementations.  Using bare Trunc() yields divergent results across
+// architectures because FPC's Trunc(NaN) returns Int64.MinValue on
+// x86_64 (cvttsd2si "indefinite") but 0 on aarch64; that single-instruction
+// difference accounted for ~22 test262 failures on Linux x86_64 CI that
+// passed on macOS arm64 / Linux aarch64.
+//
+// Operands also go through ToPrimitive first (returns the value
+// unchanged for primitives — fast path is one virtual IsPrimitive
+// call) so boxed BigInts (e.g. `Object(1n)`) unbox to their primitive
+// BigInt and take the BigInt branch instead of being silently coerced
+// to Number 0/-1 via the boxed object's ToNumberLiteral path.  Per
+// ES2026 §13.15.3 / §6.1.6.2 the IsBigInt? check applies to the
+// post-ToPrimitive value.
+
 function VMBitwiseAndValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+var
+  PrimLeft, PrimRight: TGocciaValue;
 begin
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.BitwiseAnd(TGocciaBigIntValue(ARight).Value)));
-  VMCheckBigIntMixed(ALeft, ARight);
-  Result := VMNumberValue(Trunc(ALeft.ToNumberLiteral.Value) and
-    Trunc(ARight.ToNumberLiteral.Value));
+      TGocciaBigIntValue(PrimLeft).Value.BitwiseAnd(TGocciaBigIntValue(PrimRight).Value)));
+  VMCheckBigIntMixed(PrimLeft, PrimRight);
+  Result := VMNumberValue(ToInt32Value(PrimLeft) and ToInt32Value(PrimRight));
 end;
 
 function VMBitwiseOrValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+var
+  PrimLeft, PrimRight: TGocciaValue;
 begin
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.BitwiseOr(TGocciaBigIntValue(ARight).Value)));
-  VMCheckBigIntMixed(ALeft, ARight);
-  Result := VMNumberValue(Trunc(ALeft.ToNumberLiteral.Value) or
-    Trunc(ARight.ToNumberLiteral.Value));
+      TGocciaBigIntValue(PrimLeft).Value.BitwiseOr(TGocciaBigIntValue(PrimRight).Value)));
+  VMCheckBigIntMixed(PrimLeft, PrimRight);
+  Result := VMNumberValue(ToInt32Value(PrimLeft) or ToInt32Value(PrimRight));
 end;
 
 function VMBitwiseXorValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+var
+  PrimLeft, PrimRight: TGocciaValue;
 begin
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.BitwiseXor(TGocciaBigIntValue(ARight).Value)));
-  VMCheckBigIntMixed(ALeft, ARight);
-  Result := VMNumberValue(Trunc(ALeft.ToNumberLiteral.Value) xor
-    Trunc(ARight.ToNumberLiteral.Value));
+      TGocciaBigIntValue(PrimLeft).Value.BitwiseXor(TGocciaBigIntValue(PrimRight).Value)));
+  VMCheckBigIntMixed(PrimLeft, PrimRight);
+  Result := VMNumberValue(ToInt32Value(PrimLeft) xor ToInt32Value(PrimRight));
 end;
 
 function VMLeftShiftValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+var
+  PrimLeft, PrimRight: TGocciaValue;
 begin
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.ShiftLeft(
-        TGocciaBigIntValue(ARight).Value.ToInt64)));
-  VMCheckBigIntMixed(ALeft, ARight);
-  Result := VMNumberValue(Trunc(ALeft.ToNumberLiteral.Value) shl
-    (Trunc(ARight.ToNumberLiteral.Value) and 31));
+      TGocciaBigIntValue(PrimLeft).Value.ShiftLeft(
+        TGocciaBigIntValue(PrimRight).Value.ToInt64)));
+  VMCheckBigIntMixed(PrimLeft, PrimRight);
+  Result := VMNumberValue(
+    ToInt32Value(PrimLeft) shl (ToUint32Value(PrimRight) and 31));
 end;
 
 function VMRightShiftValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+var
+  PrimLeft, PrimRight: TGocciaValue;
 begin
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+  if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
-      TGocciaBigIntValue(ALeft).Value.ShiftRight(
-        TGocciaBigIntValue(ARight).Value.ToInt64)));
-  VMCheckBigIntMixed(ALeft, ARight);
-  Result := VMNumberValue(SarLongint(Int32(Trunc(ALeft.ToNumberLiteral.Value)),
-    Trunc(ARight.ToNumberLiteral.Value) and 31));
+      TGocciaBigIntValue(PrimLeft).Value.ShiftRight(
+        TGocciaBigIntValue(PrimRight).Value.ToInt64)));
+  VMCheckBigIntMixed(PrimLeft, PrimRight);
+  Result := VMNumberValue(SarLongint(
+    ToInt32Value(PrimLeft), ToUint32Value(PrimRight) and 31));
 end;
 
 // ES2026 §6.1.6.2.11 BigInt::unsignedRightShift — always throws
 function VMUnsignedRightShiftValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+var
+  PrimLeft, PrimRight: TGocciaValue;
 begin
-  if (ALeft is TGocciaBigIntValue) or (ARight is TGocciaBigIntValue) then
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+  if (PrimLeft is TGocciaBigIntValue) or (PrimRight is TGocciaBigIntValue) then
     ThrowTypeError(SErrorBigIntUnsignedRightShift, SSuggestBigIntNoMixedArithmetic);
-  Result := VMNumberValue(Cardinal(Trunc(ALeft.ToNumberLiteral.Value)) shr
-    (Trunc(ARight.ToNumberLiteral.Value) and 31));
+  Result := VMNumberValue(
+    ToUint32Value(PrimLeft) shr (ToUint32Value(PrimRight) and 31));
 end;
 
 function VMBitwiseNotValue(const AOperand: TGocciaValue): TGocciaValue; inline;
+var
+  PrimOperand: TGocciaValue;
 begin
-  if AOperand is TGocciaBigIntValue then
-    Exit(TGocciaBigIntValue.Create(TGocciaBigIntValue(AOperand).Value.BitwiseNot));
-  Result := VMNumberValue(not Trunc(AOperand.ToNumberLiteral.Value));
+  PrimOperand := ToPrimitive(AOperand);
+  if PrimOperand is TGocciaBigIntValue then
+    Exit(TGocciaBigIntValue.Create(TGocciaBigIntValue(PrimOperand).Value.BitwiseNot));
+  Result := VMNumberValue(not ToInt32Value(PrimOperand));
 end;
 
 function VMGlobalConstructor(const AScope: TGocciaScope;
@@ -1444,6 +1464,7 @@ type
   public
     constructor Create(const AVM: TGocciaVM; const AName: string;
       const ASuperClass: TGocciaClassValue);
+    function GetClassLength: Integer; override;
     function Instantiate(const AArguments: TGocciaArgumentsCollection;
       const ANewTarget: TGocciaClassValue = nil): TGocciaValue; override;
     function InstantiateRegisters(
@@ -1532,6 +1553,23 @@ begin
   inherited Create(AName, ASuperClass);
   FVM := AVM;
   FConstructorValue := nil;
+end;
+
+function TGocciaVMClassValue.GetClassLength: Integer;
+var
+  Bytecode: TGocciaBytecodeFunctionValue;
+begin
+  // VM-compiled classes hold their constructor as a bytecode function value
+  // rather than the interpreter's TGocciaMethodValue, so the inherited
+  // implementation (which only looks at FConstructorMethod) would always
+  // return 0. Bridge to the bytecode function's own length.
+  if FConstructorValue is TGocciaBytecodeFunctionValue then
+  begin
+    Bytecode := TGocciaBytecodeFunctionValue(FConstructorValue);
+    if Assigned(Bytecode.FClosure) and Assigned(Bytecode.FClosure.Template) then
+      Exit(Bytecode.FClosure.Template.FormalParameterCount);
+  end;
+  Result := inherited GetClassLength;
 end;
 
 constructor TGocciaVMSuperConstructorValue.Create(
@@ -3677,6 +3715,48 @@ begin
     FLocalCells[AIndex].Value := AValue;
 end;
 
+procedure TGocciaVM.InstallFunctionPrototype(
+  const AFunction: TGocciaObjectValue;
+  const AIsGenerator: Boolean);
+var
+  PrototypeObj: TGocciaObjectValue;
+  PrototypeFlags: TPropertyFlags;
+begin
+  // ES2026 §10.2.5 MakeConstructor — adds a `prototype` data property to a
+  // function whose value is a fresh ordinary object.  Shape differs by kind:
+  //   - Ordinary function (§15.2): prototype is { writable, !enumerable,
+  //     !configurable } with an own `constructor` pointing at the function.
+  //   - (Async) generator (§15.5 / §15.6): prototype is { !writable,
+  //     !enumerable, !configurable } with NO own `constructor` — per spec it
+  //     inherits `constructor` from %GeneratorFunction.prototype.prototype%
+  //     (which points at %GeneratorFunction.prototype%, not the specific
+  //     generator function), so an own back-reference would be wrong.
+  // The prototype object's [[Prototype]] is %Object.prototype% per ES2026
+  // §10.2.5.1 OrdinaryFunctionCreate.  (For generators it should be %Generator%,
+  // but GocciaScript does not yet expose that intrinsic; falling back to
+  // Object.prototype keeps the chain non-null and lets generic object methods
+  // like hasOwnProperty resolve.)
+  //
+  // Match the lazy-init guard used by OP_NEW_OBJECT — the bytecode VM can be
+  // exercised outside the normal engine bootstrap (e.g. Goccia.VM.Test.pas),
+  // so the realm slot may not be primed yet on the first OP_CLOSURE.
+  if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+    TGocciaObjectValue.InitializeSharedPrototype;
+  PrototypeObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  if AIsGenerator then
+  begin
+    PrototypeFlags := [];
+  end
+  else
+  begin
+    PrototypeFlags := [pfWritable];
+    PrototypeObj.DefineProperty(PROP_CONSTRUCTOR,
+      TGocciaPropertyDescriptorData.Create(AFunction, [pfWritable, pfConfigurable]));
+  end;
+  AFunction.DefineProperty(PROP_PROTOTYPE,
+    TGocciaPropertyDescriptorData.Create(PrototypeObj, PrototypeFlags));
+end;
+
 function TGocciaVM.GetLocal(const AIndex: Integer): TGocciaValue;
 begin
   if (AIndex >= 0) and (AIndex < FLocalCellCount) and Assigned(FLocalCells[AIndex]) then
@@ -3827,56 +3907,251 @@ begin
   end;
 end;
 
+// IteratorClose for the raw-object form returned by GetIteratorValue
+// when the source supplies its own iterator (i.e. an object with next()
+// rather than a TGocciaIteratorValue).  Normal-completion variant per
+// ES2024 §7.4.10 IteratorClose:
+//   - step 3.b: if `return` is missing/undefined/null, return the
+//     completion as-is (only these three values skip silently —
+//     non-callable returns are an error);
+//   - step 3.c: call return; errors propagate;
+//   - step 3.d: validate the result is an Object on normal completion;
+//     a primitive result is a TypeError.
+procedure CloseRawIterator(const AIteratorObject: TGocciaValue);
+var
+  ReturnMethod, ReturnResult: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
+begin
+  if not Assigned(AIteratorObject) then
+    Exit;
+  if AIteratorObject is TGocciaIteratorValue then
+  begin
+    CloseIterator(TGocciaIteratorValue(AIteratorObject));
+    Exit;
+  end;
+  if not (AIteratorObject is TGocciaObjectValue) then
+    Exit;
+  ReturnMethod := AIteratorObject.GetProperty(PROP_RETURN);
+  // §7.4.10 step 3.b: only missing/undefined/null skip.
+  if not Assigned(ReturnMethod) or
+     (ReturnMethod is TGocciaUndefinedLiteralValue) or
+     (ReturnMethod is TGocciaNullLiteralValue) then
+    Exit;
+  // §7.4.10 step 3.c (implicit): a present-but-non-callable `return`
+  // is a TypeError, not a silent no-op.
+  if not ReturnMethod.IsCallable then
+    ThrowTypeError(SErrorIteratorReturnMustBeCallable,
+      SSuggestIteratorProtocol);
+  CallArgs := TGocciaArgumentsCollection.Create;
+  try
+    ReturnResult := TGocciaFunctionBase(ReturnMethod).Call(
+      CallArgs, AIteratorObject);
+  finally
+    CallArgs.Free;
+  end;
+  // §7.4.10 step 3.d: on normal completion, the IteratorResult must be
+  // an Object.  Primitive results (including undefined, numbers, etc.)
+  // are a TypeError.
+  if (ReturnResult is TGocciaUndefinedLiteralValue)
+      or (ReturnResult is TGocciaNullLiteralValue)
+      or ReturnResult.IsPrimitive then
+    ThrowTypeError(SErrorIteratorReturnObject,
+      SSuggestIteratorResultObject);
+end;
+
+// Abrupt-completion variant of CloseRawIterator: per ES2024 §7.4.10
+// step 5, when an iteration body completes abruptly the close must
+// not let iter.return()'s own errors replace the original exception.
+// Mirrors CloseIteratorPreservingError in Goccia.Values.IteratorSupport
+// for the TGocciaIteratorValue case.
+procedure CloseRawIteratorPreservingError(const AIteratorObject: TGocciaValue);
+begin
+  if not Assigned(AIteratorObject) then
+    Exit;
+  try
+    CloseRawIterator(AIteratorObject);
+  except
+    // Swallow: the original abrupt completion is the one that must
+    // surface to the caller.
+  end;
+end;
+
 function TGocciaVM.IterableToArray(const AIterable: TGocciaValue;
-  const ATryAsync: Boolean): TGocciaArrayValue;
+  const ATryAsync: Boolean; const ALimit: Integer): TGocciaArrayValue;
 var
   IteratorValue: TGocciaValue;
   DoneFlag: Boolean;
   NextMethod: TGocciaValue;
   NextResult: TGocciaValue;
   DoneValue: TGocciaValue;
+  Value: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
+  GC: TGarbageCollector;
+  ArrayRooted, IteratorRooted: Boolean;
 begin
   Result := TGocciaArrayValue.Create;
-  IteratorValue := GetIteratorValue(AIterable, ATryAsync);
-  if IteratorValue is TGocciaIteratorValue then
+  // The materialised array and any newly-synthesised iterator wrapper
+  // must outlive the consume/close re-entry into JS land: DirectNext
+  // calls user next(), AwaitValue may pump microtasks, CloseIterator /
+  // CloseRawIterator invoke user return().  Each of those can trigger a
+  // GC sweep, and if `Result` or a fresh `IteratorValue` aren't on the
+  // root set, they can be reclaimed mid-flight.  Mirrors the rooting
+  // already done in TryIterableToArray below.
+  GC := TGarbageCollector.Instance;
+  ArrayRooted := False;
+  IteratorRooted := False;
+  IteratorValue := nil;
+  if Assigned(GC) then
   begin
-    repeat
-      CheckExecutionTimeout;
-      CheckInstructionLimit;
-      NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
-      if not DoneFlag then
-        Result.Elements.Add(NextResult);
-    until DoneFlag;
-    Exit;
+    GC.AddTempRoot(Result);
+    ArrayRooted := True;
   end;
+  try
+    // GetIteratorValue can throw (e.g. for a non-iterable source, or
+    // when [Symbol.iterator] returns a non-object).  Calling it inside
+    // the try/finally is what guarantees Result is unrooted on the
+    // throw path — otherwise it stays permanently temp-rooted and
+    // accumulates across calls.
+    IteratorValue := GetIteratorValue(AIterable, ATryAsync);
+    if Assigned(GC) and Assigned(IteratorValue)
+        and (IteratorValue <> AIterable)
+        and (IteratorValue is TGocciaObjectValue) then
+    begin
+      GC.AddTempRoot(IteratorValue);
+      IteratorRooted := True;
+    end;
 
-  if IteratorValue is TGocciaObjectValue then
-  begin
-    repeat
-      CheckExecutionTimeout;
-      CheckInstructionLimit;
+    if IteratorValue is TGocciaIteratorValue then
+    begin
+      // ES2024 §8.5.3 IteratorBindingInitialization: when an array
+      // binding pattern has no rest element, the iterator must be
+      // consumed for exactly N elements and then closed via
+      // IteratorClose.  Without this bound, an iterator that returns
+      // done:false indefinitely allocates unboundedly during
+      // destructuring (test262 ary-init-iter-close cluster).
+      //
+      // ALimit semantics: <0 unbounded, 0 consume zero, >0 exact.  The
+      // ALimit = 0 case must close the iterator before the first
+      // next() call (per the spec, step 4 fires after zero
+      // BindingElementList iterations for an empty pattern).
+      if ALimit = 0 then
+      begin
+        CloseIterator(TGocciaIteratorValue(IteratorValue));
+        Exit;
+      end;
+      try
+        repeat
+          CheckExecutionTimeout;
+          CheckInstructionLimit;
+          NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
+          if not DoneFlag then
+            Result.Elements.Add(NextResult);
+          if (ALimit > 0) and (Result.Elements.Count >= ALimit) then
+          begin
+            // ES2024 §7.4.10 step 5: normal-completion IteratorClose lets
+            // errors from iter.return() propagate.  Use CloseIterator (not
+            // PreservingError) so test262 tests like Iterator.from →
+            // Iterator.prototype.return-throws are reported correctly.
+            if not DoneFlag then
+              CloseIterator(TGocciaIteratorValue(IteratorValue));
+            Exit;
+          end;
+        until DoneFlag;
+      except
+        // §7.4.10 step 5 abrupt-completion path: DirectNext (and any
+        // user code it calls) can throw.  Close the iterator, swallow
+        // any error from iter.return(), and re-raise the original.
+        CloseIteratorPreservingError(TGocciaIteratorValue(IteratorValue));
+        raise;
+      end;
+      Exit;
+    end;
+
+    if IteratorValue is TGocciaObjectValue then
+    begin
+      // Same ALimit = 0 short-circuit as above.
+      if ALimit = 0 then
+      begin
+        CloseRawIterator(IteratorValue);
+        Exit;
+      end;
+      // ES2024 §7.4.2 GetIteratorDirect: NextMethod is captured ONCE
+      // at iteratorRecord creation, not re-resolved per IteratorStep.
+      // Hoisting the GetProperty + IsCallable validation out of the
+      // loop matches the spec semantic (post-acquisition mutations of
+      // `iterator.next` are ignored — §7.4.5 IteratorStep calls the
+      // captured iteratorRecord.[[NextMethod]]) and avoids a redundant
+      // hash lookup per iteration.  A missing/non-callable next is a
+      // TypeError, not silent termination — see the try/except arm
+      // below for the abrupt-completion close.
       NextMethod := IteratorValue.GetProperty(PROP_NEXT);
       if not Assigned(NextMethod) or
          (NextMethod is TGocciaUndefinedLiteralValue) or
          not NextMethod.IsCallable then
-        Break;
-      CallArgs := AcquireArguments;
+        ThrowTypeError(SErrorIteratorNextMustBeCallable,
+          SSuggestIteratorProtocol);
       try
-        NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IteratorValue);
-      finally
-        ReleaseArguments(CallArgs);
+        repeat
+          CheckExecutionTimeout;
+          CheckInstructionLimit;
+          CallArgs := AcquireArguments;
+          try
+            NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IteratorValue);
+          finally
+            ReleaseArguments(CallArgs);
+          end;
+          // Only async iterators yield a Promise from next().  For sync
+          // iteration (the default — destructuring, spread, for-of), the
+          // result is the IteratorResult object directly; calling
+          // AwaitValue on it would needlessly pump microtasks and open a
+          // re-entrancy window where time-of-check / time-of-use bugs can
+          // surface (e.g. user code mutating the result between unwrap and
+          // PROP_DONE / PROP_VALUE reads).  Mirror the spec's split between
+          // §7.4.7 IteratorStep (sync) and §7.4.13 AsyncIteratorStep.
+          if ATryAsync then
+            NextResult := AwaitValue(NextResult);
+          if NextResult.IsPrimitive then
+            ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.ToStringLiteral.Value]),
+              SSuggestIteratorResultObject);
+          DoneValue := NextResult.GetProperty(PROP_DONE);
+          DoneFlag := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
+          if not DoneFlag then
+          begin
+            // Normalize missing IteratorResult.value to undefined, matching
+            // the well-defined behaviour in TryIterableToArray.  Without
+            // this, GetProperty(PROP_VALUE) returning nil would store nil
+            // in the array, causing later .Elements[I] reads to crash or
+            // misclassify a missing result as "absent" in destructuring.
+            Value := NextResult.GetProperty(PROP_VALUE);
+            if not Assigned(Value) then
+              Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+            Result.Elements.Add(Value);
+          end;
+          if (ALimit > 0) and (Result.Elements.Count >= ALimit) then
+          begin
+            // ES2024 §7.4.10 step 5 (normal completion): errors from
+            // iter.return() propagate as the new completion.
+            if not DoneFlag then
+              CloseRawIterator(IteratorValue);
+            Exit;
+          end;
+        until DoneFlag;
+      except
+        // §7.4.10 step 5 abrupt-completion path covering the
+        // SErrorIteratorNextMustBeCallable throw above, the
+        // SErrorIteratorResultNotObject throw, AwaitValue rejections,
+        // and any error raised by user-supplied next().  iter.return()
+        // is best-effort and must not replace the original error.
+        CloseRawIteratorPreservingError(IteratorValue);
+        raise;
       end;
-      NextResult := AwaitValue(NextResult);
-      if NextResult.IsPrimitive then
-        ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.ToStringLiteral.Value]),
-          SSuggestIteratorResultObject);
-      DoneValue := NextResult.GetProperty(PROP_DONE);
-      DoneFlag := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
-      if not DoneFlag then
-        Result.Elements.Add(NextResult.GetProperty(PROP_VALUE));
-    until DoneFlag;
-    Exit;
+      Exit;
+    end;
+  finally
+    if IteratorRooted then
+      GC.RemoveTempRoot(IteratorValue);
+    if ArrayRooted then
+      GC.RemoveTempRoot(Result);
   end;
 end;
 
@@ -3893,6 +4168,10 @@ begin
   AArray := nil;
   ArrayRooted := False;
   IteratorRooted := False;
+  // NextMethod is only consumed by the OBJECT loop further down; the
+  // TGocciaIteratorValue path uses DirectNext and exits early.  Init
+  // here so FPC's uninitialized-local analysis is unambiguous.
+  NextMethod := nil;
 
   if AIterable is TGocciaIteratorValue then
     IteratorValue := AIterable
@@ -3946,43 +4225,61 @@ begin
   try
     if IteratorValue is TGocciaIteratorValue then
     begin
-      repeat
-        CheckExecutionTimeout;
-        CheckInstructionLimit;
-        NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
-        if not DoneFlag then
-          AArray.Elements.Add(NextResult);
-      until DoneFlag;
+      try
+        repeat
+          CheckExecutionTimeout;
+          CheckInstructionLimit;
+          NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
+          if not DoneFlag then
+            AArray.Elements.Add(NextResult);
+        until DoneFlag;
+      except
+        // §7.4.10 step 5 abrupt-completion path: DirectNext can throw
+        // (user next() / wrapped iterator may execute arbitrary code).
+        // Close the iterator while preserving the original error per
+        // ES2024 IteratorClose semantics.
+        CloseIteratorPreservingError(TGocciaIteratorValue(IteratorValue));
+        raise;
+      end;
       Exit(True);
     end;
 
-    repeat
-      CheckExecutionTimeout;
-      CheckInstructionLimit;
-      NextMethod := IteratorValue.GetProperty(PROP_NEXT);
-      if not Assigned(NextMethod) or
-         (NextMethod is TGocciaUndefinedLiteralValue) or
-         not NextMethod.IsCallable then
-        ThrowTypeError('Iterator.next is not a function');
-      CallArgs := AcquireArguments;
-      try
-        NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IteratorValue);
-      finally
-        ReleaseArguments(CallArgs);
-      end;
-      if NextResult.IsPrimitive then
-        ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.ToStringLiteral.Value]),
-          SSuggestIteratorResultObject);
-      DoneValue := NextResult.GetProperty(PROP_DONE);
-      DoneFlag := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
-      if not DoneFlag then
-      begin
-        Value := NextResult.GetProperty(PROP_VALUE);
-        if not Assigned(Value) then
-          Value := TGocciaUndefinedLiteralValue.UndefinedValue;
-        AArray.Elements.Add(Value);
-      end;
-    until DoneFlag;
+    // ES2024 §7.4.2 GetIteratorDirect captures NextMethod ONCE at
+    // iteratorRecord creation; §7.4.5 IteratorStep then calls that
+    // captured reference.  NextMethod was already resolved and
+    // validated at the acquisition site above (the `if IteratorObject
+    // is TGocciaObjectValue` arm), so the loop just reuses it instead
+    // of re-running GetProperty(PROP_NEXT) per iteration.
+    try
+      repeat
+        CheckExecutionTimeout;
+        CheckInstructionLimit;
+        CallArgs := AcquireArguments;
+        try
+          NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IteratorValue);
+        finally
+          ReleaseArguments(CallArgs);
+        end;
+        if NextResult.IsPrimitive then
+          ThrowTypeError(Format(SErrorIteratorResultNotObject, [NextResult.ToStringLiteral.Value]),
+            SSuggestIteratorResultObject);
+        DoneValue := NextResult.GetProperty(PROP_DONE);
+        DoneFlag := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
+        if not DoneFlag then
+        begin
+          Value := NextResult.GetProperty(PROP_VALUE);
+          if not Assigned(Value) then
+            Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+          AArray.Elements.Add(Value);
+        end;
+      until DoneFlag;
+    except
+      // §7.4.10 step 5 abrupt-completion path: covers user next()
+      // throws and our SErrorIteratorResultNotObject TypeError.  Call
+      // iter.return() best-effort and surface the original exception.
+      CloseRawIteratorPreservingError(IteratorValue);
+      raise;
+    end;
     Result := True;
   finally
     if IteratorRooted then
@@ -4119,10 +4416,22 @@ begin
          not NextMethod.IsCallable then
         ThrowTypeError(SErrorAsyncIteratorNextNotCallable,
           SSuggestAsyncIteratorProtocol);
+      // Note: the captured NextMethod is not propagated downstream
+      // here.  TGocciaVMAsyncFromSyncIteratorValue is sync->async
+      // wrapping only — for a TRUE async iterator (whose next()
+      // already returns Promise<IteratorResult>) routing through
+      // that wrapper would call GetProperty(PROP_DONE) on the
+      // unresolved Promise and produce an infinite for-await-of
+      // loop.  Capture-once for the async branch would require a
+      // dedicated TGocciaGenericAsyncIteratorValue class; until
+      // that exists, downstream consumers (for-await-of dispatch)
+      // re-resolve PROP_NEXT per iteration.  The §7.4.2 validation
+      // above still ensures `next` is callable at acquisition time.
       Exit;
     end
     else if Assigned(IteratorMethod) and
-            not (IteratorMethod is TGocciaUndefinedLiteralValue) then
+            not (IteratorMethod is TGocciaUndefinedLiteralValue) and
+            not (IteratorMethod is TGocciaNullLiteralValue) then
       ThrowTypeError('Async iterator method is not callable');
   end;
 
@@ -4185,11 +4494,28 @@ begin
           if ATryAsync then
             Exit(TGocciaVMAsyncFromSyncIteratorValue.Create(IteratorObject,
               NextMethod));
-          Exit(IteratorObject);
+          // Wrap the raw iterator object in a TGocciaGenericIteratorValue
+          // so callers (OP_ITER_NEXT, IterableToArray, etc.) get a
+          // TGocciaIteratorValue with NextMethod captured ONCE per
+          // ES2024 §7.4.2 GetIteratorDirect.  Pass the already-
+          // resolved NextMethod via the two-arg constructor — the
+          // single-arg overload would re-run GetProperty(PROP_NEXT),
+          // re-opening the post-acquisition mutation window we just
+          // closed by validating above.
+          Exit(TGocciaGenericIteratorValue.Create(IteratorObject, NextMethod));
         end;
+        // ES2024 §7.4.2 GetIteratorDirect step 2: a missing or
+        // non-callable [[NextMethod]] is a TypeError specific to the
+        // iterator protocol — the source IS an iterable (its
+        // [@@iterator] returned an object), but that object doesn't
+        // satisfy the iterator interface.  Falling through to
+        // SErrorNotIterable would mis-attribute the failure to the
+        // outer iterable; throw the protocol-specific message instead.
         if ATryAsync then
           ThrowTypeError(SErrorAsyncIteratorNextNotCallable,
             SSuggestAsyncIteratorProtocol);
+        ThrowTypeError(SErrorIteratorNextMustBeCallable,
+          SSuggestIteratorProtocol);
       end;
     end;
   end;
@@ -6196,17 +6522,16 @@ begin
           else if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) then
           begin
             if (KeyIndex >= 0) and
-               (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) then
-            begin
-              if TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex] =
-                 TGocciaHoleValue.HoleValue then
-                FRegisters[A] := RegisterUndefined
-              else
-                FRegisters[A] := VMValueToRegisterFast(
-                  TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex]);
-            end
+               (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) and
+               (TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex] <>
+                TGocciaHoleValue.HoleValue) then
+              FRegisters[A] := VMValueToRegisterFast(
+                TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex])
             else
-              FRegisters[A] := RegisterUndefined;
+              // Hole, out-of-range, or accessor-shadowed slot: take the slow
+              // path so accessor descriptors and prototype lookups run.
+              SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
+                IntToStr(KeyIndex)));
           end
           else
             SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
@@ -6504,20 +6829,35 @@ begin
           else if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) then
           begin
             if (KeyIndex >= 0) and
-               (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) then
-            begin
-              if TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex] =
-                 TGocciaHoleValue.HoleValue then
-                FRegisters[A] := RegisterUndefined
-              else
-                FRegisters[A] := VMValueToRegisterFast(
-                  TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex]);
-            end
+               (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) and
+               (TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex] <>
+                TGocciaHoleValue.HoleValue) then
+              FRegisters[A] := VMValueToRegisterFast(
+                TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex])
             else
-              FRegisters[A] := RegisterUndefined;
+              // Hole, out-of-range, or accessor-shadowed slot: take the slow
+              // path so accessor descriptors and prototype lookups run.
+              SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
+                IntToStr(KeyIndex)));
           end
           else
             SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
+              KeyToPropertyNameRegister(FRegisters[C])));
+        end
+        else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaClassValue) then
+        begin
+          // Classes must be matched before TGocciaObjectValue so that static
+          // symbol-keyed properties (FStaticSymbolDescriptors) and the
+          // superclass walk are reached. TGocciaClassValue.GetSymbolProperty
+          // is not virtual on the base, so a TGocciaObjectValue cast would
+          // bypass them. Mirrors OP_ARRAY_GET ordering.
+          if (FRegisters[C].Kind = grkObject) and
+             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
+            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
+              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
+          else
+            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
               KeyToPropertyNameRegister(FRegisters[C])));
         end
         else if (FRegisters[B].Kind = grkObject) and
@@ -6549,17 +6889,6 @@ begin
               TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value[KeyIndex + 1]))
           else
             SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
-        end
-        else if (FRegisters[B].Kind = grkObject) and
-                (FRegisters[B].ObjectValue is TGocciaClassValue) then
-        begin
-          if (FRegisters[C].Kind = grkObject) and
-             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
-            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
-              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
-          else
-            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
-              KeyToPropertyNameRegister(FRegisters[C])));
         end
         else
           FRegisters[A] := RegisterUndefined;
@@ -6762,7 +7091,12 @@ begin
           FRegisters[A] := VMNumberRegister(-RegisterToDouble(FRegisters[B]))
         else
         begin
-          LeftValue := GetRegisterFast(B);
+          // ES2026 §13.5.5 UnaryMinus invokes ToNumeric (= ToPrimitive
+          // then a BigInt? branch).  Apply ToPrimitive so boxed BigInts
+          // (Object(1n)) unbox to their primitive and take the
+          // BigInt::unaryMinus path; without it the box's
+          // ToNumberLiteral coerces to NaN and we lose the BigInt.
+          LeftValue := ToPrimitive(GetRegisterFast(B));
           if LeftValue is TGocciaBigIntValue then
             SetRegister(A, TGocciaBigIntValue.Create(
               TGocciaBigIntValue(LeftValue).Value.Negate))
@@ -7061,7 +7395,14 @@ begin
           else if Assigned(FCurrentClosure) then
             ChildClosure.SetUpvalue(I, FCurrentClosure.GetUpvalue(Desc.Index));
         end;
-        SetRegister(A, TGocciaBytecodeFunctionValue.Create(Self, ChildClosure));
+        BytecodeFunction := TGocciaBytecodeFunctionValue.Create(Self, ChildClosure);
+        // ES2026 §10.2.5 MakeConstructor: install own `prototype` data property
+        // for `function`/`function*` declarations and expressions (including
+        // async generators).  The prototype is a fresh ordinary object whose
+        // `constructor` data property back-references the function.
+        if ChildTemplate.HasOwnPrototype then
+          InstallFunctionPrototype(BytecodeFunction, ChildTemplate.IsGenerator);
+        SetRegister(A, BytecodeFunction);
       end;
 
       OP_CALL:
@@ -7822,7 +8163,22 @@ begin
             end;
 
           VALIDATE_OP_REQUIRE_ITERABLE:
-            SetRegister(A, IterableToArray(RegisterToValue(FRegisters[A])));
+            // Operand C is the iteration bound emitted by the compiler
+            // for array destructuring (see ITERABLE_LIMIT_UNBOUNDED in
+            // Goccia.Bytecode):
+            //   0..254  = exact element count to consume; 0 means
+            //             "consume zero elements" for `const [] = iter`
+            //             then close;
+            //   255     = unbounded (rest pattern present or pattern
+            //             length exceeds the encoding range).
+            // IterableToArray's ALimit uses -1 = unbounded, 0+ = exact
+            // count, so translate the sentinel here.
+            if C = ITERABLE_LIMIT_UNBOUNDED then
+              SetRegister(A, IterableToArray(RegisterToValue(FRegisters[A]),
+                False, -1))
+            else
+              SetRegister(A, IterableToArray(RegisterToValue(FRegisters[A]),
+                False, C));
         else
           raise Exception.CreateFmt('Unsupported validation mode: %d', [B]);
         end;

@@ -33,6 +33,7 @@ uses
   Goccia.Parser,
   Goccia.Profiler,
   Goccia.Profiler.Report,
+  Goccia.Scope,
   Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
   Goccia.CLI.JSON.Reporter,
@@ -98,6 +99,7 @@ type
     FLastPaths: TStringList;
 
     function IsJsonOutput: Boolean;
+    function IsCompactJsonOutput: Boolean;
     function ParseSource(const ASource: TStringList; const AFileName: string;
       const APreprocessors: TGocciaPreprocessors; const ASuppressWarnings: Boolean;
       const AASIEnabled, AVarEnabled, AFunctionEnabled: Boolean;
@@ -111,6 +113,10 @@ type
     procedure ApplyModuleGlobalsToEngine(const AEngine: TGocciaEngine);
     function ExecuteInterpreted(const ASource: TStringList; const AFileName: string;
       const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
+    function RunBytecodeModule(const AEngine: TGocciaEngine;
+      const AExecutor: TGocciaBytecodeExecutor;
+      const AModule: TGocciaBytecodeModule;
+      const AFileName: string): TGocciaValue;
     function ExecuteBytecodeFromSource(const ASource: TStringList; const AFileName: string;
       const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
     function ExecuteBytecodeFromFile(const AFileName: string;
@@ -235,7 +241,7 @@ begin
   AddProfilerOptions;
 
   FOutputPath := AddString('output',
-    '"json" for structured JSON output');
+    '"json" for structured JSON output, "compact-json" omits build, memory, stdout, stderr');
   FSilent := AddFlag('silent', 'Suppress console output from the script');
   FSourceMap := AddString('source-map',
     'Write a .map source map file (optional: explicit path)');
@@ -247,7 +253,13 @@ end;
 
 function TScriptLoaderApp.IsJsonOutput: Boolean;
 begin
-  Result := FOutputPath.Present and (FOutputPath.Value = 'json');
+  Result := FOutputPath.Present and
+    ((FOutputPath.Value = 'json') or (FOutputPath.Value = 'compact-json'));
+end;
+
+function TScriptLoaderApp.IsCompactJsonOutput: Boolean;
+begin
+  Result := FOutputPath.Present and (FOutputPath.Value = 'compact-json');
 end;
 
 { TScriptLoaderApp - Validate }
@@ -407,15 +419,18 @@ begin
 end;
 
 procedure PrintJSONSuccess(const AReport: TScriptExecutionReport;
-  const ACapture: TScriptLoaderConsoleCapture; const AFileName: string);
+  const ACapture: TScriptLoaderConsoleCapture; const AFileName: string;
+  const ACompact: Boolean);
 begin
   WriteLn(BuildCLIScriptSuccessJSON(AFileName, AReport.ResultValue,
     CapturedOutputText(ACapture), CapturedStdoutText(ACapture),
-    CapturedStderrText(ACapture), AReport.Timing, AReport.MemoryStats, 1, 1));
+    CapturedStderrText(ACapture), AReport.Timing, AReport.MemoryStats, 1, 1,
+    ACompact));
 end;
 
 procedure PrintJSONError(const E: Exception; const AReport: TScriptExecutionReport;
-  const ACapture: TScriptLoaderConsoleCapture; const ADefaultFileName: string);
+  const ACapture: TScriptLoaderConsoleCapture; const ADefaultFileName: string;
+  const ACompact: Boolean);
 var
   ErrorInfo: TCLIJSONErrorInfo;
 begin
@@ -424,7 +439,7 @@ begin
     ErrorInfo.FileName := ADefaultFileName;
   WriteLn(BuildCLIScriptErrorJSON(ADefaultFileName, CapturedOutputText(ACapture),
     CapturedStdoutText(ACapture), CapturedStderrText(ACapture), ErrorInfo,
-    AReport.Timing, AReport.MemoryStats, 1, 1));
+    AReport.Timing, AReport.MemoryStats, 1, 1, ACompact));
 end;
 
 procedure AddTiming(var ATarget: TCLIJSONTiming;
@@ -442,62 +457,9 @@ begin
     ASource.TotalTimeNanoseconds;
 end;
 
-function MaxInt64Value(const ALeft, ARight: Int64): Int64;
-begin
-  if ALeft > ARight then
-    Result := ALeft
-  else
-    Result := ARight;
-end;
-
-function AggregateScriptLoaderMemoryStats(
-  const AResults: array of TScriptLoaderJSONFileResult): TCLIJSONMemoryStats;
-var
-  I: Integer;
-  Stats: TCLIJSONMemoryStats;
-begin
-  Result := DefaultCLIJSONMemoryStats;
-
-  for I := 0 to High(AResults) do
-  begin
-    Stats := AResults[I].MemoryStats;
-    if not Stats.Enabled then
-      Continue;
-
-    Result.Enabled := True;
-    Result.GCStartBytes := Result.GCStartBytes + Stats.GCStartBytes;
-    Result.GCEndBytes := Result.GCEndBytes + Stats.GCEndBytes;
-    Result.GCPeakBytes := Result.GCPeakBytes + Stats.GCPeakBytes;
-    Result.GCLiveBytes := Result.GCLiveBytes + Stats.GCLiveBytes;
-    Result.GCDeltaBytes := Result.GCDeltaBytes + Stats.GCDeltaBytes;
-    Result.GCAllocatedDuringRunBytes :=
-      Result.GCAllocatedDuringRunBytes + Stats.GCAllocatedDuringRunBytes;
-    Result.GCMaxBytes := MaxInt64Value(Result.GCMaxBytes, Stats.GCMaxBytes);
-    Result.GCStartObjectCount :=
-      Result.GCStartObjectCount + Stats.GCStartObjectCount;
-    Result.GCEndObjectCount :=
-      Result.GCEndObjectCount + Stats.GCEndObjectCount;
-    Result.GCCollections := Result.GCCollections + Stats.GCCollections;
-    Result.GCCollectedObjects :=
-      Result.GCCollectedObjects + Stats.GCCollectedObjects;
-    Result.HeapStartAllocatedBytes :=
-      Result.HeapStartAllocatedBytes + Stats.HeapStartAllocatedBytes;
-    Result.HeapEndAllocatedBytes :=
-      Result.HeapEndAllocatedBytes + Stats.HeapEndAllocatedBytes;
-    Result.HeapDeltaAllocatedBytes :=
-      Result.HeapDeltaAllocatedBytes + Stats.HeapDeltaAllocatedBytes;
-    Result.HeapStartFreeBytes :=
-      Result.HeapStartFreeBytes + Stats.HeapStartFreeBytes;
-    Result.HeapEndFreeBytes :=
-      Result.HeapEndFreeBytes + Stats.HeapEndFreeBytes;
-    Result.HeapDeltaFreeBytes :=
-      Result.HeapDeltaFreeBytes + Stats.HeapDeltaFreeBytes;
-  end;
-end;
-
 function BuildAggregateScriptLoaderJSON(const AResults: array of TScriptLoaderJSONFileResult;
   const AMemoryStats: TCLIJSONMemoryStats; const AWorkerCount,
-  AAvailableWorkerCount: Integer): string;
+  AAvailableWorkerCount: Integer; const ACompact: Boolean): string;
 var
   I: Integer;
   Ok: Boolean;
@@ -529,7 +491,7 @@ begin
 
   Result := BuildCLIReportJSON(Ok, OutputText, StdoutText, StderrText,
     ErrorJSON, Timing, AMemoryStats, AWorkerCount, AAvailableWorkerCount,
-    FilesJSON);
+    FilesJSON, '', ACompact);
 end;
 
 procedure TScriptLoaderApp.ApplyDataGlobalsToEngine(const AEngine: TGocciaEngine);
@@ -608,6 +570,26 @@ begin
   Result.Timing.TotalTimeNanoseconds := ScriptResult.TotalTimeNanoseconds;
 end;
 
+function TScriptLoaderApp.RunBytecodeModule(const AEngine: TGocciaEngine;
+  const AExecutor: TGocciaBytecodeExecutor;
+  const AModule: TGocciaBytecodeModule;
+  const AFileName: string): TGocciaValue;
+var
+  ModuleScope: TGocciaScope;
+begin
+  if AEngine.SourceType = stModule then
+  begin
+    { Run with module semantics: fresh module scope, this = undefined.
+      Mirrors TGocciaModuleLoader.LoadModule for nested module loads. }
+    ModuleScope := AEngine.Interpreter.GlobalScope.CreateChild(skModule,
+      'Module:' + AFileName);
+    ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := AExecutor.RunModuleInScope(AModule, ModuleScope);
+  end
+  else
+    Result := AExecutor.RunModule(AModule);
+end;
+
 function TScriptLoaderApp.ExecuteBytecodeFromSource(const ASource: TStringList;
   const AFileName: string; const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
 var
@@ -657,7 +639,8 @@ begin
       try
         try
           ApplyModuleGlobalsToEngine(Engine);
-          Result.ResultValue := TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
+          Result.ResultValue := RunBytecodeModule(Engine,
+            TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
         finally
           ClearExecutionTimeout;
           ClearInstructionLimit;
@@ -698,7 +681,8 @@ begin
         StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
         try
           ApplyModuleGlobalsToEngine(Engine);
-          Result.ResultValue := TGocciaBytecodeExecutor(Engine.Executor).RunModule(Module);
+          Result.ResultValue := RunBytecodeModule(Engine,
+            TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
         finally
           ClearExecutionTimeout;
           ClearInstructionLimit;
@@ -792,7 +776,7 @@ begin
 
       Report.MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
       if IsJsonOutput then
-        PrintJSONSuccess(Report, Capture, AFileName)
+        PrintJSONSuccess(Report, Capture, AFileName, IsCompactJsonOutput)
       else
         PrintHumanReadableResult(AFileName, Report, Extension);
     except
@@ -811,7 +795,7 @@ begin
         if not GIsWorkerThread then
         begin
           if IsJsonOutput then
-            PrintJSONError(E, Report, Capture, AFileName)
+            PrintJSONError(E, Report, Capture, AFileName, IsCompactJsonOutput)
           else if E is TGocciaError then
             WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
           else if E is TGocciaThrowValue then
@@ -882,7 +866,8 @@ begin
       Result.Ok := True;
       Result.JSON := BuildCLIScriptFileSuccessJSON(AFileName,
         Report.ResultValue, Result.OutputText, Result.StdoutText,
-        Result.StderrText, Report.Timing, Report.MemoryStats);
+        Result.StderrText, Report.Timing, Report.MemoryStats,
+        IsCompactJsonOutput);
     except
       on E: Exception do
       begin
@@ -911,7 +896,8 @@ begin
         Result.Ok := False;
         Result.JSON := BuildCLIScriptFileErrorJSON(AFileName,
           Result.OutputText, Result.StdoutText, Result.StderrText,
-          ErrorInfo, Report.Timing, Report.MemoryStats);
+          ErrorInfo, Report.Timing, Report.MemoryStats,
+          IsCompactJsonOutput);
         ExitCode := 1;
       end;
     end;
@@ -930,7 +916,7 @@ begin
     Exit;
   end;
 
-  Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+  Source := SourceRegistry.Load(AFileName);
   try
     RunSource(Source, AFileName);
   finally
@@ -951,7 +937,7 @@ begin
 
   StartTime := GetNanoseconds;
   try
-    Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+    Source := SourceRegistry.Load(AFileName);
   except
     on E: Exception do
     begin
@@ -963,7 +949,7 @@ begin
         ErrorInfo.FileName := AFileName;
       Result.FileName := AFileName;
       Result.JSON := BuildCLIScriptFileErrorJSON(AFileName, '', '', '',
-        ErrorInfo, Timing, DefaultCLIJSONMemoryStats);
+        ErrorInfo, Timing, DefaultCLIJSONMemoryStats, IsCompactJsonOutput);
       Result.StdoutText := '';
       Result.StderrText := '';
       Result.OutputText := '';
@@ -987,28 +973,35 @@ var
   Results: array of TScriptLoaderJSONFileResult;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
   MemoryStats: TCLIJSONMemoryStats;
+  MainMemoryStats: TCLIJSONMemoryStats;
+  WorkerMemoryStats: TCLIJSONMemoryStats;
   Pool: TGocciaThreadPool;
   I, JobCount: Integer;
 begin
+  WorkerMemoryStats := DefaultCLIJSONMemoryStats;
   SetLength(Results, AFiles.Count);
   JobCount := GetJobCount(AFiles.Count);
 
   if JobCount > 1 then
   begin
     EnsureSharedPrototypesInitialized(EffectiveBuiltins);
+    BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
     Pool := TGocciaThreadPool.Create(JobCount);
     try
       if Assigned(TGarbageCollector.Instance) then
         Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
       Pool.RunAll(AFiles, ScriptWorkerProc, @Results[0]);
+      WorkerMemoryStats := Pool.MemoryStats;
     finally
       Pool.Free;
     end;
+    MainMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
 
     for I := 0 to AFiles.Count - 1 do
       if not Results[I].Ok then
         ExitCode := 1;
-    MemoryStats := AggregateScriptLoaderMemoryStats(Results);
+    MemoryStats := CombineCLIJSONMemoryStats(
+      MainMemoryStats, WorkerMemoryStats, True);
   end
   else
   begin
@@ -1023,18 +1016,44 @@ begin
   end;
 
   WriteLn(BuildAggregateScriptLoaderJSON(Results,
-    MemoryStats, JobCount, GetJobCount(AFiles.Count)));
+    MemoryStats, JobCount, GetJobCount(AFiles.Count),
+    IsCompactJsonOutput));
 end;
 
 procedure TScriptLoaderApp.RunScriptFromStdin;
 var
-  Source: TStringList;
+  Source, SectionSource, Names: TStringList;
+  I: Integer;
 begin
   Source := ReadSourceFromText(Input);
+  if not MultifileEnabled then
+  begin
+    try
+      RunSource(Source, STDIN_FILE_NAME);
+    finally
+      Source.Free;
+    end;
+    Exit;
+  end;
+
+  // Multifile stdin: ownership of Source transfers to SplitStdinMultifile
+  // (which either registers it under <stdin> as a single section or
+  // splits it into multiple sections and frees the wrapper).
+  Names := SplitStdinMultifile(Source);
   try
-    RunSource(Source, STDIN_FILE_NAME);
+    for I := 0 to Names.Count - 1 do
+    begin
+      if I > 0 then
+        WriteLn;
+      SectionSource := SourceRegistry.Load(Names[I]);
+      try
+        RunSource(SectionSource, Names[I]);
+      finally
+        SectionSource.Free;
+      end;
+    end;
   finally
-    Source.Free;
+    Names.Free;
   end;
 end;
 
@@ -1080,7 +1099,8 @@ begin
         JSONResults^[AIndex].MemoryStats := MemoryStats;
         JSONResults^[AIndex].Ok := False;
         JSONResults^[AIndex].JSON := BuildCLIScriptFileErrorJSON(
-          AFileName, '', '', '', ErrorInfo, Timing, MemoryStats);
+          AFileName, '', '', '', ErrorInfo, Timing, MemoryStats,
+          IsCompactJsonOutput);
       end;
       ExitCode := 1;
     end;
@@ -1114,7 +1134,7 @@ end;
 
 procedure TScriptLoaderApp.RunScripts(const APath: string);
 var
-  Files: TStringList;
+  Files, RawFiles, SinglePath: TStringList;
   I: Integer;
 begin
   if IsStdinPath(APath) then
@@ -1125,7 +1145,12 @@ begin
 
   if DirectoryExists(APath) then
   begin
-    Files := FindAllFiles(APath, ScriptExtensions);
+    RawFiles := FindAllFiles(APath, ScriptExtensions);
+    try
+      Files := ExpandMultifileFiles(RawFiles);
+    finally
+      RawFiles.Free;
+    end;
     try
       if GetJobCount(Files.Count) > 1 then
       begin
@@ -1145,7 +1170,37 @@ begin
     end;
   end
   else if FileExists(APath) then
-    RunScriptFromFile(APath)
+  begin
+    if MultifileEnabled then
+    begin
+      SinglePath := TStringList.Create;
+      try
+        SinglePath.Add(APath);
+        Files := ExpandMultifileFiles(SinglePath);
+      finally
+        SinglePath.Free;
+      end;
+      try
+        if GetJobCount(Files.Count) > 1 then
+        begin
+          WriteLn(SysUtils.Format('Running %d files with %d workers',
+            [Files.Count, GetJobCount(Files.Count)]));
+          RunScriptsParallel(Files, GetJobCount(Files.Count));
+        end
+        else
+          for I := 0 to Files.Count - 1 do
+          begin
+            if I > 0 then
+              WriteLn;
+            RunScriptFromFile(Files[I]);
+          end;
+      finally
+        Files.Free;
+      end;
+    end
+    else
+      RunScriptFromFile(APath);
+  end
   else
     raise Exception.Create('Path not found: ' + APath);
 end;
@@ -1154,10 +1209,9 @@ end;
 
 procedure TScriptLoaderApp.ExecuteWithPaths(const APaths: TStringList);
 var
-  I: Integer;
-  Files: TStringList;
-  TempFiles: TStringList;
-  Source: TStringList;
+  I, SectionIndex: Integer;
+  Files, RawFiles, StdinNames: TStringList;
+  Source, SectionSource: TStringList;
   JSONResult: TScriptLoaderJSONFileResult;
   JSONResults: array of TScriptLoaderJSONFileResult;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
@@ -1176,64 +1230,111 @@ begin
     raise TGocciaParseError.Create(
       '--source-map=<file> supports a single input file or stdin.');
 
+  // Use Present rather than the value to catch the bare --source-map
+  // form too: even if every section gets its own derived .map file, a
+  // user passing --source-map alongside --multifile is almost certainly
+  // signalling intent that does not match the multi-output reality.
+  if FSourceMap.Present and MultifileEnabled then
+    raise TGocciaParseError.Create(
+      '--source-map cannot be combined with --multifile (an input '
+      + 'may expand to multiple sections).');
+
   if IsJsonOutput then
   begin
     if (APaths.Count = 0) or
        ((APaths.Count = 1) and IsStdinPath(APaths[0])) then
     begin
       Source := ReadSourceFromText(Input);
-      try
-        BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
-        JSONResult := RunSourceForJSON(Source, STDIN_FILE_NAME, False);
-        SetLength(JSONResults, 1);
-        JSONResults[0] := JSONResult;
-        if not JSONResult.Ok then
-          ExitCode := 1;
-        WriteLn(BuildAggregateScriptLoaderJSON(JSONResults,
-          FinishCLIJSONMemoryMeasurement(MemoryMeasurement), 1, 1));
-      finally
-        Source.Free;
+      BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
+      if MultifileEnabled then
+      begin
+        StdinNames := SplitStdinMultifile(Source);
+        try
+          SetLength(JSONResults, StdinNames.Count);
+          for SectionIndex := 0 to StdinNames.Count - 1 do
+          begin
+            SectionSource := SourceRegistry.Load(StdinNames[SectionIndex]);
+            try
+              JSONResults[SectionIndex] :=
+                RunSourceForJSON(SectionSource, StdinNames[SectionIndex], False);
+              if not JSONResults[SectionIndex].Ok then
+                ExitCode := 1;
+            finally
+              SectionSource.Free;
+            end;
+          end;
+          WriteLn(BuildAggregateScriptLoaderJSON(JSONResults,
+            FinishCLIJSONMemoryMeasurement(MemoryMeasurement),
+            1, StdinNames.Count, IsCompactJsonOutput));
+        finally
+          StdinNames.Free;
+        end;
+      end
+      else
+      begin
+        try
+          JSONResult := RunSourceForJSON(Source, STDIN_FILE_NAME, False);
+          SetLength(JSONResults, 1);
+          JSONResults[0] := JSONResult;
+          if not JSONResult.Ok then
+            ExitCode := 1;
+          WriteLn(BuildAggregateScriptLoaderJSON(JSONResults,
+            FinishCLIJSONMemoryMeasurement(MemoryMeasurement), 1, 1,
+            IsCompactJsonOutput));
+        finally
+          Source.Free;
+        end;
       end;
       Exit;
     end;
 
-    Files := TStringList.Create;
+    RawFiles := TStringList.Create;
     try
       for I := 0 to APaths.Count - 1 do
       begin
         if IsStdinPath(APaths[I]) then
           raise TGocciaParseError.Create(
-            '--output=json supports stdin only as the sole input path.');
+            'stdin supports only as the sole input path.');
         if DirectoryExists(APaths[I]) then
-        begin
-          TempFiles := FindAllFiles(APaths[I], ScriptExtensions);
-          try
-            Files.AddStrings(TempFiles);
-          finally
-            TempFiles.Free;
-          end;
-        end
+          RawFiles.AddStrings(FindAllFiles(APaths[I], ScriptExtensions))
         else if FileExists(APaths[I]) then
-          Files.Add(APaths[I])
+          RawFiles.Add(APaths[I])
         else
           raise Exception.Create('Path not found: ' + APaths[I]);
       end;
-      RunJSONFiles(Files);
+      Files := ExpandMultifileFiles(RawFiles);
+      try
+        RunJSONFiles(Files);
+      finally
+        Files.Free;
+      end;
     finally
-      Files.Free;
+      RawFiles.Free;
     end;
     Exit;
   end;
 
   if APaths.Count = 0 then
     RunScriptFromStdin
+  else if (APaths.Count = 1) and IsStdinPath(APaths[0]) then
+    RunScriptFromStdin
   else
+  begin
+    { Reject mixing "-" with file paths so stdin cannot silently be
+      interleaved with on-disk files. Matches the rule enforced by
+      --output=json mode and by GocciaTestRunner / GocciaBenchmarkRunner. }
+    for I := 0 to APaths.Count - 1 do
+      if IsStdinPath(APaths[I]) then
+        raise TGocciaParseError.Create(
+          'stdin supports only as the sole input path.');
+
     for I := 0 to APaths.Count - 1 do
     begin
       if I > 0 then
         WriteLn;
       RunScripts(APaths[I]);
     end;
+  end;
 end;
 
 { TScriptLoaderApp - HandleError }
@@ -1242,7 +1343,8 @@ procedure TScriptLoaderApp.HandleError(const AException: Exception);
 begin
   if IsJsonOutput then
     WriteLn(BuildCLIScriptErrorJSON('', '', '', '', ExceptionToCLIJSONErrorInfo(AException),
-      Default(TCLIJSONTiming), DefaultCLIJSONMemoryStats, 1, 1))
+      Default(TCLIJSONTiming), DefaultCLIJSONMemoryStats, 1, 1,
+      IsCompactJsonOutput))
   else
     inherited HandleError(AException);
 end;

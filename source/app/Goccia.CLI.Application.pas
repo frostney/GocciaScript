@@ -14,7 +14,8 @@ uses
   Goccia.Application,
   Goccia.Engine,
   Goccia.Engine.Backend,
-  Goccia.Executor;
+  Goccia.Executor,
+  Goccia.ScriptLoader.SourceRegistry;
 
 type
   TGocciaCLIApplication = class(TGocciaApplication)
@@ -22,6 +23,8 @@ type
     FHelp: TGocciaFlagOption;
     FJobs: TGocciaIntegerOption;
     FLog: TGocciaStringOption;
+    FMultifile: TGocciaFlagOption;
+    FConfig: TGocciaStringOption;
     FLogFileHandle: TextFile;
     FLogLock: TRTLCriticalSection;
     FLogFileOpen: Boolean;
@@ -30,6 +33,7 @@ type
     FProfilerOptions: TGocciaProfilerOptions;
     FOwnedOptions: TGocciaOptionBaseList;
     FAllOptions: TGocciaOptionArray;
+    FSourceRegistry: TGocciaSourceRegistry;
     procedure BuildAllOptions;
     procedure InitializeSingletons;
     procedure ShutdownSingletons;
@@ -65,6 +69,31 @@ type
     { Returns the effective job count: --jobs value, or ProcessorCount,
       capped to AFileCount. Returns 1 when parallelism is not desired. }
     function GetJobCount(const AFileCount: Integer): Integer;
+    { True iff --multifile was passed (or set in goccia.json). }
+    function MultifileEnabled: Boolean;
+    { Single canonical source-loader.  All runners and workers should
+      load script source through this method instead of calling
+      CreateUTF8FileTextLines(ReadUTF8FileText(...)) directly.
+      Returns a caller-owned TStringList — registered virtual sections
+      return a fresh clone, unregistered names read from disk. }
+    function SourceRegistry: TGocciaSourceRegistry;
+    { When --multifile is set, walks AFiles, reads each script file,
+      splits on --- separators, and replaces the original entry with
+      its section names.  Sections are registered with SourceRegistry
+      under "<original>[partN].<ext>".  Files without separators and
+      .gbc files pass through unchanged.  Returns a NEW TStringList
+      that the caller owns; AFiles is not mutated. }
+    function ExpandMultifileFiles(
+      const AFiles: TStringList): TStringList;
+    { When --multifile is set and AStdinSource contains separators,
+      splits, registers each section under "<stdin>[partN]", and
+      returns the section name list.  Otherwise registers
+      AStdinSource under STDIN_FILE_NAME and returns a single-entry
+      list.  Either way the registry takes ownership of AStdinSource
+      (or a fresh derivative); the caller must not free it.
+      Caller owns the returned name list. }
+    function SplitStdinMultifile(
+      const AStdinSource: TStringList): TStringList;
     property EngineOptions: TGocciaEngineOptions read FEngineOptions;
     property CoverageOptions: TGocciaCoverageOptions read FCoverageOptions;
     property ProfilerOptions: TGocciaProfilerOptions read FProfilerOptions;
@@ -76,9 +105,11 @@ type
 implementation
 
 uses
+  Generics.Collections,
   Math,
 
   CLI.Parser,
+  TextSemantics,
 
   Goccia.Builtins.Console,
   Goccia.CLI.EngineSetup,
@@ -90,7 +121,9 @@ uses
   Goccia.JSON5,
   Goccia.Modules.Configuration,
   Goccia.Profiler,
+  Goccia.ScriptLoader.Input,
   Goccia.StackLimit,
+  Goccia.TextFiles,
   Goccia.Timeout,
   Goccia.TOML,
   Goccia.Values.ArrayValue,
@@ -294,6 +327,11 @@ begin
   FHelp := nil;
   FJobs := nil;
   FLog := nil;
+  FMultifile := nil;
+  FConfig := nil;
+  // Created eagerly on the main thread so worker threads that read
+  // through SourceRegistry.Load never race on first-access creation.
+  FSourceRegistry := TGocciaSourceRegistry.Create;
   FLogFileOpen := False;
 end;
 
@@ -307,6 +345,9 @@ begin
   FHelp.Free;
   FJobs.Free;
   FLog.Free;
+  FMultifile.Free;
+  FConfig.Free;
+  FSourceRegistry.Free;
   inherited Destroy;
 end;
 
@@ -424,6 +465,52 @@ begin
     Result := ParseConfigFile(ConfigPath);
 end;
 
+{ Resolve --source-type / config "source-type" into the engine's
+  TGocciaSourceType enum.  Priority: CLI > per-file config > root
+  config > default (script).
+
+  CLI flag and root-config values are validated by TGocciaEnumOption.Apply
+  before they reach this function (invalid values raise TGocciaParseError
+  at parse/apply time).  Per-file config values come in as raw strings via
+  FindConfigEntry, so we validate here: 'module' and 'script' are accepted
+  case-insensitively, anything else emits a stderr warning and falls back
+  to stScript so a typo never silently flips into module mode. }
+function ResolveSourceTypeOption(
+  const AOption: TGocciaEnumOption<CLI.Options.TGocciaSourceType>;
+  const AFileConfig: TConfigEntryArray): Goccia.Engine.TGocciaSourceType;
+var
+  ValueStr, NormalizedValue: string;
+begin
+  if AOption.FromCommandLine then
+  begin
+    if AOption.Matches(CLI.Options.stModule) then
+      Exit(Goccia.Engine.stModule);
+    Exit(Goccia.Engine.stScript);
+  end;
+
+  if FindConfigEntry(AFileConfig, 'source-type', ValueStr) then
+  begin
+    NormalizedValue := LowerCase(Trim(ValueStr));
+    if NormalizedValue = 'module' then
+      Exit(Goccia.Engine.stModule);
+    if NormalizedValue = 'script' then
+      Exit(Goccia.Engine.stScript);
+    WriteLn(StdErr, Format(
+      'Warning: invalid per-file config value for "source-type": %s '
+      + '(valid: script, module). Falling back to script.', [ValueStr]));
+    Exit(Goccia.Engine.stScript);
+  end;
+
+  if AOption.Present then
+  begin
+    if AOption.Matches(CLI.Options.stModule) then
+      Exit(Goccia.Engine.stModule);
+    Exit(Goccia.Engine.stScript);
+  end;
+
+  Result := Goccia.Engine.stScript;
+end;
+
 { Apply per-file config entries to the engine.
   Priority: CLI flag > per-file config > root config > default.
   FromCommandLine distinguishes CLI-set options from root-config-set options
@@ -446,6 +533,10 @@ begin
   AEngine.ASIEnabled := ResolveFlagOption(
     AEngineOptions.ASI, AFileConfig, 'asi');
 
+  { source-type: CLI flag > per-file config > root config > default (script) }
+  AEngine.SourceType := ResolveSourceTypeOption(
+    AEngineOptions.SourceType, AFileConfig);
+
   { compat-var: CLI flag > per-file config > root config > default (false) }
   AEngine.VarEnabled := ResolveFlagOption(
     AEngineOptions.CompatVar, AFileConfig, 'compat-var');
@@ -453,6 +544,10 @@ begin
   { compat-function: CLI flag > per-file config > root config > default (false) }
   AEngine.FunctionEnabled := ResolveFlagOption(
     AEngineOptions.CompatFunction, AFileConfig, 'compat-function');
+
+  { strict-types: CLI flag > per-file config > root config > default (false) }
+  AEngine.StrictTypes := ResolveFlagOption(
+    AEngineOptions.StrictTypes, AFileConfig, 'strict-types');
 
   { unsafe-function-constructor: CLI flag > per-file config > root config > default (false) }
   AEngine.FunctionConstructor.Enabled := ResolveFlagOption(
@@ -654,6 +749,196 @@ begin
   Result := GetCurrentDir;
 end;
 
+function TGocciaCLIApplication.MultifileEnabled: Boolean;
+begin
+  Result := Assigned(FMultifile) and FMultifile.Present;
+end;
+
+function TGocciaCLIApplication.SourceRegistry: TGocciaSourceRegistry;
+begin
+  // Eagerly constructed in Create — guaranteed non-nil, no race.
+  Result := FSourceRegistry;
+end;
+
+function TGocciaCLIApplication.ExpandMultifileFiles(
+  const AFiles: TStringList): TStringList;
+var
+  I, PartIndex: Integer;
+  FileName, Extension, SectionName: string;
+  RawSource: UTF8String;
+  FullSource: TStringList;
+  Sections: TObjectList<TStringList>;
+  Section: TStringList;
+begin
+  Result := TStringList.Create;
+  try
+    if not MultifileEnabled then
+    begin
+      Result.AddStrings(AFiles);
+      Exit;
+    end;
+
+    for I := 0 to AFiles.Count - 1 do
+    begin
+      FileName := AFiles[I];
+      Extension := LowerCase(ExtractFileExt(FileName));
+
+      // .gbc files are bytecode; multifile splitting does not apply.
+      if Extension = EXT_GBC then
+      begin
+        Result.Add(FileName);
+        Continue;
+      end;
+
+      try
+        RawSource := ReadUTF8FileText(FileName);
+      except
+        // Fall through to the runner's own load-error handling.
+        Result.Add(FileName);
+        Continue;
+      end;
+
+      FullSource := CreateUTF8FileTextLines(RawSource);
+      Sections := nil;
+      try
+        // Only treat as multifile when the input actually contains the
+        // separator.  Sections.Count <= 1 alone is wrong: a file with
+        // separators that trims down to a single non-empty section would
+        // incorrectly fall through to the pass-through branch.
+        if not ContainsMultifileSeparator(FullSource) then
+        begin
+          Result.Add(FileName);
+          Continue;
+        end;
+
+        Sections := SplitMultifileSource(FullSource);
+
+        // Pure-separator inputs (no surviving sections) pass the original
+        // name through so the runner reports the source consistently —
+        // matches pre-fix behaviour for that edge case.
+        if Sections.Count = 0 then
+        begin
+          Result.Add(FileName);
+          Continue;
+        end;
+
+        // Always extract index 0 — extraction shifts remaining items down.
+        PartIndex := 0;
+        while Sections.Count > 0 do
+        begin
+          Section := Sections.ExtractIndex(0);
+          Inc(PartIndex);
+          SectionName := BuildMultifileSectionName(FileName, PartIndex);
+          SourceRegistry.Register(SectionName, Section);
+          Result.Add(SectionName);
+        end;
+      finally
+        Sections.Free;
+        FullSource.Free;
+      end;
+    end;
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+function TGocciaCLIApplication.SplitStdinMultifile(
+  const AStdinSource: TStringList): TStringList;
+var
+  Sections: TObjectList<TStringList>;
+  Section: TStringList;
+  SectionName: string;
+  PartIndex: Integer;
+begin
+  Result := TStringList.Create;
+  try
+    if not MultifileEnabled then
+    begin
+      SourceRegistry.Register(STDIN_FILE_NAME, AStdinSource);
+      Result.Add(STDIN_FILE_NAME);
+      Exit;
+    end;
+
+    // Only treat as multifile when the input actually contains the
+    // separator.  See ExpandMultifileFiles for why "section count" is
+    // not a reliable proxy.
+    if not ContainsMultifileSeparator(AStdinSource) then
+    begin
+      SourceRegistry.Register(STDIN_FILE_NAME, AStdinSource);
+      Result.Add(STDIN_FILE_NAME);
+      Exit;
+    end;
+
+    Sections := SplitMultifileSource(AStdinSource);
+    try
+      if Sections.Count = 0 then
+      begin
+        // Pure-separator stdin: register the (now empty-ish) source
+        // under the canonical stdin name to keep ownership clear.
+        SourceRegistry.Register(STDIN_FILE_NAME, AStdinSource);
+        Result.Add(STDIN_FILE_NAME);
+        Exit;
+      end;
+
+      // Register each section, then free the original wrapper since
+      // its contents have been redistributed into sections.
+      // Always extract index 0 — extraction shifts remaining items down.
+      PartIndex := 0;
+      while Sections.Count > 0 do
+      begin
+        Section := Sections.ExtractIndex(0);
+        Inc(PartIndex);
+        SectionName := BuildMultifileSectionName(STDIN_FILE_NAME,
+          PartIndex);
+        SourceRegistry.Register(SectionName, Section);
+        Result.Add(SectionName);
+      end;
+      AStdinSource.Free;
+    finally
+      Sections.Free;
+    end;
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+{ Resolve an explicit --config value to a concrete file path.
+  Accepts either a path to a config file or to a directory containing
+  goccia.toml / goccia.json5 / goccia.json (priority order).  The
+  directory form checks only that directory and does not walk upward,
+  so the user gets exactly what they asked for and a typo errors out
+  rather than silently picking up a parent's config.  Raises when the
+  path does not exist or when a directory contains no recognised
+  config file. }
+function ResolveExplicitConfigPath(const AValue: string): string;
+var
+  Expanded, Candidate: string;
+  E: Integer;
+begin
+  Expanded := ExpandFileName(AValue);
+
+  if DirectoryExists(Expanded) then
+  begin
+    for E := 0 to High(CONFIG_EXTENSIONS) do
+    begin
+      Candidate := IncludeTrailingPathDelimiter(Expanded) +
+        CONFIG_BASE_NAME + CONFIG_EXTENSIONS[E];
+      if FileExists(Candidate) then
+        Exit(Candidate);
+    end;
+    raise Exception.CreateFmt(
+      'No %s.{toml,json5,json} found in config directory: %s',
+      [CONFIG_BASE_NAME, AValue]);
+  end;
+
+  if FileExists(Expanded) then
+    Exit(Expanded);
+
+  raise Exception.CreateFmt('Config path not found: %s', [AValue]);
+end;
+
 procedure TGocciaCLIApplication.Execute;
 var
   Paths: TStringList;
@@ -670,11 +955,21 @@ begin
 
   FLog := TGocciaStringOption.Create('log', 'Write console output to a log file');
 
+  FMultifile := TGocciaFlagOption.Create('multifile',
+    'Split each input (file or stdin) on "---" lines and run each ' +
+    'section as an independent file');
+
+  FConfig := TGocciaStringOption.Create('config',
+    'Path to a config file or a directory containing one (skips auto-discovery)');
+
   BuildAllOptions;
-  // Append --jobs and --log after BuildAllOptions so they appear in help
-  SetLength(FAllOptions, Length(FAllOptions) + 2);
-  FAllOptions[High(FAllOptions) - 1] := FJobs;
-  FAllOptions[High(FAllOptions)] := FLog;
+  // Append --jobs, --log, --multifile and --config after BuildAllOptions so
+  // they appear in help
+  SetLength(FAllOptions, Length(FAllOptions) + 4);
+  FAllOptions[High(FAllOptions) - 3] := FJobs;
+  FAllOptions[High(FAllOptions) - 2] := FLog;
+  FAllOptions[High(FAllOptions) - 1] := FMultifile;
+  FAllOptions[High(FAllOptions)] := FConfig;
 
   { Parse CLI first so we know the entry file path. }
   Paths := ParseCommandLine(FAllOptions);
@@ -693,12 +988,25 @@ begin
       if FAllOptions[I].Present then
         FAllOptions[I].MarkFromCommandLine;
 
-    { Discover config file starting from the entry file's directory.
-      Apply as defaults — options already set by CLI are skipped. }
+    { Resolve the root config path.  When --config is given it takes
+      precedence over auto-discovery and a missing path is a hard
+      error so a typo is not silently ignored.  The value may point
+      to a config file directly or to a directory containing
+      goccia.toml / goccia.json5 / goccia.json (priority order); the
+      directory form does NOT walk upward.  Otherwise walk up from
+      the entry file's directory.  Either way, options already set by
+      CLI are skipped during application. }
     EnsureConfigParsersRegistered;
-    ConfigStartDir := ResolveConfigStartDirectory(Paths);
-    ConfigPath := DiscoverConfigFile(ConfigStartDir,
-      [CONFIG_BASE_NAME], CONFIG_EXTENSIONS);
+    if FConfig.Present then
+    begin
+      ConfigPath := ResolveExplicitConfigPath(FConfig.Value);
+    end
+    else
+    begin
+      ConfigStartDir := ResolveConfigStartDirectory(Paths);
+      ConfigPath := DiscoverConfigFile(ConfigStartDir,
+        [CONFIG_BASE_NAME], CONFIG_EXTENSIONS);
+    end;
     if ConfigPath <> '' then
       ApplyConfigFile(ConfigPath, FAllOptions);
 

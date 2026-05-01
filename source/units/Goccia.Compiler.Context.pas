@@ -32,6 +32,7 @@ type
     SourcePath: string;
     FormalParameterCounts: TFormalParameterCountMap;
     GlobalBackedTopLevel: Boolean;
+    StrictTypes: Boolean;
     CompileExpression: TCompileExpressionProc;
     CompileStatement: TCompileStatementProc;
     CompileFunctionBody: TCompileFunctionBodyProc;
