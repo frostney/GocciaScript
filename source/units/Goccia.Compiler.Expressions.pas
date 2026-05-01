@@ -1198,12 +1198,13 @@ var
   MemberExpr: TGocciaMemberExpression;
   PropIdx: UInt16;
   UseSpread: Boolean;
-  NilJump, EndJump: Integer;
+  NilJump, CallNilJump, EndJump: Integer;
 begin
   ArgCount := AExpr.Arguments.Count;
   if ArgCount > High(UInt8) then
     raise Exception.Create('Compiler error: too many arguments (>255)');
   UseSpread := HasSpreadArgument(AExpr);
+  CallNilJump := -1;
 
   if AExpr.Callee is TGocciaSuperExpression then
   begin
@@ -1220,6 +1221,9 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET_CONST, BaseReg, 0, UInt8(PropIdx)));
     ACtx.Scope.FreeRegister;
 
+    if AExpr.Optional then
+      CallNilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, BaseReg);
+
     if UseSpread then
     begin
       ArgsReg := ACtx.Scope.AllocateRegister;
@@ -1234,6 +1238,14 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
       for I := 0 to ArgCount - 1 do
         ACtx.Scope.FreeRegister;
+    end;
+
+    if AExpr.Optional then
+    begin
+      EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      PatchJumpTarget(ACtx, CallNilJump);
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
+      PatchJumpTarget(ACtx, EndJump);
     end;
 
     if ADest <> BaseReg then
@@ -1255,6 +1267,9 @@ begin
       raise Exception.Create('Constant pool overflow: private method name index exceeds 255');
     EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, BaseReg, ObjReg, UInt8(PropIdx)));
 
+    if AExpr.Optional then
+      CallNilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, BaseReg);
+
     if UseSpread then
     begin
       ArgsReg := ACtx.Scope.AllocateRegister;
@@ -1269,6 +1284,14 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
       for I := 0 to ArgCount - 1 do
         ACtx.Scope.FreeRegister;
+    end;
+
+    if AExpr.Optional then
+    begin
+      EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      PatchJumpTarget(ACtx, CallNilJump);
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
+      PatchJumpTarget(ACtx, EndJump);
     end;
 
     if ADest <> BaseReg then
@@ -1295,6 +1318,9 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET_CONST, BaseReg, 0, UInt8(PropIdx)));
       ACtx.Scope.FreeRegister;
 
+      if AExpr.Optional then
+        CallNilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, BaseReg);
+
       if UseSpread then
       begin
         ArgsReg := ACtx.Scope.AllocateRegister;
@@ -1309,6 +1335,14 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
         for I := 0 to ArgCount - 1 do
           ACtx.Scope.FreeRegister;
+      end;
+
+      if AExpr.Optional then
+      begin
+        EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+        PatchJumpTarget(ACtx, CallNilJump);
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
+        PatchJumpTarget(ACtx, EndJump);
       end;
 
       if ADest <> BaseReg then
@@ -1342,6 +1376,9 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, BaseReg, ObjReg, UInt8(PropIdx)));
       end;
 
+      if AExpr.Optional then
+        CallNilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, BaseReg);
+
       if UseSpread then
       begin
         ArgsReg := ACtx.Scope.AllocateRegister;
@@ -1358,10 +1395,13 @@ begin
           ACtx.Scope.FreeRegister;
       end;
 
-      if MemberExpr.Optional then
+      if MemberExpr.Optional or AExpr.Optional then
       begin
         EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-        PatchJumpTarget(ACtx, NilJump);
+        if MemberExpr.Optional then
+          PatchJumpTarget(ACtx, NilJump);
+        if AExpr.Optional then
+          PatchJumpTarget(ACtx, CallNilJump);
         EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
         PatchJumpTarget(ACtx, EndJump);
       end;
@@ -1383,6 +1423,9 @@ begin
 
     ACtx.CompileExpression(AExpr.Callee, BaseReg);
 
+    if AExpr.Optional then
+      CallNilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, BaseReg);
+
     if UseSpread then
     begin
       ArgsReg := ACtx.Scope.AllocateRegister;
@@ -1398,6 +1441,14 @@ begin
         CallTrustedFlag(ACtx, AExpr)));
       for I := 0 to ArgCount - 1 do
         ACtx.Scope.FreeRegister;
+    end;
+
+    if AExpr.Optional then
+    begin
+      EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      PatchJumpTarget(ACtx, CallNilJump);
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
+      PatchJumpTarget(ACtx, EndJump);
     end;
 
     if BaseReg <> ADest then

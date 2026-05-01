@@ -246,12 +246,15 @@ type
   private
     FCallee: TGocciaExpression;
     FArguments: TObjectList<TGocciaExpression>;
+    FOptional: Boolean;
   public
     constructor Create(const ACallee: TGocciaExpression;
-      const AArguments: TObjectList<TGocciaExpression>; const ALine, AColumn: Integer);
+      const AArguments: TObjectList<TGocciaExpression>; const ALine, AColumn: Integer;
+      const AOptional: Boolean = False);
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Callee: TGocciaExpression read FCallee;
     property Arguments: TObjectList<TGocciaExpression> read FArguments;
+    property Optional: Boolean read FOptional;
   end;
 
   TGocciaMemberExpression = class(TGocciaExpression)
@@ -1052,11 +1055,13 @@ end;
 { TGocciaCallExpression }
 
 constructor TGocciaCallExpression.Create(const ACallee: TGocciaExpression;
-  const AArguments: TObjectList<TGocciaExpression>; const ALine, AColumn: Integer);
+  const AArguments: TObjectList<TGocciaExpression>; const ALine, AColumn: Integer;
+  const AOptional: Boolean = False);
 begin
   inherited Create(ALine, AColumn);
   FCallee := ACallee;
   FArguments := AArguments;
+  FOptional := AOptional;
 end;
 
 { TGocciaMemberExpression }
