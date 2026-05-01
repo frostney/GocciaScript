@@ -299,8 +299,9 @@ begin
 
   if TryStrToInt(AName, Index) then
   begin
-    if (Index >= 0) and (Index < Length(StringValue)) then
-      Result := TGocciaStringLiteralValue.Create(StringValue[Index + 1])
+    if (Index >= 0) and (Index < UTF16CodeUnitLength(StringValue)) then
+      Result := TGocciaStringLiteralValue.Create(
+        UTF16CodeUnitAt(StringValue, Index))
     else
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
@@ -327,11 +328,11 @@ var
 begin
   StringValue := FPrimitive.ToStringLiteral.Value;
   InheritedNames := inherited GetEnumerablePropertyNames;
-  SetLength(Result, Length(StringValue) + Length(InheritedNames));
-  for I := 0 to Length(StringValue) - 1 do
+  SetLength(Result, UTF16CodeUnitLength(StringValue) + Length(InheritedNames));
+  for I := 0 to UTF16CodeUnitLength(StringValue) - 1 do
     Result[I] := IntToStr(I);
   for I := 0 to High(InheritedNames) do
-    Result[Length(StringValue) + I] := InheritedNames[I];
+    Result[UTF16CodeUnitLength(StringValue) + I] := InheritedNames[I];
 end;
 
 function TGocciaStringObjectValue.GetEnumerablePropertyValues: TArray<TGocciaValue>;
@@ -342,11 +343,12 @@ var
 begin
   StringValue := FPrimitive.ToStringLiteral.Value;
   InheritedValues := inherited GetEnumerablePropertyValues;
-  SetLength(Result, Length(StringValue) + Length(InheritedValues));
-  for I := 0 to Length(StringValue) - 1 do
-    Result[I] := TGocciaStringLiteralValue.Create(StringValue[I + 1]);
+  SetLength(Result, UTF16CodeUnitLength(StringValue) + Length(InheritedValues));
+  for I := 0 to UTF16CodeUnitLength(StringValue) - 1 do
+    Result[I] := TGocciaStringLiteralValue.Create(
+      UTF16CodeUnitAt(StringValue, I));
   for I := 0 to High(InheritedValues) do
-    Result[Length(StringValue) + I] := InheritedValues[I];
+    Result[UTF16CodeUnitLength(StringValue) + I] := InheritedValues[I];
 end;
 
 function TGocciaStringObjectValue.GetEnumerablePropertyEntries: TArray<TPair<string, TGocciaValue>>;
@@ -358,15 +360,16 @@ var
 begin
   StringValue := FPrimitive.ToStringLiteral.Value;
   InheritedEntries := inherited GetEnumerablePropertyEntries;
-  SetLength(Result, Length(StringValue) + Length(InheritedEntries));
-  for I := 0 to Length(StringValue) - 1 do
+  SetLength(Result, UTF16CodeUnitLength(StringValue) + Length(InheritedEntries));
+  for I := 0 to UTF16CodeUnitLength(StringValue) - 1 do
   begin
     Entry.Key := IntToStr(I);
-    Entry.Value := TGocciaStringLiteralValue.Create(StringValue[I + 1]);
+    Entry.Value := TGocciaStringLiteralValue.Create(
+      UTF16CodeUnitAt(StringValue, I));
     Result[I] := Entry;
   end;
   for I := 0 to High(InheritedEntries) do
-    Result[Length(StringValue) + I] := InheritedEntries[I];
+    Result[UTF16CodeUnitLength(StringValue) + I] := InheritedEntries[I];
 end;
 
 // ES2026 §10.4.3.6 StringExoticObject [[OwnPropertyKeys]] (all own string keys)
@@ -379,12 +382,13 @@ var
 begin
   StringValue := FPrimitive.ToStringLiteral.Value;
   InheritedNames := inherited GetAllPropertyNames;
-  SetLength(Result, Length(StringValue) + 1 + Length(InheritedNames));
-  for I := 0 to Length(StringValue) - 1 do
+  SetLength(Result, UTF16CodeUnitLength(StringValue) + 1 +
+    Length(InheritedNames));
+  for I := 0 to UTF16CodeUnitLength(StringValue) - 1 do
     Result[I] := IntToStr(I);
-  Result[Length(StringValue)] := PROP_LENGTH;
+  Result[UTF16CodeUnitLength(StringValue)] := PROP_LENGTH;
   for I := 0 to High(InheritedNames) do
-    Result[Length(StringValue) + 1 + I] := InheritedNames[I];
+    Result[UTF16CodeUnitLength(StringValue) + 1 + I] := InheritedNames[I];
 end;
 
 // ES2026 §10.4.3.1 StringExoticObject [[GetOwnProperty]](P)
@@ -398,11 +402,11 @@ begin
   if TryStrToInt(AName, Index) and (AName = IntToStr(Index)) then
   begin
     StringValue := FPrimitive.ToStringLiteral.Value;
-    if (Index >= 0) and (Index < Length(StringValue)) then
+    if (Index >= 0) and (Index < UTF16CodeUnitLength(StringValue)) then
     begin
       // String character indices: enumerable, non-writable, non-configurable
       Result := TGocciaPropertyDescriptorData.Create(
-        TGocciaStringLiteralValue.Create(StringValue[Index + 1]),
+        TGocciaStringLiteralValue.Create(UTF16CodeUnitAt(StringValue, Index)),
         [pfEnumerable]);
       Exit;
     end;
@@ -412,7 +416,8 @@ begin
   begin
     // length: non-enumerable, non-writable, non-configurable
     Result := TGocciaPropertyDescriptorData.Create(
-      TGocciaNumberLiteralValue.Create(Length(FPrimitive.ToStringLiteral.Value)),
+      TGocciaNumberLiteralValue.Create(
+        UTF16CodeUnitLength(FPrimitive.ToStringLiteral.Value)),
       []);
     Exit;
   end;
@@ -430,7 +435,7 @@ begin
   if TryStrToInt(AName, Index) and (AName = IntToStr(Index)) then
   begin
     StringValue := FPrimitive.ToStringLiteral.Value;
-    Result := (Index >= 0) and (Index < Length(StringValue));
+    Result := (Index >= 0) and (Index < UTF16CodeUnitLength(StringValue));
     Exit;
   end;
   if AName = PROP_LENGTH then
@@ -526,7 +531,7 @@ begin
   // Step 2: Let S be ToString(O)
   StringValue := ExtractStringValue(AThisValue);
   // Step 3: Return the number of code units in S
-  Result := TGocciaNumberLiteralValue.Create(Length(StringValue));
+  Result := TGocciaNumberLiteralValue.Create(UTF16CodeUnitLength(StringValue));
 end;
 
 // ES2026 §22.1.3.1 String.prototype.charAt(pos)
@@ -544,8 +549,9 @@ begin
 
   // Step 4: If position < 0 or position >= len(S), return ""
   // Step 5: Return the String value of length 1 containing the code unit at index position
-  if (Index >= 0) and (Index < Length(StringValue)) then
-    Result := TGocciaStringLiteralValue.Create(StringValue[Index + 1])
+  if (Index >= 0) and (Index < UTF16CodeUnitLength(StringValue)) then
+    Result := TGocciaStringLiteralValue.Create(
+      UTF16CodeUnitAt(StringValue, Index))
   else
     Result := TGocciaStringLiteralValue.Create('');
 end;
@@ -553,6 +559,9 @@ end;
 // ES2026 §22.1.3.2 String.prototype.charCodeAt(pos)
 function TGocciaStringObjectValue.StringCharCodeAt(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
+  Character: string;
+  ByteLength: Integer;
+  CodePoint: Cardinal;
   StringValue: string;
   Index: Integer;
 begin
@@ -565,8 +574,17 @@ begin
 
   // Step 4: If position < 0 or position >= len(S), return NaN
   // Step 5: Return the numeric value of the code unit at index position
-  if (Index >= 0) and (Index < Length(StringValue)) then
-    Result := TGocciaNumberLiteralValue.Create(Ord(StringValue[Index + 1]))
+  if (Index < 0) or (Index >= UTF16CodeUnitLength(StringValue)) then
+  begin
+    Result := TGocciaNumberLiteralValue.NaNValue;
+    Exit;
+  end;
+
+  Character := UTF16CodeUnitAt(StringValue, Index);
+  if TryReadUTF8CodePoint(Character, 1, CodePoint, ByteLength) then
+    Result := TGocciaNumberLiteralValue.Create(CodePoint)
+  else if Character <> '' then
+    Result := TGocciaNumberLiteralValue.Create(Ord(Character[1]))
   else
     Result := TGocciaNumberLiteralValue.NaNValue;
 end;
@@ -1801,17 +1819,17 @@ begin
 
   // Step 5: If relativeIndex >= 0, let k be relativeIndex; else let k be len + relativeIndex
   if Index < 0 then
-    Index := Length(StringValue) + Index;
+    Index := UTF16CodeUnitLength(StringValue) + Index;
 
   // Step 6: If k < 0 or k >= len, return undefined
-  if (Index < 0) or (Index >= Length(StringValue)) then
+  if (Index < 0) or (Index >= UTF16CodeUnitLength(StringValue)) then
   begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
 
   // Step 7: Return the substring of S from k to k + 1
-  Result := TGocciaStringLiteralValue.Create(StringValue[Index + 1]);
+  Result := TGocciaStringLiteralValue.Create(UTF16CodeUnitAt(StringValue, Index));
 end;
 
 // ES2026 §22.1.3.32 String.prototype.valueOf()
@@ -1841,7 +1859,6 @@ end;
 function TGocciaStringObjectValue.StringCodePointAt(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
-  ByteLength: Integer;
   CodePoint: Cardinal;
   Index: Integer;
 begin
@@ -1853,20 +1870,17 @@ begin
   Index := ToIntegerFromArgs(AArgs);
 
   // Step 4: If position < 0 or position >= len(S), return undefined
-  if (Index < 0) or (Index >= Length(StringValue)) then
+  if (Index < 0) or (Index >= UTF16CodeUnitLength(StringValue)) then
   begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
 
   // Step 5: Let cp be CodePointAt(S, position) and return cp.[[CodePoint]]
-  if not TryReadUTF8CodePoint(StringValue, Index + 1, CodePoint,
-    ByteLength) then
-  begin
-    CodePoint := Ord(StringValue[Index + 1]);
-  end;
-
-  Result := TGocciaNumberLiteralValue.Create(CodePoint);
+  if TryUTF16CodePointValueAt(StringValue, Index, CodePoint) then
+    Result := TGocciaNumberLiteralValue.Create(CodePoint)
+  else
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 // ES2026 §22.1.3.11 String.prototype.localeCompare(that)

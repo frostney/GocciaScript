@@ -26,6 +26,7 @@ type
     procedure TestCRIncrementsLineInWhitespace;
     procedure TestCRIncrementsLineInBlockComment;
     procedure TestUnicodeLineTerminatorsInBlockComment;
+    procedure TestUnicodeLineTerminatorsBetweenTokens;
     procedure TestRegexLiteralPreservesRawPattern;
     procedure TestRegexUnterminatedAtEOF;
     procedure TestNumericSeparatorsNormalize;
@@ -42,6 +43,7 @@ begin
   Test('CR increments line counter in whitespace', TestCRIncrementsLineInWhitespace);
   Test('CR increments line counter in block comments', TestCRIncrementsLineInBlockComment);
   Test('Unicode line terminators increment line counter in block comments', TestUnicodeLineTerminatorsInBlockComment);
+  Test('Unicode line terminators split tokens', TestUnicodeLineTerminatorsBetweenTokens);
   Test('Regex literal preserves raw pattern', TestRegexLiteralPreservesRawPattern);
   Test('Unterminated regex at EOF raises lexer error', TestRegexUnterminatedAtEOF);
   Test('Numeric separators normalize', TestNumericSeparatorsNormalize);
@@ -214,6 +216,31 @@ begin
     Tokens := Lexer.ScanTokens;
     Expect<TGocciaTokenType>(Tokens[0].TokenType).ToBe(gttConst);
     Expect<Integer>(Tokens[0].Line).ToBe(2);
+  finally
+    Lexer.Free;
+  end;
+end;
+
+procedure TLexerTests.TestUnicodeLineTerminatorsBetweenTokens;
+const
+  UTF8_LINE_SEPARATOR = #$E2#$80#$A8;
+  UTF8_PARAGRAPH_SEPARATOR = #$E2#$80#$A9;
+var
+  Lexer: TGocciaLexer;
+  Tokens: TObjectList<TGocciaToken>;
+begin
+  Lexer := TGocciaLexer.Create(
+    'var' + UTF8_LINE_SEPARATOR + 'x' + UTF8_PARAGRAPH_SEPARATOR +
+    '=' + UTF8_LINE_SEPARATOR + '1' + UTF8_PARAGRAPH_SEPARATOR + ';',
+    '<test>');
+  try
+    Tokens := Lexer.ScanTokens;
+    Expect<TGocciaTokenType>(Tokens[0].TokenType).ToBe(gttVar);
+    Expect<TGocciaTokenType>(Tokens[1].TokenType).ToBe(gttIdentifier);
+    Expect<string>(Tokens[1].Lexeme).ToBe('x');
+    Expect<TGocciaTokenType>(Tokens[2].TokenType).ToBe(gttAssign);
+    Expect<TGocciaTokenType>(Tokens[3].TokenType).ToBe(gttNumber);
+    Expect<TGocciaTokenType>(Tokens[4].TokenType).ToBe(gttSemicolon);
   finally
     Lexer.Free;
   end;

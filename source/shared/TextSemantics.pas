@@ -38,6 +38,12 @@ function TrimECMAScriptWhitespaceStart(const AText: string): string;
 function TrimECMAScriptWhitespaceEnd(const AText: string): string;
 function IsWellFormedUTF8(const AText: string): Boolean;
 function ToWellFormedUTF8(const AText: string): string;
+function UTF8CodePointLength(const AText: string): Integer;
+function UTF8CodePointAt(const AText: string; const AIndex: Integer): string;
+function UTF16CodeUnitLength(const AText: string): Integer;
+function UTF16CodeUnitAt(const AText: string; const AIndex: Integer): string;
+function TryUTF16CodePointValueAt(const AText: string; const AIndex: Integer;
+  out ACodePoint: Cardinal): Boolean;
 function UnicodeLowerCaseUTF8(const AText: string): string;
 function UnicodeUpperCaseUTF8(const AText: string): string;
 function AdvanceUTF8StringIndex(const AText: string; const AIndex: Integer;
@@ -47,6 +53,7 @@ function ExpandReplacementPattern(const AReplacement, AMatched,
   const ACaptures: array of TReplacementCapture;
   const ANamedCaptures: array of TReplacementNamedCapture): string;
 function CreateUTF8StringList(const AText: string): TStringList;
+function CreateECMAScriptSourceLines(const AText: string): TStringList;
 function CreateUTF8FileTextLines(const AText: UTF8String): TStringList;
 function NormalizeNewlinesToLF(const AText: string): string;
 function NormalizeUTF8NewlinesToLF(const AText: UTF8String): UTF8String;
@@ -326,6 +333,207 @@ begin
   Result := Buffer.ToString;
 end;
 
+function UTF8CodePointLength(const AText: string): Integer;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  Index: Integer;
+begin
+  Result := 0;
+  Index := 1;
+  while Index <= Length(AText) do
+  begin
+    if TryReadUTF8CodePoint(AText, Index, CodePoint, ByteLength) then
+      Inc(Index, ByteLength)
+    else
+      Inc(Index);
+    Inc(Result);
+  end;
+end;
+
+function UTF8CodePointAt(const AText: string; const AIndex: Integer): string;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  CodePointIndex: Integer;
+  Index: Integer;
+begin
+  if AIndex < 0 then
+    Exit('');
+
+  CodePointIndex := 0;
+  Index := 1;
+  while Index <= Length(AText) do
+  begin
+    if TryReadUTF8CodePoint(AText, Index, CodePoint, ByteLength) then
+    begin
+      if CodePointIndex = AIndex then
+        Exit(Copy(AText, Index, ByteLength));
+      Inc(Index, ByteLength);
+    end
+    else
+    begin
+      if CodePointIndex = AIndex then
+        Exit(AText[Index]);
+      Inc(Index);
+    end;
+    Inc(CodePointIndex);
+  end;
+
+  Result := '';
+end;
+
+function UTF16CodeUnitToUTF8(const ACodeUnit: Cardinal): string;
+begin
+  if ACodeUnit <= $7F then
+    Result := Chr(ACodeUnit)
+  else if ACodeUnit <= $7FF then
+    Result := Chr($C0 or (ACodeUnit shr 6)) +
+      Chr($80 or (ACodeUnit and $3F))
+  else
+    Result := Chr($E0 or (ACodeUnit shr 12)) +
+      Chr($80 or ((ACodeUnit shr 6) and $3F)) +
+      Chr($80 or (ACodeUnit and $3F));
+end;
+
+function UTF16CodeUnitLength(const AText: string): Integer;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  Index: Integer;
+begin
+  Result := 0;
+  Index := 1;
+  while Index <= Length(AText) do
+  begin
+    if TryReadUTF8CodePoint(AText, Index, CodePoint, ByteLength) then
+    begin
+      if CodePoint > $FFFF then
+        Inc(Result, 2)
+      else
+        Inc(Result);
+      Inc(Index, ByteLength);
+    end
+    else
+    begin
+      Inc(Result);
+      Inc(Index);
+    end;
+  end;
+end;
+
+function UTF16CodeUnitAt(const AText: string; const AIndex: Integer): string;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  CodeUnitIndex: Integer;
+  HighSurrogate: Cardinal;
+  Index: Integer;
+  LowSurrogate: Cardinal;
+  Supplementary: Cardinal;
+begin
+  if AIndex < 0 then
+    Exit('');
+
+  CodeUnitIndex := 0;
+  Index := 1;
+  while Index <= Length(AText) do
+  begin
+    if TryReadUTF8CodePoint(AText, Index, CodePoint, ByteLength) then
+    begin
+      if CodePoint <= $FFFF then
+      begin
+        if CodeUnitIndex = AIndex then
+          Exit(Copy(AText, Index, ByteLength));
+        Inc(CodeUnitIndex);
+      end
+      else
+      begin
+        Supplementary := CodePoint - $10000;
+        HighSurrogate := $D800 + (Supplementary shr 10);
+        LowSurrogate := $DC00 + (Supplementary and $3FF);
+        if CodeUnitIndex = AIndex then
+          Exit(UTF16CodeUnitToUTF8(HighSurrogate));
+        if CodeUnitIndex + 1 = AIndex then
+          Exit(UTF16CodeUnitToUTF8(LowSurrogate));
+        Inc(CodeUnitIndex, 2);
+      end;
+      Inc(Index, ByteLength);
+    end
+    else
+    begin
+      if CodeUnitIndex = AIndex then
+        Exit(AText[Index]);
+      Inc(CodeUnitIndex);
+      Inc(Index);
+    end;
+  end;
+
+  Result := '';
+end;
+
+function TryUTF16CodePointValueAt(const AText: string; const AIndex: Integer;
+  out ACodePoint: Cardinal): Boolean;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  CodeUnitIndex: Integer;
+  Index: Integer;
+  LowSurrogate: Cardinal;
+  Supplementary: Cardinal;
+begin
+  ACodePoint := 0;
+  if AIndex < 0 then
+    Exit(False);
+
+  CodeUnitIndex := 0;
+  Index := 1;
+  while Index <= Length(AText) do
+  begin
+    if TryReadUTF8CodePoint(AText, Index, CodePoint, ByteLength) then
+    begin
+      if CodePoint <= $FFFF then
+      begin
+        if CodeUnitIndex = AIndex then
+        begin
+          ACodePoint := CodePoint;
+          Exit(True);
+        end;
+        Inc(CodeUnitIndex);
+      end
+      else
+      begin
+        if CodeUnitIndex = AIndex then
+        begin
+          ACodePoint := CodePoint;
+          Exit(True);
+        end;
+        Supplementary := CodePoint - $10000;
+        LowSurrogate := $DC00 + (Supplementary and $3FF);
+        if CodeUnitIndex + 1 = AIndex then
+        begin
+          ACodePoint := LowSurrogate;
+          Exit(True);
+        end;
+        Inc(CodeUnitIndex, 2);
+      end;
+      Inc(Index, ByteLength);
+    end
+    else
+    begin
+      if CodeUnitIndex = AIndex then
+      begin
+        ACodePoint := Ord(AText[Index]);
+        Exit(True);
+      end;
+      Inc(CodeUnitIndex);
+      Inc(Index);
+    end;
+  end;
+
+  Result := False;
+end;
+
 function UTF8TextToUnicodeString(const AText: string): UnicodeString;
 var
   Bytes: RawByteString;
@@ -556,6 +764,58 @@ begin
     Result.Add(Copy(AText, LineStart, Length(AText) - LineStart + 1))
   else if (Length(AText) > 0) and ((AText[Length(AText)] = #10) or
     (AText[Length(AText)] = #13)) then
+    Result.Add('');
+end;
+
+function IsUTF8LineOrParagraphSeparatorAt(const AText: string;
+  const AIndex: Integer): Boolean;
+begin
+  Result := (AIndex >= 1) and (AIndex + 2 <= Length(AText)) and
+    (AText[AIndex] = #$E2) and
+    (AText[AIndex + 1] = #$80) and
+    ((AText[AIndex + 2] = #$A8) or (AText[AIndex + 2] = #$A9));
+end;
+
+function CreateECMAScriptSourceLines(const AText: string): TStringList;
+const
+  UTF8_LINE_TERMINATOR_BYTE_LENGTH = 3;
+var
+  LineStart: Integer;
+  TextIndex: Integer;
+begin
+  Result := TStringList.Create;
+  LineStart := 1;
+  TextIndex := 1;
+
+  while TextIndex <= Length(AText) do
+  begin
+    if AText[TextIndex] = #13 then
+    begin
+      Result.Add(Copy(AText, LineStart, TextIndex - LineStart));
+      if (TextIndex < Length(AText)) and (AText[TextIndex + 1] = #10) then
+        Inc(TextIndex);
+      LineStart := TextIndex + 1;
+    end
+    else if AText[TextIndex] = #10 then
+    begin
+      Result.Add(Copy(AText, LineStart, TextIndex - LineStart));
+      LineStart := TextIndex + 1;
+    end
+    else if IsUTF8LineOrParagraphSeparatorAt(AText, TextIndex) then
+    begin
+      Result.Add(Copy(AText, LineStart, TextIndex - LineStart));
+      Inc(TextIndex, UTF8_LINE_TERMINATOR_BYTE_LENGTH - 1);
+      LineStart := TextIndex + 1;
+    end;
+    Inc(TextIndex);
+  end;
+
+  if LineStart <= Length(AText) then
+    Result.Add(Copy(AText, LineStart, Length(AText) - LineStart + 1))
+  else if (Length(AText) > 0) and
+    ((AText[Length(AText)] = #10) or (AText[Length(AText)] = #13) or
+    IsUTF8LineOrParagraphSeparatorAt(AText,
+    Length(AText) - UTF8_LINE_TERMINATOR_BYTE_LENGTH + 1)) then
     Result.Add('');
 end;
 
