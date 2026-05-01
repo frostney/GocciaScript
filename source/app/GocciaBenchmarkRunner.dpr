@@ -18,6 +18,7 @@ uses
   Goccia.Builtins.Benchmark,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  CLI.ConfigFile,
   CLI.Options,
   Goccia.Constants.PropertyNames,
   Goccia.Engine,
@@ -30,6 +31,7 @@ uses
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
+  Goccia.Runtime,
   Goccia.Scope,
   Goccia.ScriptLoader.Input,
   Goccia.CLI.JSON.Reporter,
@@ -196,6 +198,8 @@ type
       const AMode: TGocciaExecutionMode; const AShowProgress: Boolean);
   protected
     procedure Configure; override;
+    procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
+      const AFileConfig: TConfigEntryArray); override;
     function UsageLine: string; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
     function GlobalBuiltins: TGocciaGlobalBuiltins; override;
@@ -209,17 +213,49 @@ begin
   Result := Pos('/helpers/', NormalizedPath) > 0;
 end;
 
+procedure InitializeRuntime(const AEngine: TGocciaEngine);
+begin
+  AttachRuntimeExtension(AEngine);
+end;
+
+function RuntimeBenchmark(const AEngine: TGocciaEngine): TGocciaBenchmark;
+var
+  Runtime: TGocciaRuntimeExtension;
+begin
+  Runtime := GetRuntimeExtension(AEngine);
+  if Assigned(Runtime) then
+    Result := Runtime.BuiltinBenchmark
+  else
+    Result := nil;
+end;
+
+procedure ConfigureBenchmarkRuntime(const AEngine: TGocciaEngine;
+  const AShowProgress, AClearBeforeMeasurement: Boolean);
+var
+  Benchmark: TGocciaBenchmark;
+begin
+  Benchmark := RuntimeBenchmark(AEngine);
+  if not Assigned(Benchmark) then
+    Exit;
+  if AShowProgress then
+    Benchmark.OnProgress := TBenchmarkProgress.OnProgress;
+  if AClearBeforeMeasurement then
+    Benchmark.OnBeforeMeasurement := AEngine.ClearTransientCaches;
+end;
+
 function RunRegisteredBenchmarks(const AEngine: TGocciaEngine): TGocciaObjectValue;
 var
+  Benchmark: TGocciaBenchmark;
   EmptyArgs: TGocciaArgumentsCollection;
   Value: TGocciaValue;
 begin
-  if not Assigned(AEngine.BuiltinBenchmark) then
+  Benchmark := RuntimeBenchmark(AEngine);
+  if not Assigned(Benchmark) then
     Exit(nil);
 
   EmptyArgs := TGocciaArgumentsCollection.Create;
   try
-    Value := AEngine.BuiltinBenchmark.RunBenchmarks(EmptyArgs,
+    Value := Benchmark.RunBenchmarks(EmptyArgs,
       TGocciaUndefinedLiteralValue.UndefinedValue);
   finally
     EmptyArgs.Free;
@@ -279,8 +315,7 @@ begin
     try
       Engine := CreateEngine(AFileName, Source);
       try
-        if AShowProgress and Assigned(Engine.BuiltinBenchmark) then
-          Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
+        ConfigureBenchmarkRuntime(Engine, AShowProgress, False);
 
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
         StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
@@ -408,10 +443,7 @@ begin
             Lexer.Free;
           end;
 
-          if AShowProgress and Assigned(Engine.BuiltinBenchmark) then
-            Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
-          if Assigned(Engine.BuiltinBenchmark) then
-            Engine.BuiltinBenchmark.OnBeforeMeasurement := Engine.ClearTransientCaches;
+          ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
 
           try
           StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
@@ -512,8 +544,7 @@ begin
   try
     Engine := CreateEngine(AFileName, ASource);
     try
-      if AShowProgress and Assigned(Engine.BuiltinBenchmark) then
-        Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
+      ConfigureBenchmarkRuntime(Engine, AShowProgress, False);
 
       StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
       StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
@@ -622,10 +653,7 @@ begin
           Lexer.Free;
         end;
 
-        if AShowProgress and Assigned(Engine.BuiltinBenchmark) then
-          Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
-        if Assigned(Engine.BuiltinBenchmark) then
-          Engine.BuiltinBenchmark.OnBeforeMeasurement := Engine.ClearTransientCaches;
+        ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
 
         try
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
@@ -894,7 +922,7 @@ begin
         SetLength(WorkerData[I].Entries, 0);
       end;
 
-      EnsureSharedPrototypesInitialized(EffectiveBuiltins);
+      EnsureSharedPrototypesInitialized(EffectiveBuiltins, InitializeRuntime);
 
       BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
       WallClockStart := GetNanoseconds;
@@ -971,6 +999,16 @@ begin
     'Output format (console, text, csv, json, compact-json). ' +
     '"compact-json" emits the json envelope without build, memory, stdout, stderr.');
   FOutputFile := AddString('output', 'Output file path (attaches to last --format)');
+end;
+
+procedure TBenchmarkRunnerApp.ConfigureCreatedEngine(
+  const AEngine: TGocciaEngine; const AFileConfig: TConfigEntryArray);
+var
+  Runtime: TGocciaRuntimeExtension;
+begin
+  Runtime := AttachRuntimeExtension(AEngine);
+  if LogFileOpen and Assigned(Runtime.BuiltinConsole) then
+    Runtime.BuiltinConsole.LogCallback := HandleConsoleLog;
 end;
 
 function TBenchmarkRunnerApp.GlobalBuiltins: TGocciaGlobalBuiltins;

@@ -13,7 +13,7 @@
 
 ## Overview
 
-GocciaScript has two execution modes — interpreter (tree-walk over the AST) and bytecode (`TGocciaVM`). A single `TGocciaEngine` class orchestrates both, delegating execution to a pluggable `TGocciaExecutor`. Both modes share the same frontend, runtime objects, built-ins, and garbage collector. See [Bytecode VM](bytecode-vm.md) for the bytecode backend's architecture.
+GocciaScript has two execution modes — interpreter (tree-walk over the AST) and bytecode (`TGocciaVM`). A single `TGocciaEngine` class orchestrates both, delegating execution to a pluggable `TGocciaExecutor`. Both modes share the same frontend, value system, core language built-ins, and garbage collector. Host/runtime globals are attached through runtime extensions. See [Bytecode VM](bytecode-vm.md) for the bytecode backend's architecture.
 
 ## Pipelines
 
@@ -33,7 +33,8 @@ Source -> JSX Transformer (optional) -> Lexer -> Parser -> Compiler -> Goccia By
 
 | Layer | Units | Responsibility |
 |-------|-------|----------------|
-| Engine | `Goccia.Engine` | Single engine class: built-in registration, module loading, executor dispatch |
+| Engine | `Goccia.Engine` | Core language globals, language configuration, module loading, executor dispatch |
+| Runtime | `Goccia.Runtime` | Optional host/runtime globals such as console, fetch, JSON5, TOML, YAML, CSV/TSV, text assets, SemVer |
 | Executor abstraction | `Goccia.Executor` | Abstract `TGocciaExecutor` base class |
 | Interpreter executor | `Goccia.Engine` (`TGocciaInterpreterExecutor`) | Tree-walk execution via `TGocciaInterpreter` |
 | Bytecode executor | `Goccia.Engine.Backend` (`TGocciaBytecodeExecutor`) | Bytecode compile + VM execution; no interpreter dependency |
@@ -43,7 +44,7 @@ Source -> JSX Transformer (optional) -> Lexer -> Parser -> Compiler -> Goccia By
 | Bytecode compiler | `Goccia.Compiler*` | AST to bytecode templates/modules |
 | Bytecode format | `Goccia.Bytecode*` | Opcodes, templates, modules, binary I/O, debug info |
 | Bytecode VM | `Goccia.VM*` | Register execution, closures, upvalues, handlers |
-| Shared runtime | `Goccia.Values.*`, `Goccia.Scope`, `Goccia.Runtime.Bootstrap` | Built-ins, objects, classes, arrays, promises, globals |
+| Shared value system | `Goccia.Values.*`, `Goccia.Scope` | Objects, classes, arrays, promises, scopes, and shared value behavior |
 | Realm | `Goccia.Realm` | Per-engine container for mutable intrinsic prototypes |
 | GC | `Goccia.GarbageCollector` | Mark-and-sweep garbage collection |
 

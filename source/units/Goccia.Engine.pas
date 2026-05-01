@@ -6,19 +6,15 @@ interface
 
 uses
   Classes,
+  Generics.Collections,
 
   Goccia.Arguments.Collection,
   Goccia.AST.Node,
   Goccia.Builtins.Base,
-  Goccia.Builtins.Benchmark,
-  Goccia.Builtins.Console,
-  Goccia.Builtins.CSV,
   Goccia.Builtins.DisposableStack,
   Goccia.Builtins.GlobalArray,
   Goccia.Builtins.GlobalArrayBuffer,
   Goccia.Builtins.GlobalBigInt,
-  Goccia.Builtins.GlobalFetch,
-  Goccia.Builtins.GlobalFFI,
   Goccia.Builtins.GlobalMap,
   Goccia.Builtins.GlobalNumber,
   Goccia.Builtins.GlobalObject,
@@ -30,28 +26,15 @@ uses
   Goccia.Builtins.GlobalSet,
   Goccia.Builtins.GlobalString,
   Goccia.Builtins.GlobalSymbol,
-  Goccia.Builtins.GlobalTextDecoder,
-  Goccia.Builtins.GlobalTextEncoder,
-  Goccia.Builtins.GlobalURL,
   Goccia.Builtins.GlobalWeakMap,
   Goccia.Builtins.GlobalWeakSet,
   Goccia.Builtins.JSON,
-  Goccia.Builtins.JSON5,
-  Goccia.Builtins.JSONL,
   Goccia.Builtins.Math,
-  Goccia.Builtins.Performance,
-  Goccia.Builtins.Semver,
   Goccia.Builtins.Temporal,
-  Goccia.Builtins.TestingLibrary,
-  Goccia.Builtins.TOML,
-  Goccia.Builtins.TSV,
-  Goccia.Builtins.YAML,
   Goccia.Evaluator.Context,
   Goccia.Executor,
   Goccia.Interpreter,
   Goccia.JSON,
-  Goccia.JSON5,
-  Goccia.JSONL,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Loader,
@@ -62,15 +45,14 @@ uses
   Goccia.Realm,
   Goccia.Scope,
   Goccia.SourceMap,
-  Goccia.TOML,
   Goccia.Values.BigIntValue,
   Goccia.Values.ClassValue,
   Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
   Goccia.Values.IteratorValue,
+  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
-  Goccia.Values.TypedArrayValue,
-  Goccia.YAML;
+  Goccia.Values.TypedArrayValue;
 
 type
   TGocciaGlobalBuiltin = (
@@ -98,6 +80,21 @@ type
     TotalTimeNanoseconds: Int64;
     FileName: string;
   end;
+
+  TGocciaEngineExtension = class
+  public
+    procedure WaitForIdle; virtual;
+    procedure DiscardPending; virtual;
+    procedure SetAllowedFetchHosts(const AHosts: TStrings); virtual;
+    function InjectGlobalsFromJSON5(
+      const AJSON5String: UTF8String): Boolean; virtual;
+    function InjectGlobalsFromTOML(
+      const ATOMLString: UTF8String): Boolean; virtual;
+    function InjectGlobalsFromYAML(const AYamlString: string): Boolean; virtual;
+  end;
+
+  TGocciaEngineExtensionClass = class of TGocciaEngineExtension;
+  TGocciaEngineExtensionList = TObjectList<TGocciaEngineExtension>;
 
   TGocciaInterpreterExecutor = class(TGocciaExecutor)
   private
@@ -136,8 +133,9 @@ type
     FSourceLines: TStringList;
     FGlobals: TGocciaGlobalBuiltins;
 
-    // Built-in objects
-    FBuiltinConsole: TGocciaConsole;
+    FExtensions: TGocciaEngineExtensionList;
+
+    // Core language built-in objects
     FBuiltinMath: TGocciaMath;
     FBuiltinGlobalObject: TGocciaGlobalObject;
     FBuiltinGlobalArray: TGocciaGlobalArray;
@@ -146,35 +144,22 @@ type
     FBuiltinRegExp: TGocciaGlobalRegExp;
     FBuiltinGlobalString: TGocciaGlobalString;
     FBuiltinGlobals: TGocciaGlobals;
-    FBuiltinCSV: TGocciaCSVBuiltin;
     FBuiltinJSON: TGocciaJSONBuiltin;
-    FBuiltinJSON5: TGocciaJSON5Builtin;
-    FBuiltinTOML: TGocciaTOMLBuiltin;
-    FBuiltinJSONL: TGocciaJSONLBuiltin;
-    FBuiltinTSV: TGocciaTSVBuiltin;
-    FBuiltinYAML: TGocciaYAMLBuiltin;
     FBuiltinSymbol: TGocciaGlobalSymbol;
     FBuiltinSet: TGocciaGlobalSet;
     FBuiltinMap: TGocciaGlobalMap;
     FBuiltinWeakSet: TGocciaGlobalWeakSet;
     FBuiltinWeakMap: TGocciaGlobalWeakMap;
-    FBuiltinPerformance: TGocciaPerformance;
     FBuiltinPromise: TGocciaGlobalPromise;
-    FBuiltinTestAssertions: TGocciaTestAssertions;
-    FBuiltinBenchmark: TGocciaBenchmark;
     FBuiltinTemporal: TGocciaTemporalBuiltin;
     FBuiltinArrayBuffer: TGocciaGlobalArrayBuffer;
     FBuiltinProxy: TGocciaGlobalProxy;
-    FBuiltinFFI: TGocciaGlobalFFI;
     FBuiltinReflect: TGocciaGlobalReflect;
-    FBuiltinTextEncoder: TGocciaGlobalTextEncoder;
-    FBuiltinTextDecoder: TGocciaGlobalTextDecoder;
-    FBuiltinURL: TGocciaGlobalURL;
-    FBuiltinURLSearchParams: TGocciaGlobalURLSearchParams;
-    FBuiltinFetch: TGocciaGlobalFetch;
     FBuiltinDisposableStack: TGocciaBuiltinDisposableStack;
+    FGocciaGlobal: TGocciaObjectValue;
     FRealm: TGocciaRealm;
     FPrevRealm: TGocciaRealm;
+    FObjectConstructor: TGocciaClassValue;
     FFunctionConstructor: TGocciaFunctionConstructorClassValue;
     FTypedArrayIntrinsic: TGocciaClassValue;
     FPreviousExceptionMask: TFPUExceptionMask;
@@ -209,9 +194,9 @@ type
     function GocciaGCMaxBytesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GocciaGCSuggestedMaxBytesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GocciaGCBytesAllocatedGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    procedure WaitForRuntimeIdle;
+    procedure DiscardRuntimePending;
     procedure PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap = nil);
-    procedure ThrowError(const AMessage: string; const ALine,
-      AColumn: Integer);
     function CompileDynamicFunction(const AParamsSources: array of string;
       const ABodySource: string): TGocciaFunctionBase;
   public
@@ -229,6 +214,8 @@ type
 
     function Execute: TGocciaScriptResult;
     function ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;
+    procedure ThrowError(const AMessage: string; const ALine,
+      AColumn: Integer);
 
     procedure AddAlias(const APattern, AReplacement: string);
     procedure SetAllowedFetchHosts(const AHosts: TStrings);
@@ -241,6 +228,11 @@ type
     procedure InjectGlobalsFromModule(const APath: string);
     procedure ClearTransientCaches;
     procedure RegisterGlobalModule(const AName: string; const AModule: TGocciaModule);
+    procedure RefreshGlobalThis;
+    function AddExtension(
+      const AExtension: TGocciaEngineExtension): TGocciaEngineExtension;
+    function FindExtension(
+      const AClass: TGocciaEngineExtensionClass): TGocciaEngineExtension;
 
     class function RunScript(const ASource: string; const AFileName: string; const AGlobals: TGocciaGlobalBuiltins): TGocciaScriptResult; overload;
     class function RunScript(const ASource: string; const AFileName: string = 'inline.goccia'): TGocciaScriptResult; overload;
@@ -259,40 +251,30 @@ type
     property VarEnabled: Boolean read GetVarEnabled write SetVarEnabled;
     property FunctionEnabled: Boolean read GetFunctionEnabled write SetFunctionEnabled;
     property FunctionConstructor: TGocciaFunctionConstructorClassValue read FFunctionConstructor;
+    property ObjectConstructor: TGocciaClassValue read FObjectConstructor;
+    property GlobalBuiltins: TGocciaGlobalBuiltins read FGlobals;
     property Preprocessors: TGocciaPreprocessors read FPreprocessors write SetPreprocessors;
     property Compatibility: TGocciaCompatibilityFlags read FCompatibility write SetCompatibility;
     property SourceType: TGocciaSourceType read FSourceType write FSourceType;
     property StrictTypes: Boolean read FStrictTypes write SetStrictTypes;
     property Shims: TStringList read FShims;
-    property BuiltinConsole: TGocciaConsole read FBuiltinConsole;
     property BuiltinMath: TGocciaMath read FBuiltinMath;
     property BuiltinGlobalObject: TGocciaGlobalObject read FBuiltinGlobalObject;
     property BuiltinGlobalArray: TGocciaGlobalArray read FBuiltinGlobalArray;
     property BuiltinGlobalNumber: TGocciaGlobalNumber read FBuiltinGlobalNumber;
     property BuiltinGlobals: TGocciaGlobals read FBuiltinGlobals;
-    property BuiltinCSV: TGocciaCSVBuiltin read FBuiltinCSV;
     property BuiltinJSON: TGocciaJSONBuiltin read FBuiltinJSON;
-    property BuiltinJSON5: TGocciaJSON5Builtin read FBuiltinJSON5;
-    property BuiltinTOML: TGocciaTOMLBuiltin read FBuiltinTOML;
-    property BuiltinJSONL: TGocciaJSONLBuiltin read FBuiltinJSONL;
-    property BuiltinTSV: TGocciaTSVBuiltin read FBuiltinTSV;
-    property BuiltinYAML: TGocciaYAMLBuiltin read FBuiltinYAML;
     property BuiltinSymbol: TGocciaGlobalSymbol read FBuiltinSymbol;
     property BuiltinSet: TGocciaGlobalSet read FBuiltinSet;
     property BuiltinMap: TGocciaGlobalMap read FBuiltinMap;
     property BuiltinWeakSet: TGocciaGlobalWeakSet read FBuiltinWeakSet;
     property BuiltinWeakMap: TGocciaGlobalWeakMap read FBuiltinWeakMap;
-    property BuiltinPerformance: TGocciaPerformance read FBuiltinPerformance;
     property BuiltinPromise: TGocciaGlobalPromise read FBuiltinPromise;
-    property BuiltinTestAssertions: TGocciaTestAssertions read FBuiltinTestAssertions;
-    property BuiltinBenchmark: TGocciaBenchmark read FBuiltinBenchmark;
     property BuiltinTemporal: TGocciaTemporalBuiltin read FBuiltinTemporal;
     property BuiltinArrayBuffer: TGocciaGlobalArrayBuffer read FBuiltinArrayBuffer;
     property BuiltinProxy: TGocciaGlobalProxy read FBuiltinProxy;
-    property BuiltinFFI: TGocciaGlobalFFI read FBuiltinFFI;
     property BuiltinReflect: TGocciaGlobalReflect read FBuiltinReflect;
-    property BuiltinURL: TGocciaGlobalURL read FBuiltinURL;
-    property BuiltinURLSearchParams: TGocciaGlobalURLSearchParams read FBuiltinURLSearchParams;
+    property GocciaGlobal: TGocciaObjectValue read FGocciaGlobal;
     property SuppressWarnings: Boolean read FSuppressWarnings write FSuppressWarnings;
     property LastTiming: TGocciaScriptResult read FLastTiming;
     // Source map from the most recent JSX transform, if any.
@@ -304,7 +286,6 @@ type
 implementation
 
 uses
-  Generics.Collections,
   Math,
   SysUtils,
   TypInfo,
@@ -322,7 +303,6 @@ uses
   Goccia.Engine.Backend,
   Goccia.Error,
   Goccia.Evaluator,
-  Goccia.FetchManager,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
   Goccia.JSX.Transformer,
@@ -340,25 +320,50 @@ uses
   Goccia.Values.BooleanObjectValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionValue,
-  Goccia.Values.HeadersValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.NumberObjectValue,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.ResponseValue,
   Goccia.Values.SetValue,
   Goccia.Values.SharedArrayBufferValue,
   Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
-  Goccia.Values.TextDecoderValue,
-  Goccia.Values.TextEncoderValue,
   Goccia.Values.Uint8ArrayEncoding,
-  Goccia.Values.URLSearchParamsValue,
-  Goccia.Values.URLValue,
   Goccia.Values.WeakMapValue,
   Goccia.Values.WeakSetValue,
   Goccia.Version;
+
+{ TGocciaEngineExtension }
+
+procedure TGocciaEngineExtension.WaitForIdle;
+begin
+end;
+
+procedure TGocciaEngineExtension.DiscardPending;
+begin
+end;
+
+procedure TGocciaEngineExtension.SetAllowedFetchHosts(const AHosts: TStrings);
+begin
+end;
+
+function TGocciaEngineExtension.InjectGlobalsFromJSON5(
+  const AJSON5String: UTF8String): Boolean;
+begin
+  Result := False;
+end;
+
+function TGocciaEngineExtension.InjectGlobalsFromTOML(
+  const ATOMLString: UTF8String): Boolean;
+begin
+  Result := False;
+end;
+
+function TGocciaEngineExtension.InjectGlobalsFromYAML(
+  const AYamlString: string): Boolean;
+begin
+  Result := False;
+end;
 
 { TGocciaInterpreterExecutor }
 
@@ -479,94 +484,33 @@ end;
 procedure TGocciaEngine.InjectGlobalsFromJSON5(
   const AJSON5String: UTF8String);
 var
-  Key: string;
-  Obj: TGocciaObjectValue;
-  ParsedValue: TGocciaValue;
-  Parser: TGocciaJSON5Parser;
+  I: Integer;
 begin
-  Parser := TGocciaJSON5Parser.Create;
-  try
-    ParsedValue := Parser.Parse(AJSON5String);
-  finally
-    Parser.Free;
-  end;
-
-  if not (ParsedValue is TGocciaObjectValue) then
-    ThrowError('Globals JSON5 must be a top-level object.', 0, 0);
-
-  TGarbageCollector.Instance.AddTempRoot(ParsedValue);
-  try
-    Obj := TGocciaObjectValue(ParsedValue);
-    for Key in Obj.GetOwnPropertyKeys do
-      RegisterGlobal(Key, Obj.GetProperty(Key));
-  finally
-    TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
-  end;
+  for I := 0 to FExtensions.Count - 1 do
+    if FExtensions[I].InjectGlobalsFromJSON5(AJSON5String) then
+      Exit;
+  ThrowError('JSON5 globals require a runtime extension.', 0, 0);
 end;
 
 procedure TGocciaEngine.InjectGlobalsFromTOML(
   const ATOMLString: UTF8String);
 var
-  Key: string;
-  Obj: TGocciaObjectValue;
-  ParsedValue: TGocciaValue;
-  Parser: TGocciaTOMLParser;
+  I: Integer;
 begin
-  Parser := TGocciaTOMLParser.Create;
-  try
-    ParsedValue := Parser.Parse(ATOMLString);
-  finally
-    Parser.Free;
-  end;
-
-  if not (ParsedValue is TGocciaObjectValue) then
-    ThrowError('Globals TOML must be a top-level object.', 0, 0);
-
-  TGarbageCollector.Instance.AddTempRoot(ParsedValue);
-  try
-    Obj := TGocciaObjectValue(ParsedValue);
-    for Key in Obj.GetOwnPropertyKeys do
-      RegisterGlobal(Key, Obj.GetProperty(Key));
-  finally
-    TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
-  end;
+  for I := 0 to FExtensions.Count - 1 do
+    if FExtensions[I].InjectGlobalsFromTOML(ATOMLString) then
+      Exit;
+  ThrowError('TOML globals require a runtime extension.', 0, 0);
 end;
 
 procedure TGocciaEngine.InjectGlobalsFromYAML(const AYamlString: string);
 var
-  Documents: TGocciaArrayValue;
-  ParsedDocument: TGocciaValue;
-  Parser: TGocciaYAMLParser;
-  Obj: TGocciaObjectValue;
-  Key: string;
+  I: Integer;
 begin
-  Parser := TGocciaYAMLParser.Create;
-  try
-    Documents := Parser.ParseDocuments(AYamlString);
-  finally
-    Parser.Free;
-  end;
-
-  try
-    if Documents.Elements.Count <> 1 then
-      ThrowError(
-        'Globals YAML must contain exactly one top-level document.', 0, 0);
-
-    ParsedDocument := Documents.Elements[0];
-    if not (ParsedDocument is TGocciaObjectValue) then
-      ThrowError('Globals YAML must be a top-level object.', 0, 0);
-
-    TGarbageCollector.Instance.AddTempRoot(ParsedDocument);
-    Obj := TGocciaObjectValue(ParsedDocument);
-    try
-      for Key in Obj.GetOwnPropertyKeys do
-        RegisterGlobal(Key, Obj.GetProperty(Key));
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(ParsedDocument);
-    end;
-  finally
-    Documents.Free;
-  end;
+  for I := 0 to FExtensions.Count - 1 do
+    if FExtensions[I].InjectGlobalsFromYAML(AYamlString) then
+      Exit;
+  ThrowError('YAML globals require a runtime extension.', 0, 0);
 end;
 
 procedure TGocciaEngine.InjectGlobalsFromModule(const APath: string);
@@ -583,6 +527,24 @@ procedure TGocciaEngine.ClearTransientCaches;
 begin
   if Assigned(FExecutor) then
     FExecutor.ClearTransientCaches;
+end;
+
+function TGocciaEngine.AddExtension(
+  const AExtension: TGocciaEngineExtension): TGocciaEngineExtension;
+begin
+  FExtensions.Add(AExtension);
+  Result := AExtension;
+end;
+
+function TGocciaEngine.FindExtension(
+  const AClass: TGocciaEngineExtensionClass): TGocciaEngineExtension;
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+    if FExtensions[I].InheritsFrom(AClass) then
+      Exit(FExtensions[I]);
+  Result := nil;
 end;
 
 constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins);
@@ -657,7 +619,6 @@ begin
   TGarbageCollector.Initialize;
   TGocciaCallStack.Initialize;
   TGocciaMicrotaskQueue.Initialize;
-  TGocciaFetchManager.Initialize;
 
   // Per-realm intrinsic state (Array.prototype, ...) lives on FRealm.  Must
   // be assigned before any value is constructed so lazy prototype init in
@@ -674,6 +635,7 @@ begin
   FSourceType := DefaultSourceType;
   FStrictTypes := False;
   FShims := TStringList.Create;
+  FExtensions := TGocciaEngineExtensionList.Create(True);
 
   FInterpreter := TGocciaInterpreter.Create(AFileName, ASourceLines,
     FModuleLoader);
@@ -702,46 +664,29 @@ end;
 destructor TGocciaEngine.Destroy;
 begin
   try
-    TGocciaFetchManager.Shutdown;
-
     if Assigned(TGarbageCollector.Instance) and Assigned(FInterpreter) then
       TGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);
 
-    FBuiltinConsole.Free;
+    FExtensions.Free;
     FBuiltinMath.Free;
     FBuiltinGlobalObject.Free;
     FBuiltinGlobalArray.Free;
     FBuiltinGlobalNumber.Free;
     FBuiltinGlobalBigInt.Free;
     FBuiltinRegExp.Free;
-  FBuiltinGlobalString.Free;
-  FBuiltinGlobals.Free;
-    FBuiltinCSV.Free;
-  FBuiltinJSON.Free;
-  FBuiltinJSON5.Free;
-  FBuiltinTOML.Free;
-    FBuiltinJSONL.Free;
-    FBuiltinTSV.Free;
-    FBuiltinYAML.Free;
+    FBuiltinGlobalString.Free;
+    FBuiltinGlobals.Free;
+    FBuiltinJSON.Free;
     FBuiltinSymbol.Free;
     FBuiltinSet.Free;
     FBuiltinMap.Free;
     FBuiltinWeakSet.Free;
     FBuiltinWeakMap.Free;
-    FBuiltinPerformance.Free;
     FBuiltinPromise.Free;
-    FBuiltinTestAssertions.Free;
-    FBuiltinBenchmark.Free;
     FBuiltinTemporal.Free;
     FBuiltinArrayBuffer.Free;
     FBuiltinProxy.Free;
-    FBuiltinFFI.Free;
     FBuiltinReflect.Free;
-    FBuiltinTextEncoder.Free;
-    FBuiltinTextDecoder.Free;
-    FBuiltinURL.Free;
-    FBuiltinURLSearchParams.Free;
-    FBuiltinFetch.Free;
     FBuiltinDisposableStack.Free;
     ClearImportMetaCache;
     FLastSourceMap.Free;
@@ -791,49 +736,23 @@ var
 begin
   Scope := FInterpreter.GlobalScope;
 
-  // Standard built-ins: always registered.
-  FBuiltinConsole := TGocciaConsole.Create('console', Scope, ThrowError);
+  // Core language built-ins: always registered.
   FBuiltinMath := TGocciaMath.Create('Math', Scope, ThrowError);
   FBuiltinGlobalObject := TGocciaGlobalObject.Create(CONSTRUCTOR_OBJECT, Scope, ThrowError);
   FBuiltinGlobalArray := TGocciaGlobalArray.Create(CONSTRUCTOR_ARRAY, Scope, ThrowError);
   FBuiltinGlobalNumber := TGocciaGlobalNumber.Create(CONSTRUCTOR_NUMBER, Scope, ThrowError);
   FBuiltinGlobalBigInt := TGocciaGlobalBigInt.Create(CONSTRUCTOR_BIGINT, Scope, ThrowError);
-  FBuiltinCSV := TGocciaCSVBuiltin.Create('CSV', Scope, ThrowError);
   FBuiltinJSON := TGocciaJSONBuiltin.Create('JSON', Scope, ThrowError);
-  FBuiltinJSON5 := TGocciaJSON5Builtin.Create('JSON5', Scope, ThrowError);
-  FBuiltinJSONL := TGocciaJSONLBuiltin.Create('JSONL', Scope, ThrowError);
-  FBuiltinTOML := TGocciaTOMLBuiltin.Create('TOML', Scope, ThrowError);
-  FBuiltinTSV := TGocciaTSVBuiltin.Create('TSV', Scope, ThrowError);
-  FBuiltinYAML := TGocciaYAMLBuiltin.Create('YAML', Scope, ThrowError);
   FBuiltinSymbol := TGocciaGlobalSymbol.Create(CONSTRUCTOR_SYMBOL, Scope, ThrowError);
   FBuiltinSet := TGocciaGlobalSet.Create(CONSTRUCTOR_SET, Scope, ThrowError);
   FBuiltinMap := TGocciaGlobalMap.Create(CONSTRUCTOR_MAP, Scope, ThrowError);
   FBuiltinWeakSet := TGocciaGlobalWeakSet.Create(CONSTRUCTOR_WEAK_SET, Scope, ThrowError);
   FBuiltinWeakMap := TGocciaGlobalWeakMap.Create(CONSTRUCTOR_WEAK_MAP, Scope, ThrowError);
-  FBuiltinPerformance := TGocciaPerformance.Create('performance', Scope, ThrowError);
   FBuiltinPromise := TGocciaGlobalPromise.Create(CONSTRUCTOR_PROMISE, Scope, ThrowError);
   FBuiltinTemporal := TGocciaTemporalBuiltin.Create('Temporal', Scope, ThrowError);
   FBuiltinArrayBuffer := TGocciaGlobalArrayBuffer.Create(CONSTRUCTOR_ARRAY_BUFFER, Scope, ThrowError);
   FBuiltinProxy := TGocciaGlobalProxy.Create(Scope);
   FBuiltinReflect := TGocciaGlobalReflect.Create('Reflect', Scope, ThrowError);
-  FBuiltinTextEncoder := TGocciaGlobalTextEncoder.Create(
-    CONSTRUCTOR_TEXT_ENCODER, Scope, ThrowError);
-  FBuiltinTextDecoder := TGocciaGlobalTextDecoder.Create(
-    CONSTRUCTOR_TEXT_DECODER, Scope, ThrowError);
-  FBuiltinURL := TGocciaGlobalURL.Create(CONSTRUCTOR_URL, Scope, ThrowError);
-  FBuiltinURLSearchParams := TGocciaGlobalURLSearchParams.Create(
-    CONSTRUCTOR_URL_SEARCH_PARAMS, Scope, ThrowError);
-  FBuiltinFetch := TGocciaGlobalFetch.Create('Fetch', Scope, ThrowError);
-
-  // Special-purpose built-ins: flag-gated.
-  if ggTestAssertions in FGlobals then
-    FBuiltinTestAssertions := TGocciaTestAssertions.Create('TestAssertions', Scope, ThrowError);
-  if ggBenchmark in FGlobals then
-    FBuiltinBenchmark := TGocciaBenchmark.Create('Benchmark', Scope, ThrowError);
-  if ggFFI in FGlobals then
-    FBuiltinFFI := TGocciaGlobalFFI.Create(CONSTRUCTOR_FFI, Scope, ThrowError);
-
-  // Always-registered built-ins
   FBuiltinGlobalString := TGocciaGlobalString.Create(CONSTRUCTOR_STRING, Scope, ThrowError);
   FBuiltinGlobals := TGocciaGlobals.Create('Globals', Scope, ThrowError);
   FBuiltinDisposableStack := TGocciaBuiltinDisposableStack.Create('DisposableStack', Scope, ThrowError);
@@ -894,36 +813,6 @@ begin
   TGocciaWeakSetValue.ExposePrototype(AConstructor);
 end;
 
-procedure ExposeTextEncoderPrototype(const AConstructor: TGocciaValue);
-begin
-  TGocciaTextEncoderValue.ExposePrototype(AConstructor);
-end;
-
-procedure ExposeTextDecoderPrototype(const AConstructor: TGocciaValue);
-begin
-  TGocciaTextDecoderValue.ExposePrototype(AConstructor);
-end;
-
-procedure ExposeURLPrototype(const AConstructor: TGocciaValue);
-begin
-  TGocciaURLValue.ExposePrototype(AConstructor);
-end;
-
-procedure ExposeURLSearchParamsPrototype(const AConstructor: TGocciaValue);
-begin
-  TGocciaURLSearchParamsValue.ExposePrototype(AConstructor);
-end;
-
-procedure ExposeHeadersPrototype(const AConstructor: TGocciaValue);
-begin
-  TGocciaHeadersValue.ExposePrototype(AConstructor);
-end;
-
-procedure ExposeResponsePrototype(const AConstructor: TGocciaValue);
-begin
-  TGocciaResponseValue.ExposePrototype(AConstructor);
-end;
-
 procedure TGocciaEngine.RegisterBuiltinConstructors;
 var
   Key: string;
@@ -939,11 +828,6 @@ var
   StringConstructor: TGocciaStringClassValue;
   NumberConstructor: TGocciaNumberClassValue;
   BooleanConstructor: TGocciaBooleanClassValue;
-  PerformanceConstructor: TGocciaNativeFunctionValue;
-  URLConstructor: TGocciaURLClassValue;
-  URLSearchParamsConstructor: TGocciaURLSearchParamsClassValue;
-  TextEncoderConstructor, TextDecoderConstructor: TGocciaClassValue;
-  HeadersConstructor, ResponseConstructor: TGocciaClassValue;
   TypeDef: TGocciaTypeDefinition;
 begin
   TGocciaObjectValue.InitializeSharedPrototype;
@@ -956,6 +840,7 @@ begin
   TypeDef.PrototypeParent := nil;
   TypeDef.AddSpeciesGetter := False;
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, ObjectConstructor);
+  FObjectConstructor := ObjectConstructor;
 
   TypeDef.ConstructorName := CONSTRUCTOR_ARRAY;
   TypeDef.Kind := gtdkNativeInstanceType;
@@ -1011,72 +896,6 @@ begin
   TypeDef.AddSpeciesGetter := False;
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   WeakSetConstructor := TGocciaWeakSetClassValue(GenericConstructor);
-
-  TypeDef.ConstructorName := CONSTRUCTOR_TEXT_ENCODER;
-  TypeDef.Kind := gtdkNativeInstanceType;
-  TypeDef.ClassValueClass := TGocciaTextEncoderClassValue;
-  TypeDef.ExposePrototype := @ExposeTextEncoderPrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := nil;
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  TextEncoderConstructor := GenericConstructor;
-
-  TypeDef.ConstructorName := CONSTRUCTOR_TEXT_DECODER;
-  TypeDef.Kind := gtdkNativeInstanceType;
-  TypeDef.ClassValueClass := TGocciaTextDecoderClassValue;
-  TypeDef.ExposePrototype := @ExposeTextDecoderPrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := nil;
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  TextDecoderConstructor := GenericConstructor;
-
-  TypeDef.ConstructorName := CONSTRUCTOR_URL;
-  TypeDef.Kind := gtdkCollectionLikeNativeType;
-  TypeDef.ClassValueClass := TGocciaURLClassValue;
-  TypeDef.ExposePrototype := @ExposeURLPrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinURL);
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  URLConstructor := TGocciaURLClassValue(GenericConstructor);
-
-  TypeDef.ConstructorName := CONSTRUCTOR_URL_SEARCH_PARAMS;
-  TypeDef.Kind := gtdkCollectionLikeNativeType;
-  TypeDef.ClassValueClass := TGocciaURLSearchParamsClassValue;
-  TypeDef.ExposePrototype := @ExposeURLSearchParamsPrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinURLSearchParams);
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  URLSearchParamsConstructor := TGocciaURLSearchParamsClassValue(GenericConstructor);
-
-  TypeDef.ConstructorName := CONSTRUCTOR_HEADERS;
-  TypeDef.Kind := gtdkNativeInstanceType;
-  TypeDef.ClassValueClass := TGocciaHeadersClassValue;
-  TypeDef.ExposePrototype := @ExposeHeadersPrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := nil;
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  HeadersConstructor := GenericConstructor;
-
-  TypeDef.ConstructorName := CONSTRUCTOR_RESPONSE;
-  TypeDef.Kind := gtdkNativeInstanceType;
-  TypeDef.ClassValueClass := TGocciaResponseClassValue;
-  TypeDef.ExposePrototype := @ExposeResponsePrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := nil;
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  ResponseConstructor := GenericConstructor;
 
   ArrayBufferConstructor := TGocciaArrayBufferClassValue.Create(CONSTRUCTOR_ARRAY_BUFFER, nil);
   TGocciaArrayBufferValue.ExposePrototype(ArrayBufferConstructor);
@@ -1183,17 +1002,8 @@ begin
   TGocciaClassValue.PatchDefaultPrototype(StringConstructor);
   TGocciaClassValue.PatchDefaultPrototype(NumberConstructor);
   TGocciaClassValue.PatchDefaultPrototype(BooleanConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(TextEncoderConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(TextDecoderConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(URLConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(URLSearchParamsConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(HeadersConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(ResponseConstructor);
   TGocciaClassValue.PatchDefaultPrototype(FunctionConstructor);
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);
-
-  PerformanceConstructor := TGocciaPerformance.CreateInterfaceObject;
-  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_PERFORMANCE, PerformanceConstructor, dtConst);
 
   // ES2026 §20.4.3: Symbol.prototype's [[Prototype]] is %Object.prototype%
   if Assigned(TGocciaSymbolValue.SharedPrototype) then
@@ -1260,7 +1070,11 @@ var
   Flags: TPropertyFlags;
 begin
   Scope := FInterpreter.GlobalScope;
-  GlobalThisObj := TGocciaObjectValue.Create;
+  if Scope.ContainsOwnLexicalBinding('globalThis') and
+     (Scope.GetValue('globalThis') is TGocciaObjectValue) then
+    GlobalThisObj := TGocciaObjectValue(Scope.GetValue('globalThis'))
+  else
+    GlobalThisObj := TGocciaObjectValue.Create;
 
   for Name in Scope.GetOwnBindingNames do
   begin
@@ -1278,12 +1092,20 @@ begin
 
   GlobalThisObj.DefineProperty('globalThis',
     TGocciaPropertyDescriptorData.Create(GlobalThisObj, [pfWritable, pfConfigurable]));
-  Scope.DefineLexicalBinding('globalThis', GlobalThisObj, dtConst);
+  if Scope.ContainsOwnLexicalBinding('globalThis') then
+    Scope.ForceUpdateBinding('globalThis', GlobalThisObj)
+  else
+    Scope.DefineLexicalBinding('globalThis', GlobalThisObj, dtConst);
 
   // ES2026 §9.1.2.5 NewGlobalEnvironment: a global Environment Record's
   // [[GlobalThisValue]] is the global object. Top-level `this` resolves
   // here via §9.4.3 ResolveThisBinding -> GlobalEnvironmentRecord.GetThisBinding.
   Scope.ThisValue := GlobalThisObj;
+end;
+
+procedure TGocciaEngine.RefreshGlobalThis;
+begin
+  RegisterGlobalThis;
 end;
 
 procedure TGocciaEngine.RegisterGocciaScriptGlobal;
@@ -1323,7 +1145,6 @@ begin
   GocciaObj.AssignProperty('version', TGocciaStringLiteralValue.Create(GetVersion));
   GocciaObj.AssignProperty('commit', TGocciaStringLiteralValue.Create(GetCommit));
   GocciaObj.AssignProperty('builtIns', BuiltInsArray);
-  GocciaObj.AssignProperty(SEMVER_NAMESPACE_PROPERTY, CreateSemverNamespace);
   GocciaObj.AssignProperty('build', BuildObj);
   GocciaObj.DefineProperty('spec', TGocciaPropertyDescriptorData.Create(
     CreateSpecObject, [pfEnumerable]));
@@ -1349,7 +1170,8 @@ begin
       []));
   GocciaObj.AssignProperty('gc', GCFunc);
 
-  FInterpreter.GlobalScope.DefineLexicalBinding('Goccia', GocciaObj, dtConst);
+  FGocciaGlobal := GocciaObj;
+  FInterpreter.GlobalScope.DefineLexicalBinding('Goccia', FGocciaGlobal, dtConst);
 end;
 
 function TGocciaEngine.GetResolver: TGocciaModuleResolver;
@@ -1364,22 +1186,26 @@ end;
 
 procedure TGocciaEngine.SetAllowedFetchHosts(const AHosts: TStrings);
 var
-  EmptyHosts: TStringList;
+  I: Integer;
 begin
-  if not Assigned(FBuiltinFetch) then
-    Exit;
+  for I := 0 to FExtensions.Count - 1 do
+    FExtensions[I].SetAllowedFetchHosts(AHosts);
+end;
 
-  if Assigned(AHosts) then
-    FBuiltinFetch.SetAllowedHosts(AHosts)
-  else
-  begin
-    EmptyHosts := TStringList.Create;
-    try
-      FBuiltinFetch.SetAllowedHosts(EmptyHosts);
-    finally
-      EmptyHosts.Free;
-    end;
-  end;
+procedure TGocciaEngine.WaitForRuntimeIdle;
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+    FExtensions[I].WaitForIdle;
+end;
+
+procedure TGocciaEngine.DiscardRuntimePending;
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+    FExtensions[I].DiscardPending;
 end;
 
 procedure TGocciaEngine.InjectGlobal(const AKey: string; const AValue: TGocciaValue);
@@ -1471,7 +1297,7 @@ begin
               ExecStart := GetNanoseconds;
               FLastTiming.Result :=
                 FExecutor.EvaluateModuleBody(ProgramNode, ModuleContext);
-              WaitForFetchIdle;
+              WaitForRuntimeIdle;
               ExecEnd := GetNanoseconds;
               FLastTiming.CompileTimeNanoseconds := 0;
               FLastTiming.ExecuteTimeNanoseconds := ExecEnd - ExecStart;
@@ -1481,7 +1307,7 @@ begin
               CheckTopLevelRedeclarations(ProgramNode,
                 FInterpreter.GlobalScope, FSourcePath);
               FLastTiming.Result := FExecutor.ExecuteProgram(ProgramNode);
-              WaitForFetchIdle;
+              WaitForRuntimeIdle;
               ExecEnd := GetNanoseconds;
               FLastTiming.CompileTimeNanoseconds :=
                 FExecutor.CompileTimeNanoseconds;
@@ -1492,7 +1318,7 @@ begin
           finally
             if Assigned(TGocciaMicrotaskQueue.Instance) then
               TGocciaMicrotaskQueue.Instance.ClearQueue;
-            DiscardFetchCompletions;
+            DiscardRuntimePending;
             ProgramNode.Free;
           end;
         finally
@@ -1530,11 +1356,11 @@ function TGocciaEngine.ExecuteProgram(const AProgram: TGocciaProgram): TGocciaVa
 begin
   try
     Result := FExecutor.ExecuteProgram(AProgram);
-    WaitForFetchIdle;
+    WaitForRuntimeIdle;
   finally
     if Assigned(TGocciaMicrotaskQueue.Instance) then
       TGocciaMicrotaskQueue.Instance.ClearQueue;
-    DiscardFetchCompletions;
+    DiscardRuntimePending;
   end;
 end;
 

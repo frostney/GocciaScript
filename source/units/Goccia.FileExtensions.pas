@@ -39,6 +39,10 @@ const
     EXT_TXT, EXT_MD
   );
 
+  EngineModuleImportExtensions: array[0..5] of string = (
+    EXT_JS, EXT_JSX, EXT_TS, EXT_TSX, EXT_MJS, EXT_JSON
+  );
+
 function IsScriptExtension(const AExtension: string): Boolean;
 function IsCSVExtension(const AExtension: string): Boolean;
 function IsJSON5Extension(const AExtension: string): Boolean;

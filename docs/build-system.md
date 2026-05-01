@@ -25,6 +25,7 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 
 ```bash
 ./build.pas loader              # Dev build (default)
+./build.pas loaderbare          # Dev build of the bare script executor
 ./build.pas --dev loader        # Explicit dev build
 ./build.pas --prod loader       # Production build
 ./build.pas --prod              # Production build of all components
@@ -38,13 +39,14 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 ./build.pas --prod    # Production build of all components
 ```
 
-Runs a clean (removes stale `.ppu`, `.o`, `.res` from `build/compiled/`), then builds all components in order: tests, loader, testrunner, benchmarkrunner, bundler, repl.
+Runs a clean (removes stale `.ppu`, `.o`, `.res` from `build/compiled/`), then builds all components in order: tests, loader, loaderbare, testrunner, benchmarkrunner, bundler, repl.
 
 ### Build Specific Components
 
 ```bash
 ./build.pas repl             # Interactive REPL
 ./build.pas loader           # Script file executor
+./build.pas loaderbare       # Bare script executor (core engine only)
 ./build.pas testrunner       # JavaScript test runner
 ./build.pas benchmarkrunner  # Performance benchmark runner
 ./build.pas bundler          # Bytecode bundler (compile to .gbc)
@@ -345,6 +347,7 @@ All compiled binaries go to the `build/` directory:
 |--------|--------|-------------|
 | `build/GocciaREPL` | `source/app/GocciaREPL.dpr` | Interactive read-eval-print loop |
 | `build/GocciaScriptLoader` | `source/app/GocciaScriptLoader.dpr` | Execute `.js` files or stdin input, with optional JSON output |
+| `build/GocciaScriptLoaderBare` | `source/app/GocciaScriptLoaderBare.dpr` | Execute scripts with the core engine only; no default runtime globals |
 | `build/GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | JavaScript test runner |
 | `build/GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Performance benchmark runner for files or stdin input |
 | `build/GocciaBundler` | `source/app/GocciaBundler.dpr` | Standalone bytecode compiler (source to `.gbc`) |
@@ -440,6 +443,7 @@ GocciaScript/
 │   ├── app/              # CLI applications
 │   │   ├── GocciaREPL.dpr              # REPL program source
 │   │   ├── GocciaScriptLoader.dpr      # Script loader program source
+│   │   ├── GocciaScriptLoaderBare.dpr  # Core-engine-only script loader
 │   │   ├── GocciaTestRunner.dpr        # Test runner program source
 │   │   ├── GocciaBenchmarkRunner.dpr   # Benchmark runner program source
 │   │   ├── GocciaBundler.dpr     # Standalone bytecode compiler

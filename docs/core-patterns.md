@@ -360,7 +360,7 @@ Built-ins are registered via a `TGocciaGlobalBuiltins` set of flags:
 TGocciaGlobalBuiltin = (ggTestAssertions, ggBenchmark, ggFFI);
 ```
 
-Standard built-ins (console, Math, Array, Number, Promise, JSON, Symbol, Set, Map, Temporal, ArrayBuffer, etc.) are always registered -- no flag-gating required. The enum now contains only special-purpose built-ins that are opt-in.
+Core language built-ins (Math, Array, Number, Promise, JSON, Symbol, Set, Map, Temporal, ArrayBuffer, etc.) are always registered by `TGocciaEngine` -- no flag-gating required. Host/runtime globals such as console, fetch, URL, JSON5, TOML, YAML, CSV, and TSV are attached by runtime extensions such as `TGocciaRuntime`. The enum now contains only special-purpose built-ins that are opt-in.
 
 **Why configurable for special-purpose built-ins?**
 

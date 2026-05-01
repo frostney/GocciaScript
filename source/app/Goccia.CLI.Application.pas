@@ -37,7 +37,6 @@ type
     procedure BuildAllOptions;
     procedure InitializeSingletons;
     procedure ShutdownSingletons;
-    procedure HandleConsoleLog(const AMethod, ALine: string);
     procedure OpenLogFile;
     procedure CloseLogFile;
   protected
@@ -56,6 +55,9 @@ type
     function AddRepeatable(const AName, AHelp: string): TGocciaRepeatableOption;
     function Add(const AOption: TGocciaOptionBase): TGocciaOptionBase;
     function EffectiveBuiltins: TGocciaGlobalBuiltins;
+    procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
+      const AFileConfig: TConfigEntryArray); virtual;
+    procedure HandleConsoleLog(const AMethod, ALine: string);
     { Discover the nearest goccia.json/json5/toml for a file and
       return its parsed entries.  Returns an empty array when no
       config is found.  Thread-safe: does not mutate shared state. }
@@ -97,6 +99,7 @@ type
     property EngineOptions: TGocciaEngineOptions read FEngineOptions;
     property CoverageOptions: TGocciaCoverageOptions read FCoverageOptions;
     property ProfilerOptions: TGocciaProfilerOptions read FProfilerOptions;
+    property LogFileOpen: Boolean read FLogFileOpen;
   public
     constructor Create(const AName: string); override;
     destructor Destroy; override;
@@ -111,7 +114,6 @@ uses
   CLI.Parser,
   TextSemantics,
 
-  Goccia.Builtins.Console,
   Goccia.CLI.EngineSetup,
   Goccia.CLI.Help,
   Goccia.Coverage,
@@ -612,6 +614,11 @@ begin
   end;
 end;
 
+procedure TGocciaCLIApplication.ConfigureCreatedEngine(
+  const AEngine: TGocciaEngine; const AFileConfig: TConfigEntryArray);
+begin
+end;
+
 function TGocciaCLIApplication.CreateEngine(const AFileName: string;
   const ASource: TStringList): TGocciaEngine;
 var
@@ -624,10 +631,10 @@ begin
     begin
       ConfigureModuleResolver(Result.Resolver, AFileName,
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
-      ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig);
     end;
-    if FLogFileOpen then
-      Result.BuiltinConsole.LogCallback := HandleConsoleLog;
+    ConfigureCreatedEngine(Result, FileConfig);
+    if Assigned(FEngineOptions) then
+      ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig);
   except
     Result.Free;
     raise;
@@ -647,10 +654,10 @@ begin
     begin
       ConfigureModuleResolver(Result.Resolver, AFileName,
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
-      ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig);
     end;
-    if FLogFileOpen then
-      Result.BuiltinConsole.LogCallback := HandleConsoleLog;
+    ConfigureCreatedEngine(Result, FileConfig);
+    if Assigned(FEngineOptions) then
+      ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig);
   except
     Result.Free;
     raise;

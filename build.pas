@@ -305,6 +305,23 @@ begin
   WriteLn('');
 end;
 
+procedure BuildScriptLoaderBare;
+var
+  Output: string;
+begin
+  WriteLn('');
+  WriteLn('Building GocciaScriptLoaderBare...');
+  if not RunCommand('fpc', FPCArgs('source/app/GocciaScriptLoaderBare.dpr'), Output) then
+  begin
+    WriteLn(Output);
+    WriteLn('GocciaScriptLoaderBare build failed');
+    Halt(1);
+  end;
+  WriteLn(Output);
+  WriteLn('GocciaScriptLoaderBare built successfully');
+  WriteLn('');
+end;
+
 procedure BuildTests;
 var
   AllUnitFiles: TStringList;
@@ -419,6 +436,8 @@ begin
     BuildREPL
   else if ATrigger = 'loader' then
     BuildScriptLoader
+  else if ATrigger = 'loaderbare' then
+    BuildScriptLoaderBare
   else if ATrigger = 'tests' then
     BuildTests
   else if ATrigger = 'testrunner' then
@@ -465,6 +484,7 @@ begin
     BuildTriggers.Add('clean');
     BuildTriggers.Add('tests');
     BuildTriggers.Add('loader');
+    BuildTriggers.Add('loaderbare');
     BuildTriggers.Add('testrunner');
     BuildTriggers.Add('benchmarkrunner');
     BuildTriggers.Add('bundler');

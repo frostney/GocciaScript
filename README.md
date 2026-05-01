@@ -67,6 +67,7 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 
 # Build specific components
 ./build.pas loader           # Dev build of script executor
+./build.pas loaderbare       # Dev build of core-engine-only script executor
 ./build.pas --prod loader    # Production build of script executor
 ./build.pas repl             # Interactive REPL
 ./build.pas testrunner       # Test runner
@@ -78,6 +79,13 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 ```bash
 ./build.pas loader && ./build/GocciaScriptLoader example.js
 printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader
+```
+
+For a smaller binary surface without the default runtime globals (console, JSON5/TOML/YAML, fetch, SemVer, etc.), build and run `GocciaScriptLoaderBare`:
+
+```bash
+./build.pas loaderbare
+printf "Goccia.version;" | ./build/GocciaScriptLoaderBare
 ```
 
 Script files may start with a Unix shebang line like `#!/usr/bin/env goccia`; GocciaScript ignores that first line during lexing.

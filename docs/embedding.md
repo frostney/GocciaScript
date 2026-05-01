@@ -348,7 +348,7 @@ uses
   Classes,
 
   Goccia.Builtins.Console,
-  Goccia.Engine;
+  Goccia.Runtime;
 
 type
   TMyLogger = class
@@ -364,22 +364,22 @@ begin
 end;
 
 var
-  Engine: TGocciaEngine;
+  Runtime: TGocciaRuntime;
   Source: TStringList;
   Logger: TMyLogger;
 begin
   Logger := TMyLogger.Create;
   Source := TStringList.Create;
   Source.Text := 'console.log("hello"); console.warn("careful");';
-  Engine := TGocciaEngine.Create('app.js', Source, []);
+  Runtime := TGocciaRuntime.Create('app.js', Source, []);
   try
-    Engine.BuiltinConsole.OutputCallback := Logger.OnConsoleOutput;
-    Engine.Execute;
+    Runtime.BuiltinConsole.OutputCallback := Logger.OnConsoleOutput;
+    Runtime.Execute;
     // Output:
     //   [log] hello
     //   [warn] Warning: careful
   finally
-    Engine.Free;
+    Runtime.Free;
     Source.Free;
     Logger.Free;
   end;
@@ -399,19 +399,34 @@ When `OutputCallback` is assigned, it takes priority over both `OutputLines` (th
 `LogCallback` fires on every console call regardless of the `Enabled` flag, independent of the primary output path. This makes it safe for worker threads where `Enabled` is `False` to suppress stdout:
 
 ```pascal
-Engine.BuiltinConsole.LogCallback := MyHandler.OnLog;
-Engine.BuiltinConsole.Enabled := False;  // no stdout, but LogCallback still fires
+Runtime.BuiltinConsole.LogCallback := MyHandler.OnLog;
+Runtime.BuiltinConsole.Enabled := False;  // no stdout, but LogCallback still fires
 ```
 
-The `TGocciaCLIApplication`-based frontends (ScriptLoader, TestRunner, BenchmarkRunner, Bundler) use `LogCallback` internally for `--log=<file>`, which captures console output to a log file in `[method] line` format. The REPL creates `TGocciaEngine` directly and does not wire `LogCallback`, so `--log` is not available there. The TestRunner silences workers via `Enabled := False` (not by replacing JS methods), so `LogCallback` fires on every console call even in parallel mode. File writes are serialized with a critical section so `--log` is thread-safe even with `--jobs=N`.
+The `TGocciaCLIApplication`-based frontends that attach the default runtime (ScriptLoader, TestRunner, BenchmarkRunner, and REPL) use `LogCallback` internally for `--log=<file>`, which captures console output to a log file in `[method] line` format. The TestRunner silences workers via `Enabled := False` (not by replacing JS methods), so `LogCallback` fires on every console call even in parallel mode. File writes are serialized with a critical section so `--log` is thread-safe even with `--jobs=N`.
 
 ## Built-in Registration
 
-The standard built-ins (Console, Math, Object, Array, etc.) are documented in [Built-ins — Registration System](built-ins.md#registration-system). They are always registered unconditionally and are not flag-gated.
+Core language built-ins (Math, Object, Array, JSON, Promise, Temporal, typed arrays, etc.) are registered by `TGocciaEngine`. Runtime globals that are not part of the language core (Console, CSV, JSON5, JSONL, TOML, TSV, YAML, TextEncoder/TextDecoder, URL, fetch, performance, SemVer) are provided by `Goccia.Runtime`. Hosts should use `TGocciaRuntime.Create(...)` for the standard surface or pass a `TGocciaRuntimeGlobals` set to choose a smaller runtime surface.
+
+When you already have an engine, pass it to the runtime constructor:
+
+```pascal
+Engine := TGocciaEngine.Create('app.js', Source, []);
+Runtime := TGocciaRuntime.Create(Engine);
+try
+  Runtime.Execute;
+finally
+  Runtime.Free;
+  Engine.Free;
+end;
+```
+
+Passing an engine does not transfer ownership by default. Use `TGocciaRuntime.Create(Engine, True)` or `TGocciaRuntime.Create(Engine, RuntimeGlobals, True)` when the runtime should free the engine.
 
 ### Special-Purpose Flags
 
-The `TGocciaGlobalBuiltins` set controls three special-purpose built-ins that are off by default:
+The `TGocciaGlobalBuiltins` set controls three special-purpose built-ins that are off by default. The default runtime registers them only when the matching flag is present:
 
 | Flag | Provides | Notes |
 |------|----------|-------|
@@ -863,10 +878,12 @@ For CLI tools, use `TGocciaCLIApplication` instead, which adds argument parsing,
 ## Minimal Embedding Checklist
 
 1. Add `source/units/` and `source/shared/` to your FreePascal unit search path (or use `config.cfg`)
-2. `uses Goccia.Engine, Goccia.Values.Primitives;`
-3. Call `TGocciaEngine.RunScript(...)` or create an instance with `TGocciaEngine.Create(...)`
-4. Choose your built-in set via `TGocciaGlobalBuiltins`
-5. Inject custom globals via `Engine.Interpreter.GlobalScope.DefineLexicalBinding(...)`
-6. Handle exceptions from `Goccia.Error`
-7. Free the engine when done (the GC cleans up all runtime values)
-For host-provided configuration data, `TGocciaEngine` exposes `InjectGlobalsFromJSON(...)`, `InjectGlobalsFromJSON5(...)`, `InjectGlobalsFromTOML(...)`, `InjectGlobalsFromYAML(...)`, and `InjectGlobalsFromModule(...)`. JSON5- and TOML-backed globals use the same top-level-object/table contract as JSON/YAML object globals.
+2. `uses Goccia.Runtime, Goccia.Values.Primitives;`
+3. Create `TGocciaRuntime.Create(...)` for the standard runtime surface
+4. Use `Runtime.Engine` for engine-level options such as ASI, source type, and compatibility flags
+5. Choose your special-purpose built-in set via `TGocciaGlobalBuiltins`
+6. Inject custom globals via `Runtime.Engine.Interpreter.GlobalScope.DefineLexicalBinding(...)`
+7. Handle exceptions from `Goccia.Error`
+8. Free the runtime when done (it owns and frees its engine)
+
+For host-provided configuration data, `Runtime.Engine` exposes `InjectGlobalsFromJSON(...)`, `InjectGlobalsFromJSON5(...)`, `InjectGlobalsFromTOML(...)`, `InjectGlobalsFromYAML(...)`, and `InjectGlobalsFromModule(...)`. Strict JSON is core. JSON5, TOML, and YAML injection require the runtime extension installed by `TGocciaRuntime`; they use the same top-level-object/table contract as JSON object globals. Embedders that intentionally need only the core language can still use `TGocciaEngine` directly.

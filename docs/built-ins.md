@@ -6,16 +6,18 @@
 
 ## Executive Summary
 
-- **Unconditional registration** — Standard built-ins (Console, Math, Object, Array, String, Number, RegExp, JSON, JSON5, JSONL, TOML, YAML, CSV, TSV, Symbol, Set, Map, WeakSet, WeakMap, Promise, Performance, Temporal, ArrayBuffer, SharedArrayBuffer, TypedArrays, Proxy, Reflect, Iterator, TextEncoder, TextDecoder, URL, URLSearchParams, fetch, Headers, Response, DisposableStack, AsyncDisposableStack) are always registered
+- **Core vs runtime registration** — `TGocciaEngine` always registers core language built-ins (Math, Object, Array, String, Number, RegExp, JSON, Symbol, Set, Map, Promise, Temporal, ArrayBuffer, TypedArrays, Proxy, Reflect, Iterator, DisposableStack, etc.); `Goccia.Runtime` provides optional host/runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer)
 - **Flag-gated extras** — Only `ggTestAssertions`, `ggBenchmark`, and `ggFFI` use flag-gating for opt-in registration
 - **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
 - **Always-present globals** — `globalThis` and `Goccia` namespace are registered after all built-ins
 
-GocciaScript provides a set of built-in global objects that mirror JavaScript's standard library. Each built-in is implemented as a Pascal unit and registered unconditionally by the engine. Only test assertions, benchmarks, and FFI use flag-gated registration.
+GocciaScript provides a set of built-in global objects that mirror JavaScript's standard library. Core language built-ins are implemented as Pascal units and registered by the engine. Host/runtime globals live behind runtime extensions so binaries can import only the surface they need. Test assertions, benchmarks, and FFI remain special-purpose opt-ins.
 
 ## Registration System
 
-Standard built-ins (Console, Math, Object, Array, Number, JSON, JSON5, JSONL, TOML, YAML, CSV, TSV, Symbol, Set, Map, WeakSet, WeakMap, Promise, Performance, Temporal, ArrayBuffer, Proxy, Reflect, fetch, Headers, Response) are always registered unconditionally by the engine. There is no flag-gating for these — they are available in every execution context.
+Core language built-ins (Math, Object, Array, Number, JSON, Symbol, Set, Map, WeakSet, WeakMap, Promise, Temporal, ArrayBuffer, Proxy, Reflect, etc.) are always registered unconditionally by the engine.
+
+Runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer) are registered by `TGocciaRuntime`. Frontends such as `GocciaScriptLoader`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, and `GocciaREPL` attach that runtime; `GocciaScriptLoaderBare` does not.
 
 Only three built-ins use flag-gated registration via the `TGocciaGlobalBuiltins` enum:
 

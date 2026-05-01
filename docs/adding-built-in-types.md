@@ -4,9 +4,9 @@
 
 ## Executive Summary
 
-- **10-step recipe** — Value type, built-in registration, class value subclass, engine integration, constants, structuredClone, tests, benchmarks, documentation
+- **10-step recipe** — Value type, built-in registration, class value subclass, engine/runtime integration, constants, structuredClone, tests, benchmarks, documentation
 - **Key patterns** — Shared prototype singleton (GC-pinned), `ThisValue` for method callbacks (not `Self`), `MarkReferences` for GC
-- **Engine integration** — Standard built-ins are always registered; add flag-gating only for special-purpose built-ins (TestAssertions, Benchmark, FFI)
+- **Engine/runtime integration** — Core language built-ins are registered by the engine; host/runtime globals belong in runtime extensions; add `TGocciaGlobalBuiltin` flags only for special-purpose built-ins (TestAssertions, Benchmark, FFI)
 - **Checklist included** — Complete checklist at the end of the document for verification
 
 This guide walks through every step needed to add a new built-in type to GocciaScript. Follow the steps in order; each section references the exact files and patterns involved.
@@ -338,9 +338,11 @@ end;
 
 **In the implementation uses clause**, add `Goccia.Values.YourValue`.
 
-## Step 4: Engine Integration (`Goccia.Engine.pas`)
+## Step 4: Engine Or Runtime Integration
 
-Six changes needed:
+Core language built-ins belong in `Goccia.Engine.pas`. Host/runtime globals that are not part of the language core belong in a runtime extension such as `Goccia.Runtime.pas`.
+
+For a core language built-in, make these changes in the engine:
 
 ### 4a. Interface uses clause
 
@@ -348,13 +350,13 @@ Add `Goccia.Builtins.GlobalYour` (alphabetically sorted).
 
 ### 4b. Enum flag (special-purpose built-ins only)
 
-Standard built-ins are always registered and do not need an enum flag. Add a flag to `TGocciaGlobalBuiltin` only for special-purpose built-ins that should be opt-in:
+Core language built-ins are always registered and do not need an enum flag. Add a flag to `TGocciaGlobalBuiltin` only for special-purpose built-ins that should be opt-in:
 
 ```pascal
 TGocciaGlobalBuiltin = (ggTestAssertions, ggBenchmark, ggFFI);
 ```
 
-Most new built-in types are standard and should skip this step entirely.
+Most new language built-in types should skip this step entirely. Runtime extension membership should be represented with the extension's own configuration type, not `TGocciaGlobalBuiltin`.
 
 ### 4c. Field declaration
 
@@ -364,7 +366,7 @@ FBuiltinYour: TGocciaGlobalYour;
 
 ### 4d. RegisterBuiltIns
 
-For standard built-ins (no flag-gating needed):
+For core language built-ins (no flag-gating needed):
 
 ```pascal
 FBuiltinYour := TGocciaGlobalYour.Create(
