@@ -93,6 +93,7 @@ const
   UTF8_LINE_SEPARATOR = #$E2#$80#$A8;
   UTF8_PARAGRAPH_SEPARATOR = #$E2#$80#$A9;
   UTF8_NONCHARACTER = #$EF#$BF#$BF;
+  UTF8_HIGH_SURROGATE = #$ED#$A0#$80;
 var
   Text: string;
 begin
@@ -105,6 +106,11 @@ begin
   Expect<string>(UTF8CodePointAt(Text, 3)).ToBe(UTF8_NONCHARACTER);
   Expect<string>(UTF8CodePointAt(Text, 4)).ToBe('b');
   Expect<string>(UTF8CodePointAt(Text, 5)).ToBe('');
+  Expect<Integer>(UTF8CodePointLength(UTF8_HIGH_SURROGATE)).ToBe(1);
+  Text := 'a' + UTF8_HIGH_SURROGATE + 'b';
+  Expect<Integer>(UTF8CodePointLength(Text)).ToBe(3);
+  Expect<string>(UTF8CodePointAt(Text, 0)).ToBe('a');
+  Expect<string>(UTF8CodePointAt(Text, 2)).ToBe('b');
 end;
 
 procedure TTextSemanticsTests.TestUTF16CodeUnitIndexing;

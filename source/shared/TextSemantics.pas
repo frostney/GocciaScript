@@ -390,7 +390,8 @@ begin
   Index := 1;
   while Index <= Length(AText) do
   begin
-    if TryReadUTF8CodePoint(AText, Index, CodePoint, ByteLength) then
+    if TryReadUTF8CodePointAllowSurrogates(AText, Index, CodePoint,
+      ByteLength) then
       Inc(Index, ByteLength)
     else
       Inc(Index);
@@ -412,7 +413,8 @@ begin
   Index := 1;
   while Index <= Length(AText) do
   begin
-    if TryReadUTF8CodePoint(AText, Index, CodePoint, ByteLength) then
+    if TryReadUTF8CodePointAllowSurrogates(AText, Index, CodePoint,
+      ByteLength) then
     begin
       if CodePointIndex = AIndex then
         Exit(Copy(AText, Index, ByteLength));
