@@ -70,13 +70,15 @@ var
 begin
   Source := TStringList.Create;
   Source.Text := ASource;
+  Engine := nil;
   Runtime := nil;
   try
     Engine := TGocciaEngine.Create('<engine-realm-test>', Source, []);
-    Runtime := TGocciaRuntime.Create(Engine, [rgURL], True);
+    Runtime := TGocciaRuntime.Create(Engine, [rgURL]);
     Result := Runtime.Execute;
   finally
     Runtime.Free;
+    Engine.Free;
     Source.Free;
   end;
 end;

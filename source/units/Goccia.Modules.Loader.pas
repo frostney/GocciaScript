@@ -225,12 +225,21 @@ begin
     Exit;
   end;
 
+  Module := nil;
   if Assigned(FRuntimeModuleLoader) and
      FRuntimeModuleLoader(ResolvedPath, Module) then
   begin
-    FModules.Add(ResolvedPath, Module);
-    Result := Module;
-    Exit;
+    if Assigned(Module) then
+    begin
+      try
+        FModules.Add(ResolvedPath, Module);
+      except
+        Module.Free;
+        raise;
+      end;
+      Result := Module;
+      Exit;
+    end;
   end;
 
   Content := FContentProvider.LoadContent(ResolvedPath);

@@ -13,6 +13,8 @@ uses
   Goccia.Engine.Backend,
   Goccia.ModuleResolver,
   Goccia.Modules,
+  Goccia.Modules.Loader,
+  Goccia.Modules.Resolver,
   Goccia.Runtime,
   Goccia.ScriptLoader.Globals,
   Goccia.TestSetup,
@@ -21,6 +23,12 @@ uses
   Goccia.Values.Primitives;
 
 type
+  TCustomRuntimeModuleResolver = class(TGocciaModuleResolver)
+  public
+    function Resolve(const AModulePath,
+      AImportingFilePath: string): string; override;
+  end;
+
   TScriptLoaderGlobalsTests = class(TTestSuite)
   private
     FCustomRuntimeLoaderCalled: Boolean;
@@ -40,6 +48,15 @@ type
   public
     procedure SetupTests; override;
   end;
+
+function TCustomRuntimeModuleResolver.Resolve(const AModulePath,
+  AImportingFilePath: string): string;
+begin
+  if AModulePath = 'virtual.custom' then
+    Exit('virtual.custom');
+
+  Result := inherited Resolve(AModulePath, AImportingFilePath);
+end;
 
 procedure TScriptLoaderGlobalsTests.SetupTests;
 begin
@@ -187,28 +204,41 @@ end;
 
 procedure TScriptLoaderGlobalsTests.TestRuntimeModuleLoaderFallsBackToPreviousLoader;
 var
+  CachedModule: TGocciaModule;
   Engine: TGocciaEngine;
   LoadedModule: TGocciaModule;
+  ModuleLoader: TGocciaModuleLoader;
+  Resolver: TCustomRuntimeModuleResolver;
   Runtime: TGocciaRuntime;
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Engine := TGocciaEngine.Create('<runtime-test>', Source, []);
+  Resolver := nil;
+  ModuleLoader := nil;
+  Engine := nil;
   Runtime := nil;
   LoadedModule := nil;
   FCustomRuntimeLoaderCalled := False;
   try
+    Resolver := TCustomRuntimeModuleResolver.Create;
+    ModuleLoader := TGocciaModuleLoader.Create('<runtime-test>', Resolver);
+    Engine := TGocciaEngine.Create('<runtime-test>', Source, [], ModuleLoader);
     Engine.ModuleLoader.RuntimeModuleLoader := LoadCustomRuntimeModule;
     Runtime := TGocciaRuntime.Create(Engine, [rgJSON5]);
 
-    Expect<Boolean>(Engine.ModuleLoader.RuntimeModuleLoader(
-      'virtual.custom', LoadedModule)).ToBe(True);
+    LoadedModule := Engine.ModuleLoader.LoadModule(
+      'virtual.custom', '<runtime-test>');
+    CachedModule := Engine.ModuleLoader.LoadModule(
+      'virtual.custom', '<runtime-test>');
+
     Expect<Boolean>(FCustomRuntimeLoaderCalled).ToBe(True);
     Expect<string>(LoadedModule.Path).ToBe('virtual.custom');
+    Expect<Boolean>(CachedModule = LoadedModule).ToBe(True);
   finally
-    LoadedModule.Free;
     Runtime.Free;
     Engine.Free;
+    ModuleLoader.Free;
+    Resolver.Free;
     Source.Free;
   end;
 end;
