@@ -7833,33 +7833,8 @@ begin
       end;
 
       OP_ITER_CLOSE:
-      begin
-        try
-          if (FRegisters[A].Kind = grkObject) and
-             (FRegisters[A].ObjectValue is TGocciaIteratorValue) then
-            TGocciaIteratorValue(FRegisters[A].ObjectValue).Close
-          else if (FRegisters[A].Kind = grkObject) and
-                  (FRegisters[A].ObjectValue is TGocciaObjectValue) then
-          begin
-            IterResult := FRegisters[A].ObjectValue;
-            NextMethod := IterResult.GetProperty(PROP_RETURN);
-            if Assigned(NextMethod) and
-               not (NextMethod is TGocciaUndefinedLiteralValue) and
-               not (NextMethod is TGocciaNullLiteralValue) and
-               NextMethod.IsCallable then
-            begin
-              CallArgs := AcquireArguments;
-              try
-                TGocciaFunctionBase(NextMethod).Call(CallArgs, IterResult);
-              finally
-                ReleaseArguments(CallArgs);
-              end;
-            end;
-          end;
-        except
-          // Iterator close errors must not replace the original abrupt completion.
-        end;
-      end;
+        if FRegisters[A].Kind = grkObject then
+          CloseRawIteratorPreservingError(FRegisters[A].ObjectValue);
 
       OP_AWAIT:
         SetRegister(A, AwaitValue(GetRegister(B)));
