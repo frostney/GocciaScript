@@ -50,6 +50,7 @@ type
     FStaticGetters: TOrderedStringMap<TGocciaFunctionBase>;
     FStaticSetters: TOrderedStringMap<TGocciaFunctionBase>;
     FStaticSymbolDescriptors: TStaticSymbolDescriptorMap;
+    FNativeSuperConstructor: TGocciaObjectValue;
     FMethodInitializers: array of TGocciaValue;
     FFieldInitializers: array of TGocciaValue;
     FDecoratorFieldInitializers: array of record
@@ -120,10 +121,11 @@ type
     function GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor; override;
     function GetOwnSymbols: TArray<TGocciaSymbolValue>; override;
     function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
-    function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue;
+    function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue; override;
 
     property Name: string read FName;
     property SuperClass: TGocciaClassValue read FSuperClass write FSuperClass;
+    property NativeSuperConstructor: TGocciaObjectValue read FNativeSuperConstructor write FNativeSuperConstructor;
     property Prototype: TGocciaObjectValue read FClassPrototype;
     property ConstructorMethod: TGocciaMethodValue read FConstructorMethod;
     property InstancePropertyDefs: TGocciaExpressionMap read FInstancePropertyDefs;
@@ -358,6 +360,7 @@ begin
   FStaticGetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
   FStaticSetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
   FStaticSymbolDescriptors := TStaticSymbolDescriptorMap.Create;
+  FNativeSuperConstructor := nil;
   FClassPrototype := TGocciaObjectValue.Create;
   FConstructorMethod := nil;
   if Assigned(FSuperClass) then
@@ -402,6 +405,9 @@ begin
 
   if Assigned(FSuperClass) then
     FSuperClass.MarkReferences;
+
+  if Assigned(FNativeSuperConstructor) then
+    FNativeSuperConstructor.MarkReferences;
 
   if Assigned(FClassPrototype) then
     FClassPrototype.MarkReferences;
@@ -1296,10 +1302,7 @@ begin
     end;
   end;
 
-  if Assigned(FSuperClass) then
-    Result := FSuperClass.GetSymbolPropertyWithReceiver(ASymbol, AReceiver)
-  else
-    Result := inherited GetSymbolPropertyWithReceiver(ASymbol, AReceiver);
+  Result := inherited GetSymbolPropertyWithReceiver(ASymbol, AReceiver);
 end;
 
 // ES2026 §10.2.2 [[Call]] — class constructors are not callable without new

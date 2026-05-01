@@ -1794,7 +1794,7 @@ var
   ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
   FuncIdx: UInt16;
-  FnReg: UInt8;
+  FnReg, TargetReg, AccessorReg: UInt8;
   NameIdx: UInt16;
   I: Integer;
 begin
@@ -1828,9 +1828,13 @@ begin
   NameIdx := ACtx.Template.AddConstantString(AName);
   if NameIdx > High(UInt8) then
     raise Exception.Create('Constant pool overflow: getter name index exceeds 255');
-  if FnReg <> ATargetReg + 1 then
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ATargetReg + 1, FnReg, 0));
-  EmitInstruction(ACtx, EncodeABC(AOpcode, ATargetReg, AFlags, UInt8(NameIdx)));
+  TargetReg := ACtx.Scope.AllocateRegister;
+  AccessorReg := ACtx.Scope.AllocateRegister;
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, TargetReg, ATargetReg, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, AccessorReg, FnReg, 0));
+  EmitInstruction(ACtx, EncodeABC(AOpcode, TargetReg, AFlags, UInt8(NameIdx)));
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 end;
 
@@ -1844,7 +1848,7 @@ var
   ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
   FuncIdx: UInt16;
-  FnReg: UInt8;
+  FnReg, TargetReg, AccessorReg: UInt8;
   NameIdx: UInt16;
   I: Integer;
 begin
@@ -1879,9 +1883,13 @@ begin
   NameIdx := ACtx.Template.AddConstantString(AName);
   if NameIdx > High(UInt8) then
     raise Exception.Create('Constant pool overflow: setter name index exceeds 255');
-  if FnReg <> ATargetReg + 1 then
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ATargetReg + 1, FnReg, 0));
-  EmitInstruction(ACtx, EncodeABC(AOpcode, ATargetReg, AFlags, UInt8(NameIdx)));
+  TargetReg := ACtx.Scope.AllocateRegister;
+  AccessorReg := ACtx.Scope.AllocateRegister;
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, TargetReg, ATargetReg, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, AccessorReg, FnReg, 0));
+  EmitInstruction(ACtx, EncodeABC(AOpcode, TargetReg, AFlags, UInt8(NameIdx)));
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 end;
 
@@ -1895,7 +1903,7 @@ var
   ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
   FuncIdx: UInt16;
-  FnReg, SafeKeyReg: UInt8;
+  FnReg, TargetReg, AccessorReg: UInt8;
   I: Integer;
 begin
   OldTemplate := ACtx.Template;
@@ -1924,20 +1932,13 @@ begin
   FnReg := ACtx.Scope.AllocateRegister;
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, FnReg, FuncIdx));
 
-  if AKeyReg = ATargetReg + 1 then
-  begin
-    SafeKeyReg := ACtx.Scope.AllocateRegister;
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, SafeKeyReg, AKeyReg, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ATargetReg + 1, FnReg, 0));
-    EmitInstruction(ACtx, EncodeABC(AOpcode, ATargetReg, AFlags, SafeKeyReg));
-    ACtx.Scope.FreeRegister;
-  end
-  else
-  begin
-    if FnReg <> ATargetReg + 1 then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ATargetReg + 1, FnReg, 0));
-    EmitInstruction(ACtx, EncodeABC(AOpcode, ATargetReg, AFlags, AKeyReg));
-  end;
+  TargetReg := ACtx.Scope.AllocateRegister;
+  AccessorReg := ACtx.Scope.AllocateRegister;
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, TargetReg, ATargetReg, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, AccessorReg, FnReg, 0));
+  EmitInstruction(ACtx, EncodeABC(AOpcode, TargetReg, AFlags, AKeyReg));
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 end;
 
@@ -1951,7 +1952,7 @@ var
   ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
   FuncIdx: UInt16;
-  FnReg, SafeKeyReg: UInt8;
+  FnReg, TargetReg, AccessorReg: UInt8;
   I: Integer;
 begin
   OldTemplate := ACtx.Template;
@@ -1981,20 +1982,13 @@ begin
   FnReg := ACtx.Scope.AllocateRegister;
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, FnReg, FuncIdx));
 
-  if AKeyReg = ATargetReg + 1 then
-  begin
-    SafeKeyReg := ACtx.Scope.AllocateRegister;
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, SafeKeyReg, AKeyReg, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ATargetReg + 1, FnReg, 0));
-    EmitInstruction(ACtx, EncodeABC(AOpcode, ATargetReg, AFlags, SafeKeyReg));
-    ACtx.Scope.FreeRegister;
-  end
-  else
-  begin
-    if FnReg <> ATargetReg + 1 then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ATargetReg + 1, FnReg, 0));
-    EmitInstruction(ACtx, EncodeABC(AOpcode, ATargetReg, AFlags, AKeyReg));
-  end;
+  TargetReg := ACtx.Scope.AllocateRegister;
+  AccessorReg := ACtx.Scope.AllocateRegister;
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, TargetReg, ATargetReg, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, AccessorReg, FnReg, 0));
+  EmitInstruction(ACtx, EncodeABC(AOpcode, TargetReg, AFlags, AKeyReg));
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 end;
 

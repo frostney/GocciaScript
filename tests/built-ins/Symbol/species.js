@@ -36,6 +36,38 @@ describe("Symbol.species", () => {
     expect(MyRegExp[Symbol.species]).toBe(MyRegExp);
   });
 
+  test("RegExp subclass constructs native RegExp instances", () => {
+    class MyRegExp extends RegExp {}
+    const regex = new MyRegExp("a+");
+    expect(regex.test("aa")).toBe(true);
+    expect(regex.test("bb")).toBe(false);
+  });
+
+  test("RegExp subclass resolves native super methods", () => {
+    class MyRegExp extends RegExp {
+      getTestMethodType() {
+        return typeof super.test;
+      }
+
+      static getEscapeType() {
+        return typeof super.escape;
+      }
+
+      get testMethodType() {
+        return typeof super.test;
+      }
+
+      static get escapeType() {
+        return typeof super.escape;
+      }
+    }
+
+    expect(new MyRegExp("a").getTestMethodType()).toBe("function");
+    expect(MyRegExp.getEscapeType()).toBe("function");
+    expect(new MyRegExp("a").testMethodType).toBe("function");
+    expect(MyRegExp.escapeType).toBe("function");
+  });
+
   test("Promise subclass inherits Symbol.species through constructor prototype chain", () => {
     class MyPromise extends Promise {}
     expect(MyPromise[Symbol.species]).toBe(MyPromise);

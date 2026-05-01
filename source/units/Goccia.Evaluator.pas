@@ -37,8 +37,8 @@ function EvaluateMember(const AMemberExpression: TGocciaMemberExpression; const 
 function EvaluateMember(const AMemberExpression: TGocciaMemberExpression; const AContext: TGocciaEvaluationContext; out AObjectValue: TGocciaValue): TGocciaValue; overload;
 function EvaluateArray(const AArrayExpression: TGocciaArrayExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateObject(const AObjectExpression: TGocciaObjectExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
-function EvaluateGetter(const AGetterExpression: TGocciaGetterExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
-function EvaluateSetter(const ASetterExpression: TGocciaSetterExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateGetter(const AGetterExpression: TGocciaGetterExpression; const AContext: TGocciaEvaluationContext; const ASuperClass: TGocciaValue = nil): TGocciaValue;
+function EvaluateSetter(const ASetterExpression: TGocciaSetterExpression; const AContext: TGocciaEvaluationContext; const ASuperClass: TGocciaValue = nil): TGocciaValue;
 function EvaluateArrowFunction(const AArrowFunctionExpression: TGocciaArrowFunctionExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateMethodExpression(const AMethodExpression: TGocciaMethodExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateBlock(const ABlockStatement: TGocciaBlockStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -732,6 +732,7 @@ var
   ThisValue: TGocciaValue;
   ArgumentExpr: TGocciaExpression;
   SuperClass: TGocciaClassValue;
+  SuperClassValue: TGocciaValue;
   MemberExpr: TGocciaMemberExpression;
   SpreadValue: TGocciaValue;
   CalleeName: string;
@@ -743,8 +744,13 @@ begin
   // Handle super() calls specially
   if ACallExpression.Callee is TGocciaSuperExpression then
   begin
-    SuperClass := TGocciaClassValue(EvaluateExpression(ACallExpression.Callee, AContext));
-    if not (SuperClass is TGocciaClassValue) then
+    SuperClassValue := EvaluateExpression(ACallExpression.Callee, AContext);
+    if SuperClassValue is TGocciaClassValue then
+      SuperClass := TGocciaClassValue(SuperClassValue)
+    else
+      SuperClass := nil;
+    if (not Assigned(SuperClass)) and
+       (not ((SuperClassValue is TGocciaObjectValue) and SuperClassValue.IsCallable)) then
     begin
       AContext.OnError('super() can only be called within a method with a superclass',
         ACallExpression.Line, ACallExpression.Column);
@@ -766,14 +772,36 @@ begin
           Arguments.Add(EvaluateExpression(ArgumentExpr, AContext));
       end;
 
-      if Assigned(SuperClass.ConstructorMethod) then
+      if Assigned(SuperClass) and Assigned(SuperClass.ConstructorMethod) then
       begin
         Result := SuperClass.ConstructorMethod.Call(Arguments, AContext.Scope.ThisValue);
       end
-      else
+      else if Assigned(SuperClass) then
       begin
         if AContext.Scope.ThisValue is TGocciaInstanceValue then
           TGocciaInstanceValue(AContext.Scope.ThisValue).InitializeNativeFromArguments(Arguments);
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      end
+      else if SuperClassValue is TGocciaProxyValue then
+        Result := TGocciaProxyValue(SuperClassValue).ConstructTrap(Arguments)
+      else if SuperClassValue is TGocciaNativeFunctionValue then
+      begin
+        if TGocciaNativeFunctionValue(SuperClassValue).NotConstructable then
+          ThrowTypeError(
+            Format(SErrorNotConstructor,
+              [TGocciaNativeFunctionValue(SuperClassValue).Name]),
+            Format('''%s'' is not a constructor',
+              [TGocciaNativeFunctionValue(SuperClassValue).Name]));
+        Result := TGocciaNativeFunctionValue(SuperClassValue).Call(
+          Arguments, TGocciaHoleValue.HoleValue);
+      end
+      else if SuperClassValue is TGocciaFunctionBase then
+        Result := TGocciaFunctionBase(SuperClassValue).Call(
+          Arguments, TGocciaUndefinedLiteralValue.UndefinedValue)
+      else
+      begin
+        ThrowTypeError(Format(SErrorValueNotFunction, [SuperClassValue.TypeName]),
+          SSuggestNotFunctionType);
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
       end;
     finally
@@ -919,6 +947,9 @@ var
   PropertyName: string;
   PropertyValue: TGocciaValue;
   SuperClass: TGocciaClassValue;
+  SuperClassValue: TGocciaValue;
+  SuperObject: TGocciaObjectValue;
+  SuperPrototype: TGocciaValue;
   BoxedValue: TGocciaObjectValue;
   ObjectEvaluated: Boolean;
 begin
@@ -941,8 +972,17 @@ begin
   // Handle super.method() specially
   if AMemberExpression.ObjectExpr is TGocciaSuperExpression then
   begin
-    SuperClass := TGocciaClassValue(EvaluateExpression(AMemberExpression.ObjectExpr, AContext));
-    if not (SuperClass is TGocciaClassValue) then
+    SuperClassValue := EvaluateExpression(AMemberExpression.ObjectExpr, AContext);
+    if SuperClassValue is TGocciaClassValue then
+      SuperClass := TGocciaClassValue(SuperClassValue)
+    else
+      SuperClass := nil;
+    if (SuperClassValue is TGocciaObjectValue) then
+      SuperObject := TGocciaObjectValue(SuperClassValue)
+    else
+      SuperObject := nil;
+    if (not Assigned(SuperClass)) and
+       (not (Assigned(SuperObject) and SuperObject.IsCallable)) then
     begin
       AContext.OnError('super can only be used within a method with a superclass',
         AMemberExpression.Line, AMemberExpression.Column);
@@ -953,12 +993,38 @@ begin
     end;
 
     if Assigned(AOutObjectValue) then
-      AOutObjectValue^ := SuperClass;
+      AOutObjectValue^ := SuperClassValue;
 
     // Get the property name
     if AMemberExpression.Computed and Assigned(AMemberExpression.PropertyExpression) then
     begin
       PropertyValue := EvaluateExpression(AMemberExpression.PropertyExpression, AContext);
+      if PropertyValue is TGocciaSymbolValue then
+      begin
+        if AContext.Scope.ThisValue is TGocciaClassValue then
+        begin
+          if Assigned(SuperClass) then
+            Result := SuperClass.GetSymbolPropertyWithReceiver(
+              TGocciaSymbolValue(PropertyValue), AContext.Scope.ThisValue)
+          else
+            Result := SuperObject.GetSymbolPropertyWithReceiver(
+              TGocciaSymbolValue(PropertyValue), AContext.Scope.ThisValue);
+        end
+        else
+        begin
+          if Assigned(SuperClass) then
+            SuperPrototype := SuperClass.Prototype
+          else
+            SuperPrototype := SuperObject.GetProperty(PROP_PROTOTYPE);
+
+          if SuperPrototype is TGocciaObjectValue then
+            Result := TGocciaObjectValue(SuperPrototype).GetSymbolPropertyWithReceiver(
+              TGocciaSymbolValue(PropertyValue), AContext.Scope.ThisValue)
+          else
+            Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+        end;
+        Exit;
+      end;
       PropertyName := PropertyValue.ToStringLiteral.Value;
     end
     else
@@ -970,14 +1036,30 @@ begin
     if AContext.Scope.ThisValue is TGocciaClassValue then
     begin
       // Static method context: look for static methods using GetProperty
-      Result := SuperClass.GetProperty(PropertyName);
+      if Assigned(SuperClass) then
+        Result := SuperClass.GetProperty(PropertyName)
+      else
+        Result := SuperObject.GetPropertyWithContext(
+          PropertyName, AContext.Scope.ThisValue);
     end
     else
     begin
       // Instance method context: look for instance methods using GetMethod
-      Result := SuperClass.GetMethod(PropertyName);
-      if not Assigned(Result) then
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      if Assigned(SuperClass) then
+      begin
+        Result := SuperClass.GetMethod(PropertyName);
+        if not Assigned(Result) then
+          Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      end
+      else
+      begin
+        SuperPrototype := SuperObject.GetProperty(PROP_PROTOTYPE);
+        if SuperPrototype is TGocciaObjectValue then
+          Result := TGocciaObjectValue(SuperPrototype).GetPropertyWithContext(
+            PropertyName, AContext.Scope.ThisValue)
+        else
+          Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      end;
     end;
 
     Exit;
@@ -1263,7 +1345,7 @@ begin
   end;
 end;
 
-function EvaluateGetter(const AGetterExpression: TGocciaGetterExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateGetter(const AGetterExpression: TGocciaGetterExpression; const AContext: TGocciaEvaluationContext; const ASuperClass: TGocciaValue = nil): TGocciaValue;
 var
   Statements: TObjectList<TGocciaASTNode>;
   EmptyParameters: TGocciaParameterArray;
@@ -1274,13 +1356,16 @@ begin
   Statements := CopyStatementList(TGocciaBlockStatement(AGetterExpression.Body).Nodes);
 
   // Create function with closure scope
-  Result := TGocciaFunctionValue.Create(EmptyParameters, Statements, AContext.Scope.CreateChild);
+  if Assigned(ASuperClass) then
+    Result := TGocciaMethodValue.Create(EmptyParameters, Statements, AContext.Scope.CreateChild, '', ASuperClass)
+  else
+    Result := TGocciaFunctionValue.Create(EmptyParameters, Statements, AContext.Scope.CreateChild);
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := AGetterExpression.Line;
   TGocciaFunctionValue(Result).SourceText := AGetterExpression.SourceText;
 end;
 
-function EvaluateSetter(const ASetterExpression: TGocciaSetterExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateSetter(const ASetterExpression: TGocciaSetterExpression; const AContext: TGocciaEvaluationContext; const ASuperClass: TGocciaValue = nil): TGocciaValue;
 var
   Statements: TObjectList<TGocciaASTNode>;
   Parameters: TGocciaParameterArray;
@@ -1293,7 +1378,10 @@ begin
   Statements := CopyStatementList(TGocciaBlockStatement(ASetterExpression.Body).Nodes);
 
   // Create function with closure scope
-  Result := TGocciaFunctionValue.Create(Parameters, Statements, AContext.Scope.CreateChild);
+  if Assigned(ASuperClass) then
+    Result := TGocciaMethodValue.Create(Parameters, Statements, AContext.Scope.CreateChild, '', ASuperClass)
+  else
+    Result := TGocciaFunctionValue.Create(Parameters, Statements, AContext.Scope.CreateChild);
   TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
   TGocciaFunctionValue(Result).SourceLine := ASetterExpression.Line;
   TGocciaFunctionValue(Result).SourceText := ASetterExpression.SourceText;
@@ -2884,6 +2972,7 @@ function EvaluateClassDefinition(const AClassDef: TGocciaClassDefinition; const 
 var
   SuperClass: TGocciaClassValue;
   SuperClassValue: TGocciaValue;
+  MethodSuperClass: TGocciaValue;
   SuperPrototype: TGocciaValue;
   ClassValue: TGocciaClassValue;
   MethodPair: TGocciaClassMethodMap.TKeyValuePair;
@@ -2917,18 +3006,38 @@ var
   InitializerResults: TArray<TGocciaValue>;
   AccessorBackingName: string;
   ExistingDescriptor: TGocciaPropertyDescriptor;
+
+  function BuildClassGetter(const AGetterExpression: TGocciaGetterExpression): TGocciaFunctionValue;
+  begin
+    Result := TGocciaFunctionValue(EvaluateGetter(AGetterExpression, AContext, MethodSuperClass));
+    if Result is TGocciaMethodValue then
+      TGocciaMethodValue(Result).OwningClass := ClassValue;
+  end;
+
+  function BuildClassSetter(const ASetterExpression: TGocciaSetterExpression): TGocciaFunctionValue;
+  begin
+    Result := TGocciaFunctionValue(EvaluateSetter(ASetterExpression, AContext, MethodSuperClass));
+    if Result is TGocciaMethodValue then
+      TGocciaMethodValue(Result).OwningClass := ClassValue;
+  end;
 begin
   SuperClass := nil;
   SuperClassValue := nil;
+  MethodSuperClass := nil;
   if AClassDef.SuperClass <> '' then
   begin
     SuperClassValue := AContext.Scope.GetValue(AClassDef.SuperClass);
     if SuperClassValue = nil then
       AContext.OnError(Format('Superclass "%s" not found', [AClassDef.SuperClass]), ALine, AColumn)
     else if SuperClassValue is TGocciaClassValue then
-      SuperClass := TGocciaClassValue(SuperClassValue)
+    begin
+      SuperClass := TGocciaClassValue(SuperClassValue);
+      MethodSuperClass := SuperClass;
+    end
     else if not ((SuperClassValue is TGocciaObjectValue) and SuperClassValue.IsCallable) then
       AContext.OnError(Format('Superclass "%s" is not a class (found %s)', [AClassDef.SuperClass, SuperClassValue.TypeName]), ALine, AColumn)
+    else
+      MethodSuperClass := SuperClassValue;
   end;
 
   // Use the class name if provided, otherwise create an anonymous class
@@ -2942,6 +3051,7 @@ begin
      SuperClassValue.IsCallable then
   begin
     TGocciaObjectValue(ClassValue).Prototype := TGocciaObjectValue(SuperClassValue);
+    ClassValue.NativeSuperConstructor := TGocciaObjectValue(SuperClassValue);
     SuperPrototype := SuperClassValue.GetProperty(PROP_PROTOTYPE);
     if SuperPrototype is TGocciaNullLiteralValue then
       ClassValue.Prototype.Prototype := nil
@@ -2958,7 +3068,7 @@ begin
 
   for MethodPair in AClassDef.Methods do
   begin
-    Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, AContext, SuperClass));
+    Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, AContext, MethodSuperClass));
     Method.OwningClass := ClassValue;
 
     if MethodPair.Value.IsStatic then
@@ -3011,7 +3121,7 @@ begin
 
   for MethodPair in AClassDef.PrivateMethods do
   begin
-    Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, AContext, SuperClass));
+    Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, AContext, MethodSuperClass));
     Method.OwningClass := ClassValue;
     ClassValue.AddPrivateMethod(MethodPair.Key, Method);
   end;
@@ -3020,7 +3130,7 @@ begin
 
   for GetterPair in AClassDef.Getters do
   begin
-    GetterFunction := TGocciaFunctionValue(EvaluateGetter(GetterPair.Value, AContext));
+    GetterFunction := BuildClassGetter(GetterPair.Value);
     if (Length(GetterPair.Key) > 0) and (GetterPair.Key[1] = '#') then
       ClassValue.AddPrivateGetter(Copy(GetterPair.Key, 2, Length(GetterPair.Key) - 1), GetterFunction)
     else
@@ -3029,7 +3139,7 @@ begin
 
   for SetterPair in AClassDef.Setters do
   begin
-    SetterFunction := TGocciaFunctionValue(EvaluateSetter(SetterPair.Value, AContext));
+    SetterFunction := BuildClassSetter(SetterPair.Value);
     if (Length(SetterPair.Key) > 0) and (SetterPair.Key[1] = '#') then
       ClassValue.AddPrivateSetter(Copy(SetterPair.Key, 2, Length(SetterPair.Key) - 1), SetterFunction)
     else
@@ -3038,7 +3148,7 @@ begin
 
   for GetterPair in AClassDef.FStaticGetters do
   begin
-    GetterFunction := TGocciaFunctionValue(EvaluateGetter(GetterPair.Value, AContext));
+    GetterFunction := BuildClassGetter(GetterPair.Value);
     if (GetterPair.Key <> '') and (GetterPair.Key[1] = '#') then
       ClassValue.AddPrivateGetter(Copy(GetterPair.Key, 2, Length(GetterPair.Key) - 1), GetterFunction)
     else
@@ -3047,7 +3157,7 @@ begin
 
   for SetterPair in AClassDef.FStaticSetters do
   begin
-    SetterFunction := TGocciaFunctionValue(EvaluateSetter(SetterPair.Value, AContext));
+    SetterFunction := BuildClassSetter(SetterPair.Value);
     if (SetterPair.Key <> '') and (SetterPair.Key[1] = '#') then
       ClassValue.AddPrivateSetter(Copy(SetterPair.Key, 2, Length(SetterPair.Key) - 1), SetterFunction)
     else
@@ -3068,7 +3178,7 @@ begin
     case Elem.Kind of
       cekMethod:
       begin
-        Method := TGocciaMethodValue(EvaluateClassMethod(Elem.MethodNode, AContext, SuperClass));
+        Method := TGocciaMethodValue(EvaluateClassMethod(Elem.MethodNode, AContext, MethodSuperClass));
         Method.OwningClass := ClassValue;
         if ComputedKey is TGocciaSymbolValue then
         begin
@@ -3091,7 +3201,7 @@ begin
       end;
       cekGetter:
       begin
-        GetterFunction := TGocciaFunctionValue(EvaluateGetter(Elem.GetterNode, AContext));
+        GetterFunction := BuildClassGetter(Elem.GetterNode);
         if ComputedKey is TGocciaSymbolValue then
         begin
           if Elem.IsStatic then
@@ -3113,7 +3223,7 @@ begin
       end;
       cekSetter:
       begin
-        SetterFunction := TGocciaFunctionValue(EvaluateSetter(Elem.SetterNode, AContext));
+        SetterFunction := BuildClassSetter(Elem.SetterNode);
         if ComputedKey is TGocciaSymbolValue then
         begin
           if Elem.IsStatic then
@@ -3974,6 +4084,40 @@ var
   NativeInstance: TGocciaObjectValue;
   InitContext, SuperInitContext: TGocciaEvaluationContext;
   InitScope, SuperInitScope: TGocciaScope;
+  function ConstructNativeSuperInstance(
+    const AConstructor: TGocciaObjectValue): TGocciaObjectValue;
+  var
+    ConstructedValue: TGocciaValue;
+  begin
+    if AConstructor is TGocciaProxyValue then
+      ConstructedValue := TGocciaProxyValue(AConstructor).ConstructTrap(AArguments)
+    else if AConstructor is TGocciaNativeFunctionValue then
+    begin
+      if TGocciaNativeFunctionValue(AConstructor).NotConstructable then
+        ThrowTypeError(
+          Format(SErrorNotConstructor,
+            [TGocciaNativeFunctionValue(AConstructor).Name]),
+          Format('''%s'' is not a constructor',
+            [TGocciaNativeFunctionValue(AConstructor).Name]));
+      ConstructedValue := TGocciaNativeFunctionValue(AConstructor).Call(
+        AArguments, TGocciaHoleValue.HoleValue);
+    end
+    else if AConstructor is TGocciaFunctionBase then
+      ConstructedValue := TGocciaFunctionBase(AConstructor).Call(
+        AArguments, TGocciaUndefinedLiteralValue.UndefinedValue)
+    else
+      ThrowTypeError(Format(SErrorValueNotConstructor, [AConstructor.TypeName]),
+        SSuggestNotConstructorType);
+
+    if ConstructedValue is TGocciaObjectValue then
+      Result := TGocciaObjectValue(ConstructedValue)
+    else
+    begin
+      ThrowTypeError('Superclass constructor did not return an object',
+        SSuggestNotConstructorType);
+      Result := nil;
+    end;
+  end;
 begin
   CheckExecutionTimeout;
   IncrementInstructionCounter;
@@ -3986,6 +4130,10 @@ begin
     IncrementInstructionCounter;
     CheckInstructionLimit;
     NativeInstance := WalkClass.CreateNativeInstance(AArguments);
+    if (not Assigned(NativeInstance)) and
+       Assigned(WalkClass.NativeSuperConstructor) then
+      NativeInstance := ConstructNativeSuperInstance(
+        WalkClass.NativeSuperConstructor);
     if Assigned(NativeInstance) then
       Break;
     WalkClass := WalkClass.SuperClass;

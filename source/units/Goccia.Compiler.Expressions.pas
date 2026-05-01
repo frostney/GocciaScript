@@ -1347,10 +1347,31 @@ end;
 procedure CompileMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaMemberExpression; const ADest: UInt8);
 var
-  ObjReg, IdxReg: UInt8;
+  ObjReg, IdxReg, BaseReg, SuperReg: UInt8;
   PropIdx: UInt16;
   NilJump, EndJump: Integer;
 begin
+  if (AExpr.ObjectExpr is TGocciaSuperExpression) and (not AExpr.Computed) then
+  begin
+    ObjReg := ACtx.Scope.AllocateRegister;
+    CompileThis(ACtx, ObjReg);
+    BaseReg := ACtx.Scope.AllocateRegister;
+    SuperReg := ACtx.Scope.AllocateRegister;
+    CompileSuperAccess(ACtx, SuperReg);
+    PropIdx := ACtx.Template.AddConstantString(AExpr.PropertyName);
+    if PropIdx > High(UInt8) then
+      raise Exception.Create('Constant pool overflow: property name index exceeds 255');
+    if SuperReg <> BaseReg + 1 then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, BaseReg + 1, SuperReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET_CONST, BaseReg, 0, UInt8(PropIdx)));
+    if ADest <> BaseReg then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+    Exit;
+  end;
+
   ObjReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
 

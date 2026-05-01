@@ -59,6 +59,13 @@ test("Symbol as object property key", () => {
   expect(obj[key]).toBe("value");
 });
 
+test("symbol-keyed write on primitive throws TypeError", () => {
+  const key = Symbol("primitiveWrite");
+  expect(() => {
+    (1)[key] = "value";
+  }).toThrow(TypeError);
+});
+
 test("Symbol properties are not enumerable by string keys", () => {
   const sym = Symbol("hidden");
   const obj = { visible: true, [sym]: "secret" };

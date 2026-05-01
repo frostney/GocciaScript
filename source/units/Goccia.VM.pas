@@ -1396,11 +1396,11 @@ type
 
   TGocciaVMSuperConstructorValue = class(TGocciaFunctionBase)
   private
-    FSuperClass: TGocciaClassValue;
+    FSuperClass: TGocciaValue;
   protected
     function GetFunctionName: string; override;
   public
-    constructor Create(const ASuperClass: TGocciaClassValue);
+    constructor Create(const ASuperClass: TGocciaValue);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
@@ -1413,6 +1413,8 @@ type
   public
     constructor Create(const AVM: TGocciaVM; const AName: string;
       const ASuperClass: TGocciaClassValue);
+    function CreateNativeInstance(
+      const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
     function GetClassLength: Integer; override;
     function Instantiate(const AArguments: TGocciaArgumentsCollection;
       const ANewTarget: TGocciaClassValue = nil): TGocciaValue; override;
@@ -1521,8 +1523,28 @@ begin
   Result := inherited GetClassLength;
 end;
 
+function TGocciaVMClassValue.CreateNativeInstance(
+  const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+var
+  ConstructedValue: TGocciaValue;
+begin
+  Result := inherited CreateNativeInstance(AArguments);
+  if Assigned(Result) or not Assigned(NativeSuperConstructor) then
+    Exit;
+
+  ConstructedValue := FVM.ConstructValue(NativeSuperConstructor, AArguments);
+  if ConstructedValue is TGocciaObjectValue then
+    Result := TGocciaObjectValue(ConstructedValue)
+  else
+  begin
+    ThrowTypeError('Superclass constructor did not return an object',
+      SSuggestNotConstructorType);
+    Result := nil;
+  end;
+end;
+
 constructor TGocciaVMSuperConstructorValue.Create(
-  const ASuperClass: TGocciaClassValue);
+  const ASuperClass: TGocciaValue);
 begin
   inherited Create;
   FSuperClass := ASuperClass;
@@ -2990,39 +3012,69 @@ end;
 
 function TGocciaVMSuperConstructorValue.Call(
   const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  SuperClass: TGocciaClassValue;
 begin
-  if (FSuperClass is TGocciaVMClassValue) and
-     Assigned(TGocciaVMClassValue(FSuperClass).FConstructorValue) then
+  if (FSuperClass is TGocciaObjectValue) and
+     (not (FSuperClass is TGocciaClassValue)) and
+     FSuperClass.IsCallable then
   begin
-    TGocciaVMClassValue(FSuperClass).FVM.RunClassInitializers(
-      FSuperClass, AThisValue);
-    Exit(TGocciaVMClassValue(FSuperClass).FVM.InvokeFunctionValue(
-      TGocciaVMClassValue(FSuperClass).FConstructorValue,
+    if FSuperClass is TGocciaProxyValue then
+      Exit(TGocciaProxyValue(FSuperClass).ConstructTrap(AArguments));
+    if FSuperClass is TGocciaNativeFunctionValue then
+    begin
+      if TGocciaNativeFunctionValue(FSuperClass).NotConstructable then
+        ThrowTypeError(
+          Format(SErrorNotConstructor,
+            [TGocciaNativeFunctionValue(FSuperClass).Name]),
+          Format('''%s'' is not a constructor',
+            [TGocciaNativeFunctionValue(FSuperClass).Name]));
+      Exit(TGocciaNativeFunctionValue(FSuperClass).Call(
+        AArguments, TGocciaHoleValue.HoleValue));
+    end;
+    if FSuperClass is TGocciaFunctionBase then
+      Exit(TGocciaFunctionBase(FSuperClass).Call(
+        AArguments, TGocciaUndefinedLiteralValue.UndefinedValue));
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  if not (FSuperClass is TGocciaClassValue) then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+
+  SuperClass := TGocciaClassValue(FSuperClass);
+
+  if (SuperClass is TGocciaVMClassValue) and
+     Assigned(TGocciaVMClassValue(SuperClass).FConstructorValue) then
+  begin
+    TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
+      SuperClass, AThisValue);
+    Exit(TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
+      TGocciaVMClassValue(SuperClass).FConstructorValue,
       AArguments, AThisValue));
   end;
 
-  if Assigned(FSuperClass) and Assigned(FSuperClass.ConstructorMethod) then
+  if Assigned(SuperClass.ConstructorMethod) then
   begin
-    if FSuperClass is TGocciaVMClassValue then
-      TGocciaVMClassValue(FSuperClass).FVM.RunClassInitializers(
-        FSuperClass, AThisValue);
-    Exit(FSuperClass.ConstructorMethod.Call(AArguments, AThisValue));
+    if SuperClass is TGocciaVMClassValue then
+      TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
+        SuperClass, AThisValue);
+    Exit(SuperClass.ConstructorMethod.Call(AArguments, AThisValue));
   end;
 
-  if Assigned(FSuperClass) and Assigned(FSuperClass.SuperClass) and
-     Assigned(FSuperClass.SuperClass.ConstructorMethod) then
+  if Assigned(SuperClass.SuperClass) and
+     Assigned(SuperClass.SuperClass.ConstructorMethod) then
   begin
-    if FSuperClass is TGocciaVMClassValue then
-      TGocciaVMClassValue(FSuperClass).FVM.InvokeImplicitSuperInitialization(
-        FSuperClass.SuperClass, AThisValue, AArguments);
+    if SuperClass is TGocciaVMClassValue then
+      TGocciaVMClassValue(SuperClass).FVM.InvokeImplicitSuperInitialization(
+        SuperClass.SuperClass, AThisValue, AArguments);
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 
   if AThisValue is TGocciaInstanceValue then
   begin
-    if (FSuperClass is TGocciaVMClassValue) and Assigned(FSuperClass) then
-      TGocciaVMClassValue(FSuperClass).FVM.InvokeImplicitSuperInitialization(
-        FSuperClass, AThisValue, AArguments);
+    if SuperClass is TGocciaVMClassValue then
+      TGocciaVMClassValue(SuperClass).FVM.InvokeImplicitSuperInitialization(
+        SuperClass, AThisValue, AArguments);
     TGocciaInstanceValue(AThisValue).InitializeNativeFromArguments(AArguments);
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
@@ -3191,6 +3243,11 @@ begin
     while Assigned(WalkClass) do
     begin
       if not (WalkClass is TGocciaVMClassValue) then
+      begin
+        EnsureBoxedArgs;
+        NativeInstance := WalkClass.CreateNativeInstance(BoxedArgs);
+      end
+      else if Assigned(TGocciaVMClassValue(WalkClass).NativeSuperConstructor) then
       begin
         EnsureBoxedArgs;
         NativeInstance := WalkClass.CreateNativeInstance(BoxedArgs);
@@ -4628,6 +4685,13 @@ begin
     Exit;
   end;
 
+  if (AClassValue is TGocciaVMClassValue) and
+     Assigned(TGocciaVMClassValue(AClassValue).NativeSuperConstructor) then
+  begin
+    RunClassInitializers(AClassValue, AInstance);
+    Exit;
+  end;
+
   if Assigned(AClassValue.ConstructorMethod) then
   begin
     RunClassInitializers(AClassValue, AInstance);
@@ -4678,6 +4742,13 @@ begin
     finally
       ReleaseArguments(BoxedArgs);
     end;
+    Exit;
+  end;
+
+  if (AClassValue is TGocciaVMClassValue) and
+     Assigned(TGocciaVMClassValue(AClassValue).NativeSuperConstructor) then
+  begin
+    RunClassInitializers(AClassValue, AInstance);
     Exit;
   end;
 
@@ -5128,7 +5199,28 @@ function TGocciaVM.GetSuperPropertyValue(const ASuperValue, AThisValue: TGocciaV
   const AName: string): TGocciaValue;
 var
   SuperClass: TGocciaClassValue;
+  SuperObject: TGocciaObjectValue;
+  SuperPrototype: TGocciaValue;
 begin
+  if (ASuperValue is TGocciaObjectValue) and
+     (not (ASuperValue is TGocciaClassValue)) and
+     ASuperValue.IsCallable then
+  begin
+    SuperObject := TGocciaObjectValue(ASuperValue);
+    if AName = PROP_CONSTRUCTOR then
+      Exit(TGocciaVMSuperConstructorValue.Create(SuperObject));
+
+    if AThisValue is TGocciaClassValue then
+      Exit(SuperObject.GetPropertyWithContext(AName, AThisValue));
+
+    SuperPrototype := SuperObject.GetProperty(PROP_PROTOTYPE);
+    if SuperPrototype is TGocciaObjectValue then
+      Exit(TGocciaObjectValue(SuperPrototype).GetPropertyWithContext(
+        AName, AThisValue));
+
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
   if not (ASuperValue is TGocciaClassValue) then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
 
@@ -6388,6 +6480,8 @@ begin
         begin
           TGocciaVMClassValue(FRegisters[A].ObjectValue).SuperClass :=
             TGocciaClassValue(FRegisters[B].ObjectValue);
+          TGocciaVMClassValue(FRegisters[A].ObjectValue).NativeSuperConstructor :=
+            nil;
           // Set [[Prototype]] of derived class constructor to superclass
           TGocciaObjectValue(FRegisters[A].ObjectValue).Prototype :=
             TGocciaObjectValue(FRegisters[B].ObjectValue);
@@ -6402,8 +6496,9 @@ begin
                 FRegisters[B].ObjectValue.IsCallable then
         begin
           // Native constructor superclass: preserve static and prototype
-          // inheritance links even though native construction is not modeled
-          // through TGocciaClassValue.SuperClass.
+          // inheritance links, and remember the constructor for instantiation.
+          TGocciaVMClassValue(FRegisters[A].ObjectValue).NativeSuperConstructor :=
+            TGocciaObjectValue(FRegisters[B].ObjectValue);
           TGocciaObjectValue(FRegisters[A].ObjectValue).Prototype :=
             TGocciaObjectValue(FRegisters[B].ObjectValue);
           RightValue := FRegisters[B].ObjectValue.GetProperty(PROP_PROTOTYPE);
@@ -6672,7 +6767,15 @@ begin
             TGocciaObjectValue(FRegisters[A].ObjectValue).SetProperty(
               KeyToPropertyNameRegister(FRegisters[B]),
               RegisterToValue(FRegisters[C]));
-        end;
+        end
+        else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
+          ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
+            SSuggestCheckNullBeforeAccess)
+        else
+          SetPropertyValue(GetRegister(A),
+            KeyToPropertyNameRegister(FRegisters[B]),
+            RegisterToValue(FRegisters[C]));
       end;
 
       OP_ADD:

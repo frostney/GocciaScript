@@ -35,11 +35,10 @@ procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; 
 begin
   if (AObj is TGocciaObjectValue) or (AObj is TGocciaClassValue) then
     AObj.SetProperty(APropertyName, AValue)
-  else if Assigned(AOnError) then
+  else
     // AOnError is not invoked here — ThrowTypeError must be used because this is
     // a JavaScript-level TypeError (TGocciaThrowValue), not an interpreter-level
     // runtime error (TGocciaRuntimeError) which is what AOnError produces.
-    // The Assigned check guards against raising in contexts without error handling.
     ThrowTypeError(SErrorCannotSetPropertyOnNonObject, SSuggestCheckNullBeforeAccess);
 end;
 
