@@ -79,6 +79,15 @@ console.log("Error display (bytecode SyntaxError)...");
   if (typeof json.error?.column !== "number") throw new Error(`Bytecode JSON error should include numeric column, got ${json.error?.column}`);
 }
 
+// -- ASI at EOF -----------------------------------------------------------------
+
+console.log("ASI at EOF...");
+{
+  const res = runLoaderJson("const value = 42", ["--asi"]);
+  if (res.exitCode !== 0) throw new Error(`ASI should accept a final declaration at EOF without a semicolon`);
+  if (res.json.ok !== true) throw new Error(`ASI EOF declaration should succeed, got: ${JSON.stringify(res.json)}`);
+}
+
 // -- Unsupported var recovery (ASI and compat-var flags) ------------------------
 
 console.log("Unsupported var recovery (ASI and compat-var flags)...");

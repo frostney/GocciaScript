@@ -502,7 +502,10 @@ var
   CurrentType: TGocciaTokenType;
 begin
   CurrentType := FTokens[FCurrent].TokenType;
-  Result := (CurrentType <> gttEOF) and (CurrentType = ATokenType);
+  if ATokenType = gttEOF then
+    Result := CurrentType = gttEOF
+  else
+    Result := (CurrentType <> gttEOF) and (CurrentType = ATokenType);
 end;
 
 function TGocciaParser.CheckNext(const ATokenType: TGocciaTokenType): Boolean;
