@@ -24,6 +24,7 @@ type
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   published
     function PromiseConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PromiseSpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function PromiseResolve(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function PromiseReject(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function PromiseAll(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -50,9 +51,11 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.MapValue,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue,
   Goccia.Values.SetValue,
+  Goccia.Values.SymbolValue,
   Goccia.VM.Exception;
 
 threadvar
@@ -447,6 +450,11 @@ begin
   inherited Create(AName, AScope, AThrowError);
 
   FPromiseConstructor := TGocciaNativeFunctionValue.Create(PromiseConstructorFn, 'Promise', 1);
+  FPromiseConstructor.DefineSymbolProperty(TGocciaSymbolValue.WellKnownSpecies,
+    TGocciaPropertyDescriptorAccessor.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        PromiseSpeciesGetter, 'get [Symbol.species]', 0),
+      nil, [pfConfigurable]));
 
   TGocciaPromiseValue.ExposePrototype(FPromiseConstructor);
   Members := TGocciaMemberCollection.Create;
@@ -466,6 +474,13 @@ begin
   RegisterMemberDefinitions(FPromiseConstructor, FStaticMembers);
 
   AScope.DefineLexicalBinding(AName, FPromiseConstructor, dtLet);
+end;
+
+// ES2026 §27.2.4.8 get Promise [ @@species ]
+function TGocciaGlobalPromise.PromiseSpeciesGetter(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := AThisValue;
 end;
 
 { Promise ( executor ) — §27.2.3.1

@@ -379,6 +379,16 @@ begin
     Exit;
   end;
 
+  if AArgs.GetElement(0) is TGocciaSymbolValue then
+  begin
+    // Symbol primitives have no own properties, but Object.hasOwn still
+    // evaluates the property key before returning.
+    if not (AArgs.GetElement(1) is TGocciaSymbolValue) then
+      PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
+    Result := TGocciaBooleanLiteralValue.FalseValue;
+    Exit;
+  end;
+
   Obj := ToObject(AArgs.GetElement(0));
   if Assigned(TGarbageCollector.Instance) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then

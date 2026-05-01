@@ -209,6 +209,7 @@ RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pat
 | Method | Description |
 |--------|-------------|
 | `escape(string)` | Returns a string with all regex-significant characters escaped so the result can be safely interpolated into a pattern. Implements `RegExp.escape`. Syntax characters are backslash-escaped; ClassSet-reserved punctuators, whitespace, and line terminators are hex-encoded (`\xHH` / `\uHHHH`). A leading digit or ASCII letter is also hex-encoded to prevent ambiguity with backreferences. |
+| `RegExp[Symbol.species]` | Accessor returning the receiver constructor (`this`) for subclass-aware species lookup |
 
 **Prototype methods:**
 
@@ -403,7 +404,7 @@ Implements [ECMAScript Symbol](https://developer.mozilla.org/en-US/docs/Web/Java
 | `Symbol.replace` | Well-known symbol for `String.prototype.replace()` and `replaceAll()` dispatch |
 | `Symbol.search` | Well-known symbol for `String.prototype.search()` dispatch |
 | `Symbol.split` | Well-known symbol for `String.prototype.split()` dispatch |
-| `Symbol.species` | Well-known symbol for constructor species (behavioral: Array/Map/Set constructors have default `[Symbol.species]` getter returning `this`; Array prototype methods use `ArraySpeciesCreate` for subclass-aware result construction) |
+| `Symbol.species` | Well-known symbol for constructor species (behavioral: Array/Map/Promise/RegExp/Set constructors have default `[Symbol.species]` getter returning `this`; Array prototype methods use `ArraySpeciesCreate` for subclass-aware result construction) |
 | `Symbol.hasInstance` | Well-known symbol for instanceof behavior |
 | `Symbol.toPrimitive` | Well-known symbol for type conversion |
 | `Symbol.toStringTag` | Well-known symbol for Object.prototype.toString |
@@ -555,6 +556,7 @@ const p = new Promise((resolve, reject) => {
 | `Promise.any(iterable)` | Resolve with first fulfillment; reject with AggregateError if all reject |
 | `Promise.withResolvers()` | Returns object with `promise`, `resolve`, `reject` |
 | `Promise.try(callback)` | Execute callback, wrap result or error in Promise |
+| `Promise[Symbol.species]` | Accessor returning the receiver constructor (`this`) for subclass-aware species lookup |
 
 **Microtask queue:** `.then()` callbacks are enqueued as microtasks and drained automatically after script execution completes — the script is one macrotask, and microtasks drain after it finishes, matching ECMAScript specification behavior. Thenable adoption (resolving a Promise with another Promise) is deferred via a microtask per the spec's PromiseResolveThenableJob, ensuring correct ordering relative to other microtasks. If the script throws an exception, pending microtasks are discarded via `ClearQueue` in a `finally` block, preventing stale callbacks from leaking into subsequent executions. The test framework also drains microtasks after each test callback, so tests can return a Promise and place assertions inside `.then()` handlers. The benchmark runner drains after each measurement round.
 

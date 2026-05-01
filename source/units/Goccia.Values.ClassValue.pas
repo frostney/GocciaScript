@@ -117,6 +117,8 @@ type
     procedure DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
     procedure AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
     function GetOwnStaticSymbolDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
+    function GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor; override;
+    function GetOwnSymbols: TArray<TGocciaSymbolValue>; override;
     function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
     function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue;
 
@@ -1170,6 +1172,18 @@ begin
     Result := nil;
 end;
 
+function TGocciaClassValue.GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
+begin
+  Result := GetOwnStaticSymbolDescriptor(ASymbol);
+  if not Assigned(Result) then
+    Result := inherited GetOwnSymbolPropertyDescriptor(ASymbol);
+end;
+
+function TGocciaClassValue.GetOwnSymbols: TArray<TGocciaSymbolValue>;
+begin
+  Result := FStaticSymbolDescriptors.Keys;
+end;
+
 procedure TGocciaClassValue.AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
 var
   Descriptor: TGocciaPropertyDescriptor;
@@ -1252,7 +1266,7 @@ begin
   if Assigned(FSuperClass) then
     Result := FSuperClass.GetSymbolPropertyWithReceiver(ASymbol, AReceiver)
   else
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := inherited GetSymbolPropertyWithReceiver(ASymbol, AReceiver);
 end;
 
 // ES2026 §10.2.2 [[Call]] — class constructors are not callable without new

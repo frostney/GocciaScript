@@ -5285,6 +5285,10 @@ begin
     Exit;
   end;
 
+  if not (AObject is TGocciaObjectValue) then
+    ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
+      SSuggestCheckNullBeforeAccess);
+
   AObject.SetProperty(AKey, AValue);
 end;
 
@@ -6336,7 +6340,15 @@ begin
             TGocciaObjectValue(FRegisters[A].ObjectValue).SetProperty(
               KeyToPropertyNameRegister(FRegisters[B]),
               RegisterToValue(FRegisters[C]));
-        end;
+        end
+        else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
+          ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
+            SSuggestCheckNullBeforeAccess)
+        else
+          SetPropertyValue(GetRegister(A),
+            KeyToPropertyNameRegister(FRegisters[B]),
+            RegisterToValue(FRegisters[C]));
       end;
 
       OP_GET_LENGTH:
@@ -6382,6 +6394,22 @@ begin
           // Set .prototype chain: DerivedClass.prototype.[[Prototype]] = SuperClass.prototype
           TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.Prototype :=
             TGocciaClassValue(FRegisters[B].ObjectValue).Prototype;
+        end
+        else if (FRegisters[A].Kind = grkObject) and
+                (FRegisters[A].ObjectValue is TGocciaVMClassValue) and
+                (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaObjectValue) and
+                FRegisters[B].ObjectValue.IsCallable then
+        begin
+          // Native constructor superclass: preserve static and prototype
+          // inheritance links even though native construction is not modeled
+          // through TGocciaClassValue.SuperClass.
+          TGocciaObjectValue(FRegisters[A].ObjectValue).Prototype :=
+            TGocciaObjectValue(FRegisters[B].ObjectValue);
+          RightValue := FRegisters[B].ObjectValue.GetProperty(PROP_PROTOTYPE);
+          if RightValue is TGocciaObjectValue then
+            TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.Prototype :=
+              TGocciaObjectValue(RightValue);
         end;
       end;
 

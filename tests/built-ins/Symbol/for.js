@@ -22,7 +22,7 @@ test("Symbol.for with different keys", () => {
 });
 
 test("Symbol.for key coercion", () => {
-  // All arguments are coerced to string via ToStringLiteral
+  // All arguments are coerced with ToString.
   const sNull = Symbol.for("null");
   const sUndefined = Symbol.for("undefined");
   const sZero = Symbol.for("0");
@@ -33,4 +33,26 @@ test("Symbol.for key coercion", () => {
   expect(Symbol.for(undefined)).toBe(sUndefined);
   expect(Symbol.for(0)).toBe(sZero);
   expect(Symbol.for(false)).toBe(sFalse);
+});
+
+test("Symbol.for key coercion uses object toString", () => {
+  const calls = [];
+  const key = {
+    valueOf() {
+      calls.push("valueOf");
+      return {};
+    },
+    toString() {
+      calls.push("toString");
+      return "object-key";
+    },
+  };
+
+  const symbol = Symbol.for(key);
+  expect(symbol).toBe(Symbol.for("object-key"));
+  expect(calls).toEqual(["toString"]);
+});
+
+test("Symbol.for rejects symbol keys", () => {
+  expect(() => Symbol.for(Symbol("key"))).toThrow(TypeError);
 });

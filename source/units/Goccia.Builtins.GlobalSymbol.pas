@@ -48,8 +48,10 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.HoleValue,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.ToPrimitive;
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
@@ -69,10 +71,10 @@ begin
   // Use the well-known Symbol.iterator singleton
   FIteratorSymbol := TGocciaSymbolValue.WellKnownIterator;
 
-  // Create the Symbol function (callable, creates new symbols)
-  // ES2026 §20.4.1.1: Symbol throws TypeError if invoked with new
+  // Create the Symbol function (callable, creates new symbols). It still has
+  // [[Construct]] so it can be used as an extends newTarget; the constructor
+  // body throws when actually invoked via new.
   FSymbolFunction := TGocciaNativeFunctionValue.Create(SymbolConstructor, 'Symbol', 0);
-  FSymbolFunction.NotConstructable := True;
 
   // Register static methods on the Symbol function
   // Static built-in methods are not constructors per ES2026
@@ -139,6 +141,10 @@ var
   HasDescription: Boolean;
   Arg: TGocciaValue;
 begin
+  { Step 1: If NewTarget is not undefined, throw a TypeError exception. }
+  if AThisValue is TGocciaHoleValue then
+    ThrowTypeError(SErrorSymbolConstructorRequiresCall, SSuggestSymbolNoNew);
+
   { Step 2: If description is undefined, let descString be undefined.
     Step 3: Else, let descString be ? ToString(description). }
   HasDescription := False;
@@ -148,7 +154,7 @@ begin
     Arg := AArgs.GetElement(0);
     if not (Arg is TGocciaUndefinedLiteralValue) then
     begin
-      Description := Arg.ToStringLiteral.Value;
+      Description := ToECMAString(Arg).Value;
       HasDescription := True;
     end;
   end;
@@ -173,7 +179,7 @@ var
 begin
   { Step 1: Let stringKey = ToString(key) }
   if AArgs.Length > 0 then
-    Key := AArgs.GetElement(0).ToStringLiteral.Value
+    Key := ToECMAString(AArgs.GetElement(0)).Value
   else
     Key := 'undefined';
 

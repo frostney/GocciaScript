@@ -2884,6 +2884,7 @@ function EvaluateClassDefinition(const AClassDef: TGocciaClassDefinition; const 
 var
   SuperClass: TGocciaClassValue;
   SuperClassValue: TGocciaValue;
+  SuperPrototype: TGocciaValue;
   ClassValue: TGocciaClassValue;
   MethodPair: TGocciaClassMethodMap.TKeyValuePair;
   PropertyPair: TGocciaExpressionMap.TKeyValuePair;
@@ -2918,15 +2919,16 @@ var
   ExistingDescriptor: TGocciaPropertyDescriptor;
 begin
   SuperClass := nil;
+  SuperClassValue := nil;
   if AClassDef.SuperClass <> '' then
   begin
     SuperClassValue := AContext.Scope.GetValue(AClassDef.SuperClass);
     if SuperClassValue = nil then
       AContext.OnError(Format('Superclass "%s" not found', [AClassDef.SuperClass]), ALine, AColumn)
-    else if not (SuperClassValue is TGocciaClassValue) then
+    else if SuperClassValue is TGocciaClassValue then
+      SuperClass := TGocciaClassValue(SuperClassValue)
+    else if not ((SuperClassValue is TGocciaObjectValue) and SuperClassValue.IsCallable) then
       AContext.OnError(Format('Superclass "%s" is not a class (found %s)', [AClassDef.SuperClass, SuperClassValue.TypeName]), ALine, AColumn)
-    else
-      SuperClass := TGocciaClassValue(SuperClassValue);
   end;
 
   // Use the class name if provided, otherwise create an anonymous class
@@ -2936,6 +2938,14 @@ begin
     ClassName := '<anonymous>';
 
   ClassValue := TGocciaClassValue.Create(ClassName, SuperClass);
+  if (SuperClass = nil) and (SuperClassValue is TGocciaObjectValue) and
+     SuperClassValue.IsCallable then
+  begin
+    TGocciaObjectValue(ClassValue).Prototype := TGocciaObjectValue(SuperClassValue);
+    SuperPrototype := SuperClassValue.GetProperty(PROP_PROTOTYPE);
+    if SuperPrototype is TGocciaObjectValue then
+      ClassValue.Prototype.Prototype := TGocciaObjectValue(SuperPrototype);
+  end;
   // ES §14.3.7: constructor property is non-enumerable
   ClassValue.Prototype.DefineProperty(PROP_CONSTRUCTOR,
     TGocciaPropertyDescriptorData.Create(ClassValue, [pfConfigurable, pfWritable]));
