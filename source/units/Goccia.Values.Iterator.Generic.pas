@@ -13,12 +13,26 @@ type
   TGocciaGenericIteratorValue = class(TGocciaIteratorValue)
   private
     FSource: TGocciaValue;
+    // Captured at construction per ES2024 §7.4.2 GetIteratorDirect:
+    // the iterator record's [[NextMethod]] is the result of `GetV(obj,
+    // "next")` evaluated ONCE at iterator acquisition time.  Reusing
+    // FNextMethod across AdvanceNext calls means post-acquisition
+    // mutations of `iterator.next` are correctly ignored, and we
+    // avoid a redundant GetProperty hash lookup per iteration.
+    FNextMethod: TGocciaValue;
     function AdvanceNextInternal(const AValue: TGocciaValue;
       const AHasValue: Boolean): TGocciaObjectValue;
     function ReturnInternal(const AValue: TGocciaValue;
       const AHasValue: Boolean): TGocciaObjectValue;
   public
-    constructor Create(const AIteratorObject: TGocciaValue);
+    constructor Create(const AIteratorObject: TGocciaValue); overload;
+    // Overload for callers that have already resolved & validated
+    // `next` (e.g. GetIteratorValue / GetIteratorFromValue) — passes
+    // the captured callable straight in instead of forcing the
+    // constructor to re-run GetProperty(PROP_NEXT).  Keeps the
+    // capture-once contract end-to-end through the iterator
+    // acquisition pipeline.
+    constructor Create(const AIteratorObject, ANextMethod: TGocciaValue); overload;
     function AdvanceNext: TGocciaObjectValue; override;
     function AdvanceNextValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
@@ -47,12 +61,37 @@ constructor TGocciaGenericIteratorValue.Create(const AIteratorObject: TGocciaVal
 begin
   inherited Create;
   FSource := AIteratorObject;
+  // Capture once.  Callers (GetIteratorFromValue and the seven
+  // built-in factories above) already validate next is callable
+  // before reaching here, so we trust the resolved value; the
+  // defensive nil/non-callable guard in AdvanceNextInternal upgrades
+  // the silent-truncation bug that previously fired when user code
+  // mutated `iterator.next` mid-iteration into a spec-compliant
+  // TypeError per ES2024 §7.4.5 IteratorStep.
+  if Assigned(FSource) then
+    FNextMethod := FSource.GetProperty(PROP_NEXT)
+  else
+    FNextMethod := nil;
+end;
+
+constructor TGocciaGenericIteratorValue.Create(
+  const AIteratorObject, ANextMethod: TGocciaValue);
+begin
+  inherited Create;
+  FSource := AIteratorObject;
+  // ANextMethod was resolved + validated by the caller (typically
+  // GetIteratorValue at the iteratorRecord-creation site).  Trusting
+  // it directly avoids a redundant GetProperty(PROP_NEXT) and keeps
+  // the capture-once contract from the caller through to
+  // AdvanceNextInternal — no opportunity for an interleaved
+  // user-side mutation to swap `next` between validation and use.
+  FNextMethod := ANextMethod;
 end;
 
 function TGocciaGenericIteratorValue.AdvanceNextInternal(
   const AValue: TGocciaValue; const AHasValue: Boolean): TGocciaObjectValue;
 var
-  NextMethod, NextResult, DoneVal, ValueVal: TGocciaValue;
+  NextResult, DoneVal, ValueVal: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
 begin
   if FDone then
@@ -61,20 +100,24 @@ begin
     Exit;
   end;
 
-  NextMethod := FSource.GetProperty(PROP_NEXT);
-  if not Assigned(NextMethod) or not NextMethod.IsCallable then
-  begin
-    FDone := True;
-    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
-    Exit;
-  end;
+  // ES2024 §7.4.2 GetIteratorDirect step 2 / §7.4.5 IteratorStep:
+  // a missing/non-callable [[NextMethod]] is a TypeError, not silent
+  // termination.  We deliberately do NOT mark the iterator FDone
+  // before raising — per §7.4.10 IteratorClose, an abrupt completion
+  // must run iter.return() best-effort, and ReturnInternal short-
+  // circuits when FDone is already true.  Setting FDone here would
+  // suppress the cleanup callback the consumer expects to fire.
+  if not Assigned(FNextMethod) or
+     (FNextMethod is TGocciaUndefinedLiteralValue) or
+     not FNextMethod.IsCallable then
+    ThrowTypeError(SErrorIteratorNextMustBeCallable, SSuggestIteratorProtocol);
 
   if AHasValue then
     CallArgs := TGocciaArgumentsCollection.Create([AValue])
   else
     CallArgs := TGocciaArgumentsCollection.Create;
   try
-    NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, FSource);
+    NextResult := TGocciaFunctionBase(FNextMethod).Call(CallArgs, FSource);
   finally
     CallArgs.Free;
   end;
@@ -236,6 +279,8 @@ begin
   inherited;
   if Assigned(FSource) then
     FSource.MarkReferences;
+  if Assigned(FNextMethod) then
+    FNextMethod.MarkReferences;
 end;
 
 

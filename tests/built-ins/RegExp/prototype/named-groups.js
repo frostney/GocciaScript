@@ -93,7 +93,8 @@ test("forward backreference resolves correctly", () => {
   // Forward backreference matches empty string before group is captured,
   // so it matches " hello" (empty backreference + space + "hello")
   const result = re.exec(" hello");
-  expect(result).toBe(null);
+  expect(result[0]).toBe(" hello");
+  expect(result.groups.word).toBe("hello");
 });
 
 test("invalid named backreference throws", () => {

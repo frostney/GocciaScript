@@ -99,6 +99,24 @@ begin
     IsPositiveFinite(AEntry.MeanMs) and (AEntry.Iterations > 0);
 end;
 
+function FormatJSONNumber(const AValue: Double;
+  const AFormatSettings: TFormatSettings): string;
+begin
+  if Math.IsNan(AValue) or Math.IsInfinite(AValue) then
+    Exit('null');
+
+  Result := SysUtils.Format('%.6f', [AValue], AFormatSettings);
+end;
+
+function FormatJSONPercentage(const AValue: Double;
+  const AFormatSettings: TFormatSettings): string;
+begin
+  if Math.IsNan(AValue) or Math.IsInfinite(AValue) then
+    Exit('null');
+
+  Result := SysUtils.Format('%.4f', [AValue], AFormatSettings);
+end;
+
 function ParseReportFormat(const S: string): TBenchmarkReportFormat;
 var
   Lower: string;
@@ -420,14 +438,18 @@ begin
       end
       else
         BenchmarkJSON := SysUtils.Format(
-          '{"suite":"%s","name":"%s","opsPerSec":%.6f,' +
-          '"variancePercentage":%.4f,"meanMs":%.6f,"iterations":%d,' +
-          '"setupMs":%.6f,"teardownMs":%.6f,"minOpsPerSec":%.6f,' +
-          '"maxOpsPerSec":%.6f}',
-          [EscapeJSON(Entry.Suite), EscapeJSON(Entry.Name), Entry.OpsPerSec,
-           Entry.VariancePercentage, Entry.MeanMs, Entry.Iterations,
-           Entry.SetupMs, Entry.TeardownMs, Entry.MinOpsPerSec,
-           Entry.MaxOpsPerSec], JSONFormatSettings);
+          '{"suite":"%s","name":"%s","opsPerSec":%s,' +
+          '"variancePercentage":%s,"meanMs":%s,"iterations":%d,' +
+          '"setupMs":%s,"teardownMs":%s,"minOpsPerSec":%s,' +
+          '"maxOpsPerSec":%s}',
+          [EscapeJSON(Entry.Suite), EscapeJSON(Entry.Name),
+           FormatJSONNumber(Entry.OpsPerSec, JSONFormatSettings),
+           FormatJSONPercentage(Entry.VariancePercentage, JSONFormatSettings),
+           FormatJSONNumber(Entry.MeanMs, JSONFormatSettings), Entry.Iterations,
+           FormatJSONNumber(Entry.SetupMs, JSONFormatSettings),
+           FormatJSONNumber(Entry.TeardownMs, JSONFormatSettings),
+           FormatJSONNumber(Entry.MinOpsPerSec, JSONFormatSettings),
+           FormatJSONNumber(Entry.MaxOpsPerSec, JSONFormatSettings)]);
 
       if BenchmarksJSON <> '' then
         BenchmarksJSON := BenchmarksJSON + ',';

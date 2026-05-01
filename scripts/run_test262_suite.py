@@ -30,6 +30,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -60,7 +61,7 @@ def _recover_per_file_records(raw_json: str) -> list[dict] | None:
     structure is broken.
 
     Each per-file record is emitted by the runner on its own line in
-    the form ``{"fileName": "...", ..., "failedTests": [...]}`` (possibly
+    the form ``{"file": "...", ..., "failedTests": [...]}`` (possibly
     followed by a trailing comma).  When the surrounding "failedTests"
     array gets corrupted (a known runner bug under heavy stall load),
     we cannot ``json.loads`` the whole document but the per-file
@@ -69,12 +70,14 @@ def _recover_per_file_records(raw_json: str) -> list[dict] | None:
     Returns the recovered list, or None if nothing usable was found.
     """
     records: list[dict] = []
-    # Each line is either an entry like
+    # Each line is a per-file record like:
     #     {"fileName": "...", "passed": 0, ...},
-    # or
-    #     {"fileName": "...", "passed": 0, ...}
-    # Match a JSON object on a single line that starts with {"fileName":.
-    line_re = re.compile(r'^\s*(\{"fileName":\s*".*?\})(,?)\s*$')
+    # The runner historically used "file" as the key; PR #474 (compact-json
+    # output) renamed it to "fileName".  Match both so this fallback works
+    # regardless of which runner version produced the corrupted JSON.
+    line_re = re.compile(
+        r'^\s*(\{"(?:file|fileName)":\s*".*?\})(,?)\s*$'
+    )
     for line in raw_json.splitlines():
         m = line_re.match(line)
         if not m:
@@ -83,7 +86,7 @@ def _recover_per_file_records(raw_json: str) -> list[dict] | None:
             obj = json.loads(m.group(1))
         except json.JSONDecodeError:
             continue
-        if isinstance(obj, dict) and "fileName" in obj:
+        if isinstance(obj, dict) and ("file" in obj or "fileName" in obj):
             records.append(obj)
     return records or None
 
@@ -518,330 +521,495 @@ def evaluate_suite(
         # need to be (re-)run.
         final_by_id: dict[str, dict] = {}
 
-        # Tests we've already seen stall in native code — we exclude them
-        # from retries so a single bad test cannot orphan the same worker
-        # again on the next attempt.
-        known_stalled: set[str] = set()
+        # Process the eligible batch in fixed-size chunks instead of one
+        # giant subprocess invocation.  When a single test crashes the
+        # runner (OOM, native stall the cooperative timeout can't reach,
+        # exit=1 on a Pascal-side error) the runner produces no JSON and
+        # *every* still-pending test in that subprocess gets marked ERROR.
+        # Without chunking, one bad test in test262's 35K wrappers
+        # invalidates tens of thousands of others.  Chunking bounds the
+        # blast radius to TEST262_BATCH_SIZE tests per crash and lets the
+        # rest of the suite still report real conformance numbers.
+        # Each chunk gets a fresh runner subprocess with its own
+        # known_stalled set and retry budget.
+        batch_size_default = 1000
+        batch_size = int(os.environ.get(
+            "TEST262_BATCH_SIZE", str(batch_size_default)))
+        if batch_size <= 0:
+            batch_size = len(test_ids_in_order) or 1
+        total_chunks = (len(test_ids_in_order) + batch_size - 1) // batch_size
 
-        pending_ids = list(test_ids_in_order)
-
-        # Per-worker stalls bounded by jobs count; each retry reduces the
-        # queue by one stall worth of files.  Scale the ceiling with the
-        # initial queue so large batches aren't capped at a fixed budget
-        # before the no-progress break trips; the no-progress check (below)
-        # still terminates promptly when a retry produces nothing new.
-        max_retries = max(10, len(pending_ids))
-        attempt = 0
-
-        while pending_ids and attempt < max_retries:
-            attempt += 1
-            if attempt > 1:
+        for chunk_index in range(total_chunks):
+            chunk_start = chunk_index * batch_size
+            chunk_ids = test_ids_in_order[chunk_start:chunk_start + batch_size]
+            if total_chunks > 1:
                 print(
-                    f"  Retry {attempt - 1}: re-running "
-                    f"{len(pending_ids)} unfinished tests "
-                    f"(skipping {len(known_stalled)} known stalls) ..."
+                    f"  Chunk {chunk_index + 1}/{total_chunks}: "
+                    f"{len(chunk_ids)} tests "
+                    f"({chunk_start + 1}..{chunk_start + len(chunk_ids)})"
                 )
 
-            with tempfile.TemporaryDirectory(prefix="test262-goccia.") as tmp:
-                temp_dir = Path(tmp)
+            # Tests we've already seen stall in native code — we exclude them
+            # from retries so a single bad test cannot orphan the same worker
+            # again on the next attempt.  Reset per chunk: a stall from a
+            # prior chunk cannot affect tests in this one.
+            known_stalled: set[str] = set()
 
-                for tid in pending_ids:
-                    test_path, metadata = test_meta_by_id[tid]
-                    source = test_path.read_text(encoding="utf-8")
-                    body = strip_frontmatter(source)
-                    description = metadata.get("description", tid)
-                    if isinstance(description, dict):
-                        description = str(description)
-                    negative = metadata.get("negative")
-                    includes = metadata.get("includes", [])
+            pending_ids = list(chunk_ids)
 
-                    flags = metadata.get("flags", [])
-                    is_async = "async" in flags
-                    if is_async and "doneprintHandle.js" not in includes:
-                        includes = [*includes, "doneprintHandle.js"]
-                    harness_source = build_harness_source(
-                        includes, harness_files
+            # Per-worker stalls bounded by jobs count; each retry reduces the
+            # queue by one stall worth of files.  Scale the ceiling with the
+            # initial queue so large batches aren't capped at a fixed budget
+            # before the no-progress break trips; the no-progress check (below)
+            # still terminates promptly when a retry produces nothing new.
+            max_retries = max(10, len(pending_ids))
+            attempt = 0
+
+            while pending_ids and attempt < max_retries:
+                attempt += 1
+                if attempt > 1:
+                    print(
+                        f"  Retry {attempt - 1}: re-running "
+                        f"{len(pending_ids)} unfinished tests "
+                        f"(skipping {len(known_stalled)} known stalls) ..."
                     )
 
-                    if (negative is not None
-                            and negative.get("phase") == "runtime"):
-                        error_type = negative.get("type", "TypeError")
-                        wrapped = wrap_negative_runtime_test(
-                            harness_source, body, tid, description,
-                            error_type,
+                with tempfile.TemporaryDirectory(prefix="test262-goccia.") as tmp:
+                    temp_dir = Path(tmp)
+
+                    for tid in pending_ids:
+                        test_path, metadata = test_meta_by_id[tid]
+                        source = test_path.read_text(encoding="utf-8")
+                        body = strip_frontmatter(source)
+                        description = metadata.get("description", tid)
+                        if isinstance(description, dict):
+                            description = str(description)
+                        negative = metadata.get("negative")
+                        includes = metadata.get("includes", [])
+
+                        flags = metadata.get("flags", [])
+                        is_async = "async" in flags
+                        if is_async and "doneprintHandle.js" not in includes:
+                            includes = [*includes, "doneprintHandle.js"]
+                        harness_source = build_harness_source(
+                            includes, harness_files
                         )
-                    else:
-                        wrapped = wrap_positive_test(
-                            harness_source, body, tid, description,
-                            is_async=is_async,
-                        )
 
-                    # Hash the tid into a collision-free temp filename.  The
-                    # naive replace("/", "__") collapses both `foo/bar` and
-                    # `foo__bar` to the same name, which silently overwrites
-                    # one wrapper with another and then misattributes the
-                    # runner's per-file record to the wrong source test.
-                    safe_name = (
-                        hashlib.sha1(tid.encode("utf-8")).hexdigest() + ".js"
-                    )
-                    (temp_dir / safe_name).write_text(
-                        wrapped, encoding="utf-8"
-                    )
-
-                json_output = temp_dir / "__results.json"
-
-                timeout_ms = timeout * 1000
-                runner_cmd = [
-                    str(test_runner),
-                    str(temp_dir),
-                    "--silent",
-                    f"--output={json_output}",
-                    f"--timeout={timeout_ms}",
-                    f"--test-timeout={timeout_ms}",
-                    f"--describe-timeout={timeout_ms}",
-                ]
-                if asi:
-                    runner_cmd.append("--asi")
-                if mode != "interpreted":
-                    runner_cmd.append(f"--mode={mode}")
-                if compat_var:
-                    runner_cmd.append("--compat-var")
-                if compat_function:
-                    runner_cmd.append("--compat-function")
-                if unsafe_function_constructor:
-                    runner_cmd.append("--unsafe-function-constructor")
-                if jobs is not None:
-                    runner_cmd.append(f"--jobs={jobs}")
-
-                runner_output = ""
-                process_returncode = -1
-                debug_dir = Path(tempfile.gettempdir())
-                try:
-                    process = subprocess.run(
-                        runner_cmd,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.PIPE,
-                        check=False,
-                    )
-                    process_returncode = process.returncode
-                    runner_output = (
-                        process.stderr.decode("utf-8", errors="replace")
-                    ).strip()
-                    if process_returncode != 0 and runner_output:
-                        try:
-                            (debug_dir / "last_runner_stderr.txt").write_text(
-                                runner_output
+                        if (negative is not None
+                                and negative.get("phase") == "runtime"):
+                            error_type = negative.get("type", "TypeError")
+                            wrapped = wrap_negative_runtime_test(
+                                harness_source, body, tid, description,
+                                error_type,
                             )
-                        except OSError:
-                            pass
-                except Exception as e:  # noqa: BLE001
-                    runner_output = f"Runner invocation failed: {e}"
-
-                tr_results: dict | None = None
-                if json_output.is_file():
-                    raw_json = json_output.read_bytes().decode(
-                        "utf-8", errors="replace"
-                    )
-                    clean_json = re.sub(
-                        r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw_json
-                    )
-                    try:
-                        tr_results = json.loads(clean_json)
-                    except json.JSONDecodeError as e:
-                        # The runner emits a top-level "failedTests"
-                        # array that can grow to tens of thousands of
-                        # entries when a stalled-worker run produces
-                        # many "Worker produced no result" placeholders.
-                        # That array is occasionally corrupted in the
-                        # serialised JSON (a separate runner-side bug),
-                        # but the per-file "results" array we actually
-                        # consume is well-formed.  Recover by parsing
-                        # each per-file record individually.
-                        recovered = _recover_per_file_records(clean_json)
-                        if recovered is not None:
-                            print(
-                                f"  JSON parse error at {e.pos}; "
-                                f"recovered {len(recovered)} per-file "
-                                f"records via regex fallback"
-                            )
-                            tr_results = {"results": recovered}
                         else:
-                            print(
-                                f"  JSON parse error at {e.pos} of "
-                                f"{len(clean_json)}: {e.msg}"
+                            wrapped = wrap_positive_test(
+                                harness_source, body, tid, description,
+                                is_async=is_async,
                             )
+
+                        # Hash the tid into a collision-free temp filename.  The
+                        # naive replace("/", "__") collapses both `foo/bar` and
+                        # `foo__bar` to the same name, which silently overwrites
+                        # one wrapper with another and then misattributes the
+                        # runner's per-file record to the wrong source test.
+                        # SHA-256 (vs SHA-1) avoids any theoretical collision
+                        # concern even at suite sizes of millions of test_ids;
+                        # the longer hex string is harmless as a filename.
+                        safe_name = (
+                            hashlib.sha256(tid.encode("utf-8")).hexdigest() + ".js"
+                        )
+                        (temp_dir / safe_name).write_text(
+                            wrapped, encoding="utf-8"
+                        )
+
+                    json_output = temp_dir / "__results.json"
+
+                    # Per-process GC heap cap.  test262 contains many tests
+                    # designed to verify IteratorClose / iterator-cleanup
+                    # semantics by running an infinite iterator against an
+                    # engine that's expected to stop early.  Any engine bug
+                    # in the early-exit path turns those tests into runaway
+                    # allocators that OOM the whole runner process — and
+                    # because the process holds the entire batch's pending
+                    # work, one bad test kills tens of thousands of others.
+                    # Capping the GC heap converts a process-killing OOM
+                    # into a per-test RangeError that the engine catches
+                    # locally; the worker reports the test as failed and
+                    # moves on.  2 GiB leaves plenty of headroom for legit
+                    # memory-heavy tests on 16 GiB CI runners.  Override via
+                    # TEST262_MAX_MEMORY (bytes); set 0 to disable.
+                    max_memory_default = 2 * 1024 * 1024 * 1024  # 2 GiB
+                    max_memory = int(os.environ.get(
+                        "TEST262_MAX_MEMORY", str(max_memory_default)))
+
+                    timeout_ms = timeout * 1000
+                    runner_cmd = [
+                        str(test_runner),
+                        str(temp_dir),
+                        # Neither --silent nor --no-progress: forward the
+                        # runner's per-file progress lines (`[N/M] file.js`) live
+                        # to this script's stdout so CI logs see exactly which
+                        # test the runner is processing at any moment.  Without
+                        # this, a stall or external SIGTERM mid-run leaves CI
+                        # with zero diagnostic output and no way to identify
+                        # which test or phase is responsible.
+                        f"--output={json_output}",
+                        f"--timeout={timeout_ms}",
+                        f"--test-timeout={timeout_ms}",
+                        f"--describe-timeout={timeout_ms}",
+                    ]
+                    if max_memory > 0:
+                        runner_cmd.append(f"--max-memory={max_memory}")
+                    if asi:
+                        runner_cmd.append("--asi")
+                    if mode != "interpreted":
+                        runner_cmd.append(f"--mode={mode}")
+                    if compat_var:
+                        runner_cmd.append("--compat-var")
+                    if compat_function:
+                        runner_cmd.append("--compat-function")
+                    if unsafe_function_constructor:
+                        runner_cmd.append("--unsafe-function-constructor")
+                    if jobs is not None:
+                        runner_cmd.append(f"--jobs={jobs}")
+
+                    runner_output = ""
+                    process_returncode = -1
+                    debug_dir = Path(tempfile.gettempdir())
+                    # Stream runner output:
+                    # - stdout inherits this script's fd, so the runner writes
+                    #   directly to our stdout (no Python intermediation).
+                    # - stderr is piped and drained on a background thread so we
+                    #   can both forward it live to this script's stderr AND
+                    #   capture it for fallback diagnostic display when the
+                    #   runner exits without a parseable JSON report.
+                    # A hard timeout backs up the runner's cooperative
+                    # --timeout/--test-timeout: those are honoured by the
+                    # bytecode dispatch loop, but a worker thread stuck in
+                    # native Pascal code can ignore them.  Without this
+                    # ceiling, process.wait() blocks indefinitely and the
+                    # whole CI job hangs at the GH-hosted timeout-minutes
+                    # ceiling — exactly what we saw before chunked
+                    # execution.  Override via TEST262_RUNNER_TIMEOUT_S
+                    # (seconds); 0 disables the hard ceiling.
+                    runner_timeout_default = 600
+                    runner_timeout = int(os.environ.get(
+                        "TEST262_RUNNER_TIMEOUT_S",
+                        str(runner_timeout_default),
+                    ))
+                    captured_stderr_chunks: list[str] = []
+                    process: subprocess.Popen | None = None
+                    stderr_thread: threading.Thread | None = None
+
+                    def _flush_runner_state(extra_message: str = "") -> None:
+                        nonlocal runner_output
+                        # Merge any synthetic diagnostic message (timeout
+                        # notice, invocation failure) with whatever the
+                        # runner managed to write to stderr.  Without
+                        # this merge, a stderr-empty crash or a hard
+                        # timeout would leave runner_output blank, and
+                        # the chunk's tests would all be classified as
+                        # ERROR with the unhelpful "No runner output"
+                        # message instead of the actual root cause.
+                        stderr_output = (
+                            "".join(captured_stderr_chunks).strip())
+                        runner_output = "\n".join(
+                            part for part in
+                            (extra_message.strip(), stderr_output)
+                            if part
+                        )
+                        if (process_returncode != 0
+                                and runner_output):
                             try:
-                                (debug_dir / "last_runner_json.txt").write_text(
-                                    clean_json
-                                )
+                                (debug_dir
+                                 / "last_runner_stderr.txt"
+                                 ).write_text(runner_output)
                             except OSError:
                                 pass
-                            tr_results = None
-                else:
-                    print(
-                        f"  Runner output file missing: {json_output} "
-                        f"(exit={process_returncode}, "
-                        f"stderr_bytes={len(runner_output)})"
-                    )
 
-                if tr_results is None:
-                    print("  TestRunner produced no usable JSON output")
-                    if runner_output:
-                        for line in runner_output.split("\n")[:10]:
-                            print(f"    {line[:200]}")
-                    for tid in pending_ids:
-                        final_by_id[tid] = {
-                            "id": tid,
-                            "status": "ERROR",
-                            "message": (runner_output[:300]
-                                        or "No runner output"),
-                        }
-                        summary["errors"] += 1
-                    pending_ids = []
-                    break
+                    timeout_msg = ""
+                    try:
+                        process = subprocess.Popen(
+                            runner_cmd,
+                            stdout=None,
+                            stderr=subprocess.PIPE,
+                            bufsize=1,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
+                        )
 
-                # Ground truth: per-file records emitted by the runner.
-                file_results_by_safe: dict[str, dict] = {}
-                for fr in tr_results.get("results", []):
-                    fpath = fr.get("fileName", "")
-                    key = Path(fpath).name if fpath else ""
-                    if key:
-                        file_results_by_safe[key] = fr
+                        def _drain_stderr() -> None:
+                            assert process is not None
+                            assert process.stderr is not None
+                            for line in process.stderr:
+                                sys.stderr.write(line)
+                                sys.stderr.flush()
+                                captured_stderr_chunks.append(line)
 
-                next_pending: list[str] = []
-                attempt_stalls = 0
-                for tid in pending_ids:
-                    safe = (
-                        hashlib.sha1(tid.encode("utf-8")).hexdigest() + ".js"
-                    )
-                    fr = file_results_by_safe.get(safe)
-                    if fr is None:
-                        # Missing per-file record is functionally identical to
-                        # the "Worker produced no result" stall: the runner did
-                        # not surface an outcome for this file on this attempt.
-                        # Requeue so the retry loop can hand it to a fresh
-                        # pool; the post-loop tail at L826-835 finalises any
-                        # IDs still missing after attempts are exhausted.
-                        next_pending.append(tid)
-                        continue
+                        stderr_thread = threading.Thread(
+                            target=_drain_stderr, daemon=True
+                        )
+                        stderr_thread.start()
+                        try:
+                            wait_timeout = (
+                                runner_timeout
+                                if runner_timeout > 0 else None)
+                            process.wait(timeout=wait_timeout)
+                        except subprocess.TimeoutExpired:
+                            timeout_msg = (
+                                f"Runner exceeded "
+                                f"TEST262_RUNNER_TIMEOUT_S="
+                                f"{runner_timeout}s; terminating"
+                            )
+                            print(f"  {timeout_msg}")
+                            try:
+                                process.terminate()
+                                process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                process.kill()
+                                process.wait()
+                        stderr_thread.join(timeout=5)
 
-                    f_error = fr.get("error", "") or ""
-                    f_failed = int(fr.get("failed", 0))
-                    f_passed = int(fr.get("passed", 0))
-                    f_total = int(fr.get("totalTests", 0))
-                    f_failed_tests = fr.get("failedTests", []) or []
+                        process_returncode = process.returncode
+                        _flush_runner_state(timeout_msg)
+                    except Exception as e:  # noqa: BLE001
+                        invocation_msg = f"Runner invocation failed: {e}"
+                        # Don't leave the runner orphaned on this script's
+                        # exit path: terminate it and drain stderr so
+                        # diagnostic state still lands in
+                        # last_runner_stderr.txt.
+                        if (process is not None
+                                and process.poll() is None):
+                            try:
+                                process.terminate()
+                                process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                process.kill()
+                                process.wait()
+                        if stderr_thread is not None:
+                            stderr_thread.join(timeout=5)
+                        if process is not None:
+                            process_returncode = (
+                                process.returncode
+                                if process.returncode is not None
+                                else -1)
+                        _flush_runner_state(invocation_msg)
 
-                    # Distinguish the two stall categories from real
-                    # outcomes.  Stall = the watchdog actually abandoned
-                    # the worker on this file; queue-not-drained = a peer
-                    # stall left this file untouched, retry will likely
-                    # finish it on a fresh pool.
-                    is_stalled = "TIMEOUT (worker stalled" in f_error
-                    is_no_result = (
-                        "Worker produced no result" in f_error
-                    )
-                    # Cooperative per-test deadlines surface as failed-test
-                    # entries containing "TIMEOUT after Xms" rather than as
-                    # a worker-stall string.  Without recognising them here
-                    # they fall through to the FAIL branch, so the suite's
-                    # `timeouts` counter under-reports while `failed`
-                    # over-reports.
-                    is_test_timeout = any(
-                        "TIMEOUT after " in item for item in f_failed_tests
-                    )
-
-                    if is_stalled:
-                        known_stalled.add(tid)
-                        attempt_stalls += 1
-                        final_by_id[tid] = {
-                            "id": tid,
-                            "status": "TIMEOUT",
-                            "message": f_error,
-                        }
-                        summary["timeouts"] += 1
-                        continue
-
-                    if is_no_result:
-                        next_pending.append(tid)
-                        continue
-
-                    if is_test_timeout:
-                        final_by_id[tid] = {
-                            "id": tid,
-                            "status": "TIMEOUT",
-                            "message": "; ".join(f_failed_tests) or f_error,
-                        }
-                        summary["timeouts"] += 1
-                        continue
-
-                    if f_failed > 0:
-                        final_by_id[tid] = {
-                            "id": tid,
-                            "status": "FAIL",
-                            "message": (
-                                "; ".join(f_failed_tests)
-                                or f_error
-                                or "Test failed"
-                            ),
-                        }
-                        summary["failed"] += 1
-                    elif f_passed > 0 and f_total > 0:
-                        final_by_id[tid] = {
-                            "id": tid,
-                            "status": "PASS",
-                            "message": "",
-                        }
-                        summary["passed"] += 1
-                    elif f_error:
-                        final_by_id[tid] = {
-                            "id": tid,
-                            "status": "ERROR",
-                            "message": f_error,
-                        }
-                        summary["errors"] += 1
+                    tr_results: dict | None = None
+                    if json_output.is_file():
+                        raw_json = json_output.read_bytes().decode(
+                            "utf-8", errors="replace"
+                        )
+                        clean_json = re.sub(
+                            r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw_json
+                        )
+                        try:
+                            tr_results = json.loads(clean_json)
+                        except json.JSONDecodeError as e:
+                            # The runner emits a top-level "failedTests"
+                            # array that can grow to tens of thousands of
+                            # entries when a stalled-worker run produces
+                            # many "Worker produced no result" placeholders.
+                            # That array is occasionally corrupted in the
+                            # serialised JSON (a separate runner-side bug),
+                            # but the per-file "results" array we actually
+                            # consume is well-formed.  Recover by parsing
+                            # each per-file record individually.
+                            recovered = _recover_per_file_records(clean_json)
+                            if recovered is not None:
+                                print(
+                                    f"  JSON parse error at {e.pos}; "
+                                    f"recovered {len(recovered)} per-file "
+                                    f"records via regex fallback"
+                                )
+                                tr_results = {"results": recovered}
+                            else:
+                                print(
+                                    f"  JSON parse error at {e.pos} of "
+                                    f"{len(clean_json)}: {e.msg}"
+                                )
+                                try:
+                                    (debug_dir / "last_runner_json.txt").write_text(
+                                        clean_json
+                                    )
+                                except OSError:
+                                    pass
+                                tr_results = None
                     else:
-                        final_by_id[tid] = {
-                            "id": tid,
-                            "status": "ERROR",
-                            "message": "File ran but registered no tests",
-                        }
-                        summary["errors"] += 1
+                        print(
+                            f"  Runner output file missing: {json_output} "
+                            f"(exit={process_returncode}, "
+                            f"stderr_bytes={len(runner_output)})"
+                        )
 
-                if attempt_stalls > 0:
-                    print(
-                        f"  Attempt {attempt}: "
-                        f"{attempt_stalls} new native-code stall(s); "
-                        f"{len(next_pending)} files still pending"
-                    )
+                    if tr_results is None:
+                        print("  TestRunner produced no usable JSON output")
+                        if runner_output:
+                            for line in runner_output.split("\n")[:10]:
+                                print(f"    {line[:200]}")
+                        for tid in pending_ids:
+                            final_by_id[tid] = {
+                                "id": tid,
+                                "status": "ERROR",
+                                "message": (runner_output[:300]
+                                            or "No runner output"),
+                            }
+                            summary["errors"] += 1
+                        pending_ids = []
+                        break
 
-                # Halt when a retry produces no progress — re-running the
-                # exact same set won't break the loop.  Preserve the
-                # exact still-pending set (next_pending) so the post-loop
-                # cleanup records ERROR entries for them in final_by_id;
-                # zeroing pending_ids here would silently drop those IDs.
-                if (len(next_pending) == len(pending_ids)
-                        and attempt_stalls == 0):
-                    print(
-                        f"  No progress on retry; "
-                        f"{len(next_pending)} tests remain unprocessed"
-                    )
+                    # Ground truth: per-file records emitted by the runner.
+                    # PR #474 renamed "file" to "fileName" in TestRunner's
+                    # JSON output; tolerate both so we don't silently drop
+                    # records produced by older runners or recovered via
+                    # _recover_per_file_records (whose regex still matches
+                    # the legacy "file" form).
+                    file_results_by_safe: dict[str, dict] = {}
+                    for fr in tr_results.get("results", []):
+                        fpath = fr.get("fileName") or fr.get("file") or ""
+                        key = Path(fpath).name if fpath else ""
+                        if key:
+                            file_results_by_safe[key] = fr
+
+                    next_pending: list[str] = []
+                    attempt_stalls = 0
+                    for tid in pending_ids:
+                        # Must mirror the SHA-256 computed when wrappers
+                        # were written above so we can match runner per-
+                        # file records back to the originating test_id.
+                        safe = (
+                            hashlib.sha256(tid.encode("utf-8")).hexdigest() + ".js"
+                        )
+                        fr = file_results_by_safe.get(safe)
+                        if fr is None:
+                            # Missing per-file record is functionally identical to
+                            # the "Worker produced no result" stall: the runner did
+                            # not surface an outcome for this file on this attempt.
+                            # Requeue so the retry loop can hand it to a fresh
+                            # pool; the post-loop tail at L826-835 finalises any
+                            # IDs still missing after attempts are exhausted.
+                            next_pending.append(tid)
+                            continue
+
+                        f_error = fr.get("error", "") or ""
+                        f_failed = int(fr.get("failed", 0))
+                        f_passed = int(fr.get("passed", 0))
+                        f_total = int(fr.get("totalTests", 0))
+                        f_failed_tests = fr.get("failedTests", []) or []
+
+                        # Distinguish the two stall categories from real
+                        # outcomes.  Stall = the watchdog actually abandoned
+                        # the worker on this file; queue-not-drained = a peer
+                        # stall left this file untouched, retry will likely
+                        # finish it on a fresh pool.
+                        is_stalled = "TIMEOUT (worker stalled" in f_error
+                        is_no_result = (
+                            "Worker produced no result" in f_error
+                        )
+                        # Cooperative per-test deadlines surface as failed-test
+                        # entries containing "TIMEOUT after Xms" rather than as
+                        # a worker-stall string.  Without recognising them here
+                        # they fall through to the FAIL branch, so the suite's
+                        # `timeouts` counter under-reports while `failed`
+                        # over-reports.
+                        is_test_timeout = any(
+                            "TIMEOUT after " in item for item in f_failed_tests
+                        )
+
+                        if is_stalled:
+                            known_stalled.add(tid)
+                            attempt_stalls += 1
+                            final_by_id[tid] = {
+                                "id": tid,
+                                "status": "TIMEOUT",
+                                "message": f_error,
+                            }
+                            summary["timeouts"] += 1
+                            continue
+
+                        if is_no_result:
+                            next_pending.append(tid)
+                            continue
+
+                        if is_test_timeout:
+                            final_by_id[tid] = {
+                                "id": tid,
+                                "status": "TIMEOUT",
+                                "message": "; ".join(f_failed_tests) or f_error,
+                            }
+                            summary["timeouts"] += 1
+                            continue
+
+                        if f_failed > 0:
+                            final_by_id[tid] = {
+                                "id": tid,
+                                "status": "FAIL",
+                                "message": (
+                                    "; ".join(f_failed_tests)
+                                    or f_error
+                                    or "Test failed"
+                                ),
+                            }
+                            summary["failed"] += 1
+                        elif f_passed > 0 and f_total > 0:
+                            final_by_id[tid] = {
+                                "id": tid,
+                                "status": "PASS",
+                                "message": "",
+                            }
+                            summary["passed"] += 1
+                        elif f_error:
+                            final_by_id[tid] = {
+                                "id": tid,
+                                "status": "ERROR",
+                                "message": f_error,
+                            }
+                            summary["errors"] += 1
+                        else:
+                            final_by_id[tid] = {
+                                "id": tid,
+                                "status": "ERROR",
+                                "message": "File ran but registered no tests",
+                            }
+                            summary["errors"] += 1
+
+                    if attempt_stalls > 0:
+                        print(
+                            f"  Attempt {attempt}: "
+                            f"{attempt_stalls} new native-code stall(s); "
+                            f"{len(next_pending)} files still pending"
+                        )
+
+                    # Halt when a retry produces no progress — re-running the
+                    # exact same set won't break the loop.  Preserve the
+                    # exact still-pending set (next_pending) so the post-loop
+                    # cleanup records ERROR entries for them in final_by_id;
+                    # zeroing pending_ids here would silently drop those IDs.
+                    if (len(next_pending) == len(pending_ids)
+                            and attempt_stalls == 0):
+                        print(
+                            f"  No progress on retry; "
+                            f"{len(next_pending)} tests remain unprocessed"
+                        )
+                        pending_ids = next_pending
+                        break
+
                     pending_ids = next_pending
-                    break
 
-                pending_ids = next_pending
-
-        # Anything still pending after retries is a queue tail no fresh
-        # pool managed to drain.  Surface explicitly.
-        for tid in pending_ids:
-            final_by_id[tid] = {
-                "id": tid,
-                "status": "ERROR",
-                "message": (
-                    "Worker produced no result after "
-                    f"{attempt} attempts (queue never drained)"
-                ),
-            }
-            summary["errors"] += 1
+            # Anything still pending after retries is a queue tail no fresh
+            # pool managed to drain.  Surface explicitly.
+            for tid in pending_ids:
+                final_by_id[tid] = {
+                    "id": tid,
+                    "status": "ERROR",
+                    "message": (
+                        "Worker produced no result after "
+                        f"{attempt} attempts (queue never drained)"
+                    ),
+                }
+                summary["errors"] += 1
 
         # Append in the original submission order so downstream consumers
         # see results in a stable order.
