@@ -1042,7 +1042,6 @@ function TGocciaClassValue.GetPropertyWithContext(const AName: string; const ATh
 var
   Getter: TGocciaFunctionBase;
   Args: TGocciaArgumentsCollection;
-  Current: TGocciaClassValue;
 begin
   if AName = PROP_PROTOTYPE then
   begin
@@ -1085,34 +1084,8 @@ begin
     Exit;
   end;
 
-  Current := FSuperClass;
-  while Assigned(Current) do
-  begin
-    if Current.FStaticMethods.TryGetValue(AName, Result) then
-      Exit;
-
-    if Current.FStaticGetters.TryGetValue(AName, Getter) then
-    begin
-      Args := TGocciaArgumentsCollection.CreateWithCapacity(0);
-      try
-        Result := Getter.Call(Args, AThisContext);
-      finally
-        Args.Free;
-      end;
-      Exit;
-    end;
-
-    if Current.FStaticSetters.ContainsKey(AName) then
-    begin
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
-    end;
-
-    Current := Current.FSuperClass;
-  end;
-
   // Fall through to own properties (inherited from TGocciaObjectValue) and
-  // then up the [[Prototype]] chain (Function.prototype → Object.prototype)
+  // then up the constructor [[Prototype]] chain.
   Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 

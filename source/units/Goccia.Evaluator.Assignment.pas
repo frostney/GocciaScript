@@ -12,6 +12,7 @@ uses
 
 // Property assignment with error handling for non-objects
 procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
+procedure AssignSymbolProperty(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
 
 // Compound assignment operations
 procedure PerformPropertyCompoundAssignment(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
@@ -49,6 +50,15 @@ procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; 
 begin
   EnsureAssignableReceiver(AObj, APropertyName);
   AObj.SetProperty(APropertyName, AValue);
+end;
+
+procedure AssignSymbolProperty(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
+begin
+  EnsureAssignableReceiver(AObj, ASymbol.ToDisplayString.Value);
+  if AObj is TGocciaClassValue then
+    TGocciaClassValue(AObj).AssignSymbolProperty(ASymbol, AValue)
+  else
+    TGocciaObjectValue(AObj).AssignSymbolProperty(ASymbol, AValue);
 end;
 
 procedure PerformPropertyCompoundAssignment(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);

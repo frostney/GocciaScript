@@ -1581,7 +1581,6 @@ function TGocciaVMClassValue.CreateNativeInstance(
   const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
 var
   ConstructedValue: TGocciaValue;
-  Receiver: TGocciaInstanceValue;
 begin
   Result := inherited CreateNativeInstance(AArguments);
   if Assigned(Result) or not Assigned(NativeSuperConstructor) then
@@ -1590,19 +1589,8 @@ begin
   if (NativeSuperConstructor is TGocciaFunctionBase) and
      not (NativeSuperConstructor is TGocciaNativeFunctionValue) then
   begin
-    Receiver := TGocciaInstanceValue.Create(Self);
-    TGarbageCollector.Instance.AddTempRoot(Receiver);
-    try
-      ConstructedValue := TGocciaFunctionBase(NativeSuperConstructor).Call(
-        AArguments, Receiver);
-      if ConstructedValue is TGocciaObjectValue then
-        Result := TGocciaObjectValue(ConstructedValue)
-      else
-        Result := Receiver;
-      Exit;
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(Receiver);
-    end;
+    Result := TGocciaInstanceValue.Create(Self);
+    Exit;
   end;
 
   ConstructedValue := FVM.ConstructValue(NativeSuperConstructor, AArguments);
@@ -2880,6 +2868,66 @@ begin
   Result := 'super';
 end;
 
+function InvokeConstructableWithReceiver(const AConstructor: TGocciaValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const AReceiver: TGocciaValue): TGocciaValue;
+var
+  BoundFunction: TGocciaBoundFunctionValue;
+  CombinedArgs: TGocciaArgumentsCollection;
+  SuperResult: TGocciaValue;
+  I: Integer;
+begin
+  if AConstructor is TGocciaBoundFunctionValue then
+  begin
+    BoundFunction := TGocciaBoundFunctionValue(AConstructor);
+    CombinedArgs := TGocciaArgumentsCollection.CreateWithCapacity(
+      BoundFunction.BoundArgCount + AArguments.Length);
+    try
+      for I := 0 to BoundFunction.BoundArgCount - 1 do
+        CombinedArgs.Add(BoundFunction.GetBoundArg(I));
+      for I := 0 to AArguments.Length - 1 do
+        CombinedArgs.Add(AArguments.GetElement(I));
+      Exit(InvokeConstructableWithReceiver(BoundFunction.OriginalFunction,
+        CombinedArgs, AReceiver));
+    finally
+      CombinedArgs.Free;
+    end;
+  end;
+
+  if AConstructor is TGocciaProxyValue then
+    SuperResult := TGocciaProxyValue(AConstructor).ConstructTrap(AArguments)
+  else if AConstructor is TGocciaNativeFunctionValue then
+  begin
+    if TGocciaNativeFunctionValue(AConstructor).NotConstructable then
+      ThrowTypeError(
+        Format(SErrorNotConstructor,
+          [TGocciaNativeFunctionValue(AConstructor).Name]),
+        Format('''%s'' is not a constructor',
+          [TGocciaNativeFunctionValue(AConstructor).Name]));
+    SuperResult := TGocciaNativeFunctionValue(AConstructor).Call(
+      AArguments, TGocciaHoleValue.HoleValue);
+  end
+  else if AConstructor is TGocciaClassValue then
+  begin
+    if Assigned(TGocciaClassValue(AConstructor).ConstructorMethod) then
+      SuperResult := TGocciaClassValue(AConstructor).ConstructorMethod.Call(
+        AArguments, AReceiver)
+    else
+      SuperResult := AReceiver;
+  end
+  else if AConstructor is TGocciaFunctionBase then
+    SuperResult := TGocciaFunctionBase(AConstructor).Call(
+      AArguments, AReceiver)
+  else
+    ThrowTypeError(Format(SErrorValueNotConstructor, [AConstructor.TypeName]),
+      SSuggestNotConstructorType);
+
+  if SuperResult is TGocciaObjectValue then
+    Result := SuperResult
+  else
+    Result := AReceiver;
+end;
+
 function TGocciaBytecodeFunctionValue.Call(
   const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -3106,34 +3154,14 @@ var
 begin
   if (FSuperClass is TGocciaObjectValue) and
      (not (FSuperClass is TGocciaClassValue)) and
-     FSuperClass.IsCallable then
+     FSuperClass.IsConstructable then
   begin
     if (AThisValue is TGocciaObjectValue) and
        not (AThisValue is TGocciaInstanceValue) then
       Exit(AThisValue);
 
-    if FSuperClass is TGocciaProxyValue then
-      Exit(TGocciaProxyValue(FSuperClass).ConstructTrap(AArguments));
-    if FSuperClass is TGocciaNativeFunctionValue then
-    begin
-      if TGocciaNativeFunctionValue(FSuperClass).NotConstructable then
-        ThrowTypeError(
-          Format(SErrorNotConstructor,
-            [TGocciaNativeFunctionValue(FSuperClass).Name]),
-          Format('''%s'' is not a constructor',
-            [TGocciaNativeFunctionValue(FSuperClass).Name]));
-      Exit(TGocciaNativeFunctionValue(FSuperClass).Call(
-        AArguments, TGocciaHoleValue.HoleValue));
-    end;
-    if FSuperClass is TGocciaFunctionBase then
-    begin
-      SuperResult := TGocciaFunctionBase(FSuperClass).Call(
-        AArguments, AThisValue);
-      if SuperResult is TGocciaObjectValue then
-        Exit(SuperResult);
-      Exit(AThisValue);
-    end;
-    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+    Exit(InvokeConstructableWithReceiver(FSuperClass, AArguments,
+      AThisValue));
   end;
 
   if not (FSuperClass is TGocciaClassValue) then
@@ -3311,6 +3339,11 @@ begin
         end
         else if Assigned(SuperClass) then
           FVM.InvokeImplicitSuperInitialization(SuperClass, Instance, AArguments)
+        else if Assigned(NativeSuperConstructor) and
+                (NativeSuperConstructor is TGocciaFunctionBase) and
+                not (NativeSuperConstructor is TGocciaNativeFunctionValue) then
+          InvokeConstructableWithReceiver(NativeSuperConstructor,
+            AArguments, Instance)
         else if Instance is TGocciaInstanceValue then
           TGocciaInstanceValue(Instance).InitializeNativeFromArguments(AArguments);
       end;
@@ -3448,6 +3481,14 @@ begin
           end
           else if Assigned(SuperClass) then
             FVM.InvokeImplicitSuperInitializationRegisters(SuperClass, Instance, AArguments)
+          else if Assigned(NativeSuperConstructor) and
+                  (NativeSuperConstructor is TGocciaFunctionBase) and
+                  not (NativeSuperConstructor is TGocciaNativeFunctionValue) then
+          begin
+            EnsureBoxedArgs;
+            InvokeConstructableWithReceiver(NativeSuperConstructor,
+              BoxedArgs, Instance);
+          end
           else
           begin
             EnsureBoxedArgs;
@@ -5580,7 +5621,7 @@ begin
 
   if (ASuperValue is TGocciaObjectValue) and
      (not (ASuperValue is TGocciaClassValue)) and
-     ASuperValue.IsCallable then
+     ASuperValue.IsConstructable then
   begin
     SuperObject := TGocciaObjectValue(ASuperValue);
     if AUseSuperConstructor and (AName = PROP_CONSTRUCTOR) then
@@ -5649,7 +5690,7 @@ begin
 
   if (ASuperValue is TGocciaObjectValue) and
      (not (ASuperValue is TGocciaClassValue)) and
-     ASuperValue.IsCallable then
+     ASuperValue.IsConstructable then
   begin
     SuperObject := TGocciaObjectValue(ASuperValue);
     if AThisValue is TGocciaClassValue then

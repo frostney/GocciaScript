@@ -52,6 +52,7 @@ begin
   FFunction := AFunction;
   FName := AName;
   FArity := AArity;
+  FNotConstructable := True;
 
   inherited Create; // No prototype for methods that are part of the prototype
 end;

@@ -741,6 +741,66 @@ begin
   end;
 end;
 
+function InvokeConstructableWithReceiver(const AConstructor: TGocciaValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const AReceiver: TGocciaValue): TGocciaValue;
+var
+  BoundFunction: TGocciaBoundFunctionValue;
+  CombinedArgs: TGocciaArgumentsCollection;
+  SuperResult: TGocciaValue;
+  I: Integer;
+begin
+  if AConstructor is TGocciaBoundFunctionValue then
+  begin
+    BoundFunction := TGocciaBoundFunctionValue(AConstructor);
+    CombinedArgs := TGocciaArgumentsCollection.CreateWithCapacity(
+      BoundFunction.BoundArgCount + AArguments.Length);
+    try
+      for I := 0 to BoundFunction.BoundArgCount - 1 do
+        CombinedArgs.Add(BoundFunction.GetBoundArg(I));
+      for I := 0 to AArguments.Length - 1 do
+        CombinedArgs.Add(AArguments.GetElement(I));
+      Exit(InvokeConstructableWithReceiver(BoundFunction.OriginalFunction,
+        CombinedArgs, AReceiver));
+    finally
+      CombinedArgs.Free;
+    end;
+  end;
+
+  if AConstructor is TGocciaProxyValue then
+    SuperResult := TGocciaProxyValue(AConstructor).ConstructTrap(AArguments)
+  else if AConstructor is TGocciaNativeFunctionValue then
+  begin
+    if TGocciaNativeFunctionValue(AConstructor).NotConstructable then
+      ThrowTypeError(
+        Format(SErrorNotConstructor,
+          [TGocciaNativeFunctionValue(AConstructor).Name]),
+        Format('''%s'' is not a constructor',
+          [TGocciaNativeFunctionValue(AConstructor).Name]));
+    SuperResult := TGocciaNativeFunctionValue(AConstructor).Call(
+      AArguments, TGocciaHoleValue.HoleValue);
+  end
+  else if AConstructor is TGocciaClassValue then
+  begin
+    if Assigned(TGocciaClassValue(AConstructor).ConstructorMethod) then
+      SuperResult := TGocciaClassValue(AConstructor).ConstructorMethod.Call(
+        AArguments, AReceiver)
+    else
+      SuperResult := AReceiver;
+  end
+  else if AConstructor is TGocciaFunctionBase then
+    SuperResult := TGocciaFunctionBase(AConstructor).Call(
+      AArguments, AReceiver)
+  else
+    ThrowTypeError(Format(SErrorValueNotConstructor, [AConstructor.TypeName]),
+      SSuggestNotConstructorType);
+
+  if SuperResult is TGocciaObjectValue then
+    Result := SuperResult
+  else
+    Result := AReceiver;
+end;
+
 function EvaluateCall(const ACallExpression: TGocciaCallExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Callee: TGocciaValue;
@@ -805,28 +865,9 @@ begin
       else if (AContext.Scope.ThisValue is TGocciaObjectValue) and
               not (AContext.Scope.ThisValue is TGocciaInstanceValue) then
         Result := AContext.Scope.ThisValue
-      else if SuperClassValue is TGocciaProxyValue then
-        Result := TGocciaProxyValue(SuperClassValue).ConstructTrap(Arguments)
-      else if SuperClassValue is TGocciaNativeFunctionValue then
-      begin
-        if TGocciaNativeFunctionValue(SuperClassValue).NotConstructable then
-          ThrowTypeError(
-            Format(SErrorNotConstructor,
-              [TGocciaNativeFunctionValue(SuperClassValue).Name]),
-            Format('''%s'' is not a constructor',
-              [TGocciaNativeFunctionValue(SuperClassValue).Name]));
-        Result := TGocciaNativeFunctionValue(SuperClassValue).Call(
-          Arguments, TGocciaHoleValue.HoleValue);
-      end
-      else if SuperClassValue is TGocciaFunctionBase then
-      begin
-        SuperResult := TGocciaFunctionBase(SuperClassValue).Call(
-          Arguments, AContext.Scope.ThisValue);
-        if SuperResult is TGocciaObjectValue then
-          Result := SuperResult
-        else
-          Result := AContext.Scope.ThisValue;
-      end
+      else if SuperClassValue is TGocciaObjectValue then
+        Result := InvokeConstructableWithReceiver(SuperClassValue, Arguments,
+          AContext.Scope.ThisValue)
       else
       begin
         ThrowTypeError(Format(SErrorValueNotFunction, [SuperClassValue.TypeName]),
@@ -1041,7 +1082,7 @@ begin
     else
       SuperObject := nil;
     if (not Assigned(SuperClass)) and
-       (not (Assigned(SuperObject) and SuperObject.IsCallable)) then
+       (not Assigned(SuperObject)) then
     begin
       AContext.OnError('super can only be used within a method with a superclass',
         AMemberExpression.Line, AMemberExpression.Column);
@@ -4154,7 +4195,6 @@ var
   function ConstructNativeSuperInstance(
     const AConstructor: TGocciaObjectValue): TGocciaObjectValue;
   var
-    Receiver: TGocciaInstanceValue;
     ConstructedValue: TGocciaValue;
   begin
     if AConstructor is TGocciaProxyValue then
@@ -4172,20 +4212,9 @@ var
     end
     else if AConstructor is TGocciaFunctionBase then
     begin
-      Receiver := TGocciaInstanceValue.Create(AClassValue,
+      Result := TGocciaInstanceValue.Create(AClassValue,
         AClassValue.EstimatedInstancePropertyCapacity);
-      if Assigned(TGarbageCollector.Instance) then
-        TGarbageCollector.Instance.AddTempRoot(Receiver);
-      try
-        ConstructedValue := TGocciaFunctionBase(AConstructor).Call(
-          AArguments, Receiver);
-        if ConstructedValue is TGocciaObjectValue then
-          Exit(TGocciaObjectValue(ConstructedValue));
-        Exit(Receiver);
-      finally
-        if Assigned(TGarbageCollector.Instance) then
-          TGarbageCollector.Instance.RemoveTempRoot(Receiver);
-      end;
+      Exit;
     end
     else
       ThrowTypeError(Format(SErrorValueNotConstructor, [AConstructor.TypeName]),
@@ -4275,6 +4304,11 @@ begin
       AClassValue.ConstructorMethod.Call(AArguments, Instance)
     else if Assigned(AClassValue.SuperClass) and Assigned(AClassValue.SuperClass.ConstructorMethod) then
       AClassValue.SuperClass.ConstructorMethod.Call(AArguments, Instance)
+    else if Assigned(AClassValue.NativeSuperConstructor) and
+            (AClassValue.NativeSuperConstructor is TGocciaFunctionBase) and
+            not (AClassValue.NativeSuperConstructor is TGocciaNativeFunctionValue) then
+      InvokeConstructableWithReceiver(AClassValue.NativeSuperConstructor,
+        AArguments, Instance)
     else if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then
       TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
   finally

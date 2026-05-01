@@ -211,6 +211,9 @@ end;
 function TGocciaFunctionBase.IsConstructable: Boolean;
 begin
   Result := HasOwnProperty(PROP_PROTOTYPE);
+  if (not Result) and (Self is TGocciaBoundFunctionValue) and
+     Assigned(TGocciaBoundFunctionValue(Self).OriginalFunction) then
+    Result := TGocciaBoundFunctionValue(Self).OriginalFunction.IsConstructable;
 end;
 
 function TGocciaFunctionBase.TypeName: string;

@@ -66,6 +66,31 @@ test("hasOwnProperty('prototype') is true on function declarations", () => {
   expect(Object.prototype.hasOwnProperty.call(f, "prototype")).toBe(true);
 });
 
+test("function superclass constructor runs once from explicit super", () => {
+  let calls = 0;
+  function Base(value) {
+    calls += 1;
+    this.value = value;
+  }
+
+  class Derived extends Base {
+    constructor(value) {
+      super("super-" + value);
+      this.done = true;
+    }
+  }
+
+  const derived = new Derived("arg");
+  expect(calls).toBe(1);
+  expect(derived.value).toBe("super-arg");
+  expect(derived.done).toBe(true);
+
+  class ImplicitDerived extends Base {}
+  const implicit = new ImplicitDerived("implicit");
+  expect(calls).toBe(2);
+  expect(implicit.value).toBe("implicit");
+});
+
 // Per ES2026 §10.2.5.1 OrdinaryFunctionCreate, the prototype object's
 // [[Prototype]] is %Object.prototype%.  (The spec specifies %Generator% for
 // generators, but GocciaScript does not yet expose that intrinsic and falls

@@ -116,6 +116,25 @@ test("super.constructor reads the prototype constructor property", () => {
   expect(derived.getComputedConstructor()).toBe(Base);
 });
 
+test("static super observes ordinary own properties on intermediate constructors", () => {
+  class Base {
+    static shadowed() {
+      return "base";
+    }
+  }
+
+  class Middle extends Base {}
+  Middle.shadowed = "middle";
+
+  class Derived extends Middle {
+    static readShadowed() {
+      return super.shadowed;
+    }
+  }
+
+  expect(Derived.readShadowed()).toBe("middle");
+});
+
 test("super method calls", () => {
   class Shape {
     constructor(name) {

@@ -1272,10 +1272,7 @@ begin
 
   // ES2026 §28.1.1 step 1: Proxy [[Construct]] only exists when target
   // is constructable. Validate before dispatching to the trap.
-  if not ((FTarget is TGocciaProxyValue) or
-          (FTarget is TGocciaClassValue) or
-          (FTarget is TGocciaNativeFunctionValue) or
-          (FTarget is TGocciaFunctionBase)) then
+  if not FTarget.IsConstructable then
     ThrowTypeError(SErrorProxyTargetNotConstructor, SSuggestProxyTargetType);
 
   Trap := GetTrap(PROP_CONSTRUCT);

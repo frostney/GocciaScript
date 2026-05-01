@@ -64,6 +64,7 @@ test("compound property assignment on primitive receivers reports receiver", () 
   let symbolError;
   const numberTarget = 42;
   const symbolKey = Symbol("missing");
+  let directSymbolError;
 
   try {
     numberTarget.missing += 1;
@@ -77,10 +78,18 @@ test("compound property assignment on primitive receivers reports receiver", () 
     symbolError = e;
   }
 
+  try {
+    numberTarget[symbolKey] = 1;
+  } catch (e) {
+    directSymbolError = e;
+  }
+
   expect(numberError instanceof TypeError).toBe(true);
   expect(numberError.message).toBe("Cannot set property on non-object");
   expect(symbolError instanceof TypeError).toBe(true);
   expect(symbolError.message).toBe("Cannot set property on non-object");
+  expect(directSymbolError instanceof TypeError).toBe(true);
+  expect(directSymbolError.message).toBe("Cannot set property on non-object");
 });
 
 test("symbol logical compound assignment reads before deciding to write", () => {

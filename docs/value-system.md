@@ -168,8 +168,8 @@ Overridden by:
 
 | Type | Returns |
 |------|---------|
-| `TGocciaFunctionBase` | `True` when the function owns a `prototype` property |
-| `TGocciaNativeFunctionValue` | `True` unless marked `NotConstructable` |
+| `TGocciaFunctionBase` | `True` when the function owns a `prototype` property, or for bound functions when the target is constructable |
+| `TGocciaNativeFunctionValue` | `True` unless marked `NotConstructable`; native functions created without a prototype are non-constructable by default |
 | `TGocciaClassValue` | `True` |
 | `TGocciaProxyValue` | Delegates to the proxy target |
 | Generator functions and non-constructor bytecode functions | `False` |
