@@ -396,7 +396,8 @@ begin
   ConvertedPattern := PreprocessRegExpPattern(ExecutablePattern, DiscardedGroups);
   // ES2026 §22.2.2.9: Apply Unicode pattern preprocessing when u flag is set
   if IsUnicode then
-    ConvertedPattern := PreprocessUnicodePattern(ConvertedPattern);
+    ConvertedPattern := PreprocessUnicodePattern(ConvertedPattern,
+      HasRegExpFlag(AFlags, 'i'));
   Matcher := TRegExpr.Create;
   try
     Matcher.Expression := ConvertedPattern;
@@ -680,6 +681,7 @@ var
   BackrefResult: string;
   AltStack: array of Integer;
   AltStackDepth: Integer;
+  CaptureIndex, TargetIndex: Integer;
 begin
   // Pass 1: collect all named groups so forward backreferences resolve
   ANamedGroups := CollectNamedGroups(APattern);
@@ -697,6 +699,7 @@ begin
   SetLength(AltStack, 64);
   AltStackDepth := 0;
   AltStack[0] := 0;
+  CaptureIndex := 0;
   while I <= PatternLength do
   begin
     if APattern[I] = '\' then
@@ -715,12 +718,21 @@ begin
           begin
             GroupName := Copy(APattern, I + 3, CloseAngle - I - 3);
             // ES2025: Resolve with duplicate named group awareness
-            BackrefResult := ResolveNamedBackreference(ANamedGroups,
-              GroupName, Copy(AltStack, 0, AltStackDepth + 1));
+            TargetIndex := FindNamedGroupIndex(ANamedGroups, GroupName);
+            if TargetIndex > CaptureIndex then
+              BackrefResult := ''
+            else
+              BackrefResult := ResolveNamedBackreference(ANamedGroups,
+                GroupName, Copy(AltStack, 0, AltStackDepth + 1));
             if BackrefResult = '' then
-              raise EConvertError.CreateFmt(
-                'Invalid named backreference: %s', [GroupName]);
-            Result := Result + BackrefResult;
+            begin
+              if TargetIndex < 0 then
+                raise EConvertError.CreateFmt(
+                  'Invalid named backreference: %s', [GroupName]);
+              Result := Result + '(?:)';
+            end
+            else
+              Result := Result + BackrefResult;
             I := CloseAngle + 1;
             Continue;
           end;
@@ -798,6 +810,7 @@ begin
           if CloseAngle <= PatternLength then
           begin
             // Strip the name, emit plain capturing group
+            Inc(CaptureIndex);
             Result := Result + '(';
             I := CloseAngle + 1;
             Continue;
@@ -807,6 +820,7 @@ begin
         Inc(I, 2);
         Continue;
       end;
+      Inc(CaptureIndex);
       Result := Result + APattern[I];
       Inc(I);
       Continue;
@@ -856,7 +870,8 @@ begin
   ConvertedPattern := PreprocessRegExpPattern(ExecutablePattern, NamedGroups);
   // ES2026 §22.2.2.9: Apply Unicode pattern preprocessing when u flag is set
   if IsUnicode then
-    ConvertedPattern := PreprocessUnicodePattern(ConvertedPattern);
+    ConvertedPattern := PreprocessUnicodePattern(ConvertedPattern,
+      HasRegExpFlag(AFlags, 'i'));
   Matcher := TRegExpr.Create;
   try
     Matcher.Expression := ConvertedPattern;

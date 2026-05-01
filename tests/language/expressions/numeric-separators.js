@@ -14,6 +14,8 @@ describe("numeric separators", () => {
   test("decimal with fractional separators", () => {
     expect(1_000.5).toBe(1000.5);
     expect(1_000.00_1).toBe(1000.001);
+    expect(.0_1e2).toBe(1);
+    expect(.10_1e2).toBe(10.1);
     expect(3.141_592).toBe(3.141592);
     expect(1_0.1_0).toBe(10.10);
   });

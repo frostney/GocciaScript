@@ -5421,16 +5421,20 @@ function TGocciaParser.ConvertNumberLiteral(const ALexeme: string): Double;
 var
   Value: Double;
   IntValue: Int64;
-  HexStr, BinStr, OctStr: string;
+  NormalizedLexeme, HexStr, BinStr, OctStr: string;
   I: Integer;
 begin
+  NormalizedLexeme := ALexeme;
+  if (Length(NormalizedLexeme) > 0) and (NormalizedLexeme[1] = '.') then
+    NormalizedLexeme := '0' + NormalizedLexeme;
+
   // Handle special number formats
-  if Length(ALexeme) >= 3 then
+  if Length(NormalizedLexeme) >= 3 then
   begin
     // Hexadecimal: 0x10, 0X10
-    if (ALexeme[1] = '0') and ((ALexeme[2] = 'x') or (ALexeme[2] = 'X')) then
+    if (NormalizedLexeme[1] = '0') and ((NormalizedLexeme[2] = 'x') or (NormalizedLexeme[2] = 'X')) then
     begin
-      HexStr := Copy(ALexeme, 3, Length(ALexeme) - 2);
+      HexStr := Copy(NormalizedLexeme, 3, Length(NormalizedLexeme) - 2);
       IntValue := 0;
       for I := 1 to Length(HexStr) do
       begin
@@ -5445,9 +5449,9 @@ begin
     end
 
     // Binary: 0b1010, 0B1010
-    else if (ALexeme[1] = '0') and ((ALexeme[2] = 'b') or (ALexeme[2] = 'B')) then
+    else if (NormalizedLexeme[1] = '0') and ((NormalizedLexeme[2] = 'b') or (NormalizedLexeme[2] = 'B')) then
     begin
-      BinStr := Copy(ALexeme, 3, Length(ALexeme) - 2);
+      BinStr := Copy(NormalizedLexeme, 3, Length(NormalizedLexeme) - 2);
       IntValue := 0;
       for I := 1 to Length(BinStr) do
       begin
@@ -5459,9 +5463,9 @@ begin
     end
 
     // Octal: 0o12, 0O12
-    else if (ALexeme[1] = '0') and ((ALexeme[2] = 'o') or (ALexeme[2] = 'O')) then
+    else if (NormalizedLexeme[1] = '0') and ((NormalizedLexeme[2] = 'o') or (NormalizedLexeme[2] = 'O')) then
     begin
-      OctStr := Copy(ALexeme, 3, Length(ALexeme) - 2);
+      OctStr := Copy(NormalizedLexeme, 3, Length(NormalizedLexeme) - 2);
       IntValue := 0;
       for I := 1 to Length(OctStr) do
       begin
@@ -5473,7 +5477,7 @@ begin
   end;
 
   // Regular decimal numbers (including scientific notation)
-  if TryStrToFloat(ALexeme, Value) then
+  if TryStrToFloat(NormalizedLexeme, Value) then
     Exit(Value);
 
   raise TGocciaSyntaxError.Create('Invalid number format: ' + ALexeme, Peek.Line, Peek.Column,
