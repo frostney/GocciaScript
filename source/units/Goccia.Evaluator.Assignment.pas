@@ -33,7 +33,7 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue;
 
-procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
+procedure EnsureAssignableReceiver(const AObj: TGocciaValue; const APropertyName: string);
 begin
   if AObj is TGocciaNullLiteralValue then
     ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [APropertyName]),
@@ -41,26 +41,24 @@ begin
   else if AObj is TGocciaUndefinedLiteralValue then
     ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined, [APropertyName]),
       SSuggestCheckNullBeforeAccess)
-  else if (AObj is TGocciaObjectValue) or (AObj is TGocciaClassValue) then
-    AObj.SetProperty(APropertyName, AValue)
-  else
-    // AOnError is not invoked here — ThrowTypeError must be used because this is
-    // a JavaScript-level TypeError (TGocciaThrowValue), not an interpreter-level
-    // runtime error (TGocciaRuntimeError) which is what AOnError produces.
+  else if not ((AObj is TGocciaObjectValue) or (AObj is TGocciaClassValue)) then
     ThrowTypeError(SErrorCannotSetPropertyOnNonObject, SSuggestCheckNullBeforeAccess);
+end;
+
+procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
+begin
+  EnsureAssignableReceiver(AObj, APropertyName);
+  AObj.SetProperty(APropertyName, AValue);
 end;
 
 procedure PerformPropertyCompoundAssignment(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
 var
   CurrentValue, NewValue: TGocciaValue;
 begin
+  EnsureAssignableReceiver(AObj, APropertyName);
   CurrentValue := AObj.GetProperty(APropertyName);
   if CurrentValue = nil then
-  begin
-    if Assigned(AOnError) then
-      AOnError('Cannot access property on non-object', ALine, AColumn);
-    Exit;
-  end;
+    CurrentValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   NewValue := PerformCompoundOperation(CurrentValue, AValue, AOperator);
   AObj.SetProperty(APropertyName, NewValue);
@@ -70,16 +68,13 @@ procedure PerformSymbolPropertyCompoundAssignment(const AObj: TGocciaValue; cons
 var
   CurrentValue, NewValue: TGocciaValue;
 begin
+  EnsureAssignableReceiver(AObj, ASymbol.ToDisplayString.Value);
   if AObj is TGocciaClassValue then
     CurrentValue := TGocciaClassValue(AObj).GetSymbolProperty(ASymbol)
   else if AObj is TGocciaObjectValue then
     CurrentValue := TGocciaObjectValue(AObj).GetSymbolProperty(ASymbol)
   else
-  begin
-    if Assigned(AOnError) then
-      AOnError('Cannot access property on non-object', ALine, AColumn);
-    Exit;
-  end;
+    CurrentValue := nil;
   if CurrentValue = nil then
     CurrentValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   NewValue := PerformCompoundOperation(CurrentValue, AValue, AOperator);

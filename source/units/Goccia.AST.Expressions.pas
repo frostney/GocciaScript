@@ -1782,8 +1782,23 @@ var
 begin
   Obj := ObjectExpr.Evaluate(AContext);
   PropertyKeyValue := PropertyExpression.Evaluate(AContext);
-  if (PropertyKeyValue is TGocciaSymbolValue) and ((Obj is TGocciaClassValue) or (Obj is TGocciaObjectValue)) then
+  if PropertyKeyValue is TGocciaSymbolValue then
   begin
+    if not ((Obj is TGocciaClassValue) or (Obj is TGocciaObjectValue)) then
+    begin
+      if IsShortCircuitOperator then
+      begin
+        CurrentValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        if ShortCircuits then
+          Exit(CurrentValue);
+      end;
+
+      RhsValue := Value.Evaluate(AContext);
+      PerformSymbolPropertyCompoundAssignment(Obj, TGocciaSymbolValue(PropertyKeyValue), RhsValue, Operator, AContext.OnError, Line, Column);
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Exit;
+    end;
+
     if Obj is TGocciaClassValue then
       CurrentValue := NormalizeAssignmentValue(
         TGocciaClassValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue)))

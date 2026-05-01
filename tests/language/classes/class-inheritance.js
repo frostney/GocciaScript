@@ -53,6 +53,42 @@ test("super() in constructor", () => {
   expect(car.getInfo()).toBe("2020 Toyota with 4 doors");
 });
 
+test("super() returns receiver unless superclass returns object", () => {
+  class PrimitiveBase {
+    constructor() {
+      this.base = true;
+      return 7;
+    }
+  }
+
+  class PrimitiveDerived extends PrimitiveBase {
+    constructor() {
+      const value = super();
+      this.superReturnedThis = value === this;
+    }
+  }
+
+  class ObjectBase {
+    constructor() {
+      return { fromBase: true };
+    }
+  }
+
+  class ObjectDerived extends ObjectBase {
+    constructor() {
+      const value = super();
+      this.superReturnedObject = value.fromBase;
+    }
+  }
+
+  const primitive = new PrimitiveDerived();
+  expect(primitive.base).toBe(true);
+  expect(primitive.superReturnedThis).toBe(true);
+
+  const object = new ObjectDerived();
+  expect(object.superReturnedObject).toBe(true);
+});
+
 test("super method calls", () => {
   class Shape {
     constructor(name) {

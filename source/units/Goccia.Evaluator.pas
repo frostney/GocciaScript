@@ -748,7 +748,7 @@ var
   ThisValue: TGocciaValue;
   ArgumentExpr: TGocciaExpression;
   SuperClass: TGocciaClassValue;
-  SuperClassValue: TGocciaValue;
+  SuperClassValue, SuperResult: TGocciaValue;
   MemberExpr: TGocciaMemberExpression;
   SpreadValue: TGocciaValue;
   CalleeName: string;
@@ -790,13 +790,17 @@ begin
 
       if Assigned(SuperClass) and Assigned(SuperClass.ConstructorMethod) then
       begin
-        Result := SuperClass.ConstructorMethod.Call(Arguments, AContext.Scope.ThisValue);
+        SuperResult := SuperClass.ConstructorMethod.Call(Arguments, AContext.Scope.ThisValue);
+        if SuperResult is TGocciaObjectValue then
+          Result := SuperResult
+        else
+          Result := AContext.Scope.ThisValue;
       end
       else if Assigned(SuperClass) then
       begin
         if AContext.Scope.ThisValue is TGocciaInstanceValue then
           TGocciaInstanceValue(AContext.Scope.ThisValue).InitializeNativeFromArguments(Arguments);
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+        Result := AContext.Scope.ThisValue;
       end
       else if (AContext.Scope.ThisValue is TGocciaObjectValue) and
               not (AContext.Scope.ThisValue is TGocciaInstanceValue) then

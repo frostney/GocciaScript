@@ -28,8 +28,10 @@ test("object property addition", () => {
 test("property assignment on null and undefined reports receiver", () => {
   let nullError;
   let undefinedError;
+  let numberError;
   const nullTarget = null;
   const undefinedTarget = undefined;
+  const numberTarget = 42;
 
   try {
     nullTarget.missing = 1;
@@ -43,10 +45,42 @@ test("property assignment on null and undefined reports receiver", () => {
     undefinedError = e;
   }
 
+  try {
+    numberTarget.missing = 1;
+  } catch (e) {
+    numberError = e;
+  }
+
   expect(nullError instanceof TypeError).toBe(true);
   expect(nullError.message).toBe("Cannot set properties of null (setting 'missing')");
   expect(undefinedError instanceof TypeError).toBe(true);
   expect(undefinedError.message).toBe("Cannot set properties of undefined (setting 'missing')");
+  expect(numberError instanceof TypeError).toBe(true);
+  expect(numberError.message).toBe("Cannot set property on non-object");
+});
+
+test("compound property assignment on primitive receivers reports receiver", () => {
+  let numberError;
+  let symbolError;
+  const numberTarget = 42;
+  const symbolKey = Symbol("missing");
+
+  try {
+    numberTarget.missing += 1;
+  } catch (e) {
+    numberError = e;
+  }
+
+  try {
+    numberTarget[symbolKey] += 1;
+  } catch (e) {
+    symbolError = e;
+  }
+
+  expect(numberError instanceof TypeError).toBe(true);
+  expect(numberError.message).toBe("Cannot set property on non-object");
+  expect(symbolError instanceof TypeError).toBe(true);
+  expect(symbolError.message).toBe("Cannot set property on non-object");
 });
 
 test("object property deletion", () => {

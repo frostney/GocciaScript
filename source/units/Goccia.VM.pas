@@ -3067,6 +3067,7 @@ function TGocciaVMSuperConstructorValue.Call(
   const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   SuperClass: TGocciaClassValue;
+  SuperResult: TGocciaValue;
 begin
   if (FSuperClass is TGocciaObjectValue) and
      (not (FSuperClass is TGocciaClassValue)) and
@@ -3105,9 +3106,12 @@ begin
   begin
     TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
       SuperClass, AThisValue);
-    Exit(TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
+    SuperResult := TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
       TGocciaVMClassValue(SuperClass).FConstructorValue,
-      AArguments, AThisValue));
+      AArguments, AThisValue);
+    if SuperResult is TGocciaObjectValue then
+      Exit(SuperResult);
+    Exit(AThisValue);
   end;
 
   if Assigned(SuperClass.ConstructorMethod) then
@@ -3115,7 +3119,10 @@ begin
     if SuperClass is TGocciaVMClassValue then
       TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
         SuperClass, AThisValue);
-    Exit(SuperClass.ConstructorMethod.Call(AArguments, AThisValue));
+    SuperResult := SuperClass.ConstructorMethod.Call(AArguments, AThisValue);
+    if SuperResult is TGocciaObjectValue then
+      Exit(SuperResult);
+    Exit(AThisValue);
   end;
 
   if Assigned(SuperClass.SuperClass) and
@@ -3133,7 +3140,7 @@ begin
       TGocciaVMClassValue(SuperClass).FVM.InvokeImplicitSuperInitialization(
         SuperClass, AThisValue, AArguments);
     TGocciaInstanceValue(AThisValue).InitializeNativeFromArguments(AArguments);
-    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+    Exit(AThisValue);
   end;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
