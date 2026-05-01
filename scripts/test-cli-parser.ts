@@ -105,9 +105,16 @@ console.log("Unsupported optional private field access...");
 
 console.log("ASI at EOF...");
 {
-  const res = runLoaderJson("const value = 42", ["--asi"]);
-  if (res.exitCode !== 0) throw new Error(`ASI should accept a final declaration at EOF without a semicolon`);
-  if (res.json.ok !== true) throw new Error(`ASI EOF declaration should succeed, got: ${JSON.stringify(res.json)}`);
+  const asiRes = runLoaderJson("const value = 42", ["--asi"]);
+  if (asiRes.exitCode !== 0) throw new Error(`ASI should accept a final declaration at EOF without a semicolon`);
+  if (asiRes.json.ok !== true)
+    throw new Error(`ASI EOF declaration should succeed, got: ${JSON.stringify(asiRes.json)}`);
+
+  const noAsiRes = runLoaderJson("const value = 42", []);
+  if (noAsiRes.exitCode !== 0)
+    throw new Error(`Non-ASI should accept a final declaration at EOF without a semicolon`);
+  if (noAsiRes.json.ok !== true)
+    throw new Error(`Non-ASI EOF declaration should succeed, got: ${JSON.stringify(noAsiRes.json)}`);
 }
 
 // -- Unsupported var recovery (ASI and compat-var flags) ------------------------
