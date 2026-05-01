@@ -89,6 +89,33 @@ test("super() returns receiver unless superclass returns object", () => {
   expect(object.superReturnedObject).toBe(true);
 });
 
+test("extends rejects non-constructable callable superclass", () => {
+  const NotConstructor = () => {};
+
+  expect(() => {
+    class Invalid extends NotConstructor {}
+    return Invalid;
+  }).toThrow(TypeError);
+});
+
+test("super.constructor reads the prototype constructor property", () => {
+  class Base {}
+
+  class Derived extends Base {
+    getConstructor() {
+      return super.constructor;
+    }
+
+    getComputedConstructor() {
+      return super["constructor"];
+    }
+  }
+
+  const derived = new Derived();
+  expect(derived.getConstructor()).toBe(Base);
+  expect(derived.getComputedConstructor()).toBe(Base);
+});
+
 test("super method calls", () => {
   class Shape {
     constructor(name) {

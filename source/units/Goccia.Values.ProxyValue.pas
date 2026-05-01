@@ -99,6 +99,7 @@ type
 
     function TypeOf: string; override;
     function IsCallable: Boolean; override;
+    function IsConstructable: Boolean; override;
     function ToStringTag: string; override;
 
     procedure MarkReferences; override;
@@ -1327,6 +1328,11 @@ end;
 function TGocciaProxyValue.IsCallable: Boolean;
 begin
   Result := FTarget.IsCallable;
+end;
+
+function TGocciaProxyValue.IsConstructable: Boolean;
+begin
+  Result := FTarget.IsConstructable;
 end;
 
 function TGocciaProxyValue.ToStringTag: string;

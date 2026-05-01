@@ -30,6 +30,7 @@ type
 
     function IsPrimitive: Boolean; virtual;
     function IsCallable: Boolean; virtual;
+    function IsConstructable: Boolean; virtual;
     function GetProperty(const AName: string): TGocciaValue; virtual;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); virtual;
   end;
@@ -356,6 +357,10 @@ begin
   Result := False;
 end;
 
+function TGocciaValue.IsConstructable: Boolean;
+begin
+  Result := False;
+end;
 
 function TGocciaValue.GetProperty(const AName: string): TGocciaValue;
 begin

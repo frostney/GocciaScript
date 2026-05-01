@@ -167,9 +167,9 @@ type
     procedure ApplyClassDecorator(const ADecoratorFn: TGocciaValue);
     function FinishDecorators(const ACurrentValue: TGocciaValue): TGocciaValue;
     function GetSuperPropertyValue(const ASuperValue, AThisValue: TGocciaValue;
-      const AName: string): TGocciaValue;
+      const AName: string; const AUseSuperConstructor: Boolean): TGocciaValue;
     function GetSuperPropertyValueByKey(const ASuperValue, AThisValue,
-      AKey: TGocciaValue): TGocciaValue;
+      AKey: TGocciaValue; const AUseSuperConstructor: Boolean): TGocciaValue;
     function GetPropertyValue(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
     procedure SetPropertyValue(const AObject: TGocciaValue; const AKey: string;
       const AValue: TGocciaValue);
@@ -1341,6 +1341,7 @@ type
     function CallOneArg(const AArg0, AThisValue: TGocciaValue): TGocciaValue; override;
     function CallTwoArgs(const AArg0, AArg1, AThisValue: TGocciaValue): TGocciaValue; override;
     function CallThreeArgs(const AArg0, AArg1, AArg2, AThisValue: TGocciaValue): TGocciaValue; override;
+    function IsConstructable: Boolean; override;
     procedure MarkReferences; override;
   end;
 
@@ -1580,10 +1581,29 @@ function TGocciaVMClassValue.CreateNativeInstance(
   const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
 var
   ConstructedValue: TGocciaValue;
+  Receiver: TGocciaInstanceValue;
 begin
   Result := inherited CreateNativeInstance(AArguments);
   if Assigned(Result) or not Assigned(NativeSuperConstructor) then
     Exit;
+
+  if (NativeSuperConstructor is TGocciaFunctionBase) and
+     not (NativeSuperConstructor is TGocciaNativeFunctionValue) then
+  begin
+    Receiver := TGocciaInstanceValue.Create(Self);
+    TGarbageCollector.Instance.AddTempRoot(Receiver);
+    try
+      ConstructedValue := TGocciaFunctionBase(NativeSuperConstructor).Call(
+        AArguments, Receiver);
+      if ConstructedValue is TGocciaObjectValue then
+        Result := TGocciaObjectValue(ConstructedValue)
+      else
+        Result := Receiver;
+      Exit;
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(Receiver);
+    end;
+  end;
 
   ConstructedValue := FVM.ConstructValue(NativeSuperConstructor, AArguments);
   if ConstructedValue is TGocciaObjectValue then
@@ -2844,6 +2864,17 @@ begin
   Result := FClosure.Template.SourceText;
 end;
 
+function TGocciaBytecodeFunctionValue.IsConstructable: Boolean;
+begin
+  if not inherited IsConstructable then
+    Exit(False);
+
+  Result := Assigned(FClosure) and Assigned(FClosure.Template) and
+            (not FClosure.Template.IsGenerator) and
+            (not FClosure.Template.IsAsync) and
+            (not FClosure.Template.IsArrow);
+end;
+
 function TGocciaVMSuperConstructorValue.GetFunctionName: string;
 begin
   Result := 'super';
@@ -3095,8 +3126,13 @@ begin
         AArguments, TGocciaHoleValue.HoleValue));
     end;
     if FSuperClass is TGocciaFunctionBase then
-      Exit(TGocciaFunctionBase(FSuperClass).Call(
-        AArguments, TGocciaUndefinedLiteralValue.UndefinedValue));
+    begin
+      SuperResult := TGocciaFunctionBase(FSuperClass).Call(
+        AArguments, AThisValue);
+      if SuperResult is TGocciaObjectValue then
+        Exit(SuperResult);
+      Exit(AThisValue);
+    end;
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 
@@ -3838,7 +3874,8 @@ procedure SetBytecodeHomeObject(const AFunctionValue: TGocciaValue;
   const AHomeObject: TGocciaObjectValue);
 begin
   if (AFunctionValue is TGocciaBytecodeFunctionValue) and
-     Assigned(TGocciaBytecodeFunctionValue(AFunctionValue).FClosure) then
+     Assigned(TGocciaBytecodeFunctionValue(AFunctionValue).FClosure) and
+     not Assigned(TGocciaBytecodeFunctionValue(AFunctionValue).FClosure.HomeObject) then
     TGocciaBytecodeFunctionValue(AFunctionValue).FClosure.HomeObject := AHomeObject;
 end;
 
@@ -5530,7 +5567,7 @@ begin
 end;
 
 function TGocciaVM.GetSuperPropertyValue(const ASuperValue, AThisValue: TGocciaValue;
-  const AName: string): TGocciaValue;
+  const AName: string; const AUseSuperConstructor: Boolean): TGocciaValue;
 var
   SuperClass: TGocciaClassValue;
   SuperObject: TGocciaObjectValue;
@@ -5546,7 +5583,7 @@ begin
      ASuperValue.IsCallable then
   begin
     SuperObject := TGocciaObjectValue(ASuperValue);
-    if AName = PROP_CONSTRUCTOR then
+    if AUseSuperConstructor and (AName = PROP_CONSTRUCTOR) then
       Exit(TGocciaVMSuperConstructorValue.Create(SuperObject));
 
     if AThisValue is TGocciaClassValue then
@@ -5573,11 +5610,11 @@ begin
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
 
   SuperClass := TGocciaClassValue(ASuperValue);
-  if AName = PROP_CONSTRUCTOR then
+  if AUseSuperConstructor and (AName = PROP_CONSTRUCTOR) then
     Exit(TGocciaVMSuperConstructorValue.Create(SuperClass));
 
   if AThisValue is TGocciaClassValue then
-    Exit(SuperClass.GetProperty(AName));
+    Exit(SuperClass.GetPropertyWithContext(AName, AThisValue));
 
   if Assigned(HomeObject) then
   begin
@@ -5595,7 +5632,7 @@ begin
 end;
 
 function TGocciaVM.GetSuperPropertyValueByKey(const ASuperValue, AThisValue,
-  AKey: TGocciaValue): TGocciaValue;
+  AKey: TGocciaValue; const AUseSuperConstructor: Boolean): TGocciaValue;
 var
   SuperClass: TGocciaClassValue;
   SuperObject: TGocciaObjectValue;
@@ -5604,7 +5641,7 @@ var
 begin
   if not (AKey is TGocciaSymbolValue) then
     Exit(GetSuperPropertyValue(ASuperValue, AThisValue,
-      KeyToPropertyName(AKey)));
+      KeyToPropertyName(AKey), AUseSuperConstructor));
 
   HomeObject := nil;
   if Assigned(FCurrentClosure) then
@@ -6918,7 +6955,7 @@ begin
                 (FRegisters[A].ObjectValue is TGocciaVMClassValue) and
                 (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaObjectValue) and
-                FRegisters[B].ObjectValue.IsCallable then
+                FRegisters[B].ObjectValue.IsConstructable then
         begin
           // Native constructor superclass: preserve static and prototype
           // inheritance links, and remember the constructor for instantiation.
@@ -6934,7 +6971,12 @@ begin
             ThrowTypeError(
               'Superclass prototype must be an object or null',
               'set the superclass prototype property to an object or null');
-        end;
+        end
+        else if (FRegisters[A].Kind = grkObject) and
+                (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
+          ThrowTypeError(Format(SErrorValueNotConstructor,
+            [RegisterToValue(FRegisters[B]).TypeName]),
+            SSuggestNotConstructorType);
       end;
 
       OP_CLASS_ADD_METHOD_CONST:
@@ -8476,14 +8518,15 @@ begin
       OP_SUPER_GET_CONST:
         if A > 0 then
           SetRegister(A, GetSuperPropertyValue(GetRegister(A + 1),
-            GetRegister(A - 1), Template.GetConstantUnchecked(C).StringValue))
+            GetRegister(A - 1), Template.GetConstantUnchecked(C).StringValue,
+            B <> 0))
         else
           SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
 
       OP_SUPER_GET:
         if A > 0 then
           SetRegister(A, GetSuperPropertyValueByKey(GetRegister(A + 1),
-            GetRegister(A - 1), GetRegister(C)))
+            GetRegister(A - 1), GetRegister(C), B <> 0))
         else
           SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
 

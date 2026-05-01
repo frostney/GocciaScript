@@ -71,6 +71,7 @@ type
     constructor Create(const AName: string; const ASuperClass: TGocciaClassValue);
     destructor Destroy; override;
     function IsCallable: Boolean; override;
+    function IsConstructable: Boolean; override;
     function TypeName: string; override;
     function TypeOf: string; override;
     function ToStringLiteral: TGocciaStringLiteralValue; override;
@@ -108,6 +109,7 @@ type
     // their constructor method's formal parameters.
     function GetClassLength: Integer; virtual;
     function GetProperty(const AName: string): TGocciaValue; override;
+    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
     function HasOwnProperty(const AName: string): Boolean; override;
@@ -477,6 +479,11 @@ begin
 end;
 
 function TGocciaClassValue.IsCallable: Boolean;
+begin
+  Result := True;
+end;
+
+function TGocciaClassValue.IsConstructable: Boolean;
 begin
   Result := True;
 end;
@@ -1027,6 +1034,11 @@ begin
 end;
 
 function TGocciaClassValue.GetProperty(const AName: string): TGocciaValue;
+begin
+  Result := GetPropertyWithContext(AName, Self);
+end;
+
+function TGocciaClassValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 var
   Getter: TGocciaFunctionBase;
   Args: TGocciaArgumentsCollection;
@@ -1045,7 +1057,7 @@ begin
   begin
     Args := TGocciaArgumentsCollection.CreateWithCapacity(0);
     try
-      Result := Getter.Call(Args, Self);
+      Result := Getter.Call(Args, AThisContext);
     finally
       Args.Free;
     end;
@@ -1083,7 +1095,7 @@ begin
     begin
       Args := TGocciaArgumentsCollection.CreateWithCapacity(0);
       try
-        Result := Getter.Call(Args, Self);
+        Result := Getter.Call(Args, AThisContext);
       finally
         Args.Free;
       end;
@@ -1101,7 +1113,7 @@ begin
 
   // Fall through to own properties (inherited from TGocciaObjectValue) and
   // then up the [[Prototype]] chain (Function.prototype → Object.prototype)
-  Result := inherited GetProperty(AName);
+  Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 
 procedure TGocciaClassValue.SetProperty(const AName: string; const AValue: TGocciaValue);

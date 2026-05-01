@@ -840,6 +840,8 @@ uses
   Goccia.Constants.ErrorNames,
   Goccia.Coverage,
   Goccia.Error,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Evaluator,
   Goccia.Evaluator.Arithmetic,
   Goccia.Evaluator.Assignment,
@@ -848,6 +850,7 @@ uses
   Goccia.ImportMeta,
   Goccia.Modules,
   Goccia.RegExp.Runtime,
+  Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -1761,6 +1764,7 @@ end;
 function TGocciaComputedPropertyCompoundAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Obj, PropertyKeyValue, CurrentValue, RhsValue: TGocciaValue;
+  BoxedValue: TGocciaObjectValue;
   PropName: string;
 
   function ShortCircuits: Boolean; inline;
@@ -1779,32 +1783,44 @@ var
     Result := Operator in [gttNullishCoalescingAssign, gttLogicalAndAssign, gttLogicalOrAssign];
   end;
 
+  function ReadSymbolProperty(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue): TGocciaValue;
+  begin
+    if AObj is TGocciaNullLiteralValue then
+      ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [ASymbol.ToDisplayString.Value]),
+        SSuggestCheckNullBeforeAccess)
+    else if AObj is TGocciaUndefinedLiteralValue then
+      ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined, [ASymbol.ToDisplayString.Value]),
+        SSuggestCheckNullBeforeAccess);
+
+    if AObj is TGocciaClassValue then
+      Result := TGocciaClassValue(AObj).GetSymbolProperty(ASymbol)
+    else if AObj is TGocciaObjectValue then
+      Result := TGocciaObjectValue(AObj).GetSymbolProperty(ASymbol)
+    else if AObj is TGocciaSymbolValue then
+    begin
+      if TGocciaSymbolValue.SharedPrototype is TGocciaObjectValue then
+        Result := TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype)
+          .GetSymbolPropertyWithReceiver(ASymbol, AObj)
+      else
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    end
+    else
+    begin
+      BoxedValue := AObj.Box;
+      if Assigned(BoxedValue) then
+        Result := BoxedValue.GetSymbolProperty(ASymbol)
+      else
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    end;
+  end;
+
 begin
   Obj := ObjectExpr.Evaluate(AContext);
   PropertyKeyValue := PropertyExpression.Evaluate(AContext);
   if PropertyKeyValue is TGocciaSymbolValue then
   begin
-    if not ((Obj is TGocciaClassValue) or (Obj is TGocciaObjectValue)) then
-    begin
-      if IsShortCircuitOperator then
-      begin
-        CurrentValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-        if ShortCircuits then
-          Exit(CurrentValue);
-      end;
-
-      RhsValue := Value.Evaluate(AContext);
-      PerformSymbolPropertyCompoundAssignment(Obj, TGocciaSymbolValue(PropertyKeyValue), RhsValue, Operator, AContext.OnError, Line, Column);
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
-    end;
-
-    if Obj is TGocciaClassValue then
-      CurrentValue := NormalizeAssignmentValue(
-        TGocciaClassValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue)))
-    else
-      CurrentValue := NormalizeAssignmentValue(
-        TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue)));
+    CurrentValue := NormalizeAssignmentValue(ReadSymbolProperty(Obj,
+      TGocciaSymbolValue(PropertyKeyValue)));
 
     if IsShortCircuitOperator then
     begin

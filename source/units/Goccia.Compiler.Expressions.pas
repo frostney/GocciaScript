@@ -1250,7 +1250,7 @@ begin
       raise Exception.Create('Constant pool overflow');
     if SuperReg <> BaseReg + 1 then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, BaseReg + 1, SuperReg, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET_CONST, BaseReg, 0, UInt8(PropIdx)));
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET_CONST, BaseReg, 1, UInt8(PropIdx)));
     ACtx.Scope.FreeRegister;
 
     if AExpr.Optional then

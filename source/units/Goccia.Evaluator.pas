@@ -766,7 +766,7 @@ begin
     else
       SuperClass := nil;
     if (not Assigned(SuperClass)) and
-       (not ((SuperClassValue is TGocciaObjectValue) and SuperClassValue.IsCallable)) then
+       (not ((SuperClassValue is TGocciaObjectValue) and SuperClassValue.IsConstructable)) then
     begin
       AContext.OnError('super() can only be called within a method with a superclass',
         ACallExpression.Line, ACallExpression.Column);
@@ -819,8 +819,14 @@ begin
           Arguments, TGocciaHoleValue.HoleValue);
       end
       else if SuperClassValue is TGocciaFunctionBase then
-        Result := TGocciaFunctionBase(SuperClassValue).Call(
-          Arguments, TGocciaUndefinedLiteralValue.UndefinedValue)
+      begin
+        SuperResult := TGocciaFunctionBase(SuperClassValue).Call(
+          Arguments, AContext.Scope.ThisValue);
+        if SuperResult is TGocciaObjectValue then
+          Result := SuperResult
+        else
+          Result := AContext.Scope.ThisValue;
+      end
       else
       begin
         ThrowTypeError(Format(SErrorValueNotFunction, [SuperClassValue.TypeName]),
@@ -1087,7 +1093,8 @@ begin
     begin
       // Static method context: look for static methods using GetProperty
       if Assigned(SuperClass) then
-        Result := SuperClass.GetProperty(PropertyName)
+        Result := SuperClass.GetPropertyWithContext(
+          PropertyName, AContext.Scope.ThisValue)
       else
         Result := SuperObject.GetPropertyWithContext(
           PropertyName, AContext.Scope.ThisValue);
@@ -1097,8 +1104,10 @@ begin
       // Instance method context: look for instance methods using GetMethod
       if Assigned(SuperClass) then
       begin
-        Result := SuperClass.GetMethod(PropertyName);
-        if not Assigned(Result) then
+        if Assigned(SuperClass.Prototype) then
+          Result := SuperClass.Prototype.GetPropertyWithContext(
+            PropertyName, AContext.Scope.ThisValue)
+        else
           Result := TGocciaUndefinedLiteralValue.UndefinedValue;
       end
       else
@@ -3090,8 +3099,10 @@ begin
       SuperClass := TGocciaClassValue(SuperClassValue);
       MethodSuperClass := SuperClass;
     end
-    else if not ((SuperClassValue is TGocciaObjectValue) and SuperClassValue.IsCallable) then
-      AContext.OnError(Format('Superclass "%s" is not a class (found %s)', [AClassDef.SuperClass, SuperClassValue.TypeName]), ALine, AColumn)
+    else if not ((SuperClassValue is TGocciaObjectValue) and SuperClassValue.IsConstructable) then
+      ThrowTypeError(Format('Superclass "%s" is not a constructor (found %s)',
+        [AClassDef.SuperClass, SuperClassValue.TypeName]),
+        SSuggestNotConstructorType)
     else
       MethodSuperClass := SuperClassValue;
   end;
@@ -3104,7 +3115,7 @@ begin
 
   ClassValue := TGocciaClassValue.Create(ClassName, SuperClass);
   if (SuperClass = nil) and (SuperClassValue is TGocciaObjectValue) and
-     SuperClassValue.IsCallable then
+     SuperClassValue.IsConstructable then
   begin
     ClassValue.LinkNativeSuperConstructor(
       TGocciaObjectValue(SuperClassValue));
@@ -4143,6 +4154,7 @@ var
   function ConstructNativeSuperInstance(
     const AConstructor: TGocciaObjectValue): TGocciaObjectValue;
   var
+    Receiver: TGocciaInstanceValue;
     ConstructedValue: TGocciaValue;
   begin
     if AConstructor is TGocciaProxyValue then
@@ -4159,8 +4171,22 @@ var
         AArguments, TGocciaHoleValue.HoleValue);
     end
     else if AConstructor is TGocciaFunctionBase then
-      ConstructedValue := TGocciaFunctionBase(AConstructor).Call(
-        AArguments, TGocciaUndefinedLiteralValue.UndefinedValue)
+    begin
+      Receiver := TGocciaInstanceValue.Create(AClassValue,
+        AClassValue.EstimatedInstancePropertyCapacity);
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AddTempRoot(Receiver);
+      try
+        ConstructedValue := TGocciaFunctionBase(AConstructor).Call(
+          AArguments, Receiver);
+        if ConstructedValue is TGocciaObjectValue then
+          Exit(TGocciaObjectValue(ConstructedValue));
+        Exit(Receiver);
+      finally
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.RemoveTempRoot(Receiver);
+      end;
+    end
     else
       ThrowTypeError(Format(SErrorValueNotConstructor, [AConstructor.TypeName]),
         SSuggestNotConstructorType);

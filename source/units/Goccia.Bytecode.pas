@@ -31,7 +31,10 @@ const
   //   v21 -> v22: #490 added OP_SUPER_GET so computed super property
   //               access uses receiver-aware lookup instead of generic
   //               index access.
-  GOCCIA_FORMAT_VERSION = 22;
+  //   v22 -> v23: #490 gave OP_SUPER_GET_CONST/OP_SUPER_GET operand B
+  //               call-context semantics so only direct super() reads use
+  //               the synthetic super-constructor helper.
+  GOCCIA_FORMAT_VERSION = 23;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;

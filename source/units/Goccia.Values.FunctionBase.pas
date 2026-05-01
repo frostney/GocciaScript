@@ -57,6 +57,7 @@ type
 
     // VMT-based type discrimination
     function IsCallable: Boolean; override;
+    function IsConstructable: Boolean; override;
 
     // Override TypeName and TypeOf for all functions
     function TypeName: string; override;
@@ -205,6 +206,11 @@ end;
 function TGocciaFunctionBase.IsCallable: Boolean;
 begin
   Result := True;
+end;
+
+function TGocciaFunctionBase.IsConstructable: Boolean;
+begin
+  Result := HasOwnProperty(PROP_PROTOTYPE);
 end;
 
 function TGocciaFunctionBase.TypeName: string;

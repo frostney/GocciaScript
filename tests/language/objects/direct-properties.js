@@ -83,6 +83,26 @@ test("compound property assignment on primitive receivers reports receiver", () 
   expect(symbolError.message).toBe("Cannot set property on non-object");
 });
 
+test("symbol logical compound assignment reads before deciding to write", () => {
+  const inheritedKey = Symbol("primitive-inherited");
+  Object.defineProperty(Symbol.prototype, inheritedKey, {
+    value: 12,
+    configurable: true,
+  });
+
+  try {
+    const symbolTarget = Symbol("target");
+    expect(symbolTarget[inheritedKey] ??= 99).toBe(12);
+  } finally {
+    Reflect.deleteProperty(Symbol.prototype, inheritedKey);
+  }
+
+  const nullTarget = null;
+  expect(() => {
+    nullTarget[inheritedKey] ??= 1;
+  }).toThrow(TypeError);
+});
+
 test("object property deletion", () => {
   const obj = {
     existing: "value",
