@@ -29,3 +29,19 @@ test("regex literals are allowed after condition parentheses", () => {
 
   expect(matched).toBe(true);
 });
+
+test("unicode regex literals treat astral symbols as code points", () => {
+  expect(/𝌆{2}/u.test("𝌆𝌆")).toBe(true);
+  expect(/^.$/u.test("𝌆")).toBe(true);
+  expect(/^[𝌆]$/u.test("𝌆")).toBe(true);
+  expect(/[💩-💫]/u.test("💩")).toBe(true);
+  expect(/[💩-💫]/u.test("💨")).toBe(false);
+});
+
+test("unicode regex literals handle escapes and forward named references", () => {
+  expect(/\u{3f}/u.test("?")).toBe(true);
+  expect(/\0/u.test(String.fromCharCode(0))).toBe(true);
+  expect(/\u212a/iu.test("k")).toBe(true);
+  expect(/\u212a/u.test("k")).toBe(false);
+  expect(/\k<a>(?<a>x)/.test("x")).toBe(true);
+});
