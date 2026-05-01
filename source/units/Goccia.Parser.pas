@@ -645,8 +645,27 @@ begin
 end;
 
 function TGocciaParser.Expression: TGocciaExpression;
+var
+  Expressions: TObjectList<TGocciaExpression>;
+  Line, Column: Integer;
 begin
   Result := Assignment;
+  if not Match(gttComma) then
+    Exit;
+
+  Line := Result.Line;
+  Column := Result.Column;
+  Expressions := TObjectList<TGocciaExpression>.Create(True);
+  try
+    Expressions.Add(Result);
+    repeat
+      Expressions.Add(Assignment);
+    until not Match(gttComma);
+    Result := TGocciaSequenceExpression.Create(Expressions, Line, Column);
+  except
+    Expressions.Free;
+    raise;
+  end;
 end;
 
 function TGocciaParser.Conditional: TGocciaExpression;
@@ -887,9 +906,9 @@ begin
       begin
         repeat
           if Match(gttSpread) then
-            Arg := TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column)
+            Arg := TGocciaSpreadExpression.Create(Assignment, Previous.Line, Previous.Column)
           else
-            Arg := Expression;
+            Arg := Assignment;
           Arguments.Add(Arg);
         until not Match(gttComma) or Check(gttRightParen);
       end;
@@ -933,9 +952,9 @@ begin
           begin
             repeat
               if Match(gttSpread) then
-                Arg := TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column)
+                Arg := TGocciaSpreadExpression.Create(Assignment, Previous.Line, Previous.Column)
               else
-                Arg := Expression;
+                Arg := Assignment;
               Arguments.Add(Arg);
             until not Match(gttComma) or Check(gttRightParen);
           end;
@@ -1599,7 +1618,7 @@ begin
     begin
       // ES2026 §13.3.10 ImportCall — import(specifier)
       Advance; // consume '('
-      Expr := Expression;
+      Expr := Assignment;
       Consume(gttRightParen, 'Expected ")" after import() specifier',
         SSuggestDynamicImportSyntax);
       Result := TGocciaImportCallExpression.Create(Expr, Token.Line, Token.Column);
@@ -1655,9 +1674,9 @@ begin
       begin
         repeat
           if Match(gttSpread) then
-            Args.Add(TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column))
+            Args.Add(TGocciaSpreadExpression.Create(Assignment, Previous.Line, Previous.Column))
           else
-            Args.Add(Expression);
+            Args.Add(Assignment);
         until not Match(gttComma) or Check(gttRightParen);
       end;
       Consume(gttRightParen, 'Expected ")" after constructor arguments',
@@ -1712,7 +1731,7 @@ begin
         if Match(gttLeftBrace) then
           ArrowBody := BlockStatement
         else
-          ArrowBody := Expression;
+          ArrowBody := Assignment;
       finally
         Dec(FFunctionDepth);
         Dec(FInAsyncFunction);
@@ -1884,14 +1903,14 @@ begin
           'Keep only one default clause in this match expression');
       Consume(gttColon, 'Expected ":" after default match clause',
         SSuggestTernaryColon);
-      DefaultExpression := Expression;
+      DefaultExpression := Assignment;
     end
     else
     begin
       Pattern := ParseMatchPattern;
       Consume(gttColon, 'Expected ":" after match pattern',
         SSuggestTernaryColon);
-      ClauseExpression := Expression;
+      ClauseExpression := Assignment;
       Clauses.Add(TGocciaMatchClause.Create(Pattern, ClauseExpression));
     end;
 
@@ -2192,7 +2211,7 @@ begin
     if Match(gttLeftBracket) then
     begin
       IsComputed := True;
-      KeyExpression := Expression;
+      KeyExpression := Assignment;
       Consume(gttRightBracket, 'Expected "]" after computed pattern property',
         SSuggestCloseBracketComputedPropertyName);
     end
@@ -2468,12 +2487,12 @@ begin
     else if Match(gttSpread) then
     begin
       // Spread expression: ...array
-      Elements.Add(TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column));
+      Elements.Add(TGocciaSpreadExpression.Create(Assignment, Previous.Line, Previous.Column));
     end
     else
     begin
       // Regular expression
-      Elements.Add(Expression);
+      Elements.Add(Assignment);
     end;
 
     if not Match(gttComma) then
@@ -2564,7 +2583,7 @@ begin
       // Create a spread expression
       Line := Previous.Line;
       Column := Previous.Column;
-      KeyExpression := TGocciaSpreadExpression.Create(Expression, Line, Column);
+      KeyExpression := TGocciaSpreadExpression.Create(Assignment, Line, Column);
       ComputedProperties.Add(KeyExpression, nil); // nil value for spread
 
       // Track in source order
@@ -2588,7 +2607,7 @@ begin
     begin
       // Computed property name: [expr]: value
       IsComputed := True;
-      KeyExpression := Expression;
+      KeyExpression := Assignment;
       Consume(gttRightBracket, 'Expected "]" after computed property name',
         SSuggestCloseBracketComputedPropertyName);
     end
@@ -2654,7 +2673,7 @@ begin
         // Regular property: key: value
         Consume(gttColon, 'Expected ":" after property key',
           SSuggestAddColonPropertyValue);
-        Value := Expression;
+        Value := Assignment;
       end
             else
       begin
@@ -2670,7 +2689,7 @@ begin
         if Match(gttAssign) then
         begin
           // This creates an assignment expression for use in destructuring patterns
-          Value := TGocciaAssignmentExpression.Create(Key, Expression, Previous.Line, Previous.Column);
+          Value := TGocciaAssignmentExpression.Create(Key, Assignment, Previous.Line, Previous.Column);
         end;
       end;
     end;
@@ -2957,7 +2976,7 @@ begin
       if Match(gttLeftBrace) then
         Body := BlockStatement
       else
-        Body := Expression;
+        Body := Assignment;
     finally
       if AIsAsync then Dec(FInAsyncFunction);
     end;
@@ -3000,7 +3019,7 @@ begin
       if Match(gttLeftBrace) then
         ArrowBody := BlockStatement
       else
-        ArrowBody := Expression;
+        ArrowBody := Assignment;
     finally
       Dec(FFunctionDepth);
     end;
@@ -3294,7 +3313,7 @@ begin
     end;
     Consume(gttAssign, 'Destructuring declarations must have an initializer',
       SSuggestDestructuringRequiresInitializer);
-    Initializer := Expression;
+    Initializer := Assignment;
     ConsumeSemicolonOrASI('Expected ";" after destructuring declaration',
       SSuggestAddSemicolon);
     DestructuringDecl := TGocciaDestructuringDeclaration.Create(Pattern, Initializer, IsConst, Line, Column);
@@ -3317,7 +3336,7 @@ begin
       end;
 
       if Match(gttAssign) then
-        Variables[VariableCount].Initializer := Expression
+        Variables[VariableCount].Initializer := Assignment
       else if IsConst then
         raise TGocciaSyntaxError.Create('const declarations must have an initializer',
           Line, Column, FFileName, FSourceLines,
@@ -3379,7 +3398,7 @@ begin
     // using declarations must have an initializer
     Consume(gttAssign, '"using" declarations must have an initializer',
       'Add " = <expression>" after the variable name');
-    Initializer := Expression;
+    Initializer := Assignment;
     Variables[VariableCount].Initializer := Initializer;
 
     Inc(VariableCount);
@@ -3684,7 +3703,7 @@ begin
     end;
     Consume(gttAssign, 'Destructuring declarations must have an initializer',
       SSuggestDestructuringRequiresInitializer);
-    Initializer := Expression;
+    Initializer := Assignment;
     ConsumeSemicolonOrASI('Expected ";" after destructuring declaration',
       SSuggestAddSemicolon);
     DestructuringDecl := TGocciaDestructuringDeclaration.Create(Pattern, Initializer, False, Line, Column, True);
@@ -3707,7 +3726,7 @@ begin
       end;
 
       if Match(gttAssign) then
-        Variables[VariableCount].Initializer := Expression
+        Variables[VariableCount].Initializer := Assignment
       else
         Variables[VariableCount].Initializer := TGocciaLiteralExpression.Create(
           TGocciaUndefinedLiteralValue.UndefinedValue, Line, Column);
@@ -3803,7 +3822,7 @@ begin
       begin
         Advance; // consume 'of'
 
-        IterableExpr := Expression;
+        IterableExpr := Assignment;
         Consume(gttRightParen, 'Expected ")" after for...of expression',
           SSuggestCloseParenForOf);
 
@@ -4184,9 +4203,9 @@ begin
         begin
           repeat
             if Match(gttSpread) then
-              Arg := TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column)
+              Arg := TGocciaSpreadExpression.Create(Assignment, Previous.Line, Previous.Column)
             else
-              Arg := Expression;
+              Arg := Assignment;
             Arguments.Add(Arg);
           until not Match(gttComma) or Check(gttRightParen);
         end;
@@ -4270,7 +4289,7 @@ begin
 
     Consume(gttAssign, 'Expected "=" after enum member name (enum members require explicit initializers)',
       SSuggestEnumExplicitValues);
-    Initializer := Expression;
+    Initializer := Assignment;
 
     Inc(MemberCount);
     SetLength(Members, MemberCount);
@@ -4789,7 +4808,7 @@ begin
         if Check(gttLeftBracket) then
         begin
           Advance;
-          ComputedKeyExpression := Expression;
+          ComputedKeyExpression := Assignment;
           Consume(gttRightBracket, 'Expected "]" after computed property name',
             SSuggestCloseBracketComputedPropertyName);
           IsComputed := True;
@@ -4814,7 +4833,7 @@ begin
         if Check(gttLeftBracket) then
         begin
           Advance;
-          ComputedKeyExpression := Expression;
+          ComputedKeyExpression := Assignment;
           Consume(gttRightBracket, 'Expected "]" after computed property name',
             SSuggestCloseBracketComputedPropertyName);
           IsComputed := True;
@@ -4834,7 +4853,7 @@ begin
       else if Check(gttLeftBracket) then
       begin
         Advance;
-        ComputedKeyExpression := Expression;
+        ComputedKeyExpression := Assignment;
         Consume(gttRightBracket, 'Expected "]" after computed property name',
           SSuggestCloseBracketComputedPropertyName);
         IsComputed := True;
@@ -4871,7 +4890,7 @@ begin
         if Check(gttAssign) then
         begin
           Advance;
-          PropertyValue := Expression;
+          PropertyValue := Assignment;
         end
         else
           PropertyValue := nil;
@@ -4893,7 +4912,7 @@ begin
       begin
         Consume(gttAssign, 'Expected "=" in property',
           SSuggestAddPropertyInitializer);
-        PropertyValue := Expression;
+        PropertyValue := Assignment;
         ConsumeSemicolonOrASI('Expected ";" after property',
           SSuggestAddSemicolon);
 
@@ -5567,7 +5586,7 @@ begin
       // Check for default value
       if Match(gttAssign) then
       begin
-        Pattern := TGocciaAssignmentDestructuringPattern.Create(Pattern, Expression, Pattern.Line, Pattern.Column);
+        Pattern := TGocciaAssignmentDestructuringPattern.Create(Pattern, Assignment, Pattern.Line, Pattern.Column);
       end;
 
       Elements.Add(Pattern);
@@ -5615,7 +5634,7 @@ begin
       begin
         // Computed property: [expr]: pattern
         IsComputed := True;
-        KeyExpression := Expression;
+        KeyExpression := Assignment;
         Key := ''; // Will be computed at runtime
         Consume(gttRightBracket, 'Expected "]" after computed property key',
           SSuggestCloseBracketComputedPropertyKey);
@@ -5641,7 +5660,7 @@ begin
         // Check for default value
         if Match(gttAssign) then
         begin
-          Pattern := TGocciaAssignmentDestructuringPattern.Create(Pattern, Expression, Pattern.Line, Pattern.Column);
+          Pattern := TGocciaAssignmentDestructuringPattern.Create(Pattern, Assignment, Pattern.Line, Pattern.Column);
         end;
       end
       else
@@ -5652,7 +5671,7 @@ begin
         // Check for default value in shorthand
         if Match(gttAssign) then
         begin
-          Pattern := TGocciaAssignmentDestructuringPattern.Create(Pattern, Expression, Pattern.Line, Pattern.Column);
+          Pattern := TGocciaAssignmentDestructuringPattern.Create(Pattern, Assignment, Pattern.Line, Pattern.Column);
         end;
       end;
 

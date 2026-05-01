@@ -230,6 +230,7 @@ function ExpressionType(const AScope: TGocciaCompilerScope;
   const AExpr: TGocciaExpression): TGocciaLocalType;
 var
   Bin: TGocciaBinaryExpression;
+  Sequence: TGocciaSequenceExpression;
   LocalIdx: Integer;
   LeftType, RightType: TGocciaLocalType;
   ObjAnnotation: string;
@@ -277,6 +278,13 @@ begin
       else if IsKnownNumeric(LeftType) and IsKnownNumeric(RightType) then
         Result := sltFloat;
     end;
+  end
+  else if AExpr is TGocciaSequenceExpression then
+  begin
+    Sequence := TGocciaSequenceExpression(AExpr);
+    if Sequence.Expressions.Count > 0 then
+      Result := ExpressionType(AScope,
+        Sequence.Expressions[Sequence.Expressions.Count - 1]);
   end
   else if AExpr is TGocciaCallExpression then
   begin
