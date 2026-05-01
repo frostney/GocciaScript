@@ -90,6 +90,7 @@ uses
   Goccia.AST.Statements,
   Goccia.Error,
   Goccia.FileExtensions,
+  Goccia.GarbageCollector,
   Goccia.JSON,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
@@ -421,23 +422,30 @@ begin
       JSONParser.Free;
     end;
 
-    Module := TGocciaModule.Create(AResolvedPath);
-    Module.LastModified := Content.LastModified;
-    LoadSucceeded := False;
+    if Assigned(TGarbageCollector.Instance) and Assigned(ParsedValue) then
+      TGarbageCollector.Instance.AddTempRoot(ParsedValue);
     try
-      if ParsedValue is TGocciaObjectValue then
-      begin
-        Obj := TGocciaObjectValue(ParsedValue);
-        for Key in Obj.GetOwnPropertyKeys do
-          Module.ExportsTable.AddOrSetValue(Key, Obj.GetProperty(Key));
-      end;
+      Module := TGocciaModule.Create(AResolvedPath);
+      Module.LastModified := Content.LastModified;
+      LoadSucceeded := False;
+      try
+        if ParsedValue is TGocciaObjectValue then
+        begin
+          Obj := TGocciaObjectValue(ParsedValue);
+          for Key in Obj.GetOwnPropertyKeys do
+            Module.ExportsTable.AddOrSetValue(Key, Obj.GetProperty(Key));
+        end;
 
-      FModules.Add(AResolvedPath, Module);
-      Result := Module;
-      LoadSucceeded := True;
+        FModules.Add(AResolvedPath, Module);
+        Result := Module;
+        LoadSucceeded := True;
+      finally
+        if not LoadSucceeded then
+          Module.Free;
+      end;
     finally
-      if not LoadSucceeded then
-        Module.Free;
+      if Assigned(TGarbageCollector.Instance) and Assigned(ParsedValue) then
+        TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
     end;
   finally
     Content.Free;

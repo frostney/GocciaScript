@@ -11,6 +11,8 @@ uses
 
   Goccia.Engine,
   Goccia.Engine.Backend,
+  Goccia.ModuleResolver,
+  Goccia.Modules,
   Goccia.Runtime,
   Goccia.ScriptLoader.Globals,
   Goccia.TestSetup,
@@ -21,10 +23,15 @@ uses
 type
   TScriptLoaderGlobalsTests = class(TTestSuite)
   private
+    FCustomRuntimeLoaderCalled: Boolean;
     function CreateEmptySource: TStringList;
+    function LoadCustomRuntimeModule(const AResolvedPath: string;
+      out AModule: TGocciaModule): Boolean;
     procedure TestDetectsStructuredGlobalsFilesByExtension;
     procedure TestRuntimeConstructorAcceptsExistingEngine;
     procedure TestRuntimeConstructorRejectsDifferentGlobals;
+    procedure TestRuntimePreservesResolverExtensions;
+    procedure TestRuntimeModuleLoaderFallsBackToPreviousLoader;
     procedure TestEngineInjectGlobalsFromJSON5;
     procedure TestReadFileTextPreservesUTF8ForTOMLGlobals;
     procedure TestEngineInjectGlobalsFromTOML;
@@ -44,6 +51,10 @@ begin
     TestRuntimeConstructorAcceptsExistingEngine);
   Test('Runtime constructor rejects different globals',
     TestRuntimeConstructorRejectsDifferentGlobals);
+  Test('Runtime preserves resolver extensions',
+    TestRuntimePreservesResolverExtensions);
+  Test('Runtime module loader falls back to previous loader',
+    TestRuntimeModuleLoaderFallsBackToPreviousLoader);
   Test('Engine injects globals from JSON5',
     TestEngineInjectGlobalsFromJSON5);
   Test('Engine injects globals from TOML',
@@ -58,6 +69,19 @@ function TScriptLoaderGlobalsTests.CreateEmptySource: TStringList;
 begin
   Result := TStringList.Create;
   Result.Text := '';
+end;
+
+function TScriptLoaderGlobalsTests.LoadCustomRuntimeModule(
+  const AResolvedPath: string; out AModule: TGocciaModule): Boolean;
+begin
+  Result := AResolvedPath = 'virtual.custom';
+  if Result then
+  begin
+    FCustomRuntimeLoaderCalled := True;
+    AModule := TGocciaModule.Create(AResolvedPath);
+  end
+  else
+    AModule := nil;
 end;
 
 procedure TScriptLoaderGlobalsTests.TestDetectsStructuredGlobalsFilesByExtension;
@@ -130,6 +154,60 @@ begin
   finally
     SecondRuntime.Free;
     FirstRuntime.Free;
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TScriptLoaderGlobalsTests.TestRuntimePreservesResolverExtensions;
+var
+  Engine: TGocciaEngine;
+  Extensions: TModuleResolverExtensionArray;
+  Runtime: TGocciaRuntime;
+  Source: TStringList;
+begin
+  Source := CreateEmptySource;
+  Engine := TGocciaEngine.Create('<runtime-test>', Source, []);
+  Runtime := nil;
+  try
+    Engine.Resolver.SetExtensions(['.custom', '.js']);
+    Runtime := TGocciaRuntime.Create(Engine, [rgJSON5]);
+    Extensions := Engine.Resolver.GetExtensions;
+
+    Expect<string>(Extensions[0]).ToBe('.custom');
+    Expect<string>(Extensions[1]).ToBe('.js');
+    Expect<string>(Extensions[High(Extensions) - 1]).ToBe('.json5');
+    Expect<string>(Extensions[High(Extensions)]).ToBe('.jsonc');
+  finally
+    Runtime.Free;
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TScriptLoaderGlobalsTests.TestRuntimeModuleLoaderFallsBackToPreviousLoader;
+var
+  Engine: TGocciaEngine;
+  LoadedModule: TGocciaModule;
+  Runtime: TGocciaRuntime;
+  Source: TStringList;
+begin
+  Source := CreateEmptySource;
+  Engine := TGocciaEngine.Create('<runtime-test>', Source, []);
+  Runtime := nil;
+  LoadedModule := nil;
+  FCustomRuntimeLoaderCalled := False;
+  try
+    Engine.ModuleLoader.RuntimeModuleLoader := LoadCustomRuntimeModule;
+    Runtime := TGocciaRuntime.Create(Engine, [rgJSON5]);
+
+    Expect<Boolean>(Engine.ModuleLoader.RuntimeModuleLoader(
+      'virtual.custom', LoadedModule)).ToBe(True);
+    Expect<Boolean>(FCustomRuntimeLoaderCalled).ToBe(True);
+    Expect<string>(LoadedModule.Path).ToBe('virtual.custom');
+  finally
+    LoadedModule.Free;
+    Runtime.Free;
     Engine.Free;
     Source.Free;
   end;

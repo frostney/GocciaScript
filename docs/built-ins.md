@@ -241,7 +241,7 @@ RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pat
 
 ### Global Constants, Functions, and Error Constructors (`Goccia.Builtins.Globals.pas`)
 
-These are always registered (not flag-gated).
+These core constants, functions, and error constructors are always registered (not flag-gated). Runtime extensions can add more globals or namespace properties.
 
 **Constants:** `undefined`, `NaN`, `Infinity`, `globalThis`
 
@@ -256,7 +256,7 @@ A `const` global providing engine metadata and Goccia-owned utility APIs:
 | `version` | `string` | Semver version from the latest git tag (e.g., `"0.2.0"`), or tag + `-dev` suffix if there are commits after the tag (e.g., `"0.2.0-dev"`) |
 | `commit` | `string` | Short git commit hash (e.g., `"a1b2c3d"`) |
 | `build` | `object` | Compile-time platform information (see below) |
-| `semver` | `object` | SemVer 2.0.0 API namespace (see below) |
+| `semver` | `object` | Runtime-provided SemVer 2.0.0 API namespace (see below) |
 | `spec` | `object` | ES specification features implemented by GocciaScript, keyed by year (e.g., `"2015"`, `"2025"`). Each year maps to an array of `{ name, link }` entries. |
 | `proposal` | `object` | TC39 proposals implemented by GocciaScript, keyed by stage (e.g., `"stage-3"`, `"stage-1"`). Each stage maps to an array of `{ name, link }` entries. |
 | `shims` | `string[]` | Names of registered shims (currently empty, infrastructure for future shim support) |
@@ -273,6 +273,8 @@ A `const` global providing engine metadata and Goccia-owned utility APIs:
 | `date` | `string` | Build date in `YYYY-MM-DD` format (e.g., `"2026-04-20"`) |
 
 **`Goccia.semver`**
+
+`Goccia.semver` is provided by `TGocciaRuntime`; it is not part of the bare engine namespace. `GocciaScriptLoaderBare` exposes `Goccia` but does not expose `Goccia.semver`.
 
 `Goccia.semver` exposes a SemVer 2.0.0 API modeled after the main `node-semver` export plus its documented module-group aliases:
 

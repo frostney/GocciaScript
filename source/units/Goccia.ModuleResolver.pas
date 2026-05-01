@@ -10,11 +10,13 @@ uses
   OrderedStringMap;
 
 type
+  TModuleResolverExtensionArray = array of string;
+
   TModuleResolver = class
   private
     FAliases: TStringStringMap;
     FBaseDirectory: string;
-    FExtensions: array of string;
+    FExtensions: TModuleResolverExtensionArray;
   protected
     function ApplyAliases(const AModulePath, AImportingFilePath: string): string;
     function TryResolveWithExtensions(const ABasePath: string; out AResolvedPath: string): Boolean;
@@ -23,6 +25,7 @@ type
     destructor Destroy; override;
 
     procedure AddAlias(const APattern, AReplacement: string);
+    function GetExtensions: TModuleResolverExtensionArray;
     function HasAlias(const AModulePath: string): Boolean;
     procedure SetExtensions(const AExtensions: array of string);
     function Resolve(const AModulePath, AImportingFilePath: string): string; virtual;
@@ -144,6 +147,15 @@ end;
 procedure TModuleResolver.AddAlias(const APattern, AReplacement: string);
 begin
   FAliases.AddOrSetValue(APattern, AReplacement);
+end;
+
+function TModuleResolver.GetExtensions: TModuleResolverExtensionArray;
+var
+  I: Integer;
+begin
+  SetLength(Result, Length(FExtensions));
+  for I := 0 to High(FExtensions) do
+    Result[I] := FExtensions[I];
 end;
 
 function TModuleResolver.HasAlias(const AModulePath: string): Boolean;

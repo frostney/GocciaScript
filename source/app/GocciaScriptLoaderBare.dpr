@@ -140,8 +140,17 @@ begin
     Engine := TGocciaEngine.Create(DisplayName, Source, []);
     try
       ConfigureEngine(Engine, AOptions);
-      ScriptResult := Engine.Execute;
-      PrintResult(ScriptResult.Result);
+      try
+        ScriptResult := Engine.Execute;
+        PrintResult(ScriptResult.Result);
+      except
+        on E: TGocciaThrowValue do
+        begin
+          WriteLn(StdErr, FormatThrowDetail(E.Value, DisplayName, Source,
+            IsColorTerminal, E.Suggestion));
+          Result := 1;
+        end;
+      end;
     finally
       Engine.Free;
     end;
@@ -160,12 +169,6 @@ begin
     on E: TGocciaError do
     begin
       WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
-      ExitCode := 1;
-    end;
-    on E: TGocciaThrowValue do
-    begin
-      WriteLn(StdErr, FormatThrowDetail(E.Value, Options.FileName, nil,
-        IsColorTerminal, E.Suggestion));
       ExitCode := 1;
     end;
     on E: Exception do

@@ -24,6 +24,7 @@ uses
   Goccia.Modules.Loader,
   Goccia.Modules.Resolver,
   Goccia.Parser,
+  Goccia.Runtime,
   Goccia.TestSetup,
   Goccia.Token,
   Goccia.TOML,
@@ -495,6 +496,7 @@ var
   Provider: TMemoryModuleContentProvider;
   Resolver: TInMemoryModuleResolver;
   RaisedExpected: Boolean;
+  Runtime: TGocciaRuntime;
   Source: TStringList;
 begin
   Provider := TMemoryModuleContentProvider.Create;
@@ -512,10 +514,12 @@ begin
     try
       Engine := TGocciaEngine.Create(ENTRY_PATH, Source,
         [], ModuleLoader);
+      Runtime := nil;
       try
+        Runtime := TGocciaRuntime.Create(Engine, [rgJSONL]);
         RaisedExpected := False;
         try
-          Engine.Execute;
+          Runtime.Execute;
           Fail('Expected invalid JSONL module source to raise an exception.');
         except
           on E: Exception do
@@ -533,6 +537,7 @@ begin
 
         Expect<Boolean>(RaisedExpected).ToBe(True);
       finally
+        Runtime.Free;
         Engine.Free;
       end;
     finally
@@ -557,6 +562,7 @@ var
   Provider: TMemoryModuleContentProvider;
   Resolver: TInMemoryModuleResolver;
   RaisedExpected: Boolean;
+  Runtime: TGocciaRuntime;
   Source: TStringList;
 begin
   Provider := TMemoryModuleContentProvider.Create;
@@ -571,10 +577,12 @@ begin
     try
       Engine := TGocciaEngine.Create(ENTRY_PATH, Source,
         [], ModuleLoader);
+      Runtime := nil;
       try
+        Runtime := TGocciaRuntime.Create(Engine, [rgTOML]);
         RaisedExpected := False;
         try
-          Engine.Execute;
+          Runtime.Execute;
           Fail('Expected invalid TOML module source to raise an exception.');
         except
           on E: Exception do
@@ -593,6 +601,7 @@ begin
 
         Expect<Boolean>(RaisedExpected).ToBe(True);
       finally
+        Runtime.Free;
         Engine.Free;
       end;
     finally
@@ -775,6 +784,7 @@ var
   Engine: TGocciaEngine;
   MetadataValue: TGocciaObjectValue;
   ResultObject: TGocciaObjectValue;
+  Runtime: TGocciaRuntime;
   ScriptResult: TGocciaScriptResult;
   Source: TStringList;
   TempDirectory: string;
@@ -795,9 +805,12 @@ begin
       IncludeTrailingPathDelimiter(TempDirectory) + 'app.js',
       Source,
       []);
+    Runtime := nil;
     try
-      ScriptResult := Engine.Execute;
+      Runtime := TGocciaRuntime.Create(Engine, [rgTextAssets]);
+      ScriptResult := Runtime.Execute;
     finally
+      Runtime.Free;
       Engine.Free;
     end;
 
@@ -826,6 +839,7 @@ procedure TModuleContentProviderTests.TestEngineNormalizesCRLFTextAssetModulesTo
 var
   Engine: TGocciaEngine;
   RawContent: UTF8String;
+  Runtime: TGocciaRuntime;
   ScriptResult: TGocciaScriptResult;
   Source: TStringList;
   TempDirectory: string;
@@ -846,9 +860,12 @@ begin
       IncludeTrailingPathDelimiter(TempDirectory) + 'app.js',
       Source,
       []);
+    Runtime := nil;
     try
-      ScriptResult := Engine.Execute;
+      Runtime := TGocciaRuntime.Create(Engine, [rgTextAssets]);
+      ScriptResult := Runtime.Execute;
     finally
+      Runtime.Free;
       Engine.Free;
     end;
 

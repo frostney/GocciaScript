@@ -5,46 +5,45 @@
 
 ## Executive Summary
 
-- **Quick start** — `TGocciaEngine.RunScript('code')` for one-shot execution; `TGocciaEngine.Create(...)` for long-lived engines
-- **Sandboxing** — Control available built-ins via `TGocciaGlobalBuiltins` flags; inject custom globals via `DefineLexicalBinding`; enforce execution limits via timeout or instruction cap
+- **Quick start** — `TGocciaRuntime.Create(...)` for the standard host/runtime surface; `TGocciaEngine.Create(...)` for core-language-only embedders
+- **Sandboxing** — Choose runtime globals with `TGocciaRuntimeGlobals`; enable special-purpose globals with `TGocciaGlobalBuiltins`; inject custom globals via `DefineLexicalBinding`; enforce execution limits via timeout or instruction cap
 - **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, and global modules
 - **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
 
-GocciaScript is designed to be embedded in FreePascal applications. The `TGocciaEngine` class provides the public API for executing scripts, controlling available built-ins, and injecting custom globals.
+GocciaScript is designed to be embedded in FreePascal applications. `TGocciaRuntime` is the default embedding entry point for host globals such as `console`, `fetch`, `URL`, JSON5, TOML, YAML, CSV/TSV, and SemVer. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals.
 
 ## Quick Start
 
-The simplest way to run a script:
+The simplest way to run a script with the standard runtime surface:
 
 ```pascal
-uses
-  Goccia.Engine;
-
-TGocciaEngine.RunScript('console.log("hello from GocciaScript");');
+Source := TStringList.Create;
+Source.Text := 'console.log("hello from GocciaScript");';
+Runtime := TGocciaRuntime.Create('<inline>', Source, []);
+try
+  Runtime.Execute;
+finally
+  Runtime.Free;
+  Source.Free;
+end;
 ```
 
-To execute a file:
-
-```pascal
-TGocciaEngine.RunScriptFromFile('app.js');
-```
-
-Both methods create an engine with the default built-in set, execute the code, and clean up automatically.
+For files, load `app.js` into the `Source` list and pass the real filename to `TGocciaRuntime.Create('app.js', Source, [])`. Use `TGocciaEngine.RunScript*` only for core-language scripts that do not need runtime globals.
 
 ## Engine API
 
 ### Class Methods (One-Shot Execution)
 
-These are convenience methods that create an engine, execute, and clean up in a single call. Use these for fire-and-forget script execution.
+These are convenience methods that create a core engine, execute, and clean up in a single call. They do not attach `TGocciaRuntime`, so host/runtime globals such as `console`, `fetch`, `URL`, JSON5, TOML, YAML, CSV/TSV, and SemVer are not available.
 
 | Method | Description |
 |--------|-------------|
-| `RunScript(Source)` | Execute a string of code with default globals |
-| `RunScript(Source, FileName, Globals)` | Execute a string with custom globals and filename |
-| `RunScriptFromFile(FileName)` | Execute a file with default globals |
-| `RunScriptFromFile(FileName, Globals)` | Execute a file with custom globals |
-| `RunScriptFromStringList(Source, FileName)` | Execute from a `TStringList` with default globals |
-| `RunScriptFromStringList(Source, FileName, Globals)` | Execute from a `TStringList` with custom globals |
+| `RunScript(Source)` | Execute a string of code with default core globals |
+| `RunScript(Source, FileName, Globals)` | Execute a string with special-purpose built-ins and filename |
+| `RunScriptFromFile(FileName)` | Execute a file with default core globals |
+| `RunScriptFromFile(FileName, Globals)` | Execute a file with special-purpose built-ins |
+| `RunScriptFromStringList(Source, FileName)` | Execute from a `TStringList` with default core globals |
+| `RunScriptFromStringList(Source, FileName, Globals)` | Execute from a `TStringList` with special-purpose built-ins |
 All methods return `TGocciaScriptResult` — a record containing the result value, per-phase timing (in microseconds), and the filename.
 
 ### Instance Usage (Long-Lived Engine)
@@ -61,7 +60,7 @@ uses
 var
   Engine: TGocciaEngine;
   Source: TStringList;
-  Result: TGocciaValue;
+  ScriptResult: TGocciaScriptResult;
 begin
   Source := TStringList.Create;
   Engine := TGocciaEngine.Create('session', Source, []);
@@ -71,8 +70,9 @@ begin
     Engine.Execute;
 
     // Second execution — uses the variable from the first
-    Source.Text := 'console.log(x);'; // prints 42
-    Engine.Execute;
+    Source.Text := 'x + 1;';
+    ScriptResult := Engine.Execute;
+    WriteLn(ScriptResult.Result.ToStringLiteral.Value); // 43
   finally
     Engine.Free;
     Source.Free;
@@ -439,8 +439,16 @@ When embedding, pass `ggFFI` in the `TGocciaGlobalBuiltins` set during engine cr
 To add the test framework for a custom test runner:
 
 ```pascal
-TGocciaEngine.RunScriptFromFile('tests/my-test.js', [ggTestAssertions]);
+Engine := TGocciaEngine.Create('tests/my-test.js', Source, [ggTestAssertions]);
+Runtime := TGocciaRuntime.Create(Engine, True);
+try
+  Runtime.Execute;
+finally
+  Runtime.Free;
+end;
 ```
+
+Runtime globals can be reduced by passing a smaller `TGocciaRuntimeGlobals` set, for example `TGocciaRuntime.Create(Engine, [rgConsole], True)`.
 
 ### Preprocessors and Compatibility
 
@@ -884,6 +892,6 @@ For CLI tools, use `TGocciaCLIApplication` instead, which adds argument parsing,
 5. Choose your special-purpose built-in set via `TGocciaGlobalBuiltins`
 6. Inject custom globals via `Runtime.Engine.Interpreter.GlobalScope.DefineLexicalBinding(...)`
 7. Handle exceptions from `Goccia.Error`
-8. Free the runtime when done (it owns and frees its engine)
+8. Free the runtime when done; it owns and frees the engine only when it created the engine itself, or when you used an ownership-transfer overload such as `TGocciaRuntime.Create(Engine, True)`. `TGocciaRuntime.Create(Engine)` is non-owning by default, so embedders wrapping an existing engine must also free that engine.
 
 For host-provided configuration data, `Runtime.Engine` exposes `InjectGlobalsFromJSON(...)`, `InjectGlobalsFromJSON5(...)`, `InjectGlobalsFromTOML(...)`, `InjectGlobalsFromYAML(...)`, and `InjectGlobalsFromModule(...)`. Strict JSON is core. JSON5, TOML, and YAML injection require the runtime extension installed by `TGocciaRuntime`; they use the same top-level-object/table contract as JSON object globals. Embedders that intentionally need only the core language can still use `TGocciaEngine` directly.

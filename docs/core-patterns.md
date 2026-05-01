@@ -354,7 +354,7 @@ This keeps the evaluator fully reentrant — all dependencies are explicit, maki
 
 ### Configurable Built-ins
 
-Built-ins are registered via a `TGocciaGlobalBuiltins` set of flags:
+`TGocciaEngine` always registers core language built-ins such as Math, Array, Number, Promise, JSON, Symbol, Set, Map, Temporal, ArrayBuffer, and related constructors. `TGocciaRuntime` attaches host/runtime globals such as console, fetch, URL, JSON5, TOML, YAML, CSV, and TSV through runtime extensions. `TGocciaGlobalBuiltins` only enumerates special-purpose, opt-in built-ins:
 
 ```pascal
 TGocciaGlobalBuiltin = (ggTestAssertions, ggBenchmark, ggFFI);

@@ -11,13 +11,15 @@ uses
 
   Goccia.Engine,
   Goccia.Realm,
-  Goccia.Values.Primitives,
-  Goccia.TestSetup;
+  Goccia.Runtime,
+  Goccia.TestSetup,
+  Goccia.Values.Primitives;
 
 type
   TTestEngineRealm = class(TTestSuite)
   private
     function RunInline(const ASource: string): TGocciaScriptResult;
+    function RunRuntimeInline(const ASource: string): TGocciaScriptResult;
   public
     procedure SetupTests; override;
 
@@ -57,6 +59,26 @@ end;
 function TTestEngineRealm.RunInline(const ASource: string): TGocciaScriptResult;
 begin
   Result := TGocciaEngine.RunScript(ASource, '<engine-realm-test>');
+end;
+
+function TTestEngineRealm.RunRuntimeInline(
+  const ASource: string): TGocciaScriptResult;
+var
+  Engine: TGocciaEngine;
+  Runtime: TGocciaRuntime;
+  Source: TStringList;
+begin
+  Source := TStringList.Create;
+  Source.Text := ASource;
+  Runtime := nil;
+  try
+    Engine := TGocciaEngine.Create('<engine-realm-test>', Source, []);
+    Runtime := TGocciaRuntime.Create(Engine, [rgURL], True);
+    Result := Runtime.Execute;
+  finally
+    Runtime.Free;
+    Source.Free;
+  end;
 end;
 
 procedure TTestEngineRealm.TestCurrentRealmIsAssignedDuringLife;
@@ -144,12 +166,12 @@ var
 begin
   // URLSearchParams.prototype is built lazily through TGocciaSharedPrototype
   // and rebuilt per realm; mutations on engine A must not leak.
-  ResultA := RunInline(
+  ResultA := RunRuntimeInline(
     'URLSearchParams.prototype.__poisonUSP = 7;' +
     'URLSearchParams.prototype.__poisonUSP;');
   Expect<Double>((ResultA.Result as TGocciaNumberLiteralValue).Value).ToBe(7);
 
-  ResultB := RunInline('typeof URLSearchParams.prototype.__poisonUSP;');
+  ResultB := RunRuntimeInline('typeof URLSearchParams.prototype.__poisonUSP;');
   Expect<string>((ResultB.Result as TGocciaStringLiteralValue).Value).ToBe(
     'undefined');
 end;
@@ -160,12 +182,12 @@ var
 begin
   // URL.prototype is built lazily through TGocciaSharedPrototype and
   // rebuilt per realm; mutations on engine A must not leak.
-  ResultA := RunInline(
+  ResultA := RunRuntimeInline(
     'URL.prototype.__poisonURL = 7;' +
     'URL.prototype.__poisonURL;');
   Expect<Double>((ResultA.Result as TGocciaNumberLiteralValue).Value).ToBe(7);
 
-  ResultB := RunInline('typeof URL.prototype.__poisonURL;');
+  ResultB := RunRuntimeInline('typeof URL.prototype.__poisonURL;');
   Expect<string>((ResultB.Result as TGocciaStringLiteralValue).Value).ToBe(
     'undefined');
 end;

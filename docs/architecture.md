@@ -4,16 +4,16 @@
 
 ## Executive Summary
 
-- **Single engine** — `TGocciaEngine` handles global configuration, built-in registration, and module loading for both execution modes
+- **Engine/runtime split** — `TGocciaEngine` orchestrates parsing, execution, core language built-ins, and module loading; `Goccia.Runtime` attaches runtime-provided built-ins, host globals, and extensions
 - **Execution mode abstraction** — `TGocciaExecutor` is the abstract class; `TGocciaInterpreterExecutor` and `TGocciaBytecodeExecutor` implement it independently
 - **Shared frontend** — Lexer, Parser, and AST are shared between execution modes
-- **Unified runtime** — Both modes share the same value types, built-ins, scope chain, and mark-and-sweep GC
+- **Shared execution substrate** — Both modes share the same value types, core scope model, runtime extension mechanism, and mark-and-sweep GC
 - **Goccia-specific** — The bytecode VM operates directly on `TGocciaValue`, not a generic VM abstraction
 - **No cross-dependency** — The bytecode executor has no dependency on the interpreter or evaluator units
 
 ## Overview
 
-GocciaScript has two execution modes — interpreter (tree-walk over the AST) and bytecode (`TGocciaVM`). A single `TGocciaEngine` class orchestrates both, delegating execution to a pluggable `TGocciaExecutor`. Both modes share the same frontend, value system, core language built-ins, and garbage collector. Host/runtime globals are attached through runtime extensions. See [Bytecode VM](bytecode-vm.md) for the bytecode backend's architecture.
+GocciaScript has two execution modes — interpreter (tree-walk over the AST) and bytecode (`TGocciaVM`). A single `TGocciaEngine` class orchestrates both, delegating execution to a pluggable `TGocciaExecutor`. Both modes share the same frontend, value system, core language built-ins, and garbage collector. Host/runtime globals are attached through runtime extensions; see [Main Layers](#main-layers) for the `Goccia.Engine` / `Goccia.Runtime` split. See [Bytecode VM](bytecode-vm.md) for the bytecode backend's architecture.
 
 ## Pipelines
 

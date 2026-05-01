@@ -25,6 +25,7 @@ uses
   Goccia.Engine,
   Goccia.Executor,
   Goccia.Modules,
+  Goccia.Modules.Loader,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -54,6 +55,7 @@ type
   private
     FEngine: TGocciaEngine;
     FGlobals: TGocciaRuntimeGlobals;
+    FPrevRuntimeModuleLoader: TGocciaRuntimeModuleLoader;
 
     FBuiltinConsole: TGocciaConsole;
     FBuiltinCSV: TGocciaCSVBuiltin;
@@ -193,6 +195,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.JSON5,
   Goccia.JSONL,
+  Goccia.ModuleResolver,
   Goccia.Modules.ContentProvider,
   Goccia.ObjectModel.Engine,
   Goccia.Scope,
@@ -215,7 +218,13 @@ const
 
 procedure AddRuntimeExtension(var AExtensions: TGocciaRuntimeImportExtensionArray;
   var ACount: Integer; const AExtension: string);
+var
+  I: Integer;
 begin
+  for I := 0 to ACount - 1 do
+    if SameText(AExtensions[I], AExtension) then
+      Exit;
+
   if ACount >= Length(AExtensions) then
     SetLength(AExtensions, Length(AExtensions) * 2 + 8);
   AExtensions[ACount] := AExtension;
@@ -463,6 +472,7 @@ begin
   RegisterBuiltIns;
   RegisterRuntimeConstructors;
   ConfigureModuleExtensions;
+  FPrevRuntimeModuleLoader := FEngine.ModuleLoader.RuntimeModuleLoader;
   FEngine.ModuleLoader.RuntimeModuleLoader := LoadRuntimeModule;
   FEngine.RefreshGlobalThis;
 end;
@@ -470,7 +480,7 @@ end;
 destructor TGocciaRuntimeExtension.Destroy;
 begin
   if Assigned(FEngine) then
-    FEngine.ModuleLoader.RuntimeModuleLoader := nil;
+    FEngine.ModuleLoader.RuntimeModuleLoader := FPrevRuntimeModuleLoader;
 
   FBuiltinConsole.Free;
   FBuiltinCSV.Free;
@@ -496,10 +506,17 @@ end;
 procedure TGocciaRuntimeExtension.ConfigureModuleExtensions;
 var
   Count: Integer;
+  ExistingExtensions: TModuleResolverExtensionArray;
   Extensions: TGocciaRuntimeImportExtensionArray;
+  I: Integer;
 begin
   Count := 0;
-  SetLength(Extensions, Length(EngineModuleImportExtensions) + 16);
+  ExistingExtensions := FEngine.Resolver.GetExtensions;
+  SetLength(Extensions, Length(ExistingExtensions) +
+    Length(EngineModuleImportExtensions) + 16);
+
+  for I := 0 to High(ExistingExtensions) do
+    AddRuntimeExtension(Extensions, Count, ExistingExtensions[I]);
   AddRuntimeExtension(Extensions, Count, EXT_JS);
   AddRuntimeExtension(Extensions, Count, EXT_JSX);
   AddRuntimeExtension(Extensions, Count, EXT_TS);
@@ -691,6 +708,8 @@ begin
 
   for Key in AValue.GetOwnPropertyKeys do
     FEngine.RegisterGlobal(Key, AValue.GetProperty(Key));
+
+  FEngine.RefreshGlobalThis;
 end;
 
 function TGocciaRuntimeExtension.LoadRuntimeModule(const AResolvedPath: string;
@@ -727,7 +746,11 @@ begin
     ((rgYAML in FGlobals) and IsYAMLExtension(Extension)) or
     ((rgTextAssets in FGlobals) and IsTextAssetExtension(Extension));
   if not Result then
+  begin
+    if Assigned(FPrevRuntimeModuleLoader) then
+      Result := FPrevRuntimeModuleLoader(AResolvedPath, AModule);
     Exit;
+  end;
 
   Content := FEngine.ModuleLoader.ContentProvider.LoadContent(AResolvedPath);
   CSVRecords := nil;
@@ -776,7 +799,15 @@ begin
     begin
       CSVParser := TGocciaCSVParser.Create;
       try
-        CSVRecords := CSVParser.Parse(Content.Text);
+        try
+          CSVRecords := CSVParser.Parse(Content.Text);
+        except
+          on E: EGocciaCSVParseError do
+            raise TGocciaRuntimeError.Create(
+              Format('Failed to parse CSV module "%s": %s',
+                [AResolvedPath, E.Message]),
+              0, 0, AResolvedPath, nil);
+        end;
       finally
         CSVParser.Free;
       end;
@@ -785,7 +816,15 @@ begin
     begin
       TSVParser := TGocciaTSVParser.Create;
       try
-        TSVRecords := TSVParser.Parse(Content.Text);
+        try
+          TSVRecords := TSVParser.Parse(Content.Text);
+        except
+          on E: EGocciaTSVParseError do
+            raise TGocciaRuntimeError.Create(
+              Format('Failed to parse TSV module "%s": %s',
+                [AResolvedPath, E.Message]),
+              0, 0, AResolvedPath, nil);
+        end;
       finally
         TSVParser.Free;
       end;
@@ -794,7 +833,15 @@ begin
     begin
       JSON5Parser := TGocciaJSON5Parser.Create;
       try
-        ParsedValue := JSON5Parser.Parse(Content.Text);
+        try
+          ParsedValue := JSON5Parser.Parse(Content.Text);
+        except
+          on E: EGocciaJSON5ParseError do
+            raise TGocciaRuntimeError.Create(
+              Format('Failed to parse JSON5 module "%s": %s',
+                [AResolvedPath, E.Message]),
+              0, 0, AResolvedPath, nil);
+        end;
       finally
         JSON5Parser.Free;
       end;
@@ -803,7 +850,15 @@ begin
     begin
       JSONLParser := TGocciaJSONLParser.Create;
       try
-        JSONLRecords := JSONLParser.Parse(Content.Text);
+        try
+          JSONLRecords := JSONLParser.Parse(Content.Text);
+        except
+          on E: EGocciaJSONLParseError do
+            raise TGocciaRuntimeError.Create(
+              Format('Failed to parse JSONL module "%s": %s',
+                [AResolvedPath, E.Message]),
+              0, 0, AResolvedPath, nil);
+        end;
       finally
         JSONLParser.Free;
       end;
@@ -812,7 +867,15 @@ begin
     begin
       TOMLParser := TGocciaTOMLParser.Create;
       try
-        ParsedValue := TOMLParser.Parse(Content.Text);
+        try
+          ParsedValue := TOMLParser.Parse(Content.Text);
+        except
+          on E: EGocciaTOMLParseError do
+            raise TGocciaRuntimeError.Create(
+              Format('Failed to parse TOML module "%s": %s',
+                [AResolvedPath, E.Message]),
+              0, 0, AResolvedPath, nil);
+        end;
       finally
         TOMLParser.Free;
       end;
@@ -821,7 +884,15 @@ begin
     begin
       YAMLParser := TGocciaYAMLParser.Create;
       try
-        Documents := YAMLParser.ParseDocuments(Content.Text);
+        try
+          Documents := YAMLParser.ParseDocuments(Content.Text);
+        except
+          on E: EGocciaYAMLParseError do
+            raise TGocciaRuntimeError.Create(
+              Format('Failed to parse YAML module "%s": %s',
+                [AResolvedPath, E.Message]),
+              0, 0, AResolvedPath, nil);
+        end;
       finally
         YAMLParser.Free;
       end;

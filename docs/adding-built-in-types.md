@@ -411,6 +411,18 @@ Add `Goccia.Values.YourValue` (alphabetically sorted).
 property BuiltinYour: TGocciaGlobalYour read FBuiltinYour;
 ```
 
+### 4i. Runtime-extension registration
+
+For a host/runtime global, use the same built-in/value unit patterns but wire it through `Goccia.Runtime.pas` instead of `Goccia.Engine.pas`:
+
+1. Add `Goccia.Builtins.GlobalYour` to the `Goccia.Runtime.pas` interface `uses` clause.
+2. Add an extension-specific config entry such as `rgYour` to `TGocciaRuntimeGlobal`; do not add a `TGocciaGlobalBuiltin` flag unless the feature is a special-purpose opt-in like tests, benchmarks, or FFI.
+3. Add a private field such as `FBuiltinYour: TGocciaGlobalYour` to `TGocciaRuntimeExtension`.
+4. Instantiate it from `TGocciaRuntimeExtension.RegisterBuiltIns` or register its constructor from `RegisterRuntimeConstructors`, mirroring the engine's `RegisterBuiltIns` / constructor-registration pattern.
+5. Free the field in `TGocciaRuntimeExtension.Destroy`.
+6. If the feature adds importable file types, update `ConfigureModuleExtensions` and `LoadRuntimeModule` so the extension participates only when its `rgYour` config flag is enabled.
+7. Expose host setup through `TGocciaRuntime.Create(..., RuntimeGlobals)` or `AttachRuntimeExtension(Engine, RuntimeGlobals)`. CLI frontends attach the runtime in their engine-configuration hook; embedders can use the same runtime constructor or extension attach entry.
+
 ## Step 5: Constructor Name Constant
 
 In `source/units/Goccia.Constants.ConstructorNames.pas`:
