@@ -196,13 +196,13 @@ type
     procedure RunBenchmarks(const APaths: TStringList;
       const AReports: array of TReportSpec;
       const AMode: TGocciaExecutionMode; const AShowProgress: Boolean);
+    function EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
   protected
     procedure Configure; override;
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); override;
     function UsageLine: string; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
-    function GlobalBuiltins: TGocciaGlobalBuiltins; override;
   end;
 
 function IsBenchmarkHelperFile(const AFileName: string): Boolean;
@@ -211,11 +211,6 @@ var
 begin
   NormalizedPath := StringReplace(AFileName, PathDelim, '/', [rfReplaceAll]);
   Result := Pos('/helpers/', NormalizedPath) > 0;
-end;
-
-procedure InitializeRuntime(const AEngine: TGocciaEngine);
-begin
-  AttachRuntimeExtension(AEngine);
 end;
 
 function RuntimeBenchmark(const AEngine: TGocciaEngine): TGocciaBenchmark;
@@ -922,7 +917,7 @@ begin
         SetLength(WorkerData[I].Entries, 0);
       end;
 
-      EnsureSharedPrototypesInitialized(EffectiveBuiltins, InitializeRuntime);
+      EnsureSharedPrototypesInitialized(EffectiveRuntimeGlobals);
 
       BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
       WallClockStart := GetNanoseconds;
@@ -1006,14 +1001,16 @@ procedure TBenchmarkRunnerApp.ConfigureCreatedEngine(
 var
   Runtime: TGocciaRuntimeExtension;
 begin
-  Runtime := AttachRuntimeExtension(AEngine);
+  Runtime := AttachRuntimeExtension(AEngine, EffectiveRuntimeGlobals);
   if LogFileOpen and Assigned(Runtime.BuiltinConsole) then
     Runtime.BuiltinConsole.LogCallback := HandleConsoleLog;
 end;
 
-function TBenchmarkRunnerApp.GlobalBuiltins: TGocciaGlobalBuiltins;
+function TBenchmarkRunnerApp.EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
 begin
-  Result := [ggBenchmark];
+  Result := DefaultRuntimeGlobals + [rgBenchmark];
+  if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
+    Include(Result, rgFFI);
 end;
 
 procedure TBenchmarkRunnerApp.ExecuteWithPaths(const APaths: TStringList);

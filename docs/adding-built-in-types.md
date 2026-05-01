@@ -6,7 +6,7 @@
 
 - **10-step recipe** — Value type, built-in registration, class value subclass, engine/runtime integration, constants, structuredClone, tests, benchmarks, documentation
 - **Key patterns** — Shared prototype singleton (GC-pinned), `ThisValue` for method callbacks (not `Self`), `MarkReferences` for GC
-- **Engine/runtime integration** — Core language built-ins are registered by the engine; host/runtime globals belong in runtime extensions; add `TGocciaGlobalBuiltin` flags only for special-purpose built-ins (TestAssertions, Benchmark, FFI)
+- **Engine/runtime integration** — Core language built-ins are registered by the engine; host/runtime globals and special-purpose tools belong in runtime extensions via `TGocciaRuntimeGlobals`
 - **Checklist included** — Complete checklist at the end of the document for verification
 
 This guide walks through every step needed to add a new built-in type to GocciaScript. Follow the steps in order; each section references the exact files and patterns involved.
@@ -348,15 +348,15 @@ For a core language built-in, make these changes in the engine:
 
 Add `Goccia.Builtins.GlobalYour` (alphabetically sorted).
 
-### 4b. Enum flag (special-purpose built-ins only)
+### 4b. Runtime config entry (runtime globals only)
 
-Core language built-ins are always registered and do not need an enum flag. Add a flag to `TGocciaGlobalBuiltin` only for special-purpose built-ins that should be opt-in:
+Core language built-ins are always registered and do not need an enum flag. Host/runtime globals and special-purpose tools should add a selector to `TGocciaRuntimeGlobal`:
 
 ```pascal
-TGocciaGlobalBuiltin = (ggTestAssertions, ggBenchmark, ggFFI);
+TGocciaRuntimeGlobal = (..., rgYour);
 ```
 
-Most new language built-in types should skip this step entirely. Runtime extension membership should be represented with the extension's own configuration type, not `TGocciaGlobalBuiltin`.
+Most new language built-in types should skip this step entirely. Runtime extension membership is represented by `TGocciaRuntimeGlobals`, not by engine configuration.
 
 ### 4c. Field declaration
 
@@ -416,7 +416,7 @@ property BuiltinYour: TGocciaGlobalYour read FBuiltinYour;
 For a host/runtime global, use the same built-in/value unit patterns but wire it through `Goccia.Runtime.pas` instead of `Goccia.Engine.pas`:
 
 1. Add `Goccia.Builtins.GlobalYour` to the `Goccia.Runtime.pas` interface `uses` clause.
-2. Add an extension-specific config entry such as `rgYour` to `TGocciaRuntimeGlobal`; do not add a `TGocciaGlobalBuiltin` flag unless the feature is a special-purpose opt-in like tests, benchmarks, or FFI.
+2. Add an extension-specific config entry such as `rgYour` to `TGocciaRuntimeGlobal`.
 3. Add a private field such as `FBuiltinYour: TGocciaGlobalYour` to `TGocciaRuntimeExtension`.
 4. Instantiate it from `TGocciaRuntimeExtension.RegisterBuiltIns` or register its constructor from `RegisterRuntimeConstructors`, mirroring the engine's `RegisterBuiltIns` / constructor-registration pattern.
 5. Free the field in `TGocciaRuntimeExtension.Destroy`.
@@ -567,7 +567,7 @@ Use this checklist when adding a new built-in type:
 - [ ] Value type unit (`Goccia.Values.YourValue.pas`) with realm slot registered in `initialization`
 - [ ] Built-in registration unit (`Goccia.Builtins.GlobalYour.pas`)
 - [ ] Class value subclass in `Goccia.Values.ClassValue.pas`
-- [ ] Engine: enum flag in `TGocciaGlobalBuiltin` (special-purpose built-ins only)
+- [ ] Runtime: config entry in `TGocciaRuntimeGlobal` (runtime globals only)
 - [ ] Engine: field declaration
 - [ ] Engine: `RegisterBuiltIns` registration
 - [ ] Engine: `RegisterBuiltinConstructors` constructor

@@ -100,6 +100,7 @@ type
     FInlineGlobals: TGocciaRepeatableOption;
     FLastPaths: TStringList;
 
+    function EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
     function ParseSource(const ASource: TStringList; const AFileName: string;
@@ -233,11 +234,6 @@ end;
 
 { TScriptLoaderApp - Configure }
 
-procedure InitializeRuntime(const AEngine: TGocciaEngine);
-begin
-  AttachRuntimeExtension(AEngine);
-end;
-
 function RuntimeConsole(const AEngine: TGocciaEngine): TGocciaConsole;
 var
   Runtime: TGocciaRuntimeExtension;
@@ -247,6 +243,13 @@ begin
     Result := Runtime.BuiltinConsole
   else
     Result := nil;
+end;
+
+function TScriptLoaderApp.EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
+begin
+  Result := DefaultRuntimeGlobals;
+  if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
+    Include(Result, rgFFI);
 end;
 
 function TScriptLoaderApp.UsageLine: string;
@@ -276,7 +279,7 @@ procedure TScriptLoaderApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
 var
   Runtime: TGocciaRuntimeExtension;
 begin
-  Runtime := AttachRuntimeExtension(AEngine);
+  Runtime := AttachRuntimeExtension(AEngine, EffectiveRuntimeGlobals);
   if LogFileOpen and Assigned(Runtime.BuiltinConsole) then
     Runtime.BuiltinConsole.LogCallback := HandleConsoleLog;
 end;
@@ -1014,7 +1017,7 @@ begin
 
   if JobCount > 1 then
   begin
-    EnsureSharedPrototypesInitialized(EffectiveBuiltins, InitializeRuntime);
+    EnsureSharedPrototypesInitialized(EffectiveRuntimeGlobals);
     BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
     Pool := TGocciaThreadPool.Create(JobCount);
     try
@@ -1143,7 +1146,7 @@ var
   Pool: TGocciaThreadPool;
   I: Integer;
 begin
-  EnsureSharedPrototypesInitialized(EffectiveBuiltins, InitializeRuntime);
+  EnsureSharedPrototypesInitialized(EffectiveRuntimeGlobals);
 
   Pool := TGocciaThreadPool.Create(AJobCount);
   try

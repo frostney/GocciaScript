@@ -126,6 +126,7 @@ type
     FOutputFile: TGocciaStringOption;
     FTestTimeout: TGocciaIntegerOption;
     FDescribeTimeout: TGocciaIntegerOption;
+    function EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
   protected
     procedure Configure; override;
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
@@ -133,7 +134,6 @@ type
     function UsageLine: string; override;
     procedure Validate; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
-    function GlobalBuiltins: TGocciaGlobalBuiltins; override;
   private
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
@@ -217,11 +217,6 @@ end;
 
 { TTestRunnerApp }
 
-procedure InitializeRuntime(const AEngine: TGocciaEngine);
-begin
-  AttachRuntimeExtension(AEngine);
-end;
-
 procedure DisableRuntimeConsole(const AEngine: TGocciaEngine);
 var
   Runtime: TGocciaRuntimeExtension;
@@ -254,7 +249,7 @@ procedure TTestRunnerApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
 var
   Runtime: TGocciaRuntimeExtension;
 begin
-  Runtime := AttachRuntimeExtension(AEngine);
+  Runtime := AttachRuntimeExtension(AEngine, EffectiveRuntimeGlobals);
   if LogFileOpen and Assigned(Runtime.BuiltinConsole) then
     Runtime.BuiltinConsole.LogCallback := HandleConsoleLog;
 end;
@@ -447,9 +442,11 @@ begin
   end;
 end;
 
-function TTestRunnerApp.GlobalBuiltins: TGocciaGlobalBuiltins;
+function TTestRunnerApp.EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
 begin
-  Result := [ggTestAssertions];
+  Result := DefaultRuntimeGlobals + [rgTestAssertions];
+  if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
+    Include(Result, rgFFI);
 end;
 
 function TTestRunnerApp.RunGocciaScriptInterpreted(const AFileName: string;
@@ -1092,7 +1089,7 @@ begin
 
   // Force all shared prototypes to be initialised on the main thread
   // before any worker thread starts, avoiding class-var race conditions.
-  EnsureSharedPrototypesInitialized(EffectiveBuiltins, InitializeRuntime);
+  EnsureSharedPrototypesInitialized(EffectiveRuntimeGlobals);
 
   WallClockStart := GetNanoseconds;
 

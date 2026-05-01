@@ -742,7 +742,7 @@ GocciaScript requires explicit semicolons by default, preventing this class of b
 
 ```pascal
 // Enable ASI via the engine API
-Engine := TGocciaEngine.Create(FileName, Source, []);
+Engine := TGocciaEngine.Create(FileName, Source);
 Engine.ASIEnabled := True;
 ```
 

@@ -5,9 +5,7 @@ unit Goccia.Application;
 interface
 
 uses
-  SysUtils,
-
-  Goccia.Engine;
+  SysUtils;
 
 type
   TGocciaApplicationClass = class of TGocciaApplication;
@@ -18,7 +16,6 @@ type
   protected
     procedure Execute; virtual; abstract;
     procedure HandleError(const AException: Exception); virtual;
-    function GlobalBuiltins: TGocciaGlobalBuiltins; virtual;
     property Name: string read FName;
   public
     constructor Create(const AName: string); virtual;
@@ -40,11 +37,6 @@ constructor TGocciaApplication.Create(const AName: string);
 begin
   inherited Create;
   FName := AName;
-end;
-
-function TGocciaApplication.GlobalBuiltins: TGocciaGlobalBuiltins;
-begin
-  Result := [];
 end;
 
 procedure TGocciaApplication.HandleError(const AException: Exception);

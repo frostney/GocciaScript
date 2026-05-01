@@ -40,6 +40,7 @@ type
     procedure TestRuntimeConstructorRejectsDifferentGlobals;
     procedure TestRuntimePreservesResolverExtensions;
     procedure TestRuntimeModuleLoaderFallsBackToPreviousLoader;
+    procedure TestRuntimeRunScriptFromFileLoadsFile;
     procedure TestEngineInjectGlobalsFromJSON5;
     procedure TestReadFileTextPreservesUTF8ForTOMLGlobals;
     procedure TestEngineInjectGlobalsFromTOML;
@@ -72,6 +73,8 @@ begin
     TestRuntimePreservesResolverExtensions);
   Test('Runtime module loader falls back to previous loader',
     TestRuntimeModuleLoaderFallsBackToPreviousLoader);
+  Test('Runtime RunScriptFromFile loads file',
+    TestRuntimeRunScriptFromFileLoadsFile);
   Test('Engine injects globals from JSON5',
     TestEngineInjectGlobalsFromJSON5);
   Test('Engine injects globals from TOML',
@@ -119,7 +122,7 @@ var
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Engine := TGocciaEngine.Create('<runtime-test>', Source, []);
+  Engine := TGocciaEngine.Create('<runtime-test>', Source);
   Runtime := nil;
   try
     Runtime := TGocciaRuntime.Create(Engine, [rgConsole]);
@@ -145,7 +148,7 @@ var
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Engine := TGocciaEngine.Create('<runtime-test>', Source, []);
+  Engine := TGocciaEngine.Create('<runtime-test>', Source);
   FirstRuntime := nil;
   SecondRuntime := nil;
   try
@@ -184,7 +187,7 @@ var
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Engine := TGocciaEngine.Create('<runtime-test>', Source, []);
+  Engine := TGocciaEngine.Create('<runtime-test>', Source);
   Runtime := nil;
   try
     Engine.Resolver.SetExtensions(['.custom', '.js']);
@@ -222,7 +225,7 @@ begin
   try
     Resolver := TCustomRuntimeModuleResolver.Create;
     ModuleLoader := TGocciaModuleLoader.Create('<runtime-test>', Resolver);
-    Engine := TGocciaEngine.Create('<runtime-test>', Source, [], ModuleLoader);
+    Engine := TGocciaEngine.Create('<runtime-test>', Source, ModuleLoader);
     Engine.ModuleLoader.RuntimeModuleLoader := LoadCustomRuntimeModule;
     Runtime := TGocciaRuntime.Create(Engine, [rgJSON5]);
 
@@ -240,6 +243,32 @@ begin
     ModuleLoader.Free;
     Resolver.Free;
     Source.Free;
+  end;
+end;
+
+procedure TScriptLoaderGlobalsTests.TestRuntimeRunScriptFromFileLoadsFile;
+var
+  ScriptResult: TGocciaScriptResult;
+  SourceBytes: UTF8String;
+  Stream: TFileStream;
+  TempFileName: string;
+begin
+  SourceBytes := '21 * 2;';
+  TempFileName := GetTempFileName(GetTempDir(False), 'goc');
+
+  Stream := TFileStream.Create(TempFileName, fmCreate);
+  try
+    Stream.WriteBuffer(Pointer(SourceBytes)^, Length(SourceBytes));
+  finally
+    Stream.Free;
+  end;
+
+  try
+    ScriptResult := TGocciaRuntime.RunScriptFromFile(TempFileName,
+      [rgConsole]);
+    Expect<Double>(ScriptResult.Result.ToNumberLiteral.Value).ToBe(42);
+  finally
+    DeleteFile(TempFileName);
   end;
 end;
 
@@ -269,8 +298,7 @@ begin
   end;
 
   Source := CreateEmptySource;
-  Engine := TGocciaEngine.Create('<globals-test>', Source,
-    []);
+  Engine := TGocciaEngine.Create('<globals-test>', Source);
   try
     AttachRuntimeExtension(Engine);
     Engine.InjectGlobalsFromTOML(ReadFileText(TempFileName));
@@ -293,8 +321,7 @@ var
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Engine := TGocciaEngine.Create('<globals-test>', Source,
-    []);
+  Engine := TGocciaEngine.Create('<globals-test>', Source);
   try
     AttachRuntimeExtension(Engine);
     Engine.InjectGlobalsFromJSON5(
@@ -327,8 +354,7 @@ var
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Engine := TGocciaEngine.Create('<globals-test>', Source,
-    []);
+  Engine := TGocciaEngine.Create('<globals-test>', Source);
   try
     AttachRuntimeExtension(Engine);
     Engine.InjectGlobalsFromTOML(
@@ -365,7 +391,7 @@ var
 begin
   Source := CreateEmptySource;
   Executor := TGocciaBytecodeExecutor.Create;
-  Engine := TGocciaEngine.Create('<globals-test>', Source, [], Executor);
+  Engine := TGocciaEngine.Create('<globals-test>', Source, Executor);
   try
     AttachRuntimeExtension(Engine);
     Engine.InjectGlobalsFromTOML(
@@ -398,7 +424,7 @@ var
 begin
   Source := CreateEmptySource;
   Executor := TGocciaBytecodeExecutor.Create;
-  Engine := TGocciaEngine.Create('<globals-test>', Source, [], Executor);
+  Engine := TGocciaEngine.Create('<globals-test>', Source, Executor);
   try
     AttachRuntimeExtension(Engine);
     Engine.InjectGlobalsFromJSON5(

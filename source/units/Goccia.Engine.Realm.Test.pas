@@ -73,7 +73,7 @@ begin
   Engine := nil;
   Runtime := nil;
   try
-    Engine := TGocciaEngine.Create('<engine-realm-test>', Source, []);
+    Engine := TGocciaEngine.Create('<engine-realm-test>', Source);
     Runtime := TGocciaRuntime.Create(Engine, [rgURL]);
     Result := Runtime.Execute;
   finally
@@ -90,7 +90,7 @@ var
 begin
   Source := TStringList.Create;
   Source.Text := '';
-  Engine := TGocciaEngine.Create('<realm-life>', Source, []);
+  Engine := TGocciaEngine.Create('<realm-life>', Source);
   try
     Expect<Boolean>(CurrentRealm <> nil).ToBe(True);
   finally
@@ -108,7 +108,7 @@ begin
   PreviousRealm := CurrentRealm;
   Source := TStringList.Create;
   Source.Text := '';
-  Engine := TGocciaEngine.Create('<realm-clear>', Source, []);
+  Engine := TGocciaEngine.Create('<realm-clear>', Source);
   Engine.Free;
   Source.Free;
   // FPrevRealm defaults to whatever was current at construction; for a single
@@ -205,12 +205,12 @@ begin
   InnerSource := TStringList.Create;
   InnerSource.Text := '';
 
-  OuterEngine := TGocciaEngine.Create('<outer>', OuterSource, []);
+  OuterEngine := TGocciaEngine.Create('<outer>', OuterSource);
   try
     OuterRealm := CurrentRealm;
     Expect<Boolean>(OuterRealm <> nil).ToBe(True);
 
-    InnerEngine := TGocciaEngine.Create('<inner>', InnerSource, []);
+    InnerEngine := TGocciaEngine.Create('<inner>', InnerSource);
     try
       InnerRealm := CurrentRealm;
       // Constructing a nested engine swaps in its own realm.
@@ -245,10 +245,10 @@ begin
   SourceB := TStringList.Create;
   SourceB.Text := '';
 
-  EngineA := TGocciaEngine.Create('<engine-a>', SourceA, []);
+  EngineA := TGocciaEngine.Create('<engine-a>', SourceA);
   try
     RealmA := CurrentRealm;
-    EngineB := TGocciaEngine.Create('<engine-b>', SourceB, []);
+    EngineB := TGocciaEngine.Create('<engine-b>', SourceB);
     try
       RealmB := CurrentRealm;
       Expect<Boolean>(RealmA <> nil).ToBe(True);

@@ -45,7 +45,10 @@ type
     rgTextDecoder,
     rgURL,
     rgFetch,
-    rgSemver
+    rgSemver,
+    rgTestAssertions,
+    rgBenchmark,
+    rgFFI
   );
 
   TGocciaRuntimeGlobals = set of TGocciaRuntimeGlobal;
@@ -73,7 +76,9 @@ type
     FBuiltinBenchmark: TGocciaBenchmark;
 
     procedure ConfigureModuleExtensions;
+    procedure ConfigureFileLoading;
     procedure RegisterBuiltIns;
+    procedure RegisterRuntimeBuiltinName(const AName: string);
     procedure RegisterRuntimeConstructors;
     procedure RegisterGlobalsFromObject(const AValue: TGocciaObjectValue;
       const AKind: string);
@@ -122,16 +127,14 @@ type
     constructor Create(const AEngine: TGocciaEngine;
       const ARuntimeGlobals: TGocciaRuntimeGlobals;
       const AOwnsEngine: Boolean); overload;
+    constructor Create(const AFileName: string;
+      const ASourceLines: TStringList); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList;
-      const AGlobals: TGocciaGlobalBuiltins); overload;
-    constructor Create(const AFileName: string; const ASourceLines: TStringList;
-      const AGlobals: TGocciaGlobalBuiltins;
       const ARuntimeGlobals: TGocciaRuntimeGlobals); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList;
-      const AGlobals: TGocciaGlobalBuiltins;
       const AExecutor: TGocciaExecutor); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList;
-      const AGlobals: TGocciaGlobalBuiltins; const AExecutor: TGocciaExecutor;
+      const AExecutor: TGocciaExecutor;
       const ARuntimeGlobals: TGocciaRuntimeGlobals); overload;
     destructor Destroy; override;
 
@@ -144,6 +147,20 @@ type
     procedure WaitForIdle;
     procedure DiscardPending;
     procedure SetAllowedFetchHosts(const AHosts: TStrings);
+
+    class function RunScript(const ASource: string;
+      const AFileName: string = 'inline.goccia'): TGocciaScriptResult; overload; static;
+    class function RunScript(const ASource: string; const AFileName: string;
+      const ARuntimeGlobals: TGocciaRuntimeGlobals): TGocciaScriptResult; overload; static;
+    class function RunScriptFromFile(
+      const AFileName: string): TGocciaScriptResult; overload; static;
+    class function RunScriptFromFile(const AFileName: string;
+      const ARuntimeGlobals: TGocciaRuntimeGlobals): TGocciaScriptResult; overload; static;
+    class function RunScriptFromStringList(const ASource: TStringList;
+      const AFileName: string): TGocciaScriptResult; overload; static;
+    class function RunScriptFromStringList(const ASource: TStringList;
+      const AFileName: string;
+      const ARuntimeGlobals: TGocciaRuntimeGlobals): TGocciaScriptResult; overload; static;
 
     property Engine: TGocciaEngine read FEngine;
     property Extension: TGocciaRuntimeExtension read FExtension;
@@ -199,6 +216,7 @@ uses
   Goccia.Modules.ContentProvider,
   Goccia.ObjectModel.Engine,
   Goccia.Scope,
+  Goccia.TextFiles,
   Goccia.TOML,
   Goccia.TSV,
   Goccia.Values.ArrayValue,
@@ -351,35 +369,33 @@ begin
 end;
 
 constructor TGocciaRuntime.Create(const AFileName: string;
-  const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins);
+  const ASourceLines: TStringList);
 begin
-  CreateWithEngine(TGocciaEngine.Create(AFileName, ASourceLines, AGlobals),
+  CreateWithEngine(TGocciaEngine.Create(AFileName, ASourceLines), True,
+    DefaultRuntimeGlobals);
+end;
+
+constructor TGocciaRuntime.Create(const AFileName: string;
+  const ASourceLines: TStringList;
+  const ARuntimeGlobals: TGocciaRuntimeGlobals);
+begin
+  CreateWithEngine(TGocciaEngine.Create(AFileName, ASourceLines), True,
+    ARuntimeGlobals);
+end;
+
+constructor TGocciaRuntime.Create(const AFileName: string;
+  const ASourceLines: TStringList; const AExecutor: TGocciaExecutor);
+begin
+  CreateWithEngine(TGocciaEngine.Create(AFileName, ASourceLines, AExecutor),
     True, DefaultRuntimeGlobals);
 end;
 
 constructor TGocciaRuntime.Create(const AFileName: string;
-  const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins;
+  const ASourceLines: TStringList; const AExecutor: TGocciaExecutor;
   const ARuntimeGlobals: TGocciaRuntimeGlobals);
 begin
-  CreateWithEngine(TGocciaEngine.Create(AFileName, ASourceLines, AGlobals),
+  CreateWithEngine(TGocciaEngine.Create(AFileName, ASourceLines, AExecutor),
     True, ARuntimeGlobals);
-end;
-
-constructor TGocciaRuntime.Create(const AFileName: string;
-  const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins;
-  const AExecutor: TGocciaExecutor);
-begin
-  CreateWithEngine(TGocciaEngine.Create(AFileName, ASourceLines, AGlobals,
-    AExecutor), True, DefaultRuntimeGlobals);
-end;
-
-constructor TGocciaRuntime.Create(const AFileName: string;
-  const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins;
-  const AExecutor: TGocciaExecutor;
-  const ARuntimeGlobals: TGocciaRuntimeGlobals);
-begin
-  CreateWithEngine(TGocciaEngine.Create(AFileName, ASourceLines, AGlobals,
-    AExecutor), True, ARuntimeGlobals);
 end;
 
 destructor TGocciaRuntime.Destroy;
@@ -423,6 +439,66 @@ end;
 procedure TGocciaRuntime.SetAllowedFetchHosts(const AHosts: TStrings);
 begin
   FEngine.SetAllowedFetchHosts(AHosts);
+end;
+
+class function TGocciaRuntime.RunScript(const ASource: string;
+  const AFileName: string): TGocciaScriptResult;
+begin
+  Result := RunScript(ASource, AFileName, DefaultRuntimeGlobals);
+end;
+
+class function TGocciaRuntime.RunScript(const ASource: string;
+  const AFileName: string;
+  const ARuntimeGlobals: TGocciaRuntimeGlobals): TGocciaScriptResult;
+var
+  SourceList: TStringList;
+begin
+  SourceList := CreateUTF8StringList(ASource);
+  try
+    Result := RunScriptFromStringList(SourceList, AFileName, ARuntimeGlobals);
+  finally
+    SourceList.Free;
+  end;
+end;
+
+class function TGocciaRuntime.RunScriptFromFile(
+  const AFileName: string): TGocciaScriptResult;
+begin
+  Result := RunScriptFromFile(AFileName, DefaultRuntimeGlobals);
+end;
+
+class function TGocciaRuntime.RunScriptFromFile(const AFileName: string;
+  const ARuntimeGlobals: TGocciaRuntimeGlobals): TGocciaScriptResult;
+var
+  Source: TStringList;
+begin
+  Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+  try
+    Result := RunScriptFromStringList(Source, AFileName, ARuntimeGlobals);
+  finally
+    Source.Free;
+  end;
+end;
+
+class function TGocciaRuntime.RunScriptFromStringList(
+  const ASource: TStringList; const AFileName: string): TGocciaScriptResult;
+begin
+  Result := RunScriptFromStringList(ASource, AFileName,
+    DefaultRuntimeGlobals);
+end;
+
+class function TGocciaRuntime.RunScriptFromStringList(
+  const ASource: TStringList; const AFileName: string;
+  const ARuntimeGlobals: TGocciaRuntimeGlobals): TGocciaScriptResult;
+var
+  Runtime: TGocciaRuntime;
+begin
+  Runtime := TGocciaRuntime.Create(AFileName, ASource, ARuntimeGlobals);
+  try
+    Result := Runtime.Execute;
+  finally
+    Runtime.Free;
+  end;
 end;
 
 function TGocciaRuntime.GetBuiltinBenchmark: TGocciaBenchmark;
@@ -471,6 +547,7 @@ begin
 
   RegisterBuiltIns;
   RegisterRuntimeConstructors;
+  ConfigureFileLoading;
   ConfigureModuleExtensions;
   FPrevRuntimeModuleLoader := FEngine.ModuleLoader.RuntimeModuleLoader;
   FEngine.ModuleLoader.RuntimeModuleLoader := LoadRuntimeModule;
@@ -552,6 +629,14 @@ begin
   FEngine.Resolver.SetExtensions(Extensions);
 end;
 
+procedure TGocciaRuntimeExtension.ConfigureFileLoading;
+begin
+  if FEngine.ModuleLoader.ContentProvider is
+     TGocciaUnavailableModuleContentProvider then
+    FEngine.ModuleLoader.SetContentProvider(
+      TGocciaFileSystemModuleContentProvider.Create, True);
+end;
+
 procedure TGocciaRuntimeExtension.RegisterBuiltIns;
 var
   Scope: TGocciaScope;
@@ -586,19 +671,42 @@ begin
   if rgFetch in FGlobals then
     FBuiltinFetch := TGocciaGlobalFetch.Create('Fetch', Scope, FEngine.ThrowError);
 
-  if ggTestAssertions in FEngine.GlobalBuiltins then
+  if rgTestAssertions in FGlobals then
+  begin
     FBuiltinTestAssertions := TGocciaTestAssertions.Create(
       'TestAssertions', Scope, FEngine.ThrowError);
-  if ggBenchmark in FEngine.GlobalBuiltins then
+    RegisterRuntimeBuiltinName('TestAssertions');
+  end;
+  if rgBenchmark in FGlobals then
+  begin
     FBuiltinBenchmark := TGocciaBenchmark.Create(
       'Benchmark', Scope, FEngine.ThrowError);
-  if ggFFI in FEngine.GlobalBuiltins then
+    RegisterRuntimeBuiltinName('Benchmark');
+  end;
+  if rgFFI in FGlobals then
+  begin
     FBuiltinFFI := TGocciaGlobalFFI.Create(CONSTRUCTOR_FFI, Scope,
       FEngine.ThrowError);
+    RegisterRuntimeBuiltinName('FFI');
+  end;
 
   if (rgSemver in FGlobals) and Assigned(FEngine.GocciaGlobal) then
     FEngine.GocciaGlobal.AssignProperty(
       SEMVER_NAMESPACE_PROPERTY, CreateSemverNamespace);
+end;
+
+procedure TGocciaRuntimeExtension.RegisterRuntimeBuiltinName(
+  const AName: string);
+var
+  BuiltInsValue: TGocciaValue;
+begin
+  if not Assigned(FEngine.GocciaGlobal) then
+    Exit;
+
+  BuiltInsValue := FEngine.GocciaGlobal.GetProperty('builtIns');
+  if BuiltInsValue is TGocciaArrayValue then
+    TGocciaArrayValue(BuiltInsValue).Elements.Add(
+      TGocciaStringLiteralValue.Create(AName));
 end;
 
 procedure TGocciaRuntimeExtension.RegisterRuntimeConstructors;

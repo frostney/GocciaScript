@@ -54,7 +54,6 @@ type
     function AddInteger(const AName, AHelp: string): TGocciaIntegerOption;
     function AddRepeatable(const AName, AHelp: string): TGocciaRepeatableOption;
     function Add(const AOption: TGocciaOptionBase): TGocciaOptionBase;
-    function EffectiveBuiltins: TGocciaGlobalBuiltins;
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); virtual;
     procedure HandleConsoleLog(const AMethod, ALine: string);
@@ -442,13 +441,6 @@ begin
   Result := AOption;
 end;
 
-function TGocciaCLIApplication.EffectiveBuiltins: TGocciaGlobalBuiltins;
-begin
-  Result := GlobalBuiltins;
-  if Assigned(FEngineOptions) and FEngineOptions.UnsafeFFI.Present then
-    Include(Result, ggFFI);
-end;
-
 function TGocciaCLIApplication.DiscoverFileConfig(
   const AFileName: string): TConfigEntryArray;
 var
@@ -624,7 +616,7 @@ function TGocciaCLIApplication.CreateEngine(const AFileName: string;
 var
   FileConfig: TConfigEntryArray;
 begin
-  Result := TGocciaEngine.Create(AFileName, ASource, EffectiveBuiltins);
+  Result := TGocciaEngine.Create(AFileName, ASource);
   try
     FileConfig := DiscoverFileConfig(AFileName);
     if Assigned(FEngineOptions) then
@@ -646,8 +638,7 @@ function TGocciaCLIApplication.CreateEngine(const AFileName: string;
 var
   FileConfig: TConfigEntryArray;
 begin
-  Result := TGocciaEngine.Create(AFileName, ASource, EffectiveBuiltins,
-    AExecutor);
+  Result := TGocciaEngine.Create(AFileName, ASource, AExecutor);
   try
     FileConfig := DiscoverFileConfig(AFileName);
     if Assigned(FEngineOptions) then

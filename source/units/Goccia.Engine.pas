@@ -55,14 +55,6 @@ uses
   Goccia.Values.TypedArrayValue;
 
 type
-  TGocciaGlobalBuiltin = (
-    ggTestAssertions,
-    ggBenchmark,
-    ggFFI
-  );
-
-  TGocciaGlobalBuiltins = set of TGocciaGlobalBuiltin;
-
   TGocciaPreprocessor = (ppJSX);
   TGocciaPreprocessors = set of TGocciaPreprocessor;
 
@@ -131,8 +123,6 @@ type
     FExecutor: TGocciaExecutor;
     FOwnsExecutor: Boolean;
     FSourceLines: TStringList;
-    FGlobals: TGocciaGlobalBuiltins;
-
     FExtensions: TGocciaEngineExtensionList;
 
     // Core language built-in objects
@@ -186,7 +176,7 @@ type
     procedure RegisterGlobalThis;
     procedure RegisterGocciaScriptGlobal;
     procedure Initialize(const AFileName: string; const ASourceLines: TStringList;
-      const AGlobals: TGocciaGlobalBuiltins; const AModuleLoader: TGocciaModuleLoader;
+      const AModuleLoader: TGocciaModuleLoader;
       const AOwnsModuleLoader: Boolean);
     function GetResolver: TGocciaModuleResolver;
     function SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -200,14 +190,12 @@ type
     function CompileDynamicFunction(const AParamsSources: array of string;
       const ABodySource: string): TGocciaFunctionBase;
   public
-    constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins); overload;
-    constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AResolver: TGocciaModuleResolver); overload;
-    constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AModuleLoader: TGocciaModuleLoader); overload;
+    constructor Create(const AFileName: string; const ASourceLines: TStringList); overload;
+    constructor Create(const AFileName: string; const ASourceLines: TStringList; const AResolver: TGocciaModuleResolver); overload;
+    constructor Create(const AFileName: string; const ASourceLines: TStringList; const AModuleLoader: TGocciaModuleLoader); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList;
-      const AGlobals: TGocciaGlobalBuiltins;
       const AExecutor: TGocciaExecutor); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList;
-      const AGlobals: TGocciaGlobalBuiltins;
       const AModuleLoader: TGocciaModuleLoader;
       const AExecutor: TGocciaExecutor); overload;
     destructor Destroy; override;
@@ -234,11 +222,7 @@ type
     function FindExtension(
       const AClass: TGocciaEngineExtensionClass): TGocciaEngineExtension;
 
-    class function RunScript(const ASource: string; const AFileName: string; const AGlobals: TGocciaGlobalBuiltins): TGocciaScriptResult; overload;
     class function RunScript(const ASource: string; const AFileName: string = 'inline.goccia'): TGocciaScriptResult; overload;
-    class function RunScriptFromFile(const AFileName: string; const AGlobals: TGocciaGlobalBuiltins): TGocciaScriptResult; overload;
-    class function RunScriptFromFile(const AFileName: string): TGocciaScriptResult; overload;
-    class function RunScriptFromStringList(const ASource: TStringList; const AFileName: string; const AGlobals: TGocciaGlobalBuiltins): TGocciaScriptResult; overload;
     class function RunScriptFromStringList(const ASource: TStringList; const AFileName: string): TGocciaScriptResult; overload;
 
     property Executor: TGocciaExecutor read FExecutor;
@@ -252,7 +236,6 @@ type
     property FunctionEnabled: Boolean read GetFunctionEnabled write SetFunctionEnabled;
     property FunctionConstructor: TGocciaFunctionConstructorClassValue read FFunctionConstructor;
     property ObjectConstructor: TGocciaClassValue read FObjectConstructor;
-    property GlobalBuiltins: TGocciaGlobalBuiltins read FGlobals;
     property Preprocessors: TGocciaPreprocessors read FPreprocessors write SetPreprocessors;
     property Compatibility: TGocciaCompatibilityFlags read FCompatibility write SetCompatibility;
     property SourceType: TGocciaSourceType read FSourceType write FSourceType;
@@ -288,7 +271,6 @@ implementation
 uses
   Math,
   SysUtils,
-  TypInfo,
 
   TextSemantics,
   TimingUtils,
@@ -312,7 +294,6 @@ uses
   Goccia.Scope.Redeclaration,
   Goccia.Shims,
   Goccia.Spec,
-  Goccia.TextFiles,
   Goccia.Threading,
   Goccia.Token,
   Goccia.Values.ArrayBufferValue,
@@ -547,43 +528,43 @@ begin
   Result := nil;
 end;
 
-constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins);
+constructor TGocciaEngine.Create(const AFileName: string;
+  const ASourceLines: TStringList);
 begin
-  Initialize(AFileName, ASourceLines, AGlobals,
-    TGocciaModuleLoader.Create(AFileName), True);
+  Initialize(AFileName, ASourceLines, TGocciaModuleLoader.Create(AFileName),
+    True);
 end;
 
-constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AResolver: TGocciaModuleResolver);
+constructor TGocciaEngine.Create(const AFileName: string;
+  const ASourceLines: TStringList; const AResolver: TGocciaModuleResolver);
 begin
-  Initialize(AFileName, ASourceLines, AGlobals,
+  Initialize(AFileName, ASourceLines,
     TGocciaModuleLoader.Create(AFileName, AResolver), True);
 end;
 
 constructor TGocciaEngine.Create(const AFileName: string;
-  const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins;
+  const ASourceLines: TStringList;
   const AModuleLoader: TGocciaModuleLoader);
 begin
-  Initialize(AFileName, ASourceLines, AGlobals, AModuleLoader, False);
+  Initialize(AFileName, ASourceLines, AModuleLoader, False);
 end;
 
 constructor TGocciaEngine.Create(const AFileName: string;
-  const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins;
+  const ASourceLines: TStringList; const AExecutor: TGocciaExecutor);
+begin
+  FExecutor := AExecutor;
+  FOwnsExecutor := False;
+  Initialize(AFileName, ASourceLines, TGocciaModuleLoader.Create(AFileName),
+    True);
+end;
+
+constructor TGocciaEngine.Create(const AFileName: string;
+  const ASourceLines: TStringList; const AModuleLoader: TGocciaModuleLoader;
   const AExecutor: TGocciaExecutor);
 begin
   FExecutor := AExecutor;
   FOwnsExecutor := False;
-  Initialize(AFileName, ASourceLines, AGlobals,
-    TGocciaModuleLoader.Create(AFileName), True);
-end;
-
-constructor TGocciaEngine.Create(const AFileName: string;
-  const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins;
-  const AModuleLoader: TGocciaModuleLoader;
-  const AExecutor: TGocciaExecutor);
-begin
-  FExecutor := AExecutor;
-  FOwnsExecutor := False;
-  Initialize(AFileName, ASourceLines, AGlobals, AModuleLoader, False);
+  Initialize(AFileName, ASourceLines, AModuleLoader, False);
 end;
 
 procedure TGocciaEngine.ExecuteShims;
@@ -600,14 +581,13 @@ begin
 end;
 
 procedure TGocciaEngine.Initialize(const AFileName: string;
-  const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins;
-  const AModuleLoader: TGocciaModuleLoader; const AOwnsModuleLoader: Boolean);
+  const ASourceLines: TStringList; const AModuleLoader: TGocciaModuleLoader;
+  const AOwnsModuleLoader: Boolean);
 begin
   FPreviousExceptionMask := GetExceptionMask;
   SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
   FSourcePath := AFileName;
   FSourceLines := ASourceLines;
-  FGlobals := AGlobals;
   FModuleLoader := AModuleLoader;
   FOwnsModuleLoader := AOwnsModuleLoader;
   if not Assigned(FModuleLoader) then
@@ -1109,25 +1089,15 @@ begin
 end;
 
 procedure TGocciaEngine.RegisterGocciaScriptGlobal;
-const
-  PREFIX_LENGTH = 2; // Strip 'gg' prefix from enum names
 var
   GocciaObj: TGocciaObjectValue;
   BuildObj: TGocciaObjectValue;
   BuiltInsArray: TGocciaArrayValue;
   ShimsArray: TGocciaArrayValue;
   GCFunc: TGocciaNativeFunctionValue;
-  Flag: TGocciaGlobalBuiltin;
-  Name: string;
   I: Integer;
 begin
   BuiltInsArray := TGocciaArrayValue.Create;
-  for Flag in FGlobals do
-  begin
-    Name := GetEnumName(TypeInfo(TGocciaGlobalBuiltin), Ord(Flag));
-    BuiltInsArray.Elements.Add(TGocciaStringLiteralValue.Create(
-      Copy(Name, PREFIX_LENGTH + 1, Length(Name) - PREFIX_LENGTH)));
-  end;
 
   BuildObj := TGocciaObjectValue.Create;
   BuildObj.DefineProperty('os', TGocciaPropertyDescriptorData.Create(
@@ -1364,55 +1334,30 @@ begin
   end;
 end;
 
-class function TGocciaEngine.RunScript(const ASource: string; const AFileName: string; const AGlobals: TGocciaGlobalBuiltins): TGocciaScriptResult;
+class function TGocciaEngine.RunScript(const ASource: string;
+  const AFileName: string): TGocciaScriptResult;
 var
   SourceList: TStringList;
 begin
   SourceList := CreateUTF8StringList(ASource);
   try
-    Result := RunScriptFromStringList(SourceList, AFileName, AGlobals);
+    Result := RunScriptFromStringList(SourceList, AFileName);
   finally
     SourceList.Free;
   end;
 end;
 
-class function TGocciaEngine.RunScript(const ASource: string; const AFileName: string): TGocciaScriptResult;
-begin
-  Result := RunScript(ASource, AFileName, []);
-end;
-
-class function TGocciaEngine.RunScriptFromFile(const AFileName: string; const AGlobals: TGocciaGlobalBuiltins): TGocciaScriptResult;
-var
-  Source: TStringList;
-begin
-  Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
-  try
-    Result := RunScriptFromStringList(Source, AFileName, AGlobals);
-  finally
-    Source.Free;
-  end;
-end;
-
-class function TGocciaEngine.RunScriptFromFile(const AFileName: string): TGocciaScriptResult;
-begin
-  Result := RunScriptFromFile(AFileName, []);
-end;
-
-class function TGocciaEngine.RunScriptFromStringList(const ASource: TStringList; const AFileName: string; const AGlobals: TGocciaGlobalBuiltins): TGocciaScriptResult;
+class function TGocciaEngine.RunScriptFromStringList(
+  const ASource: TStringList; const AFileName: string): TGocciaScriptResult;
 var
   Engine: TGocciaEngine;
 begin
-  Engine := TGocciaEngine.Create(AFileName, ASource, AGlobals);
+  Engine := TGocciaEngine.Create(AFileName, ASource);
   try
     Result := Engine.Execute;
   finally
     Engine.Free;
   end;
-end;
-
-class function TGocciaEngine.RunScriptFromStringList(const ASource: TStringList; const AFileName: string): TGocciaScriptResult;
-begin
-  Result := RunScriptFromStringList(ASource, AFileName, []);
 end;
 
 procedure TGocciaEngine.PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap);

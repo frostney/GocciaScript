@@ -312,8 +312,7 @@ begin
 
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
-      Engine := TGocciaEngine.Create(ENTRY_PATH, Source,
-        [], ModuleLoader);
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader);
       try
         ScriptResult := Engine.Execute;
       finally
@@ -359,7 +358,7 @@ begin
 
     Executor := TGocciaBytecodeExecutor.Create;
     try
-      Engine := TGocciaEngine.Create(EntryPath, Source, [],
+      Engine := TGocciaEngine.Create(EntryPath, Source,
         TGocciaModuleLoader.Create(EntryPath, nil, Provider), Executor);
       try
         ProgramNode := CreateProgram(
@@ -454,8 +453,7 @@ begin
 
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
-      Engine := TGocciaEngine.Create(ENTRY_PATH, Source,
-        [], ModuleLoader);
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader);
       try
         try
           Engine.Execute;
@@ -512,8 +510,7 @@ begin
 
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
-      Engine := TGocciaEngine.Create(ENTRY_PATH, Source,
-        [], ModuleLoader);
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader);
       Runtime := nil;
       try
         Runtime := TGocciaRuntime.Create(Engine, [rgJSONL]);
@@ -575,8 +572,7 @@ begin
 
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
-      Engine := TGocciaEngine.Create(ENTRY_PATH, Source,
-        [], ModuleLoader);
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader);
       Runtime := nil;
       try
         Runtime := TGocciaRuntime.Create(Engine, [rgTOML]);
@@ -803,8 +799,7 @@ begin
 
     Engine := TGocciaEngine.Create(
       IncludeTrailingPathDelimiter(TempDirectory) + 'app.js',
-      Source,
-      []);
+      Source);
     Runtime := nil;
     try
       Runtime := TGocciaRuntime.Create(Engine, [rgTextAssets]);
@@ -858,8 +853,7 @@ begin
 
     Engine := TGocciaEngine.Create(
       IncludeTrailingPathDelimiter(TempDirectory) + 'app.js',
-      Source,
-      []);
+      Source);
     Runtime := nil;
     try
       Runtime := TGocciaRuntime.Create(Engine, [rgTextAssets]);
@@ -900,12 +894,10 @@ begin
   try
     SourceA.Text := '1;';
     SourceB.Text := '2;';
-    EngineA := TGocciaEngine.Create(ENTRY_PATH, SourceA,
-      [], ModuleLoader);
+    EngineA := TGocciaEngine.Create(ENTRY_PATH, SourceA, ModuleLoader);
     try
       try
-        EngineB := TGocciaEngine.Create(ENTRY_PATH, SourceB,
-          [], ModuleLoader);
+        EngineB := TGocciaEngine.Create(ENTRY_PATH, SourceB, ModuleLoader);
         Fail('Expected module loader rebinding to raise an exception.');
       except
         on E: Exception do

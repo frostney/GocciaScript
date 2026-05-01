@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-- **Engine/runtime split** — `TGocciaEngine` orchestrates parsing, execution, core language built-ins, and module loading; `Goccia.Runtime` attaches runtime-provided built-ins, host globals, and extensions
+- **Engine/runtime split** — `TGocciaEngine` orchestrates parsing, execution, core language built-ins, and source-list/string execution; `Goccia.Runtime` attaches runtime-provided built-ins, host globals, file helpers, and extensions
 - **Execution mode abstraction** — `TGocciaExecutor` is the abstract class; `TGocciaInterpreterExecutor` and `TGocciaBytecodeExecutor` implement it independently
 - **Shared frontend** — Lexer, Parser, and AST are shared between execution modes
 - **Shared execution substrate** — Both modes share the same value types, core scope model, runtime extension mechanism, and mark-and-sweep GC
@@ -33,8 +33,8 @@ Source -> JSX Transformer (optional) -> Lexer -> Parser -> Compiler -> Goccia By
 
 | Layer | Units | Responsibility |
 |-------|-------|----------------|
-| Engine | `Goccia.Engine` | Core language globals, language configuration, module loading, executor dispatch |
-| Runtime | `Goccia.Runtime` | Optional host/runtime globals such as console, fetch, JSON5, TOML, YAML, CSV/TSV, text assets, SemVer |
+| Engine | `Goccia.Engine` | Core language globals, language configuration, source-string/source-list execution, executor dispatch |
+| Runtime | `Goccia.Runtime` | Optional host/runtime globals such as console, fetch, JSON5, TOML, YAML, CSV/TSV, text assets, SemVer, test assertions, benchmarks, FFI, and file-backed helpers |
 | Executor abstraction | `Goccia.Executor` | Abstract `TGocciaExecutor` base class |
 | Interpreter executor | `Goccia.Engine` (`TGocciaInterpreterExecutor`) | Tree-walk execution via `TGocciaInterpreter` |
 | Bytecode executor | `Goccia.Engine.Backend` (`TGocciaBytecodeExecutor`) | Bytecode compile + VM execution; no interpreter dependency |
@@ -88,10 +88,10 @@ The CLI tools share a two-level application class hierarchy and a declarative op
 
 | Tool | Base Class | Overrides |
 |------|-----------|-----------|
-| GocciaREPL | `TGocciaCLIApplication` | `Configure`, `ExecuteWithPaths` |
-| GocciaScriptLoader | `TGocciaCLIApplication` | `Configure`, `Validate`, `ExecuteWithPaths`, `HandleError`, `AfterExecute` |
-| GocciaTestRunner | `TGocciaCLIApplication` | `Configure`, `ExecuteWithPaths`, `GlobalBuiltins` |
-| GocciaBenchmarkRunner | `TGocciaCLIApplication` | `Configure`, `ExecuteWithPaths`, `GlobalBuiltins` |
+| GocciaREPL | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `ExecuteWithPaths` |
+| GocciaScriptLoader | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `Validate`, `ExecuteWithPaths`, `HandleError`, `AfterExecute` |
+| GocciaTestRunner | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `ExecuteWithPaths` |
+| GocciaBenchmarkRunner | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `ExecuteWithPaths` |
 | GocciaBundler | `TGocciaCLIApplication` | `Configure`, `Validate`, `ExecuteWithPaths` |
 
 ## Executor Architecture

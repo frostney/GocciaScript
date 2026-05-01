@@ -43,6 +43,7 @@ type
   TREPLApp = class(TGocciaCLIApplication)
   private
     FTiming: TGocciaFlagOption;
+    function EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
   protected
     procedure Configure; override;
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
@@ -57,12 +58,19 @@ begin
   FTiming := AddFlag('timing', 'Show per-line timing');
 end;
 
+function TREPLApp.EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
+begin
+  Result := DefaultRuntimeGlobals;
+  if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
+    Include(Result, rgFFI);
+end;
+
 procedure TREPLApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
   const AFileConfig: TConfigEntryArray);
 var
   Runtime: TGocciaRuntimeExtension;
 begin
-  Runtime := AttachRuntimeExtension(AEngine);
+  Runtime := AttachRuntimeExtension(AEngine, EffectiveRuntimeGlobals);
   if LogFileOpen and Assigned(Runtime.BuiltinConsole) then
     Runtime.BuiltinConsole.LogCallback := HandleConsoleLog;
 end;

@@ -63,6 +63,9 @@ type
     procedure CheckForModuleReload(const AModule: TGocciaModule);
     function LoadModule(const AModulePath,
       AImportingFilePath: string): TGocciaModule;
+    procedure SetContentProvider(
+      const AContentProvider: TGocciaModuleContentProvider;
+      const AOwnsContentProvider: Boolean);
 
     property ContentProvider: TGocciaModuleContentProvider
       read FContentProvider;
@@ -127,7 +130,7 @@ begin
   end
   else
   begin
-    FContentProvider := TGocciaFileSystemModuleContentProvider.Create;
+    FContentProvider := TGocciaUnavailableModuleContentProvider.Create;
     FOwnsContentProvider := True;
   end;
 end;
@@ -142,6 +145,20 @@ begin
   if FOwnsContentProvider then
     FContentProvider.Free;
   inherited;
+end;
+
+procedure TGocciaModuleLoader.SetContentProvider(
+  const AContentProvider: TGocciaModuleContentProvider;
+  const AOwnsContentProvider: Boolean);
+begin
+  if not Assigned(AContentProvider) then
+    raise Exception.Create('Module content provider cannot be nil.');
+
+  if FOwnsContentProvider then
+    FContentProvider.Free;
+
+  FContentProvider := AContentProvider;
+  FOwnsContentProvider := AOwnsContentProvider;
 end;
 
 procedure TGocciaModuleLoader.BindRuntime(const AGlobalScope: TGocciaGlobalScope;

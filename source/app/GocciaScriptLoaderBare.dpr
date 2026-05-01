@@ -137,7 +137,7 @@ begin
     else
       DisplayName := AOptions.FileName;
 
-    Engine := TGocciaEngine.Create(DisplayName, Source, []);
+    Engine := TGocciaEngine.Create(DisplayName, Source);
     try
       ConfigureEngine(Engine, AOptions);
       try

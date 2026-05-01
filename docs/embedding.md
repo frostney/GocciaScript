@@ -6,7 +6,7 @@
 ## Executive Summary
 
 - **Quick start** — `TGocciaRuntime.Create(...)` for the standard host/runtime surface; `TGocciaEngine.Create(...)` for core-language-only embedders
-- **Sandboxing** — Choose runtime globals with `TGocciaRuntimeGlobals`; enable special-purpose globals with `TGocciaGlobalBuiltins`; inject custom globals via `DefineLexicalBinding`; enforce execution limits via timeout or instruction cap
+- **Sandboxing** — Choose runtime globals and special-purpose tools with `TGocciaRuntimeGlobals`; inject custom globals via `DefineLexicalBinding`; enforce execution limits via timeout or instruction cap
 - **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, and global modules
 - **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
 
@@ -19,7 +19,7 @@ The simplest way to run a script with the standard runtime surface:
 ```pascal
 Source := TStringList.Create;
 Source.Text := 'console.log("hello from GocciaScript");';
-Runtime := TGocciaRuntime.Create('<inline>', Source, []);
+Runtime := TGocciaRuntime.Create('<inline>', Source);
 try
   Runtime.Execute;
 finally
@@ -28,7 +28,7 @@ finally
 end;
 ```
 
-For files, load `app.js` into the `Source` list and pass the real filename to `TGocciaRuntime.Create('app.js', Source, [])`. Use `TGocciaEngine.RunScript*` only for core-language scripts that do not need runtime globals.
+For files, use `TGocciaRuntime.RunScriptFromFile('app.js')` or load `app.js` into the `Source` list and pass the real filename to `TGocciaRuntime.Create('app.js', Source)`. Use `TGocciaEngine.RunScript*` only for core-language scripts that do not need runtime globals or file loading.
 
 ## Engine API
 
@@ -38,12 +38,12 @@ These are convenience methods that create a core engine, execute, and clean up i
 
 | Method | Description |
 |--------|-------------|
-| `RunScript(Source)` | Execute a string of code with default core globals |
-| `RunScript(Source, FileName, Globals)` | Execute a string with special-purpose built-ins and filename |
-| `RunScriptFromFile(FileName)` | Execute a file with default core globals |
-| `RunScriptFromFile(FileName, Globals)` | Execute a file with special-purpose built-ins |
-| `RunScriptFromStringList(Source, FileName)` | Execute from a `TStringList` with default core globals |
-| `RunScriptFromStringList(Source, FileName, Globals)` | Execute from a `TStringList` with special-purpose built-ins |
+| `TGocciaEngine.RunScript(Source)` | Execute a source string with core language globals only |
+| `TGocciaEngine.RunScript(Source, FileName)` | Execute a source string with a diagnostic filename |
+| `TGocciaEngine.RunScriptFromStringList(Source, FileName)` | Execute from a caller-provided `TStringList` |
+| `TGocciaRuntime.RunScript(Source, FileName, RuntimeGlobals)` | Execute a source string with a runtime surface |
+| `TGocciaRuntime.RunScriptFromFile(FileName, RuntimeGlobals)` | Load and execute a file through the runtime |
+| `TGocciaRuntime.RunScriptFromStringList(Source, FileName, RuntimeGlobals)` | Execute from a `TStringList` with runtime globals |
 All methods return `TGocciaScriptResult` — a record containing the result value, per-phase timing (in microseconds), and the filename.
 
 ### Instance Usage (Long-Lived Engine)
@@ -63,7 +63,7 @@ var
   ScriptResult: TGocciaScriptResult;
 begin
   Source := TStringList.Create;
-  Engine := TGocciaEngine.Create('session', Source, []);
+  Engine := TGocciaEngine.Create('session', Source);
   try
     // First execution — defines a variable
     Source.Text := 'const x = 42;';
@@ -87,7 +87,7 @@ The `TStringList` is passed by reference — update its contents and call `Execu
 ASI is disabled by default. To enable ECMAScript-compliant automatic semicolon insertion (ES2026 §12.10), set the `ASIEnabled` property after creating the engine:
 
 ```pascal
-Engine := TGocciaEngine.Create('app.js', Source, []);
+Engine := TGocciaEngine.Create('app.js', Source);
 Engine.ASIEnabled := True;  // Semicolons are now optional per ES2026 rules
 Engine.Execute;
 ```
@@ -107,7 +107,7 @@ uses
 var
   ScriptResult: TGocciaScriptResult;
 begin
-  ScriptResult := TGocciaEngine.RunScript(Source, 'bench.js', []);
+  ScriptResult := TGocciaEngine.RunScript(Source, 'bench.js');
   WriteLn('Lex: ', FormatDuration(ScriptResult.LexTimeNanoseconds));
   WriteLn('Parse: ', FormatDuration(ScriptResult.ParseTimeNanoseconds));
   WriteLn('Execute: ', FormatDuration(ScriptResult.ExecuteTimeNanoseconds));
@@ -213,7 +213,7 @@ var
   Engine: TGocciaEngine;
 begin
   Resolver := TMyResolver.Create('/path/to/project');
-  Engine := TGocciaEngine.Create('app.js', Source, [], Resolver);
+  Engine := TGocciaEngine.Create('app.js', Source, Resolver);
   try
     Engine.Execute;
   finally
@@ -295,7 +295,7 @@ begin
       Provider);
     try
       Engine := TGocciaEngine.Create('memory:/app.js', Source,
-        [], ModuleLoader);
+        ModuleLoader);
       try
         Engine.Execute;
       finally
@@ -311,7 +311,7 @@ begin
 end;
 ```
 
-`TGocciaEngine` also accepts an injected module loader via its constructor. When no loader is supplied, it creates a default `TGocciaModuleLoader`, which in turn uses a `TGocciaFileSystemModuleContentProvider` and the standard filesystem-backed resolver.
+`TGocciaEngine` also accepts an injected module loader via its constructor. When no loader is supplied, it creates a default `TGocciaModuleLoader` with the standard resolver but no filesystem content provider. `TGocciaRuntime` installs the filesystem provider when attached; core-language-only embedders that need imports should inject their own provider.
 
 ### Global Modules
 
@@ -337,7 +337,7 @@ import { version } from "my-lib";
 console.log(version);  // "1.0.0"
 ```
 
-This provides the foundation for future built-in module packages that can be coupled to `TGocciaGlobalBuiltins` flags.
+This provides the foundation for future built-in module packages that can be coupled to runtime-global configuration.
 
 ## Console Output Capture
 
@@ -371,7 +371,7 @@ begin
   Logger := TMyLogger.Create;
   Source := TStringList.Create;
   Source.Text := 'console.log("hello"); console.warn("careful");';
-  Runtime := TGocciaRuntime.Create('app.js', Source, []);
+  Runtime := TGocciaRuntime.Create('app.js', Source);
   try
     Runtime.BuiltinConsole.OutputCallback := Logger.OnConsoleOutput;
     Runtime.Execute;
@@ -412,7 +412,7 @@ Core language built-ins (Math, Object, Array, JSON, Promise, Temporal, typed arr
 When you already have an engine, pass it to the runtime constructor:
 
 ```pascal
-Engine := TGocciaEngine.Create('app.js', Source, []);
+Engine := TGocciaEngine.Create('app.js', Source);
 Runtime := TGocciaRuntime.Create(Engine);
 try
   Runtime.Execute;
@@ -424,23 +424,24 @@ end;
 
 Passing an engine does not transfer ownership by default. Use `TGocciaRuntime.Create(Engine, True)` or `TGocciaRuntime.Create(Engine, RuntimeGlobals, True)` when the runtime should free the engine.
 
-### Special-Purpose Flags
+### Special-Purpose Runtime Globals
 
-The `TGocciaGlobalBuiltins` set controls three special-purpose built-ins that are off by default. The default runtime registers them only when the matching flag is present:
+`TGocciaRuntimeGlobals` controls three special-purpose globals that are off by default. The runtime registers them only when the matching entry is present:
 
-| Flag | Provides | Notes |
+| Runtime global | Provides | Notes |
 |------|----------|-------|
-| `ggTestAssertions` | `describe`, `test`, `expect` | Testing framework (GocciaTestRunner adds this) |
-| `ggBenchmark` | `suite`, `bench` | Benchmark framework (GocciaBenchmarkRunner adds this) |
-| `ggFFI` | `FFI.open`, `FFILibrary`, `FFIPointer` | Foreign Function Interface for native shared libraries |
+| `rgTestAssertions` | `describe`, `test`, `expect` | Testing framework (GocciaTestRunner adds this) |
+| `rgBenchmark` | `suite`, `bench` | Benchmark framework (GocciaBenchmarkRunner adds this) |
+| `rgFFI` | `FFI.open`, `FFILibrary`, `FFIPointer` | Foreign Function Interface for native shared libraries |
 
-When embedding, pass `ggFFI` in the `TGocciaGlobalBuiltins` set during engine creation to enable the FFI global. CLI tools (ScriptLoader, REPL, TestRunner, BenchmarkRunner, Bundler) expose this as the `--unsafe-ffi` flag.
+When embedding, pass `rgFFI` in the `TGocciaRuntimeGlobals` set during runtime creation to enable the FFI global. CLI tools (ScriptLoader, REPL, TestRunner, BenchmarkRunner, Bundler) expose this as the `--unsafe-ffi` flag.
 
 To add the test framework for a custom test runner:
 
 ```pascal
-Engine := TGocciaEngine.Create('tests/my-test.js', Source, [ggTestAssertions]);
-Runtime := TGocciaRuntime.Create(Engine, True);
+Engine := TGocciaEngine.Create('tests/my-test.js', Source);
+Runtime := TGocciaRuntime.Create(Engine,
+  DefaultRuntimeGlobals + [rgTestAssertions], True);
 try
   Runtime.Execute;
 finally
@@ -460,7 +461,7 @@ Runtime globals can be reduced by passing a smaller `TGocciaRuntimeGlobals` set,
 | `StrictTypes` | `Boolean` | `False` | Runtime enforcement of type annotations (works in both interpreter and bytecode); setter propagates to the active executor and interpreter scope |
 
 ```pascal
-Engine := TGocciaEngine.Create('app.js', Source, []);
+Engine := TGocciaEngine.Create('app.js', Source);
 Engine.Preprocessors := [];              // Disable JSX
 Engine.ASIEnabled := True;               // Enable ASI (convenience for cfASI)
 Engine.SourceType := stModule;           // Run entry as a Module (top-level this is undefined; import.meta resolves)
@@ -492,7 +493,7 @@ var
 begin
   Source := TStringList.Create;
   Source.Text := 'console.log("version: " + APP_VERSION);';
-  Engine := TGocciaEngine.Create('app.js', Source, []);
+  Engine := TGocciaEngine.Create('app.js', Source);
   try
     // Inject a constant into the global scope
     Engine.Interpreter.GlobalScope.DefineLexicalBinding(
@@ -545,7 +546,7 @@ begin
   Host := TMyHost.Create;
   Source := TStringList.Create;
   Source.Text := 'const ts = getTimestamp(); console.log(ts);';
-  Engine := TGocciaEngine.Create('app.js', Source, []);
+  Engine := TGocciaEngine.Create('app.js', Source);
   try
     // Create a native function: callback, name, arity (-1 for variadic)
     Func := TGocciaNativeFunctionValue.Create(Host.GetTimestamp, 'getTimestamp', 0);
@@ -629,7 +630,7 @@ begin
   API := TFileSystemAPI.Create;
   Source := TStringList.Create;
   Source.Text := 'const content = fs.readFile("data.txt"); console.log(content);';
-  Engine := TGocciaEngine.Create('app.js', Source, []);
+  Engine := TGocciaEngine.Create('app.js', Source);
   try
     FSObject := TGocciaObjectValue.Create;
     FSObject.RegisterNativeMethod(
@@ -841,8 +842,8 @@ The repository includes five embedding examples:
 |---------|------|-------------|
 | `GocciaScriptLoader` | `source/app/GocciaScriptLoader.dpr` | Executes script files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`) from disk or stdin, with optional JSON output, injected globals, and execution timeouts for one-shot automation |
 | `GocciaREPL` | `source/app/GocciaREPL.dpr` | Interactive read-eval-print loop (long-lived engine) |
-| `GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | Runs test suites with `ggTestAssertions` enabled |
-| `GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Runs benchmarks with `ggBenchmark` enabled from files or stdin |
+| `GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | Runs test suites with `rgTestAssertions` enabled |
+| `GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Runs benchmarks with `rgBenchmark` enabled from files or stdin |
 | `GocciaBundler` | `source/app/GocciaBundler.dpr` | Standalone bytecode compiler — compiles source files to `.gbc` without execution |
 
 These serve as reference implementations for the patterns described above.
@@ -879,9 +880,8 @@ end.
 
 - `Execute` (abstract) — your application logic
 - `HandleError(AException)` — customize error display (e.g., JSON output)
-- `GlobalBuiltins` — return `TGocciaGlobalBuiltins` set for optional built-in registration
 
-For CLI tools, use `TGocciaCLIApplication` instead, which adds argument parsing, help generation, and singleton lifecycle management on top of `TGocciaApplication`.
+For CLI tools, use `TGocciaCLIApplication` instead, which adds argument parsing, help generation, singleton lifecycle management, and a `ConfigureCreatedEngine` hook where tools attach `TGocciaRuntime` with their chosen `TGocciaRuntimeGlobals`.
 
 ## Minimal Embedding Checklist
 
@@ -889,7 +889,7 @@ For CLI tools, use `TGocciaCLIApplication` instead, which adds argument parsing,
 2. `uses Goccia.Runtime, Goccia.Values.Primitives;`
 3. Create `TGocciaRuntime.Create(...)` for the standard runtime surface
 4. Use `Runtime.Engine` for engine-level options such as ASI, source type, and compatibility flags
-5. Choose your special-purpose built-in set via `TGocciaGlobalBuiltins`
+5. Choose your runtime surface and special-purpose globals via `TGocciaRuntimeGlobals`
 6. Inject custom globals via `Runtime.Engine.Interpreter.GlobalScope.DefineLexicalBinding(...)`
 7. Handle exceptions from `Goccia.Error`
 8. Free the runtime when done; it owns and frees the engine only when it created the engine itself, or when you used an ownership-transfer overload such as `TGocciaRuntime.Create(Engine, True)`. `TGocciaRuntime.Create(Engine)` is non-owning by default, so embedders wrapping an existing engine must also free that engine.
