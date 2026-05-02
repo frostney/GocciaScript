@@ -690,6 +690,58 @@ begin
     Result := nil;
 end;
 
+procedure PredeclareBlockVariableLocals(const AVarDecl: TGocciaVariableDeclaration;
+  const AScope: TGocciaCompilerScope);
+var
+  I, LocalIdx: Integer;
+begin
+  for I := 0 to High(AVarDecl.Variables) do
+  begin
+    LocalIdx := AScope.ResolveLocal(AVarDecl.Variables[I].Name);
+    if (LocalIdx < 0) or (AScope.GetLocal(LocalIdx).Depth <> AScope.Depth) then
+      AScope.DeclareLocal(AVarDecl.Variables[I].Name, AVarDecl.IsConst);
+  end;
+end;
+
+procedure PredeclareBlockLexicalLocals(const ANode: TGocciaASTNode;
+  const AScope: TGocciaCompilerScope);
+var
+  VarDecl: TGocciaVariableDeclaration;
+begin
+  if ANode is TGocciaVariableDeclaration then
+  begin
+    VarDecl := TGocciaVariableDeclaration(ANode);
+    if (not VarDecl.IsVar) and (not VarDecl.IsFunctionDeclaration) then
+      PredeclareBlockVariableLocals(VarDecl, AScope);
+  end
+  else if ANode is TGocciaExportVariableDeclaration then
+  begin
+    VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration;
+    if (not VarDecl.IsVar) and (not VarDecl.IsFunctionDeclaration) then
+      PredeclareBlockVariableLocals(VarDecl, AScope);
+  end
+  else if (ANode is TGocciaDestructuringDeclaration) and
+          not TGocciaDestructuringDeclaration(ANode).IsVar then
+    CollectDestructuringBindings(
+      TGocciaDestructuringDeclaration(ANode).Pattern, AScope,
+      TGocciaDestructuringDeclaration(ANode).IsConst)
+  else if ANode is TGocciaClassDeclaration then
+  begin
+    if AScope.ResolveLocal(TGocciaClassDeclaration(ANode).ClassDefinition.Name) < 0 then
+      AScope.DeclareLocal(TGocciaClassDeclaration(ANode).ClassDefinition.Name, True);
+  end
+  else if ANode is TGocciaEnumDeclaration then
+  begin
+    if AScope.ResolveLocal(TGocciaEnumDeclaration(ANode).Name) < 0 then
+      AScope.DeclareLocal(TGocciaEnumDeclaration(ANode).Name, False);
+  end
+  else if ANode is TGocciaExportEnumDeclaration then
+  begin
+    if AScope.ResolveLocal(TGocciaExportEnumDeclaration(ANode).Declaration.Name) < 0 then
+      AScope.DeclareLocal(TGocciaExportEnumDeclaration(ANode).Declaration.Name, False);
+  end;
+end;
+
 procedure EmitPendingEntryCleanup(const ACtx: TGocciaCompilationContext;
   const AEntry: TPendingFinallyEntry; const ACloseIterator: Boolean);
 var
@@ -749,9 +801,13 @@ begin
   begin
     ACtx.Scope.BeginScope;
     if HasFunctionDecl then
+    begin
+      for I := 0 to AStmt.Nodes.Count - 1 do
+        PredeclareBlockLexicalLocals(AStmt.Nodes[I], ACtx.Scope);
       for I := 0 to AStmt.Nodes.Count - 1 do
         if GetBlockFunctionDeclaration(AStmt.Nodes[I]) <> nil then
           ACtx.CompileStatement(TGocciaStatement(AStmt.Nodes[I]));
+    end;
     for I := 0 to AStmt.Nodes.Count - 1 do
     begin
       Node := AStmt.Nodes[I];
@@ -775,9 +831,13 @@ begin
   // Slow path: block with using declarations — compile as try/finally
   ACtx.Scope.BeginScope;
   if HasFunctionDecl then
+  begin
+    for I := 0 to AStmt.Nodes.Count - 1 do
+      PredeclareBlockLexicalLocals(AStmt.Nodes[I], ACtx.Scope);
     for I := 0 to AStmt.Nodes.Count - 1 do
       if GetBlockFunctionDeclaration(AStmt.Nodes[I]) <> nil then
         ACtx.CompileStatement(TGocciaStatement(AStmt.Nodes[I]));
+  end;
 
   // Remember the starting point of using resources for this block
   if not Assigned(GUsingResources) then

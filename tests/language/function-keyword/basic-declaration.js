@@ -39,6 +39,32 @@ test("block-scoped function declaration does not overwrite outer var binding", (
   expect(f()).toBe("outer");
 });
 
+test("block-scoped function declaration captures same-block lexical bindings", () => {
+  {
+    let z = 4;
+    const v = 6;
+    function f() {
+      return z + v;
+    }
+    expect(f()).toBe(10);
+  }
+});
+
+test("try block function declaration captures same-block lexical bindings", () => {
+  let value = 0;
+  try {
+    let z = 4;
+    const v = 6;
+    function f() {
+      return z + v;
+    }
+    value = f();
+  } catch (error) {
+    value = -1;
+  }
+  expect(value).toBe(10);
+});
+
 test("catch block function declaration is hoisted within the catch block", () => {
   let value;
   try {
