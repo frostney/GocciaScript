@@ -138,11 +138,11 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Arithmetic,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Evaluator.Comparison,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,

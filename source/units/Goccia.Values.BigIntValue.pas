@@ -46,10 +46,15 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
+// ES2026 §7.1.14 StringToBigInt(argument)
+function TryStringToBigInt(const AValue: string; out AResult: TBigInteger): Boolean;
+
 implementation
 
 uses
   SysUtils,
+
+  TextSemantics,
 
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
@@ -62,6 +67,46 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue;
+
+function TryStringToBigInt(const AValue: string; out AResult: TBigInteger): Boolean;
+var
+  Text: string;
+begin
+  Text := TrimECMAScriptWhitespace(AValue);
+  try
+    if Text = '' then
+    begin
+      AResult := TBigInteger.Zero;
+      Exit(True);
+    end;
+
+    if (Length(Text) > 2) and (Text[1] = '0') then
+    begin
+      case Text[2] of
+        'x', 'X':
+          begin
+            AResult := TBigInteger.FromHexString(Copy(Text, 3, Length(Text) - 2));
+            Exit(True);
+          end;
+        'o', 'O':
+          begin
+            AResult := TBigInteger.FromOctalString(Copy(Text, 3, Length(Text) - 2));
+            Exit(True);
+          end;
+        'b', 'B':
+          begin
+            AResult := TBigInteger.FromBinaryString(Copy(Text, 3, Length(Text) - 2));
+            Exit(True);
+          end;
+      end;
+    end;
+
+    AResult := TBigInteger.FromDecimalString(Text);
+    Result := True;
+  except
+    Result := False;
+  end;
+end;
 
 // BigInt.prototype (the JS-visible prototype, shared by primitive 1n and the
 // rare object wrapper) lives in a per-realm slot so JS-side mutations don't

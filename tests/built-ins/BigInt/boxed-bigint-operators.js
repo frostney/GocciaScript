@@ -6,9 +6,8 @@ description: |
   BigInt-typed path instead of being silently coerced to a Number
   via the boxed object's ToNumberLiteral.
 
-  Guards against a regression where the bitwise/unary helpers in both
-  Goccia.Evaluator.Bitwise.pas (interpreter) and Goccia.VM.pas
-  (bytecode) called `is TGocciaBigIntValue` directly on the un-unboxed
+  Guards against a regression where the shared operator helpers and VM
+  fallbacks called `is TGocciaBigIntValue` directly on the un-unboxed
   operand: boxed BigInts missed the BigInt branch and produced
   Number 0 / -1 results from the NaN-coercion fall-through.
 features: [bigint]

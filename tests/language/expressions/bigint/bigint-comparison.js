@@ -62,3 +62,17 @@ test("cross-type comparisons beyond 2^53 precision", () => {
   expect(9007199254740993n > 9007199254740992).toBe(true);
   expect(9007199254740993n === 9007199254740992).toBe(false);
 });
+
+test("cross-type comparisons BigInt vs String", () => {
+  expect(9007199254740993n > "9007199254740992").toBe(true);
+  expect("9007199254740992" < 9007199254740993n).toBe(true);
+  expect(2n > "\u00A01\uFEFF").toBe(true);
+  expect(1n < "not-a-bigint").toBe(false);
+  expect(1n > "not-a-bigint").toBe(false);
+});
+
+test("cross-type comparisons BigInt vs Boolean and Null", () => {
+  expect(2n > true).toBe(true);
+  expect(0n < true).toBe(true);
+  expect(0n >= null).toBe(true);
+});

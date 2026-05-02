@@ -951,6 +951,17 @@ jobs:
                 body += '_No areas yet meet the highlight criteria (≥ 25 attempted tests, below 100%)._\n\n';
               }
 
+              const clusters = s.clusters || {};
+              if (clusters.skipsByTarget && clusters.skipsByTarget.length > 0) {
+                body += '### Compatibility roadmap skips\n\n';
+                body += '| Target | Skipped |\n';
+                body += '|--------|---------|\n';
+                for (const item of clusters.skipsByTarget.slice(0, 5)) {
+                  body += `| \`${item.target}\` | ${fmt(item.count)} |\n`;
+                }
+                body += '\n';
+              }
+
               const baselineNote = hasBaseline
                 ? ' Δ vs main compares against the most recent cached `main` baseline.'
                 : ' No `main` baseline cached yet — Δ columns will appear once a `main` run completes.';

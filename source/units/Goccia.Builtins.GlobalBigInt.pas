@@ -107,7 +107,7 @@ function TGocciaGlobalBigInt.BigIntConstructor(const AArgs: TGocciaArgumentsColl
 var
   Arg: TGocciaValue;
   NumVal: Double;
-  StrVal: string;
+  BigIntValue: TBigInteger;
 begin
   // ES2026 §21.2.1.1 Step 1: If NewTarget is not undefined, throw TypeError
   if AThisValue is TGocciaHoleValue then
@@ -156,37 +156,10 @@ begin
   // ES2026 §7.1.14 StringToBigInt: supports decimal, hex, octal, binary
   if Arg is TGocciaStringLiteralValue then
   begin
-    StrVal := Trim(TGocciaStringLiteralValue(Arg).Value);
-    if StrVal = '' then
+    if TryStringToBigInt(TGocciaStringLiteralValue(Arg).Value, BigIntValue) then
+      Result := TGocciaBigIntValue.Create(BigIntValue)
+    else
     begin
-      Result := TGocciaBigIntValue.BigIntZero;
-      Exit;
-    end;
-    try
-      if (Length(StrVal) >= 3) and (StrVal[1] = '0') then
-      begin
-        if (StrVal[2] = 'x') or (StrVal[2] = 'X') then
-        begin
-          Result := TGocciaBigIntValue.Create(
-            TBigInteger.FromHexString(Copy(StrVal, 3, Length(StrVal) - 2)));
-          Exit;
-        end
-        else if (StrVal[2] = 'o') or (StrVal[2] = 'O') then
-        begin
-          Result := TGocciaBigIntValue.Create(
-            TBigInteger.FromOctalString(Copy(StrVal, 3, Length(StrVal) - 2)));
-          Exit;
-        end
-        else if (StrVal[2] = 'b') or (StrVal[2] = 'B') then
-        begin
-          Result := TGocciaBigIntValue.Create(
-            TBigInteger.FromBinaryString(Copy(StrVal, 3, Length(StrVal) - 2)));
-          Exit;
-        end;
-      end;
-      Result := TGocciaBigIntValue.Create(
-        TBigInteger.FromDecimalString(StrVal));
-    except
       ThrowSyntaxError(Format(SErrorBigIntInvalidConversion, [
         '''' + TGocciaStringLiteralValue(Arg).Value + '''']),
         SSuggestBigIntNoImplicitConversion);
@@ -235,7 +208,7 @@ function ToBigIntValue(const AValue: TGocciaValue): TGocciaBigIntValue; forward;
 function ToBigIntValue(const AValue: TGocciaValue): TGocciaBigIntValue;
 var
   Prim: TGocciaValue;
-  StrVal: string;
+  BigIntValue: TBigInteger;
 begin
   // Step 1: If argument is an object, apply ToPrimitive(argument, number)
   if (AValue is TGocciaObjectValue) and not (AValue is TGocciaBigIntValue) then
@@ -258,24 +231,10 @@ begin
 
   if AValue is TGocciaStringLiteralValue then
   begin
-    StrVal := Trim(TGocciaStringLiteralValue(AValue).Value);
-    if StrVal = '' then
-      Exit(TGocciaBigIntValue.BigIntZero);
-    try
-      if (Length(StrVal) >= 3) and (StrVal[1] = '0') then
-      begin
-        if (StrVal[2] = 'x') or (StrVal[2] = 'X') then
-          Exit(TGocciaBigIntValue.Create(
-            TBigInteger.FromHexString(Copy(StrVal, 3, Length(StrVal) - 2))))
-        else if (StrVal[2] = 'o') or (StrVal[2] = 'O') then
-          Exit(TGocciaBigIntValue.Create(
-            TBigInteger.FromOctalString(Copy(StrVal, 3, Length(StrVal) - 2))))
-        else if (StrVal[2] = 'b') or (StrVal[2] = 'B') then
-          Exit(TGocciaBigIntValue.Create(
-            TBigInteger.FromBinaryString(Copy(StrVal, 3, Length(StrVal) - 2))));
-      end;
-      Result := TGocciaBigIntValue.Create(TBigInteger.FromDecimalString(StrVal));
-    except
+    if TryStringToBigInt(TGocciaStringLiteralValue(AValue).Value, BigIntValue) then
+      Result := TGocciaBigIntValue.Create(BigIntValue)
+    else
+    begin
       ThrowSyntaxError(Format(SErrorBigIntInvalidConversion, [
         '''' + TGocciaStringLiteralValue(AValue).Value + '''']),
         SSuggestBigIntNoImplicitConversion);

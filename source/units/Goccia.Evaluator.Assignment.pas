@@ -23,9 +23,9 @@ function PerformIncrement(const AOldValue: TGocciaValue; const AIsIncrement: Boo
 implementation
 
 uses
+  Goccia.Arithmetic,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Evaluator.Arithmetic,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -55,7 +55,8 @@ begin
     Exit;
   end;
 
-  NewValue := PerformCompoundOperation(CurrentValue, AValue, AOperator);
+  NewValue := Goccia.Arithmetic.CompoundOperations(
+    CurrentValue, AValue, AOperator);
   AObj.SetProperty(APropertyName, NewValue);
 end;
 
@@ -75,7 +76,8 @@ begin
   end;
   if CurrentValue = nil then
     CurrentValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-  NewValue := PerformCompoundOperation(CurrentValue, AValue, AOperator);
+  NewValue := Goccia.Arithmetic.CompoundOperations(
+    CurrentValue, AValue, AOperator);
   if AObj is TGocciaClassValue then
     TGocciaClassValue(AObj).AssignSymbolProperty(ASymbol, NewValue)
   else

@@ -280,7 +280,7 @@ Each symbol has a globally unique `Id` assigned at creation. Type coercion follo
 - `Number(symbol)` — Throws `TypeError`. Internally, `ToNumberLiteral` raises the error.
 - Unary `+symbol` / `-symbol` — Throws `TypeError` (these trigger `ToNumberLiteral`).
 
-The implicit coercion checks are implemented at the operator level (in `Goccia.Evaluator.Arithmetic.pas`, `Goccia.Evaluator.pas`, and `Goccia.Values.StringObjectValue.pas`) rather than in `ToStringLiteral`, because `ToStringLiteral` is also used internally for property keys and display purposes where conversion must succeed.
+The implicit coercion checks are implemented at the operator level (primarily in `Goccia.Arithmetic.pas`, with string built-in behavior in `Goccia.Values.StringObjectValue.pas`) rather than in `ToStringLiteral`, because `ToStringLiteral` is also used internally for property keys and display purposes where conversion must succeed.
 
 **Shared prototype singleton:** Like strings and numbers, symbols use a per-engine shared prototype object stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). It is initialized via `InitializePrototype`; the realm pins it on `SetSlot` and releases it on `Destroy`. The `description` getter and `toString()` method are registered on this shared prototype, and `TGocciaSymbolValue.GetProperty` delegates to the prototype via `GetPropertyWithContext` so that accessor getters receive the correct symbol instance as `this`. `Symbol.prototype` is exposed on the Symbol constructor function, matching ECMAScript semantics. Symbol is an always-registered standard built-in; special-purpose opt-ins like test assertions, benchmarking, and FFI are runtime globals selected through `TGocciaRuntimeGlobals`. Symbol type checks at the operator level use standard RTTI (`is TGocciaSymbolValue`) rather than VMT methods purely for implementation simplicity.
 
@@ -653,7 +653,7 @@ This replaced an earlier enum-based design. See [decision-log.md](decision-log.m
 - **Negative zero** — `-0` and `+0` are equal in IEEE 754 but distinguishable in JavaScript (`Object.is(-0, +0)` is `false`). The `IsNegativeZero` accessor encapsulates the sign-bit check.
 - **Display correctness** — `NaN.toString()` must return `"NaN"`, not a floating-point artifact. The accessors ensure correct string conversion.
 
-**Pitfall: raw `Value = 0` checks.** The `IsActualZero` helper in `Goccia.Evaluator.Arithmetic.pas` uses `(Value = 0) and not IsNaN and not IsInfinite` — this intentionally treats `-0` as zero, which is correct for exponentiation (`(-0)^0 === 1`). In contexts where `-0` must be distinguished (e.g. `Object.is`, sort ordering), use `IsNegativeZero` explicitly. The `NumericRank` helper in `Goccia.Values.ArrayValue.pas` maps each special value to a distinct sort key for this purpose.
+**Pitfall: raw `Value = 0` checks.** The `IsActualZero` helper in `Goccia.Arithmetic.pas` uses `(Value = 0) and not IsNaN and not IsInfinite` — this intentionally treats `-0` as zero, which is correct for exponentiation (`(-0)^0 === 1`). In contexts where `-0` must be distinguished (e.g. `Object.is`, sort ordering), use `IsNegativeZero` explicitly. The `NumericRank` helper in `Goccia.Values.ArrayValue.pas` maps each special value to a distinct sort key for this purpose.
 
 ### `this` Binding Design
 
