@@ -123,6 +123,29 @@ test("function superclass returned object becomes the constructed receiver", () 
   expect(calls).toBe(2);
 });
 
+test("function superclass replacement receives private fields", () => {
+  let derivedPrototype;
+
+  function Base() {
+    const replacement = Object.create(derivedPrototype);
+    replacement.fromBase = true;
+    return replacement;
+  }
+
+  class Derived extends Base {
+    #value = 42;
+
+    getValue() {
+      return this.#value;
+    }
+  }
+
+  derivedPrototype = Derived.prototype;
+  const derived = new Derived();
+  expect(derived.fromBase).toBe(true);
+  expect(derived.getValue()).toBe(42);
+});
+
 // Per ES2026 §10.2.5.1 OrdinaryFunctionCreate, the prototype object's
 // [[Prototype]] is %Object.prototype%.  (The spec specifies %Generator% for
 // generators, but GocciaScript does not yet expose that intrinsic and falls

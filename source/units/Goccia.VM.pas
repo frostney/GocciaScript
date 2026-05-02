@@ -3152,6 +3152,19 @@ var
   SuperClass: TGocciaClassValue;
   SuperResult: TGocciaValue;
   ImplicitSuperInitialized: Boolean;
+  function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
+  begin
+    Result := (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue);
+  end;
+  procedure ValidateSuperConstructorResult(const AValue: TGocciaValue);
+  begin
+    if (Assigned(SuperClass.SuperClass) or
+        Assigned(SuperClass.NativeSuperConstructor)) and
+       not IsUndefinedConstructedValue(AValue) then
+      ThrowTypeError(
+        'Derived constructor returned non-object',
+        SSuggestNotConstructorType);
+  end;
 begin
   if (FSuperClass is TGocciaObjectValue) and
      (not (FSuperClass is TGocciaClassValue)) and
@@ -3181,6 +3194,7 @@ begin
       AArguments, AThisValue);
     if SuperResult is TGocciaObjectValue then
       Exit(SuperResult);
+    ValidateSuperConstructorResult(SuperResult);
     Exit(AThisValue);
   end;
 
@@ -3192,6 +3206,7 @@ begin
     SuperResult := SuperClass.ConstructorMethod.Call(AArguments, AThisValue);
     if SuperResult is TGocciaObjectValue then
       Exit(SuperResult);
+    ValidateSuperConstructorResult(SuperResult);
     Exit(AThisValue);
   end;
 
@@ -6517,7 +6532,7 @@ var
   Running: Boolean;
   Template: TGocciaFunctionTemplate;
   ChildTemplate: TGocciaFunctionTemplate;
-  LeftValue, RightValue: TGocciaValue;
+  LeftValue, RightValue, TargetValue: TGocciaValue;
   FunctionConstructorValue, ObjectConstructorValue: TGocciaValue;
   CustomMatcherValue, MatchResultValue: TGocciaValue;
   MatchHintObject: TGocciaObjectValue;
@@ -7383,53 +7398,62 @@ begin
 
       OP_SET_INDEX:
       begin
+        RightValue := RegisterToValue(FRegisters[C]);
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaArrayValue) then
         begin
+          SetBytecodeHomeObject(RightValue, FRegisters[A].ObjectValue);
           if (FRegisters[B].Kind = grkObject) and
              (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
             TGocciaArrayValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
-              TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
+              TGocciaSymbolValue(FRegisters[B].ObjectValue), RightValue)
           else if TryGetArrayIndexRegister(FRegisters[B], KeyIndex) then
             TGocciaArrayValue(FRegisters[A].ObjectValue).SetElement(
-              KeyIndex, RegisterToValue(FRegisters[C]))
+              KeyIndex, RightValue)
           else
             TGocciaArrayValue(FRegisters[A].ObjectValue).SetProperty(
               KeyToPropertyNameRegister(FRegisters[B]),
-              RegisterToValue(FRegisters[C]));
+              RightValue);
         end
         else if (FRegisters[A].Kind = grkObject) and
                 (FRegisters[A].ObjectValue is TGocciaClassValue) then
         begin
+          SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]));
           if (FRegisters[B].Kind = grkObject) and
              (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
             TGocciaClassValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
-              TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
+              TGocciaSymbolValue(FRegisters[B].ObjectValue), RightValue)
           else
             TGocciaClassValue(FRegisters[A].ObjectValue).SetProperty(
               KeyToPropertyNameRegister(FRegisters[B]),
-              RegisterToValue(FRegisters[C]));
+              RightValue);
         end
         else if (FRegisters[A].Kind = grkObject) and
                 (FRegisters[A].ObjectValue is TGocciaObjectValue) then
         begin
+          SetBytecodeHomeObject(RightValue, FRegisters[A].ObjectValue);
           if (FRegisters[B].Kind = grkObject) and
              (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
             TGocciaObjectValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
-              TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
+              TGocciaSymbolValue(FRegisters[B].ObjectValue), RightValue)
           else
             TGocciaObjectValue(FRegisters[A].ObjectValue).SetProperty(
               KeyToPropertyNameRegister(FRegisters[B]),
-              RegisterToValue(FRegisters[C]));
+              RightValue);
         end
         else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
           ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
             SSuggestCheckNullBeforeAccess)
-        else
-          SetPropertyValue(GetRegister(A),
+        else begin
+          TargetValue := GetRegister(A);
+          if (TargetValue is TGocciaClassValue) or
+             (TargetValue is TGocciaObjectValue) then
+            SetBytecodeHomeObject(RightValue, TargetValue);
+          SetPropertyValue(TargetValue,
             KeyToPropertyNameRegister(FRegisters[B]),
-            RegisterToValue(FRegisters[C]));
+            RightValue);
+        end;
       end;
 
       OP_ADD:
