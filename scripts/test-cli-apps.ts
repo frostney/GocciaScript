@@ -3,9 +3,11 @@
  * test-cli-apps.ts
  *
  * App-specific features: GocciaScriptLoader (JSON output, --global/--globals,
- * coverage, source maps), GocciaBundler (compile, roundtrip, stdin, directory,
- * .gbc rejection, source maps), GocciaBenchmarkRunner (file, stdin, bytecode),
- * GocciaREPL (banner, evaluation, ASI, error recovery, bytecode).
+ * coverage, source maps), GocciaScriptLoaderBare (core-engine-only stdin/file
+ * execution and runtime-global absence), GocciaBundler (compile, roundtrip,
+ * stdin, directory, .gbc rejection, source maps), GocciaBenchmarkRunner (file,
+ * stdin, bytecode), GocciaREPL (banner, evaluation, ASI, error recovery,
+ * bytecode).
  */
 
 import { $ } from "bun";
@@ -23,6 +25,7 @@ import { tmpdir } from "os";
 
 const ext = process.platform === "win32" ? ".exe" : "";
 const LOADER = `./build/GocciaScriptLoader${ext}`;
+const BARE = `./build/GocciaScriptLoaderBare${ext}`;
 const REPL = `./build/GocciaREPL${ext}`;
 const TESTRUNNER = `./build/GocciaTestRunner${ext}`;
 const BUNDLER = `./build/GocciaBundler${ext}`;
@@ -344,6 +347,80 @@ console.log("Loader: parallel human-readable output preserves console output..."
   }
 }
 
+// ============================================================================
+// GocciaScriptLoaderBare
+// ============================================================================
+
+console.log("Bare Loader: stdin default path...");
+{
+  const proc = Bun.spawnSync([BARE], {
+    stdin: new TextEncoder().encode("const x = 2 + 2; x;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare stdin exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "4") throw new Error(`Bare stdin expected 4, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: stdin dash path...");
+{
+  const proc = Bun.spawnSync([BARE, "-"], {
+    stdin: new TextEncoder().encode("21 * 2;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare stdin dash exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "42") throw new Error(`Bare stdin dash expected 42, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: file input...");
+{
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "bare.js");
+    writeFileSync(file, "40 + 2;\n");
+    const proc = Bun.spawnSync([BARE, file], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`Bare file exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (proc.stdout.toString().trim() !== "42") throw new Error(`Bare file expected 42, got: ${proc.stdout.toString()}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Bare Loader: no runtime globals...");
+{
+  const source = [
+    "typeof console + ':' +",
+    "typeof FFI + ':' +",
+    "typeof Goccia + ':' +",
+    "(Goccia.semver === undefined);",
+    "",
+  ].join("\n");
+  const proc = Bun.spawnSync([BARE], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare runtime-global check exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  const output = proc.stdout.toString().trim();
+  if (output !== "undefined:undefined:object:true")
+    throw new Error(`Bare runtime-global check mismatch, got: ${output}`);
+}
+
+console.log("Bare Loader: module source type...");
+{
+  const proc = Bun.spawnSync([BARE, "--source-type=module"], {
+    stdin: new TextEncoder().encode("this === undefined;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare module mode exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "true") throw new Error(`Bare module mode expected true, got: ${proc.stdout.toString()}`);
+}
+
 // -- --global / --globals -------------------------------------------------------
 
 console.log("Loader: --global flag...");
@@ -370,6 +447,61 @@ console.log("Loader: --globals file...");
     });
     const json = JSON.parse(proc.stdout.toString());
     if (json.files?.[0]?.result !== "goccia") throw new Error(`--globals should set name to "goccia", got ${json.files?.[0]?.result}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Loader: --globals JSON5 file...");
+{
+  const tmp = makeTmp();
+  try {
+    const globalsPath = join(tmp, "globals.json5");
+    writeFileSync(globalsPath, [
+      "{",
+      "  // JSON5 globals allow comments and unquoted keys",
+      "  unquoted: 'goccia',",
+      "  maxRetries: 3,",
+      "  nested: { enabled: true, },",
+      "}",
+      "",
+    ].join("\n"));
+    const proc = Bun.spawnSync([LOADER, `--globals=${globalsPath}`, "--output=json"], {
+      stdin: new TextEncoder().encode("unquoted + ':' + maxRetries + ':' + nested.enabled;\n"),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`--globals JSON5 exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const json = JSON.parse(proc.stdout.toString());
+    if (json.files?.[0]?.result !== "goccia:3:true")
+      throw new Error(`--globals JSON5 should inject parsed values, got ${json.files?.[0]?.result}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Loader: --globals TOML file...");
+{
+  const tmp = makeTmp();
+  try {
+    const globalsPath = join(tmp, "globals.toml");
+    const nameValue = "Jos\u00e9";
+    const quotedKey = "d\u00e9j\u00e0";
+    writeFileSync(globalsPath, [
+      `name = "${nameValue}"`,
+      `"${quotedKey}" = "vu"`,
+      "count = 3",
+      "",
+    ].join("\n"));
+    const proc = Bun.spawnSync([LOADER, `--globals=${globalsPath}`, "--output=json", "--mode=bytecode"], {
+      stdin: new TextEncoder().encode(`name + ':' + globalThis["${quotedKey}"] + ':' + count;\n`),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`--globals TOML exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const json = JSON.parse(proc.stdout.toString());
+    if (json.files?.[0]?.result !== "Jos\u00e9:vu:3")
+      throw new Error(`--globals TOML should inject UTF-8 parsed values, got ${json.files?.[0]?.result}`);
   } finally {
     clean(tmp);
   }

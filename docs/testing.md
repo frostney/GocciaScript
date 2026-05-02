@@ -378,7 +378,7 @@ Pascal unit tests (`*.Test.pas`) exist as a tertiary layer for behavior that can
 The `GocciaTestRunner` program:
 
 1. Scans the provided path for `.js`, `.jsx`, `.ts`, `.tsx`, and `.mjs` files.
-2. For each file, creates a fresh `TGocciaEngine` with `[ggTestAssertions]` (plus `ggFFI` when `--unsafe-ffi` is passed).
+2. For each file, creates a fresh `TGocciaEngine` and attaches `TGocciaRuntime` with `rgTestAssertions` (plus `rgFFI` when `--unsafe-ffi` is passed).
 3. Loads the source and appends a `runTests()` call.
 4. Executes the script — `describe`/`test` blocks register themselves during execution. Nested `describe` blocks are supported; suite names are composed with ` > ` separators (e.g., `"Outer > Inner"`). Skip state is inherited by nested describes.
 5. `runTests()` executes all registered tests and collects results.
@@ -529,7 +529,7 @@ build → test             → artifacts
 
 **`benchmark`** (needs build, all platforms) — Downloads pre-built binaries, runs all benchmarks.
 
-**`cli`** (needs build, all platforms) — Downloads pre-built binaries and runs CLI behavior smoke tests via Bun: `test-cli.ts` (flags across all apps), `test-cli-lexer.ts` (numeric-separator rejection), `test-cli-parser.ts` (error display), `test-cli-config.ts` (config-file loading and per-file inheritance), and `test-cli-apps.ts` (app-specific features). Windows runs additionally assert that the loader binary does not link against OpenSSL DLLs.
+**`cli`** (needs build, all platforms) — Downloads pre-built binaries and runs CLI behavior smoke tests via Bun: `test-cli.ts` (flags across all apps), `test-cli-lexer.ts` (numeric-separator rejection), `test-cli-parser.ts` (error display), `test-cli-config.ts` (config-file loading and per-file inheritance), and `test-cli-apps.ts` (app-specific features, including `GocciaScriptLoaderBare` stdin/file checks and runtime-global absence). Windows runs additionally assert that the loader binary does not link against OpenSSL DLLs.
 
 **`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + cli, `main` only) — Uploads release binaries after all checks pass. `test262` is **not** a gating dependency — failing tests there cannot block a release.
 

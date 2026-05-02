@@ -381,7 +381,7 @@ var
   Pool: TGocciaThreadPool;
   I: Integer;
 begin
-  EnsureSharedPrototypesInitialized(EffectiveBuiltins);
+  EnsureSharedPrototypesInitialized;
 
   Pool := TGocciaThreadPool.Create(AJobCount);
   try

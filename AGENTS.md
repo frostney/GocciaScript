@@ -38,9 +38,11 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
 ```bash
 ./build.pas # Clean + dev build of everything (default)
 ./build.pas --dev loader # Dev build of GocciaScriptLoader
+./build.pas --dev loaderbare # Dev build of GocciaScriptLoaderBare
 ./build.pas --prod # Clean + production build of everything
 ./build.pas --prod loader repl # Production build of specific components
 ./build.pas loader # Dev build (--dev is the default)
+./build.pas loaderbare # Dev build of the bare ScriptLoader
 ./build.pas testrunner # Dev build of GocciaTestRunner
 ./build.pas benchmarkrunner # Dev build of GocciaBenchmarkRunner
 ./build.pas bundler # Dev build of GocciaBundler

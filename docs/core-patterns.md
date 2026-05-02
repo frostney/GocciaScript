@@ -354,19 +354,19 @@ This keeps the evaluator fully reentrant — all dependencies are explicit, maki
 
 ### Configurable Built-ins
 
-Built-ins are registered via a `TGocciaGlobalBuiltins` set of flags:
+`TGocciaEngine` always registers core language built-ins such as Math, Array, Number, Promise, JSON, Symbol, Set, Map, Temporal, ArrayBuffer, and related constructors. `TGocciaRuntime` attaches host/runtime globals such as console, fetch, URL, JSON5, TOML, YAML, CSV, TSV, test assertions, benchmarking, and FFI through runtime extensions. `TGocciaRuntimeGlobals` is the single selector for that runtime surface:
 
 ```pascal
-TGocciaGlobalBuiltin = (ggTestAssertions, ggBenchmark, ggFFI);
+TGocciaRuntimeGlobal = (..., rgTestAssertions, rgBenchmark, rgFFI);
 ```
 
-Standard built-ins (console, Math, Array, Number, Promise, JSON, Symbol, Set, Map, Temporal, ArrayBuffer, etc.) are always registered -- no flag-gating required. The enum now contains only special-purpose built-ins that are opt-in.
+Core language built-ins (Math, Array, Number, Promise, JSON, Symbol, Set, Map, Temporal, ArrayBuffer, etc.) are always registered by `TGocciaEngine` -- no flag-gating required. Host/runtime globals and special-purpose tools are attached by `TGocciaRuntime`, so small hosts can pass a reduced `TGocciaRuntimeGlobals` set.
 
-**Why configurable for special-purpose built-ins?**
+**Why configurable for special-purpose runtime globals?**
 
-- **Testing** — The GocciaTestRunner enables `ggTestAssertions` to inject `describe`, `test`, and `expect` without polluting the normal runtime.
-- **Benchmarking** — The GocciaBenchmarkRunner enables `ggBenchmark` to inject `suite` and `bench`.
-- **FFI** — `ggFFI` enables the Foreign Function Interface for calling native shared libraries, which is disabled by default for security.
+- **Testing** — The GocciaTestRunner enables `rgTestAssertions` to inject `describe`, `test`, and `expect` without polluting the normal runtime.
+- **Benchmarking** — The GocciaBenchmarkRunner enables `rgBenchmark` to inject `suite` and `bench`.
+- **FFI** — `rgFFI` enables the Foreign Function Interface for calling native shared libraries, which is disabled by default for security.
 
 ### Global Function Placement
 

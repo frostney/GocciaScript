@@ -20,6 +20,7 @@ import { tmpdir } from "os";
 
 const ext = process.platform === "win32" ? ".exe" : "";
 const LOADER = `./build/GocciaScriptLoader${ext}`;
+const BARE = `./build/GocciaScriptLoaderBare${ext}`;
 const REPL = `./build/GocciaREPL${ext}`;
 const TESTRUNNER = `./build/GocciaTestRunner${ext}`;
 const BUNDLER = `./build/GocciaBundler${ext}`;
@@ -86,10 +87,10 @@ console.log("Stdin mixed-with-paths rejection (Loader, TestRunner, BenchmarkRunn
   }
 }
 
-// -- --help (all 5 apps) -------------------------------------------------------
+// -- --help (all 6 apps) -------------------------------------------------------
 
-console.log("--help (all 5 apps)...");
-for (const bin of [LOADER, REPL, TESTRUNNER, BUNDLER, BENCHRUNNER]) {
+console.log("--help (all 6 apps)...");
+for (const bin of [LOADER, BARE, REPL, TESTRUNNER, BUNDLER, BENCHRUNNER]) {
   const help = await $`${bin} --help 2>&1`.text();
   if (!help.includes("--")) throw new Error(`${bin} --help missing options`);
 }

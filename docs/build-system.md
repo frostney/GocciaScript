@@ -25,6 +25,7 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 
 ```bash
 ./build.pas loader              # Dev build (default)
+./build.pas loaderbare          # Dev build of the bare script executor
 ./build.pas --dev loader        # Explicit dev build
 ./build.pas --prod loader       # Production build
 ./build.pas --prod              # Production build of all components
@@ -38,13 +39,14 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 ./build.pas --prod    # Production build of all components
 ```
 
-Runs a clean (removes stale `.ppu`, `.o`, `.res` from `build/compiled/`), then builds all components in order: tests, loader, testrunner, benchmarkrunner, bundler, repl.
+Runs a clean (removes stale `.ppu`, `.o`, `.res` from `build/compiled/`), then builds all components in order: tests, loader, loaderbare, testrunner, benchmarkrunner, bundler, repl.
 
 ### Build Specific Components
 
 ```bash
 ./build.pas repl             # Interactive REPL
 ./build.pas loader           # Script file executor
+./build.pas loaderbare       # Bare script executor (core engine only)
 ./build.pas testrunner       # JavaScript test runner
 ./build.pas benchmarkrunner  # Performance benchmark runner
 ./build.pas bundler          # Bytecode bundler (compile to .gbc)
@@ -345,6 +347,7 @@ All compiled binaries go to the `build/` directory:
 |--------|--------|-------------|
 | `build/GocciaREPL` | `source/app/GocciaREPL.dpr` | Interactive read-eval-print loop |
 | `build/GocciaScriptLoader` | `source/app/GocciaScriptLoader.dpr` | Execute `.js` files or stdin input, with optional JSON output |
+| `build/GocciaScriptLoaderBare` | `source/app/GocciaScriptLoaderBare.dpr` | Execute file or stdin source with the core engine only; no default runtime globals |
 | `build/GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | JavaScript test runner |
 | `build/GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Performance benchmark runner for files or stdin input |
 | `build/GocciaBundler` | `source/app/GocciaBundler.dpr` | Standalone bytecode compiler (source to `.gbc`) |
@@ -440,6 +443,7 @@ GocciaScript/
 │   ├── app/              # CLI applications
 │   │   ├── GocciaREPL.dpr              # REPL program source
 │   │   ├── GocciaScriptLoader.dpr      # Script loader program source
+│   │   ├── GocciaScriptLoaderBare.dpr  # Core-engine-only script loader
 │   │   ├── GocciaTestRunner.dpr        # Test runner program source
 │   │   ├── GocciaBenchmarkRunner.dpr   # Benchmark runner program source
 │   │   ├── GocciaBundler.dpr     # Standalone bytecode compiler
@@ -543,7 +547,7 @@ Runs on **ubuntu-latest x64 only** (single runner, no matrix).
 
 **`test262`** (needs build, **non-blocking**) — Shallow-clones `tc39/test262@main`, runs `python3 scripts/run_test262_suite.py --suite-dir test262-suite --mode=bytecode --jobs=4 --output=test262-results.json`, and uploads the JSON report. Failing tests do not fail the job. The downstream `test262-comment` job (`if: always()`) restores the most recent `test262-baseline-` cache entry from main, computes a four-row metric table (Total / Eligible / Eligible passing / Total passing) and a top-three "Areas closest to 100%" table (≥ 25 attempted tests, below 100%, keyed by the first two test262 path components), and posts/updates a comment using marker `<!-- test262-results -->`. When a baseline is available, both tables include a Δ vs main column.
 
-**`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`).
+**`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`). `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, file input, module source type, and absence of runtime globals.
 
 FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, benchmark, test262, and cli jobs do the same.
 

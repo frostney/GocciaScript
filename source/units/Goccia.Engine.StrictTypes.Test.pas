@@ -58,7 +58,7 @@ var
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Engine := TGocciaEngine.Create('<strict-test>', Source, []);
+  Engine := TGocciaEngine.Create('<strict-test>', Source);
   try
     Expect<Boolean>(Engine.StrictTypes).ToBe(False);
   finally
@@ -75,7 +75,7 @@ var
 begin
   Source := CreateEmptySource;
   Executor := TGocciaBytecodeExecutor.Create;
-  Engine := TGocciaEngine.Create('<strict-test>', Source, [], Executor);
+  Engine := TGocciaEngine.Create('<strict-test>', Source, Executor);
   try
     { Both execution modes default to non-strict.  Strict-types is now
       an opt-in flag controlled by the --strict-types CLI option or
@@ -95,7 +95,7 @@ var
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Engine := TGocciaEngine.Create('<strict-test>', Source, []);
+  Engine := TGocciaEngine.Create('<strict-test>', Source);
   try
     Engine.StrictTypes := True;
     Expect<Boolean>(Engine.StrictTypes).ToBe(True);
@@ -115,7 +115,7 @@ var
 begin
   Source := CreateEmptySource;
   Executor := TGocciaBytecodeExecutor.Create;
-  Engine := TGocciaEngine.Create('<strict-test>', Source, [], Executor);
+  Engine := TGocciaEngine.Create('<strict-test>', Source, Executor);
   try
     Engine.StrictTypes := True;
     Expect<Boolean>(Engine.StrictTypes).ToBe(True);
@@ -134,7 +134,7 @@ var
   Child: TGocciaScope;
 begin
   Source := CreateEmptySource;
-  Engine := TGocciaEngine.Create('<strict-test>', Source, []);
+  Engine := TGocciaEngine.Create('<strict-test>', Source);
   try
     { Simulate a closure whose lexical scope was created before the
       setter ran: a child of the global scope captures the
@@ -171,7 +171,7 @@ var
   Threw: Boolean;
 begin
   Source := CreateEmptySource;
-  Engine := TGocciaEngine.Create('<strict-test>', Source, []);
+  Engine := TGocciaEngine.Create('<strict-test>', Source);
   try
     Scope := Engine.Interpreter.GlobalScope;
 

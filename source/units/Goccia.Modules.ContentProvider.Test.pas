@@ -24,6 +24,7 @@ uses
   Goccia.Modules.Loader,
   Goccia.Modules.Resolver,
   Goccia.Parser,
+  Goccia.Runtime,
   Goccia.TestSetup,
   Goccia.Token,
   Goccia.TOML,
@@ -79,6 +80,7 @@ type
     procedure TestFileSystemContentProviderPreservesUTF8YAMLText;
     procedure TestEngineLoadsUTF8TextAssetModule;
     procedure TestEngineNormalizesCRLFTextAssetModulesToLF;
+    procedure TestModuleLoaderContentProviderSelfAssignment;
     procedure TestModuleLoaderRejectsRebindingAcrossRuntimes;
     procedure TestBytecodeBackendUsesInjectedContentProvider;
   protected
@@ -174,6 +176,8 @@ begin
     TestEngineLoadsUTF8TextAssetModule);
   Test('Engine normalizes CRLF text asset modules to LF',
     TestEngineNormalizesCRLFTextAssetModulesToLF);
+  Test('Module loader content provider self-assignment keeps provider',
+    TestModuleLoaderContentProviderSelfAssignment);
   Test('Module loader rejects rebinding across runtimes',
     TestModuleLoaderRejectsRebindingAcrossRuntimes);
   Test('Bytecode backend uses injected content provider',
@@ -311,8 +315,7 @@ begin
 
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
-      Engine := TGocciaEngine.Create(ENTRY_PATH, Source,
-        [], ModuleLoader);
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader);
       try
         ScriptResult := Engine.Execute;
       finally
@@ -358,7 +361,7 @@ begin
 
     Executor := TGocciaBytecodeExecutor.Create;
     try
-      Engine := TGocciaEngine.Create(EntryPath, Source, [],
+      Engine := TGocciaEngine.Create(EntryPath, Source,
         TGocciaModuleLoader.Create(EntryPath, nil, Provider), Executor);
       try
         ProgramNode := CreateProgram(
@@ -453,8 +456,7 @@ begin
 
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
-      Engine := TGocciaEngine.Create(ENTRY_PATH, Source,
-        [], ModuleLoader);
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader);
       try
         try
           Engine.Execute;
@@ -495,6 +497,7 @@ var
   Provider: TMemoryModuleContentProvider;
   Resolver: TInMemoryModuleResolver;
   RaisedExpected: Boolean;
+  Runtime: TGocciaRuntime;
   Source: TStringList;
 begin
   Provider := TMemoryModuleContentProvider.Create;
@@ -510,12 +513,13 @@ begin
 
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
-      Engine := TGocciaEngine.Create(ENTRY_PATH, Source,
-        [], ModuleLoader);
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader);
+      Runtime := nil;
       try
+        Runtime := TGocciaRuntime.Create(Engine, [rgJSONL]);
         RaisedExpected := False;
         try
-          Engine.Execute;
+          Runtime.Execute;
           Fail('Expected invalid JSONL module source to raise an exception.');
         except
           on E: Exception do
@@ -533,6 +537,7 @@ begin
 
         Expect<Boolean>(RaisedExpected).ToBe(True);
       finally
+        Runtime.Free;
         Engine.Free;
       end;
     finally
@@ -557,6 +562,7 @@ var
   Provider: TMemoryModuleContentProvider;
   Resolver: TInMemoryModuleResolver;
   RaisedExpected: Boolean;
+  Runtime: TGocciaRuntime;
   Source: TStringList;
 begin
   Provider := TMemoryModuleContentProvider.Create;
@@ -569,12 +575,13 @@ begin
 
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
-      Engine := TGocciaEngine.Create(ENTRY_PATH, Source,
-        [], ModuleLoader);
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader);
+      Runtime := nil;
       try
+        Runtime := TGocciaRuntime.Create(Engine, [rgTOML]);
         RaisedExpected := False;
         try
-          Engine.Execute;
+          Runtime.Execute;
           Fail('Expected invalid TOML module source to raise an exception.');
         except
           on E: Exception do
@@ -593,6 +600,7 @@ begin
 
         Expect<Boolean>(RaisedExpected).ToBe(True);
       finally
+        Runtime.Free;
         Engine.Free;
       end;
     finally
@@ -775,6 +783,7 @@ var
   Engine: TGocciaEngine;
   MetadataValue: TGocciaObjectValue;
   ResultObject: TGocciaObjectValue;
+  Runtime: TGocciaRuntime;
   ScriptResult: TGocciaScriptResult;
   Source: TStringList;
   TempDirectory: string;
@@ -793,11 +802,13 @@ begin
 
     Engine := TGocciaEngine.Create(
       IncludeTrailingPathDelimiter(TempDirectory) + 'app.js',
-      Source,
-      []);
+      Source);
+    Runtime := nil;
     try
-      ScriptResult := Engine.Execute;
+      Runtime := TGocciaRuntime.Create(Engine, [rgTextAssets]);
+      ScriptResult := Runtime.Execute;
     finally
+      Runtime.Free;
       Engine.Free;
     end;
 
@@ -826,6 +837,7 @@ procedure TModuleContentProviderTests.TestEngineNormalizesCRLFTextAssetModulesTo
 var
   Engine: TGocciaEngine;
   RawContent: UTF8String;
+  Runtime: TGocciaRuntime;
   ScriptResult: TGocciaScriptResult;
   Source: TStringList;
   TempDirectory: string;
@@ -844,11 +856,13 @@ begin
 
     Engine := TGocciaEngine.Create(
       IncludeTrailingPathDelimiter(TempDirectory) + 'app.js',
-      Source,
-      []);
+      Source);
+    Runtime := nil;
     try
-      ScriptResult := Engine.Execute;
+      Runtime := TGocciaRuntime.Create(Engine, [rgTextAssets]);
+      ScriptResult := Runtime.Execute;
     finally
+      Runtime.Free;
       Engine.Free;
     end;
 
@@ -856,6 +870,31 @@ begin
       .ToBe('first line' + #10 + 'second line' + #10);
   finally
     Source.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests.TestModuleLoaderContentProviderSelfAssignment;
+const
+  ENTRY_PATH = 'memory:/app.js';
+  MODULE_PATH = 'memory:/missing.js';
+var
+  ModuleLoader: TGocciaModuleLoader;
+  Provider: TGocciaModuleContentProvider;
+  ProviderOwnedByLoader: Boolean;
+begin
+  ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH);
+  Provider := ModuleLoader.ContentProvider;
+  ProviderOwnedByLoader := True;
+  try
+    ModuleLoader.SetContentProvider(Provider, False);
+    ProviderOwnedByLoader := False;
+
+    Expect<Boolean>(ModuleLoader.ContentProvider = Provider).ToBe(True);
+    Expect<Boolean>(ModuleLoader.ContentProvider.Exists(MODULE_PATH)).ToBe(False);
+  finally
+    ModuleLoader.Free;
+    if not ProviderOwnedByLoader then
+      Provider.Free;
   end;
 end;
 
@@ -883,12 +922,10 @@ begin
   try
     SourceA.Text := '1;';
     SourceB.Text := '2;';
-    EngineA := TGocciaEngine.Create(ENTRY_PATH, SourceA,
-      [], ModuleLoader);
+    EngineA := TGocciaEngine.Create(ENTRY_PATH, SourceA, ModuleLoader);
     try
       try
-        EngineB := TGocciaEngine.Create(ENTRY_PATH, SourceB,
-          [], ModuleLoader);
+        EngineB := TGocciaEngine.Create(ENTRY_PATH, SourceB, ModuleLoader);
         Fail('Expected module loader rebinding to raise an exception.');
       except
         on E: Exception do

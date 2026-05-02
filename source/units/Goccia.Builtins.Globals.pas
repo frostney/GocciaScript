@@ -61,6 +61,7 @@ type
     function DecodeURIComponentCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+    procedure RegisterRuntimeGlobals;
   end;
 
 implementation
@@ -287,12 +288,6 @@ begin
   AScope.DefineLexicalBinding(SUPPRESSED_ERROR_NAME, SuppressedErrorConstructorFunc, dtConst);
   AScope.DefineLexicalBinding(DOM_EXCEPTION_NAME, DOMExceptionConstructorFunc, dtConst);
 
-  AScope.DefineLexicalBinding('queueMicrotask',
-    TGocciaNativeFunctionValue.Create(QueueMicrotaskCallback, 'queueMicrotask', 1), dtConst);
-
-  AScope.DefineLexicalBinding('structuredClone',
-    TGocciaNativeFunctionValue.Create(StructuredCloneCallback, 'structuredClone', 1), dtConst);
-
   AScope.DefineLexicalBinding('encodeURI',
     TGocciaNativeFunctionValue.Create(EncodeURICallback, 'encodeURI', 1), dtConst);
 
@@ -304,6 +299,15 @@ begin
 
   AScope.DefineLexicalBinding('decodeURIComponent',
     TGocciaNativeFunctionValue.Create(DecodeURIComponentCallback, 'decodeURIComponent', 1), dtConst);
+end;
+
+procedure TGocciaGlobals.RegisterRuntimeGlobals;
+begin
+  FScope.DefineLexicalBinding('queueMicrotask',
+    TGocciaNativeFunctionValue.Create(QueueMicrotaskCallback, 'queueMicrotask', 1), dtConst);
+
+  FScope.DefineLexicalBinding('structuredClone',
+    TGocciaNativeFunctionValue.Create(StructuredCloneCallback, 'structuredClone', 1), dtConst);
 end;
 
 { NativeError ( message [ , options ] ) — §20.5.6.1.1 (shared by all NativeError constructors)

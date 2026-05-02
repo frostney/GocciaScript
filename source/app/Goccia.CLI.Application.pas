@@ -37,7 +37,6 @@ type
     procedure BuildAllOptions;
     procedure InitializeSingletons;
     procedure ShutdownSingletons;
-    procedure HandleConsoleLog(const AMethod, ALine: string);
     procedure OpenLogFile;
     procedure CloseLogFile;
   protected
@@ -55,7 +54,9 @@ type
     function AddInteger(const AName, AHelp: string): TGocciaIntegerOption;
     function AddRepeatable(const AName, AHelp: string): TGocciaRepeatableOption;
     function Add(const AOption: TGocciaOptionBase): TGocciaOptionBase;
-    function EffectiveBuiltins: TGocciaGlobalBuiltins;
+    procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
+      const AFileConfig: TConfigEntryArray); virtual;
+    procedure HandleConsoleLog(const AMethod, ALine: string);
     { Discover the nearest goccia.json/json5/toml for a file and
       return its parsed entries.  Returns an empty array when no
       config is found.  Thread-safe: does not mutate shared state. }
@@ -97,6 +98,7 @@ type
     property EngineOptions: TGocciaEngineOptions read FEngineOptions;
     property CoverageOptions: TGocciaCoverageOptions read FCoverageOptions;
     property ProfilerOptions: TGocciaProfilerOptions read FProfilerOptions;
+    property LogFileOpen: Boolean read FLogFileOpen;
   public
     constructor Create(const AName: string); override;
     destructor Destroy; override;
@@ -111,7 +113,6 @@ uses
   CLI.Parser,
   TextSemantics,
 
-  Goccia.Builtins.Console,
   Goccia.CLI.EngineSetup,
   Goccia.CLI.Help,
   Goccia.Coverage,
@@ -440,13 +441,6 @@ begin
   Result := AOption;
 end;
 
-function TGocciaCLIApplication.EffectiveBuiltins: TGocciaGlobalBuiltins;
-begin
-  Result := GlobalBuiltins;
-  if Assigned(FEngineOptions) and FEngineOptions.UnsafeFFI.Present then
-    Include(Result, ggFFI);
-end;
-
 function TGocciaCLIApplication.DiscoverFileConfig(
   const AFileName: string): TConfigEntryArray;
 var
@@ -612,22 +606,27 @@ begin
   end;
 end;
 
+procedure TGocciaCLIApplication.ConfigureCreatedEngine(
+  const AEngine: TGocciaEngine; const AFileConfig: TConfigEntryArray);
+begin
+end;
+
 function TGocciaCLIApplication.CreateEngine(const AFileName: string;
   const ASource: TStringList): TGocciaEngine;
 var
   FileConfig: TConfigEntryArray;
 begin
-  Result := TGocciaEngine.Create(AFileName, ASource, EffectiveBuiltins);
+  Result := TGocciaEngine.Create(AFileName, ASource);
   try
     FileConfig := DiscoverFileConfig(AFileName);
     if Assigned(FEngineOptions) then
     begin
       ConfigureModuleResolver(Result.Resolver, AFileName,
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
-      ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig);
     end;
-    if FLogFileOpen then
-      Result.BuiltinConsole.LogCallback := HandleConsoleLog;
+    ConfigureCreatedEngine(Result, FileConfig);
+    if Assigned(FEngineOptions) then
+      ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig);
   except
     Result.Free;
     raise;
@@ -639,18 +638,17 @@ function TGocciaCLIApplication.CreateEngine(const AFileName: string;
 var
   FileConfig: TConfigEntryArray;
 begin
-  Result := TGocciaEngine.Create(AFileName, ASource, EffectiveBuiltins,
-    AExecutor);
+  Result := TGocciaEngine.Create(AFileName, ASource, AExecutor);
   try
     FileConfig := DiscoverFileConfig(AFileName);
     if Assigned(FEngineOptions) then
     begin
       ConfigureModuleResolver(Result.Resolver, AFileName,
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
-      ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig);
     end;
-    if FLogFileOpen then
-      Result.BuiltinConsole.LogCallback := HandleConsoleLog;
+    ConfigureCreatedEngine(Result, FileConfig);
+    if Assigned(FEngineOptions) then
+      ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig);
   except
     Result.Free;
     raise;
