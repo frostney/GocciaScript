@@ -252,7 +252,7 @@ begin
   if Result < 1 then
     ThrowRangeError(SErrorRoundingIncrementMin, SSuggestTemporalRoundArg);
   if Result > 1000000000 then
-    ThrowRangeError(SErrorRoundingIncrementMin, SSuggestTemporalRoundArg);
+    ThrowRangeError(SErrorRoundingIncrementMax, SSuggestTemporalRoundArg);
 end;
 
 procedure ValidateRoundingIncrement(const AIncrement: Integer;

@@ -528,7 +528,8 @@ begin
     gttIdentifier, gttNumber, gttBigInt, gttString, gttTemplate, gttRegex,
     gttTrue, gttFalse, gttNull, gttThis, gttSuper, gttNew, gttFunction,
     gttClass, gttImport, gttLeftParen, gttLeftBracket, gttLeftBrace,
-    gttNot, gttMinus, gttPlus, gttTypeof, gttVoid, gttBitwiseNot, gttDelete
+    gttNot, gttMinus, gttPlus, gttIncrement, gttDecrement, gttTypeof,
+    gttVoid, gttBitwiseNot, gttDelete
   ];
 end;
 

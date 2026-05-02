@@ -88,6 +88,25 @@ test("class reference preserves instanceof", () => {
   expect(obj.x).toBe(42);
 });
 
+test("block class declaration shadows outer class", () => {
+  class Shadowed {
+    static value() {
+      return "outer";
+    }
+  }
+
+  {
+    class Shadowed {
+      static value() {
+        return "inner";
+      }
+    }
+    expect(Shadowed.value()).toBe("inner");
+  }
+
+  expect(Shadowed.value()).toBe("outer");
+});
+
 test("runtime property assignment on class is enumerable", () => {
   class C {}
   C.customProp = 42;

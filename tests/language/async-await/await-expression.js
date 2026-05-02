@@ -131,6 +131,14 @@ describe("await expression", () => {
     expect(comparison).toBe(true);
   });
 
+  test("await accepts prefix update operands", async () => {
+    let value = 1;
+    expect(await ++value).toBe(2);
+    expect(value).toBe(2);
+    expect(await --value).toBe(1);
+    expect(value).toBe(1);
+  });
+
   test("await works in ternary conditions", async () => {
     const ternary = (await Promise.resolve(true)) ? "yes" : "no";
     expect(ternary).toBe("yes");

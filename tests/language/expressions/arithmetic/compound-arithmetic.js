@@ -82,3 +82,17 @@ test("compound assignment cannot mutate captured const binding", () => {
     mutate();
   }).toThrow(TypeError);
 });
+
+test("compound assignment evaluates RHS before throwing for captured const binding", () => {
+  let sideEffect = 0;
+
+  expect(() => {
+    const value = 1;
+    const mutate = () => {
+      value += (sideEffect = 1);
+    };
+    mutate();
+  }).toThrow(TypeError);
+
+  expect(sideEffect).toBe(1);
+});

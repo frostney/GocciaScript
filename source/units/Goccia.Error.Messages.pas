@@ -267,6 +267,7 @@ resourcestring
   SErrorInvalidLargestUnit = 'Invalid largestUnit: %s';
   SErrorInvalidRoundingMode = 'Invalid roundingMode: %s';
   SErrorRoundingIncrementMin = 'roundingIncrement must be >= 1';
+  SErrorRoundingIncrementMax = 'roundingIncrement must be <= 1000000000';
   SErrorRoundingIncrementDivisor = 'roundingIncrement %d does not divide the maximum value %d for this unit';
   SErrorInvalidOverflow = 'Invalid overflow option: %s';
   SErrorInvalidFractionalDigits = 'Invalid fractionalSecondDigits: %s';

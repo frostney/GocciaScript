@@ -168,7 +168,12 @@ begin
     Args.Add(TGocciaStringLiteralValue.Create(AKey));
     Args.Add(Value);
     Args.Add(Context);
-    Result := InvokeCallable(AReviver, Args, AHolder);
+    try
+      Result := InvokeCallable(AReviver, Args, AHolder);
+    except
+      on E: EGocciaBytecodeThrow do
+        raise TGocciaThrowValue.Create(E.ThrownValue);
+    end;
   finally
     Args.Free;
   end;

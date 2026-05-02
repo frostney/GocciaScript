@@ -760,6 +760,7 @@ end;
 procedure PredeclareBlockLexicalLocals(const ANode: TGocciaASTNode;
   const ACtx: TGocciaCompilationContext);
 var
+  LocalIdx: Integer;
   VarDecl: TGocciaVariableDeclaration;
 begin
   if ANode is TGocciaVariableDeclaration then
@@ -785,17 +786,23 @@ begin
       TGocciaDestructuringDeclaration(ANode).IsConst)
   else if ANode is TGocciaClassDeclaration then
   begin
-    if ACtx.Scope.ResolveLocal(TGocciaClassDeclaration(ANode).ClassDefinition.Name) < 0 then
+    LocalIdx := ACtx.Scope.ResolveLocal(TGocciaClassDeclaration(ANode).ClassDefinition.Name);
+    if (LocalIdx < 0) or
+       (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) then
       ACtx.Scope.DeclareLocal(TGocciaClassDeclaration(ANode).ClassDefinition.Name, True);
   end
   else if ANode is TGocciaEnumDeclaration then
   begin
-    if ACtx.Scope.ResolveLocal(TGocciaEnumDeclaration(ANode).Name) < 0 then
+    LocalIdx := ACtx.Scope.ResolveLocal(TGocciaEnumDeclaration(ANode).Name);
+    if (LocalIdx < 0) or
+       (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) then
       ACtx.Scope.DeclareLocal(TGocciaEnumDeclaration(ANode).Name, False);
   end
   else if ANode is TGocciaExportEnumDeclaration then
   begin
-    if ACtx.Scope.ResolveLocal(TGocciaExportEnumDeclaration(ANode).Declaration.Name) < 0 then
+    LocalIdx := ACtx.Scope.ResolveLocal(TGocciaExportEnumDeclaration(ANode).Declaration.Name);
+    if (LocalIdx < 0) or
+       (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) then
       ACtx.Scope.DeclareLocal(TGocciaExportEnumDeclaration(ANode).Declaration.Name, False);
   end;
 end;

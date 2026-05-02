@@ -2302,6 +2302,9 @@ begin
   begin
     if (ABlockStatement.Nodes[I] is TGocciaVariableDeclaration) or
        (ABlockStatement.Nodes[I] is TGocciaDestructuringDeclaration) or
+       (ABlockStatement.Nodes[I] is TGocciaClassDeclaration) or
+       (ABlockStatement.Nodes[I] is TGocciaEnumDeclaration) or
+       (ABlockStatement.Nodes[I] is TGocciaExportEnumDeclaration) or
        (ABlockStatement.Nodes[I] is TGocciaUsingDeclaration) then
     begin
       NeedsChildScope := True;

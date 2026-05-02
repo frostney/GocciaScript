@@ -235,12 +235,24 @@ def wrap_positive_test(
     body = _strip_use_strict(test_body)
     desc = _escape_js_string(description or test_id)
     tid = _escape_js_string(test_id)
+    clear_public_harness_globals = """globalThis.expect = undefined;
+globalThis.describe = undefined;
+globalThis.test = undefined;
+globalThis.it = undefined;
+globalThis.beforeAll = undefined;
+globalThis.afterAll = undefined;
+globalThis.beforeEach = undefined;
+globalThis.afterEach = undefined;
+globalThis.onTestFinished = undefined;
+globalThis.runTests = undefined;
+globalThis.mock = undefined;
+globalThis.spyOn = undefined;"""
 
     if preserve_script_scope:
         if is_async:
             return f"""{harness_source}
 
-globalThis.expect = undefined;
+{clear_public_harness_globals}
 {body}
 
 __gocciaTest262Describe("test262: {tid}", () => {{
@@ -252,7 +264,7 @@ __gocciaTest262Describe("test262: {tid}", () => {{
 
         return f"""{harness_source}
 
-globalThis.expect = undefined;
+{clear_public_harness_globals}
 {body}
 
 __gocciaTest262Describe("test262: {tid}", () => {{
@@ -263,7 +275,7 @@ __gocciaTest262Describe("test262: {tid}", () => {{
     if is_async:
         return f"""{harness_source}
 
-globalThis.expect = undefined;
+{clear_public_harness_globals}
 let __gocciaTest262Failed = false;
 let __gocciaTest262Failure = undefined;
 try {{
@@ -285,7 +297,7 @@ __gocciaTest262Describe("test262: {tid}", () => {{
 
     return f"""{harness_source}
 
-globalThis.expect = undefined;
+{clear_public_harness_globals}
 let __gocciaTest262Failed = false;
 let __gocciaTest262Failure = undefined;
 try {{
@@ -663,11 +675,12 @@ def evaluate_suite(
                                 is_only_strict="onlyStrict" in flags,
                             )
                         else:
+                            normalized_tid = tid.replace("\\", "/")
                             wrapped = wrap_positive_test(
                                 harness_source, body, tid, description,
                                 is_async=is_async,
                                 preserve_script_scope=(
-                                    tid in SCRIPT_SCOPE_POSITIVE_TESTS),
+                                    normalized_tid in SCRIPT_SCOPE_POSITIVE_TESTS),
                             )
 
                         # Hash the tid into a collision-free temp filename.  The

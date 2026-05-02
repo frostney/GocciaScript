@@ -170,6 +170,39 @@ begin
   end;
 end;
 
+procedure EmitLoadSuperPropertyByName(const ACtx: TGocciaCompilationContext;
+  const ABaseReg, AMode: UInt8; const APropertyName: string);
+var
+  PropIdx: UInt16;
+  KeyReg: UInt8;
+begin
+  PropIdx := ACtx.Template.AddConstantString(APropertyName);
+  if PropIdx <= High(UInt8) then
+    EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET_CONST, ABaseReg, AMode,
+      UInt8(PropIdx)))
+  else
+  begin
+    KeyReg := ACtx.Scope.AllocateRegister;
+    try
+      EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, PropIdx));
+      EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET, ABaseReg, AMode, KeyReg));
+    finally
+      ACtx.Scope.FreeRegister;
+    end;
+  end;
+end;
+
+procedure EmitConstAssignmentError(const ACtx: TGocciaCompilationContext);
+var
+  MsgIdx: UInt16;
+begin
+  MsgIdx := ACtx.Template.AddConstantString('Assignment to constant variable.');
+  if MsgIdx > High(UInt8) then
+    raise Exception.Create('Constant pool overflow: error message index exceeds 255');
+  EmitInstruction(ACtx, EncodeABC(OP_THROW_TYPE_ERROR_CONST, 0, 0,
+    UInt8(MsgIdx)));
+end;
+
 procedure CompileYield(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaYieldExpression; const ADest: UInt8);
 begin
@@ -624,7 +657,7 @@ var
   LocalIdx, UpvalIdx: Integer;
   Local: TGocciaCompilerLocal;
   Slot, GlobalExistsReg, ErrorReg, MessageReg: UInt8;
-  MsgIdx, NameIdx: UInt16;
+  NameIdx: UInt16;
   Hint: TGocciaLocalType;
   GlobalExistsJump: Integer;
 begin
@@ -651,11 +684,7 @@ begin
     Local := ACtx.Scope.GetLocal(LocalIdx);
     if Local.IsConst then
     begin
-      MsgIdx := ACtx.Template.AddConstantString(
-        'Assignment to constant variable.');
-      if MsgIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow: error message index exceeds 255');
-      EmitInstruction(ACtx, EncodeABC(OP_THROW_TYPE_ERROR_CONST, 0, 0, UInt8(MsgIdx)));
+      EmitConstAssignmentError(ACtx);
       Exit;
     end;
     if Local.IsGlobalBacked then
@@ -681,11 +710,7 @@ begin
   begin
     if ACtx.Scope.GetUpvalue(UpvalIdx).IsConst then
     begin
-      MsgIdx := ACtx.Template.AddConstantString(
-        'Assignment to constant variable.');
-      if MsgIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow: error message index exceeds 255');
-      EmitInstruction(ACtx, EncodeABC(OP_THROW_TYPE_ERROR_CONST, 0, 0, UInt8(MsgIdx)));
+      EmitConstAssignmentError(ACtx);
       Exit;
     end;
     if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
@@ -1315,12 +1340,9 @@ begin
     BaseReg := ACtx.Scope.AllocateRegister;
     SuperReg := ACtx.Scope.AllocateRegister;
     CompileSuperAccess(ACtx, SuperReg);
-    PropIdx := ACtx.Template.AddConstantString(PROP_CONSTRUCTOR);
-    if PropIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow');
     if SuperReg <> BaseReg + 1 then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, BaseReg + 1, SuperReg, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET_CONST, BaseReg, 1, UInt8(PropIdx)));
+    EmitLoadSuperPropertyByName(ACtx, BaseReg, 1, PROP_CONSTRUCTOR);
     ACtx.Scope.FreeRegister;
 
     if AExpr.Optional then
@@ -1389,9 +1411,19 @@ begin
     PropIdx := ACtx.Template.AddConstantString(
       PrivateKey(ACtx.Scope,
         TGocciaPrivateMemberExpression(AExpr.Callee).PrivateName));
-    if PropIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow: private method name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, BaseReg, ObjReg, UInt8(PropIdx)));
+    if PropIdx <= High(UInt8) then
+      EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, BaseReg, ObjReg,
+        UInt8(PropIdx)))
+    else
+    begin
+      KeyReg := ACtx.Scope.AllocateRegister;
+      try
+        EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, PropIdx));
+        EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, BaseReg, ObjReg, KeyReg));
+      finally
+        ACtx.Scope.FreeRegister;
+      end;
+    end;
 
     if AExpr.Optional then
       CallNilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, BaseReg);
@@ -1442,11 +1474,7 @@ begin
         ACtx.CompileExpression(MemberExpr.PropertyExpression, KeyReg);
       end
       else
-      begin
         PropIdx := ACtx.Template.AddConstantString(MemberExpr.PropertyName);
-        if PropIdx > High(UInt8) then
-          raise Exception.Create('Constant pool overflow');
-      end;
       if SuperReg <> BaseReg + 1 then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, BaseReg + 1, SuperReg, 0));
       if MemberExpr.Computed then
@@ -1455,8 +1483,21 @@ begin
         ACtx.Scope.FreeRegister;
       end
       else
-        EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET_CONST, BaseReg, 0,
-          UInt8(PropIdx)));
+      begin
+        if PropIdx <= High(UInt8) then
+          EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET_CONST, BaseReg, 0,
+            UInt8(PropIdx)))
+        else
+        begin
+          KeyReg := ACtx.Scope.AllocateRegister;
+          try
+            EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, PropIdx));
+            EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET, BaseReg, 0, KeyReg));
+          finally
+            ACtx.Scope.FreeRegister;
+          end;
+        end;
+      end;
       ACtx.Scope.FreeRegister;
 
       if AExpr.Optional then
@@ -2062,7 +2103,6 @@ procedure CompileTagCalleeRegisters(const ACtx: TGocciaCompilationContext;
   out AIsMethodCall: Boolean);
 var
   MemberExpr: TGocciaMemberExpression;
-  PropIdx: UInt16;
 begin
   AIsMethodCall := ATagExpr is TGocciaMemberExpression;
   if AIsMethodCall then
@@ -2078,12 +2118,8 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, ABaseReg, AObjReg, ABaseReg));
     end
     else
-    begin
-      PropIdx := ACtx.Template.AddConstantString(MemberExpr.PropertyName);
-      if PropIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow');
-      EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, ABaseReg, AObjReg, UInt8(PropIdx)));
-    end;
+      EmitLoadPropertyByName(ACtx, ABaseReg, AObjReg,
+        MemberExpr.PropertyName);
   end
   else
   begin
@@ -2321,7 +2357,7 @@ procedure CompileCompoundAssignment(const ACtx: TGocciaCompilationContext;
 var
   LocalIdx, UpvalIdx: Integer;
   Slot, RegVal, RegResult, CondReg, ArgReg: UInt8;
-  MsgIdx, NameIdx: UInt16;
+  NameIdx: UInt16;
   Op, FloatOp: TGocciaOpCode;
   LocalType, ValType: TGocciaLocalType;
   ArithOp: TGocciaTokenType;
@@ -2339,20 +2375,18 @@ begin
         EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest,
           ACtx.Template.AddConstantString(AExpr.Name)));
         JumpIdx := EmitJumpInstruction(ACtx, Op, ADest);
+        ACtx.CompileExpression(AExpr.Value, ADest);
+        LocalType := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
+        if ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped and
+           (LocalType <> sltUntyped) and
+           not TypesAreCompatible(InferLocalType(AExpr.Value), LocalType) then
+          EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, ADest,
+            UInt8(Ord(LocalType)), 0));
         if ACtx.Scope.GetLocal(LocalIdx).IsConst then
-        begin
-          MsgIdx := ACtx.Template.AddConstantString(
-            'Assignment to constant variable.');
-          if MsgIdx > High(UInt8) then
-            raise Exception.Create('Constant pool overflow: error message index exceeds 255');
-          EmitInstruction(ACtx, EncodeABC(OP_THROW_TYPE_ERROR_CONST, 0, 0, UInt8(MsgIdx)));
-        end
+          EmitConstAssignmentError(ACtx)
         else
-        begin
-          ACtx.CompileExpression(AExpr.Value, ADest);
           EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ADest,
             ACtx.Template.AddConstantString(AExpr.Name)));
-        end;
         PatchJumpTarget(ACtx, JumpIdx);
         Exit;
       end;
@@ -2361,18 +2395,22 @@ begin
       if ADest <> Slot then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
       JumpIdx := EmitJumpInstruction(ACtx, Op, ADest);
+      LocalType := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
       if ACtx.Scope.GetLocal(LocalIdx).IsConst then
       begin
-        MsgIdx := ACtx.Template.AddConstantString(
-          'Assignment to constant variable.');
-        if MsgIdx > High(UInt8) then
-          raise Exception.Create('Constant pool overflow: error message index exceeds 255');
-        EmitInstruction(ACtx, EncodeABC(OP_THROW_TYPE_ERROR_CONST, 0, 0, UInt8(MsgIdx)));
+        RegVal := ACtx.Scope.AllocateRegister;
+        ACtx.CompileExpression(AExpr.Value, RegVal);
+        if ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped and
+           (LocalType <> sltUntyped) and
+           not TypesAreCompatible(InferLocalType(AExpr.Value), LocalType) then
+          EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, RegVal,
+            UInt8(Ord(LocalType)), 0));
+        EmitConstAssignmentError(ACtx);
+        ACtx.Scope.FreeRegister;
       end
       else
       begin
         ACtx.CompileExpression(AExpr.Value, ADest);
-        LocalType := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
         if ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped and
            (LocalType <> sltUntyped) and
            not TypesAreCompatible(InferLocalType(AExpr.Value), LocalType) then
@@ -2394,22 +2432,16 @@ begin
       else
         EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, ADest, UInt16(UpvalIdx)));
       JumpIdx := EmitJumpInstruction(ACtx, Op, ADest);
+      ACtx.CompileExpression(AExpr.Value, ADest);
+      if ACtx.Scope.GetUpvalue(UpvalIdx).IsStrictlyTyped and
+         not TypesAreCompatible(InferLocalType(AExpr.Value),
+           ACtx.Scope.GetUpvalue(UpvalIdx).TypeHint) then
+        EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, ADest,
+          UInt8(Ord(ACtx.Scope.GetUpvalue(UpvalIdx).TypeHint)), 0));
       if ACtx.Scope.GetUpvalue(UpvalIdx).IsConst then
-      begin
-        MsgIdx := ACtx.Template.AddConstantString(
-          'Assignment to constant variable.');
-        if MsgIdx > High(UInt8) then
-          raise Exception.Create('Constant pool overflow: error message index exceeds 255');
-        EmitInstruction(ACtx, EncodeABC(OP_THROW_TYPE_ERROR_CONST, 0, 0, UInt8(MsgIdx)));
-      end
+        EmitConstAssignmentError(ACtx)
       else
       begin
-        ACtx.CompileExpression(AExpr.Value, ADest);
-        if ACtx.Scope.GetUpvalue(UpvalIdx).IsStrictlyTyped and
-           not TypesAreCompatible(InferLocalType(AExpr.Value),
-             ACtx.Scope.GetUpvalue(UpvalIdx).TypeHint) then
-          EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, ADest,
-            UInt8(Ord(ACtx.Scope.GetUpvalue(UpvalIdx).TypeHint)), 0));
         if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
           EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ADest,
             ACtx.Template.AddConstantString(AExpr.Name)))
@@ -2448,15 +2480,6 @@ begin
   LocalIdx := ACtx.Scope.ResolveLocal(AExpr.Name);
   if LocalIdx >= 0 then
   begin
-    if ACtx.Scope.GetLocal(LocalIdx).IsConst then
-    begin
-      MsgIdx := ACtx.Template.AddConstantString(
-        'Assignment to constant variable.');
-      if MsgIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow: error message index exceeds 255');
-      EmitInstruction(ACtx, EncodeABC(OP_THROW_TYPE_ERROR_CONST, 0, 0, UInt8(MsgIdx)));
-      Exit;
-    end;
     if ACtx.Scope.GetLocal(LocalIdx).IsGlobalBacked then
     begin
       RegVal := ACtx.Scope.AllocateRegister;
@@ -2464,9 +2487,20 @@ begin
       EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
         ACtx.Template.AddConstantString(AExpr.Name)));
       ACtx.CompileExpression(AExpr.Value, RegVal);
-      EmitInstruction(ACtx, EncodeABC(Op, ADest, RegResult, RegVal));
-      EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ADest,
-        ACtx.Template.AddConstantString(AExpr.Name)));
+      LocalType := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
+      if ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped and
+         (LocalType <> sltUntyped) and
+         not TypesAreCompatible(InferLocalType(AExpr.Value), LocalType) then
+        EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, RegVal,
+          UInt8(Ord(LocalType)), 0));
+      if ACtx.Scope.GetLocal(LocalIdx).IsConst then
+        EmitConstAssignmentError(ACtx)
+      else
+      begin
+        EmitInstruction(ACtx, EncodeABC(Op, ADest, RegResult, RegVal));
+        EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ADest,
+          ACtx.Template.AddConstantString(AExpr.Name)));
+      end;
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
       Exit;
@@ -2476,6 +2510,17 @@ begin
     ACtx.CompileExpression(AExpr.Value, RegVal);
 
     LocalType := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
+    if ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped and
+       (LocalType <> sltUntyped) and
+       not TypesAreCompatible(InferLocalType(AExpr.Value), LocalType) then
+      EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, RegVal,
+        UInt8(Ord(LocalType)), 0));
+    if ACtx.Scope.GetLocal(LocalIdx).IsConst then
+    begin
+      EmitConstAssignmentError(ACtx);
+      ACtx.Scope.FreeRegister;
+      Exit;
+    end;
     ValType := ExpressionType(ACtx.Scope, AExpr.Value);
     if IsKnownNumeric(LocalType) and
        IsKnownNumeric(ValType) and
@@ -2493,15 +2538,6 @@ begin
   UpvalIdx := ACtx.Scope.ResolveUpvalue(AExpr.Name);
   if UpvalIdx >= 0 then
   begin
-    if ACtx.Scope.GetUpvalue(UpvalIdx).IsConst then
-    begin
-      MsgIdx := ACtx.Template.AddConstantString(
-        'Assignment to constant variable.');
-      if MsgIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow: error message index exceeds 255');
-      EmitInstruction(ACtx, EncodeABC(OP_THROW_TYPE_ERROR_CONST, 0, 0, UInt8(MsgIdx)));
-      Exit;
-    end;
     RegVal := ACtx.Scope.AllocateRegister;
     RegResult := ACtx.Scope.AllocateRegister;
     if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
@@ -2510,14 +2546,25 @@ begin
     else
       EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, RegResult, UInt16(UpvalIdx)));
     ACtx.CompileExpression(AExpr.Value, RegVal);
-    EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, RegVal));
-    if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
-      EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, RegResult,
-        ACtx.Template.AddConstantString(AExpr.Name)))
+    if ACtx.Scope.GetUpvalue(UpvalIdx).IsStrictlyTyped and
+       not TypesAreCompatible(InferLocalType(AExpr.Value),
+         ACtx.Scope.GetUpvalue(UpvalIdx).TypeHint) then
+      EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, RegVal,
+        UInt8(Ord(ACtx.Scope.GetUpvalue(UpvalIdx).TypeHint)), 0));
+    if ACtx.Scope.GetUpvalue(UpvalIdx).IsConst then
+      EmitConstAssignmentError(ACtx)
     else
-      EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, RegResult, UInt16(UpvalIdx)));
-    if ADest <> RegResult then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
+    begin
+      EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, RegVal));
+      if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
+        EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, RegResult,
+          ACtx.Template.AddConstantString(AExpr.Name)))
+      else
+        EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, RegResult,
+          UInt16(UpvalIdx)));
+      if ADest <> RegResult then
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
+    end;
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
     Exit;

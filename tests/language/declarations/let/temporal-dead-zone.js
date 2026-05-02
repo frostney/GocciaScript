@@ -70,9 +70,7 @@ describe("Temporal Dead Zone", () => {
 
   test("captured let read before declaration throws", () => {
     {
-      function readBeforeDeclaration() {
-        return capturedLet;
-      }
+      const readBeforeDeclaration = () => capturedLet;
       expect(() => {
         readBeforeDeclaration();
       }).toThrow(ReferenceError);
@@ -82,9 +80,9 @@ describe("Temporal Dead Zone", () => {
 
   test("captured let write before declaration throws", () => {
     {
-      function writeBeforeDeclaration() {
+      const writeBeforeDeclaration = () => {
         capturedLet = 1;
-      }
+      };
       expect(() => {
         writeBeforeDeclaration();
       }).toThrow(ReferenceError);
@@ -94,9 +92,7 @@ describe("Temporal Dead Zone", () => {
 
   test("captured const read before declaration throws", () => {
     {
-      function readBeforeDeclaration() {
-        return capturedConst;
-      }
+      const readBeforeDeclaration = () => capturedConst;
       expect(() => {
         readBeforeDeclaration();
       }).toThrow(ReferenceError);

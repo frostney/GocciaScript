@@ -2285,9 +2285,33 @@ function InvokeConstructableWithReceiver(const AConstructor: TGocciaValue;
   const AReceiver: TGocciaValue): TGocciaValue;
 var
   BoundFunction: TGocciaBoundFunctionValue;
+  ClassConstructor: TGocciaClassValue;
   CombinedArgs: TGocciaArgumentsCollection;
   SuperResult: TGocciaValue;
+  ConstructorThisValue: TGocciaValue;
   I: Integer;
+  function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
+  begin
+    Result := (not Assigned(AValue)) or
+      (AValue is TGocciaUndefinedLiteralValue);
+  end;
+  function ClassRequiresObjectConstructorReturn(
+    const AClassValue: TGocciaClassValue): Boolean;
+  begin
+    Result := Assigned(AClassValue) and
+      (Assigned(AClassValue.SuperClass) or
+       Assigned(AClassValue.NativeSuperConstructor));
+  end;
+  procedure ValidateClassConstructorReturn(
+    const AClassValue: TGocciaClassValue; const AValue: TGocciaValue);
+  begin
+    if ClassRequiresObjectConstructorReturn(AClassValue) and
+       not (AValue is TGocciaObjectValue) and
+       not IsUndefinedConstructedValue(AValue) then
+      ThrowTypeError(
+        'Derived constructor returned non-object',
+        SSuggestNotConstructorType);
+  end;
 begin
   if AConstructor is TGocciaBoundFunctionValue then
   begin
@@ -2321,9 +2345,16 @@ begin
   end
   else if AConstructor is TGocciaClassValue then
   begin
-    if Assigned(TGocciaClassValue(AConstructor).ConstructorMethod) then
-      SuperResult := TGocciaClassValue(AConstructor).ConstructorMethod.Call(
-        AArguments, AReceiver)
+    ClassConstructor := TGocciaClassValue(AConstructor);
+    if Assigned(ClassConstructor.ConstructorMethod) then
+    begin
+      SuperResult := ClassConstructor.ConstructorMethod.CallWithThisValue(
+        AArguments, AReceiver, ConstructorThisValue);
+      ValidateClassConstructorReturn(ClassConstructor, SuperResult);
+      if not (SuperResult is TGocciaObjectValue) and
+         (ConstructorThisValue is TGocciaObjectValue) then
+        SuperResult := ConstructorThisValue;
+    end
     else
       SuperResult := AReceiver;
   end
