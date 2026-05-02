@@ -7,26 +7,36 @@ var __gocciaGlobalVarUndefinedInitializer = 19;
 var __gocciaGlobalVarUndefinedInitializer = undefined;
 
 const __gocciaOriginalGlobalPrototypeForVar = Object.getPrototypeOf(globalThis);
-const __gocciaInheritedGlobalVarPrototype = Object.create(__gocciaOriginalGlobalPrototypeForVar);
-__gocciaInheritedGlobalVarPrototype.__gocciaInheritedGlobalVarDeclaration = 37;
-Object.setPrototypeOf(globalThis, __gocciaInheritedGlobalVarPrototype);
-var __gocciaInheritedGlobalVarDeclaration;
-const __gocciaInheritedGlobalVarDeclarationOwn = Object.hasOwn(globalThis, "__gocciaInheritedGlobalVarDeclaration");
-const __gocciaInheritedGlobalVarDeclarationValue = globalThis.__gocciaInheritedGlobalVarDeclaration;
-delete globalThis.__gocciaInheritedGlobalVarDeclaration;
-Object.setPrototypeOf(globalThis, __gocciaOriginalGlobalPrototypeForVar);
+let __gocciaInheritedGlobalVarDeclarationOwn;
+let __gocciaInheritedGlobalVarDeclarationValue;
+try {
+  const __gocciaInheritedGlobalVarPrototype = Object.create(__gocciaOriginalGlobalPrototypeForVar);
+  __gocciaInheritedGlobalVarPrototype.__gocciaInheritedGlobalVarDeclaration = 37;
+  Object.setPrototypeOf(globalThis, __gocciaInheritedGlobalVarPrototype);
+  var __gocciaInheritedGlobalVarDeclaration;
+  __gocciaInheritedGlobalVarDeclarationOwn = Object.hasOwn(globalThis, "__gocciaInheritedGlobalVarDeclaration");
+  __gocciaInheritedGlobalVarDeclarationValue = globalThis.__gocciaInheritedGlobalVarDeclaration;
+  delete globalThis.__gocciaInheritedGlobalVarDeclaration;
+} finally {
+  Object.setPrototypeOf(globalThis, __gocciaOriginalGlobalPrototypeForVar);
+}
 
 var __gocciaDeletedInheritedGlobalVarDeclaration = 42;
 delete globalThis.__gocciaDeletedInheritedGlobalVarDeclaration;
 const __gocciaDeletedOriginalGlobalPrototypeForVar = Object.getPrototypeOf(globalThis);
-const __gocciaDeletedInheritedGlobalVarPrototype = Object.create(__gocciaDeletedOriginalGlobalPrototypeForVar);
-__gocciaDeletedInheritedGlobalVarPrototype.__gocciaDeletedInheritedGlobalVarDeclaration = 99;
-Object.setPrototypeOf(globalThis, __gocciaDeletedInheritedGlobalVarPrototype);
-var __gocciaDeletedInheritedGlobalVarDeclaration;
-const __gocciaDeletedInheritedGlobalVarDeclarationOwn = Object.hasOwn(globalThis, "__gocciaDeletedInheritedGlobalVarDeclaration");
-const __gocciaDeletedInheritedGlobalVarDeclarationValue = globalThis.__gocciaDeletedInheritedGlobalVarDeclaration;
-delete globalThis.__gocciaDeletedInheritedGlobalVarDeclaration;
-Object.setPrototypeOf(globalThis, __gocciaDeletedOriginalGlobalPrototypeForVar);
+let __gocciaDeletedInheritedGlobalVarDeclarationOwn;
+let __gocciaDeletedInheritedGlobalVarDeclarationValue;
+try {
+  const __gocciaDeletedInheritedGlobalVarPrototype = Object.create(__gocciaDeletedOriginalGlobalPrototypeForVar);
+  __gocciaDeletedInheritedGlobalVarPrototype.__gocciaDeletedInheritedGlobalVarDeclaration = 99;
+  Object.setPrototypeOf(globalThis, __gocciaDeletedInheritedGlobalVarPrototype);
+  var __gocciaDeletedInheritedGlobalVarDeclaration;
+  __gocciaDeletedInheritedGlobalVarDeclarationOwn = Object.hasOwn(globalThis, "__gocciaDeletedInheritedGlobalVarDeclaration");
+  __gocciaDeletedInheritedGlobalVarDeclarationValue = globalThis.__gocciaDeletedInheritedGlobalVarDeclaration;
+  delete globalThis.__gocciaDeletedInheritedGlobalVarDeclaration;
+} finally {
+  Object.setPrototypeOf(globalThis, __gocciaDeletedOriginalGlobalPrototypeForVar);
+}
 
 let __gocciaHoistedGlobalVarReadSucceeded = false;
 let __gocciaHoistedGlobalVarInitialValue = "not-read";
