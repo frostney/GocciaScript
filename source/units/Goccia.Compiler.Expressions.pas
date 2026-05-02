@@ -197,10 +197,11 @@ var
   MsgIdx: UInt16;
 begin
   MsgIdx := ACtx.Template.AddConstantString('Assignment to constant variable.');
-  if MsgIdx > High(UInt8) then
-    raise Exception.Create('Constant pool overflow: error message index exceeds 255');
-  EmitInstruction(ACtx, EncodeABC(OP_THROW_TYPE_ERROR_CONST, 0, 0,
-    UInt8(MsgIdx)));
+  if MsgIdx <= High(UInt8) then
+    EmitInstruction(ACtx, EncodeABC(OP_THROW_TYPE_ERROR_CONST, 0, 0,
+      UInt8(MsgIdx)))
+  else
+    EmitInstruction(ACtx, EncodeABx(OP_THROW_TYPE_ERROR_CONST_LONG, 0, MsgIdx));
 end;
 
 procedure CompileYield(const ACtx: TGocciaCompilationContext;
@@ -2746,7 +2747,6 @@ procedure CompileIncrement(const ACtx: TGocciaCompilationContext;
 var
   LocalIdx, UpvalIdx: Integer;
   Slot, RegOne, RegResult: UInt8;
-  MsgIdx: UInt16;
   Op: TGocciaOpCode;
   Ident: TGocciaIdentifierExpression;
   MemberExpr: TGocciaMemberExpression;
@@ -2779,11 +2779,7 @@ begin
   begin
     if ACtx.Scope.GetLocal(LocalIdx).IsConst then
     begin
-      MsgIdx := ACtx.Template.AddConstantString(
-        'Assignment to constant variable.');
-      if MsgIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow: error message index exceeds 255');
-      EmitInstruction(ACtx, EncodeABC(OP_THROW_TYPE_ERROR_CONST, 0, 0, UInt8(MsgIdx)));
+      EmitConstAssignmentError(ACtx);
       Exit;
     end;
     if ACtx.Scope.GetLocal(LocalIdx).IsGlobalBacked then
@@ -2823,11 +2819,7 @@ begin
   begin
     if ACtx.Scope.GetUpvalue(UpvalIdx).IsConst then
     begin
-      MsgIdx := ACtx.Template.AddConstantString(
-        'Assignment to constant variable.');
-      if MsgIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow: error message index exceeds 255');
-      EmitInstruction(ACtx, EncodeABC(OP_THROW_TYPE_ERROR_CONST, 0, 0, UInt8(MsgIdx)));
+      EmitConstAssignmentError(ACtx);
       Exit;
     end;
     RegResult := ACtx.Scope.AllocateRegister;

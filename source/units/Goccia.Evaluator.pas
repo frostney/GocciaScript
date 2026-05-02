@@ -2928,10 +2928,74 @@ var
   CaseClause: TGocciaCaseClause;
   CaseTest: TGocciaValue;
   CF: TGocciaControlFlow;
-  I, J: Integer;
+  I: Integer;
   Matched: Boolean;
   DefaultIndex: Integer;
   Done: Boolean;
+
+  function ConsequentNeedsChildScope(
+    const AConsequent: TObjectList<TGocciaStatement>): Boolean;
+  var
+    K: Integer;
+    VarDecl: TGocciaVariableDeclaration;
+  begin
+    Result := False;
+    for K := 0 to AConsequent.Count - 1 do
+    begin
+      if AConsequent[K] is TGocciaVariableDeclaration then
+      begin
+        VarDecl := TGocciaVariableDeclaration(AConsequent[K]);
+        if VarDecl.IsFunctionDeclaration or (not VarDecl.IsVar) then
+          Exit(True);
+      end
+      else if AConsequent[K] is TGocciaExportVariableDeclaration then
+      begin
+        VarDecl := TGocciaExportVariableDeclaration(AConsequent[K]).Declaration;
+        if VarDecl.IsFunctionDeclaration or (not VarDecl.IsVar) then
+          Exit(True);
+      end
+      else if ((AConsequent[K] is TGocciaDestructuringDeclaration) and
+              (not TGocciaDestructuringDeclaration(AConsequent[K]).IsVar)) or
+              (AConsequent[K] is TGocciaClassDeclaration) or
+              (AConsequent[K] is TGocciaEnumDeclaration) or
+              (AConsequent[K] is TGocciaExportEnumDeclaration) or
+              (AConsequent[K] is TGocciaUsingDeclaration) then
+        Exit(True);
+    end;
+  end;
+
+  function EvaluateCaseConsequent(
+    const AConsequent: TObjectList<TGocciaStatement>): TGocciaControlFlow;
+  var
+    K: Integer;
+    CaseBlockContext: TGocciaEvaluationContext;
+    ConsequentNodes: TObjectList<TGocciaASTNode>;
+    NeedsChildScope: Boolean;
+  begin
+    NeedsChildScope := ConsequentNeedsChildScope(AConsequent);
+    CaseBlockContext := AContext;
+    if NeedsChildScope then
+      CaseBlockContext.Scope := AContext.Scope.CreateChild(skBlock,
+        'SwitchCaseScope')
+    else
+      CaseBlockContext.Scope := AContext.Scope;
+
+    ConsequentNodes := TObjectList<TGocciaASTNode>.Create(False);
+    try
+      for K := 0 to AConsequent.Count - 1 do
+        ConsequentNodes.Add(AConsequent[K]);
+      HoistFunctionDeclarations(AConsequent, CaseBlockContext,
+        NeedsChildScope);
+      Result := EvaluateStatements(ConsequentNodes, CaseBlockContext);
+      if (Result.Kind = cfkNormal) and (Result.Value = nil) then
+        Result := TGocciaControlFlow.Normal(
+          TGocciaUndefinedLiteralValue.UndefinedValue);
+    finally
+      ConsequentNodes.Free;
+      if NeedsChildScope then
+        CaseBlockContext.Scope.Free;
+    end;
+  end;
 begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
   Discriminant := EvaluateExpression(ASwitchStatement.Discriminant, AContext);
@@ -2966,13 +3030,16 @@ begin
 
     if Matched then
     begin
-      for J := 0 to CaseClause.Consequent.Count - 1 do
+      CF := EvaluateCaseConsequent(CaseClause.Consequent);
+      if CF.Kind = cfkBreak then
+        Done := True
+      else if CF.Kind in [cfkReturn, cfkContinue] then
       begin
-        CF := EvaluateStatement(CaseClause.Consequent[J], AContext);
-        if CF.Kind = cfkBreak then begin Done := True; Break; end;
-        if CF.Kind in [cfkReturn, cfkContinue] then begin Result := CF; Exit; end;
         Result := CF;
-      end;
+        Exit;
+      end
+      else
+        Result := CF;
       if Done then Break;
     end;
   end;
@@ -2986,13 +3053,16 @@ begin
     for I := DefaultIndex to ASwitchStatement.Cases.Count - 1 do
     begin
       CaseClause := ASwitchStatement.Cases[I];
-      for J := 0 to CaseClause.Consequent.Count - 1 do
+      CF := EvaluateCaseConsequent(CaseClause.Consequent);
+      if CF.Kind = cfkBreak then
+        Done := True
+      else if CF.Kind in [cfkReturn, cfkContinue] then
       begin
-        CF := EvaluateStatement(CaseClause.Consequent[J], AContext);
-        if CF.Kind = cfkBreak then begin Done := True; Break; end;
-        if CF.Kind in [cfkReturn, cfkContinue] then begin Result := CF; Exit; end;
         Result := CF;
-      end;
+        Exit;
+      end
+      else
+        Result := CF;
       if Done then Break;
     end;
   end;

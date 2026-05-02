@@ -529,7 +529,7 @@ begin
     gttTrue, gttFalse, gttNull, gttThis, gttSuper, gttNew, gttFunction,
     gttClass, gttImport, gttLeftParen, gttLeftBracket, gttLeftBrace,
     gttNot, gttMinus, gttPlus, gttIncrement, gttDecrement, gttTypeof,
-    gttVoid, gttBitwiseNot, gttDelete
+    gttVoid, gttBitwiseNot, gttDelete, gttHash
   ];
 end;
 

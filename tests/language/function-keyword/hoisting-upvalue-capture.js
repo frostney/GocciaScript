@@ -48,3 +48,54 @@ test("hoisted function captures enum declaration", () => {
   enum Color { Red = 0, Green = 1, Blue = 2 }
   expect(inner()).toBe(0);
 });
+
+test("hoisted function sees destructuring TDZ before initialization", () => {
+  {
+    function inner() { return value; }
+    expect(() => inner()).toThrow(ReferenceError);
+    const { value } = { value: 42 };
+    expect(inner()).toBe(42);
+  }
+});
+
+test("hoisted function sees class TDZ before initialization", () => {
+  {
+    function inner() { return new MyClass().value; }
+    expect(() => inner()).toThrow(ReferenceError);
+    class MyClass {
+      constructor() {
+        this.value = 42;
+      }
+    }
+    expect(inner()).toBe(42);
+  }
+});
+
+test("hoisted function sees enum TDZ before initialization", () => {
+  {
+    function inner() { return Color.Red; }
+    expect(() => inner()).toThrow(ReferenceError);
+    enum Color { Red = 0, Green = 1, Blue = 2 }
+    expect(inner()).toBe(0);
+  }
+});
+
+test("switch case hoists function declarations into the case scope", () => {
+  let value;
+
+  switch (1) {
+    case 1:
+      class CaseClass {
+        constructor() {
+          this.value = 42;
+        }
+      }
+      value = read();
+      function read() {
+        return new CaseClass().value;
+      }
+      break;
+  }
+
+  expect(value).toBe(42);
+});

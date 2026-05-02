@@ -757,10 +757,51 @@ begin
   end;
 end;
 
+procedure PredeclareBlockPatternLocals(const ACtx: TGocciaCompilationContext;
+  const APattern: TGocciaDestructuringPattern; const AIsConst: Boolean);
+var
+  I, LocalIdx: Integer;
+  Names: TStringList;
+  Slot: UInt8;
+begin
+  Names := TStringList.Create;
+  Names.CaseSensitive := True;
+  try
+    CollectPatternBindingNames(APattern, Names, True);
+    for I := 0 to Names.Count - 1 do
+    begin
+      LocalIdx := ACtx.Scope.ResolveLocal(Names[I]);
+      if (LocalIdx < 0) or
+         (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) then
+      begin
+        Slot := ACtx.Scope.DeclareLocal(Names[I], AIsConst);
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+      end;
+    end;
+  finally
+    Names.Free;
+  end;
+end;
+
+procedure PredeclareBlockNamedLexicalLocal(
+  const ACtx: TGocciaCompilationContext; const AName: string;
+  const AIsConst: Boolean);
+var
+  LocalIdx: Integer;
+  Slot: UInt8;
+begin
+  LocalIdx := ACtx.Scope.ResolveLocal(AName);
+  if (LocalIdx < 0) or
+     (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) then
+  begin
+    Slot := ACtx.Scope.DeclareLocal(AName, AIsConst);
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+  end;
+end;
+
 procedure PredeclareBlockLexicalLocals(const ANode: TGocciaASTNode;
   const ACtx: TGocciaCompilationContext);
 var
-  LocalIdx: Integer;
   VarDecl: TGocciaVariableDeclaration;
 begin
   if ANode is TGocciaVariableDeclaration then
@@ -781,30 +822,18 @@ begin
   end
   else if (ANode is TGocciaDestructuringDeclaration) and
           not TGocciaDestructuringDeclaration(ANode).IsVar then
-    CollectDestructuringBindings(
-      TGocciaDestructuringDeclaration(ANode).Pattern, ACtx.Scope,
+    PredeclareBlockPatternLocals(ACtx,
+      TGocciaDestructuringDeclaration(ANode).Pattern,
       TGocciaDestructuringDeclaration(ANode).IsConst)
   else if ANode is TGocciaClassDeclaration then
-  begin
-    LocalIdx := ACtx.Scope.ResolveLocal(TGocciaClassDeclaration(ANode).ClassDefinition.Name);
-    if (LocalIdx < 0) or
-       (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) then
-      ACtx.Scope.DeclareLocal(TGocciaClassDeclaration(ANode).ClassDefinition.Name, True);
-  end
+    PredeclareBlockNamedLexicalLocal(ACtx,
+      TGocciaClassDeclaration(ANode).ClassDefinition.Name, True)
   else if ANode is TGocciaEnumDeclaration then
-  begin
-    LocalIdx := ACtx.Scope.ResolveLocal(TGocciaEnumDeclaration(ANode).Name);
-    if (LocalIdx < 0) or
-       (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) then
-      ACtx.Scope.DeclareLocal(TGocciaEnumDeclaration(ANode).Name, False);
-  end
+    PredeclareBlockNamedLexicalLocal(ACtx,
+      TGocciaEnumDeclaration(ANode).Name, False)
   else if ANode is TGocciaExportEnumDeclaration then
-  begin
-    LocalIdx := ACtx.Scope.ResolveLocal(TGocciaExportEnumDeclaration(ANode).Declaration.Name);
-    if (LocalIdx < 0) or
-       (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) then
-      ACtx.Scope.DeclareLocal(TGocciaExportEnumDeclaration(ANode).Declaration.Name, False);
-  end;
+    PredeclareBlockNamedLexicalLocal(ACtx,
+      TGocciaExportEnumDeclaration(ANode).Declaration.Name, False);
 end;
 
 procedure EmitPendingEntryCleanup(const ACtx: TGocciaCompilationContext;
@@ -1747,6 +1776,7 @@ var
   Reg: UInt8;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
+  HasFunctionDecl: Boolean;
 begin
   DiscReg := ACtx.Scope.AllocateRegister;
   TestReg := ACtx.Scope.AllocateRegister;
@@ -1806,10 +1836,29 @@ begin
           PatchJumpTarget(ACtx, CaseBodyJumps[I]);
       end;
 
+      HasFunctionDecl := False;
+      for J := 0 to CaseClause.Consequent.Count - 1 do
+        if GetBlockFunctionDeclaration(CaseClause.Consequent[J]) <> nil then
+        begin
+          HasFunctionDecl := True;
+          Break;
+        end;
+
       ACtx.Scope.BeginScope;
+      if HasFunctionDecl then
+      begin
+        for J := 0 to CaseClause.Consequent.Count - 1 do
+          PredeclareBlockLexicalLocals(CaseClause.Consequent[J], ACtx);
+        for J := 0 to CaseClause.Consequent.Count - 1 do
+          if GetBlockFunctionDeclaration(CaseClause.Consequent[J]) <> nil then
+            ACtx.CompileStatement(CaseClause.Consequent[J]);
+      end;
+
       for J := 0 to CaseClause.Consequent.Count - 1 do
       begin
         Node := CaseClause.Consequent[J];
+        if GetBlockFunctionDeclaration(Node) <> nil then
+          Continue;
         if Node is TGocciaStatement then
           ACtx.CompileStatement(TGocciaStatement(Node))
         else if Node is TGocciaExpression then

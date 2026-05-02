@@ -8871,6 +8871,10 @@ begin
       OP_THROW_TYPE_ERROR_CONST:
         ThrowTypeError(Template.GetConstantUnchecked(C).StringValue);
 
+      OP_THROW_TYPE_ERROR_CONST_LONG:
+        ThrowTypeError(
+          Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue);
+
       OP_DEFINE_GLOBAL_CONST:
       begin
         GlobalName := Template.GetConstantUnchecked(C).StringValue;

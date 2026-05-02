@@ -247,16 +247,22 @@ globalThis.onTestFinished = undefined;
 globalThis.runTests = undefined;
 globalThis.mock = undefined;
 globalThis.spyOn = undefined;"""
+    capture_private_harness_globals = """const __gocciaTest262RegisterDescribe = globalThis.describe;
+const __gocciaTest262RegisterTest = globalThis.test;
+const __gocciaTest262RunTests = globalThis.runTests;"""
+    restore_internal_harness_globals = """globalThis.runTests = __gocciaTest262RunTests;"""
 
     if preserve_script_scope:
         if is_async:
             return f"""{harness_source}
 
+{capture_private_harness_globals}
 {clear_public_harness_globals}
 {body}
+{restore_internal_harness_globals}
 
-__gocciaTest262Describe("test262: {tid}", () => {{
-  __gocciaTest262Test("{desc}", async () => {{
+__gocciaTest262RegisterDescribe("test262: {tid}", () => {{
+  __gocciaTest262RegisterTest("{desc}", async () => {{
     await __donePromise;
   }});
 }});
@@ -264,17 +270,20 @@ __gocciaTest262Describe("test262: {tid}", () => {{
 
         return f"""{harness_source}
 
+{capture_private_harness_globals}
 {clear_public_harness_globals}
 {body}
+{restore_internal_harness_globals}
 
-__gocciaTest262Describe("test262: {tid}", () => {{
-  __gocciaTest262Test("{desc}", () => {{}});
+__gocciaTest262RegisterDescribe("test262: {tid}", () => {{
+  __gocciaTest262RegisterTest("{desc}", () => {{}});
 }});
 """
 
     if is_async:
         return f"""{harness_source}
 
+{capture_private_harness_globals}
 {clear_public_harness_globals}
 let __gocciaTest262Failed = false;
 let __gocciaTest262Failure = undefined;
@@ -284,9 +293,10 @@ try {{
   __gocciaTest262Failed = true;
   __gocciaTest262Failure = error;
 }}
+{restore_internal_harness_globals}
 
-__gocciaTest262Describe("test262: {tid}", () => {{
-  __gocciaTest262Test("{desc}", async () => {{
+__gocciaTest262RegisterDescribe("test262: {tid}", () => {{
+  __gocciaTest262RegisterTest("{desc}", async () => {{
     if (__gocciaTest262Failed) {{
       throw __gocciaTest262Failure;
     }}
@@ -297,6 +307,7 @@ __gocciaTest262Describe("test262: {tid}", () => {{
 
     return f"""{harness_source}
 
+{capture_private_harness_globals}
 {clear_public_harness_globals}
 let __gocciaTest262Failed = false;
 let __gocciaTest262Failure = undefined;
@@ -306,9 +317,10 @@ try {{
   __gocciaTest262Failed = true;
   __gocciaTest262Failure = error;
 }}
+{restore_internal_harness_globals}
 
-__gocciaTest262Describe("test262: {tid}", () => {{
-  __gocciaTest262Test("{desc}", () => {{
+__gocciaTest262RegisterDescribe("test262: {tid}", () => {{
+  __gocciaTest262RegisterTest("{desc}", () => {{
     if (__gocciaTest262Failed) {{
       throw __gocciaTest262Failure;
     }}
