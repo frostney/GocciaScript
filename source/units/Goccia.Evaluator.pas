@@ -741,11 +741,36 @@ begin
   end;
 end;
 
+function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
+begin
+  Result := (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue);
+end;
+
+function ClassRequiresObjectConstructorReturn(
+  const AClassValue: TGocciaClassValue): Boolean;
+begin
+  Result := Assigned(AClassValue) and
+    (Assigned(AClassValue.SuperClass) or
+     Assigned(AClassValue.NativeSuperConstructor));
+end;
+
+procedure ValidateClassConstructorReturn(
+  const AClassValue: TGocciaClassValue; const AValue: TGocciaValue);
+begin
+  if ClassRequiresObjectConstructorReturn(AClassValue) and
+     not (AValue is TGocciaObjectValue) and
+     not IsUndefinedConstructedValue(AValue) then
+    ThrowTypeError(
+      'Derived constructor returned non-object',
+      SSuggestNotConstructorType);
+end;
+
 function InvokeConstructableWithReceiver(const AConstructor: TGocciaValue;
   const AArguments: TGocciaArgumentsCollection;
   const AReceiver: TGocciaValue): TGocciaValue;
 var
   BoundFunction: TGocciaBoundFunctionValue;
+  ClassConstructor: TGocciaClassValue;
   CombinedArgs: TGocciaArgumentsCollection;
   SuperResult: TGocciaValue;
   I: Integer;
@@ -782,9 +807,13 @@ begin
   end
   else if AConstructor is TGocciaClassValue then
   begin
-    if Assigned(TGocciaClassValue(AConstructor).ConstructorMethod) then
-      SuperResult := TGocciaClassValue(AConstructor).ConstructorMethod.Call(
-        AArguments, AReceiver)
+    ClassConstructor := TGocciaClassValue(AConstructor);
+    if Assigned(ClassConstructor.ConstructorMethod) then
+    begin
+      SuperResult := ClassConstructor.ConstructorMethod.Call(
+        AArguments, AReceiver);
+      ValidateClassConstructorReturn(ClassConstructor, SuperResult);
+    end
     else
       SuperResult := AReceiver;
   end
@@ -2894,29 +2923,57 @@ begin
   end;
 end;
 
-procedure InitializePublicInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
+procedure StampRawPrivateInstanceBrand(const AReceiver: TGocciaObjectValue;
+  const AAccessClass: TGocciaClassValue); forward;
+
+procedure InitializeRawPrivateInstanceProperty(
+  const AReceiver: TGocciaObjectValue; const APrivateName: string;
+  const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue); forward;
+
+procedure InitializeObjectInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
   Entry: TGocciaExpressionMap.TKeyValuePair;
   I: Integer;
   FOEntry: TGocciaClassFieldOrderEntry;
   Expr: TGocciaExpression;
+  SuperInitContext: TGocciaEvaluationContext;
+  SuperInitScope: TGocciaScope;
 begin
   if Assigned(AClassValue.SuperClass) then
-    InitializePublicInstanceProperties(AInstance, AClassValue.SuperClass, AContext);
+  begin
+    SuperInitContext := AContext;
+    SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue.SuperClass);
+    SuperInitScope.ThisValue := AInstance;
+    SuperInitContext.Scope := SuperInitScope;
+    InitializeObjectInstanceProperties(AInstance, AClassValue.SuperClass, SuperInitContext);
+  end;
+
+  if AClassValue.HasPrivateInstanceElements then
+    StampRawPrivateInstanceBrand(AInstance, AClassValue);
 
   if AClassValue.FieldOrderCount > 0 then
   begin
     for I := 0 to AClassValue.FieldOrderCount - 1 do
     begin
       FOEntry := AClassValue.FieldOrderEntry(I);
-      if FOEntry.IsPrivate then
-        Continue;
       Expr := nil;
-      if AClassValue.InstancePropertyDefs.TryGetValue(FOEntry.Name, Expr) and Assigned(Expr) then
+      if FOEntry.IsPrivate then
       begin
-        PropertyValue := EvaluateExpression(Expr, AContext);
-        AInstance.AssignProperty(FOEntry.Name, PropertyValue);
+        if AClassValue.PrivateInstancePropertyDefs.TryGetValue(FOEntry.Name, Expr) and Assigned(Expr) then
+        begin
+          PropertyValue := EvaluateExpression(Expr, AContext);
+          InitializeRawPrivateInstanceProperty(AInstance, FOEntry.Name,
+            PropertyValue, AClassValue);
+        end;
+      end
+      else
+      begin
+        if AClassValue.InstancePropertyDefs.TryGetValue(FOEntry.Name, Expr) and Assigned(Expr) then
+        begin
+          PropertyValue := EvaluateExpression(Expr, AContext);
+          AInstance.AssignProperty(FOEntry.Name, PropertyValue);
+        end;
       end;
     end;
   end
@@ -2928,6 +2985,7 @@ begin
       PropertyValue := EvaluateExpression(Entry.Value, AContext);
       AInstance.AssignProperty(Entry.Key, PropertyValue);
     end;
+    InitializePrivateInstanceProperties(AInstance, AClassValue, AContext);
   end;
 end;
 
@@ -3880,10 +3938,49 @@ begin
     ThrowPrivateBrandError(APrivateName);
 end;
 
+function RawPrivateBrandKey(const AAccessClass: TGocciaClassValue): string;
+begin
+  Result := '#brand:' + AAccessClass.PrivateBrandToken;
+end;
+
 function RawPrivateInstanceKey(const AAccessClass: TGocciaClassValue;
   const APrivateName: string): string;
 begin
-  Result := '#' + AAccessClass.Name + ':' + APrivateName;
+  Result := '#slot:' + AAccessClass.PrivateBrandToken + ':' + APrivateName;
+end;
+
+function HasRawPrivateInstanceBrand(const AReceiver: TGocciaObjectValue;
+  const AAccessClass: TGocciaClassValue): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Result := False;
+  if not Assigned(AAccessClass) then
+    Exit;
+  Descriptor := AReceiver.GetOwnPropertyDescriptor(
+    RawPrivateBrandKey(AAccessClass));
+  Result := Descriptor is TGocciaPropertyDescriptorData;
+end;
+
+procedure EnsureRawPrivateInstanceBrand(const AReceiver: TGocciaObjectValue;
+  const APrivateName: string; const AAccessClass: TGocciaClassValue);
+begin
+  if (not Assigned(AAccessClass)) or
+     not HasRawPrivateInstanceBrand(AReceiver, AAccessClass) then
+    ThrowPrivateBrandError(APrivateName);
+end;
+
+procedure StampRawPrivateInstanceBrand(const AReceiver: TGocciaObjectValue;
+  const AAccessClass: TGocciaClassValue);
+begin
+  if not Assigned(AAccessClass) then
+    Exit;
+  if HasRawPrivateInstanceBrand(AReceiver, AAccessClass) then
+    Exit;
+  AReceiver.DefineProperty(
+    RawPrivateBrandKey(AAccessClass),
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaBooleanLiteralValue.TrueValue, []));
 end;
 
 function TryGetRawPrivateInstanceProperty(const AReceiver: TGocciaObjectValue;
@@ -3894,8 +3991,7 @@ var
 begin
   Result := False;
   AValue := nil;
-  if not Assigned(AAccessClass) then
-    Exit;
+  EnsureRawPrivateInstanceBrand(AReceiver, APrivateName, AAccessClass);
   Descriptor := AReceiver.GetOwnPropertyDescriptor(
     RawPrivateInstanceKey(AAccessClass, APrivateName));
   if Descriptor is TGocciaPropertyDescriptorData then
@@ -3905,12 +4001,23 @@ begin
   end;
 end;
 
+procedure InitializeRawPrivateInstanceProperty(
+  const AReceiver: TGocciaObjectValue; const APrivateName: string;
+  const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue);
+begin
+  if not Assigned(AAccessClass) then
+    ThrowPrivateBrandError(APrivateName);
+  StampRawPrivateInstanceBrand(AReceiver, AAccessClass);
+  AReceiver.DefineProperty(
+    RawPrivateInstanceKey(AAccessClass, APrivateName),
+    TGocciaPropertyDescriptorData.Create(AValue, [pfWritable, pfConfigurable]));
+end;
+
 procedure SetRawPrivateInstanceProperty(const AReceiver: TGocciaObjectValue;
   const APrivateName: string; const AValue: TGocciaValue;
   const AAccessClass: TGocciaClassValue);
 begin
-  if not Assigned(AAccessClass) then
-    ThrowPrivateBrandError(APrivateName);
+  EnsureRawPrivateInstanceBrand(AReceiver, APrivateName, AAccessClass);
   AReceiver.DefineProperty(
     RawPrivateInstanceKey(AAccessClass, APrivateName),
     TGocciaPropertyDescriptorData.Create(AValue, [pfWritable, pfConfigurable]));
@@ -3966,6 +4073,8 @@ begin
   AccessClass := ResolveLexicalOwningClass(AContext);
   if not Assigned(AccessClass) then
     ThrowPrivateBrandError(APrivateName);
+
+  EnsureRawPrivateInstanceBrand(AReceiver, APrivateName, AccessClass);
 
   if AccessClass.HasPrivateGetter(APrivateName) then
   begin
@@ -4077,6 +4186,8 @@ begin
   AccessClass := ResolveLexicalOwningClass(AContext);
   if not Assigned(AccessClass) then
     ThrowPrivateBrandError(APrivateName);
+
+  EnsureRawPrivateInstanceBrand(AReceiver, APrivateName, AccessClass);
 
   if AccessClass.HasPrivateSetter(APrivateName) then
   begin
@@ -4379,7 +4490,7 @@ begin
       TGocciaInstanceValue(AInstance).SetPrivateProperty(
         Entry.Key, PropertyValue, AClassValue)
     else
-      SetRawPrivateInstanceProperty(
+      InitializeRawPrivateInstanceProperty(
         AInstance, Entry.Key, PropertyValue, AClassValue);
   end;
 end;
@@ -4434,14 +4545,9 @@ var
       Result := nil;
     end;
   end;
-  function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
-  begin
-    Result := (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue);
-  end;
   function HasDerivedConstructorReturnRestriction: Boolean;
   begin
-    Result := Assigned(AClassValue.SuperClass) or
-      Assigned(AClassValue.NativeSuperConstructor);
+    Result := ClassRequiresObjectConstructorReturn(AClassValue);
   end;
   procedure SetFinalInstance(const AInstance: TGocciaObjectValue);
   begin
@@ -4522,25 +4628,7 @@ var
       end;
     end
     else
-    begin
-      InitializePublicInstanceProperties(Instance, AClassValue, InitContext);
-
-      WalkClass := AClassValue.SuperClass;
-      while Assigned(WalkClass) do
-      begin
-        CheckExecutionTimeout;
-        IncrementInstructionCounter;
-        CheckInstructionLimit;
-        SuperInitContext := AContext;
-        SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, WalkClass);
-        SuperInitScope.ThisValue := Instance;
-        SuperInitContext.Scope := SuperInitScope;
-        InitializePrivateInstanceProperties(Instance, WalkClass, SuperInitContext);
-        WalkClass := WalkClass.SuperClass;
-      end;
-
-      InitializePrivateInstanceProperties(Instance, AClassValue, InitContext);
-    end;
+      InitializeObjectInstanceProperties(Instance, AClassValue, InitContext);
 
     AClassValue.RunMethodInitializers(Instance);
     AClassValue.RunFieldInitializers(Instance);
@@ -4596,6 +4684,7 @@ begin
     else if Assigned(AClassValue.SuperClass) and Assigned(AClassValue.SuperClass.ConstructorMethod) then
     begin
       ConstructedValue := AClassValue.SuperClass.ConstructorMethod.Call(AArguments, Instance);
+      ValidateClassConstructorReturn(AClassValue.SuperClass, ConstructedValue);
       ApplyReplacementResult(ConstructedValue);
     end
     else if Assigned(AClassValue.NativeSuperConstructor) and

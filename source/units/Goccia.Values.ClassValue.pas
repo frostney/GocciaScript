@@ -51,6 +51,7 @@ type
     FStaticSetters: TOrderedStringMap<TGocciaFunctionBase>;
     FStaticSymbolDescriptors: TStaticSymbolDescriptorMap;
     FNativeSuperConstructor: TGocciaObjectValue;
+    FPrivateBrandToken: string;
     FMethodInitializers: array of TGocciaValue;
     FFieldInitializers: array of TGocciaValue;
     FDecoratorFieldInitializers: array of record
@@ -90,6 +91,7 @@ type
     function HasOwnPrivateGetter(const AName: string): Boolean;
     function HasOwnPrivateSetter(const AName: string): Boolean;
     function HasOwnPrivateStaticProperty(const AName: string): Boolean;
+    function HasPrivateInstanceElements: Boolean;
     function GetOwnPrivatePropertyGetter(
       const AName: string): TGocciaFunctionBase;
     function GetOwnPrivatePropertySetter(
@@ -128,6 +130,7 @@ type
     function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue; override;
 
     property Name: string read FName;
+    property PrivateBrandToken: string read FPrivateBrandToken;
     property SuperClass: TGocciaClassValue read FSuperClass write FSuperClass;
     property NativeSuperConstructor: TGocciaObjectValue read FNativeSuperConstructor write FNativeSuperConstructor;
     property Prototype: TGocciaObjectValue read FClassPrototype;
@@ -345,6 +348,7 @@ constructor TGocciaClassValue.Create(const AName: string; const ASuperClass: TGo
 begin
   inherited Create;
   FName := AName;
+  FPrivateBrandToken := IntToHex(PtrUInt(Self), SizeOf(Pointer) * 2);
   FSuperClass := ASuperClass;
   // Set [[Prototype]]: superclass for derived, Function.prototype for base classes
   if Assigned(FSuperClass) then
@@ -637,6 +641,14 @@ function TGocciaClassValue.HasOwnPrivateStaticProperty(
   const AName: string): Boolean;
 begin
   Result := FPrivateStaticProperties.ContainsKey(AName);
+end;
+
+function TGocciaClassValue.HasPrivateInstanceElements: Boolean;
+begin
+  Result := (FPrivateInstancePropertyDefs.Count > 0) or
+    (FPrivateMethods.Count > 0) or
+    (FPrivateGetters.Count > 0) or
+    (FPrivateSetters.Count > 0);
 end;
 
 function TGocciaClassValue.GetOwnPrivatePropertyGetter(

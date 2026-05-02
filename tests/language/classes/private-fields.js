@@ -292,3 +292,133 @@ test("private field brand checks reject non-instances", () => {
   expect(TestClass.isInstance(null)).toBe(false);
   expect(TestClass.isInstance(undefined)).toBe(false);
 });
+
+test("private fields on replacement receivers preserve initialization order", () => {
+  const order = [];
+  let derivedPrototype;
+
+  class Base {
+    constructor() {
+      order.length = 0;
+      return Object.create(derivedPrototype);
+    }
+  }
+
+  class Derived extends Base {
+    a = order.push("a");
+    #b = order.push("b");
+    c = order.push("c");
+
+    readOrder() {
+      return order.join(",");
+    }
+  }
+
+  derivedPrototype = Derived.prototype;
+
+  const instance = new Derived();
+  expect(instance.readOrder()).toBe("a,b,c");
+});
+
+test("private brand checks reject unbranded replacement receivers", () => {
+  let derivedPrototype;
+
+  class Base {
+    constructor() {
+      return Object.create(derivedPrototype);
+    }
+  }
+
+  class Derived extends Base {
+    #value = 1;
+
+    static writeTo(obj, value) {
+      obj.#value = value;
+      return obj.#value;
+    }
+
+    static readFrom(obj) {
+      return obj.#value;
+    }
+
+    read() {
+      return this.#value;
+    }
+
+    write(value) {
+      this.#value = value;
+      return this.#value;
+    }
+  }
+
+  derivedPrototype = Derived.prototype;
+
+  const instance = new Derived();
+  expect(instance.read()).toBe(1);
+  expect(instance.write(2)).toBe(2);
+  expect(Derived.readFrom(instance)).toBe(2);
+  expect(Derived.writeTo(instance, 3)).toBe(3);
+  expect(() => Derived.readFrom({})).toThrow(TypeError);
+  expect(() => Derived.writeTo({})).toThrow(TypeError);
+});
+
+test("private fields on replacement receivers use distinct class brands", () => {
+  const First = (() => {
+    let derivedPrototype;
+
+    class Base {
+      constructor() {
+        return Object.create(derivedPrototype);
+      }
+    }
+
+    class SameName extends Base {
+      #value = "first";
+
+      read() {
+        return this.#value;
+      }
+
+      static readFrom(obj) {
+        return obj.#value;
+      }
+    }
+
+    derivedPrototype = SameName.prototype;
+    return SameName;
+  })();
+
+  const Second = (() => {
+    let derivedPrototype;
+
+    class Base {
+      constructor() {
+        return Object.create(derivedPrototype);
+      }
+    }
+
+    class SameName extends Base {
+      #value = "second";
+
+      read() {
+        return this.#value;
+      }
+
+      static readFrom(obj) {
+        return obj.#value;
+      }
+    }
+
+    derivedPrototype = SameName.prototype;
+    return SameName;
+  })();
+
+  const first = new First();
+  const second = new Second();
+
+  expect(first.read()).toBe("first");
+  expect(second.read()).toBe("second");
+  expect(First.readFrom(first)).toBe("first");
+  expect(Second.readFrom(second)).toBe("second");
+  expect(() => First.readFrom(second)).toThrow(TypeError);
+});

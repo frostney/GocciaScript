@@ -180,6 +180,21 @@ test("super() throws when a derived superclass constructor returns primitive", (
   expect(() => new Leaf()).toThrow(TypeError);
 });
 
+test("default constructor throws when a derived superclass constructor returns primitive", () => {
+  class Base {}
+
+  class Middle extends Base {
+    constructor() {
+      super();
+      return 7;
+    }
+  }
+
+  class Leaf extends Middle {}
+
+  expect(() => new Leaf()).toThrow(TypeError);
+});
+
 test("extends rejects non-constructable callable superclass", () => {
   const NotConstructor = () => {};
 
