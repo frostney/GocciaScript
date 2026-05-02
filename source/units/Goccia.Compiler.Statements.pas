@@ -937,8 +937,10 @@ begin
   else
   begin
     EmitPendingCleanup(ACtx);
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_RETURN, 0, 0, 0));
+    Reg := ACtx.Scope.AllocateRegister;
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, Reg, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_RETURN, Reg, 0, 0));
+    ACtx.Scope.FreeRegister;
   end;
 end;
 

@@ -224,6 +224,35 @@ test("super() replacement receives superclass initializers", () => {
   expect(leaf.readBase()).toBe("base");
 });
 
+test("implicit super preserves derived constructor receiver replacement", () => {
+  let leafPrototype;
+
+  class Base {
+    constructor() {
+      const replacement = Object.create(leafPrototype);
+      replacement.marker = "replacement";
+      return replacement;
+    }
+  }
+
+  class Middle extends Base {
+    constructor() {
+      super();
+    }
+  }
+
+  class Leaf extends Middle {
+    readMarker() {
+      return this.marker;
+    }
+  }
+
+  leafPrototype = Leaf.prototype;
+
+  const leaf = new Leaf();
+  expect(leaf.readMarker()).toBe("replacement");
+});
+
 test("super() returning this does not replay superclass initializers", () => {
   let initializersRun = 0;
 

@@ -5010,6 +5010,7 @@ function TGocciaVM.InvokeImplicitSuperInitialization(
   const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
   const AArguments: TGocciaArgumentsCollection): TGocciaValue;
 var
+  ConstructorThisValue: TGocciaValue;
   SuperResult: TGocciaValue;
   TargetInstance: TGocciaValue;
   function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
@@ -5031,6 +5032,15 @@ var
         'Derived constructor returned non-object',
         SSuggestNotConstructorType);
   end;
+  function SelectImplicitSuperResult(const AValue,
+    AConstructorThisValue: TGocciaValue): TGocciaValue;
+  begin
+    if AValue is TGocciaObjectValue then
+      Exit(AValue);
+    if AConstructorThisValue is TGocciaObjectValue then
+      Exit(AConstructorThisValue);
+    Result := AInstance;
+  end;
 begin
   Result := AInstance;
   if not Assigned(AClassValue) then
@@ -5044,6 +5054,12 @@ begin
       TGocciaVMClassValue(AClassValue).FConstructorValue,
       AArguments, AInstance);
     ValidateImplicitSuperResult(SuperResult);
+    if TGocciaVMClassValue(AClassValue).FConstructorValue is TGocciaBytecodeFunctionValue then
+      ConstructorThisValue := RegisterToValue(
+        TGocciaVMClassValue(AClassValue).FVM.FLastClosureThisValue)
+    else
+      ConstructorThisValue := nil;
+    SuperResult := SelectImplicitSuperResult(SuperResult, ConstructorThisValue);
     if SuperResult is TGocciaObjectValue then
     begin
       if SuperResult <> AInstance then
@@ -5101,6 +5117,7 @@ function TGocciaVM.InvokeImplicitSuperInitializationRegisters(
 var
   BoxedArgs: TGocciaArgumentsCollection;
   BytecodeConstructor: TGocciaBytecodeFunctionValue;
+  ConstructorThisValue: TGocciaValue;
   SuperResult: TGocciaValue;
   SuperResultRegister: TGocciaRegister;
   TargetInstance: TGocciaValue;
@@ -5138,6 +5155,15 @@ var
         'Derived constructor returned non-object',
         SSuggestNotConstructorType);
   end;
+  function SelectImplicitSuperResult(const AValue,
+    AConstructorThisValue: TGocciaValue): TGocciaValue;
+  begin
+    if AValue is TGocciaObjectValue then
+      Exit(AValue);
+    if AConstructorThisValue is TGocciaObjectValue then
+      Exit(AConstructorThisValue);
+    Result := AInstance;
+  end;
 begin
   Result := AInstance;
   if not Assigned(AClassValue) then
@@ -5158,7 +5184,11 @@ begin
         SuperResultRegister := TGocciaVMClassValue(AClassValue).FVM.ExecuteClosureRegisters(
           BytecodeConstructor.FClosure, RegisterObject(AInstance), AArguments);
         ValidateImplicitSuperRegister(SuperResultRegister);
+        ConstructorThisValue := RegisterToValue(
+          TGocciaVMClassValue(AClassValue).FVM.FLastClosureThisValue);
         SuperResult := RegisterToValue(SuperResultRegister);
+        SuperResult := SelectImplicitSuperResult(SuperResult,
+          ConstructorThisValue);
         if SuperResult is TGocciaObjectValue then
         begin
           if SuperResult <> AInstance then
@@ -5178,6 +5208,12 @@ begin
       ReleaseArguments(BoxedArgs);
     end;
     ValidateImplicitSuperResult(SuperResult);
+    if TGocciaVMClassValue(AClassValue).FConstructorValue is TGocciaBytecodeFunctionValue then
+      ConstructorThisValue := RegisterToValue(
+        TGocciaVMClassValue(AClassValue).FVM.FLastClosureThisValue)
+    else
+      ConstructorThisValue := nil;
+    SuperResult := SelectImplicitSuperResult(SuperResult, ConstructorThisValue);
     if SuperResult is TGocciaObjectValue then
     begin
       if SuperResult <> AInstance then

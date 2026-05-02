@@ -1213,6 +1213,7 @@ var
   ThisSlot: UInt8;
   MemberExpr: TGocciaMemberExpression;
   PropIdx: UInt16;
+  SuperConstructorFlag: UInt8;
   UseSpread: Boolean;
   NilJump, CallNilJump, EndJump: Integer;
 begin
@@ -1354,22 +1355,29 @@ begin
       begin
         KeyReg := ACtx.Scope.AllocateRegister;
         ACtx.CompileExpression(MemberExpr.PropertyExpression, KeyReg);
+        SuperConstructorFlag := 1;
       end
       else
       begin
         PropIdx := ACtx.Template.AddConstantString(MemberExpr.PropertyName);
         if PropIdx > High(UInt8) then
           raise Exception.Create('Constant pool overflow');
+        if MemberExpr.PropertyName = PROP_CONSTRUCTOR then
+          SuperConstructorFlag := 1
+        else
+          SuperConstructorFlag := 0;
       end;
       if SuperReg <> BaseReg + 1 then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, BaseReg + 1, SuperReg, 0));
       if MemberExpr.Computed then
       begin
-        EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET, BaseReg, 0, KeyReg));
+        EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET, BaseReg,
+          SuperConstructorFlag, KeyReg));
         ACtx.Scope.FreeRegister;
       end
       else
-        EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET_CONST, BaseReg, 0, UInt8(PropIdx)));
+        EmitInstruction(ACtx, EncodeABC(OP_SUPER_GET_CONST, BaseReg,
+          SuperConstructorFlag, UInt8(PropIdx)));
       ACtx.Scope.FreeRegister;
 
       if AExpr.Optional then
