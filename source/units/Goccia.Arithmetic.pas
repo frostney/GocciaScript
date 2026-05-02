@@ -298,6 +298,7 @@ function EvaluateModulo(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
   PrimLeft, PrimRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
+  RemainderValue: Double;
 begin
   ToPrimitiveOperands(ALeft, ARight, PrimLeft, PrimRight);
 
@@ -321,8 +322,12 @@ begin
   if RightNum.Value = 0 then
     Exit(TGocciaNumberLiteralValue.NaNValue);
 
-  Result := NumberValue(
-    LeftNum.Value - RightNum.Value * Trunc(LeftNum.Value / RightNum.Value));
+  RemainderValue := LeftNum.Value -
+    RightNum.Value * Trunc(LeftNum.Value / RightNum.Value);
+  if (RemainderValue = 0) and
+     ((LeftNum.Value < 0) or LeftNum.IsNegativeZero) then
+    Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
+  Result := NumberValue(RemainderValue);
 end;
 
 function EvaluateExponentiation(const ALeft, ARight: TGocciaValue): TGocciaValue;
@@ -686,43 +691,87 @@ begin
   Result := RELATION_EQUAL;
 end;
 
+function CompareBigIntAndString(const ABigInt: TGocciaBigIntValue;
+  const AString: TGocciaStringLiteralValue): Integer; inline;
+var
+  StringBigInt: TBigInteger;
+begin
+  if not TryStringToBigInt(AString.Value, StringBigInt) then
+    Exit(RELATION_UNORDERED);
+  Result := NormalizeRelation(ABigInt.Value.Compare(StringBigInt));
+end;
+
+function ToRelationalNumeric(const AValue: TGocciaValue): TGocciaValue; inline;
+begin
+  if AValue is TGocciaBigIntValue then
+    Exit(AValue);
+  if AValue is TGocciaSymbolValue then
+    ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
+  Result := AValue.ToNumberLiteral;
+end;
+
 function CompareRelationalValues(const ALeft, ARight: TGocciaValue): Integer; inline;
 var
+  PrimLeft, PrimRight: TGocciaValue;
+  NumericLeft, NumericRight: TGocciaValue;
   Cmp: Integer;
 begin
-  if (ALeft is TGocciaUndefinedLiteralValue) or
-     (ARight is TGocciaUndefinedLiteralValue) then
+  PrimLeft := ToPrimitive(ALeft, tphNumber);
+  PrimRight := ToPrimitive(ARight, tphNumber);
+
+  if (PrimLeft is TGocciaUndefinedLiteralValue) or
+     (PrimRight is TGocciaUndefinedLiteralValue) then
     Exit(RELATION_UNORDERED);
 
-  if (ALeft is TGocciaNullLiteralValue) and
-     (ARight is TGocciaNullLiteralValue) then
+  if (PrimLeft is TGocciaNullLiteralValue) and
+     (PrimRight is TGocciaNullLiteralValue) then
     Exit(RELATION_EQUAL);
 
-  if (ALeft is TGocciaStringLiteralValue) and
-     (ARight is TGocciaStringLiteralValue) then
-    Exit(CompareStringValues(TGocciaStringLiteralValue(ALeft).Value,
-      TGocciaStringLiteralValue(ARight).Value));
+  if (PrimLeft is TGocciaStringLiteralValue) and
+     (PrimRight is TGocciaStringLiteralValue) then
+    Exit(CompareStringValues(TGocciaStringLiteralValue(PrimLeft).Value,
+      TGocciaStringLiteralValue(PrimRight).Value));
 
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
-    Exit(NormalizeRelation(TGocciaBigIntValue(ALeft).Value.Compare(
-      TGocciaBigIntValue(ARight).Value)));
+  if (PrimLeft is TGocciaBigIntValue) and
+     (PrimRight is TGocciaStringLiteralValue) then
+    Exit(CompareBigIntAndString(TGocciaBigIntValue(PrimLeft),
+      TGocciaStringLiteralValue(PrimRight)));
 
-  if (ALeft is TGocciaBigIntValue) and
-     (ARight is TGocciaNumberLiteralValue) then
-    Exit(CompareBigIntAndNumber(TGocciaBigIntValue(ALeft),
-      TGocciaNumberLiteralValue(ARight)));
-
-  if (ALeft is TGocciaNumberLiteralValue) and
-     (ARight is TGocciaBigIntValue) then
+  if (PrimLeft is TGocciaStringLiteralValue) and
+     (PrimRight is TGocciaBigIntValue) then
   begin
-    Cmp := CompareBigIntAndNumber(TGocciaBigIntValue(ARight),
-      TGocciaNumberLiteralValue(ALeft));
+    Cmp := CompareBigIntAndString(TGocciaBigIntValue(PrimRight),
+      TGocciaStringLiteralValue(PrimLeft));
     if Cmp = RELATION_UNORDERED then
       Exit(RELATION_UNORDERED);
     Exit(-Cmp);
   end;
 
-  Result := CompareNumberValues(ALeft.ToNumberLiteral, ARight.ToNumberLiteral);
+  NumericLeft := ToRelationalNumeric(PrimLeft);
+  NumericRight := ToRelationalNumeric(PrimRight);
+
+  if (NumericLeft is TGocciaBigIntValue) and
+     (NumericRight is TGocciaBigIntValue) then
+    Exit(NormalizeRelation(TGocciaBigIntValue(NumericLeft).Value.Compare(
+      TGocciaBigIntValue(NumericRight).Value)));
+
+  if (NumericLeft is TGocciaBigIntValue) and
+     (NumericRight is TGocciaNumberLiteralValue) then
+    Exit(CompareBigIntAndNumber(TGocciaBigIntValue(NumericLeft),
+      TGocciaNumberLiteralValue(NumericRight)));
+
+  if (NumericLeft is TGocciaNumberLiteralValue) and
+     (NumericRight is TGocciaBigIntValue) then
+  begin
+    Cmp := CompareBigIntAndNumber(TGocciaBigIntValue(NumericRight),
+      TGocciaNumberLiteralValue(NumericLeft));
+    if Cmp = RELATION_UNORDERED then
+      Exit(RELATION_UNORDERED);
+    Exit(-Cmp);
+  end;
+
+  Result := CompareNumberValues(TGocciaNumberLiteralValue(NumericLeft),
+    TGocciaNumberLiteralValue(NumericRight));
 end;
 
 function LessThan(const ALeft, ARight: TGocciaValue): Boolean; inline;

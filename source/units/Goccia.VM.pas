@@ -449,6 +449,18 @@ begin
   Result := RegisterFloat(AValue);
 end;
 
+function VMModuloRegister(const ALeft, ARight: Double): TGocciaRegister; inline;
+var
+  RemainderValue: Double;
+  LeftBits: Int64 absolute ALeft;
+begin
+  RemainderValue := FMod(ALeft, ARight);
+  if (RemainderValue = 0.0) and ((ALeft < 0.0) or
+     ((ALeft = 0.0) and (LeftBits < 0))) then
+    Exit(RegisterObject(TGocciaNumberLiteralValue.NegativeZeroValue));
+  Result := VMNumberRegister(RemainderValue);
+end;
+
 
 // ES2026 Types-as-comments: runtime guard for OP_CHECK_TYPE (compiler emits Ord(TGocciaLocalType) in operand B).
 // Delegates to Goccia.Types.Enforcement.EnforceStrictType so the interpreter
@@ -5764,8 +5776,8 @@ begin
           RegisterToDouble(FRegisters[C]));
 
       OP_MOD_INT, OP_MOD_FLOAT:
-        FRegisters[A] := VMNumberRegister(FMod(RegisterToDouble(FRegisters[B]),
-          RegisterToDouble(FRegisters[C])));
+        FRegisters[A] := VMModuloRegister(RegisterToDouble(FRegisters[B]),
+          RegisterToDouble(FRegisters[C]));
 
       OP_EQ_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
@@ -6441,8 +6453,8 @@ begin
            RegisterIsNumericScalar(FRegisters[C]) then
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := VMNumberRegister(FMod(RegisterToDouble(FRegisters[B]),
-            RegisterToDouble(FRegisters[C])));
+          FRegisters[A] := VMModuloRegister(RegisterToDouble(FRegisters[B]),
+            RegisterToDouble(FRegisters[C]));
         end
         else
         begin

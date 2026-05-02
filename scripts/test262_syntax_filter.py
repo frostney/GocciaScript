@@ -36,21 +36,33 @@ def _load_compatibility_roadmap() -> dict:
 
 COMPATIBILITY_ROADMAP: dict = _load_compatibility_roadmap()
 ELIGIBLE_STATUSES: set[str] = set(COMPATIBILITY_ROADMAP["eligibleStatuses"])
+UNKNOWN_ROADMAP_ENTRY: dict[str, str] = {
+    "status": "unsupported",
+    "target": "unassigned",
+}
+UNKNOWN_SYNTAX_ENTRY: dict[str, str] = {
+    "status": "excluded-by-language-design",
+    "target": "excluded-syntax",
+}
 
 
 def _entry_is_eligible(entry: dict | None) -> bool:
     if not entry:
-        entry = COMPATIBILITY_ROADMAP["unknownFeature"]
+        entry = UNKNOWN_ROADMAP_ENTRY
     if "eligible" in entry:
         return bool(entry["eligible"])
     return str(entry.get("status", "")) in ELIGIBLE_STATUSES
 
 
-def _roadmap_entry(kind: str, key: str) -> dict:
+def _roadmap_entry(
+    kind: str,
+    key: str,
+    fallback: dict[str, str] | None = None,
+) -> dict:
     section = COMPATIBILITY_ROADMAP.get(kind, {})
     entry = section.get(key)
     if entry is None:
-        return COMPATIBILITY_ROADMAP["unknownFeature"]
+        return fallback if fallback is not None else UNKNOWN_ROADMAP_ENTRY
     return entry
 
 
@@ -277,7 +289,7 @@ def classify_skip_reason(reason: str, test_id: str = "") -> dict[str, str]:
         target = str(entry.get("target", target))
     elif prefix == "unsupported_syntax":
         kind = "syntax"
-        entry = _roadmap_entry("syntax", value)
+        entry = _roadmap_entry("syntax", value, UNKNOWN_SYNTAX_ENTRY)
         status = str(entry.get("status", "excluded-by-language-design"))
         target = str(entry.get("target", "excluded-syntax"))
     elif prefix == "skip_path":
