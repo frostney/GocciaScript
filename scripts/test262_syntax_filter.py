@@ -11,6 +11,8 @@ import json
 import re
 from pathlib import Path
 
+from test262_harness_map import AVAILABLE_INCLUDES
+
 # ---------------------------------------------------------------------------
 # Compatibility roadmap
 # ---------------------------------------------------------------------------
@@ -334,32 +336,6 @@ def check_syntax(
     return reasons
 
 
-# Harness files we have reimplemented for GocciaScript
-AVAILABLE_INCLUDES: set[str] = {
-    "assert.js",
-    "sta.js",
-    "compareArray.js",
-    "propertyHelper.js",
-    "compareIterator.js",
-    "isConstructor.js",
-    "deepEqual.js",
-    "nans.js",
-    "testTypedArray.js",
-    "testBigIntTypedArray.js",
-    "temporalHelpers.js",
-    "promiseHelper.js",
-    "dateConstants.js",
-    "decimalToHexString.js",
-    "fnGlobalObject.js",
-    "nativeFunctionMatcher.js",
-    "byteConversionValues.js",
-    "proxyTrapsHelper.js",
-    "regExpUtils.js",
-    "detachArrayBuffer.js",
-    "doneprintHandle.js",
-}
-
-
 def check_includes(includes: list[str]) -> list[str]:
     """Return list of skip reasons for harness files we haven't reimplemented."""
     reasons: list[str] = []
@@ -409,7 +385,8 @@ def is_eligible(
 
     reasons.extend(check_flags(flags))
     reasons.extend(check_features(features))
-    reasons.extend(check_includes(includes))
+    if not reasons:
+        reasons.extend(check_includes(includes))
 
     # Negative parse/resolution tests need special handling
     if negative is not None:

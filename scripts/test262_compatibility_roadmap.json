@@ -983,7 +983,7 @@
     },
     "tail-call-optimization": {
       "status": "unsupported",
-      "target": "unassigned"
+      "target": "functions"
     },
     "template": {
       "status": "supported",
@@ -1053,12 +1053,12 @@
     },
     "raw": {
       "status": "unsupported",
-      "target": "harness"
+      "target": "syntax"
     }
   },
   "harnessIncludes": {
     "assertRelativeDateMs.js": {
-      "status": "unsupported",
+      "status": "supported",
       "target": "harness"
     },
     "asyncHelpers.js": {
@@ -1130,7 +1130,7 @@
       "target": "intl"
     },
     "wellKnownIntrinsicObjects.js": {
-      "status": "unsupported",
+      "status": "supported",
       "target": "harness"
     }
   },
@@ -1257,6 +1257,10 @@
     },
     "globals-errors": {
       "description": "Global APIs and Error family behavior",
+      "status": "active"
+    },
+    "functions": {
+      "description": "Function object, call-frame, and tail-call semantics",
       "status": "active"
     },
     "harness": {

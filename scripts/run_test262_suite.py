@@ -38,6 +38,7 @@ from pathlib import Path
 # Sibling modules
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test262_frontmatter import parse_frontmatter, strip_frontmatter  # noqa: E402
+from test262_harness_map import INCLUDE_MAP  # noqa: E402
 from test262_syntax_filter import classify_skip_reason, is_eligible  # noqa: E402
 
 SUITE_REPO_URL = "https://github.com/tc39/test262.git"
@@ -174,32 +175,6 @@ def load_harness_files() -> dict[str, str]:
     for path in sorted(HARNESS_DIR.glob("*.js")):
         harness[path.name] = path.read_text(encoding="utf-8")
     return harness
-
-
-# Map test262 include names to our harness file names
-INCLUDE_MAP: dict[str, str] = {
-    "assert.js": "assert.js",
-    "sta.js": "assert.js",  # $ERROR and $DONOTEVALUATE are in our assert.js
-    "compareArray.js": "assert.js",  # assert.compareArray is in our assert.js
-    "propertyHelper.js": "propertyHelper.js",
-    "compareIterator.js": "compareIterator.js",
-    "isConstructor.js": "isConstructor.js",
-    "deepEqual.js": "deepEqual.js",
-    "nans.js": "nans.js",
-    "testTypedArray.js": "testTypedArray.js",
-    "testBigIntTypedArray.js": "testTypedArray.js",
-    "temporalHelpers.js": "temporalHelpers.js",
-    "promiseHelper.js": "promiseHelper.js",
-    "dateConstants.js": "dateConstants.js",
-    "decimalToHexString.js": "decimalToHexString.js",
-    "fnGlobalObject.js": "fnGlobalObject.js",
-    "nativeFunctionMatcher.js": "nativeFunctionMatcher.js",
-    "byteConversionValues.js": "byteConversionValues.js",
-    "proxyTrapsHelper.js": "proxyTrapsHelper.js",
-    "regExpUtils.js": "regExpUtils.js",
-    "detachArrayBuffer.js": "detachArrayBuffer.js",
-    "doneprintHandle.js": "doneprintHandle.js",
-}
 
 
 def build_harness_source(includes: list[str], harness_files: dict[str, str]) -> str:
