@@ -452,6 +452,61 @@ console.log("Loader: --globals file...");
   }
 }
 
+console.log("Loader: --globals JSON5 file...");
+{
+  const tmp = makeTmp();
+  try {
+    const globalsPath = join(tmp, "globals.json5");
+    writeFileSync(globalsPath, [
+      "{",
+      "  // JSON5 globals allow comments and unquoted keys",
+      "  unquoted: 'goccia',",
+      "  maxRetries: 3,",
+      "  nested: { enabled: true, },",
+      "}",
+      "",
+    ].join("\n"));
+    const proc = Bun.spawnSync([LOADER, `--globals=${globalsPath}`, "--output=json"], {
+      stdin: new TextEncoder().encode("unquoted + ':' + maxRetries + ':' + nested.enabled;\n"),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`--globals JSON5 exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const json = JSON.parse(proc.stdout.toString());
+    if (json.files?.[0]?.result !== "goccia:3:true")
+      throw new Error(`--globals JSON5 should inject parsed values, got ${json.files?.[0]?.result}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Loader: --globals TOML file...");
+{
+  const tmp = makeTmp();
+  try {
+    const globalsPath = join(tmp, "globals.toml");
+    const nameValue = "Jos\u00e9";
+    const quotedKey = "d\u00e9j\u00e0";
+    writeFileSync(globalsPath, [
+      `name = "${nameValue}"`,
+      `"${quotedKey}" = "vu"`,
+      "count = 3",
+      "",
+    ].join("\n"));
+    const proc = Bun.spawnSync([LOADER, `--globals=${globalsPath}`, "--output=json", "--mode=bytecode"], {
+      stdin: new TextEncoder().encode(`name + ':' + globalThis["${quotedKey}"] + ':' + count;\n`),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`--globals TOML exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const json = JSON.parse(proc.stdout.toString());
+    if (json.files?.[0]?.result !== "Jos\u00e9:vu:3")
+      throw new Error(`--globals TOML should inject UTF-8 parsed values, got ${json.files?.[0]?.result}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Loader: --global overrides --globals file...");
 {
   const tmp = makeTmp();
