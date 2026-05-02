@@ -46,6 +46,8 @@ These are convenience methods that create a core engine, execute, and clean up i
 | `TGocciaRuntime.RunScriptFromStringList(Source, FileName, RuntimeGlobals)` | Execute from a `TStringList` with runtime globals |
 All methods return `TGocciaScriptResult` — a record containing the result value, per-phase timing (in microseconds), and the filename.
 
+`SourceType` is an engine-level language option, not a runtime option. Set `Engine.SourceType` (or use the CLI `--source-type=script|module`) to choose Script vs Module entry execution. File loading is separate: `TGocciaEngine` one-shot helpers accept source text or source lists only, while `TGocciaRuntime.RunScriptFromFile` is the runtime convenience API for loading an entry file.
+
 ### Instance Usage (Long-Lived Engine)
 
 For interactive sessions (REPL, editor integration) or when you need to execute multiple scripts in the same scope, create an engine instance directly:

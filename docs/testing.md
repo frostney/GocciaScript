@@ -529,7 +529,7 @@ build → test             → artifacts
 
 **`benchmark`** (needs build, all platforms) — Downloads pre-built binaries, runs all benchmarks.
 
-**`cli`** (needs build, all platforms) — Downloads pre-built binaries and runs CLI behavior smoke tests via Bun: `test-cli.ts` (flags across all apps), `test-cli-lexer.ts` (numeric-separator rejection), `test-cli-parser.ts` (error display), `test-cli-config.ts` (config-file loading and per-file inheritance), and `test-cli-apps.ts` (app-specific features). Windows runs additionally assert that the loader binary does not link against OpenSSL DLLs.
+**`cli`** (needs build, all platforms) — Downloads pre-built binaries and runs CLI behavior smoke tests via Bun: `test-cli.ts` (flags across all apps), `test-cli-lexer.ts` (numeric-separator rejection), `test-cli-parser.ts` (error display), `test-cli-config.ts` (config-file loading and per-file inheritance), and `test-cli-apps.ts` (app-specific features, including `GocciaScriptLoaderBare` stdin/file checks and runtime-global absence). Windows runs additionally assert that the loader binary does not link against OpenSSL DLLs.
 
 **`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + cli, `main` only) — Uploads release binaries after all checks pass. `test262` is **not** a gating dependency — failing tests there cannot block a release.
 

@@ -86,7 +86,10 @@ For a smaller binary surface without the default runtime globals (console, JSON5
 ```bash
 ./build.pas loaderbare
 printf "Goccia.version;" | ./build/GocciaScriptLoaderBare
+./build/GocciaScriptLoaderBare example.js
 ```
+
+`GocciaScriptLoaderBare` accepts an explicit file path, `-`, or no path for stdin. It reads the entry source in the frontend and passes source text to `TGocciaEngine`; it does not attach `TGocciaRuntime`.
 
 Script files may start with a Unix shebang line like `#!/usr/bin/env goccia`; GocciaScript ignores that first line during lexing.
 

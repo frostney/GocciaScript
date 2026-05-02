@@ -245,7 +245,7 @@ These core constants, functions, and error constructors are always registered (n
 
 **Constants:** `undefined`, `NaN`, `Infinity`, `globalThis`
 
-`globalThis` is a `const` binding that holds a plain object populated with all global scope bindings at the time of registration. It includes a self-referential `globalThis` property (`globalThis.globalThis === globalThis`).
+`globalThis` is a `const` binding that holds a plain object populated with global scope bindings. It includes a self-referential `globalThis` property (`globalThis.globalThis === globalThis`). Runtime extensions and global-injection helpers call `TGocciaEngine.RefreshGlobalThis` after adding globals so enumeration and property access reflect the new bindings; the public refresh method delegates to the engine's internal global-object registration routine.
 
 **`Goccia` object:**
 

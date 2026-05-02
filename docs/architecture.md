@@ -50,6 +50,8 @@ Source -> JSX Transformer (optional) -> Lexer -> Parser -> Compiler -> Goccia By
 
 For **tree-walk execution**, see [Interpreter](interpreter.md); for **bytecode execution**, see [Bytecode VM](bytecode-vm.md). For **recurring implementation patterns** and **terminology** (Define vs Assign, bindings, …), see [Core patterns](core-patterns.md).
 
+Script-vs-module entry semantics belong to `TGocciaEngine.SourceType`, because they change language execution (`this`, import metadata, and top-level scope lifetime). `TGocciaRuntime` may be attached to an engine, but it does not decide whether the entry runs as a Script or Module. File-backed convenience APIs and the default filesystem module content provider live in `Goccia.Runtime`; engine APIs accept source strings or caller-provided `TStringList` instances. CLI frontends may still read their entry file or stdin before constructing the engine, as `GocciaScriptLoaderBare` does, but that file read is outside the engine API and does not attach runtime globals.
+
 ## Design Direction
 
 - Bytecode execution is Goccia-specific, not a generic VM layer.
