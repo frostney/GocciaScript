@@ -336,6 +336,29 @@ test("super.constructor reads the prototype constructor property", () => {
   expect(derived.getComputedConstructor()).toBe(Base);
 });
 
+test("super.constructor member calls are ordinary class calls", () => {
+  class Base {
+    constructor() {
+      this.value = 1;
+    }
+  }
+
+  class DotDerived extends Base {
+    constructor() {
+      super.constructor();
+    }
+  }
+
+  class ComputedDerived extends Base {
+    constructor() {
+      super["constructor"]();
+    }
+  }
+
+  expect(() => new DotDerived()).toThrow(TypeError);
+  expect(() => new ComputedDerived()).toThrow(TypeError);
+});
+
 test("static super observes ordinary own properties on intermediate constructors", () => {
   class Base {
     static shadowed() {
