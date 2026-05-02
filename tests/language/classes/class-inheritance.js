@@ -224,6 +224,46 @@ test("super() replacement receives superclass initializers", () => {
   expect(leaf.readBase()).toBe("base");
 });
 
+test("super() returning this does not replay superclass initializers", () => {
+  let initializersRun = 0;
+
+  class Base {
+    value = ++initializersRun;
+
+    constructor() {
+      return this;
+    }
+  }
+
+  class Derived extends Base {
+    constructor() {
+      super();
+    }
+  }
+
+  const instance = new Derived();
+  expect(instance.value).toBe(1);
+  expect(initializersRun).toBe(1);
+});
+
+test("implicit super returning this does not replay superclass initializers", () => {
+  let initializersRun = 0;
+
+  class Base {
+    value = ++initializersRun;
+
+    constructor() {
+      return this;
+    }
+  }
+
+  class Derived extends Base {}
+
+  const instance = new Derived();
+  expect(instance.value).toBe(1);
+  expect(initializersRun).toBe(1);
+});
+
 test("extends rejects non-constructable callable superclass", () => {
   const NotConstructor = () => {};
 

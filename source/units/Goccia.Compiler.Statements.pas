@@ -2202,7 +2202,7 @@ begin
             AClassDef.FFieldOrder[I].Name, FieldExpr) then
           ACtx.CompileExpression(FieldExpr, ValReg);
         KeyIdx := ChildTemplate.AddConstantString(
-          '#' + ChildScope.ResolvePrivatePrefix + AClassDef.FFieldOrder[I].Name);
+          '#slot:' + ChildScope.ResolvePrivatePrefix + AClassDef.FFieldOrder[I].Name);
       end
       else
       begin
@@ -2238,7 +2238,7 @@ begin
       Entry := AClassDef.PrivateInstanceProperties.EntryAt(I);
       ValReg := ChildScope.AllocateRegister;
       ACtx.CompileExpression(Entry.Value, ValReg);
-      KeyIdx := ChildTemplate.AddConstantString('#' + ChildScope.ResolvePrivatePrefix + Entry.Key);
+      KeyIdx := ChildTemplate.AddConstantString('#slot:' + ChildScope.ResolvePrivatePrefix + Entry.Key);
       if KeyIdx > High(UInt8) then
         raise Exception.Create('Constant pool overflow: field name index exceeds 255');
       EmitInstruction(ChildCtx, EncodeABC(OP_SET_PROP_CONST, ThisReg,
@@ -2604,14 +2604,14 @@ begin
   end;
 
   for MethodPair in ClassDef.PrivateMethods do
-    CompileMethodBody(ACtx, ClassReg, '#' + PrivPrefix + MethodPair.Key,
+    CompileMethodBody(ACtx, ClassReg, '#slot:' + PrivPrefix + MethodPair.Key,
       MethodPair.Value, OP_CLASS_ADD_METHOD_CONST);
 
   for GetterPair in ClassDef.Getters do
   begin
     if (GetterPair.Key <> '') and (GetterPair.Key[1] = '#') then
       CompileGetterBody(ACtx, ClassReg,
-        '#' + PrivPrefix + Copy(GetterPair.Key, 2, MaxInt),
+        '#slot:' + PrivPrefix + Copy(GetterPair.Key, 2, MaxInt),
         GetterPair.Value, OP_DEFINE_ACCESSOR_CONST, 0)
     else
       CompileGetterBody(ACtx, ClassReg, GetterPair.Key,
@@ -2622,7 +2622,7 @@ begin
   begin
     if (SetterPair.Key <> '') and (SetterPair.Key[1] = '#') then
       CompileSetterBody(ACtx, ClassReg,
-        '#' + PrivPrefix + Copy(SetterPair.Key, 2, MaxInt),
+        '#slot:' + PrivPrefix + Copy(SetterPair.Key, 2, MaxInt),
         SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_SETTER)
     else
       CompileSetterBody(ACtx, ClassReg, SetterPair.Key,
@@ -2633,7 +2633,7 @@ begin
   begin
     if (GetterPair.Key <> '') and (GetterPair.Key[1] = '#') then
       CompileGetterBody(ACtx, ClassReg,
-        '#' + PrivPrefix + Copy(GetterPair.Key, 2, MaxInt),
+        '#slot:' + PrivPrefix + Copy(GetterPair.Key, 2, MaxInt),
         GetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC)
     else
       CompileGetterBody(ACtx, ClassReg, GetterPair.Key,
@@ -2644,7 +2644,7 @@ begin
   begin
     if (SetterPair.Key <> '') and (SetterPair.Key[1] = '#') then
       CompileSetterBody(ACtx, ClassReg,
-        '#' + PrivPrefix + Copy(SetterPair.Key, 2, MaxInt),
+        '#slot:' + PrivPrefix + Copy(SetterPair.Key, 2, MaxInt),
         SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER)
     else
       CompileSetterBody(ACtx, ClassReg, SetterPair.Key,
@@ -2675,7 +2675,7 @@ begin
     begin
       ValReg := ACtx.Scope.AllocateRegister;
       ACtx.CompileExpression(StaticPropPair.Value, ValReg);
-      KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + StaticPropPair.Key);
+      KeyIdx := ACtx.Template.AddConstantString('#slot:' + PrivPrefix + StaticPropPair.Key);
       if KeyIdx > High(UInt8) then
         raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
       EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
@@ -2703,7 +2703,7 @@ begin
       if ClassDef.FElements[I].IsPrivate then
       begin
         KeyIdx := ACtx.Template.AddConstantString(
-          '#' + PrivPrefix + ClassDef.FElements[I].Name);
+          '#slot:' + PrivPrefix + ClassDef.FElements[I].Name);
         if KeyIdx > High(UInt8) then
           raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
         EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
@@ -2815,14 +2815,14 @@ begin
   end;
 
   for MethodPair in ClassDef.PrivateMethods do
-    CompileMethodBody(ACtx, ADest, '#' + PrivPrefix + MethodPair.Key,
+    CompileMethodBody(ACtx, ADest, '#slot:' + PrivPrefix + MethodPair.Key,
       MethodPair.Value, OP_CLASS_ADD_METHOD_CONST);
 
   for GetterPair in ClassDef.Getters do
   begin
     if (GetterPair.Key <> '') and (GetterPair.Key[1] = '#') then
       CompileGetterBody(ACtx, ADest,
-        '#' + PrivPrefix + Copy(GetterPair.Key, 2, MaxInt),
+        '#slot:' + PrivPrefix + Copy(GetterPair.Key, 2, MaxInt),
         GetterPair.Value, OP_DEFINE_ACCESSOR_CONST, 0)
     else
       CompileGetterBody(ACtx, ADest, GetterPair.Key,
@@ -2833,7 +2833,7 @@ begin
   begin
     if (SetterPair.Key <> '') and (SetterPair.Key[1] = '#') then
       CompileSetterBody(ACtx, ADest,
-        '#' + PrivPrefix + Copy(SetterPair.Key, 2, MaxInt),
+        '#slot:' + PrivPrefix + Copy(SetterPair.Key, 2, MaxInt),
         SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_SETTER)
     else
       CompileSetterBody(ACtx, ADest, SetterPair.Key,
@@ -2844,7 +2844,7 @@ begin
   begin
     if (GetterPair.Key <> '') and (GetterPair.Key[1] = '#') then
       CompileGetterBody(ACtx, ADest,
-        '#' + PrivPrefix + Copy(GetterPair.Key, 2, MaxInt),
+        '#slot:' + PrivPrefix + Copy(GetterPair.Key, 2, MaxInt),
         GetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC)
     else
       CompileGetterBody(ACtx, ADest, GetterPair.Key,
@@ -2855,7 +2855,7 @@ begin
   begin
     if (SetterPair.Key <> '') and (SetterPair.Key[1] = '#') then
       CompileSetterBody(ACtx, ADest,
-        '#' + PrivPrefix + Copy(SetterPair.Key, 2, MaxInt),
+        '#slot:' + PrivPrefix + Copy(SetterPair.Key, 2, MaxInt),
         SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER)
     else
       CompileSetterBody(ACtx, ADest, SetterPair.Key,
@@ -2886,7 +2886,7 @@ begin
     begin
       ValReg := ACtx.Scope.AllocateRegister;
       ACtx.CompileExpression(StaticPropPair.Value, ValReg);
-      KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + StaticPropPair.Key);
+      KeyIdx := ACtx.Template.AddConstantString('#slot:' + PrivPrefix + StaticPropPair.Key);
       if KeyIdx > High(UInt8) then
         raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
       EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
@@ -2914,7 +2914,7 @@ begin
       if ClassDef.FElements[I].IsPrivate then
       begin
         KeyIdx := ACtx.Template.AddConstantString(
-          '#' + PrivPrefix + ClassDef.FElements[I].Name);
+          '#slot:' + PrivPrefix + ClassDef.FElements[I].Name);
         if KeyIdx > High(UInt8) then
           raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
         EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,

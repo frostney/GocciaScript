@@ -154,6 +154,9 @@ test("bracket notation with static values", () => {
 
   obj["special-key"] = "new special key";
   expect(obj["special-key"]).toBe("new special key");
+
+  obj["#price$usd"] = 12;
+  expect(obj["#price$usd"]).toBe(12);
 });
 
 test("bracket notation with dynamic values", () => {

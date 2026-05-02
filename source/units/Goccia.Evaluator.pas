@@ -4592,6 +4592,8 @@ var
   begin
     if AValue is TGocciaObjectValue then
     begin
+      if TGocciaObjectValue(AValue) = Instance then
+        Exit;
       SetFinalInstance(TGocciaObjectValue(AValue));
       InitializerReplayReceiver := Instance;
     end;

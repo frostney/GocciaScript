@@ -121,7 +121,7 @@ var
   Prefix: string;
 begin
   Prefix := AScope.ResolvePrivatePrefix;
-  Result := '#' + Prefix + AName;
+  Result := '#slot:' + Prefix + AName;
 end;
 
 procedure CompileYield(const ACtx: TGocciaCompilationContext;
