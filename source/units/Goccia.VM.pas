@@ -5012,6 +5012,25 @@ function TGocciaVM.InvokeImplicitSuperInitialization(
 var
   SuperResult: TGocciaValue;
   TargetInstance: TGocciaValue;
+  function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
+  begin
+    Result := (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue);
+  end;
+  function RequiresObjectReturn: Boolean;
+  begin
+    Result := Assigned(AClassValue) and
+      (Assigned(AClassValue.SuperClass) or
+       Assigned(AClassValue.NativeSuperConstructor));
+  end;
+  procedure ValidateImplicitSuperResult(const AValue: TGocciaValue);
+  begin
+    if RequiresObjectReturn and
+       not (AValue is TGocciaObjectValue) and
+       not IsUndefinedConstructedValue(AValue) then
+      ThrowTypeError(
+        'Derived constructor returned non-object',
+        SSuggestNotConstructorType);
+  end;
 begin
   Result := AInstance;
   if not Assigned(AClassValue) then
@@ -5024,6 +5043,7 @@ begin
     SuperResult := TGocciaVMClassValue(AClassValue).FVM.InvokeFunctionValue(
       TGocciaVMClassValue(AClassValue).FConstructorValue,
       AArguments, AInstance);
+    ValidateImplicitSuperResult(SuperResult);
     if SuperResult is TGocciaObjectValue then
     begin
       if SuperResult <> AInstance then
@@ -5037,6 +5057,16 @@ begin
      Assigned(TGocciaVMClassValue(AClassValue).NativeSuperConstructor) then
   begin
     RunClassInitializers(AClassValue, AInstance);
+    SuperResult := InvokeConstructableWithReceiver(
+      TGocciaVMClassValue(AClassValue).NativeSuperConstructor,
+      AArguments, AInstance);
+    ValidateImplicitSuperResult(SuperResult);
+    if SuperResult is TGocciaObjectValue then
+    begin
+      if SuperResult <> AInstance then
+        RunClassInitializers(AClassValue, SuperResult);
+      Exit(SuperResult);
+    end;
     Exit;
   end;
 
@@ -5044,6 +5074,7 @@ begin
   begin
     RunClassInitializers(AClassValue, AInstance);
     SuperResult := AClassValue.ConstructorMethod.Call(AArguments, AInstance);
+    ValidateImplicitSuperResult(SuperResult);
     if SuperResult is TGocciaObjectValue then
     begin
       if SuperResult <> AInstance then
@@ -5073,6 +5104,40 @@ var
   SuperResult: TGocciaValue;
   SuperResultRegister: TGocciaRegister;
   TargetInstance: TGocciaValue;
+  function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
+  begin
+    Result := (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue);
+  end;
+  function IsUndefinedConstructedRegister(
+    const AValue: TGocciaRegister): Boolean;
+  begin
+    Result := AValue.Kind in [grkUndefined, grkHole];
+  end;
+  function RequiresObjectReturn: Boolean;
+  begin
+    Result := Assigned(AClassValue) and
+      (Assigned(AClassValue.SuperClass) or
+       Assigned(AClassValue.NativeSuperConstructor));
+  end;
+  procedure ValidateImplicitSuperResult(const AValue: TGocciaValue);
+  begin
+    if RequiresObjectReturn and
+       not (AValue is TGocciaObjectValue) and
+       not IsUndefinedConstructedValue(AValue) then
+      ThrowTypeError(
+        'Derived constructor returned non-object',
+        SSuggestNotConstructorType);
+  end;
+  procedure ValidateImplicitSuperRegister(const AValue: TGocciaRegister);
+  begin
+    if RequiresObjectReturn and
+       not ((AValue.Kind = grkObject) and
+            (AValue.ObjectValue is TGocciaObjectValue)) and
+       not IsUndefinedConstructedRegister(AValue) then
+      ThrowTypeError(
+        'Derived constructor returned non-object',
+        SSuggestNotConstructorType);
+  end;
 begin
   Result := AInstance;
   if not Assigned(AClassValue) then
@@ -5092,6 +5157,7 @@ begin
       begin
         SuperResultRegister := TGocciaVMClassValue(AClassValue).FVM.ExecuteClosureRegisters(
           BytecodeConstructor.FClosure, RegisterObject(AInstance), AArguments);
+        ValidateImplicitSuperRegister(SuperResultRegister);
         SuperResult := RegisterToValue(SuperResultRegister);
         if SuperResult is TGocciaObjectValue then
         begin
@@ -5111,6 +5177,7 @@ begin
     finally
       ReleaseArguments(BoxedArgs);
     end;
+    ValidateImplicitSuperResult(SuperResult);
     if SuperResult is TGocciaObjectValue then
     begin
       if SuperResult <> AInstance then
@@ -5123,7 +5190,22 @@ begin
   if (AClassValue is TGocciaVMClassValue) and
      Assigned(TGocciaVMClassValue(AClassValue).NativeSuperConstructor) then
   begin
-    RunClassInitializers(AClassValue, AInstance);
+    BoxedArgs := MaterializeArguments(AArguments);
+    try
+      RunClassInitializers(AClassValue, AInstance);
+      SuperResult := InvokeConstructableWithReceiver(
+        TGocciaVMClassValue(AClassValue).NativeSuperConstructor,
+        BoxedArgs, AInstance);
+    finally
+      ReleaseArguments(BoxedArgs);
+    end;
+    ValidateImplicitSuperResult(SuperResult);
+    if SuperResult is TGocciaObjectValue then
+    begin
+      if SuperResult <> AInstance then
+        RunClassInitializers(AClassValue, SuperResult);
+      Exit(SuperResult);
+    end;
     Exit;
   end;
 
@@ -5136,6 +5218,7 @@ begin
     finally
       ReleaseArguments(BoxedArgs);
     end;
+    ValidateImplicitSuperResult(SuperResult);
     if SuperResult is TGocciaObjectValue then
     begin
       if SuperResult <> AInstance then
