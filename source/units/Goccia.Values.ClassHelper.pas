@@ -34,10 +34,7 @@ type
 implementation
 
 uses
-  Math,
-
-  BigInteger,
-
+  Goccia.Arithmetic,
   Goccia.Values.BigIntValue;
 
   // function TGocciaValueHelper.ToBooleanLiteral: TGocciaBooleanLiteralValue;
@@ -281,186 +278,38 @@ uses
   end;
   function TGocciaValueHelper.IsEqual(const AOther: TGocciaValue): TGocciaBooleanLiteralValue;
   begin
-    // Strict equality comparison
-    if (Self is TGocciaUndefinedLiteralValue) and (AOther is TGocciaUndefinedLiteralValue) then
-      Result := TGocciaBooleanLiteralValue.TrueValue
-    else if (Self is TGocciaNullLiteralValue) and (AOther is TGocciaNullLiteralValue) then
-      Result := TGocciaBooleanLiteralValue.TrueValue
-    else if (Self is TGocciaBooleanLiteralValue) and (AOther is TGocciaBooleanLiteralValue) then
-      if TGocciaBooleanLiteralValue(Self).Value = TGocciaBooleanLiteralValue(AOther).Value then
-        Result := TGocciaBooleanLiteralValue.TrueValue
-      else
-        Result := TGocciaBooleanLiteralValue.FalseValue
-    else if (Self is TGocciaNumberLiteralValue) and (AOther is TGocciaNumberLiteralValue) then
-    begin
-      // Handle NaN case
-      if TGocciaNumberLiteralValue(Self).IsNaN or TGocciaNumberLiteralValue(AOther).IsNaN then
-        Result := TGocciaBooleanLiteralValue.FalseValue
-      else
-        if TGocciaNumberLiteralValue(Self).Value = TGocciaNumberLiteralValue(AOther).Value then
-          Result := TGocciaBooleanLiteralValue.TrueValue
-        else
-          Result := TGocciaBooleanLiteralValue.FalseValue;
-    end
-    else if (Self is TGocciaStringLiteralValue) and (AOther is TGocciaStringLiteralValue) then
-      if TGocciaStringLiteralValue(Self).Value = TGocciaStringLiteralValue(AOther).Value then
-        Result := TGocciaBooleanLiteralValue.TrueValue
-      else
-        Result := TGocciaBooleanLiteralValue.FalseValue
-    // ES2026 §7.2.16 BigInt strict equality
-    else if (Self is TGocciaBigIntValue) and (AOther is TGocciaBigIntValue) then
-      if TGocciaBigIntValue(Self).Value.Equal(TGocciaBigIntValue(AOther).Value) then
-        Result := TGocciaBooleanLiteralValue.TrueValue
-      else
-        Result := TGocciaBooleanLiteralValue.FalseValue
-    else
-      if Self = AOther then
-        Result := TGocciaBooleanLiteralValue.TrueValue
-      else
-        Result := TGocciaBooleanLiteralValue.FalseValue; // Reference equality
+    Result := TGocciaBooleanLiteralValue.FromBoolean(
+      Goccia.Arithmetic.IsStrictEqual(Self, AOther));
   end;
 
   function TGocciaValueHelper.IsNotEqual(const AOther: TGocciaValue): TGocciaBooleanLiteralValue;
-  var
-    EqualResult: TGocciaBooleanLiteralValue;
   begin
-    EqualResult := IsEqual(AOther);
-    if EqualResult.Value then
-      Result := TGocciaBooleanLiteralValue.FalseValue
-    else
-      Result := TGocciaBooleanLiteralValue.TrueValue;
+    Result := TGocciaBooleanLiteralValue.FromBoolean(
+      Goccia.Arithmetic.IsNotStrictEqual(Self, AOther));
   end;
 
   function TGocciaValueHelper.IsLessThan(const AOther: TGocciaValue): TGocciaBooleanLiteralValue;
-  var
-    LeftNum, RightNum: TGocciaNumberLiteralValue;
-    LeftStr, RightStr: TGocciaStringLiteralValue;
   begin
-    if (Self is TGocciaStringLiteralValue) and (AOther is TGocciaStringLiteralValue) then
-    begin
-      LeftStr := TGocciaStringLiteralValue(Self);
-      RightStr := TGocciaStringLiteralValue(AOther);
-      if LeftStr.Value < RightStr.Value then
-        Result := TGocciaBooleanLiteralValue.TrueValue
-      else
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-    end
-    else
-    begin
-      LeftNum := Self.ToNumberLiteral;
-      RightNum := AOther.ToNumberLiteral;
-
-      if (LeftNum.IsNaN or RightNum.IsNaN) then
-        Result := TGocciaBooleanLiteralValue.FalseValue
-      else if LeftNum.IsInfinity then
-        Result := TGocciaBooleanLiteralValue.FalseValue  // +Infinity is not less than anything
-      else if LeftNum.IsNegativeInfinity then
-      begin
-        if RightNum.IsNegativeInfinity then
-          Result := TGocciaBooleanLiteralValue.FalseValue
-        else
-          Result := TGocciaBooleanLiteralValue.TrueValue;  // -Infinity < anything except -Infinity
-      end
-      else if RightNum.IsInfinity then
-        Result := TGocciaBooleanLiteralValue.TrueValue  // Anything < +Infinity
-      else if RightNum.IsNegativeInfinity then
-        Result := TGocciaBooleanLiteralValue.FalseValue  // Nothing < -Infinity
-      else if LeftNum.Value < RightNum.Value then
-        Result := TGocciaBooleanLiteralValue.TrueValue
-      else
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-    end;
+    Result := TGocciaBooleanLiteralValue.FromBoolean(
+      Goccia.Arithmetic.LessThan(Self, AOther));
   end;
 
   function TGocciaValueHelper.IsGreaterThan(const AOther: TGocciaValue): TGocciaBooleanLiteralValue;
-  var
-    LeftNum, RightNum: TGocciaNumberLiteralValue;
-    LeftStr, RightStr: TGocciaStringLiteralValue;
   begin
-    if (Self is TGocciaStringLiteralValue) and (AOther is TGocciaStringLiteralValue) then
-    begin
-      LeftStr := TGocciaStringLiteralValue(Self);
-      RightStr := TGocciaStringLiteralValue(AOther);
-      if LeftStr.Value > RightStr.Value then
-        Result := TGocciaBooleanLiteralValue.TrueValue
-      else
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-    end
-    else
-    begin
-      LeftNum := Self.ToNumberLiteral;
-      RightNum := AOther.ToNumberLiteral;
-
-      if (LeftNum.IsNaN or RightNum.IsNaN) then
-        Result := TGocciaBooleanLiteralValue.FalseValue
-      else if LeftNum.IsInfinity then
-      begin
-        if RightNum.IsInfinity then
-          Result := TGocciaBooleanLiteralValue.FalseValue
-        else
-          Result := TGocciaBooleanLiteralValue.TrueValue;  // +Infinity > anything except +Infinity
-      end
-      else if LeftNum.IsNegativeInfinity then
-        Result := TGocciaBooleanLiteralValue.FalseValue  // -Infinity is not greater than anything
-      else if RightNum.IsInfinity then
-        Result := TGocciaBooleanLiteralValue.FalseValue  // Nothing > +Infinity
-      else if RightNum.IsNegativeInfinity then
-        Result := TGocciaBooleanLiteralValue.TrueValue  // Anything > -Infinity
-      else if LeftNum.Value > RightNum.Value then
-        Result := TGocciaBooleanLiteralValue.TrueValue
-      else
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-    end;
+    Result := TGocciaBooleanLiteralValue.FromBoolean(
+      Goccia.Arithmetic.GreaterThan(Self, AOther));
   end;
 
   function TGocciaValueHelper.IsLessThanOrEqual(const AOther: TGocciaValue): TGocciaBooleanLiteralValue;
-  var
-    LessResult, EqualResult: TGocciaBooleanLiteralValue;
-    LeftNum, RightNum: TGocciaNumberLiteralValue;
   begin
-    // For numeric comparisons, check NaN first
-    if (Self is TGocciaNumberLiteralValue) and (AOther is TGocciaNumberLiteralValue) then
-    begin
-      LeftNum := TGocciaNumberLiteralValue(Self);
-      RightNum := TGocciaNumberLiteralValue(AOther);
-      if LeftNum.IsNaN or RightNum.IsNaN then
-      begin
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-        Exit;
-      end;
-    end;
-    
-    LessResult := IsLessThan(AOther);
-    EqualResult := IsEqual(AOther);
-    if LessResult.Value or EqualResult.Value then
-      Result := TGocciaBooleanLiteralValue.TrueValue
-    else
-      Result := TGocciaBooleanLiteralValue.FalseValue;
+    Result := TGocciaBooleanLiteralValue.FromBoolean(
+      Goccia.Arithmetic.LessThanOrEqual(Self, AOther));
   end;
 
   function TGocciaValueHelper.IsGreaterThanOrEqual(const AOther: TGocciaValue): TGocciaBooleanLiteralValue;
-  var
-    GreaterResult, EqualResult: TGocciaBooleanLiteralValue;
-    LeftNum, RightNum: TGocciaNumberLiteralValue;
   begin
-    // For numeric comparisons, check NaN first
-    if (Self is TGocciaNumberLiteralValue) and (AOther is TGocciaNumberLiteralValue) then
-    begin
-      LeftNum := TGocciaNumberLiteralValue(Self);
-      RightNum := TGocciaNumberLiteralValue(AOther);
-      if LeftNum.IsNaN or RightNum.IsNaN then
-      begin
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-        Exit;
-      end;
-    end;
-    
-    GreaterResult := IsGreaterThan(AOther);
-    EqualResult := IsEqual(AOther);
-    if GreaterResult.Value or EqualResult.Value then
-      Result := TGocciaBooleanLiteralValue.TrueValue
-    else
-      Result := TGocciaBooleanLiteralValue.FalseValue;
+    Result := TGocciaBooleanLiteralValue.FromBoolean(
+      Goccia.Arithmetic.GreaterThanOrEqual(Self, AOther));
   end;
 
 end.

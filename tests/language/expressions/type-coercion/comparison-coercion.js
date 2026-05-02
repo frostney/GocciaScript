@@ -72,6 +72,12 @@ describe("relational operators coerce to number", () => {
     expect("abc" < "abd").toBe(true);
   });
 
+  test("relational operators compare string objects after ToPrimitive", () => {
+    expect(new String("2") < "10").toBe(false);
+    expect(new String("2") > "10").toBe(true);
+    expect(new String("2") < 10).toBe(true);
+  });
+
   test("comparisons with NaN always return false", () => {
     expect(NaN > 0).toBe(false);
     expect(NaN < 0).toBe(false);

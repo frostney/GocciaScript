@@ -137,6 +137,17 @@ type
     property Right: TGocciaExpression read FRight;
   end;
 
+  TGocciaSequenceExpression = class(TGocciaExpression)
+  private
+    FExpressions: TObjectList<TGocciaExpression>;
+  public
+    constructor Create(const AExpressions: TObjectList<TGocciaExpression>;
+      const ALine, AColumn: Integer);
+    destructor Destroy; override;
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    property Expressions: TObjectList<TGocciaExpression> read FExpressions;
+  end;
+
   TGocciaUnaryExpression = class(TGocciaExpression)
   private
     FOperator: TGocciaTokenType;
@@ -246,12 +257,15 @@ type
   private
     FCallee: TGocciaExpression;
     FArguments: TObjectList<TGocciaExpression>;
+    FOptional: Boolean;
   public
     constructor Create(const ACallee: TGocciaExpression;
-      const AArguments: TObjectList<TGocciaExpression>; const ALine, AColumn: Integer);
+      const AArguments: TObjectList<TGocciaExpression>; const ALine, AColumn: Integer;
+      const AOptional: Boolean = False);
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Callee: TGocciaExpression read FCallee;
     property Arguments: TObjectList<TGocciaExpression> read FArguments;
+    property Optional: Boolean read FOptional;
   end;
 
   TGocciaMemberExpression = class(TGocciaExpression)
@@ -823,17 +837,20 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Arithmetic,
   Goccia.Constants.ErrorNames,
   Goccia.Coverage,
   Goccia.Error,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Evaluator,
-  Goccia.Evaluator.Arithmetic,
   Goccia.Evaluator.Assignment,
   Goccia.Evaluator.PatternMatching,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
   Goccia.Modules,
   Goccia.RegExp.Runtime,
+  Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -968,6 +985,21 @@ begin
   FRight := ARight;
 end;
 
+{ TGocciaSequenceExpression }
+
+constructor TGocciaSequenceExpression.Create(const AExpressions: TObjectList<TGocciaExpression>;
+  const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FExpressions := AExpressions;
+end;
+
+destructor TGocciaSequenceExpression.Destroy;
+begin
+  FExpressions.Free;
+  inherited;
+end;
+
 { TGocciaUnaryExpression }
 
 constructor TGocciaUnaryExpression.Create(const AOperator: TGocciaTokenType;
@@ -1052,11 +1084,13 @@ end;
 { TGocciaCallExpression }
 
 constructor TGocciaCallExpression.Create(const ACallee: TGocciaExpression;
-  const AArguments: TObjectList<TGocciaExpression>; const ALine, AColumn: Integer);
+  const AArguments: TObjectList<TGocciaExpression>; const ALine, AColumn: Integer;
+  const AOptional: Boolean = False);
 begin
   inherited Create(ALine, AColumn);
   FCallee := ACallee;
   FArguments := AArguments;
+  FOptional := AOptional;
 end;
 
 { TGocciaMemberExpression }
@@ -1587,6 +1621,16 @@ begin
   Result := EvaluateBinary(Self, AContext);
 end;
 
+// ES2026 §13.16 Comma Operator (,)
+function TGocciaSequenceExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  I: Integer;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  for I := 0 to FExpressions.Count - 1 do
+    Result := EvaluateExpression(FExpressions[I], AContext);
+end;
+
 function TGocciaUnaryExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
   Result := EvaluateUnary(Self, AContext);
@@ -1615,10 +1659,9 @@ begin
   Obj := ObjectExpr.Evaluate(AContext);
   PropertyValue := PropertyExpression.Evaluate(AContext);
   Result := Value.Evaluate(AContext);
-  if (PropertyValue is TGocciaSymbolValue) and (Obj is TGocciaClassValue) then
-    TGocciaClassValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropertyValue), Result)
-  else if (PropertyValue is TGocciaSymbolValue) and (Obj is TGocciaObjectValue) then
-    TGocciaObjectValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropertyValue), Result)
+  if PropertyValue is TGocciaSymbolValue then
+    AssignSymbolProperty(Obj, TGocciaSymbolValue(PropertyValue),
+      Result, AContext.OnError, Line, Column)
   else
   begin
     PropName := PropertyValue.ToStringLiteral.Value;
@@ -1667,7 +1710,8 @@ begin
 
   Result := CurrentValue;
   RhsValue := Value.Evaluate(AContext);
-  Result := PerformCompoundOperation(Result, RhsValue, Operator);
+    Result := Goccia.Arithmetic.CompoundOperations(
+      Result, RhsValue, Operator);
   AContext.Scope.AssignBinding(Name, Result);
 end;
 
@@ -1720,6 +1764,7 @@ end;
 function TGocciaComputedPropertyCompoundAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Obj, PropertyKeyValue, CurrentValue, RhsValue: TGocciaValue;
+  BoxedValue: TGocciaObjectValue;
   PropName: string;
 
   function ShortCircuits: Boolean; inline;
@@ -1738,17 +1783,44 @@ var
     Result := Operator in [gttNullishCoalescingAssign, gttLogicalAndAssign, gttLogicalOrAssign];
   end;
 
+  function ReadSymbolProperty(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue): TGocciaValue;
+  begin
+    if AObj is TGocciaNullLiteralValue then
+      ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [ASymbol.ToDisplayString.Value]),
+        SSuggestCheckNullBeforeAccess)
+    else if AObj is TGocciaUndefinedLiteralValue then
+      ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined, [ASymbol.ToDisplayString.Value]),
+        SSuggestCheckNullBeforeAccess);
+
+    if AObj is TGocciaClassValue then
+      Result := TGocciaClassValue(AObj).GetSymbolProperty(ASymbol)
+    else if AObj is TGocciaObjectValue then
+      Result := TGocciaObjectValue(AObj).GetSymbolProperty(ASymbol)
+    else if AObj is TGocciaSymbolValue then
+    begin
+      if TGocciaSymbolValue.SharedPrototype is TGocciaObjectValue then
+        Result := TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype)
+          .GetSymbolPropertyWithReceiver(ASymbol, AObj)
+      else
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    end
+    else
+    begin
+      BoxedValue := AObj.Box;
+      if Assigned(BoxedValue) then
+        Result := BoxedValue.GetSymbolProperty(ASymbol)
+      else
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    end;
+  end;
+
 begin
   Obj := ObjectExpr.Evaluate(AContext);
   PropertyKeyValue := PropertyExpression.Evaluate(AContext);
-  if (PropertyKeyValue is TGocciaSymbolValue) and ((Obj is TGocciaClassValue) or (Obj is TGocciaObjectValue)) then
+  if PropertyKeyValue is TGocciaSymbolValue then
   begin
-    if Obj is TGocciaClassValue then
-      CurrentValue := NormalizeAssignmentValue(
-        TGocciaClassValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue)))
-    else
-      CurrentValue := NormalizeAssignmentValue(
-        TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue)));
+    CurrentValue := NormalizeAssignmentValue(ReadSymbolProperty(Obj,
+      TGocciaSymbolValue(PropertyKeyValue)));
 
     if IsShortCircuitOperator then
     begin
@@ -1756,21 +1828,15 @@ begin
         Exit(CurrentValue);
 
       Result := Value.Evaluate(AContext);
-      if Obj is TGocciaClassValue then
-        TGocciaClassValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropertyKeyValue), Result)
-      else
-        TGocciaObjectValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropertyKeyValue), Result);
+      AssignSymbolProperty(Obj, TGocciaSymbolValue(PropertyKeyValue),
+        Result, AContext.OnError, Line, Column);
       Exit;
     end;
 
     RhsValue := Value.Evaluate(AContext);
     PerformSymbolPropertyCompoundAssignment(Obj, TGocciaSymbolValue(PropertyKeyValue), RhsValue, Operator, AContext.OnError, Line, Column);
-    if Obj is TGocciaClassValue then
-      Result := NormalizeAssignmentValue(
-        TGocciaClassValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue)))
-    else
-      Result := NormalizeAssignmentValue(
-        TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue)));
+    Result := NormalizeAssignmentValue(ReadSymbolProperty(Obj,
+      TGocciaSymbolValue(PropertyKeyValue)));
     Exit;
   end;
 

@@ -121,6 +121,7 @@ The base `TGocciaValue` class provides two virtual methods for runtime type disc
 TGocciaValue = class(TGCManagedObject)
   function IsPrimitive: Boolean; virtual;  // Returns False by default
   function IsCallable: Boolean; virtual;   // Returns False by default
+  function IsConstructable: Boolean; virtual; // Returns False by default
 end;
 ```
 
@@ -158,6 +159,23 @@ Used by:
 - `IsDeepEqual` — to reject callable objects from deep structural comparison when TypeNames differ.
 
 **Important:** When code needs to cast to `TGocciaFunctionBase` after the check (e.g., accessor property invocation via `.Call()`), use `is TGocciaFunctionBase` instead of `IsCallable`. This is because `TGocciaClassValue` inherits from `TGocciaValue` (not `TGocciaFunctionBase`) but returns `True` for `IsCallable`. The RTTI check ensures the cast is safe.
+
+### `IsConstructable`
+
+Returns `True` for values that can be used as constructors. This is intentionally narrower than `IsCallable`, because callable values such as arrow functions, generator functions, and explicitly non-constructable native functions must be rejected by `new`, `extends`, and `super()` construction paths.
+
+Overridden by:
+
+| Type | Returns |
+|------|---------|
+| `TGocciaFunctionBase` | `True` when the function owns a `prototype` property, or for bound functions when the target is constructable |
+| `TGocciaNativeFunctionValue` | `True` unless marked `NotConstructable`; native functions created without a prototype are non-constructable by default |
+| `TGocciaClassValue` | `True` |
+| `TGocciaProxyValue` | Delegates to the proxy target |
+| Generator functions and non-constructor bytecode functions | `False` |
+| All others | `False` (inherited default) |
+
+Use `IsConstructable` instead of `IsCallable` when validating class heritage or constructor dispatch. Continue to use the concrete value type when the next step requires a specific construct API.
 
 ## Virtual Property Access
 
@@ -280,9 +298,9 @@ Each symbol has a globally unique `Id` assigned at creation. Type coercion follo
 - `Number(symbol)` — Throws `TypeError`. Internally, `ToNumberLiteral` raises the error.
 - Unary `+symbol` / `-symbol` — Throws `TypeError` (these trigger `ToNumberLiteral`).
 
-The implicit coercion checks are implemented at the operator level (in `Goccia.Evaluator.Arithmetic.pas`, `Goccia.Evaluator.pas`, and `Goccia.Values.StringObjectValue.pas`) rather than in `ToStringLiteral`, because `ToStringLiteral` is also used internally for property keys and display purposes where conversion must succeed.
+The implicit coercion checks are implemented at the operator level (primarily in `Goccia.Arithmetic.pas`, with string built-in behavior in `Goccia.Values.StringObjectValue.pas`) rather than in `ToStringLiteral`, because `ToStringLiteral` is also used internally for property keys and display purposes where conversion must succeed.
 
-**Shared prototype singleton:** Like strings and numbers, symbols use a per-engine shared prototype object stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). It is initialized via `InitializePrototype`; the realm pins it on `SetSlot` and releases it on `Destroy`. The `description` getter and `toString()` method are registered on this shared prototype, and `TGocciaSymbolValue.GetProperty` delegates to the prototype via `GetPropertyWithContext` so that accessor getters receive the correct symbol instance as `this`. `Symbol.prototype` is exposed on the Symbol constructor function, matching ECMAScript semantics. Symbol is an always-registered standard built-in (it is not part of `TGocciaGlobalBuiltins`, which only gates special-purpose opt-in built-ins like test assertions, benchmarking, and FFI); symbol type checks at the operator level use standard RTTI (`is TGocciaSymbolValue`) rather than VMT methods purely for implementation simplicity.
+**Shared prototype singleton:** Like strings and numbers, symbols use a per-engine shared prototype object stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). It is initialized via `InitializePrototype`; the realm pins it on `SetSlot` and releases it on `Destroy`. The `description` getter and `toString()` method are registered on this shared prototype, and `TGocciaSymbolValue.GetProperty` delegates to the prototype via `GetPropertyWithContext` so that accessor getters receive the correct symbol instance as `this`. `Symbol.prototype` is exposed on the Symbol constructor function, matching ECMAScript semantics. Symbol is an always-registered standard built-in; special-purpose opt-ins like test assertions, benchmarking, and FFI are runtime globals selected through `TGocciaRuntimeGlobals`. Symbol type checks at the operator level use standard RTTI (`is TGocciaSymbolValue`) rather than VMT methods purely for implementation simplicity.
 
 **Weak eligibility:** `TGocciaSymbolValue.Registered` distinguishes symbols returned by `Symbol.for()` from local/well-known symbols. Non-registered symbols can be held weakly by WeakMap/WeakSet; registered symbols are pinned by the global symbol registry and rejected by `CanBeHeldWeakly`.
 
@@ -653,7 +671,7 @@ This replaced an earlier enum-based design. See [decision-log.md](decision-log.m
 - **Negative zero** — `-0` and `+0` are equal in IEEE 754 but distinguishable in JavaScript (`Object.is(-0, +0)` is `false`). The `IsNegativeZero` accessor encapsulates the sign-bit check.
 - **Display correctness** — `NaN.toString()` must return `"NaN"`, not a floating-point artifact. The accessors ensure correct string conversion.
 
-**Pitfall: raw `Value = 0` checks.** The `IsActualZero` helper in `Goccia.Evaluator.Arithmetic.pas` uses `(Value = 0) and not IsNaN and not IsInfinite` — this intentionally treats `-0` as zero, which is correct for exponentiation (`(-0)^0 === 1`). In contexts where `-0` must be distinguished (e.g. `Object.is`, sort ordering), use `IsNegativeZero` explicitly. The `NumericRank` helper in `Goccia.Values.ArrayValue.pas` maps each special value to a distinct sort key for this purpose.
+**Pitfall: raw `Value = 0` checks.** The `IsActualZero` helper in `Goccia.Arithmetic.pas` uses `(Value = 0) and not IsNaN and not IsInfinite` — this intentionally treats `-0` as zero, which is correct for exponentiation (`(-0)^0 === 1`). In contexts where `-0` must be distinguished (e.g. `Object.is`, sort ordering), use `IsNegativeZero` explicitly. The `NumericRank` helper in `Goccia.Values.ArrayValue.pas` maps each special value to a distinct sort key for this purpose.
 
 ### `this` Binding Design
 

@@ -52,10 +52,10 @@ uses
   Generics.Collections,
 
   Goccia.Arguments.Validator,
+  Goccia.Arithmetic,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
@@ -376,6 +376,16 @@ begin
       else
         Result := TGocciaBooleanLiteralValue.FalseValue;
     end;
+    Exit;
+  end;
+
+  if AArgs.GetElement(0) is TGocciaSymbolValue then
+  begin
+    // Symbol primitives have no own properties, but Object.hasOwn still
+    // evaluates the property key before returning.
+    if not (AArgs.GetElement(1) is TGocciaSymbolValue) then
+      PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
+    Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
 

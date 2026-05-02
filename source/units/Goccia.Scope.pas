@@ -368,7 +368,7 @@ begin
 
   if TargetScope.FVarBindings.TryGetValue(AName, Binding) then
   begin
-    // Redeclaration: only update if there's a real initializer
+    // Redeclaration: only update if the source had a syntactic initializer.
     if AHasInitializer then
     begin
       Binding.Value := AValue;

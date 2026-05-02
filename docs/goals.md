@@ -18,7 +18,7 @@ AI agents need to execute generated code in a constrained environment. GocciaScr
 - **Read-only network access** — A WHATWG `fetch` (GET/HEAD only) gated by an explicit host allowlist (`--allowed-host`); without an allowlist any call to `fetch` throws `TypeError`, so scripts cannot retrieve data or reach the network unless the host opts in
 - **Deterministic execution** — Same input produces the same output; no implicit global state leakage between executions
 - **Timeout enforcement** — The `--timeout` flag and embedding API allow hosts to kill runaway scripts
-- **Controlled built-in surface** — The host chooses which built-ins to expose via `TGocciaGlobalBuiltins` flags (see [Embedding](embedding.md))
+- **Controlled built-in surface** — The host chooses which runtime globals to expose via `TGocciaRuntimeGlobals` (see [Embedding](embedding.md))
 - **No eval** — `eval()` is excluded by design, preventing code injection from within scripts
 - **No dynamic code generation by default** — The `Function()` constructor is excluded unless the host opts in via `--unsafe-function-constructor`; the `function` keyword (declarations and expressions) is excluded by default and only re-enabled in compatibility mode via `--compat-function`
 

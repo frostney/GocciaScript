@@ -22,6 +22,12 @@ describe("modulo operator", () => {
     expect(-10 % -3).toBe(-1);
   });
 
+  test("negative exact-zero remainder preserves negative zero", () => {
+    expect(Object.is(-4 % 2, -0)).toBe(true);
+    expect(Object.is(-0 % 2, -0)).toBe(true);
+    expect(Object.is(4 % 2, 0)).toBe(true);
+  });
+
   test("modulo by zero returns NaN", () => {
     expect(Number.isNaN(5 % 0)).toBe(true);
     expect(Number.isNaN(0 % 0)).toBe(true);

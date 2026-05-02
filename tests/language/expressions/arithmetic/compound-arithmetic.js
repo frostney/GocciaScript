@@ -72,3 +72,13 @@ test("compound exponentiation", () => {
   a **= 3;
   expect(a).toBe(8);
 });
+
+test("compound assignment cannot mutate captured const binding", () => {
+  expect(() => {
+    const value = 1;
+    const mutate = () => {
+      value += 1;
+    };
+    mutate();
+  }).toThrow(TypeError);
+});

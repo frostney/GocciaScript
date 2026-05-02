@@ -33,6 +33,20 @@ begin
   Result := (V = 0.0) and (Bits < 0);
 end;
 
+function NegativeZeroFloat: Double; inline;
+begin
+  Result := 0.0;
+  Result := Result * -1.0;
+end;
+
+function FoldedModuloValue(const ALeft, ARight: Double): Double; inline;
+begin
+  Result := FMod(ALeft, ARight);
+
+  if (Result = 0.0) and ((ALeft < 0.0) or IsNegativeZeroFloat(ALeft)) then
+    Result := NegativeZeroFloat;
+end;
+
 procedure EmitFoldedNumber(const ACtx: TGocciaCompilationContext;
   const AValue: Double; const ADest: UInt8);
 var
@@ -178,10 +192,7 @@ begin
       begin
         if RightVal = 0.0 then
           Exit;
-        if (Frac(LeftVal) = 0.0) and (Frac(RightVal) = 0.0) then
-          EmitFoldedNumber(ACtx, Trunc(LeftVal) mod Trunc(RightVal), ADest)
-        else
-          EmitFoldedNumber(ACtx, FMod(LeftVal, RightVal), ADest);
+        EmitFoldedNumber(ACtx, FoldedModuloValue(LeftVal, RightVal), ADest);
         Result := True;
       end;
       gttPower:

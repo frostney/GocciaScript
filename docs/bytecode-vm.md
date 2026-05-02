@@ -17,7 +17,7 @@ GocciaScript has two execution modes:
 - **Interpreter mode**: tree-walk execution over the AST via `TGocciaInterpreterExecutor`
 - **Bytecode mode**: AST compilation to Goccia bytecode, then execution on `TGocciaVM` via `TGocciaBytecodeExecutor`
 
-Both modes are implementations of `TGocciaExecutor` (see [Architecture](architecture.md#executor-architecture)). The single `TGocciaEngine` class bootstraps the runtime (global scope, built-ins, shims) and delegates execution to whichever executor is configured. The bytecode executor has no dependency on the interpreter or evaluator — it only uses the compiler and VM.
+Both modes are implementations of `TGocciaExecutor` (see [Architecture](architecture.md#executor-architecture)). The single `TGocciaEngine` class bootstraps the core language environment (global scope, core built-ins, shims) and delegates execution to whichever executor is configured. Optional host/runtime globals are attached through runtime extensions. The bytecode executor has no dependency on the interpreter or evaluator — it only uses the compiler and VM.
 
 ## Pipeline
 

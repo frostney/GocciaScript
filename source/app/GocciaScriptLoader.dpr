@@ -17,6 +17,7 @@ uses
   Goccia.Bytecode.Binary,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  CLI.ConfigFile,
   CLI.Options,
   Goccia.Constants.PropertyNames,
   Goccia.Coverage,
@@ -33,6 +34,7 @@ uses
   Goccia.Parser,
   Goccia.Profiler,
   Goccia.Profiler.Report,
+  Goccia.Runtime,
   Goccia.Scope,
   Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
@@ -98,6 +100,7 @@ type
     FInlineGlobals: TGocciaRepeatableOption;
     FLastPaths: TStringList;
 
+    function EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
     function ParseSource(const ASource: TStringList; const AFileName: string;
@@ -139,6 +142,8 @@ type
     procedure RunScripts(const APath: string);
   protected
     procedure Configure; override;
+    procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
+      const AFileConfig: TConfigEntryArray); override;
     function UsageLine: string; override;
     procedure Validate; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
@@ -229,6 +234,24 @@ end;
 
 { TScriptLoaderApp - Configure }
 
+function RuntimeConsole(const AEngine: TGocciaEngine): TGocciaConsole;
+var
+  Runtime: TGocciaRuntimeExtension;
+begin
+  Runtime := GetRuntimeExtension(AEngine);
+  if Assigned(Runtime) then
+    Result := Runtime.BuiltinConsole
+  else
+    Result := nil;
+end;
+
+function TScriptLoaderApp.EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
+begin
+  Result := DefaultRuntimeGlobals;
+  if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
+    Include(Result, rgFFI);
+end;
+
 function TScriptLoaderApp.UsageLine: string;
 begin
   Result := '[file|directory|-] [options]';
@@ -249,6 +272,16 @@ begin
     'Inject globals from a JSON/JSON5/TOML/YAML file or a module with named exports');
   FInlineGlobals := AddRepeatable('global',
     'Inject a single global; value is parsed as JSON or kept as a string');
+end;
+
+procedure TScriptLoaderApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
+  const AFileConfig: TConfigEntryArray);
+var
+  Runtime: TGocciaRuntimeExtension;
+begin
+  Runtime := AttachRuntimeExtension(AEngine, EffectiveRuntimeGlobals);
+  if LogFileOpen and Assigned(Runtime.BuiltinConsole) then
+    Runtime.BuiltinConsole.LogCallback := HandleConsoleLog;
 end;
 
 function TScriptLoaderApp.IsJsonOutput: Boolean;
@@ -539,7 +572,7 @@ begin
   try
     Engine.SuppressWarnings := GIsWorkerThread or
       IsJsonOutput;
-    ConfigureConsole(Engine.BuiltinConsole, ACapture);
+    ConfigureConsole(RuntimeConsole(Engine), ACapture);
     ApplyDataGlobalsToEngine(Engine);
     StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
     StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
@@ -605,7 +638,7 @@ begin
   try
     Engine := CreateEngine(AFileName, ASource, Executor);
     try
-      ConfigureConsole(Engine.BuiltinConsole, ACapture);
+      ConfigureConsole(RuntimeConsole(Engine), ACapture);
       ApplyDataGlobalsToEngine(Engine);
 
       ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultPreprocessors,
@@ -675,7 +708,7 @@ begin
     try
       Engine := CreateEngine(AFileName, nil, Executor);
       try
-        ConfigureConsole(Engine.BuiltinConsole, ACapture);
+        ConfigureConsole(RuntimeConsole(Engine), ACapture);
         ApplyDataGlobalsToEngine(Engine);
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
         StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
@@ -916,7 +949,7 @@ begin
     Exit;
   end;
 
-  Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+  Source := SourceRegistry.Load(AFileName);
   try
     RunSource(Source, AFileName);
   finally
@@ -937,7 +970,7 @@ begin
 
   StartTime := GetNanoseconds;
   try
-    Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+    Source := SourceRegistry.Load(AFileName);
   except
     on E: Exception do
     begin
@@ -984,7 +1017,7 @@ begin
 
   if JobCount > 1 then
   begin
-    EnsureSharedPrototypesInitialized(EffectiveBuiltins);
+    EnsureSharedPrototypesInitialized(EffectiveRuntimeGlobals);
     BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
     Pool := TGocciaThreadPool.Create(JobCount);
     try
@@ -1022,13 +1055,38 @@ end;
 
 procedure TScriptLoaderApp.RunScriptFromStdin;
 var
-  Source: TStringList;
+  Source, SectionSource, Names: TStringList;
+  I: Integer;
 begin
   Source := ReadSourceFromText(Input);
+  if not MultifileEnabled then
+  begin
+    try
+      RunSource(Source, STDIN_FILE_NAME);
+    finally
+      Source.Free;
+    end;
+    Exit;
+  end;
+
+  // Multifile stdin: ownership of Source transfers to SplitStdinMultifile
+  // (which either registers it under <stdin> as a single section or
+  // splits it into multiple sections and frees the wrapper).
+  Names := SplitStdinMultifile(Source);
   try
-    RunSource(Source, STDIN_FILE_NAME);
+    for I := 0 to Names.Count - 1 do
+    begin
+      if I > 0 then
+        WriteLn;
+      SectionSource := SourceRegistry.Load(Names[I]);
+      try
+        RunSource(SectionSource, Names[I]);
+      finally
+        SectionSource.Free;
+      end;
+    end;
   finally
-    Source.Free;
+    Names.Free;
   end;
 end;
 
@@ -1088,7 +1146,7 @@ var
   Pool: TGocciaThreadPool;
   I: Integer;
 begin
-  EnsureSharedPrototypesInitialized(EffectiveBuiltins);
+  EnsureSharedPrototypesInitialized(EffectiveRuntimeGlobals);
 
   Pool := TGocciaThreadPool.Create(AJobCount);
   try
@@ -1109,7 +1167,7 @@ end;
 
 procedure TScriptLoaderApp.RunScripts(const APath: string);
 var
-  Files: TStringList;
+  Files, RawFiles, SinglePath: TStringList;
   I: Integer;
 begin
   if IsStdinPath(APath) then
@@ -1120,7 +1178,12 @@ begin
 
   if DirectoryExists(APath) then
   begin
-    Files := FindAllFiles(APath, ScriptExtensions);
+    RawFiles := FindAllFiles(APath, ScriptExtensions);
+    try
+      Files := ExpandMultifileFiles(RawFiles);
+    finally
+      RawFiles.Free;
+    end;
     try
       if GetJobCount(Files.Count) > 1 then
       begin
@@ -1140,7 +1203,37 @@ begin
     end;
   end
   else if FileExists(APath) then
-    RunScriptFromFile(APath)
+  begin
+    if MultifileEnabled then
+    begin
+      SinglePath := TStringList.Create;
+      try
+        SinglePath.Add(APath);
+        Files := ExpandMultifileFiles(SinglePath);
+      finally
+        SinglePath.Free;
+      end;
+      try
+        if GetJobCount(Files.Count) > 1 then
+        begin
+          WriteLn(SysUtils.Format('Running %d files with %d workers',
+            [Files.Count, GetJobCount(Files.Count)]));
+          RunScriptsParallel(Files, GetJobCount(Files.Count));
+        end
+        else
+          for I := 0 to Files.Count - 1 do
+          begin
+            if I > 0 then
+              WriteLn;
+            RunScriptFromFile(Files[I]);
+          end;
+      finally
+        Files.Free;
+      end;
+    end
+    else
+      RunScriptFromFile(APath);
+  end
   else
     raise Exception.Create('Path not found: ' + APath);
 end;
@@ -1149,10 +1242,9 @@ end;
 
 procedure TScriptLoaderApp.ExecuteWithPaths(const APaths: TStringList);
 var
-  I: Integer;
-  Files: TStringList;
-  TempFiles: TStringList;
-  Source: TStringList;
+  I, SectionIndex: Integer;
+  Files, RawFiles, StdinNames: TStringList;
+  Source, SectionSource: TStringList;
   JSONResult: TScriptLoaderJSONFileResult;
   JSONResults: array of TScriptLoaderJSONFileResult;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
@@ -1171,29 +1263,65 @@ begin
     raise TGocciaParseError.Create(
       '--source-map=<file> supports a single input file or stdin.');
 
+  // Use Present rather than the value to catch the bare --source-map
+  // form too: even if every section gets its own derived .map file, a
+  // user passing --source-map alongside --multifile is almost certainly
+  // signalling intent that does not match the multi-output reality.
+  if FSourceMap.Present and MultifileEnabled then
+    raise TGocciaParseError.Create(
+      '--source-map cannot be combined with --multifile (an input '
+      + 'may expand to multiple sections).');
+
   if IsJsonOutput then
   begin
     if (APaths.Count = 0) or
        ((APaths.Count = 1) and IsStdinPath(APaths[0])) then
     begin
       Source := ReadSourceFromText(Input);
-      try
-        BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
-        JSONResult := RunSourceForJSON(Source, STDIN_FILE_NAME, False);
-        SetLength(JSONResults, 1);
-        JSONResults[0] := JSONResult;
-        if not JSONResult.Ok then
-          ExitCode := 1;
-        WriteLn(BuildAggregateScriptLoaderJSON(JSONResults,
-          FinishCLIJSONMemoryMeasurement(MemoryMeasurement), 1, 1,
-          IsCompactJsonOutput));
-      finally
-        Source.Free;
+      BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
+      if MultifileEnabled then
+      begin
+        StdinNames := SplitStdinMultifile(Source);
+        try
+          SetLength(JSONResults, StdinNames.Count);
+          for SectionIndex := 0 to StdinNames.Count - 1 do
+          begin
+            SectionSource := SourceRegistry.Load(StdinNames[SectionIndex]);
+            try
+              JSONResults[SectionIndex] :=
+                RunSourceForJSON(SectionSource, StdinNames[SectionIndex], False);
+              if not JSONResults[SectionIndex].Ok then
+                ExitCode := 1;
+            finally
+              SectionSource.Free;
+            end;
+          end;
+          WriteLn(BuildAggregateScriptLoaderJSON(JSONResults,
+            FinishCLIJSONMemoryMeasurement(MemoryMeasurement),
+            1, StdinNames.Count, IsCompactJsonOutput));
+        finally
+          StdinNames.Free;
+        end;
+      end
+      else
+      begin
+        try
+          JSONResult := RunSourceForJSON(Source, STDIN_FILE_NAME, False);
+          SetLength(JSONResults, 1);
+          JSONResults[0] := JSONResult;
+          if not JSONResult.Ok then
+            ExitCode := 1;
+          WriteLn(BuildAggregateScriptLoaderJSON(JSONResults,
+            FinishCLIJSONMemoryMeasurement(MemoryMeasurement), 1, 1,
+            IsCompactJsonOutput));
+        finally
+          Source.Free;
+        end;
       end;
       Exit;
     end;
 
-    Files := TStringList.Create;
+    RawFiles := TStringList.Create;
     try
       for I := 0 to APaths.Count - 1 do
       begin
@@ -1201,22 +1329,20 @@ begin
           raise TGocciaParseError.Create(
             'stdin supports only as the sole input path.');
         if DirectoryExists(APaths[I]) then
-        begin
-          TempFiles := FindAllFiles(APaths[I], ScriptExtensions);
-          try
-            Files.AddStrings(TempFiles);
-          finally
-            TempFiles.Free;
-          end;
-        end
+          RawFiles.AddStrings(FindAllFiles(APaths[I], ScriptExtensions))
         else if FileExists(APaths[I]) then
-          Files.Add(APaths[I])
+          RawFiles.Add(APaths[I])
         else
           raise Exception.Create('Path not found: ' + APaths[I]);
       end;
-      RunJSONFiles(Files);
+      Files := ExpandMultifileFiles(RawFiles);
+      try
+        RunJSONFiles(Files);
+      finally
+        Files.Free;
+      end;
     finally
-      Files.Free;
+      RawFiles.Free;
     end;
     Exit;
   end;

@@ -14,6 +14,27 @@ test("Symbol with description via String()", () => {
   expect(String(s)).toBe("Symbol(test)");
 });
 
+test("Symbol description is converted with ToString", () => {
+  const calls = [];
+  const s = Symbol({
+    valueOf() {
+      calls.push("valueOf");
+      return {};
+    },
+    toString() {
+      calls.push("toString");
+      return "object description";
+    },
+  });
+
+  expect(s.description).toBe("object description");
+  expect(calls).toEqual(["toString"]);
+});
+
+test("Symbol description conversion rejects symbols", () => {
+  expect(() => Symbol(Symbol("description"))).toThrow(TypeError);
+});
+
 test("Symbol without description via String()", () => {
   const s = Symbol();
   expect(String(s)).toBe("Symbol()");
@@ -36,6 +57,13 @@ test("Symbol as object property key", () => {
   const obj = {};
   obj[key] = "value";
   expect(obj[key]).toBe("value");
+});
+
+test("symbol-keyed write on primitive throws TypeError", () => {
+  const key = Symbol("primitiveWrite");
+  expect(() => {
+    (1)[key] = "value";
+  }).toThrow(TypeError);
 });
 
 test("Symbol properties are not enumerable by string keys", () => {
@@ -135,6 +163,11 @@ test("new Symbol() throws TypeError", () => {
   expect(() => new Symbol("desc")).toThrow(TypeError);
 });
 
+test("Symbol is constructable as a newTarget only", () => {
+  const value = Reflect.construct(class {}, [], Symbol);
+  expect(Object.getPrototypeOf(value)).toBe(Symbol.prototype);
+});
+
 test("Symbol() distinguishes undefined description from empty-string description", () => {
   expect(Symbol().description).toBe(undefined);
   expect(Symbol(undefined).description).toBe(undefined);
@@ -164,4 +197,18 @@ test("Symbol.prototype's [[Prototype]] is Object.prototype", () => {
 test("Object.getPrototypeOf(symbolPrimitive) returns Symbol.prototype", () => {
   const s = Symbol("x");
   expect(Object.getPrototypeOf(s)).toBe(Symbol.prototype);
+});
+
+test("symbol primitives do not have an own description property", () => {
+  const s = Symbol("desc");
+  expect(s.hasOwnProperty("description")).toBe(false);
+  expect(Object.hasOwn(s, "description")).toBe(false);
+});
+
+test("assigning symbol-keyed properties to symbol primitives throws", () => {
+  const s = Symbol("target");
+  const key = Symbol("key");
+
+  expect(() => { s[Symbol.toStringTag] = "tag"; }).toThrow(TypeError);
+  expect(() => { s[key] = "value"; }).toThrow(TypeError);
 });

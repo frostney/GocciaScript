@@ -283,6 +283,7 @@ uses
 
   TimingUtils,
 
+  Goccia.Arithmetic,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,

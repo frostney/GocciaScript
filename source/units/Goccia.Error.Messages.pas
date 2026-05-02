@@ -580,6 +580,7 @@ resourcestring
   SErrorDisposePropertyNotFunction = 'Property [Symbol.%s] is not a function';
 
   // Symbol prototype errors
+  SErrorSymbolConstructorRequiresCall = 'Symbol is not a constructor';
   SErrorSymbolProtoToStringRequiresSymbol = 'Symbol.prototype.toString requires that ''this'' be a Symbol';
   SErrorSymbolProtoDescriptionRequiresSymbol = 'Symbol.prototype.description requires that ''this'' be a Symbol';
   SErrorSymbolProtoValueOfRequiresSymbol = 'Symbol.prototype.valueOf requires that ''this'' be a Symbol';
@@ -594,6 +595,7 @@ resourcestring
 
   // Generic iterator errors
   SErrorIteratorReturnMustBeCallable = 'Iterator return property must be callable';
+  SErrorIteratorNextMustBeCallable = 'Iterator next property must be callable';
 
   // Iterator concat errors
   SErrorIteratorConcatMustReturnObject = 'Iterator.concat: [Symbol.iterator]() must return an object';

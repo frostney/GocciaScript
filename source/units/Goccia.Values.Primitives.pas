@@ -30,6 +30,7 @@ type
 
     function IsPrimitive: Boolean; virtual;
     function IsCallable: Boolean; virtual;
+    function IsConstructable: Boolean; virtual;
     function GetProperty(const AName: string): TGocciaValue; virtual;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); virtual;
   end;
@@ -77,6 +78,7 @@ type
   public
     constructor Create(const AValue: Boolean);
 
+    class function FromBoolean(const AValue: Boolean): TGocciaBooleanLiteralValue; static; inline;
     class function TrueValue: TGocciaBooleanLiteralValue;
     class function FalseValue: TGocciaBooleanLiteralValue;
 
@@ -356,6 +358,10 @@ begin
   Result := False;
 end;
 
+function TGocciaValue.IsConstructable: Boolean;
+begin
+  Result := False;
+end;
 
 function TGocciaValue.GetProperty(const AName: string): TGocciaValue;
 begin
@@ -511,6 +517,15 @@ begin
     FFalseValue := TGocciaBooleanLiteralValue.Create(False);
   end;
   Result := FFalseValue;
+end;
+
+class function TGocciaBooleanLiteralValue.FromBoolean(
+  const AValue: Boolean): TGocciaBooleanLiteralValue; inline;
+begin
+  if AValue then
+    Result := TrueValue
+  else
+    Result := FalseValue;
 end;
 
 function TGocciaBooleanLiteralValue.TypeName: string;

@@ -1,5 +1,5 @@
 /*---
-description: Goccia.builtIns exposes the array of enabled special-purpose built-in flag names
+description: Goccia.builtIns exposes the array of enabled special-purpose runtime built-in names
 features: [Goccia]
 ---*/
 

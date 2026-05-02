@@ -116,6 +116,8 @@ begin
     Goccia.Compiler.Expressions.CompileIdentifier(Ctx, TGocciaIdentifierExpression(AExpr), ADest)
   else if AExpr is TGocciaBinaryExpression then
     Goccia.Compiler.Expressions.CompileBinary(Ctx, TGocciaBinaryExpression(AExpr), ADest)
+  else if AExpr is TGocciaSequenceExpression then
+    Goccia.Compiler.Expressions.CompileSequence(Ctx, TGocciaSequenceExpression(AExpr), ADest)
   else if AExpr is TGocciaUnaryExpression then
     Goccia.Compiler.Expressions.CompileUnary(Ctx, TGocciaUnaryExpression(AExpr), ADest)
   else if AExpr is TGocciaPropertyCompoundAssignmentExpression then
@@ -430,8 +432,10 @@ begin
           end;
         end;
       end;
-      EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
-      EmitInstruction(BuildContext, EncodeABC(OP_RETURN, 0, 0, 0));
+      Reg := FCurrentScope.AllocateRegister;
+      EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, Reg, 0, 0));
+      EmitInstruction(BuildContext, EncodeABC(OP_RETURN, Reg, 0, 0));
+      FCurrentScope.FreeRegister;
     end
     else if ABody is TGocciaExpression then
     begin
@@ -441,8 +445,12 @@ begin
       FCurrentScope.FreeRegister;
     end
     else
-      EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
-      EmitInstruction(BuildContext, EncodeABC(OP_RETURN, 0, 0, 0));
+    begin
+      Reg := FCurrentScope.AllocateRegister;
+      EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, Reg, 0, 0));
+      EmitInstruction(BuildContext, EncodeABC(OP_RETURN, Reg, 0, 0));
+      FCurrentScope.FreeRegister;
+    end;
   finally
     Goccia.Compiler.Statements.RestorePendingFinally(SavedFinally);
   end;

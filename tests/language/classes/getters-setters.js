@@ -223,6 +223,26 @@ test("static getter inheritance", () => {
   expect(Derived.type).toBe("base");
 });
 
+test("static super getter receives derived class as this", () => {
+  class Base {
+    static label = "base";
+
+    static get inheritedLabel() {
+      return this.label;
+    }
+  }
+
+  class Derived extends Base {
+    static label = "derived";
+
+    static readLabel() {
+      return super.inheritedLabel;
+    }
+  }
+
+  expect(Derived.readLabel()).toBe("derived");
+});
+
 test("static getter override in subclass", () => {
   class Base {
     static get type() {

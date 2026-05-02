@@ -276,7 +276,7 @@ begin
 
   OutputPath := ResolveOutputPath(AFileName);
 
-  Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+  Source := SourceRegistry.Load(AFileName);
   try
     EmitBytecode(Source, AFileName, OutputPath);
   finally
@@ -284,19 +284,76 @@ begin
   end;
 end;
 
+{ Replace characters that are illegal in filenames on Windows (< > : " /
+  \ | * ?) and ASCII control characters with '_'.  Used when synthesizing
+  on-disk paths from multifile section names whose synthetic basename
+  contains the angle brackets of the stdin marker (e.g.
+  '<stdin>[part1]').  The section name itself stays intact for diagnostic
+  output; only the disk path is sanitized. }
+function SanitizeFileBaseName(const ABaseName: string): string;
+var
+  I: Integer;
+  C: Char;
+begin
+  SetLength(Result, Length(ABaseName));
+  for I := 1 to Length(ABaseName) do
+  begin
+    C := ABaseName[I];
+    if (C = '<') or (C = '>') or (C = ':') or (C = '"') or
+       (C = '/') or (C = '\') or (C = '|') or (C = '?') or (C = '*') or
+       (Ord(C) < 32) then
+      Result[I] := '_'
+    else
+      Result[I] := C;
+  end;
+end;
+
 procedure TBundlerApp.EmitFromStdin;
 var
-  Source: TStringList;
+  Source, SectionSource, Names: TStringList;
+  OutputPath: string;
+  I: Integer;
 begin
   if not FOutputPath.Present then
     raise TGocciaParseError.Create(
       '--output=<path> is required when compiling from stdin.');
 
+  Source := ReadSourceFromText(Input);
+
+  if MultifileEnabled then
+  begin
+    if not DirectoryExists(FOutputPath.Value) then
+      raise TGocciaParseError.Create(
+        '--output must be a directory when --multifile is set with stdin.');
+
+    // Ownership of Source transfers to SplitStdinMultifile.
+    Names := SplitStdinMultifile(Source);
+    try
+      for I := 0 to Names.Count - 1 do
+      begin
+        // Sanitize the filename so '<stdin>[partN]' becomes a Windows-
+        // legal '_stdin_[partN].gbc' on disk.  The section name stays
+        // intact for EmitBytecode (used for diagnostics).
+        OutputPath := IncludeTrailingPathDelimiter(FOutputPath.Value) +
+          ChangeFileExt(SanitizeFileBaseName(ExtractFileName(Names[I])),
+            EXT_GBC);
+        SectionSource := SourceRegistry.Load(Names[I]);
+        try
+          EmitBytecode(SectionSource, Names[I], OutputPath);
+        finally
+          SectionSource.Free;
+        end;
+      end;
+    finally
+      Names.Free;
+    end;
+    Exit;
+  end;
+
   if DirectoryExists(FOutputPath.Value) then
     raise TGocciaParseError.Create(
       '--output must be a file when compiling from stdin.');
 
-  Source := ReadSourceFromText(Input);
   try
     EmitBytecode(Source, STDIN_FILE_NAME, FOutputPath.Value);
   finally
@@ -324,7 +381,7 @@ var
   Pool: TGocciaThreadPool;
   I: Integer;
 begin
-  EnsureSharedPrototypesInitialized(EffectiveBuiltins);
+  EnsureSharedPrototypesInitialized;
 
   Pool := TGocciaThreadPool.Create(AJobCount);
   try
@@ -345,7 +402,7 @@ end;
 
 procedure TBundlerApp.EmitPath(const APath: string);
 var
-  Files: TStringList;
+  Files, RawFiles, SinglePath: TStringList;
   I: Integer;
 begin
   if IsStdinPath(APath) then
@@ -356,7 +413,12 @@ begin
 
   if DirectoryExists(APath) then
   begin
-    Files := FindAllFiles(APath, ScriptExtensions);
+    RawFiles := FindAllFiles(APath, ScriptExtensions);
+    try
+      Files := ExpandMultifileFiles(RawFiles);
+    finally
+      RawFiles.Free;
+    end;
     try
       if GetJobCount(Files.Count) > 1 then
       begin
@@ -376,7 +438,30 @@ begin
     end;
   end
   else if FileExists(APath) then
-    EmitFromFile(APath)
+  begin
+    if MultifileEnabled then
+    begin
+      SinglePath := TStringList.Create;
+      try
+        SinglePath.Add(APath);
+        Files := ExpandMultifileFiles(SinglePath);
+      finally
+        SinglePath.Free;
+      end;
+      try
+        for I := 0 to Files.Count - 1 do
+        begin
+          if I > 0 then
+            WriteLn;
+          EmitFromFile(Files[I]);
+        end;
+      finally
+        Files.Free;
+      end;
+    end
+    else
+      EmitFromFile(APath);
+  end
   else
     raise Exception.Create('Path not found: ' + APath);
 end;
@@ -394,11 +479,25 @@ begin
     raise TGocciaParseError.Create(
       '--output must be a directory when compiling multiple files.');
 
+  if MultifileEnabled and FOutputPath.Present and
+     (FOutputPath.Value <> '') and not DirectoryExists(FOutputPath.Value) then
+    raise TGocciaParseError.Create(
+      '--output=<file> cannot be combined with --multifile (an input '
+      + 'may expand to multiple sections); pass a directory or omit '
+      + '--output.');
+
   if (FSourceMap.ValueOr('') <> '') and
      ((APaths.Count > 1) or
       ((APaths.Count = 1) and DirectoryExists(APaths[0]))) then
     raise TGocciaParseError.Create(
       '--source-map=<file> supports a single input file or stdin.');
+
+  // Use Present rather than the value to catch the bare --source-map
+  // form too — see ScriptLoader for the rationale.
+  if FSourceMap.Present and MultifileEnabled then
+    raise TGocciaParseError.Create(
+      '--source-map cannot be combined with --multifile (an input '
+      + 'may expand to multiple sections).');
 
   if APaths.Count = 0 then
     EmitFromStdin

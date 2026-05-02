@@ -75,6 +75,21 @@ describe("Array subclassing", () => {
     expect(arr[2]).toBe(30);
   });
 
+  test("native super() returns initialized receiver", () => {
+    class MyArray extends Array {
+      constructor(...items) {
+        const value = super(...items);
+        this.superReturnedThis = value === this;
+      }
+    }
+
+    const arr = new MyArray(1, 2);
+    expect(arr.superReturnedThis).toBe(true);
+    expect(arr.length).toBe(2);
+    expect(arr[0]).toBe(1);
+    expect(arr[1]).toBe(2);
+  });
+
   test("map returns subclass instance via Symbol.species", () => {
     class MyArray extends Array {}
     const arr = new MyArray(1, 2, 3);

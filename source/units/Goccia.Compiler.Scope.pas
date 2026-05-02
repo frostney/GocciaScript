@@ -7,6 +7,8 @@ interface
 uses
   Generics.Collections,
 
+  OrderedStringMap,
+
   Goccia.Bytecode.Chunk;
 
 type
@@ -43,6 +45,7 @@ type
   private
     FParent: TGocciaCompilerScope;
     FLocals: array of TGocciaCompilerLocal;
+    FLocalIndex: TOrderedStringMap<Integer>;
     FLocalCount: Integer;
     FUpvalues: array of TGocciaCompilerUpvalue;
     FUpvalueCount: Integer;
@@ -50,9 +53,12 @@ type
     FNextSlot: UInt8;
     FMaxSlot: UInt8;
     FPrivatePrefix: string;
+    procedure EnsureLocalIndex;
+    procedure RestoreLocalIndexBinding(const ARemovedName: string);
   public
     constructor Create(const AParent: TGocciaCompilerScope;
       const ADepth: Integer);
+    destructor Destroy; override;
 
     function DeclareLocal(const AName: string;
       const AIsConst: Boolean): UInt8;
@@ -104,18 +110,62 @@ implementation
 uses
   SysUtils;
 
+const
+  COMPILER_LOCAL_INDEX_THRESHOLD = 64;
+
 { TGocciaCompilerScope }
+
+procedure TGocciaCompilerScope.EnsureLocalIndex;
+var
+  I: Integer;
+begin
+  if Assigned(FLocalIndex) then
+    Exit;
+  if FLocalCount < COMPILER_LOCAL_INDEX_THRESHOLD then
+    Exit;
+
+  FLocalIndex := TOrderedStringMap<Integer>.Create(FLocalCount * 2);
+  for I := 0 to FLocalCount - 1 do
+    FLocalIndex.Add(FLocals[I].Name, I);
+end;
+
+procedure TGocciaCompilerScope.RestoreLocalIndexBinding(
+  const ARemovedName: string);
+var
+  I: Integer;
+begin
+  if not Assigned(FLocalIndex) then
+    Exit;
+
+  FLocalIndex.Remove(ARemovedName);
+  for I := FLocalCount - 1 downto 0 do
+    if FLocals[I].Name = ARemovedName then
+    begin
+      FLocalIndex.Add(ARemovedName, I);
+      Break;
+    end;
+
+  if FLocalCount < COMPILER_LOCAL_INDEX_THRESHOLD then
+    FreeAndNil(FLocalIndex);
+end;
 
 constructor TGocciaCompilerScope.Create(const AParent: TGocciaCompilerScope;
   const ADepth: Integer);
 begin
   inherited Create;
   FParent := AParent;
+  FLocalIndex := nil;
   FLocalCount := 0;
   FUpvalueCount := 0;
   FDepth := ADepth;
   FNextSlot := 0;
   FMaxSlot := 0;
+end;
+
+destructor TGocciaCompilerScope.Destroy;
+begin
+  FLocalIndex.Free;
+  inherited;
 end;
 
 function TGocciaCompilerScope.DeclareLocal(const AName: string;
@@ -139,6 +189,9 @@ begin
   FLocals[FLocalCount].TypeAnnotation := '';
   FLocals[FLocalCount].ElementTypeAnnotation := '';
   Result := FNextSlot;
+  EnsureLocalIndex;
+  if Assigned(FLocalIndex) then
+    FLocalIndex.Add(AName, FLocalCount);
   Inc(FLocalCount);
   Inc(FNextSlot);
   if FNextSlot > FMaxSlot then
@@ -173,6 +226,9 @@ begin
   FLocals[FLocalCount].TypeAnnotation := '';
   FLocals[FLocalCount].ElementTypeAnnotation := '';
   Result := FNextSlot;
+  EnsureLocalIndex;
+  if Assigned(FLocalIndex) then
+    FLocalIndex.Add(AName, FLocalCount);
   Inc(FLocalCount);
   Inc(FNextSlot);
   if FNextSlot > FMaxSlot then
@@ -183,6 +239,13 @@ function TGocciaCompilerScope.ResolveLocal(const AName: string): Integer;
 var
   I: Integer;
 begin
+  if Assigned(FLocalIndex) then
+  begin
+    if FLocalIndex.TryGetValue(AName, Result) then
+      Exit;
+    Exit(-1);
+  end;
+
   for I := FLocalCount - 1 downto 0 do
     if FLocals[I].Name = AName then
       Exit(I);
@@ -277,10 +340,13 @@ end;
 
 procedure TGocciaCompilerScope.EndScope(out AClosedLocals: array of UInt8;
   out AClosedCount: Integer);
+var
+  RemovedName: string;
 begin
   AClosedCount := 0;
   while (FLocalCount > 0) and (FLocals[FLocalCount - 1].Depth = FDepth) do
   begin
+    RemovedName := FLocals[FLocalCount - 1].Name;
     Dec(FLocalCount);
     if FLocals[FLocalCount].IsCaptured then
     begin
@@ -290,6 +356,7 @@ begin
       Inc(AClosedCount);
     end;
     Dec(FNextSlot);
+    RestoreLocalIndexBinding(RemovedName);
   end;
   Dec(FDepth);
 end;

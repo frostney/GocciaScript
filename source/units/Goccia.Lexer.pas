@@ -143,7 +143,7 @@ end;
 function TGocciaLexer.GetSourceLines: TStringList;
 begin
   if not Assigned(FSourceLines) then
-    FSourceLines := CreateUTF8StringList(FSource);
+    FSourceLines := CreateECMAScriptSourceLines(FSource);
   Result := FSourceLines;
 end;
 
@@ -537,10 +537,19 @@ end;
 
 procedure TGocciaLexer.ProcessEscapeSequence(var ASB: TStringBuffer);
 begin
+  if IsLineTerminator then
+  begin
+    ConsumeLineTerminator;
+    Exit;
+  end;
+
   case Peek of
+    'b': begin ASB.AppendChar(#8); Advance; end;
+    'f': begin ASB.AppendChar(#12); Advance; end;
     'n': begin ASB.AppendChar(#10); Advance; end;
     'r': begin ASB.AppendChar(#13); Advance; end;
     't': begin ASB.AppendChar(#9); Advance; end;
+    'v': begin ASB.AppendChar(#11); Advance; end;
     '\': begin ASB.AppendChar('\'); Advance; end;
     '0': begin ASB.AppendChar(#0); Advance; end;
     'u': begin Advance; ASB.Append(ScanUnicodeEscape); end;
@@ -1422,7 +1431,7 @@ var
   Text: string;
   TokenType: TGocciaTokenType;
 begin
-  while not IsAtEnd and IsValidIdentifierChar(Peek) do
+  while not IsAtEnd and (not IsLineTerminator) and IsValidIdentifierChar(Peek) do
     Advance;
 
   Text := Copy(FSource, FStart, FCurrent - FStart);
@@ -1591,6 +1600,12 @@ begin
         Advance; // consume second dot
         Advance; // consume third dot
         AddToken(gttSpread);
+      end
+      else if CharInSet(Peek, ['0'..'9']) then
+      begin
+        Dec(FCurrent);
+        Dec(FColumn);
+        ScanNumber;
       end
       else
         AddToken(gttDot);

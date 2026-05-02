@@ -80,6 +80,7 @@ begin
     OP_CONSTRUCT:                      Result := 'OP_CONSTRUCT';
     OP_GET_ITER:                       Result := 'OP_GET_ITER';
     OP_ITER_NEXT:                      Result := 'OP_ITER_NEXT';
+    OP_ITER_CLOSE:                     Result := 'OP_ITER_CLOSE';
     OP_TO_STRING:                      Result := 'OP_TO_STRING';
     OP_NEW_CLASS:                      Result := 'OP_NEW_CLASS';
     OP_CLASS_SET_SUPER:                Result := 'OP_CLASS_SET_SUPER';
@@ -102,6 +103,7 @@ begin
     OP_TO_BOOL:                        Result := 'OP_TO_BOOL';
     OP_DEFINE_ACCESSOR_CONST:          Result := 'OP_DEFINE_ACCESSOR_CONST';
     OP_DEFINE_ACCESSOR_DYNAMIC:        Result := 'OP_DEFINE_ACCESSOR_DYNAMIC';
+    OP_SUPER_GET:                      Result := 'OP_SUPER_GET';
     OP_COLLECTION_OP:                  Result := 'OP_COLLECTION_OP';
     OP_VALIDATE_VALUE:                 Result := 'OP_VALIDATE_VALUE';
     OP_THROW_TYPE_ERROR_CONST:         Result := 'OP_THROW_TYPE_ERROR_CONST';

@@ -66,6 +66,8 @@ type
     function CreateCallScope: TGocciaScope; override;
   public
     constructor Create(const AParameters: TGocciaParameterArray; const ABodyStatements: TObjectList<TGocciaASTNode>; const AClosure: TGocciaScope; const AName: string; const ASuperClass: TGocciaValue = nil);
+    function CallWithThisValue(const AArguments: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue; out AFinalThisValue: TGocciaValue): TGocciaValue;
     procedure MarkReferences; override;
 
     property SuperClass: TGocciaValue read FSuperClass write FSuperClass;
@@ -407,6 +409,26 @@ constructor TGocciaMethodValue.Create(const AParameters: TGocciaParameterArray; 
 begin
   inherited Create(AParameters, ABodyStatements, AClosure, AName);
   FSuperClass := ASuperClass;
+end;
+
+function TGocciaMethodValue.CallWithThisValue(
+  const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue;
+  out AFinalThisValue: TGocciaValue): TGocciaValue;
+var
+  CallScope: TGocciaScope;
+begin
+  AFinalThisValue := AThisValue;
+  CallScope := CreateCallScope;
+
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.PushActiveRoot(CallScope);
+  try
+    Result := ExecuteBody(CallScope, AArguments, AThisValue);
+    AFinalThisValue := CallScope.ThisValue;
+  finally
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PopActiveRoot;
+  end;
 end;
 
 function TGocciaMethodValue.CreateCallScope: TGocciaScope;

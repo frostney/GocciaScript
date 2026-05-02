@@ -378,7 +378,7 @@ Pascal unit tests (`*.Test.pas`) exist as a tertiary layer for behavior that can
 The `GocciaTestRunner` program:
 
 1. Scans the provided path for `.js`, `.jsx`, `.ts`, `.tsx`, and `.mjs` files.
-2. For each file, creates a fresh `TGocciaEngine` with `[ggTestAssertions]` (plus `ggFFI` when `--unsafe-ffi` is passed).
+2. For each file, creates a fresh `TGocciaEngine` and attaches `TGocciaRuntime` with `rgTestAssertions` (plus `rgFFI` when `--unsafe-ffi` is passed).
 3. Loads the source and appends a `runTests()` call.
 4. Executes the script — `describe`/`test` blocks register themselves during execution. Nested `describe` blocks are supported; suite names are composed with ` > ` separators (e.g., `"Outer > Inner"`). Skip state is inherited by nested describes.
 5. `runTests()` executes all registered tests and collects results.
@@ -506,14 +506,15 @@ Each test starts with a `BeforeEach` override that calls `FAssertions.ResetCurre
 
 ## CI Integration
 
-GitHub Actions CI (`.github/workflows/ci.yml`) runs on push to `main` and tags, with a five-job pipeline plus release packaging:
+GitHub Actions CI (`.github/workflows/ci.yml`) runs on push to `main` and tags, with a six-job pipeline plus release packaging:
 
 ```text
 build → test             → artifacts
       → toml-compliance  →
       → json5-compliance →
+      → test262          →
       → benchmark        →
-      → examples         →
+      → cli              →
 ```
 
 **`build`** — Installs FPC once per platform, compiles all binaries, uploads them as intermediate artifacts.
@@ -524,15 +525,17 @@ build → test             → artifacts
 
 **`json5-compliance`** (all platforms) — Downloads the prebuilt `GocciaJSON5Check` harness and `GocciaTestRunner` binary from the matrix build artifacts, resolves `python3` or `python`, runs `scripts/run_json5_test_suite.py --harness=... --test-runner=... --output=json5-test-results-<target>.json`, checks that both the parser and stringify summaries report zero failures, and uploads the per-platform JSON5 conformance report as a workflow artifact.
 
+**`test262`** (needs build, ubuntu-latest x64 only, **non-blocking**) — Downloads the `gocciascript-x86_64-linux` build, shallow-clones [`tc39/test262@main`](https://github.com/tc39/test262) into `test262-suite/`, runs `python3 scripts/run_test262_suite.py --suite-dir test262-suite --mode=bytecode --jobs=4 --output=test262-results.json`, and uploads the JSON report as a 30-day workflow artifact. The run step is `continue-on-error: true` because GocciaScript intentionally excludes parts of the language that test262 covers — this lane is an indicator metric, not a regression gate. On `main` the result is also stashed as a cache entry keyed `test262-baseline-<sha>`, which the PR workflow restores to compute Δ vs main.
+
 **`benchmark`** (needs build, all platforms) — Downloads pre-built binaries, runs all benchmarks.
 
-**`examples`** (needs build, all platforms) — Runs the example scripts and GocciaScriptLoader CLI smoke tests.
+**`cli`** (needs build, all platforms) — Downloads pre-built binaries and runs CLI behavior smoke tests via Bun: `test-cli.ts` (flags across all apps), `test-cli-lexer.ts` (numeric-separator rejection), `test-cli-parser.ts` (error display), `test-cli-config.ts` (config-file loading and per-file inheritance), and `test-cli-apps.ts` (app-specific features, including `GocciaScriptLoaderBare` stdin/file checks and runtime-global absence). Windows runs additionally assert that the loader binary does not link against OpenSSL DLLs.
 
-**`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + examples, `main` only) — Uploads release binaries after all checks pass.
+**`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + cli, `main` only) — Uploads release binaries after all checks pass. `test262` is **not** a gating dependency — failing tests there cannot block a release.
 
-**`release`** (needs test + toml-compliance + json5-compliance + benchmark + examples, tags only) — Packages and publishes release archives after the same gates pass.
+**`release`** (needs test + toml-compliance + json5-compliance + benchmark + cli, tags only) — Packages and publishes release archives after the same gates pass.
 
-The `test`, `benchmark`, `examples`, and `toml-compliance` jobs run in parallel after `build`. The TOML conformance lane reuses the already-built harness binary from the matrix build artifacts instead of installing FPC again, so platform-specific TOML issues are caught on the same Linux, macOS, and Windows targets as the main test lanes.
+The `test`, `benchmark`, `cli`, `toml-compliance`, `json5-compliance`, and `test262` jobs run in parallel after `build`. The TOML, JSON5, and test262 lanes all reuse the already-built binaries from the matrix build artifacts instead of installing FPC again, so platform-specific issues are caught on the same Linux, macOS, and Windows targets as the main test lanes (test262 runs on Linux only since conformance outcomes are platform-independent for this engine).
 
 ### PR Workflow (`.github/workflows/pr.yml`)
 
@@ -540,11 +543,32 @@ Runs on pull requests targeting `main`, on **ubuntu-latest x64 only**:
 
 ```text
 build → test
-      → benchmark → PR comment
-      → examples
+      → benchmark → benchmark / timing comments
+      → test262   → test262 comment
+      → cli
 ```
 
 The PR workflow also posts a **Suite Timing** comment with expandable test-runner and benchmark summaries. Each summary shows timing, top-level GocciaScript GC metrics, and selected FreePascal heap allocation metrics for interpreted and bytecode modes. GC memory rows aggregate the main thread plus all worker thread-local GCs. The test runner does not count worker shutdown reclamation as GC collections, while the benchmark runner explicitly collects between benchmark files, so collection counts are expected to differ. The comment hides negative FreePascal heap free-space deltas because they are valid allocator diagnostics but are noisy in a PR summary. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the benchmark comparison format.
+
+The **test262 conformance comment** posts a non-blocking summary using the [`actions/github-script@v7`](https://github.com/actions/github-script) pattern, marker `<!-- test262-results -->`. It reports four headline metrics:
+
+| Metric | Numerator / Denominator |
+|--------|-------------------------|
+| Total tests | `summary.total_discovered` |
+| Eligible tests | `summary.total_eligible` / `summary.total_discovered` |
+| Eligible tests passing | `summary.passed` / `summary.total_eligible` |
+| Total tests passing | `summary.passed` / `summary.total_discovered` |
+
+Plus a **Areas closest to 100%** table listing the three test262 directories (keyed by the first two path components, e.g. `built-ins/Math`, `language/expressions`) with the highest pass rate, filtered to areas with **at least 25 attempted tests** and **below 100%** (so areas already at parity don't crowd out areas making real progress). When a `main` baseline is cached, the comment adds a **Δ vs main** column showing the absolute count delta and (where meaningful) the percentage-point delta of the relevant pass rate. Deltas below ±0.05pp render as `±0pp` to keep the table readable.
+
+### Running test262 locally
+
+```bash
+./build.pas testrunner loader  # build the binaries the runner needs
+python3 scripts/run_test262_suite.py --filter "built-ins/Array/*" --output=results.json
+```
+
+The runner clones test262 into a tempdir on first use, or accepts an existing checkout via `--suite-dir`. See `python3 scripts/run_test262_suite.py --help` for the full flag set, including `--categories`, `--max-tests`, `--mode={interpreted,bytecode}`, and `--jobs`.
 
 ## Coverage
 

@@ -75,11 +75,11 @@ type
     function AssignSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean; virtual;
     function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue; virtual;
     function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue; virtual;
-    function GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
+    function GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor; virtual;
     function HasSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean; virtual;
     function DeleteSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean;
     function GetEnumerableSymbolProperties: TArray<TPair<TGocciaSymbolValue, TGocciaValue>>;
-    function GetOwnSymbols: TArray<TGocciaSymbolValue>;
+    function GetOwnSymbols: TArray<TGocciaSymbolValue>; virtual;
 
     procedure Freeze; virtual;
     procedure Seal; virtual;
@@ -113,11 +113,11 @@ uses
 
   StringBuffer,
 
+  Goccia.Arithmetic,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Realm,

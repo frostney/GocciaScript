@@ -66,6 +66,86 @@ test("hasOwnProperty('prototype') is true on function declarations", () => {
   expect(Object.prototype.hasOwnProperty.call(f, "prototype")).toBe(true);
 });
 
+test("function superclass constructor runs once from explicit super", () => {
+  let calls = 0;
+  function Base(value) {
+    calls += 1;
+    this.value = value;
+  }
+
+  class Derived extends Base {
+    constructor(value) {
+      super("super-" + value);
+      this.done = true;
+    }
+  }
+
+  const derived = new Derived("arg");
+  expect(calls).toBe(1);
+  expect(derived.value).toBe("super-arg");
+  expect(derived.done).toBe(true);
+
+  class ImplicitDerived extends Base {}
+  const implicit = new ImplicitDerived("implicit");
+  expect(calls).toBe(2);
+  expect(implicit.value).toBe("implicit");
+});
+
+test("function superclass returned object becomes the constructed receiver", () => {
+  let calls = 0;
+  function Base(value) {
+    calls += 1;
+    return { value, fromBase: true };
+  }
+
+  class ExplicitDerived extends Base {
+    constructor(value) {
+      const returned = super("explicit-" + value);
+      this.superReturnedThis = returned === this;
+      this.afterSuper = true;
+      return this;
+    }
+  }
+
+  const explicit = new ExplicitDerived("arg");
+  expect(explicit.value).toBe("explicit-arg");
+  expect(explicit.fromBase).toBe(true);
+  expect(explicit.superReturnedThis).toBe(true);
+  expect(explicit.afterSuper).toBe(true);
+
+  class ImplicitDerived extends Base {
+    field = "field";
+  }
+  const implicit = new ImplicitDerived("implicit");
+  expect(implicit.value).toBe("implicit");
+  expect(implicit.fromBase).toBe(true);
+  expect(implicit.field).toBe("field");
+  expect(calls).toBe(2);
+});
+
+test("function superclass replacement receives private fields", () => {
+  let derivedPrototype;
+
+  function Base() {
+    const replacement = Object.create(derivedPrototype);
+    replacement.fromBase = true;
+    return replacement;
+  }
+
+  class Derived extends Base {
+    #value = 42;
+
+    getValue() {
+      return this.#value;
+    }
+  }
+
+  derivedPrototype = Derived.prototype;
+  const derived = new Derived();
+  expect(derived.fromBase).toBe(true);
+  expect(derived.getValue()).toBe(42);
+});
+
 // Per ES2026 §10.2.5.1 OrdinaryFunctionCreate, the prototype object's
 // [[Prototype]] is %Object.prototype%.  (The spec specifies %Generator% for
 // generators, but GocciaScript does not yet expose that intrinsic and falls

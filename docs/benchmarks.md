@@ -6,6 +6,7 @@
 
 - **`suite`/`bench` API** — `bench(name, { setup?, run, teardown? })` with auto-calibration, warmup, and IQR outlier filtering
 - **Four output formats** — `console` (default), `text`, `csv`, `json`; configurable via `--format` and `--output`
+- **Profiler-backed runs** — Bytecode benchmark runs can emit opcode/function profiles with `--profile`
 - **CI integration** — PR workflow posts benchmark comparison comments with range-overlap classification
 - **Environment tuning** — Calibration time, warmup iterations, and measurement rounds configurable via environment variables
 
@@ -30,6 +31,9 @@ printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./bu
 # Run benchmarks with 2 parallel workers (default: CPU count)
 ./build/GocciaBenchmarkRunner benchmarks --jobs=2
 
+# Run bytecode benchmarks with VM profiler data
+./build/GocciaBenchmarkRunner benchmarks --profile=all --profile-output=bench-profile.json --jobs=1
+
 # Export results in different formats
 ./build/GocciaBenchmarkRunner benchmarks --format=json --output=results.json
 ./build/GocciaBenchmarkRunner benchmarks --format=csv --output=results.csv
@@ -50,6 +54,26 @@ The GocciaBenchmarkRunner supports four output formats via the `--format` flag:
 | `json` | Structured JSON with the common CLI envelope (`build`, aggregate `output`, `timing`, `memory`, `workers`) and a `files[]` array containing each `fileName`, per-file timing, and nested `benchmarks[]`, including `opsPerSec`, `variancePercentage`, `minOpsPerSec`, `maxOpsPerSec`, `setupMs`, and `teardownMs` |
 
 Use `--output=<file>` to write results to a file instead of stdout.
+
+## Profiling Benchmark Runs
+
+`GocciaBenchmarkRunner` accepts the same VM profiling flags as `GocciaScriptLoader`:
+`--profile=opcodes|functions|all`, `--profile-output=<path>`, and
+`--profile-format=flamegraph`. Profiling forces bytecode mode and serial execution
+because profiler state is per thread.
+
+Use profiler-backed benchmark runs when a benchmark ratio is ambiguous and you need
+to see the opcode mix, scalar fast-path hit rate, JS function self-time, or
+allocation attribution:
+
+```bash
+./build/GocciaBenchmarkRunner benchmarks/numbers.js \
+  --profile=all \
+  --profile-output=tmp/numbers-profile.json \
+  --format=json \
+  --output=tmp/numbers-bench.json \
+  --jobs=1
+```
 
 ## Configuring Benchmark Parameters
 
@@ -123,7 +147,7 @@ The `GocciaBenchmarkRunner` program:
 
 1. Parses CLI arguments (`--format`, `--output`, and the benchmark path or stdin marker).
 2. Scans the provided path for `.js` files.
-3. For each file, creates a `TGocciaEngine` with `[ggBenchmark]`.
+3. For each file, creates a `TGocciaEngine` and attaches `TGocciaRuntime` with `rgBenchmark`.
 4. Loads and executes the source so benchmark files register their suites and benchmarks without running measurements from inside the script body.
 5. Measures lex, parse, compile (bytecode mode), script execution, and benchmark execution phases separately with nanosecond precision via `TimingUtils.GetNanoseconds`.
 6. `suite()` calls execute immediately, registering `bench()` entries.

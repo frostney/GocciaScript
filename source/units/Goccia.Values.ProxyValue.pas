@@ -99,6 +99,7 @@ type
 
     function TypeOf: string; override;
     function IsCallable: Boolean; override;
+    function IsConstructable: Boolean; override;
     function ToStringTag: string; override;
 
     procedure MarkReferences; override;
@@ -138,11 +139,11 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Arithmetic,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Evaluator.Comparison,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
@@ -1271,10 +1272,7 @@ begin
 
   // ES2026 §28.1.1 step 1: Proxy [[Construct]] only exists when target
   // is constructable. Validate before dispatching to the trap.
-  if not ((FTarget is TGocciaProxyValue) or
-          (FTarget is TGocciaClassValue) or
-          (FTarget is TGocciaNativeFunctionValue) or
-          (FTarget is TGocciaFunctionBase)) then
+  if not FTarget.IsConstructable then
     ThrowTypeError(SErrorProxyTargetNotConstructor, SSuggestProxyTargetType);
 
   Trap := GetTrap(PROP_CONSTRUCT);
@@ -1327,6 +1325,11 @@ end;
 function TGocciaProxyValue.IsCallable: Boolean;
 begin
   Result := FTarget.IsCallable;
+end;
+
+function TGocciaProxyValue.IsConstructable: Boolean;
+begin
+  Result := FTarget.IsConstructable;
 end;
 
 function TGocciaProxyValue.ToStringTag: string;

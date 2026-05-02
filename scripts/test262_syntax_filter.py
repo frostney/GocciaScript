@@ -2,246 +2,80 @@
 
 Scans test source for constructs that GocciaScript intentionally excludes
 (var, function keyword, traditional loops, loose equality, eval, etc.)
-and checks test262 feature metadata against the GocciaScript feature map.
+and checks test262 metadata against the GocciaScript compatibility roadmap.
 """
 
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
+
+from test262_harness_map import AVAILABLE_INCLUDES
 
 # ---------------------------------------------------------------------------
-# Feature support map
+# Compatibility roadmap
 # ---------------------------------------------------------------------------
 
-SUPPORTED_FEATURES: dict[str, bool] = {
-    # Core language -- supported
-    "let": True,
-    "const": True,
-    "arrow-function": True,
-    "class": True,
-    "class-fields-public": True,
-    "class-fields-private": True,
-    "class-static-fields-public": True,
-    "class-static-fields-private": True,
-    "class-methods-private": True,
-    "class-static-methods-private": True,
-    "computed-property-names": True,
-    "default-parameters": True,
-    "destructuring-binding": True,
-    "destructuring-assignment": True,
-    "exponentiation": True,
-    "for-of": True,
-    "logical-assignment-operators": True,
-    "numeric-separator-literal": True,
-    "object-rest": True,
-    "object-spread": True,
-    "optional-catch-binding": True,
-    "optional-chaining": True,
-    "coalesce-expression": True,
-    "nullish-coalescing": True,
-    "rest-parameters": True,
-    "spread": True,
-    "template": True,
-    "String.prototype.trim": True,
-    "String.prototype.includes": True,
-    "String.prototype.startsWith": True,
-    "String.prototype.endsWith": True,
-    "String.prototype.repeat": True,
-    "String.prototype.padStart": True,
-    "String.prototype.padEnd": True,
-    "String.prototype.trimStart": True,
-    "String.prototype.trimEnd": True,
-    "String.prototype.matchAll": True,
-    "String.prototype.replaceAll": True,
-    "String.prototype.at": True,
-    "Array.from": True,
-    "Array.of": True,
-    "Array.prototype.includes": True,
-    "Array.prototype.find": True,
-    "Array.prototype.findIndex": True,
-    "Array.prototype.flat": True,
-    "Array.prototype.flatMap": True,
-    "Array.prototype.at": True,
-    "Array.prototype.findLast": True,
-    "Array.prototype.findLastIndex": True,
-    "Array.prototype.values": True,
-    "Array.prototype.keys": True,
-    "Array.prototype.entries": True,
-    "change-array-by-copy": True,
-    "Array.fromAsync": True,
-    "Map": True,
-    "Set": True,
-    "Symbol": True,
-    "Symbol.iterator": True,
-    "Symbol.species": True,
-    "Symbol.asyncIterator": True,
-    "Symbol.hasInstance": True,
-    "Symbol.toPrimitive": True,
-    "Symbol.toStringTag": True,
-    "Symbol.isConcatSpreadable": True,
-    "Symbol.match": True,
-    "Symbol.replace": True,
-    "Symbol.search": True,
-    "Symbol.split": True,
-    "Symbol.for": True,
-    "well-known-symbol": True,
-    "Promise": True,
-    "Promise.allSettled": True,
-    "Promise.any": True,
-    "Promise.prototype.finally": True,
-    "promise-try": True,
-    "JSON": True,
-    "Object.assign": True,
-    "Object.entries": True,
-    "Object.fromEntries": True,
-    "Object.hasOwn": True,
-    "Object.is": True,
-    "Object.keys": True,
-    "Object.values": True,
-    "Number.isFinite": True,
-    "Number.isInteger": True,
-    "Number.isNaN": True,
-    "Number.isSafeInteger": True,
-    "Number.parseFloat": True,
-    "Number.parseInt": True,
-    "Math.trunc": True,
-    "Math.sign": True,
-    "Math.cbrt": True,
-    "Math.log2": True,
-    "Math.log10": True,
-    "Math.clz32": True,
-    "Math.fround": True,
-    "Math.imul": True,
-    "Math.cosh": True,
-    "Math.sinh": True,
-    "Math.tanh": True,
-    "Math.acosh": True,
-    "Math.asinh": True,
-    "Math.atanh": True,
-    "Math.hypot": True,
-    "Math.expm1": True,
-    "Math.log1p": True,
-    "RegExp": True,
-    "regexp-dotall": True,
-    "regexp-lookbehind": True,
-    "regexp-named-groups": True,
-    "regexp-unicode-property-escapes": True,
-    "regexp-match-indices": True,
-    "regexp-v-flag": True,
-    "ArrayBuffer": True,
-    "SharedArrayBuffer": True,
-    "TypedArray": True,
-    "TypedArray.prototype.at": True,
-    "Temporal": True,
-    "iterator-helpers": True,
-    "decorators": True,
-    "globalThis": True,
-    "structuredClone": True,
-    "async-functions": True,
-    "async-await": True,
-    "async-iteration": True,
-    "top-level-await": True,
-    "super": True,
-    "new.target": True,
-    "Uint8Array": True,
-    "Int8Array": True,
-    "Uint16Array": True,
-    "Int16Array": True,
-    "Uint32Array": True,
-    "Int32Array": True,
-    "Float32Array": True,
-    "Float64Array": True,
-    "Uint8ClampedArray": True,
-    "BigInt64Array": True,
-    "BigUint64Array": True,
-    "hashbang": True,
-    "String.raw": True,
-    "template-literal": True,
-    "array-find-from-last": True,
-    "string-trimming": True,
-    "AggregateError": True,
-    "promise-with-resolvers": True,
-    "String.fromCodePoint": True,
-    "array-grouping": True,
-    "Math.sumPrecise": True,
-    "Error.isError": True,
+ROADMAP_PATH = Path(__file__).with_name("test262_compatibility_roadmap.json")
 
-    # Core language -- NOT supported
-    "generators": True,
-    "async-generator": True,
-    "async-generators": True,
-    "BigInt": True,
-    "Proxy": True,
-    "Reflect": True,
-    "Reflect.construct": True,
-    "Reflect.apply": True,
-    "Reflect.defineProperty": True,
-    "Reflect.deleteProperty": True,
-    "Reflect.get": True,
-    "Reflect.getOwnPropertyDescriptor": True,
-    "Reflect.getPrototypeOf": True,
-    "Reflect.has": True,
-    "Reflect.isExtensible": True,
-    "Reflect.ownKeys": True,
-    "Reflect.preventExtensions": True,
-    "Reflect.set": True,
-    "Reflect.setPrototypeOf": True,
-    "WeakMap": True,
-    "WeakSet": True,
-    "WeakRef": False,
-    "FinalizationRegistry": False,
-    "dynamic-import": True,
-    "import.meta": True,
-    "import-assertions": False,
-    "import-attributes": False,
-    "json-modules": False,
-    "ShadowRealm": False,
-    "tail-call-optimization": False,
-    "Atomics": False,
-    "DataView": False,
-    "cross-realm": False,
-    "caller": False,
-    "IsHTMLDDA": False,
-    "resizable-arraybuffer": True,
-    "arraybuffer-transfer": True,
-    "Float16Array": True,
-    "Intl": False,
-    "Intl.DateTimeFormat": False,
-    "Intl.NumberFormat": False,
-    "Intl.RelativeTimeFormat": False,
-    "Intl.ListFormat": False,
-    "Intl.Locale": False,
-    "Intl.Segmenter": False,
-    "Intl.DisplayNames": False,
-    "Intl.DurationFormat": False,
-    "Intl-enumeration": False,
-    "Symbol.matchAll": True,
-    "String.prototype.isWellFormed": True,
-    "String.prototype.toWellFormed": True,
-    "__proto__": False,
-    "__getter__": False,
-    "__setter__": False,
-    "legacy-regexp": False,
-    "regexp-duplicate-named-groups": True,
-    "regexp-modifiers": True,
-    "error-cause": True,
-    "symbols-as-weakmap-keys": True,
-    "disposition": True,
-    "explicit-resource-management": True,
-    "set-methods": True,
-    "Map.groupBy": True,
-    "Object.groupBy": True,
+
+def _load_compatibility_roadmap() -> dict:
+    """Load the required test262 compatibility roadmap."""
+    try:
+        return json.loads(ROADMAP_PATH.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise RuntimeError(
+            f"test262 compatibility roadmap is required: {ROADMAP_PATH}"
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"invalid test262 compatibility roadmap: {ROADMAP_PATH}: {exc}"
+        ) from exc
+
+
+COMPATIBILITY_ROADMAP: dict = _load_compatibility_roadmap()
+ELIGIBLE_STATUSES: set[str] = set(COMPATIBILITY_ROADMAP["eligibleStatuses"])
+UNKNOWN_ROADMAP_TARGET: str = str(
+    COMPATIBILITY_ROADMAP.get("unknownFeature", {}).get("target", "unassigned")
+)
+UNKNOWN_ROADMAP_ENTRY: dict[str, str] = {
+    "status": "unsupported",
+    "target": UNKNOWN_ROADMAP_TARGET,
+}
+UNKNOWN_SYNTAX_ENTRY: dict[str, str] = {
+    "status": "excluded-by-language-design",
+    "target": "excluded-syntax",
 }
 
-# Flags that mean we should skip the test
-SKIP_FLAGS: set[str] = {
-    "module",          # ES module semantics differ
-    "raw",             # No harness prepended -- unusual tests
-    "noStrict",        # Non-strict-only tests -- GocciaScript is always strict
-    "CanBlockIsFalse",
-    "CanBlockIsTrue",
-    "non-deterministic",
-}
+
+def _entry_is_eligible(entry: dict | None) -> bool:
+    if not entry:
+        entry = UNKNOWN_ROADMAP_ENTRY
+    if "eligible" in entry:
+        return bool(entry["eligible"])
+    return str(entry.get("status", "")) in ELIGIBLE_STATUSES
+
+
+def _roadmap_entry(
+    kind: str,
+    key: str,
+    fallback: dict[str, str] | None = None,
+) -> dict:
+    section = COMPATIBILITY_ROADMAP.get(kind, {})
+    entry = section.get(key)
+    if entry is None:
+        return fallback if fallback is not None else UNKNOWN_ROADMAP_ENTRY
+    return entry
+
+
+def _roadmap_ineligible_keys(kind: str) -> set[str]:
+    return {
+        name
+        for name, entry in COMPATIBILITY_ROADMAP.get(kind, {}).items()
+        if not _entry_is_eligible(entry)
+    }
+
 
 # ---------------------------------------------------------------------------
 # Syntax patterns that indicate unsupported constructs
@@ -418,10 +252,9 @@ def check_features(features: list[str]) -> list[str]:
     """Return list of skip reasons for unsupported features."""
     reasons: list[str] = []
     for feature in features:
-        supported = SUPPORTED_FEATURES.get(feature)
-        if supported is False:
+        entry = _roadmap_entry("features", feature)
+        if not _entry_is_eligible(entry):
             reasons.append(f"unsupported_feature:{feature}")
-        # Unknown features are allowed (conservative: don't skip)
     return reasons
 
 
@@ -429,9 +262,68 @@ def check_flags(flags: list[str]) -> list[str]:
     """Return list of skip reasons for unsupported flags."""
     reasons: list[str] = []
     for flag in flags:
-        if flag in SKIP_FLAGS:
+        entry = _roadmap_entry("flags", flag)
+        if not _entry_is_eligible(entry):
             reasons.append(f"unsupported_flag:{flag}")
     return reasons
+
+
+def classify_skip_reason(reason: str, test_id: str = "") -> dict[str, str]:
+    """Return roadmap status/target metadata for a skip reason."""
+    status = "unsupported"
+    target = UNKNOWN_ROADMAP_TARGET
+    value = ""
+    kind = "unknown"
+
+    if ":" in reason:
+        prefix, value = reason.split(":", 1)
+    else:
+        prefix = reason
+
+    if prefix == "unsupported_feature":
+        kind = "feature"
+        entry = _roadmap_entry("features", value)
+        status = str(entry.get("status", status))
+        target = str(entry.get("target", target))
+    elif prefix == "unsupported_flag":
+        kind = "flag"
+        entry = _roadmap_entry("flags", value)
+        status = str(entry.get("status", status))
+        target = str(entry.get("target", target))
+    elif prefix == "unsupported_syntax":
+        kind = "syntax"
+        entry = _roadmap_entry("syntax", value, UNKNOWN_SYNTAX_ENTRY)
+        status = str(entry.get("status", "excluded-by-language-design"))
+        target = str(entry.get("target", "excluded-syntax"))
+    elif prefix == "skip_path":
+        kind = "path"
+        entry = _roadmap_entry("pathSegments", value)
+        status = str(entry.get("status", status))
+        target = str(entry.get("target", target))
+    elif prefix == "missing_harness":
+        kind = "harness"
+        entry = _roadmap_entry("harnessIncludes", value)
+        status = str(entry.get("status", status))
+        target = str(entry.get("target", "harness"))
+    elif prefix == "negative_resolution":
+        kind = "negative"
+        status = "unsupported"
+        target = "modules"
+    elif prefix.startswith("negative_"):
+        kind = "negative"
+        status = "unsupported"
+        target = "roadmap-hygiene"
+
+    area_parts = test_id.replace("\\", "/").split("/")[:2]
+    area = "/".join(part for part in area_parts if part)
+    return {
+        "reason": reason,
+        "kind": kind,
+        "value": value,
+        "status": status,
+        "target": target,
+        "area": area or "unknown",
+    }
 
 
 def check_syntax(
@@ -459,32 +351,6 @@ def check_syntax(
     return reasons
 
 
-# Harness files we have reimplemented for GocciaScript
-AVAILABLE_INCLUDES: set[str] = {
-    "assert.js",
-    "sta.js",
-    "compareArray.js",
-    "propertyHelper.js",
-    "compareIterator.js",
-    "isConstructor.js",
-    "deepEqual.js",
-    "nans.js",
-    "testTypedArray.js",
-    "testBigIntTypedArray.js",
-    "temporalHelpers.js",
-    "promiseHelper.js",
-    "dateConstants.js",
-    "decimalToHexString.js",
-    "fnGlobalObject.js",
-    "nativeFunctionMatcher.js",
-    "byteConversionValues.js",
-    "proxyTrapsHelper.js",
-    "regExpUtils.js",
-    "detachArrayBuffer.js",
-    "doneprintHandle.js",
-}
-
-
 def check_includes(includes: list[str]) -> list[str]:
     """Return list of skip reasons for harness files we haven't reimplemented."""
     reasons: list[str] = []
@@ -498,13 +364,7 @@ def check_includes(includes: list[str]) -> list[str]:
 # NOTE: "asi" is deliberately absent -- when --asi is enabled, those tests
 # are eligible.  The syntax filter already catches unsupported constructs
 # that happen to appear inside ASI tests (var, function, etc.).
-SKIP_PATH_SEGMENTS: set[str] = {
-    "eval-code",        # All eval-code tests use eval
-    "for-in",           # No for-in support
-    "DataView",         # No DataView support
-    "WeakRef",          # No WeakRef support
-    "Atomics",          # No Atomics support
-}
+SKIP_PATH_SEGMENTS: set[str] = _roadmap_ineligible_keys("pathSegments")
 
 
 def check_path(test_id: str) -> list[str]:
@@ -538,7 +398,6 @@ def is_eligible(
 
     reasons.extend(check_flags(flags))
     reasons.extend(check_features(features))
-    reasons.extend(check_includes(includes))
 
     # Negative parse/resolution tests need special handling
     if negative is not None:
@@ -557,5 +416,7 @@ def is_eligible(
                 unsafe_function_constructor=unsafe_function_constructor,
             )
         )
+    if not reasons:
+        reasons.extend(check_includes(includes))
 
     return (len(reasons) == 0, reasons)

@@ -16,6 +16,7 @@ uses
   Goccia.AST.Node,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  CLI.ConfigFile,
   CLI.Options,
   Goccia.Coverage,
   Goccia.Coverage.Report,
@@ -30,6 +31,7 @@ uses
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
+  Goccia.Runtime,
   Goccia.Scope,
   Goccia.ScriptLoader.Input,
   Goccia.SourceMap,
@@ -124,12 +126,14 @@ type
     FOutputFile: TGocciaStringOption;
     FTestTimeout: TGocciaIntegerOption;
     FDescribeTimeout: TGocciaIntegerOption;
+    function EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
   protected
     procedure Configure; override;
+    procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
+      const AFileConfig: TConfigEntryArray); override;
     function UsageLine: string; override;
     procedure Validate; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
-    function GlobalBuiltins: TGocciaGlobalBuiltins; override;
   private
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
@@ -213,6 +217,15 @@ end;
 
 { TTestRunnerApp }
 
+procedure DisableRuntimeConsole(const AEngine: TGocciaEngine);
+var
+  Runtime: TGocciaRuntimeExtension;
+begin
+  Runtime := GetRuntimeExtension(AEngine);
+  if Assigned(Runtime) and Assigned(Runtime.BuiltinConsole) then
+    Runtime.BuiltinConsole.Enabled := False;
+end;
+
 procedure TTestRunnerApp.Configure;
 begin
   AddEngineOptions;
@@ -229,6 +242,16 @@ begin
     'Per-test timeout in ms (0 disables). Marks the test TIMEOUT and continues.');
   FDescribeTimeout := AddInteger('describe-timeout',
     'Per-describe timeout in ms (0 disables). Aborts the suite and continues.');
+end;
+
+procedure TTestRunnerApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
+  const AFileConfig: TConfigEntryArray);
+var
+  Runtime: TGocciaRuntimeExtension;
+begin
+  Runtime := AttachRuntimeExtension(AEngine, EffectiveRuntimeGlobals);
+  if LogFileOpen and Assigned(Runtime.BuiltinConsole) then
+    Runtime.BuiltinConsole.LogCallback := HandleConsoleLog;
 end;
 
 procedure TTestRunnerApp.Validate;
@@ -255,7 +278,7 @@ end;
 
 procedure TTestRunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
-  Files: TStringList;
+  Files, RawFiles, StdinNames, TempFiles, CoverageSource: TStringList;
   I: Integer;
   AggregatedResult: TAggregatedTestResult;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
@@ -297,22 +320,48 @@ begin
     if UseStdin then
     begin
       StdinSource := ReadSourceFromText(Input);
-      Files.Add(STDIN_FILE_NAME);
+      if MultifileEnabled then
+      begin
+        // Split stdin sections into the registry; ownership of
+        // StdinSource transfers to SplitStdinMultifile.
+        StdinNames := SplitStdinMultifile(StdinSource);
+        try
+          Files.AddStrings(StdinNames);
+        finally
+          StdinNames.Free;
+        end;
+        StdinSource := nil;
+      end
+      else
+        Files.Add(STDIN_FILE_NAME);
     end
     else
-      for I := 0 to APaths.Count - 1 do
-      begin
-        if DirectoryExists(APaths[I]) then
-          Files.AddStrings(FindAllFiles(APaths[I], ScriptExtensions))
-        else if FileExists(APaths[I]) then
-          Files.Add(APaths[I])
-        else
+    begin
+      RawFiles := TStringList.Create;
+      try
+        for I := 0 to APaths.Count - 1 do
         begin
-          WriteLn(StdErr, 'Error: Path not found: ', APaths[I]);
-          ExitCode := 1;
-          Exit;
+          if DirectoryExists(APaths[I]) then
+            RawFiles.AddStrings(FindAllFiles(APaths[I], ScriptExtensions))
+          else if FileExists(APaths[I]) then
+            RawFiles.Add(APaths[I])
+          else
+          begin
+            WriteLn(StdErr, 'Error: Path not found: ', APaths[I]);
+            ExitCode := 1;
+            Exit;
+          end;
         end;
+        // Build the expanded list before freeing the old Files: if
+        // ExpandMultifileFiles raises, Files still owns its (empty)
+        // TStringList and the outer finally won't double-free.
+        TempFiles := ExpandMultifileFiles(RawFiles);
+        Files.Free;
+        Files := TempFiles;
+      finally
+        RawFiles.Free;
       end;
+    end;
 
     if (not FNoProgress.Present) and (not IsJsonOutput) then
     begin
@@ -357,7 +406,24 @@ begin
       begin
         PrintCoverageSummary(TGocciaCoverageTracker.Instance);
         if Files.Count = 1 then
-          PrintCoverageDetail(TGocciaCoverageTracker.Instance, Files[0]);
+        begin
+          { Virtual filenames (multifile sections, stdin) are not on
+            disk; load their source from the registry so coverage detail
+            is printed with the actual section content rather than
+            silently skipped. }
+          if SourceRegistry.IsRegistered(Files[0]) then
+          begin
+            CoverageSource := SourceRegistry.Load(Files[0]);
+            try
+              PrintCoverageDetail(TGocciaCoverageTracker.Instance,
+                Files[0], CoverageSource);
+            finally
+              CoverageSource.Free;
+            end;
+          end
+          else
+            PrintCoverageDetail(TGocciaCoverageTracker.Instance, Files[0]);
+        end;
       end;
       if CoverageOptions.Format.Matches(cfLcov) and
          (CoverageOptions.OutputPath.ValueOr('') <> '') then
@@ -376,9 +442,11 @@ begin
   end;
 end;
 
-function TTestRunnerApp.GlobalBuiltins: TGocciaGlobalBuiltins;
+function TTestRunnerApp.EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
 begin
-  Result := [ggTestAssertions];
+  Result := DefaultRuntimeGlobals + [rgTestAssertions];
+  if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
+    Include(Result, rgFFI);
 end;
 
 function TTestRunnerApp.RunGocciaScriptInterpreted(const AFileName: string;
@@ -398,7 +466,7 @@ begin
     else
     begin
       try
-        Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+        Source := SourceRegistry.Load(AFileName);
       except
         on E: EStreamError do
         begin
@@ -419,7 +487,7 @@ begin
       try
         if FSilent.Present or GIsWorkerThread or IsJsonOutput then
         begin
-          Engine.BuiltinConsole.Enabled := False;
+          DisableRuntimeConsole(Engine);
           Engine.SuppressWarnings := True;
         end;
 
@@ -523,7 +591,7 @@ begin
     else
     begin
       try
-        Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
+        Source := SourceRegistry.Load(AFileName);
       except
         on E: EStreamError do
         begin
@@ -555,7 +623,7 @@ begin
         try
           if FSilent.Present or GIsWorkerThread or IsJsonOutput then
           begin
-            Engine.BuiltinConsole.Enabled := False;
+            DisableRuntimeConsole(Engine);
             Engine.SuppressWarnings := True;
           end;
 
@@ -1021,7 +1089,7 @@ begin
 
   // Force all shared prototypes to be initialised on the main thread
   // before any worker thread starts, avoiding class-var race conditions.
-  EnsureSharedPrototypesInitialized(EffectiveBuiltins);
+  EnsureSharedPrototypesInitialized(EffectiveRuntimeGlobals);
 
   WallClockStart := GetNanoseconds;
 

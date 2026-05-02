@@ -112,12 +112,12 @@ uses
   StringBuffer,
 
   Goccia.Arguments.Callbacks,
+  Goccia.Arithmetic,
   Goccia.Constants.NumericLimits,
   Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Timeout,

@@ -58,7 +58,7 @@ assert.throws = (expectedErrorConstructor, func, message) => {
     if (error instanceof expectedErrorConstructor) {
       return;
     }
-    throw new Test262Error(message || "Expected " + expectedErrorConstructor.name + " but got " + error);
+    throw new Test262Error(message || "Expected " + expectedErrorConstructor.name + " but got " + __gocciaTest262String(error));
   }
   throw new Test262Error(message || "Expected " + expectedErrorConstructor.name + " to be thrown");
 };
