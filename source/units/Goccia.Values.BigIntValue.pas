@@ -54,6 +54,8 @@ implementation
 uses
   SysUtils,
 
+  TextSemantics,
+
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
   Goccia.Error.Messages,
@@ -70,7 +72,7 @@ function TryStringToBigInt(const AValue: string; out AResult: TBigInteger): Bool
 var
   Text: string;
 begin
-  Text := Trim(AValue);
+  Text := TrimECMAScriptWhitespace(AValue);
   try
     if Text = '' then
     begin

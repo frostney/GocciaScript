@@ -41,10 +41,7 @@ end;
 
 function FoldedModuloValue(const ALeft, ARight: Double): Double; inline;
 begin
-  if (Frac(ALeft) = 0.0) and (Frac(ARight) = 0.0) then
-    Result := Trunc(ALeft) mod Trunc(ARight)
-  else
-    Result := FMod(ALeft, ARight);
+  Result := FMod(ALeft, ARight);
 
   if (Result = 0.0) and ((ALeft < 0.0) or IsNegativeZeroFloat(ALeft)) then
     Result := NegativeZeroFloat;

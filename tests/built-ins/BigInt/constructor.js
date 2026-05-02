@@ -56,6 +56,12 @@ test("BigInt from empty string", () => {
   expect(BigInt("")).toBe(0n);
 });
 
+test("BigInt from string trims ECMAScript whitespace", () => {
+  const whitespace = "\u00A0\u1680\u2000\u2028\u2029\u202F\u205F\u3000\uFEFF";
+  expect(BigInt(`${whitespace}42${whitespace}`)).toBe(42n);
+  expect(BigInt(whitespace)).toBe(0n);
+});
+
 test("BigInt.asIntN", () => {
   expect(BigInt.asIntN(8, 255n)).toBe(-1n);
   expect(BigInt.asIntN(8, 128n)).toBe(-128n);

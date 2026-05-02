@@ -397,8 +397,6 @@ def is_eligible(
 
     reasons.extend(check_flags(flags))
     reasons.extend(check_features(features))
-    if not reasons:
-        reasons.extend(check_includes(includes))
 
     # Negative parse/resolution tests need special handling
     if negative is not None:
@@ -417,5 +415,7 @@ def is_eligible(
                 unsafe_function_constructor=unsafe_function_constructor,
             )
         )
+    if not reasons:
+        reasons.extend(check_includes(includes))
 
     return (len(reasons) == 0, reasons)
