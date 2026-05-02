@@ -96,6 +96,50 @@ test("super() returns receiver unless superclass returns object", () => {
   expect(object.superReturnedObject).toBe(true);
 });
 
+test("own constructor object return does not replay fields", () => {
+  class BaseReturn {
+    field = "base-field";
+
+    constructor() {
+      return {};
+    }
+  }
+
+  class Parent {}
+  class DerivedReturn extends Parent {
+    field = "derived-field";
+
+    constructor() {
+      super();
+      return {};
+    }
+  }
+
+  expect(new BaseReturn().field).toBeUndefined();
+  expect(new DerivedReturn().field).toBeUndefined();
+});
+
+test("super replacement returned as this receives fields", () => {
+  class Base {
+    constructor() {
+      return { fromBase: true };
+    }
+  }
+
+  class Derived extends Base {
+    field = "field";
+
+    constructor() {
+      super();
+      return this;
+    }
+  }
+
+  const derived = new Derived();
+  expect(derived.fromBase).toBe(true);
+  expect(derived.field).toBe("field");
+});
+
 test("derived constructor returning primitive throws TypeError", () => {
   class Base {
     constructor() {

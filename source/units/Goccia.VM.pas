@@ -82,6 +82,7 @@ type
     FPreviousExceptionMask: TFPUExceptionMask;
     FArgumentPool: TGocciaArgumentsPoolArray;
     FArgumentPoolCount: Integer;
+    FLastClosureThisValue: TGocciaRegister;
     function ConstantToValue(const AConstant: TGocciaBytecodeConstant): TGocciaValue;
     // ES2026 §13.2.8.3 GetTemplateObject — lazy-build helper for bckTemplateObject constants.
     function BuildTemplateObjectConstant(const ATemplate: TGocciaFunctionTemplate;
@@ -3244,6 +3245,7 @@ begin
   FHandlerStack := TGocciaBytecodeHandlerStack.Create;
   FArgumentPoolCount := 0;
   FActiveDecoratorSession := nil;
+  FLastClosureThisValue := RegisterUndefined;
   SetLength(FRegisterStack, INITIAL_STACK_SIZE);
   FRegisterBase := 0;
   FRegisters := nil;
@@ -3292,7 +3294,8 @@ var
   ConstructorToCall: TGocciaMethodValue;
   InstancePrototype: TGocciaObjectValue;
   ConstructedValue: TGocciaValue;
-  ReplacementOccurred: Boolean;
+  ConstructorThisValue: TGocciaValue;
+  InitializerReplayReceiver: TGocciaObjectValue;
   function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
   begin
     Result := (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue);
@@ -3309,12 +3312,31 @@ var
     TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
     RootedInstance := AInstance;
     Instance := AInstance;
-    ReplacementOccurred := True;
   end;
-  procedure ApplyOwnConstructorResult(const AValue: TGocciaValue);
+  procedure ApplyOwnConstructorResult(const AValue,
+    AConstructorThisValue: TGocciaValue);
+  var
+    ThisObject: TGocciaObjectValue;
+    ReturnObject: TGocciaObjectValue;
   begin
+    if (AConstructorThisValue is TGocciaObjectValue) and
+       (AConstructorThisValue <> Instance) then
+    begin
+      ThisObject := TGocciaObjectValue(AConstructorThisValue);
+      SetFinalInstance(ThisObject);
+      InitializerReplayReceiver := ThisObject;
+    end;
+
     if AValue is TGocciaObjectValue then
-      SetFinalInstance(TGocciaObjectValue(AValue))
+    begin
+      ReturnObject := TGocciaObjectValue(AValue);
+      if ReturnObject <> Instance then
+      begin
+        SetFinalInstance(ReturnObject);
+        if ReturnObject <> InitializerReplayReceiver then
+          InitializerReplayReceiver := nil;
+      end;
+    end
     else if HasDerivedConstructorReturnRestriction and
             not IsUndefinedConstructedValue(AValue) then
       ThrowTypeError(
@@ -3324,7 +3346,10 @@ var
   procedure ApplyReplacementResult(const AValue: TGocciaValue);
   begin
     if AValue is TGocciaObjectValue then
+    begin
       SetFinalInstance(TGocciaObjectValue(AValue));
+      InitializerReplayReceiver := Instance;
+    end;
   end;
 begin
   // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget)
@@ -3360,14 +3385,19 @@ begin
   if Assigned(FConstructorValue) then
   begin
     RootedInstance := Instance;
-    ReplacementOccurred := False;
+    InitializerReplayReceiver := nil;
     TGarbageCollector.Instance.AddTempRoot(RootedInstance);
     try
       FVM.RunClassInitializers(Self, Instance);
       ConstructedValue := FVM.InvokeFunctionValue(
         FConstructorValue, AArguments, Instance);
-      ApplyOwnConstructorResult(ConstructedValue);
-      if ReplacementOccurred then
+      if FConstructorValue is TGocciaBytecodeFunctionValue then
+        ConstructorThisValue := RegisterToValue(FVM.FLastClosureThisValue)
+      else
+        ConstructorThisValue := Instance;
+      ApplyOwnConstructorResult(ConstructedValue, ConstructorThisValue);
+      if Assigned(InitializerReplayReceiver) and
+         (Instance = InitializerReplayReceiver) then
         FVM.RunClassInitializers(Self, Instance);
     finally
       TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
@@ -3376,7 +3406,7 @@ begin
   else
   begin
     RootedInstance := Instance;
-    ReplacementOccurred := False;
+    InitializerReplayReceiver := nil;
     TGarbageCollector.Instance.AddTempRoot(RootedInstance);
     try
       FVM.RunClassInitializers(Self, Instance);
@@ -3416,7 +3446,8 @@ begin
         else if Instance is TGocciaInstanceValue then
           TGocciaInstanceValue(Instance).InitializeNativeFromArguments(AArguments);
       end;
-      if ReplacementOccurred then
+      if Assigned(InitializerReplayReceiver) and
+         (Instance = InitializerReplayReceiver) then
         FVM.RunClassInitializers(Self, Instance);
     finally
       TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
@@ -3439,7 +3470,8 @@ var
   BytecodeSuperConstructor: TGocciaBytecodeFunctionValue;
   ConstructedValue: TGocciaValue;
   ReturnRegister: TGocciaRegister;
-  ReplacementOccurred: Boolean;
+  ConstructorThisRegister: TGocciaRegister;
+  InitializerReplayReceiver: TGocciaObjectValue;
   procedure EnsureBoxedArgs;
   begin
     if not Assigned(BoxedArgs) then
@@ -3465,12 +3497,34 @@ var
     TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
     RootedInstance := AInstance;
     Instance := AInstance;
-    ReplacementOccurred := True;
+  end;
+  procedure ApplyOwnConstructorThisRegister(const AValue: TGocciaRegister);
+  var
+    ThisObject: TGocciaObjectValue;
+  begin
+    if (AValue.Kind = grkObject) and
+       (AValue.ObjectValue is TGocciaObjectValue) and
+       (AValue.ObjectValue <> Instance) then
+    begin
+      ThisObject := TGocciaObjectValue(AValue.ObjectValue);
+      SetFinalInstance(ThisObject);
+      InitializerReplayReceiver := ThisObject;
+    end;
   end;
   procedure ApplyOwnConstructorResult(const AValue: TGocciaValue);
+  var
+    ReturnObject: TGocciaObjectValue;
   begin
     if AValue is TGocciaObjectValue then
-      SetFinalInstance(TGocciaObjectValue(AValue))
+    begin
+      ReturnObject := TGocciaObjectValue(AValue);
+      if ReturnObject <> Instance then
+      begin
+        SetFinalInstance(ReturnObject);
+        if ReturnObject <> InitializerReplayReceiver then
+          InitializerReplayReceiver := nil;
+      end;
+    end
     else if HasDerivedConstructorReturnRestriction and
             not IsUndefinedConstructedValue(AValue) then
       ThrowTypeError(
@@ -3478,10 +3532,20 @@ var
         SSuggestNotConstructorType);
   end;
   procedure ApplyOwnConstructorRegister(const AValue: TGocciaRegister);
+  var
+    ReturnObject: TGocciaObjectValue;
   begin
     if (AValue.Kind = grkObject) and
        (AValue.ObjectValue is TGocciaObjectValue) then
-      SetFinalInstance(TGocciaObjectValue(AValue.ObjectValue))
+    begin
+      ReturnObject := TGocciaObjectValue(AValue.ObjectValue);
+      if ReturnObject <> Instance then
+      begin
+        SetFinalInstance(ReturnObject);
+        if ReturnObject <> InitializerReplayReceiver then
+          InitializerReplayReceiver := nil;
+      end;
+    end
     else if HasDerivedConstructorReturnRestriction and
             not IsUndefinedConstructedRegister(AValue) then
       ThrowTypeError(
@@ -3491,13 +3555,19 @@ var
   procedure ApplyReplacementResult(const AValue: TGocciaValue);
   begin
     if AValue is TGocciaObjectValue then
+    begin
       SetFinalInstance(TGocciaObjectValue(AValue));
+      InitializerReplayReceiver := Instance;
+    end;
   end;
   procedure ApplyReplacementRegister(const AValue: TGocciaRegister);
   begin
     if (AValue.Kind = grkObject) and
        (AValue.ObjectValue is TGocciaObjectValue) then
+    begin
       SetFinalInstance(TGocciaObjectValue(AValue.ObjectValue));
+      InitializerReplayReceiver := Instance;
+    end;
   end;
 begin
   CheckExecutionTimeout;
@@ -3537,7 +3607,7 @@ begin
     end;
 
     RootedInstance := Instance;
-    ReplacementOccurred := False;
+    InitializerReplayReceiver := nil;
     TGarbageCollector.Instance.AddTempRoot(RootedInstance);
     try
       if Assigned(FConstructorValue) then
@@ -3553,6 +3623,8 @@ begin
             ReturnRegister := FVM.ExecuteClosureRegisters(
               BytecodeConstructor.FClosure, RegisterObject(Instance),
               AArguments);
+            ConstructorThisRegister := FVM.FLastClosureThisValue;
+            ApplyOwnConstructorThisRegister(ConstructorThisRegister);
             ApplyOwnConstructorRegister(ReturnRegister);
           end
           else
@@ -3560,6 +3632,8 @@ begin
             EnsureBoxedArgs;
             ConstructedValue := FVM.InvokeFunctionValue(
               FConstructorValue, BoxedArgs, Instance);
+            if FConstructorValue is TGocciaBytecodeFunctionValue then
+              ApplyOwnConstructorThisRegister(FVM.FLastClosureThisValue);
             ApplyOwnConstructorResult(ConstructedValue);
           end;
         end
@@ -3568,6 +3642,8 @@ begin
           EnsureBoxedArgs;
           ConstructedValue := FVM.InvokeFunctionValue(
             FConstructorValue, BoxedArgs, Instance);
+          if FConstructorValue is TGocciaBytecodeFunctionValue then
+            ApplyOwnConstructorThisRegister(FVM.FLastClosureThisValue);
           ApplyOwnConstructorResult(ConstructedValue);
         end;
       end
@@ -3643,7 +3719,8 @@ begin
           end;
         end;
       end;
-      if ReplacementOccurred then
+      if Assigned(InitializerReplayReceiver) and
+         (Instance = InitializerReplayReceiver) then
         FVM.RunClassInitializers(Self, Instance);
     finally
       TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
@@ -6555,6 +6632,7 @@ begin
   SavedClosure := FCurrentClosure;
   SavedHandlerCount := FHandlerStack.Count;
   InitialFrameStackCount := FFrameStackCount;
+  FLastClosureThisValue := AThisValue;
   try
     SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
       AArg0, AArg1, AArg2, AUseFixedArgs,
@@ -8743,7 +8821,10 @@ begin
         ReturnValue := FRegisters[A];
         // Outermost frame: let the finally block handle teardown
         if FFrameStackCount <= InitialFrameStackCount then
+        begin
+          FLastClosureThisValue := GetLocalRegister(0);
           Exit(ReturnValue);
+        end;
         // Intermediate trampoline frame: tear down and pop to parent
         TeardownCurrentFrame(Template, ProfileEntryTimestamp,
           FFrameStack[FFrameStackCount - 1].HandlerCount);

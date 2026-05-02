@@ -813,6 +813,7 @@ var
   SpreadValue: TGocciaValue;
   CalleeName: string;
   I: Integer;
+  ThisScope: TGocciaScope;
 begin
   CheckExecutionTimeout;
   IncrementInstructionCounter;
@@ -854,6 +855,9 @@ begin
         if SuperResult is TGocciaObjectValue then
         begin
           AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);
+          ThisScope := AContext.Scope.FindFunctionOrModuleScope;
+          if Assigned(ThisScope) then
+            ThisScope.ThisValue := AContext.Scope.ThisValue;
           Result := AContext.Scope.ThisValue;
         end
         else if (Assigned(SuperClass.SuperClass) or
@@ -880,7 +884,12 @@ begin
         SuperResult := InvokeConstructableWithReceiver(SuperClassValue, Arguments,
           AContext.Scope.ThisValue);
         if SuperResult is TGocciaObjectValue then
+        begin
           AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);
+          ThisScope := AContext.Scope.FindFunctionOrModuleScope;
+          if Assigned(ThisScope) then
+            ThisScope.ThisValue := AContext.Scope.ThisValue;
+        end;
         Result := AContext.Scope.ThisValue;
       end
       else
@@ -4384,9 +4393,10 @@ var
   WalkClass: TGocciaClassValue;
   NativeInstance: TGocciaObjectValue;
   ConstructedValue: TGocciaValue;
+  ConstructorThisValue: TGocciaValue;
   InitContext, SuperInitContext: TGocciaEvaluationContext;
   InitScope, SuperInitScope: TGocciaScope;
-  ReplacementOccurred: Boolean;
+  InitializerReplayReceiver: TGocciaObjectValue;
   function ConstructNativeSuperInstance(
     const AConstructor: TGocciaObjectValue): TGocciaObjectValue;
   var
@@ -4441,12 +4451,31 @@ var
     TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
     RootedInstance := AInstance;
     Instance := AInstance;
-    ReplacementOccurred := True;
   end;
-  procedure ApplyOwnConstructorResult(const AValue: TGocciaValue);
+  procedure ApplyOwnConstructorResult(const AValue,
+    AConstructorThisValue: TGocciaValue);
+  var
+    ThisObject: TGocciaObjectValue;
+    ReturnObject: TGocciaObjectValue;
   begin
+    if (AConstructorThisValue is TGocciaObjectValue) and
+       (AConstructorThisValue <> Instance) then
+    begin
+      ThisObject := TGocciaObjectValue(AConstructorThisValue);
+      SetFinalInstance(ThisObject);
+      InitializerReplayReceiver := ThisObject;
+    end;
+
     if AValue is TGocciaObjectValue then
-      SetFinalInstance(TGocciaObjectValue(AValue))
+    begin
+      ReturnObject := TGocciaObjectValue(AValue);
+      if ReturnObject <> Instance then
+      begin
+        SetFinalInstance(ReturnObject);
+        if ReturnObject <> InitializerReplayReceiver then
+          InitializerReplayReceiver := nil;
+      end;
+    end
     else if HasDerivedConstructorReturnRestriction and
             not IsUndefinedConstructedValue(AValue) then
       ThrowTypeError(
@@ -4456,7 +4485,10 @@ var
   procedure ApplyReplacementResult(const AValue: TGocciaValue);
   begin
     if AValue is TGocciaObjectValue then
+    begin
       SetFinalInstance(TGocciaObjectValue(AValue));
+      InitializerReplayReceiver := Instance;
+    end;
   end;
   procedure RunInstanceInitializers;
   begin
@@ -4550,15 +4582,16 @@ begin
   end;
 
   RootedInstance := Instance;
-  ReplacementOccurred := False;
+  InitializerReplayReceiver := nil;
   TGarbageCollector.Instance.AddTempRoot(RootedInstance);
   try
     RunInstanceInitializers;
 
     if Assigned(AClassValue.ConstructorMethod) then
     begin
-      ConstructedValue := AClassValue.ConstructorMethod.Call(AArguments, Instance);
-      ApplyOwnConstructorResult(ConstructedValue);
+      ConstructedValue := AClassValue.ConstructorMethod.CallWithThisValue(
+        AArguments, Instance, ConstructorThisValue);
+      ApplyOwnConstructorResult(ConstructedValue, ConstructorThisValue);
     end
     else if Assigned(AClassValue.SuperClass) and Assigned(AClassValue.SuperClass.ConstructorMethod) then
     begin
@@ -4576,7 +4609,8 @@ begin
     else if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then
       TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
 
-    if ReplacementOccurred then
+    if Assigned(InitializerReplayReceiver) and
+       (Instance = InitializerReplayReceiver) then
       RunInstanceInitializers;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
