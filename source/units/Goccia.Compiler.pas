@@ -526,6 +526,42 @@ begin
     HoistVarLocals(AStatements[I], AScope);
 end;
 
+procedure MarkHoistedVarsGlobalBacked(const AScope: TGocciaCompilerScope);
+var
+  I: Integer;
+  Local: TGocciaCompilerLocal;
+begin
+  for I := 0 to AScope.LocalCount - 1 do
+  begin
+    Local := AScope.GetLocal(I);
+    if (Local.Depth = 0) and (Local.Name <> '__receiver') then
+      AScope.MarkGlobalBacked(I);
+  end;
+end;
+
+procedure EmitHoistedGlobalVarDeclarations(const ACtx: TGocciaCompilationContext;
+  const AScope: TGocciaCompilerScope);
+const
+  GLOBAL_DEFINE_VAR_DECL = 3;
+var
+  I: Integer;
+  Local: TGocciaCompilerLocal;
+  NameIdx: UInt16;
+begin
+  for I := 0 to AScope.LocalCount - 1 do
+  begin
+    Local := AScope.GetLocal(I);
+    if (Local.Depth <> 0) or (Local.Name = '__receiver') then
+      Continue;
+
+    NameIdx := ACtx.Template.AddConstantString(Local.Name);
+    if NameIdx > High(UInt8) then
+      raise Exception.Create('Constant pool overflow: global name index exceeds 255');
+    EmitInstruction(ACtx, EncodeABC(OP_DEFINE_GLOBAL_CONST, Local.Slot,
+      GLOBAL_DEFINE_VAR_DECL, UInt8(NameIdx)));
+  end;
+end;
+
 function TGocciaCompiler.Compile(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
@@ -545,6 +581,11 @@ begin
   try
     // Hoist var declarations to module scope
     HoistVarLocalsFromStatements(AProgram.Body, FCurrentScope);
+    if FGlobalBackedTopLevel then
+    begin
+      MarkHoistedVarsGlobalBacked(FCurrentScope);
+      EmitHoistedGlobalVarDeclarations(BuildContext, FCurrentScope);
+    end;
 
     // Check if there are function declarations to hoist
     HasFunctionDecl := False;

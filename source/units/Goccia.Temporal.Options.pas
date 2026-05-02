@@ -176,6 +176,7 @@ function GetOptionInteger(const AOptions: TGocciaObjectValue; const AName: strin
   const ADefault: Integer): Integer;
 var
   V: TGocciaValue;
+  Num: TGocciaNumberLiteralValue;
 begin
   if AOptions = nil then
   begin
@@ -186,7 +187,21 @@ begin
   if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
     Result := ADefault
   else
-    Result := Trunc(V.ToNumberLiteral.Value);
+  begin
+    Num := V.ToNumberLiteral;
+    if Num.IsNaN then
+      Result := 0
+    else if Num.IsInfinity then
+      Result := MaxInt
+    else if Num.IsNegativeInfinity then
+      Result := -MaxInt
+    else if Num.Value >= MaxInt then
+      Result := MaxInt
+    else if Num.Value <= -MaxInt then
+      Result := -MaxInt
+    else
+      Result := Trunc(Num.Value);
+  end;
 end;
 
 function GetSmallestUnit(const AOptions: TGocciaObjectValue; const ADefault: TTemporalUnit): TTemporalUnit;
@@ -236,6 +251,8 @@ begin
   Result := GetOptionInteger(AOptions, 'roundingIncrement', ADefault);
   if Result < 1 then
     ThrowRangeError(SErrorRoundingIncrementMin, SSuggestTemporalRoundArg);
+  if Result > 1000000000 then
+    ThrowRangeError(SErrorRoundingIncrementMin, SSuggestTemporalRoundArg);
 end;
 
 procedure ValidateRoundingIncrement(const AIncrement: Integer;
@@ -281,6 +298,7 @@ end;
 function GetFractionalSecondDigits(const AOptions: TGocciaObjectValue): Integer;
 var
   V: TGocciaValue;
+  Num: TGocciaNumberLiteralValue;
   S: string;
 begin
   if AOptions = nil then
@@ -304,7 +322,19 @@ begin
   end
   else
   begin
-    Result := Trunc(V.ToNumberLiteral.Value);
+    Num := V.ToNumberLiteral;
+    if Num.IsNaN then
+      Result := 0
+    else if Num.IsInfinity then
+      Result := MaxInt
+    else if Num.IsNegativeInfinity then
+      Result := -MaxInt
+    else if Num.Value >= MaxInt then
+      Result := MaxInt
+    else if Num.Value <= -MaxInt then
+      Result := -MaxInt
+    else
+      Result := Trunc(Num.Value);
     if (Result < 0) or (Result > 9) then
       ThrowRangeError(SErrorFractionalDigitsRange, SSuggestTemporalRoundArg);
   end;

@@ -52,6 +52,13 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 HARNESS_DIR = SCRIPT_DIR / "test262_harness"
 
+# These tests assert script-level declaration semantics that are changed by the
+# normal protective try/catch wrapper.  They are kept at true top level and any
+# thrown error is reported by GocciaTestRunner as a file failure.
+SCRIPT_SCOPE_POSITIVE_TESTS = {
+    "language/statements/function/S13_A19_T1.js",
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -222,15 +229,41 @@ def wrap_positive_test(
     test_id: str,
     description: str,
     is_async: bool = False,
+    preserve_script_scope: bool = False,
 ) -> str:
     """Wrap a positive test in describe/test with Goccia TestAssertions."""
     body = _strip_use_strict(test_body)
     desc = _escape_js_string(description or test_id)
     tid = _escape_js_string(test_id)
 
+    if preserve_script_scope:
+        if is_async:
+            return f"""{harness_source}
+
+globalThis.expect = undefined;
+{body}
+
+__gocciaTest262Describe("test262: {tid}", () => {{
+  __gocciaTest262Test("{desc}", async () => {{
+    await __donePromise;
+  }});
+}});
+"""
+
+        return f"""{harness_source}
+
+globalThis.expect = undefined;
+{body}
+
+__gocciaTest262Describe("test262: {tid}", () => {{
+  __gocciaTest262Test("{desc}", () => {{}});
+}});
+"""
+
     if is_async:
         return f"""{harness_source}
 
+globalThis.expect = undefined;
 let __gocciaTest262Failed = false;
 let __gocciaTest262Failure = undefined;
 try {{
@@ -252,6 +285,7 @@ __gocciaTest262Describe("test262: {tid}", () => {{
 
     return f"""{harness_source}
 
+globalThis.expect = undefined;
 let __gocciaTest262Failed = false;
 let __gocciaTest262Failure = undefined;
 try {{
@@ -277,19 +311,24 @@ def wrap_negative_runtime_test(
     test_id: str,
     description: str,
     error_type: str,
+    is_only_strict: bool = False,
 ) -> str:
     """Wrap a negative runtime test: body inside expect(() => ...).toThrow()."""
     body = _strip_use_strict(test_body)
     desc = _escape_js_string(f"{description} [negative: runtime {error_type}]")
     tid = _escape_js_string(test_id)
+    strict_directive = '      "use strict";\n' if is_only_strict else ""
 
     return f"""{harness_source}
 
+globalThis.expect = undefined;
+
 __gocciaTest262Describe("test262: {tid}", () => {{
   __gocciaTest262Test("{desc}", () => {{
-    expect(() => {{
+    assert.throws({error_type}, () => {{
+{strict_directive}
 {body}
-    }}).toThrow({error_type});
+    }});
   }});
 }});
 """
@@ -621,11 +660,14 @@ def evaluate_suite(
                             wrapped = wrap_negative_runtime_test(
                                 harness_source, body, tid, description,
                                 error_type,
+                                is_only_strict="onlyStrict" in flags,
                             )
                         else:
                             wrapped = wrap_positive_test(
                                 harness_source, body, tid, description,
                                 is_async=is_async,
+                                preserve_script_scope=(
+                                    tid in SCRIPT_SCOPE_POSITIVE_TESTS),
                             )
 
                         # Hash the tid into a collision-free temp filename.  The

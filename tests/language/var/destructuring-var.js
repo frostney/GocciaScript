@@ -5,6 +5,8 @@ features: [compat-var]
 
 var __gocciaGlobalDestructuringVar;
 ({ __gocciaGlobalDestructuringVar } = { __gocciaGlobalDestructuringVar: 73 });
+var [__gocciaGlobalArrayDestructuringVar] = [91];
+var { value: __gocciaGlobalObjectDestructuringVar } = { value: 92 };
 
 test("var with object destructuring", () => {
   var { a, b } = { a: 1, b: 2 };
@@ -21,4 +23,11 @@ test("var with array destructuring", () => {
 test("top-level destructuring assignment updates global-backed var", () => {
   expect(__gocciaGlobalDestructuringVar).toBe(73);
   expect(globalThis.__gocciaGlobalDestructuringVar).toBe(73);
+});
+
+test("top-level var destructuring creates global-backed bindings", () => {
+  expect(__gocciaGlobalArrayDestructuringVar).toBe(91);
+  expect(globalThis.__gocciaGlobalArrayDestructuringVar).toBe(91);
+  expect(__gocciaGlobalObjectDestructuringVar).toBe(92);
+  expect(globalThis.__gocciaGlobalObjectDestructuringVar).toBe(92);
 });

@@ -85,6 +85,7 @@ type
     function Advance: TGocciaToken;
     function Check(const ATokenType: TGocciaTokenType): Boolean; inline;
     function CheckNext(const ATokenType: TGocciaTokenType): Boolean; inline;
+    function IsAwaitOperandStart: Boolean;
     function Match(const ATokenTypes: array of TGocciaTokenType): Boolean; overload;
     function Match(const ATokenType: TGocciaTokenType): Boolean; overload; inline;
     function Consume(const ATokenType: TGocciaTokenType; const AMessage: string): TGocciaToken; overload;
@@ -515,6 +516,22 @@ begin
   Result := FTokens[FCurrent + 1].TokenType = ATokenType;
 end;
 
+function TGocciaParser.IsAwaitOperandStart: Boolean;
+var
+  NextType: TGocciaTokenType;
+begin
+  if FCurrent + 1 >= FTokens.Count then
+    Exit(False);
+
+  NextType := FTokens[FCurrent + 1].TokenType;
+  Result := NextType in [
+    gttIdentifier, gttNumber, gttBigInt, gttString, gttTemplate, gttRegex,
+    gttTrue, gttFalse, gttNull, gttThis, gttSuper, gttNew, gttFunction,
+    gttClass, gttImport, gttLeftParen, gttLeftBracket, gttLeftBrace,
+    gttNot, gttMinus, gttPlus, gttTypeof, gttVoid, gttBitwiseNot, gttDelete
+  ];
+end;
+
 function TGocciaParser.Match(const ATokenTypes: array of TGocciaTokenType): Boolean;
 var
   TokenType: TGocciaTokenType;
@@ -875,7 +892,9 @@ var
   Right: TGocciaExpression;
 begin
   // ES2026 §16.1 top-level await / §15.8.2 AwaitExpression: await UnaryExpression
-  if ((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) then
+  if ((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and
+     Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) and
+     IsAwaitOperandStart then
   begin
     Operator := Advance; // consume 'await'
     Right := Unary;

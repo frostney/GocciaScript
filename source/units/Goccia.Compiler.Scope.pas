@@ -202,9 +202,10 @@ function TGocciaCompilerScope.DeclareVarLocal(const AName: string): UInt8;
 var
   I: Integer;
 begin
-  // Check if already declared (var redeclaration is allowed)
+  // Check if already declared at var/function scope (var redeclaration is allowed).
+  // Block-scoped declarations with the same name must not capture var writes.
   for I := 0 to FLocalCount - 1 do
-    if FLocals[I].Name = AName then
+    if (FLocals[I].Name = AName) and (FLocals[I].Depth = 0) then
       Exit(FLocals[I].Slot);
 
   // Declare at depth 0 so EndScope never pops it

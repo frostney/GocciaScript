@@ -578,8 +578,11 @@ begin
   for I := 0 to DefaultShimCount - 1 do
   begin
     Shim := DefaultShim(I);
-    FInterpreter.GlobalScope.DefineLexicalBinding(Shim.Name,
-      LoadShimValue(FInterpreter, Shim), dtConst);
+    if Shim.Name = 'hasOwnProperty' then
+      LoadShimValue(FInterpreter, Shim)
+    else
+      FInterpreter.GlobalScope.DefineLexicalBinding(Shim.Name,
+        LoadShimValue(FInterpreter, Shim), dtConst);
   end;
 end;
 

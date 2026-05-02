@@ -60,7 +60,8 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.VM.Exception;
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
@@ -556,6 +557,8 @@ begin
     // Step 10-12: Create wrapper, set wrapper[""] = value, return SerializeJSONProperty(state, "", wrapper).
     Result := TGocciaStringLiteralValue.Create(FStringifier.Stringify(Value, Gap));
   except
+    on E: EGocciaBytecodeThrow do
+      raise TGocciaThrowValue.Create(E.ThrownValue);
     on E: TGocciaThrowValue do
       raise;
     on E: Exception do

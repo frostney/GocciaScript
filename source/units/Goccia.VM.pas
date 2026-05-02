@@ -1617,7 +1617,7 @@ begin
 
   while FVM.FHandlerStack.Count > AHandlerBaseCount do
     FVM.FHandlerStack.Pop;
-  FVM.FHandlerStack.RestoreFrom(FContinuationHandlers);
+  FVM.FHandlerStack.RestoreFrom(FContinuationHandlers, FVM.FFrameDepth);
 
   AFrame.IP := FContinuationIP;
   APrevCovLine := FContinuationPrevCovLine;
@@ -6767,7 +6767,11 @@ begin
         SetRegisterRaw(A, FRegisters[B]);
 
       OP_GET_LOCAL:
-        SetRegisterRaw(A, GetLocalRegister(DecodeBx(Instruction)));
+      begin
+        FRegisters[A] := GetLocalRegister(DecodeBx(Instruction));
+        if FRegisters[A].Kind = grkHole then
+          ThrowReferenceError('Cannot access lexical binding before initialization');
+      end;
 
       OP_SET_LOCAL:
         SetLocalRaw(DecodeBx(Instruction), FRegisters[A]);
@@ -6778,7 +6782,11 @@ begin
         begin
           Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
+          begin
+            if Upvalue.Cell.Value.Kind = grkHole then
+              ThrowReferenceError('Cannot access lexical binding before initialization');
             SetRegisterRaw(A, Upvalue.Cell.Value)
+          end
           else
             FRegisters[A] := RegisterUndefined;
         end
@@ -6792,7 +6800,11 @@ begin
         begin
           Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
+          begin
+            if Upvalue.Cell.Value.Kind = grkHole then
+              ThrowReferenceError('Cannot access lexical binding before initialization');
             Upvalue.Cell.Value := FRegisters[A];
+          end;
         end;
       end;
 

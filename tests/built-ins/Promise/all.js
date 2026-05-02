@@ -96,3 +96,30 @@ test("Promise.all with Map iterates entries", () => {
     expect(result).toEqual([["x", 1], ["y", 2]]);
   });
 });
+
+test("Promise.all accepts deferred thenable rejection", () => {
+  const thenable = {
+    then(resolve, reject) {
+      Promise.resolve().then(() => reject("deferred"));
+    }
+  };
+  return Promise.all([thenable]).then(() => {
+    throw new Error("expected rejection");
+  }, (reason) => {
+    expect(reason).toBe("deferred");
+  });
+});
+
+test("Promise.all ignores late thenable rejection after resolve", () => {
+  const thenable = {
+    then(resolve, reject) {
+      Promise.resolve().then(() => {
+        resolve(9);
+        reject("late");
+      });
+    }
+  };
+  return Promise.all([thenable]).then((result) => {
+    expect(result).toEqual([9]);
+  });
+});

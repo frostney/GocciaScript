@@ -28,6 +28,19 @@ const __gocciaDeletedInheritedGlobalVarDeclarationValue = globalThis.__gocciaDel
 delete globalThis.__gocciaDeletedInheritedGlobalVarDeclaration;
 Object.setPrototypeOf(globalThis, __gocciaDeletedOriginalGlobalPrototypeForVar);
 
+let __gocciaHoistedGlobalVarReadSucceeded = false;
+let __gocciaHoistedGlobalVarInitialValue = "not-read";
+try {
+  __gocciaHoistedGlobalVarInitialValue = __gocciaHoistedGlobalVar;
+  __gocciaHoistedGlobalVarReadSucceeded = true;
+} catch (e) {
+  __gocciaHoistedGlobalVarInitialValue = e.name;
+}
+var __gocciaHoistedGlobalVar = 77;
+
+__gocciaHoistedAssignedGlobalVar = 12;
+var __gocciaHoistedAssignedGlobalVar;
+
 test("var redeclaration does not throw", () => {
   var x = 1;
   var x = 2;
@@ -60,4 +73,16 @@ test("declaration-only top-level var creates own property over inherited global"
 test("declaration-only redeclared top-level var does not reuse stale register value", () => {
   expect(__gocciaDeletedInheritedGlobalVarDeclarationOwn).toBe(true);
   expect(__gocciaDeletedInheritedGlobalVarDeclarationValue).toBeUndefined();
+});
+
+test("top-level var is visible before its declaration executes", () => {
+  expect(__gocciaHoistedGlobalVarReadSucceeded).toBe(true);
+  expect(__gocciaHoistedGlobalVarInitialValue).toBeUndefined();
+  expect(__gocciaHoistedGlobalVar).toBe(77);
+  expect(globalThis.__gocciaHoistedGlobalVar).toBe(77);
+});
+
+test("declaration-only top-level var preserves assignment before declaration", () => {
+  expect(__gocciaHoistedAssignedGlobalVar).toBe(12);
+  expect(globalThis.__gocciaHoistedAssignedGlobalVar).toBe(12);
 });
