@@ -1021,11 +1021,11 @@
   "flags": {
     "CanBlockIsFalse": {
       "status": "unsupported",
-      "target": "harness"
+      "target": "atomics-shared-memory"
     },
     "CanBlockIsTrue": {
       "status": "unsupported",
-      "target": "harness"
+      "target": "atomics-shared-memory"
     },
     "async": {
       "status": "supported",
@@ -1037,7 +1037,7 @@
     },
     "module": {
       "status": "unsupported",
-      "target": "harness"
+      "target": "modules"
     },
     "noStrict": {
       "status": "excluded-by-language-design",
@@ -1063,19 +1063,19 @@
     },
     "asyncHelpers.js": {
       "status": "unsupported",
-      "target": "harness"
+      "target": "async-promises"
     },
     "atomicsHelper.js": {
       "status": "unsupported",
-      "target": "harness"
+      "target": "atomics-shared-memory"
     },
     "iteratorZipUtils.js": {
       "status": "unsupported",
-      "target": "harness"
+      "target": "iterators"
     },
     "resizableArrayBufferUtils.js": {
       "status": "unsupported",
-      "target": "harness"
+      "target": "arraybuffer-typedarray"
     },
     "sm/assertThrowsValue.js": {
       "status": "unsupported",
@@ -1083,27 +1083,27 @@
     },
     "sm/non262-Date-shell.js": {
       "status": "unsupported",
-      "target": "harness"
+      "target": "globals-errors"
     },
     "sm/non262-JSON-shell.js": {
       "status": "unsupported",
-      "target": "harness"
+      "target": "json"
     },
     "sm/non262-Math-shell.js": {
       "status": "unsupported",
-      "target": "harness"
+      "target": "numbers-bigint"
     },
     "sm/non262-Reflect-shell.js": {
       "status": "unsupported",
-      "target": "harness"
+      "target": "proxy-reflect"
     },
     "sm/non262-Set-shell.js": {
       "status": "unsupported",
-      "target": "harness"
+      "target": "collections"
     },
     "sm/non262-TypedArray-shell.js": {
       "status": "unsupported",
-      "target": "harness"
+      "target": "arraybuffer-typedarray"
     },
     "sm/non262-expressions-shell.js": {
       "status": "unsupported",
@@ -1111,7 +1111,7 @@
     },
     "sm/non262-generators-shell.js": {
       "status": "unsupported",
-      "target": "harness"
+      "target": "iterators"
     },
     "sm/non262-strict-shell.js": {
       "status": "unsupported",
@@ -1123,11 +1123,11 @@
     },
     "testAtomics.js": {
       "status": "unsupported",
-      "target": "harness"
+      "target": "atomics-shared-memory"
     },
     "testIntl.js": {
       "status": "unsupported",
-      "target": "harness"
+      "target": "intl"
     },
     "wellKnownIntrinsicObjects.js": {
       "status": "unsupported",

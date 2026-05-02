@@ -288,10 +288,14 @@ def classify_skip_reason(reason: str, test_id: str = "") -> dict[str, str]:
         entry = _roadmap_entry("harnessIncludes", value)
         status = str(entry.get("status", status))
         target = str(entry.get("target", "harness"))
+    elif prefix == "negative_resolution":
+        kind = "negative"
+        status = "unsupported"
+        target = "modules"
     elif prefix.startswith("negative_"):
         kind = "negative"
         status = "unsupported"
-        target = "harness"
+        target = "roadmap-hygiene"
 
     area_parts = test_id.replace("\\", "/").split("/")[:2]
     area = "/".join(part for part in area_parts if part)

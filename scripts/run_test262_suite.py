@@ -1367,12 +1367,6 @@ def main() -> int:
                     print(f"         {line[:200]}")
         print()
 
-    if clusters.get("failureFingerprints"):
-        print("Top failure clusters:")
-        for item in clusters["failureFingerprints"][:10]:
-            print(f"  {item['count']:>6}  {item['fingerprint']}")
-        print()
-
     if temp_checkout is not None:
         temp_checkout.cleanup()
 

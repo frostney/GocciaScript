@@ -962,17 +962,6 @@ jobs:
                 body += '\n';
               }
 
-              if (clusters.failureFingerprints && clusters.failureFingerprints.length > 0) {
-                body += '### Top failure clusters\n\n';
-                body += '| Cluster | Count |\n';
-                body += '|---------|-------|\n';
-                for (const item of clusters.failureFingerprints.slice(0, 5)) {
-                  const fingerprint = String(item.fingerprint).replaceAll('`', '\\`');
-                  body += `| \`${fingerprint}\` | ${fmt(item.count)} |\n`;
-                }
-                body += '\n';
-              }
-
               const baselineNote = hasBaseline
                 ? ' Δ vs main compares against the most recent cached `main` baseline.'
                 : ' No `main` baseline cached yet — Δ columns will appear once a `main` run completes.';
