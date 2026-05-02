@@ -8836,7 +8836,8 @@ begin
         else if B = 3 then
         begin
           if Assigned(FGlobalScope) then
-            FGlobalScope.DefineVariableBinding(GlobalName, GetRegister(A), False);
+            FGlobalScope.DefineVariableBinding(GlobalName,
+              TGocciaUndefinedLiteralValue.UndefinedValue, False);
         end
         else if B = 2 then
           DefineGlobalBinding(GlobalName, GetRegister(A), dtConst)

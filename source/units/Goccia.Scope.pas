@@ -356,7 +356,7 @@ begin
      (TargetScope.FThisValue is TGocciaObjectValue) then
   begin
     GlobalObject := TGocciaObjectValue(TargetScope.FThisValue);
-    if (not AHasInitializer) and GlobalObject.HasProperty(AName) then
+    if (not AHasInitializer) and GlobalObject.HasOwnProperty(AName) then
       Exit;
     GlobalObject.AssignProperty(AName, AValue);
     Exit;
