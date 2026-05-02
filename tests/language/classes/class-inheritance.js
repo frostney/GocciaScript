@@ -195,6 +195,35 @@ test("default constructor throws when a derived superclass constructor returns p
   expect(() => new Leaf()).toThrow(TypeError);
 });
 
+test("super() replacement receives superclass initializers", () => {
+  let leafPrototype;
+
+  class Base {
+    baseField = "base";
+
+    constructor() {
+      return Object.create(leafPrototype);
+    }
+  }
+
+  class Middle extends Base {
+    constructor() {
+      return super();
+    }
+  }
+
+  class Leaf extends Middle {
+    readBase() {
+      return this.baseField;
+    }
+  }
+
+  leafPrototype = Leaf.prototype;
+
+  const leaf = new Leaf();
+  expect(leaf.readBase()).toBe("base");
+});
+
 test("extends rejects non-constructable callable superclass", () => {
   const NotConstructor = () => {};
 

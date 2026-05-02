@@ -83,7 +83,7 @@ type
     FArgumentPool: TGocciaArgumentsPoolArray;
     FArgumentPoolCount: Integer;
     FLastClosureThisValue: TGocciaRegister;
-    FPrivateInitializerDepth: Integer;
+    FPrivateInitializerReceiver: TGocciaValue;
     function ConstantToValue(const AConstant: TGocciaBytecodeConstant): TGocciaValue;
     // ES2026 §13.2.8.3 GetTemplateObject — lazy-build helper for bckTemplateObject constants.
     function BuildTemplateObjectConstant(const ATemplate: TGocciaFunctionTemplate;
@@ -3198,7 +3198,11 @@ begin
       TGocciaVMClassValue(SuperClass).FConstructorValue,
       AArguments, AThisValue);
     if SuperResult is TGocciaObjectValue then
+    begin
+      TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
+        SuperClass, SuperResult);
       Exit(SuperResult);
+    end;
     ValidateSuperConstructorResult(SuperResult);
     Exit(AThisValue);
   end;
@@ -3210,7 +3214,12 @@ begin
         SuperClass, AThisValue);
     SuperResult := SuperClass.ConstructorMethod.Call(AArguments, AThisValue);
     if SuperResult is TGocciaObjectValue then
+    begin
+      if SuperClass is TGocciaVMClassValue then
+        TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
+          SuperClass, SuperResult);
       Exit(SuperResult);
+    end;
     ValidateSuperConstructorResult(SuperResult);
     Exit(AThisValue);
   end;
@@ -3250,7 +3259,7 @@ begin
   FArgumentPoolCount := 0;
   FActiveDecoratorSession := nil;
   FLastClosureThisValue := RegisterUndefined;
-  FPrivateInitializerDepth := 0;
+  FPrivateInitializerReceiver := nil;
   SetLength(FRegisterStack, INITIAL_STACK_SIZE);
   FRegisterBase := 0;
   FRegisters := nil;
@@ -5363,6 +5372,13 @@ begin
   Result := (AKey <> '') and (AKey[1] = '#') and (Pos('$', AKey) > 0);
 end;
 
+function IsBytecodePrivateBrandKey(const AKey: string): Boolean;
+begin
+  Result := (Length(AKey) > Length('#brand:')) and
+    (Copy(AKey, 1, Length('#brand:')) = '#brand:') and
+    (Pos('$', AKey) > 0);
+end;
+
 function NormalizeBytecodePrivateKey(const AName: string): string;
 begin
   if (AName <> '') and (AName[1] = '#') then
@@ -5408,15 +5424,18 @@ end;
 
 procedure TGocciaVM.RunClassInitializers(const AClassValue: TGocciaClassValue;
   const AInstance: TGocciaValue);
+var
+  PreviousPrivateInitializerReceiver: TGocciaValue;
 begin
   StampBytecodePrivateBrands(AClassValue, AInstance);
-  Inc(FPrivateInitializerDepth);
+  PreviousPrivateInitializerReceiver := FPrivateInitializerReceiver;
+  FPrivateInitializerReceiver := AInstance;
   try
     AClassValue.RunMethodInitializers(AInstance);
     AClassValue.RunFieldInitializers(AInstance);
     AClassValue.RunDecoratorFieldInitializers(AInstance);
   finally
-    Dec(FPrivateInitializerDepth);
+    FPrivateInitializerReceiver := PreviousPrivateInitializerReceiver;
   end;
 end;
 
@@ -6149,11 +6168,10 @@ begin
         end;
         if Descriptor is TGocciaPropertyDescriptorData then
         begin
-          if Current <> TGocciaObjectValue(AObject) then
-            if not TryGetRawPrivateValue(
-              AObject, BytecodePrivateBrandKey(AKey), BrandValue) then
-              ThrowTypeError(Format(SErrorPrivateFieldNotAccessible, [AKey]),
-                SSuggestPrivateFieldAccess);
+          if not TryGetRawPrivateValue(
+            AObject, BytecodePrivateBrandKey(AKey), BrandValue) then
+            ThrowTypeError(Format(SErrorPrivateFieldNotAccessible, [AKey]),
+              SSuggestPrivateFieldAccess);
           Exit(TGocciaPropertyDescriptorData(Descriptor).Value);
         end;
         Current := Current.Prototype;
@@ -6247,10 +6265,14 @@ begin
         Current := Current.Prototype;
       end;
     end;
-    if (FPrivateInitializerDepth <= 0) and
-       not TryGetRawPrivateValue(AObject, AKey, ExistingValue) then
-      ThrowTypeError(Format(SErrorPrivateFieldNotAccessible, [AKey]),
-        SSuggestPrivateFieldAccess);
+    if not TryGetRawPrivateValue(AObject, AKey, ExistingValue) then
+    begin
+      if AObject <> FPrivateInitializerReceiver then
+        ThrowTypeError(Format(SErrorPrivateFieldNotAccessible, [AKey]),
+          SSuggestPrivateFieldAccess);
+      SetRawPrivateValue(AObject, BytecodePrivateBrandKey(AKey),
+        TGocciaBooleanLiteralValue.TrueValue);
+    end;
     SetRawPrivateValue(AObject, AKey, AValue);
     Exit;
   end;
@@ -6265,17 +6287,25 @@ end;
 function TGocciaVM.TryGetRawPrivateValue(const AObject: TGocciaValue;
   const AKey: string; out AValue: TGocciaValue): Boolean;
 var
+  BrandDescriptor: TGocciaPropertyDescriptor;
+  BrandValue: TGocciaValue;
   Descriptor: TGocciaPropertyDescriptor;
+  InstanceValue: TGocciaInstanceValue;
 begin
   Result := False;
   AValue := nil;
   if not IsBytecodePrivateKey(AKey) then
     Exit;
 
-  if (AObject is TGocciaInstanceValue) and
-     TGocciaInstanceValue(AObject).TryGetRawPrivateProperty(AKey, AValue) then
+  if AObject is TGocciaInstanceValue then
   begin
-    Result := True;
+    InstanceValue := TGocciaInstanceValue(AObject);
+    if InstanceValue.TryGetRawPrivateProperty(AKey, AValue) then
+    begin
+      Result := IsBytecodePrivateBrandKey(AKey) or
+        InstanceValue.TryGetRawPrivateProperty(
+          BytecodePrivateBrandKey(AKey), BrandValue);
+    end;
     Exit;
   end;
 
@@ -6288,6 +6318,14 @@ begin
 
   if AObject is TGocciaObjectValue then
   begin
+    if not IsBytecodePrivateBrandKey(AKey) then
+    begin
+      BrandDescriptor := TGocciaObjectValue(AObject).GetOwnPropertyDescriptor(
+        BytecodePrivateBrandKey(AKey));
+      if not (BrandDescriptor is TGocciaPropertyDescriptorData) then
+        Exit;
+    end;
+
     Descriptor := TGocciaObjectValue(AObject).GetOwnPropertyDescriptor(AKey);
     if Descriptor is TGocciaPropertyDescriptorData then
     begin

@@ -359,7 +359,34 @@ test("private brand checks reject unbranded replacement receivers", () => {
   expect(Derived.readFrom(instance)).toBe(2);
   expect(Derived.writeTo(instance, 3)).toBe(3);
   expect(() => Derived.readFrom({})).toThrow(TypeError);
-  expect(() => Derived.writeTo({})).toThrow(TypeError);
+  expect(() => Derived.writeTo({}, 0)).toThrow(TypeError);
+});
+
+test("private field initializers cannot brand unrelated objects", () => {
+  const unrelated = {};
+  let initializerResult = "not run";
+
+  class TestClass {
+    #value = (() => {
+      try {
+        unrelated.#value = 1;
+        initializerResult = "wrote";
+      } catch (error) {
+        initializerResult = error instanceof TypeError ? "typeerror" : "other";
+      }
+      return 2;
+    })();
+
+    static readFrom(obj) {
+      return obj.#value;
+    }
+  }
+
+  const instance = new TestClass();
+
+  expect(initializerResult).toBe("typeerror");
+  expect(TestClass.readFrom(instance)).toBe(2);
+  expect(() => TestClass.readFrom(unrelated)).toThrow(TypeError);
 });
 
 test("private fields on replacement receivers use distinct class brands", () => {
