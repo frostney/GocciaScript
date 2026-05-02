@@ -36,9 +36,12 @@ def _load_compatibility_roadmap() -> dict:
 
 COMPATIBILITY_ROADMAP: dict = _load_compatibility_roadmap()
 ELIGIBLE_STATUSES: set[str] = set(COMPATIBILITY_ROADMAP["eligibleStatuses"])
+UNKNOWN_ROADMAP_TARGET: str = str(
+    COMPATIBILITY_ROADMAP.get("unknownFeature", {}).get("target", "unassigned")
+)
 UNKNOWN_ROADMAP_ENTRY: dict[str, str] = {
     "status": "unsupported",
-    "target": "unassigned",
+    "target": UNKNOWN_ROADMAP_TARGET,
 }
 UNKNOWN_SYNTAX_ENTRY: dict[str, str] = {
     "status": "excluded-by-language-design",
@@ -268,7 +271,7 @@ def check_flags(flags: list[str]) -> list[str]:
 def classify_skip_reason(reason: str, test_id: str = "") -> dict[str, str]:
     """Return roadmap status/target metadata for a skip reason."""
     status = "unsupported"
-    target = "unassigned"
+    target = UNKNOWN_ROADMAP_TARGET
     value = ""
     kind = "unknown"
 
