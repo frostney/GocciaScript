@@ -290,8 +290,14 @@ const
 
 function IsBytecodePrivateKey(const AKey: string): Boolean; forward;
 function IsBytecodePrivateBrandKey(const AKey: string): Boolean; forward;
-function NormalizeBytecodePrivateKey(const AName: string): string; forward;
-function BytecodePrivateBrandKey(const AKey: string): string; forward;
+function NormalizeBytecodePrivateKey(const AName,
+  APrivateBrandToken: string): string; forward;
+function BytecodePrivateBrandKey(const AKey,
+  APrivateBrandToken: string): string; forward;
+function BytecodePrivateTokenForKey(const AKey,
+  AFallbackPrivateBrandToken: string): string; forward;
+function BytecodePrivateReceiverBrandToken(
+  const AObject: TGocciaValue): string; forward;
 
 function VMIsObjectInstanceOfClass(const AObj: TGocciaObjectValue;
   const AClassValue: TGocciaClassValue): Boolean;
@@ -2891,8 +2897,16 @@ begin
         ConstructedValue := TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
           TGocciaVMClassValue(SuperClass).FConstructorValue,
           AArguments, Instance);
+        if TGocciaVMClassValue(SuperClass).FConstructorValue is TGocciaBytecodeFunctionValue then
+          ConstructorThisValue := RegisterToValue(
+            TGocciaVMClassValue(SuperClass).FVM.FLastClosureThisValue)
+        else
+          ConstructorThisValue := Instance;
         ValidateClassConstructorReturn(SuperClass, ConstructedValue);
-        ApplyReplacementResult(ConstructedValue);
+        if IsUndefinedConstructedValue(ConstructedValue) then
+          ApplyReplacementResult(ConstructorThisValue)
+        else
+          ApplyReplacementResult(ConstructedValue);
       end
       else
       begin
@@ -2902,9 +2916,13 @@ begin
         if Assigned(ConstructorToCall) then
         begin
           FVM.RunClassInitializers(SuperClass, Instance);
-          ConstructedValue := ConstructorToCall.Call(AArguments, Instance);
+          ConstructedValue := ConstructorToCall.CallWithThisValue(
+            AArguments, Instance, ConstructorThisValue);
           ValidateClassConstructorReturn(SuperClass, ConstructedValue);
-          ApplyReplacementResult(ConstructedValue);
+          if IsUndefinedConstructedValue(ConstructedValue) then
+            ApplyReplacementResult(ConstructorThisValue)
+          else
+            ApplyReplacementResult(ConstructedValue);
         end
         else if Assigned(SuperClass) then
         begin
@@ -2946,6 +2964,7 @@ var
   BytecodeConstructor: TGocciaBytecodeFunctionValue;
   BytecodeSuperConstructor: TGocciaBytecodeFunctionValue;
   ConstructedValue: TGocciaValue;
+  ConstructorThisValue: TGocciaValue;
   ReturnRegister: TGocciaRegister;
   ConstructorThisRegister: TGocciaRegister;
   InitializerReplayReceiver: TGocciaObjectValue;
@@ -3177,8 +3196,13 @@ begin
               ReturnRegister := TGocciaVMClassValue(SuperClass).FVM.ExecuteClosureRegisters(
                 BytecodeSuperConstructor.FClosure,
                 RegisterObject(Instance), AArguments);
+              ConstructorThisRegister :=
+                TGocciaVMClassValue(SuperClass).FVM.FLastClosureThisValue;
               ValidateClassConstructorRegister(SuperClass, ReturnRegister);
-              ApplyReplacementRegister(ReturnRegister);
+              if IsUndefinedConstructedRegister(ReturnRegister) then
+                ApplyReplacementRegister(ConstructorThisRegister)
+              else
+                ApplyReplacementRegister(ReturnRegister);
             end
             else
             begin
@@ -3186,8 +3210,13 @@ begin
               ConstructedValue := TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
                 TGocciaVMClassValue(SuperClass).FConstructorValue,
                 BoxedArgs, Instance);
+              ConstructorThisRegister :=
+                TGocciaVMClassValue(SuperClass).FVM.FLastClosureThisValue;
               ValidateClassConstructorReturn(SuperClass, ConstructedValue);
-              ApplyReplacementResult(ConstructedValue);
+              if IsUndefinedConstructedValue(ConstructedValue) then
+                ApplyReplacementRegister(ConstructorThisRegister)
+              else
+                ApplyReplacementResult(ConstructedValue);
             end;
           end
           else
@@ -3209,9 +3238,13 @@ begin
           begin
             EnsureBoxedArgs;
             FVM.RunClassInitializers(SuperClass, Instance);
-            ConstructedValue := ConstructorToCall.Call(BoxedArgs, Instance);
+            ConstructedValue := ConstructorToCall.CallWithThisValue(
+              BoxedArgs, Instance, ConstructorThisValue);
             ValidateClassConstructorReturn(SuperClass, ConstructedValue);
-            ApplyReplacementResult(ConstructedValue);
+            if IsUndefinedConstructedValue(ConstructedValue) then
+              ApplyReplacementResult(ConstructorThisValue)
+            else
+              ApplyReplacementResult(ConstructedValue);
           end
           else if Assigned(SuperClass) then
           begin
@@ -4506,6 +4539,9 @@ begin
   begin
     ConstructorName := TGocciaFunctionBase(AConstructor).GetProperty(PROP_NAME)
       .ToStringLiteral.Value;
+    if not TGocciaFunctionBase(AConstructor).IsConstructable then
+      ThrowTypeError(Format(SErrorNotConstructor, [ConstructorName]),
+        SSuggestNotConstructorType);
     if Assigned(TGocciaCallStack.Instance) then
       TGocciaCallStack.Instance.Push(ConstructorName, '', 0, 0);
     try
@@ -4602,13 +4638,20 @@ end;
 
 procedure TGocciaVM.DefineStaticGetterProperty(const ATarget: TGocciaValue;
   const AName: string; const AGetter: TGocciaValue);
+var
+  PrivateBrandToken: string;
 begin
   if ATarget is TGocciaClassValue then
   begin
     SetBytecodeHomeObject(AGetter, ATarget);
     if IsBytecodePrivateKey(AName) then
+    begin
+      PrivateBrandToken := BytecodePrivateTokenForKey(AName,
+        TGocciaClassValue(ATarget).PrivateBrandToken);
       TGocciaClassValue(ATarget).AddPrivateGetter(
-        NormalizeBytecodePrivateKey(AName), TGocciaFunctionBase(AGetter))
+        NormalizeBytecodePrivateKey(AName, PrivateBrandToken),
+        TGocciaFunctionBase(AGetter));
+    end
     else
       TGocciaClassValue(ATarget).AddStaticGetter(AName, TGocciaFunctionBase(AGetter));
   end;
@@ -4616,13 +4659,20 @@ end;
 
 procedure TGocciaVM.DefineStaticSetterProperty(const ATarget: TGocciaValue;
   const AName: string; const ASetter: TGocciaValue);
+var
+  PrivateBrandToken: string;
 begin
   if ATarget is TGocciaClassValue then
   begin
     SetBytecodeHomeObject(ASetter, ATarget);
     if IsBytecodePrivateKey(AName) then
+    begin
+      PrivateBrandToken := BytecodePrivateTokenForKey(AName,
+        TGocciaClassValue(ATarget).PrivateBrandToken);
       TGocciaClassValue(ATarget).AddPrivateSetter(
-        NormalizeBytecodePrivateKey(AName), TGocciaFunctionBase(ASetter))
+        NormalizeBytecodePrivateKey(AName, PrivateBrandToken),
+        TGocciaFunctionBase(ASetter));
+    end
     else
       TGocciaClassValue(ATarget).AddStaticSetter(AName, TGocciaFunctionBase(ASetter));
   end;
@@ -4828,24 +4878,64 @@ begin
       BYTECODE_PRIVATE_BRAND_PREFIX);
 end;
 
-function NormalizeBytecodePrivateKey(const AName: string): string;
+function BytecodePrivateTokenForKey(const AKey,
+  AFallbackPrivateBrandToken: string): string;
+var
+  KeyBody: string;
+  DelimiterPos: SizeInt;
+begin
+  Result := AFallbackPrivateBrandToken;
+  if IsBytecodePrivateBrandKey(AKey) then
+  begin
+    KeyBody := Copy(AKey, Length(BYTECODE_PRIVATE_BRAND_PREFIX) + 1, MaxInt);
+    DelimiterPos := Pos(':', KeyBody);
+    if DelimiterPos > 1 then
+      Result := Copy(KeyBody, 1, DelimiterPos - 1);
+  end
+  else if IsBytecodePrivateKey(AKey) then
+  begin
+    KeyBody := Copy(AKey, Length(BYTECODE_PRIVATE_SLOT_PREFIX) + 1, MaxInt);
+    DelimiterPos := Pos(':', KeyBody);
+    if DelimiterPos > 1 then
+      Result := Copy(KeyBody, 1, DelimiterPos - 1)
+    else if KeyBody <> '' then
+      Result := KeyBody;
+  end;
+end;
+
+function BytecodePrivateReceiverBrandToken(
+  const AObject: TGocciaValue): string;
+begin
+  Result := '';
+  if AObject is TGocciaClassValue then
+    Result := TGocciaClassValue(AObject).PrivateBrandToken
+  else if (AObject is TGocciaInstanceValue) and
+          Assigned(TGocciaInstanceValue(AObject).ClassValue) then
+    Result := TGocciaInstanceValue(AObject).ClassValue.PrivateBrandToken;
+end;
+
+function NormalizeBytecodePrivateKey(const AName,
+  APrivateBrandToken: string): string;
 begin
   if IsBytecodePrivateBrandKey(AName) then
     Result := AName
   else if IsBytecodePrivateKey(AName) then
     Result := AName
   else if (AName <> '') and (AName[1] = '#') then
-    Result := BYTECODE_PRIVATE_SLOT_PREFIX + Copy(AName, 2, MaxInt)
+    Result := BYTECODE_PRIVATE_SLOT_PREFIX + APrivateBrandToken + ':' +
+      Copy(AName, 2, MaxInt)
   else
-    Result := BYTECODE_PRIVATE_SLOT_PREFIX + AName;
+    Result := BYTECODE_PRIVATE_SLOT_PREFIX + APrivateBrandToken + ':' + AName;
 end;
 
-function BytecodePrivateBrandKey(const AKey: string): string;
+function BytecodePrivateBrandKey(const AKey,
+  APrivateBrandToken: string): string;
 begin
   if IsBytecodePrivateBrandKey(AKey) then
     Result := AKey
   else
-    Result := BYTECODE_PRIVATE_BRAND_PREFIX + NormalizeBytecodePrivateKey(AKey);
+    Result := BYTECODE_PRIVATE_BRAND_PREFIX + APrivateBrandToken + ':' +
+      NormalizeBytecodePrivateKey(AKey, APrivateBrandToken);
 end;
 
 procedure TGocciaVM.StampBytecodePrivateBrands(
@@ -4854,6 +4944,7 @@ var
   Names: TStringList;
   PrototypeNames: TArray<string>;
   PrototypeName: string;
+  PrivateBrandToken: string;
   I: Integer;
 begin
   if (not Assigned(AClassValue)) or
@@ -4875,9 +4966,14 @@ begin
           Names.Add(PrototypeName);
     end;
     for I := 0 to Names.Count - 1 do
+    begin
+      PrivateBrandToken := BytecodePrivateTokenForKey(Names[I],
+        AClassValue.PrivateBrandToken);
       SetRawPrivateValue(AInstance, BytecodePrivateBrandKey(
-        NormalizeBytecodePrivateKey(Names[I])),
+        NormalizeBytecodePrivateKey(Names[I], PrivateBrandToken),
+        PrivateBrandToken),
         TGocciaBooleanLiteralValue.TrueValue);
+    end;
   finally
     Names.Free;
   end;
@@ -5622,6 +5718,7 @@ var
   Current: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
   PrivateName: string;
+  PrivateBrandToken: string;
   BrandValue: TGocciaValue;
   EmptyArgs: TGocciaArgumentsCollection;
 begin
@@ -5634,7 +5731,9 @@ begin
 
   if IsBytecodePrivateKey(AKey) then
   begin
-    PrivateName := NormalizeBytecodePrivateKey(AKey);
+    PrivateBrandToken := BytecodePrivateTokenForKey(AKey,
+      BytecodePrivateReceiverBrandToken(AObject));
+    PrivateName := NormalizeBytecodePrivateKey(AKey, PrivateBrandToken);
     if AObject is TGocciaClassValue then
     begin
       if TGocciaClassValue(AObject).HasOwnPrivateGetter(PrivateName) then
@@ -5666,7 +5765,8 @@ begin
         if Descriptor is TGocciaPropertyDescriptorAccessor then
         begin
           if not TryGetRawPrivateValue(
-            AObject, BytecodePrivateBrandKey(AKey), BrandValue) then
+            AObject, BytecodePrivateBrandKey(AKey, PrivateBrandToken),
+            BrandValue) then
             ThrowTypeError(Format(SErrorPrivateFieldNotAccessible, [AKey]),
               SSuggestPrivateFieldAccess);
           if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
@@ -5677,7 +5777,8 @@ begin
         if Descriptor is TGocciaPropertyDescriptorData then
         begin
           if not TryGetRawPrivateValue(
-            AObject, BytecodePrivateBrandKey(AKey), BrandValue) then
+            AObject, BytecodePrivateBrandKey(AKey, PrivateBrandToken),
+            BrandValue) then
             ThrowTypeError(Format(SErrorPrivateFieldNotAccessible, [AKey]),
               SSuggestPrivateFieldAccess);
           Exit(TGocciaPropertyDescriptorData(Descriptor).Value);
@@ -5712,6 +5813,7 @@ var
   Descriptor: TGocciaPropertyDescriptor;
   SetterArgs: TGocciaArgumentsCollection;
   PrivateName: string;
+  PrivateBrandToken: string;
   ExistingValue: TGocciaValue;
 begin
   if AObject is TGocciaNullLiteralValue then
@@ -5722,7 +5824,9 @@ begin
       SSuggestCheckNullBeforeAccess);
   if IsBytecodePrivateKey(AKey) then
   begin
-    PrivateName := NormalizeBytecodePrivateKey(AKey);
+    PrivateBrandToken := BytecodePrivateTokenForKey(AKey,
+      BytecodePrivateReceiverBrandToken(AObject));
+    PrivateName := NormalizeBytecodePrivateKey(AKey, PrivateBrandToken);
     if AObject is TGocciaClassValue then
     begin
       if TGocciaClassValue(AObject).HasOwnPrivateSetter(PrivateName) then
@@ -5759,7 +5863,8 @@ begin
            Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
         begin
           if not TryGetRawPrivateValue(
-            AObject, BytecodePrivateBrandKey(AKey), ExistingValue) then
+            AObject, BytecodePrivateBrandKey(AKey, PrivateBrandToken),
+            ExistingValue) then
             ThrowTypeError(Format(SErrorPrivateFieldNotAccessible, [AKey]),
               SSuggestPrivateFieldAccess);
           AObject.SetProperty(AKey, AValue);
@@ -5778,7 +5883,8 @@ begin
       if AObject <> FPrivateInitializerReceiver then
         ThrowTypeError(Format(SErrorPrivateFieldNotAccessible, [AKey]),
           SSuggestPrivateFieldAccess);
-      SetRawPrivateValue(AObject, BytecodePrivateBrandKey(AKey),
+      SetRawPrivateValue(AObject, BytecodePrivateBrandKey(AKey,
+        PrivateBrandToken),
         TGocciaBooleanLiteralValue.TrueValue);
     end;
     SetRawPrivateValue(AObject, AKey, AValue);
@@ -5796,6 +5902,7 @@ function TGocciaVM.TryGetRawPrivateValue(const AObject: TGocciaValue;
   const AKey: string; out AValue: TGocciaValue): Boolean;
 var
   BrandDescriptor: TGocciaPropertyDescriptor;
+  PrivateBrandToken: string;
   BrandValue: TGocciaValue;
   Descriptor: TGocciaPropertyDescriptor;
   InstanceValue: TGocciaInstanceValue;
@@ -5810,9 +5917,11 @@ begin
     InstanceValue := TGocciaInstanceValue(AObject);
     if InstanceValue.TryGetRawPrivateProperty(AKey, AValue) then
     begin
+      PrivateBrandToken := BytecodePrivateTokenForKey(AKey,
+        BytecodePrivateReceiverBrandToken(AObject));
       Result := IsBytecodePrivateBrandKey(AKey) or
         InstanceValue.TryGetRawPrivateProperty(
-          BytecodePrivateBrandKey(AKey), BrandValue);
+          BytecodePrivateBrandKey(AKey, PrivateBrandToken), BrandValue);
     end;
     Exit;
   end;
@@ -5828,8 +5937,10 @@ begin
   begin
     if not IsBytecodePrivateBrandKey(AKey) then
     begin
+      PrivateBrandToken := BytecodePrivateTokenForKey(AKey,
+        BytecodePrivateReceiverBrandToken(AObject));
       BrandDescriptor := TGocciaObjectValue(AObject).GetOwnPropertyDescriptor(
-        BytecodePrivateBrandKey(AKey));
+        BytecodePrivateBrandKey(AKey, PrivateBrandToken));
       if not (BrandDescriptor is TGocciaPropertyDescriptorData) then
         Exit;
     end;
@@ -7048,7 +7159,8 @@ begin
         if (FRegisters[B].Kind = grkObject) and Assigned(FRegisters[B].ObjectValue) then
         begin
           GlobalName := Template.GetConstantUnchecked(C).StringValue;
-          if (FRegisters[B].ObjectValue is TGocciaVMLiteralObjectValue) and
+          if (not IsBytecodePrivateKey(GlobalName)) and
+             (FRegisters[B].ObjectValue is TGocciaVMLiteralObjectValue) and
              TGocciaVMLiteralObjectValue(FRegisters[B].ObjectValue).TryGetOwnDataPropertyFastRegister(
                GlobalName, FRegisters[A]) then
             { fast path already assigned }
