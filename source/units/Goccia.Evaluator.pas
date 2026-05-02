@@ -98,6 +98,8 @@ uses
   OrderedStringMap,
   StringBuffer,
 
+  Goccia.Arithmetic,
+  Goccia.AST.BindingPatterns,
   Goccia.CallStack,
   Goccia.Constants,
   Goccia.Constants.ErrorNames,
@@ -107,10 +109,7 @@ uses
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Evaluator.Arithmetic,
   Goccia.Evaluator.Assignment,
-  Goccia.Evaluator.Bitwise,
-  Goccia.Evaluator.Comparison,
   Goccia.Evaluator.Decorators,
   Goccia.Evaluator.PatternMatching,
   Goccia.Evaluator.TypeOperations,
@@ -155,117 +154,6 @@ begin
     Result.Add(ASource[I]);
 end;
 
-// Var hoisting: scan statements recursively for var declarations and pre-define
-// their names as undefined in the target scope (function/module scope).
-procedure CollectVarNamesFromNode(const ANode: TGocciaASTNode; const ANames: TStringList); forward;
-
-procedure CollectPatternNames(const APattern: TGocciaDestructuringPattern; const ANames: TStringList);
-var
-  ObjPat: TGocciaObjectDestructuringPattern;
-  ArrPat: TGocciaArrayDestructuringPattern;
-  I: Integer;
-begin
-  if APattern is TGocciaIdentifierDestructuringPattern then
-  begin
-    if ANames.IndexOf(TGocciaIdentifierDestructuringPattern(APattern).Name) = -1 then
-      ANames.Add(TGocciaIdentifierDestructuringPattern(APattern).Name);
-  end
-  else if APattern is TGocciaObjectDestructuringPattern then
-  begin
-    ObjPat := TGocciaObjectDestructuringPattern(APattern);
-    for I := 0 to ObjPat.Properties.Count - 1 do
-      CollectPatternNames(ObjPat.Properties[I].Pattern, ANames);
-  end
-  else if APattern is TGocciaArrayDestructuringPattern then
-  begin
-    ArrPat := TGocciaArrayDestructuringPattern(APattern);
-    for I := 0 to ArrPat.Elements.Count - 1 do
-      if Assigned(ArrPat.Elements[I]) then
-        CollectPatternNames(ArrPat.Elements[I], ANames);
-  end
-  else if APattern is TGocciaAssignmentDestructuringPattern then
-    CollectPatternNames(TGocciaAssignmentDestructuringPattern(APattern).Left, ANames)
-  else if APattern is TGocciaRestDestructuringPattern then
-    CollectPatternNames(TGocciaRestDestructuringPattern(APattern).Argument, ANames);
-end;
-
-procedure CollectVarNames(const AStatements: TObjectList<TGocciaStatement>; const ANames: TStringList);
-var
-  I: Integer;
-begin
-  for I := 0 to AStatements.Count - 1 do
-    CollectVarNamesFromNode(AStatements[I], ANames);
-end;
-
-procedure CollectVarNamesFromNode(const ANode: TGocciaASTNode; const ANames: TStringList);
-var
-  Block: TGocciaBlockStatement;
-  IfStmt: TGocciaIfStatement;
-  ForOf: TGocciaForOfStatement;
-  TryStmt: TGocciaTryStatement;
-  SwitchStmt: TGocciaSwitchStatement;
-  DestructDecl: TGocciaDestructuringDeclaration;
-  I, J: Integer;
-begin
-  if ANode is TGocciaVariableDeclaration then
-  begin
-    if TGocciaVariableDeclaration(ANode).IsVar then
-      for I := 0 to Length(TGocciaVariableDeclaration(ANode).Variables) - 1 do
-        if ANames.IndexOf(TGocciaVariableDeclaration(ANode).Variables[I].Name) = -1 then
-          ANames.Add(TGocciaVariableDeclaration(ANode).Variables[I].Name);
-  end
-  else if ANode is TGocciaDestructuringDeclaration then
-  begin
-    DestructDecl := TGocciaDestructuringDeclaration(ANode);
-    if DestructDecl.IsVar then
-      CollectPatternNames(DestructDecl.Pattern, ANames);
-  end
-  else if ANode is TGocciaBlockStatement then
-  begin
-    Block := TGocciaBlockStatement(ANode);
-    for I := 0 to Block.Nodes.Count - 1 do
-      CollectVarNamesFromNode(Block.Nodes[I], ANames);
-  end
-  else if ANode is TGocciaIfStatement then
-  begin
-    IfStmt := TGocciaIfStatement(ANode);
-    CollectVarNamesFromNode(IfStmt.Consequent, ANames);
-    if Assigned(IfStmt.Alternate) then
-      CollectVarNamesFromNode(IfStmt.Alternate, ANames);
-  end
-  else if ANode is TGocciaForOfStatement then
-  begin
-    // Also covers TGocciaForAwaitOfStatement (subclass)
-    ForOf := TGocciaForOfStatement(ANode);
-    if ForOf.IsVar then
-    begin
-      if Assigned(ForOf.BindingPattern) then
-        CollectPatternNames(ForOf.BindingPattern, ANames)
-      else if (ForOf.BindingName <> '') and (ANames.IndexOf(ForOf.BindingName) = -1) then
-        ANames.Add(ForOf.BindingName);
-    end;
-    CollectVarNamesFromNode(ForOf.Body, ANames);
-  end
-  else if ANode is TGocciaTryStatement then
-  begin
-    TryStmt := TGocciaTryStatement(ANode);
-    if Assigned(TryStmt.Block) then
-      CollectVarNamesFromNode(TryStmt.Block, ANames);
-    if Assigned(TryStmt.CatchBlock) then
-      CollectVarNamesFromNode(TryStmt.CatchBlock, ANames);
-    if Assigned(TryStmt.FinallyBlock) then
-      CollectVarNamesFromNode(TryStmt.FinallyBlock, ANames);
-  end
-  else if ANode is TGocciaSwitchStatement then
-  begin
-    SwitchStmt := TGocciaSwitchStatement(ANode);
-    for I := 0 to SwitchStmt.Cases.Count - 1 do
-      for J := 0 to SwitchStmt.Cases[I].Consequent.Count - 1 do
-        CollectVarNamesFromNode(SwitchStmt.Cases[I].Consequent[J], ANames);
-  end;
-  // Do NOT recurse into function expressions — they create their own scope
-end;
-
 procedure HoistVarDeclarations(const AStatements: TObjectList<TGocciaStatement>; const AScope: TGocciaScope);
 var
   Names: TStringList;
@@ -274,7 +162,7 @@ begin
   Names := TStringList.Create;
   Names.CaseSensitive := True;
   try
-    CollectVarNames(AStatements, Names);
+    CollectVarBindingNamesFromStatements(AStatements, Names);
     for I := 0 to Names.Count - 1 do
       AScope.DefineVariableBinding(Names[I], TGocciaUndefinedLiteralValue.UndefinedValue, False);
   finally
@@ -290,8 +178,7 @@ begin
   Names := TStringList.Create;
   Names.CaseSensitive := True;
   try
-    for I := 0 to ANodes.Count - 1 do
-      CollectVarNamesFromNode(ANodes[I], Names);
+    CollectVarBindingNamesFromNodes(ANodes, Names);
     for I := 0 to Names.Count - 1 do
       AScope.DefineVariableBinding(Names[I], TGocciaUndefinedLiteralValue.UndefinedValue, False);
   finally
@@ -609,17 +496,23 @@ begin
     gttPower:
       Result := EvaluateExponentiation(Left, Right);
     gttEqual:
-      if IsStrictEqual(Left, Right) then Result := TGocciaBooleanLiteralValue.TrueValue else Result := TGocciaBooleanLiteralValue.FalseValue;
+      Result := TGocciaBooleanLiteralValue.FromBoolean(
+        Goccia.Arithmetic.IsStrictEqual(Left, Right));
     gttNotEqual:
-      if IsNotStrictEqual(Left, Right) then Result := TGocciaBooleanLiteralValue.TrueValue else Result := TGocciaBooleanLiteralValue.FalseValue;
+      Result := TGocciaBooleanLiteralValue.FromBoolean(
+        Goccia.Arithmetic.IsNotStrictEqual(Left, Right));
     gttLess:
-      if LessThan(Left, Right) then Result := TGocciaBooleanLiteralValue.TrueValue else Result := TGocciaBooleanLiteralValue.FalseValue;
+      Result := TGocciaBooleanLiteralValue.FromBoolean(
+        Goccia.Arithmetic.LessThan(Left, Right));
     gttGreater:
-      if GreaterThan(Left, Right) then Result := TGocciaBooleanLiteralValue.TrueValue else Result := TGocciaBooleanLiteralValue.FalseValue;
+      Result := TGocciaBooleanLiteralValue.FromBoolean(
+        Goccia.Arithmetic.GreaterThan(Left, Right));
     gttLessEqual:
-      if LessThanOrEqual(Left, Right) then Result := TGocciaBooleanLiteralValue.TrueValue else Result := TGocciaBooleanLiteralValue.FalseValue;
+      Result := TGocciaBooleanLiteralValue.FromBoolean(
+        Goccia.Arithmetic.LessThanOrEqual(Left, Right));
     gttGreaterEqual:
-      if GreaterThanOrEqual(Left, Right) then Result := TGocciaBooleanLiteralValue.TrueValue else Result := TGocciaBooleanLiteralValue.FalseValue;
+      Result := TGocciaBooleanLiteralValue.FromBoolean(
+        Goccia.Arithmetic.GreaterThanOrEqual(Left, Right));
     gttInstanceof:
       Result := EvaluateInstanceof(Left, Right, IsObjectInstanceOfClass);
     gttIn:
@@ -773,6 +666,7 @@ var
   ClassConstructor: TGocciaClassValue;
   CombinedArgs: TGocciaArgumentsCollection;
   SuperResult: TGocciaValue;
+  ConstructorThisValue: TGocciaValue;
   I: Integer;
 begin
   if AConstructor is TGocciaBoundFunctionValue then
@@ -810,9 +704,12 @@ begin
     ClassConstructor := TGocciaClassValue(AConstructor);
     if Assigned(ClassConstructor.ConstructorMethod) then
     begin
-      SuperResult := ClassConstructor.ConstructorMethod.Call(
-        AArguments, AReceiver);
+      SuperResult := ClassConstructor.ConstructorMethod.CallWithThisValue(
+        AArguments, AReceiver, ConstructorThisValue);
       ValidateClassConstructorReturn(ClassConstructor, SuperResult);
+      if not (SuperResult is TGocciaObjectValue) and
+         (ConstructorThisValue is TGocciaObjectValue) then
+        SuperResult := ConstructorThisValue;
     end
     else
       SuperResult := AReceiver;
@@ -843,6 +740,7 @@ var
   CalleeName: string;
   I: Integer;
   ThisScope: TGocciaScope;
+  ConstructorThisValue: TGocciaValue;
 begin
   CheckExecutionTimeout;
   IncrementInstructionCounter;
@@ -880,7 +778,8 @@ begin
 
       if Assigned(SuperClass) and Assigned(SuperClass.ConstructorMethod) then
       begin
-        SuperResult := SuperClass.ConstructorMethod.Call(Arguments, AContext.Scope.ThisValue);
+        SuperResult := SuperClass.ConstructorMethod.CallWithThisValue(
+          Arguments, AContext.Scope.ThisValue, ConstructorThisValue);
         if SuperResult is TGocciaObjectValue then
         begin
           AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);
@@ -896,6 +795,14 @@ begin
           ThrowTypeError(
             'Derived constructor returned non-object',
             SSuggestNotConstructorType)
+        else if ConstructorThisValue is TGocciaObjectValue then
+        begin
+          AContext.Scope.ThisValue := TGocciaObjectValue(ConstructorThisValue);
+          ThisScope := AContext.Scope.FindFunctionOrModuleScope;
+          if Assigned(ThisScope) then
+            ThisScope.ThisValue := AContext.Scope.ThisValue;
+          Result := AContext.Scope.ThisValue;
+        end
         else
           Result := AContext.Scope.ThisValue;
       end
@@ -2939,14 +2846,21 @@ var
   Expr: TGocciaExpression;
   SuperInitContext: TGocciaEvaluationContext;
   SuperInitScope: TGocciaScope;
+  OldScope: TGocciaScope;
 begin
   if Assigned(AClassValue.SuperClass) then
   begin
     SuperInitContext := AContext;
+    OldScope := SuperInitContext.Scope;
     SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue.SuperClass);
-    SuperInitScope.ThisValue := AInstance;
-    SuperInitContext.Scope := SuperInitScope;
-    InitializeObjectInstanceProperties(AInstance, AClassValue.SuperClass, SuperInitContext);
+    try
+      SuperInitScope.ThisValue := AInstance;
+      SuperInitContext.Scope := SuperInitScope;
+      InitializeObjectInstanceProperties(AInstance, AClassValue.SuperClass, SuperInitContext);
+    finally
+      SuperInitContext.Scope := OldScope;
+      SuperInitScope.Free;
+    end;
   end;
 
   if AClassValue.HasPrivateInstanceElements then
@@ -3021,7 +2935,7 @@ begin
     if not Matched then
     begin
       CaseTest := EvaluateExpression(CaseClause.Test, AContext);
-      if IsStrictEqual(Discriminant, CaseTest) then
+      if Goccia.Arithmetic.IsStrictEqual(Discriminant, CaseTest) then
       begin
         Matched := True;
         if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
@@ -4442,7 +4356,8 @@ begin
   Value := EvaluateExpression(APrivatePropertyCompoundAssignmentExpression.Value, AContext);
 
   // Use shared compound operation function
-  Result := PerformCompoundOperation(CurrentValue, Value, APrivatePropertyCompoundAssignmentExpression.Operator);
+  Result := Goccia.Arithmetic.CompoundOperations(
+    CurrentValue, Value, APrivatePropertyCompoundAssignmentExpression.Operator);
 
   // Set the new value
   if ObjectValue is TGocciaInstanceValue then

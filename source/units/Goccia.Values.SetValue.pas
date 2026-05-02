@@ -61,11 +61,11 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Arithmetic,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Utils,

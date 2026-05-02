@@ -102,6 +102,7 @@ uses
   Math,
   SysUtils,
 
+  Goccia.AST.BindingPatterns,
   Goccia.Bytecode.Debug,
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.Statements,
@@ -703,46 +704,25 @@ end;
 procedure CollectDestructuringBindings(const APattern: TGocciaDestructuringPattern;
   const AScope: TGocciaCompilerScope; const AIsConst: Boolean);
 var
-  ObjPat: TGocciaObjectDestructuringPattern;
-  ArrPat: TGocciaArrayDestructuringPattern;
-  AssignPat: TGocciaAssignmentDestructuringPattern;
+  Names: TStringList;
   I, LocalIdx: Integer;
 begin
-  if APattern is TGocciaIdentifierDestructuringPattern then
-  begin
-    // Reuse a pre-declared local (from function hoisting upvalue resolution)
-    // if it exists at the same scope depth — mirrors CompileVariableDeclaration
-    LocalIdx := AScope.ResolveLocal(
-      TGocciaIdentifierDestructuringPattern(APattern).Name);
-    if (LocalIdx < 0) or
-       (AScope.GetLocal(LocalIdx).Depth <> AScope.Depth) then
-      AScope.DeclareLocal(
-        TGocciaIdentifierDestructuringPattern(APattern).Name, AIsConst);
-  end
-  else if APattern is TGocciaObjectDestructuringPattern then
-  begin
-    ObjPat := TGocciaObjectDestructuringPattern(APattern);
-    for I := 0 to ObjPat.Properties.Count - 1 do
-      CollectDestructuringBindings(ObjPat.Properties[I].Pattern, AScope, AIsConst);
-  end
-  else if APattern is TGocciaArrayDestructuringPattern then
-  begin
-    ArrPat := TGocciaArrayDestructuringPattern(APattern);
-    for I := 0 to ArrPat.Elements.Count - 1 do
-      if Assigned(ArrPat.Elements[I]) then
-        CollectDestructuringBindings(ArrPat.Elements[I], AScope, AIsConst);
-  end
-  else if APattern is TGocciaAssignmentDestructuringPattern then
-  begin
-    AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
-    CollectDestructuringBindings(AssignPat.Left, AScope, AIsConst);
-  end
-  else if APattern is TGocciaRestDestructuringPattern then
-    CollectDestructuringBindings(
-      TGocciaRestDestructuringPattern(APattern).Argument, AScope, AIsConst)
-  else if APattern is TGocciaMemberExpressionDestructuringPattern then
-    // Member expression targets assign to existing objects — no bindings to declare
-    ;
+  Names := TStringList.Create;
+  Names.CaseSensitive := True;
+  try
+    CollectPatternBindingNames(APattern, Names);
+    for I := 0 to Names.Count - 1 do
+    begin
+      // Reuse a pre-declared local (from function hoisting upvalue resolution)
+      // if it exists at the same scope depth — mirrors CompileVariableDeclaration
+      LocalIdx := AScope.ResolveLocal(Names[I]);
+      if (LocalIdx < 0) or
+         (AScope.GetLocal(LocalIdx).Depth <> AScope.Depth) then
+        AScope.DeclareLocal(Names[I], AIsConst);
+    end;
+  finally
+    Names.Free;
+  end;
 end;
 
 procedure EmitDestructuring(const ACtx: TGocciaCompilationContext;
@@ -1228,6 +1208,8 @@ var
   ArgCount, I: Integer;
   BaseReg, ObjReg, ArgsReg, SuperReg, KeyReg: UInt8;
   ThisLocalIdx: Integer;
+  ThisUpvalIdx: Integer;
+  ThisLocal: TGocciaCompilerLocal;
   ThisSlot: UInt8;
   MemberExpr: TGocciaMemberExpression;
   PropIdx: UInt16;
@@ -1277,9 +1259,25 @@ begin
     ThisLocalIdx := ACtx.Scope.ResolveLocal(KEYWORD_THIS);
     if ThisLocalIdx >= 0 then
     begin
-      ThisSlot := ACtx.Scope.GetLocal(ThisLocalIdx).Slot;
+      ThisLocal := ACtx.Scope.GetLocal(ThisLocalIdx);
+      ThisSlot := ThisLocal.Slot;
       if ThisSlot <> BaseReg then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ThisSlot, BaseReg, 0));
+      if ThisLocal.IsCaptured then
+        EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ThisSlot,
+          UInt16(ThisSlot)));
+    end
+    else
+    begin
+      ThisUpvalIdx := ACtx.Scope.ResolveUpvalue(KEYWORD_THIS);
+      if ThisUpvalIdx >= 0 then
+        EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, BaseReg,
+          UInt16(ThisUpvalIdx)))
+      else
+      begin
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, 0, BaseReg, 0));
+        EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, 0, 0));
+      end;
     end;
 
     if AExpr.Optional then

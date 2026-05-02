@@ -32,6 +32,14 @@ type
       out ALastModified: TDateTime): Boolean; virtual; abstract;
   end;
 
+  TGocciaUnavailableModuleContentProvider = class(TGocciaModuleContentProvider)
+  public
+    function Exists(const APath: string): Boolean; override;
+    function LoadContent(const APath: string): TGocciaModuleContent; override;
+    function TryGetLastModified(const APath: string;
+      out ALastModified: TDateTime): Boolean; override;
+  end;
+
   TGocciaFileSystemModuleContentProvider = class(TGocciaModuleContentProvider)
   public
     function Exists(const APath: string): Boolean; override;
@@ -80,6 +88,28 @@ end;
 function TGocciaModuleContent.GetText: UTF8String;
 begin
   Result := FText;
+end;
+
+{ TGocciaUnavailableModuleContentProvider }
+
+function TGocciaUnavailableModuleContentProvider.Exists(
+  const APath: string): Boolean;
+begin
+  Result := False;
+end;
+
+function TGocciaUnavailableModuleContentProvider.LoadContent(
+  const APath: string): TGocciaModuleContent;
+begin
+  raise EStreamError.Create(
+    'No module content provider configured for: ' + APath);
+end;
+
+function TGocciaUnavailableModuleContentProvider.TryGetLastModified(
+  const APath: string; out ALastModified: TDateTime): Boolean;
+begin
+  ALastModified := 0;
+  Result := False;
 end;
 
 { TGocciaFileSystemModuleContentProvider }

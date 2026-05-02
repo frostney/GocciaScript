@@ -4,16 +4,16 @@
 
 ## Executive Summary
 
-- **Single engine** — `TGocciaEngine` handles global configuration, built-in registration, and module loading for both execution modes
+- **Engine/runtime split** — `TGocciaEngine` orchestrates parsing, execution, core language built-ins, and source-list/string execution; `Goccia.Runtime` attaches runtime-provided built-ins, host globals, file helpers, and extensions
 - **Execution mode abstraction** — `TGocciaExecutor` is the abstract class; `TGocciaInterpreterExecutor` and `TGocciaBytecodeExecutor` implement it independently
 - **Shared frontend** — Lexer, Parser, and AST are shared between execution modes
-- **Unified runtime** — Both modes share the same value types, built-ins, scope chain, and mark-and-sweep GC
+- **Shared execution substrate** — Both modes share the same value types, core scope model, runtime extension mechanism, and mark-and-sweep GC
 - **Goccia-specific** — The bytecode VM operates directly on `TGocciaValue`, not a generic VM abstraction
 - **No cross-dependency** — The bytecode executor has no dependency on the interpreter or evaluator units
 
 ## Overview
 
-GocciaScript has two execution modes — interpreter (tree-walk over the AST) and bytecode (`TGocciaVM`). A single `TGocciaEngine` class orchestrates both, delegating execution to a pluggable `TGocciaExecutor`. Both modes share the same frontend, runtime objects, built-ins, and garbage collector. See [Bytecode VM](bytecode-vm.md) for the bytecode backend's architecture.
+GocciaScript has two execution modes — interpreter (tree-walk over the AST) and bytecode (`TGocciaVM`). A single `TGocciaEngine` class orchestrates both, delegating execution to a pluggable `TGocciaExecutor`. Both modes share the same frontend, value system, core language built-ins, and garbage collector. Host/runtime globals are attached through runtime extensions; see [Main Layers](#main-layers) for the `Goccia.Engine` / `Goccia.Runtime` split. See [Bytecode VM](bytecode-vm.md) for the bytecode backend's architecture.
 
 ## Pipelines
 
@@ -33,7 +33,8 @@ Source -> JSX Transformer (optional) -> Lexer -> Parser -> Compiler -> Goccia By
 
 | Layer | Units | Responsibility |
 |-------|-------|----------------|
-| Engine | `Goccia.Engine` | Single engine class: built-in registration, module loading, executor dispatch |
+| Engine | `Goccia.Engine` | Core language globals, language configuration, source-string/source-list execution, executor dispatch |
+| Runtime | `Goccia.Runtime` | Optional host/runtime globals such as console, fetch, JSON5, TOML, YAML, CSV/TSV, text assets, SemVer, test assertions, benchmarks, FFI, and file-backed helpers |
 | Executor abstraction | `Goccia.Executor` | Abstract `TGocciaExecutor` base class |
 | Interpreter executor | `Goccia.Engine` (`TGocciaInterpreterExecutor`) | Tree-walk execution via `TGocciaInterpreter` |
 | Bytecode executor | `Goccia.Engine.Backend` (`TGocciaBytecodeExecutor`) | Bytecode compile + VM execution; no interpreter dependency |
@@ -43,11 +44,13 @@ Source -> JSX Transformer (optional) -> Lexer -> Parser -> Compiler -> Goccia By
 | Bytecode compiler | `Goccia.Compiler*` | AST to bytecode templates/modules |
 | Bytecode format | `Goccia.Bytecode*` | Opcodes, templates, modules, binary I/O, debug info |
 | Bytecode VM | `Goccia.VM*` | Register execution, closures, upvalues, handlers |
-| Shared runtime | `Goccia.Values.*`, `Goccia.Scope`, `Goccia.Runtime.Bootstrap` | Built-ins, objects, classes, arrays, promises, globals |
+| Shared value system | `Goccia.Values.*`, `Goccia.Scope` | Objects, classes, arrays, promises, scopes, and shared value behavior |
 | Realm | `Goccia.Realm` | Per-engine container for mutable intrinsic prototypes |
 | GC | `Goccia.GarbageCollector` | Mark-and-sweep garbage collection |
 
 For **tree-walk execution**, see [Interpreter](interpreter.md); for **bytecode execution**, see [Bytecode VM](bytecode-vm.md). For **recurring implementation patterns** and **terminology** (Define vs Assign, bindings, …), see [Core patterns](core-patterns.md).
+
+Script-vs-module entry semantics belong to `TGocciaEngine.SourceType`, because they change language execution (`this`, import metadata, and top-level scope lifetime). `TGocciaRuntime` may be attached to an engine, but it does not decide whether the entry runs as a Script or Module. File-backed convenience APIs and the default filesystem module content provider live in `Goccia.Runtime`; engine APIs accept source strings or caller-provided `TStringList` instances. CLI frontends may still read their entry file or stdin before constructing the engine, as `GocciaScriptLoaderBare` does, but that file read is outside the engine API and does not attach runtime globals.
 
 ## Design Direction
 
@@ -87,10 +90,10 @@ The CLI tools share a two-level application class hierarchy and a declarative op
 
 | Tool | Base Class | Overrides |
 |------|-----------|-----------|
-| GocciaREPL | `TGocciaCLIApplication` | `Configure`, `ExecuteWithPaths` |
-| GocciaScriptLoader | `TGocciaCLIApplication` | `Configure`, `Validate`, `ExecuteWithPaths`, `HandleError`, `AfterExecute` |
-| GocciaTestRunner | `TGocciaCLIApplication` | `Configure`, `ExecuteWithPaths`, `GlobalBuiltins` |
-| GocciaBenchmarkRunner | `TGocciaCLIApplication` | `Configure`, `ExecuteWithPaths`, `GlobalBuiltins` |
+| GocciaREPL | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `ExecuteWithPaths` |
+| GocciaScriptLoader | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `Validate`, `ExecuteWithPaths`, `HandleError`, `AfterExecute` |
+| GocciaTestRunner | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `ExecuteWithPaths` |
+| GocciaBenchmarkRunner | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `ExecuteWithPaths` |
 | GocciaBundler | `TGocciaCLIApplication` | `Configure`, `Validate`, `ExecuteWithPaths` |
 
 ## Executor Architecture

@@ -38,12 +38,14 @@ from pathlib import Path
 # Sibling modules
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test262_frontmatter import parse_frontmatter, strip_frontmatter  # noqa: E402
-from test262_syntax_filter import is_eligible  # noqa: E402
+from test262_harness_map import INCLUDE_MAP  # noqa: E402
+from test262_syntax_filter import classify_skip_reason, is_eligible  # noqa: E402
 
 SUITE_REPO_URL = "https://github.com/tc39/test262.git"
 SUITE_BRANCH = "main"
 DEFAULT_TIMEOUT_SECONDS = 1
 DEFAULT_CATEGORIES = ("language", "built-ins")
+MAX_CLUSTER_ITEMS = 20
 
 # Paths relative to this script
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -61,7 +63,7 @@ def _recover_per_file_records(raw_json: str) -> list[dict] | None:
     structure is broken.
 
     Each per-file record is emitted by the runner on its own line in
-    the form ``{"file": "...", ..., "failedTests": [...]}`` (possibly
+    the form ``{"fileName": "...", ..., "failedTests": [...]}`` (possibly
     followed by a trailing comma).  When the surrounding "failedTests"
     array gets corrupted (a known runner bug under heavy stall load),
     we cannot ``json.loads`` the whole document but the per-file
@@ -70,14 +72,7 @@ def _recover_per_file_records(raw_json: str) -> list[dict] | None:
     Returns the recovered list, or None if nothing usable was found.
     """
     records: list[dict] = []
-    # Each line is a per-file record like:
-    #     {"fileName": "...", "passed": 0, ...},
-    # The runner historically used "file" as the key; PR #474 (compact-json
-    # output) renamed it to "fileName".  Match both so this fallback works
-    # regardless of which runner version produced the corrupted JSON.
-    line_re = re.compile(
-        r'^\s*(\{"(?:file|fileName)":\s*".*?\})(,?)\s*$'
-    )
+    line_re = re.compile(r'^\s*(\{"fileName":\s*".*?\})(,?)\s*$')
     for line in raw_json.splitlines():
         m = line_re.match(line)
         if not m:
@@ -86,7 +81,7 @@ def _recover_per_file_records(raw_json: str) -> list[dict] | None:
             obj = json.loads(m.group(1))
         except json.JSONDecodeError:
             continue
-        if isinstance(obj, dict) and ("file" in obj or "fileName" in obj):
+        if isinstance(obj, dict) and "fileName" in obj:
             records.append(obj)
     return records or None
 
@@ -101,6 +96,26 @@ def run(
         capture_output=True,
         check=True,
     )
+
+
+def path_bucket(test_id: str, depth: int = 2) -> str:
+    parts = [p for p in test_id.replace("\\", "/").split("/") if p]
+    return "/".join(parts[:depth]) if parts else "unknown"
+
+
+def message_fingerprint(message: str) -> str:
+    for line in (message or "").splitlines():
+        stripped = line.strip()
+        if stripped:
+            return re.sub(r"\d+", "#", stripped)[:160]
+    return "(no message)"
+
+
+def counter_records(counter: Counter[str], key_name: str) -> list[dict]:
+    return [
+        {key_name: key, "count": count}
+        for key, count in counter.most_common(MAX_CLUSTER_ITEMS)
+    ]
 
 
 def ensure_suite_checkout(
@@ -160,32 +175,6 @@ def load_harness_files() -> dict[str, str]:
     for path in sorted(HARNESS_DIR.glob("*.js")):
         harness[path.name] = path.read_text(encoding="utf-8")
     return harness
-
-
-# Map test262 include names to our harness file names
-INCLUDE_MAP: dict[str, str] = {
-    "assert.js": "assert.js",
-    "sta.js": "assert.js",  # $ERROR and $DONOTEVALUATE are in our assert.js
-    "compareArray.js": "assert.js",  # assert.compareArray is in our assert.js
-    "propertyHelper.js": "propertyHelper.js",
-    "compareIterator.js": "compareIterator.js",
-    "isConstructor.js": "isConstructor.js",
-    "deepEqual.js": "deepEqual.js",
-    "nans.js": "nans.js",
-    "testTypedArray.js": "testTypedArray.js",
-    "testBigIntTypedArray.js": "testTypedArray.js",
-    "temporalHelpers.js": "temporalHelpers.js",
-    "promiseHelper.js": "promiseHelper.js",
-    "dateConstants.js": "dateConstants.js",
-    "decimalToHexString.js": "decimalToHexString.js",
-    "fnGlobalObject.js": "fnGlobalObject.js",
-    "nativeFunctionMatcher.js": "nativeFunctionMatcher.js",
-    "byteConversionValues.js": "byteConversionValues.js",
-    "proxyTrapsHelper.js": "proxyTrapsHelper.js",
-    "regExpUtils.js": "regExpUtils.js",
-    "detachArrayBuffer.js": "detachArrayBuffer.js",
-    "doneprintHandle.js": "doneprintHandle.js",
-}
 
 
 def build_harness_source(includes: list[str], harness_files: dict[str, str]) -> str:
@@ -413,6 +402,9 @@ def evaluate_suite(
         "timeouts": 0,
     }
     skip_reasons_counter: Counter[str] = Counter()
+    skip_target_counter: Counter[str] = Counter()
+    skip_status_counter: Counter[str] = Counter()
+    skip_area_counter: Counter[str] = Counter()
 
     positive_tests: list[tuple[Path, dict, str]] = []
     negative_runtime_tests: list[tuple[Path, dict, str]] = []
@@ -448,6 +440,12 @@ def evaluate_suite(
             summary["total_skipped"] += 1
             for reason in reasons:
                 skip_reasons_counter[reason] += 1
+                classification = classify_skip_reason(reason, test_id)
+                skip_target_counter[classification["target"]] += 1
+                skip_status_counter[classification["status"]] += 1
+                skip_area_counter[
+                    f"{classification['area']} :: {classification['target']}"
+                ] += 1
             continue
         negative = metadata.get("negative")
 
@@ -861,14 +859,9 @@ def evaluate_suite(
                         break
 
                     # Ground truth: per-file records emitted by the runner.
-                    # PR #474 renamed "file" to "fileName" in TestRunner's
-                    # JSON output; tolerate both so we don't silently drop
-                    # records produced by older runners or recovered via
-                    # _recover_per_file_records (whose regex still matches
-                    # the legacy "file" form).
                     file_results_by_safe: dict[str, dict] = {}
                     for fr in tr_results.get("results", []):
-                        fpath = fr.get("fileName") or fr.get("file") or ""
+                        fpath = fr.get("fileName") or ""
                         key = Path(fpath).name if fpath else ""
                         if key:
                             file_results_by_safe[key] = fr
@@ -1067,6 +1060,30 @@ def evaluate_suite(
         + summary["timeouts"]
     )
     summary["skip_reasons"] = dict(skip_reasons_counter.most_common())
+    failing_results = [
+        r for r in results if r["status"] in ("FAIL", "TIMEOUT", "ERROR")
+    ]
+    failure_area_counter: Counter[str] = Counter()
+    failure_fingerprint_counter: Counter[str] = Counter()
+    for result in failing_results:
+        test_id = result.get("id", "")
+        failure_area_counter[path_bucket(test_id, 2)] += 1
+        fingerprint = (
+            f"{path_bucket(test_id, 2)} :: "
+            f"{result.get('status', 'UNKNOWN')} :: "
+            f"{message_fingerprint(result.get('message', ''))}"
+        )
+        failure_fingerprint_counter[fingerprint] += 1
+
+    summary["clusters"] = {
+        "skipsByTarget": counter_records(skip_target_counter, "target"),
+        "skipsByStatus": counter_records(skip_status_counter, "status"),
+        "skipsByAreaAndTarget": counter_records(skip_area_counter, "areaTarget"),
+        "failuresByArea": counter_records(failure_area_counter, "area"),
+        "failureFingerprints": counter_records(
+            failure_fingerprint_counter, "fingerprint"
+        ),
+    }
 
     return {"summary": summary, "results": results}
 
@@ -1302,6 +1319,13 @@ def main() -> int:
             s["skip_reasons"].items(), key=lambda x: -x[1]
         )[:15]:
             print(f"  {count:>6}  {reason}")
+        print()
+
+    clusters = s.get("clusters", {})
+    if clusters.get("skipsByTarget"):
+        print("Top compatibility target skips:")
+        for item in clusters["skipsByTarget"][:10]:
+            print(f"  {item['count']:>6}  {item['target']}")
         print()
 
     failing = [

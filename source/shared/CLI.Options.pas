@@ -562,7 +562,7 @@ begin
   FMaxInstructions := TGocciaInt64Option.Create('max-instructions',
     'Maximum execution steps before aborting', 'Engine');
   FUnsafeFFI := TGocciaFlagOption.Create('unsafe-ffi',
-    'Enable the FFI global (foreign function interface)', 'Engine');
+    'Enable the FFI global (foreign function interface)', 'Runtime');
   FUnsafeFunctionConstructor := TGocciaFlagOption.Create('unsafe-function-constructor',
     'Enable the Function constructor (dynamic code generation)', 'Engine');
   FStackSize := TGocciaIntegerOption.Create('stack-size',

@@ -15,12 +15,12 @@ uses
   Goccia.AST.Node,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  CLI.ConfigFile,
   CLI.Options,
   Goccia.Engine,
   Goccia.Engine.Backend,
   Goccia.Error,
   Goccia.Error.Detail,
-  Goccia.FetchManager,
   Goccia.GarbageCollector,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
@@ -28,6 +28,7 @@ uses
   Goccia.Parser,
   Goccia.REPL.Formatter,
   Goccia.REPL.LineEditor,
+  Goccia.Runtime,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
   Goccia.Token,
@@ -42,8 +43,11 @@ type
   TREPLApp = class(TGocciaCLIApplication)
   private
     FTiming: TGocciaFlagOption;
+    function EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
   protected
     procedure Configure; override;
+    procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
+      const AFileConfig: TConfigEntryArray); override;
     function UsageLine: string; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
   end;
@@ -52,6 +56,41 @@ procedure TREPLApp.Configure;
 begin
   AddEngineOptions;
   FTiming := AddFlag('timing', 'Show per-line timing');
+end;
+
+function TREPLApp.EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
+begin
+  Result := DefaultRuntimeGlobals;
+  if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
+    Include(Result, rgFFI);
+end;
+
+procedure TREPLApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
+  const AFileConfig: TConfigEntryArray);
+var
+  Runtime: TGocciaRuntimeExtension;
+begin
+  Runtime := AttachRuntimeExtension(AEngine, EffectiveRuntimeGlobals);
+  if LogFileOpen and Assigned(Runtime.BuiltinConsole) then
+    Runtime.BuiltinConsole.LogCallback := HandleConsoleLog;
+end;
+
+procedure WaitForRuntimeIdle(const AEngine: TGocciaEngine);
+var
+  Runtime: TGocciaRuntimeExtension;
+begin
+  Runtime := GetRuntimeExtension(AEngine);
+  if Assigned(Runtime) then
+    Runtime.WaitForIdle;
+end;
+
+procedure DiscardRuntimePending(const AEngine: TGocciaEngine);
+var
+  Runtime: TGocciaRuntimeExtension;
+begin
+  Runtime := GetRuntimeExtension(AEngine);
+  if Assigned(Runtime) then
+    Runtime.DiscardPending;
 end;
 
 function TREPLApp.UsageLine: string;
@@ -163,7 +202,7 @@ begin
                     if Assigned(ResultValue) then
                       TGarbageCollector.Instance.AddTempRoot(ResultValue);
                     try
-                      WaitForFetchIdle;
+                      WaitForRuntimeIdle(Eng);
                       ExecEnd := GetNanoseconds;
 
                       if ResultValue <> nil then
@@ -175,7 +214,7 @@ begin
                   finally
                     if Assigned(TGocciaMicrotaskQueue.Instance) then
                       TGocciaMicrotaskQueue.Instance.ClearQueue;
-                    DiscardFetchCompletions;
+                    DiscardRuntimePending(Eng);
                     LiveModules.Add(Module);
                   end;
                 finally

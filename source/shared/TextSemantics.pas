@@ -30,6 +30,9 @@ function UTF8SequenceLengthAt(const AText: string;
   const AIndex: Integer): Integer;
 function TryReadUTF8CodePoint(const AText: string; const AIndex: Integer;
   out ACodePoint: Cardinal; out AByteLength: Integer): Boolean;
+function TryReadUTF8CodePointAllowSurrogates(const AText: string;
+  const AIndex: Integer; out ACodePoint: Cardinal;
+  out AByteLength: Integer): Boolean;
 function CodePointToUTF8(const ACodePoint: Cardinal): string;
 function IsUnicodeSurrogateCodePoint(const ACodePoint: Cardinal): Boolean; inline;
 function IsECMAScriptWhitespaceCodePoint(const ACodePoint: Cardinal): Boolean;
@@ -38,6 +41,18 @@ function TrimECMAScriptWhitespaceStart(const AText: string): string;
 function TrimECMAScriptWhitespaceEnd(const AText: string): string;
 function IsWellFormedUTF8(const AText: string): Boolean;
 function ToWellFormedUTF8(const AText: string): string;
+function UTF8CodePointLength(const AText: string): Integer;
+function UTF8CodePointAt(const AText: string; const AIndex: Integer): string;
+function UTF16CodeUnitLength(const AText: string): Integer;
+function UTF16CodeUnitAt(const AText: string; const AIndex: Integer): string;
+function TryUTF16CodePointValueAt(const AText: string; const AIndex: Integer;
+  out ACodePoint: Cardinal): Boolean;
+function UTF16Substring(const AText: string; const AStart,
+  ACount: Integer): string;
+function UTF16IndexOf(const AText, ASearch: string;
+  const AStart: Integer = 0): Integer;
+function UTF16LastIndexOf(const AText, ASearch: string;
+  const AStart: Integer): Integer;
 function UnicodeLowerCaseUTF8(const AText: string): string;
 function UnicodeUpperCaseUTF8(const AText: string): string;
 function AdvanceUTF8StringIndex(const AText: string; const AIndex: Integer;
@@ -47,6 +62,7 @@ function ExpandReplacementPattern(const AReplacement, AMatched,
   const ACaptures: array of TReplacementCapture;
   const ANamedCaptures: array of TReplacementNamedCapture): string;
 function CreateUTF8StringList(const AText: string): TStringList;
+function CreateECMAScriptSourceLines(const AText: string): TStringList;
 function CreateUTF8FileTextLines(const AText: UTF8String): TStringList;
 function NormalizeNewlinesToLF(const AText: string): string;
 function NormalizeUTF8NewlinesToLF(const AText: UTF8String): UTF8String;
@@ -160,6 +176,44 @@ begin
     Cardinal(ByteValue[2] and $3F) shl 6 or
     Cardinal(ByteValue[3] and $3F);
   Result := True;
+end;
+
+function TryReadUTF8SurrogateCodePoint(const AText: string;
+  const AIndex: Integer; out ACodePoint: Cardinal;
+  out AByteLength: Integer): Boolean;
+var
+  ByteValue: array[0..2] of Byte;
+begin
+  Result := False;
+  ACodePoint := 0;
+  AByteLength := 1;
+
+  if (AIndex < 1) or (AIndex + 2 > Length(AText)) then
+    Exit;
+
+  ByteValue[0] := Ord(AText[AIndex]);
+  ByteValue[1] := Ord(AText[AIndex + 1]);
+  ByteValue[2] := Ord(AText[AIndex + 2]);
+
+  if (ByteValue[0] <> $ED) or (ByteValue[1] < $A0) or
+     (ByteValue[1] > $BF) or ((ByteValue[2] and $C0) <> $80) then
+    Exit;
+
+  ACodePoint := Cardinal(ByteValue[0] and $0F) shl 12 or
+    Cardinal(ByteValue[1] and $3F) shl 6 or
+    Cardinal(ByteValue[2] and $3F);
+  AByteLength := 3;
+  Result := True;
+end;
+
+function TryReadUTF8CodePointAllowSurrogates(const AText: string;
+  const AIndex: Integer; out ACodePoint: Cardinal;
+  out AByteLength: Integer): Boolean;
+begin
+  Result := TryReadUTF8SurrogateCodePoint(AText, AIndex, ACodePoint,
+    AByteLength);
+  if not Result then
+    Result := TryReadUTF8CodePoint(AText, AIndex, ACodePoint, AByteLength);
 end;
 
 function UTF8SequenceLengthAt(const AText: string;
@@ -324,6 +378,394 @@ begin
     end;
   end;
   Result := Buffer.ToString;
+end;
+
+function UTF8CodePointLength(const AText: string): Integer;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  Index: Integer;
+begin
+  Result := 0;
+  Index := 1;
+  while Index <= Length(AText) do
+  begin
+    if TryReadUTF8CodePointAllowSurrogates(AText, Index, CodePoint,
+      ByteLength) then
+      Inc(Index, ByteLength)
+    else
+      Inc(Index);
+    Inc(Result);
+  end;
+end;
+
+function UTF8CodePointAt(const AText: string; const AIndex: Integer): string;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  CodePointIndex: Integer;
+  Index: Integer;
+begin
+  if AIndex < 0 then
+    Exit('');
+
+  CodePointIndex := 0;
+  Index := 1;
+  while Index <= Length(AText) do
+  begin
+    if TryReadUTF8CodePointAllowSurrogates(AText, Index, CodePoint,
+      ByteLength) then
+    begin
+      if CodePointIndex = AIndex then
+        Exit(Copy(AText, Index, ByteLength));
+      Inc(Index, ByteLength);
+    end
+    else
+    begin
+      if CodePointIndex = AIndex then
+        Exit(AText[Index]);
+      Inc(Index);
+    end;
+    Inc(CodePointIndex);
+  end;
+
+  Result := '';
+end;
+
+function UTF16CodeUnitToUTF8(const ACodeUnit: Cardinal): string;
+begin
+  if ACodeUnit <= $7F then
+    Result := Chr(ACodeUnit)
+  else if ACodeUnit <= $7FF then
+    Result := Chr($C0 or (ACodeUnit shr 6)) +
+      Chr($80 or (ACodeUnit and $3F))
+  else
+    Result := Chr($E0 or (ACodeUnit shr 12)) +
+      Chr($80 or ((ACodeUnit shr 6) and $3F)) +
+      Chr($80 or (ACodeUnit and $3F));
+end;
+
+function UTF16CodeUnitLength(const AText: string): Integer;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  Index: Integer;
+begin
+  Result := 0;
+  Index := 1;
+  while Index <= Length(AText) do
+  begin
+    if TryReadUTF8CodePointAllowSurrogates(AText, Index, CodePoint,
+      ByteLength) then
+    begin
+      if CodePoint > $FFFF then
+        Inc(Result, 2)
+      else
+        Inc(Result);
+      Inc(Index, ByteLength);
+    end
+    else
+    begin
+      Inc(Result);
+      Inc(Index);
+    end;
+  end;
+end;
+
+function UTF16CodeUnitAt(const AText: string; const AIndex: Integer): string;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  CodeUnitIndex: Integer;
+  HighSurrogate: Cardinal;
+  Index: Integer;
+  LowSurrogate: Cardinal;
+  Supplementary: Cardinal;
+begin
+  if AIndex < 0 then
+    Exit('');
+
+  CodeUnitIndex := 0;
+  Index := 1;
+  while Index <= Length(AText) do
+  begin
+    if TryReadUTF8CodePointAllowSurrogates(AText, Index, CodePoint,
+      ByteLength) then
+    begin
+      if CodePoint <= $FFFF then
+      begin
+        if CodeUnitIndex = AIndex then
+          Exit(Copy(AText, Index, ByteLength));
+        Inc(CodeUnitIndex);
+      end
+      else
+      begin
+        Supplementary := CodePoint - $10000;
+        HighSurrogate := $D800 + (Supplementary shr 10);
+        LowSurrogate := $DC00 + (Supplementary and $3FF);
+        if CodeUnitIndex = AIndex then
+          Exit(UTF16CodeUnitToUTF8(HighSurrogate));
+        if CodeUnitIndex + 1 = AIndex then
+          Exit(UTF16CodeUnitToUTF8(LowSurrogate));
+        Inc(CodeUnitIndex, 2);
+      end;
+      Inc(Index, ByteLength);
+    end
+    else
+    begin
+      if CodeUnitIndex = AIndex then
+        Exit(AText[Index]);
+      Inc(CodeUnitIndex);
+      Inc(Index);
+    end;
+  end;
+
+  Result := '';
+end;
+
+function TryUTF16CodePointValueAt(const AText: string; const AIndex: Integer;
+  out ACodePoint: Cardinal): Boolean;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  CodeUnitIndex: Integer;
+  Index: Integer;
+  LowSurrogate: Cardinal;
+  Supplementary: Cardinal;
+begin
+  ACodePoint := 0;
+  if AIndex < 0 then
+    Exit(False);
+
+  CodeUnitIndex := 0;
+  Index := 1;
+  while Index <= Length(AText) do
+  begin
+    if TryReadUTF8CodePointAllowSurrogates(AText, Index, CodePoint,
+      ByteLength) then
+    begin
+      if CodePoint <= $FFFF then
+      begin
+        if CodeUnitIndex = AIndex then
+        begin
+          ACodePoint := CodePoint;
+          Exit(True);
+        end;
+        Inc(CodeUnitIndex);
+      end
+      else
+      begin
+        if CodeUnitIndex = AIndex then
+        begin
+          ACodePoint := CodePoint;
+          Exit(True);
+        end;
+        Supplementary := CodePoint - $10000;
+        LowSurrogate := $DC00 + (Supplementary and $3FF);
+        if CodeUnitIndex + 1 = AIndex then
+        begin
+          ACodePoint := LowSurrogate;
+          Exit(True);
+        end;
+        Inc(CodeUnitIndex, 2);
+      end;
+      Inc(Index, ByteLength);
+    end
+    else
+    begin
+      if CodeUnitIndex = AIndex then
+      begin
+        ACodePoint := Ord(AText[Index]);
+        Exit(True);
+      end;
+      Inc(CodeUnitIndex);
+      Inc(Index);
+    end;
+  end;
+
+  Result := False;
+end;
+
+function UTF16Substring(const AText: string; const AStart,
+  ACount: Integer): string;
+var
+  Buffer: TStringBuffer;
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  CodeUnitIndex: Integer;
+  HighSurrogate: Cardinal;
+  Index: Integer;
+  LowSelected: Boolean;
+  LowSurrogate: Cardinal;
+  HighSelected: Boolean;
+  TargetEnd: Integer;
+  Supplementary: Cardinal;
+begin
+  if (AStart < 0) or (ACount <= 0) then
+    Exit('');
+
+  Buffer := TStringBuffer.Create(Length(AText));
+  CodeUnitIndex := 0;
+  Index := 1;
+  TargetEnd := AStart + ACount;
+  while (Index <= Length(AText)) and (CodeUnitIndex < TargetEnd) do
+  begin
+    if TryReadUTF8CodePointAllowSurrogates(AText, Index, CodePoint,
+      ByteLength) then
+    begin
+      if CodePoint <= $FFFF then
+      begin
+        if (CodeUnitIndex >= AStart) and (CodeUnitIndex < TargetEnd) then
+          Buffer.Append(Copy(AText, Index, ByteLength));
+        Inc(CodeUnitIndex);
+      end
+      else
+      begin
+        HighSelected := (CodeUnitIndex >= AStart) and
+          (CodeUnitIndex < TargetEnd);
+        LowSelected := (CodeUnitIndex + 1 >= AStart) and
+          (CodeUnitIndex + 1 < TargetEnd);
+        if HighSelected and LowSelected then
+          Buffer.Append(Copy(AText, Index, ByteLength))
+        else
+        begin
+          Supplementary := CodePoint - $10000;
+          HighSurrogate := $D800 + (Supplementary shr 10);
+          LowSurrogate := $DC00 + (Supplementary and $3FF);
+          if HighSelected then
+            Buffer.Append(UTF16CodeUnitToUTF8(HighSurrogate));
+          if LowSelected then
+            Buffer.Append(UTF16CodeUnitToUTF8(LowSurrogate));
+        end;
+        Inc(CodeUnitIndex, 2);
+      end;
+      Inc(Index, ByteLength);
+    end
+    else
+    begin
+      if (CodeUnitIndex >= AStart) and (CodeUnitIndex < TargetEnd) then
+        Buffer.Append(AText[Index]);
+      Inc(CodeUnitIndex);
+      Inc(Index);
+    end;
+  end;
+  Result := Buffer.ToString;
+end;
+
+type
+  TUTF16CodeUnitArray = array of Cardinal;
+
+function BuildUTF16CodeUnitArray(const AText: string): TUTF16CodeUnitArray;
+var
+  ByteLength: Integer;
+  CodePoint: Cardinal;
+  Count: Integer;
+  Index: Integer;
+  Supplementary: Cardinal;
+begin
+  SetLength(Result, Length(AText));
+  Count := 0;
+  Index := 1;
+  while Index <= Length(AText) do
+  begin
+    if TryReadUTF8CodePointAllowSurrogates(AText, Index, CodePoint,
+      ByteLength) then
+    begin
+      if CodePoint <= $FFFF then
+      begin
+        Result[Count] := CodePoint;
+        Inc(Count);
+      end
+      else
+      begin
+        Supplementary := CodePoint - $10000;
+        Result[Count] := $D800 + (Supplementary shr 10);
+        Result[Count + 1] := $DC00 + (Supplementary and $3FF);
+        Inc(Count, 2);
+      end;
+      Inc(Index, ByteLength);
+    end
+    else
+    begin
+      Result[Count] := Ord(AText[Index]);
+      Inc(Count);
+      Inc(Index);
+    end;
+  end;
+  SetLength(Result, Count);
+end;
+
+function UTF16CodeUnitsEqualAt(const ATextUnits,
+  ASearchUnits: TUTF16CodeUnitArray; const AStart: Integer): Boolean;
+var
+  I: Integer;
+begin
+  if Length(ASearchUnits) = 0 then
+    Exit(True);
+  if AStart + Length(ASearchUnits) > Length(ATextUnits) then
+    Exit(False);
+
+  for I := 0 to Length(ASearchUnits) - 1 do
+    if ATextUnits[AStart + I] <> ASearchUnits[I] then
+      Exit(False);
+
+  Result := True;
+end;
+
+function UTF16IndexOf(const AText, ASearch: string;
+  const AStart: Integer): Integer;
+var
+  I: Integer;
+  SearchUnits: TUTF16CodeUnitArray;
+  SearchLength: Integer;
+  StartIndex: Integer;
+  TextUnits: TUTF16CodeUnitArray;
+  TextLength: Integer;
+begin
+  TextUnits := BuildUTF16CodeUnitArray(AText);
+  SearchUnits := BuildUTF16CodeUnitArray(ASearch);
+  TextLength := Length(TextUnits);
+  SearchLength := Length(SearchUnits);
+  StartIndex := Max(0, Min(AStart, TextLength));
+
+  if SearchLength = 0 then
+    Exit(StartIndex);
+  if SearchLength > TextLength then
+    Exit(-1);
+
+  for I := StartIndex to TextLength - SearchLength do
+    if UTF16CodeUnitsEqualAt(TextUnits, SearchUnits, I) then
+      Exit(I);
+
+  Result := -1;
+end;
+
+function UTF16LastIndexOf(const AText, ASearch: string;
+  const AStart: Integer): Integer;
+var
+  I: Integer;
+  SearchUnits: TUTF16CodeUnitArray;
+  SearchLength: Integer;
+  StartIndex: Integer;
+  TextUnits: TUTF16CodeUnitArray;
+  TextLength: Integer;
+begin
+  TextUnits := BuildUTF16CodeUnitArray(AText);
+  SearchUnits := BuildUTF16CodeUnitArray(ASearch);
+  TextLength := Length(TextUnits);
+  SearchLength := Length(SearchUnits);
+  StartIndex := Max(0, Min(AStart, TextLength));
+
+  if SearchLength = 0 then
+    Exit(StartIndex);
+  if SearchLength > TextLength then
+    Exit(-1);
+
+  for I := Min(StartIndex, TextLength - SearchLength) downto 0 do
+    if UTF16CodeUnitsEqualAt(TextUnits, SearchUnits, I) then
+      Exit(I);
+
+  Result := -1;
 end;
 
 function UTF8TextToUnicodeString(const AText: string): UnicodeString;
@@ -556,6 +998,58 @@ begin
     Result.Add(Copy(AText, LineStart, Length(AText) - LineStart + 1))
   else if (Length(AText) > 0) and ((AText[Length(AText)] = #10) or
     (AText[Length(AText)] = #13)) then
+    Result.Add('');
+end;
+
+function IsUTF8LineOrParagraphSeparatorAt(const AText: string;
+  const AIndex: Integer): Boolean;
+begin
+  Result := (AIndex >= 1) and (AIndex + 2 <= Length(AText)) and
+    (AText[AIndex] = #$E2) and
+    (AText[AIndex + 1] = #$80) and
+    ((AText[AIndex + 2] = #$A8) or (AText[AIndex + 2] = #$A9));
+end;
+
+function CreateECMAScriptSourceLines(const AText: string): TStringList;
+const
+  UTF8_LINE_TERMINATOR_BYTE_LENGTH = 3;
+var
+  LineStart: Integer;
+  TextIndex: Integer;
+begin
+  Result := TStringList.Create;
+  LineStart := 1;
+  TextIndex := 1;
+
+  while TextIndex <= Length(AText) do
+  begin
+    if AText[TextIndex] = #13 then
+    begin
+      Result.Add(Copy(AText, LineStart, TextIndex - LineStart));
+      if (TextIndex < Length(AText)) and (AText[TextIndex + 1] = #10) then
+        Inc(TextIndex);
+      LineStart := TextIndex + 1;
+    end
+    else if AText[TextIndex] = #10 then
+    begin
+      Result.Add(Copy(AText, LineStart, TextIndex - LineStart));
+      LineStart := TextIndex + 1;
+    end
+    else if IsUTF8LineOrParagraphSeparatorAt(AText, TextIndex) then
+    begin
+      Result.Add(Copy(AText, LineStart, TextIndex - LineStart));
+      Inc(TextIndex, UTF8_LINE_TERMINATOR_BYTE_LENGTH - 1);
+      LineStart := TextIndex + 1;
+    end;
+    Inc(TextIndex);
+  end;
+
+  if LineStart <= Length(AText) then
+    Result.Add(Copy(AText, LineStart, Length(AText) - LineStart + 1))
+  else if (Length(AText) > 0) and
+    ((AText[Length(AText)] = #10) or (AText[Length(AText)] = #13) or
+    IsUTF8LineOrParagraphSeparatorAt(AText,
+    Length(AText) - UTF8_LINE_TERMINATOR_BYTE_LENGTH + 1)) then
     Result.Add('');
 end;
 

@@ -20,12 +20,18 @@ unit Goccia.Threading.Init;
 interface
 
 uses
-  Goccia.Engine;
+  Goccia.Engine,
+  Goccia.Runtime;
+
+type
+  TGocciaEngineInitializer = procedure(const AEngine: TGocciaEngine);
 
 { Force-creates a throwaway engine to trigger lazy shared prototype
   initialisation for every built-in type. Safe to call multiple times
   (subsequent calls are no-ops once prototypes are populated). }
-procedure EnsureSharedPrototypesInitialized(const ABuiltins: TGocciaGlobalBuiltins);
+procedure EnsureSharedPrototypesInitialized(
+  const ARuntimeGlobals: TGocciaRuntimeGlobals = [];
+  const AInitializer: TGocciaEngineInitializer = nil);
 
 implementation
 
@@ -35,7 +41,9 @@ uses
   Goccia.GarbageCollector,
   Goccia.Lexer;
 
-procedure EnsureSharedPrototypesInitialized(const ABuiltins: TGocciaGlobalBuiltins);
+procedure EnsureSharedPrototypesInitialized(
+  const ARuntimeGlobals: TGocciaRuntimeGlobals;
+  const AInitializer: TGocciaEngineInitializer);
 var
   Source: TStringList;
   Engine: TGocciaEngine;
@@ -54,8 +62,12 @@ begin
     // Create a minimal engine. The constructor registers all built-in
     // types, which triggers lazy shared prototype initialisation for
     // every value type (Array, Object, Map, Set, Promise, etc.).
-    Engine := TGocciaEngine.Create('<thread-init>', Source, ABuiltins);
+    Engine := TGocciaEngine.Create('<thread-init>', Source);
     try
+      if ARuntimeGlobals <> [] then
+        AttachRuntimeExtension(Engine, ARuntimeGlobals);
+      if Assigned(AInitializer) then
+        AInitializer(Engine);
       // Nothing to execute — we only needed the constructor side-effects.
     finally
       Engine.Free;

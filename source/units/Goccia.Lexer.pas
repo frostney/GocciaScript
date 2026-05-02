@@ -143,7 +143,7 @@ end;
 function TGocciaLexer.GetSourceLines: TStringList;
 begin
   if not Assigned(FSourceLines) then
-    FSourceLines := CreateUTF8StringList(FSource);
+    FSourceLines := CreateECMAScriptSourceLines(FSource);
   Result := FSourceLines;
 end;
 
@@ -1431,7 +1431,7 @@ var
   Text: string;
   TokenType: TGocciaTokenType;
 begin
-  while not IsAtEnd and IsValidIdentifierChar(Peek) do
+  while not IsAtEnd and (not IsLineTerminator) and IsValidIdentifierChar(Peek) do
     Advance;
 
   Text := Copy(FSource, FStart, FCurrent - FStart);

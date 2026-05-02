@@ -18,6 +18,7 @@ uses
   Goccia.Builtins.Benchmark,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  CLI.ConfigFile,
   CLI.Options,
   Goccia.Constants.PropertyNames,
   Goccia.Engine,
@@ -30,6 +31,9 @@ uses
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
+  Goccia.Profiler,
+  Goccia.Profiler.Report,
+  Goccia.Runtime,
   Goccia.Scope,
   Goccia.ScriptLoader.Input,
   Goccia.CLI.JSON.Reporter,
@@ -167,6 +171,8 @@ type
     FNoProgress: TGocciaFlagOption;
     FFormats: TGocciaRepeatableOption;
     FOutputFile: TGocciaStringOption;
+    FCanPrintProfile: Boolean;
+    function ProfilingEnabled: Boolean;
     procedure RunBytecodeBenchmarkModule(const AEngine: TGocciaEngine;
       const AExecutor: TGocciaBytecodeExecutor;
       const AModule: TGocciaBytecodeModule; const AFileName: string);
@@ -194,11 +200,15 @@ type
     procedure RunBenchmarks(const APaths: TStringList;
       const AReports: array of TReportSpec;
       const AMode: TGocciaExecutionMode; const AShowProgress: Boolean);
+    function EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
   protected
     procedure Configure; override;
+    procedure Validate; override;
+    procedure AfterExecute; override;
+    procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
+      const AFileConfig: TConfigEntryArray); override;
     function UsageLine: string; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
-    function GlobalBuiltins: TGocciaGlobalBuiltins; override;
   end;
 
 function IsBenchmarkHelperFile(const AFileName: string): Boolean;
@@ -209,17 +219,49 @@ begin
   Result := Pos('/helpers/', NormalizedPath) > 0;
 end;
 
+function TBenchmarkRunnerApp.ProfilingEnabled: Boolean;
+begin
+  Result := Assigned(ProfilerOptions) and ProfilerOptions.Mode.Present;
+end;
+
+function RuntimeBenchmark(const AEngine: TGocciaEngine): TGocciaBenchmark;
+var
+  Runtime: TGocciaRuntimeExtension;
+begin
+  Runtime := GetRuntimeExtension(AEngine);
+  if Assigned(Runtime) then
+    Result := Runtime.BuiltinBenchmark
+  else
+    Result := nil;
+end;
+
+procedure ConfigureBenchmarkRuntime(const AEngine: TGocciaEngine;
+  const AShowProgress, AClearBeforeMeasurement: Boolean);
+var
+  Benchmark: TGocciaBenchmark;
+begin
+  Benchmark := RuntimeBenchmark(AEngine);
+  if not Assigned(Benchmark) then
+    Exit;
+  if AShowProgress then
+    Benchmark.OnProgress := TBenchmarkProgress.OnProgress;
+  if AClearBeforeMeasurement then
+    Benchmark.OnBeforeMeasurement := AEngine.ClearTransientCaches;
+end;
+
 function RunRegisteredBenchmarks(const AEngine: TGocciaEngine): TGocciaObjectValue;
 var
+  Benchmark: TGocciaBenchmark;
   EmptyArgs: TGocciaArgumentsCollection;
   Value: TGocciaValue;
 begin
-  if not Assigned(AEngine.BuiltinBenchmark) then
+  Benchmark := RuntimeBenchmark(AEngine);
+  if not Assigned(Benchmark) then
     Exit(nil);
 
   EmptyArgs := TGocciaArgumentsCollection.Create;
   try
-    Value := AEngine.BuiltinBenchmark.RunBenchmarks(EmptyArgs,
+    Value := Benchmark.RunBenchmarks(EmptyArgs,
       TGocciaUndefinedLiteralValue.UndefinedValue);
   finally
     EmptyArgs.Free;
@@ -279,8 +321,7 @@ begin
     try
       Engine := CreateEngine(AFileName, Source);
       try
-        if AShowProgress and Assigned(Engine.BuiltinBenchmark) then
-          Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
+        ConfigureBenchmarkRuntime(Engine, AShowProgress, False);
 
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
         StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
@@ -408,10 +449,7 @@ begin
             Lexer.Free;
           end;
 
-          if AShowProgress and Assigned(Engine.BuiltinBenchmark) then
-            Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
-          if Assigned(Engine.BuiltinBenchmark) then
-            Engine.BuiltinBenchmark.OnBeforeMeasurement := Engine.ClearTransientCaches;
+          ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
 
           try
           StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
@@ -512,8 +550,7 @@ begin
   try
     Engine := CreateEngine(AFileName, ASource);
     try
-      if AShowProgress and Assigned(Engine.BuiltinBenchmark) then
-        Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
+      ConfigureBenchmarkRuntime(Engine, AShowProgress, False);
 
       StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
       StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
@@ -622,10 +659,7 @@ begin
           Lexer.Free;
         end;
 
-        if AShowProgress and Assigned(Engine.BuiltinBenchmark) then
-          Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
-        if Assigned(Engine.BuiltinBenchmark) then
-          Engine.BuiltinBenchmark.OnBeforeMeasurement := Engine.ClearTransientCaches;
+        ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
 
         try
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
@@ -867,6 +901,8 @@ begin
     end;
 
     JobCount := GetJobCount(Files.Count);
+    if ProfilingEnabled and (JobCount > 1) then
+      JobCount := 1;
 
     if AShowProgress then
     begin
@@ -894,7 +930,7 @@ begin
         SetLength(WorkerData[I].Entries, 0);
       end;
 
-      EnsureSharedPrototypesInitialized(EffectiveBuiltins);
+      EnsureSharedPrototypesInitialized(EffectiveRuntimeGlobals);
 
       BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
       WallClockStart := GetNanoseconds;
@@ -966,6 +1002,7 @@ end;
 procedure TBenchmarkRunnerApp.Configure;
 begin
   AddEngineOptions;
+  AddProfilerOptions;
   FNoProgress := AddFlag('no-progress', 'Suppress progress output');
   FFormats := AddRepeatable('format',
     'Output format (console, text, csv, json, compact-json). ' +
@@ -973,9 +1010,85 @@ begin
   FOutputFile := AddString('output', 'Output file path (attaches to last --format)');
 end;
 
-function TBenchmarkRunnerApp.GlobalBuiltins: TGocciaGlobalBuiltins;
+procedure TBenchmarkRunnerApp.Validate;
 begin
-  Result := [ggBenchmark];
+  inherited Validate;
+
+  if ProfilerOptions.Format.Present and not ProfilerOptions.Mode.Present then
+    ProfilerOptions.Mode.Apply('functions');
+
+  if ProfilerOptions.Mode.Present then
+    EngineOptions.Mode.Apply('bytecode');
+
+  if ProfilerOptions.OutputPath.Present and not ProfilerOptions.Mode.Present then
+    raise TGocciaParseError.Create(
+      '--profile-output requires --profile=opcodes|functions|all.');
+
+  if ProfilerOptions.Format.Matches(pfFlamegraph) and
+     not ProfilerOptions.OutputPath.Present then
+    raise TGocciaParseError.Create(
+      '--profile-format=flamegraph requires --profile-output=<path>.');
+end;
+
+procedure TBenchmarkRunnerApp.AfterExecute;
+var
+  ProfileOpcodes, ProfileFunctions: Boolean;
+  ProfileMode: CLI.Options.TGocciaProfileMode;
+begin
+  ProfileOpcodes := False;
+  ProfileFunctions := False;
+
+  if ProfilerOptions.Mode.Present then
+  begin
+    ProfileMode := ProfilerOptions.Mode.Value;
+    ProfileOpcodes := (ProfileMode = CLI.Options.pmOpcodes) or
+                      (ProfileMode = CLI.Options.pmAll);
+    ProfileFunctions := (ProfileMode = CLI.Options.pmFunctions) or
+                        (ProfileMode = CLI.Options.pmAll);
+  end;
+
+  if (ProfileOpcodes or ProfileFunctions) and
+     Assigned(TGocciaProfiler.Instance) then
+  begin
+    if FCanPrintProfile then
+    begin
+      if ProfileOpcodes then
+      begin
+        PrintOpcodeProfile(TGocciaProfiler.Instance);
+        PrintOpcodePairProfile(TGocciaProfiler.Instance);
+        PrintScalarHitRate(TGocciaProfiler.Instance);
+      end;
+      if ProfileFunctions then
+        PrintFunctionProfile(TGocciaProfiler.Instance);
+    end;
+
+    if ProfilerOptions.OutputPath.Present then
+    begin
+      if ProfilerOptions.Format.Matches(pfFlamegraph) then
+        WriteCollapsedStacks(TGocciaProfiler.Instance,
+          ProfilerOptions.OutputPath.Value)
+      else
+        WriteProfileJSON(TGocciaProfiler.Instance,
+          ProfilerOptions.OutputPath.Value);
+    end;
+  end;
+end;
+
+procedure TBenchmarkRunnerApp.ConfigureCreatedEngine(
+  const AEngine: TGocciaEngine; const AFileConfig: TConfigEntryArray);
+var
+  Runtime: TGocciaRuntimeExtension;
+begin
+  Runtime := AttachRuntimeExtension(AEngine, EffectiveRuntimeGlobals);
+  if LogFileOpen and Assigned(Runtime.BuiltinConsole) then
+    Runtime.BuiltinConsole.LogCallback := HandleConsoleLog;
+end;
+
+function TBenchmarkRunnerApp.EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
+begin
+  Result := DefaultRuntimeGlobals + [rgBenchmark];
+  if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
+    Include(Result, rgFFI);
 end;
 
 procedure TBenchmarkRunnerApp.ExecuteWithPaths(const APaths: TStringList);
@@ -1016,6 +1129,7 @@ begin
   // formats would write to stdout — the mixed output corrupts structured data.
   HasStructuredStdout := False;
   HasReadableStdout := False;
+  FCanPrintProfile := True;
   for I := 0 to Length(Reports) - 1 do
     if Reports[I].OutputFile = '' then
     begin
@@ -1024,6 +1138,8 @@ begin
       else
         HasReadableStdout := True;
     end;
+  if HasStructuredStdout then
+    FCanPrintProfile := False;
   if HasStructuredStdout and HasReadableStdout then
   begin
     WriteLn(StdErr, 'Error: Cannot write structured and human-readable formats both to stdout. Provide an --output file for one of them.');

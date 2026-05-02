@@ -6,28 +6,30 @@
 
 ## Executive Summary
 
-- **Unconditional registration** — Standard built-ins (Console, Math, Object, Array, String, Number, RegExp, JSON, JSON5, JSONL, TOML, YAML, CSV, TSV, Symbol, Set, Map, WeakSet, WeakMap, Promise, Performance, Temporal, ArrayBuffer, SharedArrayBuffer, TypedArrays, Proxy, Reflect, Iterator, TextEncoder, TextDecoder, URL, URLSearchParams, fetch, Headers, Response, DisposableStack, AsyncDisposableStack) are always registered
-- **Flag-gated extras** — Only `ggTestAssertions`, `ggBenchmark`, and `ggFFI` use flag-gating for opt-in registration
+- **Core vs runtime registration** — `TGocciaEngine` always registers core language built-ins (Math, Object, Array, String, Number, RegExp, JSON, Symbol, Set, Map, Promise, Temporal, ArrayBuffer, TypedArrays, Proxy, Reflect, Iterator, DisposableStack, etc.); `Goccia.Runtime` provides optional host/runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer)
+- **Runtime opt-ins** — `rgTestAssertions`, `rgBenchmark`, and `rgFFI` are special-purpose runtime globals that are off by default
 - **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
 - **Always-present globals** — `globalThis` and `Goccia` namespace are registered after all built-ins
 
-GocciaScript provides a set of built-in global objects that mirror JavaScript's standard library. Each built-in is implemented as a Pascal unit and registered unconditionally by the engine. Only test assertions, benchmarks, and FFI use flag-gated registration.
+GocciaScript provides a set of built-in global objects that mirror JavaScript's standard library. Core language built-ins are implemented as Pascal units and registered by the engine. Host/runtime globals live behind runtime extensions so binaries can import only the surface they need. Test assertions, benchmarks, and FFI are runtime-level opt-ins.
 
 ## Registration System
 
-Standard built-ins (Console, Math, Object, Array, Number, JSON, JSON5, JSONL, TOML, YAML, CSV, TSV, Symbol, Set, Map, WeakSet, WeakMap, Promise, Performance, Temporal, ArrayBuffer, Proxy, Reflect, fetch, Headers, Response) are always registered unconditionally by the engine. There is no flag-gating for these — they are available in every execution context.
+Core language built-ins (Math, Object, Array, Number, JSON, Symbol, Set, Map, WeakSet, WeakMap, Promise, Temporal, ArrayBuffer, Proxy, Reflect, etc.) are always registered unconditionally by the engine.
 
-Only three built-ins use flag-gated registration via the `TGocciaGlobalBuiltins` enum:
+Runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer) are registered by `TGocciaRuntime`. Frontends such as `GocciaScriptLoader`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, and `GocciaREPL` attach that runtime; `GocciaScriptLoaderBare` does not.
+
+Only three runtime globals are special-purpose opt-ins in `TGocciaRuntimeGlobal`:
 
 ```pascal
-TGocciaGlobalBuiltin = (
-  ggTestAssertions,   // describe, test, expect (testing only)
-  ggBenchmark,        // suite, bench, runBenchmarks (benchmarking only)
-  ggFFI              // Foreign Function Interface
+TGocciaRuntimeGlobal = (
+  rgTestAssertions,   // describe, test, expect (testing only)
+  rgBenchmark,        // suite, bench, runBenchmarks (benchmarking only)
+  rgFFI               // Foreign Function Interface
 );
 ```
 
-The `GocciaTestRunner` adds `ggTestAssertions`, the `GocciaBenchmarkRunner` adds `ggBenchmark`, and FFI (`ggFFI`) requires the `--unsafe-ffi` CLI flag.
+The `GocciaTestRunner` adds `rgTestAssertions`, the `GocciaBenchmarkRunner` adds `rgBenchmark`, and FFI (`rgFFI`) requires the `--unsafe-ffi` CLI flag.
 
 ## Adding a New Built-in
 
@@ -240,11 +242,11 @@ RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pat
 
 ### Global Constants, Functions, and Error Constructors (`Goccia.Builtins.Globals.pas`)
 
-These are always registered (not flag-gated).
+These core constants, functions, and error constructors are always registered (not flag-gated). Runtime extensions can add more globals or namespace properties.
 
 **Constants:** `undefined`, `NaN`, `Infinity`, `globalThis`
 
-`globalThis` is a `const` binding that holds a plain object populated with all global scope bindings at the time of registration. It includes a self-referential `globalThis` property (`globalThis.globalThis === globalThis`).
+`globalThis` is a `const` binding that holds a plain object populated with global scope bindings. It includes a self-referential `globalThis` property (`globalThis.globalThis === globalThis`). Runtime extensions and global-injection helpers call `TGocciaEngine.RefreshGlobalThis` after adding globals so enumeration and property access reflect the new bindings; the public refresh method delegates to the engine's internal global-object registration routine.
 
 **`Goccia` object:**
 
@@ -255,7 +257,7 @@ A `const` global providing engine metadata and Goccia-owned utility APIs:
 | `version` | `string` | Semver version from the latest git tag (e.g., `"0.2.0"`), or tag + `-dev` suffix if there are commits after the tag (e.g., `"0.2.0-dev"`) |
 | `commit` | `string` | Short git commit hash (e.g., `"a1b2c3d"`) |
 | `build` | `object` | Compile-time platform information (see below) |
-| `semver` | `object` | SemVer 2.0.0 API namespace (see below) |
+| `semver` | `object` | Runtime-provided SemVer 2.0.0 API namespace (see below) |
 | `spec` | `object` | ES specification features implemented by GocciaScript, keyed by year (e.g., `"2015"`, `"2025"`). Each year maps to an array of `{ name, link }` entries. |
 | `proposal` | `object` | TC39 proposals implemented by GocciaScript, keyed by stage (e.g., `"stage-3"`, `"stage-1"`). Each stage maps to an array of `{ name, link }` entries. |
 | `shims` | `string[]` | Names of registered shims (currently empty, infrastructure for future shim support) |
@@ -272,6 +274,8 @@ A `const` global providing engine metadata and Goccia-owned utility APIs:
 | `date` | `string` | Build date in `YYYY-MM-DD` format (e.g., `"2026-04-20"`) |
 
 **`Goccia.semver`**
+
+`Goccia.semver` is provided by `TGocciaRuntime`; it is not part of the bare engine namespace. `GocciaScriptLoaderBare` exposes `Goccia` but does not expose `Goccia.semver`.
 
 `Goccia.semver` exposes a SemVer 2.0.0 API modeled after the main `node-semver` export plus its documented module-group aliases:
 
@@ -613,7 +617,7 @@ See [Binary Data Built-ins](built-ins-binary-data.md) for the complete ArrayBuff
 
 ### FFI (`Goccia.Builtins.GlobalFFI.pas`)
 
-Foreign Function Interface for calling native shared libraries. Only available when `ggFFI` is enabled (not registered by default).
+Foreign Function Interface for calling native shared libraries. Only available when `rgFFI` is enabled in the runtime (not registered by default).
 
 **FFI global object:**
 
@@ -644,7 +648,7 @@ Foreign Function Interface for calling native shared libraries. Only available w
 
 ### Test Assertions (`Goccia.Builtins.TestingLibrary.pas`)
 
-Only available when `ggTestAssertions` is enabled.
+Only available when `rgTestAssertions` is enabled in the runtime.
 
 **Test structure:**
 
@@ -698,7 +702,7 @@ All matchers support `.not` negation: `expect(value).not.toBe(wrong)`.
 
 ### Benchmark (`Goccia.Builtins.Benchmark.pas`)
 
-Only available when `ggBenchmark` is enabled (used by the GocciaBenchmarkRunner). See [benchmarks.md](benchmarks.md) for usage, output formats, and CI integration.
+Only available when `rgBenchmark` is enabled in the runtime (used by the GocciaBenchmarkRunner). See [benchmarks.md](benchmarks.md) for usage, output formats, and CI integration.
 
 **Benchmark structure:**
 

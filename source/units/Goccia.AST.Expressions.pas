@@ -837,13 +837,13 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Arithmetic,
   Goccia.Constants.ErrorNames,
   Goccia.Coverage,
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Evaluator,
-  Goccia.Evaluator.Arithmetic,
   Goccia.Evaluator.Assignment,
   Goccia.Evaluator.PatternMatching,
   Goccia.GarbageCollector,
@@ -1710,7 +1710,8 @@ begin
 
   Result := CurrentValue;
   RhsValue := Value.Evaluate(AContext);
-  Result := PerformCompoundOperation(Result, RhsValue, Operator);
+    Result := Goccia.Arithmetic.CompoundOperations(
+      Result, RhsValue, Operator);
   AContext.Scope.AssignBinding(Name, Result);
 end;
 

@@ -17,6 +17,7 @@ uses
   Goccia.Bytecode.Binary,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  CLI.ConfigFile,
   CLI.Options,
   Goccia.Constants.PropertyNames,
   Goccia.Coverage,
@@ -33,6 +34,7 @@ uses
   Goccia.Parser,
   Goccia.Profiler,
   Goccia.Profiler.Report,
+  Goccia.Runtime,
   Goccia.Scope,
   Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
@@ -98,6 +100,7 @@ type
     FInlineGlobals: TGocciaRepeatableOption;
     FLastPaths: TStringList;
 
+    function EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
     function ParseSource(const ASource: TStringList; const AFileName: string;
@@ -139,6 +142,8 @@ type
     procedure RunScripts(const APath: string);
   protected
     procedure Configure; override;
+    procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
+      const AFileConfig: TConfigEntryArray); override;
     function UsageLine: string; override;
     procedure Validate; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
@@ -229,6 +234,24 @@ end;
 
 { TScriptLoaderApp - Configure }
 
+function RuntimeConsole(const AEngine: TGocciaEngine): TGocciaConsole;
+var
+  Runtime: TGocciaRuntimeExtension;
+begin
+  Runtime := GetRuntimeExtension(AEngine);
+  if Assigned(Runtime) then
+    Result := Runtime.BuiltinConsole
+  else
+    Result := nil;
+end;
+
+function TScriptLoaderApp.EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
+begin
+  Result := DefaultRuntimeGlobals;
+  if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
+    Include(Result, rgFFI);
+end;
+
 function TScriptLoaderApp.UsageLine: string;
 begin
   Result := '[file|directory|-] [options]';
@@ -249,6 +272,16 @@ begin
     'Inject globals from a JSON/JSON5/TOML/YAML file or a module with named exports');
   FInlineGlobals := AddRepeatable('global',
     'Inject a single global; value is parsed as JSON or kept as a string');
+end;
+
+procedure TScriptLoaderApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
+  const AFileConfig: TConfigEntryArray);
+var
+  Runtime: TGocciaRuntimeExtension;
+begin
+  Runtime := AttachRuntimeExtension(AEngine, EffectiveRuntimeGlobals);
+  if LogFileOpen and Assigned(Runtime.BuiltinConsole) then
+    Runtime.BuiltinConsole.LogCallback := HandleConsoleLog;
 end;
 
 function TScriptLoaderApp.IsJsonOutput: Boolean;
@@ -539,7 +572,7 @@ begin
   try
     Engine.SuppressWarnings := GIsWorkerThread or
       IsJsonOutput;
-    ConfigureConsole(Engine.BuiltinConsole, ACapture);
+    ConfigureConsole(RuntimeConsole(Engine), ACapture);
     ApplyDataGlobalsToEngine(Engine);
     StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
     StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
@@ -605,7 +638,7 @@ begin
   try
     Engine := CreateEngine(AFileName, ASource, Executor);
     try
-      ConfigureConsole(Engine.BuiltinConsole, ACapture);
+      ConfigureConsole(RuntimeConsole(Engine), ACapture);
       ApplyDataGlobalsToEngine(Engine);
 
       ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultPreprocessors,
@@ -675,7 +708,7 @@ begin
     try
       Engine := CreateEngine(AFileName, nil, Executor);
       try
-        ConfigureConsole(Engine.BuiltinConsole, ACapture);
+        ConfigureConsole(RuntimeConsole(Engine), ACapture);
         ApplyDataGlobalsToEngine(Engine);
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
         StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
@@ -984,7 +1017,7 @@ begin
 
   if JobCount > 1 then
   begin
-    EnsureSharedPrototypesInitialized(EffectiveBuiltins);
+    EnsureSharedPrototypesInitialized(EffectiveRuntimeGlobals);
     BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
     Pool := TGocciaThreadPool.Create(JobCount);
     try
@@ -1113,7 +1146,7 @@ var
   Pool: TGocciaThreadPool;
   I: Integer;
 begin
-  EnsureSharedPrototypesInitialized(EffectiveBuiltins);
+  EnsureSharedPrototypesInitialized(EffectiveRuntimeGlobals);
 
   Pool := TGocciaThreadPool.Create(AJobCount);
   try

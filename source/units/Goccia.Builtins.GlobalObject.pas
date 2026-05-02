@@ -52,10 +52,10 @@ uses
   Generics.Collections,
 
   Goccia.Arguments.Validator,
+  Goccia.Arithmetic,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.ArrayValue,

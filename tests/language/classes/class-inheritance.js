@@ -264,6 +264,22 @@ test("implicit super returning this does not replay superclass initializers", ()
   expect(initializersRun).toBe(1);
 });
 
+test("closure captured this before super observes initialized receiver", () => {
+  class Base {}
+
+  class Derived extends Base {
+    constructor() {
+      const readThis = () => this;
+      super();
+      this.marker = "initialized";
+      expect(readThis()).toBe(this);
+    }
+  }
+
+  const instance = new Derived();
+  expect(instance.marker).toBe("initialized");
+});
+
 test("extends rejects non-constructable callable superclass", () => {
   const NotConstructor = () => {};
 
