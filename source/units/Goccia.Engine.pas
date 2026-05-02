@@ -513,6 +513,9 @@ end;
 function TGocciaEngine.AddExtension(
   const AExtension: TGocciaEngineExtension): TGocciaEngineExtension;
 begin
+  if not Assigned(AExtension) then
+    raise Exception.Create('Engine extension cannot be nil.');
+
   FExtensions.Add(AExtension);
   Result := AExtension;
 end;

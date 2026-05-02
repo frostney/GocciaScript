@@ -212,6 +212,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.JSON5,
   Goccia.JSONL,
+  Goccia.Keywords.Reserved,
   Goccia.ModuleResolver,
   Goccia.Modules.ContentProvider,
   Goccia.ObjectModel.Engine,
@@ -1050,7 +1051,9 @@ begin
         Obj := TGocciaObjectValue(ParsedDocument);
         for Key in Obj.GetOwnPropertyKeys do
           AModule.ExportsTable.AddOrSetValue(Key, Obj.GetProperty(Key));
-      end;
+      end
+      else if Assigned(ParsedDocument) then
+        AModule.ExportsTable.AddOrSetValue(KEYWORD_DEFAULT, ParsedDocument);
 
       LoadSucceeded := True;
     finally

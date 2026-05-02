@@ -154,6 +154,12 @@ begin
   if not Assigned(AContentProvider) then
     raise Exception.Create('Module content provider cannot be nil.');
 
+  if AContentProvider = FContentProvider then
+  begin
+    FOwnsContentProvider := AOwnsContentProvider;
+    Exit;
+  end;
+
   if FOwnsContentProvider then
     FContentProvider.Free;
 

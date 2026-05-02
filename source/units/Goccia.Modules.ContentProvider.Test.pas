@@ -80,6 +80,7 @@ type
     procedure TestFileSystemContentProviderPreservesUTF8YAMLText;
     procedure TestEngineLoadsUTF8TextAssetModule;
     procedure TestEngineNormalizesCRLFTextAssetModulesToLF;
+    procedure TestModuleLoaderContentProviderSelfAssignment;
     procedure TestModuleLoaderRejectsRebindingAcrossRuntimes;
     procedure TestBytecodeBackendUsesInjectedContentProvider;
   protected
@@ -175,6 +176,8 @@ begin
     TestEngineLoadsUTF8TextAssetModule);
   Test('Engine normalizes CRLF text asset modules to LF',
     TestEngineNormalizesCRLFTextAssetModulesToLF);
+  Test('Module loader content provider self-assignment keeps provider',
+    TestModuleLoaderContentProviderSelfAssignment);
   Test('Module loader rejects rebinding across runtimes',
     TestModuleLoaderRejectsRebindingAcrossRuntimes);
   Test('Bytecode backend uses injected content provider',
@@ -867,6 +870,31 @@ begin
       .ToBe('first line' + #10 + 'second line' + #10);
   finally
     Source.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests.TestModuleLoaderContentProviderSelfAssignment;
+const
+  ENTRY_PATH = 'memory:/app.js';
+  MODULE_PATH = 'memory:/missing.js';
+var
+  ModuleLoader: TGocciaModuleLoader;
+  Provider: TGocciaModuleContentProvider;
+  ProviderOwnedByLoader: Boolean;
+begin
+  ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH);
+  Provider := ModuleLoader.ContentProvider;
+  ProviderOwnedByLoader := True;
+  try
+    ModuleLoader.SetContentProvider(Provider, False);
+    ProviderOwnedByLoader := False;
+
+    Expect<Boolean>(ModuleLoader.ContentProvider = Provider).ToBe(True);
+    Expect<Boolean>(ModuleLoader.ContentProvider.Exists(MODULE_PATH)).ToBe(False);
+  finally
+    ModuleLoader.Free;
+    if not ProviderOwnedByLoader then
+      Provider.Free;
   end;
 end;
 

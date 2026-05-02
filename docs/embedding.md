@@ -494,7 +494,7 @@ var
   Source: TStringList;
 begin
   Source := TStringList.Create;
-  Source.Text := 'console.log("version: " + APP_VERSION);';
+  Source.Text := 'APP_VERSION;';
   Engine := TGocciaEngine.Create('app.js', Source);
   try
     // Inject a constant into the global scope
@@ -503,7 +503,7 @@ begin
       TGocciaStringLiteralValue.Create('1.2.3'),
       dtConst
     );
-    Engine.Execute; // prints "version: 1.2.3"
+    Engine.Execute; // evaluates "1.2.3"
   finally
     Engine.Free;
     Source.Free;
@@ -547,7 +547,7 @@ var
 begin
   Host := TMyHost.Create;
   Source := TStringList.Create;
-  Source.Text := 'const ts = getTimestamp(); console.log(ts);';
+  Source.Text := 'getTimestamp();';
   Engine := TGocciaEngine.Create('app.js', Source);
   try
     // Create a native function: callback, name, arity (-1 for variadic)
@@ -631,7 +631,7 @@ var
 begin
   API := TFileSystemAPI.Create;
   Source := TStringList.Create;
-  Source.Text := 'const content = fs.readFile("data.txt"); console.log(content);';
+  Source.Text := 'fs.readFile("data.txt");';
   Engine := TGocciaEngine.Create('app.js', Source);
   try
     FSObject := TGocciaObjectValue.Create;
@@ -654,23 +654,23 @@ Scripts can then call `fs.readFile("path")` and `fs.exists("path")` as if they w
 
 ## Reading Return Values
 
-The engine returns the result of the last evaluated expression as a `TGocciaValue`. Use the type conversion methods to extract Pascal values:
+`TGocciaEngine.RunScript`, `TGocciaRuntime.RunScript`, and `Execute` return a `TGocciaScriptResult` record. Its `Result` field holds the last evaluated expression as a `TGocciaValue`; use the type conversion methods on that value to extract Pascal values:
 
 ```pascal
 var
-  Result: TGocciaValue;
+  ScriptResult: TGocciaScriptResult;
 begin
-  Result := TGocciaEngine.RunScript('40 + 2;');
+  ScriptResult := TGocciaEngine.RunScript('40 + 2;');
 
   // Type checking
-  if Result is TGocciaNumberLiteralValue then
-    WriteLn(TGocciaNumberLiteralValue(Result).Value);  // 42.0
+  if ScriptResult.Result is TGocciaNumberLiteralValue then
+    WriteLn(TGocciaNumberLiteralValue(ScriptResult.Result).Value);  // 42.0
 
   // Generic conversion methods (available on all TGocciaValue)
-  WriteLn(Result.ToStringLiteral.Value);   // "42"
-  WriteLn(Result.ToNumberLiteral.Value);   // 42.0
-  WriteLn(Result.ToBooleanLiteral.Value);  // True
-  WriteLn(Result.TypeOf);                  // "number"
+  WriteLn(ScriptResult.Result.ToStringLiteral.Value);   // "42"
+  WriteLn(ScriptResult.Result.ToNumberLiteral.Value);   // 42.0
+  WriteLn(ScriptResult.Result.ToBooleanLiteral.Value);  // True
+  WriteLn(ScriptResult.Result.TypeOf);                  // "number"
 end;
 ```
 
@@ -800,8 +800,8 @@ The execution ordering follows ECMAScript specification semantics — the script
 
 ```pascal
 // Promises work automatically — no manual queue management needed
-Source.Text := 'Promise.resolve(42).then((v) => console.log(v));';
-Engine.Execute;  // prints "42" (microtasks drain after Execute)
+Source.Text := 'Promise.resolve(42).then((v) => { globalThis.answer = v; });';
+Engine.Execute;  // microtasks drain before Execute returns
 ```
 
 For long-lived engines (REPL-style), each `Execute` call drains its own microtasks. Promise callbacks from one execution will not leak into the next — even if the script throws an exception, the engine clears any pending microtasks in a `finally` block.

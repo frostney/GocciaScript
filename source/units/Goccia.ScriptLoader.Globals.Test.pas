@@ -36,6 +36,7 @@ type
     function LoadCustomRuntimeModule(const AResolvedPath: string;
       out AModule: TGocciaModule): Boolean;
     procedure TestDetectsStructuredGlobalsFilesByExtension;
+    procedure TestEngineRejectsNilExtension;
     procedure TestRuntimeConstructorAcceptsExistingEngine;
     procedure TestRuntimeConstructorRejectsDifferentGlobals;
     procedure TestRuntimePreservesResolverExtensions;
@@ -63,6 +64,8 @@ procedure TScriptLoaderGlobalsTests.SetupTests;
 begin
   Test('Detects structured globals files by extension',
     TestDetectsStructuredGlobalsFilesByExtension);
+  Test('Engine rejects nil extension',
+    TestEngineRejectsNilExtension);
   Test('ReadFileText preserves UTF-8 for TOML globals',
     TestReadFileTextPreservesUTF8ForTOMLGlobals);
   Test('Runtime constructor accepts existing engine',
@@ -113,6 +116,38 @@ begin
   Expect<Boolean>(IsStructuredGlobalsFile('config.toml')).ToBe(True);
   Expect<Boolean>(IsTOMLGlobalsFile('config.toml')).ToBe(True);
   Expect<Boolean>(IsYAMLGlobalsFile('config.toml')).ToBe(False);
+end;
+
+procedure TScriptLoaderGlobalsTests.TestEngineRejectsNilExtension;
+var
+  Engine: TGocciaEngine;
+  HasExpectedMessage: Boolean;
+  RaisedExpected: Boolean;
+  Source: TStringList;
+begin
+  Source := CreateEmptySource;
+  Engine := TGocciaEngine.Create('<extension-test>', Source);
+  try
+    RaisedExpected := False;
+    HasExpectedMessage := False;
+    try
+      Engine.AddExtension(nil);
+      Fail('Expected nil extension registration to raise an exception.');
+    except
+      on E: Exception do
+      begin
+        RaisedExpected := True;
+        HasExpectedMessage := Pos('extension cannot be nil', E.Message) > 0;
+        if not HasExpectedMessage then
+          Fail('Expected nil extension error message.');
+      end;
+    end;
+
+    Expect<Boolean>(RaisedExpected).ToBe(True);
+  finally
+    Engine.Free;
+    Source.Free;
+  end;
 end;
 
 procedure TScriptLoaderGlobalsTests.TestRuntimeConstructorAcceptsExistingEngine;
