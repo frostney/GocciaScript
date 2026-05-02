@@ -229,6 +229,7 @@ begin
     Runtime := TGocciaRuntime.Create(Engine, [rgJSON5]);
     Extensions := Engine.Resolver.GetExtensions;
 
+    Expect<Boolean>(Length(Extensions) >= 4).ToBe(True);
     Expect<string>(Extensions[0]).ToBe('.custom');
     Expect<string>(Extensions[1]).ToBe('.js');
     Expect<string>(Extensions[High(Extensions) - 1]).ToBe('.json5');
