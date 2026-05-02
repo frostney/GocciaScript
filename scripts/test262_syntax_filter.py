@@ -353,9 +353,7 @@ def check_includes(includes: list[str]) -> list[str]:
     reasons: list[str] = []
     for inc in includes:
         if inc not in AVAILABLE_INCLUDES:
-            entry = _roadmap_entry("harnessIncludes", inc)
-            if not _entry_is_eligible(entry):
-                reasons.append(f"missing_harness:{inc}")
+            reasons.append(f"missing_harness:{inc}")
     return reasons
 
 
