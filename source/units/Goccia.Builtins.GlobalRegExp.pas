@@ -23,6 +23,8 @@ type
     function RegExpConstructorFn(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
   published
+    function RegExpSpeciesGetter(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     function RegExpEscape(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function RegExpExec(const AArgs: TGocciaArgumentsCollection;
@@ -323,6 +325,11 @@ begin
   FRegExpConstructor := TGocciaNativeFunctionValue.Create(RegExpConstructorFn,
     CONSTRUCTOR_REGEXP, 2);
   FRegExpConstructor.AssignProperty(PROP_PROTOTYPE, FRegExpPrototype);
+  FRegExpConstructor.DefineSymbolProperty(TGocciaSymbolValue.WellKnownSpecies,
+    TGocciaPropertyDescriptorAccessor.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        RegExpSpeciesGetter, 'get [Symbol.species]', 0),
+      nil, [pfConfigurable]));
   FRegExpPrototype.DefineProperty(PROP_CONSTRUCTOR,
     TGocciaPropertyDescriptorData.Create(FRegExpConstructor, [pfConfigurable, pfWritable]));
 
@@ -339,6 +346,14 @@ begin
   RegisterMemberDefinitions(FRegExpConstructor, FStaticMembers);
 
   AScope.DefineLexicalBinding(AName, FRegExpConstructor, dtConst);
+end;
+
+// ES2026 §22.2.4.2 get RegExp [ @@species ]
+function TGocciaGlobalRegExp.RegExpSpeciesGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := AThisValue;
 end;
 
 function IsECMAScriptWhiteSpaceOrLineTerminator(

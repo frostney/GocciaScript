@@ -292,3 +292,185 @@ test("private field brand checks reject non-instances", () => {
   expect(TestClass.isInstance(null)).toBe(false);
   expect(TestClass.isInstance(undefined)).toBe(false);
 });
+
+test("private fields on replacement receivers preserve initialization order", () => {
+  const order = [];
+  let derivedPrototype;
+
+  class Base {
+    constructor() {
+      order.length = 0;
+      return Object.create(derivedPrototype);
+    }
+  }
+
+  class Derived extends Base {
+    a = order.push("a");
+    #b = order.push("b");
+    c = order.push("c");
+
+    readOrder() {
+      return order.join(",");
+    }
+  }
+
+  derivedPrototype = Derived.prototype;
+
+  const instance = new Derived();
+  expect(instance.readOrder()).toBe("a,b,c");
+});
+
+test("private brand checks reject unbranded replacement receivers", () => {
+  let derivedPrototype;
+
+  class Base {
+    constructor() {
+      return Object.create(derivedPrototype);
+    }
+  }
+
+  class Derived extends Base {
+    #value = 1;
+
+    static writeTo(obj, value) {
+      obj.#value = value;
+      return obj.#value;
+    }
+
+    static readFrom(obj) {
+      return obj.#value;
+    }
+
+    read() {
+      return this.#value;
+    }
+
+    write(value) {
+      this.#value = value;
+      return this.#value;
+    }
+  }
+
+  derivedPrototype = Derived.prototype;
+
+  const instance = new Derived();
+  expect(instance.read()).toBe(1);
+  expect(instance.write(2)).toBe(2);
+  expect(Derived.readFrom(instance)).toBe(2);
+  expect(Derived.writeTo(instance, 3)).toBe(3);
+  expect(() => Derived.readFrom({})).toThrow(TypeError);
+  expect(() => Derived.writeTo({}, 0)).toThrow(TypeError);
+});
+
+test("private field initializers cannot brand unrelated objects", () => {
+  const unrelated = {};
+  let initializerResult = "not run";
+
+  class TestClass {
+    #value = (() => {
+      try {
+        unrelated.#value = 1;
+        initializerResult = "wrote";
+      } catch (error) {
+        initializerResult = error instanceof TypeError ? "typeerror" : "other";
+      }
+      return 2;
+    })();
+
+    static readFrom(obj) {
+      return obj.#value;
+    }
+  }
+
+  const instance = new TestClass();
+
+  expect(initializerResult).toBe("typeerror");
+  expect(TestClass.readFrom(instance)).toBe(2);
+  expect(() => TestClass.readFrom(unrelated)).toThrow(TypeError);
+});
+
+test("private fields on replacement receivers use distinct class brands", () => {
+  const First = (() => {
+    let derivedPrototype;
+
+    class Base {
+      constructor() {
+        return Object.create(derivedPrototype);
+      }
+    }
+
+    class SameName extends Base {
+      #value = "first";
+
+      read() {
+        return this.#value;
+      }
+
+      static readFrom(obj) {
+        return obj.#value;
+      }
+    }
+
+    derivedPrototype = SameName.prototype;
+    return SameName;
+  })();
+
+  const Second = (() => {
+    let derivedPrototype;
+
+    class Base {
+      constructor() {
+        return Object.create(derivedPrototype);
+      }
+    }
+
+    class SameName extends Base {
+      #value = "second";
+
+      read() {
+        return this.#value;
+      }
+
+      static readFrom(obj) {
+        return obj.#value;
+      }
+    }
+
+    derivedPrototype = SameName.prototype;
+    return SameName;
+  })();
+
+  const first = new First();
+  const second = new Second();
+
+  expect(first.read()).toBe("first");
+  expect(second.read()).toBe("second");
+  expect(First.readFrom(first)).toBe("first");
+  expect(Second.readFrom(second)).toBe("second");
+  expect(() => First.readFrom(second)).toThrow(TypeError);
+});
+
+test("forged bytecode private brand properties do not grant access", () => {
+  class TestClass {
+    #method() {
+      return 1;
+    }
+
+    readFrom(obj) {
+      return obj.#method();
+    }
+  }
+
+  const privateKey = Object.getOwnPropertyNames(TestClass.prototype)
+    .find((key) => key.indexOf("#slot:") === 0);
+  if (privateKey === undefined) {
+    expect(privateKey).toBe(undefined);
+    return;
+  }
+
+  const forged = {};
+  forged[privateKey] = TestClass.prototype[privateKey];
+  forged["#brand:" + privateKey] = true;
+
+  expect(() => new TestClass().readFrom(forged)).toThrow(TypeError);
+});

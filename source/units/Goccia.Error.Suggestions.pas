@@ -313,6 +313,7 @@ resourcestring
   SSuggestReflectObjectArg = 'Reflect methods require the target to be an object';
 
   // Runtime errors — Symbol
+  SSuggestSymbolNoNew = 'call Symbol(description) without ''new''';
   SSuggestSymbolThisType = 'Symbol prototype methods must be called on a Symbol';
   SSuggestSymbolKeyForArg = 'pass a Symbol value to Symbol.keyFor (e.g., Symbol.for("key"))';
 

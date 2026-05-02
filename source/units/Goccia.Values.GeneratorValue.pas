@@ -64,6 +64,7 @@ type
       const AIsAsyncGenerator: Boolean = False): TGocciaGeneratorContinuation;
   public
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
+    function IsConstructable: Boolean; override;
   end;
 
   TGocciaAsyncGeneratorFunctionValue = class(TGocciaGeneratorFunctionValue)
@@ -620,6 +621,11 @@ function TGocciaGeneratorFunctionValue.Call(
   const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaGeneratorObjectValue.Create(CreateContinuation(AArguments, AThisValue));
+end;
+
+function TGocciaGeneratorFunctionValue.IsConstructable: Boolean;
+begin
+  Result := False;
 end;
 
 function TGocciaAsyncGeneratorFunctionValue.Call(

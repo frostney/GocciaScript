@@ -121,6 +121,7 @@ The base `TGocciaValue` class provides two virtual methods for runtime type disc
 TGocciaValue = class(TGCManagedObject)
   function IsPrimitive: Boolean; virtual;  // Returns False by default
   function IsCallable: Boolean; virtual;   // Returns False by default
+  function IsConstructable: Boolean; virtual; // Returns False by default
 end;
 ```
 
@@ -158,6 +159,23 @@ Used by:
 - `IsDeepEqual` — to reject callable objects from deep structural comparison when TypeNames differ.
 
 **Important:** When code needs to cast to `TGocciaFunctionBase` after the check (e.g., accessor property invocation via `.Call()`), use `is TGocciaFunctionBase` instead of `IsCallable`. This is because `TGocciaClassValue` inherits from `TGocciaValue` (not `TGocciaFunctionBase`) but returns `True` for `IsCallable`. The RTTI check ensures the cast is safe.
+
+### `IsConstructable`
+
+Returns `True` for values that can be used as constructors. This is intentionally narrower than `IsCallable`, because callable values such as arrow functions, generator functions, and explicitly non-constructable native functions must be rejected by `new`, `extends`, and `super()` construction paths.
+
+Overridden by:
+
+| Type | Returns |
+|------|---------|
+| `TGocciaFunctionBase` | `True` when the function owns a `prototype` property, or for bound functions when the target is constructable |
+| `TGocciaNativeFunctionValue` | `True` unless marked `NotConstructable`; native functions created without a prototype are non-constructable by default |
+| `TGocciaClassValue` | `True` |
+| `TGocciaProxyValue` | Delegates to the proxy target |
+| Generator functions and non-constructor bytecode functions | `False` |
+| All others | `False` (inherited default) |
+
+Use `IsConstructable` instead of `IsCallable` when validating class heritage or constructor dispatch. Continue to use the concrete value type when the next step requires a specific construct API.
 
 ## Virtual Property Access
 

@@ -580,6 +580,7 @@ resourcestring
   SErrorDisposePropertyNotFunction = 'Property [Symbol.%s] is not a function';
 
   // Symbol prototype errors
+  SErrorSymbolConstructorRequiresCall = 'Symbol is not a constructor';
   SErrorSymbolProtoToStringRequiresSymbol = 'Symbol.prototype.toString requires that ''this'' be a Symbol';
   SErrorSymbolProtoDescriptionRequiresSymbol = 'Symbol.prototype.description requires that ''this'' be a Symbol';
   SErrorSymbolProtoValueOfRequiresSymbol = 'Symbol.prototype.valueOf requires that ''this'' be a Symbol';

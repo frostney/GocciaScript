@@ -26,6 +26,7 @@ type
     constructor CreateWithoutPrototype(const AFunction: TGocciaNativeFunctionCallback; const AName: string;
       const AArity: Integer);
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
+    function IsConstructable: Boolean; override;
     property NativeFunction: TGocciaNativeFunctionCallback read FFunction;
     property Name: string read FName;
     property Arity: Integer read FArity;
@@ -51,6 +52,7 @@ begin
   FFunction := AFunction;
   FName := AName;
   FArity := AArity;
+  FNotConstructable := True;
 
   inherited Create; // No prototype for methods that are part of the prototype
 end;
@@ -58,6 +60,11 @@ end;
 function TGocciaNativeFunctionValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := FFunction(AArguments, AThisValue);
+end;
+
+function TGocciaNativeFunctionValue.IsConstructable: Boolean;
+begin
+  Result := not FNotConstructable;
 end;
 
 function TGocciaNativeFunctionValue.GetFunctionLength: Integer;

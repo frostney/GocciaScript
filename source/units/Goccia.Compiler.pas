@@ -429,8 +429,10 @@ begin
           end;
         end;
       end;
-      EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
-      EmitInstruction(BuildContext, EncodeABC(OP_RETURN, 0, 0, 0));
+      Reg := FCurrentScope.AllocateRegister;
+      EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, Reg, 0, 0));
+      EmitInstruction(BuildContext, EncodeABC(OP_RETURN, Reg, 0, 0));
+      FCurrentScope.FreeRegister;
     end
     else if ABody is TGocciaExpression then
     begin
@@ -440,8 +442,12 @@ begin
       FCurrentScope.FreeRegister;
     end
     else
-      EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
-      EmitInstruction(BuildContext, EncodeABC(OP_RETURN, 0, 0, 0));
+    begin
+      Reg := FCurrentScope.AllocateRegister;
+      EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, Reg, 0, 0));
+      EmitInstruction(BuildContext, EncodeABC(OP_RETURN, Reg, 0, 0));
+      FCurrentScope.FreeRegister;
+    end;
   finally
     Goccia.Compiler.Statements.RestorePendingFinally(SavedFinally);
   end;

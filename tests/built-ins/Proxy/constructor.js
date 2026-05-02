@@ -31,6 +31,10 @@ describe("Proxy constructor", () => {
     expect(() => new Proxy()).toThrow(TypeError);
   });
 
+  test("revocable helper is not constructable", () => {
+    expect(() => new Proxy.revocable({}, {})).toThrow(TypeError);
+  });
+
   test("proxy with empty handler passes through all operations", () => {
     const target = { a: 1, b: 2, c: 3 };
     const proxy = new Proxy(target, {});
