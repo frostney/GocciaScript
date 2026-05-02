@@ -234,6 +234,7 @@ uses
   SysUtils,
 
   BigInteger,
+  TextSemantics,
   TimingUtils,
 
   Goccia.Arithmetic,
@@ -5958,9 +5959,11 @@ begin
               TGocciaSymbolValue(FRegisters[C].ObjectValue)))
           else if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) and
              (KeyIndex >= 0) and
-             (KeyIndex < Length(TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value)) then
+             (KeyIndex < UTF16CodeUnitLength(TGocciaStringLiteralValue(
+               FRegisters[B].ObjectValue).Value)) then
             SetRegister(A, TGocciaStringLiteralValue.Create(
-              TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value[KeyIndex + 1]))
+              UTF16CodeUnitAt(TGocciaStringLiteralValue(
+                FRegisters[B].ObjectValue).Value, KeyIndex)))
           else
             FRegisters[A] := RegisterUndefined;
         end
@@ -6031,6 +6034,10 @@ begin
            (FRegisters[B].ObjectValue is TGocciaArrayValue) then
           FRegisters[A] := VMNumberRegister(
             TGocciaArrayValue(FRegisters[B].ObjectValue).GetLength)
+        else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) then
+          FRegisters[A] := VMNumberRegister(UTF16CodeUnitLength(
+            TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value))
         else
           FRegisters[A] := RegisterInt(0);
       end;
@@ -6274,9 +6281,11 @@ begin
               TGocciaSymbolValue(FRegisters[C].ObjectValue)))
           else if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) and
              (KeyIndex >= 0) and
-             (KeyIndex < Length(TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value)) then
+             (KeyIndex < UTF16CodeUnitLength(TGocciaStringLiteralValue(
+               FRegisters[B].ObjectValue).Value)) then
             SetRegister(A, TGocciaStringLiteralValue.Create(
-              TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value[KeyIndex + 1]))
+              UTF16CodeUnitAt(TGocciaStringLiteralValue(
+                FRegisters[B].ObjectValue).Value, KeyIndex)))
           else
             SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
         end

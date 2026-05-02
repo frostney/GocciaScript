@@ -1,5 +1,6 @@
 import { name, version, debug, maxRetries, tags, database } from "./helpers/config.yaml";
 import { count, pi, empty, active, greeting } from "./helpers/simple-values.yml";
+import { "default" as scalarDefault } from "./helpers/scalar.yaml";
 import * as unicodeConfig from "./helpers/unicode-config.yaml";
 
 describe("YAML import", () => {
@@ -45,6 +46,10 @@ describe("YAML import", () => {
 
   test("string with spaces", () => {
     expect(greeting).toBe("hello world");
+  });
+
+  test("single scalar document default export", () => {
+    expect(scalarDefault).toBe(42);
   });
 
   test("preserves UTF-8 text in file-backed YAML modules", () => {

@@ -16,6 +16,7 @@ uses
   Goccia.AST.Node,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  CLI.ConfigFile,
   CLI.Options,
   Goccia.Coverage,
   Goccia.Coverage.Report,
@@ -30,6 +31,7 @@ uses
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
+  Goccia.Runtime,
   Goccia.Scope,
   Goccia.ScriptLoader.Input,
   Goccia.SourceMap,
@@ -124,12 +126,14 @@ type
     FOutputFile: TGocciaStringOption;
     FTestTimeout: TGocciaIntegerOption;
     FDescribeTimeout: TGocciaIntegerOption;
+    function EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
   protected
     procedure Configure; override;
+    procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
+      const AFileConfig: TConfigEntryArray); override;
     function UsageLine: string; override;
     procedure Validate; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
-    function GlobalBuiltins: TGocciaGlobalBuiltins; override;
   private
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
@@ -213,6 +217,15 @@ end;
 
 { TTestRunnerApp }
 
+procedure DisableRuntimeConsole(const AEngine: TGocciaEngine);
+var
+  Runtime: TGocciaRuntimeExtension;
+begin
+  Runtime := GetRuntimeExtension(AEngine);
+  if Assigned(Runtime) and Assigned(Runtime.BuiltinConsole) then
+    Runtime.BuiltinConsole.Enabled := False;
+end;
+
 procedure TTestRunnerApp.Configure;
 begin
   AddEngineOptions;
@@ -229,6 +242,16 @@ begin
     'Per-test timeout in ms (0 disables). Marks the test TIMEOUT and continues.');
   FDescribeTimeout := AddInteger('describe-timeout',
     'Per-describe timeout in ms (0 disables). Aborts the suite and continues.');
+end;
+
+procedure TTestRunnerApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
+  const AFileConfig: TConfigEntryArray);
+var
+  Runtime: TGocciaRuntimeExtension;
+begin
+  Runtime := AttachRuntimeExtension(AEngine, EffectiveRuntimeGlobals);
+  if LogFileOpen and Assigned(Runtime.BuiltinConsole) then
+    Runtime.BuiltinConsole.LogCallback := HandleConsoleLog;
 end;
 
 procedure TTestRunnerApp.Validate;
@@ -419,9 +442,11 @@ begin
   end;
 end;
 
-function TTestRunnerApp.GlobalBuiltins: TGocciaGlobalBuiltins;
+function TTestRunnerApp.EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
 begin
-  Result := [ggTestAssertions];
+  Result := DefaultRuntimeGlobals + [rgTestAssertions];
+  if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
+    Include(Result, rgFFI);
 end;
 
 function TTestRunnerApp.RunGocciaScriptInterpreted(const AFileName: string;
@@ -462,7 +487,7 @@ begin
       try
         if FSilent.Present or GIsWorkerThread or IsJsonOutput then
         begin
-          Engine.BuiltinConsole.Enabled := False;
+          DisableRuntimeConsole(Engine);
           Engine.SuppressWarnings := True;
         end;
 
@@ -598,7 +623,7 @@ begin
         try
           if FSilent.Present or GIsWorkerThread or IsJsonOutput then
           begin
-            Engine.BuiltinConsole.Enabled := False;
+            DisableRuntimeConsole(Engine);
             Engine.SuppressWarnings := True;
           end;
 
@@ -1064,7 +1089,7 @@ begin
 
   // Force all shared prototypes to be initialised on the main thread
   // before any worker thread starts, avoiding class-var race conditions.
-  EnsureSharedPrototypesInitialized(EffectiveBuiltins);
+  EnsureSharedPrototypesInitialized(EffectiveRuntimeGlobals);
 
   WallClockStart := GetNanoseconds;
 

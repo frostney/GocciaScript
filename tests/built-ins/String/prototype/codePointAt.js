@@ -19,8 +19,17 @@ describe("String.prototype.codePointAt", () => {
     expect("".codePointAt(0)).toBe(undefined);
   });
 
-  test("falls back to raw byte values for invalid UTF-8 positions", () => {
-    expect("é".codePointAt(1)).toBe(0xa9);
-    expect("\uD800".codePointAt(0)).toBe(0xed);
+  test("indexes valid UTF-8 characters as ECMAScript string positions", () => {
+    expect("é".codePointAt(0)).toBe(0xe9);
+    expect("é".codePointAt(1)).toBe(undefined);
+  });
+
+  test("returns full code point for leading surrogate position", () => {
+    expect("😀".codePointAt(0)).toBe(0x1f600);
+    expect("😀".codePointAt(1)).toBe(0xde00);
+  });
+
+  test("returns lone surrogate code unit values", () => {
+    expect("\uD800".codePointAt(0)).toBe(0xd800);
   });
 });

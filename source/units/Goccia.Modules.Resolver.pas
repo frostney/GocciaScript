@@ -84,7 +84,7 @@ end;
 constructor TGocciaModuleResolver.Create(const ABaseDirectory: string);
 begin
   inherited Create(ABaseDirectory);
-  SetExtensions(ModuleImportExtensions);
+  SetExtensions(EngineModuleImportExtensions);
 end;
 
 class function TGocciaModuleResolver.DiscoverProjectConfig(

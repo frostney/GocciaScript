@@ -147,7 +147,7 @@ The `GocciaBenchmarkRunner` program:
 
 1. Parses CLI arguments (`--format`, `--output`, and the benchmark path or stdin marker).
 2. Scans the provided path for `.js` files.
-3. For each file, creates a `TGocciaEngine` with `[ggBenchmark]`.
+3. For each file, creates a `TGocciaEngine` and attaches `TGocciaRuntime` with `rgBenchmark`.
 4. Loads and executes the source so benchmark files register their suites and benchmarks without running measurements from inside the script body.
 5. Measures lex, parse, compile (bytecode mode), script execution, and benchmark execution phases separately with nanosecond precision via `TimingUtils.GetNanoseconds`.
 6. `suite()` calls execute immediately, registering `bench()` entries.

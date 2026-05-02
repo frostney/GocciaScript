@@ -18,6 +18,7 @@ uses
   Goccia.Builtins.Benchmark,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  CLI.ConfigFile,
   CLI.Options,
   Goccia.Constants.PropertyNames,
   Goccia.Engine,
@@ -32,6 +33,7 @@ uses
   Goccia.Parser,
   Goccia.Profiler,
   Goccia.Profiler.Report,
+  Goccia.Runtime,
   Goccia.Scope,
   Goccia.ScriptLoader.Input,
   Goccia.CLI.JSON.Reporter,
@@ -198,13 +200,15 @@ type
     procedure RunBenchmarks(const APaths: TStringList;
       const AReports: array of TReportSpec;
       const AMode: TGocciaExecutionMode; const AShowProgress: Boolean);
+    function EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
   protected
     procedure Configure; override;
     procedure Validate; override;
     procedure AfterExecute; override;
+    procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
+      const AFileConfig: TConfigEntryArray); override;
     function UsageLine: string; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
-    function GlobalBuiltins: TGocciaGlobalBuiltins; override;
   end;
 
 function IsBenchmarkHelperFile(const AFileName: string): Boolean;
@@ -220,17 +224,44 @@ begin
   Result := Assigned(ProfilerOptions) and ProfilerOptions.Mode.Present;
 end;
 
+function RuntimeBenchmark(const AEngine: TGocciaEngine): TGocciaBenchmark;
+var
+  Runtime: TGocciaRuntimeExtension;
+begin
+  Runtime := GetRuntimeExtension(AEngine);
+  if Assigned(Runtime) then
+    Result := Runtime.BuiltinBenchmark
+  else
+    Result := nil;
+end;
+
+procedure ConfigureBenchmarkRuntime(const AEngine: TGocciaEngine;
+  const AShowProgress, AClearBeforeMeasurement: Boolean);
+var
+  Benchmark: TGocciaBenchmark;
+begin
+  Benchmark := RuntimeBenchmark(AEngine);
+  if not Assigned(Benchmark) then
+    Exit;
+  if AShowProgress then
+    Benchmark.OnProgress := TBenchmarkProgress.OnProgress;
+  if AClearBeforeMeasurement then
+    Benchmark.OnBeforeMeasurement := AEngine.ClearTransientCaches;
+end;
+
 function RunRegisteredBenchmarks(const AEngine: TGocciaEngine): TGocciaObjectValue;
 var
+  Benchmark: TGocciaBenchmark;
   EmptyArgs: TGocciaArgumentsCollection;
   Value: TGocciaValue;
 begin
-  if not Assigned(AEngine.BuiltinBenchmark) then
+  Benchmark := RuntimeBenchmark(AEngine);
+  if not Assigned(Benchmark) then
     Exit(nil);
 
   EmptyArgs := TGocciaArgumentsCollection.Create;
   try
-    Value := AEngine.BuiltinBenchmark.RunBenchmarks(EmptyArgs,
+    Value := Benchmark.RunBenchmarks(EmptyArgs,
       TGocciaUndefinedLiteralValue.UndefinedValue);
   finally
     EmptyArgs.Free;
@@ -290,8 +321,7 @@ begin
     try
       Engine := CreateEngine(AFileName, Source);
       try
-        if AShowProgress and Assigned(Engine.BuiltinBenchmark) then
-          Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
+        ConfigureBenchmarkRuntime(Engine, AShowProgress, False);
 
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
         StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
@@ -419,10 +449,7 @@ begin
             Lexer.Free;
           end;
 
-          if AShowProgress and Assigned(Engine.BuiltinBenchmark) then
-            Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
-          if Assigned(Engine.BuiltinBenchmark) then
-            Engine.BuiltinBenchmark.OnBeforeMeasurement := Engine.ClearTransientCaches;
+          ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
 
           try
           StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
@@ -523,8 +550,7 @@ begin
   try
     Engine := CreateEngine(AFileName, ASource);
     try
-      if AShowProgress and Assigned(Engine.BuiltinBenchmark) then
-        Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
+      ConfigureBenchmarkRuntime(Engine, AShowProgress, False);
 
       StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
       StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
@@ -633,10 +659,7 @@ begin
           Lexer.Free;
         end;
 
-        if AShowProgress and Assigned(Engine.BuiltinBenchmark) then
-          Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
-        if Assigned(Engine.BuiltinBenchmark) then
-          Engine.BuiltinBenchmark.OnBeforeMeasurement := Engine.ClearTransientCaches;
+        ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
 
         try
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
@@ -907,7 +930,7 @@ begin
         SetLength(WorkerData[I].Entries, 0);
       end;
 
-      EnsureSharedPrototypesInitialized(EffectiveBuiltins);
+      EnsureSharedPrototypesInitialized(EffectiveRuntimeGlobals);
 
       BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
       WallClockStart := GetNanoseconds;
@@ -1051,9 +1074,21 @@ begin
   end;
 end;
 
-function TBenchmarkRunnerApp.GlobalBuiltins: TGocciaGlobalBuiltins;
+procedure TBenchmarkRunnerApp.ConfigureCreatedEngine(
+  const AEngine: TGocciaEngine; const AFileConfig: TConfigEntryArray);
+var
+  Runtime: TGocciaRuntimeExtension;
 begin
-  Result := [ggBenchmark];
+  Runtime := AttachRuntimeExtension(AEngine, EffectiveRuntimeGlobals);
+  if LogFileOpen and Assigned(Runtime.BuiltinConsole) then
+    Runtime.BuiltinConsole.LogCallback := HandleConsoleLog;
+end;
+
+function TBenchmarkRunnerApp.EffectiveRuntimeGlobals: TGocciaRuntimeGlobals;
+begin
+  Result := DefaultRuntimeGlobals + [rgBenchmark];
+  if Assigned(EngineOptions) and EngineOptions.UnsafeFFI.Present then
+    Include(Result, rgFFI);
 end;
 
 procedure TBenchmarkRunnerApp.ExecuteWithPaths(const APaths: TStringList);
