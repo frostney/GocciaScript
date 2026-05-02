@@ -48,7 +48,7 @@ procedure ThrowNoMatchingPattern;
 implementation
 
 uses
-  Goccia.Evaluator.Comparison,
+  Goccia.Arithmetic,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue,

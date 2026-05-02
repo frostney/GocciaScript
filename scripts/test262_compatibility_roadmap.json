@@ -1,0 +1,1345 @@
+{
+  "eligibleStatuses": [
+    "supported",
+    "active",
+    "compat"
+  ],
+  "features": {
+    "AggregateError": {
+      "status": "supported",
+      "target": "globals-errors"
+    },
+    "Array.from": {
+      "status": "supported",
+      "target": "arrays"
+    },
+    "Array.fromAsync": {
+      "status": "supported",
+      "target": "arrays"
+    },
+    "Array.of": {
+      "status": "supported",
+      "target": "arrays"
+    },
+    "Array.prototype.at": {
+      "status": "supported",
+      "target": "arrays"
+    },
+    "Array.prototype.entries": {
+      "status": "supported",
+      "target": "arrays"
+    },
+    "Array.prototype.find": {
+      "status": "supported",
+      "target": "arrays"
+    },
+    "Array.prototype.findIndex": {
+      "status": "supported",
+      "target": "arrays"
+    },
+    "Array.prototype.findLast": {
+      "status": "supported",
+      "target": "arrays"
+    },
+    "Array.prototype.findLastIndex": {
+      "status": "supported",
+      "target": "arrays"
+    },
+    "Array.prototype.flat": {
+      "status": "supported",
+      "target": "arrays"
+    },
+    "Array.prototype.flatMap": {
+      "status": "supported",
+      "target": "arrays"
+    },
+    "Array.prototype.includes": {
+      "status": "supported",
+      "target": "arrays"
+    },
+    "Array.prototype.keys": {
+      "status": "supported",
+      "target": "arrays"
+    },
+    "Array.prototype.values": {
+      "status": "supported",
+      "target": "arrays"
+    },
+    "ArrayBuffer": {
+      "status": "supported",
+      "target": "arrays"
+    },
+    "Atomics": {
+      "status": "unsupported",
+      "target": "atomics-shared-memory"
+    },
+    "Atomics.pause": {
+      "status": "unsupported",
+      "target": "atomics-shared-memory"
+    },
+    "Atomics.waitAsync": {
+      "status": "unsupported",
+      "target": "atomics-shared-memory"
+    },
+    "BigInt": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "BigInt64Array": {
+      "status": "supported",
+      "target": "arraybuffer-typedarray"
+    },
+    "BigUint64Array": {
+      "status": "supported",
+      "target": "arraybuffer-typedarray"
+    },
+    "DataView": {
+      "status": "unsupported",
+      "target": "binary-data-dataview"
+    },
+    "DataView.prototype.getFloat32": {
+      "status": "unsupported",
+      "target": "binary-data-dataview"
+    },
+    "DataView.prototype.getFloat64": {
+      "status": "unsupported",
+      "target": "binary-data-dataview"
+    },
+    "DataView.prototype.getInt16": {
+      "status": "unsupported",
+      "target": "binary-data-dataview"
+    },
+    "DataView.prototype.getInt32": {
+      "status": "unsupported",
+      "target": "binary-data-dataview"
+    },
+    "DataView.prototype.getInt8": {
+      "status": "unsupported",
+      "target": "binary-data-dataview"
+    },
+    "DataView.prototype.getUint16": {
+      "status": "unsupported",
+      "target": "binary-data-dataview"
+    },
+    "DataView.prototype.getUint32": {
+      "status": "unsupported",
+      "target": "binary-data-dataview"
+    },
+    "DataView.prototype.setUint8": {
+      "status": "unsupported",
+      "target": "binary-data-dataview"
+    },
+    "Error.isError": {
+      "status": "supported",
+      "target": "globals-errors"
+    },
+    "FinalizationRegistry": {
+      "status": "unsupported",
+      "target": "weakrefs"
+    },
+    "Float16Array": {
+      "status": "supported",
+      "target": "arraybuffer-typedarray"
+    },
+    "Float32Array": {
+      "status": "supported",
+      "target": "arraybuffer-typedarray"
+    },
+    "Float64Array": {
+      "status": "supported",
+      "target": "arraybuffer-typedarray"
+    },
+    "Int16Array": {
+      "status": "supported",
+      "target": "arraybuffer-typedarray"
+    },
+    "Int32Array": {
+      "status": "supported",
+      "target": "arraybuffer-typedarray"
+    },
+    "Int8Array": {
+      "status": "supported",
+      "target": "arraybuffer-typedarray"
+    },
+    "Intl": {
+      "status": "excluded-by-language-design",
+      "target": "intl"
+    },
+    "Intl-enumeration": {
+      "status": "excluded-by-language-design",
+      "target": "intl"
+    },
+    "Intl.DateTimeFormat": {
+      "status": "excluded-by-language-design",
+      "target": "intl"
+    },
+    "Intl.DisplayNames": {
+      "status": "excluded-by-language-design",
+      "target": "intl"
+    },
+    "Intl.DurationFormat": {
+      "status": "excluded-by-language-design",
+      "target": "intl"
+    },
+    "Intl.Era-monthcode": {
+      "status": "excluded-by-language-design",
+      "target": "intl"
+    },
+    "Intl.ListFormat": {
+      "status": "excluded-by-language-design",
+      "target": "intl"
+    },
+    "Intl.Locale": {
+      "status": "excluded-by-language-design",
+      "target": "intl"
+    },
+    "Intl.NumberFormat": {
+      "status": "excluded-by-language-design",
+      "target": "intl"
+    },
+    "Intl.RelativeTimeFormat": {
+      "status": "excluded-by-language-design",
+      "target": "intl"
+    },
+    "Intl.Segmenter": {
+      "status": "excluded-by-language-design",
+      "target": "intl"
+    },
+    "IsHTMLDDA": {
+      "status": "excluded-by-language-design",
+      "target": "legacy-web-compat"
+    },
+    "JSON": {
+      "status": "supported",
+      "target": "json"
+    },
+    "Map": {
+      "status": "supported",
+      "target": "collections"
+    },
+    "Map.groupBy": {
+      "status": "supported",
+      "target": "collections"
+    },
+    "Math.acosh": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Math.asinh": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Math.atanh": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Math.cbrt": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Math.clz32": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Math.cosh": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Math.expm1": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Math.fround": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Math.hypot": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Math.imul": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Math.log10": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Math.log1p": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Math.log2": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Math.sign": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Math.sinh": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Math.sumPrecise": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Math.tanh": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Math.trunc": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Number.isFinite": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Number.isInteger": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Number.isNaN": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Number.isSafeInteger": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Number.parseFloat": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Number.parseInt": {
+      "status": "supported",
+      "target": "numbers-bigint"
+    },
+    "Object.assign": {
+      "status": "supported",
+      "target": "unassigned"
+    },
+    "Object.entries": {
+      "status": "supported",
+      "target": "unassigned"
+    },
+    "Object.fromEntries": {
+      "status": "supported",
+      "target": "unassigned"
+    },
+    "Object.groupBy": {
+      "status": "supported",
+      "target": "collections"
+    },
+    "Object.hasOwn": {
+      "status": "supported",
+      "target": "unassigned"
+    },
+    "Object.is": {
+      "status": "supported",
+      "target": "unassigned"
+    },
+    "Object.keys": {
+      "status": "supported",
+      "target": "unassigned"
+    },
+    "Object.values": {
+      "status": "supported",
+      "target": "unassigned"
+    },
+    "Promise": {
+      "status": "supported",
+      "target": "async-promises"
+    },
+    "Promise.allSettled": {
+      "status": "supported",
+      "target": "async-promises"
+    },
+    "Promise.any": {
+      "status": "supported",
+      "target": "async-promises"
+    },
+    "Promise.prototype.finally": {
+      "status": "supported",
+      "target": "async-promises"
+    },
+    "Proxy": {
+      "status": "supported",
+      "target": "proxy-reflect"
+    },
+    "Reflect": {
+      "status": "supported",
+      "target": "proxy-reflect"
+    },
+    "Reflect.apply": {
+      "status": "supported",
+      "target": "proxy-reflect"
+    },
+    "Reflect.construct": {
+      "status": "supported",
+      "target": "proxy-reflect"
+    },
+    "Reflect.defineProperty": {
+      "status": "supported",
+      "target": "proxy-reflect"
+    },
+    "Reflect.deleteProperty": {
+      "status": "supported",
+      "target": "proxy-reflect"
+    },
+    "Reflect.get": {
+      "status": "supported",
+      "target": "proxy-reflect"
+    },
+    "Reflect.getOwnPropertyDescriptor": {
+      "status": "supported",
+      "target": "proxy-reflect"
+    },
+    "Reflect.getPrototypeOf": {
+      "status": "supported",
+      "target": "proxy-reflect"
+    },
+    "Reflect.has": {
+      "status": "supported",
+      "target": "proxy-reflect"
+    },
+    "Reflect.isExtensible": {
+      "status": "supported",
+      "target": "proxy-reflect"
+    },
+    "Reflect.ownKeys": {
+      "status": "supported",
+      "target": "proxy-reflect"
+    },
+    "Reflect.preventExtensions": {
+      "status": "supported",
+      "target": "proxy-reflect"
+    },
+    "Reflect.set": {
+      "status": "supported",
+      "target": "proxy-reflect"
+    },
+    "Reflect.setPrototypeOf": {
+      "status": "supported",
+      "target": "proxy-reflect"
+    },
+    "RegExp": {
+      "status": "supported",
+      "target": "regexp"
+    },
+    "RegExp.escape": {
+      "status": "supported",
+      "target": "regexp"
+    },
+    "Set": {
+      "status": "supported",
+      "target": "collections"
+    },
+    "ShadowRealm": {
+      "status": "unsupported",
+      "target": "realms"
+    },
+    "SharedArrayBuffer": {
+      "status": "supported",
+      "target": "arraybuffer-typedarray"
+    },
+    "String.fromCodePoint": {
+      "status": "supported",
+      "target": "strings"
+    },
+    "String.prototype.at": {
+      "status": "supported",
+      "target": "strings"
+    },
+    "String.prototype.endsWith": {
+      "status": "supported",
+      "target": "strings"
+    },
+    "String.prototype.includes": {
+      "status": "supported",
+      "target": "strings"
+    },
+    "String.prototype.isWellFormed": {
+      "status": "supported",
+      "target": "strings"
+    },
+    "String.prototype.matchAll": {
+      "status": "supported",
+      "target": "strings"
+    },
+    "String.prototype.padEnd": {
+      "status": "supported",
+      "target": "strings"
+    },
+    "String.prototype.padStart": {
+      "status": "supported",
+      "target": "strings"
+    },
+    "String.prototype.repeat": {
+      "status": "supported",
+      "target": "strings"
+    },
+    "String.prototype.replaceAll": {
+      "status": "supported",
+      "target": "strings"
+    },
+    "String.prototype.startsWith": {
+      "status": "supported",
+      "target": "strings"
+    },
+    "String.prototype.toWellFormed": {
+      "status": "supported",
+      "target": "strings"
+    },
+    "String.prototype.trim": {
+      "status": "supported",
+      "target": "strings"
+    },
+    "String.prototype.trimEnd": {
+      "status": "supported",
+      "target": "strings"
+    },
+    "String.prototype.trimStart": {
+      "status": "supported",
+      "target": "strings"
+    },
+    "String.raw": {
+      "status": "supported",
+      "target": "strings"
+    },
+    "Symbol": {
+      "status": "supported",
+      "target": "symbols"
+    },
+    "Symbol.asyncIterator": {
+      "status": "supported",
+      "target": "symbols"
+    },
+    "Symbol.for": {
+      "status": "supported",
+      "target": "symbols"
+    },
+    "Symbol.hasInstance": {
+      "status": "supported",
+      "target": "symbols"
+    },
+    "Symbol.isConcatSpreadable": {
+      "status": "supported",
+      "target": "symbols"
+    },
+    "Symbol.iterator": {
+      "status": "supported",
+      "target": "symbols"
+    },
+    "Symbol.match": {
+      "status": "supported",
+      "target": "symbols"
+    },
+    "Symbol.matchAll": {
+      "status": "supported",
+      "target": "regexp"
+    },
+    "Symbol.prototype.description": {
+      "status": "supported",
+      "target": "symbols"
+    },
+    "Symbol.replace": {
+      "status": "supported",
+      "target": "symbols"
+    },
+    "Symbol.search": {
+      "status": "supported",
+      "target": "symbols"
+    },
+    "Symbol.species": {
+      "status": "supported",
+      "target": "symbols"
+    },
+    "Symbol.split": {
+      "status": "supported",
+      "target": "symbols"
+    },
+    "Symbol.toPrimitive": {
+      "status": "supported",
+      "target": "symbols"
+    },
+    "Symbol.toStringTag": {
+      "status": "supported",
+      "target": "symbols"
+    },
+    "Symbol.unscopables": {
+      "status": "excluded-by-language-design",
+      "target": "legacy-web-compat"
+    },
+    "Temporal": {
+      "status": "supported",
+      "target": "temporal"
+    },
+    "TypedArray": {
+      "status": "supported",
+      "target": "arraybuffer-typedarray"
+    },
+    "TypedArray.prototype.at": {
+      "status": "supported",
+      "target": "arraybuffer-typedarray"
+    },
+    "Uint16Array": {
+      "status": "supported",
+      "target": "arraybuffer-typedarray"
+    },
+    "Uint32Array": {
+      "status": "supported",
+      "target": "arraybuffer-typedarray"
+    },
+    "Uint8Array": {
+      "status": "supported",
+      "target": "arraybuffer-typedarray"
+    },
+    "Uint8ClampedArray": {
+      "status": "supported",
+      "target": "arraybuffer-typedarray"
+    },
+    "WeakMap": {
+      "status": "supported",
+      "target": "collections"
+    },
+    "WeakRef": {
+      "status": "unsupported",
+      "target": "weakrefs"
+    },
+    "WeakSet": {
+      "status": "supported",
+      "target": "collections"
+    },
+    "__getter__": {
+      "status": "excluded-by-language-design",
+      "target": "legacy-web-compat"
+    },
+    "__proto__": {
+      "status": "excluded-by-language-design",
+      "target": "legacy-web-compat"
+    },
+    "__setter__": {
+      "status": "excluded-by-language-design",
+      "target": "legacy-web-compat"
+    },
+    "align-detached-buffer-semantics-with-web-reality": {
+      "status": "active",
+      "target": "arraybuffer-typedarray"
+    },
+    "arbitrary-module-namespace-names": {
+      "status": "unsupported",
+      "target": "modules"
+    },
+    "array-find-from-last": {
+      "status": "supported",
+      "target": "arrays"
+    },
+    "array-grouping": {
+      "status": "supported",
+      "target": "arrays"
+    },
+    "arraybuffer-transfer": {
+      "status": "supported",
+      "target": "arraybuffer-typedarray"
+    },
+    "arrow-function": {
+      "status": "supported",
+      "target": "syntax"
+    },
+    "async-await": {
+      "status": "supported",
+      "target": "async-promises"
+    },
+    "async-functions": {
+      "status": "supported",
+      "target": "async-promises"
+    },
+    "async-generator": {
+      "status": "supported",
+      "target": "iterators"
+    },
+    "async-generators": {
+      "status": "supported",
+      "target": "iterators"
+    },
+    "async-iteration": {
+      "status": "supported",
+      "target": "async-promises"
+    },
+    "await-dictionary": {
+      "status": "unsupported",
+      "target": "proposals"
+    },
+    "caller": {
+      "status": "excluded-by-language-design",
+      "target": "legacy-web-compat"
+    },
+    "change-array-by-copy": {
+      "status": "supported",
+      "target": "arrays"
+    },
+    "class": {
+      "status": "supported",
+      "target": "classes"
+    },
+    "class-fields-private": {
+      "status": "supported",
+      "target": "classes"
+    },
+    "class-fields-private-in": {
+      "status": "supported",
+      "target": "classes"
+    },
+    "class-fields-public": {
+      "status": "supported",
+      "target": "classes"
+    },
+    "class-methods-private": {
+      "status": "supported",
+      "target": "classes"
+    },
+    "class-static-block": {
+      "status": "supported",
+      "target": "classes"
+    },
+    "class-static-fields-private": {
+      "status": "supported",
+      "target": "classes"
+    },
+    "class-static-fields-public": {
+      "status": "supported",
+      "target": "classes"
+    },
+    "class-static-methods-private": {
+      "status": "supported",
+      "target": "classes"
+    },
+    "coalesce-expression": {
+      "status": "supported",
+      "target": "unassigned"
+    },
+    "computed-property-names": {
+      "status": "supported",
+      "target": "unassigned"
+    },
+    "const": {
+      "status": "supported",
+      "target": "syntax"
+    },
+    "cross-realm": {
+      "status": "unsupported",
+      "target": "realms"
+    },
+    "decorators": {
+      "status": "supported",
+      "target": "classes"
+    },
+    "default-parameters": {
+      "status": "supported",
+      "target": "syntax"
+    },
+    "destructuring-assignment": {
+      "status": "supported",
+      "target": "bindings-patterns"
+    },
+    "destructuring-binding": {
+      "status": "supported",
+      "target": "bindings-patterns"
+    },
+    "disposition": {
+      "status": "supported",
+      "target": "resource-management"
+    },
+    "dynamic-import": {
+      "status": "supported",
+      "target": "modules"
+    },
+    "error-cause": {
+      "status": "supported",
+      "target": "globals-errors"
+    },
+    "explicit-resource-management": {
+      "status": "supported",
+      "target": "resource-management"
+    },
+    "exponentiation": {
+      "status": "supported",
+      "target": "unassigned"
+    },
+    "export-star-as-namespace-from-module": {
+      "status": "unsupported",
+      "target": "modules"
+    },
+    "for-in-order": {
+      "status": "excluded-by-language-design",
+      "target": "excluded-syntax"
+    },
+    "for-of": {
+      "status": "supported",
+      "target": "unassigned"
+    },
+    "generators": {
+      "status": "supported",
+      "target": "iterators"
+    },
+    "globalThis": {
+      "status": "supported",
+      "target": "globals-errors"
+    },
+    "hashbang": {
+      "status": "supported",
+      "target": "syntax"
+    },
+    "immutable-arraybuffer": {
+      "status": "active",
+      "target": "arraybuffer-typedarray"
+    },
+    "import-assertions": {
+      "status": "unsupported",
+      "target": "modules"
+    },
+    "import-attributes": {
+      "status": "unsupported",
+      "target": "modules"
+    },
+    "import-bytes": {
+      "status": "unsupported",
+      "target": "modules"
+    },
+    "import-defer": {
+      "status": "unsupported",
+      "target": "modules"
+    },
+    "import-text": {
+      "status": "unsupported",
+      "target": "modules"
+    },
+    "import.meta": {
+      "status": "supported",
+      "target": "modules"
+    },
+    "iterator-helpers": {
+      "status": "supported",
+      "target": "iterators"
+    },
+    "iterator-sequencing": {
+      "status": "active",
+      "target": "iterators"
+    },
+    "joint-iteration": {
+      "status": "active",
+      "target": "iterators"
+    },
+    "json-modules": {
+      "status": "unsupported",
+      "target": "modules"
+    },
+    "json-parse-with-source": {
+      "status": "unsupported",
+      "target": "json"
+    },
+    "json-superset": {
+      "status": "supported",
+      "target": "syntax"
+    },
+    "legacy-regexp": {
+      "status": "excluded-by-language-design",
+      "target": "legacy-web-compat"
+    },
+    "let": {
+      "status": "supported",
+      "target": "syntax"
+    },
+    "logical-assignment-operators": {
+      "status": "supported",
+      "target": "unassigned"
+    },
+    "new.target": {
+      "status": "supported",
+      "target": "syntax"
+    },
+    "nonextensible-applies-to-private": {
+      "status": "active",
+      "target": "classes"
+    },
+    "nullish-coalescing": {
+      "status": "supported",
+      "target": "unassigned"
+    },
+    "numeric-separator-literal": {
+      "status": "supported",
+      "target": "syntax"
+    },
+    "object-rest": {
+      "status": "supported",
+      "target": "bindings-patterns"
+    },
+    "object-spread": {
+      "status": "supported",
+      "target": "bindings-patterns"
+    },
+    "optional-catch-binding": {
+      "status": "supported",
+      "target": "unassigned"
+    },
+    "optional-chaining": {
+      "status": "supported",
+      "target": "unassigned"
+    },
+    "promise-try": {
+      "status": "supported",
+      "target": "async-promises"
+    },
+    "promise-with-resolvers": {
+      "status": "supported",
+      "target": "async-promises"
+    },
+    "proxy-missing-checks": {
+      "status": "active",
+      "target": "proxy-reflect"
+    },
+    "regexp-dotall": {
+      "status": "supported",
+      "target": "regexp"
+    },
+    "regexp-duplicate-named-groups": {
+      "status": "supported",
+      "target": "regexp"
+    },
+    "regexp-lookbehind": {
+      "status": "supported",
+      "target": "regexp"
+    },
+    "regexp-match-indices": {
+      "status": "supported",
+      "target": "regexp"
+    },
+    "regexp-modifiers": {
+      "status": "supported",
+      "target": "regexp"
+    },
+    "regexp-named-groups": {
+      "status": "supported",
+      "target": "regexp"
+    },
+    "regexp-unicode-property-escapes": {
+      "status": "supported",
+      "target": "regexp"
+    },
+    "regexp-v-flag": {
+      "status": "supported",
+      "target": "regexp"
+    },
+    "resizable-arraybuffer": {
+      "status": "supported",
+      "target": "arraybuffer-typedarray"
+    },
+    "rest-parameters": {
+      "status": "supported",
+      "target": "syntax"
+    },
+    "set-methods": {
+      "status": "supported",
+      "target": "collections"
+    },
+    "source-phase-imports": {
+      "status": "unsupported",
+      "target": "modules"
+    },
+    "source-phase-imports-module-source": {
+      "status": "unsupported",
+      "target": "modules"
+    },
+    "spread": {
+      "status": "supported",
+      "target": "syntax"
+    },
+    "stable-array-sort": {
+      "status": "supported",
+      "target": "arrays"
+    },
+    "stable-typedarray-sort": {
+      "status": "supported",
+      "target": "arraybuffer-typedarray"
+    },
+    "string-trimming": {
+      "status": "supported",
+      "target": "strings"
+    },
+    "structuredClone": {
+      "status": "supported",
+      "target": "globals-errors"
+    },
+    "super": {
+      "status": "supported",
+      "target": "syntax"
+    },
+    "symbols-as-weakmap-keys": {
+      "status": "supported",
+      "target": "collections"
+    },
+    "tail-call-optimization": {
+      "status": "unsupported",
+      "target": "unassigned"
+    },
+    "template": {
+      "status": "supported",
+      "target": "syntax"
+    },
+    "template-literal": {
+      "status": "supported",
+      "target": "syntax"
+    },
+    "top-level-await": {
+      "status": "supported",
+      "target": "async-promises"
+    },
+    "u180e": {
+      "status": "supported",
+      "target": "strings"
+    },
+    "uint8array-base64": {
+      "status": "supported",
+      "target": "arraybuffer-typedarray"
+    },
+    "upsert": {
+      "status": "supported",
+      "target": "collections"
+    },
+    "well-formed-json-stringify": {
+      "status": "supported",
+      "target": "json"
+    },
+    "well-known-symbol": {
+      "status": "supported",
+      "target": "symbols"
+    }
+  },
+  "flags": {
+    "CanBlockIsFalse": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "CanBlockIsTrue": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "async": {
+      "status": "supported",
+      "target": "harness"
+    },
+    "generated": {
+      "status": "supported",
+      "target": "harness"
+    },
+    "module": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "noStrict": {
+      "status": "excluded-by-language-design",
+      "target": "excluded-syntax"
+    },
+    "non-deterministic": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "onlyStrict": {
+      "status": "supported",
+      "target": "syntax"
+    },
+    "raw": {
+      "status": "unsupported",
+      "target": "harness"
+    }
+  },
+  "harnessIncludes": {
+    "assertRelativeDateMs.js": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "asyncHelpers.js": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "atomicsHelper.js": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "iteratorZipUtils.js": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "resizableArrayBufferUtils.js": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "sm/assertThrowsValue.js": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "sm/non262-Date-shell.js": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "sm/non262-JSON-shell.js": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "sm/non262-Math-shell.js": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "sm/non262-Reflect-shell.js": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "sm/non262-Set-shell.js": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "sm/non262-TypedArray-shell.js": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "sm/non262-expressions-shell.js": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "sm/non262-generators-shell.js": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "sm/non262-strict-shell.js": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "tcoHelper.js": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "testAtomics.js": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "testIntl.js": {
+      "status": "unsupported",
+      "target": "harness"
+    },
+    "wellKnownIntrinsicObjects.js": {
+      "status": "unsupported",
+      "target": "harness"
+    }
+  },
+  "pathSegments": {
+    "Atomics": {
+      "status": "unsupported",
+      "target": "atomics-shared-memory"
+    },
+    "DataView": {
+      "status": "unsupported",
+      "target": "binary-data-dataview"
+    },
+    "WeakRef": {
+      "status": "unsupported",
+      "target": "weakrefs"
+    },
+    "eval-code": {
+      "status": "unsupported",
+      "target": "excluded-syntax"
+    },
+    "for-in": {
+      "status": "unsupported",
+      "target": "excluded-syntax"
+    }
+  },
+  "syntax": {
+    "arguments_object": {
+      "status": "excluded-by-language-design",
+      "target": "excluded-syntax"
+    },
+    "do_while_loop": {
+      "status": "excluded-by-language-design",
+      "target": "excluded-syntax"
+    },
+    "eval_identifier": {
+      "status": "excluded-by-language-design",
+      "target": "excluded-syntax"
+    },
+    "for_in_loop": {
+      "status": "excluded-by-language-design",
+      "target": "excluded-syntax"
+    },
+    "function_declaration": {
+      "status": "excluded-by-language-design",
+      "target": "excluded-syntax"
+    },
+    "function_expression": {
+      "status": "excluded-by-language-design",
+      "target": "excluded-syntax"
+    },
+    "labeled_break": {
+      "status": "excluded-by-language-design",
+      "target": "excluded-syntax"
+    },
+    "labeled_continue": {
+      "status": "excluded-by-language-design",
+      "target": "excluded-syntax"
+    },
+    "labeled_statement": {
+      "status": "excluded-by-language-design",
+      "target": "excluded-syntax"
+    },
+    "loose_equality": {
+      "status": "excluded-by-language-design",
+      "target": "excluded-syntax"
+    },
+    "loose_inequality": {
+      "status": "excluded-by-language-design",
+      "target": "excluded-syntax"
+    },
+    "new_function": {
+      "status": "excluded-by-language-design",
+      "target": "excluded-syntax"
+    },
+    "traditional_for_loop": {
+      "status": "excluded-by-language-design",
+      "target": "excluded-syntax"
+    },
+    "while_loop": {
+      "status": "excluded-by-language-design",
+      "target": "excluded-syntax"
+    },
+    "with_statement": {
+      "status": "excluded-by-language-design",
+      "target": "excluded-syntax"
+    }
+  },
+  "targets": {
+    "arraybuffer-typedarray": {
+      "description": "ArrayBuffer, SharedArrayBuffer, typed arrays, and Uint8Array encodings excluding DataView",
+      "status": "active"
+    },
+    "arrays": {
+      "description": "Array constructor and prototype behavior",
+      "status": "active"
+    },
+    "async-promises": {
+      "description": "Promises, async functions, async iteration, and top-level await",
+      "status": "active"
+    },
+    "atomics-shared-memory": {
+      "description": "Atomics and blocking shared-memory primitives are not implemented",
+      "status": "unsupported"
+    },
+    "binary-data-dataview": {
+      "description": "DataView is not implemented",
+      "status": "unsupported"
+    },
+    "bindings-patterns": {
+      "description": "Binding, destructuring, var hoisting, and iterator-close semantics",
+      "status": "active"
+    },
+    "classes": {
+      "description": "Class fields, private names, decorators, and related semantics",
+      "status": "active"
+    },
+    "collections": {
+      "description": "Map, Set, weak collections, grouping, and set methods",
+      "status": "active"
+    },
+    "excluded-syntax": {
+      "description": "Syntax excluded by GocciaScript language design",
+      "status": "excluded-by-language-design"
+    },
+    "globals-errors": {
+      "description": "Global APIs and Error family behavior",
+      "status": "active"
+    },
+    "harness": {
+      "description": "test262 harness helper coverage",
+      "status": "active"
+    },
+    "intl": {
+      "description": "Intl is intentionally outside the runtime scope",
+      "status": "excluded-by-language-design"
+    },
+    "iterators": {
+      "description": "Generators and iterator helpers",
+      "status": "active"
+    },
+    "json": {
+      "description": "JSON parse/stringify and proposal extensions",
+      "status": "active"
+    },
+    "legacy-web-compat": {
+      "description": "Legacy web compatibility hooks are intentionally excluded",
+      "status": "excluded-by-language-design"
+    },
+    "modules": {
+      "description": "Module compatibility beyond GocciaScript named imports/exports",
+      "status": "unsupported"
+    },
+    "numbers-bigint": {
+      "description": "Number, Math, BigInt, and numeric operator behavior",
+      "status": "active"
+    },
+    "proposals": {
+      "description": "Unimplemented proposal or staging-area features",
+      "status": "unsupported"
+    },
+    "proxy-reflect": {
+      "description": "Proxy and Reflect invariants",
+      "status": "active"
+    },
+    "realms": {
+      "description": "Cross-realm and ShadowRealm semantics are not implemented",
+      "status": "unsupported"
+    },
+    "regexp": {
+      "description": "RegExp syntax and built-ins",
+      "status": "active"
+    },
+    "resource-management": {
+      "description": "Explicit resource management built-ins and syntax",
+      "status": "active"
+    },
+    "roadmap-hygiene": {
+      "description": "Tests requiring explicit classification before they should run",
+      "status": "active"
+    },
+    "strings": {
+      "description": "String constructor and prototype behavior",
+      "status": "active"
+    },
+    "symbols": {
+      "description": "Symbol constructor, well-known symbols, and symbol wrappers",
+      "status": "active"
+    },
+    "syntax": {
+      "description": "Core supported syntax and parser compatibility",
+      "status": "active"
+    },
+    "temporal": {
+      "description": "Temporal built-ins",
+      "status": "active"
+    },
+    "unassigned": {
+      "description": "Supported tags not yet assigned to a narrower target",
+      "status": "active"
+    },
+    "weakrefs": {
+      "description": "WeakRef and FinalizationRegistry are not implemented",
+      "status": "unsupported"
+    }
+  },
+  "unknownFeature": {
+    "eligible": false,
+    "status": "needs-roadmap-entry",
+    "target": "roadmap-hygiene"
+  },
+  "version": 1
+}

@@ -77,6 +77,7 @@ type
   public
     constructor Create(const AValue: Boolean);
 
+    class function FromBoolean(const AValue: Boolean): TGocciaBooleanLiteralValue; static; inline;
     class function TrueValue: TGocciaBooleanLiteralValue;
     class function FalseValue: TGocciaBooleanLiteralValue;
 
@@ -511,6 +512,15 @@ begin
     FFalseValue := TGocciaBooleanLiteralValue.Create(False);
   end;
   Result := FFalseValue;
+end;
+
+class function TGocciaBooleanLiteralValue.FromBoolean(
+  const AValue: Boolean): TGocciaBooleanLiteralValue; inline;
+begin
+  if AValue then
+    Result := TrueValue
+  else
+    Result := FalseValue;
 end;
 
 function TGocciaBooleanLiteralValue.TypeName: string;

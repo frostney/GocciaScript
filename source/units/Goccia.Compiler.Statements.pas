@@ -77,10 +77,12 @@ procedure RestorePendingFinally(const ASaved: TObject);
 implementation
 
 uses
+  Classes,
   SysUtils,
 
   OrderedStringMap,
 
+  Goccia.AST.BindingPatterns,
   Goccia.Bytecode,
   Goccia.Bytecode.Debug,
   Goccia.Compiler.Expressions,
@@ -2957,34 +2959,18 @@ end;
 procedure CollectDestructuringVarBindings(const APattern: TGocciaDestructuringPattern;
   const AScope: TGocciaCompilerScope);
 var
-  ObjPat: TGocciaObjectDestructuringPattern;
-  ArrPat: TGocciaArrayDestructuringPattern;
-  AssignPat: TGocciaAssignmentDestructuringPattern;
+  Names: TStringList;
   I: Integer;
 begin
-  if APattern is TGocciaIdentifierDestructuringPattern then
-    AScope.DeclareVarLocal(TGocciaIdentifierDestructuringPattern(APattern).Name)
-  else if APattern is TGocciaObjectDestructuringPattern then
-  begin
-    ObjPat := TGocciaObjectDestructuringPattern(APattern);
-    for I := 0 to ObjPat.Properties.Count - 1 do
-      CollectDestructuringVarBindings(ObjPat.Properties[I].Pattern, AScope);
-  end
-  else if APattern is TGocciaArrayDestructuringPattern then
-  begin
-    ArrPat := TGocciaArrayDestructuringPattern(APattern);
-    for I := 0 to ArrPat.Elements.Count - 1 do
-      if Assigned(ArrPat.Elements[I]) then
-        CollectDestructuringVarBindings(ArrPat.Elements[I], AScope);
-  end
-  else if APattern is TGocciaAssignmentDestructuringPattern then
-  begin
-    AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
-    CollectDestructuringVarBindings(AssignPat.Left, AScope);
-  end
-  else if APattern is TGocciaRestDestructuringPattern then
-    CollectDestructuringVarBindings(
-      TGocciaRestDestructuringPattern(APattern).Argument, AScope);
+  Names := TStringList.Create;
+  Names.CaseSensitive := True;
+  try
+    CollectPatternBindingNames(APattern, Names);
+    for I := 0 to Names.Count - 1 do
+      AScope.DeclareVarLocal(Names[I]);
+  finally
+    Names.Free;
+  end;
 end;
 
 procedure EmitGlobalDefinesForPattern(const ACtx: TGocciaCompilationContext;

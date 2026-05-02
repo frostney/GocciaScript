@@ -319,7 +319,7 @@ Small, frequently-called non-virtual methods are marked `inline` to eliminate ca
 | `ResolveIdentifier(Name)` | `Goccia.Scope` | Unifies `this`/keyword checks with scope lookup |
 | `ContainsOwnLexicalBinding(Name)` | `Goccia.Scope` | Dictionary lookup wrapper |
 | `Contains(Name)` | `Goccia.Scope` | Scope chain containment check |
-| `IsNegativeZero(Value)` | `Goccia.Evaluator.Comparison` | Trivial enum comparison |
+| `IsNegativeZero(Value)` | `Goccia.Values.Primitives` | Trivial enum comparison |
 
 **Why selective inlining?**
 

@@ -66,7 +66,7 @@ const SKIP_UNIT_PATTERNS = [
 ];
 
 // Pattern for method-path references: `Goccia.Unit.Name.MethodName`
-// These reference a method/function inside a unit, e.g. `Goccia.Evaluator.Arithmetic.pas`'s `IsActualZero`
+// These reference a method/function inside a unit, e.g. `Goccia.Arithmetic.pas`'s `IsActualZero`
 const METHOD_PATH_PATTERN = /^(Goccia(?:\.\w+)+)\.([A-Z]\w+)$/;
 
 // Files to skip entirely (snapshots / historical records)

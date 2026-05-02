@@ -34,10 +34,10 @@ uses
   SysUtils,
 
   Goccia.Arguments.Collection,
+  Goccia.Arithmetic,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Evaluator,
-  Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.PatternMatching,
   Goccia.Scope,
@@ -59,14 +59,6 @@ uses
   Goccia.Values.ProxyValue,
   Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue;
-
-function BooleanValue(const AValue: Boolean): TGocciaBooleanLiteralValue; inline;
-begin
-  if AValue then
-    Result := TGocciaBooleanLiteralValue.TrueValue
-  else
-    Result := TGocciaBooleanLiteralValue.FalseValue;
-end;
 
 function CreatePatternChildContext(const AContext: TGocciaEvaluationContext;
   const ALabel: string): TGocciaEvaluationContext;
@@ -870,8 +862,9 @@ var
   MatchContext: TGocciaEvaluationContext;
 begin
   Subject := EvaluateExpression(AExpression.Subject, AContext);
-  Result := BooleanValue(TryEvaluateMatchPattern(Subject, AExpression.Pattern,
-    AContext, MatchContext));
+  Result := TGocciaBooleanLiteralValue.FromBoolean(
+    TryEvaluateMatchPattern(Subject, AExpression.Pattern, AContext,
+    MatchContext));
   if TGocciaBooleanLiteralValue(Result).Value then
     ReleaseMatchContext(MatchContext, AContext);
 end;
