@@ -113,10 +113,13 @@ test("function superclass returned object becomes the constructed receiver", () 
   expect(explicit.superReturnedThis).toBe(true);
   expect(explicit.afterSuper).toBe(true);
 
-  class ImplicitDerived extends Base {}
+  class ImplicitDerived extends Base {
+    field = "field";
+  }
   const implicit = new ImplicitDerived("implicit");
   expect(implicit.value).toBe("implicit");
   expect(implicit.fromBase).toBe(true);
+  expect(implicit.field).toBe("field");
   expect(calls).toBe(2);
 });
 

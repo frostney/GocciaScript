@@ -75,6 +75,8 @@ test("super() returns receiver unless superclass returns object", () => {
   }
 
   class ObjectDerived extends ObjectBase {
+    field = "field";
+
     constructor() {
       const value = super();
       this.superReturnedThis = value === this;
@@ -89,8 +91,30 @@ test("super() returns receiver unless superclass returns object", () => {
 
   const object = new ObjectDerived();
   expect(object.fromBase).toBe(true);
+  expect(object.field).toBe("field");
   expect(object.superReturnedThis).toBe(true);
   expect(object.superReturnedObject).toBe(true);
+});
+
+test("derived constructor returning primitive throws TypeError", () => {
+  class Base {
+    constructor() {
+      this.ready = true;
+      return 7;
+    }
+  }
+
+  const base = new Base();
+  expect(base.ready).toBe(true);
+
+  class Derived extends Base {
+    constructor() {
+      super();
+      return 7;
+    }
+  }
+
+  expect(() => new Derived()).toThrow(TypeError);
 });
 
 test("extends rejects non-constructable callable superclass", () => {

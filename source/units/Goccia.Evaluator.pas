@@ -2878,6 +2878,43 @@ begin
   end;
 end;
 
+procedure InitializePublicInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
+var
+  PropertyValue: TGocciaValue;
+  Entry: TGocciaExpressionMap.TKeyValuePair;
+  I: Integer;
+  FOEntry: TGocciaClassFieldOrderEntry;
+  Expr: TGocciaExpression;
+begin
+  if Assigned(AClassValue.SuperClass) then
+    InitializePublicInstanceProperties(AInstance, AClassValue.SuperClass, AContext);
+
+  if AClassValue.FieldOrderCount > 0 then
+  begin
+    for I := 0 to AClassValue.FieldOrderCount - 1 do
+    begin
+      FOEntry := AClassValue.FieldOrderEntry(I);
+      if FOEntry.IsPrivate then
+        Continue;
+      Expr := nil;
+      if AClassValue.InstancePropertyDefs.TryGetValue(FOEntry.Name, Expr) and Assigned(Expr) then
+      begin
+        PropertyValue := EvaluateExpression(Expr, AContext);
+        AInstance.AssignProperty(FOEntry.Name, PropertyValue);
+      end;
+    end;
+  end
+  else
+  begin
+    for I := 0 to AClassValue.InstancePropertyDefs.Count - 1 do
+    begin
+      Entry := AClassValue.InstancePropertyDefs.EntryAt(I);
+      PropertyValue := EvaluateExpression(Entry.Value, AContext);
+      AInstance.AssignProperty(Entry.Key, PropertyValue);
+    end;
+  end;
+end;
+
 function EvaluateSwitch(const ASwitchStatement: TGocciaSwitchStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
   Discriminant: TGocciaValue;
@@ -4202,6 +4239,7 @@ var
   ConstructedValue: TGocciaValue;
   InitContext, SuperInitContext: TGocciaEvaluationContext;
   InitScope, SuperInitScope: TGocciaScope;
+  ReplacementOccurred: Boolean;
   function ConstructNativeSuperInstance(
     const AConstructor: TGocciaObjectValue): TGocciaObjectValue;
   var
@@ -4239,6 +4277,78 @@ var
       Result := nil;
     end;
   end;
+  function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
+  begin
+    Result := (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue);
+  end;
+  function HasDerivedConstructorReturnRestriction: Boolean;
+  begin
+    Result := Assigned(AClassValue.SuperClass) or
+      Assigned(AClassValue.NativeSuperConstructor);
+  end;
+  procedure SetFinalInstance(const AInstance: TGocciaObjectValue);
+  begin
+    if (not Assigned(AInstance)) or (AInstance = Instance) then
+      Exit;
+    TGarbageCollector.Instance.AddTempRoot(AInstance);
+    TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
+    RootedInstance := AInstance;
+    Instance := AInstance;
+    ReplacementOccurred := True;
+  end;
+  procedure ApplyOwnConstructorResult(const AValue: TGocciaValue);
+  begin
+    if AValue is TGocciaObjectValue then
+      SetFinalInstance(TGocciaObjectValue(AValue))
+    else if HasDerivedConstructorReturnRestriction and
+            not IsUndefinedConstructedValue(AValue) then
+      ThrowTypeError(
+        'Derived constructor returned non-object',
+        SSuggestNotConstructorType);
+  end;
+  procedure ApplyReplacementResult(const AValue: TGocciaValue);
+  begin
+    if AValue is TGocciaObjectValue then
+      SetFinalInstance(TGocciaObjectValue(AValue));
+  end;
+  procedure RunInstanceInitializers;
+  begin
+    InitContext := AContext;
+    InitScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue);
+    InitScope.ThisValue := Instance;
+    InitContext.Scope := InitScope;
+
+    if Instance is TGocciaInstanceValue then
+    begin
+      InitializeInstanceProperties(TGocciaInstanceValue(Instance), AClassValue, InitContext);
+
+      if AClassValue.FieldOrderCount = 0 then
+      begin
+        WalkClass := AClassValue.SuperClass;
+        while Assigned(WalkClass) do
+        begin
+          CheckExecutionTimeout;
+          IncrementInstructionCounter;
+          CheckInstructionLimit;
+          SuperInitContext := AContext;
+          SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, WalkClass);
+          SuperInitScope.ThisValue := Instance;
+          SuperInitContext.Scope := SuperInitScope;
+          if WalkClass.FieldOrderCount = 0 then
+            InitializePrivateInstanceProperties(TGocciaInstanceValue(Instance), WalkClass, SuperInitContext);
+          WalkClass := WalkClass.SuperClass;
+        end;
+
+        InitializePrivateInstanceProperties(TGocciaInstanceValue(Instance), AClassValue, InitContext);
+      end;
+    end
+    else
+      InitializePublicInstanceProperties(Instance, AClassValue, InitContext);
+
+    AClassValue.RunMethodInitializers(Instance);
+    AClassValue.RunFieldInitializers(Instance);
+    AClassValue.RunDecoratorFieldInitializers(Instance);
+  end;
 begin
   CheckExecutionTimeout;
   IncrementInstructionCounter;
@@ -4275,53 +4385,20 @@ begin
   end;
 
   RootedInstance := Instance;
+  ReplacementOccurred := False;
   TGarbageCollector.Instance.AddTempRoot(RootedInstance);
   try
-    InitContext := AContext;
-    InitScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue);
-    InitScope.ThisValue := Instance;
-    InitContext.Scope := InitScope;
-
-    if Instance is TGocciaInstanceValue then
-    begin
-      InitializeInstanceProperties(TGocciaInstanceValue(Instance), AClassValue, InitContext);
-
-      if AClassValue.FieldOrderCount = 0 then
-      begin
-        WalkClass := AClassValue.SuperClass;
-        while Assigned(WalkClass) do
-        begin
-          CheckExecutionTimeout;
-          IncrementInstructionCounter;
-          CheckInstructionLimit;
-          SuperInitContext := AContext;
-          SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, WalkClass);
-          SuperInitScope.ThisValue := Instance;
-          SuperInitContext.Scope := SuperInitScope;
-          if WalkClass.FieldOrderCount = 0 then
-            InitializePrivateInstanceProperties(TGocciaInstanceValue(Instance), WalkClass, SuperInitContext);
-          WalkClass := WalkClass.SuperClass;
-        end;
-
-        InitializePrivateInstanceProperties(TGocciaInstanceValue(Instance), AClassValue, InitContext);
-      end;
-    end;
-
-    AClassValue.RunMethodInitializers(Instance);
-    AClassValue.RunFieldInitializers(Instance);
-    AClassValue.RunDecoratorFieldInitializers(Instance);
+    RunInstanceInitializers;
 
     if Assigned(AClassValue.ConstructorMethod) then
     begin
       ConstructedValue := AClassValue.ConstructorMethod.Call(AArguments, Instance);
-      if ConstructedValue is TGocciaObjectValue then
-        Instance := TGocciaObjectValue(ConstructedValue);
+      ApplyOwnConstructorResult(ConstructedValue);
     end
     else if Assigned(AClassValue.SuperClass) and Assigned(AClassValue.SuperClass.ConstructorMethod) then
     begin
       ConstructedValue := AClassValue.SuperClass.ConstructorMethod.Call(AArguments, Instance);
-      if ConstructedValue is TGocciaObjectValue then
-        Instance := TGocciaObjectValue(ConstructedValue);
+      ApplyReplacementResult(ConstructedValue);
     end
     else if Assigned(AClassValue.NativeSuperConstructor) and
             (AClassValue.NativeSuperConstructor is TGocciaFunctionBase) and
@@ -4329,11 +4406,13 @@ begin
     begin
       ConstructedValue := InvokeConstructableWithReceiver(
         AClassValue.NativeSuperConstructor, AArguments, Instance);
-      if ConstructedValue is TGocciaObjectValue then
-        Instance := TGocciaObjectValue(ConstructedValue);
+      ApplyReplacementResult(ConstructedValue);
     end
     else if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then
       TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
+
+    if ReplacementOccurred then
+      RunInstanceInitializers;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
   end;
