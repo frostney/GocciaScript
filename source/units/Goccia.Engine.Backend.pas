@@ -62,6 +62,7 @@ uses
 
   TimingUtils,
 
+  Goccia.Compiler.ConstantValue,
   Goccia.Coverage,
   Goccia.GarbageCollector,
   Goccia.Profiler,
@@ -99,11 +100,17 @@ var
   Compiler: TGocciaCompiler;
   BytecodeModule: TGocciaBytecodeModule;
   SavedGlobalScope: TGocciaScope;
+  Options: TGocciaCompilerOptimizationOptions;
 begin
   Compiler := TGocciaCompiler.Create(AContext.CurrentFilePath);
   try
     Compiler.GlobalBackedTopLevel := True;
     Compiler.StrictTypes := FStrictTypes;
+    Options := Compiler.OptimizationOptions;
+    Options.PreserveCoverageShape :=
+      Assigned(TGocciaCoverageTracker.Instance) and
+      TGocciaCoverageTracker.Instance.Enabled;
+    Compiler.OptimizationOptions := Options;
     BytecodeModule := Compiler.Compile(AProgram);
   finally
     Compiler.Free;
@@ -156,6 +163,7 @@ function TGocciaBytecodeExecutor.CompileToModule(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
   Compiler: TGocciaCompiler;
+  Options: TGocciaCompilerOptimizationOptions;
 begin
   if FGlobalBackedTopLevel and Assigned(FGlobalScope) then
     CheckTopLevelRedeclarations(AProgram, FGlobalScope, FSourcePath);
@@ -164,6 +172,11 @@ begin
   try
     Compiler.GlobalBackedTopLevel := FGlobalBackedTopLevel;
     Compiler.StrictTypes := FStrictTypes;
+    Options := Compiler.OptimizationOptions;
+    Options.PreserveCoverageShape :=
+      Assigned(TGocciaCoverageTracker.Instance) and
+      TGocciaCoverageTracker.Instance.Enabled;
+    Compiler.OptimizationOptions := Options;
     Result := Compiler.Compile(AProgram);
   finally
     Compiler.Free;

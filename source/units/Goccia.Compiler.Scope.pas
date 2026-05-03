@@ -9,7 +9,8 @@ uses
 
   OrderedStringMap,
 
-  Goccia.Bytecode.Chunk;
+  Goccia.Bytecode.Chunk,
+  Goccia.Compiler.ConstantValue;
 
 type
   TGocciaCompilerVariableKind = (cvkLocal, cvkUpvalue, cvkGlobal);
@@ -28,6 +29,8 @@ type
     ParamTypeSignature: string;
     TypeAnnotation: string;
     ElementTypeAnnotation: string;
+    HasConstantValue: Boolean;
+    ConstantValue: TGocciaCompileTimeValue;
   end;
 
   TGocciaCompilerUpvalue = record
@@ -99,6 +102,12 @@ type
       const AAnnotation: string);
     procedure SetLocalElementTypeAnnotation(const AIndex: Integer;
       const AAnnotation: string);
+    procedure SetLocalConstantValue(const AIndex: Integer;
+      const AValue: TGocciaCompileTimeValue);
+    procedure ClearLocalConstantValue(const AIndex: Integer);
+    function TryGetVisibleConstantValue(const AName: string;
+      out AValue: TGocciaCompileTimeValue): Boolean;
+    function HasVisibleLocal(const AName: string): Boolean;
     function ResolvePrivatePrefix: string;
     property PrivatePrefix: string read FPrivatePrefix write FPrivatePrefix;
   end;
@@ -188,6 +197,8 @@ begin
   FLocals[FLocalCount].ParamTypeSignature := '';
   FLocals[FLocalCount].TypeAnnotation := '';
   FLocals[FLocalCount].ElementTypeAnnotation := '';
+  FLocals[FLocalCount].HasConstantValue := False;
+  FLocals[FLocalCount].ConstantValue := UnknownCompileTimeValue;
   Result := FNextSlot;
   EnsureLocalIndex;
   if Assigned(FLocalIndex) then
@@ -226,6 +237,8 @@ begin
   FLocals[FLocalCount].ParamTypeSignature := '';
   FLocals[FLocalCount].TypeAnnotation := '';
   FLocals[FLocalCount].ElementTypeAnnotation := '';
+  FLocals[FLocalCount].HasConstantValue := False;
+  FLocals[FLocalCount].ConstantValue := UnknownCompileTimeValue;
   Result := FNextSlot;
   EnsureLocalIndex;
   if Assigned(FLocalIndex) then
@@ -424,6 +437,50 @@ procedure TGocciaCompilerScope.SetLocalElementTypeAnnotation(const AIndex: Integ
   const AAnnotation: string);
 begin
   FLocals[AIndex].ElementTypeAnnotation := AAnnotation;
+end;
+
+procedure TGocciaCompilerScope.SetLocalConstantValue(const AIndex: Integer;
+  const AValue: TGocciaCompileTimeValue);
+begin
+  FLocals[AIndex].HasConstantValue := True;
+  FLocals[AIndex].ConstantValue := AValue;
+end;
+
+procedure TGocciaCompilerScope.ClearLocalConstantValue(const AIndex: Integer);
+begin
+  FLocals[AIndex].HasConstantValue := False;
+  FLocals[AIndex].ConstantValue := UnknownCompileTimeValue;
+end;
+
+function TGocciaCompilerScope.TryGetVisibleConstantValue(const AName: string;
+  out AValue: TGocciaCompileTimeValue): Boolean;
+var
+  LocalIdx: Integer;
+begin
+  LocalIdx := ResolveLocal(AName);
+  if LocalIdx >= 0 then
+  begin
+    Result := FLocals[LocalIdx].HasConstantValue;
+    if Result then
+      AValue := FLocals[LocalIdx].ConstantValue
+    else
+      AValue := UnknownCompileTimeValue;
+    Exit;
+  end;
+
+  if Assigned(FParent) then
+    Exit(FParent.TryGetVisibleConstantValue(AName, AValue));
+
+  AValue := UnknownCompileTimeValue;
+  Result := False;
+end;
+
+function TGocciaCompilerScope.HasVisibleLocal(const AName: string): Boolean;
+begin
+  if ResolveLocal(AName) >= 0 then
+    Exit(True);
+
+  Result := Assigned(FParent) and FParent.HasVisibleLocal(AName);
 end;
 
 function TGocciaCompilerScope.ResolvePrivatePrefix: string;
