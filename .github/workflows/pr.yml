@@ -189,6 +189,26 @@ jobs:
           GOCCIA_BENCH_ROUNDS: 7
         run: ./build/GocciaBenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress --format=json --output=benchmark-${{ matrix.mode }}.json
 
+      - name: Capture deterministic profiles
+        if: matrix.mode == 'bytecode'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p profile-current
+          while IFS= read -r bench; do
+            rel="${bench#benchmarks/}"
+            out="profile-current/${rel%.*}.json"
+            mkdir -p "$(dirname "$out")"
+            ./build/GocciaBenchmarkRunner "$bench" \
+              --mode=bytecode \
+              --profile-deterministic \
+              --profile=all \
+              --profile-output="$out" \
+              --no-progress \
+              --format=compact-json \
+              > /dev/null
+          done < <(find benchmarks -type f \( -name '*.js' -o -name '*.jsx' -o -name '*.ts' -o -name '*.tsx' -o -name '*.mjs' \) ! -path '*/helpers/*' | sort)
+
       - name: Check benchmark CLI behaviour
         run: |
           grep -q '"files": \[' benchmark-${{ matrix.mode }}.json
@@ -201,6 +221,14 @@ jobs:
           name: benchmark-${{ matrix.mode }}
           retention-days: 1
           path: benchmark-${{ matrix.mode }}.json
+
+      - name: Upload deterministic profiles
+        if: matrix.mode == 'bytecode'
+        uses: actions/upload-artifact@v7
+        with:
+          name: profile-current
+          retention-days: 1
+          path: profile-current/
 
   cli:
     needs: build
@@ -308,6 +336,8 @@ jobs:
       run:
         shell: bash
     steps:
+      - uses: actions/checkout@v5
+
       - name: Download interpreted results
         uses: actions/download-artifact@v7
         with:
@@ -317,6 +347,13 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: benchmark-bytecode
+
+      - name: Download deterministic profiles
+        uses: actions/download-artifact@v7
+        continue-on-error: true
+        with:
+          name: profile-current
+          path: profile-current/
 
       - name: Restore interpreted baseline
         uses: actions/cache/restore@v5
@@ -331,6 +368,13 @@ jobs:
           path: benchmark-bytecode-results.json
           key: benchmark-bytecode-baseline-will-not-match
           restore-keys: benchmark-bytecode-baseline-
+
+      - name: Restore deterministic profile baseline
+        uses: actions/cache/restore@v5
+        with:
+          path: profile-baseline/
+          key: profile-baseline-will-not-match
+          restore-keys: profile-baseline-
 
       - name: Check baselines
         run: |
@@ -350,6 +394,7 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+            const { buildProfileDiffSection } = require('./scripts/profile-diff.js');
 
             const fmtOps = (n) => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
             const fmtPercent = (change) => {
@@ -544,6 +589,19 @@ jobs:
               body += `<summary><strong>${shortName}</strong> — ${block.fileSummary}</summary>\n\n`;
               body += block.fileRows;
               body += `\n</details>\n\n`;
+            }
+
+            const skipProfile = /\[skip-profile-check\]/.test(context.payload.pull_request?.body || '');
+            try {
+              const profileDiff = buildProfileDiffSection({
+                baselineDir: 'profile-baseline',
+                currentDir: 'profile-current',
+                skip: skipProfile,
+              });
+              body += profileDiff.markdown + '\n\n';
+            } catch (error) {
+              console.log('Failed to build deterministic profile diff:', error.message);
+              body += '## Deterministic profile diff\n\nDeterministic profile diff: unavailable due to a comparison error.\n\n';
             }
 
             body += '<sub>Measured on ubuntu-latest x64. Benchmark ranges compare cached main-branch min/max ops/sec with the PR run; overlapping ranges are treated as unchanged noise. Percentage deltas are secondary context.</sub>';

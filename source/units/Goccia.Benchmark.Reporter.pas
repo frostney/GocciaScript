@@ -33,6 +33,7 @@ type
     Entries: array of TBenchmarkEntry;
     TotalBenchmarks: Integer;
     DurationNanoseconds: Int64;
+    DeterministicProfile: Boolean;
   end;
 
   TBenchmarkReportFormat = (brfConsole, brfText, brfCSV, brfJSON,
@@ -93,10 +94,14 @@ begin
     not Math.IsInfinite(AValue);
 end;
 
-function IsValidBenchmarkEntry(const AEntry: TBenchmarkEntry): Boolean;
+function IsValidBenchmarkEntry(const AEntry: TBenchmarkEntry;
+  const ADeterministicProfile: Boolean): Boolean;
 begin
-  Result := (AEntry.Error = '') and IsPositiveFinite(AEntry.OpsPerSec) and
-    IsPositiveFinite(AEntry.MeanMs) and (AEntry.Iterations > 0);
+  if ADeterministicProfile then
+    Result := (AEntry.Error = '') and (AEntry.Iterations > 0)
+  else
+    Result := (AEntry.Error = '') and IsPositiveFinite(AEntry.OpsPerSec) and
+      IsPositiveFinite(AEntry.MeanMs) and (AEntry.Iterations > 0);
 end;
 
 function FormatJSONNumber(const AValue: Double;
@@ -416,7 +421,7 @@ begin
     begin
       Entry := FFiles[F].Entries[E];
 
-      if IsValidBenchmarkEntry(Entry) then
+      if IsValidBenchmarkEntry(Entry, FFiles[F].DeterministicProfile) then
         Inc(ValidFileBenchmarkCount)
       else if FileOk then
       begin
@@ -562,7 +567,7 @@ begin
     for E := 0 to Length(FFiles[F].Entries) - 1 do
     begin
       Entry := FFiles[F].Entries[E];
-      if not IsValidBenchmarkEntry(Entry) then
+      if not IsValidBenchmarkEntry(Entry, FFiles[F].DeterministicProfile) then
         Exit(True);
       Inc(ValidBenchmarkCount);
     end;
