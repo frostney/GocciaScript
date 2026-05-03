@@ -664,10 +664,6 @@ begin
 
     // Compile the initializer into the value slot
     ACtx.CompileExpression(Info.Initializer, ValueSlot);
-    if (LocalIdx >= 0) and
-       (ACtx.Scope.GetLocal(LocalIdx).Slot = ValueSlot) and
-       ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
-      EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ValueSlot, UInt16(ValueSlot)));
 
     // Allocate a hidden register for the dispose method
     DisposeSlot := ACtx.Scope.AllocateRegister;
@@ -678,6 +674,10 @@ begin
     else
       Flags := 0;
     EmitInstruction(ACtx, EncodeABC(OP_USING_INIT, DisposeSlot, ValueSlot, Flags));
+    if (LocalIdx >= 0) and
+       (ACtx.Scope.GetLocal(LocalIdx).Slot = ValueSlot) and
+       ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+      EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ValueSlot, UInt16(ValueSlot)));
 
     // Track for disposal at block exit
     Entry.ValueSlot := ValueSlot;

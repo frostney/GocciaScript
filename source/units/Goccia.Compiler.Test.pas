@@ -697,7 +697,8 @@ var
   Instruction: UInt32;
 begin
   Module := CompileSource(
-    'let read; switch (1) { case 1: let value = "switch"; read = () => value; break; }');
+    'let read; switch (1) { case 1: let value = "switch"; read = () => value; break; }',
+    False, False, False, False, False, False);
   try
     Template := Module.TopLevel;
     CloseIndex := -1;
