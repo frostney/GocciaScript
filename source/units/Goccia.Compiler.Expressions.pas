@@ -133,6 +133,29 @@ begin
     Result := InferLocalType(AExpr);
 end;
 
+procedure SetNonStrictLocalTypeHint(const ACtx: TGocciaCompilationContext;
+  const ALocalIdx: Integer; const ATypeHint: TGocciaLocalType);
+var
+  Local: TGocciaCompilerLocal;
+begin
+  if ALocalIdx < 0 then
+    Exit;
+
+  Local := ACtx.Scope.GetLocal(ALocalIdx);
+  if Local.IsStrictlyTyped then
+    Exit;
+
+  ACtx.Scope.SetLocalTypeHint(ALocalIdx, ATypeHint);
+  ACtx.Template.SetLocalType(Local.Slot, ATypeHint);
+end;
+
+procedure RefreshNonStrictLocalTypeHint(const ACtx: TGocciaCompilationContext;
+  const ALocalIdx: Integer; const AExpr: TGocciaExpression);
+begin
+  SetNonStrictLocalTypeHint(ACtx, ALocalIdx,
+    InferredExpressionType(ACtx.Scope, AExpr));
+end;
+
 procedure CompileYield(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaYieldExpression; const ADest: UInt8);
 begin
@@ -605,6 +628,7 @@ begin
     begin
       EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ADest,
         ACtx.Template.AddConstantString(AExpr.Name)));
+      RefreshNonStrictLocalTypeHint(ACtx, LocalIdx, AExpr.Value);
       Exit;
     end;
     Slot := Local.Slot;
@@ -620,8 +644,7 @@ begin
     if not Local.IsStrictlyTyped then
     begin
       ValueType := InferredExpressionType(ACtx.Scope, AExpr.Value);
-      ACtx.Scope.SetLocalTypeHint(LocalIdx, ValueType);
-      ACtx.Template.SetLocalType(Slot, ValueType);
+      SetNonStrictLocalTypeHint(ACtx, LocalIdx, ValueType);
     end;
     Exit;
   end;
@@ -2286,6 +2309,7 @@ begin
           ACtx.CompileExpression(AExpr.Value, ADest);
           EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ADest,
             ACtx.Template.AddConstantString(AExpr.Name)));
+          SetNonStrictLocalTypeHint(ACtx, LocalIdx, sltUntyped);
         end;
         PatchJumpTarget(ACtx, JumpIdx);
         Exit;
@@ -2314,6 +2338,7 @@ begin
             UInt8(Ord(LocalType)), 0));
         if ADest <> Slot then
           EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ADest, Slot));
+        SetNonStrictLocalTypeHint(ACtx, LocalIdx, sltUntyped);
       end;
       PatchJumpTarget(ACtx, JumpIdx);
       Exit;
@@ -2393,6 +2418,7 @@ begin
       EmitInstruction(ACtx, EncodeABC(Op, ADest, RegResult, RegVal));
       EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ADest,
         ACtx.Template.AddConstantString(AExpr.Name)));
+      SetNonStrictLocalTypeHint(ACtx, LocalIdx, sltUntyped);
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
       Exit;
@@ -2418,8 +2444,7 @@ begin
       if IsArithmeticCompoundAssign(AExpr.Operator, ArithOp) and
          IsKnownNumeric(LocalType) and IsKnownNumeric(ValType) then
         ResultType := sltFloat;
-      ACtx.Scope.SetLocalTypeHint(LocalIdx, ResultType);
-      ACtx.Template.SetLocalType(Slot, ResultType);
+      SetNonStrictLocalTypeHint(ACtx, LocalIdx, ResultType);
     end;
     if ADest <> Slot then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));

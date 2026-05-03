@@ -42,6 +42,8 @@ type
       const AEnableDeadBranchElimination: Boolean = True): TGocciaBytecodeModule;
     function CountOp(const ATemplate: TGocciaFunctionTemplate;
       const AOp: TGocciaOpCode): Integer;
+    function FindFunctionWithOp(const ATemplate: TGocciaFunctionTemplate;
+      const AOp: TGocciaOpCode): TGocciaFunctionTemplate;
     function CountArithmeticOps(
       const ATemplate: TGocciaFunctionTemplate): Integer;
     function HasLoadInt(const ATemplate: TGocciaFunctionTemplate;
@@ -77,8 +79,13 @@ type
     procedure TestInferredNumericLocalsUseTypedArithmetic;
     procedure TestAnnotatedParametersUseTypedArithmetic;
     procedure TestAssignmentClearsStaleNumericHint;
+    procedure TestGlobalBackedAssignmentClearsStaleNumericHint;
+    procedure TestShortCircuitAssignmentClearsStaleNumericHint;
+    procedure TestGlobalBackedShortCircuitClearsStaleNumericHint;
+    procedure TestGlobalBackedCompoundClearsStaleNumericHint;
     procedure TestCapturedNumericLocalAvoidsTypedArithmetic;
     procedure TestForOfSkipsHandlerWithoutAbruptClose;
+    procedure TestForOfUsesHandlerForExpressionBody;
     procedure TestForOfUsesOneIteratorCloseHandler;
     procedure TestConstantIfEliminatesBranch;
     procedure TestConstantIfPrunesAbruptTail;
@@ -110,8 +117,13 @@ begin
   Test('Inferred numeric locals use typed arithmetic', TestInferredNumericLocalsUseTypedArithmetic);
   Test('Annotated parameters use typed arithmetic', TestAnnotatedParametersUseTypedArithmetic);
   Test('Assignment clears stale numeric hint', TestAssignmentClearsStaleNumericHint);
+  Test('Global-backed assignment clears stale numeric hint', TestGlobalBackedAssignmentClearsStaleNumericHint);
+  Test('Short-circuit assignment clears stale numeric hint', TestShortCircuitAssignmentClearsStaleNumericHint);
+  Test('Global-backed short-circuit clears stale numeric hint', TestGlobalBackedShortCircuitClearsStaleNumericHint);
+  Test('Global-backed compound clears stale numeric hint', TestGlobalBackedCompoundClearsStaleNumericHint);
   Test('Captured numeric local avoids typed arithmetic', TestCapturedNumericLocalAvoidsTypedArithmetic);
   Test('for-of skips handler without abrupt close', TestForOfSkipsHandlerWithoutAbruptClose);
+  Test('for-of uses handler for expression body', TestForOfUsesHandlerForExpressionBody);
   Test('for-of uses one iterator-close handler', TestForOfUsesOneIteratorCloseHandler);
   Test('Constant if eliminates branch', TestConstantIfEliminatesBranch);
   Test('Constant if prunes abrupt tail', TestConstantIfPrunesAbruptTail);
@@ -171,6 +183,25 @@ begin
   for I := 0 to ATemplate.CodeCount - 1 do
     if TGocciaOpCode(DecodeOp(ATemplate.GetInstruction(I))) = AOp then
       Inc(Result);
+end;
+
+function TTestCompiler.FindFunctionWithOp(
+  const ATemplate: TGocciaFunctionTemplate;
+  const AOp: TGocciaOpCode): TGocciaFunctionTemplate;
+var
+  I: Integer;
+  Candidate: TGocciaFunctionTemplate;
+begin
+  Result := nil;
+  for I := 0 to ATemplate.FunctionCount - 1 do
+  begin
+    Candidate := ATemplate.GetFunction(I);
+    if CountOp(Candidate, AOp) > 0 then
+      Exit(Candidate);
+    Result := FindFunctionWithOp(Candidate, AOp);
+    if Assigned(Result) then
+      Exit;
+  end;
 end;
 
 function TTestCompiler.CountArithmeticOps(
@@ -612,7 +643,7 @@ var
 begin
   Module := CompileSource(
     'let a = 1; let b = 2; let c = a + b; c;',
-    False, False, False, False);
+    False, False, False, False, False, False);
   try
     Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(1);
     Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
@@ -628,11 +659,15 @@ var
 begin
   Module := CompileSource(
     'const add = (a: number, b: number): number => a + b; add(1, 2);',
-    True, False, False, False);
+    True, False, False, False, False, False);
   try
-    Func := Module.TopLevel.GetFunction(0);
-    Expect<Integer>(CountOp(Func, OP_ADD_FLOAT)).ToBe(1);
-    Expect<Integer>(CountOp(Func, OP_ADD)).ToBe(0);
+    Func := FindFunctionWithOp(Module.TopLevel, OP_ADD_FLOAT);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      Expect<Integer>(CountOp(Func, OP_ADD_FLOAT)).ToBe(1);
+      Expect<Integer>(CountOp(Func, OP_ADD)).ToBe(0);
+    end;
   finally
     Module.Free;
   end;
@@ -644,10 +679,70 @@ var
 begin
   Module := CompileSource(
     'let a = 1; a = "x"; const b = a + 1; b;',
-    False, False, False, False);
+    False, False, False, False, False, False);
   try
     Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
     Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestGlobalBackedAssignmentClearsStaleNumericHint;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let a = 1; a = "x"; const b = a + 1; b;',
+    False, False, True, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestShortCircuitAssignmentClearsStaleNumericHint;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let a = 1; a ||= "x"; const b = a + 1; b;',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestGlobalBackedShortCircuitClearsStaleNumericHint;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let a = 1; a ||= "x"; const b = a + 1; b;',
+    False, False, True, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestGlobalBackedCompoundClearsStaleNumericHint;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let a = 1; a += "x"; const b = a + 1; b;',
+    False, False, True, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(2);
   finally
     Module.Free;
   end;
@@ -663,7 +758,7 @@ begin
     'set();' + LineEnding +
     'const b = a + 1;' + LineEnding +
     'b;',
-    False, False, False, False);
+    False, False, False, False, False, False);
   try
     Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
     Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(1);
@@ -677,11 +772,26 @@ var
   Module: TGocciaBytecodeModule;
 begin
   Module := CompileSource(
-    'let sum = 0; for (const x of [1, 2, 3]) { sum = sum + x; } sum;',
-    False, False, False, False);
+    'for (const x of [1, 2, 3]) { }',
+    False, False, False, False, False, False);
   try
     Expect<Integer>(CountOp(Module.TopLevel, OP_PUSH_HANDLER)).ToBe(0);
     Expect<Integer>(CountOp(Module.TopLevel, OP_POP_HANDLER)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestForOfUsesHandlerForExpressionBody;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let sum = 0; for (const x of [1, 2, 3]) { sum = sum + x; } sum;',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_PUSH_HANDLER)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_POP_HANDLER)).ToBe(1);
   finally
     Module.Free;
   end;
@@ -693,7 +803,7 @@ var
 begin
   Module := CompileSource(
     'for (const x of [1, 2, 3]) { throw x; }',
-    False, False, False, False);
+    False, False, False, False, False, False);
   try
     Expect<Integer>(CountOp(Module.TopLevel, OP_PUSH_HANDLER)).ToBe(1);
     Expect<Integer>(CountOp(Module.TopLevel, OP_POP_HANDLER)).ToBe(1);

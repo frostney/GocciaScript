@@ -774,14 +774,8 @@ end;
 function StatementNeedsIteratorClose(const AStmt: TGocciaStatement): Boolean;
 var
   BlockStmt: TGocciaBlockStatement;
-  IfStmt: TGocciaIfStatement;
   TryStmt: TGocciaTryStatement;
-  SwitchStmt: TGocciaSwitchStatement;
-  ForStmt: TGocciaForStatement;
-  WhileStmt: TGocciaWhileStatement;
-  DoWhileStmt: TGocciaDoWhileStatement;
-  ForOfStmt: TGocciaForOfStatement;
-  I, J: Integer;
+  I: Integer;
 begin
   if not Assigned(AStmt) then
     Exit(False);
@@ -791,22 +785,31 @@ begin
      (AStmt is TGocciaThrowStatement) then
     Exit(True);
 
+  if (AStmt is TGocciaEmptyStatement) or
+     (AStmt is TGocciaContinueStatement) then
+    Exit(False);
+
+  if (AStmt is TGocciaExpressionStatement) or
+     (AStmt is TGocciaVariableDeclaration) or
+     (AStmt is TGocciaDestructuringDeclaration) or
+     (AStmt is TGocciaUsingDeclaration) then
+    Exit(True);
+
   if AStmt is TGocciaBlockStatement then
   begin
     BlockStmt := TGocciaBlockStatement(AStmt);
     for I := 0 to BlockStmt.Nodes.Count - 1 do
-      if (BlockStmt.Nodes[I] is TGocciaStatement) and
-         StatementNeedsIteratorClose(TGocciaStatement(BlockStmt.Nodes[I])) then
+    begin
+      if not (BlockStmt.Nodes[I] is TGocciaStatement) then
         Exit(True);
+      if StatementNeedsIteratorClose(TGocciaStatement(BlockStmt.Nodes[I])) then
+        Exit(True);
+    end;
     Exit(False);
   end;
 
   if AStmt is TGocciaIfStatement then
-  begin
-    IfStmt := TGocciaIfStatement(AStmt);
-    Exit(StatementNeedsIteratorClose(IfStmt.Consequent) or
-      StatementNeedsIteratorClose(IfStmt.Alternate));
-  end;
+    Exit(True);
 
   if AStmt is TGocciaTryStatement then
   begin
@@ -817,40 +820,21 @@ begin
   end;
 
   if AStmt is TGocciaSwitchStatement then
-  begin
-    SwitchStmt := TGocciaSwitchStatement(AStmt);
-    for I := 0 to SwitchStmt.Cases.Count - 1 do
-      for J := 0 to SwitchStmt.Cases[I].Consequent.Count - 1 do
-        if StatementNeedsIteratorClose(SwitchStmt.Cases[I].Consequent[J]) then
-          Exit(True);
-    Exit(False);
-  end;
+    Exit(True);
 
   if AStmt is TGocciaForOfStatement then
-  begin
-    ForOfStmt := TGocciaForOfStatement(AStmt);
-    Exit(StatementNeedsIteratorClose(ForOfStmt.Body));
-  end;
+    Exit(True);
 
   if AStmt is TGocciaForStatement then
-  begin
-    ForStmt := TGocciaForStatement(AStmt);
-    Exit(StatementNeedsIteratorClose(ForStmt.Body));
-  end;
+    Exit(True);
 
   if AStmt is TGocciaWhileStatement then
-  begin
-    WhileStmt := TGocciaWhileStatement(AStmt);
-    Exit(StatementNeedsIteratorClose(WhileStmt.Body));
-  end;
+    Exit(True);
 
   if AStmt is TGocciaDoWhileStatement then
-  begin
-    DoWhileStmt := TGocciaDoWhileStatement(AStmt);
-    Exit(StatementNeedsIteratorClose(DoWhileStmt.Body));
-  end;
+    Exit(True);
 
-  Result := False;
+  Result := True;
 end;
 
 procedure EmitPendingEntryCleanup(const ACtx: TGocciaCompilationContext;
