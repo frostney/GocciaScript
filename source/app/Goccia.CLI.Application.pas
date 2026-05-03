@@ -632,6 +632,9 @@ begin
     ConfigureCreatedEngine(Result, FileConfig);
     if Assigned(FEngineOptions) then
       ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig);
+    if AExecutor is TGocciaBytecodeExecutor then
+      TGocciaBytecodeExecutor(AExecutor).GlobalBackedTopLevel :=
+        Result.SourceType = stScript;
   except
     Result.Free;
     raise;

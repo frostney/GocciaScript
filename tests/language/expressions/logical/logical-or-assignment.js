@@ -115,6 +115,17 @@ test("logical OR assignment only throws for const bindings when an assignment is
   }).toThrow(TypeError);
 });
 
+test("logical OR assignment evaluates RHS before throwing for assigned const", () => {
+  let sideEffect = 0;
+  const falsy = null;
+
+  expect(() => {
+    falsy ||= (sideEffect = 1);
+  }).toThrow(TypeError);
+
+  expect(sideEffect).toBe(1);
+});
+
 test("logical OR assignment throws for unresolved identifiers", () => {
   expect(() => {
     missingOrValue ||= 1;

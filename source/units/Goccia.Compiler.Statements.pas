@@ -106,6 +106,13 @@ type
     IsAwait: Boolean;
   end;
 
+  TPreallocatedUsingDisposeSlot = record
+    Declaration: TGocciaUsingDeclaration;
+    VariableIndex: Integer;
+    DisposeSlot: UInt8;
+    ResourceRegistered: Boolean;
+  end;
+
   TPendingFinallyEntry = record
     FinallyBlock: TGocciaBlockStatement;
     // Non-nil when this entry represents a using block's disposal.
@@ -408,19 +415,33 @@ begin
 end;
 
 { B field encodes the declaration mode for OP_DEFINE_GLOBAL_CONST:
+  0 = var declaration
   1 = let declaration (throws on re-declaration)
-  2 = const declaration (throws on re-declaration, non-writable) }
+  2 = const declaration (throws on re-declaration, non-writable)
+  3 = var declaration without syntactic initializer }
 const
+  GLOBAL_DEFINE_VAR = 0;
   GLOBAL_DEFINE_LET = 1;
   GLOBAL_DEFINE_CONST = 2;
+  GLOBAL_DEFINE_VAR_DECL = 3;
+
+function FindVarLocalIndex(const AScope: TGocciaCompilerScope;
+  const AName: string): Integer; forward;
+function FindLocalBySlot(const AScope: TGocciaCompilerScope;
+  const AName: string; const ASlot: UInt8): Integer; forward;
 
 procedure EmitGlobalDefine(const ACtx: TGocciaCompilationContext;
-  const ASlot: UInt8; const AName: string; const AIsConst: Boolean);
+  const ASlot: UInt8; const AName: string; const AIsConst: Boolean;
+  const AIsVar: Boolean = False; const AHasInitializer: Boolean = True);
 var
   NameIdx: UInt16;
   DeclMode: UInt8;
 begin
-  if AIsConst then
+  if AIsVar and (not AHasInitializer) then
+    DeclMode := GLOBAL_DEFINE_VAR_DECL
+  else if AIsVar then
+    DeclMode := GLOBAL_DEFINE_VAR
+  else if AIsConst then
     DeclMode := GLOBAL_DEFINE_CONST
   else
     DeclMode := GLOBAL_DEFINE_LET;
@@ -441,16 +462,19 @@ var
   TypeHint, AnnotationType: TGocciaLocalType;
   ConstantValue: TGocciaCompileTimeValue;
   ConstantType: TGocciaLocalType;
-  IsStrict, HasRealInitializer, IsTopLevelGlobalBacked, IsVarRedeclaration: Boolean;
+  IsBlockScopedFunctionDeclaration, IsStrict, HasInitializer, HasRealInitializer,
+  IsTopLevelGlobalBacked, IsVarRedeclaration: Boolean;
   CanTrackConstant: Boolean;
 begin
   for I := 0 to High(AStmt.Variables) do
   begin
     Info := AStmt.Variables[I];
-    if AStmt.IsVar then
+    IsBlockScopedFunctionDeclaration := AStmt.IsFunctionDeclaration and
+      (ACtx.Scope.Depth > 0);
+    if AStmt.IsVar and (not IsBlockScopedFunctionDeclaration) then
     begin
       // Track whether this is a redeclaration (slot already exists)
-      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      LocalIdx := FindVarLocalIndex(ACtx.Scope, Info.Name);
       IsVarRedeclaration := LocalIdx >= 0;
       Slot := ACtx.Scope.DeclareVarLocal(Info.Name);
     end
@@ -469,14 +493,17 @@ begin
     end;
 
     IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
-      (ACtx.Scope.Depth = 0);
-    if IsTopLevelGlobalBacked then
+      ((AStmt.IsVar and (not IsBlockScopedFunctionDeclaration)) or
+       ((not AStmt.IsVar) and (ACtx.Scope.Depth = 0)));
+    if IsTopLevelGlobalBacked and AStmt.IsVar and
+       (not IsBlockScopedFunctionDeclaration) then
     begin
-      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      LocalIdx := FindLocalBySlot(ACtx.Scope, Info.Name, Slot);
       if LocalIdx >= 0 then
         ACtx.Scope.MarkGlobalBacked(LocalIdx);
     end;
 
+    HasInitializer := Info.HasInitializer;
     HasRealInitializer := Assigned(Info.Initializer) and
                           not IsUndefinedInitializer(Info.Initializer);
 
@@ -535,7 +562,7 @@ begin
     end;
 
     if Assigned(Info.Initializer) and
-       not (AStmt.IsVar and (not HasRealInitializer) and IsVarRedeclaration) then
+       not (AStmt.IsVar and (not HasInitializer) and IsVarRedeclaration) then
     begin
       FuncCount := ACtx.Template.FunctionCount;
 
@@ -573,7 +600,7 @@ begin
     // a cell that copied the register's initial (undefined) value.  The
     // initializer wrote directly to the register (e.g. OP_LOAD_INT) bypassing
     // the cell.  Emit OP_SET_LOCAL to sync the cell with the register.
-    if not AStmt.IsVar then
+    if (not AStmt.IsVar) or IsBlockScopedFunctionDeclaration or HasInitializer then
     begin
       LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
       if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
@@ -601,7 +628,8 @@ begin
     end;
 
     if IsTopLevelGlobalBacked then
-      EmitGlobalDefine(ACtx, Slot, Info.Name, AStmt.IsConst);
+      EmitGlobalDefine(ACtx, Slot, Info.Name, AStmt.IsConst, AStmt.IsVar,
+        HasInitializer);
   end;
 end;
 
@@ -609,6 +637,57 @@ threadvar
   // Module-level stack of using resource entries for the current block.
   // Populated by CompileUsingDeclaration, consumed by CompileBlockStatement.
   GUsingResources: TList<TUsingResourceEntry>;
+  GPreallocatedUsingDisposeSlots: TList<TPreallocatedUsingDisposeSlot>;
+
+procedure RegisterUsingResourceForDisposal(const AEntry: TUsingResourceEntry);
+var
+  Len, PendingIdx: Integer;
+  PendingEntry: TPendingFinallyEntry;
+begin
+  if not Assigned(GUsingResources) then
+    GUsingResources := TList<TUsingResourceEntry>.Create;
+  GUsingResources.Add(AEntry);
+
+  if Assigned(GPendingFinally) and (GPendingFinally.Count > 0) then
+  begin
+    PendingIdx := GPendingFinally.Count - 1;
+    PendingEntry := GPendingFinally[PendingIdx];
+    if not Assigned(PendingEntry.FinallyBlock) then
+    begin
+      Len := Length(PendingEntry.UsingResources);
+      SetLength(PendingEntry.UsingResources, Len + 1);
+      PendingEntry.UsingResources[Len] := AEntry;
+      GPendingFinally[PendingIdx] := PendingEntry;
+    end;
+  end;
+end;
+
+function TryUsePreallocatedUsingDisposeSlot(
+  const ADeclaration: TGocciaUsingDeclaration; const AVariableIndex: Integer;
+  out ADisposeSlot: UInt8; out AResourceRegistered: Boolean): Boolean;
+var
+  I: Integer;
+  Preallocated: TPreallocatedUsingDisposeSlot;
+begin
+  Result := False;
+  ADisposeSlot := 0;
+  AResourceRegistered := False;
+  if not Assigned(GPreallocatedUsingDisposeSlots) then
+    Exit;
+
+  for I := GPreallocatedUsingDisposeSlots.Count - 1 downto 0 do
+  begin
+    Preallocated := GPreallocatedUsingDisposeSlots[I];
+    if (Preallocated.Declaration = ADeclaration) and
+       (Preallocated.VariableIndex = AVariableIndex) then
+    begin
+      ADisposeSlot := Preallocated.DisposeSlot;
+      AResourceRegistered := Preallocated.ResourceRegistered;
+      GPreallocatedUsingDisposeSlots.Delete(I);
+      Exit(True);
+    end;
+  end;
+end;
 
 // TC39 Explicit Resource Management: compile using / await using declaration.
 // Emits OP_USING_INIT for each variable to validate and extract the dispose method.
@@ -617,26 +696,40 @@ threadvar
 procedure CompileUsingDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaUsingDeclaration);
 var
-  I, Len: Integer;
+  I, LocalIdx: Integer;
   Info: TGocciaVariableInfo;
   ValueSlot, DisposeSlot: UInt8;
   Flags: UInt8;
   Entry: TUsingResourceEntry;
-  PendingIdx: Integer;
-  PendingEntry: TPendingFinallyEntry;
+  ResourceRegistered: Boolean;
 begin
   for I := 0 to High(AStmt.Variables) do
   begin
     Info := AStmt.Variables[I];
 
-    // Declare the using variable as const
-    ValueSlot := ACtx.Scope.DeclareLocal(Info.Name, True);
+    // Reuse a block predeclaration when one was created for hoisted function
+    // captures; otherwise declare the using variable at the current depth.
+    LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+    if (LocalIdx >= 0) and
+       (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) then
+      ValueSlot := ACtx.Scope.GetLocal(LocalIdx).Slot
+    else
+    begin
+      ValueSlot := ACtx.Scope.DeclareLocal(Info.Name, True);
+      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+    end;
 
     // Compile the initializer into the value slot
     ACtx.CompileExpression(Info.Initializer, ValueSlot);
 
-    // Allocate a hidden register for the dispose method
-    DisposeSlot := ACtx.Scope.AllocateRegister;
+    // Allocate a hidden register for the dispose method, or reuse a switch
+    // prelude slot that was initialized before case dispatch.
+    if not TryUsePreallocatedUsingDisposeSlot(AStmt, I, DisposeSlot,
+      ResourceRegistered) then
+    begin
+      DisposeSlot := ACtx.Scope.AllocateRegister;
+      ResourceRegistered := False;
+    end;
 
     // OP_USING_INIT: A=disposeMethodDest, B=valueSource, C=flags (0=sync, 1=async)
     if AStmt.IsAwait then
@@ -644,28 +737,17 @@ begin
     else
       Flags := 0;
     EmitInstruction(ACtx, EncodeABC(OP_USING_INIT, DisposeSlot, ValueSlot, Flags));
+    if (LocalIdx >= 0) and
+       (ACtx.Scope.GetLocal(LocalIdx).Slot = ValueSlot) and
+       ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+      EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ValueSlot, UInt16(ValueSlot)));
 
     // Track for disposal at block exit
     Entry.ValueSlot := ValueSlot;
     Entry.DisposeSlot := DisposeSlot;
     Entry.IsAwait := AStmt.IsAwait;
-    if not Assigned(GUsingResources) then
-      GUsingResources := TList<TUsingResourceEntry>.Create;
-    GUsingResources.Add(Entry);
-
-    // Update the topmost pending-finally entry so return/break can find resources
-    if Assigned(GPendingFinally) and (GPendingFinally.Count > 0) then
-    begin
-      PendingIdx := GPendingFinally.Count - 1;
-      PendingEntry := GPendingFinally[PendingIdx];
-      if not Assigned(PendingEntry.FinallyBlock) then
-      begin
-        Len := Length(PendingEntry.UsingResources);
-        SetLength(PendingEntry.UsingResources, Len + 1);
-        PendingEntry.UsingResources[Len] := Entry;
-        GPendingFinally[PendingIdx] := PendingEntry;
-      end;
-    end;
+    if not ResourceRegistered then
+      RegisterUsingResourceForDisposal(Entry);
   end;
 end;
 
@@ -688,6 +770,279 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_AWAIT,
         AResources[I].DisposeSlot, AResources[I].DisposeSlot, 0));
   end;
+end;
+
+function GetBlockFunctionDeclaration(const ANode: TGocciaASTNode): TGocciaVariableDeclaration;
+begin
+  if ANode is TGocciaVariableDeclaration then
+    Result := TGocciaVariableDeclaration(ANode)
+  else if ANode is TGocciaExportVariableDeclaration then
+    Result := TGocciaExportVariableDeclaration(ANode).Declaration
+  else
+    Exit(nil);
+  if not Result.IsFunctionDeclaration then
+    Result := nil;
+end;
+
+function FindVarLocalIndex(const AScope: TGocciaCompilerScope;
+  const AName: string): Integer;
+var
+  I: Integer;
+  Local: TGocciaCompilerLocal;
+begin
+  for I := 0 to AScope.LocalCount - 1 do
+  begin
+    Local := AScope.GetLocal(I);
+    if (Local.Name = AName) and (Local.Depth = 0) then
+      Exit(I);
+  end;
+  Result := -1;
+end;
+
+function FindLocalBySlot(const AScope: TGocciaCompilerScope;
+  const AName: string; const ASlot: UInt8): Integer;
+var
+  I: Integer;
+  Local: TGocciaCompilerLocal;
+begin
+  for I := 0 to AScope.LocalCount - 1 do
+  begin
+    Local := AScope.GetLocal(I);
+    if (Local.Name = AName) and (Local.Slot = ASlot) then
+      Exit(I);
+  end;
+  Result := -1;
+end;
+
+procedure PredeclareBlockFunctionLocal(const AVarDecl: TGocciaVariableDeclaration;
+  const AScope: TGocciaCompilerScope);
+var
+  I, LocalIdx: Integer;
+begin
+  for I := 0 to High(AVarDecl.Variables) do
+  begin
+    LocalIdx := AScope.ResolveLocal(AVarDecl.Variables[I].Name);
+    if (LocalIdx < 0) or (AScope.GetLocal(LocalIdx).Depth <> AScope.Depth) then
+      AScope.DeclareLocal(AVarDecl.Variables[I].Name, False);
+  end;
+end;
+
+procedure PredeclareBlockVariableLocals(const ACtx: TGocciaCompilationContext;
+  const AVarDecl: TGocciaVariableDeclaration;
+  const AEmitInitializers: Boolean = True);
+var
+  I, LocalIdx: Integer;
+  Slot: UInt8;
+begin
+  for I := 0 to High(AVarDecl.Variables) do
+  begin
+    LocalIdx := ACtx.Scope.ResolveLocal(AVarDecl.Variables[I].Name);
+    if (LocalIdx < 0) or (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) then
+    begin
+      Slot := ACtx.Scope.DeclareLocal(AVarDecl.Variables[I].Name,
+        AVarDecl.IsConst);
+      if AEmitInitializers then
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+    end;
+  end;
+end;
+
+procedure PredeclareBlockPatternLocals(const ACtx: TGocciaCompilationContext;
+  const APattern: TGocciaDestructuringPattern; const AIsConst: Boolean;
+  const AEmitInitializers: Boolean = True);
+var
+  I, LocalIdx: Integer;
+  Names: TStringList;
+  Slot: UInt8;
+begin
+  Names := TStringList.Create;
+  Names.CaseSensitive := True;
+  try
+    CollectPatternBindingNames(APattern, Names, True);
+    for I := 0 to Names.Count - 1 do
+    begin
+      LocalIdx := ACtx.Scope.ResolveLocal(Names[I]);
+      if (LocalIdx < 0) or
+         (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) then
+      begin
+        Slot := ACtx.Scope.DeclareLocal(Names[I], AIsConst);
+        if AEmitInitializers then
+          EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+      end;
+    end;
+  finally
+    Names.Free;
+  end;
+end;
+
+procedure PredeclareBlockNamedLexicalLocal(
+  const ACtx: TGocciaCompilationContext; const AName: string;
+  const AIsConst: Boolean; const AEmitInitializer: Boolean = True);
+var
+  LocalIdx: Integer;
+  Slot: UInt8;
+begin
+  LocalIdx := ACtx.Scope.ResolveLocal(AName);
+  if (LocalIdx < 0) or
+     (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) then
+  begin
+    Slot := ACtx.Scope.DeclareLocal(AName, AIsConst);
+    if AEmitInitializer then
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+  end;
+end;
+
+procedure PredeclareBlockUsingLocals(const ACtx: TGocciaCompilationContext;
+  const AUsingDecl: TGocciaUsingDeclaration;
+  const AEmitInitializers: Boolean = True);
+var
+  I: Integer;
+begin
+  for I := 0 to High(AUsingDecl.Variables) do
+    PredeclareBlockNamedLexicalLocal(ACtx, AUsingDecl.Variables[I].Name, True,
+      AEmitInitializers);
+end;
+
+procedure PredeclareBlockLexicalLocals(const ANode: TGocciaASTNode;
+  const ACtx: TGocciaCompilationContext;
+  const AEmitInitializers: Boolean = True);
+var
+  VarDecl: TGocciaVariableDeclaration;
+begin
+  if ANode is TGocciaVariableDeclaration then
+  begin
+    VarDecl := TGocciaVariableDeclaration(ANode);
+    if VarDecl.IsFunctionDeclaration then
+      PredeclareBlockFunctionLocal(VarDecl, ACtx.Scope)
+    else if not VarDecl.IsVar then
+      PredeclareBlockVariableLocals(ACtx, VarDecl, AEmitInitializers);
+  end
+  else if ANode is TGocciaExportVariableDeclaration then
+  begin
+    VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration;
+    if VarDecl.IsFunctionDeclaration then
+      PredeclareBlockFunctionLocal(VarDecl, ACtx.Scope)
+    else if not VarDecl.IsVar then
+      PredeclareBlockVariableLocals(ACtx, VarDecl, AEmitInitializers);
+  end
+  else if (ANode is TGocciaDestructuringDeclaration) and
+          not TGocciaDestructuringDeclaration(ANode).IsVar then
+    PredeclareBlockPatternLocals(ACtx,
+      TGocciaDestructuringDeclaration(ANode).Pattern,
+      TGocciaDestructuringDeclaration(ANode).IsConst, AEmitInitializers)
+  else if ANode is TGocciaUsingDeclaration then
+    PredeclareBlockUsingLocals(ACtx, TGocciaUsingDeclaration(ANode),
+      AEmitInitializers)
+  else if ANode is TGocciaClassDeclaration then
+    PredeclareBlockNamedLexicalLocal(ACtx,
+      TGocciaClassDeclaration(ANode).ClassDefinition.Name, True,
+      AEmitInitializers)
+  else if ANode is TGocciaEnumDeclaration then
+    PredeclareBlockNamedLexicalLocal(ACtx,
+      TGocciaEnumDeclaration(ANode).Name, False, AEmitInitializers)
+  else if ANode is TGocciaExportEnumDeclaration then
+    PredeclareBlockNamedLexicalLocal(ACtx,
+      TGocciaExportEnumDeclaration(ANode).Declaration.Name, False,
+      AEmitInitializers);
+end;
+
+procedure EmitBlockLexicalHoleInitializer(const ACtx: TGocciaCompilationContext;
+  const AName: string);
+var
+  LocalIdx: Integer;
+  Local: TGocciaCompilerLocal;
+begin
+  LocalIdx := ACtx.Scope.ResolveLocal(AName);
+  if LocalIdx < 0 then
+    Exit;
+  Local := ACtx.Scope.GetLocal(LocalIdx);
+  if Local.Depth = ACtx.Scope.Depth then
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Local.Slot, 0, 0));
+end;
+
+procedure EmitBlockPatternHoleInitializers(const ACtx: TGocciaCompilationContext;
+  const APattern: TGocciaDestructuringPattern);
+var
+  I: Integer;
+  Names: TStringList;
+begin
+  Names := TStringList.Create;
+  Names.CaseSensitive := True;
+  try
+    CollectPatternBindingNames(APattern, Names, True);
+    for I := 0 to Names.Count - 1 do
+      EmitBlockLexicalHoleInitializer(ACtx, Names[I]);
+  finally
+    Names.Free;
+  end;
+end;
+
+procedure EmitBlockLexicalHoleInitializers(const ANode: TGocciaASTNode;
+  const ACtx: TGocciaCompilationContext);
+var
+  I: Integer;
+  VarDecl: TGocciaVariableDeclaration;
+  UsingDecl: TGocciaUsingDeclaration;
+begin
+  if ANode is TGocciaVariableDeclaration then
+  begin
+    VarDecl := TGocciaVariableDeclaration(ANode);
+    if VarDecl.IsVar or VarDecl.IsFunctionDeclaration then
+      Exit;
+    for I := 0 to High(VarDecl.Variables) do
+      EmitBlockLexicalHoleInitializer(ACtx, VarDecl.Variables[I].Name);
+  end
+  else if ANode is TGocciaExportVariableDeclaration then
+  begin
+    VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration;
+    if VarDecl.IsVar or VarDecl.IsFunctionDeclaration then
+      Exit;
+    for I := 0 to High(VarDecl.Variables) do
+      EmitBlockLexicalHoleInitializer(ACtx, VarDecl.Variables[I].Name);
+  end
+  else if (ANode is TGocciaDestructuringDeclaration) and
+          not TGocciaDestructuringDeclaration(ANode).IsVar then
+    EmitBlockPatternHoleInitializers(ACtx,
+      TGocciaDestructuringDeclaration(ANode).Pattern)
+  else if ANode is TGocciaUsingDeclaration then
+  begin
+    UsingDecl := TGocciaUsingDeclaration(ANode);
+    for I := 0 to High(UsingDecl.Variables) do
+      EmitBlockLexicalHoleInitializer(ACtx, UsingDecl.Variables[I].Name);
+  end
+  else if ANode is TGocciaClassDeclaration then
+    EmitBlockLexicalHoleInitializer(ACtx,
+      TGocciaClassDeclaration(ANode).ClassDefinition.Name)
+  else if ANode is TGocciaEnumDeclaration then
+    EmitBlockLexicalHoleInitializer(ACtx, TGocciaEnumDeclaration(ANode).Name)
+  else if ANode is TGocciaExportEnumDeclaration then
+    EmitBlockLexicalHoleInitializer(ACtx,
+      TGocciaExportEnumDeclaration(ANode).Declaration.Name);
+end;
+
+function NeedsBlockLexicalPredeclaration(const ANode: TGocciaASTNode): Boolean;
+var
+  VarDecl: TGocciaVariableDeclaration;
+begin
+  if ANode is TGocciaVariableDeclaration then
+  begin
+    VarDecl := TGocciaVariableDeclaration(ANode);
+    Exit(VarDecl.IsFunctionDeclaration or not VarDecl.IsVar);
+  end
+  else if ANode is TGocciaExportVariableDeclaration then
+  begin
+    VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration;
+    Exit(VarDecl.IsFunctionDeclaration or not VarDecl.IsVar);
+  end
+  else if ANode is TGocciaDestructuringDeclaration then
+    Exit(not TGocciaDestructuringDeclaration(ANode).IsVar)
+  else if (ANode is TGocciaUsingDeclaration) or
+          (ANode is TGocciaClassDeclaration) or
+          (ANode is TGocciaEnumDeclaration) or
+          (ANode is TGocciaExportEnumDeclaration) then
+    Exit(True);
+
+  Result := False;
 end;
 
 function StatementAlwaysAbrupt(const AStmt: TGocciaStatement): Boolean;
@@ -793,9 +1148,16 @@ var
   HandlerJump, EndJump, NullishJump: Integer;
   SavedResources: array of TUsingResourceEntry;
   PendingEntry: TPendingFinallyEntry;
-  StatementAbrupt: Boolean;
+  HasFunctionDecl, StatementAbrupt: Boolean;
 begin
   Result := False;
+  HasFunctionDecl := False;
+  for I := 0 to AStmt.Nodes.Count - 1 do
+    if GetBlockFunctionDeclaration(AStmt.Nodes[I]) <> nil then
+    begin
+      HasFunctionDecl := True;
+      Break;
+    end;
 
   // Check if this block contains any using declarations
   HasUsing := False;
@@ -811,8 +1173,16 @@ begin
   begin
     ACtx.Scope.BeginScope;
     for I := 0 to AStmt.Nodes.Count - 1 do
+      PredeclareBlockLexicalLocals(AStmt.Nodes[I], ACtx);
+    if HasFunctionDecl then
+      for I := 0 to AStmt.Nodes.Count - 1 do
+        if GetBlockFunctionDeclaration(AStmt.Nodes[I]) <> nil then
+          ACtx.CompileStatement(TGocciaStatement(AStmt.Nodes[I]));
+    for I := 0 to AStmt.Nodes.Count - 1 do
     begin
       Node := AStmt.Nodes[I];
+      if GetBlockFunctionDeclaration(Node) <> nil then
+        Continue;
       if Node is TGocciaStatement then
       begin
         StatementAbrupt := ACtx.CompileStatement(TGocciaStatement(Node));
@@ -837,6 +1207,12 @@ begin
 
   // Slow path: block with using declarations — compile as try/finally
   ACtx.Scope.BeginScope;
+  for I := 0 to AStmt.Nodes.Count - 1 do
+    PredeclareBlockLexicalLocals(AStmt.Nodes[I], ACtx);
+  if HasFunctionDecl then
+    for I := 0 to AStmt.Nodes.Count - 1 do
+      if GetBlockFunctionDeclaration(AStmt.Nodes[I]) <> nil then
+        ACtx.CompileStatement(TGocciaStatement(AStmt.Nodes[I]));
 
   // Remember the starting point of using resources for this block
   if not Assigned(GUsingResources) then
@@ -867,6 +1243,8 @@ begin
   for I := 0 to AStmt.Nodes.Count - 1 do
   begin
     Node := AStmt.Nodes[I];
+    if GetBlockFunctionDeclaration(Node) <> nil then
+      Continue;
     if Node is TGocciaStatement then
     begin
       StatementAbrupt := ACtx.CompileStatement(TGocciaStatement(Node));
@@ -1703,11 +2081,85 @@ var
   Reg: UInt8;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
-  StatementAbrupt: Boolean;
+  HasFunctionDecl, NeedsPrelude, StatementAbrupt, HasUsing: Boolean;
+  SavedResourceBase, ResourceCount: Integer;
+  CatchReg, ErrorReg: UInt8;
+  HandlerJump, DisposalEndJump, NullishJump: Integer;
+  SavedResources: array of TUsingResourceEntry;
+  PendingEntry: TPendingFinallyEntry;
+  PreallocatedUsingDisposeSlots, OldPreallocatedUsingDisposeSlots:
+    TList<TPreallocatedUsingDisposeSlot>;
+
+  procedure BeginSwitchUsingDisposalRegion;
+  begin
+    if not HasUsing then
+      Exit;
+
+    if not Assigned(GUsingResources) then
+      GUsingResources := TList<TUsingResourceEntry>.Create;
+    SavedResourceBase := GUsingResources.Count;
+
+    CatchReg := ACtx.Scope.AllocateRegister;
+    ErrorReg := ACtx.Scope.AllocateRegister;
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_NULL, ErrorReg, 0, 0));
+    HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, CatchReg);
+
+    if not Assigned(GPendingFinally) then
+      GPendingFinally := TList<TPendingFinallyEntry>.Create;
+    FillChar(PendingEntry, SizeOf(PendingEntry), 0);
+    PendingEntry.FinallyBlock := nil;
+    PendingEntry.UsingErrorReg := ErrorReg;
+    GPendingFinally.Add(PendingEntry);
+  end;
+
+  procedure RegisterSwitchUsingResources;
+  var
+    CaseIdx, ConsequentIdx, VarIdx, LocalIdx: Integer;
+    UsingDecl: TGocciaUsingDeclaration;
+    Entry: TUsingResourceEntry;
+    Preallocated: TPreallocatedUsingDisposeSlot;
+  begin
+    if not HasUsing then
+      Exit;
+
+    PreallocatedUsingDisposeSlots := TList<TPreallocatedUsingDisposeSlot>.Create;
+    OldPreallocatedUsingDisposeSlots := GPreallocatedUsingDisposeSlots;
+    GPreallocatedUsingDisposeSlots := PreallocatedUsingDisposeSlots;
+
+    for CaseIdx := 0 to AStmt.Cases.Count - 1 do
+    begin
+      CaseClause := AStmt.Cases[CaseIdx];
+      for ConsequentIdx := 0 to CaseClause.Consequent.Count - 1 do
+      begin
+        if not (CaseClause.Consequent[ConsequentIdx] is TGocciaUsingDeclaration) then
+          Continue;
+
+        UsingDecl := TGocciaUsingDeclaration(CaseClause.Consequent[ConsequentIdx]);
+        for VarIdx := 0 to High(UsingDecl.Variables) do
+        begin
+          LocalIdx := ACtx.Scope.ResolveLocal(UsingDecl.Variables[VarIdx].Name);
+          if LocalIdx < 0 then
+            Continue;
+
+          Entry.ValueSlot := ACtx.Scope.GetLocal(LocalIdx).Slot;
+          Entry.DisposeSlot := ACtx.Scope.AllocateRegister;
+          Entry.IsAwait := UsingDecl.IsAwait;
+          EmitInstruction(ACtx, EncodeABC(OP_LOAD_NULL, Entry.DisposeSlot, 0, 0));
+          RegisterUsingResourceForDisposal(Entry);
+
+          Preallocated.Declaration := UsingDecl;
+          Preallocated.VariableIndex := VarIdx;
+          Preallocated.DisposeSlot := Entry.DisposeSlot;
+          Preallocated.ResourceRegistered := True;
+          PreallocatedUsingDisposeSlots.Add(Preallocated);
+        end;
+      end;
+    end;
+  end;
 begin
+  PreallocatedUsingDisposeSlots := nil;
+  OldPreallocatedUsingDisposeSlots := nil;
   DiscReg := ACtx.Scope.AllocateRegister;
-  TestReg := ACtx.Scope.AllocateRegister;
-  CmpReg := ACtx.Scope.AllocateRegister;
 
   ACtx.CompileExpression(AStmt.Discriminant, DiscReg);
 
@@ -1715,29 +2167,6 @@ begin
   DefaultIndex := -1;
   DefaultJump := -1;
   EndJump := -1;
-
-  for I := 0 to AStmt.Cases.Count - 1 do
-  begin
-    CaseClause := AStmt.Cases[I];
-    if not Assigned(CaseClause.Test) then
-    begin
-      DefaultIndex := I;
-      CaseBodyJumps[I] := -1;
-      Continue;
-    end;
-    ACtx.CompileExpression(CaseClause.Test, TestReg);
-    EmitInstruction(ACtx, EncodeABC(OP_EQ, CmpReg, DiscReg, TestReg));
-    CaseBodyJumps[I] := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CmpReg);
-  end;
-
-  if DefaultIndex >= 0 then
-    DefaultJump := EmitJumpInstruction(ACtx, OP_JUMP, 0)
-  else
-    EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-
-  ACtx.Scope.FreeRegister;
-  ACtx.Scope.FreeRegister;
-  ACtx.Scope.FreeRegister;
 
   OldBreakJumps := GBreakJumps;
   OldBreakFinallyBase := GBreakFinallyBase;
@@ -1748,6 +2177,81 @@ begin
   else
     GBreakFinallyBase := 0;
   try
+    HasFunctionDecl := False;
+    NeedsPrelude := False;
+    HasUsing := False;
+    for I := 0 to AStmt.Cases.Count - 1 do
+    begin
+      CaseClause := AStmt.Cases[I];
+      for J := 0 to CaseClause.Consequent.Count - 1 do
+      begin
+        Node := CaseClause.Consequent[J];
+        if NeedsBlockLexicalPredeclaration(Node) then
+          NeedsPrelude := True;
+        if Node is TGocciaUsingDeclaration then
+          HasUsing := True;
+        if GetBlockFunctionDeclaration(Node) <> nil then
+          HasFunctionDecl := True;
+      end;
+    end;
+
+    ACtx.Scope.BeginScope;
+
+    if NeedsPrelude then
+    begin
+      for I := 0 to AStmt.Cases.Count - 1 do
+      begin
+        CaseClause := AStmt.Cases[I];
+        for J := 0 to CaseClause.Consequent.Count - 1 do
+          PredeclareBlockLexicalLocals(CaseClause.Consequent[J], ACtx, False);
+      end;
+
+      for I := 0 to AStmt.Cases.Count - 1 do
+      begin
+        CaseClause := AStmt.Cases[I];
+        for J := 0 to CaseClause.Consequent.Count - 1 do
+          EmitBlockLexicalHoleInitializers(CaseClause.Consequent[J], ACtx);
+      end;
+
+      for I := 0 to AStmt.Cases.Count - 1 do
+      begin
+        CaseClause := AStmt.Cases[I];
+        for J := 0 to CaseClause.Consequent.Count - 1 do
+          if HasFunctionDecl and
+             (GetBlockFunctionDeclaration(CaseClause.Consequent[J]) <> nil) then
+            ACtx.CompileStatement(CaseClause.Consequent[J]);
+      end;
+    end;
+
+    if HasUsing then
+    begin
+      BeginSwitchUsingDisposalRegion;
+      RegisterSwitchUsingResources;
+    end;
+
+    TestReg := ACtx.Scope.AllocateRegister;
+    CmpReg := ACtx.Scope.AllocateRegister;
+    for I := 0 to AStmt.Cases.Count - 1 do
+    begin
+      CaseClause := AStmt.Cases[I];
+      if not Assigned(CaseClause.Test) then
+      begin
+        DefaultIndex := I;
+        CaseBodyJumps[I] := -1;
+        Continue;
+      end;
+      ACtx.CompileExpression(CaseClause.Test, TestReg);
+      EmitInstruction(ACtx, EncodeABC(OP_EQ, CmpReg, DiscReg, TestReg));
+      CaseBodyJumps[I] := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CmpReg);
+    end;
+
+    if DefaultIndex >= 0 then
+      DefaultJump := EmitJumpInstruction(ACtx, OP_JUMP, 0)
+    else
+      EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+
     for I := 0 to AStmt.Cases.Count - 1 do
     begin
       CaseClause := AStmt.Cases[I];
@@ -1763,10 +2267,11 @@ begin
           PatchJumpTarget(ACtx, CaseBodyJumps[I]);
       end;
 
-      ACtx.Scope.BeginScope;
       for J := 0 to CaseClause.Consequent.Count - 1 do
       begin
         Node := CaseClause.Consequent[J];
+        if GetBlockFunctionDeclaration(Node) <> nil then
+          Continue;
         if Node is TGocciaStatement then
         begin
           StatementAbrupt := ACtx.CompileStatement(TGocciaStatement(Node));
@@ -1782,21 +2287,67 @@ begin
           ACtx.Scope.FreeRegister;
         end;
       end;
-      ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
-      for J := 0 to ClosedCount - 1 do
-        EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[J], 0, 0));
     end;
 
+    if HasUsing and (EndJump >= 0) then
+    begin
+      PatchJumpTarget(ACtx, EndJump);
+      EndJump := -1;
+    end;
+
+    if HasUsing then
+    begin
+      GPendingFinally.Delete(GPendingFinally.Count - 1);
+      EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+
+      ResourceCount := GUsingResources.Count - SavedResourceBase;
+      SetLength(SavedResources, ResourceCount);
+      for I := 0 to ResourceCount - 1 do
+        SavedResources[I] := GUsingResources[SavedResourceBase + I];
+
+      for I := GUsingResources.Count - 1 downto SavedResourceBase do
+        GUsingResources.Delete(I);
+
+      EmitDisposalSequence(ACtx, SavedResources, ResourceCount, ErrorReg);
+      NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, ErrorReg);
+      EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
+      PatchJumpTarget(ACtx, NullishJump);
+
+      DisposalEndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+
+      PatchJumpTarget(ACtx, HandlerJump);
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ErrorReg, CatchReg, 0));
+      EmitDisposalSequence(ACtx, SavedResources, ResourceCount, ErrorReg);
+      EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
+
+      PatchJumpTarget(ACtx, DisposalEndJump);
+
+      for I := ResourceCount - 1 downto 0 do
+        ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+    end;
     if EndJump >= 0 then
       PatchJumpTarget(ACtx, EndJump);
 
     for I := 0 to BreakJumps.Count - 1 do
       PatchJumpTarget(ACtx, BreakJumps[I]);
+
+    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+    for J := 0 to ClosedCount - 1 do
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[J], 0, 0));
   finally
+    if Assigned(PreallocatedUsingDisposeSlots) then
+    begin
+      if GPreallocatedUsingDisposeSlots = PreallocatedUsingDisposeSlots then
+        GPreallocatedUsingDisposeSlots := OldPreallocatedUsingDisposeSlots;
+      PreallocatedUsingDisposeSlots.Free;
+    end;
     BreakJumps.Free;
     GBreakJumps := OldBreakJumps;
     GBreakFinallyBase := OldBreakFinallyBase;
   end;
+  ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileBreakStatement(const ACtx: TGocciaCompilationContext);
@@ -3122,7 +3673,8 @@ begin
 end;
 
 procedure EmitGlobalDefinesForPattern(const ACtx: TGocciaCompilationContext;
-  const APattern: TGocciaDestructuringPattern; const AIsConst: Boolean);
+  const APattern: TGocciaDestructuringPattern; const AIsConst: Boolean;
+  const AIsVar: Boolean = False; const AHasInitializer: Boolean = True);
 var
   ObjPat: TGocciaObjectDestructuringPattern;
   ArrPat: TGocciaArrayDestructuringPattern;
@@ -3135,32 +3687,38 @@ begin
     LocalIdx := ACtx.Scope.ResolveLocal(TGocciaIdentifierDestructuringPattern(APattern).Name);
     if LocalIdx >= 0 then
     begin
-      ACtx.Scope.MarkGlobalBacked(LocalIdx);
+      if AIsVar then
+        ACtx.Scope.MarkGlobalBacked(LocalIdx);
       EmitGlobalDefine(ACtx, ACtx.Scope.GetLocal(LocalIdx).Slot,
-        ACtx.Scope.GetLocal(LocalIdx).Name, AIsConst);
+        ACtx.Scope.GetLocal(LocalIdx).Name, AIsConst, AIsVar,
+        AHasInitializer);
     end;
   end
   else if APattern is TGocciaObjectDestructuringPattern then
   begin
     ObjPat := TGocciaObjectDestructuringPattern(APattern);
     for I := 0 to ObjPat.Properties.Count - 1 do
-      EmitGlobalDefinesForPattern(ACtx, ObjPat.Properties[I].Pattern, AIsConst);
+      EmitGlobalDefinesForPattern(ACtx, ObjPat.Properties[I].Pattern,
+        AIsConst, AIsVar, AHasInitializer);
   end
   else if APattern is TGocciaArrayDestructuringPattern then
   begin
     ArrPat := TGocciaArrayDestructuringPattern(APattern);
     for I := 0 to ArrPat.Elements.Count - 1 do
       if Assigned(ArrPat.Elements[I]) then
-        EmitGlobalDefinesForPattern(ACtx, ArrPat.Elements[I], AIsConst);
+        EmitGlobalDefinesForPattern(ACtx, ArrPat.Elements[I], AIsConst,
+          AIsVar, AHasInitializer);
   end
   else if APattern is TGocciaAssignmentDestructuringPattern then
   begin
     AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
-    EmitGlobalDefinesForPattern(ACtx, AssignPat.Left, AIsConst);
+    EmitGlobalDefinesForPattern(ACtx, AssignPat.Left, AIsConst, AIsVar,
+      AHasInitializer);
   end
   else if APattern is TGocciaRestDestructuringPattern then
     EmitGlobalDefinesForPattern(ACtx,
-      TGocciaRestDestructuringPattern(APattern).Argument, AIsConst);
+      TGocciaRestDestructuringPattern(APattern).Argument, AIsConst, AIsVar,
+      AHasInitializer);
 end;
 
 procedure CompileDestructuringDeclaration(const ACtx: TGocciaCompilationContext;
@@ -3172,7 +3730,7 @@ var
   Local: TGocciaCompilerLocal;
 begin
   IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
-    (ACtx.Scope.Depth = 0);
+    (AStmt.IsVar or (ACtx.Scope.Depth = 0));
   LocalCountBefore := ACtx.Scope.LocalCount;
 
   if AStmt.IsVar then
@@ -3180,9 +3738,8 @@ begin
   else
     CollectDestructuringBindings(AStmt.Pattern, ACtx.Scope, AStmt.IsConst);
 
-  if IsTopLevelGlobalBacked and (not AStmt.IsVar) then
-    for I := LocalCountBefore to ACtx.Scope.LocalCount - 1 do
-      ACtx.Scope.MarkGlobalBacked(I);
+  if IsTopLevelGlobalBacked and AStmt.IsVar then
+    EmitGlobalDefinesForPattern(ACtx, AStmt.Pattern, False, True, False);
 
   SrcReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AStmt.Initializer, SrcReg);
@@ -3191,9 +3748,7 @@ begin
 
   if IsTopLevelGlobalBacked then
   begin
-    if AStmt.IsVar then
-      EmitGlobalDefinesForPattern(ACtx, AStmt.Pattern, False)
-    else
+    if not AStmt.IsVar then
       for I := LocalCountBefore to ACtx.Scope.LocalCount - 1 do
       begin
         Local := ACtx.Scope.GetLocal(I);

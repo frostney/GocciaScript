@@ -106,6 +106,7 @@ begin
     OP_SUPER_GET:                      Result := 'OP_SUPER_GET';
     OP_COLLECTION_OP:                  Result := 'OP_COLLECTION_OP';
     OP_VALIDATE_VALUE:                 Result := 'OP_VALIDATE_VALUE';
+    OP_THROW_TYPE_ERROR_CONST_LONG:    Result := 'OP_THROW_TYPE_ERROR_CONST_LONG';
     OP_THROW_TYPE_ERROR_CONST:         Result := 'OP_THROW_TYPE_ERROR_CONST';
     OP_DEFINE_GLOBAL_CONST:            Result := 'OP_DEFINE_GLOBAL_CONST';
     OP_FINALIZE_ENUM:                  Result := 'OP_FINALIZE_ENUM';

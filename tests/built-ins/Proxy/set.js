@@ -90,4 +90,50 @@ describe("Proxy set trap", () => {
     expect(changes[0].from).toBe(1);
     expect(changes[0].to).toBe(2);
   });
+
+  test("primitive property assignment uses boxed prototype [[Set]]", () => {
+    const originalPrototype = Object.getPrototypeOf(Number.prototype);
+    let count = 0;
+    const proxy = new Proxy(
+      {},
+      {
+        set: () => {
+          count++;
+          return true;
+        },
+      }
+    );
+
+    try {
+      Object.setPrototypeOf(Number.prototype, proxy);
+      0..test262 = null;
+    } finally {
+      Object.setPrototypeOf(Number.prototype, originalPrototype);
+    }
+
+    expect(count).toBe(1);
+  });
+
+  test("primitive compound property assignment uses boxed prototype [[Set]]", () => {
+    const originalPrototype = Object.getPrototypeOf(Number.prototype);
+    let count = 0;
+    const proxy = new Proxy(
+      {},
+      {
+        set: () => {
+          count++;
+          return true;
+        },
+      }
+    );
+
+    try {
+      Object.setPrototypeOf(Number.prototype, proxy);
+      0..test262 += 1;
+    } finally {
+      Object.setPrototypeOf(Number.prototype, originalPrototype);
+    }
+
+    expect(count).toBe(1);
+  });
 });

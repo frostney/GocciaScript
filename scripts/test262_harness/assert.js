@@ -1,12 +1,6 @@
-// test262 assert API -- GocciaScript-compatible reimplementation
-// Bridges test262 assertions to Goccia TestAssertions (expect()).  Both
-// expect().toBe() and Object.is() use SameValue semantics natively, so
-// NaN === NaN and +0/-0 edges are handled by the engine.
-//
-// Goccia TestAssertions integration:
-//   - assert.throws  --> expect(fn).toThrow(ErrorConstructor)
-//   - assert         --> expect(val).toBe(true)
-//   - describe/test  --> wrapping provided by the runner
+// test262 assert API -- GocciaScript-compatible reimplementation.
+// Assertions throw Test262Error directly because generated wrappers execute
+// the conformance body before registering the runner test.
 
 class Test262Error {
   constructor(message) {
@@ -27,33 +21,60 @@ const $ERROR = (message) => {
   throw new Test262Error(message);
 };
 
-// --- Core assert: bridges to expect().toBe(true) ---
-const assert = (mustBeTrue, message) => {
-  expect(mustBeTrue).toBe(true);
+const __gocciaTest262String = (value) => {
+  try {
+    return String(value);
+  } catch (error) {
+    return "<unprintable>";
+  }
 };
 
-// --- assert.sameValue: SameValue via expect().toBe() (native IsSameValue) ---
+// --- Core assert ---
+const assert = (mustBeTrue, message) => {
+  if (mustBeTrue !== true) {
+    throw new Test262Error(message || "Expected true but got " + __gocciaTest262String(mustBeTrue));
+  }
+};
+
+// --- assert.sameValue: SameValue via Object.is() ---
 assert.sameValue = (actual, expected, message) => {
-  expect(actual).toBe(expected);
+  if (!Object.is(actual, expected)) {
+    throw new Test262Error(message || "Expected SameValue(" + __gocciaTest262String(actual) + ", " + __gocciaTest262String(expected) + ")");
+  }
 };
 
 // --- assert.notSameValue ---
 assert.notSameValue = (actual, unexpected, message) => {
-  expect(actual).not.toBe(unexpected);
+  if (Object.is(actual, unexpected)) {
+    throw new Test262Error(message || "Expected values to differ");
+  }
 };
 
-// --- assert.throws: bridges to expect(fn).toThrow(ErrorConstructor) ---
+// --- assert.throws ---
 assert.throws = (expectedErrorConstructor, func, message) => {
-  expect(func).toThrow(expectedErrorConstructor);
+  try {
+    func();
+  } catch (error) {
+    if (error instanceof expectedErrorConstructor) {
+      return;
+    }
+    throw new Test262Error(message || "Expected " + expectedErrorConstructor.name + " but got " + __gocciaTest262String(error));
+  }
+  throw new Test262Error(message || "Expected " + expectedErrorConstructor.name + " to be thrown");
 };
 
-// --- assert.compareArray: uses expect() for length and per-element SameValue ---
+// --- assert.compareArray ---
 assert.compareArray = (actual, expected, message) => {
-  expect(Array.isArray(actual)).toBe(true);
-  expect(Array.isArray(expected)).toBe(true);
-  expect(actual.length).toBe(expected.length);
+  if (!Array.isArray(actual) || !Array.isArray(expected)) {
+    throw new Test262Error(message || "Expected both values to be arrays");
+  }
+  if (actual.length !== expected.length) {
+    throw new Test262Error(message || "Expected array length " + expected.length + " but got " + actual.length);
+  }
   const entries = actual.entries();
   for (const [i, val] of entries) {
-    expect(val).toBe(expected[i]);
+    if (!Object.is(val, expected[i])) {
+      throw new Test262Error(message || "Expected array element " + i + " to be SameValue");
+    }
   }
 };

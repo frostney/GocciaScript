@@ -176,6 +176,43 @@ test("methods added to prototype are visible to instances via [[Prototype]] chai
   expect(Object.getPrototypeOf(dog)).toBe(Animal.prototype);
 });
 
+test("constructor return primitives are ignored for ordinary functions", () => {
+  function Box(value) {
+    this.value = value;
+    return 42;
+  }
+
+  const box = new Box("ok");
+  expect(box.value).toBe("ok");
+  expect(Object.getPrototypeOf(box)).toBe(Box.prototype);
+});
+
+test("constructor return objects replace the default instance", () => {
+  const replacement = { value: "replacement" };
+  function Box() {
+    this.value = "ignored";
+    return replacement;
+  }
+
+  expect(new Box()).toBe(replacement);
+});
+
+test("bound ordinary functions remain constructable", () => {
+  function Pair(a, b) {
+    this.a = a;
+    this.b = b;
+    this.boundThisIgnored = this.ignored;
+  }
+
+  const BoundPair = Pair.bind({ ignored: true }, 1);
+  const pair = new BoundPair(2);
+
+  expect(pair.a).toBe(1);
+  expect(pair.b).toBe(2);
+  expect(pair.boundThisIgnored).toBeUndefined();
+  expect(Object.getPrototypeOf(pair)).toBe(Pair.prototype);
+});
+
 test("generator function declaration has own prototype property", () => {
   function* g() {
     yield 1;

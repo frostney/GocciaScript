@@ -363,6 +363,7 @@ begin
     // ES2026 §27.2.1.3.2 steps 11-15: If then is callable, resolve via the thenable.
     if Assigned(ThenMethod) and ThenMethod.IsCallable then
     begin
+      FAlreadyResolved := False;
       ResolveFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(DoResolve, 'resolve', 1);
       RejectFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(DoReject, 'reject', 1);
       ThenArgs := TGocciaArgumentsCollection.Create([ResolveFn, RejectFn]);
@@ -402,7 +403,7 @@ begin
                 RejectArgs.Free;
               end;
             end;
-          end;
+        end;
         finally
           if Assigned(GC) then
           begin

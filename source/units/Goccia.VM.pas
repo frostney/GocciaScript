@@ -273,6 +273,7 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
+  Goccia.Values.GeneratorValue,
   Goccia.Values.HoleValue,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.Generic,
@@ -1616,7 +1617,7 @@ begin
 
   while FVM.FHandlerStack.Count > AHandlerBaseCount do
     FVM.FHandlerStack.Pop;
-  FVM.FHandlerStack.RestoreFrom(FContinuationHandlers);
+  FVM.FHandlerStack.RestoreFrom(FContinuationHandlers, FVM.FFrameDepth);
 
   AFrame.IP := FContinuationIP;
   APrevCovLine := FContinuationPrevCovLine;
@@ -2288,7 +2289,30 @@ var
   CombinedArgs: TGocciaArgumentsCollection;
   SuperResult: TGocciaValue;
   ConstructorThisValue: TGocciaValue;
+  VMClassConstructor: TGocciaVMClassValue;
   I: Integer;
+  function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
+  begin
+    Result := (not Assigned(AValue)) or
+      (AValue is TGocciaUndefinedLiteralValue);
+  end;
+  function ClassRequiresObjectConstructorReturn(
+    const AClassValue: TGocciaClassValue): Boolean;
+  begin
+    Result := Assigned(AClassValue) and
+      (Assigned(AClassValue.SuperClass) or
+       Assigned(AClassValue.NativeSuperConstructor));
+  end;
+  procedure ValidateClassConstructorReturn(
+    const AClassValue: TGocciaClassValue; const AValue: TGocciaValue);
+  begin
+    if ClassRequiresObjectConstructorReturn(AClassValue) and
+       not (AValue is TGocciaObjectValue) and
+       not IsUndefinedConstructedValue(AValue) then
+      ThrowTypeError(
+        'Derived constructor returned non-object',
+        SSuggestNotConstructorType);
+  end;
 begin
   if AConstructor is TGocciaBoundFunctionValue then
   begin
@@ -2320,16 +2344,31 @@ begin
     SuperResult := TGocciaNativeFunctionValue(AConstructor).Call(
       AArguments, TGocciaHoleValue.HoleValue);
   end
-  else if AConstructor is TGocciaVMClassValue then
-    // Bytecode-compiled classes store the constructor as FConstructorValue
-    // (a TGocciaBytecodeFunctionValue), not FConstructorMethod, so route
-    // them through Instantiate which knows how to invoke that path and
-    // apply ApplyOwnConstructorResult's receiver-swap rules.
-    SuperResult := TGocciaVMClassValue(AConstructor).Instantiate(AArguments)
   else if AConstructor is TGocciaClassValue then
   begin
     ClassConstructor := TGocciaClassValue(AConstructor);
-    if Assigned(ClassConstructor.ConstructorMethod) then
+    if (ClassConstructor is TGocciaVMClassValue) and
+       Assigned(TGocciaVMClassValue(ClassConstructor).FConstructorValue) then
+    begin
+      VMClassConstructor := TGocciaVMClassValue(ClassConstructor);
+      VMClassConstructor.FVM.RunClassInitializers(ClassConstructor, AReceiver);
+      SuperResult := VMClassConstructor.FVM.InvokeFunctionValue(
+        VMClassConstructor.FConstructorValue, AArguments, AReceiver);
+      ValidateClassConstructorReturn(ClassConstructor, SuperResult);
+      if VMClassConstructor.FConstructorValue is TGocciaBytecodeFunctionValue then
+        ConstructorThisValue := RegisterToValue(
+          VMClassConstructor.FVM.FLastClosureThisValue)
+      else
+        ConstructorThisValue := nil;
+      if not (SuperResult is TGocciaObjectValue) and
+         (ConstructorThisValue is TGocciaObjectValue) then
+        SuperResult := ConstructorThisValue;
+      if (SuperResult is TGocciaObjectValue) and
+         (SuperResult <> AReceiver) and
+         (SuperResult = ConstructorThisValue) then
+        VMClassConstructor.FVM.RunClassInitializers(ClassConstructor, SuperResult);
+    end
+    else if Assigned(ClassConstructor.ConstructorMethod) then
     begin
       // Mirror the Evaluator path: CallWithThisValue returns the constructor's
       // final `this` (which the body may have replaced via an explicit return)
@@ -2341,6 +2380,9 @@ begin
          (ConstructorThisValue is TGocciaObjectValue) then
         SuperResult := ConstructorThisValue;
     end
+    else if ClassConstructor is TGocciaVMClassValue then
+      SuperResult := TGocciaVMClassValue(ClassConstructor).FVM.InvokeImplicitSuperInitialization(
+        ClassConstructor, AReceiver, AArguments)
     else
       SuperResult := AReceiver;
   end
@@ -4495,8 +4537,11 @@ function TGocciaVM.ConstructValue(const AConstructor: TGocciaValue;
   const AArguments: TGocciaArgumentsCollection): TGocciaValue;
 var
   BytecodeFunction: TGocciaBytecodeFunctionValue;
+  BoundArgs: TGocciaArgumentsCollection;
+  BoundFunction: TGocciaBoundFunctionValue;
   Context: TGocciaEvaluationContext;
   ConstructorName: string;
+  I: Integer;
   PrototypeTarget: TGocciaValue;
   PrototypeValue: TGocciaValue;
   ReceiverPrototype, ReceiverInstance: TGocciaObjectValue;
@@ -4519,6 +4564,23 @@ begin
     FillChar(Context, SizeOf(Context), 0);
     Context.Scope := FGlobalScope;
     Result := InstantiateClass(TGocciaClassValue(AConstructor), AArguments, Context);
+    Exit;
+  end;
+
+  if AConstructor is TGocciaBoundFunctionValue then
+  begin
+    BoundFunction := TGocciaBoundFunctionValue(AConstructor);
+    BoundArgs := TGocciaArgumentsCollection.CreateWithCapacity(
+      BoundFunction.BoundArgCount + AArguments.Length);
+    try
+      for I := 0 to BoundFunction.BoundArgCount - 1 do
+        BoundArgs.Add(BoundFunction.GetBoundArg(I));
+      for I := 0 to AArguments.Length - 1 do
+        BoundArgs.Add(AArguments.GetElement(I));
+      Result := ConstructValue(BoundFunction.OriginalFunction, BoundArgs);
+    finally
+      BoundArgs.Free;
+    end;
     Exit;
   end;
 
@@ -4558,6 +4620,11 @@ begin
 
   if AConstructor is TGocciaFunctionBase then
   begin
+    if (AConstructor is TGocciaGeneratorFunctionValue) or
+       not TGocciaFunctionBase(AConstructor).IsConstructable then
+      ThrowTypeError(Format(SErrorValueNotConstructor,
+        [AConstructor.TypeName]), SSuggestNotConstructorType);
+
     ConstructorName := TGocciaFunctionBase(AConstructor).GetProperty(PROP_NAME)
       .ToStringLiteral.Value;
     if not TGocciaFunctionBase(AConstructor).IsConstructable then
@@ -4871,7 +4938,12 @@ procedure TGocciaVM.DefineGlobalBinding(const AName: string;
   const ADeclarationType: TGocciaDeclarationType);
 begin
   if Assigned(FGlobalScope) then
-    FGlobalScope.DefineLexicalBinding(AName, AValue, ADeclarationType);
+  begin
+    if ADeclarationType = dtVar then
+      FGlobalScope.DefineVariableBinding(AName, AValue, True)
+    else
+      FGlobalScope.DefineLexicalBinding(AName, AValue, ADeclarationType);
+  end;
 end;
 
 function TGocciaVM.FinalizeEnumValue(const AValue: TGocciaValue;
@@ -5986,6 +6058,7 @@ var
   Descriptor: TGocciaPropertyDescriptor;
   SetterArgs: TGocciaArgumentsCollection;
   PrivateName: string;
+  BoxedValue: TGocciaObjectValue;
   PrivateBrandToken: string;
   ExistingValue: TGocciaValue;
 begin
@@ -6064,11 +6137,32 @@ begin
     Exit;
   end;
 
-  if not (AObject is TGocciaObjectValue) then
-    ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
-      SSuggestCheckNullBeforeAccess);
+  if AObject is TGocciaObjectValue then
+  begin
+    AObject.SetProperty(AKey, AValue);
+    Exit;
+  end;
 
-  AObject.SetProperty(AKey, AValue);
+  if (AObject is TGocciaSymbolValue) and
+     (TGocciaSymbolValue.SharedPrototype is TGocciaObjectValue) then
+  begin
+    BoxedValue := TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype);
+    if not BoxedValue.AssignPropertyWithReceiver(AKey, AValue, AObject) then
+      ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
+        SSuggestCheckNullBeforeAccess);
+    Exit;
+  end;
+
+  BoxedValue := AObject.Box;
+  if Assigned(BoxedValue) then
+  begin
+    if not BoxedValue.AssignPropertyWithReceiver(AKey, AValue, AObject) then
+      ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
+        SSuggestCheckNullBeforeAccess);
+    Exit;
+  end;
+  ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
+    SSuggestCheckNullBeforeAccess);
 end;
 
 function TGocciaVM.TryGetRawPrivateValue(const AObject: TGocciaValue;
@@ -6746,7 +6840,11 @@ begin
         SetRegisterRaw(A, FRegisters[B]);
 
       OP_GET_LOCAL:
-        SetRegisterRaw(A, GetLocalRegister(DecodeBx(Instruction)));
+      begin
+        FRegisters[A] := GetLocalRegister(DecodeBx(Instruction));
+        if FRegisters[A].Kind = grkHole then
+          ThrowReferenceError('Cannot access lexical binding before initialization');
+      end;
 
       OP_SET_LOCAL:
         SetLocalRaw(DecodeBx(Instruction), FRegisters[A]);
@@ -6757,7 +6855,11 @@ begin
         begin
           Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
+          begin
+            if Upvalue.Cell.Value.Kind = grkHole then
+              ThrowReferenceError('Cannot access lexical binding before initialization');
             SetRegisterRaw(A, Upvalue.Cell.Value)
+          end
           else
             FRegisters[A] := RegisterUndefined;
         end
@@ -6771,7 +6873,11 @@ begin
         begin
           Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
+          begin
+            if Upvalue.Cell.Value.Kind = grkHole then
+              ThrowReferenceError('Cannot access lexical binding before initialization');
             Upvalue.Cell.Value := FRegisters[A];
+          end;
         end;
       end;
 
@@ -7439,8 +7545,15 @@ begin
             SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
               TGocciaSymbolValue(FRegisters[C].ObjectValue)))
           else
-            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
-              KeyToPropertyNameRegister(FRegisters[C])));
+          begin
+            GlobalName := KeyToPropertyNameRegister(FRegisters[C]);
+            if IsBytecodePrivateKey(GlobalName) then
+              SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
+                GlobalName))
+            else
+              SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
+                GlobalName));
+          end;
         end
         else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaObjectValue) then
@@ -7449,13 +7562,20 @@ begin
              (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
             SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetSymbolProperty(
               TGocciaSymbolValue(FRegisters[C].ObjectValue)))
-          else if (FRegisters[B].ObjectValue is TGocciaVMLiteralObjectValue) and
-                  TGocciaVMLiteralObjectValue(FRegisters[B].ObjectValue).TryGetOwnDataPropertyFastRegister(
-                    KeyToPropertyNameRegister(FRegisters[C]), FRegisters[A]) then
-            { fast path already assigned }
           else
-            SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetProperty(
-              KeyToPropertyNameRegister(FRegisters[C])));
+          begin
+            GlobalName := KeyToPropertyNameRegister(FRegisters[C]);
+            if IsBytecodePrivateKey(GlobalName) then
+              SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
+                GlobalName))
+            else if (FRegisters[B].ObjectValue is TGocciaVMLiteralObjectValue) and
+                    TGocciaVMLiteralObjectValue(FRegisters[B].ObjectValue).TryGetOwnDataPropertyFastRegister(
+                      GlobalName, FRegisters[A]) then
+              { fast path already assigned }
+            else
+              SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetProperty(
+                GlobalName));
+          end;
         end
         else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) then
@@ -7506,9 +7626,15 @@ begin
             TGocciaClassValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
               TGocciaSymbolValue(FRegisters[B].ObjectValue), RightValue)
           else
-            TGocciaClassValue(FRegisters[A].ObjectValue).SetProperty(
-              KeyToPropertyNameRegister(FRegisters[B]),
-              RightValue);
+          begin
+            GlobalName := KeyToPropertyNameRegister(FRegisters[B]);
+            if IsBytecodePrivateKey(GlobalName) then
+              SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
+                RightValue)
+            else
+              TGocciaClassValue(FRegisters[A].ObjectValue).SetProperty(
+                GlobalName, RightValue);
+          end;
         end
         else if (FRegisters[A].Kind = grkObject) and
                 (FRegisters[A].ObjectValue is TGocciaObjectValue) then
@@ -7519,9 +7645,15 @@ begin
             TGocciaObjectValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
               TGocciaSymbolValue(FRegisters[B].ObjectValue), RightValue)
           else
-            TGocciaObjectValue(FRegisters[A].ObjectValue).SetProperty(
-              KeyToPropertyNameRegister(FRegisters[B]),
-              RightValue);
+          begin
+            GlobalName := KeyToPropertyNameRegister(FRegisters[B]);
+            if IsBytecodePrivateKey(GlobalName) then
+              SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
+                RightValue)
+            else
+              TGocciaObjectValue(FRegisters[A].ObjectValue).SetProperty(
+                GlobalName, RightValue);
+          end;
         end
         else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
@@ -8807,10 +8939,22 @@ begin
       OP_THROW_TYPE_ERROR_CONST:
         ThrowTypeError(Template.GetConstantUnchecked(C).StringValue);
 
+      OP_THROW_TYPE_ERROR_CONST_LONG:
+        ThrowTypeError(
+          Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue);
+
       OP_DEFINE_GLOBAL_CONST:
       begin
         GlobalName := Template.GetConstantUnchecked(C).StringValue;
-        if B = 2 then
+        if B = 0 then
+          DefineGlobalBinding(GlobalName, GetRegister(A), dtVar)
+        else if B = 3 then
+        begin
+          if Assigned(FGlobalScope) then
+            FGlobalScope.DefineVariableBinding(GlobalName,
+              TGocciaUndefinedLiteralValue.UndefinedValue, False);
+        end
+        else if B = 2 then
           DefineGlobalBinding(GlobalName, GetRegister(A), dtConst)
         else
           DefineGlobalBinding(GlobalName, GetRegister(A), dtLet);

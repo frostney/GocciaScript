@@ -54,4 +54,16 @@ describe("async functions", () => {
 
     expect(true).toBe(false);
   });
+
+  test("await accepts private field shorthand operands", async () => {
+    class Counter {
+      #value = Promise.resolve(42);
+
+      async read() {
+        return await #value;
+      }
+    }
+
+    expect(await new Counter().read()).toBe(42);
+  });
 });

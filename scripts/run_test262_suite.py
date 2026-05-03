@@ -52,6 +52,13 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 HARNESS_DIR = SCRIPT_DIR / "test262_harness"
 
+# These tests assert script-level declaration semantics that are changed by the
+# normal protective try/catch wrapper.  They are kept at true top level and any
+# thrown error is reported by GocciaTestRunner as a file failure.
+SCRIPT_SCOPE_POSITIVE_TESTS = {
+    "language/statements/function/S13_A19_T1.js",
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -216,24 +223,87 @@ def _strip_use_strict(body: str) -> str:
     return re.sub(r"^(\s*)'use strict'\s*;?\s*\n", "", body)
 
 
+CLEAR_PUBLIC_HARNESS_GLOBALS = """globalThis.expect = undefined;
+globalThis.describe = undefined;
+globalThis.test = undefined;
+globalThis.it = undefined;
+globalThis.beforeAll = undefined;
+globalThis.afterAll = undefined;
+globalThis.beforeEach = undefined;
+globalThis.afterEach = undefined;
+globalThis.onTestFinished = undefined;
+globalThis.runTests = undefined;
+globalThis.mock = undefined;
+globalThis.spyOn = undefined;"""
+
+CAPTURE_PRIVATE_HARNESS_GLOBALS = """const __gocciaTest262RegisterDescribe = globalThis.describe;
+const __gocciaTest262RegisterTest = globalThis.test;
+const __gocciaTest262RunTests = globalThis.runTests;"""
+
+RESTORE_INTERNAL_HARNESS_GLOBALS = """globalThis.runTests = __gocciaTest262RunTests;"""
+
+
 def wrap_positive_test(
     harness_source: str,
     test_body: str,
     test_id: str,
     description: str,
     is_async: bool = False,
+    preserve_script_scope: bool = False,
 ) -> str:
     """Wrap a positive test in describe/test with Goccia TestAssertions."""
     body = _strip_use_strict(test_body)
     desc = _escape_js_string(description or test_id)
     tid = _escape_js_string(test_id)
 
+    if preserve_script_scope:
+        if is_async:
+            return f"""{harness_source}
+
+{CAPTURE_PRIVATE_HARNESS_GLOBALS}
+{CLEAR_PUBLIC_HARNESS_GLOBALS}
+{body}
+{RESTORE_INTERNAL_HARNESS_GLOBALS}
+
+__gocciaTest262RegisterDescribe("test262: {tid}", () => {{
+  __gocciaTest262RegisterTest("{desc}", async () => {{
+    await __donePromise;
+  }});
+}});
+"""
+
+        return f"""{harness_source}
+
+{CAPTURE_PRIVATE_HARNESS_GLOBALS}
+{CLEAR_PUBLIC_HARNESS_GLOBALS}
+{body}
+{RESTORE_INTERNAL_HARNESS_GLOBALS}
+
+__gocciaTest262RegisterDescribe("test262: {tid}", () => {{
+  __gocciaTest262RegisterTest("{desc}", () => {{}});
+}});
+"""
+
     if is_async:
         return f"""{harness_source}
 
-describe("test262: {tid}", () => {{
-  test("{desc}", async () => {{
+{CAPTURE_PRIVATE_HARNESS_GLOBALS}
+{CLEAR_PUBLIC_HARNESS_GLOBALS}
+let __gocciaTest262Failed = false;
+let __gocciaTest262Failure = undefined;
+try {{
 {body}
+}} catch (error) {{
+  __gocciaTest262Failed = true;
+  __gocciaTest262Failure = error;
+}}
+{RESTORE_INTERNAL_HARNESS_GLOBALS}
+
+__gocciaTest262RegisterDescribe("test262: {tid}", () => {{
+  __gocciaTest262RegisterTest("{desc}", async () => {{
+    if (__gocciaTest262Failed) {{
+      throw __gocciaTest262Failure;
+    }}
     await __donePromise;
   }});
 }});
@@ -241,9 +311,23 @@ describe("test262: {tid}", () => {{
 
     return f"""{harness_source}
 
-describe("test262: {tid}", () => {{
-  test("{desc}", () => {{
+{CAPTURE_PRIVATE_HARNESS_GLOBALS}
+{CLEAR_PUBLIC_HARNESS_GLOBALS}
+let __gocciaTest262Failed = false;
+let __gocciaTest262Failure = undefined;
+try {{
 {body}
+}} catch (error) {{
+  __gocciaTest262Failed = true;
+  __gocciaTest262Failure = error;
+}}
+{RESTORE_INTERNAL_HARNESS_GLOBALS}
+
+__gocciaTest262RegisterDescribe("test262: {tid}", () => {{
+  __gocciaTest262RegisterTest("{desc}", () => {{
+    if (__gocciaTest262Failed) {{
+      throw __gocciaTest262Failure;
+    }}
   }});
 }});
 """
@@ -255,19 +339,31 @@ def wrap_negative_runtime_test(
     test_id: str,
     description: str,
     error_type: str,
+    is_only_strict: bool = False,
 ) -> str:
     """Wrap a negative runtime test: body inside expect(() => ...).toThrow()."""
     body = _strip_use_strict(test_body)
     desc = _escape_js_string(f"{description} [negative: runtime {error_type}]")
     tid = _escape_js_string(test_id)
+    strict_directive = '      "use strict";\n' if is_only_strict else ""
 
     return f"""{harness_source}
 
-describe("test262: {tid}", () => {{
-  test("{desc}", () => {{
-    expect(() => {{
+{CAPTURE_PRIVATE_HARNESS_GLOBALS}
+{CLEAR_PUBLIC_HARNESS_GLOBALS}
+{RESTORE_INTERNAL_HARNESS_GLOBALS}
+
+__gocciaTest262RegisterDescribe("test262: {tid}", () => {{
+  __gocciaTest262RegisterTest("{desc}", () => {{
+    globalThis.runTests = undefined;
+    try {{
+      assert.throws({error_type}, () => {{
+{strict_directive}
 {body}
-    }}).toThrow({error_type});
+      }});
+    }} finally {{
+      globalThis.runTests = __gocciaTest262RunTests;
+    }}
   }});
 }});
 """
@@ -599,11 +695,15 @@ def evaluate_suite(
                             wrapped = wrap_negative_runtime_test(
                                 harness_source, body, tid, description,
                                 error_type,
+                                is_only_strict="onlyStrict" in flags,
                             )
                         else:
+                            normalized_tid = tid.replace("\\", "/")
                             wrapped = wrap_positive_test(
                                 harness_source, body, tid, description,
                                 is_async=is_async,
+                                preserve_script_scope=(
+                                    normalized_tid in SCRIPT_SCOPE_POSITIVE_TESTS),
                             )
 
                         # Hash the tid into a collision-free temp filename.  The
@@ -897,9 +997,15 @@ def evaluate_suite(
                         # the worker on this file; queue-not-drained = a peer
                         # stall left this file untouched, retry will likely
                         # finish it on a fresh pool.
-                        is_stalled = "TIMEOUT (worker stalled" in f_error
+                        is_stalled = (
+                            "TIMEOUT (worker stalled" in f_error or
+                            any("TIMEOUT (worker stalled" in item
+                                for item in f_failed_tests)
+                        )
                         is_no_result = (
-                            "Worker produced no result" in f_error
+                            "Worker produced no result" in f_error or
+                            any("Worker produced no result" in item
+                                for item in f_failed_tests)
                         )
                         # Cooperative per-test deadlines surface as failed-test
                         # entries containing "TIMEOUT after Xms" rather than as

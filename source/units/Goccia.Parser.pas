@@ -85,6 +85,7 @@ type
     function Advance: TGocciaToken;
     function Check(const ATokenType: TGocciaTokenType): Boolean; inline;
     function CheckNext(const ATokenType: TGocciaTokenType): Boolean; inline;
+    function IsAwaitOperandStart: Boolean;
     function Match(const ATokenTypes: array of TGocciaTokenType): Boolean; overload;
     function Match(const ATokenType: TGocciaTokenType): Boolean; overload; inline;
     function Consume(const ATokenType: TGocciaTokenType; const AMessage: string): TGocciaToken; overload;
@@ -515,6 +516,23 @@ begin
   Result := FTokens[FCurrent + 1].TokenType = ATokenType;
 end;
 
+function TGocciaParser.IsAwaitOperandStart: Boolean;
+var
+  NextType: TGocciaTokenType;
+begin
+  if FCurrent + 1 >= FTokens.Count then
+    Exit(False);
+
+  NextType := FTokens[FCurrent + 1].TokenType;
+  Result := NextType in [
+    gttIdentifier, gttNumber, gttBigInt, gttString, gttTemplate, gttRegex,
+    gttTrue, gttFalse, gttNull, gttThis, gttSuper, gttNew, gttFunction,
+    gttClass, gttImport, gttLeftParen, gttLeftBracket, gttLeftBrace,
+    gttNot, gttMinus, gttPlus, gttIncrement, gttDecrement, gttTypeof,
+    gttVoid, gttBitwiseNot, gttDelete, gttHash
+  ];
+end;
+
 function TGocciaParser.Match(const ATokenTypes: array of TGocciaTokenType): Boolean;
 var
   TokenType: TGocciaTokenType;
@@ -875,13 +893,20 @@ var
   Right: TGocciaExpression;
 begin
   // ES2026 §16.1 top-level await / §15.8.2 AwaitExpression: await UnaryExpression
-  if ((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) then
+  if ((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and
+     Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) and
+     IsAwaitOperandStart then
   begin
     Operator := Advance; // consume 'await'
     Right := Unary;
     Result := TGocciaAwaitExpression.Create(Right, Operator.Line, Operator.Column);
     Exit;
   end;
+  if (FInAsyncFunction > 0) and Check(gttIdentifier) and
+     (Peek.Lexeme = KEYWORD_AWAIT) and not IsAwaitOperandStart then
+    raise TGocciaSyntaxError.Create('Expected expression after "await"',
+      Peek.Line, Peek.Column, FFileName, FSourceLines,
+      SSuggestExpressionExpected);
 
   if (FInGeneratorFunction > 0) and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_YIELD) then
   begin
@@ -3413,14 +3438,20 @@ begin
       end;
 
       if Match(gttAssign) then
+      begin
+        Variables[VariableCount].HasInitializer := True;
         Variables[VariableCount].Initializer := Assignment
+      end
       else if IsConst then
         raise TGocciaSyntaxError.Create('const declarations must have an initializer',
           Line, Column, FFileName, FSourceLines,
           SSuggestAddConstInitializer)
       else
+      begin
+        Variables[VariableCount].HasInitializer := False;
         Variables[VariableCount].Initializer := TGocciaLiteralExpression.Create(
           TGocciaUndefinedLiteralValue.UndefinedValue, Line, Column);
+      end;
 
       Inc(VariableCount);
     until not Match(gttComma);
@@ -3477,6 +3508,7 @@ begin
       'Add " = <expression>" after the variable name');
     Initializer := Assignment;
     Variables[VariableCount].Initializer := Initializer;
+    Variables[VariableCount].HasInitializer := True;
 
     Inc(VariableCount);
   until not Match(gttComma);
@@ -3803,10 +3835,16 @@ begin
       end;
 
       if Match(gttAssign) then
+      begin
+        Variables[VariableCount].HasInitializer := True;
         Variables[VariableCount].Initializer := Assignment
+      end
       else
+      begin
+        Variables[VariableCount].HasInitializer := False;
         Variables[VariableCount].Initializer := TGocciaLiteralExpression.Create(
           TGocciaUndefinedLiteralValue.UndefinedValue, Line, Column);
+      end;
 
       Inc(VariableCount);
     until not Match(gttComma);
@@ -4039,6 +4077,7 @@ begin
   SetLength(Variables, 1);
   Variables[0].Name := NameToken.Lexeme;
   Variables[0].Initializer := TGocciaExpression(MethodExpr);
+  Variables[0].HasInitializer := True;
   Variables[0].TypeAnnotation := '';
   VarDecl := TGocciaVariableDeclaration.Create(Variables, False, Line, Column, True);
   VarDecl.IsFunctionDeclaration := True;
