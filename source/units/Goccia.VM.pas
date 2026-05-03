@@ -2289,6 +2289,7 @@ var
   CombinedArgs: TGocciaArgumentsCollection;
   SuperResult: TGocciaValue;
   ConstructorThisValue: TGocciaValue;
+  VMClassConstructor: TGocciaVMClassValue;
   I: Integer;
   function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
   begin
@@ -2346,7 +2347,27 @@ begin
   else if AConstructor is TGocciaClassValue then
   begin
     ClassConstructor := TGocciaClassValue(AConstructor);
-    if Assigned(ClassConstructor.ConstructorMethod) then
+    if (ClassConstructor is TGocciaVMClassValue) and
+       Assigned(TGocciaVMClassValue(ClassConstructor).FConstructorValue) then
+    begin
+      VMClassConstructor := TGocciaVMClassValue(ClassConstructor);
+      VMClassConstructor.FVM.RunClassInitializers(ClassConstructor, AReceiver);
+      SuperResult := VMClassConstructor.FVM.InvokeFunctionValue(
+        VMClassConstructor.FConstructorValue, AArguments, AReceiver);
+      ValidateClassConstructorReturn(ClassConstructor, SuperResult);
+      if VMClassConstructor.FConstructorValue is TGocciaBytecodeFunctionValue then
+        ConstructorThisValue := RegisterToValue(
+          VMClassConstructor.FVM.FLastClosureThisValue)
+      else
+        ConstructorThisValue := nil;
+      if not (SuperResult is TGocciaObjectValue) and
+         (ConstructorThisValue is TGocciaObjectValue) then
+        SuperResult := ConstructorThisValue;
+      if (SuperResult is TGocciaObjectValue) and
+         (SuperResult <> AReceiver) then
+        VMClassConstructor.FVM.RunClassInitializers(ClassConstructor, SuperResult);
+    end
+    else if Assigned(ClassConstructor.ConstructorMethod) then
     begin
       SuperResult := ClassConstructor.ConstructorMethod.CallWithThisValue(
         AArguments, AReceiver, ConstructorThisValue);

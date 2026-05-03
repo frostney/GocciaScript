@@ -293,6 +293,25 @@ test("implicit super returning this does not replay superclass initializers", ()
   expect(initializersRun).toBe(1);
 });
 
+test("bound class super runs constructor and field initializers", () => {
+  class Base {
+    field = "field";
+
+    constructor(value) {
+      this.value = value;
+    }
+  }
+
+  const BoundBase = Base.bind(null, 41);
+  BoundBase.prototype = Base.prototype;
+
+  class Derived extends BoundBase {}
+
+  const instance = new Derived();
+  expect(instance.field).toBe("field");
+  expect(instance.value).toBe(41);
+});
+
 test("closure captured this before super observes initialized receiver", () => {
   class Base {}
 
