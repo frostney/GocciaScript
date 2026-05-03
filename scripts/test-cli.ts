@@ -241,6 +241,29 @@ console.log("--compat-all (Loader + Bare + TestRunner)...");
       const help = await $`${bin} --help 2>&1`.text();
       if (!help.includes("--compat-all")) throw new Error(`${bin} --help should mention --compat-all`);
     }
+
+    // Runtime smoke: every CLI must accept --compat-all without parser error.
+    // Each invocation feeds the binary an input it can complete and exit on,
+    // so the option actually flows through ParseCommandLine into engine setup.
+    const bundlerOut = join(tmp, "smoke.gbc");
+    const benchSrc = `suite("smoke", () => { bench("noop", { run: () => 1 }); });\n`;
+    const smokes: Array<[string, string[], string]> = [
+      [LOADER, ["--compat-all", "--output=compact-json"], ""],
+      [BARE, ["--compat-all"], ""],
+      [REPL, ["--compat-all"], ""],
+      [TESTRUNNER, ["--compat-all", "--no-progress"], 'test("noop", () => expect(1).toBe(1));\n'],
+      [BUNDLER, ["--compat-all", `--output=${bundlerOut}`], "1;\n"],
+      [BENCHRUNNER, ["--compat-all", "--no-progress"], benchSrc],
+    ];
+    for (const [bin, args, stdin] of smokes) {
+      const proc = Bun.spawnSync([bin, ...args], {
+        stdin: new TextEncoder().encode(stdin),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (proc.exitCode !== 0)
+        throw new Error(`${bin} --compat-all smoke should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

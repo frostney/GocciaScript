@@ -34,6 +34,7 @@ type
     ASI: Boolean;
     CompatVar: Boolean;
     CompatFunction: Boolean;
+    CompatAll: Boolean;
     StrictTypes: Boolean;
     UnsafeFunctionConstructor: Boolean;
     Mode: TBareExecutionMode;
@@ -106,6 +107,7 @@ begin
   Result.ASI := False;
   Result.CompatVar := False;
   Result.CompatFunction := False;
+  Result.CompatAll := False;
   Result.StrictTypes := False;
   Result.UnsafeFunctionConstructor := False;
   Result.Mode := bemInterpreted;
@@ -127,10 +129,7 @@ begin
     else if Arg = '--compat-function' then
       Result.CompatFunction := True
     else if Arg = '--compat-all' then
-    begin
-      Result.CompatVar := True;
-      Result.CompatFunction := True;
-    end
+      Result.CompatAll := True
     else if Arg = '--strict-types' then
       Result.StrictTypes := True
     else if Arg = '--unsafe-function-constructor' then
@@ -160,8 +159,11 @@ procedure ConfigureEngine(const AEngine: TGocciaEngine;
   const AOptions: TBareOptions);
 begin
   AEngine.ASIEnabled := AOptions.ASI;
-  AEngine.VarEnabled := AOptions.CompatVar;
-  AEngine.FunctionEnabled := AOptions.CompatFunction;
+  { CompatAll is a meta-flag — OR it into every per-flag setting so future
+    --compat-* options only need their own field; the meta-flag fan-out
+    happens here rather than in the parser. }
+  AEngine.VarEnabled := AOptions.CompatVar or AOptions.CompatAll;
+  AEngine.FunctionEnabled := AOptions.CompatFunction or AOptions.CompatAll;
   AEngine.StrictTypes := AOptions.StrictTypes;
   AEngine.SourceType := AOptions.SourceType;
   AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;
