@@ -10,8 +10,10 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Engine,
+  Goccia.Engine.Backend,
   Goccia.Error,
   Goccia.Error.Detail,
+  Goccia.Executor,
   Goccia.ScriptLoader.Input,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
@@ -26,12 +28,15 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
+  TBareExecutionMode = (bemInterpreted, bemBytecode);
+
   TBareOptions = record
     ASI: Boolean;
     CompatVar: Boolean;
     CompatFunction: Boolean;
     StrictTypes: Boolean;
     UnsafeFunctionConstructor: Boolean;
+    Mode: TBareExecutionMode;
     SourceType: TGocciaSourceType;
     FileName: string;
   end;
@@ -66,9 +71,20 @@ begin
   WriteLn('  --compat-var                  Enable var declarations');
   WriteLn('  --compat-function             Enable function declarations/expressions');
   WriteLn('  --strict-types                Enforce type annotations at runtime');
+  WriteLn('  --mode=interpreted|bytecode   Execution mode (default: interpreted)');
   WriteLn('  --source-type=script|module   Load entry as a script or module');
   WriteLn('  --unsafe-function-constructor Enable dynamic Function constructor');
   WriteLn('  --help                        Show this help');
+end;
+
+procedure ParseMode(const AValue: string; var AOptions: TBareOptions);
+begin
+  if AValue = 'interpreted' then
+    AOptions.Mode := bemInterpreted
+  else if AValue = 'bytecode' then
+    AOptions.Mode := bemBytecode
+  else
+    raise Exception.Create('Invalid --mode value: ' + AValue);
 end;
 
 procedure ParseSourceType(const AValue: string; var AOptions: TBareOptions);
@@ -91,6 +107,7 @@ begin
   Result.CompatFunction := False;
   Result.StrictTypes := False;
   Result.UnsafeFunctionConstructor := False;
+  Result.Mode := bemInterpreted;
   Result.SourceType := stScript;
   Result.FileName := STDIN_PATH_MARKER;
 
@@ -112,6 +129,8 @@ begin
       Result.StrictTypes := True
     else if Arg = '--unsafe-function-constructor' then
       Result.UnsafeFunctionConstructor := True
+    else if Copy(Arg, 1, Length('--mode=')) = '--mode=' then
+      ParseMode(Copy(Arg, Length('--mode=') + 1, MaxInt), Result)
     else if Copy(Arg, 1, Length('--source-type=')) = '--source-type=' then
       ParseSourceType(Copy(Arg, Length('--source-type=') + 1, MaxInt), Result)
     else if Copy(Arg, 1, 2) = '--' then
@@ -160,10 +179,20 @@ begin
   WriteLn(AResult.ToStringLiteral.Value);
 end;
 
+function CreateExecutorForMode(
+  const AMode: TBareExecutionMode): TGocciaExecutor;
+begin
+  case AMode of
+    bemInterpreted: Result := TGocciaInterpreterExecutor.Create;
+    bemBytecode: Result := TGocciaBytecodeExecutor.Create;
+  end;
+end;
+
 function RunBare(const AOptions: TBareOptions): Integer;
 var
   DisplayName: string;
   Engine: TGocciaEngine;
+  Executor: TGocciaExecutor;
   PrintHost: TBarePrintHost;
   ScriptResult: TGocciaScriptResult;
   Source: TStringList;
@@ -178,23 +207,28 @@ begin
 
     PrintHost := TBarePrintHost.Create;
     try
-      Engine := TGocciaEngine.Create(DisplayName, Source);
+      Executor := CreateExecutorForMode(AOptions.Mode);
       try
-        ConfigureEngine(Engine, AOptions);
-        RegisterBareGlobals(Engine, PrintHost);
+        Engine := TGocciaEngine.Create(DisplayName, Source, Executor);
         try
-          ScriptResult := Engine.Execute;
-          PrintResult(ScriptResult.Result);
-        except
-          on E: TGocciaThrowValue do
-          begin
-            WriteLn(StdErr, FormatThrowDetail(E.Value, DisplayName, Source,
-              IsColorTerminal, E.Suggestion));
-            Result := 1;
+          ConfigureEngine(Engine, AOptions);
+          RegisterBareGlobals(Engine, PrintHost);
+          try
+            ScriptResult := Engine.Execute;
+            PrintResult(ScriptResult.Result);
+          except
+            on E: TGocciaThrowValue do
+            begin
+              WriteLn(StdErr, FormatThrowDetail(E.Value, DisplayName, Source,
+                IsColorTerminal, E.Suggestion));
+              Result := 1;
+            end;
           end;
+        finally
+          Engine.Free;
         end;
       finally
-        Engine.Free;
+        Executor.Free;
       end;
     finally
       PrintHost.Free;

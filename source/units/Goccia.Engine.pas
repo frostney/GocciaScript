@@ -92,7 +92,7 @@ type
   private
     FInterpreter: TGocciaInterpreter;
   public
-    constructor Create(const AInterpreter: TGocciaInterpreter);
+    constructor Create;
     procedure Initialize(const AGlobalScope: TGocciaScope;
       const AModuleLoader: TGocciaModuleLoader;
       const ASourcePath: string); override;
@@ -102,6 +102,10 @@ type
       const AProgram: TGocciaProgram): TGocciaValue; override;
     function EvaluateModuleBody(const AProgram: TGocciaProgram;
       const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    { The bootstrapped interpreter is owned by TGocciaEngine and assigned
+      here during Engine.Initialize so the executor can tree-walk. }
+    property Interpreter: TGocciaInterpreter read FInterpreter
+      write FInterpreter;
   end;
 
   TGocciaEngine = class
@@ -121,7 +125,6 @@ type
     FStrictTypes: Boolean;
     FShims: TStringList;
     FExecutor: TGocciaExecutor;
-    FOwnsExecutor: Boolean;
     FSourceLines: TStringList;
     FExtensions: TGocciaEngineExtensionList;
 
@@ -190,12 +193,18 @@ type
     function CompileDynamicFunction(const AParamsSources: array of string;
       const ABodySource: string): TGocciaFunctionBase;
   public
-    constructor Create(const AFileName: string; const ASourceLines: TStringList); overload;
-    constructor Create(const AFileName: string; const ASourceLines: TStringList; const AResolver: TGocciaModuleResolver); overload;
-    constructor Create(const AFileName: string; const ASourceLines: TStringList; const AModuleLoader: TGocciaModuleLoader); overload;
-    constructor Create(const AFileName: string; const ASourceLines: TStringList;
+    { Callers always provide an explicit executor — no implicit interpreter
+      fallback. Pair an executor with the engine that owns it; the engine
+      does not free executors. }
+    constructor Create(const AFileName: string;
+      const ASourceLines: TStringList;
       const AExecutor: TGocciaExecutor); overload;
-    constructor Create(const AFileName: string; const ASourceLines: TStringList;
+    constructor Create(const AFileName: string;
+      const ASourceLines: TStringList;
+      const AResolver: TGocciaModuleResolver;
+      const AExecutor: TGocciaExecutor); overload;
+    constructor Create(const AFileName: string;
+      const ASourceLines: TStringList;
       const AModuleLoader: TGocciaModuleLoader;
       const AExecutor: TGocciaExecutor); overload;
     destructor Destroy; override;
@@ -348,11 +357,10 @@ end;
 
 { TGocciaInterpreterExecutor }
 
-constructor TGocciaInterpreterExecutor.Create(
-  const AInterpreter: TGocciaInterpreter);
+constructor TGocciaInterpreterExecutor.Create;
 begin
   inherited Create;
-  FInterpreter := AInterpreter;
+  FInterpreter := nil;
 end;
 
 procedure TGocciaInterpreterExecutor.Initialize(
@@ -532,41 +540,34 @@ begin
 end;
 
 constructor TGocciaEngine.Create(const AFileName: string;
-  const ASourceLines: TStringList);
+  const ASourceLines: TStringList; const AExecutor: TGocciaExecutor);
 begin
+  if not Assigned(AExecutor) then
+    raise Exception.Create('TGocciaEngine.Create: AExecutor is required.');
+  FExecutor := AExecutor;
   Initialize(AFileName, ASourceLines, TGocciaModuleLoader.Create(AFileName),
     True);
-end;
-
-constructor TGocciaEngine.Create(const AFileName: string;
-  const ASourceLines: TStringList; const AResolver: TGocciaModuleResolver);
-begin
-  Initialize(AFileName, ASourceLines,
-    TGocciaModuleLoader.Create(AFileName, AResolver), True);
 end;
 
 constructor TGocciaEngine.Create(const AFileName: string;
   const ASourceLines: TStringList;
-  const AModuleLoader: TGocciaModuleLoader);
+  const AResolver: TGocciaModuleResolver;
+  const AExecutor: TGocciaExecutor);
 begin
-  Initialize(AFileName, ASourceLines, AModuleLoader, False);
-end;
-
-constructor TGocciaEngine.Create(const AFileName: string;
-  const ASourceLines: TStringList; const AExecutor: TGocciaExecutor);
-begin
+  if not Assigned(AExecutor) then
+    raise Exception.Create('TGocciaEngine.Create: AExecutor is required.');
   FExecutor := AExecutor;
-  FOwnsExecutor := False;
-  Initialize(AFileName, ASourceLines, TGocciaModuleLoader.Create(AFileName),
-    True);
+  Initialize(AFileName, ASourceLines,
+    TGocciaModuleLoader.Create(AFileName, AResolver), True);
 end;
 
 constructor TGocciaEngine.Create(const AFileName: string;
   const ASourceLines: TStringList; const AModuleLoader: TGocciaModuleLoader;
   const AExecutor: TGocciaExecutor);
 begin
+  if not Assigned(AExecutor) then
+    raise Exception.Create('TGocciaEngine.Create: AExecutor is required.');
   FExecutor := AExecutor;
-  FOwnsExecutor := False;
   Initialize(AFileName, ASourceLines, AModuleLoader, False);
 end;
 
@@ -632,12 +633,12 @@ begin
   RegisterBuiltIns;
   ExecuteShims;
 
-  // Set up the executor: use the provided one or default to interpreter mode.
-  if not Assigned(FExecutor) then
-  begin
-    FExecutor := TGocciaInterpreterExecutor.Create(FInterpreter);
-    FOwnsExecutor := True;
-  end;
+  // The executor was provided by the caller via the constructor.  When the
+  // caller chose interpreter mode, bind the bootstrapped interpreter into
+  // it now so its tree-walk methods can dispatch.  The bytecode executor
+  // does not need this hook.
+  if FExecutor is TGocciaInterpreterExecutor then
+    TGocciaInterpreterExecutor(FExecutor).Interpreter := FInterpreter;
   FExecutor.Initialize(FInterpreter.GlobalScope, FModuleLoader, AFileName);
 
   if Assigned(FFunctionConstructor) then
@@ -675,8 +676,6 @@ begin
     FLastSourceMap.Free;
     FInjectedGlobals.Free;
     FShims.Free;
-    if FOwnsExecutor then
-      FExecutor.Free;
     FInterpreter.Free;
     if FOwnsModuleLoader then
       FModuleLoader.Free;
@@ -1354,12 +1353,18 @@ class function TGocciaEngine.RunScriptFromStringList(
   const ASource: TStringList; const AFileName: string): TGocciaScriptResult;
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
 begin
-  Engine := TGocciaEngine.Create(AFileName, ASource);
+  Executor := TGocciaInterpreterExecutor.Create;
   try
-    Result := Engine.Execute;
+    Engine := TGocciaEngine.Create(AFileName, ASource, Executor);
+    try
+      Result := Engine.Execute;
+    finally
+      Engine.Free;
+    end;
   finally
-    Engine.Free;
+    Executor.Free;
   end;
 end;
 

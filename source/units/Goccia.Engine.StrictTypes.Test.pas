@@ -55,15 +55,21 @@ end;
 procedure TEngineStrictTypesTests.TestDefaultIsFalse;
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Engine := TGocciaEngine.Create('<strict-test>', Source);
+  Executor := TGocciaInterpreterExecutor.Create;
   try
-    Expect<Boolean>(Engine.StrictTypes).ToBe(False);
+    Engine := TGocciaEngine.Create('<strict-test>', Source, Executor);
+    try
+      Expect<Boolean>(Engine.StrictTypes).ToBe(False);
+    finally
+      Engine.Free;
+      Source.Free;
+    end;
   finally
-    Engine.Free;
-    Source.Free;
+    Executor.Free;
   end;
 end;
 
@@ -92,18 +98,24 @@ end;
 procedure TEngineStrictTypesTests.TestSetterPropagatesToInterpreterScope;
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Engine := TGocciaEngine.Create('<strict-test>', Source);
+  Executor := TGocciaInterpreterExecutor.Create;
   try
-    Engine.StrictTypes := True;
-    Expect<Boolean>(Engine.StrictTypes).ToBe(True);
-    Expect<Boolean>(Engine.Interpreter.StrictTypesEnabled).ToBe(True);
-    Expect<Boolean>(Engine.Interpreter.GlobalScope.StrictTypes).ToBe(True);
+    Engine := TGocciaEngine.Create('<strict-test>', Source, Executor);
+    try
+      Engine.StrictTypes := True;
+      Expect<Boolean>(Engine.StrictTypes).ToBe(True);
+      Expect<Boolean>(Engine.Interpreter.StrictTypesEnabled).ToBe(True);
+      Expect<Boolean>(Engine.Interpreter.GlobalScope.StrictTypes).ToBe(True);
+    finally
+      Engine.Free;
+      Source.Free;
+    end;
   finally
-    Engine.Free;
-    Source.Free;
+    Executor.Free;
   end;
 end;
 
@@ -130,99 +142,111 @@ end;
 procedure TEngineStrictTypesTests.TestEffectiveStrictTypesReadsLiveRoot;
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   Source: TStringList;
   Child: TGocciaScope;
 begin
   Source := CreateEmptySource;
-  Engine := TGocciaEngine.Create('<strict-test>', Source);
+  Executor := TGocciaInterpreterExecutor.Create;
   try
-    { Simulate a closure whose lexical scope was created before the
-      setter ran: a child of the global scope captures the
-      then-current StrictTypes (False) into its own FStrictTypes. }
-    Child := Engine.Interpreter.GlobalScope.CreateChild(skBlock,
-      'embedder-block');
-    Expect<Boolean>(Child.StrictTypes).ToBe(False);
+    Engine := TGocciaEngine.Create('<strict-test>', Source, Executor);
+    try
+      { Simulate a closure whose lexical scope was created before the
+        setter ran: a child of the global scope captures the
+        then-current StrictTypes (False) into its own FStrictTypes. }
+      Child := Engine.Interpreter.GlobalScope.CreateChild(skBlock,
+        'embedder-block');
+      Expect<Boolean>(Child.StrictTypes).ToBe(False);
 
-    { Flipping Engine.StrictTypes only updates the global scope's own
-      FStrictTypes; the child's snapshot stays stale. }
-    Engine.StrictTypes := True;
-    Expect<Boolean>(Child.StrictTypes).ToBe(False);
+      { Flipping Engine.StrictTypes only updates the global scope's own
+        FStrictTypes; the child's snapshot stays stale. }
+      Engine.StrictTypes := True;
+      Expect<Boolean>(Child.StrictTypes).ToBe(False);
 
-    { EffectiveStrictTypes walks to the root, so closures
-      created before the setter still observe the live value -- this
-      is what TGocciaFunctionValue.ExecuteBody and its generator
-      counterparts read when seeding the call context. }
-    Expect<Boolean>(Child.EffectiveStrictTypes).ToBe(True);
+      { EffectiveStrictTypes walks to the root, so closures
+        created before the setter still observe the live value -- this
+        is what TGocciaFunctionValue.ExecuteBody and its generator
+        counterparts read when seeding the call context. }
+      Expect<Boolean>(Child.EffectiveStrictTypes).ToBe(True);
 
-    { Flipping it back also flows through. }
-    Engine.StrictTypes := False;
-    Expect<Boolean>(Child.EffectiveStrictTypes).ToBe(False);
+      { Flipping it back also flows through. }
+      Engine.StrictTypes := False;
+      Expect<Boolean>(Child.EffectiveStrictTypes).ToBe(False);
+    finally
+      Engine.Free;
+      Source.Free;
+    end;
   finally
-    Engine.Free;
-    Source.Free;
+    Executor.Free;
   end;
 end;
 
 procedure TEngineStrictTypesTests.TestAssignBindingGatedOnLiveStrictTypes;
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   Source: TStringList;
   Scope: TGocciaScope;
   Threw: Boolean;
 begin
   Source := CreateEmptySource;
-  Engine := TGocciaEngine.Create('<strict-test>', Source);
+  Executor := TGocciaInterpreterExecutor.Create;
   try
-    Scope := Engine.Interpreter.GlobalScope;
-
-    { Set up a binding with a recorded sltFloat type hint while
-      strict-types is on. }
-    Engine.StrictTypes := True;
-    Scope.DefineLexicalBinding('x',
-      TGocciaNumberLiteralValue.Create(1), dtLet);
-    Scope.SetOwnBindingTypeHint('x', sltFloat);
-
-    { With strict-types live, assigning a string throws TypeError. }
-    Threw := False;
+    Engine := TGocciaEngine.Create('<strict-test>', Source, Executor);
     try
-      Scope.AssignBinding('x',
-        TGocciaStringLiteralValue.Create('hello'));
-    except
-      on TGocciaThrowValue do
-        Threw := True;
-    end;
-    Expect<Boolean>(Threw).ToBe(True);
+      Scope := Engine.Interpreter.GlobalScope;
 
-    { Now turn strict-types off.  The binding's recorded TypeHint
-      stays (it's a piece of binding metadata), but AssignBinding's
-      enforcement is gated on the live root flag, so reassignments
-      stop throwing -- this is what makes the embedder's runtime
-      toggle flow through the way function-entry checks already do. }
-    Engine.StrictTypes := False;
-    Threw := False;
-    try
-      Scope.AssignBinding('x',
-        TGocciaStringLiteralValue.Create('hello'));
-    except
-      on TGocciaThrowValue do
-        Threw := True;
-    end;
-    Expect<Boolean>(Threw).ToBe(False);
+      { Set up a binding with a recorded sltFloat type hint while
+        strict-types is on. }
+      Engine.StrictTypes := True;
+      Scope.DefineLexicalBinding('x',
+        TGocciaNumberLiteralValue.Create(1), dtLet);
+      Scope.SetOwnBindingTypeHint('x', sltFloat);
 
-    { Flip back on -- enforcement returns. }
-    Engine.StrictTypes := True;
-    Threw := False;
-    try
-      Scope.AssignBinding('x',
-        TGocciaBooleanLiteralValue.Create(True));
-    except
-      on TGocciaThrowValue do
-        Threw := True;
+      { With strict-types live, assigning a string throws TypeError. }
+      Threw := False;
+      try
+        Scope.AssignBinding('x',
+          TGocciaStringLiteralValue.Create('hello'));
+      except
+        on TGocciaThrowValue do
+          Threw := True;
+      end;
+      Expect<Boolean>(Threw).ToBe(True);
+
+      { Now turn strict-types off.  The binding's recorded TypeHint
+        stays (it's a piece of binding metadata), but AssignBinding's
+        enforcement is gated on the live root flag, so reassignments
+        stop throwing -- this is what makes the embedder's runtime
+        toggle flow through the way function-entry checks already do. }
+      Engine.StrictTypes := False;
+      Threw := False;
+      try
+        Scope.AssignBinding('x',
+          TGocciaStringLiteralValue.Create('hello'));
+      except
+        on TGocciaThrowValue do
+          Threw := True;
+      end;
+      Expect<Boolean>(Threw).ToBe(False);
+
+      { Flip back on -- enforcement returns. }
+      Engine.StrictTypes := True;
+      Threw := False;
+      try
+        Scope.AssignBinding('x',
+          TGocciaBooleanLiteralValue.Create(True));
+      except
+        on TGocciaThrowValue do
+          Threw := True;
+      end;
+      Expect<Boolean>(Threw).ToBe(True);
+    finally
+      Engine.Free;
+      Source.Free;
     end;
-    Expect<Boolean>(Threw).ToBe(True);
   finally
-    Engine.Free;
-    Source.Free;
+    Executor.Free;
   end;
 end;
 
