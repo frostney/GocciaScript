@@ -1396,7 +1396,11 @@ begin
   // Skip on worker threads: shared immutable objects (singletons, prototypes)
   // have a single FGCMark field that is not thread-safe — running mark-sweep
   // on a worker would race on that field and crash.
-  if Assigned(GC) and (not GIsWorkerThread) then
+  // Also skip while JS function/callback frames are active. Pascal stack-held
+  // values are protected by the active-root discipline at safe call
+  // boundaries; reentrant user-triggered mark-sweep from inside that stack is
+  // too early to prove every transient value has been rooted.
+  if Assigned(GC) and (not GIsWorkerThread) and (GC.ActiveRootCount = 0) then
     GC.Collect;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;

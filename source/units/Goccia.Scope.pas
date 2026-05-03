@@ -35,6 +35,7 @@ type
     FOnError: TGocciaThrowErrorCallback;
     FLoadModule: TLoadModuleCallback;
     FStrictTypes: Boolean;
+    FEscaped: Boolean;
   protected
     function GetThisValue: TGocciaValue; virtual;
     function GetOwningClass: TGocciaValue; virtual;
@@ -43,8 +44,10 @@ type
     constructor Create(const AParent: TGocciaScope = nil; const AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; const ACapacity: Integer = 0);
     destructor Destroy; override;
     function CreateChild(const AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; const ACapacity: Integer = 0): TGocciaScope;
+    procedure MarkEscaped;
 
     procedure MarkReferences; override;
+    function CanRecycleDuringActiveCall: Boolean; override;
 
     // New Define/Assign pattern
     procedure DefineLexicalBinding(const AName: string; const AValue: TGocciaValue; const ADeclarationType: TGocciaDeclarationType; const ALine: Integer = 0; const AColumn: Integer = 0);
@@ -100,6 +103,7 @@ type
       surrounding lexical scope.  For live engine state use
       EffectiveStrictTypes, which always reads the root scope. }
     property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
+    property Escaped: Boolean read FEscaped;
   end;
 
   // Root scope with no parent -- used by the interpreter/engine
@@ -214,6 +218,23 @@ begin
   Result := TGocciaScope.Create(Self, AScopeKind, ACustomLabel, ACapacity);
   // Inherit ThisValue so that block scopes can resolve `this` correctly
   Result.FThisValue := FThisValue;
+end;
+
+procedure TGocciaScope.MarkEscaped;
+var
+  Current: TGocciaScope;
+begin
+  Current := Self;
+  while Assigned(Current) and not Current.FEscaped do
+  begin
+    Current.FEscaped := True;
+    Current := Current.FParent;
+  end;
+end;
+
+function TGocciaScope.CanRecycleDuringActiveCall: Boolean;
+begin
+  Result := False;
 end;
 
 function TGocciaScope.GetThisValue: TGocciaValue;

@@ -37,13 +37,17 @@ begin
   if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
     TGocciaObjectValue.InitializeSharedPrototype;
   FBuiltinObject := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.PinObject(FBuiltinObject);
   FThrowError := AThrowError;
 end;
 
 destructor TGocciaBuiltin.Destroy;
 begin
-  // FBuiltinObject is GC-managed when GC is active; only free manually otherwise
-  if not Assigned(TGarbageCollector.Instance) then
+  // FBuiltinObject is GC-managed when GC is active; only free manually otherwise.
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.UnpinObject(FBuiltinObject)
+  else
     FBuiltinObject.Free;
   inherited;
 end;

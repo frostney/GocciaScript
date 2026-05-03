@@ -22,6 +22,7 @@ type
     procedure MarkReferences; virtual;
     function TraceWeakReferences: Boolean; virtual;
     procedure SweepWeakReferences; virtual;
+    function CanRecycleDuringActiveCall: Boolean; virtual;
     // Called by the GC sweep instead of Free. Default calls Free.
     // Override to return the object to a pool instead of deallocating.
     procedure Recycle; virtual;
@@ -41,6 +42,7 @@ type
     FActiveRootStack: TGCManagedObjectList;
 
     FAllocationsSinceLastGC: Integer;
+    FUnregisteredSlots: Integer;
     FGCThreshold: Integer;
     FEnabled: Boolean;
     FCollecting: Boolean;
@@ -63,7 +65,9 @@ type
     {$ENDIF}
 
     function GetManagedObjectCount: Integer;
+    function GetActiveRootCount: Integer;
     function GetWatermark: Integer; inline;
+    procedure CompactManagedObjects;
   protected
     procedure MarkRoots; virtual;
     procedure TraceWeakReferences;
@@ -123,6 +127,7 @@ type
     property TotalCollected: Int64 read FTotalCollected;
     property TotalCollections: Integer read FTotalCollections;
     property ManagedObjectCount: Integer read GetManagedObjectCount;
+    property ActiveRootCount: Integer read GetActiveRootCount;
 
     // Byte-level memory tracking. BytesAllocated is the approximate
     // number of bytes currently tracked by the GC (InstanceSize per
@@ -216,6 +221,11 @@ procedure TGCManagedObject.SweepWeakReferences;
 begin
 end;
 
+function TGCManagedObject.CanRecycleDuringActiveCall: Boolean;
+begin
+  Result := True;
+end;
+
 procedure TGCManagedObject.Recycle;
 begin
   Free;
@@ -252,6 +262,7 @@ begin
   FRootObjects := TGCObjectSet.Create;
   FActiveRootStack := TGCManagedObjectList.Create(False);
   FAllocationsSinceLastGC := 0;
+  FUnregisteredSlots := 0;
   FGCThreshold := DEFAULT_GC_THRESHOLD;
   FEnabled := True;
   FCollecting := False;
@@ -309,6 +320,10 @@ begin
     FManagedObjects[Idx] := nil;
     AObject.GCIndex := -1;
     Dec(FBytesAllocated, AObject.InstanceSize);
+    Inc(FUnregisteredSlots);
+    if (not FCollecting) and (FUnregisteredSlots > 4096) and
+       (FUnregisteredSlots * 4 > FManagedObjects.Count) then
+      CompactManagedObjects;
   end;
 end;
 
@@ -415,6 +430,31 @@ begin
   end;
 end;
 
+procedure TGarbageCollector.CompactManagedObjects;
+var
+  I, WriteIdx: Integer;
+  Obj: TGCManagedObject;
+begin
+  if FUnregisteredSlots = 0 then
+    Exit;
+
+  WriteIdx := 0;
+  for I := 0 to FManagedObjects.Count - 1 do
+  begin
+    Obj := FManagedObjects[I];
+    if Obj = nil then
+      Continue;
+    Obj.GCIndex := WriteIdx;
+    FManagedObjects[WriteIdx] := Obj;
+    Inc(WriteIdx);
+  end;
+
+  FManagedObjects.Count := WriteIdx;
+  FUnregisteredSlots := 0;
+  if FManagedObjects.Capacity > 4 * WriteIdx + 256 then
+    FManagedObjects.Capacity := WriteIdx + (WriteIdx div 2);
+end;
+
 procedure TGarbageCollector.SweepObjects;
 var
   I, WriteIdx: Integer;
@@ -435,6 +475,13 @@ begin
       FManagedObjects[WriteIdx] := Obj;
       Inc(WriteIdx);
     end
+    else if (FActiveRootStack.Count > 0) and
+            (not Obj.CanRecycleDuringActiveCall) then
+    begin
+      Obj.GCIndex := WriteIdx;
+      FManagedObjects[WriteIdx] := Obj;
+      Inc(WriteIdx);
+    end
     else
     begin
       Dec(FBytesAllocated, Obj.InstanceSize);
@@ -445,6 +492,7 @@ begin
   end;
 
   FManagedObjects.Count := WriteIdx;
+  FUnregisteredSlots := 0;
   if FManagedObjects.Capacity > 4 * WriteIdx + 256 then
     FManagedObjects.Capacity := WriteIdx + (WriteIdx div 2);
   FTotalCollected := FTotalCollected + Collected;
@@ -573,6 +621,13 @@ begin
         FManagedObjects[WriteIdx] := Obj;
         Inc(WriteIdx);
       end
+      else if (FActiveRootStack.Count > 0) and
+              (not Obj.CanRecycleDuringActiveCall) then
+      begin
+        Obj.GCIndex := WriteIdx;
+        FManagedObjects[WriteIdx] := Obj;
+        Inc(WriteIdx);
+      end
       else
       begin
         Dec(FBytesAllocated, Obj.InstanceSize);
@@ -583,6 +638,7 @@ begin
     end;
 
     FManagedObjects.Count := WriteIdx;
+    FUnregisteredSlots := 0;
     if FManagedObjects.Capacity > 4 * WriteIdx + 256 then
       FManagedObjects.Capacity := WriteIdx + (WriteIdx div 2);
     FAllocationsSinceLastGC := 0;
@@ -636,6 +692,11 @@ end;
 function TGarbageCollector.GetManagedObjectCount: Integer;
 begin
   Result := FManagedObjects.Count;
+end;
+
+function TGarbageCollector.GetActiveRootCount: Integer;
+begin
+  Result := FActiveRootStack.Count;
 end;
 
 initialization

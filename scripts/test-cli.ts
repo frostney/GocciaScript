@@ -288,6 +288,30 @@ console.log("--max-memory (OOM triggers RangeError)...");
   if (!out.includes("RangeError")) throw new Error(`OOM output should contain RangeError`);
 }
 
+console.log("--max-memory (tight recursion stays under limit)...");
+{
+  const src = "const fib=(n)=>n<=1?n:fib(n-1)+fib(n-2); fib(25);\n";
+  for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+    const proc = Bun.spawnSync(
+      [LOADER, "--max-memory=1000000", "--output=json", "--asi", ...modeArgs],
+      {
+        stdin: new TextEncoder().encode(src),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    if (proc.exitCode !== 0) {
+      throw new Error(
+        `tight recursion with ${modeArgs[0] ?? "interpreted"} should stay under --max-memory, got exit ${proc.exitCode}: ${proc.stdout.toString()}${proc.stderr.toString()}`,
+      );
+    }
+    const json = JSON.parse(proc.stdout.toString());
+    if (json.files?.[0]?.result !== 75025) {
+      throw new Error(`tight recursion result should be 75025, got ${json.files?.[0]?.result}`);
+    }
+  }
+}
+
 console.log("--max-memory (maxBytes readonly)...");
 {
   const res = await $`echo 'Goccia.gc.maxBytes = 999' | ${LOADER} --asi 2>&1`.nothrow();

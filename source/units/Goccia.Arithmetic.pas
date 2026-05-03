@@ -81,8 +81,8 @@ begin
       Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
     Exit(TGocciaNumberLiteralValue.ZeroValue);
   end;
-  if AValue = 1.0 then
-    Exit(TGocciaNumberLiteralValue.OneValue);
+  if (AValue >= 0.0) and (AValue <= 255.0) and (Frac(AValue) = 0) then
+    Exit(TGocciaNumberLiteralValue.SmallIntValue(Trunc(AValue)));
   Result := TGocciaNumberLiteralValue.Create(AValue);
 end;
 

@@ -102,6 +102,8 @@ begin
   FBodyStatements := ABodyStatements;
   FClosure := AClosure;
   FName := AName;
+  if Assigned(FClosure) then
+    FClosure.MarkEscaped;
 
   // Pre-compute whether all parameters are simple named params (no rest, no destructuring, no defaults)
   FIsSimpleParams := True;
@@ -339,16 +341,30 @@ end;
 function TGocciaFunctionValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   CallScope: TGocciaScope;
+  GC: TGarbageCollector;
+  CollectionCountBefore: Integer;
 begin
   CallScope := CreateCallScope;
+  GC := TGarbageCollector.Instance;
+  CollectionCountBefore := -1;
 
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.PushActiveRoot(CallScope);
+  if Assigned(GC) then
+  begin
+    CollectionCountBefore := GC.TotalCollections;
+    GC.PushActiveRoot(Self);
+    GC.PushActiveRoot(CallScope);
+  end;
   try
     Result := ExecuteBody(CallScope, AArguments, AThisValue);
   finally
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.PopActiveRoot;
+    if Assigned(GC) then
+    begin
+      GC.PopActiveRoot;
+      GC.PopActiveRoot;
+    end;
+    if ((not Assigned(GC)) or (GC.TotalCollections = CollectionCountBefore)) and
+       (not CallScope.Escaped) then
+      CallScope.Free;
   end;
 end;
 
@@ -416,18 +432,32 @@ function TGocciaMethodValue.CallWithThisValue(
   out AFinalThisValue: TGocciaValue): TGocciaValue;
 var
   CallScope: TGocciaScope;
+  GC: TGarbageCollector;
+  CollectionCountBefore: Integer;
 begin
   AFinalThisValue := AThisValue;
   CallScope := CreateCallScope;
+  GC := TGarbageCollector.Instance;
+  CollectionCountBefore := -1;
 
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.PushActiveRoot(CallScope);
+  if Assigned(GC) then
+  begin
+    CollectionCountBefore := GC.TotalCollections;
+    GC.PushActiveRoot(Self);
+    GC.PushActiveRoot(CallScope);
+  end;
   try
     Result := ExecuteBody(CallScope, AArguments, AThisValue);
     AFinalThisValue := CallScope.ThisValue;
   finally
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.PopActiveRoot;
+    if Assigned(GC) then
+    begin
+      GC.PopActiveRoot;
+      GC.PopActiveRoot;
+    end;
+    if ((not Assigned(GC)) or (GC.TotalCollections = CollectionCountBefore)) and
+       (not CallScope.Escaped) then
+      CallScope.Free;
   end;
 end;
 
