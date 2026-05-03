@@ -2227,15 +2227,15 @@ begin
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
     end;
-    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
-    for J := 0 to ClosedCount - 1 do
-      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[J], 0, 0));
-
     if EndJump >= 0 then
       PatchJumpTarget(ACtx, EndJump);
 
     for I := 0 to BreakJumps.Count - 1 do
       PatchJumpTarget(ACtx, BreakJumps[I]);
+
+    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+    for J := 0 to ClosedCount - 1 do
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[J], 0, 0));
   finally
     BreakJumps.Free;
     GBreakJumps := OldBreakJumps;

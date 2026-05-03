@@ -79,6 +79,7 @@ type
     procedure TestCoveragePreservesConstantBranch;
     procedure TestConstantEvaluationOptionsAreIndependent;
     procedure TestStrictTypeSimplificationRequiresStrictTypes;
+    procedure TestSwitchExitJumpsCloseUpvalues;
   public
     procedure SetupTests; override;
   end;
@@ -106,6 +107,7 @@ begin
   Test('Coverage preserves constant branch shape', TestCoveragePreservesConstantBranch);
   Test('Constant evaluation options are independent', TestConstantEvaluationOptionsAreIndependent);
   Test('Strict type simplification requires strict-types', TestStrictTypeSimplificationRequiresStrictTypes);
+  Test('Switch exit jumps close upvalues', TestSwitchExitJumpsCloseUpvalues);
 end;
 
 function TTestCompiler.CompileSource(
@@ -682,6 +684,48 @@ begin
   Module := CompileSource('let b: boolean = true; !!b;', True);
   try
     Expect<Integer>(CountOp(Module.TopLevel, OP_NOT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestSwitchExitJumpsCloseUpvalues;
+var
+  Module: TGocciaBytecodeModule;
+  Template: TGocciaFunctionTemplate;
+  I, CloseIndex, CloseTargetJumps, TargetIndex: Integer;
+  Instruction: UInt32;
+begin
+  Module := CompileSource(
+    'let read; switch (1) { case 1: let value = "switch"; read = () => value; break; }');
+  try
+    Template := Module.TopLevel;
+    CloseIndex := -1;
+    for I := 0 to Template.CodeCount - 1 do
+    begin
+      Instruction := Template.GetInstruction(I);
+      if TGocciaOpCode(DecodeOp(Instruction)) = OP_CLOSE_UPVALUE then
+      begin
+        CloseIndex := I;
+        Break;
+      end;
+    end;
+
+    Expect<Boolean>(CloseIndex >= 0).ToBe(True);
+
+    CloseTargetJumps := 0;
+    for I := 0 to Template.CodeCount - 1 do
+    begin
+      Instruction := Template.GetInstruction(I);
+      if TGocciaOpCode(DecodeOp(Instruction)) <> OP_JUMP then
+        Continue;
+
+      TargetIndex := I + 1 + DecodeAx(Instruction);
+      if TargetIndex = CloseIndex then
+        Inc(CloseTargetJumps);
+    end;
+
+    Expect<Boolean>(CloseTargetJumps >= 2).ToBe(True);
   finally
     Module.Free;
   end;
