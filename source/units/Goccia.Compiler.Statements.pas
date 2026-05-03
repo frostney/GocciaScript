@@ -106,6 +106,13 @@ type
     IsAwait: Boolean;
   end;
 
+  TPreallocatedUsingDisposeSlot = record
+    Declaration: TGocciaUsingDeclaration;
+    VariableIndex: Integer;
+    DisposeSlot: UInt8;
+    ResourceRegistered: Boolean;
+  end;
+
   TPendingFinallyEntry = record
     FinallyBlock: TGocciaBlockStatement;
     // Non-nil when this entry represents a using block's disposal.
@@ -630,6 +637,57 @@ threadvar
   // Module-level stack of using resource entries for the current block.
   // Populated by CompileUsingDeclaration, consumed by CompileBlockStatement.
   GUsingResources: TList<TUsingResourceEntry>;
+  GPreallocatedUsingDisposeSlots: TList<TPreallocatedUsingDisposeSlot>;
+
+procedure RegisterUsingResourceForDisposal(const AEntry: TUsingResourceEntry);
+var
+  Len, PendingIdx: Integer;
+  PendingEntry: TPendingFinallyEntry;
+begin
+  if not Assigned(GUsingResources) then
+    GUsingResources := TList<TUsingResourceEntry>.Create;
+  GUsingResources.Add(AEntry);
+
+  if Assigned(GPendingFinally) and (GPendingFinally.Count > 0) then
+  begin
+    PendingIdx := GPendingFinally.Count - 1;
+    PendingEntry := GPendingFinally[PendingIdx];
+    if not Assigned(PendingEntry.FinallyBlock) then
+    begin
+      Len := Length(PendingEntry.UsingResources);
+      SetLength(PendingEntry.UsingResources, Len + 1);
+      PendingEntry.UsingResources[Len] := AEntry;
+      GPendingFinally[PendingIdx] := PendingEntry;
+    end;
+  end;
+end;
+
+function TryUsePreallocatedUsingDisposeSlot(
+  const ADeclaration: TGocciaUsingDeclaration; const AVariableIndex: Integer;
+  out ADisposeSlot: UInt8; out AResourceRegistered: Boolean): Boolean;
+var
+  I: Integer;
+  Preallocated: TPreallocatedUsingDisposeSlot;
+begin
+  Result := False;
+  ADisposeSlot := 0;
+  AResourceRegistered := False;
+  if not Assigned(GPreallocatedUsingDisposeSlots) then
+    Exit;
+
+  for I := GPreallocatedUsingDisposeSlots.Count - 1 downto 0 do
+  begin
+    Preallocated := GPreallocatedUsingDisposeSlots[I];
+    if (Preallocated.Declaration = ADeclaration) and
+       (Preallocated.VariableIndex = AVariableIndex) then
+    begin
+      ADisposeSlot := Preallocated.DisposeSlot;
+      AResourceRegistered := Preallocated.ResourceRegistered;
+      GPreallocatedUsingDisposeSlots.Delete(I);
+      Exit(True);
+    end;
+  end;
+end;
 
 // TC39 Explicit Resource Management: compile using / await using declaration.
 // Emits OP_USING_INIT for each variable to validate and extract the dispose method.
@@ -638,13 +696,12 @@ threadvar
 procedure CompileUsingDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaUsingDeclaration);
 var
-  I, Len, LocalIdx: Integer;
+  I, LocalIdx: Integer;
   Info: TGocciaVariableInfo;
   ValueSlot, DisposeSlot: UInt8;
   Flags: UInt8;
   Entry: TUsingResourceEntry;
-  PendingIdx: Integer;
-  PendingEntry: TPendingFinallyEntry;
+  ResourceRegistered: Boolean;
 begin
   for I := 0 to High(AStmt.Variables) do
   begin
@@ -665,8 +722,14 @@ begin
     // Compile the initializer into the value slot
     ACtx.CompileExpression(Info.Initializer, ValueSlot);
 
-    // Allocate a hidden register for the dispose method
-    DisposeSlot := ACtx.Scope.AllocateRegister;
+    // Allocate a hidden register for the dispose method, or reuse a switch
+    // prelude slot that was initialized before case dispatch.
+    if not TryUsePreallocatedUsingDisposeSlot(AStmt, I, DisposeSlot,
+      ResourceRegistered) then
+    begin
+      DisposeSlot := ACtx.Scope.AllocateRegister;
+      ResourceRegistered := False;
+    end;
 
     // OP_USING_INIT: A=disposeMethodDest, B=valueSource, C=flags (0=sync, 1=async)
     if AStmt.IsAwait then
@@ -683,23 +746,8 @@ begin
     Entry.ValueSlot := ValueSlot;
     Entry.DisposeSlot := DisposeSlot;
     Entry.IsAwait := AStmt.IsAwait;
-    if not Assigned(GUsingResources) then
-      GUsingResources := TList<TUsingResourceEntry>.Create;
-    GUsingResources.Add(Entry);
-
-    // Update the topmost pending-finally entry so return/break can find resources
-    if Assigned(GPendingFinally) and (GPendingFinally.Count > 0) then
-    begin
-      PendingIdx := GPendingFinally.Count - 1;
-      PendingEntry := GPendingFinally[PendingIdx];
-      if not Assigned(PendingEntry.FinallyBlock) then
-      begin
-        Len := Length(PendingEntry.UsingResources);
-        SetLength(PendingEntry.UsingResources, Len + 1);
-        PendingEntry.UsingResources[Len] := Entry;
-        GPendingFinally[PendingIdx] := PendingEntry;
-      end;
-    end;
+    if not ResourceRegistered then
+      RegisterUsingResourceForDisposal(Entry);
   end;
 end;
 
@@ -2039,6 +2087,8 @@ var
   HandlerJump, DisposalEndJump, NullishJump: Integer;
   SavedResources: array of TUsingResourceEntry;
   PendingEntry: TPendingFinallyEntry;
+  PreallocatedUsingDisposeSlots, OldPreallocatedUsingDisposeSlots:
+    TList<TPreallocatedUsingDisposeSlot>;
 
   procedure BeginSwitchUsingDisposalRegion;
   begin
@@ -2061,7 +2111,54 @@ var
     PendingEntry.UsingErrorReg := ErrorReg;
     GPendingFinally.Add(PendingEntry);
   end;
+
+  procedure RegisterSwitchUsingResources;
+  var
+    CaseIdx, ConsequentIdx, VarIdx, LocalIdx: Integer;
+    UsingDecl: TGocciaUsingDeclaration;
+    Entry: TUsingResourceEntry;
+    Preallocated: TPreallocatedUsingDisposeSlot;
+  begin
+    if not HasUsing then
+      Exit;
+
+    PreallocatedUsingDisposeSlots := TList<TPreallocatedUsingDisposeSlot>.Create;
+    OldPreallocatedUsingDisposeSlots := GPreallocatedUsingDisposeSlots;
+    GPreallocatedUsingDisposeSlots := PreallocatedUsingDisposeSlots;
+
+    for CaseIdx := 0 to AStmt.Cases.Count - 1 do
+    begin
+      CaseClause := AStmt.Cases[CaseIdx];
+      for ConsequentIdx := 0 to CaseClause.Consequent.Count - 1 do
+      begin
+        if not (CaseClause.Consequent[ConsequentIdx] is TGocciaUsingDeclaration) then
+          Continue;
+
+        UsingDecl := TGocciaUsingDeclaration(CaseClause.Consequent[ConsequentIdx]);
+        for VarIdx := 0 to High(UsingDecl.Variables) do
+        begin
+          LocalIdx := ACtx.Scope.ResolveLocal(UsingDecl.Variables[VarIdx].Name);
+          if LocalIdx < 0 then
+            Continue;
+
+          Entry.ValueSlot := ACtx.Scope.GetLocal(LocalIdx).Slot;
+          Entry.DisposeSlot := ACtx.Scope.AllocateRegister;
+          Entry.IsAwait := UsingDecl.IsAwait;
+          EmitInstruction(ACtx, EncodeABC(OP_LOAD_NULL, Entry.DisposeSlot, 0, 0));
+          RegisterUsingResourceForDisposal(Entry);
+
+          Preallocated.Declaration := UsingDecl;
+          Preallocated.VariableIndex := VarIdx;
+          Preallocated.DisposeSlot := Entry.DisposeSlot;
+          Preallocated.ResourceRegistered := True;
+          PreallocatedUsingDisposeSlots.Add(Preallocated);
+        end;
+      end;
+    end;
+  end;
 begin
+  PreallocatedUsingDisposeSlots := nil;
+  OldPreallocatedUsingDisposeSlots := nil;
   DiscReg := ACtx.Scope.AllocateRegister;
 
   ACtx.CompileExpression(AStmt.Discriminant, DiscReg);
@@ -2127,7 +2224,10 @@ begin
     end;
 
     if HasUsing then
+    begin
       BeginSwitchUsingDisposalRegion;
+      RegisterSwitchUsingResources;
+    end;
 
     TestReg := ACtx.Scope.AllocateRegister;
     CmpReg := ACtx.Scope.AllocateRegister;
@@ -2237,6 +2337,12 @@ begin
     for J := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[J], 0, 0));
   finally
+    if Assigned(PreallocatedUsingDisposeSlots) then
+    begin
+      if GPreallocatedUsingDisposeSlots = PreallocatedUsingDisposeSlots then
+        GPreallocatedUsingDisposeSlots := OldPreallocatedUsingDisposeSlots;
+      PreallocatedUsingDisposeSlots.Free;
+    end;
     BreakJumps.Free;
     GBreakJumps := OldBreakJumps;
     GBreakFinallyBase := OldBreakFinallyBase;

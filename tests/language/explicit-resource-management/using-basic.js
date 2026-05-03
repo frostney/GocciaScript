@@ -242,4 +242,24 @@ describe("using declaration", () => {
     expect(caught).toBe("after");
     expect(order).toEqual([]);
   });
+
+  test("skipped switch case using does not dispose stale case-test value", () => {
+    const order = [];
+    const marker = () => {
+      order.push("stale-dispose");
+    };
+
+    switch (marker) {
+      case 1:
+        using skipped = {
+          [Symbol.dispose]() { order.push("skipped"); }
+        };
+        order.push("case1");
+      case marker:
+        order.push("case2");
+        break;
+    }
+
+    expect(order).toEqual(["case2"]);
+  });
 });
