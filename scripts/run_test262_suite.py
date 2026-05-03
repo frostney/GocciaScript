@@ -993,9 +993,15 @@ def evaluate_suite(
                         # the worker on this file; queue-not-drained = a peer
                         # stall left this file untouched, retry will likely
                         # finish it on a fresh pool.
-                        is_stalled = "TIMEOUT (worker stalled" in f_error
+                        is_stalled = (
+                            "TIMEOUT (worker stalled" in f_error or
+                            any("TIMEOUT (worker stalled" in item
+                                for item in f_failed_tests)
+                        )
                         is_no_result = (
-                            "Worker produced no result" in f_error
+                            "Worker produced no result" in f_error or
+                            any("Worker produced no result" in item
+                                for item in f_failed_tests)
                         )
                         # Cooperative per-test deadlines surface as failed-test
                         # entries containing "TIMEOUT after Xms" rather than as
