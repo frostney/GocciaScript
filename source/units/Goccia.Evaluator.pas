@@ -732,7 +732,8 @@ begin
          (ConstructorThisValue is TGocciaObjectValue) then
         SuperResult := ConstructorThisValue;
       if (SuperResult is TGocciaObjectValue) and
-         (SuperResult <> AReceiver) then
+         (SuperResult <> AReceiver) and
+         (SuperResult = ConstructorThisValue) then
         RunClassInstanceInitializers(ClassConstructor,
           TGocciaObjectValue(SuperResult), AContext);
     end
@@ -3147,7 +3148,7 @@ begin
     end
     else if (Target is TGocciaFunctionBase) and
             not (Target is TGocciaGeneratorFunctionValue) and
-            TGocciaFunctionBase(Target).HasOwnProperty(PROP_PROTOTYPE) then
+            TGocciaFunctionBase(Target).IsConstructable then
       Result := ConstructOrdinaryFunction(TGocciaFunctionBase(Target),
         BoundArgs)
     else
@@ -3229,7 +3230,7 @@ begin
           Arguments, AContext)
       else if (Callee is TGocciaFunctionBase) and
               not (Callee is TGocciaGeneratorFunctionValue) and
-              TGocciaFunctionBase(Callee).HasOwnProperty(PROP_PROTOTYPE) then
+              TGocciaFunctionBase(Callee).IsConstructable then
       begin
         Result := ConstructOrdinaryFunction(TGocciaFunctionBase(Callee),
           Arguments);

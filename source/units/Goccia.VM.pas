@@ -2364,7 +2364,8 @@ begin
          (ConstructorThisValue is TGocciaObjectValue) then
         SuperResult := ConstructorThisValue;
       if (SuperResult is TGocciaObjectValue) and
-         (SuperResult <> AReceiver) then
+         (SuperResult <> AReceiver) and
+         (SuperResult = ConstructorThisValue) then
         VMClassConstructor.FVM.RunClassInitializers(ClassConstructor, SuperResult);
     end
     else if Assigned(ClassConstructor.ConstructorMethod) then
@@ -4613,7 +4614,7 @@ begin
   if AConstructor is TGocciaFunctionBase then
   begin
     if (AConstructor is TGocciaGeneratorFunctionValue) or
-       not TGocciaFunctionBase(AConstructor).HasOwnProperty(PROP_PROTOTYPE) then
+       not TGocciaFunctionBase(AConstructor).IsConstructable then
       ThrowTypeError(Format(SErrorValueNotConstructor,
         [AConstructor.TypeName]), SSuggestNotConstructorType);
 
