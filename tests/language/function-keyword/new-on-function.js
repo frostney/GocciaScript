@@ -228,3 +228,31 @@ test("`new` on a bound non-constructable function (arrow) throws TypeError", () 
   const Bound = arrow.bind(null);
   expect(() => new Bound()).toThrow(TypeError);
 });
+
+test("`new` on a bound class promotes the constructor's explicit object return as the result", () => {
+  class Base {
+    constructor() {
+      return { swapped: true };
+    }
+  }
+  const Bound = Base.bind(null);
+  const inst = new Bound();
+  expect(inst.swapped).toBe(true);
+});
+
+test("`new` on a bound class with no explicit return yields a fresh instance with class methods", () => {
+  class Counter {
+    constructor(start) {
+      this.value = start;
+    }
+    next() {
+      this.value += 1;
+      return this.value;
+    }
+  }
+  const Bound = Counter.bind(null, 10);
+  const c = new Bound();
+  expect(c.value).toBe(10);
+  expect(c.next()).toBe(11);
+  expect(c instanceof Counter).toBe(true);
+});
