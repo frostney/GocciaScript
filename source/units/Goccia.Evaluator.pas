@@ -2992,7 +2992,8 @@ var
   InitContext, SuperInitContext: TGocciaEvaluationContext;
   InitScope, SuperInitScope: TGocciaScope;
   FunctionCallee: TGocciaFunctionBase;
-  PrototypeValue, ConstructResult: TGocciaValue;
+  PrototypeTarget: TGocciaValue;
+  PrototypeValue: TGocciaValue;
   ReceiverPrototype: TGocciaObjectValue;
   ReceiverInstance: TGocciaObjectValue;
 begin
@@ -3055,11 +3056,20 @@ begin
         // OrdinaryCreateFromConstructor produces a fresh object whose
         // [[Prototype]] is constructor.prototype (or %Object.prototype% when
         // that property is not an Object — §10.1.14 GetPrototypeFromConstructor).
+        // For bound function exotic objects (§10.4.1.2) the receiver's
+        // [[Prototype]] comes from the underlying [[BoundTargetFunction]] —
+        // the bound wrapper itself has no own `prototype` data property.
         FunctionCallee := TGocciaFunctionBase(Callee);
         if not FunctionCallee.IsConstructable then
           ThrowTypeError(Format(SErrorNotConstructor, [CalleeName]),
             SSuggestNotConstructorType);
-        PrototypeValue := FunctionCallee.GetProperty(PROP_PROTOTYPE);
+        PrototypeTarget := FunctionCallee;
+        while PrototypeTarget is TGocciaBoundFunctionValue do
+          PrototypeTarget := TGocciaBoundFunctionValue(PrototypeTarget).OriginalFunction;
+        if PrototypeTarget is TGocciaObjectValue then
+          PrototypeValue := TGocciaObjectValue(PrototypeTarget).GetProperty(PROP_PROTOTYPE)
+        else
+          PrototypeValue := nil;
         if PrototypeValue is TGocciaObjectValue then
           ReceiverPrototype := TGocciaObjectValue(PrototypeValue)
         else
@@ -3071,11 +3081,11 @@ begin
         ReceiverInstance := TGocciaObjectValue.Create(ReceiverPrototype);
         TGarbageCollector.Instance.AddTempRoot(ReceiverInstance);
         try
-          ConstructResult := FunctionCallee.Call(Arguments, ReceiverInstance);
-          if ConstructResult is TGocciaObjectValue then
-            Result := ConstructResult
-          else
-            Result := ReceiverInstance;
+          // InvokeConstructableWithReceiver merges bound args, dispatches to
+          // the underlying target, and applies the spec return rules
+          // (explicit Object return wins; otherwise the receiver).
+          Result := InvokeConstructableWithReceiver(FunctionCallee, Arguments,
+            ReceiverInstance);
         finally
           TGarbageCollector.Instance.RemoveTempRoot(ReceiverInstance);
         end;

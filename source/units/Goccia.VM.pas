@@ -4479,7 +4479,8 @@ var
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   Context: TGocciaEvaluationContext;
   ConstructorName: string;
-  PrototypeValue, ConstructResult: TGocciaValue;
+  PrototypeTarget: TGocciaValue;
+  PrototypeValue: TGocciaValue;
   ReceiverPrototype, ReceiverInstance: TGocciaObjectValue;
 begin
   // ES2026 §28.1.1 [[Construct]](argumentsList, newTarget)
@@ -4550,7 +4551,16 @@ begin
     // that property is not an Object — §10.1.14 GetPrototypeFromConstructor),
     // then calls the body with the new object bound as `this`.  Iff the body
     // explicitly returns an Object, that becomes the call result.
-    PrototypeValue := TGocciaFunctionBase(AConstructor).GetProperty(PROP_PROTOTYPE);
+    // For bound function exotic objects (§10.4.1.2) the receiver's
+    // [[Prototype]] comes from the underlying [[BoundTargetFunction]] —
+    // the bound wrapper itself has no own `prototype` data property.
+    PrototypeTarget := AConstructor;
+    while PrototypeTarget is TGocciaBoundFunctionValue do
+      PrototypeTarget := TGocciaBoundFunctionValue(PrototypeTarget).OriginalFunction;
+    if PrototypeTarget is TGocciaObjectValue then
+      PrototypeValue := TGocciaObjectValue(PrototypeTarget).GetProperty(PROP_PROTOTYPE)
+    else
+      PrototypeValue := nil;
     if PrototypeValue is TGocciaObjectValue then
       ReceiverPrototype := TGocciaObjectValue(PrototypeValue)
     else
@@ -4565,12 +4575,11 @@ begin
       if Assigned(TGocciaCallStack.Instance) then
         TGocciaCallStack.Instance.Push(ConstructorName, '', 0, 0);
       try
-        ConstructResult := TGocciaFunctionBase(AConstructor).Call(
-          AArguments, ReceiverInstance);
-        if ConstructResult is TGocciaObjectValue then
-          Result := ConstructResult
-        else
-          Result := ReceiverInstance;
+        // InvokeConstructableWithReceiver merges bound args, dispatches to
+        // the underlying target, and applies the spec return rules
+        // (explicit Object return wins; otherwise the receiver).
+        Result := InvokeConstructableWithReceiver(AConstructor, AArguments,
+          ReceiverInstance);
       finally
         if Assigned(TGocciaCallStack.Instance) then
           TGocciaCallStack.Instance.Pop;

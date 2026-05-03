@@ -181,3 +181,50 @@ test("when Foo.prototype is reassigned to a non-object, instances fall back to O
   const instance = new Foo();
   expect(Object.getPrototypeOf(instance)).toBe(Object.prototype);
 });
+
+test("`new` on a bound function uses the target's prototype, not the bound wrapper's", () => {
+  function Foo() {}
+  const Bound = Foo.bind(null);
+  const instance = new Bound();
+  expect(Object.getPrototypeOf(instance)).toBe(Foo.prototype);
+  expect(instance instanceof Foo).toBe(true);
+});
+
+test("`new` on a bound function merges bound and call arguments in order", () => {
+  function Pair(a, b) {
+    this.a = a;
+    this.b = b;
+  }
+  const Bound = Pair.bind(null, 1);
+  const p = new Bound(2);
+  expect(p.a).toBe(1);
+  expect(p.b).toBe(2);
+});
+
+test("`new` on a bound function ignores the bound `this` and binds the new instance instead", () => {
+  function Capture() {
+    this.captured = this;
+  }
+  const sentinel = { sentinel: true };
+  const Bound = Capture.bind(sentinel);
+  const c = new Bound();
+  expect(c.captured).toBe(c);
+  expect(c.captured).not.toBe(sentinel);
+});
+
+test("`new` on a doubly-bound function still routes through the original target", () => {
+  function Triple(a, b, c) {
+    this.sum = a + b + c;
+  }
+  const Once = Triple.bind(null, 1);
+  const Twice = Once.bind(null, 2);
+  const t = new Twice(3);
+  expect(t.sum).toBe(6);
+  expect(Object.getPrototypeOf(t)).toBe(Triple.prototype);
+});
+
+test("`new` on a bound non-constructable function (arrow) throws TypeError", () => {
+  const arrow = () => {};
+  const Bound = arrow.bind(null);
+  expect(() => new Bound()).toThrow(TypeError);
+});
