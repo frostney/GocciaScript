@@ -8,6 +8,7 @@ uses
 
   TextSemantics,
 
+  Goccia.Arguments.Collection,
   Goccia.Engine,
   Goccia.Error,
   Goccia.Error.Detail,
@@ -15,9 +16,16 @@ uses
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
   Goccia.Values.Error,
+  Goccia.Values.NativeFunction,
   Goccia.Values.Primitives;
 
 type
+  TBarePrintHost = class
+  public
+    function Print(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+  end;
+
   TBareOptions = record
     ASI: Boolean;
     CompatVar: Boolean;
@@ -27,6 +35,27 @@ type
     SourceType: TGocciaSourceType;
     FileName: string;
   end;
+
+const
+  BARE_PRINT_GLOBAL_NAME = 'print';
+
+function TBarePrintHost.Print(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  I: Integer;
+  Line: string;
+begin
+  Line := '';
+  for I := 0 to AArgs.Length - 1 do
+  begin
+    if I > 0 then
+      Line := Line + ' ';
+    Line := Line + AArgs.GetElement(I).ToStringLiteral.Value;
+  end;
+
+  WriteLn(Line);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
 
 procedure PrintUsage;
 begin
@@ -113,6 +142,15 @@ begin
   AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;
 end;
 
+procedure RegisterBareGlobals(const AEngine: TGocciaEngine;
+  const APrintHost: TBarePrintHost);
+begin
+  AEngine.RegisterGlobal(BARE_PRINT_GLOBAL_NAME,
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(APrintHost.Print,
+      BARE_PRINT_GLOBAL_NAME, -1));
+  AEngine.RefreshGlobalThis;
+end;
+
 procedure PrintResult(const AResult: TGocciaValue);
 begin
   if not Assigned(AResult) then
@@ -126,6 +164,7 @@ function RunBare(const AOptions: TBareOptions): Integer;
 var
   DisplayName: string;
   Engine: TGocciaEngine;
+  PrintHost: TBarePrintHost;
   ScriptResult: TGocciaScriptResult;
   Source: TStringList;
 begin
@@ -137,22 +176,28 @@ begin
     else
       DisplayName := AOptions.FileName;
 
-    Engine := TGocciaEngine.Create(DisplayName, Source);
+    PrintHost := TBarePrintHost.Create;
     try
-      ConfigureEngine(Engine, AOptions);
+      Engine := TGocciaEngine.Create(DisplayName, Source);
       try
-        ScriptResult := Engine.Execute;
-        PrintResult(ScriptResult.Result);
-      except
-        on E: TGocciaThrowValue do
-        begin
-          WriteLn(StdErr, FormatThrowDetail(E.Value, DisplayName, Source,
-            IsColorTerminal, E.Suggestion));
-          Result := 1;
+        ConfigureEngine(Engine, AOptions);
+        RegisterBareGlobals(Engine, PrintHost);
+        try
+          ScriptResult := Engine.Execute;
+          PrintResult(ScriptResult.Result);
+        except
+          on E: TGocciaThrowValue do
+          begin
+            WriteLn(StdErr, FormatThrowDetail(E.Value, DisplayName, Source,
+              IsColorTerminal, E.Suggestion));
+            Result := 1;
+          end;
         end;
+      finally
+        Engine.Free;
       end;
     finally
-      Engine.Free;
+      PrintHost.Free;
     end;
   finally
     Source.Free;
