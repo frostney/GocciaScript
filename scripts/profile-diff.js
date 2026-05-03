@@ -106,9 +106,11 @@ function allocationMap(profile) {
     const allocations = entry.allocations ?? entry.allocs ?? 0;
     if (typeof allocations !== 'number') continue;
     const key = functionKey(entry);
+    const location = functionLocation(entry);
+    const label = location ? `${functionLabel(entry)} @ ${location} allocs` : `${functionLabel(entry)} allocs`;
     map.set(key, {
       value: allocations,
-      label: `${functionLabel(entry)} allocs`,
+      label,
     });
   }
   return map;
@@ -289,10 +291,16 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--baseline') {
+      if (!argv[i + 1] || argv[i + 1].startsWith('--')) {
+        throw new Error('Missing value for --baseline');
+      }
       args.baselineDir = argv[++i];
     } else if (arg.startsWith('--baseline=')) {
       args.baselineDir = arg.slice('--baseline='.length);
     } else if (arg === '--current') {
+      if (!argv[i + 1] || argv[i + 1].startsWith('--')) {
+        throw new Error('Missing value for --current');
+      }
       args.currentDir = argv[++i];
     } else if (arg.startsWith('--current=')) {
       args.currentDir = arg.slice('--current='.length);

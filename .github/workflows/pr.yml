@@ -200,6 +200,7 @@ jobs:
             out="profile-current/${rel%.*}.json"
             mkdir -p "$(dirname "$out")"
             ./build/GocciaBenchmarkRunner "$bench" \
+              --mode=bytecode \
               --profile-deterministic \
               --profile=all \
               --profile-output="$out" \

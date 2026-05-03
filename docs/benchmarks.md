@@ -5,7 +5,7 @@
 ## Executive Summary
 
 - **`suite`/`bench` API** — `bench(name, { setup?, run, teardown? })` with auto-calibration, warmup, and IQR outlier filtering
-- **Four output formats** — `console` (default), `text`, `csv`, `json`; configurable via `--format` and `--output`
+- **Five output formats** — `console` (default), `text`, `csv`, `json`, `compact-json`; configurable via `--format` and `--output`
 - **Profiler-backed runs** — Bytecode benchmark runs can emit opcode/function profiles with `--profile`, including deterministic single-run capture
 - **CI integration** — PR workflow posts benchmark comparison comments with range-overlap classification
 - **Environment tuning** — Calibration time, warmup iterations, and measurement rounds configurable via environment variables
@@ -39,6 +39,7 @@ printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./bu
 
 # Export results in different formats
 ./build/GocciaBenchmarkRunner benchmarks --format=json --output=results.json
+./build/GocciaBenchmarkRunner benchmarks --format=compact-json --output=compact-results.json
 ./build/GocciaBenchmarkRunner benchmarks --format=csv --output=results.csv
 ./build/GocciaBenchmarkRunner benchmarks --format=text
 ```
@@ -47,7 +48,7 @@ When no path is provided, `GocciaBenchmarkRunner` reads benchmark source from st
 
 ## Output Formats
 
-The GocciaBenchmarkRunner supports four output formats via the `--format` flag:
+The GocciaBenchmarkRunner supports five output formats via the `--format` flag:
 
 | Format | Description |
 |--------|-------------|
@@ -55,6 +56,7 @@ The GocciaBenchmarkRunner supports four output formats via the `--format` flag:
 | `text` | Compact one-line-per-benchmark format with optional `setup=Xms teardown=Xms` suffixes |
 | `csv` | Standard CSV with header row (`file,suite,name,ops_per_sec,variance_percentage,mean_ms,iterations,setup_ms,teardown_ms,error`) |
 | `json` | Structured JSON with the common CLI envelope (`build`, aggregate `output`, `timing`, `memory`, `workers`) and a `files[]` array containing each `fileName`, per-file timing, and nested `benchmarks[]`, including `opsPerSec`, `variancePercentage`, `minOpsPerSec`, `maxOpsPerSec`, `setupMs`, and `teardownMs` |
+| `compact-json` | Same structured JSON shape, omitting `build`, `memory`, `stdout`, and `stderr` for smaller machine-readable output |
 
 Use `--output=<file>` to write results to a file instead of stdout.
 
