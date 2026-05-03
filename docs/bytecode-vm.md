@@ -191,6 +191,18 @@ Language features are compiled into compact bytecode instruction sequences rathe
 
 This keeps the emitted bytecode compact and makes opcode additions deliberate instead of reactive.
 
+### Compiler Optimizer
+
+Bytecode compilation includes a small compile-time value optimizer. It folds pure primitive constant expressions, propagates immutable local `const` bindings initialized from compile-time constants, and omits branches or statement tails that are provably unreachable.
+
+The optimizer is intentionally compiler-side only:
+
+- it does not add opcodes or change the `.gbc` format
+- it does not track mutable bindings, imports, destructuring, function/class declarations, or global-backed top-level bindings
+- it only uses `--strict-types` for conservative algebraic simplifications where the strict type alone preserves JavaScript semantics
+
+When coverage is enabled, `PreserveCoverageShape` keeps constant branch structure in the emitted bytecode so coverage can report the non-hit branch instead of erasing it from the report.
+
 ### How Opcode Additions Work
 
 New opcodes should be added only when an operation is both common enough and semantically stable enough to justify a dedicated instruction.

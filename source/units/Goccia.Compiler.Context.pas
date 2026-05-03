@@ -13,13 +13,14 @@ uses
   Goccia.Bytecode,
   Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Debug,
+  Goccia.Compiler.ConstantValue,
   Goccia.Compiler.Scope,
   Goccia.Token;
 
 type
   TCompileExpressionProc = procedure(const AExpr: TGocciaExpression;
     const ADest: UInt8) of object;
-  TCompileStatementProc = procedure(const AStmt: TGocciaStatement) of object;
+  TCompileStatementProc = function(const AStmt: TGocciaStatement): Boolean of object;
   TCompileFunctionBodyProc = procedure(const ABody: TGocciaASTNode) of object;
   TSwapStateProc = procedure(const ATemplate: TGocciaFunctionTemplate;
     const AScope: TGocciaCompilerScope) of object;
@@ -33,6 +34,7 @@ type
     FormalParameterCounts: TFormalParameterCountMap;
     GlobalBackedTopLevel: Boolean;
     StrictTypes: Boolean;
+    OptimizationOptions: TGocciaCompilerOptimizationOptions;
     CompileExpression: TCompileExpressionProc;
     CompileStatement: TCompileStatementProc;
     CompileFunctionBody: TCompileFunctionBodyProc;
