@@ -5,6 +5,7 @@ program Goccia.Compiler.Test;
 uses
   Classes,
   Generics.Collections,
+  Math,
   SysUtils,
 
   TestingPascalLibrary,
@@ -19,6 +20,7 @@ uses
   Goccia.Bytecode.Debug,
   Goccia.Bytecode.Module,
   Goccia.Compiler,
+  Goccia.Compiler.ConstantValue,
   Goccia.Compiler.Scope,
   Goccia.Error,
   Goccia.GarbageCollector,
@@ -31,7 +33,25 @@ uses
 type
   TTestCompiler = class(TTestSuite)
   private
-    function CompileSource(const ASource: string): TGocciaBytecodeModule;
+    function CompileSource(const ASource: string;
+      const AStrictTypes: Boolean = False;
+      const APreserveCoverageShape: Boolean = False;
+      const AGlobalBackedTopLevel: Boolean = False): TGocciaBytecodeModule;
+    function CountOp(const ATemplate: TGocciaFunctionTemplate;
+      const AOp: TGocciaOpCode): Integer;
+    function CountArithmeticOps(
+      const ATemplate: TGocciaFunctionTemplate): Integer;
+    function HasLoadInt(const ATemplate: TGocciaFunctionTemplate;
+      const AValue: Int16): Boolean;
+    function HasNaNFloatConstant(
+      const ATemplate: TGocciaFunctionTemplate): Boolean;
+    function HasInfinityFloatConstant(
+      const ATemplate: TGocciaFunctionTemplate;
+      const APositive: Boolean): Boolean;
+    function HasFloatConstantBits(
+      const ATemplate: TGocciaFunctionTemplate;
+      const AExpected: Double): Boolean;
+    function NegativeZero: Double;
 
     procedure TestCompileLiteral;
     procedure TestCompileRegExpLiteral;
@@ -42,6 +62,14 @@ type
     procedure TestBinaryLittleEndian;
     procedure TestBinaryRoundTripConstants;
     procedure TestUndeclaredPrivateNameRaisesSyntaxError;
+    procedure TestConstantFoldsNestedArithmetic;
+    procedure TestConstantFoldsSpecialNumbers;
+    procedure TestConstPropagation;
+    procedure TestConstPropagationSkipsMutable;
+    procedure TestConstPropagationSkipsGlobalBacked;
+    procedure TestConstantIfEliminatesBranch;
+    procedure TestCoveragePreservesConstantBranch;
+    procedure TestStrictTypeSimplificationRequiresStrictTypes;
   public
     procedure SetupTests; override;
   end;
@@ -57,10 +85,20 @@ begin
   Test('Binary little-endian format', TestBinaryLittleEndian);
   Test('Binary round-trip constants', TestBinaryRoundTripConstants);
   Test('Undeclared private name raises SyntaxError', TestUndeclaredPrivateNameRaisesSyntaxError);
+  Test('Constant folds nested arithmetic', TestConstantFoldsNestedArithmetic);
+  Test('Constant folds special numbers', TestConstantFoldsSpecialNumbers);
+  Test('Const propagation', TestConstPropagation);
+  Test('Const propagation skips mutable bindings', TestConstPropagationSkipsMutable);
+  Test('Const propagation skips global-backed bindings', TestConstPropagationSkipsGlobalBacked);
+  Test('Constant if eliminates branch', TestConstantIfEliminatesBranch);
+  Test('Coverage preserves constant branch shape', TestCoveragePreservesConstantBranch);
+  Test('Strict type simplification requires strict-types', TestStrictTypeSimplificationRequiresStrictTypes);
 end;
 
 function TTestCompiler.CompileSource(
-  const ASource: string): TGocciaBytecodeModule;
+  const ASource: string; const AStrictTypes: Boolean;
+  const APreserveCoverageShape: Boolean;
+  const AGlobalBackedTopLevel: Boolean): TGocciaBytecodeModule;
 var
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
@@ -68,6 +106,7 @@ var
   ProgramNode: TGocciaProgram;
   Compiler: TGocciaCompiler;
   SourceLines: TStringList;
+  Options: TGocciaCompilerOptimizationOptions;
 begin
   Lexer := TGocciaLexer.Create(ASource, '<test>');
   Tokens := Lexer.ScanTokens;
@@ -77,6 +116,11 @@ begin
 
   Compiler := TGocciaCompiler.Create('<test>');
   try
+    Compiler.StrictTypes := AStrictTypes;
+    Compiler.GlobalBackedTopLevel := AGlobalBackedTopLevel;
+    Options := Compiler.OptimizationOptions;
+    Options.PreserveCoverageShape := APreserveCoverageShape;
+    Compiler.OptimizationOptions := Options;
     Result := Compiler.Compile(ProgramNode);
   finally
     Compiler.Free;
@@ -85,6 +129,115 @@ begin
     SourceLines.Free;
     Lexer.Free;
   end;
+end;
+
+function TTestCompiler.CountOp(const ATemplate: TGocciaFunctionTemplate;
+  const AOp: TGocciaOpCode): Integer;
+var
+  I: Integer;
+begin
+  Result := 0;
+  for I := 0 to ATemplate.CodeCount - 1 do
+    if TGocciaOpCode(DecodeOp(ATemplate.GetInstruction(I))) = AOp then
+      Inc(Result);
+end;
+
+function TTestCompiler.CountArithmeticOps(
+  const ATemplate: TGocciaFunctionTemplate): Integer;
+begin
+  Result :=
+    CountOp(ATemplate, OP_ADD) +
+    CountOp(ATemplate, OP_SUB) +
+    CountOp(ATemplate, OP_MUL) +
+    CountOp(ATemplate, OP_DIV) +
+    CountOp(ATemplate, OP_MOD) +
+    CountOp(ATemplate, OP_POW) +
+    CountOp(ATemplate, OP_ADD_INT) +
+    CountOp(ATemplate, OP_SUB_INT) +
+    CountOp(ATemplate, OP_MUL_INT) +
+    CountOp(ATemplate, OP_DIV_INT) +
+    CountOp(ATemplate, OP_MOD_INT) +
+    CountOp(ATemplate, OP_ADD_FLOAT) +
+    CountOp(ATemplate, OP_SUB_FLOAT) +
+    CountOp(ATemplate, OP_MUL_FLOAT) +
+    CountOp(ATemplate, OP_DIV_FLOAT) +
+    CountOp(ATemplate, OP_MOD_FLOAT);
+end;
+
+function TTestCompiler.HasLoadInt(const ATemplate: TGocciaFunctionTemplate;
+  const AValue: Int16): Boolean;
+var
+  I: Integer;
+  Instruction: UInt32;
+begin
+  for I := 0 to ATemplate.CodeCount - 1 do
+  begin
+    Instruction := ATemplate.GetInstruction(I);
+    if (TGocciaOpCode(DecodeOp(Instruction)) = OP_LOAD_INT) and
+       (DecodesBx(Instruction) = AValue) then
+      Exit(True);
+  end;
+  Result := False;
+end;
+
+function TTestCompiler.HasNaNFloatConstant(
+  const ATemplate: TGocciaFunctionTemplate): Boolean;
+var
+  I: Integer;
+  Constant: TGocciaBytecodeConstant;
+begin
+  for I := 0 to ATemplate.ConstantCount - 1 do
+  begin
+    Constant := ATemplate.GetConstant(I);
+    if (Constant.Kind = bckFloat) and IsNaN(Constant.FloatValue) then
+      Exit(True);
+  end;
+  Result := False;
+end;
+
+function TTestCompiler.HasInfinityFloatConstant(
+  const ATemplate: TGocciaFunctionTemplate;
+  const APositive: Boolean): Boolean;
+var
+  I: Integer;
+  Constant: TGocciaBytecodeConstant;
+begin
+  for I := 0 to ATemplate.ConstantCount - 1 do
+  begin
+    Constant := ATemplate.GetConstant(I);
+    if (Constant.Kind = bckFloat) and IsInfinite(Constant.FloatValue) and
+       ((Constant.FloatValue > 0) = APositive) then
+      Exit(True);
+  end;
+  Result := False;
+end;
+
+function TTestCompiler.HasFloatConstantBits(
+  const ATemplate: TGocciaFunctionTemplate;
+  const AExpected: Double): Boolean;
+var
+  I: Integer;
+  Constant: TGocciaBytecodeConstant;
+  ExpectedBits, ActualBits: Int64;
+begin
+  Move(AExpected, ExpectedBits, SizeOf(Double));
+  for I := 0 to ATemplate.ConstantCount - 1 do
+  begin
+    Constant := ATemplate.GetConstant(I);
+    if Constant.Kind = bckFloat then
+    begin
+      Move(Constant.FloatValue, ActualBits, SizeOf(Double));
+      if ActualBits = ExpectedBits then
+        Exit(True);
+    end;
+  end;
+  Result := False;
+end;
+
+function TTestCompiler.NegativeZero: Double;
+begin
+  Result := 0.0;
+  Result := Result * -1.0;
 end;
 
 procedure TTestCompiler.TestCompileLiteral;
@@ -294,6 +447,137 @@ begin
 
   Expect<Boolean>(Raised).ToBe(True);
   Expect<Boolean>(ContainsMessage).ToBe(True);
+end;
+
+procedure TTestCompiler.TestConstantFoldsNestedArithmetic;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('const result = (1 + 2) * (3 + 4); result;');
+  try
+    Expect<Integer>(CountArithmeticOps(Module.TopLevel)).ToBe(0);
+    Expect<Boolean>(HasLoadInt(Module.TopLevel, 21)).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstantFoldsSpecialNumbers;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('1 / 0;');
+  try
+    Expect<Boolean>(HasInfinityFloatConstant(Module.TopLevel, True)).ToBe(True);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource('(-Infinity) ** 0.5;');
+  try
+    Expect<Boolean>(HasInfinityFloatConstant(Module.TopLevel, True)).ToBe(True);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource('0 / 0;');
+  try
+    Expect<Boolean>(HasNaNFloatConstant(Module.TopLevel)).ToBe(True);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource('(-4) % 2;');
+  try
+    Expect<Boolean>(HasFloatConstantBits(Module.TopLevel, NegativeZero)).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstPropagation;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('const a = 2 + 3; const b = a * 4; b;');
+  try
+    Expect<Integer>(CountArithmeticOps(Module.TopLevel)).ToBe(0);
+    Expect<Boolean>(HasLoadInt(Module.TopLevel, 20)).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstPropagationSkipsMutable;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('let a = 2; const b = a * 4; b;');
+  try
+    Expect<Boolean>(CountArithmeticOps(Module.TopLevel) > 0).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstPropagationSkipsGlobalBacked;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('const a = 2; const b = a * 4; b;',
+    False, False, True);
+  try
+    Expect<Boolean>(CountArithmeticOps(Module.TopLevel) > 0).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstantIfEliminatesBranch;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'if (false) { const x = 1 + 2; } else { const y = 3; }');
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_JUMP_IF_FALSE)).ToBe(0);
+    Expect<Integer>(CountArithmeticOps(Module.TopLevel)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestCoveragePreservesConstantBranch;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'if (false) { const x = 1 + 2; } else { const y = 3; }',
+    False, True);
+  try
+    Expect<Boolean>(CountOp(Module.TopLevel, OP_JUMP_IF_FALSE) > 0).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestStrictTypeSimplificationRequiresStrictTypes;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('let b: boolean = true; !!b;', False);
+  try
+    Expect<Boolean>(CountOp(Module.TopLevel, OP_NOT) > 0).ToBe(True);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource('let b: boolean = true; !!b;', True);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_NOT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
 end;
 
 begin

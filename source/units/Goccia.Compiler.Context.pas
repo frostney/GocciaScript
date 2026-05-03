@@ -13,6 +13,7 @@ uses
   Goccia.Bytecode,
   Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Debug,
+  Goccia.Compiler.ConstantValue,
   Goccia.Compiler.Scope,
   Goccia.Token;
 
@@ -33,6 +34,7 @@ type
     FormalParameterCounts: TFormalParameterCountMap;
     GlobalBackedTopLevel: Boolean;
     StrictTypes: Boolean;
+    OptimizationOptions: TGocciaCompilerOptimizationOptions;
     CompileExpression: TCompileExpressionProc;
     CompileStatement: TCompileStatementProc;
     CompileFunctionBody: TCompileFunctionBodyProc;

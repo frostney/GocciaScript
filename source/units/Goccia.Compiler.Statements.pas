@@ -67,6 +67,7 @@ function StripArrayLayer(const AAnnotation: string): string;
 function ExpressionType(const AScope: TGocciaCompilerScope;
   const AExpr: TGocciaExpression): TGocciaLocalType;
 function CharToLocalType(const ACh: Char): TGocciaLocalType;
+function StatementAlwaysAbrupt(const AStmt: TGocciaStatement): Boolean;
 
 procedure CollectDestructuringVarBindings(const APattern: TGocciaDestructuringPattern;
   const AScope: TGocciaCompilerScope);
@@ -85,6 +86,8 @@ uses
   Goccia.AST.BindingPatterns,
   Goccia.Bytecode,
   Goccia.Bytecode.Debug,
+  Goccia.Compiler.ConstantFolding,
+  Goccia.Compiler.ConstantValue,
   Goccia.Compiler.Expressions,
   Goccia.Compiler.PatternMatching,
   Goccia.Constants.PropertyNames,
@@ -434,7 +437,10 @@ var
   Slot: UInt8;
   InferredTemplate: TGocciaFunctionTemplate;
   TypeHint, AnnotationType: TGocciaLocalType;
+  ConstantValue: TGocciaCompileTimeValue;
+  ConstantType: TGocciaLocalType;
   IsStrict, HasRealInitializer, IsTopLevelGlobalBacked, IsVarRedeclaration: Boolean;
+  CanTrackConstant: Boolean;
 begin
   for I := 0 to High(AStmt.Variables) do
   begin
@@ -572,6 +578,26 @@ begin
         EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
     end;
 
+    LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+    if LocalIdx >= 0 then
+    begin
+      ACtx.Scope.ClearLocalConstantValue(LocalIdx);
+      CanTrackConstant := ACtx.OptimizationOptions.EnableConstPropagation and
+        AStmt.IsConst and not AStmt.IsVar and
+        not AStmt.IsFunctionDeclaration and not IsTopLevelGlobalBacked and
+        HasRealInitializer and Assigned(Info.Initializer) and
+        TryEvaluateConstantExpression(ACtx, Info.Initializer, ConstantValue);
+
+      if CanTrackConstant and IsStrict then
+      begin
+        ConstantType := CompileTimeValueToLocalType(ConstantValue);
+        CanTrackConstant := TypesAreCompatible(ConstantType, TypeHint);
+      end;
+
+      if CanTrackConstant then
+        ACtx.Scope.SetLocalConstantValue(LocalIdx, ConstantValue);
+    end;
+
     if IsTopLevelGlobalBacked then
       EmitGlobalDefine(ACtx, Slot, Info.Name, AStmt.IsConst);
   end;
@@ -662,6 +688,38 @@ begin
   end;
 end;
 
+function StatementAlwaysAbrupt(const AStmt: TGocciaStatement): Boolean;
+var
+  IfStmt: TGocciaIfStatement;
+  BlockStmt: TGocciaBlockStatement;
+  I: Integer;
+begin
+  if (AStmt is TGocciaReturnStatement) or
+     (AStmt is TGocciaThrowStatement) or
+     (AStmt is TGocciaBreakStatement) or
+     (AStmt is TGocciaContinueStatement) then
+    Exit(True);
+
+  if AStmt is TGocciaIfStatement then
+  begin
+    IfStmt := TGocciaIfStatement(AStmt);
+    Exit(Assigned(IfStmt.Alternate) and
+      StatementAlwaysAbrupt(IfStmt.Consequent) and
+      StatementAlwaysAbrupt(IfStmt.Alternate));
+  end;
+
+  if AStmt is TGocciaBlockStatement then
+  begin
+    BlockStmt := TGocciaBlockStatement(AStmt);
+    for I := 0 to BlockStmt.Nodes.Count - 1 do
+      if (BlockStmt.Nodes[I] is TGocciaStatement) and
+         StatementAlwaysAbrupt(TGocciaStatement(BlockStmt.Nodes[I])) then
+        Exit(True);
+  end;
+
+  Result := False;
+end;
+
 procedure EmitPendingEntryCleanup(const ACtx: TGocciaCompilationContext;
   const AEntry: TPendingFinallyEntry; const ACloseIterator: Boolean);
 var
@@ -715,7 +773,13 @@ begin
     begin
       Node := AStmt.Nodes[I];
       if Node is TGocciaStatement then
-        ACtx.CompileStatement(TGocciaStatement(Node))
+      begin
+        ACtx.CompileStatement(TGocciaStatement(Node));
+        if ACtx.OptimizationOptions.EnableDeadBranchElimination and
+           not ACtx.OptimizationOptions.PreserveCoverageShape and
+           StatementAlwaysAbrupt(TGocciaStatement(Node)) then
+          Break;
+      end
       else if Node is TGocciaExpression then
       begin
         Reg := ACtx.Scope.AllocateRegister;
@@ -834,6 +898,7 @@ var
   PatternFailJumps: TGocciaJumpArray;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount, I: Integer;
+  ConditionValue: TGocciaCompileTimeValue;
 
   procedure PatchPatternFailureTarget;
   var
@@ -848,6 +913,17 @@ var
       EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[J], 0, 0));
   end;
 begin
+  if ACtx.OptimizationOptions.EnableDeadBranchElimination and
+     not ACtx.OptimizationOptions.PreserveCoverageShape and
+     TryEvaluateConstantExpression(ACtx, AStmt.Condition, ConditionValue) then
+  begin
+    if CompileTimeValueToBoolean(ConditionValue) then
+      ACtx.CompileStatement(AStmt.Consequent)
+    else if Assigned(AStmt.Alternate) then
+      ACtx.CompileStatement(AStmt.Alternate);
+    Exit;
+  end;
+
   CondReg := ACtx.Scope.AllocateRegister;
   HasPatternBindings := False;
   PatternSubjectReg := 0;

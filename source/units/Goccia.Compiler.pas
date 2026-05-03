@@ -10,6 +10,7 @@ uses
   Goccia.AST.Statements,
   Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Module,
+  Goccia.Compiler.ConstantValue,
   Goccia.Compiler.Context,
   Goccia.Compiler.Scope;
 
@@ -23,6 +24,7 @@ type
     FFormalParameterCounts: TFormalParameterCountMap;
     FGlobalBackedTopLevel: Boolean;
     FStrictTypes: Boolean;
+    FOptimizationOptions: TGocciaCompilerOptimizationOptions;
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
       const ADest: UInt8);
     procedure DoCompileStatement(const AStmt: TGocciaStatement);
@@ -40,6 +42,8 @@ type
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
       write FGlobalBackedTopLevel;
     property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
+    property OptimizationOptions: TGocciaCompilerOptimizationOptions
+      read FOptimizationOptions write FOptimizationOptions;
   end;
 
 const
@@ -53,6 +57,7 @@ uses
 
   Goccia.Bytecode,
   Goccia.Bytecode.Debug,
+  Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.Expressions,
   Goccia.Compiler.PatternMatching,
   Goccia.Compiler.Statements;
@@ -67,6 +72,7 @@ begin
   FModule := nil;
   FCurrentTemplate := nil;
   FCurrentScope := nil;
+  FOptimizationOptions := DefaultCompilerOptimizationOptions;
 end;
 
 destructor TGocciaCompiler.Destroy;
@@ -83,6 +89,7 @@ begin
   Result.FormalParameterCounts := FFormalParameterCounts;
   Result.GlobalBackedTopLevel := FGlobalBackedTopLevel;
   Result.StrictTypes := FStrictTypes;
+  Result.OptimizationOptions := FOptimizationOptions;
   Result.CompileExpression := DoCompileExpression;
   Result.CompileStatement := DoCompileStatement;
   Result.CompileFunctionBody := DoCompileFunctionBody;
@@ -104,6 +111,9 @@ var
 begin
   Ctx := BuildContext;
   EmitLineMapping(Ctx, AExpr.Line, AExpr.Column);
+
+  if TryEmitConstantExpression(Ctx, AExpr, ADest) then
+    Exit;
 
   if AExpr is TGocciaLiteralExpression then
     Goccia.Compiler.Expressions.CompileLiteral(Ctx, TGocciaLiteralExpression(AExpr), ADest)
@@ -420,7 +430,14 @@ begin
           if GetFunctionDecl(Node) <> nil then
             Continue;
           if Node is TGocciaStatement then
-            DoCompileStatement(TGocciaStatement(Node))
+          begin
+            DoCompileStatement(TGocciaStatement(Node));
+            if FOptimizationOptions.EnableDeadBranchElimination and
+               not FOptimizationOptions.PreserveCoverageShape and
+               Goccia.Compiler.Statements.StatementAlwaysAbrupt(
+                 TGocciaStatement(Node)) then
+              Break;
+          end
           else if Node is TGocciaExpression then
           begin
             Reg := FCurrentScope.AllocateRegister;
