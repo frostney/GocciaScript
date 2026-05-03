@@ -165,7 +165,7 @@ test("async generator function.prototype's [[Prototype]] is Object.prototype (Go
   expect(Object.getPrototypeOf(g.prototype)).toBe(Object.prototype);
 });
 
-test("methods added to prototype are visible to constructed instances", () => {
+test("methods added to prototype are visible to instances via [[Prototype]] chain", () => {
   function Animal() {}
   Animal.prototype.speak = function () {
     return "generic sound";

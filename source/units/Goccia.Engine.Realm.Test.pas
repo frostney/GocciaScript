@@ -65,6 +65,7 @@ function TTestEngineRealm.RunRuntimeInline(
   const ASource: string): TGocciaScriptResult;
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   Runtime: TGocciaRuntime;
   Source: TStringList;
 begin
@@ -72,48 +73,62 @@ begin
   Source.Text := ASource;
   Engine := nil;
   Runtime := nil;
+  Executor := TGocciaInterpreterExecutor.Create;
   try
-    Engine := TGocciaEngine.Create('<engine-realm-test>', Source);
+    Engine := TGocciaEngine.Create('<engine-realm-test>', Source, Executor);
     Runtime := TGocciaRuntime.Create(Engine, [rgURL]);
     Result := Runtime.Execute;
   finally
     Runtime.Free;
     Engine.Free;
     Source.Free;
+    Executor.Free;
   end;
 end;
 
 procedure TTestEngineRealm.TestCurrentRealmIsAssignedDuringLife;
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   Source: TStringList;
 begin
   Source := TStringList.Create;
   Source.Text := '';
-  Engine := TGocciaEngine.Create('<realm-life>', Source);
+  Executor := TGocciaInterpreterExecutor.Create;
   try
-    Expect<Boolean>(CurrentRealm <> nil).ToBe(True);
+    Engine := TGocciaEngine.Create('<realm-life>', Source, Executor);
+    try
+      Expect<Boolean>(CurrentRealm <> nil).ToBe(True);
+    finally
+      Engine.Free;
+      Source.Free;
+    end;
   finally
-    Engine.Free;
-    Source.Free;
+    Executor.Free;
   end;
 end;
 
 procedure TTestEngineRealm.TestCurrentRealmIsClearedAfterDestroy;
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   Source: TStringList;
   PreviousRealm: TGocciaRealm;
 begin
   PreviousRealm := CurrentRealm;
   Source := TStringList.Create;
   Source.Text := '';
-  Engine := TGocciaEngine.Create('<realm-clear>', Source);
-  Engine.Free;
-  Source.Free;
-  // FPrevRealm defaults to whatever was current at construction; for a single
-  // engine on a clean main thread that's PreviousRealm.
-  Expect<Boolean>(CurrentRealm = PreviousRealm).ToBe(True);
+  Executor := TGocciaInterpreterExecutor.Create;
+  try
+    Engine := TGocciaEngine.Create('<realm-clear>', Source, Executor);
+    Engine.Free;
+    Source.Free;
+    // FPrevRealm defaults to whatever was current at construction; for a single
+    // engine on a clean main thread that's PreviousRealm.
+    Expect<Boolean>(CurrentRealm = PreviousRealm).ToBe(True);
+  finally
+    Executor.Free;
+  end;
 end;
 
 procedure TTestEngineRealm.TestSequentialEnginesHaveIsolatedArrayPrototype;
@@ -197,6 +212,7 @@ end;
 procedure TTestEngineRealm.TestNestedEngineRestoresOuterRealmOnDestroy;
 var
   OuterEngine, InnerEngine: TGocciaEngine;
+  OuterExecutor, InnerExecutor: TGocciaInterpreterExecutor;
   OuterSource, InnerSource: TStringList;
   OuterRealm, InnerRealm: TGocciaRealm;
 begin
@@ -205,32 +221,40 @@ begin
   InnerSource := TStringList.Create;
   InnerSource.Text := '';
 
-  OuterEngine := TGocciaEngine.Create('<outer>', OuterSource);
+  OuterExecutor := TGocciaInterpreterExecutor.Create;
+  InnerExecutor := TGocciaInterpreterExecutor.Create;
   try
-    OuterRealm := CurrentRealm;
-    Expect<Boolean>(OuterRealm <> nil).ToBe(True);
-
-    InnerEngine := TGocciaEngine.Create('<inner>', InnerSource);
+    OuterEngine := TGocciaEngine.Create('<outer>', OuterSource, OuterExecutor);
     try
-      InnerRealm := CurrentRealm;
-      // Constructing a nested engine swaps in its own realm.
-      Expect<Boolean>(InnerRealm <> OuterRealm).ToBe(True);
-    finally
-      InnerEngine.Free;
-    end;
+      OuterRealm := CurrentRealm;
+      Expect<Boolean>(OuterRealm <> nil).ToBe(True);
 
-    // Destroying the inner engine must restore the outer engine's realm.
-    Expect<Boolean>(CurrentRealm = OuterRealm).ToBe(True);
+      InnerEngine := TGocciaEngine.Create('<inner>', InnerSource, InnerExecutor);
+      try
+        InnerRealm := CurrentRealm;
+        // Constructing a nested engine swaps in its own realm.
+        Expect<Boolean>(InnerRealm <> OuterRealm).ToBe(True);
+      finally
+        InnerEngine.Free;
+      end;
+
+      // Destroying the inner engine must restore the outer engine's realm.
+      Expect<Boolean>(CurrentRealm = OuterRealm).ToBe(True);
+    finally
+      OuterEngine.Free;
+      InnerSource.Free;
+      OuterSource.Free;
+    end;
   finally
-    OuterEngine.Free;
-    InnerSource.Free;
-    OuterSource.Free;
+    InnerExecutor.Free;
+    OuterExecutor.Free;
   end;
 end;
 
 procedure TTestEngineRealm.TestEachEngineGetsADistinctRealm;
 var
   EngineA, EngineB: TGocciaEngine;
+  ExecutorA, ExecutorB: TGocciaInterpreterExecutor;
   SourceA, SourceB: TStringList;
   RealmA, RealmB: TGocciaRealm;
 begin
@@ -245,22 +269,29 @@ begin
   SourceB := TStringList.Create;
   SourceB.Text := '';
 
-  EngineA := TGocciaEngine.Create('<engine-a>', SourceA);
+  ExecutorA := TGocciaInterpreterExecutor.Create;
+  ExecutorB := TGocciaInterpreterExecutor.Create;
   try
-    RealmA := CurrentRealm;
-    EngineB := TGocciaEngine.Create('<engine-b>', SourceB);
+    EngineA := TGocciaEngine.Create('<engine-a>', SourceA, ExecutorA);
     try
-      RealmB := CurrentRealm;
-      Expect<Boolean>(RealmA <> nil).ToBe(True);
-      Expect<Boolean>(RealmB <> nil).ToBe(True);
-      Expect<Boolean>(RealmB <> RealmA).ToBe(True);
+      RealmA := CurrentRealm;
+      EngineB := TGocciaEngine.Create('<engine-b>', SourceB, ExecutorB);
+      try
+        RealmB := CurrentRealm;
+        Expect<Boolean>(RealmA <> nil).ToBe(True);
+        Expect<Boolean>(RealmB <> nil).ToBe(True);
+        Expect<Boolean>(RealmB <> RealmA).ToBe(True);
+      finally
+        EngineB.Free;
+      end;
     finally
-      EngineB.Free;
+      EngineA.Free;
+      SourceA.Free;
+      SourceB.Free;
     end;
   finally
-    EngineA.Free;
-    SourceA.Free;
-    SourceB.Free;
+    ExecutorB.Free;
+    ExecutorA.Free;
   end;
 end;
 

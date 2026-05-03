@@ -109,6 +109,7 @@ var
 
   { Interpreted mode }
   Eng: TGocciaEngine;
+  InterpExecutor: TGocciaInterpreterExecutor;
   ScriptResult: TGocciaScriptResult;
 
   { Bytecode mode }
@@ -261,50 +262,55 @@ begin
   end
   else
   begin
-    Eng := CreateEngine(REPL_FILE_NAME, Source);
+    InterpExecutor := TGocciaInterpreterExecutor.Create;
     try
-      while True do
-      begin
-        ReadResult := Editor.ReadLine('> ', Line);
-        if ReadResult = lrExit then
-          Break;
-        if Line = 'exit' then
-          Break;
-        if Line = '' then
-          Continue;
+      Eng := CreateEngine(REPL_FILE_NAME, Source, InterpExecutor);
+      try
+        while True do
+        begin
+          ReadResult := Editor.ReadLine('> ', Line);
+          if ReadResult = lrExit then
+            Break;
+          if Line = 'exit' then
+            Break;
+          if Line = '' then
+            Continue;
 
-        Editor.AddToHistory(Line);
-        Source.Clear;
-        Source.Add(Line);
+          Editor.AddToHistory(Line);
+          Source.Clear;
+          Source.Add(Line);
 
-        try
-          ScriptResult := Eng.Execute;
-          if ScriptResult.Result <> nil then
-            WriteLn(FormatREPLValue(ScriptResult.Result, IsColorTerminal));
-        except
-          on E: Exception do
-          begin
-            if E is TGocciaError then
-              WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
-            else if E is TGocciaThrowValue then
-              WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value,
-                REPL_FILE_NAME, Source, IsColorTerminal,
-                TGocciaThrowValue(E).Suggestion))
-            else
-              WriteLn('Error: ', E.Message);
+          try
+            ScriptResult := Eng.Execute;
+            if ScriptResult.Result <> nil then
+              WriteLn(FormatREPLValue(ScriptResult.Result, IsColorTerminal));
+          except
+            on E: Exception do
+            begin
+              if E is TGocciaError then
+                WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+              else if E is TGocciaThrowValue then
+                WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value,
+                  REPL_FILE_NAME, Source, IsColorTerminal,
+                  TGocciaThrowValue(E).Suggestion))
+              else
+                WriteLn('Error: ', E.Message);
+            end;
           end;
+          if FTiming.Present then
+            WriteLn(SysUtils.Format(
+              '  Lex: %s | Parse: %s | Execute: %s | Total: %s',
+              [FormatDuration(Eng.LastTiming.LexTimeNanoseconds),
+               FormatDuration(Eng.LastTiming.ParseTimeNanoseconds),
+               FormatDuration(Eng.LastTiming.ExecuteTimeNanoseconds),
+               FormatDuration(Eng.LastTiming.TotalTimeNanoseconds)]));
         end;
-        if FTiming.Present then
-          WriteLn(SysUtils.Format(
-            '  Lex: %s | Parse: %s | Execute: %s | Total: %s',
-            [FormatDuration(Eng.LastTiming.LexTimeNanoseconds),
-             FormatDuration(Eng.LastTiming.ParseTimeNanoseconds),
-             FormatDuration(Eng.LastTiming.ExecuteTimeNanoseconds),
-             FormatDuration(Eng.LastTiming.TotalTimeNanoseconds)]));
+      finally
+        Eng.Free;
       end;
     finally
+      InterpExecutor.Free;
       Editor.Free;
-      Eng.Free;
       Source.Free;
     end;
   end;

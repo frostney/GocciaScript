@@ -47,6 +47,7 @@ procedure EnsureSharedPrototypesInitialized(
 var
   Source: TStringList;
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   Lexer: TGocciaLexer;
 begin
   // Force lexer keyword table initialisation. The class var FKeywords is
@@ -62,15 +63,20 @@ begin
     // Create a minimal engine. The constructor registers all built-in
     // types, which triggers lazy shared prototype initialisation for
     // every value type (Array, Object, Map, Set, Promise, etc.).
-    Engine := TGocciaEngine.Create('<thread-init>', Source);
+    Executor := TGocciaInterpreterExecutor.Create;
     try
-      if ARuntimeGlobals <> [] then
-        AttachRuntimeExtension(Engine, ARuntimeGlobals);
-      if Assigned(AInitializer) then
-        AInitializer(Engine);
-      // Nothing to execute — we only needed the constructor side-effects.
+      Engine := TGocciaEngine.Create('<thread-init>', Source, Executor);
+      try
+        if ARuntimeGlobals <> [] then
+          AttachRuntimeExtension(Engine, ARuntimeGlobals);
+        if Assigned(AInitializer) then
+          AInitializer(Engine);
+        // Nothing to execute — we only needed the constructor side-effects.
+      finally
+        Engine.Free;
+      end;
     finally
-      Engine.Free;
+      Executor.Free;
     end;
     // Clean up the throwaway objects.
     if Assigned(TGarbageCollector.Instance) then
