@@ -596,6 +596,7 @@ begin
     NameIdx := ACtx.Template.AddConstantString(Local.Name);
     if NameIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: global name index exceeds 255');
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, Local.Slot, 0, 0));
     EmitInstruction(ACtx, EncodeABC(OP_DEFINE_GLOBAL_CONST, Local.Slot,
       GLOBAL_DEFINE_VAR_DECL, UInt8(NameIdx)));
   end;

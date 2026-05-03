@@ -80,6 +80,21 @@ test("hoisted function sees enum TDZ before initialization", () => {
   }
 });
 
+test("hoisted block function captures later using binding", () => {
+  let value;
+  {
+    function readResource() {
+      return resource.name;
+    }
+    using resource = {
+      name: "captured",
+      [Symbol.dispose]() {}
+    };
+    value = readResource();
+  }
+  expect(value).toBe("captured");
+});
+
 test("switch case hoists function declarations into the case scope", () => {
   let value;
 

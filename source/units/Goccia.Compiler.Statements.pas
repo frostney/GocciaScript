@@ -639,7 +639,7 @@ threadvar
 procedure CompileUsingDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaUsingDeclaration);
 var
-  I, Len: Integer;
+  I, Len, LocalIdx: Integer;
   Info: TGocciaVariableInfo;
   ValueSlot, DisposeSlot: UInt8;
   Flags: UInt8;
@@ -651,11 +651,24 @@ begin
   begin
     Info := AStmt.Variables[I];
 
-    // Declare the using variable as const
-    ValueSlot := ACtx.Scope.DeclareLocal(Info.Name, True);
+    // Reuse a block predeclaration when one was created for hoisted function
+    // captures; otherwise declare the using variable at the current depth.
+    LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+    if (LocalIdx >= 0) and
+       (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) then
+      ValueSlot := ACtx.Scope.GetLocal(LocalIdx).Slot
+    else
+    begin
+      ValueSlot := ACtx.Scope.DeclareLocal(Info.Name, True);
+      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+    end;
 
     // Compile the initializer into the value slot
     ACtx.CompileExpression(Info.Initializer, ValueSlot);
+    if (LocalIdx >= 0) and
+       (ACtx.Scope.GetLocal(LocalIdx).Slot = ValueSlot) and
+       ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+      EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ValueSlot, UInt16(ValueSlot)));
 
     // Allocate a hidden register for the dispose method
     DisposeSlot := ACtx.Scope.AllocateRegister;
@@ -827,6 +840,15 @@ begin
   end;
 end;
 
+procedure PredeclareBlockUsingLocals(const ACtx: TGocciaCompilationContext;
+  const AUsingDecl: TGocciaUsingDeclaration);
+var
+  I: Integer;
+begin
+  for I := 0 to High(AUsingDecl.Variables) do
+    PredeclareBlockNamedLexicalLocal(ACtx, AUsingDecl.Variables[I].Name, True);
+end;
+
 procedure PredeclareBlockLexicalLocals(const ANode: TGocciaASTNode;
   const ACtx: TGocciaCompilationContext);
 var
@@ -853,6 +875,8 @@ begin
     PredeclareBlockPatternLocals(ACtx,
       TGocciaDestructuringDeclaration(ANode).Pattern,
       TGocciaDestructuringDeclaration(ANode).IsConst)
+  else if ANode is TGocciaUsingDeclaration then
+    PredeclareBlockUsingLocals(ACtx, TGocciaUsingDeclaration(ANode))
   else if ANode is TGocciaClassDeclaration then
     PredeclareBlockNamedLexicalLocal(ACtx,
       TGocciaClassDeclaration(ANode).ClassDefinition.Name, True)

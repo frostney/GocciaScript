@@ -51,6 +51,19 @@ var __gocciaHoistedGlobalVar = 77;
 __gocciaHoistedAssignedGlobalVar = 12;
 var __gocciaHoistedAssignedGlobalVar;
 
+let __gocciaHoistedGlobalVarClosureReadSucceeded = false;
+let __gocciaHoistedGlobalVarClosureInitialValue = "not-read";
+const __gocciaReadHoistedGlobalVarDeclarationOnly =
+  () => __gocciaHoistedGlobalVarDeclarationOnly;
+try {
+  __gocciaHoistedGlobalVarClosureInitialValue =
+    __gocciaReadHoistedGlobalVarDeclarationOnly();
+  __gocciaHoistedGlobalVarClosureReadSucceeded = true;
+} catch (e) {
+  __gocciaHoistedGlobalVarClosureInitialValue = e.name;
+}
+var __gocciaHoistedGlobalVarDeclarationOnly;
+
 test("var redeclaration does not throw", () => {
   var x = 1;
   var x = 2;
@@ -95,4 +108,10 @@ test("top-level var is visible before its declaration executes", () => {
 test("declaration-only top-level var preserves assignment before declaration", () => {
   expect(__gocciaHoistedAssignedGlobalVar).toBe(12);
   expect(globalThis.__gocciaHoistedAssignedGlobalVar).toBe(12);
+});
+
+test("closure captures declaration-only top-level var as undefined", () => {
+  expect(__gocciaHoistedGlobalVarClosureReadSucceeded).toBe(true);
+  expect(__gocciaHoistedGlobalVarClosureInitialValue).toBeUndefined();
+  expect(globalThis.__gocciaHoistedGlobalVarDeclarationOnly).toBeUndefined();
 });
