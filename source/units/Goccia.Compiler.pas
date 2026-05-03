@@ -696,8 +696,10 @@ begin
       end;
     end
     else
+    begin
       EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
       EmitInstruction(BuildContext, EncodeABC(OP_RETURN, 0, 0, 0));
+    end;
 
     FCurrentTemplate.MaxRegisters := FCurrentScope.MaxSlot;
     FModule.TopLevel := FCurrentTemplate;
@@ -705,7 +707,6 @@ begin
     Result := FModule;
     FModule := nil;
     FCurrentTemplate := nil;
-    FTopLevelTemplate := nil;
   finally
     FreeAndNil(FCurrentScope);
     FTopLevelTemplate := nil;

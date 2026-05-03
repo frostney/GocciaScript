@@ -114,3 +114,21 @@ test("switch case hoists function declarations into the case scope", () => {
 
   expect(value).toBe(42);
 });
+
+test("switch function declarations share the switch lexical scope", () => {
+  let value;
+
+  switch (2) {
+    case 1:
+      function readLater() {
+        return later;
+      }
+      break;
+    case 2:
+      const later = 42;
+      value = readLater();
+      break;
+  }
+
+  expect(value).toBe(42);
+});

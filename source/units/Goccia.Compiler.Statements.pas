@@ -1925,9 +1925,11 @@ var
   OldBreakFinallyBase: Integer;
   BreakJumps: TList<Integer>;
   Node: TGocciaASTNode;
-  Reg: UInt8;
+  Reg, SelectedReg, DispatchIndexReg, DispatchCmpReg: UInt8;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
+  EntryToPreludeJumps: array of Integer;
+  BodyDispatchJumps: array of Integer;
   HasFunctionDecl, StatementAbrupt: Boolean;
 begin
   DiscReg := ACtx.Scope.AllocateRegister;
@@ -1973,11 +1975,80 @@ begin
   else
     GBreakFinallyBase := 0;
   try
+    HasFunctionDecl := False;
+    for I := 0 to AStmt.Cases.Count - 1 do
+    begin
+      CaseClause := AStmt.Cases[I];
+      for J := 0 to CaseClause.Consequent.Count - 1 do
+        if GetBlockFunctionDeclaration(CaseClause.Consequent[J]) <> nil then
+        begin
+          HasFunctionDecl := True;
+          Break;
+        end;
+      if HasFunctionDecl then
+        Break;
+    end;
+
+    ACtx.Scope.BeginScope;
+
+    if HasFunctionDecl then
+    begin
+      SelectedReg := ACtx.Scope.AllocateRegister;
+      DispatchIndexReg := ACtx.Scope.AllocateRegister;
+      DispatchCmpReg := ACtx.Scope.AllocateRegister;
+      SetLength(EntryToPreludeJumps, AStmt.Cases.Count);
+      SetLength(BodyDispatchJumps, AStmt.Cases.Count);
+
+      for I := 0 to AStmt.Cases.Count - 1 do
+      begin
+        EntryToPreludeJumps[I] := -1;
+        if (I = DefaultIndex) and (DefaultJump >= 0) then
+          PatchJumpTarget(ACtx, DefaultJump)
+        else if CaseBodyJumps[I] >= 0 then
+          PatchJumpTarget(ACtx, CaseBodyJumps[I])
+        else
+          Continue;
+
+        EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, SelectedReg, Int16(I)));
+        EntryToPreludeJumps[I] := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      end;
+
+      for I := 0 to High(EntryToPreludeJumps) do
+        if EntryToPreludeJumps[I] >= 0 then
+          PatchJumpTarget(ACtx, EntryToPreludeJumps[I]);
+
+      for I := 0 to AStmt.Cases.Count - 1 do
+      begin
+        CaseClause := AStmt.Cases[I];
+        for J := 0 to CaseClause.Consequent.Count - 1 do
+          PredeclareBlockLexicalLocals(CaseClause.Consequent[J], ACtx);
+      end;
+
+      for I := 0 to AStmt.Cases.Count - 1 do
+      begin
+        CaseClause := AStmt.Cases[I];
+        for J := 0 to CaseClause.Consequent.Count - 1 do
+          if GetBlockFunctionDeclaration(CaseClause.Consequent[J]) <> nil then
+            ACtx.CompileStatement(CaseClause.Consequent[J]);
+      end;
+
+      for I := 0 to AStmt.Cases.Count - 1 do
+      begin
+        EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, DispatchIndexReg, Int16(I)));
+        EmitInstruction(ACtx, EncodeABC(OP_EQ, DispatchCmpReg, SelectedReg,
+          DispatchIndexReg));
+        BodyDispatchJumps[I] := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE,
+          DispatchCmpReg);
+      end;
+    end;
+
     for I := 0 to AStmt.Cases.Count - 1 do
     begin
       CaseClause := AStmt.Cases[I];
 
-      if I = DefaultIndex then
+      if HasFunctionDecl then
+        PatchJumpTarget(ACtx, BodyDispatchJumps[I])
+      else if I = DefaultIndex then
       begin
         if DefaultJump >= 0 then
           PatchJumpTarget(ACtx, DefaultJump);
@@ -1986,24 +2057,6 @@ begin
       begin
         if CaseBodyJumps[I] >= 0 then
           PatchJumpTarget(ACtx, CaseBodyJumps[I]);
-      end;
-
-      HasFunctionDecl := False;
-      for J := 0 to CaseClause.Consequent.Count - 1 do
-        if GetBlockFunctionDeclaration(CaseClause.Consequent[J]) <> nil then
-        begin
-          HasFunctionDecl := True;
-          Break;
-        end;
-
-      ACtx.Scope.BeginScope;
-      if HasFunctionDecl then
-      begin
-        for J := 0 to CaseClause.Consequent.Count - 1 do
-          PredeclareBlockLexicalLocals(CaseClause.Consequent[J], ACtx);
-        for J := 0 to CaseClause.Consequent.Count - 1 do
-          if GetBlockFunctionDeclaration(CaseClause.Consequent[J]) <> nil then
-            ACtx.CompileStatement(CaseClause.Consequent[J]);
       end;
 
       for J := 0 to CaseClause.Consequent.Count - 1 do
@@ -2026,10 +2079,17 @@ begin
           ACtx.Scope.FreeRegister;
         end;
       end;
-      ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
-      for J := 0 to ClosedCount - 1 do
-        EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[J], 0, 0));
     end;
+
+    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+    if HasFunctionDecl then
+    begin
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+    end;
+    for J := 0 to ClosedCount - 1 do
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[J], 0, 0));
 
     if EndJump >= 0 then
       PatchJumpTarget(ACtx, EndJump);

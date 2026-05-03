@@ -2945,6 +2945,8 @@ var
   Matched: Boolean;
   DefaultIndex: Integer;
   Done: Boolean;
+  SwitchBlockContext: TGocciaEvaluationContext;
+  NeedsSwitchScope: Boolean;
 
   function ConsequentNeedsChildScope(
     const AConsequent: TObjectList<TGocciaStatement>): Boolean;
@@ -2977,107 +2979,128 @@ var
     end;
   end;
 
+  function SwitchNeedsChildScope: Boolean;
+  var
+    K: Integer;
+  begin
+    Result := False;
+    for K := 0 to ASwitchStatement.Cases.Count - 1 do
+      if ConsequentNeedsChildScope(ASwitchStatement.Cases[K].Consequent) then
+        Exit(True);
+  end;
+
+  procedure HoistSwitchConsequents;
+  var
+    K: Integer;
+  begin
+    for K := 0 to ASwitchStatement.Cases.Count - 1 do
+      HoistFunctionDeclarations(ASwitchStatement.Cases[K].Consequent,
+        SwitchBlockContext, True);
+  end;
+
   function EvaluateCaseConsequent(
     const AConsequent: TObjectList<TGocciaStatement>): TGocciaControlFlow;
   var
     K: Integer;
-    CaseBlockContext: TGocciaEvaluationContext;
     ConsequentNodes: TObjectList<TGocciaASTNode>;
-    NeedsChildScope: Boolean;
   begin
-    NeedsChildScope := ConsequentNeedsChildScope(AConsequent);
-    CaseBlockContext := AContext;
-    if NeedsChildScope then
-      CaseBlockContext.Scope := AContext.Scope.CreateChild(skBlock,
-        'SwitchCaseScope')
-    else
-      CaseBlockContext.Scope := AContext.Scope;
-
     ConsequentNodes := TObjectList<TGocciaASTNode>.Create(False);
     try
       for K := 0 to AConsequent.Count - 1 do
         ConsequentNodes.Add(AConsequent[K]);
-      HoistFunctionDeclarations(AConsequent, CaseBlockContext,
-        NeedsChildScope);
-      Result := EvaluateStatements(ConsequentNodes, CaseBlockContext);
+      Result := EvaluateStatements(ConsequentNodes, SwitchBlockContext);
       if (Result.Kind = cfkNormal) and (Result.Value = nil) then
         Result := TGocciaControlFlow.Normal(
           TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       ConsequentNodes.Free;
-      if NeedsChildScope then
-        CaseBlockContext.Scope.Free;
     end;
   end;
 begin
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
   Discriminant := EvaluateExpression(ASwitchStatement.Discriminant, AContext);
 
-  Matched := False;
-  DefaultIndex := -1;
-  Done := False;
+  NeedsSwitchScope := SwitchNeedsChildScope;
+  SwitchBlockContext := AContext;
+  if NeedsSwitchScope then
+    SwitchBlockContext.Scope := AContext.Scope.CreateChild(skBlock,
+      'SwitchScope')
+  else
+    SwitchBlockContext.Scope := AContext.Scope;
 
-  for I := 0 to ASwitchStatement.Cases.Count - 1 do
-  begin
-    CaseClause := ASwitchStatement.Cases[I];
+  try
+    if NeedsSwitchScope then
+      HoistSwitchConsequents;
 
-    if not Assigned(CaseClause.Test) then
+    Matched := False;
+    DefaultIndex := -1;
+    Done := False;
+
+    for I := 0 to ASwitchStatement.Cases.Count - 1 do
     begin
-      DefaultIndex := I;
-      if not Matched then
-        Continue;
-    end;
+      CaseClause := ASwitchStatement.Cases[I];
 
-    if not Matched then
-    begin
-      CaseTest := EvaluateExpression(CaseClause.Test, AContext);
-      if Goccia.Arithmetic.IsStrictEqual(Discriminant, CaseTest) then
+      if not Assigned(CaseClause.Test) then
       begin
-        Matched := True;
-        if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
-          TGocciaCoverageTracker.Instance.RecordBranchHit(
-            AContext.CurrentFilePath, ASwitchStatement.Line,
-            ASwitchStatement.Column, I);
+        DefaultIndex := I;
+        if not Matched then
+          Continue;
+      end;
+
+      if not Matched then
+      begin
+        CaseTest := EvaluateExpression(CaseClause.Test, AContext);
+        if Goccia.Arithmetic.IsStrictEqual(Discriminant, CaseTest) then
+        begin
+          Matched := True;
+          if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+            TGocciaCoverageTracker.Instance.RecordBranchHit(
+              AContext.CurrentFilePath, ASwitchStatement.Line,
+              ASwitchStatement.Column, I);
+        end;
+      end;
+
+      if Matched then
+      begin
+        CF := EvaluateCaseConsequent(CaseClause.Consequent);
+        if CF.Kind = cfkBreak then
+          Done := True
+        else if CF.Kind in [cfkReturn, cfkContinue] then
+        begin
+          Result := CF;
+          Exit;
+        end
+        else
+          Result := CF;
+        if Done then Break;
       end;
     end;
 
-    if Matched then
+    if not Matched and not Done and (DefaultIndex >= 0) then
     begin
-      CF := EvaluateCaseConsequent(CaseClause.Consequent);
-      if CF.Kind = cfkBreak then
-        Done := True
-      else if CF.Kind in [cfkReturn, cfkContinue] then
+      if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+        TGocciaCoverageTracker.Instance.RecordBranchHit(
+          AContext.CurrentFilePath, ASwitchStatement.Line,
+          ASwitchStatement.Column, DefaultIndex);
+      for I := DefaultIndex to ASwitchStatement.Cases.Count - 1 do
       begin
-        Result := CF;
-        Exit;
-      end
-      else
-        Result := CF;
-      if Done then Break;
+        CaseClause := ASwitchStatement.Cases[I];
+        CF := EvaluateCaseConsequent(CaseClause.Consequent);
+        if CF.Kind = cfkBreak then
+          Done := True
+        else if CF.Kind in [cfkReturn, cfkContinue] then
+        begin
+          Result := CF;
+          Exit;
+        end
+        else
+          Result := CF;
+        if Done then Break;
+      end;
     end;
-  end;
-
-  if not Matched and not Done and (DefaultIndex >= 0) then
-  begin
-    if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
-      TGocciaCoverageTracker.Instance.RecordBranchHit(
-        AContext.CurrentFilePath, ASwitchStatement.Line,
-        ASwitchStatement.Column, DefaultIndex);
-    for I := DefaultIndex to ASwitchStatement.Cases.Count - 1 do
-    begin
-      CaseClause := ASwitchStatement.Cases[I];
-      CF := EvaluateCaseConsequent(CaseClause.Consequent);
-      if CF.Kind = cfkBreak then
-        Done := True
-      else if CF.Kind in [cfkReturn, cfkContinue] then
-      begin
-        Result := CF;
-        Exit;
-      end
-      else
-        Result := CF;
-      if Done then Break;
-    end;
+  finally
+    if NeedsSwitchScope then
+      SwitchBlockContext.Scope.Free;
   end;
 end;
 

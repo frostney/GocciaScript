@@ -307,10 +307,11 @@ procedure TTestCompiler.TestCompileArithmetic;
 var
   Module: TGocciaBytecodeModule;
 begin
-  Module := CompileSource('const result = 1 + 2 * 3;');
+  Module := CompileSource('const result = 1 + 2 * 3;',
+    False, False, False, False, False, False);
   try
     Expect<Boolean>(Assigned(Module)).ToBe(True);
-    Expect<Boolean>(Module.TopLevel.CodeCount > 3).ToBe(True);
+    Expect<Boolean>(CountArithmeticOps(Module.TopLevel) > 0).ToBe(True);
   finally
     Module.Free;
   end;
