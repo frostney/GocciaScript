@@ -689,7 +689,9 @@ function TryEvaluateConstantExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; out AValue: TGocciaCompileTimeValue): Boolean;
 begin
   AValue := UnknownCompileTimeValue;
-  if not ACtx.OptimizationOptions.EnableConstantFolding then
+  if not (ACtx.OptimizationOptions.EnableConstantFolding or
+          ACtx.OptimizationOptions.EnableConstPropagation or
+          ACtx.OptimizationOptions.EnableDeadBranchElimination) then
     Exit(False);
 
   if AExpr is TGocciaLiteralExpression then

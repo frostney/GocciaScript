@@ -36,7 +36,10 @@ type
     function CompileSource(const ASource: string;
       const AStrictTypes: Boolean = False;
       const APreserveCoverageShape: Boolean = False;
-      const AGlobalBackedTopLevel: Boolean = False): TGocciaBytecodeModule;
+      const AGlobalBackedTopLevel: Boolean = False;
+      const AEnableConstantFolding: Boolean = True;
+      const AEnableConstPropagation: Boolean = True;
+      const AEnableDeadBranchElimination: Boolean = True): TGocciaBytecodeModule;
     function CountOp(const ATemplate: TGocciaFunctionTemplate;
       const AOp: TGocciaOpCode): Integer;
     function CountArithmeticOps(
@@ -74,6 +77,7 @@ type
     procedure TestConstantIfEliminatesBranch;
     procedure TestConstantIfPrunesAbruptTail;
     procedure TestCoveragePreservesConstantBranch;
+    procedure TestConstantEvaluationOptionsAreIndependent;
     procedure TestStrictTypeSimplificationRequiresStrictTypes;
   public
     procedure SetupTests; override;
@@ -100,13 +104,17 @@ begin
   Test('Constant if eliminates branch', TestConstantIfEliminatesBranch);
   Test('Constant if prunes abrupt tail', TestConstantIfPrunesAbruptTail);
   Test('Coverage preserves constant branch shape', TestCoveragePreservesConstantBranch);
+  Test('Constant evaluation options are independent', TestConstantEvaluationOptionsAreIndependent);
   Test('Strict type simplification requires strict-types', TestStrictTypeSimplificationRequiresStrictTypes);
 end;
 
 function TTestCompiler.CompileSource(
   const ASource: string; const AStrictTypes: Boolean;
   const APreserveCoverageShape: Boolean;
-  const AGlobalBackedTopLevel: Boolean): TGocciaBytecodeModule;
+  const AGlobalBackedTopLevel: Boolean;
+  const AEnableConstantFolding: Boolean;
+  const AEnableConstPropagation: Boolean;
+  const AEnableDeadBranchElimination: Boolean): TGocciaBytecodeModule;
 var
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
@@ -128,6 +136,9 @@ begin
     Compiler.GlobalBackedTopLevel := AGlobalBackedTopLevel;
     Options := Compiler.OptimizationOptions;
     Options.PreserveCoverageShape := APreserveCoverageShape;
+    Options.EnableConstantFolding := AEnableConstantFolding;
+    Options.EnableConstPropagation := AEnableConstPropagation;
+    Options.EnableDeadBranchElimination := AEnableDeadBranchElimination;
     Compiler.OptimizationOptions := Options;
     Result := Compiler.Compile(ProgramNode);
   finally
@@ -629,6 +640,28 @@ begin
     False, True);
   try
     Expect<Boolean>(CountOp(Module.TopLevel, OP_JUMP_IF_FALSE) > 0).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstantEvaluationOptionsAreIndependent;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('const a = 2; a;',
+    False, False, False, False, True, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_GET_LOCAL)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource(
+    'if (false) { const x = 1; } else { const y = 2; }',
+    False, False, False, False, False, True);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_JUMP_IF_FALSE)).ToBe(0);
   finally
     Module.Free;
   end;
