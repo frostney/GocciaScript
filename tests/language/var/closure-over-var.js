@@ -22,3 +22,25 @@ test("var assignment visible to previously-created closure", () => {
   };
   expect(fn()).toBe("updated");
 });
+
+test("declaration-only var redeclaration does not overwrite captured cell", () => {
+  const fn = () => {
+    var value = "initial";
+    const getter = () => value;
+    value = "updated";
+    var value;
+    return getter();
+  };
+  expect(fn()).toBe("updated");
+});
+
+test("var redeclaration with undefined initializer updates captured cell", () => {
+  const fn = () => {
+    var value = "initial";
+    const getter = () => value;
+    value = "updated";
+    var value = undefined;
+    return getter();
+  };
+  expect(fn()).toBeUndefined();
+});

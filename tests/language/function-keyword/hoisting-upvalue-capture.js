@@ -1,6 +1,6 @@
 /*---
 description: Hoisted function declarations correctly capture later-declared lexical bindings
-features: [compat-function]
+features: [compat-function, enum-declaration, explicit-resource-management]
 ---*/
 
 test("hoisted function captures array-destructured variable", () => {

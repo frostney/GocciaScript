@@ -593,8 +593,7 @@ begin
     // a cell that copied the register's initial (undefined) value.  The
     // initializer wrote directly to the register (e.g. OP_LOAD_INT) bypassing
     // the cell.  Emit OP_SET_LOCAL to sync the cell with the register.
-    if (not AStmt.IsVar) or IsBlockScopedFunctionDeclaration or
-       Assigned(Info.Initializer) then
+    if (not AStmt.IsVar) or IsBlockScopedFunctionDeclaration or HasInitializer then
     begin
       LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
       if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
@@ -2081,13 +2080,13 @@ begin
       end;
     end;
 
-    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     if HasFunctionDecl then
     begin
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
     end;
+    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for J := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[J], 0, 0));
 
