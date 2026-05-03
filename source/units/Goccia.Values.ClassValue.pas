@@ -1254,8 +1254,22 @@ begin
     Result := inherited HasOwnProperty(AName);
 end;
 
+procedure MarkStaticSymbolDescriptorEscapedReferences(
+  const ADescriptor: TGocciaPropertyDescriptor);
+var
+  Visited: TGCObjectSet;
+begin
+  Visited := TGCObjectSet.Create;
+  try
+    ADescriptor.MarkEscapedReferences(Visited);
+  finally
+    Visited.Free;
+  end;
+end;
+
 procedure TGocciaClassValue.DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
 begin
+  MarkStaticSymbolDescriptorEscapedReferences(ADescriptor);
   FStaticSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
 end;
 
