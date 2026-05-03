@@ -374,9 +374,9 @@ begin
   Result := False;
   if not Assigned(AVisited) then
     Exit;
-  if AVisited.ContainsKey(Self) then
+  if AVisited.ContainsKey(TGCManagedObject(Self)) then
     Exit;
-  AVisited.Add(Self, True);
+  AVisited.Add(TGCManagedObject(Self), True);
   Result := True;
 end;
 

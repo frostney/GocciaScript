@@ -536,7 +536,12 @@ begin
     FuncPair.Value.MarkEscapedReferencesIn(AVisited);
 
   for SymPair in FStaticSymbolDescriptors do
-    SymPair.Value.MarkEscapedReferences(AVisited);
+  begin
+    if Assigned(SymPair.Key) then
+      SymPair.Key.MarkEscapedReferencesIn(AVisited);
+    if Assigned(SymPair.Value) then
+      SymPair.Value.MarkEscapedReferences(AVisited);
+  end;
 
   for I := 0 to High(FMethodInitializers) do
     if Assigned(FMethodInitializers[I]) and

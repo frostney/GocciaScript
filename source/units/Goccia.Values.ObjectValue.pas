@@ -439,6 +439,9 @@ begin
       if Assigned(SymPair.Value) then
         SymPair.Value.MarkEscapedReferences(AVisited);
     end;
+
+  if Assigned(FPrototype) then
+    FPrototype.MarkEscapedReferencesIn(AVisited);
 end;
 
 function TGocciaObjectValue.ToDebugString: string;
@@ -763,11 +766,9 @@ begin
   end;
 end;
 
-// ES2026 §20.1.2.3.1 DefinePropertyOrThrow(O, P, desc)
-// Does NOT take ownership of ADescriptor on failure — caller must free.
-procedure TGocciaObjectValue.DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
+procedure MarkDescriptorEscapedReferences(
+  const ADescriptor: TGocciaPropertyDescriptor);
 var
-  Current: TGocciaPropertyDescriptor;
   Visited: TGCObjectSet;
 begin
   Visited := TGCObjectSet.Create;
@@ -776,15 +777,25 @@ begin
   finally
     Visited.Free;
   end;
+end;
 
+// ES2026 §20.1.2.3.1 DefinePropertyOrThrow(O, P, desc)
+// Does NOT take ownership of ADescriptor on failure — caller must free.
+procedure TGocciaObjectValue.DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
+var
+  Current: TGocciaPropertyDescriptor;
+begin
   if FProperties.TryGetValue(AName, Current) then
   begin
     if not ValidatePropertyDescriptor(Current, ADescriptor) then
       ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]), SSuggestCannotDeleteNonConfigurable);
+    MarkDescriptorEscapedReferences(ADescriptor);
     Current.Free;
   end
   else if not FExtensible then
-    ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]), SSuggestObjectNotExtensible);
+    ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]), SSuggestObjectNotExtensible)
+  else
+    MarkDescriptorEscapedReferences(ADescriptor);
 
   FProperties.Add(AName, ADescriptor);
 end;
@@ -794,15 +805,7 @@ end;
 function TGocciaObjectValue.TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 var
   Current: TGocciaPropertyDescriptor;
-  Visited: TGCObjectSet;
 begin
-  Visited := TGCObjectSet.Create;
-  try
-    ADescriptor.MarkEscapedReferences(Visited);
-  finally
-    Visited.Free;
-  end;
-
   if not FProperties.TryGetValue(AName, Current) then
   begin
     if not FExtensible then
@@ -810,6 +813,7 @@ begin
       ADescriptor.Free;
       Exit(False);
     end;
+    MarkDescriptorEscapedReferences(ADescriptor);
     FProperties.Add(AName, ADescriptor);
     Exit(True);
   end;
@@ -820,6 +824,7 @@ begin
     Exit(False);
   end;
 
+  MarkDescriptorEscapedReferences(ADescriptor);
   Current.Free;
   FProperties.Add(AName, ADescriptor);
   Result := True;
@@ -1049,25 +1054,21 @@ end;
 procedure TGocciaObjectValue.DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
 var
   Current: TGocciaPropertyDescriptor;
-  Visited: TGCObjectSet;
 begin
-  Visited := TGCObjectSet.Create;
-  try
-    ADescriptor.MarkEscapedReferences(Visited);
-  finally
-    Visited.Free;
-  end;
-
   if FSymbolDescriptors.TryGetValue(ASymbol, Current) then
   begin
     if not ValidatePropertyDescriptor(Current, ADescriptor) then
       ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [ASymbol.ToDisplayString.Value]), SSuggestCannotDeleteNonConfigurable);
+    MarkDescriptorEscapedReferences(ADescriptor);
     Current.Free;
   end
   else if not FExtensible then
     ThrowTypeError(SErrorCannotAddSymbolNotExtensible, SSuggestObjectNotExtensible)
   else
+  begin
+    MarkDescriptorEscapedReferences(ADescriptor);
     FSymbolInsertionOrder.Add(ASymbol);
+  end;
 
   FSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
 end;
@@ -1077,15 +1078,7 @@ end;
 function TGocciaObjectValue.TryDefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 var
   Current: TGocciaPropertyDescriptor;
-  Visited: TGCObjectSet;
 begin
-  Visited := TGCObjectSet.Create;
-  try
-    ADescriptor.MarkEscapedReferences(Visited);
-  finally
-    Visited.Free;
-  end;
-
   if not FSymbolDescriptors.TryGetValue(ASymbol, Current) then
   begin
     if not FExtensible then
@@ -1093,6 +1086,7 @@ begin
       ADescriptor.Free;
       Exit(False);
     end;
+    MarkDescriptorEscapedReferences(ADescriptor);
     FSymbolInsertionOrder.Add(ASymbol);
     FSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
     Exit(True);
@@ -1104,6 +1098,7 @@ begin
     Exit(False);
   end;
 
+  MarkDescriptorEscapedReferences(ADescriptor);
   Current.Free;
   FSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
   Result := True;

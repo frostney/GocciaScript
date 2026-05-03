@@ -11,11 +11,12 @@ uses
 
 type
   TGocciaBuiltin = class
+  private
+    FBuiltinObjectPinned: Boolean;
   protected
     FName: string;
     FScope: TGocciaScope;
     FBuiltinObject: TGocciaObjectValue;
-    FBuiltinObjectPinned: Boolean;
     FThrowError: TGocciaThrowErrorCallback;
     procedure PinBuiltinObject;
   public

@@ -68,6 +68,7 @@ type
     function GetManagedObjectCount: Integer;
     function GetActiveRootCount: Integer;
     function GetWatermark: Integer; inline;
+    procedure ClearActiveRootEntries(const AObject: TGCManagedObject);
     procedure CompactManagedObjects;
   protected
     procedure MarkRoots; virtual;
@@ -337,6 +338,7 @@ begin
     FTempRoots.Remove(AObject);
   if Assigned(FRootObjects) then
     FRootObjects.Remove(AObject);
+  ClearActiveRootEntries(AObject);
   if not Assigned(FManagedObjects) then
     Exit;
 
@@ -352,6 +354,18 @@ begin
        (FUnregisteredSlots * 4 > FManagedObjects.Count) then
       CompactManagedObjects;
   end;
+end;
+
+procedure TGarbageCollector.ClearActiveRootEntries(
+  const AObject: TGCManagedObject);
+var
+  I: Integer;
+begin
+  if not Assigned(FActiveRootStack) then
+    Exit;
+  for I := 0 to FActiveRootStack.Count - 1 do
+    if FActiveRootStack[I] = AObject then
+      FActiveRootStack[I] := nil;
 end;
 
 function TGarbageCollector.ContainsObject(

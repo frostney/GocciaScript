@@ -54,7 +54,7 @@ When working with the GC, follow these rules:
 - **Protect stack-held values** — Values held only by Pascal code (not in any GocciaScript scope) must be protected with `AddTempRoot`/`RemoveTempRoot`.
 - **Use `CollectIfNeeded(AProtect)`** when holding a `TGCManagedObject` on the stack. The no-arg `CollectIfNeeded` is only safe when all live values are already rooted.
 - **Weak containers must not mark keys during `MarkReferences`**. Put weak-value propagation in `TraceWeakReferences` and dead-entry pruning in `SweepWeakReferences`; otherwise WeakMap/WeakSet semantics collapse into strong Map/Set semantics.
-- **Scopes** register/unregister with the GC in their constructor/destructor. Active call scopes are tracked via `PushActiveRoot`/`PopActiveRoot`. Interpreted call scopes that did not escape into a closure are freed immediately on return when no collection ran during that call; escaped scopes remain GC-managed and are collected by normal tracing.
+- **Scopes** register with the GC in their constructor and unregister in `BeforeDestruction`. Active call scopes are tracked via `PushActiveRoot`/`PopActiveRoot`. Interpreted call scopes that did not escape into a closure are freed immediately on return when no collection ran during that call; escaped scopes remain GC-managed and are collected by normal tracing.
 - **VM register rooting** only traverses object-bearing register slots. The bytecode VM registers a stack root so manual GC can mark live object registers during active VM execution.
 - Automatic collection is disabled during bytecode execution. Manual `Goccia.gc()` and explicit host `Collect` still run synchronously; benchmark/test hosts also collect at file boundaries where appropriate.
 
