@@ -170,6 +170,7 @@ describe("using declaration", () => {
 
     switch (1) {
       case 1:
+        // biome-ignore lint/correctness/noSwitchDeclarations: intentional - CaseBlock using declarations are spec-valid and disposed at switch exit.
         using resource = {
           [Symbol.dispose]() { order.push("dispose"); }
         };
@@ -188,6 +189,7 @@ describe("using declaration", () => {
     const run = () => {
       switch (1) {
         case 1:
+          // biome-ignore lint/correctness/noSwitchDeclarations: intentional - CaseBlock using declarations are spec-valid and disposed on return.
           using resource = {
             [Symbol.dispose]() { order.push("dispose"); }
           };
@@ -207,6 +209,7 @@ describe("using declaration", () => {
     try {
       switch (1) {
         case 1:
+          // biome-ignore lint/correctness/noSwitchDeclarations: intentional - CaseBlock using declarations are spec-valid and disposed before rethrow.
           using resource = {
             [Symbol.dispose]() { order.push("dispose"); }
           };
@@ -228,6 +231,7 @@ describe("using declaration", () => {
     try {
       switch (0) {
         case 1:
+          // biome-ignore lint/correctness/noSwitchDeclarations: intentional - skipped CaseBlock using declarations must not become active.
           using resource = {
             [Symbol.dispose]() { order.push("dispose"); }
           };
@@ -250,7 +254,9 @@ describe("using declaration", () => {
     };
 
     switch (marker) {
+      // biome-ignore lint/suspicious/noFallthroughSwitchClause: intentional - later matching case must not dispose skipped using.
       case 1:
+        // biome-ignore lint/correctness/noSwitchDeclarations: intentional - this covers stale switch-dispatch registers for skipped CaseBlock using declarations.
         using skipped = {
           [Symbol.dispose]() { order.push("skipped"); }
         };
@@ -261,5 +267,118 @@ describe("using declaration", () => {
     }
 
     expect(order).toEqual(["case2"]);
+  });
+
+  test("switch case using lives across fallthrough until switch exit", () => {
+    const order = [];
+
+    switch (1) {
+      // biome-ignore lint/suspicious/noFallthroughSwitchClause: intentional - selected CaseBlock using must live across fallthrough.
+      case 1:
+        // biome-ignore lint/correctness/noSwitchDeclarations: intentional - wrapping this case would dispose before fallthrough.
+        using resource = {
+          [Symbol.dispose]() { order.push("dispose"); }
+        };
+        order.push("case1");
+      case 2:
+        order.push("case2");
+        break;
+    }
+
+    expect(order).toEqual(["case1", "case2", "dispose"]);
+  });
+
+  test("block-wrapped switch case using disposes before fallthrough", () => {
+    const order = [];
+
+    switch (1) {
+      // biome-ignore lint/suspicious/noFallthroughSwitchClause: intentional - block disposal before fallthrough is the expected contrast.
+      case 1: {
+        using resource = {
+          [Symbol.dispose]() { order.push("dispose"); }
+        };
+        order.push("case1");
+      }
+      case 2:
+        order.push("case2");
+        break;
+    }
+
+    expect(order).toEqual(["case1", "dispose", "case2"]);
+  });
+
+  test("skipped switch case using stays inactive before return", () => {
+    const order = [];
+    const marker = () => {
+      order.push("stale-dispose");
+    };
+
+    const run = () => {
+      switch (marker) {
+        // biome-ignore lint/suspicious/noFallthroughSwitchClause: intentional - later return must not dispose skipped using.
+        case 1:
+          // biome-ignore lint/correctness/noSwitchDeclarations: intentional - skipped CaseBlock using must not run during return cleanup.
+          using skipped = {
+            [Symbol.dispose]() { order.push("skipped"); }
+          };
+          order.push("case1");
+        case marker:
+          order.push("case2");
+          return "done";
+      }
+    };
+
+    expect(run()).toBe("done");
+    expect(order).toEqual(["case2"]);
+  });
+
+  test("skipped switch case using stays inactive before throw", () => {
+    const order = [];
+    const marker = () => {
+      order.push("stale-dispose");
+    };
+    let caught;
+
+    try {
+      switch (marker) {
+        // biome-ignore lint/suspicious/noFallthroughSwitchClause: intentional - later throw must not dispose skipped using.
+        case 1:
+          // biome-ignore lint/correctness/noSwitchDeclarations: intentional - skipped CaseBlock using must not run during throw cleanup.
+          using skipped = {
+            [Symbol.dispose]() { order.push("skipped"); }
+          };
+          order.push("case1");
+        case marker:
+          order.push("case2");
+          throw "boom";
+      }
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(caught).toBe("boom");
+    expect(order).toEqual(["case2"]);
+  });
+
+  test("default after skipped switch case using stays inactive", () => {
+    const order = [];
+    const marker = () => {
+      order.push("stale-dispose");
+    };
+
+    switch (0) {
+      // biome-ignore lint/suspicious/noFallthroughSwitchClause: intentional - default dispatch must not dispose skipped using.
+      case marker:
+        // biome-ignore lint/correctness/noSwitchDeclarations: intentional - default dispatch must not activate skipped CaseBlock using.
+        using skipped = {
+          [Symbol.dispose]() { order.push("skipped"); }
+        };
+        order.push("case1");
+      default:
+        order.push("default");
+        break;
+    }
+
+    expect(order).toEqual(["default"]);
   });
 });
