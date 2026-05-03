@@ -30,6 +30,9 @@ Profiling implies `--mode=bytecode` automatically. Near-zero overhead when disab
 # JSON export (includes all sections regardless of console mode)
 ./build/GocciaScriptLoader script.js --profile=all --profile-output=profile.json
 
+# Deterministic benchmark profile capture for CI comparisons
+./build/GocciaBenchmarkRunner benchmarks/numbers.js --profile-deterministic --profile-output=numbers-profile.json
+
 # Stdin works too
 echo 'const x = 1 + 2; x;' | ./build/GocciaScriptLoader --profile=all
 ```

@@ -6,7 +6,7 @@
 
 - **`suite`/`bench` API** — `bench(name, { setup?, run, teardown? })` with auto-calibration, warmup, and IQR outlier filtering
 - **Four output formats** — `console` (default), `text`, `csv`, `json`; configurable via `--format` and `--output`
-- **Profiler-backed runs** — Bytecode benchmark runs can emit opcode/function profiles with `--profile`
+- **Profiler-backed runs** — Bytecode benchmark runs can emit opcode/function profiles with `--profile`, including deterministic single-run capture
 - **CI integration** — PR workflow posts benchmark comparison comments with range-overlap classification
 - **Environment tuning** — Calibration time, warmup iterations, and measurement rounds configurable via environment variables
 
@@ -33,6 +33,9 @@ printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./bu
 
 # Run bytecode benchmarks with VM profiler data
 ./build/GocciaBenchmarkRunner benchmarks --profile=all --profile-output=bench-profile.json --jobs=1
+
+# Capture a deterministic opcode/allocation profile for CI-style diffing
+./build/GocciaBenchmarkRunner benchmarks/numbers.js --profile-deterministic --profile-output=profile.json
 
 # Export results in different formats
 ./build/GocciaBenchmarkRunner benchmarks --format=json --output=results.json
@@ -73,6 +76,21 @@ allocation attribution:
   --format=json \
   --output=tmp/numbers-bench.json \
   --jobs=1
+```
+
+For deterministic CI signals, add `--profile-deterministic`. This skips warmup,
+calibration, and repeated measurement rounds, then runs each registered benchmark
+once through the existing `setup`/`run`/`teardown` path. If `--profile` is not
+provided, it defaults to `--profile=all`. The benchmark report remains
+structurally valid, but throughput fields are placeholders; use the profile JSON
+for deterministic comparisons.
+
+```bash
+./build/GocciaBenchmarkRunner benchmarks/numbers.js \
+  --profile-deterministic \
+  --profile-output=tmp/numbers-deterministic-profile.json \
+  --format=compact-json \
+  --output=tmp/numbers-deterministic-report.json
 ```
 
 ## Configuring Benchmark Parameters

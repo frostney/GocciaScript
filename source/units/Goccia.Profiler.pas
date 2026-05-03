@@ -64,6 +64,8 @@ type
     constructor Create;
     destructor Destroy; override;
 
+    procedure ResetCounts;
+
     procedure RecordOpcode(const AOp: UInt8); inline;
     procedure RecordScalarHit; inline;
     procedure RecordScalarMiss; inline;
@@ -143,6 +145,29 @@ begin
   if Assigned(FOpcodePairs) then
     FreeMem(FOpcodePairs);
   inherited;
+end;
+
+procedure TGocciaProfiler.ResetCounts;
+var
+  I: Integer;
+begin
+  for I := 0 to MAX_OPCODE_ORDINAL do
+    FOpcodeCount[I] := 0;
+  FillChar(FOpcodePairs^, SizeOf(TGocciaOpcodePairArray), 0);
+  FHasPrevOp := False;
+  FPrevOp := 0;
+  FScalarHits := 0;
+  FScalarMisses := 0;
+  FTimingStackCount := 0;
+  FCollapsedStacks.Clear;
+
+  for I := 0 to FFunctionProfileCount - 1 do
+  begin
+    FFunctionProfiles[I].CallCount := 0;
+    FFunctionProfiles[I].SelfTimeNanoseconds := 0;
+    FFunctionProfiles[I].TotalTimeNanoseconds := 0;
+    FFunctionProfiles[I].Allocations := 0;
+  end;
 end;
 
 procedure TGocciaProfiler.RecordOpcode(const AOp: UInt8);

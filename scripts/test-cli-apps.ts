@@ -1114,6 +1114,53 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
       if (valid.length === 0) throw new Error("Bytecode benchmark JSON should contain at least one valid result");
     }
 
+    console.log("BenchmarkRunner: deterministic profile mode...");
+    const profileBench = join(tmp, "profile-deterministic.js");
+    const profileOut = join(tmp, "profile.json");
+    writeFileSync(profileBench, [
+      'let count = 0;',
+      'suite("profile", () => {',
+      '  bench("runs once", {',
+      '    setup: () => ({ value: 1 }),',
+      '    run: async (state) => {',
+      '      count = count + await Promise.resolve(state.value);',
+      '    },',
+      '    teardown: () => {',
+      '      if (count !== 1) { throw new Error("expected one deterministic run, got " + count); }',
+      '    },',
+      '  });',
+      '});',
+      '',
+    ].join("\n"));
+    {
+      const proc = Bun.spawnSync(
+        [
+          resolve(BENCHRUNNER),
+          profileBench,
+          "--profile-deterministic",
+          "--profile=all",
+          `--profile-output=${profileOut}`,
+          "--no-progress",
+          "--format=compact-json",
+        ],
+        { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
+      );
+      if (proc.exitCode !== 0) throw new Error(`Deterministic profile benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const report = JSON.parse(proc.stdout.toString());
+      const bench = report.files?.[0]?.benchmarks?.[0];
+      if (bench?.iterations !== 1)
+        throw new Error(`Deterministic profile report should record one iteration, got ${bench?.iterations}`);
+    }
+    {
+      const profile = JSON.parse(readFileSync(profileOut, "utf-8"));
+      if (!Array.isArray(profile.opcodes) || profile.opcodes.length === 0)
+        throw new Error("Deterministic profile should include opcode counts");
+      if (!Array.isArray(profile.functions) || profile.functions.length === 0)
+        throw new Error("Deterministic profile should include function counts");
+      if (!profile.functions.some((fn: Record<string, unknown>) => typeof fn.allocations === "number"))
+        throw new Error("Deterministic profile should include function allocation counts");
+    }
+
     console.log("BenchmarkRunner: file benchmark JSON output...");
     if (!fileJson.includes('"totalBenchmarks":')) throw new Error('JSON should contain totalBenchmarks');
 

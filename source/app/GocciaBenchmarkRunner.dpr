@@ -184,6 +184,7 @@ type
   TBenchmarkRunnerApp = class(TGocciaCLIApplication)
   private
     FNoProgress: TGocciaFlagOption;
+    FProfileDeterministic: TGocciaFlagOption;
     FFormats: TGocciaRepeatableOption;
     FOutputFile: TGocciaStringOption;
     FCanPrintProfile: Boolean;
@@ -265,7 +266,8 @@ begin
     Benchmark.OnBeforeMeasurement := AEngine.ClearTransientCaches;
 end;
 
-function RunRegisteredBenchmarks(const AEngine: TGocciaEngine): TGocciaObjectValue;
+function RunRegisteredBenchmarks(const AEngine: TGocciaEngine;
+  const ADeterministicProfile: Boolean): TGocciaObjectValue;
 var
   Benchmark: TGocciaBenchmark;
   EmptyArgs: TGocciaArgumentsCollection;
@@ -277,8 +279,12 @@ begin
 
   EmptyArgs := TGocciaArgumentsCollection.Create;
   try
-    Value := Benchmark.RunBenchmarks(EmptyArgs,
-      TGocciaUndefinedLiteralValue.UndefinedValue);
+    if ADeterministicProfile then
+      Value := Benchmark.RunDeterministicProfile(EmptyArgs,
+        TGocciaUndefinedLiteralValue.UndefinedValue)
+    else
+      Value := Benchmark.RunBenchmarks(EmptyArgs,
+        TGocciaUndefinedLiteralValue.UndefinedValue);
   finally
     EmptyArgs.Free;
   end;
@@ -344,11 +350,13 @@ begin
         try
           EngineResult := Engine.Execute;
           FileResult.FileName := AFileName;
+          FileResult.DeterministicProfile := FProfileDeterministic.Present;
           FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
           FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
           FileResult.CompileTimeNanoseconds := 0;
           BenchStart := GetNanoseconds;
-          ScriptResult := RunRegisteredBenchmarks(Engine);
+          ScriptResult := RunRegisteredBenchmarks(Engine,
+            FProfileDeterministic.Present);
           FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds +
             (GetNanoseconds - BenchStart);
         finally
@@ -474,13 +482,18 @@ begin
             RunBytecodeBenchmarkModule(Engine,
               TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
             ExecEnd := GetNanoseconds;
+            if FProfileDeterministic.Present and
+               Assigned(TGocciaProfiler.Instance) then
+              TGocciaProfiler.Instance.ResetCounts;
 
             FileResult.FileName := AFileName;
+            FileResult.DeterministicProfile := FProfileDeterministic.Present;
             FileResult.LexTimeNanoseconds := LexEnd - LexStart;
             FileResult.ParseTimeNanoseconds := ParseEnd - LexEnd;
             FileResult.CompileTimeNanoseconds := CompileEnd - ParseEnd;
             BenchStart := GetNanoseconds;
-            ScriptResult := RunRegisteredBenchmarks(Engine);
+            ScriptResult := RunRegisteredBenchmarks(Engine,
+              FProfileDeterministic.Present);
             FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd +
               (GetNanoseconds - BenchStart);
           finally
@@ -573,11 +586,13 @@ begin
       try
         EngineResult := Engine.Execute;
         FileResult.FileName := AFileName;
+        FileResult.DeterministicProfile := FProfileDeterministic.Present;
         FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
         FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
         FileResult.CompileTimeNanoseconds := 0;
         BenchStart := GetNanoseconds;
-        ScriptResult := RunRegisteredBenchmarks(Engine);
+        ScriptResult := RunRegisteredBenchmarks(Engine,
+          FProfileDeterministic.Present);
         FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds +
           (GetNanoseconds - BenchStart);
       finally
@@ -684,13 +699,18 @@ begin
           RunBytecodeBenchmarkModule(Engine,
             TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
           ExecEnd := GetNanoseconds;
+          if FProfileDeterministic.Present and
+             Assigned(TGocciaProfiler.Instance) then
+            TGocciaProfiler.Instance.ResetCounts;
 
           FileResult.FileName := AFileName;
+          FileResult.DeterministicProfile := FProfileDeterministic.Present;
           FileResult.LexTimeNanoseconds := LexEnd - LexStart;
           FileResult.ParseTimeNanoseconds := ParseEnd - LexEnd;
           FileResult.CompileTimeNanoseconds := CompileEnd - ParseEnd;
           BenchStart := GetNanoseconds;
-          ScriptResult := RunRegisteredBenchmarks(Engine);
+          ScriptResult := RunRegisteredBenchmarks(Engine,
+            FProfileDeterministic.Present);
           FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd +
             (GetNanoseconds - BenchStart);
         finally
@@ -944,6 +964,7 @@ begin
         WorkerData[I].ExecuteTimeNanoseconds := 0;
         WorkerData[I].TotalBenchmarks := 0;
         WorkerData[I].DurationNanoseconds := 0;
+        WorkerData[I].DeterministicProfile := False;
         SetLength(WorkerData[I].Entries, 0);
       end;
 
@@ -1026,6 +1047,8 @@ begin
   AddEngineOptions;
   AddProfilerOptions;
   FNoProgress := AddFlag('no-progress', 'Suppress progress output');
+  FProfileDeterministic := AddFlag('profile-deterministic',
+    'Run each registered benchmark once for deterministic profile capture');
   FFormats := AddRepeatable('format',
     'Output format (console, text, csv, json, compact-json). ' +
     '"compact-json" emits the json envelope without build, memory, stdout, stderr.');
@@ -1038,6 +1061,9 @@ begin
 
   if ProfilerOptions.Format.Present and not ProfilerOptions.Mode.Present then
     ProfilerOptions.Mode.Apply('functions');
+
+  if FProfileDeterministic.Present and not ProfilerOptions.Mode.Present then
+    ProfilerOptions.Mode.Apply('all');
 
   if ProfilerOptions.Mode.Present then
     EngineOptions.Mode.Apply('bytecode');
