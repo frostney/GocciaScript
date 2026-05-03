@@ -4479,6 +4479,8 @@ var
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   Context: TGocciaEvaluationContext;
   ConstructorName: string;
+  PrototypeValue, ConstructResult: TGocciaValue;
+  ReceiverPrototype, ReceiverInstance: TGocciaObjectValue;
 begin
   // ES2026 §28.1.1 [[Construct]](argumentsList, newTarget)
   if AConstructor is TGocciaProxyValue then
@@ -4542,14 +4544,39 @@ begin
     if not TGocciaFunctionBase(AConstructor).IsConstructable then
       ThrowTypeError(Format(SErrorNotConstructor, [ConstructorName]),
         SSuggestNotConstructorType);
-    if Assigned(TGocciaCallStack.Instance) then
-      TGocciaCallStack.Instance.Push(ConstructorName, '', 0, 0);
+    // ES2026 §10.2.2 [[Construct]] for ordinary function objects:
+    // OrdinaryCreateFromConstructor allocates a fresh object whose
+    // [[Prototype]] is constructor.prototype (or %Object.prototype% when
+    // that property is not an Object — §10.1.14 GetPrototypeFromConstructor),
+    // then calls the body with the new object bound as `this`.  Iff the body
+    // explicitly returns an Object, that becomes the call result.
+    PrototypeValue := TGocciaFunctionBase(AConstructor).GetProperty(PROP_PROTOTYPE);
+    if PrototypeValue is TGocciaObjectValue then
+      ReceiverPrototype := TGocciaObjectValue(PrototypeValue)
+    else
+    begin
+      if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+        TGocciaObjectValue.InitializeSharedPrototype;
+      ReceiverPrototype := TGocciaObjectValue.SharedObjectPrototype;
+    end;
+    ReceiverInstance := TGocciaObjectValue.Create(ReceiverPrototype);
+    TGarbageCollector.Instance.AddTempRoot(ReceiverInstance);
     try
-      Result := TGocciaFunctionBase(AConstructor).Call(
-        AArguments, TGocciaUndefinedLiteralValue.UndefinedValue);
-    finally
       if Assigned(TGocciaCallStack.Instance) then
-        TGocciaCallStack.Instance.Pop;
+        TGocciaCallStack.Instance.Push(ConstructorName, '', 0, 0);
+      try
+        ConstructResult := TGocciaFunctionBase(AConstructor).Call(
+          AArguments, ReceiverInstance);
+        if ConstructResult is TGocciaObjectValue then
+          Result := ConstructResult
+        else
+          Result := ReceiverInstance;
+      finally
+        if Assigned(TGocciaCallStack.Instance) then
+          TGocciaCallStack.Instance.Pop;
+      end;
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(ReceiverInstance);
     end;
     Exit;
   end;

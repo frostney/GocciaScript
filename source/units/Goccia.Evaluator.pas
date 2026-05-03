@@ -2991,6 +2991,10 @@ var
   WalkClass, ClassValue: TGocciaClassValue;
   InitContext, SuperInitContext: TGocciaEvaluationContext;
   InitScope, SuperInitScope: TGocciaScope;
+  FunctionCallee: TGocciaFunctionBase;
+  PrototypeValue, ConstructResult: TGocciaValue;
+  ReceiverPrototype: TGocciaObjectValue;
+  ReceiverInstance: TGocciaObjectValue;
 begin
   CheckExecutionTimeout;
   IncrementInstructionCounter;
@@ -3014,6 +3018,8 @@ begin
       CalleeName := TGocciaClassValue(Callee).Name
     else if Callee is TGocciaNativeFunctionValue then
       CalleeName := TGocciaNativeFunctionValue(Callee).Name
+    else if Callee is TGocciaFunctionBase then
+      CalleeName := TGocciaFunctionBase(Callee).GetProperty(PROP_NAME).ToStringLiteral.Value
     else
       CalleeName := '';
 
@@ -3042,6 +3048,37 @@ begin
               [TGocciaNativeFunctionValue(Callee).Name]));
         Result := TGocciaNativeFunctionValue(Callee).Call(Arguments,
           TGocciaHoleValue.HoleValue);
+      end
+      else if Callee is TGocciaFunctionBase then
+      begin
+        // ES2026 §10.2.2 [[Construct]] for ordinary function objects:
+        // OrdinaryCreateFromConstructor produces a fresh object whose
+        // [[Prototype]] is constructor.prototype (or %Object.prototype% when
+        // that property is not an Object — §10.1.14 GetPrototypeFromConstructor).
+        FunctionCallee := TGocciaFunctionBase(Callee);
+        if not FunctionCallee.IsConstructable then
+          ThrowTypeError(Format(SErrorNotConstructor, [CalleeName]),
+            SSuggestNotConstructorType);
+        PrototypeValue := FunctionCallee.GetProperty(PROP_PROTOTYPE);
+        if PrototypeValue is TGocciaObjectValue then
+          ReceiverPrototype := TGocciaObjectValue(PrototypeValue)
+        else
+        begin
+          if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+            TGocciaObjectValue.InitializeSharedPrototype;
+          ReceiverPrototype := TGocciaObjectValue.SharedObjectPrototype;
+        end;
+        ReceiverInstance := TGocciaObjectValue.Create(ReceiverPrototype);
+        TGarbageCollector.Instance.AddTempRoot(ReceiverInstance);
+        try
+          ConstructResult := FunctionCallee.Call(Arguments, ReceiverInstance);
+          if ConstructResult is TGocciaObjectValue then
+            Result := ConstructResult
+          else
+            Result := ReceiverInstance;
+        finally
+          TGarbageCollector.Instance.RemoveTempRoot(ReceiverInstance);
+        end;
       end
       else
       begin
