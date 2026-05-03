@@ -351,15 +351,19 @@ def wrap_negative_runtime_test(
 
 {CAPTURE_PRIVATE_HARNESS_GLOBALS}
 {CLEAR_PUBLIC_HARNESS_GLOBALS}
-
 {RESTORE_INTERNAL_HARNESS_GLOBALS}
 
 __gocciaTest262RegisterDescribe("test262: {tid}", () => {{
   __gocciaTest262RegisterTest("{desc}", () => {{
-    assert.throws({error_type}, () => {{
+    globalThis.runTests = undefined;
+    try {{
+      assert.throws({error_type}, () => {{
 {strict_directive}
 {body}
-    }});
+      }});
+    }} finally {{
+      globalThis.runTests = __gocciaTest262RunTests;
+    }}
   }});
 }});
 """
