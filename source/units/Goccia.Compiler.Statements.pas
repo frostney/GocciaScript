@@ -2030,11 +2030,9 @@ var
   OldBreakFinallyBase: Integer;
   BreakJumps: TList<Integer>;
   Node: TGocciaASTNode;
-  Reg, SelectedReg, DispatchIndexReg, DispatchCmpReg: UInt8;
+  Reg: UInt8;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
-  EntryToPreludeJumps: array of Integer;
-  BodyDispatchJumps: array of Integer;
   HasFunctionDecl, NeedsPrelude, StatementAbrupt, HasUsing: Boolean;
   SavedResourceBase, ResourceCount: Integer;
   CatchReg, ErrorReg: UInt8;
@@ -2065,8 +2063,6 @@ var
   end;
 begin
   DiscReg := ACtx.Scope.AllocateRegister;
-  TestReg := ACtx.Scope.AllocateRegister;
-  CmpReg := ACtx.Scope.AllocateRegister;
 
   ACtx.CompileExpression(AStmt.Discriminant, DiscReg);
 
@@ -2074,29 +2070,6 @@ begin
   DefaultIndex := -1;
   DefaultJump := -1;
   EndJump := -1;
-
-  for I := 0 to AStmt.Cases.Count - 1 do
-  begin
-    CaseClause := AStmt.Cases[I];
-    if not Assigned(CaseClause.Test) then
-    begin
-      DefaultIndex := I;
-      CaseBodyJumps[I] := -1;
-      Continue;
-    end;
-    ACtx.CompileExpression(CaseClause.Test, TestReg);
-    EmitInstruction(ACtx, EncodeABC(OP_EQ, CmpReg, DiscReg, TestReg));
-    CaseBodyJumps[I] := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CmpReg);
-  end;
-
-  if DefaultIndex >= 0 then
-    DefaultJump := EmitJumpInstruction(ACtx, OP_JUMP, 0)
-  else
-    EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-
-  ACtx.Scope.FreeRegister;
-  ACtx.Scope.FreeRegister;
-  ACtx.Scope.FreeRegister;
 
   OldBreakJumps := GBreakJumps;
   OldBreakFinallyBase := GBreakFinallyBase;
@@ -2136,30 +2109,6 @@ begin
           PredeclareBlockLexicalLocals(CaseClause.Consequent[J], ACtx, False);
       end;
 
-      SelectedReg := ACtx.Scope.AllocateRegister;
-      DispatchIndexReg := ACtx.Scope.AllocateRegister;
-      DispatchCmpReg := ACtx.Scope.AllocateRegister;
-      SetLength(EntryToPreludeJumps, AStmt.Cases.Count);
-      SetLength(BodyDispatchJumps, AStmt.Cases.Count);
-
-      for I := 0 to AStmt.Cases.Count - 1 do
-      begin
-        EntryToPreludeJumps[I] := -1;
-        if (I = DefaultIndex) and (DefaultJump >= 0) then
-          PatchJumpTarget(ACtx, DefaultJump)
-        else if CaseBodyJumps[I] >= 0 then
-          PatchJumpTarget(ACtx, CaseBodyJumps[I])
-        else
-          Continue;
-
-        EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, SelectedReg, Int16(I)));
-        EntryToPreludeJumps[I] := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-      end;
-
-      for I := 0 to High(EntryToPreludeJumps) do
-        if EntryToPreludeJumps[I] >= 0 then
-          PatchJumpTarget(ACtx, EntryToPreludeJumps[I]);
-
       for I := 0 to AStmt.Cases.Count - 1 do
       begin
         CaseClause := AStmt.Cases[I];
@@ -2175,29 +2124,39 @@ begin
              (GetBlockFunctionDeclaration(CaseClause.Consequent[J]) <> nil) then
             ACtx.CompileStatement(CaseClause.Consequent[J]);
       end;
-
-      BeginSwitchUsingDisposalRegion;
-
-      for I := 0 to AStmt.Cases.Count - 1 do
-      begin
-        EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, DispatchIndexReg, Int16(I)));
-        EmitInstruction(ACtx, EncodeABC(OP_EQ, DispatchCmpReg, SelectedReg,
-          DispatchIndexReg));
-        BodyDispatchJumps[I] := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE,
-          DispatchCmpReg);
-      end;
     end;
 
-    if HasUsing and not NeedsPrelude then
+    if HasUsing then
       BeginSwitchUsingDisposalRegion;
+
+    TestReg := ACtx.Scope.AllocateRegister;
+    CmpReg := ACtx.Scope.AllocateRegister;
+    for I := 0 to AStmt.Cases.Count - 1 do
+    begin
+      CaseClause := AStmt.Cases[I];
+      if not Assigned(CaseClause.Test) then
+      begin
+        DefaultIndex := I;
+        CaseBodyJumps[I] := -1;
+        Continue;
+      end;
+      ACtx.CompileExpression(CaseClause.Test, TestReg);
+      EmitInstruction(ACtx, EncodeABC(OP_EQ, CmpReg, DiscReg, TestReg));
+      CaseBodyJumps[I] := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CmpReg);
+    end;
+
+    if DefaultIndex >= 0 then
+      DefaultJump := EmitJumpInstruction(ACtx, OP_JUMP, 0)
+    else
+      EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
 
     for I := 0 to AStmt.Cases.Count - 1 do
     begin
       CaseClause := AStmt.Cases[I];
 
-      if NeedsPrelude then
-        PatchJumpTarget(ACtx, BodyDispatchJumps[I])
-      else if I = DefaultIndex then
+      if I = DefaultIndex then
       begin
         if DefaultJump >= 0 then
           PatchJumpTarget(ACtx, DefaultJump);
@@ -2228,6 +2187,12 @@ begin
           ACtx.Scope.FreeRegister;
         end;
       end;
+    end;
+
+    if HasUsing and (EndJump >= 0) then
+    begin
+      PatchJumpTarget(ACtx, EndJump);
+      EndJump := -1;
     end;
 
     if HasUsing then
@@ -2262,13 +2227,6 @@ begin
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
     end;
-
-    if NeedsPrelude then
-    begin
-      ACtx.Scope.FreeRegister;
-      ACtx.Scope.FreeRegister;
-      ACtx.Scope.FreeRegister;
-    end;
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for J := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[J], 0, 0));
@@ -2283,6 +2241,7 @@ begin
     GBreakJumps := OldBreakJumps;
     GBreakFinallyBase := OldBreakFinallyBase;
   end;
+  ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileBreakStatement(const ACtx: TGocciaCompilationContext);

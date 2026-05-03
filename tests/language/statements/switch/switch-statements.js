@@ -139,6 +139,26 @@ test("switch case lexical binding is in TDZ before declaration", () => {
   expect(value).toBe("outer");
 });
 
+test("switch case test expression sees case lexical TDZ", () => {
+  let value = "outer";
+  let caught;
+
+  try {
+    switch (0) {
+      case value:
+        break;
+      case 1:
+        let value = "inner";
+        break;
+    }
+  } catch (e) {
+    caught = e;
+  }
+
+  expect(caught instanceof ReferenceError).toBe(true);
+  expect(value).toBe("outer");
+});
+
 test("switch shared lexical prelude initializes selected case binding", () => {
   let result;
 

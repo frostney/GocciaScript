@@ -132,3 +132,19 @@ test("switch function declarations share the switch lexical scope", () => {
 
   expect(value).toBe(42);
 });
+
+test("switch case tests see hoisted switch function declarations", () => {
+  let value;
+
+  switch ("function") {
+    case typeof read:
+      value = read();
+      break;
+    default:
+      function read() {
+        return "hoisted";
+      }
+  }
+
+  expect(value).toBe("hoisted");
+});

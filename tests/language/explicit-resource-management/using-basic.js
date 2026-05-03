@@ -220,4 +220,26 @@ describe("using declaration", () => {
     expect(caught).toBe("boom");
     expect(order).toEqual(["body", "dispose"]);
   });
+
+  test("unmatched switch with using case does not leave active handler", () => {
+    const order = [];
+    let caught;
+
+    try {
+      switch (0) {
+        case 1:
+          using resource = {
+            [Symbol.dispose]() { order.push("dispose"); }
+          };
+          order.push("body");
+          break;
+      }
+      throw "after";
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(caught).toBe("after");
+    expect(order).toEqual([]);
+  });
 });

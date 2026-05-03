@@ -3211,7 +3211,7 @@ begin
 
         if not Matched then
         begin
-          CaseTest := EvaluateExpression(CaseClause.Test, AContext);
+          CaseTest := EvaluateExpression(CaseClause.Test, SwitchBlockContext);
           if Goccia.Arithmetic.IsStrictEqual(Discriminant, CaseTest) then
           begin
             Matched := True;
