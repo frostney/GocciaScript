@@ -51,6 +51,8 @@ type
     function HasFloatConstantBits(
       const ATemplate: TGocciaFunctionTemplate;
       const AExpected: Double): Boolean;
+    function HasBigIntConstant(const ATemplate: TGocciaFunctionTemplate;
+      const AExpected: string): Boolean;
     function NegativeZero: Double;
 
     procedure TestCompileLiteral;
@@ -63,11 +65,14 @@ type
     procedure TestBinaryRoundTripConstants;
     procedure TestUndeclaredPrivateNameRaisesSyntaxError;
     procedure TestConstantFoldsNestedArithmetic;
+    procedure TestConstantFoldsBigInt;
     procedure TestConstantFoldsSpecialNumbers;
     procedure TestConstPropagation;
+    procedure TestConstPropagationBigInt;
     procedure TestConstPropagationSkipsMutable;
     procedure TestConstPropagationSkipsGlobalBacked;
     procedure TestConstantIfEliminatesBranch;
+    procedure TestConstantIfPrunesAbruptTail;
     procedure TestCoveragePreservesConstantBranch;
     procedure TestStrictTypeSimplificationRequiresStrictTypes;
   public
@@ -86,11 +91,14 @@ begin
   Test('Binary round-trip constants', TestBinaryRoundTripConstants);
   Test('Undeclared private name raises SyntaxError', TestUndeclaredPrivateNameRaisesSyntaxError);
   Test('Constant folds nested arithmetic', TestConstantFoldsNestedArithmetic);
+  Test('Constant folds BigInt', TestConstantFoldsBigInt);
   Test('Constant folds special numbers', TestConstantFoldsSpecialNumbers);
   Test('Const propagation', TestConstPropagation);
+  Test('Const propagation with BigInt', TestConstPropagationBigInt);
   Test('Const propagation skips mutable bindings', TestConstPropagationSkipsMutable);
   Test('Const propagation skips global-backed bindings', TestConstPropagationSkipsGlobalBacked);
   Test('Constant if eliminates branch', TestConstantIfEliminatesBranch);
+  Test('Constant if prunes abrupt tail', TestConstantIfPrunesAbruptTail);
   Test('Coverage preserves constant branch shape', TestCoveragePreservesConstantBranch);
   Test('Strict type simplification requires strict-types', TestStrictTypeSimplificationRequiresStrictTypes);
 end;
@@ -230,6 +238,22 @@ begin
       if ActualBits = ExpectedBits then
         Exit(True);
     end;
+  end;
+  Result := False;
+end;
+
+function TTestCompiler.HasBigIntConstant(
+  const ATemplate: TGocciaFunctionTemplate;
+  const AExpected: string): Boolean;
+var
+  I: Integer;
+  Constant: TGocciaBytecodeConstant;
+begin
+  for I := 0 to ATemplate.ConstantCount - 1 do
+  begin
+    Constant := ATemplate.GetConstant(I);
+    if (Constant.Kind = bckBigInt) and (Constant.StringValue = AExpected) then
+      Exit(True);
   end;
   Result := False;
 end;
@@ -462,6 +486,19 @@ begin
   end;
 end;
 
+procedure TTestCompiler.TestConstantFoldsBigInt;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('1n + 2n;');
+  try
+    Expect<Integer>(CountArithmeticOps(Module.TopLevel)).ToBe(0);
+    Expect<Boolean>(HasBigIntConstant(Module.TopLevel, '3')).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
 procedure TTestCompiler.TestConstantFoldsSpecialNumbers;
 var
   Module: TGocciaBytecodeModule;
@@ -508,6 +545,19 @@ begin
   end;
 end;
 
+procedure TTestCompiler.TestConstPropagationBigInt;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('const a = 1n; const b = a + 2n; b;');
+  try
+    Expect<Integer>(CountArithmeticOps(Module.TopLevel)).ToBe(0);
+    Expect<Boolean>(HasBigIntConstant(Module.TopLevel, '3')).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
 procedure TTestCompiler.TestConstPropagationSkipsMutable;
 var
   Module: TGocciaBytecodeModule;
@@ -542,6 +592,29 @@ begin
   try
     Expect<Integer>(CountOp(Module.TopLevel, OP_JUMP_IF_FALSE)).ToBe(0);
     Expect<Integer>(CountArithmeticOps(Module.TopLevel)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstantIfPrunesAbruptTail;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'if (true) { throw 1; } const unreachable = 2 + 3; unreachable;');
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_THROW)).ToBe(1);
+    Expect<Boolean>(HasLoadInt(Module.TopLevel, 5)).ToBe(False);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource(
+    '{ if (true) { throw 1; } const unreachable = 2 + 3; }');
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_THROW)).ToBe(1);
+    Expect<Boolean>(HasLoadInt(Module.TopLevel, 5)).ToBe(False);
   finally
     Module.Free;
   end;

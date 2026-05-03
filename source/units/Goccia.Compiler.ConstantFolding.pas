@@ -17,9 +17,9 @@ function TryEmitConstantExpression(const ACtx: TGocciaCompilationContext;
 procedure EmitCompileTimeValue(const ACtx: TGocciaCompilationContext;
   const AValue: TGocciaCompileTimeValue; const ADest: UInt8);
 function CompileTimeValueToBoolean(
-  const AValue: TGocciaCompileTimeValue): Boolean;
+  const AValue: TGocciaCompileTimeValue): Boolean; inline;
 function CompileTimeValueIsNullish(
-  const AValue: TGocciaCompileTimeValue): Boolean;
+  const AValue: TGocciaCompileTimeValue): Boolean; inline;
 
 function TryFoldBinary(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaBinaryExpression; const ADest: UInt8): Boolean;
@@ -46,13 +46,13 @@ uses
   Goccia.Values.Primitives;
 
 function CompileTimeValueToBoolean(
-  const AValue: TGocciaCompileTimeValue): Boolean;
+  const AValue: TGocciaCompileTimeValue): Boolean; inline;
 begin
   Result := Goccia.Compiler.ConstantValue.CompileTimeValueToBoolean(AValue);
 end;
 
 function CompileTimeValueIsNullish(
-  const AValue: TGocciaCompileTimeValue): Boolean;
+  const AValue: TGocciaCompileTimeValue): Boolean; inline;
 begin
   Result := Goccia.Compiler.ConstantValue.CompileTimeValueIsNullish(AValue);
 end;

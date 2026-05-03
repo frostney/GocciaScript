@@ -20,7 +20,7 @@ uses
 type
   TCompileExpressionProc = procedure(const AExpr: TGocciaExpression;
     const ADest: UInt8) of object;
-  TCompileStatementProc = procedure(const AStmt: TGocciaStatement) of object;
+  TCompileStatementProc = function(const AStmt: TGocciaStatement): Boolean of object;
   TCompileFunctionBodyProc = procedure(const ABody: TGocciaASTNode) of object;
   TSwapStateProc = procedure(const ATemplate: TGocciaFunctionTemplate;
     const AScope: TGocciaCompilerScope) of object;

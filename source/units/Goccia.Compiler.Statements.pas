@@ -19,10 +19,10 @@ procedure CompileExpressionStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExpressionStatement);
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaVariableDeclaration);
-procedure CompileBlockStatement(const ACtx: TGocciaCompilationContext;
-  const AStmt: TGocciaBlockStatement);
-procedure CompileIfStatement(const ACtx: TGocciaCompilationContext;
-  const AStmt: TGocciaIfStatement);
+function CompileBlockStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaBlockStatement): Boolean;
+function CompileIfStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaIfStatement): Boolean;
 procedure CompileReturnStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaReturnStatement);
 procedure CompileThrowStatement(const ACtx: TGocciaCompilationContext;
@@ -67,7 +67,9 @@ function StripArrayLayer(const AAnnotation: string): string;
 function ExpressionType(const AScope: TGocciaCompilerScope;
   const AExpr: TGocciaExpression): TGocciaLocalType;
 function CharToLocalType(const ACh: Char): TGocciaLocalType;
-function StatementAlwaysAbrupt(const AStmt: TGocciaStatement): Boolean;
+function StatementAlwaysAbrupt(const AStmt: TGocciaStatement): Boolean; overload;
+function StatementAlwaysAbrupt(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaStatement): Boolean; overload;
 
 procedure CollectDestructuringVarBindings(const APattern: TGocciaDestructuringPattern;
   const AScope: TGocciaCompilerScope);
@@ -720,6 +722,42 @@ begin
   Result := False;
 end;
 
+function StatementAlwaysAbrupt(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaStatement): Boolean;
+var
+  ConditionValue: TGocciaCompileTimeValue;
+  IfStmt: TGocciaIfStatement;
+  BlockStmt: TGocciaBlockStatement;
+  I: Integer;
+begin
+  if AStmt is TGocciaIfStatement then
+  begin
+    IfStmt := TGocciaIfStatement(AStmt);
+    if ACtx.OptimizationOptions.EnableDeadBranchElimination and
+       not ACtx.OptimizationOptions.PreserveCoverageShape and
+       TryEvaluateConstantExpression(ACtx, IfStmt.Condition, ConditionValue) then
+    begin
+      if CompileTimeValueToBoolean(ConditionValue) then
+        Exit(StatementAlwaysAbrupt(ACtx, IfStmt.Consequent));
+      if Assigned(IfStmt.Alternate) then
+        Exit(StatementAlwaysAbrupt(ACtx, IfStmt.Alternate));
+      Exit(False);
+    end;
+  end;
+
+  if AStmt is TGocciaBlockStatement then
+  begin
+    BlockStmt := TGocciaBlockStatement(AStmt);
+    for I := 0 to BlockStmt.Nodes.Count - 1 do
+      if (BlockStmt.Nodes[I] is TGocciaStatement) and
+         StatementAlwaysAbrupt(ACtx, TGocciaStatement(BlockStmt.Nodes[I])) then
+        Exit(True);
+    Exit(False);
+  end;
+
+  Result := StatementAlwaysAbrupt(AStmt);
+end;
+
 procedure EmitPendingEntryCleanup(const ACtx: TGocciaCompilationContext;
   const AEntry: TPendingFinallyEntry; const ACloseIterator: Boolean);
 var
@@ -741,8 +779,8 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, AEntry.IteratorReg, 0, 0));
 end;
 
-procedure CompileBlockStatement(const ACtx: TGocciaCompilationContext;
-  const AStmt: TGocciaBlockStatement);
+function CompileBlockStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaBlockStatement): Boolean;
 var
   I: Integer;
   ClosedLocals: array[0..255] of UInt8;
@@ -755,7 +793,10 @@ var
   HandlerJump, EndJump, NullishJump: Integer;
   SavedResources: array of TUsingResourceEntry;
   PendingEntry: TPendingFinallyEntry;
+  StatementAbrupt: Boolean;
 begin
+  Result := False;
+
   // Check if this block contains any using declarations
   HasUsing := False;
   for I := 0 to AStmt.Nodes.Count - 1 do
@@ -774,10 +815,11 @@ begin
       Node := AStmt.Nodes[I];
       if Node is TGocciaStatement then
       begin
-        ACtx.CompileStatement(TGocciaStatement(Node));
+        StatementAbrupt := ACtx.CompileStatement(TGocciaStatement(Node));
+        Result := Result or StatementAbrupt;
         if ACtx.OptimizationOptions.EnableDeadBranchElimination and
            not ACtx.OptimizationOptions.PreserveCoverageShape and
-           StatementAlwaysAbrupt(TGocciaStatement(Node)) then
+           StatementAbrupt then
           Break;
       end
       else if Node is TGocciaExpression then
@@ -826,7 +868,14 @@ begin
   begin
     Node := AStmt.Nodes[I];
     if Node is TGocciaStatement then
-      ACtx.CompileStatement(TGocciaStatement(Node))
+    begin
+      StatementAbrupt := ACtx.CompileStatement(TGocciaStatement(Node));
+      Result := Result or StatementAbrupt;
+      if ACtx.OptimizationOptions.EnableDeadBranchElimination and
+         not ACtx.OptimizationOptions.PreserveCoverageShape and
+         StatementAbrupt then
+        Break;
+    end
     else if Node is TGocciaExpression then
     begin
       Reg := ACtx.Scope.AllocateRegister;
@@ -889,8 +938,8 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
 end;
 
-procedure CompileIfStatement(const ACtx: TGocciaCompilationContext;
-  const AStmt: TGocciaIfStatement);
+function CompileIfStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaIfStatement): Boolean;
 var
   CondReg, PatternSubjectReg: UInt8;
   ElseJump, EndJump: Integer;
@@ -899,6 +948,7 @@ var
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount, I: Integer;
   ConditionValue: TGocciaCompileTimeValue;
+  ConsequentAbrupt, AlternateAbrupt: Boolean;
 
   procedure PatchPatternFailureTarget;
   var
@@ -913,14 +963,16 @@ var
       EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[J], 0, 0));
   end;
 begin
+  Result := False;
+
   if ACtx.OptimizationOptions.EnableDeadBranchElimination and
      not ACtx.OptimizationOptions.PreserveCoverageShape and
      TryEvaluateConstantExpression(ACtx, AStmt.Condition, ConditionValue) then
   begin
     if CompileTimeValueToBoolean(ConditionValue) then
-      ACtx.CompileStatement(AStmt.Consequent)
+      Result := ACtx.CompileStatement(AStmt.Consequent)
     else if Assigned(AStmt.Alternate) then
-      ACtx.CompileStatement(AStmt.Alternate);
+      Result := ACtx.CompileStatement(AStmt.Alternate);
     Exit;
   end;
 
@@ -935,7 +987,7 @@ begin
       ACtx.CompileExpression(AStmt.Condition, CondReg);
 
     ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
-    ACtx.CompileStatement(AStmt.Consequent);
+    ConsequentAbrupt := ACtx.CompileStatement(AStmt.Consequent);
 
     if HasPatternBindings then
     begin
@@ -949,13 +1001,15 @@ begin
       EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
       PatchJumpTarget(ACtx, ElseJump);
       PatchPatternFailureTarget;
-      ACtx.CompileStatement(AStmt.Alternate);
+      AlternateAbrupt := ACtx.CompileStatement(AStmt.Alternate);
       PatchJumpTarget(ACtx, EndJump);
+      Result := ConsequentAbrupt and AlternateAbrupt;
     end
     else
     begin
       PatchJumpTarget(ACtx, ElseJump);
       PatchPatternFailureTarget;
+      Result := False;
     end;
   finally
     if HasPatternBindings then
@@ -1649,6 +1703,7 @@ var
   Reg: UInt8;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
+  StatementAbrupt: Boolean;
 begin
   DiscReg := ACtx.Scope.AllocateRegister;
   TestReg := ACtx.Scope.AllocateRegister;
@@ -1713,7 +1768,13 @@ begin
       begin
         Node := CaseClause.Consequent[J];
         if Node is TGocciaStatement then
-          ACtx.CompileStatement(TGocciaStatement(Node))
+        begin
+          StatementAbrupt := ACtx.CompileStatement(TGocciaStatement(Node));
+          if ACtx.OptimizationOptions.EnableDeadBranchElimination and
+             not ACtx.OptimizationOptions.PreserveCoverageShape and
+             StatementAbrupt then
+            Break;
+        end
         else if Node is TGocciaExpression then
         begin
           Reg := ACtx.Scope.AllocateRegister;
@@ -2375,6 +2436,7 @@ var
   I: Integer;
   Node: TGocciaASTNode;
   Reg: UInt8;
+  StatementAbrupt: Boolean;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
@@ -2396,7 +2458,13 @@ begin
   begin
     Node := ABody.Nodes[I];
     if Node is TGocciaStatement then
-      ACtx.CompileStatement(TGocciaStatement(Node))
+    begin
+      StatementAbrupt := ACtx.CompileStatement(TGocciaStatement(Node));
+      if ACtx.OptimizationOptions.EnableDeadBranchElimination and
+         not ACtx.OptimizationOptions.PreserveCoverageShape and
+         StatementAbrupt then
+        Break;
+    end
     else if Node is TGocciaExpression then
     begin
       Reg := ACtx.Scope.AllocateRegister;

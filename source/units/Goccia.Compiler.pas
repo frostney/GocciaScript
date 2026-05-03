@@ -27,7 +27,7 @@ type
     FOptimizationOptions: TGocciaCompilerOptimizationOptions;
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
       const ADest: UInt8);
-    procedure DoCompileStatement(const AStmt: TGocciaStatement);
+    function DoCompileStatement(const AStmt: TGocciaStatement): Boolean;
     procedure DoCompileFunctionBody(const ABody: TGocciaASTNode);
     procedure DoSwapState(const ATemplate: TGocciaFunctionTemplate;
       const AScope: TGocciaCompilerScope);
@@ -211,10 +211,11 @@ begin
     EmitInstruction(Ctx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
 end;
 
-procedure TGocciaCompiler.DoCompileStatement(const AStmt: TGocciaStatement);
+function TGocciaCompiler.DoCompileStatement(const AStmt: TGocciaStatement): Boolean;
 var
   Ctx: TGocciaCompilationContext;
 begin
+  Result := False;
   Ctx := BuildContext;
   EmitLineMapping(Ctx, AStmt.Line, AStmt.Column);
 
@@ -223,13 +224,23 @@ begin
   else if AStmt is TGocciaVariableDeclaration then
     Goccia.Compiler.Statements.CompileVariableDeclaration(Ctx, TGocciaVariableDeclaration(AStmt))
   else if AStmt is TGocciaBlockStatement then
-    Goccia.Compiler.Statements.CompileBlockStatement(Ctx, TGocciaBlockStatement(AStmt))
+    Result := Goccia.Compiler.Statements.CompileBlockStatement(Ctx,
+      TGocciaBlockStatement(AStmt))
   else if AStmt is TGocciaIfStatement then
-    Goccia.Compiler.Statements.CompileIfStatement(Ctx, TGocciaIfStatement(AStmt))
+    Result := Goccia.Compiler.Statements.CompileIfStatement(Ctx,
+      TGocciaIfStatement(AStmt))
   else if AStmt is TGocciaReturnStatement then
-    Goccia.Compiler.Statements.CompileReturnStatement(Ctx, TGocciaReturnStatement(AStmt))
+  begin
+    Goccia.Compiler.Statements.CompileReturnStatement(Ctx,
+      TGocciaReturnStatement(AStmt));
+    Result := True;
+  end
   else if AStmt is TGocciaThrowStatement then
-    Goccia.Compiler.Statements.CompileThrowStatement(Ctx, TGocciaThrowStatement(AStmt))
+  begin
+    Goccia.Compiler.Statements.CompileThrowStatement(Ctx,
+      TGocciaThrowStatement(AStmt));
+    Result := True;
+  end
   else if AStmt is TGocciaTryStatement then
     Goccia.Compiler.Statements.CompileTryStatement(Ctx, TGocciaTryStatement(AStmt))
   else if AStmt is TGocciaForAwaitOfStatement then
@@ -242,9 +253,15 @@ begin
   else if AStmt is TGocciaSwitchStatement then
     Goccia.Compiler.Statements.CompileSwitchStatement(Ctx, TGocciaSwitchStatement(AStmt))
   else if AStmt is TGocciaBreakStatement then
-    Goccia.Compiler.Statements.CompileBreakStatement(Ctx)
+  begin
+    Goccia.Compiler.Statements.CompileBreakStatement(Ctx);
+    Result := True;
+  end
   else if AStmt is TGocciaContinueStatement then
-    Goccia.Compiler.Statements.CompileContinueStatement(Ctx)
+  begin
+    Goccia.Compiler.Statements.CompileContinueStatement(Ctx);
+    Result := True;
+  end
   else if AStmt is TGocciaImportDeclaration then
     Goccia.Compiler.Statements.CompileImportDeclaration(Ctx, TGocciaImportDeclaration(AStmt))
   else if AStmt is TGocciaExportVariableDeclaration then
@@ -263,6 +280,9 @@ begin
   else if AStmt is TGocciaUsingDeclaration then
     Goccia.Compiler.Statements.CompileUsingDeclaration(Ctx,
       TGocciaUsingDeclaration(AStmt));
+
+  if not Result then
+    Result := Goccia.Compiler.Statements.StatementAlwaysAbrupt(Ctx, AStmt);
 end;
 
 procedure HoistVarLocals(const ANode: TGocciaASTNode; const AScope: TGocciaCompilerScope); forward;
@@ -375,6 +395,7 @@ var
   Node: TGocciaASTNode;
   Reg: UInt8;
   HasUsing, HasFunctionDecl: Boolean;
+  StatementAbrupt: Boolean;
   SavedFinally: TObject;
 begin
   SavedFinally := Goccia.Compiler.Statements.SavePendingFinally;
@@ -420,9 +441,11 @@ begin
         end;
 
       if HasUsing then
-        Goccia.Compiler.Statements.CompileBlockStatement(BuildContext, Block)
+        StatementAbrupt := Goccia.Compiler.Statements.CompileBlockStatement(
+          BuildContext, Block)
       else
       begin
+        StatementAbrupt := False;
         for I := 0 to Block.Nodes.Count - 1 do
         begin
           Node := Block.Nodes[I];
@@ -431,11 +454,10 @@ begin
             Continue;
           if Node is TGocciaStatement then
           begin
-            DoCompileStatement(TGocciaStatement(Node));
+            StatementAbrupt := DoCompileStatement(TGocciaStatement(Node));
             if FOptimizationOptions.EnableDeadBranchElimination and
                not FOptimizationOptions.PreserveCoverageShape and
-               Goccia.Compiler.Statements.StatementAlwaysAbrupt(
-                 TGocciaStatement(Node)) then
+               StatementAbrupt then
               Break;
           end
           else if Node is TGocciaExpression then
@@ -547,7 +569,7 @@ var
   LastStmt: TGocciaStatement;
   RetReg: UInt8;
   Ctx: TGocciaCompilationContext;
-  HasFunctionDecl: Boolean;
+  HasFunctionDecl, BodyAbrupt, StatementAbrupt: Boolean;
 begin
   FModule := TGocciaBytecodeModule.Create(GOCCIA_RUNTIME_TAG, FSourcePath);
   FCurrentTemplate := TGocciaFunctionTemplate.Create('<module>');
@@ -583,17 +605,30 @@ begin
 
     if AProgram.Body.Count > 0 then
     begin
+      BodyAbrupt := False;
       for I := 0 to AProgram.Body.Count - 2 do
       begin
         // Skip function declarations — already compiled during hoisting
         if GetFunctionDecl(AProgram.Body[I]) <> nil then
           Continue;
-        DoCompileStatement(AProgram.Body[I]);
+        StatementAbrupt := DoCompileStatement(AProgram.Body[I]);
+        if FOptimizationOptions.EnableDeadBranchElimination and
+           not FOptimizationOptions.PreserveCoverageShape and
+           StatementAbrupt then
+        begin
+          BodyAbrupt := True;
+          Break;
+        end;
       end;
 
       LastStmt := AProgram.Body[AProgram.Body.Count - 1];
       // Function declarations already compiled during hoisting — just emit return undefined
-      if GetFunctionDecl(LastStmt) <> nil then
+      if BodyAbrupt then
+      begin
+        EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
+        EmitInstruction(BuildContext, EncodeABC(OP_RETURN, 0, 0, 0));
+      end
+      else if GetFunctionDecl(LastStmt) <> nil then
       begin
         EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
         EmitInstruction(BuildContext, EncodeABC(OP_RETURN, 0, 0, 0));
