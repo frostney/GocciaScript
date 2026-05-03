@@ -63,10 +63,8 @@ type
     function DiscoverFileConfig(
       const AFileName: string): TConfigEntryArray;
     function CreateEngine(const AFileName: string;
-      const ASource: TStringList): TGocciaEngine; overload;
-    function CreateEngine(const AFileName: string;
       const ASource: TStringList;
-      const AExecutor: TGocciaExecutor): TGocciaEngine; overload;
+      const AExecutor: TGocciaExecutor): TGocciaEngine;
     { Returns the effective job count: --jobs value, or ProcessorCount,
       capped to AFileCount. Returns 1 when parallelism is not desired. }
     function GetJobCount(const AFileCount: Integer): Integer;
@@ -609,28 +607,6 @@ end;
 procedure TGocciaCLIApplication.ConfigureCreatedEngine(
   const AEngine: TGocciaEngine; const AFileConfig: TConfigEntryArray);
 begin
-end;
-
-function TGocciaCLIApplication.CreateEngine(const AFileName: string;
-  const ASource: TStringList): TGocciaEngine;
-var
-  FileConfig: TConfigEntryArray;
-begin
-  Result := TGocciaEngine.Create(AFileName, ASource);
-  try
-    FileConfig := DiscoverFileConfig(AFileName);
-    if Assigned(FEngineOptions) then
-    begin
-      ConfigureModuleResolver(Result.Resolver, AFileName,
-        FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
-    end;
-    ConfigureCreatedEngine(Result, FileConfig);
-    if Assigned(FEngineOptions) then
-      ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig);
-  except
-    Result.Free;
-    raise;
-  end;
 end;
 
 function TGocciaCLIApplication.CreateEngine(const AFileName: string;

@@ -455,6 +455,7 @@ var
   Source: TStringList;
   ScriptResult, FileResult: TGocciaObjectValue;
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   EngineResult: TGocciaScriptResult;
 begin
   ScriptResult := CreateDefaultScriptResult;
@@ -483,24 +484,29 @@ begin
       [BoolToStr(FExitOnFirst.Present, 'true', 'false')]));
 
     try
-      Engine := CreateEngine(AFileName, Source);
+      Executor := TGocciaInterpreterExecutor.Create;
       try
-        if FSilent.Present or GIsWorkerThread or IsJsonOutput then
-        begin
-          DisableRuntimeConsole(Engine);
-          Engine.SuppressWarnings := True;
-        end;
-
-        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS));
-        StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+        Engine := CreateEngine(AFileName, Source, Executor);
         try
-          EngineResult := Engine.Execute;
+          if FSilent.Present or GIsWorkerThread or IsJsonOutput then
+          begin
+            DisableRuntimeConsole(Engine);
+            Engine.SuppressWarnings := True;
+          end;
+
+          StartExecutionTimeout(EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS));
+          StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+          try
+            EngineResult := Engine.Execute;
+          finally
+            ClearExecutionTimeout;
+            ClearInstructionLimit;
+          end;
         finally
-          ClearExecutionTimeout;
-          ClearInstructionLimit;
+          Engine.Free;
         end;
       finally
-        Engine.Free;
+        Executor.Free;
       end;
       Result.Timing := EngineResult;
       Result.ErrorMessage := '';

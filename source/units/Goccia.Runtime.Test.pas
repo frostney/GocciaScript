@@ -87,61 +87,74 @@ end;
 procedure TRuntimeTests.TestEngineRejectsNilExtension;
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   HasExpectedMessage: Boolean;
   RaisedExpected: Boolean;
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Engine := TGocciaEngine.Create('<extension-test>', Source);
+  Executor := TGocciaInterpreterExecutor.Create;
   try
-    RaisedExpected := False;
-    HasExpectedMessage := False;
+    Engine := TGocciaEngine.Create('<extension-test>', Source, Executor);
     try
-      Engine.AddExtension(nil);
-      Fail('Expected nil extension registration to raise an exception.');
-    except
-      on E: Exception do
-      begin
-        RaisedExpected := True;
-        HasExpectedMessage := Pos('extension cannot be nil', E.Message) > 0;
-        if not HasExpectedMessage then
-          Fail('Expected nil extension error message.');
+      RaisedExpected := False;
+      HasExpectedMessage := False;
+      try
+        Engine.AddExtension(nil);
+        Fail('Expected nil extension registration to raise an exception.');
+      except
+        on E: Exception do
+        begin
+          RaisedExpected := True;
+          HasExpectedMessage := Pos('extension cannot be nil', E.Message) > 0;
+          if not HasExpectedMessage then
+            Fail('Expected nil extension error message.');
+        end;
       end;
-    end;
 
-    Expect<Boolean>(RaisedExpected).ToBe(True);
+      Expect<Boolean>(RaisedExpected).ToBe(True);
+    finally
+      Engine.Free;
+      Source.Free;
+    end;
   finally
-    Engine.Free;
-    Source.Free;
+    Executor.Free;
   end;
 end;
 
 procedure TRuntimeTests.TestRuntimeConstructorAcceptsExistingEngine;
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   Runtime: TGocciaRuntime;
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Engine := TGocciaEngine.Create('<runtime-test>', Source);
-  Runtime := nil;
+  Executor := TGocciaInterpreterExecutor.Create;
   try
-    Runtime := TGocciaRuntime.Create(Engine, [rgConsole]);
+    Engine := TGocciaEngine.Create('<runtime-test>', Source, Executor);
+    Runtime := nil;
+    try
+      Runtime := TGocciaRuntime.Create(Engine, [rgConsole]);
 
-    Expect<Boolean>(Runtime.Engine = Engine).ToBe(True);
-    Expect<Boolean>(Assigned(Runtime.BuiltinConsole)).ToBe(True);
-    Expect<Boolean>(rgConsole in Runtime.Globals).ToBe(True);
-    Expect<Boolean>(rgSemver in Runtime.Globals).ToBe(False);
+      Expect<Boolean>(Runtime.Engine = Engine).ToBe(True);
+      Expect<Boolean>(Assigned(Runtime.BuiltinConsole)).ToBe(True);
+      Expect<Boolean>(rgConsole in Runtime.Globals).ToBe(True);
+      Expect<Boolean>(rgSemver in Runtime.Globals).ToBe(False);
+    finally
+      Runtime.Free;
+      Engine.Free;
+      Source.Free;
+    end;
   finally
-    Runtime.Free;
-    Engine.Free;
-    Source.Free;
+    Executor.Free;
   end;
 end;
 
 procedure TRuntimeTests.TestRuntimeConstructorRejectsDifferentGlobals;
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   FirstRuntime: TGocciaRuntime;
   HasExpectedMessage: Boolean;
   RaisedExpected: Boolean;
@@ -149,61 +162,72 @@ var
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Engine := TGocciaEngine.Create('<runtime-test>', Source);
-  FirstRuntime := nil;
-  SecondRuntime := nil;
+  Executor := TGocciaInterpreterExecutor.Create;
   try
-    FirstRuntime := TGocciaRuntime.Create(Engine, [rgConsole]);
-    RaisedExpected := False;
-    HasExpectedMessage := False;
-
+    Engine := TGocciaEngine.Create('<runtime-test>', Source, Executor);
+    FirstRuntime := nil;
+    SecondRuntime := nil;
     try
-      SecondRuntime := TGocciaRuntime.Create(Engine, [rgConsole, rgSemver]);
-      Fail('Expected runtime global mismatch to raise an exception.');
-    except
-      on E: Exception do
-      begin
-        RaisedExpected := True;
-        HasExpectedMessage := Pos('different global configuration',
-          E.Message) > 0;
-        if not HasExpectedMessage then
-          Fail('Expected runtime global mismatch error message.');
-      end;
-    end;
+      FirstRuntime := TGocciaRuntime.Create(Engine, [rgConsole]);
+      RaisedExpected := False;
+      HasExpectedMessage := False;
 
-    Expect<Boolean>(RaisedExpected).ToBe(True);
+      try
+        SecondRuntime := TGocciaRuntime.Create(Engine, [rgConsole, rgSemver]);
+        Fail('Expected runtime global mismatch to raise an exception.');
+      except
+        on E: Exception do
+        begin
+          RaisedExpected := True;
+          HasExpectedMessage := Pos('different global configuration',
+            E.Message) > 0;
+          if not HasExpectedMessage then
+            Fail('Expected runtime global mismatch error message.');
+        end;
+      end;
+
+      Expect<Boolean>(RaisedExpected).ToBe(True);
+    finally
+      SecondRuntime.Free;
+      FirstRuntime.Free;
+      Engine.Free;
+      Source.Free;
+    end;
   finally
-    SecondRuntime.Free;
-    FirstRuntime.Free;
-    Engine.Free;
-    Source.Free;
+    Executor.Free;
   end;
 end;
 
 procedure TRuntimeTests.TestRuntimePreservesResolverExtensions;
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   Extensions: TModuleResolverExtensionArray;
   Runtime: TGocciaRuntime;
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Engine := TGocciaEngine.Create('<runtime-test>', Source);
-  Runtime := nil;
+  Executor := TGocciaInterpreterExecutor.Create;
   try
-    Engine.Resolver.SetExtensions(['.custom', '.js']);
-    Runtime := TGocciaRuntime.Create(Engine, [rgJSON5]);
-    Extensions := Engine.Resolver.GetExtensions;
+    Engine := TGocciaEngine.Create('<runtime-test>', Source, Executor);
+    Runtime := nil;
+    try
+      Engine.Resolver.SetExtensions(['.custom', '.js']);
+      Runtime := TGocciaRuntime.Create(Engine, [rgJSON5]);
+      Extensions := Engine.Resolver.GetExtensions;
 
-    Expect<Boolean>(Length(Extensions) >= 4).ToBe(True);
-    Expect<string>(Extensions[0]).ToBe('.custom');
-    Expect<string>(Extensions[1]).ToBe('.js');
-    Expect<string>(Extensions[High(Extensions) - 1]).ToBe('.json5');
-    Expect<string>(Extensions[High(Extensions)]).ToBe('.jsonc');
+      Expect<Boolean>(Length(Extensions) >= 4).ToBe(True);
+      Expect<string>(Extensions[0]).ToBe('.custom');
+      Expect<string>(Extensions[1]).ToBe('.js');
+      Expect<string>(Extensions[High(Extensions) - 1]).ToBe('.json5');
+      Expect<string>(Extensions[High(Extensions)]).ToBe('.jsonc');
+    finally
+      Runtime.Free;
+      Engine.Free;
+      Source.Free;
+    end;
   finally
-    Runtime.Free;
-    Engine.Free;
-    Source.Free;
+    Executor.Free;
   end;
 end;
 
@@ -211,6 +235,7 @@ procedure TRuntimeTests.TestRuntimeModuleLoaderFallsBackToPreviousLoader;
 var
   CachedModule: TGocciaModule;
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   LoadedModule: TGocciaModule;
   ModuleLoader: TGocciaModuleLoader;
   Resolver: TCustomRuntimeModuleResolver;
@@ -224,10 +249,11 @@ begin
   Runtime := nil;
   LoadedModule := nil;
   FCustomRuntimeLoaderCalled := False;
+  Executor := TGocciaInterpreterExecutor.Create;
   try
     Resolver := TCustomRuntimeModuleResolver.Create;
     ModuleLoader := TGocciaModuleLoader.Create('<runtime-test>', Resolver);
-    Engine := TGocciaEngine.Create('<runtime-test>', Source, ModuleLoader);
+    Engine := TGocciaEngine.Create('<runtime-test>', Source, ModuleLoader, Executor);
     Engine.ModuleLoader.RuntimeModuleLoader := LoadCustomRuntimeModule;
     Runtime := TGocciaRuntime.Create(Engine, [rgJSON5]);
 
@@ -245,6 +271,7 @@ begin
     ModuleLoader.Free;
     Resolver.Free;
     Source.Free;
+    Executor.Free;
   end;
 end;
 

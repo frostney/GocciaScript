@@ -13,6 +13,7 @@ uses
   Goccia.Engine.Backend,
   Goccia.Error,
   Goccia.Error.Detail,
+  Goccia.Executor,
   Goccia.ScriptLoader.Input,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
@@ -178,11 +179,20 @@ begin
   WriteLn(AResult.ToStringLiteral.Value);
 end;
 
+function CreateExecutorForMode(
+  const AMode: TBareExecutionMode): TGocciaExecutor;
+begin
+  case AMode of
+    bemInterpreted: Result := TGocciaInterpreterExecutor.Create;
+    bemBytecode: Result := TGocciaBytecodeExecutor.Create;
+  end;
+end;
+
 function RunBare(const AOptions: TBareOptions): Integer;
 var
   DisplayName: string;
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
+  Executor: TGocciaExecutor;
   PrintHost: TBarePrintHost;
   ScriptResult: TGocciaScriptResult;
   Source: TStringList;
@@ -197,15 +207,9 @@ begin
 
     PrintHost := TBarePrintHost.Create;
     try
-      Executor := nil;
+      Executor := CreateExecutorForMode(AOptions.Mode);
       try
-        if AOptions.Mode = bemBytecode then
-        begin
-          Executor := TGocciaBytecodeExecutor.Create;
-          Engine := TGocciaEngine.Create(DisplayName, Source, Executor);
-        end
-        else
-          Engine := TGocciaEngine.Create(DisplayName, Source);
+        Engine := TGocciaEngine.Create(DisplayName, Source, Executor);
         try
           ConfigureEngine(Engine, AOptions);
           RegisterBareGlobals(Engine, PrintHost);

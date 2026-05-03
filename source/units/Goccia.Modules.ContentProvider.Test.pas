@@ -297,6 +297,7 @@ const
   MODULE_PATH = 'memory:/dep.js';
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   HasLineNumber: Boolean;
   HasParseMessage: Boolean;
   ModuleLoader: TGocciaModuleLoader;
@@ -308,6 +309,7 @@ begin
   Provider := TMemoryModuleContentProvider.Create;
   Resolver := TInMemoryModuleResolver.Create;
   Source := TStringList.Create;
+  Executor := TGocciaInterpreterExecutor.Create;
   try
     Provider.AddModule(MODULE_PATH, 'export const value = 42;');
     Source.Text := 'import { value } from "' + MODULE_PATH + '";' + LineEnding +
@@ -315,7 +317,7 @@ begin
 
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
-      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader);
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader, Executor);
       try
         ScriptResult := Engine.Execute;
       finally
@@ -331,6 +333,7 @@ begin
     Source.Free;
     Resolver.Free;
     Provider.Free;
+    Executor.Free;
   end;
 end;
 
@@ -438,6 +441,7 @@ const
   MODULE_PATH = 'memory:/dep.js';
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   HasLineNumber: Boolean;
   HasParseMessage: Boolean;
   ModuleLoader: TGocciaModuleLoader;
@@ -449,6 +453,7 @@ begin
   Provider := TMemoryModuleContentProvider.Create;
   Resolver := TInMemoryModuleResolver.Create;
   Source := TStringList.Create;
+  Executor := TGocciaInterpreterExecutor.Create;
   try
     Provider.AddModule(MODULE_PATH, 'export const value = ;');
     Source.Text := 'import { value } from "' + MODULE_PATH + '";' + LineEnding +
@@ -456,7 +461,7 @@ begin
 
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
-      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader);
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader, Executor);
       try
         try
           Engine.Execute;
@@ -482,6 +487,7 @@ begin
     Source.Free;
     Resolver.Free;
     Provider.Free;
+    Executor.Free;
   end;
 end;
 
@@ -491,6 +497,7 @@ const
   MODULE_PATH = 'memory:/events.jsonl';
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   HasLineNumber: Boolean;
   HasParseMessage: Boolean;
   ModuleLoader: TGocciaModuleLoader;
@@ -503,6 +510,7 @@ begin
   Provider := TMemoryModuleContentProvider.Create;
   Resolver := TInMemoryModuleResolver.Create;
   Source := TStringList.Create;
+  Executor := TGocciaInterpreterExecutor.Create;
   try
     Provider.AddModule(MODULE_PATH,
       '{"id":1}' + LineEnding +
@@ -513,7 +521,7 @@ begin
 
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
-      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader);
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader, Executor);
       Runtime := nil;
       try
         Runtime := TGocciaRuntime.Create(Engine, [rgJSONL]);
@@ -547,6 +555,7 @@ begin
     Source.Free;
     Resolver.Free;
     Provider.Free;
+    Executor.Free;
   end;
 end;
 
@@ -556,6 +565,7 @@ const
   MODULE_PATH = 'memory:/config.toml';
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   HasParseMessage: Boolean;
   HasSyntaxDetail: Boolean;
   ModuleLoader: TGocciaModuleLoader;
@@ -568,6 +578,7 @@ begin
   Provider := TMemoryModuleContentProvider.Create;
   Resolver := TInMemoryModuleResolver.Create;
   Source := TStringList.Create;
+  Executor := TGocciaInterpreterExecutor.Create;
   try
     Provider.AddModule(MODULE_PATH, 'value = 01');
     Source.Text := 'import { value } from "' + MODULE_PATH + '";' + LineEnding +
@@ -575,7 +586,7 @@ begin
 
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
-      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader);
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader, Executor);
       Runtime := nil;
       try
         Runtime := TGocciaRuntime.Create(Engine, [rgTOML]);
@@ -610,6 +621,7 @@ begin
     Source.Free;
     Resolver.Free;
     Provider.Free;
+    Executor.Free;
   end;
 end;
 
@@ -781,6 +793,7 @@ procedure TModuleContentProviderTests.TestEngineLoadsUTF8TextAssetModule;
 var
   ContentValue: UTF8String;
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   MetadataValue: TGocciaObjectValue;
   ResultObject: TGocciaObjectValue;
   Runtime: TGocciaRuntime;
@@ -795,6 +808,7 @@ begin
   WriteUTF8File(TextAssetPath, ContentValue);
 
   Source := TStringList.Create;
+  Executor := TGocciaInterpreterExecutor.Create;
   try
     Source.Text :=
       'import { content, metadata } from "./note.txt";' + LineEnding +
@@ -802,7 +816,7 @@ begin
 
     Engine := TGocciaEngine.Create(
       IncludeTrailingPathDelimiter(TempDirectory) + 'app.js',
-      Source);
+      Source, Executor);
     Runtime := nil;
     try
       Runtime := TGocciaRuntime.Create(Engine, [rgTextAssets]);
@@ -830,12 +844,14 @@ begin
       .ToNumberLiteral.Value).ToBe(Length(ContentValue));
   finally
     Source.Free;
+    Executor.Free;
   end;
 end;
 
 procedure TModuleContentProviderTests.TestEngineNormalizesCRLFTextAssetModulesToLF;
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   RawContent: UTF8String;
   Runtime: TGocciaRuntime;
   ScriptResult: TGocciaScriptResult;
@@ -849,6 +865,7 @@ begin
   WriteUTF8File(TextAssetPath, RawContent);
 
   Source := TStringList.Create;
+  Executor := TGocciaInterpreterExecutor.Create;
   try
     Source.Text :=
       'import { content } from "./crlf-note.txt";' + LineEnding +
@@ -856,7 +873,7 @@ begin
 
     Engine := TGocciaEngine.Create(
       IncludeTrailingPathDelimiter(TempDirectory) + 'app.js',
-      Source);
+      Source, Executor);
     Runtime := nil;
     try
       Runtime := TGocciaRuntime.Create(Engine, [rgTextAssets]);
@@ -870,6 +887,7 @@ begin
       .ToBe('first line' + #10 + 'second line' + #10);
   finally
     Source.Free;
+    Executor.Free;
   end;
 end;
 
@@ -904,6 +922,8 @@ const
 var
   EngineA: TGocciaEngine;
   EngineB: TGocciaEngine;
+  ExecutorA: TGocciaInterpreterExecutor;
+  ExecutorB: TGocciaInterpreterExecutor;
   RaisedExpected: Boolean;
   HasExpectedMessage: Boolean;
   ModuleLoader: TGocciaModuleLoader;
@@ -919,13 +939,15 @@ begin
   SourceB := TStringList.Create;
   EngineB := nil;
   RaisedExpected := False;
+  ExecutorA := TGocciaInterpreterExecutor.Create;
+  ExecutorB := TGocciaInterpreterExecutor.Create;
   try
     SourceA.Text := '1;';
     SourceB.Text := '2;';
-    EngineA := TGocciaEngine.Create(ENTRY_PATH, SourceA, ModuleLoader);
+    EngineA := TGocciaEngine.Create(ENTRY_PATH, SourceA, ModuleLoader, ExecutorA);
     try
       try
-        EngineB := TGocciaEngine.Create(ENTRY_PATH, SourceB, ModuleLoader);
+        EngineB := TGocciaEngine.Create(ENTRY_PATH, SourceB, ModuleLoader, ExecutorB);
         Fail('Expected module loader rebinding to raise an exception.');
       except
         on E: Exception do
@@ -948,6 +970,8 @@ begin
     ModuleLoader.Free;
     Resolver.Free;
     Provider.Free;
+    ExecutorB.Free;
+    ExecutorA.Free;
   end;
 end;
 
