@@ -307,6 +307,7 @@ console.log("--max-memory (manual gc reclaims inside active calls)...");
         stdin: new TextEncoder().encode(src),
         stdout: "pipe",
         stderr: "pipe",
+        timeout: 30_000,
       },
     );
     if (proc.exitCode !== 0) {

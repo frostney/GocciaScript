@@ -8,6 +8,7 @@ uses
   Generics.Collections,
 
   Goccia.Arguments.Collection,
+  Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.SharedPrototype,
   Goccia.Values.ArrayValue,
@@ -52,6 +53,7 @@ type
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
+    function MarkEscapedReferencesIn(const AVisited: TGCObjectSet): Boolean; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
 
@@ -66,7 +68,6 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
@@ -205,6 +206,24 @@ begin
   end;
 end;
 
+function TGocciaMapValue.MarkEscapedReferencesIn(
+  const AVisited: TGCObjectSet): Boolean;
+var
+  I: Integer;
+begin
+  Result := inherited MarkEscapedReferencesIn(AVisited);
+  if not Result then
+    Exit;
+
+  for I := 0 to FEntries.Count - 1 do
+  begin
+    if Assigned(FEntries[I].Key) then
+      FEntries[I].Key.MarkEscapedReferencesIn(AVisited);
+    if Assigned(FEntries[I].Value) then
+      FEntries[I].Value.MarkEscapedReferencesIn(AVisited);
+  end;
+end;
+
 function TGocciaMapValue.FindEntry(const AKey: TGocciaValue): Integer;
 var
   I: Integer;
@@ -228,6 +247,10 @@ begin
   Index := FindEntry(AKey);
   Entry.Key := AKey;
   Entry.Value := AValue;
+  if Assigned(AKey) and AKey.CanContainEscapedReferences then
+    AKey.MarkEscapedReferences;
+  if Assigned(AValue) and AValue.CanContainEscapedReferences then
+    AValue.MarkEscapedReferences;
 
   if Index >= 0 then
     FEntries[Index] := Entry

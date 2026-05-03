@@ -80,6 +80,8 @@ begin
       for I := 0 to AArguments.Length - 1 do
         if Assigned(AArguments.GetElement(I)) then
         begin
+          if AArguments.GetElement(I).IsCallable then
+            AArguments.GetElement(I).MarkEscapedReferences;
           GC.PushActiveRoot(AArguments.GetElement(I));
           Inc(RootCount);
         end;

@@ -19,8 +19,10 @@ type
   TGocciaValue = class(TGCManagedObject)
   public
     procedure AfterConstruction; override;
-    procedure BeforeDestruction; override;
     function RuntimeCopy: TGocciaValue; virtual;
+    function CanContainEscapedReferences: Boolean; virtual;
+    procedure MarkEscapedReferences;
+    function MarkEscapedReferencesIn(const AVisited: TGCObjectSet): Boolean; virtual;
 
     function TypeName: string; virtual; abstract;
     function TypeOf: string; virtual; abstract;
@@ -343,20 +345,39 @@ begin
   CheckInstructionLimit;
 end;
 
-procedure TGocciaValue.BeforeDestruction;
-var
-  GC: TGarbageCollector;
-begin
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) then
-    GC.UnregisterObject(Self);
-  inherited;
-end;
-
 function TGocciaValue.RuntimeCopy: TGocciaValue;
 begin
   // Default: return self (for singletons and complex values like objects/functions)
   Result := Self;
+end;
+
+function TGocciaValue.CanContainEscapedReferences: Boolean;
+begin
+  Result := False;
+end;
+
+procedure TGocciaValue.MarkEscapedReferences;
+var
+  Visited: TGCObjectSet;
+begin
+  Visited := TGCObjectSet.Create;
+  try
+    MarkEscapedReferencesIn(Visited);
+  finally
+    Visited.Free;
+  end;
+end;
+
+function TGocciaValue.MarkEscapedReferencesIn(
+  const AVisited: TGCObjectSet): Boolean;
+begin
+  Result := False;
+  if not Assigned(AVisited) then
+    Exit;
+  if AVisited.ContainsKey(Self) then
+    Exit;
+  AVisited.Add(Self, True);
+  Result := True;
 end;
 
 function TGocciaValue.IsPrimitive: Boolean;

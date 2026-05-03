@@ -744,6 +744,7 @@ type
     ClassValue: TGocciaValue;
     constructor Create(const AMetadataObject: TGocciaObjectValue);
     destructor Destroy; override;
+    procedure MarkReferences;
   end;
 
   TGocciaBytecodeFunctionValue = class(TGocciaFunctionBase)
@@ -909,6 +910,8 @@ constructor TGocciaVMStackRoot.Create(const AVM: TGocciaVM);
 begin
   FVM := AVM;
   inherited Create;
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.RegisterObject(Self);
 end;
 
 procedure TGocciaVMStackRoot.MarkClosureReferences(
@@ -933,6 +936,34 @@ procedure TGocciaVMStackRoot.MarkReferences;
 var
   I, Limit: Integer;
   ExportPair: TGocciaValueMap.TKeyValuePair;
+
+  procedure MarkRegisterRange(const ABase, ACount: Integer);
+  var
+    J, RangeLimit: Integer;
+  begin
+    if (ABase < 0) or (ACount <= 0) or (ABase >= Length(FVM.FRegisterStack)) then
+      Exit;
+    RangeLimit := ABase + ACount;
+    if RangeLimit > Length(FVM.FRegisterStack) then
+      RangeLimit := Length(FVM.FRegisterStack);
+    for J := ABase to RangeLimit - 1 do
+      MarkRegisterReferences(FVM.FRegisterStack[J]);
+  end;
+
+  procedure MarkLocalCellRange(const ABase, ACount: Integer);
+  var
+    J, RangeLimit: Integer;
+  begin
+    if (ABase < 0) or (ACount <= 0) or (ABase >= Length(FVM.FLocalCellStack)) then
+      Exit;
+    RangeLimit := ABase + ACount;
+    if RangeLimit > Length(FVM.FLocalCellStack) then
+      RangeLimit := Length(FVM.FLocalCellStack);
+    for J := ABase to RangeLimit - 1 do
+      if Assigned(FVM.FLocalCellStack[J]) then
+        MarkRegisterReferences(FVM.FLocalCellStack[J].Value);
+  end;
+
 begin
   if GCMarked then Exit;
   inherited;
@@ -960,7 +991,16 @@ begin
       MarkRegisterReferences(FVM.FLocalCellStack[I].Value);
 
   for I := 0 to FVM.FFrameStackCount - 1 do
+  begin
     MarkClosureReferences(FVM.FFrameStack[I].Closure);
+    MarkRegisterRange(FVM.FFrameStack[I].RegisterBase,
+      FVM.FFrameStack[I].RegisterCount);
+    MarkLocalCellRange(FVM.FFrameStack[I].LocalCellBase,
+      FVM.FFrameStack[I].LocalCellCount);
+  end;
+
+  if Assigned(FVM.FActiveDecoratorSession) then
+    TGocciaVMDecoratorSession(FVM.FActiveDecoratorSession).MarkReferences;
 
   if Assigned(FVM.FCurrentModuleExports) then
     for ExportPair in FVM.FCurrentModuleExports do
@@ -1125,6 +1165,32 @@ begin
   StaticFieldCollector.Free;
   ClassCollector.Free;
   inherited;
+end;
+
+procedure TGocciaVMDecoratorSession.MarkReferences;
+var
+  Initializers: TArray<TGocciaValue>;
+  Initializer: TGocciaValue;
+
+  procedure MarkCollector(const ACollector: TGocciaInitializerCollector);
+  begin
+    if not Assigned(ACollector) then
+      Exit;
+    Initializers := ACollector.GetInitializers;
+    for Initializer in Initializers do
+      if Assigned(Initializer) then
+        Initializer.MarkReferences;
+  end;
+
+begin
+  if Assigned(MetadataObject) then
+    MetadataObject.MarkReferences;
+  if Assigned(ClassValue) then
+    ClassValue.MarkReferences;
+  MarkCollector(MethodCollector);
+  MarkCollector(FieldCollector);
+  MarkCollector(StaticFieldCollector);
+  MarkCollector(ClassCollector);
 end;
 
 threadvar

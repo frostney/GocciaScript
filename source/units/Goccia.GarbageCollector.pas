@@ -19,6 +19,7 @@ type
     procedure SetGCMarked(const AValue: Boolean); inline;
   public
     class procedure AdvanceMark; static; inline;
+    procedure BeforeDestruction; override;
     procedure MarkReferences; virtual;
     function TraceWeakReferences: Boolean; virtual;
     procedure SweepWeakReferences; virtual;
@@ -83,6 +84,7 @@ type
 
     procedure RegisterObject(const AObject: TGCManagedObject);
     procedure UnregisterObject(const AObject: TGCManagedObject);
+    function ContainsObject(const AObject: TGCManagedObject): Boolean;
     procedure PinObject(const AObject: TGCManagedObject);
     procedure UnpinObject(const AObject: TGCManagedObject);
     procedure AddTempRoot(const AObject: TGCManagedObject);
@@ -197,6 +199,16 @@ begin
     GCCurrentMark := 1;
 end;
 
+procedure TGCManagedObject.BeforeDestruction;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    GC.UnregisterObject(Self);
+  inherited;
+end;
+
 function TGCManagedObject.GetGCMarked: Boolean;
 begin
   Result := FGCMark = GCCurrentMark;
@@ -249,9 +261,12 @@ begin
 end;
 
 class procedure TGarbageCollector.Shutdown;
+var
+  GC: TGarbageCollector;
 begin
-  GCThreadInstance.Free;
+  GC := GCThreadInstance;
   GCThreadInstance := nil;
+  GC.Free;
 end;
 
 constructor TGarbageCollector.Create;
@@ -286,6 +301,8 @@ end;
 
 destructor TGarbageCollector.Destroy;
 begin
+  if GCThreadInstance = Self then
+    GCThreadInstance := nil;
   {$IFDEF GC_TIMING}
   PrintTimingSummary;
   {$ENDIF}
@@ -314,6 +331,15 @@ procedure TGarbageCollector.UnregisterObject(
 var
   Idx: Integer;
 begin
+  if Assigned(FPinnedObjects) then
+    FPinnedObjects.Remove(AObject);
+  if Assigned(FTempRoots) then
+    FTempRoots.Remove(AObject);
+  if Assigned(FRootObjects) then
+    FRootObjects.Remove(AObject);
+  if not Assigned(FManagedObjects) then
+    Exit;
+
   Idx := AObject.GCIndex;
   if (Idx >= 0) and (Idx < FManagedObjects.Count) and
      (FManagedObjects[Idx] = AObject) then
@@ -326,6 +352,19 @@ begin
        (FUnregisteredSlots * 4 > FManagedObjects.Count) then
       CompactManagedObjects;
   end;
+end;
+
+function TGarbageCollector.ContainsObject(
+  const AObject: TGCManagedObject): Boolean;
+var
+  Idx: Integer;
+begin
+  Result := False;
+  if not Assigned(AObject) or not Assigned(FManagedObjects) then
+    Exit;
+  Idx := AObject.GCIndex;
+  Result := (Idx >= 0) and (Idx < FManagedObjects.Count) and
+    (FManagedObjects[Idx] = AObject);
 end;
 
 procedure TGarbageCollector.PinObject(const AObject: TGCManagedObject);
@@ -389,16 +428,20 @@ var
   I: Integer;
 begin
   for Pair in FPinnedObjects do
-    Pair.Key.MarkReferences;
+    if ContainsObject(Pair.Key) then
+      Pair.Key.MarkReferences;
 
   for Pair in FTempRoots do
-    Pair.Key.MarkReferences;
+    if ContainsObject(Pair.Key) then
+      Pair.Key.MarkReferences;
 
   for Pair in FRootObjects do
-    Pair.Key.MarkReferences;
+    if ContainsObject(Pair.Key) then
+      Pair.Key.MarkReferences;
 
   for I := 0 to FActiveRootStack.Count - 1 do
-    FActiveRootStack[I].MarkReferences;
+    if ContainsObject(FActiveRootStack[I]) then
+      FActiveRootStack[I].MarkReferences;
 end;
 
 procedure TGarbageCollector.TraceWeakReferences;
