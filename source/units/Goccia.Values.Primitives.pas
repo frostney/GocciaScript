@@ -19,6 +19,7 @@ type
   TGocciaValue = class(TGCManagedObject)
   public
     procedure AfterConstruction; override;
+    procedure BeforeDestruction; override;
     function RuntimeCopy: TGocciaValue; virtual;
 
     function TypeName: string; virtual; abstract;
@@ -104,15 +105,15 @@ type
     function GetIsNegativeInfinity: Boolean; inline;
     function GetIsInfinite: Boolean; inline;
 
+    class var FZeroValue: TGocciaNumberLiteralValue;
+    class var FOneValue: TGocciaNumberLiteralValue;
     class var FNaNValue: TGocciaNumberLiteralValue;
     class var FNegativeZeroValue: TGocciaNumberLiteralValue;
     class var FInfinityValue: TGocciaNumberLiteralValue;
     class var FNegativeInfinityValue: TGocciaNumberLiteralValue;
-    class var FSmallIntValues: array[0..255] of TGocciaNumberLiteralValue;
   public
     constructor Create(const AValue: Double);
 
-    class function SmallIntValue(const AValue: Integer): TGocciaNumberLiteralValue;
     class function NaNValue: TGocciaNumberLiteralValue;
     class function NegativeZeroValue: TGocciaNumberLiteralValue;
     class function InfinityValue: TGocciaNumberLiteralValue;
@@ -342,6 +343,16 @@ begin
   CheckInstructionLimit;
 end;
 
+procedure TGocciaValue.BeforeDestruction;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    GC.UnregisterObject(Self);
+  inherited;
+end;
+
 function TGocciaValue.RuntimeCopy: TGocciaValue;
 begin
   // Default: return self (for singletons and complex values like objects/functions)
@@ -377,8 +388,6 @@ end;
 { Utility functions }
 
 procedure PinPrimitiveSingletons;
-var
-  I: Integer;
 begin
   if not Assigned(TGarbageCollector.Instance) then
     Exit;
@@ -388,12 +397,11 @@ begin
   TGarbageCollector.Instance.PinObject(TGocciaBooleanLiteralValue.TrueValue);
   TGarbageCollector.Instance.PinObject(TGocciaBooleanLiteralValue.FalseValue);
   TGarbageCollector.Instance.PinObject(TGocciaNumberLiteralValue.NaNValue);
+  TGarbageCollector.Instance.PinObject(TGocciaNumberLiteralValue.ZeroValue);
+  TGarbageCollector.Instance.PinObject(TGocciaNumberLiteralValue.OneValue);
   TGarbageCollector.Instance.PinObject(TGocciaNumberLiteralValue.NegativeZeroValue);
   TGarbageCollector.Instance.PinObject(TGocciaNumberLiteralValue.InfinityValue);
   TGarbageCollector.Instance.PinObject(TGocciaNumberLiteralValue.NegativeInfinityValue);
-  for I := Low(TGocciaNumberLiteralValue.FSmallIntValues) to
-           High(TGocciaNumberLiteralValue.FSmallIntValues) do
-    TGarbageCollector.Instance.PinObject(TGocciaNumberLiteralValue.SmallIntValue(I));
   // BigInt singletons are pinned in TGocciaBigIntValue.BigIntZero/BigIntOne
 end;
 
@@ -583,21 +591,6 @@ begin
   FValue := AValue;
 end;
 
-class function TGocciaNumberLiteralValue.SmallIntValue(
-  const AValue: Integer): TGocciaNumberLiteralValue;
-begin
-  if (AValue < Low(FSmallIntValues)) or (AValue > High(FSmallIntValues)) then
-    Exit(TGocciaNumberLiteralValue.Create(AValue));
-  if not Assigned(FSmallIntValues[AValue]) then
-  begin
-    Assert(not GIsWorkerThread, 'SmallIntValue: must be initialised on main thread');
-    FSmallIntValues[AValue] := TGocciaNumberLiteralValue.Create(AValue);
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.PinObject(FSmallIntValues[AValue]);
-  end;
-  Result := FSmallIntValues[AValue];
-end;
-
 function TGocciaNumberLiteralValue.GetIsNaN: Boolean;
 begin
   Result := Math.IsNaN(FValue);
@@ -673,12 +666,22 @@ end;
 
 class function TGocciaNumberLiteralValue.ZeroValue: TGocciaNumberLiteralValue;
 begin
-  Result := SmallIntValue(0);
+  if not Assigned(FZeroValue) then
+  begin
+    Assert(not GIsWorkerThread, 'ZeroValue: must be initialised on main thread');
+    FZeroValue := TGocciaNumberLiteralValue.Create(ZERO_VALUE);
+  end;
+  Result := FZeroValue;
 end;
 
 class function TGocciaNumberLiteralValue.OneValue: TGocciaNumberLiteralValue;
 begin
-  Result := SmallIntValue(1);
+  if not Assigned(FOneValue) then
+  begin
+    Assert(not GIsWorkerThread, 'OneValue: must be initialised on main thread');
+    FOneValue := TGocciaNumberLiteralValue.Create(ONE_VALUE);
+  end;
+  Result := FOneValue;
 end;
 
 function TGocciaNumberLiteralValue.TypeName: string;
@@ -703,9 +706,10 @@ begin
   end;
   if IsNegativeZero then
     Exit(NegativeZeroValue);
-  if (FValue >= Low(FSmallIntValues)) and (FValue <= High(FSmallIntValues)) and
-     (Frac(FValue) = 0) then
-    Exit(SmallIntValue(Trunc(FValue)));
+  if FValue = ZERO_VALUE then
+    Exit(ZeroValue);
+  if FValue = ONE_VALUE then
+    Exit(OneValue);
   Result := TGocciaNumberLiteralValue.Create(FValue);
 end;
 

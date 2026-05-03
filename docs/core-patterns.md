@@ -396,11 +396,11 @@ String interning (caching `TGocciaStringLiteralValue` instances in a `TDictionar
 - **Dictionary lookup cost exceeds allocation cost.** FreePascal's allocator is fast. A `TDictionary.TryGetValue` call involves hashing the string (O(n) in string length) plus a hash-table probe, which is more expensive than simply allocating a short-lived `TGocciaStringLiteralValue` and letting the GC reclaim it later.
 - **Low hit rate on hot paths.** `ToStringLiteral` on numbers produces mostly unique strings (`"42"`, `"3.14"`, etc.) that never hit the cache, paying the hash cost with zero benefit. This path is called frequently in arithmetic-heavy benchmarks.
 - **`RuntimeCopy` is the wrong interception point.** Every string literal evaluation goes through `RuntimeCopy`. Adding a dictionary lookup to this universal hot path penalizes all string operations, including those that create one-off strings (concatenation results, method return values).
-- **GC pressure is not the bottleneck.** The SmallInt cache works for numbers because integer equality is a single comparison. String equality requires content comparison, so the lookup cost scales with string length rather than being O(1).
+- **GC pressure is not the bottleneck.** String interning adds lookup work to a path where allocation is usually cheaper. String equality requires content comparison, so the lookup cost scales with string length rather than being O(1).
 
-**The `SmallInt` cache works because:** integer comparison is a single machine instruction, the cache is a fixed-size array (no hashing), and the hit rate for integers 0–255 is very high in typical code. None of these properties hold for arbitrary strings.
+GocciaScript keeps explicit numeric singletons for `0`, `1`, `NaN`, infinities, and `-0`, but does not intern arbitrary small integers. Previous broader numeric caches were removed after benchmark review; do not reintroduce one without fresh measurements across the benchmark suite.
 
-**Do not re-attempt** dictionary-based string interning. If string allocation becomes a measurable bottleneck in future profiling, consider instead: (a) pre-allocated singletons for a small fixed set of ultra-common strings (like `SmallInt` but for `"length"`, `"undefined"`, etc.), or (b) arena/pool allocation for `TGocciaStringLiteralValue` objects to reduce per-object GC overhead without per-string hashing.
+**Do not re-attempt** dictionary-based string interning. If string allocation becomes a measurable bottleneck in future profiling, consider instead: (a) pre-allocated singletons for a small fixed set of ultra-common strings (`"length"`, `"undefined"`, etc.), or (b) arena/pool allocation for `TGocciaStringLiteralValue` objects to reduce per-object GC overhead without per-string hashing.
 
 ## Related documents
 

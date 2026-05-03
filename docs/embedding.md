@@ -819,7 +819,7 @@ uses
 TGarbageCollector.Instance.Collect;
 ```
 
-Host-side `Collect` is intended for safe boundaries such as between `Execute` calls or between files; JavaScript-facing `Goccia.gc()` returns `undefined` without sweeping from worker threads or active JS frames, where a reentrant sweep may run before stack-held transients are rooted. **Memory ceiling:** The GC auto-detects physical memory and defaults to half of RAM, capped at 8 GB on 64-bit or 700 MB on 32-bit (512 MB fallback when detection fails). Override with `MaxBytes` to impose a custom limit. Allocations exceeding it raise a JavaScript `RangeError`:
+Host-side `Collect` is intended for safe boundaries such as between `Execute` calls or between files; JavaScript-facing `Goccia.gc()` runs synchronously even from active JS frames and CLI worker threads, so host-held values must be rooted with `AddTempRoot` when they are not reachable from script state. **Memory ceiling:** The GC auto-detects physical memory and defaults to half of RAM, capped at 8 GB on 64-bit or 700 MB on 32-bit (512 MB fallback when detection fails). Override with `MaxBytes` to impose a custom limit. Allocations exceeding it raise a JavaScript `RangeError`:
 
 ```pascal
 TGarbageCollector.Instance.MaxBytes := 10 * 1024 * 1024; // 10 MB limit

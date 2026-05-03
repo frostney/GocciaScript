@@ -205,12 +205,10 @@ procedure InitThreadRuntime(AEnableCoverage: Boolean; AMaxBytes: Int64);
 begin
   GIsWorkerThread := True;
   TGarbageCollector.Initialize;
-  // Disable automatic GC on worker threads. Shared immutable objects
-  // (primitive singletons, shared prototypes) have a single FGCMark field
-  // written by the mark phase — running GC on multiple threads would race
-  // on that field. Each worker runs a single file and then shuts down, so
-  // skipping collection is acceptable: all objects are freed in bulk when
-  // the thread-local GC is destroyed.
+  // Disable automatic GC on worker threads to avoid surprise pauses while
+  // processing a file. Manual Goccia.gc() and explicit host collection still
+  // run; the collector serializes mark/sweep globally so shared immutable
+  // objects are not marked concurrently.
   TGarbageCollector.Instance.Enabled := False;
   // Propagate the memory ceiling from the main thread so that --max-memory
   // is honoured on workers. Without this, workers use the auto-detected

@@ -157,11 +157,9 @@ function DetectDefaultMaxBytes: Int64;
 
 implementation
 
-{$IF DEFINED(GC_DEBUG) OR DEFINED(GC_TIMING)}
 uses
   SysUtils
   {$IFDEF GC_TIMING}, TimingUtils{$ENDIF};
-{$ENDIF}
 
 function DetectDefaultMaxBytes: Int64;
 var
@@ -186,6 +184,9 @@ end;
 threadvar
   GCCurrentMark: Cardinal;
   GCThreadInstance: TGarbageCollector;
+
+var
+  GCCollectionLock: TRTLCriticalSection;
 
 { TGCManagedObject }
 
@@ -507,52 +508,58 @@ var
   {$ENDIF}
 begin
   if FCollecting then Exit;
-  FCollecting := True;
+  EnterCriticalSection(GCCollectionLock);
   try
-    BeforeCount := FManagedObjects.Count;
-    TGCManagedObject.AdvanceMark;
-    {$IFDEF GC_TIMING}
-    StartNs := GetNanoseconds;
-    {$ENDIF}
-    MarkRoots;
-    TraceWeakReferences;
-    SweepWeakReferences;
-    {$IFDEF GC_TIMING}
-    AfterMarkNs := GetNanoseconds;
-    {$ENDIF}
-    SweepObjects;
-    FAllocationsSinceLastGC := 0;
+    if FCollecting then Exit;
+    FCollecting := True;
+    try
+      BeforeCount := FManagedObjects.Count;
+      TGCManagedObject.AdvanceMark;
+      {$IFDEF GC_TIMING}
+      StartNs := GetNanoseconds;
+      {$ENDIF}
+      MarkRoots;
+      TraceWeakReferences;
+      SweepWeakReferences;
+      {$IFDEF GC_TIMING}
+      AfterMarkNs := GetNanoseconds;
+      {$ENDIF}
+      SweepObjects;
+      FAllocationsSinceLastGC := 0;
 
-    // Adaptive threshold: next collection after allocating as many
-    // objects as survived, amortizing collection cost to O(1) per
-    // allocation. Small heaps keep the default minimum.
-    FGCThreshold := FManagedObjects.Count;
-    if FGCThreshold < DEFAULT_GC_THRESHOLD then
-      FGCThreshold := DEFAULT_GC_THRESHOLD;
+      // Adaptive threshold: next collection after allocating as many
+      // objects as survived, amortizing collection cost to O(1) per
+      // allocation. Small heaps keep the default minimum.
+      FGCThreshold := FManagedObjects.Count;
+      if FGCThreshold < DEFAULT_GC_THRESHOLD then
+        FGCThreshold := DEFAULT_GC_THRESHOLD;
 
-    Inc(FTotalCollections);
-    {$IFDEF GC_TIMING}
-    EndNs := GetNanoseconds;
-    MarkNs := AfterMarkNs - StartNs;
-    SweepNs := EndNs - AfterMarkNs;
-    TotalNs := EndNs - StartNs;
-    FTotalMarkTimeNs := FTotalMarkTimeNs + MarkNs;
-    FTotalSweepTimeNs := FTotalSweepTimeNs + SweepNs;
-    FTotalGCTimeNs := FTotalGCTimeNs + TotalNs;
-    if MarkNs > FMaxMarkTimeNs then
-      FMaxMarkTimeNs := MarkNs;
-    if SweepNs > FMaxSweepTimeNs then
-      FMaxSweepTimeNs := SweepNs;
-    WriteLn(Format('[GC] Collect: mark=%s sweep=%s total=%s (%d before, %d after)',
-      [FormatDuration(MarkNs), FormatDuration(SweepNs), FormatDuration(TotalNs),
-       BeforeCount, FManagedObjects.Count]));
-    {$ENDIF}
-    {$IFDEF GC_DEBUG}
-    WriteLn(Format('[GC] Collect: %d -> %d objects (%d freed)',
-      [BeforeCount, FManagedObjects.Count, BeforeCount - FManagedObjects.Count]));
-    {$ENDIF}
+      Inc(FTotalCollections);
+      {$IFDEF GC_TIMING}
+      EndNs := GetNanoseconds;
+      MarkNs := AfterMarkNs - StartNs;
+      SweepNs := EndNs - AfterMarkNs;
+      TotalNs := EndNs - StartNs;
+      FTotalMarkTimeNs := FTotalMarkTimeNs + MarkNs;
+      FTotalSweepTimeNs := FTotalSweepTimeNs + SweepNs;
+      FTotalGCTimeNs := FTotalGCTimeNs + TotalNs;
+      if MarkNs > FMaxMarkTimeNs then
+        FMaxMarkTimeNs := MarkNs;
+      if SweepNs > FMaxSweepTimeNs then
+        FMaxSweepTimeNs := SweepNs;
+      WriteLn(Format('[GC] Collect: mark=%s sweep=%s total=%s (%d before, %d after)',
+        [FormatDuration(MarkNs), FormatDuration(SweepNs), FormatDuration(TotalNs),
+         BeforeCount, FManagedObjects.Count]));
+      {$ENDIF}
+      {$IFDEF GC_DEBUG}
+      WriteLn(Format('[GC] Collect: %d -> %d objects (%d freed)',
+        [BeforeCount, FManagedObjects.Count, BeforeCount - FManagedObjects.Count]));
+      {$ENDIF}
+    finally
+      FCollecting := False;
+    end;
   finally
-    FCollecting := False;
+    LeaveCriticalSection(GCCollectionLock);
   end;
 end;
 
@@ -586,71 +593,77 @@ var
   EffectiveWatermark: Integer;
 begin
   if FCollecting then Exit;
-  FCollecting := True;
+  EnterCriticalSection(GCCollectionLock);
   try
-    EffectiveWatermark := AWatermark;
-    if EffectiveWatermark < 0 then
-      EffectiveWatermark := 0;
-    if EffectiveWatermark > FManagedObjects.Count then
-      EffectiveWatermark := FManagedObjects.Count;
+    if FCollecting then Exit;
+    FCollecting := True;
+    try
+      EffectiveWatermark := AWatermark;
+      if EffectiveWatermark < 0 then
+        EffectiveWatermark := 0;
+      if EffectiveWatermark > FManagedObjects.Count then
+        EffectiveWatermark := FManagedObjects.Count;
 
-    TGCManagedObject.AdvanceMark;
+      TGCManagedObject.AdvanceMark;
 
-    for I := 0 to EffectiveWatermark - 1 do
-    begin
-      Obj := FManagedObjects[I];
-      if Assigned(Obj) then
-        Obj.GCMarked := True;
-    end;
-
-    MarkRoots;
-    TraceWeakReferences;
-    SweepWeakReferences;
-
-    Collected := 0;
-    WriteIdx := EffectiveWatermark;
-
-    for I := EffectiveWatermark to FManagedObjects.Count - 1 do
-    begin
-      Obj := FManagedObjects[I];
-      if Obj = nil then
-        Continue;
-      if Obj.GCMarked then
+      for I := 0 to EffectiveWatermark - 1 do
       begin
-        Obj.GCIndex := WriteIdx;
-        FManagedObjects[WriteIdx] := Obj;
-        Inc(WriteIdx);
-      end
-      else if (FActiveRootStack.Count > 0) and
-              (not Obj.CanRecycleDuringActiveCall) then
-      begin
-        Obj.GCIndex := WriteIdx;
-        FManagedObjects[WriteIdx] := Obj;
-        Inc(WriteIdx);
-      end
-      else
-      begin
-        Dec(FBytesAllocated, Obj.InstanceSize);
-        Obj.GCIndex := -1;
-        Obj.Recycle;
-        Inc(Collected);
+        Obj := FManagedObjects[I];
+        if Assigned(Obj) then
+          Obj.GCMarked := True;
       end;
-    end;
 
-    FManagedObjects.Count := WriteIdx;
-    FUnregisteredSlots := 0;
-    if FManagedObjects.Capacity > 4 * WriteIdx + 256 then
-      FManagedObjects.Capacity := WriteIdx + (WriteIdx div 2);
-    FAllocationsSinceLastGC := 0;
-    FTotalCollected := FTotalCollected + Collected;
-    Inc(FTotalCollections);
-    {$IFDEF GC_DEBUG}
-    WriteLn(Format('[GC] CollectYoung(wm=%d): %d total, %d young, %d freed, %d surviving',
-      [AWatermark, EffectiveWatermark + (FManagedObjects.Count - EffectiveWatermark) + Collected,
-       FManagedObjects.Count - EffectiveWatermark + Collected, Collected, FManagedObjects.Count]));
-    {$ENDIF}
+      MarkRoots;
+      TraceWeakReferences;
+      SweepWeakReferences;
+
+      Collected := 0;
+      WriteIdx := EffectiveWatermark;
+
+      for I := EffectiveWatermark to FManagedObjects.Count - 1 do
+      begin
+        Obj := FManagedObjects[I];
+        if Obj = nil then
+          Continue;
+        if Obj.GCMarked then
+        begin
+          Obj.GCIndex := WriteIdx;
+          FManagedObjects[WriteIdx] := Obj;
+          Inc(WriteIdx);
+        end
+        else if (FActiveRootStack.Count > 0) and
+                (not Obj.CanRecycleDuringActiveCall) then
+        begin
+          Obj.GCIndex := WriteIdx;
+          FManagedObjects[WriteIdx] := Obj;
+          Inc(WriteIdx);
+        end
+        else
+        begin
+          Dec(FBytesAllocated, Obj.InstanceSize);
+          Obj.GCIndex := -1;
+          Obj.Recycle;
+          Inc(Collected);
+        end;
+      end;
+
+      FManagedObjects.Count := WriteIdx;
+      FUnregisteredSlots := 0;
+      if FManagedObjects.Capacity > 4 * WriteIdx + 256 then
+        FManagedObjects.Capacity := WriteIdx + (WriteIdx div 2);
+      FAllocationsSinceLastGC := 0;
+      FTotalCollected := FTotalCollected + Collected;
+      Inc(FTotalCollections);
+      {$IFDEF GC_DEBUG}
+      WriteLn(Format('[GC] CollectYoung(wm=%d): %d total, %d young, %d freed, %d surviving',
+        [AWatermark, EffectiveWatermark + (FManagedObjects.Count - EffectiveWatermark) + Collected,
+         FManagedObjects.Count - EffectiveWatermark + Collected, Collected, FManagedObjects.Count]));
+      {$ENDIF}
+    finally
+      FCollecting := False;
+    end;
   finally
-    FCollecting := False;
+    LeaveCriticalSection(GCCollectionLock);
   end;
 end;
 
@@ -700,6 +713,10 @@ begin
 end;
 
 initialization
+  InitCriticalSection(GCCollectionLock);
   GCCurrentMark := 1;
+
+finalization
+  DoneCriticalSection(GCCollectionLock);
 
 end.

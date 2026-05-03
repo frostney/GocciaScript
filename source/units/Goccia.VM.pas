@@ -13,6 +13,7 @@ uses
   Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Module,
   Goccia.Evaluator.Context,
+  Goccia.GarbageCollector,
   Goccia.Modules,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
@@ -28,6 +29,17 @@ uses
   Goccia.VM.Upvalue;
 
 type
+  TGocciaVM = class;
+
+  TGocciaVMStackRoot = class(TGCManagedObject)
+  private
+    FVM: TGocciaVM;
+    procedure MarkClosureReferences(const AClosure: TGocciaBytecodeClosure);
+  public
+    constructor Create(const AVM: TGocciaVM);
+    procedure MarkReferences; override;
+  end;
+
   TGocciaVMLiteralObjectValue = class(TGocciaObjectValue)
   private
     FFastLiteralMode: Boolean;
@@ -84,6 +96,7 @@ type
     FArgumentPoolCount: Integer;
     FLastClosureThisValue: TGocciaRegister;
     FPrivateInitializerReceiver: TGocciaValue;
+    FStackRoot: TGocciaVMStackRoot;
     function ConstantToValue(const AConstant: TGocciaBytecodeConstant): TGocciaValue;
     // ES2026 §13.2.8.3 GetTemplateObject — lazy-build helper for bckTemplateObject constants.
     function BuildTemplateObjectConstant(const ATemplate: TGocciaFunctionTemplate;
@@ -257,7 +270,6 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Evaluator,
   Goccia.Evaluator.Decorators,
-  Goccia.GarbageCollector,
   Goccia.ImportMeta,
   Goccia.InstructionLimit,
   Goccia.PatternMatching,
@@ -890,6 +902,73 @@ type
     procedure SetVMConstructor(const AValue: TGocciaValue);
     procedure MarkReferences; override;
   end;
+
+{ TGocciaVMStackRoot }
+
+constructor TGocciaVMStackRoot.Create(const AVM: TGocciaVM);
+begin
+  FVM := AVM;
+  inherited Create;
+end;
+
+procedure TGocciaVMStackRoot.MarkClosureReferences(
+  const AClosure: TGocciaBytecodeClosure);
+var
+  I: Integer;
+  Upvalue: TGocciaBytecodeUpvalue;
+begin
+  if not Assigned(AClosure) then
+    Exit;
+  if Assigned(AClosure.HomeObject) then
+    AClosure.HomeObject.MarkReferences;
+  for I := 0 to AClosure.UpvalueCount - 1 do
+  begin
+    Upvalue := AClosure.GetUpvalue(I);
+    if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
+      MarkRegisterReferences(Upvalue.Cell.Value);
+  end;
+end;
+
+procedure TGocciaVMStackRoot.MarkReferences;
+var
+  I, Limit: Integer;
+  ExportPair: TGocciaValueMap.TKeyValuePair;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if not Assigned(FVM) then
+    Exit;
+
+  if Assigned(FVM.FGlobalScope) then
+    FVM.FGlobalScope.MarkReferences;
+  MarkClosureReferences(FVM.FCurrentClosure);
+  MarkRegisterReferences(FVM.FLastClosureThisValue);
+  if Assigned(FVM.FPrivateInitializerReceiver) then
+    FVM.FPrivateInitializerReceiver.MarkReferences;
+
+  Limit := FVM.FRegisterBase + FVM.FRegisterCount;
+  if Limit > Length(FVM.FRegisterStack) then
+    Limit := Length(FVM.FRegisterStack);
+  for I := 0 to Limit - 1 do
+    MarkRegisterReferences(FVM.FRegisterStack[I]);
+
+  Limit := FVM.FLocalCellBase + FVM.FLocalCellCount;
+  if Limit > Length(FVM.FLocalCellStack) then
+    Limit := Length(FVM.FLocalCellStack);
+  for I := 0 to Limit - 1 do
+    if Assigned(FVM.FLocalCellStack[I]) then
+      MarkRegisterReferences(FVM.FLocalCellStack[I].Value);
+
+  for I := 0 to FVM.FFrameStackCount - 1 do
+    MarkClosureReferences(FVM.FFrameStack[I].Closure);
+
+  if Assigned(FVM.FCurrentModuleExports) then
+    for ExportPair in FVM.FCurrentModuleExports do
+      if Assigned(ExportPair.Value) then
+        ExportPair.Value.MarkReferences;
+end;
+
+{ TGocciaBytecodeFunctionValue }
 
 constructor TGocciaBytecodeFunctionValue.Create(const AVM: TGocciaVM;
   const AClosure: TGocciaBytecodeClosure);
@@ -2714,12 +2793,18 @@ begin
   FLocalCellCount := 0;
   SetLength(FFrameStack, 64);
   FFrameStackCount := 0;
+  FStackRoot := TGocciaVMStackRoot.Create(Self);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddRootObject(FStackRoot);
 end;
 
 destructor TGocciaVM.Destroy;
 var
   I: Integer;
 begin
+  if Assigned(TGarbageCollector.Instance) and Assigned(FStackRoot) then
+    TGarbageCollector.Instance.RemoveRootObject(FStackRoot);
+  FStackRoot.Free;
   if Assigned(FActiveDecoratorSession) then
   begin
     TGarbageCollector.Instance.RemoveTempRoot(

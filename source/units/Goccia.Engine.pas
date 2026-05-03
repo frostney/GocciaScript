@@ -1393,14 +1393,10 @@ var
   GC: TGarbageCollector;
 begin
   GC := TGarbageCollector.Instance;
-  // Skip on worker threads: shared immutable objects (singletons, prototypes)
-  // have a single FGCMark field that is not thread-safe — running mark-sweep
-  // on a worker would race on that field and crash.
-  // Also skip while JS function/callback frames are active. Pascal stack-held
-  // values are protected by the active-root discipline at safe call
-  // boundaries; reentrant user-triggered mark-sweep from inside that stack is
-  // too early to prove every transient value has been rooted.
-  if Assigned(GC) and (not GIsWorkerThread) and (GC.ActiveRootCount = 0) then
+  // Manual GC is synchronous and bypasses the automatic threshold. The GC
+  // serializes mark/sweep across threads, while active roots and backend stack
+  // roots keep in-flight values visible during reentrant calls.
+  if Assigned(GC) then
     GC.Collect;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
