@@ -2377,6 +2377,9 @@ begin
          (ConstructorThisValue is TGocciaObjectValue) then
         SuperResult := ConstructorThisValue;
     end
+    else if ClassConstructor is TGocciaVMClassValue then
+      SuperResult := TGocciaVMClassValue(ClassConstructor).FVM.InvokeImplicitSuperInitialization(
+        ClassConstructor, AReceiver, AArguments)
     else
       SuperResult := AReceiver;
   end

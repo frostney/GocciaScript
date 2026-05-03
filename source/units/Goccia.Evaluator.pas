@@ -776,6 +776,32 @@ var
   SuperResult: TGocciaValue;
   ConstructorThisValue: TGocciaValue;
   I: Integer;
+
+  function InvokeImplicitClassConstructor: TGocciaValue;
+  begin
+    Result := AReceiver;
+
+    if Assigned(ClassConstructor.SuperClass) then
+      Result := InvokeConstructableWithReceiver(ClassConstructor.SuperClass,
+        AArguments, AReceiver, AContext)
+    else if Assigned(ClassConstructor.NativeSuperConstructor) then
+      Result := InvokeConstructableWithReceiver(
+        ClassConstructor.NativeSuperConstructor, AArguments, AReceiver,
+        AContext)
+    else if AReceiver is TGocciaInstanceValue then
+      TGocciaInstanceValue(AReceiver).InitializeNativeFromArguments(AArguments);
+
+    ValidateClassConstructorReturn(ClassConstructor, Result);
+    if Result is TGocciaObjectValue then
+      RunClassInstanceInitializers(ClassConstructor,
+        TGocciaObjectValue(Result), AContext)
+    else if AReceiver is TGocciaObjectValue then
+    begin
+      RunClassInstanceInitializers(ClassConstructor,
+        TGocciaObjectValue(AReceiver), AContext);
+      Result := AReceiver;
+    end;
+  end;
 begin
   if AConstructor is TGocciaBoundFunctionValue then
   begin
@@ -828,7 +854,7 @@ begin
           TGocciaObjectValue(SuperResult), AContext);
     end
     else
-      SuperResult := AReceiver;
+      SuperResult := InvokeImplicitClassConstructor;
   end
   else if AConstructor is TGocciaFunctionBase then
     SuperResult := TGocciaFunctionBase(AConstructor).Call(
@@ -3040,6 +3066,12 @@ var
   Done: Boolean;
   SwitchBlockContext: TGocciaEvaluationContext;
   NeedsSwitchScope: Boolean;
+  HasUsingDeclarations: Boolean;
+  Tracker: TGocciaDisposalTracker;
+  DisposalError: TGocciaValue;
+  CaughtError: TGocciaValue;
+  HasCaughtError: Boolean;
+  GC: TGarbageCollector;
 
   function ConsequentNeedsChildScope(
     const AConsequent: TObjectList<TGocciaStatement>): Boolean;
@@ -3080,6 +3112,17 @@ var
     for K := 0 to ASwitchStatement.Cases.Count - 1 do
       if ConsequentNeedsChildScope(ASwitchStatement.Cases[K].Consequent) then
         Exit(True);
+  end;
+
+  function SwitchHasUsingDeclarations: Boolean;
+  var
+    K, L: Integer;
+  begin
+    Result := False;
+    for K := 0 to ASwitchStatement.Cases.Count - 1 do
+      for L := 0 to ASwitchStatement.Cases[K].Consequent.Count - 1 do
+        if ASwitchStatement.Cases[K].Consequent[L] is TGocciaUsingDeclaration then
+          Exit(True);
   end;
 
   procedure HoistSwitchConsequents;
@@ -3124,6 +3167,7 @@ begin
   Discriminant := EvaluateExpression(ASwitchStatement.Discriminant, AContext);
 
   NeedsSwitchScope := SwitchNeedsChildScope;
+  HasUsingDeclarations := SwitchHasUsingDeclarations;
   SwitchBlockContext := AContext;
   if NeedsSwitchScope then
     SwitchBlockContext.Scope := AContext.Scope.CreateChild(skBlock,
@@ -3131,82 +3175,135 @@ begin
   else
     SwitchBlockContext.Scope := AContext.Scope;
 
+  Tracker := nil;
+  DisposalError := nil;
+  CaughtError := nil;
+  HasCaughtError := False;
+  GC := TGarbageCollector.Instance;
+  if HasUsingDeclarations then
+  begin
+    Tracker := TGocciaDisposalTracker.Create;
+    SwitchBlockContext.DisposalTracker := Tracker;
+  end;
+
   try
-    if NeedsSwitchScope then
-    begin
-      PredeclareSwitchConsequents;
-      HoistSwitchConsequents;
-    end;
-
-    Matched := False;
-    DefaultIndex := -1;
-    Done := False;
-
-    for I := 0 to ASwitchStatement.Cases.Count - 1 do
-    begin
-      CaseClause := ASwitchStatement.Cases[I];
-
-      if not Assigned(CaseClause.Test) then
+    try
+      if NeedsSwitchScope then
       begin
-        DefaultIndex := I;
-        if not Matched then
-          Continue;
+        PredeclareSwitchConsequents;
+        HoistSwitchConsequents;
       end;
 
-      if not Matched then
-      begin
-        CaseTest := EvaluateExpression(CaseClause.Test, AContext);
-        if Goccia.Arithmetic.IsStrictEqual(Discriminant, CaseTest) then
-        begin
-          Matched := True;
-          if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
-            TGocciaCoverageTracker.Instance.RecordBranchHit(
-              AContext.CurrentFilePath, ASwitchStatement.Line,
-              ASwitchStatement.Column, I);
-        end;
-      end;
+      Matched := False;
+      DefaultIndex := -1;
+      Done := False;
 
-      if Matched then
-      begin
-        CF := EvaluateCaseConsequent(CaseClause.Consequent);
-        if CF.Kind = cfkBreak then
-          Done := True
-        else if CF.Kind in [cfkReturn, cfkContinue] then
-        begin
-          Result := CF;
-          Exit;
-        end
-        else
-          Result := CF;
-        if Done then Break;
-      end;
-    end;
-
-    if not Matched and not Done and (DefaultIndex >= 0) then
-    begin
-      if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
-        TGocciaCoverageTracker.Instance.RecordBranchHit(
-          AContext.CurrentFilePath, ASwitchStatement.Line,
-          ASwitchStatement.Column, DefaultIndex);
-      for I := DefaultIndex to ASwitchStatement.Cases.Count - 1 do
+      for I := 0 to ASwitchStatement.Cases.Count - 1 do
       begin
         CaseClause := ASwitchStatement.Cases[I];
-        CF := EvaluateCaseConsequent(CaseClause.Consequent);
-        if CF.Kind = cfkBreak then
-          Done := True
-        else if CF.Kind in [cfkReturn, cfkContinue] then
+
+        if not Assigned(CaseClause.Test) then
         begin
-          Result := CF;
-          Exit;
+          DefaultIndex := I;
+          if not Matched then
+            Continue;
+        end;
+
+        if not Matched then
+        begin
+          CaseTest := EvaluateExpression(CaseClause.Test, AContext);
+          if Goccia.Arithmetic.IsStrictEqual(Discriminant, CaseTest) then
+          begin
+            Matched := True;
+            if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+              TGocciaCoverageTracker.Instance.RecordBranchHit(
+                AContext.CurrentFilePath, ASwitchStatement.Line,
+                ASwitchStatement.Column, I);
+          end;
+        end;
+
+        if Matched then
+        begin
+          CF := EvaluateCaseConsequent(CaseClause.Consequent);
+          if CF.Kind = cfkBreak then
+            Done := True
+          else if CF.Kind in [cfkReturn, cfkContinue] then
+          begin
+            Result := CF;
+            Exit;
+          end
+          else
+            Result := CF;
+          if Done then Break;
         end
-        else
-          Result := CF;
-        if Done then Break;
+      end;
+
+      if not Matched and not Done and (DefaultIndex >= 0) then
+      begin
+        if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+          TGocciaCoverageTracker.Instance.RecordBranchHit(
+            AContext.CurrentFilePath, ASwitchStatement.Line,
+            ASwitchStatement.Column, DefaultIndex);
+        for I := DefaultIndex to ASwitchStatement.Cases.Count - 1 do
+        begin
+          CaseClause := ASwitchStatement.Cases[I];
+          CF := EvaluateCaseConsequent(CaseClause.Consequent);
+          if CF.Kind = cfkBreak then
+            Done := True
+          else if CF.Kind in [cfkReturn, cfkContinue] then
+          begin
+            Result := CF;
+            Exit;
+          end
+          else
+            Result := CF;
+          if Done then Break;
+        end;
+      end;
+    except
+      on E: TGocciaThrowValue do
+      begin
+        if not HasUsingDeclarations then
+          raise;
+        CaughtError := E.Value;
+        HasCaughtError := True;
+        if Assigned(GC) and Assigned(CaughtError) then
+          GC.AddTempRoot(CaughtError);
+        Result := TGocciaControlFlow.Normal(
+          TGocciaUndefinedLiteralValue.UndefinedValue);
       end;
     end;
   finally
+    if HasUsingDeclarations then
+    begin
+      if HasCaughtError then
+      begin
+        if HasAsyncDisposals(Tracker) then
+          DisposalError := DisposeTrackedResourcesAsync(Tracker, CaughtError)
+        else
+          DisposalError := DisposeTrackedResources(Tracker, CaughtError);
+      end
+      else
+      begin
+        if HasAsyncDisposals(Tracker) then
+          DisposalError := DisposeTrackedResourcesAsync(Tracker, nil)
+        else
+          DisposalError := DisposeTrackedResources(Tracker, nil);
+      end;
+      Tracker.Free;
+      SwitchBlockContext.DisposalTracker := nil;
+    end;
+
     if NeedsSwitchScope then
       SwitchBlockContext.Scope.Free;
+
+    if HasCaughtError and Assigned(GC) and Assigned(CaughtError) then
+      GC.RemoveTempRoot(CaughtError);
+
+    if Assigned(DisposalError) then
+      raise TGocciaThrowValue.Create(DisposalError)
+    else if HasCaughtError then
+      raise TGocciaThrowValue.Create(CaughtError);
   end;
 end;
 

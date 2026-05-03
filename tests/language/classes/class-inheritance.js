@@ -312,6 +312,20 @@ test("bound class super runs constructor and field initializers", () => {
   expect(instance.value).toBe(41);
 });
 
+test("bound class super without constructor runs field initializers", () => {
+  class Base {
+    field = "field";
+  }
+
+  const BoundBase = Base.bind(null);
+  BoundBase.prototype = Base.prototype;
+
+  class Derived extends BoundBase {}
+
+  const instance = new Derived();
+  expect(instance.field).toBe("field");
+});
+
 test("bound class super replacement does not replay superclass initializers", () => {
   let derivedPrototype;
   let initializersRun = 0;

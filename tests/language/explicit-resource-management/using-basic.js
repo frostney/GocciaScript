@@ -164,4 +164,60 @@ describe("using declaration", () => {
     }
     expect(order).toEqual(["b", "a"]);
   });
+
+  test("using in switch case disposes on break", () => {
+    const order = [];
+
+    switch (1) {
+      case 1:
+        using resource = {
+          [Symbol.dispose]() { order.push("dispose"); }
+        };
+        order.push("body");
+        break;
+      default:
+        order.push("default");
+    }
+
+    expect(order).toEqual(["body", "dispose"]);
+  });
+
+  test("using in switch case disposes on return", () => {
+    const order = [];
+
+    const run = () => {
+      switch (1) {
+        case 1:
+          using resource = {
+            [Symbol.dispose]() { order.push("dispose"); }
+          };
+          order.push("body");
+          return "done";
+      }
+    };
+
+    expect(run()).toBe("done");
+    expect(order).toEqual(["body", "dispose"]);
+  });
+
+  test("using in switch case disposes when body throws", () => {
+    const order = [];
+    let caught;
+
+    try {
+      switch (1) {
+        case 1:
+          using resource = {
+            [Symbol.dispose]() { order.push("dispose"); }
+          };
+          order.push("body");
+          throw "boom";
+      }
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(caught).toBe("boom");
+    expect(order).toEqual(["body", "dispose"]);
+  });
 });
