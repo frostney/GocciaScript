@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.SharedPrototype,
   Goccia.Values.ArrayValue,
@@ -50,6 +51,7 @@ type
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
+    function MarkEscapedReferencesIn(const AVisited: TGCObjectSet): Boolean; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
 
@@ -66,7 +68,6 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
@@ -302,6 +303,20 @@ begin
   end;
 end;
 
+function TGocciaSetValue.MarkEscapedReferencesIn(
+  const AVisited: TGCObjectSet): Boolean;
+var
+  I: Integer;
+begin
+  Result := inherited MarkEscapedReferencesIn(AVisited);
+  if not Result then
+    Exit;
+
+  for I := 0 to FItems.Count - 1 do
+    if Assigned(FItems[I]) then
+      FItems[I].MarkEscapedReferencesIn(AVisited);
+end;
+
 function TGocciaSetValue.ContainsValue(const AValue: TGocciaValue): Boolean;
 begin
   Result := SetDataIndex(FItems, AValue) >= 0;
@@ -309,6 +324,8 @@ end;
 
 procedure TGocciaSetValue.AddItem(const AValue: TGocciaValue);
 begin
+  if Assigned(AValue) and AValue.CanContainEscapedReferences then
+    AValue.MarkEscapedReferences;
   if not ContainsValue(AValue) then
     FItems.Add(AValue);
 end;

@@ -13,6 +13,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.AST.Expressions,
   Goccia.AST.Node,
+  Goccia.GarbageCollector,
   Goccia.Scope,
   Goccia.Values.FunctionBase,
   Goccia.Values.Primitives;
@@ -41,6 +42,7 @@ type
 
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
+    function MarkEscapedReferencesIn(const AVisited: TGCObjectSet): Boolean; override;
     procedure SetInferredName(const AName: string);
 
     property Parameters: TGocciaParameterArray read FParameters;
@@ -87,7 +89,6 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
-  Goccia.GarbageCollector,
   Goccia.Types.Enforcement,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper;
@@ -131,6 +132,16 @@ begin
   // Mark the closure scope
   if Assigned(FClosure) then
     FClosure.MarkReferences;
+end;
+
+function TGocciaFunctionValue.MarkEscapedReferencesIn(
+  const AVisited: TGCObjectSet): Boolean;
+begin
+  Result := inherited MarkEscapedReferencesIn(AVisited);
+  if not Result then
+    Exit;
+  if Assigned(FClosure) then
+    FClosure.MarkEscaped;
 end;
 
 procedure TGocciaFunctionValue.BindThis(const ACallScope: TGocciaScope; const AThisValue: TGocciaValue);
@@ -339,16 +350,32 @@ end;
 function TGocciaFunctionValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   CallScope: TGocciaScope;
+  GC: TGarbageCollector;
+  CollectionCountBefore: Integer;
 begin
   CallScope := CreateCallScope;
+  GC := TGarbageCollector.Instance;
+  CollectionCountBefore := -1;
 
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.PushActiveRoot(CallScope);
+  if Assigned(GC) then
+  begin
+    CollectionCountBefore := GC.TotalCollections;
+    GC.PushActiveRoot(Self);
+    GC.PushActiveRoot(CallScope);
+  end;
   try
     Result := ExecuteBody(CallScope, AArguments, AThisValue);
+    if Assigned(Result) and Result.CanContainEscapedReferences then
+      Result.MarkEscapedReferences;
   finally
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.PopActiveRoot;
+    if Assigned(GC) then
+    begin
+      GC.PopActiveRoot;
+      GC.PopActiveRoot;
+    end;
+    if ((not Assigned(GC)) or (GC.TotalCollections = CollectionCountBefore)) and
+       (not CallScope.Escaped) then
+      CallScope.Free;
   end;
 end;
 
@@ -416,18 +443,36 @@ function TGocciaMethodValue.CallWithThisValue(
   out AFinalThisValue: TGocciaValue): TGocciaValue;
 var
   CallScope: TGocciaScope;
+  GC: TGarbageCollector;
+  CollectionCountBefore: Integer;
 begin
   AFinalThisValue := AThisValue;
   CallScope := CreateCallScope;
+  GC := TGarbageCollector.Instance;
+  CollectionCountBefore := -1;
 
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.PushActiveRoot(CallScope);
+  if Assigned(GC) then
+  begin
+    CollectionCountBefore := GC.TotalCollections;
+    GC.PushActiveRoot(Self);
+    GC.PushActiveRoot(CallScope);
+  end;
   try
     Result := ExecuteBody(CallScope, AArguments, AThisValue);
     AFinalThisValue := CallScope.ThisValue;
+    if Assigned(Result) and Result.CanContainEscapedReferences then
+      Result.MarkEscapedReferences;
+    if Assigned(AFinalThisValue) and AFinalThisValue.CanContainEscapedReferences then
+      AFinalThisValue.MarkEscapedReferences;
   finally
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.PopActiveRoot;
+    if Assigned(GC) then
+    begin
+      GC.PopActiveRoot;
+      GC.PopActiveRoot;
+    end;
+    if ((not Assigned(GC)) or (GC.TotalCollections = CollectionCountBefore)) and
+       (not CallScope.Escaped) then
+      CallScope.Free;
   end;
 end;
 

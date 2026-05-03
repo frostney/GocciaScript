@@ -11,11 +11,14 @@ uses
 
 type
   TGocciaBuiltin = class
+  private
+    FBuiltinObjectPinned: Boolean;
   protected
     FName: string;
     FScope: TGocciaScope;
     FBuiltinObject: TGocciaObjectValue;
     FThrowError: TGocciaThrowErrorCallback;
+    procedure PinBuiltinObject;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
     destructor Destroy; override;
@@ -37,13 +40,30 @@ begin
   if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
     TGocciaObjectValue.InitializeSharedPrototype;
   FBuiltinObject := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  FBuiltinObjectPinned := False;
+  PinBuiltinObject;
   FThrowError := AThrowError;
+end;
+
+procedure TGocciaBuiltin.PinBuiltinObject;
+begin
+  if FBuiltinObjectPinned or not Assigned(FBuiltinObject) then
+    Exit;
+  if Assigned(TGarbageCollector.Instance) then
+  begin
+    TGarbageCollector.Instance.PinObject(FBuiltinObject);
+    FBuiltinObjectPinned := True;
+  end;
 end;
 
 destructor TGocciaBuiltin.Destroy;
 begin
-  // FBuiltinObject is GC-managed when GC is active; only free manually otherwise
-  if not Assigned(TGarbageCollector.Instance) then
+  if FBuiltinObjectPinned then
+  begin
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.UnpinObject(FBuiltinObject);
+  end
+  else
     FBuiltinObject.Free;
   inherited;
 end;

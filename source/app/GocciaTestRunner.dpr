@@ -457,8 +457,10 @@ var
   Engine: TGocciaEngine;
   Executor: TGocciaInterpreterExecutor;
   EngineResult: TGocciaScriptResult;
+  RootedEngineResult: Boolean;
 begin
   ScriptResult := CreateDefaultScriptResult;
+  RootedEngineResult := False;
 
   Source := nil;
   try
@@ -488,6 +490,7 @@ begin
       try
         Engine := CreateEngine(AFileName, Source, Executor);
         try
+          TGarbageCollector.Instance.AddTempRoot(ScriptResult);
           if FSilent.Present or GIsWorkerThread or IsJsonOutput then
           begin
             DisableRuntimeConsole(Engine);
@@ -498,6 +501,11 @@ begin
           StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
           try
             EngineResult := Engine.Execute;
+            if Assigned(EngineResult.Result) then
+            begin
+              TGarbageCollector.Instance.AddTempRoot(EngineResult.Result);
+              RootedEngineResult := True;
+            end;
           finally
             ClearExecutionTimeout;
             ClearInstructionLimit;
@@ -513,9 +521,22 @@ begin
       FileResult := EngineResult.Result as TGocciaObjectValue;
       MergeFileResult(ScriptResult, FileResult);
       Result.TestResult := ScriptResult;
+      if RootedEngineResult then
+      begin
+        TGarbageCollector.Instance.RemoveTempRoot(EngineResult.Result);
+        RootedEngineResult := False;
+      end;
+      TGarbageCollector.Instance.RemoveTempRoot(ScriptResult);
     except
       on E: Exception do
       begin
+        if RootedEngineResult then
+        begin
+          TGarbageCollector.Instance.RemoveTempRoot(EngineResult.Result);
+          RootedEngineResult := False;
+        end;
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.RemoveTempRoot(ScriptResult);
         if E is TGocciaError then
         begin
           if (not GIsWorkerThread) and (not IsJsonOutput) then
@@ -627,11 +648,13 @@ begin
       try
         Engine := CreateEngine(AFileName, Source, Executor);
         try
-          if FSilent.Present or GIsWorkerThread or IsJsonOutput then
-          begin
-            DisableRuntimeConsole(Engine);
-            Engine.SuppressWarnings := True;
-          end;
+          TGarbageCollector.Instance.AddTempRoot(ScriptResult);
+          try
+            if FSilent.Present or GIsWorkerThread or IsJsonOutput then
+            begin
+              DisableRuntimeConsole(Engine);
+              Engine.SuppressWarnings := True;
+            end;
 
             LexStart := GetNanoseconds;
             Lexer := TGocciaLexer.Create(SourceText, AFileName);
@@ -709,6 +732,9 @@ begin
             finally
               Module.Free;
             end;
+          finally
+            TGarbageCollector.Instance.RemoveTempRoot(ScriptResult);
+          end;
         finally
           Engine.Free;
         end;

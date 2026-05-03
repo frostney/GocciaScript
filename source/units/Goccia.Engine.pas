@@ -1398,10 +1398,10 @@ var
   GC: TGarbageCollector;
 begin
   GC := TGarbageCollector.Instance;
-  // Skip on worker threads: shared immutable objects (singletons, prototypes)
-  // have a single FGCMark field that is not thread-safe — running mark-sweep
-  // on a worker would race on that field and crash.
-  if Assigned(GC) and (not GIsWorkerThread) then
+  // Manual GC is synchronous and bypasses the automatic threshold. The GC
+  // serializes mark/sweep across threads, while active roots and backend stack
+  // roots keep in-flight values visible during reentrant calls.
+  if Assigned(GC) then
     GC.Collect;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;

@@ -13,6 +13,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.AST.Expressions,
   Goccia.AST.Node,
+  Goccia.GarbageCollector,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -149,6 +150,7 @@ type
     property PrivatePropertyGetter[const AName: string]: TGocciaFunctionBase read GetPrivatePropertyGetter;
     property PrivatePropertySetter[const AName: string]: TGocciaFunctionBase read GetPrivatePropertySetter;
     procedure MarkReferences; override;
+    function MarkEscapedReferencesIn(const AVisited: TGCObjectSet): Boolean; override;
 
     procedure AddFieldInitializer(const AName: string; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
     procedure SetMethodInitializers(const AInitializers: array of TGocciaValue);
@@ -282,6 +284,7 @@ type
     function IsInstanceOf(const AClass: TGocciaClassValue): Boolean; inline;
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); virtual;
     procedure MarkReferences; override;
+    function MarkEscapedReferencesIn(const AVisited: TGCObjectSet): Boolean; override;
 
     property ClassValue: TGocciaClassValue read FClass write FClass;
   end;
@@ -299,7 +302,6 @@ uses
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.GarbageCollector,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.AutoAccessor,
@@ -480,6 +482,79 @@ begin
   for I := 0 to High(FDecoratorFieldInitializers) do
     if Assigned(FDecoratorFieldInitializers[I].Initializer) then
       FDecoratorFieldInitializers[I].Initializer.MarkReferences;
+end;
+
+function TGocciaClassValue.MarkEscapedReferencesIn(
+  const AVisited: TGCObjectSet): Boolean;
+var
+  MethodPair: TOrderedStringMap<TGocciaMethodValue>.TKeyValuePair;
+  FuncPair: TOrderedStringMap<TGocciaFunctionBase>.TKeyValuePair;
+  ValPair: TGocciaValueMap.TKeyValuePair;
+  SymPair: TStaticSymbolDescriptorMap.TKeyValuePair;
+  I: Integer;
+begin
+  Result := inherited MarkEscapedReferencesIn(AVisited);
+  if not Result then
+    Exit;
+
+  if Assigned(FSuperClass) then
+    FSuperClass.MarkEscapedReferencesIn(AVisited);
+  if Assigned(FNativeSuperConstructor) then
+    FNativeSuperConstructor.MarkEscapedReferencesIn(AVisited);
+  if Assigned(FClassPrototype) then
+    FClassPrototype.MarkEscapedReferencesIn(AVisited);
+  if Assigned(FConstructorMethod) then
+    FConstructorMethod.MarkEscapedReferencesIn(AVisited);
+
+  for MethodPair in FMethods do
+    MethodPair.Value.MarkEscapedReferencesIn(AVisited);
+
+  for FuncPair in FGetters do
+    FuncPair.Value.MarkEscapedReferencesIn(AVisited);
+  for FuncPair in FSetters do
+    FuncPair.Value.MarkEscapedReferencesIn(AVisited);
+
+  for ValPair in FStaticMethods do
+    if Assigned(ValPair.Value) and ValPair.Value.CanContainEscapedReferences then
+      ValPair.Value.MarkEscapedReferencesIn(AVisited);
+
+  for ValPair in FPrivateStaticProperties do
+    if Assigned(ValPair.Value) and ValPair.Value.CanContainEscapedReferences then
+      ValPair.Value.MarkEscapedReferencesIn(AVisited);
+
+  for MethodPair in FPrivateMethods do
+    MethodPair.Value.MarkEscapedReferencesIn(AVisited);
+
+  for FuncPair in FPrivateGetters do
+    FuncPair.Value.MarkEscapedReferencesIn(AVisited);
+  for FuncPair in FPrivateSetters do
+    FuncPair.Value.MarkEscapedReferencesIn(AVisited);
+
+  for FuncPair in FStaticGetters do
+    FuncPair.Value.MarkEscapedReferencesIn(AVisited);
+  for FuncPair in FStaticSetters do
+    FuncPair.Value.MarkEscapedReferencesIn(AVisited);
+
+  for SymPair in FStaticSymbolDescriptors do
+  begin
+    if Assigned(SymPair.Key) then
+      SymPair.Key.MarkEscapedReferencesIn(AVisited);
+    if Assigned(SymPair.Value) then
+      SymPair.Value.MarkEscapedReferences(AVisited);
+  end;
+
+  for I := 0 to High(FMethodInitializers) do
+    if Assigned(FMethodInitializers[I]) and
+       FMethodInitializers[I].CanContainEscapedReferences then
+      FMethodInitializers[I].MarkEscapedReferencesIn(AVisited);
+  for I := 0 to High(FFieldInitializers) do
+    if Assigned(FFieldInitializers[I]) and
+       FFieldInitializers[I].CanContainEscapedReferences then
+      FFieldInitializers[I].MarkEscapedReferencesIn(AVisited);
+  for I := 0 to High(FDecoratorFieldInitializers) do
+    if Assigned(FDecoratorFieldInitializers[I].Initializer) and
+       FDecoratorFieldInitializers[I].Initializer.CanContainEscapedReferences then
+      FDecoratorFieldInitializers[I].Initializer.MarkEscapedReferencesIn(AVisited);
 end;
 
 function TGocciaClassValue.IsCallable: Boolean;
@@ -1179,8 +1254,22 @@ begin
     Result := inherited HasOwnProperty(AName);
 end;
 
+procedure MarkStaticSymbolDescriptorEscapedReferences(
+  const ADescriptor: TGocciaPropertyDescriptor);
+var
+  Visited: TGCObjectSet;
+begin
+  Visited := TGCObjectSet.Create;
+  try
+    ADescriptor.MarkEscapedReferences(Visited);
+  finally
+    Visited.Free;
+  end;
+end;
+
 procedure TGocciaClassValue.DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
 begin
+  MarkStaticSymbolDescriptorEscapedReferences(ADescriptor);
   FStaticSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
 end;
 
@@ -1889,6 +1978,24 @@ begin
     for ValPair in FPrivateProperties do
       if Assigned(ValPair.Value) then
         ValPair.Value.MarkReferences;
+end;
+
+function TGocciaInstanceValue.MarkEscapedReferencesIn(
+  const AVisited: TGCObjectSet): Boolean;
+var
+  ValPair: TGocciaValueMap.TKeyValuePair;
+begin
+  Result := inherited MarkEscapedReferencesIn(AVisited);
+  if not Result then
+    Exit;
+
+  if Assigned(FClass) then
+    FClass.MarkEscapedReferencesIn(AVisited);
+
+  if Assigned(FPrivateProperties) then
+    for ValPair in FPrivateProperties do
+      if Assigned(ValPair.Value) and ValPair.Value.CanContainEscapedReferences then
+        ValPair.Value.MarkEscapedReferencesIn(AVisited);
 end;
 
 end.

@@ -235,7 +235,7 @@ TGocciaNumberLiteralValue = class(TGocciaValue)
 end;
 ```
 
-Special number singletons: `NaNValue`, `PositiveInfinityValue`, `NegativeInfinityValue`, `NegativeZeroValue`.
+Special number singletons: `ZeroValue`, `OneValue`, `NaNValue`, `InfinityValue`, `NegativeInfinityValue`, `NegativeZeroValue`. Other numeric literals allocate regular `TGocciaNumberLiteralValue` instances.
 
 **Checking for special values:** Use the property accessors (`IsNaN`, `IsInfinity`, `IsNegativeZero`) which delegate to `Math.IsNaN`, `Math.IsInfinite`, and an endian-neutral `Int64 absolute` sign-bit check respectively. See [Tooling](contributing/tooling.md#endian-dependent-byte-indexing) for the endian-neutral pattern.
 

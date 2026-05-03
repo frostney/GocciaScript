@@ -7,6 +7,7 @@ interface
 uses
   OrderedStringMap,
 
+  Goccia.GarbageCollector,
   Goccia.Values.Primitives;
 
 type
@@ -22,6 +23,7 @@ type
   public
     constructor Create(const AFlags: TPropertyFlags);
     procedure MarkValues; virtual;
+    procedure MarkEscapedReferences(const AVisited: TGCObjectSet); virtual;
 
     property Flags: TPropertyFlags read FFlags;
     property Enumerable: Boolean read GetEnumerable;
@@ -35,6 +37,7 @@ type
   public
     constructor Create(const AValue: TGocciaValue; const AFlags: TPropertyFlags);
     procedure MarkValues; override;
+    procedure MarkEscapedReferences(const AVisited: TGCObjectSet); override;
 
     property Value: TGocciaValue read FValue write FValue;
   end;
@@ -48,6 +51,7 @@ type
   public
     constructor Create(const AGetter: TGocciaValue; const ASetter: TGocciaValue; const AFlags: TPropertyFlags);
     procedure MarkValues; override;
+    procedure MarkEscapedReferences(const AVisited: TGCObjectSet); override;
 
     property Getter: TGocciaValue read FGetter;
     property Setter: TGocciaValue read FSetter;
@@ -96,6 +100,12 @@ begin
   // No-op base: subclasses override to mark their value references
 end;
 
+procedure TGocciaPropertyDescriptor.MarkEscapedReferences(
+  const AVisited: TGCObjectSet);
+begin
+  // No-op base: subclasses override to mark their value references
+end;
+
 constructor TGocciaPropertyDescriptorData.Create(const AValue: TGocciaValue; const AFlags: TPropertyFlags);
 begin
   inherited Create(AFlags);
@@ -106,6 +116,13 @@ procedure TGocciaPropertyDescriptorData.MarkValues;
 begin
   if Assigned(FValue) then
     FValue.MarkReferences;
+end;
+
+procedure TGocciaPropertyDescriptorData.MarkEscapedReferences(
+  const AVisited: TGCObjectSet);
+begin
+  if Assigned(FValue) and FValue.CanContainEscapedReferences then
+    FValue.MarkEscapedReferencesIn(AVisited);
 end;
 
 constructor TGocciaPropertyDescriptorAccessor.Create(const AGetter: TGocciaValue; const ASetter: TGocciaValue; const AFlags: TPropertyFlags);
@@ -121,6 +138,15 @@ begin
     FGetter.MarkReferences;
   if Assigned(FSetter) then
     FSetter.MarkReferences;
+end;
+
+procedure TGocciaPropertyDescriptorAccessor.MarkEscapedReferences(
+  const AVisited: TGCObjectSet);
+begin
+  if Assigned(FGetter) and FGetter.CanContainEscapedReferences then
+    FGetter.MarkEscapedReferencesIn(AVisited);
+  if Assigned(FSetter) and FSetter.CanContainEscapedReferences then
+    FSetter.MarkEscapedReferencesIn(AVisited);
 end;
 
 function TGocciaPropertyDescriptorAccessor.GetWritable: Boolean;

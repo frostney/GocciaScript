@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.GarbageCollector,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -58,6 +59,7 @@ type
     // VMT-based type discrimination
     function IsCallable: Boolean; override;
     function IsConstructable: Boolean; override;
+    function CanRecycleDuringActiveCall: Boolean; override;
 
     // Override TypeName and TypeOf for all functions
     function TypeName: string; override;
@@ -89,6 +91,7 @@ type
     function CallOneArg(const AArg0, AThisValue: TGocciaValue): TGocciaValue; override;
     function CallTwoArgs(const AArg0, AArg1, AThisValue: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
+    function MarkEscapedReferencesIn(const AVisited: TGCObjectSet): Boolean; override;
     property OriginalFunction: TGocciaValue read FOriginalFunction;
     property BoundThis: TGocciaValue read FBoundThis;
     property BoundArgCount: Integer read FBoundArgCount;
@@ -106,7 +109,6 @@ uses
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
@@ -214,6 +216,11 @@ begin
   if (not Result) and (Self is TGocciaBoundFunctionValue) and
      Assigned(TGocciaBoundFunctionValue(Self).OriginalFunction) then
     Result := TGocciaBoundFunctionValue(Self).OriginalFunction.IsConstructable;
+end;
+
+function TGocciaFunctionBase.CanRecycleDuringActiveCall: Boolean;
+begin
+  Result := False;
 end;
 
 function TGocciaFunctionBase.TypeName: string;
@@ -772,6 +779,31 @@ begin
     for I := 0 to FBoundArgs.Count - 1 do
       if Assigned(FBoundArgs[I]) then
         FBoundArgs[I].MarkReferences;
+end;
+
+function TGocciaBoundFunctionValue.MarkEscapedReferencesIn(
+  const AVisited: TGCObjectSet): Boolean;
+var
+  I: Integer;
+begin
+  Result := inherited MarkEscapedReferencesIn(AVisited);
+  if not Result then
+    Exit;
+
+  if Assigned(FOriginalFunction) then
+    FOriginalFunction.MarkEscapedReferencesIn(AVisited);
+  if Assigned(FBoundThis) then
+    FBoundThis.MarkEscapedReferencesIn(AVisited);
+
+  if FBoundArgCount = 1 then
+  begin
+    if Assigned(FSingleBoundArg) then
+      FSingleBoundArg.MarkEscapedReferencesIn(AVisited);
+  end
+  else if Assigned(FBoundArgs) then
+    for I := 0 to FBoundArgs.Count - 1 do
+      if Assigned(FBoundArgs[I]) then
+        FBoundArgs[I].MarkEscapedReferencesIn(AVisited);
 end;
 
 initialization

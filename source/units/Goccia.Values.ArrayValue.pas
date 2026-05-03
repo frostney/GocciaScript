@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -54,6 +55,7 @@ type
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
+    function MarkEscapedReferencesIn(const AVisited: TGCObjectSet): Boolean; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
 
@@ -118,7 +120,6 @@ uses
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Timeout,
   Goccia.Utils,
@@ -634,7 +635,8 @@ begin
     FElements.Capacity := AElementCapacity;
   InitializePrototype;
   SharedPrototype := GetSharedArrayPrototype;
-  if not Assigned(AClass) and Assigned(SharedPrototype) then
+  if not Assigned(AClass) and Assigned(SharedPrototype) and
+     (Self <> FPrototypeMethodHost) then
     FPrototype := SharedPrototype;
 end;
 
@@ -791,11 +793,29 @@ begin
   if GCMarked then Exit;
   inherited;
 
+  if not Assigned(FElements) then
+    Exit;
   for I := 0 to FElements.Count - 1 do
   begin
     if Assigned(FElements[I]) then
       FElements[I].MarkReferences;
   end;
+end;
+
+function TGocciaArrayValue.MarkEscapedReferencesIn(
+  const AVisited: TGCObjectSet): Boolean;
+var
+  I: Integer;
+begin
+  Result := inherited MarkEscapedReferencesIn(AVisited);
+  if not Result then
+    Exit;
+
+  if not Assigned(FElements) then
+    Exit;
+  for I := 0 to FElements.Count - 1 do
+    if Assigned(FElements[I]) then
+      FElements[I].MarkEscapedReferencesIn(AVisited);
 end;
 
 function TGocciaArrayValue.ToStringTag: string;
@@ -849,6 +869,8 @@ begin
   while FElements.Count <= AIndex do
     FElements.Add(TGocciaHoleValue.HoleValue);
 
+  if Assigned(AValue) and AValue.CanContainEscapedReferences then
+    AValue.MarkEscapedReferences;
   FElements[AIndex] := AValue;
   Result := True;
 end;
@@ -2749,6 +2771,8 @@ begin
         FElements.Add(TGocciaHoleValue.HoleValue);
 
       // Set the element
+      if Assigned(AValue) and AValue.CanContainEscapedReferences then
+        AValue.MarkEscapedReferences;
       FElements[Index] := AValue;
     end;
     // Negative indices are ignored for array assignment
@@ -2827,6 +2851,9 @@ begin
       // Data descriptor on an array index: extract the value into FElements.
       while FElements.Count <= Index do
         FElements.Add(TGocciaHoleValue.HoleValue);
+      if Assigned(TGocciaPropertyDescriptorData(ADescriptor).Value) and
+         TGocciaPropertyDescriptorData(ADescriptor).Value.CanContainEscapedReferences then
+        TGocciaPropertyDescriptorData(ADescriptor).Value.MarkEscapedReferences;
       FElements[Index] := TGocciaPropertyDescriptorData(ADescriptor).Value;
       ADescriptor.Free;
     end
@@ -2896,6 +2923,9 @@ begin
       // Extend array if needed
       while FElements.Count <= Index do
         FElements.Add(TGocciaHoleValue.HoleValue);
+      if Assigned(TGocciaPropertyDescriptorData(ADescriptor).Value) and
+         TGocciaPropertyDescriptorData(ADescriptor).Value.CanContainEscapedReferences then
+        TGocciaPropertyDescriptorData(ADescriptor).Value.MarkEscapedReferences;
       FElements[Index] := TGocciaPropertyDescriptorData(ADescriptor).Value;
       ADescriptor.Free;
       Result := True;

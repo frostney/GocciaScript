@@ -19,9 +19,11 @@ type
     procedure SetGCMarked(const AValue: Boolean); inline;
   public
     class procedure AdvanceMark; static; inline;
+    procedure BeforeDestruction; override;
     procedure MarkReferences; virtual;
     function TraceWeakReferences: Boolean; virtual;
     procedure SweepWeakReferences; virtual;
+    function CanRecycleDuringActiveCall: Boolean; virtual;
     // Called by the GC sweep instead of Free. Default calls Free.
     // Override to return the object to a pool instead of deallocating.
     procedure Recycle; virtual;
@@ -41,6 +43,7 @@ type
     FActiveRootStack: TGCManagedObjectList;
 
     FAllocationsSinceLastGC: Integer;
+    FUnregisteredSlots: Integer;
     FGCThreshold: Integer;
     FEnabled: Boolean;
     FCollecting: Boolean;
@@ -63,7 +66,10 @@ type
     {$ENDIF}
 
     function GetManagedObjectCount: Integer;
+    function GetActiveRootCount: Integer;
     function GetWatermark: Integer; inline;
+    procedure ClearActiveRootEntries(const AObject: TGCManagedObject);
+    procedure CompactManagedObjects;
   protected
     procedure MarkRoots; virtual;
     procedure TraceWeakReferences;
@@ -79,6 +85,7 @@ type
 
     procedure RegisterObject(const AObject: TGCManagedObject);
     procedure UnregisterObject(const AObject: TGCManagedObject);
+    function ContainsObject(const AObject: TGCManagedObject): Boolean;
     procedure PinObject(const AObject: TGCManagedObject);
     procedure UnpinObject(const AObject: TGCManagedObject);
     procedure AddTempRoot(const AObject: TGCManagedObject);
@@ -123,6 +130,7 @@ type
     property TotalCollected: Int64 read FTotalCollected;
     property TotalCollections: Integer read FTotalCollections;
     property ManagedObjectCount: Integer read GetManagedObjectCount;
+    property ActiveRootCount: Integer read GetActiveRootCount;
 
     // Byte-level memory tracking. BytesAllocated is the approximate
     // number of bytes currently tracked by the GC (InstanceSize per
@@ -152,11 +160,9 @@ function DetectDefaultMaxBytes: Int64;
 
 implementation
 
-{$IF DEFINED(GC_DEBUG) OR DEFINED(GC_TIMING)}
 uses
   SysUtils
   {$IFDEF GC_TIMING}, TimingUtils{$ENDIF};
-{$ENDIF}
 
 function DetectDefaultMaxBytes: Int64;
 var
@@ -182,6 +188,9 @@ threadvar
   GCCurrentMark: Cardinal;
   GCThreadInstance: TGarbageCollector;
 
+var
+  GCCollectionLock: TRTLCriticalSection;
+
 { TGCManagedObject }
 
 class procedure TGCManagedObject.AdvanceMark;
@@ -189,6 +198,16 @@ begin
   Inc(GCCurrentMark);
   if GCCurrentMark = 0 then
     GCCurrentMark := 1;
+end;
+
+procedure TGCManagedObject.BeforeDestruction;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    GC.UnregisterObject(Self);
+  inherited;
 end;
 
 function TGCManagedObject.GetGCMarked: Boolean;
@@ -216,6 +235,11 @@ procedure TGCManagedObject.SweepWeakReferences;
 begin
 end;
 
+function TGCManagedObject.CanRecycleDuringActiveCall: Boolean;
+begin
+  Result := True;
+end;
+
 procedure TGCManagedObject.Recycle;
 begin
   Free;
@@ -238,9 +262,12 @@ begin
 end;
 
 class procedure TGarbageCollector.Shutdown;
+var
+  GC: TGarbageCollector;
 begin
-  GCThreadInstance.Free;
+  GC := GCThreadInstance;
   GCThreadInstance := nil;
+  GC.Free;
 end;
 
 constructor TGarbageCollector.Create;
@@ -252,6 +279,7 @@ begin
   FRootObjects := TGCObjectSet.Create;
   FActiveRootStack := TGCManagedObjectList.Create(False);
   FAllocationsSinceLastGC := 0;
+  FUnregisteredSlots := 0;
   FGCThreshold := DEFAULT_GC_THRESHOLD;
   FEnabled := True;
   FCollecting := False;
@@ -274,6 +302,8 @@ end;
 
 destructor TGarbageCollector.Destroy;
 begin
+  if GCThreadInstance = Self then
+    GCThreadInstance := nil;
   {$IFDEF GC_TIMING}
   PrintTimingSummary;
   {$ENDIF}
@@ -302,6 +332,16 @@ procedure TGarbageCollector.UnregisterObject(
 var
   Idx: Integer;
 begin
+  if Assigned(FPinnedObjects) then
+    FPinnedObjects.Remove(AObject);
+  if Assigned(FTempRoots) then
+    FTempRoots.Remove(AObject);
+  if Assigned(FRootObjects) then
+    FRootObjects.Remove(AObject);
+  ClearActiveRootEntries(AObject);
+  if not Assigned(FManagedObjects) then
+    Exit;
+
   Idx := AObject.GCIndex;
   if (Idx >= 0) and (Idx < FManagedObjects.Count) and
      (FManagedObjects[Idx] = AObject) then
@@ -309,7 +349,36 @@ begin
     FManagedObjects[Idx] := nil;
     AObject.GCIndex := -1;
     Dec(FBytesAllocated, AObject.InstanceSize);
+    Inc(FUnregisteredSlots);
+    if (not FCollecting) and (FUnregisteredSlots > 4096) and
+       (FUnregisteredSlots * 4 > FManagedObjects.Count) then
+      CompactManagedObjects;
   end;
+end;
+
+procedure TGarbageCollector.ClearActiveRootEntries(
+  const AObject: TGCManagedObject);
+var
+  I: Integer;
+begin
+  if not Assigned(FActiveRootStack) then
+    Exit;
+  for I := 0 to FActiveRootStack.Count - 1 do
+    if FActiveRootStack[I] = AObject then
+      FActiveRootStack[I] := nil;
+end;
+
+function TGarbageCollector.ContainsObject(
+  const AObject: TGCManagedObject): Boolean;
+var
+  Idx: Integer;
+begin
+  Result := False;
+  if not Assigned(AObject) or not Assigned(FManagedObjects) then
+    Exit;
+  Idx := AObject.GCIndex;
+  Result := (Idx >= 0) and (Idx < FManagedObjects.Count) and
+    (FManagedObjects[Idx] = AObject);
 end;
 
 procedure TGarbageCollector.PinObject(const AObject: TGCManagedObject);
@@ -373,16 +442,20 @@ var
   I: Integer;
 begin
   for Pair in FPinnedObjects do
-    Pair.Key.MarkReferences;
+    if ContainsObject(Pair.Key) then
+      Pair.Key.MarkReferences;
 
   for Pair in FTempRoots do
-    Pair.Key.MarkReferences;
+    if ContainsObject(Pair.Key) then
+      Pair.Key.MarkReferences;
 
   for Pair in FRootObjects do
-    Pair.Key.MarkReferences;
+    if ContainsObject(Pair.Key) then
+      Pair.Key.MarkReferences;
 
   for I := 0 to FActiveRootStack.Count - 1 do
-    FActiveRootStack[I].MarkReferences;
+    if ContainsObject(FActiveRootStack[I]) then
+      FActiveRootStack[I].MarkReferences;
 end;
 
 procedure TGarbageCollector.TraceWeakReferences;
@@ -415,6 +488,31 @@ begin
   end;
 end;
 
+procedure TGarbageCollector.CompactManagedObjects;
+var
+  I, WriteIdx: Integer;
+  Obj: TGCManagedObject;
+begin
+  if FUnregisteredSlots = 0 then
+    Exit;
+
+  WriteIdx := 0;
+  for I := 0 to FManagedObjects.Count - 1 do
+  begin
+    Obj := FManagedObjects[I];
+    if Obj = nil then
+      Continue;
+    Obj.GCIndex := WriteIdx;
+    FManagedObjects[WriteIdx] := Obj;
+    Inc(WriteIdx);
+  end;
+
+  FManagedObjects.Count := WriteIdx;
+  FUnregisteredSlots := 0;
+  if FManagedObjects.Capacity > 4 * WriteIdx + 256 then
+    FManagedObjects.Capacity := WriteIdx + (WriteIdx div 2);
+end;
+
 procedure TGarbageCollector.SweepObjects;
 var
   I, WriteIdx: Integer;
@@ -435,6 +533,13 @@ begin
       FManagedObjects[WriteIdx] := Obj;
       Inc(WriteIdx);
     end
+    else if (FActiveRootStack.Count > 0) and
+            (not Obj.CanRecycleDuringActiveCall) then
+    begin
+      Obj.GCIndex := WriteIdx;
+      FManagedObjects[WriteIdx] := Obj;
+      Inc(WriteIdx);
+    end
     else
     begin
       Dec(FBytesAllocated, Obj.InstanceSize);
@@ -445,6 +550,7 @@ begin
   end;
 
   FManagedObjects.Count := WriteIdx;
+  FUnregisteredSlots := 0;
   if FManagedObjects.Capacity > 4 * WriteIdx + 256 then
     FManagedObjects.Capacity := WriteIdx + (WriteIdx div 2);
   FTotalCollected := FTotalCollected + Collected;
@@ -459,52 +565,58 @@ var
   {$ENDIF}
 begin
   if FCollecting then Exit;
-  FCollecting := True;
+  EnterCriticalSection(GCCollectionLock);
   try
-    BeforeCount := FManagedObjects.Count;
-    TGCManagedObject.AdvanceMark;
-    {$IFDEF GC_TIMING}
-    StartNs := GetNanoseconds;
-    {$ENDIF}
-    MarkRoots;
-    TraceWeakReferences;
-    SweepWeakReferences;
-    {$IFDEF GC_TIMING}
-    AfterMarkNs := GetNanoseconds;
-    {$ENDIF}
-    SweepObjects;
-    FAllocationsSinceLastGC := 0;
+    if FCollecting then Exit;
+    FCollecting := True;
+    try
+      BeforeCount := FManagedObjects.Count;
+      TGCManagedObject.AdvanceMark;
+      {$IFDEF GC_TIMING}
+      StartNs := GetNanoseconds;
+      {$ENDIF}
+      MarkRoots;
+      TraceWeakReferences;
+      SweepWeakReferences;
+      {$IFDEF GC_TIMING}
+      AfterMarkNs := GetNanoseconds;
+      {$ENDIF}
+      SweepObjects;
+      FAllocationsSinceLastGC := 0;
 
-    // Adaptive threshold: next collection after allocating as many
-    // objects as survived, amortizing collection cost to O(1) per
-    // allocation. Small heaps keep the default minimum.
-    FGCThreshold := FManagedObjects.Count;
-    if FGCThreshold < DEFAULT_GC_THRESHOLD then
-      FGCThreshold := DEFAULT_GC_THRESHOLD;
+      // Adaptive threshold: next collection after allocating as many
+      // objects as survived, amortizing collection cost to O(1) per
+      // allocation. Small heaps keep the default minimum.
+      FGCThreshold := FManagedObjects.Count;
+      if FGCThreshold < DEFAULT_GC_THRESHOLD then
+        FGCThreshold := DEFAULT_GC_THRESHOLD;
 
-    Inc(FTotalCollections);
-    {$IFDEF GC_TIMING}
-    EndNs := GetNanoseconds;
-    MarkNs := AfterMarkNs - StartNs;
-    SweepNs := EndNs - AfterMarkNs;
-    TotalNs := EndNs - StartNs;
-    FTotalMarkTimeNs := FTotalMarkTimeNs + MarkNs;
-    FTotalSweepTimeNs := FTotalSweepTimeNs + SweepNs;
-    FTotalGCTimeNs := FTotalGCTimeNs + TotalNs;
-    if MarkNs > FMaxMarkTimeNs then
-      FMaxMarkTimeNs := MarkNs;
-    if SweepNs > FMaxSweepTimeNs then
-      FMaxSweepTimeNs := SweepNs;
-    WriteLn(Format('[GC] Collect: mark=%s sweep=%s total=%s (%d before, %d after)',
-      [FormatDuration(MarkNs), FormatDuration(SweepNs), FormatDuration(TotalNs),
-       BeforeCount, FManagedObjects.Count]));
-    {$ENDIF}
-    {$IFDEF GC_DEBUG}
-    WriteLn(Format('[GC] Collect: %d -> %d objects (%d freed)',
-      [BeforeCount, FManagedObjects.Count, BeforeCount - FManagedObjects.Count]));
-    {$ENDIF}
+      Inc(FTotalCollections);
+      {$IFDEF GC_TIMING}
+      EndNs := GetNanoseconds;
+      MarkNs := AfterMarkNs - StartNs;
+      SweepNs := EndNs - AfterMarkNs;
+      TotalNs := EndNs - StartNs;
+      FTotalMarkTimeNs := FTotalMarkTimeNs + MarkNs;
+      FTotalSweepTimeNs := FTotalSweepTimeNs + SweepNs;
+      FTotalGCTimeNs := FTotalGCTimeNs + TotalNs;
+      if MarkNs > FMaxMarkTimeNs then
+        FMaxMarkTimeNs := MarkNs;
+      if SweepNs > FMaxSweepTimeNs then
+        FMaxSweepTimeNs := SweepNs;
+      WriteLn(Format('[GC] Collect: mark=%s sweep=%s total=%s (%d before, %d after)',
+        [FormatDuration(MarkNs), FormatDuration(SweepNs), FormatDuration(TotalNs),
+         BeforeCount, FManagedObjects.Count]));
+      {$ENDIF}
+      {$IFDEF GC_DEBUG}
+      WriteLn(Format('[GC] Collect: %d -> %d objects (%d freed)',
+        [BeforeCount, FManagedObjects.Count, BeforeCount - FManagedObjects.Count]));
+      {$ENDIF}
+    finally
+      FCollecting := False;
+    end;
   finally
-    FCollecting := False;
+    LeaveCriticalSection(GCCollectionLock);
   end;
 end;
 
@@ -538,63 +650,77 @@ var
   EffectiveWatermark: Integer;
 begin
   if FCollecting then Exit;
-  FCollecting := True;
+  EnterCriticalSection(GCCollectionLock);
   try
-    EffectiveWatermark := AWatermark;
-    if EffectiveWatermark < 0 then
-      EffectiveWatermark := 0;
-    if EffectiveWatermark > FManagedObjects.Count then
-      EffectiveWatermark := FManagedObjects.Count;
+    if FCollecting then Exit;
+    FCollecting := True;
+    try
+      EffectiveWatermark := AWatermark;
+      if EffectiveWatermark < 0 then
+        EffectiveWatermark := 0;
+      if EffectiveWatermark > FManagedObjects.Count then
+        EffectiveWatermark := FManagedObjects.Count;
 
-    TGCManagedObject.AdvanceMark;
+      TGCManagedObject.AdvanceMark;
 
-    for I := 0 to EffectiveWatermark - 1 do
-    begin
-      Obj := FManagedObjects[I];
-      if Assigned(Obj) then
-        Obj.GCMarked := True;
-    end;
-
-    MarkRoots;
-    TraceWeakReferences;
-    SweepWeakReferences;
-
-    Collected := 0;
-    WriteIdx := EffectiveWatermark;
-
-    for I := EffectiveWatermark to FManagedObjects.Count - 1 do
-    begin
-      Obj := FManagedObjects[I];
-      if Obj = nil then
-        Continue;
-      if Obj.GCMarked then
+      for I := 0 to EffectiveWatermark - 1 do
       begin
-        Obj.GCIndex := WriteIdx;
-        FManagedObjects[WriteIdx] := Obj;
-        Inc(WriteIdx);
-      end
-      else
-      begin
-        Dec(FBytesAllocated, Obj.InstanceSize);
-        Obj.GCIndex := -1;
-        Obj.Recycle;
-        Inc(Collected);
+        Obj := FManagedObjects[I];
+        if Assigned(Obj) then
+          Obj.GCMarked := True;
       end;
-    end;
 
-    FManagedObjects.Count := WriteIdx;
-    if FManagedObjects.Capacity > 4 * WriteIdx + 256 then
-      FManagedObjects.Capacity := WriteIdx + (WriteIdx div 2);
-    FAllocationsSinceLastGC := 0;
-    FTotalCollected := FTotalCollected + Collected;
-    Inc(FTotalCollections);
-    {$IFDEF GC_DEBUG}
-    WriteLn(Format('[GC] CollectYoung(wm=%d): %d total, %d young, %d freed, %d surviving',
-      [AWatermark, EffectiveWatermark + (FManagedObjects.Count - EffectiveWatermark) + Collected,
-       FManagedObjects.Count - EffectiveWatermark + Collected, Collected, FManagedObjects.Count]));
-    {$ENDIF}
+      MarkRoots;
+      TraceWeakReferences;
+      SweepWeakReferences;
+
+      Collected := 0;
+      WriteIdx := EffectiveWatermark;
+
+      for I := EffectiveWatermark to FManagedObjects.Count - 1 do
+      begin
+        Obj := FManagedObjects[I];
+        if Obj = nil then
+          Continue;
+        if Obj.GCMarked then
+        begin
+          Obj.GCIndex := WriteIdx;
+          FManagedObjects[WriteIdx] := Obj;
+          Inc(WriteIdx);
+        end
+        else if (FActiveRootStack.Count > 0) and
+                (not Obj.CanRecycleDuringActiveCall) then
+        begin
+          Obj.GCIndex := WriteIdx;
+          FManagedObjects[WriteIdx] := Obj;
+          Inc(WriteIdx);
+        end
+        else
+        begin
+          Dec(FBytesAllocated, Obj.InstanceSize);
+          Obj.GCIndex := -1;
+          Obj.Recycle;
+          Inc(Collected);
+        end;
+      end;
+
+      FManagedObjects.Count := WriteIdx;
+      FUnregisteredSlots := 0;
+      if FManagedObjects.Capacity > 4 * WriteIdx + 256 then
+        FManagedObjects.Capacity := WriteIdx + (WriteIdx div 2);
+      FAllocationsSinceLastGC := 0;
+      FTotalCollected := FTotalCollected + Collected;
+      Inc(FTotalCollections);
+      {$IFDEF GC_DEBUG}
+      WriteLn(Format('[GC] CollectYoung(wm=%d): %d total, %d young, %d freed, %d surviving',
+        [AWatermark, EffectiveWatermark + (FManagedObjects.Count - EffectiveWatermark) + Collected,
+         FManagedObjects.Count - EffectiveWatermark + Collected, Collected, FManagedObjects.Count]));
+      {$ENDIF}
+    finally
+      FCollecting := False;
+    end;
   finally
-    FCollecting := False;
+    LeaveCriticalSection(GCCollectionLock);
   end;
 end;
 
@@ -638,7 +764,16 @@ begin
   Result := FManagedObjects.Count;
 end;
 
+function TGarbageCollector.GetActiveRootCount: Integer;
+begin
+  Result := FActiveRootStack.Count;
+end;
+
 initialization
+  InitCriticalSection(GCCollectionLock);
   GCCurrentMark := 1;
+
+finalization
+  DoneCriticalSection(GCCollectionLock);
 
 end.

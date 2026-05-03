@@ -70,7 +70,8 @@ begin
   FPrimitive := APrimitive;
   InitializePrototype;
   SharedPrototype := GetSharedBigIntPrototype;
-  if not Assigned(AClass) and Assigned(SharedPrototype) then
+  if not Assigned(AClass) and Assigned(SharedPrototype) and
+     (Self <> FPrototypeMethodHost) then
     FPrototype := SharedPrototype;
 end;
 

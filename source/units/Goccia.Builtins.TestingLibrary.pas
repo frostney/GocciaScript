@@ -13,6 +13,7 @@ uses
   Goccia.Builtins.Base,
   Goccia.Error,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.GarbageCollector,
   Goccia.Scope,
   Goccia.Values.ArrayValue,
   Goccia.Values.FunctionBase,
@@ -94,6 +95,7 @@ type
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
+    function MarkEscapedReferencesIn(const AVisited: TGCObjectSet): Boolean; override;
   end;
 
   // Expectation object that provides matchers
@@ -291,7 +293,6 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.Comparison,
   Goccia.FetchManager,
-  Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.RegExp.Runtime,
   Goccia.Timeout,
@@ -361,6 +362,23 @@ begin
     RemoveTempRootIfNeeded(ACollection.GetElement(I));
 end;
 
+procedure MarkEscapedIfNeeded(const AValue: TGocciaValue);
+begin
+  if Assigned(AValue) and AValue.CanContainEscapedReferences then
+    AValue.MarkEscapedReferences;
+end;
+
+procedure MarkEscapedCollection(const ACollection: TGocciaArgumentsCollection);
+var
+  I: Integer;
+begin
+  if not Assigned(ACollection) then
+    Exit;
+
+  for I := 0 to ACollection.Length - 1 do
+    MarkEscapedIfNeeded(ACollection.GetElement(I));
+end;
+
 { TGocciaRegisteredEntry }
 
 constructor TGocciaRegisteredEntry.Create(const AParentSuite: TGocciaTestSuite;
@@ -392,6 +410,8 @@ begin
   AfterEachCallbacks := TGocciaArgumentsCollection.Create;
   AfterAllCallbacks := TGocciaArgumentsCollection.Create;
 
+  MarkEscapedIfNeeded(SuiteFunction);
+  MarkEscapedCollection(SuiteArguments);
   AddTempRootIfNeeded(SuiteFunction);
   AddCollectionRoots(SuiteArguments);
 end;
@@ -422,6 +442,7 @@ end;
 procedure TGocciaTestSuite.AddHook(const ACallback: TGocciaFunctionBase;
   const APhase: TGocciaTestHookPhase);
 begin
+  MarkEscapedIfNeeded(ACallback);
   AddTempRootIfNeeded(ACallback);
 
   case APhase of
@@ -484,6 +505,8 @@ begin
     TestArguments := TGocciaArgumentsCollection.Create;
   IsTodo := AIsTodo;
 
+  MarkEscapedIfNeeded(TestFunction);
+  MarkEscapedCollection(TestArguments);
   AddTempRootIfNeeded(TestFunction);
   AddCollectionRoots(TestArguments);
 end;
@@ -597,6 +620,16 @@ begin
   inherited;
   if Assigned(FTable) then
     FTable.MarkReferences;
+end;
+
+function TGocciaParameterizedRegistrationFunction.MarkEscapedReferencesIn(
+  const AVisited: TGCObjectSet): Boolean;
+begin
+  Result := inherited MarkEscapedReferencesIn(AVisited);
+  if not Result then
+    Exit;
+  if Assigned(FTable) and FTable.CanContainEscapedReferences then
+    FTable.MarkEscapedReferencesIn(AVisited);
 end;
 
 { TGocciaExpectationValue }
@@ -3467,6 +3500,7 @@ begin
   if not (AArgs.GetElement(0) is TGocciaFunctionBase) then
     Goccia.Values.ErrorHelper.ThrowTypeError(SErrorOnTestFinishedExpectsFunction, SSuggestTestUsage);
 
+  MarkEscapedIfNeeded(AArgs.GetElement(0));
   AddTempRootIfNeeded(AArgs.GetElement(0));
   FOnTestFinishedCallbacks.Add(AArgs.GetElement(0));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
