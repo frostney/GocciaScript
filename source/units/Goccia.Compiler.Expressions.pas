@@ -90,7 +90,8 @@ procedure EmitDefaultParameters(const ACtx: TGocciaCompilationContext;
 procedure CollectDestructuringBindings(const APattern: TGocciaDestructuringPattern;
   const AScope: TGocciaCompilerScope; const AIsConst: Boolean = False);
 procedure EmitDestructuring(const ACtx: TGocciaCompilationContext;
-  const APattern: TGocciaDestructuringPattern; const ASrcReg: UInt8);
+  const APattern: TGocciaDestructuringPattern; const ASrcReg: UInt8;
+  const AAssignmentMode: Boolean = False);
 procedure CompileDestructuringAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaDestructuringAssignmentExpression; const ADest: UInt8);
 
@@ -831,15 +832,85 @@ begin
   end;
 end;
 
+procedure EmitBindingAssignmentFromRegister(const ACtx: TGocciaCompilationContext;
+  const AName: string; const AValueReg: UInt8;
+  const AAssignmentMode: Boolean);
+var
+  LocalIdx, UpvalIdx: Integer;
+  Local: TGocciaCompilerLocal;
+  Upvalue: TGocciaCompilerUpvalue;
+  Slot: UInt8;
+begin
+  LocalIdx := ACtx.Scope.ResolveLocal(AName);
+  if LocalIdx >= 0 then
+  begin
+    Local := ACtx.Scope.GetLocal(LocalIdx);
+    if AAssignmentMode and Local.IsConst then
+    begin
+      EmitConstAssignmentError(ACtx);
+      Exit;
+    end;
+    if AAssignmentMode and Local.IsStrictlyTyped and
+       (Local.TypeHint <> sltUntyped) then
+      EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, AValueReg,
+        UInt8(Ord(Local.TypeHint)), 0));
+    if Local.IsGlobalBacked then
+    begin
+      EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, AValueReg,
+        ACtx.Template.AddConstantString(AName)));
+      Exit;
+    end;
+    Slot := Local.Slot;
+    if AAssignmentMode then
+    begin
+      if Slot <> AValueReg then
+        EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, AValueReg, UInt16(Slot)))
+      else if Local.IsCaptured then
+        EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
+      Exit;
+    end;
+    if Slot <> AValueReg then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, AValueReg, 0));
+    if Local.IsCaptured then
+      EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
+    Exit;
+  end;
+
+  UpvalIdx := ACtx.Scope.ResolveUpvalue(AName);
+  if UpvalIdx >= 0 then
+  begin
+    Upvalue := ACtx.Scope.GetUpvalue(UpvalIdx);
+    if AAssignmentMode and Upvalue.IsConst then
+    begin
+      EmitConstAssignmentError(ACtx);
+      Exit;
+    end;
+    if AAssignmentMode and Upvalue.IsStrictlyTyped and
+       (Upvalue.TypeHint <> sltUntyped) then
+      EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, AValueReg,
+        UInt8(Ord(Upvalue.TypeHint)), 0));
+    if Upvalue.IsGlobalBacked then
+      EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, AValueReg,
+        ACtx.Template.AddConstantString(AName)))
+    else
+      EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, AValueReg,
+        UInt16(UpvalIdx)));
+    Exit;
+  end;
+
+  EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, AValueReg,
+    ACtx.Template.AddConstantString(AName)));
+end;
+
 procedure EmitDestructuring(const ACtx: TGocciaCompilationContext;
-  const APattern: TGocciaDestructuringPattern; const ASrcReg: UInt8);
+  const APattern: TGocciaDestructuringPattern; const ASrcReg: UInt8;
+  const AAssignmentMode: Boolean);
 var
   ObjPat: TGocciaObjectDestructuringPattern;
   ArrPat: TGocciaArrayDestructuringPattern;
   AssignPat: TGocciaAssignmentDestructuringPattern;
   IdentPat: TGocciaIdentifierDestructuringPattern;
   Prop: TGocciaDestructuringProperty;
-  LocalIdx: Integer;
   DestSlot, IdxReg: UInt8;
   PropIdx: UInt16;
   JumpIdx, I: Integer;
@@ -850,40 +921,8 @@ begin
   if APattern is TGocciaIdentifierDestructuringPattern then
   begin
     IdentPat := TGocciaIdentifierDestructuringPattern(APattern);
-    LocalIdx := ACtx.Scope.ResolveLocal(IdentPat.Name);
-    if LocalIdx >= 0 then
-    begin
-      if ACtx.Scope.GetLocal(LocalIdx).IsGlobalBacked then
-      begin
-        EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ASrcReg,
-          ACtx.Template.AddConstantString(IdentPat.Name)));
-        Exit;
-      end;
-      DestSlot := ACtx.Scope.GetLocal(LocalIdx).Slot;
-      if DestSlot <> ASrcReg then
-        EmitInstruction(ACtx, EncodeABC(OP_MOVE, DestSlot, ASrcReg, 0));
-      // When a local was pre-declared for upvalue resolution and captured
-      // by a hoisted function closure, the cell holds the stale initial
-      // value.  OP_MOVE writes to the register but bypasses the cell.
-      // Emit OP_SET_LOCAL to sync the cell with the register.
-      if ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
-        EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, DestSlot, UInt16(DestSlot)));
-    end
-    else
-    begin
-      LocalIdx := ACtx.Scope.ResolveUpvalue(IdentPat.Name);
-      if LocalIdx >= 0 then
-      begin
-        if ACtx.Scope.GetUpvalue(LocalIdx).IsGlobalBacked then
-          EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ASrcReg,
-            ACtx.Template.AddConstantString(IdentPat.Name)))
-        else
-          EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, ASrcReg, UInt16(LocalIdx)));
-      end
-      else
-        EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ASrcReg,
-          ACtx.Template.AddConstantString(IdentPat.Name)));
-    end;
+    EmitBindingAssignmentFromRegister(ACtx, IdentPat.Name, ASrcReg,
+      AAssignmentMode);
   end
   else if APattern is TGocciaObjectDestructuringPattern then
   begin
@@ -912,7 +951,8 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_COLLECTION_OP, DestSlot,
           COLLECTION_OP_OBJECT_REST, ASrcReg));
         EmitDestructuring(ACtx,
-          TGocciaRestDestructuringPattern(Prop.Pattern).Argument, DestSlot);
+          TGocciaRestDestructuringPattern(Prop.Pattern).Argument, DestSlot,
+          AAssignmentMode);
         ACtx.Scope.FreeRegister;
         ACtx.Scope.FreeRegister;
         Break;
@@ -932,7 +972,7 @@ begin
         EmitLoadPropertyByName(ACtx, DestSlot, ASrcReg, Prop.Key);
       end;
 
-      EmitDestructuring(ACtx, Prop.Pattern, DestSlot);
+      EmitDestructuring(ACtx, Prop.Pattern, DestSlot, AAssignmentMode);
       ACtx.Scope.FreeRegister;
     end;
   end
@@ -1013,7 +1053,8 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_UNPACK, DestSlot, ASrcReg,
           UInt8(I)));
         EmitDestructuring(ACtx,
-          TGocciaRestDestructuringPattern(ArrPat.Elements[I]).Argument, DestSlot);
+          TGocciaRestDestructuringPattern(ArrPat.Elements[I]).Argument, DestSlot,
+          AAssignmentMode);
         ACtx.Scope.FreeRegister;
         Break;
       end;
@@ -1024,7 +1065,7 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, DestSlot, ASrcReg, IdxReg));
       ACtx.Scope.FreeRegister;
 
-      EmitDestructuring(ACtx, ArrPat.Elements[I], DestSlot);
+      EmitDestructuring(ACtx, ArrPat.Elements[I], DestSlot, AAssignmentMode);
       ACtx.Scope.FreeRegister;
     end;
   end
@@ -1034,7 +1075,7 @@ begin
     EmitUndefinedCheck(ACtx, ASrcReg, JumpIdx);
     ACtx.CompileExpression(AssignPat.Right, ASrcReg);
     PatchJumpTarget(ACtx, JumpIdx);
-    EmitDestructuring(ACtx, AssignPat.Left, ASrcReg);
+    EmitDestructuring(ACtx, AssignPat.Left, ASrcReg, AAssignmentMode);
   end
   else if APattern is TGocciaMemberExpressionDestructuringPattern then
   begin
@@ -1068,7 +1109,7 @@ var
 begin
   SrcReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AExpr.Right, SrcReg);
-  EmitDestructuring(ACtx, AExpr.Left, SrcReg);
+  EmitDestructuring(ACtx, AExpr.Left, SrcReg, True);
   if ADest <> SrcReg then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, SrcReg, 0));
   ACtx.Scope.FreeRegister;
@@ -2867,15 +2908,11 @@ procedure CompilePrivateMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaPrivateMemberExpression; const ADest: UInt8);
 var
   ObjReg: UInt8;
-  PropIdx: UInt16;
 begin
   ObjReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
-  PropIdx := ACtx.Template.AddConstantString(
+  EmitLoadPropertyByName(ACtx, ADest, ObjReg,
     PrivateKey(ACtx.Scope, AExpr.PrivateName));
-  if PropIdx > High(UInt8) then
-    raise Exception.Create('Constant pool overflow: private property name index exceeds 255');
-  EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, ADest, ObjReg, UInt8(PropIdx)));
   ACtx.Scope.FreeRegister;
 end;
 
@@ -2883,17 +2920,13 @@ procedure CompilePrivatePropertyAssignment(const ACtx: TGocciaCompilationContext
   const AExpr: TGocciaPrivatePropertyAssignmentExpression; const ADest: UInt8);
 var
   ObjReg, ValReg: UInt8;
-  KeyIdx: UInt16;
 begin
   ObjReg := ACtx.Scope.AllocateRegister;
   ValReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
   ACtx.CompileExpression(AExpr.Value, ValReg);
-  KeyIdx := ACtx.Template.AddConstantString(
-    PrivateKey(ACtx.Scope, AExpr.PrivateName));
-  if KeyIdx > High(UInt8) then
-    raise Exception.Create('Constant pool overflow: private property name index exceeds 255');
-  EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ObjReg, UInt8(KeyIdx), ValReg));
+  EmitStorePropertyByName(ACtx, ObjReg,
+    PrivateKey(ACtx.Scope, AExpr.PrivateName), ValReg);
   if ADest <> ValReg then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, ValReg, 0));
   ACtx.Scope.FreeRegister;
@@ -2907,7 +2940,7 @@ procedure CompilePrivatePropertyCompoundAssignment(
 var
   ObjReg, CurReg, ValReg: UInt8;
   Op: TGocciaOpCode;
-  PropIdx: UInt16;
+  PrivatePropKey: string;
   JumpIdx: Integer;
 begin
   // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??=/&&=/||= AssignmentExpression
@@ -2916,14 +2949,11 @@ begin
     ObjReg := ACtx.Scope.AllocateRegister;
     CurReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
-    PropIdx := ACtx.Template.AddConstantString(
-      PrivateKey(ACtx.Scope, AExpr.PrivateName));
-    if PropIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow: private property name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, CurReg, ObjReg, UInt8(PropIdx)));
+    PrivatePropKey := PrivateKey(ACtx.Scope, AExpr.PrivateName);
+    EmitLoadPropertyByName(ACtx, CurReg, ObjReg, PrivatePropKey);
     JumpIdx := EmitJumpInstruction(ACtx, ShortCircuitJumpOp(AExpr.Operator), CurReg);
     ACtx.CompileExpression(AExpr.Value, CurReg);
-    EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ObjReg, UInt8(PropIdx), CurReg));
+    EmitStorePropertyByName(ACtx, ObjReg, PrivatePropKey, CurReg);
     PatchJumpTarget(ACtx, JumpIdx);
     if ADest <> CurReg then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
@@ -2937,14 +2967,11 @@ begin
   CurReg := ACtx.Scope.AllocateRegister;
   ValReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
-  PropIdx := ACtx.Template.AddConstantString(
-    PrivateKey(ACtx.Scope, AExpr.PrivateName));
-  if PropIdx > High(UInt8) then
-    raise Exception.Create('Constant pool overflow: private property name index exceeds 255');
-  EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, CurReg, ObjReg, UInt8(PropIdx)));
+  PrivatePropKey := PrivateKey(ACtx.Scope, AExpr.PrivateName);
+  EmitLoadPropertyByName(ACtx, CurReg, ObjReg, PrivatePropKey);
   ACtx.CompileExpression(AExpr.Value, ValReg);
   EmitInstruction(ACtx, EncodeABC(Op, CurReg, CurReg, ValReg));
-  EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ObjReg, UInt8(PropIdx), CurReg));
+  EmitStorePropertyByName(ACtx, ObjReg, PrivatePropKey, CurReg);
   if ADest <> CurReg then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
   ACtx.Scope.FreeRegister;

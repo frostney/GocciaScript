@@ -902,6 +902,11 @@ begin
     Result := TGocciaAwaitExpression.Create(Right, Operator.Line, Operator.Column);
     Exit;
   end;
+  if (FInAsyncFunction > 0) and Check(gttIdentifier) and
+     (Peek.Lexeme = KEYWORD_AWAIT) and not IsAwaitOperandStart then
+    raise TGocciaSyntaxError.Create('Expected expression after "await"',
+      Peek.Line, Peek.Column, FFileName, FSourceLines,
+      SSuggestExpressionExpected);
 
   if (FInGeneratorFunction > 0) and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_YIELD) then
   begin

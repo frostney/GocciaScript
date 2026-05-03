@@ -7503,8 +7503,15 @@ begin
             SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
               TGocciaSymbolValue(FRegisters[C].ObjectValue)))
           else
-            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
-              KeyToPropertyNameRegister(FRegisters[C])));
+          begin
+            GlobalName := KeyToPropertyNameRegister(FRegisters[C]);
+            if IsBytecodePrivateKey(GlobalName) then
+              SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
+                GlobalName))
+            else
+              SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
+                GlobalName));
+          end;
         end
         else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaObjectValue) then
@@ -7513,13 +7520,20 @@ begin
              (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
             SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetSymbolProperty(
               TGocciaSymbolValue(FRegisters[C].ObjectValue)))
-          else if (FRegisters[B].ObjectValue is TGocciaVMLiteralObjectValue) and
-                  TGocciaVMLiteralObjectValue(FRegisters[B].ObjectValue).TryGetOwnDataPropertyFastRegister(
-                    KeyToPropertyNameRegister(FRegisters[C]), FRegisters[A]) then
-            { fast path already assigned }
           else
-            SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetProperty(
-              KeyToPropertyNameRegister(FRegisters[C])));
+          begin
+            GlobalName := KeyToPropertyNameRegister(FRegisters[C]);
+            if IsBytecodePrivateKey(GlobalName) then
+              SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
+                GlobalName))
+            else if (FRegisters[B].ObjectValue is TGocciaVMLiteralObjectValue) and
+                    TGocciaVMLiteralObjectValue(FRegisters[B].ObjectValue).TryGetOwnDataPropertyFastRegister(
+                      GlobalName, FRegisters[A]) then
+              { fast path already assigned }
+            else
+              SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetProperty(
+                GlobalName));
+          end;
         end
         else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) then
@@ -7570,9 +7584,15 @@ begin
             TGocciaClassValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
               TGocciaSymbolValue(FRegisters[B].ObjectValue), RightValue)
           else
-            TGocciaClassValue(FRegisters[A].ObjectValue).SetProperty(
-              KeyToPropertyNameRegister(FRegisters[B]),
-              RightValue);
+          begin
+            GlobalName := KeyToPropertyNameRegister(FRegisters[B]);
+            if IsBytecodePrivateKey(GlobalName) then
+              SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
+                RightValue)
+            else
+              TGocciaClassValue(FRegisters[A].ObjectValue).SetProperty(
+                GlobalName, RightValue);
+          end;
         end
         else if (FRegisters[A].Kind = grkObject) and
                 (FRegisters[A].ObjectValue is TGocciaObjectValue) then
@@ -7583,9 +7603,15 @@ begin
             TGocciaObjectValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
               TGocciaSymbolValue(FRegisters[B].ObjectValue), RightValue)
           else
-            TGocciaObjectValue(FRegisters[A].ObjectValue).SetProperty(
-              KeyToPropertyNameRegister(FRegisters[B]),
-              RightValue);
+          begin
+            GlobalName := KeyToPropertyNameRegister(FRegisters[B]);
+            if IsBytecodePrivateKey(GlobalName) then
+              SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
+                RightValue)
+            else
+              TGocciaObjectValue(FRegisters[A].ObjectValue).SetProperty(
+                GlobalName, RightValue);
+          end;
         end
         else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaSymbolValue) then

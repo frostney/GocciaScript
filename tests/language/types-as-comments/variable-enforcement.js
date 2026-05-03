@@ -81,6 +81,12 @@ test("reassignment with correct type works", () => {
   expect(b).toBe(false);
 });
 
+test("number annotation rejects destructuring reassignment", () => {
+  let x: number = 1;
+  expect(() => { [x] = ["wrong"]; }).toThrow(TypeError);
+  expect(x).toBe(1);
+});
+
 test("error message includes type names", () => {
   let x: number = 1;
   let err = null;
