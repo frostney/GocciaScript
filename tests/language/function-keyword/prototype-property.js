@@ -165,15 +165,13 @@ test("async generator function.prototype's [[Prototype]] is Object.prototype (Go
   expect(Object.getPrototypeOf(g.prototype)).toBe(Object.prototype);
 });
 
-test("methods added to prototype are visible to instances via [[Prototype]] chain (interpreter only — new on plain functions is not yet wired)", () => {
-  // We can verify the prototype chain mechanically without invoking `new`:
-  // Object.create(f.prototype) gives us an object whose [[Prototype]] is f.prototype.
+test("methods added to prototype are visible to instances via [[Prototype]] chain", () => {
   function Animal() {}
   Animal.prototype.speak = function () {
     return "generic sound";
   };
 
-  const dog = Object.create(Animal.prototype);
+  const dog = new Animal();
   expect(dog.speak()).toBe("generic sound");
   expect(Object.getPrototypeOf(dog)).toBe(Animal.prototype);
 });

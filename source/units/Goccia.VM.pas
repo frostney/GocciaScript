@@ -2284,8 +2284,10 @@ function InvokeConstructableWithReceiver(const AConstructor: TGocciaValue;
   const AReceiver: TGocciaValue): TGocciaValue;
 var
   BoundFunction: TGocciaBoundFunctionValue;
+  ClassConstructor: TGocciaClassValue;
   CombinedArgs: TGocciaArgumentsCollection;
   SuperResult: TGocciaValue;
+  ConstructorThisValue: TGocciaValue;
   I: Integer;
 begin
   if AConstructor is TGocciaBoundFunctionValue then
@@ -2318,11 +2320,27 @@ begin
     SuperResult := TGocciaNativeFunctionValue(AConstructor).Call(
       AArguments, TGocciaHoleValue.HoleValue);
   end
+  else if AConstructor is TGocciaVMClassValue then
+    // Bytecode-compiled classes store the constructor as FConstructorValue
+    // (a TGocciaBytecodeFunctionValue), not FConstructorMethod, so route
+    // them through Instantiate which knows how to invoke that path and
+    // apply ApplyOwnConstructorResult's receiver-swap rules.
+    SuperResult := TGocciaVMClassValue(AConstructor).Instantiate(AArguments)
   else if AConstructor is TGocciaClassValue then
   begin
-    if Assigned(TGocciaClassValue(AConstructor).ConstructorMethod) then
-      SuperResult := TGocciaClassValue(AConstructor).ConstructorMethod.Call(
-        AArguments, AReceiver)
+    ClassConstructor := TGocciaClassValue(AConstructor);
+    if Assigned(ClassConstructor.ConstructorMethod) then
+    begin
+      // Mirror the Evaluator path: CallWithThisValue returns the constructor's
+      // final `this` (which the body may have replaced via an explicit return)
+      // so we can promote it as the receiver when the body returned a primitive.
+      SuperResult := ClassConstructor.ConstructorMethod.CallWithThisValue(
+        AArguments, AReceiver, ConstructorThisValue);
+      ValidateClassConstructorReturn(ClassConstructor, SuperResult);
+      if not (SuperResult is TGocciaObjectValue) and
+         (ConstructorThisValue is TGocciaObjectValue) then
+        SuperResult := ConstructorThisValue;
+    end
     else
       SuperResult := AReceiver;
   end
@@ -4479,6 +4497,9 @@ var
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   Context: TGocciaEvaluationContext;
   ConstructorName: string;
+  PrototypeTarget: TGocciaValue;
+  PrototypeValue: TGocciaValue;
+  ReceiverPrototype, ReceiverInstance: TGocciaObjectValue;
 begin
   // ES2026 §28.1.1 [[Construct]](argumentsList, newTarget)
   if AConstructor is TGocciaProxyValue then
@@ -4542,14 +4563,47 @@ begin
     if not TGocciaFunctionBase(AConstructor).IsConstructable then
       ThrowTypeError(Format(SErrorNotConstructor, [ConstructorName]),
         SSuggestNotConstructorType);
-    if Assigned(TGocciaCallStack.Instance) then
-      TGocciaCallStack.Instance.Push(ConstructorName, '', 0, 0);
+    // ES2026 §10.2.2 [[Construct]] for ordinary function objects:
+    // OrdinaryCreateFromConstructor allocates a fresh object whose
+    // [[Prototype]] is constructor.prototype (or %Object.prototype% when
+    // that property is not an Object — §10.1.14 GetPrototypeFromConstructor),
+    // then calls the body with the new object bound as `this`.  Iff the body
+    // explicitly returns an Object, that becomes the call result.
+    // For bound function exotic objects (§10.4.1.2) the receiver's
+    // [[Prototype]] comes from the underlying [[BoundTargetFunction]] —
+    // the bound wrapper itself has no own `prototype` data property.
+    PrototypeTarget := AConstructor;
+    while PrototypeTarget is TGocciaBoundFunctionValue do
+      PrototypeTarget := TGocciaBoundFunctionValue(PrototypeTarget).OriginalFunction;
+    if PrototypeTarget is TGocciaObjectValue then
+      PrototypeValue := TGocciaObjectValue(PrototypeTarget).GetProperty(PROP_PROTOTYPE)
+    else
+      PrototypeValue := nil;
+    if PrototypeValue is TGocciaObjectValue then
+      ReceiverPrototype := TGocciaObjectValue(PrototypeValue)
+    else
+    begin
+      if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+        TGocciaObjectValue.InitializeSharedPrototype;
+      ReceiverPrototype := TGocciaObjectValue.SharedObjectPrototype;
+    end;
+    ReceiverInstance := TGocciaObjectValue.Create(ReceiverPrototype);
+    TGarbageCollector.Instance.AddTempRoot(ReceiverInstance);
     try
-      Result := TGocciaFunctionBase(AConstructor).Call(
-        AArguments, TGocciaUndefinedLiteralValue.UndefinedValue);
-    finally
       if Assigned(TGocciaCallStack.Instance) then
-        TGocciaCallStack.Instance.Pop;
+        TGocciaCallStack.Instance.Push(ConstructorName, '', 0, 0);
+      try
+        // InvokeConstructableWithReceiver merges bound args, dispatches to
+        // the underlying target, and applies the spec return rules
+        // (explicit Object return wins; otherwise the receiver).
+        Result := InvokeConstructableWithReceiver(AConstructor, AArguments,
+          ReceiverInstance);
+      finally
+        if Assigned(TGocciaCallStack.Instance) then
+          TGocciaCallStack.Instance.Pop;
+      end;
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(ReceiverInstance);
     end;
     Exit;
   end;
