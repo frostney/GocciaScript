@@ -4,10 +4,10 @@
  *
  * App-specific features: GocciaScriptLoader (JSON output, --global/--globals,
  * coverage, source maps), GocciaScriptLoaderBare (core-engine-only stdin/file
- * execution and runtime-global absence), GocciaBundler (compile, roundtrip,
- * stdin, directory, .gbc rejection, source maps), GocciaBenchmarkRunner (file,
- * stdin, bytecode), GocciaREPL (banner, evaluation, ASI, error recovery,
- * bytecode).
+ * execution, CLI print, and runtime-global absence), GocciaBundler (compile,
+ * roundtrip, stdin, directory, .gbc rejection, source maps),
+ * GocciaBenchmarkRunner (file, stdin, bytecode), GocciaREPL (banner,
+ * evaluation, ASI, error recovery, bytecode).
  */
 
 import { $ } from "bun";
@@ -390,9 +390,22 @@ console.log("Bare Loader: file input...");
   }
 }
 
+console.log("Bare Loader: print global...");
+{
+  const proc = Bun.spawnSync([BARE], {
+    stdin: new TextEncoder().encode("print('hello', 7); undefined;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare print exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "hello 7") throw new Error(`Bare print expected hello 7, got: ${proc.stdout.toString()}`);
+}
+
 console.log("Bare Loader: no runtime globals...");
 {
   const source = [
+    "typeof print + ':' +",
+    "typeof globalThis.print + ':' +",
     "typeof console + ':' +",
     "typeof FFI + ':' +",
     "typeof Goccia + ':' +",
@@ -406,7 +419,7 @@ console.log("Bare Loader: no runtime globals...");
   });
   if (proc.exitCode !== 0) throw new Error(`Bare runtime-global check exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   const output = proc.stdout.toString().trim();
-  if (output !== "undefined:undefined:object:true")
+  if (output !== "function:function:undefined:undefined:object:true")
     throw new Error(`Bare runtime-global check mismatch, got: ${output}`);
 }
 
