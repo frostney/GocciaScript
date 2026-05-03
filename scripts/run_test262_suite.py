@@ -223,6 +223,26 @@ def _strip_use_strict(body: str) -> str:
     return re.sub(r"^(\s*)'use strict'\s*;?\s*\n", "", body)
 
 
+CLEAR_PUBLIC_HARNESS_GLOBALS = """globalThis.expect = undefined;
+globalThis.describe = undefined;
+globalThis.test = undefined;
+globalThis.it = undefined;
+globalThis.beforeAll = undefined;
+globalThis.afterAll = undefined;
+globalThis.beforeEach = undefined;
+globalThis.afterEach = undefined;
+globalThis.onTestFinished = undefined;
+globalThis.runTests = undefined;
+globalThis.mock = undefined;
+globalThis.spyOn = undefined;"""
+
+CAPTURE_PRIVATE_HARNESS_GLOBALS = """const __gocciaTest262RegisterDescribe = globalThis.describe;
+const __gocciaTest262RegisterTest = globalThis.test;
+const __gocciaTest262RunTests = globalThis.runTests;"""
+
+RESTORE_INTERNAL_HARNESS_GLOBALS = """globalThis.runTests = __gocciaTest262RunTests;"""
+
+
 def wrap_positive_test(
     harness_source: str,
     test_body: str,
@@ -235,31 +255,15 @@ def wrap_positive_test(
     body = _strip_use_strict(test_body)
     desc = _escape_js_string(description or test_id)
     tid = _escape_js_string(test_id)
-    clear_public_harness_globals = """globalThis.expect = undefined;
-globalThis.describe = undefined;
-globalThis.test = undefined;
-globalThis.it = undefined;
-globalThis.beforeAll = undefined;
-globalThis.afterAll = undefined;
-globalThis.beforeEach = undefined;
-globalThis.afterEach = undefined;
-globalThis.onTestFinished = undefined;
-globalThis.runTests = undefined;
-globalThis.mock = undefined;
-globalThis.spyOn = undefined;"""
-    capture_private_harness_globals = """const __gocciaTest262RegisterDescribe = globalThis.describe;
-const __gocciaTest262RegisterTest = globalThis.test;
-const __gocciaTest262RunTests = globalThis.runTests;"""
-    restore_internal_harness_globals = """globalThis.runTests = __gocciaTest262RunTests;"""
 
     if preserve_script_scope:
         if is_async:
             return f"""{harness_source}
 
-{capture_private_harness_globals}
-{clear_public_harness_globals}
+{CAPTURE_PRIVATE_HARNESS_GLOBALS}
+{CLEAR_PUBLIC_HARNESS_GLOBALS}
 {body}
-{restore_internal_harness_globals}
+{RESTORE_INTERNAL_HARNESS_GLOBALS}
 
 __gocciaTest262RegisterDescribe("test262: {tid}", () => {{
   __gocciaTest262RegisterTest("{desc}", async () => {{
@@ -270,10 +274,10 @@ __gocciaTest262RegisterDescribe("test262: {tid}", () => {{
 
         return f"""{harness_source}
 
-{capture_private_harness_globals}
-{clear_public_harness_globals}
+{CAPTURE_PRIVATE_HARNESS_GLOBALS}
+{CLEAR_PUBLIC_HARNESS_GLOBALS}
 {body}
-{restore_internal_harness_globals}
+{RESTORE_INTERNAL_HARNESS_GLOBALS}
 
 __gocciaTest262RegisterDescribe("test262: {tid}", () => {{
   __gocciaTest262RegisterTest("{desc}", () => {{}});
@@ -283,8 +287,8 @@ __gocciaTest262RegisterDescribe("test262: {tid}", () => {{
     if is_async:
         return f"""{harness_source}
 
-{capture_private_harness_globals}
-{clear_public_harness_globals}
+{CAPTURE_PRIVATE_HARNESS_GLOBALS}
+{CLEAR_PUBLIC_HARNESS_GLOBALS}
 let __gocciaTest262Failed = false;
 let __gocciaTest262Failure = undefined;
 try {{
@@ -293,7 +297,7 @@ try {{
   __gocciaTest262Failed = true;
   __gocciaTest262Failure = error;
 }}
-{restore_internal_harness_globals}
+{RESTORE_INTERNAL_HARNESS_GLOBALS}
 
 __gocciaTest262RegisterDescribe("test262: {tid}", () => {{
   __gocciaTest262RegisterTest("{desc}", async () => {{
@@ -307,8 +311,8 @@ __gocciaTest262RegisterDescribe("test262: {tid}", () => {{
 
     return f"""{harness_source}
 
-{capture_private_harness_globals}
-{clear_public_harness_globals}
+{CAPTURE_PRIVATE_HARNESS_GLOBALS}
+{CLEAR_PUBLIC_HARNESS_GLOBALS}
 let __gocciaTest262Failed = false;
 let __gocciaTest262Failure = undefined;
 try {{
@@ -317,7 +321,7 @@ try {{
   __gocciaTest262Failed = true;
   __gocciaTest262Failure = error;
 }}
-{restore_internal_harness_globals}
+{RESTORE_INTERNAL_HARNESS_GLOBALS}
 
 __gocciaTest262RegisterDescribe("test262: {tid}", () => {{
   __gocciaTest262RegisterTest("{desc}", () => {{
@@ -345,10 +349,13 @@ def wrap_negative_runtime_test(
 
     return f"""{harness_source}
 
-globalThis.expect = undefined;
+{CAPTURE_PRIVATE_HARNESS_GLOBALS}
+{CLEAR_PUBLIC_HARNESS_GLOBALS}
 
-__gocciaTest262Describe("test262: {tid}", () => {{
-  __gocciaTest262Test("{desc}", () => {{
+{RESTORE_INTERNAL_HARNESS_GLOBALS}
+
+__gocciaTest262RegisterDescribe("test262: {tid}", () => {{
+  __gocciaTest262RegisterTest("{desc}", () => {{
     assert.throws({error_type}, () => {{
 {strict_directive}
 {body}
