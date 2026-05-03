@@ -10,6 +10,7 @@
 import { $ } from "bun";
 import {
   mkdtempSync,
+  mkdirSync,
   writeFileSync,
   readFileSync,
   existsSync,
@@ -178,6 +179,68 @@ console.log("--compat-var (Loader + Bundler + TestRunner)...");
     );
     const trOut = await $`${TESTRUNNER} ${testSrc} --compat-var --no-progress 2>&1`.text();
     if (!trOut.includes("Passed: 1")) throw new Error(`TestRunner --compat-var expected Passed: 1, got: ${trOut}`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// -- --compat-all (Loader + Bare + TestRunner) ----------------------------------
+
+console.log("--compat-all (Loader + Bare + TestRunner)...");
+{
+  const tmp = mkdtempSync(join(tmpdir(), "goccia-compat-all-"));
+  try {
+    // Source uses both var and function — both compat flags required.
+    const src = join(tmp, "use-both.js");
+    writeFileSync(src, "var x = 10;\nfunction f() { return x; }\nf();\n");
+
+    // Loader with --compat-all matches enumerating both flags.
+    const allOut = await $`${LOADER} ${src} --compat-all 2>&1`.text();
+    if (!allOut.includes("Result: 10")) throw new Error(`Loader --compat-all expected Result: 10, got: ${allOut}`);
+    const enumOut = await $`${LOADER} ${src} --compat-var --compat-function 2>&1`.text();
+    if (!enumOut.includes("Result: 10")) throw new Error(`Loader enumerated flags expected Result: 10, got: ${enumOut}`);
+
+    // Without any compat flag the source must fail (function declaration unsupported).
+    const noFlag = await $`${LOADER} ${src} 2>&1`.nothrow();
+    if (noFlag.exitCode === 0) throw new Error("Loader without compat flags should reject var/function");
+
+    // Bare loader with --compat-all.
+    const bareOut = await $`${BARE} ${src} --compat-all 2>&1`.text();
+    if (!bareOut.includes("10")) throw new Error(`Bare --compat-all expected output 10, got: ${bareOut}`);
+    const bareNoFlag = await $`${BARE} ${src} 2>&1`.nothrow();
+    if (bareNoFlag.exitCode === 0) throw new Error("Bare without compat flags should reject var/function");
+
+    // TestRunner with --compat-all.
+    const testSrc = join(tmp, "test-both.js");
+    writeFileSync(
+      testSrc,
+      [
+        "var y = 20;",
+        "function getY() { return y; }",
+        'describe("compat-all", () => {',
+        '  test("works", () => {',
+        "    expect(getY()).toBe(20);",
+        "  });",
+        "});",
+      ].join("\n") + "\n",
+    );
+    const trOut = await $`${TESTRUNNER} ${testSrc} --compat-all --no-progress 2>&1`.text();
+    if (!trOut.includes("Passed: 1")) throw new Error(`TestRunner --compat-all expected Passed: 1, got: ${trOut}`);
+
+    // goccia.json equivalent: "compat-all": true.
+    const cfgDir = join(tmp, "cfg");
+    mkdirSync(cfgDir);
+    writeFileSync(join(cfgDir, "goccia.json"), '{"compat-all": true}\n');
+    const cfgSrc = join(cfgDir, "use-both.js");
+    writeFileSync(cfgSrc, "var x = 10;\nfunction f() { return x; }\nf();\n");
+    const cfgOut = await $`${LOADER} ${cfgSrc} 2>&1`.text();
+    if (!cfgOut.includes("Result: 10")) throw new Error(`Config compat-all expected Result: 10, got: ${cfgOut}`);
+
+    // --help mentions --compat-all on every CLI.
+    for (const bin of [LOADER, BARE, REPL, TESTRUNNER, BUNDLER, BENCHRUNNER]) {
+      const help = await $`${bin} --help 2>&1`.text();
+      if (!help.includes("--compat-all")) throw new Error(`${bin} --help should mention --compat-all`);
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

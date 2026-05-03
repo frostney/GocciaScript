@@ -70,6 +70,7 @@ begin
   WriteLn('  --asi                         Enable automatic semicolon insertion');
   WriteLn('  --compat-var                  Enable var declarations');
   WriteLn('  --compat-function             Enable function declarations/expressions');
+  WriteLn('  --compat-all                  Enable all compatibility flags (--compat-*)');
   WriteLn('  --strict-types                Enforce type annotations at runtime');
   WriteLn('  --mode=interpreted|bytecode   Execution mode (default: interpreted)');
   WriteLn('  --source-type=script|module   Load entry as a script or module');
@@ -125,6 +126,11 @@ begin
       Result.CompatVar := True
     else if Arg = '--compat-function' then
       Result.CompatFunction := True
+    else if Arg = '--compat-all' then
+    begin
+      Result.CompatVar := True;
+      Result.CompatFunction := True;
+    end
     else if Arg = '--strict-types' then
       Result.StrictTypes := True
     else if Arg = '--unsafe-function-constructor' then

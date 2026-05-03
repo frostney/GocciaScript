@@ -166,6 +166,7 @@ type
     FStackSize: TGocciaIntegerOption;
     FCompatVar: TGocciaFlagOption;
     FCompatFunction: TGocciaFlagOption;
+    FCompatAll: TGocciaFlagOption;
     FStrictTypes: TGocciaFlagOption;
     FAllowedHosts: TGocciaRepeatableOption;
   public
@@ -187,6 +188,7 @@ type
     property StackSize: TGocciaIntegerOption read FStackSize;
     property CompatVar: TGocciaFlagOption read FCompatVar;
     property CompatFunction: TGocciaFlagOption read FCompatFunction;
+    property CompatAll: TGocciaFlagOption read FCompatAll;
     property StrictTypes: TGocciaFlagOption read FStrictTypes;
     property AllowedHosts: TGocciaRepeatableOption read FAllowedHosts;
   end;
@@ -571,6 +573,8 @@ begin
     'Enable var declarations (compatibility)', 'Engine');
   FCompatFunction := TGocciaFlagOption.Create('compat-function',
     'Enable function declarations and expressions (compatibility)', 'Engine');
+  FCompatAll := TGocciaFlagOption.Create('compat-all',
+    'Enable all compatibility flags (--compat-*)', 'Engine');
   FStrictTypes := TGocciaFlagOption.Create('strict-types',
     'Enforce type annotations at runtime (interpreter and bytecode)', 'Engine');
   FAllowedHosts := TGocciaRepeatableOption.Create('allowed-host',
@@ -593,6 +597,7 @@ begin
   FStackSize.Free;
   FCompatVar.Free;
   FCompatFunction.Free;
+  FCompatAll.Free;
   FStrictTypes.Free;
   FAllowedHosts.Free;
   inherited Destroy;
@@ -600,7 +605,7 @@ end;
 
 function TGocciaEngineOptions.Options: TGocciaOptionArray;
 begin
-  SetLength(Result, 15);
+  SetLength(Result, 16);
   Result[0] := FMode;
   Result[1] := FSourceType;
   Result[2] := FASI;
@@ -614,8 +619,9 @@ begin
   Result[10] := FStackSize;
   Result[11] := FCompatVar;
   Result[12] := FCompatFunction;
-  Result[13] := FStrictTypes;
-  Result[14] := FAllowedHosts;
+  Result[13] := FCompatAll;
+  Result[14] := FStrictTypes;
+  Result[15] := FAllowedHosts;
 end;
 
 { TGocciaCoverageOptions }
