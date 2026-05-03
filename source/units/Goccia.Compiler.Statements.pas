@@ -200,7 +200,8 @@ end;
 
 function IsArithmeticOp(const ATokenType: TGocciaTokenType): Boolean;
 begin
-  Result := ATokenType in [gttMinus, gttStar, gttSlash, gttPercent, gttPower];
+  Result := ATokenType in [gttPlus, gttMinus, gttStar, gttSlash,
+    gttPercent, gttPower];
 end;
 
 function IsComparisonOp(const ATokenType: TGocciaTokenType): Boolean;
@@ -241,6 +242,7 @@ var
   Bin: TGocciaBinaryExpression;
   Sequence: TGocciaSequenceExpression;
   LocalIdx: Integer;
+  Local: TGocciaCompilerLocal;
   LeftType, RightType: TGocciaLocalType;
   ObjAnnotation: string;
   Member: TGocciaMemberExpression;
@@ -260,9 +262,9 @@ begin
     LocalIdx := AScope.ResolveLocal(TGocciaIdentifierExpression(AExpr).Name);
     if LocalIdx >= 0 then
     begin
-      if AScope.GetLocal(LocalIdx).IsConst or
-         AScope.GetLocal(LocalIdx).IsStrictlyTyped then
-        Result := AScope.GetLocal(LocalIdx).TypeHint;
+      Local := AScope.GetLocal(LocalIdx);
+      if Local.IsConst or Local.IsStrictlyTyped or not Local.IsCaptured then
+        Result := Local.TypeHint;
     end
     else
     begin
@@ -347,6 +349,14 @@ begin
     Result := sltReference
   else if AExpr is TGocciaMethodExpression then
     Result := sltReference;
+end;
+
+function InferredExpressionType(const AScope: TGocciaCompilerScope;
+  const AExpr: TGocciaExpression): TGocciaLocalType;
+begin
+  Result := ExpressionType(AScope, AExpr);
+  if Result = sltUntyped then
+    Result := InferLocalType(AExpr);
 end;
 
 function IsUndefinedInitializer(const AExpr: TGocciaExpression): Boolean;
@@ -482,10 +492,10 @@ begin
 
     AnnotationType := TypeAnnotationToLocalType(Info.TypeAnnotation);
 
-    if AnnotationType <> sltUntyped then
+    if (AnnotationType <> sltUntyped) and ACtx.StrictTypes then
       TypeHint := AnnotationType
     else if (Info.TypeAnnotation = '') and HasRealInitializer then
-      TypeHint := InferLocalType(Info.Initializer)
+      TypeHint := InferredExpressionType(ACtx.Scope, Info.Initializer)
     else
       TypeHint := sltUntyped;
 
@@ -493,15 +503,18 @@ begin
       When disabled, type annotations are parsed but not enforced. }
     IsStrict := ACtx.StrictTypes and (TypeHint <> sltUntyped);
 
-    if IsStrict then
+    if TypeHint <> sltUntyped then
     begin
       LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
       if LocalIdx >= 0 then
       begin
         ACtx.Scope.SetLocalTypeHint(LocalIdx, TypeHint);
         ACtx.Template.SetLocalType(Slot, TypeHint);
-        ACtx.Scope.SetLocalStrictlyTyped(LocalIdx, True);
-        ACtx.Template.SetLocalStrictFlag(Slot, True);
+        if IsStrict then
+        begin
+          ACtx.Scope.SetLocalStrictlyTyped(LocalIdx, True);
+          ACtx.Template.SetLocalStrictFlag(Slot, True);
+        end;
       end;
     end;
 
@@ -756,6 +769,88 @@ begin
   end;
 
   Result := StatementAlwaysAbrupt(AStmt);
+end;
+
+function StatementNeedsIteratorClose(const AStmt: TGocciaStatement): Boolean;
+var
+  BlockStmt: TGocciaBlockStatement;
+  IfStmt: TGocciaIfStatement;
+  TryStmt: TGocciaTryStatement;
+  SwitchStmt: TGocciaSwitchStatement;
+  ForStmt: TGocciaForStatement;
+  WhileStmt: TGocciaWhileStatement;
+  DoWhileStmt: TGocciaDoWhileStatement;
+  ForOfStmt: TGocciaForOfStatement;
+  I, J: Integer;
+begin
+  if not Assigned(AStmt) then
+    Exit(False);
+
+  if (AStmt is TGocciaBreakStatement) or
+     (AStmt is TGocciaReturnStatement) or
+     (AStmt is TGocciaThrowStatement) then
+    Exit(True);
+
+  if AStmt is TGocciaBlockStatement then
+  begin
+    BlockStmt := TGocciaBlockStatement(AStmt);
+    for I := 0 to BlockStmt.Nodes.Count - 1 do
+      if (BlockStmt.Nodes[I] is TGocciaStatement) and
+         StatementNeedsIteratorClose(TGocciaStatement(BlockStmt.Nodes[I])) then
+        Exit(True);
+    Exit(False);
+  end;
+
+  if AStmt is TGocciaIfStatement then
+  begin
+    IfStmt := TGocciaIfStatement(AStmt);
+    Exit(StatementNeedsIteratorClose(IfStmt.Consequent) or
+      StatementNeedsIteratorClose(IfStmt.Alternate));
+  end;
+
+  if AStmt is TGocciaTryStatement then
+  begin
+    TryStmt := TGocciaTryStatement(AStmt);
+    Exit(StatementNeedsIteratorClose(TryStmt.Block) or
+      StatementNeedsIteratorClose(TryStmt.CatchBlock) or
+      StatementNeedsIteratorClose(TryStmt.FinallyBlock));
+  end;
+
+  if AStmt is TGocciaSwitchStatement then
+  begin
+    SwitchStmt := TGocciaSwitchStatement(AStmt);
+    for I := 0 to SwitchStmt.Cases.Count - 1 do
+      for J := 0 to SwitchStmt.Cases[I].Consequent.Count - 1 do
+        if StatementNeedsIteratorClose(SwitchStmt.Cases[I].Consequent[J]) then
+          Exit(True);
+    Exit(False);
+  end;
+
+  if AStmt is TGocciaForOfStatement then
+  begin
+    ForOfStmt := TGocciaForOfStatement(AStmt);
+    Exit(StatementNeedsIteratorClose(ForOfStmt.Body));
+  end;
+
+  if AStmt is TGocciaForStatement then
+  begin
+    ForStmt := TGocciaForStatement(AStmt);
+    Exit(StatementNeedsIteratorClose(ForStmt.Body));
+  end;
+
+  if AStmt is TGocciaWhileStatement then
+  begin
+    WhileStmt := TGocciaWhileStatement(AStmt);
+    Exit(StatementNeedsIteratorClose(WhileStmt.Body));
+  end;
+
+  if AStmt is TGocciaDoWhileStatement then
+  begin
+    DoWhileStmt := TGocciaDoWhileStatement(AStmt);
+    Exit(StatementNeedsIteratorClose(DoWhileStmt.Body));
+  end;
+
+  Result := False;
 end;
 
 procedure EmitPendingEntryCleanup(const ACtx: TGocciaCompilationContext;
@@ -1351,6 +1446,7 @@ procedure CompileForOfStatement(const ACtx: TGocciaCompilationContext;
 var
   IterReg, ValueReg, DoneReg, CloseErrorReg: UInt8;
   LoopStart, ExitJump, MismatchJump, HandlerJump, I: Integer;
+  PendingBase: Integer;
   Slot: UInt8;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
@@ -1362,6 +1458,7 @@ var
   ContinueJumps: TList<Integer>;
   ArrayLocalIdx: Integer;
   PendingEntry: TPendingFinallyEntry;
+  NeedsIteratorClose: Boolean;
 begin
   if IsConstArrayLocal(ACtx, AStmt.Iterable, ArrayLocalIdx) then
   begin
@@ -1372,7 +1469,12 @@ begin
   IterReg := ACtx.Scope.AllocateRegister;
   ValueReg := ACtx.Scope.AllocateRegister;
   DoneReg := ACtx.Scope.AllocateRegister;
-  CloseErrorReg := ACtx.Scope.AllocateRegister;
+  CloseErrorReg := 0;
+
+  NeedsIteratorClose := Assigned(AStmt.BindingPattern) or
+    Assigned(AStmt.MatchPattern) or StatementNeedsIteratorClose(AStmt.Body);
+  if NeedsIteratorClose then
+    CloseErrorReg := ACtx.Scope.AllocateRegister;
 
   ACtx.CompileExpression(AStmt.Iterable, IterReg);
   EmitInstruction(ACtx, EncodeABC(OP_GET_ITER, IterReg, IterReg, 0));
@@ -1385,29 +1487,31 @@ begin
   OldContinueFinallyBase := GContinueFinallyBase;
   ContinueJumps := TList<Integer>.Create;
   GContinueJumps := ContinueJumps;
+  if NeedsIteratorClose and not Assigned(GPendingFinally) then
+    GPendingFinally := TList<TPendingFinallyEntry>.Create;
   if Assigned(GPendingFinally) then
-  begin
-    GBreakFinallyBase := GPendingFinally.Count;
-    GContinueFinallyBase := GPendingFinally.Count;
-  end
+    PendingBase := GPendingFinally.Count
   else
-  begin
-    GBreakFinallyBase := 0;
-    GContinueFinallyBase := 0;
-  end;
+    PendingBase := 0;
+  GBreakFinallyBase := PendingBase;
+  GContinueFinallyBase := PendingBase;
   try
+    HandlerJump := -1;
+    if NeedsIteratorClose then
+    begin
+      HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, CloseErrorReg);
+      FillChar(PendingEntry, SizeOf(PendingEntry), 0);
+      PendingEntry.IsIteratorClose := True;
+      PendingEntry.IteratorReg := IterReg;
+      GPendingFinally.Add(PendingEntry);
+      GContinueFinallyBase := GPendingFinally.Count;
+    end;
+
     LoopStart := CurrentCodePosition(ACtx);
     MismatchJump := -1;
 
     EmitInstruction(ACtx, EncodeABC(OP_ITER_NEXT, ValueReg, DoneReg, IterReg));
     ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
-    HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, CloseErrorReg);
-    if not Assigned(GPendingFinally) then
-      GPendingFinally := TList<TPendingFinallyEntry>.Create;
-    FillChar(PendingEntry, SizeOf(PendingEntry), 0);
-    PendingEntry.IsIteratorClose := True;
-    PendingEntry.IteratorReg := IterReg;
-    GPendingFinally.Add(PendingEntry);
 
     ACtx.Scope.BeginScope;
 
@@ -1431,10 +1535,8 @@ begin
 
     ACtx.CompileStatement(AStmt.Body);
 
-    GPendingFinally.Delete(GPendingFinally.Count - 1);
     if MismatchJump >= 0 then
       PatchJumpTarget(ACtx, MismatchJump);
-    EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
 
     // Patch continue jumps before close-upvalue so closures see correct iteration values
     for I := 0 to ContinueJumps.Count - 1 do
@@ -1446,11 +1548,19 @@ begin
 
     EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
 
-    PatchJumpTarget(ACtx, HandlerJump);
-    EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, 0, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_THROW, CloseErrorReg, 0, 0));
+    if NeedsIteratorClose then
+    begin
+      PatchJumpTarget(ACtx, HandlerJump);
+      EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, 0, 0));
+      EmitInstruction(ACtx, EncodeABC(OP_THROW, CloseErrorReg, 0, 0));
+    end;
 
     PatchJumpTarget(ACtx, ExitJump);
+    if NeedsIteratorClose then
+    begin
+      EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+      GPendingFinally.Delete(GPendingFinally.Count - 1);
+    end;
 
     for I := 0 to BreakJumps.Count - 1 do
       PatchJumpTarget(ACtx, BreakJumps[I]);
@@ -1466,7 +1576,8 @@ begin
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
-  ACtx.Scope.FreeRegister;
+  if NeedsIteratorClose then
+    ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileForAwaitOfStatement(const ACtx: TGocciaCompilationContext;

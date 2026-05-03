@@ -74,6 +74,12 @@ type
     procedure TestConstPropagationBigInt;
     procedure TestConstPropagationSkipsMutable;
     procedure TestConstPropagationSkipsGlobalBacked;
+    procedure TestInferredNumericLocalsUseTypedArithmetic;
+    procedure TestAnnotatedParametersUseTypedArithmetic;
+    procedure TestAssignmentClearsStaleNumericHint;
+    procedure TestCapturedNumericLocalAvoidsTypedArithmetic;
+    procedure TestForOfSkipsHandlerWithoutAbruptClose;
+    procedure TestForOfUsesOneIteratorCloseHandler;
     procedure TestConstantIfEliminatesBranch;
     procedure TestConstantIfPrunesAbruptTail;
     procedure TestCoveragePreservesConstantBranch;
@@ -101,6 +107,12 @@ begin
   Test('Const propagation with BigInt', TestConstPropagationBigInt);
   Test('Const propagation skips mutable bindings', TestConstPropagationSkipsMutable);
   Test('Const propagation skips global-backed bindings', TestConstPropagationSkipsGlobalBacked);
+  Test('Inferred numeric locals use typed arithmetic', TestInferredNumericLocalsUseTypedArithmetic);
+  Test('Annotated parameters use typed arithmetic', TestAnnotatedParametersUseTypedArithmetic);
+  Test('Assignment clears stale numeric hint', TestAssignmentClearsStaleNumericHint);
+  Test('Captured numeric local avoids typed arithmetic', TestCapturedNumericLocalAvoidsTypedArithmetic);
+  Test('for-of skips handler without abrupt close', TestForOfSkipsHandlerWithoutAbruptClose);
+  Test('for-of uses one iterator-close handler', TestForOfUsesOneIteratorCloseHandler);
   Test('Constant if eliminates branch', TestConstantIfEliminatesBranch);
   Test('Constant if prunes abrupt tail', TestConstantIfPrunesAbruptTail);
   Test('Coverage preserves constant branch shape', TestCoveragePreservesConstantBranch);
@@ -589,6 +601,102 @@ begin
     False, False, True);
   try
     Expect<Boolean>(CountArithmeticOps(Module.TopLevel) > 0).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestInferredNumericLocalsUseTypedArithmetic;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let a = 1; let b = 2; let c = a + b; c;',
+    False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestAnnotatedParametersUseTypedArithmetic;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const add = (a: number, b: number): number => a + b; add(1, 2);',
+    True, False, False, False);
+  try
+    Func := Module.TopLevel.GetFunction(0);
+    Expect<Integer>(CountOp(Func, OP_ADD_FLOAT)).ToBe(1);
+    Expect<Integer>(CountOp(Func, OP_ADD)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestAssignmentClearsStaleNumericHint;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let a = 1; a = "x"; const b = a + 1; b;',
+    False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestCapturedNumericLocalAvoidsTypedArithmetic;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let a = 1;' + LineEnding +
+    'const set = () => { a = "x"; };' + LineEnding +
+    'set();' + LineEnding +
+    'const b = a + 1;' + LineEnding +
+    'b;',
+    False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestForOfSkipsHandlerWithoutAbruptClose;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let sum = 0; for (const x of [1, 2, 3]) { sum = sum + x; } sum;',
+    False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_PUSH_HANDLER)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_POP_HANDLER)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestForOfUsesOneIteratorCloseHandler;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'for (const x of [1, 2, 3]) { throw x; }',
+    False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_PUSH_HANDLER)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_POP_HANDLER)).ToBe(1);
   finally
     Module.Free;
   end;

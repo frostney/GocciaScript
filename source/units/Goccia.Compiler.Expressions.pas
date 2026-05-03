@@ -125,6 +125,14 @@ begin
   Result := '#slot:' + Prefix + AName;
 end;
 
+function InferredExpressionType(const AScope: TGocciaCompilerScope;
+  const AExpr: TGocciaExpression): TGocciaLocalType;
+begin
+  Result := ExpressionType(AScope, AExpr);
+  if Result = sltUntyped then
+    Result := InferLocalType(AExpr);
+end;
+
 procedure CompileYield(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaYieldExpression; const ADest: UInt8);
 begin
@@ -576,7 +584,7 @@ var
   Local: TGocciaCompilerLocal;
   Slot: UInt8;
   MsgIdx: UInt16;
-  Hint: TGocciaLocalType;
+  Hint, ValueType: TGocciaLocalType;
 begin
   ACtx.CompileExpression(AExpr.Value, ADest);
 
@@ -608,6 +616,12 @@ begin
     if ADest <> Slot then
     begin
       EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ADest, Slot));
+    end;
+    if not Local.IsStrictlyTyped then
+    begin
+      ValueType := InferredExpressionType(ACtx.Scope, AExpr.Value);
+      ACtx.Scope.SetLocalTypeHint(LocalIdx, ValueType);
+      ACtx.Template.SetLocalType(Slot, ValueType);
     end;
     Exit;
   end;
@@ -993,12 +1007,9 @@ var
   AnnotationType: TGocciaLocalType;
   ParamName: string;
 begin
-  { When strict-types enforcement is disabled, parameter annotations
-    are parsed but never bound to the local — no OP_CHECK_TYPE is
-    emitted later because EmitParameterTypeChecks gates on
-    Local.IsStrictlyTyped. }
   if not AStrictTypes then
     Exit;
+
   for I := 0 to High(AParameters) do
   begin
     if AParameters[I].TypeAnnotation = '' then
@@ -1021,8 +1032,8 @@ begin
     // guarded, but EmitParameterTypeChecks skips IsRest so no OP_CHECK_TYPE
     // fires at function entry against the rest array itself.
     AScope.SetLocalTypeHint(LocalIdx, AnnotationType);
-    AScope.SetLocalStrictlyTyped(LocalIdx, True);
     ATemplate.SetLocalType(AScope.GetLocal(LocalIdx).Slot, AnnotationType);
+    AScope.SetLocalStrictlyTyped(LocalIdx, True);
     ATemplate.SetLocalStrictFlag(AScope.GetLocal(LocalIdx).Slot, True);
   end;
 end;
@@ -2246,7 +2257,7 @@ var
   Slot, RegVal, RegResult, CondReg, ArgReg: UInt8;
   MsgIdx, NameIdx: UInt16;
   Op, FloatOp: TGocciaOpCode;
-  LocalType, ValType: TGocciaLocalType;
+  LocalType, ValType, ResultType: TGocciaLocalType;
   ArithOp: TGocciaTokenType;
   JumpIdx, OkJump: Integer;
 begin
@@ -2396,9 +2407,20 @@ begin
        IsKnownNumeric(ValType) and
        IsArithmeticCompoundAssign(AExpr.Operator, ArithOp) and
        TryFloatOp(ArithOp, FloatOp) then
+    begin
       EmitInstruction(ACtx, EncodeABC(FloatOp, Slot, Slot, RegVal))
+    end
     else
       EmitInstruction(ACtx, EncodeABC(Op, Slot, Slot, RegVal));
+    if not ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped then
+    begin
+      ResultType := sltUntyped;
+      if IsArithmeticCompoundAssign(AExpr.Operator, ArithOp) and
+         IsKnownNumeric(LocalType) and IsKnownNumeric(ValType) then
+        ResultType := sltFloat;
+      ACtx.Scope.SetLocalTypeHint(LocalIdx, ResultType);
+      ACtx.Template.SetLocalType(Slot, ResultType);
+    end;
     if ADest <> Slot then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
     ACtx.Scope.FreeRegister;
