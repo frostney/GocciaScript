@@ -190,6 +190,96 @@ begin
   end;
 end;
 
+function BlockLexicalDeclarationType(const AIsConst: Boolean): TGocciaDeclarationType;
+begin
+  if AIsConst then
+    Result := dtConst
+  else
+    Result := dtLet;
+end;
+
+procedure PredeclareBlockLexicalName(const AScope: TGocciaScope; const AName: string;
+  const ADeclarationType: TGocciaDeclarationType; const ALine, AColumn: Integer);
+begin
+  if not AScope.ContainsOwnLexicalBinding(AName) then
+    AScope.PredeclareLexicalBinding(AName, ADeclarationType, ALine, AColumn);
+end;
+
+procedure PredeclareBlockLexicalBinding(const ANode: TGocciaASTNode;
+  const AScope: TGocciaScope);
+var
+  VarDecl: TGocciaVariableDeclaration;
+  DestructDecl: TGocciaDestructuringDeclaration;
+  UsingDecl: TGocciaUsingDeclaration;
+  Names: TStringList;
+  I: Integer;
+begin
+  if ANode is TGocciaVariableDeclaration then
+  begin
+    VarDecl := TGocciaVariableDeclaration(ANode);
+    if VarDecl.IsVar and not VarDecl.IsFunctionDeclaration then
+      Exit;
+    for I := 0 to High(VarDecl.Variables) do
+      PredeclareBlockLexicalName(AScope, VarDecl.Variables[I].Name,
+        BlockLexicalDeclarationType(VarDecl.IsConst), VarDecl.Line,
+        VarDecl.Column);
+  end
+  else if ANode is TGocciaExportVariableDeclaration then
+  begin
+    VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration;
+    if VarDecl.IsVar and not VarDecl.IsFunctionDeclaration then
+      Exit;
+    for I := 0 to High(VarDecl.Variables) do
+      PredeclareBlockLexicalName(AScope, VarDecl.Variables[I].Name,
+        BlockLexicalDeclarationType(VarDecl.IsConst), VarDecl.Line,
+        VarDecl.Column);
+  end
+  else if ANode is TGocciaDestructuringDeclaration then
+  begin
+    DestructDecl := TGocciaDestructuringDeclaration(ANode);
+    if DestructDecl.IsVar then
+      Exit;
+    Names := TStringList.Create;
+    Names.CaseSensitive := True;
+    try
+      CollectPatternBindingNames(DestructDecl.Pattern, Names, True);
+      for I := 0 to Names.Count - 1 do
+        PredeclareBlockLexicalName(AScope, Names[I],
+          BlockLexicalDeclarationType(DestructDecl.IsConst), DestructDecl.Line,
+          DestructDecl.Column);
+    finally
+      Names.Free;
+    end;
+  end
+  else if ANode is TGocciaUsingDeclaration then
+  begin
+    UsingDecl := TGocciaUsingDeclaration(ANode);
+    for I := 0 to High(UsingDecl.Variables) do
+      PredeclareBlockLexicalName(AScope, UsingDecl.Variables[I].Name, dtConst,
+        UsingDecl.Line, UsingDecl.Column);
+  end
+  else if ANode is TGocciaClassDeclaration then
+    PredeclareBlockLexicalName(AScope,
+      TGocciaClassDeclaration(ANode).ClassDefinition.Name, dtLet, ANode.Line,
+      ANode.Column)
+  else if ANode is TGocciaEnumDeclaration then
+    PredeclareBlockLexicalName(AScope, TGocciaEnumDeclaration(ANode).Name,
+      dtLet, ANode.Line, ANode.Column)
+  else if ANode is TGocciaExportEnumDeclaration then
+    PredeclareBlockLexicalName(AScope,
+      TGocciaExportEnumDeclaration(ANode).Declaration.Name, dtLet, ANode.Line,
+      ANode.Column);
+end;
+
+procedure PredeclareBlockLexicalBindings(const ANodes: TObjectList<TGocciaASTNode>;
+  const AContext: TGocciaEvaluationContext);
+var
+  I: Integer;
+begin
+  for I := 0 to ANodes.Count - 1 do
+    PredeclareBlockLexicalBinding(ANodes[I], AContext.Scope);
+end;
+
 procedure HoistSingleFunctionDeclaration(const ANode: TGocciaASTNode;
   const AContext: TGocciaEvaluationContext; const ABlockScoped: Boolean);
 var
@@ -2335,6 +2425,8 @@ begin
     else
       BlockContext.Scope := AContext.Scope;
     try
+      if NeedsChildScope then
+        PredeclareBlockLexicalBindings(ABlockStatement.Nodes, BlockContext);
       HoistFunctionDeclarations(ABlockStatement.Nodes, BlockContext,
         NeedsChildScope);
       Result := EvaluateStatements(ABlockStatement.Nodes, BlockContext);
@@ -2359,6 +2451,7 @@ begin
   GC := TGarbageCollector.Instance;
   try
     try
+      PredeclareBlockLexicalBindings(ABlockStatement.Nodes, BlockContext);
       HoistFunctionDeclarations(ABlockStatement.Nodes, BlockContext, True);
       Result := EvaluateStatements(ABlockStatement.Nodes, BlockContext);
       if (Result.Kind = cfkNormal) and (Result.Value = nil) then
@@ -2998,6 +3091,16 @@ var
         SwitchBlockContext, True);
   end;
 
+  procedure PredeclareSwitchConsequents;
+  var
+    K, L: Integer;
+  begin
+    for K := 0 to ASwitchStatement.Cases.Count - 1 do
+      for L := 0 to ASwitchStatement.Cases[K].Consequent.Count - 1 do
+        PredeclareBlockLexicalBinding(ASwitchStatement.Cases[K].Consequent[L],
+          SwitchBlockContext.Scope);
+  end;
+
   function EvaluateCaseConsequent(
     const AConsequent: TObjectList<TGocciaStatement>): TGocciaControlFlow;
   var
@@ -3030,7 +3133,10 @@ begin
 
   try
     if NeedsSwitchScope then
+    begin
+      PredeclareSwitchConsequents;
       HoistSwitchConsequents;
+    end;
 
     Matched := False;
     DefaultIndex := -1;

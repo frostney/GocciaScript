@@ -887,6 +887,31 @@ begin
       TGocciaExportEnumDeclaration(ANode).Declaration.Name, False);
 end;
 
+function NeedsBlockLexicalPredeclaration(const ANode: TGocciaASTNode): Boolean;
+var
+  VarDecl: TGocciaVariableDeclaration;
+begin
+  if ANode is TGocciaVariableDeclaration then
+  begin
+    VarDecl := TGocciaVariableDeclaration(ANode);
+    Exit(VarDecl.IsFunctionDeclaration or not VarDecl.IsVar);
+  end
+  else if ANode is TGocciaExportVariableDeclaration then
+  begin
+    VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration;
+    Exit(VarDecl.IsFunctionDeclaration or not VarDecl.IsVar);
+  end
+  else if ANode is TGocciaDestructuringDeclaration then
+    Exit(not TGocciaDestructuringDeclaration(ANode).IsVar)
+  else if (ANode is TGocciaUsingDeclaration) or
+          (ANode is TGocciaClassDeclaration) or
+          (ANode is TGocciaEnumDeclaration) or
+          (ANode is TGocciaExportEnumDeclaration) then
+    Exit(True);
+
+  Result := False;
+end;
+
 function StatementAlwaysAbrupt(const AStmt: TGocciaStatement): Boolean;
 var
   IfStmt: TGocciaIfStatement;
@@ -1014,14 +1039,12 @@ begin
   if not HasUsing then
   begin
     ACtx.Scope.BeginScope;
+    for I := 0 to AStmt.Nodes.Count - 1 do
+      PredeclareBlockLexicalLocals(AStmt.Nodes[I], ACtx);
     if HasFunctionDecl then
-    begin
-      for I := 0 to AStmt.Nodes.Count - 1 do
-        PredeclareBlockLexicalLocals(AStmt.Nodes[I], ACtx);
       for I := 0 to AStmt.Nodes.Count - 1 do
         if GetBlockFunctionDeclaration(AStmt.Nodes[I]) <> nil then
           ACtx.CompileStatement(TGocciaStatement(AStmt.Nodes[I]));
-    end;
     for I := 0 to AStmt.Nodes.Count - 1 do
     begin
       Node := AStmt.Nodes[I];
@@ -1051,14 +1074,12 @@ begin
 
   // Slow path: block with using declarations — compile as try/finally
   ACtx.Scope.BeginScope;
+  for I := 0 to AStmt.Nodes.Count - 1 do
+    PredeclareBlockLexicalLocals(AStmt.Nodes[I], ACtx);
   if HasFunctionDecl then
-  begin
-    for I := 0 to AStmt.Nodes.Count - 1 do
-      PredeclareBlockLexicalLocals(AStmt.Nodes[I], ACtx);
     for I := 0 to AStmt.Nodes.Count - 1 do
       if GetBlockFunctionDeclaration(AStmt.Nodes[I]) <> nil then
         ACtx.CompileStatement(TGocciaStatement(AStmt.Nodes[I]));
-  end;
 
   // Remember the starting point of using resources for this block
   if not Assigned(GUsingResources) then
@@ -1929,7 +1950,7 @@ var
   ClosedCount: Integer;
   EntryToPreludeJumps: array of Integer;
   BodyDispatchJumps: array of Integer;
-  HasFunctionDecl, StatementAbrupt: Boolean;
+  HasFunctionDecl, NeedsPrelude, StatementAbrupt: Boolean;
 begin
   DiscReg := ACtx.Scope.AllocateRegister;
   TestReg := ACtx.Scope.AllocateRegister;
@@ -1975,22 +1996,29 @@ begin
     GBreakFinallyBase := 0;
   try
     HasFunctionDecl := False;
+    NeedsPrelude := False;
     for I := 0 to AStmt.Cases.Count - 1 do
     begin
       CaseClause := AStmt.Cases[I];
       for J := 0 to CaseClause.Consequent.Count - 1 do
-        if GetBlockFunctionDeclaration(CaseClause.Consequent[J]) <> nil then
-        begin
+      begin
+        Node := CaseClause.Consequent[J];
+        if NeedsBlockLexicalPredeclaration(Node) then
+          NeedsPrelude := True;
+        if GetBlockFunctionDeclaration(Node) <> nil then
           HasFunctionDecl := True;
+        if HasFunctionDecl and NeedsPrelude then
+        begin
           Break;
         end;
+      end;
       if HasFunctionDecl then
         Break;
     end;
 
     ACtx.Scope.BeginScope;
 
-    if HasFunctionDecl then
+    if NeedsPrelude then
     begin
       SelectedReg := ACtx.Scope.AllocateRegister;
       DispatchIndexReg := ACtx.Scope.AllocateRegister;
@@ -2027,7 +2055,8 @@ begin
       begin
         CaseClause := AStmt.Cases[I];
         for J := 0 to CaseClause.Consequent.Count - 1 do
-          if GetBlockFunctionDeclaration(CaseClause.Consequent[J]) <> nil then
+          if HasFunctionDecl and
+             (GetBlockFunctionDeclaration(CaseClause.Consequent[J]) <> nil) then
             ACtx.CompileStatement(CaseClause.Consequent[J]);
       end;
 
@@ -2045,7 +2074,7 @@ begin
     begin
       CaseClause := AStmt.Cases[I];
 
-      if HasFunctionDecl then
+      if NeedsPrelude then
         PatchJumpTarget(ACtx, BodyDispatchJumps[I])
       else if I = DefaultIndex then
       begin
@@ -2080,7 +2109,7 @@ begin
       end;
     end;
 
-    if HasFunctionDecl then
+    if NeedsPrelude then
     begin
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;

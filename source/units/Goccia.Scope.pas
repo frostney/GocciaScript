@@ -47,6 +47,7 @@ type
     procedure MarkReferences; override;
 
     // New Define/Assign pattern
+    procedure PredeclareLexicalBinding(const AName: string; const ADeclarationType: TGocciaDeclarationType; const ALine: Integer = 0; const AColumn: Integer = 0);
     procedure DefineLexicalBinding(const AName: string; const AValue: TGocciaValue; const ADeclarationType: TGocciaDeclarationType; const ALine: Integer = 0; const AColumn: Integer = 0);
     procedure AssignBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0); virtual;
     procedure ForceUpdateBinding(const AName: string; const AValue: TGocciaValue);
@@ -283,6 +284,28 @@ begin
   Result := nil;
 end;
 
+procedure TGocciaScope.PredeclareLexicalBinding(const AName: string;
+  const ADeclarationType: TGocciaDeclarationType; const ALine: Integer = 0;
+  const AColumn: Integer = 0);
+var
+  LexicalBinding: TLexicalBinding;
+  Error: TGocciaSyntaxError;
+begin
+  if FLexicalBindings.ContainsKey(AName) then
+  begin
+    Error := TGocciaSyntaxError.Create(
+      Format(SErrorIdentifierAlreadyDeclared, [AName]), ALine, AColumn, '', nil);
+    Error.Suggestion := SSuggestAlreadyDeclared;
+    raise Error;
+  end;
+
+  LexicalBinding.Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+  LexicalBinding.DeclarationType := ADeclarationType;
+  LexicalBinding.Initialized := False;
+  LexicalBinding.TypeHint := sltUntyped;
+  FLexicalBindings.Add(AName, LexicalBinding);
+end;
+
 procedure TGocciaScope.DefineLexicalBinding(const AName: string; const AValue: TGocciaValue; const ADeclarationType: TGocciaDeclarationType; const ALine: Integer = 0; const AColumn: Integer = 0);
 var
   LexicalBinding: TLexicalBinding;
@@ -292,6 +315,15 @@ begin
   // Check for redeclaration errors
   if FLexicalBindings.TryGetValue(AName, ExistingLexicalBinding) then
   begin
+    if not ExistingLexicalBinding.Initialized then
+    begin
+      ExistingLexicalBinding.Value := AValue;
+      ExistingLexicalBinding.DeclarationType := ADeclarationType;
+      ExistingLexicalBinding.Initialized := True;
+      FLexicalBindings.AddOrSetValue(AName, ExistingLexicalBinding);
+      Exit;
+    end;
+
     // Check redeclaration rules - let/const cannot be redeclared
     case ADeclarationType of
       dtLet, dtConst:

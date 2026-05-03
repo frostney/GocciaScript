@@ -40,6 +40,19 @@ describe("using declaration", () => {
     expect(value).toBe(42);
   });
 
+  test("later lexical binding is in TDZ inside using block", () => {
+    let value = "outer";
+    {
+      using resource = {
+        [Symbol.dispose]() {}
+      };
+      expect(() => value).toThrow(ReferenceError);
+      let value = "inner";
+      expect(value).toBe("inner");
+    }
+    expect(value).toBe("outer");
+  });
+
   test("using null is silently skipped", () => {
     let reached = false;
     {

@@ -125,6 +125,20 @@ test("switch with block scoping in cases", () => {
   expect(result).toBe("two");
 });
 
+test("switch case lexical binding is in TDZ before declaration", () => {
+  let value = "outer";
+
+  switch (0) {
+    case 0:
+      expect(() => value).toThrow(ReferenceError);
+      let value = "inner";
+      expect(value).toBe("inner");
+      break;
+  }
+
+  expect(value).toBe("outer");
+});
+
 test("switch with null and boolean discriminants", () => {
   let nullResult;
   switch (null) {
