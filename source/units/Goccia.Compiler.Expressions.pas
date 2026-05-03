@@ -156,6 +156,22 @@ begin
     InferredExpressionType(ACtx.Scope, AExpr));
 end;
 
+procedure EmitStrictLocalTypeCheck(const ACtx: TGocciaCompilationContext;
+  const ALocalIdx: Integer; const AValueReg: UInt8;
+  const AProducedType: TGocciaLocalType);
+var
+  Local: TGocciaCompilerLocal;
+begin
+  if ALocalIdx < 0 then
+    Exit;
+
+  Local := ACtx.Scope.GetLocal(ALocalIdx);
+  if Local.IsStrictlyTyped and (Local.TypeHint <> sltUntyped) and
+     not TypesAreCompatible(AProducedType, Local.TypeHint) then
+    EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, AValueReg,
+      UInt8(Ord(Local.TypeHint)), 0));
+end;
+
 procedure CompileYield(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaYieldExpression; const ADest: UInt8);
 begin
@@ -607,7 +623,7 @@ var
   Local: TGocciaCompilerLocal;
   Slot: UInt8;
   MsgIdx: UInt16;
-  Hint, ValueType: TGocciaLocalType;
+  ValueType: TGocciaLocalType;
 begin
   ACtx.CompileExpression(AExpr.Value, ADest);
 
@@ -626,17 +642,16 @@ begin
     end;
     if Local.IsGlobalBacked then
     begin
+      EmitStrictLocalTypeCheck(ACtx, LocalIdx, ADest,
+        InferLocalType(AExpr.Value));
       EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ADest,
         ACtx.Template.AddConstantString(AExpr.Name)));
       RefreshNonStrictLocalTypeHint(ACtx, LocalIdx, AExpr.Value);
       Exit;
     end;
     Slot := Local.Slot;
-    Hint := Local.TypeHint;
-    if Local.IsStrictlyTyped and (Hint <> sltUntyped) then
-      if not TypesAreCompatible(InferLocalType(AExpr.Value), Hint) then
-        EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, ADest,
-          UInt8(Ord(Hint)), 0));
+    EmitStrictLocalTypeCheck(ACtx, LocalIdx, ADest,
+      InferLocalType(AExpr.Value));
     if ADest <> Slot then
     begin
       EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ADest, Slot));
@@ -2307,6 +2322,8 @@ begin
         else
         begin
           ACtx.CompileExpression(AExpr.Value, ADest);
+          EmitStrictLocalTypeCheck(ACtx, LocalIdx, ADest,
+            InferLocalType(AExpr.Value));
           EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ADest,
             ACtx.Template.AddConstantString(AExpr.Name)));
           SetNonStrictLocalTypeHint(ACtx, LocalIdx, sltUntyped);
@@ -2330,12 +2347,8 @@ begin
       else
       begin
         ACtx.CompileExpression(AExpr.Value, ADest);
-        LocalType := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
-        if ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped and
-           (LocalType <> sltUntyped) and
-           not TypesAreCompatible(InferLocalType(AExpr.Value), LocalType) then
-          EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, ADest,
-            UInt8(Ord(LocalType)), 0));
+        EmitStrictLocalTypeCheck(ACtx, LocalIdx, ADest,
+          InferLocalType(AExpr.Value));
         if ADest <> Slot then
           EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ADest, Slot));
         SetNonStrictLocalTypeHint(ACtx, LocalIdx, sltUntyped);
@@ -2416,6 +2429,13 @@ begin
         ACtx.Template.AddConstantString(AExpr.Name)));
       ACtx.CompileExpression(AExpr.Value, RegVal);
       EmitInstruction(ACtx, EncodeABC(Op, ADest, RegResult, RegVal));
+      LocalType := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
+      ValType := ExpressionType(ACtx.Scope, AExpr.Value);
+      ResultType := sltUntyped;
+      if IsArithmeticCompoundAssign(AExpr.Operator, ArithOp) and
+         IsKnownNumeric(LocalType) and IsKnownNumeric(ValType) then
+        ResultType := sltFloat;
+      EmitStrictLocalTypeCheck(ACtx, LocalIdx, ADest, ResultType);
       EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ADest,
         ACtx.Template.AddConstantString(AExpr.Name)));
       SetNonStrictLocalTypeHint(ACtx, LocalIdx, sltUntyped);
@@ -2438,12 +2458,13 @@ begin
     end
     else
       EmitInstruction(ACtx, EncodeABC(Op, Slot, Slot, RegVal));
+    ResultType := sltUntyped;
+    if IsArithmeticCompoundAssign(AExpr.Operator, ArithOp) and
+       IsKnownNumeric(LocalType) and IsKnownNumeric(ValType) then
+      ResultType := sltFloat;
+    EmitStrictLocalTypeCheck(ACtx, LocalIdx, Slot, ResultType);
     if not ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped then
     begin
-      ResultType := sltUntyped;
-      if IsArithmeticCompoundAssign(AExpr.Operator, ArithOp) and
-         IsKnownNumeric(LocalType) and IsKnownNumeric(ValType) then
-        ResultType := sltFloat;
       SetNonStrictLocalTypeHint(ACtx, LocalIdx, ResultType);
     end;
     if ADest <> Slot then

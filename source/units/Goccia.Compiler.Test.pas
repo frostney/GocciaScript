@@ -83,6 +83,9 @@ type
     procedure TestShortCircuitAssignmentClearsStaleNumericHint;
     procedure TestGlobalBackedShortCircuitClearsStaleNumericHint;
     procedure TestGlobalBackedCompoundClearsStaleNumericHint;
+    procedure TestGlobalBackedAssignmentChecksStrictType;
+    procedure TestGlobalBackedShortCircuitChecksStrictType;
+    procedure TestGlobalBackedCompoundChecksStrictType;
     procedure TestCapturedNumericLocalAvoidsTypedArithmetic;
     procedure TestForOfSkipsHandlerWithoutAbruptClose;
     procedure TestForOfUsesHandlerForExpressionBody;
@@ -121,6 +124,9 @@ begin
   Test('Short-circuit assignment clears stale numeric hint', TestShortCircuitAssignmentClearsStaleNumericHint);
   Test('Global-backed short-circuit clears stale numeric hint', TestGlobalBackedShortCircuitClearsStaleNumericHint);
   Test('Global-backed compound clears stale numeric hint', TestGlobalBackedCompoundClearsStaleNumericHint);
+  Test('Global-backed assignment checks strict type', TestGlobalBackedAssignmentChecksStrictType);
+  Test('Global-backed short-circuit checks strict type', TestGlobalBackedShortCircuitChecksStrictType);
+  Test('Global-backed compound checks strict type', TestGlobalBackedCompoundChecksStrictType);
   Test('Captured numeric local avoids typed arithmetic', TestCapturedNumericLocalAvoidsTypedArithmetic);
   Test('for-of skips handler without abrupt close', TestForOfSkipsHandlerWithoutAbruptClose);
   Test('for-of uses handler for expression body', TestForOfUsesHandlerForExpressionBody);
@@ -193,14 +199,15 @@ var
   Candidate: TGocciaFunctionTemplate;
 begin
   Result := nil;
+  if CountOp(ATemplate, AOp) > 0 then
+    Exit(ATemplate);
+
   for I := 0 to ATemplate.FunctionCount - 1 do
   begin
     Candidate := ATemplate.GetFunction(I);
-    if CountOp(Candidate, AOp) > 0 then
-      Exit(Candidate);
     Result := FindFunctionWithOp(Candidate, AOp);
     if Assigned(Result) then
-      Exit;
+      Exit(Result);
   end;
 end;
 
@@ -743,6 +750,48 @@ begin
   try
     Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
     Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(2);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestGlobalBackedAssignmentChecksStrictType;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let a: number = 1; a = "x"; a;',
+    True, False, True, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestGlobalBackedShortCircuitChecksStrictType;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let a: number = 0; a ||= "x"; a;',
+    True, False, True, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestGlobalBackedCompoundChecksStrictType;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let a: number = 1; a += "x"; a;',
+    True, False, True, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(1);
   finally
     Module.Free;
   end;
