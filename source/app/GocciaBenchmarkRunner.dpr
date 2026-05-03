@@ -60,15 +60,30 @@ type
   end;
 
   TBenchmarkProgress = class
+    class procedure WriteLine(const AMessage: string);
     class procedure OnProgress(const ASuiteName, ABenchName: string; const AIndex, ATotal: Integer);
   end;
+
+var
+  BenchmarkProgressLock: TRTLCriticalSection;
+
+class procedure TBenchmarkProgress.WriteLine(const AMessage: string);
+begin
+  EnterCriticalSection(BenchmarkProgressLock);
+  try
+    WriteLn(AMessage);
+    Flush(Output);
+  finally
+    LeaveCriticalSection(BenchmarkProgressLock);
+  end;
+end;
 
 class procedure TBenchmarkProgress.OnProgress(const ASuiteName, ABenchName: string; const AIndex, ATotal: Integer);
 begin
   if ASuiteName <> '' then
-    WriteLn(SysUtils.Format('  [%d/%d] %s > %s', [AIndex, ATotal, ASuiteName, ABenchName]))
+    WriteLine(SysUtils.Format('  [%d/%d] %s > %s', [AIndex, ATotal, ASuiteName, ABenchName]))
   else
-    WriteLn(SysUtils.Format('  [%d/%d] %s', [AIndex, ATotal, ABenchName]));
+    WriteLine(SysUtils.Format('  [%d/%d] %s', [AIndex, ATotal, ABenchName]));
 end;
 
 type
@@ -172,6 +187,7 @@ type
     FFormats: TGocciaRepeatableOption;
     FOutputFile: TGocciaStringOption;
     FCanPrintProfile: Boolean;
+    FWorkerProgressEnabled: Boolean;
     function ProfilingEnabled: Boolean;
     procedure RunBytecodeBenchmarkModule(const AEngine: TGocciaEngine;
       const AExecutor: TGocciaBytecodeExecutor;
@@ -764,7 +780,8 @@ begin
   WorkerReporter := TBenchmarkReporter.Create;
   try
     try
-      CollectBenchmarkFile(AFileName, WorkerReporter, Mode, False);
+      CollectBenchmarkFile(AFileName, WorkerReporter, Mode,
+        FWorkerProgressEnabled);
       if WorkerReporter.FileCount > 0 then
         WorkerResults^[AIndex] := WorkerReporter.Files[0];
     except
@@ -907,10 +924,10 @@ begin
     if AShowProgress then
     begin
       if JobCount > 1 then
-        WriteLn(SysUtils.Format('Running %d files with %d workers',
+        TBenchmarkProgress.WriteLine(SysUtils.Format('Running %d files with %d workers',
           [Files.Count, JobCount]))
       else
-        WriteLn(SysUtils.Format('Running %d files', [Files.Count]));
+        TBenchmarkProgress.WriteLine(SysUtils.Format('Running %d files', [Files.Count]));
     end;
 
     if JobCount > 1 then
@@ -939,7 +956,12 @@ begin
       try
         if Assigned(TGarbageCollector.Instance) then
           Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
-        Pool.RunAll(Files, BenchmarkWorkerProc, @WorkerData[0]);
+        FWorkerProgressEnabled := AShowProgress;
+        try
+          Pool.RunAll(Files, BenchmarkWorkerProc, @WorkerData[0]);
+        finally
+          FWorkerProgressEnabled := False;
+        end;
         WorkerMemoryStats := Pool.MemoryStats;
       finally
         Pool.Free;
@@ -955,7 +977,7 @@ begin
       for I := 0 to Files.Count - 1 do
       begin
         if AShowProgress then
-          WriteLn(SysUtils.Format('[%d/%d] %s',
+          TBenchmarkProgress.WriteLine(SysUtils.Format('[%d/%d] %s',
             [I + 1, Files.Count, ExtractFileName(Files[I])]));
         Reporter.AddFileResult(WorkerData[I]);
       end;
@@ -967,7 +989,7 @@ begin
       for I := 0 to Files.Count - 1 do
       begin
         if AShowProgress then
-          WriteLn(SysUtils.Format('[%d/%d] %s',
+          TBenchmarkProgress.WriteLine(SysUtils.Format('[%d/%d] %s',
             [I + 1, Files.Count, ExtractFileName(Files[I])]));
         CollectBenchmarkFile(Files[I], Reporter, AMode, AShowProgress);
       end;
@@ -975,7 +997,7 @@ begin
     end;
 
     if AShowProgress and (Files.Count > 0) then
-      WriteLn;
+      TBenchmarkProgress.WriteLine('');
 
     for J := 0 to Length(AReports) - 1 do
     begin
@@ -1181,7 +1203,12 @@ end;
 var
   RunResult: Integer;
 begin
-  RunResult := TGocciaApplication.RunApplication(TBenchmarkRunnerApp, 'GocciaBenchmarkRunner');
+  InitCriticalSection(BenchmarkProgressLock);
+  try
+    RunResult := TGocciaApplication.RunApplication(TBenchmarkRunnerApp, 'GocciaBenchmarkRunner');
+  finally
+    DoneCriticalSection(BenchmarkProgressLock);
+  end;
   if RunResult <> 0 then
     ExitCode := RunResult;
 end.
