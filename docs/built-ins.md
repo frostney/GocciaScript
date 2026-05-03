@@ -17,7 +17,7 @@ GocciaScript provides a set of built-in global objects that mirror JavaScript's 
 
 Core language built-ins (Math, Object, Array, Number, JSON, Symbol, Set, Map, WeakSet, WeakMap, Promise, Temporal, ArrayBuffer, Proxy, Reflect, etc.) are always registered unconditionally by the engine.
 
-Runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer) are registered by `TGocciaRuntime`. Frontends such as `GocciaScriptLoader`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, and `GocciaREPL` attach that runtime; `GocciaScriptLoaderBare` does not.
+Runtime globals (Console, JSON5, JSONL, TOML, YAML, CSV, TSV, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, SemVer) are registered by `TGocciaRuntime`. Frontends such as `GocciaScriptLoader`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, and `GocciaREPL` attach that runtime; `GocciaScriptLoaderBare` does not, and exposes only a CLI-local `print(...args)` helper.
 
 Only three runtime globals are special-purpose opt-ins in `TGocciaRuntimeGlobal`:
 

@@ -4,10 +4,10 @@
  *
  * App-specific features: GocciaScriptLoader (JSON output, --global/--globals,
  * coverage, source maps), GocciaScriptLoaderBare (core-engine-only stdin/file
- * execution and runtime-global absence), GocciaBundler (compile, roundtrip,
- * stdin, directory, .gbc rejection, source maps), GocciaBenchmarkRunner (file,
- * stdin, bytecode), GocciaREPL (banner, evaluation, ASI, error recovery,
- * bytecode).
+ * execution, CLI print, and runtime-global absence), GocciaBundler (compile,
+ * roundtrip, stdin, directory, .gbc rejection, source maps),
+ * GocciaBenchmarkRunner (file, stdin, bytecode), GocciaREPL (banner,
+ * evaluation, ASI, error recovery, bytecode).
  */
 
 import { $ } from "bun";
@@ -390,9 +390,22 @@ console.log("Bare Loader: file input...");
   }
 }
 
+console.log("Bare Loader: print global...");
+{
+  const proc = Bun.spawnSync([BARE], {
+    stdin: new TextEncoder().encode("print('hello', 7); undefined;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare print exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "hello 7") throw new Error(`Bare print expected hello 7, got: ${proc.stdout.toString()}`);
+}
+
 console.log("Bare Loader: no runtime globals...");
 {
   const source = [
+    "typeof print + ':' +",
+    "typeof globalThis.print + ':' +",
     "typeof console + ':' +",
     "typeof FFI + ':' +",
     "typeof Goccia + ':' +",
@@ -406,7 +419,7 @@ console.log("Bare Loader: no runtime globals...");
   });
   if (proc.exitCode !== 0) throw new Error(`Bare runtime-global check exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   const output = proc.stdout.toString().trim();
-  if (output !== "undefined:undefined:object:true")
+  if (output !== "function:function:undefined:undefined:object:true")
     throw new Error(`Bare runtime-global check mismatch, got: ${output}`);
 }
 
@@ -419,6 +432,56 @@ console.log("Bare Loader: module source type...");
   });
   if (proc.exitCode !== 0) throw new Error(`Bare module mode exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "true") throw new Error(`Bare module mode expected true, got: ${proc.stdout.toString()}`);
+}
+
+// --mode flag: bare loader defaults to bytecode; both values must execute.
+console.log("Bare Loader: --mode=interpreted...");
+{
+  const proc = Bun.spawnSync([BARE, "--mode=interpreted"], {
+    stdin: new TextEncoder().encode("21 * 2;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare --mode=interpreted exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "42") throw new Error(`Bare --mode=interpreted expected 42, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: --mode=bytecode...");
+{
+  const proc = Bun.spawnSync([BARE, "--mode=bytecode"], {
+    stdin: new TextEncoder().encode("21 * 2;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare --mode=bytecode exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "42") throw new Error(`Bare --mode=bytecode expected 42, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: --mode default is interpreted...");
+{
+  const proc = Bun.spawnSync([BARE, "--help"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare --help exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  const help = proc.stdout.toString();
+  if (!help.includes("--mode=interpreted|bytecode"))
+    throw new Error(`Bare --help should document --mode, got: ${help}`);
+  if (!help.includes("default: interpreted"))
+    throw new Error(`Bare --help should document interpreted as default, got: ${help}`);
+}
+
+console.log("Bare Loader: --mode invalid value rejected...");
+{
+  const proc = Bun.spawnSync([BARE, "--mode=foo"], {
+    stdin: new TextEncoder().encode("1;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode === 0) throw new Error(`Bare --mode=foo should fail, got exit 0`);
+  const stderr = proc.stderr.toString();
+  if (!stderr.includes("Invalid --mode value: foo"))
+    throw new Error(`Bare --mode=foo should report invalid value, got stderr: ${stderr}`);
 }
 
 // -- --global / --globals -------------------------------------------------------
@@ -1112,6 +1175,53 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
           typeof bench.iterations === "number" && bench.iterations > 0
         );
       if (valid.length === 0) throw new Error("Bytecode benchmark JSON should contain at least one valid result");
+    }
+
+    console.log("BenchmarkRunner: deterministic profile mode...");
+    const profileBench = join(tmp, "profile-deterministic.js");
+    const profileOut = join(tmp, "profile.json");
+    writeFileSync(profileBench, [
+      'let count = 0;',
+      'suite("profile", () => {',
+      '  bench("runs once", {',
+      '    setup: () => ({ value: 1 }),',
+      '    run: async (state) => {',
+      '      count = count + await Promise.resolve(state.value);',
+      '    },',
+      '    teardown: () => {',
+      '      if (count !== 1) { throw new Error("expected one deterministic run, got " + count); }',
+      '    },',
+      '  });',
+      '});',
+      '',
+    ].join("\n"));
+    {
+      const proc = Bun.spawnSync(
+        [
+          resolve(BENCHRUNNER),
+          profileBench,
+          "--profile-deterministic",
+          "--profile=all",
+          `--profile-output=${profileOut}`,
+          "--no-progress",
+          "--format=compact-json",
+        ],
+        { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
+      );
+      if (proc.exitCode !== 0) throw new Error(`Deterministic profile benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const report = JSON.parse(proc.stdout.toString());
+      const bench = report.files?.[0]?.benchmarks?.[0];
+      if (bench?.iterations !== 1)
+        throw new Error(`Deterministic profile report should record one iteration, got ${bench?.iterations}`);
+    }
+    {
+      const profile = JSON.parse(readFileSync(profileOut, "utf-8"));
+      if (!Array.isArray(profile.opcodes) || profile.opcodes.length === 0)
+        throw new Error("Deterministic profile should include opcode counts");
+      if (!Array.isArray(profile.functions) || profile.functions.length === 0)
+        throw new Error("Deterministic profile should include function counts");
+      if (!profile.functions.some((fn: Record<string, unknown>) => typeof fn.allocations === "number"))
+        throw new Error("Deterministic profile should include function allocation counts");
     }
 
     console.log("BenchmarkRunner: file benchmark JSON output...");

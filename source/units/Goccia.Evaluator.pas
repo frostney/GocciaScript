@@ -78,6 +78,7 @@ procedure AssignRestPattern(const APattern: TGocciaRestDestructuringPattern; con
 procedure InitializeInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 procedure InitializePrivateInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 function InstantiateClass(const AClassValue: TGocciaClassValue; const AArguments: TGocciaArgumentsCollection; const AContext: TGocciaEvaluationContext): TGocciaValue;
+procedure ValidateClassConstructorReturn(const AClassValue: TGocciaClassValue; const AValue: TGocciaValue);
 
 function IsObjectInstanceOfClass(const AObj: TGocciaObjectValue; const AClassValue: TGocciaClassValue): Boolean;
 
@@ -2991,6 +2992,11 @@ var
   WalkClass, ClassValue: TGocciaClassValue;
   InitContext, SuperInitContext: TGocciaEvaluationContext;
   InitScope, SuperInitScope: TGocciaScope;
+  FunctionCallee: TGocciaFunctionBase;
+  PrototypeTarget: TGocciaValue;
+  PrototypeValue: TGocciaValue;
+  ReceiverPrototype: TGocciaObjectValue;
+  ReceiverInstance: TGocciaObjectValue;
 begin
   CheckExecutionTimeout;
   IncrementInstructionCounter;
@@ -3014,6 +3020,8 @@ begin
       CalleeName := TGocciaClassValue(Callee).Name
     else if Callee is TGocciaNativeFunctionValue then
       CalleeName := TGocciaNativeFunctionValue(Callee).Name
+    else if Callee is TGocciaFunctionBase then
+      CalleeName := TGocciaFunctionBase(Callee).GetProperty(PROP_NAME).ToStringLiteral.Value
     else
       CalleeName := '';
 
@@ -3042,6 +3050,46 @@ begin
               [TGocciaNativeFunctionValue(Callee).Name]));
         Result := TGocciaNativeFunctionValue(Callee).Call(Arguments,
           TGocciaHoleValue.HoleValue);
+      end
+      else if Callee is TGocciaFunctionBase then
+      begin
+        // ES2026 §10.2.2 [[Construct]] for ordinary function objects:
+        // OrdinaryCreateFromConstructor produces a fresh object whose
+        // [[Prototype]] is constructor.prototype (or %Object.prototype% when
+        // that property is not an Object — §10.1.14 GetPrototypeFromConstructor).
+        // For bound function exotic objects (§10.4.1.2) the receiver's
+        // [[Prototype]] comes from the underlying [[BoundTargetFunction]] —
+        // the bound wrapper itself has no own `prototype` data property.
+        FunctionCallee := TGocciaFunctionBase(Callee);
+        if not FunctionCallee.IsConstructable then
+          ThrowTypeError(Format(SErrorNotConstructor, [CalleeName]),
+            SSuggestNotConstructorType);
+        PrototypeTarget := FunctionCallee;
+        while PrototypeTarget is TGocciaBoundFunctionValue do
+          PrototypeTarget := TGocciaBoundFunctionValue(PrototypeTarget).OriginalFunction;
+        if PrototypeTarget is TGocciaObjectValue then
+          PrototypeValue := TGocciaObjectValue(PrototypeTarget).GetProperty(PROP_PROTOTYPE)
+        else
+          PrototypeValue := nil;
+        if PrototypeValue is TGocciaObjectValue then
+          ReceiverPrototype := TGocciaObjectValue(PrototypeValue)
+        else
+        begin
+          if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+            TGocciaObjectValue.InitializeSharedPrototype;
+          ReceiverPrototype := TGocciaObjectValue.SharedObjectPrototype;
+        end;
+        ReceiverInstance := TGocciaObjectValue.Create(ReceiverPrototype);
+        TGarbageCollector.Instance.AddTempRoot(ReceiverInstance);
+        try
+          // InvokeConstructableWithReceiver merges bound args, dispatches to
+          // the underlying target, and applies the spec return rules
+          // (explicit Object return wins; otherwise the receiver).
+          Result := InvokeConstructableWithReceiver(FunctionCallee, Arguments,
+            ReceiverInstance);
+        finally
+          TGarbageCollector.Instance.RemoveTempRoot(ReceiverInstance);
+        end;
       end
       else
       begin

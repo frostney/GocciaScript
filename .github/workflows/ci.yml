@@ -748,6 +748,32 @@ jobs:
           path: benchmark-${{ matrix.mode }}-results.json
           key: benchmark-${{ matrix.mode }}-baseline-${{ github.sha }}
 
+      - name: Capture deterministic profile baseline
+        if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && matrix.mode == 'bytecode'
+        run: |
+          set -euo pipefail
+          mkdir -p profile-baseline
+          while IFS= read -r bench; do
+            rel="${bench#benchmarks/}"
+            out="profile-baseline/${rel%.*}.json"
+            mkdir -p "$(dirname "$out")"
+            ./build/GocciaBenchmarkRunner "$bench" \
+              --mode=bytecode \
+              --profile-deterministic \
+              --profile=all \
+              --profile-output="$out" \
+              --no-progress \
+              --format=compact-json \
+              > /dev/null
+          done < <(find benchmarks -type f \( -name '*.js' -o -name '*.jsx' -o -name '*.ts' -o -name '*.tsx' -o -name '*.mjs' \) ! -path '*/helpers/*' | sort)
+
+      - name: Cache deterministic profile baseline
+        if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && matrix.mode == 'bytecode'
+        uses: actions/cache/save@v5
+        with:
+          path: profile-baseline/
+          key: profile-baseline-${{ github.sha }}
+
   cli:
     needs: build
     strategy:

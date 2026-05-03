@@ -60,15 +60,30 @@ type
   end;
 
   TBenchmarkProgress = class
+    class procedure WriteLine(const AMessage: string);
     class procedure OnProgress(const ASuiteName, ABenchName: string; const AIndex, ATotal: Integer);
   end;
+
+var
+  BenchmarkProgressLock: TRTLCriticalSection;
+
+class procedure TBenchmarkProgress.WriteLine(const AMessage: string);
+begin
+  EnterCriticalSection(BenchmarkProgressLock);
+  try
+    WriteLn(AMessage);
+    Flush(Output);
+  finally
+    LeaveCriticalSection(BenchmarkProgressLock);
+  end;
+end;
 
 class procedure TBenchmarkProgress.OnProgress(const ASuiteName, ABenchName: string; const AIndex, ATotal: Integer);
 begin
   if ASuiteName <> '' then
-    WriteLn(SysUtils.Format('  [%d/%d] %s > %s', [AIndex, ATotal, ASuiteName, ABenchName]))
+    WriteLine(SysUtils.Format('  [%d/%d] %s > %s', [AIndex, ATotal, ASuiteName, ABenchName]))
   else
-    WriteLn(SysUtils.Format('  [%d/%d] %s', [AIndex, ATotal, ABenchName]));
+    WriteLine(SysUtils.Format('  [%d/%d] %s', [AIndex, ATotal, ABenchName]));
 end;
 
 type
@@ -169,9 +184,11 @@ type
   TBenchmarkRunnerApp = class(TGocciaCLIApplication)
   private
     FNoProgress: TGocciaFlagOption;
+    FProfileDeterministic: TGocciaFlagOption;
     FFormats: TGocciaRepeatableOption;
     FOutputFile: TGocciaStringOption;
     FCanPrintProfile: Boolean;
+    FWorkerProgressEnabled: Boolean;
     function ProfilingEnabled: Boolean;
     procedure RunBytecodeBenchmarkModule(const AEngine: TGocciaEngine;
       const AExecutor: TGocciaBytecodeExecutor;
@@ -249,7 +266,8 @@ begin
     Benchmark.OnBeforeMeasurement := AEngine.ClearTransientCaches;
 end;
 
-function RunRegisteredBenchmarks(const AEngine: TGocciaEngine): TGocciaObjectValue;
+function RunRegisteredBenchmarks(const AEngine: TGocciaEngine;
+  const ADeterministicProfile: Boolean): TGocciaObjectValue;
 var
   Benchmark: TGocciaBenchmark;
   EmptyArgs: TGocciaArgumentsCollection;
@@ -261,8 +279,12 @@ begin
 
   EmptyArgs := TGocciaArgumentsCollection.Create;
   try
-    Value := Benchmark.RunBenchmarks(EmptyArgs,
-      TGocciaUndefinedLiteralValue.UndefinedValue);
+    if ADeterministicProfile then
+      Value := Benchmark.RunDeterministicProfile(EmptyArgs,
+        TGocciaUndefinedLiteralValue.UndefinedValue)
+    else
+      Value := Benchmark.RunBenchmarks(EmptyArgs,
+        TGocciaUndefinedLiteralValue.UndefinedValue);
   finally
     EmptyArgs.Free;
   end;
@@ -299,6 +321,7 @@ procedure TBenchmarkRunnerApp.CollectBenchmarkFileInterpreted(
 var
   Source: TStringList;
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   GC: TGarbageCollector;
   EngineResult: TGocciaScriptResult;
   ScriptResult: TGocciaObjectValue;
@@ -319,39 +342,46 @@ begin
       end;
     end;
     try
-      Engine := CreateEngine(AFileName, Source);
+      Executor := TGocciaInterpreterExecutor.Create;
       try
-        ConfigureBenchmarkRuntime(Engine, AShowProgress, False);
-
-        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
-        StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+        Engine := CreateEngine(AFileName, Source, Executor);
         try
-          EngineResult := Engine.Execute;
-          FileResult.FileName := AFileName;
-          FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
-          FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
-          FileResult.CompileTimeNanoseconds := 0;
-          BenchStart := GetNanoseconds;
-          ScriptResult := RunRegisteredBenchmarks(Engine);
-          FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds +
-            (GetNanoseconds - BenchStart);
-        finally
-          ClearExecutionTimeout;
-          ClearInstructionLimit;
-        end;
+          ConfigureBenchmarkRuntime(Engine, AShowProgress, False);
 
-        GC := TGarbageCollector.Instance;
+          StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+          StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+          try
+            EngineResult := Engine.Execute;
+            FileResult.FileName := AFileName;
+            FileResult.DeterministicProfile := FProfileDeterministic.Present;
+            FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
+            FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
+            FileResult.CompileTimeNanoseconds := 0;
+            BenchStart := GetNanoseconds;
+            ScriptResult := RunRegisteredBenchmarks(Engine,
+              FProfileDeterministic.Present);
+            FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds +
+              (GetNanoseconds - BenchStart);
+          finally
+            ClearExecutionTimeout;
+            ClearInstructionLimit;
+          end;
 
-        if Assigned(ScriptResult) and Assigned(GC) then
-          GC.AddTempRoot(ScriptResult);
-        try
-          PopulateFileResult(FileResult, ScriptResult, AReporter);
-        finally
+          GC := TGarbageCollector.Instance;
+
           if Assigned(ScriptResult) and Assigned(GC) then
-            GC.RemoveTempRoot(ScriptResult);
+            GC.AddTempRoot(ScriptResult);
+          try
+            PopulateFileResult(FileResult, ScriptResult, AReporter);
+          finally
+            if Assigned(ScriptResult) and Assigned(GC) then
+              GC.RemoveTempRoot(ScriptResult);
+          end;
+        finally
+          Engine.Free;
         end;
       finally
-        Engine.Free;
+        Executor.Free;
       end;
     except
       on E: TGocciaError do
@@ -458,13 +488,18 @@ begin
             RunBytecodeBenchmarkModule(Engine,
               TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
             ExecEnd := GetNanoseconds;
+            if FProfileDeterministic.Present and
+               Assigned(TGocciaProfiler.Instance) then
+              TGocciaProfiler.Instance.ResetCounts;
 
             FileResult.FileName := AFileName;
+            FileResult.DeterministicProfile := FProfileDeterministic.Present;
             FileResult.LexTimeNanoseconds := LexEnd - LexStart;
             FileResult.ParseTimeNanoseconds := ParseEnd - LexEnd;
             FileResult.CompileTimeNanoseconds := CompileEnd - ParseEnd;
             BenchStart := GetNanoseconds;
-            ScriptResult := RunRegisteredBenchmarks(Engine);
+            ScriptResult := RunRegisteredBenchmarks(Engine,
+              FProfileDeterministic.Present);
             FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd +
               (GetNanoseconds - BenchStart);
           finally
@@ -541,6 +576,7 @@ procedure TBenchmarkRunnerApp.CollectBenchmarkSourceInterpreted(
   const AReporter: TBenchmarkReporter; const AShowProgress: Boolean);
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   GC: TGarbageCollector;
   EngineResult: TGocciaScriptResult;
   ScriptResult: TGocciaObjectValue;
@@ -548,39 +584,46 @@ var
   BenchStart: Int64;
 begin
   try
-    Engine := CreateEngine(AFileName, ASource);
+    Executor := TGocciaInterpreterExecutor.Create;
     try
-      ConfigureBenchmarkRuntime(Engine, AShowProgress, False);
-
-      StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
-      StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+      Engine := CreateEngine(AFileName, ASource, Executor);
       try
-        EngineResult := Engine.Execute;
-        FileResult.FileName := AFileName;
-        FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
-        FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
-        FileResult.CompileTimeNanoseconds := 0;
-        BenchStart := GetNanoseconds;
-        ScriptResult := RunRegisteredBenchmarks(Engine);
-        FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds +
-          (GetNanoseconds - BenchStart);
-      finally
-        ClearExecutionTimeout;
-        ClearInstructionLimit;
-      end;
+        ConfigureBenchmarkRuntime(Engine, AShowProgress, False);
 
-      GC := TGarbageCollector.Instance;
+        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+        StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+        try
+          EngineResult := Engine.Execute;
+          FileResult.FileName := AFileName;
+          FileResult.DeterministicProfile := FProfileDeterministic.Present;
+          FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
+          FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
+          FileResult.CompileTimeNanoseconds := 0;
+          BenchStart := GetNanoseconds;
+          ScriptResult := RunRegisteredBenchmarks(Engine,
+            FProfileDeterministic.Present);
+          FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds +
+            (GetNanoseconds - BenchStart);
+        finally
+          ClearExecutionTimeout;
+          ClearInstructionLimit;
+        end;
 
-      if Assigned(ScriptResult) and Assigned(GC) then
-        GC.AddTempRoot(ScriptResult);
-      try
-        PopulateFileResult(FileResult, ScriptResult, AReporter);
-      finally
+        GC := TGarbageCollector.Instance;
+
         if Assigned(ScriptResult) and Assigned(GC) then
-          GC.RemoveTempRoot(ScriptResult);
+          GC.AddTempRoot(ScriptResult);
+        try
+          PopulateFileResult(FileResult, ScriptResult, AReporter);
+        finally
+          if Assigned(ScriptResult) and Assigned(GC) then
+            GC.RemoveTempRoot(ScriptResult);
+        end;
+      finally
+        Engine.Free;
       end;
     finally
-      Engine.Free;
+      Executor.Free;
     end;
   except
     on E: TGocciaError do
@@ -668,13 +711,18 @@ begin
           RunBytecodeBenchmarkModule(Engine,
             TGocciaBytecodeExecutor(Engine.Executor), Module, AFileName);
           ExecEnd := GetNanoseconds;
+          if FProfileDeterministic.Present and
+             Assigned(TGocciaProfiler.Instance) then
+            TGocciaProfiler.Instance.ResetCounts;
 
           FileResult.FileName := AFileName;
+          FileResult.DeterministicProfile := FProfileDeterministic.Present;
           FileResult.LexTimeNanoseconds := LexEnd - LexStart;
           FileResult.ParseTimeNanoseconds := ParseEnd - LexEnd;
           FileResult.CompileTimeNanoseconds := CompileEnd - ParseEnd;
           BenchStart := GetNanoseconds;
-          ScriptResult := RunRegisteredBenchmarks(Engine);
+          ScriptResult := RunRegisteredBenchmarks(Engine,
+            FProfileDeterministic.Present);
           FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd +
             (GetNanoseconds - BenchStart);
         finally
@@ -764,7 +812,8 @@ begin
   WorkerReporter := TBenchmarkReporter.Create;
   try
     try
-      CollectBenchmarkFile(AFileName, WorkerReporter, Mode, False);
+      CollectBenchmarkFile(AFileName, WorkerReporter, Mode,
+        FWorkerProgressEnabled);
       if WorkerReporter.FileCount > 0 then
         WorkerResults^[AIndex] := WorkerReporter.Files[0];
     except
@@ -907,10 +956,10 @@ begin
     if AShowProgress then
     begin
       if JobCount > 1 then
-        WriteLn(SysUtils.Format('Running %d files with %d workers',
+        TBenchmarkProgress.WriteLine(SysUtils.Format('Running %d files with %d workers',
           [Files.Count, JobCount]))
       else
-        WriteLn(SysUtils.Format('Running %d files', [Files.Count]));
+        TBenchmarkProgress.WriteLine(SysUtils.Format('Running %d files', [Files.Count]));
     end;
 
     if JobCount > 1 then
@@ -927,6 +976,7 @@ begin
         WorkerData[I].ExecuteTimeNanoseconds := 0;
         WorkerData[I].TotalBenchmarks := 0;
         WorkerData[I].DurationNanoseconds := 0;
+        WorkerData[I].DeterministicProfile := False;
         SetLength(WorkerData[I].Entries, 0);
       end;
 
@@ -939,7 +989,12 @@ begin
       try
         if Assigned(TGarbageCollector.Instance) then
           Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
-        Pool.RunAll(Files, BenchmarkWorkerProc, @WorkerData[0]);
+        FWorkerProgressEnabled := AShowProgress;
+        try
+          Pool.RunAll(Files, BenchmarkWorkerProc, @WorkerData[0]);
+        finally
+          FWorkerProgressEnabled := False;
+        end;
         WorkerMemoryStats := Pool.MemoryStats;
       finally
         Pool.Free;
@@ -955,7 +1010,7 @@ begin
       for I := 0 to Files.Count - 1 do
       begin
         if AShowProgress then
-          WriteLn(SysUtils.Format('[%d/%d] %s',
+          TBenchmarkProgress.WriteLine(SysUtils.Format('[%d/%d] %s',
             [I + 1, Files.Count, ExtractFileName(Files[I])]));
         Reporter.AddFileResult(WorkerData[I]);
       end;
@@ -967,7 +1022,7 @@ begin
       for I := 0 to Files.Count - 1 do
       begin
         if AShowProgress then
-          WriteLn(SysUtils.Format('[%d/%d] %s',
+          TBenchmarkProgress.WriteLine(SysUtils.Format('[%d/%d] %s',
             [I + 1, Files.Count, ExtractFileName(Files[I])]));
         CollectBenchmarkFile(Files[I], Reporter, AMode, AShowProgress);
       end;
@@ -975,7 +1030,7 @@ begin
     end;
 
     if AShowProgress and (Files.Count > 0) then
-      WriteLn;
+      TBenchmarkProgress.WriteLine('');
 
     for J := 0 to Length(AReports) - 1 do
     begin
@@ -1004,6 +1059,8 @@ begin
   AddEngineOptions;
   AddProfilerOptions;
   FNoProgress := AddFlag('no-progress', 'Suppress progress output');
+  FProfileDeterministic := AddFlag('profile-deterministic',
+    'Run each registered benchmark once for deterministic profile capture');
   FFormats := AddRepeatable('format',
     'Output format (console, text, csv, json, compact-json). ' +
     '"compact-json" emits the json envelope without build, memory, stdout, stderr.');
@@ -1016,6 +1073,9 @@ begin
 
   if ProfilerOptions.Format.Present and not ProfilerOptions.Mode.Present then
     ProfilerOptions.Mode.Apply('functions');
+
+  if FProfileDeterministic.Present and not ProfilerOptions.Mode.Present then
+    ProfilerOptions.Mode.Apply('all');
 
   if ProfilerOptions.Mode.Present then
     EngineOptions.Mode.Apply('bytecode');
@@ -1181,7 +1241,12 @@ end;
 var
   RunResult: Integer;
 begin
-  RunResult := TGocciaApplication.RunApplication(TBenchmarkRunnerApp, 'GocciaBenchmarkRunner');
+  InitCriticalSection(BenchmarkProgressLock);
+  try
+    RunResult := TGocciaApplication.RunApplication(TBenchmarkRunnerApp, 'GocciaBenchmarkRunner');
+  finally
+    DoneCriticalSection(BenchmarkProgressLock);
+  end;
   if RunResult <> 0 then
     ExitCode := RunResult;
 end.

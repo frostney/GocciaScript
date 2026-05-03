@@ -111,7 +111,7 @@ TGocciaExecutor (abstract — Goccia.Executor.pas)
 
 The engine always creates a `TGocciaInterpreter` for bootstrapping (global scope creation, built-in registration, shim loading). The executor receives the bootstrapped global scope and module loader via `Initialize`, then handles all program and module body execution independently.
 
-Callers pass an executor to the engine constructor. When none is provided, the engine defaults to `TGocciaInterpreterExecutor`.
+Callers must pass an explicit executor to the engine constructor — there is no implicit default. The engine never frees the executor; the caller (or a wrapping layer such as `TGocciaRuntime`) owns it and frees it after the engine.
 
 ## Realm Isolation
 

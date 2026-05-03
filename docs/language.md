@@ -742,8 +742,18 @@ GocciaScript requires explicit semicolons by default, preventing this class of b
 
 ```pascal
 // Enable ASI via the engine API
-Engine := TGocciaEngine.Create(FileName, Source);
-Engine.ASIEnabled := True;
+Executor := TGocciaInterpreterExecutor.Create;
+try
+  Engine := TGocciaEngine.Create(FileName, Source, Executor);
+  try
+    Engine.ASIEnabled := True;
+    Engine.Execute;
+  finally
+    Engine.Free;
+  end;
+finally
+  Executor.Free;
+end;
 ```
 
 When enabled, GocciaScript follows the ECMAScript ASI rules (ES2026 §12.10):
