@@ -92,6 +92,10 @@ test("compound assignment checks computed result before mutating local", () => {
     return x;
   };
 
+  expect(() => {
+    let x: boolean = true;
+    x += false;
+  }).toThrow(TypeError);
   expect(run()).toBe(true);
 });
 
