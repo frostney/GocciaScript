@@ -16,11 +16,12 @@
 Every `TGocciaValue` participates in the garbage collector:
 
 ```pascal
+threadvar
+  GCCurrentMark: Cardinal;  // Per-thread generation counter
+
 TGCManagedObject = class
-private class var
-  FCurrentMark: Cardinal;      // Generation counter — incremented each collection
 private
-  FGCMark: Cardinal;           // Per-object mark — matches FCurrentMark when alive
+  FGCMark: Cardinal;           // Per-object mark — matches GCCurrentMark when alive
   FGCIndex: Integer;           // Index in FManagedObjects for O(1) unregistration
 public
   procedure BeforeDestruction; override;
@@ -38,8 +39,8 @@ TGocciaValue = class(TGCManagedObject)
 end;
 ```
 
-- **`AfterConstruction` / `BeforeDestruction`** — Every value auto-registers with `TGarbageCollector.Instance` upon creation and unregisters before destruction so root sets cannot retain stale object pointers.
-- **`MarkReferences`** — Base implementation sets `FGCMark := FCurrentMark` (marking the object as alive for the current collection). Subclasses override this to also mark values they reference (e.g., `TGocciaObjectValue` marks its prototype and property values, `TGocciaFunctionValue` marks its closure scope, `TGocciaArrayValue` marks its elements). The `if GCMarked then Exit;` guard at the top of each override prevents re-visiting objects in cyclic reference graphs.
+- **`AfterConstruction` / `BeforeDestruction`** — Every value auto-registers with the thread-local `TGarbageCollector.Instance` upon creation and unregisters before destruction so root sets cannot retain stale object pointers.
+- **`MarkReferences`** — Base implementation sets `FGCMark := GCCurrentMark` (marking the object as alive for the current thread's collection). `AdvanceMark` increments the thread-local `GCCurrentMark`, and `TGarbageCollector.Instance` uses that thread-local mark while traversing objects. Subclasses override `MarkReferences` to also mark values they reference (e.g., `TGocciaObjectValue` marks its prototype and property values, `TGocciaFunctionValue` marks its closure scope, `TGocciaArrayValue` marks its elements). The `if GCMarked then Exit;` guard at the top of each override prevents re-visiting objects in cyclic reference graphs.
 - **`TraceWeakReferences` / `SweepWeakReferences`** — Optional hooks for weak containers. The default implementations do nothing. WeakMap uses `TraceWeakReferences` as an ephemeron pass: if a key is already marked by normal roots, its value is marked, but the key is never marked by the map. WeakMap and WeakSet use `SweepWeakReferences` to remove entries whose keys/values remain unmarked.
 - **`RuntimeCopy`** — Creates a fresh GC-managed copy of the value. Used by the evaluator when evaluating literal expressions: AST-owned literal values are not tracked by the GC, so `RuntimeCopy` produces a runtime value that is. The default implementation returns `Self` (for singletons and complex values). Primitives override this: numbers use the `SmallInt` cache for 0-255, booleans return singletons, strings create new instances (cheap due to copy-on-write).
 

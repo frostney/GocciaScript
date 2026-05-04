@@ -340,22 +340,33 @@ function TGocciaFunctionValue.Call(const AArguments: TGocciaArgumentsCollection;
 var
   CallScope: TGocciaScope;
   GC: TGarbageCollector;
+  SelfRooted: Boolean;
+  CallScopeRooted: Boolean;
 begin
-  CallScope := CreateCallScope;
-
   GC := TGarbageCollector.Instance;
+  SelfRooted := False;
+  CallScopeRooted := False;
+  CallScope := nil;
   if Assigned(GC) then
   begin
     GC.PushActiveRoot(Self);
-    GC.PushActiveRoot(CallScope);
+    SelfRooted := True;
   end;
   try
+    CallScope := CreateCallScope;
+    if Assigned(GC) then
+    begin
+      GC.PushActiveRoot(CallScope);
+      CallScopeRooted := True;
+    end;
     Result := ExecuteBody(CallScope, AArguments, AThisValue);
   finally
     if Assigned(GC) then
     begin
-      GC.PopActiveRoot;
-      GC.PopActiveRoot;
+      if CallScopeRooted then
+        GC.PopActiveRoot;
+      if SelfRooted then
+        GC.PopActiveRoot;
     end;
   end;
 end;
@@ -425,24 +436,35 @@ function TGocciaMethodValue.CallWithThisValue(
 var
   CallScope: TGocciaScope;
   GC: TGarbageCollector;
+  SelfRooted: Boolean;
+  CallScopeRooted: Boolean;
 begin
   AFinalThisValue := AThisValue;
-  CallScope := CreateCallScope;
-
   GC := TGarbageCollector.Instance;
+  SelfRooted := False;
+  CallScopeRooted := False;
+  CallScope := nil;
   if Assigned(GC) then
   begin
     GC.PushActiveRoot(Self);
-    GC.PushActiveRoot(CallScope);
+    SelfRooted := True;
   end;
   try
+    CallScope := CreateCallScope;
+    if Assigned(GC) then
+    begin
+      GC.PushActiveRoot(CallScope);
+      CallScopeRooted := True;
+    end;
     Result := ExecuteBody(CallScope, AArguments, AThisValue);
     AFinalThisValue := CallScope.ThisValue;
   finally
     if Assigned(GC) then
     begin
-      GC.PopActiveRoot;
-      GC.PopActiveRoot;
+      if CallScopeRooted then
+        GC.PopActiveRoot;
+      if SelfRooted then
+        GC.PopActiveRoot;
     end;
   end;
 end;

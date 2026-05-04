@@ -351,7 +351,7 @@ begin
     Exit;
   for I := FActiveRootStack.Count - 1 downto 0 do
     if FActiveRootStack[I] = AObject then
-      FActiveRootStack.Delete(I);
+      FActiveRootStack[I] := nil;
 end;
 
 procedure TGarbageCollector.PinObject(const AObject: TGCManagedObject);
@@ -424,7 +424,8 @@ begin
     Pair.Key.MarkReferences;
 
   for I := 0 to FActiveRootStack.Count - 1 do
-    FActiveRootStack[I].MarkReferences;
+    if Assigned(FActiveRootStack[I]) then
+      FActiveRootStack[I].MarkReferences;
 end;
 
 procedure TGarbageCollector.TraceWeakReferences;
