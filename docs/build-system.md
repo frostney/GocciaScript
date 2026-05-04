@@ -76,6 +76,15 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader
 printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner
 ```
 
+Both loaders are silent about the script's last evaluated value by default (matching `node script.js` / `bun script.js` / `deno run script.js` / `qjs script.js`). Pass `--print` to emit the bare value on its own line, including `undefined` (mirrors `node -p` / `bun --print` / `deno eval -p`):
+
+```bash
+printf "2 + 2;" | ./build/GocciaScriptLoader --print          # prints "4" after the timing banner
+printf "undefined;" | ./build/GocciaScriptLoaderBare --print  # prints "undefined"
+```
+
+`GocciaScriptLoader`'s human-readable timing banner is always printed; `--print` only controls the final value line. Programmatic consumers should use `--output=json` instead — the result is always present in the `result` field regardless of `--print`.
+
 Leading Unix shebang lines such as `#!/usr/bin/env goccia` are treated as comments by the lexer, so executable scripts can be run directly without preprocessing.
 
 ### Compile and Test
@@ -91,7 +100,7 @@ All execution tools support `--mode=bytecode` to compile and run via the Goccia 
 ```bash
 # Execute via bytecode VM
 ./build/GocciaScriptLoader example.js --mode=bytecode
-printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader --mode=bytecode
+printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader --mode=bytecode --print
 
 # Load and execute a pre-compiled .gbc file
 ./build/GocciaScriptLoader output.gbc
@@ -114,7 +123,7 @@ printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=compact
 ./build/GocciaBenchmarkRunner benchmarks --format=compact-json --output=out.json
 
 # Inject globals from the CLI
-printf "x + y;" | ./build/GocciaScriptLoader --global x=10 --global y=20
+printf "x + y;" | ./build/GocciaScriptLoader --global x=10 --global y=20 --print
 printf "name;" | ./build/GocciaScriptLoader --globals=context.json --output=json
 printf "name;" | ./build/GocciaScriptLoader --globals=context.json5 --output=json
 printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
