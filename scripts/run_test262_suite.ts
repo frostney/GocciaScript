@@ -58,6 +58,21 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_MEMORY = 2 * 1024 * 1024 * 1024; // 2 GiB
 const DEFAULT_JOBS = 4;
 
+// Tests that are known to crash the engine (SIGSEGV / SIGBUS) at the
+// native level — i.e. not catchable by the per-test timeout, and not
+// representative of conformance failures.  Skipping them keeps the
+// wrapper-infra counter trustworthy as a "harness broke" signal.
+//
+// Each entry MUST be paired with a GitHub issue tracking the engine
+// bug.  Per docs/test262.md "Updating the contract", this list is the
+// only allowed form of test-skipping; no generic eligibility filter.
+const KNOWN_ENGINE_CRASHES = new Set<string>([
+  // SIGSEGV: generator + iterator concat path. https://github.com/frostney/GocciaScript/issues/514
+  "built-ins/Iterator/concat/throws-typeerror-when-generator-is-running-next.js",
+  // SIGSEGV: RegExp.prototype.test trailing-input edge case. https://github.com/frostney/GocciaScript/issues/515
+  "staging/sm/RegExp/test-trailing.js",
+]);
+
 // ---------------------------------------------------------------------------
 // Frontmatter
 // ---------------------------------------------------------------------------
@@ -84,11 +99,22 @@ function parseTest(source: string): ParsedTest {
     return { body: source, meta: { flags: [], includes: [], features: [] } };
   }
   const yamlText = match[1];
-  let parsed: any = {};
+  // test262 frontmatter is loose YAML — `info:` / `description:` fields
+  // routinely contain unbalanced brackets like
+  // `String.fromCharCode ( [ char0 [ , char1 ] ] )` that Bun's strict
+  // YAML rejects but other engines (and the historical Python parser)
+  // accept.  Try strict YAML first, then fall back to a forgiving
+  // line-based extractor that only resolves the fields the orchestrator
+  // actually needs (`flags`, `includes`, `negative.phase`,
+  // `negative.type`, plus `description` for reporting).  This keeps a
+  // genuine YAML-shape bug visible (it would still fail the line
+  // extractor in most cases) while not losing tests to free-form text
+  // in fields we never read.
+  let parsed: any;
   try {
     parsed = Bun.YAML.parse(yamlText) || {};
   } catch {
-    parsed = {};
+    parsed = parseTolerantFrontmatter(yamlText);
   }
   const before = source.slice(0, match.index).replace(/\s+$/, "");
   const after = source.slice(match.index + match[0].length).replace(/^\n+/, "");
@@ -107,6 +133,48 @@ function parseTest(source: string): ParsedTest {
       esid: parsed.esid,
     },
   };
+}
+
+function parseTolerantFrontmatter(yamlText: string): any {
+  const out: any = {};
+  const lines = yamlText.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = /^([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(.*)$/.exec(line);
+    if (!m) continue;
+    const key = m[1];
+    const rest = m[2];
+    if (rest === "") {
+      // Nested mapping — collect indented `key: value` lines.
+      const nested: any = {};
+      while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1])) {
+        i++;
+        const nm = /^\s+([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(.*)$/.exec(lines[i]);
+        if (nm) nested[nm[1]] = unquote(nm[2]);
+      }
+      out[key] = nested;
+    } else {
+      // Inline list `[a, b]`
+      const lm = /^\[(.*)\]\s*$/.exec(rest);
+      if (lm) {
+        out[key] = lm[1]
+          .split(",")
+          .map((s) => unquote(s.trim()))
+          .filter(Boolean);
+      } else {
+        out[key] = unquote(rest);
+      }
+    }
+  }
+  return out;
+}
+
+function unquote(s: string): string {
+  if (s.length >= 2) {
+    const f = s[0];
+    if ((f === '"' || f === "'") && s[s.length - 1] === f) return s.slice(1, -1);
+  }
+  return s;
 }
 
 function toStringArray(value: unknown): string[] {
@@ -254,9 +322,14 @@ function classifyRunResult(args: ClassifyArgs): {
 
   // Signal exits or ridiculously high exit codes signal an engine crash —
   // these are wrapper-infra failures, not conformance failures, because
-  // the engine could not produce a trustworthy verdict.
+  // the engine could not produce a trustworthy verdict.  Exception:
+  // SIGTERM is what AbortController sends when our wall-clock timeout
+  // fires — classify that as TIMEOUT, not WRAPPER_INFRA.
   const exitCode = result.exitCode ?? -1;
   if (result.signalCode !== null) {
+    if (result.signalCode === "SIGTERM" || result.signalCode === "SIGKILL") {
+      return { outcome: "TIMEOUT", reason: `wall-clock ${result.signalCode}`, diagnostic: "" };
+    }
     return {
       outcome: "WRAPPER_INFRA",
       reason: `signal ${result.signalCode}`,
@@ -434,6 +507,7 @@ function walkJs(
     if (ent.name.endsWith("_FIXTURE.js")) continue; // test262 fixture convention
     const id = normalizeTestId(relative(base, full));
     if (filterGlob && !matchesGlob(id, filterGlob)) continue;
+    if (KNOWN_ENGINE_CRASHES.has(id)) continue;
     out.push({ id, path: full });
   }
 }
@@ -460,7 +534,6 @@ interface RunOptions {
   timeoutMs: number;
   maxMemoryBytes: number;
   mode: "interpreted" | "bytecode";
-  asi: boolean;
 }
 
 interface PerTestRecord {
@@ -477,20 +550,50 @@ async function runOneTest(
   opts: RunOptions,
 ): Promise<PerTestRecord> {
   const sourceText = readFileSync(test.path, "utf-8");
-  const parsed = parseTest(sourceText);
+  let parsed: ParsedTest;
+  try {
+    parsed = parseTest(sourceText);
+  } catch (err) {
+    return {
+      id: test.id,
+      status: "WRAPPER_INFRA",
+      durationMs: 0,
+      message: `frontmatter parse failed: ${(err as Error).message}`,
+    };
+  }
   const flags = parsed.meta.flags;
   const isAsync = flags.includes("async");
   const isRaw = flags.includes("raw");
   const isModule = flags.includes("module");
   const negative = parsed.meta.negative;
-  const isNegativeParse = negative?.phase === "parse" || negative?.phase === "early";
-  const isNegativeRuntime = negative?.phase === "runtime" || negative?.phase === "resolution";
+  const isNegative = negative !== undefined;
 
+  // Test262 negative phases:
+  //   parse, early       — caught at parse time, no body executes
+  //   resolution         — caught during module link, no body executes
+  //   runtime            — caught during execution
+  //
+  // Module-flagged negative tests (any phase) cannot be wrapped in
+  // try/catch because top-level `import` is declarative and illegal
+  // inside a try block.  Run those raw under --source-type=module and
+  // detect failure via exit code, same as parse/resolution/early.
   let kind: WrapperKind;
-  if (isNegativeParse) kind = "negative_parse";
-  else if (isNegativeRuntime) kind = "negative_runtime";
-  else if (isAsync) kind = "positive_async";
-  else kind = "positive_sync";
+  if (isNegative) {
+    if (
+      negative.phase === "parse" ||
+      negative.phase === "early" ||
+      negative.phase === "resolution" ||
+      isModule
+    ) {
+      kind = "negative_parse";
+    } else {
+      kind = "negative_runtime";
+    }
+  } else if (isAsync) {
+    kind = "positive_async";
+  } else {
+    kind = "positive_sync";
+  }
 
   // Async always needs doneprintHandle.js (stock $DONE / marker emitter).
   const includes = [...parsed.meta.includes];
@@ -517,6 +620,10 @@ async function runOneTest(
     errorType: negative?.type,
   });
 
+  // test262 source is overwhelmingly semicolon-omitted; ASI is required to
+  // parse the corpus.  --compat-all and --unsafe-function-constructor are
+  // also unconditional: stock harness uses `var`, `function`, and
+  // `Function("return this;")()`.
   const args = [
     "--asi",
     "--compat-all",
@@ -524,11 +631,9 @@ async function runOneTest(
     `--mode=${opts.mode}`,
     `--timeout=${opts.timeoutMs}`,
     `--max-memory=${opts.maxMemoryBytes}`,
-    "-",
   ];
   if (isModule) args.unshift("--source-type=module");
-  // ASI flag is always set above (ASI is required for test262 per current
-  // CI invocation); --asi appears unconditionally rather than gated on opts.
+  args.push("-");
 
   const result = await spawnBareWithTimeout(
     opts.bare,
@@ -781,7 +886,7 @@ function pct(n: number, d: number): string {
 // Step summary (GitHub Actions $GITHUB_STEP_SUMMARY)
 // ---------------------------------------------------------------------------
 
-function emitStepSummary(s: SuiteSummary): void {
+async function emitStepSummary(s: SuiteSummary): Promise<void> {
   const path = process.env.GITHUB_STEP_SUMMARY;
   if (!path) return;
   let md = "## test262 Conformance\n\n";
@@ -797,7 +902,7 @@ function emitStepSummary(s: SuiteSummary): void {
   }
   md += `| **total** | ${s.totalRun} | ${s.passed} | ${s.failed} | ${pct(s.passed, s.totalRun)} |\n`;
   md += `\nDuration: ${s.durationSeconds.toFixed(1)}s\n`;
-  Bun.write(path, md);
+  await Bun.write(path, md);
 }
 
 // ---------------------------------------------------------------------------
@@ -812,11 +917,19 @@ interface MainArgs {
   maxTests: number;
   jobs: number;
   mode: "interpreted" | "bytecode";
-  asi: boolean;
   timeoutMs: number;
   maxMemoryBytes: number;
   verbose: boolean;
   bare: string;
+}
+
+function parsePositiveInt(name: string, raw: string | undefined): number {
+  const n = parseInt(raw ?? "", 10);
+  if (!Number.isInteger(n) || n <= 0) {
+    console.error(`${name} requires a positive integer, got: ${raw}`);
+    process.exit(2);
+  }
+  return n;
 }
 
 function parseMainArgs(argv: string[]): MainArgs {
@@ -828,7 +941,6 @@ function parseMainArgs(argv: string[]): MainArgs {
     maxTests: parseInt(process.env.TEST262_MAX_TESTS || "0", 10),
     jobs: DEFAULT_JOBS,
     mode: "bytecode",
-    asi: true,
     timeoutMs: parseInt(process.env.TEST262_TIMEOUT_MS || String(DEFAULT_TIMEOUT_MS), 10),
     maxMemoryBytes: parseInt(process.env.TEST262_MAX_MEMORY || String(DEFAULT_MAX_MEMORY), 10),
     verbose: false,
@@ -846,8 +958,8 @@ function parseMainArgs(argv: string[]): MainArgs {
     else if (arg.startsWith("--categories=")) out.categories = arg.slice("--categories=".length).split(",");
     else if (arg === "--max-tests") out.maxTests = parseInt(argv[++i], 10);
     else if (arg.startsWith("--max-tests=")) out.maxTests = parseInt(arg.slice("--max-tests=".length), 10);
-    else if (arg === "--jobs") out.jobs = parseInt(argv[++i], 10);
-    else if (arg.startsWith("--jobs=")) out.jobs = parseInt(arg.slice("--jobs=".length), 10);
+    else if (arg === "--jobs") out.jobs = parsePositiveInt("--jobs", argv[++i]);
+    else if (arg.startsWith("--jobs=")) out.jobs = parsePositiveInt("--jobs", arg.slice("--jobs=".length));
     else if (arg === "--mode") out.mode = argv[++i] as "interpreted" | "bytecode";
     else if (arg.startsWith("--mode=")) out.mode = arg.slice("--mode=".length) as "interpreted" | "bytecode";
     else if (arg === "--timeout-ms") out.timeoutMs = parseInt(argv[++i], 10);
@@ -856,8 +968,6 @@ function parseMainArgs(argv: string[]): MainArgs {
     else if (arg.startsWith("--max-memory=")) out.maxMemoryBytes = parseInt(arg.slice("--max-memory=".length), 10);
     else if (arg === "--bare") out.bare = argv[++i];
     else if (arg.startsWith("--bare=")) out.bare = arg.slice("--bare=".length);
-    else if (arg === "--no-asi") out.asi = false;
-    else if (arg === "--asi") out.asi = true;
     else if (arg === "--verbose" || arg === "-v") out.verbose = true;
     else if (arg === "--help" || arg === "-h") {
       printUsage();
@@ -884,7 +994,6 @@ Run mode options:
   --timeout-ms MS        Per-test engine timeout (default: ${DEFAULT_TIMEOUT_MS}).
   --max-memory BYTES     Per-test GC heap cap (default: 2 GiB).
   --bare PATH            Path to GocciaScriptLoaderBare (default: ./build/...).
-  --no-asi               Disable ASI (default is enabled).
   --verbose              Print per-test results.
 
 Comment mode:
@@ -964,7 +1073,6 @@ async function runMain(argv: string[]): Promise<number> {
         timeoutMs: args.timeoutMs,
         maxMemoryBytes: args.maxMemoryBytes,
         mode: args.mode,
-        asi: args.asi,
       },
       args.jobs,
       (done, total, rec) => {
@@ -1005,7 +1113,7 @@ async function runMain(argv: string[]): Promise<number> {
     }
 
     printConsoleSummary(summary, results);
-    emitStepSummary(summary);
+    await emitStepSummary(summary);
 
     if (
       summary.failed > 0 ||

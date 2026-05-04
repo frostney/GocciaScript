@@ -865,10 +865,27 @@ jobs:
         # wrapper-infra highlighting all live in one place under version
         # control.  Pass "-" for the baseline arg if no cached baseline
         # exists; the script handles both shapes.
+        #
+        # The artifact download above is `continue-on-error: true`, so
+        # test262-results.json may be absent when the conformance job
+        # crashed or timed out.  In that case emit the same "results
+        # not produced" stub the runner does internally so the PR
+        # comment still updates instead of going stale.
         run: |
           baseline=test262-baseline.json
           [ -f "$baseline" ] || baseline=-
-          bun scripts/run_test262_suite.ts --comment test262-results.json "$baseline" > test262-comment.md
+          if [ -s test262-results.json ]; then
+            bun scripts/run_test262_suite.ts --comment test262-results.json "$baseline" > test262-comment.md
+          else
+            cat > test262-comment.md <<'EOF'
+          <!-- test262-results -->
+          ## test262 Conformance
+
+          _test262 results were not produced for this run._
+
+          <sub>Non-blocking. The conformance job either timed out, crashed, or did not upload an artifact. See the workflow run for details.</sub>
+          EOF
+          fi
 
       - name: Post test262 comment
         uses: actions/github-script@v7

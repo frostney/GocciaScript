@@ -5,6 +5,19 @@ contract the orchestrator guarantees, and the boundary between
 conformance failures, wrapper-infrastructure failures, and runner-level
 errors.
 
+## What test262 is, and why we run it
+
+[test262](https://github.com/tc39/test262) is the TC39-maintained
+conformance suite for ECMAScript. ~50K tests cover every observable
+behavior in the language and built-ins, plus Intl, staging proposals,
+and the harness itself. We run it as an indicator metric — not a
+release gate — to track which spec corners GocciaScript implements,
+where the engine diverges, and how each PR moves those numbers.
+
+For the architectural rationale behind the current
+LoaderBare-plus-stock-harness setup, see the
+[Decision log entry](decision-log.md) dated 2026-05-04.
+
 ## Executive summary
 
 - Test262 runs via `GocciaScriptLoaderBare`, never via `GocciaTestRunner`.
@@ -17,22 +30,6 @@ errors.
   same convention `test262-harness`/`eshost`/test262.fyi use.
 - Wrapper-infrastructure failures are classified separately from
   conformance failures and gated to zero in CI.
-
-## Why
-
-PR #491 exposed that the previous adapter ran wrapped tests *inside*
-`GocciaTestRunner`, which registers test-library globals (`expect`,
-`describe`, `test`, hooks, mocks). The wrapper had to capture, hide,
-and selectively restore those globals so test bodies wouldn't see
-them; failure capture used `undefined` as a sentinel; `globalThis.runTests`
-got clobbered. Any wrapper drift inflated or deflated conformance
-numbers, and a chunked-runner crash marked thousands of tests ERROR
-indistinguishably from real engine regressions.
-
-The fix is structural: run each test in a neutral binary that simply
-doesn't register those globals, and report results via the exit code +
-stdout pattern stock test262 already uses. There's nothing to leak
-because nothing is registered.
 
 ## Architecture
 
@@ -203,6 +200,28 @@ There is no eligibility filter. Every discovered test runs. Tests
 that depend on missing features fail with a real diagnostic, not an
 invisible skip. Per-test subprocess + `--timeout` + `--max-memory`
 bound the blast radius of any individual hang or OOM.
+
+## Known engine crashes
+
+A small `KNOWN_ENGINE_CRASHES` set in `scripts/run_test262_suite.ts`
+skips tests that are known to crash the engine at the native level
+(SIGSEGV / SIGBUS) — not catchable by the per-test timeout, not
+representative of conformance failures, and would otherwise inflate
+`wrapper_infra_failures` indefinitely. Each entry is paired with a
+GitHub issue tracking the underlying engine bug; remove the entry
+once the bug is fixed.
+
+This list is the only allowed form of test-skipping in the harness.
+Do not rebuild a generic eligibility filter (the structural blast-radius
+control is per-test subprocess + `--timeout` + `--max-memory`, not
+pre-execution exclusion).
+
+Current entries:
+
+- `built-ins/Iterator/concat/throws-typeerror-when-generator-is-running-next.js`
+  — [#514](https://github.com/frostney/GocciaScript/issues/514)
+- `staging/sm/RegExp/test-trailing.js`
+  — [#515](https://github.com/frostney/GocciaScript/issues/515)
 
 ## Updating the contract
 

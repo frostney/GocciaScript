@@ -274,21 +274,14 @@ begin
     else
       DisplayName := AOptions.FileName;
 
-    { Engine-side bounds.  --timeout drives the cooperative deadline checked
-      by the bytecode dispatch loop; --max-memory caps the GC heap so a
-      runaway allocator surfaces as a RangeError instead of a process kill;
-      --max-instructions caps the bytecode step count.  All three are off
-      (0) by default and clear any state from a prior invocation. }
+    { Engine-side bounds.  StartExecutionTimeout / StartInstructionLimit
+      are threadvar-backed and order-independent vs. engine creation, so
+      they stay here.  --max-memory must be applied AFTER Engine.Create —
+      the engine constructor calls TGarbageCollector.Initialize, which
+      lazy-creates the GC singleton with FMaxBytes := FSuggestedMaxBytes
+      and would otherwise overwrite any pre-engine value. }
     StartExecutionTimeout(AOptions.TimeoutMs);
     StartInstructionLimit(AOptions.MaxInstructions);
-    GC := TGarbageCollector.Instance;
-    if Assigned(GC) then
-    begin
-      if AOptions.MaxMemoryBytes > 0 then
-        GC.MaxBytes := AOptions.MaxMemoryBytes
-      else
-        GC.MaxBytes := GC.SuggestedMaxBytes;
-    end;
 
     PrintHost := TBarePrintHost.Create;
     try
@@ -297,6 +290,11 @@ begin
         Engine := TGocciaEngine.Create(DisplayName, Source, Executor);
         try
           ConfigureEngine(Engine, AOptions);
+
+          GC := TGarbageCollector.Instance;
+          if Assigned(GC) and (AOptions.MaxMemoryBytes > 0) then
+            GC.MaxBytes := AOptions.MaxMemoryBytes;
+
           RegisterBareGlobals(Engine, PrintHost);
           try
             ScriptResult := Engine.Execute;

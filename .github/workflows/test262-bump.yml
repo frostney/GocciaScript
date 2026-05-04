@@ -35,7 +35,22 @@ jobs:
       - name: Update pin in workflows
         run: bun scripts/test262-bump-pin.ts ${{ steps.latest.outputs.sha }}
 
+      # Skip PR creation when the pin is already at the latest SHA.  Without
+      # this guard the cron would open a no-op PR every quiet week (or even
+      # day if a manual run lands between the cron and the next upstream
+      # commit).  Detect via `git diff --quiet`: zero-exit means the working
+      # tree matches HEAD, so bump-pin made no edits.
+      - id: changed
+        run: |
+          if git diff --quiet -- .github/workflows/ci.yml .github/workflows/pr.yml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "test262 already pinned to ${{ steps.latest.outputs.short }} — no PR to open."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Open PR
+        if: steps.changed.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v7
         with:
           branch: chore/test262-bump-${{ steps.latest.outputs.short }}
