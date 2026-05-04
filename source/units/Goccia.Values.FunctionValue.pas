@@ -339,16 +339,35 @@ end;
 function TGocciaFunctionValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   CallScope: TGocciaScope;
+  GC: TGarbageCollector;
+  SelfRooted: Boolean;
+  CallScopeRooted: Boolean;
 begin
-  CallScope := CreateCallScope;
-
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.PushActiveRoot(CallScope);
+  GC := TGarbageCollector.Instance;
+  SelfRooted := False;
+  CallScopeRooted := False;
+  CallScope := nil;
+  if Assigned(GC) then
+  begin
+    GC.PushActiveRoot(Self);
+    SelfRooted := True;
+  end;
   try
+    CallScope := CreateCallScope;
+    if Assigned(GC) then
+    begin
+      GC.PushActiveRoot(CallScope);
+      CallScopeRooted := True;
+    end;
     Result := ExecuteBody(CallScope, AArguments, AThisValue);
   finally
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.PopActiveRoot;
+    if Assigned(GC) then
+    begin
+      if CallScopeRooted then
+        GC.PopActiveRoot;
+      if SelfRooted then
+        GC.PopActiveRoot;
+    end;
   end;
 end;
 
@@ -416,18 +435,37 @@ function TGocciaMethodValue.CallWithThisValue(
   out AFinalThisValue: TGocciaValue): TGocciaValue;
 var
   CallScope: TGocciaScope;
+  GC: TGarbageCollector;
+  SelfRooted: Boolean;
+  CallScopeRooted: Boolean;
 begin
   AFinalThisValue := AThisValue;
-  CallScope := CreateCallScope;
-
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.PushActiveRoot(CallScope);
+  GC := TGarbageCollector.Instance;
+  SelfRooted := False;
+  CallScopeRooted := False;
+  CallScope := nil;
+  if Assigned(GC) then
+  begin
+    GC.PushActiveRoot(Self);
+    SelfRooted := True;
+  end;
   try
+    CallScope := CreateCallScope;
+    if Assigned(GC) then
+    begin
+      GC.PushActiveRoot(CallScope);
+      CallScopeRooted := True;
+    end;
     Result := ExecuteBody(CallScope, AArguments, AThisValue);
     AFinalThisValue := CallScope.ThisValue;
   finally
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.PopActiveRoot;
+    if Assigned(GC) then
+    begin
+      if CallScopeRooted then
+        GC.PopActiveRoot;
+      if SelfRooted then
+        GC.PopActiveRoot;
+    end;
   end;
 end;
 

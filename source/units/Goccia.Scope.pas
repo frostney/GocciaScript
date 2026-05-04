@@ -197,9 +197,6 @@ end;
 
 destructor TGocciaScope.Destroy;
 begin
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.UnregisterObject(Self);
-
   if Assigned(FLexicalBindings) then
     FLexicalBindings.Free;
   if Assigned(FVarBindings) then

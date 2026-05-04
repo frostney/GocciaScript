@@ -18,6 +18,7 @@ type
     function GetGCMarked: Boolean; inline;
     procedure SetGCMarked(const AValue: Boolean); inline;
   public
+    procedure BeforeDestruction; override;
     class procedure AdvanceMark; static; inline;
     procedure MarkReferences; virtual;
     function TraceWeakReferences: Boolean; virtual;
@@ -64,6 +65,7 @@ type
 
     function GetManagedObjectCount: Integer;
     function GetWatermark: Integer; inline;
+    procedure ClearActiveRootEntries(const AObject: TGCManagedObject);
   protected
     procedure MarkRoots; virtual;
     procedure TraceWeakReferences;
@@ -221,6 +223,16 @@ begin
   Free;
 end;
 
+procedure TGCManagedObject.BeforeDestruction;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    GC.UnregisterObject(Self);
+  inherited;
+end;
+
 { TGarbageCollector }
 
 class function TGarbageCollector.Instance: TGarbageCollector;
@@ -302,7 +314,25 @@ procedure TGarbageCollector.UnregisterObject(
 var
   Idx: Integer;
 begin
+  if not Assigned(AObject) then
+    Exit;
+  if not Assigned(FManagedObjects) then
+    Exit;
+
   Idx := AObject.GCIndex;
+  if FCollecting and
+     ((Idx < 0) or (Idx >= FManagedObjects.Count) or
+      (FManagedObjects[Idx] <> AObject)) then
+    Exit;
+
+  if Assigned(FPinnedObjects) then
+    FPinnedObjects.Remove(AObject);
+  if Assigned(FTempRoots) then
+    FTempRoots.Remove(AObject);
+  if Assigned(FRootObjects) then
+    FRootObjects.Remove(AObject);
+  ClearActiveRootEntries(AObject);
+
   if (Idx >= 0) and (Idx < FManagedObjects.Count) and
      (FManagedObjects[Idx] = AObject) then
   begin
@@ -310,6 +340,18 @@ begin
     AObject.GCIndex := -1;
     Dec(FBytesAllocated, AObject.InstanceSize);
   end;
+end;
+
+procedure TGarbageCollector.ClearActiveRootEntries(
+  const AObject: TGCManagedObject);
+var
+  I: Integer;
+begin
+  if not Assigned(FActiveRootStack) then
+    Exit;
+  for I := FActiveRootStack.Count - 1 downto 0 do
+    if FActiveRootStack[I] = AObject then
+      FActiveRootStack[I] := nil;
 end;
 
 procedure TGarbageCollector.PinObject(const AObject: TGCManagedObject);
@@ -382,7 +424,8 @@ begin
     Pair.Key.MarkReferences;
 
   for I := 0 to FActiveRootStack.Count - 1 do
-    FActiveRootStack[I].MarkReferences;
+    if Assigned(FActiveRootStack[I]) then
+      FActiveRootStack[I].MarkReferences;
 end;
 
 procedure TGarbageCollector.TraceWeakReferences;
