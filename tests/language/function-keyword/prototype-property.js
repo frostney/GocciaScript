@@ -195,6 +195,7 @@ test("constructor return objects replace the default instance", () => {
   }
 
   expect(new Box()).toBe(replacement);
+  expect(replacement.value).toBe("replacement");
 });
 
 test("bound ordinary functions remain constructable", () => {
