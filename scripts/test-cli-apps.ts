@@ -12,27 +12,25 @@
 
 import { $ } from "bun";
 import {
-  mkdtempSync,
   writeFileSync,
   readFileSync,
   existsSync,
-  rmSync,
   mkdirSync,
   chmodSync,
 } from "fs";
 import { join, resolve } from "path";
-import { tmpdir } from "os";
+import {
+  LOADER,
+  BARE,
+  REPL,
+  TESTRUNNER,
+  BUNDLER,
+  BENCHRUNNER,
+} from "./test-cli/binaries";
+import { containsLine } from "./test-cli/assertions";
+import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 
-const ext = process.platform === "win32" ? ".exe" : "";
-const LOADER = `./build/GocciaScriptLoader${ext}`;
-const BARE = `./build/GocciaScriptLoaderBare${ext}`;
-const REPL = `./build/GocciaREPL${ext}`;
-const TESTRUNNER = `./build/GocciaTestRunner${ext}`;
-const BUNDLER = `./build/GocciaBundler${ext}`;
-const BENCHRUNNER = `./build/GocciaBenchmarkRunner${ext}`;
-
-const makeTmp = () => mkdtempSync(join(tmpdir(), "goccia-apps-"));
-const clean = (d: string) => rmSync(d, { recursive: true, force: true });
+const makeTmp = makeTmpFactory("goccia-apps-");
 
 function assertValidSourceMap(path: string): void {
   const raw = readFileSync(path, "utf-8");
@@ -377,7 +375,7 @@ console.log("Loader: --print emits bare value (no 'Result:' prefix)...");
   const out = proc.stdout.toString();
   if (out.includes("Result:"))
     throw new Error(`Loader --print must not prefix with "Result:", got: ${out}`);
-  if (!out.includes("\nthis contains the word error\n"))
+  if (!containsLine(out, "this contains the word error"))
     throw new Error(`Loader --print should emit bare value on its own line, got: ${out}`);
 }
 
@@ -390,7 +388,7 @@ console.log("Loader: --print emits 'undefined' when result is undefined...");
   });
   if (proc.exitCode !== 0) throw new Error(`Loader --print undefined exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   const out = proc.stdout.toString();
-  if (!out.includes("\nundefined\n"))
+  if (!containsLine(out, "undefined"))
     throw new Error(`Loader --print should emit "undefined" (matches node -p), got: ${out}`);
 }
 
@@ -407,7 +405,7 @@ console.log("Loader: --print honored from goccia.json...");
     });
     if (proc.exitCode !== 0) throw new Error(`Loader config print exited ${proc.exitCode}: ${proc.stderr.toString()}`);
     const out = proc.stdout.toString();
-    if (!out.includes("\n2\n"))
+    if (!containsLine(out, "2"))
       throw new Error(`goccia.json print=true should emit value, got: ${out}`);
   } finally {
     clean(tmp);
@@ -1150,7 +1148,7 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
 
     // Roundtrip
     const roundtripOut = await $`${LOADER} --print ${singleGbc} 2>&1`.text();
-    if (!roundtripOut.includes("\n4\n")) throw new Error(`Roundtrip should print 4 on its own line, got: ${roundtripOut}`);
+    if (!containsLine(roundtripOut, "4")) throw new Error(`Roundtrip should print 4 on its own line, got: ${roundtripOut}`);
 
     console.log("Bundler: custom --output path...");
     const customOut = join(tmp, "custom.gbc");
@@ -1164,7 +1162,7 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     await $`echo 'const z = 5 + 5; z;' | ${BUNDLER} --output=${stdinOut}`.quiet();
     if (!existsSync(stdinOut)) throw new Error("Stdin --output .gbc should exist");
     const stdinRoundtrip = await $`${LOADER} --print ${stdinOut} 2>&1`.text();
-    if (!stdinRoundtrip.includes("\n10\n")) throw new Error(`Stdin roundtrip should print 10 on its own line, got: ${stdinRoundtrip}`);
+    if (!containsLine(stdinRoundtrip, "10")) throw new Error(`Stdin roundtrip should print 10 on its own line, got: ${stdinRoundtrip}`);
 
     console.log("Bundler: stdin without --output should fail...");
     const stdinNoOutput = await $`echo '1 + 1;' | ${BUNDLER} 2>&1`.nothrow();

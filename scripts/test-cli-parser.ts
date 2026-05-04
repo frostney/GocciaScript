@@ -6,17 +6,8 @@
  */
 
 import { $ } from "bun";
-
-const ext = process.platform === "win32" ? ".exe" : "";
-const LOADER = `./build/GocciaScriptLoader${ext}`;
-
-function normalizeLineEndings(output: unknown): string {
-  if (Array.isArray(output)) {
-    const text = output.join("\n");
-    return text.length > 0 ? `${text}\n` : "";
-  }
-  return String(output).replace(/\r\n/g, "\n");
-}
+import { LOADER } from "./test-cli/binaries";
+import { normalizeLineEndings } from "./test-cli/assertions";
 
 function runLoaderJson(source: string, args: string[] = []) {
   const proc = Bun.spawnSync([LOADER, "--output=json", ...args], {

@@ -8,37 +8,31 @@
  */
 
 import { $ } from "bun";
-import {
-  mkdtempSync,
-  mkdirSync,
-  writeFileSync,
-  readFileSync,
-  existsSync,
-  rmSync,
-} from "fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "fs";
 import { join } from "path";
-import { tmpdir } from "os";
-
-const ext = process.platform === "win32" ? ".exe" : "";
-const LOADER = `./build/GocciaScriptLoader${ext}`;
-const BARE = `./build/GocciaScriptLoaderBare${ext}`;
-const REPL = `./build/GocciaREPL${ext}`;
-const TESTRUNNER = `./build/GocciaTestRunner${ext}`;
-const BUNDLER = `./build/GocciaBundler${ext}`;
-const BENCHRUNNER = `./build/GocciaBenchmarkRunner${ext}`;
+import {
+  LOADER,
+  BARE,
+  REPL,
+  TESTRUNNER,
+  BUNDLER,
+  BENCHRUNNER,
+} from "./test-cli/binaries";
+import { containsLine } from "./test-cli/assertions";
+import { mkdtemp, clean } from "./test-cli/tmpdir";
 
 // -- Stdin smoke (Loader interpreted + bytecode) --------------------------------
 
 console.log("Stdin smoke (interpreted)...");
 {
   const out = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print`.text();
-  if (!out.includes("\n4\n")) throw new Error(`Expected 4 on its own line, got: ${out}`);
+  if (!containsLine(out, "4")) throw new Error(`Expected 4 on its own line, got: ${out}`);
 }
 
 console.log("Stdin smoke (bytecode)...");
 {
   const out = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print - --mode=bytecode`.text();
-  if (!out.includes("\n4\n")) throw new Error(`Expected 4 on its own line, got: ${out}`);
+  if (!containsLine(out, "4")) throw new Error(`Expected 4 on its own line, got: ${out}`);
 }
 
 // -- Stdin smoke (TestRunner) --------------------------------------------------
@@ -72,7 +66,7 @@ console.log("Stdin smoke (BenchmarkRunner)...");
 
 console.log("Stdin mixed-with-paths rejection (Loader, TestRunner, BenchmarkRunner)...");
 {
-  const tmp = mkdtempSync(join(tmpdir(), "goccia-stdin-mix-"));
+  const tmp = mkdtemp("goccia-stdin-mix-");
   try {
     const f = join(tmp, "x.js");
     writeFileSync(f, "1;\n");
@@ -84,7 +78,7 @@ console.log("Stdin mixed-with-paths rejection (Loader, TestRunner, BenchmarkRunn
         throw new Error(`${label} mixed-path error missing unified message, got: ${proc.text()}`);
     }
   } finally {
-    rmSync(tmp, { recursive: true, force: true });
+    clean(tmp);
   }
 }
 
@@ -121,7 +115,7 @@ console.log("--unsafe-ffi gating...");
 
 console.log("--asi (Loader + Bundler)...");
 {
-  const tmp = mkdtempSync(join(tmpdir(), "goccia-asi-"));
+  const tmp = mkdtemp("goccia-asi-");
   try {
     const src = join(tmp, "no-semi.js");
     writeFileSync(src, "const x = 42\nx\n");
@@ -133,7 +127,7 @@ console.log("--asi (Loader + Bundler)...");
 
     // Loader with --asi should succeed
     const withAsi = await $`${LOADER} --print ${src} --asi 2>&1`.text();
-    if (!withAsi.includes("\n42\n")) throw new Error(`Expected 42 with --asi, got: ${withAsi}`);
+    if (!containsLine(withAsi, "42")) throw new Error(`Expected 42 with --asi, got: ${withAsi}`);
 
     // Bundler without --asi should fail
     const bundleNoAsi = await $`${BUNDLER} ${src} 2>&1`.nothrow();
@@ -143,7 +137,7 @@ console.log("--asi (Loader + Bundler)...");
     await $`${BUNDLER} ${src} --asi`.quiet();
     if (!existsSync(join(tmp, "no-semi.gbc"))) throw new Error("Bundler --asi should produce .gbc");
   } finally {
-    rmSync(tmp, { recursive: true, force: true });
+    clean(tmp);
   }
 }
 
@@ -151,14 +145,14 @@ console.log("--asi (Loader + Bundler)...");
 
 console.log("--compat-var (Loader + Bundler + TestRunner)...");
 {
-  const tmp = mkdtempSync(join(tmpdir(), "goccia-var-"));
+  const tmp = mkdtemp("goccia-var-");
   try {
     const src = join(tmp, "use-var.js");
     writeFileSync(src, "var x = 10;\nx;\n");
 
     // Loader with --compat-var
     const loaderOut = await $`${LOADER} --print ${src} --compat-var 2>&1`.text();
-    if (!loaderOut.includes("\n10\n")) throw new Error(`Loader --compat-var expected 10, got: ${loaderOut}`);
+    if (!containsLine(loaderOut, "10")) throw new Error(`Loader --compat-var expected 10, got: ${loaderOut}`);
 
     // Bundler with --compat-var
     await $`${BUNDLER} ${src} --compat-var`.quiet();
@@ -180,7 +174,7 @@ console.log("--compat-var (Loader + Bundler + TestRunner)...");
     const trOut = await $`${TESTRUNNER} ${testSrc} --compat-var --no-progress 2>&1`.text();
     if (!trOut.includes("Passed: 1")) throw new Error(`TestRunner --compat-var expected Passed: 1, got: ${trOut}`);
   } finally {
-    rmSync(tmp, { recursive: true, force: true });
+    clean(tmp);
   }
 }
 
@@ -188,7 +182,7 @@ console.log("--compat-var (Loader + Bundler + TestRunner)...");
 
 console.log("--compat-all (Loader + Bare + TestRunner)...");
 {
-  const tmp = mkdtempSync(join(tmpdir(), "goccia-compat-all-"));
+  const tmp = mkdtemp("goccia-compat-all-");
   try {
     // Source uses both var and function — both compat flags required.
     const src = join(tmp, "use-both.js");
@@ -196,9 +190,9 @@ console.log("--compat-all (Loader + Bare + TestRunner)...");
 
     // Loader with --compat-all matches enumerating both flags.
     const allOut = await $`${LOADER} --print ${src} --compat-all 2>&1`.text();
-    if (!allOut.includes("\n10\n")) throw new Error(`Loader --compat-all expected 10, got: ${allOut}`);
+    if (!containsLine(allOut, "10")) throw new Error(`Loader --compat-all expected 10, got: ${allOut}`);
     const enumOut = await $`${LOADER} --print ${src} --compat-var --compat-function 2>&1`.text();
-    if (!enumOut.includes("\n10\n")) throw new Error(`Loader enumerated flags expected 10, got: ${enumOut}`);
+    if (!containsLine(enumOut, "10")) throw new Error(`Loader enumerated flags expected 10, got: ${enumOut}`);
 
     // Without any compat flag the source must fail (function declaration unsupported).
     const noFlag = await $`${LOADER} ${src} 2>&1`.nothrow();
@@ -234,7 +228,7 @@ console.log("--compat-all (Loader + Bare + TestRunner)...");
     const cfgSrc = join(cfgDir, "use-both.js");
     writeFileSync(cfgSrc, "var x = 10;\nfunction f() { return x; }\nf();\n");
     const cfgOut = await $`${LOADER} --print ${cfgSrc} 2>&1`.text();
-    if (!cfgOut.includes("\n10\n")) throw new Error(`Config compat-all expected 10, got: ${cfgOut}`);
+    if (!containsLine(cfgOut, "10")) throw new Error(`Config compat-all expected 10, got: ${cfgOut}`);
 
     // --help mentions --compat-all on every CLI.
     for (const bin of [LOADER, BARE, REPL, TESTRUNNER, BUNDLER, BENCHRUNNER]) {
@@ -265,7 +259,7 @@ console.log("--compat-all (Loader + Bare + TestRunner)...");
         throw new Error(`${bin} --compat-all smoke should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
     }
   } finally {
-    rmSync(tmp, { recursive: true, force: true });
+    clean(tmp);
   }
 }
 
@@ -274,11 +268,11 @@ console.log("--compat-all (Loader + Bare + TestRunner)...");
 console.log("--mode=bytecode...");
 {
   const interpOut = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print`.text();
-  if (!interpOut.includes("\n4\n")) throw new Error(`Interpreted expected 4 on its own line, got: ${interpOut}`);
+  if (!containsLine(interpOut, "4")) throw new Error(`Interpreted expected 4 on its own line, got: ${interpOut}`);
   if (!interpOut.includes("(interpreted)")) throw new Error(`Expected (interpreted) in output`);
 
   const bcOut = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print - --mode=bytecode`.text();
-  if (!bcOut.includes("\n4\n")) throw new Error(`Bytecode expected 4 on its own line, got: ${bcOut}`);
+  if (!containsLine(bcOut, "4")) throw new Error(`Bytecode expected 4 on its own line, got: ${bcOut}`);
   if (!bcOut.includes("(bytecode)")) throw new Error(`Expected (bytecode) in output`);
 }
 
@@ -440,7 +434,7 @@ console.log("--stack-size (bytecode trampoline)...");
 
 console.log("--log flag...");
 {
-  const tmp = mkdtempSync(join(tmpdir(), "goccia-log-"));
+  const tmp = mkdtemp("goccia-log-");
   try {
     const logPath = join(tmp, "output.log");
     await $`echo "console.log('hello-log'); console.warn('hello-warn');" | ${LOADER} --log=${logPath}`.quiet();
@@ -449,7 +443,7 @@ console.log("--log flag...");
     if (!content.includes("[log]")) throw new Error(`Log file should contain [log]`);
     if (!content.includes("[warn]")) throw new Error(`Log file should contain [warn]`);
   } finally {
-    rmSync(tmp, { recursive: true, force: true });
+    clean(tmp);
   }
 }
 
