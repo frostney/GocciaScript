@@ -34,7 +34,9 @@ const
   //   v22 -> v23: #490 gave OP_SUPER_GET_CONST/OP_SUPER_GET operand B
   //               call-context semantics so only direct super() reads use
   //               the synthetic super-constructor helper.
-  GOCCIA_FORMAT_VERSION = 23;
+  //   v23 -> v24: #491 added OP_THROW_TYPE_ERROR_CONST_LONG so const-assignment
+  //               diagnostics can reference constant-pool strings above 255.
+  GOCCIA_FORMAT_VERSION = 24;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -162,6 +164,7 @@ type
     OP_SUPER_GET     = 87,
     OP_COLLECTION_OP = 93,
     OP_VALIDATE_VALUE = 95,
+    OP_THROW_TYPE_ERROR_CONST_LONG = 97,
     OP_THROW_TYPE_ERROR_CONST = 98,
     OP_DEFINE_GLOBAL_CONST = 99,
     OP_FINALIZE_ENUM = 100,

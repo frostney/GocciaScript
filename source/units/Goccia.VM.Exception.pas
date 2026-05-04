@@ -28,7 +28,8 @@ type
     procedure Pop;
     procedure CopyFrom(const AStartIndex: Integer;
       out AEntries: TGocciaBytecodeHandlerEntryArray);
-    procedure RestoreFrom(const AEntries: TGocciaBytecodeHandlerEntryArray);
+    procedure RestoreFrom(const AEntries: TGocciaBytecodeHandlerEntryArray;
+      const AFrameDepth: Integer);
     function Peek: TGocciaBytecodeHandlerEntry;
     function IsEmpty: Boolean;
     property Count: Integer read FCount;
@@ -82,7 +83,8 @@ begin
 end;
 
 procedure TGocciaBytecodeHandlerStack.RestoreFrom(
-  const AEntries: TGocciaBytecodeHandlerEntryArray);
+  const AEntries: TGocciaBytecodeHandlerEntryArray;
+  const AFrameDepth: Integer);
 var
   I: Integer;
 begin
@@ -93,6 +95,7 @@ begin
   for I := 0 to High(AEntries) do
   begin
     FEntries[FCount] := AEntries[I];
+    FEntries[FCount].FrameDepth := AFrameDepth;
     Inc(FCount);
   end;
 end;

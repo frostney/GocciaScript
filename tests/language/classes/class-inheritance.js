@@ -293,6 +293,67 @@ test("implicit super returning this does not replay superclass initializers", ()
   expect(initializersRun).toBe(1);
 });
 
+test("bound class super runs constructor and field initializers", () => {
+  class Base {
+    field = "field";
+
+    constructor(value) {
+      this.value = value;
+    }
+  }
+
+  const BoundBase = Base.bind(null, 41);
+  BoundBase.prototype = Base.prototype;
+
+  class Derived extends BoundBase {}
+
+  const instance = new Derived();
+  expect(instance.field).toBe("field");
+  expect(instance.value).toBe(41);
+});
+
+test("bound class super without constructor runs field initializers", () => {
+  class Base {
+    field = "field";
+  }
+
+  const BoundBase = Base.bind(null);
+  BoundBase.prototype = Base.prototype;
+
+  class Derived extends BoundBase {}
+
+  const instance = new Derived();
+  expect(instance.field).toBe("field");
+});
+
+test("bound class super replacement does not replay superclass initializers", () => {
+  let derivedPrototype;
+  let initializersRun = 0;
+
+  class Base {
+    field = ++initializersRun;
+
+    constructor() {
+      return Object.create(derivedPrototype);
+    }
+  }
+
+  const BoundBase = Base.bind(null);
+  BoundBase.prototype = Base.prototype;
+
+  class Derived extends BoundBase {
+    readField() {
+      return this.field;
+    }
+  }
+
+  derivedPrototype = Derived.prototype;
+
+  const instance = new Derived();
+  expect(instance.readField()).toBeUndefined();
+  expect(initializersRun).toBe(1);
+});
+
 test("closure captured this before super observes initialized receiver", () => {
   class Base {}
 

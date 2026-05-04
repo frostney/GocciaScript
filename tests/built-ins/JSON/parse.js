@@ -198,6 +198,21 @@ test("JSON.parse reviver visits nested properties before parents", () => {
   expect(keys).toEqual(["inner", "outer", "0", "list", ""]);
 });
 
+test("JSON.parse reviver rethrows the original thrown value", () => {
+  const marker = new RangeError("reviver boom");
+  let caught;
+
+  try {
+    JSON.parse('{"a":1}', () => {
+      throw marker;
+    });
+  } catch (error) {
+    caught = error;
+  }
+
+  expect(caught).toBe(marker);
+});
+
 test("JSON.parse reviver receives context with source for number", () => {
   let receivedSource;
   JSON.parse("42", (key, value, context) => {

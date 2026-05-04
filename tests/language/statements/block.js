@@ -44,3 +44,15 @@ test("variable defined in inner scope, only available in inner scope", () => {
     testVar;
   }).toThrow(ReferenceError);
 });
+
+test("inner lexical binding is in TDZ before declaration", () => {
+  let testVar = "outer";
+
+  {
+    expect(() => testVar).toThrow(ReferenceError);
+    let testVar = "inner";
+    expect(testVar).toBe("inner");
+  }
+
+  expect(testVar).toBe("outer");
+});

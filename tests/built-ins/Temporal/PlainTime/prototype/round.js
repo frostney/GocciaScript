@@ -37,4 +37,17 @@ describe.runIf(isTemporal)("Temporal.PlainTime.prototype.round", () => {
     const rounded = t.round({ smallestUnit: "minute", roundingIncrement: 15 });
     expect(rounded.minute).toBe(45);
   });
+
+  test("roundingIncrement above maximum reports upper bound", () => {
+    const t = new Temporal.PlainTime(13, 47, 0);
+    let message;
+
+    try {
+      t.round({ smallestUnit: "nanosecond", roundingIncrement: 1000000001 });
+    } catch (error) {
+      message = error.message;
+    }
+
+    expect(message).toBe("roundingIncrement must be <= 1000000000");
+  });
 });

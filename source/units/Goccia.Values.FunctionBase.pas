@@ -478,7 +478,7 @@ begin
   // AThisValue is the function being bound
 
   if not AThisValue.IsCallable then
-    raise TGocciaError.Create('Function.prototype.bind called on non-function', 0, 0, '', nil);
+    ThrowTypeError('Function.prototype.bind called on non-function');
 
   // First argument is the 'this' value to bind
   if AArgs.Length > 0 then

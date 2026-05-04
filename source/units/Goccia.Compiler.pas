@@ -19,6 +19,7 @@ type
   private
     FModule: TGocciaBytecodeModule;
     FCurrentTemplate: TGocciaFunctionTemplate;
+    FTopLevelTemplate: TGocciaFunctionTemplate;
     FCurrentScope: TGocciaCompilerScope;
     FSourcePath: string;
     FFormalParameterCounts: TFormalParameterCountMap;
@@ -71,6 +72,7 @@ begin
   FFormalParameterCounts := TFormalParameterCountMap.Create;
   FModule := nil;
   FCurrentTemplate := nil;
+  FTopLevelTemplate := nil;
   FCurrentScope := nil;
   FOptimizationOptions := DefaultCompilerOptimizationOptions;
 end;
@@ -87,7 +89,8 @@ begin
   Result.Scope := FCurrentScope;
   Result.SourcePath := FSourcePath;
   Result.FormalParameterCounts := FFormalParameterCounts;
-  Result.GlobalBackedTopLevel := FGlobalBackedTopLevel;
+  Result.GlobalBackedTopLevel := FGlobalBackedTopLevel and
+    (FCurrentTemplate = FTopLevelTemplate);
   Result.StrictTypes := FStrictTypes;
   Result.OptimizationOptions := FOptimizationOptions;
   Result.CompileExpression := DoCompileExpression;
@@ -562,6 +565,43 @@ begin
     HoistVarLocals(AStatements[I], AScope);
 end;
 
+procedure MarkHoistedVarsGlobalBacked(const AScope: TGocciaCompilerScope);
+var
+  I: Integer;
+  Local: TGocciaCompilerLocal;
+begin
+  for I := 0 to AScope.LocalCount - 1 do
+  begin
+    Local := AScope.GetLocal(I);
+    if (Local.Depth = 0) and (Local.Name <> '__receiver') then
+      AScope.MarkGlobalBacked(I);
+  end;
+end;
+
+procedure EmitHoistedGlobalVarDeclarations(const ACtx: TGocciaCompilationContext;
+  const AScope: TGocciaCompilerScope);
+const
+  GLOBAL_DEFINE_VAR_DECL = 3;
+var
+  I: Integer;
+  Local: TGocciaCompilerLocal;
+  NameIdx: UInt16;
+begin
+  for I := 0 to AScope.LocalCount - 1 do
+  begin
+    Local := AScope.GetLocal(I);
+    if (Local.Depth <> 0) or (Local.Name = '__receiver') then
+      Continue;
+
+    NameIdx := ACtx.Template.AddConstantString(Local.Name);
+    if NameIdx > High(UInt8) then
+      raise Exception.Create('Constant pool overflow: global name index exceeds 255');
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, Local.Slot, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_DEFINE_GLOBAL_CONST, Local.Slot,
+      GLOBAL_DEFINE_VAR_DECL, UInt8(NameIdx)));
+  end;
+end;
+
 function TGocciaCompiler.Compile(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
@@ -573,6 +613,7 @@ var
 begin
   FModule := TGocciaBytecodeModule.Create(GOCCIA_RUNTIME_TAG, FSourcePath);
   FCurrentTemplate := TGocciaFunctionTemplate.Create('<module>');
+  FTopLevelTemplate := FCurrentTemplate;
   FCurrentTemplate.DebugInfo := TGocciaDebugInfo.Create(FSourcePath);
   FCurrentScope := TGocciaCompilerScope.Create(nil, 0);
   FCurrentScope.DeclareLocal('__receiver', False);
@@ -580,6 +621,11 @@ begin
   try
     // Hoist var declarations to module scope
     HoistVarLocalsFromStatements(AProgram.Body, FCurrentScope);
+    if FGlobalBackedTopLevel then
+    begin
+      MarkHoistedVarsGlobalBacked(FCurrentScope);
+      EmitHoistedGlobalVarDeclarations(BuildContext, FCurrentScope);
+    end;
 
     // Check if there are function declarations to hoist
     HasFunctionDecl := False;
@@ -650,8 +696,10 @@ begin
       end;
     end
     else
+    begin
       EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
       EmitInstruction(BuildContext, EncodeABC(OP_RETURN, 0, 0, 0));
+    end;
 
     FCurrentTemplate.MaxRegisters := FCurrentScope.MaxSlot;
     FModule.TopLevel := FCurrentTemplate;
@@ -661,6 +709,7 @@ begin
     FCurrentTemplate := nil;
   finally
     FreeAndNil(FCurrentScope);
+    FTopLevelTemplate := nil;
     if Assigned(FModule) then
     begin
       FreeAndNil(FCurrentTemplate);
