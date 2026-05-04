@@ -18,6 +18,7 @@ import {
 } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { containsLine } from "./test-cli-helpers";
 
 const ext = process.platform === "win32" ? ".exe" : "";
 const LOADER = `./build/GocciaScriptLoader${ext}`;
@@ -26,11 +27,6 @@ const REPL = `./build/GocciaREPL${ext}`;
 const TESTRUNNER = `./build/GocciaTestRunner${ext}`;
 const BUNDLER = `./build/GocciaBundler${ext}`;
 const BENCHRUNNER = `./build/GocciaBenchmarkRunner${ext}`;
-
-// Pascal's WriteLn writes \r\n on Windows, so substring matches against \n<value>\n
-// fail there. Strip \r before matching.
-const containsLine = (s: string, value: string): boolean =>
-  s.replace(/\r/g, "").includes(`\n${value}\n`);
 
 // -- Stdin smoke (Loader interpreted + bytecode) --------------------------------
 

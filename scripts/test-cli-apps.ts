@@ -22,6 +22,7 @@ import {
 } from "fs";
 import { join, resolve } from "path";
 import { tmpdir } from "os";
+import { containsLine } from "./test-cli-helpers";
 
 const ext = process.platform === "win32" ? ".exe" : "";
 const LOADER = `./build/GocciaScriptLoader${ext}`;
@@ -33,11 +34,6 @@ const BENCHRUNNER = `./build/GocciaBenchmarkRunner${ext}`;
 
 const makeTmp = () => mkdtempSync(join(tmpdir(), "goccia-apps-"));
 const clean = (d: string) => rmSync(d, { recursive: true, force: true });
-
-// Pascal's WriteLn writes \r\n on Windows, so substring matches against \n<value>\n
-// fail there. Strip \r before matching.
-const containsLine = (s: string, value: string): boolean =>
-  s.replace(/\r/g, "").includes(`\n${value}\n`);
 
 function assertValidSourceMap(path: string): void {
   const raw = readFileSync(path, "utf-8");
