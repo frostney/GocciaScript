@@ -70,6 +70,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader # Execute stdin source
 ./build/GocciaScriptLoader example.js --source-type=module # Load entry as a module (top-level this is undefined; default is script)
 ./build/GocciaScriptLoader example.js --output=json # Execute with structured JSON output
 ./build/GocciaScriptLoader example.js --output=compact-json # Execute with structured JSON output, omitting build, memory, stdout, and stderr
+./build/GocciaScriptLoader example.js --print # Print the script's last value (incl. undefined; mirrors node -p / bun --print)
 ./build/GocciaScriptLoader example.js --profile=opcodes # Opcode histogram, pair frequency, scalar hit rate (bytecode)
 ./build/GocciaScriptLoader example.js --profile=functions # Function self-time, allocations (bytecode)
 ./build/GocciaScriptLoader example.js --profile=all # All profiling data (bytecode)

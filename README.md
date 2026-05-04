@@ -81,16 +81,25 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader
 ```
 
+By default both loaders are silent about the script's last evaluated value (matching `node script.js` / `bun script.js` / `deno run script.js` / `qjs script.js`). Pass `--print` to emit the bare value on its own line, including `undefined`. This mirrors `node -p` / `bun --print` / `deno eval -p`.
+
+```bash
+printf "2 + 2;" | ./build/GocciaScriptLoader --print            # prints "4" after the timing banner
+printf "undefined;" | ./build/GocciaScriptLoader --print        # prints "undefined"
+```
+
+`GocciaScriptLoader` keeps its human-readable timing banner regardless; `--print` only controls the final value line. For programmatic consumers, `--output=json` always carries the result in the `result` field (no `--print` needed).
+
 For a smaller binary surface without the default runtime globals (console, JSON5/TOML/YAML, fetch, SemVer, etc.), build and run `GocciaScriptLoaderBare`:
 
 ```bash
 ./build.pas loaderbare
-printf "Goccia.version;" | ./build/GocciaScriptLoaderBare
+printf "Goccia.version;" | ./build/GocciaScriptLoaderBare --print
 printf "print('hello from bare');" | ./build/GocciaScriptLoaderBare
 ./build/GocciaScriptLoaderBare example.js
 ```
 
-`GocciaScriptLoaderBare` accepts an explicit file path, `-`, or no path for stdin. It reads the entry source in the frontend and passes source text to `TGocciaEngine`; it exposes a CLI-local `print(...args)` helper for stdout, but does not attach `TGocciaRuntime`.
+`GocciaScriptLoaderBare` accepts an explicit file path, `-`, or no path for stdin. It reads the entry source in the frontend and passes source text to `TGocciaEngine`; it exposes a CLI-local `print(...args)` helper for stdout, but does not attach `TGocciaRuntime`. Like `GocciaScriptLoader`, it is silent by default — pass `--print` to emit the script's last value (the explicit `print(...)` helper is unaffected by `--print`).
 
 Script files may start with a Unix shebang line like `#!/usr/bin/env goccia`; GocciaScript ignores that first line during lexing.
 
@@ -101,7 +110,7 @@ GocciaScript includes a bytecode execution backend. The public bytecode artifact
 ```bash
 # Compile and execute via bytecode
 ./build/GocciaScriptLoader example.js --mode=bytecode
-printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader --mode=bytecode
+printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader --mode=bytecode --print
 
 # Compile to .gbc bytecode file (no execution) — use GocciaBundler
 ./build/GocciaBundler example.js
@@ -125,7 +134,7 @@ printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=compact
 ./build/GocciaBenchmarkRunner benchmarks --format=compact-json --output=out.json
 
 # Inject globals from the CLI
-printf "x + y;" | ./build/GocciaScriptLoader --global x=10 --global y=20
+printf "x + y;" | ./build/GocciaScriptLoader --global x=10 --global y=20 --print
 printf "name;" | ./build/GocciaScriptLoader --globals=context.json --output=json
 printf "name;" | ./build/GocciaScriptLoader --globals=context.json5 --output=json
 printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json

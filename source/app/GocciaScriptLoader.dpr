@@ -95,6 +95,7 @@ type
   private
     FOutputPath: TGocciaStringOption;
     FSilent: TGocciaFlagOption;
+    FPrint: TGocciaFlagOption;
     FSourceMap: TGocciaStringOption;
     FGlobalFiles: TGocciaRepeatableOption;
     FInlineGlobals: TGocciaRepeatableOption;
@@ -266,6 +267,8 @@ begin
   FOutputPath := AddString('output',
     '"json" for structured JSON output, "compact-json" omits build, memory, stdout, stderr');
   FSilent := AddFlag('silent', 'Suppress console output from the script');
+  FPrint := AddFlag('print',
+    'Print the script''s last value to stdout (mirrors node -p / bun --print / deno eval -p)');
   FSourceMap := AddString('source-map',
     'Write a .map source map file (optional: explicit path)');
   FGlobalFiles := AddRepeatable('globals',
@@ -780,7 +783,13 @@ begin
        FormatDuration(AReport.Timing.TotalTimeNanoseconds)]));
   end;
 
-  WriteLn('Result: ', AReport.ResultValue.ToStringLiteral.Value);
+  { Mirrors `node -p` / `bun --print` / `deno eval -p`: silent by default,
+    prints the bare value (incl. `undefined`) only when --print is set. }
+  if not FPrint.Present then
+    Exit;
+  if not Assigned(AReport.ResultValue) then
+    Exit;
+  WriteLn(AReport.ResultValue.ToStringLiteral.Value);
 end;
 
 procedure TScriptLoaderApp.RunSource(const ASource: TStringList;
