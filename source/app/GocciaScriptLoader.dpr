@@ -95,6 +95,7 @@ type
   private
     FOutputPath: TGocciaStringOption;
     FSilent: TGocciaFlagOption;
+    FNoResult: TGocciaFlagOption;
     FSourceMap: TGocciaStringOption;
     FGlobalFiles: TGocciaRepeatableOption;
     FInlineGlobals: TGocciaRepeatableOption;
@@ -266,6 +267,8 @@ begin
   FOutputPath := AddString('output',
     '"json" for structured JSON output, "compact-json" omits build, memory, stdout, stderr');
   FSilent := AddFlag('silent', 'Suppress console output from the script');
+  FNoResult := AddFlag('no-result',
+    'Suppress the script result line in human-readable output');
   FSourceMap := AddString('source-map',
     'Write a .map source map file (optional: explicit path)');
   FGlobalFiles := AddRepeatable('globals',
@@ -780,6 +783,16 @@ begin
        FormatDuration(AReport.Timing.TotalTimeNanoseconds)]));
   end;
 
+  { Skip when --no-result is set, when the result is unset (e.g. .gbc
+    paths that bypassed the executor on some early-error code paths),
+    or when the script returned undefined.  Mirrors GocciaScriptLoaderBare
+    so both loaders agree on what counts as "no useful result". }
+  if FNoResult.Present then
+    Exit;
+  if not Assigned(AReport.ResultValue) then
+    Exit;
+  if AReport.ResultValue = TGocciaUndefinedLiteralValue.UndefinedValue then
+    Exit;
   WriteLn('Result: ', AReport.ResultValue.ToStringLiteral.Value);
 end;
 

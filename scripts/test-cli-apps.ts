@@ -347,6 +347,71 @@ console.log("Loader: parallel human-readable output preserves console output..."
   }
 }
 
+// -- --no-result ---------------------------------------------------------------
+
+console.log("Loader: prints Result line by default...");
+{
+  const proc = Bun.spawnSync([LOADER], {
+    stdin: new TextEncoder().encode("const r = 'this contains the word error'; r;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Loader default exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  const out = proc.stdout.toString();
+  if (!out.includes("Result: this contains the word error"))
+    throw new Error(`Loader default should print Result line, got: ${out}`);
+}
+
+console.log("Loader: --no-result suppresses Result line, banner timings remain...");
+{
+  const proc = Bun.spawnSync([LOADER, "--no-result"], {
+    stdin: new TextEncoder().encode("const r = 'this contains the word error'; r;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Loader --no-result exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  const out = proc.stdout.toString();
+  if (out.includes("Result:"))
+    throw new Error(`Loader --no-result should not print Result line, got: ${out}`);
+  if (!out.includes("Running script"))
+    throw new Error(`Loader --no-result should still print banner, got: ${out}`);
+  if (!out.includes("Lex:"))
+    throw new Error(`Loader --no-result should still print timings, got: ${out}`);
+}
+
+console.log("Loader: skips Result line when value is undefined...");
+{
+  const proc = Bun.spawnSync([LOADER], {
+    stdin: new TextEncoder().encode("undefined;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Loader undefined exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  const out = proc.stdout.toString();
+  if (out.includes("Result:"))
+    throw new Error(`Loader should skip Result line for undefined, got: ${out}`);
+}
+
+console.log("Loader: --no-result honored from goccia.json...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "goccia.json"), '{"no-result": true}\n');
+    const file = join(tmp, "test.js");
+    writeFileSync(file, "const r = 'this contains the word error'; r;\n");
+    const proc = Bun.spawnSync([LOADER, file], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) throw new Error(`Loader config no-result exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const out = proc.stdout.toString();
+    if (out.includes("Result:"))
+      throw new Error(`goccia.json no-result should suppress Result line, got: ${out}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 // ============================================================================
 // GocciaScriptLoaderBare
 // ============================================================================
@@ -482,6 +547,43 @@ console.log("Bare Loader: --mode invalid value rejected...");
   const stderr = proc.stderr.toString();
   if (!stderr.includes("Invalid --mode value: foo"))
     throw new Error(`Bare --mode=foo should report invalid value, got stderr: ${stderr}`);
+}
+
+// -- --no-result ---------------------------------------------------------------
+
+console.log("Bare Loader: --no-result suppresses script result...");
+{
+  const proc = Bun.spawnSync([BARE, "--no-result"], {
+    stdin: new TextEncoder().encode("const r = 'this contains the word error'; r;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare --no-result exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString() !== "")
+    throw new Error(`Bare --no-result should produce empty stdout, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: --no-result still permits print() output...");
+{
+  const proc = Bun.spawnSync([BARE, "--no-result"], {
+    stdin: new TextEncoder().encode("print('explicit'); 'last value';\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare --no-result+print exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "explicit")
+    throw new Error(`Bare --no-result should print explicit print() but suppress result, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: --help documents --no-result...");
+{
+  const proc = Bun.spawnSync([BARE, "--help"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare --help exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (!proc.stdout.toString().includes("--no-result"))
+    throw new Error(`Bare --help should document --no-result, got: ${proc.stdout.toString()}`);
 }
 
 // -- --global / --globals -------------------------------------------------------

@@ -37,6 +37,7 @@ type
     CompatAll: Boolean;
     StrictTypes: Boolean;
     UnsafeFunctionConstructor: Boolean;
+    NoResult: Boolean;
     Mode: TBareExecutionMode;
     SourceType: TGocciaSourceType;
     FileName: string;
@@ -76,6 +77,7 @@ begin
   WriteLn('  --mode=interpreted|bytecode   Execution mode (default: interpreted)');
   WriteLn('  --source-type=script|module   Load entry as a script or module');
   WriteLn('  --unsafe-function-constructor Enable dynamic Function constructor');
+  WriteLn('  --no-result                   Suppress printing the script''s last value');
   WriteLn('  --help                        Show this help');
 end;
 
@@ -110,6 +112,7 @@ begin
   Result.CompatAll := False;
   Result.StrictTypes := False;
   Result.UnsafeFunctionConstructor := False;
+  Result.NoResult := False;
   Result.Mode := bemInterpreted;
   Result.SourceType := stScript;
   Result.FileName := STDIN_PATH_MARKER;
@@ -134,6 +137,8 @@ begin
       Result.StrictTypes := True
     else if Arg = '--unsafe-function-constructor' then
       Result.UnsafeFunctionConstructor := True
+    else if Arg = '--no-result' then
+      Result.NoResult := True
     else if Copy(Arg, 1, Length('--mode=')) = '--mode=' then
       ParseMode(Copy(Arg, Length('--mode=') + 1, MaxInt), Result)
     else if Copy(Arg, 1, Length('--source-type=')) = '--source-type=' then
@@ -178,8 +183,10 @@ begin
   AEngine.RefreshGlobalThis;
 end;
 
-procedure PrintResult(const AResult: TGocciaValue);
+procedure PrintResult(const AResult: TGocciaValue; const ANoResult: Boolean);
 begin
+  if ANoResult then
+    Exit;
   if not Assigned(AResult) then
     Exit;
   if AResult = TGocciaUndefinedLiteralValue.UndefinedValue then
@@ -223,7 +230,7 @@ begin
           RegisterBareGlobals(Engine, PrintHost);
           try
             ScriptResult := Engine.Execute;
-            PrintResult(ScriptResult.Result);
+            PrintResult(ScriptResult.Result, AOptions.NoResult);
           except
             on E: TGocciaThrowValue do
             begin
