@@ -1170,7 +1170,19 @@ end;
 procedure TGocciaEngine.WaitForRuntimeIdle;
 var
   I: Integer;
+  Queue: TGocciaMicrotaskQueue;
 begin
+  { Drain pending microtasks before consulting runtime extensions.  Without
+    this, hosts that do not register a fetch extension (e.g. Bare) never
+    run promise continuations queued during top-level execution: the
+    extension WaitForIdle loop is a no-op, and Engine.Execute's finally
+    block then ClearQueue's the unfinished tasks.  Loader/TestRunner reach
+    a drain via fetch's pump loop, but doing it here unconditionally is
+    cheap (the queue is empty in the no-async case) and keeps async
+    semantics consistent across hosts. }
+  Queue := TGocciaMicrotaskQueue.Instance;
+  if Assigned(Queue) and Queue.HasPending then
+    Queue.DrainQueue;
   for I := 0 to FExtensions.Count - 1 do
     FExtensions[I].WaitForIdle;
 end;
