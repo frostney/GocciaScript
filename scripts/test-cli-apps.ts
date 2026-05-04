@@ -347,9 +347,9 @@ console.log("Loader: parallel human-readable output preserves console output..."
   }
 }
 
-// -- --no-result ---------------------------------------------------------------
+// -- --print --------------------------------------------------------------------
 
-console.log("Loader: prints Result line by default...");
+console.log("Loader: silent (no result line) by default...");
 {
   const proc = Bun.spawnSync([LOADER], {
     stdin: new TextEncoder().encode("const r = 'this contains the word error'; r;\n"),
@@ -358,55 +358,57 @@ console.log("Loader: prints Result line by default...");
   });
   if (proc.exitCode !== 0) throw new Error(`Loader default exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   const out = proc.stdout.toString();
-  if (!out.includes("Result: this contains the word error"))
-    throw new Error(`Loader default should print Result line, got: ${out}`);
+  if (out.includes("Result:"))
+    throw new Error(`Loader should not print "Result:" prefix anymore, got: ${out}`);
+  if (out.includes("this contains the word error"))
+    throw new Error(`Loader default should not print script value, got: ${out}`);
+  if (!out.includes("Running script"))
+    throw new Error(`Loader default should still print timing banner, got: ${out}`);
 }
 
-console.log("Loader: --no-result suppresses Result line, banner timings remain...");
+console.log("Loader: --print emits bare value (no 'Result:' prefix)...");
 {
-  const proc = Bun.spawnSync([LOADER, "--no-result"], {
+  const proc = Bun.spawnSync([LOADER, "--print"], {
     stdin: new TextEncoder().encode("const r = 'this contains the word error'; r;\n"),
     stdout: "pipe",
     stderr: "pipe",
   });
-  if (proc.exitCode !== 0) throw new Error(`Loader --no-result exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.exitCode !== 0) throw new Error(`Loader --print exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   const out = proc.stdout.toString();
   if (out.includes("Result:"))
-    throw new Error(`Loader --no-result should not print Result line, got: ${out}`);
-  if (!out.includes("Running script"))
-    throw new Error(`Loader --no-result should still print banner, got: ${out}`);
-  if (!out.includes("Lex:"))
-    throw new Error(`Loader --no-result should still print timings, got: ${out}`);
+    throw new Error(`Loader --print must not prefix with "Result:", got: ${out}`);
+  if (!out.includes("\nthis contains the word error\n"))
+    throw new Error(`Loader --print should emit bare value on its own line, got: ${out}`);
 }
 
-console.log("Loader: skips Result line when value is undefined...");
+console.log("Loader: --print emits 'undefined' when result is undefined...");
 {
-  const proc = Bun.spawnSync([LOADER], {
+  const proc = Bun.spawnSync([LOADER, "--print"], {
     stdin: new TextEncoder().encode("undefined;\n"),
     stdout: "pipe",
     stderr: "pipe",
   });
-  if (proc.exitCode !== 0) throw new Error(`Loader undefined exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.exitCode !== 0) throw new Error(`Loader --print undefined exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   const out = proc.stdout.toString();
-  if (out.includes("Result:"))
-    throw new Error(`Loader should skip Result line for undefined, got: ${out}`);
+  if (!out.includes("\nundefined\n"))
+    throw new Error(`Loader --print should emit "undefined" (matches node -p), got: ${out}`);
 }
 
-console.log("Loader: --no-result honored from goccia.json...");
+console.log("Loader: --print honored from goccia.json...");
 {
   const tmp = makeTmp();
   try {
-    writeFileSync(join(tmp, "goccia.json"), '{"no-result": true}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"print": true}\n');
     const file = join(tmp, "test.js");
-    writeFileSync(file, "const r = 'this contains the word error'; r;\n");
+    writeFileSync(file, "1 + 1;\n");
     const proc = Bun.spawnSync([LOADER, file], {
       stdout: "pipe",
       stderr: "pipe",
     });
-    if (proc.exitCode !== 0) throw new Error(`Loader config no-result exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (proc.exitCode !== 0) throw new Error(`Loader config print exited ${proc.exitCode}: ${proc.stderr.toString()}`);
     const out = proc.stdout.toString();
-    if (out.includes("Result:"))
-      throw new Error(`goccia.json no-result should suppress Result line, got: ${out}`);
+    if (!out.includes("\n2\n"))
+      throw new Error(`goccia.json print=true should emit value, got: ${out}`);
   } finally {
     clean(tmp);
   }
@@ -418,7 +420,7 @@ console.log("Loader: --no-result honored from goccia.json...");
 
 console.log("Bare Loader: stdin default path...");
 {
-  const proc = Bun.spawnSync([BARE], {
+  const proc = Bun.spawnSync([BARE, "--print"], {
     stdin: new TextEncoder().encode("const x = 2 + 2; x;\n"),
     stdout: "pipe",
     stderr: "pipe",
@@ -429,7 +431,7 @@ console.log("Bare Loader: stdin default path...");
 
 console.log("Bare Loader: stdin dash path...");
 {
-  const proc = Bun.spawnSync([BARE, "-"], {
+  const proc = Bun.spawnSync([BARE, "--print", "-"], {
     stdin: new TextEncoder().encode("21 * 2;\n"),
     stdout: "pipe",
     stderr: "pipe",
@@ -444,7 +446,7 @@ console.log("Bare Loader: file input...");
   try {
     const file = join(tmp, "bare.js");
     writeFileSync(file, "40 + 2;\n");
-    const proc = Bun.spawnSync([BARE, file], {
+    const proc = Bun.spawnSync([BARE, "--print", file], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -477,7 +479,7 @@ console.log("Bare Loader: no runtime globals...");
     "(Goccia.semver === undefined);",
     "",
   ].join("\n");
-  const proc = Bun.spawnSync([BARE], {
+  const proc = Bun.spawnSync([BARE, "--print"], {
     stdin: new TextEncoder().encode(source),
     stdout: "pipe",
     stderr: "pipe",
@@ -490,7 +492,7 @@ console.log("Bare Loader: no runtime globals...");
 
 console.log("Bare Loader: module source type...");
 {
-  const proc = Bun.spawnSync([BARE, "--source-type=module"], {
+  const proc = Bun.spawnSync([BARE, "--print", "--source-type=module"], {
     stdin: new TextEncoder().encode("this === undefined;\n"),
     stdout: "pipe",
     stderr: "pipe",
@@ -502,7 +504,7 @@ console.log("Bare Loader: module source type...");
 // --mode flag: bare loader defaults to bytecode; both values must execute.
 console.log("Bare Loader: --mode=interpreted...");
 {
-  const proc = Bun.spawnSync([BARE, "--mode=interpreted"], {
+  const proc = Bun.spawnSync([BARE, "--print", "--mode=interpreted"], {
     stdin: new TextEncoder().encode("21 * 2;\n"),
     stdout: "pipe",
     stderr: "pipe",
@@ -513,7 +515,7 @@ console.log("Bare Loader: --mode=interpreted...");
 
 console.log("Bare Loader: --mode=bytecode...");
 {
-  const proc = Bun.spawnSync([BARE, "--mode=bytecode"], {
+  const proc = Bun.spawnSync([BARE, "--print", "--mode=bytecode"], {
     stdin: new TextEncoder().encode("21 * 2;\n"),
     stdout: "pipe",
     stderr: "pipe",
@@ -549,41 +551,65 @@ console.log("Bare Loader: --mode invalid value rejected...");
     throw new Error(`Bare --mode=foo should report invalid value, got stderr: ${stderr}`);
 }
 
-// -- --no-result ---------------------------------------------------------------
+// -- --print --------------------------------------------------------------------
 
-console.log("Bare Loader: --no-result suppresses script result...");
+console.log("Bare Loader: silent by default (no script result printed)...");
 {
-  const proc = Bun.spawnSync([BARE, "--no-result"], {
+  const proc = Bun.spawnSync([BARE], {
     stdin: new TextEncoder().encode("const r = 'this contains the word error'; r;\n"),
     stdout: "pipe",
     stderr: "pipe",
   });
-  if (proc.exitCode !== 0) throw new Error(`Bare --no-result exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.exitCode !== 0) throw new Error(`Bare default exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString() !== "")
-    throw new Error(`Bare --no-result should produce empty stdout, got: ${proc.stdout.toString()}`);
+    throw new Error(`Bare default should produce empty stdout (matches node script.js), got: ${proc.stdout.toString()}`);
 }
 
-console.log("Bare Loader: --no-result still permits print() output...");
+console.log("Bare Loader: --print emits bare value...");
 {
-  const proc = Bun.spawnSync([BARE, "--no-result"], {
+  const proc = Bun.spawnSync([BARE, "--print"], {
+    stdin: new TextEncoder().encode("const r = 'this contains the word error'; r;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare --print exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "this contains the word error")
+    throw new Error(`Bare --print should emit bare value, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: --print emits 'undefined' (matches node -p)...");
+{
+  const proc = Bun.spawnSync([BARE, "--print"], {
+    stdin: new TextEncoder().encode("undefined;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare --print undefined exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "undefined")
+    throw new Error(`Bare --print undefined should emit "undefined", got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: print() output independent of --print flag...");
+{
+  const proc = Bun.spawnSync([BARE], {
     stdin: new TextEncoder().encode("print('explicit'); 'last value';\n"),
     stdout: "pipe",
     stderr: "pipe",
   });
-  if (proc.exitCode !== 0) throw new Error(`Bare --no-result+print exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.exitCode !== 0) throw new Error(`Bare default+print() exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "explicit")
-    throw new Error(`Bare --no-result should print explicit print() but suppress result, got: ${proc.stdout.toString()}`);
+    throw new Error(`Bare default should emit print() output but no result, got: ${proc.stdout.toString()}`);
 }
 
-console.log("Bare Loader: --help documents --no-result...");
+console.log("Bare Loader: --help documents --print...");
 {
   const proc = Bun.spawnSync([BARE, "--help"], {
     stdout: "pipe",
     stderr: "pipe",
   });
   if (proc.exitCode !== 0) throw new Error(`Bare --help exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  if (!proc.stdout.toString().includes("--no-result"))
-    throw new Error(`Bare --help should document --no-result, got: ${proc.stdout.toString()}`);
+  if (!proc.stdout.toString().includes("--print"))
+    throw new Error(`Bare --help should document --print, got: ${proc.stdout.toString()}`);
 }
 
 // -- --global / --globals -------------------------------------------------------
@@ -1123,8 +1149,8 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     if (!singleOut.includes("Compiled to")) throw new Error('Output should contain "Compiled to"');
 
     // Roundtrip
-    const roundtripOut = await $`${LOADER} ${singleGbc} 2>&1`.text();
-    if (!roundtripOut.includes("Result: 4")) throw new Error(`Roundtrip should produce Result: 4, got: ${roundtripOut}`);
+    const roundtripOut = await $`${LOADER} --print ${singleGbc} 2>&1`.text();
+    if (!roundtripOut.includes("\n4\n")) throw new Error(`Roundtrip should print 4 on its own line, got: ${roundtripOut}`);
 
     console.log("Bundler: custom --output path...");
     const customOut = join(tmp, "custom.gbc");
@@ -1137,8 +1163,8 @@ console.log("TestRunner: --output=compact-json omits build, memory, stdout, stde
     const stdinOut = join(tmp, "stdin.gbc");
     await $`echo 'const z = 5 + 5; z;' | ${BUNDLER} --output=${stdinOut}`.quiet();
     if (!existsSync(stdinOut)) throw new Error("Stdin --output .gbc should exist");
-    const stdinRoundtrip = await $`${LOADER} ${stdinOut} 2>&1`.text();
-    if (!stdinRoundtrip.includes("Result: 10")) throw new Error(`Stdin roundtrip should produce Result: 10, got: ${stdinRoundtrip}`);
+    const stdinRoundtrip = await $`${LOADER} --print ${stdinOut} 2>&1`.text();
+    if (!stdinRoundtrip.includes("\n10\n")) throw new Error(`Stdin roundtrip should print 10 on its own line, got: ${stdinRoundtrip}`);
 
     console.log("Bundler: stdin without --output should fail...");
     const stdinNoOutput = await $`echo '1 + 1;' | ${BUNDLER} 2>&1`.nothrow();

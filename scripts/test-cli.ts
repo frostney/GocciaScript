@@ -31,14 +31,14 @@ const BENCHRUNNER = `./build/GocciaBenchmarkRunner${ext}`;
 
 console.log("Stdin smoke (interpreted)...");
 {
-  const out = await $`echo 'const x = 2 + 2; x;' | ${LOADER}`.text();
-  if (!out.includes("Result: 4")) throw new Error(`Expected Result: 4, got: ${out}`);
+  const out = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print`.text();
+  if (!out.includes("\n4\n")) throw new Error(`Expected 4 on its own line, got: ${out}`);
 }
 
 console.log("Stdin smoke (bytecode)...");
 {
-  const out = await $`echo 'const x = 2 + 2; x;' | ${LOADER} - --mode=bytecode`.text();
-  if (!out.includes("Result: 4")) throw new Error(`Expected Result: 4, got: ${out}`);
+  const out = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print - --mode=bytecode`.text();
+  if (!out.includes("\n4\n")) throw new Error(`Expected 4 on its own line, got: ${out}`);
 }
 
 // -- Stdin smoke (TestRunner) --------------------------------------------------
@@ -132,8 +132,8 @@ console.log("--asi (Loader + Bundler)...");
     if (!noAsi.text().includes("SyntaxError")) throw new Error("Expected SyntaxError without --asi");
 
     // Loader with --asi should succeed
-    const withAsi = await $`${LOADER} ${src} --asi 2>&1`.text();
-    if (!withAsi.includes("Result: 42")) throw new Error(`Expected Result: 42 with --asi, got: ${withAsi}`);
+    const withAsi = await $`${LOADER} --print ${src} --asi 2>&1`.text();
+    if (!withAsi.includes("\n42\n")) throw new Error(`Expected 42 with --asi, got: ${withAsi}`);
 
     // Bundler without --asi should fail
     const bundleNoAsi = await $`${BUNDLER} ${src} 2>&1`.nothrow();
@@ -157,8 +157,8 @@ console.log("--compat-var (Loader + Bundler + TestRunner)...");
     writeFileSync(src, "var x = 10;\nx;\n");
 
     // Loader with --compat-var
-    const loaderOut = await $`${LOADER} ${src} --compat-var 2>&1`.text();
-    if (!loaderOut.includes("Result: 10")) throw new Error(`Loader --compat-var expected Result: 10, got: ${loaderOut}`);
+    const loaderOut = await $`${LOADER} --print ${src} --compat-var 2>&1`.text();
+    if (!loaderOut.includes("\n10\n")) throw new Error(`Loader --compat-var expected 10, got: ${loaderOut}`);
 
     // Bundler with --compat-var
     await $`${BUNDLER} ${src} --compat-var`.quiet();
@@ -195,18 +195,18 @@ console.log("--compat-all (Loader + Bare + TestRunner)...");
     writeFileSync(src, "var x = 10;\nfunction f() { return x; }\nf();\n");
 
     // Loader with --compat-all matches enumerating both flags.
-    const allOut = await $`${LOADER} ${src} --compat-all 2>&1`.text();
-    if (!allOut.includes("Result: 10")) throw new Error(`Loader --compat-all expected Result: 10, got: ${allOut}`);
-    const enumOut = await $`${LOADER} ${src} --compat-var --compat-function 2>&1`.text();
-    if (!enumOut.includes("Result: 10")) throw new Error(`Loader enumerated flags expected Result: 10, got: ${enumOut}`);
+    const allOut = await $`${LOADER} --print ${src} --compat-all 2>&1`.text();
+    if (!allOut.includes("\n10\n")) throw new Error(`Loader --compat-all expected 10, got: ${allOut}`);
+    const enumOut = await $`${LOADER} --print ${src} --compat-var --compat-function 2>&1`.text();
+    if (!enumOut.includes("\n10\n")) throw new Error(`Loader enumerated flags expected 10, got: ${enumOut}`);
 
     // Without any compat flag the source must fail (function declaration unsupported).
     const noFlag = await $`${LOADER} ${src} 2>&1`.nothrow();
     if (noFlag.exitCode === 0) throw new Error("Loader without compat flags should reject var/function");
 
     // Bare loader with --compat-all.
-    const bareOut = await $`${BARE} ${src} --compat-all 2>&1`.text();
-    if (!bareOut.includes("10")) throw new Error(`Bare --compat-all expected output 10, got: ${bareOut}`);
+    const bareOut = await $`${BARE} --print ${src} --compat-all 2>&1`.text();
+    if (bareOut.trim() !== "10") throw new Error(`Bare --compat-all expected output 10, got: ${bareOut}`);
     const bareNoFlag = await $`${BARE} ${src} 2>&1`.nothrow();
     if (bareNoFlag.exitCode === 0) throw new Error("Bare without compat flags should reject var/function");
 
@@ -233,8 +233,8 @@ console.log("--compat-all (Loader + Bare + TestRunner)...");
     writeFileSync(join(cfgDir, "goccia.json"), '{"compat-all": true}\n');
     const cfgSrc = join(cfgDir, "use-both.js");
     writeFileSync(cfgSrc, "var x = 10;\nfunction f() { return x; }\nf();\n");
-    const cfgOut = await $`${LOADER} ${cfgSrc} 2>&1`.text();
-    if (!cfgOut.includes("Result: 10")) throw new Error(`Config compat-all expected Result: 10, got: ${cfgOut}`);
+    const cfgOut = await $`${LOADER} --print ${cfgSrc} 2>&1`.text();
+    if (!cfgOut.includes("\n10\n")) throw new Error(`Config compat-all expected 10, got: ${cfgOut}`);
 
     // --help mentions --compat-all on every CLI.
     for (const bin of [LOADER, BARE, REPL, TESTRUNNER, BUNDLER, BENCHRUNNER]) {
@@ -269,16 +269,16 @@ console.log("--compat-all (Loader + Bare + TestRunner)...");
   }
 }
 
-// -- --mode=bytecode (Loader: both modes produce Result: 4) ---------------------
+// -- --mode=bytecode (Loader: both modes produce 4) ----------------------------
 
 console.log("--mode=bytecode...");
 {
-  const interpOut = await $`echo 'const x = 2 + 2; x;' | ${LOADER}`.text();
-  if (!interpOut.includes("Result: 4")) throw new Error(`Interpreted expected Result: 4, got: ${interpOut}`);
+  const interpOut = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print`.text();
+  if (!interpOut.includes("\n4\n")) throw new Error(`Interpreted expected 4 on its own line, got: ${interpOut}`);
   if (!interpOut.includes("(interpreted)")) throw new Error(`Expected (interpreted) in output`);
 
-  const bcOut = await $`echo 'const x = 2 + 2; x;' | ${LOADER} - --mode=bytecode`.text();
-  if (!bcOut.includes("Result: 4")) throw new Error(`Bytecode expected Result: 4, got: ${bcOut}`);
+  const bcOut = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print - --mode=bytecode`.text();
+  if (!bcOut.includes("\n4\n")) throw new Error(`Bytecode expected 4 on its own line, got: ${bcOut}`);
   if (!bcOut.includes("(bytecode)")) throw new Error(`Expected (bytecode) in output`);
 }
 

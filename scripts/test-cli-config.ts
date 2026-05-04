@@ -70,9 +70,9 @@ console.log("goccia.json loading...");
     writeFileSync(join(tmp, "goccia.json"), '{"asi": true, "mode": "bytecode"}\n');
     writeFileSync(join(tmp, "test.js"), "const x = 2 + 2\nx\n");
 
-    const out = await $`${LOADER} ${join(tmp, "test.js")} 2>&1`.text();
+    const out = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`goccia.json should enable bytecode, got: ${out}`);
-    if (!out.includes("Result: 4")) throw new Error(`goccia.json should produce Result: 4, got: ${out}`);
+    if (!out.includes("\n4\n")) throw new Error(`goccia.json should produce 4 on its own line, got: ${out}`);
   } finally {
     clean(tmp);
   }
@@ -87,9 +87,9 @@ console.log("goccia.toml loading...");
     writeFileSync(join(tmp, "goccia.toml"), 'asi = true\nmode = "bytecode"\n');
     writeFileSync(join(tmp, "test.js"), "const x = 10\nx\n");
 
-    const out = await $`${LOADER} ${join(tmp, "test.js")} 2>&1`.text();
+    const out = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`goccia.toml should enable bytecode, got: ${out}`);
-    if (!out.includes("Result: 10")) throw new Error(`goccia.toml should produce Result: 10, got: ${out}`);
+    if (!out.includes("\n10\n")) throw new Error(`goccia.toml should produce 10 on its own line, got: ${out}`);
   } finally {
     clean(tmp);
   }
@@ -139,9 +139,9 @@ console.log("Discovery from entry file directory...");
     writeFileSync(join(tmp, "goccia.json"), '{"asi": true, "mode": "bytecode"}\n');
     writeFileSync(join(tmp, "src", "test.js"), "const x = 7\nx\n");
 
-    const out = await $`${LOADER} ${join(tmp, "src", "test.js")} 2>&1`.text();
+    const out = await $`${LOADER} --print ${join(tmp, "src", "test.js")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`Config in parent should be discovered, got: ${out}`);
-    if (!out.includes("Result: 7")) throw new Error(`Should produce Result: 7, got: ${out}`);
+    if (!out.includes("\n7\n")) throw new Error(`Should produce 7 on its own line, got: ${out}`);
   } finally {
     clean(tmp);
   }
@@ -195,8 +195,8 @@ console.log("Config without imports field...");
     writeFileSync(join(tmp, "goccia.json"), '{"asi": true}\n');
     writeFileSync(join(tmp, "test.js"), "const x = 42\nx\n");
 
-    const out = await $`${LOADER} ${join(tmp, "test.js")} 2>&1`.text();
-    if (!out.includes("Result: 42")) throw new Error(`Config without imports should work, got: ${out}`);
+    const out = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
+    if (!out.includes("\n42\n")) throw new Error(`Config without imports should work, got: ${out}`);
   } finally {
     clean(tmp);
   }
@@ -216,8 +216,8 @@ console.log("Config with imports...");
     );
     writeFileSync(join(tmp, "test.js"), 'import { value } from "utils"\nvalue\n');
 
-    const out = runCwd(LOADER, ["test.js"], tmp);
-    if (!out.combined.includes("Result: 99")) throw new Error(`Imports should resolve, got: ${out.combined}`);
+    const out = runCwd(LOADER, ["--print", "test.js"], tmp);
+    if (!out.combined.includes("\n99\n")) throw new Error(`Imports should resolve, got: ${out.combined}`);
   } finally {
     clean(tmp);
   }
@@ -233,9 +233,9 @@ console.log("Config extends...");
     writeFileSync(join(tmp, "goccia.json"), '{"extends": "base.json", "mode": "bytecode"}\n');
     writeFileSync(join(tmp, "test.js"), "const x = 5\nx\n");
 
-    const out = await $`${LOADER} ${join(tmp, "test.js")} 2>&1`.text();
+    const out = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`Extends should enable bytecode, got: ${out}`);
-    if (!out.includes("Result: 5")) throw new Error(`Extends should inherit ASI, got: ${out}`);
+    if (!out.includes("\n5\n")) throw new Error(`Extends should inherit ASI, got: ${out}`);
   } finally {
     clean(tmp);
   }
@@ -255,9 +255,9 @@ console.log("Config extends from subdirectory...");
     );
     writeFileSync(join(tmp, "tests", "asi", "test.js"), "const x = 99\nx\n");
 
-    const out = await $`${LOADER} ${join(tmp, "tests", "asi", "test.js")} 2>&1`.text();
+    const out = await $`${LOADER} --print ${join(tmp, "tests", "asi", "test.js")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`Subdirectory extends should enable bytecode, got: ${out}`);
-    if (!out.includes("Result: 99")) throw new Error(`Subdirectory extends should inherit ASI, got: ${out}`);
+    if (!out.includes("\n99\n")) throw new Error(`Subdirectory extends should inherit ASI, got: ${out}`);
   } finally {
     clean(tmp);
   }
@@ -369,18 +369,18 @@ console.log("Per-file ASI config across all apps...");
     writeFileSync(join(strictDir, "bad.js"), "const z = 1\nz\n");
 
     // Loader (interpreted)
-    const loaderInterp = await $`${LOADER} ${join(asiDir, "test.js")} 2>&1`.text();
-    if (!loaderInterp.includes("Result: 42")) throw new Error(`Loader interp ASI should produce 42, got: ${loaderInterp}`);
+    const loaderInterp = await $`${LOADER} --print ${join(asiDir, "test.js")} 2>&1`.text();
+    if (!loaderInterp.includes("\n42\n")) throw new Error(`Loader interp ASI should produce 42 on its own line, got: ${loaderInterp}`);
 
-    const strictOk = await $`${LOADER} ${join(strictDir, "test.js")} 2>&1`.text();
-    if (!strictOk.includes("Result: 99")) throw new Error(`Strict subdir should produce 99, got: ${strictOk}`);
+    const strictOk = await $`${LOADER} --print ${join(strictDir, "test.js")} 2>&1`.text();
+    if (!strictOk.includes("\n99\n")) throw new Error(`Strict subdir should produce 99 on its own line, got: ${strictOk}`);
 
     const strictBad = await $`${LOADER} ${join(strictDir, "bad.js")} 2>&1`.nothrow();
     if (!strictBad.text().includes("SyntaxError")) throw new Error("Strict subdir should reject missing semicolons");
 
     // Loader (bytecode)
-    const loaderBc = await $`${LOADER} ${join(asiDir, "test.js")} --mode=bytecode 2>&1`.text();
-    if (!loaderBc.includes("Result: 42")) throw new Error(`Loader bytecode ASI should produce 42, got: ${loaderBc}`);
+    const loaderBc = await $`${LOADER} --print ${join(asiDir, "test.js")} --mode=bytecode 2>&1`.text();
+    if (!loaderBc.includes("\n42\n")) throw new Error(`Loader bytecode ASI should produce 42 on its own line, got: ${loaderBc}`);
 
     const strictBcBad = await $`${LOADER} ${join(strictDir, "bad.js")} --mode=bytecode 2>&1`.nothrow();
     if (!strictBcBad.text().includes("SyntaxError")) throw new Error("Strict bytecode should reject");
@@ -468,12 +468,12 @@ console.log("Per-file compat-var config across all apps...");
     );
 
     // Loader (interpreted)
-    const loaderOut = await $`${LOADER} ${join(tmp, "test.js")} 2>&1`.text();
-    if (!loaderOut.includes("Result: 10")) throw new Error(`Loader interp compat-var should produce 10, got: ${loaderOut}`);
+    const loaderOut = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
+    if (!loaderOut.includes("\n10\n")) throw new Error(`Loader interp compat-var should produce 10 on its own line, got: ${loaderOut}`);
 
     // Loader (bytecode)
-    const loaderBc = await $`${LOADER} ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
-    if (!loaderBc.includes("Result: 10")) throw new Error(`Loader bytecode compat-var should produce 10, got: ${loaderBc}`);
+    const loaderBc = await $`${LOADER} --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
+    if (!loaderBc.includes("\n10\n")) throw new Error(`Loader bytecode compat-var should produce 10 on its own line, got: ${loaderBc}`);
 
     // TestRunner (interpreted)
     const trInterp = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --no-progress 2>&1`.text();
@@ -582,20 +582,20 @@ console.log("CLI flag overrides file config...");
     writeFileSync(join(noConfigDir, "test.js"), "const x = 1\nx\n");
 
     // File config ASI works
-    const configOut = await $`${LOADER} ${join(tmp, "test.js")} 2>&1`.text();
-    if (!configOut.includes("Result: 1")) throw new Error(`File config ASI should work, got: ${configOut}`);
+    const configOut = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
+    if (!configOut.includes("\n1\n")) throw new Error(`File config ASI should work, got: ${configOut}`);
 
     // Without config should fail
     const noConfigRes = await $`${LOADER} ${join(noConfigDir, "test.js")} 2>&1`.nothrow();
     if (!noConfigRes.text().includes("SyntaxError")) throw new Error("No config should reject");
 
     // CLI --asi overrides no-config
-    const cliAsi = await $`${LOADER} ${join(noConfigDir, "test.js")} --asi 2>&1`.text();
-    if (!cliAsi.includes("Result: 1")) throw new Error(`CLI --asi should override, got: ${cliAsi}`);
+    const cliAsi = await $`${LOADER} --print ${join(noConfigDir, "test.js")} --asi 2>&1`.text();
+    if (!cliAsi.includes("\n1\n")) throw new Error(`CLI --asi should override, got: ${cliAsi}`);
 
     // CLI --asi bytecode
-    const cliAsiBc = await $`${LOADER} ${join(noConfigDir, "test.js")} --asi --mode=bytecode 2>&1`.text();
-    if (!cliAsiBc.includes("Result: 1")) throw new Error(`CLI --asi bytecode should override, got: ${cliAsiBc}`);
+    const cliAsiBc = await $`${LOADER} --print ${join(noConfigDir, "test.js")} --asi --mode=bytecode 2>&1`.text();
+    if (!cliAsiBc.includes("\n1\n")) throw new Error(`CLI --asi bytecode should override, got: ${cliAsiBc}`);
 
     // CLI --mode=interpreted overrides config mode
     writeFileSync(join(tmp, "goccia.json"), '{"asi": true, "mode": "bytecode"}\n');
@@ -639,7 +639,7 @@ console.log("Config allowed-hosts allows listed host...");
       'const p = fetch("http://0.0.0.0:1/"); p.catch(() => {}); typeof p.then;\n',
     );
 
-    const out = runCwd(LOADER, ["test.js"], tmp);
+    const out = runCwd(LOADER, ["--print", "test.js"], tmp);
     if (!out.combined.includes("function")) throw new Error(`Allowed host should return promise, got: ${out.combined}`);
   } finally {
     clean(tmp);
@@ -741,9 +741,9 @@ console.log("--config=<file> loads .json explicitly...");
     // Config lives in a sibling directory; auto-discovery would never find it.
     writeFileSync(join(cfgDir, "custom.json"), '{"asi": true, "mode": "bytecode"}\n');
 
-    const out = await $`${LOADER} ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.json")} 2>&1`.text();
+    const out = await $`${LOADER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.json")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`--config=.json should enable bytecode, got: ${out}`);
-    if (!out.includes("Result: 11")) throw new Error(`--config=.json should enable ASI (Result: 11), got: ${out}`);
+    if (!out.includes("\n11\n")) throw new Error(`--config=.json should enable ASI (11 on its own line), got: ${out}`);
   } finally {
     clean(tmp);
     clean(cfgDir);
@@ -758,9 +758,9 @@ console.log("--config=<file> loads .toml explicitly...");
     writeFileSync(join(tmp, "test.js"), "const x = 21\nx\n");
     writeFileSync(join(cfgDir, "custom.toml"), 'asi = true\nmode = "bytecode"\n');
 
-    const out = await $`${LOADER} ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.toml")} 2>&1`.text();
+    const out = await $`${LOADER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.toml")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`--config=.toml should enable bytecode, got: ${out}`);
-    if (!out.includes("Result: 21")) throw new Error(`--config=.toml should enable ASI (Result: 21), got: ${out}`);
+    if (!out.includes("\n21\n")) throw new Error(`--config=.toml should enable ASI (21 on its own line), got: ${out}`);
   } finally {
     clean(tmp);
     clean(cfgDir);
@@ -775,9 +775,9 @@ console.log("--config=<file> loads .json5 explicitly...");
     writeFileSync(join(tmp, "test.js"), "const x = 31\nx\n");
     writeFileSync(join(cfgDir, "custom.json5"), '{asi: true, mode: "bytecode"}\n');
 
-    const out = await $`${LOADER} ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.json5")} 2>&1`.text();
+    const out = await $`${LOADER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.json5")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`--config=.json5 should enable bytecode, got: ${out}`);
-    if (!out.includes("Result: 31")) throw new Error(`--config=.json5 should enable ASI (Result: 31), got: ${out}`);
+    if (!out.includes("\n31\n")) throw new Error(`--config=.json5 should enable ASI (31 on its own line), got: ${out}`);
   } finally {
     clean(tmp);
     clean(cfgDir);
@@ -792,9 +792,9 @@ console.log("--config=<file> with relative path resolves against cwd...");
     writeFileSync(join(tmp, "custom.json"), '{"asi": true, "mode": "bytecode"}\n');
 
     // Relative path; cwd is tmp.
-    const out = runCwd(LOADER, ["test.js", "--config=./custom.json"], tmp);
+    const out = runCwd(LOADER, ["--print", "test.js", "--config=./custom.json"], tmp);
     if (!out.combined.includes("(bytecode)")) throw new Error(`Relative --config should resolve, got: ${out.combined}`);
-    if (!out.combined.includes("Result: 41")) throw new Error(`Relative --config should enable ASI, got: ${out.combined}`);
+    if (!out.combined.includes("\n41\n")) throw new Error(`Relative --config should enable ASI, got: ${out.combined}`);
   } finally {
     clean(tmp);
   }
@@ -814,9 +814,9 @@ console.log("--config=<dir> finds goccia.json...");
     writeFileSync(join(tmp, "test.js"), "const x = 51\nx\n");
     writeFileSync(join(cfgDir, "goccia.json"), '{"asi": true, "mode": "bytecode"}\n');
 
-    const out = await $`${LOADER} ${join(tmp, "test.js")} --config=${cfgDir} 2>&1`.text();
+    const out = await $`${LOADER} --print ${join(tmp, "test.js")} --config=${cfgDir} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`--config=<dir> with goccia.json should enable bytecode, got: ${out}`);
-    if (!out.includes("Result: 51")) throw new Error(`--config=<dir> should enable ASI, got: ${out}`);
+    if (!out.includes("\n51\n")) throw new Error(`--config=<dir> should enable ASI, got: ${out}`);
   } finally {
     clean(tmp);
     clean(cfgDir);
@@ -912,9 +912,9 @@ console.log("--config skips auto-discovery of nearby goccia.*...");
     // Explicit config selects bytecode.
     writeFileSync(join(cfgDir, "good.toml"), 'asi = true\nmode = "bytecode"\n');
 
-    const out = await $`${LOADER} ${join(tmp, "test.js")} --config=${join(cfgDir, "good.toml")} 2>&1`.text();
+    const out = await $`${LOADER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "good.toml")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`--config should skip nearby goccia.json, got: ${out}`);
-    if (!out.includes("Result: 101")) throw new Error(`--config should still apply ASI, got: ${out}`);
+    if (!out.includes("\n101\n")) throw new Error(`--config should still apply ASI, got: ${out}`);
   } finally {
     clean(tmp);
     clean(cfgDir);
@@ -933,9 +933,9 @@ console.log("CLI flags override values from --config...");
     writeFileSync(join(cfgDir, "custom.toml"), 'asi = true\nmode = "interpreted"\n');
 
     // ...but a direct --mode=bytecode on the CLI must win.
-    const out = await $`${LOADER} ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.toml")} --mode=bytecode 2>&1`.text();
+    const out = await $`${LOADER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.toml")} --mode=bytecode 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`CLI --mode should override --config value, got: ${out}`);
-    if (!out.includes("Result: 111")) throw new Error(`ASI from --config should still apply, got: ${out}`);
+    if (!out.includes("\n111\n")) throw new Error(`ASI from --config should still apply, got: ${out}`);
   } finally {
     clean(tmp);
     clean(cfgDir);
