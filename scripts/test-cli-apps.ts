@@ -12,28 +12,25 @@
 
 import { $ } from "bun";
 import {
-  mkdtempSync,
   writeFileSync,
   readFileSync,
   existsSync,
-  rmSync,
   mkdirSync,
   chmodSync,
 } from "fs";
 import { join, resolve } from "path";
-import { tmpdir } from "os";
-import { containsLine } from "./test-cli-helpers";
+import {
+  LOADER,
+  BARE,
+  REPL,
+  TESTRUNNER,
+  BUNDLER,
+  BENCHRUNNER,
+} from "./test-cli/binaries";
+import { containsLine } from "./test-cli/assertions";
+import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 
-const ext = process.platform === "win32" ? ".exe" : "";
-const LOADER = `./build/GocciaScriptLoader${ext}`;
-const BARE = `./build/GocciaScriptLoaderBare${ext}`;
-const REPL = `./build/GocciaREPL${ext}`;
-const TESTRUNNER = `./build/GocciaTestRunner${ext}`;
-const BUNDLER = `./build/GocciaBundler${ext}`;
-const BENCHRUNNER = `./build/GocciaBenchmarkRunner${ext}`;
-
-const makeTmp = () => mkdtempSync(join(tmpdir(), "goccia-apps-"));
-const clean = (d: string) => rmSync(d, { recursive: true, force: true });
+const makeTmp = makeTmpFactory("goccia-apps-");
 
 function assertValidSourceMap(path: string): void {
   const raw = readFileSync(path, "utf-8");

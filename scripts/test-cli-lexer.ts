@@ -5,8 +5,7 @@
  * Lexer-level CLI tests: numeric separator rejection.
  */
 
-const ext = process.platform === "win32" ? ".exe" : "";
-const LOADER = `./build/GocciaScriptLoader${ext}`;
+import { LOADER } from "./test-cli/binaries";
 
 // -- Numeric separator rejection (9 cases) --------------------------------------
 
