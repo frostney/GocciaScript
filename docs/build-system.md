@@ -76,14 +76,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader
 printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/GocciaBenchmarkRunner
 ```
 
-Both loaders are silent about the script's last evaluated value by default (matching `node script.js` / `bun script.js` / `deno run script.js` / `qjs script.js`). Pass `--print` to emit the bare value on its own line, including `undefined` (mirrors `node -p` / `bun --print` / `deno eval -p`):
-
-```bash
-printf "2 + 2;" | ./build/GocciaScriptLoader --print          # prints "4" after the timing banner
-printf "undefined;" | ./build/GocciaScriptLoaderBare --print  # prints "undefined"
-```
-
-`GocciaScriptLoader`'s human-readable timing banner is always printed; `--print` only controls the final value line. Programmatic consumers should use `--output=json` instead — the result is always present in the `result` field regardless of `--print`.
+Both loaders are silent about the script's last evaluated value unless you pass `--print` (the value-printing contract is described in [README § Run a Script](../README.md#run-a-script)). For local dev that's fine; for CI scripts and shell pipelines that previously parsed `Result: <value>` from the loader's stdout, pass `--print` and parse the bare value on the line after the timing banner — or switch to `--output=json` and read the `result` field, which is always populated regardless of `--print`.
 
 Leading Unix shebang lines such as `#!/usr/bin/env goccia` are treated as comments by the lexer, so executable scripts can be run directly without preprocessing.
 
