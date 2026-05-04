@@ -81,6 +81,34 @@ test("reassignment with correct type works", () => {
   expect(b).toBe(false);
 });
 
+test("compound assignment checks computed result before mutating local", () => {
+  const run = () => {
+    let x: boolean = true;
+    try {
+      x += false;
+    } catch (e) {
+      return x;
+    }
+    return x;
+  };
+
+  expect(() => {
+    let x: boolean = true;
+    x += false;
+  }).toThrow(TypeError);
+  expect(run()).toBe(true);
+});
+
+test("compound assignment validates result type, not rhs type", () => {
+  const run = () => {
+    let s: string = "a";
+    s += 1;
+    return s;
+  };
+
+  expect(run()).toBe("a1");
+});
+
 test("number annotation rejects destructuring reassignment", () => {
   let x: number = 1;
   expect(() => { [x] = ["wrong"]; }).toThrow(TypeError);

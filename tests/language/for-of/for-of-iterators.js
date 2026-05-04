@@ -196,6 +196,42 @@ describe("for...of with iterators", () => {
     expect(caughtMessage).toBe("body-threw");
   });
 
+  test("calls iterator return when an expression in the body throws", () => {
+    let returnCalled = 0;
+    let caughtMessage = "";
+    const iterable = {
+      [Symbol.iterator]() {
+        return {
+          next() {
+            return {
+              value: {
+                fail() {
+                  throw new Error("expression-threw");
+                }
+              },
+              done: false
+            };
+          },
+          return() {
+            returnCalled++;
+            return { done: true };
+          }
+        };
+      }
+    };
+
+    try {
+      for (const value of iterable) {
+        value.fail();
+      }
+    } catch (error) {
+      caughtMessage = error.message;
+    }
+
+    expect(returnCalled).toBe(1);
+    expect(caughtMessage).toBe("expression-threw");
+  });
+
   test("calls iterator return when break exits early", () => {
     let returnCalled = 0;
     const iterable = {
