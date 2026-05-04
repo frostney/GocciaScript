@@ -1255,12 +1255,14 @@ begin
 end;
 
 procedure MarkStaticSymbolDescriptorEscapedReferences(
-  const ADescriptor: TGocciaPropertyDescriptor);
+  const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
 var
   Visited: TGCObjectSet;
 begin
   Visited := TGCObjectSet.Create;
   try
+    if Assigned(ASymbol) then
+      ASymbol.MarkEscapedReferencesIn(Visited);
     ADescriptor.MarkEscapedReferences(Visited);
   finally
     Visited.Free;
@@ -1269,7 +1271,7 @@ end;
 
 procedure TGocciaClassValue.DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
 begin
-  MarkStaticSymbolDescriptorEscapedReferences(ADescriptor);
+  MarkStaticSymbolDescriptorEscapedReferences(ASymbol, ADescriptor);
   FStaticSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
 end;
 

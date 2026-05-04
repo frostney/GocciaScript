@@ -532,7 +532,8 @@ begin
       begin
         if RootedEngineResult then
         begin
-          TGarbageCollector.Instance.RemoveTempRoot(EngineResult.Result);
+          if Assigned(TGarbageCollector.Instance) then
+            TGarbageCollector.Instance.RemoveTempRoot(EngineResult.Result);
           RootedEngineResult := False;
         end;
         if Assigned(TGarbageCollector.Instance) then

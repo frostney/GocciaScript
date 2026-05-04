@@ -128,16 +128,18 @@ test("instance properties vs static properties", () => {
   expect(ic.getNumber()).toBe(4);
 });
 
-test("static symbol assignment preserves escaped function closures", () => {
-  const key = Symbol("staticClosure");
-  class Holder {}
+describe.runIf(typeof Goccia !== "undefined")("static symbol assignment preserves escaped function closures", () => {
+  test("preserves escaped function closures after manual GC", () => {
+    const key = Symbol("staticClosure");
+    class Holder {}
 
-  (() => {
-    const captured = { value: 42 };
-    Holder[key] = () => captured.value;
-  })();
+    (() => {
+      const captured = { value: 42 };
+      Holder[key] = () => captured.value;
+    })();
 
-  Goccia.gc();
+    Goccia.gc();
 
-  expect(Holder[key]()).toBe(42);
+    expect(Holder[key]()).toBe(42);
+  });
 });
