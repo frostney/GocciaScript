@@ -17,6 +17,10 @@ describe("await in async function parameter defaults", () => {
     expect(await fn()).toBe(42);
   });
 
+  test("await without an operand in async arrow body throws", () => {
+    expect(() => new Function("return async () => { await; }")).toThrow();
+  });
+
   test("await in async arrow parameter default throws", () => {
     expect(() => new Function("return async (x = await 1) => x")).toThrow();
   });

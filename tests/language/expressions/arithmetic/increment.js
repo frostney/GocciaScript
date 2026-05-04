@@ -96,3 +96,13 @@ test("post-increment on non-writable property throws", () => {
   expect(() => obj.x++).toThrow(TypeError);
   expect(obj.x).toBe(1);
 });
+
+test("increment cannot mutate captured const binding", () => {
+  expect(() => {
+    const value = 1;
+    const mutate = () => {
+      value++;
+    };
+    mutate();
+  }).toThrow(TypeError);
+});

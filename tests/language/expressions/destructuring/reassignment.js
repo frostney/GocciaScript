@@ -57,3 +57,19 @@ test("const nested destructuring throws on reassignment", () => {
   expect(deep).toBe(42);
   expect(() => { deep = 0; }).toThrow(TypeError);
 });
+
+test("const binding throws on array destructuring reassignment", () => {
+  const value = 1;
+  expect(() => { [value] = [2]; }).toThrow(TypeError);
+  expect(value).toBe(1);
+});
+
+test("captured const binding throws on object destructuring reassignment", () => {
+  const value = 1;
+  const mutate = () => {
+    ({ value } = { value: 2 });
+  };
+
+  expect(() => mutate()).toThrow(TypeError);
+  expect(value).toBe(1);
+});

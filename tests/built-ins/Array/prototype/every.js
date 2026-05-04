@@ -75,3 +75,21 @@ test("generic receiver checks all elements in array-like", () => {
   expect(Array.prototype.every.call(arrayLike, x => typeof x === 'string')).toBe(true);
   expect(Array.prototype.every.call(arrayLike, x => x === 'a')).toBe(false);
 });
+
+test("every passes thisArg to callback", () => {
+  const arr = [3, 4];
+  const receiver = { minimum: 2 };
+  let callCount = 0;
+  const callbacks = {
+    check(value, index, array) {
+      expect(this).toBe(receiver);
+      expect(array).toBe(arr);
+      callCount = callCount + 1;
+      return value > this.minimum;
+    },
+  };
+  const result = arr.every(callbacks.check, receiver);
+
+  expect(result).toBe(true);
+  expect(callCount).toBe(2);
+});
