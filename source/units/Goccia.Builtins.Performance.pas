@@ -239,7 +239,6 @@ begin
     TGocciaObjectValue.InitializeSharedPrototype;
 
   FBuiltinObject := TGocciaPerformanceValue.Create;
-  PinBuiltinObject;
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
 end;
 

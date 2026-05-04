@@ -45,24 +45,16 @@ var
   Promise: TGocciaPromiseValue;
   CallScope: TGocciaScope;
   BodyResult: TGocciaValue;
-  GC: TGarbageCollector;
-  CollectionCountBefore: Integer;
 begin
   Promise := TGocciaPromiseValue.Create;
 
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) then
-    GC.AddTempRoot(Promise);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(Promise);
   try
     CallScope := CreateCallScope;
-    CollectionCountBefore := -1;
 
-    if Assigned(GC) then
-    begin
-      CollectionCountBefore := GC.TotalCollections;
-      GC.PushActiveRoot(Self);
-      GC.PushActiveRoot(CallScope);
-    end;
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PushActiveRoot(CallScope);
     try
       try
         BodyResult := ExecuteBody(CallScope, AArguments, AThisValue);
@@ -72,18 +64,12 @@ begin
           Promise.Reject(E.Value);
       end;
     finally
-      if Assigned(GC) then
-      begin
-        GC.PopActiveRoot;
-        GC.PopActiveRoot;
-      end;
-      if ((not Assigned(GC)) or (GC.TotalCollections = CollectionCountBefore)) and
-         (not CallScope.Escaped) then
-        CallScope.Free;
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.PopActiveRoot;
     end;
   finally
-    if Assigned(GC) then
-      GC.RemoveTempRoot(Promise);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(Promise);
   end;
 
   Result := Promise;
@@ -97,24 +83,16 @@ var
   Promise: TGocciaPromiseValue;
   CallScope: TGocciaScope;
   BodyResult: TGocciaValue;
-  GC: TGarbageCollector;
-  CollectionCountBefore: Integer;
 begin
   Promise := TGocciaPromiseValue.Create;
 
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) then
-    GC.AddTempRoot(Promise);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(Promise);
   try
     CallScope := CreateCallScope;
-    CollectionCountBefore := -1;
 
-    if Assigned(GC) then
-    begin
-      CollectionCountBefore := GC.TotalCollections;
-      GC.PushActiveRoot(Self);
-      GC.PushActiveRoot(CallScope);
-    end;
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PushActiveRoot(CallScope);
     try
       try
         BodyResult := ExecuteBody(CallScope, AArguments, AThisValue);
@@ -124,18 +102,12 @@ begin
           Promise.Reject(E.Value);
       end;
     finally
-      if Assigned(GC) then
-      begin
-        GC.PopActiveRoot;
-        GC.PopActiveRoot;
-      end;
-      if ((not Assigned(GC)) or (GC.TotalCollections = CollectionCountBefore)) and
-         (not CallScope.Escaped) then
-        CallScope.Free;
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.PopActiveRoot;
     end;
   finally
-    if Assigned(GC) then
-      GC.RemoveTempRoot(Promise);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(Promise);
   end;
 
   Result := Promise;
@@ -149,24 +121,16 @@ var
   Promise: TGocciaPromiseValue;
   CallScope: TGocciaScope;
   BodyResult: TGocciaValue;
-  GC: TGarbageCollector;
-  CollectionCountBefore: Integer;
 begin
   Promise := TGocciaPromiseValue.Create;
 
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) then
-    GC.AddTempRoot(Promise);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(Promise);
   try
     CallScope := CreateCallScope;
-    CollectionCountBefore := -1;
 
-    if Assigned(GC) then
-    begin
-      CollectionCountBefore := GC.TotalCollections;
-      GC.PushActiveRoot(Self);
-      GC.PushActiveRoot(CallScope);
-    end;
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PushActiveRoot(CallScope);
     try
       try
         BodyResult := ExecuteBody(CallScope, AArguments, AThisValue);
@@ -176,18 +140,12 @@ begin
           Promise.Reject(E.Value);
       end;
     finally
-      if Assigned(GC) then
-      begin
-        GC.PopActiveRoot;
-        GC.PopActiveRoot;
-      end;
-      if ((not Assigned(GC)) or (GC.TotalCollections = CollectionCountBefore)) and
-         (not CallScope.Escaped) then
-        CallScope.Free;
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.PopActiveRoot;
     end;
   finally
-    if Assigned(GC) then
-      GC.RemoveTempRoot(Promise);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(Promise);
   end;
 
   Result := Promise;

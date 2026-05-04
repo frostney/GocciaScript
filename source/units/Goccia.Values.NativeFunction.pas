@@ -36,9 +36,6 @@ type
 
 implementation
 
-uses
-  Goccia.GarbageCollector;
-
 constructor TGocciaNativeFunctionValue.Create(const AFunction: TGocciaNativeFunctionCallback;
   const AName: string; const AArity: Integer);
 begin
@@ -61,40 +58,8 @@ begin
 end;
 
 function TGocciaNativeFunctionValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  GC: TGarbageCollector;
-  I, RootCount: Integer;
 begin
-  GC := TGarbageCollector.Instance;
-  RootCount := 0;
-  if Assigned(GC) then
-  begin
-    GC.PushActiveRoot(Self);
-    Inc(RootCount);
-    if Assigned(AThisValue) then
-    begin
-      GC.PushActiveRoot(AThisValue);
-      Inc(RootCount);
-    end;
-    if Assigned(AArguments) then
-      for I := 0 to AArguments.Length - 1 do
-        if Assigned(AArguments.GetElement(I)) then
-        begin
-          if AArguments.GetElement(I).IsCallable then
-            AArguments.GetElement(I).MarkEscapedReferences;
-          GC.PushActiveRoot(AArguments.GetElement(I));
-          Inc(RootCount);
-        end;
-  end;
-  try
-    Result := FFunction(AArguments, AThisValue);
-  finally
-    while RootCount > 0 do
-    begin
-      GC.PopActiveRoot;
-      Dec(RootCount);
-    end;
-  end;
+  Result := FFunction(AArguments, AThisValue);
 end;
 
 function TGocciaNativeFunctionValue.IsConstructable: Boolean;

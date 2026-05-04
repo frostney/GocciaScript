@@ -262,8 +262,7 @@ begin
   FPrimitive := APrimitive;
   InitializePrototype;
   SharedPrototype := GetSharedStringPrototype;
-  if not Assigned(AClass) and Assigned(SharedPrototype) and
-     (Self <> FPrototypeMethodHost) then
+  if not Assigned(AClass) and Assigned(SharedPrototype) then
     FPrototype := SharedPrototype;
 end;
 

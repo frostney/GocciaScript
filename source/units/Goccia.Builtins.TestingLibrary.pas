@@ -13,7 +13,6 @@ uses
   Goccia.Builtins.Base,
   Goccia.Error,
   Goccia.Error.ThrowErrorCallback,
-  Goccia.GarbageCollector,
   Goccia.Scope,
   Goccia.Values.ArrayValue,
   Goccia.Values.FunctionBase,
@@ -95,7 +94,6 @@ type
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
-    function MarkEscapedReferencesIn(const AVisited: TGCObjectSet): Boolean; override;
   end;
 
   // Expectation object that provides matchers
@@ -293,6 +291,7 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.Comparison,
   Goccia.FetchManager,
+  Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.RegExp.Runtime,
   Goccia.Timeout,
@@ -362,23 +361,6 @@ begin
     RemoveTempRootIfNeeded(ACollection.GetElement(I));
 end;
 
-procedure MarkEscapedIfNeeded(const AValue: TGocciaValue);
-begin
-  if Assigned(AValue) and AValue.CanContainEscapedReferences then
-    AValue.MarkEscapedReferences;
-end;
-
-procedure MarkEscapedCollection(const ACollection: TGocciaArgumentsCollection);
-var
-  I: Integer;
-begin
-  if not Assigned(ACollection) then
-    Exit;
-
-  for I := 0 to ACollection.Length - 1 do
-    MarkEscapedIfNeeded(ACollection.GetElement(I));
-end;
-
 { TGocciaRegisteredEntry }
 
 constructor TGocciaRegisteredEntry.Create(const AParentSuite: TGocciaTestSuite;
@@ -410,8 +392,6 @@ begin
   AfterEachCallbacks := TGocciaArgumentsCollection.Create;
   AfterAllCallbacks := TGocciaArgumentsCollection.Create;
 
-  MarkEscapedIfNeeded(SuiteFunction);
-  MarkEscapedCollection(SuiteArguments);
   AddTempRootIfNeeded(SuiteFunction);
   AddCollectionRoots(SuiteArguments);
 end;
@@ -442,7 +422,6 @@ end;
 procedure TGocciaTestSuite.AddHook(const ACallback: TGocciaFunctionBase;
   const APhase: TGocciaTestHookPhase);
 begin
-  MarkEscapedIfNeeded(ACallback);
   AddTempRootIfNeeded(ACallback);
 
   case APhase of
@@ -505,8 +484,6 @@ begin
     TestArguments := TGocciaArgumentsCollection.Create;
   IsTodo := AIsTodo;
 
-  MarkEscapedIfNeeded(TestFunction);
-  MarkEscapedCollection(TestArguments);
   AddTempRootIfNeeded(TestFunction);
   AddCollectionRoots(TestArguments);
 end;
@@ -620,16 +597,6 @@ begin
   inherited;
   if Assigned(FTable) then
     FTable.MarkReferences;
-end;
-
-function TGocciaParameterizedRegistrationFunction.MarkEscapedReferencesIn(
-  const AVisited: TGCObjectSet): Boolean;
-begin
-  Result := inherited MarkEscapedReferencesIn(AVisited);
-  if not Result then
-    Exit;
-  if Assigned(FTable) and FTable.CanContainEscapedReferences then
-    FTable.MarkEscapedReferencesIn(AVisited);
 end;
 
 { TGocciaExpectationValue }
@@ -2376,9 +2343,29 @@ end;
 
 constructor TGocciaTestAssertions.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
+  GlobalObject: TGocciaObjectValue;
+  ExpectFunction: TGocciaNativeFunctionValue;
   DescribeFunction: TGocciaNativeFunctionValue;
   TestFunction: TGocciaNativeFunctionValue;
   ItFunction: TGocciaNativeFunctionValue;
+  BeforeAllFunction: TGocciaNativeFunctionValue;
+  BeforeEachFunction: TGocciaNativeFunctionValue;
+  AfterEachFunction: TGocciaNativeFunctionValue;
+  AfterAllFunction: TGocciaNativeFunctionValue;
+  OnTestFinishedFunction: TGocciaNativeFunctionValue;
+  RunTestsFunction: TGocciaNativeFunctionValue;
+  MockFunctionValue: TGocciaNativeFunctionValue;
+  SpyOnFunction: TGocciaNativeFunctionValue;
+
+  procedure RegisterPublicGlobal(const AName: string; const AValue: TGocciaValue);
+  begin
+    if Assigned(GlobalObject) then
+      GlobalObject.DefineProperty(AName,
+        TGocciaPropertyDescriptorData.Create(AValue, [pfWritable, pfConfigurable]))
+    else
+      AScope.DefineLexicalBinding(AName, AValue, dtConst);
+  end;
+
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -2387,47 +2374,66 @@ begin
   FOnTestFinishedCallbacks := TGocciaArgumentsCollection.Create;
   ResetTestStats;
 
-  // Functions are registered on both the scope (for direct access in test scripts)
-  // and the builtin object (for completeness). This dual registration is intentional.
+  if AScope.ThisValue is TGocciaObjectValue then
+    GlobalObject := TGocciaObjectValue(AScope.ThisValue)
+  else
+    GlobalObject := nil;
 
-  // Register testing functions globally for easy access
-  AScope.DefineLexicalBinding('expect', TGocciaNativeFunctionValue.Create(Expect, 'expect', 1), dtConst);
+  // Public testing helpers are global object properties, not lexical bindings.
+  // Test262 scripts intentionally declare vars named expect/test/it, and those
+  // var globals must be able to shadow the runner helpers.
+  ExpectFunction := TGocciaNativeFunctionValue.Create(Expect, 'expect', 1);
+  RegisterPublicGlobal('expect', ExpectFunction);
 
   // Create describe function with skip/skipIf/runIf properties
   DescribeFunction := TGocciaNativeFunctionValue.Create(Describe, 'describe', 2);
   ConfigureDescribeFunction(DescribeFunction);
-  AScope.DefineLexicalBinding('describe', DescribeFunction, dtConst);
+  RegisterPublicGlobal('describe', DescribeFunction);
 
   // Create test function with skip/skipIf/runIf properties
   TestFunction := TGocciaNativeFunctionValue.Create(Test, 'test', 2);
   ConfigureTestFunction(TestFunction);
-  AScope.DefineLexicalBinding('test', TestFunction, dtConst);
+  RegisterPublicGlobal('test', TestFunction);
+
+  // Private aliases used by generated Test262 wrappers.  Some conformance
+  // tests intentionally declare globals named describe/test.
+  AScope.DefineLexicalBinding('__gocciaTest262Describe', DescribeFunction,
+    dtConst);
+  AScope.DefineLexicalBinding('__gocciaTest262Test', TestFunction, dtConst);
 
   ItFunction := TGocciaNativeFunctionValue.Create(It, 'it', 2);
   ConfigureTestFunction(ItFunction);
-  AScope.DefineLexicalBinding('it', ItFunction, dtConst);
-  AScope.DefineLexicalBinding('beforeAll', TGocciaNativeFunctionValue.Create(BeforeAll, 'beforeAll', 1), dtConst);
-  AScope.DefineLexicalBinding('beforeEach', TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1), dtConst);
-  AScope.DefineLexicalBinding('afterEach', TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1), dtConst);
-  AScope.DefineLexicalBinding('afterAll', TGocciaNativeFunctionValue.Create(AfterAll, 'afterAll', 1), dtConst);
-  AScope.DefineLexicalBinding('onTestFinished', TGocciaNativeFunctionValue.Create(OnTestFinished, 'onTestFinished', 1), dtConst);
-  AScope.DefineLexicalBinding('runTests', TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0), dtConst);
-  AScope.DefineLexicalBinding('mock', TGocciaNativeFunctionValue.Create(MockFunction, 'mock', 0), dtConst);
-  AScope.DefineLexicalBinding('spyOn', TGocciaNativeFunctionValue.Create(SpyOn, 'spyOn', 2), dtConst);
+  RegisterPublicGlobal('it', ItFunction);
+  BeforeAllFunction := TGocciaNativeFunctionValue.Create(BeforeAll, 'beforeAll', 1);
+  BeforeEachFunction := TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1);
+  AfterEachFunction := TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1);
+  AfterAllFunction := TGocciaNativeFunctionValue.Create(AfterAll, 'afterAll', 1);
+  OnTestFinishedFunction := TGocciaNativeFunctionValue.Create(OnTestFinished, 'onTestFinished', 1);
+  RunTestsFunction := TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0);
+  MockFunctionValue := TGocciaNativeFunctionValue.Create(MockFunction, 'mock', 0);
+  SpyOnFunction := TGocciaNativeFunctionValue.Create(SpyOn, 'spyOn', 2);
+  RegisterPublicGlobal('beforeAll', BeforeAllFunction);
+  RegisterPublicGlobal('beforeEach', BeforeEachFunction);
+  RegisterPublicGlobal('afterEach', AfterEachFunction);
+  RegisterPublicGlobal('afterAll', AfterAllFunction);
+  RegisterPublicGlobal('onTestFinished', OnTestFinishedFunction);
+  RegisterPublicGlobal('runTests', RunTestsFunction);
+  RegisterPublicGlobal('mock', MockFunctionValue);
+  RegisterPublicGlobal('spyOn', SpyOnFunction);
 
   // Also set them in the builtin object for completeness
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(Expect, 'expect', 1));
+  FBuiltinObject.RegisterNativeMethod(ExpectFunction);
   FBuiltinObject.RegisterNativeMethod(DescribeFunction);
   FBuiltinObject.RegisterNativeMethod(TestFunction);
   FBuiltinObject.RegisterNativeMethod(ItFunction);
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(BeforeAll, 'beforeAll', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(AfterAll, 'afterAll', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(OnTestFinished, 'onTestFinished', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MockFunction, 'mock', 0));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(SpyOn, 'spyOn', 2));
+  FBuiltinObject.RegisterNativeMethod(BeforeAllFunction);
+  FBuiltinObject.RegisterNativeMethod(BeforeEachFunction);
+  FBuiltinObject.RegisterNativeMethod(AfterEachFunction);
+  FBuiltinObject.RegisterNativeMethod(AfterAllFunction);
+  FBuiltinObject.RegisterNativeMethod(OnTestFinishedFunction);
+  FBuiltinObject.RegisterNativeMethod(RunTestsFunction);
+  FBuiltinObject.RegisterNativeMethod(MockFunctionValue);
+  FBuiltinObject.RegisterNativeMethod(SpyOnFunction);
 end;
 
 destructor TGocciaTestAssertions.Destroy;
@@ -3500,7 +3506,6 @@ begin
   if not (AArgs.GetElement(0) is TGocciaFunctionBase) then
     Goccia.Values.ErrorHelper.ThrowTypeError(SErrorOnTestFinishedExpectsFunction, SSuggestTestUsage);
 
-  MarkEscapedIfNeeded(AArgs.GetElement(0));
   AddTempRootIfNeeded(AArgs.GetElement(0));
   FOnTestFinishedCallbacks.Add(AArgs.GetElement(0));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;

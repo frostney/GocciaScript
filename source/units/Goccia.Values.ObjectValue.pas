@@ -10,7 +10,6 @@ uses
   HashMap,
 
   Goccia.Arguments.Collection,
-  Goccia.GarbageCollector,
   Goccia.ObjectModel.Types,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.Primitives,
@@ -46,7 +45,6 @@ type
     function ToStringLiteral: TGocciaStringLiteralValue; override;
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
     function ToNumberLiteral: TGocciaNumberLiteralValue; override;
-    function CanContainEscapedReferences: Boolean; override;
 
     procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); virtual;
     function TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean; virtual;
@@ -92,7 +90,6 @@ type
     function TestIntegritySealed: Boolean; virtual;
 
     procedure MarkReferences; override;
-    function MarkEscapedReferencesIn(const AVisited: TGCObjectSet): Boolean; override;
 
     property Properties: TGocciaPropertyMap read FProperties;
     property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
@@ -121,6 +118,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Realm,
   Goccia.Values.ErrorHelper,
@@ -391,57 +389,21 @@ procedure TGocciaObjectValue.MarkReferences;
 var
   Pair: TGocciaPropertyMap.TKeyValuePair;
   SymPair: TSymbolDescriptorMap.TKeyValuePair;
-  GC: TGarbageCollector;
 begin
   if GCMarked then Exit;
   inherited;
 
-  GC := TGarbageCollector.Instance;
-  if Assigned(FPrototype) and
-     ((not Assigned(GC)) or GC.ContainsObject(FPrototype)) then
+  if Assigned(FPrototype) then
     FPrototype.MarkReferences;
 
-  if Assigned(FProperties) then
-    for Pair in FProperties do
-      if Assigned(Pair.Value) then
-        Pair.Value.MarkValues;
+  for Pair in FProperties do
+    Pair.Value.MarkValues;
 
-  if Assigned(FSymbolDescriptors) then
-    for SymPair in FSymbolDescriptors do
-    begin
-      if Assigned(SymPair.Key) then
-        SymPair.Key.MarkReferences;
-      if Assigned(SymPair.Value) then
-        SymPair.Value.MarkValues;
-    end;
-end;
-
-function TGocciaObjectValue.MarkEscapedReferencesIn(
-  const AVisited: TGCObjectSet): Boolean;
-var
-  Pair: TGocciaPropertyMap.TKeyValuePair;
-  SymPair: TSymbolDescriptorMap.TKeyValuePair;
-begin
-  Result := inherited MarkEscapedReferencesIn(AVisited);
-  if not Result then
-    Exit;
-
-  if Assigned(FProperties) then
-    for Pair in FProperties do
-      if Assigned(Pair.Value) then
-        Pair.Value.MarkEscapedReferences(AVisited);
-
-  if Assigned(FSymbolDescriptors) then
-    for SymPair in FSymbolDescriptors do
-    begin
-      if Assigned(SymPair.Key) then
-        SymPair.Key.MarkEscapedReferencesIn(AVisited);
-      if Assigned(SymPair.Value) then
-        SymPair.Value.MarkEscapedReferences(AVisited);
-    end;
-
-  if Assigned(FPrototype) then
-    FPrototype.MarkEscapedReferencesIn(AVisited);
+  for SymPair in FSymbolDescriptors do
+  begin
+    SymPair.Key.MarkReferences;
+    SymPair.Value.MarkValues;
+  end;
 end;
 
 function TGocciaObjectValue.ToDebugString: string;
@@ -527,11 +489,6 @@ begin
   Result := TGocciaNumberLiteralValue.NaNValue;
 end;
 
-function TGocciaObjectValue.CanContainEscapedReferences: Boolean;
-begin
-  Result := True;
-end;
-
 // ES2026 §10.1.9 [[Set]](P, V, Receiver)
 procedure TGocciaObjectValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True);
 var
@@ -566,8 +523,6 @@ begin
     begin
       if TGocciaPropertyDescriptorData(Descriptor).Writable then
       begin
-        if Assigned(AValue) and AValue.CanContainEscapedReferences then
-          AValue.MarkEscapedReferences;
         TGocciaPropertyDescriptorData(Descriptor).Value := AValue;
         Exit;
       end;
@@ -766,19 +721,6 @@ begin
   end;
 end;
 
-procedure MarkDescriptorEscapedReferences(
-  const ADescriptor: TGocciaPropertyDescriptor);
-var
-  Visited: TGCObjectSet;
-begin
-  Visited := TGCObjectSet.Create;
-  try
-    ADescriptor.MarkEscapedReferences(Visited);
-  finally
-    Visited.Free;
-  end;
-end;
-
 // ES2026 §20.1.2.3.1 DefinePropertyOrThrow(O, P, desc)
 // Does NOT take ownership of ADescriptor on failure — caller must free.
 procedure TGocciaObjectValue.DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
@@ -789,13 +731,10 @@ begin
   begin
     if not ValidatePropertyDescriptor(Current, ADescriptor) then
       ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]), SSuggestCannotDeleteNonConfigurable);
-    MarkDescriptorEscapedReferences(ADescriptor);
     Current.Free;
   end
   else if not FExtensible then
-    ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]), SSuggestObjectNotExtensible)
-  else
-    MarkDescriptorEscapedReferences(ADescriptor);
+    ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]), SSuggestObjectNotExtensible);
 
   FProperties.Add(AName, ADescriptor);
 end;
@@ -813,7 +752,6 @@ begin
       ADescriptor.Free;
       Exit(False);
     end;
-    MarkDescriptorEscapedReferences(ADescriptor);
     FProperties.Add(AName, ADescriptor);
     Exit(True);
   end;
@@ -824,7 +762,6 @@ begin
     Exit(False);
   end;
 
-  MarkDescriptorEscapedReferences(ADescriptor);
   Current.Free;
   FProperties.Add(AName, ADescriptor);
   Result := True;
@@ -1059,16 +996,12 @@ begin
   begin
     if not ValidatePropertyDescriptor(Current, ADescriptor) then
       ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [ASymbol.ToDisplayString.Value]), SSuggestCannotDeleteNonConfigurable);
-    MarkDescriptorEscapedReferences(ADescriptor);
     Current.Free;
   end
   else if not FExtensible then
     ThrowTypeError(SErrorCannotAddSymbolNotExtensible, SSuggestObjectNotExtensible)
   else
-  begin
-    MarkDescriptorEscapedReferences(ADescriptor);
     FSymbolInsertionOrder.Add(ASymbol);
-  end;
 
   FSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
 end;
@@ -1086,7 +1019,6 @@ begin
       ADescriptor.Free;
       Exit(False);
     end;
-    MarkDescriptorEscapedReferences(ADescriptor);
     FSymbolInsertionOrder.Add(ASymbol);
     FSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
     Exit(True);
@@ -1098,7 +1030,6 @@ begin
     Exit(False);
   end;
 
-  MarkDescriptorEscapedReferences(ADescriptor);
   Current.Free;
   FSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
   Result := True;
@@ -1137,8 +1068,6 @@ begin
     begin
       if TGocciaPropertyDescriptorData(Descriptor).Writable then
       begin
-        if Assigned(AValue) and AValue.CanContainEscapedReferences then
-          AValue.MarkEscapedReferences;
         FSymbolDescriptors.AddOrSetValue(ASymbol, TGocciaPropertyDescriptorData.Create(AValue, Descriptor.Flags));
         Descriptor.Free;
         Exit;

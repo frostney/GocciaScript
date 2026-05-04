@@ -138,7 +138,7 @@ begin
   FDone := False;
   InitializePrototype;
   SharedPrototype := GetSharedIteratorPrototype;
-  if Assigned(SharedPrototype) and (Self <> FPrototypeMethodHost) then
+  if Assigned(SharedPrototype) then
     FPrototype := SharedPrototype;
 end;
 

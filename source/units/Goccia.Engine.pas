@@ -579,8 +579,11 @@ begin
   for I := 0 to DefaultShimCount - 1 do
   begin
     Shim := DefaultShim(I);
-    FInterpreter.GlobalScope.DefineLexicalBinding(Shim.Name,
-      LoadShimValue(FInterpreter, Shim), dtConst);
+    if Shim.Name = 'hasOwnProperty' then
+      LoadShimValue(FInterpreter, Shim)
+    else
+      FInterpreter.GlobalScope.DefineLexicalBinding(Shim.Name,
+        LoadShimValue(FInterpreter, Shim), dtConst);
   end;
 end;
 
@@ -1398,10 +1401,10 @@ var
   GC: TGarbageCollector;
 begin
   GC := TGarbageCollector.Instance;
-  // Manual GC is synchronous and bypasses the automatic threshold. The GC
-  // serializes mark/sweep across threads, while active roots and backend stack
-  // roots keep in-flight values visible during reentrant calls.
-  if Assigned(GC) then
+  // Skip on worker threads: shared immutable objects (singletons, prototypes)
+  // have a single FGCMark field that is not thread-safe — running mark-sweep
+  // on a worker would race on that field and crash.
+  if Assigned(GC) and (not GIsWorkerThread) then
     GC.Collect;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;

@@ -377,76 +377,28 @@ console.log("--max-memory (OOM triggers RangeError)...");
 console.log("--max-memory (manual gc reclaims inside active calls)...");
 {
   const src = [
-    "const churn=(r)=>r<=0?Goccia.gc.bytesAllocated:(()=>{",
-    "let junk=Array.from({length:300},(_,i)=>({r,i}));",
-    "junk=null;",
-    "Goccia.gc();",
-    "return churn(r-1);",
+    "const churn = (remaining) => remaining <= 0 ? Goccia.gc.bytesAllocated : (() => {",
+    "  let junk = Array.from({ length: 300 }, (_, i) => ({ remaining, i }));",
+    "  junk = null;",
+    "  Goccia.gc();",
+    "  return churn(remaining - 1);",
     "})();",
     "churn(30);",
     "",
   ].join("\n");
+
   for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
-    const proc = Bun.spawnSync(
-      [LOADER, "--max-memory=500000", "--output=json", "--asi", ...modeArgs],
-      {
-        stdin: new TextEncoder().encode(src),
-        stdout: "pipe",
-        stderr: "pipe",
-        timeout: 30_000,
-      },
-    );
-    if (proc.exitCode !== 0) {
-      throw new Error(
-        `manual gc with ${modeArgs[0] ?? "interpreted"} should stay under --max-memory, got exit ${proc.exitCode}: ${proc.stdout.toString()}${proc.stderr.toString()}`,
-      );
-    }
+    const proc = Bun.spawnSync([LOADER, "--max-memory=500000", "--output=json", "--asi", ...modeArgs], {
+      stdin: new TextEncoder().encode(src),
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 30_000,
+    });
+    const label = modeArgs.length > 0 ? modeArgs.join(" ") : "interpreter";
+    if (proc.exitCode !== 0) throw new Error(`Manual GC active-call ${label} exit code should be 0, got ${proc.exitCode}: ${proc.stdout.toString()}${proc.stderr.toString()}`);
     const json = JSON.parse(proc.stdout.toString());
-    if (typeof json.files?.[0]?.result !== "number" || json.files[0].result <= 0) {
-      throw new Error(`manual gc result should be positive bytesAllocated, got ${json.files?.[0]?.result}`);
-    }
-    if ((json.memory?.gc?.collections ?? 0) < 30) {
-      throw new Error(`manual gc should report at least 30 collections, got ${json.memory?.gc?.collections}`);
-    }
-  }
-}
-
-console.log("--max-memory (manual gc in parallel test workers)...");
-{
-  const tmp = mkdtempSync(join(tmpdir(), "goccia-worker-gc-"));
-  try {
-    const src = [
-      'test("worker manual gc", () => {',
-      "const churn=(r)=>r<=0?Goccia.gc.bytesAllocated:(()=>{",
-      "let junk=Array.from({length:300},(_,i)=>({r,i}));",
-      "junk=null;",
-      "Goccia.gc();",
-      "return churn(r-1);",
-      "})();",
-      "expect(churn(30)).toBeGreaterThan(0);",
-      "});",
-      "",
-    ].join("\n");
-    writeFileSync(join(tmp, "a.js"), src);
-    writeFileSync(join(tmp, "b.js"), src);
-
-    for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
-      const proc = Bun.spawnSync(
-        [TESTRUNNER, tmp, "--asi", "--jobs=2", "--max-memory=500000", "--no-progress", ...modeArgs],
-        {
-          stdout: "pipe",
-          stderr: "pipe",
-          timeout: 30_000,
-        },
-      );
-      if (proc.exitCode !== 0) {
-        throw new Error(
-          `worker manual gc with ${modeArgs[0] ?? "interpreted"} should pass, got exit ${proc.exitCode}: ${proc.stdout.toString()}${proc.stderr.toString()}`,
-        );
-      }
-    }
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
+    if (typeof json.files?.[0]?.result !== "number" || json.files[0].result <= 0) throw new Error(`Manual GC active-call ${label} should return positive bytesAllocated`);
+    if ((json.memory?.gc?.collections ?? 0) < 30) throw new Error(`Manual GC active-call ${label} should report at least 30 collections, got ${json.memory?.gc?.collections}`);
   }
 }
 
