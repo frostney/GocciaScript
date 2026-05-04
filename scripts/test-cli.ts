@@ -27,18 +27,23 @@ const TESTRUNNER = `./build/GocciaTestRunner${ext}`;
 const BUNDLER = `./build/GocciaBundler${ext}`;
 const BENCHRUNNER = `./build/GocciaBenchmarkRunner${ext}`;
 
+// Pascal's WriteLn writes \r\n on Windows, so substring matches against \n<value>\n
+// fail there. Strip \r before matching.
+const containsLine = (s: string, value: string): boolean =>
+  s.replace(/\r/g, "").includes(`\n${value}\n`);
+
 // -- Stdin smoke (Loader interpreted + bytecode) --------------------------------
 
 console.log("Stdin smoke (interpreted)...");
 {
   const out = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print`.text();
-  if (!out.includes("\n4\n")) throw new Error(`Expected 4 on its own line, got: ${out}`);
+  if (!containsLine(out, "4")) throw new Error(`Expected 4 on its own line, got: ${out}`);
 }
 
 console.log("Stdin smoke (bytecode)...");
 {
   const out = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print - --mode=bytecode`.text();
-  if (!out.includes("\n4\n")) throw new Error(`Expected 4 on its own line, got: ${out}`);
+  if (!containsLine(out, "4")) throw new Error(`Expected 4 on its own line, got: ${out}`);
 }
 
 // -- Stdin smoke (TestRunner) --------------------------------------------------
@@ -133,7 +138,7 @@ console.log("--asi (Loader + Bundler)...");
 
     // Loader with --asi should succeed
     const withAsi = await $`${LOADER} --print ${src} --asi 2>&1`.text();
-    if (!withAsi.includes("\n42\n")) throw new Error(`Expected 42 with --asi, got: ${withAsi}`);
+    if (!containsLine(withAsi, "42")) throw new Error(`Expected 42 with --asi, got: ${withAsi}`);
 
     // Bundler without --asi should fail
     const bundleNoAsi = await $`${BUNDLER} ${src} 2>&1`.nothrow();
@@ -158,7 +163,7 @@ console.log("--compat-var (Loader + Bundler + TestRunner)...");
 
     // Loader with --compat-var
     const loaderOut = await $`${LOADER} --print ${src} --compat-var 2>&1`.text();
-    if (!loaderOut.includes("\n10\n")) throw new Error(`Loader --compat-var expected 10, got: ${loaderOut}`);
+    if (!containsLine(loaderOut, "10")) throw new Error(`Loader --compat-var expected 10, got: ${loaderOut}`);
 
     // Bundler with --compat-var
     await $`${BUNDLER} ${src} --compat-var`.quiet();
@@ -196,9 +201,9 @@ console.log("--compat-all (Loader + Bare + TestRunner)...");
 
     // Loader with --compat-all matches enumerating both flags.
     const allOut = await $`${LOADER} --print ${src} --compat-all 2>&1`.text();
-    if (!allOut.includes("\n10\n")) throw new Error(`Loader --compat-all expected 10, got: ${allOut}`);
+    if (!containsLine(allOut, "10")) throw new Error(`Loader --compat-all expected 10, got: ${allOut}`);
     const enumOut = await $`${LOADER} --print ${src} --compat-var --compat-function 2>&1`.text();
-    if (!enumOut.includes("\n10\n")) throw new Error(`Loader enumerated flags expected 10, got: ${enumOut}`);
+    if (!containsLine(enumOut, "10")) throw new Error(`Loader enumerated flags expected 10, got: ${enumOut}`);
 
     // Without any compat flag the source must fail (function declaration unsupported).
     const noFlag = await $`${LOADER} ${src} 2>&1`.nothrow();
@@ -234,7 +239,7 @@ console.log("--compat-all (Loader + Bare + TestRunner)...");
     const cfgSrc = join(cfgDir, "use-both.js");
     writeFileSync(cfgSrc, "var x = 10;\nfunction f() { return x; }\nf();\n");
     const cfgOut = await $`${LOADER} --print ${cfgSrc} 2>&1`.text();
-    if (!cfgOut.includes("\n10\n")) throw new Error(`Config compat-all expected 10, got: ${cfgOut}`);
+    if (!containsLine(cfgOut, "10")) throw new Error(`Config compat-all expected 10, got: ${cfgOut}`);
 
     // --help mentions --compat-all on every CLI.
     for (const bin of [LOADER, BARE, REPL, TESTRUNNER, BUNDLER, BENCHRUNNER]) {
@@ -274,11 +279,11 @@ console.log("--compat-all (Loader + Bare + TestRunner)...");
 console.log("--mode=bytecode...");
 {
   const interpOut = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print`.text();
-  if (!interpOut.includes("\n4\n")) throw new Error(`Interpreted expected 4 on its own line, got: ${interpOut}`);
+  if (!containsLine(interpOut, "4")) throw new Error(`Interpreted expected 4 on its own line, got: ${interpOut}`);
   if (!interpOut.includes("(interpreted)")) throw new Error(`Expected (interpreted) in output`);
 
   const bcOut = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print - --mode=bytecode`.text();
-  if (!bcOut.includes("\n4\n")) throw new Error(`Bytecode expected 4 on its own line, got: ${bcOut}`);
+  if (!containsLine(bcOut, "4")) throw new Error(`Bytecode expected 4 on its own line, got: ${bcOut}`);
   if (!bcOut.includes("(bytecode)")) throw new Error(`Expected (bytecode) in output`);
 }
 
