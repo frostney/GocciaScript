@@ -321,6 +321,7 @@ procedure TBenchmarkRunnerApp.CollectBenchmarkFileInterpreted(
 var
   Source: TStringList;
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   GC: TGarbageCollector;
   EngineResult: TGocciaScriptResult;
   ScriptResult: TGocciaObjectValue;
@@ -341,41 +342,46 @@ begin
       end;
     end;
     try
-      Engine := CreateEngine(AFileName, Source);
+      Executor := TGocciaInterpreterExecutor.Create;
       try
-        ConfigureBenchmarkRuntime(Engine, AShowProgress, False);
-
-        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
-        StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+        Engine := CreateEngine(AFileName, Source, Executor);
         try
-          EngineResult := Engine.Execute;
-          FileResult.FileName := AFileName;
-          FileResult.DeterministicProfile := FProfileDeterministic.Present;
-          FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
-          FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
-          FileResult.CompileTimeNanoseconds := 0;
-          BenchStart := GetNanoseconds;
-          ScriptResult := RunRegisteredBenchmarks(Engine,
-            FProfileDeterministic.Present);
-          FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds +
-            (GetNanoseconds - BenchStart);
-        finally
-          ClearExecutionTimeout;
-          ClearInstructionLimit;
-        end;
+          ConfigureBenchmarkRuntime(Engine, AShowProgress, False);
 
-        GC := TGarbageCollector.Instance;
+          StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+          StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+          try
+            EngineResult := Engine.Execute;
+            FileResult.FileName := AFileName;
+            FileResult.DeterministicProfile := FProfileDeterministic.Present;
+            FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
+            FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
+            FileResult.CompileTimeNanoseconds := 0;
+            BenchStart := GetNanoseconds;
+            ScriptResult := RunRegisteredBenchmarks(Engine,
+              FProfileDeterministic.Present);
+            FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds +
+              (GetNanoseconds - BenchStart);
+          finally
+            ClearExecutionTimeout;
+            ClearInstructionLimit;
+          end;
 
-        if Assigned(ScriptResult) and Assigned(GC) then
-          GC.AddTempRoot(ScriptResult);
-        try
-          PopulateFileResult(FileResult, ScriptResult, AReporter);
-        finally
+          GC := TGarbageCollector.Instance;
+
           if Assigned(ScriptResult) and Assigned(GC) then
-            GC.RemoveTempRoot(ScriptResult);
+            GC.AddTempRoot(ScriptResult);
+          try
+            PopulateFileResult(FileResult, ScriptResult, AReporter);
+          finally
+            if Assigned(ScriptResult) and Assigned(GC) then
+              GC.RemoveTempRoot(ScriptResult);
+          end;
+        finally
+          Engine.Free;
         end;
       finally
-        Engine.Free;
+        Executor.Free;
       end;
     except
       on E: TGocciaError do
@@ -570,6 +576,7 @@ procedure TBenchmarkRunnerApp.CollectBenchmarkSourceInterpreted(
   const AReporter: TBenchmarkReporter; const AShowProgress: Boolean);
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   GC: TGarbageCollector;
   EngineResult: TGocciaScriptResult;
   ScriptResult: TGocciaObjectValue;
@@ -577,41 +584,46 @@ var
   BenchStart: Int64;
 begin
   try
-    Engine := CreateEngine(AFileName, ASource);
+    Executor := TGocciaInterpreterExecutor.Create;
     try
-      ConfigureBenchmarkRuntime(Engine, AShowProgress, False);
-
-      StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
-      StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+      Engine := CreateEngine(AFileName, ASource, Executor);
       try
-        EngineResult := Engine.Execute;
-        FileResult.FileName := AFileName;
-        FileResult.DeterministicProfile := FProfileDeterministic.Present;
-        FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
-        FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
-        FileResult.CompileTimeNanoseconds := 0;
-        BenchStart := GetNanoseconds;
-        ScriptResult := RunRegisteredBenchmarks(Engine,
-          FProfileDeterministic.Present);
-        FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds +
-          (GetNanoseconds - BenchStart);
-      finally
-        ClearExecutionTimeout;
-        ClearInstructionLimit;
-      end;
+        ConfigureBenchmarkRuntime(Engine, AShowProgress, False);
 
-      GC := TGarbageCollector.Instance;
+        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+        StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+        try
+          EngineResult := Engine.Execute;
+          FileResult.FileName := AFileName;
+          FileResult.DeterministicProfile := FProfileDeterministic.Present;
+          FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
+          FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
+          FileResult.CompileTimeNanoseconds := 0;
+          BenchStart := GetNanoseconds;
+          ScriptResult := RunRegisteredBenchmarks(Engine,
+            FProfileDeterministic.Present);
+          FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds +
+            (GetNanoseconds - BenchStart);
+        finally
+          ClearExecutionTimeout;
+          ClearInstructionLimit;
+        end;
 
-      if Assigned(ScriptResult) and Assigned(GC) then
-        GC.AddTempRoot(ScriptResult);
-      try
-        PopulateFileResult(FileResult, ScriptResult, AReporter);
-      finally
+        GC := TGarbageCollector.Instance;
+
         if Assigned(ScriptResult) and Assigned(GC) then
-          GC.RemoveTempRoot(ScriptResult);
+          GC.AddTempRoot(ScriptResult);
+        try
+          PopulateFileResult(FileResult, ScriptResult, AReporter);
+        finally
+          if Assigned(ScriptResult) and Assigned(GC) then
+            GC.RemoveTempRoot(ScriptResult);
+        end;
+      finally
+        Engine.Free;
       end;
     finally
-      Engine.Free;
+      Executor.Free;
     end;
   except
     on E: TGocciaError do

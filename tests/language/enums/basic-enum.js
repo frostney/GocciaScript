@@ -55,6 +55,21 @@ test("enum with mixed number and string values", () => {
   expect(Mixed.Message).toBe("OK");
 });
 
+test("block enum declaration shadows outer enum", () => {
+  enum Shadowed {
+    Value = "outer"
+  }
+
+  {
+    enum Shadowed {
+      Value = "inner"
+    }
+    expect(Shadowed.Value).toBe("inner");
+  }
+
+  expect(Shadowed.Value).toBe("outer");
+});
+
 test("enum with trailing comma", () => {
   enum TrailingComma {
     A = 1,

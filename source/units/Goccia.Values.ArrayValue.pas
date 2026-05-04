@@ -215,6 +215,25 @@ begin
   Result := AValue;
 end;
 
+function GetArrayCallbackThisArg(const AArgs: TGocciaArgumentsCollection): TGocciaValue; inline;
+begin
+  if AArgs.Length > 1 then
+    Result := AArgs.GetElement(1)
+  else
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function InvokeArrayCallback(const ACallback: TGocciaValue;
+  const ATypedCallback: TGocciaFunctionBase;
+  const ACallArgs: TGocciaArgumentsCollection;
+  const AThisArg: TGocciaValue): TGocciaValue; inline;
+begin
+  if Assigned(ATypedCallback) then
+    Result := ATypedCallback.Call(ACallArgs, AThisArg)
+  else
+    Result := InvokeCallable(ACallback, ACallArgs, AThisArg);
+end;
+
 
 procedure TArrayLikeView.Init(const AThisValue: TGocciaValue);
 begin
@@ -887,11 +906,13 @@ var
   ResultArray: TGocciaArrayValue;
   Callback: TGocciaValue;
   TypedCallback: TGocciaFunctionBase;
+  ThisArg: TGocciaValue;
   CallArgs: TGocciaArrayCallbackArgs;
   I: Integer;
 begin
   View.Init(AThisValue);
   Callback := ValidateArrayMethodCall('map', AArgs, AThisValue, True);
+  ThisArg := GetArrayCallbackThisArg(AArgs);
   // Step 5: Let A be ArraySpeciesCreate(O, len) — ArrayCreate throws
   // RangeError if len > 2^32 - 1.  Doing this *before* allocating the
   // capacity-hinted TGocciaArrayValue matters: len is clamped to MaxInt
@@ -917,10 +938,8 @@ begin
 
       CallArgs.Element := View.Get(I);
       CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-      if Assigned(TypedCallback) then
-        ArrayCreateDataProperty(ResultArray, I, TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue))
-      else
-        ArrayCreateDataProperty(ResultArray, I, InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue));
+      ArrayCreateDataProperty(ResultArray, I,
+        InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg));
     end;
   finally
     CallArgs.Free;
@@ -939,6 +958,7 @@ var
   View: TArrayLikeView;
   Callback: TGocciaValue;
   TypedCallback: TGocciaFunctionBase;
+  ThisArg: TGocciaValue;
   ResultArray: TGocciaArrayValue;
   CallArgs: TGocciaArrayCallbackArgs;
   PredicateResult, Element: TGocciaValue;
@@ -948,6 +968,7 @@ var
 begin
   View.Init(AThisValue);
   Callback := ValidateArrayMethodCall('filter', AArgs, AThisValue, True);
+  ThisArg := GetArrayCallbackThisArg(AArgs);
   if Assigned(View.Arr) then
     ResultArray := ArraySpeciesCreate(View.Arr, 0)
   else
@@ -967,10 +988,7 @@ begin
         Element := View.Get64(K);
         CallArgs.Element := Element;
         CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
-        if Assigned(TypedCallback) then
-          PredicateResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-        else
-          PredicateResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        PredicateResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
         if PredicateResult.ToBooleanLiteral.Value then
           ResultArray.Elements.Add(Element);
       end;
@@ -985,10 +1003,7 @@ begin
         Element := View.Get(I);
         CallArgs.Element := Element;
         CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-        if Assigned(TypedCallback) then
-          PredicateResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-        else
-          PredicateResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        PredicateResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
 
         if PredicateResult.ToBooleanLiteral.Value then
           ResultArray.Elements.Add(Element);
@@ -1109,6 +1124,7 @@ var
   View: TArrayLikeView;
   Callback: TGocciaValue;
   TypedCallback: TGocciaFunctionBase;
+  ThisArg: TGocciaValue;
   CallArgs: TGocciaArrayCallbackArgs;
   I: Integer;
   Sparse: TArray<Int64>;
@@ -1116,6 +1132,7 @@ var
 begin
   View.Init(AThisValue);
   Callback := ValidateArrayMethodCall('forEach', AArgs, AThisValue, True);
+  ThisArg := GetArrayCallbackThisArg(AArgs);
 
   TypedCallback := nil;
   if Callback is TGocciaFunctionBase then
@@ -1130,10 +1147,7 @@ begin
       begin
         CallArgs.Element := View.Get64(K);
         CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
-        if Assigned(TypedCallback) then
-          TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-        else
-          InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
       end;
     end
     else
@@ -1145,10 +1159,7 @@ begin
 
         CallArgs.Element := View.Get(I);
         CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-        if Assigned(TypedCallback) then
-          TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-        else
-          InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
       end;
     end;
   finally
@@ -1296,6 +1307,7 @@ var
   View: TArrayLikeView;
   Callback: TGocciaValue;
   TypedCallback: TGocciaFunctionBase;
+  ThisArg: TGocciaValue;
   CallArgs: TGocciaArrayCallbackArgs;
   I: Integer;
   SomeResult: TGocciaValue;
@@ -1304,6 +1316,7 @@ var
 begin
   View.Init(AThisValue);
   Callback := ValidateArrayMethodCall('some', AArgs, AThisValue, True);
+  ThisArg := GetArrayCallbackThisArg(AArgs);
 
   TypedCallback := nil;
   if Callback is TGocciaFunctionBase then
@@ -1318,10 +1331,7 @@ begin
       begin
         CallArgs.Element := View.Get64(K);
         CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
-        if Assigned(TypedCallback) then
-          SomeResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-        else
-          SomeResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        SomeResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
         if SomeResult.ToBooleanLiteral.Value then
         begin
           Result := TGocciaBooleanLiteralValue.TrueValue;
@@ -1338,10 +1348,7 @@ begin
 
         CallArgs.Element := View.Get(I);
         CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-        if Assigned(TypedCallback) then
-          SomeResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-        else
-          SomeResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        SomeResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
         if SomeResult.ToBooleanLiteral.Value then
         begin
           Result := TGocciaBooleanLiteralValue.TrueValue;
@@ -1362,6 +1369,7 @@ var
   View: TArrayLikeView;
   Callback: TGocciaValue;
   TypedCallback: TGocciaFunctionBase;
+  ThisArg: TGocciaValue;
   CallArgs: TGocciaArrayCallbackArgs;
   I: Integer;
   EveryResult: TGocciaValue;
@@ -1370,6 +1378,7 @@ var
 begin
   View.Init(AThisValue);
   Callback := ValidateArrayMethodCall('every', AArgs, AThisValue, True);
+  ThisArg := GetArrayCallbackThisArg(AArgs);
 
   TypedCallback := nil;
   if Callback is TGocciaFunctionBase then
@@ -1384,10 +1393,7 @@ begin
       begin
         CallArgs.Element := View.Get64(K);
         CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
-        if Assigned(TypedCallback) then
-          EveryResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-        else
-          EveryResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        EveryResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
         if not EveryResult.ToBooleanLiteral.Value then
         begin
           Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -1404,10 +1410,7 @@ begin
 
         CallArgs.Element := View.Get(I);
         CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-        if Assigned(TypedCallback) then
-          EveryResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-        else
-          EveryResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        EveryResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
         if not EveryResult.ToBooleanLiteral.Value then
         begin
           Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -1509,12 +1512,14 @@ var
   ResultArray: TGocciaArrayValue;
   Callback: TGocciaValue;
   TypedCallback: TGocciaFunctionBase;
+  ThisArg: TGocciaValue;
   CallArgs: TGocciaArrayCallbackArgs;
   I, J: Integer;
   MappedValue: TGocciaValue;
 begin
   View.Init(AThisValue);
   Callback := ValidateArrayMethodCall('flatMap', AArgs, AThisValue, True);
+  ThisArg := GetArrayCallbackThisArg(AArgs);
   if Assigned(View.Arr) then
     ResultArray := ArraySpeciesCreate(View.Arr, 0)
   else
@@ -1533,10 +1538,7 @@ begin
 
       CallArgs.Element := View.Get(I);
       CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-      if Assigned(TypedCallback) then
-        MappedValue := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-      else
-        MappedValue := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      MappedValue := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
 
       if MappedValue is TGocciaArrayValue then
       begin
@@ -1761,6 +1763,7 @@ var
   View: TArrayLikeView;
   Callback: TGocciaValue;
   TypedCallback: TGocciaFunctionBase;
+  ThisArg: TGocciaValue;
   CallArgs: TGocciaArrayCallbackArgs;
   I: Integer;
   Element, CallResult: TGocciaValue;
@@ -1769,6 +1772,7 @@ var
 begin
   View.Init(AThisValue);
   Callback := ValidateArrayMethodCall('find', AArgs, AThisValue, True);
+  ThisArg := GetArrayCallbackThisArg(AArgs);
 
   TypedCallback := nil;
   if Callback is TGocciaFunctionBase then
@@ -1790,10 +1794,7 @@ begin
         Element := View.Get64(K);
         CallArgs.Element := Element;
         CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
-        if Assigned(TypedCallback) then
-          CallResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-        else
-          CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
         if CallResult.ToBooleanLiteral.Value then
         begin
           Result := Element;
@@ -1810,10 +1811,7 @@ begin
 
       CallArgs.Element := Element;
       CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-      if Assigned(TypedCallback) then
-        CallResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-      else
-        CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
       if CallResult.ToBooleanLiteral.Value then
       begin
         Result := Element;
@@ -1833,6 +1831,7 @@ var
   View: TArrayLikeView;
   Callback: TGocciaValue;
   TypedCallback: TGocciaFunctionBase;
+  ThisArg: TGocciaValue;
   CallArgs: TGocciaArrayCallbackArgs;
   I: Integer;
   Element, CallResult: TGocciaValue;
@@ -1841,6 +1840,7 @@ var
 begin
   View.Init(AThisValue);
   Callback := ValidateArrayMethodCall('findIndex', AArgs, AThisValue, True);
+  ThisArg := GetArrayCallbackThisArg(AArgs);
 
   TypedCallback := nil;
   if Callback is TGocciaFunctionBase then
@@ -1856,10 +1856,7 @@ begin
         Element := View.Get64(K);
         CallArgs.Element := Element;
         CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
-        if Assigned(TypedCallback) then
-          CallResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-        else
-          CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
         if CallResult.ToBooleanLiteral.Value then
         begin
           Result := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
@@ -1876,10 +1873,7 @@ begin
 
       CallArgs.Element := Element;
       CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-      if Assigned(TypedCallback) then
-        CallResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-      else
-        CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
       if CallResult.ToBooleanLiteral.Value then
       begin
         Result := TGocciaNumberLiteralValue.Create(I);
@@ -1899,6 +1893,7 @@ var
   View: TArrayLikeView;
   Callback: TGocciaValue;
   TypedCallback: TGocciaFunctionBase;
+  ThisArg: TGocciaValue;
   CallArgs: TGocciaArrayCallbackArgs;
   I: Integer;
   Element, CallResult: TGocciaValue;
@@ -1907,6 +1902,7 @@ var
 begin
   View.Init(AThisValue);
   Callback := ValidateArrayMethodCall('findLast', AArgs, AThisValue, True);
+  ThisArg := GetArrayCallbackThisArg(AArgs);
 
   TypedCallback := nil;
   if Callback is TGocciaFunctionBase then
@@ -1922,10 +1918,7 @@ begin
         Element := View.Get64(Sparse[J]);
         CallArgs.Element := Element;
         CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(Sparse[J]));
-        if Assigned(TypedCallback) then
-          CallResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-        else
-          CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
         if CallResult.ToBooleanLiteral.Value then
         begin
           Result := Element;
@@ -1942,10 +1935,7 @@ begin
 
       CallArgs.Element := Element;
       CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-      if Assigned(TypedCallback) then
-        CallResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-      else
-        CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
       if CallResult.ToBooleanLiteral.Value then
       begin
         Result := Element;
@@ -1965,6 +1955,7 @@ var
   View: TArrayLikeView;
   Callback: TGocciaValue;
   TypedCallback: TGocciaFunctionBase;
+  ThisArg: TGocciaValue;
   CallArgs: TGocciaArrayCallbackArgs;
   I: Integer;
   Element, CallResult: TGocciaValue;
@@ -1973,6 +1964,7 @@ var
 begin
   View.Init(AThisValue);
   Callback := ValidateArrayMethodCall('findLastIndex', AArgs, AThisValue, True);
+  ThisArg := GetArrayCallbackThisArg(AArgs);
 
   TypedCallback := nil;
   if Callback is TGocciaFunctionBase then
@@ -1988,10 +1980,7 @@ begin
         Element := View.Get64(Sparse[J]);
         CallArgs.Element := Element;
         CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(Sparse[J]));
-        if Assigned(TypedCallback) then
-          CallResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-        else
-          CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
         if CallResult.ToBooleanLiteral.Value then
         begin
           Result := TGocciaNumberLiteralValue.Create(Int64ToDouble(Sparse[J]));
@@ -2008,10 +1997,7 @@ begin
 
       CallArgs.Element := Element;
       CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-      if Assigned(TypedCallback) then
-        CallResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-      else
-        CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
       if CallResult.ToBooleanLiteral.Value then
       begin
         Result := TGocciaNumberLiteralValue.Create(I);

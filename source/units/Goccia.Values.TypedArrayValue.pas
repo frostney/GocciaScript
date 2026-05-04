@@ -749,6 +749,25 @@ begin
   Result := TGocciaTypedArrayValue(AThisValue);
 end;
 
+function ToIntegerOrInfinityBounded(const AValue: TGocciaValue): Integer;
+var
+  Num: TGocciaNumberLiteralValue;
+begin
+  Num := AValue.ToNumberLiteral;
+  if Num.IsNaN then
+    Result := 0
+  else if Num.IsInfinity then
+    Result := MaxInt
+  else if Num.IsNegativeInfinity then
+    Result := -MaxInt
+  else if Num.Value >= MaxInt then
+    Result := MaxInt
+  else if Num.Value <= -MaxInt then
+    Result := -MaxInt
+  else
+    Result := Trunc(Num.Value);
+end;
+
 function InvokeCallback(const ACallback: TGocciaValue; const AElement, AIndex, AArray, AThisArg: TGocciaValue): TGocciaValue;
 var
   Args: TGocciaArgumentsCollection;
@@ -1011,7 +1030,7 @@ begin
 
   if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
   begin
-    TargetOffset := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value);
+    TargetOffset := ToIntegerOrInfinityBounded(AArgs.GetElement(1));
     if TargetOffset < 0 then
       ThrowRangeError(SErrorTypedArraySetOffsetNonNegative, SSuggestTypedArrayLength);
   end
@@ -1021,7 +1040,8 @@ begin
   if AArgs.GetElement(0) is TGocciaTypedArrayValue then
   begin
     SrcTA := TGocciaTypedArrayValue(AArgs.GetElement(0));
-    if TargetOffset + SrcTA.FLength > TA.FLength then
+    if (TargetOffset > TA.FLength) or
+       (SrcTA.FLength > TA.FLength - TargetOffset) then
       ThrowRangeError(SErrorTypedArraySourceTooLarge, SSuggestTypedArrayLength);
     // ES2026 §23.2.3.25.1 step 1.b: mixed BigInt/Number content types throw
     if IsBigIntKind(TA.FKind) <> IsBigIntKind(SrcTA.FKind) then
@@ -1040,7 +1060,8 @@ begin
   else if AArgs.GetElement(0) is TGocciaArrayValue then
   begin
     SrcArray := TGocciaArrayValue(AArgs.GetElement(0));
-    if TargetOffset + SrcArray.Elements.Count > TA.FLength then
+    if (TargetOffset > TA.FLength) or
+       (SrcArray.Elements.Count > TA.FLength - TargetOffset) then
       ThrowRangeError(SErrorTypedArraySourceTooLarge, SSuggestTypedArrayLength);
     for I := 0 to SrcArray.Elements.Count - 1 do
       TA.WriteValueToElement(TargetOffset + I, SrcArray.Elements[I]);
@@ -1987,7 +2008,7 @@ begin
   begin
     Buf := TGocciaArrayBufferValue(FirstArg);
     if AArguments.Length > 1 then
-      ByteOff := Trunc(AArguments.GetElement(1).ToNumberLiteral.Value)
+      ByteOff := ToIntegerOrInfinityBounded(AArguments.GetElement(1))
     else
       ByteOff := 0;
 
@@ -2000,7 +2021,7 @@ begin
 
     if AArguments.Length > 2 then
     begin
-      ElemLen := Trunc(AArguments.GetElement(2).ToNumberLiteral.Value);
+      ElemLen := ToIntegerOrInfinityBounded(AArguments.GetElement(2));
       if ElemLen < 0 then
         ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
       if Int64(ByteOff) + Int64(ElemLen) * Int64(BPE) > Int64(System.Length(Buf.Data)) then
@@ -2023,7 +2044,7 @@ begin
   begin
     SAB := TGocciaSharedArrayBufferValue(FirstArg);
     if AArguments.Length > 1 then
-      ByteOff := Trunc(AArguments.GetElement(1).ToNumberLiteral.Value)
+      ByteOff := ToIntegerOrInfinityBounded(AArguments.GetElement(1))
     else
       ByteOff := 0;
 
@@ -2036,7 +2057,7 @@ begin
 
     if AArguments.Length > 2 then
     begin
-      ElemLen := Trunc(AArguments.GetElement(2).ToNumberLiteral.Value);
+      ElemLen := ToIntegerOrInfinityBounded(AArguments.GetElement(2));
       if ElemLen < 0 then
         ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
       if Int64(ByteOff) + Int64(ElemLen) * Int64(BPE) > Int64(System.Length(SAB.Data)) then
@@ -2069,8 +2090,12 @@ begin
   Num := FirstArg.ToNumberLiteral;
   if Num.IsNaN then
     Len := 0
+  else if Num.IsInfinity or Num.IsNegativeInfinity then
+    ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength)
   else
   begin
+    if Num.Value >= MaxInt then
+      ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
     Len := Trunc(Num.Value);
     if Len < 0 then
       ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);

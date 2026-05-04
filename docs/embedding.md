@@ -1,11 +1,11 @@
-<!-- doc-length-limit: 900 -->
+<!-- doc-length-limit: 1000 -->
 # Embedding the Engine
 
 *For FreePascal developers who want to embed the GocciaScript engine in their own applications.*
 
 ## Executive Summary
 
-- **Quick start** — `TGocciaRuntime.Create(...)` for the standard host/runtime surface; `TGocciaEngine.Create(...)` for core-language-only embedders
+- **Quick start** — `TGocciaRuntime.Create(...)` for the standard host/runtime surface; `TGocciaEngine.Create(...)` for core-language-only embedders. `TGocciaEngine.Create(...)` requires an explicit executor (`TGocciaInterpreterExecutor` for tree-walk or `TGocciaBytecodeExecutor` for bytecode VM); `TGocciaRuntime.Create(...)` is the convenience that picks one for you
 - **Sandboxing** — Choose runtime globals and special-purpose tools with `TGocciaRuntimeGlobals`; inject custom globals via `DefineLexicalBinding`; enforce execution limits via timeout or instruction cap
 - **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, and global modules
 - **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
@@ -61,22 +61,28 @@ uses
 
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   Source: TStringList;
   ScriptResult: TGocciaScriptResult;
 begin
   Source := TStringList.Create;
-  Engine := TGocciaEngine.Create('session', Source);
+  Executor := TGocciaInterpreterExecutor.Create;
   try
-    // First execution — defines a variable
-    Source.Text := 'const x = 42;';
-    Engine.Execute;
+    Engine := TGocciaEngine.Create('session', Source, Executor);
+    try
+      // First execution — defines a variable
+      Source.Text := 'const x = 42;';
+      Engine.Execute;
 
-    // Second execution — uses the variable from the first
-    Source.Text := 'x + 1;';
-    ScriptResult := Engine.Execute;
-    WriteLn(ScriptResult.Result.ToStringLiteral.Value); // 43
+      // Second execution — uses the variable from the first
+      Source.Text := 'x + 1;';
+      ScriptResult := Engine.Execute;
+      WriteLn(ScriptResult.Result.ToStringLiteral.Value); // 43
+    finally
+      Engine.Free;
+    end;
   finally
-    Engine.Free;
+    Executor.Free;
     Source.Free;
   end;
 end;
@@ -84,14 +90,24 @@ end;
 
 The `TStringList` is passed by reference — update its contents and call `Execute` again to run new code in the same global scope. Variables, functions, and classes defined in previous executions remain available.
 
+### Engine Constructor and Executor Ownership
+
+Callers must pass an explicit executor — `TGocciaInterpreterExecutor` (in `Goccia.Engine`) for tree-walk or `TGocciaBytecodeExecutor` (in `Goccia.Engine.Backend`) for the bytecode VM. The engine does not own the executor; the caller frees it after the engine. `TGocciaRuntime`'s file/source convenience overloads handle this internally for embedders who want the default interpreter setup.
+
 ### Automatic Semicolon Insertion
 
 ASI is disabled by default. To enable ECMAScript-compliant automatic semicolon insertion (ES2026 §12.10), set the `ASIEnabled` property after creating the engine:
 
 ```pascal
-Engine := TGocciaEngine.Create('app.js', Source);
-Engine.ASIEnabled := True;  // Semicolons are now optional per ES2026 rules
-Engine.Execute;
+Executor := TGocciaInterpreterExecutor.Create;
+try
+  Engine := TGocciaEngine.Create('app.js', Source, Executor);
+  Engine.ASIEnabled := True;  // Semicolons are now optional per ES2026 rules
+  Engine.Execute;
+finally
+  Engine.Free;
+  Executor.Free;
+end;
 ```
 
 When enabled, the parser inserts virtual semicolons at newline boundaries, before `}`, and at EOF. Restricted productions (`return`, `throw`, `break`) follow the `[no LineTerminator here]` rules.
@@ -213,13 +229,19 @@ end;
 var
   Resolver: TMyResolver;
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
 begin
   Resolver := TMyResolver.Create('/path/to/project');
-  Engine := TGocciaEngine.Create('app.js', Source, Resolver);
+  Executor := TGocciaInterpreterExecutor.Create;
   try
-    Engine.Execute;
+    Engine := TGocciaEngine.Create('app.js', Source, Resolver, Executor);
+    try
+      Engine.Execute;
+    finally
+      Engine.Free;
+    end;
   finally
-    Engine.Free;
+    Executor.Free;
     Resolver.Free;  // caller owns the resolver when injected
   end;
 end;
@@ -286,18 +308,20 @@ end;
 
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   ModuleLoader: TGocciaModuleLoader;
   Resolver: TMemoryResolver;
   Provider: TMemoryContentProvider;
 begin
   Resolver := TMemoryResolver.Create;
   Provider := TMemoryContentProvider.Create;
+  Executor := TGocciaInterpreterExecutor.Create;
   try
     ModuleLoader := TGocciaModuleLoader.Create('memory:/app.js', Resolver,
       Provider);
     try
       Engine := TGocciaEngine.Create('memory:/app.js', Source,
-        ModuleLoader);
+        ModuleLoader, Executor);
       try
         Engine.Execute;
       finally
@@ -307,6 +331,7 @@ begin
       ModuleLoader.Free;  // caller owns injected module loaders
     end;
   finally
+    Executor.Free;
     Provider.Free;  // caller owns injected providers
     Resolver.Free;
   end;
@@ -414,17 +439,22 @@ Core language built-ins (Math, Object, Array, JSON, Promise, Temporal, typed arr
 When you already have an engine, pass it to the runtime constructor:
 
 ```pascal
-Engine := TGocciaEngine.Create('app.js', Source);
-Runtime := TGocciaRuntime.Create(Engine);
+Executor := TGocciaInterpreterExecutor.Create;
 try
-  Runtime.Execute;
+  Engine := TGocciaEngine.Create('app.js', Source, Executor);
+  Runtime := TGocciaRuntime.Create(Engine);
+  try
+    Runtime.Execute;
+  finally
+    Runtime.Free;
+    Engine.Free;
+  end;
 finally
-  Runtime.Free;
-  Engine.Free;
+  Executor.Free;
 end;
 ```
 
-Passing an engine does not transfer ownership by default. Use `TGocciaRuntime.Create(Engine, True)` or `TGocciaRuntime.Create(Engine, RuntimeGlobals, True)` when the runtime should free the engine.
+Passing an engine does not transfer ownership by default. Use `TGocciaRuntime.Create(Engine, True)` or `TGocciaRuntime.Create(Engine, RuntimeGlobals, True)` when the runtime should free the engine. The executor is always owned by the caller — free it after the engine.
 
 ### Special-Purpose Runtime Globals
 
@@ -441,13 +471,18 @@ When embedding, pass `rgFFI` in the `TGocciaRuntimeGlobals` set during runtime c
 To add the test framework for a custom test runner:
 
 ```pascal
-Engine := TGocciaEngine.Create('tests/my-test.js', Source);
-Runtime := TGocciaRuntime.Create(Engine,
-  DefaultRuntimeGlobals + [rgTestAssertions], True);
+Executor := TGocciaInterpreterExecutor.Create;
 try
-  Runtime.Execute;
+  Engine := TGocciaEngine.Create('tests/my-test.js', Source, Executor);
+  Runtime := TGocciaRuntime.Create(Engine,
+    DefaultRuntimeGlobals + [rgTestAssertions], True);
+  try
+    Runtime.Execute;
+  finally
+    Runtime.Free;
+  end;
 finally
-  Runtime.Free;
+  Executor.Free;
 end;
 ```
 
@@ -463,11 +498,16 @@ Runtime globals can be reduced by passing a smaller `TGocciaRuntimeGlobals` set,
 | `StrictTypes` | `Boolean` | `False` | Runtime enforcement of type annotations (works in both interpreter and bytecode); setter propagates to the active executor and interpreter scope |
 
 ```pascal
-Engine := TGocciaEngine.Create('app.js', Source);
-Engine.Preprocessors := [];              // Disable JSX
-Engine.ASIEnabled := True;               // Enable ASI (convenience for cfASI)
-Engine.SourceType := stModule;           // Run entry as a Module (top-level this is undefined; import.meta resolves)
-Engine.StrictTypes := True;              // Enforce type annotations in both modes
+Executor := TGocciaInterpreterExecutor.Create;
+try
+  Engine := TGocciaEngine.Create('app.js', Source, Executor);
+  Engine.Preprocessors := [];              // Disable JSX
+  Engine.ASIEnabled := True;               // Enable ASI (convenience for cfASI)
+  Engine.SourceType := stModule;           // Run entry as a Module (top-level this is undefined; import.meta resolves)
+  Engine.StrictTypes := True;              // Enforce type annotations in both modes
+finally
+  Executor.Free;
+end;
 ```
 
 When `SourceType` is `stModule`, `Execute` runs the entry program in a fresh module scope (`skModule`) with `this = undefined`, mirroring the semantics imported modules already receive from the module loader (ES2026 §16.2.1.6.4). The CLI surface for this is `--source-type=script|module` and the matching `goccia.json` key `"source-type"`.
@@ -491,21 +531,27 @@ uses
 
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   Source: TStringList;
 begin
   Source := TStringList.Create;
   Source.Text := 'APP_VERSION;';
-  Engine := TGocciaEngine.Create('app.js', Source);
+  Executor := TGocciaInterpreterExecutor.Create;
   try
-    // Inject a constant into the global scope
-    Engine.Interpreter.GlobalScope.DefineLexicalBinding(
-      'APP_VERSION',
-      TGocciaStringLiteralValue.Create('1.2.3'),
-      dtConst
-    );
-    Engine.Execute; // evaluates "1.2.3"
+    Engine := TGocciaEngine.Create('app.js', Source, Executor);
+    try
+      // Inject a constant into the global scope
+      Engine.Interpreter.GlobalScope.DefineLexicalBinding(
+        'APP_VERSION',
+        TGocciaStringLiteralValue.Create('1.2.3'),
+        dtConst
+      );
+      Engine.Execute; // evaluates "1.2.3"
+    finally
+      Engine.Free;
+    end;
   finally
-    Engine.Free;
+    Executor.Free;
     Source.Free;
   end;
 end;
@@ -541,6 +587,7 @@ end;
 
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   Source: TStringList;
   Host: TMyHost;
   Func: TGocciaNativeFunctionValue;
@@ -548,14 +595,19 @@ begin
   Host := TMyHost.Create;
   Source := TStringList.Create;
   Source.Text := 'getTimestamp();';
-  Engine := TGocciaEngine.Create('app.js', Source);
+  Executor := TGocciaInterpreterExecutor.Create;
   try
-    // Create a native function: callback, name, arity (-1 for variadic)
-    Func := TGocciaNativeFunctionValue.Create(Host.GetTimestamp, 'getTimestamp', 0);
-    Engine.Interpreter.GlobalScope.DefineLexicalBinding('getTimestamp', Func, dtConst);
-    Engine.Execute;
+    Engine := TGocciaEngine.Create('app.js', Source, Executor);
+    try
+      // Create a native function: callback, name, arity (-1 for variadic)
+      Func := TGocciaNativeFunctionValue.Create(Host.GetTimestamp, 'getTimestamp', 0);
+      Engine.Interpreter.GlobalScope.DefineLexicalBinding('getTimestamp', Func, dtConst);
+      Engine.Execute;
+    finally
+      Engine.Free;
+    end;
   finally
-    Engine.Free;
+    Executor.Free;
     Source.Free;
     Host.Free;
   end;
@@ -625,6 +677,7 @@ end;
 
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   Source: TStringList;
   API: TFileSystemAPI;
   FSObject: TGocciaObjectValue;
@@ -632,18 +685,23 @@ begin
   API := TFileSystemAPI.Create;
   Source := TStringList.Create;
   Source.Text := 'fs.readFile("data.txt");';
-  Engine := TGocciaEngine.Create('app.js', Source);
+  Executor := TGocciaInterpreterExecutor.Create;
   try
-    FSObject := TGocciaObjectValue.Create;
-    FSObject.RegisterNativeMethod(
-      TGocciaNativeFunctionValue.Create(API.ReadFile, 'readFile', 1));
-    FSObject.RegisterNativeMethod(
-      TGocciaNativeFunctionValue.Create(API.Exists, 'exists', 1));
+    Engine := TGocciaEngine.Create('app.js', Source, Executor);
+    try
+      FSObject := TGocciaObjectValue.Create;
+      FSObject.RegisterNativeMethod(
+        TGocciaNativeFunctionValue.Create(API.ReadFile, 'readFile', 1));
+      FSObject.RegisterNativeMethod(
+        TGocciaNativeFunctionValue.Create(API.Exists, 'exists', 1));
 
-    Engine.Interpreter.GlobalScope.DefineLexicalBinding('fs', FSObject, dtConst);
-    Engine.Execute;
+      Engine.Interpreter.GlobalScope.DefineLexicalBinding('fs', FSObject, dtConst);
+      Engine.Execute;
+    finally
+      Engine.Free;
+    end;
   finally
-    Engine.Free;
+    Executor.Free;
     Source.Free;
     API.Free;
   end;

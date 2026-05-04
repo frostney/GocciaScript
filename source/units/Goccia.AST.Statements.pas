@@ -21,6 +21,7 @@ type
   TGocciaVariableInfo = record
     Name: string;
     Initializer: TGocciaExpression;
+    HasInitializer: Boolean;
     TypeAnnotation: string;
   end;
   TGocciaExpressionStatement = class(TGocciaStatement)
@@ -856,7 +857,7 @@ end;
   var
     I: Integer;
     Value: TGocciaValue;
-    HasRealInit, HasRealStrictInit: Boolean;
+    HasRealStrictInit: Boolean;
     AnnotationType, TypeHint: TGocciaLocalType;
   begin
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -898,9 +899,8 @@ end;
 
       if IsVar then
       begin
-        HasRealInit := not ((Variables[I].Initializer is TGocciaLiteralExpression) and
-          (Value is TGocciaUndefinedLiteralValue));
-        AContext.Scope.DefineVariableBinding(Variables[I].Name, Value, HasRealInit);
+        AContext.Scope.DefineVariableBinding(Variables[I].Name, Value,
+          Variables[I].HasInitializer);
       end
       else if IsConst then
         AContext.Scope.DefineFromToken(Variables[I].Name, Value, gttConst)

@@ -565,34 +565,40 @@ function TScriptLoaderApp.ExecuteInterpreted(const ASource: TStringList;
   const AFileName: string; const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
 var
   Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
   ScriptResult: TGocciaScriptResult;
   SourceMap: TGocciaSourceMap;
 begin
-  Engine := CreateEngine(AFileName, ASource);
+  Executor := TGocciaInterpreterExecutor.Create;
   try
-    Engine.SuppressWarnings := GIsWorkerThread or
-      IsJsonOutput;
-    ConfigureConsole(RuntimeConsole(Engine), ACapture);
-    ApplyDataGlobalsToEngine(Engine);
-    StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
-    StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+    Engine := CreateEngine(AFileName, ASource, Executor);
     try
-      ApplyModuleGlobalsToEngine(Engine);
-      ScriptResult := Engine.Execute;
-    finally
-      ClearExecutionTimeout;
-      ClearInstructionLimit;
-      SourceMap := Engine.TakeLastSourceMap;
+      Engine.SuppressWarnings := GIsWorkerThread or
+        IsJsonOutput;
+      ConfigureConsole(RuntimeConsole(Engine), ACapture);
+      ApplyDataGlobalsToEngine(Engine);
+      StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+      StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
       try
-        if Assigned(SourceMap) and Assigned(ASource) then
-          SourceMap.SetSourceContent(0, StringListToLFText(ASource));
-        WriteSourceMapIfEnabled(SourceMap, AFileName);
+        ApplyModuleGlobalsToEngine(Engine);
+        ScriptResult := Engine.Execute;
       finally
-        SourceMap.Free;
+        ClearExecutionTimeout;
+        ClearInstructionLimit;
+        SourceMap := Engine.TakeLastSourceMap;
+        try
+          if Assigned(SourceMap) and Assigned(ASource) then
+            SourceMap.SetSourceContent(0, StringListToLFText(ASource));
+          WriteSourceMapIfEnabled(SourceMap, AFileName);
+        finally
+          SourceMap.Free;
+        end;
       end;
+    finally
+      Engine.Free;
     end;
   finally
-    Engine.Free;
+    Executor.Free;
   end;
 
   Result.ResultValue := ScriptResult.Result;

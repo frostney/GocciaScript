@@ -111,6 +111,9 @@ type
     FEngine: TGocciaEngine;
     FExtension: TGocciaRuntimeExtension;
     FOwnsEngine: Boolean;
+    { Set when the runtime constructed the engine itself via one of the
+      file/source convenience overloads.  Freed in Destroy after FEngine. }
+    FOwnedExecutor: TGocciaExecutor;
 
     constructor CreateWithEngine(const AEngine: TGocciaEngine;
       const AOwnsEngine: Boolean; const AGlobals: TGocciaRuntimeGlobals);
@@ -372,16 +375,20 @@ end;
 constructor TGocciaRuntime.Create(const AFileName: string;
   const ASourceLines: TStringList);
 begin
-  CreateWithEngine(TGocciaEngine.Create(AFileName, ASourceLines), True,
-    DefaultRuntimeGlobals);
+  FOwnedExecutor := TGocciaInterpreterExecutor.Create;
+  CreateWithEngine(
+    TGocciaEngine.Create(AFileName, ASourceLines, FOwnedExecutor),
+    True, DefaultRuntimeGlobals);
 end;
 
 constructor TGocciaRuntime.Create(const AFileName: string;
   const ASourceLines: TStringList;
   const ARuntimeGlobals: TGocciaRuntimeGlobals);
 begin
-  CreateWithEngine(TGocciaEngine.Create(AFileName, ASourceLines), True,
-    ARuntimeGlobals);
+  FOwnedExecutor := TGocciaInterpreterExecutor.Create;
+  CreateWithEngine(
+    TGocciaEngine.Create(AFileName, ASourceLines, FOwnedExecutor),
+    True, ARuntimeGlobals);
 end;
 
 constructor TGocciaRuntime.Create(const AFileName: string;
@@ -405,6 +412,8 @@ begin
     FEngine.Free;
   FEngine := nil;
   FExtension := nil;
+  FOwnedExecutor.Free;
+  FOwnedExecutor := nil;
   inherited;
 end;
 

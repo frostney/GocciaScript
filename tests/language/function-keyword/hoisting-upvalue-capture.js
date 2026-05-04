@@ -1,6 +1,6 @@
 /*---
 description: Hoisted function declarations correctly capture later-declared lexical bindings
-features: [compat-function]
+features: [compat-function, enum-declaration, explicit-resource-management]
 ---*/
 
 test("hoisted function captures array-destructured variable", () => {
@@ -47,4 +47,104 @@ test("hoisted function captures enum declaration", () => {
   function inner() { return Color.Red; }
   enum Color { Red = 0, Green = 1, Blue = 2 }
   expect(inner()).toBe(0);
+});
+
+test("hoisted function sees destructuring TDZ before initialization", () => {
+  {
+    function inner() { return value; }
+    expect(() => inner()).toThrow(ReferenceError);
+    const { value } = { value: 42 };
+    expect(inner()).toBe(42);
+  }
+});
+
+test("hoisted function sees class TDZ before initialization", () => {
+  {
+    function inner() { return new MyClass().value; }
+    expect(() => inner()).toThrow(ReferenceError);
+    class MyClass {
+      constructor() {
+        this.value = 42;
+      }
+    }
+    expect(inner()).toBe(42);
+  }
+});
+
+test("hoisted function sees enum TDZ before initialization", () => {
+  {
+    function inner() { return Color.Red; }
+    expect(() => inner()).toThrow(ReferenceError);
+    enum Color { Red = 0, Green = 1, Blue = 2 }
+    expect(inner()).toBe(0);
+  }
+});
+
+test("hoisted block function captures later using binding", () => {
+  let value;
+  {
+    function readResource() {
+      return resource.name;
+    }
+    using resource = {
+      name: "captured",
+      [Symbol.dispose]() {}
+    };
+    value = readResource();
+  }
+  expect(value).toBe("captured");
+});
+
+test("switch case hoists function declarations into the case scope", () => {
+  let value;
+
+  switch (1) {
+    case 1:
+      class CaseClass {
+        constructor() {
+          this.value = 42;
+        }
+      }
+      value = read();
+      function read() {
+        return new CaseClass().value;
+      }
+      break;
+  }
+
+  expect(value).toBe(42);
+});
+
+test("switch function declarations share the switch lexical scope", () => {
+  let value;
+
+  switch (2) {
+    case 1:
+      function readLater() {
+        return later;
+      }
+      break;
+    case 2:
+      const later = 42;
+      value = readLater();
+      break;
+  }
+
+  expect(value).toBe(42);
+});
+
+test("switch case tests see hoisted switch function declarations", () => {
+  let value;
+
+  switch ("function") {
+    case typeof read:
+      value = read();
+      break;
+    default:
+      function read() {
+        return "hoisted";
+      }
+  }
+
+  expect(value).toBe("hoisted");
 });

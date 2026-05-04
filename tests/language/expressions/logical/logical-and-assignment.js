@@ -113,6 +113,17 @@ test("logical AND assignment only throws for const bindings when an assignment i
   }).toThrow(TypeError);
 });
 
+test("logical AND assignment evaluates RHS before throwing for assigned const", () => {
+  let sideEffect = 0;
+  const truthy = 1;
+
+  expect(() => {
+    truthy &&= (sideEffect = 1);
+  }).toThrow(TypeError);
+
+  expect(sideEffect).toBe(1);
+});
+
 test("logical AND assignment throws for unresolved identifiers", () => {
   expect(() => {
     missingAndValue &&= 1;

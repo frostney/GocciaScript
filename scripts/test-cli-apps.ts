@@ -434,6 +434,56 @@ console.log("Bare Loader: module source type...");
   if (proc.stdout.toString().trim() !== "true") throw new Error(`Bare module mode expected true, got: ${proc.stdout.toString()}`);
 }
 
+// --mode flag: bare loader defaults to bytecode; both values must execute.
+console.log("Bare Loader: --mode=interpreted...");
+{
+  const proc = Bun.spawnSync([BARE, "--mode=interpreted"], {
+    stdin: new TextEncoder().encode("21 * 2;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare --mode=interpreted exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "42") throw new Error(`Bare --mode=interpreted expected 42, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: --mode=bytecode...");
+{
+  const proc = Bun.spawnSync([BARE, "--mode=bytecode"], {
+    stdin: new TextEncoder().encode("21 * 2;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare --mode=bytecode exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "42") throw new Error(`Bare --mode=bytecode expected 42, got: ${proc.stdout.toString()}`);
+}
+
+console.log("Bare Loader: --mode default is interpreted...");
+{
+  const proc = Bun.spawnSync([BARE, "--help"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0) throw new Error(`Bare --help exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  const help = proc.stdout.toString();
+  if (!help.includes("--mode=interpreted|bytecode"))
+    throw new Error(`Bare --help should document --mode, got: ${help}`);
+  if (!help.includes("default: interpreted"))
+    throw new Error(`Bare --help should document interpreted as default, got: ${help}`);
+}
+
+console.log("Bare Loader: --mode invalid value rejected...");
+{
+  const proc = Bun.spawnSync([BARE, "--mode=foo"], {
+    stdin: new TextEncoder().encode("1;\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode === 0) throw new Error(`Bare --mode=foo should fail, got exit 0`);
+  const stderr = proc.stderr.toString();
+  if (!stderr.includes("Invalid --mode value: foo"))
+    throw new Error(`Bare --mode=foo should report invalid value, got stderr: ${stderr}`);
+}
+
 // -- --global / --globals -------------------------------------------------------
 
 console.log("Loader: --global flag...");
