@@ -93,9 +93,12 @@ type
     function ApplyTrap(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
 
-    // ES2026 §28.1.1 [[Construct]](argumentsList, newTarget)
+    // ES2026 §28.1.1 [[Construct]](argumentsList, newTarget). ANewTarget is
+    // forwarded to the construct trap and to a nested proxy fallback. nil
+    // means "use this proxy as newTarget" — the default for `new proxy(...)`.
     function ConstructTrap(
-      const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+      const AArguments: TGocciaArgumentsCollection;
+      const ANewTarget: TGocciaValue = nil): TGocciaValue;
 
     function TypeOf: string; override;
     function IsCallable: Boolean; override;
@@ -147,9 +150,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.FunctionBase,
-  Goccia.Values.HoleValue,
-  Goccia.Values.NativeFunction;
+  Goccia.Values.FunctionBase;
 
 { TGocciaProxyValue }
 
@@ -1261,11 +1262,13 @@ end;
 
 // ES2026 §28.1.1 [[Construct]](argumentsList, newTarget)
 function TGocciaProxyValue.ConstructTrap(
-  const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaValue): TGocciaValue;
 var
   Trap: TGocciaValue;
   Args: TGocciaArgumentsCollection;
   ArgsArray: TGocciaArrayValue;
+  EffectiveNewTarget: TGocciaValue;
   I: Integer;
 begin
   CheckRevoked;
@@ -1274,6 +1277,12 @@ begin
   // is constructable. Validate before dispatching to the trap.
   if not FTarget.IsConstructable then
     ThrowTypeError(SErrorProxyTargetNotConstructor, SSuggestProxyTargetType);
+
+  // Default newTarget for `new proxy(...)` is the proxy itself per ES2026.
+  if Assigned(ANewTarget) then
+    EffectiveNewTarget := ANewTarget
+  else
+    EffectiveNewTarget := Self;
 
   Trap := GetTrap(PROP_CONSTRUCT);
   if Assigned(Trap) then
@@ -1287,7 +1296,7 @@ begin
     try
       Args.Add(FTarget);
       Args.Add(ArgsArray);
-      Args.Add(Self);
+      Args.Add(EffectiveNewTarget);
       Result := InvokeTrap(Trap, Args);
       if Result.IsPrimitive then
         ThrowTypeError(SErrorProxyConstructReturnType, SSuggestProxyTrapReturnType);
@@ -1296,23 +1305,13 @@ begin
     end;
   end
   else
-  begin
-    // No construct trap: construct the target directly (nested proxies first).
-    // Use Instantiate() for class values — it is virtual, so
-    // TGocciaVMClassValue dispatches to its bytecode-aware override.
-    if FTarget is TGocciaProxyValue then
-      Result := TGocciaProxyValue(FTarget).ConstructTrap(AArguments)
-    else if FTarget is TGocciaClassValue then
-      Result := TGocciaClassValue(FTarget).Instantiate(AArguments)
-    else if FTarget is TGocciaNativeFunctionValue then
-      Result := TGocciaNativeFunctionValue(FTarget).Call(AArguments,
-        TGocciaHoleValue.HoleValue)
-    else if FTarget is TGocciaFunctionBase then
-      Result := TGocciaFunctionBase(FTarget).Call(AArguments,
-        TGocciaHoleValue.HoleValue)
-    else
-      ThrowTypeError(SErrorProxyTargetNotConstructor, SSuggestProxyTargetType);
-  end;
+    // No construct trap: forward to target's [[Construct]](args, EffectiveNewTarget)
+    // through the shared dispatch — handles bound chain unwrap (so
+    // `new Proxy(F.bind(obj), {})()` does not leak the bound `this` into the
+    // synthetic receiver), nested proxies, classes, ordinary functions, and
+    // native constructors. Native-constructor newTarget propagation remains
+    // tracked in #530.
+    Result := ConstructValue(FTarget, AArguments, EffectiveNewTarget);
 end;
 
 function TGocciaProxyValue.TypeOf: string;

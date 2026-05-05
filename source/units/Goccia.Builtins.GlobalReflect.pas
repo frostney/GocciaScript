@@ -45,12 +45,9 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
-  Goccia.Values.ClassValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
-  Goccia.Values.HoleValue,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
@@ -129,25 +126,22 @@ begin
 end;
 
 // ES2026 §28.1.2 Reflect.construct(target, argumentsList [, newTarget])
-// ES2026 §7.2.4 IsConstructor(argument) — check if a value can be used with new
+// ES2026 §7.2.4 IsConstructor(argument): defer to the value's virtual
+// IsConstructable. Each TGocciaFunctionBase descendant overrides it to
+// match the spec — function declarations/expressions return true (they own
+// a `prototype` data property), while arrow, async, generator, async-
+// generator, concise method, and revoked-proxy targets return false.
+// Bound functions delegate to their underlying [[BoundTargetFunction]],
+// matching ES2026 §10.4.1.2.
 function IsConstructorValue(const AValue: TGocciaValue): Boolean;
 begin
-  if AValue is TGocciaClassValue then
-    Exit(True);
-  if (AValue is TGocciaNativeFunctionValue) and
-     not TGocciaNativeFunctionValue(AValue).NotConstructable then
-    Exit(True);
-  Result := False;
+  Result := AValue.IsConstructable;
 end;
 
 function TGocciaGlobalReflect.ReflectConstruct(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Target: TGocciaValue;
-  ArgsList: TGocciaValue;
-  NewTarget: TGocciaValue;
+  Target, ArgsList, NewTarget: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
-  ProtoValue: TGocciaValue;
-  NewTargetClass: TGocciaClassValue;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Reflect.construct', ThrowError);
 
@@ -158,45 +152,23 @@ begin
   if not IsConstructorValue(Target) then
     ThrowTypeError(SErrorReflectConstructTargetMustBeConstructor, SSuggestNotConstructorType);
 
+  // Step 3: If newTarget provided, validate IsConstructor(newTarget)
+  if AArgs.Length >= 3 then
+  begin
+    NewTarget := AArgs.GetElement(2);
+    if not IsConstructorValue(NewTarget) then
+      ThrowTypeError(SErrorReflectConstructNewTargetMustBeConstructor, SSuggestNotConstructorType);
+  end
+  else
+    NewTarget := Target;
+
   // Step 2: Let args be ? CreateListFromArrayLike(argumentsList)
   CallArgs := CreateListFromArrayLike(ArgsList, 'Reflect.construct');
   try
-    // Step 3: If newTarget provided, validate IsConstructor(newTarget)
-    if AArgs.Length >= 3 then
-    begin
-      NewTarget := AArgs.GetElement(2);
-      if not IsConstructorValue(NewTarget) then
-        ThrowTypeError(SErrorReflectConstructNewTargetMustBeConstructor, SSuggestNotConstructorType);
-    end
-    else
-      NewTarget := Target;
-
-    // Step 4: Return ? Construct(target, args, newTarget)
-    if Target is TGocciaClassValue then
-    begin
-      if NewTarget is TGocciaClassValue then
-      begin
-        NewTargetClass := TGocciaClassValue(NewTarget);
-        if NewTargetClass <> TGocciaClassValue(Target) then
-          Result := TGocciaClassValue(Target).Instantiate(CallArgs, NewTargetClass)
-        else
-          Result := TGocciaClassValue(Target).Instantiate(CallArgs);
-      end
-      else
-      begin
-        // newTarget is a native function — get its .prototype for the instance
-        Result := TGocciaClassValue(Target).Instantiate(CallArgs);
-        ProtoValue := NewTarget.GetProperty(PROP_PROTOTYPE);
-        if ProtoValue is TGocciaObjectValue then
-          TGocciaObjectValue(Result).Prototype := TGocciaObjectValue(ProtoValue);
-      end;
-    end
-    else
-    begin
-      // Target is a native function constructor
-      Result := TGocciaNativeFunctionValue(Target).Call(CallArgs,
-        TGocciaHoleValue.HoleValue);
-    end;
+    // Step 4: Return ? Construct(target, args, newTarget). ConstructValue
+    // walks the §10.4.1.2 bound chain (substituting newTarget where the
+    // SameValue rule applies) and dispatches by target kind.
+    Result := ConstructValue(Target, CallArgs, NewTarget);
   finally
     CallArgs.Free;
   end;

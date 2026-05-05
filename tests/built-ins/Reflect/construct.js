@@ -148,4 +148,138 @@ describe("Reflect.construct", () => {
     expect(obj instanceof Foo).toBe(true);
     expect(obj.isFoo).toBe(true);
   });
+
+  test("rejects an object shorthand method (no [[Construct]] slot)", () => {
+    const obj = { m() {} };
+    expect(() => Reflect.construct(obj.m, [])).toThrow(TypeError);
+  });
+
+  test("rejects a class instance method reached via prototype (no [[Construct]] slot)", () => {
+    class C {
+      m() {}
+    }
+    expect(() => Reflect.construct(C.prototype.m, [])).toThrow(TypeError);
+  });
+
+  test("rejects an arrow function used as newTarget", () => {
+    class Foo {}
+    expect(() => Reflect.construct(Foo, [], () => {})).toThrow(TypeError);
+  });
+
+  test("constructs through a bound class — bound `this` is ignored, instance is fresh", () => {
+    class Counter {
+      constructor(start) {
+        this.value = start;
+      }
+      next() {
+        this.value += 1;
+        return this.value;
+      }
+    }
+    const Bound = Counter.bind(null, 10);
+    const obj = Reflect.construct(Bound, []);
+    expect(obj.value).toBe(10);
+    expect(obj.next()).toBe(11);
+    expect(obj instanceof Counter).toBe(true);
+  });
+
+  test("bound class with explicit newTarget uses newTarget.prototype on the instance", () => {
+    class Base {
+      constructor() {
+        this.x = 1;
+      }
+    }
+    class Other {}
+    const Bound = Base.bind(null);
+    const obj = Reflect.construct(Bound, [], Other);
+    expect(obj.x).toBe(1);
+    expect(Object.getPrototypeOf(obj)).toBe(Other.prototype);
+  });
+
+  test("bound non-constructable target (bound arrow) still throws", () => {
+    const Bound = (() => {}).bind(null);
+    expect(() => Reflect.construct(Bound, [])).toThrow(TypeError);
+  });
+
+  test("Proxy over a class invokes the construct trap", () => {
+    class Foo {
+      constructor(x) {
+        this.x = x;
+      }
+    }
+    let trapCalled = false;
+    const proxy = new Proxy(Foo, {
+      construct(target, args, newTarget) {
+        trapCalled = true;
+        return Reflect.construct(target, args, newTarget);
+      },
+    });
+    const obj = Reflect.construct(proxy, [99]);
+    expect(trapCalled).toBe(true);
+    expect(obj.x).toBe(99);
+    expect(obj instanceof Foo).toBe(true);
+  });
+
+  test("Proxy over a class with no construct trap falls through to the target", () => {
+    class Foo {
+      constructor(x) {
+        this.x = x;
+      }
+    }
+    const proxy = new Proxy(Foo, {});
+    const obj = Reflect.construct(proxy, [7]);
+    expect(obj.x).toBe(7);
+    expect(obj instanceof Foo).toBe(true);
+  });
+
+  test("Proxy construct trap receives the explicit newTarget supplied to Reflect.construct", () => {
+    class Foo {}
+    class Other {}
+    let receivedNewTarget;
+    const proxy = new Proxy(Foo, {
+      construct(target, args, newTarget) {
+        receivedNewTarget = newTarget;
+        return Reflect.construct(target, args, newTarget);
+      },
+    });
+    Reflect.construct(proxy, [], Other);
+    expect(receivedNewTarget).toBe(Other);
+  });
+
+  test("Proxy construct trap receives the proxy as default newTarget when none is supplied", () => {
+    class Foo {}
+    let receivedNewTarget;
+    const proxy = new Proxy(Foo, {
+      construct(target, args, newTarget) {
+        receivedNewTarget = newTarget;
+        return Reflect.construct(target, args, newTarget);
+      },
+    });
+    Reflect.construct(proxy, []);
+    expect(receivedNewTarget).toBe(proxy);
+  });
+
+  test("nested proxy forwards newTarget through the outer fallback to the inner construct trap", () => {
+    class Foo {}
+    class Other {}
+    let inner;
+    const innerProxy = new Proxy(Foo, {
+      construct(target, args, newTarget) {
+        inner = newTarget;
+        return Reflect.construct(target, args, newTarget);
+      },
+    });
+    const outerProxy = new Proxy(innerProxy, {});
+    Reflect.construct(outerProxy, [], Other);
+    expect(inner).toBe(Other);
+  });
+
+  test("Proxy with no construct trap forwards class newTarget to Instantiate", () => {
+    class Foo {}
+    class Other {}
+    const proxy = new Proxy(Foo, {});
+    const obj = Reflect.construct(proxy, [], Other);
+    expect(Object.getPrototypeOf(obj)).toBe(Other.prototype);
+    expect(obj instanceof Other).toBe(true);
+  });
 });
