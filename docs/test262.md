@@ -23,9 +23,12 @@ LoaderBare-plus-stock-harness setup, see the
 - Test262 runs via `GocciaScriptLoaderBare`, never via `GocciaTestRunner`.
 - Wrapper bodies execute inside a neutral engine — `expect`, `describe`,
   `test`, lifecycle hooks, mocks, `runTests` are not registered.
-- Stock tc39/test262 harness files (`sta.js`, `assert.js`,
-  `doneprintHandle.js`, etc.) are loaded directly from the pinned
-  test262 checkout's `harness/` directory. No bundled custom copies.
+- Stock tc39/test262 harness files are loaded from the pinned test262
+  checkout's `harness/` directory by default. A small number (currently
+  13) are bundled as GocciaScript-compatible reimplementations under
+  `scripts/test262_harness/` — only the stock files that depend on
+  language features Goccia intentionally excludes or implements
+  differently. See "Bundled harness adaptations" below.
 - The orchestrator drives via process exit code + stdout markers, the
   same convention `test262-harness`/`eshost`/test262.fyi use.
 - Wrapper-infrastructure failures are classified separately from
@@ -150,6 +153,58 @@ Bodies do NOT see:
   Goccia's runtime extension.
 - `$262` — Goccia doesn't implement test262's optional host hooks
   object. Tests that depend on it fail honestly.
+
+## Bundled harness adaptations
+
+The orchestrator loads stock tc39/test262 harness files from the pinned
+checkout's `harness/` directory by default. A small `BUNDLED_INCLUDES`
+map in `scripts/run_test262_suite.ts` overrides specific includes with
+GocciaScript-compatible reimplementations under `scripts/test262_harness/`.
+This is the minimum compatibility layer needed to keep conformance
+numbers honest — without it, ~7K tests fail with harness-environment
+errors instead of real engine surfaces.
+
+Bundling rule: only override a stock file when it depends on language
+features Goccia intentionally excludes (`arguments`, `with`, traditional
+`for(var i=0;...)` / `while` loops — Goccia's parser warns and silently
+drops these constructs, leaving helper functions broken). Each entry has
+a one-line rationale in `BUNDLED_INCLUDES`. If a future stock harness
+change makes a bundled file unnecessary, delete the entry.
+
+Current bundled set (13 files):
+
+Excluded language features:
+
+- `assert.js` (subsumes stock `sta.js` + `assert.js` + `compareArray.js`)
+  — `arguments` and `for(var ...)` in `assert.compareArray`.
+- `propertyHelper.js` — `arguments` x3, `for(var ...)` in `verifyProperty`.
+- `deepEqual.js` — `arguments`, `for(var ...)` in the recursive comparator.
+- `temporalHelpers.js` — `arguments` x3 in variadic helpers.
+- `testTypedArray.js` — `for(var ...)` x7, `with(...)` x2.
+- `wellKnownIntrinsicObjects.js` — `arguments`, `for(var ...)`.
+- `compareIterator.js` — `for(...)` loop bodies dropped by Goccia parser.
+- `decimalToHexString.js` — `while(...)` loop body dropped.
+- `nativeFunctionMatcher.js` — `while(...)` loop body dropped.
+- `regExpUtils.js` — `for(...)` loop bodies dropped.
+
+Engine surface differences:
+
+- `isConstructor.js` — stock uses
+  `Reflect.construct(function(){}, [], f)` but Goccia treats function
+  expressions as non-constructors by design. The bundled adaptation uses
+  `Reflect.construct(class {}, [], f)`.
+- `fnGlobalObject.js` — stock uses `Function("return this;")()` but
+  Goccia's `Function` constructor doesn't bind `this` to the global the
+  way V8/JSC do, so the stock helper returns the Function instance
+  instead of globalThis. The bundled adaptation uses `() => globalThis`.
+
+Engine-bug workaround:
+
+- `doneprintHandle.js` — Goccia bytecode VM has a Range-check-error in
+  the top-level `Promise.then` continuation drain. The bundled adaptation
+  routes completion through `__donePromise` so the `positive_async`
+  wrapper can `await` it inside an async IIFE (which drains via the
+  VM's continuation machinery, not the broken top-level path).
 
 ## Strict mode
 

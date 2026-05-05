@@ -202,51 +202,79 @@ function toStringArray(value: unknown): string[] {
 // Harness loading
 // ---------------------------------------------------------------------------
 
-// Goccia's curated language design intentionally excludes constructs that
-// stock test262 harness JS depends on — `arguments`, traditional
-// `for (var i = 0; ...)` loops, sloppy-mode patterns, etc.  Loading stock
-// harness files directly causes thousands of tests to fail with
-// `ReferenceError: arguments is not defined` and similar — not engine
-// regressions, but harness-environment incompatibility.  To keep the
-// conformance numbers a faithful signal of engine behavior, we maintain
-// GocciaScript-compatible reimplementations of the harness files that
-// can't run as-is in `scripts/test262_harness/`, and fall back to the
-// stock test262 checkout for everything else.
+// Stock test262 harness JS depends on language features GocciaScript
+// intentionally excludes (`arguments`, `with`, traditional
+// `for (var i = 0; ...)` and `while` loops — Goccia's parser warns and
+// then silently drops these constructs).  Loading affected stock files
+// produces silently-broken helpers — `propertyHelper.verifyProperty` etc.
+// throw `ReferenceError: arguments is not defined`, `decimalToHexString`
+// returns wrong values because its loop body never runs, and so on.
+// Tests that include those files then fail with harness-environment
+// errors, not engine surface differences.
 //
-// BUNDLED_INCLUDES maps each test262 include name to a file in our
-// adaptation directory.  Several stock includes (sta.js, compareArray.js)
-// are folded into our self-contained `assert.js` so the order-of-loading
-// gymnastics from stock (sta-then-assert) collapses to a single load.
+// To keep conformance numbers a faithful signal of engine behavior,
+// `BUNDLED_INCLUDES` maps the test262 include names that need it to
+// GocciaScript-compatible reimplementations under `scripts/test262_harness/`.
+// Anything NOT listed here loads stock from the test262 checkout's
+// `harness/` directory directly.
+//
+// To minimise our surface against the stock harness, only files that
+// were empirically shown to break are bundled.  Each entry has a one-line
+// rationale; if a future stock harness change makes a bundled file
+// unnecessary, delete the entry and the corresponding file.
 const BUNDLED_INCLUDES: Record<string, string> = {
+  // Subsumes stock sta.js + assert.js + compareArray.js.  Stock assert.js
+  // uses `arguments` in `assert.compareArray` and a `for (var i = 0; ...)`
+  // loop body that Goccia's parser drops.
   "assert.js": "assert.js",
   "sta.js": "assert.js",
   "compareArray.js": "assert.js",
+  // Stock uses `arguments` (3x) and `for (var i = 0; ...)` (1x) in
+  // `verifyProperty`; without adaptation every property-descriptor test
+  // fails before reaching the actual conformance check.
   "propertyHelper.js": "propertyHelper.js",
-  "compareIterator.js": "compareIterator.js",
-  "isConstructor.js": "isConstructor.js",
+  // Stock uses `arguments` (1x) and `for (var i = 0; ...)` (2x) in
+  // `assert.deepEqual`'s recursive comparator.
   "deepEqual.js": "deepEqual.js",
-  "nans.js": "nans.js",
+  // Stock uses `arguments` (3x) for variadic helpers used by every
+  // Temporal test.
+  "temporalHelpers.js": "temporalHelpers.js",
+  // Stock uses `for (var i = 0; ...)` (7x) and `with (...)` (2x) in
+  // `testWithTypedArrayConstructors` — the principal entry point used
+  // by every TypedArray conformance test.
   "testTypedArray.js": "testTypedArray.js",
   "testBigIntTypedArray.js": "testTypedArray.js",
-  "temporalHelpers.js": "temporalHelpers.js",
-  "promiseHelper.js": "promiseHelper.js",
-  "dateConstants.js": "dateConstants.js",
-  "assertRelativeDateMs.js": "assertRelativeDateMs.js",
-  "decimalToHexString.js": "decimalToHexString.js",
-  "fnGlobalObject.js": "fnGlobalObject.js",
-  "nativeFunctionMatcher.js": "nativeFunctionMatcher.js",
+  // Stock uses `arguments` and `for (var i = 0; ...)` in the intrinsics
+  // walker.
   "wellKnownIntrinsicObjects.js": "wellKnownIntrinsicObjects.js",
-  "byteConversionValues.js": "byteConversionValues.js",
-  "proxyTrapsHelper.js": "proxyTrapsHelper.js",
+  // Stock uses `for (...)` loop bodies (Goccia parses them as a warning
+  // then drops the body) in iterator comparators.
+  "compareIterator.js": "compareIterator.js",
+  // Stock uses `while (...)` for the digit-conversion loop; without it
+  // the function returns wrong results silently.
+  "decimalToHexString.js": "decimalToHexString.js",
+  // Stock uses `while (...)` in the matcher loop.
+  "nativeFunctionMatcher.js": "nativeFunctionMatcher.js",
+  // Stock uses `for (...)` over RegExp result iterators.
   "regExpUtils.js": "regExpUtils.js",
-  "detachArrayBuffer.js": "detachArrayBuffer.js",
-  // doneprintHandle.js: stock would `print('Test262:AsyncTestComplete')` from
-  // inside `$DONE`, but Goccia's bytecode VM has a Range check error in the
-  // top-level `Promise.then` continuation drain (exercised by every test
-  // written like `p.then(v => $DONE())`).  The bundled adaptation routes
-  // completion through `__donePromise`; the `positive_async` wrapper awaits
-  // it inside an async IIFE (which drains via the VM's continuation
-  // machinery, not the broken top-level path) and prints the markers itself.
+  // Stock probes constructor-ness via `Reflect.construct(function(){}, [], f)`,
+  // but Goccia treats function expressions as non-constructors (a curated
+  // language design choice — function expressions are non-constructible
+  // in Goccia, see code-style.md).  The bundled adaptation uses
+  // `Reflect.construct(class {}, [], f)` which Goccia accepts.
+  "isConstructor.js": "isConstructor.js",
+  // Stock uses `Function("return this;")()` but Goccia's `Function`
+  // constructor doesn't bind `this` to the global the same way V8/JSC do,
+  // so the stock helper returns the Function instance instead of
+  // globalThis.  The bundled adaptation uses `() => globalThis` directly.
+  "fnGlobalObject.js": "fnGlobalObject.js",
+  // Stock would `print('Test262:AsyncTestComplete')` from inside `$DONE`,
+  // but Goccia's bytecode VM has a Range check error in the top-level
+  // `Promise.then` continuation drain (exercised by every test written
+  // like `p.then(v => $DONE())`).  The bundled adaptation routes completion
+  // through `__donePromise`; the `positive_async` wrapper awaits it inside
+  // an async IIFE (which drains via the VM's continuation machinery, not
+  // the broken top-level path) and prints the markers itself.
   "doneprintHandle.js": "doneprintHandle.js",
 };
 
