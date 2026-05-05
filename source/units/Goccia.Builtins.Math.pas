@@ -182,8 +182,14 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.floor', ThrowError);
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := TGocciaArgumentConverter.GetNumber(AArgs, 0);
-  // Step 2: If n is NaN, +∞𝔽, -∞𝔽, or an integral Number, return n.
-  if NumberArg.IsNaN or NumberArg.IsInfinite then
+  // Step 2: If n is NaN, +∞𝔽, -∞𝔽, return n. Signed-zero is preserved
+  // (Math.floor(-0𝔽) is -0𝔽, not +0𝔽).
+  if NumberArg.IsNaN or NumberArg.IsInfinite or NumberArg.IsNegativeZero then
+  begin
+    Result := NumberArg;
+    Exit;
+  end;
+  if NumberArg.Value = 0 then
   begin
     Result := NumberArg;
     Exit;
