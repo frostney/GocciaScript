@@ -5,7 +5,7 @@
 ## Executive Summary
 
 - **Local setup** — Install Lefthook for pre-commit formatting, then `lefthook install`
-- **Branch workflow** — Branch from `main`, implement with [critical rules](../../CONTRIBUTING.md#critical-rules) and [code style](code-style.md), add tests, update docs, commit
+- **Branch workflow** — Branch from `main`, implement with [implementation principles](../../CONTRIBUTING.md#implementation-principles), [critical rules](../../CONTRIBUTING.md#critical-rules), and [code style](code-style.md), add tests, update docs, commit
 - **Verification** — `./build.pas testrunner && ./build/GocciaTestRunner tests` before every push
 
 ## Local setup
@@ -50,8 +50,8 @@ Formatting, editor integration, and CI behavior are covered in [Tooling](tooling
 Every change should follow this sequence:
 
 1. **Create a branch** from `main` with a descriptive name (for example `feature/string-prototype-repeat`, `fix/nan-comparison`).
-2. **Implement** on that branch, following [Critical rules](../../CONTRIBUTING.md#critical-rules) and [Code style](code-style.md).
-3. **Annotate spec references** — For ECMAScript behavior, add `// ESYYYY` spec comments as described in [ECMAScript spec annotations](code-style.md#ecmascript-spec-annotations).
+2. **Implement** on that branch, following [Implementation principles](../../CONTRIBUTING.md#implementation-principles), [Critical rules](../../CONTRIBUTING.md#critical-rules), [Code style](code-style.md), and the relevant architecture docs for the area you touch.
+3. **Verify and annotate spec references** — For ECMAScript behavior, verify semantics against the current official ECMA-262 text, then add `// ESYYYY` spec comments as described in [ECMAScript spec annotations](code-style.md#ecmascript-spec-annotations).
 4. **Add or update tests** — JavaScript tests under `tests/` are primary; Pascal units under `source/units/*.Test.pas` when you touch AST, evaluator, or value types. See [testing.md](../testing.md) and [Critical rules](../../CONTRIBUTING.md#critical-rules).
 5. **Update documentation** that your change affects (`README.md`, `docs/*`, and CONTRIBUTING.md when workflow, rules, or style change). Edit **AGENTS.md** only when **agent-specific** guidance changes—not to duplicate CONTRIBUTING. If the change introduces a new **architectural or design decision** (not just a feature addition), add an entry to [decision-log.md](../decision-log.md) following the template there.
 6. **Commit** with a clear message. Do not commit directly to `main`.
