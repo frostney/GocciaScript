@@ -253,7 +253,7 @@ begin
 
     // Step 4: Return ? Construct(target, args, newTarget)
     if EffectiveTarget is TGocciaProxyValue then
-      Result := TGocciaProxyValue(EffectiveTarget).ConstructTrap(CallArgs)
+      Result := TGocciaProxyValue(EffectiveTarget).ConstructTrap(CallArgs, NewTarget)
     else if EffectiveTarget is TGocciaClassValue then
     begin
       if NewTarget is TGocciaClassValue then

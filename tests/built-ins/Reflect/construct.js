@@ -231,4 +231,46 @@ describe("Reflect.construct", () => {
     expect(obj.x).toBe(7);
     expect(obj instanceof Foo).toBe(true);
   });
+
+  test("Proxy construct trap receives the explicit newTarget supplied to Reflect.construct", () => {
+    class Foo {}
+    class Other {}
+    let receivedNewTarget;
+    const proxy = new Proxy(Foo, {
+      construct(target, args, newTarget) {
+        receivedNewTarget = newTarget;
+        return Reflect.construct(target, args, newTarget);
+      },
+    });
+    Reflect.construct(proxy, [], Other);
+    expect(receivedNewTarget).toBe(Other);
+  });
+
+  test("Proxy construct trap receives the proxy as default newTarget when none is supplied", () => {
+    class Foo {}
+    let receivedNewTarget;
+    const proxy = new Proxy(Foo, {
+      construct(target, args, newTarget) {
+        receivedNewTarget = newTarget;
+        return Reflect.construct(target, args, newTarget);
+      },
+    });
+    Reflect.construct(proxy, []);
+    expect(receivedNewTarget).toBe(proxy);
+  });
+
+  test("nested proxy forwards newTarget through the outer fallback to the inner construct trap", () => {
+    class Foo {}
+    class Other {}
+    let inner;
+    const innerProxy = new Proxy(Foo, {
+      construct(target, args, newTarget) {
+        inner = newTarget;
+        return Reflect.construct(target, args, newTarget);
+      },
+    });
+    const outerProxy = new Proxy(innerProxy, {});
+    Reflect.construct(outerProxy, [], Other);
+    expect(inner).toBe(Other);
+  });
 });
