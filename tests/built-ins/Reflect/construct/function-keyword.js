@@ -169,6 +169,35 @@ describe("Reflect.construct on bound function-keyword targets", () => {
     const Bound = arrow.bind(null);
     expect(() => Reflect.construct(Bound, [])).toThrow(TypeError);
   });
+
+  test("bound newTarget without an own `prototype` falls back to Object.prototype per §10.1.14", () => {
+    function Foo() {
+      this.x = 1;
+    }
+    function Other() {}
+    const BoundOther = Other.bind(null);
+    // Per spec, Get(BoundOther, 'prototype') walks past the bound wrapper to
+    // Function.prototype, finds nothing, returns undefined; the §10.1.14
+    // fallback then yields %Object.prototype% — engines must not unwrap to
+    // Other.prototype.
+    expect(BoundOther.prototype).toBeUndefined();
+    const obj = Reflect.construct(Foo, [], BoundOther);
+    expect(obj.x).toBe(1);
+    expect(Object.getPrototypeOf(obj)).toBe(Object.prototype);
+  });
+
+  test("bound newTarget with a user-assigned `prototype` uses that prototype directly", () => {
+    function Foo() {
+      this.x = 1;
+    }
+    function Other() {}
+    const BoundOther = Other.bind(null);
+    const customProto = { tag: "custom" };
+    BoundOther.prototype = customProto;
+    const obj = Reflect.construct(Foo, [], BoundOther);
+    expect(obj.x).toBe(1);
+    expect(Object.getPrototypeOf(obj)).toBe(customProto);
+  });
 });
 
 describe("Reflect.construct rejects non-constructable function forms", () => {
