@@ -1,0 +1,31 @@
+---
+name: update-pr
+description: Commit relevant local changes and push them to the current GocciaScript pull request branch. Use when the user enters /update-pr.
+disable-model-invocation: true
+---
+
+# Update PR
+
+This command is explicit permission to commit relevant changes and push them to the current PR branch.
+
+## Steps
+
+1. Inspect the repository state:
+   - `git status --short --branch`
+   - `git diff`
+   - `git diff --staged`
+   - `git log --oneline -5`
+2. Confirm the current branch is not `main`. If it is `main`, stop and ask for the intended PR branch.
+3. Confirm the branch has an associated PR with `gh pr view`. If there is no PR, ask whether to run `/create-pr` instead.
+4. Confirm there are changes to commit. If there are none, stop.
+5. Stage only relevant files. Exclude secrets and unrelated user changes.
+6. Commit with a concise message passed via HEREDOC.
+7. Push the branch, setting upstream tracking if needed:
+
+```bash
+git push -u origin HEAD
+```
+
+8. Report the commit hash, pushed branch, PR URL, and verification performed.
+
+Do not skip git hooks or verification unless the user explicitly asks.
