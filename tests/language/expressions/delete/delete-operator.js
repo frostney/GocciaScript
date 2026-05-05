@@ -55,3 +55,14 @@ test("delete with symbol key removes symbol-keyed property (ES2026 §7.1.19)", (
   expect(obj[sym]).toBeUndefined();
   expect(obj.regular).toBe(1);
 });
+
+test("delete with symbol key on array removes symbol-keyed property", () => {
+  const sym = Symbol("tag");
+  const arr = [1, 2, 3];
+  arr[sym] = "marker";
+  expect(arr[sym]).toBe("marker");
+  delete arr[sym];
+  expect(arr[sym]).toBeUndefined();
+  expect(arr.length).toBe(3);
+  expect(arr[0]).toBe(1);
+});

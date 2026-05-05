@@ -301,7 +301,30 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
-  Goccia.Values.SetValue;
+  Goccia.Values.SetValue,
+  Goccia.Values.SymbolValue;
+
+// Render a value for an assertion failure message. Mirrors the philosophy of
+// Jest/Vitest pretty-format: objects are dumped structurally (via ToDebugString)
+// rather than passed through user-defined toString, so failure messages are
+// (a) deterministic, (b) safe on objects without a working prototype chain
+// (e.g. Object.create(null)), and (c) free of side effects from getters or
+// proxy traps. Primitives use ToStringLiteral, which never invokes user code.
+// Symbols use ToDisplayString to avoid the spec ToString TypeError on Symbol.
+function FormatForMessage(const AValue: TGocciaValue): string;
+begin
+  if not Assigned(AValue) then
+  begin
+    Result := 'undefined';
+    Exit;
+  end;
+  if AValue is TGocciaSymbolValue then
+    Result := TGocciaSymbolValue(AValue).ToDisplayString.Value
+  else if AValue is TGocciaObjectValue then
+    Result := TGocciaObjectValue(AValue).ToDebugString
+  else
+    Result := AValue.ToStringLiteral.Value;
+end;
 
 function FormatThrowValueDetail(const AValue: TGocciaValue): string;
 var
@@ -317,12 +340,10 @@ begin
     else if Assigned(MsgValue) and (MsgValue is TGocciaStringLiteralValue) then
       Result := TGocciaStringLiteralValue(MsgValue).Value
     else
-      Result := AValue.ToStringLiteral.Value;
+      Result := FormatForMessage(AValue);
   end
-  else if Assigned(AValue) then
-    Result := AValue.ToStringLiteral.Value
   else
-    Result := '(unknown error)';
+    Result := FormatForMessage(AValue);
 end;
 
 { TGocciaTestSuite }
@@ -709,10 +730,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBe',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to be ' + Expected.ToStringLiteral.Value)
+        'Expected ' + FormatForMessage(FActualValue) + ' not to be ' + FormatForMessage(Expected))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBe',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to be ' + Expected.ToStringLiteral.Value);
+        'Expected ' + FormatForMessage(FActualValue) + ' to be ' + FormatForMessage(Expected));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -739,10 +760,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toEqual',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to equal ' + Expected.ToStringLiteral.Value)
+        'Expected ' + FormatForMessage(FActualValue) + ' not to equal ' + FormatForMessage(Expected))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toEqual',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to equal ' + Expected.ToStringLiteral.Value);
+        'Expected ' + FormatForMessage(FActualValue) + ' to equal ' + FormatForMessage(Expected));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -761,7 +782,7 @@ begin
       TGocciaTestAssertions(FTestAssertions).AssertionPassed('toContainEqual')
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toContainEqual',
-        'Expected an array but received ' + FActualValue.ToStringLiteral.Value);
+        'Expected an array but received ' + FormatForMessage(FActualValue));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
@@ -787,10 +808,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toContainEqual',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to contain equal ' + Expected.ToStringLiteral.Value)
+        'Expected ' + FormatForMessage(FActualValue) + ' not to contain equal ' + FormatForMessage(Expected))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toContainEqual',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to contain equal ' + Expected.ToStringLiteral.Value);
+        'Expected ' + FormatForMessage(FActualValue) + ' to contain equal ' + FormatForMessage(Expected));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -817,10 +838,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toStrictEqual',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to strictly equal ' + Expected.ToStringLiteral.Value)
+        'Expected ' + FormatForMessage(FActualValue) + ' not to strictly equal ' + FormatForMessage(Expected))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toStrictEqual',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to strictly equal ' + Expected.ToStringLiteral.Value);
+        'Expected ' + FormatForMessage(FActualValue) + ' to strictly equal ' + FormatForMessage(Expected));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -840,7 +861,7 @@ begin
       TGocciaTestAssertions(FTestAssertions).AssertionPassed('toMatchObject')
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toMatchObject',
-        'Expected an object but received ' + FActualValue.ToStringLiteral.Value);
+        'Expected an object but received ' + FormatForMessage(FActualValue));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
@@ -851,7 +872,7 @@ begin
       TGocciaTestAssertions(FTestAssertions).AssertionPassed('toMatchObject')
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toMatchObject',
-        'Expected a match object but received ' + Expected.ToStringLiteral.Value);
+        'Expected a match object but received ' + FormatForMessage(Expected));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
@@ -870,10 +891,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toMatchObject',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to match object ' + Expected.ToStringLiteral.Value)
+        'Expected ' + FormatForMessage(FActualValue) + ' not to match object ' + FormatForMessage(Expected))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toMatchObject',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to match object ' + Expected.ToStringLiteral.Value);
+        'Expected ' + FormatForMessage(FActualValue) + ' to match object ' + FormatForMessage(Expected));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -897,7 +918,7 @@ begin
       TGocciaTestAssertions(FTestAssertions).AssertionPassed('toMatch')
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toMatch',
-        'Expected a string but received ' + FActualValue.ToStringLiteral.Value);
+        'Expected a string but received ' + FormatForMessage(FActualValue));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
@@ -910,12 +931,12 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toMatch',
         'Expected a string pattern or RegExp but received ' +
-        Expected.ToStringLiteral.Value);
+        FormatForMessage(Expected));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
 
-  ActualString := FActualValue.ToStringLiteral.Value;
+  ActualString := FormatForMessage(FActualValue);
   if IsRegExpValue(Expected) then
   begin
     ExpectedDescription := RegExpObjectToString(Expected);
@@ -924,7 +945,7 @@ begin
   end
   else
   begin
-    ExpectedDescription := Expected.ToStringLiteral.Value;
+    ExpectedDescription := FormatForMessage(Expected);
     Matches := Pos(ExpectedDescription, ActualString) > 0;
   end;
 
@@ -940,11 +961,11 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toMatch',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to match ' +
+        'Expected ' + FormatForMessage(FActualValue) + ' not to match ' +
         ExpectedDescription)
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toMatch',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to match ' +
+        'Expected ' + FormatForMessage(FActualValue) + ' to match ' +
         ExpectedDescription);
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
@@ -968,10 +989,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeNull',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to be null')
+        'Expected ' + FormatForMessage(FActualValue) + ' not to be null')
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeNull',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to be null');
+        'Expected ' + FormatForMessage(FActualValue) + ' to be null');
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -994,10 +1015,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeNaN',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to be NaN')
+        'Expected ' + FormatForMessage(FActualValue) + ' not to be NaN')
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeNaN',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to be NaN');
+        'Expected ' + FormatForMessage(FActualValue) + ' to be NaN');
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -1020,10 +1041,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeUndefined',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to be undefined')
+        'Expected ' + FormatForMessage(FActualValue) + ' not to be undefined')
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeUndefined',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to be undefined');
+        'Expected ' + FormatForMessage(FActualValue) + ' to be undefined');
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -1046,10 +1067,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeDefined',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to be defined')
+        'Expected ' + FormatForMessage(FActualValue) + ' not to be defined')
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeDefined',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to be defined');
+        'Expected ' + FormatForMessage(FActualValue) + ' to be defined');
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -1072,10 +1093,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeTruthy',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to be truthy')
+        'Expected ' + FormatForMessage(FActualValue) + ' not to be truthy')
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeTruthy',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to be truthy');
+        'Expected ' + FormatForMessage(FActualValue) + ' to be truthy');
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -1098,10 +1119,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeFalsy',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to be falsy')
+        'Expected ' + FormatForMessage(FActualValue) + ' not to be falsy')
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeFalsy',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to be falsy');
+        'Expected ' + FormatForMessage(FActualValue) + ' to be falsy');
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -1128,10 +1149,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeGreaterThan',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to be greater than ' + Expected.ToStringLiteral.Value)
+        'Expected ' + FormatForMessage(FActualValue) + ' not to be greater than ' + FormatForMessage(Expected))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeGreaterThan',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to be greater than ' + Expected.ToStringLiteral.Value);
+        'Expected ' + FormatForMessage(FActualValue) + ' to be greater than ' + FormatForMessage(Expected));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -1158,10 +1179,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeGreaterThanOrEqual',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to be greater than or equal to ' + Expected.ToStringLiteral.Value)
+        'Expected ' + FormatForMessage(FActualValue) + ' not to be greater than or equal to ' + FormatForMessage(Expected))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeGreaterThanOrEqual',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to be greater than or equal to ' + Expected.ToStringLiteral.Value);
+        'Expected ' + FormatForMessage(FActualValue) + ' to be greater than or equal to ' + FormatForMessage(Expected));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -1188,10 +1209,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeLessThan',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to be less than ' + Expected.ToStringLiteral.Value)
+        'Expected ' + FormatForMessage(FActualValue) + ' not to be less than ' + FormatForMessage(Expected))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeLessThan',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to be less than ' + Expected.ToStringLiteral.Value);
+        'Expected ' + FormatForMessage(FActualValue) + ' to be less than ' + FormatForMessage(Expected));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -1218,10 +1239,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeLessThanOrEqual',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to be less than or equal to ' + Expected.ToStringLiteral.Value)
+        'Expected ' + FormatForMessage(FActualValue) + ' not to be less than or equal to ' + FormatForMessage(Expected))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeLessThanOrEqual',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to be less than or equal to ' + Expected.ToStringLiteral.Value);
+        'Expected ' + FormatForMessage(FActualValue) + ' to be less than or equal to ' + FormatForMessage(Expected));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -1239,8 +1260,8 @@ begin
   // For strings, check substring
   if FActualValue is TGocciaStringLiteralValue then
   begin
-    ActualStr := FActualValue.ToStringLiteral.Value;
-    ExpectedStr := Expected.ToStringLiteral.Value;
+    ActualStr := FormatForMessage(FActualValue);
+    ExpectedStr := FormatForMessage(Expected);
     Contains := Pos(ExpectedStr, ActualStr) > 0;
   end
   else if FActualValue is TGocciaArrayValue then
@@ -1268,10 +1289,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toContain',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to contain ' + Expected.ToStringLiteral.Value)
+        'Expected ' + FormatForMessage(FActualValue) + ' not to contain ' + FormatForMessage(Expected))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toContain',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to contain ' + Expected.ToStringLiteral.Value);
+        'Expected ' + FormatForMessage(FActualValue) + ' to contain ' + FormatForMessage(Expected));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -1355,10 +1376,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeInstanceOf',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to be an instance of ' + ExpectedConstructor.ToStringLiteral.Value)
+        'Expected ' + FormatForMessage(FActualValue) + ' not to be an instance of ' + FormatForMessage(ExpectedConstructor))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeInstanceOf',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to be an instance of ' + ExpectedConstructor.ToStringLiteral.Value);
+        'Expected ' + FormatForMessage(FActualValue) + ' to be an instance of ' + FormatForMessage(ExpectedConstructor));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -1382,7 +1403,7 @@ begin
   end
   else if FActualValue is TGocciaStringLiteralValue then
   begin
-    HasLength := Length(FActualValue.ToStringLiteral.Value) = Expected.ToNumberLiteral.Value;
+    HasLength := Length(FormatForMessage(FActualValue)) = Expected.ToNumberLiteral.Value;
   end
   else
   begin
@@ -1401,10 +1422,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveLength',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to have length ' + Expected.ToStringLiteral.Value)
+        'Expected ' + FormatForMessage(FActualValue) + ' not to have length ' + FormatForMessage(Expected))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveLength',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to have length ' + Expected.ToStringLiteral.Value);
+        'Expected ' + FormatForMessage(FActualValue) + ' to have length ' + FormatForMessage(Expected));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -1421,7 +1442,7 @@ begin
       TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveProperty')
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
-        'Expected an object but received ' + FActualValue.ToStringLiteral.Value);
+        'Expected an object but received ' + FormatForMessage(FActualValue));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
@@ -1440,10 +1461,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to have property ' + AArgs.GetElement(0).ToStringLiteral.Value)
+        'Expected ' + FormatForMessage(FActualValue) + ' not to have property ' + AArgs.GetElement(0).ToStringLiteral.Value)
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to have property ' + AArgs.GetElement(0).ToStringLiteral.Value);
+        'Expected ' + FormatForMessage(FActualValue) + ' to have property ' + AArgs.GetElement(0).ToStringLiteral.Value);
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -1499,7 +1520,7 @@ begin
         end;
       end;
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
-        'Expected error of type ' + ExpectedErrorType + ' but got: ' + FActualValue.ToStringLiteral.Value);
+        'Expected error of type ' + ExpectedErrorType + ' but got: ' + FormatForMessage(FActualValue));
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
       Exit;
     end;
@@ -1573,7 +1594,7 @@ begin
         else
         begin
           TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
-            'Expected ' + FActualValue.ToStringLiteral.Value + ' to throw ' + ExpectedErrorType + ' but threw: ' + E.Value.ToStringLiteral.Value);
+            'Expected ' + FormatForMessage(FActualValue) + ' to throw ' + ExpectedErrorType + ' but threw: ' + FormatForMessage(E.Value));
           Exit;
         end;
       end;
@@ -1597,7 +1618,7 @@ begin
         else
         begin
           TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
-            'Expected ' + FActualValue.ToStringLiteral.Value + ' to throw ' + ExpectedErrorType + ' but threw: ' + E.Message);
+            'Expected ' + FormatForMessage(FActualValue) + ' to throw ' + ExpectedErrorType + ' but threw: ' + E.Message);
           Exit;
         end;
       end;
@@ -1620,7 +1641,7 @@ begin
         else
         begin
           TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
-            'Expected ' + FActualValue.ToStringLiteral.Value + ' to throw ' + ExpectedErrorType + ' but threw: ' + E.ClassName + ': ' + E.Message);
+            'Expected ' + FormatForMessage(FActualValue) + ' to throw ' + ExpectedErrorType + ' but threw: ' + E.ClassName + ': ' + E.Message);
           Exit;
         end;
       end;
@@ -1630,7 +1651,7 @@ begin
   end;
 
   TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
-    'Expected ' + FActualValue.ToStringLiteral.Value + ' to throw an exception');
+    'Expected ' + FormatForMessage(FActualValue) + ' to throw an exception');
 end;
 
 function TGocciaExpectationValue.ToBeCloseTo(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1698,11 +1719,11 @@ begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeCloseTo',
         Format('Expected %s not to be close to %s (precision: %d)',
-               [FActualValue.ToStringLiteral.Value, Expected.ToStringLiteral.Value, Precision]))
+               [FormatForMessage(FActualValue), FormatForMessage(Expected), Precision]))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeCloseTo',
         Format('Expected %s to be close to %s (precision: %d)',
-               [FActualValue.ToStringLiteral.Value, Expected.ToStringLiteral.Value, Precision]));
+               [FormatForMessage(FActualValue), FormatForMessage(Expected), Precision]));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -2129,10 +2150,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveReturnedWith',
-        'Expected mock not to have returned with ' + Expected.ToStringLiteral.Value)
+        'Expected mock not to have returned with ' + FormatForMessage(Expected))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveReturnedWith',
-        'Expected mock to have returned with ' + Expected.ToStringLiteral.Value);
+        'Expected mock to have returned with ' + FormatForMessage(Expected));
   end;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -2185,10 +2206,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveLastReturnedWith',
-        'Expected mock not to have last returned with ' + Expected.ToStringLiteral.Value)
+        'Expected mock not to have last returned with ' + FormatForMessage(Expected))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveLastReturnedWith',
-        'Expected mock to have last returned with ' + Expected.ToStringLiteral.Value);
+        'Expected mock to have last returned with ' + FormatForMessage(Expected));
   end;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -2250,10 +2271,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveNthReturnedWith',
-        Format('Expected return %d not to be %s', [N, Expected.ToStringLiteral.Value]))
+        Format('Expected return %d not to be %s', [N, FormatForMessage(Expected)]))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveNthReturnedWith',
-        Format('Expected return %d to be %s', [N, Expected.ToStringLiteral.Value]));
+        Format('Expected return %d to be %s', [N, FormatForMessage(Expected)]));
   end;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -2273,7 +2294,7 @@ begin
     if not (FActualValue is TGocciaPromiseValue) then
     begin
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('resolves',
-        'Expected a Promise but received ' + FActualValue.ToStringLiteral.Value);
+        'Expected a Promise but received ' + FormatForMessage(FActualValue));
       Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
       Exit;
     end;
@@ -2286,7 +2307,7 @@ begin
     else if Promise.State = gpsRejected then
     begin
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('resolves',
-        'Expected Promise to resolve but it rejected with: ' + Promise.PromiseResult.ToStringLiteral.Value);
+        'Expected Promise to resolve but it rejected with: ' + FormatForMessage(Promise.PromiseResult));
       Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
     end
     else
@@ -2311,7 +2332,7 @@ begin
     if not (FActualValue is TGocciaPromiseValue) then
     begin
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('rejects',
-        'Expected a Promise but received ' + FActualValue.ToStringLiteral.Value);
+        'Expected a Promise but received ' + FormatForMessage(FActualValue));
       Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
       Exit;
     end;
@@ -2324,7 +2345,7 @@ begin
     else if Promise.State = gpsFulfilled then
     begin
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('rejects',
-        'Expected Promise to reject but it resolved with: ' + Promise.PromiseResult.ToStringLiteral.Value);
+        'Expected Promise to reject but it resolved with: ' + FormatForMessage(Promise.PromiseResult));
       Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
     end
     else
@@ -2950,8 +2971,8 @@ begin
                   WaitForFetchPromise(TGocciaPromiseValue(TestResult));
                   if TGocciaPromiseValue(TestResult).State = gpsRejected then
                   begin
-                    RejectionReason := TGocciaPromiseValue(TestResult).
-                      PromiseResult.ToStringLiteral.Value;
+                    RejectionReason := FormatForMessage(
+                      TGocciaPromiseValue(TestResult).PromiseResult);
                     AssertionFailed('async test', 'Returned Promise rejected: ' +
                       RejectionReason);
                     if FTestStats.CurrentSuiteName <> '' then
@@ -3170,7 +3191,7 @@ begin
               Promise := TGocciaPromiseValue(CallbackResult);
               WaitForFetchPromise(Promise);
               if Promise.State = gpsRejected then
-                AssertionFailed('callback execution', 'Async callback rejected: ' + Promise.PromiseResult.ToStringLiteral.Value)
+                AssertionFailed('callback execution', 'Async callback rejected: ' + FormatForMessage(Promise.PromiseResult))
               else if Promise.State = gpsPending then
                 AssertionFailed('callback execution', 'Async callback Promise still pending after microtask drain');
             end

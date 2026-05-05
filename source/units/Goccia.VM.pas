@@ -8231,7 +8231,22 @@ begin
 
       OP_DEL_INDEX:
       begin
+        // ES2026 §7.1.19 ToPropertyKey — symbol keys must delete from symbol
+        // storage regardless of whether the receiver is an array or plain
+        // object. Check this before the array-numeric-index branch so that
+        // `delete arr[sym]` doesn't silently no-op via the array fall-through.
         if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaObjectValue) and
+           (FRegisters[C].Kind = grkObject) and
+           (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
+        begin
+          if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteSymbolProperty(
+            TGocciaSymbolValue(FRegisters[C].ObjectValue)) then
+            FRegisters[A] := RegisterBoolean(True)
+          else
+            FRegisters[A] := RegisterBoolean(False);
+        end
+        else if (FRegisters[B].Kind = grkObject) and
            (FRegisters[B].ObjectValue is TGocciaArrayValue) then
         begin
           if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) and
@@ -8248,17 +8263,7 @@ begin
         else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaObjectValue) then
         begin
-          // ES2026 §7.1.19 ToPropertyKey: symbol keys delete from symbol storage.
-          if (FRegisters[C].Kind = grkObject) and
-             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
-          begin
-            if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteSymbolProperty(
-              TGocciaSymbolValue(FRegisters[C].ObjectValue)) then
-              FRegisters[A] := RegisterBoolean(True)
-            else
-              FRegisters[A] := RegisterBoolean(False);
-          end
-          else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
+          if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
             KeyToPropertyNameRegister(FRegisters[C])) then
             FRegisters[A] := RegisterBoolean(True)
           else

@@ -9,6 +9,7 @@ uses
 
   Goccia.Error,
   Goccia.TestSetup,
+  Goccia.Values.Error,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -81,12 +82,14 @@ begin
   // (no prototype assigned in this test fixture) throws TypeError because
   // neither toString() nor valueOf() can be located. This exercises the spec
   // path through ToPrimitive(string). Real engine objects always inherit
-  // Object.prototype and therefore stringify successfully.
+  // Object.prototype and therefore stringify successfully. Catch only
+  // TGocciaThrowValue (the JS-level TypeError) — any other exception class
+  // indicates a real bug and must propagate.
   ToStringThrew := False;
   try
     ObjectValue.ToStringLiteral;
   except
-    on E: Exception do
+    on TGocciaThrowValue do
       ToStringThrew := True;
   end;
   Expect<Boolean>(ToStringThrew).ToBe(True);

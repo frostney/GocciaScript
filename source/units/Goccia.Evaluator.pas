@@ -5600,7 +5600,16 @@ begin
         // ToPropertyKey on the evaluated expression, dispatch by type.
         PropertyKey := ToPropertyKey(EvaluateExpression(ObjPat.Properties[I].KeyExpression, AContext));
         if PropertyKey is TGocciaSymbolValue then
-          PropValue := (AValue as TGocciaObjectValue).GetSymbolProperty(TGocciaSymbolValue(PropertyKey))
+        begin
+          // TGocciaClassValue.GetSymbolProperty is not virtual, so casting an
+          // AValue that is actually a class to TGocciaObjectValue would skip
+          // the static symbol descriptor table. Dispatch on the concrete type
+          // (mirrors AssignObjectPattern below).
+          if AValue is TGocciaClassValue then
+            PropValue := TGocciaClassValue(AValue).GetSymbolProperty(TGocciaSymbolValue(PropertyKey))
+          else
+            PropValue := (AValue as TGocciaObjectValue).GetSymbolProperty(TGocciaSymbolValue(PropertyKey));
+        end
         else
           PropValue := (AValue as TGocciaObjectValue).GetProperty(TGocciaStringLiteralValue(PropertyKey).Value);
         if not Assigned(PropValue) then
