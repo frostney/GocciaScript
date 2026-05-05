@@ -8240,11 +8240,19 @@ begin
            (FRegisters[C].Kind = grkObject) and
            (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
         begin
+          // ES2026 §13.5.1.2 step 5.b: a non-configurable symbol property
+          // throws TypeError on delete (mirrors EvaluateDelete's symbol path
+          // in the interpreter). Pre-refactor the bytecode threw via the
+          // symbol-stringification side effect; the spec-correct path keeps
+          // that throw.
           if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteSymbolProperty(
             TGocciaSymbolValue(FRegisters[C].ObjectValue)) then
             FRegisters[A] := RegisterBoolean(True)
           else
-            FRegisters[A] := RegisterBoolean(False);
+            ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
+              [TGocciaSymbolValue(FRegisters[C].ObjectValue).ToDisplayString.Value,
+               '[object Object]']),
+              SSuggestCannotDeleteNonConfigurable);
         end
         else if (FRegisters[B].Kind = grkObject) and
            (FRegisters[B].ObjectValue is TGocciaArrayValue) then

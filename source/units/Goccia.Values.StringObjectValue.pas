@@ -527,6 +527,15 @@ function TGocciaStringObjectValue.StringLength(const AArgs: TGocciaArgumentsColl
 var
   StringValue: string;
 begin
+  // ES2026 §22.1.4 String.prototype is itself a String exotic object whose
+  // [[StringData]] is the empty String. Short-circuit to 0 here so the
+  // accessor returns spec-correct length without recursing through
+  // ExtractStringValue → ToStringLiteral → String.prototype.toString →
+  // ExtractStringValue → ... (Goccia's String.prototype is a plain
+  // TGocciaObjectValue, not a String wrapper, so ExtractStringValue would
+  // fall through to ToString which triggers the recursion).
+  if AThisValue = GetSharedStringPrototype then
+    Exit(TGocciaNumberLiteralValue.ZeroValue);
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
   StringValue := ExtractStringValue(AThisValue);
@@ -1140,21 +1149,27 @@ var
   MatchIndex, MatchEnd, NextIndex: Integer;
 begin
   // Step 1: Let O be RequireObjectCoercible(this value)
-  // Step 2: Let string be ToString(O)
-  StringValue := ExtractStringValue(AThisValue);
+  if (AThisValue is TGocciaUndefinedLiteralValue) or
+     (AThisValue is TGocciaNullLiteralValue) then
+    ThrowTypeError(SErrorStringPrototypeRequiresNonNullish, SSuggestCheckNullBeforeAccess);
 
-  // Step 3: Let searchString be ToString(searchValue)
   if AArgs.Length > 0 then
     SearchArg := AArgs.GetElement(0)
   else
     SearchArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  // Step 4: Let replaceValue (or functionalReplace if callable)
   if AArgs.Length > 1 then
     ReplaceArg := AArgs.GetElement(1)
   else
     ReplaceArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
+  // Step 2 (spec): If searchValue is neither undefined nor null, invoke
+  // GetMethod(searchValue, @@replace) and dispatch through it BEFORE doing
+  // any ToString on `O` or the args. ES2026 §22.1.3.20 step 2.a.iii: the
+  // RegExp-flags global check uses Get + ToString on searchValue.flags
+  // only when searchValue is itself a RegExp; for arbitrary user-supplied
+  // searchValues with @@replace, the replacer call is the only observable
+  // side effect.
   if IsRegExpValue(SearchArg) and
      not GetRegExpBooleanProperty(TGocciaObjectValue(SearchArg), PROP_GLOBAL) then
     ThrowTypeError(SErrorReplaceAllRequiresGlobalRegExp, SSuggestReplaceAllGlobalFlag);
@@ -1165,8 +1180,11 @@ begin
   begin
     if not ReplaceMethod.IsCallable then
       ThrowTypeError(SErrorSymbolReplaceNotCallable, SSuggestWellKnownSymbolCallable);
+    // ES2026 §22.1.3.20 step 2.d.i: Call(replacer, searchValue, « O, replaceValue »).
+    // The replacer receives the original `this` (O), not a stringified copy —
+    // ToString(O) only happens in step 3 if there is no @@replace replacer.
     CallArgs := TGocciaArgumentsCollection.Create([
-      TGocciaStringLiteralValue.Create(StringValue),
+      AThisValue,
       ReplaceArg
     ]);
     try
@@ -1176,6 +1194,9 @@ begin
     end;
     Exit;
   end;
+
+  // Step 3 (spec): Let string be ? ToString(O)
+  StringValue := ExtractStringValue(AThisValue);
 
   if IsRegExpValue(SearchArg) then
   begin

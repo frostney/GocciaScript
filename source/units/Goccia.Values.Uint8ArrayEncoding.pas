@@ -120,7 +120,13 @@ begin
     AlphabetVal := TGocciaObjectValue(AOptions).GetProperty(PROP_ALPHABET);
     if Assigned(AlphabetVal) and not (AlphabetVal is TGocciaUndefinedLiteralValue) then
     begin
-      Result := AlphabetVal.ToStringLiteral.Value;
+      // Stage 3 Uint8Array Base64 proposal: `alphabet` must be a String
+      // primitive equal to "base64" or "base64url". The spec does not call
+      // ToString — a String wrapper object (e.g. `Object("base64")`) must be
+      // rejected, not coerced.
+      if not (AlphabetVal is TGocciaStringLiteralValue) then
+        ThrowTypeError(SErrorInvalidAlphabet, SSuggestBase64Format);
+      Result := TGocciaStringLiteralValue(AlphabetVal).Value;
       if (Result <> ALPHABET_BASE64) and (Result <> ALPHABET_BASE64URL) then
         ThrowTypeError(SErrorInvalidAlphabet, SSuggestBase64Format);
     end;
@@ -150,7 +156,12 @@ begin
     Val := TGocciaObjectValue(AOptions).GetProperty(PROP_LAST_CHUNK_HANDLING);
     if Assigned(Val) and not (Val is TGocciaUndefinedLiteralValue) then
     begin
-      Result := Val.ToStringLiteral.Value;
+      // Stage 3 Uint8Array Base64 proposal: `lastChunkHandling` must be a
+      // String primitive equal to "loose"/"strict"/"stop-before-partial".
+      // No ToString coercion — wrapper objects must be rejected.
+      if not (Val is TGocciaStringLiteralValue) then
+        ThrowTypeError(SErrorInvalidLastChunkHandling, SSuggestBase64Format);
+      Result := TGocciaStringLiteralValue(Val).Value;
       if (Result <> LAST_CHUNK_LOOSE) and (Result <> LAST_CHUNK_STRICT) and
          (Result <> LAST_CHUNK_STOP_BEFORE_PARTIAL) then
         ThrowTypeError(SErrorInvalidLastChunkHandling, SSuggestBase64Format);
