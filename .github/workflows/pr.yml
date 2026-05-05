@@ -860,17 +860,22 @@ jobs:
           restore-keys: test262-baseline-
 
       - name: Build comment markdown
-        # Reuses scripts/run_test262_suite.ts in --comment mode so the
-        # delta computation, "Areas closest to 100%" ranking, and
-        # wrapper-infra highlighting all live in one place under version
-        # control.  Pass "-" for the baseline arg if no cached baseline
-        # exists; the script handles both shapes.
+        id: build_comment
+        # `--comment` is dual-purpose: it writes the PR comment markdown
+        # to stdout AND exits non-zero on regression vs the cached main
+        # baseline (lower total pass count, or any PASS -> non-PASS
+        # transition).  The per-test deltas live in the comment itself —
+        # this step's exit code is the only signal we need.  We mark
+        # continue-on-error so a regression doesn't abort the post-comment
+        # step; the explicit gate below converts the captured outcome
+        # into a job failure.
         #
         # The artifact download above is `continue-on-error: true`, so
         # test262-results.json may be absent when the conformance job
-        # crashed or timed out.  In that case emit the same "results
-        # not produced" stub the runner does internally so the PR
-        # comment still updates instead of going stale.
+        # crashed or timed out.  In that case emit the "results not
+        # produced" stub directly so the PR comment still updates
+        # instead of going stale, and skip the regression gate.
+        continue-on-error: true
         run: |
           baseline=test262-baseline.json
           [ -f "$baseline" ] || baseline=-
@@ -917,3 +922,9 @@ jobs:
                 body,
               });
             }
+
+      - name: Fail on regression
+        if: steps.build_comment.outcome == 'failure'
+        run: |
+          echo "::error::test262 regression detected vs cached main baseline. See the PR comment for per-test deltas."
+          exit 1
