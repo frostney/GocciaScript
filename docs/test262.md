@@ -59,10 +59,20 @@ scripts/run_test262_suite.ts
 | Negative runtime  | stdout contains `Test262:NegativeTestError:<expected-type>`           | `Test262:NegativeTestNoError`, OR `Test262:NegativeTestError:<other>`    |
 | Negative parse    | exit non-zero (parse failed as expected)                              | exit 0 (parse succeeded)                                                 |
 
-The async markers come from stock tc39/test262 `doneprintHandle.js` —
-its `$DONE` function calls `print("Test262:AsyncTestComplete")` (or the
-failure variant). The negative-runtime markers are the only
-Goccia-specific addition; see "Wrapper templates" below.
+The async markers are emitted by the `positive_async` wrapper template
+in `scripts/run_test262_suite.ts` (NOT by `$DONE`). The bundled
+`scripts/test262_harness/doneprintHandle.js` defines `$DONE` to
+resolve/reject the `__donePromise`; the wrapper `await`s that promise
+in an async IIFE and prints `Test262:AsyncTestComplete` /
+`Test262:AsyncTestFailure:...` from there. (Stock test262
+`doneprintHandle.js` would print the markers from inside `$DONE`
+directly, but that path triggers a bytecode VM crash on the top-level
+`Promise.then` drain — see "Bundled harness adaptations" below.)
+Async-debugging starts at `__donePromise` and the `positive_async`
+branch of `buildTestSource`. The negative-runtime markers
+(`Test262:NegativeTestError:...` / `Test262:NegativeTestNoError`) are
+the only Goccia-specific marker addition; see "Wrapper templates"
+below.
 
 ## Wrapper templates
 

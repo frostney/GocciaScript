@@ -31,7 +31,7 @@
  */
 
 import { $ } from "bun";
-import { readFileSync, existsSync, mkdirSync, writeFileSync, statSync } from "fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, statSync, rmSync } from "fs";
 import { readdirSync } from "fs";
 import { join, dirname, relative, basename, resolve } from "path";
 import { tmpdir } from "os";
@@ -426,11 +426,16 @@ function classifyRunResult(args: ClassifyArgs): {
   // Signal exits or ridiculously high exit codes signal an engine crash —
   // these are wrapper-infra failures, not conformance failures, because
   // the engine could not produce a trustworthy verdict.  Exception:
-  // SIGTERM is what AbortController sends when our wall-clock timeout
-  // fires — classify that as TIMEOUT, not WRAPPER_INFRA.
+  // SIGTERM/SIGKILL when WE triggered the abort (timedOut flag set in
+  // spawnBareWithTimeout's setTimeout callback).  An external SIGTERM
+  // (operator kills the process) or SIGKILL from the OS is a real crash
+  // signal and stays in WRAPPER_INFRA.
   const exitCode = result.exitCode ?? -1;
   if (result.signalCode !== null) {
-    if (result.signalCode === "SIGTERM" || result.signalCode === "SIGKILL") {
+    if (
+      result.timedOut &&
+      (result.signalCode === "SIGTERM" || result.signalCode === "SIGKILL")
+    ) {
       return { outcome: "TIMEOUT", reason: `wall-clock ${result.signalCode}`, diagnostic: "" };
     }
     return {
@@ -769,8 +774,11 @@ async function spawnBareWithTimeout(
 ): Promise<RunResult> {
   const start = performance.now();
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), wallClockMs);
   let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    ac.abort();
+  }, wallClockMs);
   try {
     const proc = Bun.spawn([bare, ...args], {
       stdin: new Blob([stdin]),
@@ -1026,9 +1034,20 @@ interface MainArgs {
   bare: string;
 }
 
+// Use Number() rather than parseInt(): parseInt("4x") silently returns 4,
+// hiding bad input; Number("4x") returns NaN so trailing junk is rejected.
+// Empty input also fails because Number("") === 0 but the caller needs
+// strict positivity.
+function parseStrictInt(raw: string | undefined): number | null {
+  const trimmed = (raw ?? "").trim();
+  if (trimmed.length === 0) return null;
+  const n = Number(trimmed);
+  return Number.isInteger(n) ? n : null;
+}
+
 function parsePositiveInt(name: string, raw: string | undefined): number {
-  const n = parseInt(raw ?? "", 10);
-  if (!Number.isInteger(n) || n <= 0) {
+  const n = parseStrictInt(raw);
+  if (n === null || n <= 0) {
     console.error(`${name} requires a positive integer, got: ${raw}`);
     process.exit(2);
   }
@@ -1036,8 +1055,8 @@ function parsePositiveInt(name: string, raw: string | undefined): number {
 }
 
 function parseNonNegativeInt(name: string, raw: string | undefined): number {
-  const n = parseInt(raw ?? "", 10);
-  if (!Number.isInteger(n) || n < 0) {
+  const n = parseStrictInt(raw);
+  if (n === null || n < 0) {
     console.error(`${name} requires a non-negative integer, got: ${raw}`);
     process.exit(2);
   }
@@ -1147,7 +1166,7 @@ async function ensureSuiteCheckout(suiteDir: string | null): Promise<{
     dir: checkoutDir,
     cleanup: () => {
       try {
-        Bun.spawnSync(["rm", "-rf", tmp]);
+        rmSync(tmp, { recursive: true, force: true });
       } catch {}
     },
   };
