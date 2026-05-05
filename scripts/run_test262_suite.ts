@@ -257,24 +257,27 @@ const BUNDLED_INCLUDES: Record<string, string> = {
   "nativeFunctionMatcher.js": "nativeFunctionMatcher.js",
   // Stock uses `for (...)` over RegExp result iterators.
   "regExpUtils.js": "regExpUtils.js",
-  // Stock probes constructor-ness via `Reflect.construct(function(){}, [], f)`,
-  // but Goccia treats function expressions as non-constructors (a curated
-  // language design choice — function expressions are non-constructible
-  // in Goccia, see code-style.md).  The bundled adaptation uses
-  // `Reflect.construct(class {}, [], f)` which Goccia accepts.
+  // Engine bug #516: stock probes constructor-ness via
+  // `Reflect.construct(function(){}, [], f)`, but Goccia rejects function
+  // expressions as the proxy target.  Adapted version uses
+  // `Reflect.construct(class {}, [], f)` which Goccia accepts.  Delete
+  // this entry and the bundled file when #516 is fixed.
   "isConstructor.js": "isConstructor.js",
-  // Stock uses `Function("return this;")()` but Goccia's `Function`
-  // constructor doesn't bind `this` to the global the same way V8/JSC do,
-  // so the stock helper returns the Function instance instead of
-  // globalThis.  The bundled adaptation uses `() => globalThis` directly.
+  // Engine bug #517: stock uses `Function("return this;")()` but Goccia's
+  // `Function` constructor doesn't bind `this` to the global, so the
+  // stock helper returns the Function instance instead of globalThis.
+  // Adapted version uses `() => globalThis`.  Delete this entry and the
+  // bundled file when #517 is fixed.
   "fnGlobalObject.js": "fnGlobalObject.js",
-  // Stock would `print('Test262:AsyncTestComplete')` from inside `$DONE`,
-  // but Goccia's bytecode VM has a Range check error in the top-level
-  // `Promise.then` continuation drain (exercised by every test written
-  // like `p.then(v => $DONE())`).  The bundled adaptation routes completion
-  // through `__donePromise`; the `positive_async` wrapper awaits it inside
-  // an async IIFE (which drains via the VM's continuation machinery, not
-  // the broken top-level path) and prints the markers itself.
+  // Engine bug #518: stock would `print('Test262:AsyncTestComplete')` from
+  // inside `$DONE`, but Goccia's bytecode VM has a Range check error in
+  // the top-level `Promise.then` continuation drain (exercised by every
+  // test written like `p.then(v => $DONE())`).  The bundled adaptation
+  // routes completion through `__donePromise`; the `positive_async`
+  // wrapper awaits it inside an async IIFE (which drains via the VM's
+  // continuation machinery, not the broken top-level path) and prints
+  // the markers itself.  Delete this entry, the bundled file, and the
+  // async-IIFE wrapper template when #518 is fixed.
   "doneprintHandle.js": "doneprintHandle.js",
 };
 

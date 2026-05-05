@@ -173,10 +173,12 @@ change makes a bundled file unnecessary, delete the entry.
 
 Current bundled set (13 files):
 
-Excluded language features:
+Excluded language features (these stay bundled as long as the feature
+is excluded by design):
 
 - `assert.js` (subsumes stock `sta.js` + `assert.js` + `compareArray.js`)
-  — `arguments` and `for(var ...)` in `assert.compareArray`.
+  — `arguments` and `for(var ...)` in `assert.compareArray`. Also works
+  around [#519](https://github.com/frostney/GocciaScript/issues/519) — see "Engine bugs" below.
 - `propertyHelper.js` — `arguments` x3, `for(var ...)` in `verifyProperty`.
 - `deepEqual.js` — `arguments`, `for(var ...)` in the recursive comparator.
 - `temporalHelpers.js` — `arguments` x3 in variadic helpers.
@@ -187,24 +189,33 @@ Excluded language features:
 - `nativeFunctionMatcher.js` — `while(...)` loop body dropped.
 - `regExpUtils.js` — `for(...)` loop bodies dropped.
 
-Engine surface differences:
+Engine bugs (delete the bundled adaptation when the linked issue is
+fixed; orchestrator falls through to stock):
 
-- `isConstructor.js` — stock uses
-  `Reflect.construct(function(){}, [], f)` but Goccia treats function
-  expressions as non-constructors by design. The bundled adaptation uses
-  `Reflect.construct(class {}, [], f)`.
-- `fnGlobalObject.js` — stock uses `Function("return this;")()` but
-  Goccia's `Function` constructor doesn't bind `this` to the global the
-  way V8/JSC do, so the stock helper returns the Function instance
-  instead of globalThis. The bundled adaptation uses `() => globalThis`.
-
-Engine-bug workaround:
-
-- `doneprintHandle.js` — Goccia bytecode VM has a Range-check-error in
-  the top-level `Promise.then` continuation drain. The bundled adaptation
-  routes completion through `__donePromise` so the `positive_async`
-  wrapper can `await` it inside an async IIFE (which drains via the
-  VM's continuation machinery, not the broken top-level path).
+- `isConstructor.js` ([#516](https://github.com/frostney/GocciaScript/issues/516))
+  — stock uses `Reflect.construct(function(){}, [], f)` but Goccia
+  rejects function expressions as the proxy target. Adapted version
+  uses `Reflect.construct(class {}, [], f)`.
+- `fnGlobalObject.js` ([#517](https://github.com/frostney/GocciaScript/issues/517))
+  — stock uses `Function("return this;")()` but Goccia's `Function`
+  constructor doesn't bind `this` to the global, so the stock helper
+  returns the Function instance instead of globalThis. Adapted version
+  uses `() => globalThis`.
+- `doneprintHandle.js` ([#518](https://github.com/frostney/GocciaScript/issues/518))
+  — Goccia bytecode VM has a Range-check-error in the top-level
+  `Promise.then` continuation drain. The bundled adaptation routes
+  completion through `__donePromise` so the `positive_async` wrapper
+  can `await` it inside an async IIFE (which drains via the VM's
+  continuation machinery, not the broken top-level path).
+- `assert.js` `assert.throws` ([#519](https://github.com/frostney/GocciaScript/issues/519))
+  — stock reads `thrown.constructor.name` to compare error types, but
+  `Error.prototype.constructor` is missing in Goccia (only the Error
+  hierarchy; Array/Object/user classes are fine). Adapted `assert.throws`
+  uses `error instanceof expectedErrorConstructor` which walks the
+  prototype chain. Note: assert.js stays bundled even after #519 because
+  of the excluded-language-feature adaptation in `assert.compareArray`,
+  but the `instanceof` workaround inside `assert.throws` can be reverted
+  to stock's `error.constructor !== ctor`.
 
 ## Strict mode
 

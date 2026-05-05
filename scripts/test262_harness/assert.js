@@ -51,6 +51,12 @@ assert.notSameValue = (actual, unexpected, message) => {
 };
 
 // --- assert.throws ---
+// Engine bug #519: stock test262 assert.throws compares
+// `thrown.constructor !== expectedErrorConstructor`, but
+// `Error.prototype.constructor` is missing in Goccia (caught Errors
+// have e.constructor === undefined), so that check throws.  Use
+// `instanceof` instead since the prototype chain IS set up correctly.
+// Revert to stock's `error.constructor !== ctor` once #519 is fixed.
 assert.throws = (expectedErrorConstructor, func, message) => {
   try {
     func();
