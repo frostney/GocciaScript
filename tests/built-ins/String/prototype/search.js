@@ -22,3 +22,30 @@ test("search dispatches through Symbol.search", () => {
 
   expect("abc".search(searcher)).toBe(7);
 });
+
+test("Symbol.search fires before ToString on the receiver (ES2026 §22.1.3.27 step 2)", () => {
+  let poisoned = false;
+  let searcherFired = false;
+  const poison = { toString() { poisoned = true; return ""; } };
+  const searcher = {
+    [Symbol.search]() { searcherFired = true; return -1; },
+  };
+  "".search.call(poison, searcher);
+  expect(searcherFired).toBe(true);
+  expect(poisoned).toBe(false);
+});
+
+test("Symbol.search receives O directly, not a stringified copy", () => {
+  const receiver = { tag: "unique-receiver" };
+  let receivedThis;
+  const searcher = {
+    [Symbol.search](o) { receivedThis = o; return -1; },
+  };
+  "".search.call(receiver, searcher);
+  expect(receivedThis).toBe(receiver);
+});
+
+test("search throws TypeError when called on null or undefined", () => {
+  expect(() => "".search.call(null, /x/)).toThrow(TypeError);
+  expect(() => "".search.call(undefined, /x/)).toThrow(TypeError);
+});

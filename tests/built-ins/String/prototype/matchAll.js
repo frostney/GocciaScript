@@ -122,3 +122,30 @@ test("matchAll iterator does not mutate the original regex", () => {
 
   expect(regex.lastIndex).toBe(2);
 });
+
+test("Symbol.matchAll fires before ToString on the receiver (ES2026 §22.1.3.16 step 3)", () => {
+  let poisoned = false;
+  let matcherFired = false;
+  const poison = { toString() { poisoned = true; return ""; } };
+  const matcher = {
+    [Symbol.matchAll]() { matcherFired = true; return [].values(); },
+  };
+  "".matchAll.call(poison, matcher);
+  expect(matcherFired).toBe(true);
+  expect(poisoned).toBe(false);
+});
+
+test("Symbol.matchAll receives O directly, not a stringified copy", () => {
+  const receiver = { tag: "unique-receiver" };
+  let receivedThis;
+  const matcher = {
+    [Symbol.matchAll](o) { receivedThis = o; return [].values(); },
+  };
+  "".matchAll.call(receiver, matcher);
+  expect(receivedThis).toBe(receiver);
+});
+
+test("matchAll throws TypeError when called on null or undefined", () => {
+  expect(() => "".matchAll.call(null, /x/g)).toThrow(TypeError);
+  expect(() => "".matchAll.call(undefined, /x/g)).toThrow(TypeError);
+});

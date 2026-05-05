@@ -92,3 +92,30 @@ test("String.prototype.split dispatches through Symbol.split", () => {
 
   expect("abc".split(splitter, 2)).toEqual(["custom", "split"]);
 });
+
+test("Symbol.split fires before ToString on the receiver (ES2026 §22.1.3.23 step 2)", () => {
+  let poisoned = false;
+  let splitterFired = false;
+  const poison = { toString() { poisoned = true; return ""; } };
+  const splitter = {
+    [Symbol.split]() { splitterFired = true; return []; },
+  };
+  "".split.call(poison, splitter);
+  expect(splitterFired).toBe(true);
+  expect(poisoned).toBe(false);
+});
+
+test("Symbol.split receives O directly, not a stringified copy", () => {
+  const receiver = { tag: "unique-receiver" };
+  let receivedThis;
+  const splitter = {
+    [Symbol.split](o) { receivedThis = o; return []; },
+  };
+  "".split.call(receiver, splitter);
+  expect(receivedThis).toBe(receiver);
+});
+
+test("split throws TypeError when called on null or undefined", () => {
+  expect(() => "".split.call(null, ",")).toThrow(TypeError);
+  expect(() => "".split.call(undefined, ",")).toThrow(TypeError);
+});
