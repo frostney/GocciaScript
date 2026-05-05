@@ -544,8 +544,13 @@ begin
   AEngine.FunctionEnabled := CompatAll or ResolveFlagOption(
     AEngineOptions.CompatFunction, AFileConfig, 'compat-function');
 
-  { compat-traditional-for-loop: CLI flag > per-file config > root config > default (false) }
-  AEngine.TraditionalForLoopsEnabled := CompatAll or ResolveFlagOption(
+  { compat-traditional-for-loop: CLI flag > per-file config > root config > default (false).
+    Deliberately NOT bundled into --compat-all. Enabling it re-runs traditional
+    for-loop bodies that warn-and-skipped on baseline, which exposes unrelated
+    engine gaps in Atomics/Intl/RegExp/Math edge cases that were trivially
+    passing before. The flag is opt-in only so the test262 baseline (which
+    runs through GocciaScriptLoaderBare with --compat-all) stays stable. }
+  AEngine.TraditionalForLoopsEnabled := ResolveFlagOption(
     AEngineOptions.CompatTraditionalFor, AFileConfig, 'compat-traditional-for-loop');
 
   { strict-types: CLI flag > per-file config > root config > default (false) }

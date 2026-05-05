@@ -764,7 +764,7 @@ When enabled, GocciaScript follows the ECMAScript ASI rules (ES2026 §12.10):
 
 ### Traditional `for(init; test; update)` Loop
 
-**Opt-in.** Excluded by default; use `for...of`, `for await...of`, or array methods. Available via `--compat-traditional-for-loop` (CLI flag, `Engine.TraditionalForLoopsEnabled`, or `{"compat-traditional-for-loop": true}` in config).
+**Opt-in.** Excluded by default; use `for...of`, `for await...of`, or array methods. Available via `--compat-traditional-for-loop` (CLI flag, `Engine.TraditionalForLoopsEnabled`, or `{"compat-traditional-for-loop": true}` in config). Unlike the other `--compat-*` flags, this one is **not** bundled into `--compat-all` — opt in explicitly when you need it.
 
 When disabled (default), the parser accepts the syntax but treats it as a no-op and emits a warning suggesting array methods or the flag. When enabled, `for(init; test; update) body` is fully supported in both interpreter and bytecode modes:
 

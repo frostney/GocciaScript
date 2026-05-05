@@ -227,8 +227,9 @@ begin
     happens here rather than in the parser. }
   AEngine.VarEnabled := AOptions.CompatVar or AOptions.CompatAll;
   AEngine.FunctionEnabled := AOptions.CompatFunction or AOptions.CompatAll;
-  AEngine.TraditionalForLoopsEnabled :=
-    AOptions.CompatTraditionalFor or AOptions.CompatAll;
+  // compat-traditional-for-loop is opt-in only — see ApplyFileConfigToEngine
+  // in Goccia.CLI.Application.pas for rationale.
+  AEngine.TraditionalForLoopsEnabled := AOptions.CompatTraditionalFor;
   AEngine.StrictTypes := AOptions.StrictTypes;
   AEngine.SourceType := AOptions.SourceType;
   AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;
