@@ -1,0 +1,70 @@
+name: test262 weekly bump
+
+# Pulls the latest tc39/test262 main SHA, updates the pin in ci.yml +
+# pr.yml, and opens a PR.  CI on the PR runs the conformance suite
+# against the new SHA and posts the per-category delta vs. the cached
+# main baseline; merge once the delta is acceptable.
+#
+# Cadence: weekly (Mondays 06:00 UTC).  Manual trigger available via
+# workflow_dispatch.  See docs/test262.md "Updating the SHA pin".
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+
+      - id: latest
+        run: |
+          sha=$(gh api repos/tc39/test262/commits/main --jq .sha)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short=${sha:0:8}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update pin in workflows
+        run: bun scripts/test262-bump-pin.ts ${{ steps.latest.outputs.sha }}
+
+      # Skip PR creation when the pin is already at the latest SHA.  Without
+      # this guard the cron would open a no-op PR every quiet week (or even
+      # day if a manual run lands between the cron and the next upstream
+      # commit).  Detect via `git diff --quiet`: zero-exit means the working
+      # tree matches HEAD, so bump-pin made no edits.
+      - id: changed
+        run: |
+          if git diff --quiet -- .github/workflows/ci.yml .github/workflows/pr.yml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "test262 already pinned to ${{ steps.latest.outputs.short }} — no PR to open."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open PR
+        if: steps.changed.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/test262-bump-${{ steps.latest.outputs.short }}
+          commit-message: "chore(test262): bump pin to ${{ steps.latest.outputs.short }}"
+          title: "chore(test262): bump pin to ${{ steps.latest.outputs.short }}"
+          body: |
+            Weekly automated bump of the test262 SHA pin.
+
+            CI will run the conformance suite against the new SHA. The
+            test262 PR comment will show the per-category delta vs. the
+            cached `main` baseline. Review the delta and merge if
+            acceptable.
+
+            Cron: weekly, Mondays 06:00 UTC. See `.github/workflows/test262-bump.yml`.
+          labels: |
+            test262
+            automated

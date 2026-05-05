@@ -585,6 +585,8 @@ jobs:
       - name: Make binaries executable
         run: chmod +x build/*
 
+      - uses: oven-sh/setup-bun@v2
+
       - name: Checkout test262 suite
         uses: actions/checkout@v5
         with:
@@ -593,20 +595,21 @@ jobs:
           # run measure the same upstream test corpus.  `ref: main` would
           # let new tests land mid-PR and surface as spurious deltas
           # against the cached baseline.  Bump in lockstep with pr.yml
-          # when refreshing the suite.
+          # when refreshing the suite.  The weekly cron at
+          # .github/workflows/test262-bump.yml updates both files together.
           ref: d0c1b4555b03dd404873fd6422a4b5da00136500
           path: test262-suite
           fetch-depth: 1
 
       - name: Run test262 conformance suite
         continue-on-error: true
-        # python3 -u: unbuffered, so progress prints reach the live CI log
-        # in real time even if the job is later killed by SIGTERM.
-        # --jobs=2 (not 4): see pr.yml's identical step for rationale —
-        # higher concurrency tripped false-positive watchdog stalls on
-        # GH-hosted runners.
+        # --jobs=2 (not 4): higher concurrency tripped false-positive
+        # watchdog stalls on GH-hosted runners under the previous
+        # chunked-runner architecture.  Per-test subprocess is more
+        # forgiving but the 2-CPU GH runner doesn't actually benefit
+        # from more.
         run: |
-          python3 -u scripts/run_test262_suite.py \
+          bun scripts/run_test262_suite.ts \
             --suite-dir test262-suite \
             --mode=bytecode \
             --jobs=2 \

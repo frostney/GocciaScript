@@ -14,9 +14,12 @@ uses
   Goccia.Error,
   Goccia.Error.Detail,
   Goccia.Executor,
+  Goccia.GarbageCollector,
+  Goccia.InstructionLimit,
   Goccia.ScriptLoader.Input,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
+  Goccia.Timeout,
   Goccia.Values.Error,
   Goccia.Values.NativeFunction,
   Goccia.Values.Primitives;
@@ -41,6 +44,9 @@ type
     Mode: TBareExecutionMode;
     SourceType: TGocciaSourceType;
     FileName: string;
+    TimeoutMs: Integer;
+    MaxMemoryBytes: Int64;
+    MaxInstructions: Int64;
   end;
 
 const
@@ -78,6 +84,9 @@ begin
   WriteLn('  --source-type=script|module   Load entry as a script or module');
   WriteLn('  --unsafe-function-constructor Enable dynamic Function constructor');
   WriteLn('  --print                       Print the script''s last value (incl. undefined)');
+  WriteLn('  --timeout=MS                  Per-file cooperative timeout in milliseconds');
+  WriteLn('  --max-memory=BYTES            GC heap byte limit (RangeError on exceed)');
+  WriteLn('  --max-instructions=N          Maximum bytecode steps before aborting');
   WriteLn('  --help                        Show this help');
 end;
 
@@ -101,6 +110,40 @@ begin
     raise Exception.Create('Invalid --source-type value: ' + AValue);
 end;
 
+procedure ParseTimeout(const AValue: string; var AOptions: TBareOptions);
+var
+  Parsed: Integer;
+begin
+  if not TryStrToInt(AValue, Parsed) then
+    raise Exception.Create('Invalid --timeout value: ' + AValue);
+  if Parsed < 0 then
+    raise Exception.Create('--timeout must be 0 or greater');
+  AOptions.TimeoutMs := Parsed;
+end;
+
+procedure ParseMaxMemory(const AValue: string; var AOptions: TBareOptions);
+var
+  Parsed: Int64;
+begin
+  if not TryStrToInt64(AValue, Parsed) then
+    raise Exception.Create('Invalid --max-memory value: ' + AValue);
+  if Parsed < 0 then
+    raise Exception.Create('--max-memory must be 0 or greater');
+  AOptions.MaxMemoryBytes := Parsed;
+end;
+
+procedure ParseMaxInstructions(const AValue: string;
+  var AOptions: TBareOptions);
+var
+  Parsed: Int64;
+begin
+  if not TryStrToInt64(AValue, Parsed) then
+    raise Exception.Create('Invalid --max-instructions value: ' + AValue);
+  if Parsed < 0 then
+    raise Exception.Create('--max-instructions must be 0 or greater');
+  AOptions.MaxInstructions := Parsed;
+end;
+
 function ParseOptions: TBareOptions;
 var
   I: Integer;
@@ -116,6 +159,9 @@ begin
   Result.Mode := bemInterpreted;
   Result.SourceType := stScript;
   Result.FileName := STDIN_PATH_MARKER;
+  Result.TimeoutMs := 0;
+  Result.MaxMemoryBytes := 0;
+  Result.MaxInstructions := 0;
 
   for I := 1 to ParamCount do
   begin
@@ -143,6 +189,13 @@ begin
       ParseMode(Copy(Arg, Length('--mode=') + 1, MaxInt), Result)
     else if Copy(Arg, 1, Length('--source-type=')) = '--source-type=' then
       ParseSourceType(Copy(Arg, Length('--source-type=') + 1, MaxInt), Result)
+    else if Copy(Arg, 1, Length('--timeout=')) = '--timeout=' then
+      ParseTimeout(Copy(Arg, Length('--timeout=') + 1, MaxInt), Result)
+    else if Copy(Arg, 1, Length('--max-memory=')) = '--max-memory=' then
+      ParseMaxMemory(Copy(Arg, Length('--max-memory=') + 1, MaxInt), Result)
+    else if Copy(Arg, 1, Length('--max-instructions=')) = '--max-instructions=' then
+      ParseMaxInstructions(Copy(Arg, Length('--max-instructions=') + 1, MaxInt),
+        Result)
     else if Copy(Arg, 1, 2) = '--' then
       raise Exception.Create('Unknown option: ' + Arg)
     else if Result.FileName = STDIN_PATH_MARKER then
@@ -208,6 +261,7 @@ var
   DisplayName: string;
   Engine: TGocciaEngine;
   Executor: TGocciaExecutor;
+  GC: TGarbageCollector;
   PrintHost: TBarePrintHost;
   ScriptResult: TGocciaScriptResult;
   Source: TStringList;
@@ -220,6 +274,15 @@ begin
     else
       DisplayName := AOptions.FileName;
 
+    { Engine-side bounds.  StartExecutionTimeout / StartInstructionLimit
+      are threadvar-backed and order-independent vs. engine creation, so
+      they stay here.  --max-memory must be applied AFTER Engine.Create —
+      the engine constructor calls TGarbageCollector.Initialize, which
+      lazy-creates the GC singleton with FMaxBytes := FSuggestedMaxBytes
+      and would otherwise overwrite any pre-engine value. }
+    StartExecutionTimeout(AOptions.TimeoutMs);
+    StartInstructionLimit(AOptions.MaxInstructions);
+
     PrintHost := TBarePrintHost.Create;
     try
       Executor := CreateExecutorForMode(AOptions.Mode);
@@ -227,6 +290,11 @@ begin
         Engine := TGocciaEngine.Create(DisplayName, Source, Executor);
         try
           ConfigureEngine(Engine, AOptions);
+
+          GC := TGarbageCollector.Instance;
+          if Assigned(GC) and (AOptions.MaxMemoryBytes > 0) then
+            GC.MaxBytes := AOptions.MaxMemoryBytes;
+
           RegisterBareGlobals(Engine, PrintHost);
           try
             ScriptResult := Engine.Execute;
