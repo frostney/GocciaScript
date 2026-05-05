@@ -45,14 +45,10 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
-  Goccia.Values.ClassValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
-  Goccia.Values.HoleValue,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue;
 
 threadvar
@@ -144,15 +140,8 @@ end;
 
 function TGocciaGlobalReflect.ReflectConstruct(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Target: TGocciaValue;
-  ArgsList: TGocciaValue;
-  NewTarget: TGocciaValue;
-  CallArgs, CombinedArgs: TGocciaArgumentsCollection;
-  NewTargetClass: TGocciaClassValue;
-  Receiver: TGocciaObjectValue;
-  EffectiveTarget: TGocciaValue;
-  BoundFn: TGocciaBoundFunctionValue;
-  I: Integer;
+  Target, ArgsList, NewTarget: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Reflect.construct', ThrowError);
 
@@ -163,90 +152,23 @@ begin
   if not IsConstructorValue(Target) then
     ThrowTypeError(SErrorReflectConstructTargetMustBeConstructor, SSuggestNotConstructorType);
 
+  // Step 3: If newTarget provided, validate IsConstructor(newTarget)
+  if AArgs.Length >= 3 then
+  begin
+    NewTarget := AArgs.GetElement(2);
+    if not IsConstructorValue(NewTarget) then
+      ThrowTypeError(SErrorReflectConstructNewTargetMustBeConstructor, SSuggestNotConstructorType);
+  end
+  else
+    NewTarget := Target;
+
   // Step 2: Let args be ? CreateListFromArrayLike(argumentsList)
   CallArgs := CreateListFromArrayLike(ArgsList, 'Reflect.construct');
   try
-    // Step 3: If newTarget provided, validate IsConstructor(newTarget)
-    if AArgs.Length >= 3 then
-    begin
-      NewTarget := AArgs.GetElement(2);
-      if not IsConstructorValue(NewTarget) then
-        ThrowTypeError(SErrorReflectConstructNewTargetMustBeConstructor, SSuggestNotConstructorType);
-    end
-    else
-      NewTarget := Target;
-
-    // Bound function target (§10.4.1.2): at each level, merge the bound
-    // arguments into the call list and apply step 5's substitution —
-    // SameValue(F, newTarget) ⇒ newTarget := F.[[BoundTargetFunction]] —
-    // before recursing into the underlying target. The substitution preserves
-    // an explicit non-bound newTarget (e.g. Reflect.construct(Bound, [], C))
-    // while default-newTarget calls follow the bound chain to the eventual
-    // ordinary constructor.
-    EffectiveTarget := Target;
-    while EffectiveTarget is TGocciaBoundFunctionValue do
-    begin
-      BoundFn := TGocciaBoundFunctionValue(EffectiveTarget);
-      if NewTarget = EffectiveTarget then
-        NewTarget := BoundFn.OriginalFunction;
-      CombinedArgs := TGocciaArgumentsCollection.CreateWithCapacity(
-        BoundFn.BoundArgCount + CallArgs.Length);
-      try
-        for I := 0 to BoundFn.BoundArgCount - 1 do
-          CombinedArgs.Add(BoundFn.GetBoundArg(I));
-        for I := 0 to CallArgs.Length - 1 do
-          CombinedArgs.Add(CallArgs.GetElement(I));
-      except
-        CombinedArgs.Free;
-        raise;
-      end;
-      CallArgs.Free;
-      CallArgs := CombinedArgs;
-      EffectiveTarget := BoundFn.OriginalFunction;
-    end;
-
-    // Step 4: Return ? Construct(target, args, newTarget)
-    if EffectiveTarget is TGocciaProxyValue then
-      Result := TGocciaProxyValue(EffectiveTarget).ConstructTrap(CallArgs, NewTarget)
-    else if EffectiveTarget is TGocciaClassValue then
-    begin
-      if NewTarget is TGocciaClassValue then
-      begin
-        NewTargetClass := TGocciaClassValue(NewTarget);
-        if NewTargetClass <> TGocciaClassValue(EffectiveTarget) then
-          Result := TGocciaClassValue(EffectiveTarget).Instantiate(CallArgs, NewTargetClass)
-        else
-          Result := TGocciaClassValue(EffectiveTarget).Instantiate(CallArgs);
-      end
-      else
-      begin
-        // newTarget is a non-class constructor — patch the instance prototype
-        // from newTarget.prototype after instantiation (Instantiate only
-        // accepts a class for its newTarget parameter). GetProtoFromConstructor
-        // applies the §10.1.14 fallback to %Object.prototype% when
-        // newTarget.prototype is not an Object.
-        Result := TGocciaClassValue(EffectiveTarget).Instantiate(CallArgs);
-        if Result is TGocciaObjectValue then
-          TGocciaObjectValue(Result).Prototype := GetProtoFromConstructor(NewTarget);
-      end;
-    end
-    else if EffectiveTarget is TGocciaNativeFunctionValue then
-    begin
-      // Native constructors create their own internal-slot-backed instance;
-      // the receiver is unused so we pass HoleValue. newTarget-driven
-      // prototype propagation for native constructors is not yet wired here.
-      Result := TGocciaNativeFunctionValue(EffectiveTarget).Call(CallArgs,
-        TGocciaHoleValue.HoleValue);
-    end
-    else if EffectiveTarget is TGocciaFunctionBase then
-    begin
-      Receiver := TGocciaObjectValue.Create(GetProtoFromConstructor(NewTarget));
-      Result := ConstructOrdinaryWithReceiver(TGocciaFunctionBase(EffectiveTarget),
-        CallArgs, Receiver);
-    end
-    else
-      ThrowTypeError(SErrorReflectConstructTargetMustBeConstructor,
-        SSuggestNotConstructorType);
+    // Step 4: Return ? Construct(target, args, newTarget). ConstructValue
+    // walks the §10.4.1.2 bound chain (substituting newTarget where the
+    // SameValue rule applies) and dispatches by target kind.
+    Result := ConstructValue(Target, CallArgs, NewTarget);
   finally
     CallArgs.Free;
   end;

@@ -250,6 +250,41 @@ describe("Reflect.construct on a proxy wrapping a function-keyword target", () =
     expect(obj.x).toBe(1);
     expect(Object.getPrototypeOf(obj)).toBe(Object.prototype);
   });
+
+  test("proxy fallback over a bound function unwraps the bound chain — receiver wins over bound `this`", () => {
+    function Capture() {
+      this.captured = this;
+      this.flag = true;
+    }
+    const sentinel = { sentinel: true };
+    const proxy = new Proxy(Capture.bind(sentinel), {});
+    const obj = Reflect.construct(proxy, []);
+    expect(obj.flag).toBe(true);
+    expect(obj.captured).toBe(obj);
+    expect(obj.captured).not.toBe(sentinel);
+  });
+
+  test("proxy fallback over a doubly-bound function merges bound args through the chain", () => {
+    function Triple(a, b, c) {
+      this.sum = a + b + c;
+    }
+    const Once = Triple.bind(null, 1);
+    const Twice = Once.bind(null, 2);
+    const proxy = new Proxy(Twice, {});
+    const obj = Reflect.construct(proxy, [3]);
+    expect(obj.sum).toBe(6);
+  });
+
+  test("proxy fallback over a bound class runs the class constructor with merged bound args", () => {
+    class Counter {
+      constructor(start) {
+        this.value = start;
+      }
+    }
+    const proxy = new Proxy(Counter.bind(null, 10), {});
+    const obj = Reflect.construct(proxy, []);
+    expect(obj.value).toBe(10);
+  });
 });
 
 describe("Reflect.construct rejects non-constructable function forms", () => {

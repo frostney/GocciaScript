@@ -150,9 +150,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.FunctionBase,
-  Goccia.Values.HoleValue,
-  Goccia.Values.NativeFunction;
+  Goccia.Values.FunctionBase;
 
 { TGocciaProxyValue }
 
@@ -1307,38 +1305,13 @@ begin
     end;
   end
   else
-  begin
-    // No construct trap: forward to target's [[Construct]](args, EffectiveNewTarget).
-    // Instantiate() is virtual — TGocciaVMClassValue dispatches to its
-    // bytecode-aware override. Native-constructor newTarget propagation
-    // remains tracked in #530 (engine-wide change required: every native
-    // allocator would need to accept newTarget).
-    if FTarget is TGocciaProxyValue then
-      Result := TGocciaProxyValue(FTarget).ConstructTrap(AArguments,
-        EffectiveNewTarget)
-    else if FTarget is TGocciaClassValue then
-    begin
-      if EffectiveNewTarget is TGocciaClassValue then
-        Result := TGocciaClassValue(FTarget).Instantiate(AArguments,
-          TGocciaClassValue(EffectiveNewTarget))
-      else
-      begin
-        Result := TGocciaClassValue(FTarget).Instantiate(AArguments);
-        if Result is TGocciaObjectValue then
-          TGocciaObjectValue(Result).Prototype :=
-            GetProtoFromConstructor(EffectiveNewTarget);
-      end;
-    end
-    else if FTarget is TGocciaNativeFunctionValue then
-      Result := TGocciaNativeFunctionValue(FTarget).Call(AArguments,
-        TGocciaHoleValue.HoleValue)
-    else if FTarget is TGocciaFunctionBase then
-      Result := ConstructOrdinaryWithReceiver(TGocciaFunctionBase(FTarget),
-        AArguments,
-        TGocciaObjectValue.Create(GetProtoFromConstructor(EffectiveNewTarget)))
-    else
-      ThrowTypeError(SErrorProxyTargetNotConstructor, SSuggestProxyTargetType);
-  end;
+    // No construct trap: forward to target's [[Construct]](args, EffectiveNewTarget)
+    // through the shared dispatch — handles bound chain unwrap (so
+    // `new Proxy(F.bind(obj), {})()` does not leak the bound `this` into the
+    // synthetic receiver), nested proxies, classes, ordinary functions, and
+    // native constructors. Native-constructor newTarget propagation remains
+    // tracked in #530.
+    Result := ConstructValue(FTarget, AArguments, EffectiveNewTarget);
 end;
 
 function TGocciaProxyValue.TypeOf: string;

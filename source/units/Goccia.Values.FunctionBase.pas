@@ -108,6 +108,19 @@ function ConstructOrdinaryWithReceiver(const ATarget: TGocciaFunctionBase;
   const AArguments: TGocciaArgumentsCollection;
   const AReceiver: TGocciaObjectValue): TGocciaValue;
 
+// ES2026 §7.3.14 Construct(F, argumentsList, newTarget): single dispatch
+// across all callable forms — proxies, classes, native constructors,
+// ordinary functions, and bound functions. Walks the §10.4.1.2 bound chain
+// (merging bound arguments and applying the SameValue(F, newTarget) ⇒
+// newTarget := F.[[BoundTargetFunction]] substitution) before routing the
+// unwrapped target to its [[Construct]] implementation. Callers must
+// pre-validate IsConstructable(ATarget); the trailing else-branch only
+// fires defensively. Used by Reflect.construct (§28.1.2) and the proxy
+// [[Construct]] fallback (§10.5.13).
+function ConstructValue(const ATarget: TGocciaValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaValue): TGocciaValue;
+
 implementation
 
 uses
@@ -126,6 +139,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.HoleValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ProxyValue;
 
@@ -176,6 +190,80 @@ begin
       Result := AReceiver;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(AReceiver);
+  end;
+end;
+
+function ConstructValue(const ATarget: TGocciaValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaValue): TGocciaValue;
+var
+  EffectiveTarget: TGocciaValue;
+  EffectiveNewTarget: TGocciaValue;
+  WorkingArgs, NextArgs: TGocciaArgumentsCollection;
+  BoundFn: TGocciaBoundFunctionValue;
+  I: Integer;
+begin
+  EffectiveTarget := ATarget;
+  EffectiveNewTarget := ANewTarget;
+
+  WorkingArgs := TGocciaArgumentsCollection.CreateWithCapacity(AArguments.Length);
+  try
+    for I := 0 to AArguments.Length - 1 do
+      WorkingArgs.Add(AArguments.GetElement(I));
+
+    while EffectiveTarget is TGocciaBoundFunctionValue do
+    begin
+      BoundFn := TGocciaBoundFunctionValue(EffectiveTarget);
+      if EffectiveNewTarget = EffectiveTarget then
+        EffectiveNewTarget := BoundFn.OriginalFunction;
+      NextArgs := TGocciaArgumentsCollection.CreateWithCapacity(
+        BoundFn.BoundArgCount + WorkingArgs.Length);
+      try
+        for I := 0 to BoundFn.BoundArgCount - 1 do
+          NextArgs.Add(BoundFn.GetBoundArg(I));
+        for I := 0 to WorkingArgs.Length - 1 do
+          NextArgs.Add(WorkingArgs.GetElement(I));
+      except
+        NextArgs.Free;
+        raise;
+      end;
+      WorkingArgs.Free;
+      WorkingArgs := NextArgs;
+      EffectiveTarget := BoundFn.OriginalFunction;
+    end;
+
+    if EffectiveTarget is TGocciaProxyValue then
+      Result := TGocciaProxyValue(EffectiveTarget).ConstructTrap(WorkingArgs,
+        EffectiveNewTarget)
+    else if EffectiveTarget is TGocciaClassValue then
+    begin
+      if EffectiveNewTarget is TGocciaClassValue then
+        Result := TGocciaClassValue(EffectiveTarget).Instantiate(WorkingArgs,
+          TGocciaClassValue(EffectiveNewTarget))
+      else
+      begin
+        // Patching the freshly-created instance's [[Prototype]] after the
+        // constructor returns is sound while Instantiate ignores explicit
+        // object returns; once that engine limitation is lifted (tracked
+        // alongside #529), this branch must derive the receiver pre-call.
+        Result := TGocciaClassValue(EffectiveTarget).Instantiate(WorkingArgs);
+        if Result is TGocciaObjectValue then
+          TGocciaObjectValue(Result).Prototype :=
+            GetProtoFromConstructor(EffectiveNewTarget);
+      end;
+    end
+    else if EffectiveTarget is TGocciaNativeFunctionValue then
+      Result := TGocciaNativeFunctionValue(EffectiveTarget).Call(WorkingArgs,
+        TGocciaHoleValue.HoleValue)
+    else if EffectiveTarget is TGocciaFunctionBase then
+      Result := ConstructOrdinaryWithReceiver(TGocciaFunctionBase(EffectiveTarget),
+        WorkingArgs,
+        TGocciaObjectValue.Create(GetProtoFromConstructor(EffectiveNewTarget)))
+    else
+      ThrowTypeError(SErrorReflectConstructTargetMustBeConstructor,
+        SSuggestNotConstructorType);
+  finally
+    WorkingArgs.Free;
   end;
 end;
 
