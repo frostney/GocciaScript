@@ -8,7 +8,7 @@
 - **Modern subset** — `let`/`const`, arrow functions, classes with private fields, `for...of`, async/await, ES modules (named only)
 - **TC39 proposals** — Decorators, decorator metadata, pattern matching, types as comments, enums, `Math.clamp`
 - **Excluded by design** — `==`/`!=`, `eval`, `arguments`, `while` / `do...while`, `with`, default imports/exports
-- **Graceful handling** — Parser-recognized excluded syntax (`==`, loops, `with`) parses successfully but executes as a no-op with a warning and suggestion
+- **Graceful handling** — Parser-recognized excluded syntax (`==`, `while`/`do...while`, traditional `for(;;)` when `--compat-traditional-for-loop` is off, `with`) parses successfully but executes as a no-op with a warning and suggestion
 - **Opt-in toggles** — ASI (`--asi`), `var` declarations (`--compat-var`), `function` keyword (`--compat-function`), traditional `for(init; test; update)` loops (`--compat-traditional-for-loop`), runtime type enforcement (`--strict-types`)
 - **Default preprocessors** — JSX (enabled by default via `DefaultPreprocessors`)
 

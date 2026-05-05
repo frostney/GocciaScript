@@ -222,8 +222,12 @@ begin
   Result := '';
   while V > 0 do
   begin
-    Q := Trunc(V / ARadix);
-    D := Trunc(V - Q * ARadix);
+    // Use Int() rather than Trunc() throughout — Trunc returns Int64 and
+    // overflows on doubles past 2^63 (e.g. (1e100).toString(16)). Int()
+    // returns the truncated value as Double so arbitrarily large finite
+    // numbers stringify; Round() narrows just the small-modulo digit.
+    Q := Int(V / ARadix);
+    D := Round(V - Q * ARadix);
     if D < 0 then D := 0;
     if D > ARadix - 1 then D := ARadix - 1;
     Result := DIGITS[D] + Result;
@@ -318,7 +322,9 @@ begin
     end
     else
       Sign := '';
-    IntPart := Trunc(V);
+    // Int() returns the truncated value as Double so V > Int64.MaxValue
+    // doesn't trip a range check before IntegerToRadixString sees it.
+    IntPart := Int(V);
     FracPart := V - IntPart;
     IntStr := IntegerToRadixString(IntPart, Radix);
     if FracPart > 0 then
