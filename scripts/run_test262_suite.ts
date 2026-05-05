@@ -76,16 +76,21 @@ const KNOWN_ENGINE_CRASHES = new Set<string>([
 // ---------------------------------------------------------------------------
 // Frontmatter
 // ---------------------------------------------------------------------------
+//
+// test262 frontmatter is YAML, but the orchestrator only consumes three
+// fields: `flags` (e.g. async / module / raw), `includes` (extra harness
+// files), and `negative.{phase, type}`.  Free-form fields like
+// `description`, `info`, `esid`, `features` are not used — and `info` in
+// particular routinely contains unbalanced brackets that strict YAML
+// rejects.  Parse just what we need with targeted regex per field.
 
 const FRONTMATTER_RE = /\/\*---\s*\n([\s\S]*?)\n---\*\//;
+const STRIP_QUOTES = (s: string) => s.replace(/^['"]|['"]$/g, "").trim();
 
 interface Frontmatter {
-  description?: string;
   flags: string[];
   includes: string[];
-  features: string[];
   negative?: { phase?: string; type?: string };
-  esid?: string;
 }
 
 interface ParsedTest {
@@ -95,107 +100,41 @@ interface ParsedTest {
 
 function parseTest(source: string): ParsedTest {
   const match = FRONTMATTER_RE.exec(source);
-  if (!match) {
-    return { body: source, meta: { flags: [], includes: [], features: [] } };
-  }
-  const yamlText = match[1];
-  // test262 frontmatter is loose YAML — `info:` / `description:` fields
-  // routinely contain unbalanced brackets like
-  // `String.fromCharCode ( [ char0 [ , char1 ] ] )` that Bun's strict
-  // YAML rejects but other engines (and the historical Python parser)
-  // accept.  Try strict YAML first, then fall back to a forgiving
-  // line-based extractor that only resolves the fields the orchestrator
-  // actually needs (`flags`, `includes`, `negative.phase`,
-  // `negative.type`, plus `description` for reporting).  This keeps a
-  // genuine YAML-shape bug visible (it would still fail the line
-  // extractor in most cases) while not losing tests to free-form text
-  // in fields we never read.
-  let parsed: any;
-  try {
-    parsed = Bun.YAML.parse(yamlText) || {};
-  } catch {
-    parsed = parseTolerantFrontmatter(yamlText);
-  }
-  const before = source.slice(0, match.index).replace(/\s+$/, "");
+  if (!match) return { body: source, meta: { flags: [], includes: [] } };
+  const yaml = match[1];
+  const before = source.slice(0, match.index).trimEnd();
   const after = source.slice(match.index + match[0].length).replace(/^\n+/, "");
-  const body = (before + "\n" + after).replace(/^\n+/, "");
   return {
-    body,
+    body: (before + "\n" + after).replace(/^\n+/, ""),
     meta: {
-      description: parsed.description,
-      flags: toStringArray(parsed.flags),
-      includes: toStringArray(parsed.includes),
-      features: toStringArray(parsed.features),
-      negative:
-        parsed.negative && typeof parsed.negative === "object"
-          ? { phase: parsed.negative.phase, type: parsed.negative.type }
-          : undefined,
-      esid: parsed.esid,
+      flags: extractList(yaml, "flags"),
+      includes: extractList(yaml, "includes"),
+      negative: extractNegative(yaml),
     },
   };
 }
 
-function parseTolerantFrontmatter(yamlText: string): any {
-  const out: any = {};
-  const lines = yamlText.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const m = /^([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(.*)$/.exec(line);
-    if (!m) continue;
-    const key = m[1];
-    const rest = m[2];
-    if (rest === "") {
-      // Indented child block.  YAML allows two shapes here: either a
-      // nested mapping (lines like `  key: value`, e.g. `negative:`)
-      // or a sequence (lines like `  - value`, e.g. `flags:` /
-      // `includes:` written in block form).  Inspect the first child
-      // line to pick the bucket; mixed shapes are not test262 idiom.
-      const firstChild = lines[i + 1];
-      if (firstChild && /^\s*-\s*/.test(firstChild)) {
-        const items: string[] = [];
-        while (i + 1 < lines.length && /^\s*-\s*/.test(lines[i + 1])) {
-          i++;
-          const im = /^\s*-\s*(.*)$/.exec(lines[i]);
-          if (im) items.push(unquote(im[1].trim()));
-        }
-        out[key] = items;
-      } else {
-        const nested: any = {};
-        while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1])) {
-          i++;
-          const nm = /^\s+([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(.*)$/.exec(lines[i]);
-          if (nm) nested[nm[1]] = unquote(nm[2]);
-        }
-        out[key] = nested;
-      }
-    } else {
-      // Inline list `[a, b]`
-      const lm = /^\[(.*)\]\s*$/.exec(rest);
-      if (lm) {
-        out[key] = lm[1]
-          .split(",")
-          .map((s) => unquote(s.trim()))
-          .filter(Boolean);
-      } else {
-        out[key] = unquote(rest);
-      }
-    }
+// Match either inline `key: [a, b]` or block `key:\n  - a\n  - b`.
+function extractList(yaml: string, key: string): string[] {
+  const inline = new RegExp(`^${key}:[ \\t]*\\[(.*)\\][ \\t]*$`, "m").exec(yaml);
+  if (inline) return inline[1].split(",").map(STRIP_QUOTES).filter(Boolean);
+  const block = new RegExp(`^${key}:[ \\t]*\\n((?:[ \\t]+-.*\\n?)+)`, "m").exec(yaml);
+  if (block) {
+    return [...block[1].matchAll(/^[ \t]+-[ \t]*(.*)$/gm)]
+      .map((m) => STRIP_QUOTES(m[1])).filter(Boolean);
   }
-  return out;
-}
-
-function unquote(s: string): string {
-  if (s.length >= 2) {
-    const f = s[0];
-    if ((f === '"' || f === "'") && s[s.length - 1] === f) return s.slice(1, -1);
-  }
-  return s;
-}
-
-function toStringArray(value: unknown): string[] {
-  if (Array.isArray(value)) return value.map((v) => String(v));
-  if (typeof value === "string" && value.length > 0) return [value];
   return [];
+}
+
+// Match `negative:\n  phase: <x>\n  type: <y>`.  Both child fields are
+// always present in test262's negative blocks.
+function extractNegative(yaml: string): { phase?: string; type?: string } | undefined {
+  const block = /^negative:[ \t]*\n((?:[ \t]+\w+:.*\n?)+)/m.exec(yaml);
+  if (!block) return undefined;
+  const phase = /^[ \t]+phase:[ \t]*(.+?)[ \t]*$/m.exec(block[1])?.[1];
+  const type = /^[ \t]+type:[ \t]*(.+?)[ \t]*$/m.exec(block[1])?.[1];
+  if (phase === undefined && type === undefined) return undefined;
+  return { phase, type };
 }
 
 // ---------------------------------------------------------------------------
