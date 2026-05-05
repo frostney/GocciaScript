@@ -25,7 +25,14 @@
  *
  * Usage:
  *   bun scripts/run_test262_suite.ts [options]
- *   bun scripts/run_test262_suite.ts --comment <results.json> <baseline.json>
+ *   bun scripts/run_test262_suite.ts --comment <results.json> <baseline.json|->
+ *
+ * --comment writes the PR comment markdown to stdout.  When run with a
+ * cached `main` baseline, it also serves as the conformance gate: it
+ * exits non-zero iff total pass count dropped or any previously-passing
+ * test transitioned to non-PASS.  Steady-state failures (the long tail
+ * of unimplemented features) remain non-blocking via continue-on-error
+ * on the conformance job itself; only true regressions block.
  *
  * See docs/test262.md for the full harness contract.
  */
@@ -1305,6 +1312,41 @@ interface BaselineSummary {
   failed?: number;
 }
 
+interface RegressionDelta {
+  hasBaseline: boolean;
+  /** current.passed - baseline.passed; equals current.passed when hasBaseline is false. */
+  totalPassedDelta: number;
+  /** Tests that were not PASS in baseline but are PASS in current. */
+  newPasses: string[];
+  /** Tests that were PASS in baseline but are not PASS in current. */
+  newFails: string[];
+}
+
+function computeRegression(
+  data: { summary: SuiteSummary; results: PerTestRecord[] } | null,
+  baseline: { summary: BaselineSummary; results?: PerTestRecord[] } | null,
+): RegressionDelta {
+  const hasBaseline = !!(baseline && baseline.summary);
+  if (!data) return { hasBaseline, totalPassedDelta: 0, newPasses: [], newFails: [] };
+  const baseTotalPassed = hasBaseline ? (baseline!.summary.passed ?? 0) : 0;
+  const totalPassedDelta = hasBaseline
+    ? data.summary.passed - baseTotalPassed
+    : data.summary.passed;
+  const newPasses: string[] = [];
+  const newFails: string[] = [];
+  if (hasBaseline) {
+    const prevById = new Map<string, Outcome>();
+    for (const r of baseline!.results || []) prevById.set(r.id, r.status);
+    for (const r of data.results) {
+      const prev = prevById.get(r.id);
+      if (!prev) continue;
+      if (prev !== "PASS" && r.status === "PASS") newPasses.push(r.id);
+      else if (prev === "PASS" && r.status !== "PASS") newFails.push(r.id);
+    }
+  }
+  return { hasBaseline, totalPassedDelta, newPasses, newFails };
+}
+
 interface AreaBucket {
   key: string;
   attempted: number;
@@ -1331,7 +1373,7 @@ function bucketAreas(results: PerTestRecord[]): Map<string, AreaBucket> {
 function buildCommentMarkdown(
   data: { summary: SuiteSummary; results: PerTestRecord[] } | null,
   baseline: { summary: BaselineSummary; results?: PerTestRecord[] } | null,
-): string {
+): { markdown: string; regressed: boolean } {
   const marker = "<!-- test262-results -->";
   let body = "## test262 Conformance\n\n";
 
@@ -1339,11 +1381,18 @@ function buildCommentMarkdown(
     body +=
       "_test262 results were not produced for this run._\n\n" +
       "<sub>Non-blocking. The conformance job either timed out, crashed, or did not upload an artifact. See the workflow run for details.</sub>\n";
-    return marker + "\n" + body;
+    return { markdown: marker + "\n" + body, regressed: false };
   }
 
   const s = data.summary;
-  const hasBaseline = !!(baseline && baseline.summary);
+  const delta = computeRegression(data, baseline);
+  const hasBaseline = delta.hasBaseline;
+  const regressed =
+    hasBaseline && (delta.totalPassedDelta < 0 || delta.newFails.length > 0);
+
+  if (regressed) {
+    body += `> 🚫 **Regression vs cached \`main\` baseline.** ${delta.newFails.length} previously-passing test(s) now fail; pass count Δ ${delta.totalPassedDelta >= 0 ? "+" : ""}${delta.totalPassedDelta}. This run blocks merge — see "Newly failing" below.\n\n`;
+  }
   const baselineByCat = new Map<string, CategorySummary>();
   if (hasBaseline) {
     for (const c of baseline!.summary.byCategory || []) {
@@ -1369,8 +1418,7 @@ function buildCommentMarkdown(
   const baseTotalRun = (baseline?.summary.totalRun) ?? 0;
   const baseTotalPassed = (baseline?.summary.passed) ?? 0;
   const baseTotalRate = baseTotalRun > 0 ? baseTotalPassed / baseTotalRun : null;
-  const dTotalPass = hasBaseline ? s.passed - baseTotalPassed : s.passed;
-  body += `| **total** | ${fmt(s.totalRun)} | ${fmt(s.passed)} | ${hasBaseline ? signed(dTotalPass) : "🆕"} | ${fmt(s.failed)} | ${pct(s.passed, s.totalRun)} | ${signedPp(totalRate, baseTotalRate)} |\n\n`;
+  body += `| **total** | ${fmt(s.totalRun)} | ${fmt(s.passed)} | ${hasBaseline ? signed(delta.totalPassedDelta) : "🆕"} | ${fmt(s.failed)} | ${pct(s.passed, s.totalRun)} | ${signedPp(totalRate, baseTotalRate)} |\n\n`;
 
   // Areas closest to 100%
   const MIN_SAMPLE = 25;
@@ -1412,41 +1460,29 @@ function buildCommentMarkdown(
   }
 
   // Per-test deltas (collapsible)
-  if (hasBaseline) {
-    const baselineStatusById = new Map<string, Outcome>();
-    for (const r of baseline!.results || []) baselineStatusById.set(r.id, r.status);
-    const newPasses: string[] = [];
-    const newFails: string[] = [];
-    for (const r of data.results) {
-      const prev = baselineStatusById.get(r.id);
-      if (!prev) continue;
-      if (prev !== "PASS" && r.status === "PASS") newPasses.push(r.id);
-      else if (prev === "PASS" && r.status !== "PASS") newFails.push(r.id);
+  if (hasBaseline && (delta.newPasses.length > 0 || delta.newFails.length > 0)) {
+    body += `<details${regressed ? " open" : ""}>\n<summary>Per-test deltas (+${delta.newPasses.length} / -${delta.newFails.length})</summary>\n\n`;
+    if (delta.newFails.length > 0) {
+      body += `**Newly failing (${delta.newFails.length}):**\n\n`;
+      for (const id of delta.newFails.slice(0, 100)) body += `- \`${id}\`\n`;
+      if (delta.newFails.length > 100) body += `- _… ${delta.newFails.length - 100} more_\n`;
+      body += "\n";
     }
-    if (newPasses.length > 0 || newFails.length > 0) {
-      body += `<details>\n<summary>Per-test deltas (+${newPasses.length} / -${newFails.length})</summary>\n\n`;
-      if (newFails.length > 0) {
-        body += `**Newly failing (${newFails.length}):**\n\n`;
-        for (const id of newFails.slice(0, 100)) body += `- \`${id}\`\n`;
-        if (newFails.length > 100) body += `- _… ${newFails.length - 100} more_\n`;
-        body += "\n";
-      }
-      if (newPasses.length > 0) {
-        body += `**Newly passing (${newPasses.length}):**\n\n`;
-        for (const id of newPasses.slice(0, 100)) body += `- \`${id}\`\n`;
-        if (newPasses.length > 100) body += `- _… ${newPasses.length - 100} more_\n`;
-        body += "\n";
-      }
-      body += "</details>\n\n";
+    if (delta.newPasses.length > 0) {
+      body += `**Newly passing (${delta.newPasses.length}):**\n\n`;
+      for (const id of delta.newPasses.slice(0, 100)) body += `- \`${id}\`\n`;
+      if (delta.newPasses.length > 100) body += `- _… ${delta.newPasses.length - 100} more_\n`;
+      body += "\n";
     }
+    body += "</details>\n\n";
   }
 
   const baselineNote = hasBaseline
     ? " Δ vs main compares against the most recent cached `main` baseline."
     : " No `main` baseline cached yet — Δ columns will appear once a `main` run completes.";
-  body += `<sub>Non-blocking. Measured on ubuntu-latest x64, bytecode mode. Areas grouped by the first two test262 path components; minimum 25 attempted tests, areas already at 100% excluded.${baselineNote}</sub>\n`;
+  body += `<sub>Steady-state failures are non-blocking; regressions vs the cached main baseline (lower total pass count, or any PASS → non-PASS transition) fail the conformance gate. Measured on ubuntu-latest x64, bytecode mode. Areas grouped by the first two test262 path components; minimum 25 attempted tests, areas already at 100% excluded.${baselineNote}</sub>\n`;
 
-  return marker + "\n" + body;
+  return { markdown: marker + "\n" + body, regressed };
 }
 
 function runComment(argv: string[]): number {
@@ -1470,7 +1506,16 @@ function runComment(argv: string[]): number {
       // Missing baseline is fine — surfaces as 🆕 in the table.
     }
   }
-  process.stdout.write(buildCommentMarkdown(data, baseline));
+  const { markdown, regressed } = buildCommentMarkdown(data, baseline);
+  process.stdout.write(markdown);
+  if (regressed) {
+    // Single-line CI annotation; the per-test list is already in the
+    // markdown comment posted to the PR, so don't repeat it here.
+    console.error(
+      "::error title=test262 regression::Pass count dropped or a previously-passing test now fails. See the PR comment for per-test deltas.",
+    );
+    return 1;
+  }
   return 0;
 }
 
