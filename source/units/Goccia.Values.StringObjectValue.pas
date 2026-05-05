@@ -1009,30 +1009,38 @@ var
   MatchArray: TGocciaObjectValue;
   MatchIndex, MatchEnd, NextIndex, Offset: Integer;
 begin
-  // Step 1: Let O be RequireObjectCoercible(this value)
-  // Step 2: Let string be ToString(O)
-  StringValue := ExtractStringValue(AThisValue);
+  // ES2026 §22.1.3.19 String.prototype.replace:
+  //   1. Let O be ? RequireObjectCoercible(this value).
+  //   2. If searchValue is neither undefined nor null:
+  //      c. Let replacer be ? GetMethod(searchValue, @@replace).
+  //      d. If replacer is not undefined: return ? Call(replacer, searchValue, « O, replaceValue »).
+  //   3. Let string be ? ToString(O).
+  // Step 1 — RequireObjectCoercible: throw if `this` is null/undefined.
+  if (AThisValue is TGocciaUndefinedLiteralValue) or
+     (AThisValue is TGocciaNullLiteralValue) then
+    ThrowTypeError(SErrorStringPrototypeRequiresNonNullish, SSuggestCheckNullBeforeAccess);
 
-  // Step 3: Let searchString be ToString(searchValue)
   if AArgs.Length > 0 then
     SearchArg := AArgs.GetElement(0)
   else
     SearchArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  // Step 4: Let replaceValue (or functionalReplace if callable)
   if AArgs.Length > 1 then
     ReplaceArg := AArgs.GetElement(1)
   else
     ReplaceArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
+  // Step 2.c-d: dispatch to @@replace before doing any ToString on O —
+  // matches the StringReplaceAllMethod fix above.
   ReplaceMethod := GetMethodBySymbol(SearchArg,
     TGocciaSymbolValue.WellKnownReplace);
   if not (ReplaceMethod is TGocciaUndefinedLiteralValue) then
   begin
     if not ReplaceMethod.IsCallable then
       ThrowTypeError(SErrorSymbolReplaceNotCallable, SSuggestWellKnownSymbolCallable);
+    // Spec passes O through to the replacer — not a stringified copy.
     CallArgs := TGocciaArgumentsCollection.Create([
-      TGocciaStringLiteralValue.Create(StringValue),
+      AThisValue,
       ReplaceArg
     ]);
     try
@@ -1042,6 +1050,9 @@ begin
     end;
     Exit;
   end;
+
+  // Step 3: Let string be ? ToString(O).
+  StringValue := ExtractStringValue(AThisValue);
 
   if IsRegExpValue(SearchArg) then
   begin
