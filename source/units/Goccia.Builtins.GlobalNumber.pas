@@ -32,6 +32,8 @@ uses
   Math,
   SysUtils,
 
+  TextSemantics,
+
   Goccia.Arguments.Validator,
   Goccia.Constants.NumericLimits,
   Goccia.Values.NativeFunction,
@@ -88,7 +90,7 @@ begin
 
   // Step 1: Let inputString be ? ToString(string)
   // Step 2: Let S be ! TrimString(inputString, start)
-  InputStr := Trim(AArgs.GetElement(0).ToStringLiteral.Value);
+  InputStr := TrimECMAScriptWhitespace(AArgs.GetElement(0).ToStringLiteral.Value);
   if InputStr = '' then
   begin
     Result := TGocciaNumberLiteralValue.NaNValue;
@@ -201,7 +203,7 @@ begin
 
   // Step 1: Let inputString be ? ToString(string)
   // Step 2: Let trimmedString be ! TrimString(inputString, start)
-  InputStr := Trim(AArgs.GetElement(0).ToStringLiteral.Value);
+  InputStr := TrimECMAScriptWhitespace(AArgs.GetElement(0).ToStringLiteral.Value);
   if InputStr = '' then
   begin
     Result := TGocciaNumberLiteralValue.NaNValue;
