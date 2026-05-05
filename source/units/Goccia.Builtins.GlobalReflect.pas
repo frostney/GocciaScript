@@ -43,6 +43,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
@@ -52,6 +53,7 @@ uses
   Goccia.Values.HoleValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue;
 
 threadvar
@@ -129,15 +131,69 @@ begin
 end;
 
 // ES2026 §28.1.2 Reflect.construct(target, argumentsList [, newTarget])
-// ES2026 §7.2.4 IsConstructor(argument) — check if a value can be used with new
+// ES2026 §7.2.4 IsConstructor(argument): defer to the value's virtual
+// IsConstructable. Each TGocciaFunctionBase descendant overrides it to
+// match the spec — function declarations/expressions return true (they own
+// a `prototype` data property), while arrow, async, generator, async-
+// generator, concise method, and revoked-proxy targets return false.
+// Bound functions delegate to their underlying [[BoundTargetFunction]],
+// matching ES2026 §10.4.1.2.
 function IsConstructorValue(const AValue: TGocciaValue): Boolean;
 begin
-  if AValue is TGocciaClassValue then
-    Exit(True);
-  if (AValue is TGocciaNativeFunctionValue) and
-     not TGocciaNativeFunctionValue(AValue).NotConstructable then
-    Exit(True);
-  Result := False;
+  Result := AValue.IsConstructable;
+end;
+
+// Walk through chained bound functions to find the [[Construct]]-bearing target.
+// Used to read `.prototype` for receiver allocation per ES2026 §10.1.14
+// GetPrototypeFromConstructor — the bound wrapper has no own `prototype`.
+function UnwrapBoundFunction(const AValue: TGocciaValue): TGocciaValue;
+begin
+  Result := AValue;
+  while Result is TGocciaBoundFunctionValue do
+    Result := TGocciaBoundFunctionValue(Result).OriginalFunction;
+end;
+
+// ES2026 §10.1.14 GetPrototypeFromConstructor: read newTarget.prototype;
+// if it is not an Object, fall back to %Object.prototype%.
+function GetProtoFromConstructor(const ANewTarget: TGocciaValue): TGocciaObjectValue;
+var
+  Unwrapped, ProtoValue: TGocciaValue;
+begin
+  Unwrapped := UnwrapBoundFunction(ANewTarget);
+  if Unwrapped is TGocciaObjectValue then
+    ProtoValue := TGocciaObjectValue(Unwrapped).GetProperty(PROP_PROTOTYPE)
+  else
+    ProtoValue := nil;
+
+  if ProtoValue is TGocciaObjectValue then
+    Result := TGocciaObjectValue(ProtoValue)
+  else
+  begin
+    if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+      TGocciaObjectValue.InitializeSharedPrototype;
+    Result := TGocciaObjectValue.SharedObjectPrototype;
+  end;
+end;
+
+// ES2026 §10.2.2 [[Construct]] for ordinary function objects: call the body
+// with the receiver as `this`; if the body returns an Object, that wins —
+// otherwise the receiver is the result.
+function ConstructOrdinaryWithReceiver(const ATarget: TGocciaFunctionBase;
+  const AArguments: TGocciaArgumentsCollection;
+  const AReceiver: TGocciaObjectValue): TGocciaValue;
+var
+  ReturnValue: TGocciaValue;
+begin
+  TGarbageCollector.Instance.AddTempRoot(AReceiver);
+  try
+    ReturnValue := ATarget.Call(AArguments, AReceiver);
+    if ReturnValue is TGocciaObjectValue then
+      Result := ReturnValue
+    else
+      Result := AReceiver;
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(AReceiver);
+  end;
 end;
 
 function TGocciaGlobalReflect.ReflectConstruct(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -145,9 +201,13 @@ var
   Target: TGocciaValue;
   ArgsList: TGocciaValue;
   NewTarget: TGocciaValue;
-  CallArgs: TGocciaArgumentsCollection;
+  CallArgs, CombinedArgs: TGocciaArgumentsCollection;
   ProtoValue: TGocciaValue;
   NewTargetClass: TGocciaClassValue;
+  Receiver: TGocciaObjectValue;
+  EffectiveTarget: TGocciaValue;
+  BoundFn: TGocciaBoundFunctionValue;
+  I: Integer;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Reflect.construct', ThrowError);
 
@@ -171,32 +231,71 @@ begin
     else
       NewTarget := Target;
 
+    // Bound function target (§10.4.1.2): merge bound and call args, then
+    // dispatch on the underlying [[BoundTargetFunction]]. The bound wrapper
+    // contributes no [[Prototype]] of its own, so newTarget continues to
+    // drive receiver allocation for non-class underlying targets.
+    EffectiveTarget := Target;
+    while EffectiveTarget is TGocciaBoundFunctionValue do
+    begin
+      BoundFn := TGocciaBoundFunctionValue(EffectiveTarget);
+      CombinedArgs := TGocciaArgumentsCollection.CreateWithCapacity(
+        BoundFn.BoundArgCount + CallArgs.Length);
+      try
+        for I := 0 to BoundFn.BoundArgCount - 1 do
+          CombinedArgs.Add(BoundFn.GetBoundArg(I));
+        for I := 0 to CallArgs.Length - 1 do
+          CombinedArgs.Add(CallArgs.GetElement(I));
+      except
+        CombinedArgs.Free;
+        raise;
+      end;
+      CallArgs.Free;
+      CallArgs := CombinedArgs;
+      EffectiveTarget := BoundFn.OriginalFunction;
+    end;
+
     // Step 4: Return ? Construct(target, args, newTarget)
-    if Target is TGocciaClassValue then
+    if EffectiveTarget is TGocciaProxyValue then
+      Result := TGocciaProxyValue(EffectiveTarget).ConstructTrap(CallArgs)
+    else if EffectiveTarget is TGocciaClassValue then
     begin
       if NewTarget is TGocciaClassValue then
       begin
         NewTargetClass := TGocciaClassValue(NewTarget);
-        if NewTargetClass <> TGocciaClassValue(Target) then
-          Result := TGocciaClassValue(Target).Instantiate(CallArgs, NewTargetClass)
+        if NewTargetClass <> TGocciaClassValue(EffectiveTarget) then
+          Result := TGocciaClassValue(EffectiveTarget).Instantiate(CallArgs, NewTargetClass)
         else
-          Result := TGocciaClassValue(Target).Instantiate(CallArgs);
+          Result := TGocciaClassValue(EffectiveTarget).Instantiate(CallArgs);
       end
       else
       begin
-        // newTarget is a native function — get its .prototype for the instance
-        Result := TGocciaClassValue(Target).Instantiate(CallArgs);
-        ProtoValue := NewTarget.GetProperty(PROP_PROTOTYPE);
+        // newTarget is a non-class constructor — patch the instance prototype
+        // from newTarget.prototype after instantiation (Instantiate only
+        // accepts a class for its newTarget parameter).
+        Result := TGocciaClassValue(EffectiveTarget).Instantiate(CallArgs);
+        ProtoValue := UnwrapBoundFunction(NewTarget).GetProperty(PROP_PROTOTYPE);
         if ProtoValue is TGocciaObjectValue then
           TGocciaObjectValue(Result).Prototype := TGocciaObjectValue(ProtoValue);
       end;
     end
-    else
+    else if EffectiveTarget is TGocciaNativeFunctionValue then
     begin
-      // Target is a native function constructor
-      Result := TGocciaNativeFunctionValue(Target).Call(CallArgs,
+      // Native constructors create their own internal-slot-backed instance;
+      // the receiver is unused so we pass HoleValue. newTarget-driven
+      // prototype propagation for native constructors is not yet wired here.
+      Result := TGocciaNativeFunctionValue(EffectiveTarget).Call(CallArgs,
         TGocciaHoleValue.HoleValue);
-    end;
+    end
+    else if EffectiveTarget is TGocciaFunctionBase then
+    begin
+      Receiver := TGocciaObjectValue.Create(GetProtoFromConstructor(NewTarget));
+      Result := ConstructOrdinaryWithReceiver(TGocciaFunctionBase(EffectiveTarget),
+        CallArgs, Receiver);
+    end
+    else
+      ThrowTypeError(SErrorReflectConstructTargetMustBeConstructor,
+        SSuggestNotConstructorType);
   finally
     CallArgs.Free;
   end;
