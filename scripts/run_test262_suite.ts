@@ -79,13 +79,21 @@ const KNOWN_ENGINE_CRASHES = new Set<string>([
 //
 // test262 frontmatter is YAML, but the orchestrator only consumes three
 // fields: `flags` (e.g. async / module / raw), `includes` (extra harness
-// files), and `negative.{phase, type}`.  Free-form fields like
-// `description`, `info`, `esid`, `features` are not used — and `info` in
-// particular routinely contains unbalanced brackets that strict YAML
-// rejects.  Parse just what we need with targeted regex per field.
+// files), and `negative.{phase, type}`.  Free-form fields like `info`,
+// `description`, `esid`, `features` are not read by the orchestrator —
+// and `info` in particular routinely contains unbalanced brackets like
+// `String.fromCharCode ( [ char0 [ , char1 [ , ... ] ] ] )` that Bun's
+// strict YAML parser rejects.
+//
+// Strategy: line-walk the frontmatter block, copy lines that belong to
+// `flags`, `includes`, or `negative` (top-level key + its indented
+// continuation), and drop everything else.  Pass the cleaned text to
+// Bun's built-in YAML parser.  No regex; no custom YAML; we just trim
+// the input to what we need before handing it to a real YAML parser.
 
-const FRONTMATTER_RE = /\/\*---\s*\n([\s\S]*?)\n---\*\//;
-const STRIP_QUOTES = (s: string) => s.replace(/^['"]|['"]$/g, "").trim();
+const KEPT_KEYS = new Set(["flags", "includes", "negative"]);
+const FRONTMATTER_OPEN = "/*---";
+const FRONTMATTER_CLOSE = "---*/";
 
 interface Frontmatter {
   flags: string[];
@@ -99,42 +107,60 @@ interface ParsedTest {
 }
 
 function parseTest(source: string): ParsedTest {
-  const match = FRONTMATTER_RE.exec(source);
-  if (!match) return { body: source, meta: { flags: [], includes: [] } };
-  const yaml = match[1];
-  const before = source.slice(0, match.index).trimEnd();
-  const after = source.slice(match.index + match[0].length).replace(/^\n+/, "");
+  const open = source.indexOf(FRONTMATTER_OPEN);
+  const close = open < 0 ? -1 : source.indexOf(FRONTMATTER_CLOSE, open);
+  if (open < 0 || close < 0) {
+    return { body: source, meta: { flags: [], includes: [] } };
+  }
+  const blockStart = source.indexOf("\n", open) + 1;
+  const yaml = source.slice(blockStart, close).trimEnd();
+  const cleaned = stripUnreadFields(yaml);
+  const parsed = (Bun.YAML.parse(cleaned) || {}) as any;
+
+  const before = source.slice(0, open).trimEnd();
+  const after = source.slice(close + FRONTMATTER_CLOSE.length).replace(/^\n+/, "");
+  const body = (before + "\n" + after).replace(/^\n+/, "");
+
   return {
-    body: (before + "\n" + after).replace(/^\n+/, ""),
+    body,
     meta: {
-      flags: extractList(yaml, "flags"),
-      includes: extractList(yaml, "includes"),
-      negative: extractNegative(yaml),
+      flags: toStringArray(parsed.flags),
+      includes: toStringArray(parsed.includes),
+      negative:
+        parsed.negative && typeof parsed.negative === "object"
+          ? { phase: parsed.negative.phase, type: parsed.negative.type }
+          : undefined,
     },
   };
 }
 
-// Match either inline `key: [a, b]` or block `key:\n  - a\n  - b`.
-function extractList(yaml: string, key: string): string[] {
-  const inline = new RegExp(`^${key}:[ \\t]*\\[(.*)\\][ \\t]*$`, "m").exec(yaml);
-  if (inline) return inline[1].split(",").map(STRIP_QUOTES).filter(Boolean);
-  const block = new RegExp(`^${key}:[ \\t]*\\n((?:[ \\t]+-.*\\n?)+)`, "m").exec(yaml);
-  if (block) {
-    return [...block[1].matchAll(/^[ \t]+-[ \t]*(.*)$/gm)]
-      .map((m) => STRIP_QUOTES(m[1])).filter(Boolean);
+// Walk the frontmatter line-by-line; copy through any block whose
+// top-level key is one we care about, drop the rest.  A "block" is a
+// line that starts in column 0 with `<key>:` plus all following lines
+// indented under it.
+function stripUnreadFields(yaml: string): string {
+  const out: string[] = [];
+  let inKept = false;
+  for (const line of yaml.split("\n")) {
+    if (line.length === 0 || line.startsWith(" ") || line.startsWith("\t") ||
+        line.startsWith("#")) {
+      // Continuation of whatever block we're currently in (or comment).
+      if (inKept) out.push(line);
+      continue;
+    }
+    // New top-level key.
+    const colon = line.indexOf(":");
+    const key = colon > 0 ? line.slice(0, colon).trim() : "";
+    inKept = KEPT_KEYS.has(key);
+    if (inKept) out.push(line);
   }
-  return [];
+  return out.join("\n");
 }
 
-// Match `negative:\n  phase: <x>\n  type: <y>`.  Both child fields are
-// always present in test262's negative blocks.
-function extractNegative(yaml: string): { phase?: string; type?: string } | undefined {
-  const block = /^negative:[ \t]*\n((?:[ \t]+\w+:.*\n?)+)/m.exec(yaml);
-  if (!block) return undefined;
-  const phase = /^[ \t]+phase:[ \t]*(.+?)[ \t]*$/m.exec(block[1])?.[1];
-  const type = /^[ \t]+type:[ \t]*(.+?)[ \t]*$/m.exec(block[1])?.[1];
-  if (phase === undefined && type === undefined) return undefined;
-  return { phase, type };
+function toStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((v) => String(v));
+  if (typeof value === "string" && value.length > 0) return [value];
+  return [];
 }
 
 // ---------------------------------------------------------------------------
@@ -297,16 +323,26 @@ function buildTestSource(
 ): string {
   if (opts.kind === "negative_parse") return body;
   if (opts.kind === "negative_runtime") {
+    // For the error-class identification we prefer `e.constructor.name`
+    // (the spec-canonical path) but fall back to `e.name` because
+    // Goccia's native Error class hierarchy is missing
+    // `prototype.constructor` (#519) — caught Errors have
+    // `e.constructor === undefined` despite `e.name` being set
+    // correctly to "TypeError" / "ReferenceError" / etc.
     return `${harnessSource}
 try {
 ${body}
   print("Test262:NegativeTestNoError");
 } catch (__gocciaT262_e) {
-  if (__gocciaT262_e && __gocciaT262_e.constructor && __gocciaT262_e.constructor.name) {
-    print("Test262:NegativeTestError:" + __gocciaT262_e.constructor.name);
-  } else {
-    print("Test262:NegativeTestError:unknown");
+  var __gocciaT262_n = "unknown";
+  if (__gocciaT262_e && typeof __gocciaT262_e === "object") {
+    if (__gocciaT262_e.constructor && __gocciaT262_e.constructor.name) {
+      __gocciaT262_n = __gocciaT262_e.constructor.name;
+    } else if (typeof __gocciaT262_e.name === "string") {
+      __gocciaT262_n = __gocciaT262_e.name;
+    }
   }
+  print("Test262:NegativeTestError:" + __gocciaT262_n);
 }
 `;
   }
@@ -316,8 +352,14 @@ ${body}
     // through the VM's continuation machinery (which works in bytecode
     // mode), and emit the stock marker strings from this wrapper rather
     // than from $DONE itself.  See scripts/test262_harness/doneprintHandle.js.
+    //
+    // The `;` between body and IIFE is mandatory: many test262 async test
+    // bodies end with `foo().then(function() { $DONE(); })` (no trailing
+    // semicolon — relying on ASI), and the leading `(` of our IIFE would
+    // otherwise be parsed as a call on the body's last expression
+    // (`then(...)(async () => ...)`), producing "object is not a function".
     return `${harnessSource}
-${body}
+${body};
 (async () => {
   try {
     await __donePromise;
