@@ -314,7 +314,16 @@ begin
         Break;
     end;
     if HasExpDigits then
-      Mantissa := Mantissa * IntPower(10.0, ExpSign * ExpValue);
+    begin
+      // Apply exponent. Multiply for positive, divide for negative — divide
+      // gives more accurate IEEE 754 results than multiplying by 10^-N
+      // (e.g. 0.1 / 10 lands exactly on the closest double to 0.01,
+      // whereas 0.1 * 0.1 yields 0.010000000000000002).
+      if ExpSign > 0 then
+        Mantissa := Mantissa * IntPower(10.0, ExpValue)
+      else if ExpValue > 0 then
+        Mantissa := Mantissa / IntPower(10.0, ExpValue);
+    end;
     // If HasExpDigits is False the exponent indicator was a stray `e` —
     // ES2026 §21.1.2.13.1 returns the longest valid prefix, which is the
     // mantissa alone. Mantissa already holds it; nothing else to do.
