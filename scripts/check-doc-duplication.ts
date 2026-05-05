@@ -119,7 +119,7 @@ const NUM_HASHES = 128;
 const NUM_BANDS = 32;
 const ROWS_PER_BAND = NUM_HASHES / NUM_BANDS; // 4
 const EXTENSIONS = new Set([".md", ".mdx"]);
-const IGNORE_DIRS = new Set(["node_modules", ".git", ".agents", "dist", "build", ".next", "vendor"]);
+const IGNORE_DIRS = new Set(["node_modules", ".git", ".agents", ".claude", "dist", "build", ".next", "vendor"]);
 // Build artifacts whose contents are synced from elsewhere and validated at
 // the source location. Path-prefix matched against repo-relative paths.
 const IGNORE_PATH_PREFIXES = ["website/content/docs/"];

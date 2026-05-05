@@ -34,6 +34,7 @@
     "**/node_modules/**",
     "CHANGELOG.md",
     ".agents/skills/**",
+    ".claude/**",
     "website/content/docs/**",
     // Claude Code @-include shim files — single-line `@OTHER.md` directives
     // that aren't real markdown.

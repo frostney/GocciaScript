@@ -24,7 +24,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
 const VERBOSE = process.argv.includes("--verbose");
 const EXTENSIONS = new Set([".md", ".mdx"]);
-const IGNORE_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "vendor"]);
+const IGNORE_DIRS = new Set(["node_modules", ".git", ".agents", ".claude", "dist", "build", ".next", "vendor"]);
 // Build artifacts whose contents are synced from elsewhere and validated at
 // the source location. Path-prefix matched against repo-relative paths.
 const IGNORE_PATH_PREFIXES = ["website/content/docs/"];
