@@ -784,7 +784,7 @@ items.filter((item) => item.isValid);
 items.reduce((acc, item) => acc + item, 0);
 ```
 
-`break` and `continue` are available inside `switch` statements, `for...of`/`for await...of`, and (with the flag enabled) traditional `for(;;)` loops.
+`break` exits the nearest enclosing `switch`, `for...of`, `for await...of`, or (with the flag enabled) traditional `for(;;)` loop. `continue` only applies to iteration constructs — `for...of`, `for await...of`, and traditional `for(;;)` — never to `switch`.
 
 ### `while` and `do...while`
 

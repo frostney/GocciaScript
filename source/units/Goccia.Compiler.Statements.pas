@@ -2116,12 +2116,18 @@ begin
     Exit;
   // ES2026 §14.7.4.4 evaluates the test expression each iteration. The fast
   // path snapshots LimitReg once before the loop, so anything that can change
-  // between iterations would diverge from the spec. Restrict to literals —
-  // ForBodyAssignsIdentifier doesn't see writes inside IIFEs, callbacks,
-  // property setters, or eval-like reaches, so a bare-identifier RHS is
-  // unsafe even for `i < limit` shapes. Identifier and any other RHS shapes
-  // fall through to the general path which re-evaluates the condition.
+  // between iterations would diverge from the spec. Restrict to integer-valued
+  // numeric literals only — `ForBodyAssignsIdentifier` doesn't see writes
+  // through IIFEs/callbacks/property setters, so a bare-identifier RHS is
+  // unsafe; and the emitted compare uses OP_GTE_INT/OP_LTE_INT, so a
+  // non-integer literal like `i < 3.5` would round in surprising ways
+  // relative to the spec's IEEE 754 compare.
   if not (CondExpr.Right is TGocciaLiteralExpression) then
+    Exit;
+  if not (TGocciaLiteralExpression(CondExpr.Right).Value is TGocciaNumberLiteralValue) then
+    Exit;
+  if Frac(TGocciaNumberLiteralValue(
+       TGocciaLiteralExpression(CondExpr.Right).Value).Value) <> 0 then
     Exit;
 
   case CondExpr.Operator of

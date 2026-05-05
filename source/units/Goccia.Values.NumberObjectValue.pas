@@ -199,9 +199,13 @@ begin
   Result := TGocciaStringLiteralValue.Create(FormatFloat('0.' + StringOfChar('0', Digits), Prim.Value));
 end;
 
-// Convert a finite non-negative integer to its base-AR digit sequence, using
-// 0-9 and a-z (lowercase) for digit values 10-35.
-function IntegerToRadixString(const AValue: Int64; const ARadix: Integer): string;
+// Convert a finite non-negative integer-valued Double to its base-ARadix
+// digit sequence, using 0-9 and a-z (lowercase) for digit values 10-35.
+// Uses Double arithmetic so any finite Number (including those above
+// Int64.MaxValue or 2^53) gets a sensible representation; doubles past 2^53
+// are necessarily aligned to powers of 2 and the trailing digits reflect that
+// alignment per ES2026 §6.1.6.1.20's "implementation-defined" clause.
+function IntegerToRadixString(const AValue: Double; const ARadix: Integer): string;
 const
   DIGITS: array[0..35] of Char =
     ('0','1','2','3','4','5','6','7','8','9',
@@ -209,7 +213,8 @@ const
      'k','l','m','n','o','p','q','r','s','t',
      'u','v','w','x','y','z');
 var
-  V: Int64;
+  V, Q: Double;
+  D: Integer;
 begin
   if AValue = 0 then
     Exit('0');
@@ -217,14 +222,21 @@ begin
   Result := '';
   while V > 0 do
   begin
-    Result := DIGITS[V mod ARadix] + Result;
-    V := V div ARadix;
+    Q := Trunc(V / ARadix);
+    D := Trunc(V - Q * ARadix);
+    if D < 0 then D := 0;
+    if D > ARadix - 1 then D := ARadix - 1;
+    Result := DIGITS[D] + Result;
+    V := Q;
   end;
 end;
 
 // Convert a positive finite fractional value (0 < AValue < 1) to its base-ARadix
-// representation. Uses a fixed precision of 52 fractional digits — enough to
-// round-trip a binary64 mantissa for any base ≥ 2 — and trims trailing zeros.
+// representation. The digit budget is sized to capture the binary64 mantissa
+// in any radix (53 / Log2(R), rounded up, with headroom) so common values like
+// (0.1).toString(2) emit enough binary digits to round-trip within double
+// precision — full subnormal range (which can need ~1074 binary digits) is
+// out of scope and tracked separately.
 function FractionToRadixString(const AValue: Double; const ARadix: Integer): string;
 const
   DIGITS: array[0..35] of Char =
@@ -232,15 +244,18 @@ const
      'a','b','c','d','e','f','g','h','i','j',
      'k','l','m','n','o','p','q','r','s','t',
      'u','v','w','x','y','z');
-const
-  MAX_DIGITS = 52;
 var
   V: Double;
-  Digit, I, LastNonZero: Integer;
+  Digit, I, LastNonZero, MaxDigits: Integer;
 begin
   Result := '';
   V := AValue;
-  for I := 1 to MAX_DIGITS do
+  // Ceil(53 / Log2(ARadix)) — enough for binary64 mantissa precision in any
+  // base 2..36.  Add a small constant headroom for the rounding-into-the-next
+  // place behaviour at the boundary.  53/Ln(2) ≈ 76, divided by Ln(R)/Ln(2).
+  MaxDigits := Trunc(53.0 / (Ln(ARadix) / Ln(2.0))) + 4;
+  if MaxDigits < 16 then MaxDigits := 16;
+  for I := 1 to MaxDigits do
   begin
     V := V * ARadix;
     Digit := Trunc(V);
@@ -305,7 +320,7 @@ begin
       Sign := '';
     IntPart := Trunc(V);
     FracPart := V - IntPart;
-    IntStr := IntegerToRadixString(Round(IntPart), Radix);
+    IntStr := IntegerToRadixString(IntPart, Radix);
     if FracPart > 0 then
     begin
       FracStr := FractionToRadixString(FracPart, Radix);
