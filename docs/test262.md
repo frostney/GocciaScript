@@ -99,17 +99,29 @@ try {
 {body}
   print("Test262:NegativeTestNoError");
 } catch (__gocciaT262_e) {
-  if (__gocciaT262_e && __gocciaT262_e.constructor && __gocciaT262_e.constructor.name) {
-    print("Test262:NegativeTestError:" + __gocciaT262_e.constructor.name);
-  } else {
-    print("Test262:NegativeTestError:unknown");
+  var __gocciaT262_n = "unknown";
+  if (__gocciaT262_e && typeof __gocciaT262_e === "object") {
+    if (__gocciaT262_e.constructor && __gocciaT262_e.constructor.name) {
+      __gocciaT262_n = __gocciaT262_e.constructor.name;
+    } else if (typeof __gocciaT262_e.name === "string") {
+      __gocciaT262_n = __gocciaT262_e.name;
+    }
   }
+  print("Test262:NegativeTestError:" + __gocciaT262_n);
 }
 ```
 
-The single binding `__gocciaT262_e` is catch-param-scoped and cannot
-collide with body-level vars. This is the only Goccia-specific
-identifier in the generated source.
+The error-class identification has a two-step fallback: prefer
+`e.constructor.name` (the spec-canonical path), fall back to `e.name`.
+The fallback exists because Goccia's native Error class hierarchy is
+currently missing `prototype.constructor` — caught Errors have
+`e.constructor === undefined` despite `e.name` being set correctly to
+`"TypeError"` / `"ReferenceError"` / etc.
+
+The bindings `__gocciaT262_e` (catch parameter) and `__gocciaT262_n`
+(local var inside catch) are the only Goccia-specific identifiers in
+the generated source. Both are catch-block-scoped and cannot collide
+with body-level vars.
 
 ### Negative parse
 
