@@ -7,6 +7,8 @@ uses
 
   TestingPascalLibrary,
 
+  Goccia.Constants.ErrorNames,
+  Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.TestSetup,
   Goccia.Values.Error,
@@ -66,6 +68,8 @@ var
   ObjectValue: TGocciaObjectValue;
   DebugString: string;
   ToStringThrew: Boolean;
+  ThrownNameValue: TGocciaValue;
+  ThrownTypeName: string;
 begin
   ObjectValue := SimpleObject;
   DebugString := ObjectValue.ToDebugString;
@@ -82,17 +86,26 @@ begin
   // (no prototype assigned in this test fixture) throws TypeError because
   // neither toString() nor valueOf() can be located. This exercises the spec
   // path through ToPrimitive(string). Real engine objects always inherit
-  // Object.prototype and therefore stringify successfully. Catch only
-  // TGocciaThrowValue (the JS-level TypeError) — any other exception class
-  // indicates a real bug and must propagate.
+  // Object.prototype and therefore stringify successfully. Verify both that
+  // the throw fires AND that the JS-level error name is "TypeError" — any
+  // other thrown error class would be a real bug masking the spec one.
   ToStringThrew := False;
+  ThrownTypeName := '';
   try
     ObjectValue.ToStringLiteral;
   except
-    on TGocciaThrowValue do
+    on E: TGocciaThrowValue do
+    begin
       ToStringThrew := True;
+      ThrownNameValue := nil;
+      if E.Value is TGocciaObjectValue then
+        ThrownNameValue := TGocciaObjectValue(E.Value).GetProperty(PROP_NAME);
+      if ThrownNameValue is TGocciaStringLiteralValue then
+        ThrownTypeName := TGocciaStringLiteralValue(ThrownNameValue).Value;
+    end;
   end;
   Expect<Boolean>(ToStringThrew).ToBe(True);
+  Expect<string>(ThrownTypeName).ToBe(TYPE_ERROR_NAME);
 
   Expect<Boolean>(ObjectValue.ToBooleanLiteral.Value).ToBe(True);
   Expect<Boolean>(ObjectValue.ToNumberLiteral.IsNaN).ToBe(True);
