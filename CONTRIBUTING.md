@@ -32,6 +32,12 @@ When your change affects behavior visible to users or contributors, update the r
 
 `docs/` files are about the GocciaScript project (engine, language, runtime). Contributing guides are about FreePascal contribution standards. Match the voice and structure of the target document.
 
+## Implementation principles
+
+- **Prefer modifying existing code** — Update, simplify, or replace the existing implementation before adding parallel code paths or new helpers.
+- **Simplify and centralize** — Keep the smallest complete implementation. When the same logic is needed more than once, centralize it so behavior, validation, and error formatting do not drift. Centralization must follow the existing architecture, ownership boundaries, and project patterns in [Architecture](docs/architecture.md), [Core Patterns](docs/core-patterns.md), and [Code Style](docs/contributing/code-style.md); do not create a new abstraction that cuts across those boundaries without a clear design reason.
+- **Verify against the official spec** — For ECMAScript behavior, check the current official ECMA-262 text before implementing or reviewing semantics. Use spec comments as described in [Code Style](docs/contributing/code-style.md#ecmascript-spec-annotations), but do not treat comments as a substitute for reading the spec. When behavior is ambiguous or bug reports appear to conflict with the spec, compare against other JavaScript engine implementations such as V8, SpiderMonkey, JavaScriptCore, or Node.js before deciding the expected behavior.
+
 ## Critical rules
 
 These rules **must** be followed when modifying the codebase:
