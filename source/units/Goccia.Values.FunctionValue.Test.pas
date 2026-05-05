@@ -19,6 +19,7 @@ uses
   Goccia.Scope,
   Goccia.TestSetup,
   Goccia.Token,
+  Goccia.Values.Error,
   Goccia.Values.FunctionValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -83,6 +84,7 @@ type
     Parameters: TStringList;
     ReturnValue: TGocciaValue;
     Args: TGocciaArgumentsCollection;
+    ToStringThrew: Boolean;
   begin
     Scope := TGocciaGlobalScope.Create;
     Parameters := TStringList.Create;
@@ -91,7 +93,21 @@ type
 
     // Test basic function properties
     Expect<Boolean>(FunctionValue.ToBooleanLiteral.Value).ToBe(True);
-    Expect<string>(FunctionValue.ToStringLiteral.Value).ToBe('[function Object]');
+
+    // ES2026 §7.1.17 ToString on a function fixture without Function.prototype
+    // (no engine init in this Pascal test) throws TypeError because neither
+    // toString() nor valueOf() can be located through the prototype chain.
+    // Real engine functions inherit Function.prototype.toString and stringify
+    // to "function name() { ... }".
+    ToStringThrew := False;
+    try
+      FunctionValue.ToStringLiteral;
+    except
+      on TGocciaThrowValue do
+        ToStringThrew := True;
+    end;
+    Expect<Boolean>(ToStringThrew).ToBe(True);
+
     Expect<Boolean>(FunctionValue.ToNumberLiteral.IsNaN).ToBe(True);
     Expect<string>(FunctionValue.TypeName).ToBe('function');
 
