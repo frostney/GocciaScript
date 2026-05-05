@@ -515,6 +515,119 @@ console.log("Per-file compat-var config across all apps...");
   }
 }
 
+// -- Per-file compat-traditional-for-loop config across all apps ---------------
+
+console.log("Per-file compat-traditional-for-loop config across all apps...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(
+      join(tmp, "goccia.json"),
+      '{"compat-traditional-for-loop": true}\n',
+    );
+    writeFileSync(
+      join(tmp, "test.js"),
+      "let s = 0;\nfor (let i = 0; i < 5; i++) { s += i; }\ns;\n",
+    );
+    writeFileSync(
+      join(tmp, "test-runner.js"),
+      [
+        'describe("for", () => {',
+        '  test("counts", () => {',
+        "    let s = 0;",
+        "    for (let i = 0; i < 5; i++) s += i;",
+        "    expect(s).toBe(10);",
+        "  });",
+        "});",
+      ].join("\n") + "\n",
+    );
+    writeFileSync(
+      join(tmp, "bench.js"),
+      [
+        'suite("for", () => {',
+        '  bench("count", {',
+        "    run: () => {",
+        "      let s = 0;",
+        "      for (let i = 0; i < 10; i++) s += i;",
+        "      return s;",
+        "    },",
+        "  });",
+        "});",
+      ].join("\n") + "\n",
+    );
+
+    // Loader (interpreted)
+    const loaderOut = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
+    if (!containsLine(loaderOut, "10")) throw new Error(`Loader interp compat-traditional-for-loop should produce 10 on its own line, got: ${loaderOut}`);
+
+    // Loader (bytecode)
+    const loaderBc = await $`${LOADER} --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
+    if (!containsLine(loaderBc, "10")) throw new Error(`Loader bytecode compat-traditional-for-loop should produce 10 on its own line, got: ${loaderBc}`);
+
+    // TestRunner (interpreted)
+    const trInterp = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --no-progress 2>&1`.text();
+    if (!trInterp.includes("Passed: 1")) throw new Error(`TestRunner interp compat-traditional-for-loop should pass, got: ${trInterp}`);
+
+    // TestRunner (bytecode)
+    const trBc = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --mode=bytecode --no-progress 2>&1`.text();
+    if (!trBc.includes("Passed: 1")) throw new Error(`TestRunner bytecode compat-traditional-for-loop should pass, got: ${trBc}`);
+
+    // Bundler
+    await $`${BUNDLER} ${join(tmp, "test.js")}`.quiet();
+    if (!existsSync(join(tmp, "test.gbc"))) throw new Error("Bundler compat-traditional-for-loop should compile");
+
+    // BenchmarkRunner (interpreted)
+    const benchInterp = Bun.spawnSync(
+      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--no-progress"],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
+        timeout: 60_000,
+      },
+    );
+    if (benchInterp.exitCode !== 0) throw new Error(`BenchmarkRunner interp compat-traditional-for-loop exited ${benchInterp.exitCode}: ${benchInterp.stderr.toString()}`);
+    if (!benchInterp.stdout.toString().includes("for")) throw new Error("BenchmarkRunner interp compat-traditional-for-loop should mention 'for'");
+
+    // BenchmarkRunner (bytecode)
+    const benchBc = Bun.spawnSync(
+      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--mode=bytecode", "--no-progress"],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
+        timeout: 60_000,
+      },
+    );
+    if (benchBc.exitCode !== 0) throw new Error(`BenchmarkRunner bytecode compat-traditional-for-loop exited ${benchBc.exitCode}: ${benchBc.stderr.toString()}`);
+    if (!benchBc.stdout.toString().includes("for")) throw new Error("BenchmarkRunner bytecode compat-traditional-for-loop should mention 'for'");
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- compat-traditional-for-loop off -> warning, no crash -----------------------
+
+console.log("compat-traditional-for-loop OFF emits warning and no-ops...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(
+      join(tmp, "no-flag.js"),
+      "for (let i = 0; i < 3; i++) { console.log('should not run'); }\n",
+    );
+    const stderr = await $`${LOADER} ${join(tmp, "no-flag.js")} 2>&1`.text();
+    if (!stderr.includes("Traditional 'for(;;)' loops are not supported")) {
+      throw new Error(`Loader without flag should emit warning, got: ${stderr}`);
+    }
+    if (stderr.includes("should not run")) {
+      throw new Error(`Loader without flag should not execute the loop body, got: ${stderr}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 // -- Multi-directory TestRunner (lenient + strict, both modes) ------------------
 
 console.log("Multi-directory TestRunner...");

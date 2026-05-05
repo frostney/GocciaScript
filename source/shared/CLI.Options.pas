@@ -166,6 +166,7 @@ type
     FStackSize: TGocciaIntegerOption;
     FCompatVar: TGocciaFlagOption;
     FCompatFunction: TGocciaFlagOption;
+    FCompatTraditionalFor: TGocciaFlagOption;
     FCompatAll: TGocciaFlagOption;
     FStrictTypes: TGocciaFlagOption;
     FAllowedHosts: TGocciaRepeatableOption;
@@ -188,6 +189,7 @@ type
     property StackSize: TGocciaIntegerOption read FStackSize;
     property CompatVar: TGocciaFlagOption read FCompatVar;
     property CompatFunction: TGocciaFlagOption read FCompatFunction;
+    property CompatTraditionalFor: TGocciaFlagOption read FCompatTraditionalFor;
     property CompatAll: TGocciaFlagOption read FCompatAll;
     property StrictTypes: TGocciaFlagOption read FStrictTypes;
     property AllowedHosts: TGocciaRepeatableOption read FAllowedHosts;
@@ -573,6 +575,8 @@ begin
     'Enable var declarations (compatibility)', 'Engine');
   FCompatFunction := TGocciaFlagOption.Create('compat-function',
     'Enable function declarations and expressions (compatibility)', 'Engine');
+  FCompatTraditionalFor := TGocciaFlagOption.Create('compat-traditional-for-loop',
+    'Enable traditional C-style for(init; test; update) loops (compatibility)', 'Engine');
   FCompatAll := TGocciaFlagOption.Create('compat-all',
     'Enable all compatibility flags (--compat-*)', 'Engine');
   FStrictTypes := TGocciaFlagOption.Create('strict-types',
@@ -597,6 +601,7 @@ begin
   FStackSize.Free;
   FCompatVar.Free;
   FCompatFunction.Free;
+  FCompatTraditionalFor.Free;
   FCompatAll.Free;
   FStrictTypes.Free;
   FAllowedHosts.Free;
@@ -605,7 +610,7 @@ end;
 
 function TGocciaEngineOptions.Options: TGocciaOptionArray;
 begin
-  SetLength(Result, 16);
+  SetLength(Result, 17);
   Result[0] := FMode;
   Result[1] := FSourceType;
   Result[2] := FASI;
@@ -619,9 +624,10 @@ begin
   Result[10] := FStackSize;
   Result[11] := FCompatVar;
   Result[12] := FCompatFunction;
-  Result[13] := FCompatAll;
-  Result[14] := FStrictTypes;
-  Result[15] := FAllowedHosts;
+  Result[13] := FCompatTraditionalFor;
+  Result[14] := FCompatAll;
+  Result[15] := FStrictTypes;
+  Result[16] := FAllowedHosts;
 end;
 
 { TGocciaCoverageOptions }

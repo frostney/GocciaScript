@@ -67,6 +67,7 @@ function AwaitValue(const AValue: TGocciaValue): TGocciaValue;
 function EvaluateUsingDeclaration(const AUsingDeclaration: TGocciaUsingDeclaration; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateForOf(const AForOfStatement: TGocciaForOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateForAwaitOf(const AForAwaitOfStatement: TGocciaForAwaitOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+function EvaluateFor(const AForStatement: TGocciaForStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 
 // Destructuring pattern assignment procedures
 procedure AssignPattern(const APattern: TGocciaDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
@@ -101,6 +102,7 @@ uses
 
   Goccia.Arithmetic,
   Goccia.AST.BindingPatterns,
+  Goccia.Bytecode.Chunk,
   Goccia.CallStack,
   Goccia.Constants,
   Goccia.Constants.ErrorNames,
@@ -1865,6 +1867,150 @@ begin
   finally
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+  end;
+end;
+
+// ES2026 §14.7.4.2 ForBodyEvaluation — traditional for(init; test; update) loop
+function EvaluateFor(const AForStatement: TGocciaForStatement;
+  const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+var
+  HeaderScope, IterScope: TGocciaScope;
+  HeaderContext, IterContext: TGocciaEvaluationContext;
+  IsLexical: Boolean;
+  PerIterNames: TStringList;
+  PrevValues: array of TGocciaValue;
+  CondValue: TGocciaValue;
+  CF: TGocciaControlFlow;
+  I: Integer;
+  Name: string;
+  HeaderBinding, IterBinding: TLexicalBinding;
+  VarDecl: TGocciaVariableDeclaration;
+  DestructDecl: TGocciaDestructuringDeclaration;
+  DeclarationType: TGocciaDeclarationType;
+begin
+  Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+
+  IsLexical := False;
+  PerIterNames := nil;
+  HeaderScope := nil;
+  HeaderContext := AContext;
+
+  if Assigned(AForStatement.Init) then
+  begin
+    if (AForStatement.Init is TGocciaVariableDeclaration)
+       and not TGocciaVariableDeclaration(AForStatement.Init).IsVar
+       and not TGocciaVariableDeclaration(AForStatement.Init).IsFunctionDeclaration then
+    begin
+      IsLexical := True;
+      VarDecl := TGocciaVariableDeclaration(AForStatement.Init);
+      if VarDecl.IsConst then
+        DeclarationType := dtConst
+      else
+        DeclarationType := dtLet;
+      PerIterNames := TStringList.Create;
+      for I := 0 to High(VarDecl.Variables) do
+        PerIterNames.Add(VarDecl.Variables[I].Name);
+    end
+    else if (AForStatement.Init is TGocciaDestructuringDeclaration)
+            and not TGocciaDestructuringDeclaration(AForStatement.Init).IsVar then
+    begin
+      IsLexical := True;
+      DestructDecl := TGocciaDestructuringDeclaration(AForStatement.Init);
+      if DestructDecl.IsConst then
+        DeclarationType := dtConst
+      else
+        DeclarationType := dtLet;
+      PerIterNames := TStringList.Create;
+      CollectPatternBindingNames(DestructDecl.Pattern, PerIterNames, True);
+    end;
+  end;
+
+  try
+    if IsLexical then
+    begin
+      HeaderScope := AContext.Scope.CreateChild(skBlock, 'ForHeader');
+      HeaderContext := AContext;
+      HeaderContext.Scope := HeaderScope;
+    end;
+
+    if Assigned(AForStatement.Init) then
+    begin
+      CF := EvaluateStatement(AForStatement.Init, HeaderContext);
+      if CF.Kind = cfkReturn then
+      begin
+        Result := CF;
+        Exit;
+      end;
+    end;
+
+    while True do
+    begin
+      CheckExecutionTimeout;
+      IncrementInstructionCounter;
+      CheckInstructionLimit;
+
+      if IsLexical then
+      begin
+        SetLength(PrevValues, PerIterNames.Count);
+        for I := 0 to PerIterNames.Count - 1 do
+        begin
+          Name := PerIterNames[I];
+          HeaderBinding := HeaderScope.GetBinding(Name);
+          PrevValues[I] := HeaderBinding.Value;
+        end;
+        IterScope := AContext.Scope.CreateChild(skBlock, 'ForIter');
+        IterContext := AContext;
+        IterContext.Scope := IterScope;
+        for I := 0 to PerIterNames.Count - 1 do
+        begin
+          Name := PerIterNames[I];
+          HeaderBinding := HeaderScope.GetBinding(Name);
+          IterScope.DefineLexicalBinding(Name, PrevValues[I], DeclarationType);
+          if HeaderBinding.TypeHint <> sltUntyped then
+            IterScope.SetOwnBindingTypeHint(Name, HeaderBinding.TypeHint);
+        end;
+      end
+      else
+        IterContext := HeaderContext;
+
+      if Assigned(AForStatement.Condition) then
+      begin
+        CondValue := EvaluateExpression(AForStatement.Condition, IterContext);
+        if not CondValue.ToBooleanLiteral.Value then
+          Break;
+      end;
+
+      CF := EvaluateLoopBodyStatement(AForStatement.Body, IterContext);
+      if CF.Kind = cfkBreak then
+        Break;
+      if CF.Kind = cfkReturn then
+      begin
+        Result := CF;
+        Exit;
+      end;
+      // cfkContinue and cfkNormal both fall through to update.
+
+      if IsLexical then
+      begin
+        for I := 0 to PerIterNames.Count - 1 do
+        begin
+          Name := PerIterNames[I];
+          IterBinding := IterScope.GetBinding(Name);
+          HeaderScope.AssignBinding(Name, IterBinding.Value);
+        end;
+      end;
+
+      if Assigned(AForStatement.Update) then
+      begin
+        if IsLexical then
+          EvaluateExpression(AForStatement.Update, HeaderContext)
+        else
+          EvaluateExpression(AForStatement.Update, IterContext);
+      end;
+    end;
+  finally
+    if Assigned(PerIterNames) then
+      PerIterNames.Free;
   end;
 end;
 

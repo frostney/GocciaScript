@@ -19,7 +19,8 @@
 | `==` / `!=` (loose equality) | ES1 | Excluded — use `===` / `!==` |
 | `eval()` | ES1 | Excluded |
 | `arguments` object | ES1 | Excluded — use rest parameters |
-| `for` / `while` / `do...while` | ES1 | Excluded — use `for...of` or array methods |
+| Traditional `for(init; test; update)` loop | ES1 | Opt-in (`--compat-traditional-for-loop`) — use `for...of` or array methods by default |
+| `while` / `do...while` | ES1 | Excluded — use `for...of` or array methods |
 | `with` statement | ES1 | Excluded |
 | ASI (automatic semicolon insertion) | ES1 | Opt-in (`--asi`) |
 | Global `parseInt`, `parseFloat`, `isNaN`, `isFinite` | ES1 | Excluded — use `Number.*` |

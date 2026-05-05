@@ -250,6 +250,8 @@ begin
     Goccia.Compiler.Statements.CompileForAwaitOfStatement(Ctx, TGocciaForAwaitOfStatement(AStmt))
   else if AStmt is TGocciaForOfStatement then
     Goccia.Compiler.Statements.CompileForOfStatement(Ctx, TGocciaForOfStatement(AStmt))
+  else if AStmt is TGocciaForStatement then
+    Goccia.Compiler.Statements.CompileForStatement(Ctx, TGocciaForStatement(AStmt))
   else if AStmt is TGocciaClassDeclaration then
     Goccia.Compiler.Statements.CompileClassDeclaration(Ctx,
       TGocciaClassDeclaration(AStmt))
@@ -500,6 +502,7 @@ var
   Block: TGocciaBlockStatement;
   IfStmt: TGocciaIfStatement;
   ForOf: TGocciaForOfStatement;
+  ForStmt: TGocciaForStatement;
   TryStmt: TGocciaTryStatement;
   SwitchStmt: TGocciaSwitchStatement;
   VarDecl: TGocciaVariableDeclaration;
@@ -536,6 +539,13 @@ begin
   begin
     ForOf := TGocciaForOfStatement(ANode);
     HoistVarLocals(ForOf.Body, AScope);
+  end
+  else if ANode is TGocciaForStatement then
+  begin
+    ForStmt := TGocciaForStatement(ANode);
+    if Assigned(ForStmt.Init) then
+      HoistVarLocals(ForStmt.Init, AScope);
+    HoistVarLocals(ForStmt.Body, AScope);
   end
   else if ANode is TGocciaTryStatement then
   begin

@@ -71,6 +71,7 @@ var
   Block: TGocciaBlockStatement;
   IfStmt: TGocciaIfStatement;
   ForOf: TGocciaForOfStatement;
+  ForStmt: TGocciaForStatement;
   TryStmt: TGocciaTryStatement;
   SwitchStmt: TGocciaSwitchStatement;
   VarDecl: TGocciaVariableDeclaration;
@@ -122,6 +123,13 @@ begin
         AddBindingName(ANames, ForOf.BindingName, True);
     end;
     CollectVarBindingNamesFromNode(ForOf.Body, ANames);
+  end
+  else if ANode is TGocciaForStatement then
+  begin
+    ForStmt := TGocciaForStatement(ANode);
+    if Assigned(ForStmt.Init) then
+      CollectVarBindingNamesFromNode(ForStmt.Init, ANames);
+    CollectVarBindingNamesFromNode(ForStmt.Body, ANames);
   end
   else if ANode is TGocciaTryStatement then
   begin

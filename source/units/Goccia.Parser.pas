@@ -70,6 +70,7 @@ type
     FAutomaticSemicolonInsertion: Boolean;
     FVarDeclarationsEnabled: Boolean;
     FFunctionDeclarationsEnabled: Boolean;
+    FTraditionalForLoopsEnabled: Boolean;
 
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
     procedure PushPrivateClassContext;
@@ -191,6 +192,7 @@ type
     function IfStatement: TGocciaStatement;
     function VarStatement: TGocciaStatement;
     function ForStatement: TGocciaStatement;
+    function ParseTraditionalForBody(const ALine, AColumn: Integer): TGocciaForStatement;
     function WhileStatement: TGocciaStatement;
     function DoWhileStatement: TGocciaStatement;
     function WithStatement: TGocciaStatement;
@@ -227,6 +229,8 @@ type
       read FVarDeclarationsEnabled write FVarDeclarationsEnabled;
     property FunctionDeclarationsEnabled: Boolean
       read FFunctionDeclarationsEnabled write FFunctionDeclarationsEnabled;
+    property TraditionalForLoopsEnabled: Boolean
+      read FTraditionalForLoopsEnabled write FTraditionalForLoopsEnabled;
     property WarningCount: Integer read FWarningCount;
   end;
 
@@ -3910,8 +3914,10 @@ begin
       else
       begin
         FCurrent := SavedCurrent;
-        AddWarning('''for'' loops are not supported in GocciaScript',
-          'Use array methods like .forEach(), .map(), .filter(), or .reduce() instead',
+        if FTraditionalForLoopsEnabled then
+          Exit(ParseTraditionalForBody(Line, Column));
+        AddWarning('Traditional ''for(;;)'' loops are not supported by default in GocciaScript',
+          'Use for...of/array methods, or enable --compat-traditional-for-loop',
           Line, Column);
         SkipBalancedParens;
         SkipStatementOrBlock;
@@ -3963,12 +3969,18 @@ begin
       end;
     end;
 
-    // Not a for...of — fall back to traditional for loop (unsupported, skip with warning)
+    // Not a for...of — fall back to traditional for loop (gated by flag)
     FCurrent := SavedCurrent;
   end;
 
-  AddWarning('''for'' loops are not supported in GocciaScript',
-    'Use array methods like .forEach(), .map(), .filter(), or .reduce() instead',
+  if FTraditionalForLoopsEnabled then
+  begin
+    Result := ParseTraditionalForBody(Line, Column);
+    Exit;
+  end;
+
+  AddWarning('Traditional ''for(;;)'' loops are not supported by default in GocciaScript',
+    'Use for...of/array methods, or enable --compat-traditional-for-loop',
     Line, Column);
 
   SkipBalancedParens;
@@ -3976,6 +3988,149 @@ begin
   SkipStatementOrBlock;
 
   Result := TGocciaEmptyStatement.Create(Line, Column);
+end;
+
+function TGocciaParser.ParseTraditionalForBody(
+  const ALine, AColumn: Integer): TGocciaForStatement;
+var
+  InitStmt: TGocciaStatement;
+  CondExpr, UpdateExpr, InitExpr: TGocciaExpression;
+  BodyStmt: TGocciaStatement;
+  IsConst, IsVarKeyword: Boolean;
+  Variables: TArray<TGocciaVariableInfo>;
+  VarCount: Integer;
+  DeclLine, DeclColumn: Integer;
+  Pattern: TGocciaDestructuringPattern;
+  Initializer: TGocciaExpression;
+  DestructTypeAnnotation: string;
+  DestructDecl: TGocciaDestructuringDeclaration;
+begin
+  InitStmt := nil;
+  CondExpr := nil;
+  UpdateExpr := nil;
+
+  Consume(gttLeftParen, 'Expected ''('' after ''for''',
+    SSuggestOpenParenExpression);
+
+  // ---- INIT ----
+  if Match(gttSemicolon) then
+  begin
+    InitStmt := nil;
+  end
+  else if Check(gttLet) or Check(gttConst) or
+          (FVarDeclarationsEnabled and Check(gttVar)) then
+  begin
+    DeclLine := Peek.Line;
+    DeclColumn := Peek.Column;
+    IsVarKeyword := Check(gttVar);
+    IsConst := Check(gttConst);
+    Advance; // consume let/const/var
+
+    if Check(gttLeftBracket) or Check(gttLeftBrace) then
+    begin
+      // Destructuring init: for (let [a, b] = …; …; …)
+      Pattern := ParsePattern;
+      DestructTypeAnnotation := '';
+      if Check(gttColon) then
+      begin
+        Advance;
+        DestructTypeAnnotation := CollectTypeAnnotation([gttAssign]);
+      end;
+      Consume(gttAssign, 'Destructuring declarations must have an initializer',
+        SSuggestDestructuringRequiresInitializer);
+      Initializer := Assignment;
+      Consume(gttSemicolon, 'Expected '';'' after for-init declaration',
+        SSuggestAddSemicolon);
+      DestructDecl := TGocciaDestructuringDeclaration.Create(Pattern, Initializer,
+        IsConst, DeclLine, DeclColumn, IsVarKeyword);
+      DestructDecl.TypeAnnotation := DestructTypeAnnotation;
+      InitStmt := DestructDecl;
+    end
+    else
+    begin
+      VarCount := 0;
+      repeat
+        SetLength(Variables, VarCount + 1);
+        Variables[VarCount].Name :=
+          Consume(gttIdentifier, 'Expected variable name in for-init',
+            SSuggestProvideVariableName).Lexeme;
+        if Check(gttColon) then
+        begin
+          Advance;
+          Variables[VarCount].TypeAnnotation :=
+            CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
+        end;
+        if Match(gttAssign) then
+        begin
+          Variables[VarCount].HasInitializer := True;
+          Variables[VarCount].Initializer := Assignment;
+        end
+        else if IsConst then
+          raise TGocciaSyntaxError.Create(
+            '''const'' declaration in for-init must have an initializer',
+            DeclLine, DeclColumn, FFileName, FSourceLines,
+            SSuggestAddConstInitializer)
+        else
+        begin
+          Variables[VarCount].HasInitializer := False;
+          Variables[VarCount].Initializer := TGocciaLiteralExpression.Create(
+            TGocciaUndefinedLiteralValue.UndefinedValue, DeclLine, DeclColumn);
+        end;
+        Inc(VarCount);
+      until not Match(gttComma);
+      Consume(gttSemicolon, 'Expected '';'' after for-init declaration',
+        SSuggestAddSemicolon);
+      InitStmt := TGocciaVariableDeclaration.Create(Variables, IsConst,
+        DeclLine, DeclColumn, IsVarKeyword);
+    end;
+  end
+  else if Check(gttVar) then
+  begin
+    AddWarning('''var'' in for-init requires --compat-var',
+      'Use ''let''/''const'' or enable --compat-var',
+      Peek.Line, Peek.Column);
+    SkipUntilSemicolon;
+    InitStmt := nil;
+  end
+  else
+  begin
+    DeclLine := Peek.Line;
+    DeclColumn := Peek.Column;
+    InitExpr := Expression;
+    Consume(gttSemicolon, 'Expected '';'' after for-init expression',
+      SSuggestAddSemicolon);
+    InitStmt := TGocciaExpressionStatement.Create(InitExpr, DeclLine, DeclColumn);
+  end;
+
+  // ---- CONDITION ----
+  if Match(gttSemicolon) then
+    CondExpr := nil
+  else
+  begin
+    CondExpr := Expression;
+    Consume(gttSemicolon, 'Expected '';'' after for-condition',
+      SSuggestAddSemicolon);
+  end;
+
+  // ---- UPDATE ----
+  if Check(gttRightParen) then
+    UpdateExpr := nil
+  else
+    UpdateExpr := Expression;
+  Consume(gttRightParen, 'Expected '')'' after for-update',
+    SSuggestCloseParenExpression);
+
+  // ---- BODY ----
+  if Check(gttLeftBrace) then
+  begin
+    Advance;
+    BodyStmt := BlockStatement;
+  end
+  else
+    BodyStmt := Statement;
+
+  Result := TGocciaForStatement.Create(InitStmt, CondExpr, UpdateExpr,
+    BodyStmt, ALine, AColumn);
 end;
 
 function TGocciaParser.WhileStatement: TGocciaStatement;

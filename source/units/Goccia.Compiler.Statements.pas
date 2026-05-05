@@ -33,6 +33,8 @@ procedure CompileForOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement);
 procedure CompileForAwaitOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForAwaitOfStatement);
+procedure CompileForStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaForStatement);
 procedure CompileImportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaImportDeclaration);
 procedure CompileExportDeclaration(const ACtx: TGocciaCompilationContext;
@@ -2040,6 +2042,468 @@ begin
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
+end;
+
+function ForBodyAssignsIdentifier(const ANode: TGocciaASTNode;
+  const AName: string): Boolean; forward;
+
+function TryCompileCountedFor(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaForStatement): Boolean;
+var
+  VarDecl: TGocciaVariableDeclaration;
+  IsConst, IsVarKeyword: Boolean;
+  LoopName: string;
+  StartLit: TGocciaLiteralExpression;
+  StartIntDouble: Double;
+  StartInt: Integer;
+  CondExpr: TGocciaBinaryExpression;
+  CondLeftIdent: TGocciaIdentifierExpression;
+  IncExpr: TGocciaIncrementExpression;
+  IncOperandIdent: TGocciaIdentifierExpression;
+  StartReg, LimitReg, OneReg, CmpReg: UInt8;
+  Slot, OuterSlot: UInt8;
+  LoopStart, ExitJump, I: Integer;
+  ClosedLocals: array[0..255] of UInt8;
+  ClosedCount: Integer;
+  OldBreakJumps, OldContinueJumps: TList<Integer>;
+  OldBreakFinallyBase, OldContinueFinallyBase: Integer;
+  BreakJumps, ContinueJumps: TList<Integer>;
+  IsAscending: Boolean;
+  ExitOpcode, StepOpcode: TGocciaOpCode;
+begin
+  Result := False;
+
+  if not Assigned(AStmt.Init) or not (AStmt.Init is TGocciaVariableDeclaration) then
+    Exit;
+  VarDecl := TGocciaVariableDeclaration(AStmt.Init);
+  if VarDecl.IsFunctionDeclaration or (Length(VarDecl.Variables) <> 1) then
+    Exit;
+  if not VarDecl.Variables[0].HasInitializer then
+    Exit;
+  if not (VarDecl.Variables[0].Initializer is TGocciaLiteralExpression) then
+    Exit;
+  StartLit := TGocciaLiteralExpression(VarDecl.Variables[0].Initializer);
+  if not (StartLit.Value is TGocciaNumberLiteralValue) then
+    Exit;
+  StartIntDouble := TGocciaNumberLiteralValue(StartLit.Value).Value;
+  if (StartIntDouble <> Trunc(StartIntDouble)) or
+     (StartIntDouble < Low(Int16)) or (StartIntDouble > High(Int16)) then
+    Exit;
+  StartInt := Trunc(StartIntDouble);
+  IsConst := VarDecl.IsConst;
+  IsVarKeyword := VarDecl.IsVar;
+  // const can't be incremented anyway. var has shared (not per-iteration)
+  // binding and may be global-backed at top level — both make the fast path's
+  // per-iteration slot copy wrong; defer to the general path.
+  if IsConst or IsVarKeyword then
+    Exit;
+
+  LoopName := VarDecl.Variables[0].Name;
+
+  if not Assigned(AStmt.Condition) or
+     not (AStmt.Condition is TGocciaBinaryExpression) then
+    Exit;
+  CondExpr := TGocciaBinaryExpression(AStmt.Condition);
+  if not (CondExpr.Left is TGocciaIdentifierExpression) then
+    Exit;
+  CondLeftIdent := TGocciaIdentifierExpression(CondExpr.Left);
+  if CondLeftIdent.Name <> LoopName then
+    Exit;
+
+  case CondExpr.Operator of
+    gttLess: begin IsAscending := True; ExitOpcode := OP_GTE_INT; end;
+    gttGreater: begin IsAscending := False; ExitOpcode := OP_LTE_INT; end;
+  else
+    Exit;
+  end;
+
+  if not Assigned(AStmt.Update) or
+     not (AStmt.Update is TGocciaIncrementExpression) then
+    Exit;
+  IncExpr := TGocciaIncrementExpression(AStmt.Update);
+  if not (IncExpr.Operand is TGocciaIdentifierExpression) then
+    Exit;
+  IncOperandIdent := TGocciaIdentifierExpression(IncExpr.Operand);
+  if IncOperandIdent.Name <> LoopName then
+    Exit;
+  if IsAscending and (IncExpr.Operator <> gttIncrement) then
+    Exit;
+  if (not IsAscending) and (IncExpr.Operator <> gttDecrement) then
+    Exit;
+  if IsAscending then
+    StepOpcode := OP_ADD_INT
+  else
+    StepOpcode := OP_SUB_INT;
+
+  if ForBodyAssignsIdentifier(AStmt.Body, LoopName) then
+    Exit;
+
+  // Outer scope owns the canonical loop var slot; per-iteration scope
+  // declares a fresh slot and copies in/out so closures pin per iteration.
+  ACtx.Scope.BeginScope;
+  StartReg := ACtx.Scope.DeclareLocal(LoopName, False);
+  EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, StartReg, Int16(StartInt)));
+
+  if IsVarKeyword then
+    ; // var doesn't need per-iteration treatment but the fast path still
+      // works the same; we only hit this branch when it's a let.
+  // (IsConst already excluded above; IsVar excluded by the path above as
+  // well — keep the guard simple by just rejecting var.)
+
+  LimitReg := ACtx.Scope.AllocateRegister;
+  OneReg := ACtx.Scope.AllocateRegister;
+  CmpReg := ACtx.Scope.AllocateRegister;
+
+  ACtx.CompileExpression(CondExpr.Right, LimitReg);
+  EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, OneReg, 1));
+
+  OldBreakJumps := GBreakJumps;
+  OldBreakFinallyBase := GBreakFinallyBase;
+  BreakJumps := TList<Integer>.Create;
+  GBreakJumps := BreakJumps;
+  OldContinueJumps := GContinueJumps;
+  OldContinueFinallyBase := GContinueFinallyBase;
+  ContinueJumps := TList<Integer>.Create;
+  GContinueJumps := ContinueJumps;
+  if Assigned(GPendingFinally) then
+  begin
+    GBreakFinallyBase := GPendingFinally.Count;
+    GContinueFinallyBase := GPendingFinally.Count;
+  end
+  else
+  begin
+    GBreakFinallyBase := 0;
+    GContinueFinallyBase := 0;
+  end;
+  try
+    LoopStart := CurrentCodePosition(ACtx);
+
+    EmitInstruction(ACtx, EncodeABC(ExitOpcode, CmpReg, StartReg, LimitReg));
+    ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CmpReg);
+
+    OuterSlot := StartReg;
+    ACtx.Scope.BeginScope;
+    Slot := ACtx.Scope.DeclareLocal(LoopName, False);
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, OuterSlot, 0));
+
+    ACtx.CompileStatement(AStmt.Body);
+
+    for I := 0 to ContinueJumps.Count - 1 do
+      PatchJumpTarget(ACtx, ContinueJumps[I]);
+
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, OuterSlot, Slot, 0));
+    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+    for I := 0 to ClosedCount - 1 do
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+
+    EmitInstruction(ACtx, EncodeABC(StepOpcode, OuterSlot, OuterSlot, OneReg));
+    EmitInstruction(ACtx, EncodeAx(OP_JUMP,
+      LoopStart - CurrentCodePosition(ACtx) - 1));
+
+    PatchJumpTarget(ACtx, ExitJump);
+
+    for I := 0 to BreakJumps.Count - 1 do
+      PatchJumpTarget(ACtx, BreakJumps[I]);
+  finally
+    BreakJumps.Free;
+    GBreakJumps := OldBreakJumps;
+    GBreakFinallyBase := OldBreakFinallyBase;
+    ContinueJumps.Free;
+    GContinueJumps := OldContinueJumps;
+    GContinueFinallyBase := OldContinueFinallyBase;
+  end;
+
+  ACtx.Scope.FreeRegister; // CmpReg
+  ACtx.Scope.FreeRegister; // OneReg
+  ACtx.Scope.FreeRegister; // LimitReg
+  // StartReg is popped by EndScope of the outer for-scope below.
+
+  ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+  for I := 0 to ClosedCount - 1 do
+    EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+
+  Result := True;
+end;
+
+function ForBodyAssignsIdentifier(const ANode: TGocciaASTNode;
+  const AName: string): Boolean;
+var
+  Block: TGocciaBlockStatement;
+  IfStmt: TGocciaIfStatement;
+  ForOf: TGocciaForOfStatement;
+  ForStmt: TGocciaForStatement;
+  TryStmt: TGocciaTryStatement;
+  SwitchStmt: TGocciaSwitchStatement;
+  ExprStmt: TGocciaExpressionStatement;
+  Assign: TGocciaAssignmentExpression;
+  Compound: TGocciaCompoundAssignmentExpression;
+  IncExpr: TGocciaIncrementExpression;
+  ReturnStmt: TGocciaReturnStatement;
+  ThrowStmt: TGocciaThrowStatement;
+  I, J: Integer;
+begin
+  Result := False;
+  if not Assigned(ANode) then
+    Exit;
+
+  if ANode is TGocciaExpressionStatement then
+  begin
+    ExprStmt := TGocciaExpressionStatement(ANode);
+    Result := ForBodyAssignsIdentifier(ExprStmt.Expression, AName);
+  end
+  else if ANode is TGocciaAssignmentExpression then
+  begin
+    Assign := TGocciaAssignmentExpression(ANode);
+    if Assign.Name = AName then
+      Exit(True);
+    Result := ForBodyAssignsIdentifier(Assign.Value, AName);
+  end
+  else if ANode is TGocciaCompoundAssignmentExpression then
+  begin
+    Compound := TGocciaCompoundAssignmentExpression(ANode);
+    if Compound.Name = AName then
+      Exit(True);
+    Result := ForBodyAssignsIdentifier(Compound.Value, AName);
+  end
+  else if ANode is TGocciaIncrementExpression then
+  begin
+    IncExpr := TGocciaIncrementExpression(ANode);
+    if (IncExpr.Operand is TGocciaIdentifierExpression) and
+       (TGocciaIdentifierExpression(IncExpr.Operand).Name = AName) then
+      Exit(True);
+    Result := ForBodyAssignsIdentifier(IncExpr.Operand, AName);
+  end
+  else if ANode is TGocciaBlockStatement then
+  begin
+    Block := TGocciaBlockStatement(ANode);
+    for I := 0 to Block.Nodes.Count - 1 do
+      if ForBodyAssignsIdentifier(Block.Nodes[I], AName) then
+        Exit(True);
+  end
+  else if ANode is TGocciaIfStatement then
+  begin
+    IfStmt := TGocciaIfStatement(ANode);
+    if ForBodyAssignsIdentifier(IfStmt.Condition, AName) then Exit(True);
+    if ForBodyAssignsIdentifier(IfStmt.Consequent, AName) then Exit(True);
+    Result := ForBodyAssignsIdentifier(IfStmt.Alternate, AName);
+  end
+  else if ANode is TGocciaForOfStatement then
+  begin
+    ForOf := TGocciaForOfStatement(ANode);
+    if (ForOf.BindingName = AName) and ForOf.IsVar then
+      Exit(True);
+    if ForBodyAssignsIdentifier(ForOf.Iterable, AName) then Exit(True);
+    Result := ForBodyAssignsIdentifier(ForOf.Body, AName);
+  end
+  else if ANode is TGocciaForStatement then
+  begin
+    ForStmt := TGocciaForStatement(ANode);
+    if ForBodyAssignsIdentifier(ForStmt.Init, AName) then Exit(True);
+    if ForBodyAssignsIdentifier(ForStmt.Condition, AName) then Exit(True);
+    if ForBodyAssignsIdentifier(ForStmt.Update, AName) then Exit(True);
+    Result := ForBodyAssignsIdentifier(ForStmt.Body, AName);
+  end
+  else if ANode is TGocciaTryStatement then
+  begin
+    TryStmt := TGocciaTryStatement(ANode);
+    if ForBodyAssignsIdentifier(TryStmt.Block, AName) then Exit(True);
+    if ForBodyAssignsIdentifier(TryStmt.CatchBlock, AName) then Exit(True);
+    Result := ForBodyAssignsIdentifier(TryStmt.FinallyBlock, AName);
+  end
+  else if ANode is TGocciaSwitchStatement then
+  begin
+    SwitchStmt := TGocciaSwitchStatement(ANode);
+    for I := 0 to SwitchStmt.Cases.Count - 1 do
+      for J := 0 to SwitchStmt.Cases[I].Consequent.Count - 1 do
+        if ForBodyAssignsIdentifier(SwitchStmt.Cases[I].Consequent[J], AName) then
+          Exit(True);
+  end
+  else if ANode is TGocciaReturnStatement then
+  begin
+    ReturnStmt := TGocciaReturnStatement(ANode);
+    Result := ForBodyAssignsIdentifier(ReturnStmt.Value, AName);
+  end
+  else if ANode is TGocciaThrowStatement then
+  begin
+    ThrowStmt := TGocciaThrowStatement(ANode);
+    Result := ForBodyAssignsIdentifier(ThrowStmt.Value, AName);
+  end;
+  // Conservative: only reports DEFINITE writes to a top-level identifier.
+  // Closures captured in the body that reassign `i` are NOT flagged here, but
+  // they would target a per-iteration slot in the slow path anyway. The fast
+  // path's assumption is that direct synchronous writes to `i` from the body
+  // are absent; deeper analysis would be unsound.
+end;
+
+procedure CompileForStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaForStatement);
+var
+  CondReg, TempReg: UInt8;
+  LoopStart, ExitJump, I: Integer;
+  ClosedLocals: array[0..255] of UInt8;
+  ClosedCount: Integer;
+  OldBreakJumps, OldContinueJumps: TList<Integer>;
+  OldBreakFinallyBase, OldContinueFinallyBase: Integer;
+  BreakJumps, ContinueJumps: TList<Integer>;
+  HasLexicalInit: Boolean;
+  PerIterNames: TStringList;
+  PerIterIsConst: Boolean;
+  OuterSlots, InnerSlots: array of UInt8;
+  Name: string;
+  VarDecl: TGocciaVariableDeclaration;
+  DestructDecl: TGocciaDestructuringDeclaration;
+begin
+  if TryCompileCountedFor(ACtx, AStmt) then
+    Exit;
+
+  HasLexicalInit := False;
+  PerIterIsConst := False;
+  PerIterNames := nil;
+
+  if Assigned(AStmt.Init) then
+  begin
+    if (AStmt.Init is TGocciaVariableDeclaration)
+       and not TGocciaVariableDeclaration(AStmt.Init).IsVar
+       and not TGocciaVariableDeclaration(AStmt.Init).IsFunctionDeclaration then
+    begin
+      HasLexicalInit := True;
+      VarDecl := TGocciaVariableDeclaration(AStmt.Init);
+      PerIterIsConst := VarDecl.IsConst;
+      PerIterNames := TStringList.Create;
+      for I := 0 to High(VarDecl.Variables) do
+        PerIterNames.Add(VarDecl.Variables[I].Name);
+    end
+    else if (AStmt.Init is TGocciaDestructuringDeclaration)
+            and not TGocciaDestructuringDeclaration(AStmt.Init).IsVar then
+    begin
+      HasLexicalInit := True;
+      DestructDecl := TGocciaDestructuringDeclaration(AStmt.Init);
+      PerIterIsConst := DestructDecl.IsConst;
+      PerIterNames := TStringList.Create;
+      CollectPatternBindingNames(DestructDecl.Pattern, PerIterNames, True);
+    end;
+  end;
+
+  try
+    if HasLexicalInit then
+      ACtx.Scope.BeginScope;
+
+    if Assigned(AStmt.Init) then
+      ACtx.CompileStatement(AStmt.Init);
+
+    OldBreakJumps := GBreakJumps;
+    OldBreakFinallyBase := GBreakFinallyBase;
+    BreakJumps := TList<Integer>.Create;
+    GBreakJumps := BreakJumps;
+    OldContinueJumps := GContinueJumps;
+    OldContinueFinallyBase := GContinueFinallyBase;
+    ContinueJumps := TList<Integer>.Create;
+    GContinueJumps := ContinueJumps;
+    if Assigned(GPendingFinally) then
+    begin
+      GBreakFinallyBase := GPendingFinally.Count;
+      GContinueFinallyBase := GPendingFinally.Count;
+    end
+    else
+    begin
+      GBreakFinallyBase := 0;
+      GContinueFinallyBase := 0;
+    end;
+
+    try
+      LoopStart := CurrentCodePosition(ACtx);
+      ExitJump := -1;
+
+      if Assigned(AStmt.Condition) then
+      begin
+        CondReg := ACtx.Scope.AllocateRegister;
+        try
+          ACtx.CompileExpression(AStmt.Condition, CondReg);
+          ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+        finally
+          ACtx.Scope.FreeRegister;
+        end;
+      end;
+
+      // Capture outer slots BEFORE entering the per-iteration scope, where
+      // ResolveLocal would shadow with the inner declaration.
+      if HasLexicalInit then
+      begin
+        SetLength(OuterSlots, PerIterNames.Count);
+        SetLength(InnerSlots, PerIterNames.Count);
+        for I := 0 to PerIterNames.Count - 1 do
+        begin
+          Name := PerIterNames[I];
+          OuterSlots[I] := ACtx.Scope.GetLocal(ACtx.Scope.ResolveLocal(Name)).Slot;
+        end;
+      end;
+
+      ACtx.Scope.BeginScope;
+
+      if HasLexicalInit then
+      begin
+        for I := 0 to PerIterNames.Count - 1 do
+        begin
+          Name := PerIterNames[I];
+          InnerSlots[I] := ACtx.Scope.DeclareLocal(Name, PerIterIsConst);
+          EmitInstruction(ACtx,
+            EncodeABC(OP_MOVE, InnerSlots[I], OuterSlots[I], 0));
+        end;
+      end;
+
+      ACtx.CompileStatement(AStmt.Body);
+
+      for I := 0 to ContinueJumps.Count - 1 do
+        PatchJumpTarget(ACtx, ContinueJumps[I]);
+
+      if HasLexicalInit then
+      begin
+        for I := 0 to PerIterNames.Count - 1 do
+          EmitInstruction(ACtx,
+            EncodeABC(OP_MOVE, OuterSlots[I], InnerSlots[I], 0));
+      end;
+
+      ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+      for I := 0 to ClosedCount - 1 do
+        EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+
+      if Assigned(AStmt.Update) then
+      begin
+        TempReg := ACtx.Scope.AllocateRegister;
+        try
+          ACtx.CompileExpression(AStmt.Update, TempReg);
+        finally
+          ACtx.Scope.FreeRegister;
+        end;
+      end;
+
+      EmitInstruction(ACtx,
+        EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+
+      if ExitJump >= 0 then
+        PatchJumpTarget(ACtx, ExitJump);
+
+      for I := 0 to BreakJumps.Count - 1 do
+        PatchJumpTarget(ACtx, BreakJumps[I]);
+    finally
+      BreakJumps.Free;
+      GBreakJumps := OldBreakJumps;
+      GBreakFinallyBase := OldBreakFinallyBase;
+      ContinueJumps.Free;
+      GContinueJumps := OldContinueJumps;
+      GContinueFinallyBase := OldContinueFinallyBase;
+    end;
+
+    if HasLexicalInit then
+    begin
+      ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+      for I := 0 to ClosedCount - 1 do
+        EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+    end;
+  finally
+    if Assigned(PerIterNames) then
+      PerIterNames.Free;
+  end;
 end;
 
 procedure CompileImportDeclaration(const ACtx: TGocciaCompilationContext;
