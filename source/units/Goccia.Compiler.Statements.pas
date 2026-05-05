@@ -2097,6 +2097,11 @@ begin
   // per-iteration slot copy wrong; defer to the general path.
   if IsConst or IsVarKeyword then
     Exit;
+  // Type annotations (e.g. `for (let i: number = 0; ...)`) carry hints the
+  // fast path can't propagate onto the synthetic per-iteration slot; route
+  // through the general path so CompileVariableDeclaration installs them.
+  if VarDecl.Variables[0].TypeAnnotation <> '' then
+    Exit;
 
   LoopName := VarDecl.Variables[0].Name;
 
@@ -2108,6 +2113,21 @@ begin
     Exit;
   CondLeftIdent := TGocciaIdentifierExpression(CondExpr.Left);
   if CondLeftIdent.Name <> LoopName then
+    Exit;
+  // ES2026 §14.7.4.4 evaluates the test expression each iteration. The fast
+  // path snapshots LimitReg once before the loop, so anything with side
+  // effects or whose value can change between iterations (function calls,
+  // member access, identifiers the body might reassign) would diverge from
+  // the spec. Restrict to literals and bare identifiers that the body does
+  // not assign; anything else falls through to the general path which
+  // re-evaluates the condition each iteration.
+  if CondExpr.Right is TGocciaIdentifierExpression then
+  begin
+    if ForBodyAssignsIdentifier(AStmt.Body,
+        TGocciaIdentifierExpression(CondExpr.Right).Name) then
+      Exit;
+  end
+  else if not (CondExpr.Right is TGocciaLiteralExpression) then
     Exit;
 
   case CondExpr.Operator of

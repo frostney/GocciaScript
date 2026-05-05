@@ -1461,7 +1461,8 @@ end;
 // when the Lexer is destroyed — they must not be freed separately.
 function ParseInterpolationExpression(const AExprText, AFileName: string;
   const AASI: Boolean = False; const AVarEnabled: Boolean = False;
-  const AFunctionEnabled: Boolean = False): TGocciaExpression;
+  const AFunctionEnabled: Boolean = False;
+  const ATraditionalForLoopsEnabled: Boolean = False): TGocciaExpression;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -1483,6 +1484,7 @@ begin
       Parser.AutomaticSemicolonInsertion := AASI;
       Parser.VarDeclarationsEnabled := AVarEnabled;
       Parser.FunctionDeclarationsEnabled := AFunctionEnabled;
+      Parser.TraditionalForLoopsEnabled := ATraditionalForLoopsEnabled;
       try
         ProgramNode := Parser.ParseUnchecked;
         try
@@ -1545,7 +1547,7 @@ begin
   Expressions := TObjectList<TGocciaExpression>.Create(True);
   for I := 0 to Length(ExprTexts) - 1 do
   begin
-    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName, FAutomaticSemicolonInsertion, FVarDeclarationsEnabled, FFunctionDeclarationsEnabled);
+    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName, FAutomaticSemicolonInsertion, FVarDeclarationsEnabled, FFunctionDeclarationsEnabled, FTraditionalForLoopsEnabled);
     if Assigned(ParsedExpr) then
       Expressions.Add(ParsedExpr);
   end;
@@ -1605,7 +1607,7 @@ begin
       AToken.Line, AToken.Column));
 
     // Parse and add the interpolation expression
-    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName, FAutomaticSemicolonInsertion, FVarDeclarationsEnabled, FFunctionDeclarationsEnabled);
+    ParsedExpr := ParseInterpolationExpression(ExprTexts[I], FFileName, FAutomaticSemicolonInsertion, FVarDeclarationsEnabled, FFunctionDeclarationsEnabled, FTraditionalForLoopsEnabled);
     if Assigned(ParsedExpr) then
       Parts.Add(ParsedExpr);
   end;

@@ -1990,16 +1990,26 @@ begin
       end;
       // cfkContinue and cfkNormal both fall through to update.
 
+      // Sync body's writes (including the iteration variable) back to the
+      // header so the update expression and the next iteration's snapshot
+      // see them. The body's per-iteration scope stays alive and pinned to
+      // its captured value for any closure created during the body — the
+      // header carries the canonical mutating cell that update will modify.
       if IsLexical then
       begin
         for I := 0 to PerIterNames.Count - 1 do
         begin
           Name := PerIterNames[I];
           IterBinding := IterScope.GetBinding(Name);
-          HeaderScope.AssignBinding(Name, IterBinding.Value);
+          HeaderScope.ForceUpdateBinding(Name, IterBinding.Value);
         end;
       end;
 
+      // Update runs on the header so it mutates the canonical cell rather
+      // than the iteration's frozen scope. Per-iteration semantics for
+      // closures created _inside_ the update expression are intentionally
+      // simpler than the spec (they pin the header rather than a fresh
+      // per-iteration env); closures inside update bodies are rare.
       if Assigned(AForStatement.Update) then
       begin
         if IsLexical then
