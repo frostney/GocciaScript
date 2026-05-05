@@ -1126,6 +1126,7 @@ var
   Obj: TGocciaValue;
   PropertyName: string;
   PropertyValue: TGocciaValue;
+  PropertyKey: TGocciaValue;
   SuperClass: TGocciaClassValue;
   SuperClassValue: TGocciaValue;
   SuperObject: TGocciaObjectValue;
@@ -1198,20 +1199,22 @@ begin
     if Assigned(AOutObjectValue) then
       AOutObjectValue^ := SuperClassValue;
 
-    // Get the property name
+    // Get the property name. ES2026 §7.1.19 ToPropertyKey: symbols pass
+    // through; otherwise coerce via ToPrimitive(string) → ToString.
     if AMemberExpression.Computed and Assigned(AMemberExpression.PropertyExpression) then
     begin
       PropertyValue := EvaluateExpression(AMemberExpression.PropertyExpression, AContext);
-      if PropertyValue is TGocciaSymbolValue then
+      PropertyKey := ToPropertyKey(PropertyValue);
+      if PropertyKey is TGocciaSymbolValue then
       begin
         if AContext.Scope.ThisValue is TGocciaClassValue then
         begin
           if Assigned(SuperClass) then
             Result := SuperClass.GetSymbolPropertyWithReceiver(
-              TGocciaSymbolValue(PropertyValue), AContext.Scope.ThisValue)
+              TGocciaSymbolValue(PropertyKey), AContext.Scope.ThisValue)
           else
             Result := SuperObject.GetSymbolPropertyWithReceiver(
-              TGocciaSymbolValue(PropertyValue), AContext.Scope.ThisValue);
+              TGocciaSymbolValue(PropertyKey), AContext.Scope.ThisValue);
         end
         else
         begin
@@ -1219,13 +1222,13 @@ begin
 
           if SuperPrototype is TGocciaObjectValue then
             Result := TGocciaObjectValue(SuperPrototype).GetSymbolPropertyWithReceiver(
-              TGocciaSymbolValue(PropertyValue), AContext.Scope.ThisValue)
+              TGocciaSymbolValue(PropertyKey), AContext.Scope.ThisValue)
           else
             Result := TGocciaUndefinedLiteralValue.UndefinedValue;
         end;
         Exit;
       end;
-      PropertyName := PropertyValue.ToStringLiteral.Value;
+      PropertyName := TGocciaStringLiteralValue(PropertyKey).Value;
     end
     else
     begin
@@ -1275,14 +1278,15 @@ begin
       AOutObjectValue^ := Obj;
   end;
 
-  // Determine the property name
+  // Determine the property name. ES2026 §7.1.19 ToPropertyKey on the
+  // computed expression: symbols pass through; otherwise coerce via
+  // ToPrimitive(string) → ToString.
   if AMemberExpression.Computed and Assigned(AMemberExpression.PropertyExpression) then
   begin
-    // Computed access: evaluate the property expression to get the property name
     PropertyValue := EvaluateExpression(AMemberExpression.PropertyExpression, AContext);
+    PropertyKey := ToPropertyKey(PropertyValue);
 
-    // Symbol property access
-    if PropertyValue is TGocciaSymbolValue then
+    if PropertyKey is TGocciaSymbolValue then
     begin
       if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
         ThrowTypeError(Format(SErrorCannotReadPropertiesOf, [Obj.ToStringLiteral.Value, 'Symbol()']),
@@ -1290,12 +1294,12 @@ begin
 
       if Obj is TGocciaClassValue then
       begin
-        Result := TGocciaClassValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyValue));
+        Result := TGocciaClassValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKey));
         Exit;
       end
       else if Obj is TGocciaObjectValue then
       begin
-        Result := TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyValue));
+        Result := TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKey));
         Exit;
       end
       else if Obj is TGocciaSymbolValue then
@@ -1303,7 +1307,7 @@ begin
         // Symbol primitive: look up symbol-keyed members on Symbol.prototype
         if Assigned(TGocciaSymbolValue.SharedPrototype) then
           Result := TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype)
-            .GetSymbolPropertyWithReceiver(TGocciaSymbolValue(PropertyValue), Obj)
+            .GetSymbolPropertyWithReceiver(TGocciaSymbolValue(PropertyKey), Obj)
         else
           Result := TGocciaUndefinedLiteralValue.UndefinedValue;
         Exit;
@@ -1313,7 +1317,7 @@ begin
         BoxedValue := Obj.Box;
         if Assigned(BoxedValue) then
         begin
-          Result := BoxedValue.GetSymbolProperty(TGocciaSymbolValue(PropertyValue));
+          Result := BoxedValue.GetSymbolProperty(TGocciaSymbolValue(PropertyKey));
           Exit;
         end;
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -1321,7 +1325,7 @@ begin
       end;
     end;
 
-    PropertyName := PropertyValue.ToStringLiteral.Value;
+    PropertyName := TGocciaStringLiteralValue(PropertyKey).Value;
   end
   else
   begin
@@ -1413,6 +1417,7 @@ var
   PropertyName: string;
   PropertyExpression: TGocciaExpression;
   PropertyValue: TGocciaValue;
+  PropertyKey: TGocciaValue;
   ExistingDescriptor: TGocciaPropertyDescriptor;
   ExistingSetter: TGocciaValue;
   ExistingGetter: TGocciaValue;
@@ -1483,13 +1488,15 @@ begin
             end
             else
             begin
-              // Regular computed property: {[expr]: value}
+              // Regular computed property: {[expr]: value}. ES2026 §13.2.5.5
+              // PropertyDefinitionEvaluation routes through ToPropertyKey.
               PropertyValue := EvaluateExpression(ComputedPair.Key, AContext);
-              if PropertyValue is TGocciaSymbolValue then
-                Obj.DefineSymbolProperty(TGocciaSymbolValue(PropertyValue), TGocciaPropertyDescriptorData.Create(EvaluateExpression(ComputedPair.Value, AContext), [pfEnumerable, pfConfigurable, pfWritable]))
+              PropertyKey := ToPropertyKey(PropertyValue);
+              if PropertyKey is TGocciaSymbolValue then
+                Obj.DefineSymbolProperty(TGocciaSymbolValue(PropertyKey), TGocciaPropertyDescriptorData.Create(EvaluateExpression(ComputedPair.Value, AContext), [pfEnumerable, pfConfigurable, pfWritable]))
               else
               begin
-                ComputedKey := PropertyValue.ToStringLiteral.Value;
+                ComputedKey := TGocciaStringLiteralValue(PropertyKey).Value;
                 Obj.DefineProperty(ComputedKey, TGocciaPropertyDescriptorData.Create(EvaluateExpression(ComputedPair.Value, AContext), [pfEnumerable, pfConfigurable, pfWritable]));
               end;
             end;
@@ -3770,7 +3777,9 @@ begin
     if not (Elem.Kind in [cekMethod, cekGetter, cekSetter]) then
       Continue;
 
-    ComputedKey := EvaluateExpression(Elem.ComputedKeyExpression, AContext);
+    // ES2026 §15.4 ClassDefinitionEvaluation step 6.b for computed names:
+    // evaluate, then ToPropertyKey, dispatching string vs. symbol storage.
+    ComputedKey := ToPropertyKey(EvaluateExpression(Elem.ComputedKeyExpression, AContext));
 
     case Elem.Kind of
       cekMethod:
@@ -5132,7 +5141,7 @@ begin
       if PartValue is TGocciaSymbolValue then
         ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
       // ES2026 §13.15.5.1 step 5e: ToString(value) on each substitution
-      SB.Append(ToECMAString(PartValue).Value);
+      SB.Append(PartValue.ToStringLiteral.Value);
     end;
   end;
   Result := TGocciaStringLiteralValue.Create(SB.ToString);
@@ -5568,6 +5577,7 @@ var
   Iterator: TGocciaIteratorValue;
   IterResult: TGocciaObjectValue;
   PropValue, ElementValue, DefaultValue: TGocciaValue;
+  PropertyKey: TGocciaValue;
   RestElements: TGocciaArrayValue;
   I, J: Integer;
   Exhausted: Boolean;
@@ -5585,8 +5595,17 @@ begin
     for I := 0 to ObjPat.Properties.Count - 1 do
     begin
       if ObjPat.Properties[I].Computed and Assigned(ObjPat.Properties[I].KeyExpression) then
-        PropValue := (AValue as TGocciaObjectValue).GetProperty(
-          EvaluateExpression(ObjPat.Properties[I].KeyExpression, AContext).ToStringLiteral.Value)
+      begin
+        // ES2026 §13.5.5 ObjectBindingPattern with ComputedPropertyName:
+        // ToPropertyKey on the evaluated expression, dispatch by type.
+        PropertyKey := ToPropertyKey(EvaluateExpression(ObjPat.Properties[I].KeyExpression, AContext));
+        if PropertyKey is TGocciaSymbolValue then
+          PropValue := (AValue as TGocciaObjectValue).GetSymbolProperty(TGocciaSymbolValue(PropertyKey))
+        else
+          PropValue := (AValue as TGocciaObjectValue).GetProperty(TGocciaStringLiteralValue(PropertyKey).Value);
+        if not Assigned(PropValue) then
+          PropValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      end
       else
         PropValue := (AValue as TGocciaObjectValue).GetProperty(ObjPat.Properties[I].Key);
       AssignVariablePattern(ObjPat.Properties[I].Pattern, PropValue, AContext);
@@ -5783,13 +5802,15 @@ begin
   Obj := EvaluateExpression(MemberExpr.ObjectExpr, AContext);
   if MemberExpr.Computed then
   begin
-    PropValue := EvaluateExpression(MemberExpr.PropertyExpression, AContext);
+    // ES2026 §13.5.1.2 PropertyDestructuringAssignmentEvaluation step 5:
+    // ToPropertyKey on the computed key.
+    PropValue := ToPropertyKey(EvaluateExpression(MemberExpr.PropertyExpression, AContext));
     if (PropValue is TGocciaSymbolValue) and (Obj is TGocciaObjectValue) then
       TGocciaObjectValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropValue), AValue)
     else if (PropValue is TGocciaSymbolValue) and (Obj is TGocciaClassValue) then
       TGocciaClassValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropValue), AValue)
     else
-      AssignProperty(Obj, PropValue.ToStringLiteral.Value, AValue, AContext.OnError, APattern.Line, APattern.Column);
+      AssignProperty(Obj, TGocciaStringLiteralValue(PropValue).Value, AValue, AContext.OnError, APattern.Line, APattern.Column);
   end
   else
     AssignProperty(Obj, MemberExpr.PropertyName, AValue, AContext.OnError, APattern.Line, APattern.Column);
@@ -6059,11 +6080,11 @@ begin
       end
       else
       begin
-        // Regular property
+        // Regular property — ES2026 §13.5.5 ObjectAssignmentPattern routes
+        // computed keys through ToPropertyKey.
         if Prop.Computed then
         begin
-          // Computed property key (may be a symbol)
-          PropValue := EvaluateExpression(Prop.KeyExpression, AContext);
+          PropValue := ToPropertyKey(EvaluateExpression(Prop.KeyExpression, AContext));
           if PropValue is TGocciaSymbolValue then
           begin
             // Class values store static symbol-keyed members in their own
@@ -6077,7 +6098,7 @@ begin
             AssignPattern(Prop.Pattern, PropValue, AContext, AIsDeclaration, ADeclarationType);
             Continue;
           end;
-          Key := PropValue.ToStringLiteral.Value;
+          Key := TGocciaStringLiteralValue(PropValue).Value;
         end
         else
         begin
@@ -6148,30 +6169,56 @@ var
   MemberExpr: TGocciaMemberExpression;
   ObjValue: TGocciaValue;
   PropertyName: string;
-  Value: TGocciaValue;
+  PropertyKey: TGocciaValue;
+  IsSymbolKey: Boolean;
+  SymbolKey: TGocciaSymbolValue;
   ArrayValue: TGocciaArrayValue;
   ObjectValue: TGocciaObjectValue;
   Index: Integer;
 begin
+  IsSymbolKey := False;
+  SymbolKey := nil;
+  PropertyName := '';
   // Handle member expressions (property deletion)
   if AOperand is TGocciaMemberExpression then
   begin
     MemberExpr := TGocciaMemberExpression(AOperand);
     ObjValue := EvaluateExpression(MemberExpr.ObjectExpr, AContext);
 
-    // Get property name
+    // Get property name. ES2026 §13.5.1.2 step 5 routes computed keys through
+    // ToPropertyKey so symbols are deleted from symbol storage rather than
+    // being stringified (which would throw TypeError).
     if MemberExpr.Computed and Assigned(MemberExpr.PropertyExpression) then
     begin
-      Value := EvaluateExpression(MemberExpr.PropertyExpression, AContext);
-      PropertyName := Value.ToStringLiteral.Value;
+      PropertyKey := ToPropertyKey(EvaluateExpression(MemberExpr.PropertyExpression, AContext));
+      if PropertyKey is TGocciaSymbolValue then
+      begin
+        IsSymbolKey := True;
+        SymbolKey := TGocciaSymbolValue(PropertyKey);
+      end
+      else
+        PropertyName := TGocciaStringLiteralValue(PropertyKey).Value;
     end
     else
     begin
       PropertyName := MemberExpr.PropertyName;
     end;
 
+    if IsSymbolKey then
+    begin
+      // Symbol-keyed deletion: defined for objects/instances/classes only.
+      // Primitives have no symbol storage, so the operation is a no-op.
+      if ObjValue is TGocciaObjectValue then
+      begin
+        if not TGocciaObjectValue(ObjValue).DeleteSymbolProperty(SymbolKey) then
+          ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
+            [SymbolKey.ToDisplayString.Value, '[object Object]']),
+            SSuggestCannotDeleteNonConfigurable);
+      end;
+      Result := TGocciaBooleanLiteralValue.TrueValue;
+    end
     // Handle array element deletion
-    if ObjValue is TGocciaArrayValue then
+    else if ObjValue is TGocciaArrayValue then
     begin
       ArrayValue := TGocciaArrayValue(ObjValue);
       if TryStrToInt(PropertyName, Index) and (Index >= 0) and (Index < ArrayValue.Elements.Count) then

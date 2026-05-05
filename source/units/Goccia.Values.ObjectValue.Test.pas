@@ -3,8 +3,11 @@ program Goccia.Values.ObjectValue.Test;
 {$I Goccia.inc}
 
 uses
+  SysUtils,
+
   TestingPascalLibrary,
 
+  Goccia.Error,
   Goccia.TestSetup,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -61,6 +64,7 @@ procedure TTestObjectValue.TestCasting;
 var
   ObjectValue: TGocciaObjectValue;
   DebugString: string;
+  ToStringThrew: Boolean;
 begin
   ObjectValue := SimpleObject;
   DebugString := ObjectValue.ToDebugString;
@@ -72,7 +76,21 @@ begin
   Expect<Boolean>(ContainsFragment(DebugString, 'city: Anytown')).ToBe(True);
   Expect<Boolean>(ContainsFragment(DebugString, 'state: CA')).ToBe(True);
   Expect<Boolean>(ContainsFragment(DebugString, 'zip: 12345')).ToBe(True);
-  Expect<string>(ObjectValue.ToStringLiteral.Value).ToBe('[object Object]');
+
+  // ES2026 §7.1.17 ToString on an object without Object.prototype.toString
+  // (no prototype assigned in this test fixture) throws TypeError because
+  // neither toString() nor valueOf() can be located. This exercises the spec
+  // path through ToPrimitive(string). Real engine objects always inherit
+  // Object.prototype and therefore stringify successfully.
+  ToStringThrew := False;
+  try
+    ObjectValue.ToStringLiteral;
+  except
+    on E: Exception do
+      ToStringThrew := True;
+  end;
+  Expect<Boolean>(ToStringThrew).ToBe(True);
+
   Expect<Boolean>(ObjectValue.ToBooleanLiteral.Value).ToBe(True);
   Expect<Boolean>(ObjectValue.ToNumberLiteral.IsNaN).ToBe(True);
   Expect<string>(ObjectValue.TypeName).ToBe('object');

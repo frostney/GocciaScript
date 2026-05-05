@@ -46,3 +46,12 @@ test("property is gone after delete", () => {
   delete obj.value;
   expect("value" in obj).toBe(false);
 });
+
+test("delete with symbol key removes symbol-keyed property (ES2026 §7.1.19)", () => {
+  const sym = Symbol("foo");
+  const obj = { [sym]: "x", regular: 1 };
+  expect(obj[sym]).toBe("x");
+  delete obj[sym];
+  expect(obj[sym]).toBeUndefined();
+  expect(obj.regular).toBe(1);
+});

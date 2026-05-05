@@ -116,27 +116,23 @@ constructor EGocciaBytecodeThrow.Create(const AThrownValue: TGocciaValue);
 var
   MessageText: string;
   ErrorObject: TGocciaObjectValue;
-  NameValue: TGocciaValue;
-  DetailValue: TGocciaValue;
+  NameValue, DetailValue: TGocciaValue;
 begin
+  // Pascal-side Exception.Message — consulted only when no higher-level
+  // formatter handles the throw. Built from primitive `name`/`message`
+  // properties when available, otherwise a static placeholder. Never invoke
+  // user toString()/valueOf() here: exceptions that JS later catches must
+  // not observe stringification (ES2026 §14.14 ThrowStatement).
   MessageText := 'Goccia VM throw';
-  if Assigned(AThrownValue) then
+  if Assigned(AThrownValue) and (AThrownValue is TGocciaObjectValue) then
   begin
-    if AThrownValue is TGocciaObjectValue then
-    begin
-      ErrorObject := TGocciaObjectValue(AThrownValue);
-      NameValue := ErrorObject.GetProperty(PROP_NAME);
-      DetailValue := ErrorObject.GetProperty(PROP_MESSAGE);
-      if Assigned(NameValue) and Assigned(DetailValue) and
-         not (NameValue is TGocciaUndefinedLiteralValue) and
-         not (DetailValue is TGocciaUndefinedLiteralValue) then
-        MessageText := NameValue.ToStringLiteral.Value + ': ' +
-          DetailValue.ToStringLiteral.Value
-      else
-        MessageText := AThrownValue.ToStringLiteral.Value;
-    end
-    else
-      MessageText := AThrownValue.ToStringLiteral.Value;
+    ErrorObject := TGocciaObjectValue(AThrownValue);
+    NameValue := ErrorObject.GetProperty(PROP_NAME);
+    DetailValue := ErrorObject.GetProperty(PROP_MESSAGE);
+    if (NameValue is TGocciaStringLiteralValue) and
+       (DetailValue is TGocciaStringLiteralValue) then
+      MessageText := TGocciaStringLiteralValue(NameValue).Value + ': ' +
+        TGocciaStringLiteralValue(DetailValue).Value;
   end;
   inherited Create(MessageText);
   FThrownValue := AThrownValue;

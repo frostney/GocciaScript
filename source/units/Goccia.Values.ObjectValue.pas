@@ -124,7 +124,8 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
-  Goccia.Values.NativeFunction;
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ToPrimitive;
 
 // Object.prototype lives in a per-realm slot.  See Goccia.Realm and the
 // matching pattern in Goccia.Values.ArrayValue for the rationale; the method
@@ -474,9 +475,20 @@ begin
   Result := CONSTRUCTOR_OBJECT;
 end;
 
+// ES2026 §7.1.17 ToString. For an object: ToPrimitive(O, string) → ToString
+// of the resulting primitive. May invoke user-defined toString()/valueOf()
+// and may throw. Callers that cannot tolerate user re-entry must use
+// SafeToString from Goccia.Values.ToPrimitive instead.
 function TGocciaObjectValue.ToStringLiteral: TGocciaStringLiteralValue;
+var
+  Prim: TGocciaValue;
 begin
-  Result := TGocciaStringLiteralValue.Create(Format('[%s %s]', [TypeName, ToStringTag]));
+  Prim := ToPrimitive(Self, tphString);
+  if Prim is TGocciaSymbolValue then
+    ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
+  // Prim is a primitive at this point — its ToStringLiteral cannot recurse
+  // into user code.
+  Result := Prim.ToStringLiteral;
 end;
 
 function TGocciaObjectValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;

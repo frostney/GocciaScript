@@ -298,7 +298,7 @@ Each symbol has a globally unique `Id` assigned at creation. Type coercion follo
 - `Number(symbol)` — Throws `TypeError`. Internally, `ToNumberLiteral` raises the error.
 - Unary `+symbol` / `-symbol` — Throws `TypeError` (these trigger `ToNumberLiteral`).
 
-The implicit coercion checks are implemented at the operator level (primarily in `Goccia.Arithmetic.pas`, with string built-in behavior in `Goccia.Values.StringObjectValue.pas`) rather than in `ToStringLiteral`, because `ToStringLiteral` is also used internally for property keys and display purposes where conversion must succeed.
+The implicit coercion checks for symbols are implemented at the operator level (primarily in `Goccia.Arithmetic.pas`, with string built-in behavior in `Goccia.Values.StringObjectValue.pas`) so that operators reach Symbol-rejection cleanly without first invoking `ToStringLiteral` on a non-symbol path.
 
 **Shared prototype singleton:** Like strings and numbers, symbols use a per-engine shared prototype object stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). It is initialized via `InitializePrototype`; the realm pins it on `SetSlot` and releases it on `Destroy`. The `description` getter and `toString()` method are registered on this shared prototype, and `TGocciaSymbolValue.GetProperty` delegates to the prototype via `GetPropertyWithContext` so that accessor getters receive the correct symbol instance as `this`. `Symbol.prototype` is exposed on the Symbol constructor function, matching ECMAScript semantics. Symbol is an always-registered standard built-in; special-purpose opt-ins like test assertions, benchmarking, and FFI are runtime globals selected through `TGocciaRuntimeGlobals`. Symbol type checks at the operator level use standard RTTI (`is TGocciaSymbolValue`) rather than VMT methods purely for implementation simplicity.
 
@@ -310,7 +310,11 @@ Objects store symbol-keyed properties separately from string-keyed properties vi
 
 ### ToPrimitive (`Goccia.Values.ToPrimitive.pas`)
 
-The ECMAScript abstract operation `ToPrimitive` converts any value to a primitive. For primitives, it's a no-op. For objects, it tries `valueOf()` first, then `toString()`, returning the first result that is a primitive. This operation is used by the `+` operator and is available as a standalone function for any module that needs spec-compliant type coercion.
+The ECMAScript abstract operation `ToPrimitive` converts any value to a primitive. For primitives, it's a no-op. For objects, the hint determines order: with `tphString` it tries `toString()` first, then `valueOf()`; with `tphDefault` or `tphNumber` it tries `valueOf()` first, then `toString()`. Returns the first result that is a primitive, or throws `TypeError` if neither method returns one. Used by `+`, comparison operators, and the spec coercion methods.
+
+### `ToPropertyKey` helper
+
+`Goccia.Values.ToPrimitive` also exposes `ToPropertyKey` (ES2026 §7.1.19) — coerces a value to a property key. Symbols pass through unchanged so the caller can dispatch to symbol-keyed property storage; non-symbols are coerced via `ToPrimitive(string)` and then `ToStringLiteral`. Property-access call sites check the returned type and route to either the string or symbol property table.
 
 ### Coercion Methods
 
@@ -321,6 +325,8 @@ Every value implements three conversion methods, following JavaScript coercion r
 | `ToBooleanLiteral` | `TGocciaBooleanLiteralValue` | `false` |
 | `ToNumberLiteral` | `TGocciaNumberLiteralValue` | `NaN` |
 | `ToStringLiteral` | `TGocciaStringLiteralValue` | `"undefined"` |
+
+For objects and class instances, `ToStringLiteral` performs ES2026 §7.1.17 ToString — it calls `ToPrimitive(value, string)` and may invoke user-defined `toString()` / `valueOf()`. It can therefore throw or trigger arbitrary side effects. Callers in error-boundary contexts (the bytecode throw constructor, the top-level throw formatter) avoid invoking it on objects entirely — they read primitive `name`/`message` properties or render a static `[object <Tag>]` placeholder instead, since post-VM-unwind re-entry is unsafe.
 
 Conversion follows ECMAScript specification semantics:
 

@@ -525,26 +525,7 @@ begin
   end;
 end;
 
-function VMToECMAStringFast(const AValue: TGocciaValue): TGocciaStringLiteralValue; inline;
-var
-  PrimitiveValue: TGocciaValue;
-begin
-  if AValue is TGocciaStringLiteralValue then
-    Exit(TGocciaStringLiteralValue(AValue));
-
-  if AValue is TGocciaSymbolValue then
-    ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
-
-  if AValue.IsPrimitive then
-    Exit(AValue.ToStringLiteral);
-
-  PrimitiveValue := ToPrimitive(AValue, tphString);
-  if PrimitiveValue is TGocciaSymbolValue then
-    ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
-  Result := PrimitiveValue.ToStringLiteral;
-end;
-
-function VMRegisterToECMAStringFast(
+function VMRegisterToStringFast(
   const AValue: TGocciaRegister): TGocciaStringLiteralValue; inline;
 begin
   case AValue.Kind of
@@ -565,12 +546,11 @@ begin
       Exit(RegisterToValue(AValue).ToStringLiteral);
     grkObject:
       begin
-        if AValue.ObjectValue is TGocciaStringLiteralValue then
-          Exit(TGocciaStringLiteralValue(AValue.ObjectValue));
-        if AValue.ObjectValue is TGocciaSymbolValue then
-          ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
         if Assigned(AValue.ObjectValue) then
-          Exit(VMToECMAStringFast(AValue.ObjectValue));
+          // Spec ToString — for objects, dispatches through
+          // TGocciaObjectValue.ToStringLiteral which performs ToPrimitive(string)
+          // and may invoke user toString()/valueOf().
+          Exit(AValue.ObjectValue.ToStringLiteral);
       end;
   end;
   Result := TGocciaStringLiteralValue.Create('');
@@ -4053,10 +4033,10 @@ begin
     grkInt:
       Result := IntToStr(AKey.IntValue);
     grkFloat:
-      Result := VMRegisterToECMAStringFast(AKey).Value;
+      Result := VMRegisterToStringFast(AKey).Value;
     grkObject:
       if Assigned(AKey.ObjectValue) then
-        Result := VMRegisterToECMAStringFast(AKey).Value
+        Result := VMRegisterToStringFast(AKey).Value
       else
         Result := '';
   else
@@ -7260,8 +7240,8 @@ begin
             TGocciaStringLiteralValue(FRegisters[C].ObjectValue).Value))
         else
           SetRegisterFast(A, TGocciaStringLiteralValue.Create(
-            VMRegisterToECMAStringFast(FRegisters[B]).Value +
-            VMRegisterToECMAStringFast(FRegisters[C]).Value));
+            VMRegisterToStringFast(FRegisters[B]).Value +
+            VMRegisterToStringFast(FRegisters[C]).Value));
       end;
 
       OP_NEW_ARRAY:
@@ -7850,8 +7830,8 @@ begin
                       Assigned(FRegisters[C].ObjectValue) and
                       (not FRegisters[C].ObjectValue.IsPrimitive))) then
           SetRegisterFast(A, TGocciaStringLiteralValue.Create(
-            VMRegisterToECMAStringFast(FRegisters[B]).Value +
-            VMRegisterToECMAStringFast(FRegisters[C]).Value))
+            VMRegisterToStringFast(FRegisters[B]).Value +
+            VMRegisterToStringFast(FRegisters[C]).Value))
         else
         begin
           LeftValue := GetRegisterFast(B);
@@ -8247,7 +8227,7 @@ begin
         end;
 
       OP_TO_STRING:
-        SetRegisterFast(A, VMRegisterToECMAStringFast(FRegisters[B]));
+        SetRegisterFast(A, VMRegisterToStringFast(FRegisters[B]));
 
       OP_DEL_INDEX:
       begin
@@ -8268,7 +8248,17 @@ begin
         else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaObjectValue) then
         begin
-          if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
+          // ES2026 §7.1.19 ToPropertyKey: symbol keys delete from symbol storage.
+          if (FRegisters[C].Kind = grkObject) and
+             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
+          begin
+            if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteSymbolProperty(
+              TGocciaSymbolValue(FRegisters[C].ObjectValue)) then
+              FRegisters[A] := RegisterBoolean(True)
+            else
+              FRegisters[A] := RegisterBoolean(False);
+          end
+          else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
             KeyToPropertyNameRegister(FRegisters[C])) then
             FRegisters[A] := RegisterBoolean(True)
           else
@@ -8825,11 +8815,11 @@ begin
           try
             if Assigned(Template.DebugInfo) and (Template.DebugInfo.SourceFile <> '') then
               DynImportPromise.Resolve(ImportModuleValue(
-                VMRegisterToECMAStringFast(FRegisters[B]).Value,
+                VMRegisterToStringFast(FRegisters[B]).Value,
                 Template.DebugInfo.SourceFile))
             else
               DynImportPromise.Resolve(ImportModuleValue(
-                VMRegisterToECMAStringFast(FRegisters[B]).Value,
+                VMRegisterToStringFast(FRegisters[B]).Value,
                 FCurrentModuleSourcePath));
           except
             on E: EGocciaBytecodeThrow do

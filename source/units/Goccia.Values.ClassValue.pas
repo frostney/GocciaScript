@@ -270,7 +270,6 @@ type
       const APropertyCapacity: Integer = 0);
     destructor Destroy; override;
     function TypeName: string; override;
-    function ToStringLiteral: TGocciaStringLiteralValue; override;
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); override;
@@ -313,6 +312,7 @@ uses
   Goccia.Values.SharedArrayBufferValue,
   Goccia.Values.TextDecoderValue,
   Goccia.Values.TextEncoderValue,
+  Goccia.Values.ToPrimitive,
   Goccia.Values.URLSearchParamsValue,
   Goccia.Values.URLValue,
   Goccia.Values.WeakMapValue,
@@ -1618,14 +1618,6 @@ begin
     Result := FClass.Name
   else
     Result := CONSTRUCTOR_OBJECT;
-end;
-
-function TGocciaInstanceValue.ToStringLiteral: TGocciaStringLiteralValue;
-begin
-  if Assigned(FClass) then
-    Result := TGocciaStringLiteralValue.Create(Format('[Instance of %s]', [FClass.Name]))
-  else
-    Result := TGocciaStringLiteralValue.Create('[object Object]');
 end;
 
 function TGocciaInstanceValue.GetProperty(const AName: string): TGocciaValue;
