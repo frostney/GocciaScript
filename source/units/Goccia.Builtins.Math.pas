@@ -196,6 +196,7 @@ end;
 function TGocciaMath.MathCeil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
+  V: Double;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.ceil', ThrowError);
   // Step 1: Let n be ? ToNumber(x).
@@ -206,8 +207,15 @@ begin
     Result := NumberArg;
     Exit;
   end;
-  // Step 3: Return the smallest (closest to -∞) integral Number ≥ n.
-  Result := TGocciaNumberLiteralValue.Create(Ceil(NumberArg.Value));
+  // Step 3: If n < +0𝔽 and n > -1𝔽, return -0𝔽 (preserves signed-zero).
+  V := NumberArg.Value;
+  if (V < 0) and (V > -1) then
+  begin
+    Result := TGocciaNumberLiteralValue.NegativeZeroValue;
+    Exit;
+  end;
+  // Step 4: Return the smallest (closest to -∞) integral Number ≥ n.
+  Result := TGocciaNumberLiteralValue.Create(Ceil(V));
 end;
 
 // §21.3.2.28 Math.round ( x )

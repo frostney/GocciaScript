@@ -199,11 +199,72 @@ begin
   Result := TGocciaStringLiteralValue.Create(FormatFloat('0.' + StringOfChar('0', Digits), Prim.Value));
 end;
 
+// Convert a finite non-negative integer to its base-AR digit sequence, using
+// 0-9 and a-z (lowercase) for digit values 10-35.
+function IntegerToRadixString(const AValue: Int64; const ARadix: Integer): string;
+const
+  DIGITS: array[0..35] of Char =
+    ('0','1','2','3','4','5','6','7','8','9',
+     'a','b','c','d','e','f','g','h','i','j',
+     'k','l','m','n','o','p','q','r','s','t',
+     'u','v','w','x','y','z');
+var
+  V: Int64;
+begin
+  if AValue = 0 then
+    Exit('0');
+  V := AValue;
+  Result := '';
+  while V > 0 do
+  begin
+    Result := DIGITS[V mod ARadix] + Result;
+    V := V div ARadix;
+  end;
+end;
+
+// Convert a positive finite fractional value (0 < AValue < 1) to its base-ARadix
+// representation. Uses a fixed precision of 52 fractional digits — enough to
+// round-trip a binary64 mantissa for any base ≥ 2 — and trims trailing zeros.
+function FractionToRadixString(const AValue: Double; const ARadix: Integer): string;
+const
+  DIGITS: array[0..35] of Char =
+    ('0','1','2','3','4','5','6','7','8','9',
+     'a','b','c','d','e','f','g','h','i','j',
+     'k','l','m','n','o','p','q','r','s','t',
+     'u','v','w','x','y','z');
+const
+  MAX_DIGITS = 52;
+var
+  V: Double;
+  Digit, I, LastNonZero: Integer;
+begin
+  Result := '';
+  V := AValue;
+  for I := 1 to MAX_DIGITS do
+  begin
+    V := V * ARadix;
+    Digit := Trunc(V);
+    if Digit < 0 then Digit := 0;
+    if Digit > ARadix - 1 then Digit := ARadix - 1;
+    Result := Result + DIGITS[Digit];
+    V := V - Digit;
+    if V = 0 then Break;
+  end;
+  // Trim trailing zeros — a base-N fraction terminates exactly at the
+  // last non-zero digit.
+  LastNonZero := Length(Result);
+  while (LastNonZero > 0) and (Result[LastNonZero] = '0') do
+    Dec(LastNonZero);
+  SetLength(Result, LastNonZero);
+end;
+
 // ES2026 §21.1.3.6 Number.prototype.toString([radix])
 function TGocciaNumberObjectValue.NumberToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Prim: TGocciaNumberLiteralValue;
   Radix: Integer;
+  V, IntPart, FracPart: Double;
+  IntStr, FracStr, Sign: string;
 begin
   // Step 1: Let x be ? thisNumberValue(this value)
   Prim := ExtractPrimitive(AThisValue);
@@ -224,11 +285,37 @@ begin
       Result := TGocciaStringLiteralValue.Create('');
       Exit;
     end;
-    // Step 4: Return the String representation of x in the given radix
-    if Radix = 16 then
-      Result := TGocciaStringLiteralValue.Create(LowerCase(IntToHex(Trunc(Prim.Value), 1)))
-    else
+    // Step 2: If radix is undefined or 10, return ! ToString(x)
+    if Radix = 10 then
+    begin
       Result := Prim.ToStringLiteral;
+      Exit;
+    end;
+    // Step 4: Return the String representation of x in the given radix.
+    // ES2026 §6.1.6.1.20 Number::toString — implementation-defined for
+    // non-integer values, but spec asserts the result must be a "generalization"
+    // of the decimal algorithm: sign + integer-digits + optional '.' + fraction.
+    V := Prim.Value;
+    if V < 0 then
+    begin
+      Sign := '-';
+      V := -V;
+    end
+    else
+      Sign := '';
+    IntPart := Trunc(V);
+    FracPart := V - IntPart;
+    IntStr := IntegerToRadixString(Round(IntPart), Radix);
+    if FracPart > 0 then
+    begin
+      FracStr := FractionToRadixString(FracPart, Radix);
+      if FracStr <> '' then
+        Result := TGocciaStringLiteralValue.Create(Sign + IntStr + '.' + FracStr)
+      else
+        Result := TGocciaStringLiteralValue.Create(Sign + IntStr);
+    end
+    else
+      Result := TGocciaStringLiteralValue.Create(Sign + IntStr);
   end
   else
     // Step 2: If radix is undefined or 10, return ! ToString(x)
