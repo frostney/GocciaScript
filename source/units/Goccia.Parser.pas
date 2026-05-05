@@ -192,6 +192,7 @@ type
     function IfStatement: TGocciaStatement;
     function VarStatement: TGocciaStatement;
     function ForStatement: TGocciaStatement;
+    function LooksLikeTraditionalForHeader: Boolean;
     function ParseTraditionalForBody(const ALine, AColumn: Integer): TGocciaForStatement;
     function WhileStatement: TGocciaStatement;
     function DoWhileStatement: TGocciaStatement;
@@ -3916,7 +3917,7 @@ begin
       else
       begin
         FCurrent := SavedCurrent;
-        if FTraditionalForLoopsEnabled then
+        if FTraditionalForLoopsEnabled and LooksLikeTraditionalForHeader then
           Exit(ParseTraditionalForBody(Line, Column));
         AddWarning('Traditional ''for(;;)'' loops are not supported by default in GocciaScript',
           'Use for...of/array methods, or enable --compat-traditional-for-loop',
@@ -3975,7 +3976,7 @@ begin
     FCurrent := SavedCurrent;
   end;
 
-  if FTraditionalForLoopsEnabled then
+  if FTraditionalForLoopsEnabled and LooksLikeTraditionalForHeader then
   begin
     Result := ParseTraditionalForBody(Line, Column);
     Exit;
@@ -3990,6 +3991,44 @@ begin
   SkipStatementOrBlock;
 
   Result := TGocciaEmptyStatement.Create(Line, Column);
+end;
+
+// Cheap shape detector for the for-header at the current cursor (which
+// points at the leading '(' of `for ( ... )`). Returns True iff at least
+// one top-depth ';' appears inside the parens — that's the unambiguous
+// signal of a traditional `for(init; test; update)`. for-of / for-in
+// heads contain no top-level ';', so they return False and fall through
+// to warn-and-skip rather than getting (mis)parsed by ParseTraditionalForBody.
+// Pure peek, doesn't advance.
+function TGocciaParser.LooksLikeTraditionalForHeader: Boolean;
+var
+  Idx, Depth: Integer;
+  Tok: TGocciaToken;
+begin
+  Idx := FCurrent;
+  if (Idx >= FTokens.Count) or (FTokens[Idx].TokenType <> gttLeftParen) then
+    Exit(False);
+  Inc(Idx); // step past '('
+  Depth := 1;
+  while (Idx < FTokens.Count) and (Depth > 0) do
+  begin
+    Tok := FTokens[Idx];
+    case Tok.TokenType of
+      gttLeftParen, gttLeftBracket, gttLeftBrace:
+        Inc(Depth);
+      gttRightParen, gttRightBracket, gttRightBrace:
+      begin
+        Dec(Depth);
+        if Depth = 0 then
+          Break;
+      end;
+      gttSemicolon:
+        if Depth = 1 then
+          Exit(True);
+    end;
+    Inc(Idx);
+  end;
+  Result := False;
 end;
 
 function TGocciaParser.ParseTraditionalForBody(
