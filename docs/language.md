@@ -814,7 +814,7 @@ Warning: Labeled statements are not supported in GocciaScript
 
 The labeled statement itself (the statement after the `:`) is still parsed and executed normally. For example, `myLabel: x = 2;` strips the label and executes `x = 2;`. If the labeled statement is itself unsupported (e.g., `outer: for (...)`), both a label warning and a loop warning are emitted.
 
-Labels exist primarily for `break`/`continue` targets in nested loops. Since GocciaScript excludes traditional loops, labels serve no purpose.
+Labels exist primarily for `break`/`continue` targets in nested loops. GocciaScript supports `for...of`, `for await...of`, and (with `--compat-traditional-for-loop`) traditional `for(;;)`, but doesn't implement labeled `break`/`continue` against any of them; nested-loop control flow uses `return` from a closure or an early-exit flag.
 
 ### Generators and Iterators
 
