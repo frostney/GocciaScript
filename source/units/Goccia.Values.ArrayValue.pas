@@ -2457,7 +2457,20 @@ var
   I: Integer;
   CallArgs: TGocciaArgumentsCollection;
 begin
-  // Step 1: Let O be ToObject(this value)
+  // Step 1: If comparefn is not undefined and IsCallable(comparefn) is false,
+  // throw a TypeError. Spec §23.1.3.34 step 1 — must run BEFORE LengthOfArrayLike
+  // so a comparator-shape error is observed before any property reads on `this`.
+  if AArgs.Length > 0 then
+  begin
+    CustomSortFunction := AArgs.GetElement(0);
+    if (not (CustomSortFunction is TGocciaUndefinedLiteralValue)) and
+       (not CustomSortFunction.IsCallable) then
+      ThrowTypeError(SErrorCustomSortMustBeFunction, SSuggestCallbackRequired);
+  end
+  else
+    CustomSortFunction := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  // Step 2-3: Let O be ToObject(this value); Let len be LengthOfArrayLike(O).
   View.Init(AThisValue);
   // Step 4: Let A be ArrayCreate(len) — RangeError if len > 2^32-1
   View.CheckArrayCreateLen;
@@ -2467,13 +2480,8 @@ begin
   for I := 0 to View.Len - 1 do
     ResultArray.Elements.Add(View.Get(I));
 
-  if AArgs.Length > 0 then
+  if not (CustomSortFunction is TGocciaUndefinedLiteralValue) then
   begin
-    CustomSortFunction := AArgs.GetElement(0);
-
-    if not CustomSortFunction.IsCallable then
-      ThrowError(SErrorCustomSortMustBeFunction, [], SSuggestCallbackRequired);
-
     CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
     try
       QuickSortElements(ResultArray.Elements, TGocciaFunctionBase(CustomSortFunction), CallArgs, AThisValue, 0, ResultArray.Elements.Count - 1);
@@ -2924,6 +2932,18 @@ var
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
 begin
+  // Step 1: If comparefn is not undefined and IsCallable(comparefn) is false,
+  // throw a TypeError. Per spec §23.1.3.29 this runs BEFORE LengthOfArrayLike.
+  if AArgs.Length > 0 then
+  begin
+    CustomSortFunction := AArgs.GetElement(0);
+    if (not (CustomSortFunction is TGocciaUndefinedLiteralValue)) and
+       (not CustomSortFunction.IsCallable) then
+      ThrowTypeError(SErrorCustomSortMustBeFunction, SSuggestCallbackRequired);
+  end
+  else
+    CustomSortFunction := TGocciaUndefinedLiteralValue.UndefinedValue;
+
   View.Init(AThisValue);
 
   // Collect only present elements via View for prototype-aware access
@@ -2934,11 +2954,8 @@ begin
       TempArr.Elements.Add(View.Get(I));
   end;
 
-  if AArgs.Length > 0 then
+  if not (CustomSortFunction is TGocciaUndefinedLiteralValue) then
   begin
-    CustomSortFunction := AArgs.GetElement(0);
-    if not CustomSortFunction.IsCallable then
-      ThrowError(SErrorCustomSortMustBeFunction, [], SSuggestCallbackRequired);
     CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
     try
       if TempArr.Elements.Count > 1 then
