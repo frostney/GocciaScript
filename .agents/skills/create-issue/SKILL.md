@@ -51,8 +51,9 @@ When labels were selected, append one `-F labelIds[]="$LABEL_ID"` argument per l
 gh api "repos/$OWNER/$REPO/issues" \
   -f title="$ISSUE_TITLE" \
   -f body="$ISSUE_BODY" \
-  -f labels[]="$LABEL_NAME" \
   --jq '.html_url'
 ```
+
+When labels were selected, append one `-f labels[]="$LABEL_NAME"` argument per label name.
 
 10. Return the issue URL to the user.
