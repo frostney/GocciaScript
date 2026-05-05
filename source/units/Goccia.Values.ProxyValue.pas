@@ -1308,24 +1308,34 @@ begin
   end
   else
   begin
-    // No construct trap: construct the target directly (nested proxies first).
-    // Use Instantiate() for class values — it is virtual, so
-    // TGocciaVMClassValue dispatches to its bytecode-aware override.
-    // newTarget propagation through non-proxy fallback targets is tracked in
-    // #529 (classes) and #530 (native constructors); the chained-proxy case
-    // forwards EffectiveNewTarget so nested proxies still see the right
-    // newTarget at their trap invocation.
+    // No construct trap: forward to target's [[Construct]](args, EffectiveNewTarget).
+    // Instantiate() is virtual — TGocciaVMClassValue dispatches to its
+    // bytecode-aware override. Native-constructor newTarget propagation
+    // remains tracked in #530 (engine-wide change required: every native
+    // allocator would need to accept newTarget).
     if FTarget is TGocciaProxyValue then
       Result := TGocciaProxyValue(FTarget).ConstructTrap(AArguments,
         EffectiveNewTarget)
     else if FTarget is TGocciaClassValue then
-      Result := TGocciaClassValue(FTarget).Instantiate(AArguments)
+    begin
+      if EffectiveNewTarget is TGocciaClassValue then
+        Result := TGocciaClassValue(FTarget).Instantiate(AArguments,
+          TGocciaClassValue(EffectiveNewTarget))
+      else
+      begin
+        Result := TGocciaClassValue(FTarget).Instantiate(AArguments);
+        if Result is TGocciaObjectValue then
+          TGocciaObjectValue(Result).Prototype :=
+            GetProtoFromConstructor(EffectiveNewTarget);
+      end;
+    end
     else if FTarget is TGocciaNativeFunctionValue then
       Result := TGocciaNativeFunctionValue(FTarget).Call(AArguments,
         TGocciaHoleValue.HoleValue)
     else if FTarget is TGocciaFunctionBase then
-      Result := TGocciaFunctionBase(FTarget).Call(AArguments,
-        TGocciaHoleValue.HoleValue)
+      Result := ConstructOrdinaryWithReceiver(TGocciaFunctionBase(FTarget),
+        AArguments,
+        TGocciaObjectValue.Create(GetProtoFromConstructor(EffectiveNewTarget)))
     else
       ThrowTypeError(SErrorProxyTargetNotConstructor, SSuggestProxyTargetType);
   end;

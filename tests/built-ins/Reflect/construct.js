@@ -273,4 +273,13 @@ describe("Reflect.construct", () => {
     Reflect.construct(outerProxy, [], Other);
     expect(inner).toBe(Other);
   });
+
+  test("Proxy with no construct trap forwards class newTarget to Instantiate", () => {
+    class Foo {}
+    class Other {}
+    const proxy = new Proxy(Foo, {});
+    const obj = Reflect.construct(proxy, [], Other);
+    expect(Object.getPrototypeOf(obj)).toBe(Other.prototype);
+    expect(obj instanceof Other).toBe(true);
+  });
 });

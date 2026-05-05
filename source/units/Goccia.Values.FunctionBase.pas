@@ -94,6 +94,20 @@ type
     property BoundArgCount: Integer read FBoundArgCount;
   end;
 
+// ES2026 §10.1.14 GetPrototypeFromConstructor: Get(constructor, "prototype")
+// directly — no bound-function unwrap. If the property is not an Object,
+// fall back to %Object.prototype%. Shared by Reflect.construct (§28.1.2)
+// and the proxy [[Construct]] fallback (§10.5.13).
+function GetProtoFromConstructor(const ANewTarget: TGocciaValue): TGocciaObjectValue;
+
+// ES2026 §10.2.2 [[Construct]] for ordinary function objects: call the body
+// with the receiver as `this`; if the body returns an Object, that wins —
+// otherwise the receiver is the result. The receiver is rooted across the
+// call so a GC during the body cannot collect a reachable instance.
+function ConstructOrdinaryWithReceiver(const ATarget: TGocciaFunctionBase;
+  const AArguments: TGocciaArgumentsCollection;
+  const AReceiver: TGocciaObjectValue): TGocciaValue;
+
 implementation
 
 uses
@@ -126,6 +140,43 @@ begin
     Result := TGocciaFunctionSharedPrototype(CurrentRealm.GetSlot(GFunctionPrototypeSlot))
   else
     Result := nil;
+end;
+
+function GetProtoFromConstructor(const ANewTarget: TGocciaValue): TGocciaObjectValue;
+var
+  ProtoValue: TGocciaValue;
+begin
+  if ANewTarget is TGocciaObjectValue then
+    ProtoValue := TGocciaObjectValue(ANewTarget).GetProperty(PROP_PROTOTYPE)
+  else
+    ProtoValue := nil;
+
+  if ProtoValue is TGocciaObjectValue then
+    Result := TGocciaObjectValue(ProtoValue)
+  else
+  begin
+    if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+      TGocciaObjectValue.InitializeSharedPrototype;
+    Result := TGocciaObjectValue.SharedObjectPrototype;
+  end;
+end;
+
+function ConstructOrdinaryWithReceiver(const ATarget: TGocciaFunctionBase;
+  const AArguments: TGocciaArgumentsCollection;
+  const AReceiver: TGocciaObjectValue): TGocciaValue;
+var
+  ReturnValue: TGocciaValue;
+begin
+  TGarbageCollector.Instance.AddTempRoot(AReceiver);
+  try
+    ReturnValue := ATarget.Call(AArguments, AReceiver);
+    if ReturnValue is TGocciaObjectValue then
+      Result := ReturnValue
+    else
+      Result := AReceiver;
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(AReceiver);
+  end;
 end;
 
 { TGocciaFunctionBase }

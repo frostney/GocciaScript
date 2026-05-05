@@ -200,6 +200,58 @@ describe("Reflect.construct on bound function-keyword targets", () => {
   });
 });
 
+describe("Reflect.construct on a proxy wrapping a function-keyword target", () => {
+  test("proxy fallback over a function declaration uses newTarget.prototype on the receiver", () => {
+    function Foo() {
+      this.x = 1;
+    }
+    function NewTarget() {}
+    const proxy = new Proxy(Foo, {});
+    const obj = Reflect.construct(proxy, [], NewTarget);
+    expect(obj.x).toBe(1);
+    expect(Object.getPrototypeOf(obj)).toBe(NewTarget.prototype);
+  });
+
+  test("proxy fallback over a function declaration with non-object newTarget.prototype falls back to Object.prototype", () => {
+    function Foo() {
+      this.x = 1;
+    }
+    function NewTarget() {}
+    NewTarget.prototype = null;
+    const proxy = new Proxy(Foo, {});
+    const obj = Reflect.construct(proxy, [], NewTarget);
+    expect(obj.x).toBe(1);
+    expect(Object.getPrototypeOf(obj)).toBe(Object.prototype);
+  });
+
+  test("proxy fallback over a class with function newTarget patches instance prototype from newTarget.prototype", () => {
+    class Foo {
+      constructor() {
+        this.x = 1;
+      }
+    }
+    function NewTarget() {}
+    const proxy = new Proxy(Foo, {});
+    const obj = Reflect.construct(proxy, [], NewTarget);
+    expect(obj.x).toBe(1);
+    expect(Object.getPrototypeOf(obj)).toBe(NewTarget.prototype);
+  });
+
+  test("proxy fallback over a class with function newTarget whose prototype is non-object falls back to Object.prototype", () => {
+    class Foo {
+      constructor() {
+        this.x = 1;
+      }
+    }
+    function NewTarget() {}
+    NewTarget.prototype = null;
+    const proxy = new Proxy(Foo, {});
+    const obj = Reflect.construct(proxy, [], NewTarget);
+    expect(obj.x).toBe(1);
+    expect(Object.getPrototypeOf(obj)).toBe(Object.prototype);
+  });
+});
+
 describe("Reflect.construct rejects non-constructable function forms", () => {
   test("async function declaration target throws TypeError", () => {
     async function asyncFn() {}

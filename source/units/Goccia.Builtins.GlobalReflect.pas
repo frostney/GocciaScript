@@ -43,7 +43,6 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
@@ -141,51 +140,6 @@ end;
 function IsConstructorValue(const AValue: TGocciaValue): Boolean;
 begin
   Result := AValue.IsConstructable;
-end;
-
-// ES2026 §10.1.14 GetPrototypeFromConstructor: Get(constructor, "prototype")
-// directly — no bound-function unwrap. If the property is not an Object,
-// fall back to %Object.prototype%. A plain bound function whose user has
-// not assigned an own `prototype` walks its prototype chain to undefined,
-// which lands on the fallback per spec.
-function GetProtoFromConstructor(const ANewTarget: TGocciaValue): TGocciaObjectValue;
-var
-  ProtoValue: TGocciaValue;
-begin
-  if ANewTarget is TGocciaObjectValue then
-    ProtoValue := TGocciaObjectValue(ANewTarget).GetProperty(PROP_PROTOTYPE)
-  else
-    ProtoValue := nil;
-
-  if ProtoValue is TGocciaObjectValue then
-    Result := TGocciaObjectValue(ProtoValue)
-  else
-  begin
-    if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
-      TGocciaObjectValue.InitializeSharedPrototype;
-    Result := TGocciaObjectValue.SharedObjectPrototype;
-  end;
-end;
-
-// ES2026 §10.2.2 [[Construct]] for ordinary function objects: call the body
-// with the receiver as `this`; if the body returns an Object, that wins —
-// otherwise the receiver is the result.
-function ConstructOrdinaryWithReceiver(const ATarget: TGocciaFunctionBase;
-  const AArguments: TGocciaArgumentsCollection;
-  const AReceiver: TGocciaObjectValue): TGocciaValue;
-var
-  ReturnValue: TGocciaValue;
-begin
-  TGarbageCollector.Instance.AddTempRoot(AReceiver);
-  try
-    ReturnValue := ATarget.Call(AArguments, AReceiver);
-    if ReturnValue is TGocciaObjectValue then
-      Result := ReturnValue
-    else
-      Result := AReceiver;
-  finally
-    TGarbageCollector.Instance.RemoveTempRoot(AReceiver);
-  end;
 end;
 
 function TGocciaGlobalReflect.ReflectConstruct(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
