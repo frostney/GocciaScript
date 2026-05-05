@@ -162,7 +162,7 @@ Bodies see only the identifiers stock test262 expects:
 - `Test262Error` (from `sta.js`)
 - `assert` and its methods (from `assert.js`)
 - `$DONE`, `$DONOTEVALUATE` (from `sta.js` / `doneprintHandle.js` when included)
-- `print` (Goccia engine global; stock `doneprintHandle.js` calls it)
+- `print` (Goccia engine global; the `positive_async` wrapper calls it to emit the `Test262:Async*` markers after `await __donePromise`. The bundled `doneprintHandle.js` itself only resolves / rejects `__donePromise`; it does NOT call `print`.)
 - Anything declared in test-included harness files (e.g. `compareArray`,
   `propertyHelper`)
 
