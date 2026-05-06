@@ -6350,12 +6350,45 @@ begin
     MemberExpr := TGocciaMemberExpression(AOperand);
     ObjValue := EvaluateExpression(MemberExpr.ObjectExpr, AContext);
 
-    // Get property name. ES2026 §13.5.1.2 step 5 routes computed keys through
-    // ToPropertyKey so symbols are deleted from symbol storage rather than
-    // being stringified (which would throw TypeError).
+    if (ObjValue is TGocciaNullLiteralValue) or
+       (ObjValue is TGocciaUndefinedLiteralValue) then
+    begin
+      if MemberExpr.Optional then
+      begin
+        Result := TGocciaBooleanLiteralValue.TrueValue;
+        Exit;
+      end;
+    end;
+
     if MemberExpr.Computed and Assigned(MemberExpr.PropertyExpression) then
     begin
-      PropertyKey := ToPropertyKey(EvaluateExpression(MemberExpr.PropertyExpression, AContext));
+      PropertyKey := EvaluateExpression(MemberExpr.PropertyExpression, AContext);
+
+      if (ObjValue is TGocciaNullLiteralValue) or
+         (ObjValue is TGocciaUndefinedLiteralValue) then
+      begin
+        if PropertyKey is TGocciaSymbolValue then
+          ThrowTypeError(Format(SErrorCannotReadPropertiesOf,
+            [ObjValue.ToStringLiteral.Value,
+             TGocciaSymbolValue(PropertyKey).ToDisplayString.Value]),
+            SSuggestCheckNullBeforeAccess)
+        else if PropertyKey is TGocciaStringLiteralValue then
+          ThrowTypeError(Format(SErrorCannotReadPropertiesOf,
+            [ObjValue.ToStringLiteral.Value,
+             TGocciaStringLiteralValue(PropertyKey).Value]),
+            SSuggestCheckNullBeforeAccess)
+        else if PropertyKey is TGocciaNumberLiteralValue then
+          ThrowTypeError(Format(SErrorCannotReadPropertiesOf,
+            [ObjValue.ToStringLiteral.Value,
+             FormatDouble(TGocciaNumberLiteralValue(PropertyKey).Value)]),
+            SSuggestCheckNullBeforeAccess)
+        else
+          ThrowTypeError(Format(SErrorCannotReadPropertiesOf,
+            [ObjValue.ToStringLiteral.Value, '<computed>']),
+            SSuggestCheckNullBeforeAccess);
+      end;
+
+      PropertyKey := ToPropertyKey(PropertyKey);
       if PropertyKey is TGocciaSymbolValue then
       begin
         IsSymbolKey := True;
@@ -6367,12 +6400,15 @@ begin
     else
     begin
       PropertyName := MemberExpr.PropertyName;
+      if (ObjValue is TGocciaNullLiteralValue) or
+         (ObjValue is TGocciaUndefinedLiteralValue) then
+        ThrowTypeError(Format(SErrorCannotReadPropertiesOf,
+          [ObjValue.ToStringLiteral.Value, PropertyName]),
+          SSuggestCheckNullBeforeAccess);
     end;
 
     if IsSymbolKey then
     begin
-      // Symbol-keyed deletion: defined for objects/instances/classes only.
-      // Primitives have no symbol storage, so the operation is a no-op.
       if ObjValue is TGocciaObjectValue then
       begin
         if not TGocciaObjectValue(ObjValue).DeleteSymbolProperty(SymbolKey) then

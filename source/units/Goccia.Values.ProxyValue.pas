@@ -35,6 +35,7 @@ type
       const ACanCreate: Boolean = True); override;
 
     // ES2026 §28.1.1 [[HasProperty]](P)
+    function HasProperty(const AName: string): Boolean; override;
     function HasTrap(const AName: string): Boolean;
     function HasSymbolTrap(const ASymbol: TGocciaSymbolValue): Boolean;
 
@@ -353,6 +354,11 @@ begin
     else
       Result := False;
   end;
+end;
+
+function TGocciaProxyValue.HasProperty(const AName: string): Boolean;
+begin
+  Result := HasTrap(AName);
 end;
 
 // ES2026 §28.1.1 [[HasProperty]](P)

@@ -375,7 +375,7 @@ begin
   if (StartTime <> nil) and not (StartTime is TGocciaUndefinedLiteralValue) then
   begin
     Elapsed := GetMilliseconds - StartTime.ToNumberLiteral.Value;
-    EmitLine('timeEnd', GroupPrefix + LabelStr + ': ' + FormatFloat('0.###', Elapsed) + 'ms');
+    EmitLine('timeEnd', GroupPrefix + LabelStr + ': ' + FormatFloat('0.###', Elapsed, InvariantFormatSettings) + 'ms');
     FTimers.DeleteProperty(LabelStr);
   end
   else
@@ -398,7 +398,7 @@ begin
   if (StartTime <> nil) and not (StartTime is TGocciaUndefinedLiteralValue) then
   begin
     Elapsed := GetMilliseconds - StartTime.ToNumberLiteral.Value;
-    EmitLine('timeLog', GroupPrefix + LabelStr + ': ' + FormatFloat('0.###', Elapsed) + 'ms');
+    EmitLine('timeLog', GroupPrefix + LabelStr + ': ' + FormatFloat('0.###', Elapsed, InvariantFormatSettings) + 'ms');
   end
   else
     EmitLine('timeLog', GroupPrefix + 'Timer ''' + LabelStr + ''' does not exist');

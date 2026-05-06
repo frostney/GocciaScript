@@ -129,6 +129,7 @@ type
       out AIndex: Integer): Boolean;
     function KeyToPropertyName(const AKey: TGocciaValue): string;
     function KeyToPropertyNameRegister(const AKey: TGocciaRegister): string;
+    function KeyDisplaySafe(const AKey: TGocciaRegister): string;
     // ALimit semantics:
     //   ALimit < 0 → unbounded (drain until iterator returns done:true);
     //   ALimit = 0 → consume zero elements (used for `const [] = iter`);
@@ -4065,6 +4066,31 @@ begin
   end;
 end;
 
+function TGocciaVM.KeyDisplaySafe(const AKey: TGocciaRegister): string;
+begin
+  case AKey.Kind of
+    grkInt:
+      Result := IntToStr(AKey.IntValue);
+    grkFloat:
+      Result := FormatDouble(AKey.FloatValue);
+    grkBoolean:
+      if AKey.BoolValue then Result := 'true' else Result := 'false';
+    grkNull:
+      Result := 'null';
+    grkUndefined:
+      Result := 'undefined';
+    grkObject:
+      if AKey.ObjectValue is TGocciaStringLiteralValue then
+        Result := TGocciaStringLiteralValue(AKey.ObjectValue).Value
+      else if AKey.ObjectValue is TGocciaSymbolValue then
+        Result := TGocciaSymbolValue(AKey.ObjectValue).ToDisplayString.Value
+      else
+        Result := '<computed>';
+  else
+    Result := '<computed>';
+  end;
+end;
+
 // IteratorClose for the raw-object form returned by GetIteratorValue
 // when the source supplies its own iterator (i.e. an object with next()
 // rather than a TGocciaIteratorValue).  Normal-completion variant per
@@ -7630,7 +7656,15 @@ begin
 
       OP_DELETE_PROP_CONST:
       begin
-        if (FRegisters[A].Kind = grkObject) and
+        if FRegisters[A].Kind = grkNull then
+          ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull,
+            [Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue]),
+            SSuggestCheckNullBeforeAccess)
+        else if FRegisters[A].Kind = grkUndefined then
+          ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined,
+            [Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue]),
+            SSuggestCheckNullBeforeAccess)
+        else if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaObjectValue) then
         begin
           if TGocciaObjectValue(FRegisters[A].ObjectValue).DeleteProperty(
@@ -7903,6 +7937,30 @@ begin
             GetRegisterFast(B), GetRegisterFast(C)));
         end;
       end;
+
+      OP_INC:
+        if FRegisters[B].Kind = grkInt then
+          FRegisters[A] := VMIntResult(FRegisters[B].IntValue + 1)
+        else if FRegisters[B].Kind = grkFloat then
+          FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue + 1.0)
+        else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaBigIntValue) then
+          SetRegister(A, TGocciaBigIntValue.Create(
+            TGocciaBigIntValue(FRegisters[B].ObjectValue).Value.Add(TBigInteger.One)))
+        else
+          SetRegister(A, VMNumberValue(GetRegisterFast(B).ToNumberLiteral.Value + 1));
+
+      OP_DEC:
+        if FRegisters[B].Kind = grkInt then
+          FRegisters[A] := VMIntResult(FRegisters[B].IntValue - 1)
+        else if FRegisters[B].Kind = grkFloat then
+          FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue - 1.0)
+        else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaBigIntValue) then
+          SetRegister(A, TGocciaBigIntValue.Create(
+            TGocciaBigIntValue(FRegisters[B].ObjectValue).Value.Subtract(TBigInteger.One)))
+        else
+          SetRegister(A, VMNumberValue(GetRegisterFast(B).ToNumberLiteral.Value - 1));
 
       OP_MUL:
       begin
@@ -8251,16 +8309,41 @@ begin
           SetRegister(A, GetRegister(B).ToNumberLiteral);
         end;
 
+      OP_TO_NUMERIC:
+        case FRegisters[B].Kind of
+          grkInt, grkFloat:
+            FRegisters[A] := FRegisters[B];
+          grkBoolean:
+            if FRegisters[B].BoolValue then
+              FRegisters[A] := RegisterInt(1)
+            else
+              FRegisters[A] := RegisterInt(0);
+          grkNull:
+            FRegisters[A] := RegisterInt(0);
+          grkUndefined, grkHole:
+            FRegisters[A] := RegisterObject(TGocciaNumberLiteralValue.NaNValue);
+        else
+          LeftValue := ToPrimitive(GetRegisterFast(B));
+          if LeftValue is TGocciaBigIntValue then
+            SetRegisterFast(A, LeftValue)
+          else
+            SetRegister(A, LeftValue.ToNumberLiteral);
+        end;
+
       OP_TO_STRING:
         SetRegisterFast(A, VMRegisterToStringFast(FRegisters[B]));
 
       OP_DEL_INDEX:
       begin
-        // ES2026 §7.1.19 ToPropertyKey — symbol keys must delete from symbol
-        // storage regardless of whether the receiver is an array or plain
-        // object. Check this before the array-numeric-index branch so that
-        // `delete arr[sym]` doesn't silently no-op via the array fall-through.
-        if (FRegisters[B].Kind = grkObject) and
+        if FRegisters[B].Kind = grkNull then
+          ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull,
+            [KeyDisplaySafe(FRegisters[C])]),
+            SSuggestCheckNullBeforeAccess)
+        else if FRegisters[B].Kind = grkUndefined then
+          ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined,
+            [KeyDisplaySafe(FRegisters[C])]),
+            SSuggestCheckNullBeforeAccess)
+        else if (FRegisters[B].Kind = grkObject) and
            (FRegisters[B].ObjectValue is TGocciaObjectValue) and
            (FRegisters[C].Kind = grkObject) and
            (FRegisters[C].ObjectValue is TGocciaSymbolValue) then

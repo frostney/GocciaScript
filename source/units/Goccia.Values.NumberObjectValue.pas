@@ -68,6 +68,7 @@ begin
     Result := nil;
 end;
 
+// ES2026 §21.1.3 thisNumberValue(value)
 function TGocciaNumberObjectValue.ExtractPrimitive(const AValue: TGocciaValue): TGocciaNumberLiteralValue;
 begin
   if AValue is TGocciaNumberLiteralValue then
@@ -75,7 +76,7 @@ begin
   else if AValue is TGocciaNumberObjectValue then
     Result := TGocciaNumberObjectValue(AValue).Primitive
   else
-    Result := AValue.ToNumberLiteral;
+    ThrowTypeError(SErrorNotANumber, SSuggestNotANumber);
 end;
 
 constructor TGocciaNumberObjectValue.Create(const APrimitive: TGocciaNumberLiteralValue; const AClass: TGocciaClassValue = nil);
@@ -196,7 +197,7 @@ begin
   end;
 
   // Step 6: Format x with exactly f digits after the decimal point
-  Result := TGocciaStringLiteralValue.Create(FormatFloat('0.' + StringOfChar('0', Digits), Prim.Value));
+  Result := TGocciaStringLiteralValue.Create(FormatFloat('0.' + StringOfChar('0', Digits), Prim.Value, InvariantFormatSettings));
 end;
 
 // Convert a finite non-negative integer-valued Double to its base-ARadix
@@ -295,16 +296,13 @@ begin
     Exit;
   end;
 
-  if AArgs.Length > 0 then
+  // Step 2: If radix is undefined, let radixMV be 10
+  if (AArgs.Length > 0) and not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
   begin
     Radix := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
     // Step 3: If radixMV < 2 or radixMV > 36, throw a RangeError exception
     if (Radix < 2) or (Radix > 36) then
-    begin
-      Result := TGocciaStringLiteralValue.Create('');
-      Exit;
-    end;
-    // Step 2: If radix is undefined or 10, return ! ToString(x)
+      ThrowRangeError(SErrorBigIntInvalidRadix, SSuggestBigIntInvalidRadix);
     if Radix = 10 then
     begin
       Result := Prim.ToStringLiteral;
@@ -385,7 +383,7 @@ begin
   end;
 
   // Step 7: Format x with p significant digits
-  Result := TGocciaStringLiteralValue.Create(FloatToStrF(Prim.Value, ffGeneral, Precision, 0));
+  Result := TGocciaStringLiteralValue.Create(FloatToStrF(Prim.Value, ffGeneral, Precision, 0, InvariantFormatSettings));
 end;
 
 // ES2026 §21.1.3.2 Number.prototype.toExponential(fractionDigits)
@@ -460,21 +458,18 @@ begin
   // Step 10: Format mantissa with f fraction digits
   if FractionDigits < 0 then
   begin
-    MantissaStr := FloatToStrF(Mantissa, ffGeneral, 15, 0);
+    MantissaStr := FloatToStrF(Mantissa, ffGeneral, 15, 0, InvariantFormatSettings);
     if Pos('.', MantissaStr) = 0 then
       MantissaStr := MantissaStr;
   end
   else
   begin
-    MantissaStr := FormatFloat('0.' + StringOfChar('0', FractionDigits), Mantissa);
-    if (Length(MantissaStr) > 1) and (MantissaStr[1] <> '0') and (Pos('.', MantissaStr) > 0) then
+    MantissaStr := FormatFloat('0.' + StringOfChar('0', FractionDigits), Mantissa, InvariantFormatSettings);
+    if Pos('.', MantissaStr) > 2 then
     begin
-      if (MantissaStr[1] >= '2') then
-      begin
-        Mantissa := Mantissa / 10;
-        Inc(Exp);
-        MantissaStr := FormatFloat('0.' + StringOfChar('0', FractionDigits), Mantissa);
-      end;
+      Mantissa := Mantissa / 10;
+      Inc(Exp);
+      MantissaStr := FormatFloat('0.' + StringOfChar('0', FractionDigits), Mantissa, InvariantFormatSettings);
     end;
   end;
 

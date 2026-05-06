@@ -22,6 +22,17 @@ describe("Number.prototype.toString", () => {
     expect((0).toString(10)).toBe("0");
   });
 
+  test("toString with undefined radix returns decimal string", () => {
+    expect((42).toString(undefined)).toBe("42");
+    expect((0).toString(undefined)).toBe("0");
+  });
+
+  test("toString throws RangeError for radix < 2 or > 36", () => {
+    expect(() => (42).toString(0)).toThrow(RangeError);
+    expect(() => (42).toString(1)).toThrow(RangeError);
+    expect(() => (42).toString(37)).toThrow(RangeError);
+  });
+
   test("toString on NaN", () => {
     expect(NaN.toString()).toBe("NaN");
   });

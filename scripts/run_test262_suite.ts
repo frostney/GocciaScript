@@ -195,6 +195,10 @@ function toStringArray(value: unknown): string[] {
 // rationale; if a future stock harness change makes a bundled file
 // unnecessary, delete the entry and the corresponding file.
 const BUNDLED_INCLUDES: Record<string, string> = {
+  // $262 host hooks (detachArrayBuffer, etc.).  Always loaded before all
+  // other harness files so stock includes like detachArrayBuffer.js find
+  // the methods they expect.  No stock equivalent — this is host-provided.
+  "$262.js": "$262.js",
   // Subsumes stock sta.js + assert.js + compareArray.js.  Stock assert.js
   // uses `arguments` in `assert.compareArray` and a `for (var i = 0; ...)`
   // loop body that Goccia's parser drops.
@@ -273,15 +277,18 @@ class HarnessCache {
   }
 
   /**
-   * Always prepend our `assert.js` (which subsumes stock `sta.js`,
-   * `assert.js`, and `compareArray.js`).  Then append every name from
-   * the test's `includes:` list, dedup'd against names already covered
-   * by the prepended bundle.  The `raw` flag (caller's responsibility)
-   * skips this entirely.
+   * Always prepend `$262.js` (host hooks) and `assert.js` (which subsumes
+   * stock `sta.js`, `assert.js`, and `compareArray.js`).  Then append
+   * every name from the test's `includes:` list, dedup'd against names
+   * already covered by the prepended bundle.  The `raw` flag (caller's
+   * responsibility) skips this entirely.
    */
   async build(includes: string[]): Promise<string> {
-    const seen = new Set<string>(["assert.js", "sta.js", "compareArray.js"]);
-    const parts: string[] = [await this.read("assert.js")];
+    const seen = new Set<string>(["$262.js", "assert.js", "sta.js", "compareArray.js"]);
+    const parts: string[] = [
+      await this.read("$262.js"),
+      await this.read("assert.js"),
+    ];
     for (const name of includes) {
       if (seen.has(name)) continue;
       seen.add(name);

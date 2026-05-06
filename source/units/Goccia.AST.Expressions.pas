@@ -855,13 +855,15 @@ uses
   Goccia.ImportMeta,
   Goccia.Modules,
   Goccia.RegExp.Runtime,
+  Goccia.Values.BigIntValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.Values.ToPrimitive;
 
 function IsNullishAssignmentValue(const AValue: TGocciaValue): Boolean; inline;
 begin
@@ -1862,6 +1864,13 @@ begin
   Result := NormalizeAssignmentValue(Obj.GetProperty(PropName));
 end;
 
+function ToNumericValue(const AValue: TGocciaValue): TGocciaValue; inline;
+begin
+  Result := ToPrimitive(AValue);
+  if not (Result is TGocciaBigIntValue) then
+    Result := Result.ToNumberLiteral;
+end;
+
 function TGocciaIncrementExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Obj, OldValue, NewValue, PropertyKeyValue: TGocciaValue;
@@ -1871,8 +1880,7 @@ begin
   if Operand is TGocciaIdentifierExpression then
   begin
     PropName := TGocciaIdentifierExpression(Operand).Name;
-    OldValue := AContext.Scope.GetValue(PropName);
-    OldValue := OldValue.ToNumberLiteral;
+    OldValue := ToNumericValue(AContext.Scope.GetValue(PropName));
     NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
     AContext.Scope.AssignBinding(PropName, NewValue);
     if IsPrefix then
@@ -1895,7 +1903,7 @@ begin
           OldValue := TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue));
         if OldValue = nil then
           OldValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-        OldValue := OldValue.ToNumberLiteral;
+        OldValue := ToNumericValue(OldValue);
         NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
         if Obj is TGocciaClassValue then
           TGocciaClassValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropertyKeyValue), NewValue)
@@ -1913,12 +1921,8 @@ begin
       PropName := MemberExpr.PropertyName;
     OldValue := Obj.GetProperty(PropName);
     if OldValue = nil then
-    begin
-      AContext.OnError('Cannot access property on non-object', Line, Column);
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
-    end;
-    OldValue := OldValue.ToNumberLiteral;
+      OldValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    OldValue := ToNumericValue(OldValue);
     NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
     AssignProperty(Obj, PropName, NewValue, AContext.OnError, Line, Column);
     if IsPrefix then

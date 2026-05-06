@@ -19,12 +19,14 @@ procedure PerformPropertyCompoundAssignment(const AObj: TGocciaValue; const APro
 procedure PerformSymbolPropertyCompoundAssignment(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
 
 // Increment/Decrement operations
-function PerformIncrement(const AOldValue: TGocciaValue; const AIsIncrement: Boolean): TGocciaValue; inline;
+function PerformIncrement(const AOldValue: TGocciaValue; const AIsIncrement: Boolean): TGocciaValue;
 
 implementation
 
 uses
   SysUtils,
+
+  BigInteger,
 
   Goccia.Arithmetic,
   Goccia.Error.Messages,
@@ -221,10 +223,22 @@ end;
 
 function PerformIncrement(const AOldValue: TGocciaValue; const AIsIncrement: Boolean): TGocciaValue;
 begin
-  if AIsIncrement then
-    Result := TGocciaNumberLiteralValue.Create(AOldValue.ToNumberLiteral.Value + 1)
+  if AOldValue is TGocciaBigIntValue then
+  begin
+    if AIsIncrement then
+      Result := TGocciaBigIntValue.Create(
+        TGocciaBigIntValue(AOldValue).Value.Add(TBigInteger.One))
+    else
+      Result := TGocciaBigIntValue.Create(
+        TGocciaBigIntValue(AOldValue).Value.Subtract(TBigInteger.One));
+  end
   else
-    Result := TGocciaNumberLiteralValue.Create(AOldValue.ToNumberLiteral.Value - 1);
+  begin
+    if AIsIncrement then
+      Result := TGocciaNumberLiteralValue.Create(AOldValue.ToNumberLiteral.Value + 1)
+    else
+      Result := TGocciaNumberLiteralValue.Create(AOldValue.ToNumberLiteral.Value - 1);
+  end;
 end;
 
 end.

@@ -1271,6 +1271,8 @@ var
   I, StartIdx: Integer;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.indexOf');
+  if TA.FLength = 0 then
+    Exit(TGocciaNumberLiteralValue.Create(-1));
   if AArgs.Length = 0 then
     Exit(TGocciaNumberLiteralValue.Create(-1));
 
@@ -1325,6 +1327,8 @@ var
   I, StartIdx: Integer;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.lastIndexOf');
+  if TA.FLength = 0 then
+    Exit(TGocciaNumberLiteralValue.Create(-1));
   if AArgs.Length = 0 then
     Exit(TGocciaNumberLiteralValue.Create(-1));
   if AArgs.Length > 1 then
@@ -1377,6 +1381,8 @@ var
   I, StartIdx: Integer;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.includes');
+  if TA.FLength = 0 then
+    Exit(TGocciaBooleanLiteralValue.FalseValue);
   if AArgs.Length = 0 then
     Exit(TGocciaBooleanLiteralValue.FalseValue);
   if AArgs.Length > 1 then
@@ -1398,7 +1404,9 @@ begin
     Exit(TGocciaBooleanLiteralValue.FalseValue);
   end;
 
-  SearchNum := AArgs.GetElement(0).ToNumberLiteral;
+  if not (AArgs.GetElement(0) is TGocciaNumberLiteralValue) then
+    Exit(TGocciaBooleanLiteralValue.FalseValue);
+  SearchNum := TGocciaNumberLiteralValue(AArgs.GetElement(0));
   // SameValueZero: NaN === NaN for includes
   if SearchNum.IsNaN then
   begin

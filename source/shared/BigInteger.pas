@@ -366,6 +366,7 @@ var
   V: Double;
   Limb: Cardinal;
   DecStr: string;
+  FS: TFormatSettings;
 begin
   if IsNaN(AValue) or IsInfinite(AValue) then
     raise Exception.Create('Cannot convert non-finite number to BigInt');
@@ -384,7 +385,9 @@ begin
   // For values above 2^53 (representable as aligned integers in IEEE 754),
   // convert via decimal string to avoid FPC AArch64 FMod precision bugs.
   // FormatFloat('0', v) renders the exact integer without scientific notation.
-  DecStr := FormatFloat('0', AValue);
+  FS := DefaultFormatSettings;
+  FS.DecimalSeparator := '.';
+  DecStr := FormatFloat('0', AValue, FS);
   Result := FromDecimalString(DecStr);
 end;
 

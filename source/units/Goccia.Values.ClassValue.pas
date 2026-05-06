@@ -77,7 +77,6 @@ type
     function TypeOf: string; override;
     function ToStringLiteral: TGocciaStringLiteralValue; override;
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
-    function ToNumberLiteral: TGocciaNumberLiteralValue; override;
     procedure AddMethod(const AName: string; const AMethod: TGocciaMethodValue);
     function GetMethod(const AName: string): TGocciaMethodValue;
     procedure AddGetter(const AName: string; const AGetter: TGocciaFunctionBase);
@@ -514,11 +513,6 @@ end;
 function TGocciaClassValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
 begin
   Result := TGocciaBooleanLiteralValue.TrueValue;
-end;
-
-function TGocciaClassValue.ToNumberLiteral: TGocciaNumberLiteralValue;
-begin
-  Result := TGocciaNumberLiteralValue.NaNValue;
 end;
 
 procedure TGocciaClassValue.AddMethod(const AName: string; const AMethod: TGocciaMethodValue);

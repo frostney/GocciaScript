@@ -326,7 +326,9 @@ Every value implements three conversion methods, following JavaScript coercion r
 | `ToNumberLiteral` | `TGocciaNumberLiteralValue` | `NaN` |
 | `ToStringLiteral` | `TGocciaStringLiteralValue` | `"undefined"` |
 
-For objects and class instances, `ToStringLiteral` performs ES2026 §7.1.17 ToString — it calls `ToPrimitive(value, string)` and may invoke user-defined `toString()` / `valueOf()`. It can therefore throw or trigger arbitrary side effects. Callers in error-boundary contexts (the bytecode throw constructor, the top-level throw formatter) avoid invoking it on objects entirely — they read primitive `name`/`message` properties or render a static `[object <Tag>]` placeholder instead, since post-VM-unwind re-entry is unsafe.
+For objects and class instances, `ToStringLiteral` and `ToNumberLiteral` go through `ToPrimitive` — they may invoke user-defined `toString()` / `valueOf()` and can therefore throw or trigger arbitrary side effects. Callers in error-boundary contexts (the bytecode throw constructor, the top-level throw formatter) avoid invoking them on objects entirely — they read primitive `name`/`message` properties or render a static `[object <Tag>]` placeholder instead, since post-VM-unwind re-entry is unsafe.
+
+**Do not override `ToNumberLiteral` in `TGocciaObjectValue` subclasses.** The base-class implementation delegates to `ToPrimitive(number)`, which looks up `valueOf()` / `toString()` on the object at runtime. Subclasses that hardcode conversion results bypass ToPrimitive and silently ignore user-overridden methods. If a subclass needs custom numeric coercion, register the appropriate `valueOf` prototype method instead — ToPrimitive will find and invoke it. `ToStringLiteral` may be overridden when a subclass (a) directly implements the same `join()`-style logic that `ToPrimitive` would reach through the prototype, and (b) must work on internally-created instances that may lack a full prototype chain (e.g. arrays during early bootstrap).
 
 Conversion follows ECMAScript specification semantics:
 
@@ -338,7 +340,7 @@ Conversion follows ECMAScript specification semantics:
 | `false` | `false` | `0` | `"false"` |
 | `0`, `-0`, `NaN` | `false` | — | `"0"`, `"0"`, `"NaN"` |
 | `""` (empty) | `false` | `0` | — |
-| Objects | `true` | — | `"[object Object]"` |
+| Objects | `true` | `ToPrimitive(number)` | `ToPrimitive(string)` |
 
 ## Objects
 

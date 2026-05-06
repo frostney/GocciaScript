@@ -108,7 +108,27 @@ begin
   Expect<string>(ThrownTypeName).ToBe(TYPE_ERROR_NAME);
 
   Expect<Boolean>(ObjectValue.ToBooleanLiteral.Value).ToBe(True);
-  Expect<Boolean>(ObjectValue.ToNumberLiteral.IsNaN).ToBe(True);
+
+  // ES2026 §7.1.4 ToNumber on an object without Object.prototype also throws
+  // TypeError — ToPrimitive finds no valueOf()/toString().
+  ToStringThrew := False;
+  ThrownTypeName := '';
+  try
+    ObjectValue.ToNumberLiteral;
+  except
+    on E: TGocciaThrowValue do
+    begin
+      ToStringThrew := True;
+      ThrownNameValue := nil;
+      if E.Value is TGocciaObjectValue then
+        ThrownNameValue := TGocciaObjectValue(E.Value).GetProperty(PROP_NAME);
+      if ThrownNameValue is TGocciaStringLiteralValue then
+        ThrownTypeName := TGocciaStringLiteralValue(ThrownNameValue).Value;
+    end;
+  end;
+  Expect<Boolean>(ToStringThrew).ToBe(True);
+  Expect<string>(ThrownTypeName).ToBe(TYPE_ERROR_NAME);
+
   Expect<string>(ObjectValue.TypeName).ToBe('object');
 end;
 
