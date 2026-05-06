@@ -41,6 +41,10 @@ type
 
 implementation
 
+uses
+  Goccia.Constants.PropertyNames,
+  Goccia.Values.ObjectValue;
+
 constructor TGocciaNativeFunctionValue.Create(const AFunction: TGocciaNativeFunctionCallback;
   const AName: string; const AArity: Integer);
 begin
@@ -68,11 +72,32 @@ begin
 end;
 
 function TGocciaNativeFunctionValue.Construct(const AArguments: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
+var
+  Proto: TGocciaObjectValue;
+  ProtoValue: TGocciaValue;
 begin
   if Assigned(FConstructCallback) then
     Result := FConstructCallback(AArguments, ANewTarget)
   else
+  begin
     Result := FFunction(AArguments, TGocciaHoleValue.HoleValue);
+    // §10.1.14 auto-patch: when no explicit [[Construct]] callback is
+    // registered and newTarget differs from the constructor, resolve the
+    // prototype from newTarget and apply it to the result. Constructors
+    // with ordering requirements (Error, Promise) register an explicit
+    // ConstructCallback instead.
+    if (Result is TGocciaObjectValue) and
+       (TGocciaValue(ANewTarget) <> TGocciaValue(Self)) then
+    begin
+      ProtoValue := Self.GetProperty(PROP_PROTOTYPE);
+      if ProtoValue is TGocciaObjectValue then
+        Proto := TGocciaObjectValue(ProtoValue)
+      else
+        Proto := TGocciaObjectValue.SharedObjectPrototype;
+      TGocciaObjectValue(Result).Prototype :=
+        GetProtoFromConstructorWithIntrinsic(ANewTarget, Proto);
+    end;
+  end;
 end;
 
 function TGocciaNativeFunctionValue.HasConstructCallback: Boolean;
