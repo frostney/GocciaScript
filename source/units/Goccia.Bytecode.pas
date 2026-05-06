@@ -36,7 +36,8 @@ const
   //               the synthetic super-constructor helper.
   //   v23 -> v24: #491 added OP_THROW_TYPE_ERROR_CONST_LONG so const-assignment
   //               diagnostics can reference constant-pool strings above 255.
-  GOCCIA_FORMAT_VERSION = 24;
+  //   v24 -> v25: #529 added OP_NEW_TARGET for the new.target meta-property.
+  GOCCIA_FORMAT_VERSION = 25;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
