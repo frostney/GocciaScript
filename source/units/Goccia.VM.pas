@@ -7349,6 +7349,17 @@ begin
               SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
                 IntToStr(KeyIndex)));
           end
+          else if (FRegisters[C].Kind = grkObject) and
+                  (FRegisters[C].ObjectValue is TGocciaObjectValue) then
+          begin
+            PropKeyValue := ToPropertyKey(FRegisters[C].ObjectValue);
+            if PropKeyValue is TGocciaSymbolValue then
+              SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetSymbolProperty(
+                TGocciaSymbolValue(PropKeyValue)))
+            else
+              SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
+                TGocciaStringLiteralValue(PropKeyValue).Value));
+          end
           else
             SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
               KeyToPropertyNameRegister(FRegisters[C])));
@@ -7360,6 +7371,17 @@ begin
              (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
             SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
               TGocciaSymbolValue(FRegisters[C].ObjectValue)))
+          else if (FRegisters[C].Kind = grkObject) and
+                  (FRegisters[C].ObjectValue is TGocciaObjectValue) then
+          begin
+            PropKeyValue := ToPropertyKey(FRegisters[C].ObjectValue);
+            if PropKeyValue is TGocciaSymbolValue then
+              SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
+                TGocciaSymbolValue(PropKeyValue)))
+            else
+              SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
+                TGocciaStringLiteralValue(PropKeyValue).Value));
+          end
           else
             SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
               KeyToPropertyNameRegister(FRegisters[C])));
@@ -7727,6 +7749,17 @@ begin
               SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
                 IntToStr(KeyIndex)));
           end
+          else if (FRegisters[C].Kind = grkObject) and
+                  (FRegisters[C].ObjectValue is TGocciaObjectValue) then
+          begin
+            PropKeyValue := ToPropertyKey(FRegisters[C].ObjectValue);
+            if PropKeyValue is TGocciaSymbolValue then
+              SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetSymbolProperty(
+                TGocciaSymbolValue(PropKeyValue)))
+            else
+              SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
+                TGocciaStringLiteralValue(PropKeyValue).Value));
+          end
           else
             SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
               KeyToPropertyNameRegister(FRegisters[C])));
@@ -7743,6 +7776,24 @@ begin
              (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
             SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
               TGocciaSymbolValue(FRegisters[C].ObjectValue)))
+          else if (FRegisters[C].Kind = grkObject) and
+                  (FRegisters[C].ObjectValue is TGocciaObjectValue) then
+          begin
+            PropKeyValue := ToPropertyKey(FRegisters[C].ObjectValue);
+            if PropKeyValue is TGocciaSymbolValue then
+              SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
+                TGocciaSymbolValue(PropKeyValue)))
+            else
+            begin
+              GlobalName := TGocciaStringLiteralValue(PropKeyValue).Value;
+              if IsBytecodePrivateKey(GlobalName) then
+                SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
+                  GlobalName))
+              else
+                SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
+                  GlobalName));
+            end;
+          end
           else
           begin
             GlobalName := KeyToPropertyNameRegister(FRegisters[C]);
