@@ -29,7 +29,6 @@ type
       const AArity: Integer);
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     function Construct(const AArguments: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
-    function HasConstructCallback: Boolean;
     function IsConstructable: Boolean; override;
     property NativeFunction: TGocciaNativeFunctionCallback read FFunction;
     property ConstructCallback: TGocciaNativeConstructorCallback read FConstructCallback write FConstructCallback;
@@ -98,11 +97,6 @@ begin
         GetProtoFromConstructorWithIntrinsic(ANewTarget, Proto);
     end;
   end;
-end;
-
-function TGocciaNativeFunctionValue.HasConstructCallback: Boolean;
-begin
-  Result := Assigned(FConstructCallback);
 end;
 
 function TGocciaNativeFunctionValue.IsConstructable: Boolean;

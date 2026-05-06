@@ -38,6 +38,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
+  Goccia.Values.HoleValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.TypedArrayValue;
 
@@ -140,7 +141,7 @@ var
 begin
   Proto := GetProtoFromConstructorWithIntrinsic(ANewTarget,
     TGocciaObjectValue(FArrayBufferConstructor.GetProperty(PROP_PROTOTYPE)));
-  AB := TGocciaArrayBufferValue(ArrayBufferConstructorFn(AArgs, nil));
+  AB := TGocciaArrayBufferValue(ArrayBufferConstructorFn(AArgs, TGocciaHoleValue.HoleValue));
   AB.Prototype := Proto;
   Result := AB;
 end;
