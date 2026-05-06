@@ -203,7 +203,8 @@ begin
   FErrorProto.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(''), [pfConfigurable, pfWritable]));
   with TGocciaMemberCollection.Create do
   try
-    AddNamedMethod(PROP_TO_STRING, ErrorPrototypeToString, 0);
+    AddNamedMethod(PROP_TO_STRING, ErrorPrototypeToString, 0,
+      gmkPrototypeMethod, [gmfNotConstructable]);
     ErrorProtoMembers := ToDefinitions;
   finally
     Free;

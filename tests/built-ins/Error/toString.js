@@ -78,3 +78,9 @@ test("Error.prototype.toString throws on non-object this", () => {
   expect(() => fn.call(42)).toThrow(TypeError);
   expect(() => fn.call("string")).toThrow(TypeError);
 });
+
+test("Error.prototype.toString is not a constructor", () => {
+  const fn = Error.prototype.toString;
+  expect(() => new fn()).toThrow(TypeError);
+  expect(() => Reflect.construct(Object, [], fn)).toThrow(TypeError);
+});
