@@ -433,3 +433,93 @@ describe("Object(symbol) wrapper", () => {
     expect(Symbol.prototype.toString.call(w)).toBe("Symbol(call)");
   });
 });
+
+// === Symbol wrapper as property key — ToPropertyKey dispatch ===
+
+describe("Object(symbol) as property key", () => {
+  const sym = Symbol("key");
+  const wrapped = Object(sym);
+
+  test("obj[wrapper] = value and obj[wrapper] read back", () => {
+    const obj = {};
+    obj[wrapped] = "set";
+    expect(obj[wrapped]).toBe("set");
+    expect(obj[sym]).toBe("set");
+  });
+
+  test("wrapper in obj", () => {
+    const obj = { [sym]: 1 };
+    expect(wrapped in obj).toBe(true);
+  });
+
+  test("delete obj[wrapper]", () => {
+    const obj = { [sym]: 1 };
+    expect(delete obj[wrapped]).toBe(true);
+    expect(sym in obj).toBe(false);
+  });
+
+  test("Object.hasOwn with wrapper key", () => {
+    const obj = { [sym]: 1 };
+    expect(Object.hasOwn(obj, wrapped)).toBe(true);
+  });
+
+  test("obj.hasOwnProperty with wrapper key", () => {
+    const obj = { [sym]: 1 };
+    expect(obj.hasOwnProperty(wrapped)).toBe(true);
+  });
+
+  test("Object.getOwnPropertyDescriptor with wrapper key", () => {
+    const obj = { [sym]: 42 };
+    const desc = Object.getOwnPropertyDescriptor(obj, wrapped);
+    expect(desc.value).toBe(42);
+    expect(desc.writable).toBe(true);
+  });
+
+  test("Object.defineProperty with wrapper key", () => {
+    const obj = {};
+    Object.defineProperty(obj, wrapped, { value: "defined", writable: false });
+    expect(obj[sym]).toBe("defined");
+    const desc = Object.getOwnPropertyDescriptor(obj, sym);
+    expect(desc.writable).toBe(false);
+  });
+
+  test("Reflect.get with wrapper key", () => {
+    const obj = { [sym]: "rget" };
+    expect(Reflect.get(obj, wrapped)).toBe("rget");
+  });
+
+  test("Reflect.set with wrapper key", () => {
+    const obj = {};
+    expect(Reflect.set(obj, wrapped, "rset")).toBe(true);
+    expect(obj[sym]).toBe("rset");
+  });
+
+  test("Reflect.has with wrapper key", () => {
+    const obj = { [sym]: 1 };
+    expect(Reflect.has(obj, wrapped)).toBe(true);
+  });
+
+  test("Reflect.deleteProperty with wrapper key", () => {
+    const obj = { [sym]: 1 };
+    expect(Reflect.deleteProperty(obj, wrapped)).toBe(true);
+    expect(sym in obj).toBe(false);
+  });
+
+  test("Reflect.getOwnPropertyDescriptor with wrapper key", () => {
+    const obj = { [sym]: "rdesc" };
+    const desc = Reflect.getOwnPropertyDescriptor(obj, wrapped);
+    expect(desc.value).toBe("rdesc");
+  });
+
+  test("Reflect.defineProperty with wrapper key", () => {
+    const obj = {};
+    Reflect.defineProperty(obj, wrapped, { value: "rdef", configurable: true });
+    expect(obj[sym]).toBe("rdef");
+  });
+
+  test("property increment with wrapper key", () => {
+    const obj = { [sym]: 10 };
+    obj[wrapped]++;
+    expect(obj[sym]).toBe(11);
+  });
+});

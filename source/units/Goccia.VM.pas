@@ -8534,7 +8534,26 @@ begin
         else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaObjectValue) then
         begin
-          if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
+          if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
+          begin
+            if PropKeyValue is TGocciaSymbolValue then
+            begin
+              if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteSymbolProperty(
+                TGocciaSymbolValue(PropKeyValue)) then
+                FRegisters[A] := RegisterBoolean(True)
+              else
+                ThrowTypeError(Format(SErrorCannotDeletePropertyOf,
+                  [TGocciaSymbolValue(PropKeyValue).ToDisplayString.Value,
+                   '[object Object]']),
+                  SSuggestCannotDeleteNonConfigurable);
+            end
+            else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
+              TGocciaStringLiteralValue(PropKeyValue).Value) then
+              FRegisters[A] := RegisterBoolean(True)
+            else
+              FRegisters[A] := RegisterBoolean(False);
+          end
+          else if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
             KeyToPropertyNameRegister(FRegisters[C])) then
             FRegisters[A] := RegisterBoolean(True)
           else

@@ -1664,14 +1664,14 @@ var
   PropName: string;
 begin
   Obj := ObjectExpr.Evaluate(AContext);
-  PropertyValue := PropertyExpression.Evaluate(AContext);
+  PropertyValue := ToPropertyKey(PropertyExpression.Evaluate(AContext));
   Result := Value.Evaluate(AContext);
   if PropertyValue is TGocciaSymbolValue then
     AssignSymbolProperty(Obj, TGocciaSymbolValue(PropertyValue),
       Result, AContext.OnError, Line, Column)
   else
   begin
-    PropName := PropertyValue.ToStringLiteral.Value;
+    PropName := TGocciaStringLiteralValue(PropertyValue).Value;
     AssignProperty(Obj, PropName, Result, AContext.OnError, Line, Column);
   end;
 end;
@@ -1823,7 +1823,7 @@ var
 
 begin
   Obj := ObjectExpr.Evaluate(AContext);
-  PropertyKeyValue := PropertyExpression.Evaluate(AContext);
+  PropertyKeyValue := ToPropertyKey(PropertyExpression.Evaluate(AContext));
   if PropertyKeyValue is TGocciaSymbolValue then
   begin
     CurrentValue := NormalizeAssignmentValue(ReadSymbolProperty(Obj,
@@ -1847,7 +1847,7 @@ begin
     Exit;
   end;
 
-  PropName := PropertyKeyValue.ToStringLiteral.Value;
+  PropName := TGocciaStringLiteralValue(PropertyKeyValue).Value;
   CurrentValue := NormalizeAssignmentValue(Obj.GetProperty(PropName));
   if IsShortCircuitOperator then
   begin
@@ -1894,7 +1894,7 @@ begin
     Obj := MemberExpr.ObjectExpr.Evaluate(AContext);
     if MemberExpr.Computed then
     begin
-      PropertyKeyValue := MemberExpr.PropertyExpression.Evaluate(AContext);
+      PropertyKeyValue := ToPropertyKey(MemberExpr.PropertyExpression.Evaluate(AContext));
       if (PropertyKeyValue is TGocciaSymbolValue) and ((Obj is TGocciaClassValue) or (Obj is TGocciaObjectValue)) then
       begin
         if Obj is TGocciaClassValue then
