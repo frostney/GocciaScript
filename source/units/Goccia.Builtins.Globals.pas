@@ -53,6 +53,7 @@ type
     function SuppressedErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DOMExceptionConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ErrorIsError(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ErrorPrototypeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function QueueMicrotaskCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StructuredCloneCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function EncodeURICallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -189,6 +190,7 @@ var
   SuppressedErrorConstructorFunc: TGocciaNativeFunctionValue;
   DOMExceptionConstructorFunc: TGocciaNativeFunctionValue;
   ErrorStaticMembers: TArray<TGocciaMemberDefinition>;
+  ErrorProtoMembers: TArray<TGocciaMemberDefinition>;
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -199,6 +201,14 @@ begin
   FErrorProto := TGocciaObjectValue.Create;
   FErrorProto.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(ERROR_NAME), [pfConfigurable, pfWritable]));
   FErrorProto.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(''), [pfConfigurable, pfWritable]));
+  with TGocciaMemberCollection.Create do
+  try
+    AddNamedMethod(PROP_TO_STRING, ErrorPrototypeToString, 0);
+    ErrorProtoMembers := ToDefinitions;
+  finally
+    Free;
+  end;
+  RegisterMemberDefinitions(FErrorProto, ErrorProtoMembers);
 
   FTypeErrorProto := TGocciaObjectValue.Create(FErrorProto);
   FTypeErrorProto.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(TYPE_ERROR_NAME), [pfConfigurable, pfWritable]));
@@ -379,6 +389,38 @@ begin
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
+// ES2026 §20.5.3.4 Error.prototype.toString()
+function TGocciaGlobals.ErrorPrototypeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Obj: TGocciaObjectValue;
+  NameValue, MsgValue: TGocciaValue;
+  Name, Msg: string;
+begin
+  if not (AThisValue is TGocciaObjectValue) then
+    ThrowTypeError('Error.prototype.toString requires that ''this'' be an Object');
+
+  Obj := TGocciaObjectValue(AThisValue);
+
+  NameValue := Obj.GetProperty(PROP_NAME);
+  if (NameValue = nil) or (NameValue is TGocciaUndefinedLiteralValue) then
+    Name := ERROR_NAME
+  else
+    Name := NameValue.ToStringLiteral.Value;
+
+  MsgValue := Obj.GetProperty(PROP_MESSAGE);
+  if (MsgValue = nil) or (MsgValue is TGocciaUndefinedLiteralValue) then
+    Msg := ''
+  else
+    Msg := MsgValue.ToStringLiteral.Value;
+
+  if Name = '' then
+    Result := TGocciaStringLiteralValue.Create(Msg)
+  else if Msg = '' then
+    Result := TGocciaStringLiteralValue.Create(Name)
+  else
+    Result := TGocciaStringLiteralValue.Create(Name + ': ' + Msg);
 end;
 
 { TypeError ( message [ , options ] ) — §20.5.6.1.1 (NativeError) }
