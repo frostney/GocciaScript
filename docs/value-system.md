@@ -136,6 +136,8 @@ Returns `True` for primitive value types. Overridden by:
 | `TGocciaBooleanLiteralValue` | `True` |
 | `TGocciaNumberLiteralValue` | `True` |
 | `TGocciaStringLiteralValue` | `True` |
+| `TGocciaSymbolValue` | `True` |
+| `TGocciaBigIntValue` | `True` |
 | All others (objects, arrays, functions, classes) | `False` (inherited default) |
 
 Used by `ToPrimitive` (`Goccia.Values.ToPrimitive.pas`) to skip conversion for values that are already primitive. A standalone `IsPrimitive(Value)` function in `Goccia.Values.Primitives` delegates to `Value.IsPrimitive`.
@@ -310,7 +312,7 @@ Objects store symbol-keyed properties separately from string-keyed properties vi
 
 ### ToPrimitive (`Goccia.Values.ToPrimitive.pas`)
 
-The ECMAScript abstract operation `ToPrimitive` converts any value to a primitive. For primitives, it's a no-op. For objects, the hint determines order: with `tphString` it tries `toString()` first, then `valueOf()`; with `tphDefault` or `tphNumber` it tries `valueOf()` first, then `toString()`. Returns the first result that is a primitive, or throws `TypeError` if neither method returns one. Used by `+`, comparison operators, and the spec coercion methods.
+The ECMAScript abstract operation `ToPrimitive` converts any value to a primitive. For primitives, it's a no-op. For objects, it first probes the `@@toPrimitive` well-known symbol (ES2026 §7.1.1 step 2.a): if present and callable, it is invoked with the hint as a string argument (`"string"`, `"number"`, or `"default"`), and the result must be a primitive or a `TypeError` is thrown. If `@@toPrimitive` is absent, `OrdinaryToPrimitive` runs: with `tphString` it tries `toString()` first, then `valueOf()`; with `tphDefault` or `tphNumber` it tries `valueOf()` first, then `toString()`. Returns the first result that is a primitive, or throws `TypeError` if neither method returns one. Used by `+`, comparison operators, and the spec coercion methods.
 
 ### `ToPropertyKey` helper
 
