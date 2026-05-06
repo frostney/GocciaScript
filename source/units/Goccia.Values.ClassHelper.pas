@@ -10,7 +10,8 @@ uses
   Goccia.Values.NumberObjectValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
-  Goccia.Values.StringObjectValue;
+  Goccia.Values.StringObjectValue,
+  Goccia.Values.SymbolObjectValue;
 
 type
 
@@ -35,7 +36,8 @@ implementation
 
 uses
   Goccia.Arithmetic,
-  Goccia.Values.BigIntValue;
+  Goccia.Values.BigIntValue,
+  Goccia.Values.SymbolValue;
 
   // function TGocciaValueHelper.ToBooleanLiteral: TGocciaBooleanLiteralValue;
   // var
@@ -271,6 +273,12 @@ uses
     if Self is TGocciaBigIntValue then
     begin
       Result := TGocciaBigIntObjectValue.Create(Self);
+      Exit;
+    end;
+
+    if Self is TGocciaSymbolValue then
+    begin
+      Result := TGocciaSymbolObjectValue.Create(Self);
       Exit;
     end;
 

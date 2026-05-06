@@ -53,6 +53,7 @@ classDiagram
     TGocciaObjectValue <|-- TGocciaNumberObjectValue
     TGocciaObjectValue <|-- TGocciaStringObjectValue
     TGocciaObjectValue <|-- TGocciaBooleanObjectValue
+    TGocciaObjectValue <|-- TGocciaSymbolObjectValue
 
     TGocciaFunctionValue <|-- TGocciaMethodValue
 
@@ -136,6 +137,8 @@ Returns `True` for primitive value types. Overridden by:
 | `TGocciaBooleanLiteralValue` | `True` |
 | `TGocciaNumberLiteralValue` | `True` |
 | `TGocciaStringLiteralValue` | `True` |
+| `TGocciaSymbolValue` | `True` |
+| `TGocciaBigIntValue` | `True` |
 | All others (objects, arrays, functions, classes) | `False` (inherited default) |
 
 Used by `ToPrimitive` (`Goccia.Values.ToPrimitive.pas`) to skip conversion for values that are already primitive. A standalone `IsPrimitive(Value)` function in `Goccia.Values.Primitives` delegates to `Value.IsPrimitive`.
@@ -300,6 +303,8 @@ Each symbol has a globally unique `Id` assigned at creation. Type coercion follo
 
 The implicit coercion checks for symbols are implemented at the operator level (primarily in `Goccia.Arithmetic.pas`, with string built-in behavior in `Goccia.Values.StringObjectValue.pas`) so that operators reach Symbol-rejection cleanly without first invoking `ToStringLiteral` on a non-symbol path.
 
+**Symbol wrapper objects:** `Object(symbol)` boxes a symbol primitive into a `TGocciaSymbolObjectValue`, a plain `TGocciaObjectValue` subclass whose prototype is `Symbol.prototype` and whose `SymbolData` property holds the underlying `TGocciaSymbolValue`. Symbol.prototype methods use `thisSymbolValue` to accept either the primitive or the wrapper. `ToObject` (via `Box`) also produces the wrapper when other spec operations need an object from a symbol.
+
 **Shared prototype singleton:** Like strings and numbers, symbols use a per-engine shared prototype object stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). It is initialized via `InitializePrototype`; the realm pins it on `SetSlot` and releases it on `Destroy`. The `description` getter and `toString()` method are registered on this shared prototype, and `TGocciaSymbolValue.GetProperty` delegates to the prototype via `GetPropertyWithContext` so that accessor getters receive the correct symbol instance as `this`. `Symbol.prototype` is exposed on the Symbol constructor function, matching ECMAScript semantics. Symbol is an always-registered standard built-in; special-purpose opt-ins like test assertions, benchmarking, and FFI are runtime globals selected through `TGocciaRuntimeGlobals`. Symbol type checks at the operator level use standard RTTI (`is TGocciaSymbolValue`) rather than VMT methods purely for implementation simplicity.
 
 **Weak eligibility:** `TGocciaSymbolValue.Registered` distinguishes symbols returned by `Symbol.for()` from local/well-known symbols. Non-registered symbols can be held weakly by WeakMap/WeakSet; registered symbols are pinned by the global symbol registry and rejected by `CanBeHeldWeakly`.
@@ -310,7 +315,7 @@ Objects store symbol-keyed properties separately from string-keyed properties vi
 
 ### ToPrimitive (`Goccia.Values.ToPrimitive.pas`)
 
-The ECMAScript abstract operation `ToPrimitive` converts any value to a primitive. For primitives, it's a no-op. For objects, the hint determines order: with `tphString` it tries `toString()` first, then `valueOf()`; with `tphDefault` or `tphNumber` it tries `valueOf()` first, then `toString()`. Returns the first result that is a primitive, or throws `TypeError` if neither method returns one. Used by `+`, comparison operators, and the spec coercion methods.
+The ECMAScript abstract operation `ToPrimitive` converts any value to a primitive. For primitives, it's a no-op. For objects, it first probes the `@@toPrimitive` well-known symbol via `GetMethod` (ES2026 §7.1.1 step 2.a + §7.3.10): if present and callable, it is invoked with the hint as a string argument (`"string"`, `"number"`, or `"default"`), and the result must be a primitive or a `TypeError` is thrown; if present but not callable, a `TypeError` is thrown immediately. If `@@toPrimitive` is absent (undefined or null), `OrdinaryToPrimitive` runs: with `tphString` it tries `toString()` first, then `valueOf()`; with `tphDefault` or `tphNumber` it tries `valueOf()` first, then `toString()`. Returns the first result that is a primitive, or throws `TypeError` if neither method returns one. Used by `+`, comparison operators, and the spec coercion methods.
 
 ### `ToPropertyKey` helper
 

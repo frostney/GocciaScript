@@ -66,7 +66,8 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue,
-  Goccia.Values.ToObject;
+  Goccia.Values.ToObject,
+  Goccia.Values.ToPrimitive;
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
@@ -352,6 +353,7 @@ var
   Obj: TGocciaObjectValue;
   PropertyName: string;
   ClassObj: TGocciaClassValue;
+  KeyValue: TGocciaValue;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.hasOwn', ThrowError);
 
@@ -361,17 +363,17 @@ begin
     ClassObj := TGocciaClassValue(AArgs.GetElement(0));
     // Step 2: Let key be ? ToPropertyKey(P)
     // Step 3: Return ? HasOwnProperty(obj, key)
-    if AArgs.GetElement(1) is TGocciaSymbolValue then
+    KeyValue := ToPropertyKey(AArgs.GetElement(1));
+    if KeyValue is TGocciaSymbolValue then
     begin
-      if not (ClassObj.GetSymbolProperty(TGocciaSymbolValue(AArgs.GetElement(1))) is TGocciaUndefinedLiteralValue) then
+      if not (ClassObj.GetSymbolProperty(TGocciaSymbolValue(KeyValue)) is TGocciaUndefinedLiteralValue) then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue;
     end
     else
     begin
-      PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
-      if not (ClassObj.GetProperty(PropertyName) is TGocciaUndefinedLiteralValue) then
+      if not (ClassObj.GetProperty(TGocciaStringLiteralValue(KeyValue).Value) is TGocciaUndefinedLiteralValue) then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -381,10 +383,7 @@ begin
 
   if AArgs.GetElement(0) is TGocciaSymbolValue then
   begin
-    // Symbol primitives have no own properties, but Object.hasOwn still
-    // evaluates the property key before returning.
-    if not (AArgs.GetElement(1) is TGocciaSymbolValue) then
-      PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
+    ToPropertyKey(AArgs.GetElement(1));
     Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
@@ -396,17 +395,17 @@ begin
   try
     // Step 2: Let key be ? ToPropertyKey(P)
     // Step 3: Return ? HasOwnProperty(obj, key)
-    if AArgs.GetElement(1) is TGocciaSymbolValue then
+    KeyValue := ToPropertyKey(AArgs.GetElement(1));
+    if KeyValue is TGocciaSymbolValue then
     begin
-      if Obj.HasSymbolProperty(TGocciaSymbolValue(AArgs.GetElement(1))) then
+      if Obj.HasSymbolProperty(TGocciaSymbolValue(KeyValue)) then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue;
     end
     else
     begin
-      PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
-      if Obj.HasOwnProperty(PropertyName) then
+      if Obj.HasOwnProperty(TGocciaStringLiteralValue(KeyValue).Value) then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -455,6 +454,7 @@ var
   Obj: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
   PropertyName: string;
+  KeyValue: TGocciaValue;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.getOwnPropertyDescriptor', ThrowError);
 
@@ -466,13 +466,11 @@ begin
   try
     // Step 2: Let key be ? ToPropertyKey(P)
     // Step 3: Let desc be ? O.[[GetOwnProperty]](key)
-    if AArgs.GetElement(1) is TGocciaSymbolValue then
-      Descriptor := Obj.GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(AArgs.GetElement(1)))
+    KeyValue := ToPropertyKey(AArgs.GetElement(1));
+    if KeyValue is TGocciaSymbolValue then
+      Descriptor := Obj.GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(KeyValue))
     else
-    begin
-      PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
-      Descriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
-    end;
+      Descriptor := Obj.GetOwnPropertyDescriptor(TGocciaStringLiteralValue(KeyValue).Value);
     // Step 4: Return FromPropertyDescriptor(desc)
     if Descriptor = nil then
       Result := TGocciaUndefinedLiteralValue.UndefinedValue
@@ -545,6 +543,7 @@ var
   ExistingDescriptor: TGocciaPropertyDescriptor;
   IsSymbolKey: Boolean;
   SymbolKey: TGocciaSymbolValue;
+  KeyValue: TGocciaValue;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 3, 'Object.defineProperty', ThrowError);
 
@@ -559,19 +558,20 @@ begin
   DescriptorObject := TGocciaObjectValue(AArgs.GetElement(2));
 
   // Step 2: Let key be ? ToPropertyKey(P)
-  IsSymbolKey := AArgs.GetElement(1) is TGocciaSymbolValue;
+  KeyValue := ToPropertyKey(AArgs.GetElement(1));
+  IsSymbolKey := KeyValue is TGocciaSymbolValue;
   SymbolKey := nil;
   PropertyName := '';
   ExistingDescriptor := nil;
 
   if IsSymbolKey then
   begin
-    SymbolKey := TGocciaSymbolValue(AArgs.GetElement(1));
+    SymbolKey := TGocciaSymbolValue(KeyValue);
     ExistingDescriptor := Obj.GetOwnSymbolPropertyDescriptor(SymbolKey);
   end
   else
   begin
-    PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
+    PropertyName := TGocciaStringLiteralValue(KeyValue).Value;
     ExistingDescriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
   end;
 
@@ -735,19 +735,7 @@ var
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.getPrototypeOf', ThrowError);
 
-  // Step 1: Let obj be ? ToObject(O)
-  // Symbol primitives: ToObject(Symbol) -> Symbol wrapper whose prototype is %Symbol.prototype%.
-  // Without a wrapper class we short-circuit to %Symbol.prototype% directly.
   Arg := AArgs.GetElement(0);
-  if Arg is TGocciaSymbolValue then
-  begin
-    if Assigned(TGocciaSymbolValue.SharedPrototype) then
-      Result := TGocciaSymbolValue.SharedPrototype
-    else
-      Result := TGocciaNullLiteralValue.NullValue;
-    Exit;
-  end;
-
   Obj := ToObject(Arg);
   if Assigned(TGarbageCollector.Instance) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then

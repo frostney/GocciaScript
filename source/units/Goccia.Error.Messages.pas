@@ -620,6 +620,8 @@ resourcestring
 
   // ToPrimitive errors
   SErrorCannotConvertToPrimitive = 'Cannot convert object to primitive value';
+  SErrorToPrimitiveReturnedObject = 'Symbol.toPrimitive returned a non-primitive value';
+  SErrorToPrimitiveNotCallable = 'Symbol.toPrimitive is not a function';
 
   // Number method errors
   SErrorToExponentialArgRange = 'toExponential() argument must be between 0 and 100';

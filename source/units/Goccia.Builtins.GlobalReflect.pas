@@ -49,7 +49,8 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.Values.ToPrimitive;
 
 threadvar
   FStaticMembers: TArray<TGocciaMemberDefinition>;
@@ -189,7 +190,7 @@ begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 3, 'Reflect.defineProperty', ThrowError);
 
   Target := AArgs.GetElement(0);
-  PropKey := AArgs.GetElement(1);
+  PropKey := ToPropertyKey(AArgs.GetElement(1));
   Attrs := AArgs.GetElement(2);
 
   // Step 1: If target is not an Object, throw a TypeError exception
@@ -214,7 +215,7 @@ begin
   end
   else
   begin
-    PropertyName := PropKey.ToStringLiteral.Value;
+    PropertyName := TGocciaStringLiteralValue(PropKey).Value;
     ExistingDescriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
   end;
 
@@ -249,7 +250,7 @@ begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Reflect.deleteProperty', ThrowError);
 
   Target := AArgs.GetElement(0);
-  PropKey := AArgs.GetElement(1);
+  PropKey := ToPropertyKey(AArgs.GetElement(1));
 
   // Step 1: If target is not an Object, throw a TypeError exception
   RequireObjectTarget(Target, 'Reflect.deleteProperty');
@@ -283,7 +284,7 @@ begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Reflect.get', ThrowError);
 
   Target := AArgs.GetElement(0);
-  PropKey := AArgs.GetElement(1);
+  PropKey := ToPropertyKey(AArgs.GetElement(1));
 
   // Step 1: If target is not an Object, throw a TypeError exception
   RequireObjectTarget(Target, 'Reflect.get');
@@ -322,7 +323,7 @@ begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Reflect.getOwnPropertyDescriptor', ThrowError);
 
   Target := AArgs.GetElement(0);
-  PropKey := AArgs.GetElement(1);
+  PropKey := ToPropertyKey(AArgs.GetElement(1));
 
   // Step 1: If target is not an Object, throw a TypeError exception
   RequireObjectTarget(Target, 'Reflect.getOwnPropertyDescriptor');
@@ -335,7 +336,7 @@ begin
     Descriptor := Obj.GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(PropKey))
   else
   begin
-    PropertyName := PropKey.ToStringLiteral.Value;
+    PropertyName := TGocciaStringLiteralValue(PropKey).Value;
     Descriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
   end;
 
@@ -408,7 +409,7 @@ begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Reflect.has', ThrowError);
 
   Target := AArgs.GetElement(0);
-  PropKey := AArgs.GetElement(1);
+  PropKey := ToPropertyKey(AArgs.GetElement(1));
 
   // Step 1: If target is not an Object, throw a TypeError exception
   RequireObjectTarget(Target, 'Reflect.has');
@@ -514,7 +515,7 @@ begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 3, 'Reflect.set', ThrowError);
 
   Target := AArgs.GetElement(0);
-  PropKey := AArgs.GetElement(1);
+  PropKey := ToPropertyKey(AArgs.GetElement(1));
   Value := AArgs.GetElement(2);
 
   // Step 1: If target is not an Object, throw a TypeError exception
@@ -533,7 +534,7 @@ begin
       TGocciaSymbolValue(PropKey), Value, Receiver)
   else
   begin
-    PropertyName := PropKey.ToStringLiteral.Value;
+    PropertyName := TGocciaStringLiteralValue(PropKey).Value;
     Success := TGocciaObjectValue(Target).AssignPropertyWithReceiver(
       PropertyName, Value, Receiver);
   end;

@@ -740,11 +740,11 @@ begin
   if AValue = nil then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
 
-  if AValue.IsPrimitive then
-    Exit(AValue);
-
   if AValue is TGocciaSymbolValue then
     ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [TGocciaSymbolValue(AValue).ToDisplayString.Value]), SSuggestStructuredClone);
+
+  if AValue.IsPrimitive then
+    Exit(AValue);
 
   if AValue.IsCallable then
     ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [AValue.ToStringLiteral.Value]), SSuggestStructuredClone);

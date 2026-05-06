@@ -59,6 +59,7 @@ type
     class function WellKnownUnscopables: TGocciaSymbolValue;
     class function WellKnownCustomMatcher: TGocciaSymbolValue;
 
+    function IsPrimitive: Boolean; override;
     function TypeName: string; override;
     function TypeOf: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
@@ -98,7 +99,8 @@ uses
   Goccia.Threading,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.SymbolObjectValue;
 
 // Symbol.prototype lives in a per-realm slot so that JS-visible mutations
 // (e.g. Symbol.prototype.foo = 1) do not leak across engine recreation.
@@ -123,40 +125,49 @@ begin
     Result := nil;
 end;
 
+// ES2026 §20.4.3.3.1 thisSymbolValue(value)
+function ThisSymbolValue(const AValue: TGocciaValue): TGocciaSymbolValue;
+begin
+  if AValue is TGocciaSymbolValue then
+    Result := TGocciaSymbolValue(AValue)
+  else if AValue is TGocciaSymbolObjectValue then
+    Result := TGocciaSymbolValue(TGocciaSymbolObjectValue(AValue).SymbolData)
+  else
+  begin
+    ThrowTypeError(SErrorSymbolProtoToStringRequiresSymbol, SSuggestSymbolThisType);
+    Result := nil;
+  end;
+end;
+
 // ES2026 §20.4.3.4 Symbol.prototype.toString()
 function TGocciaSymbolValue.SymbolToString(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if not (AThisValue is TGocciaSymbolValue) then
-    ThrowTypeError(SErrorSymbolProtoToStringRequiresSymbol, SSuggestSymbolThisType);
-  Result := TGocciaSymbolValue(AThisValue).ToDisplayString;
+  Result := ThisSymbolValue(AThisValue).ToDisplayString;
 end;
 
 // ES2026 §20.4.3.5 Symbol.prototype.valueOf()
 function TGocciaSymbolValue.SymbolValueOf(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if not (AThisValue is TGocciaSymbolValue) then
-    ThrowTypeError(SErrorSymbolProtoValueOfRequiresSymbol, SSuggestSymbolThisType);
-  Result := AThisValue;
+  Result := ThisSymbolValue(AThisValue);
 end;
 
 // ES2026 §20.4.3.6 Symbol.prototype [ @@toPrimitive ] ( hint )
 function TGocciaSymbolValue.SymbolToPrimitive(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if not (AThisValue is TGocciaSymbolValue) then
-    ThrowTypeError(SErrorSymbolProtoToPrimitiveRequiresSymbol, SSuggestSymbolThisType);
-  Result := AThisValue;
+  Result := ThisSymbolValue(AThisValue);
 end;
 
 function TGocciaSymbolValue.GetDescription(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Sym: TGocciaSymbolValue;
 begin
-  if not (AThisValue is TGocciaSymbolValue) then
-    ThrowTypeError(SErrorSymbolProtoDescriptionRequiresSymbol, SSuggestSymbolThisType);
-  if TGocciaSymbolValue(AThisValue).FHasDescription then
-    Result := TGocciaStringLiteralValue.Create(TGocciaSymbolValue(AThisValue).FDescription)
+  Sym := ThisSymbolValue(AThisValue);
+  if Sym.FHasDescription then
+    Result := TGocciaStringLiteralValue.Create(Sym.FDescription)
   else
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -440,6 +451,11 @@ begin
   if not Assigned(GSymbolRegistry) then
     GSymbolRegistry := THashMap<Integer, TGocciaSymbolValue>.Create;
   GSymbolRegistry.AddOrSetValue(FId, Self);
+end;
+
+function TGocciaSymbolValue.IsPrimitive: Boolean;
+begin
+  Result := True;
 end;
 
 function TGocciaSymbolValue.TypeName: string;

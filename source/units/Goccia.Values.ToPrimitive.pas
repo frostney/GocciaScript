@@ -56,10 +56,37 @@ begin
   end;
 end;
 
+threadvar
+  GHintString: TGocciaStringLiteralValue;
+  GHintNumber: TGocciaStringLiteralValue;
+  GHintDefault: TGocciaStringLiteralValue;
+
+procedure EnsureHintValue(var ASlot: TGocciaStringLiteralValue; const AValue: string); inline;
+begin
+  if not Assigned(ASlot) then
+  begin
+    ASlot := TGocciaStringLiteralValue.Create(AValue);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(ASlot);
+  end;
+end;
+
+function HintValue(const AHint: TGocciaToPrimitiveHint): TGocciaStringLiteralValue;
+begin
+  case AHint of
+    tphString: begin EnsureHintValue(GHintString, 'string'); Result := GHintString; end;
+    tphNumber: begin EnsureHintValue(GHintNumber, 'number'); Result := GHintNumber; end;
+  else
+    EnsureHintValue(GHintDefault, 'default'); Result := GHintDefault;
+  end;
+end;
+
 // ES2026 §7.1.1 ToPrimitive(input [, preferredType])
 function ToPrimitive(const AValue: TGocciaValue; const AHint: TGocciaToPrimitiveHint = tphDefault): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
+  ExoticToPrim: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
 begin
   if AValue.IsPrimitive then
   begin
@@ -71,20 +98,49 @@ begin
   begin
     Obj := TGocciaObjectValue(AValue);
 
+    // ES2026 §7.1.1 step 2.a + §7.3.10 GetMethod(input, @@toPrimitive)
+    ExoticToPrim := Obj.GetSymbolProperty(TGocciaSymbolValue.WellKnownToPrimitive);
+    if not ((ExoticToPrim is TGocciaUndefinedLiteralValue) or
+            (ExoticToPrim is TGocciaNullLiteralValue)) then
+    begin
+      // GetMethod step 3: If IsCallable(func) is false, throw a TypeError.
+      if not ExoticToPrim.IsCallable then
+        ThrowTypeError(SErrorToPrimitiveNotCallable, SSuggestToPrimitiveNotCallable);
+      // Step 2.b: Call(exoticToPrim, input, « hint »)
+      Args := TGocciaArgumentsCollection.Create;
+      try
+        Args.Add(HintValue(AHint));
+        Result := TGocciaFunctionBase(ExoticToPrim).Call(Args, AValue);
+      finally
+        Args.Free;
+      end;
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AddTempRoot(Result);
+      try
+        // Step 2.b.ii: If result is not an Object, return result.
+        if Result.IsPrimitive then
+          Exit;
+        // Step 2.b.iii: Throw a TypeError exception.
+        ThrowTypeError(SErrorToPrimitiveReturnedObject, SSuggestToPrimitiveReturnPrimitive);
+      finally
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.RemoveTempRoot(Result);
+      end;
+    end;
+
+    // Step 2.c: OrdinaryToPrimitive(input, hint)
     if AHint = tphString then
     begin
-      // String hint: toString() first, then valueOf()
       if TryCallMethod(Obj, PROP_TO_STRING, AValue, Result) then Exit;
       if TryCallMethod(Obj, PROP_VALUE_OF, AValue, Result) then Exit;
     end
     else
     begin
-      // Default/number hint: valueOf() first, then toString()
       if TryCallMethod(Obj, PROP_VALUE_OF, AValue, Result) then Exit;
       if TryCallMethod(Obj, PROP_TO_STRING, AValue, Result) then Exit;
     end;
 
-    // ES2026 §7.1.1 step 3e: Throw TypeError if no method returned a primitive
+    // Step 2.c (OrdinaryToPrimitive step 6): Throw TypeError
     ThrowTypeError(SErrorCannotConvertToPrimitive, SSuggestToPrimitive);
   end;
 
