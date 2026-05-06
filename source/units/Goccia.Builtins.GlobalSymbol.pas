@@ -154,7 +154,7 @@ begin
     Arg := AArgs.GetElement(0);
     if not (Arg is TGocciaUndefinedLiteralValue) then
     begin
-      Description := ToECMAString(Arg).Value;
+      Description := Arg.ToStringLiteral.Value;
       HasDescription := True;
     end;
   end;
@@ -179,7 +179,7 @@ var
 begin
   { Step 1: Let stringKey = ToString(key) }
   if AArgs.Length > 0 then
-    Key := ToECMAString(AArgs.GetElement(0)).Value
+    Key := AArgs.GetElement(0).ToStringLiteral.Value
   else
     Key := 'undefined';
 

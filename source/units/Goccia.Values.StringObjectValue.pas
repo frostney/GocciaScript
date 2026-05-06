@@ -101,6 +101,7 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.RegExp,
+  Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue;
 
 // String.prototype lives in a per-realm slot.  Method host and member
@@ -239,6 +240,8 @@ begin
 end;
 
 function TGocciaStringObjectValue.ExtractStringValue(const AValue: TGocciaValue): string;
+var
+  Unwrapped: TGocciaValue;
 begin
   if (AValue is TGocciaUndefinedLiteralValue) or
      (AValue is TGocciaNullLiteralValue) then
@@ -250,6 +253,25 @@ begin
     Result := TGocciaStringObjectValue(AValue).Primitive.Value
   else if AValue is TGocciaSymbolValue then
     ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion)
+  else if AValue is TGocciaProxyValue then
+  begin
+    // ES2026 String.prototype methods do `Let S be ToString(O)` per
+    // §22.1.3.x. For a Proxy whose [[ProxyTarget]] is (transitively) a
+    // String wrapper, V8/Node read [[StringData]] from the underlying
+    // wrapper. Unwrap the Proxy chain here — falling back to ToStringLiteral
+    // would call user toString through the Proxy get-trap chain, which for
+    // a get:null/empty handler chain forwards back to a String accessor
+    // that re-enters ExtractStringValue → infinite recursion → SIGSEGV.
+    Unwrapped := AValue;
+    while Unwrapped is TGocciaProxyValue do
+      Unwrapped := TGocciaProxyValue(Unwrapped).Target;
+    if Unwrapped is TGocciaStringObjectValue then
+      Result := TGocciaStringObjectValue(Unwrapped).Primitive.Value
+    else if Unwrapped is TGocciaStringLiteralValue then
+      Result := TGocciaStringLiteralValue(Unwrapped).Value
+    else
+      Result := AValue.ToStringLiteral.Value;
+  end
   else
     Result := AValue.ToStringLiteral.Value;
 end;
@@ -527,6 +549,15 @@ function TGocciaStringObjectValue.StringLength(const AArgs: TGocciaArgumentsColl
 var
   StringValue: string;
 begin
+  // ES2026 §22.1.4 String.prototype is itself a String exotic object whose
+  // [[StringData]] is the empty String. Short-circuit to 0 here so the
+  // accessor returns spec-correct length without recursing through
+  // ExtractStringValue → ToStringLiteral → String.prototype.toString →
+  // ExtractStringValue → ... (Goccia's String.prototype is a plain
+  // TGocciaObjectValue, not a String wrapper, so ExtractStringValue would
+  // fall through to ToString which triggers the recursion).
+  if AThisValue = GetSharedStringPrototype then
+    Exit(TGocciaNumberLiteralValue.ZeroValue);
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
   StringValue := ExtractStringValue(AThisValue);
@@ -1000,30 +1031,38 @@ var
   MatchArray: TGocciaObjectValue;
   MatchIndex, MatchEnd, NextIndex, Offset: Integer;
 begin
-  // Step 1: Let O be RequireObjectCoercible(this value)
-  // Step 2: Let string be ToString(O)
-  StringValue := ExtractStringValue(AThisValue);
+  // ES2026 §22.1.3.19 String.prototype.replace:
+  //   1. Let O be ? RequireObjectCoercible(this value).
+  //   2. If searchValue is neither undefined nor null:
+  //      c. Let replacer be ? GetMethod(searchValue, @@replace).
+  //      d. If replacer is not undefined: return ? Call(replacer, searchValue, « O, replaceValue »).
+  //   3. Let string be ? ToString(O).
+  // Step 1 — RequireObjectCoercible: throw if `this` is null/undefined.
+  if (AThisValue is TGocciaUndefinedLiteralValue) or
+     (AThisValue is TGocciaNullLiteralValue) then
+    ThrowTypeError(SErrorStringPrototypeRequiresNonNullish, SSuggestCheckNullBeforeAccess);
 
-  // Step 3: Let searchString be ToString(searchValue)
   if AArgs.Length > 0 then
     SearchArg := AArgs.GetElement(0)
   else
     SearchArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  // Step 4: Let replaceValue (or functionalReplace if callable)
   if AArgs.Length > 1 then
     ReplaceArg := AArgs.GetElement(1)
   else
     ReplaceArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
+  // Step 2.c-d: dispatch to @@replace before doing any ToString on O —
+  // matches the StringReplaceAllMethod fix above.
   ReplaceMethod := GetMethodBySymbol(SearchArg,
     TGocciaSymbolValue.WellKnownReplace);
   if not (ReplaceMethod is TGocciaUndefinedLiteralValue) then
   begin
     if not ReplaceMethod.IsCallable then
       ThrowTypeError(SErrorSymbolReplaceNotCallable, SSuggestWellKnownSymbolCallable);
+    // Spec passes O through to the replacer — not a stringified copy.
     CallArgs := TGocciaArgumentsCollection.Create([
-      TGocciaStringLiteralValue.Create(StringValue),
+      AThisValue,
       ReplaceArg
     ]);
     try
@@ -1033,6 +1072,9 @@ begin
     end;
     Exit;
   end;
+
+  // Step 3: Let string be ? ToString(O).
+  StringValue := ExtractStringValue(AThisValue);
 
   if IsRegExpValue(SearchArg) then
   begin
@@ -1140,21 +1182,27 @@ var
   MatchIndex, MatchEnd, NextIndex: Integer;
 begin
   // Step 1: Let O be RequireObjectCoercible(this value)
-  // Step 2: Let string be ToString(O)
-  StringValue := ExtractStringValue(AThisValue);
+  if (AThisValue is TGocciaUndefinedLiteralValue) or
+     (AThisValue is TGocciaNullLiteralValue) then
+    ThrowTypeError(SErrorStringPrototypeRequiresNonNullish, SSuggestCheckNullBeforeAccess);
 
-  // Step 3: Let searchString be ToString(searchValue)
   if AArgs.Length > 0 then
     SearchArg := AArgs.GetElement(0)
   else
     SearchArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  // Step 4: Let replaceValue (or functionalReplace if callable)
   if AArgs.Length > 1 then
     ReplaceArg := AArgs.GetElement(1)
   else
     ReplaceArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
+  // Step 2 (spec): If searchValue is neither undefined nor null, invoke
+  // GetMethod(searchValue, @@replace) and dispatch through it BEFORE doing
+  // any ToString on `O` or the args. ES2026 §22.1.3.20 step 2.a.iii: the
+  // RegExp-flags global check uses Get + ToString on searchValue.flags
+  // only when searchValue is itself a RegExp; for arbitrary user-supplied
+  // searchValues with @@replace, the replacer call is the only observable
+  // side effect.
   if IsRegExpValue(SearchArg) and
      not GetRegExpBooleanProperty(TGocciaObjectValue(SearchArg), PROP_GLOBAL) then
     ThrowTypeError(SErrorReplaceAllRequiresGlobalRegExp, SSuggestReplaceAllGlobalFlag);
@@ -1165,8 +1213,11 @@ begin
   begin
     if not ReplaceMethod.IsCallable then
       ThrowTypeError(SErrorSymbolReplaceNotCallable, SSuggestWellKnownSymbolCallable);
+    // ES2026 §22.1.3.20 step 2.d.i: Call(replacer, searchValue, « O, replaceValue »).
+    // The replacer receives the original `this` (O), not a stringified copy —
+    // ToString(O) only happens in step 3 if there is no @@replace replacer.
     CallArgs := TGocciaArgumentsCollection.Create([
-      TGocciaStringLiteralValue.Create(StringValue),
+      AThisValue,
       ReplaceArg
     ]);
     try
@@ -1176,6 +1227,9 @@ begin
     end;
     Exit;
   end;
+
+  // Step 3 (spec): Let string be ? ToString(O)
+  StringValue := ExtractStringValue(AThisValue);
 
   if IsRegExpValue(SearchArg) then
   begin
@@ -1342,12 +1396,15 @@ var
   MatchIndex, MatchEnd, NextIndex: Integer;
   PreviousIndex, SearchIndex: Integer;
 begin
-  // Step 1: Let O be RequireObjectCoercible(this value)
-  // Step 2: Let S be ToString(O)
-  StringValue := ExtractStringValue(AThisValue);
+  // ES2026 §22.1.3.23 String.prototype.split:
+  //   1. RequireObjectCoercible(this).
+  //   2. If separator is non-null/undefined, GetMethod(separator, @@split)
+  //      and dispatch through it BEFORE any ToString on O.
+  //   3. ToString(O); fall back to the regular path.
+  if (AThisValue is TGocciaUndefinedLiteralValue) or
+     (AThisValue is TGocciaNullLiteralValue) then
+    ThrowTypeError(SErrorStringPrototypeRequiresNonNullish, SSuggestCheckNullBeforeAccess);
 
-  // Step 3: Let A be ArrayCreate(0)
-  // Step 4: Let sep be ToString(separator)
   if AArgs.Length > 0 then
     SeparatorArg := AArgs.GetElement(0)
   else
@@ -1374,14 +1431,15 @@ begin
     begin
       if not SplitMethod.IsCallable then
         ThrowTypeError(SErrorSymbolSplitNotCallable, SSuggestWellKnownSymbolCallable);
+      // Spec passes O directly to the @@split callable, not a stringified copy.
       if HasLimit then
         CallArgs := TGocciaArgumentsCollection.Create([
-          TGocciaStringLiteralValue.Create(StringValue),
+          AThisValue,
           AArgs.GetElement(1)
         ])
       else
         CallArgs := TGocciaArgumentsCollection.Create([
-          TGocciaStringLiteralValue.Create(StringValue)
+          AThisValue
         ]);
       try
         Result := InvokeCallable(SplitMethod, CallArgs, SeparatorArg);
@@ -1390,6 +1448,9 @@ begin
       end;
       Exit;
     end;
+
+    // Step 3 (spec): Let S be ? ToString(O). Only reached when no @@split.
+    StringValue := ExtractStringValue(AThisValue);
 
     if IsRegExpValue(SeparatorArg) then
     begin
@@ -1508,7 +1569,15 @@ var
   ResultArray: TGocciaArrayValue;
   MatchIndex, MatchEnd, NextIndex, SearchIndex: Integer;
 begin
-  StringValue := ExtractStringValue(AThisValue);
+  // ES2026 §22.1.3.15 String.prototype.match:
+  //   1. RequireObjectCoercible(this).
+  //   2. If regexp is non-null/undefined, GetMethod(regexp, @@match) and
+  //      dispatch through it BEFORE any ToString on O.
+  //   3. ToString(O); fall back to RegExp coercion.
+  if (AThisValue is TGocciaUndefinedLiteralValue) or
+     (AThisValue is TGocciaNullLiteralValue) then
+    ThrowTypeError(SErrorStringPrototypeRequiresNonNullish, SSuggestCheckNullBeforeAccess);
+
   if AArgs.Length > 0 then
   begin
     MatchMethod := GetMethodBySymbol(AArgs.GetElement(0),
@@ -1517,8 +1586,9 @@ begin
     begin
       if not MatchMethod.IsCallable then
         ThrowTypeError(SErrorSymbolMatchNotCallable, SSuggestWellKnownSymbolCallable);
+      // Spec passes O directly to the @@match callable, not a stringified copy.
       CallArgs := TGocciaArgumentsCollection.Create([
-        TGocciaStringLiteralValue.Create(StringValue)
+        AThisValue
       ]);
       try
         Result := InvokeCallable(MatchMethod, CallArgs, AArgs.GetElement(0));
@@ -1528,6 +1598,9 @@ begin
       Exit;
     end;
   end;
+
+  // Step 3 (spec): Let S be ? ToString(O). Only reached when no @@match.
+  StringValue := ExtractStringValue(AThisValue);
 
   if AArgs.Length > 0 then
     RegexValue := CoerceRegExpValue(AArgs.GetElement(0))
@@ -1577,7 +1650,16 @@ var
   CallArgs: TGocciaArgumentsCollection;
   RegexValue: TGocciaObjectValue;
 begin
-  StringValue := ExtractStringValue(AThisValue);
+  // ES2026 §22.1.3.16 String.prototype.matchAll:
+  //   1. RequireObjectCoercible(this).
+  //   2. If regexp is non-null/undefined and is a RegExp, validate global flag.
+  //   3. GetMethod(regexp, @@matchAll); if defined, dispatch through it
+  //      BEFORE any ToString on O.
+  //   4. ToString(O); fall back to RegExp coercion.
+  if (AThisValue is TGocciaUndefinedLiteralValue) or
+     (AThisValue is TGocciaNullLiteralValue) then
+    ThrowTypeError(SErrorStringPrototypeRequiresNonNullish, SSuggestCheckNullBeforeAccess);
+
   if (AArgs.Length > 0) and IsRegExpValue(AArgs.GetElement(0)) and
      not GetRegExpBooleanProperty(TGocciaObjectValue(AArgs.GetElement(0)),
        PROP_GLOBAL) then
@@ -1591,8 +1673,9 @@ begin
     begin
       if not MatchAllMethod.IsCallable then
         ThrowTypeError(SErrorSymbolMatchAllNotCallable, SSuggestWellKnownSymbolCallable);
+      // Spec passes O directly to the @@matchAll callable, not a stringified copy.
       CallArgs := TGocciaArgumentsCollection.Create([
-        TGocciaStringLiteralValue.Create(StringValue)
+        AThisValue
       ]);
       try
         Result := InvokeCallable(MatchAllMethod, CallArgs, AArgs.GetElement(0));
@@ -1602,6 +1685,9 @@ begin
       Exit;
     end;
   end;
+
+  // Step 4 (spec): Let S be ? ToString(O). Only reached when no @@matchAll.
+  StringValue := ExtractStringValue(AThisValue);
 
   if AArgs.Length > 0 then
     RegexValue := CoerceRegExpValue(AArgs.GetElement(0), 'g')
@@ -1622,7 +1708,15 @@ var
   MatchArray: TGocciaObjectValue;
   MatchIndex, MatchEnd, NextIndex: Integer;
 begin
-  StringValue := ExtractStringValue(AThisValue);
+  // ES2026 §22.1.3.27 String.prototype.search:
+  //   1. RequireObjectCoercible(this).
+  //   2. If regexp is non-null/undefined, GetMethod(regexp, @@search) and
+  //      dispatch through it BEFORE any ToString on O.
+  //   3. ToString(O); fall back to RegExp coercion.
+  if (AThisValue is TGocciaUndefinedLiteralValue) or
+     (AThisValue is TGocciaNullLiteralValue) then
+    ThrowTypeError(SErrorStringPrototypeRequiresNonNullish, SSuggestCheckNullBeforeAccess);
+
   if AArgs.Length > 0 then
   begin
     SearchMethod := GetMethodBySymbol(AArgs.GetElement(0),
@@ -1631,8 +1725,9 @@ begin
     begin
       if not SearchMethod.IsCallable then
         ThrowTypeError(SErrorSymbolSearchNotCallable, SSuggestWellKnownSymbolCallable);
+      // Spec passes O directly to the @@search callable, not a stringified copy.
       CallArgs := TGocciaArgumentsCollection.Create([
-        TGocciaStringLiteralValue.Create(StringValue)
+        AThisValue
       ]);
       try
         Result := InvokeCallable(SearchMethod, CallArgs, AArgs.GetElement(0));
@@ -1642,6 +1737,9 @@ begin
       Exit;
     end;
   end;
+
+  // Step 3 (spec): Let S be ? ToString(O). Only reached when no @@search.
+  StringValue := ExtractStringValue(AThisValue);
 
   if AArgs.Length > 0 then
     RegexValue := CoerceRegExpValue(AArgs.GetElement(0))

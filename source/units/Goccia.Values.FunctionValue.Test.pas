@@ -13,12 +13,15 @@ uses
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
+  Goccia.Constants.ErrorNames,
+  Goccia.Constants.PropertyNames,
   Goccia.ControlFlow,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.Scope,
   Goccia.TestSetup,
   Goccia.Token,
+  Goccia.Values.Error,
   Goccia.Values.FunctionValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -83,6 +86,9 @@ type
     Parameters: TStringList;
     ReturnValue: TGocciaValue;
     Args: TGocciaArgumentsCollection;
+    ToStringThrew: Boolean;
+    ThrownNameValue: TGocciaValue;
+    ThrownTypeName: string;
   begin
     Scope := TGocciaGlobalScope.Create;
     Parameters := TStringList.Create;
@@ -91,7 +97,32 @@ type
 
     // Test basic function properties
     Expect<Boolean>(FunctionValue.ToBooleanLiteral.Value).ToBe(True);
-    Expect<string>(FunctionValue.ToStringLiteral.Value).ToBe('[function Object]');
+
+    // ES2026 §7.1.17 ToString on a function fixture without Function.prototype
+    // (no engine init in this Pascal test) throws TypeError because neither
+    // toString() nor valueOf() can be located through the prototype chain.
+    // Real engine functions inherit Function.prototype.toString and stringify
+    // to "function name() { ... }". Verify both that the throw fires AND that
+    // the JS-level error name is "TypeError" — any other thrown error class
+    // would be a real bug (a different exception masking the spec one).
+    ToStringThrew := False;
+    ThrownTypeName := '';
+    try
+      FunctionValue.ToStringLiteral;
+    except
+      on E: TGocciaThrowValue do
+      begin
+        ToStringThrew := True;
+        ThrownNameValue := nil;
+        if E.Value is TGocciaObjectValue then
+          ThrownNameValue := TGocciaObjectValue(E.Value).GetProperty(PROP_NAME);
+        if (ThrownNameValue is TGocciaStringLiteralValue) then
+          ThrownTypeName := TGocciaStringLiteralValue(ThrownNameValue).Value;
+      end;
+    end;
+    Expect<Boolean>(ToStringThrew).ToBe(True);
+    Expect<string>(ThrownTypeName).ToBe(TYPE_ERROR_NAME);
+
     Expect<Boolean>(FunctionValue.ToNumberLiteral.IsNaN).ToBe(True);
     Expect<string>(FunctionValue.TypeName).ToBe('function');
 

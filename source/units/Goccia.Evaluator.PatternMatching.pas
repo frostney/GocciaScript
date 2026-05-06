@@ -58,7 +58,8 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.ProxyValue,
   Goccia.Values.StringObjectValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.Values.ToPrimitive;
 
 function CreatePatternChildContext(const AContext: TGocciaEvaluationContext;
   const ALabel: string): TGocciaEvaluationContext;
@@ -248,37 +249,41 @@ end;
 
 function HasMatchProperty(const ASubject, AKey: TGocciaValue): Boolean;
 var
+  ResolvedKey: TGocciaValue;
   KeyName: string;
   BoxedSubject: TGocciaObjectValue;
   SymbolPrototype: TGocciaValue;
   PropertyValue: TGocciaValue;
 begin
-  if AKey is TGocciaSymbolValue then
+  // ES2026 §7.1.19 ToPropertyKey on the pattern key — symbols pass through;
+  // an object whose toString() returns a Symbol resolves to that Symbol.
+  ResolvedKey := ToPropertyKey(AKey);
+  if ResolvedKey is TGocciaSymbolValue then
   begin
     if ASubject is TGocciaObjectValue then
     begin
       if ASubject is TGocciaProxyValue then
-        Exit(TGocciaProxyValue(ASubject).HasSymbolTrap(TGocciaSymbolValue(AKey)));
+        Exit(TGocciaProxyValue(ASubject).HasSymbolTrap(TGocciaSymbolValue(ResolvedKey)));
       Exit(HasSymbolPropertyInChain(TGocciaObjectValue(ASubject),
-        TGocciaSymbolValue(AKey)));
+        TGocciaSymbolValue(ResolvedKey)));
     end;
 
     BoxedSubject := BoxPrimitiveForMatch(ASubject);
     if Assigned(BoxedSubject) then
-      Exit(HasSymbolPropertyInChain(BoxedSubject, TGocciaSymbolValue(AKey)));
+      Exit(HasSymbolPropertyInChain(BoxedSubject, TGocciaSymbolValue(ResolvedKey)));
 
     if ASubject is TGocciaSymbolValue then
     begin
       SymbolPrototype := TGocciaSymbolValue.SharedPrototype;
       if SymbolPrototype is TGocciaObjectValue then
         Exit(HasSymbolPropertyInChain(TGocciaObjectValue(SymbolPrototype),
-          TGocciaSymbolValue(AKey)));
+          TGocciaSymbolValue(ResolvedKey)));
     end;
 
     Exit(False);
   end;
 
-  KeyName := AKey.ToStringLiteral.Value;
+  KeyName := TGocciaStringLiteralValue(ResolvedKey).Value;
   if ASubject is TGocciaProxyValue then
     Exit(TGocciaProxyValue(ASubject).HasTrap(KeyName));
 
@@ -302,24 +307,28 @@ end;
 
 function GetMatchProperty(const ASubject, AKey: TGocciaValue): TGocciaValue;
 var
+  ResolvedKey: TGocciaValue;
+  KeyName: string;
   BoxedSubject: TGocciaObjectValue;
   SymbolPrototype: TGocciaValue;
 begin
-  if AKey is TGocciaSymbolValue then
+  // ES2026 §7.1.19 ToPropertyKey before dispatching to symbol or string storage.
+  ResolvedKey := ToPropertyKey(AKey);
+  if ResolvedKey is TGocciaSymbolValue then
   begin
     if ASubject is TGocciaObjectValue then
-      Result := TGocciaObjectValue(ASubject).GetSymbolProperty(TGocciaSymbolValue(AKey))
+      Result := TGocciaObjectValue(ASubject).GetSymbolProperty(TGocciaSymbolValue(ResolvedKey))
     else
     begin
       BoxedSubject := BoxPrimitiveForMatch(ASubject);
       if Assigned(BoxedSubject) then
-        Result := BoxedSubject.GetSymbolProperty(TGocciaSymbolValue(AKey))
+        Result := BoxedSubject.GetSymbolProperty(TGocciaSymbolValue(ResolvedKey))
       else if ASubject is TGocciaSymbolValue then
       begin
         SymbolPrototype := TGocciaSymbolValue.SharedPrototype;
         if SymbolPrototype is TGocciaObjectValue then
           Result := TGocciaObjectValue(SymbolPrototype).GetSymbolProperty(
-            TGocciaSymbolValue(AKey))
+            TGocciaSymbolValue(ResolvedKey))
         else
           Result := nil;
       end
@@ -327,15 +336,19 @@ begin
         Result := nil;
     end;
   end
-  else if ASubject is TGocciaObjectValue then
-    Result := ASubject.GetProperty(AKey.ToStringLiteral.Value)
   else
   begin
-    BoxedSubject := BoxPrimitiveForMatch(ASubject);
-    if Assigned(BoxedSubject) then
-      Result := BoxedSubject.GetProperty(AKey.ToStringLiteral.Value)
+    KeyName := TGocciaStringLiteralValue(ResolvedKey).Value;
+    if ASubject is TGocciaObjectValue then
+      Result := ASubject.GetProperty(KeyName)
     else
-      Result := ASubject.GetProperty(AKey.ToStringLiteral.Value);
+    begin
+      BoxedSubject := BoxPrimitiveForMatch(ASubject);
+      if Assigned(BoxedSubject) then
+        Result := BoxedSubject.GetProperty(KeyName)
+      else
+        Result := ASubject.GetProperty(KeyName);
+    end;
   end;
   if not Assigned(Result) then
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -585,7 +598,8 @@ begin
     begin
       Prop := APattern.Properties[I];
       if Prop.Computed then
-        KeyValue := EvaluateExpression(Prop.KeyExpression, CurrentContext)
+        // ES2026 §7.1.19 ToPropertyKey on the computed pattern key.
+        KeyValue := ToPropertyKey(EvaluateExpression(Prop.KeyExpression, CurrentContext))
       else
         KeyValue := TGocciaStringLiteralValue.Create(Prop.Key);
 
@@ -599,7 +613,7 @@ begin
       if KeyValue is TGocciaSymbolValue then
         MatchedSymbols.Add(TGocciaSymbolValue(KeyValue))
       else
-        MatchedKeys.Add(KeyValue.ToStringLiteral.Value);
+        MatchedKeys.Add(TGocciaStringLiteralValue(KeyValue).Value);
       CurrentContext := NextContext;
     end;
 

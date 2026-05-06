@@ -124,7 +124,8 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
-  Goccia.Values.NativeFunction;
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ToPrimitive;
 
 // Object.prototype lives in a per-realm slot.  See Goccia.Realm and the
 // matching pattern in Goccia.Values.ArrayValue for the rationale; the method
@@ -474,9 +475,20 @@ begin
   Result := CONSTRUCTOR_OBJECT;
 end;
 
+// ES2026 §7.1.17 ToString. For an object: ToPrimitive(O, string) → ToString
+// of the resulting primitive. May invoke user-defined toString()/valueOf()
+// and may throw. Callers that cannot tolerate user re-entry must use
+// SafeToString from Goccia.Values.ToPrimitive instead.
 function TGocciaObjectValue.ToStringLiteral: TGocciaStringLiteralValue;
+var
+  Prim: TGocciaValue;
 begin
-  Result := TGocciaStringLiteralValue.Create(Format('[%s %s]', [TypeName, ToStringTag]));
+  Prim := ToPrimitive(Self, tphString);
+  if Prim is TGocciaSymbolValue then
+    ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
+  // Prim is a primitive at this point — its ToStringLiteral cannot recurse
+  // into user code.
+  Result := Prim.ToStringLiteral;
 end;
 
 function TGocciaObjectValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
@@ -1334,6 +1346,7 @@ end;
 procedure TGocciaObjectValue.Freeze;
 var
   Pair: TGocciaPropertyMap.TKeyValuePair;
+  SymPair: TSymbolDescriptorMap.TKeyValuePair;
   Descriptor: TGocciaPropertyDescriptor;
   NewDescriptor: TGocciaPropertyDescriptor;
 begin
@@ -1365,6 +1378,36 @@ begin
       Descriptor.Free;
     end;
   end;
+  // ES2026 §7.3.15 SetIntegrityLevel must apply to symbol-keyed properties
+  // too — same pattern as Seal above.
+  for SymPair in FSymbolDescriptors do
+  begin
+    Descriptor := SymPair.Value;
+    if Descriptor is TGocciaPropertyDescriptorData then
+    begin
+      if Descriptor.Enumerable then
+        NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, [pfEnumerable])
+      else
+        NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, []);
+      FSymbolDescriptors.AddOrSetValue(SymPair.Key, NewDescriptor);
+      Descriptor.Free;
+    end
+    else if Descriptor is TGocciaPropertyDescriptorAccessor then
+    begin
+      if Descriptor.Enumerable then
+        NewDescriptor := TGocciaPropertyDescriptorAccessor.Create(
+          TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
+          TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
+          [pfEnumerable])
+      else
+        NewDescriptor := TGocciaPropertyDescriptorAccessor.Create(
+          TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
+          TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
+          []);
+      FSymbolDescriptors.AddOrSetValue(SymPair.Key, NewDescriptor);
+      Descriptor.Free;
+    end;
+  end;
   FFrozen := True;
   FSealed := True;
   FExtensible := False;
@@ -1373,6 +1416,7 @@ end;
 procedure TGocciaObjectValue.Seal;
 var
   Pair: TGocciaPropertyMap.TKeyValuePair;
+  SymPair: TSymbolDescriptorMap.TKeyValuePair;
   Descriptor: TGocciaPropertyDescriptor;
   NewDescriptor: TGocciaPropertyDescriptor;
   Flags: TPropertyFlags;
@@ -1398,6 +1442,33 @@ begin
         TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
         Flags);
       FProperties.Add(Pair.Key, NewDescriptor);
+      Descriptor.Free;
+    end;
+  end;
+  // ES2026 §7.3.15 SetIntegrityLevel must apply to symbol-keyed properties
+  // too — they live in a separate descriptor table in Goccia but are still
+  // own properties of O, so seal/freeze must clear pfConfigurable here.
+  for SymPair in FSymbolDescriptors do
+  begin
+    Descriptor := SymPair.Value;
+    Flags := [];
+    if Descriptor.Enumerable then
+      Include(Flags, pfEnumerable);
+    if Descriptor is TGocciaPropertyDescriptorData then
+    begin
+      if Descriptor.Writable then
+        Include(Flags, pfWritable);
+      NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, Flags);
+      FSymbolDescriptors.AddOrSetValue(SymPair.Key, NewDescriptor);
+      Descriptor.Free;
+    end
+    else if Descriptor is TGocciaPropertyDescriptorAccessor then
+    begin
+      NewDescriptor := TGocciaPropertyDescriptorAccessor.Create(
+        TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
+        TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
+        Flags);
+      FSymbolDescriptors.AddOrSetValue(SymPair.Key, NewDescriptor);
       Descriptor.Free;
     end;
   end;

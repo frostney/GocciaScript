@@ -17,7 +17,10 @@ function ExtractThrowLocation(const AThrown: TGocciaValue;
 
 { Formats a detailed error message for a TGocciaThrowValue, including source
   context with caret pointer when source lines and location are available.
-  Falls back to the stack trace or bare message when context is unavailable. }
+  Falls back to the stack trace or a debug-format placeholder when context is
+  unavailable. The fallback never invokes user toString()/valueOf() — by the
+  time this is called the bytecode VM has unwound and re-entering it would
+  raise a Pascal range-check error. }
 function FormatThrowDetail(const AThrown: TGocciaValue;
   const AFileName: string; const ASourceLines: TStringList;
   const AUseColor: Boolean; const ASuggestion: string = ''): string;
@@ -29,7 +32,8 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.Error,
-  Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.SymbolValue;
 
 function ExtractThrowLocation(const AThrown: TGocciaValue;
   out AErrorName, AErrorMessage, AFrameFileName: string;
@@ -118,7 +122,10 @@ begin
   end
   else
   begin
-    // Fallback: just show the stack trace or message
+    // Fallback when no parseable stack frame is available. Use the stack
+    // string if present; otherwise render a static debug representation that
+    // does not touch user toString()/valueOf() — the bytecode VM has already
+    // unwound by the time this runs and re-entry is unsafe.
     if AThrown is TGocciaObjectValue then
     begin
       StackValue := TGocciaObjectValue(AThrown).GetProperty(PROP_STACK);
@@ -126,9 +133,13 @@ begin
          (TGocciaStringLiteralValue(StackValue).Value <> '') then
         Result := TGocciaStringLiteralValue(StackValue).Value
       else
-        Result := AThrown.ToStringLiteral.Value;
+        Result := Format('[object %s]', [TGocciaObjectValue(AThrown).ToStringTag]);
     end
+    else if AThrown is TGocciaSymbolValue then
+      Result := TGocciaSymbolValue(AThrown).ToDisplayString.Value
     else
+      // Primitive non-Symbol values: ToStringLiteral cannot invoke user code
+      // and cannot throw, so it is safe to call here.
       Result := AThrown.ToStringLiteral.Value;
   end;
 end;

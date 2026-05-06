@@ -87,4 +87,34 @@ describe('String.prototype.replace', () => {
 
     expect('abc'.replace(searchValue, 'x')).toBe('custom replace');
   });
+
+  test('Symbol.replace fires before ToString on the receiver (ES2026 §22.1.3.19 step 2.c-d)', () => {
+    // The replacer must run before any ToString on `this`. If the receiver's
+    // toString fires first, `poisoned` becomes true and the assertion fails.
+    let poisoned = false;
+    let replacerFired = false;
+    const poison = { toString() { poisoned = true; return ''; } };
+    const searchValue = {
+      [Symbol.replace]() { replacerFired = true; return 'ok'; },
+    };
+    ''.replace.call(poison, searchValue, 'x');
+    expect(replacerFired).toBe(true);
+    expect(poisoned).toBe(false);
+  });
+
+  test('Symbol.replace receives O directly, not a stringified copy', () => {
+    // Spec step 2.d.i: Call(replacer, searchValue, « O, replaceValue »).
+    const receiver = { tag: 'unique-receiver' };
+    let receivedThis;
+    const searchValue = {
+      [Symbol.replace](o) { receivedThis = o; return 'ok'; },
+    };
+    ''.replace.call(receiver, searchValue, 'x');
+    expect(receivedThis).toBe(receiver);
+  });
+
+  test('throws TypeError when called on null or undefined', () => {
+    expect(() => ''.replace.call(null, /x/, 'y')).toThrow(TypeError);
+    expect(() => ''.replace.call(undefined, /x/, 'y')).toThrow(TypeError);
+  });
 });

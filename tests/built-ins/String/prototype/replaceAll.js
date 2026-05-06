@@ -85,4 +85,35 @@ describe('String.prototype.replaceAll', () => {
 
     expect('abc'.replaceAll(searchValue, 'x')).toBe('custom replaceAll');
   });
+
+  test('Symbol.replace fires before ToString on the receiver (ES2026 §22.1.3.20 step 2.c-d)', () => {
+    let poisoned = false;
+    let replacerFired = false;
+    const poison = { toString() { poisoned = true; return ''; } };
+    const searchValue = {
+      [Symbol.match]: false,
+      flags: 'g',
+      [Symbol.replace]() { replacerFired = true; return 'ok'; },
+    };
+    ''.replaceAll.call(poison, searchValue, 'x');
+    expect(replacerFired).toBe(true);
+    expect(poisoned).toBe(false);
+  });
+
+  test('Symbol.replace receives O directly, not a stringified copy', () => {
+    const receiver = { tag: 'unique-receiver' };
+    let receivedThis;
+    const searchValue = {
+      [Symbol.match]: false,
+      flags: 'g',
+      [Symbol.replace](o) { receivedThis = o; return 'ok'; },
+    };
+    ''.replaceAll.call(receiver, searchValue, 'x');
+    expect(receivedThis).toBe(receiver);
+  });
+
+  test('throws TypeError when called on null or undefined', () => {
+    expect(() => ''.replaceAll.call(null, /x/g, 'y')).toThrow(TypeError);
+    expect(() => ''.replaceAll.call(undefined, /x/g, 'y')).toThrow(TypeError);
+  });
 });

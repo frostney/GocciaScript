@@ -13,8 +13,9 @@ type
 // ES2026 §7.1.1 ToPrimitive(input [, preferredType])
 function ToPrimitive(const AValue: TGocciaValue; const AHint: TGocciaToPrimitiveHint = tphDefault): TGocciaValue;
 
-// ES2026 §7.1.17 ToString(argument)
-function ToECMAString(const AValue: TGocciaValue): TGocciaStringLiteralValue;
+// ES2026 §7.1.19 ToPropertyKey(argument). Symbols are returned as-is; everything
+// else is coerced via ToString. Callers must check the returned type.
+function ToPropertyKey(const AValue: TGocciaValue): TGocciaValue;
 
 implementation
 
@@ -90,30 +91,23 @@ begin
   Result := AValue;
 end;
 
-// ES2026 §7.1.17 ToString(argument) — Symbols cannot be converted to strings
-function ToECMAString(const AValue: TGocciaValue): TGocciaStringLiteralValue;
+// ES2026 §7.1.19 ToPropertyKey(argument). Symbols pass through; non-symbols
+// are coerced via ToPrimitive(string) then ToString. The caller is
+// responsible for dispatching string vs. symbol property storage.
+function ToPropertyKey(const AValue: TGocciaValue): TGocciaValue;
 var
   Prim: TGocciaValue;
 begin
-  if AValue is TGocciaStringLiteralValue then
-  begin
-    Result := TGocciaStringLiteralValue(AValue);
-    Exit;
-  end;
-
-  if AValue is TGocciaSymbolValue then
-    ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
-
-  if AValue.IsPrimitive then
-  begin
-    Result := AValue.ToStringLiteral;
-    Exit;
-  end;
-
-  // ES2026 §7.1.17 step 1: ToPrimitive(argument, string)
+  // Step 1: Let key be ? ToPrimitive(argument, string).
   Prim := ToPrimitive(AValue, tphString);
+  // Step 2: If key is a Symbol, return key.
   if Prim is TGocciaSymbolValue then
-    ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion);
+  begin
+    Result := Prim;
+    Exit;
+  end;
+  // Step 3: Return ! ToString(key). Prim is a primitive here, so ToStringLiteral
+  // on it cannot re-enter user code.
   Result := Prim.ToStringLiteral;
 end;
 

@@ -1201,7 +1201,7 @@ begin
       Continue
     else
       // ES2026 §23.1.3.16 step 7c: Let next be ? ToString(element)
-      ResultString := ResultString + ToECMAString(Element).Value;
+      ResultString := ResultString + Element.ToStringLiteral.Value;
   end;
 
   // Step 9: Return R

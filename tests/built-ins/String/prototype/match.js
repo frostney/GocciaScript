@@ -34,3 +34,30 @@ test("match dispatches through Symbol.match", () => {
 test("match advances by code point for zero-length global unicode matches", () => {
   expect("😀".match(/(?:)/gu)).toEqual(["", ""]);
 });
+
+test("Symbol.match fires before ToString on the receiver (ES2026 §22.1.3.15 step 2)", () => {
+  let poisoned = false;
+  let matcherFired = false;
+  const poison = { toString() { poisoned = true; return ""; } };
+  const matcher = {
+    [Symbol.match]() { matcherFired = true; return null; },
+  };
+  "".match.call(poison, matcher);
+  expect(matcherFired).toBe(true);
+  expect(poisoned).toBe(false);
+});
+
+test("Symbol.match receives O directly, not a stringified copy", () => {
+  const receiver = { tag: "unique-receiver" };
+  let receivedThis;
+  const matcher = {
+    [Symbol.match](o) { receivedThis = o; return null; },
+  };
+  "".match.call(receiver, matcher);
+  expect(receivedThis).toBe(receiver);
+});
+
+test("match throws TypeError when called on null or undefined", () => {
+  expect(() => "".match.call(null, /x/)).toThrow(TypeError);
+  expect(() => "".match.call(undefined, /x/)).toThrow(TypeError);
+});
