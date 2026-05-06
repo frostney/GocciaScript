@@ -29,6 +29,8 @@ resourcestring
   SErrorBigIntInvalidRadix = 'toString() radix must be between 2 and 36';
   SErrorBigIntInvalidIndex = 'Invalid index';
 
+  SErrorNotANumber = 'Value is not a Number';
+
   // Type errors — property access
   SErrorCannotReadPropertyOf = 'Cannot read property ''%s'' of %s';
   SErrorCannotReadPropertiesOf = 'Cannot read properties of %s (reading ''%s'')';

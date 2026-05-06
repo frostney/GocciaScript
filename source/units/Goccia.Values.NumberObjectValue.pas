@@ -68,6 +68,7 @@ begin
     Result := nil;
 end;
 
+// ES2026 §21.1.3 thisNumberValue(value)
 function TGocciaNumberObjectValue.ExtractPrimitive(const AValue: TGocciaValue): TGocciaNumberLiteralValue;
 begin
   if AValue is TGocciaNumberLiteralValue then
@@ -75,7 +76,7 @@ begin
   else if AValue is TGocciaNumberObjectValue then
     Result := TGocciaNumberObjectValue(AValue).Primitive
   else
-    Result := AValue.ToNumberLiteral;
+    ThrowTypeError(SErrorNotANumber, SSuggestNotANumber);
 end;
 
 constructor TGocciaNumberObjectValue.Create(const APrimitive: TGocciaNumberLiteralValue; const AClass: TGocciaClassValue = nil);
