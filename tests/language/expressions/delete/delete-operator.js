@@ -92,3 +92,10 @@ test("delete null.prop throws TypeError", () => {
 test("delete undefined.prop throws TypeError", () => {
   expect(() => { delete undefined.x; }).toThrow(TypeError);
 });
+
+test("delete null[key] does not invoke key toString before throwing", () => {
+  let called = false;
+  const key = { toString() { called = true; return "x"; } };
+  expect(() => { delete null[key]; }).toThrow(TypeError);
+  expect(called).toBe(false);
+});
