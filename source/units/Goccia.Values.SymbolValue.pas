@@ -126,7 +126,7 @@ begin
 end;
 
 // ES2026 §20.4.3.3.1 thisSymbolValue(value)
-function ThisSymbolValue(const AValue: TGocciaValue; const AMethodName: string): TGocciaSymbolValue;
+function ThisSymbolValue(const AValue: TGocciaValue): TGocciaSymbolValue;
 begin
   if AValue is TGocciaSymbolValue then
     Result := TGocciaSymbolValue(AValue)
@@ -143,21 +143,21 @@ end;
 function TGocciaSymbolValue.SymbolToString(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := ThisSymbolValue(AThisValue, 'toString').ToDisplayString;
+  Result := ThisSymbolValue(AThisValue).ToDisplayString;
 end;
 
 // ES2026 §20.4.3.5 Symbol.prototype.valueOf()
 function TGocciaSymbolValue.SymbolValueOf(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := ThisSymbolValue(AThisValue, 'valueOf');
+  Result := ThisSymbolValue(AThisValue);
 end;
 
 // ES2026 §20.4.3.6 Symbol.prototype [ @@toPrimitive ] ( hint )
 function TGocciaSymbolValue.SymbolToPrimitive(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := ThisSymbolValue(AThisValue, '[Symbol.toPrimitive]');
+  Result := ThisSymbolValue(AThisValue);
 end;
 
 function TGocciaSymbolValue.GetDescription(const AArgs: TGocciaArgumentsCollection;
@@ -165,7 +165,7 @@ function TGocciaSymbolValue.GetDescription(const AArgs: TGocciaArgumentsCollecti
 var
   Sym: TGocciaSymbolValue;
 begin
-  Sym := ThisSymbolValue(AThisValue, 'description');
+  Sym := ThisSymbolValue(AThisValue);
   if Sym.FHasDescription then
     Result := TGocciaStringLiteralValue.Create(Sym.FDescription)
   else

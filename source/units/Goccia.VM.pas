@@ -6473,7 +6473,10 @@ begin
     end;
   end;
 
-  KeyStr := KeyToPropertyName(AKey);
+  if (AKey is TGocciaObjectValue) and Assigned(ResolvedKey) then
+    KeyStr := TGocciaStringLiteralValue(ResolvedKey).Value
+  else
+    KeyStr := KeyToPropertyName(AKey);
 
   // ES2026 §28.1.1 [[HasProperty]](P) — string key
   if AObject is TGocciaProxyValue then

@@ -56,44 +56,28 @@ begin
   end;
 end;
 
-var
+threadvar
   GHintString: TGocciaStringLiteralValue;
   GHintNumber: TGocciaStringLiteralValue;
   GHintDefault: TGocciaStringLiteralValue;
 
+procedure EnsureHintValue(var ASlot: TGocciaStringLiteralValue; const AValue: string); inline;
+begin
+  if not Assigned(ASlot) then
+  begin
+    ASlot := TGocciaStringLiteralValue.Create(AValue);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(ASlot);
+  end;
+end;
+
 function HintValue(const AHint: TGocciaToPrimitiveHint): TGocciaStringLiteralValue;
 begin
   case AHint of
-    tphString:
-    begin
-      if not Assigned(GHintString) then
-      begin
-        GHintString := TGocciaStringLiteralValue.Create('string');
-        if Assigned(TGarbageCollector.Instance) then
-          TGarbageCollector.Instance.PinObject(GHintString);
-      end;
-      Result := GHintString;
-    end;
-    tphNumber:
-    begin
-      if not Assigned(GHintNumber) then
-      begin
-        GHintNumber := TGocciaStringLiteralValue.Create('number');
-        if Assigned(TGarbageCollector.Instance) then
-          TGarbageCollector.Instance.PinObject(GHintNumber);
-      end;
-      Result := GHintNumber;
-    end;
+    tphString: begin EnsureHintValue(GHintString, 'string'); Result := GHintString; end;
+    tphNumber: begin EnsureHintValue(GHintNumber, 'number'); Result := GHintNumber; end;
   else
-    begin
-      if not Assigned(GHintDefault) then
-      begin
-        GHintDefault := TGocciaStringLiteralValue.Create('default');
-        if Assigned(TGarbageCollector.Instance) then
-          TGarbageCollector.Instance.PinObject(GHintDefault);
-      end;
-      Result := GHintDefault;
-    end;
+    EnsureHintValue(GHintDefault, 'default'); Result := GHintDefault;
   end;
 end;
 
