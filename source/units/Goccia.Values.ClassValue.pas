@@ -1350,7 +1350,9 @@ begin
        not (AArguments.GetElement(0) is TGocciaUndefinedLiteralValue) and
        not (AArguments.GetElement(0) is TGocciaNullLiteralValue) then
     begin
-      if AArguments.GetElement(0).IsPrimitive then
+      if AArguments.GetElement(0) is TGocciaSymbolValue then
+        Result := AArguments.GetElement(0)
+      else if AArguments.GetElement(0).IsPrimitive then
         Result := AArguments.GetElement(0).Box
       else
         Result := AArguments.GetElement(0);
