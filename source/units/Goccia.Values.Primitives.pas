@@ -234,6 +234,16 @@ var
   Parsed: Double;
   FS: TFormatSettings;
 begin
+  if IsNan(AValue) then
+    Exit('NaN');
+  if IsInfinite(AValue) then
+  begin
+    if AValue > 0 then
+      Exit('Infinity')
+    else
+      Exit('-Infinity');
+  end;
+
   if AValue = 0 then
     Exit('0');
 
