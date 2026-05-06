@@ -68,6 +68,7 @@ begin
     Result := nil;
 end;
 
+// ES2026 §21.1.3 thisNumberValue(value)
 function TGocciaNumberObjectValue.ExtractPrimitive(const AValue: TGocciaValue): TGocciaNumberLiteralValue;
 begin
   if AValue is TGocciaNumberLiteralValue then
@@ -75,7 +76,7 @@ begin
   else if AValue is TGocciaNumberObjectValue then
     Result := TGocciaNumberObjectValue(AValue).Primitive
   else
-    Result := AValue.ToNumberLiteral;
+    ThrowTypeError(SErrorNotANumber, SSuggestNotANumber);
 end;
 
 constructor TGocciaNumberObjectValue.Create(const APrimitive: TGocciaNumberLiteralValue; const AClass: TGocciaClassValue = nil);
@@ -295,16 +296,13 @@ begin
     Exit;
   end;
 
-  if AArgs.Length > 0 then
+  // Step 2: If radix is undefined, let radixMV be 10
+  if (AArgs.Length > 0) and not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
   begin
     Radix := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
     // Step 3: If radixMV < 2 or radixMV > 36, throw a RangeError exception
     if (Radix < 2) or (Radix > 36) then
-    begin
-      Result := TGocciaStringLiteralValue.Create('');
-      Exit;
-    end;
-    // Step 2: If radix is undefined or 10, return ! ToString(x)
+      ThrowRangeError(SErrorBigIntInvalidRadix, SSuggestBigIntInvalidRadix);
     if Radix = 10 then
     begin
       Result := Prim.ToStringLiteral;

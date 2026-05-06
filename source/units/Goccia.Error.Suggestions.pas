@@ -161,6 +161,7 @@ resourcestring
   SSuggestBigIntRequiresBigIntValue = 'this method can only be called on a BigInt value or BigInt object';
   SSuggestBigIntInvalidRadix = 'provide a radix value between 2 and 36';
   SSuggestBigIntInvalidIndex = 'bits must be a non-negative integer';
+  SSuggestNotANumber = 'this method can only be called on a Number value or Number object';
   SSuggestDecoratorFunction = 'decorators must be expressions that evaluate to a function';
   SSuggestDisposable = 'the value must have a [Symbol.dispose] method to be used with ''using''';
   SSuggestNotFunctionType = 'the value is not callable — only functions can be invoked';
