@@ -66,3 +66,29 @@ test("delete with symbol key on array removes symbol-keyed property", () => {
   expect(arr.length).toBe(3);
   expect(arr[0]).toBe(1);
 });
+
+test("delete null[string] throws TypeError", () => {
+  expect(() => { delete null["x"]; }).toThrow(TypeError);
+});
+
+test("delete undefined[string] throws TypeError", () => {
+  expect(() => { delete undefined["x"]; }).toThrow(TypeError);
+});
+
+test("delete null[symbol] throws TypeError", () => {
+  const sym = Symbol();
+  expect(() => { delete null[sym]; }).toThrow(TypeError);
+});
+
+test("delete undefined[symbol] throws TypeError", () => {
+  const sym = Symbol();
+  expect(() => { delete undefined[sym]; }).toThrow(TypeError);
+});
+
+test("delete null.prop throws TypeError", () => {
+  expect(() => { delete null.x; }).toThrow(TypeError);
+});
+
+test("delete undefined.prop throws TypeError", () => {
+  expect(() => { delete undefined.x; }).toThrow(TypeError);
+});

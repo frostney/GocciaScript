@@ -7605,7 +7605,15 @@ begin
 
       OP_DELETE_PROP_CONST:
       begin
-        if (FRegisters[A].Kind = grkObject) and
+        if FRegisters[A].Kind = grkNull then
+          ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull,
+            [Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue]),
+            SSuggestCheckNullBeforeAccess)
+        else if FRegisters[A].Kind = grkUndefined then
+          ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined,
+            [Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue]),
+            SSuggestCheckNullBeforeAccess)
+        else if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaObjectValue) then
         begin
           if TGocciaObjectValue(FRegisters[A].ObjectValue).DeleteProperty(
@@ -8231,11 +8239,15 @@ begin
 
       OP_DEL_INDEX:
       begin
-        // ES2026 §7.1.19 ToPropertyKey — symbol keys must delete from symbol
-        // storage regardless of whether the receiver is an array or plain
-        // object. Check this before the array-numeric-index branch so that
-        // `delete arr[sym]` doesn't silently no-op via the array fall-through.
-        if (FRegisters[B].Kind = grkObject) and
+        if FRegisters[B].Kind = grkNull then
+          ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull,
+            [KeyToPropertyNameRegister(FRegisters[C])]),
+            SSuggestCheckNullBeforeAccess)
+        else if FRegisters[B].Kind = grkUndefined then
+          ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined,
+            [KeyToPropertyNameRegister(FRegisters[C])]),
+            SSuggestCheckNullBeforeAccess)
+        else if (FRegisters[B].Kind = grkObject) and
            (FRegisters[B].ObjectValue is TGocciaObjectValue) and
            (FRegisters[C].Kind = grkObject) and
            (FRegisters[C].ObjectValue is TGocciaSymbolValue) then

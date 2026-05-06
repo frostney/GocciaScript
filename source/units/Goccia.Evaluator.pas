@@ -6213,10 +6213,21 @@ begin
       PropertyName := MemberExpr.PropertyName;
     end;
 
+    if (ObjValue is TGocciaNullLiteralValue) or
+       (ObjValue is TGocciaUndefinedLiteralValue) then
+    begin
+      if IsSymbolKey then
+        ThrowTypeError(Format(SErrorCannotReadPropertiesOf,
+          [ObjValue.ToStringLiteral.Value, SymbolKey.ToDisplayString.Value]),
+          SSuggestCheckNullBeforeAccess)
+      else
+        ThrowTypeError(Format(SErrorCannotReadPropertiesOf,
+          [ObjValue.ToStringLiteral.Value, PropertyName]),
+          SSuggestCheckNullBeforeAccess);
+    end;
+
     if IsSymbolKey then
     begin
-      // Symbol-keyed deletion: defined for objects/instances/classes only.
-      // Primitives have no symbol storage, so the operation is a no-op.
       if ObjValue is TGocciaObjectValue then
       begin
         if not TGocciaObjectValue(ObjValue).DeleteSymbolProperty(SymbolKey) then
