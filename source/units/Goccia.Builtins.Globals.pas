@@ -399,7 +399,7 @@ var
   Name, Msg: string;
 begin
   if not (AThisValue is TGocciaObjectValue) then
-    ThrowTypeError('Error.prototype.toString requires that ''this'' be an Object');
+    ThrowTypeError(SErrorErrorProtoToStringRequiresObject);
 
   Obj := TGocciaObjectValue(AThisValue);
 
