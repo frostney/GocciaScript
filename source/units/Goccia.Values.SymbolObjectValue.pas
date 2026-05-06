@@ -48,11 +48,6 @@ end;
 function TGocciaSymbolObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 begin
   Result := inherited GetPropertyWithContext(AName, AThisContext);
-  if not (Result is TGocciaUndefinedLiteralValue) then
-    Exit;
-
-  if Assigned(FPrototype) then
-    Result := FPrototype.GetPropertyWithContext(AName, AThisContext);
 end;
 
 procedure TGocciaSymbolObjectValue.MarkReferences;

@@ -121,7 +121,7 @@ begin
     begin
       // GetMethod step 3: If IsCallable(func) is false, throw a TypeError.
       if not ExoticToPrim.IsCallable then
-        ThrowTypeError(SErrorToPrimitiveNotCallable, SSuggestToPrimitive);
+        ThrowTypeError(SErrorToPrimitiveNotCallable, SSuggestToPrimitiveNotCallable);
       // Step 2.b: Call(exoticToPrim, input, « hint »)
       Args := TGocciaArgumentsCollection.Create;
       try

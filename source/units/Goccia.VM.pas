@@ -6874,7 +6874,7 @@ var
   Running: Boolean;
   Template: TGocciaFunctionTemplate;
   ChildTemplate: TGocciaFunctionTemplate;
-  LeftValue, RightValue, TargetValue: TGocciaValue;
+  LeftValue, RightValue, TargetValue, PropKeyValue: TGocciaValue;
   FunctionConstructorValue, ObjectConstructorValue: TGocciaValue;
   CustomMatcherValue, MatchResultValue: TGocciaValue;
   MatchHintObject: TGocciaObjectValue;
@@ -7371,6 +7371,17 @@ begin
              (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
             SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetSymbolProperty(
               TGocciaSymbolValue(FRegisters[C].ObjectValue)))
+          else if (FRegisters[C].Kind = grkObject) and
+                  (FRegisters[C].ObjectValue is TGocciaObjectValue) then
+          begin
+            PropKeyValue := ToPropertyKey(FRegisters[C].ObjectValue);
+            if PropKeyValue is TGocciaSymbolValue then
+              SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetSymbolProperty(
+                TGocciaSymbolValue(PropKeyValue)))
+            else
+              SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetProperty(
+                TGocciaStringLiteralValue(PropKeyValue).Value));
+          end
           else
             SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetProperty(
               KeyToPropertyNameRegister(FRegisters[C])));
@@ -7750,6 +7761,25 @@ begin
              (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
             SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetSymbolProperty(
               TGocciaSymbolValue(FRegisters[C].ObjectValue)))
+          else if (FRegisters[C].Kind = grkObject) and
+                  (FRegisters[C].ObjectValue is TGocciaObjectValue) then
+          begin
+            PropKeyValue := ToPropertyKey(FRegisters[C].ObjectValue);
+            if PropKeyValue is TGocciaSymbolValue then
+              SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetSymbolProperty(
+                TGocciaSymbolValue(PropKeyValue)))
+            else
+            begin
+              GlobalName := TGocciaStringLiteralValue(PropKeyValue).Value;
+              if (FRegisters[B].ObjectValue is TGocciaVMLiteralObjectValue) and
+                  TGocciaVMLiteralObjectValue(FRegisters[B].ObjectValue).TryGetOwnDataPropertyFastRegister(
+                    GlobalName, FRegisters[A]) then
+                { fast path already assigned }
+              else
+                SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetProperty(
+                  GlobalName));
+            end;
+          end
           else
           begin
             GlobalName := KeyToPropertyNameRegister(FRegisters[C]);
