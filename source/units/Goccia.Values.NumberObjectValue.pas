@@ -296,13 +296,13 @@ begin
     Exit;
   end;
 
-  if AArgs.Length > 0 then
+  // Step 2: If radix is undefined, let radixMV be 10
+  if (AArgs.Length > 0) and not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
   begin
     Radix := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
     // Step 3: If radixMV < 2 or radixMV > 36, throw a RangeError exception
     if (Radix < 2) or (Radix > 36) then
       ThrowRangeError(SErrorBigIntInvalidRadix, SSuggestBigIntInvalidRadix);
-    // Step 2: If radix is undefined or 10, return ! ToString(x)
     if Radix = 10 then
     begin
       Result := Prim.ToStringLiteral;

@@ -284,7 +284,7 @@ class HarnessCache {
    * responsibility) skips this entirely.
    */
   async build(includes: string[]): Promise<string> {
-    const seen = new Set<string>(["assert.js", "sta.js", "compareArray.js"]);
+    const seen = new Set<string>(["$262.js", "assert.js", "sta.js", "compareArray.js"]);
     const parts: string[] = [
       await this.read("$262.js"),
       await this.read("assert.js"),
