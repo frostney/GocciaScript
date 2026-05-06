@@ -3450,7 +3450,7 @@ begin
             EnsureBoxedArgs;
             FVM.RunClassInitializers(SuperClass, Instance);
             ConstructedValue := ConstructorToCall.CallWithThisValue(
-              BoxedArgs, Instance, ConstructorThisValue);
+              BoxedArgs, Instance, ConstructorThisValue, Self);
             ValidateClassConstructorReturn(SuperClass, ConstructedValue);
             if IsUndefinedConstructedValue(ConstructedValue) then
               ApplyReplacementResult(ConstructorThisValue)
