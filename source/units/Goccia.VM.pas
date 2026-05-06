@@ -7879,6 +7879,30 @@ begin
         end;
       end;
 
+      OP_INC:
+        if FRegisters[B].Kind = grkInt then
+          FRegisters[A] := VMIntResult(FRegisters[B].IntValue + 1)
+        else if FRegisters[B].Kind = grkFloat then
+          FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue + 1.0)
+        else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaBigIntValue) then
+          SetRegister(A, TGocciaBigIntValue.Create(
+            TGocciaBigIntValue(FRegisters[B].ObjectValue).Value.Add(TBigInteger.One)))
+        else
+          SetRegister(A, VMNumberValue(GetRegisterFast(B).ToNumberLiteral.Value + 1));
+
+      OP_DEC:
+        if FRegisters[B].Kind = grkInt then
+          FRegisters[A] := VMIntResult(FRegisters[B].IntValue - 1)
+        else if FRegisters[B].Kind = grkFloat then
+          FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue - 1.0)
+        else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaBigIntValue) then
+          SetRegister(A, TGocciaBigIntValue.Create(
+            TGocciaBigIntValue(FRegisters[B].ObjectValue).Value.Subtract(TBigInteger.One)))
+        else
+          SetRegister(A, VMNumberValue(GetRegisterFast(B).ToNumberLiteral.Value - 1));
+
       OP_MUL:
       begin
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
@@ -8224,6 +8248,27 @@ begin
             FRegisters[A] := RegisterObject(TGocciaNumberLiteralValue.NaNValue);
         else
           SetRegister(A, GetRegister(B).ToNumberLiteral);
+        end;
+
+      OP_TO_NUMERIC:
+        case FRegisters[B].Kind of
+          grkInt, grkFloat:
+            FRegisters[A] := FRegisters[B];
+          grkBoolean:
+            if FRegisters[B].BoolValue then
+              FRegisters[A] := RegisterInt(1)
+            else
+              FRegisters[A] := RegisterInt(0);
+          grkNull:
+            FRegisters[A] := RegisterInt(0);
+          grkUndefined, grkHole:
+            FRegisters[A] := RegisterObject(TGocciaNumberLiteralValue.NaNValue);
+        else
+          LeftValue := ToPrimitive(GetRegisterFast(B));
+          if LeftValue is TGocciaBigIntValue then
+            SetRegisterFast(A, LeftValue)
+          else
+            SetRegister(A, LeftValue.ToNumberLiteral);
         end;
 
       OP_TO_STRING:

@@ -850,6 +850,7 @@ uses
   Goccia.ImportMeta,
   Goccia.Modules,
   Goccia.RegExp.Runtime,
+  Goccia.Values.BigIntValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
@@ -1867,7 +1868,8 @@ begin
   begin
     PropName := TGocciaIdentifierExpression(Operand).Name;
     OldValue := AContext.Scope.GetValue(PropName);
-    OldValue := OldValue.ToNumberLiteral;
+    if not (OldValue is TGocciaBigIntValue) then
+      OldValue := OldValue.ToNumberLiteral;
     NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
     AContext.Scope.AssignBinding(PropName, NewValue);
     if IsPrefix then
@@ -1890,7 +1892,8 @@ begin
           OldValue := TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue));
         if OldValue = nil then
           OldValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-        OldValue := OldValue.ToNumberLiteral;
+        if not (OldValue is TGocciaBigIntValue) then
+          OldValue := OldValue.ToNumberLiteral;
         NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
         if Obj is TGocciaClassValue then
           TGocciaClassValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropertyKeyValue), NewValue)
@@ -1913,7 +1916,8 @@ begin
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
       Exit;
     end;
-    OldValue := OldValue.ToNumberLiteral;
+    if not (OldValue is TGocciaBigIntValue) then
+      OldValue := OldValue.ToNumberLiteral;
     NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
     AssignProperty(Obj, PropName, NewValue, AContext.OnError, Line, Column);
     if IsPrefix then
