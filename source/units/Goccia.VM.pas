@@ -127,6 +127,7 @@ type
       out AIndex: Integer): Boolean;
     function KeyToPropertyName(const AKey: TGocciaValue): string;
     function KeyToPropertyNameRegister(const AKey: TGocciaRegister): string;
+    function KeyDisplaySafe(const AKey: TGocciaRegister): string;
     // ALimit semantics:
     //   ALimit < 0 → unbounded (drain until iterator returns done:true);
     //   ALimit = 0 → consume zero elements (used for `const [] = iter`);
@@ -4041,6 +4042,31 @@ begin
         Result := '';
   else
     Result := '';
+  end;
+end;
+
+function TGocciaVM.KeyDisplaySafe(const AKey: TGocciaRegister): string;
+begin
+  case AKey.Kind of
+    grkInt:
+      Result := IntToStr(AKey.IntValue);
+    grkFloat:
+      Result := FloatToStr(AKey.FloatValue);
+    grkBoolean:
+      if AKey.BoolValue then Result := 'true' else Result := 'false';
+    grkNull:
+      Result := 'null';
+    grkUndefined:
+      Result := 'undefined';
+    grkObject:
+      if AKey.ObjectValue is TGocciaStringLiteralValue then
+        Result := TGocciaStringLiteralValue(AKey.ObjectValue).Value
+      else if AKey.ObjectValue is TGocciaSymbolValue then
+        Result := TGocciaSymbolValue(AKey.ObjectValue).ToDisplayString.Value
+      else
+        Result := '<computed>';
+  else
+    Result := '<computed>';
   end;
 end;
 
@@ -8241,11 +8267,11 @@ begin
       begin
         if FRegisters[B].Kind = grkNull then
           ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull,
-            [KeyToPropertyNameRegister(FRegisters[C])]),
+            [KeyDisplaySafe(FRegisters[C])]),
             SSuggestCheckNullBeforeAccess)
         else if FRegisters[B].Kind = grkUndefined then
           ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined,
-            [KeyToPropertyNameRegister(FRegisters[C])]),
+            [KeyDisplaySafe(FRegisters[C])]),
             SSuggestCheckNullBeforeAccess)
         else if (FRegisters[B].Kind = grkObject) and
            (FRegisters[B].ObjectValue is TGocciaObjectValue) and
