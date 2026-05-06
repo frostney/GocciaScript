@@ -10,6 +10,9 @@ const
   KEYWORD_FROM         = 'from';
   KEYWORD_META         = 'meta';
 
+  // Meta-properties
+  KEYWORD_TARGET       = 'target';
+
   // Class bodies
   KEYWORD_STATIC       = 'static';
   KEYWORD_GET          = 'get';

@@ -67,7 +67,8 @@ type
   public
     constructor Create(const AParameters: TGocciaParameterArray; const ABodyStatements: TObjectList<TGocciaASTNode>; const AClosure: TGocciaScope; const AName: string; const ASuperClass: TGocciaValue = nil);
     function CallWithThisValue(const AArguments: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue; out AFinalThisValue: TGocciaValue): TGocciaValue;
+      const AThisValue: TGocciaValue; out AFinalThisValue: TGocciaValue;
+      const ANewTarget: TGocciaValue = nil): TGocciaValue;
     procedure MarkReferences; override;
 
     property SuperClass: TGocciaValue read FSuperClass write FSuperClass;
@@ -432,7 +433,8 @@ end;
 
 function TGocciaMethodValue.CallWithThisValue(
   const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue;
-  out AFinalThisValue: TGocciaValue): TGocciaValue;
+  out AFinalThisValue: TGocciaValue;
+  const ANewTarget: TGocciaValue): TGocciaValue;
 var
   CallScope: TGocciaScope;
   GC: TGarbageCollector;
@@ -451,6 +453,8 @@ begin
   end;
   try
     CallScope := CreateCallScope;
+    if Assigned(ANewTarget) and (CallScope is TGocciaMethodCallScope) then
+      TGocciaMethodCallScope(CallScope).NewTarget := ANewTarget;
     if Assigned(GC) then
     begin
       GC.PushActiveRoot(CallScope);

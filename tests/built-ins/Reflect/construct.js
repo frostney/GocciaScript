@@ -282,4 +282,36 @@ describe("Reflect.construct", () => {
     expect(Object.getPrototypeOf(obj)).toBe(Other.prototype);
     expect(obj instanceof Other).toBe(true);
   });
+
+  test("new.target inside class constructor reflects non-class newTarget", () => {
+    class Foo {
+      constructor() {
+        this.observed = new.target;
+      }
+    }
+    class NewTarget {}
+    const obj = Reflect.construct(Foo, [], NewTarget);
+    expect(obj.observed).toBe(NewTarget);
+  });
+
+  test("new.target.name inside class constructor reflects newTarget class name", () => {
+    class Foo {
+      constructor() {
+        this.ntName = new.target.name;
+      }
+    }
+    class Custom {}
+    const obj = Reflect.construct(Foo, [], Custom);
+    expect(obj.ntName).toBe("Custom");
+  });
+
+  test("new.target is the class itself for normal new expression", () => {
+    class Bar {
+      constructor() {
+        this.nt = new.target;
+      }
+    }
+    const obj = new Bar();
+    expect(obj.nt).toBe(Bar);
+  });
 });

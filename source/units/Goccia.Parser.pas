@@ -1737,6 +1737,15 @@ begin
     gttNew:
       begin
         Token := Advance;
+        // ES2026 §13.3.12 MetaProperty — new.target
+        if Check(gttDot) and CheckNext(gttIdentifier) and
+           (FTokens[FCurrent + 1].Lexeme = KEYWORD_TARGET) then
+        begin
+          Advance; // consume '.'
+          Advance; // consume 'target'
+          Result := TGocciaNewTargetExpression.Create(Token.Line, Token.Column);
+          Exit;
+        end;
         // Parse the callee: class name with optional member access (e.g. new a.B.C())
         // but NOT call expressions — those belong to the outer Call loop.
         Expr := Primary;

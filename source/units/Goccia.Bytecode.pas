@@ -38,7 +38,8 @@ const
   //               diagnostics can reference constant-pool strings above 255.
   //   v24 -> v25: #540 added OP_INC, OP_DEC, OP_TO_NUMERIC for spec-correct
   //               BigInt increment/decrement (ES2026 §13.4.4.1 ToNumeric).
-  GOCCIA_FORMAT_VERSION = 25;
+  //   v25 -> v26: #529 added OP_NEW_TARGET for the new.target meta-property.
+  GOCCIA_FORMAT_VERSION = 26;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -216,7 +217,8 @@ type
     OP_MATCH_EXTRACTOR = 177,
     OP_INC           = 178,
     OP_DEC           = 179,
-    OP_TO_NUMERIC    = 180
+    OP_TO_NUMERIC    = 180,
+    OP_NEW_TARGET    = 181
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;

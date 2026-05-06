@@ -39,6 +39,7 @@ type
     function GetThisValue: TGocciaValue; virtual;
     function GetOwningClass: TGocciaValue; virtual;
     function GetSuperClass: TGocciaValue; virtual;
+    function GetNewTarget: TGocciaValue; virtual;
   public
     constructor Create(const AParent: TGocciaScope = nil; const AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; const ACapacity: Integer = 0);
     destructor Destroy; override;
@@ -81,6 +82,7 @@ type
     // Walk the parent chain to find the nearest owning class / superclass
     function FindOwningClass: TGocciaValue;
     function FindSuperClass: TGocciaValue;
+    function FindNewTarget: TGocciaValue;
 
     { Read StrictTypes from the root (global) scope so that
       TGocciaEngine.SetStrictTypes propagates uniformly to closures
@@ -124,15 +126,18 @@ type
   private
     FSuperClass: TGocciaValue;
     FOwningClass: TGocciaValue;
+    FNewTarget: TGocciaValue;
   protected
     function GetOwningClass: TGocciaValue; override;
     function GetSuperClass: TGocciaValue; override;
+    function GetNewTarget: TGocciaValue; override;
   public
     constructor Create(const AParent: TGocciaScope; const AFunctionName: string;
       const ASuperClass, AOwningClass: TGocciaValue; const ACapacity: Integer = 0);
     procedure MarkReferences; override;
     property SuperClass: TGocciaValue read FSuperClass;
     property OwningClass: TGocciaValue read FOwningClass;
+    property NewTarget: TGocciaValue read FNewTarget write FNewTarget;
   end;
 
   // Scope for instance property initialization -- carries owning class
@@ -230,6 +235,11 @@ begin
   Result := nil;
 end;
 
+function TGocciaScope.GetNewTarget: TGocciaValue;
+begin
+  Result := nil;
+end;
+
 function TGocciaScope.FindFunctionOrModuleScope: TGocciaScope;
 begin
   Result := Self;
@@ -275,6 +285,20 @@ begin
   while Assigned(Current) do
   begin
     Result := Current.GetSuperClass;
+    if Assigned(Result) then Exit;
+    Current := Current.FParent;
+  end;
+  Result := nil;
+end;
+
+function TGocciaScope.FindNewTarget: TGocciaValue;
+var
+  Current: TGocciaScope;
+begin
+  Current := Self;
+  while Assigned(Current) do
+  begin
+    Result := Current.GetNewTarget;
     if Assigned(Result) then Exit;
     Current := Current.FParent;
   end;
@@ -649,6 +673,11 @@ begin
   Result := FSuperClass;
 end;
 
+function TGocciaMethodCallScope.GetNewTarget: TGocciaValue;
+begin
+  Result := FNewTarget;
+end;
+
 procedure TGocciaMethodCallScope.MarkReferences;
 begin
   inherited;
@@ -656,6 +685,8 @@ begin
     FSuperClass.MarkReferences;
   if Assigned(FOwningClass) then
     FOwningClass.MarkReferences;
+  if Assigned(FNewTarget) then
+    FNewTarget.MarkReferences;
 end;
 
 { TGocciaClassInitScope }

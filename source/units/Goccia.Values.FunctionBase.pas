@@ -236,22 +236,8 @@ begin
       Result := TGocciaProxyValue(EffectiveTarget).ConstructTrap(WorkingArgs,
         EffectiveNewTarget)
     else if EffectiveTarget is TGocciaClassValue then
-    begin
-      if EffectiveNewTarget is TGocciaClassValue then
-        Result := TGocciaClassValue(EffectiveTarget).Instantiate(WorkingArgs,
-          TGocciaClassValue(EffectiveNewTarget))
-      else
-      begin
-        // Patching the freshly-created instance's [[Prototype]] after the
-        // constructor returns is sound while Instantiate ignores explicit
-        // object returns; once that engine limitation is lifted (tracked
-        // alongside #529), this branch must derive the receiver pre-call.
-        Result := TGocciaClassValue(EffectiveTarget).Instantiate(WorkingArgs);
-        if Result is TGocciaObjectValue then
-          TGocciaObjectValue(Result).Prototype :=
-            GetProtoFromConstructor(EffectiveNewTarget);
-      end;
-    end
+      Result := TGocciaClassValue(EffectiveTarget).Instantiate(WorkingArgs,
+        EffectiveNewTarget)
     else if EffectiveTarget is TGocciaNativeFunctionValue then
       Result := TGocciaNativeFunctionValue(EffectiveTarget).Call(WorkingArgs,
         TGocciaHoleValue.HoleValue)
