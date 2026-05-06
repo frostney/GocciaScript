@@ -104,7 +104,7 @@ type
     procedure AppendOwnPrivateNames(const ANames: TStrings);
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; virtual;
     function Instantiate(const AArguments: TGocciaArgumentsCollection;
-      const ANewTarget: TGocciaClassValue = nil): TGocciaValue; virtual;
+      const ANewTarget: TGocciaValue = nil): TGocciaValue; virtual;
     function EstimatedInstancePropertyCapacity: Integer;
     // ECMAScript: number of expected constructor parameters before the first
     // default/rest. Built-in classes default to 0; user classes derive from
@@ -966,17 +966,18 @@ end;
 
 // ES2026 §10.2.2 [[Construct]](argumentsList, newTarget)
 function TGocciaClassValue.Instantiate(const AArguments: TGocciaArgumentsCollection;
-  const ANewTarget: TGocciaClassValue): TGocciaValue;
+  const ANewTarget: TGocciaValue): TGocciaValue;
 var
   Instance: TGocciaObjectValue;
   WalkClass: TGocciaClassValue;
   NativeInstance: TGocciaObjectValue;
   ConstructorToCall: TGocciaMethodValue;
   InstancePrototype: TGocciaObjectValue;
+  FinalThis: TGocciaValue;
 begin
   // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget)
   if Assigned(ANewTarget) then
-    InstancePrototype := ANewTarget.Prototype
+    InstancePrototype := GetProtoFromConstructor(ANewTarget)
   else
     InstancePrototype := FClassPrototype;
 
@@ -1013,7 +1014,8 @@ begin
   begin
     TGarbageCollector.Instance.AddTempRoot(Instance);
     try
-      ConstructorToCall.Call(AArguments, Instance);
+      ConstructorToCall.CallWithThisValue(AArguments, Instance,
+        FinalThis, ANewTarget);
     finally
       TGarbageCollector.Instance.RemoveTempRoot(Instance);
     end;

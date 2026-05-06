@@ -22,6 +22,7 @@ type
     HandlerCount: Integer;
     PrevCovLine: UInt32;
     ProfileEntryTimestamp: Int64;
+    NewTarget: Pointer;
   end;
 
 implementation

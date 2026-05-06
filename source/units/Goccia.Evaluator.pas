@@ -5234,13 +5234,13 @@ begin
     if Assigned(AClassValue.ConstructorMethod) then
     begin
       ConstructedValue := AClassValue.ConstructorMethod.CallWithThisValue(
-        AArguments, Instance, ConstructorThisValue);
+        AArguments, Instance, ConstructorThisValue, AClassValue);
       ApplyOwnConstructorResult(ConstructedValue, ConstructorThisValue);
     end
     else if Assigned(AClassValue.SuperClass) and Assigned(AClassValue.SuperClass.ConstructorMethod) then
     begin
       ConstructedValue := AClassValue.SuperClass.ConstructorMethod.CallWithThisValue(
-        AArguments, Instance, ConstructorThisValue);
+        AArguments, Instance, ConstructorThisValue, AClassValue);
       ValidateClassConstructorReturn(AClassValue.SuperClass, ConstructedValue);
       if IsUndefinedConstructedValue(ConstructedValue) then
         ApplyReplacementResult(ConstructorThisValue)

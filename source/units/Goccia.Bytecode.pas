@@ -211,7 +211,8 @@ type
     OP_YIELD         = 174,
     OP_MATCH_VALUE   = 175,
     OP_MATCH_HAS_PROPERTY = 176,
-    OP_MATCH_EXTRACTOR = 177
+    OP_MATCH_EXTRACTOR = 177,
+    OP_NEW_TARGET    = 178
   );
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt8): UInt32; inline;

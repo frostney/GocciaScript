@@ -87,6 +87,7 @@ type
     FFrameStackCount: Integer;
     FCurrentModuleSourcePath: string;
     FCurrentModuleExports: TGocciaValueMap;
+    FPendingNewTarget: TGocciaValue;
     FActiveDecoratorSession: TObject;
     FCoverageEnabled: Boolean;
     FProfilingOpcodes: Boolean;
@@ -876,7 +877,7 @@ type
       const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
     function GetClassLength: Integer; override;
     function Instantiate(const AArguments: TGocciaArgumentsCollection;
-      const ANewTarget: TGocciaClassValue = nil): TGocciaValue; override;
+      const ANewTarget: TGocciaValue = nil): TGocciaValue; override;
     function InstantiateRegisters(
       const AArguments: TGocciaRegisterArray): TGocciaRegister;
     function GetProperty(const AName: string): TGocciaValue; override;
@@ -2932,7 +2933,7 @@ end;
 // ES2026 §10.2.2 [[Construct]](argumentsList, newTarget)
 function TGocciaVMClassValue.Instantiate(
   const AArguments: TGocciaArgumentsCollection;
-  const ANewTarget: TGocciaClassValue): TGocciaValue;
+  const ANewTarget: TGocciaValue): TGocciaValue;
 var
   Instance: TGocciaObjectValue;
   RootedInstance: TGocciaObjectValue;
@@ -3020,7 +3021,7 @@ var
 begin
   // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget)
   if Assigned(ANewTarget) then
-    InstancePrototype := ANewTarget.Prototype
+    InstancePrototype := GetProtoFromConstructor(ANewTarget)
   else
     InstancePrototype := Prototype;
 
@@ -3055,6 +3056,9 @@ begin
     TGarbageCollector.Instance.AddTempRoot(RootedInstance);
     try
       FVM.RunClassInitializers(Self, Instance);
+      FVM.FPendingNewTarget := ANewTarget;
+      if not Assigned(FVM.FPendingNewTarget) then
+        FVM.FPendingNewTarget := Self;
       ConstructedValue := FVM.InvokeFunctionValue(
         FConstructorValue, AArguments, Instance);
       if FConstructorValue is TGocciaBytecodeFunctionValue then
@@ -3083,6 +3087,10 @@ begin
       begin
         TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
           SuperClass, Instance);
+        if Assigned(ANewTarget) then
+          TGocciaVMClassValue(SuperClass).FVM.FPendingNewTarget := ANewTarget
+        else
+          TGocciaVMClassValue(SuperClass).FVM.FPendingNewTarget := Self;
         ConstructedValue := TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
           TGocciaVMClassValue(SuperClass).FConstructorValue,
           AArguments, Instance);
@@ -3105,8 +3113,12 @@ begin
         if Assigned(ConstructorToCall) then
         begin
           FVM.RunClassInitializers(SuperClass, Instance);
-          ConstructedValue := ConstructorToCall.CallWithThisValue(
-            AArguments, Instance, ConstructorThisValue);
+          if Assigned(ANewTarget) then
+            ConstructedValue := ConstructorToCall.CallWithThisValue(
+              AArguments, Instance, ConstructorThisValue, ANewTarget)
+          else
+            ConstructedValue := ConstructorToCall.CallWithThisValue(
+              AArguments, Instance, ConstructorThisValue, Self);
           ValidateClassConstructorReturn(SuperClass, ConstructedValue);
           if IsUndefinedConstructedValue(ConstructedValue) then
             ApplyReplacementResult(ConstructorThisValue)
@@ -3330,6 +3342,7 @@ begin
       if Assigned(FConstructorValue) then
       begin
         FVM.RunClassInitializers(Self, Instance);
+        FVM.FPendingNewTarget := Self;
         if FConstructorValue is TGocciaBytecodeFunctionValue then
         begin
           BytecodeConstructor := TGocciaBytecodeFunctionValue(FConstructorValue);
@@ -6853,6 +6866,8 @@ begin
     SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
       AArg0, AArg1, AArg2, AUseFixedArgs,
       Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+    Frame.NewTarget := Pointer(FPendingNewTarget);
+    FPendingNewTarget := nil;
     RestoredContinuation := Assigned(GActiveBytecodeGenerator) and
       GActiveBytecodeGenerator.RestoreContinuation(
         Frame, SavedHandlerCount, PrevCovLine);
@@ -8817,6 +8832,13 @@ begin
           SetRegister(A, GetOrCreateImportMeta(Template.DebugInfo.SourceFile))
         else
           SetRegister(A, GetOrCreateImportMeta(FCurrentModuleSourcePath));
+
+      // ES2026 §13.3.12.1 — new.target reads the current frame's newTarget
+      OP_NEW_TARGET:
+        if Assigned(Frame.NewTarget) then
+          SetRegister(A, TGocciaValue(Frame.NewTarget))
+        else
+          SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
 
       // ES2026 §13.3.10.1 ImportCall — import(specifier)
       OP_DYNAMIC_IMPORT:

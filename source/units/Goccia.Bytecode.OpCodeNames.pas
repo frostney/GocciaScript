@@ -154,6 +154,7 @@ begin
     OP_MATCH_VALUE:                    Result := 'OP_MATCH_VALUE';
     OP_MATCH_HAS_PROPERTY:             Result := 'OP_MATCH_HAS_PROPERTY';
     OP_MATCH_EXTRACTOR:                Result := 'OP_MATCH_EXTRACTOR';
+    OP_NEW_TARGET:                     Result := 'OP_NEW_TARGET';
   else
     Result := Format('OP_UNKNOWN_%d', [AOp]);
   end;

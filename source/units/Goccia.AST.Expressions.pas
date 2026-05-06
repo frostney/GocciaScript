@@ -466,6 +466,11 @@ type
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
   end;
 
+  TGocciaNewTargetExpression = class(TGocciaExpression)
+  public
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+  end;
+
   TGocciaImportCallExpression = class(TGocciaExpression)
   private
     FSpecifier: TGocciaExpression;
@@ -2012,6 +2017,14 @@ end;
 function TGocciaImportMetaExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
   Result := GetOrCreateImportMeta(AContext.CurrentFilePath);
+end;
+
+// ES2026 §13.3.12.1 NewTarget : new . target
+function TGocciaNewTargetExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+begin
+  Result := AContext.Scope.FindNewTarget;
+  if not Assigned(Result) then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 constructor TGocciaImportCallExpression.Create(const ASpecifier: TGocciaExpression; const ALine, AColumn: Integer);
