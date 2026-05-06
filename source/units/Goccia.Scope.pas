@@ -121,6 +121,12 @@ type
     constructor Create(const AParent: TGocciaScope; const AFunctionName: string; const ACapacity: Integer = 0);
   end;
 
+  // Arrow function call scope -- transparent to Find* scope walks
+  TGocciaArrowCallScope = class(TGocciaCallScope)
+  public
+    constructor Create(const AParent: TGocciaScope; const AFunctionName: string; const ACapacity: Integer = 0);
+  end;
+
   // Function call scope for class methods -- carries super and owning class
   TGocciaMethodCallScope = class(TGocciaCallScope)
   private
@@ -272,6 +278,8 @@ begin
   begin
     Result := Current.GetOwningClass;
     if Assigned(Result) then Exit;
+    if (Current is TGocciaCallScope) and not (Current is TGocciaArrowCallScope) then
+      Exit(nil);
     Current := Current.FParent;
   end;
   Result := nil;
@@ -286,6 +294,8 @@ begin
   begin
     Result := Current.GetSuperClass;
     if Assigned(Result) then Exit;
+    if (Current is TGocciaCallScope) and not (Current is TGocciaArrowCallScope) then
+      Exit(nil);
     Current := Current.FParent;
   end;
   Result := nil;
@@ -300,6 +310,8 @@ begin
   begin
     Result := Current.GetNewTarget;
     if Assigned(Result) then Exit;
+    if (Current is TGocciaCallScope) and not (Current is TGocciaArrowCallScope) then
+      Exit(nil);
     Current := Current.FParent;
   end;
   Result := nil;
@@ -651,6 +663,13 @@ end;
 function TGocciaCallScope.GetThisValue: TGocciaValue;
 begin
   Result := FThisValue;
+end;
+
+{ TGocciaArrowCallScope }
+
+constructor TGocciaArrowCallScope.Create(const AParent: TGocciaScope; const AFunctionName: string; const ACapacity: Integer = 0);
+begin
+  inherited Create(AParent, AFunctionName, ACapacity);
 end;
 
 { TGocciaMethodCallScope }

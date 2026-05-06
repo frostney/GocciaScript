@@ -6757,6 +6757,9 @@ begin
   ATemplate := AClosure.Template;
   AFrame.Template := ATemplate;
 
+  if not ATemplate.IsArrow then
+    FCurrentNewTarget := nil;
+
   if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and
      Assigned(ATemplate.DebugInfo) and (ATemplate.DebugInfo.LineMapCount > 0) then
     TGocciaCoverageTracker.Instance.RecordLineHit(
