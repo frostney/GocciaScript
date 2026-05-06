@@ -176,6 +176,8 @@ begin
   end
   else if AExpr is TGocciaImportMetaExpression then
     Goccia.Compiler.Expressions.CompileImportMeta(Ctx, ADest)
+  else if AExpr is TGocciaNewTargetExpression then
+    Goccia.Compiler.Expressions.CompileNewTarget(Ctx, ADest)
   else if AExpr is TGocciaImportCallExpression then
     Goccia.Compiler.Expressions.CompileDynamicImport(Ctx,
       TGocciaImportCallExpression(AExpr), ADest)

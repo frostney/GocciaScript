@@ -257,6 +257,8 @@ const currentUrl = import.meta.url;
 const helperUrl = import.meta.resolve("./helpers/math.js");
 ```
 
+`new.target` (ES2026 §13.3.12) is supported inside class constructors. It evaluates to the constructor that was directly invoked with `new`, or the `newTarget` argument supplied to `Reflect.construct`. Outside a constructor, `new.target` is `undefined`.
+
 Dynamic `import()` (ES2026 §13.3.10) is supported. It accepts an arbitrary expression as the module specifier, loads the module synchronously, and returns a Promise that resolves with the module namespace object. On failure, the returned Promise is rejected with the error. Dynamic imports work anywhere expressions are valid — including inside functions, conditionals, and async callbacks.
 
 ```javascript

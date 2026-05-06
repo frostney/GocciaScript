@@ -80,6 +80,8 @@ procedure CompileSuperAccess(const ACtx: TGocciaCompilationContext;
   const ADest: UInt8);
 procedure CompileImportMeta(const ACtx: TGocciaCompilationContext;
   const ADest: UInt8);
+procedure CompileNewTarget(const ACtx: TGocciaCompilationContext;
+  const ADest: UInt8);
 procedure CompileDynamicImport(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaImportCallExpression; const ADest: UInt8);
 procedure CompileYield(const ACtx: TGocciaCompilationContext;
@@ -3097,6 +3099,13 @@ procedure CompileImportMeta(const ACtx: TGocciaCompilationContext;
   const ADest: UInt8);
 begin
   EmitInstruction(ACtx, EncodeABC(OP_IMPORT_META, ADest, 0, 0));
+end;
+
+// ES2026 §13.3.12 MetaProperty — new.target
+procedure CompileNewTarget(const ACtx: TGocciaCompilationContext;
+  const ADest: UInt8);
+begin
+  EmitInstruction(ACtx, EncodeABC(OP_NEW_TARGET, ADest, 0, 0));
 end;
 
 // ES2026 §13.3.10 ImportCall — import(specifier)

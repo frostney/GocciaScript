@@ -59,6 +59,7 @@
 | `Float16Array`, `Math.f16round` | ES2025 | Supported |
 | Resizable `ArrayBuffer` (`resize`, `transfer`, `transferToFixedLength`) | ES2025 | Supported |
 | `import.meta` | ES2020 | Supported |
+| `new.target` | ES2015 | Supported |
 | Dynamic `import()` | ES2020 | Supported |
 | `Uint8Array` Base64/Hex (`fromBase64`, `fromHex`, `toBase64`, `toHex`) | ES2026 | Supported |
 | `Error.isError` | ES2026 | Supported |
