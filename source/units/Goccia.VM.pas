@@ -129,6 +129,7 @@ type
       out AIndex: Integer): Boolean;
     function KeyToPropertyName(const AKey: TGocciaValue): string;
     function KeyToPropertyNameRegister(const AKey: TGocciaRegister): string;
+    function TryResolveObjectKey(const AKeyReg: TGocciaRegister; out AResolved: TGocciaValue): Boolean; inline;
     function KeyDisplaySafe(const AKey: TGocciaRegister): string;
     // ALimit semantics:
     //   ALimit < 0 → unbounded (drain until iterator returns done:true);
@@ -4066,6 +4067,13 @@ begin
   end;
 end;
 
+function TGocciaVM.TryResolveObjectKey(const AKeyReg: TGocciaRegister; out AResolved: TGocciaValue): Boolean;
+begin
+  Result := (AKeyReg.Kind = grkObject) and (AKeyReg.ObjectValue is TGocciaObjectValue);
+  if Result then
+    AResolved := ToPropertyKey(AKeyReg.ObjectValue);
+end;
+
 function TGocciaVM.KeyDisplaySafe(const AKey: TGocciaRegister): string;
 begin
   case AKey.Kind of
@@ -6447,9 +6455,10 @@ begin
 
   if AObject is TGocciaObjectValue then
   begin
-    ResolvedKey := AKey;
-    if (AKey is TGocciaObjectValue) then
-      ResolvedKey := ToPropertyKey(AKey);
+    if AKey is TGocciaObjectValue then
+      ResolvedKey := ToPropertyKey(AKey)
+    else
+      ResolvedKey := AKey;
     if ResolvedKey is TGocciaSymbolValue then
     begin
       if AObject is TGocciaProxyValue then
@@ -7355,10 +7364,8 @@ begin
               SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
                 IntToStr(KeyIndex)));
           end
-          else if (FRegisters[C].Kind = grkObject) and
-                  (FRegisters[C].ObjectValue is TGocciaObjectValue) then
+          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
           begin
-            PropKeyValue := ToPropertyKey(FRegisters[C].ObjectValue);
             if PropKeyValue is TGocciaSymbolValue then
               SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetSymbolProperty(
                 TGocciaSymbolValue(PropKeyValue)))
@@ -7377,10 +7384,8 @@ begin
              (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
             SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
               TGocciaSymbolValue(FRegisters[C].ObjectValue)))
-          else if (FRegisters[C].Kind = grkObject) and
-                  (FRegisters[C].ObjectValue is TGocciaObjectValue) then
+          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
           begin
-            PropKeyValue := ToPropertyKey(FRegisters[C].ObjectValue);
             if PropKeyValue is TGocciaSymbolValue then
               SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
                 TGocciaSymbolValue(PropKeyValue)))
@@ -7399,10 +7404,8 @@ begin
              (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
             SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetSymbolProperty(
               TGocciaSymbolValue(FRegisters[C].ObjectValue)))
-          else if (FRegisters[C].Kind = grkObject) and
-                  (FRegisters[C].ObjectValue is TGocciaObjectValue) then
+          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
           begin
-            PropKeyValue := ToPropertyKey(FRegisters[C].ObjectValue);
             if PropKeyValue is TGocciaSymbolValue then
               SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetSymbolProperty(
                 TGocciaSymbolValue(PropKeyValue)))
@@ -7461,10 +7464,8 @@ begin
           else if TryGetArrayIndexRegister(FRegisters[B], KeyIndex) then
             TGocciaArrayValue(FRegisters[A].ObjectValue).SetElement(
               KeyIndex, RegisterToValue(FRegisters[C]))
-          else if (FRegisters[B].Kind = grkObject) and
-                  (FRegisters[B].ObjectValue is TGocciaObjectValue) then
+          else if TryResolveObjectKey(FRegisters[B], PropKeyValue) then
           begin
-            PropKeyValue := ToPropertyKey(FRegisters[B].ObjectValue);
             if PropKeyValue is TGocciaSymbolValue then
               TGocciaArrayValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
                 TGocciaSymbolValue(PropKeyValue), RegisterToValue(FRegisters[C]))
@@ -7487,10 +7488,8 @@ begin
              (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
             TGocciaClassValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
               TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
-          else if (FRegisters[B].Kind = grkObject) and
-                  (FRegisters[B].ObjectValue is TGocciaObjectValue) then
+          else if TryResolveObjectKey(FRegisters[B], PropKeyValue) then
           begin
-            PropKeyValue := ToPropertyKey(FRegisters[B].ObjectValue);
             if PropKeyValue is TGocciaSymbolValue then
               TGocciaClassValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
                 TGocciaSymbolValue(PropKeyValue), RegisterToValue(FRegisters[C]))
@@ -7511,10 +7510,8 @@ begin
              (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
             TGocciaObjectValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
               TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
-          else if (FRegisters[B].Kind = grkObject) and
-                  (FRegisters[B].ObjectValue is TGocciaObjectValue) then
+          else if TryResolveObjectKey(FRegisters[B], PropKeyValue) then
           begin
-            PropKeyValue := ToPropertyKey(FRegisters[B].ObjectValue);
             if PropKeyValue is TGocciaSymbolValue then
               TGocciaObjectValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
                 TGocciaSymbolValue(PropKeyValue), RegisterToValue(FRegisters[C]))
@@ -7791,10 +7788,8 @@ begin
               SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
                 IntToStr(KeyIndex)));
           end
-          else if (FRegisters[C].Kind = grkObject) and
-                  (FRegisters[C].ObjectValue is TGocciaObjectValue) then
+          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
           begin
-            PropKeyValue := ToPropertyKey(FRegisters[C].ObjectValue);
             if PropKeyValue is TGocciaSymbolValue then
               SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetSymbolProperty(
                 TGocciaSymbolValue(PropKeyValue)))
@@ -7818,10 +7813,8 @@ begin
              (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
             SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
               TGocciaSymbolValue(FRegisters[C].ObjectValue)))
-          else if (FRegisters[C].Kind = grkObject) and
-                  (FRegisters[C].ObjectValue is TGocciaObjectValue) then
+          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
           begin
-            PropKeyValue := ToPropertyKey(FRegisters[C].ObjectValue);
             if PropKeyValue is TGocciaSymbolValue then
               SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
                 TGocciaSymbolValue(PropKeyValue)))
@@ -7854,10 +7847,8 @@ begin
              (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
             SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetSymbolProperty(
               TGocciaSymbolValue(FRegisters[C].ObjectValue)))
-          else if (FRegisters[C].Kind = grkObject) and
-                  (FRegisters[C].ObjectValue is TGocciaObjectValue) then
+          else if TryResolveObjectKey(FRegisters[C], PropKeyValue) then
           begin
-            PropKeyValue := ToPropertyKey(FRegisters[C].ObjectValue);
             if PropKeyValue is TGocciaSymbolValue then
               SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetSymbolProperty(
                 TGocciaSymbolValue(PropKeyValue)))
@@ -7923,10 +7914,8 @@ begin
           else if TryGetArrayIndexRegister(FRegisters[B], KeyIndex) then
             TGocciaArrayValue(FRegisters[A].ObjectValue).SetElement(
               KeyIndex, RightValue)
-          else if (FRegisters[B].Kind = grkObject) and
-                  (FRegisters[B].ObjectValue is TGocciaObjectValue) then
+          else if TryResolveObjectKey(FRegisters[B], PropKeyValue) then
           begin
-            PropKeyValue := ToPropertyKey(FRegisters[B].ObjectValue);
             if PropKeyValue is TGocciaSymbolValue then
               TGocciaArrayValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
                 TGocciaSymbolValue(PropKeyValue), RightValue)
@@ -7947,10 +7936,8 @@ begin
              (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
             TGocciaClassValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
               TGocciaSymbolValue(FRegisters[B].ObjectValue), RightValue)
-          else if (FRegisters[B].Kind = grkObject) and
-                  (FRegisters[B].ObjectValue is TGocciaObjectValue) then
+          else if TryResolveObjectKey(FRegisters[B], PropKeyValue) then
           begin
-            PropKeyValue := ToPropertyKey(FRegisters[B].ObjectValue);
             if PropKeyValue is TGocciaSymbolValue then
               TGocciaClassValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
                 TGocciaSymbolValue(PropKeyValue), RightValue)
@@ -7984,10 +7971,8 @@ begin
              (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
             TGocciaObjectValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
               TGocciaSymbolValue(FRegisters[B].ObjectValue), RightValue)
-          else if (FRegisters[B].Kind = grkObject) and
-                  (FRegisters[B].ObjectValue is TGocciaObjectValue) then
+          else if TryResolveObjectKey(FRegisters[B], PropKeyValue) then
           begin
-            PropKeyValue := ToPropertyKey(FRegisters[B].ObjectValue);
             if PropKeyValue is TGocciaSymbolValue then
               TGocciaObjectValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
                 TGocciaSymbolValue(PropKeyValue), RightValue)

@@ -5,7 +5,6 @@ unit Goccia.Values.SymbolObjectValue;
 interface
 
 uses
-  Goccia.Arguments.Collection,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
