@@ -49,7 +49,7 @@ describe("Proxy has trap", () => {
   test("has trap fires through prototype chain via HasProperty", () => {
     const calls = [];
     const handler = {
-      has(t, pk) {
+      has: (t, pk) => {
         calls.push(pk);
         return pk in t;
       },
