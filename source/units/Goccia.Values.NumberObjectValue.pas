@@ -385,7 +385,7 @@ begin
   end;
 
   // Step 7: Format x with p significant digits
-  Result := TGocciaStringLiteralValue.Create(FloatToStrF(Prim.Value, ffGeneral, Precision, 0));
+  Result := TGocciaStringLiteralValue.Create(FloatToStrF(Prim.Value, ffGeneral, Precision, 0, InvariantFormatSettings));
 end;
 
 // ES2026 §21.1.3.2 Number.prototype.toExponential(fractionDigits)

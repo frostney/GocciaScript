@@ -99,3 +99,15 @@ test("delete null[key] does not invoke key toString before throwing", () => {
   expect(() => { delete null[key]; }).toThrow(TypeError);
   expect(called).toBe(false);
 });
+
+test("delete null?.prop returns true (optional chaining short-circuit)", () => {
+  expect(delete null?.x).toBe(true);
+  expect(delete undefined?.x).toBe(true);
+});
+
+test("delete null?.[computed] returns true without evaluating key", () => {
+  let called = false;
+  const key = { toString() { called = true; return "x"; } };
+  expect(delete null?.[key]).toBe(true);
+  expect(called).toBe(false);
+});

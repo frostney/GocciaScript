@@ -6350,6 +6350,16 @@ begin
     MemberExpr := TGocciaMemberExpression(AOperand);
     ObjValue := EvaluateExpression(MemberExpr.ObjectExpr, AContext);
 
+    if (ObjValue is TGocciaNullLiteralValue) or
+       (ObjValue is TGocciaUndefinedLiteralValue) then
+    begin
+      if MemberExpr.Optional then
+      begin
+        Result := TGocciaBooleanLiteralValue.TrueValue;
+        Exit;
+      end;
+    end;
+
     if MemberExpr.Computed and Assigned(MemberExpr.PropertyExpression) then
     begin
       PropertyKey := EvaluateExpression(MemberExpr.PropertyExpression, AContext);
