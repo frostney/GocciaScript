@@ -568,12 +568,42 @@ function TGocciaGlobalRegExp.RegExpConstruct(
   const ANewTarget: TGocciaValue): TGocciaValue;
 var
   Proto: TGocciaObjectValue;
-  RegExpObj: TGocciaObjectValue;
+  PatternArg: TGocciaValue;
+  Pattern, Flags: string;
+  PatternIsRegExp, FlagsProvided: Boolean;
 begin
+  Pattern := '';
+  Flags := '';
+  PatternIsRegExp := False;
+  FlagsProvided := (AArgs.Length > 1) and
+    not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue);
+
+  // §22.2.4.1 step 3: if pattern is a RegExp, capture source before step 6
+  if AArgs.Length > 0 then
+  begin
+    PatternArg := AArgs.GetElement(0);
+    if IsRegExpValue(PatternArg) then
+    begin
+      PatternIsRegExp := True;
+      Pattern := TGocciaObjectValue(PatternArg).GetProperty(PROP_SOURCE)
+        .ToStringLiteral.Value;
+      if not FlagsProvided then
+        Flags := TGocciaObjectValue(PatternArg).GetProperty(PROP_FLAGS)
+          .ToStringLiteral.Value;
+    end;
+  end;
+
+  // §22.2.4.1 step 6: RegExpAlloc(newTarget) → OrdinaryCreateFromConstructor
   Proto := GetProtoFromConstructorWithIntrinsic(ANewTarget, FRegExpPrototype);
-  RegExpObj := TGocciaObjectValue(RegExpConstructorFn(AArgs, TGocciaHoleValue.HoleValue));
-  RegExpObj.Prototype := Proto;
-  Result := RegExpObj;
+
+  // §22.2.4.1 step 7: RegExpInitialize — remaining ToString coercions
+  if not PatternIsRegExp and (AArgs.Length > 0) then
+    Pattern := AArgs.GetElement(0).ToStringLiteral.Value;
+  if FlagsProvided then
+    Flags := AArgs.GetElement(1).ToStringLiteral.Value;
+
+  Result := CreateRegExpObject(Pattern, Flags);
+  TGocciaObjectValue(Result).Prototype := Proto;
 end;
 
 // ES2026 §22.2.6.2 RegExp.prototype.exec(string)
