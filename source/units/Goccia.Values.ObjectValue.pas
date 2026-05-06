@@ -496,9 +496,17 @@ begin
   Result := TGocciaBooleanLiteralValue.TrueValue;
 end;
 
+// ES2026 §7.1.4 ToNumber. For an object: ToPrimitive(O, number) → ToNumber
+// of the resulting primitive. May invoke user-defined valueOf()/toString()
+// and may throw.
 function TGocciaObjectValue.ToNumberLiteral: TGocciaNumberLiteralValue;
+var
+  Prim: TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.NaNValue;
+  Prim := ToPrimitive(Self, tphNumber);
+  if Prim is TGocciaSymbolValue then
+    ThrowTypeError(SErrorSymbolToNumber, SSuggestSymbolNoImplicitConversion);
+  Result := Prim.ToNumberLiteral;
 end;
 
 // ES2026 §10.1.9 [[Set]](P, V, Receiver)
