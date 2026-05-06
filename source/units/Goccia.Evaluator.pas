@@ -833,8 +833,8 @@ begin
           [TGocciaNativeFunctionValue(AConstructor).Name]),
         Format('''%s'' is not a constructor',
           [TGocciaNativeFunctionValue(AConstructor).Name]));
-    SuperResult := TGocciaNativeFunctionValue(AConstructor).Call(
-      AArguments, TGocciaHoleValue.HoleValue);
+    SuperResult := TGocciaNativeFunctionValue(AConstructor).Construct(
+      AArguments, AConstructor);
   end
   else if AConstructor is TGocciaClassValue then
   begin
@@ -3533,8 +3533,8 @@ begin
             [TGocciaNativeFunctionValue(Target).Name]),
           Format('''%s'' is not a constructor',
             [TGocciaNativeFunctionValue(Target).Name]));
-      Result := TGocciaNativeFunctionValue(Target).Call(BoundArgs,
-        TGocciaHoleValue.HoleValue);
+      Result := TGocciaNativeFunctionValue(Target).Construct(BoundArgs,
+        Target);
     end
     else if (Target is TGocciaFunctionBase) and
             not (Target is TGocciaGeneratorFunctionValue) and
@@ -3619,8 +3619,8 @@ begin
               [TGocciaNativeFunctionValue(Callee).Name]),
             Format('''%s'' is not a constructor',
               [TGocciaNativeFunctionValue(Callee).Name]));
-        Result := TGocciaNativeFunctionValue(Callee).Call(Arguments,
-          TGocciaHoleValue.HoleValue);
+        Result := TGocciaNativeFunctionValue(Callee).Construct(Arguments,
+          Callee);
       end
       else if Callee is TGocciaFunctionBase then
       begin
@@ -5111,8 +5111,8 @@ var
             [TGocciaNativeFunctionValue(AConstructor).Name]),
           Format('''%s'' is not a constructor',
             [TGocciaNativeFunctionValue(AConstructor).Name]));
-      ConstructedValue := TGocciaNativeFunctionValue(AConstructor).Call(
-        AArguments, TGocciaHoleValue.HoleValue);
+      ConstructedValue := TGocciaNativeFunctionValue(AConstructor).Construct(
+        AArguments, AConstructor);
     end
     else if AConstructor is TGocciaFunctionBase then
     begin

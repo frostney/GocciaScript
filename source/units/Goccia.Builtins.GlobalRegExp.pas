@@ -11,6 +11,7 @@ uses
   Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.Values.NativeFunction,
+  Goccia.Values.NativeFunctionCallback,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -22,6 +23,8 @@ type
 
     function RegExpConstructorFn(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
+    function RegExpConstruct(const AArgs: TGocciaArgumentsCollection;
+      const ANewTarget: TGocciaValue): TGocciaValue;
   published
     function RegExpSpeciesGetter(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -64,6 +67,7 @@ uses
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
   Goccia.Values.Iterator.RegExp,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -324,6 +328,7 @@ begin
 
   FRegExpConstructor := TGocciaNativeFunctionValue.Create(RegExpConstructorFn,
     CONSTRUCTOR_REGEXP, 2);
+  FRegExpConstructor.ConstructCallback := RegExpConstruct;
   FRegExpConstructor.AssignProperty(PROP_PROTOTYPE, FRegExpPrototype);
   FRegExpConstructor.DefineSymbolProperty(TGocciaSymbolValue.WellKnownSpecies,
     TGocciaPropertyDescriptorAccessor.Create(
@@ -556,6 +561,49 @@ begin
   end;
 
   Result := CreateRegExpObject(Pattern, Flags);
+end;
+
+function TGocciaGlobalRegExp.RegExpConstruct(
+  const AArgs: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaValue): TGocciaValue;
+var
+  Proto: TGocciaObjectValue;
+  PatternArg: TGocciaValue;
+  Pattern, Flags: string;
+  PatternIsRegExp, FlagsProvided: Boolean;
+begin
+  Pattern := '';
+  Flags := '';
+  PatternIsRegExp := False;
+  FlagsProvided := (AArgs.Length > 1) and
+    not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue);
+
+  // §22.2.4.1 step 3: if pattern is a RegExp, capture source before step 6
+  if AArgs.Length > 0 then
+  begin
+    PatternArg := AArgs.GetElement(0);
+    if IsRegExpValue(PatternArg) then
+    begin
+      PatternIsRegExp := True;
+      Pattern := TGocciaObjectValue(PatternArg).GetProperty(PROP_SOURCE)
+        .ToStringLiteral.Value;
+      if not FlagsProvided then
+        Flags := TGocciaObjectValue(PatternArg).GetProperty(PROP_FLAGS)
+          .ToStringLiteral.Value;
+    end;
+  end;
+
+  // §22.2.4.1 step 6: RegExpAlloc(newTarget) → OrdinaryCreateFromConstructor
+  Proto := GetProtoFromConstructorWithIntrinsic(ANewTarget, FRegExpPrototype);
+
+  // §22.2.4.1 step 7: RegExpInitialize — remaining ToString coercions
+  if not PatternIsRegExp and (AArgs.Length > 0) then
+    Pattern := PatternArg.ToStringLiteral.Value;
+  if FlagsProvided then
+    Flags := AArgs.GetElement(1).ToStringLiteral.Value;
+
+  Result := CreateRegExpObject(Pattern, Flags);
+  TGocciaObjectValue(Result).Prototype := Proto;
 end;
 
 // ES2026 §22.2.6.2 RegExp.prototype.exec(string)

@@ -4780,8 +4780,8 @@ begin
     if Assigned(TGocciaCallStack.Instance) then
       TGocciaCallStack.Instance.Push(ConstructorName, '', 0, 0);
     try
-      Result := TGocciaNativeFunctionValue(AConstructor).Call(
-        AArguments, TGocciaHoleValue.HoleValue);
+      Result := TGocciaNativeFunctionValue(AConstructor).Construct(
+        AArguments, AConstructor);
     finally
       if Assigned(TGocciaCallStack.Instance) then
         TGocciaCallStack.Instance.Pop;

@@ -100,6 +100,12 @@ type
 // and the proxy [[Construct]] fallback (§10.5.13).
 function GetProtoFromConstructor(const ANewTarget: TGocciaValue): TGocciaObjectValue;
 
+// ES2026 §10.1.14 variant with a per-constructor intrinsic default.
+// Native constructors pass their own %Foo.prototype% so the fallback
+// is correct (e.g. Error → %Error.prototype%, not %Object.prototype%).
+function GetProtoFromConstructorWithIntrinsic(const ANewTarget: TGocciaValue;
+  const AIntrinsicDefault: TGocciaObjectValue): TGocciaObjectValue;
+
 // ES2026 §10.2.2 [[Construct]] for ordinary function objects: call the body
 // with the receiver as `this`; if the body returns an Object, that wins —
 // otherwise the receiver is the result. The receiver is rooted across the
@@ -175,6 +181,22 @@ begin
   end;
 end;
 
+function GetProtoFromConstructorWithIntrinsic(const ANewTarget: TGocciaValue;
+  const AIntrinsicDefault: TGocciaObjectValue): TGocciaObjectValue;
+var
+  ProtoValue: TGocciaValue;
+begin
+  if ANewTarget is TGocciaObjectValue then
+    ProtoValue := TGocciaObjectValue(ANewTarget).GetProperty(PROP_PROTOTYPE)
+  else
+    ProtoValue := nil;
+
+  if ProtoValue is TGocciaObjectValue then
+    Result := TGocciaObjectValue(ProtoValue)
+  else
+    Result := AIntrinsicDefault;
+end;
+
 function ConstructOrdinaryWithReceiver(const ATarget: TGocciaFunctionBase;
   const AArguments: TGocciaArgumentsCollection;
   const AReceiver: TGocciaObjectValue): TGocciaValue;
@@ -239,8 +261,8 @@ begin
       Result := TGocciaClassValue(EffectiveTarget).Instantiate(WorkingArgs,
         EffectiveNewTarget)
     else if EffectiveTarget is TGocciaNativeFunctionValue then
-      Result := TGocciaNativeFunctionValue(EffectiveTarget).Call(WorkingArgs,
-        TGocciaHoleValue.HoleValue)
+      Result := TGocciaNativeFunctionValue(EffectiveTarget).Construct(WorkingArgs,
+        EffectiveNewTarget)
     else if EffectiveTarget is TGocciaFunctionBase then
       Result := ConstructOrdinaryWithReceiver(TGocciaFunctionBase(EffectiveTarget),
         WorkingArgs,
