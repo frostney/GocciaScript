@@ -141,15 +141,19 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Float16,
+  Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
+  Goccia.Values.IteratorSupport,
+  Goccia.Values.IteratorValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.Values.ToObject;
 
 var
   GTypedArraySharedSlot: TGocciaRealmOwnedSlotId;
@@ -1021,8 +1025,9 @@ end;
 function TGocciaTypedArrayValue.TypedArraySet(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA, SrcTA: TGocciaTypedArrayValue;
-  TargetOffset, I: Integer;
+  TargetOffset, I, SrcLen: Integer;
   SrcArray: TGocciaArrayValue;
+  SrcObj: TGocciaObjectValue;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.set');
   if AArgs.Length = 0 then
@@ -1067,7 +1072,16 @@ begin
       TA.WriteValueToElement(TargetOffset + I, SrcArray.Elements[I]);
   end
   else
-    ThrowTypeError(SErrorTypedArraySetArgType, SSuggestTypedArraySetSource);
+  begin
+    // ES2026 §23.2.3.25.2 SetTypedArrayFromArrayLike
+    SrcObj := ToObject(AArgs.GetElement(0));
+    SrcLen := LengthOfArrayLike(SrcObj);
+    if (TargetOffset > TA.FLength) or
+       (SrcLen > TA.FLength - TargetOffset) then
+      ThrowRangeError(SErrorTypedArraySourceTooLarge, SSuggestTypedArrayLength);
+    for I := 0 to SrcLen - 1 do
+      TA.WriteValueToElement(TargetOffset + I, SrcObj.GetProperty(IntToStr(I)));
+  end;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -1975,6 +1989,9 @@ var
   SrcArr: TGocciaArrayValue;
   I: Integer;
   NewTA: TGocciaTypedArrayValue;
+  Iterator: TGocciaIteratorValue;
+  IterResult: TGocciaObjectValue;
+  Values: TGocciaValueList;
 begin
   BPE := TGocciaTypedArrayValue.BytesPerElement(FKind);
 
@@ -2093,6 +2110,43 @@ begin
     Exit(NewTA);
   end;
 
+  // ES2026 §23.2.5.1 steps 5d-f: object with @@iterator or array-like
+  if FirstArg is TGocciaObjectValue then
+  begin
+    Iterator := GetIteratorFromValue(FirstArg);
+    if Assigned(Iterator) then
+    begin
+      // Step 5e: InitializeTypedArrayFromList via IterableToList
+      Values := TGocciaValueList.Create(False);
+      try
+        TGarbageCollector.Instance.AddTempRoot(Iterator);
+        try
+          IterResult := Iterator.AdvanceNext;
+          while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+          begin
+            Values.Add(IterResult.GetProperty(PROP_VALUE));
+            IterResult := Iterator.AdvanceNext;
+          end;
+        finally
+          TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+        end;
+        NewTA := TGocciaTypedArrayValue.Create(FKind, Values.Count);
+        for I := 0 to Values.Count - 1 do
+          NewTA.WriteValueToElement(I, Values[I]);
+      finally
+        Values.Free;
+      end;
+      Exit(NewTA);
+    end;
+
+    // Step 5f: InitializeTypedArrayFromArrayLike
+    Len := LengthOfArrayLike(TGocciaObjectValue(FirstArg));
+    NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
+    for I := 0 to Len - 1 do
+      NewTA.WriteValueToElement(I, TGocciaObjectValue(FirstArg).GetProperty(IntToStr(I)));
+    Exit(NewTA);
+  end;
+
   // new TypedArray(length) — ES2026 §23.2.1.2 step 5: ToIndex(length)
   // ToIndex calls ToNumber, which throws TypeError for BigInt (§7.1.4)
   Num := FirstArg.ToNumberLiteral;
@@ -2130,9 +2184,13 @@ var
   MapFn: TGocciaFunctionBase;
   MapFnArg: TGocciaValue;
   ThisArg: TGocciaValue;
-  I: Integer;
+  I, Len: Integer;
   Val: TGocciaValue;
   MapArgs: TGocciaArgumentsCollection;
+  Iterator: TGocciaIteratorValue;
+  IterResult: TGocciaObjectValue;
+  Values: TGocciaValueList;
+  SrcObj: TGocciaObjectValue;
 begin
   if AArgs.Length = 0 then
     ThrowTypeError(SErrorTypedArrayFromRequiresArg, SSuggestTypedArraySetSource);
@@ -2198,8 +2256,67 @@ begin
     Exit(NewTA);
   end;
 
-  ThrowTypeError(SErrorTypedArrayFromSource, SSuggestTypedArraySetSource);
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  // Step 5-6: iterable path — GetMethod(source, @@iterator)
+  Iterator := GetIteratorFromValue(Source);
+  if Assigned(Iterator) then
+  begin
+    Values := TGocciaValueList.Create(False);
+    try
+      TGarbageCollector.Instance.AddTempRoot(Iterator);
+      try
+        IterResult := Iterator.AdvanceNext;
+        while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+        begin
+          Values.Add(IterResult.GetProperty(PROP_VALUE));
+          IterResult := Iterator.AdvanceNext;
+        end;
+      finally
+        TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+      end;
+      NewTA := TGocciaTypedArrayValue.Create(FKind, Values.Count);
+      for I := 0 to Values.Count - 1 do
+      begin
+        Val := Values[I];
+        if HasMapFn then
+        begin
+          MapArgs := TGocciaArgumentsCollection.Create;
+          try
+            MapArgs.Add(Val);
+            MapArgs.Add(TGocciaNumberLiteralValue.Create(I));
+            Val := MapFn.Call(MapArgs, ThisArg);
+          finally
+            MapArgs.Free;
+          end;
+        end;
+        NewTA.WriteValueToElement(I, Val);
+      end;
+    finally
+      Values.Free;
+    end;
+    Exit(NewTA);
+  end;
+
+  // Step 7: array-like path — ToObject(source), LengthOfArrayLike, indexed Get
+  SrcObj := ToObject(Source);
+  Len := LengthOfArrayLike(SrcObj);
+  NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
+  for I := 0 to Len - 1 do
+  begin
+    Val := SrcObj.GetProperty(IntToStr(I));
+    if HasMapFn then
+    begin
+      MapArgs := TGocciaArgumentsCollection.Create;
+      try
+        MapArgs.Add(Val);
+        MapArgs.Add(TGocciaNumberLiteralValue.Create(I));
+        Val := MapFn.Call(MapArgs, ThisArg);
+      finally
+        MapArgs.Free;
+      end;
+    end;
+    NewTA.WriteValueToElement(I, Val);
+  end;
+  Result := NewTA;
 end;
 
 // ES2026 §23.2.2.2 %TypedArray%.of(...items)

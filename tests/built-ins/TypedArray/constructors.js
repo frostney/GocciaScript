@@ -146,6 +146,91 @@ describe("TypedArray constructors", () => {
     });
   });
 
+  describe("new TypedArray(iterable)", () => {
+    test("construct from custom iterable", () => {
+      const iterable = { [Symbol.iterator]() { let i = 0; const vals = [10, 20, 30]; return { next() { return i < vals.length ? { value: vals[i++], done: false } : { done: true }; } }; } };
+      const ta = new Int32Array(iterable);
+      expect(ta.length).toBe(3);
+      expect(ta[0]).toBe(10);
+      expect(ta[1]).toBe(20);
+      expect(ta[2]).toBe(30);
+    });
+
+    test("construct from Set", () => {
+      const ta = new Uint8Array(new Set([1, 2, 3]));
+      expect(ta.length).toBe(3);
+      expect(ta[0]).toBe(1);
+      expect(ta[1]).toBe(2);
+      expect(ta[2]).toBe(3);
+    });
+
+    test("construct from Map values iterator", () => {
+      const m = new Map([["a", 1], ["b", 2]]);
+      const ta = new Float64Array(m.values());
+      expect(ta.length).toBe(2);
+      expect(ta[0]).toBe(1);
+      expect(ta[1]).toBe(2);
+    });
+
+    test("construct from Map keys iterator", () => {
+      const m = new Map([[1, "a"], [2, "b"]]);
+      const ta = new Int32Array(m.keys());
+      expect(ta.length).toBe(2);
+      expect(ta[0]).toBe(1);
+      expect(ta[1]).toBe(2);
+    });
+
+    test("construct from empty iterable", () => {
+      const iterable = { [Symbol.iterator]() { return { next() { return { done: true }; } }; } };
+      const ta = new Int32Array(iterable);
+      expect(ta.length).toBe(0);
+    });
+
+    test("BigInt64Array from BigInt iterable", () => {
+      const iterable = { [Symbol.iterator]() { let i = 0; const vals = [100n, 200n]; return { next() { return i < vals.length ? { value: vals[i++], done: false } : { done: true }; } }; } };
+      const ta = new BigInt64Array(iterable);
+      expect(ta.length).toBe(2);
+      expect(ta[0]).toBe(100n);
+      expect(ta[1]).toBe(200n);
+    });
+  });
+
+  describe("new TypedArray(arrayLike)", () => {
+    test("construct from array-like object", () => {
+      const ta = new Int32Array({ 0: 7, 1: 8, 2: 9, length: 3 });
+      expect(ta.length).toBe(3);
+      expect(ta[0]).toBe(7);
+      expect(ta[1]).toBe(8);
+      expect(ta[2]).toBe(9);
+    });
+
+    test("construct from array-like with length 0", () => {
+      const ta = new Int32Array({ length: 0 });
+      expect(ta.length).toBe(0);
+    });
+
+    test("construct from array-like with single element", () => {
+      const ta = new Int32Array({ 0: 42, length: 1 });
+      expect(ta.length).toBe(1);
+      expect(ta[0]).toBe(42);
+    });
+
+    test("missing indices read as undefined and convert to 0 or NaN", () => {
+      const ta = new Float64Array({ 0: 1, length: 3 });
+      expect(ta.length).toBe(3);
+      expect(ta[0]).toBe(1);
+      expect(isNaN(ta[1])).toBe(true);
+      expect(isNaN(ta[2])).toBe(true);
+    });
+
+    test("BigInt64Array from BigInt array-like", () => {
+      const ta = new BigInt64Array({ 0: 10n, 1: 20n, length: 2 });
+      expect(ta.length).toBe(2);
+      expect(ta[0]).toBe(10n);
+      expect(ta[1]).toBe(20n);
+    });
+  });
+
   describe("BYTES_PER_ELEMENT", () => {
     test("Int8Array.BYTES_PER_ELEMENT === 1", () => { expect(Int8Array.BYTES_PER_ELEMENT).toBe(1); });
     test("Uint8Array.BYTES_PER_ELEMENT === 1", () => { expect(Uint8Array.BYTES_PER_ELEMENT).toBe(1); });

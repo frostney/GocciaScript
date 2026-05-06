@@ -41,6 +41,88 @@ describe("TypedArray.from", () => {
     });
   });
 
+  describe("from iterable", () => {
+    test("from custom iterable", () => {
+      const iterable = { [Symbol.iterator]() { let i = 0; const vals = [1, 2, 3]; return { next() { return i < vals.length ? { value: vals[i++], done: false } : { done: true }; } }; } };
+      const ta = Int32Array.from(iterable);
+      expect(ta.length).toBe(3);
+      expect(ta[0]).toBe(1);
+      expect(ta[1]).toBe(2);
+      expect(ta[2]).toBe(3);
+    });
+
+    test("from Set", () => {
+      const ta = Uint8Array.from(new Set([4, 5, 6]));
+      expect(ta.length).toBe(3);
+      expect(ta[0]).toBe(4);
+      expect(ta[1]).toBe(5);
+      expect(ta[2]).toBe(6);
+    });
+
+    test("from iterable with mapFn", () => {
+      const iterable = { [Symbol.iterator]() { let i = 0; const vals = [1, 2, 3]; return { next() { return i < vals.length ? { value: vals[i++], done: false } : { done: true }; } }; } };
+      const ta = Int32Array.from(iterable, x => x * 10);
+      expect(ta[0]).toBe(10);
+      expect(ta[1]).toBe(20);
+      expect(ta[2]).toBe(30);
+    });
+
+    test("from iterable mapFn receives index", () => {
+      const iterable = { [Symbol.iterator]() { let i = 0; return { next() { if (i < 2) { i++; return { value: "x", done: false }; } return { done: true }; } }; } };
+      const ta = Int32Array.from(iterable, (_, i) => i);
+      expect(ta[0]).toBe(0);
+      expect(ta[1]).toBe(1);
+    });
+
+    test("from empty iterable", () => {
+      const iterable = { [Symbol.iterator]() { return { next() { return { done: true }; } }; } };
+      const ta = Float64Array.from(iterable);
+      expect(ta.length).toBe(0);
+    });
+
+    test("from Map values", () => {
+      const m = new Map([["a", 5], ["b", 10]]);
+      const ta = Int32Array.from(m.values());
+      expect(ta.length).toBe(2);
+      expect(ta[0]).toBe(5);
+      expect(ta[1]).toBe(10);
+    });
+  });
+
+  describe("from array-like", () => {
+    test("from plain array-like object", () => {
+      const ta = Int32Array.from({ 0: 10, 1: 20, 2: 30, length: 3 });
+      expect(ta.length).toBe(3);
+      expect(ta[0]).toBe(10);
+      expect(ta[1]).toBe(20);
+      expect(ta[2]).toBe(30);
+    });
+
+    test("from array-like with mapFn", () => {
+      const ta = Int32Array.from({ 0: 1, 1: 2, length: 2 }, x => x * 100);
+      expect(ta[0]).toBe(100);
+      expect(ta[1]).toBe(200);
+    });
+
+    test("from array-like mapFn receives index", () => {
+      const ta = Int32Array.from({ 0: "a", 1: "b", length: 2 }, (_, i) => i);
+      expect(ta[0]).toBe(0);
+      expect(ta[1]).toBe(1);
+    });
+
+    test("from empty array-like", () => {
+      const ta = Int32Array.from({ length: 0 });
+      expect(ta.length).toBe(0);
+    });
+
+    test("missing indices produce 0 or NaN", () => {
+      const ta = Float64Array.from({ length: 2 });
+      expect(ta.length).toBe(2);
+      expect(isNaN(ta[0])).toBe(true);
+      expect(isNaN(ta[1])).toBe(true);
+    });
+  });
+
   describe.each([BigInt64Array, BigUint64Array])("%s", (TA) => {
     test(".from array of BigInts", () => {
       const ta = TA.from([1n, 2n, 3n]);

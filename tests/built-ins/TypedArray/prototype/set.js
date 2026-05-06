@@ -50,6 +50,43 @@ describe("TypedArray.prototype.set", () => {
     });
   });
 
+  describe("set from array-like", () => {
+    test("set from plain array-like object", () => {
+      const ta = new Int32Array(3);
+      ta.set({ 0: 5, 1: 6, length: 2 });
+      expect(ta[0]).toBe(5);
+      expect(ta[1]).toBe(6);
+      expect(ta[2]).toBe(0);
+    });
+
+    test("set from array-like with offset", () => {
+      const ta = new Int32Array(4);
+      ta.set({ 0: 10, 1: 20, length: 2 }, 2);
+      expect(ta[0]).toBe(0);
+      expect(ta[1]).toBe(0);
+      expect(ta[2]).toBe(10);
+      expect(ta[3]).toBe(20);
+    });
+
+    test("set from empty array-like", () => {
+      const ta = new Int32Array([1, 2, 3]);
+      ta.set({ length: 0 });
+      expect(ta[0]).toBe(1);
+      expect(ta[1]).toBe(2);
+      expect(ta[2]).toBe(3);
+    });
+
+    test("array-like too large throws RangeError", () => {
+      const ta = new Int32Array(2);
+      expect(() => ta.set({ 0: 1, 1: 2, 2: 3, length: 3 })).toThrow(RangeError);
+    });
+
+    test("array-like with offset overflow throws RangeError", () => {
+      const ta = new Int32Array(3);
+      expect(() => ta.set({ 0: 1, 1: 2, length: 2 }, 2)).toThrow(RangeError);
+    });
+  });
+
   test.each([BigInt64Array, BigUint64Array])("%s set from BigInt typed array", (TA) => {
     const src = new TA([10n, 20n]);
     const dst = new TA(4);
