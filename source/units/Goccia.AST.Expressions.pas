@@ -857,7 +857,8 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.Values.ToPrimitive;
 
 function IsNullishAssignmentValue(const AValue: TGocciaValue): Boolean; inline;
 begin
@@ -1867,7 +1868,7 @@ begin
   if Operand is TGocciaIdentifierExpression then
   begin
     PropName := TGocciaIdentifierExpression(Operand).Name;
-    OldValue := AContext.Scope.GetValue(PropName);
+    OldValue := ToPrimitive(AContext.Scope.GetValue(PropName));
     if not (OldValue is TGocciaBigIntValue) then
       OldValue := OldValue.ToNumberLiteral;
     NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
@@ -1892,6 +1893,7 @@ begin
           OldValue := TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue));
         if OldValue = nil then
           OldValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        OldValue := ToPrimitive(OldValue);
         if not (OldValue is TGocciaBigIntValue) then
           OldValue := OldValue.ToNumberLiteral;
         NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
@@ -1916,6 +1918,7 @@ begin
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
       Exit;
     end;
+    OldValue := ToPrimitive(OldValue);
     if not (OldValue is TGocciaBigIntValue) then
       OldValue := OldValue.ToNumberLiteral;
     NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
