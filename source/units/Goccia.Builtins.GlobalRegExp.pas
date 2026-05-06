@@ -11,6 +11,7 @@ uses
   Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.Values.NativeFunction,
+  Goccia.Values.NativeFunctionCallback,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -22,6 +23,8 @@ type
 
     function RegExpConstructorFn(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
+    function RegExpConstruct(const AArgs: TGocciaArgumentsCollection;
+      const ANewTarget: TGocciaValue): TGocciaValue;
   published
     function RegExpSpeciesGetter(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -64,6 +67,7 @@ uses
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
   Goccia.Values.Iterator.RegExp,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -324,6 +328,7 @@ begin
 
   FRegExpConstructor := TGocciaNativeFunctionValue.Create(RegExpConstructorFn,
     CONSTRUCTOR_REGEXP, 2);
+  FRegExpConstructor.ConstructCallback := RegExpConstruct;
   FRegExpConstructor.AssignProperty(PROP_PROTOTYPE, FRegExpPrototype);
   FRegExpConstructor.DefineSymbolProperty(TGocciaSymbolValue.WellKnownSpecies,
     TGocciaPropertyDescriptorAccessor.Create(
@@ -556,6 +561,19 @@ begin
   end;
 
   Result := CreateRegExpObject(Pattern, Flags);
+end;
+
+function TGocciaGlobalRegExp.RegExpConstruct(
+  const AArgs: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaValue): TGocciaValue;
+var
+  Proto: TGocciaObjectValue;
+  RegExpObj: TGocciaObjectValue;
+begin
+  Proto := GetProtoFromConstructorWithIntrinsic(ANewTarget, FRegExpPrototype);
+  RegExpObj := TGocciaObjectValue(RegExpConstructorFn(AArgs, TGocciaHoleValue.HoleValue));
+  RegExpObj.Prototype := Proto;
+  Result := RegExpObj;
 end;
 
 // ES2026 §22.2.6.2 RegExp.prototype.exec(string)

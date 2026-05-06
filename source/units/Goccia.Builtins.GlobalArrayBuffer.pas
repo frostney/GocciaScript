@@ -12,12 +12,14 @@ uses
   Goccia.Scope,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.NativeFunction,
+  Goccia.Values.NativeFunctionCallback,
   Goccia.Values.Primitives;
 
 type
   TGocciaGlobalArrayBuffer = class(TGocciaBuiltin)
   private
     FArrayBufferConstructor: TGocciaNativeFunctionValue;
+    function ArrayBufferConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
   published
     function ArrayBufferConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayBufferIsView(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -35,6 +37,8 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
+  Goccia.Values.ObjectValue,
   Goccia.Values.TypedArrayValue;
 
 threadvar
@@ -50,6 +54,7 @@ begin
   inherited Create(AName, AScope, AThrowError);
 
   FArrayBufferConstructor := TGocciaNativeFunctionValue.Create(ArrayBufferConstructorFn, 'ArrayBuffer', 1);
+  FArrayBufferConstructor.ConstructCallback := ArrayBufferConstruct;
   TGocciaArrayBufferValue.ExposePrototype(FArrayBufferConstructor);
 
   Members := TGocciaMemberCollection.Create;
@@ -126,6 +131,18 @@ begin
     Result := TGocciaArrayBufferValue.Create(Len, RequestedMaxByteLength)
   else
     Result := TGocciaArrayBufferValue.Create(Len);
+end;
+
+function TGocciaGlobalArrayBuffer.ArrayBufferConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
+var
+  Proto: TGocciaObjectValue;
+  AB: TGocciaArrayBufferValue;
+begin
+  Proto := GetProtoFromConstructorWithIntrinsic(ANewTarget,
+    TGocciaObjectValue(FArrayBufferConstructor.GetProperty(PROP_PROTOTYPE)));
+  AB := TGocciaArrayBufferValue(ArrayBufferConstructorFn(AArgs, nil));
+  AB.Prototype := Proto;
+  Result := AB;
 end;
 
 // ES2026 §25.1.5.1 ArrayBuffer.isView(arg)

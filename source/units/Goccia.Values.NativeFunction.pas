@@ -7,6 +7,7 @@ interface
 uses
   Goccia.Arguments.Collection,
   Goccia.Values.FunctionBase,
+  Goccia.Values.HoleValue,
   Goccia.Values.NativeFunctionCallback,
   Goccia.Values.Primitives;
 
@@ -14,6 +15,7 @@ type
   TGocciaNativeFunctionValue = class(TGocciaFunctionBase)
   private
     FFunction: TGocciaNativeFunctionCallback;
+    FConstructCallback: TGocciaNativeConstructorCallback;
     FName: string;
     FArity: Integer;
     FNotConstructable: Boolean;
@@ -26,8 +28,11 @@ type
     constructor CreateWithoutPrototype(const AFunction: TGocciaNativeFunctionCallback; const AName: string;
       const AArity: Integer);
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
+    function Construct(const AArguments: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
+    function HasConstructCallback: Boolean;
     function IsConstructable: Boolean; override;
     property NativeFunction: TGocciaNativeFunctionCallback read FFunction;
+    property ConstructCallback: TGocciaNativeConstructorCallback read FConstructCallback write FConstructCallback;
     property Name: string read FName;
     property Arity: Integer read FArity;
     property NotConstructable: Boolean read FNotConstructable write FNotConstructable;
@@ -60,6 +65,19 @@ end;
 function TGocciaNativeFunctionValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := FFunction(AArguments, AThisValue);
+end;
+
+function TGocciaNativeFunctionValue.Construct(const AArguments: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
+begin
+  if Assigned(FConstructCallback) then
+    Result := FConstructCallback(AArguments, ANewTarget)
+  else
+    Result := FFunction(AArguments, TGocciaHoleValue.HoleValue);
+end;
+
+function TGocciaNativeFunctionValue.HasConstructCallback: Boolean;
+begin
+  Result := Assigned(FConstructCallback);
 end;
 
 function TGocciaNativeFunctionValue.IsConstructable: Boolean;

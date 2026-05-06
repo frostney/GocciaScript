@@ -12,6 +12,7 @@ uses
   Goccia.Scope,
   Goccia.Values.ArrayValue,
   Goccia.Values.NativeFunction,
+  Goccia.Values.NativeFunctionCallback,
   Goccia.Values.Primitives;
 
 type
@@ -20,6 +21,7 @@ type
     FPromiseConstructor: TGocciaNativeFunctionValue;
 
     function ExtractPromiseArray(const AArgs: TGocciaArgumentsCollection): TGocciaArrayValue;
+    function PromiseConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   published
@@ -450,6 +452,7 @@ begin
   inherited Create(AName, AScope, AThrowError);
 
   FPromiseConstructor := TGocciaNativeFunctionValue.Create(PromiseConstructorFn, 'Promise', 1);
+  FPromiseConstructor.ConstructCallback := PromiseConstruct;
   FPromiseConstructor.DefineSymbolProperty(TGocciaSymbolValue.WellKnownSpecies,
     TGocciaPropertyDescriptorAccessor.Create(
       TGocciaNativeFunctionValue.CreateWithoutPrototype(
@@ -549,6 +552,61 @@ begin
   end;
 
   { Step 10: Return promise }
+  Result := Promise;
+end;
+
+function TGocciaGlobalPromise.PromiseConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
+var
+  Promise: TGocciaPromiseValue;
+  Executor: TGocciaValue;
+  ResolveFn, RejectFn: TGocciaNativeFunctionValue;
+  ExecutorArgs, RejectArgs: TGocciaArgumentsCollection;
+  Proto: TGocciaObjectValue;
+begin
+  if AArgs.Length = 0 then
+    Goccia.Values.ErrorHelper.ThrowTypeError(SErrorPromiseResolverUndefinedNotFunction, SSuggestPromiseResolver);
+
+  Executor := AArgs.GetElement(0);
+  if not Executor.IsCallable then
+    Goccia.Values.ErrorHelper.ThrowTypeError(SErrorPromiseResolverNotFunction, SSuggestPromiseResolver);
+
+  Proto := GetProtoFromConstructorWithIntrinsic(ANewTarget,
+    TGocciaObjectValue(FPromiseConstructor.GetProperty(PROP_PROTOTYPE)));
+
+  Promise := TGocciaPromiseValue.Create;
+  Promise.Prototype := Proto;
+
+  ResolveFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(Promise.DoResolve, 'resolve', 1);
+  RejectFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(Promise.DoReject, 'reject', 1);
+
+  ExecutorArgs := TGocciaArgumentsCollection.Create([ResolveFn, RejectFn]);
+  try
+    try
+      InvokeCallable(Executor, ExecutorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+    except
+      on E: EGocciaBytecodeThrow do
+      begin
+        RejectArgs := TGocciaArgumentsCollection.Create([E.ThrownValue]);
+        try
+          Promise.DoReject(RejectArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        finally
+          RejectArgs.Free;
+        end;
+      end;
+      on E: TGocciaThrowValue do
+      begin
+        RejectArgs := TGocciaArgumentsCollection.Create([E.Value]);
+        try
+          Promise.DoReject(RejectArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        finally
+          RejectArgs.Free;
+        end;
+      end;
+    end;
+  finally
+    ExecutorArgs.Free;
+  end;
+
   Result := Promise;
 end;
 
