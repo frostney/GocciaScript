@@ -37,6 +37,7 @@ type
     ASI: Boolean;
     CompatVar: Boolean;
     CompatFunction: Boolean;
+    CompatTraditionalFor: Boolean;
     CompatAll: Boolean;
     StrictTypes: Boolean;
     UnsafeFunctionConstructor: Boolean;
@@ -78,6 +79,7 @@ begin
   WriteLn('  --asi                         Enable automatic semicolon insertion');
   WriteLn('  --compat-var                  Enable var declarations');
   WriteLn('  --compat-function             Enable function declarations/expressions');
+  WriteLn('  --compat-traditional-for-loop Enable traditional C-style for(;;) loops');
   WriteLn('  --compat-all                  Enable all compatibility flags (--compat-*)');
   WriteLn('  --strict-types                Enforce type annotations at runtime');
   WriteLn('  --mode=interpreted|bytecode   Execution mode (default: interpreted)');
@@ -152,6 +154,7 @@ begin
   Result.ASI := False;
   Result.CompatVar := False;
   Result.CompatFunction := False;
+  Result.CompatTraditionalFor := False;
   Result.CompatAll := False;
   Result.StrictTypes := False;
   Result.UnsafeFunctionConstructor := False;
@@ -177,6 +180,8 @@ begin
       Result.CompatVar := True
     else if Arg = '--compat-function' then
       Result.CompatFunction := True
+    else if Arg = '--compat-traditional-for-loop' then
+      Result.CompatTraditionalFor := True
     else if Arg = '--compat-all' then
       Result.CompatAll := True
     else if Arg = '--strict-types' then
@@ -222,6 +227,8 @@ begin
     happens here rather than in the parser. }
   AEngine.VarEnabled := AOptions.CompatVar or AOptions.CompatAll;
   AEngine.FunctionEnabled := AOptions.CompatFunction or AOptions.CompatAll;
+  AEngine.TraditionalForLoopsEnabled :=
+    AOptions.CompatTraditionalFor or AOptions.CompatAll;
   AEngine.StrictTypes := AOptions.StrictTypes;
   AEngine.SourceType := AOptions.SourceType;
   AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;

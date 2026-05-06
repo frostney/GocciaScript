@@ -58,7 +58,7 @@ type
   TGocciaPreprocessor = (ppJSX);
   TGocciaPreprocessors = set of TGocciaPreprocessor;
 
-  TGocciaCompatibility = (cfASI, cfVar, cfFunction);
+  TGocciaCompatibility = (cfASI, cfVar, cfFunction, cfTraditionalFor);
   TGocciaCompatibilityFlags = set of TGocciaCompatibility;
 
   TGocciaSourceType = (stScript, stModule);
@@ -162,9 +162,11 @@ type
     function GetASIEnabled: Boolean;
     function GetVarEnabled: Boolean;
     function GetFunctionEnabled: Boolean;
+    function GetTraditionalForLoopsEnabled: Boolean;
     procedure SetASIEnabled(const AValue: Boolean);
     procedure SetVarEnabled(const AValue: Boolean);
     procedure SetFunctionEnabled(const AValue: Boolean);
+    procedure SetTraditionalForLoopsEnabled(const AValue: Boolean);
     procedure SetStrictTypes(const AValue: Boolean);
     function GetContentProvider: TGocciaModuleContentProvider;
     function GetModuleResolver: TGocciaModuleResolver;
@@ -243,6 +245,8 @@ type
     property ASIEnabled: Boolean read GetASIEnabled write SetASIEnabled;
     property VarEnabled: Boolean read GetVarEnabled write SetVarEnabled;
     property FunctionEnabled: Boolean read GetFunctionEnabled write SetFunctionEnabled;
+    property TraditionalForLoopsEnabled: Boolean
+      read GetTraditionalForLoopsEnabled write SetTraditionalForLoopsEnabled;
     property FunctionConstructor: TGocciaFunctionConstructorClassValue read FFunctionConstructor;
     property ObjectConstructor: TGocciaClassValue read FObjectConstructor;
     property Preprocessors: TGocciaPreprocessors read FPreprocessors write SetPreprocessors;
@@ -1238,6 +1242,7 @@ begin
         Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
         Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
         Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
+        Parser.TraditionalForLoopsEnabled := cfTraditionalFor in FCompatibility;
         try
           ProgramNode := Parser.Parse;
           PrintParserWarnings(Parser, SourceMap);
@@ -1512,6 +1517,20 @@ begin
   FInterpreter.FunctionEnabled := AValue;
 end;
 
+function TGocciaEngine.GetTraditionalForLoopsEnabled: Boolean;
+begin
+  Result := cfTraditionalFor in FCompatibility;
+end;
+
+procedure TGocciaEngine.SetTraditionalForLoopsEnabled(const AValue: Boolean);
+begin
+  if AValue then
+    Include(FCompatibility, cfTraditionalFor)
+  else
+    Exclude(FCompatibility, cfTraditionalFor);
+  FInterpreter.TraditionalForLoopsEnabled := AValue;
+end;
+
 procedure TGocciaEngine.SetStrictTypes(const AValue: Boolean);
 begin
   FStrictTypes := AValue;
@@ -1537,6 +1556,7 @@ begin
   FInterpreter.ASIEnabled := cfASI in AValue;
   FInterpreter.VarEnabled := cfVar in AValue;
   FInterpreter.FunctionEnabled := cfFunction in AValue;
+  FInterpreter.TraditionalForLoopsEnabled := cfTraditionalFor in AValue;
 end;
 
 procedure TGocciaEngine.ThrowError(const AMessage: string; const ALine, AColumn: Integer);
@@ -1584,6 +1604,7 @@ begin
       Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
       Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
       Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
+      Parser.TraditionalForLoopsEnabled := cfTraditionalFor in FCompatibility;
       try
         ProgramNode := Parser.Parse;
         try
@@ -1615,6 +1636,7 @@ begin
       Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
       Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
       Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
+      Parser.TraditionalForLoopsEnabled := cfTraditionalFor in FCompatibility;
       try
         ProgramNode := Parser.Parse;
         try
@@ -1644,6 +1666,7 @@ begin
     Parser.AutomaticSemicolonInsertion := cfASI in FCompatibility;
     Parser.VarDeclarationsEnabled := cfVar in FCompatibility;
     Parser.FunctionDeclarationsEnabled := cfFunction in FCompatibility;
+    Parser.TraditionalForLoopsEnabled := cfTraditionalFor in FCompatibility;
     try
       ProgramNode := Parser.ParseUnchecked;
       try

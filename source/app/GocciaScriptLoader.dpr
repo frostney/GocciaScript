@@ -106,7 +106,8 @@ type
     function IsCompactJsonOutput: Boolean;
     function ParseSource(const ASource: TStringList; const AFileName: string;
       const APreprocessors: TGocciaPreprocessors; const ASuppressWarnings: Boolean;
-      const AASIEnabled, AVarEnabled, AFunctionEnabled: Boolean;
+      const AASIEnabled, AVarEnabled, AFunctionEnabled,
+        ATraditionalForLoopsEnabled: Boolean;
       out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
       out ASourceMap: TGocciaSourceMap): TGocciaProgram;
     procedure WriteSourceMapIfEnabled(const ASourceMap: TGocciaSourceMap;
@@ -329,7 +330,8 @@ end;
 
 function TScriptLoaderApp.ParseSource(const ASource: TStringList;
   const AFileName: string; const APreprocessors: TGocciaPreprocessors;
-  const ASuppressWarnings: Boolean; const AASIEnabled, AVarEnabled, AFunctionEnabled: Boolean;
+  const ASuppressWarnings: Boolean; const AASIEnabled, AVarEnabled,
+  AFunctionEnabled, ATraditionalForLoopsEnabled: Boolean;
   out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64;
   out ASourceMap: TGocciaSourceMap): TGocciaProgram;
 var
@@ -366,6 +368,7 @@ begin
       Parser.AutomaticSemicolonInsertion := AASIEnabled;
       Parser.VarDeclarationsEnabled := AVarEnabled;
       Parser.FunctionDeclarationsEnabled := AFunctionEnabled;
+      Parser.TraditionalForLoopsEnabled := ATraditionalForLoopsEnabled;
       try
         Result := Parser.Parse;
         ParseEnd := GetNanoseconds;
@@ -652,6 +655,7 @@ begin
 
       ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultPreprocessors,
         IsJsonOutput, Engine.ASIEnabled, Engine.VarEnabled, Engine.FunctionEnabled,
+        Engine.TraditionalForLoopsEnabled,
         Result.Timing.LexTimeNanoseconds,
         Result.Timing.ParseTimeNanoseconds, SourceMap);
       try

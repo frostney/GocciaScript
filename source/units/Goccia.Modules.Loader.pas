@@ -34,6 +34,7 @@ type
     FASIEnabled: Boolean;
     FVarEnabled: Boolean;
     FFunctionEnabled: Boolean;
+    FTraditionalForLoopsEnabled: Boolean;
     FStrictTypesEnabled: Boolean;
     FContentProvider: TGocciaModuleContentProvider;
     FEvaluateModuleBody: TGocciaModuleBodyEvaluator;
@@ -77,6 +78,8 @@ type
     property JSXEnabled: Boolean read FJSXEnabled write FJSXEnabled;
     property VarEnabled: Boolean read FVarEnabled write FVarEnabled;
     property FunctionEnabled: Boolean read FFunctionEnabled write FFunctionEnabled;
+    property TraditionalForLoopsEnabled: Boolean
+      read FTraditionalForLoopsEnabled write FTraditionalForLoopsEnabled;
     property StrictTypesEnabled: Boolean read FStrictTypesEnabled
       write FStrictTypesEnabled;
     property Resolver: TGocciaModuleResolver read FResolver;
@@ -287,6 +290,7 @@ begin
           Parser.AutomaticSemicolonInsertion := FASIEnabled;
           Parser.VarDeclarationsEnabled := FVarEnabled;
           Parser.FunctionDeclarationsEnabled := FFunctionEnabled;
+          Parser.TraditionalForLoopsEnabled := FTraditionalForLoopsEnabled;
           try
             ProgramNode := Parser.Parse;
             try
