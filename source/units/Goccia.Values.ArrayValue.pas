@@ -35,7 +35,6 @@ type
     function ToStringTag: string; override;
 
     function ToStringLiteral: TGocciaStringLiteralValue; override;
-    function ToNumberLiteral: TGocciaNumberLiteralValue; override;
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
 
     // Index-based element access
@@ -2638,17 +2637,6 @@ begin
       SB.Append(FElements[I].ToStringLiteral.Value);
   end;
   Result := TGocciaStringLiteralValue.Create(SB.ToString);
-end;
-
-function TGocciaArrayValue.ToNumberLiteral: TGocciaNumberLiteralValue;
-begin
-  // ECMAScript: [] -> "" -> 0, [n] -> n, [a, b] -> NaN
-  if FElements.Count = 0 then
-    Result := TGocciaNumberLiteralValue.ZeroValue
-  else if FElements.Count = 1 then
-    Result := FElements[0].ToNumberLiteral
-  else
-    Result := TGocciaNumberLiteralValue.NaNValue;
 end;
 
 function TGocciaArrayValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;

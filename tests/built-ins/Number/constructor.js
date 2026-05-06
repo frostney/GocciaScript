@@ -65,4 +65,14 @@ describe("Number constructor", () => {
     const wrapped = new Number(55);
     expect(Number(wrapped)).toBe(55);
   });
+
+  test("Number(array) coerces via ToPrimitive, not element-wise", () => {
+    expect(Number([])).toBe(0);
+    expect(Number([42])).toBe(42);
+    expect(Number([1, 2])).toBeNaN();
+    expect(Number([true])).toBeNaN();
+    expect(Number([false])).toBeNaN();
+    expect(Number([null])).toBe(0);
+    expect(Number([undefined])).toBe(0);
+  });
 });
