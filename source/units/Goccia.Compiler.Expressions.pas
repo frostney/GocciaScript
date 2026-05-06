@@ -2807,25 +2807,21 @@ procedure CompileIncrementMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIncrementExpression; const AMember: TGocciaMemberExpression;
   const ADest: UInt8; const AOp: TGocciaOpCode);
 var
-  ObjReg, CurReg, RegOne: UInt8;
-  PropIdx: UInt16;
+  ObjReg, CurReg: UInt8;
 begin
   ObjReg := ACtx.Scope.AllocateRegister;
   CurReg := ACtx.Scope.AllocateRegister;
-  RegOne := ACtx.Scope.AllocateRegister;
 
   ACtx.CompileExpression(AMember.ObjectExpr, ObjReg);
   EmitLoadPropertyByName(ACtx, CurReg, ObjReg, AMember.PropertyName);
-  EmitInstruction(ACtx, EncodeABC(OP_TO_NUMBER, CurReg, CurReg, 0));
-  EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, RegOne, 1));
+  EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, CurReg, CurReg, 0));
   if not AExpr.IsPrefix then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
-  EmitInstruction(ACtx, EncodeABC(AOp, CurReg, CurReg, RegOne));
+  EmitInstruction(ACtx, EncodeABC(AOp, CurReg, CurReg, 0));
   EmitStorePropertyByName(ACtx, ObjReg, AMember.PropertyName, CurReg);
   if AExpr.IsPrefix then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
 
-  ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 end;
@@ -2834,26 +2830,23 @@ procedure CompileIncrementComputedMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIncrementExpression; const AMember: TGocciaMemberExpression;
   const ADest: UInt8; const AOp: TGocciaOpCode);
 var
-  ObjReg, KeyReg, CurReg, RegOne: UInt8;
+  ObjReg, KeyReg, CurReg: UInt8;
 begin
   ObjReg := ACtx.Scope.AllocateRegister;
   KeyReg := ACtx.Scope.AllocateRegister;
   CurReg := ACtx.Scope.AllocateRegister;
-  RegOne := ACtx.Scope.AllocateRegister;
 
   ACtx.CompileExpression(AMember.ObjectExpr, ObjReg);
   ACtx.CompileExpression(AMember.PropertyExpression, KeyReg);
   EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, CurReg, ObjReg, KeyReg));
-  EmitInstruction(ACtx, EncodeABC(OP_TO_NUMBER, CurReg, CurReg, 0));
-  EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, RegOne, 1));
+  EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, CurReg, CurReg, 0));
   if not AExpr.IsPrefix then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
-  EmitInstruction(ACtx, EncodeABC(AOp, CurReg, CurReg, RegOne));
+  EmitInstruction(ACtx, EncodeABC(AOp, CurReg, CurReg, 0));
   EmitInstruction(ACtx, EncodeABC(OP_ARRAY_SET, ObjReg, KeyReg, CurReg));
   if AExpr.IsPrefix then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
 
-  ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
@@ -2863,15 +2856,15 @@ procedure CompileIncrement(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIncrementExpression; const ADest: UInt8);
 var
   LocalIdx, UpvalIdx: Integer;
-  Slot, RegOne, RegResult: UInt8;
+  Slot, RegResult: UInt8;
   Op: TGocciaOpCode;
   Ident: TGocciaIdentifierExpression;
   MemberExpr: TGocciaMemberExpression;
 begin
   if AExpr.Operator = gttIncrement then
-    Op := OP_ADD
+    Op := OP_INC
   else
-    Op := OP_SUB;
+    Op := OP_DEC;
 
   if AExpr.Operand is TGocciaMemberExpression then
   begin
@@ -2902,32 +2895,26 @@ begin
     if ACtx.Scope.GetLocal(LocalIdx).IsGlobalBacked then
     begin
       RegResult := ACtx.Scope.AllocateRegister;
-      RegOne := ACtx.Scope.AllocateRegister;
       EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
         ACtx.Template.AddConstantString(Ident.Name)));
-      EmitInstruction(ACtx, EncodeABC(OP_TO_NUMBER, RegResult, RegResult, 0));
-      EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, RegOne, 1));
+      EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, RegResult, RegResult, 0));
       if not AExpr.IsPrefix then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
-      EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, RegOne));
+      EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, 0));
       EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, RegResult,
         ACtx.Template.AddConstantString(Ident.Name)));
       if AExpr.IsPrefix then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
       ACtx.Scope.FreeRegister;
-      ACtx.Scope.FreeRegister;
       Exit;
     end;
     Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
-    EmitInstruction(ACtx, EncodeABC(OP_TO_NUMBER, Slot, Slot, 0));
-    RegOne := ACtx.Scope.AllocateRegister;
-    EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, RegOne, 1));
+    EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, Slot, Slot, 0));
     if not AExpr.IsPrefix then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
-    EmitInstruction(ACtx, EncodeABC(Op, Slot, Slot, RegOne));
+    EmitInstruction(ACtx, EncodeABC(Op, Slot, Slot, 0));
     if AExpr.IsPrefix then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
-    ACtx.Scope.FreeRegister;
     Exit;
   end;
 
@@ -2940,17 +2927,15 @@ begin
       Exit;
     end;
     RegResult := ACtx.Scope.AllocateRegister;
-    RegOne := ACtx.Scope.AllocateRegister;
     if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
       EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
         ACtx.Template.AddConstantString(Ident.Name)))
     else
       EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, RegResult, UInt16(UpvalIdx)));
-    EmitInstruction(ACtx, EncodeABC(OP_TO_NUMBER, RegResult, RegResult, 0));
-    EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, RegOne, 1));
+    EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, RegResult, RegResult, 0));
     if not AExpr.IsPrefix then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
-    EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, RegOne));
+    EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, 0));
     if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
       EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, RegResult,
         ACtx.Template.AddConstantString(Ident.Name)))
@@ -2959,24 +2944,20 @@ begin
     if AExpr.IsPrefix then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
     ACtx.Scope.FreeRegister;
-    ACtx.Scope.FreeRegister;
     Exit;
   end;
 
   RegResult := ACtx.Scope.AllocateRegister;
-  RegOne := ACtx.Scope.AllocateRegister;
   EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
     ACtx.Template.AddConstantString(Ident.Name)));
-  EmitInstruction(ACtx, EncodeABC(OP_TO_NUMBER, RegResult, RegResult, 0));
-  EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, RegOne, 1));
+  EmitInstruction(ACtx, EncodeABC(OP_TO_NUMERIC, RegResult, RegResult, 0));
   if not AExpr.IsPrefix then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
-  EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, RegOne));
+  EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, 0));
   EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, RegResult,
     ACtx.Template.AddConstantString(Ident.Name)));
   if AExpr.IsPrefix then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
-  ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 end;
 
