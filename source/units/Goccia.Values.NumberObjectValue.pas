@@ -196,7 +196,7 @@ begin
   end;
 
   // Step 6: Format x with exactly f digits after the decimal point
-  Result := TGocciaStringLiteralValue.Create(FormatFloat('0.' + StringOfChar('0', Digits), Prim.Value));
+  Result := TGocciaStringLiteralValue.Create(FormatFloat('0.' + StringOfChar('0', Digits), Prim.Value, InvariantFormatSettings));
 end;
 
 // Convert a finite non-negative integer-valued Double to its base-ARadix
@@ -466,14 +466,14 @@ begin
   end
   else
   begin
-    MantissaStr := FormatFloat('0.' + StringOfChar('0', FractionDigits), Mantissa);
+    MantissaStr := FormatFloat('0.' + StringOfChar('0', FractionDigits), Mantissa, InvariantFormatSettings);
     if (Length(MantissaStr) > 1) and (MantissaStr[1] <> '0') and (Pos('.', MantissaStr) > 0) then
     begin
       if (MantissaStr[1] >= '2') then
       begin
         Mantissa := Mantissa / 10;
         Inc(Exp);
-        MantissaStr := FormatFloat('0.' + StringOfChar('0', FractionDigits), Mantissa);
+        MantissaStr := FormatFloat('0.' + StringOfChar('0', FractionDigits), Mantissa, InvariantFormatSettings);
       end;
     end;
   end;

@@ -112,17 +112,23 @@ Trivial literals that are self-explanatory in context (`0`, `1`, `-1`, `''`, `Tr
 
 Never use bare `FloatToStr` or `FormatFloat` without an explicit `TFormatSettings` argument — these use the system decimal separator which varies by locale and breaks deterministic output.
 
-Use `DoubleToESString` (from `Goccia.Values.Primitives`) for any float-to-string conversion that must produce ECMAScript-compliant output (property keys, error messages, serialization). For non-ES contexts that still need deterministic output, pass a `TFormatSettings` with `DecimalSeparator := '.'`:
+Use `FormatDouble` (from `Goccia.Values.Primitives`) for any float-to-string conversion that must produce ECMAScript-compliant output (property keys, error messages, serialization). For formatted output that needs a specific pattern (e.g., `toFixed`, `toExponential`, timing), pass `InvariantFormatSettings` (same unit) to `FormatFloat`:
 
 ```pascal
 // Wrong — locale-dependent, breaks on systems with comma decimal separator
 Result := FloatToStr(AValue);
+Result := FormatFloat('0.###', AValue);
 
-// Correct — ES2026 §7.1.12.1 Number::toString, always uses '.'
-Result := DoubleToESString(AValue);
+// Correct — ES2026 §6.1.6.1.13 Number::toString, always uses '.'
+Result := FormatDouble(AValue);
 
-// Correct — explicit format settings for non-ES formatting
-var FS: TFormatSettings;
+// Correct — formatted output with invariant decimal separator
+Result := FormatFloat('0.###', AValue, InvariantFormatSettings);
+```
+
+For `source/shared/` units that cannot import `Goccia.Values.Primitives`, use explicit inline format settings:
+
+```pascal
 FS := DefaultFormatSettings;
 FS.DecimalSeparator := '.';
 Result := FloatToStr(AValue, FS);

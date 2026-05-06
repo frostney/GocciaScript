@@ -142,13 +142,18 @@ end;
 class function TExpect<T>.FormatValue(const AValue: T): string;
 var
   P: Pointer;
+  FS: TFormatSettings;
 begin
   P := @AValue;
   case PTypeInfo(TypeInfo(T))^.Kind of
     tkSString, tkLString, tkAString, tkUString, tkWString:
       Result := '"' + PString(P)^ + '"';
     tkFloat:
-      Result := FloatToStr(PDouble(P)^);
+      begin
+        FS := DefaultFormatSettings;
+        FS.DecimalSeparator := '.';
+        Result := FloatToStr(PDouble(P)^, FS);
+      end;
     tkInteger:
       Result := IntToStr(PInteger(P)^);
     tkInt64:

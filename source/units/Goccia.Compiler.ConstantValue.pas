@@ -233,7 +233,7 @@ begin
       else if CompileTimeNumberIsNegativeZero(AValue.NumberValue) then
         Result := '0'
       else
-        Result := DoubleToESString(AValue.NumberValue);
+        Result := FormatDouble(AValue.NumberValue);
     ctvkString:
       Result := AValue.StringValue;
     ctvkBigInt:

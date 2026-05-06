@@ -2618,7 +2618,7 @@ var
       'd', 'i':
         Result := IntToStr(Trunc(AValue.ToNumberLiteral.Value));
       'f':
-        Result := FloatToStr(AValue.ToNumberLiteral.Value);
+        Result := FormatDouble(AValue.ToNumberLiteral.Value);
       'j', 'o', 's':
         Result := AValue.ToStringLiteral.Value;
       '#':
