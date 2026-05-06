@@ -543,6 +543,7 @@ var
   ExistingDescriptor: TGocciaPropertyDescriptor;
   IsSymbolKey: Boolean;
   SymbolKey: TGocciaSymbolValue;
+  KeyValue: TGocciaValue;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 3, 'Object.defineProperty', ThrowError);
 
@@ -557,19 +558,20 @@ begin
   DescriptorObject := TGocciaObjectValue(AArgs.GetElement(2));
 
   // Step 2: Let key be ? ToPropertyKey(P)
-  IsSymbolKey := AArgs.GetElement(1) is TGocciaSymbolValue;
+  KeyValue := ToPropertyKey(AArgs.GetElement(1));
+  IsSymbolKey := KeyValue is TGocciaSymbolValue;
   SymbolKey := nil;
   PropertyName := '';
   ExistingDescriptor := nil;
 
   if IsSymbolKey then
   begin
-    SymbolKey := TGocciaSymbolValue(AArgs.GetElement(1));
+    SymbolKey := TGocciaSymbolValue(KeyValue);
     ExistingDescriptor := Obj.GetOwnSymbolPropertyDescriptor(SymbolKey);
   end
   else
   begin
-    PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
+    PropertyName := TGocciaStringLiteralValue(KeyValue).Value;
     ExistingDescriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
   end;
 

@@ -33,7 +33,8 @@ uses
   Goccia.Values.HoleValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ProxyValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.Values.ToPrimitive;
 
 function EvaluateTypeof(const AOperand: TGocciaValue): TGocciaValue;
 begin
@@ -149,8 +150,9 @@ function EvaluateInOperator(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
   PropertyName: string;
   Index: Integer;
+  ResolvedKey: TGocciaValue;
 begin
-  // ECMAScript: right operand must be an object, not a primitive
+  // ECMAScript §13.10.1 step 5: If rval is not an Object, throw TypeError
   if ARight.IsPrimitive then
   begin
     if ALeft is TGocciaSymbolValue then
@@ -163,13 +165,14 @@ begin
         SSuggestCheckNullBeforeAccess);
   end;
 
-  if ALeft is TGocciaSymbolValue then
+  // Step 6: Return ? HasProperty(rval, ? ToPropertyKey(lval))
+  ResolvedKey := ToPropertyKey(ALeft);
+
+  if ResolvedKey is TGocciaSymbolValue then
   begin
-    // Proxy has trap for symbol keys: pass the symbol itself unchanged
-    // per ES2026 §28.1.1 — traps receive PropertyKey (String or Symbol).
     if ARight is TGocciaProxyValue then
     begin
-      if TGocciaProxyValue(ARight).HasSymbolTrap(TGocciaSymbolValue(ALeft)) then
+      if TGocciaProxyValue(ARight).HasSymbolTrap(TGocciaSymbolValue(ResolvedKey)) then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -177,7 +180,7 @@ begin
     end;
     if ARight is TGocciaObjectValue then
     begin
-      if TGocciaObjectValue(ARight).HasSymbolProperty(TGocciaSymbolValue(ALeft)) then
+      if TGocciaObjectValue(ARight).HasSymbolProperty(TGocciaSymbolValue(ResolvedKey)) then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -187,7 +190,7 @@ begin
     Exit;
   end;
 
-  PropertyName := ALeft.ToStringLiteral.Value;
+  PropertyName := TGocciaStringLiteralValue(ResolvedKey).Value;
 
   // Proxy intercept: has trap takes precedence over all other checks
   if ARight is TGocciaProxyValue then
