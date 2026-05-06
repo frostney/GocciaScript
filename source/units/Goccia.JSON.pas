@@ -234,7 +234,7 @@ end;
 // ES2026 §25.5.2.5 SerializeJSONProperty — step 8.a: ToString(value)
 function SerializeJSONNumber(const AValue: Double): string;
 begin
-  Result := DoubleToESString(AValue);
+  Result := FormatDouble(AValue);
 end;
 
 procedure AppendEscapedChar(var ASB: TStringBuffer; const AValue: Char);

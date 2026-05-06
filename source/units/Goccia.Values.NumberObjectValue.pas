@@ -196,7 +196,7 @@ begin
   end;
 
   // Step 6: Format x with exactly f digits after the decimal point
-  Result := TGocciaStringLiteralValue.Create(FormatFloat('0.' + StringOfChar('0', Digits), Prim.Value));
+  Result := TGocciaStringLiteralValue.Create(FormatFloat('0.' + StringOfChar('0', Digits), Prim.Value, InvariantFormatSettings));
 end;
 
 // Convert a finite non-negative integer-valued Double to its base-ARadix
@@ -385,7 +385,7 @@ begin
   end;
 
   // Step 7: Format x with p significant digits
-  Result := TGocciaStringLiteralValue.Create(FloatToStrF(Prim.Value, ffGeneral, Precision, 0));
+  Result := TGocciaStringLiteralValue.Create(FloatToStrF(Prim.Value, ffGeneral, Precision, 0, InvariantFormatSettings));
 end;
 
 // ES2026 §21.1.3.2 Number.prototype.toExponential(fractionDigits)
@@ -460,21 +460,18 @@ begin
   // Step 10: Format mantissa with f fraction digits
   if FractionDigits < 0 then
   begin
-    MantissaStr := FloatToStrF(Mantissa, ffGeneral, 15, 0);
+    MantissaStr := FloatToStrF(Mantissa, ffGeneral, 15, 0, InvariantFormatSettings);
     if Pos('.', MantissaStr) = 0 then
       MantissaStr := MantissaStr;
   end
   else
   begin
-    MantissaStr := FormatFloat('0.' + StringOfChar('0', FractionDigits), Mantissa);
-    if (Length(MantissaStr) > 1) and (MantissaStr[1] <> '0') and (Pos('.', MantissaStr) > 0) then
+    MantissaStr := FormatFloat('0.' + StringOfChar('0', FractionDigits), Mantissa, InvariantFormatSettings);
+    if Pos('.', MantissaStr) > 2 then
     begin
-      if (MantissaStr[1] >= '2') then
-      begin
-        Mantissa := Mantissa / 10;
-        Inc(Exp);
-        MantissaStr := FormatFloat('0.' + StringOfChar('0', FractionDigits), Mantissa);
-      end;
+      Mantissa := Mantissa / 10;
+      Inc(Exp);
+      MantissaStr := FormatFloat('0.' + StringOfChar('0', FractionDigits), Mantissa, InvariantFormatSettings);
     end;
   end;
 

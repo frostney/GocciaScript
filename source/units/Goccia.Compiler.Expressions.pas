@@ -608,12 +608,18 @@ var
   MemberExpr: TGocciaMemberExpression;
   ObjReg, KeyReg: UInt8;
   PropIdx: UInt16;
+  NilJump, EndJump: Integer;
 begin
   if AExpr.Operand is TGocciaMemberExpression then
   begin
     MemberExpr := TGocciaMemberExpression(AExpr.Operand);
     ObjReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(MemberExpr.ObjectExpr, ObjReg);
+
+    if MemberExpr.Optional then
+      NilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, ObjReg)
+    else
+      NilJump := -1;
 
     if MemberExpr.Computed then
     begin
@@ -629,6 +635,15 @@ begin
       if ADest <> ObjReg then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, ObjReg, 0));
     end;
+
+    if NilJump >= 0 then
+    begin
+      EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+      PatchJumpTarget(ACtx, NilJump);
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_TRUE, ADest, 0, 0));
+      PatchJumpTarget(ACtx, EndJump);
+    end;
+
     ACtx.Scope.FreeRegister;
   end
   else
