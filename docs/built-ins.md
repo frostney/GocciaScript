@@ -344,6 +344,12 @@ try { null.x; } catch (e) {
 |--------|-------------|
 | `Error.isError(arg)` | Returns `true` if `arg` is an Error instance (has `[[ErrorData]]` internal slot), `false` otherwise |
 
+**Prototype methods:**
+
+| Method | Description |
+|--------|-------------|
+| `error.toString()` | Returns `"name: message"`, or just `name` if message is empty, or just `message` if name is empty (ES2026 §20.5.3.4). Inherited by all NativeError subclasses through the prototype chain |
+
 All error constructors accept an optional second argument `options` with a `cause` property. `AggregateError` takes `(errors, message, options?)` where `errors` is an array of error objects. `DOMException` takes `(message?, name?)` where `name` defaults to `"Error"` — the `code` property is automatically set from the legacy error code mapping (e.g., `"DataCloneError"` → 25).
 
 Each creates an error object with `name`, `message`, and `stack` properties. The `stack` property is a formatted string with the following structure:
