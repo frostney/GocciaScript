@@ -101,6 +101,7 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.RegExp,
+  Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue;
 
 // String.prototype lives in a per-realm slot.  Method host and member
@@ -239,6 +240,8 @@ begin
 end;
 
 function TGocciaStringObjectValue.ExtractStringValue(const AValue: TGocciaValue): string;
+var
+  Unwrapped: TGocciaValue;
 begin
   if (AValue is TGocciaUndefinedLiteralValue) or
      (AValue is TGocciaNullLiteralValue) then
@@ -250,6 +253,25 @@ begin
     Result := TGocciaStringObjectValue(AValue).Primitive.Value
   else if AValue is TGocciaSymbolValue then
     ThrowTypeError(SErrorSymbolToString, SSuggestSymbolNoImplicitConversion)
+  else if AValue is TGocciaProxyValue then
+  begin
+    // ES2026 String.prototype methods do `Let S be ToString(O)` per
+    // §22.1.3.x. For a Proxy whose [[ProxyTarget]] is (transitively) a
+    // String wrapper, V8/Node read [[StringData]] from the underlying
+    // wrapper. Unwrap the Proxy chain here — falling back to ToStringLiteral
+    // would call user toString through the Proxy get-trap chain, which for
+    // a get:null/empty handler chain forwards back to a String accessor
+    // that re-enters ExtractStringValue → infinite recursion → SIGSEGV.
+    Unwrapped := AValue;
+    while Unwrapped is TGocciaProxyValue do
+      Unwrapped := TGocciaProxyValue(Unwrapped).Target;
+    if Unwrapped is TGocciaStringObjectValue then
+      Result := TGocciaStringObjectValue(Unwrapped).Primitive.Value
+    else if Unwrapped is TGocciaStringLiteralValue then
+      Result := TGocciaStringLiteralValue(Unwrapped).Value
+    else
+      Result := AValue.ToStringLiteral.Value;
+  end
   else
     Result := AValue.ToStringLiteral.Value;
 end;
